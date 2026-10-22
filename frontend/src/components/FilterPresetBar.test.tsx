@@ -43,7 +43,7 @@ vi.mock('@/lib/api', async (orig) => ({
 }));
 
 import { createFilterPreset, deleteFilterPreset, updateFilterPreset } from '@/lib/api';
-import FilterPresetBar from './FilterPresetBar';
+import FilterPresetBar, { PRESETS_EXPANDED_KEY } from './FilterPresetBar';
 
 const BOUNDS = { west: 14.3, south: 50.0, east: 14.5, north: 50.1 };
 
@@ -80,6 +80,7 @@ function renderBar({
 }
 
 beforeEach(() => {
+  localStorage.removeItem(PRESETS_EXPANDED_KEY);
   vi.mocked(createFilterPreset).mockReset();
   vi.mocked(updateFilterPreset).mockReset();
   vi.mocked(deleteFilterPreset).mockReset();
@@ -113,8 +114,27 @@ describe('<FilterPresetBar> behaviour', () => {
   it('loads a preset on a chip click', () => {
     const onLoad = vi.fn();
     renderBar({ onLoad, activePresetId: null });
+    fireEvent.click(screen.getByRole('button', { name: /^Presety/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Praha 2+kk' }));
     expect(onLoad).toHaveBeenCalledWith(preset);
+  });
+
+  /* Eleven presets wrapped onto three rows above the map; folded, the bar keeps
+   * one row and the preset in force. */
+  it('folds to the active preset, and the Presety toggle unfolds them all, remembered', () => {
+    const other = { ...preset, id: 'p2', name: 'Brno 3+1' };
+    const { unmount } = renderBar({ presets: [preset, other], activePresetId: 'p1' });
+    const toggle = screen.getByRole('button', { name: /^Presety/ });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).toHaveTextContent('2');
+    expect(screen.getByRole('button', { name: 'Praha 2+kk' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Brno 3+1' })).toBeNull();
+    fireEvent.click(toggle);
+    expect(screen.getByRole('button', { name: 'Brno 3+1' })).toBeInTheDocument();
+    unmount();
+    renderBar({ presets: [preset, other], activePresetId: 'p1' });
+    expect(screen.getByRole('button', { name: /^Presety/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'Brno 3+1' })).toBeInTheDocument();
   });
 
   it('offers "Update preset" on a dirty preset and saves filters + sort back into it', async () => {

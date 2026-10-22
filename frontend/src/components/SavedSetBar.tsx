@@ -20,6 +20,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 
 import { isApiConfigured } from '@/lib/api';
+import { usePersistedFlag } from '@/lib/persistedFlag';
 import type { TagColor } from '@/lib/types';
 import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import SavedSetSaveModal, { type SaveModalWords } from '@/components/SavedSetSaveModal';
@@ -73,6 +74,9 @@ export interface SavedSetBarProps<T extends SavedSetItem> {
   checkbox?: { label: string; initial: (item: T | null) => boolean };
   /* Chips that lead the row and are not saved sets (Browse's Pipeline scope). */
   leading?: ReactNode;
+  /* Fold the chips behind a "<label> <count>" toggle: folded, only the active
+   * chip shows. The choice is remembered per browser under `storageKey`. */
+  collapse?: { label: string; storageKey: string; show: string; fold: string };
 }
 
 type SavedSetList<T> = { data: T[]; total: number };
@@ -123,7 +127,7 @@ export const chipBase =
 
 export default function SavedSetBar<T extends SavedSetItem>({
   items, loading = false, activeId, dirty, copy, onLoad, onSaveNew, onUpdate, onRename, onDelete, onReorder,
-  isOwn = () => true, suffix, chipMenu, checkbox, leading,
+  isOwn = () => true, suffix, chipMenu, checkbox, leading, collapse,
 }: SavedSetBarProps<T>) {
   const barRef = useRef<HTMLDivElement>(null);
   const dirtyId = useId();
@@ -132,8 +136,11 @@ export default function SavedSetBar<T extends SavedSetItem>({
   const [menu, setMenu] = useState<{ id: string; armed?: number } | null>(null);
   const [running, setRunning] = useState(false);
 
-  const own = items.filter(isOwn);
-  const shared = items.filter((i) => !isOwn(i));
+  const expanded = usePersistedFlag(collapse?.storageKey ?? '', false);
+  const collapsed = collapse != null && !expanded.value;
+  const shown = collapsed ? items.filter((i) => i.id === activeId) : items;
+  const own = shown.filter(isOwn);
+  const shared = shown.filter((i) => !isOwn(i));
   const active = items.find((i) => i.id === activeId);
 
   /* Click-away closes the per-chip kebab menu. */
@@ -308,6 +315,23 @@ export default function SavedSetBar<T extends SavedSetItem>({
   return (
     <div ref={barRef} className="flex items-center gap-2 flex-wrap">
       {leading}
+
+      {collapse && items.length > 0 ? (
+        <button
+          type="button"
+          onClick={expanded.toggle}
+          aria-expanded={!collapsed}
+          title={collapsed ? collapse.show : collapse.fold}
+          className={`${chipBase} gap-1.5 px-2.5 py-1 font-medium bg-[var(--color-paper-2)] border-[var(--color-rule)] text-[var(--color-ink)] hover:border-[var(--color-rule-strong)]`}
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden
+            className={`transition-transform ${collapsed ? '' : 'rotate-90'}`}>
+            <path d="M3.5 2 6.5 5l-3 3" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span>{collapse.label}</span>
+          <span className="font-mono tabular-nums text-[0.7rem] text-[var(--color-ink-3)]">{items.length}</span>
+        </button>
+      ) : null}
 
       {items.length === 0 && !loading ? (
         <span className="text-[0.75rem] text-[var(--color-ink-4)]">{copy.empty}</span>

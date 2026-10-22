@@ -21,10 +21,12 @@ type CreateMapOptions = Omit<MapOptions, 'container'> & {
   /* Add the metric ScaleControl (bottom-left). On for every map except the
    * Datasets choropleth, which omits it. */
   scaleControl?: boolean;
+  /* Add MapLibre's zoom buttons (top-right). Browse's map draws its own on its rail. */
+  navigationControl?: boolean;
 };
 
 /* Build an app-standard MapLibre map: the shared basemap style, compact
- * attribution, a zoom-only NavigationControl, and (by default) a metric scale.
+ * attribution, (by default) a zoom-only NavigationControl, and (by default) a metric scale.
  *
  * Rotation and tilt are disabled on EVERY surface — the product is a north-up,
  * flat 2D map. Hiding the compass button alone (showCompass:false) only removes
@@ -37,7 +39,7 @@ type CreateMapOptions = Omit<MapOptions, 'container'> & {
  * we keep. Only its rotation half is turned off via `disableRotation()`. */
 export function createMap(
   container: HTMLElement,
-  { scaleControl = true, ...overrides }: CreateMapOptions = {},
+  { scaleControl = true, navigationControl = true, ...overrides }: CreateMapOptions = {},
 ): maplibregl.Map {
   const map = new maplibregl.Map({
     container,
@@ -51,7 +53,9 @@ export function createMap(
   map.touchZoomRotate.disableRotation();
   map.keyboard.disableRotation();
 
-  map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+  if (navigationControl) {
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+  }
   if (scaleControl) {
     map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: 'metric' }), 'bottom-left');
   }

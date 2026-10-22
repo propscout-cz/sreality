@@ -19,7 +19,7 @@ import type { CityIndexDefinition, CuratedCity, MapCounts, MapRow } from '@/lib/
 import type { CenterRadius, MapBounds } from '@/lib/filters';
 import { groupForPicker, indexLabel, pinnedFirst } from '@/lib/cityIndexes';
 import { legendGradient, mapRampStops, normalizeIndexValue } from '@/lib/cityIndexScale';
-import { fmtCzk, fmtArea, fmtMeasuredPricePerM2, fmtRelative, fmtAbsolute } from '@/lib/format';
+import { czPlural, fmtCzk, fmtArea, fmtMeasuredPricePerM2, fmtRelative, fmtAbsolute } from '@/lib/format';
 import { PPM2_UNIT, areaKindOf, ppm2BasisFromToken } from '@/lib/measure';
 import { PIN_LIMIT_MAX, PIN_LIMIT_MIN, parsePinLimit, type PriceMetric } from '@/lib/browseState';
 import { listingKindLabel } from '@/lib/enums';
@@ -35,9 +35,13 @@ import {
   type HoverData,
 } from '@/lib/growthChoropleth';
 import HoverChart from '@/components/HoverChart';
-import MapOverlayControls from '@/components/MapOverlayControls';
-import { OverlayChip, OverlayPanel } from '@/components/OverlayChip';
+import MapOverlayControls, { MapOverlayLegends } from '@/components/MapOverlayControls';
+import { MapLegendCard, OverlayChip, OverlayPanel } from '@/components/OverlayChip';
+import {
+  LabelIcon, LayersIcon, MinusIcon, PlusIcon, RailButton, RailFlyout, RailGroup, ShowAllIcon, SlidersIcon, useRailPanel,
+} from '@/components/MapRail';
 import { escapeHtml } from '@/lib/escapeHtml';
+import { usePersistedFlag } from '@/lib/persistedFlag';
 import { circleRing } from '@/lib/geoRing';
 import { propertyPath } from '@/lib/listingUrl';
 import {
@@ -56,6 +60,9 @@ import {
 } from '@/lib/uncertaintyCircle';
 
 const psgLayerId = (m: GrowthMetric) => `psg-${m}`;
+
+/* Whether the map's layer keys are folded to their button (per browser). */
+const LEGENDS_FOLDED_KEY = 'sreality.browse.mapLegendsFolded';
 
 /* The reference overlays sit under the growth choropleth's first layer — so
  * under the city polygons and the listings too — where the MF rent map and the
@@ -525,11 +532,12 @@ export default function ListingMap({
   useEffect(() => {
     if (!containerRef.current) return;
     /* Scale sits bottom-LEFT (createMap default) so it never collides with the
-     * OpenFreeMap attribution; the bottom-left city controls are lifted clear
-     * of it below. */
+     * OpenFreeMap attribution; the layer keys are lifted clear of it below.
+     * The zoom buttons are the rail's, so createMap adds none. */
     const map = createMap(containerRef.current, {
       center: [PRAGUE.lng, PRAGUE.lat],
       zoom: PRAGUE.zoom,
+      navigationControl: false,
     });
     mapRef.current = map;
 
@@ -1442,8 +1450,27 @@ export default function ListingMap({
     didInitialFitRef.current = false;
   };
 
+  const rail = useRailPanel<'layers' | 'pins'>();
+  /* The rail's badge: every layer group that is drawn. */
+  const overlaySectionsOn = useMemo(() => {
+    const sel = parseLayers(overlayLayers);
+    return (overlayRegistry?.sections ?? []).filter((s) => s.layers.some((l) => sel.has(l.key))).length;
+  }, [overlayRegistry, overlayLayers]);
+  const layersOn = (cities && cities.length > 0 && showCities ? 1 : 0) + (showGrowth ? 1 : 0) + overlaySectionsOn;
+  const cityKey = cities && cities.length > 0 && showCities ? colorByIndex ?? null : null;
+  const legendsFolded = usePersistedFlag(LEGENDS_FOLDED_KEY, false);
+  const countText = isLoading
+    ? 'Načítání…'
+    : total == null
+      ? '—'
+      : cohortTotal != null && cohortTotal > total
+        ? `${total.toLocaleString('cs-CZ')} z ${cohortTotal.toLocaleString('cs-CZ')} na mapě`
+        : `${total.toLocaleString('cs-CZ')} ${czPlural(total, 'nemovitost', 'nemovitosti', 'nemovitostí')}`;
+
   return (
-    <div className="relative h-full min-h-[480px] rounded-[var(--radius-md)] overflow-hidden border border-[var(--color-rule)]">
+    /* `@container`: the rail's panel turns into a bottom sheet, and the pin key
+     * drops its words, by the MAP's width — the map is narrow on wide screens too. */
+    <div className="@container relative h-full min-h-[480px] rounded-[var(--radius-md)] overflow-hidden border border-[var(--color-rule)]">
       <div
         ref={containerRef}
         className="absolute inset-0"
@@ -1471,114 +1498,180 @@ export default function ListingMap({
           />
         </div>
       )}
-      {/* `right-12`, not `right-3`: createMap's zoom buttons own the top-right
-          corner, and at right-3 they sat on top of "Show all". The legend rides
-          in the count's row and wraps under it only when the map is too narrow,
-          so it does not add a second band of chrome over the pins. */}
-      <div className="pointer-events-none absolute top-3 left-3 right-12 flex items-start justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <Pill>
-            {isLoading
-              ? 'Loading…'
-              : total == null
-                ? '—'
-                : cohortTotal != null && cohortTotal > total
-                  ? `${total.toLocaleString('cs-CZ')} of ${cohortTotal.toLocaleString('cs-CZ')} mapped`
-                  : `${total.toLocaleString('cs-CZ')} ${total === 1 ? 'property' : 'properties'}`}
-            {counts != null && (
-              /* Corollary F (a surface says what it shows in the cohort's own
-               * terms): nothing is missing here, and the operator must not read
-               * count marks as the old truncation. Every property in the cohort
-               * is in exactly one count, so this says what changed (grain) rather
-               * than apologising for a loss that did not happen. */
-              <span
-                className="ml-2 text-[var(--color-ink-2)]"
-                title={
-                  `More than ${pinLimit.toLocaleString('cs-CZ')} properties are in view, so they are counted `
-                  + 'by map tile: every matching property is in exactly one count — nothing is cut. '
-                  + 'Zoom in (the viewport is part of the filter), or raise the pin limit, and '
-                  + 'individual pins return.'
-                }
-              >
-                · over {pinLimit.toLocaleString('cs-CZ')} in view, counted by tile
-              </span>
-            )}
-          </Pill>
+      {/* Top-left: what the map shows, the count and the key to the pins. The
+          controls are on the rail at the right edge; the corner stacks they
+          replaced covered a quarter of a 450 px map. Every overlay sits over
+          MapLibre's control corners (z-2): until the first pan the attribution
+          is spelled out and, on a narrow map, wraps up into them. */}
+      <div className="pointer-events-none absolute z-[3] top-2 left-2 right-14 flex">
+        <Pill>
+          <span>{countText}</span>
+          {counts != null && (
+            /* Corollary F (a surface says what it shows in the cohort's own
+             * terms): nothing is missing here, and the operator must not read
+             * count marks as the old truncation. Every property in the cohort
+             * is in exactly one count, so this says what changed (grain) rather
+             * than apologising for a loss that did not happen. */
+            <span
+              className="font-normal text-[var(--color-ink-2)]"
+              title={
+                `V záběru je víc než ${pinLimit.toLocaleString('cs-CZ')} nemovitostí, mapa je proto počítá `
+                + 'po dlaždicích: každá odpovídající nemovitost je právě v jednom čísle, nic se neusekne. '
+                + 'Přibližte mapu (výřez je součást filtru) nebo zvyšte limit pinů a piny se vrátí.'
+              }
+            >
+              · po dlaždicích
+            </span>
+          )}
           {rows.length > 0 && <PinPrecisionLegend exact={pinFaces.exact} approx={pinFaces.approx} inactive={pinFaces.inactive} />}
-          <MapViewControls
-            pinLimit={pinLimit}
-            onPinLimitChange={onPinLimitChange}
-            priceLabels={priceLabels}
-            onPriceLabelsChange={onPriceLabelsChange}
-          />
+        </Pill>
+      </div>
+      {/* Right edge: the control rail and the panel it opens. */}
+      {/* z-4: the panel it opens (a bottom sheet on a narrow map) covers the keys. */}
+      <div ref={rail.rootRef} className="pointer-events-none absolute z-[4] inset-0">
+        <div className="absolute top-2 right-2 flex flex-col gap-2">
+          <RailGroup>
+            <RailButton
+              label="Vrstvy"
+              expanded={rail.open === 'layers'}
+              badge={layersOn}
+              onClick={() => rail.toggle('layers')}
+            >
+              <LayersIcon />
+            </RailButton>
+            <RailButton
+              label={priceMetric === 'per_m2' ? 'Ceny na pinech za m² (kliknutím celkem)' : 'Ceny na pinech celkem (kliknutím za m²)'}
+              pressed={priceMetric === 'per_m2'}
+              onClick={() => onPriceMetricChange?.(priceMetric === 'per_m2' ? 'total' : 'per_m2')}
+            >
+              {/* A basis-free word, as on the Ceny control: the default cohort is
+                  a rental one, whose pins read Kč/m²/měs. */}
+              <span className="text-[0.62rem] font-semibold leading-none">za m²</span>
+            </RailButton>
+            <RailButton
+              label={priceLabels ? 'Popisky cen u pinů: zapnuté' : 'Popisky cen u pinů: vypnuté'}
+              pressed={priceLabels}
+              onClick={() => onPriceLabelsChange?.(!priceLabels)}
+            >
+              <LabelIcon />
+            </RailButton>
+            <RailButton
+              label="Piny a ceny"
+              expanded={rail.open === 'pins'}
+              onClick={() => rail.toggle('pins')}
+            >
+              <SlidersIcon />
+            </RailButton>
+          </RailGroup>
+          <RailGroup>
+            <RailButton label="Přiblížit" onClick={() => mapRef.current?.zoomIn()}>
+              <PlusIcon />
+            </RailButton>
+            <RailButton label="Oddálit" onClick={() => mapRef.current?.zoomOut()}>
+              <MinusIcon />
+            </RailButton>
+          </RailGroup>
+          {bounds && (
+            <RailGroup>
+              <RailButton label="Zobrazit vše (zrušit výřez mapy)" onClick={resetView}>
+                <ShowAllIcon />
+              </RailButton>
+            </RailGroup>
+          )}
         </div>
-        {bounds && (
+        {rail.open === 'layers' && (
+          <RailFlyout title="Vrstvy" onClose={rail.close}>
+            <div className="flex flex-col divide-y divide-[var(--color-rule)]">
+              {cities && cities.length > 0 && (
+                <div className="py-1">
+                  <CityMapControls
+                    showCities={showCities}
+                    onToggleShowCities={onToggleShowCities}
+                    colorByIndex={colorByIndex ?? null}
+                    cityIndexDefinitions={cityIndexDefinitions ?? []}
+                    onColorByIndexChange={onColorByIndexChange}
+                    colorByMin={colorByMin}
+                    onColorByMinChange={setColorByMin}
+                    cityCount={cities.length}
+                  />
+                </div>
+              )}
+              <div className="py-1">
+                <GrowthMapControls
+                  showGrowth={showGrowth}
+                  datasets={growthDatasets ?? []}
+                  datasetId={growthDatasetId}
+                  metric={growthMetric}
+                  from={growthFrom}
+                  to={growthTo}
+                  onToggle={onToggleShowGrowth}
+                  onDatasetChange={onGrowthDatasetChange}
+                  onMetricChange={onGrowthMetricChange}
+                  onFromChange={onGrowthFromChange}
+                  onToChange={onGrowthToChange}
+                  chartOnHover={growthChartOnHover}
+                  onToggleChartOnHover={onToggleGrowthChartOnHover}
+                />
+              </div>
+              {onOverlayLayersChange && (
+                <div className="py-1">
+                  <MapOverlayControls
+                    registry={overlayRegistry}
+                    selection={overlayLayers}
+                    onChange={onOverlayLayersChange}
+                    zoom={zoomLevel}
+                  />
+                </div>
+              )}
+            </div>
+          </RailFlyout>
+        )}
+        {rail.open === 'pins' && (
+          <RailFlyout title="Piny a ceny" onClose={rail.close}>
+            <div className="flex flex-col gap-3">
+              <PriceMetricControls priceMetric={priceMetric} onPriceMetricChange={onPriceMetricChange} />
+              <MapViewControls
+                pinLimit={pinLimit}
+                onPinLimitChange={onPinLimitChange}
+                priceLabels={priceLabels}
+                onPriceLabelsChange={onPriceLabelsChange}
+              />
+              <PinPrecisionKey exact={pinFaces.exact} approx={pinFaces.approx} inactive={pinFaces.inactive} />
+            </div>
+          </RailFlyout>
+        )}
+      </div>
+      {/* Bottom-left, over the scale: the key to every layer that is on, so a
+          choropleth reads with the panel closed. It folds to one button (and
+          stays folded in this browser) when the map is too narrow to spare it. */}
+      {(showGrowth || cityKey || overlaySectionsOn > 0) && (
+        <div className="pointer-events-none absolute z-[3] bottom-9 left-2 flex flex-col gap-1.5 items-start max-h-[45%] max-w-[calc(100%-4rem)]">
+          {!legendsFolded.value && (
+            <div className="pointer-events-auto flex flex-col gap-1.5 items-start min-h-0 overflow-y-auto">
+              {showGrowth && <GrowthLegend metric={growthMetric} rowCount={growthRows?.length ?? 0} />}
+              {cityKey && <CityIndexLegend index={cityKey} />}
+              <MapOverlayLegends registry={overlayRegistry} selection={overlayLayers} />
+            </div>
+          )}
           <button
             type="button"
-            onClick={resetView}
-            className="pointer-events-auto shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-2 py-1 text-[0.7rem] tracking-wide rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] hover:border-[var(--color-rule-strong)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] transition-colors"
-            title="Clear the map area filter"
+            onClick={legendsFolded.toggle}
+            aria-expanded={!legendsFolded.value}
+            className="pointer-events-auto shrink-0 inline-flex items-center gap-1 px-2 py-0.5 text-[0.7rem] rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] shadow-[0_2px_6px_rgba(0,0,0,0.04)]"
           >
-            Show all
+            {legendsFolded.value ? 'Ukázat legendu' : 'Skrýt legendu'}
           </button>
-        )}
-      </div>
-      {/* Bottom-left overlay stack. The wrapper moved OUT of CityMapControls so
-          the price-metric control shares it: the Ceny toggle must not vanish
-          with the city pins, which is what gating it on `cities` would do. */}
-      <div className="pointer-events-none absolute bottom-9 left-3 flex flex-col gap-2 items-start">
-        <PriceMetricControls
-          priceMetric={priceMetric}
-          onPriceMetricChange={onPriceMetricChange}
-        />
-        {cities && cities.length > 0 && (
-          <CityMapControls
-            showCities={showCities}
-            onToggleShowCities={onToggleShowCities}
-            colorByIndex={colorByIndex ?? null}
-            cityIndexDefinitions={cityIndexDefinitions ?? []}
-            onColorByIndexChange={onColorByIndexChange}
-            colorByMin={colorByMin}
-            onColorByMinChange={setColorByMin}
-            cityCount={cities.length}
-          />
-        )}
-      </div>
-      {/* Bottom-right overlay stack: growth control above the reference
-          overlays (the rent map among them). Flex children, so they never overlap. */}
-      <div className="pointer-events-none absolute bottom-10 right-3 flex flex-col gap-2 items-end">
-        <GrowthMapControls
-          showGrowth={showGrowth}
-          datasets={growthDatasets ?? []}
-          datasetId={growthDatasetId}
-          metric={growthMetric}
-          from={growthFrom}
-          to={growthTo}
-          rowCount={growthRows?.length ?? 0}
-          onToggle={onToggleShowGrowth}
-          onDatasetChange={onGrowthDatasetChange}
-          onMetricChange={onGrowthMetricChange}
-          onFromChange={onGrowthFromChange}
-          onToChange={onGrowthToChange}
-          chartOnHover={growthChartOnHover}
-          onToggleChartOnHover={onToggleGrowthChartOnHover}
-        />
-        {onOverlayLayersChange && (
-          <MapOverlayControls
-            registry={overlayRegistry}
-            selection={overlayLayers}
-            onChange={onOverlayLayersChange}
-            zoom={zoomLevel}
-          />
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
 
 
+/* The settings of the "Růst cen a nájmů" layer in the Vrstvy panel; its key is
+ * GrowthLegend, on the map. */
 function GrowthMapControls({
-  showGrowth, datasets, datasetId, metric, from, to, rowCount,
+  showGrowth, datasets, datasetId, metric, from, to,
   onToggle, onDatasetChange, onMetricChange, onFromChange, onToChange,
   chartOnHover, onToggleChartOnHover,
 }: {
@@ -1588,7 +1681,6 @@ function GrowthMapControls({
   metric: GrowthMetric;
   from: string;
   to: string;
-  rowCount: number;
   onToggle?: (next: boolean) => void;
   onDatasetChange?: (id: number) => void;
   onMetricChange?: (m: GrowthMetric) => void;
@@ -1599,23 +1691,21 @@ function GrowthMapControls({
 }) {
   // A literal radio `name` is a page-global token; two mounts would share one group.
   const metricName = useId();
-  const cfg = GROWTH_METRICS[metric];
-  const gradient = `linear-gradient(to right, ${cfg.ramp.map(([, c]) => c).join(', ')})`;
   return (
-    <div className="flex flex-col gap-2 items-end">
+    <div className="flex flex-col">
       <OverlayChip
         label="Růst cen a nájmů"
         checked={showGrowth}
         onChange={(next) => onToggle?.(next)}
       />
       {showGrowth && (
-        <OverlayPanel className="min-w-[210px]">
+        <OverlayPanel>
           {datasets.length === 0 ? (
             <span className="text-[0.7rem] text-[var(--color-ink-3)]">Žádné datasety</span>
           ) : (
             <select
               aria-label="Dataset"
-              className={YM_SELECT_CLS + ' max-w-[200px]'}
+              className={YM_SELECT_CLS + ' max-w-[220px]'}
               value={datasetId ?? ''}
               onChange={(e) => onDatasetChange?.(Number(e.target.value))}
             >
@@ -1630,36 +1720,45 @@ function GrowthMapControls({
               </label>
             ))}
           </div>
-          <div className="flex items-center gap-1 border-t border-[var(--color-rule)] pt-1.5 text-[0.7rem] text-[var(--color-ink-2)]">
+          <div className="flex items-center gap-1 text-[0.7rem] text-[var(--color-ink-2)]">
             <YmPicker label="Od" value={from} onChange={onFromChange} />
             <span className="text-[var(--color-ink-3)]">→</span>
             <YmPicker label="Do" value={to} onChange={onToChange} />
           </div>
-          <label className="inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-ink-2)] cursor-pointer border-t border-[var(--color-rule)] pt-1.5">
+          <label className="inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-ink-2)] cursor-pointer">
             <input type="checkbox" checked={!!chartOnHover} onChange={(e) => onToggleChartOnHover?.(e.target.checked)} />
-            <span>Chart on hover</span>
+            <span>Graf při najetí myší</span>
           </label>
-          <div className="flex flex-col gap-1 border-t border-[var(--color-rule)] pt-1.5">
-            <div className="h-1.5 rounded-sm" style={{ background: gradient }} />
-            <div className="flex justify-between text-[0.65rem] text-[var(--color-ink-3)] tabular-nums">
-              <span>{cfg.ramp[0][0].toFixed(cfg.digits)}{cfg.suffix}</span>
-              <span>+{cfg.ramp[cfg.ramp.length - 1][0].toFixed(cfg.digits)}{cfg.suffix}</span>
-            </div>
-            <div className="flex items-center gap-2 text-[0.62rem] text-[var(--color-ink-3)]">
-              <span className="flex items-center gap-1">
-                <span className="inline-block h-2 w-2 rounded-[2px]" style={{ background: 'rgba(94,122,74,0.3)' }} />
-                málo dat
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block h-2 w-2 rounded-[2px]" style={{ background: GROWTH_NO_DATA }} />
-                bez dat
-              </span>
-            </div>
-            {rowCount === 0 && <span className="text-[0.65rem] text-[var(--color-ink-3)]">Načítání…</span>}
-          </div>
         </OverlayPanel>
       )}
     </div>
+  );
+}
+
+/* The growth choropleth's key: its ramp from the metric's own stops, and the
+ * two tints that are not a value. */
+function GrowthLegend({ metric, rowCount }: { metric: GrowthMetric; rowCount: number }) {
+  const cfg = GROWTH_METRICS[metric];
+  const gradient = `linear-gradient(to right, ${cfg.ramp.map(([, c]) => c).join(', ')})`;
+  return (
+    <MapLegendCard title={cfg.label}>
+      <div className="h-1.5 rounded-sm" style={{ background: gradient }} />
+      <div className="flex justify-between text-[0.65rem] text-[var(--color-ink-3)] tabular-nums">
+        <span>{cfg.ramp[0][0].toFixed(cfg.digits)}{cfg.suffix}</span>
+        <span>+{cfg.ramp[cfg.ramp.length - 1][0].toFixed(cfg.digits)}{cfg.suffix}</span>
+      </div>
+      <div className="flex items-center gap-2 text-[0.62rem] text-[var(--color-ink-3)]">
+        <span className="flex items-center gap-1">
+          <span className="inline-block h-2 w-2 rounded-[2px]" style={{ background: 'rgba(94,122,74,0.3)' }} />
+          málo dat
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block h-2 w-2 rounded-[2px]" style={{ background: GROWTH_NO_DATA }} />
+          bez dat
+        </span>
+      </div>
+      {rowCount === 0 && <span className="text-[0.65rem] text-[var(--color-ink-3)]">Načítání…</span>}
+    </MapLegendCard>
   );
 }
 
@@ -1686,88 +1785,80 @@ function CityMapControls({
   const colorById = useId();
   const minById = useId();
   return (
-    <>
+    <div className="flex flex-col">
       <OverlayChip
-        label="Show cities"
+        label="Města"
         count={cityCount}
         checked={showCities}
         onChange={(next) => onToggleShowCities?.(next)}
       />
       {showCities && (
-        <div className="pointer-events-auto flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] text-[0.75rem]">
-          <span id={colorById} className="text-[var(--color-ink-2)] font-medium">Color by:</span>
-          <select
-            aria-labelledby={colorById}
-            className="text-[0.75rem] bg-[var(--color-paper-2)] border border-[var(--color-rule)] rounded px-1.5 py-0.5 max-w-[200px]"
-            value={colorByIndex?.index_name ?? ''}
-            onChange={(e) => onColorByIndexChange?.(e.target.value || null)}
-          >
-            <option value="">Žádné</option>
-            {groupForPicker(cityIndexDefinitions).map((g) => (
-              <optgroup key={g.label} label={g.label}>
-                {g.defs.map((d) => (
-                  <option key={d.index_name} value={d.index_name}>
-                    {g.prefix}{indexLabel(d)}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-        </div>
-      )}
-      {showCities && colorByIndex && (
-        <div className="pointer-events-auto flex flex-col gap-1 px-2.5 py-1.5 rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] min-w-[160px]">
-          {/* Same stops as the choropleth, from the one shared scale — the
-              gradient used to be a hand-written copy of the ramp and could
-              drift from it silently. The end labels are the definition's real
-              bounds, which the paint now normalizes against, so the two
-              genuinely describe the same domain. */}
-          <div
-            className="h-1.5 rounded-sm"
-            style={{ background: legendGradient() }}
-          />
-          {/* The gradient always runs worst → best. For a lower-is-better index
-              the normalizer inverts, so the bound labels must swap with it or
-              the legend would read backwards against its own colours. Every
-              seeded index is higher_is_better today, so this is prevention. */}
-          <div className="flex justify-between text-[0.65rem] text-[var(--color-ink-3)] tabular-nums">
-            <span>
-              {colorByIndex.higher_is_better === false
-                ? colorByIndex.scale_max
-                : colorByIndex.scale_min}
-            </span>
-            <span className="text-[var(--color-ink-2)]">{indexLabel(colorByIndex)}</span>
-            <span>
-              {colorByIndex.higher_is_better === false
-                ? colorByIndex.scale_min
-                : colorByIndex.scale_max}
-            </span>
+        <OverlayPanel>
+          <div className="flex flex-wrap items-center gap-2 text-[0.75rem]">
+            <span id={colorById} className="text-[var(--color-ink-2)]">Obarvit podle</span>
+            <select
+              aria-labelledby={colorById}
+              className="text-[0.75rem] bg-[var(--color-paper-2)] border border-[var(--color-rule)] rounded px-1.5 py-0.5 max-w-[200px]"
+              value={colorByIndex?.index_name ?? ''}
+              onChange={(e) => onColorByIndexChange?.(e.target.value || null)}
+            >
+              <option value="">Žádné</option>
+              {groupForPicker(cityIndexDefinitions).map((g) => (
+                <optgroup key={g.label} label={g.label}>
+                  {g.defs.map((d) => (
+                    <option key={d.index_name} value={d.index_name}>
+                      {g.prefix}{indexLabel(d)}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
           </div>
-          <div className="flex items-center gap-1.5 pt-0.5">
-            <span id={minById} className="text-[0.65rem] text-[var(--color-ink-2)]">Min:</span>
-            <input
-              aria-labelledby={minById}
-              type="number"
-              inputMode="decimal"
-              step="any"
-              placeholder="—"
-              value={colorByMin ?? ''}
-              onChange={(e) => {
-                const raw = e.target.value.trim();
-                const n = Number(raw);
-                onColorByMinChange?.(
-                  raw === '' || Number.isNaN(n) ? null : n,
-                );
-              }}
-              className="w-16 text-[0.7rem] bg-[var(--color-paper-2)] border border-[var(--color-rule)] rounded px-1 py-0.5 tabular-nums"
-            />
-            <span className="text-[0.6rem] text-[var(--color-ink-3)]">
-              below → grey
-            </span>
-          </div>
-        </div>
+          {colorByIndex && (
+            <div className="flex items-center gap-1.5">
+              <span id={minById} className="text-[0.7rem] text-[var(--color-ink-2)]">Min.</span>
+              <input
+                aria-labelledby={minById}
+                type="number"
+                inputMode="decimal"
+                step="any"
+                placeholder="—"
+                value={colorByMin ?? ''}
+                onChange={(e) => {
+                  const raw = e.target.value.trim();
+                  const n = Number(raw);
+                  onColorByMinChange?.(
+                    raw === '' || Number.isNaN(n) ? null : n,
+                  );
+                }}
+                className="w-16 text-[0.7rem] bg-[var(--color-paper-2)] border border-[var(--color-rule)] rounded px-1 py-0.5 tabular-nums"
+              />
+              <span className="text-[0.65rem] text-[var(--color-ink-3)]">pod ním šedě</span>
+            </div>
+          )}
+        </OverlayPanel>
       )}
-    </>
+    </div>
+  );
+}
+
+/* The city colouring's key. Same stops as the choropleth, from the one shared
+ * scale — the gradient used to be a hand-written copy of the ramp and could
+ * drift from it silently. The end labels are the definition's real bounds,
+ * which the paint normalizes against, so the two describe the same domain. */
+function CityIndexLegend({ index }: { index: CityIndexDefinition }) {
+  /* The gradient always runs worst → best. For a lower-is-better index the
+   * normalizer inverts, so the bound labels must swap with it or the legend
+   * would read backwards against its own colours. */
+  const flip = index.higher_is_better === false;
+  return (
+    <MapLegendCard title={`Města · ${indexLabel(index)}`}>
+      <div className="h-1.5 rounded-sm" style={{ background: legendGradient() }} />
+      <div className="flex justify-between text-[0.65rem] text-[var(--color-ink-3)] tabular-nums">
+        <span>{flip ? index.scale_max : index.scale_min}</span>
+        <span>{flip ? index.scale_min : index.scale_max}</span>
+      </div>
+    </MapLegendCard>
   );
 }
 
@@ -1776,7 +1867,8 @@ function CityMapControls({
  * exactly two states and the current one has to be readable at a glance while
  * the operator is reading pins. It does NOT recolour anything: per-basis colour
  * ramps are a separate problem (a sale ramp and a rent ramp cannot share a
- * domain) and are deliberately not in this wave. */
+ * domain) and are deliberately not in this wave. The rail's "za m²" button is
+ * the same switch. */
 function PriceMetricControls({
   priceMetric,
   onPriceMetricChange,
@@ -1795,42 +1887,40 @@ function PriceMetricControls({
   ];
   const hint = 'Popisky pinů: celková cena nebo cena za m²';
   return (
-    <div className="pointer-events-auto flex flex-col gap-1 px-2.5 py-1.5 rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] text-[0.75rem]">
-      <div className="flex items-center gap-2">
-        <span className="text-[var(--color-ink-2)] font-medium">Ceny:</span>
-        <div
-          role="group"
-          aria-label="Popisky pinů"
-          className="inline-flex gap-0.5 p-0.5 rounded-[var(--radius-sm)] border border-[var(--color-rule)]"
-        >
-          {opts.map((o) => (
-            <button
-              key={o.value}
-              type="button"
-              aria-pressed={priceMetric === o.value}
-              title={hint}
-              onClick={() => onPriceMetricChange?.(o.value)}
-              className={[
-                'px-2 py-0.5 text-[0.72rem] rounded-[var(--radius-xs)] transition-colors',
-                priceMetric === o.value
-                  ? 'bg-[var(--color-ink)] text-[var(--color-paper)]'
-                  : 'bg-[var(--color-paper-2)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)]',
-              ].join(' ')}
-            >
-              {o.label}
-            </button>
-          ))}
-        </div>
+    <div className="flex items-center gap-2 text-[0.75rem]">
+      <span className="text-[var(--color-ink-2)]">Ceny na pinech</span>
+      <div
+        role="group"
+        aria-label="Popisky pinů"
+        className="inline-flex gap-0.5 p-0.5 rounded-[var(--radius-sm)] border border-[var(--color-rule)]"
+      >
+        {opts.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            aria-pressed={priceMetric === o.value}
+            title={hint}
+            onClick={() => onPriceMetricChange?.(o.value)}
+            className={[
+              'px-2 py-0.5 text-[0.72rem] rounded-[var(--radius-xs)] transition-colors',
+              priceMetric === o.value
+                ? 'bg-[var(--color-ink)] text-[var(--color-paper)]'
+                : 'bg-[var(--color-paper-2)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)]',
+            ].join(' ')}
+          >
+            {o.label}
+          </button>
+        ))}
       </div>
     </div>
   );
 }
 
-/* The two view knobs above the map: how many properties in view are drawn pin
- * by pin before the map counts them by tile (it IS the server's point budget, so
- * changing it refetches), and whether pins print their price label. Both are URL
- * state (`pins`, `labels`). The number commits on blur or Enter so a half-typed
- * value never fires a fetch; the state's parser clamps it into range. */
+/* The two view knobs: how many properties in view are drawn pin by pin before
+ * the map counts them by tile (it IS the server's point budget, so changing it
+ * refetches), and whether pins print their price label. Both are URL state
+ * (`pins`, `labels`). The number commits on blur or Enter so a half-typed value
+ * never fires a fetch; the state's parser clamps it into range. */
 function MapViewControls({
   pinLimit,
   onPinLimitChange,
@@ -1851,70 +1941,100 @@ function MapViewControls({
   };
   const inputId = useId();
   return (
-    <span className="pointer-events-auto inline-flex items-center gap-2 px-2.5 py-1 text-[0.72rem] rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] text-[var(--color-ink-2)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] tabular-nums">
-      <label htmlFor={inputId} className="inline-flex items-center gap-1" title={`Do tohoto počtu nemovitostí v záběru se kreslí každá zvlášť; nad ním mapa počítá po dlaždicích (${PIN_LIMIT_MIN} až ${PIN_LIMIT_MAX}).`}>
-        <span>Piny do</span>
-        <input
-          id={inputId}
-          type="number"
-          inputMode="numeric"
-          min={PIN_LIMIT_MIN}
-          max={PIN_LIMIT_MAX}
-          step={10}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-          className="w-14 px-1 py-0 text-right bg-[var(--color-paper)] border border-[var(--color-rule)] rounded-[var(--radius-xs)] text-[var(--color-ink)]"
-        />
-      </label>
-      <label className="inline-flex items-center gap-1 cursor-pointer" title="Vypsat u pinů cenu">
+    <div className="flex flex-col gap-2 text-[0.75rem] text-[var(--color-ink-2)] tabular-nums">
+      <div className="flex flex-col gap-0.5">
+        <label htmlFor={inputId} className="inline-flex items-center gap-1.5">
+          <span>Piny do</span>
+          <input
+            id={inputId}
+            type="number"
+            inputMode="numeric"
+            min={PIN_LIMIT_MIN}
+            max={PIN_LIMIT_MAX}
+            step={10}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+            className="w-16 px-1 py-0 text-right bg-[var(--color-paper)] border border-[var(--color-rule)] rounded-[var(--radius-xs)] text-[var(--color-ink)]"
+          />
+        </label>
+        <span className="text-[0.65rem] text-[var(--color-ink-3)]">
+          Do tohoto počtu nemovitostí v záběru se kreslí každá zvlášť; nad ním mapa počítá po dlaždicích ({PIN_LIMIT_MIN} až {PIN_LIMIT_MAX}).
+        </span>
+      </div>
+      <label className="inline-flex items-center gap-1.5 cursor-pointer">
         <input
           type="checkbox"
           checked={priceLabels}
           onChange={(e) => onPriceLabelsChange?.(e.target.checked)}
           className="accent-[var(--color-ink)]"
         />
-        <span>Popisky</span>
+        <span>Popisky cen u pinů</span>
       </label>
-    </span>
+    </div>
   );
 }
 
 function Pill({ children }: { children: React.ReactNode }) {
   return (
-    <span className="pointer-events-auto inline-flex items-center gap-1.5 px-2.5 py-1 text-[0.75rem] font-medium tracking-wide rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] text-[var(--color-ink-2)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] tabular-nums">
+    <span className="pointer-events-auto inline-flex flex-wrap items-center gap-x-1.5 gap-y-0.5 max-w-full px-2.5 py-1 text-[0.75rem] font-medium tracking-wide rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] text-[var(--color-ink-2)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] tabular-nums">
       {children}
     </span>
   );
 }
 
-/* The key to the pin's faces. Without it the contour is a code nobody was told;
- * the tooltip also says where the circle went — onto the pin you click. */
+const PIN_FACES_HINT =
+  'Černý obrys: poloha ověřená na budovu nebo adresu. Bez něj je poloha jen přibližná '
+  + '(ulice, část obce, obec…). Purpurový bod je aktivní nabídka, průhledný bílý s purpurovým '
+  + 'obrysem neaktivní. Klikněte na pin: mapa ukáže okruh, ve kterém '
+  + 'nemovitost leží, a popisek řekne, jak je velký.';
+
+/* The key to the pin's faces, inside the count pill: the swatches and their
+ * counts, the words only on a map wide enough to hold them (the full key is in
+ * the Piny a ceny panel). Without it the contour is a code nobody was told. */
 function PinPrecisionLegend({ exact, approx, inactive }: { exact: number; approx: number; inactive: number }) {
+  const faces = [
+    { exact: true, active: true, word: 'přesná', n: exact },
+    { exact: false, active: true, word: 'přibližná', n: approx },
+    { exact: false, active: false, word: 'neaktivní', n: inactive },
+  ];
   return (
     <span
-      className="pointer-events-auto inline-flex flex-wrap items-center gap-x-3 gap-y-0.5 px-2.5 py-1 text-[0.7rem] rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] text-[var(--color-ink-3)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] tabular-nums cursor-help"
-      title={
-        'Černý obrys: poloha ověřená na budovu nebo adresu. Bez něj je poloha jen přibližná '
-        + '(ulice, část obce, obec…). Purpurový bod je aktivní nabídka, průhledný bílý s purpurovým '
-        + 'obrysem neaktivní. Klikněte na pin: mapa ukáže okruh, ve kterém '
-        + 'nemovitost leží, a popisek řekne, jak je velký.'
-      }
+      className="inline-flex items-center gap-x-2.5 pl-2 ml-0.5 border-l border-[var(--color-rule-strong)] font-normal text-[0.7rem] text-[var(--color-ink-3)] cursor-help"
+      title={PIN_FACES_HINT}
     >
-      <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-        <PinSwatch exact active />
-        Přesná poloha <span className="text-[var(--color-ink-2)]">{exact.toLocaleString('cs-CZ')}</span>
-      </span>
-      <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-        <PinSwatch exact={false} active />
-        Přibližná <span className="text-[var(--color-ink-2)]">{approx.toLocaleString('cs-CZ')}</span>
-      </span>
-      <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-        <PinSwatch exact={false} active={false} />
-        Neaktivní <span className="text-[var(--color-ink-2)]">{inactive.toLocaleString('cs-CZ')}</span>
-      </span>
+      {faces.map((f) => (
+        <span key={f.word} className="inline-flex items-center gap-1 whitespace-nowrap">
+          <PinSwatch exact={f.exact} active={f.active} />
+          <span className="text-[var(--color-ink-2)]">{f.n.toLocaleString('cs-CZ')}</span>
+          <span className="hidden @min-[900px]:inline">{f.word}</span>
+        </span>
+      ))}
     </span>
+  );
+}
+
+/* The same key in full, for the Piny a ceny panel. */
+function PinPrecisionKey({ exact, approx, inactive }: { exact: number; approx: number; inactive: number }) {
+  const faces = [
+    { exact: true, active: true, label: 'Přesná poloha', n: exact },
+    { exact: false, active: true, label: 'Přibližná poloha', n: approx },
+    { exact: false, active: false, label: 'Neaktivní', n: inactive },
+  ];
+  return (
+    <div className="flex flex-col gap-1.5 border-t border-[var(--color-rule)] pt-2">
+      <ul aria-label="Legenda pinů" className="flex flex-col gap-1">
+        {faces.map((f) => (
+          <li key={f.label} className="flex items-center gap-2 text-[0.75rem] text-[var(--color-ink-2)]">
+            <PinSwatch exact={f.exact} active={f.active} />
+            <span>{f.label}</span>
+            <span className="ml-auto tabular-nums text-[var(--color-ink)]">{f.n.toLocaleString('cs-CZ')}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="text-[0.65rem] leading-snug text-[var(--color-ink-3)]">{PIN_FACES_HINT}</p>
+    </div>
   );
 }
 

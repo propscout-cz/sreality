@@ -600,6 +600,13 @@ export default function BrowseExperience({
     if (tab === 'map') cards.refetch();
   };
   const mapError = mapVisible ? mapQuery.error : null;
+  const mergeBar = (
+    <MergeBar
+      merge={mergeMode}
+      merging={mergeMut.isPending}
+      onMerge={() => mergeMut.mutate(mergeMode.letters)}
+    />
+  );
 
   return (
     <div className={`flex${isModal ? ' h-full' : ''}`} ref={outerRef}>
@@ -681,7 +688,10 @@ export default function BrowseExperience({
               />
             </div>
           )}
-          <div className="mt-4 flex items-center justify-between gap-3">
+          {/* A merge in progress takes a row of its own under the tabs: its letters
+              and statement grow with every group, and beside the tabs they pushed
+              Merge and Cancel off the screen. */}
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
             <Tabs tabs={tabs} active={tab} onChange={view.setTab} />
             {tab === 'map' && (
               <div className="flex items-center gap-2">
@@ -694,14 +704,11 @@ export default function BrowseExperience({
                   onChange={cardImageLarge.set}
                   label="Card image size"
                 />
-                {f.mergeMode && (
-                  <MergeBar
-                    merge={mergeMode}
-                    merging={mergeMut.isPending}
-                    onMerge={() => mergeMut.mutate(mergeMode.letters)}
-                  />
-                )}
+                {f.mergeMode && !mergeMode.active && mergeBar}
               </div>
+            )}
+            {tab === 'map' && f.mergeMode && mergeMode.active && (
+              <div className="basis-full min-w-0">{mergeBar}</div>
             )}
           </div>
         </div>
