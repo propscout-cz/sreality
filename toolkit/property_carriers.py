@@ -466,7 +466,7 @@ _INSERT_SQL: dict[str, str] = {
         "INSERT INTO property_notes (property_id, body, origin_listing_id, origin_listing_ref_id, "
         "  created_at, updated_at, shared, account_id) "
         "SELECT %(to)s, body, origin_listing_id, origin_listing_ref_id, created_at, updated_at, "
-        "  shared, account_id FROM property_notes WHERE id = %(key)s RETURNING id"),
+        "  shared, account_id FROM property_notes WHERE id = %(key)s"),
     "property_pipeline": (
         "INSERT INTO property_pipeline (property_id, stage_id, board_position, account_id) "
         "SELECT %(to)s::bigint, %(stage)s::bigint, coalesce(max(board_position), 0) + 1, "

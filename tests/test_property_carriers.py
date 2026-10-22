@@ -438,9 +438,6 @@ class _RouteCur:
     def fetchall(self) -> list[tuple]:
         return self.rows
 
-    def fetchone(self) -> tuple:
-        return (900 + len(self.ran),)
-
 
 def _plan(rows: list[tuple], movers: dict[int, int | None], **kw: Any) -> list[carriers.Route]:
     return carriers.curation_plan(_RouteCur(rows), left=L, movers=movers, **kw)

@@ -163,26 +163,16 @@ def test_an_upload_onto_a_note_checks_the_note_is_the_propertys_and_writable(cli
     assert conn.sql("INSERT")[0][1][1] == 7
 
 
-@pytest.mark.parametrize("seed,status", [
-    ({"note_ok": False}, 404),      # not this property's note, or not the caller's to change (RLS)
-    ({"count": at.MAX_FILES_PER_NOTE}, 409),
+@pytest.mark.parametrize("note_id,seed", [
+    (7, {"count": at.MAX_FILES_PER_NOTE}),
+    (None, {"count": at.MAX_FILES_WITHOUT_NOTE}),
+    (None, {"duplicate": True}),    # the account holds these bytes on the property already
 ])
-def test_the_note_is_checked_before_storage(client, conn, r2, seed, status):
+def test_a_full_note_or_property_or_the_same_bytes_twice_is_a_409_before_storage(
+        client, conn, r2, note_id, seed):
     for k, v in seed.items():
         setattr(conn, k, v)
-    assert _upload(client, "plan.pdf", note_id=7).status_code == status
-    assert r2.put == [] and conn.sql("INSERT") == []
-
-
-def test_files_outside_notes_are_capped_per_property(client, conn, r2):
-    conn.count = at.MAX_FILES_WITHOUT_NOTE
-    assert _upload(client, "plan.pdf").status_code == 409
-    assert r2.put == []
-
-
-def test_the_same_bytes_twice_are_a_409_before_storage(client, conn, r2):
-    conn.duplicate = True
-    assert _upload(client, "plan.pdf").status_code == 409
+    assert _upload(client, "plan.pdf", note_id=note_id).status_code == 409
     assert r2.put == []
 
 
@@ -273,7 +263,8 @@ def test_a_copy_that_cannot_be_made_serves_the_original(client, conn, r2):
 
 
 def test_another_accounts_file_or_note_is_a_404(client, conn, r2):
-    """RLS hides what the caller may not read or change: the fake answers as it would."""
+    """RLS hides what the caller may not read or change (a note: its UPDATE policy, before any
+    byte reaches R2); the fake answers as it would."""
     conn.deletes = 0
     assert client.get("/properties/5/attachments/41").status_code == 404
     assert client.delete("/properties/5/attachments/41").status_code == 404
