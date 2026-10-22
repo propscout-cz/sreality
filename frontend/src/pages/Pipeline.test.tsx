@@ -256,6 +256,13 @@ function renderBoard(entry = '/pipeline') {
 /* Nobody shares a board with me unless a test says so (migration 641). */
 const NO_SHARES = { shared_with: [], shared_with_me: [] };
 
+/* The bar's long sets open from a menu (variant A, 2026-10-22): its button names
+   the set, then how many of its choices are on; the panel holds the set's control. */
+const openMenu = async (label: string) => {
+  fireEvent.click(await screen.findByRole('button', { name: new RegExp(`^${label}( · \\d+)?$`) }));
+  return screen.findByRole('group', { name: label });
+};
+
 describe('<Pipeline> board', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -513,6 +520,7 @@ describe('<Pipeline> board', () => {
     // Both cards render; the type chips appear (≥2 types present).
     expect(await screen.findByText('Sadová')).toBeInTheDocument();
     expect(screen.getByText('Lesní')).toBeInTheDocument();
+    await openMenu('Typ');
     const domy = screen.getByRole('button', { name: 'Domy' });
     expect(screen.getByRole('button', { name: 'Byty' })).toBeInTheDocument();
     // Filter to Domy → only the dům card remains.
@@ -574,7 +582,7 @@ describe('<Pipeline> board', () => {
     expect(screen.queryByText('Kolekce')).not.toBeInTheDocument();
     // Uncounted: the header reads the plain total, and there is nothing to reset.
     expect(screen.getByText(/nemovitostí/).textContent).toBe('2 nemovitostí');
-    expect(screen.queryByRole('button', { name: 'Reset' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Zrušit filtry' })).not.toBeInTheDocument();
   });
 
   /* ...and says so (MS16): a retry where the row sits, after which the
@@ -583,6 +591,7 @@ describe('<Pipeline> board', () => {
     vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_DUM]);
     vi.mocked(queries.fetchPropertyCollectionMemberSet).mockRejectedValue(new Error('403'));
     renderBoard('/pipeline?collections=7');
+    await openMenu('Kolekce');
     const retry = await screen.findByRole('button', { name: /Kolekce se nepodařilo načíst/ });
     expect(screen.getByText(/nemovitostí/).textContent).toBe('2 nemovitostí');
     expect(screen.getByText('Sadová')).toBeInTheDocument();
@@ -602,6 +611,7 @@ describe('<Pipeline> board', () => {
     vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[42, [7]]]));
     vi.mocked(api.listCollections).mockRejectedValue(new Error('HTTP 500'));
     renderBoard('/pipeline?collections=7');
+    await openMenu('Kolekce');
     expect(await screen.findByRole('button', { name: /Kolekce se nepodařilo načíst/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '#7' })).not.toBeInTheDocument();
   });
@@ -619,11 +629,12 @@ describe('<Pipeline> board', () => {
       new Promise(() => {}) as ReturnType<typeof api.listCollections>,
     );
     renderBoard('/pipeline?collections=7');
+    await openMenu('Kolekce');
     expect(await screen.findByRole('button', { name: '#7' })).toHaveAttribute(
       'aria-pressed',
       'true',
     );
-    expect(screen.getByText('Kolekce')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Kolekce · 1' })).toBeInTheDocument();
     expect(screen.getByText(/nemovitostí/).textContent).toBe('1 z 2 nemovitostí');
   });
 
@@ -635,8 +646,8 @@ describe('<Pipeline> board', () => {
     renderBoard();
     expect(await screen.findByText('Sadová')).toBeInTheDocument();
     // Only the collection with a member ON the board is offered.
+    await openMenu('Kolekce');
     const chip = await screen.findByRole('button', { name: 'Šortlist' });
-    expect(screen.getByText('Kolekce')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Archiv' })).not.toBeInTheDocument();
     fireEvent.click(chip);
     await waitFor(() =>
@@ -655,6 +666,7 @@ describe('<Pipeline> board', () => {
     );
     renderBoard();
     expect(await screen.findByText('Sadová')).toBeInTheDocument();
+    await openMenu('Kolekce');
     fireEvent.click(await screen.findByRole('button', { name: 'V žádné kolekci' }));
     await waitFor(() => expect(screen.queryByText('Sadová')).not.toBeInTheDocument());
     expect(screen.getByText('Lesní')).toBeInTheDocument();
@@ -672,6 +684,7 @@ describe('<Pipeline> board', () => {
       new Map([[42, [9]]]),
     );
     renderBoard();
+    await openMenu('Kolekce');
     expect(
       await screen.findByRole('button', { name: 'Od Petra · petr@example.cz' }),
     ).toBeInTheDocument();
@@ -691,7 +704,8 @@ describe('<Pipeline> board', () => {
     expect(screen.queryByText('Sadová')).not.toBeInTheDocument();
     expect(screen.queryByText('Lesní')).not.toBeInTheDocument();
     // Its chip renders pressed although nothing on the board is in it: a
-    // constraint you cannot see is one you can only leave through Reset.
+    // constraint you cannot see is one you can only leave through Zrušit filtry.
+    await openMenu('Kolekce');
     expect(screen.getByRole('button', { name: 'Archiv' })).toHaveAttribute(
       'aria-pressed',
       'true',
@@ -711,19 +725,36 @@ describe('<Pipeline> board', () => {
     expect(screen.queryByText('Sadová')).not.toBeInTheDocument();
   });
 
-  it('clears every filter through the one header Reset', async () => {
+  it('clears every filter through the one Zrušit filtry', async () => {
     vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_DUM]);
     vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(
       new Map([[42, [7]]]),
     );
     renderBoard('/pipeline?cat=dum&collections=7');
-    // Type and collection disagree, so the board is empty until Reset.
-    const reset = await screen.findByRole('button', { name: 'Reset' });
+    // Type and collection disagree, so the board is empty until it is cleared.
+    const reset = await screen.findByRole('button', { name: 'Zrušit filtry' });
     expect(screen.queryByText('Sadová')).not.toBeInTheDocument();
     fireEvent.click(reset);
     expect(await screen.findByText('Sadová')).toBeInTheDocument();
     expect(screen.getByText('Lesní')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Reset' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Zrušit filtry' })).not.toBeInTheDocument();
+  });
+
+  /* The menus only count their choices; the row under the bar names each one,
+     and its × takes that one back. */
+  it('names every active filter under the bar, each removable on its own', async () => {
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_DUM]);
+    vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[42, [7]]]));
+    renderBoard('/pipeline?cat=dum&collections=7');
+    const row = await screen.findByRole('list', { name: 'Aktivní filtry' });
+    await waitFor(() =>
+      expect(within(row).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['Domy', 'Kolekce: Šortlist']),
+    );
+    expect(screen.getByRole('button', { name: 'Typ · 1' })).toBeInTheDocument();
+    fireEvent.click(within(row).getByRole('button', { name: 'Zrušit filtr Domy' }));
+    expect(await screen.findByText('Sadová')).toBeInTheDocument();
+    expect(screen.queryByText('Lesní')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Typ' })).toBeInTheDocument();
   });
 
   it('names the stage-manager create field by its visible words', async () => {
@@ -802,7 +833,7 @@ describe('<Pipeline> board', () => {
     renderBoard();
     expect(await screen.findByText('Sadová')).toBeInTheDocument();
     // Only the tag with a member ON the board is offered.
-    const bar = (await screen.findByText('Štítky')).parentElement!;
+    const bar = await openMenu('Štítky');
     const chip = within(bar).getByRole('button', { name: 'k prohlídce' });
     expect(within(bar).queryByRole('button', { name: 'odmítnuto' })).toBeNull();
 
@@ -922,7 +953,7 @@ describe('<Pipeline> shared boards', () => {
     );
     /* Kept, my tag 5 would match none of the owner's cards: an empty board. */
     expect(await screen.findByText('Sadová')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Reset' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Zrušit filtry' })).toBeNull();
   });
 
   it('shows a read board without drag, trash, stage editor, tags or sharing', async () => {
