@@ -12,7 +12,10 @@
  * and its bell carries the count, so the eyebrow and the explanation step
  * aside (the empty state still explains); the rows' hairlines run to the screen
  * edge as the roll's do, and a row turns into two lines — kind and time, then
- * what it is about — whose prices never split. */
+ * what it is about — whose prices never split.
+ *
+ * A coalesced push opens this page as `/notifications?d={delivery}`: the open is
+ * reported once and the parameter dropped (lib/push). */
 
 import { useId, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -26,6 +29,8 @@ import { notificationKeys } from '@/lib/queries';
 import { dispatchTarget } from '@/lib/dispatchTarget';
 import { ROUTES } from '@/lib/routes';
 import { usePageTitle } from '@/lib/pageTitle';
+import { usePhoneShell } from '@/lib/phoneShell';
+import { usePushOpenedParam } from '@/lib/push';
 import { useUnreadCount } from '@/lib/unreadCount';
 import { useInfiniteList } from '@/lib/useInfiniteList';
 import { fmtAbsolute, fmtCount, fmtCzk, fmtRelative } from '@/lib/format';
@@ -76,6 +81,7 @@ export default function Notifications() {
   const qc = useQueryClient();
   const [source, setSource] = useState<SourceFilter>('all');
   const [seen, setSeen] = useState<WatchdogSeenFilter>('all');
+  usePushOpenedParam();
 
   const feed = useInfiniteList<WatchdogDispatch>({
     queryKey: notificationKeys.feed({ source, seen }),
@@ -105,8 +111,10 @@ export default function Notifications() {
   const { count: unread } = useUnreadCount();
 
   // Tab title carries the unread count, capped like the nav badge so the two
-  // never disagree. Zero → the plain "Notifications" route handle.
-  usePageTitle(unread > 0 ? `Notifications (${unread > 99 ? '99+' : unread})` : null);
+  // never disagree. Zero → the plain "Notifications" route handle. Not in the
+  // phone frame: the title is its header's, beside the bell that has the count.
+  const phone = usePhoneShell();
+  usePageTitle(!phone && unread > 0 ? `Notifications (${unread > 99 ? '99+' : unread})` : null);
 
   return (
     <div className="px-6 py-8 max-w-5xl mx-auto max-md:px-4 max-md:pt-5 max-md:pb-6">

@@ -2853,6 +2853,45 @@ export const markAllNotificationsSeen = (
     query: { source_kind },
   });
 
+/* ----- Push (notifications push program W4/W5b) -------------------------
+ * One device = one push subscription, bound to the signed-in account (lib/push).
+ * The VAPID public key is read at runtime, never baked into the build. */
+
+/* `PushSubscription.toJSON()` plus the browser's user agent. */
+export interface PushSubscriptionBody {
+  endpoint: string;
+  expirationTime: number | null;
+  keys: { p256dh: string; auth: string };
+  user_agent: string;
+}
+
+export type PushEndReason = 'signed_out' | 'switched_off';
+
+/* The server's VAPID public key (base64url, a 65-byte P-256 point); a 503 while
+ * the server has none (push not configured). */
+export const getPushKey = (): Promise<{ public_key: string }> =>
+  request<{ public_key: string }>('/push/key');
+
+/* Registers (or re-sends) this device for the caller: idempotent, and an
+ * endpoint another account held moves to the caller. 422 when the endpoint is
+ * not Apple's push service or the keys are malformed. */
+export const putPushSubscription = (body: PushSubscriptionBody): Promise<void> =>
+  request<void>('/push/subscription', { method: 'PUT', json: body });
+
+/* Ends this device's row (an unknown endpoint is still 204). The endpoint rides
+ * in the body, never the URL. */
+export const deletePushSubscription = (
+  body: { endpoint: string; reason: PushEndReason },
+  opts: { signal?: AbortSignal } = {},
+): Promise<void> =>
+  request<void>('/push/subscription', { method: 'DELETE', json: body, signal: opts.signal });
+
+/* A tap on a push lands on `/n/{dispatch}?d={delivery}` (or the coalesced
+ * `/notifications?d=`): this stamps that the caller opened their own delivery.
+ * An unknown id is still 204. Best effort, never awaited by a navigation. */
+export const postPushOpened = (delivery: number): Promise<void> =>
+  request<void>('/push/opened', { method: 'POST', json: { delivery } });
+
 /* ----- Saved Browse filter presets (migration 151) ----------------------
  * Per account (migration 595, ticket #1761): every route rides the user's
  * JWT and RLS. */

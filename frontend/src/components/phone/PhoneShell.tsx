@@ -1,8 +1,10 @@
 /* The phone frame around the routes (#1766, design #1762): a 3.5 rem header with
  * the page's title, a back affordance off the tab roots, the bell (the unread
  * count, opening Notifications; notifications push W5a, ruling R4) and the
- * account button; a bottom tab bar for the five areas (W1's four and Odkaz, W2 #1767). Shell.tsx picks this frame or the
- * desktop one by `usePhoneShell()`; the route body is the same either way.
+ * account button, whose sheet holds the theme, this iPhone's push switch (W5b),
+ * the desktop view and sign-out; a bottom tab bar for the five areas (W1's four
+ * and Odkaz, W2 #1767). Shell.tsx picks this frame or the desktop one by
+ * `usePhoneShell()`; the route body is the same either way.
  *
  * THE HEADER IS EXACTLY `h-14`, as the desktop TopBar is (Shell.tsx explains
  * why): Filters, BrowseExperience and Pipeline pin panes at `top-14` /
@@ -36,6 +38,7 @@ import { MAIN_ID } from '@/lib/useRouteFocus';
 
 import BottomSheet, { SheetContext } from './BottomSheet';
 import { BackIcon, BellIcon, LinkIcon, PersonIcon, RollIcon } from './phoneIcons';
+import PushSwitch from './PushSwitch';
 
 /* A short line a page may set beside the header's title (the feed's "5 nových
  * dnes"). Cleared when the page unmounts. A no-op outside the phone frame. */
@@ -274,6 +277,8 @@ const THEMES: ReadonlyArray<{ value: ThemeMode; label: string }> = [
 function AccountSheet({ onClose }: { onClose: () => void }) {
   const { user, signOut, isAdmin } = useAuth();
   const [mode, setMode] = useTheme();
+  /* Push is the bell's other half: where the plan hides the feed, no switch. */
+  const { visible: notifications } = useUnreadCount();
   return (
     <BottomSheet
       label="Účet"
@@ -310,6 +315,7 @@ function AccountSheet({ onClose }: { onClose: () => void }) {
         </div>
       </div>
       <div className="mt-3 border-t border-[var(--color-rule-soft)]">
+        {notifications && <PushSwitch />}
         {/* The phone has no Admin menu, and system alerts never reach the bell
           * (ruling R2b), so this row is its one way to Health; admin-only, as
           * the page is. */}

@@ -151,15 +151,21 @@ real 404, never the SPA fallback:
   a 5xx) and hashed `/assets/*` files are served from its cache; it
   touches nothing else (API, images, Supabase, tiles). It never reloads a
   page: `lib/buildSkew` stays the one "newer version" signal and
-  `lib/lazyChunk` the one recovery from a missing chunk. Design and
-  reasons: #1764 and the header of `public/sw.js`.
+  `lib/lazyChunk` the one recovery from a missing chunk. It also handles
+  push (notifications push W4): `push` always shows exactly one
+  notification and sets the icon badge (below iOS 18.4, three pushes that
+  show nothing remove every subscription), and `notificationclick` opens
+  the tapped page in the app's window. `src/lib/sw.test.ts` runs the file
+  in a fake worker scope; `npm run typecheck` checks it against the
+  worker's globals (`tsconfig.sw.json`). Design and reasons: #1764, the
+  header of `public/sw.js`, `docs/design/notifications-push/PROGRAM.md`.
 
 **Retiring the worker.** Never delete `public/sw.js`: an installed worker
 whose script 404s simply stays installed. Replace the file's contents
 with the self-unregistering version in its header comment (clears its
 caches, unregisters itself), make `registerServiceWorker()` unregister
 instead of register in the same PR, deploy, and keep that file served
-for months.
+for months. Unregistering also ends push on iOS below 18.4.
 
 The three typefaces are self-hosted (`src/assets/fonts/`, SIL OFL 1.1,
 licence files beside them; `src/styles/fonts.css`), so the page makes no
@@ -173,7 +179,13 @@ Under 768 px wide, `Shell.tsx` renders the routes inside the phone frame
 an `h-14` header (never taller — the Browse and Pipeline panes pin to
 3.5 rem) with a bell (the unread count, opening `/notifications`), a
 five-tab bar (Nové `/feed`, Pipeline, Sbírky, Makléři, Odkaz
-`/link`) and an account sheet. One unread observer
+`/link`) and an account sheet (the theme, this iPhone's push switch
+"Oznámení na tomto iPhonu" — `src/components/phone/PushSwitch.tsx` over
+`src/lib/usePush.ts`, offered on an iPhone or iPad only, its subscription
+bound to the signed-in user by `src/lib/auth.tsx` and `src/lib/push.ts`
+and riding the bell's plan gate — the desktop view, sign-out).
+A tapped push lands on `/n/:dispatchId` (`src/pages/NotificationOpen.tsx`),
+which marks it read and replaces itself with what it is about. One unread observer
 (`src/lib/unreadCount.tsx`, mounted by `Shell`) feeds the bell, the
 desktop nav badge, the Notifications page and the installed app's icon
 badge. `usePhoneShell()` (`src/lib/phoneShell.ts`) decides; the

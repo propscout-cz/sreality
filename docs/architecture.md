@@ -765,9 +765,19 @@ rules. Identify which one a task belongs to before you start.
   worker script is the browser's plus an hourly `registration.update()` on resume (a
   resumed iPhone app is not a navigation). No worker code reloads a page; "offered, never
   imposed" holds (#1771), and a chunk 404 still goes to `lazyChunk`, whose reload lands on
-  the network-first `index.html`. Retiring it is a deploy, never a deletion: a deleted
-  `sw.js` leaves the installed worker running, so the file is replaced by the
-  self-unregistering version in its header and registration flips to unregister.
+  the network-first `index.html`. The worker also answers two push events (notifications
+  push W4, `docs/design/notifications-push/PROGRAM.md` § 3.4): the server sends declarative
+  Web Push, which iOS 18.4+ shows without waking the worker; below that the `push` handler
+  ALWAYS shows exactly one notification (field by field from the payload, else "Nové
+  upozornění" opening `/notifications`; a foreign or relative `navigate` becomes an absolute
+  same-origin URL) and then sets the icon badge from `app_badge` — three pushes that show
+  nothing make WebKit drop every subscription of the origin, and nothing server-side would
+  notice. `notificationclick` is the one place the worker opens a page: it focuses the app's
+  open window and navigates it, else opens one. A vitest harness (`src/lib/sw.test.ts`) runs
+  the file in a fake `ServiceWorkerGlobalScope` over every payload shape. Retiring it is a
+  deploy, never a deletion: a deleted `sw.js` leaves the installed worker running, so the
+  file is replaced by the self-unregistering version in its header and registration flips to
+  unregister — which also ends push below iOS 18.4.
 - **One SPA, two frames: the phone shell is chosen by screen width, and the routes do not
   change** (`frontend/src/lib/phoneShell.ts`, `components/phone/`; the Phone app map #1759, W1
   #1766). `usePhoneShell()` is `matchMedia('(max-width: 767px)')` AND no per-device "desktop view"
@@ -783,10 +793,40 @@ rules. Identify which one a task belongs to before you start.
   belongs to no tab and has no phone fork: one `max-md:` pass), hidden where the plan's agenda hides
   notifications. Its number comes from the ONE unread observer `Shell` mounts above both frames
   (`lib/unreadCount.tsx`: the agenda gate and the 60 s poll the TopBar used to own), which the desktop
-  badge and the Notifications page read too, and which alone writes the installed app's icon badge
-  (`navigator.setAppBadge`, only when `isInstalledApp()`; cleared at zero and when `Shell` unmounts on
-  sign-out; every failure swallowed — iOS shows it only once notifications are allowed). The account
+  badge and the Notifications page read too. The installed app's icon badge
+  (`lib/appBadge.ts`, `navigator.setAppBadge`, only when `isInstalledApp()`; every failure swallowed —
+  iOS shows it only once notifications are allowed) has three writers: the observer sets the count
+  (cleared at zero and when `Shell` unmounts on sign-out), `sw.js` sets a push's `app_badge`, and an
+  identity change (or a signed-out launch) clears it. The account
   sheet keeps its admin Health row: system alerts never reach the bell (R2b).
+  The sheet's first row is this iPhone's push switch, "Oznámení na tomto iPhonu" (W5b;
+  `components/phone/PushSwitch.tsx` over `lib/usePush.ts`, imported eagerly so a sheet opened
+  offline cannot hit the last-resort boundary, hidden where the bell is). Its state is read, never
+  assumed: unsupported first for anything but an iPhone or iPad (by UA or `navigator.standalone`;
+  an Android phone is never prompted, and the server takes Apple's push service only), then not
+  installed (a Safari tab has no `PushManager`: "Přidejte aplikaci na plochu"), unsupported (an
+  installed app without Web Push), denied, unavailable (the server gave no key; a 503 never ends a
+  subscription), off, on (a subscription exists here), busy. Opening the sheet runs
+  `registration.update()` and fetches `GET /push/key` (no `VITE_` key), so the tap only calls
+  `Notification.requestPermission()` inside the click and, on `granted`,
+  `pushManager.subscribe({userVisibleOnly: true, …})`, then `PUT /push/subscription` (a failed PUT
+  unsubscribes again). **Binding follows identity, not a button** (AUDIT F18, `lib/auth.tsx`'s
+  identity-transition effect over `lib/push.ts`): any change of user, sign-out included, and a launch
+  with CERTAINLY nobody signed in end this device's subscription locally (no JWT needed; the
+  server's row ends "gone" at its next push) and clear the badge — a launch whose token refresh
+  failed in transit (`isAuthRetryableFetchError`: offline, a captive Wi-Fi, an Auth 5xx) ends
+  nothing, since supabase-js keeps the stored session for the next try; the explicit sign-out first
+  sends `DELETE /push/subscription` (`signed_out`, ≤ 3 s). Push rides the bell's gate
+  (`notificationsVisible` in `lib/auth.tsx`, handed to `lib/push` `setPushGate` once the plan is
+  read): opening it (a launch, a sign-in) re-sends the subscription, shutting it (a plan without
+  notifications) ends it here, and while it is not open nothing is re-sent. The re-send
+  (`resyncPush`, also on the hourly resume check; iOS never fires `pushsubscriptionchange`) ends the
+  subscription instead when another account switched it on here (a per-device owner in
+  `localStorage`) or when `GET /push/key` answers a key other than the one it was made with (a
+  rotated VAPID key; a failed read is no verdict). A tapped push lands on `/n/:dispatchId`
+  (`pages/NotificationOpen.tsx`, lazy): mark-seen under RLS, then `dispatchTarget(row)` by
+  replace (404 → `/notifications`); `?d=` there and on the coalesced `/notifications?d=` is
+  reported once to `POST /push/opened`, never awaited.
   The feed (`pages/Feed.tsx`) adds no query path: it is Browse's `fetchListingsForCards` under
   Browse's query key (so dismissal, merge and pipeline sweeps reach it), presets applied the way
   Browse loads them, and a phone menu is the desktop menu's body in a bottom sheet

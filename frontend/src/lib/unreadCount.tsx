@@ -1,9 +1,9 @@
 /* THE unread count (notifications push program W5a, AUDIT F9): one query
  * observer, mounted once by Shell, read by both frames (the desktop top bar's
  * Notifications badge, the phone header's bell) and by the Notifications page,
- * and the one writer of the installed app's icon badge (ruling R4). The number
- * is the account's own unseen rows (`/notifications/unread-count`; no system
- * row counts since ruling R2b).
+ * and the number the installed app's icon badge shows (lib/appBadge; ruling
+ * R4). The number is the account's own unseen rows
+ * (`/notifications/unread-count`; no system row counts since ruling R2b).
  *
  * The route costs ~300 ms of unpooled connection setup for ~15 ms of server
  * work, so the poll runs only while the Notifications entry is visible to this
@@ -17,10 +17,9 @@ import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'r
 import { useQuery } from '@tanstack/react-query';
 
 import { getNotificationUnreadCount } from './api';
-import { useAuth } from './auth';
+import { syncAppBadge } from './appBadge';
+import { notificationsVisible, useAuth } from './auth';
 import { notificationKeys } from './queries';
-import { isInstalledApp } from './serviceWorker';
-import { isSupabaseConfigured } from './supabase';
 
 export interface UnreadCount {
   /* The agenda gate: false hides every bell and stops the poll. */
@@ -35,8 +34,7 @@ export const useUnreadCount = (): UnreadCount => useContext(UnreadCountContext);
 
 export function UnreadCountProvider({ children }: { children: ReactNode }) {
   const { isAdmin, agendas } = useAuth();
-  const visible =
-    isAdmin || !isSupabaseConfigured() || agendas === null || agendas['notifications'] === true;
+  const visible = notificationsVisible(isAdmin, agendas);
   const unreadQ = useQuery({
     queryKey: notificationKeys.unreadCount,
     queryFn: () => getNotificationUnreadCount(),
@@ -54,18 +52,4 @@ export function UnreadCountProvider({ children }: { children: ReactNode }) {
   const count = known ?? 0;
   const value = useMemo(() => ({ visible, count }), [visible, count]);
   return <UnreadCountContext.Provider value={value}>{children}</UnreadCountContext.Provider>;
-}
-
-/* The number on the installed app's icon: set while unread rows exist, cleared
- * at zero. A browser tab, an engine without the Badging API and a refused
- * permission (iOS draws the badge only once notifications are allowed) are all
- * normal, so every failure is swallowed. */
-export function syncAppBadge(count: number): void {
-  if (typeof navigator.setAppBadge !== 'function' || !isInstalledApp()) return;
-  try {
-    const done = count > 0 ? navigator.setAppBadge(count) : navigator.clearAppBadge();
-    done.catch(() => {});
-  } catch {
-    /* A synchronous throw (a missing clearAppBadge) is the same no-badge case. */
-  }
 }

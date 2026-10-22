@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Shell from '@/components/Shell';
 import * as api from '@/lib/api';
 import * as auth from '@/lib/auth';
+import { TitleController } from '@/lib/pageTitle';
 import { PHONE_SHELL_QUERY } from '@/lib/phoneShell';
 import type { WatchdogDispatch } from '@/lib/types';
 import { expectNoNestedInteractive } from '@/test/a11y';
@@ -123,11 +124,13 @@ function renderPhone() {
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={['/notifications']}>
-        <Routes>
-          <Route element={<Shell />}>
-            <Route path="/notifications" element={<Notifications />} />
-          </Route>
-        </Routes>
+        <TitleController routes={[{ path: '/notifications', handle: { title: 'Notifications' } }]}>
+          <Routes>
+            <Route element={<Shell />}>
+              <Route path="/notifications" element={<Notifications />} />
+            </Route>
+          </Routes>
+        </TitleController>
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -143,6 +146,9 @@ describe('<Notifications> at phone width', () => {
     expect(within(header).getByRole('button', { name: 'Nové' })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Mark all read' })).toBeEnabled());
     expect(api.getNotificationUnreadCount).toHaveBeenCalledTimes(1);
+    /* The bell carries the count; the header's title does not repeat it. */
+    expect(within(header).getByRole('heading', { level: 1 })).toHaveTextContent(/^Notifications$/);
+    expect(document.title).not.toContain('(2)');
   });
 
   it('keeps every control of the desktop page, tab names in English', async () => {
@@ -181,5 +187,13 @@ describe('<Notifications> at phone width', () => {
     expect(price.className).toContain('whitespace-nowrap');
     expect(price.firstElementChild).toHaveClass('max-md:hidden');
     expect(price.firstElementChild!.textContent).toBe(' · ');
+  });
+});
+
+describe('<Notifications> on the desktop', () => {
+  it('keeps the unread count in the tab title', async () => {
+    setNarrow(false);
+    renderPhone();
+    await waitFor(() => expect(document.title).toMatch(/Notifications \(2\)$/));
   });
 });

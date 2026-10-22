@@ -3,8 +3,8 @@
  * h-14 (the desktop panes pin to 3.5 rem), the tab bar carries the five areas
  * (W1's four and Odkaz), a page outside the tab roots gets a back affordance,
  * the header's bell carries the unread count to Notifications (W5a, ruling R4),
- * and the account sheet holds the way to the desktop view and, for an admin,
- * the phone's one way to Health. */
+ * and the account sheet holds this iPhone's push switch (W5b), the way to the
+ * desktop view and, for an admin, the phone's one way to Health. */
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -136,13 +136,15 @@ describe('phone frame', () => {
     input.remove();
   });
 
-  it('opens the account sheet with the theme, the desktop view and sign-out', async () => {
+  it('opens the account sheet with the theme, the push switch, the desktop view and sign-out', async () => {
     setNarrow(true);
     renderAt('/feed');
     await userEvent.click(screen.getByRole('button', { name: 'Účet' }));
     const sheet = await screen.findByRole('dialog', { name: 'Účet' });
     expect(within(sheet).getByText('operator@example.cz')).toBeInTheDocument();
     expect(within(sheet).getByRole('radio', { name: 'Světlý' })).toBeInTheDocument();
+    /* jsdom is no iPhone: the switch is drawn, disabled (PushSwitch.test has the states). */
+    expect(await within(sheet).findByRole('switch', { name: 'Oznámení na tomto iPhonu' })).toBeDisabled();
     expect(within(sheet).getByRole('button', { name: /Desktopová verze/ })).toBeInTheDocument();
     expect(within(sheet).getByRole('button', { name: 'Odhlásit' })).toBeInTheDocument();
   });
