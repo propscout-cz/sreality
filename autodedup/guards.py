@@ -90,17 +90,16 @@ def area_relation(
 def pair_veto(a: GuardSide, b: GuardSide, settings: Settings | None = None) -> str | None:
     """The name of the first hard guard the pair breaks (E2-E5), or None when it passes.
 
-    Missing data is never a mismatch (E12): every clause needs BOTH sides known. The W32w
-    dials read a column beside what its own body states, where both sides carry readings."""
+    Missing data is never a mismatch (E12): every clause needs BOTH sides known. W1 and W2 only
+    lift the area and floor clauses, for two flats both carrying readings (W33m)."""
     cfg = settings or Settings()
     if (a.category_type is not None and b.category_type is not None
             and a.category_type != b.category_type):
         return "category_type"
     if not category_main_compatible(a.category_main, b.category_main):
         return "category_main"
-    if area_relation(a.area_m2, b.area_m2, cfg) == "reject" and not (
-            cfg.witness_area and _both_witnessed(a, b)
-            and areas_witnessed(a, b, cfg.area_reject_pct, cfg)):
+    if (area_relation(a.area_m2, b.area_m2, cfg) == "reject"
+            and not areas_witnessed(a, b, cfg.area_reject_pct, cfg)):
         return "area"
     is_land = LAND_CATEGORY in (a.category_main, b.category_main)
     dispo_a, dispo_b = a.disposition, b.disposition
@@ -112,8 +111,7 @@ def pair_veto(a: GuardSide, b: GuardSide, settings: Settings | None = None) -> s
     if (a.category_main == FLAT_CATEGORY and b.category_main == FLAT_CATEGORY
             and a.floor is not None and b.floor is not None
             and abs(a.floor - b.floor) >= 2
-            and not (cfg.witness_floor and _both_witnessed(a, b)
-                     and storeys_witnessed(a, b, cfg))):
+            and not storeys_witnessed(a, b, cfg)):
         return "floor"
     return None
 
@@ -150,13 +148,18 @@ class WitnessSide:
     printed_disposition: str | None
 
 
-def body_witnesses(description: str | None, cfg: Settings) -> Witnesses:
-    """The readings of one body under the W32w dials that read them."""
+def body_witnesses(description: str | None, cfg: Settings,
+                   category_main: str | None) -> Witnesses:
+    """The readings of one body under the W32w dials that read them. Area and storeys are read
+    of a flat only: a house, commercial or land body prints a plot, a built-up area, a hall and
+    its storeys beside the unit, and its columns are read as W31 reads them (W33m)."""
     if not description or not cfg.witnessing:
         return Witnesses()
-    unit, extras = _area_witnesses(description) if cfg.witness_area else (None, ())
+    flat = category_main == FLAT_CATEGORY
+    unit, extras = (_area_witnesses(description) if cfg.witness_area and flat
+                    else (None, ()))
     storeys, worded = ((_storey_witnesses(description, cfg.d43_prose_floor_words))
-                       if cfg.witness_floor else ((), ()))
+                       if cfg.witness_floor and flat else ((), ()))
     offered = printed_dispositions(description) if cfg.witness_disposition else frozenset()
     return Witnesses(unit, extras, storeys, worded,
                      next(iter(offered)) if len(offered) == 1 else None)
@@ -164,7 +167,7 @@ def body_witnesses(description: str | None, cfg: Settings) -> Witnesses:
 
 def witness_side(listing: Listing, cfg: Settings, area_m2: float | None) -> WitnessSide:
     """`listing` with `area_m2` (D43 reads E293's effective area) and its body's readings."""
-    seen = body_witnesses(listing.description, cfg)
+    seen = body_witnesses(listing.description, cfg, listing.category_main)
     return WitnessSide(listing.source, listing.category_main, listing.category_type, area_m2,
                        listing.disposition, listing.floor, cfg.witnessing, seen.unit_area,
                        seen.accessory_areas, seen.storeys, seen.worded_storeys,
@@ -173,6 +176,10 @@ def witness_side(listing: Listing, cfg: Settings, area_m2: float | None) -> Witn
 
 def _both_witnessed(a: GuardSide, b: GuardSide) -> bool:
     return getattr(a, "witnessed", False) and getattr(b, "witnessed", False)
+
+
+def _two_flats(a: GuardSide, b: GuardSide) -> bool:
+    return a.category_main == FLAT_CATEGORY and b.category_main == FLAT_CATEGORY
 
 
 def _accessory_sizes(description: str) -> tuple[float, ...]:
@@ -212,45 +219,72 @@ def _shares_extra(left: Sequence[float], right: Sequence[float]) -> bool:
     return any(abs(x - y) < 0.05 for x in left for y in right)
 
 
-def _composes(column: float, unit: float, extras: Sequence[float]) -> bool:
-    """Ruling 13 inside ONE side: its column is its own unit figure with one or two of its own
-    extras added or taken away (`44 = 40 + 4 sklep`, `54 = 60 - 4 balkon - 2 sklep`)."""
+def _composes(figure: float, unit: float, extras: Sequence[float]) -> bool:
+    """Ruling 13: `figure` is the printed unit figure with one or two of the same body's extras
+    added or taken away (`44 = 40 + 4 sklep`, `54 = 60 - 4 balkon - 2 sklep`)."""
     sums = list(extras) + [extras[i] + extras[j]
                            for i in range(len(extras)) for j in range(i + 1, len(extras))]
     for extra in sums:
         for total in (unit + extra, unit - extra):
-            gap = abs(column - total)
-            if gap <= COMPOSITION_ABS_M2 or gap <= COMPOSITION_REL * max(column, total):
+            gap = abs(figure - total)
+            if gap <= COMPOSITION_ABS_M2 or gap <= COMPOSITION_REL * max(figure, total):
                 return True
     return False
 
 
-def area_readings(side: GuardSide, other: GuardSide, cfg: Settings) -> tuple[float, ...]:
-    """W1: the areas a side states. Its column where its body agrees or is silent; its column
-    and its unit figure where its own extras compose the two and the other body does not print
-    the same extra; its unit figure alone where its body contradicts its column."""
+def _printed_unit(side: GuardSide) -> float | None:
+    """The one unit figure a side's body states, beside a column it is within
+    `STATED_AREA_STORED_RATIO` of (a figure three times the column is not this unit's)."""
+    column, unit = side.area_m2, side.printed_unit_area
+    if column is None or column <= 0.0 or unit is None:
+        return None
+    if not column / STATED_AREA_STORED_RATIO <= unit <= column * STATED_AREA_STORED_RATIO:
+        return None
+    return unit
+
+
+def _area_figures(side: GuardSide) -> tuple[float, ...]:
+    """W1's figure set F of a side: its column, and the unit figure its own body states."""
     column = side.area_m2
     if column is None or column <= 0.0:
         return ()
-    unit = side.printed_unit_area
-    if unit is None or (area_rel_diff(column, unit) or 0.0) <= cfg.area_reject_pct:
-        return (column,)
+    unit = _printed_unit(side)
+    return (column,) if unit is None else (column, unit)
+
+
+def _within(x: float, y: float, tol: float) -> bool:
+    diff = area_rel_diff(x, y)
+    return diff is not None and diff <= tol
+
+
+def _composed(side: GuardSide, other: GuardSide) -> bool:
+    """Ruling 13 across the pair: a figure of `other` is `side`'s printed unit figure with one
+    or two of `side`'s own extras, where `other`'s body does not state the same extra (two
+    bodies each beside one shared cellar are two areas, not one area two ways)."""
+    unit = _printed_unit(side)
     extras = side.printed_accessory_areas
-    if not _shares_extra(extras, other.printed_accessory_areas) and _composes(column, unit, extras):
-        return (column, unit)
-    if unit / STATED_AREA_STORED_RATIO <= column <= unit * STATED_AREA_STORED_RATIO:
-        return (unit,)
-    return (column,)
+    if unit is None or not extras or _shares_extra(extras, other.printed_accessory_areas):
+        return False
+    return any(_composes(figure, unit, extras) for figure in _area_figures(other))
 
 
 def areas_witnessed(a: GuardSide, b: GuardSide, tol: float, cfg: Settings) -> bool:
-    """W1: a reading of one side is within `tol` of a reading of the other."""
-    for x in area_readings(a, b, cfg):
-        for y in area_readings(b, a, cfg):
-            diff = area_rel_diff(x, y)
-            if diff is not None and diff <= tol:
-                return True
-    return False
+    """W1 (`witness_area`): the gap between two flats' columns is no stated fact.
+
+    Some figure of one side's F (`_area_figures`) is within `tol` of one of the other's, or one
+    side's printed unit figure and its own extras compose a figure of the other (`_composed`);
+    never where both bodies state unit figures that neither meet nor compose, which is two
+    stated areas. Every caller reads it only where the columns are already apart, so a reading
+    takes a column fact away and never adds one, and two columns that pass are the baseline's.
+    A body is read only where both sides carry readings, so a row `rt_fp` serves reads as W31."""
+    if not (cfg.witness_area and _two_flats(a, b) and _both_witnessed(a, b)):
+        return False
+    if _composed(a, b) or _composed(b, a):
+        return True
+    unit_a, unit_b = _printed_unit(a), _printed_unit(b)
+    if unit_a is not None and unit_b is not None and not _within(unit_a, unit_b, tol):
+        return False
+    return any(_within(x, y, tol) for x in _area_figures(a) for y in _area_figures(b))
 
 
 def veto_disposition(side: GuardSide) -> str | None:
@@ -282,9 +316,13 @@ def _column_storey(storey: int, cfg: Settings, source: str | None) -> int | None
 
 
 def storeys_witnessed(a: GuardSide, b: GuardSide, cfg: Settings) -> bool:
-    """W2: the floor columns' gap is no stated fact — both bodies print one storey, the same in
-    a shared noun or one apart across `patro` and `NP` (618930), or one body's one storey, no
-    worded placement against it, is the silent side's column on its camp (147111)."""
+    """W2 (`witness_floor`, two flats both carrying readings): the floor columns' gap is no
+    stated fact — both bodies print one storey, the same in a shared noun or one apart across
+    `patro` and `NP` (618930), or one body's one storey, no worded placement against it, is the
+    silent side's column on its camp (147111). Read only where the columns already differ, so
+    it lifts the veto or the D43 floor fact and never adds one."""
+    if not (cfg.witness_floor and _two_flats(a, b) and _both_witnessed(a, b)):
+        return False
     left, right = dict(a.printed_storeys), dict(b.printed_storeys)
     if left and right:
         if any(len(values) != 1 for values in (*left.values(), *right.values())):
@@ -370,8 +408,7 @@ def _far_pairs_excused(
                 continue
             if _same_closure(left.listing_id, right.listing_id, closure_of):
                 continue
-            if (cfg.witness_area and _both_witnessed(left, right)
-                    and areas_witnessed(left, right, cfg.cluster_area_spread, cfg)):
+            if areas_witnessed(left, right, cfg.cluster_area_spread, cfg):
                 continue
             if not prevails:
                 return False
@@ -381,7 +418,7 @@ def _far_pairs_excused(
                     return False
                 listings = reader()
             a, b = listings.get(left.listing_id), listings.get(right.listing_id)
-            if a is None or b is None or not _printed_areas_prevail(a, b, cfg.witness_area):
+            if a is None or b is None or not _printed_areas_prevail(a, b):
                 return False
     return True
 

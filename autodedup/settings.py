@@ -1071,16 +1071,22 @@ class Settings:
     # the pair veto a reading is applied only where BOTH sides carry readings
     # (`GuardSide.witnessed`), so a row `rt_fp` serves is read as W31 reads it in either order,
     # and the SQL lane refuses the three dials whose readings `rt_fp` has no columns for.
-    # Area (pair veto, cluster spread, D43 area limb): each side reads as its column; as its
-    # column and its one printed unit figure where its own extras compose the two (`44 = 40 + 4
-    # sklep`, void where both bodies print that extra); or as that figure alone where its body
-    # contradicts its column. A body stating two unit figures witnesses nothing; E280 needs a
-    # unit-scope figure in its equal set.
+    # W33m: W1 and W2 are MONOTONE and read two flats only. A reading may excuse a column
+    # difference, never create one: each is read only where the columns already differ, and a
+    # house, commercial or land body is not read at all (it prints a plot, a hall, a built-up
+    # area beside the unit).
+    # Area (pair veto, cluster spread, D43 area limb): a side's figures are its column and the
+    # one unit figure its own body states (within 3x of the column; a body stating two that are
+    # not rounding of one another witnesses nothing). The columns' gap is no fact where a figure
+    # of one side meets one of the other's within the limb's tolerance, or one side's printed
+    # figure and its own extras compose one of the other's (`44 = 40 + 4 sklep`, void where both
+    # bodies print that extra), never where both bodies state unit figures that neither meet
+    # nor compose. E280 reads as W31 reads it.
     witness_area: bool = False
-    # Floor (pair veto, D43 floor limb, flats): both bodies print one storey and the same one in
-    # a shared noun (one apart only `patro` against `NP`), or one body's one storey (`-1. PP`
-    # read too, of the unit only) is the silent side's column on that source's camp, where
-    # neither body words a placement against it.
+    # Floor (pair veto, D43 floor limb, flats): the gap is lifted where both bodies print one
+    # storey and the same one in a shared noun (one apart only `patro` against `NP`), or one
+    # body's one storey (`-1. PP` read too, of the unit only) is the silent side's column on
+    # that source's camp, where neither body words a placement against it.
     witness_floor: bool = False
     # Total floors (D43): a ONE-storey gap between two columns no body prints a count beside is
     # the attic or ground-floor count, not a fact; two storeys or more stay one.

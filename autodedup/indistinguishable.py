@@ -922,23 +922,14 @@ def storeys_disagree(a: Listing, b: Listing) -> bool:
     return bool(left) and bool(right) and not (left & right)
 
 
-def _one_unit_figure(read: frozenset[tuple[float, int, str]]) -> bool:
-    return len({round(value, 1) for value, _decimals, scope in read if scope == "unit"}) == 1
-
-
-def _printed_areas_prevail(a: Listing, b: Listing, unit_required: bool = False) -> bool:
+def _printed_areas_prevail(a: Listing, b: Listing) -> bool:
     """E280: both bodies print the SAME floor-area figures, and neither is a development's.
 
     Set EQUALITY, not overlap: a body that adds a cellar or a terrace to the other's figures is
     a different statement. Never inside a new development, where the next unit shares the
-    template and a square metre is the unit (E273/E275's line). `unit_required` (W32w's
-    `witness_area`): each body's set holds exactly ONE unit-scope figure, so one shared terrace
-    or cellar, or a two- or three-unit template's shared roster, excuses no two columns."""
-    read_a, read_b = printed_areas(a.description), printed_areas(b.description)
-    if unit_required and not (_one_unit_figure(read_a) and _one_unit_figure(read_b)):
-        return False
-    left = {round(value, 1) for value, _decimals, _scope in read_a}
-    right = {round(value, 1) for value, _decimals, _scope in read_b}
+    template and a square metre is the unit (E273/E275's line)."""
+    left = {round(value, 1) for value, _decimals, _scope in printed_areas(a.description)}
+    right = {round(value, 1) for value, _decimals, _scope in printed_areas(b.description)}
     return (bool(left) and left == right and not _development_pair(a, b)
             and not storeys_disagree(a, b))
 
@@ -986,8 +977,7 @@ def _price_sequential_path(
     code = _present(feats, "ref_code_shared") or 0.0
     gap = area_rel_diff(effective_area(a, settings), effective_area(b, settings))
     if (gap is not None and gap > 0.0 and not _column_rounding(a, b, settings)
-            and not (settings.d43_printed_area_prevails
-                     and _printed_areas_prevail(a, b, settings.witness_area))):
+            and not (settings.d43_printed_area_prevails and _printed_areas_prevail(a, b))):
         return False
     if lenient and gap is not None and not any(
             listing.category_main == "komercni" and listing.category_type == "pronajem"
@@ -2491,7 +2481,8 @@ def _floor_fact(a: Listing, b: Listing, cfg: Settings) -> bool:
         return False
     if (cfg.d43_floor_column_body_prevails and _bodies_print_one_storey(a, b, cfg)):
         return False
-    # W32w (witness_floor): two flat columns the bodies' own storeys contradict are no fact.
+    # W32w (witness_floor): two flat columns the bodies' own storeys contradict are no fact; a
+    # lift only, the gap below still decides every pair it does not excuse.
     if (cfg.witness_floor and a.category_main == FLAT_CATEGORY
             and b.category_main == FLAT_CATEGORY and a.floor is not None and b.floor is not None
             and a.floor != b.floor
@@ -2678,10 +2669,13 @@ def named_villa_conflict(a: Listing, b: Listing, cfg: Settings) -> tuple[str, st
 
 def _areas_witnessed(a: Listing, b: Listing, area_a: float | None, area_b: float | None,
                      tol: float, cfg: Settings) -> bool:
-    """W1 (`witness_area`): the areas the two sides state meet within `tol` (`guards.area_readings`
-    over E293's effective columns)."""
-    return cfg.witness_area and areas_witnessed(
-        witness_side(a, cfg, area_a), witness_side(b, cfg, area_b), tol, cfg)
+    """W1 (`witness_area`, two flats): the gap between E293's effective columns is no stated
+    fact (`guards.areas_witnessed`). Read only where the column limb would fire, so it takes the
+    fact away and never adds it."""
+    return (cfg.witness_area and a.category_main == FLAT_CATEGORY
+            and b.category_main == FLAT_CATEGORY
+            and areas_witnessed(witness_side(a, cfg, area_a), witness_side(b, cfg, area_b),
+                                tol, cfg))
 
 
 def _dispositions_differ(a: Listing, b: Listing, cfg: Settings) -> bool:
@@ -2751,8 +2745,7 @@ def distinguishing_facts(
     lenient = mode in (GATE, CLUSTER)
     gate_area_tol = cfg.d43_gate_area_tol if lenient else None
     # E280: two columns the two bodies' own printed figures contradict are not two areas.
-    printed_prevail = cfg.d43_printed_area_prevails and _printed_areas_prevail(
-        a, b, cfg.witness_area)
+    printed_prevail = cfg.d43_printed_area_prevails and _printed_areas_prevail(a, b)
     # E293: an empty land column is filled from the bažoš attribute block (identity when off).
     area_a, area_b = effective_area(a, cfg), effective_area(b, cfg)
     if gate_area_tol is not None:

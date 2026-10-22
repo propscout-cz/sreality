@@ -240,7 +240,7 @@ def build_fingerprint(
         if family in by_family:
             by_family[family].append(image.image_id)
 
-    seen = body_witnesses(description, settings)
+    seen = body_witnesses(description, settings, listing.category_main)
 
     return Fingerprint(
         listing_id=listing.id,
