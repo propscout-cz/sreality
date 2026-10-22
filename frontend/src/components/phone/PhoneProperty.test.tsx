@@ -341,7 +341,7 @@ describe('the phone property page', () => {
     expect(within(page.querySelector('header') as HTMLElement).queryByText(/138\s704/)).toBeNull();
   });
 
-  it('wears the stage wash on a filed property and offers the stage sheet, not a remove', async () => {
+  it('names the stage in the curation row, never over the photos, and offers the stage sheet', async () => {
     vi.mocked(queries.fetchPipelineMembers).mockResolvedValue(
       new Map([
         [
@@ -353,6 +353,12 @@ describe('the phone property page', () => {
     renderAt('/property/304388');
     const cell = await screen.findByRole('button', { name: 'Fáze Prohlídka, změnit' }, LOADED);
     expect(cell).toHaveTextContent('P1 · Prohlídka');
+    /* The gallery shows the photos themselves: no stage wash, no badge or name over them. */
+    const gallery = within(screen.getByRole('group', { name: 'Fotky' }));
+    expect(gallery.getAllByRole('button')).toHaveLength(3);
+    expect(gallery.queryByText('P1')).toBeNull();
+    expect(gallery.queryByText('Prohlídka')).toBeNull();
+    expect(screen.getByRole('group', { name: 'Fotky' }).querySelector('[aria-hidden="true"]')).toBeNull();
     /* A live deal is never hidden. */
     expect(screen.getByRole('button', { name: 'Rozpracovaný obchod nelze skrýt' })).toHaveAttribute(
       'aria-disabled',

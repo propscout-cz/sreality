@@ -228,7 +228,7 @@ toolkit work.
   `/listing/:source/:nativeId`. Also fixed: bezrealitky's English site (`www.bezrealitky.com`,
   `/properties-flats-houses/`), which no rule matched before. Next in W2: the paste box itself.
 - **W2: the property page on the phone and Odkaz** (#1767, [#1782](https://github.com/waiff/sreality/pull/1782)): under the phone shell
-  the property page is the prototype's "Nemovitost" — photo swiper with the stage wash, price + basis,
+  the property page is the prototype's "Nemovitost" — photo swiper (wash removed 2026-10-22; feed/pipeline wash at the extension's quiet values, PR [#1970](https://github.com/waiff/sreality/pull/1970)), price + basis,
   the curation row, then every non-map section as reading + curation (estimations read-only; no maps,
   no estimation start); the fifth tab `/link` takes a pasted link (the first URL in the text) to its
   property, keeps the last five per device, and says "Tento inzerát v databázi nemáme" with the
