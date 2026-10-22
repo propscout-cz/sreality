@@ -26,6 +26,7 @@ from api import dependencies as deps
 from api import main as api_main
 from api import schemas as _s
 from api import tenant_pool
+from api.notifications import ON_EVENT_CONFLICT
 from tests.api._script_conn import ScriptConn
 
 _SUB = "11111111-1111-1111-1111-111111111111"
@@ -540,13 +541,13 @@ def test_patch_tag_invalid_color_422(client, store):
 
 _T0 = datetime(2026, 5, 10)
 # _COLLECTION_PROJECTION: id, name, description, created_at, updated_at, listing_count,
-# monitoring_enabled, notify_channels, is_system, owner_email, shared_with.
-_COLL = (1, "x", None, _T0, _T0, 0, False, [], False, None, [])
-_SYSTEM = (6, "monitoring", None, _T0, _T0, 3, True, ["in_app"], True, None, [])
+# monitoring_enabled, is_system, owner_email, shared_with.
+_COLL = (1, "x", None, _T0, _T0, 0, False, False, None, [])
+_SYSTEM = (6, "monitoring", None, _T0, _T0, 3, True, True, None, [])
 _COLL_PAYLOAD = {
     "id": 1, "name": "x", "description": None,
     "created_at": "2026-05-10T00:00:00", "updated_at": "2026-05-10T00:00:00",
-    "listing_count": 0, "monitoring_enabled": False, "notify_channels": [], "is_system": False,
+    "listing_count": 0, "monitoring_enabled": False, "is_system": False,
     "owner_email": None, "shared_with": [],
 }
 
@@ -617,7 +618,7 @@ def test_update_collection_is_one_update_returning_the_collection():
     [(sql, params)] = conn.executed
     assert "name = CASE WHEN c.is_system THEN c.name ELSE coalesce(%s, c.name) END" in sql
     assert "RETURNING c.id, c.name" in sql
-    assert params == ("x", "d", None, None, 1)
+    assert params == ("x", "d", None, 1)
     assert conn.tx == ["commit"]
 
 
@@ -955,7 +956,7 @@ def test_curation_writes_without_an_account_are_400(client, store, monkeypatch):
 
 _RECIPIENT = "33333333-3333-3333-3333-333333333333"
 _OWNER = "44444444-4444-4444-4444-444444444444"
-_SHARED = (7, "theirs", None, _T0, _T0, 2, False, [], False, "owner@x.cz",
+_SHARED = (7, "theirs", None, _T0, _T0, 2, False, False, "owner@x.cz",
            [{"account_id": _RECIPIENT, "email": None}])
 
 
@@ -979,7 +980,7 @@ class _Opener:
 def test_the_collection_shape_keeps_its_order_and_appends_the_share_fields():
     assert list(curation._to_collection(_COLL)) == [
         "id", "name", "description", "created_at", "updated_at", "listing_count",
-        "monitoring_enabled", "notify_channels", "is_system", "owner_email", "shared_with"]
+        "monitoring_enabled", "is_system", "owner_email", "shared_with"]
 
 
 def test_a_shared_collection_names_its_owner_and_reads_monitoring_as_the_callers():
@@ -989,7 +990,6 @@ def test_a_shared_collection_names_its_owner_and_reads_monitoring_as_the_callers
     proj = " ".join(curation._COLLECTION_PROJECTION.split())
     mine = "c.account_id IN (SELECT acting_account_ids())"
     assert f"CASE WHEN {mine} THEN c.monitoring_enabled ELSE false END" in proj
-    assert f"CASE WHEN {mine} THEN c.notify_channels ELSE '{{}}'::text[] END" in proj
     assert f"CASE WHEN {mine} THEN NULL ELSE" in proj
     # Labels come only through the counterparty function; account_id never leaves the row.
     assert "share_party_emails()" in proj and "c.account_id," not in proj
@@ -1069,16 +1069,18 @@ def test_a_new_share_writes_one_recipient_stamped_notification_and_returns_the_c
     assert share[1] == (1, _RECIPIENT) and "ON CONFLICT DO NOTHING RETURNING account_id" in share[0]
     assert len([q for q, _ in identity.executed if "notification_dispatches" in q]) == 1
     sql, params = dispatch
-    # One kind for both shares (migration 641): 'share', collection_id set for a collection.
-    assert "VALUES ('share', %s::bigint, 'shared', account_email(%s::uuid) || %s::text," in sql
-    # One notification per (collection, recipient) ever: no time in the key, so a revoke +
+    # One source for every share (migration 641): 'share', collection_id set for a collection.
+    assert "VALUES ('share', %(collection_id)s::bigint, %(change_kind)s::text," in sql
+    # One notification per (collection, recipient) ever: no time in the identity, so a revoke +
     # re-share loop cannot refill the recipient's inbox.
-    assert "ON CONFLICT DO NOTHING" in sql and "epoch" not in sql
-    # (collection, owner for the label, the text after it, recipient = the stamped account, key)
-    assert params == (
-        1, _OWNER, ' shared the collection "Byty" with you', _RECIPIENT,
-        f"share:collection:1:{_RECIPIENT}",
-    )
+    assert sql.endswith(ON_EVENT_CONFLICT) and "epoch" not in sql and "dedupe_key" not in sql
+    # The kind names what opens and the owner is the actor (migration 652); a collection share
+    # needs no event_ref.
+    assert params == {
+        "change_kind": "shared_collection", "collection_id": 1, "actor": _OWNER,
+        "message": ' shared the collection "Byty" with you', "recipient": _RECIPIENT,
+        "event_ref": None,
+    }
     assert identity.tx == ["commit"]
     # The gate ran first, and the response is re-read on the tenant connection.
     assert _gate(conn.executed[0][0]) and "FROM collections c" in conn.executed[-1][0]

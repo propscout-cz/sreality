@@ -545,16 +545,15 @@ def _build_registry() -> dict[str, FilterDef]:
             pg_column=None,
             default=None,
             description=(
-                "Where the listing must be. Composite filter with three "
+                "Where the listing must be. Composite filter with two "
                 "complementary sub-fields: a location chip list "
                 "(see the `districts` filter — RÚIAN code equality per "
-                "level), a map bounding box "
-                "(west/south/east/north on the resolved point), and a center+radius "
-                "pair (ST_DWithin around (lat,lng) within radius_m). "
-                "Districts is an independent AND-clause; the map vs "
-                "center+radius pair are mutually exclusive — when both "
-                "are set, center+radius wins. Leave everything null for "
-                "no spatial restriction."
+                "level) and a map box (`bounds`: west/south/east/north, "
+                "WGS84, a band on the property's lat/lng). The box is what "
+                "Browse filters on — its viewport, or the square around a "
+                "centre+radius pick — so a watchdog saved from Browse watches "
+                "the rows Browse showed. Both are independent AND-clauses. "
+                "Leave everything null for no spatial restriction."
             ),
             category=CATEGORY_SPATIAL,
             ui_control=UiControl.LOCATION,
@@ -1176,11 +1175,18 @@ def _build_registry() -> dict[str, FilterDef]:
             description=(
                 "Restrict to energy ratings in this list (single "
                 "capital letters A through G). New constructions "
-                "trend A/B; pre-renovation panel buildings often G."
+                "trend A/B; pre-renovation panel buildings often G. "
+                "G is also the legal placeholder for 'no certificate', "
+                "which no portal marks apart. A property's rating is the "
+                "first non-null one across its ads in canonical order; "
+                "an unrated property never matches."
             ),
             category=CATEGORY_PROPERTY,
             ui_control=UiControl.MULTISELECT,
-            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
+            agendas=frozenset({
+                Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY,
+                Agenda.BROWSE, Agenda.WATCHDOG,
+            }),
             enum_values=ENERGY_RATING_OPTIONS,
         ),
         FilterDef(

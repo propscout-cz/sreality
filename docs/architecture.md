@@ -621,8 +621,8 @@ rules. Identify which one a task belongs to before you start.
   account-scoped data — those sit behind `verify_jwt` / `require_admin` / `tenant_conn`.
   At least these still break it, running service-role behind `require_token`
   alone with no account predicate: `/buildings*` (`building_runs` has tenant RLS since
-  migration 291) and `POST /notifications/dispatches/{id}/estimate` (returns any account's
-  dispatch and starts a run for it) — owed as `roadmap/public-release-track.md` item 11, an
+  migration 291; the other, `POST /notifications/dispatches/{id}/estimate`, was deleted
+  2026-10-21 in notifications W1) — owed as `roadmap/public-release-track.md` item 11, an
   open list. The estimation trace payload and both `/feedback` routes moved onto the tenant
   pool 2026-10-02; the feedback POST's refiner is admin-only (the `database` skill's
   `references/tenancy.md`, named exception); `/filter-presets*` followed 2026-10-12 (per
@@ -765,9 +765,19 @@ rules. Identify which one a task belongs to before you start.
   worker script is the browser's plus an hourly `registration.update()` on resume (a
   resumed iPhone app is not a navigation). No worker code reloads a page; "offered, never
   imposed" holds (#1771), and a chunk 404 still goes to `lazyChunk`, whose reload lands on
-  the network-first `index.html`. Retiring it is a deploy, never a deletion: a deleted
-  `sw.js` leaves the installed worker running, so the file is replaced by the
-  self-unregistering version in its header and registration flips to unregister.
+  the network-first `index.html`. The worker also answers two push events (notifications
+  push W4, `docs/design/notifications-push/PROGRAM.md` § 3.4): the server sends declarative
+  Web Push, which iOS 18.4+ shows without waking the worker; below that the `push` handler
+  ALWAYS shows exactly one notification (field by field from the payload, else "Nové
+  upozornění" opening `/notifications`; a foreign or relative `navigate` becomes an absolute
+  same-origin URL) and then sets the icon badge from `app_badge` — three pushes that show
+  nothing make WebKit drop every subscription of the origin, and nothing server-side would
+  notice. `notificationclick` is the one place the worker opens a page: it focuses the app's
+  open window and navigates it, else opens one. A vitest harness (`src/lib/sw.test.ts`) runs
+  the file in a fake `ServiceWorkerGlobalScope` over every payload shape. Retiring it is a
+  deploy, never a deletion: a deleted `sw.js` leaves the installed worker running, so the
+  file is replaced by the self-unregistering version in its header and registration flips to
+  unregister — which also ends push below iOS 18.4.
 - **One SPA, two frames: the phone shell is chosen by screen width, and the routes do not
   change** (`frontend/src/lib/phoneShell.ts`, `components/phone/`; the Phone app map #1759, W1
   #1766). `usePhoneShell()` is `matchMedia('(max-width: 767px)')` AND no per-device "desktop view"
@@ -778,6 +788,45 @@ rules. Identify which one a task belongs to before you start.
   bottom tab bar for the W1 areas, toasts above it — instead of the TopBar and footer; every
   route outside those areas renders its desktop page inside it, cramped but reachable, and the
   desktop frame is untouched. `/` redirects to `/feed` on the phone frame, `/browse` otherwise.
+  The phone header carries a bell beside the account button (notifications push W5a, ruling R4):
+  the unread count on a copper tally, opening `/notifications` under the back affordance (the page
+  belongs to no tab and has no phone fork: one `max-md:` pass), hidden where the plan's agenda hides
+  notifications. Its number comes from the ONE unread observer `Shell` mounts above both frames
+  (`lib/unreadCount.tsx`: the agenda gate and the 60 s poll the TopBar used to own), which the desktop
+  badge and the Notifications page read too. The installed app's icon badge
+  (`lib/appBadge.ts`, `navigator.setAppBadge`, only when `isInstalledApp()`; every failure swallowed —
+  iOS shows it only once notifications are allowed) has three writers: the observer sets the count
+  (cleared at zero and when `Shell` unmounts on sign-out), `sw.js` sets a push's `app_badge`, and an
+  identity change (or a signed-out launch) clears it. The account
+  sheet keeps its admin Health row: system alerts never reach the bell (R2b).
+  The sheet's first row is this iPhone's push switch, "Oznámení na tomto iPhonu" (W5b;
+  `components/phone/PushSwitch.tsx` over `lib/usePush.ts`, imported eagerly so a sheet opened
+  offline cannot hit the last-resort boundary, hidden where the bell is). Its state is read, never
+  assumed: unsupported first for anything but an iPhone or iPad (by UA or `navigator.standalone`;
+  an Android phone is never prompted, and the server takes Apple's push service only), then not
+  installed (a Safari tab has no `PushManager`: "Přidejte aplikaci na plochu"), unsupported (an
+  installed app without Web Push), denied, unavailable (the server gave no key; a 503 never ends a
+  subscription), off, on (a subscription exists here), busy. Opening the sheet runs
+  `registration.update()` and fetches `GET /push/key` (no `VITE_` key), so the tap only calls
+  `Notification.requestPermission()` inside the click and, on `granted`,
+  `pushManager.subscribe({userVisibleOnly: true, …})`, then `PUT /push/subscription` (a failed PUT
+  unsubscribes again). **Binding follows identity, not a button** (AUDIT F18, `lib/auth.tsx`'s
+  identity-transition effect over `lib/push.ts`): any change of user, sign-out included, and a launch
+  with CERTAINLY nobody signed in end this device's subscription locally (no JWT needed; the
+  server's row ends "gone" at its next push) and clear the badge — a launch whose token refresh
+  failed in transit (`isAuthRetryableFetchError`: offline, a captive Wi-Fi, an Auth 5xx) ends
+  nothing, since supabase-js keeps the stored session for the next try; the explicit sign-out first
+  sends `DELETE /push/subscription` (`signed_out`, ≤ 3 s). Push rides the bell's gate
+  (`notificationsVisible` in `lib/auth.tsx`, handed to `lib/push` `setPushGate` once the plan is
+  read): opening it (a launch, a sign-in) re-sends the subscription, shutting it (a plan without
+  notifications) ends it here, and while it is not open nothing is re-sent. The re-send
+  (`resyncPush`, also on the hourly resume check; iOS never fires `pushsubscriptionchange`) ends the
+  subscription instead when another account switched it on here (a per-device owner in
+  `localStorage`) or when `GET /push/key` answers a key other than the one it was made with (a
+  rotated VAPID key; a failed read is no verdict). A tapped push lands on `/n/:dispatchId`
+  (`pages/NotificationOpen.tsx`, lazy): mark-seen under RLS, then `dispatchTarget(row)` by
+  replace (404 → `/notifications`); `?d=` there and on the coalesced `/notifications?d=` is
+  reported once to `POST /push/opened`, never awaited.
   The feed (`pages/Feed.tsx`) adds no query path: it is Browse's `fetchListingsForCards` under
   Browse's query key (so dismissal, merge and pipeline sweeps reach it), presets applied the way
   Browse loads them, and a phone menu is the desktop menu's body in a bottom sheet
@@ -1368,11 +1417,9 @@ renumber.** Navigate by area:
     and re-adding the CHECK (two ALTERs), in lockstep with the `CreateEstimationIn.source`
     `Literal`, `api/schemas.py`).
 
-    Two paths still fork the ledger and are owed a fix. (1) The Watchdog feed's "Run estimation"
-    (`POST /notifications/dispatches/{id}/estimate`) hand-INSERTs its rows and runs its own
-    executor (`api/notifications.py`: `_insert_pending_run`, `_insert_failed_run`,
-    `run_pending_estimation`), so its runs carry no trace steps, no `reference_rent` and never
-    take the job lane. Tracked in `roadmap/public-release-track.md` (Wave 3). (2)
+    One path still forks the ledger and is owed a fix (the other, the Watchdog feed's "Run
+    estimation", `POST /notifications/dispatches/{id}/estimate`, with its own executor and no
+    trace, was deleted 2026-10-21 in W1 of `docs/design/notifications-push/PROGRAM.md`, ruling R10):
     `scripts/smoke_agent.py` (the manual `smoke_agent.yml` workflow) hand-INSERTs a production
     row (`source='api'`, `mode='agent'`, `status='running'`) per invocation and drives the agent
     itself — either route it through `create_estimation_run` or sanction it here as the one
@@ -1456,7 +1503,11 @@ renumber.** Navigate by area:
     energy class G is not sent (`assumed` —
     Czech ads without a PENB certificate must state G too), and a yes/no attribute is sent only
     when the ad says yes — portals store "not mentioned" as no (sreality's garage, bezrealitky's
-    lift), so a no stays `missing` with its reason.
+    lift), so a no stays `missing` with its reason. **Náš přepočet** (operator ruling 2026-10-21): the SPA
+    recomputes Valuo's own average over the comparables the user leaves ticked (a geometric mean of their
+    `adjusted_price_m2` weighted by `score_prct`, a realised sale twice; `frontend/src/lib/valuo.ts`), labelled
+    ours, held in page state only, never stored and never an `estimation_runs` row, and offered only while the
+    recipe over ALL comparables lands within 1 % of Valuo's `avg_price_m2`.
 
     Calibration — how a Valuo number is judged — reads production rows only, drops every row that
     leaned on an assumption for a required parameter (a success never lacks one: the POST refuses;
@@ -1915,11 +1966,13 @@ renumber.** Navigate by area:
     claim as its row stored it (E960), so a merge is applied only when every advert it moves was
     refreshed — re-read and its pairs re-decided — within 12 h (a policy window) and under the
     engine version the lane runs now; otherwise the group waits (`stale_decision`) and the next
-    pass re-claims waiting groups whole — a group whose cluster holds an active advert first
-    (E973), then flats for sale, flats for rent, the rest (E972, the operator's Prague
-    priority), oldest first within each — 200 adverts on top of its feeds (E971: the worker's
-    memory holds a pass to ~300 adverts; a group that does not fit is skipped for the next
-    ones, the first taken whole whatever its size, E973), never more than the
+    pass re-claims waiting groups whole — Praha, the towns the apply scope names with a
+    `town:` block, the rest (E974, the operator's order of 2026-10-21), then flats for sale,
+    flats for rent, houses and commercial for sale, the rest (E972, E974), oldest first within
+    each, a group going by its best member, active and inactive groups together (the operator's
+    ruling of 2026-10-21 retired E973's active-first level) — 200 adverts on top of its feeds
+    (E971: the worker's memory holds a pass to ~300 adverts; a group that does not fit is
+    skipped for the next ones, the first taken whole whatever its size, E973), never more than the
     claim cap a death halves (E948), on its first attempt, each group at most once in 6 h
     (stamped once the pass carrying it commits, is refused, hits its deadline or raises; a
     shutdown, a lost lease or a kill stamps nothing, E973), and none while the apply scope is
@@ -2062,7 +2115,7 @@ renumber.** Navigate by area:
     rendered per relation. `toolkit/filter_compiler.compile_filter_where` compiles every
     column-backed FilterDef from its derived `sql_kind` and every irregular one from ONE hook
     table. It does this for the Watchdog matcher (`properties_public`, adapter
-    `api/notifications._build_match_clauses`, which adds the served predicate, the circle and
+    `api/notifications._build_match_clauses`, which adds the served predicate, the map box and
     the place chips) and for every estimation cohort (`listings`, adapter
     `toolkit/comparables._shared_filter_where`: comparables, velocity, the transit corridor).
     Browse is not compiled in Python. Its TS auto-dispatch is pinned to the same generated
@@ -2071,8 +2124,18 @@ renumber.** Navigate by area:
     `curated_cities_matching()`, served predicate, and the `__unknown__` "Neuvedeno" chip of
     `furnished` / `ownership` / `condition_match`: NULL or a value outside the column's canon,
     `COLUMN_CANONICAL_VALUES`, which the canon itself never joins; the RPCs spell each canon out,
-    `tests/test_one_place_predicate.py` pins them, migration 644 added condition's). Open divergences: center+radius is a circle
-    in Python and a bounding square in Browse (M3); the six amenities are the property's union
+    `tests/test_one_place_predicate.py` pins them, migration 644 added condition's). **The map box is the
+    ONE spatial shape** (2026-10-21, closed M3): Browse filters by `effectiveBbox` — its viewport, or
+    the square around a centre+radius pick (a circumscribed square, accepted since the mode shipped;
+    the main map still draws the exact circle) — as a lat/lng band on the list and both stats RPCs
+    (`bbox_*`); `WatchdogFilterSpec.bounds` (the `location` composite's one sub-field beside the
+    `districts` chips, Browse's `MapBounds`) is that same box, rendered as the same band by
+    `api/location_filter.bounds_where`, so a watchdog saved from Browse watches the rows Browse
+    showed; the matcher's own circle (`lat`/`lng`/`radius_m`, ST_DWithin) is gone, no stored spec
+    ever carried one. Saving from Browse offers the viewport box through one checkbox (ticked;
+    the preset dialog's question, because a stale viewport would fire forever) and takes a
+    centre+radius square always; the editor's `MapAreaControl` sets the box to the mini-map's
+    view. A true circle, if ever wanted, is one change for both surfaces. Open divergence: the six amenities are the property's union
     (MS6) for the Watchdog, Browse and Stats but the canonical advert's own flags in an
     estimation cohort, until MS20
     (`docs/design/merge-sprint/PROGRAM.md` §9). `WatchdogFilterSpec`'s fields EQUAL the
@@ -2173,52 +2236,116 @@ renumber.** Navigate by area:
     and the bare spelling made "not Prague" quietly mean "not Prague AND located".
     `notification_dispatches` is the **unified notification event table** (migration 206 —
     physical name kept; conceptually "notifications"): one source-generic, append-only event row per
-    `(source_kind ∈ {watchdog, collection_monitor, share, system_health}, subject,
-    change_kind)` — **property-grain** for the first two, a text row for the last two (the
+    `(source_kind ∈ {watchdog, collection_monitor, share}, subject,
+    change_kind)` — **property-grain** for the first two, a text row for `share` (`system_health`, the
+    fourth until W1, is closed history: no writer, hidden by migration 651, deleted in W6; the
     `SourceKind` alias in `api/notifications.py` is the list),
-    deduped by a single per-event **`dedupe_key`** (`wd:{sub}:new:{property_id}` once-ever;
-    `wd:{sub}:price_drop:{snapshot_id}` **per-snapshot**, so a property that keeps dropping fires
-    once per real cut — and so does the collection-monitor producer). **A price step is one
+    deduped by **ONE event identity** (notifications W3, migration 653): the unique index
+    `notification_dispatches_identity_uq` over `EVENT_IDENTITY` (`api/notifications.py`) =
+    `(account_id, source_kind, subscription_id, collection_id, change_kind, property_id, event_ref,
+    actor_account_id)`, NULLS NOT DISTINCT, partial on `duplicate_of IS NULL` — a watchdog's `new`
+    once ever per property, a price step **once per snapshot** (`event_ref`), so a property that keeps
+    dropping fires once per real cut — and so does the collection-monitor producer. Every producer
+    INSERT and the share grant end in `ON CONFLICT (<EVENT_IDENTITY>) WHERE duplicate_of IS NULL DO
+    NOTHING` (`ON_EVENT_CONFLICT`, a test pins all of them and the index to one tuple); nothing writes
+    the pre-W3 `dedupe_key` (nullable since 653; its UNIQUE and column go in W6) or
+    `trigger_snapshot_id`, and nothing parses a key (F24). **The producers run on ONE
+    clock (notifications W2a, migration 652):** the realtime worker's `notifications` lane runs
+    `match_once` (step `watchdog_new`), `match_changes_once` (`price`) and
+    `match_monitored_collections_once` (`monitor`) every 300 s, each step in its own transaction; a
+    failing step is its own `lane/notifications/<step>` jobs cell (red alone while the others write;
+    every statement commits on its own, so no INSERT's locks outlive it); the API's `matcher_loop`
+    runs the same three beside it until W2b. **The cursor is gone:** a watchdog's `new` is ONE INSERT
+    over properties first seen in the last 24 h and after its `active_since` (stamped by a trigger on
+    create, on every switch-on and on every filter edit: an edited watchdog is a new start), images-first gated (a hold ends inside the window, so it never loses a property), so a
+    late-matching property under a day old still fires and a resumed watchdog never floods; `price` is
+    ONE canonical-ad step fragment (`_CANONICAL_PRICE_STEPS`, 7 days, from `active_since` /
+    `monitor_since`) for both producers; `monitor`'s `inactive` waits out 24 h gone (a portal blink
+    sends neither Delisted nor Relisted). Every row writes `event_ref` (the discriminator within
+    source, kind and property: snapshot id, inactive epoch, for `reactivated` the epoch of the
+    inactive dispatch it answers, introducing listing, dashboard id, pipeline mode) and a share its
+    `actor_account_id`; each producer's `event_ref` is what migration 652 backfilled from the old key
+    on the rows written before it (a render test pins the two), so no event already told re-fires.
+    **A price step is one
     advert's change against its OWN previous priced snapshot** — `listing_price_steps`
     (migration 559) is the one definition, read by the watchdog, the collection monitor and
     the property rollup alike; the two notification producers used to window every advert of
     a property into one series, so two portals quoting 5.0M and 5.2M fired a drop and a rise
     on every scrape and a merge alone sent false alerts. Each row carries provenance
-    (`trigger_price_czk` / `prev_price_czk` / `trigger_snapshot_id`) and producer-stamped
-    `target_channels` (the delivery-layer contract, see `docs/design/notifications-unified.md`).
+    (`trigger_price_czk` / `prev_price_czk`; the snapshot is its `event_ref`); since W1 (2026-10-21) producers
+    write facts only, never `channel`, `status` or `target_channels` (W6 drops them; the routing
+    contract of `docs/design/notifications-unified.md` is superseded by `docs/design/notifications-push/PROGRAM.md`).
     Rows are carried onto the survivor by `PROPERTY_CARRIERS`' `notification_dispatches` entry
-    (rule #18, `toolkit/property_carriers.py`, collapse key `(subscription_id, collection_id,
-    change_kind, trigger_snapshot_id)`, NULL-safe — the merge's one delete there, its `channel_sends`
-    re-pointed onto the kept row first (`Dispatches.RESEND_SQL`: the FK is ON DELETE SET NULL and
-    `channel_sends_check` refuses a NULL on a notification-backed send, so one delivered alert used to
-    abort the whole merge; `Dispatches.LOCK_SQL` first locks the retired rows FOR UPDATE in its own
-    statement, so an outbox claim cannot land a send between the re-point and the delete); deleting a
-    subscription or collection cascades its rows) so they never orphan
-    onto a `merged_away` property. **Delivery and detection are SEPARATE:** in-app delivery is the event row itself
-    (`channel='in_app'`); external channels (email/Telegram, Sprint N) deliver via a dedicated
-    `channel_sends` ledger draining `target_channels` — NOT a `channel`-column widen. (The old
+    (rule #18, `toolkit/property_carriers.Dispatches`), so they never orphan onto a `merged_away`
+    property: ONE UPDATE re-points every alert of the retired property and, where the survivor already
+    holds the same identity (`Dispatches.IDENTITY` = `EVENT_IDENTITY` without `property_id`, NULL-safe,
+    the survivor's unmarked rows, the earliest), marks it `duplicate_of` that row. **A merge deletes no
+    alert:** W3 retired the collapse on `(subscription_id, collection_id, change_kind,
+    trigger_snapshot_id)`, which erased distinct events as "twins" (audit F6: two epochs' Delisted),
+    and its `channel_sends` LOCK/RESEND steps (no writer since W1). The re-pointed row is also what
+    closes the second `new` after two fresh properties merge: it holds the survivor's identity, so the
+    producer's next pass over the survivor conflicts. **Producers and merges serialize on one
+    transaction-scoped advisory lock** (`NOTIFICATION_EVENTS_LOCK_SQL`, `toolkit/property_carriers.py`;
+    W3 review), because the identity includes `property_id`, which a merge changes: a merge takes it
+    EXCLUSIVE before its first `properties` row lock (`merge_property_set`, `lock_properties`,
+    autodedup's `recheck_group`; taken after them it would deadlock with a producer whose foreign key
+    check waits on those rows), and each producer statement takes it SHARED as its own statement first
+    (`_commit_one`), so its snapshot comes after any merge's commit (the retired property merged_away)
+    and a later merge's REPOINT sees the producer's row and marks the twin
+    (`tests/test_notification_events_lock_live.py`, two connections). Alerts write no carry rows, so a detach or split
+    leaves them in place (a split-off property under a day old may get `new` once more: accepted).
+    **Deleting a watchdog retires it** (`retired_at`, `is_active = false`; F21): it stops matching and
+    leaves the list, and its rows stay for analysis; deleting a collection still cascades its rows
+    (collection retirement is deferred). What any reader sees is ONE fragment, **`VISIBLE_SQL`**: not a
+    marked repeat, not about a property the event's own account dismissed, not from a retired
+    watchdog — the same under RLS and on the service role. **Delivery and detection are SEPARATE:** in-app delivery is the event row itself;
+    external delivery is a ledger of its own, never a `channel`-column widen. (The old
     migration-057 comment claiming a new channel was "a one-line ALTER" was **false**: migration
     096 dropped `channel` from the dedup key, so the grain could never carry a second channel —
-    which is why delivery gets its own ledger.) **A SECOND producer is live (Sprint C):
-    `match_monitored_collections_once` (api/notifications.py, own daily cadence
-    `notifications_monitor_interval_seconds` + window `notifications_monitor_window_days`) emits
+    which is why delivery gets its own ledger.) The first ledger, `channel_sends` (Sprint N: email and
+    Telegram through an outbox draining `target_channels`), never sent a row and lost every writer in
+    W1 (2026-10-21; W6 drops it). **External delivery is `notification_deliveries`** (migration 654,
+    notifications push W4; `docs/design/notifications-push/PROGRAM.md` § 3.2–3.5): ONE row per (event,
+    device), `UNIQUE (notification_id, push_subscription_id)`, ending `sent | skipped | gone | failed` with
+    a one-word `reason` (Apple's, an HTTP status, a transport error's class, or `seen | hidden | stale |
+    device_ended | capped`; a CHECK refuses anything longer). A device is a `push_subscriptions` row: one
+    installed iPhone app per account, one live row per endpoint (another account registering it ends the
+    old row `replaced`), its https `origin` the absolute link base, ending `gone | signed_out |
+    switched_off | replaced` with its three secrets blanked. Recipients come from the event's account at
+    send time through ONE join (`ps.account_id = d.account_id AND ps.ended_at IS NULL`), never from the
+    producer. The worker's `push` lane (15 s; brake: no `VAPID_PRIVATE_KEY`) fans out every VISIBLE unseen
+    event of the last day to the devices registered before it (a share past one per sharer a day is
+    `skipped/capped`), claims due rows by compare-and-set (`next_attempt_at` is a 2-minute lease, `FOR
+    UPDATE SKIP LOCKED`, so a deploy overlap shares no row and a killed send returns; no device is started 90 s
+    after the claim, a POST is bounded at 3.05 s + 6 s, and every later write is a compare-and-set on the
+    claimed `(id, attempts)`, so an overrun claimer never overwrites a newer outcome), re-checks them,
+    sends ONE declarative Web Push per device (`api/push.py`: RFC 8291 aes128gcm, RFC 8292 VAPID with
+    `sub` = the device's origin; `TTL` ≥ 60 s, `Urgency: high`, a `Topic` per batch) and finalizes it at
+    once (a 429 holds the DEVICE, `push_subscriptions.hold_until` = Retry-After, and hands the rows their
+    attempt back, so throttling never fails an alert; a retry waits 2ⁿ min, the fifth fails for good). Its words are one
+    Czech renderer (`api/notification_render.py`, by `change_kind`, from the frozen prices and the place
+    label; a share says what opens, never who), its link `/n/{id}?d={delivery}` (coalesced:
+    `/notifications?d=`), which `POST /push/opened` stamps. The endpoint is a secret: validated before
+    SQL, never logged, never in an error. **A SECOND producer is live (Sprint C):
+    the collection monitor (`match_monitored_collections_once`, its price half in `match_changes_once`,
+    both on the lane's 300 s clock over a 7-day window) emits
     `source_kind='collection_monitor'` dispatches for every property in a `monitoring_enabled`
     collection — `price_drop`/`price_rise` (per-snapshot), `inactive`/`reactivated` (lifecycle;
     `reactivated` reads the prior `inactive` dispatch as the durable "was dead" marker since
     `listings.inactive_at` is cleared on reactivation), and `new_source` (a sibling listing on a
     new portal). It is set-based (one `INSERT…SELECT` per kind across all monitored collections),
-    collection-scoped dedupe (`cm:{collection}:{kind}:{discriminator}`), `target_channels` stamped
-    from the collection's `notify_channels`. Every detector is **anchored on `monitor_since`**
+    idempotent on the one identity (collection, kind, property, `event_ref`); until W1 it also stamped
+    `target_channels` from the collection's `notify_channels`. Every detector is **anchored on `monitor_since`**
     (= `greatest(collection_properties.added_at, collections.monitoring_enabled_at)`, migration 230)
     so it fires only for changes observed AFTER the operator started watching that property — a
     price drop / delisting / new source that PREDATES membership never notifies (the false-positive
     the anchor closes). `monitoring_enabled_at` is stamped by a trigger on every false→true
     monitoring transition, so the anchor is correct across all write paths.
     `broker_change` is in the `change_kind` CHECK
-    (migration 209) but NOT yet emitted — `listing_broker_public` is current-state-only with no
-    change signal; the kind is reserved for when one exists. **A THIRD producer is live
-    (migration 274; reshaped by migration 619 in wave 1 of the Health dashboard sprint,
-    `docs/design/health-dashboard.md`): `system_health`.** Its measurer is ONE registry,
+    (migration 209) but never emitted — `listing_broker_public` is current-state-only with no
+    change signal; the kind leaves in W6. **The health ladder, `system_health`,
+    was the third producer until W1** (migration 274; reshaped by migration 619 in wave 1 of the Health
+    dashboard sprint, `docs/design/health-dashboard.md`; since ruling R2b, 2026-10-21, it writes no dispatch). Its measurer is ONE registry,
     `scripts/verify_pipeline.py` `CHECKS`: each check is declared once with its class (`alarm` or
     `gauge`), host, cadence, label, unit and owner page, and each host projects (and deletes) only
     its own keys in `health_checks`. Hosts: `realtime-worker` — the platform alarms `jobs`,
@@ -2239,22 +2366,20 @@ renumber.** Navigate by area:
     clock: every statement's `statement_timeout` is the check's remaining budget (wave 2); its
     thresholds live once, in `THRESHOLDS`, each with its basis, and nothing overrides them (wave 3).
     Measuring writes no system alert and reds no run. The ONE teller is
-    `toolkit/system_alerts.reconcile`, run by the API every 60 s beside the watchdog matcher (the
-    outbox delivers its rows once a transport is configured):
+    `toolkit/system_alerts.reconcile`, run by the API every 60 s beside the watchdog matcher:
     it keeps one `ops_incidents` row per failing cell (signature `cell:<key>:<subject>`) — a
     measured `fail` opens it, `warn` keeps it open, an OK measured across the hold — two cadences
     less the due slack, never under 30 min — closes it (the newest OK's `run_at` at least the hold
-    after the first OK's; one lone OK never recovers), Not measured never touches it — and emits
-    `source_kind='system_health'` dispatches, at most one onset, one reminder and one recovery per
-    check per pass (dedupe `sys:<key>:<onset|reminder|recovery>:…`), reminding at 6 h / 24 h / 72 h
-    then weekly for an alarm and every 24 h for a gauge: `subscription_id` and `collection_id` both
-    NULL (widened `notification_dispatches_source_ck`), `sreality_id` nullable since the alert isn't
-    about any one listing, verbatim text in the `message` column, `change_kind = 'system_alert'`.
-    **Read is not acknowledged:** reading a notice in the bell stamps `seen_at` (a platform admin
-    may do that on a SYSTEM row since migration 619's `notification_dispatches_admin_update` policy,
-    with `authenticated` UPDATE narrowed to `seen_at` and `estimation_run_id`), while only
-    `POST /admin/health/acknowledge` stamps `ops_incidents.acknowledged_at` — and only that stops
-    reminders. Reads are admin-gated: `pipeline_checks_public` serves one row per registered key
+    after the first OK's; one lone OK never recovers), Not measured never touches it — and stamps
+    each rung on the incident (`alerted_at`, `alert_count`): the onset, then 6 h / 24 h / 72 h then
+    weekly for an alarm and every 24 h for a gauge. Until W1 each onset, reminder and recovery was
+    also a `source_kind='system_health'` dispatch (dedupe `sys:<key>:<onset|reminder|recovery>:…`,
+    `change_kind = 'system_alert'`, verbatim `message`, every property column NULL); since ruling R2b
+    (2026-10-21, superseding 2026-10-18's "bell only") it writes none, and migration 651 hides the
+    902 old rows (W6 deletes them after a backup). **Only acknowledgement silences:**
+    `POST /admin/health/acknowledge` stamps `ops_incidents.acknowledged_at`, which stops reminders and
+    the canary's e-mail (until W1 a bell read also satisfied the canary; 651 dropped 619's
+    `notification_dispatches_admin_update` and narrowed `authenticated` UPDATE to `seen_at`). Reads are admin-gated: `pipeline_checks_public` serves one row per registered key
     with its newest result, its `effective_status` (`unknown` when there is no row, the newest row is
     `unknown`, or it is older than the key's `staleness_budget` by `public.health_stale`; a result
     past its staleness budget is Not measured for the ladder as well as the page) and its
@@ -2272,9 +2397,8 @@ renumber.** Navigate by area:
     checks: a matrix cell is that check's worst MEASURED cell for that portal (the cells' `portal`,
     never a parsed subject), Not measured only when none was measured (the harness's own
     `common.result` rule), and portal-less cells (`fleet/*`, `census`) stay out of it. Check rows
-    carry `id=<key>` and cells `id=<key>:<subject>` (percent-encoded), where the outbox's
-    `/health#<key>` link and the bell's "Open Health" link (the feed's `check_key`, read off the
-    `sys:<key>:` dedupe key) land.
+    carry `id=<key>` and cells `id=<key>:<subject>` (percent-encoded), so `/health#<key>` lands on a
+    check (the outbox's and the bell's links to it went in W1).
     **Every watcher is watched by another (wave 2, migration 620).** The watcher,
     `public.health_liveness()` (SECURITY DEFINER, execute revoked from the browser roles; pg_cron
     job `health-liveness`, every 5 min, under a 60 s statement timeout), runs outside the worker
@@ -2285,56 +2409,58 @@ renumber.** Navigate by area:
     watchdog matcher's lease lapsed; a NULL lease left by a clean shutdown is Not measured;
     interval 0 = off) and an `unalerted` cell (an alarm cell measured failing now and two cadences
     ago with no open incident); a subject that stops failing reads `ok` while its incident is open,
-    so it recovers with a notice. It replaced the `worker_liveness` check and migration 274's 24 h
+    so it recovers on a measured OK. It replaced the `worker_liveness` check and migration 274's 24 h
     dead-man job (`emit-verification-stale-alert`, unscheduled by 620; its function goes in 624). **The
     canary** is the ONE monitoring workflow, `verify_pipeline.yml` (cron hourly; GitHub delivers
     about five runs a day): it records every other workflow's production runs (the poller: event
     `schedule`, or `push` on `main`; each red with its reason line, judged by the `jobs` check as a
     job cell), measures the `github-actions` checks, then `scripts/health_canary.py` asserts that the database answers
     (exit 2), the newest `liveness` row is under 30 min old, every failing liveness cell has an
-    open incident after 15 min, and every alarm onset or reminder sent 15 min to 12 h ago was
-    seen or delivered, or its key's cell incidents are all acknowledged or closed (exit 1; gauge
-    notices are never asserted). A failing check never reds the run; the assertions do, as does a crash
+    open incident after 15 min, and no open, unacknowledged alarm incident's latest rung
+    (`ops_incidents.alerted_at`) is 15 min to 12 h old (exit 1; gauges are never asserted; since W1
+    it reads no `channel_sends`, `seen_at` or dedupe key). A failing check never reds the run; the assertions do, as does a crash
     of the poller or the harness or the harness step overrunning its 6 minutes, so GitHub's failure email is
-    the one path to the operator that needs neither Supabase's scheduler nor Railway — with the
-    bell the only channel (2026-10-18 ruling), it is how an unread alarm leaves the app. Who
+    the one path to the operator that needs neither Supabase's scheduler nor Railway — with system
+    alerts out of the bell (R2b), it is how an alarm leaves the app, at today's rhythm (R9a). Who
     watches whom: pg_cron watches the worker, the API's loops, the teller and every alarm's
     freshness (the canary's own keys included); the API tells; the canary watches pg_cron, the
-    teller and whether an alarm was heard; the worker's `jobs` check watches every scheduled
-    machine, the canary's poller included (wave 3). **The `system_health` arm is
-    one of the two producers (with `share`) that are NOT property-grain** — it is about
-    the pipeline, not a listing, so `listing_id` / `sreality_id` / `subscription_id` /
-    `collection_id` are all NULL, the operator-state merge reconciler has nothing to re-point on it,
-    and `compose_message()` sends its stored `message` verbatim as the body instead of building a
-    listing subject: the subject is the text before its first ` — ` (else its first 120
-    characters) and the link `{SPA_BASE_URL}/health#<key>`, the key read off its `sys:<key>:`
-    dedupe key (wave 3). **One incident model since wave 3 (migration 621):** the reliability
+    teller and whether an alarm stands unacknowledged; the worker's `jobs` check watches every scheduled
+    machine, the canary's poller included (wave 3). **The `system_health` rows (history since W1) are
+    NOT property-grain** — about the pipeline, not a listing, so `listing_id` / `sreality_id` /
+    `subscription_id` / `collection_id` are all NULL and the merge reconciler has nothing to re-point
+    on them. **One incident model since wave 3 (migration 621):** the reliability
     program's `ops_incidents` signature engine (migration 462: one open row per error-TEXT
     signature, fed by `scraper.portal_runner`'s crash path, the worker's lane failures and the
     poller's job-log backstop) is deleted and its open rows closed as `retired: signature engine`;
     a red production run is now a `jobs` cell carrying its reason line
     (`scripts/failure_signature.reason_line`), and a portal failing inside the worker a lane cell.
-    Delivery, watcher and canary detail: `.claude/skills/scraper-ops/references/pipeline-verification.md`.
-    **A FOURTH producer is live (migration 610, one kind for every share since 641; dashboards since 647): `share`.**
+    Watcher and canary detail: `.claude/skills/scraper-ops/references/pipeline-verification.md`.
+    **The third live producer is `share` (migration 610, one kind for every share since 641; dashboards since 647).**
     `api/shares.py` writes it for a collection share (`POST /collections/{id}/shares`: ONE dispatch
-    per (collection, recipient) ever, `dedupe_key` `share:collection:<collection>:<recipient>`, no
-    time: a revoke + re-share loop cannot refill an inbox; `collection_id` set; "<owner email> shared
+    per (collection, recipient) ever — the identity holds no time, so a revoke + re-share loop cannot
+    refill an inbox; `collection_id` set; "<owner email> shared
     the collection "<name>" with you") and for a pipeline share (`POST /pipeline/shares`: one per
-    (owner, recipient, mode), `share:pipeline:<owner>:<recipient>:<mode>`, written when the grant is
+    (owner, recipient, mode), written when the grant is
     new or widens to edit; `collection_id` NULL; "<owner email> shared their pipeline with you (view
-    only|edit)") and for a dashboard share (647: `share:dashboard:<dashboard>:<recipient>`, once ever, `collection_id`
-    NULL, "<owner email> shared the dashboard "<name>" with you") — `subscription_id` NULL, `change_kind = 'shared'`, the one stored copy of an email
-    in the sharing model (a snapshot at share time), in-app only (`target_channels` empty, never
-    routed to email/Telegram). Migration 641 renamed 610's `collection_share` rows and keys. It is stamped to
+    only|edit)") and for a dashboard share (647: once per (dashboard, recipient) ever, `collection_id`
+    NULL, "<owner email> shared the dashboard "<name>" with you") — `subscription_id` NULL, `change_kind` naming what opens
+    (`shared_collection | shared_dashboard | shared_pipeline`, migration 652, which relabelled the old `'shared'` rows; the feed's
+    `share_kind` reads it), `actor_account_id` the sharer and `event_ref` the dashboard id or the mode (the feed's `share_ref` is
+    the collection id, the actor or the event_ref, never a parsed key), the one stored copy of an email
+    in the sharing model (a snapshot at share time), in-app and pushed since W4 (collection-sharing
+    ruling 5(e)'s in-app-only superseded 2026-10-21, `docs/design/notifications-push/PROGRAM.md` § 3.1). Migration 641 renamed 610's `collection_share` rows and keys. It is stamped to
     the RECIPIENT by the route on the service role (tenants hold no INSERT on the table), and the
     `sync_notification_dispatches_account_id()` trigger KEEPS the supplied account for this kind
     and raises when none is supplied. Like `system_health` it is NOT property-grain
     (`property_id` NULL), so no carrier touches it. ONE `SourceKind` alias in
-    `api/notifications.py` names the four kinds for every list/unread/mark route.
+    `api/notifications.py` names the kinds every list/unread/mark route accepts.
     The unified in-app **Notifications**
     page (`/notifications`) reads every producer off one LEFT-join feed (the watchdog-only
-    INNER join became a LEFT join + a `collections` join so monitor and system_health rows
-    aren't dropped), and a red nav unread badge polls `GET /notifications/unread-count`;
+    INNER join became a LEFT join + a `collections` join so monitor and share rows aren't dropped;
+    its System tab and the duplicate `/watchdog` feed went in W1, `/watchdog` now lists the watchdogs,
+    and the feed pages with "Load more"), and ONE unread observer (`frontend/src/lib/unreadCount.tsx`,
+    mounted once by `Shell`, W5a) polls `GET /notifications/unread-count` for the red desktop nav badge,
+    the phone header's bell, the page itself and the installed app's icon badge;
     `POST /notifications/mark-all-seen` clears it.)
     **The Stats tab is a dashboard over the SAME cohort (migration 626, `docs/design/stats-dashboard.md`).**
     One pivot RPC, `browse_stats_properties(<625's 74 cohort parameters>, spec)`, keeps 625's WHERE byte
@@ -2402,11 +2528,13 @@ renumber.** Navigate by area:
     and **follows the property across a merge**, which records it in the carry record.
     `toolkit/property_carriers.py` (`PROPERTY_CARRIERS`, the one ordered list; `NOT_CARRIED` +
     the census) carries that state inside the merge transaction, in a fixed order:
-    collections, tags, notes AND `notification_dispatches` as `CurationTable`s (SET tables union
+    collections, tags and notes as `CurationTable`s (SET tables union
     with collision-collapse; APPEND tables move every row), then `property_artifact_links` (migration
     599: the operator's one "Artifact link" URL per property, a SET table on `account_id` with no
     `at`, so the survivor's link stands on a collision, nothing is recorded, and a detach leaves
-    it where it is); the pipeline (rule #22); then
+    it where it is); `notification_dispatches` (`Dispatches`, migration 653: ONE UPDATE re-points
+    every alert and marks the one the survivor already holds `duplicate_of`, deleting none, rule 16);
+    the pipeline (rule #22); then
     dismissals, AFTER the pipeline so a live card lifts its account's dismissal. The private
     `_merge_pair` (one per retired property of a `merge_property_set`) is the only writer that
     retires a property, and it runs every carrier before the retire, so no operator-state row can
@@ -2463,8 +2591,8 @@ renumber.** Navigate by area:
     routes `/collections/{id}/properties`, `/properties/{id}/tags`, `/properties/{id}/notes`); the
     browser never writes directly. **Collections carry monitoring (Sprint C, migration 211):
     `monitoring_enabled` opts a collection into change alerts (the collection-monitor producer,
-    rule #16) and `notify_channels` is its delivery-channel pick (folded into the dispatch's
-    `target_channels`); a protected default "monitoring" collection (`is_system=true`, can't be
+    rule #16; `notify_channels`, its old delivery-channel pick, is neither read nor written since
+    W1 and W6 drops it); a protected default "monitoring" collection (`is_system=true`, can't be
     renamed or deleted) ships monitoring on. The "add to collection" affordance lives on the
     Browse card (a layers control ADJACENT to the pipeline funnel — rule #22 keeps the funnel the
     sole pipeline affordance), the listing-detail header (`CollectionSaveToggle`; the page's second
@@ -2670,15 +2798,15 @@ renumber.** Navigate by area:
     production with 20,000 dismissals stacked on the newest rows: card page 49 ms, exact count
     115 ms (31 ms baseline), Stats no slower, map clusters +95 ms.
     **Notifications: a dismissal hides, it never un-detects.** The watchdog matcher, change
-    detector and collection monitor are untouched — `match_once` advances its cursor whether or
-    not it inserts, `:new:` dedupe keys are once-ever, and the `reactivated` detector keys off a
+    detector and collection monitor are untouched — `match_once` reads its 24 h window whether or
+    not it inserts, a `new` identity is once-ever, and the `reactivated` detector keys off a
     prior `inactive` dispatch, so suppressing an INSERT would lose the event for good on undo.
     Instead every in-app read of `notification_dispatches` — the feed and its total, the unread
-    badge, mark-all-seen, each watchdog's dispatch count — carries one `_NOT_DISMISSED` predicate
-    (RLS-scoped, via the view), so the badge and the list cannot disagree; a dispatch stays
-    reachable by id. The outbox drain (service-role) skips a dispatch whose own account dismissed
-    its property, on both the new and the retry pass: it gets no `channel_sends` row and ages out
-    of the 7-day window unless the dismissal is lifted first.
+    badge, mark-all-seen, mark-seen, each watchdog's dispatch count — carries the one `VISIBLE_SQL`
+    fragment (since W3; its dismissal arm names the event's own account on the active row, so the
+    service role agrees with RLS), so the badge and the list cannot disagree; a hidden dispatch is a
+    404 by id. The W4 push fans out only these VISIBLE rows, so a dismissed property is never
+    pushed (the outbox drain that skipped it the same way was deleted in W1).
     **One control.** `<DismissButton>` (`overlay` on the Browse card beside the funnel,
     `header` on the listing page) over one hook, `lib/useDismissal`. A click hides with no confirm — nothing is destroyed — and a single
     sticky "Vrátit" toast (each new dismissal replaces the last) restores; it keeps working after
@@ -3298,7 +3426,9 @@ renumber.** Navigate by area:
     `llm-pipelines` skill. **Valuo's own per-m² figures** (`avg_price_m2`, `range_price_m2`,
     `std_price_m2`, each comparable's `price_m2` / `adjusted_price_m2`) are the other outside
     authority's numbers, over Valuo's `calc_area` and never this measure, shown verbatim under the
-    request's basis label (`api/valuo.result_basis`, a `REGISTERED_SITES` entry; rule 12).
+    request's basis label (`api/valuo.result_basis`, a `REGISTERED_SITES` entry; rule 12). The browser's
+    recalculation over the comparables a user keeps (rule 12) stays inside that exception: its per-m² is Valuo's
+    per-m² and its total that figure times Valuo's own `calc_area`, never a price divided by an area.
 
     **The headline area has ONE rule, and every portal feeds it the same way** (W17,
     2026-09-15). `scraper/area.derive_headline_area(category_main, usable, floor, total, plot,
@@ -4412,8 +4542,8 @@ feed lane) because without them one street read its whole category band and the 
 `ll.obec_kod` / `okres_kod` / `kraj_kod` and `lat` / `lng` from `ST_Y/ST_X(ll.geom)`, and appends
 `cast_obce_id`, `uncertainty_radius_m` and `granularity_rank`. The last two are what the map DRAWS: a
 pin the resolver placed **at or above building level** (rank ≥ 90, `location_granularity_rank`) carries
-a black outer contour and a coarser one does not (an active pin is green with a white contour, an inactive
-one white-transparent with a green contour), so "middle of the village" and "this front door" stop looking
+a black outer contour and a coarser one does not (an active pin is magenta with a white contour, an inactive
+one white-transparent with a magenta contour), so "middle of the village" and "this front door" stop looking
 identical; clicking a pin draws its true-metre circle of `uncertainty_radius_m` for as long as its
 popup is open, and the popup names the rung and the radius. (W3-3 first drew that circle under every
 such pin at once — with ~87 % of active pins below building level it buried the map, 2026-09-22.)

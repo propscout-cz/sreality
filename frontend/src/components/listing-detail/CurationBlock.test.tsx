@@ -423,7 +423,7 @@ describe('<CurationBlock> shared notes', () => {
   const SHARED_COLLECTION: Collection = {
     id: 7, name: 'Šortlist', description: null, created_at: '2026-10-01T00:00:00Z',
     updated_at: '2026-10-01T00:00:00Z', listing_count: 1, monitoring_enabled: false,
-    notify_channels: [], is_system: false, owner_email: null,
+    is_system: false, owner_email: null,
     shared_with: [{ account_id: 'b', email: 'petr@example.cz' }],
   };
   /* The property sits in one of my collections that I share with petr@. */

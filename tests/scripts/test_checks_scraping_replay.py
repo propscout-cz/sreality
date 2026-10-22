@@ -293,9 +293,9 @@ def test_the_403_wall_is_told_in_one_grouped_notice() -> None:
     ladder, _ = _scraping_replay()
     wall = min(i["first_seen_at"] for i in _incidents(ladder, "scraping", "ceskereality/walks/")
                if i["subject"] != "ceskereality/walks/byt-prodej")
-    onsets = [m for m, key, _ in ladder.dispatches
-              if key == f"sys:scraping:onset:{wall:%Y-%m-%dT%H:%M:%SZ}"]
-    assert len(onsets) == 1 and onsets[0].count("ceskereality/walks/") == 9
+    onsets = [t for t in ladder.told if (t.kind, t.at) == ("onset", wall)]
+    assert len(onsets) == 1
+    assert sum(s.startswith("ceskereality/walks/") for s in onsets[0].subjects) == 9
 
 
 def test_every_walk_onset_stands_on_six_walk_gaps_or_two_weeks() -> None:

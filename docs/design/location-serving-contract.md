@@ -79,8 +79,8 @@ cast_obce_name, country_code, country_status)`, and every serving view publishes
 `properties_public`, `listings_public`, `broker_listings_public`, and `pipeline_board_public` (which
 reads it off `properties_public` — it is `security_invoker` and `listing_location` is revoked from
 `authenticated`). Since 636 the API's property-grain surfaces print the property's own
-`properties_public.display_label` — the collections route, the dispatch feed and the notification
-outbox (whose two inline compositions are deleted), and the extension panel, which composes the
+`properties_public.display_label` — the collections route, the dispatch feed (the notification
+outbox that also did went 2026-10-21), and the extension panel, which composes the
 ad's own label with the same function only for an ad not yet in a property; the phone's property
 location route calls the function on the property's location ad. Still no STORED label: a function
 over the answer table's own columns is one definition, computed where it is read.
@@ -100,8 +100,8 @@ over the answer table's own columns is one definition, computed where it is read
 `listing_feed_public` also publish `granularity_rank` (the INT from `location_granularity_rank` —
 the SPA compares numbers, never enum text) and `uncertainty_radius_m`. In point mode the Browse map
 draws a pin **at building level or better** (rank ≥ 90) with a black outer contour — the pin is the
-building — and every other pin, unresolved included, without it; the fill says active (green, white
-contour) or inactive (white transparent, green contour). A legend under the count names the faces with
+building — and every other pin, unresolved included, without it; the fill says active (magenta, white
+contour) or inactive (white transparent, magenta contour). A legend under the count names the faces with
 their counts. The true-metre circle of `uncertainty_radius_m` is drawn for **one pin
 only: the one whose popup is open**, and the popup prints the rung and the true radius in words
 ("Přibližná poloha: obec, ±1 km"). W3-3 first drew that circle under every pin below building

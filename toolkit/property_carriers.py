@@ -10,12 +10,13 @@ Carrier invariants:
     opens no transaction, commits nothing and raises nothing of its own, so any psycopg error
     aborts the whole merge.
   - Every cross-side predicate over an account's rows is partitioned by account (tenancy shape
-    3, `.claude/skills/database/references/tenancy.md`): the service role bypasses RLS. Pipeline
-    and Dismissals name `account_id`; a `CurationTable` is partitioned through its keys, ids one
-    account owns (collection_id, tag_id, subscription_id), so one whose keys are not
-    account-owned must add `account_id` to them.
+    3, `.claude/skills/database/references/tenancy.md`): the service role bypasses RLS. Pipeline,
+    Dismissals and Dispatches name `account_id`; a `CurationTable` is partitioned through its
+    keys, ids one account owns (collection_id, tag_id), so one whose keys are not account-owned
+    must add `account_id` to them.
   - It never deletes history. The sanctioned deletes are a SET table's collision collapse and
-    the losing pipeline card, each folded into the carry record with its snapshot.
+    the losing pipeline card, each folded into the carry record with its snapshot; an alert the
+    survivor already holds is marked a duplicate, never deleted (migration 653).
   - `on_merge` runs once per retired property, after the merge ledger row and the advert
     re-point, and returns a `Carried` per curation row it moved or folded (alert events none).
     A detach runs no carrier: it routes the curation its ads take with them (`curation_plan`,
@@ -99,8 +100,7 @@ class CurationTable:
         if not keys:
             self.sql: tuple[str, ...] = (move,)
             return
-        # NULL-safe: notification_dispatches' keys are nullable, and a NULL must collapse
-        # against a NULL, which plain `=` never does.
+        # NULL-safe: a NULL key must collapse against a NULL, which plain `=` never does.
         join = " AND ".join(f"s.{c} IS NOT DISTINCT FROM r.{c}" for c in keys)
         collapse = (f"DELETE FROM {table} r "
                     f"WHERE r.property_id = %(retired)s AND EXISTS ("
@@ -122,42 +122,55 @@ class CurationTable:
         return out
 
 
-class Dispatches(CurationTable):
-    """The unified event table (migration 206) as a SET table, whose collapse would otherwise
-    strand a delivery: `channel_sends.notification_id` is ON DELETE SET NULL (migration 207),
-    and `channel_sends_check` (migration 274) refuses a NULL on a notification-backed send, so
-    one delivered alert aborted the whole merge. Before the collapse, `LOCK_SQL` stops the
-    outbox claiming new sends on the retired rows, then `RESEND_SQL` hands each such send to
-    the survivor's twin, the row the collapse keeps; `channel_sends` is unique only on its own
-    dedupe_key, so a move never collides."""
+# THE notification-events lock (notifications W3 review): producers and merges serialize on one
+# transaction-scoped advisory lock, because the event identity includes property_id, which a merge
+# changes. The protocol, two lines:
+#   - a merge takes it EXCLUSIVE before its first `properties` row lock, at every merge entry
+#     (`property_identity.merge_property_set` and `lock_properties`, autodedup's `recheck_group`;
+#     `Dispatches.on_merge` re-takes it, a no-op once held). Taken after its row locks it would
+#     deadlock: a producer holding it SHARED waits on those rows through its foreign key check.
+#   - a producer statement takes it SHARED as its own statement first, in the same transaction
+#     (`api.notifications._commit_one`), so its READ COMMITTED snapshot is taken after any merge
+#     holding it committed (the retired property merged_away, its ads on the survivor); a merge that
+#     comes second waits for the producer's commit, and its REPOINT sees that row and marks the twin.
+NOTIFICATION_EVENTS_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext('notification_events'))"
+NOTIFICATION_EVENTS_SHARED_LOCK_SQL = (
+    "SELECT pg_advisory_xact_lock_shared(hashtext('notification_events'))")
 
-    # Its own statement, never a CTE of the resend: FOR UPDATE waits out a claim whose foreign
-    # key check holds FOR KEY SHARE on a retired row, so the resend's fresh READ COMMITTED
-    # snapshot sees that send; a later claim waits for the merge to commit.
-    LOCK_SQL = ("SELECT id FROM notification_dispatches WHERE property_id = %(retired)s "
-                "ORDER BY id FOR UPDATE")
+class Dispatches:
+    """The unified event table (rule 16): an alert follows its property and is never deleted
+    (F6, F13, F21). ONE UPDATE re-points every alert of the retired property onto the survivor;
+    one whose event the survivor already holds (the same identity on the survivor, a row that is
+    not itself a repeat) is also marked `duplicate_of` that row, the earliest, so VISIBLE hides it
+    and a producer re-running over the survivor conflicts instead of telling it twice. A retired
+    row the survivor holds no twin of keeps whatever `duplicate_of` it had.
 
-    # The twin is the collapse's own join over the same keys; subscription_id and collection_id
-    # are account-owned ids, so the pairing never crosses an account.
-    RESEND_SQL = """
-UPDATE channel_sends cs SET notification_id = s.id
-FROM notification_dispatches r
-JOIN notification_dispatches s
-  ON s.property_id = %(survivor)s
- AND s.subscription_id IS NOT DISTINCT FROM r.subscription_id
- AND s.collection_id IS NOT DISTINCT FROM r.collection_id
- AND s.change_kind IS NOT DISTINCT FROM r.change_kind
- AND s.trigger_snapshot_id IS NOT DISTINCT FROM r.trigger_snapshot_id
-WHERE r.property_id = %(retired)s AND cs.notification_id = r.id
-"""
+    `IDENTITY` is migration 653's unique index without `property_id` (the column a merge
+    changes): `api.notifications.EVENT_IDENTITY`, which a test pins it to. `account_id` is in
+    it, so the match never crosses an account. Alerts write no carry rows (rule 18), so a detach
+    or a split leaves them where they are (program § 3.2)."""
 
-    def __init__(self) -> None:
-        # Identity spans both property-grain producers (subscription_id XOR collection_id) and
-        # the per-snapshot grain (trigger_snapshot_id, NULL for 'new').
-        super().__init__("notification_dispatches",
-                         ("subscription_id", "collection_id", "change_kind",
-                          "trigger_snapshot_id"))
-        self.sql = (self.LOCK_SQL, self.RESEND_SQL, *self.sql)
+    name = "notification_dispatches"
+    columns = (("notification_dispatches", "property_id"),)
+    IDENTITY: tuple[str, ...] = ("account_id", "source_kind", "subscription_id", "collection_id",
+                                 "change_kind", "event_ref", "actor_account_id")
+    # The subquery reads the statement's snapshot, in which no survivor row moves, so a retired
+    # row never pairs with another retired row.
+    REPOINT_SQL = (
+        "UPDATE notification_dispatches r SET property_id = %(survivor)s, "
+        "duplicate_of = coalesce((SELECT s.id FROM notification_dispatches s "
+        "WHERE s.property_id = %(survivor)s AND s.duplicate_of IS NULL AND "
+        + " AND ".join(f"s.{c} IS NOT DISTINCT FROM r.{c}" for c in IDENTITY)
+        + " ORDER BY s.dispatched_at, s.id LIMIT 1), r.duplicate_of) "
+        "WHERE r.property_id = %(retired)s"
+    )
+    sql = (NOTIFICATION_EVENTS_LOCK_SQL, REPOINT_SQL)
+
+    def on_merge(self, cur: psycopg.Cursor, step: MergeStep) -> list[Carried]:
+        # The merge entry already holds it (the protocol above); re-taking it is a no-op.
+        cur.execute(NOTIFICATION_EVENTS_LOCK_SQL)
+        cur.execute(self.REPOINT_SQL, {"retired": step.retired, "survivor": step.survivor})
+        return []
 
 
 class Pipeline:

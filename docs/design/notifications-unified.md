@@ -1,5 +1,7 @@
 # Unified notifications — event model + delivery channels (shared contract)
 
+> **SUPERSEDED 2026-10-21** by [notifications-push/PROGRAM.md](./notifications-push/PROGRAM.md) (the delivery layer described here was removed in W1; kept as history)
+
 > **Status: ALL FOUR DECISIONS RESOLVED (2026-06-20, §6). The foundation
 > (PR A) is BUILT on this branch — migration 206 generalizes the event table +
 > ports the watchdog matcher; apply at deploy (see migration header).** This

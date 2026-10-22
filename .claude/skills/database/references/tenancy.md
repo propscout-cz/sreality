@@ -61,9 +61,9 @@ RLS-filtered parent lookup (the trigger runs as the invoking role) — or the OW
 the parent is merely shared with it (migration 610) — and `WITH CHECK` refuses either, so the
 insert **fails closed** — a `with check (true)` here would instead silently write invisible orphan rows.
 Service-role writers bypass RLS entirely but still get correctly-stamped rows because
-their parent lookups see every row. Since migration 619, `authenticated` may UPDATE only `seen_at`
-and `estimation_run_id` on `notification_dispatches`, and a platform admin may update SYSTEM-account
-rows (`notification_dispatches_admin_update`).
+their parent lookups see every row. Since migration 651 (notifications W1), `authenticated` may UPDATE only `seen_at`
+on `notification_dispatches` (619 also granted `estimation_run_id`), and no account reads or updates SYSTEM-account
+rows: 651 dropped `notification_dispatches_tenant_read`'s platform-admin SYSTEM arm and `notification_dispatches_admin_update`.
 
 **Migration 294 — pipeline tables**: `property_pipeline`, `pipeline_stages`,
 `property_pipeline_events`, plus the signup trigger:
@@ -122,7 +122,8 @@ uuid)`) answers **whom the caller acts FOR on curation**. Exactly eleven policie
 `USING` and `WITH CHECK` (switched by `ALTER POLICY`; the three pipeline tables pass `true`): `collections`, `tags`, `property_notes`,
 `collection_properties`, `property_tags`, `property_note_attachments`, `property_artifact_links`,
 `property_dismissals`, `property_pipeline`, `pipeline_stages`, `property_pipeline_events`. **Every
-other table keeps `current_account_ids()`** — billing, estimations, watchdog, presets, notifications,
+other table keeps `current_account_ids()`** — billing, estimations, watchdog, presets, notifications (their routes never act
+as another account; the push tables, `push_subscriptions` and `notification_deliveries`, are admin-only, migration 654),
 the three share tables, `share_party_emails()` — so a delegate never reads, writes or spends as the owner
 there (`docs/design/pipeline-sharing.md` §3.7; pinned offline by
 `test_exactly_the_eleven_curation_policies_act`).
@@ -159,9 +160,13 @@ there (`docs/design/pipeline-sharing.md` §3.7; pinned offline by
   `share_party_emails()` (every share kind, plus every actor in the caller's own ledger, so a revoked
   delegate stays named) is the label door; deleting the actor's account nulls the actor, not the row.
 - **One notification kind.** `notification_dispatches.source_kind = 'share'` for every kind
-  (`collection_id` set for a collection share, NULL for a pipeline or dashboard share); 641 renamed
-  `collection_share` (and its keys to `share:collection:<collection>:<recipient>`); `api/shares.py`
-  writes all three (`share:dashboard:<dashboard>:<recipient>`, 647).
+  (`collection_id` set for a collection share, NULL for a pipeline or dashboard share; 641 renamed
+  `collection_share`); `api/shares.py` writes all three with `change_kind` `shared_<collection|pipeline|dashboard>`
+  (652), the sharer as `actor_account_id` and the dashboard id or the mode as `event_ref`, conflicting on the
+  one event identity (`EVENT_IDENTITY`, migration 653; no `dedupe_key` since W3), so a share notifies once per
+  identity: (recipient, collection or dashboard, actor), and for a pipeline (recipient, owner, mode) — a
+  widening to edit is a second notification. In-app and pushed (W4; collection-sharing ruling 5(e) superseded
+  2026-10-21): at most one push per (sharer, recipient) a day, the rest `skipped/capped` in the ledger, bell only (R11).
 - **The API declares, per write route, which account it writes.** `tenant_conn` carries the header
   and the method into the transaction (`tenant_pool.tenant_transaction(claims, act_as=, method=)`,
   both required); `require_acting_account_id` (curation writes: own account, or the owner the
@@ -338,6 +343,16 @@ service role (`tenant_pool.account_for_email`); the share and its dispatch are o
 transaction; the response is re-read on the tenant connection. Unlike the feedback route it keeps
 the request-long `tenant_conn`: its service-role work is two fast INSERTs, not an LLM call. The gate's row lock (`FOR NO KEY UPDATE`) does not block the share's FK check
 (`FOR KEY SHARE`), so holding it across the service-role write cannot self-deadlock.
+
+**Third instance — the push device routes (`api/routes/push.py`, migration 654): the caller's own account, then the
+service role.** `push_subscriptions` and `notification_deliveries` are RLS-on with NO policy and no browser grant, registered in
+both `_ADMIN_ONLY_RELATIONS` lists (not tenant tables: no browser DML). `PUT`/`DELETE /push/subscription` and `POST
+/push/opened` declare `require_account_id` (in `_NEVER_ACTS`: a device belongs to the signed-in user, so a delegate's phone gets
+only the delegate's alerts and nobody registers a device for an account they act for), then `deps.open_background_conn` in the
+handler (pinned beside the share routes by `test_the_share_routes_open_the_service_role_only_after_their_gate`); every
+statement names that account (shape 3), and `opened` reaches the account through the delivery's event. `GET /push/key` is
+`require_token` with no connection (the public key derives from `VAPID_PRIVATE_KEY`). The worker's push lane routes by ONE
+join, `ps.account_id = d.account_id AND ps.ended_at IS NULL`: recipients come from the event's account at send time.
 
 **The only `auth.users` touchpoints:** `account_email(uuid)` (migration 610; EXECUTE revoked
 from every browser role), called by `share_party_emails()` (SECURITY DEFINER, the caller's

@@ -725,7 +725,7 @@ def test_the_worker_seeds_every_lane_before_any_lane_starts(monkeypatch):
     assert asyncio.run(rw._amain()) == 0
     assert events[0] == ("seed", {lane: {"interval_s": None} for lane in rw.LANES})
     assert events[1:] == [("lane", lane) for lane in rw.LANES]
-    assert len(set(rw.LANES)) == len(rw.LANES) == 15
+    assert len(set(rw.LANES)) == len(rw.LANES) == 17
 
 
 # --- health lane (Health dashboard W3) ----------------------------------------------------
@@ -807,7 +807,7 @@ def test_the_health_lane_ticks_on_a_constant_and_sits_before_autodedup() -> None
     assert (rw.HEALTH_TICK_SECONDS, rw.HEALTH_PASS_BUDGET_SECONDS) == (60.0, 500.0)
     from scripts import verify_pipeline
 
-    # Wave 6: the twelve worker budgets (675 s) outgrow one pass inside the watcher's 600 s
+    # Wave 6: the thirteen worker budgets (680 s) outgrow one pass inside the watcher's 600 s
     # in-flight line, so the pass is capped and run_due defers a gauge that no longer fits.
     hosted = [c for c in verify_pipeline.CHECKS if c.host == rw.WORKER_NAME]
     alarms = [c for c in hosted if c.cls == "alarm"]
@@ -910,6 +910,169 @@ def test_the_lanes_calls_bind_to_the_real_harness() -> None:
         None, verify_pipeline.THRESHOLDS, rw.WORKER_NAME, now=now,
         lane_budget_s=rw.HEALTH_PASS_BUDGET_SECONDS)
     inspect.signature(verify_pipeline.project_registry).bind(None, rw.WORKER_NAME, now)
+
+
+# --- notifications lane (notifications push program W2a) ----------------------------------
+
+
+@pytest.fixture
+def producers(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """The three api.notifications producers, faked; each records the connection it ran on."""
+    from api import notifications
+
+    ran: dict[str, Any] = {"conns": [], "steps": [], "fail": {}, "stats": {
+        "match_once": {"subscriptions_evaluated": 2, "subscriptions_invalid": 0,
+                       "subscriptions_failed": 0, "matches_inserted": 2},
+        "match_changes_once": {"subscriptions_evaluated": 2, "subscriptions_invalid": 0,
+                               "subscriptions_failed": 0, "changes_inserted": 0,
+                               "collection_changes_inserted": 0},
+        "match_monitored_collections_once": {"monitored_collections": 2, "events_inserted": 1},
+    }}
+
+    def fake(name: str) -> Any:
+        def producer(conn: _FakeConn) -> dict[str, int]:
+            assert conn is ran["conns"][-1] and not conn.closed, f"{name} runs on its own connection"
+            ran["steps"].append(name)
+            if name in ran["fail"]:
+                raise ran["fail"][name]
+            return dict(ran["stats"][name])
+        return producer
+
+    for name in rw.NOTIFICATIONS_STEPS.values():
+        monkeypatch.setattr(notifications, name, fake(name))
+
+    def connect() -> _FakeConn:
+        ran["conns"].append(_FakeConn())
+        return ran["conns"][-1]
+
+    monkeypatch.setattr(rw.db, "connect", connect)
+    monkeypatch.setattr(rw, "_NOTIFICATIONS_PASS_LOCK", rw._PassLock("notifications"))
+    return ran
+
+
+def test_the_notifications_lane_ticks_on_a_constant_between_autodedup_and_push() -> None:
+    """The health/text_extract shape: nothing read, so nothing to fail; the brake is a deploy."""
+    lane = inspect.getsource(rw._amain).split('("notifications"', 1)[1].split(")),", 1)[0]
+    assert "lambda: NOTIFICATIONS_TICK_SECONDS" in lane
+    assert "default_interval=NOTIFICATIONS_TICK_SECONDS" in lane
+    assert rw.NOTIFICATIONS_TICK_SECONDS == 300.0
+    at = rw.LANES.index("notifications")
+    assert rw.LANES[at - 1:at + 2] == ("autodedup", "notifications", "push")
+    for forbidden in ("app_settings", "os.environ"):
+        assert forbidden not in inspect.getsource(rw._notifications_sync)
+    assert "- notifications:" in rw.__doc__
+
+
+def test_the_lanes_steps_bind_to_the_real_producers() -> None:
+    """The steps name api.notifications' public producers (the API's matcher_loop calls the same
+    three until W2b); binding them keeps a rename from leaving the lane calling nothing."""
+    from api import notifications
+
+    assert list(rw.NOTIFICATIONS_STEPS) == ["watchdog_new", "price", "monitor"]
+    for name in rw.NOTIFICATIONS_STEPS.values():
+        inspect.signature(getattr(notifications, name)).bind(None)
+
+
+def test_a_notifications_pass_runs_each_step_on_its_own_connection(
+        producers: dict[str, Any]) -> None:
+    """The lane opens no transaction: each producer commits per statement itself (one watchdog's
+    INSERT, one detector; api/notifications._commit_one), so no lock outlives its statement."""
+    state = rw._new_state()
+    rw._record_pass_start(state, "notifications")
+    asyncio.run(rw._notifications_pass(asyncio.Event(), state))
+
+    assert producers["steps"] == list(rw.NOTIFICATIONS_STEPS.values())
+    assert len(producers["conns"]) == 3 and all(c.closed for c in producers["conns"])
+    assert all(conn.calls == [] for conn in producers["conns"]), "the lane itself runs no SQL"
+    lane = state["lanes"]["notifications"]
+    assert (lane["passes"], lane["started_at"], lane["failing_since"]) == (1, None, None)
+    assert lane["portal_errors"] == {}
+    assert set(lane["last"]) == {"watchdog_new", "price", "monitor"}
+    assert lane["last"]["watchdog_new"]["matches_inserted"] == 2
+    Jsonb(rw._lane_snapshot(state["lanes"]))
+
+
+def test_a_failing_step_is_its_own_cell_and_the_other_steps_still_write(
+        producers: dict[str, Any]) -> None:
+    """A step that raises rolls back alone (its own transaction), names itself in portal_errors
+    — the jobs check's `lane/notifications/<step>` cell — and keeps its onset until a clean pass."""
+    from scripts.checks import platform
+
+    producers["fail"]["match_changes_once"] = RuntimeError("statement timeout")
+    producers["stats"]["match_once"]["subscriptions_failed"] = 1
+    state = rw._new_state()
+    asyncio.run(rw._notifications_pass(asyncio.Event(), state))
+
+    assert producers["steps"] == list(rw.NOTIFICATIONS_STEPS.values()), "every step ran"
+    assert producers["conns"][1].closed
+    lane = state["lanes"]["notifications"]
+    assert lane["passes"] == 1 and lane["failing_since"] is None, "the pass itself completed"
+    errors = lane["portal_errors"]
+    assert set(errors) == {"watchdog_new", "price"}
+    assert errors["price"]["last_error"] == "RuntimeError: statement timeout"
+    assert errors["watchdog_new"]["last_error"] == "1 of 2 watchdogs failed"
+    assert set(lane["last"]) == {"watchdog_new", "monitor"}
+
+    now = datetime.fromisoformat(errors["price"]["failing_since"])
+    cells = platform._portal_cells("notifications", lane, {}, 900.0, now)
+    assert [(c["subject"], c["status"]) for c in cells] == [
+        ("lane/notifications/price", "warn"), ("lane/notifications/watchdog_new", "warn")]
+
+    onset = errors["price"]["failing_since"]
+    producers["stats"]["match_once"]["subscriptions_failed"] = 0
+    asyncio.run(rw._notifications_pass(asyncio.Event(), state))
+    errors = state["lanes"]["notifications"]["portal_errors"]
+    assert set(errors) == {"price"} and errors["price"]["failing_since"] == onset
+
+    del producers["fail"]["match_changes_once"]
+    asyncio.run(rw._notifications_pass(asyncio.Event(), state))
+    assert state["lanes"]["notifications"]["portal_errors"] == {}
+
+
+@pytest.mark.parametrize(("invalid", "failed", "error"), [
+    (1, 0, None),
+    (2, 0, None),
+    (1, 1, "1 of 2 watchdogs failed"),
+    (0, 0, None),
+], ids=["one-refused", "all-refused", "a-statement-failed", "healthy"])
+def test_a_refused_spec_never_reddens_a_step(
+        producers: dict[str, Any], invalid: int, failed: int, error: str | None) -> None:
+    """A step is red iff a statement raised. A stored spec the matcher refuses is the user's row
+    (the write routes 422 it), counted in `last`, never a cell, even when every watchdog is refused."""
+    producers["stats"]["match_once"].update(subscriptions_invalid=invalid,
+                                            subscriptions_failed=failed)
+    state = rw._new_state()
+    asyncio.run(rw._notifications_pass(asyncio.Event(), state))
+    lane = state["lanes"]["notifications"]
+    assert lane["last"]["watchdog_new"]["subscriptions_invalid"] == invalid
+    if error is None:
+        assert "watchdog_new" not in lane["portal_errors"]
+    else:
+        assert lane["portal_errors"]["watchdog_new"]["last_error"] == error
+
+
+def test_an_abandoned_notifications_pass_is_never_overlapped(producers: dict[str, Any]) -> None:
+    assert rw._NOTIFICATIONS_PASS_LOCK.try_enter()
+    try:
+        assert rw._notifications_sync(asyncio.Event()) == {"previous_pass_running": True}
+    finally:
+        rw._NOTIFICATIONS_PASS_LOCK.release()
+    assert producers["conns"] == [] and producers["steps"] == []
+    state = rw._new_state()
+    state["lanes"]["notifications"] = {"portal_errors": {"price": dict(_STALE_PORTAL_ERROR)}}
+    assert rw._NOTIFICATIONS_PASS_LOCK.try_enter()
+    try:
+        asyncio.run(rw._notifications_pass(asyncio.Event(), state))
+    finally:
+        rw._NOTIFICATIONS_PASS_LOCK.release()
+    assert state["lanes"]["notifications"]["portal_errors"] == {"price": _STALE_PORTAL_ERROR}
+
+
+def test_a_stopping_worker_starts_no_further_step(producers: dict[str, Any]) -> None:
+    stop = asyncio.Event()
+    stop.set()
+    last = rw._notifications_sync(stop)
+    assert last == {"attempted": [], "raised": {}} and producers["steps"] == []
 
 
 # --- registry ------------------------------------------------------------------

@@ -1434,8 +1434,6 @@ def test_the_canonical_handover_is_stamped_for_the_price_alerts():
     figures follow the LOCATION advert (ruling R7/R8, migration 636): their stamp clears when
     it changes, a reset property gaining one included (its pointer is NULL), and never on a
     canonical handover alone."""
-    import inspect
-
     from api import notifications as nf
     from scripts.recompute_property_stats import _RECOMPUTE_BATCH_SQL
 
@@ -1448,9 +1446,9 @@ def test_the_canonical_handover_is_stamped_for_the_price_alerts():
         "THEN NULL ELSE p.city_proximity_computed_at END")
     assert ("add column if not exists repr_since timestamptz not null default '-infinity'"
             in " ".join(MIGRATION_561.read_text().split()))
-    assert "ps.scraped_at > p.repr_since" in inspect.getsource(nf._recent_price_drops)
-    assert "st.scraped_at > m.repr_since" in inspect.getsource(nf.match_monitored_collections_once)
-    assert "p.repr_since" in nf._MONITORED_CTE
+    # Both notification producers read the one canonical-ad fragment (notifications W2a).
+    assert "ps.scraped_at > p.repr_since" in nf._CANONICAL_PRICE_STEPS
+    assert nf._MONITOR_PRICE_SQL.startswith(f"WITH {nf._CANONICAL_PRICE_STEPS}")
 
 
 def test_a_property_with_no_ads_is_reset_to_no_ads_once():

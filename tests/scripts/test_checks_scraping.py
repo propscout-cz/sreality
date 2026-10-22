@@ -182,9 +182,8 @@ def test_a_portals_first_finished_walk_recovers_its_walks_incident_with_one_noti
     (inc,) = _incidents(ladder, "scraping")
     assert (inc["subject"], inc["first_seen_at"]) == ("idnes/walks", _NOW)
     assert (inc["resolved_at"], inc["resolve_reason"]) == (results[-1][0], "measured ok")
-    told = [(key.split(":")[2], message) for message, key, _ in ladder.dispatches]
-    assert [kind for kind, _ in told] == ["onset", "recovery"]
-    assert told[1][1] == "✓ scraping: idnes/walks recovered after 0 h"
+    assert [(t.kind, t.subjects, t.at) for t in ladder.told] == [
+        ("onset", ("idnes/walks",), _NOW), ("recovery", ("idnes/walks",), results[-1][0])]
 
 
 # --- missing -------------------------------------------------------------------------------

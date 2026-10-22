@@ -36,6 +36,8 @@ import type { CuratedSet, SetScope } from '@/lib/setScope';
 /* Lazy: this is the only control here that draws a map, it renders only in
  * `center_radius` mode, and it carries maplibre-gl (~800 kB). Loading it with the
  * sidebar made every Browse first-visit pay for a map engine most sessions never open. */
+/* Lazy: it only mounts once the folded Advanced band opens. */
+const BrokerFilterControl = lazyChunk(() => import('@/components/filter-controls/BrokerFilterControl'));
 const LocationControl = lazyChunk(() =>
   import('@/components/filter-controls/LocationControl').then((m) => ({
     default: m.LocationControl,
@@ -341,6 +343,15 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
       case 'portals':
         return (
           <PortalFilterControl value={filters} onChange={(next) => onChange({ ...filters, ...next })} />
+        );
+      case 'broker':
+        return (
+          <Suspense fallback={null}>
+            <BrokerFilterControl
+              value={filters.brokerId}
+              onChange={(next) => onChange({ ...filters, brokerId: next })}
+            />
+          </Suspense>
         );
       case 'location_mode':
         return (

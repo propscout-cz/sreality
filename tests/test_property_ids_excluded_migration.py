@@ -103,8 +103,9 @@ def test_the_latest_definitions() -> None:
     except the chip arms (tests/test_one_place_predicate.py). The Stats RPC's latest
     definition (626, the dashboard pivot, which keeps this file's denylist conjunct in 625's
     WHERE) is pinned by tests/test_626_stats_dashboard.py; 630 re-pointed it at browse_list;
-    640 dropped this file's parameter and 644 swapped the condition conjunct."""
-    assert latest_definition("browse_map_cells").name == "644_condition_unknown_filter.sql"
+    640 dropped this file's parameter, 644 swapped the condition conjunct, 648 appended the
+    energy-rating parameter."""
+    assert latest_definition("browse_map_cells").name == "648_browse_energy_rating_filter.sql"
     assert latest_definition("portal_status_matches").name == "597_portal_exclusion.sql"
 
 

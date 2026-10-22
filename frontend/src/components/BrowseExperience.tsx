@@ -46,8 +46,6 @@ import { useMapOverlayRegistry } from '@/lib/mapOverlays';
 import {
   summarise,
   isDefault,
-  filtersToWatchdogSpec,
-  watchdogNameSuggestion,
   browseTitleSummary,
   toSearchParams,
   DEFAULT_FILTERS,
@@ -840,17 +838,9 @@ export default function BrowseExperience({
       </div>
 
       {f.watchdog && watchdogModalOpen
-        ? (() => {
-            const { spec, unsupported } = filtersToWatchdogSpec(filters);
-            return (
-              <CreateWatchdogModal
-                spec={spec}
-                unsupported={unsupported}
-                suggestedName={watchdogNameSuggestion(filters)}
-                onClose={() => setWatchdogModalOpen(false)}
-              />
-            );
-          })()
+        ? (
+            <CreateWatchdogModal filters={filters} onClose={() => setWatchdogModalOpen(false)} />
+          )
         : null}
     </div>
   );
@@ -909,10 +899,9 @@ function FilterSummary({
   loading: boolean;
   showTitle: boolean;
   onClearBounds?: () => void;
-  /* No sidebar control sets brokerId (see ListingFilters.brokerId) — reachable
-   * only via the explore-broker modal's seed or a `?broker=` URL param, so
-   * without this a scoped /browse?broker=<id> view (reached via "Go to
-   * Browse") would be a dead end with no way to leave the scope. */
+  /* The scope's way out in the header: a /browse?broker=<id> view (reached via
+   * "Go to Browse") opens with Advanced folded, so the sidebar's Broker control
+   * is out of sight (see ListingFilters.brokerId). */
   onClearBroker?: () => void;
   onCreateWatchdog?: () => void;
   onNewProperty?: () => void;

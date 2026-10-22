@@ -68,6 +68,11 @@ _NEVER_ACTS: frozenset[str] = frozenset({
     "POST /pipeline/shares",
     "POST /collections/{collection_id}/shares",
     "POST /stats/dashboards/{dashboard_id}/shares",
+    # Push on this device (migration 654): a device belongs to the signed-in user, so a delegate's phone
+    # gets only the delegate's alerts. (GET /push/key names no account at all: it reads no row.)
+    "PUT /push/subscription",
+    "DELETE /push/subscription",
+    "POST /push/opened",
 })
 
 _WRITE = re.compile(r"\b(?:insert\s+into|update|delete\s+from)\s+([a-z_][a-z0-9_]*)", re.I)

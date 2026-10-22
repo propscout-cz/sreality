@@ -19,7 +19,6 @@ import { isMine, revalidateCollections, settleCollectionWrite } from '@/lib/coll
 import { curationKeys } from '@/lib/queries';
 import { propertyPath } from '@/lib/listingUrl';
 import { usePageTitle } from '@/lib/pageTitle';
-import { DeliveryChannelsPicker } from '@/components/DeliveryChannelsPicker';
 import { Field } from '@/components/controls';
 import ErrorBanner from '@/components/ErrorBanner';
 import {
@@ -342,13 +341,6 @@ function MonitoringBlock({ collection }: { collection: Collection }) {
     onError: (err: Error) => setError(err.message || 'Failed to update'),
   });
 
-  const channels = useMutation({
-    mutationFn: (next: string[]) =>
-      updateCollection(collection.id, { notify_channels: next }),
-    onSuccess: invalidate,
-    onError: (err: Error) => setError(err.message || 'Failed to update'),
-  });
-
   const on = collection.monitoring_enabled;
   const labelId = useId();
 
@@ -385,22 +377,10 @@ function MonitoringBlock({ collection }: { collection: Collection }) {
               : 'Off — properties here are not monitored for changes.'}
           </p>
           <p className="mt-1 text-[0.78rem] text-[var(--color-ink-4)]">
-            Alerts always appear in the in-app Notifications feed.
+            Alerts appear in the Notifications feed.
           </p>
         </div>
       </div>
-      {on && (
-        <div className="mt-4 max-w-2xl">
-          <SectionLabel>Delivery</SectionLabel>
-          <div className="mt-2">
-            <DeliveryChannelsPicker
-              value={collection.notify_channels ?? []}
-              onChange={(next) => channels.mutate(next)}
-              disabled={channels.isPending}
-            />
-          </div>
-        </div>
-      )}
       {error && (
         <p className="mt-2 text-[0.75rem] text-[var(--color-brick)]">{error}</p>
       )}

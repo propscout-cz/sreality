@@ -88,10 +88,11 @@ def test_the_ts_module_declares_the_same_levels_and_columns() -> None:
 # floor at five and nothing else changed (tests/test_stats_min_n_migration.py); 634 made its
 # status fact read the cohort's own portal rule (tests/test_stats_status_lens_migration.py); 630 re-pointed the map's at browse_list;
 # 640 dropped the id denylist; 644 gave the condition conjunct the `__unknown__` chip
-# (tests/test_644_condition_unknown_filter.py). Re-read the chip arms when this moves again.
+# (tests/test_644_condition_unknown_filter.py); 648 appended the energy-rating parameter
+# (tests/test_648_browse_energy_rating_filter.py). Re-read the chip arms when this moves again.
 _LATEST_RPC_DEFINITION = {
-    "browse_stats_properties": "644_condition_unknown_filter.sql",
-    "browse_map_cells": "644_condition_unknown_filter.sql",
+    "browse_stats_properties": "648_browse_energy_rating_filter.sql",
+    "browse_map_cells": "648_browse_energy_rating_filter.sql",
 }
 
 
@@ -219,7 +220,8 @@ def test_the_rpc_signatures_keep_the_chip_parameters() -> None:
     sent (and the map's `listing_ids_filter`) — tests/test_portal_exclusion_migration.py
     and tests/test_property_ids_excluded_migration.py pin each step. 626 appended the
     Stats pivot's chart `spec`, which shapes the answer and never the cohort; 629 the
-    nine curated-set scope parameters (tests/test_curated_set_scope_migration.py)."""
+    nine curated-set scope parameters (tests/test_curated_set_scope_migration.py); 648
+    the energy-rating filter (tests/test_648_browse_energy_rating_filter.py)."""
     gone = {"tag_ids", "districts_context_filter", "city_index_rules", "city_proximity",
             "with_estimates", "listing_ids_filter"}
     # 640 dropped 598's denylist once 629 judged membership in the database.
@@ -237,6 +239,7 @@ def test_the_rpc_signatures_keep_the_chip_parameters() -> None:
             # 629: the curated-set scope, three sets x (set, in, out), judged under RLS.
             "tags_set", "tags_in", "tags_out", "collections_set", "collections_in",
             "collections_out", "pipeline_set", "pipeline_in", "pipeline_out",
+            "energy_rating_filter",
             ) if p not in gone_later
         ], f"{func}: parameter list changed"
         for chip_param in (
@@ -458,11 +461,13 @@ def test_every_spatial_reader_takes_its_point_from_listing_location() -> None:
         "toolkit/velocity.py",
         "toolkit/transit_axis.py",
         "toolkit/neighborhoods.py",
-        "api/notifications.py",
         "api/estimation_runs.py",
     )
+    # The watchdog circle reads properties_public's lat/lng (its location ad's point, migration 636),
+    # so the matcher is held to the negative half only.
+    view_readers = ("api/notifications.py",)
     bare_l_geom = re.compile(r"(?<![a-z])l\.geom")
-    for rel in spatial:
+    for rel in spatial + view_readers:
         text = (REPO / rel).read_text(encoding="utf-8")
         code = "\n".join(
             line for line in text.splitlines() if not line.lstrip().startswith("#")
@@ -470,6 +475,8 @@ def test_every_spatial_reader_takes_its_point_from_listing_location() -> None:
         assert bare_l_geom.search(code) is None, f"{rel} still reads listings.geom"
         assert "listings.geom" not in code, f"{rel} still reads listings.geom"
         assert "COALESCE(p.geom" not in code, f"{rel} still reads properties.geom"
+        if rel in view_readers:
+            continue
         assert (
             "listing_location" in code
             or "COHORT_LOCATION_FROM" in code

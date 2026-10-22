@@ -3,7 +3,7 @@
 A SECOND Railway service from the same Docker image (start command
 `env MALLOC_ARENA_MAX=2 python -m scraper.realtime_worker`, E949) that replaces cron
 quantization for the latency-critical path. Settings-paced asyncio lanes (the proven
-matcher/outbox pattern from api/notifications + api/notification_outbox):
+matcher-loop pattern of api/notifications):
 
 - probe:     every `realtime_probe_interval_seconds` (default 180), run the
              newest-first delta probe (portal_runner.run_index_probe, Wave C-2)
@@ -121,6 +121,25 @@ matcher/outbox pattern from api/notifications + api/notification_outbox):
              token memos whatever ends a pass, and the worker hands freed heap back
              to the kernel (gc + glibc malloc_trim) as a pass ends and again before
              the next begins, which is when a raised pass's memory goes (E949).
+- notifications: every NOTIFICATIONS_TICK_SECONDS (300, a constant), the three
+             notification producers of api/notifications (notifications push program
+             W2a): watchdog_new (a live watchdog's matches first seen in the last 24 h,
+             images-first gated), price (the canonical advert's price steps of the last
+             7 days, for watchdogs and monitored collections) and monitor (a monitored
+             property gone for a day, back, or on a new portal). Each step its own
+             connection and transaction; a failing step is its own `portal_errors` cell.
+             Beside the API's matcher_loop until W2b; the one identity index
+             (migration 653) makes the overlap a union.
+- push:      every PUSH_TICK_SECONDS (15, a constant), one pass of the push ledger
+             (api/push_delivery.deliver_once, notifications push W4): fan out every
+             VISIBLE unseen event of the last 24 h to the live devices its account
+             registered before it (a share past the one-a-day cap is skipped `capped`),
+             claim the due rows of at most 10 devices (a 2-minute lease, SKIP LOCKED),
+             re-check them, send ONE push per device (api/push.send) and finalize it
+             before the next. The brake is VAPID_PRIVATE_KEY: unset, the pass records
+             `unconfigured` and touches nothing. Steps fan_out / claim / send are its
+             `portal_errors` cells, recorded by exception class only: an endpoint is a
+             secret and never reaches the heartbeat or the log.
 - heartbeat: every 30s, upsert this worker's beat + per-lane fields into
              worker_heartbeats (migration 269) — the Health-page liveness hook — and
              record its own pass like every lane. Every lane in LANES has an entry from
@@ -214,12 +233,12 @@ HEARTBEAT_CONNECT_TIMEOUT_SECONDS = 10
 LANES: tuple[str, ...] = (
     "probe", "drain", "images", "count_probe", "maintenance", "broker_maintenance",
     "estimation", "location_resolve", "location_intake_fast", "location_refetch",
-    "sold_comps", "text_extract", "health", "autodedup", "heartbeat",
+    "sold_comps", "text_extract", "health", "autodedup", "notifications", "push", "heartbeat",
 )
 # Every lane's blocking work, the heartbeat's included, runs on asyncio's default
 # executor, which makes the heartbeat its canary: if leaked threads fill it, beats stop
 # and the watchdog restarts the worker. Pinned rather than min(32, cpu+4), so the
-# headroom does not depend on what the container reports: the fifteen LANES hold at most
+# headroom does not depend on what the container reports: the seventeen LANES hold at most
 # one thread each in normal running.
 LANE_EXECUTOR_THREADS = 32
 IDLE_WAIT_SECONDS = 60.0
@@ -542,6 +561,39 @@ _HEALTH_PASS_LOCK = _PassLock("health")
 _HEALTH_REGISTRY_PROJECTED = False
 # time.monotonic() of this process's last prune attempt; None until its first.
 _HEALTH_PRUNED_AT: float | None = None
+
+# notifications lane (notifications push program W2a, PROGRAM.md § 3.3): the three notification
+# producers of api/notifications on ONE clock, the text_extract/health shape — a CONSTANT tick, no
+# app_settings row, no flag; the brake is a deploy. Each step runs on its own connection and commits
+# per statement (one watchdog's INSERT, one monitor detector: api/notifications._commit_one, under a
+# 120 s SET LOCAL bound), so the locks an INSERT takes never outlive it and a step that raises stops
+# only itself; its error is a `portal_errors` entry, which the jobs check renders as the cell
+# `lane/notifications/<step>`, and the step's next clean pass clears it. Until W2b the API's
+# matcher_loop runs the same three producers beside this lane: both conflict on the one identity
+# index, so the overlap is a union, never a duplicate.
+NOTIFICATIONS_TICK_SECONDS = 300.0
+# step -> the api.notifications producer it runs (looked up at pass time: the module is lazy-imported).
+NOTIFICATIONS_STEPS: dict[str, str] = {
+    "watchdog_new": "match_once",
+    "price": "match_changes_once",
+    "monitor": "match_monitored_collections_once",
+}
+# A step's producers share one pass, so an abandoned pass must never overlap the next.
+_NOTIFICATIONS_PASS_LOCK = _PassLock("notifications")
+
+# push lane (notifications push W4, PROGRAM.md § 3.3-3.4): the push ledger's one pass, the notifications lane's
+# shape — a CONSTANT tick, no app_settings row, no flag. Its ONE brake is the secret it signs with: no
+# VAPID_PRIVATE_KEY (one Railway variable shared with the API), and the pass records `unconfigured` and opens no
+# connection; the Health check's `push/unconfigured` cell shows it while a live device waits. No lock but the
+# claim's lease (migration 654's next_attempt_at): a second worker in a deploy overlap claims other rows, and a
+# pass killed mid-send leaves its rows due again after two minutes.
+PUSH_TICK_SECONDS = 15.0
+# The pass's `portal_errors` subjects: `lane/push/<step>` in the jobs check.
+PUSH_STEPS: tuple[str, ...] = ("key", "fan_out", "claim", "send")
+# One connect attempt bound: the next tick is 15 s away.
+PUSH_CONNECT_TIMEOUT_SECONDS = 10
+# A pass abandoned at the lane timeout must never overlap the next one in this process.
+_PUSH_PASS_LOCK = _PassLock("push")
 
 # autodedup lane (E914): THE one production path of the dedup engine
 # (autodedup.incremental_lane.run_incremental, imported and never copied). One pass decides,
@@ -2749,6 +2801,108 @@ async def _health_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None
     _record_pass(state, "health", last)
 
 
+def _notifications_step(producer: Callable[[Any], dict[str, int]]) -> dict[str, int]:
+    """One step: its producer on a fresh connection, which commits per statement itself."""
+    conn = db.connect()
+    try:
+        return producer(conn)
+    finally:
+        with contextlib.suppress(Exception):
+            conn.close()
+
+
+def _notifications_step_error(stats: dict[str, int]) -> str | None:
+    """The step's cell text, or None while it is healthy: red iff a statement raised. A stored spec
+    the matcher refuses never reddens it, even when every watchdog is refused: it is the user's row
+    (the write routes 422 it, and a compiler regression would 422 every new watchdog, which users
+    see first), counted in `last` as `subscriptions_invalid`, never an ops fact."""
+    failed = stats.get("subscriptions_failed", 0)
+    if failed:
+        return f"{failed} of {stats.get('subscriptions_evaluated', 0)} watchdogs failed"
+    return None
+
+
+def _notifications_sync(stop_event: asyncio.Event) -> dict[str, Any]:
+    """One pass of the three producers, in ONE thread holding the lane's pass lock. A step that
+    raises, or whose statements failed, is named in `raised` (its cell); the next step still runs."""
+    # Lazy, so the api package stays off every other lane's startup path (the estimation lane's idiom).
+    from api import notifications
+
+    if not _NOTIFICATIONS_PASS_LOCK.try_enter():
+        return {"previous_pass_running": True}
+    try:
+        last: dict[str, Any] = {}
+        attempted: list[str] = []
+        raised: dict[str, str] = {}
+        for step, name in NOTIFICATIONS_STEPS.items():
+            if stop_event.is_set():
+                break
+            attempted.append(step)
+            try:
+                stats = _notifications_step(getattr(notifications, name))
+            except Exception as exc:  # noqa: BLE001 - one step must not end the pass
+                LOG.exception("NOTIFICATIONS step=%s failed", step)
+                raised[step] = f"{type(exc).__name__}: {exc}"
+                continue
+            last[step] = stats
+            error = _notifications_step_error(stats)
+            if error:
+                # The producer logged each watchdog's reason; the cell says how many.
+                raised[step] = error
+        wrote = any(value for stats in last.values()
+                    for key, value in stats.items() if key.endswith("_inserted"))
+        # Only when the pass wrote or failed: an unconditional line is 288 a day.
+        if wrote or raised:
+            LOG.info("NOTIFICATIONS %s failed=%s", last, sorted(raised))
+        return {**last, "attempted": attempted, "raised": raised}
+    finally:
+        _NOTIFICATIONS_PASS_LOCK.release()
+
+
+async def _notifications_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None:
+    if stop_event.is_set():
+        return
+    last = await asyncio.to_thread(_notifications_sync, stop_event)
+    _record_portal_errors(state, "notifications", last.pop("attempted", []),
+                          last.pop("raised", {}), set())
+    _record_pass(state, "notifications", last)
+
+
+def _push_sync(stop_event: asyncio.Event) -> dict[str, Any]:
+    """One push pass in ONE thread holding the lane's pass lock. The key is read first: unset is the brake
+    (nothing opened), unreadable is the `key` step's cell (nothing claimed, so no row spends an attempt)."""
+    # Lazy, as the notifications lane's: the api package stays off every other lane's startup path.
+    from api import push, push_delivery
+
+    if not _PUSH_PASS_LOCK.try_enter():
+        return {"previous_pass_running": True}
+    try:
+        raw = os.environ.get(push.VAPID_ENV, "").strip()
+        # Without a usable key no step can fail, so every step's cell clears; only `key` may be red.
+        if not raw:
+            return {"unconfigured": True, "attempted": list(PUSH_STEPS), "raised": {}}
+        try:
+            push.private_key(raw)
+        except ValueError as exc:
+            return {"attempted": list(PUSH_STEPS), "raised": {"key": str(exc)}}
+        conn = db.connect(connect_timeout=PUSH_CONNECT_TIMEOUT_SECONDS)
+        try:
+            return push_delivery.deliver_once(conn, stop=stop_event.is_set)
+        finally:
+            with contextlib.suppress(Exception):
+                conn.close()
+    finally:
+        _PUSH_PASS_LOCK.release()
+
+
+async def _push_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None:
+    if stop_event.is_set():
+        return
+    last = await asyncio.to_thread(_push_sync, stop_event)
+    _record_portal_errors(state, "push", last.pop("attempted", []), last.pop("raised", {}), set())
+    _record_pass(state, "push", last)
+
+
 def _arm_exit_backstop(seconds: float) -> None:
     # faulthandler's timer thread takes no GIL and calls _exit(1) itself: it ends a
     # process whose Python threads are all stopped, and as PID 1, where the kernel drops
@@ -2874,7 +3028,7 @@ async def _lane_loop(
             #
             # Honest limit: a pass that is blocked inside asyncio.to_thread keeps
             # running after the cancellation -- Python cannot kill a thread. This
-            # frees the LANE, not the thread: the nine lanes with a _PassLock leak at
+            # frees the LANE, not the thread: the eleven lanes with a _PassLock leak at
             # most one each and stay in flight in the heartbeat while it lives; a lane
             # without one leaks a thread per abandoned pass, and if those fill the
             # executor the heartbeat stops and the watchdog restarts the process.
@@ -3058,6 +3212,18 @@ async def _amain() -> int:
             lambda: _autodedup_pass(stop_event, state),
             state,
             default_interval=0)),
+        # The health lane's constant interval again: nothing to read, nothing to fail.
+        ("notifications", lambda: _lane_loop(
+            "notifications", stop_event, lambda: NOTIFICATIONS_TICK_SECONDS,
+            lambda: _notifications_pass(stop_event, state),
+            state,
+            default_interval=NOTIFICATIONS_TICK_SECONDS)),
+        # The notifications lane's constant interval again; its brake is the VAPID key, read in the pass.
+        ("push", lambda: _lane_loop(
+            "push", stop_event, lambda: PUSH_TICK_SECONDS,
+            lambda: _push_pass(stop_event, state),
+            state,
+            default_interval=PUSH_TICK_SECONDS)),
         ("heartbeat", lambda: _lane_loop(
             "heartbeat", stop_event, lambda: HEARTBEAT_INTERVAL_SECONDS,
             lambda: _heartbeat_pass(state),

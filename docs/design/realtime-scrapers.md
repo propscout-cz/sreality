@@ -99,7 +99,8 @@ photo-sharing cross-portal merge ≤ 60 min · delisting ≤ 6 h market-wide / �
 notification ≤ 2 min after the property row exists. `published_at` (migration 266) and the
 `detail_queue_completions` ledger (migration 265) are the measurement substrate; health
 checks move from fixed batch-era thresholds to cadence/SLO-scaled ones, with reds pushed
-through the existing notification outbox.
+through the existing notification outbox (*superseded: the outbox was deleted 2026-10-21; system
+alerts live on Health and the canary e-mail, ruling R2b*).
 
 ## Costs & constraints
 
@@ -590,13 +591,13 @@ Four changes, each closing one link:
   `max_claims` at what is waiting) instead of 20 slots per pass whatever the work.
 - **Probe and drain hold pass locks** like the five lanes that already did, and so does the broker
   lane (Broker Unify W3; an abandoned pass's `broker_resolution_lock` row goes stale, so the lease
-  alone would let the next tick run beside it), all eight (the health lane's, wave 3, makes nine)
+  alone would let the next tick run beside it), all eight (the health lane's, wave 3, makes nine; the notifications lane's, notifications W2a, ten)
   through one `_PassLock`: each pass runs in ONE thread, so a lane leaks at most one; a skipped pass
   records `previous_pass_running`. While an abandoned pass still holds its lock, the lane's
   `in_flight_s` keeps counting from that pass's start (a skip otherwise reads like a quick pass),
   so the jobs check's lane cell reads Watch past 1,200 s in flight and Problem past 1,800 s.
 - **The heartbeat is the executor's canary.** It stays on the default executor every lane shares,
-  pinned at 32 threads (`LANE_EXECUTOR_THREADS`; the fifteen `LANES` hold at most one each in normal
+  pinned at 32 threads (`LANE_EXECUTOR_THREADS`; the sixteen `LANES` hold at most one each in normal
   running), so anything that fills it (leaked threads from the lanes without a pass lock, say)
   stops the beats. Those threads share two glibc malloc arenas (`MALLOC_ARENA_MAX=2`, E949). A
   beat connects once with a 10 s timeout, so a slow connect cannot outlast the watchdog's bound

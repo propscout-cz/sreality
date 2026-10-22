@@ -11,6 +11,7 @@ import { MemoryRouter } from 'react-router-dom';
 
 import { FilterSidebar, FilterSidebarRail } from './Filters';
 import * as api from '@/lib/api';
+import * as brokers from '@/lib/brokers';
 import { DEFAULT_FILTERS, type ListingFilters } from '@/lib/filters';
 import type { LocationResolution } from '@/lib/maps';
 
@@ -21,6 +22,11 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   listCollections: vi.fn(),
   listTags: vi.fn(),
+}));
+vi.mock('@/lib/brokers', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/brokers')>()),
+  searchBrokersByName: vi.fn(),
+  fetchBrokerDossier: vi.fn(),
 }));
 vi.mock('@/lib/maps', async (importActual) => ({
   ...(await importActual<typeof import('@/lib/maps')>()),
@@ -79,6 +85,44 @@ describe('<FilterSidebar> status line', () => {
     expect(within(dismissed).getByRole('button', { name: 'Hide dismissed' })).toHaveAttribute('aria-pressed', 'true');
     await user.click(within(dismissed).getByRole('button', { name: 'Show dismissed' }));
     expect(latest.showDismissed).toBe(true);
+  });
+});
+
+describe('<FilterSidebar> broker', () => {
+  it('finds a broker by name in Advanced, scopes the filters to them, and clears the scope', async () => {
+    vi.mocked(api.listCollections).mockImplementation(never);
+    vi.mocked(api.listTags).mockImplementation(never);
+    vi.mocked(brokers.searchBrokersByName).mockResolvedValue([
+      { broker_id: 527, display_name: 'Jana Nováková', firm_name: 'RE/MAX Alfa', firm_domain: 're-max.cz', cz_active_property_count: 41 } as brokers.BrokerPublic,
+    ]);
+    let latest: ListingFilters = DEFAULT_FILTERS;
+    function Host() {
+      const [filters, setFilters] = useState<ListingFilters>(DEFAULT_FILTERS);
+      return (
+        <FilterSidebar
+          filters={filters}
+          onChange={(next) => {
+            latest = next;
+            setFilters(next);
+          }}
+        />
+      );
+    }
+    renderPicker(
+      <MemoryRouter>
+        <Host />
+      </MemoryRouter>,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Advanced' }));
+    await user.type(await screen.findByRole('textbox', { name: 'Broker' }), 'Nová');
+    await user.click(await screen.findByRole('button', { name: /Jana Nováková/ }));
+    expect(latest.brokerId).toBe(527);
+    expect(latest.categoryType).toBe(DEFAULT_FILTERS.categoryType);
+
+    await user.click(await screen.findByRole('button', { name: 'Remove broker Jana Nováková' }));
+    expect(latest.brokerId).toBeNull();
+    expect(brokers.fetchBrokerDossier).not.toHaveBeenCalled();
   });
 });
 

@@ -31,3 +31,10 @@ def _no_valuo_token(monkeypatch):
     test that needs a configured posture sets a fake token over a faked transport."""
     monkeypatch.delenv("VALUO_API_TOKEN", raising=False)
     monkeypatch.delenv("VALUO_SANDBOX_API_TOKEN", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_vapid_key(monkeypatch):
+    """No test can push to Apple: the VAPID key is removed before every test (the push lane's brake), and a
+    test that sends sets a throwaway key over a faked `requests.post` (tests/api/test_push.py)."""
+    monkeypatch.delenv("VAPID_PRIVATE_KEY", raising=False)

@@ -1,9 +1,8 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { getNotificationUnreadCount } from '@/lib/api';
-import { notificationKeys } from '@/lib/queries';
 import { useAuth } from '@/lib/auth';
+import { UnreadCountProvider, useUnreadCount } from '@/lib/unreadCount';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { NewEstimationProvider } from './NewEstimationModal';
 import { NewPropertyProvider } from './NewPropertyProvider';
@@ -108,8 +107,8 @@ const autodedupItems: ReadonlyArray<MenuItem> = [
 // than vanishing — a surface that exists and is switched off is a different
 // fact from one that was removed.
 const adminItems: ReadonlyArray<MenuItem> = [
-  // First: where the operator starts when something is wrong, and where the
-  // bell's system alerts open.
+  // First: where the operator starts when something is wrong, and the one place
+  // system alerts are told (the bell shows none since ruling R2b, 2026-10-21).
   { to: ROUTES.health.build(), label: 'Health' },
   // The merge-review queue is a real admin surface (routes.tsx wraps it in
   // AdminPage) that was only reachable from a conditional chip on /brokers —
@@ -162,55 +161,43 @@ export default function Shell() {
       <Outlet />
     </ErrorBoundary>
   );
+  /* The unread count's one observer sits above both frames, so the desktop
+   * badge, the phone bell and the Notifications page read one poll. */
   return (
-    <NewEstimationProvider>
-      <NewPropertyProvider>
-        <ExploreAreaProvider>
-          <ExploreBrokerProvider>
-            {phone ? (
-              <PhoneFrame>{body}</PhoneFrame>
-            ) : (
-              <div className="min-h-dvh flex flex-col bg-[var(--color-paper)] text-[var(--color-ink)]">
-                <SkipLink />
-                <TopBar />
-                {/* id + tabIndex=-1: the skip link's target and where useRouteFocus
-                  * lands keyboard focus after every navigation. -1 keeps it out of
-                  * the tab order while letting it be focused programmatically. */}
-                <main id={MAIN_ID} tabIndex={-1} className="flex-1 outline-none">
-                  {body}
-                </main>
-                <Footer />
-              </div>
-            )}
-            <ToastViewport placement={phone ? 'phone' : 'corner'} />
-          </ExploreBrokerProvider>
-        </ExploreAreaProvider>
-      </NewPropertyProvider>
-    </NewEstimationProvider>
+    <UnreadCountProvider>
+      <NewEstimationProvider>
+        <NewPropertyProvider>
+          <ExploreAreaProvider>
+            <ExploreBrokerProvider>
+              {phone ? (
+                <PhoneFrame>{body}</PhoneFrame>
+              ) : (
+                <div className="min-h-dvh flex flex-col bg-[var(--color-paper)] text-[var(--color-ink)]">
+                  <SkipLink />
+                  <TopBar />
+                  {/* id + tabIndex=-1: the skip link's target and where useRouteFocus
+                    * lands keyboard focus after every navigation. -1 keeps it out of
+                    * the tab order while letting it be focused programmatically. */}
+                  <main id={MAIN_ID} tabIndex={-1} className="flex-1 outline-none">
+                    {body}
+                  </main>
+                  <Footer />
+                </div>
+              )}
+              <ToastViewport placement={phone ? 'phone' : 'corner'} />
+            </ExploreBrokerProvider>
+          </ExploreAreaProvider>
+        </NewPropertyProvider>
+      </NewEstimationProvider>
+    </UnreadCountProvider>
   );
 }
 
 function TopBar() {
   const { isAdmin, agendas } = useAuth();
   const location = useLocation();
-  /* The badge polls a Railway route that costs ~300 ms of unpooled connection
-   * setup for ~15 ms of server work, on every page load and then every 30 s.
-   * Two changes: it only runs when the Notifications nav item is actually
-   * visible to this session (the agenda gate below already decides that, and
-   * polling a count for a hidden entry is pure cost), and the cadence backs off
-   * to 60 s — an unread badge is not a real-time surface, and the matcher that
-   * feeds it does not run faster than that either. */
-  const notificationsVisible =
-    isAdmin || !isSupabaseConfigured() || agendas === null ||
-    agendas['notifications'] === true;
-  const unreadQ = useQuery({
-    queryKey: notificationKeys.unreadCount,
-    queryFn: () => getNotificationUnreadCount(),
-    enabled: notificationsVisible,
-    staleTime: 60_000,
-    refetchInterval: 60_000,
-  });
-  const unread = unreadQ.data?.unread_count ?? 0;
+  /* Shell's one unread observer (lib/unreadCount), gated as the nav item is. */
+  const { count: unread } = useUnreadCount();
   /* The !AUDIT POLOH count — the UNRESOLVED rows only (W7-b): the listings the
    * system finished and could not place. The ones it simply has not reached yet
    * are normal traffic, and a badge that counted them would climb every time the

@@ -90,6 +90,8 @@ function customWords(row: Extract<SheetRow, { kind: 'custom' }>, f: ListingFilte
       return f.includeNoPrice ? 'ano' : null;
     case 'show_dismissed':
       return f.showDismissed ? 'ano' : null;
+    case 'broker':
+      return f.brokerId != null ? 'vybraný' : null;
     default:
       return null;
   }

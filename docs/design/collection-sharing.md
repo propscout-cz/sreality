@@ -45,6 +45,9 @@ the note's own `shared` mark and the database's read policies as the ONLY places
   account, collection_monitor → the collection's OWNER, else SYSTEM). `system_health` rows have no
   property subject and render as a text row. External delivery (`channel_sends`) resolves ONE
   operator-wide address (`notification_email_to`), so per-recipient email is not built.
+  *Superseded 2026-10-21 ([notifications-push/PROGRAM.md](./notifications-push/PROGRAM.md), W1):
+  `system_health` writes no row, `channel_sends` and its outbox are retired, and delivery becomes
+  push to each event account's own iPhones (W4).*
 - **Alerts and merges need no change.** Collection-monitor dispatches are stamped to the owner.
   Merge carriers move membership by `collection_id` and notes by property; neither reads shares.
 - **Duplication sharing would multiply** (evidence in §5): 16 hand-typed `useQuery` sites over the
@@ -519,7 +522,9 @@ which must renumber); W4 takes the next free number at merge time.
 3. **Browse control:** the same Kolekce picker with a "Shared with me" group.
 4. **Email with no account:** plain "No account uses this email".
 5. **Scope:** (a) a recipient can leave; (b) recipients don't see each other; (c) no alerts for
-   recipients; (d) no re-sharing; (e) **an in-app notification on share** (no email); (f) revoking
+   recipients; (d) no re-sharing; (e) **an in-app notification on share** (no email; *superseded
+   2026-10-21: shares are also pushed to the recipient's iPhone from W4,
+   [notifications-push/PROGRAM.md](./notifications-push/PROGRAM.md) § 3.1*); (f) revoking
    deletes the share row, no history; (g) the system "monitoring" collection is shareable.
 6. **Property page:** delete the collection chip row; the header `Uložit do kolekce` stays.
 7. **Drop** `collections_public` and `tags_public` (zero readers outside tests; no user impact).

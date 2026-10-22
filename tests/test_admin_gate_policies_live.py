@@ -37,11 +37,11 @@ _UNWRAP = (
     r"\(\s*SELECT\s+is_platform_admin\(\)(\s+AS\s+is_platform_admin)?\s*\)"
 )
 
-# 431's 10 policies / 11 sites, plus migration 619's notification_dispatches_admin_update
-# (the SYSTEM-account arm, gated in both USING and WITH CHECK), less the two
-# manual_rental_estimates policies (3 sites) that migration 639 drops with their table.
-_EXPECTED_POLICIES = 9
-_EXPECTED_SITES = 10
+# 431's 10 policies / 11 sites, less the two manual_rental_estimates policies (3 sites) that
+# migration 639 drops with their table, and less notification_dispatches_tenant_read's SYSTEM arm
+# (1 site), which migration 651 removes with 619's notification_dispatches_admin_update.
+_EXPECTED_POLICIES = 7
+_EXPECTED_SITES = 7
 
 # Their with_check has NO admin arm and must never acquire one — that would be a
 # privilege change wearing a performance change's clothes.

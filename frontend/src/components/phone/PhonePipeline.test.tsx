@@ -140,14 +140,7 @@ beforeEach(() => {
   setNarrow(true);
   vi.mocked(api.listPipelineShares).mockResolvedValue({ shared_with: [], shared_with_me: [] });
   window.scrollTo = vi.fn() as unknown as typeof window.scrollTo;
-  vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({
-    watchdog: 0,
-    collection_monitor: 0,
-    share: 0,
-    system_health: 0,
-    total: 0,
-    unread_count: 0,
-  });
+  vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({ unread_count: 0 });
   vi.mocked(pinAudit.fetchPinAuditTotal).mockResolvedValue(0);
   vi.mocked(auth.useAuth).mockReturnValue({
     isAdmin: true,

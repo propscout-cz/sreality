@@ -9,11 +9,14 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { act, render, waitFor } from '@testing-library/react';
 import { ACTIVE_BOARD_KEY, EDIT_AS_OWNER_KEY, getActiveBoard, setActiveBoard, setEditAsOwner } from './acting';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { AuthRetryableFetchError } from '@supabase/supabase-js';
 
 const h = vi.hoisted(() => ({
   /* Emitted auth-state callbacks, so a test can fire events itself. */
   listeners: [] as Array<(event: string, session: unknown) => void>,
   initialSession: null as unknown,
+  initialError: null as unknown,
+  planAgendas: { browse: true } as Record<string, boolean>,
   reads: [] as string[],
   /* Per relation, envelopes served (in order) before the real rows. */
   failNext: {} as Record<string, unknown[]>,
@@ -24,7 +27,7 @@ vi.mock('./supabase', () => {
     h.reads.push(relation);
     const rows =
       relation === 'plans'
-        ? [{ key: 'free', agendas: { browse: true }, is_default: true }]
+        ? [{ key: 'free', agendas: h.planAgendas, is_default: true }]
         : [];
     let single = false;
     const b: Record<string, unknown> = {
@@ -47,7 +50,8 @@ vi.mock('./supabase', () => {
     supabase: {
       from: table,
       auth: {
-        getSession: () => Promise.resolve({ data: { session: h.initialSession } }),
+        getSession: () =>
+          Promise.resolve({ data: { session: h.initialSession }, error: h.initialError }),
         onAuthStateChange: (cb: (event: string, session: unknown) => void) => {
           h.listeners.push(cb);
           return { data: { subscription: { unsubscribe: () => {} } } };
@@ -57,8 +61,17 @@ vi.mock('./supabase', () => {
   };
 });
 
+vi.mock('./push', () => ({
+  setPushGate: vi.fn(),
+  endPushHere: vi.fn(async () => {}),
+  signOutPush: vi.fn(async () => {}),
+}));
+vi.mock('./appBadge', () => ({ syncAppBadge: vi.fn() }));
+
 import { isTransientApiError } from './api';
+import { syncAppBadge } from './appBadge';
 import { AuthProvider, useAuth } from './auth';
+import { endPushHere, setPushGate } from './push';
 
 /* A fresh object each call — exactly what Supabase hands out per auth event,
  * and the reason keying on the session object refetched three times. */
@@ -83,7 +96,12 @@ beforeEach(() => {
   h.listeners = [];
   h.reads = [];
   h.initialSession = null;
+  h.initialError = null;
+  h.planAgendas = { browse: true };
   h.failNext = {};
+  vi.mocked(setPushGate).mockClear();
+  vi.mocked(endPushHere).mockClear();
+  vi.mocked(syncAppBadge).mockClear();
 });
 
 /* postgrest-js's resolved envelopes for a dropped connection and a refused grant. */
@@ -207,5 +225,120 @@ describe('AuthProvider session bootstrap', () => {
 
     // null -> user is a login, not a switch: nothing cached belonged to anyone else.
     expect(qc.getQueryData(['market-data'])).toBeDefined();
+  });
+});
+
+/* Push rides the notifications gate (lib/push `setPushGate`): it opens once
+ * the plan is read on a launch or a sign-in, which re-sends this device's
+ * subscription; it stays shut where the plan hides notifications; it is null
+ * while signed out or while the plan is read. */
+const gates = () => vi.mocked(setPushGate).mock.calls.map(([gate]) => gate);
+
+describe('AuthProvider push gate', () => {
+
+  it('opens once the plan is read on a signed-in launch, and once only', async () => {
+    h.planAgendas = { browse: true, notifications: true };
+    h.initialSession = sessionFor('user-1');
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { getByTestId } = renderAuth(qc);
+    await waitFor(() => expect(getByTestId('agendas').textContent).toBe('browse,notifications'));
+    for (const event of ['SIGNED_IN', 'TOKEN_REFRESHED', 'INITIAL_SESSION']) {
+      for (const cb of h.listeners) cb(event, sessionFor('user-1'));
+    }
+    await new Promise((r) => setTimeout(r, 20));
+    expect(gates().filter((gate) => gate === true)).toHaveLength(1);
+    expect(gates()).not.toContain(false);
+  });
+
+  it('stays shut where the plan hides notifications', async () => {
+    h.initialSession = sessionFor('user-1');
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { getByTestId } = renderAuth(qc);
+    await waitFor(() => expect(getByTestId('agendas').textContent).toBe('browse'));
+    await waitFor(() => expect(setPushGate).toHaveBeenLastCalledWith(false));
+    expect(gates()).not.toContain(true);
+  });
+
+  it('is null while signed out, and opens on a sign-in', async () => {
+    h.planAgendas = { browse: true, notifications: true };
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderAuth(qc);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(gates().every((gate) => gate === null)).toBe(true);
+    act(() => {
+      for (const cb of h.listeners) cb('SIGNED_IN', sessionFor('user-1'));
+    });
+    await waitFor(() => expect(setPushGate).toHaveBeenLastCalledWith(true));
+  });
+});
+
+/* No subscription outlives its user (AUDIT F18): any change of user, sign-out
+ * included, ends this device's subscription locally and clears the badge. The
+ * explicit sign-out (its order: tell the server, end it here, then sign out)
+ * is pinned against the real lib/push in auth.push.test.tsx. */
+describe('AuthProvider push binding', () => {
+  it('ends the subscription and clears the badge on sign-out', async () => {
+    h.initialSession = sessionFor('user-1');
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { getByTestId } = renderAuth(qc);
+    await waitFor(() => expect(getByTestId('agendas').textContent).toBe('browse'));
+    expect(endPushHere).not.toHaveBeenCalled();
+
+    act(() => {
+      for (const cb of h.listeners) cb('SIGNED_OUT', null);
+    });
+    await waitFor(() => expect(endPushHere).toHaveBeenCalledTimes(1));
+    expect(syncAppBadge).toHaveBeenCalledWith(0);
+  });
+
+  it('ends it, and clears the badge, on an account switch', async () => {
+    h.initialSession = sessionFor('user-1');
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { getByTestId } = renderAuth(qc);
+    await waitFor(() => expect(getByTestId('agendas').textContent).toBe('browse'));
+
+    act(() => {
+      for (const cb of h.listeners) cb('SIGNED_IN', sessionFor('user-2'));
+    });
+    await waitFor(() => expect(endPushHere).toHaveBeenCalledTimes(1));
+    expect(syncAppBadge).toHaveBeenCalledWith(0);
+  });
+
+  it('ends a subscription left behind, and clears the badge, when the app launches signed out', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderAuth(qc);
+    await waitFor(() => expect(endPushHere).toHaveBeenCalledTimes(1));
+    expect(syncAppBadge).toHaveBeenCalledWith(0);
+    expect(gates()).not.toContain(true);
+  });
+
+  /* A launch whose refresh failed in transit answers "no session" with an
+   * error while supabase-js keeps the stored one: not certainly nobody. */
+  it('ends nothing on a launch that could not refresh its session, until it is sure', async () => {
+    h.initialError = new AuthRetryableFetchError('Failed to fetch', 0);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderAuth(qc);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(endPushHere).not.toHaveBeenCalled();
+    expect(syncAppBadge).not.toHaveBeenCalled();
+
+    act(() => {
+      for (const cb of h.listeners) cb('SIGNED_OUT', null);
+    });
+    await waitFor(() => expect(endPushHere).toHaveBeenCalledTimes(1));
+    expect(syncAppBadge).toHaveBeenCalledWith(0);
+  });
+
+  it('leaves it alone on the events a session emits for the same user', async () => {
+    h.initialSession = sessionFor('user-1');
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { getByTestId } = renderAuth(qc);
+    await waitFor(() => expect(getByTestId('agendas').textContent).toBe('browse'));
+    act(() => {
+      for (const cb of h.listeners) cb('TOKEN_REFRESHED', sessionFor('user-1'));
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(endPushHere).not.toHaveBeenCalled();
+    expect(syncAppBadge).not.toHaveBeenCalled();
   });
 });
