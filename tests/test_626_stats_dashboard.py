@@ -131,9 +131,14 @@ def test_the_cohort_where_is_625s_byte_for_byte() -> None:
 
     cond = base_now.index(_OLD.rstrip("\n"))
     base_now = base_now[:cond] + _NEW.rstrip("\n").split("\n") + base_now[cond + 1:]
+    # 648 inserted one conjunct, energy rating's, right after building_type's.
+    from tests.test_648_browse_energy_rating_filter import _ANCHOR, _ENERGY
+
+    bt = base_now.index(_ANCHOR.rstrip("\n"))
+    base_now = base_now[: bt + 1] + [_ENERGY.rstrip("\n")] + base_now[bt + 1:]
     start = later.index(base[anchor - 1]) + 1
     end = later.index(base[anchor + 1], start)
-    assert later[:start] + later[end:] == base_now, "the effective WHERE is not 625's minus 640's drop, 644's swap, plus one inserted block"
+    assert later[:start] + later[end:] == base_now, "the effective WHERE is not 625's minus 640's drop, 644's swap, 648's conjunct, plus one inserted block"
     block = " ".join(later[start:end])
     assert later[start].lstrip().startswith("-- migration 629: the curated-set scope")
     assert all(f"{c}_set" in block for c in ("tags", "collections", "pipeline")), block

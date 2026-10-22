@@ -80,6 +80,12 @@ value came from, which Valuo environment answered, and Valuo's answer in its own
 our own estimates, never counted as one of them.
 _Avoid_: Valuo estimate, Valuo run, external estimate
 
+**Recalculation** (UI: "Náš přepočet"):
+Our figure over the comparables of a Valuo valuation that the user leaves ticked, worked out in the browser from
+Valuo's own per-m² prices the way Valuo works out its average. Never stored, never counted as one of our estimates
+(a run of ours) and never presented as Valuo's answer.
+_Avoid_: our estimate, Valuo recalculation, náš odhad
+
 ### Changing what belongs together
 
 **Merge**:
@@ -332,13 +338,14 @@ _Avoid_: outage, issue, ticket, problem (for the record)
 
 **System alert**:
 A notice about the platform's own health: an incident has started, is still open, or has recovered.
-It appears among the app's notifications; a watchdog's notice about properties is not one.
+Since 2026-10-21 it reaches no notification feed: the Health page shows the incident, and the canary's
+failure email tells an unacknowledged alarm; a watchdog's notice about properties is not one.
 _Avoid_: alarm (that is the check), alert (alone), health notification
 
 **Acknowledge**:
 An admin's deliberate act, on the Health page, of marking a check's open incidents as known, which
-stops their reminders; each still closes only on a measured recovery. Reading a system alert among
-the notifications does not acknowledge it.
+stops their reminders and the canary's failure email about them; each still closes only on a measured
+recovery.
 _Avoid_: dismiss, mute, snooze, resolve, mark read
 
 **Not measured**:
@@ -358,8 +365,8 @@ _Avoid_: monitor, meta-check, dead-man switch, heartbeat check
 The one monitoring workflow on GitHub, an hourly cron that GitHub delivers about five times a day:
 it records the production runs of the other workflows (those run on schedule or by a push to the main branch, each failure
 with its reason line), measures the checks hosted on GitHub, then asserts that the database answers, that the watcher is running and its Problems have incidents, and
-that no alarm's system alert has gone unread and undelivered while its incident is open and
-unacknowledged. A failing check never fails its run; the assertions do (so does a crash of the
+that no alarm's incident has stood open and unacknowledged for 15 minutes to 12 hours since its onset or
+latest reminder. A failing check never fails its run; the assertions do (so does a crash of the
 poller or the harness, or the harness step overrunning its 6 minutes), so GitHub's failure email is the one path to
 the operator that needs neither the database's scheduler nor Railway.
 _Avoid_: monitoring lane, acute lane, health workflow, smoke test
@@ -397,6 +404,25 @@ _Avoid_: connector, extension, integration
 **Phone app**:
 The platform's web app installed on a phone's home screen: the same app in a phone-sized shell.
 _Avoid_: PWA (in prose), mobile app, native app, companion app
+
+**Bell**:
+The way into a user's notifications, with the count of their unread ones: the Notifications entry
+in the desktop top bar, the bell in the phone app's header.
+_Avoid_: inbox, notification centre
+
+**App badge**:
+The number on the phone app's home-screen icon: the same unread count the bell shows.
+_Avoid_: icon badge, push badge
+
+**Push device**:
+One phone app that can receive a user's notifications as pushes: its push subscription, bound to
+the user signed in on it, ended when that user signs out or another signs in.
+_Avoid_: device token, subscriber, push subscription (in prose)
+
+**Switch**:
+"Oznámení na tomto iPhonu" in the phone app's account sheet: turns this phone into a push device
+for the signed-in user, or stops it being one. There is no other push setting.
+_Avoid_: push preference, channel picker, opt-in
 
 **Reference overlay**:
 A map layer drawn from an outside public dataset — metro routes, flood zones, kraj borders, the MF

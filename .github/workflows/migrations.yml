@@ -238,6 +238,16 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_valuo_valuations_live.py -q
 
+      # The push ledger (migration 654, notifications push W4): a claim is a lease only Postgres can show — two
+      # concurrent claims never share a row (SKIP LOCKED), a claim whose process died is due again after it, a 429
+      # holds the whole device — and fan-out's registration time, VISIBLE and share cap, and the device registry's
+      # three PUT cases, are statements over the real schema the hermetic fakes only script.
+      - name: The push ledger leases, fans out and registers as written (migration 654)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_notifications_push_live.py -q
+
       # This rail replaced migration 429's on 2026-09-12 (W2-a). That one EXPLAINed the
       # drain's bulk member read of listing_location_current — the platform's single
       # largest disk consumer at 39,488 calls x 69,327 blocks — and the drain does not make
@@ -639,7 +649,7 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"
-        run: pytest tests/test_property_carriers_live.py -q
+        run: pytest tests/test_property_carriers_live.py tests/test_652_notifications_live.py tests/test_notification_events_lock_live.py -q
 
       # W4's whole claim is that FIVE relations publish ONE number. Nothing else
       # in CI can see that: the fake connections cannot evaluate SQL, and PREPARE

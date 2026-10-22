@@ -31,9 +31,9 @@ reads public data directly and routes every write through the API), and a **Chro
 that overlays estimates on portal pages.
 
 A **dark-by-default always-on worker** (`scraper/realtime_worker.py`, a 2nd Railway service from the SAME image, gated by
-`REALTIME_WORKER_ENABLED`) runs every lane registered in `_amain`: the latency layer over the GH crons (newest-first probes,
-bounded detail drain, images-first downloads, sreality count-probe), plus property/broker maintenance, estimation jobs, location
-resolve/intake/refetch, sold comps, text extraction, health checks, autodedup and heartbeats (design: `docs/design/realtime-scrapers.md`).
+`REALTIME_WORKER_ENABLED`) runs every lane registered in `_amain`: the latency layer over the GH crons (newest-first probes, bounded
+detail drain, images-first downloads, sreality count-probe), plus property/broker maintenance, estimation jobs, location resolve/intake/
+refetch, sold comps, text extraction, health checks, autodedup, notification producers and heartbeats (`docs/design/realtime-scrapers.md`).
 ## Territories
 
 Three top-level territories with deliberately different rules — identify which one a task is
@@ -154,8 +154,8 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     on cache miss; a POI's category is set by the *query*, not OSM tags; taxonomy in `toolkit/amenities.CATEGORY_TAGS`.
 11. **`transit_lines` + `transit_line_fetches` are a parallel OSM mirror** for route geometry (migration
     028) — written by `find_comparables_along_axis`; one row per (relation, member way); tram/subway/bus; 30-day TTL.
-12. **`estimation_runs` is the single source of truth for every estimation; every run must be created through `create_estimation_run`** (owed forks:
-    the Watchdog kickoff, `scripts/smoke_agent.py`). The row is INSERTed at submit (`pending`/`running`; `failed` if setup fails), then the executor
+12. **`estimation_runs` is the single source of truth for every estimation; every run must be created through `create_estimation_run`** (owed fork:
+    `scripts/smoke_agent.py`). The row is INSERTed at submit (`pending`/`running`; `failed` if setup fails), then the executor
     UPDATEs its terminal `status` in place; failed runs still persist a row (HTTP 200 + `status='failed'`); re-runs INSERT with `parent_run_id`; a
     run's RESULT is immutable (its yield `scenario` is not; `input_listing_id` is set at submit, never late-bound; an ad we do not hold or cannot place is a 422 before any row). Sources: `ui`/`api`/`clickup`/`extension`.
     A paid outside valuation (Valuo) is not our estimate: one row per call in `valuo_valuations`, written only by `api/valuo.py`.
@@ -186,19 +186,19 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     the registry in `toolkit/filter_compiler.compile_filter_where`; Browse's TS + RPCs are pinned per shared predicate only
     (`sql_kind`, place plan, rule-23 measures, served predicate, portal rule). **Portal + broker filters select ADS, rows stay properties (MS19):**
     P matches when any ad is on P (`all_sources`), status judged on those ads; a broker likewise, both = one ad; estimation cohorts stay per-ad. `notification_dispatches` = the append-only event table,
-    **four producers**: `watchdog` + `collection_monitor` (property-grain; `dedupe_key` `:new:` once-ever / `:price_drop:{snapshot_id}`
-    per-snapshot; a `monitor_since` anchor so a pre-membership change never fires) + `system_health` (**NOT** property-grain;
-    the health ladder's per-cell `ops_incidents`, mig 619; the signature engine retired, mig 621) + `share` (not property-grain; recipient-stamped by `api/shares.py`, in-app only; collection mig 610 + pipeline mig 641 + dashboard mig 647). **Delivery is separate from detection**: in-app = the row; external = `channel_sends`. A merge re-points them (#18), collapsing a twin (the merge's one delete) once its `channel_sends` move to the kept row.
+    **three producers**: `watchdog` + `collection_monitor` (property-grain; 'new' once-ever, a price step per snapshot
+    (`event_ref`); a `monitor_since` anchor so a pre-membership change never fires) + `share` (not property-grain; recipient-stamped by `api/shares.py`;
+    collection mig 610 + pipeline mig 641 + dashboard mig 647; in-app and pushed, one push per sharer a day). Producers write facts, never routing (no channel, status or target stamping). **System alerts are no producer** (ruling R2b 2026-10-21): the health ladder's per-cell `ops_incidents` (mig 619) is told on Health + the canary e-mail only. **Delivery is separate from detection**: in-app = the row; external = `notification_deliveries` (push, one row per event × device, leased claims; `channel_sends` retired, W6), `docs/design/notifications-push/PROGRAM.md`. **One identity index** `notification_dispatches_identity_uq` over `EVENT_IDENTITY` (mig 653), NULLS NOT DISTINCT, partial on `duplicate_of IS NULL`, decides "same event?" for producers (`ON CONFLICT`) and merges; a merge re-points and marks a duplicate, never deletes; a deleted watchdog is retired; one `VISIBLE_SQL` hides both from every read.
 17. **City-quality indexes are a normalized, operator-curated time series** (`curated_cities` + `city_index_*`
     + `city_population`) — a new index needs no migration; latest revision wins; agenda-gated to **Browse +
     Watchdog only** (the estimation agent never sees them, preserving deterministic estimates).
 18. **Operator curation is PROPERTY-grain and dedup-stable** (`collections`, `tags`, `property_notes`, all keyed on `property_id`; migration 202). Every
     property-anchored operator-state row follows a merge through ONE ordered list, `PROPERTY_CARRIERS` (`toolkit/property_carriers.py`: curation
-    tables incl. `notification_dispatches`, pipeline (rule #22), **dismissals** (mig 536: lift, never delete; a LIVE deal wins)), run inside the merge
+    tables, `notification_dispatches` (one UPDATE: re-point, mark the survivor's twin `duplicate_of`, delete nothing), pipeline (rule #22), **dismissals** (mig 536: lift, never delete; a LIVE deal wins)), run inside the merge
     transaction, so no such row orphans onto `merged_away`; every other column naming a property sits in `NOT_CARRIED` with its reason, and a census (offline
     over migrations, live over the replayed schema) fails on a column in neither. A SET/APPEND table = one `CurationTable(...)` line; any other shape = one
     adapter. Each merge writes one `property_merge_carries` row per curation row it moved or folded (alerts none); a detach routes it back (`route_curation`: a note with its ad, the rest by its carry rows, folds re-created; a split's user picks per item, copies allowed).
-    Collections carry monitoring (`monitoring_enabled` + `notify_channels`); a collection may be SHARED read-only (`collection_shares` + notes the author marks `shared`, mig 610: reads widen, writes never); a PIPELINE share lets its recipient ACT AS the owner on the eleven curation tables (a read share: the board only; `X-Act-As` → `acting_account_ids()`, mig 641: the identity is replaced, never unioned; every delegated write stamped in `delegated_edits`). Writes go through the API.
+    Collections carry monitoring (`monitoring_enabled`; `notify_channels` unread since W1); a collection may be SHARED read-only (`collection_shares` + notes the author marks `shared`, mig 610: reads widen, writes never); a PIPELINE share lets its recipient ACT AS the owner on the eleven curation tables (a read share: the board only; `X-Act-As` → `acting_account_ids()`, mig 641: the identity is replaced, never unioned; every delegated write stamped in `delegated_edits`). Writes go through the API.
 19. **The scrape is cadence-split: a fast index-walk feeds an async batched detail-drain via `listing_detail_queue`** (migration 105).
     Index-walk (`--index-only`) walks the full index, `portal_runner.reconcile_sightings` (touch + enqueue) + end-gated nomination (rule #3); detail-drain
     (`--drain-only`) claims a bounded slice (`FOR UPDATE SKIP LOCKED`) and writes each flush in ONE `listing_write.write_listings` call.
@@ -282,10 +282,10 @@ secret (the frontend build must not see it). **Full env-var / secrets reference:
   any invite / role / remove surface; platform admins are still provisioned by hand in SQL.
 - **A public read API** — every data route requires a Supabase JWT (`require_token` = any signed-in user; identity routes `verify_jwt`/
   `tenant_conn`; local dev opts out with `API_AUTH_OPTIONAL=1`, never production) and `anon` reads nothing;
-  `/health` + the `/images/{key}` photo proxy are open by design, and webhooks + `/u/{token}` verify their own signature/token.
+  `/health` + the `/images/{key}` photo proxy are open by design, and the Stripe webhook verifies its own signature.
 
 ClickUp is *not* out of scope (a supported API consumer that signs in as its own Supabase user; `'clickup'` is a reserved `estimation_runs.source`);
-nor are the email/Telegram channels (rule #16). Don't start out-of-scope work without explicit direction.
+nor is email as a future second push-ledger channel (inactive; rule #16) — Telegram and every other channel are OUT by ruling 2026-10-21. Don't start out-of-scope work without explicit direction.
 ## Where the detail lives
 | Need | Load |
 | --- | --- |

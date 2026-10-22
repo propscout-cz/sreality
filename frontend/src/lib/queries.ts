@@ -9,11 +9,10 @@ import {
 import { fetchBrokerPropertyIds } from './brokers';
 import type { LlmCostDailyRow, LlmCostHourlyRow } from './llmCosts';
 import {
-  type CenterRadius,
   type ListingFilters,
   type ListingStatus,
-  type MapBounds,
   buildingMaterialToValues,
+  effectiveBbox,
   isoNDaysAgo,
   priceChangeCountColumn,
   UNKNOWN_FILTER_VALUE,
@@ -42,40 +41,6 @@ import type {
   SoldCoverage,
 } from './types';
 import type { BorderCase } from './api';
-
-/* Circle → bounding box approximation. Used when the operator picks
- * the centre+radius mode on the map: PostgREST has no native
- * ST_DWithin filter, so we send the bounding box of the radius
- * circle as the spatial predicate. The bbox is slightly oversized
- * versus the true circle (a square circumscribes a circle), which
- * means a few extra listings near the corners can slip into the
- * cohort — acceptable for the headline use case; true distance
- * filtering belongs in a follow-up RPC if it ever matters. */
-const EARTH_RADIUS_M = 6_371_000;
-
-const centerRadiusBbox = (cr: CenterRadius): MapBounds => {
-  const dLat = (cr.radius_m / EARTH_RADIUS_M) * (180 / Math.PI);
-  const dLng =
-    (cr.radius_m / (EARTH_RADIUS_M * Math.cos((cr.lat * Math.PI) / 180))) *
-    (180 / Math.PI);
-  return {
-    south: cr.lat - dLat,
-    north: cr.lat + dLat,
-    west: cr.lng - dLng,
-    east: cr.lng + dLng,
-  };
-};
-
-/** Returns the bbox the cohort filter should apply for a given
- *  filters object. Honours `locationMode`: viewport → use bounds
- *  (or null); center_radius → derive bbox from centerRadius (or null
- *  if no centre is set). The caller doesn't have to branch. */
-export const effectiveBbox = (f: ListingFilters): MapBounds | null => {
-  if (f.locationMode === 'center_radius') {
-    return f.centerRadius ? centerRadiusBbox(f.centerRadius) : null;
-  }
-  return f.bounds;
-};
 
 export const CARD_PAGE_SIZE = 24;
 
@@ -1008,6 +973,7 @@ export const buildBrowseStatsArgs = (
     has_lift_filter:         triToBool(f.hasLift),
     has_parking_filter:      triToBool(f.hasParking),
     furnished_filter:        f.furnished.length ? f.furnished : null,
+    energy_rating_filter:    f.energyRatingMatch.length ? f.energyRatingMatch : null,
     ownership_filter:        f.ownership.length ? f.ownership : null,
     terrace_filter:          triToBool(f.terrace),
     cellar_filter:           triToBool(f.cellar),
@@ -1676,9 +1642,11 @@ import {
   listEstimations,
   type TracePayload,
 } from './api';
+import { sortedIds } from './hydration/keys';
 import type {
   CreateEstimationIn,
   EstimationListParams,
+  EstimationListResponse,
   PipelineBoardCard,
   PipelineStage,
   TagColor,
@@ -1718,6 +1686,21 @@ export const fetchEstimationsList = (params: EstimationListParams) =>
  * renders the selected run without a second per-run request. */
 export const fetchEstimationsForListings = (ids: ReadonlyArray<number>) =>
   listEstimations({ listing_ids: ids.join(','), limit: 100 });
+/* That fetch as ONE query, for the estimations block and the Valuo card's
+ * "náš odhad" mark alike: polled while a run is pending or running. A
+ * non-empty array of junk ids never reaches the wire, where it would
+ * serialize to an empty value rather than a filter. */
+export const useEstimationRuns = (listingIds: readonly number[]) => {
+  const ids = sortedIds(listingIds);
+  return useQuery<EstimationListResponse, Error>({
+    queryKey: estimationKeys.byListing(ids),
+    queryFn: () => fetchEstimationsForListings(ids),
+    enabled: ids.length > 0 && ids.every((n) => Number.isFinite(n)),
+    staleTime: 15_000,
+    refetchInterval: (q) =>
+      (q.state.data?.data ?? []).some((r) => r.status === 'pending' || r.status === 'running') ? 3000 : false,
+  });
+};
 export const submitEstimation = (input: CreateEstimationIn) =>
   createEstimation(input);
 
@@ -1807,8 +1790,6 @@ export const watchdogKeys = {
   all: ['watchdog'] as const,
   subscriptions: ['watchdog', 'subscriptions'] as const,
   subscription: (id: string) => ['watchdog', 'subscriptions', id] as const,
-  dispatches: (params: Record<string, unknown>) =>
-    ['watchdog', 'dispatches', params] as const,
 };
 
 /* Unified notifications feed (watchdog matches + collection-monitor events). */

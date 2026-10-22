@@ -31,7 +31,7 @@ vi.mock('@/lib/queries', async (importOriginal) => ({
 const MINE_7 = {
   id: 7, name: 'Šortlist', description: null, created_at: '2026-05-01T00:00:00Z',
   updated_at: '2026-05-01T00:00:00Z', listing_count: 1, monitoring_enabled: false,
-  notify_channels: [], is_system: false, owner_email: null, shared_with: [],
+  is_system: false, owner_email: null, shared_with: [],
 };
 
 const renderWith = (ui: React.ReactElement) =>

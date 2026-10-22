@@ -1,9 +1,13 @@
 /* registerServiceWorker: production only, the worker at the root scope, and
  * the hourly update check on resume that reaches an installed app the browser's
- * own navigation-time check never sees. */
+ * own navigation-time check never sees; the same check re-sends this device's
+ * push subscription (iOS never reports a changed one). */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { resyncPush } from './push';
 import { registerServiceWorker } from './serviceWorker';
+
+vi.mock('./push', () => ({ resyncPush: vi.fn(async () => {}) }));
 
 const update = vi.fn();
 const register = vi.fn();
@@ -69,5 +73,20 @@ describe('registerServiceWorker', () => {
     await vi.advanceTimersByTimeAsync(30 * 60_000);
     setVisibility('visible');
     expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-sends the push subscription on the same hourly check, and only then', async () => {
+    vi.mocked(resyncPush).mockClear();
+    vi.stubEnv('PROD', true);
+    registerServiceWorker();
+    await vi.advanceTimersByTimeAsync(0);
+
+    setVisibility('visible');
+    expect(resyncPush).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    setVisibility('visible');
+    expect(resyncPush).toHaveBeenCalledTimes(1);
+    setVisibility('visible');
+    expect(resyncPush).toHaveBeenCalledTimes(1);
   });
 });

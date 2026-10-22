@@ -91,7 +91,6 @@ def test_the_teller_starts_beside_the_matcher_and_the_test_guard_keeps_it_off(mo
     monkeypatch.setattr(nf_module, "matcher_loop", idle)
     monkeypatch.setattr(loop, "system_alerts_loop", idle)
     monkeypatch.setenv("STUCK_ROW_SWEEP_DISABLED", "1")
-    monkeypatch.setenv("OUTBOX_DRAIN_DISABLED", "1")
 
     async def started_tasks() -> set[str]:
         async with api_main._lifespan(api_main.app):

@@ -326,7 +326,7 @@ export default function PropertyDetail() {
               <EstimationsBlock listing={property} listingIds={advertIds} prefill={newEstimationPrefill} />
             </Suspense>
             <Suspense fallback={<Skeleton height={140} />}>
-              <ValuoSection property={property} listingIds={advertIds} />
+              <ValuoSection property={property} listingIds={advertIds} adUrls={sources.map((s) => s.source_url)} />
             </Suspense>
           </>
         }

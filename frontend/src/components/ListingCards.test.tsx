@@ -380,6 +380,34 @@ describe('<ListingCards> the storey', () => {
   });
 });
 
+/* The ask is the card's headline figure: sage semibold while the ad is live (the
+   operator's 2026-10-21 ruling), ink-2 medium once delisted so a dead ask never
+   reads as live. jsdom resolves no theme, so the token classes are the contract. */
+describe('<ListingCards> the price', () => {
+  const priceEl = () => screen.getByText(/5\s*400\s*000/).closest('p') as HTMLElement;
+
+  it('sets a live ask in sage semibold', async () => {
+    renderGrid();
+
+    expect(await screen.findByText(/Sadová/)).toBeInTheDocument();
+    expect(priceEl()).toHaveClass('text-[var(--color-sage)]', 'font-semibold');
+  });
+
+  it('keeps a delisted ask ink-2 and medium, never green', async () => {
+    renderGrid({ row: { ...ROW, is_active: false } as CardRow });
+
+    expect(await screen.findByText(/Sadová/)).toBeInTheDocument();
+    expect(priceEl()).toHaveClass('text-[var(--color-ink-2)]', 'font-medium');
+    expect(priceEl()).not.toHaveClass('text-[var(--color-sage)]', 'font-semibold');
+  });
+
+  it('leaves "Cena na vyžádání" in its own muted ink, not green', async () => {
+    renderGrid({ row: { ...ROW, price_czk: null } as CardRow });
+
+    expect(await screen.findByText('Cena na vyžádání')).toHaveClass('text-[var(--color-ink-3)]');
+  });
+});
+
 /* The Cover dropdown: which tagged photo every card opens on. */
 describe('<ListingCards> the cover photo', () => {
   const tagged = (id: number, clip_fine_tag: string | null, tag_head_scores: Record<string, number> | null = null) =>

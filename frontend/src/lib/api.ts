@@ -38,6 +38,7 @@ import type {
   SkillRefinement,
   Tag,
   TagColor,
+  DispatchChangeKind,
   NotificationSourceKind,
   NotificationUnreadCount,
   WatchdogDispatch,
@@ -937,7 +938,6 @@ export const TAG_STATES: readonly TagState[] = ['positive', 'negative', 'exclude
  * excluded from the ambiguity rate's numerator AND denominator, so pruning can
  * never dilute the signal. */
 export type TagExcludedReason = 'ambiguous' | 'pruned';
-export const TAG_EXCLUDED_REASONS: readonly TagExcludedReason[] = ['ambiguous', 'pruned'];
 
 /* Who or what decided a cell. 'human_confirmed' (machine proposed, human
  * affirmed) is deliberately NOT the same evidence as 'machine' (nobody checked).
@@ -2418,7 +2418,6 @@ export const createCollection = (input: {
   name: string;
   description?: string | null;
   monitoring_enabled?: boolean;
-  notify_channels?: string[];
 }): Promise<Collection> =>
   request<Collection>('/collections', { method: 'POST', json: input });
 
@@ -2428,7 +2427,6 @@ export const updateCollection = (
     name?: string | null;
     description?: string | null;
     monitoring_enabled?: boolean;
-    notify_channels?: string[];
   },
 ): Promise<Collection> =>
   request<Collection>(`/collections/${id}`, {
@@ -2769,18 +2767,6 @@ export const unsharePipeline = (
 
 /* ----- Watchdog notifications (Phase U2.7) ------------------------------- */
 
-export interface ListWatchdogDispatchesParams {
-  subscription_id?: string;
-  /* Scope to one producer. The Watchdog page passes 'watchdog' so the unified
-   * feed's collection_monitor rows (subscription_id NULL) don't leak onto it. */
-  source_kind?: NotificationSourceKind | 'all';
-  seen?: WatchdogSeenFilter;
-  limit?: number;
-  offset?: number;
-  /* Keyset cursor (the prior page's next_cursor). */
-  cursor?: string;
-}
-
 export const listWatchdogSubscriptions = (
   options: { includeInactive?: boolean } = {},
 ): Promise<{ data: WatchdogSubscription[]; total: number }> =>
@@ -2800,7 +2786,6 @@ export const createWatchdogSubscription = (input: {
   name: string;
   filter_spec: WatchdogFilterSpec;
   is_active?: boolean;
-  channels?: string[];
 }): Promise<WatchdogSubscription> =>
   request<WatchdogSubscription>('/notifications/subscriptions', {
     method: 'POST',
@@ -2813,7 +2798,6 @@ export const updateWatchdogSubscription = (
     name?: string;
     filter_spec?: WatchdogFilterSpec;
     is_active?: boolean;
-    channels?: string[];
   },
 ): Promise<WatchdogSubscription> =>
   request<WatchdogSubscription>(
@@ -2829,13 +2813,6 @@ export const deleteWatchdogSubscription = (
     { method: 'DELETE' },
   );
 
-export const listWatchdogDispatches = (
-  params: ListWatchdogDispatchesParams = {},
-): Promise<WatchdogDispatchesResponse> =>
-  request<WatchdogDispatchesResponse>('/notifications/dispatches', {
-    query: params as Record<string, QueryValue>,
-  });
-
 export const markWatchdogDispatchSeen = (
   dispatchId: string,
 ): Promise<WatchdogDispatch> =>
@@ -2844,43 +2821,20 @@ export const markWatchdogDispatchSeen = (
     { method: 'POST' },
   );
 
-export const kickoffWatchdogDispatchEstimate = (
-  dispatchId: string,
-): Promise<WatchdogDispatch> =>
-  request<WatchdogDispatch>(
-    `/notifications/dispatches/${encodeURIComponent(dispatchId)}/estimate`,
-    { method: 'POST' },
-  );
-
-export const runWatchdogMatcher = (): Promise<{
-  data: {
-    subscriptions_evaluated: number;
-    matches_inserted: number;
-    listings_in_window: number;
-  };
-}> =>
-  request<{
-    data: {
-      subscriptions_evaluated: number;
-      matches_inserted: number;
-      listings_in_window: number;
-    };
-  }>('/notifications/matcher/run', { method: 'POST' });
-
 /* ----- Unified notifications feed (Sprint C) ---------------------------- */
 
 export interface ListNotificationsParams {
   source_kind?: NotificationSourceKind | 'all';
-  change_kind?: string;
+  change_kind?: DispatchChangeKind;
   collection_id?: number;
   seen?: WatchdogSeenFilter;
   limit?: number;
+  /* Keyset cursor: the prior page's next_cursor. */
   cursor?: string;
 }
 
-/* The unified feed: watchdog matches AND collection-monitor change events.
- * Same endpoint + row shape as the watchdog dispatches, just unscoped by
- * source (the LEFT-join feed serves both). */
+/* The one feed: watchdog matches, collection-monitor change events and shares,
+ * newest first, keyset-paged on (dispatched_at, id). */
 export const listNotifications = (
   params: ListNotificationsParams = {},
 ): Promise<WatchdogDispatchesResponse> =>
@@ -2888,12 +2842,8 @@ export const listNotifications = (
     query: params as Record<string, QueryValue>,
   });
 
-export const getNotificationUnreadCount = (
-  source_kind: NotificationSourceKind | 'all' = 'all',
-): Promise<NotificationUnreadCount> =>
-  request<NotificationUnreadCount>('/notifications/unread-count', {
-    query: { source_kind },
-  });
+export const getNotificationUnreadCount = (): Promise<NotificationUnreadCount> =>
+  request<NotificationUnreadCount>('/notifications/unread-count');
 
 export const markAllNotificationsSeen = (
   source_kind: NotificationSourceKind | 'all' = 'all',
@@ -2902,6 +2852,45 @@ export const markAllNotificationsSeen = (
     method: 'POST',
     query: { source_kind },
   });
+
+/* ----- Push (notifications push program W4/W5b) -------------------------
+ * One device = one push subscription, bound to the signed-in account (lib/push).
+ * The VAPID public key is read at runtime, never baked into the build. */
+
+/* `PushSubscription.toJSON()` plus the browser's user agent. */
+export interface PushSubscriptionBody {
+  endpoint: string;
+  expirationTime: number | null;
+  keys: { p256dh: string; auth: string };
+  user_agent: string;
+}
+
+export type PushEndReason = 'signed_out' | 'switched_off';
+
+/* The server's VAPID public key (base64url, a 65-byte P-256 point); a 503 while
+ * the server has none (push not configured). */
+export const getPushKey = (): Promise<{ public_key: string }> =>
+  request<{ public_key: string }>('/push/key');
+
+/* Registers (or re-sends) this device for the caller: idempotent, and an
+ * endpoint another account held moves to the caller. 422 when the endpoint is
+ * not Apple's push service or the keys are malformed. */
+export const putPushSubscription = (body: PushSubscriptionBody): Promise<void> =>
+  request<void>('/push/subscription', { method: 'PUT', json: body });
+
+/* Ends this device's row (an unknown endpoint is still 204). The endpoint rides
+ * in the body, never the URL. */
+export const deletePushSubscription = (
+  body: { endpoint: string; reason: PushEndReason },
+  opts: { signal?: AbortSignal } = {},
+): Promise<void> =>
+  request<void>('/push/subscription', { method: 'DELETE', json: body, signal: opts.signal });
+
+/* A tap on a push lands on `/n/{dispatch}?d={delivery}` (or the coalesced
+ * `/notifications?d=`): this stamps that the caller opened their own delivery.
+ * An unknown id is still 204. Best effort, never awaited by a navigation. */
+export const postPushOpened = (delivery: number): Promise<void> =>
+  request<void>('/push/opened', { method: 'POST', json: { delivery } });
 
 /* ----- Saved Browse filter presets (migration 151) ----------------------
  * Per account (migration 595, ticket #1761): every route rides the user's

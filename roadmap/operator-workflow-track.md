@@ -7,6 +7,52 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
+### Phase U-NOTIFY-PUSH: Notifications push program (approved 2026-10-21)
+
+Program `docs/design/notifications-push/PROGRAM.md` (audit `AUDIT.md`, F1–F28; eleven rulings taken 2026-10-21). North
+star: one real-world change becomes one immutable row, owned by one account, shown in one feed and pushed to that
+account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, email (kept, inactive); Telegram is out.
+- [ ] **W1 (built 2026-10-21; done when merged)** — subtract the dead and the dangerous: Estimate rent and "Run matcher
+      now" (R10); the Email/Telegram picker, Settings › Delivery, Telegram, the outbox, ChannelClient, the Resend
+      transport, webhook and unsubscribe (R1, R5); the duplicate /watchdog feed and the System tab (R3); system alerts
+      leave the bell for Health + the canary e-mail (R2b, R9a; migration 651).
+- [ ] **W2a (built 2026-10-21, stacked on W1; done when merged + 48 h overlap gate)** — the worker's `notifications` lane
+      (300 s; steps watchdog_new / price / monitor, each its own transaction and `lane/notifications/<step>` cell) runs
+      the producers beside the API's matcher: the cursor and lookback go (24 h from `active_since`), one canonical-ad
+      price fragment (7 days), 'inactive' after 24 h gone (R6 a); keys byte-identical (render test), `event_ref` +
+      `actor_account_id` written; shares become `shared_collection | shared_dashboard | shared_pipeline` (migration 652:
+      the five columns, the `active_since` trigger, the wider CHECK, backfills). Gate: cells green, the 9-preset replay,
+      EXPLAIN < 2 s, the false-new baseline.
+- [ ] **W3 (built 2026-10-21, stacked on W2a; done when merged, migration 653 applied first)** — one event identity:
+      `notification_dispatches_identity_uq` over `EVENT_IDENTITY` (NULLS NOT DISTINCT, partial on `duplicate_of IS
+      NULL`; migration 653 = Migration C: 652's fills since A, system history keyed on its old key, exact repeats
+      marked, `dedupe_key` nullable, the feed index, the index CONCURRENTLY); every producer and the share grant
+      conflict on it and write no `dedupe_key` / `trigger_snapshot_id`; ONE `VISIBLE_SQL` (repeat, own-account
+      dismissal, retired watchdog) on every read, count and update (mark-seen of a hidden row: 404); deleting a
+      watchdog retires it (F21); the carrier is one UPDATE that re-points and marks `duplicate_of`, deleting nothing
+      (F6, F13); `share_ref` reads columns, no `split_part`. Gate: CI green; a merged 'new' row is marked and never
+      re-fires, 0 deleted; a retired watchdog's alerts hidden, rows kept; 0 identity violations.
+- [ ] **W4 backend (built 2026-10-21, stacked on W3; done when merged, migration 654 applied first)** — push plumbing,
+      dark: migration 654 = Migration D (`push_subscriptions`, `notification_deliveries`, service role only);
+      `api/push.py` (RFC 8291 aes128gcm + RFC 8292 VAPID, the RFC vector byte for byte); `GET /push/key`, `PUT`/`DELETE
+      /push/subscription`, `POST /push/opened` (never act); the Czech renderer; the worker's `push` lane (15 s; fan-out
+      with the one-share-a-day cap R11, a 2-min leased claim, one push per device, a 429 holds the device); the
+      `notifications` Health check (stall, recall, failures, unconfigured). **Operator:** generate `VAPID_PRIVATE_KEY`
+      with the toolkit-api one-liner, paste it as a Railway Shared Variable on the API AND the realtime-worker, delete the
+      file. Gate: CI-Postgres lease/claim/429 tests green; lane `unconfigured`, then `live_devices` 0; `/push/key` 503
+      then 200. The SPA half (sw.js, the switch, `/n/:dispatchId`) is #1948.
+- [ ] **Next:** W2b the API matcher goes (lease, readers, gates; Migration B; after 48 h of overlap) · the on-device proof
+      of W5 (your iPhone, a second account; after the VAPID key) · W6 the one destructive prune, backup first (R8; drops
+      `dedupe_key`, its UNIQUE and `trigger_snapshot_id`).
+- [ ] **W5a (built 2026-10-21, stacked on W1; done when merged)** — the phone surfaces that need no push plumbing
+      (R4, F9): one unread observer in Shell for both frames and the page (`lib/unreadCount`), the app-icon badge
+      from it, the phone header's bell beside Účet, and /notifications at phone width (one page, `max-md:`).
+- [ ] **W4-fe + W5b (built 2026-10-21, stacked on W5a; done when merged after W4's backend)** — sw.js `push`
+      (always one notification, then the badge) and `notificationclick` (focus + navigate, else open) with a vitest
+      harness over every payload shape; the landing `/n/:dispatchId` (mark-seen → `dispatchTarget`, `?d=` → `/push/opened`);
+      `lib/push` + `usePush` and the sheet's switch "Oznámení na tomto iPhonu"; re-sync on sign-in and the hourly
+      resume; binding follows identity (F18). Owed: the on-device proof (W5 gate, the operator's iPhone).
+
 ### Phase U-NEW-PROPERTY: a property from a pasted ad link (in progress, 2026-10-20)
 
 Spec `docs/design/new-property-from-link.md` (PR #1913, approved 2026-10-20, six rulings in). North star: a
@@ -66,11 +112,28 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   match; no grade) and the comparables with their photos (one `advert/detail` call, migration 646); a sandbox answer
   is stored `sandbox` whatever the token's name; the history is the estimations' `RunHistory`, generalised; the phone
   shows the latest answer only. The estimate card frame is one `EstimateCard`. Patterns: `.interface-design/system.md`.
-- **Next:** W5, our own recalculation over the comparables the user keeps (operator ruling 2026-10-20: v3 cannot
-  exclude any; Valuo's adjusted price/m² weighted by similarity, labelled ours) — plan first; one production call
-  confirms the lease basis (a lease reads as monthly: `ValuoSection` `Price`) and whether a house's plot is sent; a per-plan monthly
+- **Settled (production call 2026-10-21, property 1012847):** Valuo's lease figures are MONTHLY (≈50 m² flats at
+  17 500–20 000 Kč, avg 18 850 Kč, 377 Kč/m²), so a lease shows `/měs` and the rent basis.
+- **Done (review fixes):** Valuo is a named shape-3 site in `tenancy.md` on the one no-account 400; its per-m² figures
+  are rule 23's named outside exception (`REGISTERED_SITES`); one error shape (`code`, one `unconfigured`), the location
+  reader out of the route module (`api/property_location.py`); a house's `garage_area` / `other_area` are user-set. SPA:
+  the editor's controls are `controls.tsx`'s form box (`box=`: one 34 px height, dashed absent, brick refused, the unit
+  inside), no local patches; one `useEstimationRuns` query for Odhady and the Valuo mark; both ledgers are `table.tsx`
+  `Column`s under `SectionLabel`/`Th`, their data ink-3; Valuo's failures in Czech.
+- **Done (W5, 2026-10-21):** "Náš přepočet" — a tick box per comparable (all ticked), a card under Valuo's own with the
+  total, the per-m² and its distance from Valuo, "orientační" from 3 kept and a band from 5, "Vrátit výchozí"; browser
+  only (`lib/valuo.ts` `recalc`: Valuo's weighted geometric mean, 0.11 % from its own on five real answers), nothing
+  stored, desktop only, offered only while the recipe lands within 1 % of Valuo's average. The subject's own ad (matched
+  by the portal id over ALL the property's ads, delisted too) is tagged "tento inzerát" and stays ticked; adding
+  comparables is not part of it. The unread record/summary names left the API payload (Valuo's answer is stored whole).
+- **Next:** one production call confirms whether a house's plot is sent; a per-plan monthly
   quota counted from the rows before the production token; Valuo's own field messages still show as bare English under
-  a Czech caption (quote them as the failure card does: `Valuo: „…“`).
+  a Czech caption (quote them as the failure card does: `Valuo: „…“`); ONE app-wide Czech translation pass (operator
+  ruling): the run ledger's `SUCCESS`/`FAILED` chips, the estimation block's English copy (`ESTIMATES`, the runs ledger's
+  `When` / `viewing` / `/mo` — `RunHistory`'s `when`/`viewing` and `PerMonth`'s `unit` go with it) stay English until
+  it. **Ruled 2026-10-21 (operator OK):** the Valuo routes answer a caller without an account with the one shared 400,
+  English `no account for caller` (it was „Přihlášený uživatel nemá účet, ocenění nelze uložit.“; no one reaches it:
+  signup seeds an account, 0 of 5 users lack one), and the sentence joins the app-wide translation pass above.
 
 ### Phase U-CURATED-SCOPE: curated-set scope (done, 2026-10-19)
 - **Done:** tags, collections and pipeline stages became ONE kind of filter (brief + rulings:
@@ -135,7 +198,8 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
     `tests/test_curation_account_stamping.py`, then `tests/api/test_auth.py` gives 15 × 503 "Auth is
     not configured"; each file passes alone and CI's path order (tests/api first) never hits it —
     find the fixture that leaks the auth state.
-  - Share notifications are in-app only: no per-recipient email delivery is built (ruling 5e).
+  - ~~Share notifications are in-app only: no per-recipient email delivery is built (ruling 5e).~~ Superseded
+    2026-10-21: shares are pushed to the recipient's iPhone from W4 (Phase U-NOTIFY-PUSH; ruling 5(e) superseded).
 
 ### Phase U-PIPE-SIGNUP: Every account starts on the default board (done, 2026-10-16)
 - **Done:** migration 612 — one signup path (account, owner membership, the 10-stage default board with codes from
@@ -143,8 +207,9 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   account-qualified. Own PRs, same sprint (merge separately): #1828 the SPA draws an empty board's columns, #1830
   migration 611 (tenant serial ids → identity; apply it BEFORE 612), #1831 the extension resets its caches on an
   identity change; migration 613 drops `legacy_backfill_claim` (operator ruling 2026-10-17).
-- **Next (unscheduled):** `notification_dispatches` needs a column-level UPDATE grant (its global `dedupe_key` is
-  browser-writable); the 60 pre-299 public sequences still grant `authenticated` setval (one revoke migration + a
+- **Next (unscheduled):** ~~`notification_dispatches` needs a column-level UPDATE grant (its global `dedupe_key` is
+  browser-writable)~~ stale: 619 narrowed the browser's UPDATE to columns and 651 to `seen_at` alone; the global
+  `dedupe_key` itself is replaced in W3 (Phase U-NOTIFY-PUSH: nothing writes it since migration 653; W6 drops it). The 60 pre-299 public sequences still grant `authenticated` setval (one revoke migration + a
   census arm).
 
 ### Phase U-LINK: Artifact link on the property (done, 2026-10-14)
@@ -836,7 +901,9 @@ surfaces the yield once it lands. Email / SMS / push remain deferred
 (see open questions below). Cron cadence is still nightly; the
 operator can call `POST /notifications/matcher/run` from the UI's
 "Run matcher now" button to trigger an immediate evaluation against
-any newly-scraped listings.
+any newly-scraped listings *(superseded 2026-10-21: that button, the
+route and the per-row estimation kickoff were deleted in W1 of
+Phase U-NOTIFY-PUSH, ruling R10)*.
 
 **What shipped**
 
@@ -870,13 +937,21 @@ any newly-scraped listings.
   merge f2d7b359; `extra='ignore'`); `ComparableFilters` gains the garden pair; both models
   now EQUAL their agendas by test; Browse reads the generated `BUILDING_MATERIAL_BUCKETS`
   (fix/watchdog-dropped-filters, C4 PR 2).
+- ✅ M3 + watchdog map area (2026-10-21, feature/watchdog-map-area): the map box is the ONE
+  spatial shape — `WatchdogFilterSpec.bounds` (Browse's `MapBounds`) replaces `lat`/`lng`/
+  `radius_m` and the matcher's ST_DWithin circle; `api/location_filter.bounds_where` renders
+  the lat/lng band the list and both stats RPCs apply; `filtersToWatchdogSpec` reads the one
+  `effectiveBbox` (moved to `lib/filters.ts`, over the one `bboxAround` formula), so a
+  centre+radius pick saves as the square Browse filtered on and the viewport box rides along
+  through the create dialog's checkbox (ticked); `MapAreaControl` edits the box on
+  `/watchdog/:id/edit` ("Use current view"); the two map controls paint through
+  `lib/mapShape`. 0 stored specs carried a circle, so nothing was migrated.
 
 **Next (filter definition, tracked from C4)**
 
 - M2: the agent advertises 10 COMPARABLES ids that `_FCR_OVERRIDE_FIELDS` drops — changes
   agent cohorts, needs an operator ruling, own PR.
 - The agent's null `category_type` path (`api/agent.py`) — same posture as M2.
-- M3: center+radius is a circle in Python and a bounding square in Browse.
 - M4: `tom_days` reaches Stats but not the Browse list.
 - M7: integer area params in the browse RPCs. M11: canonical-advert row vs property rollup.
 - Browse's TS dispatch switches to `sql_kind` (drops `isMinId`/`isMaxId` + the duplicated
@@ -889,7 +964,9 @@ any newly-scraped listings.
   CHECK-bounded to `'in_app'` only; a future migration adds the new
   enum values and the dispatch worker grows a fan-out branch
   *(superseded: email + Telegram deliver through the `channel_sends`
-  ledger, migration 207, not a widened `channel` — rule #16)*.
+  ledger, migration 207, not a widened `channel` — rule #16; superseded
+  again 2026-10-21: Telegram is out, email inactive, iPhone push from W4
+  of Phase U-NOTIFY-PUSH)*.
 - 5-minute scrape cadence (Shape A from the original proposal).
   Today's nightly cron still applies; the matcher loop honestly
   surfaces "no fresh listings" between scrapes. A new

@@ -781,7 +781,7 @@ MUST precede flip (the flip-gate checklist, §8):
   column, else resolve legacy → id via join (ledger holds pre-deploy legacy-only rows).
 - Notifications: producers write listing_id; **fix the `new_source` dedupe_key NULL
   concat** (notifications.py:1790 → key on listing_id or source||':'||source_id_native);
-  read joins (notifications.py:639, notification_outbox.py:174/223).
+  read joins (notifications.py:639, notification_outbox.py:174/223; the outbox was deleted 2026-10-21).
 - Chrome extension: move the app-link **gate** off `l.sreality_id` (content.ts:565 → the
   `found`/source_id flag portal_lookup already returns) + note write :1381
   (`origin_listing_id`).

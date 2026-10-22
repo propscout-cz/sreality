@@ -481,14 +481,12 @@ class CreateCollectionIn(BaseModel):
     name:               str = Field(min_length=1, max_length=200)
     description:        str | None = None
     monitoring_enabled: bool = False
-    notify_channels:    list[str] = Field(default_factory=list)
 
 
 class UpdateCollectionIn(BaseModel):
     name:               str | None = Field(default=None, min_length=1, max_length=200)
     description:        str | None = None
     monitoring_enabled: bool | None = None
-    notify_channels:    list[str] | None = None
 
 
 class AddPropertiesToCollectionIn(BaseModel):
@@ -690,7 +688,7 @@ class UpdateStatsDashboardIn(BaseModel):
 ShareDashboardIn = ShareIn
 
 
-class ValuoRunIn(BaseModel):
+class ValuoValuationIn(BaseModel):
     """A Valuo valuation (api/valuo.py): parameter -> the user's value, or null to send none."""
     overrides: dict[str, Any] = Field(default_factory=dict)
 

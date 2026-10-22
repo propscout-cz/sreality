@@ -22,6 +22,7 @@ const NOT_DESTINATIONS = new Set(['/', '*', 'estimate']);
 const PARAM_FIXTURES: Record<string, string | number> = {
   id: 7,
   propertyId: 42,
+  dispatchId: '7f1c2e9a-0000-4000-8000-000000000001',
   source: 'bazos',
   nativeId: 'abc-123',
   sreality_id: -284913,

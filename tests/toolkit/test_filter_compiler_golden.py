@@ -271,9 +271,10 @@ def generate_cases() -> list[dict[str, Any]]:
             if f.id != "districts":
                 everything[grain][f.id] = _last_set([inp[f.id] for _, inp, _ in pinned])
         if grain == "watchdog":
-            circle = {"lat": point["lat"], "lng": point["lng"], "radius_m": 800}
-            cases.append(_case(grain, "location=circle", circle, None, "location"))
-            everything[grain].update(circle)
+            box = {"bounds": {"west": round(point["lng"] - 0.02, 2), "south": round(point["lat"] - 0.02, 2),
+                              "east": round(point["lng"] + 0.02, 2), "north": round(point["lat"] + 0.02, 2)}}
+            cases.append(_case(grain, "location=box", box, None, "location"))
+            everything[grain].update(box)
             everything[grain].update({
                 "districts": _district_cases()[2][1],
                 "include_no_price": True,

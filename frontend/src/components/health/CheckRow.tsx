@@ -446,7 +446,7 @@ function IncidentLine({ checkKey, incidents }: { checkKey: string; incidents: He
             setSaid('');
             ack.mutate();
           }}
-          title={`Stops the reminders of this check's ${plural(waiting, 'open incident', 'open incidents')}; each still closes on a measured OK. Reading the alert among the notifications never acknowledges it.`}
+          title={`Stops the reminders and the canary e-mail for this check's ${plural(waiting, 'open incident', 'open incidents')}; each still closes on a measured OK.`}
           className="rounded-[var(--radius-xs)] border border-[var(--color-copper)] px-3 py-1 text-[0.8rem] text-[var(--color-copper)] hover:bg-[var(--color-copper-soft)] aria-disabled:cursor-wait max-md:h-11"
         >
           {ack.isPending ? 'Acknowledging…' : 'Acknowledge'}

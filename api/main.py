@@ -65,8 +65,6 @@ from api.portal_lookup import lookup_portal_listings
 from api.property_merge import router as property_merge_router
 from api.routes.admin import router as admin_router
 from api.routes.billing import router as billing_router
-from api.routes.resend_webhook import router as resend_webhook_router
-from api.routes.unsubscribe import router as unsubscribe_router
 from api.routes.brokers import router as brokers_router
 from api.routes.broker_review import router as broker_review_router
 from api.routes.outreach import router as outreach_router
@@ -85,6 +83,7 @@ from api.routes.location_quality import router as location_quality_router
 from api.routes.new_dedup import router as new_dedup_router
 from api.routes.new_dedup_candidates import router as new_dedup_candidates_router
 from api.routes.notifications import router as notifications_router
+from api.routes.push import router as push_router
 from scraper import image_storage
 from scraper.db import sweep_stuck_scrape_runs
 from toolkit import (
@@ -179,19 +178,6 @@ async def _lifespan(_app: FastAPI) -> "AsyncIterator[None]":
         tasks.append(asyncio.create_task(
             system_alerts_loop.system_alerts_loop(stop_event), name="system-alerts",
         ))
-
-    # Delivery outbox (Sprint N): only start it when a transport is actually
-    # configured (e.g. RESEND_API_KEY set) — otherwise it would query every
-    # interval to do nothing. So it is a true no-op (no task) until the operator
-    # provisions a channel and redeploys. OUTBOX_DRAIN_DISABLED force-disables it.
-    if not os.environ.get("OUTBOX_DRAIN_DISABLED") and any(
-        t.is_configured() for t in deps.get_transports().values()
-    ):
-        from api import notification_outbox
-        tasks.append(asyncio.create_task(
-            notification_outbox.outbox_loop(stop_event), name="notification-outbox",
-        ))
-        logging.info("notification outbox started (a transport is configured)")
 
     try:
         yield
@@ -301,11 +287,13 @@ app.include_router(admin_router)
 # raw body vs STRIPE_WEBHOOK_SECRET), distinct from bearer/JWT and token-exempt;
 # GET /billing/me rides verify_jwt + the tenant pool like any per-account read.
 app.include_router(billing_router)
-app.include_router(resend_webhook_router)
-app.include_router(unsubscribe_router)
 # /notifications/* (Watchdog feed + subscription CRUD) goes through
 # the standard bearer gate — operator content, not configuration.
 app.include_router(notifications_router)
+# /push/* (push on this device: the VAPID public key, a device's registration and end, a tapped push's
+# open) — the key for any signed-in caller; the three writes are the caller's own account (never acted
+# for) on the service role, opened in the handler after that gate (api/routes/push.py).
+app.include_router(push_router)
 # /properties/merge|{id}/split|{id}/origins (merge MECHANICS: collapse an
 # operator-chosen set, split one property's adverts, where each came from)
 # — mutating operator actions, admin-gated (require_admin). Mounted before the
@@ -342,8 +330,7 @@ app.include_router(property_download_router)
 # granularity and label, and Mapy's static map of it streamed through us on every view (Mapy's
 # terms forbid storing it; 4 credits a fetch, MAPY_STATIC_MAPS_ENABLED=0 turns it off). JWT-gated.
 app.include_router(property_location_router)
-# /properties/{id}/valuo — the Valuo section: the editor's defaults + the caller's own valuations (GET), one paid
-# Valuo call saved before it is made (POST). Any signed-in user (verify_jwt); rows scoped to the caller's account.
+# /properties/{id}/valuo — the Valuo section (GET editor + own history, POST a paid call); verify_jwt, tenancy shape 3.
 app.include_router(valuo_router)
 # /map-overlays + /map-overlays/{section}/{z}/{x}/{y}.mvt — the maps' reference overlays (metro,
 # flood zones, kraje): the layer registry and tiles pre-rendered at ingest, read by primary key and
@@ -1308,7 +1295,7 @@ def post_create_collection(
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
     act_as: uuid.UUID | None = Depends(tenant_pool.act_as_header),
 ) -> dict[str, Any]:
-    curation.refuse_monitoring_while_acting(act_as, body.monitoring_enabled, body.notify_channels)
+    curation.refuse_monitoring_while_acting(act_as, body.monitoring_enabled)
     return curation.create_collection(conn, body, account_id=str(account_id))
 
 
@@ -1334,9 +1321,7 @@ def patch_collection(
     conn: Any = Depends(tenant_pool.tenant_conn),
     act_as: uuid.UUID | None = Depends(tenant_pool.act_as_header),
 ) -> dict[str, Any]:
-    curation.refuse_monitoring_while_acting(
-        act_as, body.monitoring_enabled is not None, body.notify_channels is not None,
-    )
+    curation.refuse_monitoring_while_acting(act_as, body.monitoring_enabled is not None)
     return curation.update_collection(conn, collection_id, body)
 
 

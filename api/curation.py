@@ -52,8 +52,6 @@ _COLLECTION_PROJECTION = (
     " WHERE cp.collection_id = c.id) AS listing_count, "
     f"CASE WHEN {_COLLECTION_IS_MINE} THEN c.monitoring_enabled ELSE false END "
     "  AS monitoring_enabled, "
-    f"CASE WHEN {_COLLECTION_IS_MINE} THEN c.notify_channels ELSE '{{}}'::text[] END "
-    "  AS notify_channels, "
     "c.is_system, "
     f"CASE WHEN {_COLLECTION_IS_MINE} THEN NULL ELSE {shares.party_label('c.account_id')} END "
     "  AS owner_email, "
@@ -66,8 +64,8 @@ _COLLECTION_PROJECTION = (
 
 _CREATE_COLLECTION_SQL = (
     "INSERT INTO collections AS c "
-    "  (name, description, monitoring_enabled, notify_channels, account_id) "
-    "VALUES (%s, %s, %s, %s, %s) "
+    "  (name, description, monitoring_enabled, account_id) "
+    "VALUES (%s, %s, %s, %s) "
     f"RETURNING {_COLLECTION_PROJECTION}"
 )
 
@@ -78,7 +76,6 @@ _UPDATE_COLLECTION_SQL = (
     "  name = CASE WHEN c.is_system THEN c.name ELSE coalesce(%s, c.name) END, "
     "  description = coalesce(%s, c.description), "
     "  monitoring_enabled = coalesce(%s, c.monitoring_enabled), "
-    "  notify_channels = coalesce(%s, c.notify_channels), "
     "  updated_at = now() "
     f"WHERE c.id = %s RETURNING {_COLLECTION_PROJECTION}"
 )
@@ -97,8 +94,7 @@ def create_collection(
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(
                 _CREATE_COLLECTION_SQL,
-                (body.name, body.description,
-                 body.monitoring_enabled, body.notify_channels, account_id),
+                (body.name, body.description, body.monitoring_enabled, account_id),
             )
             row = cur.fetchone()
     except psycopg.errors.UniqueViolation:
@@ -181,7 +177,7 @@ def update_collection(
     collection_id: int,
     body: s.UpdateCollectionIn,
 ) -> dict[str, Any]:
-    fields = (body.name, body.description, body.monitoring_enabled, body.notify_channels)
+    fields = (body.name, body.description, body.monitoring_enabled)
     if all(f is None for f in fields):
         raise HTTPException(422, "nothing to update")
     try:
@@ -290,9 +286,9 @@ def remove_property_from_collection(
 # --- shares (migration 610) -------------------------------------------------
 
 
-def refuse_monitoring_while_acting(act_as: uuid.UUID | None, *monitoring_set: object) -> None:
+def refuse_monitoring_while_acting(act_as: uuid.UUID | None, monitoring_set: bool) -> None:
     """403 when a delegate sets the owner's collection monitoring: its alerts are the owner's (spec §3.8)."""
-    if act_as is not None and any(monitoring_set):
+    if act_as is not None and monitoring_set:
         raise HTTPException(403, "collection monitoring is the owner's own setting")
 
 
@@ -658,10 +654,9 @@ def _to_collection(row: tuple[Any, ...]) -> dict[str, Any]:
         "updated_at":         _iso(row[4]),
         "listing_count":      int(row[5]),
         "monitoring_enabled": bool(row[6]),
-        "notify_channels":    list(row[7]) if row[7] is not None else [],
-        "is_system":          bool(row[8]),
-        "owner_email":        row[9],
-        "shared_with":        list(row[10]),
+        "is_system":          bool(row[7]),
+        "owner_email":        row[8],
+        "shared_with":        list(row[9]),
     }
 
 

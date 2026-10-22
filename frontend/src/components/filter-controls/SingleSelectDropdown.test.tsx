@@ -102,4 +102,14 @@ describe('<SingleSelectDropdown> accessible name', () => {
     );
     expect(screen.getByRole('combobox', { name: 'Ownership' })).toBeInTheDocument();
   });
+
+  /* Every filter's select keeps its classes; the form box (the Valuo editor) adds one height and its states. */
+  it('keeps its classes without a box, and takes the form box with one', () => {
+    const base = 'w-full px-2 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)]';
+    const { rerender } = render(<SingleSelectDropdown label="Stav" value={null} options={[]} onChange={vi.fn()} />);
+    expect(screen.getByRole('combobox')).toHaveAttribute('class', base);
+    rerender(<SingleSelectDropdown label="Stav" value={null} options={[]} onChange={vi.fn()} box="absent" />);
+    expect(screen.getByRole('combobox')).toHaveAttribute('class',
+      `${base} h-[2.125rem] aria-[invalid=true]:border-[var(--color-brick)] border-dashed`);
+  });
 });

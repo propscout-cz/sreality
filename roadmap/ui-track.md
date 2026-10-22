@@ -37,10 +37,16 @@ toolkit work.
   floor area ("180 m² · 850 m² pozemku"; a pozemek's area already is its plot). Same plan and cost as
   the price sort (~90 ms, houses for sale). Owed: the phone property page's line has no lot until
   `properties_public` carries the measure.
-- **Next (operator placed them in Advanced, not built):** Energy rating (A–G, needs the Browse read
-  model), Has a floor plan (from the image tagger's floor-plan tag), a Broker control (the scope is
-  entry-only today). Condition scoring is PARKED, not removed (operator 2026-10-20: keep the engine,
-  nothing may read its levels): the registry ids retired with migration 645's PR; engine, columns and rule 14 stay.
+- **Shipped (2026-10-22): Advanced → Energy rating (PENB A–G)**, Browse + Watchdog (migration 648:
+  `energy_rating_filter` on the Stats and map-tile RPCs; `browse_list` already carried the column). A
+  property's rating is the first non-null across its ads; G is also the legal "no certificate"
+  placeholder (~half of rated flats for sale), which no portal marks apart.
+- **Shipped (2026-10-22): Advanced → Broker** — a name search (GET /brokers/search) that sets the
+  existing broker scope (`brokerId`, MS19) on desktop and phone; it narrows the current filters
+  (the explore-broker modal still opens a broker's whole book) and stays outside presets.
+- **Not built, by ruling:** Has a floor plan (operator 2026-10-21; CLIP-only signal, ~2 h lag).
+  Condition scoring stays PARKED, not removed (operator 2026-10-20, re-confirmed 2026-10-21: keep the
+  engine and data, nothing may read its levels; registry ids retired with 645).
 
 ### Pipeline sharing surfaces (2026-10-20, migration 641; PR #1908)
 - **Built (merges with W1 #1906 in the window):** the Pipeline tab switches between my board and

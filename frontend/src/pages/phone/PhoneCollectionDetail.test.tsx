@@ -49,7 +49,6 @@ const COLLECTION: Collection = {
   updated_at: '2026-10-11T09:00:00Z',
   listing_count: 3,
   monitoring_enabled: true,
-  notify_channels: [],
   is_system: false,
   owner_email: null,
   shared_with: [],

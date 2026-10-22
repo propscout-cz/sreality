@@ -21,17 +21,13 @@ import {
 import { FilterForm } from '@/components/FilterForm';
 import { PortalFilterControl } from '@/components/filter-controls/PortalFilterControl';
 import CityIndexRulesPicker from '@/components/CityIndexRulesPicker';
-import { DeliveryChannelsPicker } from '@/components/DeliveryChannelsPicker';
-import {
-  LocationTypeahead,
-  type CenterRadius,
-} from '@/components/filter-controls';
+import { LocationTypeahead } from '@/components/filter-controls';
 /* Lazy for the same reason as in Filters: this control carries maplibre-gl, and
  * /watchdog/:id is a statically-routed page, so a plain import put the map engine in
  * the entry chunk that every route pays for. */
-const LocationControl = lazyChunk(() =>
-  import('@/components/filter-controls/LocationControl').then((m) => ({
-    default: m.LocationControl,
+const MapAreaControl = lazyChunk(() =>
+  import('@/components/filter-controls/MapAreaControl').then((m) => ({
+    default: m.MapAreaControl,
   })),
 );
 
@@ -51,7 +47,6 @@ export default function WatchdogEdit() {
     DEFAULT_WATCHDOG_FILTER_SPEC,
   );
   const [isActive, setIsActive] = useState(true);
-  const [channels, setChannels] = useState<string[]>([]);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
@@ -59,7 +54,6 @@ export default function WatchdogEdit() {
       setName(existingQ.data.name);
       setSpec({ ...DEFAULT_WATCHDOG_FILTER_SPEC, ...existingQ.data.filter_spec });
       setIsActive(existingQ.data.is_active);
-      setChannels(existingQ.data.channels ?? []);
       setHydrated(true);
     }
   }, [existingQ.data, hydrated]);
@@ -70,11 +64,10 @@ export default function WatchdogEdit() {
         name,
         filter_spec: spec,
         is_active: isActive,
-        channels,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: watchdogKeys.all });
-      navigate(ROUTES.watchdogManage.build());
+      navigate(ROUTES.watchdog.build());
     },
   });
 
@@ -87,7 +80,7 @@ export default function WatchdogEdit() {
 
   // Watchdog creation now lives on Browse ("Create watchdog" from a saved
   // filter). This page is edit-only; a missing id has nowhere to go.
-  if (!id) return <Navigate to={ROUTES.watchdogManage.build()} replace />;
+  if (!id) return <Navigate to={ROUTES.watchdog.build()} replace />;
 
   return (
     <div className="px-6 py-8 max-w-3xl mx-auto">
@@ -124,14 +117,8 @@ export default function WatchdogEdit() {
           </Row>
         </Section>
 
-        <Section title="Delivery">
-          <Row label="Channels">
-            <DeliveryChannelsPicker value={channels} onChange={setChannels} />
-          </Row>
-        </Section>
-
-        <Section title="Spatial centre">
-          <Row label="Centre + radius">
+        <Section title="Map area">
+          <Row label="Box">
             <Suspense
               fallback={
                 <div
@@ -140,25 +127,12 @@ export default function WatchdogEdit() {
                 />
               }
             >
-            <LocationControl
-              value={
-                spec.lat != null && spec.lng != null && spec.radius_m != null
-                  ? { lat: spec.lat, lng: spec.lng, radius_m: spec.radius_m }
-                  : null
-              }
-              onChange={(next: CenterRadius | null) => {
-                setSpec((prev) => ({
-                  ...prev,
-                  lat: next?.lat ?? null,
-                  lng: next?.lng ?? null,
-                  radius_m: next?.radius_m ?? null,
-                }));
-              }}
+            <MapAreaControl
+              value={spec.bounds}
+              onChange={(next) => setSpec((prev) => ({ ...prev, bounds: next }))}
               hint={
-                'Optional. Drag the dot or click the map to set the ' +
-                'centre; drag the slider for the radius. Restricts the ' +
-                'watchdog to listings inside the dashed circle. Clear ' +
-                'to drop the spatial filter entirely.'
+                'Optional. Pan and zoom, then "Use current view" to watch only what the ' +
+                'map shows — the same box Browse filters on. Clear to drop the map area.'
               }
             />
             </Suspense>
@@ -240,7 +214,7 @@ export default function WatchdogEdit() {
 
         <div className="flex items-center justify-between gap-3 border-t border-[var(--color-rule)] pt-5">
           <Link
-            to={ROUTES.watchdogManage.build()}
+            to={ROUTES.watchdog.build()}
             className="text-sm text-[var(--color-ink-3)] hover:text-[var(--color-ink)]"
           >
             ← Cancel

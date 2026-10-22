@@ -34,3 +34,9 @@ export function Th({
     </th>
   );
 }
+
+/* One column of a table described as data (the property page's ledgers and comparables): its header, the
+ * alignment its header and cells share, its cells' classes. */
+export type Column<T> = { header: string; align?: 'left' | 'right'; className?: string; cell: (row: T, i: number) => ReactNode };
+export const cellClass = (c: Pick<Column<unknown>, 'align' | 'className'>, base = 'px-3 py-2') =>
+  [base, c.align === 'right' && 'text-right', c.className].filter(Boolean).join(' ');

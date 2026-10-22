@@ -53,7 +53,8 @@ def _hosted(host: str) -> list[str]:
 
 # The keys the worker's health lane measures (waves 3-6), in registry order; GitHub keeps two.
 _WORKER_KEYS = ["location_town_coverage", "jobs", "capacity", "llm", "scraping", "publishing",
-                "delisting", "coverage", "dedup", "parsing", "data_quality", "text_extraction"]
+                "delisting", "coverage", "dedup", "notifications", "parsing", "data_quality",
+                "text_extraction"]
 _GITHUB_KEYS = ["migration_drift", "outbound_url_conformance"]
 
 
@@ -418,9 +419,10 @@ def test_each_check_runs_under_its_own_budget(monkeypatch: Any) -> None:
     checks = [_stub("db", _peek("db")), _stub("probe", _peek("probe"), budget_s=120.0)]
     run_checks(None, {}, checks=checks, lane_budget_s=vp.lane_budget_for(checks))
     assert seen == {"db": "45000ms", "probe": "120000ms"}
-    # Wave 6: parsing reads the active stock several ways on four default budgets.
+    # Wave 6: parsing reads the active stock several ways on four default budgets; W4's push ledger
+    # reads a few hundred rows on 5 s.
     assert {c.key: c.budget_s for c in CHECKS if c.budget_s != clock.CHECK_BUDGET_S} == {
-        "parsing": 180.0, "outbound_url_conformance": 120.0}
+        "parsing": 180.0, "outbound_url_conformance": 120.0, "notifications": 5.0}
 
 
 # --- the registry ------------------------------------------------------------
@@ -430,7 +432,7 @@ def test_every_registered_check_is_declared_once_with_its_metadata() -> None:
     from scripts import verify_pipeline as vp
 
     keys = _keys()
-    assert len(keys) == len(set(keys)) == 14
+    assert len(keys) == len(set(keys)) == 15
     # Waves 3-6: the worker hosts the platform, portal, dedup, parsing and quality checks; GitHub
     # keeps for good what needs a checkout (migration_drift) or an address that is not the
     # scrapers' (the outbound probe).
@@ -465,6 +467,7 @@ def test_every_check_carries_its_page_section_and_owner_page() -> None:
         "delisting": ("portals", "/scrapers"),
         "coverage": ("portals", "/scrapers"),
         "dedup": ("dedup", "/autodedup/progress"),
+        "notifications": ("platform", "/notifications"),
         "parsing": ("portals", "/scrapers"),
         "data_quality": ("data_quality", "/scrapers"),
         "text_extraction": ("data_quality", "/costs"),
@@ -529,16 +532,16 @@ def test_the_wave6_checks_carry_the_contracts_metadata() -> None:
 
 
 def test_every_worker_alarm_due_at_once_fits_the_pass_and_gauges_defer() -> None:
-    """Wave 6 (D2): the twelve worker budgets sum 675 s, past what one pass may take inside the
+    """Wave 6 (D2): the thirteen worker budgets sum 680 s, past what one pass may take inside the
     watcher's 600 s in-flight line, so the pass is capped at 500 s (the worker pins the
-    constant): every ALARM due at once fits (7 x 45 s + parsing's 180 s = 495 s, alarms run
-    first) and a gauge that no longer fits is deferred to the next 60 s tick. GitHub's two
-    checks owe 165 s."""
+    constant): every ALARM due at once fits (7 x 45 s + parsing's 180 s + notifications' 5 s =
+    500 s, alarms run first) and a gauge that no longer fits is deferred to the next 60 s tick.
+    GitHub's two checks owe 165 s."""
     from scripts import verify_pipeline as vp
 
     worker = [c for c in CHECKS if c.host == "realtime-worker"]
     alarms = [c for c in worker if c.cls == "alarm"]
-    assert (vp.lane_budget_for(alarms), vp.lane_budget_for(worker)) == (495.0, 675.0)
+    assert (vp.lane_budget_for(alarms), vp.lane_budget_for(worker)) == (500.0, 680.0)
     assert vp.lane_budget_for(alarms) <= 500.0 < vp.lane_budget_for(worker)
     assert vp.lane_budget_for([c for c in CHECKS if c.host == "github-actions"]) == 165.0
 
@@ -654,7 +657,7 @@ def test_each_check_keeps_the_cadence_of_the_lane_it_ran_in() -> None:
     assert {k: _by_key(k).cadence_s for k in _WORKER_KEYS} == {
         "location_town_coverage": 21_600, "jobs": 600, "capacity": 1_800, "llm": 600,
         "scraping": 600, "publishing": 600, "delisting": 600, "coverage": 3_600, "dedup": 600,
-        "parsing": 21_600, "data_quality": 21_600, "text_extraction": 3_600}
+        "notifications": 600, "parsing": 21_600, "data_quality": 21_600, "text_extraction": 3_600}
     assert {k: _by_key(k).cadence_s for k in _GITHUB_KEYS} == {
         "migration_drift": 3_600, "outbound_url_conformance": 604_800}
 

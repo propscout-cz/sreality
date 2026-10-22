@@ -33,7 +33,7 @@ import {
   getAutodedupStats,
   type AutodedupIteration,
 } from '@/lib/api';
-import LoadMore from '@/components/autodedup/LoadMore';
+import LoadMore from '@/components/LoadMore';
 import Notice, { StoreNotReady } from '@/components/autodedup/Notice';
 import ErrorBanner from '@/components/ErrorBanner';
 import { ROUTES, withHash, withQuery } from '@/lib/routes';

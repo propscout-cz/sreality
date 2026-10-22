@@ -35,12 +35,6 @@ _PUBLIC_ALLOWLIST: frozenset[tuple[str, str]] = frozenset({
     ("GET", "/images/{key:path}"),    # R2 image proxy, opaque keys
     # Authenticates in-handler by verifying a Stripe HMAC over the raw request body.
     ("POST", "/billing/webhook"),
-    # Authenticates in-handler by verifying a Svix (Resend) HMAC over the raw body.
-    ("POST", "/webhooks/resend"),
-    # RFC 8058 one-click unsubscribe — the HMAC token in the path IS the auth, and it
-    # must render for a logged-out recipient (no session).
-    ("GET", "/u/{token}"),
-    ("POST", "/u/{token}"),
 })
 
 # Every route under these must resolve to require_admin. `/properties` as a whole is
@@ -438,6 +432,11 @@ def test_estimation_child_routes_ride_the_tenant_connection() -> None:
 @pytest.mark.parametrize("key", [
     ("POST", "/collections/{collection_id}/shares"),
     ("POST", "/pipeline/shares"),
+    # The push device routes (migration 654) have the same shape: the caller's own account at the edge,
+    # then the service role, since browser roles hold nothing on either push table.
+    ("PUT", "/push/subscription"),
+    ("DELETE", "/push/subscription"),
+    ("POST", "/push/opened"),
 ])
 def test_the_share_routes_open_the_service_role_only_after_their_gate(key: tuple[str, str]) -> None:
     # tenancy.md's second "tenant gate, then a service-role write": a recipient's or a

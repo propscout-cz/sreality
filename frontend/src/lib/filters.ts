@@ -76,11 +76,39 @@ export type LocationMode = 'viewport' | 'center_radius';
  * the viewport cohort when opening Browse focused on a single point (the
  * "Explore area" modal) — the same `bounds` value both fits the camera and
  * narrows the cohort, so no separate flyTo is needed. */
+const KM_PER_DEG = 111.32;
+
 export const bboxAround = (lat: number, lng: number, km: number): MapBounds => {
   const half = km / 2;
-  const dLat = half / 111.32;
-  const dLng = half / (111.32 * Math.max(Math.cos((lat * Math.PI) / 180), 0.01));
+  const dLat = half / KM_PER_DEG;
+  const dLng = half / (KM_PER_DEG * Math.max(Math.cos((lat * Math.PI) / 180), 0.01));
   return { west: lng - dLng, south: lat - dLat, east: lng + dLng, north: lat + dLat };
+};
+
+/* THE box Browse filters on, from the location mode: viewport → the map's
+ * `bounds` (or null); centre+radius → the square around the circle, through the
+ * one box-around-a-point formula above. A circumscribed square admits a few
+ * corner listings beyond the true radius — accepted since the mode shipped; the
+ * main map still draws the exact circle. One rule, every reader: the list
+ * (queries.applyFilters), both stats RPCs (`bbox_*`) and a watchdog saved from
+ * Browse (filtersToWatchdogSpec), so what Browse shows is what a watchdog
+ * watches (rule 16). */
+export const effectiveBbox = (f: ListingFilters): MapBounds | null => {
+  if (f.locationMode === 'center_radius') {
+    return f.centerRadius
+      ? bboxAround(f.centerRadius.lat, f.centerRadius.lng, (2 * f.centerRadius.radius_m) / 1000)
+      : null;
+  }
+  return f.bounds;
+};
+
+/* The box in words for a summary line: its extent in km and its centre. */
+export const mapAreaLabel = (b: MapBounds): string => {
+  const lat = (b.north + b.south) / 2;
+  const lng = (b.east + b.west) / 2;
+  const h = (b.north - b.south) * KM_PER_DEG;
+  const w = (b.east - b.west) * KM_PER_DEG * Math.cos((lat * Math.PI) / 180);
+  return `map area ≈ ${w.toFixed(1)} × ${h.toFixed(1)} km around ${lat.toFixed(4)}, ${lng.toFixed(4)}`;
 };
 
 /* Phase QUAL — one entry in `cityIndexRules`. Snake_case keys mirror
@@ -213,6 +241,10 @@ export interface ListingFilters {
    * categoryMain in (dum, komercni); see SUBTYPE_LABELS_BY_MAIN. */
   subtype: string[];
   buildingMaterial: BuildingMaterial[];
+  /* PENB letters A–G (registry `energy_rating_match`): a property matches when its
+   * rating — the first non-null across its ads in canonical order — is one of them;
+   * an unrated property never does. Empty = no constraint. */
+  energyRatingMatch: string[];
   estateAreaMin: number | null;
   estateAreaMax: number | null;
   usableAreaMin: number | null;
@@ -250,10 +282,9 @@ export interface ListingFilters {
   /* Browse-only broker scope ("Explore this broker's listings"). Null = off.
    * Deliberately NOT part of a saved preset's identity (PRESET_EXCLUDED_KEYS),
    * NOT in toolkit/filter_registry.py (must stay invisible to the agent /
-   * comparables / estimation agendas), and NOT settable from the filter
-   * sidebar — reachable only via the explore-broker modal's seed or a
-   * `?broker=` URL param, the same entry-only treatment `pipeline` gets
-   * before its own dedicated chip. A property-id allowlist (MS19): the
+   * comparables / estimation agendas). Set by the explore-broker modal's seed,
+   * a `?broker=` URL param, or the sidebar's Advanced → Broker search
+   * (filter-controls/BrokerFilterControl). A property-id allowlist (MS19): the
    * properties where one of this broker's ads matches the portal and status
    * filters, so one ad satisfies both (queries.ts:adScope). */
   brokerId: number | null;
@@ -331,6 +362,7 @@ export const DEFAULT_FILTERS: ListingFilters = {
   categorySubCb: null,
   subtype: [],
   buildingMaterial: [],
+  energyRatingMatch: [],
   estateAreaMin: null,
   estateAreaMax: null,
   usableAreaMin: null,
@@ -363,12 +395,6 @@ export const DEFAULT_FILTERS: ListingFilters = {
   nearOverall15kmMin: null,
   priceGrowthRules: [],
 };
-
-export const ESTATE_AREA_BOUNDS = { min: 0, max: 5000, step: 50 };
-export const USABLE_AREA_BOUNDS = { min: 0, max: 500, step: 5 };
-
-export const PRICE_BOUNDS = { min: 0, max: 100_000, step: 500 };
-export const AREA_BOUNDS = { min: 0, max: 300, step: 5 };
 
 /* Expand a multi-select of operator-friendly buckets into the union of
  * granular `building_type` values to match against (deduped). The expansion
@@ -424,6 +450,7 @@ const CATEGORY_TYPE_VALUES: ReadonlyArray<CategoryType> = [
 const BUILDING_MATERIAL_VALUES: ReadonlyArray<BuildingMaterial> = [
   'cihla', 'panel', 'smisena', 'ostatni',
 ];
+const ENERGY_RATING_VALUES: ReadonlyArray<string> = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
 
 const splitCsv = (s: string | null): string[] =>
   s == null || s === '' ? [] : s.split(',').map(decodeURIComponent);
@@ -587,6 +614,7 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
     buildingMaterial: splitCsv(sp.get('build')).filter((m): m is BuildingMaterial =>
       (BUILDING_MATERIAL_VALUES as ReadonlyArray<string>).includes(m),
     ),
+    energyRatingMatch: splitCsv(sp.get('energy')).filter((v) => ENERGY_RATING_VALUES.includes(v)),
     estateAreaMin: estateMin,
     estateAreaMax: estateMax,
     usableAreaMin: usableMin,
@@ -790,6 +818,7 @@ export const toSearchParams = (f: ListingFilters): URLSearchParams => {
   if (f.categorySubCb != null) sp.set('subcat', String(f.categorySubCb));
   if (f.subtype.length) sp.set('subtype', f.subtype.join(','));
   if (f.buildingMaterial.length) sp.set('build', f.buildingMaterial.join(','));
+  if (f.energyRatingMatch.length) sp.set('energy', f.energyRatingMatch.join(','));
   if (f.estateAreaMin != null || f.estateAreaMax != null) {
     sp.set('estate', fmtRange(f.estateAreaMin, f.estateAreaMax));
   }
@@ -1234,6 +1263,7 @@ export const REGISTRY_KEY_MAP = {
   portals_excluded_active_only: 'portalsExcludedActiveOnly',
   condition_match: 'conditionMatch',
   building_material: 'buildingMaterial',
+  energy_rating_match: 'energyRatingMatch',
   min_parking_lots: 'parkingLotsMin',
   min_garden_area: 'gardenAreaMin',
   max_garden_area: 'gardenAreaMax',
@@ -1372,20 +1402,20 @@ export function applySidebarUpdates(
  * clause for are NOT silently dropped: `filtersToWatchdogSpec` reports them in
  * `unsupported` so the UI can tell the operator what won't be watched.
  *
- * Honoured (mapped): category, disposition, district chips, price / price-per-m²
- * / MF-yield / area / usable / estate / garden bounds, building material,
- * tri-state amenities, furnished, ownership, both sides of the portal rule
- * (MS19 + migration 597), condition_match, parking-lots min, condition-level bounds, the
- * price-history pair (price-change count in a window, total price change %),
- * and the city-quality predicates (index rules, population min/max, the near-*
- * minimums).
- * center+radius → lat/lng/radius_m.
+ * Honoured (mapped): category, disposition, district chips, THE map box
+ * (`bounds` — effectiveBbox, rule 16: a centre+radius pick saves as the square
+ * Browse filtered on, always; the viewport box unless the caller opts it out,
+ * which is the create dialog's one checkbox), price / price-per-m² / MF-yield /
+ * area / usable / estate / garden bounds, building material, tri-state
+ * amenities, furnished, ownership, both sides of the portal rule (MS19 +
+ * migration 597), condition_match, parking-lots min, the price-history pair
+ * (price-change count in a window, total price change %), and the city-quality
+ * predicates (index rules, population min/max, the near-* minimums).
  *
  * NOT honoured by the matcher (reported as unsupported when set): listing
  * `status`, the last-seen / first-seen / time-on-market day ranges and the
  * `recently added/changed` presets (a watchdog already fires on brand-new /
- * changed listings, so a recency window is redundant there), the map `bounds`
- * viewport (use a district chip or center+radius instead), `tags` and
+ * changed listings, so a recency window is redundant there), `tags` and
  * `collections`. */
 
 const UNSUPPORTED_LABELS: ReadonlyArray<{
@@ -1393,7 +1423,6 @@ const UNSUPPORTED_LABELS: ReadonlyArray<{
   label: string;
 }> = [
   { test: (f) => f.status !== 'any', label: 'listing status' },
-  { test: (f) => f.bounds != null, label: 'map area' },
   {
     test: (f) =>
       f.lastSeenMinDays != null || f.lastSeenMaxDays != null
@@ -1428,12 +1457,13 @@ export interface FiltersToWatchdogResult {
 
 export function filtersToWatchdogSpec(
   filters: ListingFilters,
+  { includeMapArea = true }: { includeMapArea?: boolean } = {},
 ): FiltersToWatchdogResult {
   const f = filters;
   const arr = <T>(xs: T[]): T[] | null => (xs.length === 0 ? null : xs);
-  /* center+radius is the only spatial mode a watchdog can express (the matcher
-   * has no viewport clause). All three of lat/lng/radius are needed or none. */
-  const cr = f.locationMode === 'center_radius' ? f.centerRadius : null;
+  /* A centre+radius pick is a sidebar filter, never a stale viewport, so it
+   * always rides along; the viewport box only when the caller keeps it. */
+  const bounds = f.locationMode === 'center_radius' || includeMapArea ? effectiveBbox(f) : null;
 
   const spec: WatchdogFilterSpec = {
     ...DEFAULT_WATCHDOG_FILTER_SPEC,
@@ -1443,9 +1473,7 @@ export function filtersToWatchdogSpec(
     subtype: arr(f.subtype),
     dispositions: arr(f.dispositions),
     districts: arr(f.districts),
-    lat: cr ? cr.lat : null,
-    lng: cr ? cr.lng : null,
-    radius_m: cr ? cr.radius_m : null,
+    bounds,
     min_price_czk: f.priceMin,
     max_price_czk: f.priceMax,
     include_no_price: f.includeNoPrice,
@@ -1460,6 +1488,7 @@ export function filtersToWatchdogSpec(
     min_estate_area: f.estateAreaMin,
     max_estate_area: f.estateAreaMax,
     building_material: f.buildingMaterial.length ? [...f.buildingMaterial] : null,
+    energy_rating_match: f.energyRatingMatch.length ? [...f.energyRatingMatch] : null,
     min_garden_area: f.gardenAreaMin,
     max_garden_area: f.gardenAreaMax,
     has_balcony: triToBoolNullable(f.hasBalcony),

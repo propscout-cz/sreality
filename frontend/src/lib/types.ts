@@ -1,7 +1,7 @@
 /* Wire shapes mirroring the public views from migration 008. Only the columns
  * the UI actually reads are typed here; expand as Parts B–E need more. */
 
-import type { DistrictChip, ListingFilters, PresetSpec } from './filters';
+import type { DistrictChip, ListingFilters, MapBounds, PresetSpec } from './filters';
 import type { ReferenceRent } from './mfReference';
 
 /* The whole Czech grammar, 1 through 9 — the same span
@@ -138,14 +138,6 @@ export interface ListingFreshnessCheckPublic {
   outcome: string;
 }
 
-export interface ListingFetchFailurePublic {
-  sreality_id: number;
-  attempts: number;
-  first_failure_at: string;
-  last_failure_at: string;
-  given_up: boolean;
-}
-
 export interface ImagePublic {
   id: number;
   sreality_id: number;
@@ -176,14 +168,6 @@ export const bareImage = (id: number, storage_path: string | null, sreality_url 
   id, sreality_id: 0, sequence: null, sreality_url, storage_path,
   clip_fine_tag: null, clip_logical_tag: null, clip_confidence: null, clip_render_score: null, phash: null,
 });
-
-/* Distributional shape — drawn by components/estimation/RangeStrip. */
-
-export interface PercentileTriple {
-  p25: number;
-  p50: number;
-  p75: number;
-}
 
 /* -------------------------------------------------------------------------- */
 /* Estimations (U2). Wire shapes mirror api/schemas.py and api/estimation_runs */
@@ -554,17 +538,14 @@ export interface Collection {
   created_at: string;
   updated_at: string;
   listing_count: number;
-  /* Monitored collections raise in-app change alerts on their member
-   * properties (price moves, delisting). `notify_channels` is the source's
-   * channel pick that the producer folds into notifications.target_channels —
-   * empty means in-app only. `is_system` marks the protected default
+  /* Monitored collections raise change alerts on their member properties
+   * (price moves, delisting). `is_system` marks the protected default
    * "monitoring" collection (can't be renamed or deleted). */
   monitoring_enabled: boolean;
-  notify_channels: string[];
   is_system: boolean;
   /* Sharing (migration 610). `owner_email` is null exactly when the caller owns
    * the collection (lib/collectionCache `isMine`); on a shared row monitoring
-   * reads off and notify_channels empty — the alerts are the owner's. */
+   * reads off — the alerts are the owner's. */
   owner_email: string | null;
   /* The owner sees every recipient; a recipient sees only its own grant, with
    * `email: null` (= you) — that account_id is the key to leave. */
@@ -931,9 +912,12 @@ export interface WatchdogFilterSpec {
   // Portal-agnostic property sub-type (multi-select; matches any).
   subtype: string[] | null;
   dispositions: string[] | null;
-  lat: number | null;
-  lng: number | null;
-  radius_m: number | null;
+  /* The map box (rule 16): the ONE spatial shape, what Browse filters on — its
+   * viewport, or the square around a centre+radius pick (filters.effectiveBbox)
+   * — so a watchdog saved from Browse watches the rows Browse showed. The
+   * matcher renders it as the same lat/lng band (api/location_filter
+   * .bounds_where). Null = no map area. */
+  bounds: MapBounds | null;
   /* Place, as chips. Each chip is a LEVEL plus a RÚIAN CODE — the one
    * predicate Browse, Stats, the map and the watchdog matcher share
    * (rule 16, lib/districtCodes + api/location_filter). `context` is
@@ -995,6 +979,7 @@ export interface WatchdogFilterSpec {
   // the matcher honours them as Browse does, and an equality test pins
   // the Python spec to the WATCHDOG agenda so a filter can't drop again.
   building_material: Array<'cihla' | 'panel' | 'smisena' | 'ostatni'> | null;
+  energy_rating_match: string[] | null;
   min_garden_area: number | null;
   max_garden_area: number | null;
   tags: number[] | null;
@@ -1026,9 +1011,7 @@ export const DEFAULT_WATCHDOG_FILTER_SPEC: WatchdogFilterSpec = {
   category_sub_cb: null,
   subtype: null,
   dispositions: null,
-  lat: null,
-  lng: null,
-  radius_m: null,
+  bounds: null,
   districts: null,
   min_price_czk: null,
   max_price_czk: null,
@@ -1060,6 +1043,7 @@ export const DEFAULT_WATCHDOG_FILTER_SPEC: WatchdogFilterSpec = {
   price_change_window_days: null,
   total_price_change_pct: null,
   building_material: [],
+  energy_rating_match: [],
   min_garden_area: null,
   max_garden_area: null,
   tags: null,
@@ -1083,10 +1067,6 @@ export interface WatchdogSubscription {
   is_active: boolean;
   created_at: string;
   updated_at: string;
-  /* Non-in_app delivery channels this watchdog fans out to (e.g. ['email'])
-   * — folded into each dispatch's target_channels by the matcher (Sprint N).
-   * in_app is always implicit. */
-  channels: string[];
   dispatch_count: number;
 }
 
@@ -1132,13 +1112,23 @@ export interface SavedDashboard {
 export type NotificationSourceKind =
   | 'watchdog'
   | 'collection_monitor'
-  /* Something was shared with the caller (migrations 610 + 641): a collection
-   * (collection_id set) or a pipeline (collection_id null); change_kind
-   * 'shared', no listing subject — the `message` text. */
-  | 'share'
-  /* System-health alerts (migration 273/274 producer): pipeline stalls, credit
-   * outages, etc. No listing subject — the payload is the `message` text. */
-  | 'system_health';
+  /* Something was shared with the caller (migrations 610, 641, 647): a collection
+   * (collection_id set), a pipeline or a dashboard (collection_id null); change_kind
+   * names which (migration 652), no listing subject — the `message` text. */
+  | 'share';
+
+/* Why a dispatch fired: a detector's event, or what a share opens (the change_kind
+ * CHECK of migration 652, minus the kinds no feed row carries). */
+export type DispatchChangeKind =
+  | 'new'
+  | 'price_drop'
+  | 'price_rise'
+  | 'inactive'
+  | 'reactivated'
+  | 'new_source'
+  | 'shared_collection'
+  | 'shared_dashboard'
+  | 'shared_pipeline';
 
 export interface WatchdogDispatch {
   id: string;
@@ -1149,47 +1139,28 @@ export interface WatchdogDispatch {
   subscription_name: string | null;
   collection_id: number | null;
   collection_name: string | null;
-  sreality_id: number;
-  /* Property grain (Slice 2b). `property_id` is the canonical property;
-   * `change_kind` is why this dispatch fired ('new' = newly matched the
-   * filter, 'price_drop' = a recent price decrease). `sreality_id` is the
-   * property's representative listing (what the feed links to). */
+  /* Property grain (Slice 2b). `property_id` is the property the event is
+   * about — set on every watchdog / collection_monitor row, null on a share;
+   * the row opens it (lib/dispatchTarget). `change_kind` is why this dispatch
+   * fired ('new' = newly matched the filter, 'price_drop' = a recent price
+   * decrease). */
   property_id: number | null;
-  change_kind: string;
-  /* Free-text body for the rows with no listing subject: source_kind=
-   * 'system_health' (change_kind 'system_alert') and 'share'
-   * (change_kind 'shared'); null on watchdog / collection_monitor rows, which
-   * describe a listing subject instead. Those two kinds also carry no listing,
-   * so their `sreality_id` is null at runtime despite the type (widening it
-   * touches pages/Watchdog.tsx; owed). */
+  change_kind: DispatchChangeKind;
+  /* Free-text body of a `share` row (change_kind 'shared_<kind>'), which has no
+   * listing subject; null on watchdog / collection_monitor rows. */
   message: string | null;
-  /* The check a system_health alert is about, read by the API off its dedupe key
-   * (`sys:<check_key>:…`), so the bell opens Health at that check; null on every
-   * other producer. */
-  check_key: string | null;
-  /* What a `share` row shares, read by the API off its dedupe key
-   * (`share:<kind>:<ref>:…`): the kind, and its id — the collection id, the
-   * owner's account uuid for a pipeline, the dashboard uuid. Null on every
-   * other producer. */
+  /* What a `share` row shares: the kind (the API reads it off change_kind,
+   * migration 652), and its id off the row's own columns — the collection id, the
+   * owner's account uuid for a pipeline (the actor), the dashboard uuid (the
+   * event_ref). Null on every other producer. */
   share_kind: 'collection' | 'pipeline' | 'dashboard' | null;
   share_ref: string | null;
   dispatched_at: string;
   seen_at: string | null;
-  /* Change provenance — collection-monitor price events carry these so "why was
-   * I pinged" survives latest-wins: the trigger snapshot + new/previous price. */
+  /* Change provenance — price events carry these so "why was I pinged" survives
+   * latest-wins: the new and the previous price. */
   trigger_price_czk: number | null;
   prev_price_czk: number | null;
-  trigger_snapshot_id: number | null;
-  /* Non-in_app delivery channels the producer stamped (the Sprint N outbox
-   * reads this column); empty = in-app only. */
-  target_channels: string[];
-  estimation_run_id: number | null;
-  estimation_status: EstimationStatus | null;
-  estimation_kind: 'rent' | 'sale' | null;
-  estimated_monthly_rent_czk: number | null;
-  estimated_sale_price_czk: number | null;
-  gross_yield_pct: number | null;
-  confidence: Confidence | null;
   /* Listing-side fields joined via the matcher's LEFT JOIN. Null when
    * the listing has been hard-deleted (shouldn't happen — architectural
    * rule #3 forbids deletes — but render defensively). */
@@ -1211,12 +1182,11 @@ export interface WatchdogDispatch {
   last_seen_at: string | null;
   /* MF (Ministry of Finance) reference gross rental yield % — the
    * deterministic Cenová-mapa figure carried on the listing (migration 133).
-   * Sale apartments only; null on rentals / non-apartments / no territory.
-   * Shown alongside the comparables-based estimation yield. */
+   * Sale apartments only; null on rentals / non-apartments / no territory. */
   mf_gross_yield_pct: number | null;
   /* The portal the property was last seen on (`listings.source`, e.g.
    * 'sreality') + the listing's URL on that portal (`source_url`, may be null
-   * for older sreality rows). Drives the Portal column's clickable chip. */
+   * for older sreality rows). */
   source: string | null;
   source_url: string | null;
 }
@@ -1230,16 +1200,9 @@ export interface WatchdogDispatchesResponse {
   next_cursor: string | null;
 }
 
-/* Unseen dispatch counts (GET /notifications/unread-count). `unread_count` is
- * the total, or the scoped count when a source_kind is requested. */
+/* The caller's unseen notifications (GET /notifications/unread-count): the
+ * one number the nav badge and the feed's header show. */
 export interface NotificationUnreadCount {
-  watchdog: number;
-  collection_monitor: number;
-  share: number;
-  system_health: number;
-  /* `total` sums EVERY source_kind (incl. system_health); the nav bell badge
-   * reads `unread_count` (= total when unscoped), so system alerts count too. */
-  total: number;
   unread_count: number;
 }
 

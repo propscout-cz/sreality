@@ -49,6 +49,7 @@ const CUSTOM_REACH: Record<CustomBlockKey, { ids: string[]; fields: Array<keyof 
     fields: ['portals', 'portalsExcluded', 'portalsExcludedActiveOnly'],
   },
   location_mode: { ids: ['location'], fields: ['locationMode', 'centerRadius'] },
+  broker: { ids: [], fields: ['brokerId'] },
 };
 
 function groupOf(g: FilterRow): SheetGroup {
