@@ -1,10 +1,10 @@
-/* Shared "what is this property" overview — the dossier header (identity +
- * price and a dense facts strip left, location map anchored top-right),
- * description, optional curation and estimates slots, and the photo gallery.
- * The property page and the Estimation Detail page render their subject with
- * the SAME structure (one surface, not two). Driven by a ListingPublic-shaped
- * row: the property page passes the property as its Browse card shows it, the
- * estimation page the subject's resolved listings row. */
+/* Shared "what is this property" pieces — the identity column (kind, price, the
+ * place and a dense facts strip), the location map, the description and the
+ * photo grid. The property page composes them into its own hero and tabs
+ * (PropertyHero, PropertyTabs); the Estimation Detail page renders its subject
+ * with ListingOverview below: the SAME pieces, one surface, not two. Driven by a
+ * ListingPublic-shaped row: the property page passes the property as its Browse
+ * card shows it, the estimation page the subject's resolved listings row. */
 import { Suspense, useLayoutEffect, useRef, useState } from 'react';
 import { lazyChunk } from '@/lib/lazyChunk';
 import { fmtCzk, fmtArea, fmtFloor, fmtMeasuredPricePerM2, fmtAbsolute } from '@/lib/format';
@@ -31,53 +31,22 @@ export interface PriceNote {
 
 export function ListingOverview({
   listing,
-  priceNote,
   images = [],
   imagesLoading = false,
   showStatus = true,
-  mapFooter,
-  curationSlot,
-  estimatesSlot,
 }: {
   listing: ListingPublic;
-  /* Rendered under the headline price, or in its place when the listing states
-   * none. Estimation Detail leaves it empty. */
-  priceNote?: PriceNote;
   images?: ImagePublic[];
   imagesLoading?: boolean;
   showStatus?: boolean;
-  /* Rendered directly UNDER the header map (right column), only when the
-   * listing has coordinates. The property page fills it with the
-   * "Explore area" button; Estimation Detail leaves it empty (so the button
-   * doesn't appear on the estimation subject). */
-  mapFooter?: React.ReactNode;
-  /* The operator's own curation (collections, tags, notes), rendered directly
-   * under the description and above the estimates — what the operator has
-   * already decided about this property comes before the numbers. Gets its
-   * leading hairline here; Estimation Detail leaves it empty. */
-  curationSlot?: React.ReactNode;
-  /* The estimation chapter, rendered between description and gallery — the
-   * property page passes its EstimationsBlock here so the estimates sit in
-   * the prime slot the location map used to occupy (the map lives in the
-   * header now). The slot brings its own leading hairline. */
-  estimatesSlot?: React.ReactNode;
 }) {
   return (
     <>
-      <Header
-        listing={listing}
-        priceNote={priceNote}
-        showStatus={showStatus}
-        mapFooter={mapFooter}
-      />
+      <div className="mt-4 grid gap-x-8 gap-y-5 lg:grid-cols-[minmax(0,1fr)_minmax(300px,400px)] items-start">
+        <PropertyIdentity listing={listing} showStatus={showStatus} />
+        <LocationMap listing={listing} />
+      </div>
       <DescriptionBlock listing={listing} />
-      {curationSlot && (
-        <>
-          <Hairline />
-          {curationSlot}
-        </>
-      )}
-      {estimatesSlot}
       <Hairline />
       <GalleryBlock
         images={images}
@@ -89,19 +58,22 @@ export function ListingOverview({
 }
 
 /* -------------------------------------------------------------------------- */
-/* Header (hero)                                                              */
+/* Identity + map                                                              */
 /* -------------------------------------------------------------------------- */
 
-function Header({
+/* The identity column: kind, area and floor, the status, the headline price
+ * (with the lowest-active-price note, MS8, when the page passes one), the place,
+ * the id and per-m² figure, then the key facts. */
+export function PropertyIdentity({
   listing,
   priceNote,
-  showStatus,
-  mapFooter,
+  showStatus = true,
 }: {
   listing: ListingPublic;
+  /* Rendered under the headline price, or in its place when the listing states
+   * none. Estimation Detail leaves it empty. */
   priceNote?: PriceNote;
-  showStatus: boolean;
-  mapFooter?: React.ReactNode;
+  showStatus?: boolean;
 }) {
   // Identity tokens, most-specific first: subtype ("Ubytování", "Rodinný dům")
   // and/or disposition ("2+kk"). Commercial/houses keep their kind instead of
@@ -127,95 +99,106 @@ function Header({
   // Only sreality carries a real portal id; other sources hold a synthetic
   // (negative) sreality_id that must never surface as an "ID".
   const hasId = listing.source === 'sreality';
-  const { lat, lng } = listing;
-  const hasMap = lat != null && lng != null;
 
   return (
-    <div className="mt-4 grid gap-x-8 gap-y-5 lg:grid-cols-[minmax(0,1fr)_minmax(300px,400px)] items-start">
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <p className="font-mono tabular-nums text-[var(--color-ink-2)] text-sm">
-            <span>{kindParts.length > 0 ? kindParts.join(' · ') : '—'}</span>
-            <span className="mx-2 text-[var(--color-ink-4)]">·</span>
-            <span>{area}</span>
-            {floor != null && (
-              <>
-                <span className="mx-2 text-[var(--color-ink-4)]">·</span>
-                <span className="text-[var(--color-ink)]">{floor}</span>
-              </>
-            )}
-          </p>
-          {showStatus && (
-            <StatusPill isActive={listing.is_active} lastSeenAt={listing.last_seen_at} />
+    <div className="min-w-0">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <p className="font-mono tabular-nums text-[var(--color-ink-2)] text-sm">
+          <span>{kindParts.length > 0 ? kindParts.join(' · ') : '—'}</span>
+          <span className="mx-2 text-[var(--color-ink-4)]">·</span>
+          <span>{area}</span>
+          {floor != null && (
+            <>
+              <span className="mx-2 text-[var(--color-ink-4)]">·</span>
+              <span className="text-[var(--color-ink)]">{floor}</span>
+            </>
           )}
-        </div>
-        <h1
-          className={[
-            'mt-1.5 leading-[1.05] tabular-nums',
-            hasPrice ? 'text-[2.6rem]' : 'text-[1.6rem] text-[var(--color-ink-3)]',
-          ].join(' ')}
-          style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
-          title={!hasPrice && priceNote ? priceNote.title : undefined}
-        >
-          {!hasPrice && priceNote ? priceNote.text : price}
-          <span className="text-base font-sans font-normal text-[var(--color-ink-3)] tracking-wide">
-            {unit}
-          </span>
-        </h1>
-        {hasPrice && priceNote && (
-          <p className="mt-1 text-sm tabular-nums text-[var(--color-ink-2)]" title={priceNote.title}>
-            {priceNote.text}
-          </p>
-        )}
-        <p className="mt-2 text-sm text-[var(--color-ink-2)]">
-          {listing.display_label ?? '—'}
         </p>
-        {(hasId || ppm !== '—') && (
-          <p className="text-[0.7rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)] mt-2">
-            {hasId && (
-              <>
-                ID{' '}
-                <span className="font-mono tabular-nums text-[var(--color-ink-3)] normal-case tracking-normal">
-                  {listing.sreality_id}
-                </span>
-              </>
-            )}
-            {ppm !== '—' && (
-              <>
-                {hasId && <span className="mx-2">·</span>}
-                <span className="font-mono tabular-nums text-[var(--color-ink-3)] normal-case tracking-normal">
-                  {ppm}
-                </span>
-              </>
-            )}
-          </p>
+        {showStatus && (
+          <StatusPill isActive={listing.is_active} lastSeenAt={listing.last_seen_at} />
         )}
-        <KeyFactsBlock listing={listing} />
       </div>
-      {/* The dossier's "file photo": the location map anchored top-right.
-          Missing coordinates keep the slot with an explicit note — silence
-          would read as a render failure, not a data fact. */}
-      <div className="w-full">
-        {hasMap ? (
-          <Suspense
-            fallback={
-              <div className="h-[190px] rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)]" />
-            }
-          >
-            <DetailMap
-              lat={lat}
-              lng={lng}
-              isActive={listing.is_active}
-              heightClass="h-[190px]"
-            />
-          </Suspense>
-        ) : (
-          <div className="h-[190px] flex items-center justify-center text-sm text-[var(--color-ink-3)] border border-dashed border-[var(--color-rule)] rounded-[var(--radius-md)]">
-            No coordinates recorded
-          </div>
-        )}
-        {hasMap && mapFooter && <div className="mt-2">{mapFooter}</div>}
-      </div>
+      <h1
+        className={[
+          'mt-1.5 leading-[1.05] tabular-nums',
+          hasPrice ? 'text-[2.6rem]' : 'text-[1.6rem] text-[var(--color-ink-3)]',
+        ].join(' ')}
+        style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
+        title={!hasPrice && priceNote ? priceNote.title : undefined}
+      >
+        {!hasPrice && priceNote ? priceNote.text : price}
+        <span className="text-base font-sans font-normal text-[var(--color-ink-3)] tracking-wide">
+          {unit}
+        </span>
+      </h1>
+      {hasPrice && priceNote && (
+        <p className="mt-1 text-sm tabular-nums text-[var(--color-ink-2)]" title={priceNote.title}>
+          {priceNote.text}
+        </p>
+      )}
+      <p className="mt-2 text-sm text-[var(--color-ink-2)]">
+        {listing.display_label ?? '—'}
+      </p>
+      {(hasId || ppm !== '—') && (
+        <p className="text-[0.7rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)] mt-2">
+          {hasId && (
+            <>
+              ID{' '}
+              <span className="font-mono tabular-nums text-[var(--color-ink-3)] normal-case tracking-normal">
+                {listing.sreality_id}
+              </span>
+            </>
+          )}
+          {ppm !== '—' && (
+            <>
+              {hasId && <span className="mx-2">·</span>}
+              <span className="font-mono tabular-nums text-[var(--color-ink-3)] normal-case tracking-normal">
+                {ppm}
+              </span>
+            </>
+          )}
+        </p>
+      )}
+      <KeyFactsBlock listing={listing} />
+    </div>
+  );
+}
+
+/* The location map, or an explicit note where it would be — silence would read
+ * as a render failure, not a data fact. `footer` renders under the map only when
+ * there is one (the property page's Explore area + external map links). */
+export function LocationMap({
+  listing,
+  heightClass = 'h-[190px]',
+  footer,
+}: {
+  listing: ListingPublic;
+  heightClass?: string;
+  footer?: React.ReactNode;
+}) {
+  const { lat, lng } = listing;
+  const hasMap = lat != null && lng != null;
+  return (
+    <div className="w-full">
+      {hasMap ? (
+        <Suspense
+          fallback={
+            <div className={`${heightClass} rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)]`} />
+          }
+        >
+          <DetailMap
+            lat={lat}
+            lng={lng}
+            isActive={listing.is_active}
+            heightClass={heightClass}
+          />
+        </Suspense>
+      ) : (
+        <div className={`${heightClass} flex items-center justify-center text-sm text-[var(--color-ink-3)] border border-dashed border-[var(--color-rule)] rounded-[var(--radius-md)]`}>
+          No coordinates recorded
+        </div>
+      )}
+      {hasMap && footer && <div className="mt-2">{footer}</div>}
     </div>
   );
 }
@@ -247,19 +230,23 @@ function StatusPill({ isActive, lastSeenAt }: { isActive: boolean; lastSeenAt: s
 /* Gallery                                                                    */
 /* -------------------------------------------------------------------------- */
 
-function GalleryBlock({
+export function GalleryBlock({
   images,
   isActive,
   loading,
+  label = 'Photos',
+  emptyText = 'No photos recorded.',
 }: {
   images: ImagePublic[];
   isActive: boolean;
   loading: boolean;
+  label?: string;
+  emptyText?: string;
 }) {
   if (loading && images.length === 0) {
     return (
       <div>
-        <SectionLabel>Photos</SectionLabel>
+        <SectionLabel>{label}</SectionLabel>
         <div className="mt-2 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-1.5">
           {Array.from({ length: 4 }).map((_, i) => (
             <div
@@ -274,15 +261,15 @@ function GalleryBlock({
   if (images.length === 0) {
     return (
       <div>
-        <SectionLabel>Photos</SectionLabel>
-        <p className="mt-2 text-sm text-[var(--color-ink-3)]">No photos recorded.</p>
+        <SectionLabel>{label}</SectionLabel>
+        <p className="mt-2 text-sm text-[var(--color-ink-3)]">{emptyText}</p>
       </div>
     );
   }
   return (
     <div>
       <div className="flex items-baseline justify-between">
-        <SectionLabel>Photos</SectionLabel>
+        <SectionLabel>{label}</SectionLabel>
         <p className="text-[0.7rem] tracking-wide text-[var(--color-ink-4)] font-mono tabular-nums">
           {images.length}
         </p>
@@ -306,7 +293,20 @@ function DescriptionBlock({ listing }: { listing: ListingPublic }) {
   return <DescriptionBody text={text} />;
 }
 
-function DescriptionBody({ text }: { text: string }) {
+export function DescriptionBody({
+  text,
+  label = 'Description',
+  className = 'mt-7',
+  clamp = 'line-clamp-4',
+  words = ['Show more', 'Show less'],
+}: {
+  text: string;
+  label?: string;
+  className?: string;
+  /* The collapsed height, as a Tailwind line-clamp class. */
+  clamp?: string;
+  words?: readonly [more: string, less: string];
+}) {
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
   const ref = useRef<HTMLParagraphElement | null>(null);
@@ -315,16 +315,16 @@ function DescriptionBody({ text }: { text: string }) {
     const el = ref.current;
     if (!el) return;
     setOverflows(el.scrollHeight - el.clientHeight > 1);
-  }, [text]);
+  }, [text, clamp]);
 
   return (
-    <div className="mt-7">
-      <SectionLabel>Description</SectionLabel>
+    <div className={className}>
+      <SectionLabel>{label}</SectionLabel>
       <p
         ref={ref}
         className={
           'mt-3 text-sm leading-relaxed text-[var(--color-ink)] whitespace-pre-wrap ' +
-          (expanded ? '' : 'line-clamp-4')
+          (expanded ? '' : clamp)
         }
       >
         {text}
@@ -335,7 +335,7 @@ function DescriptionBody({ text }: { text: string }) {
           onClick={() => setExpanded((v) => !v)}
           className="mt-2 inline-flex items-center text-[0.75rem] tracking-wide text-[var(--color-ink-3)] hover:text-[var(--color-copper)] transition-colors"
         >
-          {expanded ? 'Show less' : 'Show more'}
+          {expanded ? words[1] : words[0]}
         </button>
       )}
     </div>

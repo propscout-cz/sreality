@@ -1,13 +1,13 @@
-/* ListingOverview — the vertical order of the dossier sections. The operator's
- * own curation (collections / tags / notes) sits directly under the description
- * and above the estimates, which sit above the photos. The key facts live in the
- * header's price column, not as their own row between header and description. */
+/* ListingOverview (Estimation Detail's subject) and the identity column it shares
+ * with the property page's header: the key facts live in the price column, not as
+ * their own row between header and description, and the lowest active price
+ * (MS8) is a labelled line under the headline price. */
 
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
-import { ListingOverview } from './ListingOverview';
+import { ListingOverview, PropertyIdentity } from './ListingOverview';
 import type { ListingPublic } from '@/lib/types';
 
 const LISTING = {
@@ -46,47 +46,25 @@ describe('<ListingOverview> section order', () => {
     expect(precedes(facts, description)).toBe(true);
   });
 
-  it('renders description, then curation, then estimates, then photos', () => {
+  it('renders the description, then the photos', () => {
     render(
       <MemoryRouter>
-        <ListingOverview
-          listing={LISTING}
-          curationSlot={<div data-testid="curation" />}
-          estimatesSlot={<div data-testid="estimates" />}
-        />
+        <ListingOverview listing={LISTING} />
       </MemoryRouter>,
     );
 
-    const description = screen.getByText('Description');
-    const curation = screen.getByTestId('curation');
-    const estimates = screen.getByTestId('estimates');
-    const photos = screen.getByText('Photos');
-
-    expect(precedes(description, curation)).toBe(true);
-    expect(precedes(curation, estimates)).toBe(true);
-    expect(precedes(estimates, photos)).toBe(true);
-  });
-
-  it('renders no curation chrome when the slot is empty', () => {
-    render(
-      <MemoryRouter>
-        <ListingOverview listing={LISTING} estimatesSlot={<div data-testid="estimates" />} />
-      </MemoryRouter>,
-    );
-
-    expect(screen.queryByTestId('curation')).not.toBeInTheDocument();
-    expect(screen.getByTestId('estimates')).toBeInTheDocument();
+    expect(precedes(screen.getByText('Description'), screen.getByText('Photos'))).toBe(true);
   });
 });
 
 /* MS8: the property page's lowest active price — labelled, display only. */
-describe('<ListingOverview> price note', () => {
+describe('<PropertyIdentity> price note', () => {
   const NOTE = { text: 'Nejnižší aktivní cena: 4 900 000 Kč · iDNES Reality', title: 'jen pro informaci' };
 
   it('sits under the headline price and leaves the price alone', () => {
     render(
       <MemoryRouter>
-        <ListingOverview listing={LISTING} priceNote={NOTE} />
+        <PropertyIdentity listing={LISTING} priceNote={NOTE} />
       </MemoryRouter>,
     );
 
@@ -100,7 +78,7 @@ describe('<ListingOverview> price note', () => {
   it('takes the headline’s place, still labelled, when the listing states no price', () => {
     render(
       <MemoryRouter>
-        <ListingOverview listing={{ ...LISTING, price_czk: null }} priceNote={NOTE} />
+        <PropertyIdentity listing={{ ...LISTING, price_czk: null }} priceNote={NOTE} />
       </MemoryRouter>,
     );
 

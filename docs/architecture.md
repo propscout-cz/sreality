@@ -935,8 +935,9 @@ rules. Identify which one a task belongs to before you start.
   and mutation key with `actingKey` (`['acting', owner, …]`; outside a provider the key is
   byte-identical to before) and hand `{ actAs }` to `lib/api` `request` (the `X-Act-As` header) or
   `pgRead` (`setHeader`); the "Browse never acts" rule lives once, in `lib/curationSettle`
-  (`settlePatches` / `settleRereads` / `browseReads` take `actAs` and answer nothing for it). Only the header's pipeline / collection / dismiss controls and
-  `CurationBlock` (tags, artifact link, notes) are wrapped on the property page; estimations, Valuo,
+  (`settlePatches` / `settleRereads` / `browseReads` take `actAs` and answer nothing for it). Only the header's pipeline / collection / dismiss controls, the
+  "Moje" line under the header (`MineStrip`) and `CurationBlock` (tags, artifact link, notes) are
+  wrapped on the property page; estimations, Valuo,
   the maps, sold comps, merges, Browse, Collections, Notifications, watchdog, presets and the
   extension never act, and sharing calls (`/pipeline/shares`, `/collections/{id}/shares`) never
   carry the header. A read board renders without drag, stage menu, trash, stage editor, tag chips
@@ -1762,6 +1763,19 @@ renumber.** Navigate by area:
     property id follows its survivor through `GET /properties/{id}/origins`. Gone: the per-portal
     chips, the "current active listing" jump, the history block's URL list, the price-mismatch
     note and the repr-resolving `?property=` redirect.
+    **The desktop page is a header plus tabs (operator ruling 2026-10-22, design A).** The header
+    is the canonical advert's photo mosaic beside the identity column and the map
+    (`ListingOverview`'s `PropertyIdentity` + `LocationMap`, the pieces Estimation Detail renders
+    too), then one "Moje" line (tags, the latest note, the artifact link — `MineStrip`, read as the
+    acting identity). Under it, `components/listing-detail/PropertyTabs`: Přehled · Fotky · Cena a
+    hodnota · Trh v okolí · Inzeráty · Moje · Audit. Přehled (`PropertyOverview`, its own chunk)
+    answers each question in one card — description, brokers with their contact, the ask against
+    our estimate's band on the valuation ruler, the price moves, the adverts, the sold median —
+    each from the SAME query and rule as the tab it opens, so the two never disagree. The open tab
+    is `?tab=` (switched with `replace`, so Back still leaves the page); an address without it opens
+    the tab its other parts point at (`?run=` / `#estimations` / `#feedback` → Cena a hodnota;
+    `?letters=` or a non-canonical `?advert=` → Inzeráty), else Přehled. A tab mounts on first open
+    and stays mounted, hidden, so a draft survives a look elsewhere.
     **What changed: the NEW DEDUP cutoff (2026-08).** The whole *automatic decision layer* that
     used to order merges was removed wholesale — a deliberate teardown, not a regression. It had
     grown into a many-rung machine (street+disposition and geo-proximity candidate paths, a

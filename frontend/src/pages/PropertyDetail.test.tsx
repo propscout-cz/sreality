@@ -308,9 +308,12 @@ describe('<PropertyDetail> one property, one voice', () => {
     await waitFor(() => expect(queries.fetchImagesByListing).toHaveBeenCalledWith(105054, expect.anything()));
     await waitFor(() =>
       expect(queries.fetchSnapshotsForListings).toHaveBeenCalledWith([105053, 105054], expect.anything()));
-    // The price moves are the property's, as Browse filters on them.
-    expect(screen.getByText('Price changes').nextSibling).toHaveTextContent('2');
-    expect(screen.getByText('Days on market').nextSibling).toHaveTextContent('62');
+    // The price moves are the property's, as Browse filters on them — on the overview's card.
+    // The overview is its own chunk: the first test to open it waits for the import.
+    const stat = async (label: string) =>
+      (await screen.findByText(label, {}, { timeout: 5000 })).parentElement?.nextSibling;
+    expect(await stat('Změny ceny')).toHaveTextContent('2');
+    expect(await stat('Na trhu')).toHaveTextContent('62 dní');
     // The curation controls read, so the header offers them, never a retry.
     expect(await screen.findByRole('button', { name: /Přidat do pipeline/ })).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: 'Uložit do kolekce' })).toBeInTheDocument();
@@ -318,7 +321,7 @@ describe('<PropertyDetail> one property, one voice', () => {
 
   it('hands the Valuo section the link of every advert, a delisted one too (its own-ad tag needs them)', async () => {
     vi.mocked(queries.fetchPropertySources).mockResolvedValue([SOURCES[0], { ...SOURCES[1], is_active: false }]);
-    renderAt('/property/774');
+    renderAt('/property/774?tab=hodnota');
 
     const ads = await screen.findByTestId('valuo-ads');
     expect(JSON.parse(ads.textContent ?? '[]')).toEqual(SOURCES.map((s) => s.source_url));
@@ -332,7 +335,7 @@ describe('<PropertyDetail> one property, one voice', () => {
   });
 
   it('lists the adverts once, in the merged-adverts section, with no duplicate lists', async () => {
-    renderAt('/property/774');
+    renderAt('/property/774?tab=inzeraty');
 
     expect(await screen.findByText('Sloučené inzeráty')).toBeInTheDocument();
     expect(within(screen.getByText('Sreality').closest('li') as HTMLElement).getByText('hlavní inzerát'))
@@ -379,7 +382,7 @@ describe('<PropertyDetail> one property, one voice', () => {
     vi.mocked(queries.fetchPropertySources).mockResolvedValue([SOURCES[0], { ...SOURCES[1], price_czk: 4_800_000 }]);
     const deal = (id: number) => [id, { id, category_type: 'prodej', disposition: '3+1' } as ListingPublic] as const;
     vi.mocked(queries.fetchListingsForListingIds).mockResolvedValue(new Map([deal(105053), deal(105054)]));
-    renderAt('/property/774');
+    renderAt('/property/774?tab=inzeraty');
     expect((await screen.findAllByText(/3\+1/)).length).toBeGreaterThan(0);
     expect(screen.queryByText(/Nejnižší aktivní cena/)).toBeNull();
   });
@@ -395,7 +398,7 @@ describe('<PropertyDetail> one property, one voice', () => {
       snap(3, 105054, '2025-12-01T08:00:00Z', 5_200_000),
       snap(4, 105054, '2026-01-01T08:00:00Z', 5_000_000),
     ]);
-    renderAt('/property/774');
+    renderAt('/property/774?tab=hodnota');
     const moves = await screen.findByRole('list', { name: 'Price moves' });
     expect(within(moves).getAllByRole('listitem').map((li) => li.firstChild?.textContent))
       .toEqual(['Sreality', 'iDNES Reality']);
@@ -417,6 +420,58 @@ describe('<PropertyDetail> one property, one voice', () => {
 
     await waitFor(() => expect(where()).toBe('/property/774?advert=105053'));
     expect(api.fetchPropertyOrigins).toHaveBeenCalledWith(500);
+  });
+});
+
+/* Design A (operator 2026-10-22): the sections sit in tabs under the header; the
+   open one is ?tab=, and the addresses handed out before the tabs still land on
+   their section. */
+describe('<PropertyDetail> tabs', () => {
+  const selected = () => screen.getByRole('tab', { selected: true });
+
+  it('opens the overview: the description above "is the price right", the brokers beside it', async () => {
+    vi.mocked(queries.fetchProperty).mockResolvedValue({ ...PROPERTY, description: 'Světlý byt po rekonstrukci.' });
+    renderAt('/property/774');
+
+    await screen.findByRole('heading', { level: 1 });
+    expect(selected()).toHaveTextContent('Přehled');
+    const popis = await screen.findByText('Popis');
+    const value = screen.getByText('Je cena v pořádku?');
+    expect(popis.compareDocumentPosition(value) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Every other section waits for its tab.
+    expect(screen.queryByText('Sloučené inzeráty')).toBeNull();
+    expect(screen.queryByTestId('valuo-ads')).toBeNull();
+  });
+
+  it('switches tab in place, into the address, and keeps a visited tab mounted', async () => {
+    renderAt('/property/774');
+    await screen.findByRole('heading', { level: 1 });
+
+    fireEvent.click(screen.getByRole('tab', { name: /Inzeráty/ }));
+    expect(await screen.findByText('Sloučené inzeráty')).toBeInTheDocument();
+    expect(where()).toBe('/property/774?tab=inzeraty');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Přehled' }));
+    expect(where()).toBe('/property/774?tab=prehled');
+    // Hidden, not unmounted: an open advert row or a draft survives the look away.
+    expect(screen.getByText('Sloučené inzeráty')).not.toBeVisible();
+  });
+
+  it('lands an estimation-run link on Cena a hodnota', async () => {
+    renderAt('/property/774?run=5#estimations');
+    await screen.findByRole('heading', { level: 1 });
+    expect(selected()).toHaveTextContent('Cena a hodnota');
+  });
+
+  it('lands the canonical advert’s own address on the overview, another advert’s on Inzeráty', async () => {
+    renderAt('/property/774?advert=105054');
+    await screen.findByRole('heading', { level: 1 });
+    expect(selected()).toHaveTextContent('Přehled');
+  });
+
+  it('counts the photos and the adverts on their tabs', async () => {
+    renderAt('/property/774');
+    expect(await screen.findByRole('tab', { name: 'Inzeráty 2' })).toBeInTheDocument();
   });
 });
 
