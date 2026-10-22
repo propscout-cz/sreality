@@ -504,10 +504,11 @@ measured `ok` starts `ok_since` at the first OK, and the incident resolves
 due slack, never under 30 min (`max(2 × due_after_s(cadence), 30 min)`: a lane measures a check
 up to the slack early, so two measured intervals can sum to under two cadences): the newest OK's
 `run_at` must be at least the hold after the first OK; one lone OK never recovers. Two closes are
-silent: an incident whose key left the registry (`retired`), and a cell unmeasured for max(7 d,
-2 × cadence) — its `last_seen_at` older than that and its cell in no measured row inside it
-written since the key's `declared_at` — which closes silently (`unmeasured 7d`; two weeks for the
-weekly URL probe). Not measured never opens, recovers or ages an incident.
+silent: `retired`, an incident whose key left the registry or whose subject the key's newest in-budget
+measured result no longer lists (a renamed or dropped cell, since 2026-10-22), and `unmeasured 7d`, a
+cell the newest result does not judge (listed Not measured, or its key Not measured) whose last non-OK
+(a listed cell in its hold: its first OK) is older than max(7 d, 2 × cadence); two weeks for the weekly
+URL probe. Not measured never opens, recovers or ages an incident.
 
 **What it records.** Since W1 of the notifications push program (2026-10-21, ruling R2b;
 `docs/design/notifications-push/PROGRAM.md` § 3.8) the ladder writes no `notification_dispatches`
@@ -589,7 +590,7 @@ measures them in that pass (all four are due); the nine retired GitHub keys (`pp
 included); both sets show on the page in between. `location_town_coverage` keeps its key but changes host,
 so its `declared_at` restarts and it reads Not measured until the worker measures it; its open implicit
 incident `cell:location_town_coverage:location_town_coverage` matches none of the new `<portal>/town`
-subjects, so it is never reminded and closes silently (`unmeasured 7d`) within 7 days. A canary run checked
+subjects, so it is never reminded; since 2026-10-22 it closes as `retired` on the first pass. A canary run checked
 out at the old SHA that projects after the worker's first pass may move the row back to GitHub, and it
 stays so until the worker's next projection (one per process). Expected at ship: `data_quality` opens a
 Problem on realitymix's komerční/pronájem basis floor (11.4 % of 4,140 priced ads NULLed, lower bound 10.5
