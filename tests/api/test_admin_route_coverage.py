@@ -229,6 +229,10 @@ _RLS_ONLY_ALLOWLIST: dict[str, str] = {
     "DELETE /properties/{property_id}/attachments/{attachment_id}": (
         "DELETE by id — migration 660 USING clause"
     ),
+    "GET /properties/{property_id}/download.zip": (
+        "RLS-only read of the acting identity's own photos (migration 660 on "
+        "`property_attachments`, `acting_account_ids()`); the ad's data on the service role"
+    ),
     "GET /tags": "RLS-only read (migration 290 policy on `tags`)",
     "PATCH /tags/{tag_id}": "UPDATE by id — migration 290 USING clause",
     "DELETE /tags/{tag_id}": "DELETE by id — migration 290 USING clause",

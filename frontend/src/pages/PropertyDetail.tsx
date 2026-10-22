@@ -294,8 +294,8 @@ export default function PropertyDetail() {
         {/* The page-level verbs, grouped top-right, in the same order as the
             controls on a Browse card: track this deal in the pipeline, save the
             property to a collection (monitoring rides on the collection), dismiss
-            it — all property-grain (rule #18) — then download the ad (a PDF + the
-            gallery's photos) and run a new estimation. */}
+            it — all property-grain (rule #18) — then download the ad (a PDF, the
+            gallery's photos and my own) and run a new estimation. */}
         <div className="flex flex-wrap items-center justify-end gap-2">
           {activeBoard?.mode === 'edit' && (
             <EditAsOwnerToggle share={activeBoard} on={actingShare != null} />
@@ -306,8 +306,9 @@ export default function PropertyDetail() {
             <PipelineToggle property_id={propertyId} />
             <CollectionSaveToggle property_id={propertyId} />
             <DismissButton property_id={propertyId} variant="header" />
+            {/* Its zip packs the acting identity's own photos. */}
+            <DownloadPropertyButton propertyId={propertyId} images={images} />
           </ActingAs>
-          <DownloadPropertyButton propertyId={propertyId} images={images} />
           <NewEstimationButton prefill={newEstimationPrefill} />
         </div>
       </div>

@@ -576,11 +576,11 @@ export const fetchBuildingAttachmentBlob = (
 ): Promise<Blob> =>
   requestBlob(`/buildings/${buildingId}/attachments/${attachmentId}/raw`);
 
-/* The property page's download: a PDF of the ad plus the canonical ad's stored
- * photos, zipped by the API — R2 sends no CORS header, so the SPA cannot read the
- * bytes behind /images/{key} and zip them itself. */
-export const fetchPropertyDownload = (propertyId: number): Promise<Blob> =>
-  requestBlob(`/properties/${propertyId}/download.zip`);
+/* The property page's download: a PDF of the ad, the canonical ad's stored photos and the
+ * acting identity's own photos (moje-fotky/), zipped by the API — R2 sends no CORS header,
+ * so the SPA cannot read the bytes behind /images/{key} and zip them itself. */
+export const fetchPropertyDownload = (propertyId: number, { actAs }: Acting = {}): Promise<Blob> =>
+  requestBlob(`/properties/${propertyId}/download.zip`, { actAs });
 
 /* ----- admin / Settings page --------------------------------------------
  *
