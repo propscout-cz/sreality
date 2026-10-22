@@ -1237,13 +1237,14 @@ condition, told once when it first reads Problem and then once a day.
 | cell | measures | Watch | Problem |
 | --- | --- | --- | --- |
 | `<portal>/residual/<cm>-<ct>` | at the unit's newest end-reached walk, R = (H − P − D) / D: D the Σ declared of its entries, H its active ads now, P the active ads with a pending unrefuted gone verdict (in dwell) | R beyond ±2 % (`coverage_residual_warn`) | R beyond ±5 % (`coverage_residual_fail`) |
-| `<portal>/unnominated` | active ads whose `last_seen_at` is before the start of their unit's newest end-reached walk (an ad with no unit: the portal's newest walk in which every entry reached the end), with no queue row and no completion newer than the ad's last sighting, less that walk's deferrals; a portal with no end-reached walk in 30 d reads Not measured | 25 or more (`coverage_unnominated_warn`) | 100 or more (`coverage_unnominated_fail`) |
+| `<portal>/unnominated` | active ads whose `last_seen_at` is before the start of their unit's newest end-reached walk (an ad with no unit: the portal's newest walk in which every entry reached the end), that the walks' own predicate (`db.nominable_predicate`: no queue row, no completion within the 24 h recheck throttle) judged at that walk's start still calls nominable, less that walk's deferrals; a portal with no end-reached walk in 30 d reads Not measured | 25 or more (`coverage_unnominated_warn`) | 100 or more (`coverage_unnominated_fail`) |
 
 Residual needs D ≥ 500 (`coverage_residual_min_declared`), and an entry whose `total_is_count` is
-true or absent is Not measured, as in scraping's missing arm. Unnominated counts from the ad's last
-sighting, not from that walk's start: an ad checked inside the 24 h recheck throttle before the walk
-is in flight, not stuck (counted from the walk's start, 2026-10-19 read about 3,600 ads already
-being rechecked: Problem on five portals). Each cell's facts carry `trend` and `worse_7d`, the shared
+true or absent is Not measured, as in scraping's missing arm. Unnominated is the walks' own predicate
+(`db.NOMINABLE_PREDICATE`, `presence_candidates` and `web`) judged at that walk's start, so an ad the walk's
+throttle skipped is not stuck: until 2026-10-22 the check excused only checks after the last sighting and
+read sreality 52, bazos 43 and idnes 63 ads the walks had rightly skipped (all 0 under one predicate). Each
+cell's facts carry `trend` and `worse_7d`, the shared
 gauge trend (the quality gauges section, below); until Health dashboard sprint wave 6 they were `trend_30d`
 (this check's own value 7 and 30 days ago) and `worse_than_7d` (the value grew), and the series restarted at
 that deploy.

@@ -43,7 +43,6 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from scraper import db, portal_runner
-from scraper.delist_policy import RECHECK_THROTTLE
 from scraper.portal import PortalConfig, deadline_reached
 from scraper.portal_base import ListingGoneError
 from scraper.portal_identity import WEB, Resolved, canonical_url, resolve_url
@@ -57,18 +56,12 @@ SOURCE = WEB
 
 _EMPTY_COUNTS = {"found_new": 0, "enqueued": 0}
 
-_PRESENCE_SQL = """
+_PRESENCE_SQL = f"""
     SELECT l.source_id_native, l.source_url, l.price_czk
     FROM listings l
     WHERE l.is_active = true
       AND l.source = %(source)s
-      AND NOT EXISTS (
-            SELECT 1 FROM listing_detail_queue q
-            WHERE q.source = l.source AND q.native_id = l.source_id_native)
-      AND NOT EXISTS (
-            SELECT 1 FROM detail_queue_completions c
-            WHERE c.source = l.source AND c.native_id = l.source_id_native
-              AND c.completed_at > now() - %(throttle)s::interval)
+      AND {db.NOMINABLE_PREDICATE}
     ORDER BY l.last_seen_at ASC NULLS FIRST, l.id
 """
 _ACTIVE_SQL = "SELECT count(*) FROM listings WHERE is_active = true AND source = %(source)s"
@@ -137,7 +130,7 @@ class WebPortal(portal_runner.PortalDefaults):
     ) -> tuple[list[tuple[str, str | None, int | None]], int, dict[str, Any]]:
         """Every active `web` ad due a page check, NULL categories included (the agenda
         is the whole portal, so the scope is `category_main=None`)."""
-        params = {"source": SOURCE, "throttle": RECHECK_THROTTLE}
+        params = {"source": SOURCE}
         with conn.cursor() as cur:
             cur.execute(_ACTIVE_SQL, params)
             active_rows = int(cur.fetchone()[0])

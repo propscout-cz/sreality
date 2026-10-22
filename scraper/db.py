@@ -893,6 +893,29 @@ def _touch_chunk_by_id(cur: Any, chunk: list[int]) -> int:
     return cur.rowcount or 0
 
 
+# Rule #3's one definition of an ad awaiting nomination, over a relation aliased `l` (source,
+# source_id_native): the drain does not hold it (a queue row: waiting, claimed or given up) and
+# finished nothing on it within delist_policy.RECHECK_THROTTLE before `at`. Without the two, a page
+# that errors keeps its old last_seen_at, sorts first forever and takes every verify slot. The walks
+# nominate by it at now(); the Health check's `unnominated` counts by it at the walk's start.
+_NOMINABLE_TEMPLATE = """NOT EXISTS (
+        SELECT 1 FROM listing_detail_queue q
+        WHERE q.source = l.source AND q.native_id = l.source_id_native)
+  AND NOT EXISTS (
+        SELECT 1 FROM detail_queue_completions c
+        WHERE c.source = l.source AND c.native_id = l.source_id_native
+          AND c.completed_at > {at} - interval '{hours} hours')"""
+
+
+def nominable_predicate(at: str = "now()") -> str:
+    """Rule #3's "awaiting nomination" judged at the SQL instant `at` (RECHECK_THROTTLE in hours)."""
+    hours = int(delist_policy.RECHECK_THROTTLE.total_seconds() // 3600)
+    return _NOMINABLE_TEMPLATE.format(at=at, hours=hours)
+
+
+NOMINABLE_PREDICATE = nominable_predicate()
+
+
 def presence_candidates(
     conn: psycopg.Connection,
     source: str,
@@ -950,7 +973,6 @@ def presence_candidates(
     scope_params.append(category_type)
     if scope_subtype:
         scope_params.append(subtype)
-    recheck_h = int(delist_policy.RECHECK_THROTTLE.total_seconds() // 3600)
     with conn.cursor() as cur:
         cur.execute(
             f"""
@@ -963,12 +985,6 @@ def presence_candidates(
             tuple(scope_params),
         )
         active_rows = int(cur.fetchone()[0])
-        # Two exclusions keep the oldest-unseen order from jamming. A row that
-        # already has a queue row (waiting, claimed, or given up after five
-        # failures) is in the drain's hands, and a row the drain finished
-        # within delist_policy.RECHECK_THROTTLE was just checked; without these,
-        # a page that errors keeps its old last_seen_at, sorts first forever and
-        # eats every throttle slot while the rows behind it are never nominated.
         cur.execute(
             f"""
             SELECT {key_col}::text, source_url, price_czk
@@ -977,13 +993,7 @@ def presence_candidates(
               AND l.source = %s{cm_clause}
               AND l.category_type = %s{sub_clause}
               AND l.{key_col} <> ALL(%s)
-              AND NOT EXISTS (
-                    SELECT 1 FROM listing_detail_queue q
-                    WHERE q.source = l.source AND q.native_id = l.{key_col}::text)
-              AND NOT EXISTS (
-                    SELECT 1 FROM detail_queue_completions c
-                    WHERE c.source = l.source AND c.native_id = l.{key_col}::text
-                      AND c.completed_at > now() - interval '{recheck_h} hours')
+              AND {NOMINABLE_PREDICATE}
             ORDER BY l.last_seen_at ASC NULLS FIRST, l.id
             """,
             tuple(scope_params) + (ids,),

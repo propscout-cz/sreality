@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 from location_data.claims_common import SOURCES
-from scraper.db import QUEUE_PRIORITY_NEW
+from scraper.db import QUEUE_PRIORITY_NEW, nominable_predicate
 from scraper.portal_runner import DECLARED_TOTAL_KEY
 from scripts.checks import common
 from scripts.checks import scraping as sc
@@ -359,6 +359,8 @@ def test_ads_in_categories_no_walk_covers_are_counted_by_the_portals_walk() -> N
     assert dict(zip(params["portal_sources"], params["portal_starts"])) == {
         s: _ago(hours=5.0) if s == "realitymix" else None for s in SOURCES}
     assert "coalesce(u.start_at, p.start_at)" in sc._UNNOMINATED_SQL
+    # One definition of nominable: the walks nominate by it at now(), this counts by it at the start.
+    assert nominable_predicate("l.walk_start") in sc._UNNOMINATED_SQL
 
 
 def test_a_portal_no_walk_reached_the_end_of_has_no_unnominated_verdict() -> None:

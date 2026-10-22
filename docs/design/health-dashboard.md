@@ -218,7 +218,7 @@ Precision:
 
 **Measures.** Do we hold what each portal shows? A standing condition, so a gauge.
 - Residual, per (portal, declared unit) at the latest end-reached walk: declared D (non-overlapping units), active now H, in dwell P (active with a pending unrefuted gone verdict); R = (H − P − D) / D. Entries with total_is_count read unknown.
-- Cannot be nominated, per portal: active ads unseen since before the start of their unit's (or, with no unit, the portal's) newest end-reached walk, with no queue row and no completion since, minus that walk's deferrals. This outcome definition counts the NULL-category ads without naming a portal.
+- Cannot be nominated, per portal: active ads unseen since before the start of their unit's (or, with no unit, the portal's) newest end-reached walk that the walks' own predicate (`db.nominable_predicate`: no queue row, no completion within the 24 h recheck throttle), judged at that walk's start, still calls nominable, minus that walk's deferrals. This outcome definition counts the NULL-category ads without naming a portal.
 Each cell carries a rolling 30-day trend and a worse-than-7-days-ago flag. As built (Health dashboard sprint wave 6): through the shared `scripts/checks/common.trend`, facts `trend` (up to 30 Europe/Prague days of [day, value, status]) and `worse_7d` (today's status worse than the point a week back); wave 4's `trend_30d` / `worse_than_7d` are renamed and the series starts at the deploy.
 
 **Data.** scrape_runs.by_category (declared total, collected, walk_reached_end, verify_deferred, total_is_count); listings (is_active, last_seen_at index; ~2.4 s count); detail_queue_completions gone index; listing_detail_queue. About 3 s, hourly.

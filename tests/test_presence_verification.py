@@ -84,10 +84,8 @@ def test_native_nomination_excludes_the_seen_set_and_returns_oldest_first():
     assert count_params == ("remax", "byt", "prodej")
     assert "l.source_id_native <> ALL(%s)" in select_sql
     assert "ORDER BY l.last_seen_at ASC NULLS FIRST" in select_sql
-    # Rows the drain already holds, or checked within a day, are not nominated
-    # again -- otherwise an erroring page sorts first forever and jams the slots.
-    assert "NOT EXISTS ( SELECT 1 FROM listing_detail_queue q" in select_sql
-    assert "detail_queue_completions c" in select_sql and "interval '24 hours'" in select_sql
+    # Rows the drain holds or checked within a day are not nominated again: rule 3's one predicate.
+    assert " ".join(db.NOMINABLE_PREDICATE.split()) in select_sql
     assert select_params[:3] == ("remax", "byt", "prodej")
     assert sorted(select_params[3]) == ["s1", "s2"]
 
@@ -133,15 +131,14 @@ def test_the_recheck_throttle_is_delist_policys_one_spelling(
         monkeypatch: pytest.MonkeyPatch) -> None:
     """The 24 h exclusion is RECHECK_THROTTLE, rendered byte-identical; a change is a decision."""
     assert delist_policy.RECHECK_THROTTLE.total_seconds() == 24 * 3600
-    # db renders it in whole hours (`interval '{recheck_h} hours'`): off the hour it would truncate.
+    # db renders it in whole hours (`interval '{hours} hours'`): off the hour it would truncate.
     assert delist_policy.RECHECK_THROTTLE % timedelta(hours=1) == timedelta(0)
     conn = _Conn(rows=[], active_rows=0)
     db.presence_candidates(conn, "remax", "byt", "prodej", {"s1"})
     assert "AND c.completed_at > now() - interval '24 hours')" in conn.executed[1][0]
     monkeypatch.setattr(delist_policy, "RECHECK_THROTTLE", delist_policy.RECHECK_THROTTLE * 1.5)
-    conn = _Conn(rows=[], active_rows=0)
-    db.presence_candidates(conn, "remax", "byt", "prodej", {"s1"})
-    assert "AND c.completed_at > now() - interval '36 hours')" in conn.executed[1][0]
+    assert "AND c.completed_at > l.walk_start - interval '36 hours')" in " ".join(
+        db.nominable_predicate("l.walk_start").split())
 
 
 # --- the bounded enqueue ---------------------------------------------------
