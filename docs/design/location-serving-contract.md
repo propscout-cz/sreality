@@ -100,8 +100,8 @@ over the answer table's own columns is one definition, computed where it is read
 `listing_feed_public` also publish `granularity_rank` (the INT from `location_granularity_rank` —
 the SPA compares numbers, never enum text) and `uncertainty_radius_m`. In point mode the Browse map
 draws a pin **at building level or better** (rank ≥ 90) with a black outer contour — the pin is the
-building — and every other pin, unresolved included, without it; the fill says active (green, white
-contour) or inactive (white transparent, green contour). A legend under the count names the faces with
+building — and every other pin, unresolved included, without it; the fill says active (magenta, white
+contour) or inactive (white transparent, magenta contour). A legend under the count names the faces with
 their counts. The true-metre circle of `uncertainty_radius_m` is drawn for **one pin
 only: the one whose popup is open**, and the popup prints the rung and the true radius in words
 ("Přibližná poloha: obec, ±1 km"). W3-3 first drew that circle under every pin below building
