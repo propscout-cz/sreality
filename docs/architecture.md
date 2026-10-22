@@ -1971,7 +1971,8 @@ renumber.** Navigate by area:
     flats for rent, houses and commercial for sale, the rest (E972, E974), oldest first within
     each, a group going by its best member, active and inactive groups together (the operator's
     ruling of 2026-10-21 retired E973's active-first level) — 200 adverts on top of its feeds
-    (E971: the worker's memory holds a pass to ~300 adverts; a group that does not fit is
+    (E971: the worker's memory holds a pass to ~300 adverts, so a build carries them inside its
+    claim, first, and the build takes what they leave, never under a fifth, E964; a group that does not fit is
     skipped for the next ones, the first taken whole whatever its size, E973), never more than the
     claim cap a death halves (E948), on its first attempt, each group at most once in 6 h
     (stamped once the pass carrying it commits, is refused, hits its deadline or raises; a

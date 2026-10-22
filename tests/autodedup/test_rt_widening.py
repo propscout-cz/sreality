@@ -306,6 +306,28 @@ def test_a_build_pass_re_claims_what_the_reconcile_handed_it(
     assert world.rt_fp[(GEN, target)]["updated_at"] == world.now, "refreshed in the build"
 
 
+@pytest.mark.parametrize(("reclaimed", "entered"), [(2, 2), (5, 1)])
+def test_a_build_pass_carries_its_re_claims_inside_its_claim(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reclaimed: int, entered: int) -> None:
+    """E964 x E971: the build feed takes the whole limit, so re-claims on top of it held limit +
+    200 adverts, past the ~300 a pass's memory holds. A build's re-claims now go first INSIDE
+    the limit and the build takes what they leave, never under a fifth of it."""
+    conn = _built_town(tmp_path)
+    _seed(conn, tmp_path, f"obec:{TOWN} obec:{OTHER_TOWN}")
+    assert conn.settings[bootstrap_key(GEN)] is True and len(NEW_IDS) > 4
+    conn.settings[pass_rate_key(GEN)] = 4.5 / (0.75 * incremental_lane.PASS_DEADLINE_S)
+    taken = list(OLD_IDS)[:reclaimed]
+    monkeypatch.setattr(incremental_lane, "_stale_claims",
+                        lambda *a, **k: (taken, len(taken), len(taken), {}))
+
+    out = run_incremental(lambda: conn)
+
+    assert not out["aborted"] and out["bootstrap"]["active"] is True
+    assert out["claim_bound"]["limit"] == 4 and out["claim_bound"]["enter"] == entered
+    assert out["feeds"].get("stale") == reclaimed and out["feeds"].get("entered") == entered
+    assert out["feeds"]["entered"] + out["feeds"]["stale"] <= max(4, 1 + reclaimed)
+
+
 # ------------------------------------------------------------------ the calibration and the ledger
 
 

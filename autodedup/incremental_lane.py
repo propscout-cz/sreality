@@ -1419,8 +1419,15 @@ class SqlWork:
         share = max(1, limit // 5)
         # During the bootstrap phase the entrant feed is not one of seven equals: it is the
         # build. Every other feed keeps its share, so an arrival, a delisting or a photograph
-        # landing mid-build is still decided in the pass that sees it.
-        enter_share = limit if self.bootstrap else share
+        # landing mid-build is still decided in the pass that sees it. A build's first attempt
+        # carries its re-claims INSIDE that limit (E964 x E971): on top of it, a build's limit
+        # + 200 re-claims outgrows the ~300 adverts the worker's memory holds. They go first,
+        # so a widening's days of build never stall the merges waiting on them, and the build
+        # takes what they leave, never less than a fifth: a build pass then holds no more than
+        # a build or a steady pass did before E964.
+        reserved = len(self.stale_claims) if self.bootstrap and self.attempt == 0 else 0
+        enter_share = max(share, limit - reserved) if self.bootstrap else share
+        self.claim_bound["enter"] = enter_share
         scope = self.scope.params()
         items: list[WorkItem] = []
         self._pending = {}
@@ -2905,7 +2912,8 @@ def _measure_rate(claimed: int, elapsed_s: float, previous: float,
     # A claim the clock cut is a measurement at any size: without that, a rate halved to a
     # one-listing claim would never be measured again. The re-claims ride on top of the limit
     # (E960), so they fill none of it (E971): 200 of them beside the feeds' ~30 would read as
-    # a filled claim at a limit of ~230 and double the rate the feeds' shares are cut from.
+    # a filled claim at a limit of ~230 and double the rate the feeds' shares are cut from. A
+    # build's sit inside its limit (E964) and still fill none: such a pass blends, never doubles.
     limit = int(bound.get("limit") or 0)
     fed = claimed - int(bound.get("stale") or 0)
     saturated = bound.get("bound_by") == "time" and limit > 0 and fed >= limit
@@ -2949,7 +2957,7 @@ def _stale_claims(conn: Any, generation: str, control: Mapping[str, Any],
     follows the pass (a seed of another version, a closed apply scope) or while the reject
     ledger holds no row under this store's key (after a deploy that moved it, every neighbour's
     reject would be re-scored). A build no longer stops it (E964): its reconcile merges the
-    blocks it has read whole.
+    blocks it has read whole, and its claim holds the re-claims inside its limit (`SqlWork.claim`).
     The count is bounded like the rate (`rt_redecide_budget`): written in flight ahead of the
     pass, a count a pass finds still in flight means the last pass that re-claimed died, so this
     one offers none and halves the budget. A pass takes at most the claim cap of it (E948): the
