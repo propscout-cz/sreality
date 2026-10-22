@@ -10,6 +10,7 @@ import datetime
 import io
 import logging
 import os
+import posixpath
 import time
 from typing import Any, Mapping
 from urllib.parse import quote, urljoin
@@ -108,15 +109,17 @@ def image_key(listing_id: int, sequence: int | None) -> str:
     return f"{listing_id}/{seq:04d}.jpg"
 
 
-# The phone-size copies `GET /images/{key}?w=` makes on first request (#1765), kept here
-# because the API and the re-master lane (which must delete a copy when it overwrites the
-# photo it was made from) both need the key, and the scraper runtime carries no fastapi.
+# The phone-size copies `GET /images/{key}?w=` (#1765) and an attachment's `?w=` make on
+# first request, kept here because the API and the re-master lane (which must delete a copy
+# when it overwrites the photo it was made from) both need the key, and the scraper runtime
+# carries no fastapi.
 COPY_WIDTHS: tuple[int, ...] = (1080,)
 
 
 def copy_key(key: str, width: int) -> str:
-    """`thumb/w<width>/<id>/<seq>.webp` for a validated `<id>/<seq>.jpg` photo key."""
-    return f"thumb/w{width}/{key.removesuffix('.jpg')}.webp"
+    """`thumb/w<width>/<key without its extension>.webp`: `<id>/<seq>` for a validated listing
+    photo, `custom-attachments/...` for an attachment (served only through its JWT proxy)."""
+    return f"thumb/w{width}/{posixpath.splitext(key)[0]}.webp"
 
 
 # sreality's v1 rebuild serves bare image URLs; the CDN 401s a bare URL and

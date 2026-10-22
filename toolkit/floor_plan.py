@@ -107,10 +107,10 @@ def read_floor_plan(
     (attachment_id, model) in `building_attachment_analyses`; a model
     bump produces a fresh row automatically.
     """
-    from api.attachments import fetch_attachment
+    from api.attachments import fetch_building_attachment
     from toolkit import _now_iso
 
-    attachment = fetch_attachment(conn, attachment_id)
+    attachment = fetch_building_attachment(conn, attachment_id)
     if attachment is None:
         raise FloorPlanReadError(f"attachment_id={attachment_id} not found")
 
@@ -159,9 +159,9 @@ def _produce(
     model: str,
     estimation_run_id: int | None,
 ) -> dict[str, Any]:
-    from api.attachments import download_attachment_bytes
+    from api.attachments import building_attachment_bytes
 
-    data, mime, filename = download_attachment_bytes(conn, attachment["id"])
+    data, mime, filename = building_attachment_bytes(conn, attachment["id"])
     encoded = base64.standard_b64encode(data).decode("ascii")
 
     content: list[dict[str, Any]] = [

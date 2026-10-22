@@ -15,13 +15,12 @@ from datetime import timedelta
 from typing import Any, AsyncIterator, Literal
 
 import psycopg
-from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from api import curation
 from api import ingest as ingest_module
-from api import note_attachments
 from api import dismissals as dismissals_module
 from api import pipeline as pipeline_module
 from api import shares as shares_module
@@ -1135,7 +1134,7 @@ def post_building_attachment(
 ) -> dict[str, Any]:
     row = assert_editable_for_attachments(conn, building_id)
     uploaded_by = source if source in ("ui", "api", "clickup") else None
-    return attachments_module.insert_attachment(
+    return attachments_module.insert_building_attachment(
         conn,
         building_run_id=row["id"],
         file=file,
@@ -1152,7 +1151,7 @@ def list_building_attachments(
     # 404 if the parent doesn't exist; otherwise return rows (may be empty).
     if get_building_run(conn, building_id) is None:
         raise HTTPException(status_code=404, detail="building run not found")
-    return {"data": attachments_module.list_attachments(conn, building_id)}
+    return {"data": attachments_module.list_building_attachments(conn, building_id)}
 
 
 @app.delete("/buildings/{building_id}/attachments/{attachment_id}")
@@ -1163,7 +1162,7 @@ def delete_building_attachment(
     _: None = Depends(deps.require_token),
 ) -> dict[str, Any]:
     assert_editable_for_attachments(conn, building_id)
-    attachments_module.delete_attachment(conn, building_id, attachment_id)
+    attachments_module.delete_building_attachment(conn, building_id, attachment_id)
     return {"ok": True}
 
 
@@ -1174,28 +1173,11 @@ def get_building_attachment_raw(
     conn: Any = Depends(deps.get_db_conn),
     _: None = Depends(deps.require_token),
 ) -> Response:
-    """Bearer-gated thumbnail proxy. The frontend uses this to render
-    attachment previews without exposing R2 credentials.
-
-    Cached hard because an attachment is immutable: its bucket key carries a per-upload
-    uuid, so editing one means a new row at a new key and a delete removes the row
-    outright — this id can never answer with different bytes. Without a Cache-Control
-    every `AttachmentCard` mount re-pulled the whole file (up to 25 MB) through Railway,
-    which pulls it from R2 first, so the operator paid a double hop per preview. `private`,
-    never `public`: these are operator-only uploads behind a bearer token and must not be
-    stored by a shared cache.
-    """
-    row = attachments_module.fetch_attachment(conn, attachment_id)
-    if row is None or row["building_run_id"] != building_id:
-        raise HTTPException(status_code=404, detail="attachment not found")
-    data, mime, _filename = attachments_module.download_attachment_bytes(
-        conn, attachment_id,
-    )
-    return Response(
-        content=data,
-        media_type=mime,
-        headers={"Cache-Control": "private, max-age=86400, immutable"},
-    )
+    """The preview proxy (the bucket is private): cached hard, as every attachment's bytes are,
+    because a row never changes them (without it each `AttachmentCard` mount re-pulled up to 25 MB
+    over two hops)."""
+    return attachments_module.file_response(*attachments_module.building_attachment_bytes(
+        conn, attachment_id, building_run_id=building_id))
 
 
 @app.post("/estimate_yield")
@@ -1519,47 +1501,47 @@ def delete_property_artifact_link(
     return curation.delete_artifact_link(conn, property_id)
 
 
-@app.post("/properties/{property_id}/notes/{note_id}/attachments")
-def post_note_attachment(
+@app.post("/properties/{property_id}/attachments")
+def post_property_attachment(
     property_id: int,
-    note_id: int,
     file: UploadFile = File(...),
+    note_id: int | None = Form(None),
+    conn: Any = Depends(tenant_pool.tenant_conn),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
+) -> dict[str, Any]:
+    return attachments_module.add_attachment(
+        conn, property_id, file, account_id=str(account_id), note_id=note_id)
+
+
+@app.get("/properties/{property_id}/attachments")
+def get_property_attachments(
+    property_id: int,
+    note_id: int | None = None,
     conn: Any = Depends(tenant_pool.tenant_conn),
 ) -> dict[str, Any]:
-    return note_attachments.add_attachment(conn, property_id, note_id, file)
+    return attachments_module.list_attachments(conn, property_id, note_id)
 
 
-@app.get("/properties/{property_id}/notes/{note_id}/attachments/{attachment_id}")
-def get_note_attachment(
+@app.get("/properties/{property_id}/attachments/{attachment_id}")
+def get_property_attachment(
     property_id: int,
-    note_id: int,
     attachment_id: int,
+    w: int | None = None,
     conn: Any = Depends(tenant_pool.tenant_conn),
 ) -> Response:
-    """The file's bytes, typed as stored (an allowlisted, inactive type) and never sniffed. An
-    attachment id never changes its bytes, so the caller's browser may keep them."""
-    data, mime, filename = note_attachments.read_attachment(
-        conn, property_id, note_id, attachment_id,
-    )
-    return Response(
-        content=data,
-        media_type=mime,
-        headers={
-            "Cache-Control": "private, max-age=86400, immutable",
-            "Content-Disposition": note_attachments.content_disposition(filename),
-            "X-Content-Type-Options": "nosniff",
-        },
-    )
+    """The original's bytes, or with `?w=1080` an image's display copy (made on first request);
+    only ever through this JWT proxy."""
+    return attachments_module.file_response(
+        *attachments_module.read_attachment(conn, property_id, attachment_id, w))
 
 
-@app.delete("/properties/{property_id}/notes/{note_id}/attachments/{attachment_id}")
-def delete_note_attachment(
+@app.delete("/properties/{property_id}/attachments/{attachment_id}")
+def delete_property_attachment(
     property_id: int,
-    note_id: int,
     attachment_id: int,
     conn: Any = Depends(tenant_pool.tenant_conn),
 ) -> dict[str, Any]:
-    return note_attachments.delete_attachment(conn, property_id, note_id, attachment_id)
+    return attachments_module.delete_attachment(conn, property_id, attachment_id)
 
 
 @app.get("/tags")
