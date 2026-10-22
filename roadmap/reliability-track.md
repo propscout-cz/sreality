@@ -877,19 +877,25 @@ What wave 2 changed:
   (the 273 "Komerční prostory" warehouses: nominable already, invisible to every category filter).
 - **The runner owns nomination scopes.** A unit's scope is its two labels unless the portal declares
   `presence_scope` (bazos: the section's subtype; remax, maxima: the agenda); units sharing a scope
-  nominate once, on the last of them, with their union. Deleted: the two slice-buffer copies
-  (ceskereality, realitymix) and `note_empty_slice`, bazos's override, `web`'s own query and remax's
-  and maxima's once-per-agenda guards.
+  nominate once, on the last of them, with their union, and a unit's active count is the same scope's.
+  Deleted: the two slice-buffer copies (ceskereality, realitymix) and `note_empty_slice`, bazos's
+  override and its `active_count`, `web`'s own query, remax's and maxima's agenda queries (an agenda's
+  union is its whole walk) and `db.active_count`'s own subtype clause.
 - **Orphans are nominated.** A walk whose every unit reached the end, over the portal's whole agenda,
   also nominates the active ads in no walked scope (`db.orphan_candidates`, NULL labels included)
-  against every id it saw, under the same flip cap and dwell (`VERIFY orphans …`). `web`'s whole
-  agenda is that scope. A bazos dispatch narrowed to one section is `narrowed` and proves no orphan.
+  against every id it saw, under the same flip cap and dwell (`VERIFY orphans …`), recorded as one more
+  `by_category` entry with NULL labels (an indexless unit's shape): the checks count its deferrals, and
+  a failed orphan query is a run error and an entry short of the end. `web`'s whole agenda is that
+  scope. A bazos dispatch narrowed to one section is `narrowed` and proves no orphan; a registry that
+  maps no bazos section fails the run (rc 2) instead of walking a stand-in one.
 - **A rail:** `tests/test_nomination_scope_rail_live.py` (CI migrations lane) builds every portal from
   its replayed `portals` row, seeds one active ad per label and requires each to come back from exactly
   one nomination query.
 
 To check: the next ceskereality and realitymix walks whose units all reached the end log
-`VERIFY orphans candidates=N`; after the reparse heal (the PR body's runbook, after the Prague read) and
+`VERIFY orphans candidates=N`, and each portal gains a `walks/none-none` cell (hours since its last walk
+in which every unit reached the end) and a Not-measured `residual/none-none` (the orphans declare 0);
+after the reparse heal (the PR body's runbook, after the Prague read) and
 two gone verdicts at least 24 h apart, `coverage ceskereality/unnominated` and `realitymix/unnominated`
 read 0 within ~2 days and their `no_walked_category` 0. Not here: the multi-ad properties the heal
 leaves holding prodej beside drazba (a clash checked only at merge) — the operator splits them.

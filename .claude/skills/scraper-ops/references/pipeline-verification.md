@@ -1064,7 +1064,7 @@ counts; with fewer than 10 gaps, the slowest portal's G).
 
 | cell | measures | Watch | Problem |
 | --- | --- | --- | --- |
-| `<portal>/walks/<cm>-<ct>` | hours since the START of the newest finished walk in which the unit reached the end | above 3 G (`scraping_walk_watch_gaps`) | above 6 G (`scraping_walk_fail_gaps`), or a unit walked in the last 30 d (`scraping_walk_recent_days`) with no end-reached walk in 14 d (`scraping_walk_stale_days`); a portal short of 10 gaps (`scraping_walk_fallback_min_gaps`) is scored on the slowest portal's G |
+| `<portal>/walks/<cm>-<ct>` | hours since the START of the newest finished walk in which the unit reached the end; `none-none` is the orphans' entry (rule 3, 2026-10-22: written only when every unit reached the end, short of the end when its query failed) | above 3 G (`scraping_walk_watch_gaps`) | above 6 G (`scraping_walk_fail_gaps`), or a unit walked in the last 30 d (`scraping_walk_recent_days`) with no end-reached walk in 14 d (`scraping_walk_stale_days`); a portal short of 10 gaps (`scraping_walk_fallback_min_gaps`) is scored on the slowest portal's G |
 | `<portal>/walks` | for every portal of `claims_common.SOURCES`, on every pass: the hours since the START of its newest finished walk, with the units its walks of the last 30 d recorded (facts `finished_at`, `units`) | never: its units' own cells judge them | no walk in 30 d recorded a unit (no walk at all, or none finished), so a portal never drops out: it keeps its inflow, fetch-error and unnominated cells, and this cell's incident recovers on a measured OK |
 | `<portal>/inflow` | ads discovered in the trailing 24 h — ads first seen in it, plus NEW-priority queue rows enqueued in it that have no listings row — against the median of the same 24 h 7, 14, 21 and 28 d earlier (ads only: those queue rows are gone by then) | below 50 % (`scraping_inflow_warn_share`), or above 300 % (`scraping_inflow_spike_share`) | below 20 % (`scraping_inflow_fail_share`) |
 | `<portal>/fetch_errors` | of the ids attempted in 24 h (terminal `detail_queue_completions` plus live queue rows with `attempts > 0` claimed or enqueued in the window), the share with a failed attempt, judged on its Wilson lower bound | above 2 % (`scraping_fetch_err_warn`) | above 10 % (`scraping_fetch_err_fail`) |
@@ -1220,7 +1220,7 @@ rule (#1858) addresses, told truthfully, not suppressed.
 Known limits: the stuck limit uses the portal-level walk gap, which understates portals whose units
 rotate (idnes walks stalest-first; units sharing a scope nominate once per walk: realitymix's
 slices, remax's and maxima's agendas); deferrals are judged per portal, because a shared scope files
-its deferrals on its last unit and the orphans (rule 3, 2026-10-22) on no unit, and a walk counts
+its deferrals on its last unit and the orphans (rule 3, 2026-10-22) on a NULL-label entry, and a walk counts
 there when any unit reached the end (coverage's portal-level walk needs every unit to: each answers
 its own question); outflow compares windows, not walks, so a walk that runs further off its baseline
 weeks' timing than the alignment absorbs can still read as a dip; location-refetch rows share the

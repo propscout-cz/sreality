@@ -1173,7 +1173,10 @@ renumber.** Navigate by area:
    unless the portal declares `presence_scope` (bazos narrows to the section's subtype,
    remax/maxima widen to the agenda's `category_type`), and units sharing a scope (realitymix's
    `domy` + `chaty` slices, an agenda's descriptors) nominate ONCE, on the last of them, with
-   the union of their ids — the runner holds that buffer; the two per-portal copies are gone.
+   the union of their ids — the runner holds that buffer; the per-portal copies are gone (an
+   agenda's union is its whole walk: `ostatni` catches every card no other descriptor claims).
+   The count a unit is reconciled against is the same scope's (`db.active_count(conn, source,
+   scope)`): one predicate, `db.scope_sql`.
    **Since 2026-10-22 nomination is TOTAL** (Health green wave 2, issue #1853): a sighting is
    label-blind but a unit's nomination is not, so an active ad whose label lies in no walked
    scope (ceskereality's `/drazby/` auctions, realitymix's chaty with a truncated breadcrumb:
@@ -1182,7 +1185,10 @@ renumber.** Navigate by area:
    narrowed to one section says `narrowed`), now also nominates those ORPHANS
    (`db.orphan_candidates`: the complement of the walked scopes, NULL labels included) against
    every id the walk saw, at the same priority under the same flip cap and dwell (descriptor:
-   no category). A portal with NO index declares `indexless = True` (`web`, the tenth portal,
+   no category), and records them as one more `scrape_runs.by_category` entry with NULL labels
+   (an indexless unit's shape), so the checks summing `verify_deferred` count their deferrals and
+   a failed orphan query is a run error and an entry that did not reach the end, aged by the
+   walks check like a failed unit's. A portal with NO index declares `indexless = True` (`web`, the tenth portal,
    since 2026-10-21): its one unit has no labels, so no scope, and its walk sees nothing by
    construction — every active `web` ad is an orphan, nominated with no seen set (the
    empty-seen refusal stays for every other portal). The rail:
@@ -3146,7 +3152,7 @@ renumber.** Navigate by area:
     `categories`, `category_labels`, `walk_category`, `fetch_detail`. Defaulted on
     `PortalDefaults`, overridden only where the portal differs: `connect_index` (idnes: staleness
     preload), `connect_drain` (sreality: session pooler), `make_client` (sreality: category-bound
-    client), `active_count` (bazos: subtype scope), `write_details` (bezrealitky: GraphQL payload
+    client), `write_details` (bezrealitky: GraphQL payload
     archive; sreality: its FetchResult writer; web: the re-key pre-step before the default
     flush), `record_failure` (sreality: the
     `listing_fetch_failures` ledger, rule #5). There is no flip seam: the drain flips a gone
@@ -3157,11 +3163,11 @@ renumber.** Navigate by area:
     one identity per ad, never a copy of the hysteresis). The drain's dry-run
     count is `db.claimable_counts`, not a seam. Optional (the runner reads them via `getattr`):
     `seen_key` (sreality — integer ids); `presence_scope` (bazos — the section's subtype;
-    remax, maxima — the agenda's `category_type`); `presence_candidates` (remax, maxima — the
-    whole agenda walk's ids, not the title-derived slices'); `narrowed` (bazos — a one-section
-    dispatch proves no orphan); `indexless` (web — its walk sees nothing BY CONSTRUCTION, its
-    unit has no scope, so its ads are all orphans nominated with no seen set; since 2026-10-22
-    the slice buffers of ceskereality and realitymix and web's own query are the runner's);
+    remax, maxima — the agenda's `category_type`; `active_count` counts it too); `narrowed`
+    (bazos — a one-section dispatch proves no orphan); `indexless` (web — its walk sees
+    nothing BY CONSTRUCTION, its unit has no scope, so its ads are all orphans nominated with
+    no seen set; since 2026-10-22 the slice buffers of ceskereality and realitymix, remax's
+    and maxima's agenda queries and web's own query are the runner's);
     `coverage_denominator_is_upper_bound` (ceskereality — its declared total is national, wider
     than its kraj slices); `total_is_count` (remax, maxima — the "total" they report is the
     count of what they saw; `False` on `PortalDefaults`), both written into every
