@@ -285,8 +285,8 @@ export interface ListingFilters {
    * comparables / estimation agendas). Set by the explore-broker modal's seed,
    * a `?broker=` URL param, or the sidebar's Advanced → Broker search
    * (filter-controls/BrokerFilterControl). A property-id allowlist (MS19): the
-   * properties where one of this broker's ads matches the portal and status
-   * filters, so one ad satisfies both (queries.ts:adScope). */
+   * properties where one of this broker's ads is on the portals in the status
+   * switch's status, so one ad satisfies both (queries.ts:adPortals). */
   brokerId: number | null;
   /* Operator tags (migration 025, lib/setScope): the in side needs EVERY element
    * (AND). Ids, not names, so renames stay queryable. Null = off; a lens. */

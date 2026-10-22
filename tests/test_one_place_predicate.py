@@ -89,9 +89,10 @@ def test_the_ts_module_declares_the_same_levels_and_columns() -> None:
 # status fact read the cohort's own portal rule (tests/test_stats_status_lens_migration.py); 630 re-pointed the map's at browse_list;
 # 640 dropped the id denylist; 644 gave the condition conjunct the `__unknown__` chip
 # (tests/test_644_condition_unknown_filter.py); 648 appended the energy-rating parameter
-# (tests/test_648_browse_energy_rating_filter.py). Re-read the chip arms when this moves again.
+# (tests/test_648_browse_energy_rating_filter.py); 657 took the Stats status lens back
+# (tests/test_657_status_is_the_propertys.py). Re-read the chip arms when this moves again.
 _LATEST_RPC_DEFINITION = {
-    "browse_stats_properties": "648_browse_energy_rating_filter.sql",
+    "browse_stats_properties": "657_status_is_the_propertys.sql",
     "browse_map_cells": "648_browse_energy_rating_filter.sql",
 }
 

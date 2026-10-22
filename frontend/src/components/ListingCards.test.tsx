@@ -948,7 +948,7 @@ describe('<ListingCards> merge mode with a multi-photo card', () => {
 });
 
 /* MS19: a card is a property. Its badge names the portals where it has an active ad
- * (or, with none active, every portal it had, marked inactive), and under one
+ * (or, with none active, every portal it had; the card itself carries the status), and under one
  * portal's "Newest first" a card whose date there is not its own first seen says so. */
 describe('<ListingCards> the title names the lot', () => {
   const title = () => screen.findByRole('link', { name: /na prodej/ });
@@ -974,17 +974,28 @@ describe('<ListingCards> the portal badge and the order date', () => {
 
   it('lists every portal with an active ad', () => {
     renderGrid({ row: { ...ROW, all_sources: ['idnes', 'sreality'], active_sources: ['idnes', 'sreality'] } });
-    expect(badge().textContent).toBe('portáliDNES Reality · Sreality');
+    expect(badge().textContent).toBe('iDNES Reality · Sreality');
   });
 
   it('lists only the live portals while one is live', () => {
     renderGrid({ row: { ...ROW, all_sources: ['bazos', 'idnes'], active_sources: ['idnes'] } });
-    expect(badge().textContent).toBe('portáliDNES Reality');
+    expect(badge().textContent).toBe('iDNES Reality');
   });
 
-  it('marks every portal inactive when no ad is live', () => {
+  it('lists every portal when no ad is live, with no status word (the card carries the status)', () => {
     renderGrid({ row: { ...ROW, is_active: false, all_sources: ['bazos', 'idnes'], active_sources: [] } });
-    expect(badge().textContent).toBe('neaktivníBazoš · iDNES Reality');
+    expect(badge().textContent).toBe('Bazoš · iDNES Reality');
+    expect(badge()).toHaveAttribute(
+      'title', 'Portály, kde nemovitost inzerovala; žádný inzerát není aktivní: Bazoš · iDNES Reality');
+  });
+
+  it('truncates a long list at its end, never its start, inside the card', () => {
+    renderGrid({ row: { ...ROW, is_active: false, all_sources: ['ceskereality', 'idnes', 'realitymix', 'sreality'], active_sources: [] } });
+    expect(badge().firstElementChild).toHaveClass('truncate', 'min-w-0');
+    expect(badge()).toHaveClass('max-w-full');
+    expect(badge().parentElement).toHaveClass('max-w-[calc(100%-0.5rem)]');
+    /* Only the portal list truncates: the lifespan run keeps its whole text. */
+    expect(screen.getByTitle(/^Neaktivní/)).not.toHaveClass('max-w-full');
   });
 
   const lifespan = () => screen.getByTitle(/^Aktivní/).textContent;
