@@ -401,7 +401,11 @@ function Card({
         ? 'bg-[var(--color-inset)] border-[var(--color-rule-soft)] hover:border-[var(--color-rule)]'
         : 'bg-[var(--color-paper-2)] border-[var(--color-rule)] hover:border-[var(--color-rule-strong)]';
   const titleColor  = inactive ? 'text-[var(--color-ink-2)]' : 'text-[var(--color-ink)]';
-  const priceColor  = inactive ? 'text-[var(--color-ink-2)]' : 'text-[var(--color-ink)]';
+  /* A live ask is sage semibold (Inter ships no 700, so semibold is the heaviest real
+   * weight); a delisted card's price stays ink-2 medium so it recedes with the card. */
+  const priceStyle  = inactive
+    ? 'text-[var(--color-ink-2)] font-medium'
+    : 'text-[var(--color-sage)] font-semibold';
   /* Status now reads off the card surface, so inactive photos desaturate
    * a touch harder than before — the only signal left in the photo lane. */
   const imageFilter = inactive
@@ -596,7 +600,7 @@ function Card({
           </p>
         )}
         <div className="mt-1 flex items-baseline justify-between gap-1">
-          <p className={`flex items-baseline gap-1 text-[0.78rem] font-medium tabular-nums ${priceColor}`}>
+          <p className={`flex items-baseline gap-1 text-[0.78rem] tabular-nums ${priceStyle}`}>
             {r.price_czk != null ? (
               <>
                 {fmtCzk(r.price_czk)}

@@ -648,8 +648,8 @@ def test_a_valuation_is_saved_before_the_call_and_answered_once(client, world, s
         "thumb": "https://pics.valuo.cz/pt/a/0.jpg", "full": "https://pics.valuo.cz/p/a/0.jpg"}
     assert first["advert_url"] == "https://example.test/r1" and first["address"] == "Testovací 148, Sandboxov"
     assert second["photos"] == [] and second["advert_url"] is None  # hashed images only: no photo to show
-    assert row["summary"] == {"count": 2, "avg_distance": 640.5, "avg_age": 12, "avg_duration": None,
-                              "avg_score": 0.81, "distance": 2000, "age": 90, "not_enough": False}
+    assert row["summary"] == {"count": 2, "avg_distance": 640.5, "avg_score": 0.81, "distance": 2000, "age": 90,
+                              "not_enough": False}
     assert world["advert_calls"] == [["r1", "r2"]]
     assert store.rows[0]["adverts"] == ADVERTS
     [(cred, request)] = world["calls"]

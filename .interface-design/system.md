@@ -49,7 +49,10 @@ section and shelf names, JetBrains Mono (`font-mono`) with `tabular-nums` on EVE
   dashed = absent.
 - **Comparables table** (the Valuo card): the first column is the comparable's first photo (fixed ~72×54 box, lazy;
   a broken image is a dashed empty box) opening the app's existing gallery; numbers mono tabular; a realised sale
-  price is tagged "prodáno"; the table scrolls inside its own box at narrow widths, never the page.
+  price is tagged "prodáno"; the table scrolls inside its own box at narrow widths, never the page. While our
+  recalculation is offered (`lib/valuo.ts` `recalcBase`) a tick sits before each photo and the copper "Náš přepočet" card
+  above the table keeps ONE height in every state (a sentence, a figure, a figure with its band), so the rows never
+  jump under the cursor.
 
 ## Health page (2026-10-19)
 Added after the Health page rebuild (`docs/design/health-dashboard.md` § 5, wave 8). It extends the ledger
@@ -64,6 +67,13 @@ above for status and adds no token.
   status hues are too close for colour-blind readers (sage and brick for deuteranopia).
 - **Hollow ring = Not measured**: a 1.5 px `--color-ink-3` ring with no fill, never a green or a filled
   `ink-4` dot, so a check nobody measured can never look healthy. Stale reads the same.
+- **Browse map pins** (`ListingMap` `PIN_COLOR`, operator 2026-10-21): magenta `#b2067e`, a map literal (the
+  basemap is not themed), not a token. Chosen as the one hue nothing else on that map wears: the OpenFreeMap
+  liberty basemap, every overlay colour in `map_overlay_layers` (reds, orange, yellow, greens, blues,
+  purples) and the ochre hover are all at least 46 CIE76 away; 3.7:1 on the worst basemap fill, 3.2:1 on the
+  black exact-position contour. Red was rejected (the metro C and flood overlays are red), teal green (the old
+  `#3c6e63`) sat in the woods' hue. The estimation `ComparablesMap` and `DetailMap` keep copper: there green
+  is "comparable" against the orange subject.
 - **Shared admin primitives**: `Panel` (paper-2, rule border, small-caps title) is the card of Health, Costs,
   LocationQuality, LocationPinAudit and NewDedupDashboard; `Stat` (label, mono value, ink-3 hint, an optional
   dot; never a coloured number) the tile of Health, Costs, LocationQuality and AutodedupProgress; `StatusDot`;
@@ -72,3 +82,8 @@ above for status and adds no token.
   while its own condition holds (a count above zero; a share above the page's bound) and the tile draws a brick
   dot beside its label, the word Problem sr-only. Copper stays "chosen or central", never a number's emphasis.
   Acknowledge is an outlined copper button: the operator's own act.
+- **Browse card price** (`ListingCards`, operator 2026-10-21 — the one exception to "numbers stay ink" outside
+  Health): a live ask is `--color-sage` semibold (Inter ships 400/500/600, so semibold is the heaviest real
+  weight; 4.58:1 on paper-2 in light, 7.22:1 in dark); a delisted card's price stays `ink-2` medium so a dead
+  ask never reads as live. Sage here means "a live ask", beside PriceDelta's sage ↓: the arrow and the signed
+  percentage carry the price move, never the colour alone. Copper stays off it ("never a number's emphasis").

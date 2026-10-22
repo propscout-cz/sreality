@@ -10,7 +10,7 @@ const TONE = {
 } as const;
 
 export default function EstimateCard({ eyebrow, aside, tone = 'plain', className = '', children }: {
-  eyebrow: string;
+  eyebrow: ReactNode;
   aside?: ReactNode;
   tone?: keyof typeof TONE;
   className?: string;

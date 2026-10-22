@@ -396,12 +396,6 @@ export const DEFAULT_FILTERS: ListingFilters = {
   priceGrowthRules: [],
 };
 
-export const ESTATE_AREA_BOUNDS = { min: 0, max: 5000, step: 50 };
-export const USABLE_AREA_BOUNDS = { min: 0, max: 500, step: 5 };
-
-export const PRICE_BOUNDS = { min: 0, max: 100_000, step: 500 };
-export const AREA_BOUNDS = { min: 0, max: 300, step: 5 };
-
 /* Expand a multi-select of operator-friendly buckets into the union of
  * granular `building_type` values to match against (deduped). The expansion
  * is generated from toolkit.filter_registry.building_material_values, the one
