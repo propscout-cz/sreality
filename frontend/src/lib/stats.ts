@@ -217,6 +217,20 @@ const dashboardPath = (id: string, tail = ''): string =>
 export const listStatsDashboards = (): Promise<DashboardList> =>
   apiGet<DashboardList>('/stats/dashboards');
 
+/* The Stats tab's sample lens (operator 2026-10-22). "filter" = the Browse filter as set;
+ * "sold" = the sold market over it: inactive only, seen from birth, dismissed included,
+ * 2–60 days on market; every other filter holds. Browse's own filter never changes. */
+export type StatsMarket = 'filter' | 'sold';
+export const SOLD_MARKET_DAYS = { min: 2, max: 60 } as const;
+export const soldMarketFilters = (f: ListingFilters): ListingFilters => ({
+  ...f,
+  status: 'inactive',
+  tomObservedOnly: true,
+  showDismissed: true,
+  tomDaysMin: SOLD_MARKET_DAYS.min,
+  tomDaysMax: SOLD_MARKET_DAYS.max,
+});
+
 export const createStatsDashboard = (input: {
   name: string;
   charts: ChartSpec[];

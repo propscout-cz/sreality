@@ -111,6 +111,8 @@ function ExploreAreaModal({
     sort: view.sort,
     tab: view.tab,
     overlay: view.overlay,
+    activeDashboardId: view.activeDashboardId,
+    statsMarket: view.statsMarket,
   });
 
   return (
