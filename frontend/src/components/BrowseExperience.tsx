@@ -837,6 +837,7 @@ export default function BrowseExperience({
               <StatsDashboard
                 filters={filters}
                 view={f.presetBar ? view : undefined}
+                market={f.presetBar ? { value: view.statsMarket, set: view.setStatsMarket } : undefined}
                 onIncludeDismissed={() => view.setFilters({ ...filters, showDismissed: true })}
               />
             </Suspense>

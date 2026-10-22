@@ -151,8 +151,14 @@ Dashboards (`api/routes/stats_dashboards.py`, mounted like the presets router):
 - **`components/stats/DashboardBar.tsx`** = SavedSetBar + the dashboard adapter, mounted at the top of the Stats tab
   (the `StatsDashboard` charts below it). Items: `GET /stats/dashboards`. Own chips drag; a shared chip shows the
   owner's email as its suffix, does not drag, and its menu offers "Načíst", "Uložit jako vlastní" and
-  "Přestat sledovat"; an own chip's menu offers "Přejmenovat", "Sdílet…" (a small modal holding `ShareBlock`, no
-  modes, `lang="cs"`) and "Smazat" (two-step).
+  "Přestat sledovat"; an own chip's menu offers "Přejmenovat", "Duplikovat" (a new row as stored, named
+  "<name> (kopie)", the active dashboard untouched — operator ask 2026-10-22), "Sdílet…" (a small modal holding
+  `ShareBlock`, no modes, `lang="cs"`) and "Smazat" (two-step).
+- **The sample lens** (operator ask 2026-10-22): a two-way control "Vzorek" at the top of the Stats tab,
+  "Jako ve filtru" (the Browse filter as set) or "Prodáno (trh)" (`lib/stats.soldMarketFilters`: inactive only,
+  seen from birth, dismissed included, 2–60 days on market; every other filter holds). It applies to whatever
+  dashboard is loaded, lives in the URL (`market=sold`, replace) and is never stored with a dashboard; Browse's
+  own filter, the dirty check and "Uložit změny" never see it. Browse-page only, as the bar is.
 - **Loading** (`onLoad`): ONE user action does two writes in order: `PUT /stats/dashboard {charts}` (copy into the
   working board, through `useOptimisticWrite` on the existing board cache), then the URL: if the dashboard carries
   `filter_spec`, `loadDashboard(d)` in `browseState.ts` writes the filters + sort exactly as `loadPreset` does

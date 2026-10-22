@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { arrayMove } from '@dnd-kit/sortable';
 import type { ListingFilters } from '@/lib/filters';
@@ -6,13 +6,16 @@ import { pushToast } from '@/lib/toast';
 import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import ErrorBanner from '@/components/ErrorBanner';
 import Skeleton from '@/components/Skeleton';
+import { Segmented } from '@/components/controls';
 import {
   MAX_CHARTS,
   fetchDashboard,
   newChart,
   saveDashboard,
+  soldMarketFilters,
   statsDashboardKey,
   type ChartSpec,
+  type StatsMarket,
 } from '@/lib/stats';
 import DismissedSkewNotice from './DismissedSkewNotice';
 import StatsChart, { type CardFocus } from './StatsChart';
@@ -29,10 +32,13 @@ import DashboardBar, { type DashboardView } from './DashboardBar';
 export default function StatsDashboard({
   filters,
   view,
+  market,
   onIncludeDismissed,
 }: {
   filters: ListingFilters;
   view?: DashboardView;
+  /* The sample lens (Browse hands it over with the view; the explore modals do not). */
+  market?: { value: StatsMarket; set: (m: StatsMarket) => void };
   /* Flips the sidebar to Show dismissed, from the skew warning. */
   onIncludeDismissed?: () => void;
 }) {
@@ -53,6 +59,10 @@ export default function StatsDashboard({
       addRef.current.focus();
     }
   });
+
+  /* What every chart counts: the Browse filter, or the sold market over it. */
+  const sold = market?.value === 'sold';
+  const sample = useMemo(() => (sold ? soldMarketFilters(filters) : filters), [sold, filters]);
 
   const board = useQuery<ChartSpec[], Error>({
     queryKey: statsDashboardKey,
@@ -120,16 +130,29 @@ export default function StatsDashboard({
   return (
     <div className="space-y-4">
       {view ? <DashboardBar view={view} working={charts} onLoadCharts={(next) => save.mutateAsync(next)} /> : null}
-      <DismissedSkewNotice filters={filters} onInclude={onIncludeDismissed} />
+      {market ? (
+        <Segmented
+          label="Vzorek"
+          options={[
+            { value: 'filter' as const, label: 'Jako ve filtru' },
+            { value: 'sold' as const, label: 'Prodáno (trh)' },
+          ]}
+          value={market.value}
+          onChange={market.set}
+        />
+      ) : null}
+      <DismissedSkewNotice filters={sample} onInclude={onIncludeDismissed} />
       <p className="text-[0.75rem] text-[var(--color-ink-3)]">
-        Každý graf počítá nemovitosti z filtru; sestava grafů je uložená k vašemu účtu.
+        {sold
+          ? 'Prodáno (trh): jen neaktivní nemovitosti sledované od vzniku, 2–60 dní na trhu, včetně skrytých; ostatní filtry platí.'
+          : 'Každý graf počítá nemovitosti z filtru; sestava grafů je uložená k vašemu účtu.'}
       </p>
       <div className="grid grid-cols-1 items-start gap-5 2xl:grid-cols-2">
         {listed.map((c, i) => (
           <StatsChart
             key={c.id}
             chart={c}
-            filters={filters}
+            filters={sample}
             saving={save.isPending}
             focus={focus?.id === c.id ? focus.req : null}
             onSave={(next) => save.mutateAsync(charts.map((x) => (x.id === c.id ? next : x)))}
@@ -144,7 +167,7 @@ export default function StatsDashboard({
           <StatsChart
             key={pending.id}
             chart={pending}
-            filters={filters}
+            filters={sample}
             startEditing
             saving={save.isPending}
             onSave={async (next) => {

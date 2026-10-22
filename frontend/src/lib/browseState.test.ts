@@ -410,6 +410,21 @@ describe('the dashboard on the URL', () => {
     expect(result.current.view.activeDashboardId).toBe('d1');
   });
 
+  it('reads, sets and clears the Stats lens `market=sold` alone, replacing the entry and keeping the filter', () => {
+    const { result } = urlState('/browse?tab=stats&cat=byt');
+    expect(result.current.view.statsMarket).toBe('filter');
+    act(() => result.current.view.setStatsMarket('sold'));
+    expect(params(result.current.search).get('market')).toBe('sold');
+    expect(result.current.view.statsMarket).toBe('sold');
+    expect(result.current.nav).toBe('REPLACE');
+    expect(params(result.current.search).get('cat')).toBe('byt');
+    expect(result.current.view.filters.status).toBe('any');
+    act(() => result.current.view.setFilters({ ...DEFAULT_FILTERS, priceMax: 4_000_000 }));
+    expect(params(result.current.search).get('market')).toBe('sold');
+    act(() => result.current.view.setStatsMarket('filter'));
+    expect(params(result.current.search).has('market')).toBe(false);
+  });
+
   it('sets and clears the id alone, replacing the entry', () => {
     const { result } = urlState('/browse?tab=stats&cat=byt');
     act(() => result.current.view.setActiveDashboardId('d2'));

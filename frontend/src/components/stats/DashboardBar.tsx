@@ -3,8 +3,9 @@
  * named chart set, optionally with the Browse filter it was saved over (the
  * preset blob). Loading one COPIES it into the working board — StatsDashboard's
  * one board write, `onLoadCharts` — then writes the URL (browseState.
- * loadDashboard); it changes only on "Uložit změny". A dashboard shared WITH the
- * account is read-only: Načíst, Uložit jako vlastní, Přestat sledovat. */
+ * loadDashboard); it changes only on "Uložit změny". An own dashboard can be
+ * duplicated as stored ("Duplikovat": a new row, "<name> (kopie)"). A dashboard
+ * shared WITH the account is read-only: Načíst, Uložit jako vlastní, Přestat sledovat. */
 
 import { useEffect, useId, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -61,6 +62,11 @@ const isOwn = (d: SavedDashboard): boolean => d.owner_email == null;
 /* A failed dashboard write, said in the Stats tab's words (StatsDashboard's
  * "Grafy se nepodařilo uložit: …"); declaring it silences the global toast. */
 const toastOnError = (what: string) => (err: Error) => pushToast('err', `${what}: ${err.message}`);
+
+/* The copy's name, within the API's 200 characters (api/schemas.py). */
+const COPY_SUFFIX = ' (kopie)';
+const NAME_MAX = 200;
+export const copyName = (name: string): string => `${name.slice(0, NAME_MAX - COPY_SUFFIX.length)}${COPY_SUFFIX}`;
 
 /* The dashboard this browser tab last loaded (a click, an arrival, a save). The
  * URL's `dashboard` asks for a load only when it names ANOTHER one. A tab switch,
@@ -225,8 +231,24 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
       });
   };
 
+  /* An own dashboard copied AS STORED (the working board is "Uložit jako dashboard"'s
+   * business): a new row under "<name> (kopie)", joining the list; the active
+   * dashboard stays active. */
+  const duplicate = (d: SavedDashboard) =>
+    create.mutateAsync({
+      name: copyName(d.name),
+      charts: sanitizeCharts(d.charts),
+      filter_spec: d.filter_spec ?? undefined,
+      color: d.color,
+    });
+
   const chipMenu = (d: SavedDashboard): SavedSetMenuItem[] => {
-    if (isOwn(d)) return [{ label: 'Sdílet…', onSelect: () => setSharingId(d.id) }];
+    if (isOwn(d)) {
+      return [
+        { label: 'Duplikovat', onSelect: () => duplicate(d) },
+        { label: 'Sdílet…', onSelect: () => setSharingId(d.id) },
+      ];
+    }
     const leave = { label: 'Přestat sledovat', confirm: { label: 'Opravdu přestat sledovat', busy: 'Odcházím…' } };
     return [
       { label: 'Načíst', onSelect: () => load(d) },

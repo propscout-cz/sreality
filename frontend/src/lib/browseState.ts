@@ -41,6 +41,7 @@ import {
   writeRememberedLayers,
 } from '@/lib/mapOverlays';
 import type { Disposition, FilterPreset, ListingPublic, SavedDashboard } from '@/lib/types';
+import type { StatsMarket } from '@/lib/stats';
 
 export type TabKey = 'map' | 'stats';
 
@@ -135,6 +136,9 @@ export interface BrowseViewState {
    * arrival from a link must not leave a second, filterless entry behind). */
   activeDashboardId: string | null;
   setActiveDashboardId: (id: string | null) => void;
+  /* The Stats tab's sample lens (`?market=sold`); Browse's filter is never touched by it. */
+  statsMarket: StatsMarket;
+  setStatsMarket: (m: StatsMarket) => void;
   loadDashboard: (d: SavedDashboard, opts?: { replace?: boolean }) => void;
 }
 
@@ -144,7 +148,7 @@ export interface BrowseViewState {
 const LEGACY_LAYER_KEYS = ['kraje', 'rentmap', 'rentvk'];
 const OVERLAY_URL_KEYS = [
   'tab', 'sort', 'cities', 'colorby', 'layers', ...LEGACY_LAYER_KEYS, 'preset', 'pm', 'labels', 'pins',
-  'dashboard',
+  'dashboard', 'market',
 ];
 
 /* A saved filter (a preset's, a dashboard's: the preset blob, lib/filters
@@ -191,6 +195,7 @@ export function useUrlBrowseState(): BrowseViewState {
   }, [searchParams, rememberedLayers]);
   const activePresetId = searchParams.get('preset');
   const activeDashboardId = searchParams.get('dashboard');
+  const statsMarket: StatsMarket = searchParams.get('market') === 'sold' ? 'sold' : 'filter';
 
   const preserveExtras = useCallback(
     (sp: URLSearchParams): URLSearchParams => {
@@ -292,6 +297,15 @@ export function useUrlBrowseState(): BrowseViewState {
     },
     [searchParams, setSearchParams],
   );
+  const setStatsMarket = useCallback(
+    (next: StatsMarket) => {
+      const sp = new URLSearchParams(searchParams);
+      if (next === 'sold') sp.set('market', 'sold');
+      else sp.delete('market');
+      setSearchParams(sp, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
 
   /* With a filter: pushed, like a preset (Back undoes it), unless `replace`.
    * Without one the filters stay and only the id moves, replaced like the
@@ -323,7 +337,7 @@ export function useUrlBrowseState(): BrowseViewState {
     filters, sort, tab, overlay, activePresetId,
     setFilters, setBounds, setSort, setTab, setOverlay, setActivePresetId, loadPreset,
     loadPipelineView,
-    activeDashboardId, setActiveDashboardId, loadDashboard,
+    activeDashboardId, setActiveDashboardId, loadDashboard, statsMarket, setStatsMarket,
   };
 }
 
@@ -370,6 +384,8 @@ export function useMemoryBrowseState(init: {
       activeDashboardId: null,
       setActiveDashboardId: () => {},
       loadDashboard: () => {},
+      statsMarket: 'filter',
+      setStatsMarket: () => {},
     }),
     [filters, sort, tab, overlay, activePresetId],
   );

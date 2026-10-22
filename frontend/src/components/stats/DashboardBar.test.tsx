@@ -54,7 +54,7 @@ import {
   updateStatsDashboard,
 } from '@/lib/stats';
 import { pushToast } from '@/lib/toast';
-import DashboardBar, { __resetLoadedDashboardForTests, type DashboardView } from './DashboardBar';
+import DashboardBar, { __resetLoadedDashboardForTests, copyName, type DashboardView } from './DashboardBar';
 import StatsDashboard from './StatsDashboard';
 import { pivotOf } from './testPivot';
 
@@ -218,12 +218,37 @@ describe('<DashboardBar> the list', () => {
     expect(screen.getByRole('button', { name: 'Možnosti dashboardu: Od Jany — sdílí petr@example.com' })).toBeInTheDocument();
   });
 
-  it('offers rename, share and a two-step delete on an own chip; load, copy and leave on a shared one', async () => {
+  it('offers rename, duplicate, share and a two-step delete on an own chip; load, copy and leave on a shared one', async () => {
     renderBar();
     await menuFor('Ceny');
-    expect(menuItems()).toEqual(['Přejmenovat', 'Sdílet…', 'Smazat…']);
+    expect(menuItems()).toEqual(['Přejmenovat', 'Duplikovat', 'Sdílet…', 'Smazat…']);
     await menuFor('Od Jany — sdílí jana@example.com');
     expect(menuItems()).toEqual(['Načíst', 'Uložit jako vlastní', 'Přestat sledovat']);
+  });
+
+  it('duplicates an own dashboard as stored: a new row named "<name> (kopie)", nothing loaded or activated', async () => {
+    const filtered = row({ id: 'd-filt', name: 'Pozemky', charts: [B], filter_spec: SHARED_FILTER, color: 'sage' });
+    const copied = row({ id: 'd-copy', name: 'Pozemky (kopie)', charts: [B], filter_spec: SHARED_FILTER, color: 'sage' });
+    vi.mocked(listStatsDashboards)
+      .mockResolvedValueOnce({ data: [OWN, filtered], total: 2 })
+      .mockResolvedValue({ data: [OWN, filtered, copied], total: 3 });
+    vi.mocked(createStatsDashboard).mockResolvedValue(copied);
+    renderBar();
+    await menuFor('Pozemky');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Duplikovat' }));
+    await waitFor(() => expect(createStatsDashboard).toHaveBeenCalledTimes(1));
+    expect(createStatsDashboard).toHaveBeenCalledWith({
+      name: 'Pozemky (kopie)', charts: [B], filter_spec: SHARED_FILTER, color: 'sage',
+    });
+    expect(await screen.findByTitle('Načíst dashboard: Pozemky (kopie)')).toBeInTheDocument();
+    expect(url().get('dashboard')).toBeNull();
+  });
+
+  it('keeps a duplicated name within the 200 characters the API accepts', () => {
+    const long = 'x'.repeat(200);
+    expect(copyName(long)).toHaveLength(200);
+    expect(copyName(long).endsWith(' (kopie)')).toBe(true);
+    expect(copyName('Ceny')).toBe('Ceny (kopie)');
   });
 
   it('points a dirty shared chip at "Uložit jako vlastní", never at an update it does not offer', async () => {
