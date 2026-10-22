@@ -193,6 +193,7 @@ from autodedup.incremental_sql import (
     RT_SCHEMA_SIZE_SQL,
     RT_SCOPE_BACKLOG_SQL,
     RT_SCOPE_BLOCK_SQL,
+    RT_SCOPE_BUILD_ENTRANTS_SQL,
     RT_SCOPE_ENTRANTS_SQL,
     RT_SCOPE_IDS_DELETE_SQL,
     RT_SCOPE_IDS_OF_BLOCKS_SQL,
@@ -1518,15 +1519,23 @@ class SqlWork:
         # a cadence, one block at a time, under a rolling-day cap.
         if self.enter_slice and self.enter_blocks:
             pointer = self.refresh_scope_ids(cursors[CURSOR_ENTER][1])
-            after_enter = cursors[CURSOR_ENTER][0]
-            rows = self._query(RT_SCOPE_ENTRANTS_SQL, {
-                "generation": self.generation, "after_id": after_enter,
-                "lag": self.lag, "limit": enter_share})
+            if self.bootstrap:
+                # E976: a build reads the LIVE adverts first, under no id cursor (two keys are
+                # no keyset): the `rt_fp` anti-join advances it, so its id half stays 0 and the
+                # feed outside the build starts again at the snapshot's first id.
+                rows = self._query(RT_SCOPE_BUILD_ENTRANTS_SQL, {
+                    "generation": self.generation, "lag": self.lag, "limit": enter_share})
+                self._pending[CURSOR_ENTER] = (0, pointer)
+            else:
+                after_enter = cursors[CURSOR_ENTER][0]
+                rows = self._query(RT_SCOPE_ENTRANTS_SQL, {
+                    "generation": self.generation, "after_id": after_enter,
+                    "lag": self.lag, "limit": enter_share})
+                # Short of the share means the snapshot is walked out: the cursor wraps so the
+                # next cycle re-offers whatever the settle lag held back this time.
+                self._pending[CURSOR_ENTER] = (
+                    (int(rows[-1][0]), pointer) if len(rows) >= enter_share else (0, pointer))
             self.windows["entered"] = len(rows)
-            # Short of the share means the snapshot is walked out: the cursor wraps so the
-            # next cycle re-offers whatever the settle lag held back this time.
-            self._pending[CURSOR_ENTER] = (
-                (int(rows[-1][0]), pointer) if len(rows) >= enter_share else (0, pointer))
             for row in rows:
                 items.append(WorkItem(int(row[0]), "entered", _epoch(row[1]), None))
             if self.bootstrap:

@@ -202,6 +202,11 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   is ~2 h now and the discovery matches the re-claim. One constant, no decision module, digest unchanged.
   Owed: the three `applied_merges` overlap scans of the reconcile's planning read id arrays that grow with
   the list (DIAGNOSIS recommendation 3: an index they can use) before they near the 2-min statement timeout.
+- **E976 (2026-10-22, the build reads live adverts first):** during a build the entrant feed orders the
+  snapshot's unread adverts live first, then inactive, ids ascending within each, under no id cursor (the
+  `rt_fp` anti-join advances it); outside a build nothing changes. Praha's 11,864 live unread adverts are
+  read in ~22 h instead of last, ~3 days in. Cost: one `listings_pkey` probe an unread advert, 337 ms a
+  build pass measured. No decision module, digest unchanged. Alone it merges nothing earlier (E977).
 - **Next:** three live days and checkpoint C2, then the last commit deletes the batch
   `apply`/`unapply` modes; `legacy_retire` runs per area under the live generation since W8 (E953, 2026-10-14). Widening the scope is the operator's call.
 - **Open (operator decision, before the C2 deletion):** the undo path once `mode=unapply` is gone.

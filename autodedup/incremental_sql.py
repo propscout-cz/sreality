@@ -505,6 +505,36 @@ select s.listing_id, s.resolved_at
  limit %(limit)s
 """
 
+# The same feed during a BUILD (E976): the LIVE adverts first, ids ascending within each half,
+# and an advert with no `listings` row last. A widening's backlog is mostly the scope's history —
+# Praha's on 2026-10-22: 37,910 unread of 200,625, 11,864 of them live, the live ones' median id
+# 18.7M against 0.5M overall — so in id order the build reached the adverts a merge is visible on
+# last, ~3 days in. Two keys cannot be a keyset, so this statement takes no id cursor: the
+# `rt_fp` anti-join is what advances it (a decided advert has a row; every advert with a
+# `listings` row yields facts, so none is offered for ever) and the settle lag still holds a fresh
+# resolution back. `is_active` is read by primary key, one probe an unread advert, as a scalar
+# subquery so the planner cannot turn it into a hash or merge join over `listings`. Measured live
+# `EXPLAIN (ANALYZE, BUFFERS)`, 2026-10-22, limit 200: a parallel hash anti-join of the snapshot
+# (3,175 buffers) and `rt_fp` (4,568), then 37,910 `listings_pkey` probes (151,785 buffers, all
+# hits) and a top-N heapsort: 159,660 buffers, 337 ms. It shrinks as the build reads; a fresh
+# build of the whole 200k scope would be ~5x that. Outside a build the statement above runs.
+RT_SCOPE_BUILD_ENTRANTS_SQL = """
+select s.listing_id, s.resolved_at
+  from autodedup.rt_scope_ids s
+ where s.generation = %(generation)s::text
+   and (s.resolved_at is null
+        or s.resolved_at <= now() - make_interval(secs => %(lag)s))
+   and not exists (select 1
+                     from autodedup.rt_fp f
+                    where f.generation = %(generation)s::text
+                      and f.listing_id = s.listing_id)
+ order by (select l.is_active
+             from public.listings l
+            where l.id = s.listing_id) desc nulls last,
+          s.listing_id
+ limit %(limit)s
+"""
+
 # The cadence's two inputs, in one statement: how long ago each block was walked, and how many
 # walks this generation has spent in the rolling day the cap is measured over. `age_s` is
 # computed by the SERVER — a runner's clock is not the database's, and the cadence is the only
