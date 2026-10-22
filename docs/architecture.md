@@ -2247,7 +2247,7 @@ renumber.** Navigate by area:
     (MS20, PROGRAM.md §9); the exclusion is Browse + Watchdog only. One control edits both
     sides on Browse, the Watchdog editor and the phone Feed: a portal chip cycles off → on it →
     not on it ("−", brick on the desktop, ink on the phone). The badge on a Browse card lists the portals with an
-    active ad, or every portal marked inactive. A second badge, "N inzeráty", reads
+    active ad, or every portal once none is active (no status word: the card carries the status, 657). A second badge, "N inzeráty", reads
     `source_count` off the card's `browse_list` row (every ad, active or not: the rollup's
     count, projected since 590), from two ads up.
     **One portal orders by its own newest ad (Q49 b).** With exactly one portal P selected,

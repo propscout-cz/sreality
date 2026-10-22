@@ -420,9 +420,9 @@ export async function fetchBrokerListings(
 
 /* A broker's properties under the portal rule (MS19): the allowlist behind
  * Browse's brokerId prefilter (lib/queries.ts resolveBrokerPrefilter). The
- * server judges portal and status over the broker's OWN ads
- * (toolkit.brokers.broker_property_ids), so "broker + portal" means one ad
- * satisfies both. Complete up to a large server-side cap, because a truncated
+ * server finds the broker's OWN ads on the portals in the status switch's
+ * status (toolkit.brokers.broker_property_ids), so "broker + portal" means one
+ * ad satisfies both; the property's own status is applied beside it. Complete up to a large server-side cap, because a truncated
  * allowlist would silently under-plot the map; `capped` is logged, since it
  * essentially never happens.
  *

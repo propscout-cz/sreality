@@ -560,13 +560,13 @@ function Card({
             )}
           </CardBadge>
           {badgePortals && (
-            /* Too long for a narrow card, it loses its END, never its start. */
             <CardBadge
+              truncate
               title={`${activePortals.length
                 ? 'Portály, kde má nemovitost aktivní inzerát'
                 : 'Portály, kde nemovitost inzerovala; žádný inzerát není aktivní'}: ${badgePortals}`}
             >
-              <span className="truncate min-w-0">{badgePortals}</span>
+              {badgePortals}
             </CardBadge>
           )}
           {r.source_count >= 2 && (
@@ -845,12 +845,16 @@ function EstimateCorner({
 /* file-tab silhouette consistent across cards.                                */
 /* -------------------------------------------------------------------------- */
 
+/* `truncate`: a text badge that fits the card by losing its END (the portal
+ * list); the others keep their whole run and overflow as they always did. */
 function CardBadge({
   children,
   title,
+  truncate = false,
 }: {
   children: ReactNode;
   title?: string;
+  truncate?: boolean;
 }) {
   return (
     <span
@@ -859,13 +863,14 @@ function CardBadge({
         // A tooltip only shows if the badge is hit-testable: raised above the
         // stretched link's ::after (card-tip), below every control.
         title ? 'card-tip' : '',
-        'inline-flex max-w-full items-center px-1.5 py-0.5 text-[0.6rem] tracking-[0.12em]',
+        'inline-flex items-center px-1.5 py-0.5 text-[0.6rem] tracking-[0.12em]',
+        truncate ? 'max-w-full' : '',
         'uppercase rounded-[var(--radius-xs)] border backdrop-blur-sm font-medium',
         'tabular-nums whitespace-nowrap',
         'bg-[var(--color-paper-3)]/85 border-[var(--color-rule)] text-[var(--color-ink-2)]',
       ].join(' ')}
     >
-      {children}
+      {truncate ? <span className="truncate min-w-0">{children}</span> : children}
     </span>
   );
 }

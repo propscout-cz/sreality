@@ -948,7 +948,7 @@ describe('<ListingCards> merge mode with a multi-photo card', () => {
 });
 
 /* MS19: a card is a property. Its badge names the portals where it has an active ad
- * (or, with none active, every portal it had, marked inactive), and under one
+ * (or, with none active, every portal it had; the card itself carries the status), and under one
  * portal's "Newest first" a card whose date there is not its own first seen says so. */
 describe('<ListingCards> the title names the lot', () => {
   const title = () => screen.findByRole('link', { name: /na prodej/ });
@@ -994,6 +994,8 @@ describe('<ListingCards> the portal badge and the order date', () => {
     expect(badge().firstElementChild).toHaveClass('truncate', 'min-w-0');
     expect(badge()).toHaveClass('max-w-full');
     expect(badge().parentElement).toHaveClass('max-w-[calc(100%-0.5rem)]');
+    /* Only the portal list truncates: the lifespan run keeps its whole text. */
+    expect(screen.getByTitle(/^Neaktivní/)).not.toHaveClass('max-w-full');
   });
 
   const lifespan = () => screen.getByTitle(/^Aktivní/).textContent;

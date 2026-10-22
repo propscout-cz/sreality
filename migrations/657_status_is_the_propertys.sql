@@ -24,7 +24,8 @@
 -- the old rule for inactive + a portal while the list and the count answer this one (1-3 % of that cohort).
 --
 -- ROLLBACK: forward only (rule 1); restating 597's rule body and 648's statement restores the old answers. A re-run
--- is a no-op: the preconditions accept this file's own bodies and both CREATEs replace.
+-- is a no-op: the preconditions accept this file's own bodies and both CREATEs replace. NEVER apply
+-- reverts/648_revert_browse_energy_rating_filter.sql after this file: it restores 644's pivot, 634's lens with it.
 
 set lock_timeout = '5s';
 set statement_timeout = '300s';

@@ -83,7 +83,7 @@ fragment still holds; `tests/test_browse_map_read_contract.py` learns that `spec
 ```
 { spec, filtered, sample, excluded,            -- properties in the cohort / with every needed value / the rest
   category_main, category_type,                -- the cohort's single values, null when mixed
-  status: 'active' | 'inactive' | 'mixed' | null,   -- each row judged by the cohort's own portal rule (597; migration 634)
+  status: 'active' | 'inactive' | 'mixed' | null,   -- each row's status is its property's (migration 657)
   basis: <migration-425 token> | null,         -- rent_monthly_czk_m2 ⇒ rent steps and "Kč / měs"
   min_n: 5,
   refused: null | 'empty' | 'mixed_category' | 'mixed_status' | 'too_many_cells' | 'bad_spec', reason?,
