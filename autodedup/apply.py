@@ -35,7 +35,8 @@ The one carve-out is TEMPORARY: `retire_legacy=1` runs `autodedup.legacy_retire`
 plan, which reads it to undo the old engine's merges in the scope's blocks and deal types (plus
 any that mixes deal types). With `generation=rt` and `blocks=` (W8, E953) it runs ALONE: no plan,
 no merge - the worker's lane re-merges once its interval is back above 0 - and only over blocks
-the lane has fully read (`rt_unread_blocks`, the reconcile's own rule).
+the lane has fully read (`rt_unread_blocks`: the reconcile's block rule, never E977's per-advert
+relaxation during a build).
 """
 
 from __future__ import annotations
@@ -1752,16 +1753,24 @@ def _retire_legacy(
                                  stream=GENERATION if generation == GENERATION else None))
 
 
-def rt_unread_blocks(conn: Any, generation: str, blocks: Iterable[str]) -> set[str]:
-    """The live stream's blocks it has not fully read (`obec:` / `cast_obce:` / `okres:` keys):
-    one of `blocks` never read to its end (a block still inside its first cycle of pages, E940,
-    included), or any whose snapshot holds an advert with no fingerprint. The reconcile waits on
-    them; the retire step refuses them."""
+def rt_block_reads(conn: Any, generation: str, blocks: Iterable[str]
+                   ) -> tuple[set[str], set[str]]:
+    """The live stream's two reasons a block (`obec:` / `cast_obce:` / `okres:` key) is not fully
+    read, apart (E977): the `blocks` never read to their end — never walked, or inside their first
+    cycle of pages (E940), so their snapshot may lack adverts — and every block whose snapshot,
+    whole, still holds an advert with no fingerprint."""
     walked = {str(row[0]) for row in _rows(conn, RT_SCOPE_SCAN_SEEN_SQL,
                                            {"generation": generation})}
-    unread = {str(row[0]) for row in _rows(conn, S.RC_UNREAD_BLOCKS_SQL,
-                                           {"generation": generation})}
-    return unread | {block for block in blocks if block not in walked}
+    unfingerprinted = {str(row[0]) for row in _rows(conn, S.RC_UNREAD_BLOCKS_SQL,
+                                                    {"generation": generation})}
+    return {block for block in blocks if block not in walked}, unfingerprinted
+
+
+def rt_unread_blocks(conn: Any, generation: str, blocks: Iterable[str]) -> set[str]:
+    """The live stream's blocks it has not fully read, for either reason (`rt_block_reads`). The
+    retire step refuses them; the reconcile reads the two reasons apart."""
+    unwalked, unfingerprinted = rt_block_reads(conn, generation, blocks)
+    return unfingerprinted | unwalked
 
 
 def rt_walked_as(conn: Any, keys: Iterable[str]) -> dict[str, str]:
