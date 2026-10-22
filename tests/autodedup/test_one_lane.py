@@ -26,6 +26,7 @@ from autodedup.incremental_lane import SqlStore
 from autodedup.incremental_sql import (
     RT_CURSOR_READ_SQL,
     RT_CURSOR_SET_SQL,
+    RT_KNOWN_SQL,
     RT_LOCK_GUARD_SQL,
     RT_SCOPE_SCAN_SEEN_SQL,
     RT_SETTING_WRITE_SQL,
@@ -549,6 +550,10 @@ class LaneDb(FakeDb):
         if sql in (RT_STATEMENT_GUARD_SQL, RT_LOCK_GUARD_SQL):
             self.guards.append(dict(p))
             return [("set",)]
+        if sql == RT_KNOWN_SQL:
+            # Fingerprinted: a member of one of the generation's groups, or an advert `_read`.
+            held = self.read | {lid for g, _k, lid in self.members if g == p["generation"]}
+            return [(int(i),) for i in p["ids"] if int(i) in held]
         if sql == RT_STALE_SQL:
             # `refreshed` absent: refreshed now; None: no fingerprint row (fail closed).
             bound = self.now - timedelta(seconds=float(p["fresh_s"]))
@@ -616,7 +621,9 @@ def test_the_reconciles_refusals_are_the_batch_applys_refusals() -> None:
     db.listing(42, 800)                                   # carried, grouped by nobody
     db.listing(52, 901, where=(999999, None))             # carried, located outside
     db.listing(61, None)                                  # unattached member
-    _read(db, 10, 11, 20, 21, 30, 31, 40, 41, 50, 51, 60, 61)
+    # 42 is carried, grouped by nobody: the lane has read it (else the group would wait for its
+    # fingerprint, E964 review R2) and refuses it as the batch does.
+    _read(db, 10, 11, 20, 21, 30, 31, 40, 41, 42, 50, 51, 60, 61)
     scope = AP.effective_scope(db.settings[AP.SCOPE_SETTING], {}, live=True)
 
     batch = AP.plan_apply(db, "g12", scope)
@@ -666,8 +673,9 @@ def test_an_advert_the_stream_holds_and_groups_with_no_one_never_rides_its_earli
 
 def test_an_advert_the_stream_never_fingerprinted_still_rides_the_merge_that_vouched_it() -> None:
     """What E965 keeps of E903: g11 merged 12 onto 200 with 11; the stream groups 10 with 11 and
-    holds no fingerprint for 12 (it never read it), so g11's live merge is the only word about
-    12 and it rides along. Once the stream reads 12 and groups it with no one, it is refused."""
+    holds no fingerprint for 12 (it never read it), so the plan vouches for 12 by g11's live
+    merge. The live reconcile holds the group until a pass reads 12 (E964 R2); once the stream
+    reads it and groups it with no one, it is refused."""
     db = LaneDb()
     db.live_scope()
     _pair_group(db, 11, [11, 12], [200, 250], gen="g11")
@@ -687,8 +695,14 @@ def test_an_advert_the_stream_never_fingerprinted_still_rides_the_merge_that_vou
     assert held.groups[0].listing_ids == [10, 11, 12]
     assert [g.reasons for g in refused.groups] == [[AP.SKIP_CARRIES_UNGROUPED]]
     assert refused.groups[0].detail["ungrouped_listings"] == [12]
-    assert out["counts"]["applied"] == 1 and out["counts"]["listings_moved"] == 2
-    assert db.listings[12]["property_id"] == db.listings[10]["property_id"] == 100
+    # E964 (R2): the live reconcile never carries an advert the stream never fingerprinted — the
+    # group waits until a pass reads 12, and then the stream's grouping decides (refused here).
+    assert out["counts"][reconcile.WAITING] == 1 and out["counts"]["applied"] == 0
+    db.read.add(12)
+    after = _lane(db)
+    assert after["counts"]["applied"] == 0
+    assert after["counts"]["skipped_by_reason"] == {AP.SKIP_CARRIES_UNGROUPED: 1}
+    assert db.listings[12]["property_id"] == 200
 
 
 def test_the_reconcile_never_splits() -> None:
@@ -963,7 +977,7 @@ def test_the_region_s_towns_come_from_the_one_reader_of_the_scope(
     _read(db, 10, 11)
     _lane(db)
     incremental_lane._stale_claims(db, RT, {seed_version_key(RT): SEED_VERSION}, [[10, 11]],
-                                   False, SimpleNamespace(ledger_keyed=lambda: True), None, 200)
+                                   SimpleNamespace(ledger_keyed=lambda: True), None, 200)
     assert seen == [[531057, 563510], [531057, 563510]], "the reconcile, then the re-claim"
 
 
