@@ -28,6 +28,7 @@ from typing import Any
 # NOT hashed either: it is portal lifecycle metadata, not listing content — bazos
 # re-stamps it on every bump / TOP renewal, so hashing it would append a snapshot
 # per seller promotion, and backfills from already-stored raw must stay snapshot-free.
+# price_czk gives way to `price_native` when a page states a foreign price (hash_doc).
 _HASH_FIELDS: tuple[str, ...] = (
     "category_main", "category_type", "price_czk", "price_unit", "area_m2",
     "disposition", "locality", "district", "floor",
@@ -70,6 +71,10 @@ class ScrapedListing:
     category_type: str | None = None
     price_czk: int | None = None
     price_unit: str | None = None
+    # The price as the page states it when that is not Kč ("298000 EUR"). Hash-only, never a
+    # column: the portal re-converts it to `price_czk` daily, so an unchanged ad would snapshot
+    # on every exchange-rate move (rule 2) — the hash reads this in place of price_czk.
+    price_native: str | None = None
     area_m2: float | None = None
     # Which physical area `area_m2` holds ('usable'|'floor'|'total'|'plot'|
     # 'unknown'), stamped by scraper.area.derive_headline_area. A PROVENANCE
@@ -137,8 +142,12 @@ class ScrapedListing:
             )
 
     def hash_doc(self) -> dict[str, Any]:
-        """The crawlers' hash document: the 28 _HASH_FIELDS, unhashed (hashing.digest hashes it)."""
-        return {k: getattr(self, k) for k in _HASH_FIELDS}
+        """The crawlers' hash document: the 28 _HASH_FIELDS, price_native in place of price_czk when stated."""
+        doc = {k: getattr(self, k) for k in _HASH_FIELDS}
+        if self.price_native is not None:
+            del doc["price_czk"]
+            doc["price_native"] = self.price_native
+        return doc
 
     def listing_columns(self) -> dict[str, Any]:
         """The `listings` column values this contract carries; the rest default to NULL."""

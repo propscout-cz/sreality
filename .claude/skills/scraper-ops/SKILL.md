@@ -12,8 +12,7 @@ test / log helpers: `scripts/test-summary.sh` and `scripts/logs.sh <run-id> [pat
 
 ## Adding a new scraper field without breaking existing data
 
-1. Add the column with a new numbered migration (`alter table listings add column ...`). Never
-   touch `001_initial.sql`.
+1. Add the column with a new numbered migration (`alter table listings add column ...`). Never touch `001_initial.sql`.
 2. Declare the cell in `scraper/attribute_contract.py` for EVERY portal (producer, source-key
    precedence, absence semantics, sentinels) and read it in the parser through `source_value` /
    `source_label`; a label→value mapping belongs in `scraper/vocabulary.py`, never in the parser.
@@ -25,6 +24,10 @@ test / log helpers: `scripts/test-summary.sh` and `scripts/logs.sh <run-id> [pat
 4. Heal old rows through the ONE re-parse seam, `reparse.yml` (`source=<portal> fields=<col>`, dry run
    first, `--missing` to resume; `--allow-snapshot-deferral` only for a HASHED column — `ad_reference` is not).
    The new cell reaches the `parsing` alarm's fill arm only once the OPERATOR re-blesses (`--bless`, prod DB).
+   Content that is no column is hash-only (`locality`; `price_native`, a page's own foreign-currency price, hashed IN PLACE OF `price_czk` so the portal's daily FX re-conversion never snapshots).
+4. Backfill old rows from NARROW typed columns via a `scripts/backfill_*.py` dispatch job (never a
+   `raw_json` pass — ~62 KB/row detoast); NULL is acceptable for a nullable column. The new cell reaches
+   the `parsing` alarm's fill arm only once the OPERATOR re-blesses (`--bless` needs the prod DB).
 
 ## Refreshing portal HTML fixtures
 

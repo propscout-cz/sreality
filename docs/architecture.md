@@ -1139,6 +1139,9 @@ renumber.** Navigate by area:
    hash *documents* (sreality's wire payload minus volatile keys, `hashing.sreality_hash_doc`;
    the crawlers' 28 `_HASH_FIELDS`, `ScrapedListing.hash_doc`) share one digest,
    `hashing.digest`; unifying the documents is a data event (≈1.5M snapshots), not a refactor.
+   A page that states its price in a foreign currency hashes that (`price_native`, never a column)
+   IN PLACE OF `price_czk`: idnes re-converts it to Kč daily, which re-snapshotted its whole
+   foreign stock (6–10k ads) every 1–3 weeks; the Kč still updates latest-wins, unhashed.
    **Sanctioned exceptions — payload-free, no snapshot.** Writers of derived, enrichment, link
    or lifecycle columns: condition levels (`toolkit/condition_scoring.py`), the stored `mf_*`
    columns (their SQL recompute, last redefined in migration 507, is no longer called — MF is
