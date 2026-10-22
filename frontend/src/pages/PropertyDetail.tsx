@@ -4,8 +4,7 @@
  * The header shows the property exactly as its Browse card does: the
  * `properties_public` row, whose advert fields are its canonical advert's and
  * whose physical facts are the first non-empty in the same order (migration 561,
- * decision 18). Photos, manual estimates and freshness checks are that canonical
- * advert's. The brokers are a list over the adverts (MS7), the price chart draws
+ * decision 18). Photos and freshness checks are that canonical advert's. The brokers are a list over the adverts (MS7), the price chart draws
  * every advert's own line (MS9), and a lowest active price that differs from the
  * header's is named under it (MS8). The merged-adverts section is the only list
  * of adverts, each advert's own facts in its row; `?advert=<id>` opens that row.
@@ -21,6 +20,7 @@ import {
   type NewEstimationPrefill,
 } from '@/components/NewEstimationModal';
 import { useExploreAreaModal } from '@/components/ExploreAreaModal';
+import Spinner from '@/components/Spinner';
 import { listingTypeLabel } from '@/lib/enums';
 import { usePageTitle } from '@/lib/pageTitle';
 import { useQuery } from '@tanstack/react-query';
@@ -56,6 +56,9 @@ import DismissButton from '@/components/DismissButton';
 import CollectionSaveToggle from '@/components/listing-detail/CollectionSaveToggle';
 import ExternalMapLinks from '@/components/listing-detail/ExternalMapLinks';
 import DownloadPropertyButton from '@/components/listing-detail/DownloadPropertyButton';
+import { ActingBanner, EditAsOwnerToggle } from '@/components/listing-detail/EditAsOwner';
+import { ActingAs, useEditAsOwnerShare } from '@/lib/acting';
+import { useBoardSelection } from '@/lib/pipelineShares';
 import { lazyChunk } from '@/lib/lazyChunk';
 import { Hairline, SectionLabel } from '@/components/section';
 import MergedAdvertsSection from '@/components/listing-detail/MergedAdvertsSection';
@@ -72,15 +75,14 @@ export { FreshnessBlock };
 const CurationBlock = lazyChunk(
   () => import('@/components/listing-detail/CurationBlock'),
 );
-const ManualEstimatesBlock = lazyChunk(
-  () => import('@/components/listing-detail/ManualEstimatesBlock'),
-);
 const SoldCompsBlock = lazyChunk(
   () => import('@/components/listing-detail/SoldCompsBlock'),
 );
 const EstimationsBlock = lazyChunk(
   () => import('@/components/listing-detail/EstimationsBlock'),
 );
+const AdvertNotFoundBody = lazyChunk(() => import('@/components/listing-detail/AdvertNotFound'));
+const ValuoSection = lazyChunk(() => import('@/components/listing-detail/ValuoSection'));
 
 /* The phone layout is its own chunk: the desktop never downloads it, and the
  * first visit stays inside scripts/bundle-budget.mjs. */
@@ -180,11 +182,12 @@ export default function PropertyDetail() {
     };
   }, [property, detailsQ.data, detailsQ.isError, sources, canonical]);
 
-  // Bind the page's "New estimation" CTA to the canonical advert's stored portal
-  // URL (migration 494; never reconstructed). MUST stay above the early returns
-  // below — a hook after a conditional return is the React #310 trap.
+  // Bind the page's "New estimation" CTA to the canonical advert (`id`, its
+  // listings.id) — any portal's, so a property without a sreality advert is
+  // estimable too. MUST stay above the early returns below — a hook after a
+  // conditional return is the React #310 trap.
   const newEstimationPrefill = useMemo<NewEstimationPrefill | undefined>(() => {
-    if (!property || !canonical?.source_url) return undefined;
+    if (!property) return undefined;
     const categoryMain =
       property.category_main === 'byt'
       || property.category_main === 'dum'
@@ -192,11 +195,11 @@ export default function PropertyDetail() {
         ? property.category_main
         : undefined;
     return {
-      url: canonical.source_url,
+      listingId: property.id,
       categoryMain,
       estimateKind: property.category_type === 'pronajem' ? 'rent' : 'sale',
     };
-  }, [property, canonical]);
+  }, [property]);
 
   // Tab title = "type · disposition · place" (the ONE place label the header
   // shows, migration 503). MUST stay above the early returns — same #310 trap.
@@ -211,6 +214,23 @@ export default function PropertyDetail() {
   // The phone frame's own layout (#1767): reading + curation, no maps, no
   // estimation runs. Read above the early returns (#310); the reads stay here.
   const phone = usePhoneShell();
+
+  // The active board (kept honest against GET /pipeline/shares while a shared
+  // one is set) and, on an EDIT share with "Upravit jako" on, the share the
+  // curation controls act through (design §3.5). Desktop only (the phone
+  // never reads the lists); above the early returns (#310). Nothing is offered
+  // or acted on until the server's lists confirm the remembered board: this
+  // device may remember a board another sign-in picked.
+  const { active: rememberedBoard, sharesQ } = useBoardSelection({ always: false, enabled: !phone });
+  const activeBoard =
+    rememberedBoard != null &&
+    sharesQ.data?.shared_with_me.some(
+      (s) => s.account_id === rememberedBoard.account_id && s.mode === rememberedBoard.mode,
+    )
+      ? rememberedBoard
+      : null;
+  const editAsShare = useEditAsOwnerShare();
+  const actingShare = activeBoard != null ? editAsShare : null;
 
   if (propertyId == null) return <NotFoundState id={idParam ?? null} />;
   if (propertyQ.isLoading) return <LoadingState />;
@@ -252,13 +272,21 @@ export default function PropertyDetail() {
             it — all property-grain (rule #18) — then download the ad (a PDF + the
             gallery's photos) and run a new estimation. */}
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <PipelineToggle property_id={propertyId} />
-          <CollectionSaveToggle property_id={propertyId} />
-          <DismissButton property_id={propertyId} variant="header" />
+          {activeBoard?.mode === 'edit' && (
+            <EditAsOwnerToggle share={activeBoard} on={actingShare != null} />
+          )}
+          {/* Keyed by the identity: a menu or draft never carries over from
+              myself to the owner, nor back. */}
+          <ActingAs key={actingShare?.account_id ?? 'own'} share={actingShare}>
+            <PipelineToggle property_id={propertyId} />
+            <CollectionSaveToggle property_id={propertyId} />
+            <DismissButton property_id={propertyId} variant="header" />
+          </ActingAs>
           <DownloadPropertyButton propertyId={propertyId} images={images} />
           <NewEstimationButton prefill={newEstimationPrefill} />
         </div>
       </div>
+      {actingShare && <ActingBanner share={actingShare} />}
       <ListingOverview
         listing={property}
         priceNote={priceNote}
@@ -283,20 +311,24 @@ export default function PropertyDetail() {
              under the description and above the estimates: what the operator
              has already decided about this property comes before the numbers. */
           <Suspense fallback={<Skeleton height={140} />}>
-            <CurationBlock property_id={propertyId} listing_id={property.id} />
+            <ActingAs key={actingShare?.account_id ?? 'own'} share={actingShare}>
+              <CurationBlock property_id={propertyId} listing_id={property.id} />
+            </ActingAs>
           </Suspense>
         }
         estimatesSlot={
           /* The estimation chapter: MF reference + our runs, side by side —
              in the prime slot after the curation. Renders nothing for a
-             property with no estimable data. */
-          <Suspense fallback={<Skeleton height={180} />}>
-            <EstimationsBlock
-              listing={property}
-              listingIds={advertIds}
-              prefill={newEstimationPrefill}
-            />
-          </Suspense>
+             property with no estimable data. Valuo's paid outside valuation
+             follows as its own section, never inside ours (rule 12). */
+          <>
+            <Suspense fallback={<Skeleton height={180} />}>
+              <EstimationsBlock listing={property} listingIds={advertIds} prefill={newEstimationPrefill} />
+            </Suspense>
+            <Suspense fallback={<Skeleton height={140} />}>
+              <ValuoSection property={property} listingIds={advertIds} adUrls={sources.map((s) => s.source_url)} />
+            </Suspense>
+          </>
         }
       />
       <BrokerList
@@ -321,15 +353,6 @@ export default function PropertyDetail() {
           />
         </>
       )}
-      <Hairline />
-      <Suspense fallback={<Skeleton height={120} />}>
-        {/* Manual estimates + freshness checks are stored against the legacy
-            sreality_id, so both are empty by construction for a non-sreality
-            advert. Curation above is property-grain and stays rendered. */}
-        {property.sreality_id != null && (
-          <ManualEstimatesBlock sreality_id={property.sreality_id} />
-        )}
-      </Suspense>
       <Hairline />
       <Suspense fallback={<Skeleton height={160} />}>
         {/* The only REALIZED prices on the page — registered sales near this
@@ -356,6 +379,8 @@ export default function PropertyDetail() {
         snapshots={snapshotsQ.data ?? NO_SNAPSHOTS}
       />
       <Hairline />
+      {/* Freshness checks are stored against the legacy sreality_id: empty by
+          construction for a non-sreality advert. */}
       {property.sreality_id != null && (
         <FreshnessBlock sreality_id={property.sreality_id} checks={checksQ.data ?? []} />
       )}
@@ -367,10 +392,14 @@ export default function PropertyDetail() {
 /* Old addresses                                                              */
 /* -------------------------------------------------------------------------- */
 
+const ATTACHING_POLL_MS = 2_000;
+
 /* Every advert address ever handed out — `/listing/{source}/{native}` (emails,
    the extension's "Otevřít v aplikaci"), `/listing/{sreality_id}` (every older
    link) and `/listing?property=<id>` — lands on the property page, the advert's
-   row open. The query string and hash ride along (`?run=` / `#estimations`). */
+   row open. The query string and hash ride along (`?run=` / `#estimations`).
+   An advert we hold whose property is not born yet (a new row waits for the
+   maintenance lane, ~30 s) is ATTACHING, not missing: re-read every 2 s. */
 export function AdvertRedirect() {
   const { sreality_id: legacyParam, source, nativeId } = useParams();
   const location = useLocation();
@@ -386,6 +415,8 @@ export function AdvertRedirect() {
     queryFn: ({ signal }) => fetchAdvertProperty(key!, { signal }),
     enabled: key != null,
     staleTime: 60_000,
+    refetchInterval: (query) =>
+      query.state.data != null && query.state.data.property_id == null ? ATTACHING_POLL_MS : false,
   });
 
   const params = new URLSearchParams(location.search);
@@ -409,6 +440,7 @@ export function AdvertRedirect() {
     );
   }
   if (q.isLoading) return <LoadingState />;
+  if (q.data && q.data.property_id == null) return <AttachingState />;
   if (q.error) return <FailedState error={q.error} />;
   if (source && nativeId) {
     return (
@@ -422,49 +454,39 @@ export function AdvertRedirect() {
   return <NotFoundState id={legacyParam ?? nativeId ?? propertyParam} />;
 }
 
-/* A portal advert we hold no row for — most often a link pasted on the phone
-   (#1767) to an ad the scrapers have not reached yet. On the phone it says so
-   in Czech and, when the paste carried the URL, offers the portal's own page
-   (same window: an installed iOS app opens it in its in-app Safari sheet). The
-   desktop keeps the generic not-found. */
-function AdvertNotFound({
-  source,
-  nativeId,
-  pastedUrl,
-}: {
-  source: string;
-  nativeId: string;
-  pastedUrl: string | null;
-}) {
+/* The advert is ours, its property is on the way (AdvertRedirect polls). */
+function AttachingState() {
   const phone = usePhoneShell();
-  if (!phone) return <NotFoundState id={nativeId} />;
+  const line = (
+    <p role="status" className="flex items-center gap-2 text-sm text-[var(--color-ink-2)]">
+      <Spinner size={12} />
+      <span>Zakládám nemovitost…</span>
+    </p>
+  );
+  if (phone) return <div className="px-4 py-8">{line}</div>;
   return (
-    <div className="px-4 py-8">
-      <p className="text-[0.7rem] font-medium uppercase tracking-[0.18em] text-[var(--color-ink-3)]">
-        Nenalezeno
-      </p>
-      <h2 className="mt-2 font-display text-[22px] font-medium leading-tight tracking-[-0.01em] text-[var(--color-ink)]">
-        Tento inzerát v databázi nemáme
-      </h2>
-      <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[14px] text-[var(--color-ink-2)]">
-        <span className="inline-flex h-5 items-center rounded-[var(--radius-xs)] border border-[var(--color-rule-strong)] px-1 text-[11px]">
-          {portalLabel(source) ?? source}
-        </span>
-        <span className="break-all font-mono text-[12px] tabular-nums">{nativeId}</span>
-      </p>
-      <p className="mt-3 text-[13px] leading-relaxed text-[var(--color-ink-3)]">
-        Buď je nový a k nám ještě nedorazil, nebo ho portál stáhl dřív, než jsme ho přečetli.
-      </p>
-      {pastedUrl && (
-        <a
-          href={pastedUrl}
-          className="mt-4 inline-flex h-11 items-center gap-1 text-[15px] font-medium text-[var(--color-copper)]"
-        >
-          Otevřít na portálu {portalLabel(source) ?? source}
-          <span aria-hidden>↗</span>
-        </a>
-      )}
-    </div>
+    <Page>
+      <Crumb />
+      <div className="mt-8">{line}</div>
+    </Page>
+  );
+}
+
+/* A portal advert we hold no row for: one state for both shells, its body its
+   own chunk (components/listing-detail/AdvertNotFound). */
+function AdvertNotFound(props: { source: string; nativeId: string; pastedUrl: string | null }) {
+  const phone = usePhoneShell();
+  const body = (
+    <Suspense fallback={null}>
+      <AdvertNotFoundBody {...props} heading={phone ? 'h2' : 'h1'} />
+    </Suspense>
+  );
+  if (phone) return <div className="px-4 py-8">{body}</div>;
+  return (
+    <Page>
+      <Crumb />
+      <div className="mt-12">{body}</div>
+    </Page>
   );
 }
 
@@ -610,6 +632,7 @@ function Crumb() {
 
 function NewEstimationButton({ prefill }: { prefill?: NewEstimationPrefill }) {
   const { open } = useNewEstimationModal();
+  if (!prefill) return null;
   return (
     <button
       type="button"

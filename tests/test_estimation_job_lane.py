@@ -60,12 +60,10 @@ class _FakeConn:
 
 def _resolution() -> er._Resolution:
     return er._Resolution(
-        input_url="https://example.test/1", input_sreality_id=7,
         target_spec={"lat": 50.0, "lng": 14.0, "area_m2": 42, "disposition": "2+kk"},
-        source_kind="sreality", parse_confidence="high",
-        parse_confidence_per_field={"lat": "high"},
-        source_html="<html>a big blob we do not want twice</html>",
-        parse_warnings=["w1"], subject_attributes={"building_type": "brick"},
+        input_listing_id=70, input_sreality_id=7,
+        subject_source="sreality", subject_source_id_native="7",
+        subject_listing_price_czk=4_000_000, subject_listing_category_type="prodej",
     )
 
 
@@ -83,28 +81,22 @@ def _stub_setup(monkeypatch: Any, resolution: er._Resolution) -> None:
 # --- _job_payload round-trip ---------------------------------------------------
 
 
-def test_job_payload_roundtrips_and_drops_source_html() -> None:
+def test_job_payload_roundtrips() -> None:
     resolution = _resolution()
-    body = s.CreateEstimationIn(url="https://example.test/1", source="extension")
+    body = s.CreateEstimationIn(listing_id=70, source="extension")
     payload = er._job_payload(body, resolution)
 
     b2 = s.CreateEstimationIn(**payload["body"])
     r2 = er._Resolution(**payload["resolution"])
 
-    assert b2.source == "extension"
-    assert r2.target_spec == resolution.target_spec
-    assert r2.parse_warnings == ["w1"]
-    assert r2.subject_attributes == {"building_type": "brick"}
-    # source_html is already its own column at INSERT time and is never read
-    # during execution, so it's dropped from the (transient) snapshot.
-    assert r2.source_html is None
+    assert b2.source == "extension" and b2.listing_id == 70
+    assert r2 == resolution
 
 
 # --- create_estimation_run routing --------------------------------------------
 
 
 def test_lane_on_inserts_pending_with_payload_and_skips_execution(monkeypatch: Any) -> None:
-    monkeypatch.setenv("MAPY_GEOCODE_ENABLED", "1")  # not a kill-switch test
     conn = _FakeConn()
     resolution = _resolution()
     _stub_setup(monkeypatch, resolution)
@@ -112,7 +104,7 @@ def test_lane_on_inserts_pending_with_payload_and_skips_execution(monkeypatch: A
     monkeypatch.setattr(er, "_execute_estimation_run", lambda *a, **k: pytest.fail(
         "lane-on must NOT execute in-process"))
 
-    body = s.CreateEstimationIn(url="https://example.test/1", source="extension")
+    body = s.CreateEstimationIn(listing_id=70, source="extension")
     out = er.create_estimation_run(conn, sreality_client=None, llm_client=None, body=body)
 
     assert out == {"id": 42}
@@ -123,7 +115,6 @@ def test_lane_on_inserts_pending_with_payload_and_skips_execution(monkeypatch: A
 
 
 def test_lane_on_agent_run_starts_pending_not_running(monkeypatch: Any) -> None:
-    monkeypatch.setenv("MAPY_GEOCODE_ENABLED", "1")  # not a kill-switch test
     """Agent runs normally INSERT 'running'; on the lane they must start
     'pending' so the worker's claim (WHERE status='pending') can see them —
     the worker stamps 'running' + claimed_at at claim time."""
@@ -139,8 +130,7 @@ def test_lane_on_agent_run_starts_pending_not_running(monkeypatch: Any) -> None:
     monkeypatch.setattr(er, "_execute_estimation_run", lambda *a, **k: pytest.fail(
         "lane-on must NOT execute in-process"))
 
-    body = s.CreateEstimationIn(
-        url="https://example.test/1", source="extension", mode="agent")
+    body = s.CreateEstimationIn(listing_id=70, source="extension", mode="agent")
     er.create_estimation_run(conn, sreality_client=None, llm_client=None, body=body)
 
     _, params = conn.executed[0]
@@ -149,7 +139,6 @@ def test_lane_on_agent_run_starts_pending_not_running(monkeypatch: Any) -> None:
 
 
 def test_lane_off_runs_inline_without_payload(monkeypatch: Any) -> None:
-    monkeypatch.setenv("MAPY_GEOCODE_ENABLED", "1")  # not a kill-switch test
     conn = _FakeConn()
     _stub_setup(monkeypatch, _resolution())
     monkeypatch.setattr(er, "_job_lane_enabled", lambda conn: False)
@@ -158,7 +147,7 @@ def test_lane_off_runs_inline_without_payload(monkeypatch: Any) -> None:
         er, "_execute_estimation_run",
         lambda conn, sc, lc, run_id, **k: ran.append(run_id))
 
-    body = s.CreateEstimationIn(url="https://example.test/1", source="extension")
+    body = s.CreateEstimationIn(listing_id=70, source="extension")
     er.create_estimation_run(conn, sreality_client=None, llm_client=None, body=body)
 
     assert ran == [42]  # inline executor DID run
@@ -174,7 +163,7 @@ def _base_fields() -> dict[str, Any]:
     return {
         "account_id": "11111111-1111-1111-1111-111111111111",
         "source": "extension", "mode": "deterministic", "status": "pending",
-        "estimate_kind": "rent", "input_url": "https://example.test/1",
+        "estimate_kind": "rent", "input_listing_id": 1,
         "input_sreality_id": 1,
     }
 
@@ -209,7 +198,7 @@ def test_execute_pending_run_rehydrates_and_runs(monkeypatch: Any) -> None:
             seen.update(run_id=run_id, body=body, resolution=resolution))
 
     payload = er._job_payload(
-        s.CreateEstimationIn(url="https://example.test/1", source="extension"),
+        s.CreateEstimationIn(listing_id=70, source="extension"),
         _resolution())
     er.execute_pending_run(conn, None, None, 42, payload)
 
@@ -246,3 +235,41 @@ def test_sweep_stuck_runs_keys_off_claimed_at() -> None:
     low = sql.lower()
     assert "coalesce(claimed_at, created_at)" in low
     assert params == (15,)
+
+
+class _SettingConn:
+    """One app_settings row (None = no row); `boom` makes the read raise."""
+
+    def __init__(self, row: tuple[Any] | None, boom: bool = False) -> None:
+        self.row, self.boom = row, boom
+
+    def cursor(self) -> "_SettingConn":
+        return self
+
+    def __enter__(self) -> "_SettingConn":
+        return self
+
+    def __exit__(self, *exc: Any) -> bool:
+        return False
+
+    def execute(self, *args: Any) -> None:
+        if self.boom:
+            raise RuntimeError("settings down")
+
+    def fetchone(self) -> tuple[Any] | None:
+        return self.row
+
+
+@pytest.mark.parametrize(("value", "on"), [
+    (True, True), (False, False), (" Yes ", True), ("on", True), ("1", True), ("off", False),
+    ("", False), (1, True), (0, False), (None, None),
+])
+def test_both_estimation_flags_read_a_setting_the_same_way_but_default_apart(value, on):
+    """One parser for the job-lane flag and the budget flag; an absent value, a missing row or a
+    failed read is OFF for the lane (it ships dark) and ON for the budget (fail-closed)."""
+    assert er._job_lane_enabled(_SettingConn((value,))) is (on is True)
+    assert er._budget_enabled(_SettingConn((value,))) is (on is not False)
+    assert er._job_lane_enabled(_SettingConn(None)) is False
+    assert er._budget_enabled(_SettingConn(None)) is True
+    assert er._job_lane_enabled(_SettingConn(None, boom=True)) is False
+    assert er._budget_enabled(_SettingConn(None, boom=True)) is True

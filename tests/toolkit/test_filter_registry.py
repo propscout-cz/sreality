@@ -124,18 +124,23 @@ def test_pg_columns_subset_of_known_listings_columns() -> None:
         # Migration 133 — MF gross rental yield % (sale apartments).
         "mf_gross_yield_pct",
         # Migrations 534/535 — THE plot measure, published as a column on the
-        # Browse read model (browse_projection -> browse_list, properties_map_mv,
-        # listing_feed_public) because `area_m2` is the parcel for pozemek and
-        # `estate_area` is NULL on a third of active land. Not on `listings`:
-        # the API-side readers call plot_area_m2(...) there (toolkit.measures).
+        # Browse read model (browse_projection -> browse_list)
+        # because `area_m2` is the parcel for pozemek and `estate_area` is NULL
+        # on a third of active land. Not on `listings`: the API-side readers
+        # call plot_area_m2(...) there (toolkit.measures).
         "plot_area_m2",
+        # Migration 054 — time on market, published by every read model; the compiler spells
+        # it over `listings` (LISTINGS_GRAIN.exprs).
+        "tom_days",
+        # Migration 625 — "observed from the start", a Browse read-model column; the
+        # compiler spells measure_tom_observed() over `listings`.
+        "tom_observed",
         # Property-grain derived columns (migrations 091/095/173), exposed via
         # properties_public and filtered by the Browse property-grain RPC.
         # Not on `listings` — they aggregate across a property's children.
         # (The merged price-change filters are synthetic — pg_column=None —
         # because the window picks among four count columns at query time.)
-        "distinct_site_count", "price_drop_count", "price_rise_count",
-        "max_price_drop_pct",
+        "price_drop_count", "price_rise_count", "max_price_drop_pct",
         # Source portal (migration 091); exposed on listings_public and
         # properties_public, filtered by the `portals` multiselect.
         "source",
@@ -182,19 +187,30 @@ def test_comparable_filters_fields_equal_the_cohort_agendas() -> None:
     )
 
 
+def test_curation_filters_are_browse_only() -> None:
+    """The operator's own state (tags, collections, pipeline, …) never reaches a
+    watchdog or a cohort: an alert would fire on their own clicks, and their interest
+    must never feed back into a valuation."""
+    curation = [f for f in fr.all_filters() if f.category == fr.CATEGORY_CURATION]
+    assert curation
+    for f in curation:
+        assert f.agendas == frozenset({fr.Agenda.BROWSE}), f.id
+
+
 def test_watchdog_filter_spec_fields_equal_the_watchdog_agenda() -> None:
     """WatchdogFilterSpec carries exactly the WATCHDOG agenda, both ways.
 
     A declared filter missing from the spec is not an error anywhere else: pydantic's
     extra='ignore' drops the key on save, and the watchdog silently matches wider than
     the Browse view it was made from (merge f2d7b359 lost three filters that way).
-    lat/lng/radius_m are the sub-fields of the composite `location` filter.
+    `bounds` (the map box) is the sub-field of the composite `location` filter;
+    the chips are their own FilterDef.
     """
     from api.notifications import WatchdogFilterSpec
 
     declared = _agenda_ids(fr.Agenda.WATCHDOG)
     assert "location" in declared
-    spec = (set(WatchdogFilterSpec.model_fields) - {"lat", "lng", "radius_m"}
+    spec = (set(WatchdogFilterSpec.model_fields) - {"bounds"}
             - _RETIRED_BUT_DESERIALISABLE)
     declared -= {"location"}
     assert spec == declared, (
@@ -353,6 +369,45 @@ def test_agent_find_comparables_relaxed_descriptions_come_from_registry() -> Non
         assert schema["properties"][fid]["description"] == fr.description(fid)
 
 
+_PARKED_CONDITION_LEVELS = frozenset({
+    "building_condition_level_min", "building_condition_level_max",
+    "apartment_condition_level_min", "apartment_condition_level_max",
+})
+
+
+def test_the_parked_condition_levels_reach_no_surface() -> None:
+    """Condition scoring is parked (rule 14, operator ruling 2026-10-20): its frozen 1-5 levels
+    are no filter on any agenda, agent tool, cohort, request model or SPA surface. Only the
+    Watchdog spec keeps the four keys, so an old saved blob deserialises — and RETIRED_FILTERS
+    makes any value raise rather than widen."""
+    from dataclasses import fields as dataclass_fields
+
+    from api import schemas
+    from api.agent import _FCR_OVERRIDE_FIELDS, _build_tool_registry
+    from api.notifications import WatchdogFilterSpec
+    from toolkit.comparables import ComparableFilters
+
+    assert _PARKED_CONDITION_LEVELS <= set(filter_compiler.RETIRED_FILTERS)
+    assert _PARKED_CONDITION_LEVELS <= set(WatchdogFilterSpec.model_fields)
+    assert not _PARKED_CONDITION_LEVELS & set(fr.REGISTRY)
+    assert not _PARKED_CONDITION_LEVELS & fr.UNITLESS_NUMERIC_FILTERS
+    for agenda in fr.Agenda:
+        assert not _PARKED_CONDITION_LEVELS & _agenda_ids(agenda), agenda
+    for name, tool in _build_tool_registry().items():
+        assert not _PARKED_CONDITION_LEVELS & set(tool.input_schema.get("properties", {})), name
+    assert not _PARKED_CONDITION_LEVELS & {name for name, _ in _FCR_OVERRIDE_FIELDS}
+    assert not _PARKED_CONDITION_LEVELS & {f.name for f in dataclass_fields(ComparableFilters)}
+    for model in (schemas.FindComparablesIn, schemas.ComputeMarketVelocityIn,
+                  schemas.CreateEstimationIn, schemas.EstimateYieldIn):
+        assert not _PARKED_CONDITION_LEVELS & set(model.model_fields), model.__name__
+    spa = Path(__file__).resolve().parents[2] / "frontend" / "src"
+    for rel in ("lib/filterRegistry.generated.ts", "lib/filters.ts", "lib/queries.ts",
+                "lib/filterLayout.ts", "lib/types.ts", "pages/WatchdogEdit.tsx",
+                "pages/WatchdogManage.tsx"):
+        text = (spa / rel).read_text(encoding="utf-8")
+        assert "condition_level" not in text and "ConditionLevel" not in text, rel
+
+
 # --- codegen drift --------------------------------------------------------
 
 
@@ -482,7 +537,7 @@ def test_sql_kind_snapshot() -> None:
     from collections import Counter
 
     counts = Counter(fr.sql_kind(f) for f in fr.all_filters())
-    assert counts == {"gte": 18, "lte": 10, "eq": 9, "any": 7, "enum_or_unknown": 2, None: 34}
+    assert counts == {"gte": 17, "lte": 9, "eq": 9, "any": 6, "enum_or_unknown": 3, None: 32}
     numeric_eq = {
         f.id for f in fr.all_filters()
         if f.type in (fr.FilterType.INT, fr.FilterType.FLOAT) and fr.sql_kind(f) == "eq"
@@ -490,6 +545,19 @@ def test_sql_kind_snapshot() -> None:
     assert numeric_eq == {"category_sub_cb"}
     column_backed = {f.id for f in fr.all_filters() if f.pg_column is not None}
     assert fr.COMPILED_BY_HOOK <= column_backed
+
+
+def test_the_condition_chip_is_the_filters_and_never_the_canons() -> None:
+    """"Neuvedeno" is a chip on the condition_match filter, as on furnished and ownership.
+    RED by: the sentinel reaching the canon (a stored value, a Stats key, the scraper's
+    vocabulary) or the chip leaving the filter."""
+    canon = fr.COLUMN_CANONICAL_VALUES["condition"]
+    chips = [o.value for o in fr.REGISTRY["condition_match"].enum_values or ()]
+    assert chips == [*canon, fr.UNKNOWN_FILTER_VALUE]
+    assert fr.sql_kind(fr.REGISTRY["condition_match"]) == "enum_or_unknown"
+    assert fr.UNKNOWN_FILTER_VALUE not in canon
+    assert all(o.value != fr.UNKNOWN_FILTER_VALUE for o in fr.CONDITION_OPTIONS)
+    assert fr.label_cs("condition", fr.UNKNOWN_FILTER_VALUE) is None
 
 
 def test_filter_to_json_carries_sql_kind() -> None:

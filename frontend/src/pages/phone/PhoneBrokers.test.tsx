@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { placeLabelOf } from '@/components/phone/placeLabel';
 import * as api from '@/lib/api';
 import * as brokers from '@/lib/brokers';
 import type { BrokerLeaderRow, BrokerPublic, LeaderboardParams } from '@/lib/brokers';
@@ -14,7 +15,7 @@ import { ROUTES } from '@/lib/routes';
 import { expectNoNestedInteractive } from '@/test/a11y';
 
 import Brokers from '../Brokers';
-import { brokerInitials, placeLabelOf } from './PhoneBrokers';
+import { brokerInitials } from './PhoneBrokers';
 
 vi.mock('@/lib/phoneShell', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/phoneShell')>()),

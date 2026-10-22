@@ -1,5 +1,5 @@
 /* The compact pipeline control used wherever a property appears in a LIST — the
- * Browse cards and the Table rows.
+ * Browse cards.
  *
  * Out of the pipeline, a click bookmarks into the entry stage (rule #22): one
  * cheap, reversible keystroke in the middle of triage. Already in it, a click
@@ -16,40 +16,21 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-
 import PipelineMark from '@/components/PipelineMark';
 import PipelineStageMenu from '@/components/pipeline/PipelineStageMenu';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
-import { fetchPipelineMembers, fetchPipelineStages, pipelineKeys } from '@/lib/queries';
+import { usePipelineMembers, usePipelineStages } from '@/lib/pipelineReads';
 import { stageAccent, stageBadge } from '@/lib/pipelineStage';
 import { usePipelineCard } from '@/lib/usePipelineCard';
 
+/* Cards float this over the photo (translucent chrome). */
 export interface PipelineFunnelButtonProps {
   property_id: number;
-  /* True when the surrounding cohort is filtered by pipeline membership — a
-   * write then changes which rows match, so Browse must refetch. */
-  cohortScoped?: boolean;
-  /* Cards float this over the photo (translucent chrome); the table renders it
-   * inline on the row background. */
-  variant?: 'overlay' | 'inline';
 }
 
-export default function PipelineFunnelButton({
-  property_id,
-  cohortScoped = false,
-  variant = 'overlay',
-}: PipelineFunnelButtonProps) {
-  const membersQ = useQuery({
-    queryKey: pipelineKeys.members,
-    queryFn: fetchPipelineMembers,
-    staleTime: 30_000,
-  });
-  const stagesQ = useQuery({
-    queryKey: pipelineKeys.stages,
-    queryFn: fetchPipelineStages,
-    staleTime: 60_000,
-  });
+export default function PipelineFunnelButton({ property_id }: PipelineFunnelButtonProps) {
+  const membersQ = usePipelineMembers();
+  const stagesQ = usePipelineStages();
 
   const member = membersQ.data?.get(property_id) ?? null;
   const inPipeline = member != null;
@@ -59,7 +40,7 @@ export default function PipelineFunnelButton({
   const badge = look ? stageBadge(look, stagesQ.data ?? []) : null;
   const accent = stageAccent(look);
 
-  const { add, pending: pendingFor } = usePipelineCard({ cohortScoped });
+  const { add, pending: pendingFor } = usePipelineCard();
   const pending = pendingFor(property_id);
   const btnRef = useRef<HTMLButtonElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -76,7 +57,7 @@ export default function PipelineFunnelButton({
 
   if (readFailed(membersQ)) {
     return (
-      <ReadFailedMark what="Pipeline" onRetry={() => void membersQ.refetch()} variant={variant} />
+      <ReadFailedMark what="Pipeline" onRetry={() => void membersQ.refetch()} />
     );
   }
   const label = inPipeline
@@ -91,8 +72,7 @@ export default function PipelineFunnelButton({
         /* No preventDefault/stopPropagation: the funnel used to sit INSIDE the
          * Browse card's detail <Link>, and swallowing the event was the only
          * thing keeping a bookmark click from navigating. It is a sibling of
-         * that link now (ListingCards), and the Table renders it in its own
-         * cell, so the click reaches nothing else either way. */
+         * that link now (ListingCards), so the click reaches nothing else. */
         onClick={() => {
           if (pending) return;
           if (inPipeline) setMenuOpen((v) => !v);
@@ -112,14 +92,10 @@ export default function PipelineFunnelButton({
         className={[
           'flex h-6 items-center justify-center rounded-[var(--radius-xs)] border transition-colors aria-disabled:opacity-60',
           badge ? 'gap-0.5 px-1' : 'w-6',
-          variant === 'overlay' ? 'backdrop-blur' : '',
+          'backdrop-blur',
           inPipeline
-            ? variant === 'overlay'
-              ? 'bg-[var(--color-paper-3)]/90'
-              : 'bg-transparent'
-            : variant === 'overlay'
-              ? 'bg-[var(--color-paper-3)]/85 border-[var(--color-rule)] text-[var(--color-ink-3)] hover:text-[var(--color-copper)] hover:border-[var(--color-copper)]'
-              : 'border-transparent text-[var(--color-ink-4)] hover:text-[var(--color-copper)] hover:border-[var(--color-copper)]',
+            ? 'bg-[var(--color-paper-3)]/90'
+            : 'bg-[var(--color-paper-3)]/85 border-[var(--color-rule)] text-[var(--color-ink-3)] hover:text-[var(--color-copper)] hover:border-[var(--color-copper)]',
         ].join(' ')}
       >
         <PipelineMark filled={inPipeline} badge={badge} />
@@ -128,7 +104,6 @@ export default function PipelineFunnelButton({
         <PipelineStageMenu
           property_id={property_id}
           stageId={member.stage_id}
-          cohortScoped={cohortScoped}
           anchorRef={btnRef}
           onClose={closeMenu}
         />

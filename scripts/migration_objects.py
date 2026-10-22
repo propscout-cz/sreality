@@ -172,7 +172,10 @@ def parse_objects(sql: str) -> list[MigrationObject]:
     migration itself runs, and it frequently contains CREATE TEMP TABLE and
     similar that exists only for the duration of a call.
     """
-    body = _strip_noise(sql)
+    return _objects_in(_strip_noise(sql))
+
+
+def _objects_in(body: str) -> list[MigrationObject]:
     found: list[MigrationObject] = []
     seen: set[tuple[str, str]] = set()
 
@@ -215,6 +218,44 @@ def parse_objects(sql: str) -> list[MigrationObject]:
     return found
 
 
+_RE_DROP_RELATION = re.compile(
+    rf"\bdrop\s+(?:materialized\s+view|view|table|index|sequence)\s+(?:concurrently\s+)?"
+    rf"(?:if\s+exists\s+)?({_QUALIFIED}(?:\s*,\s*{_QUALIFIED})*)",
+    re.IGNORECASE,
+)
+_RE_DROP_FUNCTION = re.compile(
+    rf"\bdrop\s+function\s+(?:if\s+exists\s+)?({_QUALIFIED})", re.IGNORECASE,
+)
+_RE_DROP_COLUMNS = re.compile(
+    rf"\balter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?({_QUALIFIED})\s+(drop\s+column\b[^;]*)",
+    re.IGNORECASE,
+)
+_RE_DROP_COLUMN = re.compile(rf"\bdrop\s+column\s+(?:if\s+exists\s+)?({_IDENT})", re.IGNORECASE)
+_RE_DROP_POLICY = re.compile(
+    rf"\bdrop\s+policy\s+(?:if\s+exists\s+)?({_IDENT})\s+on\s+({_QUALIFIED})", re.IGNORECASE,
+)
+
+
+def _key(kind: Kind, ident: str) -> tuple[str, str]:
+    ident = ident.lower()
+    return kind, ident[len("public."):] if ident.startswith("public.") else ident
+
+
+def _dropped(sql: str) -> set[tuple[str, str]]:
+    """What this SQL drops (the shapes a later migration uses to retire an earlier one's object)."""
+    body = _strip_noise(sql)
+    out = {_key("relation", _clean(name))
+           for m in _RE_DROP_RELATION.finditer(body) for name in m.group(1).split(",")}
+    out |= {_key("function", _clean(m.group(1))) for m in _RE_DROP_FUNCTION.finditer(body)}
+    for m in _RE_DROP_COLUMNS.finditer(body):
+        schema, _, table = _clean(m.group(1)).rpartition(".")
+        prefix = f"{schema}.{table}" if schema and schema != "public" else table
+        out |= {_key("column", f"{prefix}.{_clean(c.group(1))}") for c in _RE_DROP_COLUMN.finditer(m.group(2))}
+    for m in _RE_DROP_POLICY.finditer(body):
+        out.add(_key("policy", f"{_clean(m.group(2)).split('.')[-1]}.{_clean(m.group(1))}"))
+    return out
+
+
 _MIGRATION_NAME = re.compile(r"^(\d+)_(.+)\.sql$")
 
 
@@ -229,12 +270,71 @@ def load_migrations(migrations_dir: Path, newest: int = 25) -> list[Migration]:
     """The `newest` numbered migrations, parsed. Files under `reverts/` and any
     non-numbered file are ignored — a revert is expected NOT to be present."""
     out: list[Migration] = []
+    paths: dict[str, Path] = {}
     for path in sorted(migrations_dir.glob("*.sql")):
         m = _MIGRATION_NAME.match(path.name)
         if not m:
             continue
+        paths[path.name] = path
         out.append(
             Migration(int(m.group(1)), path.name, parse_objects(path.read_text(encoding="utf-8")))
         )
     out.sort(key=lambda mig: mig.number)
-    return out[-newest:] if newest > 0 else out
+    out = out[-newest:] if newest > 0 else out
+    # An object a LATER migration retires is absent by design, not by drift (613 drops 610's
+    # shared_at): one dropped and not re-created in that same file stops being probed for the
+    # earlier file. A re-creation in a later file is probed there.
+    retired: set[tuple[str, str]] = set()
+    for i in range(len(out) - 1, -1, -1):
+        mig = out[i]
+        objects = [o for o in mig.objects if _key(o.kind, o.ident) not in retired]
+        sql = paths[mig.filename].read_text(encoding="utf-8")
+        retired |= _dropped(sql) - {_key(o.kind, o.ident) for o in mig.objects}
+        out[i] = Migration(mig.number, mig.filename, objects)
+    return out
+
+
+# --- the live-catalog probe ----------------------------------------------------
+#
+# One probe for both readers of "applied": the `migration_drift` alarm
+# (scripts/checks/platform.py) and apply_migration_receipt's post-apply receipt. It asks
+# the catalog, never the ledger: for each declared object, does it exist right now?
+
+MIGRATION_OBJECT_PROBE_SQL = """
+select o.kind, o.ident,
+  case o.kind
+    when 'relation' then to_regclass(o.ident) is not null
+    when 'function' then exists (
+      select 1 from pg_proc p
+        join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public'
+         and p.proname = split_part(o.ident, '.', greatest(
+               array_length(string_to_array(o.ident, '.'), 1), 1)))
+    when 'column' then exists (
+      select 1 from information_schema.columns c
+       where c.table_schema = case when array_length(string_to_array(o.ident, '.'), 1) = 3
+                                   then split_part(o.ident, '.', 1) else 'public' end
+         and c.table_name = case when array_length(string_to_array(o.ident, '.'), 1) = 3
+                                 then split_part(o.ident, '.', 2) else split_part(o.ident, '.', 1) end
+         and c.column_name = split_part(o.ident, '.', array_length(string_to_array(o.ident, '.'), 1)))
+    when 'constraint' then exists (
+      select 1 from pg_constraint k
+        join pg_class rel on rel.oid = k.conrelid
+        join pg_namespace n on n.oid = rel.relnamespace
+       where n.nspname = case when array_length(string_to_array(o.ident, '.'), 1) = 3
+                              then split_part(o.ident, '.', 1) else 'public' end
+         and rel.relname = case when array_length(string_to_array(o.ident, '.'), 1) = 3
+                                then split_part(o.ident, '.', 2) else split_part(o.ident, '.', 1) end
+         and k.conname = split_part(o.ident, '.', array_length(string_to_array(o.ident, '.'), 1)))
+    when 'policy' then exists (
+      select 1 from pg_policies pl
+       where pl.schemaname = 'public'
+         and pl.tablename = split_part(o.ident, '.', 1)
+         and pl.policyname = split_part(o.ident, '.', 2))
+  end as present
+from unnest(%(kinds)s::text[], %(idents)s::text[]) as o(kind, ident)
+"""
+
+# to_regclass raises on a malformed identifier rather than returning NULL, so an
+# ident that survived parsing but is not a plain dotted name never reaches SQL.
+SAFE_IDENT = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_$]*(?:\.[a-zA-Z_][a-zA-Z0-9_$]*){0,2}$")

@@ -1,5 +1,6 @@
-/* The Browse sidebar: its two curation pickers (MS16) say a failed read failed
- * and read again, and a location pick lands on the LATEST filters. */
+/* The Browse sidebar: a location pick lands on the LATEST filters, and the
+ * sidebar folds into its rail. The curated-set control has its own test
+ * (filter-controls/CuratedSetFilter.test.tsx). */
 
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -8,9 +9,9 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
-import { CollectionsPicker, FilterSidebar } from './Filters';
-import { AccountTagFilter } from './filter-controls/TagFilterControl';
+import { FilterSidebar, FilterSidebarRail } from './Filters';
 import * as api from '@/lib/api';
+import * as brokers from '@/lib/brokers';
 import { DEFAULT_FILTERS, type ListingFilters } from '@/lib/filters';
 import type { LocationResolution } from '@/lib/maps';
 
@@ -21,6 +22,11 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   listCollections: vi.fn(),
   listTags: vi.fn(),
+}));
+vi.mock('@/lib/brokers', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/brokers')>()),
+  searchBrokersByName: vi.fn(),
+  fetchBrokerDossier: vi.fn(),
 }));
 vi.mock('@/lib/maps', async (importActual) => ({
   ...(await importActual<typeof import('@/lib/maps')>()),
@@ -42,72 +48,81 @@ const renderPicker = (ui: React.ReactElement) =>
     </QueryClientProvider>,
   );
 
-describe('Browse sidebar curation pickers', () => {
-  it('says the collections failed instead of "none yet", and reads them again', async () => {
-    vi.mocked(api.listCollections)
-      .mockRejectedValueOnce(new Error('HTTP 500'))
-      .mockResolvedValue({ data: [{ id: 7, name: 'Šortlist' }], total: 1 } as never);
-    renderPicker(<CollectionsPicker value={null} onChange={() => {}} />);
-    const retry = await screen.findByRole('button', { name: /Kolekce se nepodařilo načíst/ });
-    expect(screen.queryByText(/No collections yet/)).toBeNull();
-    fireEvent.click(retry);
-    expect(await screen.findByRole('button', { name: 'Šortlist' })).toBeInTheDocument();
+describe('<FilterSidebar> status line', () => {
+  it('draws status, seen at birth and dismissed as segmented controls that edit the filters', async () => {
+    vi.mocked(api.listCollections).mockImplementation(never);
+    vi.mocked(api.listTags).mockImplementation(never);
+    let latest: ListingFilters = DEFAULT_FILTERS;
+    function Host() {
+      const [filters, setFilters] = useState<ListingFilters>(DEFAULT_FILTERS);
+      return (
+        <FilterSidebar
+          filters={filters}
+          onChange={(next) => {
+            latest = next;
+            setFilters(next);
+          }}
+        />
+      );
+    }
+    renderPicker(
+      <MemoryRouter>
+        <Host />
+      </MemoryRouter>,
+    );
+    const user = userEvent.setup();
+    const status = screen.getByRole('group', { name: 'Status' });
+    expect(within(status).getByRole('button', { name: 'Vše' })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(within(status).getByRole('button', { name: 'Aktivní' }));
+    expect(latest.status).toBe('active');
+
+    const born = screen.getByRole('group', { name: 'Seen at birth' });
+    expect(within(born).getByRole('button', { name: 'All ads' })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(within(born).getByRole('button', { name: 'Seen at birth' }));
+    expect(latest.tomObservedOnly).toBe(true);
+
+    const dismissed = screen.getByRole('group', { name: 'Dismissed properties' });
+    expect(within(dismissed).getByRole('button', { name: 'Hide dismissed' })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(within(dismissed).getByRole('button', { name: 'Show dismissed' }));
+    expect(latest.showDismissed).toBe(true);
   });
+});
 
-  /* Ruling 3: one picker, one `collections` value; collections shared with me
-   * are their own group, labelled with their owner. */
-  it('groups mine and shared-with-me over one value, and keeps a vanished pick clearable', async () => {
-    const base = {
-      description: null, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
-      listing_count: 1, monitoring_enabled: false, notify_channels: [], is_system: false,
-    };
-    vi.mocked(api.listCollections).mockResolvedValue({
-      data: [
-        { ...base, id: 7, name: 'Šortlist', owner_email: null, shared_with: [] },
-        { ...base, id: 9, name: 'monitoring', owner_email: 'petr@example.cz',
-          shared_with: [{ account_id: 'me', email: null }] },
-      ],
-      total: 2,
-    });
-    const onChange = vi.fn();
-    renderPicker(<CollectionsPicker value={[9, 404]} onChange={onChange} />);
+describe('<FilterSidebar> broker', () => {
+  it('finds a broker by name in Advanced, scopes the filters to them, and clears the scope', async () => {
+    vi.mocked(api.listCollections).mockImplementation(never);
+    vi.mocked(api.listTags).mockImplementation(never);
+    vi.mocked(brokers.searchBrokersByName).mockResolvedValue([
+      { broker_id: 527, display_name: 'Jana Nováková', firm_name: 'RE/MAX Alfa', firm_domain: 're-max.cz', cz_active_property_count: 41 } as brokers.BrokerPublic,
+    ]);
+    let latest: ListingFilters = DEFAULT_FILTERS;
+    function Host() {
+      const [filters, setFilters] = useState<ListingFilters>(DEFAULT_FILTERS);
+      return (
+        <FilterSidebar
+          filters={filters}
+          onChange={(next) => {
+            latest = next;
+            setFilters(next);
+          }}
+        />
+      );
+    }
+    renderPicker(
+      <MemoryRouter>
+        <Host />
+      </MemoryRouter>,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Advanced' }));
+    await user.type(await screen.findByRole('textbox', { name: 'Broker' }), 'Nová');
+    await user.click(await screen.findByRole('button', { name: /Jana Nováková/ }));
+    expect(latest.brokerId).toBe(527);
+    expect(latest.categoryType).toBe(DEFAULT_FILTERS.categoryType);
 
-    const mine = await screen.findByRole('group', { name: 'Mine' });
-    const shared = screen.getByRole('group', { name: 'Shared with me' });
-    expect(within(mine).getByRole('button', { name: 'Šortlist' })).toBeInTheDocument();
-    const picked = within(shared).getByRole('button', { name: 'monitoring · petr@example.cz' });
-    expect(picked).toHaveAttribute('aria-pressed', 'true');
-
-    // A pick the list no longer holds (revoked, deleted) stays visible and clears.
-    const gone = within(screen.getByRole('group', { name: 'No longer available' }))
-      .getByRole('button', { name: '#404' });
-    fireEvent.click(gone);
-    expect(onChange).toHaveBeenLastCalledWith([9]);
-
-    // Both groups write the ONE value array.
-    fireEvent.click(within(mine).getByRole('button', { name: 'Šortlist' }));
-    expect(onChange).toHaveBeenLastCalledWith([9, 404, 7]);
-  });
-
-  it('draws no group headings while nothing is shared with me', async () => {
-    vi.mocked(api.listCollections).mockResolvedValue({
-      data: [{ id: 7, name: 'Šortlist', owner_email: null, shared_with: [] }],
-      total: 1,
-    } as never);
-    renderPicker(<CollectionsPicker value={null} onChange={() => {}} />);
-    expect(await screen.findByRole('button', { name: 'Šortlist' })).toBeInTheDocument();
-    expect(screen.queryByRole('group', { name: 'Mine' })).toBeNull();
-  });
-
-  it('says the tags failed instead of "none yet", and reads them again', async () => {
-    vi.mocked(api.listTags)
-      .mockRejectedValueOnce(new Error('HTTP 500'))
-      .mockResolvedValue({ data: [{ id: 3, name: 'k prohlídce', color: 'copper' }] } as never);
-    renderPicker(<AccountTagFilter value={{ tags: [], tagsExcluded: [] }} onChange={() => {}} />);
-    const retry = await screen.findByRole('button', { name: /Štítky se nepodařilo načíst/ });
-    expect(screen.queryByText(/No tags yet/)).toBeNull();
-    fireEvent.click(retry);
-    expect(await screen.findByRole('button', { name: 'k prohlídce' })).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'Remove broker Jana Nováková' }));
+    expect(latest.brokerId).toBeNull();
+    expect(brokers.fetchBrokerDossier).not.toHaveBeenCalled();
   });
 });
 
@@ -141,7 +156,7 @@ describe('<FilterSidebar> location pick', () => {
       name: 'Na Rybníčkách', label: 'Ulice', type: 'regional.street',
       position: { lon: 15.77, lat: 50.03 },
     }]);
-    await user.type(screen.getByRole('textbox', { name: 'District' }), 'Na Ryb');
+    await user.type(screen.getByRole('textbox', { name: 'Location' }), 'Na Ryb');
     await user.click(within(await screen.findByRole('listbox')).getByRole('button'));
 
     /* While the pick resolves, narrow the cohort to 2+kk. */
@@ -155,5 +170,44 @@ describe('<FilterSidebar> location pick', () => {
     expect(latest.districts).toEqual([
       { name: 'Na Rybníčkách', context: 'Pardubice', level: 'ulice', id: 666742 },
     ]);
+  });
+});
+
+describe('<FilterSidebar> collapse', () => {
+  const renderSidebar = (onCollapse?: () => void) => {
+    vi.mocked(api.listCollections).mockImplementation(never);
+    vi.mocked(api.listTags).mockImplementation(never);
+    return renderPicker(
+      <MemoryRouter>
+        <FilterSidebar filters={DEFAULT_FILTERS} onChange={() => {}} onCollapse={onCollapse} />
+      </MemoryRouter>,
+    );
+  };
+
+  it('offers "Hide filters" only to a caller that can fold it', () => {
+    const onCollapse = vi.fn();
+    const { unmount } = renderSidebar(onCollapse);
+    fireEvent.click(screen.getByRole('button', { name: 'Hide filters' }));
+    expect(onCollapse).toHaveBeenCalledTimes(1);
+    unmount();
+
+    renderSidebar();
+    expect(screen.queryByRole('button', { name: 'Hide filters' })).toBeNull();
+  });
+});
+
+describe('<FilterSidebarRail>', () => {
+  it('brings the filters back on a click', () => {
+    const onExpand = vi.fn();
+    render(<FilterSidebarRail active={false} onExpand={onExpand} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show filters' }));
+    expect(onExpand).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks that a filter still narrows the results only when one does', () => {
+    const { rerender } = render(<FilterSidebarRail active={false} onExpand={() => {}} />);
+    expect(screen.queryByRole('img', { name: 'Filters active' })).toBeNull();
+    rerender(<FilterSidebarRail active onExpand={() => {}} />);
+    expect(screen.getByRole('img', { name: 'Filters active' })).toBeInTheDocument();
   });
 });

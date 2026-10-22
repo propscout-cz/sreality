@@ -1,38 +1,6 @@
-"""Fetch real listing pages and save anonymized fixtures.
+"""Fetch real listing pages and save anonymized fixtures, or scrub saved ones.
 
-Run from GitHub Actions (.github/workflows/fetch-fixtures.yml). Cannot
-run from this developer sandbox because outbound HTTP is blocked.
-
-Anonymization scope: drop contact PII (phones, emails) and exact
-street numbers. Listing prices, dispositions, and the surrounding
-HTML structure are preserved — they're public data and the parser
-tests need them to make meaningful assertions later. Site-specific
-agent-name patterns are too varied to scrub by regex without false
-positives; if a fixture contains a real agent name, scrub it
-manually post-fetch.
-
-Usage (from a workflow runner):
-
-    python scripts/fetch_and_anonymize_fixtures.py \\
-        --output-dir tests/fixtures/source_html \\
-        --bezrealitky https://www.bezrealitky.cz/... \\
-        --idnes https://reality.idnes.cz/detail/... \\
-        --remax https://www.remax-czech.cz/reality/... \\
-        --bazos-index https://reality.bazos.cz/prodam/byt/ \\
-        --bazos-detail https://reality.bazos.cz/inzerat/.../...php
-
-Each URL is optional; missing ones are skipped. Output filenames are
-fixed (bezrealitky_sample.html etc.) so the per-source tests can find
-them. Bazos is a bulk crawler source (not an LLM URL parser), so it
-needs two fixtures — a search/index page and a single detail page.
-
-Note: the regex anonymizer below scrubs phones/emails/street-numbers
-but not agent/seller names (too varied for a safe regex). Bazos index
-and detail pages embed real seller names in `odeslatakci('rating',…)`
-onclicks and the "Jméno" field; hand-scrub those in the committed
-fixture if present.
-
-Second mode — scrub an ALREADY-SAVED fixture, contact fields only:
+`--scrub-contacts` scrubs an ALREADY-SAVED fixture, contact fields only:
 
     python scripts/fetch_and_anonymize_fixtures.py \\
         --scrub-contacts tests/fixtures/<set>/*.html \\
@@ -41,6 +9,35 @@ Second mode — scrub an ALREADY-SAVED fixture, contact fields only:
 Use it for whole-page fixtures kept for their BYTES rather than for
 their visible text — anonymize()'s blanket 9-digit sweep would rewrite
 coordinates and photo ids there. See anonymize_contacts() below.
+
+The fetch mode downloads pages and runs anonymize() over them; run it
+where outbound HTTP to the portals is allowed:
+
+    python scripts/fetch_and_anonymize_fixtures.py \\
+        --output-dir <dir> \\
+        --idnes https://reality.idnes.cz/detail/... \\
+        --bazos-index https://reality.bazos.cz/prodam/byt/ \\
+        --bazos-detail https://reality.bazos.cz/inzerat/.../...php
+
+Each URL is optional; missing ones are skipped. Output names are fixed
+(idnes_reality_sample.html etc.) and no test reads them under those
+names any more, so rename the file to what its test expects (e.g.
+tests/fixtures/portal_html/idnes_detail.html). Bazos needs two
+fixtures — a search/index page and a single detail page.
+
+Anonymization scope: drop contact PII (phones, emails) and exact
+street numbers. Listing prices, dispositions, and the surrounding
+HTML structure are preserved — they're public data and the parser
+tests need them to make meaningful assertions. Site-specific
+agent-name patterns are too varied to scrub by regex without false
+positives; if a fixture contains a real agent name, scrub it
+manually post-fetch.
+
+Note: the regex anonymizer below scrubs phones/emails/street-numbers
+but not agent/seller names (too varied for a safe regex). Bazos index
+and detail pages embed real seller names in `odeslatakci('rating',…)`
+onclicks and the "Jméno" field; hand-scrub those in the committed
+fixture if present.
 """
 
 from __future__ import annotations
@@ -111,7 +108,7 @@ def anonymize(html: str) -> str:
 # --- contact-scoped scrub, for fixtures anonymize() would corrupt ---
 #
 # anonymize() masks http(s) URLs and then sweeps EVERY 9-digit run. That is right
-# for the LLM-parser fixtures, whose value is the visible listing text. It is
+# for a fixture whose value is its visible listing text. It is
 # wrong for a whole-page fixture kept for its BYTES (the location_w2a_refetch
 # payload-normaliser set): on those pages the same 9-digit shape is a coordinate
 # (`data-gps-lat="50.069672777778"`), a photo id inside JSON-escaped markup that

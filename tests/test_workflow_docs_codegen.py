@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -101,36 +102,7 @@ def test_on_boolean_key_gotcha_is_handled() -> None:
     assert on.get("schedule") == [{"cron": "0 * * * *"}]
 
 
-def test_portal_tag_drives_the_per_portal_schedule() -> None:
-    # The `# portal: <source>` tag on a scrape workflow is what the Health
-    # dashboard groups on; shared/source-agnostic jobs stay untagged (None).
-    by_file = {d["filename"]: d for d in _docs()}
-    assert by_file["idnes_index_walk.yml"]["portal"] == "idnes"
-    assert by_file["idnes_detail_drain.yml"]["portal"] == "idnes"
-    assert by_file["bazos_index_walk.yml"]["portal"] == "bazos"
-    assert by_file["index_walk.yml"]["portal"] == "sreality"
-    # Shared platform jobs and non-portal ingests are NOT tagged.
-    assert by_file["images.yml"]["portal"] is None
-    assert by_file["scrape_price_stats.yml"]["portal"] is None
-
-
-def test_portal_tag_is_stripped_from_the_description() -> None:
-    text = (
-        'name: "Demo"\n'
-        "\n"
-        "# portal: idnes\n"
-        "# First line of the summary.\n"
-        "# Second line of the same paragraph.\n"
-        "\n"
-        "on:\n"
-        "  workflow_dispatch:\n"
-    )
-    assert MOD._portal(text) == "idnes"
-    assert (
-        MOD._leading_description(text)
-        == "First line of the summary. Second line of the same paragraph."
-    )
-
-
-def test_untagged_workflow_has_no_portal() -> None:
-    assert MOD._portal('name: "x"\n\n# Just a description.\non:\n  push:\n') is None
+def test_no_workflow_carries_the_retired_portal_tag() -> None:
+    """Nothing strips `# portal:` any more, so a tag would leak into the prose."""
+    tag = re.compile(r"(?m)^\s*#\s*portal:")
+    assert not [p.name for p in WORKFLOWS.glob("*.yml") if tag.search(p.read_text())]

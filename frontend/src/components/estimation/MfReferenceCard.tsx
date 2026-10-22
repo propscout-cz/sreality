@@ -5,8 +5,9 @@
  * SHAPE (lib/mfReference): a value's breakdown, the published range with its
  * note behind an (i), or the note alone — and nothing when there is no result.
  * It holds no reason text of its own; the notes come from the SQL. */
+import EstimateCard, { CardRow as Row, PerMonth } from '@/components/estimation/EstimateCard';
 import { InfoHint } from '@/components/settings/SectionChrome';
-import { fmtCount, fmtCzk, fmtMeasuredPricePerM2 } from '@/lib/format';
+import { fmtCount, fmtCzk, fmtMeasuredPricePerM2, fmtPct } from '@/lib/format';
 import {
   mfShape,
   type ReferenceRent,
@@ -25,9 +26,7 @@ const MF_ADJ_LABELS: Record<string, string> = {
 /* Every per-m² figure in this card is a MONTHLY rent per m² — it is a rent
  * map — so it goes through the shared formatter on the rent basis. */
 const perM2 = (n: number) => fmtMeasuredPricePerM2(n, 'rent');
-
-const pct2 = (n: number) =>
-  n.toLocaleString('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const EYEBROW = 'Odhad nájmu · cenová mapa MF';
 
 export function MfReferenceCard({
   refRent,
@@ -41,10 +40,9 @@ export function MfReferenceCard({
   if (shape.kind === 'none') return null;
   if (shape.kind === 'note') {
     return (
-      <div className="border border-dashed border-[var(--color-rule)] rounded-[var(--radius-sm)] p-3">
-        <Eyebrow />
+      <EstimateCard eyebrow={EYEBROW} tone="absent">
         <p className="mt-2 text-sm text-[var(--color-ink-3)]">{shape.note}</p>
-      </div>
+      </EstimateCard>
     );
   }
 
@@ -55,19 +53,18 @@ export function MfReferenceCard({
     const yieldMin = range.yield_min_pct ?? null;
     const yieldMax = range.yield_max_pct ?? null;
     return (
-      <div className="border border-[var(--color-rule)] rounded-[var(--radius-sm)] p-3">
-        <Eyebrow />
+      <EstimateCard eyebrow={EYEBROW}>
         <div className="mt-1 flex items-baseline justify-between gap-3">
           <span className="inline-flex items-baseline gap-1.5 text-lg font-medium tabular-nums">
             <span>
               {fmtCount(range.rent_min_czk)}–{fmtCzk(range.rent_max_czk)}
-              <span className="ml-1 text-[0.7rem] text-[var(--color-ink-3)]">/měs</span>
+              <PerMonth />
             </span>
             {note && <InfoHint text={note} className="self-center" />}
           </span>
           {yieldMin != null && yieldMax != null && (
             <YieldFigure>
-              {pct2(yieldMin)}–{pct2(yieldMax)}
+              {fmtPct(yieldMin, { digits: 2, unit: false })}–{fmtPct(yieldMax, { digits: 2 })}
             </YieldFigure>
           )}
         </div>
@@ -83,19 +80,18 @@ export function MfReferenceCard({
           )}
         </dl>
         <Source refRent={ref} />
-      </div>
+      </EstimateCard>
     );
   }
 
   return (
-    <div className="border border-[var(--color-rule)] rounded-[var(--radius-sm)] p-3">
-      <Eyebrow />
+    <EstimateCard eyebrow={EYEBROW}>
       <div className="mt-1 flex items-baseline justify-between gap-3">
         <span className="text-lg font-medium tabular-nums">
           {fmtCzk(ref.monthly_rent_czk)}
-          <span className="ml-1 text-[0.7rem] text-[var(--color-ink-3)]">/měs</span>
+          <PerMonth />
         </span>
-        {yieldPct != null && <YieldFigure>{pct2(yieldPct)}</YieldFigure>}
+        {yieldPct != null && <YieldFigure>{fmtPct(yieldPct, { digits: 2 })}</YieldFigure>}
       </div>
       <dl className="mt-2 space-y-0.5 text-[0.72rem] tabular-nums">
         <Row label={`Nájemné referenčního bytu${ref.is_novostavba ? ' (novostavba)' : ''}`}>
@@ -108,47 +104,18 @@ export function MfReferenceCard({
         </Row>
       </dl>
       <Source refRent={ref} />
-    </div>
+    </EstimateCard>
   );
 }
 
-function Eyebrow() {
-  return (
-    <p className="text-[0.6rem] tracking-[0.16em] uppercase text-[var(--color-ink-4)]">
-      Odhad nájmu · cenová mapa MF
-    </p>
-  );
-}
-
-function YieldFigure({ children }: { children: React.ReactNode }) {
+/* "hrubý výnos 4,60 %" beside a card's headline figure — the MF card's and
+ * our estimate's. */
+export function YieldFigure({ children }: { children: React.ReactNode }) {
   return (
     <span className="text-[0.72rem] text-[var(--color-ink-3)] tabular-nums">
       hrubý výnos{' '}
-      <span className="text-[var(--color-ink)] font-medium">{children} %</span>
+      <span className="text-[var(--color-ink)] font-medium">{children}</span>
     </span>
-  );
-}
-
-function Row({
-  label,
-  strong = false,
-  children,
-}: {
-  label: string;
-  strong?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      className={
-        strong
-          ? 'flex justify-between gap-3 border-t border-[var(--color-rule)] pt-0.5'
-          : 'flex justify-between gap-3'
-      }
-    >
-      <dt className={strong ? undefined : 'text-[var(--color-ink-3)]'}>{label}</dt>
-      <dd>{children}</dd>
-    </div>
   );
 }
 

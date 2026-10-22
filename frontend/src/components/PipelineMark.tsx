@@ -1,6 +1,6 @@
 /* THE deal-pipeline mark (rule #22): the funnel, plus the stage badge when the
- * property is on the board. One component so the Browse card, the Table row,
- * the listing header and the kanban all render the same glyph at the same
+ * property is on the board. One component so the Browse card, the listing
+ * header and the kanban all render the same glyph at the same
  * sizes — the extension reproduces this shape by hand (vanilla TS, no React),
  * and its inline SVG is kept in step with icons.tsx:FunnelIcon.
  *

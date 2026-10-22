@@ -1,4 +1,4 @@
-import type { ChangeEvent, ReactNode } from 'react';
+import type { AriaAttributes, ChangeEvent, InputHTMLAttributes, ReactNode } from 'react';
 import { useId, useState } from 'react';
 
 export type TriValue = 'any' | 'yes' | 'no';
@@ -37,10 +37,10 @@ export function CollapsibleGroup({
           aria-expanded={open}
           aria-controls={panelId}
           aria-describedby={showActive ? activeHintId : undefined}
-          className="group flex w-full items-center gap-2.5 py-4 text-left"
+          className="group flex w-full items-center gap-2.5 pt-5 pb-4 text-left"
         >
           <span
-            className="text-[0.85rem] tracking-[0.15em] uppercase font-semibold text-[var(--color-ink)]"
+            className="text-[1.125rem] leading-tight tracking-[-0.005em] font-semibold text-[var(--color-ink)]"
             style={{ fontFamily: 'var(--font-display)' }}
           >
             {title}
@@ -187,12 +187,15 @@ export function ControlGroup({
 export function Field({
   label,
   help,
+  aside,
   as = 'group',
   className = '',
   children,
 }: {
   label: string;
   help?: string;
+  /* A tag after the caption (the group form only): beside it, never part of the name. */
+  aside?: ReactNode;
   as?: 'group' | 'control';
   className?: string;
   children: ReactNode;
@@ -227,7 +230,7 @@ export function Field({
       aria-describedby={help ? helpId : undefined}
       className={className}
     >
-      {caption}
+      {aside ? <div className="flex flex-wrap items-center gap-x-2">{caption}{aside}</div> : caption}
       {helpEl}
       <div className="mt-2">{children}</div>
     </div>
@@ -258,6 +261,8 @@ export function Segmented<T extends string | number | null>({
   onChange,
   variant = 'soft',
   label,
+  aria,
+  box,
 }: {
   options: ReadonlyArray<{ value: T; label: string }>;
   value: T;
@@ -265,15 +270,19 @@ export function Segmented<T extends string | number | null>({
   variant?: 'soft' | 'solid';
   /* Names the choice when no Field caption does. */
   label?: string;
+  aria?: AriaAttributes;
+  box?: FormBox;
 }) {
+  const invalid = box ? ' [&[aria-invalid=true]>button]:border-[var(--color-brick)]' : ''; // the group carries aria-invalid
   return (
-    <div className="flex flex-wrap gap-1" role={label ? 'group' : undefined} aria-label={label}>
+    <div className={`flex flex-wrap gap-1${invalid}`} role={label ? 'group' : undefined} aria-label={label} {...aria}>
       {options.map((o) => (
         <PickButton
           key={String(o.value)}
           on={o.value === value}
           onClick={() => onChange(o.value)}
           variant={variant}
+          className={formBox(box)}
         >
           {o.label}
         </PickButton>
@@ -387,11 +396,25 @@ export function Switch({
   );
 }
 
+/* The form box: a form grid's controls (the Valuo editor) as ONE box, the inset text box's 34 px (a select draws 1 px
+ * short of it, a pick 4 px), dashed while `absent` (nothing is sent: dashed = absent, system.md), brick while
+ * aria-invalid. A control without `box` keeps its own size and every class it had. */
+export type FormBox = 'present' | 'absent';
+export const formBox = (box?: FormBox) =>
+  box ? `h-[2.125rem] aria-[invalid=true]:border-[var(--color-brick)]${box === 'absent' ? ' border-dashed' : ''}` : '';
+
 /* -------------------------------------------------------------------------- */
 /* NumberCell — paired-input cell used inside RangeFilter and any standalone  */
 /* numeric input slot. Inset background + tabular monospace so values align   */
 /* vertically across rows.                                                    */
 /* -------------------------------------------------------------------------- */
+
+const INSET = 'w-full min-w-0 px-2 py-1.5 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]';
+
+/* A form box's text or date input: NumberCell's box; `label` is its accessible name. */
+export const TextBox = ({ label, box, ...input }: InputHTMLAttributes<HTMLInputElement> & { label: string; box: FormBox }) => (
+  <input aria-label={label} {...input} className={`${INSET} ${formBox(box)}`} />
+);
 
 export function NumberCell({
   value,
@@ -400,8 +423,8 @@ export function NumberCell({
   onBlur,
   ariaLabel,
 }: {
-  /* A string value lets callers that buffer raw text (FilterForm's
-   * BufferedNumberInput) keep mid-typing intermediates like '-' alive. */
+  /* A string value lets a caller that buffers raw text (DecimalField's
+   * `cell`) keep mid-typing intermediates like '-' alive. */
   value: number | string | null;
   placeholder: string;
   onChange: (e: ChangeEvent<HTMLInputElement>) => void;
@@ -417,8 +440,94 @@ export function NumberCell({
       onChange={onChange}
       onBlur={onBlur}
       aria-label={ariaLabel}
-      className="w-full min-w-0 px-2 py-1.5 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]"
+      className={INSET}
     />
+  );
+}
+
+/* DecimalField — the one typed-number input, with an optional unit after it.
+ * The typed text is buffered: rebuilding it from the parsed number dropped a
+ * trailing "52," on every key, so 52,5 could not be typed, and wiped a lone
+ * "-", so "-10" stored +10. Only text that parses emits (a comma is the decimal
+ * point, an empty box is null, `integer` truncates); a blur or an outside
+ * change of `value` shows the value again, with a decimal comma. `cell` draws
+ * it as the filter forms' NumberCell box and keeps their display as it was
+ * (the value as String(v), no reset on blur). `label` is the input's
+ * accessible name; the visible caption is the caller's. A `box` draws the form
+ * box, its unit inside it. */
+const decimalText = (v: number | null) => (v == null ? '' : String(v).replace('.', ','));
+
+export function DecimalField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  suffix,
+  readOnly,
+  integer,
+  cell,
+  className = '',
+  aria,
+  box,
+}: {
+  label: string;
+  value: number | null;
+  onChange: (v: number | null) => void;
+  placeholder?: string;
+  suffix?: string;
+  readOnly?: boolean;
+  integer?: boolean;
+  cell?: boolean;
+  className?: string;
+  /* The boxed input only; `cell` has no use for it yet. */
+  aria?: AriaAttributes;
+  box?: FormBox;
+}) {
+  const shown = (v: number | null) => (cell ? (v == null ? '' : String(v)) : decimalText(v));
+  const [buf, setBuf] = useState({ text: shown(value), value });
+  // Adjust-state-during-render (the documented derived-state pattern): adopt an outside value.
+  if (buf.value !== value) setBuf({ text: shown(value), value });
+  const onType = (e: ChangeEvent<HTMLInputElement>) => {
+    if (readOnly) return;
+    const text = e.target.value;
+    const raw = text.trim().replace(',', '.');
+    const n = raw === '' ? null : Number(raw);
+    if (n !== null && !Number.isFinite(n)) return setBuf({ text, value });
+    const v = integer && n !== null ? Math.trunc(n) : n;
+    setBuf({ text, value: v });
+    onChange(v);
+  };
+  if (cell) {
+    return (
+      <NumberCell value={buf.text} placeholder={placeholder ?? ''} onChange={onType} ariaLabel={label} />
+    );
+  }
+  return (
+    <div className={['flex items-stretch gap-2 min-w-0', className].join(' ') + (box ? ' relative' : '')}>
+      <input
+        type="text"
+        aria-label={label}
+        {...aria}
+        inputMode={integer ? 'numeric' : 'decimal'}
+        readOnly={readOnly}
+        value={buf.text}
+        placeholder={placeholder}
+        onChange={onType}
+        onBlur={() => setBuf({ text: decimalText(value), value })}
+        className={[
+          `flex-1 min-w-0 ${box ? 'pl-2 pr-8 py-1.5' : 'px-3 py-2'} text-sm font-mono tabular-nums rounded-[var(--radius-sm)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]`,
+          readOnly
+            ? 'bg-[var(--color-paper-2)] text-[var(--color-ink-2)] cursor-default'
+            : 'bg-[var(--color-inset)]',
+          formBox(box),
+        ].join(' ').trim()}
+      />
+      {suffix && (
+        <span className={`${box ? 'absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none ' : ''}self-center text-[0.78rem] tracking-wide text-[var(--color-ink-3)]`}>
+          {suffix}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -447,27 +556,59 @@ export function TriRow<T extends TriValue>({
   return (
     <div className="flex items-center justify-between gap-2">
       <span className="text-sm text-[var(--color-ink-2)]">{label}</span>
-      <div className="grid grid-cols-3 gap-0.5 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-0.5">
-        {TRI_OPTS.map((opt) => {
-          const on = value === opt.value;
-          return (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => onChange(opt.value as T)}
-              className={[
-                'px-2.5 py-0.5 text-[0.7rem] rounded-[var(--radius-xs)] transition-colors',
-                on
-                  ? 'bg-[var(--color-copper)] text-white'
-                  : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
-              ].join(' ')}
-              aria-pressed={on}
-            >
-              {opt.label}
-            </button>
-          );
-        })}
-      </div>
+      <SegmentedBar options={TRI_OPTS as ReadonlyArray<{ value: T; label: string }>} value={value} onChange={onChange} />
+    </div>
+  );
+}
+
+/* SegmentedBar — ONE control of adjoining segments, one of them lit: the
+ * amenities' any / yes / no, the Status line's Vše / Aktivní / Neaktivní, the
+ * dismissed and seen-at-birth switches. `fill` stretches it across its container
+ * in equal segments at the sidebar's reading size; otherwise it hugs its labels
+ * at the compact amenity size. */
+export function SegmentedBar<T extends string | number | boolean>({
+  options,
+  value,
+  onChange,
+  label,
+  fill = false,
+}: {
+  options: ReadonlyArray<{ value: T; label: string }>;
+  value: T;
+  onChange: (v: T) => void;
+  label?: string;
+  fill?: boolean;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      className={[
+        fill ? 'grid w-full' : 'inline-grid',
+        'gap-0.5 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-0.5',
+      ].join(' ')}
+      style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
+    >
+      {options.map((opt) => {
+        const on = value === opt.value;
+        return (
+          <button
+            key={String(opt.value)}
+            type="button"
+            onClick={() => onChange(opt.value)}
+            className={[
+              fill ? 'px-2 py-1 text-xs' : 'px-2.5 py-0.5 text-[0.7rem]',
+              'whitespace-nowrap rounded-[var(--radius-xs)] transition-colors',
+              on
+                ? 'bg-[var(--color-copper)] text-white'
+                : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
+            ].join(' ')}
+            aria-pressed={on}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

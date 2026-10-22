@@ -7,7 +7,8 @@ rule, `<level>_id = any(codes)`, compiled by:
   * `api/location_filter.py`            — the API + the Watchdog matcher
   * `frontend/src/lib/districtCodes.ts` — the SPA (PostgREST string + the
                                           in-memory row predicate)
-  * `browse_stats_properties`           — migration 605, the Stats cohort
+  * `browse_stats_properties`           — migration 605, the Stats cohort (626's pivot
+                                          carries 625's WHERE byte for byte)
   * `browse_map_cells`                  — migration 605, the map cohort
 
 This file holds the API half of the shared table (`tests/fixtures/
@@ -80,11 +81,18 @@ def test_the_ts_module_declares_the_same_levels_and_columns() -> None:
 
 # The latest definition of both RPCs: 605 carries 598's stats body and 602's map
 # body forward byte for byte except the four chip arms, where `locality` (a street
-# pick filtered at its TOWN) became `ulice` (tests below). Re-read the chip arms
-# when this moves again.
+# pick filtered at its TOWN) became `ulice` (tests below); 625 appended
+# tom_observed_only to both; 626 replaced the Stats body with the dashboard pivot
+# over 625's WHERE verbatim (tests/test_626_stats_dashboard.py); 629 (curated-set scope) added
+# nine trailing parameters and one clause block to both RPCs; 632 restated the Stats pivot with the
+# floor at five and nothing else changed (tests/test_stats_min_n_migration.py); 634 made its
+# status fact read the cohort's own portal rule (tests/test_stats_status_lens_migration.py); 630 re-pointed the map's at browse_list;
+# 640 dropped the id denylist; 644 gave the condition conjunct the `__unknown__` chip
+# (tests/test_644_condition_unknown_filter.py); 648 appended the energy-rating parameter
+# (tests/test_648_browse_energy_rating_filter.py). Re-read the chip arms when this moves again.
 _LATEST_RPC_DEFINITION = {
-    "browse_stats_properties": "605_street_chip_level.sql",
-    "browse_map_cells": "605_street_chip_level.sql",
+    "browse_stats_properties": "648_browse_energy_rating_filter.sql",
+    "browse_map_cells": "648_browse_energy_rating_filter.sql",
 }
 
 
@@ -117,7 +125,7 @@ def _chip_case_arms(func: str) -> list[dict[str, str]]:
 
 @pytest.mark.parametrize(
     "func,relation",
-    [("browse_stats_properties", "browse_list"), ("browse_map_cells", "properties_map_mv")],
+    [("browse_stats_properties", "browse_list"), ("browse_map_cells", "browse_list")],
 )
 def test_the_stats_and_map_cohorts_inherit_the_consumer_rule(func: str, relation: str) -> None:
     """W5, operator ruling 2026-09-13. Neither RPC restates the rule that a listing is
@@ -131,21 +139,35 @@ def test_the_stats_and_map_cohorts_inherit_the_consumer_rule(func: str, relation
         assert legacy not in body, f"{func} reads {legacy} — it would bypass the rule"
 
 
+def _unknown_capable_columns() -> list[str]:
+    from toolkit import filter_registry as fr
+
+    return sorted(f.pg_column for f in fr.all_filters()
+                  if fr.sql_kind(f) == "enum_or_unknown" and fr.Agenda.BROWSE in f.agendas)
+
+
+def test_every_unknown_chip_is_on_the_aggregates() -> None:
+    """The registry decides which filters carry the `__unknown__` chip; a new one must
+    reach these bodies too. RED by: a chip added in Python and the SPA alone."""
+    assert _unknown_capable_columns() == ["condition", "furnished", "ownership"]
+
+
 @pytest.mark.parametrize("func", ["browse_stats_properties", "browse_map_cells"])
-def test_the_rpc_bodies_know_the_same_canonical_ownership(func: str) -> None:
-    """The `__unknown__` ownership pill means "NULL or not canonical", and rule 16
-    gives that predicate one definition. Browse's list compiles it from
-    `OWNERSHIP_CANONICAL`; these two bodies spell the array out. RED by: widening
-    the canon (W5 added `jine`) without carrying it into the SQL, which makes the
-    aggregates count as unknown the rows the list beside them no longer does."""
-    from toolkit.filter_registry import OWNERSHIP_CANONICAL
+@pytest.mark.parametrize("column", _unknown_capable_columns())
+def test_the_rpc_bodies_know_the_same_canon(func: str, column: str) -> None:
+    """The `__unknown__` pill (Neuvedeno) means "NULL or not canonical", and rule 16
+    gives that predicate one definition. Browse's list compiles it from the generated
+    canon; these two bodies spell the array out. RED by: widening a canon (W5 added
+    ownership `jine`) without carrying it into the SQL, which makes the aggregates
+    count as unknown the rows the list beside them no longer does."""
+    from toolkit.filter_registry import COLUMN_CANONICAL_VALUES
 
     arrays = re.findall(
-        r"l\.ownership = any\(array\[([^\]]+)\]\)", _function_body(func)
+        rf"l\.{column} = any\(array\[([^\]]+)\]\)", _function_body(func)
     )
-    assert arrays, f"{func} has no ownership __unknown__ predicate"
+    assert arrays, f"{func} has no {column} __unknown__ predicate"
     for arr in arrays:
-        assert tuple(re.findall(r"'([a-z_]+)'", arr)) == OWNERSHIP_CANONICAL
+        assert tuple(re.findall(r"'([a-z_]+)'", arr)) == COLUMN_CANONICAL_VALUES[column]
 
 
 @pytest.mark.parametrize("func", ["browse_stats_properties", "browse_map_cells"])
@@ -196,18 +218,29 @@ def test_the_rpc_signatures_keep_the_chip_parameters() -> None:
     Since 436/439 the lists grew 537's `hide_dismissed`, 597's two exclusion
     parameters and 598's `property_ids_excluded`, and 597 dropped the five nothing
     sent (and the map's `listing_ids_filter`) — tests/test_portal_exclusion_migration.py
-    and tests/test_property_ids_excluded_migration.py pin each step."""
+    and tests/test_property_ids_excluded_migration.py pin each step. 626 appended the
+    Stats pivot's chart `spec`, which shapes the answer and never the cohort; 629 the
+    nine curated-set scope parameters (tests/test_curated_set_scope_migration.py); 648
+    the energy-rating filter (tests/test_648_browse_energy_rating_filter.py)."""
     gone = {"tag_ids", "districts_context_filter", "city_index_rules", "city_proximity",
             "with_estimates", "listing_ids_filter"}
-    for func, previous in (
-        ("browse_stats_properties", "436_city_quality_obec_key.sql"),
-        ("browse_map_cells", "439_browse_map_cells.sql"),
+    # 640 dropped 598's denylist once 629 judged membership in the database.
+    gone_later = {"property_ids_excluded"}
+    for func, previous, own in (
+        ("browse_stats_properties", "436_city_quality_obec_key.sql", ["spec"]),
+        ("browse_map_cells", "439_browse_map_cells.sql", []),
     ):
         new = _params_of(latest_definition(func).read_text(encoding="utf-8"), func)
         old = _params_of((MIGRATIONS / previous).read_text(encoding="utf-8"), func)
         assert new == [p for p in old if p not in gone] + [
+            p for p in (
             "hide_dismissed", "portal_excluded_filter", "portal_excluded_active_only",
-            "property_ids_excluded",
+            "property_ids_excluded", "tom_observed_only", *own,
+            # 629: the curated-set scope, three sets x (set, in, out), judged under RLS.
+            "tags_set", "tags_in", "tags_out", "collections_set", "collections_in",
+            "collections_out", "pipeline_set", "pipeline_in", "pipeline_out",
+            "energy_rating_filter",
+            ) if p not in gone_later
         ], f"{func}: parameter list changed"
         for chip_param in (
             "districts_filter", "districts_levels", "districts_ids", "districts_excluded_filter",
@@ -240,8 +273,8 @@ def _latest_view_definition(view: str) -> str:
     "view", ["browse_projection", "properties_public", "pipeline_board_public", "listing_feed_public"],
 )
 def test_every_level_column_exists_on_every_chip_filtered_relation(view: str) -> None:
-    """A level is only a filter where the relation publishes its column: browse_list and
-    properties_map_mv inherit browse_projection's, properties_public is the Watchdog's,
+    """A level is only a filter where the relation publishes its column: browse_list inherits
+    browse_projection's (the map reads it since 630), properties_public is the Watchdog's,
     pipeline_board_public the board's in-memory copy, listing_feed_public the portal-mirror
     lane's. RED by: a re-definition that drops one, or a level with no served column."""
     from tests.test_location_w3_projection import _columns, _sql
@@ -391,8 +424,7 @@ def test_the_two_filters_are_gone_from_the_spa_filter_types() -> None:
 def test_the_two_portal_ids_are_gone_from_every_payload() -> None:
     """W4-a. They were SREALITY's portal ids, carried along in five projections
     and rendered by nothing: the comparable row, the transit-corridor row, the
-    freshness snapshot, the URL-parse `listing` sidecar and the SPA's detail
-    select. A filter that no longer exists does not get to keep a column in every
+    freshness snapshot and the SPA's detail select. A filter that no longer exists does not get to keep a column in every
     payload on the way out. The `listings` columns themselves are W4-c's.
 
     Rule 12 is intact: an estimation trace already written keeps its keys, and the
@@ -400,11 +432,8 @@ def test_the_two_portal_ids_are_gone_from_every_payload() -> None:
     nothing, not as a crash)."""
     from toolkit.freshness import _LISTING_COLS
 
-    from api.estimation_runs import _LISTING_FIELDS
-
     for gone in _DELETED:
         assert gone not in _LISTING_COLS
-        assert gone not in _LISTING_FIELDS
         for rel in (
             "toolkit/comparables.py",
             "toolkit/transit_axis.py",
@@ -424,17 +453,21 @@ def test_every_spatial_reader_takes_its_point_from_listing_location() -> None:
     The geography cast is checked with it, and it is the reason this test is
     worth having: `listing_location.geom` is geometry(Point,4326), so an
     UNCAST `ST_DWithin(ll.geom, point, 1000)` compiles, runs, and silently means
-    1000 DEGREES. Every moved call site casts."""
+    1000 DEGREES. Every moved call site casts. A module that takes its join from
+    location_data/claims_common.py (COHORT_LOCATION_FROM / SUBJECT_LOCATION_JOIN)
+    counts as joining it."""
     spatial = (
         "toolkit/comparables.py",
         "toolkit/velocity.py",
         "toolkit/transit_axis.py",
         "toolkit/neighborhoods.py",
-        "api/notifications.py",
         "api/estimation_runs.py",
     )
+    # The watchdog circle reads properties_public's lat/lng (its location ad's point, migration 636),
+    # so the matcher is held to the negative half only.
+    view_readers = ("api/notifications.py",)
     bare_l_geom = re.compile(r"(?<![a-z])l\.geom")
-    for rel in spatial:
+    for rel in spatial + view_readers:
         text = (REPO / rel).read_text(encoding="utf-8")
         code = "\n".join(
             line for line in text.splitlines() if not line.lstrip().startswith("#")
@@ -442,7 +475,13 @@ def test_every_spatial_reader_takes_its_point_from_listing_location() -> None:
         assert bare_l_geom.search(code) is None, f"{rel} still reads listings.geom"
         assert "listings.geom" not in code, f"{rel} still reads listings.geom"
         assert "COALESCE(p.geom" not in code, f"{rel} still reads properties.geom"
-        assert "listing_location" in code, f"{rel} does not join listing_location"
+        if rel in view_readers:
+            continue
+        assert (
+            "listing_location" in code
+            or "COHORT_LOCATION_FROM" in code
+            or "SUBJECT_LOCATION_JOIN" in code
+        ), f"{rel} does not read listing_location (directly or through claims_common)"
 
     for rel, expected in (
         ("toolkit/comparables.py", 2),

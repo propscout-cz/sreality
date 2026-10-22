@@ -84,7 +84,7 @@ _SOLD_COMP_CELLS_SQL = """
         JOIN pipeline_stages ps
           ON ps.account_id = pp.account_id AND ps.id = pp.stage_id
         JOIN properties p ON p.id = pp.property_id
-        JOIN listing_location ll ON ll.listing_id = p.repr_listing_ref_id
+        JOIN listing_location ll ON ll.listing_id = p.location_listing_ref_id
         JOIN admin_boundaries ab
           ON ab.level = 'obec' AND ab.id = ll.obec_kod
         WHERE p.status = 'active'

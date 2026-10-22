@@ -1,0 +1,17 @@
+check_key,status,from_run_at,to_run_at,runs
+capacity,fail,2026-10-19T00:39:58Z,2026-10-19T04:44:25Z,10
+jobs,ok,2026-10-19T00:39:58Z,2026-10-19T02:37:30Z,14
+jobs,fail,2026-10-19T02:46:33Z,2026-10-19T02:46:33Z,1
+jobs,ok,2026-10-19T02:55:36Z,2026-10-19T05:03:35Z,15
+llm,ok,2026-10-19T00:39:58Z,2026-10-19T05:03:35Z,30
+location_town_coverage,fail,2026-10-05T05:51:18Z,2026-10-06T00:07:51Z,3
+location_town_coverage,unknown,2026-10-06T06:30:06Z,2026-10-06T06:30:06Z,1
+location_town_coverage,fail,2026-10-06T18:27:13Z,2026-10-07T13:33:55Z,3
+location_town_coverage,unknown,2026-10-07T23:10:03Z,2026-10-07T23:10:03Z,1
+location_town_coverage,fail,2026-10-08T06:14:58Z,2026-10-08T06:14:58Z,1
+location_town_coverage,unknown,2026-10-08T13:39:17Z,2026-10-08T13:39:17Z,1
+location_town_coverage,fail,2026-10-08T23:25:34Z,2026-10-09T13:27:47Z,3
+location_town_coverage,unknown,2026-10-09T22:43:33Z,2026-10-09T22:43:33Z,1
+location_town_coverage,fail,2026-10-09T22:53:52Z,2026-10-18T23:15:34Z,32
+migration_drift,ok,2026-10-05T05:51:18Z,2026-10-19T00:40:45Z,47
+outbound_url_conformance,warn,2026-10-06T12:03:11Z,2026-10-18T20:24:45Z,3

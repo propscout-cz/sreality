@@ -100,6 +100,7 @@ class MaximaPortal(portal_runner.PortalDefaults):
 
     source = SOURCE
     index_rate = 1.0
+    total_is_count = True  # walk_category's total is len(seen): only agenda totals exist
 
     def __init__(self, config: PortalConfig, *, max_pages: int | None = None) -> None:
         self._categories = config.categories

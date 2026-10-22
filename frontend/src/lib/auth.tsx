@@ -8,10 +8,13 @@ import {
   type ReactNode,
 } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Session, User } from '@supabase/supabase-js';
-import { supabase } from './supabase';
+import { isAuthRetryableFetchError, type Session, type User } from '@supabase/supabase-js';
+import { resetActiveBoard } from './acting';
+import { isSupabaseConfigured, supabase } from './supabase';
 import { isTransientApiError } from './api';
 import { pgRead } from './pgRead';
+import { syncAppBadge } from './appBadge';
+import { endPushHere, setPushGate, signOutPush } from './push';
 import { ROUTES } from './routes';
 
 /**
@@ -39,6 +42,17 @@ type AuthState = {
 
 const AuthContext = createContext<AuthState | null>(null);
 
+/* THE notifications gate: the bell, the feed's nav entry, the unread poll and
+ * push (lib/push `setPushGate`) all follow it. Admins, unconfigured local dev
+ * and a plan read that failed (null: shown rather than blanked over a hiccup)
+ * pass; otherwise the plan's `notifications` agenda decides. */
+export function notificationsVisible(
+  isAdmin: boolean,
+  agendas: Record<string, boolean> | null,
+): boolean {
+  return isAdmin || !isSupabaseConfigured() || agendas === null || agendas['notifications'] === true;
+}
+
 /* Cache key for the session's plan agendas. Deliberately NOT under any
  * feature's namespace: it is session state, read once per user. */
 export const sessionAgendasKey = (userId: string | null) =>
@@ -47,15 +61,22 @@ export const sessionAgendasKey = (userId: string | null) =>
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  /* No session, but not certainly nobody: a launch whose token refresh failed in
+   * transit (offline, a captive Wi-Fi, an Auth 5xx) is answered without a
+   * session while the stored one is kept for the next try. Cleared by any
+   * session or a SIGNED_OUT, the two certain answers. */
+  const [sessionUncertain, setSessionUncertain] = useState(false);
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
+    supabase.auth.getSession().then(({ data, error }) => {
       setSession(data.session);
+      setSessionUncertain(data.session == null && isAuthRetryableFetchError(error));
       setLoading(false);
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, next) => {
       setSession(next);
+      if (next || event === 'SIGNED_OUT') setSessionUncertain(false);
     });
     return () => sub.subscription.unsubscribe();
   }, []);
@@ -125,21 +146,55 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * (5 min), so the next session could paint the previous account's collections,
    * pipeline and notifications before its own reads landed. Clearing on the
    * TRANSITION (rather than only inside signOut) also covers a switch that
-   * happens through a token change rather than an explicit sign-out. */
+   * happens through a token change rather than an explicit sign-out.
+   *
+   * Push follows identity the same way (AUDIT F18): on any change of user,
+   * sign-out included, and on a launch with CERTAINLY nobody signed in, this
+   * device's subscription ends locally (no JWT needed) and the icon badge
+   * clears, so no subscription outlives its user. A launch that could not
+   * refresh its session (`sessionUncertain`) ends nothing: its user is most
+   * likely still there. None of it runs before the stored session is read
+   * (`loading`): the null it starts from is not yet anyone. */
   const prevUserId = useRef<string | null>(null);
   useEffect(() => {
-    if (prevUserId.current !== null && prevUserId.current !== userId) {
-      queryClient.clear();
-    }
+    if (loading) return;
+    const prev = prevUserId.current;
     prevUserId.current = userId;
-  }, [userId, queryClient]);
+    if (prev !== null && prev !== userId) {
+      queryClient.clear();
+      /* The per-device pipeline board and "edit as owner" were the previous
+       * account's pick (lib/acting): the next one starts on its own board. */
+      resetActiveBoard();
+      syncAppBadge(0);
+      void endPushHere();
+    } else if (prev === null && userId === null && !sessionUncertain) {
+      syncAppBadge(0);
+      void endPushHere();
+    }
+  }, [loading, userId, sessionUncertain, queryClient]);
+
+  /* Push rides the notifications gate, once the plan is read (admins never
+   * wait for it): turning true (a launch, a sign-in) re-sends this device's
+   * subscription (lib/push `resyncPush`; idempotent, never prompts), turning
+   * false (a plan without notifications) ends it here and re-sends nothing.
+   * Null while signed out or while the plan is read. */
+  const isAdmin = session?.user?.app_metadata?.is_admin === true;
+  const pushGate =
+    userId === null
+      ? null
+      : isAdmin || !agendasQ.isPending
+        ? notificationsVisible(isAdmin, agendas)
+        : null;
+  useEffect(() => {
+    setPushGate(pushGate);
+  }, [pushGate]);
 
   const value = useMemo<AuthState>(
     () => ({
       session,
       user: session?.user ?? null,
       loading,
-      isAdmin: session?.user?.app_metadata?.is_admin === true,
+      isAdmin,
       agendas,
       async signInWithPassword(email, password) {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
@@ -167,11 +222,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (error) throw error;
       },
       async signOut() {
+        /* While the JWT still works: the server hears it (≤ 3 s), then the
+         * subscription ends here; the transition above then finds none. */
+        await signOutPush();
         const { error } = await supabase.auth.signOut();
         if (error) throw error;
       },
     }),
-    [session, loading, agendas],
+    [session, loading, isAdmin, agendas],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

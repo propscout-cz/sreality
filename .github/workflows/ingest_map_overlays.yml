@@ -22,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       sections:
-        description: "Sections to ingest (comma-separated: metro,flood,kraje,universities,rent_map). Empty = all."
+        description: "Sections to ingest (comma-separated: metro,flood,kraje,universities,railway,rent_map). Empty = all."
         required: false
         type: string
         default: ""

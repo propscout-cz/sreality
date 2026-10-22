@@ -193,9 +193,11 @@ export interface LeaderboardParams {
  * The contact pair arrives on THIS row now, not from a chained /brokers?ids=
  * lookup: listing_broker_public already joined the same `brokers` row the second
  * call re-read, so the identity and the contact were always one tuple apart.
- * Which half of BrokerContactFields is populated is still the caller's property,
- * not the row's — an admin gets primary_*, everyone else gets has_*. */
-export interface ListingBroker extends BrokerContactFields {
+ * Unlike every other /brokers read, this one is never masked: every signed-in
+ * caller gets the values (operator ruling 2026-10-18), NULL = no such channel. */
+export interface ListingBroker {
+  primary_email: string | null;
+  primary_phone: string | null;
   // NULL for a post-Gate-2 (non-sreality) listing. listing_id (migration 343)
   // is the surrogate that's always present — key lookups on it, not this.
   sreality_id: number | null;

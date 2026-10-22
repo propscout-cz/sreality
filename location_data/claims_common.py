@@ -34,11 +34,13 @@ SOURCES = (
 # whose page carries no location today as well as every one the lane resolves tomorrow,
 # and a row comes back the moment it has a geom with nothing to re-stamp and no backfill.
 #
-# ONE definition, rendered for whatever a surface calls the listing id (`l.id` on
-# `listings`, `l.listing_id` on `properties_public`, `p.repr_listing_ref_id` on
-# `browse_projection`). The inner alias is `sl` and not `ll`, because every surface that
-# carries this rule ALREADY joins `listing_location ll` for the label and the chip codes.
-# The SQL surfaces carry the rendered text verbatim, pinned against this constant by
+# ONE definition, rendered for whatever a surface calls the listing id. An ad-grain surface
+# keys it on the ad itself (`l.id` on `listings`); a PROPERTY-grain surface keys it on the
+# property's location ad (`l.location_listing_ref_id` on `properties_public`,
+# `p.location_listing_ref_id` on `properties` and `browse_projection`), never on the canonical
+# ad. The inner alias is `sl` and not `ll`, because every surface that carries this rule
+# ALREADY joins `listing_location ll` for the label and the chip codes. The SQL surfaces carry
+# the rendered text verbatim, pinned against this constant by
 # tests/test_location_w5_serve_resolved.py, so the two can never drift.
 _SERVED_LOCATION_TEMPLATE = (
     "EXISTS (SELECT 1 FROM listing_location {alias}"
@@ -53,6 +55,28 @@ def served_location_predicate(listing_id: str = "l.id", *, alias: str = "sl") ->
 
 
 SERVED_LOCATION_PREDICATE = served_location_predicate()
+
+# A PROPERTY stands at its location ad (`properties.location_listing_ref_id`, migration 635),
+# never at its canonical ad, which keeps price, area, photos and link. One definition in two
+# shapes, because Postgres cannot drive `listing_location_geog_gist` through a COALESCE key.
+#
+# The SUBJECT (ruling R7), a primary-key lookup from ONE ad `l`: its property's location ad,
+# or its own row while it has no live property. It follows `FROM listings l` and binds `lp`
+# (the property) and `ll` (the place).
+SUBJECT_LOCATION_JOIN = (
+    "LEFT JOIN properties lp ON lp.id = l.property_id AND lp.status = 'active' "
+    "LEFT JOIN listing_location ll ON ll.listing_id = COALESCE(lp.location_listing_ref_id, l.id)"
+)
+
+# The COHORT (ruling R8), spatial-first: the place, then the live property it locates, then
+# that property's canonical ad, which IS the comparable (price, area, snapshot_id: rule 8). A
+# property enters once and an ad with no live property never (Decision 13). It follows `FROM`
+# and binds `ll`, `lp` and `l`.
+COHORT_LOCATION_FROM = (
+    "listing_location ll "
+    "JOIN properties lp ON lp.location_listing_ref_id = ll.listing_id AND lp.status = 'active' "
+    "JOIN listings l ON l.id = lp.repr_listing_ref_id AND l.property_id = lp.id"
+)
 
 # The second rail, and the one that survives a pathological single row: no chunk budget can
 # split ONE array element, so a claim whose value alone dwarfs the budget would still be
@@ -769,21 +793,91 @@ def guard_admits(entry: Entry, name: str, *points: tuple[float, float]) -> bool:
     return all(predicate(lat, lon) for lat, lon in points)
 
 
-def sreality_payload_shape(raw: dict[str, Any]) -> str:
-    """`post_cutover` | `legacy` | `absent`.
+# THE PAYLOAD SHAPE of the three portals whose contract reads `listings.raw_json`, each key
+# list spelled once for both faces: the Python readers below and PAYLOAD_SHAPE_PREDICATES, the
+# SQL the parsing alarm runs over new ads. A shape is a matter of KEYS, never values: a key the
+# portal stopped sending is a payload that changed shape, while a key sent empty (bezrealitky's
+# `ruianId` on about half its ads) is content.
+SREALITY_POST_CUTOVER_KEYS = ("city", "citypart", "entity_type", "gps_lat", "gps_lon",
+                              "inaccuracy_type")
+SREALITY_LEGACY_KEYS = ("accuracy", "name", "value")
+# The field scraper.bezrealitky_client._DETAIL_QUERY asks for: every advert it fetches carries
+# the key, null or not.
+BEZREALITKY_PAYLOAD_KEYS = ("ruianId",)
+# The `:property` blob's town (the contract's obec_name entry) and pin (its coordinate entry).
+MMREALITY_PAYLOAD_KEYS = ("municipality", "point")
 
-    `absent` is the 80 KB-truncation cohort — one sreality row's raw_json was truncated by
-    a geometry blob and lost the whole `locality` object (06 §6.2.1 caveat 2). Both
-    non-post-cutover shapes route to the refetch cohort rather than emitting "no claim".
+
+def sreality_payload_shape(raw: dict[str, Any]) -> str:
+    """`post_cutover` | `legacy` | `absent`: the shape of a sreality payload's `locality`.
+
+    `absent` is also the 80 KB-truncation cohort (a geometry blob truncated raw_json and took
+    the whole `locality` object, 06 §6.2.1 caveat 2). The intake counts every shape but
+    post_cutover as a refusal (`sreality_payload_shape:<shape>`): a legacy row is still read
+    through the contract's `locator.fallback` paths, a truncated one yields nothing.
     """
     locality = raw.get("locality")
     if not isinstance(locality, dict):
         return "absent"
-    if {"gps_lat", "gps_lon", "entity_type", "inaccuracy_type", "city", "citypart"} & set(locality):
+    if set(SREALITY_POST_CUTOVER_KEYS) & set(locality):
         return "post_cutover"
-    if {"name", "value", "accuracy"} & set(locality):
+    if set(SREALITY_LEGACY_KEYS) & set(locality):
         return "legacy"
     return "absent"
+
+
+def _sreality_readable(raw: Any) -> bool:
+    return isinstance(raw, dict) and sreality_payload_shape(raw) == "post_cutover"
+
+
+def _carries_all(keys: tuple[str, ...]) -> Callable[[Any], bool]:
+    return lambda raw: isinstance(raw, dict) and all(key in raw for key in keys)
+
+
+def _sql_keys(keys: tuple[str, ...]) -> str:
+    return "array[" + ", ".join(f"'{key}'" for key in keys) + "]"
+
+
+# {portal: True when the contract can read a payload of this shape}. For sreality that is the
+# post-cutover shape new ads arrive in: the legacy one is read through a fallback, but a new
+# ad in it means the API changed again.
+PAYLOAD_SHAPE_READERS: dict[str, Callable[[Any], bool]] = {
+    "sreality": _sreality_readable,
+    "bezrealitky": _carries_all(BEZREALITKY_PAYLOAD_KEYS),
+    "mmreality": _carries_all(MMREALITY_PAYLOAD_KEYS),
+}
+
+# {portal: the same answer in SQL over `l.raw_json`}, TRUE or FALSE and never NULL: a NULL
+# drops out of `count(*) filter (where not …)` and would count a truncated payload readable,
+# so each operand sits behind an IS NOT DISTINCT FROM type test and a missing object, a
+# non-object payload or a NULL one reads FALSE. The parsing alarm (scripts/checks/quality.py)
+# wraps each in coalesce(…, false) and binds the portal names as parameters (rule 21).
+# tests/location_data/test_payload_shape_parity_live.py executes each against its reader.
+PAYLOAD_SHAPE_PREDICATES: dict[str, str] = {
+    "sreality": ("(jsonb_typeof(l.raw_json -> 'locality') IS NOT DISTINCT FROM 'object'"
+                 f" AND (l.raw_json -> 'locality') ?| {_sql_keys(SREALITY_POST_CUTOVER_KEYS)})"),
+    "bezrealitky": ("(jsonb_typeof(l.raw_json) IS NOT DISTINCT FROM 'object'"
+                    f" AND l.raw_json ?& {_sql_keys(BEZREALITKY_PAYLOAD_KEYS)})"),
+    "mmreality": ("(jsonb_typeof(l.raw_json) IS NOT DISTINCT FROM 'object'"
+                  f" AND l.raw_json ?& {_sql_keys(MMREALITY_PAYLOAD_KEYS)})"),
+}
+
+# {portal: what to change when its new ads stop arriving in a readable shape}.
+PAYLOAD_SHAPE_REMEDIES: dict[str, str] = {
+    "sreality": ("the v1 API changed the shape of `locality`: new ads carry none of the keys "
+                 "the contract reads (`SREALITY_POST_CUTOVER_KEYS`, read by "
+                 "`sreality_payload_shape` in location_data/claims_common.py). Map the new "
+                 "keys in contracts/portals/sreality.yaml and update that key list"),
+    "bezrealitky": ("new ads arrive without the `ruianId` key, so the GraphQL detail query "
+                    "lost the field (`BEZREALITKY_PAYLOAD_KEYS` in "
+                    "location_data/claims_common.py): restore it in "
+                    "scraper/bezrealitky_client._DETAIL_QUERY. That is not retroactive: the ads "
+                    "fetched meanwhile need a detail refetch"),
+    "mmreality": ("the `:property` blob changed shape: new ads lack `municipality` or `point`, "
+                  "the keys the contract reads the town and the pin from "
+                  "(`MMREALITY_PAYLOAD_KEYS` in location_data/claims_common.py). Map the new "
+                  "keys in contracts/portals/mmreality.yaml and update that key list"),
+}
 
 
 def payload_hash(raw: dict[str, Any]) -> str:

@@ -29,10 +29,10 @@ describe('buildFacts', () => {
     expect(buildFacts(base({}))).toEqual([]);
   });
 
-  it('includes only present facts, in order, capitalised', () => {
-    const facts = buildFacts(base({ building_type: 'panel', condition: 'velmi_dobry' }));
+  it('includes only present facts, in order, with the registry\'s Czech labels', () => {
+    const facts = buildFacts(base({ building_type: 'smisena', condition: 'velmi_dobry' }));
     expect(facts.map((f) => f.label)).toEqual(['Building', 'Condition']);
-    expect(facts[0].value).toBe('Panel');
+    expect(facts.map((f) => f.value)).toEqual(['Smíšená', 'Velmi dobrý']);
   });
 });
 

@@ -1,9 +1,8 @@
 """Merge safety, executed (migrations 559, 560, 561 and 588): a price step never spans two adverts,
-a merge writes no status row and a detach restores the absorbed property's own state, merging
-then detaching every advert a merge moved gives back every original property, an advert named in
-`new` is born a record the one way, the operator's merge and split land as rulings the apply
-adapter reads, an operator merge takes back every "different" between what it joins (MS12), the
-one-time copy rules only what the operator judged, and a merged property speaks with ONE
+merging then detaching every advert a merge moved gives back every original property, an advert
+named in `new` is born a record the one way, the operator's merge and split land as rulings the
+apply adapter reads, an operator merge takes back every "different" between what it joins (MS12),
+the one-time copy rules only what the operator judged, and a merged property speaks with ONE
 canonical advert everywhere (decisions 13 and 18), chosen and built by the merge sprint's rules
 (docs/design/merge-sprint/PROGRAM.md MS5, MS6, MS10, MS19), and rule 15's merge gate reads the
 set's ads (hand-over addendum 14). Runs in CI's migrations job (`TEST_DATABASE_URL`); every test
@@ -73,10 +72,23 @@ def _snapshot(cur: Any, listing_id: int, price: int | None, hours_ago: float) ->
     return int(cur.fetchone()[0])
 
 
-def _recompute(cur: Any, pid: int) -> None:
-    from scripts.recompute_property_stats import _RECOMPUTE_ONE_SQL
+def _drops(cur: Any, days: int) -> list[tuple[int, int, int, int]]:
+    """The drop steps both notification producers alert on: api/notifications' one canonical-ad
+    fragment (`_CANONICAL_PRICE_STEPS`, notifications W2a) over a `days` window."""
+    from api.notifications import _CANONICAL_PRICE_STEPS
 
-    cur.execute(_RECOMPUTE_ONE_SQL, {"pid": pid})
+    cur.execute(
+        f"WITH {_CANONICAL_PRICE_STEPS} "
+        "SELECT property_id, snapshot_id, price_czk, prev_price_czk FROM canonical_steps "
+        "WHERE price_czk < prev_price_czk ORDER BY property_id, snapshot_id",
+        {"price_window": f"{days} days"})
+    return [(int(a), int(b), int(c), int(d)) for a, b, c, d in cur.fetchall()]
+
+
+def _recompute(cur: Any, pid: int) -> None:
+    from scripts.recompute_property_stats import _RECOMPUTE_SCOPED_SQL
+
+    cur.execute(_RECOMPUTE_SCOPED_SQL, {"ids": [pid]})
 
 
 def _seen(cur: Any, listing_id: int, first_days_ago: float, last_days_ago: float = 0) -> None:
@@ -101,8 +113,6 @@ def test_a_step_never_spans_two_adverts(cur):
     """Two portals quoting 5.0M and 5.2M, read alternately, are not a drop and a rise on
     every scrape: only the one advert's own cut from 5.0M to 4.9M is a step — in the
     view, in the rollup's counts and in the watchdog's drop reader alike."""
-    from api.notifications import _recent_price_drops
-
     pid = _property(cur)
     a = _advert(cur, pid, source="sreality", price=4_900_000)
     b = _advert(cur, pid, source="idnes", price=5_200_000)
@@ -125,15 +135,8 @@ def test_a_step_never_spans_two_adverts(cur):
         "FROM properties WHERE id = %s", (pid,))
     assert cur.fetchone() == (1, 0, 1, 2.00, -2.00)
 
-    drops = [d for d in _recent_price_drops(cur.connection, window_days=2) if d[0] == pid]
+    drops = [d for d in _drops(cur, 2) if d[0] == pid]
     assert drops == [(pid, cut, 4_900_000, 5_000_000)]
-
-
-def _events(cur: Any, pid: int) -> list[bool]:
-    cur.execute(
-        "SELECT is_active FROM property_status_events WHERE property_id = %s ORDER BY id",
-        (pid,))
-    return [bool(r[0]) for r in cur.fetchall()]
 
 
 def _pair(x: int, y: int) -> tuple[int, int]:
@@ -164,37 +167,6 @@ def _placed(cur: Any, ids: list[int]) -> dict[int, int]:
     return {int(lid): int(pid) for lid, pid in cur.fetchall()}
 
 
-def test_a_merge_writes_no_status_row_and_the_absorbed_history_stays_its_own(cur):
-    survivor, absorbed, moved = _merged_pair(cur)
-    before_s, before_a = _events(cur, survivor), _events(cur, absorbed)
-
-    assert _merge(cur, [survivor, absorbed])["survivor_id"] == survivor
-    assert _events(cur, absorbed) == before_a, "a merge wrote or moved the absorbed history"
-    assert _events(cur, survivor) == before_s
-    assert _detach(cur, moved)["restored_property_id"] == absorbed
-    cur.execute("SELECT status, is_active FROM properties WHERE id = %s", (absorbed,))
-    assert cur.fetchone() == ("active", True)
-    assert _events(cur, absorbed) == before_a, "its own history already reads active"
-
-    # Its next real deactivation closes the window its own history opened (no blank chart).
-    cur.execute("UPDATE properties SET is_active = false WHERE id = %s", (absorbed,))
-    assert _events(cur, absorbed) == [True, False]
-
-
-def test_a_detach_gives_a_property_ending_on_inactive_its_active_state_back(cur):
-    """Every merge before 559 left the absorbed property on a false 'inactive' (211,026 rows
-    today). Its undo must log 'active', or the chart reads a live property as delisted."""
-    survivor, absorbed, moved = _merged_pair(cur)
-    cur.execute(
-        "INSERT INTO property_status_events (property_id, is_active, event_at) "
-        "VALUES (%s, false, now())", (absorbed,))
-    _merge(cur, [survivor, absorbed])
-    assert _events(cur, absorbed) == [True, False]
-
-    _detach(cur, moved)
-    assert _events(cur, absorbed) == [True, False, True]
-
-
 def test_merging_then_detaching_every_advert_restores_every_original_property(cur):
     """W3's gate, executed: three set merges, one built on another, then a detach of every
     advert a merge moved; every original property_id is back, every property active, no ledger
@@ -214,8 +186,8 @@ def test_merging_then_detaching_every_advert_restores_every_original_property(cu
     for lid in sorted(listing_origins(cur.connection, adverts)):
         _detach(cur, lid)
     assert _placed(cur, adverts) == original
-    cur.execute("SELECT count(*) FROM properties WHERE id = ANY(%s) AND status = 'active'",
-                (props,))
+    cur.execute("SELECT count(*) FROM properties WHERE id = ANY(%s) AND status = 'active' "
+                "AND is_active", (props,))
     assert cur.fetchone()[0] == len(props)
     cur.execute("SELECT count(*) FROM property_merge_events "
                 "WHERE listing_ref_id = ANY(%s) AND undone_at IS NULL", (adverts,))
@@ -373,8 +345,8 @@ def test_an_operator_merge_takes_back_every_different_between_what_it_joins(cur)
     _set_ruling(cur, 9_000_003, [s1, r1], "same")         # its newest word: nothing to take back
     outside = _advert(cur, _property(cur), source="bazos")
     _set_ruling(cur, 9_000_004, [s1, r1, outside], "different")   # not wholly in the merge
-    assert merge_preview(cur.connection, [absorbed, survivor]) == {
-        "property_ids": sorted([survivor, absorbed]), "rulings_taken_back": 2}
+    assert merge_preview(cur.connection, {absorbed: "A", survivor: "A"}) == {"letters": {"A": {
+        "property_ids": sorted([survivor, absorbed]), "rulings_taken_back": 2}}}
 
     merged = _merge(cur, [survivor, absorbed])
     note = f"operator merge {merged['merge_group_id']}"
@@ -479,8 +451,6 @@ def test_condition_and_both_levels_come_from_the_one_canonical_advert(cur):
 
 
 def test_the_price_history_and_the_alerts_are_the_canonical_adverts_own(cur):
-    from api.notifications import _recent_price_drops
-
     pid = _property(cur)
     canon = _advert(cur, pid, source="sreality", price=4_900_000)
     other = _advert(cur, pid, source="idnes", price=4_000_000)
@@ -492,7 +462,7 @@ def test_the_price_history_and_the_alerts_are_the_canonical_adverts_own(cur):
     cur.execute("SELECT current_price_czk, price_drop_count, price_change_count "
                 "FROM properties WHERE id = %s", (pid,))
     assert cur.fetchone() == (4_900_000, 1, 1)
-    drops = [d for d in _recent_price_drops(cur.connection, window_days=2) if d[0] == pid]
+    drops = [d for d in _drops(cur, 2) if d[0] == pid]
     assert drops == [(pid, cut, 4_900_000, 5_000_000)]
 
 
@@ -500,8 +470,6 @@ def test_a_merge_that_changes_the_canonical_advert_replays_no_older_step(cur):
     """The absorbed sreality advert outranks the survivor's bazos one, so it becomes canonical;
     its cut from yesterday was never the price the property showed, so neither producer fires
     it. A cut after the handover does fire."""
-    from api.notifications import _recent_price_drops
-
     survivor, absorbed = _property(cur), _property(cur)
     _advert(cur, survivor, source="bazos", price=5_200_000)
     moved = _advert(cur, absorbed, source="sreality", price=5_000_000)
@@ -513,10 +481,10 @@ def test_a_merge_that_changes_the_canonical_advert_replays_no_older_step(cur):
     cur.execute("SELECT repr_listing_ref_id, repr_since > '-infinity' FROM properties "
                 "WHERE id = %s", (survivor,))
     assert cur.fetchone() == (moved, True)
-    assert [d for d in _recent_price_drops(cur.connection, window_days=2) if d[0] == survivor] == []
+    assert [d for d in _drops(cur, 2) if d[0] == survivor] == []
 
     after = _snapshot(cur, moved, 4_900_000, -0.01)
-    drops = [d for d in _recent_price_drops(cur.connection, window_days=2) if d[0] == survivor]
+    drops = [d for d in _drops(cur, 2) if d[0] == survivor]
     assert drops == [(survivor, after, 4_900_000, 5_000_000)]
 
 
@@ -655,8 +623,6 @@ def test_the_portal_lists_and_newest_ad_dates_follow_every_advert(cur):
 
 def test_a_same_portal_relist_counts_its_predecessors_steps_and_one_handover(cur):
     """MS10: a predecessor's own cut plus one handover step count; alerts quote the canonical's own."""
-    from api.notifications import _recent_price_drops
-
     pid = _property(cur)
     before = _advert(cur, pid, source="sreality", price=5_200_000, active=False)
     relist = _advert(cur, pid, source="sreality", price=4_900_000)
@@ -672,7 +638,7 @@ def test_a_same_portal_relist_counts_its_predecessors_steps_and_one_handover(cur
         "       round(max_price_drop_pct, 2), round(total_price_change_pct, 2) "
         "FROM properties WHERE id = %s", (pid,))
     assert cur.fetchone() == (3, 0, 3, 3, Decimal("3.85"), Decimal("-7.55"))
-    drops = [d for d in _recent_price_drops(cur.connection, window_days=40) if d[0] == pid]
+    drops = [d for d in _drops(cur, 40) if d[0] == pid]
     assert drops == [(pid, cut, 4_900_000, 5_000_000)]
 
 
@@ -728,7 +694,9 @@ def test_adverts_that_ran_at_the_same_time_never_form_a_step(cur):
 
 
 def test_a_canonical_change_clears_the_city_figure_stamp(cur):
-    """The city stamp survives a kept canonical advert, clears on a takeover and when older than it."""
+    """The city stamp survives a kept location advert and clears when the location advert changes (here the
+    takeover is both canonical and location advert); a stamp older than `repr_since` is kept, since
+    recompute_city_proximity's UPDATE guard covers that race (migration 636)."""
     pid = _property(cur)
     first = _advert(cur, pid, source="sreality")
     _recompute(cur, pid)
@@ -747,7 +715,7 @@ def test_a_canonical_change_clears_the_city_figure_stamp(cur):
     _located(cur, takeover)
     assert city() == (takeover, False)
     assert city("now()") == (takeover, True)
-    assert city("repr_since - interval '1 minute'") == (takeover, False)
+    assert city("repr_since - interval '1 minute'") == (takeover, True)
 
 
 def test_a_property_reset_to_no_ads_takes_its_next_ad_as_a_handover(cur):

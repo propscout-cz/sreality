@@ -44,7 +44,6 @@ from autodedup.incremental_lane import (
 )
 from autodedup.incremental_sql import RT_STORE_PRESENT_SQL
 from scraper import realtime_worker as rw
-from scripts.verify_pipeline import DEFAULT_THRESHOLDS
 from tests.autodedup.fake_pg import FakePg
 from tests.autodedup.lane_world import seed_lane
 from tests.autodedup.lane_world import world as lane_world
@@ -135,7 +134,6 @@ def _summary(**over: Any) -> dict[str, Any]:
                    "ledger_skipped": 31, "ledger_written": 6, "dirty": 30,
                    "reads": {"claim": 12, "decided": 9}},
         "aborted": "",
-        "latency_s": {"n": 12, "p50": 310.2, "p95": 355.0},
         "claim_bound": {"bound_by": "count", "limit": 100},
         "reconcile": {"counts": {"applied": 2}},
         "peak_rss_mb": 412.5,
@@ -202,7 +200,8 @@ def test_a_dark_lane_opens_no_connection_and_runs_no_pass(
         await task
 
     asyncio.run(scenario())
-    assert "autodedup" not in state["lanes"]
+    # Dark is visible: the lane says the interval it read, and nothing ran.
+    assert state["lanes"]["autodedup"] == {"interval_s": 0.0}
 
 
 def test_the_seeded_setting_ships_the_lane_dark() -> None:
@@ -235,10 +234,13 @@ def test_the_settings_row_says_the_lane_merges() -> None:
 
 def test_the_engines_deadline_sits_inside_every_bound_around_it() -> None:
     """E913: the engine bounds its own time. Its deadline plus ONE statement at its
-    statement_timeout must end before the stall monitor warns, before the lane abandons the
-    pass, and before the lease expires — or a seed could take the lease mid-write."""
+    statement_timeout must end before the jobs check's lane cell warns of a pass in flight,
+    before the lane abandons the pass, and before the lease expires — or a seed could take
+    the lease mid-write."""
+    from scripts import verify_pipeline
+
     worst = PASS_DEADLINE_S + STATEMENT_TIMEOUT_MS / 1000.0
-    assert worst < DEFAULT_THRESHOLDS["worker_lane_stall_warn_seconds"]
+    assert worst < verify_pipeline.THRESHOLDS["jobs_lane_inflight_warn_s"]
     assert worst < rw.LANE_PASS_TIMEOUT_SECONDS
     assert worst < LEASE_TTL_S
     assert PASS_BUDGET_S * 2 <= PASS_DEADLINE_S, "claims are sized well inside the deadline"
@@ -285,8 +287,8 @@ def test_the_lane_hands_the_engine_its_connection_and_nothing_else(
     assert last == {
         "ran": True, "claimed": 12, "scored": 40, "grouped": 3, "merged": 2, "skipped": 0,
         "errors": 0, "seconds": last["seconds"], "held": 1, "retired": 0, "reconcile": "ran",
-        "deadline_exceeded": False, "latency_p50_s": 310.2, "latency_p95_s": 355.0,
-        "bound_by": "time", "reconcile_groups": 0, "reconcile_seconds": None,
+        "deadline_exceeded": False, "bound_by": "time", "reconcile_groups": 0,
+        "reconcile_seconds": None,
         # E951: the budget the claim was cut from (a build's 787.5 s), and the doubled rate
         "pass_budget_s": 787.5, "rate_doubled": True,
         "reconcile_refused": 0, "reconcile_failed": 0, "reconcile_waiting": 0,
@@ -380,7 +382,8 @@ def test_a_refusal_is_recorded_never_raised(
         asyncio.run(rw._autodedup_pass(asyncio.Event(), state))
 
     lane = state["lanes"]["autodedup"]
-    assert lane["failed_passes"] == 2 and lane["last_failure_at"]
+    assert lane["failed_passes"] == 2 and lane["failing_since"]
+    assert lane["last_error"] == lane["last"]["refused"]
     assert lane.get("passes", 0) == 0, "a refused pass is not a completed one"
     assert lane["started_at"] is None
     assert lane["last"]["errors"] == 1 and lane["last"]["ran"] is False

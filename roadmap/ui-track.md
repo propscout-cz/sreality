@@ -7,6 +7,103 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Condition filter: the "Neuvedeno" chip (2026-10-20, migration 644)
+- **Built:** Browse's "Condition (Stav objektu)" filter offers "Neuvedeno" as furnished and ownership
+  do: a property whose condition is NULL or off the canon. One meaning on every surface (rule 16):
+  the list, count and pins (`queries.ts`), Stats and the map cells (644 restates both RPCs with the
+  furnished shape, md5-gated on 640), the Watchdog and every estimation cohort (`filter_compiler`),
+  the phone sheet. The canon itself (`CONDITION_OPTIONS`: stored values, Stats keys, the scraper's
+  vocabulary) never gains the sentinel; only the filter's chips do (`CONDITION_FILTER_OPTIONS`).
+
+### Browse filter layout (2026-10-20, no migration)
+- **Shipped: the sidebar the operator arranged** (drag-and-drop draft, 2026-10-20). Four bands —
+  Essentials, Curation, Velocity & price activity, Advanced — with one heading level (the group
+  captions are gone on desktop and phone; `lib/filterLayout` rows), bigger band titles, and the
+  header (Reset, fold arrow) pinned while the filters scroll. Status and "Seen at birth" (was
+  "Newly listed only") share one line of buttons; Listing for has no "Vše" pill and Browse
+  defaults to Prodej (a link without `deal=` opens on sale; Watchdog and estimation keep their
+  own default). The 1–5 condition scores left both surfaces (scoring is parked, operator 2026-10-20).
+- **Shipped (2026-10-21 follow-up):** Status, "All ads | Seen at birth" and "Show dismissed | Hide
+  dismissed" are one block of segmented controls (`SegmentedBar`, the amenities' any/yes/no look,
+  now shared); the dismissed switch moved there from Curation. Browse › Stats warns above the
+  charts while Hide dismissed leaves dismissed properties out of the sample, with "Započítat skryté".
+- **Done: Table tab removed 2026-10-20** (operator ruling; ~470 lines net; the cards sort menu
+  gains "Plocha: od nejmenší / od největší" + "Naposledy viděno" (one direction; an ascending
+  last-seen link reads descending); the sort fields without a control and `estate_area` deleted,
+  a stored or linked one reads as the default). An old `?tab=table` link opens the Properties tab.
+- **Done: Lot area sort 2026-10-21** (operator request; no migration). The cards menu (desktop + phone
+  Řazení) gains "Pozemek: od nejmenšího / od největšího" on THE plot measure `plot_area_m2` (the Lot
+  area filter's column; a flat has none and sorts last), and every card with a lot names it after the
+  floor area ("180 m² · 850 m² pozemku"; a pozemek's area already is its plot). Same plan and cost as
+  the price sort (~90 ms, houses for sale). Owed: the phone property page's line has no lot until
+  `properties_public` carries the measure.
+- **Shipped (2026-10-22): Advanced → Energy rating (PENB A–G)**, Browse + Watchdog (migration 648:
+  `energy_rating_filter` on the Stats and map-tile RPCs; `browse_list` already carried the column). A
+  property's rating is the first non-null across its ads; G is also the legal "no certificate"
+  placeholder (~half of rated flats for sale), which no portal marks apart.
+- **Shipped (2026-10-22): Advanced → Broker** — a name search (GET /brokers/search) that sets the
+  existing broker scope (`brokerId`, MS19) on desktop and phone; it narrows the current filters
+  (the explore-broker modal still opens a broker's whole book) and stays outside presets.
+- **Not built, by ruling:** Has a floor plan (operator 2026-10-21; CLIP-only signal, ~2 h lag).
+  Condition scoring stays PARKED, not removed (operator 2026-10-20, re-confirmed 2026-10-21: keep the
+  engine and data, nothing may read its levels; registry ids retired with 645).
+
+### Pipeline sharing surfaces (2026-10-20, migration 641; PR #1908)
+- **Built (merges with W1 #1906 in the window):** the Pipeline tab switches between my board and
+  boards shared with me (per device, `lib/acting`), a shared board renders inside `<ActingAs>` (read:
+  board only; edit: drag, stages, trash as the owner; the phone moves cards through the stage sheet),
+  one `ShareBlock` serves the pipeline and collection pages, the desktop property page offers "Upravit
+  jako {email}" with an in-page banner, and delegated edits carry one stamp
+  (`lib/delegatedStamp`). Detail: `roadmap/operator-workflow-track.md` U-PIPE-SHARE.
+
+### Stats dashboard (2026-10-19, migration 626)
+- **Shipped: Browse › Stats is a dashboard the user composes** (`docs/design/stats-dashboard.md`,
+  operator rulings 2026-10-19). Charts = rows (up to six nested dimensions) × one column × a measure
+  (doba na trhu, plocha, cena, cena za m²), drawn as a table, a line, a bar or a box; one board per
+  account (`stats_dashboards`, `PUT /stats/dashboard`, whole-document upsert validated by
+  `toolkit/stats_registry.py`). ONE pivot RPC over 625's cohort WHERE byte for byte, ONE key
+  function (`stats_dim_key`), ONE registry rendered to SQL, TypeScript and the API validator; every
+  chart shows its sample ledger (in the filter / sample / excluded for missing data) and refuses
+  rather than guesses (mixed categories, turnover over mixed statuses, too many cells).
+- **Deleted, not patched:** the four fixed cards (`BrowseStats`, `PriceBandVelocity`,
+  `DispositionBoxPlots`) and the old aggregate body with their five box types, and the LLM box-plot
+  annotations (summarize-1: module, route, schemas, tests); migration 627 drops their cache and two
+  settings — applied 2026-10-19 17:35Z on the operator's word, after an R2 backup
+  (`backups/region-annotations-627/2026-10-19/`, 21 + 64 rows) and the autodedup session's green light.
+- **Rule-25 clause (operator may veto):** a place cell keys on the RÚIAN CODE `browse_list` already
+  carries (two same-named towns or streets stay two cells; the pivot reads no listing location), and
+  the payload's `places` list resolves each key to its name through ONE new owner-rights view over
+  the open register mirror, `ruian_place_names_public(level, code, name)` — the register is dark to
+  browser roles and the pivot runs as its caller. A location read surface added by a PR that deletes
+  none: the PR body says why (the five place dimensions were asked for on 2026-10-19).
+- **Several statistics per chart (2026-10-19, migration 628):** a line, a bar and a table with a column draw the
+  statistics the user picks (median, p10, p25 ... at once; the first pick leads in copper, the last cannot be
+  unpicked). The saved chart's `stat` became `stats`, a list; 628 rewrites the stored board losslessly.
+- **Floor lowered to five (2026-10-19, migration 632):** a Stats cell shows its statistics from 5 properties
+  (operator ruling; it was 10). One constant in the pivot (`v_min_n`), mirrored by `MIN_N`, shipped as `min_n`.
+- **Status judged by the cohort's rule (2026-10-19, migration 634):** with a portal filter the pivot's
+  `status` fact and the turnover gate read the portal rule (597), not the property's is_active — a property
+  delisted on the chosen portal but live elsewhere no longer flips a Neaktivní cohort to "aktivní i neaktivní"
+  (it leaves a turnover sample as excluded instead). Known gap: under a BROKER scope the SPA sends no portal
+  and status any, so the status fact stays the property's and "broker + Neaktivní" can still read mixed
+  (2,169 of 355,514 broker-property pairs) — closing it needs the broker prefilter to carry per-property
+  broker-ad status.
+- **Legacy vocabulary healed (2026-10-20, migration 642):** the 31 off-canon condition spellings (105 bazos
+  listings) and 28 impossible dispositions (812 listings) that charted as raw-spelled "pod 5" rows now read
+  as the canon or NULL; the mapping is pinned to `scraper/vocabulary.py` by its test. `backup_642` holds the
+  old values — drop it after a clean week.
+- **Done: saved dashboards 2026-10-20 (migration 647, `docs/design/saved-dashboards.md`):** named chart sets on
+  a bar atop the Stats tab — load copies one into the working board (and its filter, when it was saved with
+  one), "Uložit změny" / "Uložit jako dashboard", read-only sharing by email (Načíst, Uložit jako vlastní,
+  Přestat sledovat), a share notification opens it. The filter-preset bar folded into the same `SavedSetBar`
+  (presets unchanged). Line ledger (SPA production): net +407 (+733 as first cut) — the preset bar and its dialog
+  (757) became the generic bar, its dialog and the preset instance (707); the dashboard instance is 300. The
+  sprint's net is ≈ +350 production lines (≈ +0 to +50 without migration 647), not the planned ≈ −100.
+- **Next:** (1) the land-rent basis ruling — rented land keeps the rent basis and its 25 / 50 bands until
+  the operator rules; (2) optionally `reparse --source bazos --fields disposition --missing --write
+  --allow-snapshot-deferral` (dry run first), which may fill a NULL disposition the page states grammatically;
+  nothing else is owed on places.
+
 ### Negative portal filters (2026-10-13, migration 597)
 - **Shipped: the portal filter is two-sided** — "on idnes, not on sreality". One chip per portal
   cycles off → on it → not on it (Browse sidebar, Watchdog editor, phone Feed); once something is
@@ -42,6 +139,7 @@ toolkit work.
   are the desktop bodies in a bottom sheet), the extension's stage wash, per-m² through
   `lib/measure` (rule 23).
   Follow-up: a photo strip per card (up to eight, cover first, the wash on each; `/feed` a lazy chunk), PR [#1785](https://github.com/waiff/sreality/pull/1785).
+  Follow-up: full filters — the Filtry sheet (Browse's registry filters grouped as the sidebar, the view in the URL as Browse's, presets saved and updated from the phone), PR [#1866](https://github.com/waiff/sreality/pull/1866).
 - Next: the install walk on the iPhone (resolves W1: Safari install, sign-in inside the app,
   `visibilitychange` on resume, the worker's cost on feed photos); then W2 — the property page as
   reading + curation and the paste box (the fifth tab, Odkaz).
@@ -196,7 +294,7 @@ oxidised-copper accent, Fraunces / Inter / JetBrains Mono, tabular
 numerals, Czech locale formatting).
 - **Browse**: filter sidebar (district typeahead, disposition multi-toggle,
   dual-handle price + area sliders, tri-state status, last-seen-within,
-  has-balcony/lift/parking) → Map / Table / Stats tabs. Filter and
+  has-balcony/lift/parking) → Map / Stats tabs (the Table tab went 2026-10-20). Filter and
   sort state in URL params; bookmarkable, refresh-survives.
 - **Listing detail** (`/listing/:sreality_id`): hero, mini-map, key
   facts, snapshot timeline strip (the product's signature visual
@@ -228,37 +326,16 @@ numerals, Czech locale formatting).
   and `status='pending'/'running'` for U4 without forcing today's
   code to write twice.
 - `scraper.url_parser`: turns a sreality URL into a parsed spec by
-  reusing `scraper.parser`.
+  reusing `scraper.parser`. (Retired 2026-10-20,
+  `docs/design/new-property-from-link.md` §3.5.)
 - `/estimations` endpoints: POST creates a run (URL or spec), GET-by-id
   reads one, GET lists with filters and pagination.
 - Trace format v1: tool calls + computations recorded with
   `output_summary` only (full data in dedicated columns).
 
-### Phase estimation-4: Generic URL parser (done)
-- Migration 020: `parsed_url_cache`, `llm_calls`, `app_settings` +
-  `app_settings_history`, plus `source_kind` /
-  `parse_confidence` / `parse_confidence_per_field` / `source_html`
-  columns on `estimation_runs`.
-- `api.llm_client.LLMClient`: wraps the Anthropic SDK, audits every
-  call to `llm_calls`, computes USD cost from a per-model price
-  table, and emits a one-time daily-cost soft warning at
-  `LLM_DAILY_COST_WARN_USD` (default $5).
-- `scraper.geocoding.geocode`: Mapy.cz forward geocoding with
-  type-based confidence (regional.address → high; street → medium;
-  city centroid → low) and a CLI verification helper.
-- `scraper.source_dispatcher`: classifies a URL by domain and routes
-  to either the deterministic sreality flow or the LLM-driven
-  per-source parsers (bezrealitky, idnes_reality, remax,
-  best-effort generic). Cache lookup on canonicalised URL hash with
-  7-day TTL.
-- `POST /estimations/preview`: parse any allowlisted URL through the
-  LLM-driven dispatcher and return spec + provenance without
-  persisting a run. Coexists with the U2-frontend's existing
-  `GET /estimations/preview` (sreality-only, read-only); the POST
-  version is the path forward for non-sreality sources.
-- `POST /estimations`: now routes through the dispatcher and
-  populates the four new audit columns; parse failures persist a
-  `failed` row with the error message.
+### Phase estimation-4: Generic URL parser (retired)
+- Retired 2026-10-20 — `docs/design/new-property-from-link.md`: a pasted link becomes an ad
+  through `POST /listings/ingest`, and an estimation is always of an ad we hold.
 
 ### Phase U2: Estimation flow (done)
 End-to-end browser flow over the U1b backend.
@@ -300,14 +377,9 @@ End-to-end browser flow over the U1b backend.
   with a per-disposition `ppm2_box` field; existing fields preserved
   for backwards compatibility.
 
-### Phase estimation-5: URL-parser frontend (done)
-- `ConfidenceIndicator` component + per-field confidence surface on
-  the review step.
-- `previewListingUrl` + `useUrlPreview` React hook: drives the
-  paste-URL step against `POST /estimations/preview`.
-- Listing-block render on the URL step; `force_refresh` to bypass
-  the 7-day cache; `cost_usd_total` rolled up from `llm_calls`.
-- Commits `e9da41f`, `65b9967`, `d66da7e`. PR #29.
+### Phase estimation-5: URL-parser frontend (retired)
+- Retired 2026-10-20 — `docs/design/new-property-from-link.md`: a pasted link becomes an ad
+  through `POST /listings/ingest`, and an estimation is always of an ad we hold.
 
 ### Phase U-BV: Browse velocity, card badges, filter overhaul (done)
 - Migration 052 promotes "turned in" (TOM = days on market) to a
@@ -428,6 +500,24 @@ End-to-end browser flow over the U1b backend.
 - Deferred: live-table index retirement after a ≥7-day
   pg_stat_user_indexes observation window (operator OK required);
   row-comparison keyset cursor (PostgREST can't emit it yet).
+- W1 of ONE PIN: map pins + tile counts read `browse_list`; the rebuild
+  re-patches identity changes (migration 630).
+- W2 of ONE PIN: `properties_map_mv` retired with its rebuild, cron job,
+  registry row and `properties_map_visible`, plus the two dead MF
+  functions (migration 631).
+- W3 of ONE PIN: each property stores its location ad
+  (`properties.location_listing_ref_id`: a map point first, then
+  determined foreign, then the finest RÚIAN rung, ties by the canonical
+  order), written with the canonical ad by the rollup and the singleton
+  birth (migration 635; invisible until W4).
+- W4 of ONE PIN: every property surface reads the location ad — Browse
+  list, map and counts, the property page and phone map, the watchdog,
+  notifications, the estimation subject and comparables, the extension
+  label; a CHECK keeps both pointers NULL together (migration 636). Pin
+  and card name one place: ~10.8k rings become dots.
+- ONE PIN follow-up (ruled 2026-10-20): the Browse tab, its empty state
+  and the filter summary say "properties" — the count was always
+  properties, only the map pill had been renamed by W1.
 
 ### Chart axis unification (done)
 

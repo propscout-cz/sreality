@@ -3,8 +3,9 @@
  * Hermetic: every API read and the one write are mocked.
  *
  * Pins:
- *   * the page says the trial merges nothing — "Stejné" must never read as
- *     "merge now";
+ *   * the lede says the engine merges in production inside the apply scope,
+ *     links Health, and that a ruling here is recorded in the program's own
+ *     schema — "Stejné" must never read as "merge now"; no shadow-mode claim;
  *   * a card carries its cluster key, its size, its members and the weakest
  *     edge, and shows at most four members with the rest COUNTED, not cropped;
  *   * a filter control sends a KEY on the query, and resets the keyset;
@@ -503,10 +504,20 @@ describe('<AutodedupGroups>', () => {
     expect(toggles).toEqual(['+ poznámka k rozdělení', '+ poznámka k verdiktu']);
   });
 
-  it('says nothing has been merged', async () => {
+  it('says the engine merges inside the apply scope, and links Health', async () => {
     renderPage();
-    const lede = (await screen.findByText(/Nothing has been merged/)).closest('p')!;
-    expect(lede).toHaveTextContent('shadow mode');
+    const lede = (await screen.findByText(/merges in production inside the apply scope/)).closest('p')!;
+    expect(lede).toHaveTextContent(
+      'The engine merges in production inside the apply scope; live lane health is on Health.',
+    );
+    expect(within(lede).getByRole('link', { name: 'Health' })).toHaveAttribute('href', '/health#dedup');
+    expect(lede).toHaveTextContent("This page records your opinion inside the program's own schema.");
+    /* The cards carry the status chip and its title; wait for them before the absences. */
+    await screen.findByText('#7');
+    for (const gone of ['shadow', 'SHADOW', 'merges nothing', 'Nothing has been merged']) {
+      expect(document.body).not.toHaveTextContent(gone);
+    }
+    expect(screen.queryByTitle(/shadow/i)).toBeNull();
   });
 
   it('renders a group with its key, size, members and weakest edge', async () => {

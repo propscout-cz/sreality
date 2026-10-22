@@ -12,8 +12,6 @@ export function readFailed(q: { isError: boolean; data: unknown }): boolean {
 const VARIANT_CLASS = {
   overlay:
     'flex h-6 w-6 items-center justify-center rounded-[var(--radius-xs)] border border-[var(--color-brick)] bg-[var(--color-paper-3)]/90 text-[var(--color-brick)] backdrop-blur',
-  inline:
-    'flex h-6 w-6 items-center justify-center rounded-[var(--radius-xs)] border border-transparent text-[var(--color-brick)] hover:border-[var(--color-brick)]',
   header:
     'inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-brick)]/40 bg-[var(--color-brick-soft)] px-3 py-1.5 text-[0.8rem] text-[var(--color-brick)]',
 } as const;
@@ -26,7 +24,7 @@ export default function ReadFailedMark({
   /* The thing that failed, as the sentence's subject: "Pipeline", "Kolekce"… */
   what: string;
   onRetry: () => void;
-  /* `overlay` over a card photo, `inline` on a table row, `header` spelled out. */
+  /* `overlay` over a card photo, `header` spelled out. */
   variant?: keyof typeof VARIANT_CLASS;
 }) {
   const spelled = variant === 'header';

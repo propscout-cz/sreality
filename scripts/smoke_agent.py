@@ -152,13 +152,16 @@ def main() -> int:
 
 
 def _pick_target(conn: Any, sreality_id: int | None) -> dict[str, Any] | None:
-    """Pick a real recent Prague 2+kk apartment rental (or the explicit id)."""
+    """Pick a real recent Prague 2+kk apartment rental (or the explicit id), placed where
+    every estimation subject stands (ruling R7)."""
+    from location_data.claims_common import SUBJECT_LOCATION_JOIN
+
     sql = (
         "SELECT l.id, l.sreality_id, ll.obec_name AS locality, l.disposition, l.area_m2, "
         "l.price_czk, "
         "ROUND(ST_Y(ll.geom)::numeric, 5) AS lat, "
         "ROUND(ST_X(ll.geom)::numeric, 5) AS lng "
-        "FROM listings l JOIN listing_location ll ON ll.listing_id = l.id "
+        f"FROM listings l {SUBJECT_LOCATION_JOIN} "
         "WHERE l.category_main = 'byt' AND l.category_type = 'pronajem' "
         "AND l.is_active = true AND l.last_seen_at > now() - interval '3 days' "
         "AND l.price_czk IS NOT NULL AND ll.geom IS NOT NULL "
@@ -210,11 +213,11 @@ def _insert_smoke_run(
         cur.execute(
             "INSERT INTO estimation_runs "
             "(source, mode, status, input_sreality_id, input_listing_id, "
-            "input_spec, source_kind, parse_confidence, trace) "
+            "input_spec, trace) "
             "VALUES ('api', 'agent', 'running', %s, "
             # Dual-write (migration 324): surrogate listings.id beside the legacy key.
             "(SELECT id FROM listings WHERE sreality_id = %s), %s, "
-            "'sreality', 'high', %s) RETURNING id",
+            "%s) RETURNING id",
             (
                 int(target_row["sreality_id"]),
                 int(target_row["sreality_id"]),

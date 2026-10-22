@@ -123,7 +123,7 @@ bundles, the installable app's own files (below), and a `/healthz`
 endpoint that Railway uses for liveness.
 
 CI lives at `.github/workflows/frontend-build.yml` and runs
-`npm install && npm run build` on every push to catch broken builds
+`npm install && npm run build` on every pull request (and on a push to `main`) to catch broken builds
 before Railway sees them; it also fails when `dist/sw.js` or
 `dist/manifest.webmanifest` is missing.
 
@@ -151,15 +151,21 @@ real 404, never the SPA fallback:
   a 5xx) and hashed `/assets/*` files are served from its cache; it
   touches nothing else (API, images, Supabase, tiles). It never reloads a
   page: `lib/buildSkew` stays the one "newer version" signal and
-  `lib/lazyChunk` the one recovery from a missing chunk. Design and
-  reasons: #1764 and the header of `public/sw.js`.
+  `lib/lazyChunk` the one recovery from a missing chunk. It also handles
+  push (notifications push W4): `push` always shows exactly one
+  notification and sets the icon badge (below iOS 18.4, three pushes that
+  show nothing remove every subscription), and `notificationclick` opens
+  the tapped page in the app's window. `src/lib/sw.test.ts` runs the file
+  in a fake worker scope; `npm run typecheck` checks it against the
+  worker's globals (`tsconfig.sw.json`). Design and reasons: #1764, the
+  header of `public/sw.js`, `docs/design/notifications-push/PROGRAM.md`.
 
 **Retiring the worker.** Never delete `public/sw.js`: an installed worker
 whose script 404s simply stays installed. Replace the file's contents
 with the self-unregistering version in its header comment (clears its
 caches, unregisters itself), make `registerServiceWorker()` unregister
 instead of register in the same PR, deploy, and keep that file served
-for months.
+for months. Unregistering also ends push on iOS below 18.4.
 
 The three typefaces are self-hosted (`src/assets/fonts/`, SIL OFL 1.1,
 licence files beside them; `src/styles/fonts.css`), so the page makes no
@@ -171,14 +177,26 @@ cross-origin rule.
 Under 768 px wide, `Shell.tsx` renders the routes inside the phone frame
 (`src/components/phone/PhoneShell.tsx`) instead of the desktop top bar:
 an `h-14` header (never taller — the Browse and Pipeline panes pin to
-3.5 rem), a five-tab bar (Nové `/feed`, Pipeline, Sbírky, Makléři, Odkaz
-`/link`) and an account sheet. `usePhoneShell()` (`src/lib/phoneShell.ts`) decides; the
+3.5 rem) with a bell (the unread count, opening `/notifications`), a
+five-tab bar (Nové `/feed`, Pipeline, Sbírky, Makléři, Odkaz
+`/link`) and an account sheet (the theme, this iPhone's push switch
+"Oznámení na tomto iPhonu" — `src/components/phone/PushSwitch.tsx` over
+`src/lib/usePush.ts`, offered on an iPhone or iPad only, its subscription
+bound to the signed-in user by `src/lib/auth.tsx` and `src/lib/push.ts`
+and riding the bell's plan gate — the desktop view, sign-out).
+A tapped push lands on `/n/:dispatchId` (`src/pages/NotificationOpen.tsx`),
+which marks it read and replaces itself with what it is about. One unread observer
+(`src/lib/unreadCount.tsx`, mounted by `Shell`) feeds the bell, the
+desktop nav badge, the Notifications page and the installed app's icon
+badge. `usePhoneShell()` (`src/lib/phoneShell.ts`) decides; the
 account sheet's "Desktopová verze" sets a per-device override
 (`localStorage` `sreality.phone.desktopView`) and the desktop account menu's
 "Mobilní verze" clears it. Pages are not forked: a route without a phone
 design renders its desktop page inside the frame. The feed (`/feed`,
-`src/pages/Feed.tsx`) reuses Browse's read layer; its cards are
-`src/components/phone/FeedCard.tsx`. The property page draws
+`src/pages/Feed.tsx`) reuses Browse's read layer and keeps its scope in the
+URL as Browse does; its cards are `src/components/phone/FeedCard.tsx`, and
+its Filtry sheet (`src/components/phone/FilterSheet.tsx`) draws Browse's
+filter set from the sidebar's own layout table (`src/lib/filterLayout.ts`). The property page draws
 `src/components/phone/PhoneProperty.tsx` from `PropertyDetail`'s own reads;
 Odkaz (`src/pages/Link.tsx`) takes a pasted portal link to
 `/listing/:source/:nativeId`. To see the frame on a desktop browser, narrow

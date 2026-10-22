@@ -23,11 +23,13 @@ import { imageSrc } from '@/lib/imageUrl';
 import {
   fetchImagesForListingIds,
   fetchListingCovers,
+  fetchListingFloors,
   fetchPropertySourcesByPropertyIds,
+  type ListingFloor,
 } from '@/lib/queries';
 import type { ImagePublic } from '@/lib/types';
 
-import { hydrationKeys, type BrokerSubject } from './keys';
+import { hydrationKeys, sortedIds, type BrokerSubject } from './keys';
 
 /* Decorations are worth re-reading far less often than the cards themselves: a
  * listing's cover photo and its attributed broker change on the scrape's
@@ -43,6 +45,7 @@ export type BrokersByPropertyId = ReadonlyMap<number, PropertyBrokers>;
  * rows, so narrowing here would just push a second shape onto every consumer.
  * `taggedImageUrls` below is the Browse-card projection. */
 export type PhotosByListingId = ReadonlyMap<number, ImagePublic[]>;
+export type FloorsByListingId = ReadonlyMap<number, ListingFloor>;
 
 /* One cover image per listing, from listing_cover_public (W4) — a server-side
  * DISTINCT ON that returns exactly one row per listing instead of every
@@ -53,10 +56,7 @@ export function useListingCovers(listingIds: readonly number[]): {
   covers: CoverByListingId;
   isPending: boolean;
 } {
-  const ids = useMemo(
-    () => [...new Set(listingIds)].sort((a, b) => a - b),
-    [listingIds],
-  );
+  const ids = useMemo(() => sortedIds(listingIds), [listingIds]);
   const q = useQuery({
     queryKey: hydrationKeys.covers(ids),
     queryFn: async ({ signal }) => {
@@ -87,10 +87,7 @@ export function useListingBrokers(listingIds: readonly number[]): {
   isError: boolean;
   refetch: () => void;
 } {
-  const ids = useMemo(
-    () => [...new Set(listingIds)].sort((a, b) => a - b),
-    [listingIds],
-  );
+  const ids = useMemo(() => sortedIds(listingIds), [listingIds]);
   const q = useQuery({
     queryKey: hydrationKeys.brokers(ids),
     queryFn: () => fetchListingBrokersByIds(ids) as Promise<BrokerByListingId>,
@@ -232,6 +229,38 @@ export function photoBuckets(listingIds: readonly number[]): number[][] {
   return out;
 }
 
+/* The storey behind each Browse card. Bucketed in arrival order exactly like
+ * `useListingPhotos` (same reason: an accumulating infinite list must not re-key
+ * every earlier page on each append); `enabled` false holds the hook without a
+ * read. A failed bucket costs its cards the storey and nothing else. */
+export function useListingFloors(
+  listingIds: readonly number[],
+  enabled: boolean,
+): { floors: FloorsByListingId } {
+  const buckets = useMemo(() => photoBuckets(listingIds), [listingIds]);
+  const on = enabled && buckets.length > 0;
+
+  return useQueries({
+    queries: buckets.map((ids) => ({
+      queryKey: hydrationKeys.floors(ids),
+      queryFn: async ({ signal }: { signal: AbortSignal }) =>
+        (await fetchListingFloors(ids, { signal })) as FloorsByListingId,
+      enabled: on,
+      placeholderData: keepPreviousData,
+      staleTime: DECORATION_STALE_MS,
+    })),
+    combine: (results) => {
+      if (!on) return { floors: EMPTY_FLOORS };
+      const merged = new Map<number, ListingFloor>();
+      for (const r of results) {
+        if (!r.data) continue;
+        for (const [listingId, floor] of r.data) merged.set(listingId, floor);
+      }
+      return { floors: merged as FloorsByListingId };
+    },
+  });
+}
+
 /* The Browse carousel's projection, in one place instead of inline in the read
  * it used to ride along with. Kept a pure function so the hook can stay lossless
  * (raw ImagePublic rows, which the comparables modal and map both consume) while
@@ -251,4 +280,5 @@ const EMPTY_COVERS: CoverByListingId = new Map();
 const EMPTY_BROKERS: BrokerByListingId = new Map();
 const EMPTY_PROPERTY_BROKERS: BrokersByPropertyId = new Map();
 const EMPTY_PHOTOS: PhotosByListingId = new Map();
+const EMPTY_FLOORS: FloorsByListingId = new Map();
 export const NO_PHOTOS: readonly ImagePublic[] = [];

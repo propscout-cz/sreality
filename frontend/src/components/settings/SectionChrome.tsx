@@ -49,7 +49,7 @@ export function Chevron({ open, className = '' }: { open: boolean; className?: s
 /* -------------------------------------------------------------------- */
 /* Info hint — the compact form of a description: an (i) glyph that shows */
 /* its text natively on hover/focus, the same "cursor-help" idiom already  */
-/* used across the app (Pipeline's board-card Hint, ConfidenceIndicator).  */
+/* used across the app (Pipeline's board-card Hint).                      */
 /* -------------------------------------------------------------------- */
 
 export function InfoHint({ text, className = '' }: { text: string; className?: string }) {
@@ -157,7 +157,6 @@ export function CollapsibleSection({
   hint,
   description,
   infoExpanded,
-  defaultOpen = true,
   children,
 }: {
   id: string;
@@ -174,10 +173,9 @@ export function CollapsibleSection({
   hint?: string;
   description?: ReactNode;
   infoExpanded: boolean;
-  defaultOpen?: boolean;
   children: ReactNode;
 }) {
-  const [isOpen, toggle] = useCollapsed(id, defaultOpen);
+  const [isOpen, toggle] = useCollapsed(id, true);
   const hintText = hint ?? (typeof description === 'string' ? description : undefined);
   return (
     <section
@@ -228,17 +226,5 @@ export function CollapsibleSection({
         </div>
       ) : null}
     </section>
-  );
-}
-
-/* -------------------------------------------------------------------- */
-/* Shared error banner                                                   */
-/* -------------------------------------------------------------------- */
-
-export function ErrorBanner({ message }: { message: string }) {
-  return (
-    <div className="p-3 rounded-[var(--radius-sm)] border border-[var(--color-brick)]/30 bg-[var(--color-brick-soft)] text-sm text-[var(--color-brick)]">
-      <strong className="font-medium">Failed:</strong> {message}
-    </div>
   );
 }

@@ -19,6 +19,10 @@
  * scans every <a href> and keeps the ones that yield an id — robust to the
  * portals' card markup changing under us.
  *
+ * The id rules MIRROR the Python canon, scraper/portal_identity.py (the walk's
+ * identity); one probe fixture, tests/fixtures/portal_url_probes.json, runs
+ * against both, so the two can only drift with a red test.
+ *
  * Adding a host here means adding it to chrome-extension/manifest.json too;
  * portalIds.test.ts fails when the two lists differ. */
 
@@ -34,10 +38,6 @@ export interface Portal {
   /* Native id from a detail URL or a card's detail href; null = not a detail
    * link (so also: not a detail page). Accepts absolute or relative hrefs. */
   detailId(pathname: string): string | null;
-  /* Best-effort "is this a sale apartment?" from the URL alone, for the
-   * not-in-our-DB case where we have no row to gate on. true / false / null
-   * (unknown). Only portals that encode category in the path implement it. */
-  saleApartmentHint?(pathname: string): boolean | null;
 }
 
 function firstMatch(re: RegExp, s: string): string | null {
@@ -45,25 +45,13 @@ function firstMatch(re: RegExp, s: string): string | null {
   return m ? m[1] : null;
 }
 
-/* sreality / idnes encode category as /…/{prodej|pronajem}/{byt|dum|…}/… */
-function pathCategoryHint(path: string): boolean | null {
-  const sale = /\/(prodej)\//.test(path);
-  const rent = /\/(pronajem|pronájem)\//.test(path);
-  const byt = /\/byt[\/-]/.test(path) || /\/byty\//.test(path);
-  const otherKind = /\/(dum|domy|pozemek|pozemky|chata|chaty|kancelar|komercni|garaz)\b/.test(path);
-  if (rent) return false;
-  if (otherKind && !byt) return false;
-  if (sale && byt) return true;
-  return null;
-}
-
 export const PORTALS: Portal[] = [
   {
     source: 'sreality',
     hosts: ['www.sreality.cz', 'sreality.cz'],
-    // /detail/{type}/{main}/{slug}/{id} — id is the trailing all-digits segment.
-    detailId: (p) => firstMatch(/\/detail\/[^?#]*?\/(\d{5,})(?:[/?#]|$)/, p),
-    saleApartmentHint: pathCategoryHint,
+    // /detail/{type}/{main}/{slug}/{id} — id is the LAST segment, all digits; 18 at most,
+    // so it always fits the queue's bigint sreality_id.
+    detailId: (p) => firstMatch(/\/detail\/[^?#]*\/([0-9]{5,18})\/?$/, p),
   },
   {
     source: 'bazos',
@@ -82,15 +70,15 @@ export const PORTALS: Portal[] = [
   {
     source: 'idnes',
     hosts: ['reality.idnes.cz'],
-    // /detail/{sale}/{cat}/{slug}/{24-hex objectid}/
-    detailId: (p) => firstMatch(/\/detail\/[^?#]*?\/([0-9a-f]{24})(?:[/?#]|$)/, p),
-    saleApartmentHint: pathCategoryHint,
+    // /detail/{sale}/{cat}/{slug}/{hex objectid}/ — 24 hex today, 16+ in the canon
+    // (scraper/portal_identity.py); the last segment only, so a hex-looking slug word is no id.
+    detailId: (p) => firstMatch(/\/detail\/[^?#]*?\/([0-9a-f]{16,})\/?$/, p),
   },
   {
     source: 'maxima',
     hosts: ['nemovitosti.maxima.cz'],
-    // /nemovitosti/{id}/  — id is a short letter+digits token (e.g. b50089333)
-    detailId: (p) => firstMatch(/\/nemovitosti\/([a-z]?\d{6,})(?:[/?#]|$)/, p),
+    // /nemovitosti/{id}/  — id is a letter + digits token (e.g. b50089333)
+    detailId: (p) => firstMatch(/\/nemovitosti\/([a-z][0-9]+)\/?$/, p),
   },
   {
     source: 'remax',
@@ -104,26 +92,24 @@ export const PORTALS: Portal[] = [
     // ids carry a letter prefix.) Verified against live source_id_native.
     source: 'mmreality',
     hosts: ['www.mmreality.cz', 'mmreality.cz'],
-    detailId: (p) => firstMatch(/\/nemovitosti\/(\d{6,})(?:[/?#]|$)/, p),
+    detailId: (p) => firstMatch(/\/nemovitosti\/([0-9]+)\/?/, p),
   },
   {
     // /{sale}/{cat}/{disp}/{town}/{slug}-{id}.html — id is the trailing run of
-    // digits before ".html" (any length: live ids run 4–7 digits). The "-…\.html"
+    // 4+ digits before ".html" (live ids run 4–7 digits). The "-…\.html" end
     // anchor isolates it from slug decoys (the area in "...-330-m2-{id}.html").
     // Verified against 100% of live source_id_native.
     source: 'ceskereality',
     hosts: ['www.ceskereality.cz', 'ceskereality.cz'],
-    detailId: (p) => firstMatch(/-(\d+)\.html\b/, p),
-    saleApartmentHint: pathCategoryHint,
+    detailId: (p) => firstMatch(/-([0-9]{4,})\.html$/, p),
   },
   {
     // /detail/{obec}/{slug}-{id}.html — same "-{id}.html" scheme as ceskereality
     // (the "-…\.html" anchor isolates the id from a slug area decoy like
-    // "pole-253870-m-…-{id}.html"). The detail URL does NOT encode the category,
-    // so no saleApartmentHint (the /listings/lookup row gates instead).
+    // "pole-253870-m-…-{id}.html").
     source: 'realitymix',
     hosts: ['www.realitymix.cz', 'realitymix.cz'],
-    detailId: (p) => firstMatch(/-(\d+)\.html\b/, p),
+    detailId: (p) => firstMatch(/-([0-9]{4,})\.html$/, p),
   },
 ];
 
@@ -166,6 +152,16 @@ export function isDetailPage(url: string): boolean {
   return detailRef(url) != null;
 }
 
+/* A path the fetch would rewrite (a `.` / `..` segment or a backslash, percent-encoded
+ * or not) names one ad in the id rule and fetches another. `new URL` has already
+ * rewritten it, so this reads the text as pasted — the canon's `_rewritten_path`. */
+function rewrittenPath(absolute: string): boolean {
+  const beforeQuery = absolute.split(/[?#]/, 1)[0];
+  let decoded = beforeQuery;
+  try { decoded = decodeURIComponent(beforeQuery); } catch { /* Python's unquote keeps it raw too */ }
+  return decoded.includes('\\') || decoded.split('/').slice(3).some((seg) => seg === '.' || seg === '..');
+}
+
 /* A pasted portal link → the pair the SPA's /listing/:source/:nativeId route
  * takes, or null when it is not a portal listing's detail URL. Whitespace is
  * trimmed and a missing scheme assumed https; query and fragment are ignored. A
@@ -173,6 +169,8 @@ export function isDetailPage(url: string): boolean {
 export function parsePortalUrl(url: string): { source: string; nativeId: string } | null {
   const text = url.trim();
   if (text === '') return null;
-  const ref = detailRef(/^[a-z][a-z\d+.-]*:\/\//i.test(text) ? text : `https://${text}`, '');
+  const absolute = /^[a-z][a-z\d+.-]*:\/\//i.test(text) ? text : `https://${text}`;
+  if (rewrittenPath(absolute)) return null;
+  const ref = detailRef(absolute, '');
   return ref == null ? null : { source: ref.source, nativeId: ref.sourceId };
 }

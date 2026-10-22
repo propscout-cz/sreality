@@ -4,10 +4,12 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, type InfiniteData } from '@tanstack/react-query';
 
+import { browseKeys } from '@/lib/browseKeys';
+import { DEFAULT_FILTERS } from '@/lib/filters';
 import type { Tag } from '@/lib/types';
-import { curationKeys } from '@/lib/queries';
+import { curationKeys, DEFAULT_SORT } from '@/lib/queries';
 
 vi.mock('@/lib/api', async (orig) => ({
   ...(await orig<typeof import('@/lib/api')>()),
@@ -18,6 +20,7 @@ vi.mock('@/lib/api', async (orig) => ({
 }));
 
 import { attachTag, createTag, detachTag, listTags } from '@/lib/api';
+import { ActingAs, actingKey } from '@/lib/acting';
 import { TAG_SEARCH_LABEL, TagAssignList } from './TagAssignList';
 
 const tag = (id: number, name: string): Tag => ({
@@ -25,15 +28,16 @@ const tag = (id: number, name: string): Tag => ({
 });
 const TAGS = [tag(5, 'k prohlídce'), tag(6, 'odmítnuto')];
 
-function renderList(memberIds: number[] = []) {
+function renderList(memberIds: number[] = [], seed: (qc: QueryClient) => void = () => {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  seed(qc);
   const invalidate = vi.spyOn(qc, 'invalidateQueries');
   render(
     <QueryClientProvider client={qc}>
       <TagAssignList property_id={42} memberIds={new Set(memberIds)} />
     </QueryClientProvider>,
   );
-  return { invalidate };
+  return { invalidate, qc };
 }
 
 describe('<TagAssignList>', () => {
@@ -57,6 +61,20 @@ describe('<TagAssignList>', () => {
     await waitFor(() => expect(detachTag).toHaveBeenCalledWith(42, 6));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: curationKeys.propertyTagMembers });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: curationKeys.tags });
+  });
+
+  it('a tag put on a card listed under "Bez štítků" drops that card from the list (ruling 9)', async () => {
+    const f = { ...DEFAULT_FILTERS, tags: { set: 'out' as const, in: [], out: [] } };
+    const cards = browseKeys.cards(f, DEFAULT_SORT);
+    type Page = { rows: { property_id: number }[] };
+    const { qc } = renderList([], (c) => {
+      c.setQueryData(curationKeys.propertyTagMembers, new Map<number, number[]>());
+      c.setQueryData<InfiniteData<Page>>(cards, { pages: [{ rows: [{ property_id: 42 }, { property_id: 43 }] }], pageParams: [null] });
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /k prohlídce/, pressed: false }));
+    await waitFor(() =>
+      expect(qc.getQueryData<InfiniteData<Page>>(cards)!.pages[0].rows).toEqual([{ property_id: 43 }]),
+    );
   });
 
   it('creates a typed name that no tag carries, and puts it on the property', async () => {
@@ -89,5 +107,34 @@ describe('<TagAssignList>', () => {
     expect(screen.queryByText(/Zatím žádné štítky/)).toBeNull();
     fireEvent.click(retry);
     expect(await screen.findByRole('list', { name: 'Štítky' })).toBeInTheDocument();
+  });
+
+  it('inside <ActingAs> lists and attaches the owner\'s tags, on the owner\'s map, and leaves Browse alone', async () => {
+    const owner = { account_id: 'owner-1', email: 'jana@example.cz', mode: 'edit' as const };
+    const f = { ...DEFAULT_FILTERS, tags: { set: 'out' as const, in: [], out: [] } };
+    const cards = browseKeys.cards(f, DEFAULT_SORT);
+    type Page = { rows: { property_id: number }[] };
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(curationKeys.propertyTagMembers, new Map<number, number[]>());
+    qc.setQueryData(actingKey('owner-1', curationKeys.propertyTagMembers), new Map<number, number[]>());
+    qc.setQueryData<InfiniteData<Page>>(cards, { pages: [{ rows: [{ property_id: 42 }] }], pageParams: [null] });
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    render(
+      <QueryClientProvider client={qc}>
+        <ActingAs share={owner}>
+          <TagAssignList property_id={42} memberIds={new Set()} />
+        </ActingAs>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /k prohlídce/, pressed: false }));
+    await waitFor(() => expect(attachTag).toHaveBeenCalledWith(42, 5, { actAs: 'owner-1' }));
+    expect(listTags).toHaveBeenCalledWith({ actAs: 'owner-1' });
+    await waitFor(() =>
+      expect(qc.getQueryData<Map<number, number[]>>(actingKey('owner-1', curationKeys.propertyTagMembers))?.get(42)).toEqual([5]),
+    );
+    expect(qc.getQueryData<Map<number, number[]>>(curationKeys.propertyTagMembers)?.size).toBe(0);
+    expect(qc.getQueryData<InfiniteData<Page>>(cards)!.pages[0].rows).toEqual([{ property_id: 42 }]);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: actingKey('owner-1', curationKeys.tags) });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: curationKeys.tags });
   });
 });

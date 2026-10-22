@@ -10,9 +10,11 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
-import BrowseExperience from './BrowseExperience';
+import BrowseExperience, { type BrowseFeatures } from './BrowseExperience';
+import { NewPropertyProvider } from './NewPropertyProvider';
 import { useMemoryBrowseState } from '@/lib/browseState';
 import { DEFAULT_FILTERS, type ListingFilters } from '@/lib/filters';
+import * as api from '@/lib/api';
 import { fmtShortDate } from '@/lib/format';
 import * as queries from '@/lib/queries';
 import { DEFAULT_SORT, type CardRow, type SortSpec } from '@/lib/queries';
@@ -29,6 +31,25 @@ vi.mock('@/lib/queries', async (importOriginal) => ({
   fetchPipelineStages: vi.fn(async () => []),
   fetchIsDismissed: vi.fn(async () => false),
   fetchNoteCounts: vi.fn(async () => new Map()),
+}));
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
+  listCollections: vi.fn(() => new Promise<never>(() => {})),
+  listTags: vi.fn(() => new Promise<never>(() => {})),
+  createEstimation: vi.fn(),
+  latestEstimationsByListing: vi.fn(async () => ({})),
+}));
+vi.mock('@/lib/pgRead', () => ({ pgRead: vi.fn(() => new Promise<never>(() => {})) }));
+/* The Stats tab's board has its own tests (components/stats); here only the wiring. */
+vi.mock('@/components/stats/StatsDashboard', () => ({
+  default: ({ filters }: { filters: ListingFilters }) => (
+    <div data-testid="stats-dashboard">{filters.portals.join(',')}</div>
+  ),
+}));
+/* Only the "Nová nemovitost" provider asks who is signed in (admins only, v1). */
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth')>()),
+  useAuth: vi.fn(() => ({ isAdmin: true })),
 }));
 vi.mock('@/lib/brokers', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/brokers')>()),
@@ -62,13 +83,21 @@ const ROW = {
   newest_ad_at_idnes: IDNES_DAY,
 } as unknown as CardRow;
 
-function Host({ filters, sort }: { filters: ListingFilters; sort: SortSpec }) {
+function Host({
+  filters,
+  sort,
+  sidebar = false,
+}: {
+  filters: ListingFilters;
+  sort: SortSpec;
+  sidebar?: boolean;
+}) {
   const view = useMemoryBrowseState({ filters, sort, tab: 'map' });
   return (
     <BrowseExperience
       view={view}
       layout="modal"
-      features={{ presetBar: false, watchdog: false, mergeMode: false, title: false, sidebar: false }}
+      features={{ presetBar: false, watchdog: false, mergeMode: false, title: false, sidebar }}
     />
   );
 }
@@ -167,5 +196,116 @@ describe('<BrowseExperience> the cards\' cover photo', () => {
     localStorage.setItem(COVER_KEY, 'kitchen');
     renderBrowse([]);
     expect(await screen.findByText(counterIs('3 / 4'))).toBeInTheDocument();
+  });
+});
+
+describe('<BrowseExperience> the filters column', () => {
+  const SIDEBAR_COLLAPSED = 'sreality.browse.sidebarCollapsed';
+  const renderWithSidebar = () =>
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <Host filters={DEFAULT_FILTERS} sort={DEFAULT_SORT} sidebar />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  afterEach(() => localStorage.removeItem(SIDEBAR_COLLAPSED));
+
+  it('folds to a rail and unfolds again, and remembers the fold for this browser', async () => {
+    const first = renderWithSidebar();
+    expect(await screen.findByRole('heading', { name: 'Filters' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Show filters' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide filters' }));
+    expect(screen.queryByRole('heading', { name: 'Filters' })).toBeNull();
+    expect(screen.queryByRole('separator', { name: /Resize the filters sidebar/ })).toBeNull();
+    expect(localStorage.getItem(SIDEBAR_COLLAPSED)).toBe('1');
+    first.unmount();
+
+    renderWithSidebar();
+    fireEvent.click(await screen.findByRole('button', { name: 'Show filters' }));
+    expect(await screen.findByRole('heading', { name: 'Filters' })).toBeInTheDocument();
+    expect(localStorage.getItem(SIDEBAR_COLLAPSED)).toBe('0');
+  });
+});
+
+/* The Stats tab is the account's chart board over the page's filters — one
+ * component, no stats read of the page's own. */
+describe('<BrowseExperience> Stats tab', () => {
+  function StatsHost({ filters }: { filters: ListingFilters }) {
+    const view = useMemoryBrowseState({ filters, sort: DEFAULT_SORT, tab: 'stats' });
+    return (
+      <BrowseExperience
+        view={view}
+        layout="modal"
+        features={{ presetBar: false, watchdog: false, mergeMode: false, title: false, sidebar: false }}
+      />
+    );
+  }
+
+  it('renders <StatsDashboard> with the current filters', async () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <StatsHost filters={{ ...DEFAULT_FILTERS, portals: ['idnes'] }} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByTestId('stats-dashboard')).toHaveTextContent('idnes');
+  });
+});
+
+/* "Nová nemovitost" beside "+ Create watchdog" (docs/design/new-property-from-link.md
+ * §3.6): outlined, not a second copper primary, and a page feature — both Explore
+ * modals turn it off. */
+describe('<BrowseExperience> Nová nemovitost', () => {
+  function FeatureHost({ features }: { features: BrowseFeatures }) {
+    const view = useMemoryBrowseState({ filters: DEFAULT_FILTERS, sort: DEFAULT_SORT, tab: 'map' });
+    return <BrowseExperience view={view} layout="modal" features={features} />;
+  }
+  const renderWith = (features: BrowseFeatures) =>
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <NewPropertyProvider>
+            <FeatureHost features={features} />
+          </NewPropertyProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  const OFF = { presetBar: false, watchdog: true, mergeMode: false, title: false, sidebar: false };
+
+  it('sits beside the watchdog CTA, outlined, and opens the dialog', async () => {
+    renderWith(OFF);
+    const button = await screen.findByRole('button', { name: 'Nová nemovitost' });
+    expect(button.className).not.toContain('bg-[var(--color-copper)]');
+    expect(screen.getByRole('button', { name: '+ Create watchdog' })).toBeInTheDocument();
+    fireEvent.click(button);
+    expect(await screen.findByRole('dialog', { name: 'Nová nemovitost' })).toBeInTheDocument();
+  });
+
+  it('is absent when the surface turns the feature off', async () => {
+    renderWith({ ...OFF, newProperty: false });
+    expect(await screen.findByRole('button', { name: '+ Create watchdog' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Nová nemovitost' })).toBeNull();
+  });
+});
+
+/* A submit the API refuses (an ad it cannot place, docs/design/new-property-from-link.md
+ * §3.5) is a 422 with no run, so the card cannot learn of it from the runs read: the
+ * refusal itself has to stay on the card, or the click looks like it did nothing. */
+describe('<BrowseExperience> the on-card estimate', () => {
+  it("keeps a refused submit on the card, titled with the API's sentence", async () => {
+    const said = 'sreality ad 900 needs a location before it can be estimated';
+    vi.mocked(api.createEstimation).mockRejectedValue(new api.ApiError(said, 422, { detail: said }));
+    renderBrowse([]);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Odhad' }));
+
+    const refused = await screen.findByRole('button', { name: 'Odhad ↻' });
+    expect(refused).toHaveAttribute('title', said);
+    expect(api.createEstimation).toHaveBeenCalledWith(
+      expect.objectContaining({ sreality_id: 900 }),
+    );
   });
 });

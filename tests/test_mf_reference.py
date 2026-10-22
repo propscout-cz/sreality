@@ -1,6 +1,6 @@
 """`mf_reference()` -- THE MF reference rent (migration 565) -- proven against the replayed
-schema with the three serving views that call it (migration 567), plus the one rail that
-keeps its six codes and five notes in one place.
+schema with the serving views that call it (migration 567; the per-ad feed left in W6), plus
+the one rail that keeps its six codes and five notes in one place.
 
 The matrix EXECUTES the function over a seeded rent map (a stale revision, an obec-priced
 town, a KÚ-priced town with a partial, a uniform and a non-uniform VK, a retired KÚ, an
@@ -12,8 +12,7 @@ fake connections cannot evaluate SQL.
 The plan tests prove the planner INLINES the function into the property lateral and into
 each serving view (no `Function Scan`): a `SET` clause, `STRICT` or plpgsql body would turn
 it into a per-row call over every Browse row. The views are read back for the three shapes
-an advert can take (a value via its KÚ, a value via its obec, a town's range), and the
-portal lane's yield is proven to be the Browse read model's number (operator ruling Q8 b).
+an advert can take (a value via its KÚ, a value via its obec, a town's range).
 
 DB tests run in CI's migrations lane (`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED=1`) inside a
 transaction that is always rolled back; locally they skip. The rail tests are offline and
@@ -371,11 +370,11 @@ def test_a_non_flat_has_no_row(conn, category_main):
 # --- the estimation hand-off and the inlining -------------------------------------------
 
 # The lateral browse_projection and properties_public run (567): the property's golden
-# facts + its representative's stored codes, the KÚ included.
+# facts + its location ad's stored codes (ruling R7), the KÚ included.
 _PROPERTY_MF_SQL = """
 SELECT mf.mf_reference_rent_czk, mf.mf_gross_yield_pct, mf.mf_reference_rent
   FROM properties p
-  LEFT JOIN listing_location ll ON ll.listing_id = p.repr_listing_ref_id
+  LEFT JOIN listing_location ll ON ll.listing_id = p.location_listing_ref_id
   LEFT JOIN LATERAL mf_reference(
       p.category_main, p.category_type, p.disposition, p.area_m2, p.current_price_czk,
       p.condition, p.has_balcony, p.terrace, p.furnished, p.garage, p.has_lift,
@@ -400,9 +399,10 @@ def _property(cur: Any, *, obec: int, katastr: int | None = None, disposition: s
         "UPDATE properties SET category_main = 'byt', category_type = 'prodej', "
         "  current_price_czk = %s, area_m2 = %s, disposition = %s, condition = 'dobry', "
         "  has_balcony = true, garage = true, has_lift = false, building_type = 'cihla', "
-        "  status = 'active', is_active = true, published_at = now(), repr_listing_ref_id = %s "
+        "  status = 'active', is_active = true, published_at = now(), repr_listing_ref_id = %s, "
+        "  location_listing_ref_id = %s "
         " WHERE id = %s",
-        (price, area, disposition, lid, pid),
+        (price, area, disposition, lid, lid, pid),
     )
     cur.execute(
         "INSERT INTO listing_location (listing_id, geom, match_confidence, granularity, "
@@ -557,50 +557,17 @@ _VIEW_READS = {
                           "rent_map_cells"),
     "browse_projection": ("SELECT * FROM browse_projection WHERE property_id = {pid:d}",
                           "rent_map_cells"),
-    "listing_feed_public": ("SELECT * FROM listing_feed_public WHERE property_id = {pid:d}",
-                            "browse_list"),
-    "listing_feed_visible": ("SELECT * FROM listing_feed_visible() WHERE property_id = {pid:d}",
-                             "browse_list"),
 }
 
 
 @pytest.mark.parametrize("view", sorted(_VIEW_READS))
 @needs_db
 def test_each_serving_view_inlines_the_function_it_reads_mf_through(conn, adverts, view):
-    """RED by: anything that makes mf_reference() or browse_list_mf() (or the dismissal-
-    aware listing_feed_visible() over the feed) a Function Scan -- one call per row, and
+    """RED by: anything that makes mf_reference() a Function Scan -- one call per row, and
     a scan whose body the planner cannot see, so the relation it reads vanishes from the
     plan too."""
     sql, relation = _VIEW_READS[view]
     (plan,) = _one(conn, "EXPLAIN (FORMAT JSON) " + sql.format(pid=adverts["ku"][0]))
     nodes = list(_plan_nodes((plan if isinstance(plan, list) else json.loads(plan))[0]["Plan"]))
-    assert not [n for n in nodes if n.get("Function Name") in
-                ("mf_reference", "browse_list_mf", "listing_feed_visible")]
+    assert not [n for n in nodes if n.get("Function Name") == "mf_reference"]
     assert relation in {n.get("Relation Name") for n in nodes}
-
-
-@needs_db
-def test_the_portal_lane_serves_the_browse_read_models_yield(conn, adverts):
-    """Q8 (b): an advert on the portal lane shows its PROPERTY's yield, read from browse_list
-    by property_id -- nothing until the read model holds the property, then exactly its
-    number (the rebuild's own `select * from browse_projection`, via sync_browse_list)."""
-    from toolkit.browse_read_model import sync_browse_list
-
-    pids = [pid for pid, _ in adverts.values()]
-    feed_sql = ("SELECT f.property_id, f.mf_gross_yield_pct FROM {src} f "
-                "WHERE f.property_id = ANY(%s) ORDER BY 1")
-    with conn.cursor() as cur:
-        cur.execute(feed_sql.format(src="listing_feed_public"), (pids,))
-        assert [y for _, y in cur.fetchall()] == [None] * len(pids)
-
-        sync_browse_list(conn, pids)
-        cur.execute("SELECT property_id, mf_gross_yield_pct FROM browse_list "
-                    "WHERE property_id = ANY(%s) ORDER BY 1", (pids,))
-        read_model = cur.fetchall()
-        assert len(read_model) == len(pids)
-        for src in ("listing_feed_public", "listing_feed_visible()"):
-            cur.execute(feed_sql.format(src=src), (pids,))
-            assert cur.fetchall() == read_model
-    by_pid = {pid: (None if y is None else float(y)) for pid, y in read_model}
-    assert {a: by_pid[pid] for a, (pid, _) in adverts.items()} == {
-        a: yld for a, (_, yld) in _EXPECTED.items()}

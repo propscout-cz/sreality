@@ -38,6 +38,36 @@ def test_the_lane_and_the_check_share_one_predicate() -> None:
     assert where in tx.ELIGIBLE_LAG_SQL
 
 
+def test_the_gauges_stock_is_what_waits_active_apart_and_the_lanes_pace() -> None:
+    """Health wave 6: one row — waiting, waiting_active (the rest is the archive's read-once
+    re-read) and the successful readings of 24 h, so waiting / pace is a lower-bound ETA."""
+    flat = " ".join(tx.ELIGIBLE_LAG_SQL.split())
+    assert flat.startswith(
+        "SELECT count(*) AS waiting, count(*) FILTER (WHERE l.is_active) AS waiting_active, "
+        "(SELECT count(*) FROM listing_description_enrichments r WHERE r.created_at > now() - "
+        "interval '24 hours' AND r.extracted -> 'error' IS NULL) AS readings_24h FROM listings l "
+        "WHERE ")
+    assert "GROUP BY" not in flat and "oldest_hours" not in flat
+
+
+def test_the_gauges_flow_counts_arrivals_not_the_predicates_survivors() -> None:
+    """Health wave 6: new adverts with a text in the window and their first reading at ANY
+    version of this SCHEMA_VERSION (a model or prompt change re-reads, it does not stall);
+    given up at this version is its own count; p95 to the first reading."""
+    sql = tx.EXTRACTION_LATENCY_SQL
+    assert tx._eligible_where(OPEN_GATES) not in sql
+    assert f"ARRAY({tx._LLM_TEXT_SOURCES} UNION ALL SELECT 'bazos')" in sql
+    flat = " ".join(sql.split())
+    assert ("AND l.is_active AND l.description IS NOT NULL AND l.description <> '' AND "
+            "l.first_seen_at >= now() - make_interval(hours => %(window_h)s::int) AND "
+            "l.first_seen_at < now() - make_interval(hours => %(grace_h)s::int)") in flat
+    assert (f"e.extractor_version LIKE '{tx.SCHEMA_VERSION}:%%' AND e.extracted -> 'error' "
+            "IS NULL") in flat
+    assert ("g.extractor_version = %(version)s AND g.extracted -> 'error' IS NOT NULL AND "
+            f"coalesce((g.extracted ->> 'attempts')::int, 1) >= {tx.GIVE_UP_AFTER}") in flat
+    assert "percentile_cont(0.95)" in flat and "GROUP BY l.source" in flat
+
+
 def test_the_selector_keys_on_listing_id_and_never_on_sreality_id() -> None:
     sql = tx.SELECT_INFLOW_SQL
     assert "sreality_id" not in sql
@@ -52,10 +82,35 @@ def test_the_scope_is_the_open_gates_plus_the_llm_text_portals_and_names_no_port
     """W1 (2026-09-30): the NULL arms are gone — a row is in scope because its PORTAL is, via
     an open R7 gate or an active contract's `llm_text` entry read from the DB (rule 21)."""
     assert contract.extracted_cells() == OPEN_GATES
-    for sql in (tx.SELECT_INFLOW_SQL, tx.ELIGIBLE_LAG_SQL):
+    for sql in (tx.SELECT_INFLOW_SQL, tx.ELIGIBLE_LAG_SQL, tx.EXTRACTION_LATENCY_SQL):
         assert "pe.extraction_method = 'llm_text'" in sql and "pc.is_active" in sql
         assert "SELECT 'bazos'" in sql
         assert "IS NULL OR" not in sql and "l.floor" not in sql and "l.has_lift" not in sql
+
+
+@pytest.mark.parametrize("row, model", [((" gpt-5.6-luna ",), " gpt-5.6-luna "), (None, None),
+                                        (("  ",), None), ((None,), None), (({"m": 1},), None)])
+def test_the_model_is_the_one_switch_or_none(row: Any, model: str | None) -> None:
+    """MODEL_SQL and model_from are the lane's own read; the health gauge sends the same text."""
+    assert tx.model_from(row) == model
+
+    class _Cur:
+        def __enter__(self): return self
+        def __exit__(self, *a): return None
+        def execute(self, sql, params=None):
+            assert (sql, params) == (tx.MODEL_SQL, (tx.MODEL_SETTING,))
+
+        def fetchone(self): return row
+
+    class _Conn:
+        def cursor(self): return _Cur()
+
+    assert tx.resolve_model(_Conn()) == model
+
+
+def test_the_scope_from_the_llm_text_portals_unions_the_open_gates() -> None:
+    assert tx.scope_from(["idnes", "bazos"]) == {"bazos": ("floor", "has_lift"), "idnes": ()}
+    assert tx.scope_from([]) == {"bazos": ("floor", "has_lift")}
 
 
 def test_a_delisted_advert_is_read_once_per_schema_and_an_active_one_on_every_change() -> None:

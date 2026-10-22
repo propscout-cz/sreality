@@ -20,10 +20,11 @@
 export const HYDRATION_NAMESPACE = 'hydration' as const;
 
 /* Sorted + de-duplicated so the key is a property of the SET, not of the array
- * that happened to arrive. Numeric sort (not lexicographic) keeps it readable
- * in devtools. */
+ * that happened to arrive — two readers of one id set share one cache entry.
+ * Numeric sort (not lexicographic) keeps it readable in devtools. */
+export const sortedIds = (ids: readonly number[]): number[] => [...new Set(ids)].sort((a, b) => a - b);
 export function idsKey(ids: readonly number[]): string {
-  return [...new Set(ids)].sort((a, b) => a - b).join(',');
+  return sortedIds(ids).join(',');
 }
 
 /* A board card's property and the canonical ad that heads its broker list. */
@@ -54,4 +55,7 @@ export const hydrationKeys = {
    * surface asked first silently truncate the other's carousel. */
   photos: (ids: readonly number[], perId: number) =>
     [HYDRATION_NAMESPACE, 'photos', idsKey(ids), perId] as const,
+  /* The Browse card's storey, per page-sized bucket like `photos`. */
+  floors: (ids: readonly number[]) =>
+    [HYDRATION_NAMESPACE, 'floors', idsKey(ids)] as const,
 };

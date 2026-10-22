@@ -103,6 +103,8 @@ export interface FetchAllOptions {
   pageSize?: number;
   /* React Query's signal: a cancel aborts every page in flight. */
   signal?: AbortSignal;
+  /* Every page acts as this owner (lib/pgRead `actAs`); null = the caller. */
+  actAs?: string | null;
 }
 
 export async function fetchAllRows<Row extends object>({
@@ -113,6 +115,7 @@ export async function fetchAllRows<Row extends object>({
   expectMax,
   pageSize = 1000,
   signal,
+  actAs,
 }: FetchAllOptions): Promise<Row[]> {
   const ordered = new Set(orderBy.map((o) => o.column));
   for (const k of key) {
@@ -134,7 +137,7 @@ export async function fetchAllRows<Row extends object>({
     return page;
   };
   const page = (from: number) =>
-    pgRead<Row[] | null>(orderedBuild().range(from, from + pageSize - 1), { signal });
+    pgRead<Row[] | null>(orderedBuild().range(from, from + pageSize - 1), { signal, actAs });
 
   const absorb = (rows: readonly Row[]): void => {
     for (const row of rows) {

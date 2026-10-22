@@ -160,7 +160,7 @@ function ExploreAreaModal({
           view={view}
           layout="modal"
           anchor={anchor}
-          features={{ presetBar: false, mergeMode: false, watchdog: false, title: false }}
+          features={{ presetBar: false, mergeMode: false, watchdog: false, newProperty: false, title: false }}
         />
       </div>
     </Dialog>

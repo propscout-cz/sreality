@@ -1,6 +1,6 @@
 ---
 name: llm-pipelines
-description: Use when working on any LLM-backed path — the on-demand URL parser (source_dispatcher + per-source parsers), the cached analytical vision/text tools (summarize_listing, compare_listing_images, score_listing_condition, extract_building_units, read_floor_plan, discover_condition_markers, summarize_region_dispositions), the unified vision downscaling tiers, or the MF Cenová mapa nájemného reference-rent calc/ingest and gross-yield filter. Triggers on: parse_url, source_parsers, app_settings prompt/model, llm_calls, called_for, vision, max_edge downscale, reference_rent, rent map, mf_gross_yield, Gemini, provider, tool schema, additionalProperties.
+description: Use when working on any LLM-backed path — the cached analytical vision/text tools (summarize_listing, compare_listing_images, score_listing_condition, extract_building_units, read_floor_plan, discover_condition_markers), the unified vision downscaling tiers, or the MF Cenová mapa nájemného reference-rent calc/ingest and gross-yield filter. Triggers on: app_settings prompt/model, llm_calls, called_for, vision, max_edge downscale, reference_rent, rent map, mf_gross_yield, Gemini, provider, tool schema, additionalProperties.
 ---
 
 # LLM pipelines
@@ -10,35 +10,15 @@ result locally and auto-invalidates; each is a write-allowed toolkit exception (
 `toolkit-api` skill, rule #5). System prompts and model IDs are operator-tunable via
 `app_settings`.
 
-## LLM-backed parsing
+## A pasted link is not an LLM path (since 2026-10-20)
 
-`scraper.source_dispatcher.parse_listing_url` is the single entry point for any listing URL
-(sreality or otherwise). It classifies the URL by domain and routes to either the
-deterministic sreality flow (`scraper.url_parser`, unchanged) or an LLM-driven per-source
-parser under `scraper/source_parsers/`. Today's allowlist is `bezrealitky`, `idnes_reality`
-(reality.idnes.cz), and `remax` (remax-czech.cz); everything else falls through to a
-best-effort generic parser that always reports `parse_confidence='best_effort'`. (Note: bazos
-is ingested by its own crawler into `listings`, not through this on-demand URL parser.)
-
-The LLM path:
-1. Cache check against `parsed_url_cache`. Key is sha256 of the canonicalised URL (lowercase
-   scheme/host, no query, no trailing slash). Hit → return cached spec, no LLM, no cost.
-2. Fetch HTML, send to Claude with the system prompt from `app_settings.llm_parse_system_prompt`
-   and the per-source user prompt from `scraper.source_parsers.<source>`. The model is
-   `app_settings.llm_parse_model` (default `claude-sonnet-4-5`, from `api/llm_client.py`).
-3. The LLM is required to invoke `record_listing` exactly once with every field in a
-   `{value, confidence}` envelope. Any deviation raises `ParseError` and surfaces as a 502
-   from `/estimations/preview` or a `failed` row from `POST /estimations`.
-4. If the page didn't yield lat/lng, geocode the locality string via Mapy.cz
-   (`scraper.geocoding`). The geocode confidence rolls into
-   `parse_confidence_per_field['lat'/'lng']`.
-5. Store the full extraction + spec + warnings in `parsed_url_cache` with a 7-day TTL.
-
-Operator-tunable parser behaviour lives in `app_settings` (system prompt, model name) — edits
-take effect on the next preview/estimation, no deploy. Every prior value is preserved in
-`app_settings_history` (migration 020 trigger). Every call is recorded in `llm_calls` with
-token counts (incl. cache-read/write splits), USD cost, duration, and the optional
-`estimation_run_id`; `called_for='parse_url'`.
+The on-demand URL parser (`scraper/source_dispatcher` + `scraper/source_parsers`, `parsed_url_cache`,
+`app_settings.llm_parse_*`, both `/estimations/preview` routes) was retired by
+`docs/design/new-property-from-link.md`: a pasted link is resolved by `scraper/portal_identity` and
+ingested through the worker's drain (`POST /listings/ingest`), and an estimation is always of an ad we
+hold (`POST /estimations {listing_id | sreality_id | spec}`). The only LLM that reads listing prose is the
+text lane (`toolkit/description_extraction`, `app_settings.enrichment_model`), scoped by the location
+contracts' `llm_text` entries. `llm_calls.called_for = 'parse_url'` survives only as history.
 
 ## LLM-backed analysis
 
@@ -71,20 +51,8 @@ calls an LLM must do the same.
   kompletní rekonstrukci") to feed the condition-scoring marker dictionary.
 - `score_listing_condition` (`toolkit/condition_scoring.py`, migration 072, cache
   `listing_condition_scores`) — two-axis building/apartment condition levels (1..5) from the
-  curated rubric + marker dictionary. See architectural rule #14.
-- `summarize_region_dispositions` (`toolkit/region_annotations.py`, migration 104, cache
-  `region_disposition_annotations`) — a one-to-two-sentence factual annotation per
-  per-disposition Kč/m² box plot in Browse > Stats, from the same `ppm2_box` payload that
-  drives the chart. Cached per `(region_hash, day)` — invalidates by calendar day, not by
-  snapshot; `region_hash` folds in the `basis` when one is sent, so a capital and a monthly
-  reading of the same cohort can never share a cached sentence. Powers the `summarize-1`
-  annotated-charts feature; FACTS not opinions (toolkit rule #1) — it describes the
-  distribution, never recommends a price.
-  **`basis` is required in practice** (migration 425's vocabulary:
-  `sale_capital_czk_m2` / `rent_monthly_czk_m2` / `land_capital_czk_m2`): the prompt payload
-  names the unit AND the period from it, and without one the model narrates bare Kč/m² and
-  cannot tell a ~91 535 capital figure from a ~319 monthly one. Browse skips the call
-  entirely for a cohort whose basis is mixed rather than sending an unlabelled payload.
+  curated rubric + marker dictionary. PARKED (rule #14): dispatch-only, and no filter, agent fact
+  or estimate reads the levels.
 - `enrich_listing_description` — the post-publication text lane (`toolkit/description_extraction.py`),
   rebuilt by field-capture W7 on the **realtime worker** (lane `text_extract`, constant 300 s, no
   flag / setting / env var). **A field is in scope only once its `Cell.gate.passed` is true** (R7,
@@ -106,8 +74,11 @@ calls an LLM must do the same.
   no snapshot; a failed call is cached with an attempt count and given up on after 5.
   `false` needs an explicit negation in the evidence quote, every value needs a quote verbatim in
   the advert text, and `floor` comes back as the advert's own words for `scraper/floor.py` to
-  convert. Health: `verify_pipeline`'s `text_extraction_lag`, built from the lane's OWN selector
-  (R8), red too when the provider stopped the last pass (`last.fatal`, a failed pass in the heartbeat). `app_settings.enrichment_model` is the one switch. `docs/design/field-capture/PROGRAM.md`.
+  convert. Health: the `text_extraction` gauge (`scripts/checks/quality.py`), on the lane's OWN
+  statements (R8): new ads in scope still unread 1-24 h after arriving (Wilson lower bound; counted over
+  arrivals, never through the eligibility predicate), p95 minutes to the first reading beside the 20 min
+  SLO, and the backlog's ETA; a provider stop (`last.fatal`, a failed
+  pass in the heartbeat) is the `llm` check's credit cell and the `jobs` check's `lane/text_extract` cell. `app_settings.enrichment_model` is the one switch. `docs/design/field-capture/PROGRAM.md`.
 
 **Vision image downscaling is unified in `toolkit/vision_images.py` — one helper, two
 tiers.** Every image→LLM call routes R2 bytes through `image_block(r2, key, max_edge)`
@@ -153,9 +124,8 @@ adjustments. A secondary figure shown ALONGSIDE the comparables estimate — nev
   and the merge/detach recompute are gone); estimations and `/estimate_yield` call the measure.
 - **Serving, after 567 applies:** `browse_projection` / `properties_public` call the measure in
   their property lateral with the representative's `ll.obec_kod` + `ll.katastr_kod` (566, FILL
-  v5.4: the single KÚ of the bound entity, never a pin); `listing_feed_public` takes the
-  PROPERTY's yield from `browse_list` via `browse_list_mf(property_id)` (Q8 b). Until 567 applies
-  they read the stored, writer-less `properties.mf_*` / `listings.mf_*`; PR-F drops those.
+  v5.4: the single KÚ of the bound entity, never a pin). Until 567 applies they read the
+  stored, writer-less `properties.mf_*` / `listings.mf_*`; PR-F drops those.
 - **Rules:** flats only (else no row). VK = leading integer of the disposition clamped 1..4;
   novostavba = `condition = 'novostavba'` (NULL → older column, adjustments kept); rent =
   round((base + adjustments) × area); yield only for `prodej` with price ≥ 100 000, else the
@@ -174,7 +144,7 @@ adjustments. A secondary figure shown ALONGSIDE the comparables estimate — nev
 - **Estimations:** rent runs store `estimation_runs.reference_rent` (migration 131) from
   `toolkit.rent_map.compute_reference_rent` — a thin wrapper running the measure on the
   service-role connection, stamped `engine: 'mf_sql_v1'`. Our advert → its property's golden
-  facts + stored codes (`_SUBJECT_MF_FACTS_SQL`, the views' lateral inputs); a URL-parsed or
+  facts + stored codes (`_SUBJECT_MF_FACTS_SQL`, the views' lateral inputs); a raw-spec (typed)
   typed subject → obec from `api.maps.containing_obec_kod`, KÚ NULL. Stored runs keep their
   frozen breakdown (rule #12).
 - **Store + ingest:** `rent_map_revisions` (`file_sha256` UNIQUE → a re-fetch no-ops) +

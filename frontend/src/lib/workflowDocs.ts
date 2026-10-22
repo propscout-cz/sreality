@@ -3,7 +3,8 @@
  * `scripts/generate_workflow_docs.py` parses `.github/workflows/*.yml` into
  * `public/workflow-docs.json` (CI's `--check` fails on drift, so the docs can't
  * diverge from the real workflows). The types below are hand-written and are
- * the contract between that generator and the two admin pages that read it.
+ * the contract between that generator and Settings › GitHub Actions, the one
+ * page that reads it.
  *
  * Why fetched and not imported. The generated data is ~180 KB and changes
  * whenever any workflow YAML changes — including pure-backend cron edits with
@@ -39,7 +40,6 @@ export interface WorkflowDoc {
   filename: string;
   name: string;
   description: string;
-  portal: string | null;
   manual: boolean;
   schedules: WorkflowSchedule[];
   onPush: boolean;
@@ -80,8 +80,7 @@ export async function fetchWorkflowDocs(): Promise<WorkflowDoc[]> {
   return workflows as WorkflowDoc[];
 }
 
-/* One query key so Settings and Health share a single fetch + cache. The data
- * only changes on deploy, so it never needs refetching within a session. */
+/* The data only changes on deploy, so one fetch serves the whole session. */
 export function useWorkflowDocs() {
   return useQuery<WorkflowDoc[], Error>({
     queryKey: ['workflow-docs'],

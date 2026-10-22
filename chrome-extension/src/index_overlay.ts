@@ -16,10 +16,9 @@
  * And (index_promo.ts) the grid's cards that are not listings — paid ads,
  * project promos — washed whitish.
  *
- * Sale-apartment gating of the badge: by our row's category when found; for
- * listings not yet in our DB, by the portal's URL category hint (sreality/idnes
- * encode it in the path) so freshly-listed cards still get the estimate
- * affordance.
+ * Sale-apartment gating of the badge: by our row's category. An ad we do not
+ * hold gets no badge — an estimation is always of an ad we hold, and adding one
+ * is the detail panel's "Přidat do databáze" (docs/design/new-property-from-link.md).
  *
  * Controls and badges only ever come from a SUCCESSFUL lookup. When it fails
  * (signed out, network / API error) the page gets one notice in the dock
@@ -39,7 +38,8 @@ import {
 } from './index_cards';
 import { mountDock, onVeilChange, readVeil, writeVeil, type DockHandle } from './index_dock';
 import { createPromoWash } from './index_promo';
-import { detailRef, portalForHost, type Portal, type PortalRef } from '../../frontend/src/lib/portalIds';
+import { onAccountChange } from './session';
+import { detailRef, portalForHost, type PortalRef } from '../../frontend/src/lib/portalIds';
 import type { ApiMessage, ApiResult, AuthState, PortalListing } from './types';
 
 type Caller = <T>(m: ApiMessage) => Promise<ApiResult<T>>;
@@ -71,22 +71,22 @@ const MAX_LOOKUP_PER_PASS = 50;
  * Backoff: after a failure, observer-driven passes don't ask again for
  * LOOKUP_RETRY_AFTER_MS — a 401 costs no network, but in a real outage every
  * DOM mutation (re-renders, infinite scroll) would re-fetch. The notice's
- * buttons and the tab becoming visible again skip the wait, so a sign-in made
- * in the panel or another tab is picked up when the operator comes back — the
- * content script never sees the session itself (it stays in the background
- * worker; the sign-in button asks get_auth_state first and skips the Google
- * round trip when a session already exists).
+ * buttons, the tab becoming visible again and an account change (a sign-in or
+ * sign-out in the panel or any tab, session.ts) skip the wait; the sign-in
+ * button asks get_auth_state first and skips the Google round trip when a
+ * session already exists.
  *
- * Generations: one lookup is out at a time, but a sign-in or the retry button
- * starts a new generation whose lookup goes out even while an older one is
- * pending (a hung request can't swallow the click), as does the tab becoming
+ * Generations: one lookup is out at a time, but an account change or the retry
+ * button starts a new generation whose lookup goes out even while an older one
+ * is pending (a hung request can't swallow the click), as does the tab becoming
  * visible while one is out. Only the current generation decides the notice:
  * an older ask's FAILURE is dropped (an old 401 landing after a sign-in would
  * raise a false notice), but an older ask's OK answer still fills the cache
- * and badges — rows are rows. A lookup unanswered after LOOKUP_TIMEOUT_MS is
- * SHOWN as failed so a hung one can't leave the page silent, and its answer,
- * whenever it lands, still counts: the deadline decides what the notice says,
- * not what the cache holds.
+ * and badges — rows are rows (an answer asked before an account change never
+ * arrives: content.ts's call drops it). A lookup unanswered after
+ * LOOKUP_TIMEOUT_MS is SHOWN as failed so a hung one can't leave the page
+ * silent, and its answer, whenever it lands, still counts: the deadline
+ * decides what the notice says, not what the cache holds.
  *
  * Teardown: stop() removes the notice, and everything that awaits re-checks
  * `stopped` — a sign-in or lookup resolving after a route change must not
@@ -177,9 +177,6 @@ export interface IndexOverlayHandle {
   /* The panel changed this property's pipeline / collections / dismissal:
    * repaint its cards. */
   sync: (listing: PortalListing) => void;
-  /* Signed in or out from the panel: everything held was read as the session
-   * that just ended. */
-  sessionChanged: () => void;
 }
 
 function fmtPct(n: number | null): string {
@@ -221,9 +218,8 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 export async function runIndexOverlay(
   call: Caller, openPanel: OpenPanel, opts: IndexOverlayOptions,
 ): Promise<IndexOverlayHandle> {
-  const noop = (): void => {};
   const portal = portalForHost(location.hostname);
-  if (portal == null) return { stop: noop, sync: noop, sessionChanged: noop };
+  if (portal == null) return { stop: () => {}, sync: () => {} };
 
   const cache = new Map<string, PortalListing>();
 
@@ -239,7 +235,7 @@ export async function runIndexOverlay(
   let retrying = false;
   let signInError: string | null = null;
   let notice: NoticeHandle | null = null;
-  let gen = 0;  // bumped by a sign-in or a retry: answers to older asks are stale
+  let gen = 0;  // bumped by an account change or a retry: answers to older asks are stale
   let inFlightGen: number | null = null;  // generation of the lookup that is out
   let rescan = false;  // a pass skipped its lookup because this generation's was out
 
@@ -298,7 +294,7 @@ export async function runIndexOverlay(
   const layer = createCardLayer({
     call,
     cache,
-    badgeFor: (listing, href) => badgeFor(portal, listing, href),
+    badgeFor,
     openPanel: (ref, href, listing) => { void openPanel(ref, href, listing); },
     collectionsUrl: opts.collectionsUrl,
     veilOn: () => veil,
@@ -439,37 +435,28 @@ export async function runIndexOverlay(
 
   /* The same background-owned PKCE sign-in the panel's prompt runs (a content
    * script can't reach chrome.identity) — unless a session already exists,
-   * made in the panel or another tab, in which case the cards just get their
-   * lookup. On success the page asks again right away. */
+   * made in the panel or another tab. A session arriving is an account change,
+   * which asks again (below). */
   async function signIn(): Promise<void> {
     if (signingIn) return;
     signingIn = true;
     signInError = null;
     syncNotice();
-    let ok = false;
     try {
       const auth = await call<AuthState>({ type: 'get_auth_state' });
-      if (stopped) return;
-      if (auth.ok && auth.data.signedIn) {
-        ok = true;
-      } else if (!auth.ok && failureKind(auth.detail) === 'reload') {
+      if (stopped || (auth.ok && auth.data.signedIn)) return;
+      if (!auth.ok && failureKind(auth.detail) === 'reload') {
         orphaned(auth.detail);
-      } else {
-        const res = await call<undefined>({ type: 'sign_in' });
-        if (stopped) return;
-        if (res.ok) ok = true;
-        else if (failureKind(res.detail) === 'reload') orphaned(res.detail);
-        else signInError = `Přihlášení selhalo: ${res.detail}`;
+        return;
       }
+      const res = await call<undefined>({ type: 'sign_in' });
+      if (stopped || res.ok) return;
+      if (failureKind(res.detail) === 'reload') orphaned(res.detail);
+      else signInError = `Přihlášení selhalo: ${res.detail}`;
     } finally {
       signingIn = false;
       syncNotice();
     }
-    if (!ok) return;
-    gen++;  // whatever was asked without a session is stale
-    failure = null;
-    failedAt = null;
-    await pass();
   }
 
   /* Asks now, past the backoff and past a lookup that is still out; the
@@ -522,9 +509,9 @@ export async function runIndexOverlay(
     if (changed) layer.refresh();
   }
 
-  /* Every row, list and control here was read as the session that just ended:
+  /* Every row, list and control here was read as the account that just left:
    * drop them and ask again (a signed-out answer raises the notice). */
-  function sessionChanged(): void {
+  const unsubscribeAccount = onAccountChange(() => {
     if (stopped) return;
     gen++;
     cache.clear();
@@ -533,7 +520,7 @@ export async function runIndexOverlay(
     failedAt = null;
     signInError = null;
     void pass();
-  }
+  });
 
   document.documentElement.setAttribute(VEIL_ROOT_ATTR, veil ? '1' : '0');
   // Flipped in another tab, or on another portal: this page follows.
@@ -550,6 +537,7 @@ export async function runIndexOverlay(
       obs.disconnect();
       document.removeEventListener('visibilitychange', onVisibility);
       unsubscribeVeil();
+      unsubscribeAccount();
       if (timer != null) clearTimeout(timer);
       /* The controls go with the overlay: a later run starts from an empty
        * cache, and a card still marked as mounted would be skipped by it. */
@@ -560,7 +548,6 @@ export async function runIndexOverlay(
       dock = null;
     },
     sync,
-    sessionChanged,
   };
 }
 
@@ -602,16 +589,6 @@ function cardFor(anchor: HTMLAnchorElement, sourceId: string): HTMLElement {
   return card;
 }
 
-/* sreality/idnes encode prodej/byt in the detail path; other portals return null. */
-function urlSaleHint(portal: Portal, href: string): boolean | null {
-  if (portal.saleApartmentHint == null) return null;
-  try {
-    return portal.saleApartmentHint(new URL(href).pathname);
-  } catch {
-    return null;
-  }
-}
-
 /* A card still waiting on its lookup whose node was recycled from another
  * listing (see PROCESSED_ATTR) drops that listing's controls and click targets
  * now, not on the next successful lookup — a failing or backed-off lookup would
@@ -626,19 +603,16 @@ function unbadgeRecycled(hit: Hit, card: HTMLElement, clear: (card: HTMLElement)
   if (!stillLinked) clear(card);
 }
 
-/* The yield badge — sale apartments only: by our row's category when we have
- * one, else by the portal's URL hint. A value's or a range's yield on the
- * badge; the result's note (the range's (i), or a reason) rides in its title —
- * the badge falls through to the estimate or the CTA when there is no MF yield
- * to show. */
-function badgeFor(portal: Portal, listing: PortalListing, href: string): BadgeView | null {
-  const saleApt = listing.found
-    ? listing.category_main === 'byt' && listing.category_type === 'prodej'
-    : urlSaleHint(portal, href) === true;
-  if (!saleApt) return null;
+/* The yield badge — sale apartments we hold only, by our row's category. A
+ * value's or a range's yield on the badge; the result's note (the range's (i),
+ * or a reason) rides in its title — the badge falls through to the estimate or
+ * the CTA when there is no MF yield to show. */
+function badgeFor(listing: PortalListing): BadgeView | null {
+  if (!listing.found) return null;
+  if (listing.category_main !== 'byt' || listing.category_type !== 'prodej') return null;
 
   let title = 'Klikni pro odhad výnosu';
-  const shape = mfShape(listing.found ? listing.mf_reference_rent : null);
+  const shape = mfShape(listing.mf_reference_rent);
   if (shape.kind === 'value') {
     title = `MF nájem ${fmtCzk(shape.ref.monthly_rent_czk)}/měs · klikni pro odhad`;
   } else if (shape.kind !== 'none' && shape.note != null) {

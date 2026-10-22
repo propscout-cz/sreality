@@ -1,12 +1,12 @@
 """THE portal rule (MS19, migration 590; two-sided since 597), executed and pinned to the shared fixture.
 
 `tests/fixtures/portal_rule.json` is read by both languages. Here: every case through
-`public.portal_status_matches`, through both aggregate RPCs (Stats over `browse_list`, the
-map cells over a parked `properties_map_mv`) and, for the `any` rows, through the Watchdog's
+`public.portal_status_matches`, through both aggregate RPCs (Stats and, since migration 630,
+the map cells over `browse_list`) and, for the `any` rows, through the Watchdog's
 compiled clause (`toolkit.filter_compiler.PROPERTIES_GRAIN`); every broker case seeds its
 ads and runs the broker lookup (`toolkit.brokers.broker_property_ids`). The SPA half is
 `applyPortalRule` in queries.test.ts. Also live: the rebuild's one partial index per portal
-and the three relations' one shape. Offline: the fixture covers every arm.
+and the projection's and `browse_list`'s one shape. Offline: the fixture covers every arm.
 
 Live rails run in CI's migrations lane (`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED=1`), each
 inside a transaction that always rolls back.
@@ -124,7 +124,8 @@ def _rpc_args(case: dict[str, Any]) -> dict[str, Any]:
 @live
 @pytest.mark.parametrize("case", CASES, ids=_ids(CASES))
 def test_stats_counts_the_table(conn, case: dict[str, Any]) -> None:
-    """browse_stats_properties reads browse_list (590's rebuild made it a real table)."""
+    """browse_stats_properties reads browse_list (590's rebuild made it a real table); since
+    626 it is the dashboard pivot, whose `filtered` is the cohort the portal rule picked."""
     with conn.cursor() as cur:
         cur.execute(
             "insert into browse_list (property_id, is_active, all_sources, active_sources) "
@@ -134,20 +135,19 @@ def test_stats_counts_the_table(conn, case: dict[str, Any]) -> None:
             "select public.browse_stats_properties(portal_filter => %(portal)s::text[], "
             "active_only_filter => %(active_only)s, inactive_only_filter => %(inactive_only)s, "
             "portal_excluded_filter => %(excluded)s::text[], "
-            "portal_excluded_active_only => %(excluded_active_only)s)",
+            "portal_excluded_active_only => %(excluded_active_only)s, "
+            "spec => '{\"rows\": [], \"cols\": [], \"measure\": \"price\"}'::jsonb)",
             _rpc_args(case))
-        assert cur.fetchone()[0]["total"] == int(case["expected"])
+        assert cur.fetchone()[0]["filtered"] == int(case["expected"])
 
 
 @live
 @pytest.mark.parametrize("case", CASES, ids=_ids(CASES))
 def test_the_map_cells_count_the_table(conn, case: dict[str, Any]) -> None:
-    """The matview is parked for a table of its shape (tests/test_browse_map_cells_live.py)."""
+    """browse_map_cells reads browse_list, the Stats rail's table, since migration 630."""
     with conn.cursor() as cur:
-        cur.execute("alter materialized view public.properties_map_mv rename to pmm_parked_for_rule;"
-                    "create table public.properties_map_mv (like public.pmm_parked_for_rule);")
         cur.execute(
-            "insert into properties_map_mv (property_id, listing_id, lat, lng, is_active, "
+            "insert into browse_list (property_id, listing_id, lat, lng, is_active, "
             "all_sources, active_sources) values (%s, %s, 50.08, 14.42, %s, %s, %s)",
             (next(_IDS), next(_IDS), case["is_active"], case["all_sources"],
              case["active_sources"]))
@@ -215,19 +215,22 @@ def test_the_rebuild_builds_one_partial_index_per_portal(conn) -> None:
 
 
 @live
-def test_the_projection_and_both_read_models_have_one_shape(conn) -> None:
-    """`sync_browse_list` inserts by POSITION, and both sources return the projection's
-    row type: three relations, one column list, the twelve appended last."""
+def test_the_projection_and_the_read_model_have_one_shape(conn) -> None:
+    """`sync_browse_list` inserts by POSITION (`insert into browse_list select * from
+    browse_projection`): two relations, one column list, the twelve appended last."""
     shapes = {}
     with conn.cursor() as cur:
-        for rel in ("browse_projection", "browse_list", "properties_map_mv"):
+        for rel in ("browse_projection", "browse_list"):
             cur.execute(
                 "select attname, format_type(atttypid, atttypmod) from pg_attribute "
                 "where attrelid = %s::regclass and attnum > 0 and not attisdropped "
                 "order by attnum", (f"public.{rel}",))
             shapes[rel] = cur.fetchall()
-    assert shapes["browse_list"] == shapes["browse_projection"] == shapes["properties_map_mv"]
+    assert shapes["browse_list"] == shapes["browse_projection"]
     names = [n for n, _ in shapes["browse_projection"]]
     assert "asset_id" not in names
-    assert names[-12:] == ["all_sources", "active_sources", "source_count",
-                           *(f"newest_ad_at_{p}" for p in _PORTALS)]
+    # One contiguous block in portal order; later columns may follow it (584's recipe appends
+    # every new projection column LAST, so the block is not pinned to the end).
+    at = names.index("all_sources")
+    assert names[at:at + 12] == ["all_sources", "active_sources", "source_count",
+                                 *(f"newest_ad_at_{p}" for p in _PORTALS)]

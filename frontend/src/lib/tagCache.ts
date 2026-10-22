@@ -7,13 +7,29 @@
 
 import type { QueryClient } from '@tanstack/react-query';
 
+import { actingKey } from '@/lib/acting';
+import { settleMemberWrite } from '@/lib/curationSettle';
 import { curationKeys } from '@/lib/queries';
 
 /** Re-read tags after ANY tag write: an attach / detach moves the member map,
  * a create / rename / recolour / delete changes the index (a delete cascades
  * its memberships away too, migration 202), and a merge re-points
- * `property_tags` onto the survivor (rule #18). */
-export function revalidateTags(qc: QueryClient): void {
-  qc.invalidateQueries({ queryKey: curationKeys.propertyTagMembers });
-  qc.invalidateQueries({ queryKey: curationKeys.tags });
+ * `property_tags` onto the survivor (rule #18). `actAs`: the owner's entries
+ * (lib/acting), never the caller's. */
+export function revalidateTags(qc: QueryClient, actAs: string | null = null): void {
+  qc.invalidateQueries({ queryKey: actingKey(actAs, curationKeys.propertyTagMembers) });
+  qc.invalidateQueries({ queryKey: actingKey(actAs, curationKeys.tags) });
 }
+
+/** One tag attached to / detached from one property, landed: settled in the
+ * Browse reads (lib/curationSettle, ruling 9), then the tag reads re-read. */
+export const settleTagWrite = (
+  qc: QueryClient,
+  property_id: number,
+  tag_id: number,
+  member: boolean,
+  actAs: string | null = null,
+) =>
+  settleMemberWrite(qc, 'tags', property_id, tag_id, member, actAs).then(() =>
+    revalidateTags(qc, actAs),
+  );

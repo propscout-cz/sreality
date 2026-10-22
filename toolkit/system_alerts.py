@@ -1,72 +1,103 @@
-"""In-app system-health alerts through the unified notification feed.
+"""System alerts: the one health ladder, from check results to incidents and their rungs.
 
-A `system_health` producer for `notification_dispatches` (migration 274): a red
-pipeline-verification check — or a stalled LLM pipeline — inserts one append-only
-dispatch row so the SPA nav bell badge lights up, reusing the whole existing
-Notifications surface instead of a parallel alerting path.
-
-Dependency-free by design (stdlib + a caller-passed psycopg connection) so both the
-FastAPI service and the standalone verification script can call it.
+`reconcile` reads each registered check's newest result, keeps one `ops_incidents` row per
+failing cell (`cell:<key>:<subject>`) and tells each one by stamping it (`alert_count`,
+`alerted_at`): an onset, then reminders by class until it is acknowledged on Health; one
+recovery closes it once an OK is measured again across the hold. Health shows the incidents and
+the GitHub canary (scripts/health_canary.py) turns an alarm's unacknowledged rung into the
+operator's e-mail; no system alert reaches the bell (ruling R2, notifications W1). A newest
+result that is `unknown`, past its key's staleness budget or older than the key's registration
+is Not measured, and Not measured is inert: it neither opens, keeps, recovers nor reminds.
+Stdlib plus a caller-passed psycopg connection, so the API and the scripts import it with base
+dependencies only.
 """
 
 from __future__ import annotations
 
 import datetime as _dt
-import json
 from dataclasses import dataclass
 from typing import Any
 
+# Six hours reaches a missed onset the same day; 24 h and 72 h repeat it before it is forgotten.
+ALARM_RUNGS_H = (6.0, 24.0, 72.0)
+# Past the fixed rungs an unfixed alarm keeps saying so weekly, too rarely to become wallpaper.
+ALARM_WEEKLY_H = 168.0
+# The operator's ruling of 2026-10-18: a gauge rings when it first reads Problem, then once a day.
+GAUGE_RUNG_H = 24.0
+# A lane measures a check again once its newest row is a cadence old less a tenth of the cadence,
+# at most this: every row carries its run's START, so the next run, started a minute earlier in
+# its slot, would find the row not due and measure the check only every second run.
+DUE_SLACK_MAX_S = 900
+# Recovery needs a second OK measured at least two due intervals (`due_after_s`), and never less
+# than this floor, after the first, so neither a lone green run nor two quick greens of a fast
+# check close an incident.
+RECOVERY_HOLD_MIN_S = 1800
+# A cell nobody has measured for a week can never close on a measured OK, so it closes silently.
+UNMEASURED_CLOSE_DAYS = 7
+# The signature namespace of cell incidents, the only kind since the signature engine retired (621).
+CELL_PREFIX = "cell:"
 
-def _today_utc() -> str:
-    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
+_RANK = {"ok": 0, "warn": 1, "fail": 2}
 
+_LOCK_SQL = "SELECT pg_try_advisory_xact_lock(hashtext('health_reconcile'))"
 
-def _system_health_channels(conn: Any) -> list[str]:
-    """Operator-chosen external channels for system alerts (default [] = in-app only)."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT value FROM app_settings WHERE key = 'system_health_channels'"
-        )
-        row = cur.fetchone()
-    raw = row[0] if row and row[0] is not None else None
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except (TypeError, ValueError):
-            return []
-    if not isinstance(raw, list):
-        return []
-    return [c for c in raw if isinstance(c, str) and c]
+# Only rows since the key's registration count: the harness before it stored a check's own
+# error as fail and no message, so a key is Not measured until the new harness measures it.
+# The budget is read as seconds: psycopg parses interval text only under the default IntervalStyle.
+_NEWEST_SQL = """
+SELECT hc.key, hc.class, hc.cadence_s,
+       extract(epoch FROM hc.staleness_budget)::float8,
+       latest.status, latest.run_at, latest.details -> 'cells'
+  FROM health_checks hc
+  LEFT JOIN LATERAL (
+        SELECT c.status, c.run_at, c.details
+          FROM pipeline_check_results c
+         WHERE c.check_key = hc.key AND c.run_at >= hc.declared_at
+         ORDER BY c.run_at DESC
+         LIMIT 1) latest ON true
+ ORDER BY hc.sort, hc.key
+"""
 
+_OPEN_INCIDENTS_SQL = """
+SELECT id, signature, first_seen_at, last_seen_at, alert_count, alerted_at, ok_since,
+       acknowledged_at
+  FROM ops_incidents
+ WHERE resolved_at IS NULL AND signature LIKE %(cells)s
+"""
 
-def emit_system_alert(
-    conn: Any, check_key: str, message: str, *,
-    day: str | None = None, dedupe_key: str | None = None,
-) -> bool:
-    """Insert a system_health notification_dispatches row; return whether one was inserted.
+_OPEN_SQL = """
+INSERT INTO ops_incidents (signature, first_seen_at, last_seen_at)
+VALUES (%(sig)s, %(at)s, %(at)s)
+ON CONFLICT (signature) WHERE resolved_at IS NULL DO NOTHING
+RETURNING id
+"""
 
-    Idempotent via `dedupe_key` + `ON CONFLICT (dedupe_key) DO NOTHING` (a repeat is a
-    no-op returning False). When `dedupe_key` is not given it falls back to the legacy
-    per-UTC-day key `sys:{check_key}:{day or today}` (at most one alert/day). The
-    transition emitter passes an explicit edge-anchored key instead — see
-    `emit_transition_alerts`.
-    """
-    key = dedupe_key or f"sys:{check_key}:{day or _today_utc()}"
-    channels = _system_health_channels(conn)
-    with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO notification_dispatches "
-            "  (source_kind, change_kind, channel, status, message, dedupe_key, target_channels) "
-            "VALUES ('system_health', 'system_alert', 'in_app', 'sent', %s, %s, %s::text[]) "
-            "ON CONFLICT (dedupe_key) DO NOTHING",
-            (message, key, channels),
-        )
-        return (cur.rowcount or 0) > 0
+_SEEN_SQL = """
+UPDATE ops_incidents SET last_seen_at = greatest(last_seen_at, %(at)s), ok_since = NULL
+ WHERE id = %(id)s
+"""
 
+_OK_SINCE_SQL = "UPDATE ops_incidents SET ok_since = %(at)s WHERE id = %(id)s AND ok_since IS NULL"
 
-def _iso(run_at: _dt.datetime) -> str:
-    """Stable second-resolution UTC stamp for incident-anchored dedupe keys."""
-    return run_at.astimezone(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+_RESOLVE_SQL = """
+UPDATE ops_incidents SET resolved_at = %(now)s, resolve_reason = %(reason)s
+ WHERE id = ANY(%(ids)s) AND resolved_at IS NULL
+"""
+
+_STAMP_SQL = """
+UPDATE ops_incidents SET alert_count = alert_count + 1, alerted_at = %(now)s
+ WHERE id = ANY(%(ids)s)
+"""
+
+# The same registration guard as _NEWEST_SQL: a row the ladder ignores everywhere else must not
+# keep a cell it no longer measures from its silent close.
+_MEASURED_SINCE_SQL = """
+SELECT r.check_key, r.run_at, r.details -> 'cells'
+  FROM pipeline_check_results r
+  JOIN health_checks hc ON hc.key = r.check_key
+ WHERE r.check_key = ANY(%(keys)s) AND r.status <> 'unknown' AND r.run_at >= %(since)s
+   AND r.run_at >= hc.declared_at
+"""
 
 
 def _as_utc(value: _dt.datetime) -> _dt.datetime:
@@ -76,351 +107,210 @@ def _as_utc(value: _dt.datetime) -> _dt.datetime:
     return value.astimezone(_dt.timezone.utc)
 
 
-@dataclass(frozen=True)
-class AlertPolicy:
-    """The one escalation policy every producer of check results inherits (W3.4).
-
-    `reescalate_hours` are the fixed rungs after an incident's onset; `weekly_hours`
-    is the repeating rung that follows them forever (a red that nobody fixes must keep
-    saying so, at a cadence that does not become wallpaper). `flap_cooldown_hours` is
-    the hysteresis: a check that returns to `fail` within that window re-enters the SAME
-    incident instead of opening a new one, and a recovery is only announced once the
-    check has held non-fail for that long.
-    """
-
-    reescalate_hours: tuple[float, ...] = (6.0, 24.0, 72.0)
-    weekly_hours: float = 168.0
-    flap_cooldown_hours: float = 6.0
-
-    @classmethod
-    def from_thresholds(cls, thresholds: dict[str, Any]) -> "AlertPolicy":
-        """Build from `app_settings.pipeline_check_thresholds` (scalars only —
-        `verify_pipeline.load_thresholds` drops any non-scalar value from the DB merge,
-        so the ladder is spelled as one key per rung and never as a JSON array)."""
-        def _num(key: str, fallback: float) -> float:
-            v = thresholds.get(key, fallback)
-            return float(v) if isinstance(v, (int, float)) else fallback
-
-        rungs = tuple(sorted(
-            h for h in (_num("alert_reescalate_1_hours", 6.0),
-                        _num("alert_reescalate_2_hours", 24.0),
-                        _num("alert_reescalate_3_hours", 72.0)) if h > 0
-        ))
-        return cls(
-            reescalate_hours=rungs,
-            weekly_hours=_num("alert_reescalate_weekly_hours", 168.0),
-            flap_cooldown_hours=_num("alert_flap_cooldown_hours", 6.0),
-        )
-
-    def due_rung(self, elapsed_hours: float) -> str | None:
-        """The HIGHEST rung this incident has reached, or None. Only the highest is
-        emitted, so an incident that predates the ladder's deploy (or a lane that was
-        down for days) produces ONE alert, never a backlog of every overdue rung."""
-        label: str | None = None
-        for h in self.reescalate_hours:
-            if elapsed_hours >= h:
-                label = f"{h:g}h"
-        if self.weekly_hours > 0 and elapsed_hours >= self.weekly_hours:
-            label = f"w{int(elapsed_hours // self.weekly_hours)}"
-        return label
+def _opt_utc(value: _dt.datetime | None) -> _dt.datetime | None:
+    """`_as_utc` for a nullable column."""
+    return None if value is None else _as_utc(value)
 
 
-@dataclass(frozen=True)
-class CheckState:
-    """A check's stored history, collapsed to what the ladder needs.
+@dataclass
+class _Check:
+    """A registered check and its newest result, split into the cells this pass judges."""
 
-    `incident_started_at` is the first `fail` of the current streak *under the flap
-    cooldown* — short green blips inside the window do not restart the clock, which is
-    what keeps a flapping check on one incident instead of one per oscillation.
-    `last_run_at` is what makes the delayed recovery fire exactly once: the incident is
-    announced closed on the first run that observes the cooldown elapsed.
-    """
-
-    status: str | None
-    incident_started_at: _dt.datetime | None = None
-    last_fail_at: _dt.datetime | None = None
-    last_run_at: _dt.datetime | None = None
-    fail_runs: int = 0
-    # True when the streak walked off the oldest row in the history window without ever
-    # meeting a green stretch — i.e. the incident is OLDER than the window and
-    # `incident_started_at` is only the window edge. Every key is anchored on that
-    # timestamp, so a window-edge anchor would slide forward by one cadence on every
-    # run and re-emit "onset" forever (see `_resolve_truncated_onset`).
-    onset_truncated: bool = False
-
-    @property
-    def timestamped(self) -> bool:
-        """False for a state synthesised from a bare status map (legacy callers)."""
-        return self.last_run_at is not None
+    key: str
+    cls: str
+    cadence_s: int
+    run_at: _dt.datetime | None
+    cells: dict[str, dict[str, Any]]
 
 
-def _collapse(rows: list[tuple[str, _dt.datetime]], cooldown_h: float) -> CheckState:
-    """Newest-first (status, run_at) rows for ONE check → its CheckState.
+@dataclass
+class _Incident:
+    """An open cell incident as this pass holds it."""
 
-    An unbroken run of `fail` rows is ONE incident however far apart the runs are — the
-    cooldown bounds green stretches, never observation gaps. (The 6h lane really runs
-    80-256 min late under the Actions throttle; a gap-based rule would restart the
-    incident on a throttled run and re-alert onset every single time.)
-    """
-    if not rows:
-        return CheckState(status=None)
-    cooldown = _dt.timedelta(hours=max(cooldown_h, 0.0))
-    status, last_run_at = rows[0][0], rows[0][1]
-    first_fail = next((i for i, (s, _) in enumerate(rows) if s == "fail"), None)
-    if first_fail is None:
-        return CheckState(status=status, last_run_at=last_run_at)
-    last_fail_at = rows[first_fail][1]
-    started_at, anchor, runs = last_fail_at, last_fail_at, 1
-    blip = False  # a non-fail row stands between `anchor` and the row being examined
-    truncated = True  # falsified by any green stretch that ends the streak in-window
-    for s, at in rows[first_fail + 1:]:
-        if s != "fail":
-            if anchor - at > cooldown:
-                truncated = False
-                break  # green for longer than the cooldown: the incident starts after it
-            blip = True
+    id: int
+    key: str
+    subject: str
+    first_seen_at: _dt.datetime
+    last_seen_at: _dt.datetime
+    alerted_at: _dt.datetime | None
+    ok_since: _dt.datetime | None
+    acknowledged: bool
+
+
+def due_after_s(cadence_s: int) -> int:
+    """How old a check's newest result must be before a lane measures it again."""
+    return cadence_s - min(cadence_s // 10, DUE_SLACK_MAX_S)
+
+
+def _hold(cadence_s: int) -> _dt.timedelta:
+    """How long after a cell's first OK a later measured OK must come to recover its incident."""
+    # Two due intervals, not two cadences: a lane measures a check up to a slack early, so two
+    # measured intervals can sum to under two cadences and a two-cadence hold waits for a 4th OK.
+    return _dt.timedelta(seconds=max(2 * due_after_s(cadence_s), RECOVERY_HOLD_MIN_S))
+
+
+def _unmeasured_window(cadence_s: int) -> _dt.timedelta:
+    """How long a cell may go unmeasured before its incident closes; weekly checks get two weeks."""
+    return _dt.timedelta(seconds=max(UNMEASURED_CLOSE_DAYS * 86400, 2 * cadence_s))
+
+
+def _stale(stamp: _dt.datetime, budget_s: float, at: _dt.datetime) -> bool:
+    """`health_stale` (migration 619) on this pass's clock: older than the key's budget."""
+    return stamp < at - _dt.timedelta(seconds=float(budget_s))
+
+
+def _cells(raw: Any) -> dict[str, dict[str, Any]]:
+    """A result's verdict cells by subject (`details -> 'cells'`), the worst one per subject."""
+    # No cell is ever invented (wave 6 deleted the one named by the key): a result without a
+    # verdict cell opens, keeps and recovers nothing, so every check writes its own, OK included.
+    cells: dict[str, dict[str, Any]] = {}
+    for cell in raw if isinstance(raw, list) else []:
+        if not isinstance(cell, dict) or cell.get("status") not in _RANK:
             continue
-        if blip and anchor - at > cooldown:
-            truncated = False
-            break
-        started_at, anchor, runs, blip = at, at, runs + 1, False
-    return CheckState(
-        status=status, incident_started_at=started_at, last_fail_at=last_fail_at,
-        last_run_at=last_run_at, fail_runs=runs, onset_truncated=truncated,
-    )
+        subject = str(cell.get("subject") or "")
+        held = cells.get(subject)
+        if subject and (held is None or _RANK[cell["status"]] > _RANK[held["status"]]):
+            cells[subject] = cell
+    return cells
 
 
-_TRUE_ONSET_SQL = """
-SELECT min(run_at) FROM pipeline_check_results
- WHERE check_key = %(key)s
-   AND status = 'fail'
-   AND run_at > coalesce(
-       (SELECT max(run_at) FROM pipeline_check_results
-         WHERE check_key = %(key)s AND status <> 'fail' AND run_at < %(cutoff)s),
-       '-infinity'::timestamptz)
-"""
+def _check(row: tuple[Any, ...], at: _dt.datetime) -> _Check:
+    """A registry row with its newest result; only a measured result inside its budget has cells."""
+    key, cls, cadence_s, budget_s, status, run_at, raw_cells = row
+    run_at, cadence = _opt_utc(run_at), int(cadence_s)
+    # pipeline_checks_public's effective_status: missing, unknown or stale is Not measured.
+    measured = (status in _RANK and run_at is not None
+                and not _stale(run_at, budget_s, at))
+    return _Check(key, cls, cadence, run_at, _cells(raw_cells) if measured else {})
 
 
-def _resolve_truncated_onset(
-    conn: Any, key: str, cutoff: _dt.datetime, state: CheckState,
-) -> CheckState:
-    """Pin the anchor of an incident that started BEFORE the history window.
-
-    Without this the anchor is whatever the oldest row still inside the window happens
-    to be, which advances by one cadence every run as rows age out — and since every
-    dedupe key is `sys:{k}:...:{anchor}`, `ON CONFLICT DO NOTHING` stops suppressing
-    anything. A check red for longer than the window would emit a fresh ONSET alert on
-    every single run (hourly, on the acute lane), which is worse than the pre-ladder
-    behaviour it replaces: silence. The 114 alternating alerts of 2026-08 in a new shape.
-
-    One extra query, and only for a check whose streak ran off the edge of the window —
-    the fixed 19-check registry bounds it, and in practice nothing is red for 30 days.
-    The cooldown is deliberately not re-applied out there: an incident that old is one
-    long red by any reading, and the point is a STABLE key, not a second opinion.
-    """
-    try:
-        with conn.cursor() as cur:
-            cur.execute(_TRUE_ONSET_SQL, {"key": key, "cutoff": cutoff})
-            row = cur.fetchone()
-    except Exception:  # noqa: BLE001 — a slow tail must never cost the run its alerts
-        return state
-    if not row or row[0] is None:
-        return state
-    started = _as_utc(row[0])
-    if state.incident_started_at is not None and started >= state.incident_started_at:
-        return state
-    return CheckState(
-        status=state.status, incident_started_at=started,
-        last_fail_at=state.last_fail_at, last_run_at=state.last_run_at,
-        fail_runs=state.fail_runs, onset_truncated=True,
-    )
+def _incident(row: tuple[Any, ...]) -> _Incident:
+    """An open cell incident row; its key is the signature's first field (keys hold no colon)."""
+    inc_id, signature, first_seen, last_seen, _count, alerted, ok_since, acked = row
+    key, _, subject = signature[len(CELL_PREFIX):].partition(":")
+    return _Incident(int(inc_id), key, subject, _as_utc(first_seen), _as_utc(last_seen),
+                     _opt_utc(alerted), _opt_utc(ok_since), acked is not None)
 
 
-def check_states(
-    conn: Any, *, policy: AlertPolicy | None = None, history_days: int = 30,
-) -> dict[str, CheckState]:
-    """Per-check stored history (call BEFORE writing this run's rows, so it is the
-    baseline this run's results are compared against).
-
-    Bounded to `history_days` for the bulk read; the index is
-    `pipeline_check_results_key_run_idx (check_key, run_at desc)`. A streak that runs
-    off the edge of that window has its onset resolved exactly, by one extra query per
-    affected check — the anchor has to be STABLE across runs or every dedupe key built
-    from it changes and the ladder re-alerts onset forever.
-    """
-    pol = policy or AlertPolicy()
-    cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=history_days)
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT check_key, status, run_at FROM pipeline_check_results "
-            "WHERE run_at >= %s ORDER BY check_key, run_at DESC",
-            (cutoff,),
-        )
-        rows = cur.fetchall()
-    grouped: dict[str, list[tuple[str, _dt.datetime]]] = {}
-    for key, status, run_at in rows:
-        grouped.setdefault(str(key), []).append((str(status), _as_utc(run_at)))
-    out: dict[str, CheckState] = {}
-    for k, v in grouped.items():
-        st = _collapse(v, pol.flap_cooldown_hours)
-        if st.onset_truncated and st.incident_started_at is not None:
-            st = _resolve_truncated_onset(conn, k, cutoff, st)
-        out[k] = st
-    return out
+def _rung(cls: str, elapsed_h: float) -> float | None:
+    """The hours of the highest reminder rung an incident open `elapsed_h` hours has reached."""
+    if cls == "gauge":
+        days = int(elapsed_h // GAUGE_RUNG_H)
+        return days * GAUGE_RUNG_H if days >= 1 else None
+    weeks = int(elapsed_h // ALARM_WEEKLY_H)
+    if weeks >= 1:
+        return weeks * ALARM_WEEKLY_H  # the 168 h rung opens week two
+    reached = [h for h in ALARM_RUNGS_H if h <= elapsed_h]
+    return max(reached) if reached else None
 
 
-def latest_statuses(conn: Any) -> dict[str, str]:
-    """Status-only view of `check_states` (the ladder needs the timestamps too)."""
-    return {k: s.status for k, s in check_states(conn).items() if s.status is not None}
-
-
-def emit_transition_alerts(
-    conn: Any,
-    results: list[dict[str, Any]],
-    prev_statuses: dict[str, str],
-    run_at: _dt.datetime,
-    *,
-    states: dict[str, CheckState] | None = None,
-    policy: AlertPolicy | None = None,
-) -> dict[str, int]:
-    """Ring the bell on INCIDENTS, not on every red run and not on every edge.
-
-    An incident opens at a check's first `fail` and stays open while the check keeps
-    failing OR flaps back to `fail` within `policy.flap_cooldown_hours`. Every key is
-    anchored on that one onset timestamp, so `ON CONFLICT (dedupe_key) DO NOTHING`
-    gives exactly-once semantics per incident across every lane and cadence:
-
-      * onset        `sys:{k}:onset:{incident_start}`         — once, at the first fail.
-      * re-escalation `sys:{k}:reesc:{rung}:{incident_start}` — at 6h / 24h / 72h and
-        then weekly while it stays red. Only the highest DUE rung fires per run, so a
-        long-running red says so periodically instead of going silent for six days
-        (`property_maintenance`, red 2026-08-20..26 with one alert on day one).
-      * recovery     `sys:{k}:recovery:{incident_start}`      — once, and only after the
-        check has held non-fail for the cooldown. An outage that oscillates hourly
-        (`llm_errors`: 114 alternating onset/recovery alerts for an outage that never
-        recovered) therefore produces ONE onset and ONE recovery, not 114.
-
-    ok↔warn never rings (warn is dashboard-only). `states` is `check_states(conn)` read
-    before this run's writes; without it the emitter degrades to the pre-ladder
-    edge-only behaviour keyed on `run_at`, so a caller holding only a status map keeps
-    working (no ladder, since an incident's age is unknowable from a status alone).
-    """
-    pol = policy or AlertPolicy()
-    counts = {"onset": 0, "recovery": 0, "reescalation": 0}
-    now = _as_utc(run_at)
-    cooldown = _dt.timedelta(hours=max(pol.flap_cooldown_hours, 0.0))
-    for r in results:
-        k = r["check_key"]
-        curr = r["status"]
-        st = (states or {}).get(k) or CheckState(status=prev_statuses.get(k))
-        if curr == "fail":
-            # An unbroken red continues its incident however late this run is (the lanes
-            # run 80-256 min behind schedule under the Actions throttle, and a purely
-            # gap-based rule would re-alert onset on every throttled run). Only a GREEN
-            # stretch longer than the cooldown ends it.
-            continuing = (
-                st.timestamped and st.last_fail_at is not None
-                and (st.status == "fail" or now - st.last_fail_at <= cooldown)
-            )
-            if continuing:
-                start = st.incident_started_at or now
-            elif not st.timestamped and st.status == "fail":
-                continue  # legacy ongoing branch: prev=fail, no anchor to reason from
-            else:
-                start = now
-            anchor = _iso(start)
-            msg = r.get("message") or f"Pipeline check '{k}' failed."
-            if emit_system_alert(conn, k, msg, dedupe_key=f"sys:{k}:onset:{anchor}"):
-                counts["onset"] += 1
-                continue
-            rung = pol.due_rung((now - start).total_seconds() / 3600.0)
-            if rung is None:
-                continue
-            hours = (now - start).total_seconds() / 3600.0
-            runs = st.fail_runs + 1
-            note = (
-                f"⚠ Still failing ({rung}): '{k}' has been red for {hours:.0f}h "
-                f"({runs} failing runs since {anchor}). {msg}"
-            )
-            if emit_system_alert(
-                conn, k, note, dedupe_key=f"sys:{k}:reesc:{rung}:{anchor}"
-            ):
-                counts["reescalation"] += 1
+def _reminded(
+    check: _Check, incidents: list[_Incident], current: dict[int, str], at: _dt.datetime,
+) -> list[_Incident]:
+    """The incidents of `check` a reminder rung is due for this pass: measured failing or warning
+    now, unacknowledged, and not stamped since their highest rung opened."""
+    due = []
+    for inc in incidents:
+        if inc.id not in current or inc.acknowledged:
             continue
-        # Not failing: announce recovery once the incident has actually closed.
-        if not st.timestamped:
-            if st.status == "fail":
-                note = f"✓ Recovered: '{k}' is healthy again (now {curr})."
-                if emit_system_alert(
-                    conn, k, note, dedupe_key=f"sys:{k}:recovery:{_iso(now)}"
-                ):
-                    counts["recovery"] += 1
-            continue
-        if st.last_fail_at is None or st.incident_started_at is None:
-            continue
-        closed_now = now - st.last_fail_at > cooldown
-        closed_before = (
-            st.last_run_at is not None and st.last_run_at - st.last_fail_at > cooldown
-        )
-        if not closed_now or closed_before:
-            continue  # still inside the flap window, or already announced on an earlier run
-        red_h = (st.last_fail_at - st.incident_started_at).total_seconds() / 3600.0
-        note = (
-            f"✓ Recovered: '{k}' is healthy again (now {curr}) after {red_h:.0f}h red "
-            f"({st.fail_runs} failing runs since {_iso(st.incident_started_at)})."
-        )
-        if emit_system_alert(
-            conn, k, note,
-            dedupe_key=f"sys:{k}:recovery:{_iso(st.incident_started_at)}",
-        ):
-            counts["recovery"] += 1
+        rung_h = _rung(check.cls, (at - inc.first_seen_at).total_seconds() / 3600)
+        if rung_h is not None and (inc.alerted_at is None
+                                   or inc.alerted_at < inc.first_seen_at + _dt.timedelta(hours=rung_h)):
+            due.append(inc)
+    return due
+
+
+def _measured_subjects(
+    cur: Any, checks: dict[str, _Check], keys: set[str], at: _dt.datetime,
+) -> dict[str, set[str]]:
+    """The subjects each key measured inside its unmeasured window."""
+    since = {k: at - _unmeasured_window(checks[k].cadence_s) for k in keys}
+    cur.execute(_MEASURED_SINCE_SQL, {"keys": sorted(keys), "since": min(since.values())})
+    seen: dict[str, set[str]] = {}
+    for key, run_at, cells in cur.fetchall():
+        if _as_utc(run_at) >= since[key]:
+            seen.setdefault(key, set()).update(_cells(cells))
+    return seen
+
+
+def reconcile(conn: Any, *, now: _dt.datetime | None = None) -> dict[str, int]:
+    """One ladder pass in one transaction: open, keep, recover and close incidents, then tell."""
+    at = _as_utc(now) if now is not None else _dt.datetime.now(_dt.timezone.utc)
+    counts = dict.fromkeys(("opened", "reminded", "recovered", "closed_silently", "notices"), 0)
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(_LOCK_SQL)
+        locked = cur.fetchone()
+        if not locked or not locked[0]:
+            return counts  # another process is reconciling
+        cur.execute(_NEWEST_SQL)
+        checks = {c.key: c for c in (_check(row, at) for row in cur.fetchall())}
+        cur.execute(_OPEN_INCIDENTS_SQL, {"cells": CELL_PREFIX + "%"})
+        incidents = [_incident(row) for row in cur.fetchall()]
+        by_sig = {f"{CELL_PREFIX}{i.key}:{i.subject}": i for i in incidents}
+
+        opened: dict[str, list[_Incident]] = {}
+        current: dict[int, str] = {}  # incident id -> fail | warn, as measured this pass
+        recovered: dict[str, list[_Incident]] = {}
+        for check in checks.values():
+            for subject, cell in check.cells.items():
+                status, run_at = cell["status"], check.run_at
+                inc = by_sig.get(f"{CELL_PREFIX}{check.key}:{subject}")
+                if inc is None:
+                    if status == "fail":
+                        cur.execute(_OPEN_SQL, {"sig": f"{CELL_PREFIX}{check.key}:{subject}",
+                                                "at": run_at})
+                        row = cur.fetchone()
+                        if row:
+                            opened.setdefault(check.key, []).append(_Incident(
+                                int(row[0]), check.key, subject, run_at, run_at, None, None, False))
+                    continue
+                if status != "ok":
+                    if inc.last_seen_at < run_at or inc.ok_since is not None:
+                        cur.execute(_SEEN_SQL, {"id": inc.id, "at": run_at})
+                        inc.last_seen_at, inc.ok_since = max(inc.last_seen_at, run_at), None
+                    current[inc.id] = status
+                    continue
+                if inc.ok_since is None:
+                    cur.execute(_OK_SINCE_SQL, {"id": inc.id, "at": run_at})
+                    inc.ok_since = run_at
+                # Measured time, not wall-clock: silence after one OK never recovers anything.
+                if run_at - inc.ok_since >= _hold(check.cadence_s):
+                    recovered.setdefault(check.key, []).append(inc)
+        counts["opened"] = sum(len(v) for v in opened.values())
+
+        closed = {i.id for v in recovered.values() for i in v}
+        if closed:
+            cur.execute(_RESOLVE_SQL, {"now": at, "reason": "measured ok", "ids": sorted(closed)})
+        counts["recovered"] = len(closed)
+
+        still_open = [i for i in incidents if i.id not in closed]
+        retired = [i for i in still_open if i.key not in checks]
+        dark = [i for i in still_open if i.key in checks
+                and i.last_seen_at < at - _unmeasured_window(checks[i.key].cadence_s)]
+        if dark:
+            seen = _measured_subjects(cur, checks, {i.key for i in dark}, at)
+            dark = [i for i in dark if i.subject not in seen.get(i.key, set())]
+        unmeasured = f"unmeasured {UNMEASURED_CLOSE_DAYS}d"
+        for reason, group in (("retired", retired), (unmeasured, dark)):
+            if group:
+                cur.execute(_RESOLVE_SQL, {"now": at, "reason": reason,
+                                           "ids": sorted(i.id for i in group)})
+        counts["closed_silently"] = len(retired) + len(dark)
+
+        # Telling is stamping: one onset and at most one reminder per check per pass, each
+        # stamping the incidents it names; a recovery is its RESOLVE above. `notices` counts the
+        # rungs told, one per check and kind.
+        by_key: dict[str, list[_Incident]] = {}
+        for inc in incidents:
+            by_key.setdefault(inc.key, []).append(inc)
+        for key, check in checks.items():
+            if key in opened:
+                cur.execute(_STAMP_SQL, {"now": at, "ids": [i.id for i in opened[key]]})
+                counts["notices"] += 1
+            reminded = _reminded(check, by_key.get(key, []), current, at)
+            if reminded:
+                cur.execute(_STAMP_SQL, {"now": at, "ids": [i.id for i in reminded]})
+                counts["reminded"] += len(reminded)
+                counts["notices"] += 1
+        counts["notices"] += len(recovered)
     return counts
-
-
-def _iso_week(run_at: _dt.datetime) -> str:
-    year, week, _ = _as_utc(run_at).isocalendar()
-    return f"{year}-W{week:02d}"
-
-
-def emit_weekly_heartbeat(
-    conn: Any,
-    results: list[dict[str, Any]],
-    states: dict[str, CheckState],
-    run_at: _dt.datetime,
-) -> bool:
-    """One digest per ISO week — the operator-facing half of the dead-man switch.
-
-    Migration 274's `emit_verification_stale_alert` catches a dead harness from INSIDE
-    the database (no fresh `pipeline_check_results` row → ring). This catches the case
-    that one cannot: the harness runs, the DB is fine, and the whole delivery path is
-    silently broken. A heartbeat that stops arriving is itself the signal.
-
-    Keyed `sys:heartbeat:{ISO-week}` because `verify_pipeline.yml` appends `--weekly` to
-    all four of Monday's 6-hourly runs — without a week-grain key it would fire 4x.
-    """
-    statuses = {k: s.status for k, s in states.items() if s.status is not None}
-    statuses.update({r["check_key"]: r["status"] for r in results})
-    failing = sorted(k for k, s in statuses.items() if s == "fail")
-    if failing:
-        parts = []
-        for k in failing:
-            st = states.get(k)
-            if st is not None and st.incident_started_at is not None:
-                hours = (_as_utc(run_at) - st.incident_started_at).total_seconds() / 3600
-                parts.append(f"{k} ({hours:.0f}h)")
-            else:
-                parts.append(k)
-        note = (
-            f"Weekly health digest: {len(failing)} of {len(statuses)} checks are "
-            f"failing — {', '.join(parts)}."
-        )
-    else:
-        note = (
-            f"✓ Weekly health digest: all {len(statuses)} pipeline checks are healthy. "
-            "This heartbeat is the proof that the alerting path itself is alive — if it "
-            "stops arriving, treat the silence as a failure."
-        )
-    return emit_system_alert(
-        conn, "weekly_heartbeat", note,
-        dedupe_key=f"sys:heartbeat:{_iso_week(run_at)}",
-    )

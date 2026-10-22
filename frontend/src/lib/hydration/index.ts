@@ -43,6 +43,7 @@ export type { CardPhotos } from './cardPhotos';
 export type {
   CoverByListingId,
   BrokerByListingId,
+  FloorsByListingId,
   PhotosByListingId,
 } from './useCardHydration';
 export { hydrationKeys, idsKey, HYDRATION_NAMESPACE } from './keys';

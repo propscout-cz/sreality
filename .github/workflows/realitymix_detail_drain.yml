@@ -1,6 +1,5 @@
 name: "Scraping: RealityMix detail drain"
 
-# portal: realitymix
 # The slow half of the realitymix cadence split (architectural rule #19, like
 # sreality/idnes/ceskereality). Claims a bounded slice of listing_detail_queue
 # (source='realitymix', enqueued by realitymix_index_walk.yml), fetches each listing

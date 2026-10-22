@@ -20,6 +20,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 
+from location_data.claims_common import COHORT_LOCATION_FROM
 from toolkit.filter_compiler import LISTINGS_GRAIN, compile_filter_where
 from toolkit.measures import (
     cohort_basis,
@@ -65,6 +66,7 @@ class ComparableFilters:
     lifecycle: Literal["active", "delisted", "all"] | None = None
     floor_band: int | None = None
     portals: list[str] | None = None
+    # May carry the `__unknown__` sentinel, like furnished/ownership below.
     condition_match: list[str] | None = None
     building_type_match: list[str] | None = None
     energy_rating_match: list[str] | None = None
@@ -103,19 +105,12 @@ class ComparableFilters:
     min_garden_area: float | None = None
     max_garden_area: float | None = None
     min_parking_lots: int | None = None
-    # Derived condition scores (migrations 072/073). NULL rows are filtered
-    # out by the `>= N` / `<= N` comparison — that's intentional: "show me
-    # 4+" means "I want scored listings at level 4 or above", not "scored
-    # OR unscored".
-    building_condition_level_min: int | None = None
-    building_condition_level_max: int | None = None
-    apartment_condition_level_min: int | None = None
-    apartment_condition_level_max: int | None = None
-    # TOM ("turned in") = time on market in days. Mirrors migration 052's
-    # listings_public.tom_days: now() - first_seen_at for active rows,
-    # last_seen_at - first_seen_at for delisted. Inclusive bounds.
+    # TOM = time on market in days, the one measure (measure_tom_days, migration 617):
+    # now() - first_seen_at for active ads, last_seen_at - first_seen_at for inactive.
+    # Inclusive bounds.
     tom_days_min: int | None = None
     tom_days_max: int | None = None
+    tom_observed_only: bool | None = None
     # Days-ago ranges on the source timestamps. min_days = most recent
     # allowed (e.g. min=3 means "seen >= 3 days ago", so excludes
     # listings seen in the last 2 days). max_days = oldest allowed.
@@ -154,12 +149,14 @@ def _shared_filter_where(
     operational rather than attribute filters. Each caller appends them
     via the shared `_lifecycle_where` helper.
 
-    The spatial pair reads `ll` — every caller's FROM must carry
-    `JOIN listing_location ll ON ll.listing_id = l.id` (W4-a). The `::geography`
+    Every caller's FROM is `claims_common.COHORT_LOCATION_FROM` (ruling R8): `l` is a
+    live property's canonical advert, so a property counts ONCE (Decision 13) and an advert
+    not yet attached to a property is no comparable, and `ll` is that property's LOCATION
+    advert, which the spatial pair, the distance and the district read. The `::geography`
     cast is not optional: `listing_location.geom` is geometry(Point,4326), and
     `ST_DWithin(geometry, geometry, n)` measures n in DEGREES, so an uncast call
     would silently return a ~111 km cohort for a 1 km radius. The cast is served
-    by `listing_location_geog_gist` (migration 507).
+    by `listing_location_geog_gist` (migration 507), which drives the cohort.
     """
     params: dict[str, Any] = {"lat": target.lat, "lng": target.lng}
     where: list[str] = [
@@ -221,13 +218,7 @@ def _shared_filter_where(
             ")"
         )
 
-    # Decision 13: a property counts ONCE, as its canonical advert (`repr_listing_ref_id`, which
-    # the rollup writes from property_canonical_listings, migration 561), and every advert of
-    # the subject's property is out. An advert not yet attached to a property is no comparable.
-    where.append(
-        "EXISTS (SELECT 1 FROM properties canon_p "
-        "WHERE canon_p.id = l.property_id AND canon_p.repr_listing_ref_id = l.id)"
-    )
+    # Decision 13: every advert of the subject's property is out.
     if target.exclude_listing_ids:
         where.append(
             "NOT EXISTS (SELECT 1 FROM listings subj "
@@ -312,11 +303,9 @@ def build_query(
         "  latest_snap.id AS latest_snapshot_id,\n"
         "  latest_snap.scraped_at AS latest_snapshot_at,\n"
         "  latest_check.checked_at AS last_freshness_check_at\n"
-        "FROM listings l\n"
-        # W4-a: the listing's place. INNER, because `_shared_filter_where` always
-        # requires a non-NULL point anyway — an unresolved listing can never be a
-        # comparable, and an inner join says so to the planner.
-        "JOIN listing_location ll ON ll.listing_id = l.id\n"
+        # Place first (ruling R8): INNER, because `_shared_filter_where` always requires a
+        # non-NULL point anyway, so an unresolved property can never be a comparable.
+        f"FROM {COHORT_LOCATION_FROM}\n"
         "LEFT JOIN LATERAL (\n"
         "  SELECT id, scraped_at FROM listing_snapshots\n"
         # Re-keyed onto the surrogate: post-Gate-2 `sreality_id = l.sreality_id`
@@ -427,12 +416,9 @@ def _filters_used(
         "min_garden_area": filters.min_garden_area,
         "max_garden_area": filters.max_garden_area,
         "min_parking_lots": filters.min_parking_lots,
-        "building_condition_level_min": filters.building_condition_level_min,
-        "building_condition_level_max": filters.building_condition_level_max,
-        "apartment_condition_level_min": filters.apartment_condition_level_min,
-        "apartment_condition_level_max": filters.apartment_condition_level_max,
         "tom_days_min": filters.tom_days_min,
         "tom_days_max": filters.tom_days_max,
+        "tom_observed_only": filters.tom_observed_only,
         "last_seen_min_days": filters.last_seen_min_days,
         "last_seen_max_days": filters.last_seen_max_days,
         "first_seen_min_days": filters.first_seen_min_days,

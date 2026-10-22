@@ -1,13 +1,16 @@
 name: "CI: tests"
 
-# CI test suite, runs on every push and pull request. Two parallel jobs:
+# CI test suite, runs on every pull request and on every push to main. Two parallel jobs:
 # a Python job (verifies the filter-registry and workflow-docs codegen are
 # fresh, then runs pytest) and a frontend job (TypeScript type-check + vitest
 # pure-function tests). This is the build gate for every branch.
+#
+# A branch push without a PR runs nothing: a push-triggered twin of the pull_request run
+# carried the same check name, and a cancelled twin read as a failed required check.
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
 
 jobs:
@@ -22,6 +25,11 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
+
+      # The monitoring workflows install `.` alone, with no extra: an import that needs
+      # one would turn every one of their runs red, so prove the import here first.
+      - name: Import the monitoring entry points with runtime deps only
+        run: pip install -e . && python -c "import scripts.verify_pipeline, scripts.record_workflow_failures, scripts.health_canary"
 
       - name: Install
         run: pip install -e ".[dev,api,geo]"

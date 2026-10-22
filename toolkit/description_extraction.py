@@ -10,9 +10,10 @@ What the deleted lane got wrong, and what this one does instead:
 
   * It keyed on `listings.sreality_id`, which listing-identity Gate 2 made NULL for every
     new non-sreality row — so it selected 223 of 50,205 bazos rows and read green for two
-    months. Everything here keys on `listings.id`, and the ONE predicate that decides
-    eligibility (`_eligible_where`) is also what `scripts/verify_pipeline`'s lag check
-    counts, so "selects nothing while green" has no room to happen (R8).
+    months. Everything here keys on `listings.id`, the ONE predicate that decides
+    eligibility (`_eligible_where`) is also what the health check's text_extraction gauge
+    counts as waiting, and that gauge counts new adverts' readings over the arrivals rather
+    than through the predicate, so "selects nothing while green" has no room to happen (R8).
   * Its cache was keyed `(sreality_id, snapshot_id, model)`, so a price-only snapshot
     re-billed the same text (~$65 of ~$207) and a missed extraction was permanent. The key
     is now `(listing_id, text_hash, extractor_version)` — the text, not the snapshot (R6).
@@ -74,11 +75,11 @@ MODEL_SETTING = "enrichment_model"
 # no longer the answer this code would accept.
 SCHEMA_VERSION = "2"
 
-# The lane's service level, and the one number two readers share: `verify_pipeline` reports
-# p99 first_seen_at -> extraction against it, and `api/notifications`'s `:new:` re-scan
-# window is floored by it, so a filter matching on a late-filled attribute still gets its
-# second look. A late fill can only cause a MISSED alert (the `:new:` dedupe key is
-# once-ever per property), never a duplicate.
+# The lane's service level, and the one number two readers share: the health check's
+# text_extraction gauge reports p95 first_seen_at -> first reading beside it, and
+# `api/notifications`'s `:new:` re-scan window is floored by it, so a filter matching on a
+# late-filled attribute still gets its second look. A late fill can only cause a MISSED alert
+# (the `:new:` dedupe key is once-ever per property), never a duplicate.
 SLO_MINUTES = 20
 
 # Pass sizing, not a knob: gpt-5.6-luna measures p50 1.3 s a call (llm_calls, n=6,786), so
@@ -384,37 +385,59 @@ SELECT l.id, l.source, l.first_seen_at, l.is_active,
  LIMIT %(limit)s
 """
 
-# Per source: how many rows are waiting and how long the oldest has waited. A literal twin
-# of `check_acquisition_lag` — the check whose own docstring argues this exact case: a
-# "nothing happened in N hours" alarm needs a baseline the outage itself erodes, while the
-# oldest un-extracted row grows without bound and cannot be normalised away.
-_LAG_SQL_TEMPLATE = """
-SELECT l.source,
-       count(*) AS waiting,
-       max(extract(epoch from (now() - l.first_seen_at)) / 3600.0) AS oldest_hours,
-       percentile_cont(0.5) within group (
-         order by extract(epoch from (now() - l.first_seen_at)) / 3600.0
-       ) AS median_hours
+# The stock the health check's text_extraction gauge judges: every advert the ONE predicate holds
+# waiting, active ones apart (the rest is the archive's read-once re-read), and the readings
+# written in 24 h, the lane's pace, so waiting / readings is a lower bound on the days to drain.
+# Stated limit, not fixed: a retry that succeeds rewrites its failed row in place and keeps its
+# created_at (_CACHE_INSERT_SQL never bumps it), so the success is dated at its FIRST attempt and
+# a late one can book outside its own 24 h.
+_STOCK_SQL_TEMPLATE = """
+SELECT count(*) AS waiting,
+       count(*) FILTER (WHERE l.is_active) AS waiting_active,
+       (SELECT count(*) FROM listing_description_enrichments r
+         WHERE r.created_at > now() - interval '24 hours'
+           AND r.extracted -> 'error' IS NULL) AS readings_24h
   FROM listings l
  WHERE {where}
- GROUP BY l.source
-"""
-
-# p99 of first_seen_at -> extracted, over the window the SLO is stated for. Reported, never
-# a threshold of its own: the lag check above is what rings.
-EXTRACTION_LATENCY_SQL = """
-SELECT count(*) AS n,
-       percentile_cont(0.99) within group (
-         order by extract(epoch from (e.created_at - l.first_seen_at)) / 60.0
-       ) AS p99_minutes
-  FROM listing_description_enrichments e
-  JOIN listings l ON l.id = e.listing_id
- WHERE e.created_at > now() - interval '24 hours'
 """
 
 _OPEN = contract.extracted_cells()
 SELECT_INFLOW_SQL = _SELECT_SQL_TEMPLATE.format(scope=_scope(_OPEN), where=_eligible_where(_OPEN))
-ELIGIBLE_LAG_SQL = _LAG_SQL_TEMPLATE.format(where=_eligible_where(_OPEN))
+ELIGIBLE_LAG_SQL = _STOCK_SQL_TEMPLATE.format(where=_eligible_where(_OPEN))
+
+# The flow the same gauge judges, per portal in scope: active adverts with a text first written in
+# the window, how many have a reading at this SCHEMA_VERSION (any prompt or model, so a version
+# change re-reads without reading as a stall), how many the lane gave up on at this version, and
+# p95 minutes from first_seen_at to that first reading. Counted over ARRIVALS, never through
+# `_eligible_where`: a predicate that selects nothing cannot hide its own arrivals (2026-07).
+# Stated limit, not fixed: a retry that succeeds keeps its row's created_at, the FIRST attempt's
+# (_CACHE_INSERT_SQL never bumps it), so the p95 dates that success early and understates.
+EXTRACTION_LATENCY_SQL = f"""
+SELECT l.source,
+       count(*) AS arrived,
+       count(r.first_read) AS read,
+       count(*) FILTER (WHERE r.first_read IS NULL AND EXISTS (
+           SELECT 1 FROM listing_description_enrichments g
+            WHERE g.listing_id = l.id
+              AND g.extractor_version = %(version)s
+              AND g.extracted -> 'error' IS NOT NULL
+              AND coalesce((g.extracted ->> 'attempts')::int, 1) >= {GIVE_UP_AFTER})) AS given_up,
+       percentile_cont(0.95) WITHIN GROUP (
+         ORDER BY extract(epoch FROM (r.first_read - l.first_seen_at)) / 60.0) AS p95_minutes
+  FROM listings l
+  LEFT JOIN LATERAL (
+       SELECT min(e.created_at) AS first_read
+         FROM listing_description_enrichments e
+        WHERE e.listing_id = l.id
+          AND e.extractor_version LIKE '{SCHEMA_VERSION}:%%'
+          AND e.extracted -> 'error' IS NULL) r ON true
+ WHERE l.source = ANY ({_scope(_OPEN)})
+   AND l.is_active
+   AND l.description IS NOT NULL AND l.description <> ''
+   AND l.first_seen_at >= now() - make_interval(hours => %(window_h)s::int)
+   AND l.first_seen_at < now() - make_interval(hours => %(grace_h)s::int)
+ GROUP BY l.source
+"""
 
 # The conflict target is the key migration 552 adds. DO UPDATE, not DO NOTHING, and only
 # over a row that is itself a recorded FAILURE: a retry either replaces the error with the
@@ -475,15 +498,29 @@ def write_sql(columns: Sequence[str]) -> str:
 
 # --- the pass ---------------------------------------------------------------
 
+# The lane's one switch, bound to MODEL_SETTING; the health check's gauge reads it too.
+MODEL_SQL = "SELECT value FROM app_settings WHERE key = %s"
+
+
+def model_from(row: Sequence[Any] | None) -> str | None:
+    """The model a MODEL_SQL row names: None when the row is absent or names no model."""
+    value = row[0] if row else None
+    return value if isinstance(value, str) and value.strip() else None
+
+
 def resolve_model(conn: Any) -> str | None:
     """`app_settings.enrichment_model`, or None. No fallback ON PURPOSE: `LLMClient`'s own
     default is a claude id, this project does not use Anthropic models, and a lane that
     silently picks a model nobody chose is worse than a lane that says it has none."""
     with conn.cursor() as cur:
-        cur.execute("SELECT value FROM app_settings WHERE key = %s", (MODEL_SETTING,))
-        row = cur.fetchone()
-    value = row[0] if row else None
-    return value if isinstance(value, str) and value.strip() else None
+        cur.execute(MODEL_SQL, (MODEL_SETTING,))
+        return model_from(cur.fetchone())
+
+
+def scope_from(located: Iterable[str]) -> dict[str, tuple[str, ...]]:
+    """The scope from the portals LLM_TEXT_SOURCES_SQL returned, plus the open R7 gates."""
+    cells = contract.extracted_cells()
+    return {p: cells.get(p, ()) for p in sorted({str(p) for p in located} | set(cells))}
 
 
 def lane_scope(conn: Any) -> dict[str, tuple[str, ...]]:
@@ -491,9 +528,7 @@ def lane_scope(conn: Any) -> dict[str, tuple[str, ...]]:
     scope only because its active contract declares `llm_text` (location block alone)."""
     with conn.cursor() as cur:
         cur.execute(LLM_TEXT_SOURCES_SQL)
-        located = {str(r[0]) for r in cur.fetchall()}
-    cells = contract.extracted_cells()
-    return {p: cells.get(p, ()) for p in sorted(located | set(cells))}
+        return scope_from(r[0] for r in cur.fetchall())
 
 
 def select_eligible(conn: Any, *, version: str,

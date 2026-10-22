@@ -22,8 +22,18 @@ ONE table, listing grain, rebuilt by the resolver (`location_resolve.yml` + the 
 
 **There is no property-grain table.** `property_location_current` was a verbatim copy of its
 winner's row — migration 493 measured `p.kraj_kod` and `w.kraj_kod` agreeing on 0 of 637,381 rows —
-and nothing outside one pg_cron statement read it. A property's location is its members' rows
-aggregated at read: join `listings.property_id` and pick or summarise.
+and nothing outside one pg_cron statement read it. A property's location is ONE member's row, never
+an aggregate: its **location ad**, `listing_location ll on ll.listing_id = p.location_listing_ref_id`
+(migration 635 chooses it: a map point first, then determined foreign, then the finest RÚIAN rung
+whatever the ad's status, ties by the canonical order). Every property surface reads that one ad
+since 636 — Browse and its map, `properties_public`, the property page and the phone map, the
+watchdog, notifications, the estimation subject and comparables, the extension's label. The
+pointer stores no location value, so this is still one store. A consumer about ONE ad (the ad page,
+the pin audit, dedup) reads that ad's own row. The two SQL shapes, beside the served rule in
+`location_data/claims_common.py`: an estimation SUBJECT joins its property's location ad, falling
+back to its own row while it has no live property (`SUBJECT_LOCATION_JOIN`); a COHORT goes
+spatial-first, place → the live property it locates → that property's canonical ad as the row
+(`COHORT_LOCATION_FROM`), because the GiST index cannot drive a COALESCE key.
 
 A listing with no row has never been resolved (brand new, between drains). Rule 25 makes that a
 vanishing case: a listing with no live claim gets an `undetermined` row (granularity `unknown`, no
@@ -65,13 +75,15 @@ stored derivation is a second definition, so a reader composes what it needs fro
 became eleven readers composing five different strings, so the composition moved into ONE immutable
 SQL function, `location_display_label(street_name, house_number_cp, house_number_co, obec_name,
 cast_obce_name, country_code, country_status)`, and every serving view publishes its result as
-`display_label`: `browse_projection` (→ `browse_list`, `properties_map_mv`), `listing_feed_public`,
+`display_label`: `browse_projection` (→ `browse_list`), `listing_feed_public`,
 `properties_public`, `listings_public`, `broker_listings_public`, and `pipeline_board_public` (which
 reads it off `properties_public` — it is `security_invoker` and `listing_location` is revoked from
-`authenticated`). The four API surfaces that read `listings` directly — the extension's
-`/listings/lookup`, the notification composer and outbox, the dispatch feed, the collections route
-— call the same function. Still no STORED label: a function over the answer table's own columns is
-one definition, computed where it is read.
+`authenticated`). Since 636 the API's property-grain surfaces print the property's own
+`properties_public.display_label` — the collections route, the dispatch feed (the notification
+outbox that also did went 2026-10-21), and the extension panel, which composes the
+ad's own label with the same function only for an ad not yet in a property; the phone's property
+location route calls the function on the property's location ad. Still no STORED label: a function
+over the answer table's own columns is one definition, computed where it is read.
 
 **The fallback order, which is the rule and not a detail:**
 
@@ -87,9 +99,10 @@ one definition, computed where it is read.
 **Precision is DRAWN, not described** (W3-3, revised 2026-09-22). `browse_projection` and
 `listing_feed_public` also publish `granularity_rank` (the INT from `location_granularity_rank` —
 the SPA compares numbers, never enum text) and `uncertainty_radius_m`. In point mode the Browse map
-draws a pin **at building level or better** (rank ≥ 90) as a solid dot — the pin is the building —
-and every other pin, unresolved included, as an open ring; a legend under the count names both
-faces with their counts. The true-metre circle of `uncertainty_radius_m` is drawn for **one pin
+draws a pin **at building level or better** (rank ≥ 90) with a black outer contour — the pin is the
+building — and every other pin, unresolved included, without it; the fill says active (magenta, white
+contour) or inactive (white transparent, magenta contour). A legend under the count names the faces with
+their counts. The true-metre circle of `uncertainty_radius_m` is drawn for **one pin
 only: the one whose popup is open**, and the popup prints the rung and the true radius in words
 ("Přibližná poloha: obec, ±1 km"). W3-3 first drew that circle under every pin below building
 level, all the time; with ~87 % of active pins below it (street 300 m, část obce 750 m, obec 1 km)
@@ -166,7 +179,8 @@ removed the last two runtime switches of any kind on this path — the SPA bisec
 
 ## 5. There is no legacy path (W4-c)
 
-Migration 508 dropped it. `listings` and `properties` carry NO place columns: no `geom`, no
+Migration 508 dropped it. `listings` and `properties` carry NO place columns (635's
+`properties.location_listing_ref_id` points at an ad and stores no place): no `geom`, no
 `obec_id`/`okres_id`/`region_id`/`ku_id`, no `obec`/`okres`/`region`, no
 `locality`/`district`/`street`/`house_number`/`zip`, no `street_name_key`/`geo_cell_key`/
 `street_source`, and none of the sreality `locality_*_id` portal ids. The trigger that wrote them
@@ -181,8 +195,18 @@ migration 507) or it silently measures degrees.
 - **Un-shadow 2026-09-09 17:54–17:59Z:** every portal's stored claims are resolver inputs, and
   W1-b deleted the shadow mechanism whole.
 - **Rule 25's invariant is the coverage number**: `count(listing_location) = count(active
-  listings)`, and every active Czech listing has a town. `verify_pipeline`'s
-  `location_town_coverage` check measures both and is red until the second is zero.
+  listings)`, and every active Czech listing has a town. The `location_town_coverage` gauge
+  (`scripts/checks/quality.py`, on the worker every 6 h since Health dashboard sprint wave 6)
+  measures both over ACTIVE ads first written more than 24 h ago and is red until the second is
+  zero; the inactive ads with no town (13,192 on 2026-10-19, their pages gone) are a dated fact,
+  not judged.
+- **Payload shape, exported** (Health dashboard sprint wave 6): `location_data/claims_common.py`
+  holds `PAYLOAD_SHAPE_PREDICATES`, one NULL-free SQL predicate per portal whose contract reads the
+  stored payload (sreality, bezrealitky, mmreality), TRUE when `l.raw_json` is in the shape the
+  contract expects new ads in, spelled from the same key lists as the Python reader beside it
+  (`sreality_payload_shape`), and `PAYLOAD_SHAPE_REMEDIES`, the remedy per portal. The `parsing` The Python twins the parity rail executes against are `PAYLOAD_SHAPE_READERS` (sreality's is the intake's own `sreality_payload_shape`; bezrealitky's and mmreality's are key-presence readers over the same key lists).
+  alarm's payload arm reads them with the portal name bound as a parameter, so the health checks
+  name no portal (rule 21); a live CI rail holds each predicate to its Python twin.
 - **Resolver lag.** The drain works `dirty_locations` from the oldest row. Judge freshness by
   `resolved_at` and by the oldest `dirty_locations.enqueued_at`, not by queue length. The Location
   Quality page's "on an older registry" share is the same signal per portal.

@@ -4,7 +4,8 @@ name: Docs budget
 # (line caps on CLAUDE.md/ROADMAP.md/skill bodies, a word cap on skill frontmatter
 # descriptions, and routing completeness — every .claude/skills/ dir must appear in
 # CLAUDE.md's "Where the detail lives" table) on any PR touching those paths, and warns
-# (non-blocking) when a PR changes code a skill documents without touching that skill.
+# (non-blocking) when a PR changes code a skill documents without touching that skill or
+# when a doc line it adds names a code symbol that exists nowhere in the code trees.
 #
 # No secrets required.
 
@@ -21,6 +22,14 @@ jobs:
 
       - name: Enforce context budgets (blocking)
         run: .github/scripts/docs-budget-check.sh
+
+      # A design doc or roadmap line naming a function that no longer exists misleads the
+      # next session that trusts it. Warns on each backticked symbol the PR's added doc lines
+      # name that no code tree contains; never fails (a plan may name what is not built yet).
+      - name: Docs name only symbols that exist (non-blocking)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        run: python3 scripts/docs_symbol_check.py --base "${{ github.event.pull_request.base.sha }}"
 
       - name: Skill-staleness nudge (non-blocking)
         run: .github/scripts/docs-staleness-check.sh "origin/${{ github.base_ref }}" "${{ github.sha }}"

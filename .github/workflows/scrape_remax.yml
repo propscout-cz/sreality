@@ -1,6 +1,5 @@
 name: "Scraping: RE/MAX scraper (pilot)"
 
-# portal: remax
 # Scheduled (every 6h) + manual scraper for remax-czech.cz on the shared portal
 # framework. RE/MAX is a national franchise catalogue (~7,900 listings) served as
 # a single server-rendered search index (no JSON API, no per-category URL) split
@@ -20,9 +19,6 @@ name: "Scraping: RE/MAX scraper (pilot)"
 # A PILOT: supports_complete_walk=false, so the runner never marks listings
 # inactive from index-absence (architectural rule #3); a gone detail (404/410 or
 # a redirect off the detail path) still flips that one listing inactive.
-#
-# The on-demand RE/MAX URL parser (scraper/source_parsers/remax.py, used by the
-# estimation preview) is a SEPARATE entry point and is unaffected by this crawl.
 #
 # Writes 'index' + 'detail' scrape_runs rows under source='remax' (its own
 # Health-page lane; does not touch sreality liveness / reconciliation).

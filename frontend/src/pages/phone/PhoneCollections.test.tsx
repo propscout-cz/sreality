@@ -33,7 +33,6 @@ const coll = (c: Partial<Collection>): Collection => ({
   updated_at: '2026-10-11T09:00:00Z',
   listing_count: 12,
   monitoring_enabled: false,
-  notify_channels: [],
   is_system: false,
   owner_email: null,
   shared_with: [],

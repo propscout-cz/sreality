@@ -161,9 +161,9 @@ def test_corridor_excludes_radius_from_shared_filter():
     # But the anchor-circle ST_DWithin against the listing geom is NOT.
     assert "ST_DWithin(\n      ll.geom" not in corridor_sql
     assert "%(radius_m)s" not in corridor_sql
-    # And the listing's place comes from listing_location, not listings.geom
+    # And the place is the property's location ad, from listing_location, not listings.geom
     # (the lookbehind is what keeps `ll.geom` from matching as `l.geom`).
-    assert "JOIN listing_location ll ON ll.listing_id = l.id" in corridor_sql
+    assert "JOIN properties lp ON lp.location_listing_ref_id = ll.listing_id" in corridor_sql
     assert re.search(r"(?<![a-z])l\.geom", corridor_sql) is None
 
 

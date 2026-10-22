@@ -5,12 +5,13 @@ says. This asserts what the database actually ends up with, which is not the sam
 a later migration can silently restore the per-row form, and `ALTER POLICY` leaves no
 trace in the file that created the policy.
 
-The defect being guarded: `is_platform_admin()` is SECURITY DEFINER, and in all 10 tenancy
-policies it sits inside an OR with column references, so it is not pseudoconstant and the
+The defect being guarded: `is_platform_admin()` is SECURITY DEFINER, and in every gated tenancy
+policy it sits inside an OR with column references, so it is not pseudoconstant and the
 executor calls it once per candidate row — on `llm_calls` at 293,551 rows. Nothing else
 fails when this regresses. The rows returned are identical; only the cost changes.
 
-Runs in CI's migrations lane against the replayed schema.
+Runs in CI's migrations lane against the replayed schema. Since migration 639 the 431 revert
+runs only without its two `manual_rental_estimates` statements (their table is dropped).
 
 Skip behaviour: the lane sets `DB_RAILS_REQUIRED=1`, so a lane that loses its
 `TEST_DATABASE_URL` goes RED instead of reporting a green skip.
@@ -36,8 +37,11 @@ _UNWRAP = (
     r"\(\s*SELECT\s+is_platform_admin\(\)(\s+AS\s+is_platform_admin)?\s*\)"
 )
 
-_EXPECTED_POLICIES = 10
-_EXPECTED_SITES = 11
+# 431's 10 policies / 11 sites, less the two manual_rental_estimates policies (3 sites) that
+# migration 639 drops with their table, and less notification_dispatches_tenant_read's SYSTEM arm
+# (1 site), which migration 651 removes with 619's notification_dispatches_admin_update.
+_EXPECTED_POLICIES = 7
+_EXPECTED_SITES = 7
 
 # Their with_check has NO admin arm and must never acquire one — that would be a
 # privilege change wearing a performance change's clothes.
@@ -93,7 +97,8 @@ def _strip_wrapped(conn, text: str) -> str:
 
 
 def test_no_policy_calls_the_gate_per_row(conn, policies):
-    """RED by: applying migrations/reverts/431_revert_*.sql to the test DB."""
+    """RED by: applying migrations/reverts/431_revert_*.sql (less its two
+    manual_rental_estimates statements, see migration 639) to the test DB."""
     offenders = [
         f"{p['tbl']}.{p['pol']}"
         for p in policies
@@ -112,7 +117,7 @@ def test_coverage_is_exactly_what_the_migration_claims(conn, policies):
     """
     # Count the WRAPPER, not the name. The deparser renders the wrapped form as
     # `( SELECT is_platform_admin() AS is_platform_admin)`, so the name appears TWICE per
-    # site — once as the call, once as the alias — and counting the name reports 22 for 11.
+    # site — once as the call, once as the alias — and counting the name reports 20 for 10.
     sites = sum(
         (p["qual"] + " " + p["withcheck"]).lower().count("select is_platform_admin()")
         for p in policies
