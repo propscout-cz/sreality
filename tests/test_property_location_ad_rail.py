@@ -45,6 +45,8 @@ CENSUS: dict[str, str] = {
     "autodedup/ui_sql.py": "identity: which ad is canonical, shown beside each ad's own place in the review pages",
     "location_data/claims_common.py": "the one definition: the R8 cohort shape joins the location ad's property to "
                                       "its canonical ad, the comparable (price, area, snapshot_id: rule 8)",
+    "scraper/db.py": "identity: a singleton is born with its one ad as canonical AND location ad; the refetch lane's "
+                     "`listing_location` join is ad-grain (`ll.listing_id = l.id`, rule 25's town-less ads)",
 }
 
 # Every call of the served rule (rule 25) and every read of its constant, by (module, scope, the listing-id key it is
