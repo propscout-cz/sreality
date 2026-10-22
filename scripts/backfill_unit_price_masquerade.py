@@ -32,6 +32,11 @@ never guessed at:
                    is fetched (379 bytes against a 72 kB page), then handed to
                    realitymix's own `_detail_price_text` so the selector stays
                    in one place.
+  * remax        — likewise absent (`price_text` holds only the
+                   `data-advert-price` attribute, missing on every damaged
+                   row), so the `pd-table__value--price` cell is read back out
+                   of the staged page with remax's own `_text`, the call
+                   `remax_parser.parse_detail` makes on it.
 
 WHY THIS SURVIVED THE ONE RE-PARSE SEAM. `scripts/reparse.py` replaced the
 re-derive family, but it can never do this: its standing rule is that a
@@ -94,6 +99,7 @@ import os
 import sys
 import time
 from collections import Counter
+from collections.abc import Callable
 
 from selectolax.parser import HTMLParser
 
@@ -103,10 +109,11 @@ from scraper.ceskereality_parser import _PRICE_RUN_RE as _CESKEREALITY_AMOUNT_RE
 from scraper.price_text import is_per_area_price
 from scraper.realitymix_parser import _PRICE_RUN_RE as _REALITYMIX_AMOUNT_RE
 from scraper.realitymix_parser import _detail_price_text as _realitymix_price_cell
+from scraper.remax_parser import _text as _remax_text
 
 LOG = logging.getLogger("backfill_unit_price_masquerade")
 
-SOURCES: tuple[str, ...] = ("ceskereality", "realitymix", "bazos")
+SOURCES: tuple[str, ...] = ("ceskereality", "realitymix", "remax", "bazos")
 
 # Each portal's own amount scanner — the marker test is anchored to the text
 # immediately AFTER the amount, so the amount has to be found the way that
@@ -115,11 +122,22 @@ _AMOUNT_RE = {
     "bazos": _BAZOS_AMOUNT_RE,
     "ceskereality": _CESKEREALITY_AMOUNT_RE,
     "realitymix": _REALITYMIX_AMOUNT_RE,
+    # remax's `_detail_price` splits the amount off at `CZK`; on its
+    # `{amount} CZK / {unit}` cell the same digit run ends exactly there.
+    "remax": _REALITYMIX_AMOUNT_RE,
 }
 
-# The portals whose price cell is NOT in raw_json, and the `<tr>` that holds it.
+# The portals whose price cell is NOT in raw_json, the element that holds it
+# (Postgres takes a regex's greediness from its FIRST quantifier, so nothing may
+# precede the `.*?`), and the portal's own reader for that element. selectolax
+# drops a bare orphan `<tr>`, so the realitymix row is re-wrapped in a `<table>`.
 _FRAGMENT_PATTERN = {
     "realitymix": '<tr class="advert-description__short-props-price".*?</tr>',
+    "remax": '<div class="pd-table__value pd-table__value--price">.*?</div>',
+}
+_FRAGMENT_READER: dict[str, Callable[[str], str | None]] = {
+    "realitymix": lambda f: _realitymix_price_cell(HTMLParser(f"<table>{f}</table>")),
+    "remax": lambda f: _remax_text(HTMLParser(f).css_first(".pd-table__value--price")),
 }
 
 QUARANTINE, KEEP, UNCONFIRMED = "quarantine", "keep", "unconfirmed"
@@ -197,16 +215,10 @@ _QUARANTINE_SQL = """
 
 
 def price_text_from_fragment(source: str, fragment: str | None) -> str | None:
-    """Run the portal's own price-cell extractor over the staged `<tr>` fragment.
-
-    The fragment is re-wrapped in a `<table>` because selectolax drops a bare
-    orphan `<tr>` — the row has to have a table to belong to before the
-    parser's `tr.…` selector can see it.
-    """
-    if not fragment or source not in _FRAGMENT_PATTERN:
+    """Run the portal's own price-cell reader over the staged fragment."""
+    if not fragment or source not in _FRAGMENT_READER:
         return None
-    tree = HTMLParser(f"<table>{fragment}</table>")
-    return _realitymix_price_cell(tree)
+    return _FRAGMENT_READER[source](fragment)
 
 
 def decide(source: str, price_text: str | None, stored_price: int | None) -> tuple[str, str]:
@@ -248,7 +260,7 @@ def _log_summary(quarantined: Counter[str], unconfirmed: Counter[str],
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", action="append", choices=SOURCES,
-                        help="Restrict to one portal; repeatable. Default: all three.")
+                        help="Restrict to one portal; repeatable. Default: every source.")
     parser.add_argument("--limit", type=int, default=None,
                         help="Max listings examined this run. Default: the whole corpus.")
     parser.add_argument("--batch-size", type=int, default=1000,

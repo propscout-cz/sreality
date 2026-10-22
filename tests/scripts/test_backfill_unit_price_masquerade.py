@@ -18,13 +18,15 @@ from scripts.backfill_unit_price_masquerade import (
     price_text_from_fragment,
 )
 
-# The three portals' real cell shapes, straight off production staged pages.
+# The portals' real cell shapes, straight off production staged pages.
 PER_AREA_CELLS = [
     ("ceskereality", "100 Kč za m²/měsíc"),
     ("ceskereality", "105 Kč za m²/rok"),
     ("ceskereality", "105 533 Kč za m² Spočítat hypotéku"),
     ("realitymix", "45 Kč / (za m 2 ) Nabídněte cenu"),
     ("realitymix", "850 Kč / (za m 2 )"),
+    ("remax", "450 CZK / m2/měsíc"),
+    ("remax", "690 CZK / m2/rok"),
 ]
 
 # Cheap but REAL: a garage, a storage unit, a small monthly rent. Magnitude puts
@@ -36,6 +38,8 @@ CHEAP_BUT_REAL_CELLS = [
     ("bazos", "250 Kč"),
     ("bazos", "170 Kč"),
     ("realitymix", "900 Kč / (za měsíc)"),
+    ("remax", "968 CZK / za měsíc"),
+    ("remax", "140 CZK / Rezervováno"),
 ]
 
 
@@ -93,8 +97,21 @@ def test_realitymix_fragment_round_trips_through_the_portal_extractor():
     assert decide("realitymix", text, 45)[0] == QUARANTINE
 
 
+def test_remax_fragment_round_trips_through_the_portal_reader():
+    # remax keeps no price text in raw_json on these rows; the staged cell's
+    # unit sits in a <small> after the amount's <strong>.
+    fragment = (
+        '<div class="pd-table__value pd-table__value--price">\n\t\t<strong>\n'
+        "\t\t\t450\n\t\t\tCZK\n\t\t</strong><small> / m2/měsíc</small>\t\t</div>"
+    )
+    text = price_text_from_fragment("remax", fragment)
+    assert text == "450 CZK / m2/měsíc"
+    assert decide("remax", text, 450)[0] == QUARANTINE
+
+
 def test_a_missing_fragment_yields_no_text():
     assert price_text_from_fragment("realitymix", None) is None
+    assert price_text_from_fragment("remax", None) is None
     assert price_text_from_fragment("ceskereality", "<tr><td>x</td></tr>") is None
 
 

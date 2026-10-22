@@ -454,7 +454,7 @@
       "inputs": [
         {
           "name": "source",
-          "description": "Limit to one portal (blank = all three)",
+          "description": "Limit to one portal (blank = all four)",
           "required": false,
           "type": "choice",
           "default": "",
@@ -462,6 +462,7 @@
             "",
             "ceskereality",
             "realitymix",
+            "remax",
             "bazos"
           ]
         },
