@@ -60,7 +60,7 @@ export default function WatchdogManage() {
             onDelete={(id) => {
               if (
                 window.confirm(
-                  'Delete this watchdog? Its notification history will be removed too.',
+                  'Delete this watchdog? Its notifications leave your feed.',
                 )
               ) {
                 deleteMut.mutate(id);

@@ -128,8 +128,8 @@ matcher-loop pattern of api/notifications):
              7 days, for watchdogs and monitored collections) and monitor (a monitored
              property gone for a day, back, or on a new portal). Each step its own
              connection and transaction; a failing step is its own `portal_errors` cell.
-             Beside the API's matcher_loop until W2b; the shared dedupe_key makes the
-             overlap a union.
+             Beside the API's matcher_loop until W2b; the one identity index
+             (migration 653) makes the overlap a union.
 - heartbeat: every 30s, upsert this worker's beat + per-lane fields into
              worker_heartbeats (migration 269) — the Health-page liveness hook — and
              record its own pass like every lane. Every lane in LANES has an entry from
@@ -559,8 +559,8 @@ _HEALTH_PRUNED_AT: float | None = None
 # 120 s SET LOCAL bound), so the locks an INSERT takes never outlive it and a step that raises stops
 # only itself; its error is a `portal_errors` entry, which the jobs check renders as the cell
 # `lane/notifications/<step>`, and the step's next clean pass clears it. Until W2b the API's
-# matcher_loop runs the same three producers beside this lane: both write the same dedupe_key, so
-# the overlap is a union, never a duplicate.
+# matcher_loop runs the same three producers beside this lane: both conflict on the one identity
+# index, so the overlap is a union, never a duplicate.
 NOTIFICATIONS_TICK_SECONDS = 300.0
 # step -> the api.notifications producer it runs (looked up at pass time: the module is lazy-imported).
 NOTIFICATIONS_STEPS: dict[str, str] = {

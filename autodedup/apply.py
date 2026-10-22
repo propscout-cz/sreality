@@ -57,7 +57,7 @@ from autodedup.incremental import GENERATION
 from autodedup.incremental_scope import GRAIN_OF
 from autodedup.incremental_sql import RT_SCOPE_SCAN_SEEN_SQL
 from autodedup.ui_sql import NEGATIVE_VERDICTS
-from toolkit.property_carriers import curation_preview
+from toolkit.property_carriers import NOTIFICATION_EVENTS_LOCK_SQL, curation_preview
 from toolkit.property_identity import (
     CategoryClash,
     MergeError,
@@ -925,6 +925,9 @@ def recheck_group(
     property still active, the deal types, categories and scope still clean, and no operator
     negative may have landed on them since the plan read the negatives (E903). The locked
     placement is recorded on the group, for its ledger row's plan and for `unapply` (E905)."""
+    # The notification-events lock before the first row lock: the merge this transaction runs takes
+    # it, and taken after these rows it could deadlock with a producer (toolkit.property_carriers).
+    _exec(conn, NOTIFICATION_EVENTS_LOCK_SQL, {})
     locked = {
         int(pid): {"status": status, "category_type": ctype, "category_main": cmain}
         for pid, status, ctype, cmain in _rows(

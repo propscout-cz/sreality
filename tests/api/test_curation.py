@@ -26,6 +26,7 @@ from api import dependencies as deps
 from api import main as api_main
 from api import schemas as _s
 from api import tenant_pool
+from api.notifications import ON_EVENT_CONFLICT
 from tests.api._script_conn import ScriptConn
 
 _SUB = "11111111-1111-1111-1111-111111111111"
@@ -1070,15 +1071,15 @@ def test_a_new_share_writes_one_recipient_stamped_notification_and_returns_the_c
     sql, params = dispatch
     # One source for every share (migration 641): 'share', collection_id set for a collection.
     assert "VALUES ('share', %(collection_id)s::bigint, %(change_kind)s::text," in sql
-    # One notification per (collection, recipient) ever: no time in the key, so a revoke +
+    # One notification per (collection, recipient) ever: no time in the identity, so a revoke +
     # re-share loop cannot refill the recipient's inbox.
-    assert "ON CONFLICT DO NOTHING" in sql and "epoch" not in sql
+    assert sql.endswith(ON_EVENT_CONFLICT) and "epoch" not in sql and "dedupe_key" not in sql
     # The kind names what opens and the owner is the actor (migration 652); a collection share
     # needs no event_ref.
     assert params == {
         "change_kind": "shared_collection", "collection_id": 1, "actor": _OWNER,
         "message": ' shared the collection "Byty" with you', "recipient": _RECIPIENT,
-        "event_ref": None, "dedupe_key": f"share:collection:1:{_RECIPIENT}",
+        "event_ref": None,
     }
     assert identity.tx == ["commit"]
     # The gate ran first, and the response is re-read on the tenant connection.

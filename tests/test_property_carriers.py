@@ -218,9 +218,10 @@ def test_every_carrier_meets_the_protocol():
 
 def test_no_carrier_deletes_history():
     """The sanctioned deletes are a SET table's collision collapse and the losing pipeline card,
-    each folded into the carry record with its snapshot; never a ledger or log row."""
+    each folded into the carry record with its snapshot; never a ledger or log row, nor an alert
+    (a merge marks a duplicate instead, migration 653)."""
     history = ("property_dismissals", "property_pipeline_events", "property_merge_carries",
-               "property_merge_events", "properties")
+               "property_merge_events", "properties", "notification_dispatches")
     for statement in CARRIER_SQL:
         deleted = re.findall(r"\bDELETE\s+FROM\s+(\w+)", statement, re.I)
         assert not set(deleted) & set(history), f"a carrier deletes history: {_n(statement)[:120]}"
@@ -270,32 +271,39 @@ def test_every_carrier_runs_only_its_declared_sql_with_its_params_supplied(carri
         f"{carrier.name} declares SQL it never runs")
 
 
-def test_the_dispatch_collapse_hands_its_sends_to_the_kept_twin_first():
-    """A send on a collapsed row would be nulled (ON DELETE SET NULL), which channel_sends_check
-    refuses: the resend runs before the DELETE and pairs each retired row with exactly the twin
-    the DELETE collapses it onto (the same keys, NULL-safe), so the two cannot drift apart."""
-    dispatches = next(c for c in PROPERTY_CARRIERS if c.name == "notification_dispatches")
+def test_the_dispatch_carrier_is_one_update_that_marks_and_deletes_nothing():
+    """F6, F13, F21: one UPDATE re-points every alert of the retired property and marks the one
+    the survivor already holds its duplicate; nothing is deleted. Its match is the ONE identity:
+    migration 653's index, i.e. EVENT_IDENTITY, without the property a merge changes, NULL-safe,
+    against the survivor's unmarked rows only (a repeat is outside the index)."""
+    from api.notifications import EVENT_IDENTITY
+
+    dispatches = _carrier("notification_dispatches")
     assert isinstance(dispatches, carriers.Dispatches)
-    lock, resend, collapse, move = (_n(s) for s in dispatches.sql)
-    assert [s for s, _p in _walk(dispatches).ran] == [
-        _n(carriers.Dispatches.LOCK_SQL), _n(carriers.Dispatches.RESEND_SQL), collapse, move]
-    assert collapse.startswith("DELETE FROM notification_dispatches")
-    assert move.startswith("UPDATE notification_dispatches SET property_id")
+    lock, repoint = (_n(s) for s in dispatches.sql)
+    assert lock == carriers.NOTIFICATION_EVENTS_LOCK_SQL, "the protocol's exclusive half first"
+    assert [s for s, _p in _walk(dispatches).ran] == [lock, repoint]
+    assert repoint.startswith("UPDATE notification_dispatches r SET property_id = %(survivor)s, "
+                              "duplicate_of = coalesce((SELECT s.id FROM notification_dispatches s ")
+    assert repoint.endswith("ORDER BY s.dispatched_at, s.id LIMIT 1), r.duplicate_of) "
+                            "WHERE r.property_id = %(retired)s")
+    assert "s.property_id = %(survivor)s AND s.duplicate_of IS NULL" in repoint
     twin = re.compile(r"s\.(\w+) IS NOT DISTINCT FROM r\.\1\b")
-    assert twin.findall(resend) == twin.findall(collapse) == list(dispatches.keys)
-    assert "s.property_id = %(survivor)s" in resend and "r.property_id = %(retired)s" in resend
-    assert {"subscription_id", "collection_id"} <= set(dispatches.keys), (
-        "the pairing is account-partitioned only through account-owned keys")
+    assert tuple(twin.findall(repoint)) == carriers.Dispatches.IDENTITY == tuple(
+        c for c in EVENT_IDENTITY if c != "property_id")
+    assert "account_id" in carriers.Dispatches.IDENTITY, "the match must never cross an account"
+    assert "DELETE" not in repoint.upper()
 
 
-def test_the_retired_dispatches_are_locked_in_their_own_statement_before_the_resend():
-    """An outbox claim's foreign key check holds FOR KEY SHARE on the dispatch; FOR UPDATE waits
-    it out and holds off the next one. A separate statement, not a CTE of the resend, so the
-    resend's fresh READ COMMITTED snapshot sees a send that claim committed."""
-    lock = _n(carriers.Dispatches.LOCK_SQL)
-    assert lock.startswith("SELECT ") and lock.endswith(" FOR UPDATE")
-    assert "FROM notification_dispatches WHERE property_id = %(retired)s" in lock
-    assert "FOR UPDATE" not in _n(carriers.Dispatches.RESEND_SQL)
+def test_producers_and_merges_share_one_transaction_scoped_lock():
+    """The notification-events protocol: the merge's half EXCLUSIVE, the producer's SHARED, one key,
+    both transaction-scoped (released at commit, never a session lock a pooler would strand)."""
+    from api import notifications as nf
+
+    key = "hashtext('notification_events')"
+    assert carriers.NOTIFICATION_EVENTS_LOCK_SQL == f"SELECT pg_advisory_xact_lock({key})"
+    assert carriers.NOTIFICATION_EVENTS_SHARED_LOCK_SQL == f"SELECT pg_advisory_xact_lock_shared({key})"
+    assert nf.NOTIFICATION_EVENTS_SHARED_LOCK_SQL is carriers.NOTIFICATION_EVENTS_SHARED_LOCK_SQL
 
 
 # --- what each carrier hands the carry record (migration 589) ----------------------------
@@ -337,10 +345,11 @@ def test_the_artifact_link_collapses_within_an_account_and_leaves_no_carry_row()
 
 
 def test_alert_events_get_no_carry_rows_and_five_tables_get_them():
-    """MS14's default: the dispatch carrier runs its four statements and hands back nothing. The
-    carry record's five tables (no CHECK pins them): the three above, the card, the dismissal."""
+    """MS14's default: the dispatch carrier runs its lock and its one UPDATE and hands back
+    nothing. The carry record's five tables (no CHECK pins them): the three above, the card, the
+    dismissal."""
     cur = _walk(_carrier("notification_dispatches"))
-    assert len(cur.ran) == 4 and cur.carried == []
+    assert len(cur.ran) == 2 and cur.carried == []
     assert {c.name for c in PROPERTY_CARRIERS if getattr(c, "at", None)} == {
         "collection_properties", "property_tags", "property_notes"}
 

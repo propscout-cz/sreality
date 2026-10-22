@@ -24,6 +24,7 @@ from api import pipeline as pipeline_module  # noqa: E402
 from api import schemas as s  # noqa: E402
 from api import shares  # noqa: E402
 from api import tenant_pool  # noqa: E402
+from api.notifications import ON_EVENT_CONFLICT  # noqa: E402
 from tests.api._script_conn import ScriptConn  # noqa: E402
 
 _SUB = "11111111-1111-1111-1111-111111111111"
@@ -84,12 +85,12 @@ def test_a_new_pipeline_share_upserts_the_mode_and_notifies_once_per_owner_recip
     assert "WHERE s.mode <> EXCLUDED.mode" in upsert[0]
     [(sql, params)] = _dispatches(identity)
     assert "VALUES ('share', %(collection_id)s::bigint, %(change_kind)s::text," in sql
-    assert "ON CONFLICT DO NOTHING" in sql
-    # The kind names what opens, the actor is the owner (migration 652), the key keeps its grammar.
+    assert sql.endswith(ON_EVENT_CONFLICT) and "dedupe_key" not in sql
+    # The kind names what opens, the actor is the owner (migration 652), the mode tells two apart.
     assert params == {
         "change_kind": "shared_pipeline", "collection_id": None, "actor": _OWNER,
         "message": " shared their pipeline with you (view only)", "recipient": _RECIPIENT,
-        "event_ref": "read", "dedupe_key": f"share:pipeline:{_OWNER}:{_RECIPIENT}:read",
+        "event_ref": "read",
     }
     assert identity.tx == ["commit"]
 
@@ -99,8 +100,7 @@ def test_widening_to_edit_notifies_and_narrowing_or_repeating_does_not():
     shares.grant(_Opener(widened), "b@x.cz", shares.PipelineShare(_OWNER, "edit"))
     [(_sql, params)] = _dispatches(widened)
     assert params["message"] == " shared their pipeline with you (edit)"
-    assert params["dedupe_key"] == f"share:pipeline:{_OWNER}:{_RECIPIENT}:edit"
-    assert params["event_ref"] == "edit"
+    assert params["event_ref"] == "edit" and params["actor"] == _OWNER
 
     narrowed = ScriptConn([_lookup([(_RECIPIENT,)]), _upsert([(False,)])])
     shares.grant(_Opener(narrowed), "b@x.cz", shares.PipelineShare(_OWNER, "read"))

@@ -382,10 +382,11 @@ Per-lane notes:
   a live watchdog's matches first seen in the last 24 h and after its `active_since` (create, switch-on, filter edit), images-first
   gated; no cursor), `price` (`match_changes_once`: one canonical-ad step fragment, 7 days, watchdogs + monitored collections) and
   `monitor` (inactive after 24 h gone, reactivated, new_source), each on its own connection, committing per statement (one watchdog's
-  INSERT, one detector; `SET LOCAL statement_timeout` 120 s), so no INSERT's locks block a merge. Why steps: a step that raises or has a
+  INSERT, one detector; `SET LOCAL statement_timeout` 120 s; the notification-events lock SHARED first, so a merge waits one statement
+  at most and never deadlocks, architecture § rule 16). Why steps: a step that raises or has a
   failed statement is its own `portal_errors` entry, `lane/notifications/<step>` red alone while the others write; a stored spec the
   matcher refuses is `last.*.subscriptions_invalid`, never red (the write routes 422 it), even when every watchdog is. Beside the
-  API's `matcher_loop` until W2b: same `dedupe_key`, so the overlap is a union; `NOTIFICATIONS` log line only on a write or a failure.
+  API's `matcher_loop` until W2b: one identity index (mig 653), so the overlap is a union; `NOTIFICATIONS` log line only on a write or a failure.
 - **Autodedup re-cut** (E944) — pHash coverage < 0.85 marks `rt_recut:<gen>` due; the NEXT tick re-cuts instead of passing (same lease, 1,050 s, reads stop 120 s early); never in a build or while the scope (max of the last cut's count and the store's `rt_fp`) holds > `RECUT_MAX_LISTINGS` 50k ads (row says `bootstrap`/`unfit`: Prague keeps its seed's cut); ≤ 1 attempt / 6 h, stamped before the cut, so a death mid-cut waits and does not halve the claim cap (2 deaths under one cut = `died` until a seed); failed = `errors: 1` + `recut_failed`; shutdown = taken back while its stamp holds.
   Heartbeat `last.recut` + the lane's own `recut` (lost on restart; durable: `rt_recut:<gen>.last`), `calibration_built_age_days`. The parsed calibration (~16 MB at 39.5k) outlives its pass, read once a digest — E949's one deliberate exception.
 - **Autodedup lane** (AUTODEDUP §7.3/E914, mig 557) — THE engine's one real-time pass (`run_incremental`); one integer

@@ -23,9 +23,18 @@ account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, e
       `actor_account_id` written; shares become `shared_collection | shared_dashboard | shared_pipeline` (migration 652:
       the five columns, the `active_since` trigger, the wider CHECK, backfills). Gate: cells green, the 9-preset replay,
       EXPLAIN < 2 s, the false-new baseline.
-- [ ] **Next:** W2b the API matcher goes (lease, readers, gates; Migration B) · W3 one event identity (the unique index
-      replaces the dedupe key) · W4 push plumbing, dark (VAPID, the push ledger, /push routes; R7, R11) · W5 the phone
-      bell, badge and switch (R4) · W6 the one destructive prune, backup first (R8).
+- [ ] **W3 (built 2026-10-21, stacked on W2a; done when merged, migration 653 applied first)** — one event identity:
+      `notification_dispatches_identity_uq` over `EVENT_IDENTITY` (NULLS NOT DISTINCT, partial on `duplicate_of IS
+      NULL`; migration 653 = Migration C: 652's fills since A, system history keyed on its old key, exact repeats
+      marked, `dedupe_key` nullable, the feed index, the index CONCURRENTLY); every producer and the share grant
+      conflict on it and write no `dedupe_key` / `trigger_snapshot_id`; ONE `VISIBLE_SQL` (repeat, own-account
+      dismissal, retired watchdog) on every read, count and update (mark-seen of a hidden row: 404); deleting a
+      watchdog retires it (F21); the carrier is one UPDATE that re-points and marks `duplicate_of`, deleting nothing
+      (F6, F13); `share_ref` reads columns, no `split_part`. Gate: CI green; a merged 'new' row is marked and never
+      re-fires, 0 deleted; a retired watchdog's alerts hidden, rows kept; 0 identity violations.
+- [ ] **Next:** W2b the API matcher goes (lease, readers, gates; Migration B) · W4 push plumbing, dark (VAPID, the push
+      ledger, /push routes; R7, R11) · W5 the phone bell, badge and switch (R4) · W6 the one destructive prune, backup
+      first (R8; drops `dedupe_key`, its UNIQUE and `trigger_snapshot_id`).
 
 ### Phase U-NEW-PROPERTY: a property from a pasted ad link (in progress, 2026-10-20)
 
@@ -183,7 +192,7 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   identity change; migration 613 drops `legacy_backfill_claim` (operator ruling 2026-10-17).
 - **Next (unscheduled):** ~~`notification_dispatches` needs a column-level UPDATE grant (its global `dedupe_key` is
   browser-writable)~~ stale: 619 narrowed the browser's UPDATE to columns and 651 to `seen_at` alone; the global
-  `dedupe_key` itself is replaced in W3 (Phase U-NOTIFY-PUSH). The 60 pre-299 public sequences still grant `authenticated` setval (one revoke migration + a
+  `dedupe_key` itself is replaced in W3 (Phase U-NOTIFY-PUSH: nothing writes it since migration 653; W6 drops it). The 60 pre-299 public sequences still grant `authenticated` setval (one revoke migration + a
   census arm).
 
 ### Phase U-LINK: Artifact link on the property (done, 2026-10-14)

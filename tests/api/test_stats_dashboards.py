@@ -30,6 +30,7 @@ from api import main as api_main  # noqa: E402
 from api import saved_sets as ss  # noqa: E402
 from api import shares  # noqa: E402
 from api import tenant_pool  # noqa: E402
+from api.notifications import ON_EVENT_CONFLICT  # noqa: E402
 from api.routes.filter_presets import PRESETS  # noqa: E402
 from api.routes.stats_dashboards import DASHBOARDS  # noqa: E402
 from tests.api._script_conn import ScriptConn  # noqa: E402
@@ -307,12 +308,12 @@ def test_a_new_share_writes_one_recipient_stamped_notification_and_returns_the_d
                      "ON CONFLICT DO NOTHING RETURNING account_id", (_ID, _RECIPIENT))
     sql, params = dispatch
     assert "account_email(%(actor)s::uuid) || %(message)s::text" in sql
-    assert "ON CONFLICT DO NOTHING" in sql
+    assert sql.endswith(ON_EVENT_CONFLICT)
     # No collection; the owner the trigger stamped labels the text and is the actor (migration 652).
     assert params == {
         "change_kind": "shared_dashboard", "collection_id": None, "actor": _ACCT,
         "message": ' shared the dashboard "Praha byty" with you', "recipient": _RECIPIENT,
-        "event_ref": str(_ID), "dedupe_key": f"share:dashboard:{_ID}:{_RECIPIENT}",
+        "event_ref": str(_ID),
     }
     assert identity.tx == ["commit"]
     # The gate ran first, and the answer is re-read on the tenant connection (with shared_with).
@@ -329,11 +330,12 @@ def test_a_re_share_writes_no_second_notification(client, conn, monkeypatch) -> 
 
 
 def test_a_revoke_then_re_share_notifies_no_second_time(client, conn, monkeypatch) -> None:
-    """The share row is new again after a revoke, so the grant reaches its dispatch again, with the SAME key
-    (no time in it) and ON CONFLICT DO NOTHING: migration 206's unique dedupe_key keeps the one notification,
-    so a revoke + re-share loop cannot refill the recipient's bell with text the owner chose."""
+    """The share row is new again after a revoke, so the grant reaches its dispatch again, with the SAME identity
+    (no time in it) and ON CONFLICT on it: migration 653's identity index keeps the one notification, so a
+    revoke + re-share loop cannot refill the recipient's bell with text the owner chose."""
     import re
 
+    from api.notifications import EVENT_IDENTITY
     from tests.migration_defs import MIGRATIONS
 
     keys: list[Any] = []
@@ -343,13 +345,15 @@ def test_a_revoke_then_re_share_notifies_no_second_time(client, conn, monkeypatc
         monkeypatch.setattr(deps, "open_background_conn", _Opener(identity))
         assert client.post(f"/stats/dashboards/{_ID}/shares", json={"email": "b@x.cz"}).status_code == 200
         [(sql, params)] = [(q, p) for q, p in identity.executed if "notification_dispatches" in q]
-        assert sql.endswith("ON CONFLICT DO NOTHING")
-        keys.append(params["dedupe_key"])
+        assert sql.endswith(ON_EVENT_CONFLICT)
+        keys.append((params["change_kind"], params["collection_id"], params["event_ref"], params["actor"],
+                     params["recipient"]))
         revoke = ScriptConn([(_starts("DELETE FROM stats_dashboard_shares"), [(1,)])])
         assert shares.revoke_dashboard(revoke, str(_ID), str(_RECIPIENT)) == {"deleted": True}
-    assert keys == [f"share:dashboard:{_ID}:{_RECIPIENT}"] * 2
-    s206 = " ".join((MIGRATIONS / "206_notifications_unified_event_model.sql").read_text().split())
-    assert re.search(r"add constraint notification_dispatches_dedupe_key_key unique \(dedupe_key\)", s206)
+    assert keys == [("shared_dashboard", None, str(_ID), _ACCT, _RECIPIENT)] * 2
+    s653 = " ".join((MIGRATIONS / "653_notifications_w3_event_identity.sql").read_text().split())
+    assert re.search(r"create unique index concurrently if not exists notification_dispatches_identity_uq "
+                     rf"on public\.notification_dispatches \({', '.join(EVENT_IDENTITY)}\) nulls not distinct", s653)
 
 
 def test_sharing_with_your_own_account_is_422_and_rolled_back(client, conn, monkeypatch) -> None:

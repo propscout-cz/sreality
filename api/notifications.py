@@ -10,8 +10,8 @@ Two responsibilities:
    `match_monitored_collections_once`), run every 300 s by the realtime worker's
    `notifications` lane and, until W2b, by the API's `matcher_loop` beside it. They
    write one `notification_dispatches` row per event over fixed windows (a watchdog's
-   'new' over properties first seen in the last 24 h); the UNIQUE `dedupe_key`
-   (`wd:{sub}:new:{property_id}`, …) makes every re-run idempotent.
+   'new' over properties first seen in the last 24 h); the one identity index
+   (`EVENT_IDENTITY`, migration 653) makes every re-run idempotent.
 
 `WatchdogFilterSpec` is intentionally a separate model from
 `ComparableFilters`: the watchdog matcher does NOT require a target
@@ -45,6 +45,7 @@ from api.location_filter import DistrictChip, MapBounds, bounds_where, district_
 from location_data.claims_common import served_location_predicate
 from scraper import db as scraper_db
 from toolkit.filter_compiler import PROPERTIES_GRAIN, compile_filter_where
+from toolkit.property_carriers import NOTIFICATION_EVENTS_SHARED_LOCK_SQL
 
 if TYPE_CHECKING:
     import psycopg
@@ -55,6 +56,17 @@ LOG = logging.getLogger(__name__)
 # system_health rows are history the app no longer shows (ruling R2, notifications W1).
 SourceKind = Literal["watchdog", "collection_monitor", "share"]
 SourceKindFilter = Literal[SourceKind, "all"]
+
+# ONE event identity (program § 3.2, migration 653): the columns of notification_dispatches_identity_uq
+# in index order, NULLS NOT DISTINCT over the rows that are not a marked repeat. Every producer INSERT
+# and the share grant conflict on it; the merge carrier (toolkit/property_carriers.Dispatches) marks a
+# retired property's alert a duplicate on it. The account trigger (migrations 364, 641) stamps
+# account_id BEFORE INSERT, so the conflict check sees it. Tests pin all three to the migration.
+EVENT_IDENTITY: tuple[str, ...] = (
+    "account_id", "source_kind", "subscription_id", "collection_id", "change_kind", "property_id",
+    "event_ref", "actor_account_id",
+)
+ON_EVENT_CONFLICT = f"ON CONFLICT ({', '.join(EVENT_IDENTITY)}) WHERE duplicate_of IS NULL DO NOTHING"
 
 
 # --- filter spec ----------------------------------------------------------
@@ -291,14 +303,24 @@ def _row_to_sub(row: tuple[Any, ...], dispatch_count: int) -> SubscriptionRow:
     )
 
 
-# Every in-app read and count of `notification_dispatches d` hides a dispatch
-# about a property the caller dismissed (migration 536). Detection still writes
-# it — the matcher's cursor and the `reactivated` detector depend on every row
-# existing — so an undo brings it back intact. RLS-scoped: the view is the
-# caller's own; a system_health row (property_id NULL) never matches.
-_NOT_DISMISSED = (
-    "NOT EXISTS (SELECT 1 FROM property_dismissals_public pd "
-    "WHERE pd.property_id = d.property_id)"
+# VISIBLE (program § 3.6): what an account sees of its alerts, ONE fragment over
+# `notification_dispatches d`, carried by every in-app read, count and update (the feed and its
+# total, the unread count, mark-all-seen, mark-seen, each watchdog's count) and by W4's push
+# fan-out. Three arms, each answering the same under RLS and on the service role:
+#   - not a marked repeat (`duplicate_of`, written by a merge since migration 653);
+#   - not about a property the EVENT'S OWN account dismissed (migration 536's active row, probed
+#     on its (property_id, account_id) index: the service role bypasses RLS, so the account is
+#     named, never left to the caller's policy);
+#   - not from a retired watchdog (a delete retires it, F21; its rows stay for analysis).
+# Detection still writes every row — the `reactivated` detector reads prior ones — so an undo
+# brings it back intact; a system_health row (property_id NULL) is never dismissed.
+VISIBLE_SQL = (
+    "d.duplicate_of IS NULL "
+    "AND NOT EXISTS (SELECT 1 FROM property_dismissals pd "
+    "WHERE pd.property_id = d.property_id AND pd.account_id = d.account_id "
+    "AND pd.lifted_at IS NULL) "
+    "AND (d.subscription_id IS NULL OR EXISTS (SELECT 1 FROM notification_subscriptions ws "
+    "WHERE ws.id = d.subscription_id AND ws.retired_at IS NULL))"
 )
 
 
@@ -307,12 +329,13 @@ def list_subscriptions(
     *,
     include_inactive: bool = True,
 ) -> list[dict[str, Any]]:
-    where = "" if include_inactive else "WHERE is_active = true"
+    # A retired watchdog (deleted, F21) leaves the list; its rows stay, hidden by VISIBLE_SQL.
+    where = "WHERE retired_at IS NULL" + ("" if include_inactive else " AND is_active = true")
     sql = (
         f"SELECT {_SUB_COLS}, "
         "  (SELECT count(*) FROM notification_dispatches d "
         "     WHERE d.subscription_id = notification_subscriptions.id "
-        f"    AND {_NOT_DISMISSED}) AS dispatch_count "
+        f"    AND {VISIBLE_SQL}) AS dispatch_count "
         "FROM notification_subscriptions "
         f"{where} "
         "ORDER BY created_at DESC"
@@ -330,8 +353,8 @@ def get_subscription(
         cur.execute(
             f"SELECT {_SUB_COLS}, "
             "  (SELECT count(*) FROM notification_dispatches d "
-            f"    WHERE d.subscription_id = %s AND {_NOT_DISMISSED}) AS dispatch_count "
-            "FROM notification_subscriptions WHERE id = %s",
+            f"    WHERE d.subscription_id = %s AND {VISIBLE_SQL}) AS dispatch_count "
+            "FROM notification_subscriptions WHERE id = %s AND retired_at IS NULL",
             (subscription_id, subscription_id),
         )
         row = cur.fetchone()
@@ -393,7 +416,7 @@ def update_subscription(
     with conn.cursor() as cur:
         cur.execute(
             f"UPDATE notification_subscriptions SET {', '.join(sets)} "
-            "WHERE id = %s",
+            "WHERE id = %s AND retired_at IS NULL",
             params,
         )
         if cur.rowcount == 0:
@@ -404,10 +427,14 @@ def update_subscription(
 def delete_subscription(
     conn: "psycopg.Connection", subscription_id: str,
 ) -> bool:
-    """Hard delete. Cascade drops the dispatches via the FK."""
+    """Retire, never delete (F21; program § 3.2): the watchdog stops matching (the producers
+    read `retired_at IS NULL`), leaves list and get, and its alerts leave every read through
+    VISIBLE_SQL while the rows stay for analysis — the FK's cascade no longer erases them. True
+    when a live watchdog was retired; a missing or already retired one is the route's 404."""
     with conn.cursor() as cur:
         cur.execute(
-            "DELETE FROM notification_subscriptions WHERE id = %s",
+            "UPDATE notification_subscriptions SET retired_at = now(), is_active = false "
+            "WHERE id = %s AND retired_at IS NULL",
             (subscription_id,),
         )
         return cur.rowcount > 0
@@ -451,21 +478,19 @@ _LISTING_PROJECTION = (
 # subscription_id NULL, so an INNER join to subscriptions would silently drop it.
 # Exposes the source discriminator + provenance the watchdog feed never needed.
 # `share_kind` says what a share opens, read off its change_kind (`shared_<collection|pipeline|
-# dashboard>`, migration 652) — off the key for a row still labelled 'shared' (a grant between
-# 652's apply and the deploy, until its re-run), so it keeps its link; `share_ref` its id, still
-# read off the key (api/shares.py: `share:<kind>:<collection id | owner | dashboard id>:…`)
-# until W3 retires the key.
+# dashboard>`, migration 652); `share_ref` its id, off the share's own columns (api/shares.py),
+# never a key: the collection id, the pipeline owner (the actor), the dashboard id (event_ref).
 _DISPATCH_SELECT = (
     "d.id, d.source_kind, "
     "d.subscription_id, s.name AS subscription_name, "
     "d.collection_id, c.name AS collection_name, "
     "d.listing_id, d.property_id, d.change_kind, d.message, "
-    "CASE WHEN d.source_kind = 'share' THEN CASE WHEN d.change_kind = 'shared' "
-    "THEN split_part(d.dedupe_key, ':', 2) ELSE split_part(d.change_kind, '_', 2) END "
-    "END AS share_kind, "
-    "CASE WHEN d.source_kind = 'share' THEN split_part(d.dedupe_key, ':', 3) END AS share_ref, "
+    "CASE WHEN d.source_kind = 'share' THEN split_part(d.change_kind, '_', 2) END AS share_kind, "
+    "CASE d.change_kind WHEN 'shared_collection' THEN d.collection_id::text "
+    "  WHEN 'shared_pipeline' THEN d.actor_account_id::text "
+    "  WHEN 'shared_dashboard' THEN d.event_ref END AS share_ref, "
     "d.dispatched_at, d.seen_at, "
-    "d.trigger_price_czk, d.prev_price_czk, d.trigger_snapshot_id, "
+    "d.trigger_price_czk, d.prev_price_czk, "
     f"{_LISTING_PROJECTION}"
 )
 
@@ -509,7 +534,7 @@ def list_dispatches(
     shift as new dispatches prepend). `id` is a uuid — fine as a
     deterministic tiebreaker. `total` is computed once, on the first page.
     """
-    where: list[str] = [_NOT_DISMISSED]
+    where: list[str] = [VISIBLE_SQL]
     params: dict[str, Any] = {}
     if subscription_id is not None:
         where.append("d.subscription_id = %(subscription_id)s")
@@ -594,16 +619,33 @@ def _dispatch_row_to_dict(cols: list[str], row: tuple[Any, ...]) -> dict[str, An
     return out
 
 
+# The row a tap on `dispatch_id` stands for: itself, or, for a row a merge marked a duplicate, the
+# row it duplicates (the survivor's, which the carrier keeps flat: one hop). Under RLS a foreign id
+# resolves to nothing.
+_RESOLVE_DISPATCH_SQL = (
+    "SELECT coalesce(d.duplicate_of, d.id) FROM notification_dispatches d WHERE d.id = %s"
+)
+
+
 def mark_dispatch_seen(
     conn: "psycopg.Connection", dispatch_id: str,
 ) -> dict[str, Any] | None:
+    """Mark one visible dispatch seen and return it. An id a merge later marked a duplicate
+    resolves to the row it duplicates first, which is the one stamped and returned, so a tap on an
+    old push lands on the survivor's alert; None (the route's 404) when the resolved row is missing
+    or hidden (VISIBLE_SQL)."""
     with conn.cursor() as cur:
+        cur.execute(_RESOLVE_DISPATCH_SQL, (dispatch_id,))
+        row = cur.fetchone()
+        if row is None:
+            return None
+        target = str(row[0])
         cur.execute(
-            "UPDATE notification_dispatches SET seen_at = now() "
-            "WHERE id = %s AND seen_at IS NULL",
-            (dispatch_id,),
+            "UPDATE notification_dispatches d SET seen_at = now() "
+            f"WHERE d.id = %s AND d.seen_at IS NULL AND {VISIBLE_SQL}",
+            (target,),
         )
-    return _fetch_dispatch(conn, dispatch_id)
+    return _fetch_dispatch(conn, target)
 
 
 def _fetch_dispatch(
@@ -612,7 +654,7 @@ def _fetch_dispatch(
     sql = (
         f"SELECT {_DISPATCH_SELECT} "
         f"{_DISPATCH_FROM}"
-        "WHERE d.id = %s"
+        f"WHERE d.id = %s AND {VISIBLE_SQL}"
     )
     with conn.cursor() as cur:
         cur.execute(sql, (dispatch_id,))
@@ -628,7 +670,7 @@ def get_unread_count(conn: "psycopg.Connection") -> dict[str, int]:
     with conn.cursor() as cur:
         cur.execute(
             "SELECT count(*) FROM notification_dispatches d "
-            f"WHERE d.seen_at IS NULL AND {_NOT_DISMISSED}"
+            f"WHERE d.seen_at IS NULL AND {VISIBLE_SQL}"
         )
         row = cur.fetchone()
     return {"unread_count": int(row[0]) if row else 0}
@@ -641,12 +683,12 @@ def mark_all_seen(
 ) -> int:
     """Mark every visible unseen dispatch (optionally scoped to a source) as seen.
 
-    A dismissed property's dispatches are not visible, so they keep their unseen
-    state for when the dismissal is undone.
+    A hidden dispatch (VISIBLE_SQL: a repeat, a dismissed property's, a retired watchdog's) keeps
+    its unseen state, so a dismissal undone brings it back unread.
     """
     sql = (
         "UPDATE notification_dispatches d SET seen_at = now() "
-        f"WHERE d.seen_at IS NULL AND {_NOT_DISMISSED}"
+        f"WHERE d.seen_at IS NULL AND {VISIBLE_SQL}"
     )
     with conn.cursor() as cur:
         if source_kind == "all":
@@ -661,10 +703,11 @@ def mark_all_seen(
 # Three producers, one clock: the realtime worker's `notifications` lane runs `match_once`
 # (step watchdog_new), `match_changes_once` (price) and `match_monitored_collections_once`
 # (monitor) every 300 s, each step on its own connection. Until W2b the API's matcher_loop
-# below calls the same three beside it. Every INSERT is a target-less ON CONFLICT DO NOTHING
-# over the dedupe_key UNIQUE, and the keys keep the pre-W2 grammar byte for byte
-# (tests/api/test_notifications.py pins it), so two runners write a union, never a duplicate.
-# Each row also carries `event_ref` (migration 652), the discriminator W3's identity reads.
+# below calls the same three beside it. Every INSERT ends in ON_EVENT_CONFLICT, the one identity
+# (EVENT_IDENTITY, migration 653), so a re-run or a second runner writes a union, never a
+# duplicate. `event_ref` (migration 652) is the discriminator within (source, kind, property);
+# each producer's equals what 652 backfilled from the pre-W3 key on the rows written before it
+# (tests/api/test_notifications.py renders and pins both), so no event already told re-fires.
 
 # How far back each producer looks (program § 3.3, ruling R6 (a)). A watchdog's windows also
 # start no earlier than its `active_since`, a collection's no earlier than `monitor_since`.
@@ -693,9 +736,15 @@ def _commit_one(conn: "psycopg.Connection", sql: str, params: dict[str, Any]) ->
     """One producer statement in its own transaction under the bound, committed at once: the KEY
     SHARE locks its INSERT takes on the properties it dispatches last one statement, never a whole
     step, so a merge (autodedup's 5 s lock_timeout) never waits on a producer. SET LOCAL, never a
-    session SET: connect() is the transaction-mode pooler, where a session GUC leaks to others."""
+    session SET: connect() is the transaction-mode pooler, where a session GUC leaks to others.
+
+    The notification-events lock, SHARED, as its own statement before the INSERT (the protocol is
+    toolkit.property_carriers'): the identity includes property_id, which a merge changes, so the
+    INSERT's snapshot must come after any merge holding the lock has committed, and a merge that
+    comes second must wait for this commit and mark the twin it then sees."""
     with conn.transaction(), conn.cursor() as cur:
         cur.execute(f"SET LOCAL statement_timeout = '{PRODUCER_STATEMENT_TIMEOUT}'")
+        cur.execute(NOTIFICATION_EVENTS_SHARED_LOCK_SQL)
         cur.execute(sql, params)
         return cur.rowcount or 0
 
@@ -788,8 +837,8 @@ def _load_image_gate_settings(conn: "psycopg.Connection") -> ImageGateSettings:
     )
 
 
-# The watchdogs a producer serves: switched on and not retired (migration 652; nothing
-# retires one before W3, when deleting a watchdog becomes retiring it).
+# The watchdogs a producer serves: switched on and not retired (migration 652; deleting a
+# watchdog retires it, `delete_subscription`).
 _LIVE_WATCHDOGS_SQL = (
     "SELECT id, filter_spec, active_since FROM notification_subscriptions "
     "WHERE is_active = true AND retired_at IS NULL"
@@ -845,13 +894,12 @@ def _insert_per_watchdog(
 _WATCHDOG_NEW_SQL = (
     "INSERT INTO notification_dispatches "
     "  (subscription_id, source_kind, property_id, listing_id, "
-    "   change_kind, trigger_price_czk, event_ref, dedupe_key) "
+    "   change_kind, trigger_price_czk, event_ref) "
     "SELECT %(subscription_id)s, 'watchdog', l.property_id, l.listing_id, "
-    "       'new', l.price_czk, NULL, "
-    "       'wd:' || %(subscription_id)s || ':new:' || l.property_id::text "
+    "       'new', l.price_czk, NULL "
     "FROM properties_public l "
     "WHERE {where} "
-    "ON CONFLICT DO NOTHING"
+    f"{ON_EVENT_CONFLICT}"
 )
 
 
@@ -863,8 +911,8 @@ def match_once(conn: "psycopg.Connection") -> dict[str, int]:
     active_since)` (F1): a property whose match facts arrive late (its location resolves
     an hour on) still fires while it is under a day old, and a watchdog created, switched
     back on or given a new filter (each restamps `active_since`, migration 652) alerts only
-    on what appears afterwards, never a backfill (R6 (a)). The once-ever
-    `wd:{sub}:new:{property_id}` key is the only idempotence — no cursor, no lookback.
+    on what appears afterwards, never a backfill (R6 (a)). The identity (watchdog, 'new',
+    property; no event_ref) is once ever and the only idempotence — no cursor, no lookback.
 
     Images-first gate (`notifications_new_requires_image`, default on): the INSERT also
     requires `_IMAGE_GATE_SQL`, so a brand-new property with pending image downloads is
@@ -913,14 +961,13 @@ _WATCHDOG_PRICE_SQL = (
     f"WITH {_CANONICAL_PRICE_STEPS} "
     "INSERT INTO notification_dispatches "
     "  (subscription_id, source_kind, property_id, listing_id, change_kind, "
-    "   trigger_snapshot_id, trigger_price_czk, prev_price_czk, event_ref, dedupe_key) "
+    "   trigger_price_czk, prev_price_czk, event_ref) "
     "SELECT %(subscription_id)s, 'watchdog', l.property_id, l.listing_id, 'price_drop', "
-    "       st.snapshot_id, st.price_czk, st.prev_price_czk, st.snapshot_id::text, "
-    "       'wd:' || %(subscription_id)s || ':price_drop:' || st.snapshot_id::text "
+    "       st.price_czk, st.prev_price_czk, st.snapshot_id::text "
     "FROM canonical_steps st "
     "JOIN properties_public l ON l.property_id = st.property_id "
     "WHERE {where} "
-    "ON CONFLICT DO NOTHING"
+    f"{ON_EVENT_CONFLICT}"
 )
 
 
@@ -929,12 +976,11 @@ def match_changes_once(conn: "psycopg.Connection") -> dict[str, int]:
     (`_CANONICAL_PRICE_STEPS`), for both producers.
 
     - Watchdog: one `price_drop` per (live watchdog x matching property x drop step after
-      the watchdog's `active_since`), key `wd:{sub}:price_drop:{snapshot_id}`. The spec
+      the watchdog's `active_since`), event_ref = the step's snapshot id. The spec
       matches the property's CURRENT state through `_build_match_clauses` (rule 16).
     - Collection monitor: one `price_drop` / `price_rise` per (monitored collection x
-      member property x step after `monitor_since`), key
-      `cm:{collection}:{price_drop|price_rise}:{snapshot_id}`, set-based across every
-      monitored collection.
+      member property x step after `monitor_since`), event_ref = the snapshot id,
+      set-based across every monitored collection.
 
     Per-snapshot grain: a property that keeps dropping fires once per real cut, and a
     re-scan of the window is idempotent because the snapshot id is stable.
@@ -989,24 +1035,20 @@ _MONITOR_PRICE_SQL = (
     f"WITH {_CANONICAL_PRICE_STEPS}, {_MONITORED_CTE} "
     "INSERT INTO notification_dispatches "
     "  (source_kind, collection_id, property_id, listing_id, change_kind, "
-    "   trigger_snapshot_id, trigger_price_czk, prev_price_czk, event_ref, dedupe_key) "
+    "   trigger_price_czk, prev_price_czk, event_ref) "
     "SELECT 'collection_monitor', m.collection_id, st.property_id, st.listing_id, "
     "       CASE WHEN st.price_czk < st.prev_price_czk "
     "            THEN 'price_drop' ELSE 'price_rise' END, "
-    "       st.snapshot_id, st.price_czk, st.prev_price_czk, st.snapshot_id::text, "
-    "       'cm:' || m.collection_id::text || ':' || "
-    "         CASE WHEN st.price_czk < st.prev_price_czk "
-    "              THEN 'price_drop' ELSE 'price_rise' END || "
-    "         ':' || st.snapshot_id::text "
+    "       st.price_czk, st.prev_price_czk, st.snapshot_id::text "
     "FROM monitored m "
     "JOIN canonical_steps st ON st.property_id = m.property_id "
     "WHERE st.scraped_at > m.monitor_since "
-    "ON CONFLICT DO NOTHING"
+    f"{ON_EVENT_CONFLICT}"
 )
 
 # inactive — the property went inactive (every listing delisted) and has STAYED inactive
-# for INACTIVE_DWELL (F14). No snapshot; key and event_ref on the epoch of the latest child
-# inactive_at (set on the flip, cleared on reactivation, so a re-inactivation is a fresh event).
+# for INACTIVE_DWELL (F14). No snapshot; event_ref = the epoch of the latest child inactive_at
+# (set on the flip, cleared on reactivation, so a re-inactivation is a fresh event).
 _MONITOR_INACTIVE_SQL = (
     f"WITH {_MONITORED_CTE}, "
     "gone AS ("
@@ -1022,22 +1064,23 @@ _MONITOR_INACTIVE_SQL = (
     "     AND max(l.inactive_at) > m.monitor_since"
     ") "
     "INSERT INTO notification_dispatches "
-    "  (source_kind, collection_id, property_id, listing_id, change_kind, event_ref, "
-    "   dedupe_key) "
+    "  (source_kind, collection_id, property_id, listing_id, change_kind, event_ref) "
     "SELECT 'collection_monitor', g.collection_id, g.property_id, "
     "       g.repr_listing_ref_id, 'inactive', "
-    "       floor(extract(epoch FROM g.inactive_at))::bigint::text, "
-    "       'cm:' || g.collection_id::text || ':inactive:' || g.property_id::text || ':' || "
-    "         floor(extract(epoch FROM g.inactive_at))::bigint::text "
+    "       floor(extract(epoch FROM g.inactive_at))::bigint::text "
     "FROM gone g "
-    "ON CONFLICT DO NOTHING"
+    f"{ON_EVENT_CONFLICT}"
 )
 
 # reactivated — a property we ALREADY alerted as inactive came back active. The prior
 # 'inactive' dispatch is the durable "was dead" marker (listings.inactive_at is cleared on
-# reactivation, so we can't read it); it must itself postdate monitor_since (the LATERAL ON),
-# so a reactivation fires only for a property that went inactive while being monitored. Keyed
-# as before W2 on the epoch of that dispatch's dispatched_at, which is also its event_ref.
+# reactivation, so we can't read it), and only an event counts: both reads skip a row a merge
+# marked a duplicate. It must itself postdate monitor_since (the LATERAL ON),
+# so a reactivation fires only for a property that went inactive while being monitored. Its
+# event_ref is the epoch of that inactive dispatch's dispatched_at: the pre-W3 key's last segment,
+# which 652 backfilled, so a reactivation already told keeps its identity. This supersedes the
+# program's "the id of the inactive dispatch" (PROGRAM.md § 3.2): the grammar already in production
+# wins, and the epoch names the same inactive dispatch for its (collection, property).
 _MONITOR_REACTIVATED_SQL = (
     f"WITH {_MONITORED_CTE}, "
     "back AS ("
@@ -1053,6 +1096,7 @@ _MONITOR_REACTIVATED_SQL = (
     "      AND collection_id = m.collection_id "
     "      AND property_id = m.property_id "
     "      AND change_kind = 'inactive' "
+    "      AND duplicate_of IS NULL "
     "    ORDER BY dispatched_at DESC LIMIT 1"
     "  ) nd ON p.last_seen_at > nd.dispatched_at "
     "       AND nd.dispatched_at > m.monitor_since "
@@ -1062,33 +1106,32 @@ _MONITOR_REACTIVATED_SQL = (
     "      AND r.collection_id = m.collection_id "
     "      AND r.property_id = m.property_id "
     "      AND r.change_kind = 'reactivated' "
+    "      AND r.duplicate_of IS NULL "
     "      AND r.dispatched_at > nd.dispatched_at"
     "  )"
     ") "
     "INSERT INTO notification_dispatches "
-    "  (source_kind, collection_id, property_id, listing_id, change_kind, event_ref, "
-    "   dedupe_key) "
+    "  (source_kind, collection_id, property_id, listing_id, change_kind, event_ref) "
     "SELECT 'collection_monitor', b.collection_id, b.property_id, "
     "       b.repr_listing_ref_id, 'reactivated', "
-    "       floor(extract(epoch FROM b.inactive_at))::bigint::text, "
-    "       'cm:' || b.collection_id::text || ':reactivated:' || b.property_id::text || ':' || "
-    "         floor(extract(epoch FROM b.inactive_at))::bigint::text "
+    "       floor(extract(epoch FROM b.inactive_at))::bigint::text "
     "FROM back b "
-    "ON CONFLICT DO NOTHING"
+    f"{ON_EVENT_CONFLICT}"
 )
 
 # new_source — a sibling listing introduced a NEW portal to the property (a cross-source
-# sighting the dedup engine grouped in). Keyed on the introducing listing, which is also the
-# event_ref (its listing id). Limitation (kept, program § 3.3): fires only when that listing's
-# first_seen_at is inside the window (the common "a portal just listed it" case); a merge of an
-# OLD listing won't fire.
+# sighting the dedup engine grouped in). event_ref = the introducing listing's id. Limitation
+# (kept, program § 3.3): fires only when that listing's first_seen_at is inside the window (the
+# common "a portal just listed it" case); a merge of an OLD listing won't fire.
 _MONITOR_NEW_SOURCE_SQL = (
     f"WITH {_MONITORED_CTE}, "
     "src AS ("
-    "  SELECT m.collection_id, m.monitor_since, l.property_id, l.sreality_id, "
+    "  SELECT m.collection_id, m.monitor_since, l.property_id, "
     "         l.id AS listing_id, l.first_seen_at, "
+    # The introducing ad must not change between passes, or its event_ref (and so the identity)
+    # would: the legacy handle breaks a first-seen tie as before, the surrogate breaks the rest.
     "         row_number() OVER (PARTITION BY m.collection_id, l.property_id, l.source "
-    "                            ORDER BY l.first_seen_at, l.sreality_id) AS rn, "
+    "                            ORDER BY l.first_seen_at, l.sreality_id, l.id) AS rn, "
     "         min(l.first_seen_at) OVER (PARTITION BY m.collection_id, l.property_id) AS prop_first "
     "  FROM monitored m "
     "  JOIN listings l ON l.property_id = m.property_id"
@@ -1103,26 +1146,15 @@ _MONITOR_NEW_SOURCE_SQL = (
     "  FROM src"
     ") "
     "INSERT INTO notification_dispatches "
-    "  (source_kind, collection_id, property_id, listing_id, change_kind, event_ref, "
-    "   dedupe_key) "
+    "  (source_kind, collection_id, property_id, listing_id, change_kind, event_ref) "
     "SELECT 'collection_monitor', src.collection_id, src.property_id, "
-    "       src.listing_id, 'new_source', src.listing_id::text, "
-    # dedupe_key is NOT NULL, and `||` yields NULL if ANY operand is NULL:
-    # post-Gate-2 a new non-sreality listing (sreality_id NULL) would make
-    # the whole key NULL and abort the ENTIRE collection-monitor pass with a
-    # not-null violation — not just skip that row. COALESCE onto the
-    # surrogate keeps every EXISTING key byte-identical (so nothing already
-    # dispatched can re-fire) while giving NULL-sreality rows a stable,
-    # collision-free key of their own ('l' prefix disambiguates the two
-    # id-spaces).
-    "       'cm:' || src.collection_id::text || ':new_source:' || "
-    "         coalesce(src.sreality_id::text, 'l' || src.listing_id::text) "
+    "       src.listing_id, 'new_source', src.listing_id::text "
     "FROM src_counted src "
     "WHERE src.rn = 1 AND src.n_sources >= 2 "
     "  AND src.first_seen_at > src.prop_first "
     "  AND src.first_seen_at > now() - %(monitor_window)s::interval "
     "  AND src.first_seen_at > src.monitor_since "
-    "ON CONFLICT DO NOTHING"
+    f"{ON_EVENT_CONFLICT}"
 )
 
 
@@ -1133,8 +1165,8 @@ def match_monitored_collections_once(conn: "psycopg.Connection") -> dict[str, in
     `source_kind='collection_monitor'` dispatches for `inactive` (gone for a day, F14) /
     `reactivated` (lifecycle) and `new_source` (a sibling listing appeared on another
     portal); its price detector is step price (`match_changes_once`). Each dispatch carries
-    `collection_id` (the source, required by source_ck) and a per-event `dedupe_key`
-    (`cm:{collection}:{kind}:{discriminator}`), so re-runs over an overlapping window are
+    `collection_id` (the source, required by source_ck) and a per-event `event_ref` (the
+    discriminator within the identity), so re-runs over an overlapping window are
     idempotent and a 2nd real change is its own event. Set-based: one INSERT...SELECT per
     kind across ALL monitored collections.
 
@@ -1216,7 +1248,7 @@ def _try_matcher_lease(conn: "psycopg.Connection", holder: str) -> bool:
 def _acquire_matcher_lease(holder: str) -> bool:
     """Claim the single-runner lease (migration 366) so N API replicas don't fan
     out N× market-wide scans. Fail-OPEN (return True → run the pass) on any error,
-    incl. the table not existing during a rollout window: the per-event dedupe_key
+    incl. the table not existing during a rollout window: the identity index (migration 653)
     keeps a duplicated pass harmless (rule #16), and failing open preserves the
     pre-lease single-replica behaviour."""
     try:
@@ -1261,7 +1293,7 @@ async def matcher_loop(stop_event: asyncio.Event) -> None:
     matcher (`match_changes_once`) runs at most once per
     `notifications_change_match_interval_seconds` (default 86400 = daily); the
     gate is in-memory, so a process restart simply runs it once on the next
-    pass — harmless, the UNIQUE constraint dedups.
+    pass — harmless, the identity index dedups.
     """
     LOG.info("notification matcher loop starting")
     # monotonic timestamp of the last property-change pass; 0 => run on the
@@ -1334,7 +1366,7 @@ async def matcher_loop(stop_event: asyncio.Event) -> None:
         # Collection-monitor producer (Sprint C), gated to its own cadence
         # (`notifications_monitor_interval_seconds`, default daily). Same
         # in-memory monotonic gate as the change matcher; a restart re-runs it
-        # once (the dedupe_key UNIQUE absorbs the overlap).
+        # once (the identity index absorbs the overlap).
         monitor_interval = 86400
         try:
             monitor_interval = await asyncio.to_thread(_read_monitor_interval_seconds)

@@ -157,6 +157,8 @@ class FakeDb:
 
     # --- the statements
     def dispatch(self, sql: str, p: dict[str, Any]) -> list[tuple]:  # noqa: C901
+        if sql == property_carriers.NOTIFICATION_EVENTS_LOCK_SQL:
+            return []
         if sql == RT_LEASE_TAKE_SQL:
             held = self.lease.get(p["name"])
             if held and held["holder"] != p["holder"] and held["live"]:
@@ -1129,10 +1131,12 @@ def test_the_apply_time_recheck_locks_and_re_reads_categories_and_scope() -> Non
     assert {row["cluster_key"]: row["reasons"] for row in result["skipped_at_apply"]} == {
         10: [A.SKIP_CATEGORY_TYPE, A.SKIP_CARRIES_OUT_OF_SCOPE],
         20: [A.SKIP_CARRIES_OUT_OF_SCOPE]}
-    # The properties are locked FOR UPDATE, then their listings FOR SHARE, before any check.
+    # The properties are locked FOR UPDATE, then their listings FOR SHARE, before any check; the
+    # notification-events lock comes before both (toolkit.property_carriers: never after a row lock).
     assert "for update" in S.LOCK_PROPERTIES_SQL and "for share" in S.LOCK_PROPERTY_LISTINGS_SQL
     first_lock = db.statements.index(S.LOCK_PROPERTIES_SQL)
     assert first_lock < db.statements.index(S.LOCK_PROPERTY_LISTINGS_SQL)
+    assert db.statements[first_lock - 1] == property_carriers.NOTIFICATION_EVENTS_LOCK_SQL
 
 
 @pytest.mark.parametrize("ruled", [False, True])

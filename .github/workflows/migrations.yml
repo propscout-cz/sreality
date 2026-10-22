@@ -639,7 +639,7 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"
-        run: pytest tests/test_property_carriers_live.py -q
+        run: pytest tests/test_property_carriers_live.py tests/test_652_notifications_live.py tests/test_notification_events_lock_live.py -q
 
       # W4's whole claim is that FIVE relations publish ONE number. Nothing else
       # in CI can see that: the fake connections cannot evaluate SQL, and PREPARE

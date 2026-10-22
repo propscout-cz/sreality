@@ -52,10 +52,6 @@ const CHANGE_META: Record<DispatchChangeKind, { label: string; dot: string }> = 
   shared_pipeline:   { label: 'Shared pipeline',   dot: 'var(--color-ink-3)' },
 };
 
-/* A share row whose kind the feed does not know yet (a grant made between migration 652
- * and the deploy keeps the old 'shared'). */
-const SHARED_FALLBACK = { label: 'Shared', dot: 'var(--color-ink-3)' };
-
 const SOURCE_TABS: ReadonlyArray<{ key: SourceFilter; label: string }> = [
   { key: 'all', label: 'All' },
   { key: 'collection_monitor', label: 'Monitoring' },
@@ -351,7 +347,7 @@ function ShareNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }) {
   const markSeen = useMarkSeen(d);
   const unread = d.seen_at == null;
   const unreadId = useId();
-  const meta = CHANGE_META[d.change_kind] ?? SHARED_FALLBACK;
+  const meta = CHANGE_META[d.change_kind];
   const kind = d.share_kind ? SHARE_META[d.share_kind] : null;
   const to = dispatchTarget(d);
 
