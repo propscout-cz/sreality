@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 
 from psycopg.types.json import Jsonb
 
+from location_data.claims_common import COHORT_LOCATION_FROM
 from scraper.overpass_client import OverpassClient
 from toolkit.comparables import (
     ComparableFilters,
@@ -332,10 +333,9 @@ def build_corridor_query(
         "      PARTITION BY l.id\n"
         "      ORDER BY ST_Distance(ll.geom::geography, nl.geom)\n"
         "    ) AS rn\n"
-        "  FROM listings l\n"
-        # W4-a: the pin comes from listing_location, cast to geography so the
+        # The pin is the property's location advert (ruling R8), cast to geography so the
         # corridor stays a metre distance (ll.geom is geometry).
-        "  JOIN listing_location ll ON ll.listing_id = l.id\n"
+        f"  FROM {COHORT_LOCATION_FROM}\n"
         "  JOIN near_lines nl\n"
         "    ON ST_DWithin(ll.geom::geography, nl.geom, %(corridor_m)s)\n"
         f"  WHERE {listing_where_sql}\n"

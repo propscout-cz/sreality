@@ -6,6 +6,7 @@ are monkeypatched.
 
 from __future__ import annotations
 
+import importlib
 import time
 from types import SimpleNamespace
 from typing import Any
@@ -14,7 +15,7 @@ import psycopg
 import pytest
 from datetime import datetime, timedelta, timezone
 
-from scraper import delist_policy, portal_runner
+from scraper import delist_policy, portal_factory, portal_runner
 from scraper.portal_runner import DrainItem
 
 
@@ -421,6 +422,47 @@ def test_index_walk_all_categories_failed_returns_nonzero_rc(monkeypatch):
     assert agg["errors"] == 2
     assert cap["queued"] == []
     assert agg["index_pages"] == 0
+
+
+def test_every_by_category_entry_says_how_its_declared_total_reads(monkeypatch):
+    """The health checks read a unit's declared total from these keys and never from a portal's
+    name: the total under DECLARED_TOTAL_KEY, beside total_is_count (the total is what the walk
+    saw) and declared_is_upper_bound. A portal that declares neither, as these fakes, says False."""
+    _nominations(monkeypatch)
+    _rc, agg = portal_runner.run_index_walk(_FakePortal(result_size=87), dry_run=False)
+    assert portal_runner.DECLARED_TOTAL_KEY == "sreality_result_size"  # read by matviews 233/354
+    assert [(c[portal_runner.DECLARED_TOTAL_KEY], c["total_is_count"],
+             c["declared_is_upper_bound"]) for c in agg["by_category"]] == [
+        (87, False, False), (87, False, False)]
+    counted = _FakePortal(walk_fails={"B"})
+    counted.total_is_count = True
+    counted.coverage_denominator_is_upper_bound = True
+    _rc, agg = portal_runner.run_index_walk(counted, dry_run=False)
+    # the failed category's entry carries them too
+    assert [(c["total_is_count"], c["declared_is_upper_bound"]) for c in agg["by_category"]] == [
+        (True, True), (True, True)]
+
+
+def test_an_upper_bound_denominator_logs_its_coverage_gap_at_info(monkeypatch, caplog):
+    """A national total its slices cannot reach would warn on every walk: noise, not an alarm."""
+    _nominations(monkeypatch)
+    p = _FakePortal(categories=["A"], reached_end=True, result_size=87)
+    p.coverage_denominator_is_upper_bound = True
+    with caplog.at_level("INFO"):
+        portal_runner.run_index_walk(p, dry_run=False)
+    (line,) = [r for r in caplog.records if r.getMessage().startswith("COVERAGE cm=A")]
+    assert line.levelname == "INFO"
+
+
+def test_only_the_portals_whose_total_is_what_they_saw_declare_it() -> None:
+    """remax and maxima state only per-agenda totals, so their walk returns what it saw as each
+    category's total. Data cannot tell (56 of 110 units had declared = collected on every walk in
+    14 d), so each adapter declares it and every other portal keeps PortalDefaults' False."""
+    declared = {
+        source for source, (module, cls) in portal_factory.PORTAL_CLASSES.items()
+        if getattr(getattr(importlib.import_module(module), cls), "total_is_count", False)}
+    assert declared == {"maxima", "remax"}
+    assert portal_runner.PortalDefaults.total_is_count is False
 
 
 # --- run_detail_drain -------------------------------------------------------
@@ -944,13 +986,13 @@ class _PhaseRecorder:
         self.starts: list[tuple[str, str]] = []
         self.finals: list[tuple[int, dict[str, Any]]] = []
         self.bumps: list[tuple[int, dict[str, Any]]] = []
-        self.signatures: list[tuple[str, str, str]] = []
-        monkeypatch.setattr(portal_runner.db, "connect", lambda: _Conn())
-        monkeypatch.setattr(
-            portal_runner, "record_failure_signature",
-            lambda _c, exc, *, source, lane: self.signatures.append(
-                (type(exc).__name__, source, lane)),
-        )
+        self.connects = 0
+
+        def _connect() -> _Conn:
+            self.connects += 1
+            return _Conn()
+
+        monkeypatch.setattr(portal_runner.db, "connect", _connect)
         monkeypatch.setattr(
             portal_runner.db, "scrape_run_start",
             lambda _c, run_type, source: (
@@ -1096,13 +1138,13 @@ def test_run_phase_crash_recording_failure_never_masks_the_real_exception(monkey
         portal_runner.run_phase(_FakePortal(), "detail", _crash, False)
 
 
-# --- W3.1: the crash path is also the failure-signature producer -----------
+# --- the crash log line: what says which portal and lane died ---------------
 
 
-def test_run_phase_crash_records_a_failure_signature_with_portal_and_lane(monkeypatch):
-    """The chokepoint has portal + lane in scope; _record_run_crash never did. Without
-    them an incident cannot say which portal it came from."""
-    rec = _PhaseRecorder(monkeypatch)
+def test_run_phase_crash_logs_its_portal_and_lane(monkeypatch, caplog):
+    """The chokepoint has portal + lane in scope, and the crash line carries both; the
+    workflow's job cell carries the line as the run's reason."""
+    _PhaseRecorder(monkeypatch)
 
     def _crash(portal, dry_run, **kw):
         raise psycopg.errors.CheckViolation(
@@ -1110,14 +1152,16 @@ def test_run_phase_crash_records_a_failure_signature_with_portal_and_lane(monkey
             '"listings_area_basis_check"'
         )
 
-    with pytest.raises(psycopg.errors.CheckViolation):
-        portal_runner.run_phase(_FakePortal(), "detail", _crash, False)
-    assert rec.signatures == [("CheckViolation", "fake", "detail")]
+    with caplog.at_level("ERROR", logger="scraper.portal_runner"):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            portal_runner.run_phase(_FakePortal(), "detail", _crash, False)
+    (line,) = [r.getMessage() for r in caplog.records if r.getMessage().startswith("PHASE")]
+    assert "source=fake lane=detail" in line and "listings_area_basis_check" in line
 
 
-def test_run_phase_records_a_signature_even_with_no_scrape_run_row(monkeypatch):
-    """The old early-return on run_id=None meant a crash after a failed
-    scrape_run_start left NO trace anywhere at all."""
+def test_a_crash_with_no_scrape_run_row_is_logged_and_writes_nothing(
+        monkeypatch, caplog):
+    """No row to bump means nothing to write: the crash is logged and re-raised."""
     rec = _PhaseRecorder(monkeypatch)
     monkeypatch.setattr(
         portal_runner.db, "scrape_run_start",
@@ -1127,65 +1171,13 @@ def test_run_phase_records_a_signature_even_with_no_scrape_run_row(monkeypatch):
     def _crash(portal, dry_run, **kw):
         raise RuntimeError("boom")
 
-    with pytest.raises(RuntimeError):
-        portal_runner.run_phase(_FakePortal(), "index", _crash, False)
-    assert rec.bumps == []                                   # no row to bump
-    assert rec.signatures == [("RuntimeError", "fake", "index")]
-
-
-def test_a_failing_signature_write_never_masks_the_real_exception(monkeypatch):
-    _PhaseRecorder(monkeypatch)
-    monkeypatch.setattr(
-        portal_runner, "record_failure_signature",
-        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("incident table missing")),
-    )
-
-    def _crash(portal, dry_run, **kw):
-        raise ValueError("the real problem")
-
-    with pytest.raises(ValueError, match="the real problem"):
-        portal_runner.run_phase(_FakePortal(), "detail", _crash, False)
-
-
-def test_record_failure_signature_derives_the_key_from_the_text_only(monkeypatch):
-    """The asymmetry the whole wave rests on: same error, different portal and lane,
-    one signature."""
-    seen: list[dict[str, Any]] = []
-    import toolkit.ops_incidents as oi
-
-    monkeypatch.setattr(oi, "record_failure_signature",
-                        lambda _c, sig, **kw: seen.append({"sig": sig, **kw}))
-    monkeypatch.setattr(oi, "actions_context",
-                        lambda: (".github/workflows/x.yml", "https://gh/run/9"))
-    exc = psycopg.errors.CheckViolation(
-        'new row for relation "listings" violates check constraint '
-        '"listings_area_basis_check"'
-    )
-    portal_runner.record_failure_signature(_Conn(), exc, source="mmreality", lane="detail")
-    portal_runner.record_failure_signature(_Conn(), exc, source="remax", lane="index")
-    assert seen[0]["sig"] == seen[1]["sig"]
-    assert "listings_area_basis_check" in seen[0]["sig"]
-    assert [s["origin"] for s in seen] == ["mmreality/detail", "remax/index"]
-    assert seen[0]["workflow_path"] == ".github/workflows/x.yml"
-
-
-def test_the_chokepoint_stamps_its_actions_run_id(monkeypatch):
-    """The run id is what stops the poller counting this same crash a second time when
-    it meets the concluded run 80-256 minutes later (migration 463). Off-CI it is None
-    — the always-on worker's lanes have no second observer."""
-    seen: list[dict[str, Any]] = []
-    import toolkit.ops_incidents as oi
-
-    monkeypatch.setattr(oi, "record_failure_signature",
-                        lambda _c, sig, **kw: seen.append({"sig": sig, **kw}))
-    monkeypatch.setattr(oi, "actions_context", lambda: (None, None))
-    monkeypatch.setenv("GITHUB_RUN_ID", "32788072691")
-    portal_runner.record_failure_signature(
-        _Conn(), RuntimeError("boom"), source="mmreality", lane="detail")
-    monkeypatch.delenv("GITHUB_RUN_ID")
-    portal_runner.record_failure_signature(
-        _Conn(), RuntimeError("boom"), source="mmreality", lane="drain")
-    assert [s["run_id"] for s in seen] == [32788072691, None]
+    with caplog.at_level("ERROR", logger="scraper.portal_runner"):
+        with pytest.raises(RuntimeError, match="boom"):
+            portal_runner.run_phase(_FakePortal(), "index", _crash, False)
+    assert rec.bumps == []
+    assert rec.connects == 1, "the failed scrape_run_start's connection only"
+    assert any(r.getMessage().startswith("PHASE crashed (source=fake lane=index)")
+               for r in caplog.records)
 
 
 def test_run_phase_passes_run_id_and_kwargs_through_to_the_runner(monkeypatch):

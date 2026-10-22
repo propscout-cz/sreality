@@ -143,6 +143,15 @@ select a.member_ids
    and a.member_ids && %(listing_ids)s::bigint[]
 """
 
+# E965: the carried adverts the real-time generation FINGERPRINTS. One it read and grouped
+# with no one is its present word — alone — so no earlier merge vouches it onto a member.
+RT_FINGERPRINTED_SQL = """
+select f.listing_id
+  from autodedup.rt_fp f
+ where f.generation = %(generation)s::text
+   and f.listing_id = any(%(listing_ids)s::bigint[])
+"""
+
 # Every LIVE engine merge whose group named one of these listings: the only thing that lets a
 # merge carry a listing its own group does not hold (E903 `carries_ungrouped_listings`), and
 # what names the engine merge behind a group the operator ruled different after it merged.

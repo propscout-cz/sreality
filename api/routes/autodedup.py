@@ -14,8 +14,8 @@ evidence), the RESIDUAL pairs the engine did not join, one PAIR's full evidence,
 write this program's API owns — the operator's verdict (`autodedup.verdicts`, plus a permanent
 `autodedup.must_not_link` row on a negative pair verdict, dropped again when the operator
 reverses that verdict, §9's feedback loop). That write stays
-inside schema `autodedup`: shadow mode (D4) is untouched, no production table is written, and
-`listings` / `images` are read for display only.
+inside schema `autodedup`: no production table is written, and `listings` / `images` are read
+for display only.
 
 PII (E28): no broker column is selected anywhere (autodedup/ui_sql.py), and every advert text
 — description or title — reaches a response only through one scrubber
@@ -178,8 +178,7 @@ def stats(conn: Any = Depends(deps.get_db_conn)) -> dict[str, Any]:
 
     "Waves closed vs open" (§12) is deliberately NOT here: closing a wave is a gate decision
     taken in PROGRAM.md §14, not a state the ledger carries — `status` is per iteration, and a
-    wave whose every pass read `done` may still be open. Mode is likewise a constant of the
-    program (SHADOW, D4), not a column.
+    wave whose every pass read `done` may still be open.
     """
     if not store_ready(conn):
         return _not_ready()
@@ -1095,7 +1094,8 @@ def groups(
     `sort=random` is the other order this queue serves: the seeded, unbiased sample D6 is
     measured on, stable across pages and reloads for one seed.
 
-    Shadow mode: nothing on this page has been applied to production, and nothing on it can be.
+    Nothing on this page can apply a merge; the engine merges in its lane, inside the apply
+    scope (E904), so an in-scope group may already be one property.
     """
     _reject_unknown_filters(request, GROUP_FILTER_KEYS)
     _one_of("sort", sort, tuple(GROUP_SORTS))

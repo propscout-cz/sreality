@@ -1,27 +1,42 @@
-name: "Monitoring: pipeline verification"
+name: "Monitoring: health canary (hourly)"
 
-# Computes pipeline-health metrics — street/geo dedup debt, the per-source
-# eligibility funnel, merge latency, dedup-engine cycle health, and the LLM
-# error rate — into `pipeline_check_results`, and rings the in-app notification
-# bell (a `system_health` notification_dispatches row) for every `fail`. Born
-# from the 2026-07 incident where the pipeline stalled silently for two days
-# (Anthropic credit exhaustion) with no in-app signal and ~39k suspect unmerged
-# byt pairs sat invisible. On Mondays it also records a random merge-precision
-# sample for operator spot-review.
+# The health canary: the one monitoring workflow, and the one alarm path that needs neither
+# Supabase's scheduler (pg_cron) nor Railway. Each run records failed production runs, measures
+# the GitHub-hosted health checks that are due, then asserts that the watchers and the teller
+# are alive. Only those assertions are meant to turn a run red, and GitHub emails the operator
+# about a red scheduled run.
 #
-# Read-mostly (writes only its own result + alert rows); needs ONLY
-# SUPABASE_DB_URL. Each check is isolated — one failing check writes a `fail`
-# row, never aborts the run.
+# The four assertions (scripts/health_canary.py), the last step:
+#   1. the database answers;
+#   2. pg_cron's liveness watcher (every 5 min) wrote a result in the last 30 min;
+#   3. every liveness cell failing for 15 min has an open incident, else the API's teller
+#      (toolkit/system_alerts.reconcile) is not running;
+#   4. no open, unacknowledged alarm incident has its latest rung (ops_incidents.alerted_at:
+#      onset, 6 h, 24 h, 72 h, then weekly) between 15 min and 12 h old; acknowledging on
+#      Health is the one answer (ruling R2b, 2026-10-21). Gauges are never asserted: their
+#      rungs show on Health.
+# pg_cron watches the worker; this canary watches pg_cron and the teller. A poller or harness
+# crash reds the run too (the canary did not complete); a failing check never does, because
+# the teller tells it from the stored result.
 #
-# Required GitHub secret: SUPABASE_DB_URL.
+# GitHub delivers this hourly cron about five times a day (median gap ~4.9 h), so the email
+# can trail a problem by hours; the watchers themselves run every 5 min and every 60 s. GitHub
+# sends it to whoever last edited the cron line. The worker's health lane took the platform
+# checks in wave 3, the portal checks in wave 4, the engine's in wave 5 and the parsing and
+# quality checks in wave 6. Two are measured in this step for good: migration_drift reads the
+# checkout, and the portal-link probe needs an address other than the scrapers'.
+#
+# A dispatch from a branch other than main measures but never projects the registry, and its
+# poller step writes nothing. Writes only its result, registry and poller rows. Required GitHub secret: SUPABASE_DB_URL; the
+# default GITHUB_TOKEN (actions: read) covers the poller's reads of the Actions API.
 
 on:
   schedule:
-    - cron: "20 */6 * * *"
+    - cron: "15 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Compute + log only; write no result rows and send no alerts"
+        description: "Measure and log the due checks without storing results or registry rows (the poller and the assertions still run)"
         type: boolean
         default: false
 
@@ -30,13 +45,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  verify:
+  canary:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Both GitHub-hosted checks can be due at once (after a long gap, or when the registry
+    # changes). The rail in test_verify_pipeline.py fits the poller step's limit, the harness
+    # step's limit and eight minutes for setup and the assertions under this number; the runs
+    # since 2026-10-16 took 22-97 s.
+    timeout-minutes: 19
     permissions:
       contents: read
+      actions: read
     env:
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v6
 
@@ -49,14 +70,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Run pipeline verification
+      # The limit its own workflow had: a wedged poll cannot eat the checks' and assertions' time.
+      - name: Record failed workflow runs
+        timeout-minutes: 5
+        run: python -m scripts.record_workflow_failures
+
+      # Its own limit holds every GitHub-hosted check's budget plus 180 s headroom (the rail in
+      # test_verify_pipeline.py), so an overrun fails this step, which reds the run, instead of the
+      # job's kill, which is silent. It runs after a failed poll, not after a cancel.
+      - name: Measure the GitHub-hosted checks
+        if: ${{ !cancelled() }}
+        timeout-minutes: 6
         run: |
-          ARGS=""
+          ARGS="--host github-actions"
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             ARGS="$ARGS --dry-run"
           fi
-          if [ "$(date +%u)" = "1" ]; then
-            ARGS="$ARGS --weekly"
-          fi
-          echo "verify_pipeline args:${ARGS}"
+          echo "verify_pipeline args: ${ARGS}"
           python -m scripts.verify_pipeline $ARGS
+
+      - name: Assert the watchers and the teller are alive
+        if: always()
+        run: python -m scripts.health_canary

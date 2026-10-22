@@ -6,13 +6,13 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-import requests
 
 fastapi = pytest.importorskip("fastapi")
 TestClient = pytest.importorskip("fastapi.testclient").TestClient
 
 from api import dependencies as deps
 from api import main as api_main
+from api import http_json
 from api import sreality_price_map as spm
 
 # Popelky Biliánové 534, Králův Dvůr — the listing point.
@@ -63,11 +63,11 @@ class Calls(list):
 def calls(monkeypatch) -> Calls:
     seen = Calls()
 
-    def fake(url: str, params: dict[str, Any]) -> dict[str, Any]:
-        seen.append(params)
-        return seen.answers.get(params["category"], {"results": []})
+    def fake(method: str, url: str, **kw: Any) -> dict[str, Any]:
+        seen.append(kw["params"])
+        return seen.answers.get(kw["params"]["category"], {"results": []})
 
-    monkeypatch.setattr(spm, "_http_get_json", fake)
+    monkeypatch.setattr(http_json, "fetch_json", fake)
     spm.clear_cache()
     yield seen
     spm.clear_cache()
@@ -211,13 +211,10 @@ def test_route_returns_the_resolution(client, calls) -> None:
 
 def test_route_503s_when_sreality_is_down(client, monkeypatch) -> None:
     spm.clear_cache()
-    resp = requests.Response()
-    resp.status_code = 502
+    def down(method: str, url: str, **kw: Any) -> dict[str, Any]:
+        raise http_json.HttpJsonError("www.sreality.cz", "status", 502)
 
-    def down(url: str, params: dict[str, Any]) -> dict[str, Any]:
-        raise requests.HTTPError("502", response=resp)
-
-    monkeypatch.setattr(spm, "_http_get_json", down)
+    monkeypatch.setattr(http_json, "fetch_json", down)
     res = client.get(
         "/maps/sreality-price-map",
         params={"label": "Králův Dvůr", "lat": KD_LAT, "lng": KD_LNG},

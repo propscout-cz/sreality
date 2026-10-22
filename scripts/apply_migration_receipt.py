@@ -1,8 +1,9 @@
 """Plan / receipt for `apply_migration.yml`: what one migration file declares,
 and — after the apply — whether every declared object exists in the LIVE catalog.
 
-Reuses the parser and the probe SQL of verify_pipeline's `migration_drift`
-check, so "applied" here means exactly what the 6-hourly alarm would accept.
+Reuses the parser and the probe of the `migration_drift` check (both in
+scripts/migration_objects.py), so "applied" here means exactly what the hourly
+alarm accepts.
 The `supabase_migrations.schema_migrations` ledger is deliberately not read:
 it is not the oracle (see scripts/migration_objects.py).
 """
@@ -14,8 +15,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from scripts.migration_objects import MigrationObject, _strip_noise, parse_objects
-from scripts.verify_pipeline import _MIGRATION_OBJECT_PROBE_SQL, _SAFE_IDENT
+from scripts.migration_objects import (
+    MIGRATION_OBJECT_PROBE_SQL,
+    SAFE_IDENT,
+    MigrationObject,
+    _strip_noise,
+    parse_objects,
+)
 
 
 def statement_count(sql: str) -> int:
@@ -27,11 +33,11 @@ def declared(path: Path) -> list[MigrationObject]:
 
 
 def probe(conn: Any, objects: list[MigrationObject]) -> list[tuple[str, str, bool]]:
-    safe = [o for o in objects if _SAFE_IDENT.match(o.ident)]
+    safe = [o for o in objects if SAFE_IDENT.match(o.ident)]
     if not safe:
         return []
     rows = conn.execute(
-        _MIGRATION_OBJECT_PROBE_SQL,
+        MIGRATION_OBJECT_PROBE_SQL,
         {"kinds": [o.kind for o in safe], "idents": [o.ident for o in safe]},
     ).fetchall()
     return [(kind, ident, bool(present)) for kind, ident, present in rows]

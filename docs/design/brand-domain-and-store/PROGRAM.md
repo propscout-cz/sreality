@@ -130,8 +130,9 @@ opened by the coding session.
 1. Railway custom domains `api.<brand>` and `app.<brand>`, each with **two** DNS records (CNAME
    and a TXT verification record), DNS-only. `api` stays DNS-only permanently: Cloudflare's proxy
    cuts responses at 125 s and agent estimations run about four minutes.
-2. API variables: `CORS_ALLOW_ORIGINS` gains the new app origin (old one stays);
-   `SPA_BASE_URL`, `API_PUBLIC_URL` → Deploy. A preflight from both app origins confirms it.
+2. API variable `CORS_ALLOW_ORIGINS` gains the new app origin (old one stays) → Deploy. A
+   preflight from both app origins confirms it. (`SPA_BASE_URL` and `API_PUBLIC_URL` were deleted
+   by notifications push W1, 2026-10-21; nothing reads them.)
 3. Supabase URL configuration: read the current values; add the **old** Railway origin to the
    redirect allowlist explicitly; then switch the Site URL to the new app origin. The old origin
    is probably allowed only because it is today's Site URL.
@@ -211,7 +212,7 @@ Release-job PR, merged only after the store credentials exist (W5):
 
 ### W6 — Decommission
 
-Re-point any Stripe or Resend webhook registered on the old API host. Remove the old app origin
+Re-point the Stripe webhook registered on the old API host (the Resend webhook was deleted 2026-10-21, notifications push W1). Remove the old app origin
 from CORS and Supabase, the old extension ID from Supabase and CORS, the unused redirect entry
 from the Google client, and finally the two `*.up.railway.app` domains (irreversible).
 

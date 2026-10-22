@@ -14,6 +14,8 @@ import {
   dismissProperty,
   getBillingMe,
   getEstimation,
+  ingestListing,
+  ingestState,
   listCollections,
   listNotes,
   listPipelineStages,
@@ -95,10 +97,14 @@ async function handleMessage(
   switch (message.type) {
     case 'lookup_listings':
       return lookupListings(message.items);
+    case 'ingest_listing':
+      return ingestListing(message.url);
+    case 'ingest_state':
+      return ingestState(message.source, message.native_id);
     case 'patch_scenario':
       return patchScenario(message.run_id, message.body);
     case 'create_estimation':
-      return createEstimation(message.url, {
+      return createEstimation(message.listing_id, {
         estimate_kind: message.estimate_kind,
         category_main: message.category_main,
       });

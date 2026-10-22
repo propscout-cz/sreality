@@ -127,6 +127,17 @@ regression). Re-rendered at the end of `ingest_boundaries.yml`.
   city bbox fitted into the split view's map column) lands at z≈9.9, where a z10 floor shows nothing
   but the chip's "Přibližte mapu".
 
+### Railway stations — ČÚZK ZABAGED® `ZABAGED_POLOHOPIS/MapServer/58` (CC BY 4.0, verified live 2026-10-19)
+
+`https://ags.cuzk.gov.cz/arcgis/rest/services/ZABAGED_POLOHOPIS/MapServer`, layer "Železniční stanice,
+zastávka" (id 58): 2,797 points for the whole country at 1:10 000, native EPSG:5514 (fetched native,
+PostGIS transforms, as for the flood register). Fields: `fid_zbg` (stable id), `zst_k` (the SR70-style
+station code), `zst_p` (name), `typ` ∈ {stanice, zastávka}. Class = `typ` (station / halt), name and
+label = `zst_p`, `code` = `zst_k`; an unknown `typ` or an unnamed point refuses the run. ČÚZK has
+published ZABAGED® as open data under CC BY 4.0 since 2023-07-01. Alternatives rejected: ČÚZK Data50
+(2,786 points at 1:50 000, same classes, coarser), Data250 (generalised), Správa železnic (no public
+REST; the SR70 list has no permanent URL), OSM (licence incompatible, less authoritative).
+
 ### Datum control point (both coordinate systems from PID open data, stop Florenc M1B, id 689/101)
 
 S-JTSK (EPSG:5514) x = -741651.9, y = -1042827.75 ⇔ WGS84 lon 14.4369316, lat 50.09053.
@@ -242,6 +253,7 @@ Registry values:
 | metro | Metro | 9–12 | metro (1) | A #00A562, B #FCC400, C #CF003D, D #1F77D0 dash ("Metro D – návrh"), reserve #8C9196 dash ("Územní rezerva"), station #1F77D0 ("Plánovaná stanice") |
 | flood | Záplavová území | 10–12 | flood_q5 (1) #1D4F91, flood_q20 (2) #3B7DD8, flood_q100 (3) #7FB3E6, flood_q500 (4) #C6DCF2, flood_az (5) line #B3261E dash | one class per layer: q5 "Q5 – pětiletá voda", q20, q100 "Q100 – stoletá voda", q500 "Q500 – mapováno jen místy", az "Aktivní zóna" |
 | kraje | Kraje | 3–9 | kraje (1) | kraj rgba(40,40,70,0.55) |
+| railway | Železniční stanice | 7–12 | railway_stations (1) | station #37474F ("Železniční stanice", point, labelled), halt #90A4AE ("Železniční zastávka", point, labelled) |
 | universities | Vysoké školy | 9–12 | universities (1), dorms (2) | primary #5E35B1 ("Hlavní místo výuky (2 000+ studentů)", point, labelled), secondary #B39DDB ("Další pracoviště VŠ", point); dorm #F57C00 ("Kolej", point) |
 
 Notes (Czech, shown in the chip): metro — "Metropolitní plán hl. m. Prahy (platný od 1. 9. 2026):
@@ -252,7 +264,8 @@ překryv pásem je tmavší, přívalové povodně nejsou zahrnuty. Závazné in
 kraje — none; universities — "Místa vysokých škol v Praze podle ÚAP IPR Praha. Hlavní místo výuky =
 budova fakulty nebo školy, kde podle MŠMT (SIMS, poslední zveřejněný rok) studuje 2 000 a více
 studentů prezenčního studia; u škol s pobočkami mimo Prahu jde o počet za celou školu. Další
-pracoviště: ostatní budovy, kliniky, rektoráty, menzy, sportoviště."
+pracoviště: ostatní budovy, kliniky, rektoráty, menzy, sportoviště."; railway — "Železniční stanice a
+zastávky v celé ČR podle ZABAGED® ČÚZK; název a druh podle Správy železnic (kód SR70 v detailu)."
 
 A third reader kind serves the universities layer: `UniversitySites(where)` reads F21 once per run
 (`Http.content`, `parse_f21`), sums the counts per seat (`students_on_site`) and then runs the ArcGIS
@@ -502,4 +515,8 @@ Backend, as built (2026-10-15):
   column H) rather than all students: the combined-form students of the private schools come in
   blocks, so VŠEM (3 266 all / 1 505 present) and Panevropská (2 704 / 1 874) are secondary while
   AMBIS, MUP and VŠFS stay primary.
+- **Railway stations (2026-10-19):** a `railway` section — every station and stop in the country from
+  ČÚZK's ZABAGED® (2,797 points, stanice / zastávka), fetched in native S-JTSK; one registry entry, one
+  mapper, four fixtures, no frontend change. Tiled from z7 so a regional view shows the network's stops
+  without cluttering the country view; labels are the station names (MapLibre thins collisions).
 

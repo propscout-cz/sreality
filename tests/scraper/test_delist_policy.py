@@ -54,8 +54,8 @@ def test_the_dwell_edge_is_inclusive(age: timedelta, confirmed: bool) -> None:
 
 
 def test_the_dwell_is_twelve_hours() -> None:
-    """The operator's ruling (2026-10-09): 12 h, not 24 -- sreality's walk gap is ~5 h, so a
-    true removal closes on the fourth walk after the first verdict (~16 h)."""
+    """The operator's ruling (2026-10-09): 12 h. A true removal still closes about 24 h plus a walk
+    after its first verdict: RECHECK_THROTTLE keeps the ad from re-nomination for 24 h."""
     assert delist_policy.GONE_DWELL == timedelta(hours=12)
 
 

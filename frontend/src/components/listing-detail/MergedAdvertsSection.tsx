@@ -35,7 +35,7 @@ import SplitPanel from '@/components/autodedup/SplitPanel';
 import { priceLabel } from '@/components/autodedup/SplitPlanLines';
 import { UnitSelect, type UnitMap } from '@/components/autodedup/UnitSplit';
 import { SectionLabel } from '@/components/section';
-import { fetchPropertyOrigins, type AdvertOrigin, type SplitLetters } from '@/lib/api';
+import { fetchPropertyOrigins, type AdvertOrigin, type Letters } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import type { ListingBroker } from '@/lib/brokers';
 import { fmtArea, fmtCount, fmtDateSlash, fmtFloor } from '@/lib/format';
@@ -88,7 +88,7 @@ interface SectionProps {
   /* The advert an old advert address asked for: its row opens. */
   openAdvertId?: number | null;
   /* Letters a link brought (`?letters=`, the review pages'): the dialog opens on them. */
-  initialLetters?: SplitLetters;
+  initialLetters?: Letters;
 }
 
 export default function MergedAdvertsSection({

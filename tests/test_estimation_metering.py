@@ -1,6 +1,6 @@
 """Wave 1 metering + atomic submit-time gates (Phase 1 items J + A9).
 
-Hermetic unit tests: the pure key/canonicalization helpers, the pre-parse gate
+Hermetic unit tests: the pure key helper, the pre-INSERT gate
 orchestration (_prepare_metered_submit, every branch), the atomic gated
 _insert_run SQL assembly + no-row handling, create_estimation_run's metered
 routing (short-circuit / 429 / cleared), and the terminal usage_ledger write.
@@ -63,9 +63,13 @@ class _FakeConn:
 
 
 def _agent_body(**kw: Any) -> s.CreateEstimationIn:
-    return s.CreateEstimationIn(
-        url="https://www.sreality.cz/detail/1", source="extension",
-        mode="agent", **kw)
+    return s.CreateEstimationIn(listing_id=1, source="extension", mode="agent", **kw)
+
+
+_AD = er._Resolution(
+    target_spec={"lat": 50.0, "lng": 14.0}, input_listing_id=1, input_sreality_id=1,
+    subject_source="sreality", subject_source_id_native="1",
+)
 
 
 # --- pure helpers --------------------------------------------------------------
@@ -78,20 +82,13 @@ def test_is_privileged() -> None:
     assert er._is_privileged({"sub": "u1"}) is False             # real tenant
 
 
-def test_canonical_url_collapses_variance() -> None:
-    a = er._canonical_url("HTTP://www.Sreality.CZ/detail/9/?utm_source=x&b=2&a=1#frag")
-    b = er._canonical_url("https://www.sreality.cz/detail/9?a=1&b=2")
-    assert a == b
-    assert "utm_source" not in a and "#frag" not in a and a == a.rstrip("/")
-
-
 def test_idempotency_key_forms() -> None:
-    assert er._idempotency_key(s.CreateEstimationIn(sreality_id=7)) == "sid:7"
-    k = er._idempotency_key(s.CreateEstimationIn(url="https://x/1/?utm_a=1"))
-    assert k.startswith("url:") and "utm_a" not in k
-    # two spellings of the same listing collapse to one key
-    assert er._idempotency_key(s.CreateEstimationIn(url="https://x/1")) == \
-        er._idempotency_key(s.CreateEstimationIn(url="https://x/1/"))
+    assert er._idempotency_key(_agent_body(), _AD) == "ad:sreality:1"
+    spec = s.CreateEstimationIn(spec={"lat": 50.0, "lng": 14.0})
+    key = er._idempotency_key(spec, er._Resolution(target_spec={"lat": 50.0, "lng": 14.0}))
+    assert key.startswith("spec:") and key == er._idempotency_key(
+        s.CreateEstimationIn(spec={"lng": 14.0, "lat": 50.0}),
+        er._Resolution(target_spec={}))
 
 
 # --- gate orchestration --------------------------------------------------------
@@ -110,68 +107,68 @@ def _stub(monkeypatch: Any, *, entitled=("active", True, 3), inflight=None,
 def test_gate_ungated_paths(monkeypatch: Any) -> None:
     _stub(monkeypatch)
     # claims None (internal) — never even reads settings
-    assert er._prepare_metered_submit(object(), None, _agent_body(), ACC) is None
+    assert er._prepare_metered_submit(object(), None, _agent_body(), ACC, _AD) is None
     # admin bypass
     assert er._prepare_metered_submit(
-        object(), {"is_admin": True}, _agent_body(), ACC) is None
+        object(), {"is_admin": True}, _agent_body(), ACC, _AD) is None
     # deterministic is free
-    det = s.CreateEstimationIn(url="https://x/1", source="extension", mode="deterministic")
-    assert er._prepare_metered_submit(object(), {"sub": "u"}, det, ACC) is None
+    det = s.CreateEstimationIn(listing_id=1, source="extension", mode="deterministic")
+    assert er._prepare_metered_submit(object(), {"sub": "u"}, det, ACC, _AD) is None
     # SYSTEM account (unresolved) not metered
     assert er._prepare_metered_submit(
-        object(), {"sub": "u"}, _agent_body(), SYSTEM_ACCOUNT_ID) is None
+        object(), {"sub": "u"}, _agent_body(), SYSTEM_ACCOUNT_ID, _AD) is None
 
 
 def test_gate_disabled_flag_bypasses(monkeypatch: Any) -> None:
     _stub(monkeypatch, budget=False)
-    assert er._prepare_metered_submit(object(), {"sub": "u"}, _agent_body(), ACC) is None
+    assert er._prepare_metered_submit(object(), {"sub": "u"}, _agent_body(), ACC, _AD) is None
 
 
 def test_gate_blocks_raw_spec_overrides(monkeypatch: Any) -> None:
     _stub(monkeypatch)
     body = _agent_body(spec_overrides={"lat": 50.0})
     with pytest.raises(HTTPException) as e:
-        er._prepare_metered_submit(object(), {"sub": "u"}, body, ACC)
+        er._prepare_metered_submit(object(), {"sub": "u"}, body, ACC, _AD)
     assert e.value.status_code == 403
 
 
 def test_gate_rejects_unentitled(monkeypatch: Any) -> None:
     _stub(monkeypatch, entitled=("canceled", True, 3))
     with pytest.raises(HTTPException) as e:
-        er._prepare_metered_submit(object(), {"sub": "u"}, _agent_body(), ACC)
+        er._prepare_metered_submit(object(), {"sub": "u"}, _agent_body(), ACC, _AD)
     assert e.value.status_code == 403
     _stub(monkeypatch, entitled=("active", False, 3))   # estimations agenda off
     with pytest.raises(HTTPException) as e2:
-        er._prepare_metered_submit(object(), {"sub": "u"}, _agent_body(), ACC)
+        er._prepare_metered_submit(object(), {"sub": "u"}, _agent_body(), ACC, _AD)
     assert e2.value.status_code == 403
 
 
 def test_gate_short_circuits_duplicate(monkeypatch: Any) -> None:
     _stub(monkeypatch, inflight={"id": 99, "status": "running"})
-    dec = er._prepare_metered_submit(object(), {"sub": "u"}, _agent_body(), ACC)
+    dec = er._prepare_metered_submit(object(), {"sub": "u"}, _agent_body(), ACC, _AD)
     assert dec is not None and dec.short_circuit_run == {"id": 99, "status": "running"}
 
 
 def test_gate_429_over_quota(monkeypatch: Any) -> None:
     _stub(monkeypatch, month=3)   # quota is 3
     with pytest.raises(HTTPException) as e:
-        er._prepare_metered_submit(object(), {"sub": "u"}, _agent_body(), ACC)
+        er._prepare_metered_submit(object(), {"sub": "u"}, _agent_body(), ACC, _AD)
     assert e.value.status_code == 429 and "limit" in e.value.detail.lower()
 
 
 def test_gate_429_over_concurrency(monkeypatch: Any) -> None:
     _stub(monkeypatch, month=0, concurrent=3, cap=3)
     with pytest.raises(HTTPException) as e:
-        er._prepare_metered_submit(object(), {"sub": "u"}, _agent_body(), ACC)
+        er._prepare_metered_submit(object(), {"sub": "u"}, _agent_body(), ACC, _AD)
     assert e.value.status_code == 429 and "in progress" in e.value.detail.lower()
 
 
 def test_gate_clears_with_decision(monkeypatch: Any) -> None:
     _stub(monkeypatch, month=1, concurrent=0, cap=3, entitled=("trialing", True, 10))
-    dec = er._prepare_metered_submit(object(), {"sub": "u"}, _agent_body(), ACC)
+    dec = er._prepare_metered_submit(object(), {"sub": "u"}, _agent_body(), ACC, _AD)
     assert dec is not None and dec.short_circuit_run is None
     assert dec.quota == 10 and dec.concurrency_cap == 3
-    assert dec.idempotency_key.startswith("url:")
+    assert dec.idempotency_key == "ad:sreality:1"
 
 
 # --- _insert_run gated form ----------------------------------------------------
@@ -181,14 +178,14 @@ def _base_fields() -> dict[str, Any]:
     return {
         "account_id": ACC, "source": "extension", "mode": "agent",
         "status": "pending", "estimate_kind": "rent",
-        "input_url": "https://x/1", "input_sreality_id": None,
+        "input_listing_id": 1, "input_sreality_id": None,
     }
 
 
 def test_insert_run_gated_builds_atomic_sql() -> None:
     conn = _FakeConn(default_row=(7,))
-    dec = er._MeterDecision("sid:1", 3, 2)
-    rid = er._insert_run(conn, gate=dec, idempotency_key="sid:1", **_base_fields())
+    dec = er._MeterDecision("ad:sreality:1", 3, 2)
+    rid = er._insert_run(conn, gate=dec, idempotency_key="ad:sreality:1", **_base_fields())
     assert rid == 7
     sql, params = conn.executed[0]
     assert "ON CONFLICT (account_id, idempotency_key)" in sql
@@ -199,8 +196,8 @@ def test_insert_run_gated_builds_atomic_sql() -> None:
 
 def test_insert_run_gated_no_row_returns_none() -> None:
     conn = _FakeConn(default_row=None)   # WHERE excluded / ON CONFLICT DO NOTHING
-    dec = er._MeterDecision("sid:1", 3, 2)
-    assert er._insert_run(conn, gate=dec, idempotency_key="sid:1", **_base_fields()) is None
+    dec = er._MeterDecision("ad:sreality:1", 3, 2)
+    assert er._insert_run(conn, gate=dec, idempotency_key="ad:sreality:1", **_base_fields()) is None
 
 
 def test_insert_run_ungated_omits_gate_sql() -> None:
@@ -215,11 +212,7 @@ def test_insert_run_ungated_omits_gate_sql() -> None:
 
 def _stub_pipeline(monkeypatch: Any) -> None:
     monkeypatch.setattr(er, "_job_lane_enabled", lambda conn: False)
-    res = er._Resolution(
-        input_url="https://x/1", input_sreality_id=1,
-        target_spec={"lat": 50.0, "lng": 14.0}, source_kind="sreality",
-        parse_confidence="high", parse_confidence_per_field=None, source_html=None)
-    monkeypatch.setattr(er, "_resolve_input", lambda *a, **k: res)
+    monkeypatch.setattr(er, "_resolve_input", lambda *a, **k: _AD)
     monkeypatch.setattr(er, "load_filter_defaults", lambda *a, **k: object())
     monkeypatch.setattr(er, "_build_target", lambda *a, **k: object())
     monkeypatch.setattr(er, "_build_filters", lambda *a, **k: object())
@@ -230,12 +223,12 @@ def _stub_pipeline(monkeypatch: Any) -> None:
         "_Sk", (), {"name": name, "version": 1})())
 
 
-def test_create_run_short_circuits_before_parse(monkeypatch: Any) -> None:
+def test_create_run_short_circuits_before_insert(monkeypatch: Any) -> None:
     _stub_pipeline(monkeypatch)
-    monkeypatch.setattr(er, "_resolve_input", lambda *a, **k: pytest.fail(
-        "short-circuit must return BEFORE the parse"))
+    monkeypatch.setattr(er, "_insert_run", lambda *a, **k: pytest.fail(
+        "short-circuit must return BEFORE the INSERT"))
     monkeypatch.setattr(er, "_prepare_metered_submit", lambda *a, **k: er._MeterDecision(
-        "sid:1", 3, 3, short_circuit_run={"id": 55}))
+        "ad:sreality:1", 3, 3, short_circuit_run={"id": 55}))
     out = er.create_estimation_run(
         _FakeConn(), None, None, _agent_body(), account_id=ACC, claims={"sub": "u"})
     assert out == {"id": 55}
@@ -254,7 +247,7 @@ def test_create_run_gate_rejection_propagates(monkeypatch: Any) -> None:
 def test_create_run_atomic_none_becomes_429(monkeypatch: Any) -> None:
     _stub_pipeline(monkeypatch)
     monkeypatch.setattr(er, "_prepare_metered_submit", lambda *a, **k: er._MeterDecision(
-        "sid:1", 3, 3))
+        "ad:sreality:1", 3, 3))
     monkeypatch.setattr(er, "_insert_run", lambda *a, **k: None)   # gate rejected at INSERT
     monkeypatch.setattr(er, "_find_inflight_run", lambda conn, aid, k: None)
     with pytest.raises(HTTPException) as e:
@@ -266,7 +259,7 @@ def test_create_run_atomic_none_becomes_429(monkeypatch: Any) -> None:
 def test_create_run_atomic_none_returns_existing_on_conflict(monkeypatch: Any) -> None:
     _stub_pipeline(monkeypatch)
     monkeypatch.setattr(er, "_prepare_metered_submit", lambda *a, **k: er._MeterDecision(
-        "sid:1", 3, 3))
+        "ad:sreality:1", 3, 3))
     monkeypatch.setattr(er, "_insert_run", lambda *a, **k: None)
     monkeypatch.setattr(er, "_find_inflight_run", lambda conn, aid, k: {"id": 88})
     out = er.create_estimation_run(

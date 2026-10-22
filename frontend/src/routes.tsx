@@ -20,7 +20,6 @@ import BrokerDetail from './pages/BrokerDetail';
 import Collections from './pages/Collections';
 import CollectionDetail from './pages/CollectionDetail';
 import Pipeline from './pages/Pipeline';
-import Watchdog from './pages/Watchdog';
 import WatchdogManage from './pages/WatchdogManage';
 import WatchdogEdit from './pages/WatchdogEdit';
 import Notifications from './pages/Notifications';
@@ -59,9 +58,9 @@ const AutodedupJudge = lazyChunk(() => import('./pages/AutodedupJudge'));
 // the feed's chunk after its first launch (`/assets/*` cache-first).
 const LinkPage = lazyChunk(() => import('./pages/Link'));
 const Feed = lazyChunk(() => import('./pages/Feed'));
-// TODO(estimation-5 Part C1): remove DevConfidencePreview + its route
-// once design is approved and the indicator is in real use.
-const DevConfidencePreview = lazyChunk(() => import('./pages/DevConfidencePreview'));
+// Where a tapped push lands (notifications push § 3.5): opened from a
+// notification only, so outside the first visit.
+const NotificationOpen = lazyChunk(() => import('./pages/NotificationOpen'));
 
 function AdminPage({ children }: { children: ReactNode }) {
   return (
@@ -137,10 +136,18 @@ export const routes: RouteObject[] = [
       { path: ROUTES.collectionDetail.childPath, element: <CollectionDetail />, handle: { title: 'Collection' } },
       { path: ROUTES.pipeline.childPath, element: <Pipeline />, handle: { title: 'Pipeline' } },
       { path: ROUTES.datasets.childPath, element: <AdminPage><Datasets /></AdminPage>, handle: { title: 'Datasets' } },
-      { path: ROUTES.watchdog.childPath, element: <Watchdog />, handle: { title: 'Watchdogs' } },
-      { path: ROUTES.watchdogManage.childPath, element: <WatchdogManage />, handle: { title: 'Watchdogs · Manage' } },
+      { path: ROUTES.watchdog.childPath, element: <WatchdogManage />, handle: { title: 'Watchdogs' } },
       { path: ROUTES.watchdogEdit.childPath, element: <WatchdogEdit />, handle: { title: 'Edit watchdog' } },
       { path: ROUTES.notifications.childPath, element: <Notifications />, handle: { title: 'Notifications' } },
+      {
+        path: ROUTES.notificationOpen.childPath,
+        element: (
+          <Suspense fallback={null}>
+            <NotificationOpen />
+          </Suspense>
+        ),
+        handle: { title: 'Upozornění' },
+      },
       { path: ROUTES.locationQuality.childPath, element: <AdminPage><LocationQuality /></AdminPage>, handle: { title: 'Location quality' } },
       { path: ROUTES.settings.childPath, element: <AdminPage><Settings /></AdminPage>, handle: { title: 'Settings' } },
       { path: ROUTES.newDedup.childPath, element: <AdminPage><NewDedupDashboard /></AdminPage>, handle: { title: 'NEW DEDUP' } },
@@ -162,7 +169,6 @@ export const routes: RouteObject[] = [
       { path: ROUTES.autodedupRulings.childPath, element: <AdminPage><AutodedupRulings /></AdminPage>, handle: { title: 'AUTODEDUP · Rozhodnutí' } },
       { path: ROUTES.autodedupJudge.childPath, element: <AdminPage><AutodedupJudge /></AdminPage>, handle: { title: 'AUTODEDUP · Soudce' } },
       { path: ROUTES.scrapers.childPath, element: <AdminPage><Scrapers /></AdminPage>, handle: { title: 'Scrapers' } },
-      { path: ROUTES.devConfidenceIndicator.childPath, element: <AdminPage><DevConfidencePreview /></AdminPage>, handle: { title: 'Confidence indicator (dev)' } },
       { path: '*', element: <NotFound />, handle: { title: 'Not found' } },
     ],
   },

@@ -22,7 +22,7 @@ import ImageLightbox from '@/components/ImageLightbox';
 import ImageSizeToggle from '@/components/ImageSizeToggle';
 import Spinner from '@/components/Spinner';
 import { imageSrc } from '@/lib/imageUrl';
-import type { ImagePublic } from '@/lib/types';
+import { bareImage, type ImagePublic } from '@/lib/types';
 
 /* NEW DEDUP · Tagging bake-off — which encoder should the tagger buy into?
  *
@@ -485,21 +485,8 @@ function Caption({ children }: { children: ReactNode }) {
 const selectClass =
   'px-2 py-1 text-sm rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-transparent text-[var(--color-ink)]';
 
-/* The shared viewer takes images_public rows; a bake-off tile already carries the
- * only two fields imageSrc reads, and every badge the viewer draws self-guards on
- * null — so the row is widened rather than re-fetched. */
-const asImagePublic = (t: { image_id: number; storage_path: string | null }): ImagePublic => ({
-  id: t.image_id,
-  sreality_id: 0,
-  sequence: null,
-  sreality_url: '',
-  storage_path: t.storage_path,
-  clip_fine_tag: null,
-  clip_logical_tag: null,
-  clip_confidence: null,
-  clip_render_score: null,
-  phash: null,
-});
+/* A bake-off tile already carries the photo the shared viewer reads, so it is widened, never re-fetched. */
+const asImagePublic = (t: { image_id: number; storage_path: string | null }) => bareImage(t.image_id, t.storage_path);
 
 /* ==========================================================================
  * The page

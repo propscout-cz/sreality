@@ -25,11 +25,10 @@ export type UiControl =
   | "tristate"
   | "single_select"
   | "number_input"
-  | "csv_input"
   | "boolean"
   | "location"
   | "city_index_rules"
-  | "pipeline_scope";
+  | "set_scope";
 
 export type FilterType =
   | "bool"
@@ -37,9 +36,8 @@ export type FilterType =
   | "district_chip_list"
   | "float"
   | "int"
-  | "int_list"
   | "location"
-  | "pipeline_scope"
+  | "set_scope"
   | "string"
   | "string_list";
 
@@ -113,11 +111,10 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
     "tristate",
     "single_select",
     "number_input",
-    "csv_input",
     "boolean",
     "location",
     "city_index_rules",
-    "pipeline_scope"
+    "set_scope"
   ],
   "filters": [
     {
@@ -125,7 +122,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "location",
       "pg_column": null,
       "default": null,
-      "description": "Where the listing must be. Composite filter with three complementary sub-fields: a location chip list (see the `districts` filter — RÚIAN code equality per level), a map bounding box (west/south/east/north on the resolved point), and a center+radius pair (ST_DWithin around (lat,lng) within radius_m). Districts is an independent AND-clause; the map vs center+radius pair are mutually exclusive — when both are set, center+radius wins. Leave everything null for no spatial restriction.",
+      "description": "Where the listing must be. Composite filter with two complementary sub-fields: a location chip list (see the `districts` filter — RÚIAN code equality per level) and a map box (`bounds`: west/south/east/north, WGS84, a band on the property's lat/lng). The box is what Browse filters on — its viewport, or the square around a centre+radius pick — so a watchdog saved from Browse watches the rows Browse showed. Both are independent AND-clauses. Leave everything null for no spatial restriction.",
       "category": "Spatial",
       "ui_control": "location",
       "agendas": [
@@ -522,9 +519,9 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
     {
       "id": "tom_days_min",
       "type": "int",
-      "pg_column": null,
+      "pg_column": "tom_days",
       "default": null,
-      "description": "Lower bound on time-on-market in days. TOM = (now - first_seen_at) for active rows, (last_seen_at - first_seen_at) for delisted rows. Inclusive.",
+      "description": "Lower bound on time-on-market in days. TOM = (now - first_seen_at) for active ads, (last_seen_at - first_seen_at) for inactive ads. Inclusive.",
       "category": "Velocity",
       "ui_control": "number_input",
       "agendas": [
@@ -540,12 +537,12 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "enum_values": null,
       "aliases": [],
       "nullable": false,
-      "sql_kind": null
+      "sql_kind": "gte"
     },
     {
       "id": "tom_days_max",
       "type": "int",
-      "pg_column": null,
+      "pg_column": "tom_days",
       "default": null,
       "description": "Upper bound on time-on-market in days. See `tom_days_min` for the TOM definition. Inclusive.",
       "category": "Velocity",
@@ -559,6 +556,27 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
         "min": 0
       },
       "unit": "days",
+      "basis": null,
+      "enum_values": null,
+      "aliases": [],
+      "nullable": false,
+      "sql_kind": "lte"
+    },
+    {
+      "id": "tom_observed_only",
+      "type": "bool",
+      "pg_column": "tom_observed",
+      "default": false,
+      "description": "When true, only ads whose time on market is observed from the start: first seen on an ordinary day, not in a portal's first or catch-up sweep of their category, so TOM counts from the day the ad appeared. False or unset: no constraint.",
+      "category": "Velocity",
+      "ui_control": "boolean",
+      "agendas": [
+        "browse",
+        "comparables",
+        "estimation"
+      ],
+      "constraints": null,
+      "unit": null,
       "basis": null,
       "enum_values": null,
       "aliases": [],
@@ -1254,7 +1272,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "string_list",
       "pg_column": "condition",
       "default": null,
-      "description": "Restrict cohort to listings whose `condition` is in this list. Czech values without diacritics, best to worst: projekt, ve_vystavbe, novostavba, po_rekonstrukci, velmi_dobry, dobry, udrzovany, v_rekonstrukci, pred_rekonstrukci, spatny, k_demolici.",
+      "description": "Restrict cohort to listings whose `condition` is in this list. Czech values without diacritics, best to worst: projekt, ve_vystavbe, novostavba, po_rekonstrukci, velmi_dobry, dobry, udrzovany, v_rekonstrukci, pred_rekonstrukci, spatny, k_demolici. The special `__unknown__` value matches listings whose condition is not specified (NULL) or stored under a non-canonical label. Empty list / null = no constraint.",
       "category": "Property",
       "ui_control": "multiselect",
       "agendas": [
@@ -1324,11 +1342,16 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
           "value": "k_demolici",
           "label_cs": "K demolici",
           "label_en": "For demolition"
+        },
+        {
+          "value": "__unknown__",
+          "label_cs": "Neuvedeno",
+          "label_en": "Unknown / not specified"
         }
       ],
       "aliases": [],
       "nullable": false,
-      "sql_kind": "any"
+      "sql_kind": "enum_or_unknown"
     },
     {
       "id": "building_type_match",
@@ -1458,13 +1481,15 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "string_list",
       "pg_column": "energy_rating",
       "default": null,
-      "description": "Restrict to energy ratings in this list (single capital letters A through G). New constructions trend A/B; pre-renovation panel buildings often G.",
+      "description": "Restrict to energy ratings in this list (single capital letters A through G). New constructions trend A/B; pre-renovation panel buildings often G. G is also the legal placeholder for 'no certificate', which no portal marks apart. A property's rating is the first non-null one across its ads in canonical order; an unrated property never matches.",
       "category": "Property",
       "ui_control": "multiselect",
       "agendas": [
+        "browse",
         "comparables",
         "estimation",
-        "velocity"
+        "velocity",
+        "watchdog"
       ],
       "constraints": null,
       "unit": null,
@@ -1509,126 +1534,6 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "aliases": [],
       "nullable": false,
       "sql_kind": "any"
-    },
-    {
-      "id": "building_condition_level_min",
-      "type": "int",
-      "pg_column": "building_condition_level",
-      "default": null,
-      "description": "Minimum building condition score (`building_condition_level >= N`, 1..5). Set by toolkit.condition_scoring.score_listing_condition off the curated Czech marker dictionary + 5-level rubric. NULL rows (not yet scored) are excluded from the result. 5 = výborný stav (excellent), 4 = velmi dobrý stav, 3 = průměrný / udržovaný, 2 = vyžaduje rekonstrukci, 1 = kritický stav.",
-      "category": "Property",
-      "ui_control": "number_input",
-      "agendas": [
-        "browse",
-        "comparables",
-        "defaults",
-        "estimation",
-        "neighborhood",
-        "velocity",
-        "watchdog"
-      ],
-      "constraints": {
-        "min": 1,
-        "max": 5
-      },
-      "unit": null,
-      "basis": null,
-      "enum_values": null,
-      "aliases": [
-        "buildingConditionLevelMin"
-      ],
-      "nullable": false,
-      "sql_kind": "gte"
-    },
-    {
-      "id": "apartment_condition_level_min",
-      "type": "int",
-      "pg_column": "apartment_condition_level",
-      "default": null,
-      "description": "Minimum apartment condition score (`apartment_condition_level >= N`, 1..5). Same scorer as building_condition_level_min but scoped to the unit itself rather than the building shell. NULL rows (not yet scored) are excluded from the result. 5 = výborný stav (novostavba / po kompletní rekonstrukci), 4 = velmi dobrý stav (po rekonstrukci, new jádro / koupelna), 3 = průměrný, 2 = v původním stavu / před rekonstrukcí, 1 = umakartové jádro.",
-      "category": "Property",
-      "ui_control": "number_input",
-      "agendas": [
-        "browse",
-        "comparables",
-        "defaults",
-        "estimation",
-        "neighborhood",
-        "velocity",
-        "watchdog"
-      ],
-      "constraints": {
-        "min": 1,
-        "max": 5
-      },
-      "unit": null,
-      "basis": null,
-      "enum_values": null,
-      "aliases": [
-        "apartmentConditionLevelMin"
-      ],
-      "nullable": false,
-      "sql_kind": "gte"
-    },
-    {
-      "id": "building_condition_level_max",
-      "type": "int",
-      "pg_column": "building_condition_level",
-      "default": null,
-      "description": "Maximum building condition score (`building_condition_level <= N`, 1..5). Companion upper bound to building_condition_level_min; same scorer and rubric. NULL rows (not yet scored) are excluded from the result.",
-      "category": "Property",
-      "ui_control": "number_input",
-      "agendas": [
-        "browse",
-        "comparables",
-        "defaults",
-        "estimation",
-        "neighborhood",
-        "velocity",
-        "watchdog"
-      ],
-      "constraints": {
-        "min": 1,
-        "max": 5
-      },
-      "unit": null,
-      "basis": null,
-      "enum_values": null,
-      "aliases": [
-        "buildingConditionLevelMax"
-      ],
-      "nullable": false,
-      "sql_kind": "lte"
-    },
-    {
-      "id": "apartment_condition_level_max",
-      "type": "int",
-      "pg_column": "apartment_condition_level",
-      "default": null,
-      "description": "Maximum apartment condition score (`apartment_condition_level <= N`, 1..5). Companion upper bound to apartment_condition_level_min; same scorer and rubric. NULL rows (not yet scored) are excluded from the result.",
-      "category": "Property",
-      "ui_control": "number_input",
-      "agendas": [
-        "browse",
-        "comparables",
-        "defaults",
-        "estimation",
-        "neighborhood",
-        "velocity",
-        "watchdog"
-      ],
-      "constraints": {
-        "min": 1,
-        "max": 5
-      },
-      "unit": null,
-      "basis": null,
-      "enum_values": null,
-      "aliases": [
-        "apartmentConditionLevelMax"
-      ],
-      "nullable": false,
-      "sql_kind": "lte"
     },
     {
       "id": "furnished",
@@ -2359,31 +2264,12 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
     },
     {
       "id": "tags",
-      "type": "int_list",
+      "type": "set_scope",
       "pg_column": null,
       "default": null,
-      "description": "Operator-curated tag ids. AND-semantics — a property matches only if it carries every tag in the list. Tag ids are stable across renames.",
+      "description": "Operator tags as a curated-set scope. NULL = no constraint. `set` 'out' = the property carries no tag at all (the 'Bez štítků' chip); `in` = it carries EVERY listed tag (AND); `out` = it carries none of the listed tags. Tag ids are stable across renames.",
       "category": "Curation",
-      "ui_control": "multiselect",
-      "agendas": [
-        "browse"
-      ],
-      "constraints": null,
-      "unit": null,
-      "basis": null,
-      "enum_values": null,
-      "aliases": [],
-      "nullable": false,
-      "sql_kind": null
-    },
-    {
-      "id": "tags_excluded",
-      "type": "int_list",
-      "pg_column": null,
-      "default": null,
-      "description": "The other side of `tags`: drop every property that carries ANY listed tag. Combines with `tags` ('tagged k prohlídce, not tagged odmítnuto'). Empty list / null = no exclusion. BROWSE-only, like `tags`.",
-      "category": "Curation",
-      "ui_control": "multiselect",
+      "ui_control": "set_scope",
       "agendas": [
         "browse"
       ],
@@ -2397,12 +2283,12 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
     },
     {
       "id": "collections",
-      "type": "int_list",
+      "type": "set_scope",
       "pg_column": null,
       "default": null,
-      "description": "Collection ids the caller can read — own or shared with them (migration 610). OR-semantics — a property matches if it is in ANY collection in the list. Deliberately the opposite of `tags` (AND): collections read as folders, so two of them mean 'either folder'. Collection ids are stable across renames. BROWSE-only, for the same reasons as `pipeline`: watching a collection would fire on the operator's own clicks, and their groupings must never feed back into a valuation.",
+      "description": "Collections the caller can read — own or shared with them (migration 610) — as a curated-set scope. NULL = no constraint. `set` 'out' = the property is in no collection (the 'V žádné kolekci' chip); `in` = it is in ANY listed collection (OR: collections read as folders); `out` = it is in none of the listed collections. Collection ids are stable across renames.",
       "category": "Curation",
-      "ui_control": "multiselect",
+      "ui_control": "set_scope",
       "agendas": [
         "browse"
       ],
@@ -2416,12 +2302,12 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
     },
     {
       "id": "pipeline",
-      "type": "pipeline_scope",
+      "type": "set_scope",
       "pg_column": null,
       "default": null,
-      "description": "Deal-pipeline scope (rule #22). NULL = no constraint. `{stage_ids: []}` = the property has a pipeline card at ANY stage; `{stage_ids: [12, 13]}` narrows to those stages. Stage ids are account-scoped, so a scope carrying ids is meaningful only inside the account that wrote it — the empty-list form is the portable one. BROWSE-only: the pipeline is the operator's own state, so watching for it would fire on their own clicks, and it is deliberately invisible to the estimation agent (an operator's interest must never feed back into a valuation).",
+      "description": "Deal-pipeline scope (rule #22) as a curated-set scope; elements are stage ids. NULL = no constraint. `set` 'in' = a card at ANY stage (the 'V pipeline' chip); `set` 'out' = no pipeline card at any stage, terminal stages included (the 'Mimo pipeline' chip); `in` = a card at ANY listed stage; `out` = no card at a listed stage. Stage ids are account-scoped, so only the `set` side is portable.",
       "category": "Curation",
-      "ui_control": "pipeline_scope",
+      "ui_control": "set_scope",
       "agendas": [
         "browse"
       ],
@@ -2886,6 +2772,7 @@ export const UI_CONTROLS = FILTER_REGISTRY.ui_controls;
  * Generated from toolkit.filter_registry; do not hand-edit. */
 export const FURNISHED_CANONICAL = ["ano", "ne", "castecne"] as const;
 export const OWNERSHIP_CANONICAL = ["osobni", "druzstevni", "statni", "jine"] as const;
+export const CONDITION_CANONICAL = ["projekt", "ve_vystavbe", "novostavba", "po_rekonstrukci", "velmi_dobry", "dobry", "udrzovany", "v_rekonstrukci", "pred_rekonstrukci", "spatny", "k_demolici"] as const;
 
 /* `listings.price_unit` constrains no filter, so it is not in the payload
  * above — but every listing surface renders it after the price, and the

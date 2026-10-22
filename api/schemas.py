@@ -9,9 +9,16 @@ out.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, BeforeValidator, Field, field_validator, model_validator
+from fastapi import HTTPException
+from pydantic import (
+    AfterValidator, BaseModel, BeforeValidator, Field, TypeAdapter, field_validator, model_validator,
+)
+
+from api.location_filter import DistrictChip
+from toolkit import stats_registry as sr
 
 
 def _as_str_list(v: Any) -> Any:
@@ -74,12 +81,9 @@ class FindComparablesIn(BaseModel):
     min_usable_area: float | None = None
     max_usable_area: float | None = None
     min_parking_lots: int | None = None
-    building_condition_level_min: int | None = None
-    building_condition_level_max: int | None = None
-    apartment_condition_level_min: int | None = None
-    apartment_condition_level_max: int | None = None
     tom_days_min: int | None = None
     tom_days_max: int | None = None
+    tom_observed_only: bool | None = None
     last_seen_min_days: int | None = None
     last_seen_max_days: int | None = None
     first_seen_min_days: int | None = None
@@ -174,12 +178,9 @@ class ComputeMarketVelocityIn(BaseModel):
     min_usable_area: float | None = None
     max_usable_area: float | None = None
     min_parking_lots: int | None = None
-    building_condition_level_min: int | None = None
-    building_condition_level_max: int | None = None
-    apartment_condition_level_min: int | None = None
-    apartment_condition_level_max: int | None = None
     tom_days_min: int | None = None
     tom_days_max: int | None = None
+    tom_observed_only: bool | None = None
     last_seen_min_days: int | None = None
     last_seen_max_days: int | None = None
     first_seen_min_days: int | None = None
@@ -249,68 +250,15 @@ class CompareListingImagesIn(BaseModel):
     force_refresh: bool = False
 
 
-class Ppm2BoxIn(BaseModel):
-    n: int
-    min: float
-    p25: float
-    median: float
-    p75: float
-    max: float
-
-
-class RegionDispositionIn(BaseModel):
-    disposition: str
-    n: int
-    ppm2_box: Ppm2BoxIn | None = None
-
-
-class SummarizeRegionDispositionsIn(BaseModel):
-    """Annotate the per-disposition Kč/m² box plots in Browse > Stats.
-
-    `region_key` is the caller's deterministic serialization of the active
-    filter set; the server hashes it and caches the annotations per
-    (region, calendar day) so repeat browser sessions don't re-bill.
-    `dispositions` is the same `ppm2_box` payload that drives the chart.
-
-    `ppm2_basis` is the unit those boxes are in — one of migration 425's four
-    tokens, or the literal 'mixed' when the cohort spans sale and rental (rule
-    22 makes that the DEFAULT Browse cohort). 'mixed' is refused server-side.
-    Optional so a client that has not been taught to send it yet still works;
-    absent, the annotator is told the unit is unknown rather than guessing one.
-    It is also part of the cache identity: a cached sentence about a ~91 535
-    capital figure is false about a ~319 monthly one.
-    """
-    region_key: str = Field(min_length=1, max_length=8192)
-    dispositions: list[RegionDispositionIn] = Field(default_factory=list, max_length=40)
-    ppm2_overall: dict[str, Any] | None = None
-    region_label: str | None = Field(default=None, max_length=256)
-    ppm2_basis: str | None = Field(default=None, max_length=64)
-    force_refresh: bool = False
-
-
-class PreviewEstimationIn(BaseModel):
-    """POST /estimations/preview body.
-
-    Resolves the URL through the source-kind dispatcher and returns the
-    parsed spec + provenance fields without creating an estimation_runs
-    row. Used by the UI to show "what we extracted" before the user
-    commits to running the full estimate.
-    """
-    url: str
-    spec_overrides: dict[str, Any] | None = None
-    force_refresh: bool = False
-
-
 class CreateEstimationIn(BaseModel):
     """POST /estimations request body.
 
-    Exactly one of `url`, `spec`, or `sreality_id` must be set. When `url`
-    is set, the URL is parsed via scraper.url_parser and the resulting spec
-    is used as the target; `spec_overrides` (a partial dict) is merged on
-    top to let the caller adjust individual fields. When `spec` is set
-    directly, it is used verbatim. When `sreality_id` is set, the target is
-    built from the already-scraped `listings` row by id (no URL parse, no
-    LLM) — the path the Browse cards' on-card estimate uses.
+    Exactly one of `listing_id`, `sreality_id` or `spec` must be set. An
+    estimation is of an ad we hold: `listing_id` names it, and the legacy
+    `sreality_id` (the Browse cards' on-card estimate) resolves to the same
+    ad; its target is built from the stored row, `spec_overrides` (a partial
+    dict) merged on top. A `spec` is used verbatim. A pasted link becomes an
+    ad through POST /listings/ingest first.
 
     `estimate_kind` selects rent vs sale. When omitted, defaults to
     'rent' for backwards compatibility with callers built before
@@ -343,9 +291,9 @@ class CreateEstimationIn(BaseModel):
     # applies no filter.
     lifecycle: Literal["active", "delisted", "all"] | None = None
 
-    url: str | None = None
-    spec: TargetIn | None = None
+    listing_id: int | None = None
     sreality_id: int | None = None
+    spec: TargetIn | None = None
     spec_overrides: dict[str, Any] | None = None
 
     purchase_price_czk: int | None = None
@@ -375,12 +323,9 @@ class CreateEstimationIn(BaseModel):
     min_usable_area: float | None = None
     max_usable_area: float | None = None
     min_parking_lots: int | None = None
-    building_condition_level_min: int | None = None
-    building_condition_level_max: int | None = None
-    apartment_condition_level_min: int | None = None
-    apartment_condition_level_max: int | None = None
     tom_days_min: int | None = None
     tom_days_max: int | None = None
+    tom_observed_only: bool | None = None
     last_seen_min_days: int | None = None
     last_seen_max_days: int | None = None
     first_seen_min_days: int | None = None
@@ -392,12 +337,24 @@ class CreateEstimationIn(BaseModel):
     special_instructions: str | None = Field(default=None, max_length=10_000)
     contextual_text: str | None = Field(default=None, max_length=20_000)
 
+    # Pydantic drops unknown keys, so without this a pre-2026-10-20 extension's
+    # {url, listing_id} would run with its url silently ignored.
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_url(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("url") is not None:
+            raise ValueError(
+                "POST /estimations no longer takes a url: add the ad through "
+                "POST /listings/ingest (update the extension), then estimate its listing_id"
+            )
+        return data
+
     @model_validator(mode="after")
     def _apply_kind_defaults(self) -> "CreateEstimationIn":
-        targets = (self.url, self.spec, self.sreality_id)
+        targets = (self.listing_id, self.sreality_id, self.spec)
         if sum(t is not None for t in targets) != 1:
             raise ValueError(
-                "Provide exactly one of 'url', 'spec', or 'sreality_id'"
+                "Provide exactly one of 'listing_id', 'sreality_id' or 'spec'"
             )
         if self.category_type is None:
             self.category_type = (
@@ -489,12 +446,9 @@ class EstimateYieldIn(BaseModel):
     min_usable_area: float | None = None
     max_usable_area: float | None = None
     min_parking_lots: int | None = None
-    building_condition_level_min: int | None = None
-    building_condition_level_max: int | None = None
-    apartment_condition_level_min: int | None = None
-    apartment_condition_level_max: int | None = None
     tom_days_min: int | None = None
     tom_days_max: int | None = None
+    tom_observed_only: bool | None = None
     last_seen_min_days: int | None = None
     last_seen_max_days: int | None = None
     first_seen_min_days: int | None = None
@@ -527,14 +481,12 @@ class CreateCollectionIn(BaseModel):
     name:               str = Field(min_length=1, max_length=200)
     description:        str | None = None
     monitoring_enabled: bool = False
-    notify_channels:    list[str] = Field(default_factory=list)
 
 
 class UpdateCollectionIn(BaseModel):
     name:               str | None = Field(default=None, min_length=1, max_length=200)
     description:        str | None = None
     monitoring_enabled: bool | None = None
-    notify_channels:    list[str] | None = None
 
 
 class AddPropertiesToCollectionIn(BaseModel):
@@ -551,7 +503,13 @@ class CreateNoteIn(BaseModel):
     shared: bool = False
 
 
-class ShareCollectionIn(BaseModel):
+ShareMode = Literal["read", "edit"]
+ShareSide = Literal["shared_with", "shared_with_me"]
+
+
+class ShareIn(BaseModel):
+    """The one email rule for every share kind (migrations 610, 641, 647)."""
+
     email: str
 
     @field_validator("email", mode="before")
@@ -562,6 +520,15 @@ class ShareCollectionIn(BaseModel):
             if not 3 <= len(v) <= 320 or v.count("@") != 1:
                 raise ValueError("must be one email address")
         return v
+
+
+ShareCollectionIn = ShareIn
+
+
+class SharePipelineIn(ShareIn):
+    """Share my board (migration 641); re-sharing changes the mode."""
+
+    mode: ShareMode
 
 
 class SetArtifactLinkIn(BaseModel):
@@ -651,31 +618,79 @@ class ReorderStagesIn(BaseModel):
     ordered_ids: list[int]
 
 
-# --- manual rental estimates ---------------------------------------------
-# Operator-recorded point estimates attached to a listing (Phase U-ME).
-# See migration 046 and CLAUDE.md "Operator workflow track".
+# --- saved sets: filter presets + Browse > Stats dashboards (api/saved_sets.py) ---
+# Both instances' bodies (migrations 151, 626, 647). Each blob carries its one validator in
+# its type: PresetSpec (every place chip coded), Charts (toolkit.stats_registry; a refusal is
+# a 422 naming the chart and the reason).
 
-ManualEstimateSourceKind = Literal[
-    "broker", "gut", "external_comp", "portfolio", "other",
-]
-
-
-class CreateManualEstimateIn(BaseModel):
-    rent_czk:    int = Field(ge=1000, le=1000000)
-    author:      str = Field(min_length=1, max_length=120)
-    source_kind: ManualEstimateSourceKind
-    notes:       str | None = Field(default=None, min_length=1, max_length=4000)
+_CHIPS = TypeAdapter(list[DistrictChip])
 
 
-class UpdateManualEstimateIn(BaseModel):
-    rent_czk:    int | None = Field(default=None, ge=1000, le=1000000)
-    author:      str | None = Field(default=None, min_length=1, max_length=120)
-    source_kind: ManualEstimateSourceKind | None = None
-    notes:       str | None = Field(default=None, max_length=4000)
+# The blob is stored VERBATIM, so its chips are checked strictly (a "582786" or a
+# `true` id would be stored as written), where the SPA reads them (`readPresetSpec`:
+# `spec.filters`, else a legacy bare filter set). `strict=` at validation time: a
+# `ConfigDict(strict=True)` on the adapter does not reach the nested model.
+def _coded_chips(spec: dict[str, Any]) -> dict[str, Any]:
+    """Every place chip in the blob is a level plus a RÚIAN code, or the write is a 422."""
+    filters = spec["filters"] if spec.get("filters") is not None else spec
+    if isinstance(filters, dict) and filters.get("districts") is not None:
+        _CHIPS.validate_python(filters["districts"], strict=True)
+    return spec
 
 
-class GetManualRentalEstimatesIn(BaseModel):
-    sreality_id: int
+def _valid_board(charts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The board as the stats registry normalises it: the only specs the pivot accepts."""
+    try:
+        return sr.validate_board(charts)
+    except sr.SpecError as exc:
+        # Not a ValueError: pydantic re-raises an HTTPException unwrapped, so the 422 names the chart.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+PresetSpec = Annotated[dict[str, Any], AfterValidator(_coded_chips)]
+Charts = Annotated[list[dict[str, Any]], AfterValidator(_valid_board)]
+
+
+class CreatePresetIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    filter_spec: PresetSpec
+    # Shared tag palette (TagColor); None = neutral default chip.
+    color: TagColor | None = None
+
+
+class UpdatePresetIn(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    filter_spec: PresetSpec | None = None
+    color: TagColor | None = None
+
+
+class StatsDashboardIn(BaseModel):
+    """The account's working board, stored whole (PUT /stats/dashboard)."""
+    charts: Charts
+
+
+class CreateStatsDashboardIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    charts: Charts
+    # The preset blob, embedded (ruling 2, never a linked preset); None = the dashboard carries no filter.
+    filter_spec: PresetSpec | None = None
+    color: TagColor | None = None
+
+
+class UpdateStatsDashboardIn(BaseModel):
+    # An absent field keeps its value; an explicit null clears `filter_spec` or `color`, nothing else.
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    charts: Charts | None = None
+    filter_spec: PresetSpec | None = None
+    color: TagColor | None = None
+
+
+ShareDashboardIn = ShareIn
+
+
+class ValuoValuationIn(BaseModel):
+    """A Valuo valuation (api/valuo.py): parameter -> the user's value, or null to send none."""
+    overrides: dict[str, Any] = Field(default_factory=dict)
 
 
 # --- buildings ------------------------------------------------------------
@@ -716,31 +731,9 @@ class BuildingUnit(BaseModel):
 
 
 class CreateBuildingIn(BaseModel):
-    """Minimal building-row creation for B0.
-
-    Inserts a `status='pending'` shell so the read endpoints can be
-    exercised end-to-end. B1 replaces this with `POST /buildings/from_url`
-    that parses the URL, fills `input_*`/`source_*`, and kicks off the
-    extractor synchronously.
-    """
+    """Minimal building-row creation: inserts a `status='pending'` shell."""
     source: Literal["ui", "api", "clickup"] = "api"
     input_url: str | None = None
-
-
-class CreateBuildingFromUrlIn(BaseModel):
-    """Phase B1 paste-a-building entry.
-
-    Routes the URL through scraper.source_dispatcher (the existing
-    per-source parser fleet), rejects category_main='byt' (apartments
-    don't decompose), then runs the building-unit extractor
-    synchronously and persists the row in `status='awaiting_input'`.
-    """
-    source: Literal["ui", "api", "clickup"] = "api"
-    url: str = Field(min_length=1)
-    force_refresh: bool = False
-
-    special_instructions: str | None = Field(default=None, max_length=10_000)
-    contextual_text: str | None = Field(default=None, max_length=20_000)
 
 
 class UpdateBuildingInputsIn(BaseModel):
@@ -847,9 +840,33 @@ class PortalLookupItem(BaseModel):
     """One portal listing keyed by its native id. For sreality, source_id is the
     numeric id as a string (matches listings.source_id_native)."""
     source: str = Field(min_length=1, max_length=40)
-    source_id: str = Field(min_length=1, max_length=128)
+    source_id: str = Field(min_length=1, max_length=512)
 
 
 class PortalLookupIn(BaseModel):
     """Batch lookup for the Chrome extension's detail panel + index-card overlay."""
     items: list[PortalLookupItem] = Field(min_length=1, max_length=50)
+
+
+class IngestIn(BaseModel):
+    """POST /listings/ingest: pasted text or a URL; the first link in it is the ad."""
+    url: str = Field(max_length=4096)
+
+
+class IngestQueue(BaseModel):
+    attempts: int
+    claimed_at: datetime | None
+    given_up: bool
+
+
+class IngestState(BaseModel):
+    """The ONE answer of POST /listings/ingest and GET /listings/ingest/{source}/{native_id}.
+    Market data only: no per-account field may ever join it."""
+    state: Literal["refused", "held", "queued", "gone", "failed"]
+    message_cs: str | None
+    source: str | None
+    source_id_native: str | None
+    listing_id: int | None
+    is_active: bool | None
+    property_id: int | None
+    queue: IngestQueue | None

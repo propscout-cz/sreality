@@ -349,6 +349,8 @@ const FILTER_ROWS: Array<{
   // object instead of filters[key] — used by the lifecycle row to read
   // the new key while falling back to legacy traces' population/active_only.
   derive?: (f: SelectionRoundFilters) => unknown;
+  // A filter the agent can no longer set: shown only on runs whose rounds used it.
+  retired?: true;
 }> = [
   { key: 'radius_m', label: 'Radius', fmt: (v) => fmtNumberUnit(v, 'm') },
   { key: 'area_band_pct', label: 'Area band', fmt: (v) => (typeof v === 'number' ? `±${Math.round(v * 100)}%` : EM_DASH) },
@@ -393,8 +395,8 @@ const FILTER_ROWS: Array<{
   { key: 'min_usable_area', label: 'Min usable area', fmt: (v) => fmtNumberUnit(v, 'm²') },
   { key: 'max_usable_area', label: 'Max usable area', fmt: (v) => fmtNumberUnit(v, 'm²') },
   { key: 'min_parking_lots', label: 'Min parking lots', fmt: (v) => (typeof v === 'number' ? String(v) : EM_DASH) },
-  { key: 'building_condition_level_min', label: 'Min building condition', fmt: (v) => (typeof v === 'number' ? String(v) : EM_DASH) },
-  { key: 'apartment_condition_level_min', label: 'Min apartment condition', fmt: (v) => (typeof v === 'number' ? String(v) : EM_DASH) },
+  { key: 'building_condition_level_min', label: 'Min building condition', fmt: (v) => (typeof v === 'number' ? String(v) : EM_DASH), retired: true },
+  { key: 'apartment_condition_level_min', label: 'Min apartment condition', fmt: (v) => (typeof v === 'number' ? String(v) : EM_DASH), retired: true },
 ];
 
 function StrategyPanel({ summary }: { summary: SelectionSummary }) {
@@ -461,7 +463,7 @@ function FilterDeltaTable({ rounds }: { rounds: SelectionRound[] }) {
         </tr>
       </thead>
       <tbody>
-        {FILTER_ROWS.map(({ key, label, fmt, derive }) => (
+        {FILTER_ROWS.filter((row) => !row.retired || rounds.some((r) => r.filters[row.key] != null)).map(({ key, label, fmt, derive }) => (
           <tr key={key} className="border-t border-[var(--color-rule-soft)]">
             <th
               scope="row"

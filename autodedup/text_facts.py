@@ -203,6 +203,18 @@ _UNIT_CODE_BODY: str = (
 )
 _PRINTED_UNIT_CODE = re.compile(_UNIT_NOUN + r"\s+" + _UNIT_MARKER + _UNIT_CODE_BODY
                                 + r"(?![\d+]|\s*m2)")
+# E966: a co-living ROOM is let as the unit itself, and its code is the flat and the room
+# joined by a hyphen — `pokoj č. 303-2` against `Pokoj 301-3`, one Za Pohořelcem template at one
+# rent. Its own pattern, never `_UNIT_NOUN`: two bare numbers joined by a hyphen after `byt` are
+# a range (`byt 2-3 pokoje`), and the dotted, Roman, word and letter forms after `pokoj` are a
+# room's size or its label inside one flat. The code is the shape the template prints, a flat of
+# two or three digits and a one-digit room (303-2, 301-3, 403-1, 303-1, 201-3): any other pair
+# after `pokoj` is a count, a term, an hour or a price list (`pokoje 2-3 lůžkové`, `pokoj 1-2
+# osoby`, `prohlídky pokoje 10-12 hod.`, `Pokoj 1 - 12 000 Kč`). The tail refuses a decimal, an
+# area, a thousands group and a price or occupancy unit after it (`Pokoj 12 - 9 000 Kč`).
+_PRINTED_ROOM_CODE = re.compile(
+    r"\bpokoj\w*\s+\(?\s*" + _UNIT_MARKER
+    + r"(\d{2,3}\s?-\s?\d)(?![\d+]|[.,]\d|\s*m2|\s\d{3}\b|\s*(?:kc|osob|luzk))")
 # The three forms the segment reader cannot see. Each needs an EXPLICIT marker, because a bare
 # letter or numeral after a noun is Czech grammar: `dům i zahrada` is a house and a garden, not
 # unit I, and `byt a garáž` is a flat and a garage.
@@ -225,7 +237,8 @@ UNIT_CODE_MAX_PER_ADVERT: int = 4
 
 
 def printed_unit_codes(text: str | None, wide: bool = False) -> frozenset[str]:
-    """Every unit code the body prints as this unit's, whole and normalised.
+    """Every unit code the body prints as this unit's, whole and normalised — a co-living
+    room's `pokoj č. 303-2` among them (E966).
 
     `wide` adds the Roman numeral, the number word and the single letter, each of which needs
     an explicit `označením` / `č.` / `číslo` marker to be read at all."""
@@ -237,7 +250,8 @@ def _printed_unit_codes(text: str, wide: bool) -> frozenset[str]:
     folded = fold(text)
     out: set[str] = {
         re.sub(r"\s+", "", match.group(1)).upper().strip(".-/")
-        for match in _PRINTED_UNIT_CODE.finditer(folded)
+        for pattern in (_PRINTED_UNIT_CODE, _PRINTED_ROOM_CODE)
+        for match in pattern.finditer(folded)
     }
     if wide:
         out |= {match.group(1).upper() for match in _PRINTED_UNIT_ROMAN.finditer(folded)}
@@ -252,7 +266,12 @@ def _printed_unit_codes(text: str, wide: bool) -> frozenset[str]:
 # one scale with an offset of one. Read from the prose because the stored column is null on one
 # side of a third of the corpus — and read as a set, because a body names the building's storeys
 # as well as this unit's.
-_PROSE_NP = re.compile(r"\b(\d{1,2})\.?\s*(?:np\b|nadzemnim?\s+podlazi)")
+# E967, kept by E969: a maisonette's range or list (`2.-3. NP`, `2. a 3. NP`) names BOTH its
+# storeys, and the advert that names only its entry storey must still meet it — so both numbers
+# are read.
+_STOREY_JOINER: str = r"(?:\s*[-–]\s*|\s+(?:a|az)\s+)"
+_PROSE_NP = re.compile(r"\b(?:(\d{1,2})\.?" + _STOREY_JOINER
+                       + r")?(\d{1,2})\.?\s*(?:np\b|nadzemnim?\s+podlazi)")
 _PROSE_PATRO = re.compile(r"\b(\d{1,2})\.?\s*patr")
 PROSE_FLOOR_MAX: int = 40
 
@@ -270,8 +289,14 @@ _FLOOR_ORDINAL_WORDS: dict[str, int] = {
 _ORDINAL_ALTERNATION: str = "|".join(
     sorted(_FLOOR_ORDINAL_WORDS, key=len, reverse=True))
 _WORD_NP = re.compile(
-    r"\b(" + _ORDINAL_ALTERNATION + r")\s+(?:nadzemnim\s+)?(?:podlazi|np)\b")
+    r"\b(?:(" + _ORDINAL_ALTERNATION + r")" + _STOREY_JOINER + r")?("
+    + _ORDINAL_ALTERNATION + r")\s+(?:nadzemnim\s+)?(?:podlazi|np)\b")
 _WORD_PATRO = re.compile(r"\b(" + _ORDINAL_ALTERNATION + r")\s+(?:patre|patro|poschodi)\b")
+
+
+def printed_floors(text: str | None, words: bool = False) -> frozenset[int]:
+    """Every storey the body prints, on the NP scale (`1` is the ground floor)."""
+    return _printed_floors(text, words) if text else frozenset()
 
 
 # Which WORD carried a storey, kept beside the number. `3. patro` is the fourth storey and
@@ -280,32 +305,35 @@ _WORD_PATRO = re.compile(r"\b(" + _ORDINAL_ALTERNATION + r")\s+(?:patre|patro|po
 # re-writes its own advert from `v šestém patře osmipodlažního objektu` to `ve 6. nadzemním
 # podlaží`, same flat, same rent, same house number. That is a vocabulary, not a storey, and
 # `_same_feed` cannot see it because it is one feed's two spellings.
-FLOOR_FORMS: tuple[str, ...] = ("np", "patro")
-
-
-def printed_floors(text: str | None, words: bool = False) -> frozenset[int]:
-    """Every storey the body prints, on the NP scale (`1` is the ground floor)."""
-    return _printed_floors(text, words) if text else frozenset()
-
-
 def printed_floors_by_form(text: str | None, words: bool = False
                            ) -> dict[str, frozenset[int]]:
     """`printed_floors` split by the noun that carried each storey — `np` or `patro`."""
     return dict(_printed_floors_by_form(text, words)) if text else {}
 
 
+def _numbered_np(match: re.Match[str]) -> set[int]:
+    return {int(number) for number in match.group(1, 2) if number}
+
+
+def _worded_np(match: re.Match[str]) -> set[int]:
+    return {_FLOOR_ORDINAL_WORDS[word] for word in match.group(1, 2) if word}
+
+
+def _by_form(np_side: set[int], patro: set[int]) -> tuple[tuple[str, frozenset[int]], ...]:
+    return tuple((name, frozenset(v for v in values if 0 < v <= PROSE_FLOOR_MAX))
+                 for name, values in (("np", np_side), ("patro", patro)))
+
+
 @body_cached
 def _printed_floors_by_form(text: str, words: bool) -> tuple[tuple[str, frozenset[int]], ...]:
     folded = fold(text)
-    np_side = {int(match.group(1)) for match in _PROSE_NP.finditer(folded)}
+    np_side = {value for match in _PROSE_NP.finditer(folded) for value in _numbered_np(match)}
     patro = {int(match.group(1)) + 1 for match in _PROSE_PATRO.finditer(folded)}
     if words:
-        np_side |= {_FLOOR_ORDINAL_WORDS[match.group(1)]
-                    for match in _WORD_NP.finditer(folded)}
+        np_side |= {value for match in _WORD_NP.finditer(folded) for value in _worded_np(match)}
         patro |= {_FLOOR_ORDINAL_WORDS[match.group(1)] + 1
                   for match in _WORD_PATRO.finditer(folded)}
-    return tuple((name, frozenset(v for v in values if 0 < v <= PROSE_FLOOR_MAX))
-                 for name, values in (("np", np_side), ("patro", patro)))
+    return _by_form(np_side, patro)
 
 
 def _printed_floors(text: str, words: bool = False) -> frozenset[int]:
@@ -372,23 +400,18 @@ def _subject_floors_by_form(text: str, words: bool) -> tuple[tuple[str, frozense
     patro: set[int] = set()
     for cue in _PLACEMENT_CUE.finditer(folded):
         window = folded[cue.end(): cue.end() + PLACEMENT_WINDOW]
-        for match in _PROSE_NP.finditer(window):
-            if match.start() == 0:
-                np_side.add(int(match.group(1)))
-        for match in _PROSE_PATRO.finditer(window):
-            if match.start() == 0:
-                patro.add(int(match.group(1)) + 1)
+        if (match := _PROSE_NP.match(window)) is not None:
+            np_side |= _numbered_np(match)
+        if (match := _PROSE_PATRO.match(window)) is not None:
+            patro.add(int(match.group(1)) + 1)
         if not words:
             continue
         wide = folded[cue.end(): cue.end() + PLACEMENT_WORD_WINDOW]
-        for match in _WORD_NP.finditer(wide):
-            if match.start() == 0:
-                np_side.add(_FLOOR_ORDINAL_WORDS[match.group(1)])
-        for match in _WORD_PATRO.finditer(wide):
-            if match.start() == 0:
-                patro.add(_FLOOR_ORDINAL_WORDS[match.group(1)] + 1)
-    return tuple((name, frozenset(v for v in values if 0 < v <= PROSE_FLOOR_MAX))
-                 for name, values in (("np", np_side), ("patro", patro)))
+        if (match := _WORD_NP.match(wide)) is not None:
+            np_side |= _worded_np(match)
+        if (match := _WORD_PATRO.match(wide)) is not None:
+            patro.add(_FLOOR_ORDINAL_WORDS[match.group(1)] + 1)
+    return _by_form(np_side, patro)
 
 
 def _subject_floors(text: str, words: bool = False) -> frozenset[int]:
@@ -404,11 +427,11 @@ def _subject_floors(text: str, words: bool = False) -> frozenset[int]:
 # the offered unit: the preposition is mandatory, because `v přízemí domu je kočárkárna` is a
 # statement about the building.
 _GROUND_WORD = re.compile(r"\b(?:v|ve)\s+prizemi\b|\bprizemni\s+(?:byt|jednotk|apartman)\w*")
-_UPPER_WORD = re.compile(r"\b(?:v|ve)\s+(?:\d{1,2}\.?\s*)?(?:patre|poschodi)\b")
+_UPPER_WORD = re.compile(r"\b(?:v|ve)\s+(?:(\d{1,2})\.?\s*)?(?:patre|poschodi)\b")
 # E201: the same clause with the storey spelled out. `ve třetím patře` is `v patře` with an
 # ordinal in the middle, and without this the worded upper storey reads as no storey at all.
 _UPPER_WORD_ORDINAL = re.compile(
-    r"\b(?:v|ve)\s+(?:" + _ORDINAL_ALTERNATION + r")\s+(?:patre|poschodi)\b")
+    r"\b(?:v|ve)\s+(" + _ORDINAL_ALTERNATION + r")\s+(?:patre|poschodi)\b")
 
 
 # E210: `v posledním podlaží` names a storey as surely as a numeral does, and two adverts of
@@ -496,6 +519,22 @@ def _ground_or_upper(text: str, words: bool = False) -> frozenset[str]:
         out.add("ground")
     if _UPPER_WORD.search(folded) or (words and _UPPER_WORD_ORDINAL.search(folded)):
         out.add("upper")
+    return frozenset(out)
+
+
+def upper_storeys(text: str | None, words: bool = False) -> frozenset[int]:
+    """The storeys the upper clauses of `ground_or_upper` number, on the NP scale (`v 1. patře`
+    is 2); a bare `v patře` numbers none."""
+    return _upper_storeys(text, words) if text else frozenset()
+
+
+@body_cached
+def _upper_storeys(text: str, words: bool = False) -> frozenset[int]:
+    folded = fold(text)
+    out = {int(match.group(1)) + 1 for match in _UPPER_WORD.finditer(folded) if match.group(1)}
+    if words:
+        out |= {_FLOOR_ORDINAL_WORDS[match.group(1)] + 1
+                for match in _UPPER_WORD_ORDINAL.finditer(folded)}
     return frozenset(out)
 
 
@@ -690,7 +729,8 @@ def _parcel_numbers_wider(text: str) -> frozenset[str]:
 # developer's adverts inside one building are near-identical by construction (E61), and where
 # no unit number is printed the accessory number is the next thing the building itself names.
 # `stání` is matched as a whole word so `stanice metra` can never become a parking space, and
-# `pokoj č. 2` is deliberately not read: that is a room inside one flat, not an accessory.
+# `pokoj č. 2` is deliberately not read: that is a room inside one flat, not an accessory. A
+# co-living room's own code (`pokoj č. 303-2`) names the unit and is `printed_unit_codes`' (E966).
 _ACCESSORY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("stani", re.compile(r"\bstani\b\s*(?:pro\s+auto\s*)?(?:c\.|cislo)\s*(\d{1,4})\b")),
     ("sklep", re.compile(r"\bsklep\w*\s*(?:koj\w*\s*)?(?:c\.|cislo)\s*(\d{1,4})\b")),
@@ -780,16 +820,47 @@ def _offered_room_counts(text: str) -> frozenset[int]:
 # orientovaný na jihozápad`, `situovaný na sever`. Longest stem first, because `jihovýchod`
 # contains `východ` and a shorter match would read one flat's south-east as another's east.
 # The keyword is mandatory — a body also names the direction of the motorway and of the park.
-_COMPASS_STEMS: tuple[str, ...] = (
-    "severovychod", "severozapad", "jihovychod", "jihozapad",
-    "sever", "jih", "vychod", "zapad",
-)
-_ORIENTATION_KEYWORD = re.compile(r"orientac\w*|orientovan\w*|situovan\w*")
+# `orientační` / `orientačně` is an indicative price, not a facing, and `situován v jihozápadní
+# části Prahy` / `v severočeském městě` places the house in the country, so a `situovan` clause
+# that opens with `v` / `ve` is not read (E968's review).
+_CARDINALS: tuple[str, ...] = ("sever", "jih", "vychod", "zapad")
+_COMPASS_STEMS: tuple[str, ...] = tuple(
+    f"{north_south}o{east_west}" for north_south in _CARDINALS[:2]
+    for east_west in _CARDINALS[2:]) + _CARDINALS
+_ORIENTATION_KEYWORD = re.compile(r"orientac(?!n)\w*|orientovan\w*|(situovan\w*)")
+_LOCATION_CLAUSE = re.compile(r"\s*,?\s*(?:v|ve)\b")
 _ORIENTATION_WINDOW: int = 44
+# `z obývacího pokoje je východ na balkon` is a way OUT, not a facing; `orientován na východ do
+# zahrady` keeps its `na` in front and is still read.
+_COMPASS_EXIT = re.compile(
+    r"(?<!na )\bvychod\w*(?=\s+(?:na|do)\s+(?:teras|balkon|zahrad|lodzi|lodgi))")
 _COMPASS_WORD = re.compile(
     r"\b(severovychod\w*|severozapad\w*|jihovychod\w*|jihozapad\w*"
     r"|sever\w*|jizni|jih|vychod\w*|zapad\w*)\b"
 )
+# E968: Czech also puts the direction IN FRONT of the noun, as an adjective — `má jihozápadní
+# orientaci`, `Jižní orientace`. Only adjectives directly qualifying the keyword are read, joined
+# by nothing but a coordinator, so `na jihozápadní straně ulice … orientace` is not.
+# A hyphen joins two WHOLE adjectives only: `severo-jižní` is a compound of its own, and reading
+# its last element would make a north-south flat a south-facing one. An adjective of a garden,
+# a terrace, a plot or one room (`zahrada s jižní orientací`, `Ložnice má východní orientaci`)
+# is the part's facing, not the unit's.
+_COMPASS_ADJECTIVE: str = r"(?:(?:severo|jiho)?(?:vychod|zapad)ni|jizni|severni)"
+_COMPASS_BEFORE = re.compile(
+    r"(?<![a-z])(?<![a-z]-)(" + _COMPASS_ADJECTIVE + r"(?:(?:\s+[ai]\s+|\s*[-/,]\s*)"
+    + _COMPASS_ADJECTIVE + r")*)\s+$"
+)
+_ORIENTED_PART = re.compile(
+    r"\b(?:zahrad|teras|balkon|lodzi|lodgi|pozem|svah|obyvak|obyvaci\s+pokoj|loznic|kuchyn)\w*"
+    r"\s+(?:s|se|ma)\s+$")
+_ORIENTED_PART_WINDOW: int = 40
+
+
+def _compass_stem(word: str) -> str | None:
+    """One spelling per direction: the longest stem the word starts with, `jizni` as `jih`."""
+    if word == "jizni":
+        return "jih"
+    return next((stem for stem in _COMPASS_STEMS if word.startswith(stem)), None)
 
 
 def orientations(text: str | None) -> set[str]:
@@ -797,25 +868,40 @@ def orientations(text: str | None) -> set[str]:
 
     The clause after the keyword is read WHOLE, not to its first direction: `orientaci na jih
     i na sever` is a through-flat naming two, and a rule that stopped at `jih` would read it
-    as one. Abbreviations (`na J/Z`) are deliberately not read — a two-letter token is a coin
+    as one. The adjectives in front of it are read the same way (`jižní a západní orientace`).
+    Abbreviations (`na J/Z`) are deliberately not read — a two-letter token is a coin
     flip against street names and room labels, and the rule would rather abstain than guess."""
     if not text:
         return set()
     folded = fold(text)
+    exits = {match.start() for match in _COMPASS_EXIT.finditer(folded)}
     out: set[str] = set()
     for keyword in _ORIENTATION_KEYWORD.finditer(folded):
+        if keyword.group(1) and _LOCATION_CLAUSE.match(folded, keyword.end()):
+            continue
         clause = folded[keyword.end(): keyword.end() + _ORIENTATION_WINDOW]
         clause = re.split(r"[.;!?]", clause, maxsplit=1)[0]
-        for match in _COMPASS_WORD.finditer(clause):
-            word = match.group(1)
-            if word == "jizni":
-                out.add("jih")
-                continue
-            for stem in _COMPASS_STEMS:
-                if word.startswith(stem):
-                    out.add(stem)
-                    break
+        words = [match.group(1) for match in _COMPASS_WORD.finditer(clause)
+                 if keyword.end() + match.start(1) not in exits]
+        before = _COMPASS_BEFORE.search(
+            folded, max(0, keyword.start() - _ORIENTATION_WINDOW), keyword.start())
+        if before is not None and not _ORIENTED_PART.search(
+                folded, max(0, before.start(1) - _ORIENTED_PART_WINDOW), before.start(1)):
+            words += [match.group(1) for match in _COMPASS_WORD.finditer(before.group(1))]
+        out |= {stem for stem in map(_compass_stem, words) if stem is not None}
     return out
+
+
+def compass_points(directions: Iterable[str]) -> frozenset[str]:
+    """The cardinal points the stems name: `jihozapad` is `jih` and `zapad`."""
+    return frozenset(point for stem in directions for point in _CARDINALS if point in stem)
+
+
+def widest_directions(directions: Iterable[str]) -> frozenset[str]:
+    """The stems no wider stem of the set already names: `{jih, jihovychod}` is `{jihovychod}`."""
+    stems = frozenset(directions)
+    return frozenset(stem for stem in stems if not any(
+        compass_points((stem,)) < compass_points((other,)) for other in stems))
 
 
 def _area_value(raw: str) -> float | None:

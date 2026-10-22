@@ -149,13 +149,13 @@ describe('useOptimisticWrite', () => {
     expect(invalidate).not.toHaveBeenCalled();
 
     await act(async () => first.resolve('ok'));
-    await waitFor(() => expect(revalidate).toHaveBeenCalledWith(1, false));
+    await waitFor(() => expect(revalidate).toHaveBeenCalledWith(1, false, qc));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['a'] });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['b'] });
 
     invalidate.mockClear();
     act(() => result.current.mutate(2));
-    await waitFor(() => expect(revalidate).toHaveBeenCalledWith(2, true));
+    await waitFor(() => expect(revalidate).toHaveBeenCalledWith(2, true, qc));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['a'] });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['b'] });
   });

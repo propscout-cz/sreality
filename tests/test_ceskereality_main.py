@@ -14,7 +14,7 @@ the walk reached ceskereality's OWN end — every kraj stopped on the pager, on 
 region's declared tail, or on a confirmed-empty region — not that the counts
 reconciled. A region one row short of its declared count still reaches the end;
 a barren page, an error, a cap or the deadline still does not. The arithmetic is
-unchanged and still decides the slice ledger's `outcome` and the subtype descent.
+unchanged and still decides each slice's logged `outcome` and the subtype descent.
 """
 
 from __future__ import annotations
@@ -310,7 +310,7 @@ def test_a_slice_one_row_short_of_its_declared_total_still_reaches_end(monkeypat
     """86 of 87 = 0.9885, under the 0.995 the arithmetic gate demanded. The slice
     walked every page it has and the pager ran out: that is a FINISHED walk over a
     live index, so it reaches the portal's end and the category nominates. The
-    ledger still records the shortfall as `degraded` — the number did not change,
+    SLICE line still logs the shortfall as `degraded` — the number did not change,
     only what it is allowed to veto."""
     counts = {k: 40 for k in KRAJ_SLUGS}
     counts["karlovarsky-kraj"] = 87
@@ -320,7 +320,7 @@ def test_a_slice_one_row_short_of_its_declared_total_still_reaches_end(monkeypat
     short = portal._walk_slice(fake, "prodej", "byty", "karlovarsky-kraj")
     assert len({r[0] for r in short.rows}) == 86
     assert short.outcome == "degraded"       # the numeric verdict is unchanged...
-    assert short.positive is False           # ...and still numeric in the ledger
+    assert short.positive is False           # ...and still numeric (PARTITION's positive=)
     assert m_portal.walk_is_complete(86, 87) is False
     assert short.stop == "pager_end"         # ...but the PORTAL ended the loop
     assert short.reached_end is True
@@ -666,19 +666,26 @@ def _rd_stredocesky(
                per_okres={"rodinne-domy": okresy}, **kw)
 
 
-def _capture_results(monkeypatch: pytest.MonkeyPatch) -> list[list[m.SliceResult]]:
-    captured: list[list[m.SliceResult]] = []
-    monkeypatch.setattr(
-        m.CeskerealityPortal, "_record_slices",
-        lambda self, conn, category, kraje, results, hit: captured.append(results))
-    return captured
+# The per-result SLICE line is key=value pairs only; the prose SLICE lines (an empty page that
+# did not confirm, a missing pager, a pager that ended early) carry words between them.
+_SLICE_RESULT = re.compile(r"SLICE cm=\S+ ct=\S+( \w+=\S+)* outcome=\S+ stop=\S+")
 
 
-def test_a_subtype_child_over_the_ceiling_descends_onto_the_okresy(monkeypatch):
+def _slices(caplog: pytest.LogCaptureFixture) -> list[dict[str, str]]:
+    """Each SLICE line the walk logged (one per slice result, in walk order) as its fields."""
+    return [dict(kv.split("=", 1) for kv in message.split()[1:])
+            for message in (r.getMessage() for r in caplog.records)
+            if _SLICE_RESULT.fullmatch(message)]
+
+
+def test_a_subtype_child_over_the_ceiling_descends_onto_the_okresy(monkeypatch, caplog):
+    """Grandchildren keep their parent kraj and subtype, so the walk's per-kraj verdict holds however
+    deep the descent went."""
     fake = _rd_stredocesky(child=2100, okres_each=175)
     assert fake.declared == 2500
 
-    seen, _c, _t, _p, complete = _walk_ceiling(monkeypatch, fake, "rodinne-domy")
+    with caplog.at_level("INFO", logger=m.LOG.name):
+        seen, _c, _t, _p, complete = _walk_ceiling(monkeypatch, fake, "rodinne-domy")
 
     assert max(_page_num(u) for u in fake.urls) <= 99     # never asks for the 404
     child = search_url("prodej", "rodinne-domy", kraj="stredocesky-kraj",
@@ -691,32 +698,9 @@ def test_a_subtype_child_over_the_ceiling_descends_onto_the_okresy(monkeypatch):
                    for o in OKRES_SLUGS["stredocesky-kraj"])
     assert len(seen) == 2500 + 13 * 40
     assert complete is True
-
-
-def test_the_okres_level_is_recorded_as_one_ledger_row_per_kraj(monkeypatch):
-    """Grandchildren keep their parent kraj, so the ledger's key set never changes
-    shape however deep the descent went."""
-    fake = _rd_stredocesky(child=2100, okres_each=175)
-    captured: list[list[m.SliceResult]] = []
-    real = m.CeskerealityPortal._record_slices
-    monkeypatch.setattr(
-        m.CeskerealityPortal, "_record_slices",
-        lambda self, conn, category, kraje, results, hit: captured.append(results))
-    _walk_ceiling(monkeypatch, fake, "rodinne-domy")
-    results = captured[0]
-    okres_parts = [r for r in results if r.okres]
-    assert {r.okres for r in okres_parts} == set(OKRES_SLUGS["stredocesky-kraj"])
-    assert {r.kraj for r in okres_parts} == {"stredocesky-kraj"}
-    assert {r.subtype for r in okres_parts} == {"rodinne-domy"}
-
-    written: list[dict] = []
-    monkeypatch.setattr(m.db, "record_index_slice", lambda _c, **kw: written.append(kw))
-    real(m.CeskerealityPortal(default_config("ceskereality")), object(),
-         {"sale_type": "prodej", "category": "rodinne-domy"}, KRAJ_SLUGS, results, False)
-    assert sorted(w["slice_key"] for w in written) == sorted(KRAJ_SLUGS)
-    stredo = next(w for w in written if w["slice_key"] == "stredocesky-kraj")
-    assert (stredo["outcome"], stredo["declared_total"], stredo["collected"]) == (
-        "exhausted", 2500, 2500)
+    grandchildren = [s for s in _slices(caplog) if s["okres"] != "all"]
+    assert {s["okres"] for s in grandchildren} == set(OKRES_SLUGS["stredocesky-kraj"])
+    assert {(s["kraj"], s["subtype"]) for s in grandchildren} == {("stredocesky-kraj", "rodinne-domy")}
 
 
 def test_okres_grandchildren_short_of_their_child_leave_a_residue(monkeypatch):
@@ -733,7 +717,7 @@ def test_okres_grandchildren_short_of_their_child_leave_a_residue(monkeypatch):
     kids = m.CeskerealityPortal(default_config("ceskereality"))._descend_slice(
         fake, "prodej", "rodinne-domy", parent)
     residue = [k for k in kids if k.outcome == "ceiling"]
-    # the residue declares only the hole, so the kraj's ledger sum stays 2,500
+    # the residue declares only the hole, so the kraj's declared sum stays 2,500
     assert [(k.subtype, k.okres, k.declared_total, k.reached_end) for k in residue] == [
         ("rodinne-domy", None, 300, False)]
     assert sum(k.declared_total or 0 for k in kids) == 2500
@@ -778,13 +762,13 @@ def test_a_deadline_between_okresy_in_the_last_kraj_is_our_stop(monkeypatch, cap
     zlinsky is the LAST kraj, so the kraj loop never sees the deadline, and the
     clock trips exactly as kromeriz's last page lands (13 x 2 + zlinsky p.1 + the
     child's p.1 + kromeriz's 27 = 55 fetches), so no slice walk sees it either.
-    Each marker declares only the part it stands for: the ledger sum is 2,500."""
+    Each marker declares only the part it stands for: zlinsky's SLICE lines sum
+    to its 2,500."""
     assert KRAJ_SLUGS[-1] == "zlinsky-kraj"
     clock = {"t": 0.0}
     monkeypatch.setattr(m_portal, "time", SimpleNamespace(monotonic=lambda: clock["t"]))
     fake = _rd_stredocesky(2100, 525, _ClockedCeiling, kraj="zlinsky-kraj",
                            clock=clock, trip_after=55)
-    captured = _capture_results(monkeypatch)
 
     with caplog.at_level("INFO", logger=m.LOG.name):
         _seen, _c, _t, _p, complete = _walk_ceiling(
@@ -793,13 +777,13 @@ def test_a_deadline_between_okresy_in_the_last_kraj_is_our_stop(monkeypatch, cap
     assert len([u for u in fake.urls if "/rodinne-domy/kromeriz/" in u]) == 27
     assert not any("/uherske-hradiste/" in u for u in fake.urls)   # next okres
     assert complete is False
-    zlin = [r for r in captured[0] if r.kraj == "zlinsky-kraj"]
-    assert [(r.subtype, r.okres, r.stop, r.reached_end, r.declared_total)
-            for r in zlin] == [
-        ("rodinne-domy", "kromeriz", zlin[0].stop, True, 525),
-        ("rodinne-domy", None, "deadline", False, 2100 - 525),
-        (None, None, "deadline", False, 2500 - 2100),
+    zlin = [s for s in _slices(caplog) if s["kraj"] == "zlinsky-kraj"]
+    assert [(s["subtype"], s["okres"], s["stop"], s["declared"]) for s in zlin] == [
+        ("rodinne-domy", "kromeriz", zlin[0]["stop"], "525"),
+        ("rodinne-domy", "all", "deadline", str(2100 - 525)),
+        ("all", "all", "deadline", str(2500 - 2100)),
     ]
+    assert [m_portal.stop_is_portal_end(s["stop"]) for s in zlin] == [True, False, False]
     assert any(
         r.getMessage().startswith("DESCENT ") and "axis=okres" in r.getMessage()
         for r in caplog.records)
@@ -815,16 +799,16 @@ def test_an_okres_still_over_the_ceiling_keeps_the_category_incomplete(
     okresy = dict.fromkeys(OKRES_SLUGS["stredocesky-kraj"], 10)
     okresy["praha-vychod"] = 1990                 # 100 pages
     fake = _rd_stredocesky(2100, okresy)
-    captured = _capture_results(monkeypatch)
 
-    with caplog.at_level("WARNING", logger=m.LOG.name):
+    with caplog.at_level("INFO", logger=m.LOG.name):
         _seen, _c, _t, _p, complete = _walk_ceiling(monkeypatch, fake, "rodinne-domy")
 
     assert [u for u in fake.urls if "/rodinne-domy/praha-vychod/" in u] == [
         search_url("prodej", "rodinne-domy", kraj="praha-vychod",
                    subtype="rodinne-domy")]                       # bailed at p.1
     assert complete is False
-    ceiling = [(r.subtype, r.okres) for r in captured[0] if r.outcome == "ceiling"]
+    ceiling = [(s["subtype"], s["okres"]) for s in _slices(caplog)
+               if s["outcome"] == "ceiling"]
     assert ceiling == [("rodinne-domy", "praha-vychod")]          # no residue
     assert any("DESCENT no axis left" in r.getMessage()
                and "okres=praha-vychod" in r.getMessage() for r in caplog.records)
@@ -1280,98 +1264,3 @@ def test_an_unmeasurable_national_probe_no_longer_decides(monkeypatch):
     _seen, _c, total, _pages, complete = _walk(portal, fake, monkeypatch)
     assert complete is True
     assert total == 5600                            # declared_sum, not None
-
-
-# --- the slice ledger (migration 454) ----------------------------------------
-#
-# ceskereality has been parked since migration 449 and, until this, had NO WAY
-# BACK: the coverage gate un-parks a portal on ledger evidence, and this walk
-# wrote none. The gate reported "no slice ledger for this portal" every cycle,
-# forever.
-
-
-def _portal_for_ledger():
-    return m.CeskerealityPortal(default_config("ceskereality"))
-
-
-def _record(monkeypatch, results, *, kraje=("praha", "stredocesky-kraj")):
-    written: list[dict] = []
-    monkeypatch.setattr(
-        m.db, "record_index_slice",
-        lambda _conn, **kw: written.append(kw))
-    _portal_for_ledger()._record_slices(
-        object(), {"sale_type": "prodej", "category": "byty"},
-        list(kraje), results, False)
-    return written
-
-
-def _sr(kraj, outcome, *, subtype=None, declared=100, ids=("a",), pages=4,
-        stop="declared_total_reached", okres=None):
-    return m.SliceResult(
-        kraj=kraj, subtype=subtype,
-        rows=[(i, f"https://x/{i}", None) for i in ids],
-        declared_total=declared, pages=pages, outcome=outcome, stop=stop,
-        okres=okres)
-
-
-def test_one_row_per_kraj_not_per_subtype(monkeypatch):
-    """The aggregation that keeps the ledger's key set stable. A kraj past the
-    page ceiling is re-walked per subtype and comes back as several results; if
-    those were recorded individually, the `kraj/subtype-*` rows would linger the
-    first time that kraj stopped needing the descent — never re-walked, ageing
-    forever, and one permanently stale row holds the portal parked for good."""
-    written = _record(monkeypatch, [
-        _sr("praha", "exhausted", subtype="byty-2-1", declared=60, ids=("a", "b")),
-        _sr("praha", "exhausted", subtype="byty-3-1", declared=40, ids=("c",)),
-        _sr("stredocesky-kraj", "exhausted", declared=100, ids=("d",)),
-    ])
-    assert [w["slice_key"] for w in written] == ["praha", "stredocesky-kraj"]
-    praha = written[0]
-    assert praha["declared_total"] == 100          # children partition the parent
-    assert praha["collected"] == 3                 # union of their rows
-    assert praha["pages"] == 8
-
-
-def test_okres_grandchildren_still_write_one_row_per_kraj(monkeypatch):
-    written = _record(monkeypatch, [
-        _sr("stredocesky-kraj", "exhausted", subtype="chaty", declared=40, ids=("a",)),
-        _sr("stredocesky-kraj", "exhausted", subtype="rodinne-domy", okres="benesov",
-            declared=1000, ids=("b", "c")),
-        _sr("stredocesky-kraj", "exhausted", subtype="rodinne-domy", okres="beroun",
-            declared=1100, ids=("d",)),
-        _sr("praha", "exhausted", declared=100, ids=("e",)),
-    ])
-    assert [w["slice_key"] for w in written] == ["stredocesky-kraj", "praha"]
-    stredo = written[0]
-    assert (stredo["declared_total"], stredo["collected"], stredo["pages"]) == (2140, 4, 12)
-
-
-def test_a_kraj_is_exhausted_only_if_every_part_is(monkeypatch):
-    """Fourteen good subtypes and one that failed is not 93% of a kraj — it is a
-    kraj with a hole, and nomination would read the hole as 'these went unseen'."""
-    written = _record(monkeypatch, [
-        _sr("praha", "exhausted", subtype="byty-2-1"),
-        _sr("praha", "ceiling", subtype="byty-3-1"),
-    ])
-    assert len(written) == 1
-    assert written[0]["outcome"] == "ceiling"
-
-
-def test_a_kraj_the_deadline_never_reached_is_not_written(monkeypatch):
-    """It must keep its OLD timestamp so it sorts first next run. Writing a fresh
-    row for a kraj we never walked would make the stalest slice look the newest —
-    the exact inversion db.slice_staleness treats absence as infinity to avoid."""
-    written = _record(monkeypatch, [_sr("praha", "exhausted")],
-                      kraje=("praha", "stredocesky-kraj", "jihocesky-kraj"))
-    assert [w["slice_key"] for w in written] == ["praha"]
-
-
-def test_a_dry_run_writes_nothing(monkeypatch):
-    written: list[dict] = []
-    monkeypatch.setattr(
-        m.db, "record_index_slice",
-        lambda _conn, **kw: written.append(kw))
-    _portal_for_ledger()._record_slices(
-        None, {"sale_type": "prodej", "category": "byty"},
-        ["praha"], [_sr("praha", "exhausted")], False)
-    assert written == []

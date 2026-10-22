@@ -21,7 +21,8 @@ that runs OFF the scrape hot path. Three modes:
     of re-walking the same head; only a walk that covered EVERY id in one run clears
     the whole queue, and closing a rotation LAP (cumulative coverage across however
     many runs it took) stamps `broker_resolution_last_complete` — the stamp
-    verify_pipeline's broker_resolution_freshness check ages.
+    nothing reads since the Health sprint's wave 3 retired broker_resolution_freshness
+    (migration 624 drops the row).
   * --backfill: alias for full (the one-shot first population from existing
     raw_json). Run in Actions after merge — local has no psycopg, and a raw_json
     scan over the pooler times out, so it is keyset-batched here.
@@ -425,8 +426,8 @@ _SWEEP_CURSOR_KEY = "broker_sweep_cursor"
 # never hold: the stamp would never land and the freshness check would park forever
 # on the amber a missing stamp gives it, while the one light day that did fit would
 # then age past the fail threshold with the rotation working exactly as designed.
-# Read by verify_pipeline's `broker_resolution_freshness` — rename in both places
-# or not at all.
+# Read by nothing since the Health sprint's wave 3 retired `broker_resolution_freshness`;
+# migration 624 drops the row.
 _SWEEP_COMPLETE_KEY = "broker_resolution_last_complete"
 
 _READ_SETTING_SQL = "SELECT value FROM app_settings WHERE key = %s"

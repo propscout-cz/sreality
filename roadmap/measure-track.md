@@ -187,7 +187,7 @@ coalesce of two ratios — the extension divides a property-grain rent by a list
 today, which is wrong for every merged group); `analyze_distribution` /
 `find_distribution_outliers` / `cluster_comparables` carry `basis` in their envelopes and
 degrade to `'unknown'` for the caller-supplied rows `POST /tools/analyze_distribution` accepts;
-`summarize_region_dispositions` takes `ppm2_basis`, states the unit in the payload, and REFUSES
+the Stats box-plot annotator (removed 2026-10-19, migration 627) takes `ppm2_basis`, states the unit in the payload, and REFUSES
 a `'mixed'` cohort outright (no LLM call, no cache write). Migration 426 adds
 `estimation_cohort_entries.price_per_m2_basis` (nullable; historical rows stay NULL =
 "basis unknown, pre-426", never backfilled — rules 8 and 12) and supersedes migration 104's
@@ -228,7 +228,7 @@ region-annotator prompt, guarded on `updated_by = 'seed'` (verified still `seed`
   stripped the correct `Kč/m²` from every single-basis annotation for the whole W5→W6 window.
   `BrowseExperience` passes `BrowseStats.ppm2_basis` — the basis `browse_stats_properties`
   already resolves from the cohort's own rows (migration 425), not a second derivation off the
-  filters — through `fetchRegionDispositionAnnotations`, and it is part of the React Query key.
+  filters — through the annotations fetcher (removed 2026-10-19), and it is part of the React Query key.
   **Consequence, now rather than at W6: a mixed cohort's Stats annotations disappear** —
   verified on production, the DEFAULT Browse cohort reads `mixed` (rule 22), a `deal=prodej`
   one reads `sale_capital_czk_m2`. So the server's `metadata.notes` is now RENDERED in the
@@ -549,7 +549,8 @@ Three actions remain, all requiring the operator; none of them is code.
    Independent of 438 — it touches only `price_czk` and `raw_json`.
 
 Then re-check the per-basis p05/median/p95 from `properties_map_mv` and confirm mmreality
-dum/prodej no longer reads ~5 701 Kč/m² on a ~905 m² median area.
+dum/prodej no longer reads ~5 701 Kč/m² on a ~905 m² median area (job 7 and `properties_map_mv`
+retired in migration 631; read `browse_list`).
 
 ## Next after this program
 
@@ -586,5 +587,31 @@ render its SHAPE.
   and `properties_public` call the measure with `ll.katastr_kod` and `listing_feed_public` reads
   the property's yield from `browse_list` (`browse_list_mf`, Q8 b); estimations pass the KÚ too.
   PR-A (registry publish-complete) is merged.
-- **Next — PR-F:** drops the stored `mf_*`, the 507 functions and `rent_map_*_public` right
-  after the program is verified in production (operator 2026-09-25; explicit OK + `pg_dump` first).
+- **Next — PR-F:** drops the stored `mf_*` and `rent_map_*_public` right after the program is
+  verified in production (operator 2026-09-25; explicit OK + `pg_dump` first). The two 507 MF
+  functions went earlier, in migration 631 (ONE PIN W2, ruling R11).
+
+## Time on market — one read-time measure (2026-10-17)
+Found when `tom=5-45` still listed 0–1 day cards: the filter had `pg_column=None`, so Browse's list never
+applied it (Stats and map counts did), and "days on market" had six spellings.
+- **Done — #1849:** `tom_days_min/max` is a column filter on every read model (the 535 pattern); the
+  known-gap set `BROWSE_FILTERS_NOT_ON_THE_LIST_QUERY` and the compiler's `_tom` hook are deleted.
+- **Done — #1850 (migration 617):** `public.measure_tom_days()` is the one definition; four views and
+  `toolkit.measures.tom_days_sql` (compiler, velocity, `compare_snapshots`) call it. `compare_snapshots`
+  no longer ages a closed listing.
+- **Done — "Newly listed only" (#1869, migration 625):** operator ruling 10-18 (Part A "user needs to be
+  aware" = no change; Part B = a checkbox). One rule derives the sweep days per (portal, category) into
+  `ingest_bulk_days` (first day of sightings, or > greatest(100, 4 × the pair's median); validated: our
+  sighting lags the portal's date by a median 0.6 d on ordinary days vs 16–77 d on sweep days); one measure
+  `measure_tom_observed()`; `browse_projection` publishes `tom_observed` (the earliest ad's answer); registry
+  filter `tom_observed_only` (Browse + cohorts), applied by the list, pins, Stats and map counts; the two
+  aggregate RPCs gained the defaulted parameter; `/tools/compute_market_velocity`, `/estimate_yield` and the
+  comparables inputs now pass the three TOM fields their bodies already accepted. Residue (one rule, no second
+  signal): spill-over days just under the threshold read as ordinary; a single seller's batch upload on a small
+  pair reads as a sweep (~1.1k ads). **Owed (operator kept them 10-18):** `first_seen_min_days` /
+  `first_seen_max_days` — unused in presets, watchdogs and runs, twins of `recently_added_days` / `max_age_days` —
+  were the deletion that would have paid for this filter.
+- **Open (semantics, needs an operator ruling before any code):** under `status=all` a TOM bound mixes
+  active ads' age-so-far with closed ads' completed durations (right-censored vs complete), and Stats'
+  median TOM inherits that bias; the anchor is our first sighting, so a listing live before its portal
+  was first walked reads younger (2.5 % of sreality's corpus sits on the first two days).

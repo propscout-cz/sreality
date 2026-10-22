@@ -455,6 +455,25 @@ def test_the_opening_message_never_names_a_unit_it_cannot_decide():
     assert payload["price_per_m2_unit"] == "Kč/m²/měs"
 
 
+def test_the_opening_message_carries_the_condition_never_the_parked_levels():
+    """Condition scoring is parked (rule 14): its frozen 1-5 levels reach no agent."""
+    import json
+
+    body = agent_mod._initial_user_message(
+        _target(), ComparableFilters(), purchase_price_czk=None,
+        subject_condition={"condition": "dobry", "apartment_condition_level": 4,
+                           "building_condition_level": 2},
+    )
+    target = json.loads(body.split("\n\n", 1)[1])["target"]
+    assert target["condition"] == "dobry"
+    assert not any("condition_level" in key for key in target)
+
+
+def test_find_comparables_relaxed_ignores_a_parked_level_argument():
+    """An agent still prompted with a level filter widens nothing: the argument is not a tunable."""
+    assert not any("condition_level" in name for name, _ in agent_mod._FCR_OVERRIDE_FIELDS)
+
+
 # ---------------------------------------------------------------------------
 # iteration cap
 # ---------------------------------------------------------------------------

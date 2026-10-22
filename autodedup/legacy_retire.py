@@ -80,6 +80,7 @@ from typing import Any, Callable, Iterable, Mapping
 from autodedup import apply_sql as S
 from autodedup.census import write_json
 from autodedup.ui_sql import NEGATIVE_VERDICTS
+from toolkit.property_carriers import NOTIFICATION_EVENTS_LOCK_SQL
 from toolkit.property_identity import MergeError, detach_listings
 
 RETIRE_BY: str = "autodedup-legacy-retire"
@@ -288,7 +289,8 @@ def _statement(sql: str) -> str:
              AUTO_MOVED_SQL: "auto_moved", BUILT_ON_SQL: "built_on",
              S.PROPERTY_STATE_SQL: "property_state", S.PAIR_VERDICTS_SQL: "pair_verdicts",
              S.CLUSTER_VERDICTS_SQL: "group_verdicts", S.MUST_NOT_LINK_SQL: "must_not_link",
-             S.LOCK_PROPERTIES_SQL: "lock_properties"}
+             S.LOCK_PROPERTIES_SQL: "lock_properties",
+             NOTIFICATION_EVENTS_LOCK_SQL: "notification_events_lock"}
     return names.get(sql, "other")
 
 
@@ -509,6 +511,9 @@ def _retire_one(
     back = reactivated = 0
     try:
         with conn.transaction():
+            # Before the row locks: the detach below takes the notification-events lock, which
+            # must never follow a row lock (toolkit.property_carriers).
+            _rows(conn, NOTIFICATION_EVENTS_LOCK_SQL, {})
             _rows(conn, S.LOCK_PROPERTIES_SQL,
                   {"property_ids": sorted({group.survivor_id, *group.retired_ids})})
             fresh = read_groups(conn, area, categories, group.merge_group_id, engine)

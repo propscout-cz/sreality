@@ -3,9 +3,8 @@
  * The drift guard is the most important test here: without it, a new
  * registry filter could land that fits no dispatch path AND is not
  * in HAND_CODED_BROWSE_FILTERS, and the Browse cohort would silently
- * fail to narrow when the operator sets it (exactly the
- * apartment/building_condition_level_min bug that motivated this
- * module — see PR history around #140 / #146). */
+ * fail to narrow when the operator sets it (exactly the bug that
+ * motivated this module — see PR history around #140 / #146). */
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -14,7 +13,6 @@ import { describe, expect, it } from 'vitest';
 import { FILTER_REGISTRY, type Agenda, type FilterDef } from './filterRegistry.generated';
 import { DEFAULT_FILTERS, REGISTRY_KEY_MAP } from './filters';
 import {
-  BROWSE_FILTERS_NOT_ON_THE_LIST_QUERY,
   HAND_CODED_BROWSE_FILTERS,
   applyAgendaFilters,
   applyRegistryFilters,
@@ -88,7 +86,6 @@ describe('drift guard', () => {
       if (!filter.agendas.includes('browse')) continue;
       if (filter.pg_column != null) continue;
       if (HAND_CODED_BROWSE_FILTERS.has(filter.id)) continue;
-      if (BROWSE_FILTERS_NOT_ON_THE_LIST_QUERY.has(filter.id)) continue;
       undeclared.push(filter.id);
     }
     if (undeclared.length) {
@@ -98,10 +95,7 @@ describe('drift guard', () => {
         `\nEither give the filter a column the read model PUBLISHES (see ` +
         `migration 535 — a derived measure can be a projection column), or ` +
         `hand-code it in queries.ts:applyFilters and list it in ` +
-        `HAND_CODED_BROWSE_FILTERS, or — if it genuinely reaches no list ` +
-        `predicate — record it in BROWSE_FILTERS_NOT_ON_THE_LIST_QUERY with ` +
-        `the reason. Do NOT use HAND_CODED_BROWSE_FILTERS for the last case: ` +
-        `that set is a claim that something applies the filter.`,
+        `HAND_CODED_BROWSE_FILTERS (a claim that something applies it).`,
       );
     }
   });
@@ -134,14 +128,14 @@ describe('auto-dispatch', () => {
     const r = new _Recorder();
     applyRegistryFilters(r, {
       ...DEFAULT_FILTERS,
-      buildingConditionLevelMin: 4,
-      apartmentConditionLevelMin: 3,
+      parkingLotsMin: 2,
+      gardenAreaMin: 100,
     });
     const cols = r.calls
       .filter((c) => c.op === 'gte')
       .map((c) => `${c.col}=${String(c.value)}`);
-    expect(cols).toContain('building_condition_level=4');
-    expect(cols).toContain('apartment_condition_level=3');
+    expect(cols).toContain('parking_lots=2');
+    expect(cols).toContain('garden_area=100');
   });
 
   it('emits lte for `_max` numeric filters', () => {
@@ -149,24 +143,31 @@ describe('auto-dispatch', () => {
     applyRegistryFilters(r, {
       ...DEFAULT_FILTERS,
       areaMax: 100,
-      apartmentConditionLevelMax: 4,
+      gardenAreaMax: 400,
     });
     const cols = r.calls
       .filter((c) => c.op === 'lte')
       .map((c) => `${c.col}=${String(c.value)}`);
     expect(cols).toContain('area_m2=100');
-    expect(cols).toContain('apartment_condition_level=4');
+    expect(cols).toContain('garden_area=400');
+  });
+
+  it('time-on-market bounds reach the list query (they once reached only Stats)', () => {
+    const r = new _Recorder();
+    applyRegistryFilters(r, { ...DEFAULT_FILTERS, tomDaysMin: 5, tomDaysMax: 45 });
+    expect(r.calls).toContainEqual({ op: 'gte', col: 'tom_days', value: 5 });
+    expect(r.calls).toContainEqual({ op: 'lte', col: 'tom_days', value: 45 });
   });
 
   it('emits in for string_list filters with values', () => {
     const r = new _Recorder();
     applyRegistryFilters(r, {
       ...DEFAULT_FILTERS,
-      conditionMatch: ['po_rekonstrukci', 'velmi_dobry'],
+      subtype: ['vila', 'chata'],
       dispositions: ['2+kk', '3+kk'],
     });
     const ins = r.calls.filter((c) => c.op === 'in');
-    expect(ins).toContainEqual({ op: 'in', col: 'condition', value: ['po_rekonstrukci', 'velmi_dobry'] });
+    expect(ins).toContainEqual({ op: 'in', col: 'subtype', value: ['vila', 'chata'] });
     expect(ins).toContainEqual({ op: 'in', col: 'disposition', value: ['2+kk', '3+kk'] });
   });
 
@@ -174,10 +175,10 @@ describe('auto-dispatch', () => {
     const r = new _Recorder();
     applyRegistryFilters(r, {
       ...DEFAULT_FILTERS,
-      conditionMatch: [],
+      subtype: [],
       dispositions: [],
     });
-    expect(r.calls.find((c) => c.col === 'condition')).toBeUndefined();
+    expect(r.calls.find((c) => c.col === 'subtype')).toBeUndefined();
     expect(r.calls.find((c) => c.col === 'disposition')).toBeUndefined();
   });
 
@@ -264,10 +265,10 @@ describe('auto-dispatch', () => {
       ...DEFAULT_FILTERS,
       areaMin: null,
       areaMax: null,
-      buildingConditionLevelMin: null,
+      gardenAreaMin: null,
     });
     expect(r.calls.find((c) => c.col === 'area_m2')).toBeUndefined();
-    expect(r.calls.find((c) => c.col === 'building_condition_level')).toBeUndefined();
+    expect(r.calls.find((c) => c.col === 'garden_area')).toBeUndefined();
   });
 });
 
@@ -300,17 +301,19 @@ describe('hand-coded skip set', () => {
     expect(r.calls.find((c) => c.col === 'building_type')).toBeUndefined();
   });
 
-  it('does not auto-dispatch furnished / ownership (unknown-sentinel enums)', () => {
+  it('does not auto-dispatch furnished / ownership / condition (unknown-sentinel enums)', () => {
     const r = new _Recorder();
     applyRegistryFilters(r, {
       ...DEFAULT_FILTERS,
       furnished: ['ano', '__unknown__'],
       ownership: ['osobni'],
+      conditionMatch: ['__unknown__'],
     });
-    // furnished / ownership → `.or(in.(…),is.null,not.in.(…))` is handled in
-    // queries.ts:applyFilters, NOT here.
+    // furnished / ownership / condition → `.or(in.(…),is.null,not.in.(…))` is
+    // handled in queries.ts:applyFilters, NOT here.
     expect(r.calls.find((c) => c.col === 'furnished')).toBeUndefined();
     expect(r.calls.find((c) => c.col === 'ownership')).toBeUndefined();
+    expect(r.calls.find((c) => c.col === 'condition')).toBeUndefined();
   });
 
   it('does not auto-dispatch last_seen / first_seen days-ago filters', () => {

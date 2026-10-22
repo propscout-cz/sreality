@@ -1,6 +1,8 @@
-name: "Scraping: Sreality condition scoring (hourly + manual backfill)"
+name: "Scraping: Sreality condition scoring (PARKED, manual backfill)"
 
-# Decoupled condition-scoring job. Scores building/apartment condition
+# PARKED (rule #14, operator ruling 2026-10-20): dispatch-only, and no filter,
+# agent fact or estimate reads the levels it writes. Decoupled condition-scoring
+# job. Scores building/apartment condition
 # (1..5) for active listings whose latest snapshot doesn't yet have a row in
 # `listing_condition_scores`, writing both the cache row AND the two
 # listings.*_condition_level columns in one transaction per listing
@@ -9,8 +11,8 @@ name: "Scraping: Sreality condition scoring (hourly + manual backfill)"
 # out of the next selection.
 #
 # DISPATCH-ONLY FALLBACK. The synchronous hourly cron was removed: batch
-# scoring (condition_score_batches.yml) is now the scheduled steady-state
-# driver at 50% the cost. This workflow stays as the instant-revert path
+# scoring (condition_score_batches.yml) is the steady-state driver at 50%
+# the cost (its crons are off too). This workflow stays as the revert path
 # (re-add `schedule: - cron: "30 * * * *"` below and pause the batch crons)
 # and for ad-hoc / region-scoped manual backfills. Do NOT run this on a
 # schedule alongside the batch path — both select the same pending listings,

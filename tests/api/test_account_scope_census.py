@@ -96,7 +96,7 @@ _HANDROLLED_RESOLVER_ALLOWLIST: dict[str, str] = {
         "same nullable-account-means-default-plan contract as get_billing_me, evaluated "
         "as a dependency instead of in a handler"
     ),
-    "api/property_merge.py::post_merge_property_set": (
+    "api/property_merge.py::post_merge_letters": (
         "the merge is an admin's service-role write and must succeed for an admin with no "
         "membership; the account scopes only the receipt read back after it (the acting "
         "account's own carry rows, tenancy shape 3), and no account is an empty receipt"
@@ -116,12 +116,6 @@ _HANDROLLED_RESOLVER_ALLOWLIST: dict[str, str] = {
         "divergence: it returns a READ SCOPE `[account_id, SYSTEM]` mirroring migration "
         "291's three-arm policy, so an unresolvable account narrows to `[SYSTEM]` rather "
         "than failing — it never widens, and it never returns empty"
-    ),
-    "api/manual_estimates.py::create_manual_estimate": (
-        "an admin-only (require_admin) SERVICE-ROLE write to shared reference data: "
-        "migration 290 makes `manual_rental_estimates.account_id` PROVENANCE only "
-        "(nullable, ON DELETE SET NULL, reads are platform-wide), so an admin with no "
-        "membership records NULL rather than being refused"
     ),
 }
 

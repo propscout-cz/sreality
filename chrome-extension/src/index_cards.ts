@@ -87,7 +87,7 @@ export interface CardLayerDeps {
    * replaced, never mutated. */
   cache: Map<string, PortalListing>;
   /* The yield badge for this card, or null when it gets none. */
-  badgeFor: (listing: PortalListing, href: string) => BadgeView | null;
+  badgeFor: (listing: PortalListing) => BadgeView | null;
   openPanel: (ref: PortalRef, href: string, listing: PortalListing) => void;
   /* The app's collections page, for the checklist's manage link; null hides it. */
   collectionsUrl: string | null;
@@ -664,7 +664,7 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
     const first = cache.get(sourceId);
     if (first == null) return;
     const hasProperty = first.found && first.property_id != null;
-    if (!hasProperty && deps.badgeFor(first, href) == null) return;
+    if (!hasProperty && deps.badgeFor(first) == null) return;
 
     if (getComputedStyle(card).position === 'static') card.style.position = 'relative';
 
@@ -745,7 +745,7 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
       const dismissed = pid != null && l.dismissed === true;
       const canHide = pid != null && l.dismissed != null && !isLive(l);
       const veiled = dismissed && deps.veilOn();
-      const view = deps.badgeFor(l, href);
+      const view = deps.badgeFor(l);
       /* The lists tell mine from shared and name the label; they name the tag
        * chips. A held list that lacks one of the card's collections is stale
        * (made or shared in the app since it was read): re-read it once. Before

@@ -24,7 +24,6 @@
  * lands in a follow-up commit once the map mode toggle is built.
  */
 
-import { useState } from 'react';
 import {
   FILTER_REGISTRY,
   type Agenda,
@@ -32,8 +31,8 @@ import {
 } from '@/lib/filterRegistry.generated';
 import {
   ControlGroup,
+  DecimalField,
   PickButton,
-  NumberCell,
   Section,
   TriRow,
   type TriValue,
@@ -117,20 +116,31 @@ interface FilterFormProps {
    *  built-in primitive. Use for rich widgets the controls library
    *  can't generically express (district typeahead, tag picker, …). */
   customWidgets?: Record<string, CustomFilterWidget>;
+  /** Render each row without its visible caption: the host names the row
+   *  itself (the phone's Filtry sheet heads every row with its label). The
+   *  caption stays the row's accessible name. */
+  bare?: boolean;
 }
 
-export function FilterForm({
-  scope,
-  state,
-  onChange,
-  visibility,
-  exclude,
-  includeOnly,
-  labels,
-  units,
-  flat,
-  customWidgets,
-}: FilterFormProps) {
+/** One row of the form: a filter, or a min/max pair folded into one (its max
+ *  side in `maxDef`). */
+export interface FormRow {
+  def: FilterDef;
+  maxDef: FilterDef | null;
+}
+
+/** The rows a <FilterForm> draws for this slice of the registry, in the order
+ *  it draws them (registry declaration order, pairs folded). Exported so a host
+ *  that lays the rows out one by one — the phone's Filtry sheet — orders and
+ *  pairs them exactly as the form does. */
+export function formRows(
+  scope: Agenda,
+  {
+    visibility,
+    exclude,
+    includeOnly,
+  }: Pick<FilterFormProps, 'visibility' | 'exclude' | 'includeOnly'> = {},
+): FormRow[] {
   const excludeSet = new Set(exclude ?? []);
   const visibilityById = new Map(
     (visibility ?? []).map((v) => [v.id, v.visibility]),
@@ -175,9 +185,27 @@ export function FilterForm({
       }
     }
   }
+  return visibleFilters
+    .filter((f) => !skipAsMax.has(f.id))
+    .map((def) => ({ def, maxDef: pairedAsMin.get(def.id) ?? null }));
+}
 
-  const renderRow = (f: FilterDef) => {
-    const maxDef = pairedAsMin.get(f.id);
+export function FilterForm({
+  scope,
+  state,
+  onChange,
+  visibility,
+  exclude,
+  includeOnly,
+  labels,
+  units,
+  flat,
+  customWidgets,
+  bare,
+}: FilterFormProps) {
+  const rows = formRows(scope, { visibility, exclude, includeOnly });
+
+  const renderRow = ({ def: f, maxDef }: FormRow) => {
     const custom = customWidgets?.[f.id];
     if (custom) {
       // Render the operator-supplied widget inside the standard
@@ -185,25 +213,26 @@ export function FilterForm({
       // built-in rows.
       const label = labels?.[f.id] ?? prettifyId(f.id);
       return (
-        <Section key={f.id} label={label}>
+        <Caption key={f.id} label={label} bare={bare}>
           {custom({
             value: state[f.id],
             onChange: (v) => onChange([{ id: f.id, value: v }]),
             label,
           })}
-        </Section>
+        </Caption>
       );
     }
     return (
       <FilterRow
         key={f.id}
         def={f}
-        maxDef={maxDef ?? null}
+        maxDef={maxDef}
         value={state[f.id]}
         maxValue={maxDef ? state[maxDef.id] : undefined}
         emit={onChange}
         label={labels?.[f.id] ?? prettifyPair(f.id, maxDef?.id)}
         unit={units?.[f.id] ?? f.unit ?? null}
+        bare={bare}
       />
     );
   };
@@ -212,21 +241,14 @@ export function FilterForm({
     // Preserve registry declaration order so paired rows land next to
     // their host group; the caller's wrapping `<ControlGroup>` provides
     // the visual heading.
-    return (
-      <>
-        {visibleFilters
-          .filter((f) => !skipAsMax.has(f.id))
-          .map(renderRow)}
-      </>
-    );
+    return <>{rows.map(renderRow)}</>;
   }
 
-  const byCategory = new Map<string, FilterDef[]>();
-  for (const f of visibleFilters) {
-    if (skipAsMax.has(f.id)) continue;
-    const list = byCategory.get(f.category) ?? [];
-    list.push(f);
-    byCategory.set(f.category, list);
+  const byCategory = new Map<string, FormRow[]>();
+  for (const r of rows) {
+    const list = byCategory.get(r.def.category) ?? [];
+    list.push(r);
+    byCategory.set(r.def.category, list);
   }
 
   return (
@@ -298,6 +320,24 @@ function prettifyPair(minId: string, _maxId: string | undefined): string {
   return prettifyId(core);
 }
 
+/* A row's caption over its control, or — `bare` — only the group it names. */
+function Caption({
+  label,
+  bare,
+  children,
+}: {
+  label: string;
+  bare?: boolean;
+  children: React.ReactNode;
+}) {
+  if (!bare) return <Section label={label}>{children}</Section>;
+  return (
+    <div role="group" aria-label={label}>
+      {children}
+    </div>
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 /* Per-row dispatch                                                           */
 /* -------------------------------------------------------------------------- */
@@ -310,6 +350,7 @@ function FilterRow({
   emit,
   label,
   unit,
+  bare,
 }: {
   def: FilterDef;
   maxDef: FilterDef | null;
@@ -321,11 +362,15 @@ function FilterRow({
    * supplied one, else the registry's static string. Never read `def.unit`
    * directly below: that is how a rent cohort ended up labelled CZK/m². */
   unit: string | null;
+  bare?: boolean;
 }) {
   // Single-filter helper: most rows fire one update at a time. Paired
   // ranges below build a 2-element update array directly so both
   // sides apply atomically against the parent's filter state.
   const onChange = (v: unknown) => emit([{ id: def.id, value: v }]);
+  // A number box emits only a changed value (DecimalField emits every parse).
+  const num = (value as number | null) ?? null;
+  const onNumber = (v: number | null) => v !== num && onChange(v);
 
   // When paired with a max-side, render the pair as either:
   //   - a dual-thumb RangeSlider when the registry declares a complete
@@ -346,7 +391,7 @@ function FilterRow({
       typeof c.step === 'number';
     if (hasFullBounds && def.ui_control !== 'range_inputs') {
       return (
-        <Section label={label}>
+        <Caption label={label} bare={bare}>
           <RangeSlider
             bounds={{
               min: c.min as number,
@@ -366,11 +411,11 @@ function FilterRow({
             unit={unit ?? undefined}
             ariaLabel={label}
           />
-        </Section>
+        </Caption>
       );
     }
     return (
-      <Section label={label}>
+      <Caption label={label} bare={bare}>
         <RangeInputs
           minValue={(value as number | null) ?? null}
           maxValue={(maxValue as number | null) ?? null}
@@ -385,40 +430,39 @@ function FilterRow({
           ariaLabelMax={`${label} max`}
         />
         {unit ? <UnitHint unit={unit} /> : null}
-      </Section>
+      </Caption>
     );
   }
 
   switch (def.ui_control) {
     case 'pill_group':
       return (
-        <Section label={label}>
+        <Caption label={label} bare={bare}>
           <PillRow def={def} value={value as string | null} onChange={onChange} />
-        </Section>
+        </Caption>
       );
 
     case 'single_select':
       return (
-        <Section label={label}>
+        <Caption label={label} bare={bare}>
           <SingleSelectRow
             def={def}
             label={label}
             value={value as string | number | null}
             onChange={onChange}
           />
-        </Section>
+        </Caption>
       );
 
     case 'multiselect':
       return (
-        <Section label={label}>
+        <Caption label={label} bare={bare}>
           <MultiselectRow
             def={def}
-            label={label}
             value={(value as Array<string | number> | null) ?? []}
             onChange={onChange}
           />
-        </Section>
+        </Caption>
       );
 
     case 'tristate': {
@@ -442,36 +486,31 @@ function FilterRow({
       // number input — happens for `min_parking_lots` and any future
       // min-only field. Paired ranges are caught above.
       return (
-        <Section label={label}>
-          <BufferedNumberInput
-            value={(value as number | null) ?? null}
-            coerce={def.type === 'int' ? 'int' : 'float'}
+        <Caption label={label} bare={bare}>
+          <DecimalField
+            cell
+            label={label}
+            value={num}
+            integer={def.type === 'int'}
             placeholder={unit ? `value ${unit}` : 'value'}
-            onChange={onChange}
-            ariaLabel={label}
+            onChange={onNumber}
           />
-        </Section>
+        </Caption>
       );
 
     case 'number_input':
       return (
-        <Section label={label}>
-          <BufferedNumberInput
-            value={(value as number | null) ?? null}
-            coerce={def.type === 'int' ? 'int' : 'float'}
+        <Caption label={label} bare={bare}>
+          <DecimalField
+            cell
+            label={label}
+            value={num}
+            integer={def.type === 'int'}
             placeholder="—"
-            onChange={onChange}
-            ariaLabel={label}
+            onChange={onNumber}
           />
           {unit ? <UnitHint unit={unit} /> : null}
-        </Section>
-      );
-
-    case 'csv_input':
-      return (
-        <Section label={label}>
-          <CsvRow def={def} ariaLabel={label} value={value} onChange={onChange} />
-        </Section>
+        </Caption>
       );
 
     case 'boolean':
@@ -495,72 +534,6 @@ function FilterRow({
     default:
       return null;
   }
-}
-
-/* -------------------------------------------------------------------------- */
-/* BufferedNumberInput                                                        */
-/*                                                                            */
-/* Single-number widget with a local text buffer. The old handler parsed     */
-/* every keystroke and silently dropped unparseable intermediates — with a   */
-/* controlled input that WIPED the character, so typing "-10" into the       */
-/* signed total-price-change filter stored +10 (the opposite cohort) and     */
-/* "7.5" became 75. The buffer keeps the raw text; only complete parses      */
-/* emit. `buf.value` tracks the last emitted/adopted value so an external    */
-/* change (preset load, URL navigation, Reset) resyncs the text, while       */
-/* mid-typing intermediates (which emit nothing) keep it.                    */
-/* -------------------------------------------------------------------------- */
-
-// Exported for reuse outside the generic filter-registry form — Brokers.tsx's value
-// filter (migration 448) wants the same safe-buffering numeric input, driven by its
-// own local state instead of a FilterDef, and duplicating this logic would risk the
-// exact bug this component's own header comment documents.
-export function BufferedNumberInput({
-  value,
-  coerce,
-  placeholder,
-  onChange,
-  ariaLabel,
-}: {
-  value: number | null;
-  coerce: 'int' | 'float';
-  placeholder: string;
-  onChange: (v: number | null) => void;
-  ariaLabel?: string;
-}) {
-  const [buf, setBuf] = useState<{ text: string; value: number | null }>({
-    text: value == null ? '' : String(value),
-    value,
-  });
-  if (buf.value !== value) {
-    // Adjust-state-during-render (the documented derived-state pattern):
-    // the parent changed the value out from under us — adopt it.
-    setBuf({ text: value == null ? '' : String(value), value });
-  }
-  return (
-    <NumberCell
-      value={buf.text}
-      placeholder={placeholder}
-      ariaLabel={ariaLabel}
-      onChange={(e) => {
-        const raw = e.target.value;
-        const trimmed = raw.trim();
-        if (trimmed === '') {
-          setBuf({ text: raw, value: null });
-          if (value !== null) onChange(null);
-          return;
-        }
-        const n = Number(trimmed);
-        if (!Number.isFinite(n)) {
-          // Intermediate ('-', '.', '1e') — keep the text, emit nothing.
-          setBuf({ text: raw, value });
-          return;
-        }
-        const v = coerce === 'int' ? Math.trunc(n) : n;
-        setBuf({ text: raw, value: v });
-        if (v !== value) onChange(v);
-      }}
-    />
-  );
 }
 
 /* -------------------------------------------------------------------------- */
@@ -588,12 +561,10 @@ function PillRow({
 }) {
   const opts = optionsFor(def);
   if (opts.length === 0) return null;
-  /* A nullable pill group gets an explicit leading "Vše" (all) pill. Clicking
-   * the selected pill already cleared the value, but that affordance is
-   * invisible — and for `category_type` the model could not even hold the
-   * cleared state, so the URL round-trip silently snapped back to the default.
-   * Declared once in the registry (FilterDef.nullable), so any future nullable
-   * enum gets the same control without touching this file. */
+  /* No "Vše" pill (operator, 2026-10-20): a nullable group's "no constraint"
+   * state (FilterDef.nullable — `category_type` via the Pipeline chip, the
+   * phone feed's Vše scope) lights no pill, and clicking the selected pill
+   * returns to it. */
   // Auto-fit grid instead of a fixed column count: each pill claims a
   // ~4rem minimum and the browser packs as many per row as the group's
   // current width allows, then stretches them to fill. So as the
@@ -603,11 +574,6 @@ function PillRow({
   // ~4 across — unchanged from before.
   return (
     <div className="grid gap-1 [grid-template-columns:repeat(auto-fit,minmax(4rem,1fr))]">
-      {def.nullable ? (
-        <PickButton on={value == null} onClick={() => onChange(null)} variant="solid">
-          Vše
-        </PickButton>
-      ) : null}
       {opts.map((opt) => (
         <PickButton
           key={String(opt.value)}
@@ -646,75 +612,18 @@ function SingleSelectRow({
 
 function MultiselectRow({
   def,
-  label,
   value,
   onChange,
 }: {
   def: FilterDef;
-  label: string;
   value: ReadonlyArray<string | number>;
   onChange: (v: Array<string | number> | null) => void;
 }) {
-  const opts = optionsFor(def);
-  if (opts.length === 0) {
-    // Free-form list with no closed taxonomy — fall back to CSV.
-    return (
-      <CsvRow
-        def={def}
-        ariaLabel={label}
-        value={value}
-        onChange={(v) => onChange(v as Array<string | number> | null)}
-      />
-    );
-  }
   return (
     <MultiselectChips
       value={value}
-      options={opts}
+      options={optionsFor(def)}
       onChange={(next) => onChange(next.length === 0 ? null : next)}
-    />
-  );
-}
-
-function CsvRow({
-  def,
-  ariaLabel,
-  value,
-  onChange,
-}: {
-  def: FilterDef;
-  /* This file's idiom (BufferedNumberInput takes ariaLabel too). */
-  ariaLabel: string;
-  value: unknown;
-  onChange: (v: unknown) => void;
-}) {
-  const arr = Array.isArray(value) ? value : [];
-  const isIntList = def.type === 'int_list';
-  return (
-    <input
-      type="text"
-      aria-label={ariaLabel}
-      value={arr.map((x) => String(x)).join(', ')}
-      placeholder="comma-separated"
-      onChange={(e) => {
-        const parts = e.target.value
-          .split(',')
-          .map((s) => s.trim())
-          .filter(Boolean);
-        if (parts.length === 0) {
-          onChange(null);
-          return;
-        }
-        if (isIntList) {
-          const ints = parts
-            .map((p) => Number(p))
-            .filter((n) => Number.isFinite(n) && n > 0);
-          onChange(ints.length === 0 ? null : ints);
-        } else {
-          onChange(parts);
-        }
-      }}
-      className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]"
     />
   );
 }

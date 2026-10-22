@@ -1,19 +1,21 @@
 """Property merge MECHANICS — the operator's curation surface, not a decision engine.
 
-Everything here starts from a merge the operator (or another caller) has already
-ORDERED: collapse this explicit set of properties, or state how one property's adverts split.
-Nothing in this module decides *whether* two properties are the same.
+Everything here starts from a statement the operator (or another caller) has already MADE: a
+letter per property (properties with the same letter are one property afterwards), or a letter
+per advert of one property (how it splits). Nothing in this module decides *whether* two
+properties are the same.
 
 The one merge and the one undo live in `toolkit.property_identity` (`merge_property_set` /
 `detach_listings` — the survivor rule, the carry record and the curation routing, browse sync,
-the `property_merge_events` ledger and, for the operator's merge, the rulings of MS12); the
-operator's split by letters composes them in `toolkit.property_split` (MS18). This module is
-the HTTP + read layer over them. Mounted under `/properties/*`, admin-gated.
+the `property_merge_events` ledger and, for the operator's merge, the rulings of MS12);
+`merge_letters` makes a statement over properties true in one transaction, and the split by
+letters composes both in `toolkit.property_split` (MS18). This module is the HTTP + read layer
+over them. Mounted under `/properties/*`, admin-gated.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 from uuid import UUID
 
 import psycopg
@@ -22,14 +24,17 @@ from pydantic import BaseModel, Field
 
 from api import dependencies as deps
 from api import tenant_pool
-from api.category_clash_text import LETTER_ENDING, MERGE_ENDING, clash_sentence
+from api.category_clash_text import LETTER_ENDING, clash_sentence
 from toolkit.property_identity import (
+    BadLetters,
     CategoryClash,
     MergeError,
     adverts_on,
+    letter_sets,
+    letter_tokens,
     listing_origins,
+    merge_letters,
     merge_preview,
-    merge_property_set,
     resolve_active_property_id,
 )
 from toolkit.property_split import (
@@ -44,8 +49,29 @@ from toolkit.property_split import (
 router = APIRouter(prefix="/properties", tags=["properties"])
 
 
-class PropertySetAction(BaseModel):
-    property_ids: list[int]
+MAX_PROPERTIES = 200
+
+
+class LettersStatement(BaseModel):
+    """The operator's statement over properties (Browse's merge mode): a letter A–Z per property,
+    properties with the same letter one property afterwards."""
+
+    letters: dict[int, str]
+
+
+def _statement(letters: Mapping[Any, Any]) -> list[tuple[str, list[int]]]:
+    """The statement's letters in merge order, or a 400: a letter needs two properties (one is
+    no merge, and a lone letter on the page is a slip), at most `MAX_PROPERTIES` in all."""
+    if not 2 <= len(letters) <= MAX_PROPERTIES:
+        raise HTTPException(status_code=400, detail=f"need 2 to {MAX_PROPERTIES} properties")
+    try:
+        sets = letter_sets(letters)
+    except BadLetters as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if lone := [letter for letter, ids in sets if len(ids) < 2]:
+        raise HTTPException(status_code=400,
+                            detail=f"a letter needs two properties: {', '.join(lone)}")
+    return sets
 
 
 class SplitChoice(BaseModel):
@@ -126,51 +152,54 @@ def merge_receipt(conn: psycopg.Connection, merged: dict[str, Any],
 
 
 @router.post("/merge")
-def post_merge_property_set(
-    body: PropertySetAction,
+def post_merge_letters(
+    body: LettersStatement,
     conn: Any = Depends(deps.get_db_conn),
     claims: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
-    """Merge an explicit operator-chosen set of properties into its oldest record; the answer
-    adds the acting account's receipt (`merge_receipt`: `carried`, `hidden_for_you`), both null
-    when that read fails after the merge has committed. A category clash over the set's ads is
-    a 409 `{code, message, ids}` in Czech, naming the two properties."""
-    if len(set(body.property_ids)) < 2:
-        raise HTTPException(status_code=400, detail="need at least two properties")
+    """Make the statement true (`merge_letters`: each letter into its oldest record, one
+    transaction, nothing on a refusal); the answer is one receipt per letter — the merge's data
+    plus the acting account's `merge_receipt` (`carried`, `hidden_for_you`, both null when that
+    read fails after the commit). A category clash over a letter's ads is a 409
+    `{code, message, ids}` in Czech naming the two properties and, with several letters, the
+    letter."""
+    sets = _statement(body.letters)
     account = tenant_pool.resolve_account_id(conn, claims) if claims.get("sub") else None
     try:
-        merged = merge_property_set(
-            conn, body.property_ids, source="operator", reason="manual_subset",
-            decided_by=_decider(claims),
-        )["data"]
+        merged = merge_letters(conn, body.letters, decided_by=_decider(claims))
     except CategoryClash as exc:
+        ids = list(exc.properties or ())
+        sentence = clash_sentence(exc.field, exc.a, exc.b, ending=LETTER_ENDING)
+        letter = body.letters.get(ids[0]) if ids and len(sets) > 1 else None
         raise HTTPException(status_code=409, detail={
-            "code": "refused", "ids": list(exc.properties or ()),
-            "message": clash_sentence(exc.field, exc.a, exc.b, ending=MERGE_ENDING),
+            "code": "refused", "ids": ids,
+            "message": f"Písmeno {letter}: {sentence}" if letter else sentence,
         }) from exc
     except MergeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    try:
-        return {**merged, **merge_receipt(conn, merged, account)}
-    except psycopg.Error:
-        return {**merged, "carried": None, "hidden_for_you": None}
+    receipts: dict[str, Any] = {}
+    for letter, data in merged.items():
+        try:
+            receipts[letter] = {**data, **merge_receipt(conn, data, account)}
+        except psycopg.Error:
+            receipts[letter] = {**data, "carried": None, "hidden_for_you": None}
+    return {"letters": receipts}
 
 
 @router.get("/merge")
 def get_merge_preview(
-    properties: str = Query(..., max_length=2000),
+    letters: str = Query(..., max_length=4000),
     conn: Any = Depends(deps.get_db_conn),
     _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
-    """How many "different" rulings a merge of these properties (`?properties=12,34`) would
-    take back (MS12), before the click; reads only."""
+    """How many "different" rulings each letter of the statement (`?letters=12:A,34:A,56:B`,
+    `letter_tokens`) would take back (MS12), before the click; reads only."""
     try:
-        ids = sorted({int(p) for p in properties.split(",") if p.strip()})
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="properties is a comma-separated id list") from exc
-    if len(ids) < 2:
-        raise HTTPException(status_code=400, detail="need at least two properties")
-    return merge_preview(conn, ids)
+        statement = letter_tokens(letters)
+    except BadLetters as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _statement(statement)
+    return merge_preview(conn, statement)
 
 
 def _refused(refusal: dict[str, Any] | None) -> dict[str, Any] | None:

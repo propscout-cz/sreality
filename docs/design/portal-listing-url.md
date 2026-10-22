@@ -265,7 +265,7 @@ URL — **before any migration or SPA change**.
      string | null` with the never-reconstruct comment.
    - `portals.ts`: **delete** `srealitySubSlug`, `srealityListingUrl`, `SrealityCategory`, and
      `portalListingUrl` (once reconstruction is gone it returns its argument — a wrapper that invites the
-     branch back). Keep the label helpers. `CATEGORY_SUB_LABELS` stays for display only.
+     branch back). Keep the label helpers. `CATEGORY_SUB_LABELS` stays for display only (deleted unused, Valuo W1, 2026-10-19).
    - Rewire: `priceHistory.ts` (drop the parent-derived triple; `url: s.source_url`, and
      `listing.source_url` in the pre-attach fallback — this is where A4 dies); `ListingDetail.tsx`
      prefill (`currentSource?.source_url ?? listing.source_url`); `ComparableModal.tsx`
@@ -300,8 +300,8 @@ URL — **before any migration or SPA change**.
    ≈ 44 requests, full codebook every 4 weeks). Threshold on **concentration**, not rate: fail when any
    `(category_main, cb)` cell with ≥3 samples is ≥2/3 non-conforming (a slug defect fails a whole cell
    together; a scattered 404 is a delisting rule #3 has not caught up with) — warn above 5% overall.
-   Labels in `frontend/src/lib/pipelineChecks.ts`; alerting rides `emit_transition_alerts`.
-4. **Separate 4-line PR (one purpose):** `frontend/src/lib/api.ts` `SUPPORTED_SOURCES` + `types.ts`
+   Labels in `frontend/src/lib/pipelineChecks.ts`; alerting rides `toolkit/system_alerts.reconcile` (the API's 60 s loop; wave 1 of the Health dashboard sprint, 2026-10-18).
+4. **Separate 4-line PR (one purpose):** `frontend/src/lib/api.ts` `SUPPORTED_SOURCES` (deleted unused, Valuo W1, 2026-10-19) + `types.ts`
    `SourceKind` gain `ceskereality` and `realitymix` to match `scraper/source_dispatcher._KIND_SUFFIXES`
    (§8 — a live wrong-copy bug, not the unification).
 

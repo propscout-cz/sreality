@@ -25,6 +25,7 @@
 
 import { useCallback, useId, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { actOpts, useActAs } from '@/lib/acting';
 import { deleteTag, updateTag } from '@/lib/api';
 import { revalidateTags } from '@/lib/tagCache';
 import type { Tag, TagColor } from '@/lib/types';
@@ -118,24 +119,29 @@ function Popover({
     otherNames.includes(trimmed.toLowerCase());
   const dirty = trimmed !== tag.name || color !== tag.color;
 
+  const actAs = useActAs();
   const save = useMutation({
     mutationFn: () =>
-      updateTag(tag.id, {
-        name: trimmed !== tag.name ? trimmed : undefined,
-        color: color !== tag.color ? color : undefined,
-      }),
+      updateTag(
+        tag.id,
+        {
+          name: trimmed !== tag.name ? trimmed : undefined,
+          color: color !== tag.color ? color : undefined,
+        },
+        ...actOpts(actAs),
+      ),
     onSuccess: () => {
       setError(null);
-      revalidateTags(qc);
+      revalidateTags(qc, actAs);
       onClose();
     },
     onError: (err: Error) => setError(err.message || 'Failed to save'),
   });
 
   const del = useMutation({
-    mutationFn: () => deleteTag(tag.id),
+    mutationFn: () => deleteTag(tag.id, ...actOpts(actAs)),
     onSuccess: () => {
-      revalidateTags(qc);
+      revalidateTags(qc, actAs);
       onDeleted?.(tag.id);
       onClose();
     },

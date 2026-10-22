@@ -1,44 +1,53 @@
 /* "Create watchdog from Browse" — a small name-prompt dialog.
  *
- * The Browse page builds a WatchdogFilterSpec from the current filters
- * (filtersToWatchdogSpec) and opens this modal so the operator can name the
- * saved filter before it's persisted. On confirm we POST
- * /notifications/subscriptions; on success the watchdog shows up in the
- * Watchdog feed / Manage list like any other.
+ * Browse hands this modal its current filters. The modal builds the
+ * WatchdogFilterSpec (filtersToWatchdogSpec), suggests a name
+ * (watchdogNameSuggestion), and on confirm POSTs /notifications/subscriptions;
+ * on success the watchdog shows up in the Watchdogs list like any
+ * other.
  *
- * Self-contained (no context provider): Browse owns the open/close state and
- * passes the prepared spec in. Any Browse filters the matcher can't honour are
- * surfaced as a heads-up so the operator isn't surprised. */
+ * The map area is the one choice made here (rule 16: what Browse shows is what
+ * a watchdog watches). The box Browse is filtering on is watched too unless
+ * the operator unticks it — the question the preset dialog asks, because a
+ * watchdog pinned to a stale viewport fires forever on the wrong place. A
+ * centre+radius pick is a sidebar filter, not a viewport, so it always rides
+ * along and the checkbox stays off screen. Any Browse filters the matcher
+ * can't honour are surfaced as a heads-up so the operator isn't surprised.
+ *
+ * Self-contained (no context provider): Browse owns the open/close state. */
 
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
 import { useMutation } from '@tanstack/react-query';
 import { ApiError, createWatchdogSubscription } from '@/lib/api';
-import type { WatchdogFilterSpec } from '@/lib/types';
+import {
+  filtersToWatchdogSpec,
+  watchdogNameSuggestion,
+  type ListingFilters,
+} from '@/lib/filters';
 import Dialog from '@/components/Dialog';
-import { DeliveryChannelsPicker } from '@/components/DeliveryChannelsPicker';
+
+export const MAP_AREA_LABEL = 'Include the current map area in this watchdog';
 
 export interface CreateWatchdogModalProps {
-  spec: WatchdogFilterSpec;
-  /* Set-but-unmonitored Browse filters (from filtersToWatchdogSpec). */
-  unsupported: string[];
-  /* A suggested default name derived from the active filters. */
-  suggestedName: string;
+  filters: ListingFilters;
   onClose: () => void;
 }
 
-export default function CreateWatchdogModal({
-  spec,
-  unsupported,
-  suggestedName,
-  onClose,
-}: CreateWatchdogModalProps) {
+export default function CreateWatchdogModal({ filters, onClose }: CreateWatchdogModalProps) {
   const navigate = useNavigate();
-  const [name, setName] = useState(suggestedName);
-  const [channels, setChannels] = useState<string[]>([]);
+  const [name, setName] = useState(() => watchdogNameSuggestion(filters));
+  const [withMapArea, setWithMapArea] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
   const titleId = useId();
+
+  /* The viewport box is offered; a centre+radius square is not a viewport. */
+  const offersMapArea = filters.locationMode === 'viewport' && filters.bounds != null;
+  const { spec, unsupported } = useMemo(
+    () => filtersToWatchdogSpec(filters, { includeMapArea: offersMapArea && withMapArea }),
+    [filters, offersMapArea, withMapArea],
+  );
 
   /* Focus is the primitive's (`initialFocus` below). What this adds is the
    * SELECTION, so the suggested name can be typed straight over. Mount-only:
@@ -53,10 +62,9 @@ export default function CreateWatchdogModal({
         name: watchdogName,
         filter_spec: spec,
         is_active: true,
-        channels,
       }),
     onSuccess: () => {
-      navigate(ROUTES.watchdogManage.build());
+      navigate(ROUTES.watchdog.build());
     },
   });
 
@@ -74,16 +82,9 @@ export default function CreateWatchdogModal({
         : null;
 
   /* Escape, the focus trap, initial + restored focus, the backdrop click and
-   * the body scroll lock all come from <Dialog> (lib/useDialog.ts). The
-   * hand-rolled window listener that used to live here is gone, and so is the
-   * panel's `onClick={(e) => e.stopPropagation()}` — that existed only to stop
-   * the backdrop's own `onClick={onClose}` from firing on a click INSIDE the
-   * dialog, and <Dialog> makes the target test instead of asking the panel to
-   * swallow every click that reaches it.
-   *
-   * The name is now the VISIBLE heading rather than the literal "Create
-   * watchdog" the old aria-label carried, so what a screen reader announces is
-   * what the operator reads. */
+   * the body scroll lock all come from <Dialog> (lib/useDialog.ts). The name
+   * is the VISIBLE heading, so what a screen reader announces is what the
+   * operator reads. */
   return (
     <Dialog open onClose={onClose} labelledBy={titleId} initialFocus={inputRef} className="w-full max-w-md p-5">
       <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
@@ -118,14 +119,27 @@ export default function CreateWatchdogModal({
         />
       </label>
 
-      <div className="mt-4">
-        <span className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)]">
-          Delivery
-        </span>
-        <div className="mt-1.5">
-          <DeliveryChannelsPicker value={channels} onChange={setChannels} />
-        </div>
-      </div>
+      {offersMapArea ? (
+        <button
+          type="button"
+          onClick={() => setWithMapArea((v) => !v)}
+          aria-pressed={withMapArea}
+          className="mt-3 flex w-full items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-3 py-2 text-left transition-colors hover:border-[var(--color-rule-strong)]"
+        >
+          <span
+            className={[
+              'flex h-4 w-4 shrink-0 items-center justify-center rounded-[3px] border text-[0.6rem]',
+              withMapArea
+                ? 'border-[var(--color-copper)] bg-[var(--color-copper)] text-white'
+                : 'border-[var(--color-rule-strong)] text-transparent',
+            ].join(' ')}
+            aria-hidden
+          >
+            ✓
+          </span>
+          <span className="text-[0.8rem] text-[var(--color-ink-2)]">{MAP_AREA_LABEL}</span>
+        </button>
+      ) : null}
 
       {unsupported.length > 0 ? (
         <div className="mt-3 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-3 py-2">
@@ -134,8 +148,8 @@ export default function CreateWatchdogModal({
             <span className="text-[var(--color-ink)]">
               {unsupported.join(', ')}
             </span>
-            . A watchdog fires on brand-new listings, so date / status / map-area
-            filters don't apply.
+            . A watchdog fires on brand-new listings, so date / status filters
+            don't apply.
           </p>
         </div>
       ) : null}

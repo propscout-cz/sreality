@@ -5,12 +5,15 @@
 
 import { useQuery } from '@tanstack/react-query';
 
+import { actingKey, actOpts, useActAs } from '@/lib/acting';
 import { fetchArtifactLinks } from '@/lib/api';
 import { curationKeys } from '@/lib/queries';
 
-export const useArtifactLinks = () =>
-  useQuery({
-    queryKey: curationKeys.artifactLinks,
-    queryFn: fetchArtifactLinks,
+export const useArtifactLinks = () => {
+  const actAs = useActAs();
+  return useQuery({
+    queryKey: actingKey(actAs, curationKeys.artifactLinks),
+    queryFn: () => fetchArtifactLinks(...actOpts(actAs)),
     staleTime: 30_000,
   });
+};

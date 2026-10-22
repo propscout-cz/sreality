@@ -1,7 +1,7 @@
 # Collection sharing, view-only — spec (v2, rulings in)
 
-Status: **approved 2026-10-17** — the operator ruled on every question (§8); W1–W6 run on this text.
-W1–W5 merged (#1833, #1834, #1835, #1837, #1838); W6 in PR #1839 (feature/collection-sharing-extension); migration 610_collection_shares.sql (renumbered from 609 after #1836 took it; applied + verified in production 2026-10-17).
+Status: **approved 2026-10-17** — the operator ruled on every question (§8); W1–W7 run on this text.
+W1–W6 merged (#1833, #1834, #1835, #1837, #1838, #1839); migration 610_collection_shares.sql (renumbered from 609 after #1836 took it; applied + verified in production 2026-10-17). W7 in PR #1840 (feature/collection-sharing-marks-reach-later-shares): migration 613_shared_notes_reach_later_shares.sql drops the consent-time anchor (ruling 9); applied AFTER its merge and the Railway API + worker rollout (the split's note copy deployed before W7 still names `shared_at`). #1830 holds 611 and #1829 612.
 Written from a seven-reader code map, three independent designs and a three-lens judge panel (Opus),
 then verified by hand against the code and the live database, then revised to the rulings.
 
@@ -45,6 +45,9 @@ the note's own `shared` mark and the database's read policies as the ONLY places
   account, collection_monitor → the collection's OWNER, else SYSTEM). `system_health` rows have no
   property subject and render as a text row. External delivery (`channel_sends`) resolves ONE
   operator-wide address (`notification_email_to`), so per-recipient email is not built.
+  *Superseded 2026-10-21 ([notifications-push/PROGRAM.md](./notifications-push/PROGRAM.md), W1):
+  `system_health` writes no row, `channel_sends` and its outbox are retired, and delivery becomes
+  push to each event account's own iPhones (W4).*
 - **Alerts and merges need no change.** Collection-monitor dispatches are stamped to the owner.
   Merge carriers move membership by `collection_id` and notes by property; neither reads shares.
 - **Duplication sharing would multiply** (evidence in §5): 16 hand-typed `useQuery` sites over the
@@ -82,13 +85,9 @@ create policy collection_shares_party on collection_shares for all to authentica
   using      (account_id in (select current_account_ids()) or recipient_account_id in (select current_account_ids()))
   with check (account_id in (select current_account_ids()));
 
--- The author's mark. Default private; the author flips it; RLS reads it. shared_at = when the
--- mark last turned on (trigger-stamped; NULL while private; an edit never moves it).
+-- The author's mark. Default private; the author flips it; RLS reads it. (610 also added a
+-- trigger-stamped shared_at consent time; 613 dropped it, ruling 9.)
 alter table property_notes add column shared boolean not null default false;
-alter table property_notes add column shared_at timestamptz;
-create function stamp_property_notes_shared_at() returns trigger ...  -- on: now(); off: NULL; else keep
-create trigger property_notes_shared_at_biu before insert or update on property_notes
-  for each row execute function stamp_property_notes_shared_at();
 
 -- Reads widen, FOR SELECT only. The FOR ALL *_tenant_rw owner policies are NOT touched.
 create policy collections_shared_read on collections for select to authenticated
@@ -98,16 +97,13 @@ create policy collection_properties_shared_read on collection_properties for sel
 -- A shared note is readable by every party of a share whose collection holds the property and whose
 -- OTHER side is the author. collection_shares is RLS-filtered to the caller's own party rows, so
 -- "author is a party" means "author is the counterparty" for anyone but the author (own policy).
--- An author who RECEIVED the share never chose that audience (no acceptance step), so that arm
--- counts only shares that already existed when the author marked the note.
+-- Any share, made before or after the mark (ruling 9, migration 613).
 create policy property_notes_shared_read on property_notes for select to authenticated
   using (shared and exists (
           select 1 from collection_shares s
             join collection_properties cp on cp.collection_id = s.collection_id
            where cp.property_id = property_notes.property_id
-             and (property_notes.account_id = s.account_id
-                  or (property_notes.account_id = s.recipient_account_id
-                      and s.created_at <= property_notes.shared_at))));
+             and property_notes.account_id in (s.account_id, s.recipient_account_id)));
 create policy property_note_attachments_shared_read on property_note_attachments for select to authenticated
   using (note_id in (select id from property_notes));
 
@@ -173,14 +169,13 @@ Why this shape and nothing more:
 - **No new or replaced view.** The `*_public` views inherit through their base tables, so the
   391/393 `security_invoker` hazard does not recur.
 - **No carrier entry.** The share row names no property; both carrier censuses look only at
-  property foreign keys. `property_notes.shared` + `shared_at` ride the note through a merge, and a
-  split's copy writes both (`toolkit/property_carriers.py` `_INSERT_SQL`).
+  property foreign keys. `property_notes.shared` rides the note through a merge, and a
+  split's copy writes it (`toolkit/property_carriers.py` `_INSERT_SQL`).
 - **`shared` is a fact the author states about one row, not a feature flag.** It replaces an
   implicit time-gated rule (two server-stamped anchors, a column-scoped grant, a merge edge) with
-  explicit consent, one predicate. Its one timestamp, `shared_at`, dates the consent: a share the
-  author RECEIVED counts only if it existed when the author marked the note (review 2026-10-17,
-  see §7; shares need no acceptance, so otherwise anyone knowing an author's email could make
-  themselves an audience of every note that author had marked for someone else).
+  explicit consent, one predicate. The mark is not dated (ruling 9, migration 613): it reaches
+  every share between the parties that holds the property, including shares made later; the
+  bait-share edge this opens is accepted (§7).
 - **No role column; no email stored in the share model** (labels resolve live). The one snapshot
   is the share notification's `message` (the owner's email at share time, §3.5).
 - **CI stub:** `scripts/ci_db_bootstrap.sql`'s `auth.users(id, email)` gains
@@ -190,9 +185,8 @@ Why this shape and nothing more:
 
 - **Recipient R** reads collection C and its member rows iff a share (C → R) exists.
 - **Party X** reads a note by author A on property P iff the note is marked `shared`, and some share
-  between X and A names a collection that currently holds P — a share A OWNS (A chose X), or a
-  share A RECEIVED that already existed when A marked the note (`shared_at`). Files follow the
-  note.
+  between X and A names a collection that currently holds P — a share A owns or one A received,
+  made before or after the mark (ruling 9). Files follow the note.
 - Everything else stays owner-only exactly as today. **Writes never widen.**
 
 ### 3.3 Who can do what
@@ -347,9 +341,8 @@ status, so no wrong mark flashes and a failed read of either shows the mark's re
   the mark reads "Shared · nobody can see it yet" when the audience is empty — only once both reads
   resolved; until then (or when one failed, shown as a retry) the mark reads plain "Shared" and no
   checkbox or share toggle shows, since an unknown audience is not "nobody". The toggle that shares
-  names its audience in its own label ("Share with {emails}"); making private needs no names. The
-  SPA never lists who reads an EXISTING note: the payload carries no `shared_at`, so for a
-  recipient-author (§3.7 dated edge) the computed audience can overstate it. A foreign note: meta
+  names its audience in its own label ("Share with {emails}"); making private needs no names. An existing
+  note's mark still names no readers; since ruling 9 the computed audience would be exact if it did. A foreign note: meta
   `{email} · {time}` and a matching aria-label; no Attach / Edit / Delete, no drop zone, file tiles
   without ×; a neutral left border from an existing token. Note counts mean "notes I can read".
 - **Notifications page:** a `collection_share` row renders like the `system_health` text row — the
@@ -378,9 +371,8 @@ status, so no wrong mark flashes and a failed read of either shows the mark's re
 - **Consent, not time** (ruling 1): a note is private until its author marks it shared; the mark is
   the author's statement "people I share this property with may read this". It is symmetric —
   owner → recipients and recipient → owner follow the same rule — and co-recipients never see each
-  other (5b). One dated edge: a recipient's mark consents to the shares it had received AT THAT
-  MOMENT (`shared_at`); a share someone creates later does not inherit it, and re-marking consents
-  again. An owner's mark needs no such date — the owner chose every recipient.
+  other (5b). The mark is not dated (ruling 9): a share made later, by either party, reaches every
+  note already marked on a property its collection holds.
 - **Visibility recomputes from the live facts**: unmarking, revoking, leaving, or removing the
   property from the collection hides the note again; re-sharing or re-adding shows marked notes
   again (the mark persists). Nothing is deleted by any of these.
@@ -390,7 +382,7 @@ status, so no wrong mark flashes and a failed read of either shows the mark's re
 
 - Shares are keyed on the collection, which a merge never changes. Membership is carried as the
   owner's rows; notes (with their `shared` mark) are carried by property (append), so visibility
-  recomputes on the survivor; a split's note copy keeps the mark and its `shared_at`. The split preview still shows
+  recomputes on the survivor; a split's note copy keeps the mark. The split preview still shows
   only the acting account's items.
 - **Monitoring is unchanged**: alerts stay stamped to the owner; a recipient never receives one;
   the masked fields stop the UI implying otherwise. The share notification is the only event a
@@ -404,10 +396,12 @@ the author's explicit mark — simpler and consented · a `shared_note_ids()` de
 policy does the same without an RPC surface · an INSERT grant on shares: uuids are learnable ·
 `DELETE /shares/{email}`: PII in access logs · a second label definition: one `account_email()` · a
 second service-role connection on four hot read routes for labels: a recurring pool cost held by
-convention · dropping `legacy_backfill_claim`: tenancy.md:134 forbids it · dropping `is_system`
+convention · dropping `legacy_backfill_claim`: done later by migration 613 · dropping `is_system`
 before the code stops reading it: a migration-438-class outage · replacing the collection table with
 cards: an unrelated visible change · email on share: per-recipient external delivery is not built;
-the in-app row is the house pattern · pending invites, an acceptance step: off the north star (5e).
+the in-app row is the house pattern · pending invites, an acceptance step: off the north star (5e) ·
+a consent time on the mark (`shared_at`, review 2026-10-17, shipped in 610, dropped by 613): ruling 9
+— a mark reaches later shares; the bait-share edge is accepted (§7).
 
 ## 5. Subtraction ledger
 
@@ -428,7 +422,7 @@ the in-app row is the house pattern · pending invites, an acceptance step: off 
 | Sharing block + viewer branches | `CurationBlock` CollectionsRow + CollectionToggle (~120 lines, ruling 6); 4 `SectionLabel` copies; a duplicated bell SVG | `CurationBlock.tsx:123-250`; `CollectionDetail.tsx`; `Collections.tsx` ≈ `CollectionSaveMenu.tsx` |
 | the 23rd registry entry | the two mirrored registries become one `tests/_tenant_registry.py` imported by both tests | lists are identical today (22 each); the docstrings still say "20" |
 | new share-route tests | the duplicated scripted-connection fake → `tests/api/_script_conn.py` | `test_artifact_link.py` `_Tx`/`_ScriptCur` ≈ `test_curation.py` |
-| — | the NULL-owner variant on `collections` and `tags` (SET NOT NULL, W2; `filter_presets` and `notification_subscriptions` were already NOT NULL; `manual_rental_estimates` stays nullable as provenance; `property_notes` waits on a ruling — its one NULL row, id 2, is attributed by PR #1829) | live: 0 NULLs except `property_notes` id 2 |
+| — | the NULL-owner variant on `collections` and `tags` (SET NOT NULL, W2; `filter_presets` and `notification_subscriptions` were already NOT NULL; `manual_rental_estimates` stays nullable as provenance; `property_notes` ruled NOT NULL after #1829 lands (ruling 10) — its one NULL row, id 2, is attributed by PR #1829) | live: 0 NULLs except `property_notes` id 2 |
 | — | dead `if TYPE_CHECKING: pass`, stale "service role"/"anon key" prose | `curation.py:14-20, 43-44`; `main.py:1420-1424`; `CurationBlock.tsx:10-14` |
 
 **Net, plainly.** ≤ 0 on read paths (0 new), client special cases (one "is it mine" rule in one
@@ -436,7 +430,7 @@ place instead of 14) and rules (one consent predicate instead of a time rule + t
 **Not ≤ 0:** Collection fields +2 (`is_system` would have paid for them; its removal is visible and
 deferred); Note +1 and ExtNote +1 (−`origin_listing_id`,
 +`shared`, +`owner_email`) and ExtCollection +1 (−`is_system`, +`owner_email`, +`shared_with`); database objects +1 table, +1 column, +5
-policies, +2 functions, +1 trigger branch against −2 views and −2 nullable variants (a third, `property_notes`, pending a ruling); test lines
+policies, +2 functions, +1 trigger branch against −2 views and −2 nullable variants (a third, `property_notes`, ruled NOT NULL after #1829 lands, ruling 10); test lines
 (the three-tenant proof). These are irreducible — the share is a genuinely new fact, the Sharing
 control is what was asked for, and proving isolation is the price of putting sharing in the
 database. Each PR body reports its measured diff.
@@ -506,9 +500,9 @@ which must renumber); W4 takes the next free number at merge time.
 | A shared-read policy written FOR ALL or without `TO authenticated` silently grants writes or reaches anon | pinned policy census + the migration's assert block |
 | `share_party_emails()` restates the party rule; drift mislabels | live equality test against the visible share rows for all three tenants |
 | a note marked shared on a property later added to a shared collection becomes visible without a fresh decision | the mark means "people I share this property with may read this"; the composer and mark always show the current audience; unmark hides |
-| a stranger who knows an author's email shares a bait collection WITH the author to read notes the author marked for someone else (shares need no acceptance) | the recipient-author arm counts only shares older than the note's `shared_at`; marks made after the bait share do reach the stranger, whose share the author sees in their list and notification and can Leave (live test `test_a_share_made_after_the_mark_does_not_widen_a_recipients_note`). **Operator ruling owed** on this added edge (review 2026-10-17) |
+| a stranger who knows an author's email shares a bait collection WITH the author to read notes the author marked for someone else (shares need no acceptance) | accepted by ruling 9 (2026-10-17; 610's consent-time anchor dropped in 613) — mitigations: the composer names the audience a mark reaches, the share notification tells the author someone shared with them, unmarking is one click and Leave the two-step "Remove from my list" (live test `test_a_share_received_after_the_mark_reaches_its_owner`) |
 | a revoke + re-share loop floods a recipient's inbox with sender-chosen text | ONE share notification per (collection, recipient) ever (`dedupe_key` without a time) |
-| `shared_with[].account_id` lets an owner turn a confirmed email into its account uuid (share, read, revoke), linking a named person to `account_id` rows in read-all tables (`manual_rental_estimates`) | accepted for a closed platform, like enumeration; revisit with signup (an opaque per-share handle would close it) |
+| `shared_with[].account_id` lets an owner turn a confirmed email into its account uuid (share, read, revoke), linking a named person to `account_id` rows in read-all tables (`manual_rental_estimates`, retired 2026-10-19; migration 639 drops it) | accepted for a closed platform, like enumeration; revisit with signup (an opaque per-share handle would close it) |
 | the share notification's message snapshots the owner's email | the one stored copy; it outlives a revoke and an email change on purpose (an inbox row is history) |
 | email enumeration | accepted for a closed platform (5 users); rate limit if signup opens |
 | a squatter registers someone's address | confirmed-only match + the W4 "Confirm email ON" check |
@@ -528,9 +522,18 @@ which must renumber); W4 takes the next free number at merge time.
 3. **Browse control:** the same Kolekce picker with a "Shared with me" group.
 4. **Email with no account:** plain "No account uses this email".
 5. **Scope:** (a) a recipient can leave; (b) recipients don't see each other; (c) no alerts for
-   recipients; (d) no re-sharing; (e) **an in-app notification on share** (no email); (f) revoking
+   recipients; (d) no re-sharing; (e) **an in-app notification on share** (no email; *superseded
+   2026-10-21: shares are also pushed to the recipient's iPhone from W4,
+   [notifications-push/PROGRAM.md](./notifications-push/PROGRAM.md) § 3.1*); (f) revoking
    deletes the share row, no history; (g) the system "monitoring" collection is shareable.
 6. **Property page:** delete the collection chip row; the header `Uložit do kolekce` stays.
 7. **Drop** `collections_public` and `tags_public` (zero readers outside tests; no user impact).
 8. **Wording:** follow each page's language (English desktop collection pages + Browse sidebar;
    Czech phone + extension).
+9. **Marks reach later shares** (2026-10-17, verbatim: "share all even historical notes that were
+   marked for sharing with new users added later to sharing"): a marked note reaches the other party of
+   every share the author is party to whose collection holds the property, whenever that share was
+   made (co-recipients still never see each other, 5b). Migration 613
+   drops 610's consent-time anchor (`shared_at`, its trigger and the policy's time clause).
+10. **`property_notes.account_id` becomes NOT NULL** after PR #1829 lands (it keeps the column
+   nullable for a test scenario); a follow-up migration, not W7.

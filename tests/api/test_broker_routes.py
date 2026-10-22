@@ -3,7 +3,7 @@
 Both fixtures override `verify_jwt` only: `require_admin` depends on it, so one
 override drives both gates and the 403 below is the real dependency's decision.
 The admin fixture is parametrized over BOTH claim shapes `require_admin` honours,
-so dropping either arm of `_is_admin` fails here instead of quietly serving one
+so dropping either arm of `deps.is_admin` fails here instead of quietly serving one
 admin a masked envelope while `/contacts` still answers them in full.
 """
 
@@ -233,39 +233,30 @@ _ATTRIBUTION_WITH_CONTACT = {
 }
 
 
-def test_by_listings_masks_the_contact_columns_migration_419_added(client, monkeypatch):
-    """W6 widened listing_broker_public with primary_email / primary_phone so the
-    SPA stops chaining a second /brokers?ids= call for them.
-
-    The mask keys on the column NAME, not a fixed list, precisely so a widened view
-    is covered the day it lands — but "the mechanism generalises" is a claim, and
-    this is the surface where being wrong hands every logged-in user the broker
-    directory's contact PII. Assert it on the actual widened row shape.
-    """
+def _by_listings_with_contact(c, monkeypatch) -> dict:
     monkeypatch.setattr(broker_routes.brokers, "listing_brokers",
                         lambda conn, ids: {"data": [dict(_ATTRIBUTION_WITH_CONTACT)],
                                            "metadata": {}})
-    body = client.post("/brokers/by-listings", json={"listing_ids": [7]}).json()
-    row = body["data"][0]
-    assert row == {"listing_id": 7, "broker_id": 1, "sreality_id": None,
-                   "broker_display_name": "RK Alfa", "broker_firm_label": "RE/MAX",
-                   "has_email": True, "has_phone": True}
-    assert body["metadata"]["pii_masked"] is True
+    return c.post("/brokers/by-listings", json={"listing_ids": [7]}).json()
+
+
+def test_by_listings_gives_a_non_admin_the_values(client, monkeypatch):
+    """The property page's and board card's broker list shows the contact to every
+    signed-in user (operator ruling 2026-10-18) — the one /brokers route that does
+    not mask for a non-admin. The leaderboard, search and dossier still do."""
+    body = _by_listings_with_contact(client, monkeypatch)
+    assert body["data"] == [_ATTRIBUTION_WITH_CONTACT]
+    assert body["metadata"]["pii_masked"] is False
 
 
 def test_by_listings_gives_an_admin_the_values(admin_client, monkeypatch):
-    monkeypatch.setattr(broker_routes.brokers, "listing_brokers",
-                        lambda conn, ids: {"data": [dict(_ATTRIBUTION_WITH_CONTACT)],
-                                           "metadata": {}})
-    row = admin_client.post("/brokers/by-listings", json={"listing_ids": [7]}).json()["data"][0]
-    assert row["primary_email"] == "a@b.cz"
-    assert row["primary_phone"] == "+420 111 222 333"
+    body = _by_listings_with_contact(admin_client, monkeypatch)
+    assert body["data"] == [_ATTRIBUTION_WITH_CONTACT]
 
 
-def test_by_listings_flags_a_broker_with_neither_channel(client, monkeypatch):
-    """has_email=False is a real answer ("this broker is unreachable"), not the
-    absence of one — the property page's broker list draws an em-dash from it, and
-    since W6 that is the only way an empty channel can be rendered at all."""
+def test_by_listings_sends_null_for_a_broker_with_neither_channel(client, monkeypatch):
+    """NULL is a real answer ("this broker is unreachable") — the property page's
+    broker list draws an em-dash from it."""
     monkeypatch.setattr(
         broker_routes.brokers, "listing_brokers",
         lambda conn, ids: {
@@ -273,8 +264,7 @@ def test_by_listings_flags_a_broker_with_neither_channel(client, monkeypatch):
                       "primary_email": None, "primary_phone": None}],
             "metadata": {}})
     row = client.post("/brokers/by-listings", json={"listing_ids": [7]}).json()["data"][0]
-    assert row["has_email"] is False and row["has_phone"] is False
-    assert "primary_email" not in row
+    assert row["primary_email"] is None and row["primary_phone"] is None
 
 
 def test_get_broker_property_ids_passes_the_portal_rule(client, monkeypatch):
@@ -457,10 +447,15 @@ _NON_ADMIN_CALLS = [
     ("GET", "/brokers/search", "/brokers/search?q=a", None),
     ("GET", "/brokers/geo-options", "/brokers/geo-options", None),
     ("GET", "/brokers/firm-options", "/brokers/firm-options", None),
-    ("POST", "/brokers/by-listings", "/brokers/by-listings", {"listing_ids": [1]}),
     ("GET", "/brokers/{broker_id}", "/brokers/1", None),
     ("GET", "/brokers/{broker_id}/listings", "/brokers/1/listings", None),
     ("GET", "/brokers/{broker_id}/property-ids", "/brokers/1/property-ids", None),
+]
+
+# The deliberate exceptions: every signed-in caller gets the contact values here
+# (the property page's broker list, operator ruling 2026-10-18).
+_UNMASKED_CALLS = [
+    ("POST", "/brokers/by-listings", "/brokers/by-listings", {"listing_ids": [1]}),
 ]
 
 _TOOLKIT_READS = ("brokers_by_ids", "leaderboard", "search", "geo_options", "firm_options",
@@ -488,6 +483,16 @@ def test_every_non_admin_broker_route_applies_the_pii_policy(
     assert res.json()["metadata"]["pii_masked"] is True
 
 
+@pytest.mark.parametrize("method,_template,url,body", _UNMASKED_CALLS,
+                         ids=[f"{m} {t}" for m, t, _, _ in _UNMASKED_CALLS])
+def test_the_unmasked_routes_still_stamp_the_policy(
+        client, monkeypatch, method, _template, url, body):
+    _stub_every_toolkit_read(monkeypatch)
+    res = client.request(method, url, json=body)
+    assert res.status_code == 200, res.text
+    assert res.json()["metadata"]["pii_masked"] is False
+
+
 def test_the_pii_gate_covers_every_non_admin_broker_route() -> None:
     from tests.api.test_admin_route_coverage import _api_routes, _reachable_calls
 
@@ -497,7 +502,7 @@ def test_the_pii_gate_covers_every_non_admin_broker_route() -> None:
         if path.startswith("/brokers")
         and deps.require_admin not in _reachable_calls(route.dependant)
     }
-    covered = {(m, t) for m, t, _, _ in _NON_ADMIN_CALLS}
+    covered = {(m, t) for m, t, _, _ in _NON_ADMIN_CALLS + _UNMASKED_CALLS}
     assert live == covered, (
         "the PII gate table and the mounted non-admin /brokers routes disagree; "
         f"uncovered={sorted(live - covered)} stale={sorted(covered - live)}")

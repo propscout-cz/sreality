@@ -26,17 +26,21 @@ import {
   filtersForPreset,
   readPresetSpec,
   filtersToWatchdogSpec,
+  effectiveBbox,
+  mapAreaLabel,
   fromSearchParams,
   isDefault,
   type BuildingMaterial,
   type ListingFilters,
   type MapBounds,
+  type PresetSpec,
   listingFiltersToRegistryView,
   summarise,
   toSearchParams,
   watchdogNameSuggestion,
 } from './filters';
 import { districtsFilterClause } from './districtCodes';
+import { DEFAULT_SORT, parseSort, sortToParam } from './browseSort';
 import { BUILDING_MATERIAL_BUCKETS, filterById } from './filterRegistry.generated';
 import type { Disposition } from './types';
 
@@ -107,6 +111,22 @@ describe('URL round-trip', () => {
     expect(fromSearchParams(dirty).conditionMatch).toEqual(['novostavba']);
   });
 
+  it("round-trips the condition filter's Neuvedeno chip to the URL and the Watchdog", () => {
+    const f: ListingFilters = { ...DEFAULT_FILTERS, conditionMatch: ['novostavba', '__unknown__'] };
+    expect(toSearchParams(f).get('condition')).toBe('novostavba,__unknown__');
+    expect(fromSearchParams(toSearchParams(f)).conditionMatch).toEqual(['novostavba', '__unknown__']);
+    expect(filtersToWatchdogSpec(f).spec.condition_match).toEqual(['novostavba', '__unknown__']);
+  });
+
+  it('round-trips the energy rating to the URL and the Watchdog, dropping a letter outside A–G', () => {
+    const f: ListingFilters = { ...DEFAULT_FILTERS, energyRatingMatch: ['A', 'B'] };
+    expect(toSearchParams(f).get('energy')).toBe('A,B');
+    expect(fromSearchParams(toSearchParams(f)).energyRatingMatch).toEqual(['A', 'B']);
+    expect(fromSearchParams(new URLSearchParams('energy=A,Z,g')).energyRatingMatch).toEqual(['A']);
+    expect(filtersToWatchdogSpec(f).spec.energy_rating_match).toEqual(['A', 'B']);
+    expect(toSearchParams(DEFAULT_FILTERS).has('energy')).toBe(false);
+  });
+
   it('round-trips the portals and drops a code that is not one of them', () => {
     const f: ListingFilters = { ...DEFAULT_FILTERS, portals: ['idnes', 'realitymix'] };
     expect(fromSearchParams(toSearchParams(f)).portals).toEqual(['idnes', 'realitymix']);
@@ -132,13 +152,9 @@ describe('URL round-trip', () => {
       .toEqual(['sreality']);
   });
 
-  it('round-trips the condition-level bounds and price-change filters', () => {
+  it('round-trips the price-change filters', () => {
     const f: ListingFilters = {
       ...DEFAULT_FILTERS,
-      buildingConditionLevelMin: 2,
-      buildingConditionLevelMax: 4,
-      apartmentConditionLevelMin: 3,
-      apartmentConditionLevelMax: 5,
       priceChangeCountMin: 2,
       priceChangeWindowDays: 90,
       totalPriceChangePct: -10,
@@ -156,6 +172,13 @@ describe('URL round-trip', () => {
     // the default state rather than throwing.
     const legacy = new URLSearchParams('drops_min=2&sites_min=2&drop_pct_min=10');
     expect(fromSearchParams(legacy)).toEqual(DEFAULT_FILTERS);
+  });
+
+  it('the retired condition-level bounds degrade silently (condition scoring parked)', () => {
+    const url = new URLSearchParams('bld_cond_min=3&bld_cond_max=5&apt_cond_min=2&apt_cond_max=4');
+    expect(fromSearchParams(url)).toEqual(DEFAULT_FILTERS);
+    const stored = { ...DEFAULT_FILTERS, buildingConditionLevelMin: 3, apartmentConditionLevelMax: 4 };
+    expect(readPresetSpec(stored as ListingFilters).filters).toEqual(DEFAULT_FILTERS);
   });
 
   it('round-trips the subtype multi-select', () => {
@@ -302,7 +325,7 @@ describe('URL round-trip', () => {
 describe('pipelineViewFilters', () => {
   it('constrains nothing except the pipeline itself', () => {
     const f = pipelineViewFilters();
-    expect(f.pipeline).toEqual({ stage_ids: [] });
+    expect(f.pipeline).toEqual({ set: 'in', in: [], out: [] });
     expect(f.categoryMain).toEqual([]);   // not ['byt']
     expect(f.categoryType).toBeNull();    // not 'pronajem'
     expect(f.districts).toEqual([]);
@@ -333,11 +356,14 @@ describe('nullable deal type', () => {
     expect(fromSearchParams(toSearchParams(f)).categoryType).toBeNull();
   });
 
-  it('keeps an ABSENT param meaning the pronajem default', () => {
-    // The empty URL must stay byte-identical to DEFAULT_FILTERS — a bare
-    // /browse link is unchanged by making the field nullable.
-    expect(fromSearchParams(new URLSearchParams()).categoryType).toBe('pronajem');
+  it('reads an ABSENT param as the prodej default, and writes pronajem out', () => {
+    // The empty URL stays byte-identical to DEFAULT_FILTERS; since 2026-10-20
+    // that default is Prodej, so a rent cohort names its deal in the link.
+    expect(fromSearchParams(new URLSearchParams()).categoryType).toBe('prodej');
     expect(toSearchParams(DEFAULT_FILTERS).has('deal')).toBe(false);
+    const rent = toSearchParams({ ...DEFAULT_FILTERS, categoryType: 'pronajem' });
+    expect(rent.get('deal')).toBe('pronajem');
+    expect(fromSearchParams(rent).categoryType).toBe('pronajem');
   });
 
   it('drops the deal phrase from the headline instead of printing null', () => {
@@ -358,14 +384,14 @@ describe('nullable deal type', () => {
 
 describe('pipeline scope URL codec', () => {
   it('round-trips "any stage"', () => {
-    const f: ListingFilters = { ...DEFAULT_FILTERS, pipeline: { stage_ids: [] } };
+    const f: ListingFilters = { ...DEFAULT_FILTERS, pipeline: { set: 'in', in: [], out: [] } };
     const sp = toSearchParams(f);
     expect(sp.get('pipeline')).toBe('any');
     expect(fromSearchParams(sp)).toEqual(f);
   });
 
   it('round-trips a stage narrowing', () => {
-    const f: ListingFilters = { ...DEFAULT_FILTERS, pipeline: { stage_ids: [12, 13] } };
+    const f: ListingFilters = { ...DEFAULT_FILTERS, pipeline: { set: null, in: [12, 13], out: [] } };
     const sp = toSearchParams(f);
     expect(sp.get('pipeline')).toBe('12,13');
     expect(fromSearchParams(sp)).toEqual(f);
@@ -376,17 +402,31 @@ describe('pipeline scope URL codec', () => {
     expect(fromSearchParams(new URLSearchParams()).pipeline).toBeNull();
   });
 
-  it('degrades an unparseable stage list to "any stage", never to off', () => {
-    // Losing the scope entirely would swap the operator's pipeline for the
-    // whole market — the loud failure is showing them all their cards.
-    const got = fromSearchParams(new URLSearchParams('pipeline=abc'));
-    expect(got.pipeline).toEqual({ stage_ids: [] });
+  /* The one behaviour change of the curated-set codec (lib/setScope): junk once
+   * meant "any stage" here alone; now junk on ANY side of ANY set reads as off,
+   * uniformly. An old bundle shown a new param ignores it and shows a WIDER
+   * cohort, never an inverted one. */
+  it('degrades an unparseable stage list to off, like every curated-set side', () => {
+    expect(fromSearchParams(new URLSearchParams('pipeline=abc')).pipeline).toBeNull();
+    expect(fromSearchParams(new URLSearchParams('pipeline_excluded=abc')).pipeline).toBeNull();
+  });
+
+  it('round-trips "mimo pipeline" and a stage excluded from the whole pipeline', () => {
+    for (const pipeline of [
+      { set: 'out' as const, in: [], out: [] },
+      { set: 'in' as const, in: [], out: [9] },
+    ]) {
+      const f: ListingFilters = { ...DEFAULT_FILTERS, pipeline };
+      expect(fromSearchParams(toSearchParams(f))).toEqual(f);
+    }
+    expect(toSearchParams({ ...DEFAULT_FILTERS, pipeline: { set: 'out', in: [], out: [] } })
+      .get('pipeline_excluded')).toBe('any');
   });
 });
 
 describe('collection scope URL codec', () => {
   it('round-trips a selection as a CSV of ids', () => {
-    const f: ListingFilters = { ...DEFAULT_FILTERS, collections: [4, 9] };
+    const f: ListingFilters = { ...DEFAULT_FILTERS, collections: { set: null, in: [4, 9], out: [] } };
     const sp = toSearchParams(f);
     expect(sp.get('collections')).toBe('4,9');
     expect(fromSearchParams(sp)).toEqual(f);
@@ -394,12 +434,19 @@ describe('collection scope URL codec', () => {
 
   it('emits nothing when nothing is selected, and parses absence as off', () => {
     expect(toSearchParams(DEFAULT_FILTERS).has('collections')).toBe(false);
-    expect(fromSearchParams(new URLSearchParams()).collections).toEqual([]);
+    expect(fromSearchParams(new URLSearchParams()).collections).toBeNull();
   });
 
   it('drops junk ids rather than inventing a selection', () => {
     expect(fromSearchParams(new URLSearchParams('collections=4,abc,0')).collections)
-      .toEqual([4]);
+      .toEqual({ set: null, in: [4], out: [] });
+  });
+
+  it('round-trips "v žádné kolekci" as collections_excluded=any', () => {
+    const f: ListingFilters = { ...DEFAULT_FILTERS, collections: { set: 'out', in: [], out: [] } };
+    const sp = toSearchParams(f);
+    expect(sp.toString()).toContain('collections_excluded=any');
+    expect(fromSearchParams(sp)).toEqual(f);
   });
 });
 
@@ -525,21 +572,43 @@ describe('applyRegistryUpdate', () => {
   });
 
   it('normalises null to empty arrays for the multi-value fields', () => {
-    let f: ListingFilters = { ...DEFAULT_FILTERS, tags: [1, 2, 3] };
+    let f: ListingFilters = { ...DEFAULT_FILTERS, dispositions: ['2+kk'] };
+    f = applyRegistryUpdate(f, 'dispositions', null);
+    expect(f.dispositions).toEqual([]);
+  });
+
+  it('passes a curated-set scope through both ways, null = off', () => {
+    const tags = { set: null, in: [5], out: [7] };
+    let f = applyRegistryUpdate(DEFAULT_FILTERS, 'tags', tags);
+    expect(f.tags).toEqual(tags);
+    expect(listingFiltersToRegistryView(f).tags).toEqual(tags);
     f = applyRegistryUpdate(f, 'tags', null);
-    expect(f.tags).toEqual([]);
-    f = applyRegistryUpdate(f, 'tags', [5, 7]);
-    expect(f.tags).toEqual([5, 7]);
+    expect(f.tags).toBeNull();
   });
 
   it('round-trips the tag rule\'s second side through the URL (`tags_excluded`)', () => {
-    const sp = toSearchParams({ ...DEFAULT_FILTERS, tags: [5], tagsExcluded: [7, 9] });
+    const tags = { set: null, in: [5], out: [7, 9] };
+    const sp = toSearchParams({ ...DEFAULT_FILTERS, tags });
     expect(sp.get('tags')).toBe('5');
     expect(sp.get('tags_excluded')).toBe('7,9');
-    expect(fromSearchParams(sp).tagsExcluded).toEqual([7, 9]);
+    expect(fromSearchParams(sp).tags).toEqual(tags);
     expect(toSearchParams(DEFAULT_FILTERS).has('tags_excluded')).toBe(false);
     /* The watchdog has no tag clause on either side (rule 16). */
-    expect(filtersToWatchdogSpec({ ...DEFAULT_FILTERS, tagsExcluded: [7] }).unsupported).toContain('tags');
+    expect(filtersToWatchdogSpec({ ...DEFAULT_FILTERS, tags: { set: null, in: [], out: [7] } })
+      .unsupported).toContain('tags');
+  });
+
+  it('names every active curated set in the headline, in Czech', () => {
+    const line = summarise({
+      ...DEFAULT_FILTERS,
+      tags: { set: 'out', in: [], out: [] },
+      collections: { set: null, in: [4], out: [] },
+      pipeline: { set: 'out', in: [], out: [] },
+    }, 3);
+    expect(line).toContain('bez štítků');
+    expect(line).toContain('v kolekci (1 kolekce)');
+    expect(line).toContain('mimo pipeline');
+    expect(summarise(DEFAULT_FILTERS, 3)).not.toMatch(/pipeline|kolekc|štít/);
   });
 
   it('accepts DistrictChip[] for districts; null clears the list', () => {
@@ -681,24 +750,23 @@ describe('filtersToWatchdogSpec', () => {
     expect(spec.city_index_rules).toEqual([{ index_name: 'safety', op: '>=', value: 7 }]);
   });
 
-  it('center+radius location maps to lat/lng/radius_m; viewport does not', () => {
-    const cr = { lat: 50.08, lng: 14.42, radius_m: 1500 };
-    const viewport = filtersToWatchdogSpec({
-      ...DEFAULT_FILTERS,
-      locationMode: 'viewport',
-      centerRadius: cr,
-    });
-    expect(viewport.spec.lat).toBeNull();
-    expect(viewport.spec.radius_m).toBeNull();
+  it('the map box is the one spatial shape: the viewport box when kept, the centre+radius square always', () => {
+    const bounds = { west: 14.3, south: 50.0, east: 14.5, north: 50.2 };
+    const viewport = { ...DEFAULT_FILTERS, bounds };
+    expect(filtersToWatchdogSpec(viewport).spec.bounds).toEqual(bounds);
+    expect(filtersToWatchdogSpec(viewport, { includeMapArea: true }).spec.bounds).toEqual(bounds);
+    expect(filtersToWatchdogSpec(viewport, { includeMapArea: false }).spec.bounds).toBeNull();
+    expect(filtersToWatchdogSpec(viewport).unsupported).toEqual([]);
 
-    const centered = filtersToWatchdogSpec({
-      ...DEFAULT_FILTERS,
-      locationMode: 'center_radius',
-      centerRadius: cr,
-    });
-    expect(centered.spec.lat).toBe(50.08);
-    expect(centered.spec.lng).toBe(14.42);
-    expect(centered.spec.radius_m).toBe(1500);
+    const cr = { lat: 50.08, lng: 14.42, radius_m: 1500 };
+    const centered = { ...DEFAULT_FILTERS, locationMode: 'center_radius' as const, centerRadius: cr, bounds };
+    /* The square Browse filtered on (effectiveBbox), never the stale viewport, and
+     * whatever the checkbox says: a sidebar pick is not a viewport. */
+    const square = effectiveBbox(centered);
+    expect(square).not.toBeNull();
+    expect(filtersToWatchdogSpec(centered, { includeMapArea: false }).spec.bounds).toEqual(square);
+    expect(filtersToWatchdogSpec(centered).spec.bounds).toEqual(square);
+    expect(Object.keys(filtersToWatchdogSpec(centered).spec)).not.toContain('radius_m');
   });
 
   it('tri-state amenities pivot to bool | null', () => {
@@ -718,8 +786,8 @@ describe('filtersToWatchdogSpec', () => {
       ...DEFAULT_FILTERS,
       status: 'active',
       lastSeenMaxDays: 7,
-      tags: [3],
-      collections: [4],
+      tags: { set: null, in: [3], out: [] },
+      collections: { set: 'out', in: [], out: [] },
     });
     expect(unsupported).toContain('listing status');
     expect(unsupported).toContain('last/first-seen date range');
@@ -777,7 +845,7 @@ describe('watchdogNameSuggestion', () => {
   });
 
   it('falls back to just the category when nothing else is set', () => {
-    expect(watchdogNameSuggestion(DEFAULT_FILTERS)).toBe('byt pronajem');
+    expect(watchdogNameSuggestion(DEFAULT_FILTERS)).toBe('byt prodej');
   });
 });
 
@@ -796,7 +864,7 @@ describe('filter presets', () => {
     const f: ListingFilters = {
       ...DEFAULT_FILTERS,
       priceMax: 6_000_000,
-      pipeline: { stage_ids: [12] },
+      pipeline: { set: null, in: [12], out: [] },
     };
     // Both branches: the scope is a lens, not preset criteria.
     expect(filtersForPreset(f, false).pipeline).toBeNull();
@@ -808,15 +876,18 @@ describe('filter presets', () => {
     // This is the operator-visible contract: toggling Pipeline (or picking
     // stages inside it) must NOT surface the "Update preset" button.
     expect(
-      filtersEqualForPreset({ ...saved, pipeline: { stage_ids: [] } }, saved),
+      filtersEqualForPreset({ ...saved, pipeline: { set: 'in', in: [], out: [] } }, saved),
     ).toBe(true);
     expect(
-      filtersEqualForPreset({ ...saved, pipeline: { stage_ids: [3, 9] } }, saved),
+      filtersEqualForPreset({ ...saved, pipeline: { set: null, in: [3, 9], out: [] } }, saved),
+    ).toBe(true);
+    expect(
+      filtersEqualForPreset({ ...saved, pipeline: { set: 'out', in: [], out: [] } }, saved),
     ).toBe(true);
     // …and a real criteria change still is dirty, scope on or not.
     expect(
       filtersEqualForPreset(
-        { ...saved, priceMax: 4_000_000, pipeline: { stage_ids: [] } },
+        { ...saved, priceMax: 4_000_000, pipeline: { set: 'in', in: [], out: [] } },
         saved,
       ),
     ).toBe(false);
@@ -844,15 +915,62 @@ describe('filter presets', () => {
     ).toBe(false);
   });
 
-  it('treats the collection scope as a lens too: stripped, never dirtying a preset', () => {
-    const f: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 6_000_000, collections: [4] };
-    expect(filtersForPreset(f, false).collections).toEqual([]);
-    expect(filtersForPreset(f, true).collections).toEqual([]);
-    const saved: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 5_000_000 };
-    expect(filtersEqualForPreset({ ...saved, collections: [4, 9] }, saved)).toBe(true);
-    expect(
-      filtersEqualForPreset({ ...saved, priceMax: 4_000_000, collections: [4] }, saved),
-    ).toBe(false);
+  it('treats the collection and tag scopes as lenses too: stripped, never dirtying a preset', () => {
+    const four = { set: null, in: [4], out: [] };
+    for (const key of ['collections', 'tags'] as const) {
+      const f: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 6_000_000, [key]: four };
+      expect(filtersForPreset(f, false)[key]).toBeNull();
+      expect(filtersForPreset(f, true)[key]).toBeNull();
+      const saved: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 5_000_000 };
+      expect(filtersEqualForPreset({ ...saved, [key]: { set: 'out', in: [], out: [] } }, saved))
+        .toBe(true);
+      expect(filtersEqualForPreset({ ...saved, priceMax: 4_000_000, [key]: four }, saved))
+        .toBe(false);
+    }
+  });
+
+  /* 0 of 7 live presets held a tag (2026-10-19), but a blob saved before
+   * lib/setScope must still load its lens losslessly, and a stored preset that
+   * held one must not read as dirty against the same lens. */
+  it('lifts a stored pre-setScope blob losslessly into the scope shape', () => {
+    const { filters } = readPresetSpec({
+      filters: {
+        ...DEFAULT_FILTERS,
+        tags: [1, 2],
+        tagsExcluded: [3],
+        collections: [4],
+        pipeline: { stage_ids: [] },
+      } as unknown as ListingFilters,
+    });
+    expect(filters.tags).toEqual({ set: null, in: [1, 2], out: [3] });
+    expect(filters.collections).toEqual({ set: null, in: [4], out: [] });
+    expect(filters.pipeline).toEqual({ set: 'in', in: [], out: [] });
+    expect('tagsExcluded' in filters).toBe(false);
+    const legacyEmpty = readPresetSpec({
+      filters: { ...DEFAULT_FILTERS, tags: [], tagsExcluded: [], collections: [], pipeline: null },
+    } as unknown as PresetSpec).filters;
+    expect(legacyEmpty.tags).toBeNull();
+    expect(legacyEmpty.collections).toBeNull();
+    expect(readPresetSpec({
+      filters: { ...DEFAULT_FILTERS, pipeline: { stage_ids: [5, 6] } } as unknown as ListingFilters,
+    }).filters.pipeline).toEqual({ set: null, in: [5, 6], out: [] });
+  });
+
+  it('drops a stored curated value of the wrong kind rather than mis-scoping', () => {
+    const { filters } = readPresetSpec({
+      filters: {
+        ...DEFAULT_FILTERS,
+        tags: 'x',
+        collections: [1, 'a'],
+        pipeline: { set: 'sideways', in: [], out: [] },
+      } as unknown as ListingFilters,
+    });
+    expect(filters.tags).toBeNull();
+    expect(filters.collections).toBeNull();
+    expect(filters.pipeline).toBeNull();
+    expect(readPresetSpec({
+      filters: { ...DEFAULT_FILTERS, collections: { set: 'out', in: [1], out: [] } },
+    } as unknown as PresetSpec).filters.collections).toEqual({ set: 'out', in: [], out: [] });
   });
 
   it('matches identical filter sets', () => {
@@ -897,11 +1015,11 @@ describe('filter presets', () => {
     expect(got.sort).toBe('-price_czk');
   });
 
-  it('readPresetSpec tolerates a legacy bare-ListingFilters preset (sort null)', () => {
+  it('readPresetSpec tolerates a legacy bare-ListingFilters preset (the default sort)', () => {
     const legacy: ListingFilters = { ...DEFAULT_FILTERS, areaMin: 50 };
     const got = readPresetSpec(legacy);
     expect(got.filters.areaMin).toBe(50);
-    expect(got.sort).toBeNull();
+    expect(got.sort).toBe(sortToParam(DEFAULT_SORT));
     // And it still round-trips through the URL serializer.
     expect(fromSearchParams(toSearchParams(got.filters)).areaMin).toBe(50);
   });
@@ -913,7 +1031,20 @@ describe('filter presets', () => {
     // Missing fields fall back to defaults, so toSearchParams won't throw.
     expect(got.filters.categoryMain).toEqual(['byt']);
     expect(got.filters.priceMin).toBe(1000);
-    expect(got.sort).toBeNull();
+    expect(got.sort).toBe(sortToParam(DEFAULT_SORT));
+  });
+
+  /* A preset saved under a sort with no control would load the default order while
+   * holding the old token, and read dirty before the user touched anything. */
+  it('readPresetSpec reads a sort Browse no longer offers as the default, so the preset loads clean', () => {
+    const got = readPresetSpec({ filters: { ...DEFAULT_FILTERS, areaMin: 50 }, sort: '-estate_area' });
+    expect(got.sort).toBe(sortToParam(DEFAULT_SORT));
+    // What Browse holds once the preset is loaded: its filters through the URL,
+    // and the sort the URL parses to. Both halves of PresetBar's dirty check agree.
+    const loadedFilters = fromSearchParams(toSearchParams(got.filters));
+    const loadedSort = sortToParam(parseSort(got.sort));
+    expect(filtersEqualForPreset(loadedFilters, got.filters)).toBe(true);
+    expect(loadedSort).toBe(got.sort);
   });
 
   it('readPresetSpec coerces stale scalar fields that became arrays (the load crash)', () => {
@@ -946,5 +1077,59 @@ describe('filter presets', () => {
     const got = readPresetSpec(stale);
     expect(got.filters.categoryMain).toEqual(['dum']);
     expect(() => toSearchParams(got.filters)).not.toThrow();
+  });
+});
+
+/* The ONE box rule: the list, both stats RPCs and a watchdog saved from Browse all
+ * read effectiveBbox, so these pin what "in this map area" means everywhere. */
+describe('effectiveBbox', () => {
+  it('returns null when both modes are empty', () => {
+    expect(effectiveBbox(DEFAULT_FILTERS)).toBeNull();
+  });
+
+  it('returns the literal viewport bounds in viewport mode', () => {
+    const bounds = { west: 14.3, south: 50.0, east: 14.5, north: 50.2 };
+    expect(effectiveBbox({ ...DEFAULT_FILTERS, bounds })).toEqual(bounds);
+  });
+
+  it('ignores viewport bounds in centre+radius mode, and is null there without a centre', () => {
+    const bounds = { west: 14.3, south: 50.0, east: 14.5, north: 50.2 };
+    const got = effectiveBbox({
+      ...DEFAULT_FILTERS,
+      locationMode: 'center_radius',
+      centerRadius: { lat: 50, lng: 14, radius_m: 1000 },
+      bounds,
+    });
+    expect(got!.north).toBeLessThan(50.2);
+    expect(got!.west).toBeLessThan(14.3);
+    expect(effectiveBbox({ ...DEFAULT_FILTERS, locationMode: 'center_radius', centerRadius: null, bounds })).toBeNull();
+  });
+
+  it('draws the square around the circle: centre-symmetric, 1 km ≈ 1/111.32 deg of latitude, wider near the pole', () => {
+    const got = effectiveBbox({
+      ...DEFAULT_FILTERS,
+      locationMode: 'center_radius',
+      centerRadius: { lat: 50, lng: 14, radius_m: 1000 },
+    })!;
+    expect(got.north - 50).toBeCloseTo(50 - got.south, 9);
+    expect(got.east - 14).toBeCloseTo(14 - got.west, 9);
+    expect(got.north - 50).toBeCloseTo(1 / 111.32, 6);
+    const span = (lat: number) => {
+      const b = effectiveBbox({
+        ...DEFAULT_FILTERS,
+        locationMode: 'center_radius',
+        centerRadius: { lat, lng: 14, radius_m: 1000 },
+      })!;
+      return b.east - b.west;
+    };
+    expect(span(70)).toBeGreaterThan(span(10));
+  });
+});
+
+describe('mapAreaLabel', () => {
+  it('names the box by its extent and centre', () => {
+    expect(mapAreaLabel({ west: 14.4, south: 50.06, east: 14.44, north: 50.1 })).toBe(
+      'map area ≈ 2.9 × 4.5 km around 50.0800, 14.4200',
+    );
   });
 });

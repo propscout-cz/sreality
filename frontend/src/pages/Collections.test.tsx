@@ -82,7 +82,7 @@ describe('<Collections>', () => {
   it('lists collections shared with me apart, and counts my recipients', async () => {
     const base = {
       description: null, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
-      listing_count: 1, monitoring_enabled: false, notify_channels: [], is_system: false,
+      listing_count: 1, monitoring_enabled: false, is_system: false,
     };
     vi.mocked(api.listCollections).mockResolvedValue({
       data: [

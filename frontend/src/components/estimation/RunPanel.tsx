@@ -1,9 +1,10 @@
 /* The estimation-run body — extracted from the Estimation Detail page so the
  * SAME components render a run wherever it surfaces: embedded in the Listing
  * Detail estimations section (the primary surface) and on the standalone
- * /estimation/:id fallback page for orphan runs (pasted URLs we don't have in
- * the DB). RunBody dispatches on run status (in-flight / failed / success);
- * the deep analytics live in RunDetailModal behind "Show estimation detail".
+ * /estimation/:id fallback page for runs that never had an ad (historic
+ * pasted-URL runs and raw-spec runs). RunBody dispatches on run status
+ * (in-flight / failed / success); the deep analytics live in RunDetailModal
+ * behind "Show estimation detail".
  *
  * `embedded` drops the big headline + the run-level MF reference card —
  * the estimations section renders both itself, side by side.
@@ -13,7 +14,7 @@
  * remount would show the previous run's edits. (A background refetch of
  * the SAME run deliberately does not reset them — that would wipe the
  * operator's in-progress edits.) */
-import { Suspense, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Suspense, useEffect, useId, useMemo, useRef, useState, type ComponentProps } from 'react';
 import { createPortal } from 'react-dom';
 import { lazyChunk } from '@/lib/lazyChunk';
 import { Link, useLocation } from 'react-router-dom';
@@ -38,6 +39,7 @@ import {
   fmtCzk,
   fmtFloor,
   fmtMeasuredPricePerM2,
+  fmtPct,
   fmtRelative,
 } from '@/lib/format';
 import { PPM2_UNIT, ppm2BasisFromToken } from '@/lib/measure';
@@ -57,13 +59,13 @@ import {
 } from '@/lib/api';
 import { DialogClose } from '@/components/Dialog';
 import { useDialog } from '@/lib/useDialog';
-import RangeStrip from '@/components/region/RangeStrip';
+import RangeStrip from '@/components/estimation/RangeStrip';
 import Timeline from '@/components/estimation/Timeline';
 import { MfReferenceCard } from '@/components/estimation/MfReferenceCard';
 import { mfShape } from '@/lib/mfReference';
-import { PickButton } from '@/components/controls';
+import { DecimalField, PickButton } from '@/components/controls';
 import { canRerun, type RerunOverrides } from '@/lib/rerun';
-import { listingPath } from '@/lib/listingUrl';
+import { advertPath, listingPath } from '@/lib/listingUrl';
 import { filterById } from '@/lib/filterRegistry.generated';
 import type {
   ComparableExcluded,
@@ -217,7 +219,7 @@ function EstimateHeadline({ run }: { run: EstimationRun }) {
         <p className="mt-1 text-sm font-mono tabular-nums text-[var(--color-ink-2)]">
           gross yield{' '}
           <span className="text-[var(--color-ink)]">
-            {run.gross_yield_pct.toFixed(2)}&nbsp;%
+            {fmtPct(run.gross_yield_pct, { digits: 2 })}
           </span>
         </p>
       )}
@@ -430,7 +432,8 @@ function RentRange({ run }: { run: EstimationRun }) {
       <div className="mt-3">
         <RangeStrip
           label={stripLabel}
-          triple={{ p25, p50: median, p75 }}
+          range={{ low: p25, mid: median, high: p75 }}
+          caption="p25 · median · p75"
           format={(n) => fmtCzk(n)}
         />
       </div>
@@ -628,7 +631,7 @@ function YieldBlock({
             color: yieldPct != null ? 'var(--color-copper)' : 'var(--color-ink-4)',
           }}
         >
-          {yieldPct != null ? `${yieldPct.toFixed(2)} %` : '—'}
+          {fmtPct(yieldPct, { digits: 2 })}
         </p>
         <p className="mt-2 text-[0.78rem] text-[var(--color-ink-3)] font-mono tabular-nums">
           ((rent − fond oprav a SVJ) × 12) ÷ (listing price + renovation)
@@ -636,18 +639,16 @@ function YieldBlock({
       </div>
 
       <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        <YieldNumField
+        <NumField
           label="Monthly rent"
           value={rent}
-          step="100"
           suffix="Kč"
           onChange={setRentTouching}
           hint={defaultRent != null ? 'Default: median estimate' : 'No estimate — set manually'}
         />
-        <YieldNumField
+        <NumField
           label="Fond oprav + SVJ"
           value={costPerM2}
-          step="1"
           /* A fond is levied per m² per MONTH — the yield formula one card up
              subtracts it from the monthly rent before annualising. The bare
              capital `Kč/m²` this carried misnamed it by a factor of twelve, and
@@ -664,27 +665,24 @@ function YieldBlock({
                 : 'Cost per m² of usable area'
           }
         />
-        <YieldNumField
+        <NumField
           label="Area"
           value={areaM2}
-          step="0.1"
           suffix="m²"
           onChange={() => undefined}
           readOnly
           hint="From listing"
         />
-        <YieldNumField
+        <NumField
           label="Listing price"
           value={price}
-          step="100000"
           suffix="Kč"
           onChange={setPrice}
           hint={priceHint}
         />
-        <YieldNumField
+        <NumField
           label="Renovation"
           value={renovation}
-          step="50000"
           suffix="Kč"
           onChange={setRenovation}
           hint={
@@ -694,63 +692,6 @@ function YieldBlock({
           }
         />
       </div>
-    </div>
-  );
-}
-
-function YieldNumField({
-  label,
-  value,
-  step,
-  suffix,
-  hint,
-  readOnly,
-  onChange,
-}: {
-  label: string;
-  value: number | null;
-  step?: string;
-  suffix?: string;
-  hint?: string;
-  readOnly?: boolean;
-  onChange: (v: number | null) => void;
-}) {
-  return (
-    <div>
-      <FieldLabel>{label}</FieldLabel>
-      <div className="mt-1.5 flex items-stretch gap-2 min-w-0">
-        <input
-          type="text"
-          aria-label={label}
-          inputMode="decimal"
-          readOnly={readOnly}
-          value={value == null ? '' : String(value)}
-          step={step}
-          onChange={(e) => {
-            if (readOnly) return;
-            const raw = e.target.value.trim().replace(',', '.');
-            if (raw === '') return onChange(null);
-            const n = Number(raw);
-            if (Number.isFinite(n)) onChange(n);
-          }}
-          className={[
-            'flex-1 min-w-0 px-3 py-2 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] border text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]',
-            readOnly
-              ? 'bg-[var(--color-paper-2)] border-[var(--color-rule)] text-[var(--color-ink-2)] cursor-default'
-              : 'bg-[var(--color-inset)] border-[var(--color-rule)]',
-          ].join(' ')}
-        />
-        {suffix && (
-          <span className="self-center text-[0.78rem] tracking-wide text-[var(--color-ink-3)]">
-            {suffix}
-          </span>
-        )}
-      </div>
-      {hint && (
-        <p className="mt-1.5 text-[0.7rem] text-[var(--color-ink-4)] leading-relaxed">
-          {hint}
-        </p>
-      )}
     </div>
   );
 }
@@ -823,6 +764,7 @@ function Warnings({ warnings }: { warnings: string[] }) {
 
 function InputRecap({ run }: { run: EstimationRun }) {
   const spec = run.input_spec;
+  const ad = advertPath({ source: run.subject_source, source_id_native: run.subject_source_id_native });
   const facts: Array<[string, string | null]> = [];
 
   if (spec) {
@@ -868,14 +810,14 @@ function InputRecap({ run }: { run: EstimationRun }) {
           </a>
         </p>
       )}
-      {run.input_sreality_id != null && (
+      {ad != null && (
         <p className="mt-1.5 text-sm">
           <span className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)] mr-2">Listing</span>
           <Link
-            to={listingPath(run.input_sreality_id)}
+            to={ad}
             className="font-mono tabular-nums text-[var(--color-copper)] hover:text-[var(--color-copper-2)] underline-offset-2 hover:underline"
           >
-            id {run.input_sreality_id}
+            {run.subject_source} {run.subject_source_id_native}
           </Link>
         </p>
       )}
@@ -1584,16 +1526,14 @@ function AdjustPanel({
           label="Latitude"
           required
           value={state.lat}
-          step="0.000001"
-          placeholder="50.0875"
+          placeholder="50,0875"
           onChange={(v) => set('lat', v)}
         />
         <NumField
           label="Longitude"
           required
           value={state.lng}
-          step="0.000001"
-          placeholder="14.4205"
+          placeholder="14,4205"
           onChange={(v) => set('lng', v)}
         />
       </div>
@@ -1603,7 +1543,6 @@ function AdjustPanel({
           label="Area"
           required
           value={state.area_m2}
-          step="0.1"
           placeholder="50"
           suffix="m²"
           onChange={(v) => set('area_m2', v)}
@@ -1611,7 +1550,6 @@ function AdjustPanel({
         <NumField
           label="Floor"
           value={state.floor}
-          step="1"
           placeholder="—"
           hint="Přízemí = 0, 1. patro = 1, suterén = −1 — the same scale listings.floor is on."
           onChange={(v) => set('floor', v != null ? Math.round(v) : null)}
@@ -1681,7 +1619,6 @@ function AdjustPanel({
         <NumField
           label="Purchase price"
           value={state.purchase_price_czk}
-          step="100000"
           placeholder="—"
           suffix="Kč"
           onChange={(v) =>
@@ -1693,7 +1630,6 @@ function AdjustPanel({
         <NumField
           label="Expected monthly rent"
           value={state.expected_monthly_rent_czk}
-          step="500"
           placeholder="—"
           suffix="Kč/mo"
           onChange={(v) =>
@@ -1728,48 +1664,18 @@ function AdjustPanel({
 
 function NumField({
   label,
-  value,
-  step,
-  placeholder,
-  suffix,
   required,
   hint,
-  onChange,
+  ...input
 }: {
   label: string;
-  value: number | null;
-  step?: string;
-  placeholder?: string;
-  suffix?: string;
   required?: boolean;
   hint?: string;
-  onChange: (v: number | null) => void;
-}) {
+} & Omit<ComponentProps<typeof DecimalField>, 'label' | 'className'>) {
   return (
     <div>
       <FieldLabel required={required}>{label}</FieldLabel>
-      <div className="mt-1.5 flex items-stretch gap-2 min-w-0">
-        <input
-          type="text"
-          aria-label={label}
-          inputMode="decimal"
-          value={value == null ? '' : String(value)}
-          placeholder={placeholder}
-          step={step}
-          onChange={(e) => {
-            const raw = e.target.value.trim().replace(',', '.');
-            if (raw === '') return onChange(null);
-            const n = Number(raw);
-            if (Number.isFinite(n)) onChange(n);
-          }}
-          className="flex-1 min-w-0 px-3 py-2 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]"
-        />
-        {suffix && (
-          <span className="self-center text-[0.78rem] tracking-wide text-[var(--color-ink-3)]">
-            {suffix}
-          </span>
-        )}
-      </div>
+      <DecimalField label={label} className="mt-1.5" {...input} />
       {hint && (
         <p className="mt-1.5 text-[0.7rem] text-[var(--color-ink-4)] leading-relaxed">
           {hint}

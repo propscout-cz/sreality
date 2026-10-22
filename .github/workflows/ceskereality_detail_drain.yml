@@ -1,6 +1,5 @@
 name: "Scraping: Českéreality detail drain"
 
-# portal: ceskereality
 # The slow half of the ceskereality cadence split (architectural rule #19, like
 # sreality/idnes). Claims a bounded slice of listing_detail_queue
 # (source='ceskereality', enqueued by ceskereality_index_walk.yml), fetches each

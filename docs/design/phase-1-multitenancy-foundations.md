@@ -73,7 +73,7 @@ The API connects as superuser (`postgres`) today, which **bypasses RLS**. Keepin
 
 **The one hard schema break — the deal pipeline:**
 - `property_pipeline` PK `property_id` → **`(account_id, property_id)`**.
-- `pipeline_stages`: per-account boards — `is_entry` unique becomes `(account_id) where is_entry`; `key` unique becomes `(account_id, lower(key))`; **copy the 5-stage default board on signup** (stage ids stay FK-safe per account).
+- `pipeline_stages`: per-account boards — `is_entry` unique becomes `(account_id) where is_entry`; `key` unique becomes `(account_id, lower(key))`; **copy the default board on signup** (a dated snapshot in `seed_default_pipeline`; stage ids stay FK-safe per account).
 - `property_pipeline_events` → `+account_id` (so unmerge restores the right user's snapshot).
 - `reconcile_pipeline_on_merge` (`toolkit/pipeline_identity.py`) and the "single-entry crown" logic (`api/pipeline.py:176`) rewritten to fan out per account.
 
@@ -180,7 +180,7 @@ Designing the four public waves exposed eight places where this Phase 1 spec was
 
 **A2 — Merge reconcilers run `BYPASSRLS`; RLS can never scope them.** `reconcile_pipeline_on_merge`/`unmerge` run inside `merge_properties` as the service role, driven by the dedup engine on every pass. Once `account_id` is in the pipeline PK there are N cards per property (one per tenant that bookmarked it), and the current single-card SQL cross-joins tenant A's survivor with tenant B's retired card → **routine cross-tenant corruption and card loss**, not an edge case. The Phase 1 "pipeline rewrite" is therefore an account-*partitioned* SQL rewrite (add `s.account_id = r.account_id` throughout; snapshot/restore per `(account_id, property_id)`), and **`property_pipeline_events` must gain `account_id`** (it has none today). Same rule for the `carry_operator_state_on_merge` set-dedup keys.
 
-**A3 — Re-key BOTH global uniques on `pipeline_stages`, not just the entry one.** `pipeline_stages_key_ci` (`unique lower(key)`) is global; `seed_default_pipeline` inserts the same five keys per account, so the **second signup fails** unless it becomes `unique (account_id, lower(key))`. The spec named only the `one_entry` partial-unique.
+**A3 — Re-key BOTH global uniques on `pipeline_stages`, not just the entry one.** `pipeline_stages_key_ci` (`unique lower(key)`) is global; `seed_default_pipeline` inserts the same keys per account, so the **second signup fails** unless it becomes `unique (account_id, lower(key))`. The spec named only the `one_entry` partial-unique.
 
 **A4 — `estimation_runs.account_id` is NULLABLE, stamped synchronously.** It is not a standard tenant table: agent and system runs execute as service-role with **no JWT** (the post-response `BackgroundTask`), so `account_id` can't come from a claims `DEFAULT` and can't be RLS-forced `NOT NULL`. Add it **nullable**, stamp it at the *synchronous* kickoff INSERT before the task is scheduled, and scope its read policy `account_id IN (current_account_ids()) OR account_id = SYSTEM`. This is load-bearing for Waves 1, 2, and 3.
 

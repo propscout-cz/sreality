@@ -1,30 +1,26 @@
-/* Czech labels for the enum-typed columns added in migration 022.
- * Source codes live in scraper/parser.py:
- *   FURNISHED   {1: ano, 2: ne, 3: castecne}
- *   OWNERSHIP   {1: osobni, 2: druzstevni, 3: statni}
- * The DB stores the slug; the UI renders the diacritic version here.
- *
- * CATEGORY_SUB_LABELS is a lazy bottom-up table — only the codes the
- * SPA actually surfaces today are mapped. Sreality's full taxonomy has
- * ~30 codes; unmapped ones fall back to "kategorie #${cb}" so the UI
- * never shows a blank cell. Add a row whenever a new code surfaces in
- * a frontend filter dropdown. */
+/* Czech labels for enum-typed listing columns. */
 
-import { PRICE_UNIT_LABELS, filterById } from './filterRegistry.generated';
-import type { Furnished, Ownership } from './types';
+import { FILTER_REGISTRY, PRICE_UNIT_LABELS, filterById } from './filterRegistry.generated';
 
-export const FURNISHED_LABELS: Record<Furnished, string> = {
-  ano: 'Vybaveno',
-  ne: 'Nevybaveno',
-  castecne: 'Částečně',
-};
+/* One column's slug -> Czech label table, read off the generated filter
+ * registry: every filter that compiles straight onto the column contributes
+ * its options. A hook-compiled filter (sql_kind null, e.g. building_material's
+ * buckets) holds no column values, so it is skipped. */
+const ENUM_LABELS = new Map<string, Map<string, string>>();
+for (const f of FILTER_REGISTRY.filters) {
+  if (!f.pg_column || f.sql_kind == null || !f.enum_values) continue;
+  const labels = ENUM_LABELS.get(f.pg_column) ?? new Map<string, string>();
+  for (const o of f.enum_values) {
+    if (!labels.has(String(o.value))) labels.set(String(o.value), o.label_cs);
+  }
+  ENUM_LABELS.set(f.pg_column, labels);
+}
 
-export const OWNERSHIP_LABELS: Record<Ownership, string> = {
-  osobni: 'Osobní',
-  druzstevni: 'Družstevní',
-  statni: 'Státní/obecní',
-  jine: 'Jiné',
-};
+/* The registry's Czech label for a stored value; the value itself when the
+ * registry has none; null when there is no value. */
+export function enumLabel(column: string, slug: string | null | undefined): string | null {
+  return slug ? (ENUM_LABELS.get(column)?.get(slug) ?? slug) : null;
+}
 
 /* The word rendered after a price ("3 000 000 Kč / celkem"). The stored slug is
  * the eight text-priced portals' spelling and is not display Czech; an unhealed
@@ -67,70 +63,15 @@ export function categoryMainLabel(cm: string | null | undefined): string {
 /* Plural Czech label for category_main aggregate headings ("Byty", "Domy") and
  * the deal-type word ("prodej", "pronájem") — both derived from the filter
  * registry (the registry's category_main labels are plural, its category_type
- * labels are the canonical Czech words), so Health + region rollups share one
- * source with the Browse filters instead of a private hardcoded copy. Distinct
- * from categoryMainLabel's singular title noun. */
-const CATEGORY_MAIN_PLURAL: Record<string, string> = Object.fromEntries(
-  (filterById('category_main')?.enum_values ?? []).map((o) => [String(o.value), o.label_cs]),
-);
-const CATEGORY_TYPE_LABELS: Record<string, string> = Object.fromEntries(
-  (filterById('category_type')?.enum_values ?? []).map((o) => [String(o.value), o.label_cs]),
-);
-
+ * labels are the canonical Czech words), so the stats and location-audit
+ * rollups share one source with the Browse filters instead of a private
+ * hardcoded copy. Distinct from categoryMainLabel's singular title noun. */
 export function categoryMainLabelPlural(cm: string | null | undefined): string {
-  return (cm && CATEGORY_MAIN_PLURAL[cm]) || (cm ?? '—');
+  return enumLabel('category_main', cm) ?? cm ?? '—';
 }
 
 export function categoryTypeLabel(ct: string | null | undefined): string {
-  return (ct && CATEGORY_TYPE_LABELS[ct]) || (ct ?? '—');
-}
-
-/* category_sub_cb meanings differ across category_main. We key by the
- * sreality cb value alone since the codes don't collide across the
- * three category_main values we surface (1=byt, 2=dum, 4=komercni)
- * — they live in disjoint integer ranges. */
-export const CATEGORY_SUB_LABELS: Record<number, string> = {
-  /* byt (apartments) — disposition-shaped subtypes */
-  2:  '1+kk',
-  3:  '1+1',
-  4:  '2+kk',
-  5:  '2+1',
-  6:  '3+kk',
-  7:  '3+1',
-  8:  '4+kk',
-  9:  '4+1',
-  10: '5+kk',
-  11: '5+1',
-  12: '6 a více',
-  16: 'Atypický',
-  47: 'Pokoj',
-  /* dum (houses) */
-  33: 'Chata',
-  35: 'Památka/jiné',
-  37: 'Rodinný dům',
-  39: 'Vila',
-  40: 'Na klíč',
-  43: 'Chalupa',
-  44: 'Zemědělská usedlost',
-  54: 'Vícegenerační dům',
-  /* komercni (commercial) */
-  25: 'Kanceláře',
-  26: 'Sklady',
-  27: 'Výroba',
-  28: 'Obchodní prostory',
-  29: 'Ubytování',
-  30: 'Restaurace',
-  31: 'Zemědělský objekt',
-  32: 'Ostatní',
-  38: 'Činžovní dům',
-  49: 'Virtuální kancelář',
-  56: 'Ordinace',
-  57: 'Apartmány',
-};
-
-export function categorySubLabel(cb: number | null): string | null {
-  if (cb == null) return null;
-  return CATEGORY_SUB_LABELS[cb] ?? `kategorie #${cb}`;
+  return enumLabel('category_type', ct) ?? ct ?? '—';
 }
 
 /* Portal-agnostic `subtype` slugs (migration 152), grouped by the
@@ -144,10 +85,6 @@ export interface SubtypeOption {
   label: string;
 }
 
-const SUBTYPE_OPTIONS: SubtypeOption[] = (
-  filterById('subtype')?.enum_values ?? []
-).map((o) => ({ slug: String(o.value), label: o.label_cs }));
-
 export const SUBTYPE_LABELS_BY_MAIN: Record<'dum' | 'komercni', SubtypeOption[]> = {
   dum: (filterById('subtype')?.enum_values ?? [])
     .filter((o) => o.group === 'dum')
@@ -157,12 +94,8 @@ export const SUBTYPE_LABELS_BY_MAIN: Record<'dum' | 'komercni', SubtypeOption[]>
     .map((o) => ({ slug: String(o.value), label: o.label_cs })),
 };
 
-const SUBTYPE_LABEL_BY_SLUG: Record<string, string> = Object.fromEntries(
-  SUBTYPE_OPTIONS.map((o) => [o.slug, o.label]),
-);
-
 export function subtypeLabel(slug: string): string {
-  return SUBTYPE_LABEL_BY_SLUG[slug] ?? slug;
+  return enumLabel('subtype', slug) ?? slug;
 }
 
 /* --- listing identity: the "what kind" descriptor --------------------------

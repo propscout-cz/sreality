@@ -3,10 +3,11 @@
 What only the text can show: the signature is 598's verbatim (the SPA builds ONE argument object
 for both aggregate RPCs, tests/test_browse_map_read_contract.py); the cohort predicate is 598's
 byte for byte, in the map body AND the stats body (rule 16: one definition of "matches"); the `g`
-CTE still reads properties_map_mv and projects nothing but l.lat and l.lng (the index-only scan,
-tests/test_browse_map_cells_plan.py); the one transaction is gated on 598's live body before and
-checked after; nothing is dropped, granted or cascaded; the answer is four keys and bounded by
-construction. The executed half lives in tests/test_browse_map_cells_live.py.
+CTE still reads properties_map_mv and projects nothing but l.lat and l.lng (the index-only scan;
+since 630 the map reads browse_list through browse_list_map_idx, tests/test_browse_map_cells_plan.py);
+the one transaction is gated on 598's live body before and checked after; nothing is dropped,
+granted or cascaded; the answer is four keys and bounded by construction. The executed half lives
+in tests/test_browse_map_cells_live.py.
 """
 
 from __future__ import annotations
@@ -116,9 +117,11 @@ def test_the_answer_is_four_keys_and_bounded_by_construction() -> None:
 
 def test_the_latest_definitions() -> None:
     """605 restated both RPCs with this file's map body except the chip arms
-    (tests/test_one_place_predicate.py pins the swap)."""
-    assert latest_definition(FN).name == "605_street_chip_level.sql"
-    assert latest_definition("browse_stats_properties").name == "605_street_chip_level.sql"
+    (tests/test_one_place_predicate.py pins the swap); 625 restated 605's with one appended
+    parameter and one predicate (tom_observed_only); 630 re-pointed it at browse_list; 644
+    swapped its condition conjunct. The Stats RPC's latest definition is pinned where it
+    lives: tests/test_626_stats_dashboard.py."""
+    assert latest_definition(FN).name == "648_browse_energy_rating_filter.sql"
 
 
 def test_the_receipt_probes_the_function() -> None:

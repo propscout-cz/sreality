@@ -11,7 +11,8 @@
  * with NULL disposition/area/amenities yields short-but-valid output, never a
  * broken box. */
 import type { ReactElement, ReactNode } from 'react';
-import { fmtArea, fmtFurnished, fmtOwnership, fmtParkingLots } from '@/lib/format';
+import { enumLabel } from '@/lib/enums';
+import { fmtArea, fmtParkingLots } from '@/lib/format';
 import type { ListingPublic } from '@/lib/types';
 
 export interface Fact {
@@ -34,17 +35,11 @@ export function buildFacts(listing: ListingPublic): Fact[] {
   return pruneNulls([
     { label: 'Lot', value: fmtAreaOrNull(listing.estate_area), mono: true },
     { label: 'Garden', value: fmtAreaOrNull(listing.garden_area), mono: true },
-    { label: 'Building', value: capitalise(listing.building_type) },
-    { label: 'Condition', value: capitalise(listing.condition) },
+    { label: 'Building', value: enumLabel('building_type', listing.building_type) },
+    { label: 'Condition', value: enumLabel('condition', listing.condition) },
     { label: 'Energy', value: listing.energy_rating, mono: true },
-    {
-      label: 'Ownership',
-      value: listing.ownership ? fmtOwnership(listing.ownership) : null,
-    },
-    {
-      label: 'Furnished',
-      value: listing.furnished ? fmtFurnished(listing.furnished) : null,
-    },
+    { label: 'Ownership', value: enumLabel('ownership', listing.ownership) },
+    { label: 'Furnished', value: enumLabel('furnished', listing.furnished) },
   ]);
 }
 
@@ -168,11 +163,6 @@ function pruneNulls(facts: Fact[]): Fact[] {
 
 function fmtAreaOrNull(n: number | null): string | null {
   return n == null ? null : fmtArea(n);
-}
-
-function capitalise(s: string | null): string | null {
-  if (!s) return null;
-  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 /* -------------------------------------------------------------------------- */

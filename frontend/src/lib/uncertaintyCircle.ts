@@ -33,9 +33,9 @@ export interface PinPrecision {
   uncertainty_radius_m: number | null;
 }
 
-/* Whether the pin is drawn SOLID — the claim "exactly here". Only the building
- * rungs make it. An unresolved pin is deliberately NOT solid: a solid dot with no
- * verdict behind it would be the one claim nobody made. */
+/* Whether the pin gets the black outer contour — the claim "exactly here". Only
+ * the building rungs make it. An unresolved pin deliberately does NOT: a contour
+ * with no verdict behind it would be the one claim nobody made. */
 export const isPinExact = (p: PinPrecision): boolean =>
   p.granularity_rank != null && p.granularity_rank >= BUILDING_GRANULARITY_RANK;
 

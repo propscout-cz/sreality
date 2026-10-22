@@ -41,7 +41,7 @@ function Boom(): never {
 
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
-  vi.mocked(api.getNotificationUnreadCount).mockResolvedValue(0);
+  vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({ unread_count: 0 });
   vi.mocked(pinAudit.fetchPinAuditTotal).mockResolvedValue(0);
   vi.mocked(auth.useAuth).mockReturnValue({
     isAdmin: true,
@@ -91,9 +91,7 @@ describe('<Shell> error containment', () => {
  * the operator reads. */
 describe('<Shell> notifications badge', () => {
   it('keeps the nav item named "Notifications" and adds the count to it', async () => {
-    vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({
-      unread_count: 5,
-    } as unknown as Awaited<ReturnType<typeof api.getNotificationUnreadCount>>);
+    vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({ unread_count: 5 });
     renderShellWith(<p>page content</p>);
     const link = await screen.findByRole('link', { name: /^Notifications/ });
     await waitFor(() =>
@@ -175,6 +173,18 @@ describe('<Shell> admin menu', () => {
     for (const section of sections) {
       expect(section).toHaveAttribute('aria-label');
     }
+  });
+
+  /* Health leads the menu: it is where the operator starts when something is
+   * wrong, and where the bell's system alerts open. */
+  it('opens with Health as its first entry', async () => {
+    const user = userEvent.setup();
+    renderShellWith(<p>page content</p>);
+    const nav = screen.getByRole('navigation');
+    await user.click(within(nav).getByRole('button', { name: /^Admin/ }));
+    const first = within(within(nav).getByRole('menu')).getAllByRole('menuitem')[0];
+    expect(first).toHaveAccessibleName('Health');
+    expect(first).toHaveAttribute('href', '/health');
   });
 
   it('keeps the daily surfaces in the row itself', () => {

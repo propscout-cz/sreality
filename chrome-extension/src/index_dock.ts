@@ -14,6 +14,7 @@
  * chrome.storage.local like the panel's minimized state, and follows the
  * operator across portals and tabs. */
 
+import { onStoredChange } from './session';
 import tokens from './tokens.css?inline';
 
 const DOCK_HOST_ID = '__mf_dock_host__';
@@ -42,19 +43,7 @@ export function writeVeil(on: boolean): void {
 
 /* The switch flipped in another tab (or on another portal). Returns the unsubscribe. */
 export function onVeilChange(fn: (on: boolean) => void): () => void {
-  const listener = (
-    changes: { [key: string]: chrome.storage.StorageChange }, area: string,
-  ): void => {
-    if (area === 'local' && VEIL_KEY in changes) fn(changes[VEIL_KEY].newValue !== false);
-  };
-  try {
-    chrome.storage.onChanged.addListener(listener);
-  } catch {
-    return () => {};
-  }
-  return () => {
-    try { chrome.storage.onChanged.removeListener(listener); } catch { /* orphaned */ }
-  };
+  return onStoredChange(VEIL_KEY, (c) => fn(c.newValue !== false));
 }
 
 const DOCK_CSS = `

@@ -8,8 +8,8 @@ tests/api/test_providers/test_anthropic.py. Here we cover:
 - One call() end-to-end via a _ScriptedProvider, asserting the
   llm_calls row shape (provider, called_for, model, tokens, cost).
 - The daily-cost soft warning behaviour.
-- The legacy-shape -> neutral block translation that lets the URL
-  parser / summarize / image-compare callers keep their dict shape.
+- The legacy-shape -> neutral block translation that lets the
+  summarize / image-compare callers keep their dict shape.
 """
 
 from __future__ import annotations
@@ -33,28 +33,28 @@ from tests.api._fakes import _FakeConn, _ScriptedProvider, usage
 # ----------------------------------------------------------------------
 
 def test_resolve_model_reads_app_settings():
-    conn = _FakeConn(app_settings={"llm_parse_model": "claude-sonnet-4-6"})
+    conn = _FakeConn(app_settings={"llm_summary_model": "claude-sonnet-4-6"})
     client = lc.LLMClient(conn)
-    assert client.resolve_model() == "claude-sonnet-4-6"
+    assert client.resolve_model("llm_summary_model") == "claude-sonnet-4-6"
 
 
 def test_resolve_model_falls_back_when_row_missing():
     conn = _FakeConn(app_settings={})
     client = lc.LLMClient(conn)
-    assert client.resolve_model() == lc.DEFAULT_MODEL
+    assert client.resolve_model("llm_summary_model") == lc.DEFAULT_MODEL
 
 
 def test_resolve_system_prompt_reads_app_settings():
-    conn = _FakeConn(app_settings={"llm_parse_system_prompt": "Be excellent."})
+    conn = _FakeConn(app_settings={"llm_summary_system_prompt": "Be excellent."})
     client = lc.LLMClient(conn)
-    assert client.resolve_system_prompt() == "Be excellent."
+    assert client.resolve_system_prompt("llm_summary_system_prompt") == "Be excellent."
 
 
 def test_resolve_system_prompt_fallback_when_missing(caplog):
     conn = _FakeConn(app_settings={})
     client = lc.LLMClient(conn)
     with caplog.at_level("WARNING"):
-        prompt = client.resolve_system_prompt()
+        prompt = client.resolve_system_prompt("llm_summary_system_prompt")
     assert prompt == lc.DEFAULT_SYSTEM_PROMPT_FALLBACK
     assert any("missing" in m for m in caplog.messages)
 
@@ -85,7 +85,7 @@ def _client_with(provider: _ScriptedProvider, conn: _FakeConn) -> lc.LLMClient:
 
 
 def test_call_records_llm_calls_row():
-    conn = _FakeConn(app_settings={"llm_parse_model": "claude-sonnet-4-5"})
+    conn = _FakeConn(app_settings={})
     prov = _ScriptedProvider(
         "anthropic",
         [_completion(text="Hello")],
@@ -94,7 +94,8 @@ def test_call_records_llm_calls_row():
     client = _client_with(prov, conn)
 
     resp = client.call(
-        called_for="parse_url",
+        called_for="summarize_listing",
+        model="claude-sonnet-4-5",
         messages=[{"role": "user", "content": "hi"}],
     )
 
@@ -110,7 +111,7 @@ def test_call_records_llm_calls_row():
     params = conn.llm_calls_rows[0]["params"]
     # New INSERT order: called_for, provider, model, in, out, cache_r, cache_w,
     # cost_usd, duration_ms, estimation_run_id.
-    assert params[0] == "parse_url"
+    assert params[0] == "summarize_listing"
     assert params[1] == "anthropic"
     assert params[2] == "claude-sonnet-4-5"
     assert params[3] == 100
@@ -119,7 +120,7 @@ def test_call_records_llm_calls_row():
 
 
 def test_call_extracts_tool_use_blocks():
-    conn = _FakeConn(app_settings={"llm_parse_model": "claude-sonnet-4-5"})
+    conn = _FakeConn(app_settings={})
     prov = _ScriptedProvider(
         "anthropic",
         [_completion(tool_calls=[ToolCall(
@@ -130,7 +131,8 @@ def test_call_extracts_tool_use_blocks():
     client = _client_with(prov, conn)
 
     resp = client.call(
-        called_for="parse_url",
+        called_for="summarize_listing",
+        model="claude-sonnet-4-5",
         messages=[{"role": "user", "content": "x"}],
         tools=[{"name": "record_listing", "description": "", "input_schema": {}}],
     )
@@ -191,7 +193,7 @@ def test_call_explicit_provider_overrides_derivation():
     )
     client = lc.LLMClient(conn, providers={"anthropic": prov_a})
     resp = client.call(
-        called_for="parse_url",
+        called_for="summarize_listing",
         messages=[{"role": "user", "content": "x"}],
         model="gpt-5-mini",
         provider="anthropic",
@@ -200,11 +202,12 @@ def test_call_explicit_provider_overrides_derivation():
 
 
 def test_call_propagates_estimation_run_id():
-    conn = _FakeConn(app_settings={"llm_parse_model": "claude-sonnet-4-5"})
+    conn = _FakeConn(app_settings={})
     prov = _ScriptedProvider("anthropic", [_completion(text="ok", input_tokens=1, output_tokens=1)])
     client = _client_with(prov, conn)
     client.call(
-        called_for="parse_url",
+        called_for="summarize_listing",
+        model="claude-sonnet-4-5",
         messages=[{"role": "user", "content": "x"}],
         estimation_run_id=42,
     )
@@ -212,11 +215,12 @@ def test_call_propagates_estimation_run_id():
 
 
 def test_call_uses_explicit_provider_kwarg():
-    conn = _FakeConn(app_settings={"llm_parse_model": "claude-sonnet-4-5"})
+    conn = _FakeConn(app_settings={})
     g_prov = _ScriptedProvider("gemini", [_completion(text="g")])
     client = lc.LLMClient(conn, providers={"gemini": g_prov})
     client.call(
         called_for="agent_estimation",
+        model="claude-sonnet-4-5",
         messages=[{"role": "user", "content": "x"}],
         provider="gemini",
     )
@@ -224,11 +228,12 @@ def test_call_uses_explicit_provider_kwarg():
 
 
 def test_call_forwards_tool_choice_when_set():
-    conn = _FakeConn(app_settings={"llm_parse_model": "claude-sonnet-4-5"})
+    conn = _FakeConn(app_settings={})
     prov = _ScriptedProvider("anthropic", [_completion(text="ok")])
     client = _client_with(prov, conn)
     client.call(
         called_for="enrich_listing_description",
+        model="claude-sonnet-4-5",
         messages=[{"role": "user", "content": "x"}],
         tools=[{"name": "record_listing", "description": "", "input_schema": {}}],
         tool_choice="record_listing",
@@ -254,10 +259,11 @@ def test_call_omits_tool_choice_for_providers_without_support():
         def price_for(self, model):
             return None
 
-    conn = _FakeConn(app_settings={"llm_parse_model": "claude-sonnet-4-5"})
+    conn = _FakeConn(app_settings={})
     client = lc.LLMClient(conn, providers={"legacy": _Legacy()})
     resp = client.call(
-        called_for="parse_url",
+        called_for="summarize_listing",
+        model="claude-sonnet-4-5",
         messages=[{"role": "user", "content": "x"}],
         provider="legacy",
     )
@@ -266,11 +272,12 @@ def test_call_omits_tool_choice_for_providers_without_support():
 
 def test_call_raises_on_unknown_provider():
     from api.providers import ProviderError
-    conn = _FakeConn(app_settings={"llm_parse_model": "claude-sonnet-4-5"})
+    conn = _FakeConn(app_settings={})
     client = lc.LLMClient(conn, providers={})
     with pytest.raises(ProviderError, match="not configured"):
         client.call(
-            called_for="parse_url",
+            called_for="summarize_listing",
+            model="claude-sonnet-4-5",
             messages=[{"role": "user", "content": "x"}],
             provider="missing",
         )
@@ -289,14 +296,15 @@ def _heavy_call(monkeypatch, conn, input_tokens, output_tokens):
     )
     client = lc.LLMClient(conn, providers={"anthropic": prov})
     return client.call(
-        called_for="parse_url",
+        called_for="summarize_listing",
+        model="claude-sonnet-4-5",
         messages=[{"role": "user", "content": "x"}],
     )
 
 
 def test_cost_guard_does_not_warn_under_threshold(monkeypatch, caplog):
     monkeypatch.setenv("LLM_DAILY_COST_WARN_USD", "5.0")
-    conn = _FakeConn(app_settings={"llm_parse_model": "claude-sonnet-4-5"})
+    conn = _FakeConn(app_settings={})
     with caplog.at_level("WARNING"):
         _heavy_call(monkeypatch, conn, 1_000_000, 100_000)  # $4.50
     assert not any("crossed soft threshold" in m for m in caplog.messages)
@@ -304,7 +312,7 @@ def test_cost_guard_does_not_warn_under_threshold(monkeypatch, caplog):
 
 def test_cost_guard_warns_on_threshold_crossing(monkeypatch, caplog):
     monkeypatch.setenv("LLM_DAILY_COST_WARN_USD", "5.0")
-    conn = _FakeConn(app_settings={"llm_parse_model": "claude-sonnet-4-5"})
+    conn = _FakeConn(app_settings={})
     with caplog.at_level("WARNING"):
         _heavy_call(monkeypatch, conn, 2_000_000, 1_000_000)  # $21
     assert any("crossed soft threshold" in m for m in caplog.messages)
