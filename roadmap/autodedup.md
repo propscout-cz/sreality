@@ -139,6 +139,11 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   to come); within each, flats for sale, flats for rent, houses and commercial for sale, the rest.
   Active and inactive groups together: the operator's ruling of 2026-10-21 ("aktivní i neaktivní
   dohromady") retired E973's active-first level. An order only: no decision module, digest unchanged.
+- **E975 (2026-10-21, the sweep slice):** the reconcile sweeps 2,000 groups a pass past its cursor (was
+  200): with Prague's 34k clusters the hand-on ran dry at 12:00Z and the merges fell to a third; a cycle
+  is ~2 h now and the discovery matches the re-claim. One constant, no decision module, digest unchanged.
+  Owed: the three `applied_merges` overlap scans of the reconcile's planning read id arrays that grow with
+  the list (DIAGNOSIS recommendation 3: an index they can use) before they near the 2-min statement timeout.
 - **Next:** three live days and checkpoint C2, then the last commit deletes the batch
   `apply`/`unapply` modes; `legacy_retire` runs per area under the live generation since W8 (E953, 2026-10-14). Widening the scope is the operator's call.
 - **Open (operator decision, before the C2 deletion):** the undo path once `mode=unapply` is gone.

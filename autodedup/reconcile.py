@@ -66,8 +66,14 @@ from toolkit.property_identity import merge_property_set
 CURSOR: str = "rt_reconcile"
 RUN_PREFIX: str = "rt:"
 # How many of the generation's groups one pass sweeps past the cursor, besides the ones it
-# re-clustered. The trial scope holds ~1,100 groups, so a full cycle is ~6 passes.
-SWEEP_SLICE: int = 200
+# re-clustered. 200 was the trial scope's (~1,100 groups, a 6-pass cycle); since the Prague seed
+# the store holds ~34k groups and the sweep is the only way a group no feed touches reaches the
+# hand-on (E973: the discovery sets the pace), so at 200 the list ran dry (E975, 2026-10-21:
+# 524 groups to 24 in two hours, merges to a third). 2,000 finds ~240 stale groups a pass at the
+# measured 12 % share, three times what the re-claim (`STALE_FLOOR`, ~70 groups) takes a pass,
+# so the list stays full, and a cycle is ~17 passes; the swept groups are planned in bulk
+# (~36 s for 2,000) before the time-bound apply loop, so a late find is still handed on.
+SWEEP_SLICE: int = 2000
 # A group is started only while this much of the pass's time is left: one group is a handful
 # of statements and one merge, and the reconcile stops between groups, never inside one.
 GROUP_MARGIN_S: float = 30.0
