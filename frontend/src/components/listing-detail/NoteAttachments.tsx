@@ -1,17 +1,14 @@
-/* Files on operator notes (migration 592): the drop zones, the file picker, the composer's
- * staged files and a saved note's attachments. The API stores and serves the bytes; image
- * thumbnails are blob URLs of what it returns. */
+/* Files on operator notes (migrations 592, 660: a property's files, a note's by reference): the drop
+ * zones, the file picker, the composer's staged files and a saved note's attachments. The API stores
+ * and serves the bytes; an image's thumbnail is a blob URL of its 1080 px display copy. */
 
 import { useEffect, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent } from 'react';
 import { actOpts, useActAs } from '@/lib/acting';
-import { ApiError, deleteNoteAttachment, fetchNoteAttachmentBlob } from '@/lib/api';
-import type { NoteAttachment } from '@/lib/types';
-import {
-  NOTE_ATTACHMENT_ACCEPT,
-  fmtBytes,
-  isPreviewableImage,
-} from '@/lib/noteAttachments';
+import { ApiError, deleteAttachment, fetchAttachmentBlob } from '@/lib/api';
+import type { Attachment } from '@/lib/types';
+import { ATTACHMENT_ACCEPT, fmtBytes, isPreviewableImage } from '@/lib/attachments';
+import { useBlobUrl } from '@/lib/useBlobUrl';
 import { FileIcon, PaperclipIcon } from '@/components/icons';
 
 const carriesFiles = (e: { dataTransfer: DataTransfer | null }): boolean =>
@@ -119,7 +116,7 @@ export function AttachButton({
         ref={input}
         type="file"
         multiple
-        accept={NOTE_ATTACHMENT_ACCEPT}
+        accept={ATTACHMENT_ACCEPT}
         tabIndex={-1}
         aria-label={label}
         data-testid="attach-input"
@@ -193,54 +190,44 @@ function StagedFile({
   onRemove: () => void;
   disabled: boolean;
 }) {
-  const preview = useLocalObjectUrl(isPreviewableImage(file.type) ? file : null);
+  const preview = useBlobUrl(
+    isPreviewableImage(file.type) ? () => Promise.resolve(file) : null,
+    `${file.name}|${file.size}|${file.lastModified}`,
+  );
   return (
     <FileTile
       name={file.name}
       size={file.size}
-      thumbnail={preview}
+      thumbnail={preview.url}
       remove={{ label: `Remove ${file.name}`, onClick: onRemove, disabled, always: true }}
     />
   );
-}
-
-function useLocalObjectUrl(file: File | null): string | null {
-  const [url, setUrl] = useState<string | null>(null);
-  useEffect(() => {
-    if (!file) return;
-    const next = URL.createObjectURL(file);
-    setUrl(next);
-    return () => URL.revokeObjectURL(next);
-  }, [file]);
-  return url;
 }
 
 /* --- a saved note's attachments ------------------------------------------- */
 
 export function NoteAttachmentList({
   propertyId,
-  noteId,
   attachments,
   uploading,
   onRemoved,
 }: {
   propertyId: number;
-  noteId: number;
-  attachments: NoteAttachment[];
+  attachments: Attachment[];
   uploading: File[];
   /* Absent = read-only (another author's note): the tiles open, but carry no ×. */
   onRemoved?: () => Promise<unknown>;
 }) {
-  const [confirming, setConfirming] = useState<NoteAttachment | null>(null);
+  const [confirming, setConfirming] = useState<Attachment | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const actAs = useActAs();
   if (attachments.length === 0 && uploading.length === 0) return null;
 
-  const remove = (a: NoteAttachment) => {
+  const remove = (a: Attachment) => {
     setBusy(true);
     setError(null);
-    deleteNoteAttachment(propertyId, noteId, a.id, ...actOpts(actAs))
+    deleteAttachment(propertyId, a.id, ...actOpts(actAs))
       .then(() => onRemoved?.())
       .then(() => setConfirming(null))
       .catch((err: ApiError | Error) => setError(err.message || 'Failed to remove the file'))
@@ -254,7 +241,6 @@ export function NoteAttachmentList({
           <li key={a.id}>
             <SavedAttachment
               propertyId={propertyId}
-              noteId={noteId}
               attachment={a}
               onRemove={onRemoved ? () => setConfirming(a) : undefined}
             />
@@ -296,18 +282,19 @@ export function NoteAttachmentList({
 
 function SavedAttachment({
   propertyId,
-  noteId,
   attachment,
   onRemove,
 }: {
   propertyId: number;
-  noteId: number;
-  attachment: NoteAttachment;
+  attachment: Attachment;
   onRemove?: () => void;
 }) {
   const image = isPreviewableImage(attachment.mime_type);
   const actAs = useActAs();
-  const thumb = useAttachmentUrl(propertyId, noteId, attachment.id, image);
+  const thumb = useBlobUrl(
+    image ? () => fetchAttachmentBlob(propertyId, attachment.id, { w: 1080, actAs }) : null,
+    `${propertyId}:${attachment.id}:${actAs ?? ''}`,
+  );
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState(false);
   const remove = onRemove && { label: `Remove ${attachment.filename}`, onClick: onRemove };
@@ -326,7 +313,7 @@ function SavedAttachment({
   const download = () => {
     setSaving(true);
     setFailed(false);
-    fetchNoteAttachmentBlob(propertyId, noteId, attachment.id, ...actOpts(actAs))
+    fetchAttachmentBlob(propertyId, attachment.id, ...actOpts(actAs))
       .then((blob) => saveBlob(blob, attachment.filename))
       .catch(() => setFailed(true))
       .finally(() => setSaving(false));
@@ -342,39 +329,6 @@ function SavedAttachment({
       remove={remove}
     />
   );
-}
-
-/* An image attachment's bytes as a blob URL, freed on unmount. */
-function useAttachmentUrl(
-  propertyId: number,
-  noteId: number,
-  attachmentId: number,
-  enabled: boolean,
-): { url: string | null; failed: boolean } {
-  const [state, setState] = useState<{ url: string | null; failed: boolean }>({
-    url: null,
-    failed: false,
-  });
-  const actAs = useActAs();
-  useEffect(() => {
-    if (!enabled) return;
-    let cancelled = false;
-    let url: string | null = null;
-    fetchNoteAttachmentBlob(propertyId, noteId, attachmentId, ...actOpts(actAs))
-      .then((blob) => {
-        if (cancelled) return;
-        url = URL.createObjectURL(blob);
-        setState({ url, failed: false });
-      })
-      .catch(() => {
-        if (!cancelled) setState({ url: null, failed: true });
-      });
-    return () => {
-      cancelled = true;
-      if (url) URL.revokeObjectURL(url);
-    };
-  }, [propertyId, noteId, attachmentId, enabled, actAs]);
-  return state;
 }
 
 function saveBlob(blob: Blob, filename: string) {

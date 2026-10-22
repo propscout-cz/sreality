@@ -2670,8 +2670,7 @@ renumber.** Navigate by area:
     (`property_carriers.curation_plan` → `route_curation`, rule 15: a note with its ad, the rest
     to the property its oldest standing carry row names when that property gets adverts back,
     folds re-created while their twin stands, the spent rows stamped `undone_at`; a split's
-    acting user picks per item, copies allowed (a note's copy takes its attachments: new rows on
-    the new note, the same stored bytes), other accounts' items follow the rule unseen;
+    acting user picks per item, copies allowed, other accounts' items follow the rule unseen;
     the brake's dry run counts what its undo would route, `curation_preview`, by the same plan,
     bar an item an origin active again already holds, which stays uncounted). **That
     invariant has a second half, on the WRITE side: a caller-supplied `property_id` is resolved to
@@ -2785,16 +2784,22 @@ renumber.** Navigate by area:
     NOT batched into `POST /listings/lookup` (too heavy per index card) — the panel fetches them
     lazily via `GET /properties/{id}/notes` on open. Tags are the one curation surface the
     extension does not yet expose, and a note's files the one part of a note (it shows the text).
-    **A note carries files** (migration 592, `property_note_attachments`): NOTE-grain (`note_id`,
-    no property column), so they ride the note through every merge with no carrier of their own,
-    and go when it is deleted. Dropped, pasted or picked in `CurationBlock` (the composer stages
-    them until the note is saved; a saved note takes a drop directly), sent one per request to
-    `POST /properties/{id}/notes/{note_id}/attachments` (tenant connection; the account is
-    trigger-derived from the note, 292-shape), stored in R2 under the private
-    `custom-attachments/note/` prefix and served back through the API — the bucket sends no CORS
-    header, so the SPA cannot read R2 itself. An allowlist by extension (`api/note_attachments.py`,
-    mirrored in `frontend/src/lib/noteAttachments.ts`) admits nothing active: the bytes return as
-    same-origin blob URLs. R2 objects are never deleted (a split's note copy shares them). **Every property-grain operator write (curation here, the
+    **A property carries files; a note may reference them** (migrations 592, 660,
+    `property_attachments`): property-grain, `note_id` optional, carried by their own
+    `CurationTable` before the notes (the same bytes once per account and property: a twin folds)
+    and moved with their note by a trigger wherever the note goes (a split's move; its note copy
+    carries none). A deleted note leaves its files on the property (`ON DELETE SET NULL`), and the
+    `(note_id, account_id)` key lets a file name only its own account's note. Under shares they
+    follow the note rule: readable where their note is, so a file with no note is its account's
+    (and its edit delegates') alone. A detach routes no file of its own (no split-dialog item yet).
+    Dropped, pasted or picked in `CurationBlock`, sent one per request to `POST
+    /properties/{id}/attachments` (`note_id` optional; tenant connection, the acting account),
+    stored in R2 under the private `custom-attachments/property/` prefix as uploaded (EXIF intact)
+    and served back only through the API — the bucket sends no CORS header; `?w=1080` serves an
+    image's display copy, made once under `thumb/w1080/`, never presigned. One module
+    (`api/attachments.py`, the building run's files too; mirrored in `frontend/src/lib/attachments.ts`)
+    admits nothing active and no HEIC, an image by its own header. R2 objects are never deleted (an
+    orphan sweep is owed). **Every property-grain operator write (curation here, the
     pipeline in rule #22) carries exactly ONE account, resolved once at the route edge; reads take
     none and are scoped by RLS. The doctrine and its standing gates are stated once — rule #22's
     tenancy note below.**
@@ -2843,7 +2848,7 @@ renumber.** Navigate by area:
     REPLACES the identity on curation, it never widens it.** `pipeline_shares` (owner, recipient,
     mode `read|edit`; browser SELECT + DELETE, no INSERT) lets the recipient send `X-Act-As:
     <owner account>`; on that request, and only on the eleven curation tables (`collections`,
-    `tags`, `property_notes`, `collection_properties`, `property_tags`, `property_note_attachments`,
+    `tags`, `property_notes`, `collection_properties`, `property_tags`, `property_attachments`,
     `property_artifact_links`, `property_dismissals`, `property_pipeline`, `pipeline_stages`,
     `property_pipeline_events`), whose policies read `acting_account_ids()` instead of
     `current_account_ids()`, the caller IS the owner: an `edit` share reads and writes all eleven;

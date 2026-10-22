@@ -542,21 +542,21 @@ def test_a_contentless_record_of_another_category_never_refuses_a_letter(cur):
         out["letters"][1]["property_id"])
 
 
-def test_a_note_copy_takes_its_attachments(cur, accounts):
-    """A split's copy of a note is a new note, and its files come with it (migration 592): the
-    same stored bytes, the copy's account; the moved note keeps its own row."""
+def test_a_notes_files_go_with_the_note_and_its_copy_carries_none(cur, accounts):
+    """Migration 660: a file sits on its note's property, so a split's note move takes it along;
+    a copy of the note is a new note with no files (the bytes are the property's, not the text's)."""
     a, _b = accounts
     (s, r), (s1, r1) = _props(cur, "sreality", "idnes")
     _recomputed(cur, s, r)
     note = _note(cur, a, s, s1)
-    key, digest = f"custom-attachments/note/{note}/x.pdf", "a" * 64
-    cur.execute("INSERT INTO property_note_attachments (note_id, storage_key, filename, mime_type, "
-                "byte_size, sha256_hex) VALUES (%s, %s, 'plan.pdf', 'application/pdf', 10, %s)",
-                (note, key, digest))
+    digest = "a" * 64
+    cur.execute("INSERT INTO property_attachments (note_id, account_id, property_id, storage_key, "
+                "filename, mime_type, byte_size, sha256_hex) "
+                "VALUES (%s, %s, %s, %s, 'plan.pdf', 'application/pdf', 10, %s)",
+                (note, a, s, f"custom-attachments/property/{s}/x.pdf", digest))
     _merge(cur, [s, r])
     _split(cur, s, {s1: "A", r1: "B"}, a, reason="jiné patro",
            choices={f"note:{note}": ("B", ("A",))})
-    cur.execute("SELECT n.property_id, n.id = %s, f.storage_key, f.filename, f.account_id "
-                "FROM property_note_attachments f JOIN property_notes n ON n.id = f.note_id "
-                "WHERE f.sha256_hex = %s ORDER BY 1, 2", (note, digest))
-    assert cur.fetchall() == sorted([(r, True, key, "plan.pdf", a), (s, False, key, "plan.pdf", a)])
+    cur.execute("SELECT property_id, note_id FROM property_attachments WHERE sha256_hex = %s "
+                "AND account_id = %s", (digest, a))
+    assert cur.fetchall() == [(r, note)]

@@ -42,7 +42,7 @@ from api.main import app  # noqa: E402
 
 CURATION = frozenset({
     "collections", "tags", "property_notes", "collection_properties", "property_tags",
-    "property_note_attachments", "property_artifact_links", "property_dismissals",
+    "property_attachments", "property_artifact_links", "property_dismissals",
     "property_pipeline", "pipeline_stages", "property_pipeline_events",
 })
 

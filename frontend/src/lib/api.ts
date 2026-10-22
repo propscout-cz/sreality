@@ -15,6 +15,7 @@
 
 import { isAuthRetryableFetchError } from '@supabase/supabase-js';
 import type {
+  Attachment,
   BuildingAttachment,
   BuildingRun,
   Collection,
@@ -31,7 +32,6 @@ import type {
   ListingSummaryBatchRow,
   ArtifactLink,
   Note,
-  NoteAttachment,
   PipelineShareMode,
   PipelineShares,
   PipelineStage,
@@ -539,21 +539,27 @@ export const updateBuildingInputs = (
     json: input,
   });
 
-/* Multipart upload — bypasses the JSON helper. Each call uploads ONE
- * file; the caller fans out for multi-file pickers. The server replies
- * with the inserted BuildingAttachment row. */
+/* ONE file per multipart POST (the caller fans out for a multi-file pick); the server answers
+ * with the row it stored. Every attachment upload, a property's or a building run's. */
+const uploadFile = <T>(
+  path: string,
+  file: File,
+  fields: Record<string, string | number | null | undefined> = {},
+  opts: RequestOptions = {},
+): Promise<T> => {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  for (const [name, value] of Object.entries(fields)) {
+    if (value != null) form.append(name, String(value));
+  }
+  return request<T>(path, { ...opts, method: 'POST', form });
+};
+
 export const uploadBuildingAttachment = (
   buildingId: number,
   file: File,
-): Promise<BuildingAttachment> => {
-  const form = new FormData();
-  form.append('file', file, file.name);
-  return request<BuildingAttachment>(`/buildings/${buildingId}/attachments`, {
-    method: 'POST',
-    query: { source: 'ui' },
-    form,
-  });
-};
+): Promise<BuildingAttachment> =>
+  uploadFile(`/buildings/${buildingId}/attachments`, file, {}, { query: { source: 'ui' } });
 
 export const deleteBuildingAttachment = (
   buildingId: number,
@@ -2596,43 +2602,41 @@ export const deletePropertyArtifactLink = (
     actAs,
   });
 
-/* A note's files (migration 592): one file per request; the bytes come back through the API
- * because the bucket is private and sends no CORS header. */
-export const uploadNoteAttachment = (
+/* A property's files (migration 660), each optionally a note's. The bytes come back through the
+ * API because the bucket is private and sends no CORS header; `w: 1080` asks for an image's
+ * display copy instead of the original. */
+export const listAttachments = (
   property_id: number,
-  note_id: number,
+  { note_id, actAs }: Acting & { note_id?: number } = {},
+): Promise<{ data: Attachment[] }> =>
+  request<{ data: Attachment[] }>(`/properties/${property_id}/attachments`, {
+    query: { note_id },
+    actAs,
+  });
+
+export const uploadAttachment = (
+  property_id: number,
   file: File,
-  { actAs }: Acting = {},
-): Promise<NoteAttachment> => {
-  const form = new FormData();
-  form.append('file', file, file.name);
-  return request<NoteAttachment>(`/properties/${property_id}/notes/${note_id}/attachments`, {
-    method: 'POST',
-    form,
-    actAs,
-  });
-};
+  { note_id, actAs }: Acting & { note_id?: number } = {},
+): Promise<Attachment> =>
+  uploadFile(`/properties/${property_id}/attachments`, file, { note_id }, { actAs });
 
-export const fetchNoteAttachmentBlob = (
+export const fetchAttachmentBlob = (
   property_id: number,
-  note_id: number,
   attachment_id: number,
-  { actAs }: Acting = {},
+  { w, actAs }: Acting & { w?: 1080 } = {},
 ): Promise<Blob> =>
-  requestBlob(`/properties/${property_id}/notes/${note_id}/attachments/${attachment_id}`, {
-    actAs,
-  });
+  requestBlob(`/properties/${property_id}/attachments/${attachment_id}`, { query: { w }, actAs });
 
-export const deleteNoteAttachment = (
+export const deleteAttachment = (
   property_id: number,
-  note_id: number,
   attachment_id: number,
   { actAs }: Acting = {},
 ): Promise<{ deleted: true }> =>
-  request<{ deleted: true }>(
-    `/properties/${property_id}/notes/${note_id}/attachments/${attachment_id}`,
-    { method: 'DELETE', actAs },
-  );
+  request<{ deleted: true }>(`/properties/${property_id}/attachments/${attachment_id}`, {
+    method: 'DELETE',
+    actAs,
+  });
 
 /* Dismissals (migration 536) — "never show me this property again", and its
  * undo. State is read via property_dismissals_public. */

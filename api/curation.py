@@ -23,7 +23,7 @@ from typing import Any, Callable, ContextManager
 import psycopg
 from fastapi import HTTPException
 
-from api import note_attachments
+from api import attachments
 from api import schemas as s
 from api import shares
 from toolkit.property_identity import (
@@ -368,7 +368,7 @@ def list_notes(
         cur.execute(_LIST_NOTES_SQL, (pid,))
         rows = cur.fetchall()
     notes = [_to_note(r) for r in rows]
-    files = note_attachments.attachments_by_note(conn, [n["id"] for n in notes])
+    files = attachments.attachments_by_note(conn, [n["id"] for n in notes])
     return {"data": [{**n, "attachments": files[n["id"]]} for n in notes]}
 
 

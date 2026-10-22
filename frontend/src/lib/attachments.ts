@@ -1,18 +1,19 @@
-/* What a note may carry — the file picker's filter and the pre-check that saves a doomed upload.
- * The API decides (api/note_attachments.py); these lists mirror it, held in step by
- * tests/test_note_attachment_rules_parity.py. A named extension decides; only a file without
- * one falls back to the type the browser declared. Nothing active (HTML, SVG, script): the bytes
- * come back as same-origin blob URLs. */
+/* What a property may carry (migration 660) — the file picker's filter and the pre-check that saves
+ * a doomed upload. The API decides (api/attachments.py; an image by its own bytes); these lists
+ * mirror it, held in step by tests/test_attachment_rules_parity.py. A named extension decides; only
+ * a file without one falls back to the type the browser declared. Nothing active (HTML, SVG,
+ * script): the bytes come back as same-origin blob URLs. No HEIC: JPEG leads the list, so a phone
+ * hands its photos over as JPEG. */
 
-export const NOTE_ATTACHMENT_EXTENSIONS = [
-  '.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic',
+export const ATTACHMENT_EXTENSIONS = [
+  '.jpg', '.jpeg', '.png', '.webp', '.gif',
   '.pdf', '.txt', '.csv',
   '.doc', '.docx', '.xls', '.xlsx', '.odt', '.ods',
   '.zip',
 ] as const;
 
-export const NOTE_ATTACHMENT_MIME_TYPES = [
-  'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic',
+export const ATTACHMENT_MIME_TYPES = [
+  'image/jpeg', 'image/png', 'image/webp', 'image/gif',
   'application/pdf', 'text/plain', 'text/csv',
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -23,11 +24,12 @@ export const NOTE_ATTACHMENT_MIME_TYPES = [
   'application/zip',
 ] as const;
 
-export const NOTE_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
+export const ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
+/* A note's cap, and a building run's. */
 export const NOTE_ATTACHMENT_MAX_FILES = 20;
 
 /* The <input type="file"> filter. */
-export const NOTE_ATTACHMENT_ACCEPT = NOTE_ATTACHMENT_EXTENSIONS.join(',');
+export const ATTACHMENT_ACCEPT = ATTACHMENT_EXTENSIONS.join(',');
 
 const extensionOf = (name: string): string => {
   const dot = name.lastIndexOf('.');
@@ -38,12 +40,12 @@ const extensionOf = (name: string): string => {
 export function attachmentProblem(file: File): string | null {
   const ext = extensionOf(file.name);
   const allowed = ext
-    ? (NOTE_ATTACHMENT_EXTENSIONS as readonly string[]).includes(ext)
-    : (NOTE_ATTACHMENT_MIME_TYPES as readonly string[]).includes(file.type);
+    ? (ATTACHMENT_EXTENSIONS as readonly string[]).includes(ext)
+    : (ATTACHMENT_MIME_TYPES as readonly string[]).includes(file.type);
   if (!allowed) return `${file.name}: this file type cannot be attached`;
   if (file.size === 0) return `${file.name}: the file is empty`;
-  if (file.size > NOTE_ATTACHMENT_MAX_BYTES) {
-    return `${file.name}: over ${NOTE_ATTACHMENT_MAX_BYTES / (1024 * 1024)} MB`;
+  if (file.size > ATTACHMENT_MAX_BYTES) {
+    return `${file.name}: over ${ATTACHMENT_MAX_BYTES / (1024 * 1024)} MB`;
   }
   return null;
 }
@@ -65,8 +67,7 @@ export function sortAttachments(
   return { ok, problems };
 }
 
-/* Shown inline as a thumbnail; everything else (HEIC included — most browsers cannot draw
- * it) is a file chip. */
+/* Shown inline as a thumbnail (the API's 1080 px display copy); everything else is a file chip. */
 export const isPreviewableImage = (mime: string): boolean =>
   mime === 'image/jpeg' || mime === 'image/png' || mime === 'image/webp' || mime === 'image/gif';
 

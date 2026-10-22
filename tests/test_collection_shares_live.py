@@ -118,9 +118,11 @@ def world(svc: Any, tenants: dict[str, _Tenant]) -> Iterator[_World]:
         yield _World(coll, member, outside)
     finally:
         with svc.cursor() as cur:
-            cur.execute(
-                "DELETE FROM property_notes WHERE property_id = ANY(%s)", ([member, outside],)
-            )
+            for table in ("property_attachments", "property_notes"):  # a note's delete keeps its files
+                cur.execute(
+                    f"DELETE FROM {table} WHERE property_id = ANY(%s)",  # noqa: S608 - fixed tables
+                    ([member, outside],),
+                )
             cur.execute(
                 "DELETE FROM collections WHERE account_id = ANY(%s)",
                 ([t.acc for t in tenants.values()],),
@@ -432,31 +434,30 @@ def test_a_marked_notes_attachment_follows_the_note(
     note = _note(svc, b, world.member, shared=True)
     with svc.cursor() as cur:
         cur.execute(
-            "INSERT INTO property_note_attachments "
-            "(note_id, storage_key, filename, mime_type, byte_size, sha256_hex) "
-            "VALUES (%s, %s, 'plan.pdf', 'application/pdf', 1, %s) RETURNING id, account_id",
-            (note, f"test/{uuid.uuid4().hex}", "0" * 64),
+            "INSERT INTO property_attachments "
+            "(note_id, account_id, property_id, storage_key, filename, mime_type, byte_size, "
+            " sha256_hex) VALUES (%s, %s, %s, %s, 'plan.pdf', 'application/pdf', 1, %s) RETURNING id",
+            (note, b.acc, world.member, f"test/{uuid.uuid4().hex}", "0" * 64),
         )
-        attachment, stamped = cur.fetchone()
-    assert stamped == b.acc
-    files = "SELECT id FROM property_note_attachments WHERE id = %s"
+        attachment = cur.fetchone()[0]
+    files = "SELECT id FROM property_attachments WHERE id = %s"
     assert _rows(a, files, (attachment,)) == [(attachment,)]
     assert _rows(c, files, (attachment,)) == []
     # Reading is all the counterparty gets: while the note is marked (so A SEES the row) A can
-    # neither delete the file nor add one (the trigger stamps B, the author; WITH CHECK refuses).
-    assert _touched(a, "DELETE FROM property_note_attachments WHERE id = %s", (attachment,)) == 0
+    # neither delete the file nor add one: in B's name WITH CHECK refuses, in A's own the note
+    # key (note_id, account_id) does (migration 660).
+    assert _touched(a, "DELETE FROM property_attachments WHERE id = %s", (attachment,)) == 0
     planted = f"test/{uuid.uuid4().hex}"
+    plant = ("INSERT INTO property_attachments "
+             "(note_id, account_id, property_id, storage_key, filename, mime_type, byte_size, "
+             " sha256_hex) VALUES (%s, %s, %s, %s, 'x.pdf', 'application/pdf', 1, %s)")
     with pytest.raises(psycopg.errors.InsufficientPrivilege):
-        _touched(
-            a,
-            "INSERT INTO property_note_attachments "
-            "(note_id, storage_key, filename, mime_type, byte_size, sha256_hex) "
-            "VALUES (%s, %s, 'x.pdf', 'application/pdf', 1, %s)",
-            (note, planted, "1" * 64),
-        )
+        _touched(a, plant, (note, b.acc, world.member, planted, "1" * 64))
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        _touched(a, plant, (note, a.acc, world.member, planted, "1" * 64))
     with svc.cursor() as cur:
         cur.execute(
-            "SELECT count(*) FROM property_note_attachments WHERE id = %s OR storage_key = %s",
+            "SELECT count(*) FROM property_attachments WHERE id = %s OR storage_key = %s",
             (attachment, planted),
         )
         assert cur.fetchone()[0] == 1
@@ -515,7 +516,7 @@ def test_every_shared_surface_reads_without_policy_recursion(
     for t in tenants.values():
         for rel in (
             "collections", "collection_properties", "collection_properties_public",
-            "property_notes", "property_notes_public", "property_note_attachments",
+            "property_notes", "property_notes_public", "property_attachments",
             "collection_shares",
         ):
             _rows(t, f"SELECT count(*) FROM {rel}")  # noqa: S608 - fixed relation list

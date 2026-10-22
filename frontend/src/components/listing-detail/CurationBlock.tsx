@@ -31,7 +31,7 @@ import {
   deletePropertyNote,
   listPropertyNotes,
   updatePropertyNote,
-  uploadNoteAttachment,
+  uploadAttachment,
 } from '@/lib/api';
 import { actingKey, actOpts, useActAs } from '@/lib/acting';
 import { curationKeys } from '@/lib/queries';
@@ -51,7 +51,7 @@ import { TagAssignList } from '@/components/curation/TagAssignList';
 import { PencilIcon, TrashIcon } from '@/components/icons';
 import { SectionLabel } from '@/components/section';
 import ArtifactLinkRow from './ArtifactLinkRow';
-import { NOTE_ATTACHMENT_MAX_FILES, sortAttachments } from '@/lib/noteAttachments';
+import { NOTE_ATTACHMENT_MAX_FILES, sortAttachments } from '@/lib/attachments';
 import {
   AttachButton,
   DropHint,
@@ -240,7 +240,7 @@ function NotesRow({
       for (const [i, file] of files.entries()) {
         setProgress({ done: i, total: files.length });
         try {
-          await uploadNoteAttachment(property_id, note.id, file, ...actOpts(actAs));
+          await uploadAttachment(property_id, file, { note_id: note.id, actAs });
         } catch (err) {
           failed.push(`${file.name}: ${(err as Error).message || 'upload failed'}`);
         }
@@ -478,7 +478,6 @@ function ForeignNoteRow({
       <p className="text-sm text-[var(--color-ink)] whitespace-pre-wrap break-words">{note.body}</p>
       <NoteAttachmentList
         propertyId={property_id}
-        noteId={note.id}
         attachments={note.attachments ?? []}
         uploading={[]}
       />
@@ -566,7 +565,7 @@ function OwnNoteRow({
     const failed: string[] = [];
     for (const file of ok) {
       try {
-        await uploadNoteAttachment(property_id, note.id, file, ...actOpts(actAs));
+        await uploadAttachment(property_id, file, { note_id: note.id, actAs });
       } catch (err) {
         failed.push(`${file.name}: ${(err as Error).message || 'upload failed'}`);
       }
@@ -582,7 +581,6 @@ function OwnNoteRow({
     <>
       <NoteAttachmentList
         propertyId={property_id}
-        noteId={note.id}
         attachments={attachments}
         uploading={uploading}
         onRemoved={onFilesChanged}
@@ -693,7 +691,7 @@ function OwnNoteRow({
             <div className="mt-1.5 flex items-center gap-2">
               <span className="text-[0.7rem] text-[var(--color-brick)]">
                 {attachments.length > 0
-                  ? `Delete this note and its ${attachments.length === 1 ? 'file' : `${attachments.length} files`}?`
+                  ? `Delete this note? Its ${attachments.length === 1 ? 'file stays' : `${attachments.length} files stay`} with the property.`
                   : 'Delete this note?'}
               </span>
               <button
