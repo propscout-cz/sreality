@@ -396,7 +396,8 @@ class PortalConfig:
     (migration 115).
 
     - supports_complete_walk: can the portal prove a near-complete index walk?
-      Posture only since 2026-09-07 (Health; coverage_gate re-earns it) — it
+      Posture only since 2026-09-07, with no writer since Health wave 4 (the coverage gate
+      retired; the column goes in wave 9) — it
       gates no delisting; `walk_reached_end` gates nomination (rule #3).
     - categories: the per-portal list of category descriptors the runner walks.
       Shape is portal-specific (the Portal object interprets it).
@@ -510,8 +511,8 @@ _DEFAULTS: dict[str, PortalConfig] = {
         # be proved complete per canonical category the way rule #3 requires.
         # The bare /nemovitosti/ feed the walk used until 2026-09 was prodej
         # only (its count equals the prodej total; rentals never appeared).
-        # The flag stays False here: the coverage gate (migration 455) owns the
-        # flip on the live registry row, from ledger evidence.
+        # The flag stays False here: posture only, and nothing has flipped the live
+        # registry row since the coverage gate retired (Health wave 4).
         supports_complete_walk=False,
         categories=[
             {"sale_type": sale, "category": cat}

@@ -28,6 +28,7 @@
  * 409 — is identical, and lives here once.
  */
 
+import { LETTERS } from '@/lib/api';
 import type { ReactNode } from 'react';
 
 import type {
@@ -53,9 +54,6 @@ import { NEGATIVE_VERDICTS } from '@/components/autodedup/VerdictButtons';
  * that already separated two adverts must not start from a blank slate. */
 export type UnitMap = Record<number, string>;
 
-export const UNIT_LETTERS: readonly string[] = Array.from({ length: 26 }, (_, i) =>
-  String.fromCharCode(65 + i),
-);
 
 export interface SplitState {
   units: UnitMap;
@@ -163,7 +161,7 @@ export function deriveSplit(
   const units: UnitMap = {};
   for (const m of members) {
     const root = find(m.listing_id);
-    if (!letterOf.has(root)) letterOf.set(root, UNIT_LETTERS[letterOf.size] ?? 'A');
+    if (!letterOf.has(root)) letterOf.set(root, LETTERS[letterOf.size] ?? 'A');
     units[m.listing_id] = letterOf.get(root)!;
   }
   return { units };
@@ -296,7 +294,7 @@ export function UnitSelect({
   label?: ReactNode;
   disabled?: boolean;
 }) {
-  const letters = UNIT_LETTERS.slice(0, Math.min(Math.max(count, 2), UNIT_LETTERS.length));
+  const letters = LETTERS.slice(0, Math.min(Math.max(count, 2), LETTERS.length));
   return (
     <label className="flex items-center gap-1.5 text-[0.62rem] text-[var(--color-ink-3)]">
       <span>{label ?? `Jednotka #${listingId}`}</span>

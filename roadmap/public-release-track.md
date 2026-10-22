@@ -55,8 +55,8 @@ common to all. Full plan, sequencing, and gates: `docs/design/public-release-pro
   stopped `verify_jwt` emitting the claim). `tenant_conn`'s service-role fallback and
   `resolve_account_id`'s `legacy_backfill_claim` read are gone, so an unset
   `TENANT_POOL_DB_URL` now RAISES instead of silently degrading to an RLS-off connection —
-  the shape that hid the bad-DSN incident below. The `legacy_backfill_claim` TABLE stays
-  (the signup CAS in `handle_new_user`); no tenant-route test runs on the RLS-bypass path.
+  the shape that hid the bad-DSN incident below. The `legacy_backfill_claim` TABLE is dropped
+  (613, once 612 removed its last reader); no tenant-route test runs on the RLS-bypass path.
 - **2026-09-11 W3 ("One Account, One Answer" — reads go RLS-only)**: the architectural payoff.
   `lookup_portal_listings` now takes NO account at all and its SQL carries no account predicate —
   `current_account_ids()` is the single membership definition, so the extension's answer IS the
@@ -123,8 +123,9 @@ common to all. Full plan, sequencing, and gates: `docs/design/public-release-pro
   8 below). **Wave 2's engineering scope turned out to be already mostly shipped** by Phase 1
   increment 3 + Wave 1 (item 9 below) — the connection-swap, the account-partitioned reconciler,
   and the composite FK all predate this wave being picked up; only a DB-level invariant, an
-  index, and a concurrency fix were genuinely left, shipped this pass. Its launch gate (external
-  re-audit + two-real-account pen-test) still needs a second real account to exist. **Wave 3
+  index, and a concurrency fix were genuinely left, shipped this pass. Its launch gate: an external
+  re-audit + a two-account pen-test, whose DB-level half runs in CI since migration 612 (the manual
+  SPA/API/extension half with real JWTs stays open). **Wave 3
   (watchdogs & notifications) is now in progress** (item 10 below); Wave 4 is unstarted
   (`docs/design/waves-1-4-public-features.md`).
 
@@ -431,16 +432,15 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
      sum, for margin + future Stripe metered billing). Admin/legacy/SYSTEM/ClickUp bypass
      everything, mirroring `require_entitlement`. Ships **fail-closed** (enforced by default;
      `estimation_budget_enabled` app-setting is the emergency off) — safe today because the only
-     account is the admin, who bypasses. Deferred (small follow-ups): granting the trial at
-     signup (`handle_new_user` seed-hook, mig 286:101) and wiring the extension to send
+     account is the admin, who bypasses. Deferred (small follow-up): wiring the extension to send
      `mode:'agent'` for entitled users.
    - ~~**Trial-at-signup**~~ — **SHIPPED 2026-07-23, migration 362.** A SECURITY DEFINER
      `seed_trial_entitlement()` (mirroring `seed_default_pipeline`/`_collections`) wired into
      `handle_new_user`'s fresh-signup branch inserts a `('free','trialing', now()+7d)`
      entitlement, so every new signup gets **10 agent estimations for 7 days**, then falls to
      the free 3/mo (the resolver already honored the `trialing` arm; nothing marked signups
-     trialing before). Trial length hardcoded 7 days (operator decision). The legacy-backfill
-     branch (the operator) is skipped — they're admin and bypass metering. Verified live: the
+     trialing before). Trial length hardcoded 7 days (operator decision). Since migration 612
+     it is one insert inside `handle_new_user` (the function is dropped). Verified live: the
      resolver returns 10 for a trialing account.
    - Remaining: **extension agent-estimate quota UX** (switch the panel's estimate from
      `mode:'deterministic'` to metered `mode:'agent'` for entitled users, show "(X left)",
@@ -509,9 +509,12 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
      `frontend/src/pages/Login.tsx` is unauthenticated + un-allowlisted on `main` — the data-
      inheritance vector is closed, but *whether public signup should be open at all pre-launch* is
      a product decision (invite/allowlist gate), not a code fix.
-   - **Still open, needs a second real account:** the manual two-real-account pen-test half of the
-     launch gate ("A can't see/move/archive/reorder/inject into B's board") — only one
-     account/member exists live today. Plus registering `property_pipeline`/`property_pipeline_events`
+   - **Two-account pen-test half of the launch gate** ("A can't see/move/archive/reorder/inject into
+     B's board"): six accounts exist live (2026-10-16); CI's `tests/test_tenant_isolation_live.py` covers the
+     DB level on two accounts born through the real signup trigger (migration 612): reads both ways, A's
+     rename/archive/reorder/delete of B's stages matching nothing, a card planted on B's board refused, an event
+     naming B's stage refused, and the anon-definer census. **Still open:** the manual pass through the SPA,
+     the API and the extension with real JWTs, and registering `property_pipeline`/`property_pipeline_events`
      in a future GDPR export/deletion surface (the `on delete cascade` from `accounts` already
      scrubs them on account deletion; there's just no self-service surface yet — a Phase-1-wide gap).
 
@@ -523,6 +526,10 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
     scale/correctness, the route-layer tenancy move, and the public-product delivery envelope
     (per-account recipients, opt-in, suppression, unsubscribe, bounce webhook, quotas) — all
     buildable-dark; the hard gates are operator Resend-provisioning + GDPR/product sign-off.
+    *Superseded 2026-10-21 by the notifications push program (`docs/design/notifications-push/PROGRAM.md`):
+    its W1 deleted the outbox, every `channel_sends` writer, both transports, the bounce webhook and
+    unsubscribe (R5); delivery is rebuilt as push to the event account's own iPhones (W4), email later
+    to each account's own sign-in address; Telegram is out.*
     - **Detection scale + correctness — SHIPPED, migration 365** (authored 363, renumbered
       after a same-day collision with `363_browse_projection_source_id_native.sql`)**.** (1) `properties_published_at_idx`
       — a plain btree over the published rows the matcher's new-listing cursor actually scans
@@ -569,7 +576,8 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
       (sticky renewal), skips the passes when another replica holds it, releases on graceful
       shutdown, and **fails open** (runs unguarded) if the lease can't be evaluated. Co-hosted
       in the API (Phase 1 A8), not moved to the dark worker. Test `test_matcher_lease_cas_acquires_and_yields`.
-    - **Delivery safety envelope (suppression + bounce webhook) — SHIPPED DARK, migration 367.**
+    - **Delivery safety envelope (suppression + bounce webhook) — SHIPPED DARK, migration 367; DELETED
+      2026-10-21 (notifications push W1, R5; the tables drop in W6).**
       The delivery mechanism (outbox + `channel_sends` + Resend/Telegram transports) was built
       Sprint N but had no public-safety envelope. Added: (1) `notification_suppression(channel,
       address)` — GLOBAL, deletion-surviving address suppression (mirrors `broker_outreach_suppression`);
@@ -582,15 +590,16 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
       All internal objects RLS-on + default-ACL revoked. Tests: `test_resend_webhook` (Svix HMAC
       accept/tamper/stale/wrong-secret/missing), `test_send_skips_suppressed_recipient`. **Go-live is
       operator-gated**: a Resend account + verified sending domain + `RESEND_WEBHOOK_SECRET`.
-    - **One-click unsubscribe (RFC 8058) — SHIPPED DARK.** `api/unsubscribe.py` HMAC-signs
+    - **One-click unsubscribe (RFC 8058) — SHIPPED DARK; DELETED 2026-10-21 (notifications push W1, R5).** `api/unsubscribe.py` HMAC-signs
       `channel:address` with `NOTIFICATION_UNSUB_SECRET` (stdlib, no dependency); the Resend
       transport adds `List-Unsubscribe` + `List-Unsubscribe-Post` headers pointing at
       `{API_PUBLIC_URL}/u/{token}`; the unauthenticated `GET`/`POST /u/{token}` route (the HMAC
       token IS the auth, renders for logged-out recipients) inserts a `source='unsubscribe'`
       suppression on the one-click POST. Both env vars optional → the header is omitted and no
       token verifies when unconfigured (dark-safe). Tests `test_unsubscribe`.
-    - **Owed (found 2026-10-01) — the Watchdog "Run estimation" kickoff forks the estimation
-      ledger (rule #12).** `POST /notifications/dispatches/{id}/estimate`
+    - **~~Owed~~ DONE by deletion 2026-10-21 (notifications push W1a, ruling R10) — the Watchdog "Run
+      estimation" kickoff forked the estimation ledger (rule #12).** The route, its executor and the
+      feed column are gone; the property page owns estimations. As found: `POST /notifications/dispatches/{id}/estimate`
       (`api/routes/notifications.py` `post_kickoff_estimate`) never calls `create_estimation_run`: it
       hand-INSERTs the row (`api/notifications.py` `_insert_pending_run`, `_insert_failed_run`) and
       runs its own executor (`run_pending_estimation`). Compared with the shared path, it skips the
@@ -608,6 +617,10 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
       hand INSERT (`source='api'`, `mode='agent'`, one production row per manual
       `smoke_agent.yml` run), is owed the same fold or an explicit manual-smoke sanction.
     - **Remaining Wave 3 — operator / product / legal-gated (NOT started, surfaced as decisions):**
+      *Superseded 2026-10-21 by the notifications push program: (a) is moot (Resend deleted, R5); (b) becomes
+      routing by the event's account to its registered iPhones (W4), with no settings table; (c) and (e) stay
+      open for push (W4's one-share-a-day cap, R11, is the first quota); (d) is not planned (no cadence
+      settings, program § 7).*
       (a) **Resend go-live** — operator provisions a Resend account + verified sending domain +
       DNS (SPF/DKIM/DMARC) + `RESEND_WEBHOOK_SECRET`/`NOTIFICATION_UNSUB_SECRET`/`API_PUBLIC_URL`,
       then registers the webhook. (b) **Per-account recipients + double-opt-in**
@@ -641,21 +654,22 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
     /manual_estimates/{id}` take `require_admin` (migration 290: every account reads, only
     platform admins write) and stamp the admin into `updated_by` (+ `account_id` on insert); the
     SPA sends `jwt: true` and shows the controls only to admins; the `GET` read is unchanged.
-    Behaviour: `tests/api/test_manual_estimates.py`. **DONE 2026-10-12 — `/filter-presets*`**
+    (All four routes retired 2026-10-19 with the feature, migrations 638/639.) **DONE 2026-10-12 — `/filter-presets*`**
     (ticket #1761, Phone app W1): every route rides `verify_jwt` + `tenant_conn`, so migration
     290's policy scopes the reads, the reorder and UPDATE/DELETE by id; `POST` stamps the
     account from `require_account_id`; migration 595 backfills ownerless rows to the operator's
     account and sets `account_id` NOT NULL; the SPA's preset calls send `jwt: true`. Behaviour:
     `tests/api/test_filter_presets.py`. **Still owed, same shape:**
     `/buildings*` (`api/main.py` `get_buildings` → `list_building_runs`, no account filter;
-    `building_runs` tenant RLS since migration 291) and `POST /notifications/dispatches/{id}/estimate`
-    (`api/routes/notifications.py` `post_kickoff_estimate` returns any account's dispatch row and
-    starts a run for it). The AUTHENTICATION half of the remaining sweep closed 2026-10-13:
+    `building_runs` tenant RLS since migration 291); `POST /notifications/dispatches/{id}/estimate`, the
+    other, was deleted 2026-10-21 (notifications push W1a), as was `POST /notifications/matcher/run`
+    (any user ran the platform-wide producers). Also owed (audit F17): the share routes' 422 "No account
+    uses this email" reveals which emails hold accounts. The AUTHENTICATION half of the remaining sweep closed 2026-10-13:
     `require_token` accepts a verified JWT (`api/dependencies.py` `_bearer`, the one reader of
     `Authorization`), so the SPA sends its session JWT everywhere and `VITE_API_TOKEN` is deleted
     from the bundle (same day); W4 (same day) deleted the static key itself — the API accepts only a
-    Supabase JWT, a machine signs in as its own Supabase user. The account-SCOPING of the two routes
-    above stays owed.
+    Supabase JWT, a machine signs in as its own Supabase user. The account-SCOPING of `/buildings*`
+    stays owed.
 
 **Housekeeping done 2026-07-20:** operator enabled Supabase Auth's leaked-password-protection
 toggle (Authentication → Sign In / Providers → Email → "Prevent use of leaked passwords").

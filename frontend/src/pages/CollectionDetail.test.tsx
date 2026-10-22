@@ -37,7 +37,6 @@ const DATA: CollectionWithProperties = {
     updated_at: '2026-08-20T10:00:00Z',
     listing_count: 0,
     monitoring_enabled: false,
-    notify_channels: [],
     is_system: false,
     owner_email: null,
     shared_with: [],
@@ -163,6 +162,15 @@ describe('<CollectionDetail>', () => {
       await waitFor(() =>
         expect(invalidate).toHaveBeenCalledWith({ queryKey: curationKeys.collection(1) }),
       );
+    });
+
+    /* The one ShareBlock (components/ShareBlock) — a collection share has no
+       mode, so no access choice is offered (the Pipeline tab's has one). */
+    it('offers no access mode for a collection share', async () => {
+      renderPage();
+      expect(await screen.findByText('Sharing')).toBeInTheDocument();
+      expect(screen.queryByText('Access')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Can edit' })).toBeNull();
     });
 
     it('shows a 422 inline under the field', async () => {

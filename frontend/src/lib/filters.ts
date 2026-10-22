@@ -1,6 +1,7 @@
 import type { Disposition } from './types';
 import {
   BUILDING_MATERIAL_BUCKETS,
+  CONDITION_CANONICAL,
   FURNISHED_CANONICAL,
   OWNERSHIP_CANONICAL,
   filterById,
@@ -14,6 +15,17 @@ import { fmtArea } from './format';
  * this file, and the level list and the chip guard must have ONE definition. */
 import { isDistrictChip, type LocationLevel } from './districtCodes';
 import { portalScopeLabel } from './portals';
+import { parseSort, sortToParam } from './browseSort';
+import {
+  CURATED_SET_NAMES,
+  normalizeScope,
+  parseSetScope,
+  scopeActive,
+  scopeWords,
+  setScopeToParams,
+  type CuratedSet,
+  type SetScope,
+} from './setScope';
 
 export type TriState = 'any' | 'yes' | 'no';
 export type ListingStatus = 'active' | 'inactive' | 'any';
@@ -35,7 +47,7 @@ export type BuildingMaterial = 'cihla' | 'panel' | 'smisena' | 'ostatni';
 
 /* Map-viewport rectangle. west < east, south < north, all WGS84
  * degrees. Acts as an additional filter alongside the sidebar fields:
- * cards / table / stats all narrow to listings whose (lng, lat) falls
+ * cards / stats all narrow to listings whose (lng, lat) falls
  * inside the rectangle. NULL = no map area applied. */
 export interface MapBounds {
   west: number;
@@ -64,11 +76,39 @@ export type LocationMode = 'viewport' | 'center_radius';
  * the viewport cohort when opening Browse focused on a single point (the
  * "Explore area" modal) — the same `bounds` value both fits the camera and
  * narrows the cohort, so no separate flyTo is needed. */
+const KM_PER_DEG = 111.32;
+
 export const bboxAround = (lat: number, lng: number, km: number): MapBounds => {
   const half = km / 2;
-  const dLat = half / 111.32;
-  const dLng = half / (111.32 * Math.max(Math.cos((lat * Math.PI) / 180), 0.01));
+  const dLat = half / KM_PER_DEG;
+  const dLng = half / (KM_PER_DEG * Math.max(Math.cos((lat * Math.PI) / 180), 0.01));
   return { west: lng - dLng, south: lat - dLat, east: lng + dLng, north: lat + dLat };
+};
+
+/* THE box Browse filters on, from the location mode: viewport → the map's
+ * `bounds` (or null); centre+radius → the square around the circle, through the
+ * one box-around-a-point formula above. A circumscribed square admits a few
+ * corner listings beyond the true radius — accepted since the mode shipped; the
+ * main map still draws the exact circle. One rule, every reader: the list
+ * (queries.applyFilters), both stats RPCs (`bbox_*`) and a watchdog saved from
+ * Browse (filtersToWatchdogSpec), so what Browse shows is what a watchdog
+ * watches (rule 16). */
+export const effectiveBbox = (f: ListingFilters): MapBounds | null => {
+  if (f.locationMode === 'center_radius') {
+    return f.centerRadius
+      ? bboxAround(f.centerRadius.lat, f.centerRadius.lng, (2 * f.centerRadius.radius_m) / 1000)
+      : null;
+  }
+  return f.bounds;
+};
+
+/* The box in words for a summary line: its extent in km and its centre. */
+export const mapAreaLabel = (b: MapBounds): string => {
+  const lat = (b.north + b.south) / 2;
+  const lng = (b.east + b.west) / 2;
+  const h = (b.north - b.south) * KM_PER_DEG;
+  const w = (b.east - b.west) * KM_PER_DEG * Math.cos((lat * Math.PI) / 180);
+  return `map area ≈ ${w.toFixed(1)} × ${h.toFixed(1)} km around ${lat.toFixed(4)}, ${lng.toFixed(4)}`;
 };
 
 /* Phase QUAL — one entry in `cityIndexRules`. Snake_case keys mirror
@@ -108,21 +148,6 @@ export interface DistrictChip {
  * the entered rent/sale growth p.a. (CAGR ≥), computed for the [fromYm, toYm]
  * window of a chosen dataset by the price_stat_growth RPC. Multiple rules AND.
  * BROWSE-only (window-dependent, live-computed). */
-/* Deal-pipeline scope (rule #22) — "show only properties I'm working".
- *
- * `null` on ListingFilters = off. `{ stage_ids: [] }` = a card at ANY stage;
- * a non-empty list narrows to those stages (e.g. hide the closed ones). Snake-
- * cased inside the object because composite filter values cross into the
- * registry / watchdog JSON world verbatim (same convention as CenterRadius's
- * `radius_m`).
- *
- * Stage ids are ACCOUNT-scoped (migration 294), so a URL carrying ids only
- * reproduces for the account that wrote it — the empty-list form is the
- * portable one. Same trade-off as `tags`, which stores tag ids. */
-export interface PipelineScope {
-  stage_ids: number[];
-}
-
 export interface PriceGrowthRule {
   datasetId: number;
   fromYm: string | null;   // 'YYYY-MM' or null = dataset's full window
@@ -140,7 +165,8 @@ export interface ListingFilters {
    * already treats a missing category_type that way (comparables, the watchdog
    * matcher, browse_stats_properties all guard the clause), and because a
    * cohort like "everything in my pipeline" spans rent AND sale. The default
-   * stays `pronajem`, so an empty URL is unchanged. */
+   * is `prodej` (operator, 2026-10-20; Browse's own — the registry's shared
+   * default stays `pronajem` for estimation and comparables). */
   categoryType: CategoryType | null;
   districts: DistrictChip[];
   dispositions: Disposition[];
@@ -183,10 +209,13 @@ export interface ListingFilters {
   recentlyAddedDays: number | null;
   recentlyChangedDays: number | null;
   /* Days on market (= last_seen_at - first_seen_at, or now() -
-   * first_seen_at for active listings). Surfaced as tom_days on
-   * listings_public via migration 052. */
+   * first_seen_at for active listings): the read models' `tom_days` column
+   * (migration 054), which the Browse list, count, map and Stats all filter. */
   tomDaysMin: number | null;
   tomDaysMax: number | null;
+  /* Only ads whose TOM is observed from the start (read-model `tom_observed`,
+   * migration 625): first seen on an ordinary day, not in a sweep. */
+  tomObservedOnly: boolean;
   hasBalcony: TriState;
   hasLift: TriState;
   hasParking: TriState;
@@ -205,12 +234,17 @@ export interface ListingFilters {
   portals: string[];
   portalsExcluded: string[];
   portalsExcludedActiveOnly: boolean;
+  /* Carries the '__unknown__' sentinel like furnished / ownership. */
   conditionMatch: string[];
   categorySubCb: number | null;
   /* Portal-agnostic property sub-type (multi-select). Only surfaced for
    * categoryMain in (dum, komercni); see SUBTYPE_LABELS_BY_MAIN. */
   subtype: string[];
   buildingMaterial: BuildingMaterial[];
+  /* PENB letters A–G (registry `energy_rating_match`): a property matches when its
+   * rating — the first non-null across its ads in canonical order — is one of them;
+   * an unrated property never does. Empty = no constraint. */
+  energyRatingMatch: string[];
   estateAreaMin: number | null;
   estateAreaMax: number | null;
   usableAreaMin: number | null;
@@ -224,13 +258,6 @@ export interface ListingFilters {
    * Watchdog. */
   gardenAreaMin: number | null;
   gardenAreaMax: number | null;
-  /* Derived condition scores (migrations 072 / 073). 1..5 each; rows
-   * with NULL (not yet scored) are excluded from the result when a
-   * bound is set. Set by toolkit.condition_scoring.score_listing_condition. */
-  buildingConditionLevelMin: number | null;
-  buildingConditionLevelMax: number | null;
-  apartmentConditionLevelMin: number | null;
-  apartmentConditionLevelMax: number | null;
   /* Price-history signals (migration 173). Derived columns on `properties`,
    * maintained by the recompute job; property grain, applied against
    * properties_public. `priceChangeCountMin` counts cuts AND raises across
@@ -248,30 +275,24 @@ export interface ListingFilters {
    * server-side (migration 537); true reveals them. A lens over the operator's
    * own state, so it sits OUTSIDE preset identity (PRESET_EXCLUDED_KEYS). */
   showDismissed: boolean;
-  /* Browse-only deal-pipeline scope (rule #22). Null = off. Deliberately NOT
-   * part of a saved preset's identity (see PRESET_EXCLUDED_KEYS): a preset
-   * describes market criteria, the pipeline scope is a lens over the
-   * operator's own state — so toggling it never dirties a loaded preset. */
-  pipeline: PipelineScope | null;
+  /* Browse-only deal-pipeline scope (rule #22, lib/setScope; elements = stage
+   * ids). Null = off. A lens over the operator's own state, so it sits OUTSIDE
+   * a saved preset's identity (PRESET_EXCLUDED_KEYS), like tags + collections. */
+  pipeline: SetScope | null;
   /* Browse-only broker scope ("Explore this broker's listings"). Null = off.
    * Deliberately NOT part of a saved preset's identity (PRESET_EXCLUDED_KEYS),
    * NOT in toolkit/filter_registry.py (must stay invisible to the agent /
-   * comparables / estimation agendas), and NOT settable from the filter
-   * sidebar — reachable only via the explore-broker modal's seed or a
-   * `?broker=` URL param, the same entry-only treatment `pipeline` gets
-   * before its own dedicated chip. A property-id allowlist (MS19): the
+   * comparables / estimation agendas). Set by the explore-broker modal's seed,
+   * a `?broker=` URL param, or the sidebar's Advanced → Broker search
+   * (filter-controls/BrokerFilterControl). A property-id allowlist (MS19): the
    * properties where one of this broker's ads matches the portal and status
    * filters, so one ad satisfies both (queries.ts:adScope). */
   brokerId: number | null;
-  /* Migration 025 — operator tags. AND-semantics: a listing must carry
-   * every selected tag id. Stored as ids (not names) so renames /
-   * recolour-by-delete-recreate stay queryable. */
-  tags: number[];
-  /* The other side (lib/tagScope): a listing must carry NONE of these. */
-  tagsExcluded: number[];
-  /* Browse-only collection scope (rule #18). Empty = off. Like `pipeline`
-   * above, a lens over operator state, so it sits outside preset identity. */
-  collections: number[];
+  /* Operator tags (migration 025, lib/setScope): the in side needs EVERY element
+   * (AND). Ids, not names, so renames stay queryable. Null = off; a lens. */
+  tags: SetScope | null;
+  /* Browse-only collection scope (rule #18, lib/setScope; own + shared). Null = off. */
+  collections: SetScope | null;
   bounds: MapBounds | null;
   /* `viewport` (default) = map pan/zoom emits bounds, those filter
    * the cohort. `center_radius` = a sidebar-set point + radius drives
@@ -304,7 +325,7 @@ export interface ListingFilters {
 
 export const DEFAULT_FILTERS: ListingFilters = {
   categoryMain: ['byt'],
-  categoryType: 'pronajem',
+  categoryType: 'prodej',
   districts: [],
   dispositions: [],
   priceMin: null,
@@ -325,6 +346,7 @@ export const DEFAULT_FILTERS: ListingFilters = {
   recentlyChangedDays: null,
   tomDaysMin: null,
   tomDaysMax: null,
+  tomObservedOnly: false,
   hasBalcony: 'any',
   hasLift: 'any',
   hasParking: 'any',
@@ -340,6 +362,7 @@ export const DEFAULT_FILTERS: ListingFilters = {
   categorySubCb: null,
   subtype: [],
   buildingMaterial: [],
+  energyRatingMatch: [],
   estateAreaMin: null,
   estateAreaMax: null,
   usableAreaMin: null,
@@ -347,10 +370,6 @@ export const DEFAULT_FILTERS: ListingFilters = {
   parkingLotsMin: null,
   gardenAreaMin: null,
   gardenAreaMax: null,
-  buildingConditionLevelMin: null,
-  buildingConditionLevelMax: null,
-  apartmentConditionLevelMin: null,
-  apartmentConditionLevelMax: null,
   priceChangeCountMin: null,
   priceChangeWindowDays: null,
   totalPriceChangePct: null,
@@ -358,9 +377,8 @@ export const DEFAULT_FILTERS: ListingFilters = {
   showDismissed: false,
   pipeline: null,
   brokerId: null,
-  tags: [],
-  tagsExcluded: [],
-  collections: [],
+  tags: null,
+  collections: null,
   bounds: null,
   locationMode: 'viewport',
   centerRadius: null,
@@ -377,12 +395,6 @@ export const DEFAULT_FILTERS: ListingFilters = {
   nearOverall15kmMin: null,
   priceGrowthRules: [],
 };
-
-export const ESTATE_AREA_BOUNDS = { min: 0, max: 5000, step: 50 };
-export const USABLE_AREA_BOUNDS = { min: 0, max: 500, step: 5 };
-
-export const PRICE_BOUNDS = { min: 0, max: 100_000, step: 500 };
-export const AREA_BOUNDS = { min: 0, max: 300, step: 5 };
 
 /* Expand a multi-select of operator-friendly buckets into the union of
  * granular `building_type` values to match against (deduped). The expansion
@@ -409,12 +421,12 @@ const TRI_VALUES: ReadonlyArray<TriState> = ['any', 'yes', 'no'];
 const STATUS_VALUES: ReadonlyArray<ListingStatus> = ['active', 'inactive', 'any'];
 /* Multi-select wire values incl. the '__unknown__' sentinel (NULL / non-canonical).
  * The canonical sets are re-exported from the generated registry
- * (toolkit.filter_registry.{FURNISHED,OWNERSHIP}_CANONICAL) — one source, no
- * hand-coded duplicate that can drift from the SQL RPC / Watchdog / toolkit
- * (architectural rule #16). queries.ts:applyFilters uses them for the
- * `not.in.(…)` unknown predicate. */
+ * (toolkit.filter_registry.{FURNISHED,OWNERSHIP}_CANONICAL and
+ * COLUMN_CANONICAL_VALUES['condition']) — one source, no hand-coded duplicate
+ * that can drift from the SQL RPC / Watchdog / toolkit (architectural rule #16).
+ * queries.ts:applyFilters uses them for the `not.in.(…)` unknown predicate. */
 export const UNKNOWN_FILTER_VALUE = '__unknown__';
-export { FURNISHED_CANONICAL, OWNERSHIP_CANONICAL };
+export { CONDITION_CANONICAL, FURNISHED_CANONICAL, OWNERSHIP_CANONICAL };
 const FURNISHED_VALUES: ReadonlyArray<string> = [...FURNISHED_CANONICAL, UNKNOWN_FILTER_VALUE];
 const OWNERSHIP_VALUES: ReadonlyArray<string> = [...OWNERSHIP_CANONICAL, UNKNOWN_FILTER_VALUE];
 const CONDITION_VALUES: ReadonlyArray<string> = (
@@ -438,6 +450,7 @@ const CATEGORY_TYPE_VALUES: ReadonlyArray<CategoryType> = [
 const BUILDING_MATERIAL_VALUES: ReadonlyArray<BuildingMaterial> = [
   'cihla', 'panel', 'smisena', 'ostatni',
 ];
+const ENERGY_RATING_VALUES: ReadonlyArray<string> = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
 
 const splitCsv = (s: string | null): string[] =>
   s == null || s === '' ? [] : s.split(',').map(decodeURIComponent);
@@ -549,11 +562,11 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
       ? [...DEFAULT_CATEGORY_MAIN]
       : splitCsv(sp.get('cat')).filter((c): c is CategoryMain =>
           (CATEGORY_MAIN_VALUES as ReadonlyArray<string>).includes(c)),
-    /* `deal=any` is the explicit "no constraint" state; an ABSENT param keeps
-     * meaning the default (`pronajem`), so a bare /browse URL is untouched. */
+    /* `deal=any` is the explicit "no constraint" state; an ABSENT param means
+     * the default (`prodej` since 2026-10-20 — a link that omits it opens on sale). */
     categoryType: sp.get('deal') === ANY_DEAL_TYPE
       ? null
-      : enumOr(sp.get('deal'), CATEGORY_TYPE_VALUES, 'pronajem'),
+      : enumOr(sp.get('deal'), CATEGORY_TYPE_VALUES, DEFAULT_FILTERS.categoryType ?? 'prodej'),
     districts: parseDistrictChips(
       sp.get('districts'),
       sp.get('districts_ctx'),
@@ -580,6 +593,7 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
     recentlyChangedDays: parseIntOrNull(sp.get('changed')),
     tomDaysMin: tomMin,
     tomDaysMax: tomMax,
+    tomObservedOnly: sp.get('observed') === '1',
     hasBalcony: enumOr(sp.get('balcony'), TRI_VALUES, 'any'),
     hasLift: enumOr(sp.get('lift'), TRI_VALUES, 'any'),
     hasParking: enumOr(sp.get('parking'), TRI_VALUES, 'any'),
@@ -600,6 +614,7 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
     buildingMaterial: splitCsv(sp.get('build')).filter((m): m is BuildingMaterial =>
       (BUILDING_MATERIAL_VALUES as ReadonlyArray<string>).includes(m),
     ),
+    energyRatingMatch: splitCsv(sp.get('energy')).filter((v) => ENERGY_RATING_VALUES.includes(v)),
     estateAreaMin: estateMin,
     estateAreaMax: estateMax,
     usableAreaMin: usableMin,
@@ -607,20 +622,15 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
     parkingLotsMin: parseIntOrNull(sp.get('parking_min')),
     gardenAreaMin: parseIntOrNull(sp.get('garden_min')),
     gardenAreaMax: parseIntOrNull(sp.get('garden_max')),
-    buildingConditionLevelMin: parseIntOrNull(sp.get('bld_cond_min')),
-    buildingConditionLevelMax: parseIntOrNull(sp.get('bld_cond_max')),
-    apartmentConditionLevelMin: parseIntOrNull(sp.get('apt_cond_min')),
-    apartmentConditionLevelMax: parseIntOrNull(sp.get('apt_cond_max')),
     priceChangeCountMin: parseIntOrNull(sp.get('changes_min')),
     priceChangeWindowDays: parsePriceChangeWindow(sp.get('changes_window')),
     totalPriceChangePct: parseFloatOrNull(sp.get('total_change_pct')),
     withEstimates: sp.get('with_est') === '1',
     showDismissed: sp.get('dismissed') === 'show',
-    pipeline: parsePipelineScope(sp.get('pipeline')),
+    pipeline: parseSetScope(sp, 'pipeline'),
     brokerId: parseIntOrNull(sp.get('broker')),
-    tags: parseIntList(sp.get('tags')),
-    tagsExcluded: parseIntList(sp.get('tags_excluded')),
-    collections: parseIntList(sp.get('collections')),
+    tags: parseSetScope(sp, 'tags'),
+    collections: parseSetScope(sp, 'collections'),
     bounds: parseBounds(sp.get('bbox')),
     locationMode: sp.get('locmode') === 'center_radius'
       ? 'center_radius'
@@ -727,27 +737,6 @@ const parseCenterRadius = (s: string | null): CenterRadius | null => {
   return { lat, lng, radius_m: Math.trunc(radius) };
 };
 
-export const parseIntList = (s: string | null): number[] => {
-  if (!s) return [];
-  const out: number[] = [];
-  for (const part of s.split(',')) {
-    const n = Number(part);
-    if (Number.isInteger(n) && n > 0) out.push(n);
-  }
-  return out;
-};
-
-/* `?pipeline=any` → any stage; `?pipeline=12,13` → those stages; absent or
- * unparseable → off. A list that parses to nothing (stale ids from another
- * account, or junk) degrades to "any stage" rather than to "off": the operator
- * asked to see their pipeline, so showing the whole pipeline is the honest
- * failure, while silently dropping the scope would show them the whole market. */
-const parsePipelineScope = (s: string | null): PipelineScope | null => {
-  if (!s) return null;
-  if (s === 'any') return { stage_ids: [] };
-  return { stage_ids: parseIntList(s) };
-};
-
 const fmtRange = (lo: number | null, hi: number | null): string =>
   `${lo ?? ''}-${hi ?? ''}`;
 
@@ -783,7 +772,7 @@ export const toSearchParams = (f: ListingFilters): URLSearchParams => {
     sp.set('cat', f.categoryMain.join(','));
   }
   if (f.categoryType == null) sp.set('deal', ANY_DEAL_TYPE);
-  else if (f.categoryType !== 'pronajem') sp.set('deal', f.categoryType);
+  else if (f.categoryType !== DEFAULT_FILTERS.categoryType) sp.set('deal', f.categoryType);
   for (const [k, v] of Object.entries(districtChipsToCsvParams(f.districts))) {
     sp.set(k, v);
   }
@@ -813,6 +802,7 @@ export const toSearchParams = (f: ListingFilters): URLSearchParams => {
   if (f.tomDaysMin != null || f.tomDaysMax != null) {
     sp.set('tom', fmtRange(f.tomDaysMin, f.tomDaysMax));
   }
+  if (f.tomObservedOnly) sp.set('observed', '1');
   if (f.hasBalcony !== 'any') sp.set('balcony', f.hasBalcony);
   if (f.hasLift !== 'any') sp.set('lift', f.hasLift);
   if (f.hasParking !== 'any') sp.set('parking', f.hasParking);
@@ -828,6 +818,7 @@ export const toSearchParams = (f: ListingFilters): URLSearchParams => {
   if (f.categorySubCb != null) sp.set('subcat', String(f.categorySubCb));
   if (f.subtype.length) sp.set('subtype', f.subtype.join(','));
   if (f.buildingMaterial.length) sp.set('build', f.buildingMaterial.join(','));
+  if (f.energyRatingMatch.length) sp.set('energy', f.energyRatingMatch.join(','));
   if (f.estateAreaMin != null || f.estateAreaMax != null) {
     sp.set('estate', fmtRange(f.estateAreaMin, f.estateAreaMax));
   }
@@ -837,25 +828,15 @@ export const toSearchParams = (f: ListingFilters): URLSearchParams => {
   if (f.parkingLotsMin != null) sp.set('parking_min', String(f.parkingLotsMin));
   if (f.gardenAreaMin != null) sp.set('garden_min', String(f.gardenAreaMin));
   if (f.gardenAreaMax != null) sp.set('garden_max', String(f.gardenAreaMax));
-  if (f.buildingConditionLevelMin != null) sp.set('bld_cond_min', String(f.buildingConditionLevelMin));
-  if (f.buildingConditionLevelMax != null) sp.set('bld_cond_max', String(f.buildingConditionLevelMax));
-  if (f.apartmentConditionLevelMin != null) sp.set('apt_cond_min', String(f.apartmentConditionLevelMin));
-  if (f.apartmentConditionLevelMax != null) sp.set('apt_cond_max', String(f.apartmentConditionLevelMax));
   if (f.priceChangeCountMin != null) sp.set('changes_min', String(f.priceChangeCountMin));
   if (f.priceChangeWindowDays != null) sp.set('changes_window', String(f.priceChangeWindowDays));
   if (f.totalPriceChangePct != null) sp.set('total_change_pct', String(f.totalPriceChangePct));
   if (f.withEstimates) sp.set('with_est', '1');
   if (f.showDismissed) sp.set('dismissed', 'show');
-  if (f.pipeline) {
-    sp.set(
-      'pipeline',
-      f.pipeline.stage_ids.length ? f.pipeline.stage_ids.join(',') : 'any',
-    );
-  }
+  setScopeToParams(sp, 'pipeline', f.pipeline);
   if (f.brokerId != null) sp.set('broker', String(f.brokerId));
-  if (f.tags.length) sp.set('tags', f.tags.join(','));
-  if (f.tagsExcluded.length) sp.set('tags_excluded', f.tagsExcluded.join(','));
-  if (f.collections.length) sp.set('collections', f.collections.join(','));
+  setScopeToParams(sp, 'tags', f.tags);
+  setScopeToParams(sp, 'collections', f.collections);
   if (f.bounds) {
     const { west, south, east, north } = f.bounds;
     sp.set(
@@ -902,14 +883,14 @@ const CATEGORY_MAIN_PLURAL: Record<CategoryMain, string> = {
 };
 
 /* Join the multi-select category_main into a human label, e.g.
- * ['byt','dum'] -> "apartments / houses". Empty = "listings" (no constraint). */
+ * ['byt','dum'] -> "apartments / houses". Empty = "properties" (no constraint). */
 const categoryMainLabel = (cats: ReadonlyArray<CategoryMain>): string =>
   cats.length === 0
-    ? 'listings'
+    ? 'properties'
     : cats.map((c) => CATEGORY_MAIN_PLURAL[c]).join(' / ');
 
-/* URL token for "no deal-type constraint". Spelled the same as the pipeline
- * scope's `any` so the two read as one vocabulary. */
+/* URL token for "no deal-type constraint". Spelled the same as a curated
+ * set's whole-set `any` (lib/setScope) so the two read as one vocabulary. */
 export const ANY_DEAL_TYPE = 'any';
 
 const CATEGORY_TYPE_LABEL: Record<CategoryType, string> = {
@@ -923,41 +904,6 @@ const CATEGORY_TYPE_LABEL: Record<CategoryType, string> = {
  * caller's sentence reads "12 apartments" rather than "12 apartments for null". */
 export const categoryTypeLabel = (t: CategoryType | null): string =>
   t == null ? '' : CATEGORY_TYPE_LABEL[t];
-
-export const categoryHeading = (f: ListingFilters): string =>
-  [categoryMainLabel(f.categoryMain), categoryTypeLabel(f.categoryType)]
-    .filter(Boolean)
-    .join(' ');
-
-/* Stable, order-independent serialization of the cohort-defining filters.
- * Reuses the canonical URL serializer (toSearchParams) and sorts the
- * entries so two equal filter sets always produce the same string —
- * used as the per-region cache key for box-plot annotations. */
-export const regionKeyFromFilters = (f: ListingFilters): string => {
-  const entries = [...toSearchParams(f).entries()].sort((a, b) =>
-    a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0,
-  );
-  return new URLSearchParams(entries).toString();
-};
-
-/* Short human-readable label for the cohort — passed to the annotator
- * as context so it can say "in Praha" rather than "(filtered cohort)". */
-export const regionLabelFromFilters = (f: ListingFilters): string => {
-  const base = categoryHeading(f);
-  /* Only INCLUDE chips belong in an "in X" cohort label — an excluded
-   * district is a subtraction, not a place the cohort is "in". */
-  const inc = f.districts.filter((d) => !d.excluded);
-  if (inc.length) {
-    const shown = inc.slice(0, 3).map((d) => d.name).join(', ');
-    const extra = inc.length > 3 ? ` +${inc.length - 3}` : '';
-    return `${base} in ${shown}${extra}`;
-  }
-  if (f.locationMode === 'center_radius' && f.centerRadius) {
-    return `${base} within ${f.centerRadius.radius_m} m of a point`;
-  }
-  if (f.bounds) return `${base} in the current map area`;
-  return base;
-};
 
 const fmtDaysRange = (lo: number | null, hi: number | null): string => {
   if (lo == null && hi == null) return '';
@@ -995,9 +941,10 @@ export const summarise = (f: ListingFilters, count: number | null): string => {
   if (f.recentlyChangedDays != null) bits.push(`changed ≤ ${f.recentlyChangedDays} d`);
   const tomLabel = fmtDaysRange(f.tomDaysMin, f.tomDaysMax);
   if (tomLabel) bits.push(`TOM ${tomLabel}`);
-  if (f.pipeline) {
-    const n = f.pipeline.stage_ids.length;
-    bits.push(n === 0 ? 'in pipeline' : `in pipeline (${n} stage${n > 1 ? 's' : ''})`);
+  if (f.tomObservedOnly) bits.push('newly listed');
+  for (const name of CURATED_SET_NAMES) {
+    const words = scopeWords(name, f[name]);
+    if (words) bits.push(words);
   }
   if (f.brokerId != null) bits.push('for one broker');
   if (f.bounds) bits.push('in this map area');
@@ -1036,9 +983,9 @@ export const watchdogNameSuggestion = (f: ListingFilters): string => {
  * filters, for the browser-tab title (the constraints that most identify a
  * Browse tab at a glance). Each segment is omitted when empty; returns null
  * when nothing relevant is set, so the caller falls back to the static
- * "Browse" route title. Reuses fmtArea + the include-only district logic of
- * regionLabelFromFilters; the tab form is tighter (one name + "+N") because
- * tab space is narrow. Dispositions are joined with ", " (they already contain
+ * "Browse" route title. Reuses fmtArea; only INCLUDE district chips name the
+ * place (an excluded district is a subtraction, not where the cohort is), one
+ * name + "+N" because tab space is narrow. Dispositions are joined with ", " (they already contain
  * "+", e.g. "2+kk"). */
 export const browseTitleSummary = (f: ListingFilters): string | null => {
   const segments: string[] = [];
@@ -1103,8 +1050,8 @@ export const isDefault = (f: ListingFilters): boolean =>
 
 /** Persisted preset payload. The opaque `filter_spec` blob the API stores
  *  verbatim. `sort` is the serialized sort param (`sortToParam` form, e.g.
- *  "-price_czk") — kept as a plain string so this module needn't depend on
- *  the queries sort types. `null`/absent means the default sort. */
+ *  "-price_czk"), stored as a plain string. `null`/absent means the default
+ *  sort. */
 export interface PresetSpec {
   filters: ListingFilters;
   sort?: string | null;
@@ -1133,24 +1080,23 @@ export const pipelineViewFilters = (): ListingFilters => ({
   ...DEFAULT_FILTERS,
   categoryMain: [],
   categoryType: null,
-  pipeline: { stage_ids: [] },
+  pipeline: { set: 'in', in: [], out: [] },
 });
 
 /* Filter fields that ride ALONGSIDE a preset rather than inside it: they are
  * reset before persisting and ignored when deciding whether a loaded preset is
  * dirty. A preset describes MARKET CRITERIA ("2+kk, 60–90 m², Praha"); the
- * pipeline scope and the dismissed reveal are lenses over the operator's own
- * state, orthogonal to every preset and combinable with all of them — so
- * toggling one must never offer to bake itself into the saved filters.
+ * curated sets (tags, collections, pipeline), the broker and the dismissed
+ * reveal are lenses over the operator's own state, orthogonal to every preset
+ * and combinable with all of them — so toggling one must never offer to bake
+ * itself into the saved filters. A preset click resets every one of them and
+ * applies what the preset stores (operator ruling 2026-10-19).
  *
  * `bounds` is deliberately NOT here: it is opt-in per save (the "include map
  * area" toggle), which is a different rule, expressed below. */
 const PRESET_EXCLUDED_KEYS = [
-  'pipeline', 'brokerId', 'showDismissed', 'collections',
+  'tags', 'collections', 'pipeline', 'brokerId', 'showDismissed',
 ] as const satisfies ReadonlyArray<keyof ListingFilters>;
-
-/* The same fields as URL params — the form preset equality is computed in. */
-const PRESET_EXCLUDED_PARAMS: readonly string[] = ['pipeline', 'broker', 'dismissed', 'collections'];
 
 const stripPresetExcluded = (f: ListingFilters): ListingFilters => {
   const out = { ...f };
@@ -1183,8 +1129,10 @@ const coerceStoredFilters = (stored: unknown): ListingFilters => {
   const def = DEFAULT_FILTERS as unknown as Record<string, unknown>;
   const out: Record<string, unknown> = { ...def };
   if (stored && typeof stored === 'object') {
-    for (const [k, vRaw] of Object.entries(stored as Record<string, unknown>)) {
-      if (!(k in def)) continue;
+    const blob = stored as Record<string, unknown>;
+    for (const name of CURATED_SET_NAMES) out[name] = storedScope(name, blob);
+    for (const [k, vRaw] of Object.entries(blob)) {
+      if (!(k in def) || (CURATED_SET_NAMES as string[]).includes(k)) continue;
       // Migration shim: categoryMain went scalar -> array. Lift an old stored
       // scalar (e.g. "dum") to ["dum"] so a preset saved before the multiselect
       // change keeps its category instead of silently reverting to ['byt'].
@@ -1199,20 +1147,48 @@ const coerceStoredFilters = (stored: unknown): ListingFilters => {
   return out as unknown as ListingFilters;
 };
 
+const idList = (v: unknown): number[] | null =>
+  Array.isArray(v) && v.every((x) => Number.isInteger(x) && x > 0) ? (v as number[]) : null;
+
+/* A curated set as a stored blob may hold it: a SetScope, or a shape from
+ * before lib/setScope — `tags: number[]` + `tagsExcluded: number[]`,
+ * `collections: number[]`, `pipeline: {stage_ids}` ([] = any stage) — lifted
+ * losslessly; anything else is dropped (off). */
+function storedScope(name: CuratedSet, blob: Record<string, unknown>): SetScope | null {
+  const v = blob[name];
+  const ids = idList(v);
+  if (ids) {
+    const out = name === 'tags' ? idList(blob.tagsExcluded) ?? [] : [];
+    return normalizeScope({ set: null, in: ids, out });
+  }
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  if (name === 'pipeline' && 'stage_ids' in o) {
+    const stages = idList(o.stage_ids);
+    if (!stages) return null;
+    return stages.length ? { set: null, in: stages, out: [] } : { set: 'in', in: [], out: [] };
+  }
+  const inc = idList(o.in);
+  const exc = idList(o.out);
+  if (!inc || !exc || !(o.set === null || o.set === 'in' || o.set === 'out')) return null;
+  return normalizeScope({ set: o.set, in: inc, out: exc });
+}
+
 /** Read a stored preset blob, tolerating the legacy bare-`ListingFilters`
  *  shape (presets saved before sort was captured) and fields whose type drifted
  *  after the preset was saved. Always returns a complete, shape-safe filter set
- *  merged onto DEFAULT_FILTERS, plus the saved sort (or null for the default). */
+ *  merged onto DEFAULT_FILTERS, plus the saved sort as parseSort reads it, so a
+ *  preset whose sort has no control loads clean, not dirty. */
 export const readPresetSpec = (
   spec: PresetSpec | ListingFilters,
-): { filters: ListingFilters; sort: string | null } => {
+): { filters: ListingFilters; sort: string } => {
   const wrapped =
     spec != null && (spec as PresetSpec).filters != null;
   const filters = wrapped
     ? (spec as PresetSpec).filters
     : (spec as ListingFilters);
   const sort = wrapped ? (spec as PresetSpec).sort ?? null : null;
-  return { filters: coerceStoredFilters(filters), sort };
+  return { filters: coerceStoredFilters(filters), sort: sortToParam(parseSort(sort)) };
 };
 
 const canonicalParams = (sp: URLSearchParams): string =>
@@ -1230,16 +1206,12 @@ export const filtersEqualForPreset = (
   current: ListingFilters,
   saved: ListingFilters,
 ): boolean => {
-  const a = toSearchParams({ ...DEFAULT_FILTERS, ...current });
-  const b = toSearchParams({ ...DEFAULT_FILTERS, ...saved });
+  // The lenses sit outside preset identity: switching one on must not light up
+  // "Update preset", and a preset saved before they existed must not read as
+  // dirty the moment one is toggled.
+  const a = toSearchParams(stripPresetExcluded({ ...DEFAULT_FILTERS, ...current }));
+  const b = toSearchParams(stripPresetExcluded({ ...DEFAULT_FILTERS, ...saved }));
   if (!b.has('bbox')) a.delete('bbox');
-  // The lenses (pipeline scope) sit outside preset identity: switching one on
-  // must not light up "Update preset", and a preset saved before they existed
-  // must not read as dirty the moment one is toggled.
-  for (const p of PRESET_EXCLUDED_PARAMS) {
-    a.delete(p);
-    b.delete(p);
-  }
   return canonicalParams(a) === canonicalParams(b);
 };
 
@@ -1291,13 +1263,10 @@ export const REGISTRY_KEY_MAP = {
   portals_excluded_active_only: 'portalsExcludedActiveOnly',
   condition_match: 'conditionMatch',
   building_material: 'buildingMaterial',
+  energy_rating_match: 'energyRatingMatch',
   min_parking_lots: 'parkingLotsMin',
   min_garden_area: 'gardenAreaMin',
   max_garden_area: 'gardenAreaMax',
-  building_condition_level_min: 'buildingConditionLevelMin',
-  building_condition_level_max: 'buildingConditionLevelMax',
-  apartment_condition_level_min: 'apartmentConditionLevelMin',
-  apartment_condition_level_max: 'apartmentConditionLevelMax',
   price_change_count_min: 'priceChangeCountMin',
   price_change_window_days: 'priceChangeWindowDays',
   total_price_change_pct: 'totalPriceChangePct',
@@ -1305,10 +1274,10 @@ export const REGISTRY_KEY_MAP = {
   show_dismissed: 'showDismissed',
   pipeline: 'pipeline',
   tags: 'tags',
-  tags_excluded: 'tagsExcluded',
   collections: 'collections',
   tom_days_min: 'tomDaysMin',
   tom_days_max: 'tomDaysMax',
+  tom_observed_only: 'tomObservedOnly',
   last_seen_min_days: 'lastSeenMinDays',
   last_seen_max_days: 'lastSeenMaxDays',
   first_seen_min_days: 'firstSeenMinDays',
@@ -1398,6 +1367,32 @@ export function applyRegistryUpdates(
   return next;
 }
 
+/** The sidebar's apply: a batch of registry updates plus the two clean-ups the
+ *  filter UI owes the cohort, so a filter the UI no longer shows can never stay
+ *  active and silently empty it. Yield exists for sale flats only, so it goes
+ *  when the cohort leaves Prodej; a subtype refines houses / commercial units,
+ *  so it goes with the last of them. Browse's sidebar and the phone's Filtry
+ *  sheet both apply through this. */
+export function applySidebarUpdates(
+  filters: ListingFilters,
+  updates: ReadonlyArray<{ id: string; value: unknown }>,
+): ListingFilters {
+  let next = applyRegistryUpdates(filters, updates);
+  if (
+    next.categoryType !== 'prodej' &&
+    (next.mfGrossYieldPctMin != null || next.mfGrossYieldPctMax != null)
+  ) {
+    next = { ...next, mfGrossYieldPctMin: null, mfGrossYieldPctMax: null };
+  }
+  if (
+    !next.categoryMain.some((c) => c === 'dum' || c === 'komercni') &&
+    next.subtype.length > 0
+  ) {
+    next = { ...next, subtype: [] };
+  }
+  return next;
+}
+
 /* ------------------------------------------------------------------------- *
  * Browse filters → Watchdog spec (Create-watchdog-from-Browse).
  *
@@ -1407,20 +1402,20 @@ export function applyRegistryUpdates(
  * clause for are NOT silently dropped: `filtersToWatchdogSpec` reports them in
  * `unsupported` so the UI can tell the operator what won't be watched.
  *
- * Honoured (mapped): category, disposition, district chips, price / price-per-m²
- * / MF-yield / area / usable / estate / garden bounds, building material,
- * tri-state amenities, furnished, ownership, both sides of the portal rule
- * (MS19 + migration 597), condition_match, parking-lots min, condition-level bounds, the
- * price-history pair (price-change count in a window, total price change %),
- * and the city-quality predicates (index rules, population min/max, the near-*
- * minimums).
- * center+radius → lat/lng/radius_m.
+ * Honoured (mapped): category, disposition, district chips, THE map box
+ * (`bounds` — effectiveBbox, rule 16: a centre+radius pick saves as the square
+ * Browse filtered on, always; the viewport box unless the caller opts it out,
+ * which is the create dialog's one checkbox), price / price-per-m² / MF-yield /
+ * area / usable / estate / garden bounds, building material, tri-state
+ * amenities, furnished, ownership, both sides of the portal rule (MS19 +
+ * migration 597), condition_match, parking-lots min, the price-history pair
+ * (price-change count in a window, total price change %), and the city-quality
+ * predicates (index rules, population min/max, the near-* minimums).
  *
  * NOT honoured by the matcher (reported as unsupported when set): listing
  * `status`, the last-seen / first-seen / time-on-market day ranges and the
  * `recently added/changed` presets (a watchdog already fires on brand-new /
- * changed listings, so a recency window is redundant there), the map `bounds`
- * viewport (use a district chip or center+radius instead), `tags` and
+ * changed listings, so a recency window is redundant there), `tags` and
  * `collections`. */
 
 const UNSUPPORTED_LABELS: ReadonlyArray<{
@@ -1428,7 +1423,6 @@ const UNSUPPORTED_LABELS: ReadonlyArray<{
   label: string;
 }> = [
   { test: (f) => f.status !== 'any', label: 'listing status' },
-  { test: (f) => f.bounds != null, label: 'map area' },
   {
     test: (f) =>
       f.lastSeenMinDays != null || f.lastSeenMaxDays != null
@@ -1440,17 +1434,16 @@ const UNSUPPORTED_LABELS: ReadonlyArray<{
     label: 'recently added/changed',
   },
   { test: (f) => f.tomDaysMin != null || f.tomDaysMax != null, label: 'time on market' },
-  { test: (f) => f.tags.length > 0 || f.tagsExcluded.length > 0, label: 'tags' },
+  { test: (f) => f.tomObservedOnly, label: 'newly listed only' },
   { test: (f) => f.priceGrowthRules.length > 0, label: 'market growth (datasets)' },
   { test: (f) => f.withEstimates, label: 'with estimates' },
   /* A watchdog never surfaces a dismissed property, whatever the spec says. */
   { test: (f) => f.showDismissed, label: 'dismissed properties' },
-  /* The pipeline and collections are the operator's own state: a watchdog
-   * scoped to either would only ever fire on properties they already put
-   * there — and "new listing" events can't match a card, or a membership,
-   * that doesn't exist yet. */
-  { test: (f) => f.pipeline != null, label: 'pipeline' },
-  { test: (f) => f.collections.length > 0, label: 'collections' },
+  /* The curated sets are the operator's own state: a watchdog scoped to one
+   * would only ever fire on properties they already put there — and "new
+   * listing" events can't match a card, or a membership, that doesn't exist
+   * yet. */
+  ...CURATED_SET_NAMES.map((name) => ({ test: (f: ListingFilters) => scopeActive(f[name]), label: name })),
   /* "Alert me when broker X lists something new" is a real, separable feature
    * idea, not built yet — the matcher has no broker join today. */
   { test: (f) => f.brokerId != null, label: 'broker' },
@@ -1464,12 +1457,13 @@ export interface FiltersToWatchdogResult {
 
 export function filtersToWatchdogSpec(
   filters: ListingFilters,
+  { includeMapArea = true }: { includeMapArea?: boolean } = {},
 ): FiltersToWatchdogResult {
   const f = filters;
   const arr = <T>(xs: T[]): T[] | null => (xs.length === 0 ? null : xs);
-  /* center+radius is the only spatial mode a watchdog can express (the matcher
-   * has no viewport clause). All three of lat/lng/radius are needed or none. */
-  const cr = f.locationMode === 'center_radius' ? f.centerRadius : null;
+  /* A centre+radius pick is a sidebar filter, never a stale viewport, so it
+   * always rides along; the viewport box only when the caller keeps it. */
+  const bounds = f.locationMode === 'center_radius' || includeMapArea ? effectiveBbox(f) : null;
 
   const spec: WatchdogFilterSpec = {
     ...DEFAULT_WATCHDOG_FILTER_SPEC,
@@ -1479,9 +1473,7 @@ export function filtersToWatchdogSpec(
     subtype: arr(f.subtype),
     dispositions: arr(f.dispositions),
     districts: arr(f.districts),
-    lat: cr ? cr.lat : null,
-    lng: cr ? cr.lng : null,
-    radius_m: cr ? cr.radius_m : null,
+    bounds,
     min_price_czk: f.priceMin,
     max_price_czk: f.priceMax,
     include_no_price: f.includeNoPrice,
@@ -1496,6 +1488,7 @@ export function filtersToWatchdogSpec(
     min_estate_area: f.estateAreaMin,
     max_estate_area: f.estateAreaMax,
     building_material: f.buildingMaterial.length ? [...f.buildingMaterial] : null,
+    energy_rating_match: f.energyRatingMatch.length ? [...f.energyRatingMatch] : null,
     min_garden_area: f.gardenAreaMin,
     max_garden_area: f.gardenAreaMax,
     has_balcony: triToBoolNullable(f.hasBalcony),
@@ -1511,10 +1504,6 @@ export function filtersToWatchdogSpec(
     portals_excluded_active_only: f.portalsExcludedActiveOnly,
     condition_match: arr(f.conditionMatch),
     min_parking_lots: f.parkingLotsMin,
-    building_condition_level_min: f.buildingConditionLevelMin,
-    building_condition_level_max: f.buildingConditionLevelMax,
-    apartment_condition_level_min: f.apartmentConditionLevelMin,
-    apartment_condition_level_max: f.apartmentConditionLevelMax,
     price_change_count_min: f.priceChangeCountMin,
     price_change_window_days:
       f.priceChangeWindowDays != null

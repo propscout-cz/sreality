@@ -253,4 +253,5 @@ idempotence, and the offline half is
   ±0.50. The warn tier is 0.35 rather than the planned 0.25 to hold ceskereality's +0.20 amber-free while
   the §6 finding behind it is investigated — NOT because that reading is certified. Every converted portal
   lands inside 0.25 in simulation (§1), so 0.35 is protecting exactly one portal. Run the check before and
-  after, and once more after a full drain cycle.
+  after, and once more after a full drain cycle. (Health dashboard sprint wave 6 deleted the check, Q4: it
+  read inside the warn tier on every portal from 2026-10-12 to its last run; its SQL is in git history.)

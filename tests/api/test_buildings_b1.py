@@ -1,13 +1,12 @@
-"""Tests for /buildings/* B1 endpoints (from_url, confirm_units, re_extract).
+"""Tests for /buildings/* B1 endpoints (confirm_units, re_extract).
 
 Hermetic — overrides the FastAPI dependencies, monkey-patches the
-persistence helpers + the dispatcher + the extractor so no real DB,
-no real LLM, no real HTTP.
+persistence helpers + the extractor so no real DB, no real LLM, no
+real HTTP.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
@@ -18,7 +17,6 @@ TestClient = pytest.importorskip("fastapi.testclient").TestClient
 from api import building_runs as br
 from api import dependencies as deps
 from api import main as api_main
-from scraper import source_dispatcher
 from toolkit import building_extraction
 
 
@@ -70,10 +68,6 @@ def _patch_persistence(monkeypatch) -> _State:
             "input_url": fields.get("input_url"),
             "input_sreality_id": fields.get("input_sreality_id"),
             "input_spec": fields.get("input_spec"),
-            "source_kind": fields.get("source_kind"),
-            "parse_confidence": fields.get("parse_confidence"),
-            "parse_confidence_per_field": fields.get("parse_confidence_per_field"),
-            "source_html": fields.get("source_html"),
             "subject_summary": fields.get("subject_summary"),
             "units_proposal": fields.get("units_proposal"),
             "units": fields.get("units"),
@@ -96,51 +90,12 @@ def _patch_persistence(monkeypatch) -> _State:
     def fake_attachments(conn, building_id: int) -> list[dict[str, Any]]:
         return []
 
-    def fake_bg(*, building_id, sreality_id, parse_warnings,
-                subject_summary, special_instructions, contextual_text):
-        br._execute_building_extraction(
-            object(), object(),
-            building_id=building_id,
-            sreality_id=sreality_id,
-            parse_warnings=parse_warnings,
-            subject_summary=subject_summary,
-            special_instructions=special_instructions,
-            contextual_text=contextual_text,
-        )
-
     monkeypatch.setattr(br, "_insert_building", fake_insert)
     monkeypatch.setattr(br, "_update_building_fields", fake_update)
     monkeypatch.setattr(br, "_fetch_building", fake_fetch)
     monkeypatch.setattr(br, "_fetch_children", fake_children)
     monkeypatch.setattr(br, "_fetch_attachments", fake_attachments)
-    monkeypatch.setattr(
-        br, "_execute_building_extraction_background", fake_bg,
-    )
     return state
-
-
-@dataclass
-class _FakeParseResult:
-    spec: dict[str, Any]
-    source_kind: str = "sreality"
-    parse_confidence: str = "high"
-    parse_confidence_per_field: dict[str, str] | None = None
-    source_html: str | None = None
-    from_cache: bool = False
-    cost_usd: float | None = None
-    warnings: list[str] = field(default_factory=list)
-    sreality_id: int | None = 999
-    source_url: str = "https://example.cz/dum/1"
-    full_extraction: dict[str, Any] | None = None
-    fetched_at: str | None = None
-    wide_spec: dict[str, Any] | None = None
-
-
-def _patch_dispatcher(monkeypatch, result: _FakeParseResult) -> None:
-    monkeypatch.setattr(
-        source_dispatcher, "parse_listing_url",
-        lambda *a, **kw: result,
-    )
 
 
 def _patch_extractor(monkeypatch, payload: dict[str, Any] | Exception) -> list[dict[str, Any]]:
@@ -180,157 +135,6 @@ def _example_extractor_payload() -> dict[str, Any]:
         "cost_usd": 0.01,
         "cache_hit": False,
     }
-
-
-# -- POST /buildings/from_url ------------------------------------------------
-
-
-def test_from_url_returns_pending_when_background_deferred(monkeypatch):
-    """POST /buildings/from_url returns the 'pending' row immediately
-    when extraction is deferred to a BackgroundTask. The browser
-    navigates to /building/:id and polls until status reaches
-    awaiting_input / failed.
-    """
-    api_main.app.dependency_overrides[deps.get_db_conn] = lambda: object()
-    api_main.app.dependency_overrides[deps.require_token] = lambda: None
-    api_main.app.dependency_overrides[deps.get_sreality_client] = (
-        lambda: object()
-    )
-    api_main.app.dependency_overrides[deps.get_llm_client] = lambda: object()
-    try:
-        state = _patch_persistence(monkeypatch)
-        _patch_dispatcher(monkeypatch, _FakeParseResult(
-            spec={"category_main": "dum", "category_type": "prodej",
-                  "lat": 50.1, "lng": 14.4},
-        ))
-        scheduled: list[int] = []
-        monkeypatch.setattr(
-            br, "_execute_building_extraction_background",
-            lambda **kw: scheduled.append(kw["building_id"]),
-        )
-
-        client_local = TestClient(api_main.app)
-        res = client_local.post(
-            "/buildings/from_url",
-            json={"source": "ui", "url": "https://example.cz/dum/1"},
-        )
-        assert res.status_code == 200, res.text
-        body = res.json()
-        assert body["status"] == "pending"
-        assert body["units_proposal"] is None
-        assert scheduled == [1]
-        assert state.rows[1]["status"] == "pending"
-    finally:
-        api_main.app.dependency_overrides.clear()
-
-
-def test_from_url_happy_path(client, monkeypatch):
-    state = _patch_persistence(monkeypatch)
-    _patch_dispatcher(monkeypatch, _FakeParseResult(
-        spec={"category_main": "dum", "category_type": "prodej",
-              "lat": 50.1, "lng": 14.4},
-    ))
-    extractor_calls = _patch_extractor(monkeypatch, _example_extractor_payload())
-
-    response = client.post(
-        "/buildings/from_url",
-        json={"source": "ui", "url": "https://example.cz/dum/1"},
-    )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["status"] == "awaiting_input"
-    assert body["units_proposal"]["units"][0]["unit_id"] == "u1"
-    assert body["units"] is None
-    assert state.rows[1]["status"] == "awaiting_input"
-    assert len(extractor_calls) == 1
-    assert extractor_calls[0]["sreality_id"] == 999
-
-
-def test_from_url_byt_rejected(client, monkeypatch):
-    _patch_persistence(monkeypatch)
-    _patch_dispatcher(monkeypatch, _FakeParseResult(
-        spec={"category_main": "byt", "category_type": "pronajem"},
-    ))
-    _patch_extractor(monkeypatch, _example_extractor_payload())
-
-    response = client.post(
-        "/buildings/from_url",
-        json={"source": "ui", "url": "https://example.cz/byt/1"},
-    )
-    assert response.status_code == 400, response.text
-    assert "apartment" in response.json()["detail"].lower()
-
-
-def test_from_url_unsupported_category_rejected(client, monkeypatch):
-    _patch_persistence(monkeypatch)
-    _patch_dispatcher(monkeypatch, _FakeParseResult(
-        spec={"category_main": "pozemek", "category_type": "prodej"},
-    ))
-
-    response = client.post(
-        "/buildings/from_url",
-        json={"source": "ui", "url": "https://example.cz/pozemek/1"},
-    )
-    assert response.status_code == 400
-    assert "unsupported category_main" in response.json()["detail"]
-
-
-def test_from_url_parse_failure_returns_502(client, monkeypatch):
-    _patch_persistence(monkeypatch)
-    monkeypatch.setattr(
-        source_dispatcher, "parse_listing_url",
-        lambda *a, **kw: (_ for _ in ()).throw(
-            source_dispatcher.ParseError("dead url"),
-        ),
-    )
-
-    response = client.post(
-        "/buildings/from_url",
-        json={"source": "ui", "url": "https://example.cz/dum/dead"},
-    )
-    assert response.status_code == 502
-    assert "dead url" in response.json()["detail"]
-
-
-def test_from_url_extractor_failure_marks_failed(client, monkeypatch):
-    state = _patch_persistence(monkeypatch)
-    _patch_dispatcher(monkeypatch, _FakeParseResult(
-        spec={"category_main": "dum", "category_type": "prodej"},
-    ))
-    _patch_extractor(
-        monkeypatch,
-        building_extraction.BuildingExtractionError("no snapshot"),
-    )
-
-    response = client.post(
-        "/buildings/from_url",
-        json={"source": "ui", "url": "https://example.cz/dum/1"},
-    )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["status"] == "failed"
-    assert "no snapshot" in body["error_message"]
-    assert state.rows[1]["status"] == "failed"
-
-
-def test_from_url_missing_sreality_id_marks_failed(client, monkeypatch):
-    """A URL that parses but yields no sreality_id can't reach a snapshot."""
-    _patch_persistence(monkeypatch)
-    _patch_dispatcher(monkeypatch, _FakeParseResult(
-        spec={"category_main": "dum"},
-        sreality_id=None,
-    ))
-    extractor_calls = _patch_extractor(monkeypatch, _example_extractor_payload())
-
-    response = client.post(
-        "/buildings/from_url",
-        json={"source": "ui", "url": "https://example.cz/dum/1"},
-    )
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "failed"
-    assert "sreality_id" in body["error_message"]
-    assert extractor_calls == [], "extractor should not run without sreality_id"
 
 
 # -- POST /buildings/{id}/confirm_units --------------------------------------

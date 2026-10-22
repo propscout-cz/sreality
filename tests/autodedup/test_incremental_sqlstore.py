@@ -402,6 +402,42 @@ def test_a_revived_listing_reaches_the_lane() -> None:
     assert cursors[CURSOR_REVIVE] == 0, "a short slice wraps the round-robin sweep"
 
 
+def test_the_revived_feed_takes_its_fifth_and_skips_no_revived_id() -> None:
+    """E970: the revived feed took every revived id of its slice whatever the limit, so the
+    retry after a pair-budget refusal could never shrink the claim the source made (2026-10-19:
+    37 claimed at a limit of one, every pass refused). It takes a fifth like every other feed and
+    its cursor stops at the last id taken: 37 revived ids at a limit of one are 37 passes of one,
+    in order, none skipped; a full slice taken whole moves the cursor to its end, and only a
+    short slice taken whole wraps the sweep."""
+    db = FakePg()
+    revived = list(range(101, 138))
+    still_inactive = list(range(1001, 1031))
+    for listing_id in revived + still_inactive:
+        db.listings[listing_id] = {"first_seen_at": db.now - timedelta(days=9),
+                                   "inactive_at": None, "is_active": listing_id in revived}
+        db.rt_fp[(GEN, listing_id)] = {"category_main": None, "category_type": None,
+                                       "area_m2": None, "disposition": None, "floor": None,
+                                       "fp_digest": "d", "cell_key": "o1", "cell_group": "byt",
+                                       "is_active": False}
+    _place(db, *revived, *still_inactive)
+
+    def one_pass(limit: int) -> list[int]:
+        work = SqlWork(db, SCOPE, GEN, straggler_window=0, revive_slice=10, drift_slice=0,
+                       enter_slice=0, evidence_slice=0)
+        items = work.claim(limit)
+        work.commit(items)
+        return [item.listing_id for item in items if item.feed == "revived"]
+
+    assert one_pass(20) == revived[:4], "the retry's bigger claim takes a fifth of it"
+    db.cursors.pop(CURSOR_REVIVE)
+    seen = [one_pass(1) for _ in revived]
+    assert seen == [[listing_id] for listing_id in revived]
+    assert db.cursors[CURSOR_REVIVE]["last_listing_id"] == 1009, "a full slice taken whole"
+    assert [one_pass(1) for _ in range(3)] == [[], [], []]
+    assert db.cursors[CURSOR_REVIVE]["last_listing_id"] == 0, "a short slice taken whole wraps"
+    assert one_pass(1) == [revived[0]], "and the next cycle starts again"
+
+
 def test_each_feed_advances_only_its_own_cursor() -> None:
     db = FakePg()
     db.listings[5] = {"first_seen_at": db.now - timedelta(hours=2), "inactive_at": None,

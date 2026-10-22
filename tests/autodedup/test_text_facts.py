@@ -7,11 +7,19 @@ import pytest
 from autodedup.dataset import Listing, Location, live_end_stamp
 from autodedup.text_facts import (
     address_block_key,
+    compass_points,
     mask_codes,
     orientations,
+    printed_floors,
+    printed_floors_by_form,
+    printed_unit_codes,
     reference_codes,
+    same_form_floor_gap,
     stated_areas,
+    subject_floors,
     unit_designators,
+    upper_storeys,
+    widest_directions,
 )
 
 
@@ -149,3 +157,170 @@ def test_orientations_prefers_the_longer_compass_stem() -> None:
     """`jihovýchod` contains `východ`; reading the short stem would merge two flats."""
     assert orientations("Byt je orientován na jihovýchod.") == {"jihovychod"}
     assert orientations("Byt je orientován na severozápad.") == {"severozapad"}
+
+
+# E968: the direction written as an ADJECTIVE in front of the noun. Rezidence Medkova 16900 and
+# 113982 are one template apart by that word; U Stromečku 62766 writes its south that way.
+MEDKOVA_SW = ("Byt se nachází v 1. nadzemním podlaží, má jihozápadní orientaci a bude připraven "
+              "k nastěhování cca v 6/2027.")
+MEDKOVA_NE = ("Byt se nachází v 1. nadzemním podlaží, má severovýchodní orientaci a bude "
+              "připraven k nastěhování cca v 6/2027.")
+STROMECEK_SOUTH = ("a samostatnou ložnicí o ploše 12,1 m². Jižní orientace a velká okna zajišťují "
+                   "dostatek denního světla po celý den.")
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        (MEDKOVA_SW, {"jihozapad"}),
+        (MEDKOVA_NE, {"severovychod"}),
+        # `jizni` starts with no stem; the one normaliser reads it as `jih`.
+        (STROMECEK_SOUTH, {"jih"}),
+        # Two adjectives are a through-flat, read as two so neither wins.
+        ("Byt má jihozápadní a severovýchodní orientaci.", {"jihozapad", "severovychod"}),
+        # An adjective that qualifies another noun is not the unit's orientation.
+        ("Dům stojí na jihozápadní straně ulice, byt má orientaci do klidného dvora.", set()),
+        # A hyphenated compound is not its last element.
+        ("Byt má severo-jižní orientaci.", set()),
+        ("Byt má východo-západní orientaci.", set()),
+        # A garden's, a plot's or one room's facing is the part's.
+        ("Rodinný dům, zahrada s jižní orientací.", set()),
+        ("Pozemek s jižní orientací, mírně svažitý.", set()),
+        ("Obývací pokoj s kuchyní má západní orientaci.", set()),
+        ("Ložnice má východní orientaci do klidného dvora.", set()),
+        ("Byt s jižní orientací a balkonem.", {"jih"}),
+    ],
+)
+def test_orientations_reads_the_adjective_in_front_of_the_noun(
+    text: str, expected: set[str]
+) -> None:
+    assert orientations(text) == expected
+
+
+def test_compass_points_split_a_compound_direction() -> None:
+    assert compass_points({"jihozapad"}) == {"jih", "zapad"}
+    assert compass_points({"sever", "zapad"}) == {"sever", "zapad"}
+    assert compass_points(set()) == frozenset()
+
+
+def test_widest_directions_drop_a_stem_a_wider_one_names() -> None:
+    assert widest_directions({"jih", "jihovychod"}) == {"jihovychod"}
+    assert widest_directions({"jih", "sever"}) == {"jih", "sever"}
+    assert widest_directions({"jihovychod", "jihozapad"}) == {"jihovychod", "jihozapad"}
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        # `situován v …` places the house in the country.
+        ("Byt je situován v jihozápadní části Prahy, nedaleko metra.", set()),
+        ("Byt je situován v západní části Brna.", set()),
+        ("Byt je situován v severočeském městě Liberec.", set()),
+        ("Byt je situovaný na jih do klidné ulice.", {"jih"}),
+        # `východ na balkon` is a way out; `na východ do zahrady` is still a facing.
+        ("Byt je orientován do dvora, z obývacího pokoje je východ na balkon.", set()),
+        ("Byt je orientován na východ do zahrady.", {"vychod"}),
+        # `orientační cena` is an indicative price.
+        ("Orientační cena za pronájem, východ na terasu z obývacího pokoje.", set()),
+        ("Orientačně 15 minut od centra, směrem na západ.", set()),
+    ],
+)
+def test_orientations_reads_no_location_exit_or_indicative_price(
+    text: str, expected: set[str]
+) -> None:
+    assert orientations(text) == expected
+
+
+# --- E966: a co-living room's code ---------------------------------------------------------
+# Za Pohořelcem, one template of 10 m² rooms at 13,500 Kč: sreality 11944 and idnes 144190 let
+# room 303-2, sreality 19252047 room 301-3, sreality 12273170 rooms 403-1 and 303-1.
+ROOM_303_2 = ("Nabízíme k dlouhodobému nebo krátkodobému pronájmu zařízený pokoj č. 303-2 ve "
+              "sdíleném bytu 3+1 ve skvělé lokalitě Prahy 6 Pohořelec.")
+ROOM_301_3 = ("Nabízíme k dlouhodobému nebo střednědobému pronájmu (201-3, 301-3) zařízený pokoj "
+              "ve sdíleném bytu 3+1. Nabízený pokoj (cca 10 m2): Jednolůžková postel s matrací. "
+              "Dostupnost: Pokoj 301-3 (2. patro) Volný ihned.")
+ROOMS_403_303 = ("Neplatíte provizi. Pokoj 403-1 volný od 24.8.2026. Pokoj 303-1 volný od "
+                 "1.9.2026. Nabízíme k dlouhodobému nebo střednědobému pronájmu zařízený pokoj "
+                 "(č. 403-1) ve sdíleném bytu 3+1.")
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        (ROOM_303_2, {"303-2"}),
+        # The menu in front of the noun is not read; the room the advert names is.
+        (ROOM_301_3, {"301-3"}),
+        (ROOMS_403_303, {"403-1", "303-1"}),
+        ("pronájmu pokoj 301-2 ve sdíleném bytu 3+1, který se nachází ve 2 patře", {"301-2"}),
+    ],
+)
+def test_printed_unit_codes_reads_a_co_living_room_code(text: str, expected: set[str]) -> None:
+    assert printed_unit_codes(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # After a dwelling noun two bare numbers joined by a hyphen are a range.
+        "Hledáme byt 2-3 pokoje v Praze 6.",
+        # A room list's size is not a code, and a single room number is a room inside one flat.
+        "Dispozice: pokoj 1 - 12,5 m2, pokoj 2 - 14 m2, kuchyň 9 m2.",
+        "Pronajmu pokoj č. 2 v bytě 3+1.",
+        "Pokoj 1 - 12 metrů, pokoj 2 - 14 metrů.",
+        "Pokoj č. 1 - 2. patro, pokoj č. 2 - 3. patro.",
+        # Beds, persons, terms, hours and prices after the room noun are not its code.
+        "Ubytovna nabízí pokoje 2-3 lůžkové se sociálním zařízením.",
+        "Pokoj 1-2 osoby, kuchyň společná.",
+        "Pronájem: pokoj 2-3 osoby, kuchyňka.",
+        "pokoje 2-3 jsou průchozí",
+        "Pronájem pokoje 2-3 měsíce.",
+        "Možnost prohlídky pokoje 10-12 hod.",
+        "Cena za pokoj 8-9 000 Kč měsíčně.",
+        "Volné pokoje: Pokoj 1 - 12 000 Kč, Pokoj 2 - 11 500 Kč.",
+        "Pokoj 12 - 9 000 Kč.",
+        "Pokoj 12-3 lůžkový se sprchou.",
+    ],
+)
+def test_printed_unit_codes_reads_no_range_and_no_room_number(text: str) -> None:
+    assert printed_unit_codes(text) == frozenset()
+
+
+# --- the range reader (E967, kept by E969) and main's bare podlaží -------------------------
+
+
+def test_a_bare_podlazi_is_read_on_the_np_scale() -> None:
+    """A worded bare `podlaží` is the NP noun's storey, as it was before E967."""
+    assert printed_floors_by_form("bydlení je situováno v prvním podlaží", True)["np"] == {1}
+    assert printed_floors("byt ve třetím podlaží domu", True) == {3}
+    assert subject_floors("Byt se nachází ve třetím podlaží domu.", True) == {3}
+    assert same_form_floor_gap(printed_floors_by_form("ve třetím podlaží", True),
+                               printed_floors_by_form("v 1. NP", True)) == 2
+    assert same_form_floor_gap(printed_floors_by_form("ve třetím podlaží", True),
+                               printed_floors_by_form("ve 3. patře", True)) is None
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("Mezonetový byt 4+kk ve 2.-3. NP cihlového domu.", {2, 3}),
+        ("Mezonetový byt ve 2. a 3. NP.", {2, 3}),
+        ("Mezonet ve 2. – 3. NP.", {2, 3}),
+        ("Mezonet ve třetím a čtvrtém nadzemním podlaží.", {3, 4}),
+    ],
+)
+def test_a_maisonette_range_reads_both_storeys(text: str, expected: set[int]) -> None:
+    """The last storey alone would split the range from the advert naming the entry."""
+    assert printed_floors(text, True) == expected
+
+
+def test_upper_storeys_reads_the_number_the_upper_clause_carries() -> None:
+    """E969: on the NP scale, so `v přízemí` (1) against `v 1. patře` (2) is one storey."""
+    assert upper_storeys("Byt se nachází v 1. patře domu.") == {2}
+    assert upper_storeys("Byt se nachází v 1. poschodí domu.") == {2}
+    assert upper_storeys("Byt se nachází ve třetím patře domu.", True) == {4}
+    assert upper_storeys("Byt se nachází ve třetím patře domu.") == frozenset()
+    assert upper_storeys("Byt se nachází v patře domu.") == frozenset()
+
+
+def test_a_maisonette_range_is_placed_whole() -> None:
+    assert subject_floors("Mezonetový byt se nachází ve 2.-3. NP domu.", True) == {2, 3}

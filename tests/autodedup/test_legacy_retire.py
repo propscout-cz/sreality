@@ -24,6 +24,7 @@ from autodedup import rt_lease
 from autodedup.incremental_sql import RT_SCOPE_SCAN_SEEN_SQL
 from tests.autodedup.test_apply import GEN, FakeDb
 from tests._property_ledger import _Ledger, ledger_carriers  # noqa: F401 — the fixture
+from toolkit.property_carriers import NOTIFICATION_EVENTS_LOCK_SQL
 from toolkit.property_identity import (
     _detach_plan,
     _origin_gone,
@@ -351,6 +352,9 @@ def test_a_group_that_changed_since_selection_is_refused_over_a_fresh_read() -> 
     assert by == {newer: "retired", older: "refused:children_moved"}
     assert [c["merge_group_id"] for c in calls] == [newer]
     assert S.LOCK_PROPERTIES_SQL in db.statements
+    # The detach takes the notification-events lock, so the group takes it before its row locks.
+    first_lock = db.statements.index(S.LOCK_PROPERTIES_SQL)
+    assert db.statements[first_lock - 1] == NOTIFICATION_EVENTS_LOCK_SQL
 
 
 def test_a_group_the_operator_split_in_part_since_selection_is_left_to_them() -> None:

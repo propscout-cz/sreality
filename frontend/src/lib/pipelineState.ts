@@ -6,9 +6,9 @@
  * navigate to a listing, you come back, and the board is unsorted again).
  *
  * Param names and encodings are Browse's, not new ones: `status`, `cat`,
- * `collections` (Browse's own CSV of collection ids, parsed by its
- * `parseIntList`), `tags` / `tags_excluded` (the tag rule's two sides,
- * lib/tagScope), and the `districts` / `districts_ctx` / `districts_excl` /
+ * the curated sets' `collections` / `tags` (+ `_excluded`) through Browse's own
+ * codec (lib/setScope parseSetScope / setScopeToParams), and the
+ * `districts` / `districts_ctx` / `districts_excl` /
  * `districts_lvl` / `districts_id` CSV family that `districtChipsToCsvParams` +
  * `parseDistrictChips` already define as "the one wire format every
  * location-filterable surface uses". Same meaning, same spelling, everywhere.
@@ -21,7 +21,6 @@ import { useSearchParams } from 'react-router-dom';
 import {
   districtChipsToCsvParams,
   parseDistrictChips,
-  parseIntList,
   type DistrictChip,
   type ListingStatus,
 } from './filters';
@@ -31,7 +30,11 @@ import {
   PIPELINE_SORT_OPTIONS,
   type PipelineSort,
 } from './pipelineSort';
-import type { TagChoice } from './tagScope';
+import { parseSetScope, setScopeToParams, type SetScope } from './setScope';
+
+/* The curated sets the board filters on: the pipeline is the board itself. */
+export type BoardSet = 'collections' | 'tags';
+const BOARD_SETS: readonly BoardSet[] = ['collections', 'tags'];
 
 const DISTRICT_PARAMS = [
   'districts',
@@ -41,18 +44,20 @@ const DISTRICT_PARAMS = [
   'districts_id',
 ] as const;
 
+const SCOPE_PARAMS = BOARD_SETS.flatMap((n) => [n, `${n}_excluded`]);
+
 export interface PipelineViewState {
   status: ListingStatus;
   types: ReadonlySet<string>;
   districts: DistrictChip[];
-  collectionIds: number[];
-  tagChoice: TagChoice;
+  scopes: Record<BoardSet, SetScope | null>;
   sort: PipelineSort;
   setStatus: (next: ListingStatus) => void;
   setTypes: (next: string[]) => void;
   setDistricts: (next: DistrictChip[]) => void;
-  setCollections: (next: number[]) => void;
-  setTagChoice: (next: TagChoice) => void;
+  setScope: (name: BoardSet, next: SetScope | null) => void;
+  /* Both curated-set scopes off — their ids belong to one account's sets. */
+  clearScopes: () => void;
   setSort: (next: PipelineSort) => void;
   reset: () => void;
 }
@@ -62,9 +67,6 @@ export function usePipelineViewState(): PipelineViewState {
 
   const status = (searchParams.get('status') as ListingStatus | null) ?? 'any';
   const typesParam = searchParams.get('cat');
-  const collectionsParam = searchParams.get('collections');
-  const tagsParam = searchParams.get('tags');
-  const tagsExcludedParam = searchParams.get('tags_excluded');
   const sortParam = searchParams.get('sort');
 
   const types = useMemo(
@@ -72,11 +74,15 @@ export function usePipelineViewState(): PipelineViewState {
     [typesParam],
   );
 
-  const collectionIds = useMemo(() => parseIntList(collectionsParam), [collectionsParam]);
-
-  const tagChoice = useMemo<TagChoice>(
-    () => ({ tags: parseIntList(tagsParam), tagsExcluded: parseIntList(tagsExcludedParam) }),
-    [tagsParam, tagsExcludedParam],
+  const scopeKey = SCOPE_PARAMS.map((p) => searchParams.get(p) ?? '').join('|');
+  const scopes = useMemo(
+    () =>
+      Object.fromEntries(BOARD_SETS.map((n) => [n, parseSetScope(searchParams, n)])) as Record<
+        BoardSet,
+        SetScope | null
+      >,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scopeKey],
   );
 
   /* Rebuilt from the five district params rather than from a single joined
@@ -130,21 +136,15 @@ export function usePipelineViewState(): PipelineViewState {
     [patch],
   );
 
-  const setCollections = useCallback(
-    (next: number[]) =>
-      patch((sp) =>
-        next.length === 0 ? sp.delete('collections') : sp.set('collections', next.join(',')),
-      ),
+  const setScope = useCallback(
+    (name: BoardSet, next: SetScope | null) => patch((sp) => setScopeToParams(sp, name, next)),
     [patch],
   );
 
-  const setTagChoice = useCallback(
-    (next: TagChoice) =>
+  const clearScopes = useCallback(
+    () =>
       patch((sp) => {
-        if (next.tags.length === 0) sp.delete('tags');
-        else sp.set('tags', next.tags.join(','));
-        if (next.tagsExcluded.length === 0) sp.delete('tags_excluded');
-        else sp.set('tags_excluded', next.tagsExcluded.join(','));
+        for (const name of BOARD_SETS) setScopeToParams(sp, name, null);
       }),
     [patch],
   );
@@ -188,9 +188,8 @@ export function usePipelineViewState(): PipelineViewState {
   const reset = useCallback(
     () =>
       patch((sp) => {
-        for (const p of ['status', 'cat', 'collections', 'tags', 'tags_excluded', ...DISTRICT_PARAMS]) {
-          sp.delete(p);
-        }
+        for (const p of ['status', 'cat', ...DISTRICT_PARAMS]) sp.delete(p);
+        for (const name of BOARD_SETS) setScopeToParams(sp, name, null);
       }),
     [patch],
   );
@@ -199,14 +198,13 @@ export function usePipelineViewState(): PipelineViewState {
     status,
     types,
     districts,
-    collectionIds,
-    tagChoice,
+    scopes,
     sort,
     setStatus,
     setTypes,
     setDistricts,
-    setCollections,
-    setTagChoice,
+    setScope,
+    clearScopes,
     setSort,
     reset,
   };

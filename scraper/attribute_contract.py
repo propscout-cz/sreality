@@ -33,7 +33,7 @@ Each cell carries six axes:
 
 A cell with nothing behind it carries `gap=` naming the census key W4 will wire, or
 `gap=None` where the portal genuinely never states the fact. That marker is the ONE place
-"this zero is known" is declared — `scripts/verify_pipeline.py`'s fill matrix reads it
+"this zero is known" is declared — the parsing alarm's fill arm (`scripts/checks/quality.py`) reads it
 rather than carrying a second flag of its own.
 
 W7 adds a fifth axis: `gate`. A `text` cell with NO gate is the ingest grammar's alone
@@ -604,6 +604,7 @@ IGNORED: dict[str, dict[str, str]] = {
         "plocha zastavěná": "no column (a built-up area, not a headline measure)",
     },
     "idnes": {
+        "celková plocha": "total area beside the usable area the parser reads: a second area field needs a ruling (filed, Health dashboard sprint wave 6)",
         "číslo zakázky": "the portal's own reference number",
         "spočítej stěhování": "a CTA, always json null",
         "spočítej vyklizení": "a CTA, always json null",
@@ -787,7 +788,7 @@ def inert_cells() -> frozenset[str]:
 
 def known_gaps() -> dict[str, str | None]:
     """`"{portal}/{field}" -> the census key W4 will wire` for every cell with nothing
-    behind it. The one declaration `verify_pipeline` reads to say which of the live
+    behind it. The one declaration the parsing alarm reads to say which of the live
     zero-fill cells are known."""
     return {
         f"{portal}/{field}": declared.gap

@@ -1,4 +1,4 @@
-/* PipelineFunnelButton — the funnel on Browse cards and Table rows.
+/* PipelineFunnelButton — the funnel on Browse cards.
  *
  * The regression this file exists for: clicking the funnel of a property that
  * is ALREADY in the pipeline used to remove it outright — one unconfirmed,

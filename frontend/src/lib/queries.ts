@@ -9,21 +9,19 @@ import {
 import { fetchBrokerPropertyIds } from './brokers';
 import type { LlmCostDailyRow, LlmCostHourlyRow } from './llmCosts';
 import {
-  type CenterRadius,
   type ListingFilters,
   type ListingStatus,
-  type MapBounds,
-  type PipelineScope,
   buildingMaterialToValues,
+  effectiveBbox,
   isoNDaysAgo,
   priceChangeCountColumn,
   UNKNOWN_FILTER_VALUE,
+  CONDITION_CANONICAL,
   FURNISHED_CANONICAL,
   OWNERSHIP_CANONICAL,
 } from './filters';
 import { applyAgendaFilters, applyRegistryFilters } from './registryQueryBuilder';
-import { propertyIdsInCollections } from './collectionScope';
-import { propertyIdsForTags, tagChoiceActive } from './tagScope';
+import { scopeArgs } from './setScope';
 import {
   applyKeyset,
   nextCursorFrom,
@@ -33,83 +31,38 @@ import {
 } from './keyset';
 import { fetchGrowth } from './priceStats';
 import type {
-  CategoryTrend,
-  DerivedArtifactRow,
-  HealthSummary,
-  ImageFailureRow,
   ImagePublic,
-  ImageStorageOverview,
   ListingFreshnessCheckPublic,
   ListingPublic,
   ListingSnapshotPublic,
-  PortalHealth,
   PropertySource,
-  Ppm2Box,
   ReferenceRent,
-  ScrapeRun,
-  ScraperHealthChecks,
   SoldComparable,
   SoldCoverage,
 } from './types';
 import type { BorderCase } from './api';
 
-/* Circle → bounding box approximation. Used when the operator picks
- * the centre+radius mode on the map: PostgREST has no native
- * ST_DWithin filter, so we send the bounding box of the radius
- * circle as the spatial predicate. The bbox is slightly oversized
- * versus the true circle (a square circumscribes a circle), which
- * means a few extra listings near the corners can slip into the
- * cohort — acceptable for the headline use case; true distance
- * filtering belongs in a follow-up RPC if it ever matters. */
-const EARTH_RADIUS_M = 6_371_000;
-
-const centerRadiusBbox = (cr: CenterRadius): MapBounds => {
-  const dLat = (cr.radius_m / EARTH_RADIUS_M) * (180 / Math.PI);
-  const dLng =
-    (cr.radius_m / (EARTH_RADIUS_M * Math.cos((cr.lat * Math.PI) / 180))) *
-    (180 / Math.PI);
-  return {
-    south: cr.lat - dLat,
-    north: cr.lat + dLat,
-    west: cr.lng - dLng,
-    east: cr.lng + dLng,
-  };
-};
-
-/** Returns the bbox the cohort filter should apply for a given
- *  filters object. Honours `locationMode`: viewport → use bounds
- *  (or null); center_radius → derive bbox from centerRadius (or null
- *  if no centre is set). The caller doesn't have to branch. */
-export const effectiveBbox = (f: ListingFilters): MapBounds | null => {
-  if (f.locationMode === 'center_radius') {
-    return f.centerRadius ? centerRadiusBbox(f.centerRadius) : null;
-  }
-  return f.bounds;
-};
-
-export const TABLE_PAGE_SIZE = 50;
 export const CARD_PAGE_SIZE = 24;
 
 /* Every Browse row carries `listing_id` (the surrogate = the repr child's
- * listings.id, migration 343 on browse_list / properties_map_mv) — the stable,
+ * listings.id, migration 343 on browse_list) — the stable,
  * NEVER-NULL identity used for React keys, the maplibre feature-state id, and
- * the hover-sync set. The detail link is CANONICAL-first: `source` +
+ * the hover-sync set. The card detail link is CANONICAL-first: `source` +
  * `source_id_native` (migration 362 exposed the latter on the Browse read path)
  * build `/listing/{source}/{native}`, so the URL bar never flashes the negative
  * synthetic id. `sreality_id` stays selected for the legacy fallback (and as a
  * sort field) but is NULLABLE post-Gate-2, so it must never be a key/feature id.
- * The map has no keyset tiebreaker column, so it carries `property_id` explicitly
- * (Table/Cards get it from withKeysetColumns) for the final null-safe
- * `?property=` detail-link fallback. */
+ * The map carries neither: its popup links by `property_id` (propertyPath, with
+ * listing_id as the advert), so MAP_COLS selects `property_id` explicitly
+ * (the cards get it from withKeysetColumns). */
 /* `price_per_m2` is the SERVER measure (migration 425) and `price_per_m2_basis`
- * is the SERVER label for it — both published on properties_map_mv, so the pin
+ * is the SERVER label for it — both published on browse_list, so the pin
  * reads the basis rather than re-deriving it.
  * Reading it PER FEATURE is not a convenience: Browse never forces a sale/rent
  * choice (rule 22 — `deal=any` is a first-class cohort), so one map can hold a
  * sale pin and a rent pin at once, and a map-wide unit would be wrong on one of
  * them by ~300x. `category_main` stays for what the basis does not say: whether
- * this row's area_m2 is floor area or PLOT area (the popup says so), and
- * `category_type` for the monthly period on the total-price label. */
+ * this row's area_m2 is floor area or PLOT area (the popup says so). */
 /* Every column here is serialised into a GeoJSON feature property for EVERY pin, so
  * an unread column is pure wire cost. `subtype` (0 of 50,000 non-NULL in the default
  * cohort) and `tom_days` (fully populated, read nowhere) were both dropped in W6a --
@@ -123,102 +76,62 @@ export const CARD_PAGE_SIZE = 24;
  * ring, the clicked one with a circle of `uncertainty_radius_m` metres around it,
  * and `granularity_rank` is the INT form of the rung (migration 380), because
  * granularity is compared by rank and never by enum text. */
-const MAP_COLS = 'listing_id,property_id,sreality_id,source,source_id_native,lat,lng,price_czk,price_per_m2,price_per_m2_basis,category_main,category_type,disposition,area_m2,display_label,uncertainty_radius_m,granularity_rank,last_seen_at,is_active';
-const TABLE_COLS =
+const MAP_COLS = 'listing_id,property_id,lat,lng,price_czk,price_per_m2,price_per_m2_basis,category_main,disposition,area_m2,display_label,uncertainty_radius_m,granularity_rank,last_seen_at,is_active';
+const CARD_COLS =
   'listing_id,property_id,sreality_id,source,source_id_native,display_label,disposition,subtype,area_m2,price_czk,first_seen_at,last_seen_at,is_active,tom_days,' +
-  /* The Kč/m² cell reads the SERVER measure (migration 425), not price/area:
+  /* The point of the property (its location ad) — the hovered card hands it to the map. */
+  'lat,lng,' +
+  /* The Kč/m² figure reads the SERVER measure (migration 425), not price/area:
    * the column is what the sort and the Kč/m² filter already use, so selecting
    * it is what keeps the number on screen identical to the number the cohort
    * was built from. withKeysetColumns dedupes, so naming it here is safe even
    * when it is also the active sort field. */
   'price_per_m2,' +
   /* The published BASIS label of that measure, plus the two columns that feed
-   * it. Without the label the Kč/m² cell has a number and no unit. Without
-   * category_type the Price cell cannot tell a monthly rent from a purchase
-   * price. browse_list carries all three (migration 425 asserts the basis
-   * column is present before it commits).
+   * it. Without the label the Kč/m² figure has a number and no unit. Without
+   * category_type the price cannot tell a monthly rent from a purchase price.
+   * category_main also names the denominator (plot vs floor area) for surfaces
+   * with room to say so. browse_list carries all three (migration 425 asserts
+   * the basis column is present before it commits).
    * NOTE for future editors: tests/test_browse_read_path_guardrail.py parses
    * this constant by naive single-quote pairing AND stops at the first
    * semicolon, so an apostrophe or a semicolon anywhere in these comments
    * truncates the select-list into nonsense. Keep both out. */
   'price_per_m2_basis,category_main,category_type,' +
-  'estate_area,usable_area,parking_lots,furnished,ownership,category_sub_cb,building_type,total_price_change_pct,price_change_count';
-const CARD_COLS =
-  'listing_id,property_id,sreality_id,source,source_id_native,display_label,disposition,subtype,area_m2,price_czk,first_seen_at,last_seen_at,is_active,tom_days,' +
-  /* Same server measure the table cell reads (migration 425) — see TABLE_COLS. */
-  'price_per_m2,' +
-  /* The published BASIS label — see TABLE_COLS. category_main also names the
-   * denominator (plot vs floor area) for surfaces with room to say so. */
-  'price_per_m2_basis,category_main,category_type,' +
   /* The two price-history columns back <PriceDelta>. Both were already on
    * browse_list (migrations 276/343/363) and simply never selected — they
    * existed only as filter inputs, never as anything displayed. */
   'mf_gross_yield_pct,total_price_change_pct,price_change_count,' +
+  /* The lot the card names after the floor area and the Lot area sort orders by:
+   * THE plot measure (migration 534) and never the bare estate_area column. */
+  'plot_area_m2,' +
   /* The portal badge (MS19, migration 590): the portals with an active ad, else every portal. */
   'all_sources,active_sources,' +
   /* The ad-count badge (migration 590): how many ads the property holds, active or not. */
   'source_count';
 
-/* The three Browse select-lists, grouped for one purpose: a test can assert
+/* The two Browse select-lists, grouped for one purpose: a test can assert
  * that the measure's published LABEL travels with the measure on every lane.
  * `price_per_m2` without `price_per_m2_basis` is a number nothing can label,
  * and the failure mode is silent — a rent renders under a sale unit. */
 export const BROWSE_SELECT_COLUMNS = {
   map: MAP_COLS,
-  table: TABLE_COLS,
   cards: CARD_COLS,
 } as const;
 
-export type SortField =
-  | 'sreality_id' | 'display_label' | 'disposition'
-  | 'area_m2' | 'price_czk' | 'price_per_m2'
-  | 'first_seen_at' | 'last_seen_at' | 'is_active'
-  | 'estate_area' | 'usable_area' | 'parking_lots'
-  | 'mf_gross_yield_pct'
-  /* One portal's "Newest first" (MS19), never user-selectable and never in a URL —
-   * derived by effectiveSort() below. */
-  | `newest_ad_at_${string}`;
-
-export type SortDirection = 'asc' | 'desc';
-
-export interface SortSpec {
-  field: SortField;
-  direction: SortDirection;
-}
-
-/* first_seen_at DESC = "newest listings first" (operator decision 2026-07-07,
- * with the browse_list read model): meaningful (genuinely new listings, not
- * "whichever portal the scraper touched last" — touch_listings bumps
- * last_seen_at market-wide every cycle) and IMMUTABLE, so keyset cursors stay
- * valid across snapshot rebuilds. last_seen_at remains a selectable option. */
-export const DEFAULT_SORT: SortSpec = { field: 'first_seen_at', direction: 'desc' };
-
-/* sreality_id stays in SortField (it's still a selected/displayed column) but
- * is intentionally absent here: it mixes real positive ids with synthetic
- * negative ones, so sorting by it is meaningless. Saved presets / URLs that
- * still carry sort=sreality_id fall back to DEFAULT_SORT via parseSort. */
-const SORTABLE_FIELDS: ReadonlyArray<SortField> = [
-  /* W3: the Location column sorts on what it SHOWS. It used to sort on
-   * `district` (the okres text) while printing placePrimary()'s town-or-locality
-   * -- two different strings, so the order looked arbitrary. An old
-   * `?sort=district` URL falls back to DEFAULT_SORT through parseSort. */
-  'display_label', 'disposition',
-  'area_m2', 'price_czk', 'price_per_m2',
-  'first_seen_at', 'last_seen_at', 'is_active',
-  'estate_area', 'usable_area', 'parking_lots',
-  'mf_gross_yield_pct',
-];
-
-export const parseSort = (raw: string | null): SortSpec => {
-  if (!raw) return DEFAULT_SORT;
-  const direction: SortDirection = raw.startsWith('-') ? 'desc' : 'asc';
-  const field = (raw.startsWith('-') ? raw.slice(1) : raw) as SortField;
-  if (!(SORTABLE_FIELDS as ReadonlyArray<string>).includes(field)) return DEFAULT_SORT;
-  return { field, direction };
-};
-
-export const sortToParam = (s: SortSpec): string =>
-  `${s.direction === 'desc' ? '-' : ''}${s.field}`;
+/* Browse's sort (the field union, the URL token, the one menu) lives in a leaf
+ * module so filters.ts can read a stored sort without importing this file; it
+ * is re-exported here so every existing import site keeps working. */
+import type { SortSpec } from './browseSort';
+export {
+  CARD_SORTS,
+  DEFAULT_SORT,
+  parseSort,
+  sortToParam,
+  type SortDirection,
+  type SortField,
+  type SortSpec,
+} from './browseSort';
 
 /* -------------------------------------------------------------------------- */
 /* THE PORTAL RULE (MS19, migration 590; two-sided since 597): portal and     */
@@ -280,15 +193,13 @@ const solePortal = (f: ListingFilters): string | null =>
 /* Relation names, in one place so a fetcher cannot read one relation and count
  * another. */
 const BROWSE_LIST_RELATION = 'browse_list';
-const MAP_RELATION = 'properties_map_mv';
 
-/* Each relation's dismissal-aware twin (migration 537): the same rows minus the
- * caller's dismissed properties, excluded server-side under the caller's RLS —
- * a dismissed set grows without bound, so it can never ride in the GET URL. */
-const HIDING_DISMISSED: Record<string, string> = {
-  [BROWSE_LIST_RELATION]: 'browse_list_visible',
-  [MAP_RELATION]: 'properties_map_visible',
-};
+/* The one Browse source function (migrations 537 + 629 + 630: list, counts and
+ * map pins alike): the same rows, minus
+ * the caller's dismissed properties unless revealed, narrowed by the curated-set
+ * scope — membership judged server-side under the caller's RLS, because an
+ * operator's own sets only grow and can never ride in the GET URL. */
+const BROWSE_LIST_SOURCE = 'browse_list_visible';
 
 interface CountOption {
   count?: 'exact';
@@ -299,24 +210,20 @@ const selectFrom = (relation: string, columns: string, opts?: CountOption) =>
   supabase.from(relation).select(columns, opts);
 
 /* THE start of every Browse cohort read, so the list, its count, the map pins
- * and the no-price hint cannot disagree about which properties are hidden. */
+ * and the no-price hint cannot disagree about which properties are hidden. Only
+ * the active scope sides are sent (lib/setScope.scopeArgs). */
 const readSource = (
-  relation: string,
+  fn: string,
   f: ListingFilters,
   columns: string,
   opts: CountOption = {},
 ): ReturnType<typeof selectFrom> =>
-  f.showDismissed
-    ? selectFrom(relation, columns, opts)
-    : (supabase
-        .rpc(HIDING_DISMISSED[relation], {}, { get: true, ...opts })
-        .select(columns) as unknown as ReturnType<typeof selectFrom>);
+  supabase
+    .rpc(fn, { hide_dismissed: !f.showDismissed, ...scopeArgs(f) }, { get: true, ...opts })
+    .select(columns) as unknown as ReturnType<typeof selectFrom>;
 
 const listSource = (f: ListingFilters, columns: string, opts?: CountOption) =>
-  readSource(BROWSE_LIST_RELATION, f, columns, opts);
-
-const mapSource = (f: ListingFilters, columns: string) =>
-  readSource(MAP_RELATION, f, columns);
+  readSource(BROWSE_LIST_SOURCE, f, columns, opts);
 
 /* One portal's "Newest first" (MS19, Q49 b): with exactly one portal P selected,
  * "Newest first" and "Oldest first" order properties by when their newest ad on
@@ -395,6 +302,8 @@ const applyFilters = <T>(q: T, f: ListingFilters): T => {
   if (f.lastSeenMinDays != null) r = r.lte('last_seen_at', isoNDaysAgo(f.lastSeenMinDays));
   if (f.firstSeenMaxDays != null) r = r.gte('first_seen_at', isoNDaysAgo(f.firstSeenMaxDays));
   if (f.firstSeenMinDays != null) r = r.lte('first_seen_at', isoNDaysAgo(f.firstSeenMinDays));
+  /* On/off: only ads whose TOM is observed from the start (migration 625). */
+  if (f.tomObservedOnly) r = r.eq('tom_observed', true);
   /* Status-section recency presets. "added" = first seen within N days;
    * "changed" = newest content snapshot (last_change_at) within N days. */
   if (f.recentlyAddedDays != null) r = r.gte('first_seen_at', isoNDaysAgo(f.recentlyAddedDays));
@@ -407,25 +316,22 @@ const applyFilters = <T>(q: T, f: ListingFilters): T => {
   /* Multi-select enums with the '__unknown__' sentinel. The sentinel matches a
    * NULL or non-canonical value, which the plain `.in()` auto-dispatch can't
    * express — so they're hand-coded here as an `.or(in.(…),is.null,not.in.(…))`
-   * clause. Mirrors browse_stats_properties + the watchdog matcher (the
-   * shared toolkit.filter_compiler._enum_or_unknown_clause). */
-  const enumOrUnknown = (
-    col: string, values: string[], canonical: readonly string[],
-  ): string | null => {
-    if (!values.length) return null;
-    const reals = values.filter((v) => v !== UNKNOWN_FILTER_VALUE);
-    const parts: string[] = [];
-    if (reals.length) parts.push(`${col}.in.(${reals.join(',')})`);
-    if (values.includes(UNKNOWN_FILTER_VALUE)) {
-      parts.push(`${col}.is.null`);
-      parts.push(`${col}.not.in.(${canonical.join(',')})`);
+   * clause. A selection without it keeps the auto path's shape (one value is
+   * `.eq()`: the planner rule in registryQueryBuilder.ts). Mirrors
+   * browse_stats_properties + the watchdog matcher (the shared
+   * toolkit.filter_compiler._enum_or_unknown_clause). */
+  const enumOrUnknown = (col: string, values: string[], canonical: readonly string[]) => {
+    if (!values.includes(UNKNOWN_FILTER_VALUE)) {
+      if (values.length) r = values.length === 1 ? r.eq(col, values[0]) : r.in(col, values);
+      return;
     }
-    return parts.length ? parts.join(',') : null;
+    const reals = values.filter((v) => v !== UNKNOWN_FILTER_VALUE);
+    const known = reals.length ? [`${col}.in.(${reals.join(',')})`] : [];
+    r = r.or([...known, `${col}.is.null`, `${col}.not.in.(${canonical.join(',')})`].join(','));
   };
-  const furnishedOr = enumOrUnknown('furnished', f.furnished, FURNISHED_CANONICAL);
-  if (furnishedOr) r = r.or(furnishedOr);
-  const ownershipOr = enumOrUnknown('ownership', f.ownership, OWNERSHIP_CANONICAL);
-  if (ownershipOr) r = r.or(ownershipOr);
+  enumOrUnknown('furnished', f.furnished, FURNISHED_CANONICAL);
+  enumOrUnknown('ownership', f.ownership, OWNERSHIP_CANONICAL);
+  enumOrUnknown('condition', f.conditionMatch, CONDITION_CANONICAL);
   /* Absolute price bound (price_czk). Hand-coded — not the registry auto
    * `.gte`/`.lte` — so `includeNoPrice` can widen it to keep no-price listings:
    * a plain `.gte` already drops NULLs and a later `.or` can't add them back, so
@@ -463,25 +369,19 @@ const applyFilters = <T>(q: T, f: ListingFilters): T => {
 };
 
 export interface MapRow {
-  /* Surrogate identity (never null) — the maplibre feature-state id + hover-sync
-   * key. `sreality_id` is nullable post-Gate-2 and is only for the detail link. */
+  /* Surrogate identity (never null) — the maplibre feature-state id + hover-sync key. */
   listing_id: number;
   property_id: number;
-  sreality_id: number | null;
-  source: string | null;
-  source_id_native: string | null;
   lat: number;
   lng: number;
   price_czk: number | null;
   /* The SERVER measure and the SERVER label for it. The map label switches
    * between price_czk and price_per_m2 (the "Ceny" control), and the unit is
    * decided PER PIN from `price_per_m2_basis` — see MAP_COLS. `category_main`
-   * names the denominator (plot vs floor area) in the popup; `category_type`
-   * carries the monthly period onto the absolute price. */
+   * names the denominator (plot vs floor area) in the popup. */
   price_per_m2: number | null;
   price_per_m2_basis: string | null;
   category_main: string | null;
-  category_type: string | null;
   disposition: string | null;
   area_m2: number | null;
   /* The one server-composed place string (migration 503) -- what the popup
@@ -489,7 +389,7 @@ export interface MapRow {
   display_label: string | null;
   /* The two the pin-precision rules read (lib/uncertaintyCircle). `granularity_rank`
    * is the INT rung from location_granularity_rank (migration 380): compare it,
-   * never the enum text. A pin below BUILDING is drawn as an open ring, and the pin
+   * never the enum text. A pin at BUILDING or better gets a black outer contour, and the pin
    * whose popup is open gets a circle of `uncertainty_radius_m` metres -- see
    * ListingMap. Both are NULL for an unresolved row, which draws no circle rather
    * than a circle of unknown size. */
@@ -529,37 +429,6 @@ export interface MapResult {
    * count mode this is the server's exact count of the whole cohort, not of
    * what was shipped. */
   total: number | null;
-}
-
-/* The two curated-set prefilters share ONE shape: read the membership rows
- * whole (complete-or-throw, via fetchAllRows — the SAME member map every tag
- * chip and collection glyph renders from) and reduce them to property-id
- * lists. They differ only in the predicate — tags AND (plus a "none of" side),
- * collections OR.
- *
- * Returns null when the filter is off, [] when it matched nothing (the caller
- * short-circuits to zero results), else the ids. Hoistable functions so the
- * Map/Table fetchers below can call them without forward-ref issues. */
-async function resolveTagPrefilter(
-  f: ListingFilters,
-  signal?: AbortSignal,
-): Promise<{ allow: number[] | null; deny: number[] | null }> {
-  if (!tagChoiceActive(f)) return { allow: null, deny: null };
-  return propertyIdsForTags(await fetchPropertyTagMemberSet({ signal }), f);
-}
-
-/* Collection scope (rule #18). Reads through the SAME member map every
- * collection glyph renders from, so "which collections is this property in"
- * has one answer on screen and in the cohort. OR across the selection. */
-async function resolveCollectionPrefilter(
-  f: ListingFilters,
-  signal?: AbortSignal,
-): Promise<number[] | null> {
-  if (f.collections.length === 0) return null;
-  return propertyIdsInCollections(
-    await fetchPropertyCollectionMemberSet({ signal }),
-    f.collections,
-  );
 }
 
 /* min/max city population and the near_* proximity filters are NOT here:
@@ -642,8 +511,8 @@ async function resolvePriceGrowthPrefilter(
 /* With-estimates prefilter (migration 173). property_estimates_public is the
  * anon-readable property-grain projection of successful estimation runs —
  * tiny (one row per estimated property), so fetching the full id list and
- * AND'ing it via `.in('property_id', ids)` is the same composition pattern
- * as the tags prefilter. Returns null when the filter is off. */
+ * AND'ing it via `.in('property_id', ids)` is cheap. Returns null when the
+ * filter is off. */
 async function resolveEstimatesPrefilter(
   f: ListingFilters,
   signal?: AbortSignal,
@@ -661,36 +530,6 @@ async function resolveEstimatesPrefilter(
   return rows.map((r) => r.property_id);
 }
 
-/* Deal-pipeline scope prefilter (rule #22, migration 205). Same composition
- * pattern as tags / with-estimates: resolve the property-id allowlist, AND it
- * onto the cohort via `.in('property_id', …)`. Reads through the SAME
- * `fetchPipelineMembers` every funnel uses, so "what is in my pipeline" has one
- * definition — a second query here could disagree with the badges on screen.
- *
- * An empty `stage_ids` means "any stage"; a non-empty one narrows to those
- * stages (ids are account-scoped, and the map only ever holds this account's
- * cards, so a foreign id simply matches nothing). Returns null when off. */
-export const pipelineIdsForScope = (
-  members: PipelineMembers,
-  scope: PipelineScope | null,
-): number[] | null => {
-  if (scope == null) return null;
-  const wanted = new Set(scope.stage_ids);
-  const ids: number[] = [];
-  for (const m of members.values()) {
-    if (wanted.size === 0 || wanted.has(m.stage_id)) ids.push(m.property_id);
-  }
-  return ids;
-};
-
-async function resolvePipelinePrefilter(
-  f: ListingFilters,
-  signal?: AbortSignal,
-): Promise<number[] | null> {
-  if (f.pipeline == null) return null;
-  return pipelineIdsForScope(await fetchPipelineMembers({ signal }), f.pipeline);
-}
-
 /* Broker scope prefilter ("Explore this broker's listings"). Broker data is
  * architecturally dark to the anon path this whole file otherwise reads —
  * migration 299 revoked every broker relation from anon AND authenticated —
@@ -706,7 +545,7 @@ async function resolveBrokerPrefilter(f: ListingFilters): Promise<number[] | nul
 }
 
 /* Intersect two prefilter id sets (null = "no constraint"). Used so a
- * filter that combines tags + city-quality applies both prefilters
+ * filter that combines with-estimates + a broker applies both prefilters
  * before paging the main query. */
 const intersectPrefilters = (
   a: number[] | null,
@@ -721,60 +560,43 @@ const intersectPrefilters = (
 /* All Browse prefilters resolved together. Each is an id allowlist at its
  * own grain (null = inactive); `empty` is true when any ACTIVE prefilter
  * matched nothing, so the caller can short-circuit to zero results without
- * issuing the main query. Shared by the Map / Table / Cards fetchers. */
+ * issuing the main query. Shared by the Map / Cards fetchers and the
+ * Stats pivot (lib/stats.ts). */
 export interface BrowsePrefilters {
   obecIds: number[] | null;       // market growth (price-stats datasets)
-  propertyIds: number[] | null;   // tags ∩ with-estimates ∩ pipeline ∩ collections ∩ broker
-  /* The one DENYLIST: properties carrying an excluded tag (migration 598's
-   * `property_ids_excluded`). A denylist cannot ride in an allowlist — "not
-   * tagged X" is the market minus a few — so it is its own id space, and a
-   * future "not in collection" joins it here rather than growing a parameter. */
-  propertyIdsExcluded: number[] | null;
+  propertyIds: number[] | null;   // with-estimates ∩ broker
   empty: boolean;
 }
 
-async function resolveBrowsePrefilters(
+export async function resolveBrowsePrefilters(
   f: ListingFilters,
   signal?: AbortSignal,
 ): Promise<BrowsePrefilters> {
-  const [
-    tagProps, cityObec, growthObec, estimateProps, pipelineProps, collectionProps, brokerProps,
-  ] = await Promise.all([
-    resolveTagPrefilter(f, signal),
+  const [cityObec, growthObec, estimateProps, brokerProps] = await Promise.all([
     resolveCityQualityObecPrefilter(f, signal),
     resolvePriceGrowthPrefilter(f, signal),
     resolveEstimatesPrefilter(f, signal),
-    resolvePipelinePrefilter(f, signal),
-    resolveCollectionPrefilter(f, signal),
     resolveBrokerPrefilter(f),
   ]);
   // The property-grain allowlists intersect into the one .in('property_id', …)
   // applyPrefilters emits.
-  const propertyIds = [estimateProps, pipelineProps, collectionProps, brokerProps].reduce(
-    intersectPrefilters,
-    tagProps.allow,
-  );
+  const propertyIds = intersectPrefilters(estimateProps, brokerProps);
   // City-quality and market-growth are BOTH obec-grain now, and applyPrefilters applies
   // .in('obec_id', …) once — so they must be intersected here, not applied twice.
   const obecIds = intersectPrefilters(cityObec, growthObec);
   const empty =
     (obecIds != null && obecIds.length === 0)
     || (propertyIds != null && propertyIds.length === 0);
-  return { obecIds, propertyIds, propertyIdsExcluded: tagProps.deny, empty };
+  return { obecIds, propertyIds, empty };
 }
 
 /* Exported for queries.test.ts. */
 export const applyPrefilters = <T>(q: T, p: BrowsePrefilters): T => {
   let r = q as unknown as {
     in: (c: string, v: readonly unknown[]) => typeof r;
-    not: (c: string, op: 'in', v: string) => typeof r;
   };
   if (p.obecIds != null) r = r.in('obec_id', p.obecIds);
   if (p.propertyIds != null) r = r.in('property_id', p.propertyIds);
-  /* An empty denylist drops nothing, so it emits nothing. */
-  if (p.propertyIdsExcluded?.length) {
-    r = r.not('property_id', 'in', `(${p.propertyIdsExcluded.join(',')})`);
-  }
   return r as unknown as T;
 };
 
@@ -783,7 +605,7 @@ export const applyPrefilters = <T>(q: T, p: BrowsePrefilters): T => {
  * bound is hiding (or, with the toggle on, including). Powers the discoverable
  * "N listings have no listed price" hint next to the Price section's toggle.
  * Reuses the exact cohort filter path (resolveBrowsePrefilters + applyFilters)
- * so it can never drift from the Map/Table semantics. A `head:true` count, same
+ * so it can never drift from the Map/Cards semantics. A `head:true` count, same
  * risk class as the result-badge count Browse already issues. Callers gate on a
  * price bound being set; on error the UI just omits the number (graceful). */
 export const fetchNoPriceCount = async (
@@ -813,23 +635,14 @@ interface MapGrid {
 }
 
 /* The per-point read, run only once the server has said the cohort fits the pin
- * limit, so it needs no limit of its own.
- *
- * It reads `properties_map_mv` (migration 254), NOT `properties_public`. Shipping
- * the points off the live, churned `properties` table was cold-fragile
- * (>3s, the anon statement_timeout) — the matview is a clean, all-visible, cached
- * copy of the same columns, so the identical scan stays robust cold (~200ms). It
- * carries properties_public's full FILTERABLE surface, so applyFilters /
- * applyPrefilters are a drop-in (only the source differs). Rebuilt from
- * browse_projection by rebuild_properties_map_mv() (pg_cron, 7,37 past the hour —
- * migration 277); freshness readable off derived_artifacts_public, one row per
- * artifact (migration 440). */
+ * limit, so it needs no limit of its own: the list's source and filter chain,
+ * narrowed to rows with a point. */
 const fetchMapPoints = async (
   f: ListingFilters,
   pre: BrowsePrefilters,
   signal?: AbortSignal,
 ): Promise<MapRow[]> => {
-  const base = mapSource(f, MAP_COLS)
+  const base = listSource(f, MAP_COLS)
     .not('lat', 'is', null)
     .not('lng', 'is', null);
   const scoped = applyPrefilters(applyFilters(base, f), pre);
@@ -856,11 +669,7 @@ export const fetchListingsForMap = async (
    * emitted id space. */
   const { data: grid } = await pgRead<MapGrid>(
     supabase.rpc('browse_map_cells', {
-      ...buildBrowseStatsArgs(f, {
-        obec_ids_filter: pre.obecIds,
-        property_ids_filter: pre.propertyIds,
-        property_ids_excluded: pre.propertyIdsExcluded,
-      }),
+      ...buildBrowseStatsArgs(f, pre),
       point_budget: pinLimit,
     }),
     { signal },
@@ -893,89 +702,10 @@ export const fetchListingsForMap = async (
   };
 };
 
-export interface TableRow {
-  /* Property-grain tiebreaker for keyset paging + row de-dup. */
-  property_id: number;
-  /* Surrogate identity (never null) — the React key + hover-sync key. */
-  listing_id: number;
-  sreality_id: number | null;
-  source: string | null;
-  source_id_native: string | null;
-  /* The one server-composed place string (migration 503). The five columns it
-   * replaced (district / locality / obec / okres / street) are no longer
-   * selected on this lane -- there is nothing left to assemble. */
-  display_label: string | null;
-  disposition: string | null;
-  subtype: string | null;
-  area_m2: number | null;
-  price_czk: number | null;
-  /* The per-m² MEASURE (migration 425), not price/area: basis-resolved from
-   * (category_main, category_type) and NULL below its basis floor. The same
-   * column the Kč/m² sort and filter read, so the cell can never contradict
-   * the cohort. */
-  price_per_m2: number | null;
-  /* The measure's published basis label + the two columns behind it — see
-   * TABLE_COLS. The cell renders the label; the /měs marker on the absolute
-   * price reads category_type. */
-  price_per_m2_basis: string | null;
-  category_main: string | null;
-  category_type: string | null;
-  first_seen_at: string;
-  last_seen_at: string;
-  is_active: boolean;
-  tom_days: number | null;
-  estate_area: number | null;
-  usable_area: number | null;
-  parking_lots: number | null;
-  furnished: string | null;
-  ownership: string | null;
-  category_sub_cb: number | null;
-  building_type: string | null;
-  /* Same price-movement pair the cards read — the table's Price column shows
-   * the delta beside the figure so the two lanes agree. */
-  total_price_change_pct: number | null;
-  price_change_count: number | null;
-}
-
-/* A page of the keyset-paginated infinite list (see lib/keyset.ts).
- * `nextCursor` anchors the page that follows; the cohort total is fetched
- * separately, once, by fetchBrowseCount (it doesn't change per page). */
-export interface TableResult {
-  rows: TableRow[];
-  nextCursor: KeysetCursor | null;
-}
-
-export const fetchListingsForTable = async (
-  f: ListingFilters,
-  sort: SortSpec,
-  cursor: KeysetCursor | null,
-  { signal }: PgReadOptions = {},
-): Promise<TableResult> => {
-  const pre = await resolveBrowsePrefilters(f, signal);
-  if (pre.empty) return { rows: [], nextCursor: null };
-  /* browse_list (migration 276): the compact snapshot read model — a STABLE
-   * relation under the scroll (the live table mutates last_seen_at every
-   * scrape cycle), rebuilt every 15 min from browse_projection. */
-  const s = effectiveSort(f, sort);
-  const base = listSource(f, withKeysetColumns(TABLE_COLS, s));
-  const scoped = applyPrefilters(applyFilters(base, f), pre);
-  const keyed = applyKeyset(
-    scoped as unknown as KeysetBuilder,
-    s,
-    cursor,
-  ) as unknown as typeof scoped;
-  const { data } = await pgRead<TableRow[] | null>(keyed.limit(TABLE_PAGE_SIZE), { signal });
-  const rows = data ?? [];
-  return {
-    rows,
-    nextCursor: nextCursorFrom(rows as unknown as Record<string, unknown>[], s),
-  };
-};
-
-/* The ONE cohort total — header, tab badge, the cards/table "of N" labels and
+/* The ONE cohort total — header, tab badge, the cards' "of N" label and
  * the map pill's denominator: PostgREST's exact count (a HEAD with
  * `count=exact`) over the same filter chain (resolveBrowsePrefilters +
- * applyFilters) the Table/Cards fetchers read, so the total can never disagree
+ * applyFilters) the cards fetcher reads, so the total can never disagree
  * with the listed rows. Exact or nothing: the planner-estimate fallback of
  * 2026-10-13 answered a slow count with a figure that could sit below the
  * cards already on screen ("72 of ~15", 2026-10-16), so it is gone — a slow
@@ -1003,10 +733,10 @@ export const fetchBrowseCount = async (
 };
 
 /* -------------------------------------------------------------------------- */
-/* Cards (sreality-style image-first list). Same filter chain as table, plus  */
-/* a batched image lookup for the first photo per visible listing. Sorted by  */
-/* first_seen_at desc — the cards lane is for "what's new", not for arbitrary */
-/* re-sorting (that's the Table tab's job).                                   */
+/* Cards (sreality-style image-first list): Browse's one listing lane. The    */
+/* filter chain is the count's and the map's; the order is one of CARD_SORTS  */
+/* (DEFAULT_SORT = first_seen_at desc, "what's new"), keyset-paged. Photos    */
+/* arrive separately through the hydration layer (W7a, below).                */
 /* -------------------------------------------------------------------------- */
 
 export interface CardRow {
@@ -1017,8 +747,11 @@ export interface CardRow {
    * key the card image hydration batches on. `sreality_id` is nullable post-
    * Gate-2 and is only the fast detail link + the (sreality-backed) estimate. */
   listing_id: number;
+  lat: number | null;
+  lng: number | null;
   sreality_id: number | null;
-  /* The one server-composed place string (migration 503) -- see TableRow. */
+  /* The one server-composed place string (migration 503): the five columns it
+   * replaced (district / locality / obec / okres / street) are not selected. */
   display_label: string | null;
   disposition: string | null;
   /* Portal-agnostic property sub-type (migration 152) — the meaningful "kind"
@@ -1026,8 +759,10 @@ export interface CardRow {
   subtype: string | null;
   area_m2: number | null;
   price_czk: number | null;
-  /* The per-m² MEASURE (migration 425) — see TableRow.price_per_m2 — and its
-   * published basis label, which is what the footer suffixes the figure with. */
+  /* The per-m² MEASURE (migration 425), not price/area: basis-resolved from
+   * (category_main, category_type) and NULL below its basis floor, the same
+   * column the Kč/m² sort and filter read — and its published basis label,
+   * which is what the footer suffixes the figure with. */
   price_per_m2: number | null;
   price_per_m2_basis: string | null;
   first_seen_at: string;
@@ -1043,6 +778,9 @@ export interface CardRow {
   /* MF gross rental yield % (migration 133). Non-null only on sale
    * apartments that resolved to an MF territory. */
   mf_gross_yield_pct: number | null;
+  /* THE plot measure (migration 534): a house's parcel, a pozemek's own area
+   * (area_m2 already shows it), NULL when the ad states no lot. */
+  plot_area_m2: number | null;
   /* Signed percent across the representative listing's own price series, and
    * the per-child change count. NULL pct = fewer than two observed prices,
    * which <PriceDelta> renders as nothing rather than as "unchanged". */
@@ -1153,76 +891,22 @@ export const fetchDismissedCards = async (
   return { rows, nextCursor };
 };
 
-
-export interface BrowseStatsDispositionRow {
-  disposition: string;
-  n: number;
-  ppm2_box: Ppm2Box | null;
-}
-
-export interface TomBox {
-  n: number;
-  min: number;
-  p25: number;
-  median: number;
-  mean: number;
-  p75: number;
-  max: number;
-}
-
-export interface PriceBandVelocityRow {
-  bucket: 1 | 2 | 3 | 4 | 5 | 6 | 7;
-  p_lo: number;
-  p_hi: number;
-  n: number;
-  pct_share: number | null;
-  price_min: number | null;
-  price_max: number | null;
-  tom_box: TomBox | null;
-}
-
-export interface BrowseStats {
-  total: number;
-  new_7d: number;
-  new_30d: number;
-  price: { p25: number; p50: number; p75: number } | null;
-  ppm2:  { p25: number; p50: number; p75: number } | null;
-  /* The unit every Kč/m² number above and in `dispositions[].ppm2_box` is in
-   * (migration 425): one of `sale_capital_czk_m2` / `rent_monthly_czk_m2` /
-   * `land_capital_czk_m2`, the literal `'mixed'` when the cohort spans two of
-   * them — which rule 22 makes the DEFAULT cohort, sale + rent — or null when
-   * no row resolved one. Server-derived from the rows themselves, never from
-   * the filter pins, so it can never disagree with the numbers it labels. */
-  ppm2_basis: string | null;
-  dispositions: ReadonlyArray<BrowseStatsDispositionRow>;
-  price_band_velocity: ReadonlyArray<PriceBandVelocityRow>;
-}
-
-/* The two id allowlists the caller has already resolved over the network. They
- * are arguments rather than derived here because the two consumers resolve them
- * from different places: Stats intersects city-quality with market-growth and
- * adds the pipeline scope, while the map hands over whatever
- * resolveBrowsePrefilters produced for the cohort reads. */
-export interface BrowseStatsResolvedFilters {
-  obec_ids_filter: number[] | null;
-  property_ids_filter: number[] | null;
-  property_ids_excluded: number[] | null;
-}
-
 /* The argument object `browse_stats_properties` takes.
  *
- * ONE builder, because there are now TWO callers: fetchBrowseStats and
- * fetchListingsForMap's `browse_map_cells` read (migration 439), which takes the
- * SAME named parameters plus its own `point_budget`. Built inline in each caller, this
+ * ONE builder, because there are TWO callers: lib/stats.ts fetchStatsPivot (plus
+ * its own `spec`, migration 626) and fetchListingsForMap's `browse_map_cells` read
+ * (migration 439), which takes the SAME named parameters plus its own `point_budget`. Built inline in each caller, this
  * object is the single richest opportunity for the Stats cohort and the map
  * cohort to silently disagree — a new filter wired into one literal and not the
  * other produces a map and a Stats tab describing different sets of properties,
  * with no error anywhere. Extracting it collapses that surface to zero.
  *
- * Pure: every value comes from `f` or from `resolved`. Exported for queries.test.ts. */
+ * Pure: every value comes from `f` or from `pre`, the id allowlists the caller
+ * has already resolved over the network (resolveBrowsePrefilters). Exported for
+ * queries.test.ts. */
 export const buildBrowseStatsArgs = (
   f: ListingFilters,
-  resolved: BrowseStatsResolvedFilters,
+  pre: BrowsePrefilters,
 ): Record<string, unknown> => {
   const triToBool = (t: typeof f.hasBalcony): boolean | null =>
     t === 'any' ? null : t === 'yes';
@@ -1284,10 +968,12 @@ export const buildBrowseStatsArgs = (
     recently_changed_days:   f.recentlyChangedDays,
     tom_days_min:            f.tomDaysMin,
     tom_days_max:            f.tomDaysMax,
+    tom_observed_only:       f.tomObservedOnly,
     has_balcony_filter:      triToBool(f.hasBalcony),
     has_lift_filter:         triToBool(f.hasLift),
     has_parking_filter:      triToBool(f.hasParking),
     furnished_filter:        f.furnished.length ? f.furnished : null,
+    energy_rating_filter:    f.energyRatingMatch.length ? f.energyRatingMatch : null,
     ownership_filter:        f.ownership.length ? f.ownership : null,
     terrace_filter:          triToBool(f.terrace),
     cellar_filter:           triToBool(f.cellar),
@@ -1318,51 +1004,26 @@ export const buildBrowseStatsArgs = (
     /* Migration 133 — MF gross rental yield % bounds (sale apartments). */
     mf_gross_yield_pct_min:  f.mfGrossYieldPctMin,
     mf_gross_yield_pct_max:  f.mfGrossYieldPctMax,
-    /* Migration 173 — merged price-history predicates + condition-level
-     * bounds. Property grain; columns maintained by the recompute job. */
+    /* Migration 173 — merged price-history predicates. Property grain;
+     * columns maintained by the recompute job. */
     price_change_count_min:        f.priceChangeCountMin,
     price_change_window_days:      f.priceChangeWindowDays,
     total_price_change_pct_filter: f.totalPriceChangePct,
     /* Migration 537 — the caller's dismissed properties, excluded server-side. */
     hide_dismissed:                !f.showDismissed,
-    building_condition_level_min:  f.buildingConditionLevelMin,
-    building_condition_level_max:  f.buildingConditionLevelMax,
-    apartment_condition_level_min: f.apartmentConditionLevelMin,
-    apartment_condition_level_max: f.apartmentConditionLevelMax,
     portal_filter:           scope.portals.length ? scope.portals : null,
     /* Migration 597 — the property-level side: under a broker too. */
     portal_excluded_filter:      f.portalsExcluded.length ? f.portalsExcluded : null,
     portal_excluded_active_only: f.portalsExcludedActiveOnly,
     /* Migration 162 — market-growth obec allowlist (price-stats datasets).
-     * Migration 378 — generic property-id allowlist; carries the deal-pipeline
-     * scope (rule #22) today, and is the seam any future property-grain
-     * prefilter should reuse instead of growing another bespoke param.
-     * Both are resolved over the network by the caller — see the interface. */
-    ...resolved,
+     * Migration 378 — generic property-id allowlist (with-estimates ∩ broker).
+     * Both are resolved over the network by the caller (`pre`). */
+    obec_ids_filter:         pre.obecIds,
+    property_ids_filter:     pre.propertyIds,
+    /* Migration 629 — the curated-set scope, judged server-side; only the
+     * active sides are sent, as on the list read (readSource). */
+    ...scopeArgs(f),
   };
-};
-
-export const fetchBrowseStats = async (
-  f: ListingFilters,
-  { signal }: PgReadOptions = {},
-): Promise<BrowseStats> => {
-  /* Stats resolves through the SAME function every other Browse lane calls,
-   * rather than naming its prefilters one by one — which left the panel
-   * counting the whole market once per property-grain filter added. The broker
-   * allowlist rides in property_ids_filter like the rest. */
-  const pre = await resolveBrowsePrefilters(f, signal);
-  const { data } = await pgRead<BrowseStats>(
-    supabase.rpc(
-      'browse_stats_properties',
-      buildBrowseStatsArgs(f, {
-        obec_ids_filter: pre.obecIds,
-        property_ids_filter: pre.propertyIds,
-        property_ids_excluded: pre.propertyIdsExcluded,
-      }),
-    ),
-    { signal },
-  );
-  return data;
 };
 
 /* The listings_public select list: every column the view carries (the width is
@@ -1550,6 +1211,28 @@ export const fetchListingsForListingIds = async (
   const out = new Map<number, ListingPublic>();
   for (const row of data ?? []) {
     out.set(row.id, row);
+  }
+  return out;
+};
+
+/* A card's storey, for the Browse card's title. browse_list carries no floor
+ * column (and the card read model is not widened for one attribute), so the
+ * visible cards' canonical ads are read here, keyed on listings_public.id, three
+ * columns wide. The scale is listings.floor's: ground = 0, below ground < 0. */
+export type ListingFloor = Pick<ListingPublic, 'floor' | 'total_floors'>;
+
+export const fetchListingFloors = async (
+  ids: ReadonlyArray<number>,
+  { signal }: PgReadOptions = {},
+): Promise<Map<number, ListingFloor>> => {
+  if (ids.length === 0) return new Map();
+  const { data } = await pgRead<Array<ListingFloor & { id: number }> | null>(
+    supabase.from('listings_public').select('id,floor,total_floors').in('id', ids as number[]),
+    { signal },
+  );
+  const out = new Map<number, ListingFloor>();
+  for (const row of data ?? []) {
+    out.set(row.id, { floor: row.floor, total_floors: row.total_floors });
   }
   return out;
 };
@@ -1816,181 +1499,6 @@ export const fetchSoldCoverage = async (
 };
 
 /* -------------------------------------------------------------------------- */
-/* Health dashboard (Part E) — calls migration 013 health_summary RPC         */
-/* -------------------------------------------------------------------------- */
-
-export const fetchHealthSummary = async (
-  { signal }: PgReadOptions = {},
-): Promise<HealthSummary> =>
-  (await pgRead<HealthSummary>(supabase.rpc('health_summary'), { signal })).data;
-
-export const fetchRecentScrapeRuns = async (
-  days: number = 14,
-  { signal }: PgReadOptions = {},
-): Promise<ScrapeRun[]> => {
-  const { data } = await pgRead<ScrapeRun[] | null>(
-    supabase.rpc('recent_scrape_runs', { p_days: days }),
-    { signal },
-  );
-  return data ?? [];
-};
-
-export const fetchCategoryTrends = async (
-  source: string = 'sreality',
-  { signal }: PgReadOptions = {},
-): Promise<CategoryTrend[]> => {
-  const { data } = await pgRead<CategoryTrend[] | null>(
-    supabase.rpc('category_trends', { p_source: source }),
-    { signal },
-  );
-  return data ?? [];
-};
-
-export const fetchImageStorageOverview = async (
-  { signal }: PgReadOptions = {},
-): Promise<ImageStorageOverview> =>
-  (await pgRead<ImageStorageOverview>(supabase.rpc('image_storage_overview'), { signal })).data;
-
-export const fetchImagesFailureOverview = async (
-  { signal }: PgReadOptions = {},
-): Promise<ImageFailureRow[]> => {
-  const { data } = await pgRead<ImageFailureRow[] | null>(
-    supabase.rpc('images_failure_overview'),
-    { signal },
-  );
-  return data ?? [];
-};
-
-export const fetchPortalHealth = async (
-  { signal }: PgReadOptions = {},
-): Promise<PortalHealth[]> => {
-  const { data } = await pgRead<PortalHealth[] | null>(
-    supabase.rpc('portal_health_summary'),
-    { signal },
-  );
-  return data ?? [];
-};
-
-export const fetchScraperHealthChecks = async (
-  source: string = 'sreality',
-  { signal }: PgReadOptions = {},
-): Promise<ScraperHealthChecks> =>
-  (
-    await pgRead<ScraperHealthChecks>(
-      supabase.rpc('scraper_health_checks', { p_source: source }),
-      { signal },
-    )
-  ).data;
-
-/* Migration 274 — pipeline verification checks (latest row per check_key).
- * The DB stamps the ok/warn/fail status + a `value` whose unit is check-specific
- * (ratios, minutes, counts — see scripts/verify_pipeline.py). */
-export interface PipelineCheckRow {
-  check_key: string;
-  status: string;
-  value: number | null;
-  details: Record<string, unknown> | null;
-  run_at: string | null;
-}
-
-export const fetchPipelineChecks = async (
-  { signal }: PgReadOptions = {},
-): Promise<PipelineCheckRow[]> => {
-  const { data } = await pgRead<PipelineCheckRow[] | null>(
-    supabase
-      .from('pipeline_checks_public')
-      .select('check_key,status,value,details,run_at')
-      .order('check_key', { ascending: true }),
-    { signal },
-  );
-  return data ?? [];
-};
-
-/* Migration 437 — the derived-artifact registry: one row per matview / rollup
- * table with its producer, cadence and staleness budget. Columns are listed
- * explicitly rather than '*' so a later column (W7 widens this view) can't
- * arrive unnoticed, and because `last_error` deliberately isn't published —
- * asking for a named set keeps that contract visible here.
- *
- * `last_duration_ms` / `last_rows` are integer/bigint, which PostgREST hands
- * over as strings on some paths — coerce both once, here, the way the cost
- * fetchers above do. `staleness_budget` stays a string on purpose;
- * lib/derivedArtifacts parses the interval. */
-export const fetchDerivedArtifacts = async (
-  { signal }: PgReadOptions = {},
-): Promise<DerivedArtifactRow[]> => {
-  const { data } = await pgRead<Record<string, unknown>[] | null>(
-    supabase
-      .from('derived_artifacts_public')
-      .select(
-        'name,producer,host,cadence,staleness_budget,complete_through,last_succeeded_at,last_duration_ms,last_rows,is_serving',
-      )
-      .order('name', { ascending: true }),
-    { signal },
-  );
-  return (data ?? []).map((r) => ({
-    name: String(r.name),
-    producer: String(r.producer),
-    host: String(r.host),
-    cadence: String(r.cadence),
-    staleness_budget: r.staleness_budget == null ? null : String(r.staleness_budget),
-    complete_through: r.complete_through == null ? null : String(r.complete_through),
-    last_succeeded_at: r.last_succeeded_at == null ? null : String(r.last_succeeded_at),
-    last_duration_ms: r.last_duration_ms == null ? null : Number(r.last_duration_ms),
-    last_rows: r.last_rows == null ? null : Number(r.last_rows),
-    is_serving: Boolean(r.is_serving),
-  }));
-};
-
-/* Migration 178 — failed GitHub Actions runs recorded by the 30-min poller
- * (monitor_workflow_failures.yml). */
-export interface WorkflowFailureRow {
-  workflow_name: string;
-  conclusion: string;
-  run_started_at: string | null;
-  html_url: string | null;
-}
-
-export const fetchRecentWorkflowFailures = async (
-  hours: number = 48,
-  { signal }: PgReadOptions = {},
-): Promise<WorkflowFailureRow[]> => {
-  const { data } = await pgRead<WorkflowFailureRow[] | null>(
-    supabase.rpc('recent_workflow_failures', { p_hours: hours }),
-    { signal },
-  );
-  return data ?? [];
-};
-
-/* Migration 220 — streak-aware per-workflow failure summary. One row per
- * workflow with the consecutive-failure streak + is_chronic flag, so the Health
- * card can separate a chronic break (failing every run for days) from a 1%
- * self-healing transient. Supersedes recent_workflow_failures for the card. */
-export interface WorkflowFailureSummaryRow {
-  workflow_path: string;
-  workflow_name: string;
-  failure_count: number;
-  first_failure_at: string | null;
-  last_failure_at: string | null;
-  last_conclusion: string;
-  last_html_url: string | null;
-  last_success_at: string | null;
-  consecutive_failures: number;
-  is_chronic: boolean;
-}
-
-export const fetchWorkflowFailureSummary = async (
-  hours: number = 168,
-  { signal }: PgReadOptions = {},
-): Promise<WorkflowFailureSummaryRow[]> => {
-  const { data } = await pgRead<WorkflowFailureSummaryRow[] | null>(
-    supabase.rpc('workflow_failure_summary', { p_hours: hours }),
-    { signal },
-  );
-  return data ?? [];
-};
-
-/* -------------------------------------------------------------------------- */
 /* Phase QUAL — curated cities (operator-curated qualitative indexes +        */
 /* population). Browse map renders matching cities as a separate pin layer;   */
 /* the filter UI picks rules + an optional color-coding index.                */
@@ -2125,25 +1633,20 @@ export const fetchCuratedCityPolygons = async (
 /* convention used by Supabase fetchers above.                                */
 /* -------------------------------------------------------------------------- */
 
-import {
-  useMutation,
-  useQuery,
-  type UseMutationResult,
-  type UseQueryResult,
-} from '@tanstack/react-query';
+import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 import {
   ApiError,
   createEstimation,
   getEstimation,
   getTracePayload,
   listEstimations,
-  previewListingUrl,
   type TracePayload,
 } from './api';
+import { sortedIds } from './hydration/keys';
 import type {
   CreateEstimationIn,
   EstimationListParams,
-  ParseResult,
+  EstimationListResponse,
   PipelineBoardCard,
   PipelineStage,
   TagColor,
@@ -2157,8 +1660,6 @@ export const estimationKeys = {
     ['estimations', 'by-listing', ids] as const,
   detail: (id: number) =>
     ['estimations', 'detail', id] as const,
-  preview: (url: string) =>
-    ['estimations', 'preview', url] as const,
   tracePayload: (runId: number, stepN: number) =>
     ['estimations', 'detail', runId, 'trace', stepN, 'payload'] as const,
 };
@@ -2181,31 +1682,27 @@ export const fetchEstimationsList = (params: EstimationListParams) =>
 
 /* Property-grain run fetch for the Listing Detail estimations section:
  * every run on any of the property's child listings, newest first. List
- * rows carry the full run projection (minus source_html), so the section
+ * rows carry the full run projection, so the section
  * renders the selected run without a second per-run request. */
 export const fetchEstimationsForListings = (ids: ReadonlyArray<number>) =>
   listEstimations({ listing_ids: ids.join(','), limit: 100 });
+/* That fetch as ONE query, for the estimations block and the Valuo card's
+ * "náš odhad" mark alike: polled while a run is pending or running. A
+ * non-empty array of junk ids never reaches the wire, where it would
+ * serialize to an empty value rather than a filter. */
+export const useEstimationRuns = (listingIds: readonly number[]) => {
+  const ids = sortedIds(listingIds);
+  return useQuery<EstimationListResponse, Error>({
+    queryKey: estimationKeys.byListing(ids),
+    queryFn: () => fetchEstimationsForListings(ids),
+    enabled: ids.length > 0 && ids.every((n) => Number.isFinite(n)),
+    staleTime: 15_000,
+    refetchInterval: (q) =>
+      (q.state.data?.data ?? []).some((r) => r.status === 'pending' || r.status === 'running') ? 3000 : false,
+  });
+};
 export const submitEstimation = (input: CreateEstimationIn) =>
   createEstimation(input);
-
-export interface UrlPreviewVars {
-  url: string;
-  force_refresh?: boolean;
-}
-
-/* Mutation wrapper around POST /estimations/preview. Pages call
- * `mutate({ url })` for a normal preview and `mutate({ url, force_refresh: true })`
- * for the bypass-cache path. The mutation isn't keyed (TanStack
- * Query mutations aren't), so re-running the same URL never reads
- * a stale React-Query cache — the cache decision lives entirely on
- * the backend's parsed_url_cache table. */
-export const useUrlPreview = (): UseMutationResult<
-  ParseResult, ApiError, UrlPreviewVars
-> =>
-  useMutation<ParseResult, ApiError, UrlPreviewVars>({
-    mutationFn: ({ url, force_refresh }) =>
-      previewListingUrl(url, { force_refresh }),
-  });
 
 /* -------------------------------------------------------------------------- */
 /* Curation (U2.6) — read paths.                                              */
@@ -2214,14 +1711,14 @@ export const useUrlPreview = (): UseMutationResult<
 /* FastAPI service (lib/api.ts) so listing_count + ordering live in one      */
 /* place. The reverse-index reads below — "which tags / collections does      */
 /* property X belong to" — read the property-grain *_public views directly,  */
-/* whole, matching the read-only pattern Browse / Region use. Both Browse     */
-/* curated-set facets (tags, collections) resolve from those same membership  */
-/* rows — see resolveTagPrefilter / resolveCollectionPrefilter.              */
+/* whole, matching the read-only pattern Browse / Region use. The Browse     */
+/* cohort judges the same rows server-side (migration 629, lib/setScope); the */
+/* maps here feed the glyphs, the pipeline board and in-place settling.       */
 /* -------------------------------------------------------------------------- */
 
 /* All (property_id → member ids) rows of one membership view in ONE read,
  * shared (React Query dedupes the key) by every card control, glyph and cohort
- * filter that asks — the curation analogue of fetchPipelineMemberSet, so Browse
+ * filter that asks — the curation analogue of fetchPipelineMembers, so Browse
  * fires one query instead of one-per-card.
  *
  * It is also the ONLY membership read of its view: a per-property key existed
@@ -2236,7 +1733,7 @@ export const useUrlPreview = (): UseMutationResult<
 const fetchMemberSet = async <K extends string>(
   relation: 'collection_properties_public' | 'property_tags_public',
   member: K,
-  signal?: AbortSignal,
+  { signal, actAs }: PgReadOptions,
 ): Promise<Map<number, number[]>> => {
   const rows = await fetchAllRows<{ property_id: number } & Record<K, number>>({
     relation,
@@ -2246,6 +1743,7 @@ const fetchMemberSet = async <K extends string>(
     key: ['property_id', member],
     expectMax: 100_000,
     signal,
+    actAs,
   });
   const map = new Map<number, number[]>();
   for (const r of rows) {
@@ -2257,14 +1755,14 @@ const fetchMemberSet = async <K extends string>(
 };
 
 export const fetchPropertyCollectionMemberSet = (
-  { signal }: PgReadOptions = {},
+  opts: PgReadOptions = {},
 ): Promise<Map<number, number[]>> =>
-  fetchMemberSet('collection_properties_public', 'collection_id', signal);
+  fetchMemberSet('collection_properties_public', 'collection_id', opts);
 
 export const fetchPropertyTagMemberSet = (
-  { signal }: PgReadOptions = {},
+  opts: PgReadOptions = {},
 ): Promise<Map<number, number[]>> =>
-  fetchMemberSet('property_tags_public', 'tag_id', signal);
+  fetchMemberSet('property_tags_public', 'tag_id', opts);
 
 /* How many notes the caller can READ on each property (MS16): the note mark on
  * every Browse row, from ONE whole-set read rather than one per row.
@@ -2292,8 +1790,6 @@ export const watchdogKeys = {
   all: ['watchdog'] as const,
   subscriptions: ['watchdog', 'subscriptions'] as const,
   subscription: (id: string) => ['watchdog', 'subscriptions', id] as const,
-  dispatches: (params: Record<string, unknown>) =>
-    ['watchdog', 'dispatches', params] as const,
 };
 
 /* Unified notifications feed (watchdog matches + collection-monitor events). */
@@ -2320,13 +1816,11 @@ export const curationKeys = {
   allPropertyNotes: ['curation', 'property-notes'] as const,
   artifactLinks: ['curation', 'artifact-links'] as const,
   noteCounts: ['curation', 'note-counts'] as const,
-  manualEstimates: (sreality_id: number) =>
-    ['curation', 'manual-estimates', sreality_id] as const,
 };
 
-/* Deal pipeline (migration 205). The "is this property bookmarked + at which   */
-/* stage" read pulls from property_pipeline_public via the anon key; writes go   */
-/* through the FastAPI service. Single-valued — at most one card per property.
+/* Deal pipeline (migration 205). The "is this property bookmarked + at which
+ * stage" read pulls from property_pipeline_public, RLS-scoped as authenticated;
+ * writes go through the FastAPI service. At most one card per property per account.
  *
  * W3 collapsed the per-property `card(id)` key into `members` — a single
  * property's card is just `members.get(id)`. The two used to be separate
@@ -2341,6 +1835,12 @@ export const pipelineKeys = {
   members: ['pipeline', 'members'] as const,
 };
 
+/* Both of the caller's pipeline-share lists (GET /pipeline/shares). Never
+ * acting-prefixed: sharing is always the caller's own (lib/acting). */
+export const pipelineShareKeys = {
+  all: ['pipeline-shares'] as const,
+};
+
 export const dismissalKeys = {
   all: ['dismissals'] as const,
   count: ['dismissals', 'count'] as const,
@@ -2350,14 +1850,16 @@ export const dismissalKeys = {
 /* Is this property dismissed by the caller? One entry per property, but never
  * one request per property: every call made in the same task (a page of cards
  * mounting, say) is answered by ONE read of the view per DISMISSAL_BATCH ids.
- * Never a whole-set read — the dismissed set only grows. */
+ * Never a whole-set read — the dismissed set only grows. A batch is per acting
+ * identity (lib/acting): the owner's dismissals and the caller's never share a
+ * read. '' keys the caller's own batch. */
 const DISMISSAL_BATCH = 200;
 type DismissalWaiter = { resolve: (dismissed: boolean) => void; reject: (e: unknown) => void };
-let dismissalWaiters: Map<number, DismissalWaiter[]> | null = null;
+const dismissalWaiters = new Map<string, Map<number, DismissalWaiter[]>>();
 
-async function flushDismissalBatch(): Promise<void> {
-  const batch = dismissalWaiters ?? new Map<number, DismissalWaiter[]>();
-  dismissalWaiters = null;
+async function flushDismissalBatch(as: string): Promise<void> {
+  const batch = dismissalWaiters.get(as) ?? new Map<number, DismissalWaiter[]>();
+  dismissalWaiters.delete(as);
   const ids = [...batch.keys()];
   for (let i = 0; i < ids.length; i += DISMISSAL_BATCH) {
     const chunk = ids.slice(i, i + DISMISSAL_BATCH);
@@ -2368,6 +1870,7 @@ async function flushDismissalBatch(): Promise<void> {
        * observer's cancel must not fail the others. The deadline still holds. */
       const { data } = await pgRead<Array<{ property_id: number }> | null>(
         supabase.from('property_dismissals_public').select('property_id').in('property_id', chunk),
+        { actAs: as || null },
       );
       const hit = new Set((data ?? []).map((r) => r.property_id));
       settle((w, id) => w.resolve(hit.has(id)));
@@ -2377,15 +1880,21 @@ async function flushDismissalBatch(): Promise<void> {
   }
 }
 
-export const fetchIsDismissed = (property_id: number): Promise<boolean> =>
+export const fetchIsDismissed = (
+  property_id: number,
+  { actAs }: PgReadOptions = {},
+): Promise<boolean> =>
   new Promise((resolve, reject) => {
-    if (dismissalWaiters == null) {
-      dismissalWaiters = new Map();
-      setTimeout(() => void flushDismissalBatch(), 0);
+    const as = actAs ?? '';
+    let batch = dismissalWaiters.get(as);
+    if (batch == null) {
+      batch = new Map();
+      dismissalWaiters.set(as, batch);
+      setTimeout(() => void flushDismissalBatch(as), 0);
     }
-    const waiters = dismissalWaiters.get(property_id) ?? [];
+    const waiters = batch.get(property_id) ?? [];
     waiters.push({ resolve, reject });
-    dismissalWaiters.set(property_id, waiters);
+    batch.set(property_id, waiters);
   });
 
 /* How many properties the caller has dismissed (migration 536). Only a gate —
@@ -2402,7 +1911,8 @@ export const fetchDismissedCount = async (
 
 /* Every pipeline card the caller's account holds, keyed by property_id — one
  * cheap read shared (React Query dedupes the key) by every funnel on every
- * surface: Browse cards, the Table rows, and the pipeline scope's prefilter.
+ * surface (Browse cards), the board and lib/curationSettle.
+ * It narrows no cohort: the pipeline scope is judged by migration 629.
  *
  * It carries the stage, not just membership, because the funnel renders the
  * stage badge (migration 377) — the earlier "set of ids" shape forced each
@@ -2410,9 +1920,8 @@ export const fetchDismissedCount = async (
  * read. `property_pipeline_public` is RLS-scoped + security_invoker (migration
  * 316), so this returns the caller's own board and nothing else.
  *
- * Exhaustive via fetchAllRows for the same reason the tag prefilter is: a
- * silently truncated membership map would both blank funnels and, once the
- * pipeline scope is on, drop properties the operator explicitly asked to see. */
+ * Exhaustive via fetchAllRows: a silently truncated membership map would blank
+ * funnels and misjudge the in-place settle of a pipeline-scoped list. */
 export interface PipelineMembership {
   property_id: number;
   stage_id: number;
@@ -2426,7 +1935,7 @@ export interface PipelineMembership {
 export type PipelineMembers = Map<number, PipelineMembership>;
 
 export const fetchPipelineMembers = async (
-  { signal }: PgReadOptions = {},
+  { signal, actAs }: PgReadOptions = {},
 ): Promise<PipelineMembers> => {
   const rows = await fetchAllRows<PipelineMembership>({
     relation: 'property_pipeline_public',
@@ -2441,12 +1950,13 @@ export const fetchPipelineMembers = async (
     key: ['property_id'],
     expectMax: 100_000,
     signal,
+    actAs,
   });
   return new Map(rows.map((r) => [r.property_id, r]));
 };
 
 export const fetchPipelineStages = async (
-  { signal }: PgReadOptions = {},
+  { signal, actAs }: PgReadOptions = {},
 ): Promise<PipelineStage[]> => {
   const { data } = await pgRead<PipelineStage[] | null>(
     supabase
@@ -2454,10 +1964,14 @@ export const fetchPipelineStages = async (
       /* `code` too (migration 377): the stage menu badges every row from this
        * list, and the stage editor pre-fills its code box from it — omitting the
        * column rendered every existing code as blank, inviting the operator to
-       * overwrite intentional badges (three stages deliberately share "9"). */
-      .select('id, key, label, position, color, is_terminal, is_entry, code')
+       * overwrite intentional badges (several closed stages share a code). */
+      .select(
+        'id, key, label, position, color, is_terminal, is_entry, code, ' +
+          /* The stage's delegated stamp (migration 641), for the stage editor. */
+          'edited_by_account_id, edited_at',
+      )
       .order('position'),
-    { signal },
+    { signal, actAs },
   );
   return data ?? [];
 };
@@ -2479,7 +1993,7 @@ export const fetchPipelineStages = async (
  * decoration until proven structural: if the board cannot filter, sort or
  * place a card without it, it does not belong in this queryFn. */
 export const fetchPipelineBoard = async (
-  { signal }: PgReadOptions = {},
+  { signal, actAs }: PgReadOptions = {},
 ): Promise<PipelineBoardCard[]> => {
   /* board_position is the MANUAL order and stays the default sort, but it is
    * not unique — it is assigned max+1 within the entry stage at bookmark time
@@ -2495,6 +2009,7 @@ export const fetchPipelineBoard = async (
     key: ['property_id'],
     expectMax: 100_000,
     signal,
+    actAs,
   });
   return composePipelineCards(rows);
 };

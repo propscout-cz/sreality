@@ -1,7 +1,7 @@
 name: "CI: frontend build"
 
-# Builds the frontend/ Vite SPA on every push or pull request that touches
-# frontend code, to catch build/type errors before deploy. Type-checks (the
+# Builds the frontend/ Vite SPA on every pull request, and on a push to main that
+# touches frontend code, to catch build/type errors before deploy. Type-checks (the
 # service worker too), lints for Rules of Hooks, builds the production bundle,
 # checks the service worker and web app manifest made it into dist/, reports
 # every chunk's gzipped size, and enforces a blocking first-visit JS budget
@@ -10,6 +10,7 @@ name: "CI: frontend build"
 
 on:
   push:
+    branches: [main]
     paths:
       - 'frontend/**'
       - '.github/workflows/frontend-build.yml'

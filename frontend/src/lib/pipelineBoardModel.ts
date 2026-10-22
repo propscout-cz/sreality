@@ -37,7 +37,10 @@ export const PIPELINE_BOARD_COLS =
    * `?pipeline=any`), so two cards in one column can be an 18 000 Kč/měs rent
    * and an 18 000 Kč sale. Without category_type they render the identical
    * string; without the measure + its label there is no per-m² figure at all. */
-  'category_type, price_per_m2, price_per_m2_basis';
+  'category_type, price_per_m2, price_per_m2_basis, ' +
+  /* The card's delegated stamp (migration 641): who last moved it acting as
+   * the owner, and when. The account is labelled by the stamp helper. */
+  'edited_by_account_id, edited_at';
 
 export interface PipelineBoardRow {
   property_id: number;
@@ -69,6 +72,8 @@ export interface PipelineBoardRow {
   category_type: string | null;
   price_per_m2: number | null;
   price_per_m2_basis: string | null;
+  edited_by_account_id: string | null;
+  edited_at: string | null;
 }
 
 export function composePipelineCards(
@@ -105,5 +110,7 @@ export function composePipelineCards(
     category_type: r.category_type,
     price_per_m2: r.price_per_m2,
     price_per_m2_basis: r.price_per_m2_basis,
+    edited_by_account_id: r.edited_by_account_id ?? null,
+    edited_at: r.edited_at ?? null,
   }));
 }

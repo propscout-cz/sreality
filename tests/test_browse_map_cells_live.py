@@ -1,4 +1,4 @@
-"""browse_map_cells returns a BOUNDED, COMPLETE answer in WORLD TILES (migration 602), executed.
+"""browse_map_cells returns a BOUNDED, COMPLETE answer in WORLD TILES (migrations 602, 630), executed.
 
 439 replaced an unordered `.limit(50000)` — which hid 52% of the default cohort — with a 20 x 13
 grid laid over the caller's bbox; 602 replaces that grid with world tiles
@@ -20,15 +20,11 @@ grid laid over the caller's bbox; 602 replaces that grid with world tiles
     both answers: the bbox filters rows, it never moves the grid's origin.
   * **NESTED.** Two level-18 tiles sharing a parent answer as ONE level-17 cell holding both, at
     the parent's centre, once the bound forces the coarser level.
+  * **MAPPABLE ONLY.** Since migration 630 the function reads `browse_list`, which also holds the
+    properties with no point; a row without `lat`/`lng` is in no tile and not in `total`.
 
-THE OBSTACLE, AND THE TECHNIQUE — copied from tests/test_broker_leaderboard_live.py.
-`properties_map_mv` is a MATERIALIZED VIEW: you cannot INSERT into it, and CI's replayed copy is
-empty. So each test PARKS it (renames it) and creates a real table of the same shape in its place.
-Verified safe: nothing in the catalog depends on properties_map_mv (checked live 2026-08-26 — zero
-rewrite dependencies), and `browse_map_cells` is plpgsql, whose body is a string that re-resolves
-names at plan time, so it picks up the substitute. The conn fixture is FUNCTION-scoped and parks
-before the function is ever called in that session, so no cached plan can be holding the
-matview's OID. Everything runs inside a transaction that always rolls back.
+`browse_list` is a real table, so each test seeds it directly, inside a transaction that empties
+it first and always rolls back.
 
 Skip posture: the migrations lane sets DB_RAILS_REQUIRED=1, so a lane that loses its
 TEST_DATABASE_URL goes RED instead of reporting a green skip.
@@ -49,11 +45,6 @@ pytestmark = pytest.mark.skipif(
     not _DB_URL and not _REQUIRED,
     reason="TEST_DATABASE_URL not set — this rail runs in CI's migrations lane",
 )
-
-_PARK = """
-alter materialized view public.properties_map_mv rename to pmm_parked_for_rail;
-create table public.properties_map_mv (like public.pmm_parked_for_rail);
-"""
 
 _LATTICE = json.loads(
     (Path(__file__).parent / "fixtures" / "map_tile_lattice.json").read_text(encoding="utf-8")
@@ -96,21 +87,18 @@ def conn():
     import psycopg
 
     with psycopg.connect(_DB_URL, autocommit=False) as c:
+        c.execute("delete from public.browse_list")
         yield c
         c.rollback()
 
 
-def _park(cur) -> None:
-    cur.execute(_PARK)
-
-
 def _seed(cur, points) -> None:
-    """One matview row per (lat, lng), with the three id spaces all set to the 1-based
+    """One browse_list row per (lat, lng), with the three id spaces all set to the 1-based
     row ordinal so a filter on any of them selects the same row. Only the columns the
     function reads are set; every other predicate is guarded by a NULL parameter, so
     NULLs elsewhere are inert."""
     cur.executemany(
-        "insert into properties_map_mv "
+        "insert into browse_list "
         "(property_id, listing_id, obec_id, lat, lng, category_main, category_type, "
         " is_active) values (%s, %s, %s, %s, %s, 'byt', 'pronajem', true)",
         [(i + 1, i + 1, i + 1, lat, lng) for i, (lat, lng) in enumerate(points)],
@@ -152,7 +140,6 @@ def test_the_cells_are_the_fixtures_tile_centres(conn):
     fixture's own centre. RED by: any drift between the SQL and the fixture's formula."""
     cases = [c for c in _LATTICE["cases"] if c["level"] == 18]
     with conn.cursor() as cur:
-        _park(cur)
         _seed(cur, [(c["lat"], c["lng"]) for c in cases])
         r = _call(cur, point_budget=0)
     assert set(r) == _KEYS and r["clustered"] is True and r["level"] == 18
@@ -176,7 +163,6 @@ def test_bounded_as_fine_as_the_bound_allows_and_children_sum_to_their_parent(co
             lng, lat = _centre(child, 2 * py, 18)
             points.append((lat, lng))
     with conn.cursor() as cur:
-        _park(cur)
         _seed(cur, points)
         r = _call(cur, point_budget=0)
     assert r["level"] == 17
@@ -195,7 +181,6 @@ def test_every_row_is_in_exactly_one_tile(conn):
     far = [(-20.5, -118.2), (59.3, 125.7), (10.0, 100.0), (0.0, 0.0), (48.4, 11.9),
            (90.0, 14.4), (-90.0, 14.4)]
     with conn.cursor() as cur:
-        _park(cur)
         _seed(cur, inside + far)
         r = _call(cur, point_budget=0)
     assert set(r) == _KEYS
@@ -213,7 +198,6 @@ def test_interior_tiles_are_stable_under_a_pan(conn):
     a = {"bbox_west": 14.0, "bbox_east": 14.2, "bbox_south": 50.0, "bbox_north": 50.2}
     b = {"bbox_west": 14.05, "bbox_east": 14.25, "bbox_south": 50.0, "bbox_north": 50.2}
     with conn.cursor() as cur:
-        _park(cur)
         _seed(cur, points)
         ra = _call(cur, point_budget=0, **a)
         rb = _call(cur, point_budget=0, **b)
@@ -239,7 +223,6 @@ def test_the_point_budget_is_a_strict_threshold(conn):
     count nothing at all.
     """
     with conn.cursor() as cur:
-        _park(cur)
         _seed(cur, [(50.0 + 0.01 * k, 14.0 + 0.01 * k) for k in range(5)])
         at_budget = _call(cur, point_budget=5)
         assert at_budget["total"] == 5
@@ -264,7 +247,6 @@ def test_both_prefilter_id_spaces_are_applied(conn):
     the map would show the unfiltered market while Cards/Table/Count show the filtered one.
     """
     with conn.cursor() as cur:
-        _park(cur)
         _seed(cur, [(50.0, 14.0), (50.5, 14.5), (51.0, 15.0)])
         for param in ("obec_ids_filter", "property_ids_filter"):
             r = _call(cur, point_budget=0, **{param: [2]})
@@ -283,9 +265,22 @@ def test_an_empty_cohort_is_not_a_small_one(conn):
     everywhere else because both are correct for every non-degenerate cohort.
     """
     with conn.cursor() as cur:
-        _park(cur)
         r = _call(cur, point_budget=0)
     assert r["total"] == 0
     assert r["clustered"] is False
     assert r["level"] is None
     assert r["cells"] is None
+
+
+def test_a_row_without_a_point_is_in_no_tile(conn):
+    """browse_list holds the served properties with no point (determined foreign, ~53k live);
+    the map cannot draw them, so it must not count them. RED by: dropping 630's
+    `l.lat is not null and l.lng is not null` — the row then lands in a NULL tile and the
+    total reads 4."""
+    with conn.cursor() as cur:
+        _seed(cur, [(50.0, 14.0), (50.5, 14.5), (51.0, 15.0)])
+        cur.execute(
+            "insert into browse_list (property_id, listing_id, obec_id, category_main, "
+            "category_type, is_active) values (4, 4, 4, 'byt', 'pronajem', true)")
+        r = _call(cur, point_budget=0)
+    assert r["total"] == 3 == sum(c["n"] for c in r["cells"])

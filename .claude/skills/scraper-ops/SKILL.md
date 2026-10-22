@@ -1,6 +1,6 @@
 ---
 name: scraper-ops
-description: Use when running, debugging, or extending the scrapers — triggering the per-portal index-walk/detail-drain workflows, adding a new scraper field without breaking data, refreshing per-source HTML fixtures, reading the pipeline logs (INDEX/ENQUEUE/VERIFY/DRAIN/IMAGES line shapes), the always-on real-time worker (probe/drain/images/count-probe/property-maintenance/broker-maintenance/estimation/location-resolve/location-intake-fast/location-refetch/sold-comps/text-extract/autodedup/heartbeat lanes), the visual-signal producer jobs (image pHash, CLIP tagging/retag, DINOv3 corpus embedding on RunPod), or the pipeline verification/alerting harness. Also covers condition-scoring (currently unscheduled) and image-download workflow cadence. Triggers on: index_walk, detail_drain, gh workflow run, delist_policy, presence check, scrape_runs, fixtures, RUN done, a new listings column, onboarding a portal, reading a scrape log, realtime_worker, sold_comps, clip_tag, dinov3_embed_backfill, compute_image_phash, verify_pipeline, llm_burn_rate.
+description: Use when running, debugging, or extending the scrapers — triggering the per-portal index-walk/detail-drain workflows, adding a new scraper field without breaking data, refreshing portal HTML fixtures, reading the pipeline logs (INDEX/ENQUEUE/VERIFY/DRAIN/IMAGES line shapes), the always-on real-time worker (probe/drain/images/count-probe/property-maintenance/broker-maintenance/estimation/location-resolve/location-intake-fast/location-refetch/sold-comps/text-extract/health/autodedup/notifications/push/heartbeat lanes), the visual-signal producer jobs (image pHash, CLIP tagging/retag, DINOv3 corpus embedding on RunPod), or the pipeline verification/alerting harness. Also covers condition-scoring (parked) and image-download workflow cadence. Triggers on: index_walk, detail_drain, gh workflow run, delist_policy, presence check, scrape_runs, fixtures, RUN done, a new listings column, onboarding a portal, reading a scrape log, realtime_worker, sold_comps, clip_tag, dinov3_embed_backfill, compute_image_phash, verify_pipeline, health_canary, health_liveness, health lane, job cell, reason line.
 ---
 
 # Scraper operations
@@ -24,20 +24,12 @@ test / log helpers: `scripts/test-summary.sh` and `scripts/logs.sh <run-id> [pat
    `_PRESERVE_IF_NULL_COLUMNS` is the GLOBAL identity pair (`published_at`, `source_url`) and must not grow.
 4. Backfill old rows from NARROW typed columns via a `scripts/backfill_*.py` dispatch job (never a
    `raw_json` pass — ~62 KB/row detoast); NULL is acceptable for a nullable column. The new cell reaches
-   `field_fill_matrix` only once the OPERATOR re-blesses (`--bless` needs the prod DB).
+   the `parsing` alarm's fill arm only once the OPERATOR re-blesses (`--bless` needs the prod DB).
 
-## Refreshing per-source HTML fixtures
+## Refreshing portal HTML fixtures
 
-The LLM-driven parsers (`scraper/source_parsers/`) are tested against saved listing HTML in
-`tests/fixtures/source_html/`. Real listings get taken down or change layout, so every few
-months the fixtures need a refresh. Don't fetch live in tests — that would burn LLM credit and
-break offline runs.
-
-Refresh (CLI, fastest): `gh workflow run fetch-fixtures.yml --ref <branch>` (add `-f` inputs to
-override URLs), or Actions → **Fetch + anonymize source HTML fixtures** → **Run workflow**. It
-fetches each URL, scrubs via `scripts/fetch_and_anonymize_fixtures.py` and commits the
-`*_sample.html` files back to the branch; the skipif tests in
-`tests/scraper/test_source_parsers/test_real_fixtures.py` light up once they exist.
+Portal media fixtures (`tests/scraper/test_portal_media_fixtures.py`) are saved detail pages scrubbed by
+`scripts/fetch_and_anonymize_fixtures.py --scrub-contacts`; never fetch live in tests.
 
 Anonymization scope: phones → `+420 XXX XXX XXX`, emails → `agent@example.cz`, street numbers
 (`123/45`) → `XXX/YY`. Listing prices and the surrounding HTML structure are preserved — public
@@ -69,7 +61,7 @@ Two tests in `tests/location_data/test_payload_norm_measured.py` fail if a commi
 carries contact details in plaintext **or** in Cloudflare's hex.
 
 **The nine SCRAPER portal parsers are a separate fixture set** in `tests/fixtures/portal_html/`
-(`tests/scraper/test_portal_media_fixtures.py`), distinct from the LLM `source_parsers` set
+(`tests/scraper/test_portal_media_fixtures.py`)
 above. They exist because a hand-authored fixture can only assert back the strings the test
 itself planted, so it is structurally blind to upstream drift — that blindness is what let a
 19-day realitymix gallery blackout and a ~63% idnes photo loss both ship with CI green. Never
@@ -122,8 +114,8 @@ fatal — so **a broken archive looks like a healthy scrape**: `portal_raw_pages
 where page_kind = 'detail' group by 1;` is the backlog the lane's hash gate is working through.
 
 **One area rule per column (W19/W21).** `scraper.area.parse_area_text` is the ONLY area regex; ONE `areas_from_params` per portal (bazos `areas_from_text`; mmreality takes the estate OBJECT) that only `parse_detail` calls — never a second copy of a key order. The KEYS are `attribute_contract`'s: the HTML portals unpack `source_values(SOURCE, "area_m2", params)` in the slot order (usable, floor, total, plot) the cell declares.
-mmreality's parcel is `parcelArea` (`landArea`/`plotArea` never filled; `totalArea` is DERIVED per category — never read it). `usable_area` = the "užitná plocha" label ONLY. Plot area for a READER is the `plot_area_m2` MEASURE (mig 534) — a COLUMN on browse_list/map_mv/listing_feed_public (mig 535), never `estate_area`.
-Heal via `reparse.yml` (`--source <portal> --fields area_m2,estate_area,usable_area,garden_area --allow-snapshot-deferral`), which replays `parse_detail` over the stored detail page: dispatch-only, dry-run default, one source per run, no R2. It NEVER blanks a stored value.
+mmreality's parcel is `parcelArea` (`landArea`/`plotArea` never filled; `totalArea` is DERIVED per category — never read it). `usable_area` = the "užitná plocha" label ONLY. Plot area for a READER is the `plot_area_m2` MEASURE (mig 534) — a COLUMN on `browse_list` (mig 535), never `estate_area`.
+Heal via `reparse.yml` (`--source <portal> --fields area_m2,estate_area,usable_area,garden_area --allow-snapshot-deferral`), which replays `parse_detail` over the stored detail page: dispatch-only, dry-run default, one source per run, no R2. It NEVER blanks a stored value. A heal the seam cannot make — a value to BLANK, a column the parser never derived, or a substrate the parser cannot read — is a DATA migration under the seam's rules (no snapshot, no `last_seen_at`, `dirty_properties` in the same statement; a `backup_NNN` schema first since 642): 554 (sreality price_unit leftovers on an unparseable substrate), 642 (bazos off-canon condition spellings + dispositions outside the grammar; the stale values survived because a `text` cell is preserve-if-null, `db._preserved_columns`).
 
 ## How to manually trigger the scrapers
 
@@ -159,8 +151,8 @@ phases in one job via `remax_main`, bounded by `--max-detail` + a `--max-seconds
 hourly `30 * * * *`, bounded by `--max-seconds`; `SCRAPE_CHAIN_TOKEN` re-dispatches it while the
 queue has work). idnes's `supports_complete_walk` was parked (migration 453) — posture only since
 2026-09-07, it gates no delisting; the walk is sliced into the 14 kraje + abroad, each slice's outcome
-in `portal_index_slices` (454); `coverage_gate.yml` (cron `15 3,9,15,21`) re-earns the flag from it.
-**Parked flags, the slice ledger and the gate: `references/coverage-and-delisting.md`.**
+in `portal_index_slices` (454), read back to walk the stalest slice first (the gate that re-earned the flag retired in wave 4).
+**Parked flags, the slice ledger and the retired gate: `references/coverage-and-delisting.md`.**
 There is no combined fallback workflow for a split portal anymore (sreality's `scrape.yml`
 went in C2-2); an ad-hoc combined run of any portal is `python -m scraper.<portal>_main`
 with neither `--index-only` nor `--drain-only`, run locally. The properties track adds
@@ -169,7 +161,7 @@ singletons + recomputes only changed properties; rule #20) and
 `recompute_property_stats.yml` (the **daily full-sweep reconcile** at 04:15 — recomputes every
 property + clears the dirty queue under a `--max-seconds` budget; a budget stop clears only the range it
 swept and saves `app_settings.property_sweep_cursor`, where the next run resumes the cycle (if <36h old);
-a resumed run that stops again exits RED; only a whole cycle stamps completion). The visual-signal producers run alongside:
+a resumed run that stops again exits RED; only a whole cycle stamps the `property_sweep` artifact, judged by `jobs`). The visual-signal producers run alongside:
 `compute_image_phash.yml` (hourly pHash BACKSTOP only — the image drain hashes the bytes in hand and writes `phash` in the
 `storage_path` UPDATE, so this job takes just `phash IS NULL` rows: `IMAGES done phash_missed` + re-master re-arms), `clip_tag.yml`
 (`scripts/clip_tag_backfill.py` — zero-shot CLIP room/plot tags into `image_clip_tags` + a 512-d vector into `image_clip_embeddings`),
@@ -196,37 +188,32 @@ OWN predicates (`phash`, `clip_tagged_at`). It deletes no label/review/CLIP-cach
 **No drain geocodes, and no place columns.** W4-c dropped every location column from `listings`
 and `properties`, so a parser's coordinate/locality/street reading is evidence for the resolver,
 not a write; a listing's place is `listing_location` (join on `listing_id`).
-`scraper/geocoding.py` survives for `/maps/*` and the on-demand URL parse only.
+`scraper/geocoding.py` survives for `/maps/*` and the curated-city seed only.
 
-Monitor/alerting workflows watch the rest: `monitor_workflow_failures.yml` ("Monitoring: workflow
-failures", cron `*/30` — records failed / timed-out / startup-failed runs into `workflow_failures`
-for the Health page, since GitHub only emails about failed *scheduled* runs; a never-started
-supersession cancel is distinguished from a real failure; cursor + timeout-kill captured) and `llm_health.yml` ("Monitoring: acute health", hourly
-— verify_pipeline's acute lane: `llm_errors`, `llm_burn_rate`, `db_saturation`,
-`worker_liveness`, `property_maintenance`, `broker_resolution_freshness`, with
-`--exit-nonzero-on-fail` so any `fail` goes red and emails). A credit-balance error alarms
-immediately and PER PROVIDER (each its own account: one provider's success never clears another's credit error; the alert names that provider, its failing models and jobs, where 2026-10-02..10 it named every paid job and no provider), and the LLM failure probe is INDEPENDENT of pending work (a quiet-queue blind spot
+One monitoring workflow watches the rest: the canary, `verify_pipeline.yml` ("Monitoring: health canary (hourly)"; GitHub
+delivers ~5 runs a day). Step 1, the poller `scripts/record_workflow_failures.py`, records PRODUCTION runs only (event
+`schedule`, or `push` on `main`; a branch dispatch writes nothing): each red into `workflow_failures` with its reason line,
+`event` and `head_branch`, and per workflow `workflow_run_health` (`last_success_at`, `state`, `on_main`, `recent_starts` of scheduled runs only),
+which the worker's `jobs` check judges as one `gh/<stem>` cell each, since GitHub only emails about failed *scheduled* runs
+(a never-started supersession cancel is not a failure; cursor + timeout-kill captured);
+step 2 measures the `github-actions` checks DUE by registry cadence; step 3, `scripts/health_canary.py`, is the step
+meant to red the run and so email (a failing check never does; a crash of the poller or the harness, or the harness step
+overrunning its 6 minutes, reds it too; see Pipeline verification below).
+The worker's `llm` check alarms PER PROVIDER (each its own account: a credit error newer than that provider's own newest success in 72 h is its `<provider>/credit` Problem, so one provider's success never clears another's; the cell quotes the error, where 2026-10-02..10 the old alert named every paid job and no provider), INDEPENDENT of pending work (a quiet-queue blind spot
 once kept a credit-exhausted account green ~8h); `LLMClient` records the failure row on every
-provider exception, so the check needs no key of its own.
-`llm_burn_rate` watches daily LLM spend for the recurring credit-depletion pattern (warn threshold
-operator-tuned via `pipeline_check_thresholds`, currently 130) and lands its rows in the same
-`pipeline_check_results` table the harness below writes to. Run any directly:
+provider exception, so the check needs no key of its own. Its `fleet/spend` cell judges 24 h spend (Watch > $130,
+Problem > $150, in `THRESHOLDS`) and lands in the same `pipeline_check_results` table the harness below writes to. Run any directly:
 - CLI: `gh workflow run index_walk.yml --ref <branch>` (`-f` for flags); watch with
   `gh run list --workflow=index_walk.yml` then `gh run watch`.
 - Browser: repo → **Actions** → the workflow → **Run workflow** → branch + flags. (All sreality
   scraping workflows are prefixed `Scraping:`.)
 
-**Each scrape workflow self-declares its portal with a `# portal: <source>` tag.** A one-line
-comment near the top of a portal's index/drain/combined workflow (`<source>` = the
-`portals.source` key, e.g. `# portal: idnes`) is parsed by `scripts/generate_workflow_docs.py`
-into `WorkflowDoc.portal`, which is what the Health dashboard's per-portal "Pipeline schedule"
-panel groups on — so a new portal's cron lines surface there automatically, with **no hardcoded
-frontend map to keep in sync**. Tag only the actual ingest workflows (index walk / detail drain /
-combined fallback); shared, source-agnostic jobs (`images.yml`, `condition_scores.yml`,
-`recompute_property_stats.yml`, `clip_tag.yml`, …) stay **untagged** (`portal: null`) and
-appear in the full Settings → Workflows list rather than any single portal's schedule. As with any
-workflow edit, regenerate `frontend/public/workflow-docs.json` in the same commit (a FETCHED asset,
-not a bundled module — see `docs/architecture.md`); CI's `--check` guards drift.
+**The workflow catalogue is Settings › GitHub Actions** (Admin → General Settings): every
+`.github/workflows/*.yml` with its triggers and cron, dispatch inputs, secrets, run settings and links,
+generated by `scripts/generate_workflow_docs.py` from the YAML and the first paragraph of each file's
+leading `#` comment into `frontend/public/workflow-docs.json` (a FETCHED asset, not a bundled module —
+see `docs/architecture.md`). Regenerate it in the same commit as any workflow edit; CI's `--check` fails
+on drift. Health shows no declared schedule: the `jobs` check judges each workflow's production runs as its `gh/<stem>` cell.
 
 **The split (architectural rule #19).** The cheap "which ads still exist" check is decoupled
 from the slow "download each ad" write:
@@ -263,29 +250,27 @@ walk that REACHED THE PORTAL'S END (`portal.walk_reached_end`: every unit walked
 on a portal terminator, no stop of ours) nominates every active row it did not see (`VERIFY cm=…
 candidates=… queued=… deferred=…`); the drain fetches each page; a positive gone signal (404/410, redirect off the listing,
 "no longer active" text → `ListingGoneError`) is recorded (`detail_queue_completions` `gone`) and flips it (`flipped`) only when
-an earlier verdict ≥ `GONE_DWELL` (12 h) stands unrefuted (2026-10-09, portals blink; RUN `pending=`; Health `false_delist_share`); a live page refreshes it. The COUNT never vetoes — a short walk that reached the end
+an earlier verdict ≥ `GONE_DWELL` (12 h) stands unrefuted (2026-10-09, portals blink; RUN `pending=`; Health: the `delisting` check) — effectively 24 h, as a walk re-nominates no ad checked within `RECHECK_THROTTLE` (24 h); a live page refreshes it. The COUNT never vetoes — a short walk that reached the end
 nominates and logs `COVERAGE`. No absence sweep, no staleness rail; `delist_flip_cap` throttles per
 walk ONLY above its 2,000-active-row floor (`VERIFY DEFERRED`, in `delist_flip_refusals`); the page must be the row's OWN (a `detail_ref`
 naming another id is dropped). Stop-reason vocabulary: `references/coverage-and-delisting.md`.
 
-**Condition scoring is currently UNSCHEDULED — an intentional pause, not a bug** (PR #730,
-confirmed operator-intentional 2026-07-09; ~56k byt rows unscored is accepted). Don't
-re-enable or backfill without explicit direction. The machinery is otherwise unchanged and
-**batch-driven** when it does run: `condition_score_batches.yml` is the driver (Anthropic
-Message Batches API, 50% cost) — `submit` (previously every 3h) puts the next slice of
-unscored listings in a batch, `ingest` hourly (`35 * * * *`, still live for any in-flight
-batch) polls + persists; one workflow, mode chosen by `github.event.schedule`. The
-synchronous `condition_scores.yml` is a **dispatch-only fallback** — don't schedule both,
-they select the same pending listings and the sync scorer doesn't skip in-flight batch rows.
-The scoring model is `app_settings.llm_condition_model` (Haiku today), so batch+Haiku ≈ 25%
-of the original Sonnet-sync cost. The scrape has no scoring phase (its runner left `scraper.main` in C2-2).
-Scoring is **kraj-scoped and reuse-first** (migration 174):
-the selector targets only listings whose resolved kraj (`listing_location.kraj_kod`) is in
-`app_settings.condition_scoring_enabled_region_ids` (operator-edited via the Settings page
-"Hodnocení stavu — kraje" toggles; empty = paused; an unresolved listing is parked), and
-`propagate_condition_levels` copies a property's genuine score to its cross-portal siblings
-(`listings.condition_levels_propagated_from` records provenance) before every submit/backfill,
-so a duplicate never re-bills the LLM. `check_llm_health` mirrors the same scope.
+**Condition scoring is PARKED — an intentional pause, not a bug** (crons off since PR #730,
+2026-07-09; last level written 2026-06-18; operator ruling 2026-10-20: "keep the scoring engine
+for now, but make sure it does not impact anything"). Don't re-enable, schedule or backfill
+without explicit direction. Code, tables, the `listings.*_condition_level` columns and their data
+stay; NO surface reads the levels (no filter, agent fact or estimate — rule #14; the four level
+filters are `filter_compiler.RETIRED_FILTERS`). All six condition workflows are dispatch-only:
+`condition_score_batches.yml` (Anthropic Message Batches API, 50% cost; `submit` / `ingest` modes,
+both crons commented out) and the synchronous `condition_scores.yml` fallback — never run both at
+once, they select the same pending listings and the sync scorer doesn't skip in-flight batch rows.
+The scoring model is `app_settings.llm_condition_model` (Haiku). The scrape has no scoring phase
+(its runner left `scraper.main` in C2-2). Scoring is **kraj-scoped and reuse-first** (migration
+174): the selector targets only listings whose resolved kraj (`listing_location.kraj_kod`) is in
+`app_settings.condition_scoring_enabled_region_ids` (the Settings page "Hodnocení stavu — kraje"
+toggles; empty = none; a toggle alone runs nothing), and `propagate_condition_levels` copies a
+property's genuine score to its cross-portal siblings (`listings.condition_levels_propagated_from`
+records provenance) before every submit/backfill. Resume blockers: `roadmap/scraper-track.md`.
 
 **Images** stay decoupled across four workflows (the scrape split has no image phase; the drain only
 records image-URL rows — bytes land in R2 via these jobs). sreality comes through their `SQUARE_1800_JPG` template
@@ -305,30 +290,30 @@ compare only WITHIN a rendition**. Timeout guard = `--image-max-seconds`, NOT th
 
 **Cadence:** `*/15` for each half, deliberately — frequent index walks surface delistings fast, while
 the bounded drain keeps a steady, polite fetch volume. GitHub throttles scheduled workflows, so effective
-cadence is slower; Health liveness/freshness thresholds are **per-portal cadence-aware**
-(`portals.scrape_cadence_minutes`, migration 114): `scraper_health_checks` scales liveness warn at 1.5× /
-fail at 3× the portal's cadence, freshness warn at 1× / fail at 3×. sreality (cadence 60, ~hourly real)
-reproduces the original 90/180 + 60/180; the 6h pilots (bazos/bezrealitky/idnes, cadence 360) get
-proportional thresholds so they aren't falsely red between runs. Concurrency: each workflow has its own
-group with `cancel-in-progress: false` — a long run is never killed mid-batch, the next tick queues behind
-it. Per-category nominations are queued immediately after each category's walk, so even a timed-out index
-walk leaves a consistent partial result.
+cadence is slower, and Health judges the gap a portal keeps, not a declared one: the `scraping` check's `<portal>/walks/<unit>`
+cells age a unit's newest end-reached walk against G, the median start gap of the portal's finished walks over 14 d (under 10
+gaps, the slowest portal's G): Watch past 3 G, Problem past 6 G (crawlers ~43 h, sreality 26.5 h) or with no end-reached walk
+in 14 d; `<portal>/walks` is a Problem when no walk finished in 30 d (`THRESHOLDS` in `scripts/verify_pipeline.py`). No surface
+has read `scraper_health_checks()` since Health wave 8, so `portals.scrape_cadence_minutes` (migration 114), which it scales
+by, judges nothing; wave 9 drops both. Concurrency: each workflow has its own group with `cancel-in-progress: false` — a long
+run is never killed mid-batch, the next tick queues behind it. Per-category nominations are queued immediately after each
+category's walk, so even a timed-out index walk leaves a consistent partial result.
 
-The detail-drain writes `scrape_runs` rows too (`run_type='detail'`), but only the **index walk** sets `index_pages>0` — so "last scrape", the liveness check, and reconciliation track the index walk specifically, while the 24h new/updated/error counters sum across the drain's `index_pages=0` rows too (see `scraper_health_checks()`, migration 105). The image backfill (`--images-only`) deliberately writes NO `scrape_runs` row — recording it once polluted liveness/reconciliation with `index_pages=0` noise.
-**The lifecycle around both phases lives in ONE place, `portal_runner.run_phase`** (rule #21; never re-add a per-portal copy): `ended_at` means the phase COMPLETED, so a phase that raises bumps `errors` and deliberately leaves `ended_at` NULL, lighting up both the `stuck` and `err_pct` health arms instead of neither. That same crash path is W3's failure-signature producer (`ops_incidents`, migration 462). **The crash contract, the signature grammar and the log-tail backstop: `references/pipeline-verification.md`.**
+The detail-drain writes `scrape_runs` rows too (`run_type='detail'`), but only the **index walk** sets `index_pages>0`, and the portal checks read `run_type='index'` rows alone; the worker writes none (`run_id=None`), so the arms that must see its work read the queue, the completions ledger and listings. The image backfill (`--images-only`) deliberately writes NO `scrape_runs` row — recording it once polluted the old liveness and reconciliation arms with `index_pages=0` noise.
+**The lifecycle around both phases lives in ONE place, `portal_runner.run_phase`** (rule #21; never re-add a per-portal copy): `ended_at` means the phase COMPLETED, so a phase that raises bumps `errors` and deliberately leaves `ended_at` NULL with `by_category` still `[]`: a crashed walk is never a finished walk, nor an end-reached one, even once the API's boot sweep stamps its `ended_at`, so its units' `<portal>/walks/<unit>` cells keep aging against G (the delisting check's `<portal>/stuck` cell is another thing: active ads whose gone verdict waits past its limit). The crash path logs and writes no incident (the signature engine retired in Health wave 3, migration 621): a red workflow run is the `jobs` check's `gh/<stem>` cell with its reason line, a portal raising inside the worker its `lane/<lane>/<portal>` cell. **The crash contract and the jobs check: `references/pipeline-verification.md`.**
 
 ## The real-time worker (`scraper/realtime_worker.py`)
 
 A dark-by-default, always-on Railway service (a 2nd process from the SAME image, gated by
 `REALTIME_WORKER_ENABLED`) running every lane registered in `_amain`. Its probe/drain/images/count-probe
 core replaces cron quantization for the latency-critical path (the GH Actions crons above stay the
-throughput/completeness backbone); the other lanes host background jobs and `heartbeat` beats
-`worker_heartbeats`. Design + shipped waves: `docs/design/realtime-scrapers.md`. **Liveness (2026-09-30, after a silent 7 h 40 min freeze):** every lane, the heartbeat included, runs on one pinned default executor (32 threads), so the heartbeat is its canary; a daemon **watchdog** dumps every thread's stack and `os._exit(1)`s once no heartbeat pass has FINISHED for `LIVENESS_BOUND_SECONDS` (300 s; a beat that fails still finishes, so a refused write cannot crash-loop the worker), and Railway restarts it — `WATCHDOG no heartbeat pass finished` in the log is that exit, `WATCHDOG pass lock of <lane> held over 3600s` the same exit for a lane wedged behind its lock (`PASS_LOCK_BOUND_SECONDS`, 2 x the pass timeout). The dump writes to a non-blocking stderr (a full pipe cuts it short, never holds the exit) and a `faulthandler` exit timer armed first `_exit(1)`s it if it is still alive 15 s later (a C thread, no GIL; not a signal, which the kernel drops for PID 1). All eight lanes with a pass lock (`_PassLock`: probe, drain, broker_maintenance, location_resolve, location_intake_fast, sold_comps, text_extract, autodedup) run each pass in ONE thread, so each leaks at most one; a skipped pass is `last.previous_pass_running`, and while an abandoned pass still holds the lock the lane's `in_flight_s` keeps counting from that pass's start, so `worker_lane_stall` sees the wedge. The worker's probe, drain and sold_comps lanes bound each wait in the shared rate ledger (`scraper/rate_ledger.py`) at `LEDGER_MAX_WAIT_SECONDS` (120 s), and the drain's limiter also refuses every acquire past its `DRAIN_MAX_SECONDS` deadline: a farther window is refused without moving the frontier and that portal is given up for the pass (`budget_refused` in the heartbeat, drain claims handed back untouched, the sold_comps tick stopped with no ledger row for the refused cell; `RATE budget refused` in the log); a drain whose time budget runs out mid-chunk hands back the same way but counts `deadline_stopped` (`DRAIN time budget reached mid-chunk`), not a block. The Actions walks and drains and the `reas_main` CLI pass no bound and wait as the ledger says. The retry after a 403 leases one slot (that debt capped at one lease batch), and a drain's lease is sized to its claims.
+throughput/completeness backbone); the other lanes host background jobs, `health` measures the worker-hosted checks
+every 60 s and `heartbeat` beats `worker_heartbeats`. Design + shipped waves: `docs/design/realtime-scrapers.md`. **Liveness (2026-09-30, after a silent 7 h 40 min freeze):** every lane, the heartbeat included, runs on one pinned default executor (32 threads), so the heartbeat is its canary; a daemon **watchdog** dumps every thread's stack and `os._exit(1)`s once no heartbeat pass has FINISHED for `LIVENESS_BOUND_SECONDS` (300 s; a beat that fails still finishes, so a refused write cannot crash-loop the worker), and Railway restarts it — `WATCHDOG no heartbeat pass finished` in the log is that exit, `WATCHDOG pass lock of <lane> held over 3600s` the same exit for a lane wedged behind its lock (`PASS_LOCK_BOUND_SECONDS`, 2 x the pass timeout). The dump writes to a non-blocking stderr (a full pipe cuts it short, never holds the exit) and a `faulthandler` exit timer armed first `_exit(1)`s it if it is still alive 15 s later (a C thread, no GIL; not a signal, which the kernel drops for PID 1). All eleven lanes with a pass lock (`_PassLock`: probe, drain, broker_maintenance, location_resolve, location_intake_fast, sold_comps, text_extract, health, autodedup, notifications, push) run each pass in ONE thread, so each leaks at most one; a skipped pass is `last.previous_pass_running`, and while an abandoned pass still holds the lock the lane's `in_flight_s` keeps counting from that pass's start, so the `jobs` check's `lane/<lane>` cell sees the wedge (Watch past 1,200 s, Problem past 1,800 s). The worker's probe, drain and sold_comps lanes bound each wait in the shared rate ledger (`scraper/rate_ledger.py`) at `LEDGER_MAX_WAIT_SECONDS` (120 s), and the drain's limiter also refuses every acquire past its `DRAIN_MAX_SECONDS` deadline: a farther window is refused without moving the frontier and that portal is given up for the pass (`budget_refused` in the heartbeat, drain claims handed back untouched, the sold_comps tick stopped with no ledger row for the refused cell; `RATE budget refused` in the log); a drain whose time budget runs out mid-chunk hands back the same way but counts `deadline_stopped` (`DRAIN time budget reached mid-chunk`), not a block. The Actions walks and drains and the `reas_main` CLI pass no bound and wait as the ledger says. The retry after a 403 leases one slot (that debt capped at one lease batch), and a drain's lease is sized to its claims.
 Per-lane notes:
 - **Per-source kill switches** `realtime_probe_disabled_sources` / `realtime_drain_disabled_sources` (JSON lists, read every pass, no redeploy; PR #694) — a portal leaves that lane, its GH Actions cadence untouched.
 - **sreality count-probe lane** (migration 270, PR #696) — a per-`(category_main, category_type)` count
   check that sees a market-wide count swing faster than a full index walk; opted in, it dispatches `index_walk.yml` early.
-- **Property-maintenance lane**, every 2 min (PR #716) — `run_incremental_pass` against `dirty_properties`
+- **Property-maintenance lane**, every 30 s (PR #716) — `run_incremental_pass` against `dirty_properties`
   (rule #20), far more often than the 5-min GH cron; serialized with it + the daily sweep by the lease-row
   CAS (PR #717): **never a session advisory lock on a pooled connection** — the first cut stranded. Each drain
   slice = ONE `properties_changed` txn (recompute, Browse patch, `dirty_broker_listings` mirror), as merge/detach run inline.
@@ -391,61 +376,77 @@ Per-lane notes:
   declaring `llm_text`. W4: then `claims_intake.mine_readings` mines that pass's readings (30 s, batch lane
   `location_readings_fast`, log `INTAKE readings fast ids=…`, heartbeat `last.readings_fast`, off:
   `LOCATION_READINGS_FAST_ENABLED=0`; the hourly claim run is the backstop).
-  Needs `OPENAI_API_KEY`; a pass the provider stopped (`last.fatal`: credit, quota, key) is a FAILED pass (`failed_passes`, `last_failure_at`, same interval; `aborted` with no `fatal` = its own $/time ceiling, not a failure); rail = `text_extraction_lag`. Sizing, cache key, write gate: `llm-pipelines`.
+  Needs `OPENAI_API_KEY`; a pass the provider stopped (`last.fatal`: credit, quota, key) is a FAILED pass (`failed_passes`, `failing_since`, `last_error`, same interval; `aborted` with no `fatal` = its own $/time ceiling, not a failure); rails = the `text_extraction` gauge (new ads' flow, the backlog's ETA), the `jobs` check's `lane/text_extract` cell and, for a provider stop, the `llm` credit cell. Sizing, cache key, write gate: `llm-pipelines`.
+- **Notifications lane** (notifications push W2a, `docs/design/notifications-push/PROGRAM.md` § 3.3) — the three producers of
+  `api/notifications` on ONE clock: CONSTANT 300 s, no flag/setting/env var (the brake is a deploy). Steps `watchdog_new` (`match_once`:
+  a live watchdog's matches first seen in the last 24 h and after its `active_since` (create, switch-on, filter edit), images-first
+  gated; no cursor), `price` (`match_changes_once`: one canonical-ad step fragment, 7 days, watchdogs + monitored collections) and
+  `monitor` (inactive after 24 h gone, reactivated, new_source), each on its own connection, committing per statement (one watchdog's
+  INSERT, one detector; `SET LOCAL statement_timeout` 120 s; the notification-events lock SHARED first, so a merge waits one statement
+  at most and never deadlocks, architecture § rule 16). Why steps: a step that raises or has a
+  failed statement is its own `portal_errors` entry, `lane/notifications/<step>` red alone while the others write; a stored spec the
+  matcher refuses is `last.*.subscriptions_invalid`, never red (the write routes 422 it), even when every watchdog is. Beside the
+  API's `matcher_loop` until W2b: one identity index (mig 653), so the overlap is a union; `NOTIFICATIONS` log line only on a write or a failure.
+- **Push lane** (notifications push W4, PROGRAM.md § 3.3–3.4; `api/push_delivery.deliver_once`) — CONSTANT 15 s; the ONE brake is
+  `VAPID_PRIVATE_KEY` (unset: `last.unconfigured`, no connection; unreadable: the `lane/push/key` cell). A pass: fan-out (VISIBLE unseen
+  events ≤ 24 h × the account's live devices registered before each; a share past one per sharer a day = `skipped/capped`), a claim
+  (≤ 10 devices, 2-min lease = `next_attempt_at`, SKIP LOCKED, < 5 attempts), re-check (seen | hidden | stale | device_ended), ONE
+  push per device (coalesced: "N nových upozornění", `/notifications?d=`), finalized right after its POST (sent | gone: the device
+  ends | 429: the device is held, `hold_until`, the rows keep their attempt | retry 2ⁿ min | failed). No lock but the lease; steps `fan_out`/`claim`/`send` are
+  `portal_errors` cells by exception CLASS only — an endpoint is a secret, never in the heartbeat or the log (`PUSH` line on a send).
 - **Autodedup re-cut** (E944) — pHash coverage < 0.85 marks `rt_recut:<gen>` due; the NEXT tick re-cuts instead of passing (same lease, 1,050 s, reads stop 120 s early); never in a build or while the scope (max of the last cut's count and the store's `rt_fp`) holds > `RECUT_MAX_LISTINGS` 50k ads (row says `bootstrap`/`unfit`: Prague keeps its seed's cut); ≤ 1 attempt / 6 h, stamped before the cut, so a death mid-cut waits and does not halve the claim cap (2 deaths under one cut = `died` until a seed); failed = `errors: 1` + `recut_failed`; shutdown = taken back while its stamp holds.
   Heartbeat `last.recut` + the lane's own `recut` (lost on restart; durable: `rt_recut:<gen>.last`), `calibration_built_age_days`. The parsed calibration (~16 MB at 39.5k) outlives its pass, read once a digest — E949's one deliberate exception.
 - **Autodedup lane** (AUTODEDUP §7.3/E914, mig 557) — THE engine's one real-time pass (`run_incremental`); one integer
   `realtime_autodedup_interval_seconds` (seeded 0 = stopped; 60 running) is cadence AND brake, claim = engine rate × half a 1050 s deadline (a build's three quarters, E951), rate
-  halved BEFORE every pass, restored the moment it commits, then overwritten by its measurement (E941), at least doubled instead when the clock cut the claim, it was filled and the pass took under half the deadline (E951; `last.pass_budget_s`, `rate_doubled` when 2× beat the blend); one pair budget, build and live: 150k pairs to DECIDE once the reject ledger has answered (E943: `autodedup.rt_reject_ledger`, mig 596, a below-floor reject skipped while both decision digests, the calibration, the feature version and the engine digest — decision sources, model, settings — match; a deploy touching them or a re-cut costs one full-price pass; a CLIP re-embed that leaves `clip_tagged_at` alone must empty it), each refusal re-claiming a quarter of the claim made (E952; `last.attempts`/`wanted_pairs`/`wanted_by_attempt`/`pairs_to_decide`/`pairs_to_decide_by_attempt`/`aborted`/`ledger_skipped`/`ledger_written`); a pass reads facts only for its claim and the sides of the pairs it decides (E960, mig 604 `rt_fp.dd`; `last.dirty`/`reads` by reason), so an advert it does not claim is seen as its row stored it — a reparse wave, a location correction, sightings or a re-master reach `rt` only when a feed re-claims the advert, the freshness rule re-claims it (a merge applies only when its moving members were refreshed within 12 h under this engine, else `last.reconcile_stale`; waiting groups are re-claimed whole, oldest first, ≥ 100 adverts a pass, on a pass's first attempt only, each group tried at most once in 6 h, paused once and halved after a pass that died with them (`rt_redecide_budget`; watch `stale_claimed` beside `deadline_exceeded`), never while the apply scope is closed or the reject ledger is inert, so a W8 undo or a go-live backlog drains at ~70 groups a pass; arrival merges never wait; `last.reconcile_handed_on`/`_dropped`/`stale_claimed`; escape: brake 0 → delete `autodedup.settings` `rt_redecide:<gen>` → brake 60) or the scope is re-seeded; a killed pass keeps the half; `SystemExit`/trip = a failed pass. Scope: `rt_scope` (the seed's) names `obec:` / `cast_obce:` / `okres:` blocks (E961: an okres walked through its RÚIAN obce, 6 h; nothing beside a block that holds it; a block over `ENTER_SLICE` 20,000 is PAGED, a page a walk by a listing-id keyset (E940: cursors in `autodedup.settings` `rt_scope_pages:<gen>`; a page prunes only its own id range; the block is unread until its first cycle ends; the seed pages EVERY block to its end under no daily cap, the cap governs passes, then refuses BEFORE its cut a scope past `MAX_SCHEMA_MB` or past `SEED_MEMORY_MB` 8,192 at 56 kB an advert, ~150k, until E962 streams the cut; `last.enter_scan` = walks/pages/page_of `[page, of]`/stalled (16 pages, no end)/unfinished (unreached + mid-cycle) when the cap stopped it), the apply scope and W8 the same areas as `town:` / `quarter:` / `district:`. Decides + groups `rt`, then RECONCILES production: re-clustered groups merge via `merge_property_set` inside `app_settings.autodedup_apply_scope`, never a split (`mode=unapply` undoes). `rt_seed`/`apply`/`unapply` share `autodedup.rt_lease`; every lane transaction (pass, each reconcile group, re-cut) ends with `rt_lease.hold` (`lease_lost`). SIGTERM marks the lane stopping: the pass stops at its next checkpoint (`PassStopped`), rolls back and releases; the handler also releases the holder's lease on a fresh connection (2 attempts; `drainingSeconds` 30); a pass whose connections a database restart took retries the release on new ones, every 20 s for up to 180 s, before falling back to the TTL. A restart in place (same hostname + pid) releases, right before the take, the live lease its dead predecessor left (holder `<host>:<pid>:<second>` older than this boot; E948; the engine logs it) and halves `rt_claim_cap:<gen>` in the same commit: the feeds' limit = min(500, cap, rate × budget) (the revived feed ignores it), floor 25, only a seed, or a container limit (read each pass) grown ≥ 25 % over the row's `limit_mb`, raises it (E948b: `limit_mb` = the biggest limit a death since the last seed/reset died under; a row without one takes the pass's limit, but one E948 halved (no key) is measured from the 8 GB `E948_LIMIT_MB` 7,629.4; a boot seeing the growth AND a dead predecessor releases it without halving); at the floor the lease waits out its TTL (`predecessor_kept`). `last.peak_rss_mb`/`rss_mb`/`memory_limit_mb`/`claim_cap`/`predecessor_released`; `MAX_SCHEMA_MB` 10,000 (E940; 20 KiB an ad with the ledger); no GH schedule. The decided pairs are scored 5,000 at a time and each chunk's rows are written before the next, so the rows follow the chunk; a side's CLIP vectors are held from its first decided pair to its last, which in a dense pass is most sides (E950; `last.chunks`/`chunk_rss_mb`/`chunk_vectored`). No body or token memo outlives its pass (E949): each pass counts and empties them (`last.memo_entries`), and freed heap goes back to the kernel (`gc.collect` + glibc `malloc_trim(0)`) as every pass begins and ends, before its lock is released (`last.rss_at_start_mb` / `rss_after_trim_mb`), a raised pass's when the next one begins; the worker starts as `env MALLOC_ARENA_MAX=2 python -m scraper.realtime_worker` (two arenas; Railway's exec form needs `env`).
+  halved BEFORE every pass, restored the moment it commits (or the pair budget refuses it, E970), then overwritten by its measurement (E941), at least doubled instead when the clock cut the claim, the feeds filled it (the re-claims ride on top and fill none, E971) and the pass took under half the deadline (E951; `last.pass_budget_s`, `rate_doubled` when 2× beat the blend); one pair budget, build and live: 150k pairs to DECIDE once the reject ledger has answered (E943: `autodedup.rt_reject_ledger`, mig 596, a below-floor reject skipped while both decision digests, the calibration, the feature version and the engine digest — decision sources, model, settings — match; a deploy touching them or a re-cut costs one full-price pass; a CLIP re-embed that leaves `clip_tagged_at` alone must empty it), each refusal re-claiming a quarter of the claim made (E952; `last.attempts`/`wanted_pairs`/`wanted_by_attempt`/`pairs_to_decide`/`pairs_to_decide_by_attempt`/`aborted`/`ledger_skipped`/`ledger_written`); a pass reads facts only for its claim and the sides of the pairs it decides (E960, mig 604 `rt_fp.dd`; `last.dirty`/`reads` by reason; `dirty` is a neighbourhood, never a backlog: the build's backlog, rate and decision lag are the Health `dedup` check's), so an advert it does not claim is seen as its row stored it — a reparse wave, a location correction, sightings or a re-master reach `rt` only when a feed re-claims the advert, the freshness rule re-claims it (a merge applies only when its moving members were refreshed within 12 h under this engine, else `last.reconcile_stale`; waiting groups are re-claimed whole — Praha, the scope's `town:` towns, the rest (E974), then flats for sale, flats for rent, houses + commercial for sale, the rest (E972, E974), oldest first within each, active and inactive groups together (E974: the operator's ruling of 2026-10-21 retired E973's active-first level); the hand-on list's 5,000-advert cap cuts the same order — 200 adverts a pass (a group that does not fit is skipped for the next, the first taken whole, E973) on top of the feeds' limit (E971: the worker's memory holds a pass to ~300 adverts), never more than `rt_claim_cap`, on a pass's first attempt only, each group tried at most once in 6 h (stamped as the pass ends on its own terms, never by a shutdown, a lost lease or a kill, E973), paused once and halved after a pass that died with them (`rt_redecide_budget`; watch `stale_claimed` beside `deadline_exceeded`), never while the apply scope is closed or the reject ledger is inert, so a W8 undo or a go-live backlog drains at ~80–110 groups a pass; arrival merges never wait; `last.reconcile_handed_on`/`_dropped`/`stale_claimed`; escape: brake 0 → delete `autodedup.settings` `rt_redecide:<gen>` → brake 60) or the scope is re-seeded; a killed pass keeps the half; `SystemExit`/trip = a failed pass. Scope: `rt_scope` (the seed's) names `obec:` / `cast_obce:` / `okres:` blocks (E961: an okres walked through its RÚIAN obce, 6 h; nothing beside a block that holds it; a block over `ENTER_SLICE` 20,000 is PAGED, a page a walk by a listing-id keyset (E940: cursors in `autodedup.settings` `rt_scope_pages:<gen>`; a page prunes only its own id range; the block is unread until its first cycle ends; the seed pages EVERY block to its end under no daily cap, the cap governs passes, then refuses BEFORE its cut a scope past `MAX_SCHEMA_MB` or past `SEED_MEMORY_MB` 8,192 at 56 kB an advert, ~150k, until E962 streams the cut; `last.enter_scan` = walks/pages/page_of `[page, of]`/stalled (16 pages, no end)/unfinished (unreached + mid-cycle) when the cap stopped it), the apply scope and W8 the same areas as `town:` / `quarter:` / `district:`. Decides + groups `rt`, then RECONCILES production: re-clustered groups merge via `merge_property_set` inside `app_settings.autodedup_apply_scope`, never a split (`mode=unapply` undoes). `rt_seed`/`apply`/`unapply` share `autodedup.rt_lease`; every lane transaction (pass, each reconcile group, re-cut) ends with `rt_lease.hold` (`lease_lost`). SIGTERM marks the lane stopping: the pass stops at its next checkpoint (`PassStopped`), rolls back and releases; the handler also releases the holder's lease on a fresh connection (2 attempts; `drainingSeconds` 30); a pass whose connections a database restart took retries the release on new ones, every 20 s for up to 180 s, before falling back to the TTL. A restart in place (same hostname + pid) releases, right before the take, the live lease its dead predecessor left (holder `<host>:<pid>:<second>` older than this boot; E948; the engine logs it) and halves `rt_claim_cap:<gen>` in the same commit: the feeds' limit = min(500, cap, rate × budget) (each feed a fifth of it, the revived one too since E970) and the re-claims ≤ cap (E971 review), floor 25, only a seed, or a container limit (read each pass) grown ≥ 25 % over the row's `limit_mb`, raises it (E948b: `limit_mb` = the biggest limit a death since the last seed/reset died under; a row without one takes the pass's limit, but one E948 halved (no key) is measured from the 8 GB `E948_LIMIT_MB` 7,629.4; a boot seeing the growth AND a dead predecessor releases it without halving); at the floor the lease waits out its TTL (`predecessor_kept`). `last.peak_rss_mb`/`rss_mb`/`memory_limit_mb`/`claim_cap`/`predecessor_released`; `MAX_SCHEMA_MB` 10,000 (E940; 20 KiB an ad with the ledger); no GH schedule. The decided pairs are scored 5,000 at a time and each chunk's rows are written before the next, so the rows follow the chunk; a side's CLIP vectors are held from its first decided pair to its last, which in a dense pass is most sides (E950; `last.chunks`/`chunk_rss_mb`/`chunk_vectored`). No body or token memo outlives its pass (E949): each pass counts and empties them (`last.memo_entries`), and freed heap goes back to the kernel (`gc.collect` + glibc `malloc_trim(0)`) as every pass begins and ends, before its lock is released (`last.rss_at_start_mb` / `rss_after_trim_mb`), a raised pass's when the next one begins; the worker starts as `env MALLOC_ARENA_MAX=2 python -m scraper.realtime_worker` (two arenas; Railway's exec form needs `env`).
+
+- **A pasted link enters the same queue.** `POST /listings/ingest {url}` (admin) resolves the URL with the one
+  identity canon (`scraper/portal_identity.resolve_url`) and, for an ad we do not hold (or hold inactive), calls
+  `db.enqueue_detail` at NEW (a `given_up` row is re-armed); `GET /listings/ingest/{source}/{native_id}` reports
+  `refused | held | queued | gone | failed`. The API never fetches a page: the worker's drain does, so the ad is written,
+  born (the maintenance lane, 30 s) and located exactly like a walked one (`docs/design/new-property-from-link.md`).
 
 ## Pipeline verification (migration 274)
 
-**No publication gate any more.** Migration 273's `properties.published_at` gate died with the
-dedup engine in the 2026-08 cutoff (rule #15); the columns are frozen history and Watchdog's "new
-property" cursor is back on `listings.first_seen_at`. Durable lesson: a `SECURITY DEFINER` function
-in a view's `WHERE` needs a scalar subquery, never a bare call — `database` skill, InitPlan gotcha.
-
-**Pipeline verification harness** (`scripts/verify_pipeline.py`, migration 274, PR #703) — a
-scheduled job that writes one `pipeline_check_results` row per health metric (`ok`/`warn`/`fail`) and
-is the origin of the notification system's third producer, `system_health` (`docs/architecture.md`
-rule #16) — a `fail` rings the same in-app bell the SPA nav badge polls, once per INCIDENT: onset,
-then 6h/24h/72h/weekly while red, then one recovery (W3.4's ladder + flap cooldown in
-`toolkit/system_alerts`, inherited by every check). Born from the 2026-07 two-day silent stall
-(Anthropic credit exhaustion, 38k+ failed LLM calls) whose only alarm was a cron the operator missed.
-Two lanes: `llm_health.yml` hourly (the acute checks, `--only ... --exit-nonzero-on-fail`, so a
-`fail` also reds the run and emails) and `verify_pipeline.yml` 6-hourly (everything). Live checks:
-`llm_errors`, `llm_burn_rate`, `db_saturation`, `worker_liveness`,
-`dual_write_parity`, `property_maintenance`, `broker_resolution_freshness`,
-`broker_merge_suppression`, and two 6-hourly-only groups — migration 437's
-`long_open_transaction` (warn-only: the llm-cost rollup's 3h trailing re-scan stops self-healing
-once a transaction outlives it), and the per-m² program's four plausibility checks over
-`measure_plausibility_by_source` (migration 427) — `ppm2_median_shift`, `ppm2_basis_floor_share`,
-`area_vs_usable_divergence` and the denominator arm `ppm2_measure_coverage`, whose three siblings
-are ratios that skip a cell with no inputs and would read clean on a corpus gone dark. **`acquisition_lag` + `walk_coverage`
-(2026-08-27)** close the ingestion blind spot: until then every scraper health signal compared our
-data to our own data and rendered as a dot on a page, so sreality ingested ZERO new listings for
-nine days without anything leaving the database. `acquisition_lag` reads the oldest unclaimed never-fetched `listing_detail_queue` row per portal — deliberately the QUEUE and not `listings.first_seen_at`, because a "no new rows in N hours" check needs a baseline that the outage itself erodes (nine days of zeros makes zero the expected value). **`text_extraction_lag`** (field capture W7) is its twin one layer later — oldest ELIGIBLE-unextracted advert + waiting count per portal, plus a wedge arm (rows eligible, lane claiming none, or the lane absent from the heartbeat) and an abort arm (the provider stopped the last pass: `fail` quoting its `fatal`, whatever the backlog's age or `claimed`; 2026-10-02..10 the lane claimed 500 a pass for eight days and wrote nothing) — and it is computed from the text lane's OWN selector predicate, because the outage it replaces was a lane and its three monitors disagreeing about who was eligible. `walk_coverage` is the only
-comparison against EXTERNAL truth: collected vs the portal's advertised total from the latest
-COMPLETED index run's `by_category`, plus a truncation arm (categories walked vs that portal's own
-7-day best) because a budget-stopped walk leaves no entry for the categories it never reached and
-so makes the gap look BETTER. remax and maxima derive their total as `len(seen)` and mmreality
-reports none — all three are reported `verifiable: false` rather than 100%. **`walk_end_streak`** (2026-10-13) is its per-category twin: finished walks in a row in which one (source, category) was walked and did NOT reach the portal's end, i.e. nominated nothing (rule #3) — warn 3 walks (~1 day at the real cron cadence for a category walked every run), fail 6; a run that skipped the category is not counted, and a category its portal has not walked in 6 walks warns (starved or dropped); a window with no verdict is `warn`, value None, never `ok`. Born of ceskereality byt/prodej missing the end for 89 walks (13,373 active vs 9,771 listed) while the portal-wide gap read 4.6%, under warn; detail in `references/pipeline-verification.md`. **`worker_lane_stall`** closes the gap `worker_liveness` structurally cannot see — a worker that is ALIVE with a wedged lane. The realtime worker beat every 30 s for nine hours while its drain lane completed ONE pass and its images lane completed 486; a pass was recorded only on COMPLETION, so a hung lane and an idle lane published byte-identical state. The worker now stamps when a pass BEGINS and the heartbeat resolves it to `in_flight_s`, and `_lane_loop` bounds every pass with `LANE_PASS_TIMEOUT_SECONDS` (1800) — containment, not a diagnosis: it stops one hang costing every later pass, and repeated timeouts on one lane are themselves the diagnosis. Caveat worth knowing: a pass blocked inside `asyncio.to_thread` keeps running after cancellation (Python cannot kill a thread), so the lane is freed but the thread is not — hence the pass locks and the watchdog in the worker section above. **`migration_drift`** closes a different silent gap: it probes the live catalog for the objects the newest 25 migrations declare, so a migration merged but never applied is caught in one tick instead of the 29 h it took on 2026-08-25 (see the `database` skill). **`workflow_poller_liveness`** (W0.1, registered in the 6h lane only for now — promote it into `llm_health.yml`'s `--only` list after a soak) keys on the AGE of `app_settings.workflow_failures_cursor`: `record_workflow_failures.py` excludes its own runs from `workflow_failures`, so a dead poller cannot appear in the table it feeds — it just stops adding rows, which is byte-identical to a quiet week. **Three rules the harness now enforces on itself** (W0 of `docs/design/reliability-program.md`; evidence in the reference below): **silence is not recovery** — a failure is superseded only by a newer SUCCESS, never by elapsed time, so never reintroduce a recency window into a state check; **a zero is ambiguous, so name the arm** — `llm_burn_rate` carries `details.arm` (`starved`/`idle`/`runaway`/`ok`), evaluated per `called_for`; and **results are persisted AND alerted per check as each completes**, under a per-check budget and a lane budget — the acute lane's 120s `_LANE_BUDGET_S` out of its 300s job, the full lane's `full_lane_budget_s` (one per-check budget per registered check, CI-bounded by the 30-min job) (an overrun is `warn` "timed out", an unreached check `warn` "not run" — neither is ever `ok`). **`field_fill_matrix`** (field capture W1) reads the VALUES, not just presence — the half
-`data_quality_by_source` structurally cannot see: per (source, field) over EVERY active row — a
-sampled cohort cannot be compared with itself a week later, the newest-1,000 slice rotated 30+ pp on
-untouched parsers — it rings when fill collapses against the blessed baseline in
-`data/field_capture/`, when the off-canon share against `toolkit/filter_registry` rises, or when a
-blessed cell stops being measured at all; today's zeros are blessed KNOWN and named on every run, and
-a census older than 30 d warns (a CI test would red `main` on a date, not on a defect). Re-blessing is
-the OPERATOR's (step 4 above), both goldens' tests are subset assertions so an unblessed new field or
-portal reds nothing, and it owns no thresholds (sized on that cohort's measured drift) — every other
-check's live in `app_settings.pipeline_check_thresholds` over code defaults in `DEFAULT_THRESHOLDS`.
-**`floor_convention`** (field capture W8) asks what no fill or validity measure can — whether a
-populated, plausible integer is on the RIGHT SCALE: `mean(portal floor − idnes floor)` over active
-`byt` rows sharing a (price, area, disposition) key, warn 0.35 / fail 0.50 / min 40 pairs. It is the
-lane's costliest check (11-35 s, registered last among the DB checks) and the ONE that ships RED on
-purpose — the six ground = 1 portals stay +0.8..+1.1 until the operator has run the six
-`scripts/reparse.py --fields floor` heal passes in the W8 hand-over § 7.
-**Per-check rationale, incidents and threshold sizing: `references/pipeline-verification.md`.**
+**Health check harness** (`scripts/verify_pipeline.py`; plan: `docs/design/health-dashboard.md`) — ONE registry, `CHECKS`:
+each `Check` declares key, class (`alarm`/`gauge`), host (`realtime-worker` for `jobs`, `capacity` and `llm` since wave 3,
+`scraping`, `publishing`, `delisting` and `coverage` since wave 4, `dedup` since Health dashboard sprint wave 5, `parsing`, `data_quality`, `location_town_coverage` and `text_extraction` since wave 6, `github-actions` only for `migration_drift` and the URL probe), `cadence_s`, budget, label, unit and owner page; `project_registry` mirrors the host's keys into `health_checks`
+(migration 619). FOUR statuses, `ok`/`warn`/`fail`/`unknown` = OK/Watch/Problem/Not measured: a timeout, an error or a
+check's own could-not-measure path is `unknown`, reason in `details` (`timed_out`/`errored`/`skipped`), never `ok`. `run_due` (the canary for GitHub's keys; the
+worker's `health` lane, every 60 s under a 500 s pass budget that defers a gauge whose budget no longer fits, for its own) measures a host's DUE checks (newest row since `declared_at` older than `cadence_s` less
+min(cadence / 10, 15 min)), alarms before gauges, each under a real wall clock: every statement's `SET LOCAL statement_timeout` is the
+check's time left, so an overrun is `unknown` (`timed_out`, `budget_seconds`, `elapsed_seconds`), and a check the run
+never reached writes no row and stays due; the weekly outbound-URL probe is a cadence, not a workflow. A row keeps `details.message`, `elapsed_ms` and its `cells` (one verdict per portal/job/lane/file; every measured result has them since wave 6).
+Measuring writes no system alert and reds no run: the ONE ladder, `toolkit/system_alerts.reconcile`, runs in the API every 60 s —
+one `ops_incidents` row per failing cell (`cell:<key>:<subject>`), one grouped onset per check, reminders until
+acknowledged on Health (Acknowledge on a check's row covers all its open incidents) — alarm
+6 h / 24 h / 72 h then weekly, gauge daily — and one recovery once an OK is measured across two cadences less the due slack, never under
+30 min; `unknown`, or a result past its staleness budget, is inert.
+**Platform checks (wave 3, `scripts/checks/platform.py`, on the worker):** `jobs`, one job cell per production GitHub
+workflow (`gh/<stem>`, with its reason line), the poller (`gh/poller`), pg_cron job (`cron/<job>`), worker lane
+(`lane/<lane>`, `lane/<lane>/<portal>`) and derived artifact (`artifact/<name>`); `capacity`, pg_cron durations against a
+sticky reference, check timeouts per host, the oldest open transaction, connections and the worker's memory; `llm`, credit per
+provider, error share and starvation per (provider, `called_for`), 24 h spend. Thresholds: `THRESHOLDS`, no override.
+**Push check (notifications push W4, `scripts/checks/notifications.py`, on the worker; key `notifications`, 5 s budget):**
+`push/stall` (a delivery due > 10 min, its device not held), `push/recall` (a VISIBLE unseen event < 24 h, an older live device, no ledger
+row after 5 min; neither judged while braked), `push/failures` (≥ 3 terminal in 24 h), `push/unconfigured` (Watch: braked while a device waits).
+**Portal checks (wave 4, `scripts/checks/{scraping,publishing,delisting}.py`, on the worker; cells `<portal>/<arm>`):**
+`scraping` (walks: hours since a unit's newest end-reached walk against the portal's own walk gap; inflow; fetch errors;
+missing), `publishing` (queue age, Browse visibility of new ads and of the stock, photos, `fleet/dirty`), `delisting`
+(outflow, stuck verdicts, verify backlog, deferrals, precision), the `coverage` gauge (residual, unnominated ads).
+**Engine check (Health dashboard sprint wave 5, `scripts/checks/dedup.py`, on the worker; key `dedup`, label "Engine"):** the engine's state
+(off/building/merging/idle: the `state` cell, always OK, and a fact on every cell); `stream`, `build`, `merge_pause`, `decision_lag`, `lease`,
+`rulings/ads`, `rulings/brokers` (the former `broker_merge_suppression`) and `splits`, from the live engine's stores and `autodedup`/`operator` merges only (rule 15).
+**Quality checks (Health dashboard sprint wave 6, `scripts/checks/quality.py`, on the worker):** the `parsing` alarm (fill and vocabulary against the blessed baseline, new ads' per-m² measures, stock
+medians, location payload shape via `claims_common.PAYLOAD_SHAPE_PREDICATES`, re-snapshot churn) and the gauges `data_quality` (basis floor, area vs usable, no portal link), `location_town_coverage` (active ads only) and `text_extraction` (flow, backlog ETA), each gauge cell with a 30-day `trend` and `worse_7d`.
+**Watchers (migration 620):** pg_cron's `health_liveness()` (job `health-liveness`, every 5 min) writes one `liveness` row
+(host `pg_cron`) whose cells judge what must not judge itself: `worker` (heartbeat over 10 min old), `health_lane` (no completed pass, a pass in flight or failing for 10 min), `stale:<key>` (an alarm past its staleness budget), `api` (the watchdog matcher's lease lapsed) and `unalerted` (a
+measured Problem with no incident); the ladder tells them, and they replace `worker_liveness` and the 24 h dead-man job.
+The canary's last step, `scripts/health_canary.py`, exits 2 when the DB does not answer and 1 on any `CANARY FAIL`: the
+newest `liveness` row is 30 min old, a failing liveness cell has no incident after 15 min, or an open, unacknowledged alarm-class
+incident's latest rung (`ops_incidents.alerted_at`: onset, 6 h, 24 h, 72 h, weekly) is 15 min to 12 h old (never a gauge's). System alerts
+reach no bell (ruling R2b, 2026-10-21), so that red run's e-mail is the one external path. pg_cron watches the worker, the API and every alarm's freshness (the
+canary's keys too); the canary watches pg_cron and the ladder. **Rationale, watchers, sizing: `references/pipeline-verification.md`.**
 
 ## Reading the logs
 

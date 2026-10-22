@@ -12,6 +12,8 @@ import {
   updateWatchdogSubscription,
 } from '@/lib/api';
 import { watchdogKeys } from '@/lib/queries';
+import { enumLabel } from '@/lib/enums';
+import { mapAreaLabel } from '@/lib/filters';
 import { fmtAbsolute, fmtCount, fmtRelative } from '@/lib/format';
 import { PPM2_UNIT, ppm2BasisOfCohort } from '@/lib/measure';
 import { portalScopeLabel } from '@/lib/portals';
@@ -58,7 +60,7 @@ export default function WatchdogManage() {
             onDelete={(id) => {
               if (
                 window.confirm(
-                  'Delete this watchdog? Its notification history will be removed too.',
+                  'Delete this watchdog? Its notifications leave your feed.',
                 )
               ) {
                 deleteMut.mutate(id);
@@ -86,16 +88,11 @@ function Header() {
         </h1>
         <p className="mt-2 text-sm text-[var(--color-ink-2)]">
           A watchdog is a saved filter. The backend matcher fires a
-          notification when a freshly scraped listing matches the spec.
+          notification when a freshly scraped listing matches the spec; its
+          alerts appear in Notifications.
         </p>
       </div>
       <div className="flex items-center gap-3">
-        <Link
-          to={ROUTES.watchdog.build()}
-          className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] hover:border-[var(--color-rule-strong)] transition-colors"
-        >
-          ← Back to feed
-        </Link>
         <Link
           to={ROUTES.browse.build()}
           className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
@@ -291,15 +288,7 @@ function summariseFilter(spec: WatchdogFilterSpec): string {
         : head,
     );
   }
-  if (
-    spec.lat != null &&
-    spec.lng != null &&
-    spec.radius_m != null
-  ) {
-    bits.push(
-      `within ${spec.radius_m} m of (${spec.lat.toFixed(4)}, ${spec.lng.toFixed(4)})`,
-    );
-  }
+  if (spec.bounds) bits.push(mapAreaLabel(spec.bounds));
   if (spec.min_price_czk != null || spec.max_price_czk != null) {
     const lo = spec.min_price_czk != null ? `${spec.min_price_czk.toLocaleString()}` : '0';
     const hi = spec.max_price_czk != null ? `${spec.max_price_czk.toLocaleString()}` : '∞';
@@ -338,8 +327,9 @@ function summariseFilter(spec: WatchdogFilterSpec): string {
   if (spec.ownership?.length) {
     bits.push(spec.ownership.map((v) => OWNERSHIP_TEXT[v] ?? v).join(', '));
   }
+  if (spec.condition_match?.length) {
+    bits.push(`condition: ${spec.condition_match.map((v) => enumLabel('condition', v) ?? v).join(', ')}`);
+  }
   if (spec.min_parking_lots != null) bits.push(`≥${spec.min_parking_lots} parking`);
-  if (spec.building_condition_level_min != null) bits.push(`bld≥${spec.building_condition_level_min}`);
-  if (spec.apartment_condition_level_min != null) bits.push(`apt≥${spec.apartment_condition_level_min}`);
   return bits.join(' · ');
 }

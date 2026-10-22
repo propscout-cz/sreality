@@ -7,7 +7,7 @@ map_overlay_render_section. --dry-run fetches and checks everything and writes n
 render_sql_section is the same flow for one SQL-sourced section, from the database alone: the
 rent-map ingest (api/rent_map.py) re-renders `rent_map` with it inside its own transaction.
 
-    python -m scripts.ingest_map_overlays [--sections metro,flood] [--dry-run] [--accept-shrink]
+    python -m scripts.ingest_map_overlays [--sections metro,flood,railway] [--dry-run] [--accept-shrink]
 """
 
 from __future__ import annotations
@@ -61,6 +61,11 @@ IPR_REFERENCED = "https://mp.iprpraha.cz/arcgis/rest/services/ReferencedServices
 IPR_UNIVERSITIES = "FSV_CUR_OV_SKOLYVS_B"
 MSMT_F21_URL = "https://dsia.msmt.cz/vystupy/f2/f21.xlsx"
 VUV_MAPSERVER = "https://ags2.vuv.cz/arcgis/rest/services/isvs_voda/isvs_voda/MapServer"
+# ČÚZK's base topographic database (1:10 000), open data CC BY 4.0 since 2023-07-01; the station
+# layer carries the name, the SR70-style station code and stanice / zastávka.
+CUZK_ZABAGED = "https://ags.cuzk.gov.cz/arcgis/rest/services/ZABAGED_POLOHOPIS/MapServer"
+ZABAGED_STATIONS_LAYER = "Železniční stanice, zastávka"
+RAILWAY_FIELDS = ("fid_zbg", "zst_k", "zst_p", "typ")
 VUV_ISO_RECORD = "https://heis.vuv.cz/xmicka/record/xml/CZ-VUV-MD-ZaplavUzemi"
 RUIAN_ATOM = (
     "https://atom.cuzk.gov.cz/RUIAN-STATY-SHP/datasetFeeds/CZ-00025712-CUZK_RUIAN-STATY-SHP_1.xml"
@@ -670,6 +675,20 @@ class UniversitySites:
             raise Refused(f"primary site(s) without an IPR point: {sorted(missing)}")
 
 
+RAILWAY_CLASSES = {"stanice": "station", "zastávka": "halt"}
+
+
+def railway_station_props(a: dict[str, Any]) -> dict[str, Any]:
+    """A ZABAGED station point: class from `typ` (stanice / zastávka), the name as the label;
+    an unknown kind or an unnamed point is refused — the publisher changed its vocabulary."""
+    cls = RAILWAY_CLASSES.get((a.get("typ") or "").strip())
+    name = (a.get("zst_p") or "").strip() or None
+    if cls is None or name is None:
+        raise Refused(f"railway station outside typ {sorted(RAILWAY_CLASSES)} or unnamed: {a!r}")
+    return _flat({"class": cls, "name": name, "label": name,
+                  "code": (a.get("zst_k") or "").strip() or None})
+
+
 def flood_props(cls: str) -> Props:
     def props(a: dict[str, Any]) -> dict[str, Any] | None:
         return _flat({"class": cls, "name": (a.get("NAZ_TOK") or "").strip() or None})
@@ -854,6 +873,24 @@ SOURCES: dict[str, Section] = {
                   readers=(UniversitySites(TEACHING_SITES_WHERE),)),
             Layer("dorms", "Koleje", 2, legend=(_entry("dorm", "Kolej", "#F57C00", geom="point"),),
                   readers=(_ipr(IPR_UNIVERSITIES, DORMS_WHERE, POINT, dorm_props, UNIVERSITY_FIELDS),)),
+        ),
+    ),
+    # Every railway station and stop in the country from ČÚZK's ZABAGED® (2,797 points, 1:10 000;
+    # stanice vs zastávka from the layer's own `typ`), fetched in its native S-JTSK like the flood
+    # register. From z7: a regional view shows the network's stops, the country view does not.
+    "railway": Section(
+        label="Železniční stanice", sort=5, minzoom=7, maxzoom=12,
+        attribution="© ČÚZK (ZABAGED®)", licence="CC BY 4.0",
+        source_url=f"{CUZK_ZABAGED}/58",
+        note="Železniční stanice a zastávky v celé ČR podle ZABAGED® ČÚZK; název a druh podle "
+             "Správy železnic (kód SR70 v detailu).",
+        revised_at=arcgis_revised_at,
+        layers=(
+            Layer("railway_stations", "Stanice a zastávky", 1,
+                  legend=(_entry("station", "Železniční stanice", "#37474F", geom="point"),
+                          _entry("halt", "Železniční zastávka", "#90A4AE", geom="point")),
+                  readers=(ArcGisLayer(CUZK_ZABAGED, ZABAGED_STATIONS_LAYER, "1=1", 5514,
+                                       railway_station_props, POINT, RAILWAY_FIELDS),)),
         ),
     ),
     # The choropleth the Browse map drew from rent_map_choropleth_public until migration 601:

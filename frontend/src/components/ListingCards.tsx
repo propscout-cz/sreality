@@ -8,13 +8,14 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react';
+import type { HoverTarget } from '@/lib/hoverSync';
 import { Link } from 'react-router-dom';
 import CollectionMark from '@/components/CollectionMark';
 import CollectionSaveMenu, {
   COLLECTION_SAVE_LABEL,
 } from '@/components/CollectionSaveMenu';
 import CurationMarks from '@/components/CurationMarks';
-import ImageCarousel from '@/components/ImageCarousel';
+import ImageCarousel, { type ImageCarouselHandle } from '@/components/ImageCarousel';
 import InfiniteSentinel from '@/components/InfiniteSentinel';
 import Spinner from '@/components/Spinner';
 import DismissButton from '@/components/DismissButton';
@@ -27,21 +28,24 @@ import { taggedImageUrls, useCardHydration } from '@/lib/hydration';
 import { COVER_OPTIONS, coverIndex, type CoverTag } from '@/lib/imageTags';
 import { useCollectionMembership } from '@/lib/collectionCache';
 import {
+  CARD_SORTS,
   sortToParam,
   type CardRow,
+  type ListingFloor,
   type SortSpec,
 } from '@/lib/queries';
 import {
-  fmtArea, fmtCzk, fmtMeasuredPricePerM2,
+  fmtArea, fmtCzk, fmtFloor, fmtMeasuredPricePerM2,
   fmtShortDate, fmtTomDays,
 } from '@/lib/format';
-import { ppm2BasisFromToken } from '@/lib/measure';
+import { plotBesideArea, ppm2BasisFromToken } from '@/lib/measure';
 import { listingTypeLabel } from '@/lib/enums';
 import { portalLabel, portalShort } from '@/lib/portals';
 import type { ListingEstimate } from '@/lib/types';
 import { runSurfaceUrl } from '@/lib/runLinks';
 import { propertyPath } from '@/lib/listingUrl';
 import { inzeratu } from '@/lib/mergedAdverts';
+import type { MergeMode } from '@/lib/useMergeMode';
 
 /* The card grid is CONTAINER-intrinsic, not viewport-keyed: columns flow to
  * fit the cards COLUMN's own width via `auto-fill`, each at least --card-min
@@ -104,12 +108,12 @@ interface Props {
    * "0 in this map area — Show all" empty state. */
   hasBounds: boolean;
   /* Hover-sync set: when a card's listing_id appears here (because the
-   * user is hovering the matching pin on the map, or the matching row
-   * in the table), the card lights up. Cards push their own hover
-   * state (their listing_id) outward via onHover. Keyed on the surrogate
-   * listing_id, never sreality_id — null-safe past Gate-2. */
+   * user is hovering the matching pin on the map), the card lights up.
+   * Cards push their own hover state (their row: listing_id and point)
+   * outward via onHover. Keyed on the surrogate listing_id, never sreality_id —
+   * null-safe past Gate-2. */
   hoveredIds: ReadonlySet<number>;
-  onHover: (ids: ReadonlyArray<number> | null) => void;
+  onHover: (targets: ReadonlyArray<HoverTarget> | null) => void;
   /* Which pane originated the hover. Map-origin hovers get the full
    * "find it in the archive" treatment — non-matching cards recede and
    * the first match scrolls into view. List-origin hovers (the
@@ -119,24 +123,18 @@ interface Props {
   onSort: (next: SortSpec) => void;
   onClearFilters: () => void;
   onClearBounds: () => void;
-  /* Dedup merge mode: when on, cards show a selection checkbox and a click
-   * toggles selection instead of navigating; the marks stay, read-only (MS16).
-   * selected holds the picked property_ids. */
-  mergeMode: boolean;
-  selectedPropertyIds: ReadonlySet<number>;
-  onToggleSelect: (propertyId: number) => void;
-  /* The cohort is filtered by deal-pipeline membership right now (the Pipeline
-   * scope chip). Bookmark writes then change the result set, so the card
-   * funnels must invalidate the Browse reads — see usePipelineCard. */
-  pipelineScoped: boolean;
-  /* The same claim for collection membership — see revalidateCollections. */
-  collectionScoped: boolean;
+  /* Merge mode (lib/useMergeMode), or null: a card shows its letter and a click
+   * writes the active one instead of navigating; the marks stay, read-only
+   * (MS16); the grid hands the mode's key handler the focused card. */
+  merge: MergeMode | null;
   /* On-card estimate: latest rent estimate per listing id (keyed by
    * sreality_id), the set of ids whose run is being kicked off right now
    * (optimistic spinner), and the trigger. Estimate runs on apartment cards
    * only. estimates is undefined until the lookup resolves. */
   estimates: Record<number, ListingEstimate> | undefined;
   estimatingIds: ReadonlySet<number>;
+  /* The API's refusal sentence per sreality_id, for a submit that made no run. */
+  estimateRefusals?: Readonly<Record<number, string>>;
   onEstimate: (srealityId: number) => void;
 }
 
@@ -162,13 +160,10 @@ export default function ListingCards({
   onSort,
   onClearFilters,
   onClearBounds,
-  mergeMode,
-  selectedPropertyIds,
-  onToggleSelect,
-  pipelineScoped,
-  collectionScoped,
+  merge,
   estimates,
   estimatingIds,
+  estimateRefusals,
   onEstimate,
 }: Props) {
   const showSkeleton = isLoading && rows == null;
@@ -209,7 +204,7 @@ export default function ListingCards({
             : total == null
               ? '—'
               : total === 0
-                ? '0 listings'
+                ? '0 properties'
                 : `${loaded.toLocaleString('cs-CZ')} of ${total.toLocaleString('cs-CZ')}`}
         </span>
         <div className="flex items-center gap-2 shrink-0">
@@ -218,7 +213,9 @@ export default function ListingCards({
         </div>
       </div>
 
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto pr-1">
+      {/* Merge mode's keys arrive here from the focused card (never from the
+          window, so a filter field keeps its letters). */}
+      <div ref={scrollRef} onKeyDown={merge?.onKeyDown} className="flex-1 min-h-0 overflow-y-auto pr-1">
         {showSkeleton && <SkeletonGrid />}
         {isEmpty && (
           <EmptyState
@@ -240,17 +237,14 @@ export default function ListingCards({
                     dimmed={mapHover && !hoveredIds.has(r.listing_id)}
                     scrollOnHover={mapHover && r.listing_id === firstHoveredId}
                     onHover={onHover}
-                    mergeMode={mergeMode}
-                    selected={selectedPropertyIds.has(r.property_id)}
-                    onToggleSelect={onToggleSelect}
+                    merge={merge}
                     /* Estimate state is sreality-keyed (the estimation backend
                        runs by sreality_id) — a null-sreality card can't be
                        estimated, so it reads no state and shows no affordance. */
                     estimate={r.sreality_id != null ? estimates?.[r.sreality_id] : undefined}
                     estimating={r.sreality_id != null && estimatingIds.has(r.sreality_id)}
+                    refusal={r.sreality_id != null ? estimateRefusals?.[r.sreality_id] : undefined}
                     onEstimate={onEstimate}
-                    pipelineScoped={pipelineScoped}
-                    collectionScoped={collectionScoped}
                     orderPortal={orderPortal}
                   />
                 </li>
@@ -281,13 +275,7 @@ export default function ListingCards({
  * the split mirrors PipelineFunnelButton / PipelineToggle over their one menu.
  * Membership is the one shared member map (one request for the whole grid);
  * a failed read is a retry, never "in no collection" (MS16). */
-function CollectionSaveButton({
-  property_id,
-  cohortScoped,
-}: {
-  property_id: number;
-  cohortScoped: boolean;
-}) {
+function CollectionSaveButton({ property_id }: { property_id: number }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const panelId = useId();
@@ -329,7 +317,6 @@ function CollectionSaveButton({
           memberIds={memberIds}
           anchorRef={btnRef}
           onClose={close}
-          cohortScoped={cohortScoped}
         />
       )}
     </>
@@ -344,14 +331,11 @@ function Card({
   dimmed,
   scrollOnHover,
   onHover,
-  mergeMode,
-  selected,
-  onToggleSelect,
+  merge,
   estimate,
   estimating,
+  refusal,
   onEstimate,
-  pipelineScoped,
-  collectionScoped,
   orderPortal,
 }: {
   r: CardRow;
@@ -363,18 +347,12 @@ function Card({
   /* First match of a map-origin hover: gently pull it into view in
    * case it sits below the fold of the card column. */
   scrollOnHover: boolean;
-  onHover: (ids: ReadonlyArray<number> | null) => void;
-  mergeMode: boolean;
-  selected: boolean;
-  onToggleSelect: (propertyId: number) => void;
+  onHover: (targets: ReadonlyArray<HoverTarget> | null) => void;
+  merge: MergeMode | null;
   estimate: ListingEstimate | undefined;
   estimating: boolean;
+  refusal: string | undefined;
   onEstimate: (srealityId: number) => void;
-  /* The cohort is currently scoped to the deal pipeline, so a bookmark write
-   * changes which cards match — see usePipelineCard's cohortScoped. */
-  pipelineScoped: boolean;
-  /* The same claim for collection membership — see revalidateCollections. */
-  collectionScoped: boolean;
   orderPortal: string | null;
 }) {
   /* The card element itself, for the map-origin scrollIntoView below. Both
@@ -392,9 +370,14 @@ function Card({
       });
     }
   }, [hovered, scrollOnHover]);
-  const title = formatTitle(r);
-  /* Ties the merge-mode checkbox to the card-wide <label> below it. */
-  const selectId = useId();
+  const hydration = useCardHydration();
+  const title = formatTitle(r, hydration.floorFor(r.listing_id));
+  /* The card's letter in merge mode, the stretched button that holds it (the
+   * card's one focus stop there: the pointer focuses it, Tab moves on) and the
+   * carousel ← → page through. */
+  const letter = merge?.letters[r.property_id] ?? null;
+  const selectRef = useRef<HTMLButtonElement | null>(null);
+  const carouselRef = useRef<ImageCarouselHandle | null>(null);
   /* ONE server-composed label (migration 503). It used to be placePrimary()
    * plus the district, de-duped in the browser; the resolver now says street,
    * town or country once, so there is nothing left to de-dupe. */
@@ -410,7 +393,7 @@ function Card({
   /* The hover-link state is OCHRE — the same surveyor's-mark color the
    * map uses for its locator halo, so the two ends of the link read as
    * one gesture. Copper stays reserved for committed selection. */
-  const surface = selected
+  const surface = letter != null
     ? 'bg-[var(--color-paper-2)] border-[var(--color-copper)] ring-1 ring-[var(--color-copper)]'
     : hovered
       ? 'bg-[var(--color-ochre-soft)] border-[var(--color-ochre)] ring-1 ring-[var(--color-ochre)]'
@@ -418,7 +401,11 @@ function Card({
         ? 'bg-[var(--color-inset)] border-[var(--color-rule-soft)] hover:border-[var(--color-rule)]'
         : 'bg-[var(--color-paper-2)] border-[var(--color-rule)] hover:border-[var(--color-rule-strong)]';
   const titleColor  = inactive ? 'text-[var(--color-ink-2)]' : 'text-[var(--color-ink)]';
-  const priceColor  = inactive ? 'text-[var(--color-ink-2)]' : 'text-[var(--color-ink)]';
+  /* A live ask is sage semibold (Inter ships no 700, so semibold is the heaviest real
+   * weight); a delisted card's price stays ink-2 medium so it recedes with the card. */
+  const priceStyle  = inactive
+    ? 'text-[var(--color-ink-2)] font-medium'
+    : 'text-[var(--color-sage)] font-semibold';
   /* Status now reads off the card surface, so inactive photos desaturate
    * a touch harder than before — the only signal left in the photo lane. */
   const imageFilter = inactive
@@ -450,7 +437,7 @@ function Card({
      rows the layer holds (the comparables surface consumes those same rows
      un-projected), memoized on the array identity — the cohort map is stable
      across renders, so this recomputes only when this listing's photos change. */
-  const photos = useCardHydration().photosFor(r.listing_id);
+  const photos = hydration.photosFor(r.listing_id);
   const images = useMemo(() => taggedImageUrls(photos), [photos]);
   const cover = useMemo(() => coverIndex(photos, coverTag), [photos, coverTag]);
 
@@ -460,7 +447,10 @@ function Card({
     'group relative rounded-[var(--radius-sm)] border overflow-hidden',
     'transition-[border-color,background-color,opacity] duration-150',
     dimmed ? 'opacity-50' : '',
-    mergeMode ? 'cursor-pointer' : '',
+    /* The target of a key: the card holding focus, in the hover-link ochre. */
+    merge
+      ? 'cursor-pointer focus-within:border-[var(--color-ochre)] focus-within:ring-1 focus-within:ring-[var(--color-ochre)]'
+      : '',
     surface,
   ].join(' ');
 
@@ -473,70 +463,62 @@ function Card({
     <div
       ref={setWrapperEl}
       /* Hover-sync stays a normal-mode affair, exactly as when these handlers
-       * lived on the <Link>: merge mode is not browsing. */
-      onMouseEnter={mergeMode ? undefined : () => onHover([r.listing_id])}
-      onMouseLeave={mergeMode ? undefined : () => onHover(null)}
+       * lived on the <Link>: merge mode is not browsing — there the POINTER
+       * focuses the card it moves over, so a letter key and ← → have one
+       * target, the same one Tab moves. On real movement only: a scroll
+       * synthesizes an enter under a still pointer, which would rob the card
+       * Tab just reached. */
+      onMouseEnter={merge ? undefined : () => onHover([r])}
+      onMouseLeave={merge ? undefined : () => onHover(null)}
+      onMouseMove={merge ? () => focusFromPointer(selectRef.current) : undefined}
+      /* ← → page the photos from wherever focus sits on the card (the title
+       * link, the merge button); the chevrons stay for the mouse. A menu
+       * portalled out of the card still bubbles here: its arrows are its own. */
+      onKeyDown={(e) => {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        if (!e.currentTarget.contains(e.target as Node)) return;
+        if (carouselRef.current?.step(e.key === 'ArrowRight' ? 1 : -1)) e.preventDefault();
+      }}
       className={wrapperClass}
     >
       <ImageCarousel
+        ref={carouselRef}
         images={images}
         startIndex={cover}
         imgClassName={imageFilter}
         hoverZoom
         fadeChevrons
+        tabbableChevrons={false}
       >
-        {mergeMode && (
-          <div className="absolute top-1 left-1 z-[var(--z-card-action)] w-6 h-6">
-            {/* A REAL checkbox, not a drawn facsimile: it carries `checked`,
-                Space toggles it natively, and it is the card's one tab stop in
-                merge mode. Native rendering is dropped (appearance-none) so the
-                box keeps the card's own tokens unchanged; the ✓ is drawn over
-                it as decoration. Its click target is the whole card — see the
-                stretched <label> at the end of the card. */}
-            <input
-              id={selectId}
-              type="checkbox"
-              checked={selected}
-              onChange={() => onToggleSelect(r.property_id)}
-              aria-label={`Vybrat ke sloučení: ${title}`}
-              className={[
-                'appearance-none block w-6 h-6 rounded-[var(--radius-xs)] border cursor-pointer',
-                selected
-                  ? 'bg-[var(--color-copper)] border-[var(--color-copper)]'
-                  : 'bg-[var(--color-paper)]/90 border-[var(--color-rule)]',
-              ].join(' ')}
-            />
-            {selected && (
-              <span
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-0 flex items-center justify-center text-white"
-              >
-                <svg width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor"
-                  strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                  <path d="M2.5 6.2 5 8.5l4.5-5" />
-                </svg>
-              </span>
-            )}
-          </div>
+        {merge && (
+          /* The letter, drawn: a badge over the photo, inert — the click lands on
+             the stretched button at the end of the card, whose name carries the
+             letter too. Empty while the card has none. */
+          <span
+            aria-hidden="true"
+            className={[
+              'pointer-events-none absolute top-1 left-1 z-[2] flex h-6 w-6 items-center justify-center',
+              'rounded-[var(--radius-xs)] border font-mono text-[0.78rem] font-medium',
+              letter != null
+                ? 'bg-[var(--color-copper)] border-[var(--color-copper)] text-white'
+                : 'bg-[var(--color-paper)]/90 border-[var(--color-rule)]',
+            ].join(' ')}
+          >
+            {letter}
+          </span>
         )}
-        {mergeMode && (
-          /* The marks a merge will carry, read-only (MS16), beside the checkbox:
-             over the stretched label, so hovering one shows its title instead of
-             ticking the card. */
+        {merge && (
+          /* The marks a merge will carry, read-only (MS16), beside the letter:
+             over the stretched button, so hovering one shows its title instead
+             of marking the card. */
           <div className="absolute top-1 left-8 z-[var(--z-card-action)]">
             <CurationMarks property_id={r.property_id} />
           </div>
         )}
-        {!mergeMode && (
+        {!merge && (
           <div className="absolute top-1 left-1 z-[var(--z-card-action)] flex items-center gap-1">
-            <PipelineFunnelButton
-              property_id={r.property_id}
-              cohortScoped={pipelineScoped}
-            />
-            <CollectionSaveButton
-              property_id={r.property_id}
-              cohortScoped={collectionScoped}
-            />
+            <PipelineFunnelButton property_id={r.property_id} />
+            <CollectionSaveButton property_id={r.property_id} />
             <DismissButton property_id={r.property_id} />
             <NoteMark property_id={r.property_id} />
           </div>
@@ -600,7 +582,7 @@ function Card({
       </ImageCarousel>
       <div className="p-2">
         <h3 className={`text-[0.78rem] leading-snug line-clamp-2 ${titleColor}`}>
-          {mergeMode ? (
+          {merge ? (
             title
           ) : (
             /* THE card's link, and the only one: `.stretched-link` (globals.css)
@@ -618,7 +600,7 @@ function Card({
           </p>
         )}
         <div className="mt-1 flex items-baseline justify-between gap-1">
-          <p className={`flex items-baseline gap-1 text-[0.78rem] font-medium tabular-nums ${priceColor}`}>
+          <p className={`flex items-baseline gap-1 text-[0.78rem] tabular-nums ${priceStyle}`}>
             {r.price_czk != null ? (
               <>
                 {fmtCzk(r.price_czk)}
@@ -659,33 +641,61 @@ function Card({
             that runs an estimate or opens a run would be a second meaning for
             the same gesture. `.card-action` lifts it over the stretched link's
             ::after — without it the corner would be inert. */}
-        {r.category_main === 'byt' && r.sreality_id != null && !mergeMode && (
+        {r.category_main === 'byt' && r.sreality_id != null && !merge && (
           <div className="card-action mt-1 flex justify-end">
             <EstimateCorner
               srealityId={r.sreality_id}
+              ad={r}
               estimate={estimate}
               estimating={estimating}
+              refusal={refusal}
               onEstimate={onEstimate}
             />
           </div>
         )}
       </div>
-      {mergeMode && (
-        /* The whole card is the checkbox's click target, exactly as it was when
-           the card was a role="button" — but expressed as a <label for>, so the
-           gesture is the browser's own and nothing has to preventDefault its way
-           out of a wrapper. Deliberately EMPTY: the checkbox is named by its
-           aria-label, which takes precedence over a <label> (HTML-AAM), so any
-           text here would be ignored — it is a hit target, not a name. Its
-           ::after is stopped by every control carrying --z-card-action, so the
-           carousel chevrons still page instead of selecting. */
-        <label htmlFor={selectId} className="stretched-link" />
+      {merge && (
+        /* The whole card is the button's click target, the way the card was a
+           role="button" once — expressed as `.stretched-link` on a real button,
+           so Space and Enter are the browser's own and nothing has to
+           preventDefault its way out of a wrapper. Its ::after is stopped by
+           every control carrying --z-card-action, so the carousel chevrons still
+           page instead of marking. The grid's key handler finds the card by the
+           id it carries. */
+        <button
+          ref={selectRef}
+          type="button"
+          data-property-id={r.property_id}
+          onClick={() => merge.stamp(r.property_id)}
+          aria-label={letter != null ? `Písmeno ${letter}: ${title}` : `Bez písmene: ${title}`}
+          className="stretched-link appearance-none border-0 bg-transparent p-0"
+        />
       )}
     </div>
   );
 }
 
-function formatTitle(r: CardRow): string {
+/* Merge mode's pointer focus: the card the pointer moves over becomes the
+   target, unless it already is, and never while the operator is typing in a
+   field — a letter typed there is theirs, not a mark. */
+function focusFromPointer(button: HTMLButtonElement | null): void {
+  if (button == null || document.activeElement === button) return;
+  const active = document.activeElement;
+  if (
+    active instanceof HTMLElement &&
+    (active.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName))
+  ) {
+    return;
+  }
+  button.focus({ preventScroll: true });
+}
+
+/* A storey is a fact about a UNIT in a building: 91 % of apartments and 25 % of
+ * commercial units carry one, but a house's is almost always the ground floor
+ * ("přízemí" on a house reads as a claim) and a plot has none. */
+const STOREY_CATEGORIES: ReadonlySet<string | null> = new Set(['byt', 'komercni']);
+
+function formatTitle(r: CardRow, storey: ListingFloor | null): string {
   // The specific subtype is the noun for commercial/houses ("Ubytování",
   // "Činžovní dům"); apartments + subtype-less rows fall back to the generic
   // category word ("Byt", "Komerční prostor"). disposition still appends for
@@ -695,6 +705,13 @@ function formatTitle(r: CardRow): string {
   const parts = [`${kind} ${deal}`];
   if (r.disposition) parts.push(r.disposition);
   if (r.area_m2 != null) parts.push(fmtArea(r.area_m2));
+  const floor =
+    storey != null && STOREY_CATEGORIES.has(r.category_main)
+      ? fmtFloor(storey.floor, storey.total_floors)
+      : null;
+  if (floor != null) parts.push(floor);
+  const plot = plotBesideArea(r);
+  if (plot != null) parts.push(fmtArea(plot, 'plot'));
   return parts.join(' · ');
 }
 
@@ -716,13 +733,18 @@ function formatTitle(r: CardRow): string {
 
 function EstimateCorner({
   srealityId,
+  ad,
   estimate,
   estimating,
+  refusal,
   onEstimate,
 }: {
   srealityId: number;
+  /* The card's canonical ad — the run's subject, whose page the run lives on. */
+  ad: Pick<CardRow, 'source' | 'source_id_native'>;
   estimate: ListingEstimate | undefined;
   estimating: boolean;
+  refusal: string | undefined;
   onEstimate: (srealityId: number) => void;
 }) {
   const running =
@@ -755,7 +777,11 @@ function EstimateCorner({
     if (label != null) {
       return (
         <Link
-          to={runSurfaceUrl({ id: estimate.run_id, input_sreality_id: estimate.sreality_id })}
+          to={runSurfaceUrl({
+            id: estimate.run_id,
+            subject_source: ad.source,
+            subject_source_id_native: ad.source_id_native,
+          })}
           title="Náš odhad nájmu — otevřít detail odhadu"
           className="inline-flex items-center rounded-[var(--radius-xs)] border border-[var(--color-copper)] px-1.5 py-0.5 text-[0.62rem] font-medium tabular-nums text-[var(--color-copper)] hover:bg-[var(--color-copper)]/10 transition-colors"
         >
@@ -765,12 +791,14 @@ function EstimateCorner({
     }
   }
 
-  const failed = estimate?.status === 'failed';
+  const failed = refusal != null || estimate?.status === 'failed';
   return (
     <button
       type="button"
       onClick={() => onEstimate(srealityId)}
-      title={failed ? 'Odhad selhal — zkusit znovu' : 'Spustit odhad nájmu a výnosu'}
+      title={
+        refusal ?? (failed ? 'Odhad selhal — zkusit znovu' : 'Spustit odhad nájmu a výnosu')
+      }
       className="inline-flex items-center gap-1 rounded-[var(--radius-xs)] border border-[var(--color-rule)] px-1.5 py-0.5 text-[0.62rem] font-medium text-[var(--color-ink-2)] hover:border-[var(--color-copper)] hover:text-[var(--color-copper)] transition-colors"
     >
       {failed ? 'Odhad ↻' : 'Odhad'}
@@ -814,26 +842,6 @@ function CardBadge({
   );
 }
 
-/* Headline sort orders for the cards lane. Two bookend the file by
- * date (first_seen_at — when the listing entered our archive), two
- * by price, two by price/m², two by MF gross yield. The default keeps
- * last_seen_at desc so the dropdown's "selected" option matches the
- * URL on a fresh load even though that order isn't in the menu —
- * operators land on "newest in archive" mentally and the existing
- * default already approximates that. mf_gross_yield_pct is only
- * populated for sale apartments; the query orders nullsFirst:false so
- * every rental / non-apartment listing sorts to the end either way. */
-const SORT_PRESETS: ReadonlyArray<{ label: string; spec: SortSpec }> = [
-  { label: 'Newest first',      spec: { field: 'first_seen_at', direction: 'desc' } },
-  { label: 'Oldest first',      spec: { field: 'first_seen_at', direction: 'asc'  } },
-  { label: 'Price: low → high', spec: { field: 'price_czk',     direction: 'asc'  } },
-  { label: 'Price: high → low', spec: { field: 'price_czk',     direction: 'desc' } },
-  { label: 'Price/m²: low → high', spec: { field: 'price_per_m2', direction: 'asc'  } },
-  { label: 'Price/m²: high → low', spec: { field: 'price_per_m2', direction: 'desc' } },
-  { label: 'Výnos MF: high → low', spec: { field: 'mf_gross_yield_pct', direction: 'desc' } },
-  { label: 'Výnos MF: low → high', spec: { field: 'mf_gross_yield_pct', direction: 'asc'  } },
-];
-
 function SortDropdown({
   sort,
   onChange,
@@ -850,17 +858,17 @@ function SortDropdown({
       <select
         value={current}
         onChange={(e) => {
-          const picked = SORT_PRESETS.find(
+          const picked = CARD_SORTS.find(
             (p) => sortToParam(p.spec) === e.target.value,
           );
           if (picked) onChange(picked.spec);
         }}
         className="px-2 py-1 text-[0.7rem] rounded-[var(--radius-sm)] bg-[var(--color-paper-2)] border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:border-[var(--color-rule-strong)] transition-colors"
       >
-        {!SORT_PRESETS.some((p) => sortToParam(p.spec) === current) && (
+        {!CARD_SORTS.some((p) => sortToParam(p.spec) === current) && (
           <option value={current}>Default</option>
         )}
-        {SORT_PRESETS.map((p) => (
+        {CARD_SORTS.map((p) => (
           <option key={sortToParam(p.spec)} value={sortToParam(p.spec)}>
             {p.label}
           </option>

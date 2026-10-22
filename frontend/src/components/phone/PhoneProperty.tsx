@@ -31,6 +31,7 @@ import type {
   PropertySource,
 } from '@/lib/types';
 
+import { NO_FOCUS_ZOOM } from './chips';
 import CurationRow from './CurationRow';
 import {
   feedDelta,
@@ -52,7 +53,7 @@ import {
 } from './PropertySections';
 
 const EstimationsBlock = lazyChunk(() => import('@/components/listing-detail/EstimationsBlock'));
-const ManualEstimatesBlock = lazyChunk(() => import('@/components/listing-detail/ManualEstimatesBlock'));
+const ValuoSection = lazyChunk(() => import('@/components/listing-detail/ValuoSection'));
 const PhoneTagsAndNotes = lazyChunk(() =>
   import('@/components/listing-detail/CurationBlock').then((m) => ({ default: m.PhoneTagsAndNotes })),
 );
@@ -63,9 +64,6 @@ export const NOTES_SECTION_ID = 'poznamky';
  * rendered nothing) takes no room and draws no rule. */
 const BLOCK = 'min-w-0 px-4 py-4 empty:hidden';
 
-/* iOS zooms the page into any focused field under 16 px; the reused blocks'
- * fields (the note composer, the tag picker) are 14 px on the desktop. */
-const NO_FOCUS_ZOOM = '[&_input]:text-[16px] [&_select]:text-[16px] [&_textarea]:text-[16px]';
 
 /* "Na trhu 12 dní · 3 portály · cena snížena 7. 10." */
 export function metaLine({
@@ -234,13 +232,12 @@ export default function PhoneProperty({
             <EstimationsBlock listing={property} listingIds={advertIds} readOnly bare label="Odhady" />
           </Suspense>
         </div>
-        {property.sreality_id != null && (
-          <div className={BLOCK}>
-            <Suspense fallback={<Skeleton height={100} />}>
-              <ManualEstimatesBlock sreality_id={property.sreality_id} label="Ruční odhady" />
-            </Suspense>
-          </div>
-        )}
+        <div className={BLOCK}>
+          {/* No placeholder: most properties hold no Valuo answer, so the block takes no room. */}
+          <Suspense fallback={null}>
+            <ValuoSection property={property} listingIds={advertIds} readOnly bare />
+          </Suspense>
+        </div>
         {property.sreality_id != null && (
           <div className={BLOCK}>
             <FreshnessBlock sreality_id={property.sreality_id} checks={checks} label="Čerstvost" />

@@ -29,6 +29,7 @@ import pytest
 
 import toolkit.filter_registry as fr
 from api.location_filter import LEVEL_COLUMN, DistrictChip, district_where
+from location_data.claims_common import COHORT_LOCATION_FROM
 from tests.toolkit import test_filter_compiler_golden as gold
 from toolkit.measures import per_m2_sql, plot_area_sql
 
@@ -46,8 +47,7 @@ _SHADOWED = (
 )
 
 _STATEMENT = {
-    "listings": "SELECT l.id FROM listings l "
-                "JOIN listing_location ll ON ll.listing_id = l.id WHERE {where}",
+    "listings": "SELECT l.id FROM " + COHORT_LOCATION_FROM + " WHERE {where}",
     "watchdog": "SELECT l.property_id FROM properties_public l WHERE {where}",
 }
 

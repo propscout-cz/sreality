@@ -13,7 +13,6 @@ what makes RLS bind, both here and in production.
 from __future__ import annotations
 
 import contextlib
-import json
 import os
 import re
 import uuid
@@ -24,6 +23,7 @@ import pytest
 
 from tests._admin_gate_shape import gate_is_sound
 from tests._tenant_registry import TENANT_TABLES
+from tests._tenant_scope import scoped
 
 _DB_URL = os.environ.get("TEST_DATABASE_URL")
 
@@ -61,16 +61,16 @@ _TENANT_VIEWS: list[str] = [
 # deny-all under invoker rights, so flipping them silently returns zero rows to
 # every caller instead of scoping anything. `listings`/`images` are
 # RLS-enabled-with-zero-policies (fully deny-all); `properties` now carries one
-# permissive authenticated-SELECT policy (Amendment A5, migration 349) but the
-# views still must stay owner-bypass because they JOIN `listings`, which stays
-# deny-all.
+# permissive authenticated-SELECT policy (Amendment A5, migration 349) but a
+# view that JOINs `listings`, which stays deny-all, must stay owner-bypass (the
+# per-ad feed was the other one until W6 dropped it, migration 618).
 #
 # Owner rights does NOT mean unscoped. property_estimates_public reads
 # `estimation_runs`, whose RLS cannot bind inside an owner-rights view, so
 # migration 341 mirrors that read policy as an in-body predicate instead --
 # scoping lives in the view body, not in invoker RLS
 # (test_estimates_view_scopes_per_account).
-_MARKET_VIEWS: list[str] = ["property_estimates_public", "listing_feed_public"]
+_MARKET_VIEWS: list[str] = ["property_estimates_public"]
 
 # Base relations + matviews that hold admin-only operational data. Any view (or
 # function an authenticated caller can EXECUTE) that reads one of these must embed
@@ -197,6 +197,15 @@ _ADMIN_ONLY_RELATIONS: list[str] = [
     # by `authenticated`, so this arm never lists it; share_party_emails() reaches it by
     # call, not by name. MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
     "auth.users",
+    # The health check registry and the incident table (migrations 619 / 462): the browser
+    # reads both only through the admin-gated pipeline_checks_public.
+    # MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
+    "health_checks",
+    "ops_incidents",
+    # The push device registry and its delivery ledger (migration 654): service role only,
+    # no `_public` view. MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
+    "push_subscriptions",
+    "notification_deliveries",
 ]
 
 # Relations that read the above but are legitimately reachable without the gate.
@@ -319,68 +328,138 @@ def svc() -> "Iterator[Any]":
 
 @pytest.fixture(scope="module")
 def tenants(svc: Any) -> "Iterator[dict[str, uuid.UUID]]":
-    """Two accounts + two auth users + memberships, via direct service-role
-    inserts. The on-signup trigger (migration 294) would mint its own accounts
-    and race for the legacy-backfill claim, so it is disabled around the
-    auth.users inserts to keep the fixture deterministic."""
+    """Two auth users, each born through the real signup trigger (migration 612:
+    the account, its owner membership, the default board, the monitoring
+    collection and the trial), so every check here runs against what a signup
+    actually produces."""
     a_user, b_user = uuid.uuid4(), uuid.uuid4()
     with svc.cursor() as cur:
         cur.execute(
-            "INSERT INTO accounts (kind, name) VALUES ('personal', %s) RETURNING id",
-            (f"iso-a-{a_user.hex[:8]}",),
+            "INSERT INTO auth.users (id, email) VALUES (%s, %s), (%s, %s)",
+            (
+                a_user, f"iso-a-{a_user.hex[:8]}@test.local",
+                b_user, f"iso-b-{b_user.hex[:8]}@test.local",
+            ),
         )
-        a_acc = cur.fetchone()[0]
         cur.execute(
-            "INSERT INTO accounts (kind, name) VALUES ('personal', %s) RETURNING id",
-            (f"iso-b-{b_user.hex[:8]}",),
+            "SELECT user_id, account_id FROM account_members WHERE user_id IN (%s, %s)",
+            (a_user, b_user),
         )
-        b_acc = cur.fetchone()[0]
-        cur.execute("ALTER TABLE auth.users DISABLE TRIGGER USER")
-        try:
-            cur.execute(
-                "INSERT INTO auth.users (id, email) VALUES (%s, %s), (%s, %s)",
-                (
-                    a_user, f"iso-a-{a_user.hex[:8]}@test.local",
-                    b_user, f"iso-b-{b_user.hex[:8]}@test.local",
-                ),
-            )
-        finally:
-            cur.execute("ALTER TABLE auth.users ENABLE TRIGGER USER")
-        cur.execute(
-            "INSERT INTO account_members (account_id, user_id, role) "
-            "VALUES (%s, %s, 'owner'), (%s, %s, 'owner')",
-            (a_acc, a_user, b_acc, b_user),
-        )
+        account_of = {row[0]: row[1] for row in cur.fetchall()}
+    a_acc, b_acc = account_of[a_user], account_of[b_user]
     try:
         yield {"a_user": a_user, "b_user": b_user, "a_acc": a_acc, "b_acc": b_acc}
     finally:
         with svc.cursor() as cur:
-            cur.execute(
-                "DELETE FROM legacy_backfill_claim WHERE account_id IN (%s, %s)",
-                (a_acc, b_acc),
-            )
             cur.execute("DELETE FROM accounts WHERE id IN (%s, %s)", (a_acc, b_acc))
             cur.execute("DELETE FROM auth.users WHERE id IN (%s, %s)", (a_user, b_user))
 
 
-@contextlib.contextmanager
-def _scoped(sub: uuid.UUID) -> "Iterator[Any]":
-    """One transaction scoped the way tenant_conn scopes: SET LOCAL ROLE
-    authenticated + the caller's JWT claims, evaporating at transaction end."""
+def test_signup_seeds_the_default_board(
+    svc: Any, tenants: dict[str, uuid.UUID],
+) -> None:
+    """Migration 612: a signup is born with the default board, the monitoring
+    collection and the trial. Invariants only, never the literal — the board's
+    one definition is seed_default_pipeline, and a copy here would be a second.
+    Read on account B, which no fixture in this module touches (seeded_tenant_rows
+    adds an extra column to A's board)."""
+    with svc.cursor() as cur:
+        cur.execute(
+            "SELECT position, is_entry, is_terminal, code, color, key, label "
+            "FROM pipeline_stages WHERE account_id = %s AND archived_at IS NULL "
+            "ORDER BY position",
+            (tenants["b_acc"],),
+        )
+        stages = cur.fetchall()
+        cur.execute(
+            "SELECT count(*) FROM collections "
+            "WHERE account_id = %s AND name = 'monitoring' AND is_system",
+            (tenants["b_acc"],),
+        )
+        monitoring = cur.fetchone()[0]
+        cur.execute(
+            "SELECT plan, status, current_period_end > now() FROM entitlements "
+            "WHERE account_id = %s",
+            (tenants["b_acc"],),
+        )
+        trial = cur.fetchone()
+    positions = [s[0] for s in stages]
+    assert positions == list(range(1, len(stages) + 1)) and stages, (
+        f"a seeded board runs 1..n with no gap: {positions}"
+    )
+    entries = [s for s in stages if s[1]]
+    assert len(entries) == 1 and entries[0][0] == 1 and not entries[0][2], (
+        "exactly one entry stage, first on the board, never terminal"
+    )
+    terminal = [s[2] for s in stages]
+    assert terminal == sorted(terminal), "closed stages sit after every live one"
+    assert all(all(s[3:]) for s in stages), (
+        "every seeded stage carries a code, a colour, a key and a label "
+        "(the ordinal fallback must never be what a new account sees)"
+    )
+    assert len({s[5].lower() for s in stages}) == len(stages), "keys are unique"
+    assert monitoring == 1, "the protected monitoring collection"
+    assert trial == ("free", "trialing", True), f"the 7-day free trial: {trial}"
+
+
+def test_pipeline_event_cannot_name_a_foreign_stage(
+    svc: Any, tenants: dict[str, uuid.UUID],
+) -> None:
+    """Migration 612: the ledger's stage references carry the account, as the
+    card's does since 295 — FK checks bypass RLS, so the key itself must refuse
+    another account's stage id."""
     import psycopg
 
-    conn = psycopg.connect(_DB_URL, autocommit=False)
-    try:
-        with conn.transaction():
-            with conn.cursor() as cur:
-                cur.execute("SET LOCAL ROLE authenticated")
-                cur.execute(
-                    "SELECT set_config('request.jwt.claims', %s, true)",
-                    (json.dumps({"sub": str(sub), "role": "authenticated"}),),
-                )
-            yield conn
-    finally:
-        conn.close()
+    with svc.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM pipeline_stages WHERE account_id = %s AND is_entry",
+            (tenants["b_acc"],),
+        )
+        b_entry = cur.fetchone()[0]
+    with scoped(tenants["a_user"]) as conn:
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+            with conn.transaction():  # a SAVEPOINT, so the refusal cannot poison the txn
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO property_pipeline_events "
+                        "  (property_id, to_stage_id, reason, account_id) "
+                        "VALUES (1, %s, 'operator', %s)",
+                        (b_entry, tenants["a_acc"]),
+                    )
+
+
+def test_cross_tenant_pipeline_writes_match_nothing(
+    svc: Any, tenants: dict[str, uuid.UUID],
+) -> None:
+    """The write half of the two-account check at the DB level: as A, every
+    rename, archive, reorder or delete aimed at B's stages matches no row, and a
+    card planted on B's board is refused by RLS's WITH CHECK."""
+    import psycopg
+
+    with svc.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM pipeline_stages WHERE account_id = %s AND is_entry",
+            (tenants["b_acc"],),
+        )
+        b_entry = cur.fetchone()[0]
+    with scoped(tenants["a_user"]) as conn:
+        with conn.cursor() as cur:
+            for sql in (
+                "UPDATE pipeline_stages SET label = 'taken' WHERE id = %s",
+                "UPDATE pipeline_stages SET archived_at = now() WHERE id = %s",
+                "UPDATE pipeline_stages SET position = 99 WHERE id = %s",
+                "DELETE FROM pipeline_stages WHERE id = %s",
+            ):
+                cur.execute(sql, (b_entry,))
+                assert cur.rowcount == 0, f"A reached B's stage via: {sql}"
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            with conn.transaction():  # a SAVEPOINT, so the refusal cannot poison the txn
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO property_pipeline (account_id, property_id, stage_id) "
+                        "VALUES (%s, 1, %s)",
+                        (tenants["b_acc"], b_entry),
+                    )
 
 
 def test_cross_tenant_denial(svc: Any, tenants: dict[str, uuid.UUID]) -> None:
@@ -392,7 +471,7 @@ def test_cross_tenant_denial(svc: Any, tenants: dict[str, uuid.UUID]) -> None:
         )
         coll_id = cur.fetchone()[0]
     try:
-        with _scoped(tenants["b_user"]) as conn:
+        with scoped(tenants["b_user"]) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT * FROM collections WHERE name = %s", (name,))
                 assert cur.fetchall() == [], "tenant B must not see tenant A's collection"
@@ -403,7 +482,7 @@ def test_cross_tenant_denial(svc: Any, tenants: dict[str, uuid.UUID]) -> None:
                 assert cur.rowcount == 0, "tenant B must not update tenant A's collection"
                 cur.execute("DELETE FROM collections WHERE id = %s", (coll_id,))
                 assert cur.rowcount == 0, "tenant B must not delete tenant A's collection"
-        with _scoped(tenants["a_user"]) as conn:
+        with scoped(tenants["a_user"]) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT * FROM collections WHERE name = %s", (name,))
                 assert len(cur.fetchall()) == 1, "tenant A must see their own collection"
@@ -485,7 +564,7 @@ def test_a5_properties_readable_listings_still_deny_all(
             (srid, f"iso-a5-{srid}", prop),
         )
     try:
-        with _scoped(tenants["a_user"]) as conn:
+        with scoped(tenants["a_user"]) as conn:
             with conn.cursor() as cur:
                 # A5: the read policy makes base `properties` visible to a tenant.
                 cur.execute("SELECT id FROM properties WHERE id = %s", (prop,))
@@ -625,7 +704,7 @@ def test_estimates_view_scopes_per_account(
     )
 
     def visible(sub: uuid.UUID) -> set[int]:
-        with _scoped(sub) as conn:
+        with scoped(sub) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT property_id FROM property_estimates_public "
@@ -657,7 +736,7 @@ def test_estimates_view_sees_a_non_sreality_subject(
     would silently never show one."""
     pn = seeded_estimate_rows["nonsreality"]
     for who in ("a_user", "b_user"):
-        with _scoped(tenants[who]) as conn:
+        with scoped(tenants[who]) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT run_count FROM property_estimates_public WHERE property_id = %s",
@@ -725,7 +804,7 @@ def test_llm_calls_scoped_through_owning_run(
     ca, cb = seeded_llm_calls_rows["a"], seeded_llm_calls_rows["b"]
 
     def visible(sub: uuid.UUID) -> set[int]:
-        with _scoped(sub) as conn:
+        with scoped(sub) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT id FROM llm_calls WHERE id = ANY(%s)", ([ca, cb],))
                 return {r[0] for r in cur.fetchall()}
@@ -833,10 +912,10 @@ def seeded_tenant_rows(
         cleanup.insert(0, ("DELETE FROM property_dismissals WHERE property_id = %s", (prop,)))
         where["property_dismissals_public"] = ("property_id = %s", (prop,))
 
-        # A fresh account has no stages; a lone non-entry/non-terminal stage trivially
-        # satisfies both the app-layer rule and the DB CHECK (migration 357) that a
-        # stage can't be entry and terminal at once. The view filters
-        # archived_at IS NULL, so leave it NULL.
+        # The account already has the seeded board (migration 612); one more
+        # non-entry/non-terminal stage trivially satisfies both the app-layer rule
+        # and the DB CHECK (migration 357) that a stage can't be entry and terminal
+        # at once. The view filters archived_at IS NULL, so leave it NULL.
         cur.execute(
             "INSERT INTO pipeline_stages (account_id, key, label, position) "
             "VALUES (%s, %s, 'iso', 1) RETURNING id",
@@ -881,11 +960,11 @@ def test_tenant_view_scopes_both_ways(
     of reaching production."""
     clause, params = seeded_tenant_rows[view]
     sql = f"SELECT * FROM {view} WHERE {clause}"  # noqa: S608 - fixed view list
-    with _scoped(tenants["b_user"]) as conn:
+    with scoped(tenants["b_user"]) as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params)
             assert cur.fetchall() == [], f"tenant B saw tenant A's row through {view}"
-    with _scoped(tenants["a_user"]) as conn:
+    with scoped(tenants["a_user"]) as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params)
             assert len(cur.fetchall()) == 1, (
@@ -940,7 +1019,7 @@ def test_portal_lookup_membership_is_rls_only(
     _, source, native = seeded_lookup_listing
     items = [api_schemas.PortalLookupItem(source=source, source_id=native)]
 
-    with _scoped(tenants["a_user"]) as conn_a:
+    with scoped(tenants["a_user"]) as conn_a:
         out_a = lookup_portal_listings(svc, conn_a, items)
     assert len(out_a["data"]) == len(items), "the LATERAL must not multiply rows"
     entry_a = out_a["data"][0]
@@ -950,7 +1029,7 @@ def test_portal_lookup_membership_is_rls_only(
     )
     assert entry_a["pipeline"]["stage_label"] == "iso"
 
-    with _scoped(tenants["b_user"]) as conn_b:
+    with scoped(tenants["b_user"]) as conn_b:
         out_b = lookup_portal_listings(svc, conn_b, items)
     assert len(out_b["data"]) == len(items)
     entry_b = out_b["data"][0]
@@ -976,12 +1055,12 @@ def test_pipeline_card_read_is_account_scoped_after_respelling(
     prop_id = seeded_tenant_rows["property_pipeline_public"][1][0]
     a_acc, b_acc = tenants["a_acc"], tenants["b_acc"]
 
-    with _scoped(tenants["a_user"]) as conn_a:
+    with scoped(tenants["a_user"]) as conn_a:
         card = pipeline_module._fetch_card(conn_a, prop_id, a_acc)
     assert card is not None, "tenant A must read back its own card"
     assert card["stage_label"] == "iso"
 
-    with _scoped(tenants["b_user"]) as conn_b:
+    with scoped(tenants["b_user"]) as conn_b:
         assert pipeline_module._fetch_card(conn_b, prop_id, b_acc) is None
         assert pipeline_module._fetch_card(conn_b, prop_id, a_acc) is None, (
             "naming another account must not surface its card — RLS is the backstop"
@@ -1113,12 +1192,14 @@ _SEEDED_ADMIN_VIEWS: frozenset[str] = frozenset({
 
 
 @pytest.fixture(scope="module")
-def seeded_admin_rows(svc: Any) -> "Iterator[None]":
+def seeded_admin_rows(svc: Any) -> "Iterator[str]":
     """One service-role row behind each view in _SEEDED_ADMIN_VIEWS. Without this the
     deny assertion below is vacuous: the CI schema replay holds no business data, so
     `count(*) == 0` for a non-admin passes whether or not the gate works. Seeded as
     svc (owner, RLS-exempt, and is_platform_admin() true via the claims-less
-    bypassrls fallback); torn down children-first."""
+    bypassrls fallback); torn down children-first. Yields the nonce, which is also the
+    registered check key behind pipeline_checks_public (it serves registered keys only,
+    migration 619)."""
     n = f"iso-{uuid.uuid4().hex[:10]}"
     rid = 900_000_000 + int(uuid.uuid4().int % 40_000_000)
     rid2 = rid + 1
@@ -1161,6 +1242,11 @@ def seeded_admin_rows(svc: Any) -> "Iterator[None]":
             "VALUES (%s, 'https://iso.test/x', 'sreality', '{}'::jsonb)",
             (n,),
         )
+        cur.execute(
+            "INSERT INTO health_checks (key, domain, class, host, cadence_s, staleness_budget, label, declared_at) "
+            "VALUES (%s, 'platform', 'alarm', 'github-actions', 3600, '1 day', 'iso', now() - interval '1 day')",
+            (n,),
+        )
         cur.execute("INSERT INTO pipeline_check_results (run_at, check_key, status) VALUES (now(), %s, 'ok')", (n,))
         cur.execute("INSERT INTO phash_pair_notes (image_id_a, image_id_b) VALUES (%s, %s)", (ilo, ihi))
         cur.execute("INSERT INTO image_border_cases (image_id) VALUES (%s)", (ilo,))
@@ -1181,7 +1267,7 @@ def seeded_admin_rows(svc: Any) -> "Iterator[None]":
         cur.execute("INSERT INTO scrape_runs (run_type, source) VALUES ('index', 'sreality') RETURNING id")
         scrape_id = cur.fetchone()[0]
     try:
-        yield None
+        yield n
     finally:
         with svc.cursor() as cur:  # children before parents
             cur.execute("DELETE FROM image_border_cases WHERE image_id = %s", (ilo,))
@@ -1191,6 +1277,7 @@ def seeded_admin_rows(svc: Any) -> "Iterator[None]":
             cur.execute("DELETE FROM dedup_decision_feedback WHERE left_property_id = %s AND right_property_id = %s", (lo, hi))
             cur.execute("DELETE FROM dedup_vision_bakeoff_results WHERE run_label = %s", (n,))
             cur.execute("DELETE FROM pipeline_check_results WHERE check_key = %s", (n,))
+            cur.execute("DELETE FROM health_checks WHERE key = %s", (n,))
             cur.execute("DELETE FROM parsed_url_cache WHERE url_hash = %s", (n,))
             cur.execute("DELETE FROM llm_calls WHERE model = %s", (n,))
             cur.execute("DELETE FROM listing_fetch_failures WHERE sreality_id = %s", (rid2,))
@@ -1202,7 +1289,7 @@ def seeded_admin_rows(svc: Any) -> "Iterator[None]":
 
 
 def test_admin_ops_views_deny_non_admin_allow_admin(
-    svc: Any, tenants: dict[str, uuid.UUID], seeded_admin_rows: None,
+    svc: Any, tenants: dict[str, uuid.UUID], seeded_admin_rows: str,
 ) -> None:
     """Live proof the gate actually binds: tenant A (an ordinary account, not admin)
    sees zero rows through every admin-gated view/function; promoting that same user
@@ -1227,7 +1314,7 @@ def test_admin_ops_views_deny_non_admin_allow_admin(
             f"seed did not reach {unreachable} — the deny assertion for those views "
             f"would be vacuous, so fix the fixture rather than trusting the zero"
         )
-    with _scoped(tenants["a_user"]) as conn:
+    with scoped(tenants["a_user"]) as conn:
         with conn.cursor() as cur:
             for name in _ADMIN_GATED_VIEWS:
                 cur.execute(f"SELECT count(*) FROM {name}")
@@ -1250,7 +1337,7 @@ def test_admin_ops_views_deny_non_admin_allow_admin(
             (tenants["a_user"],),
         )
     try:
-        with _scoped(tenants["a_user"]) as conn:
+        with scoped(tenants["a_user"]) as conn:
             with conn.cursor() as cur:
                 for name in _ADMIN_GATED_VIEWS:
                     cur.execute(f"SELECT count(*) FROM {name}")  # must not raise
@@ -1274,6 +1361,176 @@ def test_admin_ops_views_deny_non_admin_allow_admin(
     finally:
         with svc.cursor() as cur:
             cur.execute("DELETE FROM admins WHERE user_id = %s", (tenants["a_user"],))
+
+
+@contextlib.contextmanager
+def _platform_admin(svc: Any, user: uuid.UUID) -> "Iterator[None]":
+    """`user` sits in `admins` (what is_platform_admin() reads for the JWT sub) for the block."""
+    with svc.cursor() as cur:
+        cur.execute("INSERT INTO admins (user_id) VALUES (%s) ON CONFLICT DO NOTHING", (user,))
+    try:
+        yield
+    finally:
+        with svc.cursor() as cur:
+            cur.execute("DELETE FROM admins WHERE user_id = %s", (user,))
+
+
+def test_an_admin_reads_the_registry_view_as_the_caller(
+    svc: Any, tenants: dict[str, uuid.UUID], seeded_admin_rows: str,
+) -> None:
+    """pipeline_checks_public reads its tables as its owner but calls health_stale() as the
+    CALLER, and functions are born private since 612: without 619's EXECUTE grant the
+    operator's read of effective_status fails while every owner-run view test still passes.
+
+    RED by: dropping `grant execute on function health_stale(...) to authenticated`."""
+    with _platform_admin(svc, tenants["a_user"]):
+        with scoped(tenants["a_user"]) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT status, effective_status, last_measured_at IS NOT NULL, incidents "
+                    "FROM pipeline_checks_public WHERE check_key = %s",
+                    (seeded_admin_rows,),
+                )
+                assert cur.fetchone() == ("ok", "ok", True, [])
+
+
+# Migration 364 stamps every system_health dispatch to the SYSTEM account (account_id is NOT
+# NULL), and no tenant is a member of it, so no tenant arm reaches one; since migration 651 no
+# admin arm does either (system alerts left the bell, ruling R2).
+_SYSTEM_ACCOUNT = uuid.UUID("00000000-0000-0000-0000-000000000000")
+
+
+@pytest.fixture(scope="module")
+def seeded_dispatches(
+    svc: Any, tenants: dict[str, uuid.UUID],
+) -> "Iterator[dict[str, Any]]":
+    """One system alert and one of tenant B's own collection_monitor dispatches, each stamped
+    by the dispatch trigger. Seeded as svc; B's row goes with its collection."""
+    nonce = uuid.uuid4().hex[:12]
+    alert = {"message": f"iso alert {nonce}", "dedupe_key": f"sys:iso:{nonce}"}
+    with svc.cursor() as cur:
+        cur.execute(
+            "INSERT INTO notification_dispatches (source_kind, change_kind, message, dedupe_key) "
+            "VALUES ('system_health', 'system_alert', %s, %s) RETURNING id, account_id",
+            (alert["message"], alert["dedupe_key"]),
+        )
+        system_id, system_account = cur.fetchone()
+        cur.execute(
+            "INSERT INTO collections (account_id, name) VALUES (%s, %s) RETURNING id",
+            (tenants["b_acc"], f"iso-{nonce}"),
+        )
+        coll = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO notification_dispatches (source_kind, collection_id, change_kind, dedupe_key) "
+            "VALUES ('collection_monitor', %s, 'new', %s) RETURNING id",
+            (coll, f"iso:{nonce}"),
+        )
+        own_id = cur.fetchone()[0]
+    try:
+        assert system_account == _SYSTEM_ACCOUNT, "a system alert must be a SYSTEM-account row"
+        yield {"system": system_id, "own": own_id, **alert}
+    finally:
+        with svc.cursor() as cur:
+            cur.execute("DELETE FROM notification_dispatches WHERE id = %s", (system_id,))
+            cur.execute("DELETE FROM collections WHERE id = %s", (coll,))
+
+
+def test_a_platform_admin_neither_reads_nor_marks_a_system_alert(
+    svc: Any, tenants: dict[str, uuid.UUID], seeded_dispatches: dict[str, Any],
+) -> None:
+    """Migration 651: system alerts live on Health, so the bell, the badge and the feed count an
+    account's own rows only, a platform admin's included. The blanket UPDATE reads no column, so
+    the UPDATE policies alone judge it. RED by: restoring tenant_read's SYSTEM arm or
+    notification_dispatches_admin_update."""
+    with svc.cursor() as cur:
+        cur.execute("SELECT seen_at FROM notification_dispatches WHERE id = %s",
+                    (seeded_dispatches["system"],))
+        before = cur.fetchone()[0]
+    with _platform_admin(svc, tenants["a_user"]):
+        with scoped(tenants["a_user"]) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM notification_dispatches WHERE id = %s",
+                            (seeded_dispatches["system"],))
+                assert cur.fetchone() is None, "the platform admin still reads a system alert"
+                cur.execute("UPDATE notification_dispatches SET seen_at = now()")
+                cur.execute(
+                    "UPDATE notification_dispatches SET seen_at = now() WHERE id = %s",
+                    (seeded_dispatches["system"],),
+                )
+                assert cur.rowcount == 0, "the platform admin still marks a system alert read"
+    with svc.cursor() as cur:
+        cur.execute("SELECT seen_at FROM notification_dispatches WHERE id = %s",
+                    (seeded_dispatches["system"],))
+        assert cur.fetchone()[0] == before
+
+
+def test_a_platform_admin_cannot_rewrite_a_system_alert(
+    svc: Any, tenants: dict[str, uuid.UUID], seeded_dispatches: dict[str, Any],
+) -> None:
+    """The column grant keeps every column but seen_at out of every browser caller's reach, an
+    admin's included, whichever row a policy would admit.
+
+    RED by: restoring table-wide UPDATE on notification_dispatches to authenticated."""
+    import psycopg
+
+    with _platform_admin(svc, tenants["a_user"]):
+        with scoped(tenants["a_user"]) as conn:
+            for sql in (
+                "UPDATE notification_dispatches SET message = 'rewritten' WHERE id = %s",
+                "UPDATE notification_dispatches SET target_channels = '{email}' WHERE id = %s",
+                "UPDATE notification_dispatches SET dedupe_key = 'sys:forged' WHERE id = %s",
+                "UPDATE notification_dispatches SET estimation_run_id = NULL WHERE id = %s",
+            ):
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    with conn.transaction():  # a SAVEPOINT, so the refusal cannot poison the txn
+                        with conn.cursor() as cur:
+                            cur.execute(sql, (seeded_dispatches["system"],))
+    with svc.cursor() as cur:
+        cur.execute(
+            "SELECT message, target_channels, dedupe_key FROM notification_dispatches WHERE id = %s",
+            (seeded_dispatches["system"],),
+        )
+        assert cur.fetchone() == (seeded_dispatches["message"], [], seeded_dispatches["dedupe_key"])
+
+
+def test_a_tenant_cannot_touch_a_system_alert_and_still_marks_its_own_read(
+    svc: Any, tenants: dict[str, uuid.UUID], seeded_dispatches: dict[str, Any],
+) -> None:
+    """An UPDATE that reads no column (no WHERE, no RETURNING) is judged by the UPDATE
+    policies alone; with a WHERE the read policy, which hides SYSTEM rows from tenants,
+    would mask an UPDATE arm that reaches them. So the blanket statement is the probe.
+
+    RED by: an UPDATE arm that reaches SYSTEM rows, a column grant missing seen_at, or one that
+    still carries estimation_run_id (migration 651: its one writer, "Estimate rent", is deleted)."""
+    import psycopg
+
+    seen_at = "SELECT seen_at FROM notification_dispatches WHERE id = %s"
+    with svc.cursor() as cur:
+        cur.execute(seen_at, (seeded_dispatches["system"],))
+        before = cur.fetchone()[0]
+    with scoped(tenants["b_user"]) as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE notification_dispatches SET seen_at = now()")
+            cur.execute(
+                "UPDATE notification_dispatches SET seen_at = now() WHERE id = %s",
+                (seeded_dispatches["system"],),
+            )
+            assert cur.rowcount == 0, "a tenant reached a SYSTEM-account system alert"
+            cur.execute(
+                "UPDATE notification_dispatches SET seen_at = now() WHERE id = %s",
+                (seeded_dispatches["own"],),
+            )
+            assert cur.rowcount == 1, "a tenant can no longer mark its own notification read"
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            with conn.transaction():  # a SAVEPOINT, so the refusal cannot poison the txn
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE notification_dispatches SET estimation_run_id = NULL WHERE id = %s",
+                        (seeded_dispatches["own"],),
+                    )
+    with svc.cursor() as cur:
+        cur.execute(seen_at, (seeded_dispatches["system"],))
+        assert cur.fetchone()[0] == before, "a tenant's blanket update reached a system alert"
 
 
 def test_no_anon_write_grants(svc: Any) -> None:
@@ -1308,8 +1565,8 @@ def test_no_anon_write_grants(svc: Any) -> None:
 # DEFINER first — while they were INVOKER they read these as the CALLER, so revoking
 # would have broken the operator's own Health dashboard).
 #
-# Deliberately absent: properties_map_mv and price_stat_choropleth — the SPA reads those
-# two directly as shared-market data (the third, rent_map_choropleth, is gone: migration 601).
+# Deliberately absent: price_stat_choropleth — the SPA reads it directly as shared-market
+# data (properties_map_mv is gone: migration 631; rent_map_choropleth: migration 601).
 _ADMIN_GATED_MATVIEWS: list[str] = [
     "images_failure_overview_mv",
     "health_summary_mv",
@@ -1348,6 +1605,32 @@ def test_anon_holds_no_relation_grants(svc: Any) -> None:
         f"anon must hold no SELECT on any relation — the SPA is fully login-gated "
         f"and reads as authenticated. Drift (usually a `grant ... to anon` in a "
         f"migration added after 299's sweep): {readable}"
+    )
+
+
+def test_anon_executes_no_definer_function(svc: Any) -> None:
+    """The built-in PUBLIC EXECUTE reaches anon, and a revoke that names only
+    anon + authenticated leaves it in place — that is how seed_trial_entitlement
+    shipped callable with the anon key (migration 362, closed by 612). Functions
+    are born private since 612; this rail covers every one created before it or
+    granted by hand. Allowlist empty, equality."""
+    with svc.cursor() as cur:
+        cur.execute(
+            "SELECT p.proname FROM pg_proc p "
+            "JOIN pg_namespace n ON n.oid = p.pronamespace "
+            "WHERE n.nspname = 'public' AND p.prosecdef "
+            "AND has_function_privilege('anon', p.oid, 'EXECUTE') "
+            "AND NOT EXISTS (SELECT 1 FROM pg_depend d "
+            "  WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid "
+            "  AND d.deptype = 'e') "
+            "ORDER BY p.proname"
+        )
+        callable_by_anon = [r[0] for r in cur.fetchall()]
+    assert callable_by_anon == [], (
+        f"anon can EXECUTE a SECURITY DEFINER function — it runs as the owner, "
+        f"so this is a write or read path open to anyone holding the anon key. "
+        f"The revoke must name `public` as well as anon and authenticated: "
+        f"{callable_by_anon}"
     )
 
 
@@ -1565,7 +1848,7 @@ def test_write_then_read_back_one_transaction(
     name = f"iso-rw-{uuid.uuid4().hex}"
     claims = {"sub": str(tenants["a_user"]), "role": "authenticated"}
     try:
-        gen = tenant_pool.tenant_conn(claims)
+        gen = tenant_pool.tenant_conn(claims, act_as=None, method="POST")
         conn = next(gen)
         with conn.cursor() as cur:
             cur.execute(
@@ -1576,11 +1859,11 @@ def test_write_then_read_back_one_transaction(
             assert cur.fetchone()[0] == 1, "row must be visible INSIDE the same transaction"
         next(gen, None)  # resume past the yield -> clean commit + close
 
-        with _scoped(tenants["a_user"]) as conn_a:
+        with scoped(tenants["a_user"]) as conn_a:
             with conn_a.cursor() as cur:
                 cur.execute("SELECT count(*) FROM collections WHERE name = %s", (name,))
                 assert cur.fetchone()[0] == 1, "committed row must be visible to tenant A"
-        with _scoped(tenants["b_user"]) as conn_b:
+        with scoped(tenants["b_user"]) as conn_b:
             with conn_b.cursor() as cur:
                 cur.execute("SELECT count(*) FROM collections WHERE name = %s", (name,))
                 assert cur.fetchone()[0] == 0, "committed row must be invisible to tenant B"

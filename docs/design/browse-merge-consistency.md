@@ -36,11 +36,12 @@ was layered on top of the older one without updating it:
   ```
   an UNLOGGED table that is a **full, wholesale snapshot** of
   `browse_projection` (a live view over `properties`), rebuilt **blue-green
-  every 5 minutes by `pg_cron`** (`migrations/277_browse_read_model_refresh.sql`,
-  job `browse-list-rebuild`, `*/5 * * * *`). Nothing about this rebuild is
+  every 15 minutes by `pg_cron`** (job `browse-list-rebuild`, `*/15 * * * *` since
+  `migrations/413_browse_list_rebuild_cadence.sql`; `*/5` in 277 when this was
+  written). Nothing about this rebuild is
   event-driven — it is a pure timer. Nothing in the merge write path signals
-  it. The map (`properties_map_mv`) has the identical structure on a 30-minute
-  timer.
+  it. The map (`properties_map_mv`) had the identical structure on a 30-minute
+  timer (the map reads `browse_list` since migration 630; migration 631 dropped the matview).
 
 So: the "without waiting for the cron" guarantee the merge code was written to
 provide is **silently negated** by a read layer that didn't exist when that
@@ -171,8 +172,8 @@ created the table). This is pure application-layer SQL added to one file.
 — not `property_identity.py`.** Both `property_identity` (merge/detach/split)
 and `asset_identity` (link/unlink) need it; a shared single-purpose module
 keeps `asset_identity` from importing the merge module (an unnatural
-dependency) and gives future read-model helpers (e.g. a `properties_map_mv`
-patch) an obvious home. `sync_browse_list(conn, property_ids)`:
+dependency) and gives future read-model helpers an obvious home (the map needs
+none: it reads `browse_list` since migration 630, and 631 dropped `properties_map_mv`). `sync_browse_list(conn, property_ids)`:
 
 ```python
 def sync_browse_list(conn: psycopg.Connection, property_ids: Iterable[int]) -> None:
@@ -240,15 +241,23 @@ operator can drop the two asset call sites if they prefer strict minimalism; the
 recommendation is to keep them, because a uniform invariant is less likely to
 rot than "merge syncs, asset-link doesn't, for a reason you must remember."
 
-**Concurrency safety.** The patch is plain DML against the table currently named
-`browse_list`. The 5-minute rebuild's blue-green swap (`rebuild_browse_list()`,
-`migrations/277_browse_read_model_refresh.sql:67-75`) does `DROP TABLE
-browse_list; ALTER TABLE browse_list_next RENAME TO browse_list` under a brief
-`ACCESS EXCLUSIVE` lock. A patch DML that arrives mid-swap queues behind that
-lock for the ~100 ms window, then resolves against the freshly-renamed table —
-never a half-dropped one, and never duplicating work (the fresh rebuild already
-read the post-merge state from `browse_projection`). No deadlock risk (single
-relation, one lock direction).
+**Concurrency safety [corrected 2026-10-19].** The patch is plain DML against the table
+currently named `browse_list`. The */15 rebuild's blue-green swap (`rebuild_browse_list()`)
+does `DROP TABLE browse_list; ALTER TABLE browse_list_next RENAME TO browse_list` under a
+brief `ACCESS EXCLUSIVE` lock. A patch that arrives mid-swap queues behind that lock, then
+resolves against the freshly-renamed table, never a half-dropped one. No deadlock risk
+(single relation, one lock direction). This paragraph used to add that the fresh rebuild
+"already read the post-merge state from `browse_projection`". That was false for a patch
+inside the rebuild's window: the copy snapshots `browse_projection` when it starts and the
+swap lands about a minute later (61.9 s of every 900 s, measured 2026-10-19), so a patch
+committed in between wrote the table the swap then dropped, and the merge stayed invisible
+until the next rebuild (1 of the last 5 operator merges, measured 2026-10-19). **Since migration
+630 the rebuild re-patches:** once its DROP holds the lock and before the rename, it
+deletes and re-inserts into `browse_list_next` every property a `property_merge_events`
+row created or undid since the previous run (less 15 minutes), so every merge, detach and
+split survives the swap, unless its own best-effort patch gave up on the lock and committed
+after the re-patch read (a window of milliseconds). A dirty-drain patch inside the window is still superseded until
+the next rebuild.
 
 **[as-built] The wait can outlast the swap, and the caller's `properties` locks wait with it.**
 The rebuild's `DROP TABLE browse_list` runs with `lock_timeout` 0
@@ -265,17 +274,11 @@ next pass replays it. That bounds the tail rather than removing it — a merge q
 slice already waiting can still lose its own 5 s. The identity writers inherit their caller's
 `lock_timeout`.
 
-**Concurrency safety (verify in review, not expected to be an issue):** the
-patch is plain DML against the table currently named `browse_list`. The
-5-minute rebuild's blue-green swap (`rebuild_browse_list()`,
-`migrations/277_browse_read_model_refresh.sql:67-75`) does `DROP TABLE
-browse_list; ALTER TABLE browse_list_next RENAME TO browse_list` under a brief
-`ACCESS EXCLUSIVE` lock. A patch DML that arrives mid-swap simply queues
-behind that lock for the ~100ms swap window, then resolves against the
-freshly-renamed table — never against a half-dropped one, and never
-duplicating work, since the fresh rebuild already read the post-merge state
-from `browse_projection`. No deadlock risk (single relation, one lock
-direction, no cross-waiting).
+**Concurrency safety (the original proposal's wording, corrected 2026-10-19):** it said a
+patch arriving mid-swap queues for the ~100 ms swap and is never lost, "since the fresh
+rebuild already read the post-merge state from `browse_projection`". That holds only for a
+patch committed before the rebuild's copy starts; one inside the ~62 s copy window was lost
+until migration 630's re-patch (the corrected paragraph above).
 
 **Volume note for the future auto-merge sweep:** each patch is two tiny
 indexed statements (PK lookup on `browse_list_pk`), not a scan — cheap even at
@@ -351,7 +354,10 @@ reimplementations) stays an explicit separate-PR follow-up (see non-goals).
 
 ## Explicit non-goals (do not scope-creep the fix into these)
 
-- **`properties_map_mv`'s 30-minute lag stays as-is.** It is a true
+- **[closed 2026-10-19, ONE PIN W1: migration 630]** The map no longer
+  lags merges: its pins and tile counts read `browse_list` since migration 630, so a merge
+  reaches them in its own commit; W2 retired `properties_map_mv` (migration 631). The original
+  non-goal, kept for the record: **`properties_map_mv`'s 30-minute lag stays as-is.** It is a true
   `MATERIALIZED VIEW`, not a table — Postgres does not support row-level DML
   against a matview, so the Layer-1 patch technique doesn't apply directly.
   The reported bug is about the card list, not the map; the existing 30-minute
@@ -397,7 +403,9 @@ Deferred, each its own future PR, only on operator request:
    flash ever proves bothersome) — consolidating the five call sites including
    the four pre-existing bespoke ones (finding #5).
 4. Sub-30-min map freshness for merges: convert `properties_map_mv` to the same
-   UNLOGGED-table-with-patch shape as `browse_list`.
+   UNLOGGED-table-with-patch shape as `browse_list`. **[closed 2026-10-19, ONE PIN W1:
+   migration 630]** Done differently: the map reads `browse_list`
+   itself (migration 630), so there is no second table to patch.
 
 ## Testing / verification — **[as-built]**
 

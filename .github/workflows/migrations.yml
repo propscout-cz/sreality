@@ -22,7 +22,10 @@ name: "CI: schema replay + SQL correctness"
 # Advisory until added to branch protection as a required check.
 
 on:
+  # push only on main: a branch push beside its pull_request run made a same-named twin
+  # whose cancellation read as a failed required check.
   push:
+    branches: [main]
     paths:
       - "**/*.py"
       - "migrations/**"
@@ -45,6 +48,9 @@ jobs:
   schema-and-sql:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
     env:
       PGHOST: localhost
       PGPORT: "5432"
@@ -53,6 +59,19 @@ jobs:
       PGDATABASE: postgres
     steps:
       - uses: actions/checkout@v6
+        with:
+          # The PR merge commit plus its parents: HEAD^1 is the base it was merged onto.
+          fetch-depth: 2
+
+      # tests/test_migration_numbers.py sees one checkout; two open PRs that each took the
+      # same "next" number both pass it and collide on the second merge. Fails fast, before
+      # the replay; a GitHub API error only warns.
+      - name: No other open PR carries this PR's migration number
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python3 scripts/check_migration_pr_collisions.py --base HEAD^1
 
       - name: Build + start Postgres (PostGIS + pgvector)
         # Build the image so pgvector is installed at BUILD time — the server
@@ -188,6 +207,47 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_collection_shares_live.py -q
 
+      # Dashboard sharing (migration 647) is the same shape over a third table: a FOR SELECT arm, a
+      # party policy that hides while acting, and a trigger that stamps the owner and refuses the
+      # unnamed working board. The test drives the API's own SQL under each tenant's RLS.
+      - name: Dashboard sharing is read-only and never the working board (migration 647)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_stats_dashboard_shares_live.py -q
+
+      # Curated membership (migration 629): tags, collections and the pipeline are judged
+      # inside browse_list_visible / browse_stats_properties through the *_public views, so
+      # only a real schema under the `authenticated` role can show that one tenant's card or
+      # collection never hides a property from another, that a collection shared with the
+      # caller counts as theirs, that tags_in is AND, that `{}` constrains nothing, and that
+      # hide_dismissed defaults on per account. Both functions must count the same rows.
+      - name: Curated membership is judged under the caller's RLS (migration 629)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_curated_set_scope_live.py -q
+
+      # Valuo valuations (migrations 637 + 646): a paid call is saved `pending` before it is made and
+      # finished once, and the partial unique index over md5(request::text) is what makes a
+      # double submit pay once. The hermetic tests fake the store, so only the real index, the
+      # two CHECKs and the revoked grants can show the money is guarded.
+      - name: A Valuo call is saved before it is paid and pays once (migrations 637 + 646)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_valuo_valuations_live.py -q
+
+      # The push ledger (migration 654, notifications push W4): a claim is a lease only Postgres can show — two
+      # concurrent claims never share a row (SKIP LOCKED), a claim whose process died is due again after it, a 429
+      # holds the whole device — and fan-out's registration time, VISIBLE and share cap, and the device registry's
+      # three PUT cases, are statements over the real schema the hermetic fakes only script.
+      - name: The push ledger leases, fans out and registers as written (migration 654)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_notifications_push_live.py -q
+
       # This rail replaced migration 429's on 2026-09-12 (W2-a). That one EXPLAINed the
       # drain's bulk member read of listing_location_current — the platform's single
       # largest disk consumer at 39,488 calls x 69,327 blocks — and the drain does not make
@@ -239,20 +299,22 @@ jobs:
 
       # The map RPC makes two claims a real schema is the only thing that can check.
       #
-      # PLAN: the tile aggregate reads properties_map_mv INDEX-ONLY (2,332 blocks for the
-      # whole default cohort, 2026-10-15). That rests entirely on every aggregated column
-      # being inside properties_map_mv_cover — adding obec_id, property_id or source turns
-      # it into an Index Scan over a 433 MB matview and changes no result anywhere, so
-      # nothing else goes red. The rail reads the target list OUT of the shipped function.
+      # PLAN: since migration 630 the tile aggregate reads browse_list through its map index,
+      # browse_list_map_idx (category_main, category_type, lat, lng, partial on a point).
+      # The DEFAULT call (byt/pronajem, hide_dismissed, status any or active) must read
+      # only columns that index holds, target list AND WHERE: a new always-on conjunct off
+      # the index changes no result anywhere, so nothing else goes red. The rail reads the
+      # columns out of the planner (auto_explain, VERBOSE) on the shipped function, after
+      # running the */15 rebuild once so the index exists. Portal chips and the other
+      # filters visit the heap by design.
       #
       # BEHAVIOUR: the cell count is bounded BY CONSTRUCTION (migration 602: the finest
       # world-tile level with at most 1,024 occupied tiles; there is no LIMIT in the
-      # function), every mappable row is counted exactly once in one tile, the tile
-      # centres are the ones tests/fixtures/map_tile_lattice.json pins (the SPA's formula),
-      # interior tiles are stable under a pan and children sum to their parent. The
-      # behavioural rail parks the matview and substitutes a real table -- you cannot
-      # INSERT into a materialized view, and CI's replayed copy is empty.
-      - name: The map tiles stay index-only and bounded (migration 602)
+      # function), every mappable row is counted exactly once in one tile and a row with
+      # no point in none, the tile centres are the ones tests/fixtures/map_tile_lattice.json
+      # pins (the SPA's formula), interior tiles are stable under a pan and children sum to
+      # their parent. browse_list is a real table, seeded inside a rolled-back transaction.
+      - name: The map tiles stay bounded (migrations 602, 630)
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"
@@ -311,7 +373,7 @@ jobs:
       #
       # Migration 440 emptied the `_W7_BACKLOG` exemption set, so the diff now covers all 14
       # artifacts with nothing excused, and adds three catalog rails the offline scanners
-      # cannot see: that BOTH blue-green rebuild functions stamp derived_artifacts and no
+      # cannot see: that the blue-green rebuild (rebuild_browse_list; the map's went in migration 631) stamps derived_artifacts and no
       # longer reference the dropped browse_read_model_state (restoring that stamp makes
       # every tick raise inside its own handler and silently stop republishing browse_list),
       # that the singleton and its _public view stay dropped, and that 437's temporary UNION
@@ -344,14 +406,93 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_derived_artifacts_stamping.py -q
 
-      # 422 replaced /health's `distinct on` with a recursive key-hop, which is subtle in
-      # ways a shape assertion cannot see: the hop terminates by emitting a NULL, the seek
-      # is a strict `>`, and an empty table must yield no rows rather than error. Executed
-      # against the replayed schema, in a transaction that always rolls back.
-      - name: /health pipeline checks stay latest-per-key (migration 422)
+      # 619 drives /health's pipeline_checks_public from the health_checks registry: a
+      # registered key that never ran reads not measured, an undeclared key is not served, a
+      # stale or unmeasured newest row reads unknown, and each row carries its cell incidents.
+      # Executed against the replayed schema, in a transaction that always rolls back.
+      - name: /health pipeline checks serve the registry (migration 619)
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: pytest tests/test_pipeline_checks_latest_per_key.py -q
+
+      # 620's health_liveness() is the pg_cron watcher the GitHub canary asserts on: a stale heartbeat, an
+      # alarm past its budget, an expired matcher lease and a measured Problem with no incident (a failing
+      # explicit cell, since 633) each become one failing cell the ladder reads unchanged; a dead worker folds
+      # its keys into its own cell. The replay has no pg_cron, so this lane runs the function itself, in a
+      # transaction that always rolls back. Migration 633's own statements run in their step, below.
+      - name: The pg_cron watcher judges the watchers (migration 620)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_health_liveness_live.py -q -k "not migration_633"
+
+      # 621 gives the canary's poller its production facts (workflow_failures.reason/event/head_branch,
+      # workflow_run_health.state/on_main/recent_starts, nullable: NULL means not seen yet) and retires the
+      # signature engine by predicate. The tests run the file's own UPDATE and post-condition: a signature row
+      # closes, a cell row stays open, a closed row keeps its verdict, and no browser role gains access.
+      # Executed against the replayed schema, in a transaction that always rolls back.
+      - name: The poller's facts and the signature engine's retirement (migration 621)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_platform_checks_live.py -q
+
+      # The jobs and capacity checks read pg_cron's tables, which the replay does not have, so PREPARE skips
+      # them. This lane stubs cron.job and cron.job_run_details inside a transaction that always rolls back,
+      # seeds runs and executes the checks' own statements: finished runs only, each job's 7 days counted from
+      # its newest start, 2 of the last 3, whole reference weeks; and the artifact read's GitHub delivery slack.
+      - name: The platform checks' pg_cron reads count what they claim (wave 3)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_platform_cron_sql_live.py -q
+
+      # 622 registers the daily property sweep as a derived artifact and seeds it from the app_settings stamp it
+      # replaces. Its 38 h budget plus the GitHub delivery slack the jobs check adds is the retired alarm's 56 h
+      # fail line. The tests run the file's own seed and post-condition, the producer's stamp and the jobs check's
+      # artifact read on the replayed row, in a transaction that always rolls back.
+      - name: The property sweep is a derived artifact judged at 56 h (migration 622)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_property_sweep_artifact_live.py -q
+
+      # Waves 4 to 6's checks judge in SQL that the fakes, replays and PREPARE never run: seeded rows, each check's
+      # own statements and parameters, rolled back. Walks, end-reached units, inflow, fetch errors, unnominated ads;
+      # Browse stages on the canonical ad, stock, photos, queues; outflow, stuck ads, verify backlog, precision; the
+      # engine's state, build backlog, decision lag, lease, rulings breaches and splits, where a seeded merge of the
+      # removed engine moves no number (rule 15, executed); the parsing alarm's payload shape, measures of new ads,
+      # medians, churn and field matrix; the quality gauges' floor, divergence, estate-sum and link counts, town
+      # coverage from exactly where publishing's visible day ends, the RÚIAN registry, the description lane, trends.
+      - name: The portal, engine and quality checks' statements count what they claim (waves 4-6)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: |
+          pytest tests/test_checks_scraping_sql_live.py tests/test_checks_publishing_sql_live.py \
+                 tests/test_checks_delisting_sql_live.py tests/test_checks_dedup_sql_live.py \
+                 tests/test_checks_quality_sql_live.py -q
+
+      # 633 makes the watcher read explicit cells only, as the ladder does since wave 6: a failing result without a
+      # verdict cell is no cell, never "a measured Problem with no incident" under its key (the watcher's step above
+      # pins the arm). It also unschedules the frozen data-quality capture and restates the measure view's comment.
+      # The tests run the file's own unschedule against a stubbed pg_cron (a re-run is a no-op) and its
+      # post-condition, which refuses a capture still scheduled, in a transaction that always rolls back.
+      - name: The watcher reads explicit cells only and the data-quality capture stops (migration 633)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_health_liveness_live.py -q -k migration_633
+
+      # The payload-shape predicates (location_data/claims_common.PAYLOAD_SHAPE_PREDICATES, wave 6) count the
+      # parsing check's unreadable payloads; the rail executes each on fixture payloads and holds it to its Python
+      # twin in PAYLOAD_SHAPE_READERS (only sreality's wraps the claims intake's own reader; the file's offline
+      # rails hold every key a predicate needs to its contract YAML). No parity test existed 5d3fc621..wave 6.
+      - name: Each payload-shape predicate reads a payload as its Python reader does (wave 6)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/location_data/test_payload_shape_parity_live.py -q
 
       # 06 W2a gate (b) — "a deliberately changed page appends a second body; an
       # unchanged refetch appends none" — is a property of one ON CONFLICT clause
@@ -404,7 +545,7 @@ jobs:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: pytest tests/test_property_per_m2_source_live.py -q
 
-      - name: A merge is safe — per-advert price steps, no status event, rulings (migration 559)
+      - name: A merge is safe — per-advert price steps, rulings (migration 559)
         timeout-minutes: 5
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
@@ -518,16 +659,16 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"
-        run: pytest tests/test_property_carriers_live.py -q
+        run: pytest tests/test_property_carriers_live.py tests/test_652_notifications_live.py tests/test_notification_events_lock_live.py -q
 
-      # W4's whole claim is that SIX relations publish ONE number. Nothing else
+      # W4's whole claim is that FIVE relations publish ONE number. Nothing else
       # in CI can see that: the fake connections cannot evaluate SQL, and PREPARE
       # type-checks a statement without ever computing a value -- so a view left
       # on the UNROUNDED form compiles, passes the sweep, and silently skips rows
       # at the SPA's keyset page seam (migration 200). This seeds one property and
       # reads its Kc/m2 back through listings_public, properties_public,
-      # browse_projection, listing_feed_public, browse_stats_properties and
-      # pipeline_board_public, requiring byte identity -- plus the EXPLAIN
+      # browse_projection, browse_stats_properties and pipeline_board_public,
+      # requiring byte identity -- plus the EXPLAIN
       # assertions that measure_price_per_m2 still INLINES (a `SET search_path`
       # added to it would turn every predicate into a per-row call) and that
       # browse_list's covering indexes survived the rebuild. Executed against the
@@ -538,13 +679,60 @@ jobs:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: pytest tests/test_measure_price_per_m2.py -q
 
-      # MF reference rent is ONE read-time measure (migration 565), read by the three serving
-      # views with the stored KU (566/567, replayed above). Executed over a seeded rent map:
-      # every status code, the range for a town-level location, the VK clamp, the
-      # adjustments; the views read back (value via KU, via obec, the range); the plan
-      # assertions that the function INLINES into each view (a SET clause or STRICT would
-      # make it one call per Browse row); the portal lane's yield == browse_list's (Q8 b);
-      # and that an estimation hands the property's facts, the KU included, to it.
+      # Time on market is ONE measure (migration 617): the function answers its documented
+      # cases, listings_public and the Python emitter return what it returns, and it still
+      # INLINES (a `SET` clause would turn every TOM predicate into a per-row call).
+      - name: One time-on-market definition (migration 617)
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_measure_tom_days.py -q
+
+      # The Stats dashboard's pivot (migration 626): one rollup over the Browse cohort. Seeded
+      # browse_list rows read back as the sample ledger (filtered / sample / excluded), every
+      # rollup level, min_n nulling, the refusals (empty, mixed_category, mixed_status,
+      # too_many_cells, and bad_spec for exactly what toolkit.stats_registry.validate_spec
+      # refuses), the band keys per basis, and a place chart run as `authenticated` (the
+      # names come through 626's owner-rights view; listing_location is dark to that role).
+      - name: The Stats pivot answers its contract (migration 626)
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_stats_pivot_live.py -q
+
+      # A property's location ad (migration 635, ONE PIN W3, ruling R1): rank 1 of a second window beside the
+      # canonical one (a map point, then determined foreign, then the finest rung, then the canonical order).
+      # Seeded ads read back both orders, the canonical one against 588's body run inline, and both pointers
+      # from the birth, the rollup and the no-ads reset. PREPARE cannot see which ad a window ranks first.
+      - name: A property's location ad is its most precise served ad (migration 635)
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_location_ad_order_live.py -q
+
+      # Every property surface reads the location ad (migration 636, ONE PIN W4, rulings R1/R7/R8). A property whose
+      # canonical ad sits on a street ring and whose inactive ad sits on the address point reads back the address
+      # point's lat/lng/label/rank through browse_projection and properties_public, is served by it, and gets its city
+      # proximity there; the rollup clears the proximity stamp exactly when the location ad changes (from a NULL pointer
+      # too). The rail's schema arm reads every view and function body of this replay for a place keyed on the
+      # canonical ad. PREPARE cannot see which ad a join is keyed on.
+      - name: Every property surface reads the location ad (migration 636)
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_location_ad_readers_live.py tests/test_property_location_ad_rail.py -q
+
+      # MF reference rent is ONE read-time measure (migration 565), read by the two serving
+      # views (browse_projection, properties_public) with the stored KU (566/567, replayed
+      # above). Executed over a seeded rent map: every status code, the range for a
+      # town-level location, the VK clamp, the adjustments; the views read back (value via
+      # KU, via obec, the range); the plan assertions that the function INLINES into each
+      # view (a SET clause or STRICT would make it one call per Browse row); and that an
+      # estimation hands the property's facts, the KU included, to it.
       - name: MF reference rent is one inlined measure (migrations 565, 567)
         timeout-minutes: 5
         env:
@@ -591,7 +779,7 @@ jobs:
       # fixture (tests/fixtures/portal_rule.json, also read by queries.test.ts) through
       # portal_status_matches, both aggregate RPCs, the Watchdog's compiled clause and the
       # broker lookup over seeded ads; plus the rebuild's nine per-portal indexes and the
-      # projection's one shape on both read models. Always rolled back.
+      # projection's and browse_list's one shape. Always rolled back.
       - name: One portal rule on every surface (migration 590)
         timeout-minutes: 5
         env:

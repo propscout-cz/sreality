@@ -73,6 +73,19 @@ describe('pgRead — answers', () => {
   });
 });
 
+describe('pgRead — acting as a pipeline owner (migration 641)', () => {
+  const actingHeader = (f: ReturnType<typeof stubFetch>, i: number) =>
+    new Headers(f.mock.calls[i][1]?.headers).get('x-act-as');
+
+  it('sends x-act-as on the wire only when an owner is given', async () => {
+    const f = stubFetch(async () => reply(200, []));
+    await pgRead(supabase.from('t').select('id'), { actAs: 'owner-1' });
+    await pgRead(supabase.from('t').select('id'));
+    await pgRead(supabase.from('t').select('id'), { actAs: null });
+    expect([0, 1, 2].map((i) => actingHeader(f, i))).toEqual(['owner-1', null, null]);
+  });
+});
+
 describe('pgRead — failures are ApiErrors the one retry rule can read', () => {
   it("classifies the server's statement timeout as a timeout and keeps its message verbatim", async () => {
     stubFetch(pgError(500, '57014', 'canceling statement due to statement timeout'));

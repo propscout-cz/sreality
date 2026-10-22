@@ -49,7 +49,7 @@ _TERMINAL_BATCH_STATUSES = frozenset(
 # gpt-5-nano / gpt-5.6-luna: the two OpenAI candidates of the W2-10 location bake-off
 # (location_data.claims_llm + scripts/location_llm_bakeoff.py). A model id ABSENT from
 # this dict records `cost_usd = 0.0` with only a log warning (api/providers/base.py's
-# compute_cost_usd), which silently blinds llm_burn_rate's 24h total, llm_cost_today_usd
+# compute_cost_usd), which silently blinds the llm check's fleet/spend cell, llm_cost_today_usd
 # AND the lane's own `--max-usd` cap — so the rows ship with the lane, not after it.
 # Cached input is 10% of input, the standard OpenAI 90%-off cached rate and the ratio the
 # gpt-5-mini row above already uses (0.25 -> 0.025). Prices taken 2026-09-05 from

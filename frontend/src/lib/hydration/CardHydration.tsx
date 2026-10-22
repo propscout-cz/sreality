@@ -16,16 +16,19 @@
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
 
 import type { PropertyBrokers } from '@/lib/brokers';
+import type { ListingFloor } from '@/lib/queries';
 import type { ImagePublic } from '@/lib/types';
 
 import type { BrokerSubject } from './keys';
 import {
   NO_PHOTOS,
   useListingCovers,
+  useListingFloors,
   useListingPhotos,
   usePropertyBrokers,
   type BrokersByPropertyId,
   type CoverByListingId,
+  type FloorsByListingId,
   type PhotosByListingId,
 } from './useCardHydration';
 
@@ -40,6 +43,10 @@ export interface CardHydration {
    * state, and `photosPending` is what tells them apart. Returns a stable empty
    * singleton so a consumer can memoize on identity. */
   photosFor: (listingId: number | null | undefined) => readonly ImagePublic[];
+  /* A listing's storey (floor + building's podlaží), or null when it has none /
+   * not yet. The title it joins is already on screen, so there is no pending
+   * flag: the storey just appears, and a null never renders as a gap. */
+  floorFor: (listingId: number | null | undefined) => ListingFloor | null;
   /* True while the decoration is still in flight, so a card can reserve its
    * space instead of reflowing when the value lands. Distinct from "resolved to
    * nothing", which is a real answer and must not render as a skeleton. */
@@ -52,6 +59,7 @@ const EMPTY: CardHydration = {
   coverFor: () => null,
   brokersFor: () => null,
   photosFor: () => NO_PHOTOS,
+  floorFor: () => null,
   coversPending: false,
   brokersPending: false,
   photosPending: false,
@@ -82,6 +90,9 @@ export interface CardDecorations {
   /* Several photos per card for a carousel — the value is the client-side
    * retention cap (perId), which is part of the cache key. Omitted = off. */
   photos?: number;
+  /* The storey line of the card title (floor + building podlaží): three columns
+   * of listings_public per page-sized bucket, off by default like the rest. */
+  floors?: boolean;
 }
 
 /* Fetches the decorations for one cohort of listing ids and serves them to
@@ -112,15 +123,18 @@ export function CardHydrationProvider({
     listingIds,
     renders.photos ?? null,
   );
+  const { floors } = useListingFloors(listingIds, renders.floors === true);
 
   const value = useMemo<CardHydration>(
     () =>
-      makeHydration(covers, brokers, photos, {
-        coversPending,
-        brokersPending,
-        photosPending,
-      }),
-    [covers, brokers, photos, coversPending, brokersPending, photosPending],
+      makeHydration(
+        covers,
+        brokers,
+        photos,
+        { coversPending, brokersPending, photosPending },
+        floors,
+      ),
+    [covers, brokers, photos, coversPending, brokersPending, photosPending, floors],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
@@ -142,11 +156,13 @@ export function makeHydration(
     brokersPending?: boolean;
     photosPending?: boolean;
   } = {},
+  floors: FloorsByListingId = EMPTY_FLOORS_MAP,
 ): CardHydration {
   return {
     coverFor: (id) => (id == null ? null : covers.get(id) ?? null),
     brokersFor: (id) => brokers.get(id) ?? null,
     photosFor: (id) => (id == null ? NO_PHOTOS : photos.get(id) ?? NO_PHOTOS),
+    floorFor: (id) => (id == null ? null : floors.get(id) ?? null),
     coversPending: pending.coversPending ?? false,
     brokersPending: pending.brokersPending ?? false,
     photosPending: pending.photosPending ?? false,
@@ -154,6 +170,7 @@ export function makeHydration(
 }
 
 const EMPTY_PHOTOS_MAP: PhotosByListingId = new Map();
+const EMPTY_FLOORS_MAP: FloorsByListingId = new Map();
 /* A stable identity, so switching a decoration off doesn't hand its hook a fresh
  * array every render and re-run its memo. */
 const NO_IDS: readonly number[] = [];

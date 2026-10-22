@@ -1,0 +1,1173 @@
+source,started_at,duration_s,walked,unreached,short
+bazos,2026-09-14T04:09:44Z,5108,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,,byt-prodej=8120/8117 byt-pronajem=5560/5557 dum-prodej=10330/10327 komercni-prodej=1461/1460 komercni-pronajem=3908/3904 ostatni-pronajem=1765/1764 pozemek-prodej=15030/15006
+bazos,2026-09-14T12:15:47Z,5474,*,,byt-prodej=8183/8170 byt-pronajem=5613/5609 dum-prodej=10416/10394 komercni-prodej=1498/1495 komercni-pronajem=3940/3937 ostatni-prodej=2259/2257 pozemek-prodej=15151/15121
+bazos,2026-09-14T21:39:36Z,5274,*,byt-pronajem ostatni-prodej,byt-prodej=8235/8234 dum-prodej=10467/10453 dum-pronajem=682/681 komercni-prodej=1500/1499 komercni-pronajem=3895/3873 pozemek-prodej=15233/15204
+bazos,2026-09-15T04:09:11Z,5127,*,,byt-prodej=8166/8161 byt-pronajem=5556/5553 dum-prodej=10369/10365 komercni-prodej=1482/1480 komercni-pronajem=3899/3898 ostatni-prodej=2232/2230 pozemek-prodej=15073/15048
+bazos,2026-09-15T11:24:01Z,5131,*,,byt-prodej=8200/8195 byt-pronajem=5608/5607 dum-prodej=10412/10392 komercni-pronajem=3928/3926 ostatni-prodej=2241/2238 pozemek-prodej=15129/15115
+bazos,2026-09-15T16:36:30Z,5234,*,,byt-prodej=8232/8230 byt-pronajem=5629/5623 dum-prodej=10440/10434 komercni-pronajem=3936/3933 ostatni-prodej=2250/2249 pozemek-prodej=15134/15126
+bazos,2026-09-15T21:02:05Z,5161,*,,byt-prodej=8237/8232 byt-pronajem=5633/5632 dum-prodej=10456/10455 dum-pronajem=685/684 komercni-pronajem=3934/3930 pozemek-prodej=15139/15132
+bazos,2026-09-16T04:05:18Z,5103,*,,byt-prodej=8189/8188 byt-pronajem=5588/5585 dum-prodej=10413/10407 dum-pronajem=675/674 komercni-prodej=1470/1469 komercni-pronajem=3840/3838 pozemek-prodej=15121/15112 pozemek-pronajem=584/583
+bazos,2026-09-16T11:09:03Z,5153,*,byt-prodej,byt-pronajem=5630/5623 dum-prodej=10478/10456 komercni-prodej=1486/1484 komercni-pronajem=3882/3879 ostatni-prodej=2276/2275 ostatni-pronajem=1789/1788 pozemek-prodej=15224/15192
+bazos,2026-09-16T16:29:19Z,5190,*,,byt-prodej=8271/8265 byt-pronajem=5637/5628 dum-prodej=10542/10524 komercni-prodej=1485/1484 komercni-pronajem=3910/3906 ostatni-prodej=2292/2291 pozemek-prodej=15251/15232
+bazos,2026-09-16T21:04:21Z,5281,*,,byt-prodej=8284/8279 byt-pronajem=5647/5646 dum-prodej=10564/10549 komercni-pronajem=3913/3909 ostatni-prodej=2301/2300 pozemek-prodej=15262/15251
+bazos,2026-09-17T04:12:21Z,5180,*,byt-pronajem,byt-prodej=8248/8241 dum-prodej=10539/10535 komercni-pronajem=3894/3889 ostatni-prodej=2287/2286 pozemek-prodej=15234/15217
+bazos,2026-09-17T11:18:03Z,5225,*,,byt-prodej=8258/8252 byt-pronajem=5630/5619 dum-prodej=10554/10539 komercni-prodej=1491/1490 komercni-pronajem=3913/3909 pozemek-prodej=15305/15241
+bazos,2026-09-17T16:34:39Z,5210,*,,byt-prodej=8327/8324 byt-pronajem=5635/5627 dum-prodej=10609/10605 komercni-prodej=1499/1496 komercni-pronajem=3920/3916 pozemek-prodej=15311/15299
+bazos,2026-09-17T21:06:57Z,5211,*,byt-pronajem,byt-prodej=8328/8324 dum-prodej=10625/10620 komercni-prodej=1496/1495 komercni-pronajem=3924/3920 ostatni-prodej=2326/2325 pozemek-prodej=15316/15302
+bazos,2026-09-18T03:57:12Z,5187,*,,byt-prodej=8292/8286 byt-pronajem=5603/5594 dum-prodej=10580/10575 komercni-prodej=1484/1481 komercni-pronajem=3908/3905 ostatni-prodej=2312/2311 pozemek-prodej=15254/15240
+bazos,2026-09-18T10:51:21Z,5241,*,,byt-prodej=8370/8364 byt-pronajem=5649/5646 dum-prodej=10668/10661 komercni-prodej=1508/1506 komercni-pronajem=3934/3930 pozemek-prodej=15372/15346
+bazos,2026-09-18T16:06:32Z,5245,*,,byt-prodej=8391/8384 byt-pronajem=5659/5657 dum-prodej=10694/10682 komercni-prodej=1515/1514 ostatni-prodej=2345/2343 pozemek-prodej=15378/15367
+bazos,2026-09-18T20:39:17Z,5255,*,,byt-prodej=8386/8384 byt-pronajem=5645/5644 dum-prodej=10694/10689 komercni-pronajem=3938/3937 pozemek-prodej=15383/15370
+bazos,2026-09-19T03:54:34Z,5165,*,,byt-prodej=8334/8332 byt-pronajem=5599/5594 dum-prodej=10607/10602 komercni-prodej=1507/1506 komercni-pronajem=3893/3891 ostatni-prodej=2320/2315 pozemek-prodej=15300/15291
+bazos,2026-09-19T10:34:40Z,5210,*,,byt-prodej=8329/8327 byt-pronajem=5614/5613 dum-prodej=10613/10608 komercni-pronajem=3904/3901 ostatni-prodej=2320/2318 pozemek-prodej=15307/15295
+bazos,2026-09-19T15:38:57Z,5208,*,,byt-prodej=8332/8331 byt-pronajem=5616/5614 dum-prodej=10624/10608 komercni-prodej=1508/1506 komercni-pronajem=3903/3897 ostatni-prodej=2326/2325 ostatni-pronajem=1807/1805 pozemek-prodej=15315/15292
+bazos,2026-09-19T20:17:51Z,5207,*,,byt-prodej=8353/8350 byt-pronajem=5611/5608 dum-prodej=10629/10628 komercni-pronajem=3904/3898 ostatni-prodej=2327/2326 pozemek-prodej=15321/15309
+bazos,2026-09-20T04:11:57Z,5151,*,,byt-prodej=8238/8231 byt-pronajem=5563/5561 dum-prodej=10496/10492 komercni-pronajem=3840/3833 ostatni-prodej=2292/2291 pozemek-prodej=15195/15171
+bazos,2026-09-20T10:57:50Z,5232,*,,byt-prodej=8246/8245 byt-pronajem=5577/5575 dum-prodej=10522/10504 komercni-pronajem=3860/3857 ostatni-prodej=2306/2305 pozemek-prodej=15219/15207
+bazos,2026-09-20T15:44:02Z,5201,*,,byt-prodej=8252/8246 byt-pronajem=5571/5569 dum-prodej=10540/10520 komercni-pronajem=3868/3865 ostatni-prodej=2308/2307 pozemek-prodej=15225/15216
+bazos,2026-09-20T20:33:01Z,5209,*,,byt-prodej=8266/8263 byt-pronajem=5568/5567 dum-prodej=10546/10535 dum-pronajem=706/705 komercni-prodej=1490/1489 komercni-pronajem=3868/3865 ostatni-prodej=2320/2318 pozemek-prodej=15233/15224
+bazos,2026-09-21T04:09:21Z,5092,*,,byt-prodej=8124/8120 byt-pronajem=5516/5511 dum-prodej=10346/10345 komercni-prodej=1482/1481 komercni-pronajem=3718/3714 ostatni-prodej=2299/2298 pozemek-prodej=15029/15014
+bazos,2026-09-21T12:23:44Z,5203,*,,byt-prodej=8235/8227 byt-pronajem=5565/5559 dum-prodej=10455/10440 komercni-prodej=1500/1499 komercni-pronajem=3813/3805 ostatni-prodej=2326/2324 pozemek-prodej=15215/15192
+bazos,2026-09-21T21:50:10Z,5222,*,pozemek-prodej,byt-prodej=8296/8294 byt-pronajem=5562/5561 dum-prodej=10510/10488 dum-pronajem=707/706 komercni-pronajem=3772/3767 ostatni-prodej=2309/2304 pozemek-pronajem=586/585
+bazos,2026-09-22T04:05:49Z,5153,*,byt-prodej,byt-pronajem=5556/5554 dum-prodej=10441/10437 dum-pronajem=706/705 komercni-prodej=1490/1488 komercni-pronajem=3778/3773 ostatni-prodej=2307/2306 pozemek-prodej=15179/15164
+bazos,2026-09-22T11:14:09Z,5689,*,,byt-prodej=8277/8272 byt-pronajem=5579/5577 dum-prodej=10477/10459 komercni-prodej=1496/1495 komercni-pronajem=3929/3928 ostatni-prodej=2324/2323 pozemek-prodej=15232/15211
+bazos,2026-09-22T16:36:22Z,5201,*,,byt-prodej=8328/8325 byt-pronajem=5605/5603 dum-prodej=10542/10529 komercni-prodej=1505/1504 komercni-pronajem=3926/3921 pozemek-prodej=15250/15237
+bazos,2026-09-22T21:03:16Z,4729,*,byt-pronajem dum-pronajem ostatni-prodej ostatni-pronajem pozemek-pronajem,byt-prodej=8344/8341 dum-prodej=10562/10554 komercni-pronajem=3930/3928 pozemek-prodej=15257/15243
+bazos,2026-09-23T04:02:27Z,5041,*,komercni-pronajem pozemek-prodej,byt-prodej=8330/8324 byt-pronajem=5590/5587 dum-prodej=10538/10531 ostatni-prodej=2319/2318
+bazos,2026-09-23T11:06:34Z,5207,*,,byt-prodej=8375/8361 byt-pronajem=5669/5663 dum-prodej=10590/10579 komercni-prodej=1517/1511 komercni-pronajem=3949/3942 ostatni-prodej=2342/2341 ostatni-pronajem=1803/1802 pozemek-prodej=15284/15263
+bazos,2026-09-23T16:28:08Z,5275,*,,byt-prodej=8462/8456 byt-pronajem=5683/5682 dum-prodej=10679/10666 komercni-prodej=1520/1519 komercni-pronajem=3965/3958 ostatni-prodej=2354/2351 ostatni-pronajem=1818/1817 pozemek-prodej=15364/15356
+bazos,2026-09-23T21:18:03Z,5281,*,,byt-prodej=8493/8480 byt-pronajem=5684/5683 dum-prodej=10721/10704 komercni-pronajem=3980/3972 ostatni-prodej=2349/2348 ostatni-pronajem=1813/1811 pozemek-prodej=15409/15398
+bazos,2026-09-24T03:57:35Z,5259,*,,byt-prodej=8504/8498 byt-pronajem=5648/5647 dum-prodej=10708/10700 komercni-prodej=1517/1516 komercni-pronajem=3959/3952 ostatni-prodej=2343/2342 pozemek-prodej=15375/15350 pozemek-pronajem=591/590
+bazos,2026-09-24T11:23:41Z,5307,*,byt-prodej,byt-pronajem=5666/5665 dum-prodej=10743/10723 komercni-prodej=1521/1520 komercni-pronajem=3992/3989 ostatni-prodej=2345/2344 pozemek-prodej=15445/15426
+bazos,2026-09-24T16:48:44Z,5353,*,,byt-prodej=8526/8519 byt-pronajem=5672/5668 dum-prodej=10765/10754 komercni-prodej=1523/1521 komercni-pronajem=3990/3984 pozemek-prodej=15455/15436
+bazos,2026-09-24T21:19:29Z,5400,*,komercni-pronajem,byt-prodej=8538/8529 byt-pronajem=5673/5671 dum-prodej=10780/10767 komercni-prodej=1524/1521 ostatni-pronajem=1818/1804 pozemek-prodej=15465/15445 pozemek-pronajem=600/597
+bazos,2026-09-25T04:12:16Z,5261,*,,byt-prodej=8507/8504 byt-pronajem=5649/5648 dum-prodej=10735/10728 komercni-prodej=1513/1512 komercni-pronajem=3976/3970 pozemek-prodej=15414/15397
+bazos,2026-09-25T11:29:09Z,5355,*,,byt-prodej=8514/8510 byt-pronajem=5674/5668 dum-prodej=10751/10733 komercni-prodej=1521/1518 komercni-pronajem=3997/3995 ostatni-prodej=2345/2344 pozemek-prodej=15494/15471
+bazos,2026-09-25T16:53:27Z,5309,*,,byt-prodej=8535/8530 byt-pronajem=5667/5665 dum-prodej=10792/10779 komercni-prodej=1527/1526 komercni-pronajem=4000/3994 ostatni-prodej=2350/2348 ostatni-pronajem=1822/1821 pozemek-prodej=15500/15478
+bazos,2026-09-25T21:17:36Z,5293,*,,byt-prodej=8531/8529 byt-pronajem=5668/5667 dum-prodej=10798/10781 komercni-pronajem=4006/4003 ostatni-prodej=2352/2350 ostatni-pronajem=1827/1821 pozemek-prodej=15509/15486
+bazos,2026-09-26T04:16:52Z,5290,*,,byt-prodej=8456/8454 byt-pronajem=5612/5611 dum-prodej=10687/10675 komercni-pronajem=3975/3972 ostatni-prodej=2331/2329 pozemek-prodej=15394/15381
+bazos,2026-09-26T11:04:19Z,5603,*,,byt-prodej=8449/8446 byt-pronajem=5642/5635 dum-prodej=10709/10705 komercni-prodej=1513/1511 komercni-pronajem=3983/3979 ostatni-prodej=2337/2336 pozemek-prodej=15428/15421
+bazos,2026-09-26T16:04:19Z,5343,*,dum-prodej,byt-prodej=8556/8553 byt-pronajem=5651/5650 komercni-prodej=1514/1513 komercni-pronajem=3984/3981 ostatni-prodej=2341/2340 pozemek-prodej=15432/15422
+bazos,2026-09-26T20:50:20Z,5339,*,,byt-prodej=8573/8567 byt-pronajem=5649/5645 dum-prodej=10793/10790 komercni-prodej=1515/1513 komercni-pronajem=3982/3979 pozemek-prodej=15433/15423
+bazos,2026-09-27T04:32:33Z,5257,*,,byt-prodej=8380/8377 byt-pronajem=5605/5604 dum-prodej=10598/10590 komercni-pronajem=3951/3941 pozemek-prodej=15334/15315
+bazos,2026-09-27T11:43:05Z,5259,*,,byt-prodej=8403/8400 byt-pronajem=5623/5618 dum-prodej=10645/10642 komercni-pronajem=3962/3958 pozemek-prodej=15359/15344
+bazos,2026-09-27T16:41:04Z,5253,*,,byt-prodej=8412/8409 byt-pronajem=5630/5628 dum-prodej=10652/10647 komercni-pronajem=3975/3969 ostatni-prodej=2328/2327 pozemek-prodej=15382/15372
+bazos,2026-09-27T21:06:57Z,5339,*,,byt-prodej=8425/8422 byt-pronajem=5629/5627 dum-prodej=10663/10661 komercni-pronajem=3976/3971 pozemek-prodej=15389/15380
+bazos,2026-09-28T04:34:13Z,5217,*,,byt-prodej=8333/8332 byt-pronajem=5578/5577 dum-prodej=10525/10524 komercni-prodej=1493/1491 komercni-pronajem=3927/3925 ostatni-prodej=2302/2301 ostatni-pronajem=1806/1805 pozemek-prodej=15210/15197
+bazos,2026-09-28T13:20:44Z,5242,*,byt-pronajem,byt-prodej=8365/8364 dum-prodej=10571/10557 komercni-prodej=1495/1492 komercni-pronajem=3929/3926 pozemek-prodej=15269/15256 pozemek-pronajem=585/584
+bazos,2026-09-28T23:04:08Z,5180,*,,byt-prodej=8307/8304 byt-pronajem=5519/5518 dum-prodej=10500/10483 komercni-prodej=1481/1479 komercni-pronajem=3894/3889 ostatni-prodej=2300/2299 pozemek-prodej=15191/15179
+bazos,2026-09-29T05:02:12Z,5189,*,,byt-prodej=8306/8301 byt-pronajem=5509/5503 dum-prodej=10503/10497 komercni-prodej=1484/1481 komercni-pronajem=3908/3902 ostatni-prodej=2300/2298 pozemek-prodej=15205/15179
+bazos,2026-09-29T12:26:27Z,5222,*,,byt-prodej=8413/8408 byt-pronajem=5595/5586 dum-prodej=10590/10581 komercni-prodej=1510/1507 komercni-pronajem=3946/3944 pozemek-prodej=15241/15226
+bazos,2026-09-29T22:02:31Z,5276,*,dum-prodej,byt-prodej=8465/8461 byt-pronajem=5585/5584 komercni-prodej=1525/1520 komercni-pronajem=3940/3937 ostatni-pronajem=1784/1782 pozemek-prodej=15194/15174
+bazos,2026-09-30T04:49:01Z,5244,*,,byt-prodej=8450/8438 byt-pronajem=5575/5569 dum-prodej=10570/10567 komercni-prodej=1511/1508 komercni-pronajem=3948/3946 ostatni-prodej=2306/2305 pozemek-prodej=15236/15224
+bazos,2026-09-30T12:11:26Z,5414,*,,byt-prodej=8488/8479 byt-pronajem=5607/5600 dum-prodej=10669/10662 dum-pronajem=688/687 komercni-prodej=1519/1518 komercni-pronajem=3976/3975 pozemek-prodej=15307/15289
+bazos,2026-09-30T22:01:26Z,5481,*,,byt-prodej=8588/8581 byt-pronajem=5600/5599 dum-prodej=10766/10759 komercni-pronajem=3960/3956 ostatni-pronajem=1786/1785 pozemek-prodej=15321/15293
+bazos,2026-10-01T05:01:58Z,5283,*,,byt-prodej=8536/8532 byt-pronajem=5584/5581 dum-prodej=10689/10687 komercni-prodej=1518/1517 komercni-pronajem=3969/3967 pozemek-prodej=15342/15331
+bazos,2026-10-01T12:45:47Z,5668,*,byt-pronajem,byt-prodej=8609/8592 dum-prodej=10745/10738 komercni-prodej=1536/1533 komercni-pronajem=3994/3989 ostatni-prodej=2323/2321 pozemek-prodej=15406/15384
+bazos,2026-10-01T22:29:27Z,5504,*,byt-prodej,byt-pronajem=5633/5631 dum-prodej=10763/10752 komercni-prodej=1535/1534 komercni-pronajem=3990/3983 pozemek-prodej=15392/15379
+bazos,2026-10-02T04:51:44Z,5352,*,,byt-prodej=8551/8529 byt-pronajem=5608/5606 dum-prodej=10735/10730 komercni-prodej=1534/1533 komercni-pronajem=3990/3982 pozemek-prodej=15380/15365
+bazos,2026-10-02T12:09:50Z,5459,*,,byt-prodej=8604/8594 byt-pronajem=5658/5651 dum-prodej=10792/10774 dum-pronajem=689/688 komercni-pronajem=4018/4012 ostatni-pronajem=1792/1791 pozemek-prodej=15399/15390 pozemek-pronajem=594/593
+bazos,2026-10-02T21:59:14Z,5265,*,pozemek-prodej,byt-prodej=8645/8643 byt-pronajem=5614/5612 dum-prodej=10825/10808 komercni-prodej=1552/1549 komercni-pronajem=3960/3959
+bazos,2026-10-03T04:34:24Z,5240,*,,byt-prodej=8568/8567 byt-pronajem=5597/5596 dum-prodej=10689/10673 komercni-prodej=1534/1532 pozemek-prodej=15290/15274
+bazos,2026-10-03T11:20:19Z,5709,*,,byt-prodej=8575/8571 byt-pronajem=5623/5622 dum-prodej=10719/10702 komercni-prodej=1538/1534 komercni-pronajem=3976/3971 pozemek-prodej=15314/15301
+bazos,2026-10-03T20:47:54Z,5373,*,byt-prodej,byt-pronajem=5617/5614 dum-prodej=10743/10727 komercni-prodej=1540/1537 komercni-pronajem=3977/3972 ostatni-prodej=2310/2307 ostatni-pronajem=1791/1790 pozemek-prodej=15328/15321
+bazos,2026-10-04T05:04:57Z,5274,*,byt-pronajem,byt-prodej=8523/8516 dum-prodej=10624/10621 komercni-prodej=1529/1528 komercni-pronajem=3950/3947 pozemek-prodej=15253/15236
+bazos,2026-10-04T12:01:14Z,5297,*,byt-pronajem,byt-prodej=8544/8538 dum-prodej=10661/10655 komercni-prodej=1537/1535 komercni-pronajem=3956/3952 pozemek-prodej=15280/15269
+bazos,2026-10-04T21:03:24Z,5298,*,byt-pronajem,byt-prodej=8573/8569 dum-prodej=10691/10690 komercni-prodej=1539/1538 komercni-pronajem=3960/3954 pozemek-prodej=15306/15299
+bazos,2026-10-05T04:51:35Z,5259,*,,byt-prodej=8487/8474 byt-pronajem=5578/5575 dum-prodej=10545/10542 komercni-prodej=1526/1523 komercni-pronajem=3930/3928 ostatni-prodej=2289/2287 pozemek-prodej=15213/15202 pozemek-pronajem=582/581
+bazos,2026-10-05T14:03:46Z,5441,*,,byt-prodej=8578/8573 byt-pronajem=5656/5655 dum-prodej=10674/10657 komercni-prodej=1533/1532 komercni-pronajem=3954/3947 ostatni-prodej=2329/2326 pozemek-prodej=15307/15293 pozemek-pronajem=587/586
+bazos,2026-10-05T23:53:22Z,5253,*,pozemek-prodej,byt-prodej=8563/8561 byt-pronajem=5617/5615 dum-prodej=10597/10588 komercni-prodej=1526/1520 komercni-pronajem=3948/3944 ostatni-prodej=2317/2315 pozemek-pronajem=572/571
+bazos,2026-10-06T05:38:22Z,5255,*,,byt-prodej=8532/8530 byt-pronajem=5607/5599 dum-prodej=10570/10555 komercni-prodej=1528/1523 komercni-pronajem=3951/3948 ostatni-prodej=2319/2318 pozemek-prodej=15234/15215 pozemek-pronajem=577/576
+bazos,2026-10-06T13:02:47Z,5289,*,,byt-prodej=8614/8605 byt-pronajem=5689/5684 dum-prodej=10665/10645 komercni-prodej=1536/1535 komercni-pronajem=3971/3964 pozemek-prodej=15297/15286
+bazos,2026-10-06T22:30:42Z,5264,*,dum-prodej,byt-prodej=8647/8638 byt-pronajem=5660/5659 komercni-pronajem=3949/3946 pozemek-prodej=15213/15207
+bazos,2026-10-07T05:08:56Z,5302,*,,byt-prodej=8576/8571 byt-pronajem=5643/5639 dum-prodej=10635/10630 komercni-prodej=1537/1536 komercni-pronajem=3969/3968 pozemek-prodej=15230/15216
+bazos,2026-10-07T12:57:02Z,5348,*,,byt-prodej=8657/8649 byt-pronajem=5707/5700 dum-prodej=10761/10754 komercni-prodej=1554/1553 komercni-pronajem=3999/3996 pozemek-prodej=15323/15310
+bazos,2026-10-07T22:54:35Z,5393,*,,byt-prodej=8689/8685 byt-pronajem=5724/5723 dum-prodej=10755/10750 komercni-prodej=1545/1543 komercni-pronajem=3981/3979 ostatni-prodej=2336/2335 ostatni-pronajem=1785/1784 pozemek-prodej=15310/15301
+bazos,2026-10-08T05:19:33Z,5338,*,,byt-prodej=8676/8668 byt-pronajem=5697/5694 dum-prodej=10747/10740 komercni-prodej=1545/1542 komercni-pronajem=3973/3969 ostatni-prodej=2326/2325 pozemek-prodej=15315/15309 pozemek-pronajem=580/579
+bazos,2026-10-08T13:05:18Z,5462,*,dum-prodej,byt-prodej=8696/8684 byt-pronajem=5746/5743 dum-pronajem=679/678 komercni-prodej=1564/1563 komercni-pronajem=3997/3994 pozemek-prodej=15341/15327
+bazos,2026-10-08T23:06:39Z,5529,*,,byt-prodej=8706/8704 byt-pronajem=5729/5728 dum-prodej=10791/10777 komercni-prodej=1565/1563 komercni-pronajem=3990/3987 pozemek-prodej=15318/15313
+bazos,2026-10-09T05:22:48Z,5354,*,,byt-prodej=8677/8675 byt-pronajem=5714/5711 dum-prodej=10784/10779 komercni-prodej=1565/1562 komercni-pronajem=3997/3994 pozemek-prodej=15310/15296
+bazos,2026-10-09T12:51:54Z,5357,*,,byt-prodej=8724/8717 byt-pronajem=5754/5751 dum-prodej=10852/10838 komercni-prodej=1561/1558 komercni-pronajem=4017/4015 ostatni-pronajem=1825/1824 pozemek-prodej=15341/15330
+bazos,2026-10-09T22:26:44Z,5436,*,dum-prodej,byt-prodej=8773/8771 byt-pronajem=5740/5736 komercni-prodej=1531/1526 komercni-pronajem=3962/3959 ostatni-prodej=2336/2335 ostatni-pronajem=1807/1806 pozemek-prodej=15259/15240
+bazos,2026-10-10T05:07:03Z,5227,*,byt-pronajem dum-pronajem komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,byt-prodej=8671/8665 dum-prodej=10752/10744 komercni-prodej=1533/1529
+bazos,2026-10-10T12:10:01Z,5260,*,,byt-prodej=8697/8694 byt-pronajem=5736/5735 dum-prodej=10784/10766 komercni-prodej=1547/1546 komercni-pronajem=3968/3966 pozemek-prodej=15295/15284
+bazos,2026-10-10T21:21:53Z,5279,*,komercni-pronajem pozemek-pronajem,byt-prodej=8739/8738 byt-pronajem=5738/5737 dum-prodej=10801/10786 komercni-prodej=1547/1546 ostatni-pronajem=1817/1810 pozemek-prodej=15313/15306
+bazos,2026-10-11T04:56:41Z,5250,*,,byt-prodej=8670/8661 byt-pronajem=5703/5702 dum-prodej=10721/10712 komercni-prodej=1544/1543 komercni-pronajem=3945/3943 ostatni-pronajem=1803/1802 pozemek-prodej=15212/15196
+bazos,2026-10-11T12:23:49Z,5262,*,,byt-prodej=8703/8699 byt-pronajem=5730/5727 dum-prodej=10753/10745 komercni-prodej=1547/1544 komercni-pronajem=3960/3959 pozemek-prodej=15247/15245
+bazos,2026-10-11T21:40:20Z,5268,*,byt-pronajem komercni-pronajem,byt-prodej=8731/8728 dum-prodej=10783/10771 dum-pronajem=663/659 komercni-prodej=1547/1543 ostatni-prodej=2361/2355 pozemek-prodej=15263/15256
+bazos,2026-10-12T05:10:47Z,5193,*,,byt-prodej=8624/8614 byt-pronajem=5688/5685 dum-prodej=10609/10598 dum-pronajem=661/660 komercni-prodej=1520/1516 komercni-pronajem=3908/3904 ostatni-prodej=2331/2330 pozemek-prodej=15116/15100
+bazos,2026-10-12T14:52:38Z,5279,*,,byt-prodej=8724/8716 byt-pronajem=5793/5787 dum-prodej=10710/10695 komercni-prodej=1536/1535 komercni-pronajem=3965/3959 ostatni-pronajem=1822/1821 pozemek-prodej=15301/15288
+bazos,2026-10-13T00:21:50Z,5255,*,byt-pronajem,byt-prodej=8717/8713 dum-prodej=10636/10634 komercni-prodej=1533/1532 komercni-pronajem=3947/3944 ostatni-prodej=2329/2327 pozemek-prodej=15254/15138
+bazos,2026-10-13T13:51:31Z,5298,*,,byt-prodej=8763/8755 byt-pronajem=5780/5774 dum-prodej=10692/10681 komercni-prodej=1545/1541 komercni-pronajem=3972/3968 ostatni-prodej=2359/2358 ostatni-pronajem=1836/1835 pozemek-prodej=15327/15303
+bazos,2026-10-13T22:26:29Z,5272,*,dum-prodej,byt-prodej=8788/8784 byt-pronajem=5738/5730 komercni-prodej=1538/1537 komercni-pronajem=3938/3936 ostatni-prodej=2348/2346 pozemek-prodej=15285/15271
+bazos,2026-10-14T04:12:42Z,5243,*,pozemek-prodej,byt-prodej=8771/8767 byt-pronajem=5730/5726 dum-prodej=10677/10673 komercni-prodej=1534/1533 komercni-pronajem=3950/3948 ostatni-prodej=2347/2346
+bazos,2026-10-14T11:29:11Z,5305,*,byt-pronajem,byt-prodej=8827/8817 dum-prodej=10744/10728 dum-pronajem=652/651 komercni-pronajem=3993/3991 ostatni-prodej=2367/2366 pozemek-prodej=15353/15324
+bazos,2026-10-14T16:50:42Z,5283,*,,byt-prodej=8879/8868 byt-pronajem=5796/5794 dum-prodej=10805/10801 komercni-prodej=1547/1543 komercni-pronajem=4027/4023 ostatni-pronajem=1851/1850 pozemek-prodej=15384/15371
+bazos,2026-10-14T21:25:14Z,5352,*,,byt-prodej=8903/8894 byt-pronajem=5815/5812 dum-prodej=10829/10819 komercni-prodej=1554/1553 komercni-pronajem=4019/4011 ostatni-pronajem=1849/1844 pozemek-prodej=15420/15400 pozemek-pronajem=597/595
+bazos,2026-10-15T03:55:36Z,5318,*,,byt-prodej=8888/8883 byt-pronajem=5793/5790 dum-prodej=10806/10795 komercni-prodej=1555/1552 komercni-pronajem=4004/4003 ostatni-prodej=2371/2367 pozemek-prodej=15370/15358
+bazos,2026-10-15T11:05:44Z,5324,*,,byt-prodej=8890/8885 byt-pronajem=5777/5776 dum-prodej=10845/10839 komercni-prodej=1564/1562 komercni-pronajem=4005/4002 ostatni-prodej=2388/2387 ostatni-pronajem=1851/1849 pozemek-prodej=15423/15407
+bazos,2026-10-15T16:37:09Z,5332,*,byt-pronajem,byt-prodej=8911/8906 dum-prodej=10870/10868 komercni-prodej=1573/1571 komercni-pronajem=4023/4022 pozemek-prodej=15470/15462
+bazos,2026-10-15T21:06:32Z,5326,*,,byt-prodej=8930/8927 byt-pronajem=5799/5798 dum-prodej=10892/10888 komercni-prodej=1572/1570 komercni-pronajem=4026/4025 pozemek-prodej=15479/15473
+bazos,2026-10-16T03:51:40Z,5321,*,,byt-prodej=8880/8879 byt-pronajem=5758/5744 dum-prodej=10822/10816 komercni-prodej=1561/1558 ostatni-prodej=2368/2367 pozemek-prodej=15428/15420
+bazos,2026-10-16T11:01:16Z,5378,*,byt-prodej,byt-pronajem=5815/5809 dum-prodej=10864/10854 komercni-prodej=1563/1562 komercni-pronajem=4017/4016 ostatni-prodej=2384/2383 pozemek-prodej=15435/15414
+bazos,2026-10-16T16:20:35Z,5248,*,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,
+bazos,2026-10-16T20:43:15Z,5314,*,,byt-prodej=8974/8971 byt-pronajem=5804/5803 dum-prodej=10900/10896 komercni-pronajem=4022/4021 ostatni-pronajem=1856/1855 pozemek-prodej=15446/15437
+bazos,2026-10-17T03:41:33Z,5263,*,,byt-prodej=8884/8881 byt-pronajem=5766/5757 dum-prodej=10797/10792 komercni-prodej=1553/1550 komercni-pronajem=3984/3983 ostatni-prodej=2370/2369 pozemek-prodej=15356/15352
+bazos,2026-10-17T10:22:18Z,5248,*,,byt-prodej=8905/8903 byt-pronajem=5752/5748 dum-prodej=10809/10794 komercni-pronajem=3998/3996 pozemek-prodej=15369/15362
+bazos,2026-10-17T15:15:16Z,5261,*,,byt-prodej=8930/8927 byt-pronajem=5766/5763 dum-prodej=10831/10827 komercni-pronajem=4001/4000 pozemek-prodej=15377/15370
+bazos,2026-10-17T20:20:19Z,5278,*,,byt-prodej=8940/8932 byt-pronajem=5772/5771 dum-prodej=10837/10833 komercni-pronajem=4006/4004 pozemek-prodej=15381/15375
+bazos,2026-10-18T03:47:41Z,5225,*,,byt-prodej=8882/8879 byt-pronajem=5736/5728 dum-prodej=10746/10742 komercni-prodej=1544/1541 komercni-pronajem=3984/3982 pozemek-prodej=15268/15261
+bazos,2026-10-18T10:39:23Z,5274,*,,byt-prodej=8891/8888 byt-pronajem=5766/5763 dum-prodej=10776/10759 komercni-prodej=1548/1546 komercni-pronajem=3990/3986 ostatni-prodej=2354/2353 ostatni-pronajem=1827/1826 pozemek-prodej=15291/15286
+bazos,2026-10-18T15:36:57Z,5237,*,,byt-prodej=8913/8909 byt-pronajem=5776/5771 dum-prodej=10784/10780 komercni-prodej=1550/1548 komercni-pronajem=3997/3992 ostatni-pronajem=1832/1831 pozemek-prodej=15272/15265
+bazos,2026-10-18T20:20:02Z,5269,*,,byt-prodej=8932/8929 byt-pronajem=5789/5783 dum-prodej=10796/10785 komercni-prodej=1553/1551 komercni-pronajem=3999/3996 pozemek-prodej=15281/15275
+bazos,2026-10-19T03:57:18Z,5218,*,,byt-prodej=8817/8813 byt-pronajem=5755/5753 dum-prodej=10655/10651 komercni-prodej=1533/1530 komercni-pronajem=3943/3941 ostatni-pronajem=1823/1822 pozemek-prodej=15177/15164
+bezrealitky,2026-09-14T05:28:52Z,92,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,,
+bezrealitky,2026-09-14T13:22:44Z,104,*,,
+bezrealitky,2026-09-14T22:05:10Z,104,*,,
+bezrealitky,2026-09-15T05:25:16Z,92,*,,
+bezrealitky,2026-09-15T12:10:59Z,136,*,,
+bezrealitky,2026-09-15T17:18:03Z,91,*,,
+bezrealitky,2026-09-15T21:46:48Z,103,*,,
+bezrealitky,2026-09-16T05:19:21Z,81,*,,
+bezrealitky,2026-09-16T12:07:49Z,95,*,,
+bezrealitky,2026-09-16T17:17:40Z,98,*,,
+bezrealitky,2026-09-16T21:44:12Z,132,*,,
+bezrealitky,2026-09-17T05:28:02Z,79,*,,
+bezrealitky,2026-09-17T12:08:32Z,111,*,,
+bezrealitky,2026-09-17T17:17:16Z,102,*,,
+bezrealitky,2026-09-17T21:47:36Z,94,*,,
+bezrealitky,2026-09-18T05:15:38Z,98,*,,
+bezrealitky,2026-09-18T11:51:56Z,106,*,,
+bezrealitky,2026-09-18T16:44:30Z,100,*,,
+bezrealitky,2026-09-18T21:16:53Z,104,*,,
+bezrealitky,2026-09-19T05:08:35Z,96,*,,
+bezrealitky,2026-09-19T11:35:20Z,85,*,,
+bezrealitky,2026-09-19T16:05:39Z,112,*,,
+bezrealitky,2026-09-19T21:03:45Z,83,*,,
+bezrealitky,2026-09-20T05:26:36Z,97,*,,
+bezrealitky,2026-09-20T11:50:44Z,109,*,,
+bezrealitky,2026-09-20T16:30:30Z,133,*,,
+bezrealitky,2026-09-20T21:04:27Z,82,*,,
+bezrealitky,2026-09-21T05:31:55Z,93,*,,
+bezrealitky,2026-09-21T13:22:51Z,92,*,,
+bezrealitky,2026-09-21T22:16:26Z,110,*,,
+bezrealitky,2026-09-22T05:27:00Z,89,*,,pozemek-prodej=1662/1661
+bezrealitky,2026-09-22T12:03:59Z,149,*,,
+bezrealitky,2026-09-22T17:19:08Z,99,*,,
+bezrealitky,2026-09-22T21:40:28Z,120,*,,
+bezrealitky,2026-09-23T05:13:54Z,90,*,,
+bezrealitky,2026-09-23T12:15:19Z,108,*,,byt-prodej=902/901
+bezrealitky,2026-09-23T17:29:02Z,98,*,,
+bezrealitky,2026-09-23T21:48:21Z,95,*,,
+bezrealitky,2026-09-24T05:28:41Z,79,*,,
+bezrealitky,2026-09-24T12:16:02Z,103,*,,
+bezrealitky,2026-09-24T17:34:08Z,93,*,,
+bezrealitky,2026-09-24T21:50:24Z,105,*,,
+bezrealitky,2026-09-25T05:26:21Z,115,*,,
+bezrealitky,2026-09-25T12:18:28Z,110,*,,byt-pronajem=2191/2190
+bezrealitky,2026-09-25T17:33:31Z,133,*,,
+bezrealitky,2026-09-25T21:50:26Z,94,*,,
+bezrealitky,2026-09-26T05:32:25Z,99,*,,
+bezrealitky,2026-09-26T11:49:35Z,124,*,,byt-pronajem=2156/2155
+bezrealitky,2026-09-26T16:46:32Z,111,*,,byt-pronajem=2147/2146
+bezrealitky,2026-09-26T21:36:03Z,120,*,,byt-pronajem=2147/2146
+bezrealitky,2026-09-27T05:50:28Z,108,*,,
+bezrealitky,2026-09-27T12:29:36Z,137,*,,
+bezrealitky,2026-09-27T17:18:33Z,104,*,,
+bezrealitky,2026-09-27T21:38:40Z,122,*,,
+bezrealitky,2026-09-28T05:54:58Z,101,*,,
+bezrealitky,2026-09-28T14:31:27Z,129,*,,
+bezrealitky,2026-09-28T23:31:52Z,112,*,,
+bezrealitky,2026-09-29T06:15:45Z,107,*,,
+bezrealitky,2026-09-29T13:21:29Z,92,*,,
+bezrealitky,2026-09-29T22:39:25Z,113,*,,byt-pronajem=2167/2165
+bezrealitky,2026-09-30T06:00:27Z,121,*,,
+bezrealitky,2026-09-30T13:01:53Z,137,*,,
+bezrealitky,2026-09-30T22:39:23Z,141,*,,byt-pronajem=2143/2136
+bezrealitky,2026-10-01T06:34:56Z,115,*,,
+bezrealitky,2026-10-01T13:56:31Z,167,*,,
+bezrealitky,2026-10-01T22:55:37Z,193,*,,
+bezrealitky,2026-10-02T06:15:52Z,147,*,,
+bezrealitky,2026-10-02T13:12:56Z,105,*,,
+bezrealitky,2026-10-02T22:35:11Z,103,*,,byt-pronajem=2047/2045
+bezrealitky,2026-10-03T05:47:16Z,101,*,,
+bezrealitky,2026-10-03T12:03:54Z,158,*,,
+bezrealitky,2026-10-03T16:45:12Z,108,*,,
+bezrealitky,2026-10-03T21:48:06Z,114,*,,
+bezrealitky,2026-10-04T06:23:16Z,97,*,,
+bezrealitky,2026-10-04T12:52:25Z,109,*,,
+bezrealitky,2026-10-04T21:58:14Z,98,*,,
+bezrealitky,2026-10-05T06:16:14Z,113,*,,
+bezrealitky,2026-10-05T15:18:13Z,102,*,,
+bezrealitky,2026-10-06T00:21:27Z,128,*,,
+bezrealitky,2026-10-06T06:52:58Z,91,*,,
+bezrealitky,2026-10-06T18:38:00Z,130,*,,byt-pronajem=2067/2066
+bezrealitky,2026-10-06T22:48:37Z,100,*,,
+bezrealitky,2026-10-07T06:32:10Z,121,*,,
+bezrealitky,2026-10-07T13:58:31Z,99,*,,
+bezrealitky,2026-10-07T23:19:36Z,95,*,,
+bezrealitky,2026-10-08T06:40:59Z,111,*,,
+bezrealitky,2026-10-08T14:04:03Z,94,*,,
+bezrealitky,2026-10-08T23:34:08Z,89,*,,
+bezrealitky,2026-10-09T06:47:05Z,92,*,,
+bezrealitky,2026-10-09T18:31:48Z,145,*,,
+bezrealitky,2026-10-09T22:54:59Z,136,*,,
+bezrealitky,2026-10-10T06:24:49Z,80,*,,
+bezrealitky,2026-10-10T13:04:46Z,100,*,,
+bezrealitky,2026-10-10T22:00:20Z,92,*,,
+bezrealitky,2026-10-11T06:30:01Z,92,*,,
+bezrealitky,2026-10-11T13:33:38Z,80,*,,
+bezrealitky,2026-10-11T22:29:22Z,98,*,,
+bezrealitky,2026-10-12T06:35:14Z,117,*,,
+bezrealitky,2026-10-12T16:09:34Z,83,*,,
+bezrealitky,2026-10-13T00:59:06Z,112,*,,
+bezrealitky,2026-10-13T14:36:09Z,125,*,,
+bezrealitky,2026-10-13T23:07:51Z,81,*,,
+bezrealitky,2026-10-14T05:26:59Z,91,*,,
+bezrealitky,2026-10-14T12:25:40Z,96,*,,
+bezrealitky,2026-10-14T17:37:30Z,86,*,,
+bezrealitky,2026-10-14T21:57:13Z,97,*,,
+bezrealitky,2026-10-15T05:16:50Z,93,*,,
+bezrealitky,2026-10-15T12:09:16Z,81,*,,
+bezrealitky,2026-10-15T17:22:46Z,96,*,,
+bezrealitky,2026-10-15T21:48:06Z,100,*,,
+bezrealitky,2026-10-16T05:06:30Z,99,*,,
+bezrealitky,2026-10-16T11:55:51Z,82,*,,
+bezrealitky,2026-10-16T16:59:00Z,89,*,,
+bezrealitky,2026-10-16T21:43:43Z,80,*,,
+bezrealitky,2026-10-17T05:01:34Z,83,*,,
+bezrealitky,2026-10-17T11:11:50Z,94,*,,
+bezrealitky,2026-10-17T15:57:37Z,78,*,,
+bezrealitky,2026-10-17T20:59:48Z,105,*,,
+bezrealitky,2026-10-18T05:10:45Z,73,*,,
+bezrealitky,2026-10-18T11:44:47Z,84,*,,
+bezrealitky,2026-10-18T16:09:07Z,96,*,,
+bezrealitky,2026-10-18T21:03:38Z,88,*,,
+bezrealitky,2026-10-19T05:22:12Z,79,*,,
+ceskereality,2026-09-14T05:11:29Z,5388,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,,byt-pronajem=5066/4885 dum-prodej=13348/13343 komercni-pronajem=6329/6327
+ceskereality,2026-09-14T13:05:59Z,8871,*,dum-prodej,byt-prodej=9255/9229 byt-pronajem=4889/4848 komercni-pronajem=6417/6414 ostatni-prodej=702/701 pozemek-prodej=10964/10937
+ceskereality,2026-09-14T21:55:45Z,3390,*,,byt-prodej=9254/9243 byt-pronajem=4896/4858 komercni-pronajem=6411/6410 pozemek-prodej=10956/10952
+ceskereality,2026-09-15T05:04:43Z,3986,*,,byt-prodej=9242/9235 byt-pronajem=4869/4832 dum-prodej=13309/13303 pozemek-prodej=10943/10942
+ceskereality,2026-09-15T11:55:35Z,3710,*,,byt-prodej=9355/9298 byt-pronajem=4906/4868 pozemek-prodej=10984/10983
+ceskereality,2026-09-15T17:09:43Z,3200,*,,byt-prodej=9349/9347 byt-pronajem=4898/4861 komercni-pronajem=6444/6443 pozemek-prodej=11010/11004
+ceskereality,2026-09-15T21:32:54Z,3215,*,,byt-prodej=9360/9355 byt-pronajem=4919/4876 dum-prodej=13438/13436 komercni-pronajem=6064/6063 pozemek-prodej=11017/11013
+ceskereality,2026-09-16T05:00:28Z,6807,*,,byt-prodej=9183/9176 byt-pronajem=4767/4728 dum-prodej=13233/13232 komercni-pronajem=6025/6023 pozemek-prodej=10903/10888
+ceskereality,2026-09-16T11:51:57Z,4944,*,,byt-prodej=9277/9250 byt-pronajem=4780/4741 dum-prodej=13346/13337 komercni-pronajem=6031/6030 pozemek-prodej=10962/10951
+ceskereality,2026-09-16T17:10:05Z,4226,*,byt-prodej,byt-pronajem=4789/4752 komercni-pronajem=6417/6416 pozemek-prodej=10973/10970
+ceskereality,2026-09-16T21:29:00Z,2805,*,byt-prodej,byt-pronajem=4789/4751 dum-prodej=13400/13394 komercni-pronajem=6419/6418 pozemek-prodej=10984/10979
+ceskereality,2026-09-17T05:02:42Z,3408,*,byt-prodej,byt-pronajem=4771/4734 dum-prodej=13334/13332 pozemek-prodej=10942/10938
+ceskereality,2026-09-17T11:54:33Z,5938,*,byt-prodej,byt-pronajem=4763/4722 dum-prodej=13366/13327 pozemek-prodej=10951/10950
+ceskereality,2026-09-17T17:10:16Z,3718,*,byt-prodej,byt-pronajem=4775/4741 dum-prodej=13372/13364 dum-pronajem=354/353 komercni-pronajem=6412/6411 pozemek-prodej=10945/10942
+ceskereality,2026-09-17T21:32:22Z,6918,*,byt-prodej,byt-pronajem=4770/4733 dum-pronajem=355/354 komercni-pronajem=6390/6388
+ceskereality,2026-09-18T04:55:35Z,3765,*,byt-prodej,byt-pronajem=4747/4716 dum-prodej=13345/13343 dum-pronajem=356/355 pozemek-prodej=10950/10946
+ceskereality,2026-09-18T11:31:27Z,3459,*,byt-prodej,byt-pronajem=4778/4728 dum-pronajem=358/357 komercni-pronajem=6397/6396
+ceskereality,2026-09-18T16:35:02Z,3187,*,byt-prodej,byt-pronajem=4768/4733 dum-prodej=13400/13395 dum-pronajem=360/359 komercni-pronajem=6410/6409 pozemek-prodej=10993/10989
+ceskereality,2026-09-18T21:03:01Z,2964,*,byt-prodej,byt-pronajem=4780/4742 dum-prodej=13399/13397 dum-pronajem=362/361 komercni-pronajem=6403/6401 pozemek-prodej=10991/10986
+ceskereality,2026-09-19T04:47:28Z,6715,*,byt-prodej,byt-pronajem=4778/4734 dum-prodej=13367/13362 dum-pronajem=363/362 pozemek-prodej=10952/10948
+ceskereality,2026-09-19T11:15:25Z,9055,byt-prodej byt-pronajem dum-prodej,byt-prodej dum-prodej,byt-pronajem=4761/4724
+ceskereality,2026-09-19T15:58:11Z,3544,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,byt-prodej,byt-pronajem=4762/4724 dum-prodej=13391/13386 dum-pronajem=364/363 komercni-pronajem=6402/6401 pozemek-prodej=10964/10960
+ceskereality,2026-09-19T20:51:55Z,2924,*,byt-prodej,byt-pronajem=4763/4721 dum-prodej=13392/13387 dum-pronajem=366/365 komercni-pronajem=6416/6415 pozemek-prodej=10966/10964
+ceskereality,2026-09-20T05:04:52Z,3978,*,byt-prodej,byt-pronajem=4753/4714 dum-prodej=13365/13364 dum-pronajem=364/363 pozemek-prodej=10959/10957
+ceskereality,2026-09-20T11:38:28Z,2861,*,byt-prodej,byt-pronajem=4759/4720 dum-prodej=13359/13353 dum-pronajem=363/362 pozemek-prodej=10953/10951
+ceskereality,2026-09-20T16:20:13Z,3115,*,byt-prodej,byt-pronajem=4757/4713 dum-prodej=13363/13361 dum-pronajem=363/362
+ceskereality,2026-09-20T20:57:08Z,2625,*,byt-prodej,byt-pronajem=4750/4712 dum-pronajem=363/362 pozemek-prodej=10958/10956
+ceskereality,2026-09-21T05:10:21Z,3548,*,byt-prodej,byt-pronajem=4736/4698 dum-prodej=13346/13334 dum-pronajem=362/361 komercni-pronajem=6398/6396
+ceskereality,2026-09-21T13:04:08Z,2644,*,byt-prodej,byt-pronajem=4744/4718 dum-prodej=13313/13305 dum-pronajem=363/362 komercni-prodej=2240/2239 komercni-pronajem=6408/6401 pozemek-prodej=11043/11041
+ceskereality,2026-09-21T22:04:46Z,2999,*,byt-prodej,byt-pronajem=4772/4744 dum-prodej=13390/13387 dum-pronajem=359/358 komercni-prodej=2246/2245 komercni-pronajem=6414/6412
+ceskereality,2026-09-22T05:11:33Z,8928,*,byt-prodej,byt-pronajem=4775/4733 dum-prodej=13375/13374 dum-pronajem=359/358 komercni-prodej=2242/2239 komercni-pronajem=6411/6382 pozemek-prodej=11048/11030
+ceskereality,2026-09-22T11:54:02Z,2774,*,byt-prodej,byt-pronajem=4771/4763 dum-prodej=13375/13353 dum-pronajem=357/356 komercni-prodej=2239/2238 pozemek-prodej=11046/11045
+ceskereality,2026-09-22T17:06:10Z,2415,*,byt-prodej,byt-pronajem=4805/4778 dum-prodej=13402/13401 dum-pronajem=355/354 komercni-prodej=2237/2236 komercni-pronajem=6446/6440 pozemek-prodej=11075/11072
+ceskereality,2026-09-22T21:31:05Z,2529,*,byt-prodej,byt-pronajem=4804/4771 dum-prodej=13420/13417 dum-pronajem=356/355 komercni-pronajem=6445/6443 pozemek-prodej=11084/11079
+ceskereality,2026-09-23T04:55:51Z,3048,*,byt-prodej,byt-pronajem=4795/4763 dum-prodej=13380/13378 dum-pronajem=357/356 komercni-pronajem=6433/6430 pozemek-prodej=11075/11065
+ceskereality,2026-09-23T11:53:21Z,2907,*,byt-prodej,byt-pronajem=4829/4789 dum-pronajem=352/351 komercni-pronajem=6425/6422 pozemek-prodej=11047/11022
+ceskereality,2026-09-23T17:18:43Z,3347,*,byt-prodej,byt-pronajem=4837/4797 dum-prodej=13444/13439 dum-pronajem=360/359 komercni-pronajem=6422/6419 pozemek-prodej=11071/11061
+ceskereality,2026-09-23T21:36:52Z,2755,*,byt-prodej,byt-pronajem=4825/4786 dum-prodej=13470/13465 dum-pronajem=359/358 komercni-pronajem=6418/6416 pozemek-prodej=11078/11074
+ceskereality,2026-09-24T05:06:04Z,3530,*,byt-prodej,byt-pronajem=4819/4782 dum-prodej=13438/13430 dum-pronajem=360/359 komercni-prodej=2236/2235 komercni-pronajem=6419/6415 pozemek-prodej=11049/11045
+ceskereality,2026-09-24T12:00:50Z,3092,*,byt-prodej,byt-pronajem=4804/4765 dum-pronajem=356/355 komercni-prodej=2241/2240 komercni-pronajem=6401/6398
+ceskereality,2026-09-24T17:23:32Z,2901,*,byt-prodej,byt-pronajem=4800/4761 dum-prodej=13465/13453 dum-pronajem=359/358 komercni-prodej=2243/2241 komercni-pronajem=6398/6396 pozemek-prodej=11070/11063
+ceskereality,2026-09-24T21:37:57Z,2789,*,byt-prodej,byt-pronajem=4801/4761 dum-prodej=13472/13461 dum-pronajem=358/357 komercni-prodej=2243/2241 komercni-pronajem=6399/6396 pozemek-prodej=11073/11069
+ceskereality,2026-09-25T05:08:32Z,4510,*,byt-prodej,byt-pronajem=4790/4751 dum-prodej=13462/13457 dum-pronajem=358/357 komercni-prodej=2231/2229 komercni-pronajem=6411/6404
+ceskereality,2026-09-25T12:01:13Z,2898,*,byt-prodej,byt-pronajem=4782/4741 dum-prodej=13474/13465 dum-pronajem=356/355 komercni-prodej=2237/2235 komercni-pronajem=6425/6420 pozemek-prodej=11082/11080
+ceskereality,2026-09-25T17:22:08Z,2648,*,byt-prodej,byt-pronajem=4778/4732 dum-prodej=13530/13524 dum-pronajem=361/360 komercni-prodej=2239/2237 komercni-pronajem=6423/6419 pozemek-prodej=11098/11096
+ceskereality,2026-09-25T21:42:13Z,2753,*,byt-prodej,byt-pronajem=4773/4731 dum-prodej=13545/13531 dum-pronajem=363/362 komercni-prodej=2240/2239 komercni-pronajem=6426/6425
+ceskereality,2026-09-26T05:11:49Z,3350,*,byt-prodej,byt-pronajem=4771/4729 dum-prodej=13520/13516 dum-pronajem=362/359 komercni-prodej=2237/2236
+ceskereality,2026-09-26T11:36:21Z,3173,*,byt-prodej,byt-pronajem=4760/4715 dum-prodej=13528/13522 dum-pronajem=364/361 komercni-prodej=2239/2238 komercni-pronajem=6407/6406 pozemek-prodej=11096/11092
+ceskereality,2026-09-26T16:32:51Z,2826,*,byt-prodej,byt-pronajem=4747/4703 dum-prodej=13506/13503 dum-pronajem=364/361 komercni-prodej=2239/2238 komercni-pronajem=6404/6403 pozemek-prodej=11090/11085
+ceskereality,2026-09-26T21:20:10Z,3193,*,byt-prodej,byt-pronajem=4743/4699 dum-prodej=13506/13502 dum-pronajem=364/361 komercni-prodej=2239/2238 komercni-pronajem=6402/6401 pozemek-prodej=11090/11085
+ceskereality,2026-09-27T05:28:52Z,3544,*,byt-prodej,byt-pronajem=4741/4697 dum-prodej=13497/13494 dum-pronajem=364/361 komercni-prodej=2239/2238 komercni-pronajem=6402/6400 pozemek-prodej=11086/11083
+ceskereality,2026-09-27T12:15:11Z,3086,*,byt-prodej,byt-pronajem=4719/4675 dum-prodej=13472/13468 dum-pronajem=362/359 komercni-prodej=2237/2236 komercni-pronajem=6401/6399 pozemek-prodej=11080/11077
+ceskereality,2026-09-27T17:06:44Z,2929,*,byt-prodej,byt-pronajem=4712/4669 dum-pronajem=361/358 komercni-prodej=2229/2228 komercni-pronajem=6393/6391 pozemek-prodej=11071/11068
+ceskereality,2026-09-27T21:29:45Z,3248,*,byt-prodej,byt-pronajem=4695/4651 dum-prodej=13422/13418 dum-pronajem=361/358 komercni-prodej=2227/2226 komercni-pronajem=6390/6387 pozemek-prodej=11058/11055
+ceskereality,2026-09-28T05:37:51Z,9032,byt-prodej byt-pronajem dum-prodej,byt-prodej dum-prodej,byt-pronajem=4682/4636
+ceskereality,2026-09-28T14:15:16Z,3273,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,byt-prodej,byt-pronajem=4651/4610 dum-prodej=13373/13366 dum-pronajem=360/357 pozemek-prodej=11032/11030
+ceskereality,2026-09-28T23:24:15Z,3311,*,byt-prodej,byt-pronajem=4576/4534 dum-prodej=13258/13254 dum-pronajem=354/351 komercni-prodej=2212/2210 komercni-pronajem=6350/6346 pozemek-prodej=10978/10974
+ceskereality,2026-09-29T05:55:02Z,3165,*,byt-prodej,byt-pronajem=4564/4526 dum-pronajem=354/351 komercni-prodej=2199/2197 komercni-pronajem=6342/6335 pozemek-prodej=10969/10960
+ceskereality,2026-09-30T12:50:08Z,9668,byt-prodej byt-pronajem,byt-prodej byt-pronajem,
+ceskereality,2026-10-01T06:12:35Z,9987,*,byt-prodej byt-pronajem,
+ceskereality,2026-10-01T22:48:07Z,9656,*,byt-prodej byt-pronajem,
+ceskereality,2026-10-02T05:55:44Z,9403,*,byt-prodej byt-pronajem,
+ceskereality,2026-10-02T10:30:24Z,4333,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,byt-prodej,byt-pronajem=4702/4641 dum-prodej=13485/13446 dum-pronajem=346/345 komercni-prodej=2216/2215 komercni-pronajem=6293/6292 pozemek-prodej=10899/10894
+ceskereality,2026-10-02T17:57:04Z,2441,*,byt-prodej,byt-pronajem=4720/4670 dum-prodej=13525/13517 dum-pronajem=350/349 komercni-prodej=2235/2233 komercni-pronajem=6304/6302 pozemek-prodej=10937/10935
+ceskereality,2026-10-02T22:24:40Z,2608,*,byt-prodej,byt-pronajem=4724/4673 dum-prodej=13521/13519 dum-pronajem=350/349 komercni-pronajem=6303/6302 pozemek-prodej=10933/10929
+ceskereality,2026-10-03T05:31:33Z,2652,*,byt-prodej,byt-pronajem=4719/4668 dum-prodej=13508/13506 dum-pronajem=350/349 komercni-pronajem=6296/6294 pozemek-prodej=10923/10919
+ceskereality,2026-10-03T11:52:57Z,4071,*,byt-prodej,byt-pronajem=4725/4672 dum-prodej=13513/13511 dum-pronajem=350/349 pozemek-prodej=10933/10926
+ceskereality,2026-10-03T16:33:51Z,2676,*,byt-prodej,byt-pronajem=4722/4671 dum-prodej=13523/13521 dum-pronajem=350/349 komercni-pronajem=6300/6298 pozemek-prodej=10934/10931
+ceskereality,2026-10-03T21:35:59Z,2754,*,byt-prodej,byt-pronajem=4722/4669 dum-prodej=13524/13522 dum-pronajem=349/348 komercni-pronajem=6297/6296 pozemek-prodej=10927/10926
+ceskereality,2026-10-04T06:06:54Z,2356,*,byt-prodej,byt-pronajem=4711/4659 dum-prodej=13466/13464 dum-pronajem=349/348 komercni-pronajem=6291/6290 pozemek-prodej=10897/10894
+ceskereality,2026-10-04T12:38:33Z,2444,*,byt-prodej dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,byt-pronajem=4710/4658
+ceskereality,2026-10-04T21:43:10Z,2867,*,byt-prodej,byt-pronajem=4721/4669 dum-prodej=13505/13501 dum-pronajem=346/345 komercni-pronajem=6247/6246 ostatni-prodej=682/680
+ceskereality,2026-10-05T05:59:31Z,3426,*,byt-prodej,byt-pronajem=4547/4501 dum-prodej=13079/13059 dum-pronajem=342/341 komercni-pronajem=6103/6102
+ceskereality,2026-10-05T15:05:09Z,2886,*,byt-prodej,byt-pronajem=4736/4685 dum-prodej=13485/13483 dum-pronajem=342/341 komercni-pronajem=6285/6284 pozemek-prodej=10916/10914
+ceskereality,2026-10-06T00:12:55Z,3520,*,byt-prodej byt-pronajem,dum-pronajem=341/340 komercni-pronajem=6292/6291 pozemek-prodej=10933/10932
+ceskereality,2026-10-06T06:37:59Z,3374,*,byt-prodej,byt-pronajem=4749/4698 dum-pronajem=340/339 komercni-pronajem=6297/6278 pozemek-prodej=10930/10921
+ceskereality,2026-10-06T18:31:14Z,2515,*,byt-prodej,byt-pronajem=4797/4746 dum-prodej=13529/13527 dum-pronajem=352/351 komercni-pronajem=6313/6312 ostatni-prodej=707/706 pozemek-prodej=10946/10942
+ceskereality,2026-10-07T06:15:06Z,3934,*,byt-prodej,byt-pronajem=4830/4820 dum-prodej=13501/13490 ostatni-prodej=709/708 pozemek-prodej=10919/10908
+ceskereality,2026-10-07T13:40:30Z,2965,*,byt-prodej,byt-pronajem=4849/4846 dum-prodej=13553/13540 ostatni-prodej=712/711 pozemek-prodej=10926/10924
+ceskereality,2026-10-07T23:13:39Z,2999,*,byt-prodej,byt-pronajem=4851/4849 dum-prodej=13542/13538 komercni-pronajem=6357/6356 ostatni-prodej=715/714 pozemek-prodej=10937/10934
+ceskereality,2026-10-08T06:24:05Z,4075,*,byt-prodej,byt-pronajem=4844/4842 dum-prodej=13515/13508 ostatni-prodej=714/713 pozemek-prodej=10917/10916
+ceskereality,2026-10-08T13:52:43Z,2521,*,byt-prodej,byt-pronajem=4886/4871 dum-prodej=13578/13575 komercni-pronajem=6349/6343 ostatni-prodej=719/718 pozemek-prodej=10917/10914
+ceskereality,2026-10-08T23:29:15Z,2621,*,byt-prodej,byt-pronajem=4887/4882 dum-prodej=13594/13587 komercni-prodej=2266/2265 komercni-pronajem=6347/6344 ostatni-prodej=718/717 pozemek-prodej=10926/10923
+ceskereality,2026-10-09T06:25:19Z,3144,*,byt-prodej,byt-pronajem=4904/4899 dum-prodej=13585/13573 komercni-prodej=2261/2260 komercni-pronajem=6373/6372 pozemek-prodej=10921/10912
+ceskereality,2026-10-09T18:26:53Z,3078,*,byt-prodej,byt-pronajem=4892/4887 dum-prodej=13640/13633 komercni-pronajem=6385/6381 pozemek-prodej=10925/10922
+ceskereality,2026-10-10T06:07:31Z,3953,*,byt-prodej,byt-pronajem=4882/4878
+ceskereality,2026-10-10T12:47:57Z,2064,*,byt-prodej,byt-pronajem=4885/4882 dum-prodej=13633/13625 pozemek-prodej=10911/10908
+ceskereality,2026-10-10T21:54:18Z,2829,*,byt-prodej,byt-pronajem=4885/4882 dum-prodej=13620/13619 komercni-pronajem=6342/6341 pozemek-prodej=10909/10904
+ceskereality,2026-10-11T06:04:55Z,3319,*,byt-prodej,byt-pronajem=4869/4867 dum-prodej=13587/13582 komercni-pronajem=6342/6341 ostatni-pronajem=414/413 pozemek-prodej=10900/10898
+ceskereality,2026-10-11T13:11:16Z,2431,*,byt-prodej,byt-pronajem=4875/4871 dum-prodej=13594/13578 komercni-pronajem=6346/6345 pozemek-prodej=10904/10901
+ceskereality,2026-10-11T22:11:36Z,2760,*,byt-prodej,byt-pronajem=4864/4862 dum-prodej=13590/13587 komercni-prodej=2233/2232 komercni-pronajem=6324/6322 pozemek-prodej=10876/10871
+ceskereality,2026-10-12T06:15:23Z,3987,*,byt-prodej,byt-pronajem=4862/4850 dum-prodej=13561/13552 pozemek-prodej=10885/10871
+ceskereality,2026-10-12T15:50:15Z,3275,*,byt-prodej,dum-prodej=13577/13574 komercni-prodej=2271/2270 komercni-pronajem=6351/6349 pozemek-prodej=11001/10994
+ceskereality,2026-10-13T00:53:07Z,2951,*,byt-prodej,byt-pronajem=4883/4880 dum-prodej=13582/13581 komercni-prodej=2271/2270 komercni-pronajem=6355/6353 pozemek-prodej=11002/11000
+ceskereality,2026-10-13T12:33:27Z,4367,*,,byt-prodej=9790/9762 byt-pronajem=4882/4879 dum-prodej=13594/13586 komercni-prodej=2274/2272 komercni-pronajem=6361/6359 ostatni-pronajem=414/413
+ceskereality,2026-10-13T14:26:50Z,2703,*,,byt-prodej=9800/9783 byt-pronajem=4890/4888 dum-prodej=13583/13580 komercni-pronajem=6360/6358 pozemek-prodej=11012/11001
+ceskereality,2026-10-13T22:58:39Z,4514,*,,byt-prodej=9797/9788 byt-pronajem=4902/4899 dum-prodej=13612/13608 komercni-pronajem=6361/6359 pozemek-prodej=10997/10995
+ceskereality,2026-10-14T05:08:36Z,3104,*,,byt-prodej=9791/9780 byt-pronajem=4890/4887 dum-prodej=13613/13598 komercni-pronajem=6362/6360
+ceskereality,2026-10-14T12:11:57Z,3735,*,,byt-pronajem=4906/4890 dum-prodej=13652/13648 komercni-pronajem=6390/6388 pozemek-prodej=10992/10973
+ceskereality,2026-10-14T17:25:13Z,3347,*,,byt-prodej=9855/9837 byt-pronajem=4933/4922 komercni-pronajem=6410/6407 pozemek-prodej=10990/10989
+ceskereality,2026-10-14T21:50:28Z,2721,*,,byt-prodej=9863/9854 byt-pronajem=4930/4927 komercni-pronajem=6395/6393 pozemek-prodej=10988/10985
+ceskereality,2026-10-15T04:56:25Z,2687,*,,byt-prodej=9855/9848 byt-pronajem=4908/4905 dum-prodej=13677/13672 komercni-pronajem=6386/6384 pozemek-prodej=10972/10970
+ceskereality,2026-10-15T11:50:26Z,4393,*,,byt-prodej=9902/9874 byt-pronajem=4895/4892 dum-prodej=13678/13557 komercni-pronajem=6393/6375
+ceskereality,2026-10-15T17:13:42Z,2942,*,,byt-prodej=9888/9884 byt-pronajem=4913/4911 komercni-pronajem=6392/6390 pozemek-prodej=11007/11003
+ceskereality,2026-10-15T21:34:41Z,2977,*,,byt-prodej=9913/9904 byt-pronajem=4942/4939 dum-prodej=13728/13726 komercni-prodej=2268/2267 komercni-pronajem=6390/6388 pozemek-prodej=11010/11007
+ceskereality,2026-10-16T04:46:40Z,3137,*,,byt-prodej=9888/9884 byt-pronajem=4939/4928 dum-prodej=13716/13715 komercni-prodej=2267/2261
+ceskereality,2026-10-16T11:42:37Z,4040,*,,byt-prodej=9905/9890 byt-pronajem=4945/4938 dum-prodej=13715/13710 komercni-prodej=2270/2269 komercni-pronajem=6392/6382 pozemek-prodej=10989/10975
+ceskereality,2026-10-16T16:50:15Z,2825,*,,byt-prodej=9922/9921 byt-pronajem=4932/4930 dum-prodej=13720/13717 komercni-prodej=2278/2277 komercni-pronajem=6403/6402
+ceskereality,2026-10-16T21:27:48Z,2770,*,,byt-prodej=9949/9943 byt-pronajem=4938/4936 dum-prodej=13747/13743 komercni-prodej=2279/2278 komercni-pronajem=6404/6402 pozemek-prodej=11000/10997
+ceskereality,2026-10-17T04:45:39Z,2936,*,,byt-prodej=9908/9904 byt-pronajem=4932/4928 komercni-pronajem=6399/6398 pozemek-prodej=10972/10969
+ceskereality,2026-10-17T11:01:41Z,3443,*,,byt-prodej=9918/9916 byt-pronajem=4928/4927 dum-prodej=13686/13682 komercni-pronajem=6397/6396 pozemek-prodej=10970/10966
+ceskereality,2026-10-17T15:47:03Z,2577,*,,byt-prodej=9929/9924 byt-pronajem=4929/4923 komercni-pronajem=6398/6397 pozemek-prodej=10972/10968
+ceskereality,2026-10-17T20:46:36Z,2896,*,,byt-prodej=9935/9930 byt-pronajem=4931/4929 komercni-pronajem=6400/6399 pozemek-prodej=10971/10969
+ceskereality,2026-10-18T04:51:40Z,2637,*,,byt-prodej=9909/9902 byt-pronajem=4893/4891 komercni-pronajem=6379/6378
+ceskereality,2026-10-18T11:29:20Z,3669,*,,byt-prodej=9908/9903 byt-pronajem=4892/4889 dum-prodej=13666/13657
+ceskereality,2026-10-18T16:02:07Z,2868,*,,byt-prodej=9908/9903 pozemek-prodej=10945/10943
+ceskereality,2026-10-18T20:55:53Z,2735,*,,byt-prodej=9934/9919 byt-pronajem=4897/4896 pozemek-prodej=10946/10944
+idnes,2026-09-14T04:58:15Z,7984,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,byt-prodej,dum-prodej=28494/28455 komercni-prodej=4601/4600 pozemek-prodej=26537/26524
+idnes,2026-09-14T12:49:36Z,13018,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej pozemek-prodej pozemek-pronajem,dum-prodej komercni-prodej,pozemek-prodej=26534/26530
+idnes,2026-09-14T21:50:31Z,6932,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,,byt-prodej=27769/27767 byt-pronajem=8498/8495 dum-prodej=28418/28414 pozemek-prodej=26579/26578
+idnes,2026-09-15T04:56:09Z,7362,*,,byt-pronajem=8468/8465 dum-prodej=28361/28356 komercni-pronajem=10560/10559
+idnes,2026-09-15T11:45:14Z,12417,*,,byt-pronajem=8530/8523 dum-prodej=28499/28497 komercni-pronajem=10578/10576 pozemek-prodej=26626/26618
+idnes,2026-09-15T17:00:38Z,11358,*,,byt-prodej=27858/27855 byt-pronajem=8531/8526
+idnes,2026-09-15T21:22:24Z,6667,*,byt-prodej,byt-pronajem=8553/8551 komercni-pronajem=10563/10562
+idnes,2026-09-16T04:50:31Z,8009,*,,byt-prodej=27765/27743 byt-pronajem=8519/8518 dum-prodej=28508/28498 komercni-pronajem=10549/10540
+idnes,2026-09-16T11:36:03Z,12232,*,,dum-prodej=28653/28650 pozemek-prodej=26724/26723
+idnes,2026-09-16T16:57:22Z,9567,*,,byt-prodej=27971/27949 byt-pronajem=8524/8517 dum-prodej=28663/28657 pozemek-prodej=26724/26723
+idnes,2026-09-16T21:19:31Z,6246,*,,byt-prodej=27965/27958 byt-pronajem=8520/8519 dum-prodej=28667/28664 komercni-prodej=4615/4614 pozemek-prodej=26731/26717
+idnes,2026-09-17T04:54:29Z,7942,*,,byt-prodej=27896/27895 byt-pronajem=8470/8466 dum-prodej=28587/28581 komercni-prodej=4570/4569 komercni-pronajem=10316/10313
+idnes,2026-09-17T11:43:01Z,7762,*,byt-prodej,dum-prodej=28682/28676 komercni-pronajem=10361/10360 pozemek-prodej=26786/26778
+idnes,2026-09-17T17:00:48Z,8925,*,,byt-prodej=27984/27967 dum-prodej=28702/28700 komercni-prodej=4605/4604 ostatni-prodej=1275/1274 pozemek-prodej=26773/26772
+idnes,2026-09-17T21:23:41Z,6349,*,byt-prodej,dum-prodej=28709/28698 ostatni-prodej=1279/1278 pozemek-prodej=26778/26776
+idnes,2026-09-18T04:45:05Z,10439,*,,byt-prodej=27887/27885 byt-pronajem=8488/8487 dum-prodej=28638/28629 ostatni-prodej=1279/1278 pozemek-prodej=26789/26785
+idnes,2026-09-18T11:16:34Z,9882,*,,byt-prodej=28035/28026 byt-pronajem=8521/8520 dum-prodej=28743/28727 ostatni-prodej=1277/1276 pozemek-prodej=26827/26824
+idnes,2026-09-18T16:24:52Z,10750,*,byt-prodej,dum-prodej=28738/28727 pozemek-prodej=26829/26824
+idnes,2026-09-18T20:55:08Z,7181,*,,byt-pronajem=8492/8490 dum-prodej=28746/28743 pozemek-prodej=26830/26827
+idnes,2026-09-19T04:39:01Z,10240,*,byt-pronajem,byt-prodej=28300/28169 dum-prodej=28907/28902 komercni-pronajem=10569/10567 pozemek-prodej=26810/26806
+idnes,2026-09-19T11:00:56Z,6387,*,,byt-prodej=28209/28200 byt-pronajem=8457/8456 komercni-prodej=4617/4616 pozemek-prodej=26808/26807
+idnes,2026-09-19T15:54:00Z,6126,*,,dum-prodej=29021/29019 komercni-pronajem=10574/10570 pozemek-prodej=26813/26809
+idnes,2026-09-19T20:41:35Z,5980,*,,byt-prodej=28281/28280 dum-prodej=29023/29020 pozemek-prodej=26815/26813
+idnes,2026-09-20T04:55:06Z,9944,*,,byt-prodej=28278/28262 dum-prodej=28990/28987 pozemek-prodej=26798/26797
+idnes,2026-09-20T11:25:46Z,9235,*,,byt-prodej=28280/28266 byt-pronajem=8458/8457 dum-prodej=29009/29005
+idnes,2026-09-20T16:07:51Z,10102,*,byt-prodej,byt-pronajem=8459/8458 dum-prodej=29015/29012 pozemek-prodej=26802/26800
+idnes,2026-09-20T20:50:12Z,6376,*,byt-prodej,byt-pronajem=8443/8442 dum-prodej=29024/29021 komercni-prodej=4615/4614 pozemek-prodej=26804/26798
+idnes,2026-09-21T04:57:39Z,7278,*,,byt-prodej=27896/27887 dum-prodej=28870/28851 komercni-pronajem=10557/10556 pozemek-prodej=26757/26747
+idnes,2026-09-21T12:50:07Z,13048,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej,pozemek-prodej,byt-pronajem=8466/8454
+idnes,2026-09-21T21:59:19Z,3844,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,byt-prodej byt-pronajem dum-prodej,pozemek-prodej=26931/26924
+idnes,2026-09-22T04:58:02Z,7037,*,,byt-prodej=27327/27313 byt-pronajem=8398/8397 dum-prodej=28617/28608 komercni-pronajem=10493/10491
+idnes,2026-09-22T11:40:18Z,9767,*,,byt-prodej=27479/27468 dum-prodej=28742/28736 komercni-pronajem=10563/10562
+idnes,2026-09-22T16:58:08Z,10133,*,,byt-prodej=27522/27514 byt-pronajem=8503/8502 dum-prodej=28752/28742 ostatni-pronajem=758/757 pozemek-prodej=26470/26468
+idnes,2026-09-22T21:20:17Z,6667,*,byt-prodej,dum-prodej=28756/28753
+idnes,2026-09-23T04:46:22Z,7232,*,byt-prodej,byt-pronajem=8493/8492 dum-prodej=29216/29214 komercni-pronajem=10549/10548 pozemek-prodej=26917/26908
+idnes,2026-09-23T11:38:52Z,7909,*,,byt-prodej=28418/28414 dum-prodej=29279/29278
+idnes,2026-09-23T17:00:53Z,7564,*,byt-prodej,byt-pronajem=8567/8562 dum-prodej=29281/29277 pozemek-prodej=26959/26958
+idnes,2026-09-23T21:30:55Z,5748,*,,byt-prodej=28445/28440 byt-pronajem=8555/8554 dum-prodej=29306/29296 komercni-pronajem=10180/10179 pozemek-prodej=26958/26955
+idnes,2026-09-24T04:52:53Z,7491,*,byt-prodej,byt-pronajem=8552/8550 dum-prodej=29207/29202 komercni-pronajem=10170/10166 pozemek-prodej=26905/26903
+idnes,2026-09-24T11:47:30Z,8136,*,,byt-prodej=28411/28404 byt-pronajem=8580/8578 dum-prodej=29334/29333 dum-pronajem=642/641 komercni-pronajem=10197/10196 pozemek-prodej=26972/26968
+idnes,2026-09-24T17:12:37Z,7345,*,,byt-prodej=28444/28432 byt-pronajem=8580/8575 dum-prodej=29326/29323 dum-pronajem=644/643 pozemek-prodej=26971/26970
+idnes,2026-09-24T21:31:49Z,6238,*,,byt-prodej=28457/28450 dum-prodej=29325/29320 dum-pronajem=644/643 pozemek-prodej=26967/26956
+idnes,2026-09-25T04:59:03Z,6547,*,,byt-prodej=28431/28421 dum-prodej=29296/29290 dum-pronajem=643/642 komercni-pronajem=10185/10182 pozemek-prodej=26938/26935
+idnes,2026-09-25T11:52:30Z,6664,*,,byt-prodej=28427/28410 byt-pronajem=8557/8555 dum-pronajem=640/639 komercni-pronajem=10234/10231
+idnes,2026-09-25T17:12:43Z,7097,*,byt-prodej,dum-prodej=29336/29335 dum-pronajem=643/642 pozemek-prodej=26950/26946
+idnes,2026-09-25T21:36:00Z,6787,*,,byt-prodej=28448/28437 byt-pronajem=8524/8522 dum-prodej=29342/29341 dum-pronajem=644/643 komercni-pronajem=10233/10232 pozemek-prodej=26971/26970
+idnes,2026-09-26T04:59:40Z,6600,*,,byt-prodej=28205/28097 dum-prodej=29026/29022 dum-pronajem=645/644 komercni-pronajem=10222/10221 pozemek-prodej=26949/26946
+idnes,2026-09-26T11:26:24Z,7439,*,,byt-prodej=28128/28121 dum-prodej=29081/29080 dum-pronajem=646/645 pozemek-prodej=26960/26958
+idnes,2026-09-26T16:24:45Z,7230,*,,byt-prodej=28169/28159 byt-pronajem=8504/8502 dum-pronajem=646/645 pozemek-prodej=26951/26947
+idnes,2026-09-26T21:11:30Z,6408,*,,byt-prodej=28205/28186 dum-prodej=29083/29079 dum-pronajem=646/645 pozemek-prodej=26948/26947
+idnes,2026-09-27T05:19:54Z,7442,*,byt-prodej,dum-prodej=28974/28966 dum-pronajem=643/642 pozemek-prodej=26875/26873
+idnes,2026-09-27T12:04:23Z,7032,*,,byt-prodej=28205/28195 dum-pronajem=644/643 ostatni-pronajem=777/776 pozemek-prodej=26891/26890
+idnes,2026-09-27T16:58:49Z,7543,*,,byt-prodej=28206/28204 byt-pronajem=8449/8448 dum-prodej=28981/28976 dum-pronajem=644/643 pozemek-prodej=26895/26893
+idnes,2026-09-27T21:21:44Z,6746,*,,byt-prodej=28212/28201 dum-prodej=28985/28971 dum-pronajem=645/644 pozemek-prodej=26896/26895
+idnes,2026-09-28T05:25:41Z,6655,*,byt-prodej,byt-pronajem=8348/8347 dum-prodej=28922/28903 dum-pronajem=642/641
+idnes,2026-09-28T13:57:13Z,7496,*,,byt-prodej=28133/28128 byt-pronajem=8345/8343 dum-prodej=28959/28957 dum-pronajem=645/644 pozemek-prodej=26867/26866
+idnes,2026-09-28T23:17:29Z,5477,*,,byt-prodej=28156/28155 dum-prodej=28956/28954 dum-pronajem=637/636 pozemek-prodej=26842/26838
+idnes,2026-09-29T05:45:20Z,7057,*,,dum-prodej=28734/28694 dum-pronajem=636/635 pozemek-prodej=26709/26702
+idnes,2026-09-29T12:55:22Z,7677,*,,byt-pronajem=8396/8392 dum-pronajem=625/624 pozemek-prodej=26829/26824
+idnes,2026-09-29T22:16:24Z,6493,*,dum-prodej,byt-prodej=28224/28219 dum-pronajem=625/624 pozemek-prodej=26818/26815
+idnes,2026-09-30T05:33:55Z,7169,*,dum-prodej,byt-prodej=28214/28177 byt-pronajem=8390/8389 dum-pronajem=622/621 pozemek-prodej=26767/26759
+idnes,2026-09-30T12:36:20Z,8722,*,,byt-pronajem=8417/8414 dum-pronajem=631/630 komercni-prodej=4553/4552 pozemek-prodej=26760/26748
+idnes,2026-09-30T22:17:12Z,6646,*,,byt-prodej=28322/28296 dum-prodej=28913/28885 dum-pronajem=631/630 komercni-pronajem=10982/10973 pozemek-prodej=26745/26744
+idnes,2026-10-01T05:56:02Z,6440,*,,byt-prodej=28181/28163 byt-pronajem=8277/8274 dum-prodej=28737/28697 dum-pronajem=637/636 komercni-prodej=4526/4524 komercni-pronajem=10890/10874 pozemek-prodej=26682/26676
+idnes,2026-10-01T13:17:28Z,8700,*,,byt-prodej=28262/28226 byt-pronajem=8398/8393 dum-prodej=28830/28779 dum-pronajem=635/634 komercni-pronajem=10952/10945
+idnes,2026-10-01T22:42:20Z,7137,*,,byt-prodej=28271/28257 byt-pronajem=8381/8380 dum-prodej=28814/28810 dum-pronajem=639/638
+idnes,2026-10-02T05:38:58Z,7556,*,,byt-prodej=28192/28187 dum-prodej=28729/28689 dum-pronajem=633/632 komercni-pronajem=10891/10890 pozemek-prodej=26666/26658
+idnes,2026-10-02T12:36:55Z,7845,*,,byt-prodej=28271/28262 dum-prodej=28841/28791 dum-pronajem=638/637 komercni-pronajem=10920/10918
+idnes,2026-10-02T22:15:13Z,5760,*,,dum-prodej=28880/28876 dum-pronajem=639/638 pozemek-prodej=26719/26715
+idnes,2026-10-03T05:20:14Z,8026,*,,byt-pronajem=8437/8436 dum-pronajem=637/636 komercni-pronajem=10914/10913 pozemek-prodej=26670/26662
+idnes,2026-10-03T11:40:52Z,8744,*,,byt-prodej=28317/28313 byt-pronajem=8448/8447 dum-pronajem=638/637 pozemek-prodej=26683/26682
+idnes,2026-10-03T16:18:40Z,9143,*,,byt-prodej=28328/28325 dum-pronajem=640/639
+idnes,2026-10-03T21:16:53Z,6709,*,,dum-prodej=28838/28836 dum-pronajem=638/637
+idnes,2026-10-04T05:55:03Z,6731,*,byt-prodej,dum-pronajem=636/635 komercni-pronajem=10886/10883
+idnes,2026-10-04T12:24:16Z,2763,*,byt-prodej byt-pronajem dum-prodej dum-pronajem pozemek-prodej,
+idnes,2026-10-04T21:26:54Z,5966,*,dum-prodej,byt-prodej=28356/28350 dum-pronajem=637/636
+idnes,2026-10-05T05:42:12Z,7174,*,,byt-prodej=28279/28274 dum-prodej=28755/28715 dum-pronajem=634/633 komercni-pronajem=10870/10866 pozemek-prodej=26615/26611
+idnes,2026-10-05T14:42:31Z,13053,byt-prodej byt-pronajem dum-prodej komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-pronajem,dum-prodej,byt-prodej=28414/28410
+idnes,2026-10-06T00:04:18Z,6242,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,,byt-prodej=28426/28422 dum-prodej=28800/28796 dum-pronajem=630/629 komercni-prodej=4558/4557
+idnes,2026-10-06T06:22:22Z,11131,*,byt-prodej,byt-pronajem=8595/8586 dum-prodej=28862/28861 dum-pronajem=629/628 komercni-pronajem=10859/10857
+idnes,2026-10-06T18:22:59Z,13080,*,dum-prodej,byt-prodej=28508/28502 byt-pronajem=8651/8650 dum-pronajem=639/638 komercni-pronajem=10995/10993 pozemek-prodej=26662/26658
+idnes,2026-10-07T06:01:52Z,10735,*,,byt-prodej=28468/28460 dum-pronajem=640/639
+idnes,2026-10-07T13:25:59Z,9994,*,,byt-prodej=28539/28487 byt-pronajem=8693/8689 dum-prodej=28963/28938 dum-pronajem=647/646 komercni-pronajem=11041/11038 pozemek-prodej=26654/26651
+idnes,2026-10-07T23:06:05Z,6117,*,,byt-prodej=28548/28541 dum-pronajem=645/644
+idnes,2026-10-08T06:06:08Z,11289,*,,byt-prodej=28395/28389 byt-pronajem=8659/8646 dum-prodej=28882/28877 dum-pronajem=639/638 komercni-prodej=4536/4535 komercni-pronajem=11028/11022
+idnes,2026-10-08T13:31:30Z,9565,*,,byt-prodej=28462/28413 byt-pronajem=8734/8729 dum-prodej=28916/28895 dum-pronajem=640/639 komercni-pronajem=11058/11057
+idnes,2026-10-08T23:21:51Z,6663,*,,byt-prodej=28434/28429 byt-pronajem=8717/8714 dum-prodej=28857/28856 dum-pronajem=635/634 komercni-prodej=4538/4537 komercni-pronajem=11042/11041
+idnes,2026-10-09T06:10:35Z,13091,*,dum-prodej,byt-prodej=28520/28485 dum-pronajem=636/635 ostatni-prodej=1305/1304
+idnes,2026-10-09T13:19:34Z,11066,*,,byt-prodej=28618/28617 byt-pronajem=8695/8687 dum-pronajem=646/645 pozemek-prodej=26661/26658
+idnes,2026-10-09T22:39:23Z,7125,*,,byt-prodej=28608/28573 dum-prodej=29058/29056 dum-pronajem=651/650 pozemek-prodej=26683/26681
+idnes,2026-10-10T05:54:07Z,13002,*,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,
+idnes,2026-10-10T12:33:50Z,13040,byt-prodej dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,byt-prodej,dum-pronajem=648/647 komercni-pronajem=10858/10857
+idnes,2026-10-10T21:45:59Z,7548,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,,dum-prodej=28420/28391 dum-pronajem=652/651 pozemek-prodej=26667/26666
+idnes,2026-10-11T05:48:43Z,13015,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem pozemek-prodej pozemek-pronajem,byt-prodej byt-pronajem komercni-pronajem,dum-prodej=28330/28324 dum-pronajem=648/647 pozemek-prodej=26633/26631
+idnes,2026-10-11T12:51:53Z,13030,byt-prodej byt-pronajem dum-prodej komercni-pronajem ostatni-prodej ostatni-pronajem,dum-prodej,byt-prodej=27855/27853 byt-pronajem=8602/8599
+idnes,2026-10-11T21:59:03Z,6972,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,dum-prodej dum-pronajem komercni-prodej pozemek-prodej pozemek-pronajem,byt-prodej=27946/27942 byt-pronajem=8597/8596
+idnes,2026-10-12T05:59:59Z,13026,dum-prodej dum-pronajem komercni-prodej komercni-pronajem pozemek-prodej pozemek-pronajem,komercni-pronajem,dum-prodej=28276/28262 dum-pronajem=648/647 komercni-prodej=4526/4525 pozemek-prodej=26605/26602
+idnes,2026-10-12T15:27:50Z,13028,byt-prodej byt-pronajem dum-prodej ostatni-prodej ostatni-pronajem,dum-prodej,byt-prodej=28006/27957 byt-pronajem=8624/8620
+idnes,2026-10-13T00:41:29Z,7770,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,,byt-prodej=27966/27958 dum-prodej=28347/28343 dum-pronajem=647/646 komercni-prodej=4510/4487 pozemek-prodej=26684/26681
+idnes,2026-10-13T14:13:29Z,8321,*,,byt-prodej=28109/28097 byt-pronajem=8668/8663 dum-pronajem=664/663 pozemek-prodej=26737/26726
+idnes,2026-10-13T22:45:48Z,6335,*,,byt-prodej=28130/28126 byt-pronajem=8635/8634 dum-prodej=28442/28439 dum-pronajem=661/660 komercni-pronajem=11081/11080 pozemek-prodej=26738/26728
+idnes,2026-10-14T04:55:20Z,6556,*,,byt-prodej=26613/26600 byt-pronajem=8550/8548 dum-prodej=27491/27485 dum-pronajem=642/641 pozemek-prodej=25784/25771
+idnes,2026-10-14T11:54:04Z,6899,*,,byt-prodej=26704/26696 dum-prodej=27558/27557 dum-pronajem=652/651 komercni-prodej=4536/4535 pozemek-prodej=25813/25804
+idnes,2026-10-14T17:11:31Z,7672,*,,byt-pronajem=8647/8646 dum-prodej=27575/27573 dum-pronajem=654/653 pozemek-prodej=25826/25817
+idnes,2026-10-14T21:41:57Z,5090,*,,byt-prodej=26739/26733 byt-pronajem=8643/8641 dum-prodej=27596/27595 dum-pronajem=656/655 komercni-pronajem=11101/11100 pozemek-prodej=25849/25846
+idnes,2026-10-15T04:41:06Z,5583,*,,byt-prodej=26741/26728 dum-pronajem=656/655 pozemek-prodej=25859/25854
+idnes,2026-10-15T11:31:02Z,6025,*,,byt-prodej=26820/26810 byt-pronajem=8670/8669 dum-prodej=27644/27643 dum-pronajem=656/655
+idnes,2026-10-15T17:02:18Z,5873,*,,byt-prodej=26833/26822 dum-prodej=27654/27640 dum-pronajem=658/657 pozemek-prodej=25938/25937
+idnes,2026-10-15T21:24:22Z,5524,*,,byt-prodej=26849/26847 dum-prodej=27673/27672 dum-pronajem=657/656 pozemek-prodej=25935/25933
+idnes,2026-10-16T04:33:24Z,6064,*,,byt-prodej=26841/26831 byt-pronajem=8674/8673 dum-prodej=27654/27649 dum-pronajem=654/653 pozemek-prodej=25907/25906
+idnes,2026-10-16T11:25:58Z,5745,*,,byt-prodej=26913/26897 dum-prodej=27694/27692 dum-pronajem=651/650 pozemek-prodej=25915/25905
+idnes,2026-10-16T16:40:23Z,5489,*,,byt-prodej=26915/26904 byt-pronajem=8684/8682 dum-prodej=27692/27690 dum-pronajem=657/656
+idnes,2026-10-16T21:10:09Z,5144,*,,byt-prodej=26926/26912 byt-pronajem=8688/8687 dum-prodej=27701/27700 dum-pronajem=659/658
+idnes,2026-10-17T04:28:13Z,7022,*,dum-prodej,byt-prodej=26527/26522 byt-pronajem=8679/8678 dum-pronajem=660/659
+idnes,2026-10-17T10:46:08Z,5548,*,,byt-prodej=26569/26562 dum-prodej=27178/27176 dum-pronajem=661/660 pozemek-prodej=25891/25890
+idnes,2026-10-17T15:36:54Z,5506,*,,byt-prodej=26577/26574 dum-prodej=27188/27186 dum-pronajem=660/659
+idnes,2026-10-17T20:37:39Z,5389,*,,byt-prodej=26588/26587 dum-prodej=27198/27196 dum-pronajem=660/659
+idnes,2026-10-18T04:35:46Z,6035,*,,byt-prodej=26547/26515 dum-prodej=27162/27161 dum-pronajem=658/657
+idnes,2026-10-18T11:07:09Z,6374,*,,byt-prodej=26565/26562 dum-pronajem=658/657 pozemek-prodej=25873/25872
+idnes,2026-10-18T15:53:05Z,7214,*,byt-prodej,byt-pronajem=8683/8682 dum-prodej=27193/27187 dum-pronajem=657/656 pozemek-prodej=25873/25872
+idnes,2026-10-18T20:45:01Z,5935,*,,byt-prodej=26580/26577 byt-pronajem=8671/8670 dum-pronajem=658/657 komercni-pronajem=11081/11080 pozemek-prodej=25866/25865
+maxima,2026-09-14T05:29:58Z,37,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,,
+maxima,2026-09-14T13:23:52Z,33,*,,
+maxima,2026-09-14T22:07:07Z,39,*,,
+maxima,2026-09-15T05:27:54Z,35,*,,
+maxima,2026-09-15T12:13:28Z,30,*,,
+maxima,2026-09-15T17:18:54Z,36,*,,
+maxima,2026-09-15T21:47:31Z,31,*,,
+maxima,2026-09-16T05:21:07Z,35,*,,
+maxima,2026-09-16T12:10:58Z,32,*,,
+maxima,2026-09-16T17:18:26Z,37,*,,
+maxima,2026-09-16T21:44:33Z,31,*,,
+maxima,2026-09-17T05:30:52Z,35,*,,
+maxima,2026-09-17T12:11:58Z,36,*,,
+maxima,2026-09-17T17:17:38Z,34,*,,
+maxima,2026-09-17T21:48:15Z,32,*,,
+maxima,2026-09-18T05:17:10Z,38,*,,
+maxima,2026-09-18T11:53:23Z,29,*,,
+maxima,2026-09-18T16:45:05Z,36,*,,
+maxima,2026-09-18T21:17:21Z,30,*,,
+maxima,2026-09-19T05:10:34Z,31,*,,
+maxima,2026-09-19T11:37:22Z,34,*,,
+maxima,2026-09-19T16:06:29Z,31,*,,
+maxima,2026-09-19T21:05:34Z,30,*,,
+maxima,2026-09-20T05:28:11Z,26,*,,
+maxima,2026-09-20T11:51:43Z,29,*,,
+maxima,2026-09-20T16:31:18Z,33,*,,
+maxima,2026-09-20T21:04:55Z,32,*,,
+maxima,2026-09-21T05:33:26Z,33,*,,
+maxima,2026-09-21T13:23:34Z,40,*,,
+maxima,2026-09-21T22:18:30Z,33,*,,
+maxima,2026-09-22T05:27:55Z,33,*,,
+maxima,2026-09-22T12:04:51Z,35,*,,
+maxima,2026-09-22T17:20:46Z,37,*,,
+maxima,2026-09-22T21:41:15Z,35,*,,
+maxima,2026-09-23T05:15:45Z,34,*,,
+maxima,2026-09-23T12:18:02Z,31,*,,
+maxima,2026-09-23T17:29:55Z,40,*,,
+maxima,2026-09-23T21:49:28Z,32,*,,
+maxima,2026-09-24T05:31:07Z,38,*,,
+maxima,2026-09-24T12:18:50Z,35,*,,
+maxima,2026-09-24T17:35:15Z,26,*,,
+maxima,2026-09-24T21:51:45Z,33,*,,
+maxima,2026-09-25T05:28:09Z,38,*,,
+maxima,2026-09-25T12:20:04Z,40,*,,
+maxima,2026-09-25T17:34:37Z,31,*,,
+maxima,2026-09-25T21:51:26Z,26,*,,
+maxima,2026-09-26T05:36:16Z,37,*,,
+maxima,2026-09-26T11:51:26Z,28,*,,
+maxima,2026-09-26T16:47:17Z,27,*,,
+maxima,2026-09-26T21:37:18Z,31,*,,
+maxima,2026-09-27T05:51:33Z,34,*,,
+maxima,2026-09-27T12:30:33Z,39,*,,
+maxima,2026-09-27T17:19:14Z,26,*,,
+maxima,2026-09-27T21:39:44Z,38,*,,
+maxima,2026-09-28T05:56:47Z,32,*,,
+maxima,2026-09-28T14:33:39Z,37,*,,
+maxima,2026-09-28T23:33:31Z,27,*,,
+maxima,2026-09-29T06:16:24Z,36,*,,
+maxima,2026-09-29T13:23:13Z,40,*,,
+maxima,2026-09-29T22:41:20Z,27,*,,
+maxima,2026-09-30T06:01:40Z,42,*,,
+maxima,2026-09-30T13:06:22Z,39,*,,
+maxima,2026-09-30T22:39:23Z,32,*,,
+maxima,2026-10-01T06:36:05Z,36,*,,
+maxima,2026-10-01T13:57:15Z,46,*,,
+maxima,2026-10-01T22:56:08Z,39,*,,
+maxima,2026-10-02T06:17:50Z,36,*,,
+maxima,2026-10-02T13:14:42Z,35,*,,
+maxima,2026-10-02T22:36:42Z,28,*,,
+maxima,2026-10-03T05:49:31Z,33,*,,
+maxima,2026-10-03T12:04:50Z,41,*,,
+maxima,2026-10-03T16:46:37Z,26,*,,
+maxima,2026-10-03T21:49:20Z,35,*,,
+maxima,2026-10-04T06:24:55Z,38,*,,
+maxima,2026-10-04T12:53:03Z,28,*,,
+maxima,2026-10-04T21:59:06Z,37,*,,
+maxima,2026-10-05T06:18:40Z,36,*,,
+maxima,2026-10-05T15:19:18Z,36,*,,
+maxima,2026-10-06T00:23:03Z,36,*,,
+maxima,2026-10-06T06:54:55Z,34,*,,
+maxima,2026-10-06T18:38:55Z,32,*,,
+maxima,2026-10-06T22:48:51Z,30,*,,
+maxima,2026-10-07T06:34:09Z,35,*,,
+maxima,2026-10-07T13:59:38Z,41,*,,
+maxima,2026-10-07T23:20:24Z,28,*,,
+maxima,2026-10-08T06:42:03Z,40,*,,
+maxima,2026-10-08T14:04:47Z,27,*,,
+maxima,2026-10-08T23:34:40Z,30,*,,
+maxima,2026-10-09T06:48:54Z,39,*,,
+maxima,2026-10-09T13:52:05Z,36,*,,
+maxima,2026-10-09T22:55:51Z,31,*,,
+maxima,2026-10-10T06:26:55Z,34,*,,
+maxima,2026-10-10T13:05:49Z,28,*,,
+maxima,2026-10-10T22:01:23Z,35,*,,
+maxima,2026-10-11T06:31:15Z,36,*,,
+maxima,2026-10-11T13:34:32Z,31,*,,
+maxima,2026-10-11T22:30:55Z,34,*,,
+maxima,2026-10-12T06:37:29Z,31,*,,
+maxima,2026-10-12T16:10:46Z,39,*,,
+maxima,2026-10-13T00:59:46Z,36,*,,
+maxima,2026-10-13T14:37:10Z,35,*,,
+maxima,2026-10-13T23:08:05Z,27,*,,
+maxima,2026-10-14T05:29:30Z,35,*,,
+maxima,2026-10-14T12:28:19Z,33,*,,
+maxima,2026-10-14T17:37:55Z,25,*,,
+maxima,2026-10-14T21:57:51Z,28,*,,
+maxima,2026-10-15T05:19:09Z,42,*,,
+maxima,2026-10-15T12:12:37Z,33,*,,
+maxima,2026-10-15T17:23:50Z,113,*,,
+maxima,2026-10-15T21:50:12Z,33,*,,
+maxima,2026-10-16T05:08:50Z,36,*,,
+maxima,2026-10-16T11:56:42Z,34,*,,
+maxima,2026-10-16T17:00:15Z,29,*,,
+maxima,2026-10-16T21:46:53Z,38,*,,
+maxima,2026-10-17T05:03:12Z,37,*,,
+maxima,2026-10-17T11:12:13Z,31,*,,
+maxima,2026-10-17T15:58:56Z,30,*,,
+maxima,2026-10-17T21:01:32Z,34,*,,
+maxima,2026-10-18T05:11:56Z,36,*,,
+maxima,2026-10-18T11:46:24Z,28,*,,
+maxima,2026-10-18T16:09:30Z,38,*,,
+maxima,2026-10-18T21:05:03Z,30,*,,
+maxima,2026-10-19T05:23:48Z,34,*,,
+mmreality,2026-09-14T05:28:55Z,1274,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,,
+mmreality,2026-09-14T13:22:45Z,1289,*,,
+mmreality,2026-09-14T22:05:05Z,1290,*,,
+mmreality,2026-09-15T05:25:12Z,1095,*,,dum-prodej=2632/2631
+mmreality,2026-09-15T12:10:42Z,1141,*,,dum-prodej=2642/2641 komercni-prodej=657/656
+mmreality,2026-09-15T17:18:12Z,1160,*,,
+mmreality,2026-09-15T21:46:42Z,1039,*,,
+mmreality,2026-09-16T05:19:07Z,997,*,,
+mmreality,2026-09-16T12:07:55Z,1033,*,,
+mmreality,2026-09-16T17:17:32Z,1246,*,komercni-pronajem,
+mmreality,2026-09-16T21:44:07Z,1189,*,,
+mmreality,2026-09-17T05:27:57Z,1342,*,,pozemek-prodej=3577/3576
+mmreality,2026-09-17T12:08:27Z,1137,*,,
+mmreality,2026-09-17T17:17:07Z,1243,*,,
+mmreality,2026-09-17T21:47:25Z,983,*,,
+mmreality,2026-09-18T05:15:31Z,1129,*,,
+mmreality,2026-09-18T11:51:45Z,1159,*,,pozemek-prodej=3580/3579
+mmreality,2026-09-18T16:44:27Z,1070,*,,
+mmreality,2026-09-18T21:16:42Z,1111,*,,
+mmreality,2026-09-19T05:07:54Z,1085,*,,
+mmreality,2026-09-19T11:35:21Z,1085,*,,byt-prodej=1654/1653
+mmreality,2026-09-19T16:05:32Z,1022,*,,
+mmreality,2026-09-19T21:03:46Z,1100,*,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,
+mmreality,2026-09-20T05:26:30Z,957,*,,
+mmreality,2026-09-20T11:50:38Z,1137,*,,
+mmreality,2026-09-20T16:30:39Z,1170,*,,
+mmreality,2026-09-20T21:04:12Z,1091,*,,
+mmreality,2026-09-21T05:31:48Z,963,*,,
+mmreality,2026-09-21T13:22:45Z,1111,*,,
+mmreality,2026-09-21T22:16:20Z,977,*,,
+mmreality,2026-09-22T05:25:17Z,974,*,,byt-prodej=1664/1663
+mmreality,2026-09-22T12:03:58Z,1079,*,,pozemek-prodej=3581/3579
+mmreality,2026-09-22T17:19:03Z,1267,*,,
+mmreality,2026-09-22T21:40:27Z,1442,*,,
+mmreality,2026-09-23T05:13:50Z,1194,*,,
+mmreality,2026-09-23T12:15:28Z,1135,*,,dum-prodej=2667/2666
+mmreality,2026-09-23T17:28:59Z,1072,*,,
+mmreality,2026-09-23T21:48:40Z,1159,*,,
+mmreality,2026-09-24T05:28:35Z,1056,*,,
+mmreality,2026-09-24T12:16:21Z,983,*,,
+mmreality,2026-09-24T17:34:02Z,929,*,,
+mmreality,2026-09-24T21:50:28Z,1024,*,,
+mmreality,2026-09-25T05:26:19Z,1067,*,,byt-prodej=1654/1653
+mmreality,2026-09-25T12:18:17Z,1526,*,,
+mmreality,2026-09-25T17:33:30Z,1049,*,,
+mmreality,2026-09-25T21:50:25Z,970,*,,
+mmreality,2026-09-26T05:32:29Z,1089,*,,
+mmreality,2026-09-26T11:49:36Z,1055,*,,
+mmreality,2026-09-26T16:46:28Z,1239,*,,pozemek-prodej=3578/3577
+mmreality,2026-09-26T21:36:20Z,1041,*,,
+mmreality,2026-09-27T05:50:24Z,1359,*,,
+mmreality,2026-09-27T12:29:32Z,1195,*,,
+mmreality,2026-09-27T17:18:41Z,1055,*,,
+mmreality,2026-09-27T21:38:41Z,1031,*,ostatni-pronajem,
+mmreality,2026-09-28T05:55:00Z,974,*,,
+mmreality,2026-09-28T14:31:26Z,1101,*,,
+mmreality,2026-09-28T23:31:52Z,1106,*,,
+mmreality,2026-09-29T06:15:42Z,1046,*,,byt-prodej=1646/1645
+mmreality,2026-09-29T13:21:08Z,1119,*,,
+mmreality,2026-09-29T22:39:30Z,1150,*,,
+mmreality,2026-09-30T06:00:20Z,1060,*,,
+mmreality,2026-09-30T13:01:53Z,1067,*,,
+mmreality,2026-09-30T22:38:48Z,983,*,,
+mmreality,2026-10-01T06:34:56Z,1044,*,,dum-prodej=2667/2666
+mmreality,2026-10-01T13:56:12Z,1034,*,,pozemek-prodej=3565/3564
+mmreality,2026-10-01T22:55:29Z,1344,*,,
+mmreality,2026-10-02T06:15:46Z,1118,*,,
+mmreality,2026-10-02T13:12:51Z,970,*,pozemek-prodej,dum-prodej=2681/2680
+mmreality,2026-10-02T22:34:59Z,1267,*,,
+mmreality,2026-10-03T05:46:55Z,984,*,,
+mmreality,2026-10-03T12:03:46Z,1375,*,byt-prodej,
+mmreality,2026-10-03T16:45:14Z,1012,*,,
+mmreality,2026-10-03T21:48:00Z,996,*,,
+mmreality,2026-10-04T06:23:20Z,1096,*,,
+mmreality,2026-10-04T12:52:22Z,508,*,byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,byt-prodej=1682/1681
+mmreality,2026-10-04T21:58:04Z,1049,*,byt-pronajem,
+mmreality,2026-10-05T06:16:06Z,1120,*,,
+mmreality,2026-10-05T15:18:09Z,1109,*,,
+mmreality,2026-10-06T00:21:23Z,1145,*,,
+mmreality,2026-10-06T06:53:01Z,1401,*,,
+mmreality,2026-10-06T18:37:57Z,1297,*,,
+mmreality,2026-10-06T22:49:35Z,1109,*,,
+mmreality,2026-10-07T06:32:08Z,1481,*,,
+mmreality,2026-10-07T13:58:24Z,1089,*,,
+mmreality,2026-10-07T23:19:44Z,1188,*,,
+mmreality,2026-10-08T06:41:01Z,1147,*,,
+mmreality,2026-10-08T14:03:39Z,1569,*,,dum-prodej=2691/2690
+mmreality,2026-10-08T23:34:04Z,1155,*,,
+mmreality,2026-10-09T06:46:55Z,1275,*,,
+mmreality,2026-10-09T13:49:42Z,1156,*,,
+mmreality,2026-10-09T22:54:59Z,1166,*,,
+mmreality,2026-10-10T06:24:40Z,1269,*,,dum-prodej=2673/2672
+mmreality,2026-10-10T13:04:41Z,1249,*,,
+mmreality,2026-10-10T22:00:13Z,1245,*,,
+mmreality,2026-10-11T06:30:07Z,1291,*,,
+mmreality,2026-10-11T13:33:35Z,1226,*,,
+mmreality,2026-10-11T22:29:20Z,1087,*,,
+mmreality,2026-10-12T06:34:58Z,1026,*,,byt-prodej=1716/1715
+mmreality,2026-10-12T16:09:31Z,1481,*,,
+mmreality,2026-10-13T00:59:07Z,1249,*,,
+mmreality,2026-10-13T14:36:15Z,1216,*,,
+mmreality,2026-10-13T23:07:50Z,1316,*,,
+mmreality,2026-10-14T05:26:35Z,1173,*,,
+mmreality,2026-10-14T12:25:32Z,1320,*,,byt-prodej=1706/1704
+mmreality,2026-10-14T17:37:16Z,1080,*,,
+mmreality,2026-10-14T21:57:02Z,1204,*,,
+mmreality,2026-10-15T05:16:44Z,1099,*,,
+mmreality,2026-10-15T12:09:20Z,1252,*,,byt-prodej=1715/1714
+mmreality,2026-10-15T17:22:35Z,1152,*,,
+mmreality,2026-10-15T21:48:01Z,1171,*,,
+mmreality,2026-10-16T05:06:07Z,1182,*,,
+mmreality,2026-10-16T11:55:48Z,1663,*,komercni-pronajem,byt-prodej=1719/1717 dum-prodej=2698/2697
+mmreality,2026-10-16T16:58:58Z,1953,*,,byt-prodej=1728/1727
+mmreality,2026-10-16T21:43:51Z,1190,*,,
+mmreality,2026-10-17T05:01:23Z,1453,*,,
+mmreality,2026-10-17T11:11:44Z,1446,*,,dum-prodej=2695/2694
+mmreality,2026-10-17T15:57:19Z,1238,*,,
+mmreality,2026-10-17T20:59:53Z,1175,*,,
+mmreality,2026-10-18T05:10:53Z,1370,*,,
+mmreality,2026-10-18T11:44:38Z,1357,*,komercni-prodej,
+mmreality,2026-10-18T16:09:05Z,1059,*,,
+mmreality,2026-10-18T21:03:45Z,1163,*,,
+realitymix,2026-09-14T05:01:51Z,2692,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,,byt-prodej=9600/9599 dum-prodej=11237/11236
+realitymix,2026-09-14T12:54:55Z,2937,*,,byt-prodej=9602/9601 dum-prodej=11228/11226 pozemek-prodej=11021/11000
+realitymix,2026-09-14T21:52:14Z,2845,*,,dum-prodej=11241/11240
+realitymix,2026-09-15T04:58:38Z,2720,*,,byt-prodej=9611/9610
+realitymix,2026-09-15T11:49:39Z,2729,*,,byt-prodej=9622/9621 byt-pronajem=5152/5147 dum-prodej=11247/11242
+realitymix,2026-09-15T17:03:26Z,2949,*,,dum-prodej=11255/11251 komercni-pronajem=6768/6766
+realitymix,2026-09-15T21:24:47Z,3017,*,,
+realitymix,2026-09-16T04:53:57Z,2631,*,,byt-prodej=9612/9611 byt-pronajem=5157/5156 dum-prodej=11254/11253 komercni-pronajem=6765/6764
+realitymix,2026-09-16T11:41:55Z,2659,*,,byt-prodej=9632/9627 byt-pronajem=5162/5160 dum-prodej=11259/11256
+realitymix,2026-09-16T17:03:08Z,2996,*,,byt-prodej=9639/9637 byt-pronajem=5169/5168
+realitymix,2026-09-16T21:21:40Z,2997,*,,byt-pronajem=5186/5185 pozemek-prodej=11119/11118
+realitymix,2026-09-17T04:57:05Z,2795,*,,komercni-pronajem=6778/6777 pozemek-prodej=11116/11115
+realitymix,2026-09-17T11:47:18Z,2912,*,,byt-pronajem=5179/5178 dum-prodej=11387/11382 pozemek-prodej=11074/11072
+realitymix,2026-09-17T17:03:51Z,2918,*,,byt-prodej=9700/9699 dum-prodej=11385/11384
+realitymix,2026-09-17T21:25:50Z,2812,*,,
+realitymix,2026-09-18T04:48:57Z,2748,*,,dum-prodej=11390/11389
+realitymix,2026-09-18T11:21:36Z,2929,*,,byt-prodej=9683/9680 dum-prodej=11395/11394 komercni-pronajem=6779/6777 pozemek-prodej=11116/11115
+realitymix,2026-09-18T16:27:58Z,2958,*,,byt-prodej=9705/9702
+realitymix,2026-09-18T20:56:44Z,2854,*,,dum-prodej=11400/11399
+realitymix,2026-09-19T04:41:58Z,2751,*,,
+realitymix,2026-09-19T11:04:55Z,2768,*,,
+realitymix,2026-09-19T15:55:23Z,2818,*,,pozemek-prodej=11181/11176
+realitymix,2026-09-19T20:45:35Z,2796,*,,
+realitymix,2026-09-20T04:58:00Z,2783,*,,
+realitymix,2026-09-20T11:29:54Z,2864,*,,byt-pronajem=5162/5161 pozemek-prodej=11222/11221
+realitymix,2026-09-20T16:11:34Z,2876,*,,
+realitymix,2026-09-20T20:52:12Z,2959,*,,dum-prodej=11406/11405
+realitymix,2026-09-21T05:02:15Z,2785,*,,byt-prodej=9754/9753 pozemek-prodej=11286/11284
+realitymix,2026-09-21T12:54:39Z,2215,*,pozemek-prodej,byt-prodej=9748/9741 byt-pronajem=5143/5142 dum-prodej=11394/11392 komercni-pronajem=6770/6768
+realitymix,2026-09-21T22:00:31Z,2945,*,,byt-prodej=9771/9767
+realitymix,2026-09-22T05:03:19Z,2825,*,,byt-prodej=9771/9770 pozemek-prodej=11407/11406
+realitymix,2026-09-22T11:44:33Z,3268,*,,byt-prodej=9796/9794 byt-pronajem=5170/5169 dum-prodej=11408/11407 komercni-pronajem=6788/6784
+realitymix,2026-09-22T16:59:56Z,2882,*,,byt-prodej=9810/9808 byt-pronajem=5177/5176
+realitymix,2026-09-22T21:22:56Z,2883,*,,byt-prodej=9820/9818
+realitymix,2026-09-23T04:49:31Z,2771,*,,pozemek-prodej=11416/11415
+realitymix,2026-09-23T11:43:31Z,3174,*,,byt-prodej=9831/9829 dum-prodej=11420/11416 pozemek-prodej=11387/11386
+realitymix,2026-09-23T17:07:26Z,2978,*,,byt-pronajem=5196/5195 pozemek-prodej=11403/11402
+realitymix,2026-09-23T21:32:42Z,2871,*,,pozemek-prodej=11403/11402
+realitymix,2026-09-24T04:57:18Z,2854,*,,
+realitymix,2026-09-24T11:52:15Z,2961,*,,byt-prodej=9834/9833 byt-pronajem=5172/5169 pozemek-prodej=11218/11212
+realitymix,2026-09-24T17:15:13Z,2989,*,,byt-prodej=9862/9861 byt-pronajem=5180/5179 dum-prodej=11430/11428
+realitymix,2026-09-24T21:33:40Z,2949,*,,
+realitymix,2026-09-25T05:02:09Z,2881,*,,
+realitymix,2026-09-25T11:55:22Z,2789,*,,byt-prodej=9869/9867 byt-pronajem=5147/5146
+realitymix,2026-09-25T17:16:02Z,2858,*,,byt-prodej=9882/9881 pozemek-prodej=11243/11242
+realitymix,2026-09-25T21:37:59Z,2861,*,,byt-prodej=9878/9877
+realitymix,2026-09-26T05:04:44Z,2799,*,,
+realitymix,2026-09-26T11:29:50Z,3032,*,,dum-prodej=11448/11446
+realitymix,2026-09-26T16:27:16Z,2918,*,,byt-prodej=9892/9890 komercni-prodej=2237/2236 pozemek-prodej=11277/11274
+realitymix,2026-09-26T21:13:51Z,2841,*,,
+realitymix,2026-09-27T05:23:03Z,2690,*,,dum-prodej=11451/11450
+realitymix,2026-09-27T12:07:52Z,2895,*,,
+realitymix,2026-09-27T17:00:49Z,2879,*,,byt-prodej=9901/9900
+realitymix,2026-09-27T21:23:39Z,2902,*,,
+realitymix,2026-09-28T05:29:22Z,2832,*,,pozemek-prodej=11277/11276
+realitymix,2026-09-28T14:02:42Z,2835,*,,byt-prodej=9910/9909 byt-pronajem=5134/5133 dum-prodej=11458/11454
+realitymix,2026-09-28T23:19:16Z,2874,*,,
+realitymix,2026-09-29T05:48:14Z,2587,*,,dum-prodej=11459/11456
+realitymix,2026-09-29T12:58:53Z,2648,*,,byt-prodej=9923/9921 byt-pronajem=5119/5117 dum-prodej=11433/11430 pozemek-prodej=11314/11308
+realitymix,2026-09-29T22:19:34Z,2592,*,,byt-pronajem=5118/5117
+realitymix,2026-09-30T05:37:49Z,2594,*,,pozemek-prodej=11314/11313
+realitymix,2026-09-30T12:41:04Z,3038,*,,byt-prodej=9952/9951 dum-prodej=11412/11411 pozemek-prodej=11276/11274
+realitymix,2026-09-30T22:20:01Z,3212,*,,
+realitymix,2026-10-01T06:02:00Z,2927,*,,byt-prodej=9909/9907 pozemek-prodej=11245/11237
+realitymix,2026-10-01T13:25:01Z,3365,*,,byt-prodej=9925/9921 dum-prodej=11334/11332 pozemek-prodej=11132/11130
+realitymix,2026-10-01T22:44:03Z,3230,*,,
+realitymix,2026-10-02T05:45:09Z,3012,*,,dum-prodej=11323/11321 pozemek-prodej=11140/11139
+realitymix,2026-10-02T12:42:41Z,3238,*,,byt-prodej=9917/9915 byt-pronajem=5127/5126 dum-prodej=11334/11332 komercni-pronajem=6721/6719
+realitymix,2026-10-02T22:17:43Z,2919,*,,
+realitymix,2026-10-03T05:23:21Z,2869,*,,byt-prodej=9916/9915
+realitymix,2026-10-03T11:43:56Z,3121,*,,byt-prodej=9914/9913 byt-pronajem=5136/5135 dum-prodej=11337/11336
+realitymix,2026-10-03T16:26:05Z,2884,*,,dum-prodej=11347/11346
+realitymix,2026-10-03T21:21:37Z,2786,*,,
+realitymix,2026-10-04T05:59:06Z,2829,*,,byt-prodej=9917/9916
+realitymix,2026-10-04T12:26:57Z,2810,*,,byt-prodej=9925/9924 dum-prodej=11356/11355
+realitymix,2026-10-04T21:32:30Z,2790,*,,
+realitymix,2026-10-05T05:47:24Z,2810,*,,pozemek-prodej=11116/11115
+realitymix,2026-10-05T14:48:11Z,2935,*,,dum-prodej=11372/11370
+realitymix,2026-10-06T00:06:18Z,2944,*,,
+realitymix,2026-10-06T06:26:58Z,2901,*,,byt-prodej=9957/9956 dum-prodej=11372/11371 komercni-pronajem=6721/6720
+realitymix,2026-10-06T18:25:33Z,3027,*,,byt-pronajem=5190/5189 komercni-pronajem=6746/6745 pozemek-prodej=11188/11186
+realitymix,2026-10-07T06:05:52Z,2898,*,,byt-prodej=9952/9951 pozemek-prodej=11188/11186
+realitymix,2026-10-07T13:30:35Z,2840,*,,byt-prodej=9979/9976 byt-pronajem=5190/5187 pozemek-prodej=11219/11218
+realitymix,2026-10-07T23:08:23Z,3027,*,,
+realitymix,2026-10-08T06:11:08Z,2867,*,,dum-prodej=11402/11401
+realitymix,2026-10-08T13:36:32Z,2370,*,pozemek-prodej,byt-prodej=9979/9978 dum-prodej=11415/11409 komercni-pronajem=6732/6731
+realitymix,2026-10-08T23:23:53Z,3017,*,,
+realitymix,2026-10-09T06:14:58Z,2968,*,,byt-prodej=9981/9976 dum-prodej=11407/11400 pozemek-prodej=11096/11095
+realitymix,2026-10-09T13:22:58Z,3122,*,,byt-pronajem=5159/5156 komercni-pronajem=6729/6727
+realitymix,2026-10-09T22:41:54Z,2891,*,,byt-pronajem=5148/5147 dum-prodej=11411/11410
+realitymix,2026-10-10T05:57:46Z,2833,*,,byt-prodej=9984/9983 byt-pronajem=5146/5145
+realitymix,2026-10-10T12:37:44Z,2778,*,,byt-prodej=9983/9980 dum-prodej=11412/11411 ostatni-pronajem=290/289 pozemek-prodej=11075/11074
+realitymix,2026-10-10T21:48:16Z,2658,*,,dum-prodej=11419/11418
+realitymix,2026-10-11T05:53:01Z,2752,*,,
+realitymix,2026-10-11T12:56:52Z,2776,*,,byt-prodej=10008/10005 dum-prodej=11416/11415
+realitymix,2026-10-11T22:01:59Z,2782,*,,byt-prodej=10021/10019 dum-prodej=11434/11433
+realitymix,2026-10-12T06:04:30Z,2717,*,,byt-prodej=10026/10025 dum-prodej=11429/11428
+realitymix,2026-10-12T15:34:23Z,3170,*,,byt-prodej=10054/10052 dum-prodej=11398/11397 komercni-pronajem=6731/6730
+realitymix,2026-10-13T00:45:52Z,2909,*,,byt-pronajem=5156/5155 dum-prodej=11397/11395
+realitymix,2026-10-13T14:17:30Z,2821,*,,byt-prodej=10080/10078 byt-pronajem=5158/5156 komercni-pronajem=6731/6730 pozemek-prodej=11256/11252
+realitymix,2026-10-13T22:49:24Z,3269,*,,
+realitymix,2026-10-14T04:58:56Z,2730,*,,byt-prodej=10099/10098 byt-pronajem=5158/5157
+realitymix,2026-10-14T11:59:03Z,2880,*,,byt-prodej=10123/10119 byt-pronajem=5144/5139 dum-prodej=11423/11415 komercni-pronajem=6742/6741 pozemek-prodej=11277/11276
+realitymix,2026-10-14T17:16:10Z,2909,*,,byt-pronajem=5166/5164 dum-prodej=11427/11426
+realitymix,2026-10-14T21:45:02Z,2794,*,,dum-prodej=11426/11425 pozemek-prodej=11285/11283
+realitymix,2026-10-15T04:47:00Z,2797,*,,
+realitymix,2026-10-15T11:35:46Z,2975,*,,byt-prodej=10121/10119 byt-pronajem=5160/5156 dum-prodej=11432/11431 pozemek-prodej=11100/11097
+realitymix,2026-10-15T17:05:16Z,3039,*,,byt-prodej=10127/10126 byt-pronajem=5174/5173 dum-prodej=11451/11449
+realitymix,2026-10-15T21:27:28Z,2908,*,,byt-pronajem=5182/5181
+realitymix,2026-10-16T04:37:10Z,2758,*,,byt-prodej=10130/10129
+realitymix,2026-10-16T11:30:03Z,2973,*,,byt-prodej=10116/10114 komercni-pronajem=6743/6742
+realitymix,2026-10-16T16:42:57Z,3030,*,,byt-pronajem=5184/5182 dum-prodej=11454/11451
+realitymix,2026-10-16T21:15:36Z,2786,*,,
+realitymix,2026-10-17T04:33:50Z,2733,*,,byt-prodej=10124/10123
+realitymix,2026-10-17T10:50:07Z,2785,*,,
+realitymix,2026-10-17T15:39:32Z,2854,*,,byt-pronajem=5196/5195 dum-prodej=11452/11451
+realitymix,2026-10-17T20:39:47Z,2852,*,,byt-prodej=10155/10154
+realitymix,2026-10-18T04:39:46Z,2724,*,,pozemek-prodej=11091/11090
+realitymix,2026-10-18T11:13:54Z,2835,*,,byt-pronajem=5192/5191 pozemek-prodej=11145/11143
+realitymix,2026-10-18T15:55:12Z,2839,*,,
+realitymix,2026-10-18T20:49:21Z,2854,*,,
+remax,2026-09-14T05:25:03Z,478,byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-prodej komercni-pronajem ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,,
+remax,2026-09-14T13:19:09Z,456,*,,
+remax,2026-09-14T22:01:57Z,448,*,,
+remax,2026-09-15T05:18:27Z,436,*,,
+remax,2026-09-15T12:05:30Z,434,*,,
+remax,2026-09-15T17:15:15Z,429,*,,
+remax,2026-09-15T21:44:19Z,428,*,,
+remax,2026-09-16T05:13:58Z,433,*,,
+remax,2026-09-16T12:01:19Z,473,*,,
+remax,2026-09-16T17:16:11Z,458,*,,
+remax,2026-09-16T21:41:39Z,482,*,,
+remax,2026-09-17T05:20:32Z,509,*,,
+remax,2026-09-17T12:03:22Z,495,*,,
+remax,2026-09-17T17:15:14Z,463,*,,
+remax,2026-09-17T21:44:05Z,499,*,,
+remax,2026-09-18T05:10:21Z,476,*,,
+remax,2026-09-18T11:47:20Z,617,*,,
+remax,2026-09-18T16:42:27Z,466,*,,
+remax,2026-09-18T21:14:04Z,468,*,,
+remax,2026-09-19T05:01:04Z,488,*,,
+remax,2026-09-19T11:30:24Z,460,*,,
+remax,2026-09-19T16:02:57Z,467,*,,
+remax,2026-09-19T20:59:17Z,515,*,,
+remax,2026-09-20T05:23:12Z,496,*,,
+remax,2026-09-20T11:47:18Z,487,*,,
+remax,2026-09-20T16:28:01Z,467,*,,
+remax,2026-09-20T21:02:28Z,472,*,,
+remax,2026-09-21T05:26:49Z,504,*,,
+remax,2026-09-21T13:19:14Z,514,*,,
+remax,2026-09-21T22:11:40Z,470,*,,
+remax,2026-09-22T05:21:21Z,532,*,,
+remax,2026-09-22T12:01:57Z,531,*,,
+remax,2026-09-22T17:15:43Z,473,*,,
+remax,2026-09-22T21:38:59Z,508,*,,
+remax,2026-09-23T05:08:49Z,467,*,,
+remax,2026-09-23T12:06:25Z,476,*,,
+remax,2026-09-23T17:26:56Z,507,*,,
+remax,2026-09-23T21:45:52Z,479,*,,
+remax,2026-09-24T05:21:31Z,514,*,,
+remax,2026-09-24T12:10:30Z,488,*,,
+remax,2026-09-24T17:32:06Z,525,*,,
+remax,2026-09-24T21:46:57Z,477,*,,
+remax,2026-09-25T05:22:23Z,475,*,,
+remax,2026-09-25T12:11:28Z,511,*,,
+remax,2026-09-25T17:31:29Z,486,*,,
+remax,2026-09-25T21:49:03Z,518,*,,
+remax,2026-09-26T05:26:09Z,517,*,,
+remax,2026-09-26T11:45:02Z,564,*,,
+remax,2026-09-26T16:44:35Z,551,*,,
+remax,2026-09-26T21:32:12Z,518,*,,
+remax,2026-09-27T05:42:47Z,480,*,,
+remax,2026-09-27T12:25:17Z,537,*,,
+remax,2026-09-27T17:16:13Z,518,*,,
+remax,2026-09-27T21:36:05Z,516,*,,
+remax,2026-09-28T05:49:47Z,463,*,,
+remax,2026-09-28T14:26:48Z,521,*,,
+remax,2026-09-28T23:29:35Z,467,*,,
+remax,2026-09-29T06:10:23Z,476,*,,
+remax,2026-09-29T13:18:25Z,464,*,,
+remax,2026-09-29T22:34:52Z,481,*,,
+remax,2026-09-30T05:57:07Z,487,*,,
+remax,2026-09-30T13:00:53Z,530,*,,
+remax,2026-09-30T22:36:22Z,509,*,,
+remax,2026-10-01T06:30:57Z,505,*,,
+remax,2026-10-01T13:52:16Z,547,*,,
+remax,2026-10-01T22:53:45Z,564,*,,
+remax,2026-10-02T06:09:49Z,603,*,,
+remax,2026-10-02T13:08:40Z,460,*,,
+remax,2026-10-02T22:32:29Z,466,*,,
+remax,2026-10-03T05:43:07Z,507,*,,
+remax,2026-10-03T12:00:07Z,521,*,,
+remax,2026-10-03T16:43:08Z,489,*,,
+remax,2026-10-03T21:44:23Z,512,*,,
+remax,2026-10-04T06:19:00Z,471,*,,
+remax,2026-10-04T12:50:33Z,501,*,,
+remax,2026-10-04T21:54:45Z,508,*,,
+remax,2026-10-05T06:11:40Z,484,*,,
+remax,2026-10-05T15:14:54Z,468,*,,
+remax,2026-10-06T00:18:56Z,466,*,,
+remax,2026-10-06T06:50:08Z,463,*,,
+remax,2026-10-06T18:35:54Z,483,*,,
+remax,2026-10-06T22:47:15Z,509,*,,
+remax,2026-10-07T06:25:43Z,502,*,,
+remax,2026-10-07T13:53:16Z,472,*,,
+remax,2026-10-07T23:18:11Z,477,*,,
+remax,2026-10-08T06:37:56Z,518,*,,
+remax,2026-10-08T14:01:55Z,489,*,,
+remax,2026-10-08T23:32:53Z,483,*,,
+remax,2026-10-09T06:40:13Z,492,*,,
+remax,2026-10-09T13:48:09Z,474,*,,
+remax,2026-10-09T22:53:05Z,485,*,,
+remax,2026-10-10T06:21:57Z,509,*,,
+remax,2026-10-10T13:01:38Z,482,*,,
+remax,2026-10-10T21:58:42Z,473,*,,
+remax,2026-10-11T06:24:51Z,479,*,,
+remax,2026-10-11T13:29:49Z,466,*,,
+remax,2026-10-11T22:26:49Z,490,*,,
+remax,2026-10-12T06:29:46Z,470,*,,
+remax,2026-10-12T16:04:23Z,467,*,,
+remax,2026-10-13T00:57:38Z,476,*,,
+remax,2026-10-13T14:33:26Z,482,*,,
+remax,2026-10-13T23:06:32Z,478,*,,
+remax,2026-10-14T05:21:28Z,473,*,,
+remax,2026-10-14T12:20:29Z,473,*,,
+remax,2026-10-14T17:35:00Z,481,*,,
+remax,2026-10-14T21:55:47Z,521,*,,
+remax,2026-10-15T05:08:51Z,491,*,,
+remax,2026-10-15T12:04:54Z,499,*,,
+remax,2026-10-15T17:20:01Z,487,*,,
+remax,2026-10-15T21:44:46Z,495,*,,
+remax,2026-10-16T04:58:30Z,481,*,,
+remax,2026-10-16T11:52:50Z,489,*,,
+remax,2026-10-16T16:55:49Z,464,*,,
+remax,2026-10-16T21:41:11Z,477,*,,
+remax,2026-10-17T04:57:47Z,474,*,,
+remax,2026-10-17T11:09:40Z,466,*,,
+remax,2026-10-17T15:55:03Z,466,*,,
+remax,2026-10-17T20:56:40Z,509,*,,
+remax,2026-10-18T05:06:27Z,475,*,,
+remax,2026-10-18T11:41:06Z,466,*,,
+remax,2026-10-18T16:07:10Z,474,*,,
+remax,2026-10-18T21:00:55Z,473,*,,
+remax,2026-10-19T05:17:31Z,477,*,,
+sreality,2026-09-14T00:09:29Z,1213,byt-drazba byt-podil byt-prodej byt-pronajem dum-drazba dum-podil dum-prodej dum-pronajem komercni-drazba komercni-podil komercni-prodej komercni-pronajem ostatni-drazba ostatni-podil ostatni-prodej ostatni-pronajem pozemek-drazba pozemek-podil pozemek-prodej pozemek-pronajem,,
+sreality,2026-09-14T04:52:01Z,1330,*,,
+sreality,2026-09-14T10:15:05Z,1631,*,,byt-prodej=19877/19876 komercni-pronajem=14359/14357
+sreality,2026-09-14T16:23:08Z,1813,byt-drazba byt-podil byt-prodej byt-pronajem dum-drazba dum-podil dum-prodej dum-pronajem komercni-pronajem ostatni-drazba ostatni-podil ostatni-prodej ostatni-pronajem pozemek-drazba pozemek-podil pozemek-prodej pozemek-pronajem,komercni-pronajem,byt-prodej=20042/20039 pozemek-prodej=21295/21294
+sreality,2026-09-14T20:22:14Z,1241,byt-drazba byt-podil byt-prodej byt-pronajem dum-drazba dum-podil dum-prodej dum-pronajem komercni-drazba komercni-podil komercni-prodej komercni-pronajem ostatni-drazba ostatni-podil ostatni-prodej ostatni-pronajem pozemek-drazba pozemek-podil pozemek-prodej pozemek-pronajem,,byt-pronajem=11428/11427 dum-prodej=21323/21322
+sreality,2026-09-14T23:15:36Z,1571,*,,
+sreality,2026-09-15T01:38:35Z,877,*,,
+sreality,2026-09-15T06:42:13Z,1294,*,,komercni-pronajem=14402/14401
+sreality,2026-09-15T12:08:47Z,1414,*,,dum-prodej=21379/21377 komercni-prodej=5065/5064
+sreality,2026-09-15T16:56:38Z,1487,*,,byt-prodej=20180/20178
+sreality,2026-09-15T19:58:39Z,1349,*,,byt-prodej=20181/20180
+sreality,2026-09-15T22:45:51Z,1458,*,,
+sreality,2026-09-16T00:50:11Z,1337,*,,
+sreality,2026-09-16T05:33:50Z,1093,*,,
+sreality,2026-09-16T10:17:56Z,1174,*,,dum-prodej=21365/21364 komercni-pronajem=14398/14396
+sreality,2026-09-16T15:06:18Z,1343,*,,byt-prodej=20208/20207 komercni-pronajem=14439/14438
+sreality,2026-09-16T18:53:28Z,1306,*,,byt-prodej=20202/20201 byt-pronajem=11403/11402
+sreality,2026-09-16T21:50:19Z,1388,*,,
+sreality,2026-09-17T00:00:10Z,1218,*,,
+sreality,2026-09-17T04:36:49Z,1275,*,,
+sreality,2026-09-17T09:39:43Z,1511,*,,byt-prodej=20062/20061 pozemek-prodej=21158/21157
+sreality,2026-09-17T14:26:50Z,1214,*,,
+sreality,2026-09-17T18:25:15Z,1335,*,,byt-prodej=20207/20206 byt-pronajem=11420/11418 pozemek-prodej=21278/21277
+sreality,2026-09-17T21:34:33Z,1734,*,,byt-pronajem=11413/11412
+sreality,2026-09-17T23:41:06Z,1155,*,,
+sreality,2026-09-18T01:30:27Z,1323,*,,
+sreality,2026-09-18T06:39:07Z,1162,*,,byt-pronajem=11274/11272 pozemek-prodej=21139/21138
+sreality,2026-09-18T11:49:00Z,1148,*,,
+sreality,2026-09-18T15:37:22Z,1023,*,,dum-prodej=21457/21456 ostatni-prodej=1437/1436
+sreality,2026-09-18T18:38:13Z,1077,*,,
+sreality,2026-09-18T21:15:07Z,1403,*,,
+sreality,2026-09-18T23:20:04Z,1242,*,,
+sreality,2026-09-19T01:21:19Z,935,*,,byt-prodej=20079/20078
+sreality,2026-09-19T06:11:42Z,1157,*,,
+sreality,2026-09-19T10:57:43Z,1273,*,,
+sreality,2026-09-19T14:11:48Z,871,*,,byt-pronajem=11219/11218
+sreality,2026-09-19T17:16:46Z,1216,*,,dum-prodej=21384/21382
+sreality,2026-09-19T19:26:49Z,1486,*,,
+sreality,2026-09-19T21:35:56Z,1187,*,,byt-prodej=20169/20168
+sreality,2026-09-19T23:32:36Z,1039,*,,
+sreality,2026-09-20T01:38:34Z,1039,*,,
+sreality,2026-09-20T07:00:48Z,1342,*,,
+sreality,2026-09-20T12:19:49Z,961,*,,
+sreality,2026-09-20T16:20:49Z,1118,*,,
+sreality,2026-09-20T18:56:28Z,1122,*,,
+sreality,2026-09-20T21:09:34Z,1055,*,,
+sreality,2026-09-20T23:14:04Z,1158,*,,
+sreality,2026-09-21T01:07:57Z,1416,*,,
+sreality,2026-09-21T06:18:13Z,1277,*,,byt-pronajem=10992/10991
+sreality,2026-09-21T13:06:21Z,1026,*,,byt-pronajem=11247/11245
+sreality,2026-09-21T18:40:12Z,1026,*,,
+sreality,2026-09-21T22:13:32Z,911,*,,
+sreality,2026-09-22T00:51:08Z,1230,*,,
+sreality,2026-09-22T05:44:07Z,878,*,,byt-pronajem=11237/11236
+sreality,2026-09-22T10:21:20Z,1825,*,pozemek-prodej,byt-pronajem=11347/11346
+sreality,2026-09-22T15:05:26Z,1004,*,,dum-prodej=21536/21535
+sreality,2026-09-22T18:52:28Z,976,*,,byt-prodej=20470/20469 dum-prodej=21552/21550
+sreality,2026-09-22T21:44:44Z,906,*,,byt-pronajem=11446/11445
+sreality,2026-09-22T23:51:33Z,1189,*,,komercni-pronajem=14306/14304
+sreality,2026-09-23T02:50:43Z,1076,*,,
+sreality,2026-09-23T08:11:29Z,1246,*,,
+sreality,2026-09-23T13:37:55Z,1592,*,,dum-prodej=21578/21577 pozemek-prodej=21574/21573
+sreality,2026-09-23T17:58:00Z,1180,*,,byt-prodej=20494/20493 byt-pronajem=11476/11475
+sreality,2026-09-23T21:12:38Z,1080,*,,byt-prodej=20521/20520 komercni-pronajem=14418/14417
+sreality,2026-09-23T23:42:11Z,1363,*,,byt-prodej=20340/20302
+sreality,2026-09-24T01:39:18Z,1212,*,,
+sreality,2026-09-24T06:44:58Z,1019,*,,byt-prodej=20329/20326
+sreality,2026-09-24T12:17:08Z,1375,*,,byt-prodej=20468/20466 byt-pronajem=11420/11419 dum-pronajem=803/802
+sreality,2026-09-24T17:25:43Z,1132,*,,
+sreality,2026-09-24T20:37:34Z,1146,*,,byt-prodej=20517/20516 byt-pronajem=11441/11440 dum-prodej=21591/21590
+sreality,2026-09-24T23:27:07Z,1600,*,,
+sreality,2026-09-25T01:43:27Z,985,*,,
+sreality,2026-09-25T06:39:53Z,1274,*,,
+sreality,2026-09-25T12:13:50Z,1249,*,,byt-pronajem=11375/11373 pozemek-prodej=21637/21636
+sreality,2026-09-25T17:13:58Z,1604,*,,byt-pronajem=11359/11358 komercni-pronajem=14405/14404
+sreality,2026-09-25T20:30:16Z,945,*,,
+sreality,2026-09-25T23:27:58Z,1772,*,,
+sreality,2026-09-26T01:49:13Z,894,*,,
+sreality,2026-09-26T06:57:30Z,1011,*,,
+sreality,2026-09-26T12:04:35Z,1810,byt-drazba byt-podil byt-prodej byt-pronajem dum-drazba dum-podil dum-prodej dum-pronajem komercni-drazba komercni-podil komercni-prodej komercni-pronajem ostatni-drazba ostatni-podil ostatni-prodej ostatni-pronajem pozemek-prodej pozemek-pronajem,pozemek-prodej,
+sreality,2026-09-26T16:20:44Z,1570,byt-drazba byt-podil byt-prodej byt-pronajem dum-drazba dum-podil dum-prodej dum-pronajem komercni-drazba komercni-podil komercni-prodej komercni-pronajem ostatni-drazba ostatni-podil ostatni-prodej ostatni-pronajem pozemek-drazba pozemek-podil pozemek-prodej pozemek-pronajem,,dum-prodej=21567/21566 pozemek-prodej=21605/21604
+sreality,2026-09-26T19:17:26Z,1081,*,,
+sreality,2026-09-26T22:03:01Z,1229,*,,pozemek-prodej=21610/21609
+sreality,2026-09-27T00:33:50Z,1441,*,,
+sreality,2026-09-27T05:46:03Z,1230,*,,dum-prodej=21447/21446 pozemek-prodej=21470/21469
+sreality,2026-09-27T11:10:55Z,1649,*,,
+sreality,2026-09-27T15:39:04Z,1055,*,,dum-prodej=21496/21495
+sreality,2026-09-27T19:16:14Z,1255,*,,
+sreality,2026-09-27T22:25:12Z,1520,*,,dum-prodej=21535/21534 pozemek-prodej=21502/21458
+sreality,2026-09-28T00:59:29Z,1217,*,,
+sreality,2026-09-28T06:32:23Z,1313,*,,
+sreality,2026-09-28T14:28:34Z,1572,*,,dum-prodej=21461/21460
+sreality,2026-09-28T20:40:48Z,1478,*,,
+sreality,2026-09-29T00:33:12Z,1264,*,,
+sreality,2026-09-29T06:12:27Z,1449,*,,byt-prodej=20308/20307 dum-prodej=21309/21308 pozemek-prodej=21383/21382
+sreality,2026-09-29T12:52:52Z,1541,*,,
+sreality,2026-09-29T18:25:07Z,1040,*,,
+sreality,2026-09-29T22:29:18Z,1646,*,,dum-prodej=21542/21389
+sreality,2026-09-30T01:26:57Z,1166,*,,dum-prodej=21319/21318
+sreality,2026-09-30T07:05:40Z,975,*,,byt-prodej=20468/20467
+sreality,2026-09-30T13:40:09Z,1330,*,,dum-prodej=21504/21503
+sreality,2026-09-30T18:34:06Z,1549,*,,
+sreality,2026-09-30T22:37:31Z,1738,*,,dum-prodej=21410/21396
+sreality,2026-10-01T01:34:19Z,1754,*,,byt-pronajem=11079/11078
+sreality,2026-10-01T07:47:53Z,1823,byt-drazba byt-podil byt-prodej byt-pronajem dum-podil dum-prodej dum-pronajem komercni-drazba komercni-podil komercni-prodej komercni-pronajem ostatni-drazba ostatni-podil ostatni-prodej ostatni-pronajem pozemek-drazba pozemek-podil pozemek-prodej pozemek-pronajem,dum-prodej,
+sreality,2026-10-01T14:59:55Z,1682,byt-drazba byt-podil byt-prodej byt-pronajem dum-drazba dum-podil dum-prodej dum-pronajem komercni-drazba komercni-podil komercni-prodej komercni-pronajem ostatni-drazba ostatni-podil ostatni-prodej ostatni-pronajem pozemek-drazba pozemek-podil pozemek-prodej pozemek-pronajem,,byt-pronajem=11217/11216 dum-prodej=21434/21432 pozemek-prodej=21452/21451
+sreality,2026-10-01T20:15:52Z,1435,*,,
+sreality,2026-10-02T00:00:06Z,1849,byt-drazba byt-podil byt-prodej byt-pronajem dum-drazba dum-podil dum-prodej dum-pronajem komercni-pronajem pozemek-drazba pozemek-podil pozemek-prodej pozemek-pronajem,komercni-pronajem,
+sreality,2026-10-02T05:15:17Z,1500,byt-drazba byt-podil byt-prodej byt-pronajem dum-drazba dum-podil dum-prodej dum-pronajem komercni-drazba komercni-podil komercni-prodej komercni-pronajem ostatni-drazba ostatni-podil ostatni-prodej ostatni-pronajem pozemek-drazba pozemek-podil pozemek-prodej pozemek-pronajem,,dum-prodej=21294/21292
+sreality,2026-10-02T11:08:44Z,1838,byt-drazba byt-podil byt-prodej byt-pronajem dum-prodej dum-pronajem komercni-drazba komercni-podil komercni-prodej komercni-pronajem ostatni-drazba ostatni-podil ostatni-prodej ostatni-pronajem pozemek-podil,dum-prodej,
+sreality,2026-10-02T16:37:26Z,1152,byt-drazba byt-podil byt-prodej byt-pronajem dum-drazba dum-podil dum-prodej dum-pronajem komercni-drazba komercni-podil komercni-prodej komercni-pronajem ostatni-drazba ostatni-podil ostatni-prodej ostatni-pronajem pozemek-drazba pozemek-podil pozemek-prodej pozemek-pronajem,,
+sreality,2026-10-02T20:58:11Z,1305,*,,dum-prodej=21533/21532
+sreality,2026-10-03T00:12:34Z,1397,*,,
+sreality,2026-10-03T05:18:52Z,1409,*,,
+sreality,2026-10-03T10:30:32Z,1822,*,pozemek-prodej,dum-prodej=21448/21447
+sreality,2026-10-03T14:54:57Z,1149,*,,
+sreality,2026-10-03T18:28:49Z,1482,*,,
+sreality,2026-10-03T21:39:20Z,1320,*,,
+sreality,2026-10-04T00:02:41Z,1741,*,,
+sreality,2026-10-04T05:48:47Z,1238,*,,
+sreality,2026-10-04T11:38:49Z,1414,*,,
+sreality,2026-10-04T15:58:53Z,1217,*,,
+sreality,2026-10-04T19:19:23Z,1102,*,,komercni-pronajem=13964/13963
+sreality,2026-10-04T22:24:25Z,1489,*,,pozemek-prodej=21457/21280
+sreality,2026-10-05T01:05:20Z,1606,*,,
+sreality,2026-10-05T07:00:42Z,1496,*,,byt-prodej=20507/20504
+sreality,2026-10-05T15:58:39Z,1619,*,,byt-pronajem=11427/11426 dum-prodej=21586/21585
+sreality,2026-10-05T22:21:52Z,1444,*,,komercni-pronajem=14380/14349
+sreality,2026-10-06T02:22:46Z,1454,*,,
+sreality,2026-10-06T09:11:25Z,1127,*,,byt-prodej=20801/20800 pozemek-prodej=21492/21489
+sreality,2026-10-06T15:56:03Z,1371,*,,byt-prodej=20942/20941 dum-prodej=21696/21695
+sreality,2026-10-06T20:45:47Z,1816,byt-drazba byt-podil byt-prodej byt-pronajem dum-drazba dum-podil dum-prodej dum-pronajem komercni-prodej komercni-pronajem pozemek-drazba pozemek-podil pozemek-prodej pozemek-pronajem,,
+sreality,2026-10-07T00:18:10Z,1181,byt-drazba byt-podil byt-prodej byt-pronajem dum-drazba dum-podil dum-prodej dum-pronajem komercni-drazba komercni-podil komercni-prodej komercni-pronajem ostatni-drazba ostatni-podil ostatni-prodej ostatni-pronajem pozemek-drazba pozemek-podil pozemek-prodej pozemek-pronajem,,
+sreality,2026-10-07T06:15:36Z,1788,*,,
+sreality,2026-10-07T13:41:05Z,1266,*,,byt-prodej=20946/20943
+sreality,2026-10-07T19:31:43Z,1277,*,,byt-pronajem=11613/11612
+sreality,2026-10-07T23:49:29Z,1403,*,,komercni-pronajem=14340/14324
+sreality,2026-10-08T03:59:48Z,1474,*,,
+sreality,2026-10-08T11:14:42Z,1754,*,,byt-prodej=20876/20873 byt-pronajem=11584/11581 dum-prodej=21625/21624
+sreality,2026-10-08T17:53:21Z,1416,*,,
+sreality,2026-10-08T22:44:36Z,1366,*,,
+sreality,2026-10-09T02:35:04Z,1397,*,,
+sreality,2026-10-09T09:37:53Z,1243,*,,byt-prodej=20887/20883
+sreality,2026-10-09T16:34:47Z,1441,*,,
+sreality,2026-10-09T21:16:48Z,1343,*,,
+sreality,2026-10-09T22:48:22Z,1432,*,,
+sreality,2026-10-10T01:04:04Z,1378,*,,dum-prodej=21509/21508
+sreality,2026-10-10T07:03:37Z,951,*,,byt-prodej=20867/20866
+sreality,2026-10-10T13:38:14Z,1470,*,,
+sreality,2026-10-10T18:00:37Z,1202,*,,
+sreality,2026-10-10T21:40:34Z,923,*,,
+sreality,2026-10-11T00:29:05Z,1037,*,,
+sreality,2026-10-11T06:14:36Z,843,*,,
+sreality,2026-10-11T12:54:55Z,1125,*,,
+sreality,2026-10-11T17:52:18Z,1091,*,,dum-prodej=21636/21635
+sreality,2026-10-11T21:21:28Z,1087,*,,
+sreality,2026-10-12T00:40:16Z,1310,*,,
+sreality,2026-10-12T06:31:41Z,1181,*,,byt-prodej=20774/20771
+sreality,2026-10-12T16:06:43Z,930,*,,
+sreality,2026-10-12T22:56:39Z,1614,*,,
+sreality,2026-10-13T03:20:34Z,839,*,,
+sreality,2026-10-13T10:52:22Z,907,*,,
+sreality,2026-10-13T17:53:20Z,1107,*,,dum-prodej=21795/21794
+sreality,2026-10-13T22:10:38Z,1059,*,,dum-prodej=21806/21804
+sreality,2026-10-14T01:12:23Z,1175,*,,
+sreality,2026-10-14T06:08:56Z,1288,*,,byt-pronajem=11590/11589 dum-prodej=21662/21659 pozemek-prodej=21501/21499
+sreality,2026-10-14T11:47:35Z,916,*,,byt-prodej=21188/21187 komercni-pronajem=14447/14445
+sreality,2026-10-14T16:19:39Z,1288,*,,
+sreality,2026-10-14T20:16:07Z,1369,*,,byt-prodej=21297/21296 pozemek-prodej=21684/21683
+sreality,2026-10-14T23:20:26Z,1123,*,,
+sreality,2026-10-15T01:37:23Z,1161,*,,
+sreality,2026-10-15T06:26:53Z,1136,*,,byt-prodej=21163/21162 byt-pronajem=11592/11589 dum-prodej=21713/21711 pozemek-prodej=21584/21583
+sreality,2026-10-15T11:54:31Z,1114,*,,pozemek-prodej=21671/21670
+sreality,2026-10-15T16:07:20Z,1201,*,,
+sreality,2026-10-15T19:52:27Z,1328,*,,
+sreality,2026-10-15T22:50:19Z,1054,*,,
+sreality,2026-10-16T00:56:50Z,1003,*,,
+sreality,2026-10-16T05:26:33Z,1268,*,,komercni-pronajem=14377/14376
+sreality,2026-10-16T10:01:39Z,1306,*,,dum-prodej=21790/21786
+sreality,2026-10-16T14:49:26Z,1234,*,,byt-pronajem=11691/11690 dum-prodej=21859/21858
+sreality,2026-10-16T18:33:47Z,947,*,,byt-prodej=21375/21374
+sreality,2026-10-16T21:42:52Z,1305,*,,byt-pronajem=11728/11722
+sreality,2026-10-16T23:53:50Z,833,*,,
+sreality,2026-10-17T02:33:42Z,800,*,,
+sreality,2026-10-17T07:11:35Z,1207,*,,byt-pronajem=11579/11577
+sreality,2026-10-17T11:36:35Z,1210,*,,
+sreality,2026-10-17T14:25:12Z,990,*,,
+sreality,2026-10-17T17:24:15Z,936,*,,
+sreality,2026-10-17T19:35:58Z,1096,*,,
+sreality,2026-10-17T21:44:16Z,1278,*,,
+sreality,2026-10-17T23:27:37Z,1178,*,,
+sreality,2026-10-18T01:23:20Z,806,*,,
+sreality,2026-10-18T06:15:18Z,797,*,,
+sreality,2026-10-18T11:13:36Z,967,*,,byt-prodej=21296/21294
+sreality,2026-10-18T14:35:46Z,995,*,,byt-prodej=21339/21338
+sreality,2026-10-18T17:32:58Z,1314,*,,
+sreality,2026-10-18T19:41:06Z,1081,*,,
+sreality,2026-10-18T21:53:00Z,1062,*,,
+sreality,2026-10-18T23:51:10Z,1375,*,,
+sreality,2026-10-19T02:48:18Z,928,*,,

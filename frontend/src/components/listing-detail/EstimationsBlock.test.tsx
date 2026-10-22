@@ -2,30 +2,32 @@
  * else: no run's frozen reference rent stands in for a missing one, and there
  * is no English placeholder of its own. */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import type { ReferenceRent } from '@/lib/mfReference';
 import type { EstimationRun } from '@/lib/types';
 
-vi.mock('@/lib/queries', async (orig) => ({
-  ...(await orig<typeof import('@/lib/queries')>()),
-  fetchEstimationsForListings: vi.fn(),
+vi.mock('@/lib/api', async (orig) => ({
+  ...(await orig<typeof import('@/lib/api')>()),
+  listEstimations: vi.fn(),
 }));
 vi.mock('@/components/estimation/RunPanel', () => ({
   RunBody: () => <div data-testid="run-body" />,
   ConfidencePill: () => null,
   RunStatusChip: () => null,
 }));
+const openEstimation = vi.hoisted(() => vi.fn());
 vi.mock('@/components/NewEstimationModal', () => ({
-  useNewEstimationModal: () => ({ open: () => {} }),
+  useNewEstimationModal: () => ({ open: openEstimation }),
 }));
 
-import { fetchEstimationsForListings, type PropertyPublic } from '@/lib/queries';
+import { listEstimations } from '@/lib/api';
+import type { PropertyPublic } from '@/lib/queries';
 import EstimationsBlock from './EstimationsBlock';
 
-const fetchRuns = vi.mocked(fetchEstimationsForListings);
+const fetchRuns = vi.mocked(listEstimations);
 
 const MF_LABEL = 'Odhad nájmu · cenová mapa MF';
 
@@ -65,12 +67,12 @@ const property = (mf: Partial<PropertyPublic>): PropertyPublic =>
     ...mf,
   }) as unknown as PropertyPublic;
 
-function renderBlock(listing: PropertyPublic) {
+function renderBlock(listing: PropertyPublic, prefill?: { listingId: number }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
-        <EstimationsBlock listing={listing} listingIds={[listing.id]} />
+        <EstimationsBlock listing={listing} listingIds={[listing.id]} prefill={prefill} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -114,5 +116,26 @@ describe('EstimationsBlock MF card', () => {
     );
     await waitFor(() => expect(container).toHaveTextContent(note));
     expect(container).toHaveTextContent(MF_LABEL);
+  });
+});
+
+describe('EstimationsBlock first run', () => {
+  beforeEach(() => {
+    fetchRuns.mockReset();
+    openEstimation.mockClear();
+  });
+
+  it('starts the first run on the ad the page names, by its listing id', async () => {
+    fetchRuns.mockResolvedValue({ data: [], total: 0, limit: 50, offset: 0, next_cursor: null });
+    renderBlock(property({ mf_reference_rent: FROZEN_REF }), { listingId: 11 });
+    fireEvent.click(await screen.findByRole('button', { name: /Run an estimation/ }));
+    expect(openEstimation).toHaveBeenCalledWith({ listingId: 11 });
+  });
+
+  it('offers no first run without an ad to estimate', async () => {
+    fetchRuns.mockResolvedValue({ data: [], total: 0, limit: 50, offset: 0, next_cursor: null });
+    renderBlock(property({ mf_reference_rent: FROZEN_REF }));
+    await screen.findByText('No estimation runs for this property yet.');
+    expect(screen.queryByRole('button', { name: /Run an estimation/ })).toBeNull();
   });
 });

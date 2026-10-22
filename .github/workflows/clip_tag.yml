@@ -10,7 +10,7 @@ name: Dedup — CLIP image tagging (sharded)
 # Horizontally sharded into 4 parallel jobs (image_id %% 4), each with its own
 # runner + cap, like images.yml. Installs CPU torch + the `clip` extra
 # (transformers); the production CLIP could move to int8-ONNX later as an
-# optimization. NOT a portal ingest job (untagged, portal: null).
+# optimization.
 #
 # Required secrets: SUPABASE_DB_URL + the R2_* set (same as compute_image_phash.yml).
 

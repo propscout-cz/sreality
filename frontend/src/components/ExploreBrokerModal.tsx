@@ -136,6 +136,7 @@ function ExploreBrokerModal({
             presetBar: false,
             mergeMode: false,
             watchdog: false,
+            newProperty: false,
             title: false,
             sidebar: false,
             stats: false,

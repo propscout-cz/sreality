@@ -42,8 +42,10 @@ name: "Jobs: recompute property stats (daily full reconcile)"
 #   * timeout-minutes below is only the outer backstop, sized budget+headroom;
 #   * the lease is a 15-min TTL renewed every batch — a SIGKILL freezes
 #     maintenance for minutes, not hours;
-#   * the `property_maintenance` check (verify_pipeline, hourly acute lane)
-#     alarms on the staleness any of this leaves behind.
+#   * a completed cycle stamps the `property_sweep` derived artifact (migration
+#     622); the jobs check's `artifact/property_sweep` cell (scripts/checks/
+#     platform.py, on the worker's health lane) fails when none has for 56 h
+#     (its 38 h budget + GitHub's 18 h delivery slack), whatever left it stale.
 #
 # Cadence: daily (04:15 UTC). The slot is historical — it used to run just
 # before the dedup engine's 04:45 sweep, which was removed in the 2026-08

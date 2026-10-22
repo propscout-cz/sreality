@@ -3,7 +3,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  READ_PORTALS,
   RECENT_LINKS_KEY,
   RECENT_LINKS_MAX,
   firstUrl,
@@ -76,10 +75,11 @@ describe('readPastedLink', () => {
     expect(readPastedLink('jen slova')).toEqual({ kind: 'no-url' });
   });
 
-  it('names the nine portals the platform reads', () => {
-    expect(READ_PORTALS).toEqual([
-      'sreality', 'bazos', 'bezrealitky', 'idnes', 'maxima', 'remax', 'mmreality', 'ceskereality', 'realitymix',
-    ]);
+  it('gives a scheme-less link on another site a scheme too', () => {
+    expect(readPastedLink('www.ulovdomov.cz/inzerat/123')).toEqual({
+      kind: 'other',
+      url: 'https://www.ulovdomov.cz/inzerat/123',
+    });
   });
 });
 

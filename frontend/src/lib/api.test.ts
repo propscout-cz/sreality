@@ -448,3 +448,53 @@ describe('the one credential (authHeader)', () => {
     expect(urls).toHaveLength(0);
   });
 });
+
+describe('acting as a pipeline owner (X-Act-As, migration 641)', () => {
+  it('sends the owner on an acting call, and nothing without one', async () => {
+    const { headers } = captureFetch();
+    const api = await loadApi();
+    await api.listTags({ actAs: 'owner-1' });
+    await api.attachTag(5, 7, { actAs: 'owner-1' });
+    await api.movePipelineCard(5, 3, undefined, { actAs: 'owner-1' });
+    await api.listTags();
+    await api.attachTag(5, 7);
+    expect(headers.map((h) => h['X-Act-As'])).toEqual(['owner-1', 'owner-1', 'owner-1', undefined, undefined]);
+    expect(headers.slice(3).every((h) => !('X-Act-As' in h))).toBe(true);
+  });
+
+  it('never sends it on the share routes — sharing is always the caller’s own', async () => {
+    const { headers } = captureFetch();
+    const api = await loadApi();
+    await api.listPipelineShares();
+    await api.sharePipeline('a@b.cz', 'edit');
+    await api.unsharePipeline('owner-1', 'shared_with_me');
+    expect(headers).toHaveLength(3);
+    expect(headers.every((h) => !('X-Act-As' in h))).toBe(true);
+  });
+});
+
+describe('the paste-a-link ingest routes (docs/design/new-property-from-link.md §3.2)', () => {
+  it('POSTs the pasted text, GETs the state by its natural key, and never acts', async () => {
+    const calls: Array<{ url: string; method?: string; body?: unknown; headers: Record<string, string> }> = [];
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({
+        url: String(input),
+        method: init?.method,
+        body: init?.body,
+        headers: (init?.headers ?? {}) as Record<string, string>,
+      });
+      return { ok: true, status: 200, statusText: 'OK', text: async () => '{"state":"queued"}' } as Response;
+    });
+    const api = await loadApi();
+    await expect(api.ingestListing('Koukni https://www.sreality.cz/detail/x/12345678')).resolves.toEqual({
+      state: 'queued',
+    });
+    await api.ingestState('maxima', 'f60012727');
+    expect(calls.map((c) => [c.method ?? 'GET', new URL(c.url).pathname])).toEqual([
+      ['POST', '/listings/ingest'],
+      ['GET', '/listings/ingest/maxima/f60012727'],
+    ]);
+    expect(JSON.parse(String(calls[0].body))).toEqual({ url: 'Koukni https://www.sreality.cz/detail/x/12345678' });
+    expect(calls.every((c) => !('X-Act-As' in c.headers))).toBe(true);
+  });
+});

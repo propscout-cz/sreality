@@ -26,7 +26,7 @@ import {
   ResultCount,
   type FilterOption,
 } from '@/components/autodedup/FilterBar';
-import LoadMore from '@/components/autodedup/LoadMore';
+import LoadMore from '@/components/LoadMore';
 import Notice, { StoreNotReady } from '@/components/autodedup/Notice';
 import PairCard from '@/components/autodedup/PairCard';
 import ValidationStrip, { BlindToggle } from '@/components/autodedup/ValidationStrip';

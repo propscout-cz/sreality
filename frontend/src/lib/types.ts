@@ -1,7 +1,7 @@
 /* Wire shapes mirroring the public views from migration 008. Only the columns
  * the UI actually reads are typed here; expand as Parts B–E need more. */
 
-import type { DistrictChip, ListingFilters, PresetSpec } from './filters';
+import type { DistrictChip, ListingFilters, MapBounds, PresetSpec } from './filters';
 import type { ReferenceRent } from './mfReference';
 
 /* The whole Czech grammar, 1 through 9 — the same span
@@ -100,9 +100,9 @@ export interface ListingPublic {
   garage: boolean | null;
   parking_lots: number | null;
   ownership: Ownership | null;
-  /* Migration 052 — "turned in" (TOM) in whole days. now() -
-   * first_seen_at for active listings (right-censored, growing);
-   * last_seen_at - first_seen_at for delisted. */
+  /* Time on market in whole days, the one measure (measure_tom_days, migration
+   * 617): now() - first_seen_at for active ads (right-censored, growing);
+   * last_seen_at - first_seen_at for inactive. */
   tom_days: number | null;
   /* Migration 084 — original sreality "Popis" free-text description.
    * Promoted from raw_json->'text'->>'value' to a typed column +
@@ -138,14 +138,6 @@ export interface ListingFreshnessCheckPublic {
   outcome: string;
 }
 
-export interface ListingFetchFailurePublic {
-  sreality_id: number;
-  attempts: number;
-  first_failure_at: string;
-  last_failure_at: string;
-  given_up: boolean;
-}
-
 export interface ImagePublic {
   id: number;
   sreality_id: number;
@@ -170,242 +162,12 @@ export interface ImagePublic {
    * cover); NULL when the active model has not scored the photo. */
   tag_head_scores?: Record<string, number> | null;
 }
-
-/* Distributional shapes — used by EstimationDetail's RangeStrip and by
- * the per-disposition Kč/m² box plots on Browse > Stats. */
-
-export interface PercentileTriple {
-  p25: number;
-  p50: number;
-  p75: number;
-}
-
-export interface Ppm2Box {
-  n: number;
-  min: number;
-  p25: number;
-  median: number;
-  p75: number;
-  max: number;
-}
-
-export interface RegionDispositionRow {
-  disposition: string;
-  n: number;
-  median_price: number | null;
-  median_ppm2: number | null;
-  median_area: number | null;
-  ppm2_box: Ppm2Box | null;
-}
-
-/* Health dashboard payload — shape mirrors migration 013 health_summary RPC. */
-
-export interface HealthDayCount {
-  day: string;
-  n: number;
-}
-
-export interface HealthSnapBucket {
-  bucket: '1' | '2' | '3' | '4+' | string;
-  n: number;
-}
-
-export interface HealthFreshnessRow {
-  outcome: string;
-  n: number;
-}
-
-export interface HealthFailureRow {
-  sreality_id: number;
-  attempts: number;
-  first_failure_at: string;
-  last_failure_at: string | null;
-  given_up: boolean;
-}
-
-export interface HealthCategoryBlock {
-  category_main: 'byt' | 'dum' | 'komercni' | string;
-  category_type: 'pronajem' | 'prodej' | string;
-  active_now: number;
-  flipped_inactive_7d: number;
-  new_per_day_14d: HealthDayCount[];
-  flipped_per_day_7d: HealthDayCount[];
-  failures_total: number;
-  failures_given_up: number;
-}
-
-/* One row per derived artifact (matview / rollup table) from
- * `derived_artifacts_public` (migration 437) — who produces it, on what
- * cadence, how stale it is allowed to get, and when it last succeeded.
- *
- * Two shapes to know before consuming it:
- *   · `staleness_budget` is a Postgres interval and PostgREST hands it over as
- *     a STRING ('01:00:00', '45 mins', 'PT1H' depending on IntervalStyle), not
- *     a number — lib/derivedArtifacts parses it, defensively.
- *   · There is deliberately NO error column. The base table keeps `last_error`
- *     (it can carry table and column names) and the view does not publish it,
- *     so the only failure signal here is `last_succeeded_at` falling behind
- *     `staleness_budget`. Don't reference `last_error` or `has_error`. */
-export interface DerivedArtifactRow {
-  name: string;
-  producer: string;
-  host: string;
-  cadence: string;
-  staleness_budget: string | null;
-  complete_through: string | null;
-  last_succeeded_at: string | null;
-  last_duration_ms: number | null;
-  last_rows: number | null;
-  is_serving: boolean;
-}
-
-export interface HealthSummary {
-  // When the pg_cron loop last refreshed the Health matviews (migration 176).
-  // Absent on payloads generated before that migration.
-  generated_at?: string | null;
-  last_scrape_at: string | null;
-  active_now: number;
-  active_7d_ago: number;
-  flipped_inactive_7d: number;
-  new_per_day_14d: HealthDayCount[];
-  flipped_per_day_7d: HealthDayCount[];
-  snapshot_density: HealthSnapBucket[];
-  freshness_24h: HealthFreshnessRow[];
-  failures_given_up: number;
-  failures_total: number;
-  failures_top10: HealthFailureRow[];
-  by_category: HealthCategoryBlock[];
-}
-
-/* Per-category source-scoped health (migrations 118/119): category_trends RPC.
-   One trend point per index run — "portal" = portal-reported total, "db" = our
-   active count. The rest are source-scoped per-category aggregates. */
-
-export interface CategoryTrendPoint {
-  t: string;
-  portal: number | null;
-  db: number | null;
-}
-
-export interface CategoryTrend {
-  category_main: string;
-  category_type: string;
-  total_in_db: number;
-  active_now: number;
-  new_today: number;
-  new_7d: number;
-  flipped_today: number;
-  flipped_7d: number;
-  failures_total: number;
-  failures_given_up: number;
-  portal_total: number | null;
-  collected: number | null;
-  hourly: CategoryTrendPoint[];
-  daily: CategoryTrendPoint[];
-}
-
-/* Per-scrape stats (migration 086): scrape_runs table + recent_scrape_runs RPC. */
-
-export interface ScrapeRunCategory {
-  category_main: string | null;
-  category_type: string | null;
-  listings_found_new: number;
-  listings_scraped_new: number;
-  listings_inactive: number;
-  images_discovered: number;
-  images_stored: number;
-  // Reconciliation (recorded by the region-split scraper; absent on older runs).
-  sreality_result_size?: number | null;
-  collected?: number | null;
-  active_db?: number | null;
-}
-
-export interface ScrapeRun {
-  id: number;
-  started_at: string;
-  ended_at: string | null;
-  // 'full'/'delta' are the legacy monolithic scraper; 'index'/'detail' are the
-  // Phase-2 cadence split (migration 105).
-  run_type: 'full' | 'delta' | 'index' | 'detail';
-  index_pages: number;
-  listings_found_new: number;
-  listings_scraped_new: number;
-  listings_updated: number;
-  listings_inactive: number;
-  images_discovered: number;
-  images_stored: number;
-  errors: number;
-  by_category: ScrapeRunCategory[];
-  // Which portal this run belongs to (migration 100). Defaults to 'sreality'
-  // on rows recorded before the column existed.
-  source: string;
-}
-
-/* Per-portal health (migration 100): the portals registry joined with each
- * source's activity. `kind` decides which metrics are meaningful — scrapers
- * report listing + scrape-run stats, on-demand URL parsers report parse
- * activity. Both metric families are always present (zeroed for the other
- * kind) so the dashboard renders uniformly. */
-
-export type PortalKind = 'scraper' | 'parser';
-
-export interface PortalHealth {
-  source: string;
-  label: string;
-  kind: PortalKind;
-  // Drives the derived posture badge (see lib/portalPosture). Replaced the
-  // hand-set `stage` label in migration 217.
-  supports_complete_walk: boolean;
-  home_url: string | null;
-  listings_total: number;
-  listings_active: number;
-  listings_active_7d: number;
-  // Active-listing data-quality coverage (migration 219; null when no active
-  // listings). The view also carries dedup_eligible_pct — unmodelled, nothing reads it.
-  geo_pct: number | null;
-  street_pct: number | null;
-  parses_total: number;
-  parses_30d: number;
-  last_scrape_at: string | null;
-  runs_7d: number;
-  scraped_new_7d: number;
-  inactive_7d: number;
-  errors_7d: number;
-  last_parsed_at: string | null;
-  last_activity_at: string | null;
-}
-
-export interface ImageStorageCategory {
-  category_main: string | null;
-  category_type: string | null;
-  total: number;
-  stored: number;
-  // Active-listing subset (migration 109): the *closeable* gap — inactive
-  // listings' CDN photos are mostly expired and unrecoverable.
-  total_active: number;
-  stored_active: number;
-}
-
-export interface ImageStorageOverview {
-  total_images: number;
-  stored_images: number;
-  total_active_images: number;
-  stored_active_images: number;
-  by_category: ImageStorageCategory[];
-}
-
-/* Image-download failure rollup (migration 177): one row per
- * (source, bucket, detail). `detail` is the unavailable_reason or coarse
- * last_error class ('HTTP 404', 'other'); '' when not applicable. */
-
-export type ImageFailureBucket = 'stored' | 'unavailable' | 'exhausted' | 'pending';
-
-export interface ImageFailureRow {
-  source: string;
-  bucket: ImageFailureBucket;
-  detail: string;
-  n: number;
-}
+/* A photo for the shared lightbox without an image row's CLIP/pHash facts (its badges self-guard on null):
+ * a stored copy by `storage_path`, or an outside photo by its own URL. */
+export const bareImage = (id: number, storage_path: string | null, sreality_url = ''): ImagePublic => ({
+  id, sreality_id: 0, sequence: null, sreality_url, storage_path,
+  clip_fine_tag: null, clip_logical_tag: null, clip_confidence: null, clip_render_score: null, phash: null,
+});
 
 /* -------------------------------------------------------------------------- */
 /* Estimations (U2). Wire shapes mirror api/schemas.py and api/estimation_runs */
@@ -417,18 +179,7 @@ export type EstimationSource = 'ui' | 'api' | 'clickup';
 export type EstimationMode = 'deterministic' | 'agent';
 export type EstimationProvider = 'anthropic' | 'gemini';
 export type Lifecycle = 'active' | 'delisted' | 'all';
-/* Result confidence (estimate_yield) only ever returns the first three;
- * parse confidence (URL parser) can additionally be 'best_effort'. The
- * widened union covers both call sites. */
-export type Confidence = 'low' | 'medium' | 'high' | 'best_effort';
-
-/* Mirrors the CHECK constraint on estimation_runs.source_kind (migration 020). */
-export type SourceKind =
-  | 'sreality'
-  | 'bezrealitky'
-  | 'idnes_reality'
-  | 'remax'
-  | 'unsupported';
+export type Confidence = 'low' | 'medium' | 'high';
 
 export interface TargetSpecIn {
   lat: number;
@@ -555,13 +306,15 @@ export interface EstimationRun {
   mode: EstimationMode;
   status: EstimationStatus;
   input_url: string | null;
+  /* Kept for older clients; nothing here routes by it (sreality ads only). */
   input_sreality_id: number | null;
-  /* Gate 2 surrogate twin of input_sreality_id (stamped by #914), the only
-   * handle for a post-Gate-2 non-sreality subject (input_sreality_id NULL).
-   * Null on rows written before #914 and on unresolved subjects (no matched
-   * listings row at all). Not yet consumed for routing — the existing
-   * input_sreality_id-gated links below are a documented separate cutover. */
+  /* The ad the run estimates, set at submit. Null only on the historic runs that
+   * never had an ad (a pasted URL before 2026-10-20, or a bare spec). */
   input_listing_id: number | null;
+  /* That ad's natural key (a join on input_listing_id): the run lives on
+   * `/listing/{subject_source}/{subject_source_id_native}` (lib/runLinks). */
+  subject_source: string | null;
+  subject_source_id_native: string | null;
   input_spec: TargetSpecIn | null;
   /* Discriminator added in migration 029. Null on legacy rows
    * predating the migration — readers should treat null as 'rent'. */
@@ -585,22 +338,6 @@ export interface EstimationRun {
   error_message: string | null;
   parent_run_id: number | null;
   rerun_reason: string | null;
-  /* Estimation-4 audit fields (added in migration 020). All null for
-   * runs created before estimation-4 shipped, all null for spec-mode
-   * runs (no URL parse happened), and parse_confidence_per_field is
-   * also null for sreality runs (the deterministic parser doesn't
-   * track per-field confidences). source_html is the raw page bytes
-   * (LLM path only) and is large — GET /estimations list rows omit it;
-   * only GET /estimations/:id returns it. */
-  source_kind: SourceKind | null;
-  parse_confidence: Confidence | null;
-  parse_confidence_per_field: Record<string, Confidence> | null;
-  source_html?: string | null;
-  /* Migration 138 — typed subject attributes (mirroring listings_public field
-   * names) for a parsed subject with no resolved listings row, so the UI can
-   * render its facts grid. NULL when input_sreality_id is set (read the
-   * listings row instead). */
-  subject_attributes: Record<string, unknown> | null;
   /* Sum of llm_calls.cost_usd rows linked to this run via
    * estimation_run_id. The backend uses COALESCE(..., 0) so the
    * value is never null in practice, but the type tolerates it for
@@ -634,10 +371,9 @@ export interface EstimationRun {
    * created before a rent-map revision was ingested. Read-only — never
    * overrides the comparables-based primary estimate. */
   reference_rent: ReferenceRent | null;
-  /* Server-derived display string emitted only by GET /estimations:
-   * the resolved town (listing_location.obec_name) for sreality runs, else the latest
-   * parsed_url_cache extraction.locality.value for the run's input_url.
-   * Null when neither path resolves. Not returned by GET /estimations/:id. */
+  /* Server-derived display string emitted only by GET /estimations: the
+   * resolved town (listing_location.obec_name) of the run's ad. Null for a run
+   * with no ad or an ad with no town. Not returned by GET /estimations/:id. */
   locality_display?: string | null;
 }
 
@@ -726,8 +462,6 @@ export interface EstimationFilters {
   min_usable_area: number | null;
   max_usable_area: number | null;
   min_parking_lots: number | null;
-  building_condition_level_min: number | null;
-  apartment_condition_level_min: number | null;
 }
 
 export interface CreateEstimationIn extends Partial<EstimationFilters> {
@@ -737,11 +471,13 @@ export interface CreateEstimationIn extends Partial<EstimationFilters> {
   skill?: string;
   lifecycle?: Lifecycle;
   estimate_kind?: 'rent' | 'sale';
-  url?: string;
-  spec?: TargetSpecIn;
-  /* Estimate an already-scraped listing by internal id (the Browse cards'
-   * on-card estimate). Exactly one of url / spec / sreality_id is set. */
+  /* The ad to estimate (listings.id). Exactly one of listing_id / sreality_id /
+   * spec is set; sreality_id is the legacy handle of the same ad (the Browse
+   * cards' on-card estimate). A pasted link becomes an ad first (POST
+   * /listings/ingest); there is no URL arm. */
+  listing_id?: number;
   sreality_id?: number;
+  spec?: TargetSpecIn;
   spec_overrides?: Partial<TargetSpecIn>;
   purchase_price_czk?: number | null;
   expected_monthly_rent_czk?: number | null;
@@ -764,7 +500,6 @@ export interface EstimationListParams {
    * "no filter". Never send the legacy sreality_id here — it is NULL for every
    * non-sreality listing. */
   listing_ids?: string;
-  source_kind?: SourceKind;
   limit?: number;
   offset?: number;
   /* Keyset cursor (the prior page's next_cursor). Newest-first feed paged
@@ -779,59 +514,6 @@ export interface EstimationListResponse {
   limit: number;
   offset: number;
   next_cursor: string | null;
-}
-
-/* POST /estimations/preview response (estimation-4). Routes any URL
- * through the source-kind dispatcher: sreality fast-path or LLM-driven
- * per-source parser. The `spec` block is the same TargetSpecIn shape
- * that gets POSTed back to /estimations. The `listing` block is the
- * informational sidecar. Provenance fields document where the data
- * came from and how confident the parser was. */
-export interface ParseListing {
-  price_czk: number | null;
-  price_unit: string | null;
-  category_main: string | null;
-  category_type: string | null;
-  locality: string | null;
-  district: string | null;
-  total_floors: number | null;
-  has_balcony: boolean | null;
-  has_lift: boolean | null;
-  has_parking: boolean | null;
-  building_type: string | null;
-  condition: string | null;
-  energy_rating: string | null;
-  /* Migration 022 — same fields as PreviewListing. The LLM-driven
-   * per-source parsers don't yet extract these, so they're null for
-   * non-sreality URLs until the per-source prompts learn them. */
-  estate_area: number | null;
-  usable_area: number | null;
-  garden_area: number | null;
-  category_sub_cb: number | null;
-  furnished: Furnished | null;
-  terrace: boolean | null;
-  cellar: boolean | null;
-  garage: boolean | null;
-  parking_lots: number | null;
-  ownership: Ownership | null;
-}
-
-export interface ParseResult {
-  spec: TargetSpecIn;
-  listing: ParseListing;
-  source_kind: SourceKind;
-  source_url: string;
-  /* ISO-8601 timestamp. For sreality, this is when the API was queried;
-   * for LLM-parsed sources, this is the cache row's parsed_at on a hit
-   * or "now" on a fresh parse. May be null for sreality if the upstream
-   * scraper didn't record a fetched_at. */
-  fetched_at: string | null;
-  parse_confidence: Confidence;
-  parse_confidence_per_field: Record<string, Confidence> | null;
-  warnings: string[];
-  from_cache: boolean;
-  cost_usd: number | null;
-  sreality_id: number | null;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -856,17 +538,14 @@ export interface Collection {
   created_at: string;
   updated_at: string;
   listing_count: number;
-  /* Monitored collections raise in-app change alerts on their member
-   * properties (price moves, delisting). `notify_channels` is the source's
-   * channel pick that the producer folds into notifications.target_channels —
-   * empty means in-app only. `is_system` marks the protected default
+  /* Monitored collections raise change alerts on their member properties
+   * (price moves, delisting). `is_system` marks the protected default
    * "monitoring" collection (can't be renamed or deleted). */
   monitoring_enabled: boolean;
-  notify_channels: string[];
   is_system: boolean;
   /* Sharing (migration 610). `owner_email` is null exactly when the caller owns
    * the collection (lib/collectionCache `isMine`); on a shared row monitoring
-   * reads off and notify_channels empty — the alerts are the owner's. */
+   * reads off — the alerts are the owner's. */
   owner_email: string | null;
   /* The owner sees every recipient; a recipient sees only its own grant, with
    * `email: null` (= you) — that account_id is the key to leave. */
@@ -898,6 +577,10 @@ export interface Note {
   shared: boolean;
   /* Null iff the caller wrote it; else the author's email (read-only here). */
   owner_email: string | null;
+  /* The note's latest delegated edit (migration 641): who wrote it acting as
+   * the owner, and when; null when none, or when the owner edited it since. */
+  edited_by_email?: string | null;
+  edited_at?: string | null;
   /* Its files, oldest first (migration 592). Only the list read carries them. */
   attachments?: NoteAttachment[];
 }
@@ -932,6 +615,27 @@ export interface PipelineStage {
   /* Short operator-owned badge shown inside the funnel (migration 377). NULL =
    * fall back to the stage's 1-based ordinal among live stages. */
   code: string | null;
+  /* The stage's latest delegated edit (migration 641's view columns; null when
+   * none). Only the view read carries them — the API's stage writes do not. */
+  edited_by_account_id?: string | null;
+  edited_at?: string | null;
+}
+
+/* A pipeline share (migration 641): the OTHER party and the grant's mode. In
+ * `shared_with` it is a recipient of my board; in `shared_with_me` the owner
+ * whose board I may open (read) or act on (edit). */
+export type PipelineShareMode = 'read' | 'edit';
+
+export interface PipelineShare {
+  account_id: string;
+  email: string | null;
+  mode: PipelineShareMode;
+}
+
+/* GET /pipeline/shares (and the POST's answer): both of my lists. */
+export interface PipelineShares {
+  shared_with: PipelineShare[];
+  shared_with_me: PipelineShare[];
 }
 
 /* A board card = the property_pipeline row joined to its property's display
@@ -1006,6 +710,11 @@ export interface PipelineBoardCard {
   category_type: string | null;
   price_per_m2: number | null;
   price_per_m2_basis: string | null;
+  /* The card's latest delegated edit (migration 641's view columns): the
+   * account that last moved it acting as the board's owner, and when; null
+   * when none, or when the owner changed it since. */
+  edited_by_account_id?: string | null;
+  edited_at?: string | null;
   /* No image_url and no broker here on purpose. Both are DECORATIONS: they are
    * fetched by lib/hydration keyed on `listing_id` and reach the card through
    * CardHydrationProvider, so nothing on the board's critical path waits for
@@ -1130,10 +839,6 @@ export interface BuildingRun {
   input_url: string | null;
   input_sreality_id: number | null;
   input_spec: TargetSpecIn | null;
-  source_kind: SourceKind | null;
-  parse_confidence: Confidence | null;
-  parse_confidence_per_field: Record<string, Confidence> | null;
-  source_html: string | null;
   /* Building-flow display payload ({ source_url, fields, building }) — a
    * different shape from the (removed) estimation subject summary; the
    * BuildingDetail SubjectBlock casts it to the fields it reads. */
@@ -1182,14 +887,6 @@ export interface CreateBuildingIn {
   input_url?: string | null;
 }
 
-export interface CreateBuildingFromUrlIn {
-  source: EstimationSource;
-  url: string;
-  force_refresh?: boolean;
-  special_instructions?: string | null;
-  contextual_text?: string | null;
-}
-
 export interface UpdateBuildingInputsIn {
   special_instructions?: string | null;
   contextual_text?: string | null;
@@ -1197,13 +894,6 @@ export interface UpdateBuildingInputsIn {
 
 export interface ConfirmBuildingUnitsIn {
   units: BuildingUnit[];
-}
-
-export interface BuildingListResponse {
-  data: BuildingRun[];
-  total: number;
-  limit: number;
-  offset: number;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1222,9 +912,12 @@ export interface WatchdogFilterSpec {
   // Portal-agnostic property sub-type (multi-select; matches any).
   subtype: string[] | null;
   dispositions: string[] | null;
-  lat: number | null;
-  lng: number | null;
-  radius_m: number | null;
+  /* The map box (rule 16): the ONE spatial shape, what Browse filters on — its
+   * viewport, or the square around a centre+radius pick (filters.effectiveBbox)
+   * — so a watchdog saved from Browse watches the rows Browse showed. The
+   * matcher renders it as the same lat/lng band (api/location_filter
+   * .bounds_where). Null = no map area. */
+  bounds: MapBounds | null;
   /* Place, as chips. Each chip is a LEVEL plus a RÚIAN CODE — the one
    * predicate Browse, Stats, the map and the watchdog matcher share
    * (rule 16, lib/districtCodes + api/location_filter). `context` is
@@ -1263,8 +956,9 @@ export interface WatchdogFilterSpec {
   // Multi-select enums; the '__unknown__' element matches NULL / non-canonical.
   furnished: string[] | null;
   ownership: string[] | null;
-  // Raw sreality condition enum (Stav objektu). Matches l.condition = ANY(...);
-  // null / empty = any. Honoured by the matcher (_build_match_clauses).
+  // The canonical condition (Stav objektu). Matches l.condition = ANY(...), and
+  // '__unknown__' NULL / non-canonical like furnished; null / empty = any.
+  // Honoured by the matcher (_build_match_clauses).
   condition_match: string[] | null;
   // The portal rule's two sides (MS19 + migration 597): a property with an ad on
   // one of `portals` (null / empty = all) and none on `portals_excluded` (any ad,
@@ -1273,12 +967,6 @@ export interface WatchdogFilterSpec {
   portals_excluded: string[] | null;
   portals_excluded_active_only: boolean;
   min_parking_lots: number | null;
-  // Derived condition scores (migrations 072 / 073). Same NULL-excluding
-  // `>= N` / `<= N` semantics as the Browse filter.
-  building_condition_level_min: number | null;
-  building_condition_level_max: number | null;
-  apartment_condition_level_min: number | null;
-  apartment_condition_level_max: number | null;
   // Price-history aggregates (migration 173). Property grain; the matcher
   // reads them off properties_public. The window (30/90/365, null = all
   // time) picks which precomputed count column the count min reads;
@@ -1291,6 +979,7 @@ export interface WatchdogFilterSpec {
   // the matcher honours them as Browse does, and an equality test pins
   // the Python spec to the WATCHDOG agenda so a filter can't drop again.
   building_material: Array<'cihla' | 'panel' | 'smisena' | 'ostatni'> | null;
+  energy_rating_match: string[] | null;
   min_garden_area: number | null;
   max_garden_area: number | null;
   tags: number[] | null;
@@ -1322,9 +1011,7 @@ export const DEFAULT_WATCHDOG_FILTER_SPEC: WatchdogFilterSpec = {
   category_sub_cb: null,
   subtype: null,
   dispositions: null,
-  lat: null,
-  lng: null,
-  radius_m: null,
+  bounds: null,
   districts: null,
   min_price_czk: null,
   max_price_czk: null,
@@ -1352,14 +1039,11 @@ export const DEFAULT_WATCHDOG_FILTER_SPEC: WatchdogFilterSpec = {
   portals_excluded: null,
   portals_excluded_active_only: false,
   min_parking_lots: null,
-  building_condition_level_min: null,
-  building_condition_level_max: null,
-  apartment_condition_level_min: null,
-  apartment_condition_level_max: null,
   price_change_count_min: null,
   price_change_window_days: null,
   total_price_change_pct: null,
   building_material: [],
+  energy_rating_match: [],
   min_garden_area: null,
   max_garden_area: null,
   tags: null,
@@ -1383,10 +1067,6 @@ export interface WatchdogSubscription {
   is_active: boolean;
   created_at: string;
   updated_at: string;
-  /* Non-in_app delivery channels this watchdog fans out to (e.g. ['email'])
-   * — folded into each dispatch's target_channels by the matcher (Sprint N).
-   * in_app is always implicit. */
-  channels: string[];
   dispatch_count: number;
 }
 
@@ -1409,15 +1089,46 @@ export interface FilterPreset {
   color: TagColor | null;
 }
 
+/* A named Browse › Stats dashboard (stats_dashboards, migration 647): the
+ * filter preset's twin in the one saved-set primitive (docs/design/
+ * saved-dashboards.md). `charts` is its stored chart list — read it through
+ * lib/stats `sanitizeCharts`; `filter_spec` is the preset blob, null = the
+ * dashboard carries no filter. Sharing as a collection's: `owner_email` is null
+ * exactly when the caller owns it; the owner sees every recipient, a recipient
+ * only its own grant (the account_id it leaves with). */
+export interface SavedDashboard {
+  id: string;
+  name: string;
+  charts: unknown;
+  filter_spec: PresetSpec | null;
+  position: number;
+  color: TagColor | null;
+  created_at: string;
+  updated_at: string;
+  owner_email: string | null;
+  shared_with: CollectionShare[];
+}
+
 export type NotificationSourceKind =
   | 'watchdog'
   | 'collection_monitor'
-  /* A collection was shared with the caller (migration 610): collection_id
-   * set, change_kind 'shared', no listing subject — the `message` text. */
-  | 'collection_share'
-  /* System-health alerts (migration 273/274 producer): pipeline stalls, credit
-   * outages, etc. No listing subject — the payload is the `message` text. */
-  | 'system_health';
+  /* Something was shared with the caller (migrations 610, 641, 647): a collection
+   * (collection_id set), a pipeline or a dashboard (collection_id null); change_kind
+   * names which (migration 652), no listing subject — the `message` text. */
+  | 'share';
+
+/* Why a dispatch fired: a detector's event, or what a share opens (the change_kind
+ * CHECK of migration 652, minus the kinds no feed row carries). */
+export type DispatchChangeKind =
+  | 'new'
+  | 'price_drop'
+  | 'price_rise'
+  | 'inactive'
+  | 'reactivated'
+  | 'new_source'
+  | 'shared_collection'
+  | 'shared_dashboard'
+  | 'shared_pipeline';
 
 export interface WatchdogDispatch {
   id: string;
@@ -1428,37 +1139,28 @@ export interface WatchdogDispatch {
   subscription_name: string | null;
   collection_id: number | null;
   collection_name: string | null;
-  sreality_id: number;
-  /* Property grain (Slice 2b). `property_id` is the canonical property;
-   * `change_kind` is why this dispatch fired ('new' = newly matched the
-   * filter, 'price_drop' = a recent price decrease). `sreality_id` is the
-   * property's representative listing (what the feed links to). */
+  /* Property grain (Slice 2b). `property_id` is the property the event is
+   * about — set on every watchdog / collection_monitor row, null on a share;
+   * the row opens it (lib/dispatchTarget). `change_kind` is why this dispatch
+   * fired ('new' = newly matched the filter, 'price_drop' = a recent price
+   * decrease). */
   property_id: number | null;
-  change_kind: string;
-  /* Free-text body for the rows with no listing subject: source_kind=
-   * 'system_health' (change_kind 'system_alert') and 'collection_share'
-   * (change_kind 'shared'); null on watchdog / collection_monitor rows, which
-   * describe a listing subject instead. Those two kinds also carry no listing,
-   * so their `sreality_id` is null at runtime despite the type (widening it
-   * touches pages/Watchdog.tsx; owed). */
+  change_kind: DispatchChangeKind;
+  /* Free-text body of a `share` row (change_kind 'shared_<kind>'), which has no
+   * listing subject; null on watchdog / collection_monitor rows. */
   message: string | null;
+  /* What a `share` row shares: the kind (the API reads it off change_kind,
+   * migration 652), and its id off the row's own columns — the collection id, the
+   * owner's account uuid for a pipeline (the actor), the dashboard uuid (the
+   * event_ref). Null on every other producer. */
+  share_kind: 'collection' | 'pipeline' | 'dashboard' | null;
+  share_ref: string | null;
   dispatched_at: string;
   seen_at: string | null;
-  /* Change provenance — collection-monitor price events carry these so "why was
-   * I pinged" survives latest-wins: the trigger snapshot + new/previous price. */
+  /* Change provenance — price events carry these so "why was I pinged" survives
+   * latest-wins: the new and the previous price. */
   trigger_price_czk: number | null;
   prev_price_czk: number | null;
-  trigger_snapshot_id: number | null;
-  /* Non-in_app delivery channels the producer stamped (the Sprint N outbox
-   * reads this column); empty = in-app only. */
-  target_channels: string[];
-  estimation_run_id: number | null;
-  estimation_status: EstimationStatus | null;
-  estimation_kind: 'rent' | 'sale' | null;
-  estimated_monthly_rent_czk: number | null;
-  estimated_sale_price_czk: number | null;
-  gross_yield_pct: number | null;
-  confidence: Confidence | null;
   /* Listing-side fields joined via the matcher's LEFT JOIN. Null when
    * the listing has been hard-deleted (shouldn't happen — architectural
    * rule #3 forbids deletes — but render defensively). */
@@ -1480,12 +1182,11 @@ export interface WatchdogDispatch {
   last_seen_at: string | null;
   /* MF (Ministry of Finance) reference gross rental yield % — the
    * deterministic Cenová-mapa figure carried on the listing (migration 133).
-   * Sale apartments only; null on rentals / non-apartments / no territory.
-   * Shown alongside the comparables-based estimation yield. */
+   * Sale apartments only; null on rentals / non-apartments / no territory. */
   mf_gross_yield_pct: number | null;
   /* The portal the property was last seen on (`listings.source`, e.g.
    * 'sreality') + the listing's URL on that portal (`source_url`, may be null
-   * for older sreality rows). Drives the Portal column's clickable chip. */
+   * for older sreality rows). */
   source: string | null;
   source_url: string | null;
 }
@@ -1499,92 +1200,13 @@ export interface WatchdogDispatchesResponse {
   next_cursor: string | null;
 }
 
-/* Unseen dispatch counts (GET /notifications/unread-count). `unread_count` is
- * the total, or the scoped count when a source_kind is requested. */
+/* The caller's unseen notifications (GET /notifications/unread-count): the
+ * one number the nav badge and the feed's header show. */
 export interface NotificationUnreadCount {
-  watchdog: number;
-  collection_monitor: number;
-  collection_share: number;
-  system_health: number;
-  /* `total` sums EVERY source_kind (incl. system_health); the nav bell badge
-   * reads `unread_count` (= total when unscoped), so system alerts count too. */
-  total: number;
   unread_count: number;
 }
 
 export type WatchdogSeenFilter = 'all' | 'seen' | 'unseen';
-
-/* Manual rental estimates (Phase U-ME).
- * Operator-recorded point-estimate rentals attached to a listing.
- * Read path: manual_rental_estimates_public view via anon key. */
-
-export type ManualEstimateSourceKind =
-  | 'broker'
-  | 'gut'
-  | 'external_comp'
-  | 'portfolio'
-  | 'other';
-
-export const MANUAL_ESTIMATE_SOURCE_KINDS: ReadonlyArray<ManualEstimateSourceKind> = [
-  'broker',
-  'gut',
-  'external_comp',
-  'portfolio',
-  'other',
-];
-
-export const manualEstimateSourceLabel = (kind: ManualEstimateSourceKind): string => {
-  switch (kind) {
-    case 'broker':        return 'Broker';
-    case 'gut':           return 'Gut';
-    case 'external_comp': return 'External comp';
-    case 'portfolio':     return 'Portfolio';
-    case 'other':         return 'Other';
-  }
-};
-
-export interface ManualRentalEstimate {
-  id: number;
-  sreality_id: number | null;
-  listing_id: number | null;
-  rent_czk: number;
-  author: string;
-  source_kind: ManualEstimateSourceKind;
-  notes: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface CreateManualEstimateIn {
-  rent_czk: number;
-  author: string;
-  source_kind: ManualEstimateSourceKind;
-  notes?: string | null;
-}
-
-export interface UpdateManualEstimateIn {
-  rent_czk?: number;
-  author?: string;
-  source_kind?: ManualEstimateSourceKind;
-  notes?: string | null;
-}
-
-// scraper_health_checks() RPC (migration 088)
-export type HealthCheckStatus = 'pass' | 'warn' | 'fail';
-
-export interface ScraperHealthCheck {
-  key: string;
-  label: string;
-  status: HealthCheckStatus;
-  value: string;
-  detail: string;
-}
-
-export interface ScraperHealthChecks {
-  generated_at: string;
-  source?: string;
-  checks: ScraperHealthCheck[];
-}
 
 /* One row of property_sources_public — one advert of a property: a row of the
  * property page's merged-adverts section. */
@@ -1665,4 +1287,28 @@ export interface SoldCoverage {
   truncated: boolean | null;
   last_attempt_at: string | null;
   last_attempt_status: string | null;
+}
+
+/* POST /listings/ingest and GET /listings/ingest/{source}/{native_id}
+ * (docs/design/new-property-from-link.md §3.2): ONE state shape for a pasted ad
+ * link. `held` = we hold the ad (`property_id` null until its property is born);
+ * `queued` = the worker will fetch its page; `refused` / `gone` / `failed` carry
+ * one Czech sentence in `message_cs`. Market data only — no per-account field. */
+export type IngestStateName = 'refused' | 'held' | 'queued' | 'gone' | 'failed';
+
+export interface IngestQueue {
+  attempts: number;
+  claimed_at: string | null;
+  given_up: boolean;
+}
+
+export interface IngestState {
+  state: IngestStateName;
+  message_cs: string | null;
+  source: string | null;
+  source_id_native: string | null;
+  listing_id: number | null;
+  is_active: boolean | null;
+  property_id: number | null;
+  queue: IngestQueue | null;
 }

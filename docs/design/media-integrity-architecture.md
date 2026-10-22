@@ -465,7 +465,7 @@ distribution, completeness) for the *assertions*, evaluated **per partition** (s
 cohort), alerting on **state transitions** rather than every red run.
 
 **Where it fits.** The transition-alerting spine (`pipeline_check_results` +
-`toolkit/system_alerts.emit_transition_alerts` — onset/recovery edges, dedupe keys, `ON CONFLICT`
+`toolkit/system_alerts.emit_transition_alerts` (replaced 2026-10-18 by `reconcile`, one incident per failing cell — see docs/design/health-dashboard.md) — onset/recovery edges, dedupe keys, `ON CONFLICT`
 idempotence) is genuinely good and needs a *producer*, not a rewrite.
 
 **Where it does NOT fit — say it out loud.** GE/dbt assume you own the producer and can assert a
@@ -540,10 +540,15 @@ isolation, same `pipeline_check_results` row, same transition alerting.
 | scalar fields vs `min_pct` floor | below floor, n ≥ 50 | **remax description (64 days undetected)** | ~0 once seeded from observed reality |
 | volume vs trailing-14d median | below 25% of median | a category dropping out / a WAF block | low; needs a wide band (portal seasonality is real) |
 
-**Surfacing.** `pipeline_check_results` → `emit_transition_alerts` → one `notification_dispatches`
+**Surfacing.** `pipeline_check_results` → `toolkit/system_alerts.reconcile` (since 2026-10-18; was `emit_transition_alerts`) → one `notification_dispatches`
 row → the SPA nav bell, plus per-source detail on `/health`. **Note:**
 `app_settings.system_health_channels` is currently `[]`, so today every system alert is
 in-app-bell-only — no email, no Telegram. That is an operator decision (§6 Q3), not a gap.
+Re-affirmed 2026-10-18 by the Health dashboard sprint's ruling Q1 (bell only for now), with email and
+Telegram made ready to switch on in its wave 7 (2026-10-19; the steps: the scraper-ops skill's
+`references/pipeline-verification.md` § Delivery readiness). *Superseded 2026-10-21 by ruling R2b
+([notifications-push/PROGRAM.md](./notifications-push/PROGRAM.md)): system alerts write no dispatch and
+reach no bell; they live on Health, the canary e-mail is the external alarm, and the readiness is deleted.*
 
 ### 3.3 Repair — one generic re-extraction path, not an image script
 
@@ -795,6 +800,11 @@ It is now load-bearing repair substrate, so this must be written down as policy 
 Consequence for PR 4: the badge is the *only* signal, so the two zero-false-positive checks
 (`media`, `media_unknown`) ship straight at `severity='fail'` rather than warming up on `warn`.
 The FP-prone ones (`media_complete`, `media_photoless`) still start at `warn`.
+*Re-affirmed 2026-10-18, not superseded: the Health dashboard sprint's ruling Q1 keeps the bell only
+for now (`docs/design/health-dashboard.md` § 11), and its wave 7 (2026-10-19) made email and Telegram
+ready to switch on in three steps (the scraper-ops skill's `references/pipeline-verification.md` §
+Delivery readiness).* *Superseded 2026-10-21 by ruling R2b: no bell for system alerts; Health + the
+canary e-mail only ([notifications-push/PROGRAM.md](./notifications-push/PROGRAM.md) § 6).*
 
 **Q4 — foreign inventory** → **segment metrics AND flag in the UI.** Split every media/quality
 metric by `obec_id IS NULL`, and surface a visible marker + Browse filter so foreign stock can be

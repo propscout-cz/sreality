@@ -6,6 +6,7 @@ import { useId, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ApiError, deletePropertyArtifactLink, setPropertyArtifactLink } from '@/lib/api';
 import { artifactLinkLabel, safeHttpUrl } from '@/lib/artifactLink';
+import { actingKey, actOpts, useActAs } from '@/lib/acting';
 import { curationKeys } from '@/lib/queries';
 import { useArtifactLinks } from '@/lib/useArtifactLinks';
 import type { ArtifactLink } from '@/lib/types';
@@ -27,7 +28,8 @@ export default function ArtifactLinkRow({
 }) {
   const qc = useQueryClient();
   const labelId = useId();
-  const key = curationKeys.artifactLinks;
+  const actAs = useActAs();
+  const key = actingKey(actAs, curationKeys.artifactLinks);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [confirmingRemove, setConfirmingRemove] = useState(false);
@@ -46,7 +48,7 @@ export default function ArtifactLinkRow({
     });
 
   const save = useMutation({
-    mutationFn: (url: string) => setPropertyArtifactLink(property_id, url),
+    mutationFn: (url: string) => setPropertyArtifactLink(property_id, url, ...actOpts(actAs)),
     onSuccess: (saved) => {
       patch(saved);
       setEditing(false);
@@ -56,7 +58,7 @@ export default function ArtifactLinkRow({
   });
 
   const remove = useMutation({
-    mutationFn: () => deletePropertyArtifactLink(property_id),
+    mutationFn: () => deletePropertyArtifactLink(property_id, ...actOpts(actAs)),
     onSuccess: () => {
       patch(null);
       setConfirmingRemove(false);

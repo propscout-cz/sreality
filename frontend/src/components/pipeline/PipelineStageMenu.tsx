@@ -1,8 +1,8 @@
 /* THE deal-pipeline card menu (rule #22): move this property to another stage,
  * or take it off the board.
  *
- * One menu for every surface that carries the funnel — the Browse cards, the
- * Browse table rows and the listing-detail header all open this exact component
+ * One menu for every surface that carries the funnel — the Browse cards and
+ * the listing-detail header both open this exact component
  * from their own `<PipelineMark>`. Before it, each surface had its own answer
  * to "the property is already in the pipeline, now what": Browse REMOVED it on
  * a single unconfirmed click (a stray click in a 60-card grid silently dropped
@@ -25,11 +25,9 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-
 import AnchoredPopover from '@/components/AnchoredPopover';
 import { CheckIcon } from '@/components/phone/phoneIcons';
-import { fetchPipelineStages, pipelineKeys } from '@/lib/queries';
+import { usePipelineStages } from '@/lib/pipelineReads';
 import { stageAccent, stageBadge } from '@/lib/pipelineStage';
 import { usePipelineCard } from '@/lib/usePipelineCard';
 import type { PipelineStage } from '@/lib/types';
@@ -38,9 +36,6 @@ export interface PipelineStageMenuProps {
   property_id: number;
   /* The stage the card sits at now — checked in the list, and never a move target. */
   stageId: number;
-  /* True when the surrounding cohort is filtered by pipeline membership, so a
-   * write changes which rows match and Browse has to refetch. */
-  cohortScoped?: boolean;
   /* The control the menu hangs off (the funnel button / the header pill). */
   anchorRef: React.RefObject<HTMLElement | null>;
   onClose: () => void;
@@ -49,7 +44,6 @@ export interface PipelineStageMenuProps {
 export default function PipelineStageMenu({
   property_id,
   stageId,
-  cohortScoped = false,
   anchorRef,
   onClose,
 }: PipelineStageMenuProps) {
@@ -63,7 +57,6 @@ export default function PipelineStageMenu({
       <PipelineStageMenuBody
         property_id={property_id}
         stageId={stageId}
-        cohortScoped={cohortScoped}
         onClose={onClose}
       />
     </AnchoredPopover>
@@ -120,7 +113,6 @@ const SIZES = {
 export interface PipelineStageMenuBodyProps {
   property_id: number;
   stageId: number;
-  cohortScoped?: boolean;
   onClose: () => void;
   size?: keyof typeof SIZES;
 }
@@ -128,19 +120,14 @@ export interface PipelineStageMenuBodyProps {
 export function PipelineStageMenuBody({
   property_id,
   stageId,
-  cohortScoped = false,
   onClose,
   size = 'popover',
 }: PipelineStageMenuBodyProps) {
   const cls = SIZES[size];
   const sheet = size === 'sheet';
-  const stagesQ = useQuery({
-    queryKey: pipelineKeys.stages,
-    queryFn: fetchPipelineStages,
-    staleTime: 60_000,
-  });
+  const stagesQ = usePipelineStages();
   const stages = useMemo(() => stagesQ.data ?? [], [stagesQ.data]);
-  const { move, remove, pending: pendingFor } = usePipelineCard({ cohortScoped });
+  const { move, remove, pending: pendingFor } = usePipelineCard();
   const pending = pendingFor(property_id);
   const [confirming, setConfirming] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);

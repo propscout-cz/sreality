@@ -13,11 +13,12 @@ operator override still lifting it, the deferral recorded).
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from typing import Any
 
 import pytest
 
-from scraper import db
+from scraper import db, delist_policy
 
 
 class _Cur:
@@ -126,6 +127,21 @@ def test_an_all_null_seen_set_raises_before_any_sql():
     with pytest.raises(ValueError):
         db.presence_candidates(conn, "remax", "byt", "prodej", {None})
     assert conn.executed == []
+
+
+def test_the_recheck_throttle_is_delist_policys_one_spelling(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """The 24 h exclusion is RECHECK_THROTTLE, rendered byte-identical; a change is a decision."""
+    assert delist_policy.RECHECK_THROTTLE.total_seconds() == 24 * 3600
+    # db renders it in whole hours (`interval '{recheck_h} hours'`): off the hour it would truncate.
+    assert delist_policy.RECHECK_THROTTLE % timedelta(hours=1) == timedelta(0)
+    conn = _Conn(rows=[], active_rows=0)
+    db.presence_candidates(conn, "remax", "byt", "prodej", {"s1"})
+    assert "AND c.completed_at > now() - interval '24 hours')" in conn.executed[1][0]
+    monkeypatch.setattr(delist_policy, "RECHECK_THROTTLE", delist_policy.RECHECK_THROTTLE * 1.5)
+    conn = _Conn(rows=[], active_rows=0)
+    db.presence_candidates(conn, "remax", "byt", "prodej", {"s1"})
+    assert "AND c.completed_at > now() - interval '36 hours')" in conn.executed[1][0]
 
 
 # --- the bounded enqueue ---------------------------------------------------

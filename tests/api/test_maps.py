@@ -6,14 +6,13 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
-import requests
 
 fastapi = pytest.importorskip("fastapi")
 TestClient = pytest.importorskip("fastapi.testclient").TestClient
 
 from api import dependencies as deps
 from api import main as api_main
-from api import maps
+from api import http_json, maps
 from location_data.name_index import normalize_street_name
 from location_data.resolver.resolve_db import _STREET_POINT_SQL, _STREETS_IN_OBEC_SQL
 
@@ -61,11 +60,11 @@ def client(monkeypatch):
 
 
 def _mock_http(monkeypatch, payload: dict[str, Any], counter: list[int] | None = None):
-    def fake(url: str, params: dict[str, Any]) -> dict[str, Any]:
+    def fake(method: str, url: str, **kw: Any) -> dict[str, Any]:
         if counter is not None:
             counter.append(1)
         return payload
-    monkeypatch.setattr(maps, "_http_get_json", fake)
+    monkeypatch.setattr(http_json, "fetch_json", fake)
 
 
 def test_suggest_returns_items(client, monkeypatch):
@@ -89,23 +88,20 @@ def test_suggest_503_when_mapy_rejects_key(client, monkeypatch):
     # A suspended / invalid key makes Mapy reject the call (e.g. 403). The proxy
     # must return 503 (graceful frontend fallback), not a raw 500 (silent empty
     # dropdown).
-    resp = requests.Response()
-    resp.status_code = 403
+    def _reject(method: str, url: str, **kw: Any) -> dict[str, Any]:
+        raise _http_error(403)
 
-    def _reject(url: str, params: dict[str, Any]) -> dict[str, Any]:
-        raise requests.HTTPError("403 Forbidden", response=resp)
-
-    monkeypatch.setattr(maps, "_http_get_json", _reject)
+    monkeypatch.setattr(http_json, "fetch_json", _reject)
     res = client.get("/maps/suggest", params={"query": "Vinohrady"})
     assert res.status_code == 503
     assert "unavailable" in res.json()["detail"]
 
 
 def test_suggest_503_when_mapy_unreachable(client, monkeypatch):
-    def _down(url: str, params: dict[str, Any]) -> dict[str, Any]:
-        raise requests.ConnectionError("connection refused")
+    def _down(method: str, url: str, **kw: Any) -> dict[str, Any]:
+        raise http_json.HttpJsonError("api.mapy.cz", "unreachable")
 
-    monkeypatch.setattr(maps, "_http_get_json", _down)
+    monkeypatch.setattr(http_json, "fetch_json", _down)
     res = client.get("/maps/suggest", params={"query": "Vinohrady"})
     assert res.status_code == 503
 
@@ -148,11 +144,11 @@ def test_suggest_asks_mapy_for_regional_items_only(client, monkeypatch):
     are `type=regional` (streets and addresses included)."""
     seen: list[dict[str, Any]] = []
 
-    def fake(url: str, params: dict[str, Any]) -> dict[str, Any]:
-        seen.append(params)
+    def fake(method: str, url: str, **kw: Any) -> dict[str, Any]:
+        seen.append(kw["params"])
         return _MOCK_SUGGEST
 
-    monkeypatch.setattr(maps, "_http_get_json", fake)
+    monkeypatch.setattr(http_json, "fetch_json", fake)
     assert client.get("/maps/suggest", params={"query": "Vinohrady"}).status_code == 200
     assert seen == [{
         "query": "Vinohrady", "limit": 10, "lang": "cs", "type": "regional",
@@ -163,26 +159,24 @@ def test_suggest_asks_mapy_for_regional_items_only(client, monkeypatch):
 # ---------------- backup-key failover (MAPY2_CZ_API_KEY) ----------------
 
 
-def _http_error(status: int) -> requests.HTTPError:
-    resp = requests.Response()
-    resp.status_code = status
-    return requests.HTTPError(f"{status}", response=resp)
+def _http_error(status: int) -> http_json.HttpJsonError:
+    return http_json.HttpJsonError("api.mapy.cz", "status", status)
 
 
 def _mock_http_sequence(monkeypatch, outcomes: list[Any]) -> dict[str, Any]:
-    """Mock _http_get_json to yield each outcome (payload or Exception) per call,
+    """Mock the JSON fetch to yield each outcome (payload or Exception) per call,
     recording the apikey used each time."""
     state: dict[str, Any] = {"i": 0, "keys": []}
 
-    def fake(url: str, params: dict[str, Any]) -> dict[str, Any]:
-        state["keys"].append(params.get("apikey"))
+    def fake(method: str, url: str, **kw: Any) -> dict[str, Any]:
+        state["keys"].append(kw["params"].get("apikey"))
         outcome = outcomes[state["i"]]
         state["i"] += 1
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
 
-    monkeypatch.setattr(maps, "_http_get_json", fake)
+    monkeypatch.setattr(http_json, "fetch_json", fake)
     return state
 
 

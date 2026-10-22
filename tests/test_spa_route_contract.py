@@ -1,25 +1,28 @@
 """The SPA route patterns that cross a territory boundary.
 
-Three territories build in-app URLs: the SPA itself (which owns them, in
-`frontend/src/lib/routes.ts`), the API's notification deep links (emitted into
-email/Telegram, effectively permanent URLs), and the Chrome extension's "Otevřít
-v aplikaci" link. Only the SPA's own registry has a rail — its census test lives
-inside the frontend, and `frontend-build.yml` (where the lint ban runs) is
-path-filtered to `frontend/**`, so neither would fire on an api-only or
-extension-only change.
+Two territories build in-app URLs: the SPA itself (which owns them, in
+`frontend/src/lib/routes.ts`) and the Chrome extension's "Otevřít v aplikaci"
+link. Only the SPA's own registry has a rail — its census test lives inside the
+frontend, and `frontend-build.yml` (where the lint ban runs) is path-filtered to
+`frontend/**`, so neither would fire on an extension-only change.
 
 That is the drift this file closes: renaming a route in the SPA would silently
-break every already-sent email and every extension install, with no test failing
-anywhere. It runs in `test.yml`, which fires unfiltered on every push and PR.
+break every extension install, with no test failing anywhere. It runs in
+`test.yml`, which fires unfiltered on every push and PR.
 
 Deliberately narrow. It pins ONLY the patterns actually emitted across a
-boundary — verified by reading both emitters, not assumed:
-  /listing/:source/:nativeId   api/notification_outbox.py + chrome-extension
-  /listing/:sreality_id        api/notification_outbox.py
-  /notifications               api/notification_outbox.py (system-health rows)
+boundary — verified by reading the emitter, not assumed:
+  /listing/:source/:nativeId   chrome-extension
   /collections                 chrome-extension (the save checklist's "Spravovat kolekce")
+  /n/:dispatchId               the push lane (api/push_delivery.py): one event's push, `?d=` its delivery
+  /notifications               the push lane: a coalesced push, `?d=` its first delivery
 Widening it past what actually crosses the boundary would make it a second full
 route table to maintain, which is the failure mode it exists to prevent.
+
+One emitter is data, not code: the health registry (`scripts/verify_pipeline.py`
+CHECKS, and the watcher's own row in `health_liveness()`) stores each check's
+owner page in `health_checks.owner_path`, which the Health page links. That rail
+matches every non-empty path against the registry, so it pins no route here.
 """
 
 from __future__ import annotations
@@ -27,12 +30,14 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 ROUTES_TS = REPO / "frontend" / "src" / "lib" / "routes.ts"
 EXTENSION_TS = REPO / "chrome-extension" / "src" / "content.ts"
+MIGRATIONS = REPO / "migrations"
 
 # `key: def('/pattern'),` — the one authored form in the registry.
 _DEF = re.compile(r"^\s*(\w+):\s*def\('([^']+)'\),", re.MULTILINE)
@@ -40,10 +45,14 @@ _DEF = re.compile(r"^\s*(\w+):\s*def\('([^']+)'\),", re.MULTILINE)
 # The routes that leave the SPA, and who emits them.
 CROSS_TERRITORY = {
     "listingCanonical": "/listing/:source/:nativeId",
-    "listingLegacy": "/listing/:sreality_id",
-    "notifications": "/notifications",
     "collections": "/collections",
 }
+
+
+# The routes every push links to, absolutely, from the backend (notifications push W4). The landing page ships with
+# the SPA's push wave (W5b, PR #1948): until it is in this tree its registry half waits; its shape is pinned anyway.
+PUSH_EMITTED = {"notificationOpen": "/n/:dispatchId", "notifications": "/notifications"}
+_LANDING_PAGE = REPO / "frontend" / "src" / "pages" / "NotificationOpen.tsx"
 
 
 def _registry() -> dict[str, str]:
@@ -66,67 +75,9 @@ def test_the_registry_still_declares_every_externally_emitted_route() -> None:
         )
         assert registry[key] == expected, (
             f"ROUTES.{key} changed from {expected!r} to {registry[key]!r}. Every "
-            f"already-sent notification and every installed extension still points "
-            f"at the old path. Update api/notification_outbox.py, "
+            f"installed extension still points at the old path. Update "
             f"chrome-extension/src/content.ts and this contract together."
         )
-
-
-@pytest.fixture()
-def spa_base(monkeypatch: pytest.MonkeyPatch) -> str:
-    base = "https://app.example.invalid"
-    monkeypatch.setenv("SPA_BASE_URL", base)
-    return base
-
-
-def _compose(row: dict[str, object]):
-    from api.notification_outbox import compose_message
-
-    return compose_message(row)
-
-
-def test_api_canonical_deep_link_matches_the_registry_pattern(spa_base: str) -> None:
-    msg = _compose(
-        {
-            "change_kind": "new",
-            "locality": "Praha 6",
-            "source": "bazos",
-            "source_id_native": "abc-123",
-            "sreality_id": None,
-        }
-    )
-    path = msg.deep_link[len(spa_base) :]
-    assert _pattern_to_regex(CROSS_TERRITORY["listingCanonical"]).match(path), (
-        f"notification deep link {path!r} no longer matches the SPA's "
-        f"{CROSS_TERRITORY['listingCanonical']!r}"
-    )
-
-
-def test_api_legacy_deep_link_matches_the_registry_pattern(spa_base: str) -> None:
-    msg = _compose(
-        {
-            "change_kind": "new",
-            "locality": "Praha 6",
-            "source": None,
-            "source_id_native": None,
-            "sreality_id": -284913,
-        }
-    )
-    path = msg.deep_link[len(spa_base) :]
-    assert _pattern_to_regex(CROSS_TERRITORY["listingLegacy"]).match(path), (
-        f"notification deep link {path!r} no longer matches the SPA's "
-        f"{CROSS_TERRITORY['listingLegacy']!r}"
-    )
-
-
-def test_api_system_health_deep_link_matches_the_registry_pattern(spa_base: str) -> None:
-    """System-health rows are not property-grain (migration 462) and land on the feed."""
-    msg = _compose({"source_kind": "system_health", "message": "disk full", "sreality_id": None})
-    path = msg.deep_link[len(spa_base) :]
-    assert path == CROSS_TERRITORY["notifications"], (
-        f"system-health deep link {path!r} no longer matches the SPA's "
-        f"{CROSS_TERRITORY['notifications']!r}"
-    )
 
 
 def test_extension_builds_the_canonical_listing_route() -> None:
@@ -160,13 +111,109 @@ def test_extension_builds_the_collections_route() -> None:
     )
 
 
+def _push_links() -> dict[str, str]:
+    """The path (no origin, no query) of each link the push lane builds: one event's, and a coalesced push's."""
+    from api import push_delivery as pd
+
+    def claimed(delivery: int) -> "pd.Claimed":
+        return pd.Claimed(delivery, 1, 1, "7f1c2e9a-0000-4000-8000-000000000001", None, False, True, False, 600,
+                          False, "https://web.push.apple.com/x", "p", "a", "https://app.example.cz",
+                          {"change_kind": "new"})
+
+    def path(rows: list[Any]) -> str:
+        navigate = pd.build_payload(rows, "https://app.example.cz", 1)["notification"]["navigate"]
+        assert navigate.startswith("https://app.example.cz/") and "?d=" in navigate, navigate
+        return navigate[len("https://app.example.cz"):].split("?", 1)[0]
+
+    return {"notificationOpen": path([claimed(5)]), "notifications": path([claimed(5), claimed(6)])}
+
+
+def test_the_push_lane_builds_the_routes_it_pins() -> None:
+    for key, built in _push_links().items():
+        assert _pattern_to_regex(PUSH_EMITTED[key]).match(built), (key, built)
+
+
+def test_the_registry_declares_every_route_a_push_opens() -> None:
+    """A rename in the SPA would leave every push in flight opening a dead page (and a 404 tap reads as the app
+    being broken); the emitter is api/push_delivery.py's LANDING_PATH / FEED_PATH."""
+    registry = _registry()
+    assert registry["notifications"] == PUSH_EMITTED["notifications"]
+    if "notificationOpen" not in registry and not _LANDING_PAGE.exists():
+        pytest.skip("the /n/:dispatchId landing ships with the SPA's push wave (W5b, PR #1948)")
+    assert registry.get("notificationOpen") == PUSH_EMITTED["notificationOpen"], (
+        "ROUTES.notificationOpen moved or went: every push links to /n/{dispatch}. Update "
+        "api/push_delivery.py LANDING_PATH and this contract together.")
+
+
+# The watcher upserts its own registry row inside health_liveness(), so its owner
+# page and domain are literals in the newest migration that (re)creates the function.
+_LIVENESS_FN = re.compile(r"create or replace function public\.health_liveness\(", re.I)
+_LIVENESS_ROW = re.compile(
+    r"insert into health_checks\b[^(]*\(([^)]*)\)"
+    r"\s*values\s*\(\s*('liveness',.*)\)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_SQL_VALUE = re.compile(r"'(?:[^']|'')*'|[^,\s][^,]*")
+
+
+def _liveness_row() -> dict[str, str]:
+    """The watcher's registry row: column -> SQL literal."""
+    defining = [
+        p for p in MIGRATIONS.glob("*.sql") if _LIVENESS_FN.search(p.read_text())
+    ]
+    newest = max(defining, key=lambda p: (int(p.name.split("_")[0]), p.name))
+    row = _LIVENESS_ROW.search(newest.read_text())
+    assert row, f"{newest.name} recreates health_liveness() but its row did not parse"
+    columns = [c.strip() for c in row.group(1).split(",")]
+    values = _SQL_VALUE.findall(row.group(2))
+    assert len(columns) == len(values), (columns, values)
+    return dict(zip(columns, values))
+
+
+def _text(literal: str) -> str:
+    assert literal[0] == literal[-1] == "'", literal
+    return literal[1:-1]
+
+
+def test_every_health_owner_path_is_an_spa_route() -> None:
+    """The Health page links each check to the page that owns the fix. A renamed
+    route would leave a dead link with no test failing, so every non-empty
+    owner_path must match a registry pattern ('' means no owner page)."""
+    from scripts.verify_pipeline import CHECKS
+
+    owners = {c.key: c.owner_path for c in CHECKS}
+    owners["liveness"] = _text(_liveness_row()["owner_path"])
+    patterns = [_pattern_to_regex(p) for p in _registry().values()]
+    assert any(owners.values()), "parsed no owner_path: the rail would pass vacuously"
+    stray = {
+        k: p for k, p in owners.items() if p and not any(r.match(p) for r in patterns)
+    }
+    assert not stray, f"owner_path with no route in {ROUTES_TS}: {stray}"
+
+
+_SECTION_KEY = re.compile(r"^\s*\['([a-z_]+)',\s*'[^']*'\],\s*$", re.M)
+
+
+def test_every_registry_domain_has_a_section_on_the_health_page() -> None:
+    """A check whose domain has no section is measured but never shown where it
+    belongs. SECTIONS (lib/healthChecks.ts) and DOMAINS must stay one list, and
+    the watcher's row, registered in SQL, must name one of them."""
+    from scripts.verify_pipeline import DOMAINS
+
+    ts = (REPO / "frontend" / "src" / "lib" / "healthChecks.ts").read_text()
+    block = ts.split("export const SECTIONS = [", 1)[1].split("] as const;", 1)[0]
+    assert tuple(_SECTION_KEY.findall(block)) == tuple(DOMAINS)
+    domain = _text(_liveness_row()["domain"])
+    assert domain in DOMAINS, f"health_liveness() registers domain {domain!r}: no section"
+
+
 def test_the_contract_names_only_what_actually_crosses_a_boundary() -> None:
     """Guards the file against becoming a second full route table.
 
-    Every entry must be emitted by the API or the extension. An entry nothing
-    emits is dead weight that still has to be kept in sync.
+    Every entry must be emitted by the extension. An entry nothing emits is dead
+    weight that still has to be kept in sync.
     """
-    emitters = (REPO / "api" / "notification_outbox.py").read_text() + EXTENSION_TS.read_text()
+    emitters = EXTENSION_TS.read_text()
     for key, pattern in CROSS_TERRITORY.items():
         literal_prefix = pattern.split("/:")[0]
         assert literal_prefix in emitters, (

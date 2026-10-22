@@ -28,6 +28,10 @@ describe('fmtPct', () => {
     expect(fmtPct(4.25, { digits: 0 })).toBe(`4${NBSP}%`);
   });
 
+  it('drops the "%" for the low end of a range', () => {
+    expect(fmtPct(3.6, { digits: 2, unit: false })).toBe('3,60');
+  });
+
   /* cs-CZ renders negatives with an ASCII hyphen-minus, not U+2212. Pinned
    * because a delta and its arrow must agree, and because a future switch to
    * a typographic minus would be a visible change, not an invisible one. */

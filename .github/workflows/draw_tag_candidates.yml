@@ -3,8 +3,7 @@ name: "Labeling: draw tag candidates"
 # Tops up each tag's candidate review queue by CLIP centroid retrieval. Pure SQL
 # against the embedding store — no GPU, no torch, no R2, no LLM key, and it writes
 # only tag_candidates rows, which carry no training semantics (migration 450), so a
-# bad run is deleted rather than unwound. Source-agnostic maintenance job, so it
-# carries NO `# portal:` tag.
+# bad run is deleted rather than unwound. Source-agnostic maintenance job.
 #
 # Dispatch-only. The schedule stays commented out until the shape of a good draw is
 # settled: a scheduled top-up that quietly fills queues with the wrong property mix

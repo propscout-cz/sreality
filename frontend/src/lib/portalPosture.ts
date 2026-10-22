@@ -1,5 +1,3 @@
-import type { PortalKind } from './types';
-
 /* Portal posture is DERIVED, never hand-set (migration 217 retired the manual
  * `stage` label). It is a pure function of three facts already in the registry:
  *   - kind                   — scraper vs on-demand URL parser
@@ -7,18 +5,21 @@ import type { PortalKind } from './types';
  *   - supports_complete_walk — THE operational maturity gate the runner trusts
  *     (rule #3/#21): true ⇒ the index walk infers delistings; false ⇒ delistings
  *     are only caught on a gone re-fetch.
- * Live health (the status dot) stays in the per-source scraper_health_checks
- * rollup, so the posture badge reflects stable identity and never flickers. */
+ * Live health stays on the Health page, so the posture badge reflects stable
+ * identity and never flickers. */
+
+/* `portals.kind` (migration 100): a scheduled scraper or an on-demand URL parser. */
+export type PortalKind = 'scraper' | 'parser';
 
 export type PortalPosture = 'live' | 'partial' | 'on_demand' | 'disabled';
 
 export function portalPosture(p: {
   kind: PortalKind;
   supports_complete_walk: boolean;
-  is_enabled?: boolean;
+  is_enabled: boolean;
 }): PortalPosture {
   if (p.kind === 'parser') return 'on_demand';
-  if (p.is_enabled === false) return 'disabled';
+  if (!p.is_enabled) return 'disabled';
   return p.supports_complete_walk ? 'live' : 'partial';
 }
 

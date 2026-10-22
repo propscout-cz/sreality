@@ -173,7 +173,7 @@ function setup({
   sources?: PropertySource[];
   openAdvertId?: number | null;
   canonicalListingId?: number;
-  initialLetters?: api.SplitLetters;
+  initialLetters?: api.Letters;
 } = {}) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -229,6 +229,8 @@ beforeEach(() => {
         broker_id: 7,
         broker_display_name: 'Jana Nováková',
         broker_firm_label: 'RE/MAX Alfa',
+        primary_email: null,
+        primary_phone: null,
       }],
     ]),
   );
