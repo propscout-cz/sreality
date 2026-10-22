@@ -312,7 +312,7 @@ export default function PropertyDetail() {
       {actingShare && <ActingBanner share={actingShare} />}
       {/* The header: the canonical advert's photos left; the property as its
           Browse card shows it, and where it is, right. */}
-      <div className="mt-4 grid items-start gap-x-8 gap-y-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(340px,1fr)]">
+      <div className="mt-4 grid items-start gap-x-8 gap-y-6 lg:items-stretch lg:grid-cols-[minmax(0,1.2fr)_minmax(340px,1fr)]">
         <PhotoMosaic
           images={images}
           loading={imagesQ.isLoading}

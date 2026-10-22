@@ -10,7 +10,8 @@ import ImageTagBadge from '@/components/ImageTagBadge';
 const ImageLightbox = lazyChunk(() => import('@/components/ImageLightbox'));
 
 const SHOWN = 5;
-const HEIGHT = 'h-[260px] sm:h-[360px] lg:h-[430px]';
+/* Beside the identity column on a wide screen it takes that column's height. */
+const HEIGHT = 'h-[260px] sm:h-[360px] lg:h-full lg:min-h-[430px]';
 
 /* Tile spans by how many photos there are, so a short set still fills the frame. */
 const LAYOUT: Record<number, string[]> = {
