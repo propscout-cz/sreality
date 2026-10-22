@@ -332,6 +332,19 @@ chips only, no panel. The chip markup is ONE component, `OverlayChip`, also adop
 `RentMapControls`, `GrowthMapControls` and `CityMapControls` (four copies of the same class string
 today).
 
+**Browse since 2026-10-22 (the map rail, `components/MapRail.tsx`).** The four corner stacks covered a
+quarter of a 450 px map (the map gets 42 % of the width beside the filters, so it is that narrow on a
+1440 px screen). Browse's map now carries one column of icon buttons at its right edge: Vrstvy (badge =
+layer groups drawn), the per-m² pin labels, the price labels, Piny a ceny, zoom in / out (createMap's
+`navigationControl: false`), and "Zobrazit vše" while a map area is set. Vrstvy opens a panel beside the
+rail (a bottom sheet on a map under 520 px — a container query on the map, not the window) holding every
+toggle: Města + "Obarvit podle" + Min., Růst cen a nájmů + its settings, then each registry section as
+above, its toggle a plain row (`OverlayChip` without `compact`) and its settings indented under it
+(`OverlayPanel`). The legends left the panel: `MapOverlayLegends` (plus the growth and city-index keys)
+draws a card per layer group that is on in the map's bottom-left corner, so a choropleth reads with the
+panel closed; the stack folds to one button, remembered per browser. The count pill keeps the pin key
+(swatch + count; the words from a 900 px map up); the full key and the pin limit live in Piny a ceny.
+
 ### State
 
 - `MapOverlayState.layers: string` (the canonical selection; `''` = none) replaces `showKraje`.

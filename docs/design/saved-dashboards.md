@@ -148,6 +148,9 @@ Dashboards (`api/routes/stats_dashboards.py`, mounted like the presets router):
   (queries, mutations, `loadPreset`, the Pipeline chip in `leading`). `PresetSaveModal.tsx` becomes
   `SavedSetSaveModal.tsx` with `checkbox` in place of `includeMapArea` (presets: "Include map area"; dashboards:
   "Uložit i nastavení filtru"). Behaviour of the preset bar is unchanged, pixel for pixel; its tests move with it.
+- **`collapse` (2026-10-22, presets only):** `{label, storageKey, show, fold}` folds the chips behind a
+  "Presety 11" toggle; folded, only the active chip shows (eleven presets wrapped to three rows above the
+  map). The fold is remembered per browser; the dashboards bar can take it with one prop.
 - **`components/stats/DashboardBar.tsx`** = SavedSetBar + the dashboard adapter, mounted at the top of the Stats tab
   (the `StatsDashboard` charts below it). Items: `GET /stats/dashboards`. Own chips drag; a shared chip shows the
   owner's email as its suffix, does not drag, and its menu offers "Načíst", "Uložit jako vlastní" and

@@ -28,6 +28,9 @@ export interface FilterPresetBarProps {
   onLoadPipelineView: () => void;
 }
 
+/* Whether the preset chips are unfolded (the bar folds to the active chip). */
+export const PRESETS_EXPANDED_KEY = 'sreality.browse.presetsExpanded';
+
 export const PRESET_COPY: SavedSetCopy = {
   kind: 'Filter preset',
   empty: 'No saved presets yet.',
@@ -149,6 +152,7 @@ export default function FilterPresetBar({
       dirty={dirty}
       copy={PRESET_COPY}
       leading={pipelineChip}
+      collapse={{ label: 'Presety', storageKey: PRESETS_EXPANDED_KEY, show: 'Zobrazit všechny presety', fold: 'Sbalit presety' }}
       onLoad={onLoad}
       onSaveNew={(name, withMapArea, color) => create.mutateAsync({ name, filter_spec: specOf(withMapArea), color })}
       onUpdate={(p, name, withMapArea, color) =>

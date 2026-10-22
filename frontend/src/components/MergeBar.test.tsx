@@ -112,6 +112,14 @@ describe('<MergeBar>', () => {
     await waitFor(() => expect(api.getMergePreview).toHaveBeenCalledWith({ 42: 'A', 43: 'A' }));
   });
 
+  /* Past three letters the button counts the groups: listing every letter grew it
+   * (and, beside the tabs, pushed Cancel off the screen). The statement names them. */
+  it('counts the groups on the button past three letters, naming them in its tooltip', () => {
+    renderWith(bar({ 1: 'A', 2: 'A', 3: 'B', 4: 'B', 5: 'C', 6: 'C', 7: 'D', 8: 'D' }));
+    expect(screen.getByRole('button', { name: 'Merge 4 groups' })).toHaveAttribute('title', 'Merge A, B, C, D');
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+  });
+
   it('says how many "Různé" rulings the statement would take back, once a letter holds two', async () => {
     vi.mocked(api.getMergePreview).mockResolvedValue(preview(3));
     renderWith(bar({ 42: 'A' }));

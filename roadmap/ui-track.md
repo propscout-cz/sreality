@@ -7,6 +7,16 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Browse map rail, folded presets, merge bar that wraps (2026-10-22, no migration)
+- **Done.** The operator picked variant B (a vertical icon rail) and the folding preset section from a
+  measured comparison (artifact "Ovládání mapy v Browse"). The map's four corner stacks became one rail at
+  the right edge plus two panels (Vrstvy, Piny a ceny); layer keys sit bottom-left and fold. Measured in a
+  real browser at 1440 × 900: the controls cover 5.7 % of the 450 px map, down from about 25 %. Presets fold
+  to the active one behind "Presety 11" (one row instead of three). Merge mode got its own row under the tabs:
+  letters and statement wrap, Merge and Cancel stay at the right edge (eight letters verified), and the
+  button counts groups past three. Detail: `docs/design/map-overlays.md` § MapOverlayControls.
+- **Next:** the Stats dashboards bar can fold the same way (one prop) if it grows.
+
 ### One status: the property's, on every surface (2026-10-22, migration 657)
 - **Done.** Operator report 2026-10-21: Neaktivní + Sreality drew a property still live on remax (cards
   and map). MS19 judged the status on the portal's ads while every surface draws the property's
