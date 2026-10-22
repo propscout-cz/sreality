@@ -1180,21 +1180,18 @@ last 24 h; named in wave 4, unchanged), whose larger is the **effective dwell**,
 | `<portal>/stuck` | active ads whose first unrefuted gone verdict — the earliest `gone` completion newer than the ad's `last_seen_at`, found per ad before counting (`db.gone_evidence`'s rule) — is older than the effective dwell + 2 × the portal's p90 walk-start gap (finished walks, 14 d) + 1 h (`delisting_stuck_slack_h`) | 25 or more (`delisting_stuck_warn`) | 250 or more (`delisting_stuck_fail`) |
 | `<portal>/verify_backlog` | age of the oldest VERIFY-priority queue row, claimed or not, not given up | above 6 h (`delisting_verify_warn_h`) | above 24 h (`delisting_verify_fail_h`) |
 | `<portal>/deferrals` | the flip cap's `verify_deferred`, summed per finished walk | 2 consecutive walks in which a unit reached the end, each with deferrals (`delisting_deferral_walks`) | never: the cap is a throttle by design |
-| `<portal>/precision` | of the `flipped` completions 48-72 h old, the share whose ad is active again (`listings.is_active` now), judged on its Wilson lower bound | above 10 % (`delisting_precision_warn`) | above 15 % (`delisting_precision_fail`) |
+| `<portal>/precision` | of a day of `flipped` completions from 2 × the portal's p90 walk-start gap + 1 h old (the stuck limit less the dwell: the age by which a walk has sighted any ad still listed), the share whose ad is active again (`listings.is_active` now), judged on its Wilson lower bound; a later return is a re-list, never counted | above 10 % (`delisting_precision_warn`) | above 15 % (`delisting_precision_fail`) |
 
 Minimum evidence: outflow needs a `baseline` of 50 a day (`delisting_outflow_min_baseline`), else
 Not measured — maxima is unscored by its volume, never by its name, and because the floor is judged
 on the quietest windows, remax and mmreality read Not measured about 68 % and 50 % of hours (45 %
 each on fixed windows; judging the floor on the busiest median is an open ruling); precision needs 50 flips
-(`delisting_precision_min_n`), else the cohort is pooled over 2-7 d. Outflow reads all its windows
+(`delisting_precision_min_n`) in its window, else Not measured; nothing is pooled. Outflow reads all its windows
 in one statement: one `listings_inactive_at_idx` range per lag (the 24 h widened by ±3 h), binned by
 the hour, then summed into the windows; a range per window made the planner seq-scan `listings`
 (4.6 s against 0.12 s, 10-19).
-The precision cohort reads a plain `completed_at` range over the pruned 7-day ledger with no portal
-predicate: the planner reads it whole (about 200k rows, a parallel seq scan, ~0.3 s) more cheaply
-than per portal through `detail_queue_completions_source_completed_idx`, which it prices about three
-times higher; the gone index is partial on `outcome = 'gone'`, so it cannot serve the `flipped`
-rows.
+The precision cohort reads one `detail_queue_completions_source_completed_idx` range per portal, its
+window's edge sent through an unnest (~0.11 s, 10-22).
 
 Basis: on 10-10 all nine portals made 0 ads inactive (no `inactive_at` stamp from 2026-10-09 21:39Z
 to 10-11 06:04Z) against medians of 400-1,900 a day. A crawler's flips land in bursts at its walk
@@ -1210,8 +1207,9 @@ oldest pending verdict 27.2 h; first verdict to inactive runs at p90 27.8-35.2 h
 Deferrals: the 10-13/15 ceskereality catch-up deferred nominations in two runs (2 walks, then 3) and cleared itself each time. Precision: the
 post-dwell steady state is sreality ~7 % (lower bound ~6 %) and at most 4.9 % (≤ 2.1 %) elsewhere;
 the blink cohorts read 26-49 %, and the pre-hysteresis ledger, where one verdict flipped, put
-sreality at 35 %, mmreality 15 %, remax 11 %, bezrealitky 7 % and idnes 6 %. The fixed 48-72 h
-horizon removes the right-censoring that kept `false_delist_share` non-OK on 23 of its 24 runs. When
+sreality at 35 %, mmreality 15 %, remax 11 %, bezrealitky 7 % and idnes 6 %. On 10-22 the 48-72 h
+horizon read idnes Problem (106 of 407): 104 were whole agency portfolios back 2-3 days after their
+flip under the same ids, re-lists; at the walk-gap window it reads 11 of 1,270. A fixed horizon removes the right-censoring that kept `false_delist_share` non-OK on 23 of its 24 runs. When
 precision rings, read the flipped rows' pages (`detail_queue_completions` → `listings.source_url`)
 before touching the dwell. At ship, sreality's 10-18 flip cohort reads ~17.5 % active again (lower
 bound ~15.5 %), so its precision cell may open Problem on 10-20/21: the blink tail that the 24 h

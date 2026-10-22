@@ -9,7 +9,8 @@ the rule it encodes:
 - stuck: per ad, the earliest gone verdict newer than its last sighting (a later sighting refutes an earlier
   verdict, never a later one), counted once per active ad, against the portal's limit or the fallback;
 - verify backlog: VERIFY-priority rows, claimed ones counted, given-up ones left out, aged from the oldest enqueue;
-- precision: flipped completions 48-72 h old as the cohort, 2-7 d as the pool, "active again" = is_active now;
+- precision: per portal, the flipped completions of a day from its own young edge (open there, closed a day on),
+  "active again" = is_active now, no pool;
 - walks: finished index walks only, a walk reached the end when ANY entry did, deferrals summed.
 Runs in CI's migrations lane (`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED=1`); skipped locally.
 """
@@ -200,23 +201,29 @@ def test_the_backlog_counts_claimed_presence_checks_and_leaves_out_given_up_ones
 # --- precision ---------------------------------------------------------------------------------------------------
 
 
-def test_precision_reads_the_48_72_h_cohort_and_the_2_7_d_pool_against_is_active_now(conn):
-    src = "w4-live-precision"
-    for native, days, hours_ago, active in (
-            ("p1", 0, 50, True), ("p2", 0, 60, False), ("p3", 0, 72, False),  # the cohort, its 72 h edge in
-            ("p5", 0, 48, True), ("p6", 0, 47, True),                         # too young: 48 h is open
-            ("p7", 0, 100, True), ("p9", 7, 0, True),                         # the pool, its 7 d edge in
-            ("p8", 8, 0, True)):                                              # older than the pool
+def test_precision_reads_a_day_of_flips_from_each_portals_own_edge_against_is_active_now(conn):
+    """An idnes-like portal from 19 h: a blink back within hours counts once its flip is in the day; a re-list
+    first sighted 50 h after its flip never does, for its flip has left the day by then."""
+    src, fast, unsent = "w4-live-precision", "w4-live-precision-fast", "w4-live-precision-unsent"
+    for native, hours_ago, active in (
+            ("p1", 25, True), ("p2", 30, False),     # in the day: one back, one still gone
+            ("p3", 43, False),                       # its old edge, closed: in
+            ("p4", 19, True), ("p6", 10, True),      # its young edge is open; a flip 10 h old is too young
+            ("p5", 50, True)):                       # a re-list back 50 h after its flip: past the day
         _ad(conn, src, native, active=active, seen_h=1)
-        _completion(conn, src, native, "flipped", days=days, hours_ago=hours_ago)
-    _completion(conn, src, "p4", "flipped", hours_ago=55)      # no listing row: not active again
+        _completion(conn, src, native, "flipped", hours_ago=hours_ago)
+    _completion(conn, src, "orphan", "flipped", hours_ago=30)   # no listing row: not active again
     _ad(conn, src, "g", active=True, seen_h=1)
-    _completion(conn, src, "g", "gone", hours_ago=50)          # a verdict, not a flip
+    _completion(conn, src, "g", "gone", hours_ago=25)           # a verdict, not a flip
+    _ad(conn, fast, "q", active=True, seen_h=1)
+    _completion(conn, fast, "q", "flipped", hours_ago=12)       # inside ITS day, from 10 h
+    _ad(conn, unsent, "u", active=True, seen_h=1)
+    _completion(conn, unsent, "u", "flipped", hours_ago=25)     # a portal the check does not send
 
-    rows = conn.execute(dl._PRECISION_SQL, {"from_h": dl._COHORT_H[0], "to_h": dl._COHORT_H[1],
-                                            "pool_d": dl._POOL_D}).fetchall()
+    rows = conn.execute(dl._PRECISION_SQL, {"sources": [src, fast], "young_s": [19 * _H, 10 * _H],
+                                            "span_s": dl._COHORT_S}).fetchall()
 
-    assert _rows(rows, src) == {src: (4, 1, 6, 3)}
+    assert _rows(rows, src, fast, unsent) == {src: (4, 1), fast: (1, 1)}
 
 
 # --- walks -------------------------------------------------------------------------------------------------------

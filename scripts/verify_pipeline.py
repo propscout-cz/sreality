@@ -229,7 +229,7 @@ THRESHOLDS: dict[str, Any] = {
     "delisting_stuck_warn": 25,
     # Problem at 250: verdict to inactive runs at p90 27.8-35.2 h, under limits of 38.9-47.5 h.
     "delisting_stuck_fail": 250,
-    # The hour of slack in that limit.
+    # The hour of slack in that limit, and in the age the precision cohort starts at.
     "delisting_stuck_slack_h": 1,
     # The oldest VERIFY-priority row: Watch past 6 h (7-day maximum 203 min).
     "delisting_verify_warn_h": 6,
@@ -237,11 +237,12 @@ THRESHOLDS: dict[str, Any] = {
     "delisting_verify_fail_h": 24,
     # Watch after 2 end-reached walks in a row with deferrals; never Problem (a throttle by design).
     "delisting_deferral_walks": 2,
-    # Precision: Wilson LB of 48-72 h flips active again past 10 % (sreality ~7 %, rest ≤ 4.9 %).
+    # Precision: Wilson LB of a day's flips from 2 x the p90 walk gap + slack old, active again,
+    # past 10 % (10-22: sreality 8.6 %, idnes 0.9 %).
     "delisting_precision_warn": 0.10,
     # Problem past 15 %: the blink cohorts read 26-49 %.
     "delisting_precision_fail": 0.15,
-    # Under 50 flips the cohort is pooled over 2-7 d.
+    # Under 50 flips in the portal's window the cell is Not measured; nothing is pooled.
     "delisting_precision_min_n": 50,
     # --- coverage (portal gauge): do we hold what each portal shows -----------------------
     # Residual (H − P − D) / D: Watch past 2 % (0-0.15 % on idnes, sreality and bazos).

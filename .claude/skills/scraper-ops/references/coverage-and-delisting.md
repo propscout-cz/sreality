@@ -545,9 +545,9 @@ HTML body is now a parse error, retried. `freshness._record_gone` no longer flip
 it nominates at `QUEUE_PRIORITY_VERIFY` so the drain's one decider rules.
 
 **Health.** The `delisting` alarm (wave 4) judges the rule per portal: its
-precision arm is the share of `flipped` ledger rows 48-72 h old whose ad is active
-again (a Wilson lower bound; Watch above 10%, Problem above 15%, n ≥ 50, else
-pooled over 2-7 d) — the false-flip rate the rule is meant to hold near the blink
+precision arm is the share of a day of `flipped` ledger rows from 2 × the portal's
+p90 walk gap + 1 h old whose ad is active again (a Wilson lower bound; Watch above
+10%, Problem above 15%, n ≥ 50, else Not measured) — the false-flip rate the rule is meant to hold near the blink
 tail beyond the dwell — and its stuck arm counts the active ads whose first
 unrefuted verdict is older than the effective dwell + 2 × the portal's p90 walk
 gap + 1 h; outflow, the verify backlog and the flip cap's deferrals are its other
