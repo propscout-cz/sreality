@@ -244,7 +244,7 @@ def test_a_page_with_no_pager_markup_corroborates_nothing(monkeypatch):
 def test_nomination_is_agenda_grain(monkeypatch):
     # A complete sale agenda spanning byt + dum + ostatni. presence_candidates must
     # nominate the WHOLE agenda (category_type=prodej) against EVERY agenda id —
-    # never the per-category byt slice — and only once per agenda per run.
+    # never the per-category byt slice; the runner asks once per agenda scope.
     items = [_item("b1"), _item("b2"), _item("d1", "Prodej domu"), _item("o1", "Prodej")]
     portal = _portal()
     _walk_one_agenda(monkeypatch, portal, total=4, items=items)
@@ -252,18 +252,17 @@ def test_nomination_is_agenda_grain(monkeypatch):
     captured: list[Any] = []
     monkeypatch.setattr(
         maxima_main.db, "presence_candidates",
-        lambda _c, source, cm, ct, seen, **kw: (
-            captured.append((source, cm, ct, set(seen))) or ([], 7)
+        lambda _c, source, scope, seen, **kw: (
+            captured.append((source, scope.get("category_main"), scope["category_type"], set(seen)))
+            or ([], 7)
         ),
     )
-    # First prodej descriptor (byt) triggers the agenda sweep.
-    assert portal.presence_candidates(object(), _CATEGORIES[0], {"b1", "b2"}) == ([], 7, {"category_main": None})
+    assert portal.presence_scope(_CATEGORIES[0]) == portal.presence_scope(_CATEGORIES[1]) == {
+        "category_type": "prodej"}
+    assert portal.presence_candidates(object(), _CATEGORIES[0], {"b1", "b2"}) == ([], 7)
     source, cm, ct, seen = captured[0]
     assert source == "maxima" and ct == "prodej" and cm is None   # agenda scope: category_type alone
     assert seen == {"b1", "b2", "d1", "o1"}        # the FULL agenda, not the byt slice
-    # A second prodej descriptor (dum) must NOT re-nominate the same agenda.
-    assert portal.presence_candidates(object(), _CATEGORIES[1], {"d1"}) is None
-    assert len(captured) == 1
 
 
 def test_the_drain_owns_the_gone_flip():
@@ -302,10 +301,9 @@ def test_nomination_ignores_unmeasurable_count(monkeypatch):
     captured: list[Any] = []
     monkeypatch.setattr(
         maxima_main.db, "presence_candidates",
-        lambda _c, source, cm, ct, seen, **kw: captured.append(set(seen)) or ([], 3),
+        lambda _c, source, scope, seen, **kw: captured.append(set(seen)) or ([], 3),
     )
-    assert portal.presence_candidates(object(), _CATEGORIES[0], {"b1", "b2"}) == (
-        [], 3, {"category_main": None})
+    assert portal.presence_candidates(object(), _CATEGORIES[0], {"b1", "b2"}) == ([], 3)
     assert captured == [{"b1", "b2"}]
 
 

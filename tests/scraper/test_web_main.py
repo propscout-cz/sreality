@@ -74,8 +74,8 @@ def test_the_config_is_one_agenda_with_the_shared_limiter() -> None:
 
 
 def test_the_indexless_walk_reaches_the_end_and_nominates_null_category_rows(monkeypatch) -> None:
-    """Every active web ad due a check is nominated, a NULL category included (the agenda is
-    the whole portal), through the adapter's own query, scoped category_main=None."""
+    """Every active web ad due a check is nominated, a NULL category included: its one unit has
+    no scope, so the whole agenda is the runner's orphan scope, with no seen set to exclude."""
     rows = [("https://a.example/1", "https://a.example/1", 4_500_000),
             ("https://b.example/x?id=2", "https://b.example/x?id=2", None)]
     conn = _Conn(rows=rows, active=5)
@@ -89,11 +89,10 @@ def test_the_indexless_walk_reaches_the_end_and_nominates_null_category_rows(mon
     assert rc == 0 and conn.closed
     assert queued == [(SOURCE, None, "", rows, 5)]
     (entry,) = agg["by_category"]
-    assert (entry["walk_reached_end"], entry["walk_coverage"], entry["listings_to_verify"]) == (
-        True, "complete", 2)
+    assert (entry["walk_reached_end"], entry["walk_coverage"]) == (True, "complete")
     presence_sql, params = conn.executed[-1]
-    assert "category_main" not in presence_sql and "category_type" not in presence_sql
-    assert params == {"source": SOURCE} and db.NOMINABLE_PREDICATE in presence_sql
+    assert "category_main" not in presence_sql and "<> ALL" not in presence_sql
+    assert params == (SOURCE,) and db.NOMINABLE_PREDICATE in presence_sql
 
 
 def test_a_walk_whose_budget_is_already_spent_nominates_nothing(monkeypatch) -> None:

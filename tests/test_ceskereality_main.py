@@ -992,26 +992,15 @@ def test_search_url_puts_subtype_before_kraj():
         "https://www.ceskereality.cz/prodej/byty/praha/?strana=93")
 
 
-# --- nomination (no ceskereality slice collapses since migration 659) -------------------------
+# --- nomination --------------------------------------------------------------------------------
 #
-# Rule #3 since 2026-09-07: a complete walk nominates its unseen rows for a page
-# check, it does not delist; each (category_main, category_type) is one walked scope.
+# Rule #3 since 2026-09-07: a complete walk nominates its unseen rows for a page check; the runner
+# nominates each (category_main, category_type) once, with its kraj slices' union, and the ads in
+# no walked category (the /drazby/ auctions) as orphans. This adapter keeps no buffer of its own.
 
-def _nominating_portal(monkeypatch):
-    calls: list[dict] = []
-    monkeypatch.setattr(
-        m.db, "presence_candidates",
-        lambda _c, src, cm, ct, seen, **kw: calls.append(
-            {"src": src, "cm": cm, "ct": ct, "seen": set(seen), **kw}) or ([], len(seen)),
-    )
-    return m.CeskerealityPortal(default_config("ceskereality")), calls
-
-
-def test_nomination_single_slice_group_nominates_immediately(monkeypatch):
-    portal, calls = _nominating_portal(monkeypatch)
-    assert portal.presence_candidates(
-        object(), {"sale_type": "prodej", "category": "byty"}, {"b1"}) == ([], 1)
-    assert calls == [{"src": "ceskereality", "cm": "byt", "ct": "prodej", "seen": {"b1"}}]
+def test_the_runner_groups_the_slices_not_the_adapter():
+    assert not hasattr(m.CeskerealityPortal, "presence_candidates")
+    assert not hasattr(m.CeskerealityPortal, "note_empty_slice")
 
 
 def test_the_old_sweep_seam_is_gone():

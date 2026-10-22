@@ -116,8 +116,9 @@ def _nominations(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     captured: list[Any] = []
     monkeypatch.setattr(
         remax_main.db, "presence_candidates",
-        lambda _c, source, cm, ct, seen, **kw: (
-            captured.append((source, cm, ct, set(seen))) or ([], 4)
+        lambda _c, source, scope, seen, **kw: (
+            captured.append((source, scope.get("category_main"), scope["category_type"], set(seen)))
+            or ([], 4)
         ),
     )
     return captured
@@ -136,14 +137,13 @@ def test_nomination_is_agenda_grain(monkeypatch: pytest.MonkeyPatch) -> None:
         3, ("r1", "Prodej bytu 2+kk"), ("r2", "Prodej bytu"), ("r3", "Prodej rodinného domu"),
     )]})
     captured = _nominations(monkeypatch)
-    # First prodej descriptor (byt) sweeps the whole sale agenda.
-    assert portal.presence_candidates(object(), _CATEGORIES[0], {"r1", "r2"}) == ([], 4, {"category_main": None})
+    # Every prodej descriptor shares the agenda scope, so the runner asks once per agenda.
+    assert portal.presence_scope(_CATEGORIES[0]) == portal.presence_scope(_CATEGORIES[1]) == {
+        "category_type": "prodej"}
+    assert portal.presence_candidates(object(), _CATEGORIES[0], {"r1", "r2"}) == ([], 4)
     source, cm, ct, seen = captured[0]
     assert source == "remax" and ct == "prodej" and cm is None   # agenda scope: category_type alone
     assert seen == {"r1", "r2", "r3"}              # the FULL sale agenda, not the byt slice
-    # A second prodej descriptor (dum) must NOT re-nominate.
-    assert portal.presence_candidates(object(), _CATEGORIES[1], {"r3"}) is None
-    assert len(captured) == 1
 
 
 def test_reaching_the_portals_own_count_is_the_end(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -27,7 +27,7 @@ whole agenda (sale ≡ category_type) nominates every active row it did not see 
 a page check once the walk REACHED THE PORTAL'S END (rule #3, structural: remax
 said there is nothing after this page and no stop of OURS fired; the collected /
 declared ratio is logged, never a gate), scoped by category_type against the full
-walk's id set (`db.presence_candidates` with category_main=None), never the
+walk's id set (its `presence_scope` is `{"category_type": …}`), never the
 title-derived slice. A gone detail fetch still flips that one listing at once.
 """
 
@@ -92,7 +92,6 @@ class RemaxPortal(portal_runner.PortalDefaults):
         self.shared_rate_limiter = config.limits.shared_rate_limiter
         self.price_change_min_pct = config.limits.price_change_min_pct
         self._agenda_cache: dict[int, _AgendaWalk] = {}
-        self._swept_agendas: set[int] = set()  # delist each agenda once per run
 
     # --- index-walk seams ---
     def set_index_page_cap(self, pages: int | None) -> None:
@@ -321,27 +320,26 @@ class RemaxPortal(portal_runner.PortalDefaults):
         # needs an end of its own.
         return seen, counts, len(seen), pages, walk.reached_end
 
+    def presence_scope(self, category: dict[str, Any]) -> dict[str, Any] | None:
+        ct = category.get("category_type")
+        return None if ct is None else {"category_type": ct}
+
     def presence_candidates(
         self, conn: Any, category: dict[str, Any], seen: set[str],
-    ) -> tuple[list[tuple[str, str | None, int | None]], int, dict[str, Any]] | None:
+    ) -> tuple[list[tuple[str, str | None, int | None]], int] | None:
         """Agenda-grain nomination (rule #3, 2026-09-07). The runner calls this
-        once per (cm, ct) descriptor, but remax's completeness is per AGENDA
-        (sale == category_type), so the whole agenda is nominated once --
-        scoped by category_type against the FULL agenda walk's id set, never the
-        title-derived per-category slice (a listing whose index-time title
-        category differs from its detail-time category would otherwise be
-        nominated by a walk that did see it). The passed `seen` (this
-        category's slice) is intentionally ignored. An agenda that did not reach
-        remax's end nominates nothing: its unseen set is then the part of the
-        index we never visited, not evidence of absence."""
-        cm, ct = self.category_labels(category)
+        once per agenda scope, because remax's completeness is per AGENDA
+        (sale == category_type): the whole agenda, scoped by category_type, against
+        the FULL agenda walk's id set, never the title-derived per-category slices
+        (an id whose title maps to no descriptor's category would otherwise be
+        nominated by a walk that did see it); the passed `seen` is ignored. An
+        agenda that did not reach remax's end nominates nothing: its unseen set is
+        then the part of the index we never visited, not evidence of absence."""
+        ct = category.get("category_type")
         sale = int(category.get("sale") or 1)
-        if ct is None or sale in self._swept_agendas:
-            return None
         walk = self._agenda_cache.get(sale)
         if walk is None or not walk.reached_end:
             return None
-        self._swept_agendas.add(sale)
         coverage = walk_coverage(len(walk.native_ids), walk.total)
         LOG.info(
             "VERIFY agenda sale=%d ct=%s collected=%d total=%s stop=%s coverage=%s",
@@ -357,10 +355,7 @@ class RemaxPortal(portal_runner.PortalDefaults):
                 "COVERAGE agenda sale=%d ct=%s collected=%d declared=%s verdict=%s stop=%s",
                 sale, ct, len(walk.native_ids), walk.total, coverage, walk.stop_reason,
             )
-        candidates, active_rows = db.presence_candidates(
-            conn, SOURCE, None, ct, set(walk.native_ids),
-        )
-        return candidates, active_rows, {"category_main": None}
+        return db.presence_candidates(conn, SOURCE, {"category_type": ct}, set(walk.native_ids))
 
     # --- detail-drain seams ---
     def fetch_detail(

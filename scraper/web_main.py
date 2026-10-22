@@ -11,12 +11,13 @@ Its two honest differences are declared seams, not branches:
 
   * **No index.** `indexless = True`: the walk has nothing to page, so `walk_category`
     returns an empty seen set that reached the end (declared total 0, so coverage reads
-    `complete`), and the runner — which refuses an empty seen set for every other portal —
-    asks this adapter's own `presence_candidates`: every active `web` row with no live queue
-    row and no completion within `delist_policy.RECHECK_THROTTLE`, NULL categories included,
-    oldest sighting first. `web_index_walk.yml` (every 6 h, so the 24 h throttle and not
-    the cron sets the cadence: each ad is checked every 24–30 h) is that nomination; the
-    drain fetches each page and the page decides (rule 3). `delist_flip_cap` never throttles
+    `complete`); its one unit has no labels, so no nomination scope, and every active `web`
+    row is an orphan the runner nominates without a seen set (it refuses an empty one for
+    every other portal): no live queue row, no completion within
+    `delist_policy.RECHECK_THROTTLE`, oldest sighting first. `web_index_walk.yml` (every
+    6 h, so the 24 h throttle and not the cron sets the cadence: each ad is checked every
+    24–30 h) is that nomination; the drain fetches each page and the page decides (rule 3).
+    `delist_flip_cap` never throttles
     a portal under its 2,000-row floor, and the gone-rate breaker needs 20 ingest fetches in
     a run, so neither binds here: a dead web ad closes after two gone verdicts at least
     RECHECK_THROTTLE (24 h) apart — 24–60 h after it dies. Nothing special-cases that.
@@ -42,7 +43,7 @@ import logging
 from typing import Any
 from urllib.parse import urlsplit
 
-from scraper import db, portal_runner
+from scraper import portal_runner
 from scraper.portal import PortalConfig, deadline_reached
 from scraper.portal_base import ListingGoneError
 from scraper.portal_identity import WEB, Resolved, canonical_url, resolve_url
@@ -56,15 +57,6 @@ SOURCE = WEB
 
 _EMPTY_COUNTS = {"found_new": 0, "enqueued": 0}
 
-_PRESENCE_SQL = f"""
-    SELECT l.source_id_native, l.source_url, l.price_czk
-    FROM listings l
-    WHERE l.is_active = true
-      AND l.source = %(source)s
-      AND {db.NOMINABLE_PREDICATE}
-    ORDER BY l.last_seen_at ASC NULLS FIRST, l.id
-"""
-_ACTIVE_SQL = "SELECT count(*) FROM listings WHERE is_active = true AND source = %(source)s"
 
 
 def _site(host: str | None) -> str:
@@ -124,20 +116,6 @@ class WebPortal(portal_runner.PortalDefaults):
         probe_pages: int,
     ) -> tuple[set[str], dict[str, int], int | None, int, bool]:
         return set(), dict(_EMPTY_COUNTS), 0, 0, True
-
-    def presence_candidates(
-        self, conn: Any, category: dict[str, Any], seen: set[str],
-    ) -> tuple[list[tuple[str, str | None, int | None]], int, dict[str, Any]]:
-        """Every active `web` ad due a page check, NULL categories included (the agenda
-        is the whole portal, so the scope is `category_main=None`)."""
-        params = {"source": SOURCE}
-        with conn.cursor() as cur:
-            cur.execute(_ACTIVE_SQL, params)
-            active_rows = int(cur.fetchone()[0])
-            cur.execute(_PRESENCE_SQL, params)
-            rows = cur.fetchall()
-        candidates = [(str(n), db.detail_ref(SOURCE, url), price) for n, url, price in rows]
-        return candidates, active_rows, {"category_main": None}
 
     # --- detail-drain seams ---
     def fetch_detail(self, client: WebClient, native_id: str, detail_ref: str | None) -> DrainItem:

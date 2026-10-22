@@ -9,7 +9,8 @@ district-split lives inside its `walk_category`, not here — justified in revie
 - run_index_walk: per category, walk the index + enqueue new/changed ids into the
   shared listing_detail_queue (source-generic, migration 108); nominate the rows
   the walk did not see for a page check, but only from a walk that reached the
-  portal's end (`reached_end`, architectural rule #3). Records run_type='index'.
+  portal's end (`reached_end`, architectural rule #3) -- per scope, and, once every
+  unit did, the orphans in no scope. Records run_type='index'.
 - reconcile_sightings: the ONE sighting diff. Each adapter's walk_category (and
   each bespoke probe page) hands what it saw here: every sighted row we hold is
   touched, new + repriced ids are enqueued. No adapter diffs sightings itself.
@@ -147,25 +148,24 @@ class Portal(Protocol):
     # seen_key: "native" (default; walk_category returns source_id_native strings)
     #   or "sreality_id" (integer sreality ids). Picks the column the runner's
     #   default nomination query excludes the seen set from.
-    # presence_candidates(conn, category, seen)
-    #   -> (candidates, active_rows) | (candidates, active_rows, scope) | None:
-    #   override the default nomination for portals whose index sections do not
-    #   map 1:1 onto (category_main, category_type) -- bazos scopes by subtype,
-    #   ceskereality + realitymix buffer sibling slices and nominate once on the
-    #   last, remax/maxima nominate a whole agenda. `scope` names what was actually
-    #   nominated ({"subtype": ...} / {"category_main": None}) so the throttle
-    #   and the operator override match the same scope. None means "not yet".
-    #   `candidates` are (native_id, detail_ref, price) triples, oldest-unseen
-    #   first, as db.presence_candidates returns them.
+    # presence_scope(category) -> dict | None: the rows the unit nominates from, as
+    #   db.SCOPE_COLUMNS -> value (default: its two labels; None = it nominates
+    #   nothing). bazos narrows to its section's subtype, remax/maxima widen to the
+    #   agenda ({"category_type": ...}). Units with one scope nominate once, on the
+    #   last, with their union; an active ad in no scope is an orphan (rule #3).
+    # presence_candidates(conn, category, seen) -> (candidates, active_rows) | None:
+    #   the candidates of the unit's scope when the walk's seen set is not the right
+    #   exclusion (remax/maxima: the whole agenda walk's ids). `candidates` are
+    #   (native_id, detail_ref, price) triples, oldest-unseen first.
+    # narrowed (bool, default False): a dispatch walks a subset of the portal's units
+    #   (bazos --sale-type/--category), so an ad in none of them is no orphan.
     # live_categories(limiter) -> (live, configured) | None: the portal's own
     #   category vocabulary as it lists it right now vs as configured; the runner
     #   records any difference in portal_category_drift (alarm, not gate).
-    # note_empty_slice(category): ceskereality + realitymix keep the sibling-slice
-    #   counter honest when the runner refuses an empty seen set.
     # indexless (bool, default False): the portal has no index to walk (`web`: any site an
-    #   operator pastes), so its walk sees nothing BY CONSTRUCTION and its finished walk
-    #   still nominates — through its own presence_candidates, which must exist. The
-    #   empty-seen refusal below stays for every other portal.
+    #   operator pastes), so its walk sees nothing BY CONSTRUCTION; its units have no
+    #   scope and its finished walk nominates every active ad as orphans. The empty-seen
+    #   refusal stays for every other portal.
     # coverage_denominator_is_upper_bound: ceskereality; picks the COVERAGE log
     #   level and is written into every by_category entry as declared_is_upper_bound.
 
@@ -194,6 +194,7 @@ class PortalDefaults:
 
     source: str
     total_is_count: bool = False
+    narrowed: bool = False
 
     def connect_index(self) -> Any:
         return db.connect()
@@ -295,90 +296,115 @@ def configure_logging(verbose: bool) -> None:
     )
 
 
-def _queue_presence_checks(
-    portal: Portal, conn: Any, category: Any, seen: set[Any], cm: str | None, ct: str | None,
-) -> tuple[int, int]:
-    """Rule #3 (2026-09-07): a finished walk does not delist, it NOMINATES.
+Scope = Mapping[str, Any]
+ScopeKey = tuple[tuple[str, Any], ...]
 
-    Every active row of the category the walk did not see is queued for a page
-    check at the lowest priority; the detail drain visits the page and the page
-    decides (gone -> flip, alive -> refresh, error -> next pass). Nothing here
-    consults supports_complete_walk any more: that flag gated a sweep that could
-    be wrong, and a nomination cannot be -- it costs one fetch. What still gates
-    is `reached_end`: a walk that stopped for a reason of OURS (deadline, page
-    cap, --limit, a slice never reached, an exception, an uncorroborated empty
-    page) nominates nothing, because its unseen set is not evidence, it is the
-    part of the portal it never reached. A count that came up short is NOT such a
-    reason -- the walk that reached the portal's last page nominates its gap and
-    lets the page decide.
-    """
+
+@dataclass
+class _ScopeGroup:
+    """The units of one nomination scope still to reach the end this walk, and what they saw."""
+
+    left: int = 0
+    seen: set[Any] = field(default_factory=set)
+
+
+def _scope(portal: Portal, category: Any) -> Scope | None:
+    """The rows one unit nominates from: the portal's `presence_scope`, else its labels; None = none."""
+    own = getattr(portal, "presence_scope", None)
+    if own is not None:
+        return own(category)
+    cm, ct = portal.category_labels(category)
+    return None if cm is None or ct is None else {"category_main": cm, "category_type": ct}
+
+
+def _scope_key(scope: Scope) -> ScopeKey:
+    return tuple(sorted(scope.items()))
+
+
+def _named(seen: set[Any], cm: str | None, ct: str | None) -> set[Any]:
     nulls = sum(1 for x in seen if x is None)
     if nulls:
         LOG.warning("VERIFY dropped %d NULL id(s) from the seen set cm=%s ct=%s", nulls, cm, ct)
-        seen = {x for x in seen if x is not None}
-    indexless = bool(getattr(portal, "indexless", False))
-    if not seen and not indexless:
-        # walk_coverage calls a measured zero complete (declared 0, collected 0),
-        # and it is right to -- but "I saw nothing" proves nothing about what is
-        # missing: with an empty seen set the nomination query's `<> ALL('{}')`
-        # is true for every row, so the WHOLE scope would be queued. An emptied
-        # category (a retired slug, a throttled shell page that confirmed empty
-        # twice) is exactly when the portal is least trustworthy; its rows wait
-        # for a walk that saw something, or for their own gone detail fetch.
+    return {x for x in seen if x is not None}
+
+
+def _queue_presence_checks(
+    portal: Portal, conn: Any, category: Any, scope: Scope | None,
+    groups: Mapping[ScopeKey, _ScopeGroup], seen: set[Any],
+    cm: str | None, ct: str | None,
+) -> tuple[int, int]:
+    """Rule #3 (2026-09-07): a finished walk does not delist, it NOMINATES.
+
+    Every active row of the unit's scope the walk did not see is queued for a page
+    check at the lowest priority; the detail drain visits the page and the page
+    decides (gone -> flip, alive -> refresh, error -> next pass). What gates is
+    `reached_end` (the caller's): a walk that stopped for a reason of OURS
+    nominates nothing, because its unseen set is the part of the portal it never
+    reached. A count that came up short is NOT such a reason.
+
+    Units sharing a scope (realitymix's `domy` + `chaty` slices both -> dum; remax's
+    and maxima's descriptors of one agenda) nominate ONCE, on the last of them, with
+    the union of their ids: one unit's seen set would nominate its siblings' whole
+    population. A sibling that did not reach the end leaves the group open, so
+    nothing of that scope is nominated this walk.
+    """
+    if scope is None:
+        LOG.info("VERIFY skipped cm=%s ct=%s: the category has no nomination scope", cm, ct)
+        return 0, 0
+    group = groups[_scope_key(scope)]
+    group.seen |= seen
+    group.left -= 1
+    if group.left:
+        return 0, 0
+    if not group.seen:
+        # walk_coverage calls a measured zero complete, but "I saw nothing" proves
+        # nothing: `<> ALL('{}')` is true for every row, so the WHOLE scope would be
+        # queued -- exactly when the portal is least trustworthy (a retired slug, a
+        # throttled shell page). Its rows wait for a walk that saw something.
         LOG.warning(
             "VERIFY skipped cm=%s ct=%s: the walk saw no listings, so it cannot "
             "nominate any (an empty seen set would nominate the whole scope)",
             cm, ct,
         )
-        # A portal whose index slices COLLAPSE onto one canonical category
-        # (ceskereality, realitymix) buffers each slice's ids and nominates on the
-        # group's last slice, counting the slices it has been handed. Returning here
-        # without telling it would leave that counter permanently one short, so the
-        # group would never nominate again — the same silent stall rule #3 was
-        # rewritten to remove. Record the slice; nominate nothing from it.
-        note = getattr(portal, "note_empty_slice", None)
-        if note is not None:
-            try:
-                note(category)
-            except Exception as exc:  # noqa: BLE001 - bookkeeping must not fail a walk
-                LOG.warning("note_empty_slice failed cm=%s ct=%s: %s", cm, ct, exc)
         return 0, 0
-    custom = getattr(portal, "presence_candidates", None)
-    if custom is not None:
-        scope = custom(conn, category, seen)
-    elif indexless:
-        LOG.warning("VERIFY skipped: an indexless portal nominates only through its own "
-                    "presence_candidates, and %s has none", portal.source)
+    own = getattr(portal, "presence_candidates", None)
+    found = own(conn, category, group.seen) if own is not None else db.presence_candidates(
+        conn, portal.source, scope, group.seen, seen_key=getattr(portal, "seen_key", "native"))
+    if found is None:
         return 0, 0
-    elif cm is None or ct is None:
-        LOG.info("VERIFY skipped: category has no (category_main, category_type) label")
+    return _enqueue_nominated(portal, conn, scope, *found)
+
+
+def _queue_orphan_checks(
+    portal: Portal, conn: Any, scopes: list[Scope], seen: set[Any],
+) -> tuple[int, int]:
+    """Rule #3 made total: a walk whose EVERY unit reached the portal's end also nominates
+    the active ads in no walked scope (a NULL label, an auction the walk does not ask for),
+    against every id it saw. A sighting is label-blind and a unit's nomination is not, so
+    without this an ad no unit covers is never checked once it leaves the index. An
+    indexless portal's units cover nothing and its walk sees nothing: this is its whole
+    nomination. Otherwise an empty seen set nominates nothing, as above."""
+    indexless = bool(getattr(portal, "indexless", False))
+    if not seen and not indexless:
+        LOG.warning("VERIFY orphans skipped: the walk saw no listings")
         return 0, 0
-    else:
-        scope = db.presence_candidates(
-            conn, portal.source, cm, ct, seen,
-            seen_key=getattr(portal, "seen_key", "native"),
-        )
-    if scope is None:
-        return 0, 0
-    # An override may append a scope dict: {"subtype": ...} when it narrowed the
-    # nomination (bazos), {"category_main": None} when it widened it to an
-    # agenda (remax, maxima). The throttle, the operator override match and the
-    # deferral record then describe the SAME scope the candidates came from --
-    # otherwise a subtype-named override could never match, and an agenda-wide
-    # deferral would be filed under one descriptor's category.
-    extra: dict[str, Any] = {}
-    if len(scope) == 3:
-        candidates, active_rows, extra = scope
-    else:
-        candidates, active_rows = scope
-    cm_scope = extra.get("category_main", cm)
+    candidates, active_rows = db.orphan_candidates(
+        conn, portal.source, scopes, seen or None, seen_key=getattr(portal, "seen_key", "native"))
+    return _enqueue_nominated(portal, conn, {}, candidates, active_rows, label="orphans")
+
+
+def _enqueue_nominated(
+    portal: Portal, conn: Any, scope: Scope,
+    candidates: list[tuple[str, str | None, int | None]], active_rows: int, label: str = "",
+) -> tuple[int, int]:
+    """Queue at VERIFY under the flip cap; the throttle, the operator override and the deferral
+    record name the scope the candidates came from (an orphan: no category)."""
+    cm, ct, sub = scope.get("category_main"), scope.get("category_type"), scope.get("subtype")
     queued, deferred = db.enqueue_presence_checks(
-        conn, portal.source, cm_scope, ct or "", candidates,
-        active_rows=active_rows, subtype=extra.get("subtype"),
-    )
+        conn, portal.source, cm, ct or "", candidates, active_rows=active_rows, subtype=sub)
     LOG.info(
-        "VERIFY cm=%s ct=%s subtype=%s candidates=%d queued=%d deferred=%d active=%d",
-        cm_scope, ct, extra.get("subtype"), len(candidates), queued, deferred, active_rows,
+        "VERIFY %s candidates=%d queued=%d deferred=%d active=%d",
+        label or f"cm={cm} ct={ct} subtype={sub}", len(candidates), queued, deferred, active_rows,
     )
     return queued, deferred
 
@@ -454,10 +480,19 @@ def run_index_walk(
     total_is_count = bool(getattr(portal, "total_is_count", False))
     upper_bound = bool(getattr(portal, "coverage_denominator_is_upper_bound", False))
     conn = None if dry_run else portal.connect_index()
+    orphans = (0, 0)
 
     try:
         _record_category_drift(portal, conn, limiter)
-        for category in portal.categories():
+        categories = portal.categories()
+        scopes = [_scope(portal, c) for c in categories]
+        groups: dict[ScopeKey, _ScopeGroup] = {}
+        for scope in scopes:
+            if scope is not None:
+                groups.setdefault(_scope_key(scope), _ScopeGroup()).left += 1
+        walk_seen: set[Any] = set()
+        ended = 0
+        for category, scope in zip(categories, scopes):
             if deadline_reached(deadline):
                 LOG.info(
                     "INDEX time budget %.0fs reached; stopping cleanly before the "
@@ -493,6 +528,9 @@ def run_index_walk(
 
             to_verify = deferred = 0
             if conn is not None and reached_end:
+                ended += 1
+                named = _named(seen_ids, cm_text, ct_text)
+                walk_seen |= named
                 if coverage != "complete":
                     # A portal whose declared denominator is an UPPER BOUND its slices
                     # cannot reach by construction (ceskereality reports the national
@@ -509,7 +547,7 @@ def run_index_walk(
                     )
                 try:
                     to_verify, deferred = _queue_presence_checks(
-                        portal, conn, category, seen_ids, cm_text, ct_text,
+                        portal, conn, category, scope, groups, named, cm_text, ct_text,
                     )
                 except Exception as exc:  # noqa: BLE001 - a nomination failure is not a walk failure
                     # The walk's real work (touch + enqueue) is done and committed;
@@ -562,6 +600,15 @@ def run_index_walk(
                 "declared_is_upper_bound": upper_bound,
             })
 
+        # Only a walk of the portal's WHOLE agenda knows an ad is in no unit: a dispatch that
+        # narrowed it (bazos --sale-type/--category) leaves the rest of the portal unwalked.
+        if conn is not None and categories and ended == len(categories) and not getattr(
+                portal, "narrowed", False):
+            try:
+                orphans = _queue_orphan_checks(portal, conn, [dict(k) for k in groups], walk_seen)
+            except Exception as exc:  # noqa: BLE001 - a nomination failure is not a walk failure
+                LOG.exception("VERIFY orphans failed: %s -- nothing nominated this walk", exc)
+
         LOG.info(
             "INDEX total=%d pages=%d enqueued=%d",
             total_index, total_pages, total_enqueued,
@@ -573,8 +620,8 @@ def run_index_walk(
     LOG.info(
         "RUN done pages=%d enqueued=%d to_verify=%d deferred=%d errors=%d",
         total_pages, total_enqueued,
-        sum(c["listings_to_verify"] for c in category_aggregates),
-        sum(c["verify_deferred"] for c in category_aggregates),
+        sum(c["listings_to_verify"] for c in category_aggregates) + orphans[0],
+        sum(c["verify_deferred"] for c in category_aggregates) + orphans[1],
         failed_categories,
     )
     scrape_agg: dict[str, Any] = {

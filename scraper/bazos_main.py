@@ -381,21 +381,15 @@ class BazosPortal(portal_runner.PortalDefaults):
         )
         return "barren"
 
-    def presence_candidates(
-        self, conn: Any, category: dict[str, str], seen: set[str],
-    ) -> tuple[list[tuple[str, str | None, int | None]], int, dict[str, Any]] | None:
+    def presence_scope(self, category: dict[str, str]) -> dict[str, Any] | None:
+        # Scoped to the section's subtype: bazos walks fine sections that collapse onto
+        # one category_main (chata + dum -> dum), so a per-label nomination would send
+        # every sibling section's rows to the drain for a page check on every walk.
         cm, ct = self.category_labels(category)
         if cm is None or ct is None:
             return None
-        # Scope the nomination to this section's subtype: bazos walks fine
-        # sections that collapse onto one category_main (chata + dum -> dum), so
-        # an un-scoped per-section nomination would send every sibling section's
-        # rows to the drain for a page check on every walk.
         sub = SUBTYPE.get(category.get("category"))
-        candidates, active_rows = db.presence_candidates(
-            conn, SOURCE, cm, ct, seen, subtype=sub, scope_subtype=True,
-        )
-        return candidates, active_rows, {"subtype": sub}
+        return {"category_main": cm, "category_type": ct, "subtype": sub}
 
     def active_count(self, conn: Any, category: dict[str, str]) -> int | None:
         cm, ct = self.category_labels(category)
@@ -470,6 +464,7 @@ def main(argv: list[str] | None = None) -> int:
     portal.index_rate = limits.index_rate
     portal.shared_rate_limiter = limits.shared_rate_limiter
     portal.price_change_min_pct = limits.price_change_min_pct
+    portal.narrowed = bool(args.sale_type or args.category)
 
     # Resolve operational limits: CLI override > per-portal DB config > default.
     workers = args.workers if args.workers is not None else limits.detail_workers
