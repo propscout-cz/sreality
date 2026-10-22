@@ -38,7 +38,7 @@ import ListingCards from '@/components/ListingCards';
 /* The Stats tab (the chart builder, dnd-kit, recharts) is its own chunk: it is a
  * secondary tab, and the first-visit bundle has a budget (scripts/bundle-budget.mjs). */
 const StatsDashboard = lazyChunk(() => import('@/components/stats/StatsDashboard'));
-import type { AnchorPoint, MapFlyToCommand } from '@/components/ListingMap';
+import type { AnchorPoint, MapFlyToCommand, MapFrameCommand } from '@/components/ListingMap';
 import type { MapySuggestion } from '@/lib/maps';
 import { fetchDatasets, fetchGrowth, fetchGrowthShapes, fetchSeries, priceStatsKeys } from '@/lib/priceStats';
 import { buildHoverData, type GrowthMetric } from '@/lib/growthChoropleth';
@@ -48,6 +48,7 @@ import {
   isDefault,
   browseTitleSummary,
   toSearchParams,
+  savedMapArea,
   DEFAULT_FILTERS,
   type ListingFilters,
 } from '@/lib/filters';
@@ -56,7 +57,7 @@ import { portalLabel } from '@/lib/portals';
 import CreateWatchdogModal from '@/components/CreateWatchdogModal';
 import MergeBar from '@/components/MergeBar';
 import FilterPresetBar from '@/components/FilterPresetBar';
-import type { ListingEstimate } from '@/lib/types';
+import type { FilterPreset, ListingEstimate } from '@/lib/types';
 import {
   createEstimation,
   isApiConfigured,
@@ -169,6 +170,17 @@ export default function BrowseExperience({
   /* Map flyTo command. Set when the operator picks a place in the District
    * typeahead; ListingMap animates to the new centre. */
   const [mapFlyTo, setMapFlyTo] = useState<MapFlyToCommand | null>(null);
+  /* Map frame command. Set when the operator loads a preset that saved a map
+   * area; ListingMap fits the camera to it. */
+  const [mapFrame, setMapFrame] = useState<MapFrameCommand | null>(null);
+  const loadPreset = useCallback(
+    (p: FilterPreset) => {
+      view.loadPreset(p);
+      const area = savedMapArea(p.filter_spec);
+      if (area) setMapFrame({ bounds: area, ts: Date.now() });
+    },
+    [view],
+  );
   const [watchdogModalOpen, setWatchdogModalOpen] = useState(false);
 
   /* Merge mode (page only): one statement of letters over the cards. */
@@ -662,7 +674,7 @@ export default function BrowseExperience({
                 filters={filters}
                 sort={sort}
                 activePresetId={activePresetId}
-                onLoad={view.loadPreset}
+                onLoad={loadPreset}
                 onActivePresetIdChange={view.setActivePresetId}
                 onFiltersChange={view.setFilters}
                 onLoadPipelineView={view.loadPipelineView}
@@ -774,6 +786,7 @@ export default function BrowseExperience({
                         : null
                     }
                     flyTo={mapFlyTo}
+                    frame={mapFrame}
                     anchor={anchor}
                     cities={cityOverlay.cities}
                     cityPolygons={cityPolygonsMap}
