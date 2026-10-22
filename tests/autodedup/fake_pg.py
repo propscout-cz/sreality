@@ -1088,6 +1088,23 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
                       and (row["resolved_at"] is None or row["resolved_at"] <= cut)
                       and (gen, listing_id) not in db.rt_fp)
         return rows[:int(p["limit"])]
+    # E976: the build's feed — live adverts first, then inactive, then no `listings` row; ids
+    # ascending within each; no id cursor.
+    if sql == S.RT_SCOPE_BUILD_ENTRANTS_SQL:
+        cut = db.now - timedelta(seconds=int(p["lag"]))
+
+        def live_first(listing_id: int) -> int:
+            row = db.listings.get(listing_id)
+            return 2 if row is None or row.get("is_active") is None else (
+                0 if row["is_active"] else 1)
+
+        rows = sorted(((listing_id, row["resolved_at"])
+                       for (g, _block, listing_id), row in db.scope_ids.items()
+                       if g == gen
+                       and (row["resolved_at"] is None or row["resolved_at"] <= cut)
+                       and (gen, listing_id) not in db.rt_fp),
+                      key=lambda r: (live_first(r[0]), r[0]))
+        return rows[:int(p["limit"])]
     if sql == S.RT_SCOPE_SCAN_STATE_SQL:
         out: dict[str, list[Any]] = {}
         window = db.now - timedelta(hours=int(p["hours"]))
