@@ -27,7 +27,7 @@ _SCRAPER = Path(__file__).resolve().parents[2] / "scraper"
 # rest follow `<source>_main`.
 PORTAL_MODULES = [
     "main", "bazos", "bezrealitky", "ceskereality", "idnes",
-    "maxima", "mmreality", "realitymix", "remax",
+    "maxima", "mmreality", "realitymix", "remax", "web",
 ]
 
 

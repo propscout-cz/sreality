@@ -31,6 +31,7 @@ PORTAL_CLASSES: dict[str, tuple[str, str]] = {
     "realitymix": ("scraper.realitymix_main", "RealitymixPortal"),
     "remax": ("scraper.remax_main", "RemaxPortal"),
     "sreality": ("scraper.main", "SrealityPortal"),
+    "web": ("scraper.web_main", "WebPortal"),
 }
 
 CLIENT_CLASSES: dict[str, tuple[str, str]] = {
@@ -43,6 +44,7 @@ CLIENT_CLASSES: dict[str, tuple[str, str]] = {
     "realitymix": ("scraper.realitymix_client", "RealitymixClient"),
     "remax": ("scraper.remax_client", "RemaxClient"),
     "sreality": ("scraper.sreality_client", "SrealityClient"),
+    "web": ("scraper.web_client", "WebClient"),
 }
 
 

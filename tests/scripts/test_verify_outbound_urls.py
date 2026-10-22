@@ -79,6 +79,33 @@ def _this_week() -> int:
     return _dt.datetime.now(_dt.timezone.utc).isocalendar().week
 
 
+class _Answer:
+    """A HEAD's response as the egress reads it (a context manager, no body)."""
+
+    def __init__(self, status: int, headers: dict[str, str] | None = None) -> None:
+        self.status_code, self.headers = status, headers or {}
+
+    def __enter__(self) -> "_Answer":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        return None
+
+
+class _HeadSession:
+    """A fake session the probe drives through `scraper.egress.fetch`: its one request per
+    URL is a non-following, streamed HEAD, answered by the subclass's `head` with the
+    request's read timeout."""
+
+    def request(self, method: str, url: str, *, headers: Any, timeout: tuple[float, float],
+                stream: bool, allow_redirects: bool) -> Any:
+        assert (method, stream) == ("HEAD", True)
+        return self.head(url, headers=headers, allow_redirects=allow_redirects, timeout=timeout[1])
+
+    def head(self, url: str, *, headers: Any, allow_redirects: bool, timeout: float) -> Any:
+        raise NotImplementedError
+
+
 class _Clock:
     """The module's `time`, advanced by the fake portal and the probe's own sleeps."""
 
@@ -98,18 +125,16 @@ def _slow_portal(clock: _Clock, timeouts: list[float], answer_s: float = 20.0,
     or after 1 s for a URL containing `fast`; a request given less times out when its timeout
     runs out."""
 
-    class _Resp:
-        status_code, headers = 200, {}
-
-    class _Session:
+    class _Session(_HeadSession):
         def head(self, url: str, *, headers: Any, allow_redirects: bool,
-                 timeout: float) -> _Resp:
+                 timeout: float) -> _Answer:
+            timeout = round(timeout, 2)  # the egress hands what is left of ITS deadline
             timeouts.append(timeout)
             needs = 1.0 if fast and fast in url else answer_s
             clock.now += min(timeout, needs)
             if timeout < needs:
                 raise requests.ReadTimeout(f"{url}: read timed out")
-            return _Resp()
+            return _Answer(200)
 
     return _Session
 
@@ -171,7 +196,7 @@ def test_a_slow_sreality_no_longer_spends_the_budget_before_any_crawler_is_asked
         monkeypatch: Any) -> None:
     clock, timeouts = _Clock(), []
     monkeypatch.setattr(mod, "time", clock)
-    monkeypatch.setattr(mod.requests, "Session",
+    monkeypatch.setattr(mod.egress, "safe_session",
                         _slow_portal(clock, timeouts, fast=".example/"))
     # Week 37's order (fixed by its seed) asks a crawler third; in draw order, after 36 URLs.
     probed = mod.probe_all(mod.draw_samples(_SampleConn(per_cb=3, crawlers=True), 37),
@@ -228,20 +253,16 @@ def test_the_probe_heads_each_url_without_following_a_redirect(monkeypatch: Any)
     calls: list[tuple[str, bool]] = []
     timeouts: list[float] = []
 
-    class _Resp:
-        def __init__(self, status: int) -> None:
-            self.status_code, self.headers = status, {}
-
-    class _Session:
+    class _Session(_HeadSession):
         def head(self, url: str, *, headers: Any, allow_redirects: bool,
-                 timeout: float) -> _Resp:
+                 timeout: float) -> _Answer:
             calls.append((url, allow_redirects))
-            timeouts.append(timeout)
+            timeouts.append(round(timeout, 2))
             if url.endswith("/down"):
                 raise requests.ConnectionError("down")
-            return _Resp({"gone": 404, "walled": 403}.get(url.rsplit("/", 1)[1], 200))
+            return _Answer({"gone": 404, "walled": 403}.get(url.rsplit("/", 1)[1], 200))
 
-    monkeypatch.setattr(mod.requests, "Session", _Session)
+    monkeypatch.setattr(mod.egress, "safe_session", _Session)
     monkeypatch.setattr(mod, "_PROBE_INTERVAL_S", 0.0)
     base = "https://www.remax-czech.cz/reality/detail/1"
     samples = [_s(id=i, source="remax", source_url=f"{base}/{tail}")
@@ -260,7 +281,7 @@ def test_the_probe_stops_at_its_deadline_and_leaves_the_rest_unprobed(
     unprobed rest instead of counting as a URL that failed."""
     clock, timeouts = _Clock(), []
     monkeypatch.setattr(mod, "time", clock)
-    monkeypatch.setattr(mod.requests, "Session", _slow_portal(clock, timeouts))
+    monkeypatch.setattr(mod.egress, "safe_session", _slow_portal(clock, timeouts))
     samples = [_s(id=i) for i in range(44)]
     probed = mod.probe_all(samples, 120.0)
     assert [(s.id, said) for s, said in probed] == [(i, mod.OPENS) for i in range(5)]
@@ -272,11 +293,12 @@ def test_the_probe_stops_at_its_deadline_and_leaves_the_rest_unprobed(
 # --- one cell per portal and the `sample` cell -----------------------------------------------
 
 
-def _crawlers(said: str = mod.OPENS, **by_portal: str) -> list[tuple[mod.Sample, str]]:
+def _crawlers(said: str = mod.OPENS, *, fleet: tuple[str, ...] | None = None,
+              **by_portal: str) -> list[tuple[mod.Sample, str]]:
     """One answered link of each crawler portal, as a week's draw holds them."""
     return [(_s(id=900 + i, source=p, category_main="byt", category_sub_cb=None,
                 source_url=f"https://{p}.example/{i}"), by_portal.get(p, said))
-            for i, p in enumerate(mod.CRAWLER_SOURCES)]
+            for i, p in enumerate(fleet if fleet is not None else mod.CRAWLER_SOURCES)]
 
 
 def test_a_sub_category_failing_together_is_a_slug_defect_and_a_problem_on_its_portal() -> None:
@@ -348,7 +370,9 @@ def test_the_10_18_run_reads_ok_once_the_probe_stops_misreading_its_answers() ->
         for i in (6, 9):
             links[i] = (links[i][0], mod.OPENS if fixed else mod.BROKEN)
         walled = mod.REFUSED if fixed else mod.BROKEN
-        return links + _crawlers(mmreality=walled, ceskereality=walled)
+        # That run's eight crawler portals: `web` joined the fleet on 2026-10-21.
+        then_fleet = tuple(p for p in mod.CRAWLER_SOURCES if p != "web")
+        return links + _crawlers(fleet=then_fleet, mmreality=walled, ceskereality=walled)
 
     then = _cells(mod.classify(week(fixed=False), T))["sample"]
     assert then["status"] == "warn" and then["facts"]["lower_bound"] == pytest.approx(0.064, abs=0.001)
@@ -386,8 +410,9 @@ def test_a_portal_drawn_but_never_reached_is_not_probed_while_the_rest_still_jud
     assert r["status"] == "ok"
     assert _cells(r)["maxima"]["status"] == "unknown"
     assert _cells(r)["maxima"]["message"].startswith("Not probed")
+    drawn_n = 12 + len(mod.CRAWLER_SOURCES)
     assert r["details"]["not_measured"] == {
-        "links": "1 of 20 sampled links were not probed: the check's 120 s budget ran out"}
+        "links": f"1 of {drawn_n} sampled links were not probed: the check's 120 s budget ran out"}
 
 
 def test_a_portal_with_nothing_drawn_still_has_its_cell() -> None:
@@ -407,7 +432,8 @@ def test_all_clean_is_ok_with_every_measured_cell_ok() -> None:
     r = mod.classify([(_s(id=i), mod.OPENS) for i in range(5)] + _crawlers(), T)
     assert r["status"] == "ok" and r["value"] == 0
     assert {c["status"] for c in r["details"]["cells"]} == {"ok"}
-    assert _cells(r)["sample"]["value"] == 0.0 and _cells(r)["sample"]["facts"]["answered"] == 13
+    assert _cells(r)["sample"]["value"] == 0.0
+    assert _cells(r)["sample"]["facts"]["answered"] == 5 + len(mod.CRAWLER_SOURCES)
 
 
 def test_every_verdict_carries_a_cell_for_every_portal_and_the_sample() -> None:
@@ -443,7 +469,8 @@ def test_the_check_probes_this_iso_weeks_sample_and_judges_it(monkeypatch: Any) 
     assert week in {before, _this_week()}
     assert run["codes"] == mod.codes_for_week(week)
     assert out["check_key"] == mod.CHECK_KEY and out["status"] == "ok" and out["value"] == 0
-    assert run["drawn"] == run["probed"] == len(probed) == 3 * len(mod.codes_for_week(week)) + 8
+    assert run["drawn"] == run["probed"] == len(probed) == (
+        3 * len(mod.codes_for_week(week)) + len(mod.CRAWLER_SOURCES))
     # the sampling queries spend from the same budget the HEAD loop is handed
     (budget,) = budgets
     assert 0 < budget <= mod.PROBE_BUDGET_S
@@ -456,7 +483,7 @@ def test_the_check_judges_what_its_budget_reached_once_that_is_half_the_draw(
         monkeypatch: Any) -> None:
     clock, timeouts = _Clock(), []
     monkeypatch.setattr(mod, "time", clock)
-    monkeypatch.setattr(mod.requests, "Session", _slow_portal(clock, timeouts, answer_s=3.0))
+    monkeypatch.setattr(mod.egress, "safe_session", _slow_portal(clock, timeouts, answer_s=3.0))
     out = mod.check_outbound_url_conformance(_SampleConn(per_cb=3, crawlers=True), T)
     run = _cells(out)["sample"]["facts"]
     drawn = 3 * len(run["codes"]) + len(mod.CRAWLER_SOURCES)
@@ -476,7 +503,7 @@ def test_a_check_that_probed_under_half_its_draw_is_not_measured(monkeypatch: An
     a slug defect in the cells the budget never reached."""
     clock, timeouts = _Clock(), []
     monkeypatch.setattr(mod, "time", clock)
-    monkeypatch.setattr(mod.requests, "Session", _slow_portal(clock, timeouts))
+    monkeypatch.setattr(mod.egress, "safe_session", _slow_portal(clock, timeouts))
     out = mod.check_outbound_url_conformance(_SampleConn(per_cb=3, crawlers=True), T)
     drawn = 3 * len(out["details"]["codes"]) + len(mod.CRAWLER_SOURCES)
     assert drawn * 20.0 >= 14 * 60, "the whole draw would need about 15 minutes"
@@ -503,11 +530,11 @@ def test_a_check_whose_budget_is_spent_before_any_probe_is_not_measured(
         monkeypatch: Any) -> None:
     """Zero URLs probed is not an ok over zero samples: nothing was verified."""
 
-    class _NoSession:
+    class _NoSession(_HeadSession):
         def head(self, *a: Any, **kw: Any) -> Any:
             raise AssertionError("the budget is spent, so nothing may be sent")
 
-    monkeypatch.setattr(mod.requests, "Session", _NoSession)
+    monkeypatch.setattr(mod.egress, "safe_session", _NoSession)
     out = mod.check_outbound_url_conformance(_SampleConn(per_cb=3, crawlers=True), T,
                                              budget_s=0.0)
     drawn = 3 * len(out["details"]["codes"]) + len(mod.CRAWLER_SOURCES)
@@ -564,3 +591,22 @@ def test_the_probe_module_never_imports_the_harness_back() -> None:
     imported |= {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
     assert not imported & {"scripts.verify_pipeline", "toolkit.system_alerts", "scraper.db"}
     assert not hasattr(mod, "main")
+
+
+def test_the_probe_goes_out_on_the_egress_session_and_a_private_link_judges_broken(
+        monkeypatch: Any) -> None:
+    """A stored URL is page-supplied: the HEAD never reaches a private address, and one that
+    resolves there is a link that does not open, not an exception that ends the check."""
+    from scraper import egress
+
+    assert isinstance(mod.egress.safe_session().get_adapter("https://rk.example/"),
+                      egress._PinnedAdapter)
+
+    class _Session(_HeadSession):
+        def head(self, url: str, *, headers: Any, allow_redirects: bool, timeout: float) -> Any:
+            raise egress.EgressRefused("refused address 10.0.0.7")
+
+    monkeypatch.setattr(mod.egress, "safe_session", _Session)
+    monkeypatch.setattr(mod, "_PROBE_INTERVAL_S", 0.0)
+    probed = mod.probe_all([_s(id=1, source="remax", source_url="https://rk.example/1")], 60.0)
+    assert [said for _, said in probed] == [mod.BROKEN]

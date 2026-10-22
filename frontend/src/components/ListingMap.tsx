@@ -197,6 +197,14 @@ export interface MapFlyToCommand {
   ts: number;
 }
 
+/* Imperative "put this box in the frame" command — a loaded preset's saved
+ * area. `ts` stamps it like MapFlyToCommand's, so loading the same preset
+ * again re-frames its area after a pan. */
+export interface MapFrameCommand {
+  bounds: MapBounds;
+  ts: number;
+}
+
 /* The property the operator opened "Explore area" FROM — rendered as a
  * persistent, highlighted "you are here" pin in its OWN map source, never part
  * of the filter cohort (`rows`). Because the rows effect writes only the
@@ -278,7 +286,8 @@ interface Props {
   isLoading: boolean;
   /* Bounds the URL says the map should be showing. The map applies it
    * once on mount and then ignores future updates — it's the source
-   * of truth for its own viewport. */
+   * of truth for its own viewport; only a `frame` command moves it to
+   * a box from outside. */
   bounds: MapBounds | null;
   /* Fires on user-driven pan/zoom (we ignore programmatic moves).
    * `null` means "the operator cleared the map area" (Reset-view).
@@ -306,6 +315,10 @@ interface Props {
    * write back to the URL bbox — the existing chip-based district
    * filter handles cohort narrowing. */
   flyTo?: MapFlyToCommand | null;
+  /* Latest "frame this box" command (a preset load). The map fits the box
+   * when the prop's identity changes; a command older than this map is not
+   * replayed — its mount already fitted the URL's box. */
+  frame?: MapFrameCommand | null;
   /* The "Explore area" origin property, rendered as a persistent highlighted
    * pin independent of the filter cohort (see AnchorPoint). null/undefined on
    * the Browse page — the anchor source then stays empty and Browse is
@@ -394,6 +407,7 @@ export default function ListingMap({
   haloPoints,
   centerCircle,
   flyTo,
+  frame,
   anchor = null,
   cities,
   cityPolygons,
@@ -1315,6 +1329,20 @@ export default function ListingMap({
     });
     didInitialFitRef.current = true;
   }, [flyTo, ready]);
+
+  /* Imperative fit on each new frame command. Padding 0, as the mount's URL
+   * fit: the frame shows the box the cohort is filtered on. Programmatic, so
+   * the moveend guard leaves the URL bbox as the preset wrote it. */
+  const lastFrameTsRef = useRef<number | null>(frame?.ts ?? null);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map || !frame) return;
+    if (lastFrameTsRef.current === frame.ts) return;
+    lastFrameTsRef.current = frame.ts;
+    const { west, south, east, north } = frame.bounds;
+    map.fitBounds([[west, south], [east, north]], { padding: 0, duration: 700 });
+    didInitialFitRef.current = true;
+  }, [frame, ready]);
 
   /* Defensive resize once the map is ready. MapLibre observes its container,
    * but a map mounted into a container that settles its size after first paint

@@ -7,7 +7,7 @@
  * page, kept out of the first visit. */
 
 import { useNewPropertyDialog } from '@/components/NewPropertyProvider';
-import { portalLabel } from '@/lib/portals';
+import { portalBadge } from '@/lib/portals';
 
 export default function AdvertNotFound({
   source,
@@ -21,7 +21,7 @@ export default function AdvertNotFound({
   heading: 'h1' | 'h2';
 }) {
   const newProperty = useNewPropertyDialog();
-  const portal = portalLabel(source) ?? source;
+  const portal = portalBadge(source, pastedUrl, 'long');
   return (
     <>
       <p className="text-[0.7rem] font-medium uppercase tracking-[0.18em] text-[var(--color-ink-3)]">

@@ -151,7 +151,7 @@ _CHURN_LIVE: dict[str, tuple[int, int, Any]] = {
     "bazos": (53_426, 204, 258), "bezrealitky": (5_793, 108, 81),
     "ceskereality": (49_543, 196, 320), "idnes": (108_569, 223, 710), "maxima": (277, 2, 3),
     "mmreality": (10_578, 8, 72), "realitymix": (49_476, 83, 256), "remax": (9_475, 42, 56),
-    "sreality": (108_507, 898, 2_474),
+    "sreality": (108_507, 898, 2_474), "web": (12, 0, 0),
 }
 
 
@@ -477,7 +477,8 @@ def test_a_stale_census_is_a_watch_census_cell_and_never_problem(check: Any) -> 
 
 def test_the_census_reads_ok_when_fresh_and_not_measured_when_absent(check: Any) -> None:
     out, _ = check()
-    assert _cells(out)["census"]["message"] == "all 9 portal key censuses are at most 30 d old"
+    assert _cells(out)["census"]["message"] == (
+        f"all {len(claims_common.SOURCES)} portal key censuses are at most 30 d old")
     out, _ = check(censuses=[])
     assert _cells(out)["census"]["status"] == "unknown"
     out, _ = check(censuses=ValueError("Expecting value: line 1 column 1"))

@@ -568,8 +568,8 @@ def test_the_regression_fixtures_still_produce_the_golden_claims(source: str) ->
 
 
 def test_every_portal_carries_a_golden_so_a_new_contract_cannot_arrive_ungated() -> None:
-    """A portal with no golden is a portal whose claims nobody reviews. Nine today; a
-    tenth contract file must bring its own."""
+    """A portal with no golden is a portal whose claims nobody reviews. Ten today; an
+    eleventh contract file must bring its own."""
     blessed = {p.stem.split("@")[0] for p in _GOLDEN_DIR.glob("*.json")}
     assert set(_SOURCES) <= blessed, (
         f"no golden claim set for {sorted(set(_SOURCES) - blessed)}; run {BLESS_COMMAND}")

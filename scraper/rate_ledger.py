@@ -143,6 +143,10 @@ class LedgerRateLimiter(RateLimiter):
         # trip so exactly one thread leases; never taken while holding _lock.
         self._lease_lock = threading.Lock()
 
+    @property
+    def deadline(self) -> float | None:
+        return self._deadline
+
     def acquire(self) -> None:
         with self._lease_lock:
             if (not self.refused and self._deadline is not None
