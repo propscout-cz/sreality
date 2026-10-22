@@ -41,6 +41,18 @@ class RateLimiter:
         self.refused = False
         self.refused_reason: str | None = None
 
+    @property
+    def deadline(self) -> float | None:
+        """The run's time budget (a time.monotonic() stamp) past which every slot is
+        refused; a local limiter has none."""
+        return None
+
+    def refuse(self, reason: str) -> None:
+        """Refuse the rest of this run from outside `acquire` (a client that knows its next
+        fetch cannot start before the deadline): the runner hands every unfetched claim back
+        without spending an attempt."""
+        self.refused, self.refused_reason = True, reason
+
     def acquire(self) -> None:
         """Block until this thread's slot; sleep happens outside the lock."""
         with self._lock:

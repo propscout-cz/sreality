@@ -292,6 +292,84 @@ def test_index_walk_that_saw_nothing_nominates_nothing(monkeypatch):
     assert cap["candidates"] == [] and cap["queued"] == []
 
 
+def test_an_indexless_portal_nominates_through_its_own_seam_from_an_empty_walk(monkeypatch, caplog):
+    """`web` has no index: its walk sees nothing BY CONSTRUCTION, so the empty-seen refusal
+    would mean its ads are never re-checked and never delisted. A portal that DECLARES
+    `indexless` skips that refusal and nominates through its own presence_candidates; the
+    shared default query (which raises on an empty set) is never reached."""
+    cap = _nominations(monkeypatch)
+    p = _FakePortal(reached_end=True, categories=["agenda"])
+    p.indexless = True
+    p.walk_category = lambda c, conn, dry_run, limiter, deadline=None: (set(), {"found_new": 0, "enqueued": 0}, 0, 0, True)
+    asked: list[Any] = []
+
+    def own(conn, category, seen):
+        asked.append((category, set(seen)))
+        return ([("https://a.example/1", "https://a.example/1", None)], 1, {"category_main": None})
+
+    p.presence_candidates = own
+    with caplog.at_level("WARNING", logger="scraper.portal_runner"):
+        rc, agg = portal_runner.run_index_walk(p, dry_run=False)
+    assert rc == 0 and asked == [("agenda", set())]
+    assert cap["candidates"] == []
+    assert cap["queued"] == [(None, ["https://a.example/1"], 1)]
+    assert agg["by_category"][0]["walk_coverage"] == "complete"
+    assert agg["by_category"][0]["listings_to_verify"] == 1
+    assert not [r for r in caplog.records if "VERIFY skipped" in r.getMessage()]
+    assert not [r for r in caplog.records if r.getMessage().startswith("COVERAGE")]
+
+
+def test_an_indexless_portal_without_its_own_seam_nominates_nothing(monkeypatch):
+    cap = _nominations(monkeypatch)
+    p = _FakePortal(reached_end=True, categories=["agenda"])
+    p.indexless = True
+    p.walk_category = lambda c, conn, dry_run, limiter, deadline=None: (set(), {"found_new": 0, "enqueued": 0}, 0, 0, True)
+    portal_runner.run_index_walk(p, dry_run=False)
+    assert cap["candidates"] == [] and cap["queued"] == []
+
+
+def test_an_indexless_walk_cut_short_nominates_nothing(monkeypatch):
+    cap = _nominations(monkeypatch)
+    p = _FakePortal(reached_end=False, categories=["agenda"])
+    p.indexless = True
+    p.walk_category = lambda c, conn, dry_run, limiter, deadline=None: (set(), {"found_new": 0, "enqueued": 0}, 0, 0, False)
+    p.presence_candidates = lambda conn, category, seen: ([("x", "x", None)], 1, {"category_main": None})
+    portal_runner.run_index_walk(p, dry_run=False)
+    assert cap["queued"] == []
+
+
+def test_the_drains_gone_step_is_one_function_an_adapter_can_call(monkeypatch):
+    """`web` learns a page is gone inside its write step (a redirect to a portal ad): it calls
+    the runner's gone step, never a copy of rule 3's hysteresis."""
+    calls: list[Any] = []
+    monkeypatch.setattr(portal_runner.db, "gone_evidence", lambda _c, src, nid: (False, None))
+    monkeypatch.setattr(portal_runner.db, "complete_detail",
+                        lambda _c, src, ids, outcome="written": calls.append((src, ids, outcome)))
+    assert portal_runner.record_gone_verdict(object(), "web", "u") == "no_row"
+    assert calls == [("web", ["u"], "gone")]
+    monkeypatch.setattr(portal_runner.db, "gone_evidence", lambda _c, src, nid: _CONFIRMING_PRIOR)
+    monkeypatch.setattr(portal_runner.db, "mark_listing_inactive", lambda _c, src, nid: True)
+    assert portal_runner.record_gone_verdict(object(), "web", "u") == "flipped"
+    assert calls[-1] == ("web", ["u"], "flipped")
+
+
+def test_a_page_that_is_another_portals_ad_is_rekeyed_under_that_portal(monkeypatch):
+    """One identity per ad: the target is queued at NEW under its own portal (sreality by id,
+    never by URL) and the row that led there gets the drain's own gone verdict."""
+    from scraper.portal_identity import Resolved
+
+    queued: list[Any] = []
+    gone: list[Any] = []
+    monkeypatch.setattr(portal_runner.db, "enqueue_detail",
+                        lambda _c, src, entries: queued.append((src, entries)) or 1)
+    monkeypatch.setattr(portal_runner, "record_gone_verdict",
+                        lambda _c, src, nid, now=None: gone.append((src, nid)) or "no_row")
+    target = Resolved("sreality", "2557083724", "https://www.sreality.cz/detail/x/2557083724")
+    assert portal_runner.rekey_detail(object(), "web", "https://bit.example/a", target) == "no_row"
+    assert queued == [("sreality", [("2557083724", None, None, portal_runner.db.QUEUE_PRIORITY_NEW)])]
+    assert gone == [("web", "https://bit.example/a")]
+
+
 def test_a_walk_that_saw_nothing_still_tells_a_buffering_portal(monkeypatch):
     """Portals whose index slices collapse onto one canonical category (ceskereality,
     realitymix) count the slices they are handed and nominate on the last one. A slice

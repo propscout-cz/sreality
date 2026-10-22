@@ -31,7 +31,7 @@ import {
   type PastedLink,
   type RecentLink,
 } from '@/lib/pastedLink';
-import { portalLabel, portalShort } from '@/lib/portals';
+import { portalBadge, portalLabel } from '@/lib/portals';
 import { ROUTES } from '@/lib/routes';
 import { isBusy, useNewPropertyFlow } from '@/lib/useNewPropertyFlow';
 
@@ -211,7 +211,7 @@ export default function LinkPage() {
                   className="flex h-12 w-full items-center gap-3 text-left active:bg-[var(--color-paper-2)]"
                 >
                   <span className="inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-[var(--radius-xs)] border border-[var(--color-rule-strong)] px-1 text-[11px] text-[var(--color-ink-2)]">
-                    {portalShort(r.source)}
+                    {portalBadge(r.source, r.url)}
                   </span>
                   <span className="min-w-0 flex-1 truncate font-mono text-[12px] tabular-nums text-[var(--color-ink)]">
                     {r.nativeId}

@@ -683,9 +683,11 @@ COUNT_PROBE_RATE_PER_S = 2.0  # ~20 total-only requests in ~10s, politely paced
 # The probe-capable portals (design doc: newest-first index order, or a bespoke
 # probe_category). Stable order = polite, predictable per-pass sequencing. Also
 # the set the drain lane serves — the worker only drains portals it knows how
-# to build.
+# to build. `web` (pasted sites) goes FIRST: the drain lane takes sources one after
+# another with a budget each, so a paste waits only for the drain interval, never for
+# nine other portals' budgets (docs/design/new-property-from-link.md §3.2).
 REALTIME_SOURCES: tuple[str, ...] = (
-    "bazos", "bezrealitky", "ceskereality", "idnes",
+    "web", "bazos", "bezrealitky", "ceskereality", "idnes",
     "maxima", "mmreality", "realitymix", "remax", "sreality",
 )
 

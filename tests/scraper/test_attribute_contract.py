@@ -41,6 +41,18 @@ def censuses() -> dict[str, dict]:
     return {c["portal"]: c for c in field_census.load_censuses()}
 
 
+def _awaiting_first_bless(censuses: dict[str, dict]) -> set[str]:
+    """Portals the contract declares that no bless has measured yet: no census AND no fill
+    cell. Re-blessing needs the production DB, which a session's shell does not have, so a
+    portal is onboarded first and its census follows (`web` after its first week of pastes,
+    roadmap/field-capture.md); the census gates read it from that bless on. A portal with
+    blessed fill cells and no census is not waiting — its census was lost."""
+    pending = set(contract.CONTRACT) - set(censuses)
+    blessed = {key.split("/", 1)[0] for key in field_census.load_baseline()["cells"]}
+    assert not pending & blessed, f"blessed fill cells but no census: {sorted(pending & blessed)}"
+    return pending
+
+
 def _emitted_keys(census: dict) -> set[str]:
     return set(census.get("keys") or {}) | set((census.get("rare") or {}).get("keys") or [])
 
@@ -57,9 +69,12 @@ def _is_flattened_name(entry: dict) -> bool:
 
 def test_a1_no_dead_read(censuses: dict[str, dict]) -> None:
     """Every key a structured cell names appears in that portal's census."""
-    assert set(contract.CONTRACT) <= set(censuses), "a portal has no checked-in census"
+    pending = _awaiting_first_bless(censuses)
+    assert set(contract.CONTRACT) - pending <= set(censuses), "a portal has no checked-in census"
     dead: list[str] = []
     for portal, cells in sorted(contract.CONTRACT.items()):
+        if portal in pending:
+            continue
         emitted = _emitted_keys(censuses[portal])
         for field, declared in sorted(cells.items()):
             if declared.producer != "structured":
@@ -102,6 +117,23 @@ def test_a2_ignored_entries_are_real_and_reasoned() -> None:
         for key, reason in sorted(ignored.items()):
             assert reason.strip(), f"{portal}: {key!r} is ignored with no reason"
             assert key not in read, f"{portal}: {key!r} is both read and ignored"
+
+
+def test_every_top_level_key_the_web_parse_writes_is_read_or_ignored() -> None:
+    """`web` has no census yet (its first bless is owed), so A2 cannot see it: the parse's
+    own output stands in. A key written to `raw_json` and neither read nor ignored would turn
+    A2 red the day the census is blessed."""
+    from scraper.web_parser import parse_detail
+
+    page = ("""<html><head><meta property="og:title" content="Prodej bytu 2+kk, 54 m²">"""
+            """<script type="application/ld+json">{"@type": "RealEstateListing", "name": "Prodej bytu",
+            "geo": {"latitude": 50.1, "longitude": 14.4}, "offers": {"price": 5000000, "priceCurrency": "CZK"}}"""
+            "</script></head><body><article><p>Byt 2+kk ve 3. patře, volejte +420 602 123 456.</p>"
+            "</article></body></html>")
+    raw = parse_detail(page, source_url="https://rk.example/1", final_url="https://rk.example/1").raw
+    read = {key for declared in contract.CONTRACT["web"].values() for key in declared.keys}
+    assert {"broker", "jsonld", "og", "floor", "final_url"} <= set(raw)
+    assert set(raw) - read - set(contract.IGNORED["web"]) == set()
 
 
 def test_a3_no_unmapped_value(censuses: dict[str, dict]) -> None:

@@ -433,8 +433,63 @@ matching `sec-ch-ua` client hints (`CLIENT_HINTS` — since 2026-09-29 the site'
 Chrome UA), at a polite rate. The site's robots.txt disallows generic bots; sending browser-like headers is
 an operator-owned posture (decided 2026-10-02).
 
-**Data source (reas.cz sold transactions) — NOT a portal.** The tenth source is not a tenth
-portal: it is a feed of **registered sales**, and a sale is an account-less external FACT, not a
+**Data source (web — any other site, the tenth portal).** An ad on a site we do not crawl
+enters through the paste box (`POST /listings/ingest`, docs/design/new-property-from-link.md):
+`scraper/portal_identity.resolve_url` resolves any http(s) host that is not one of the nine
+portals' (and not a sibling host on their domains, an address literal or a local-network name)
+to `source='web'`, keyed by its **canonical URL** (https, host lowercased, userinfo / default
+port / fragment / tracking keys dropped, the remaining query SORTED and kept, trailing slash
+stripped, ≤ 512 chars) — the native id IS that URL, and `listings.source_url` stores it. From
+there it is an ordinary portal (rule 21), with a client (`scraper/web_client.py`), a parser
+(`scraper/web_parser.py`), an adapter (`scraper/web_main.py` `WebPortal`), a config row
+(`_DEFAULTS['web']`: one agenda-wide descriptor, `shared_rate_limiter` so the drain's deadline
+binds), a `portals` row, a location contract (`contracts/portals/web.yaml`, text-only), a
+broker row and a chip whose badge shows the ad's HOST. **Fetch:** every request goes through
+`scraper/egress.py` — the ONE safe outbound session the image downloader and the URL prober
+share since the same wave: http(s) only, every address the name resolves to checked (loopback,
+private, link-local / metadata, IPv6 ULA incl. Railway's `fd12::/16`, IPv4-mapped, …) and the
+connection pinned to the address checked, every redirect hop re-checked (≤ 5), one 20 s
+wall-clock deadline enforced by a watchdog that shuts the fetch's sockets (a header dripped a
+byte at a time, an endless chunked trailer or a run of empty deflate blocks loops inside
+http.client / urllib3, where no check between reads runs), a 2 MB cap on DECODED bytes; an
+error status raises an `HTTPError` that carries it, as `raise_for_status` does (the image
+phase's gone / dead-URL classifiers read it). On top, the client paces one page load per 10 s
+per host, never reserving a slot past the drain's deadline (a fetch that could not start in time
+refuses the run, and the runner hands the claims back without an attempt). 404/410 is gone; a
+redirect that LEAVES the page (another site, an ancestor of its path, the query that named it
+dropped) is gone too, except when it points at one of the nine portals' ads: the client never
+requests that hop (`egress.fetch(stop_before=...)` — the portal's own client, limits and proxy
+fetch it), the pasted link was a shortener and the ad is that portal's
+(`portal_runner.rekey_detail` queues it at NEW and records the `web` row's gone verdict — never
+a second identity). **Parse:** deterministic, no LLM at ingest (Field-capture §3) — JSON-LD
+(`RealEstateListing`, `Product`/`Offer`: name, description, CZK price, `floorSize`, the seller
+party, coordinates ONLY from a `GeoCoordinates` the page publishes; `@graph` and `mainEntity`
+searched), OpenGraph/meta, the gallery (the JSON-LD images + `og:image`; the page's `<img>` only
+when the JSON-LD lists none, and only from the main block's own container), the stable main text
+as `description` (JSON-LD, `og:description`, the container with the most text in its OWN `<p>`
+children once the site's landmark header/footer, nav, aside, prose-free forms and every
+similar/related block are dropped, the meta description last — never page chrome or another
+ad's card, which would snapshot on every fetch), and the shared grammars (`price_text`'s per-m²
+guard, `,-` spelling included; the first CZK amount no deposit/fee/commission word names;
+`area`, `vocabulary.disposition`, `floor.floor_from_text`, the prodej/pronájem +
+byt/dům/pozemek/komerční/garáž words of the first of JSON-LD name, og:title, `<h1>`, `<title>`
+that says — NULL when none does). Contacts (JSON-LD, `mailto:`, `tel:`, a `+420` number in the
+ad text) become `raw['broker']` keyed by the email, else the phone. The text lane is the
+portal's only reader of prose: its one call returns the location block from `web.yaml`. Every
+deterministic reading sits at the TOP LEVEL of `raw_json` (the field census reads
+`coalesce(raw->'params', raw)`). **Delisting:** `web` has no index, so it declares `indexless`
+(rule 3): `web_index_walk.yml` (every 6 h — the 24 h throttle, not the cron, sets the cadence;
+a daily cron would skip each ad one day in two) nominates every active web ad not checked in the
+last 24 h, the drain fetches it, and a dead ad closes after two gone verdicts ≥ 24 h apart
+(checked every 24–30 h, so 24–60 h after it dies).
+`delist_flip_cap` never throttles it (under the 2,000-row floor) and the gone-rate breaker never
+trips on it (< 20 ingest fetches a run) — both stated, not special-cased. **Not reached:** the
+probe lane (nothing to probe), the Chrome extension (its manifest `matches` are the nine
+portals' hosts) and the browser's id rules (`frontend/src/lib/portalIds.ts` sends every other
+host to the server).
+
+**Data source (reas.cz sold transactions) — NOT a portal.** This source is not a portal (the
+tenth portal is `web`, above): it is a feed of **registered sales**, and a sale is an account-less external FACT, not a
 listing. Its north star: one row per sale under the sale's own cadastral identity, fetched per
 municipality cell and only where the deal pipeline has a live card, read through ONE SQL
 definition — never a `listings` row, never linked to a `property`, never mixed with asking
@@ -1116,7 +1171,11 @@ renumber.** Navigate by area:
    Nomination is the shared default (`db.presence_candidates`, keyed on `source_id_native` or,
    via `seen_key`, on `sreality_id`); a portal whose index sections do not map 1:1 onto a
    category overrides `presence_candidates` (bazos: subtype scope; ceskereality/realitymix:
-   sibling-slice union; remax/maxima: agenda grain). What a finished walk still means: a
+   sibling-slice union; remax/maxima: agenda grain). A portal with NO index declares
+   `indexless = True` (`web`, the tenth portal, since 2026-10-21): its walk sees nothing by
+   construction, so `_queue_presence_checks` skips the empty-seen refusal for it alone and
+   nominates through its own `presence_candidates` (every active `web` ad with no queue row and
+   no completion within `RECHECK_THROTTLE`, NULL categories included). What a finished walk still means: a
    partial walk (`--limit N`, `--max-pages`, a deadline) cannot know which rows it never
    reached, so it nominates nothing.
 
@@ -3057,12 +3116,19 @@ renumber.** Navigate by area:
     `PortalDefaults`, overridden only where the portal differs: `connect_index` (idnes: staleness
     preload), `connect_drain` (sreality: session pooler), `make_client` (sreality: category-bound
     client), `active_count` (bazos: subtype scope), `write_details` (bezrealitky: GraphQL payload
-    archive; sreality: its FetchResult writer), `record_failure` (sreality: the
+    archive; sreality: its FetchResult writer; web: the re-key pre-step before the default
+    flush), `record_failure` (sreality: the
     `listing_fetch_failures` ledger, rule #5). There is no flip seam: the drain flips a gone
-    listing itself (2026-10; the nine `mark_gone` copies were deleted). The drain's dry-run
+    listing itself (2026-10; the nine `mark_gone` copies were deleted) through ONE step,
+    `portal_runner.record_gone_verdict`; `portal_runner.rekey_detail` is the same step for a
+    fetched page that IS another portal's ad (`web`'s `write_details`: a pasted shortener that
+    redirects to an sreality ad queues that ad at NEW and records its own row's gone verdict —
+    one identity per ad, never a copy of the hysteresis). The drain's dry-run
     count is `db.claimable_counts`, not a seam. Optional (the runner reads them via `getattr`):
     `seen_key` (sreality — integer ids); `presence_candidates` (bazos, ceskereality, realitymix,
-    remax, maxima — index sections that don't map 1:1 onto `(category_main, category_type)`);
+    remax, maxima — index sections that don't map 1:1 onto `(category_main, category_type)`;
+    web — no index at all); `indexless` (web — its walk sees nothing BY CONSTRUCTION, so the
+    runner skips the empty-seen refusal for it and requires its own `presence_candidates`);
     `note_empty_slice` (ceskereality, realitymix — slice-buffering nominators);
     `coverage_denominator_is_upper_bound` (ceskereality — its declared total is national, wider
     than its kraj slices); `total_is_count` (remax, maxima — the "total" they report is the
@@ -3070,7 +3136,8 @@ renumber.** Navigate by area:
     `scrape_runs.by_category` entry as `declared_is_upper_bound` and `total_is_count` (Health
     wave 4) so the health checks read them without naming a portal; `live_categories` (mmreality
     — category drift); `set_index_page_cap`
-    (the seven newest-first portals, for the probe); and `probe_category` (ceskereality and
+    (the seven newest-first portals, for the probe; a no-op on web); and `probe_category`
+    (web: an empty sighting, so the probe lane is quiet; ceskereality and
     sreality: both lack a sort param their index accepts, so each implements its own per-page
     early-stop discovery probe instead of the generic capped-walk-then-diff fallback
     `run_index_probe` otherwise uses — sreality's version, added Phase 4 of the

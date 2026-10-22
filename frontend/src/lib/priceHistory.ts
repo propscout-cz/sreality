@@ -3,7 +3,7 @@
  * (MS10). Kept side-effect-free (now injected, never Date.now()) so the
  * transforms are unit-testable. */
 import { fmtDateSlash } from '@/lib/format';
-import { portalLabel } from '@/lib/portals';
+import { portalBadge } from '@/lib/portals';
 import type { ListingSnapshotPublic } from '@/lib/types';
 
 /* One advert of the property. A price step never spans two adverts, so each is
@@ -11,6 +11,8 @@ import type { ListingSnapshotPublic } from '@/lib/types';
 export interface PriceAdvert {
   id: number;
   source: string;
+  /* Names a `web` advert by its host (lib/portals portalBadge). */
+  source_url?: string | null;
   is_active: boolean;
   price_czk: number | null;
   first_seen_at: string;
@@ -51,7 +53,7 @@ export function buildPriceSeries(
   const perPortal = new Map<string, number>();
   for (const { advert } of tracks) perPortal.set(advert.source, (perPortal.get(advert.source) ?? 0) + 1);
   return tracks.map(({ advert, points }) => {
-    const portal = portalLabel(advert.source) ?? advert.source;
+    const portal = portalBadge(advert.source, advert.source_url, 'long');
     const endT = advert.is_active ? nowMs : new Date(advert.last_seen_at).getTime();
     return {
       id: advert.id,

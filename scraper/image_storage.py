@@ -18,7 +18,7 @@ import threading
 
 import requests
 
-from scraper import media
+from scraper import egress, media
 
 LOG = logging.getLogger(__name__)
 
@@ -210,11 +210,16 @@ def image_dimensions(data: bytes) -> tuple[int, int] | None:
 # (`reality.idnes.cz/file/thumbnail/{id}`, a redirector to the static CDN), whose WAF
 # rate-limits and then blocks a bare client (429 → 403 from 2026-10-05). One session
 # per process keeps the connection pool; the Accept header is what a browser sends
-# for an <img>.
+# for an <img>. The session is scraper.egress's: an image URL is page-supplied (the
+# tenth portal's pages are any site's), so every connection is resolved, checked and
+# pinned to a public address, and every redirect hop is checked again.
 _IMAGE_HEADERS: dict[str, str] = {
     "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
     "Accept-Language": "cs,en;q=0.9",
 }
+# The whole download, redirect hops included: a slow CDN's large original fits, a server
+# drip-feeding bytes does not hold an image worker.
+_IMAGE_DEADLINE_S = 60.0
 _SESSION: requests.Session | None = None
 _SESSION_LOCK = threading.Lock()
 
@@ -224,14 +229,7 @@ def _session() -> requests.Session:
     if _SESSION is None:
         with _SESSION_LOCK:
             if _SESSION is None:
-                from scraper.portal_base import _BASE_HEADERS, client_hints
-
-                session = requests.Session()
-                session.headers.update({
-                    **_BASE_HEADERS, **_IMAGE_HEADERS,
-                    **client_hints(_BASE_HEADERS["User-Agent"]),
-                })
-                _SESSION = session
+                _SESSION = egress.safe_session(_IMAGE_HEADERS)
     return _SESSION
 
 
@@ -254,6 +252,7 @@ def download_image(
     """
     target = with_transform(url, transform_ops)
     if proxies:
+        egress.check_url(target)
         hop = _session().get(
             target, timeout=timeout, allow_redirects=False, proxies=dict(proxies))
         hop.raise_for_status()
@@ -266,21 +265,14 @@ def download_image(
                     f"body exceeds {media.MAX_IMAGE_BYTES} bytes"
                 )
             return bytes(hop.content)
-    with _session().get(target, timeout=timeout, stream=True) as response:
-        response.raise_for_status()
-        declared = response.headers.get("Content-Length")
-        if declared and declared.isdigit() and int(declared) > media.MAX_IMAGE_BYTES:
-            raise NotAnImageError(
-                f"declared size {declared} exceeds {media.MAX_IMAGE_BYTES} bytes"
-            )
-        buf = bytearray()
-        for chunk in response.iter_content(chunk_size=65536):
-            buf += chunk
-            if len(buf) > media.MAX_IMAGE_BYTES:
-                raise NotAnImageError(
-                    f"body exceeds {media.MAX_IMAGE_BYTES} bytes"
-                )
-        return bytes(buf)
+    try:
+        result = egress.fetch(
+            target, session=_session(), max_bytes=media.MAX_IMAGE_BYTES,
+            deadline_s=_IMAGE_DEADLINE_S, read_timeout_s=timeout)
+    except egress.ResponseTooLarge as exc:
+        raise NotAnImageError(str(exc)) from exc
+    egress.raise_for_status(result)
+    return result.body
 
 
 class R2Client:

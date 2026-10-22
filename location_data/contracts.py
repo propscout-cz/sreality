@@ -75,6 +75,8 @@ EXTRACTOR_PREFIXES: dict[str, str] = {
     "ceskereality": "cr.",
     "realitymix": "rm.",
     "maxima": "mx.",
+    # Any other site, one pasted advert at a time (the tenth portal): text-only, `wb.txt.*`.
+    "web": "wb.",
 }
 
 # Migration 380's enums, MINUS what rule 25 retired. A Postgres enum cannot shrink in
