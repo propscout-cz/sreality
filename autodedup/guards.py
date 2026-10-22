@@ -38,6 +38,17 @@ class GuardSide(Protocol):
     area_m2: float | None
     disposition: str | None
     floor: int | None
+    # W32w: the body's own readings, empty unless the dial that reads them is on.
+    printed_unit_areas: tuple[float, ...]
+    printed_accessory_areas: tuple[float, ...]
+    printed_storeys: tuple[tuple[str, tuple[int, ...]], ...]
+    worded_storey: bool
+    printed_disposition: str | None
+
+
+# W1: a sum of printed figures meets a figure within one square metre or two per cent.
+COMPOSITION_ABS_M2: float = 1.0
+COMPOSITION_REL: float = 0.02
 
 
 def area_rel_diff(a: float | None, b: float | None) -> float | None:
@@ -64,24 +75,103 @@ def area_relation(
 def pair_veto(a: GuardSide, b: GuardSide, settings: Settings | None = None) -> str | None:
     """The name of the first hard guard the pair breaks (E2-E5), or None when it passes.
 
-    Missing data is never a mismatch (E12): every clause needs BOTH sides known."""
+    Missing data is never a mismatch (E12): every clause needs BOTH sides known. The W32w
+    dials (`witness_*`) read each column beside what its own body prints."""
     cfg = settings or Settings()
     if (a.category_type is not None and b.category_type is not None
             and a.category_type != b.category_type):
         return "category_type"
     if not category_main_compatible(a.category_main, b.category_main):
         return "category_main"
-    if area_relation(a.area_m2, b.area_m2, cfg) == "reject":
+    if area_relation(a.area_m2, b.area_m2, cfg) == "reject" and not (
+            cfg.witness_area and areas_witnessed(a, b, cfg.area_reject_pct)):
         return "area"
     is_land = LAND_CATEGORY in (a.category_main, b.category_main)
-    if (not is_land and a.disposition is not None and b.disposition is not None
-            and a.disposition != b.disposition):
+    dispo_a, dispo_b = a.disposition, b.disposition
+    if cfg.witness_disposition:
+        dispo_a, dispo_b = witnessed_disposition(a), witnessed_disposition(b)
+    if (not is_land and dispo_a is not None and dispo_b is not None
+            and dispo_a != dispo_b):
         return "disposition"
     if (a.category_main == FLAT_CATEGORY and b.category_main == FLAT_CATEGORY
             and a.floor is not None and b.floor is not None
-            and abs(a.floor - b.floor) >= 2):
+            and abs(a.floor - b.floor) >= 2
+            and not (cfg.witness_floor and storeys_witnessed(a, b))):
         return "floor"
     return None
+
+
+def _figures(side: GuardSide) -> tuple[float, ...]:
+    """W1's figure set: the column and the unit figures the body prints."""
+    column = (side.area_m2,) if side.area_m2 is not None and side.area_m2 > 0.0 else ()
+    return column + side.printed_unit_areas
+
+
+def _composes(side: GuardSide, figures: Sequence[float]) -> bool:
+    """Ruling 13: one of `side`'s figures plus one or two of the accessories its body prints is
+    one of `figures` (`44 = 40 + 4 sklep`, `60 = 54 + 4 balkon + 2 sklep`, `100 = 60 + 39,4
+    terasa`): one area written with and without its extras."""
+    extras = side.printed_accessory_areas
+    sums = list(extras) + [extras[i] + extras[j]
+                           for i in range(len(extras)) for j in range(i + 1, len(extras))]
+    for base in _figures(side):
+        for extra in sums:
+            total = base + extra
+            for figure in figures:
+                gap = abs(figure - total)
+                if gap <= COMPOSITION_ABS_M2 or gap <= COMPOSITION_REL * max(figure, total):
+                    return True
+    return False
+
+
+def areas_witnessed(a: GuardSide, b: GuardSide, tol: float) -> bool:
+    """W1: some figure of one side is within `tol` of some figure of the other, or one side's
+    figure plus its printed accessories is a figure of the other — the two columns are then one
+    area stated two ways, not two areas."""
+    left, right = _figures(a), _figures(b)
+    for x in left:
+        for y in right:
+            diff = area_rel_diff(x, y)
+            if diff is not None and diff <= tol:
+                return True
+    return _composes(a, right) or _composes(b, left)
+
+
+def witnessed_disposition(side: GuardSide) -> str | None:
+    """W5: the column, or the one disposition the body prints where it contradicts the column."""
+    if side.disposition is not None and side.printed_disposition is not None:
+        return side.printed_disposition
+    return side.disposition
+
+
+def _column_storey(form: str, value: int) -> int:
+    """A printed storey on the floor column's scale: `N. NP` is N-1 (the ground floor is 0,
+    E211's reading), `N. PP` is -N as printed."""
+    return value if form == "pp" else value - 1
+
+
+def storeys_witnessed(a: GuardSide, b: GuardSide) -> bool:
+    """W2: the floor columns' gap is not a stated fact.
+
+    Both bodies print storeys in the same nouns and in every noun the nearest two are under two
+    apart (both `v 6. NP`); or exactly one body prints a storey, one storey only, and it is the
+    silent side's column (`-1. PP` against a column of -1). A body that places the unit in
+    words (`v přízemí`, `v posledním podlaží`) is not silent, and a body naming two storeys
+    witnesses none."""
+    left, right = dict(a.printed_storeys), dict(b.printed_storeys)
+    if left and right:
+        if set(left) != set(right):
+            return False
+        return all(min(abs(x - y) for x in left[form] for y in right[form]) < 2
+                   for form in left)
+    for printer, silent in ((a, b), (b, a)):
+        if silent.printed_storeys or silent.worded_storey or printer.worded_storey:
+            continue
+        storeys = {_column_storey(form, value)
+                   for form, values in printer.printed_storeys for value in values}
+        if len(storeys) == 1 and next(iter(storeys)) == silent.floor:
+            return True
+    return False
 
 
 def unit_designator_conflict(
@@ -152,6 +242,40 @@ def _spread_is_printed_one(
     return True
 
 
+def _witnessed_far_pairs(
+    members: Sequence["Fingerprint"], cfg: Settings, closure_of: Mapping[int, int] | None,
+) -> list[tuple[int, int]]:
+    """W1 at cluster grain: the member pairs of two closures whose columns are further apart
+    than the spread and whose figures neither meet within it nor compose."""
+    sized = [fp for fp in members if fp.area_m2 is not None and fp.area_m2 > 0.0]
+    out: list[tuple[int, int]] = []
+    for index, left in enumerate(sized):
+        for right in sized[index + 1:]:
+            gap = area_rel_diff(left.area_m2, right.area_m2)
+            if gap is None or gap <= cfg.cluster_area_spread:
+                continue
+            if _same_closure(left.listing_id, right.listing_id, closure_of):
+                continue
+            if not areas_witnessed(left, right, cfg.cluster_area_spread):
+                out.append((left.listing_id, right.listing_id))
+    return out
+
+
+def _pairs_print_one(pairs: Sequence[tuple[int, int]], relation: "ClusterRelation") -> bool:
+    """E280 over the pairs W1 left far: each prints the same floor-area figures in both bodies."""
+    from autodedup.indistinguishable import _printed_areas_prevail
+
+    reader = getattr(relation, "listings", None)
+    if reader is None:
+        return False
+    listings = reader()
+    for left_id, right_id in pairs:
+        a, b = listings.get(left_id), listings.get(right_id)
+        if a is None or b is None or not _printed_areas_prevail(a, b):
+            return False
+    return True
+
+
 def _same_closure(left: int, right: int, closure_of: Mapping[int, int] | None) -> bool:
     if not closure_of:
         return False
@@ -217,8 +341,13 @@ def cluster_invariants_ok(
 
     sized = [(fp.listing_id, fp.area_m2) for fp in members
              if fp.area_m2 is not None and fp.area_m2 > 0.0]
-    if _apart(sized, closure_of,
-              lambda lo, hi: abs(hi - lo) / max(lo, hi) > cfg.cluster_area_spread):
+    if cfg.witness_area:
+        far = _witnessed_far_pairs(members, cfg, closure_of)
+        if far and not (cfg.d43_printed_area_prevails and relation is not None
+                        and _pairs_print_one(far, relation)):
+            return "area_spread"
+    elif _apart(sized, closure_of,
+                lambda lo, hi: abs(hi - lo) / max(lo, hi) > cfg.cluster_area_spread):
         if not (cfg.d43_printed_area_prevails and relation is not None
                 and _spread_is_printed_one(members, cfg, relation, closure_of)):
             return "area_spread"

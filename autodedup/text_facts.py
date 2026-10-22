@@ -360,6 +360,47 @@ def same_form_floor_gap(left: Mapping[str, frozenset[int]],
     return min(gaps) if gaps else None
 
 
+# --- the storeys BELOW ground (W32w, witness_floor) ------------------------------------------
+# `printed_floors` reads only storeys above ground, so one Vršovické náměstí 1+1 whose idnes body
+# says `(-1. PP)` while its column says 1 reads as no storey at all. A numbered `PP` or
+# `podzemní podlaží` is the storey below ground it numbers, `v suterénu` the first one; each is
+# returned as a negative storey (`1. PP` is -1), the scale the floor columns use below ground.
+# `polosuterén` is not read: a half-sunk storey is the ground floor on some portals.
+_BASEMENT_NUMBERED = re.compile(r"(?<![\d.,])-?\s?([1-9])\.?\s*(?:pp\b|podzemni\w*\s+podlazi)")
+_BASEMENT_WORD = re.compile(r"\bsuteren(?:u|em|ni\w*)?\b|\b(?:v|ve)\s+podzemni\w*\s+podlazi")
+
+
+def printed_basement_storeys(text: str | None) -> frozenset[int]:
+    """Every storey below ground the body prints, as a negative number (`1. PP` is -1)."""
+    return _printed_basement_storeys(text) if text else frozenset()
+
+
+@body_cached
+def _printed_basement_storeys(text: str) -> frozenset[int]:
+    folded = fact_text(text)
+    out = {-int(match.group(1)) for match in _BASEMENT_NUMBERED.finditer(folded)}
+    if _BASEMENT_WORD.search(folded):
+        out.add(-1)
+    return frozenset(out)
+
+
+# --- the disposition the body prints (W32w, witness_disposition) -----------------------------
+# The two standard Czech forms only, `N+kk` and `N+1`, in the spelling `disposition_norm` gives
+# a column. One idnes advert in Areál Hvězda is filed 5+kk and its own body sells `byt 5+1`.
+_PRINTED_DISPOSITION = re.compile(r"\b(\d)\s*\+\s*(kk|1)\b")
+
+
+def printed_dispositions(text: str | None) -> frozenset[str]:
+    """Every disposition the body prints, `3+kk` / `2+1`."""
+    return _printed_dispositions(text) if text else frozenset()
+
+
+@body_cached
+def _printed_dispositions(text: str) -> frozenset[str]:
+    return frozenset(f"{match.group(1)}+{match.group(2)}"
+                     for match in _PRINTED_DISPOSITION.finditer(fact_text(text)))
+
+
 # --- the storey the body predicates of the OFFERED unit (E181) ------------------------------
 # `printed_floors` is a SET of every storey a body names, and a body names the building's as
 # well as the unit's: one Dašice mill advert offers a space `umístěného v 2.NP` and mentions a

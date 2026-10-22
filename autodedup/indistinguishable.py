@@ -2742,7 +2742,12 @@ def distinguishing_facts(
         excused = (floor_total_camp_shift(a, b, cfg)
                    or total_floors_agreeing_unit(a, b, cfg)
                    or printed_storeys_prevail(a, b))
-        if delta_total and not joint and not camped and not ambiguous and not excused:
+        # W32w (witness_total_floors): two columns no body prints a count beside are two form
+        # fields, not a stated fact; where a body prints one, E954 above has already read it.
+        unwitnessed = cfg.witness_total_floors and not (
+            printed_storey_counts(a.description) or printed_storey_counts(b.description))
+        if (delta_total and not joint and not camped and not ambiguous and not excused
+                and not unwitnessed):
             add("total_floors", a.total_floors, b.total_floors)
 
     plot_conflict = _plot_conflict(a, b, cfg, is_land)
@@ -2797,9 +2802,12 @@ def distinguishing_facts(
             and a.location.obec_kod != b.location.obec_kod):
         add("obec", a.location.obec_name or a.location.obec_kod,
             b.location.obec_name or b.location.obec_kod)
+    # W32w (witness_street): the resolver's street is read only where both bodies print streets
+    # and share none; two bodies that name no street leave the geocoder's reading unstated.
     if (a.location.street_key and b.location.street_key
             and a.location.street_key != b.location.street_key
-            and not (lenient and _pins_together(a, b, cfg.d43_street_min_distance_m))):
+            and not (lenient and _pins_together(a, b, cfg.d43_street_min_distance_m))
+            and not (cfg.witness_street and prose_street_conflict(a, b) is None)):
         add("street", a.location.street_key, b.location.street_key)
 
     # The compass direction, which is what separates two otherwise identical flats in one

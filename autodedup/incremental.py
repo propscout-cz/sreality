@@ -155,11 +155,20 @@ class GuardRow:
     area_m2: float | None
     disposition: str | None
     floor: int | None
+    # W32w: the body's readings the `witness_*` dials add to the veto. The MemoryStore keeps
+    # them with the row; `rt_fp` has no columns for them, so a row the SQL store serves carries
+    # the defaults and is read by its columns alone.
+    printed_unit_areas: tuple[float, ...] = ()
+    printed_accessory_areas: tuple[float, ...] = ()
+    printed_storeys: tuple[tuple[str, tuple[int, ...]], ...] = ()
+    worded_storey: bool = False
+    printed_disposition: str | None = None
 
 
 def guard_row(fp: Fingerprint) -> GuardRow:
     return GuardRow(fp.listing_id, fp.category_main, fp.category_type, fp.area_m2,
-                    fp.disposition, fp.floor)
+                    fp.disposition, fp.floor, fp.printed_unit_areas, fp.printed_accessory_areas,
+                    fp.printed_storeys, fp.worded_storey, fp.printed_disposition)
 
 
 @dataclass(slots=True, frozen=True)

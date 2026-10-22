@@ -1065,6 +1065,24 @@ class Settings:
     # E305r (W31): the stated cellar yields to >= 4 tight photo matches AND agreeing price paths
     # (one agency corrected `sklep 2m2` to `5 m2` between two versions of its own text).
     d43_cellar_area_photo_yield: bool = False
+    # --- W32w (research): witnessed columns ------------------------------------------------------
+    # A portal COLUMN is a stated fact only until the ad's own text contradicts or composes it
+    # (convention 1, ruling 13). One dial per column; with all five off this is W31 exactly.
+    # Area: each side reads as its column plus the unit figures its body prints (a body printing
+    # more than three is a price list and witnesses nothing), or as one printed unit figure plus
+    # one or two printed accessories (`44 = 40 + 4 sklep`). Pair veto and cluster spread only.
+    witness_area: bool = False
+    # Floor: the flat floor veto is lifted where both bodies print the same nouns with every
+    # same-noun gap under two, or where the one body that prints a storey (`-1. PP` read too)
+    # prints the silent side's column.
+    witness_floor: bool = False
+    # Total floors: the D43 limb fires only where a body prints a storey count.
+    witness_total_floors: bool = False
+    # Street: the resolver's street fires only where both bodies print streets and share none.
+    witness_street: bool = False
+    # Disposition: a body printing one disposition other than its own column is read by it in
+    # the pair veto.
+    witness_disposition: bool = False
 
     def __post_init__(self) -> None:
         # A sweep file is JSON, so a tuple field arrives as a list: normalise before validating.
