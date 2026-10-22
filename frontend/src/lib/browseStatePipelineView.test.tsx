@@ -90,11 +90,11 @@ describe('loadPipelineView (URL adapter)', () => {
   });
 });
 
-/* Operator ruling 2026-10-19: everything resets on a preset click and what the
- * preset stores gets applied — the lenses stay outside preset identity, so a
- * click turns them off like the broker scope and the dismissed reveal. */
-describe('loadPreset resets the lenses', () => {
-  it('turns off the active curated sets, the broker and the dismissed reveal', () => {
+/* Operator ruling 2026-10-22 (reversing 2026-10-19): a preset click applies
+ * every filter the preset stores, the lenses included — so a preset saved
+ * without them (every preset before the ruling) turns them off. */
+describe('loadPreset applies the lenses it stores', () => {
+  it('turns off the curated sets, the broker and the dismissed reveal a preset does not store', () => {
     const h = mount(
       '/browse?cat=dum&pipeline_excluded=any&collections=4&tags=1,2&broker=7&dismissed=show',
     );
@@ -114,5 +114,33 @@ describe('loadPreset resets the lenses', () => {
     expect(h.filters.brokerId).toBeNull();
     expect(h.filters.showDismissed).toBe(false);
     expect(h.state.activePresetId).toBe('vys');
+  });
+
+  it('applies the curated sets, the broker and the dismissed reveal a preset stores', () => {
+    const h = mount('/browse?cat=dum');
+    act(() => h.state.loadPreset({
+      id: 'deals',
+      name: 'Moje dealy',
+      filter_spec: {
+        filters: {
+          categoryMain: ['byt'],
+          categoryType: 'prodej',
+          pipeline: { set: 'out', in: [], out: [] },
+          collections: { set: 'out', in: [], out: [] },
+          tags: { set: null, in: [1, 2], out: [] },
+          brokerId: 7,
+          showDismissed: true,
+        },
+        sort: null,
+      },
+      created_at: '2026-10-22T00:00:00Z',
+      updated_at: '2026-10-22T00:00:00Z',
+    } as never));
+    expect(h.filters.pipeline).toEqual({ set: 'out', in: [], out: [] });
+    expect(h.filters.collections).toEqual({ set: 'out', in: [], out: [] });
+    expect(h.filters.tags).toEqual({ set: null, in: [1, 2], out: [] });
+    expect(h.filters.brokerId).toBe(7);
+    expect(h.filters.showDismissed).toBe(true);
+    expect(h.state.activePresetId).toBe('deals');
   });
 });

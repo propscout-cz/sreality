@@ -379,10 +379,10 @@ describe('<DashboardBar> saving', () => {
     expect(screen.getByRole('button', { name: 'Ceny' })).not.toHaveAccessibleDescription(EDITED);
   });
 
-  it('marks a drifted filter dirty and saves the current filter into a dashboard that carries one', async () => {
+  it('marks a drifted filter dirty and saves the current filter into a dashboard that carries one, without the lenses', async () => {
     loadedBefore('d-filter');
     vi.mocked(updateStatsDashboard).mockResolvedValue(WITH_FILTER);
-    renderBar('/browse?tab=stats&dashboard=d-filter&cat=byt', [B]);
+    renderBar('/browse?tab=stats&dashboard=d-filter&cat=byt&tags=4&broker=7&dismissed=show', [B]);
     expect(await chip('Domy')).toHaveAccessibleDescription(EDITED);
     const dialog = await openUpdate();
     expect(box(dialog)).toHaveAttribute('aria-pressed', 'true');
@@ -392,6 +392,10 @@ describe('<DashboardBar> saving', () => {
     expect(patch.charts).toEqual([B]);
     expect(patch.filter_spec?.filters.categoryMain).toEqual(['byt']);
     expect(patch.filter_spec?.filters.bounds).toBeNull();
+    /* A dashboard can be shared: the owner's lenses never ride into it. */
+    expect(patch.filter_spec?.filters.tags).toBeNull();
+    expect(patch.filter_spec?.filters.brokerId).toBeNull();
+    expect(patch.filter_spec?.filters.showDismissed).toBe(false);
     expect(patch.filter_spec?.sort).toBe('-first_seen_at');
   });
 

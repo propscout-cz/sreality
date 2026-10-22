@@ -30,6 +30,9 @@ caller's own RLS**, never as property ids on the wire. Every wave deletes more t
    stored in preset gets applied" — the three sets stay outside preset identity, and a preset click
    (and the phone Feed's scope chip) resets them like the broker scope and the dismissed reveal;
    `withPresetLenses` is deleted.
+   **Replaced again 2026-10-22 (operator):** a preset keeps EVERY filter — the three sets, the
+   broker and the dismissed reveal are stored, dirty it and apply on a click. Only a Stats
+   dashboard (shareable) leaves them out: `PRESET_EXCLUDED_KEYS` became `DASHBOARD_EXCLUDED_KEYS`.
 7. **Look:** the checkbox becomes the chip; stage chips are visible without ticking anything;
    a picked stage chip fills copper (in) or brick (out) with its badge kept.
 8. **Czech** chip and summary words: "v pipeline / mimo pipeline", "v kolekci / v žádné kolekci",

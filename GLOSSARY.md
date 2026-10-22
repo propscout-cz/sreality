@@ -230,8 +230,9 @@ An account's decision to hide a property from its own Browse.
 _Avoid_: hide, mute, ignore, archive
 
 **Lens**:
-A filter over the account's own curation that sits outside a preset's identity: the three curated-set
-scopes, the broker scope and the dismissed reveal; it never dirties a preset, and a preset click resets it.
+A filter over the account's own curation: the three curated-set scopes, the broker scope and the
+dismissed reveal. A preset stores it like every filter (since 2026-10-22); a Stats dashboard, which can be
+shared, never does.
 _Avoid_: view, mode, preset filter, overlay
 
 **Fold**:

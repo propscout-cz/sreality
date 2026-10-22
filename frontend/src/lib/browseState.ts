@@ -66,8 +66,8 @@ export interface MapOverlayState {
    * interface guarantees: it is URL-serialised (so a Kč/m² map is a shareable
    * link), it is carried by preserveExtras (so filtering does not silently
    * reset it), and it sits OUTSIDE preset identity (so flipping it can never
-   * mark a saved preset dirty — the same reasoning rule 22 applies to the
-   * pipeline scope). The UNIT is still decided per pin, never per map. */
+   * mark a saved preset dirty: a view knob, not a filter). The UNIT is still
+   * decided per pin, never per map. */
   priceMetric: PriceMetric;
   /* Whether the pins print their price label at all (URL key `labels`, `0` hides). */
   priceLabels: boolean;

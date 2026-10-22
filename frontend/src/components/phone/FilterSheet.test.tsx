@@ -308,7 +308,7 @@ describe('presets from the phone', () => {
   const presetBase = filtersForPreset({ ...DEFAULT_FILTERS, categoryType: 'prodej', dispositions: ['2+kk'] }, true);
   const draft: ListingFilters = { ...presetBase, priceMax: 6_000_000, pipeline: { set: 'in', in: [], out: [] } };
 
-  it('saves the draft as a new preset — filters (lenses dropped) and the order — and selects it', async () => {
+  it('saves the draft as a new preset — every filter, the lenses included, and the order — and selects it', async () => {
     const user = userEvent.setup();
     vi.mocked(api.createFilterPreset).mockResolvedValue({ ...PRESET, id: 'new', name: 'Do 6 M' });
     const { onApply } = renderSheet({ filters: draft, base: presetBase, preset: PRESET });
@@ -322,8 +322,8 @@ describe('presets from the phone', () => {
       filter_spec: { filters: filtersForPreset(draft, true), sort: '-first_seen_at' },
       color: null,
     });
-    /* The pipeline scope never rides into a preset (rule 22). */
-    expect(vi.mocked(api.createFilterPreset).mock.calls[0][0].filter_spec.filters.pipeline).toBeNull();
+    /* The pipeline scope rides into the preset like any filter (ruling 2026-10-22). */
+    expect(vi.mocked(api.createFilterPreset).mock.calls[0][0].filter_spec.filters.pipeline).toEqual({ set: 'in', in: [], out: [] });
     await waitFor(() => expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ presetId: 'new' })));
   });
 
