@@ -1,20 +1,20 @@
-"""System alerts: the one health ladder, from check results to incidents to notices.
+"""System alerts: the one health ladder, from check results to incidents and their rungs.
 
 `reconcile` reads each registered check's newest result, keeps one `ops_incidents` row per
-failing cell (`cell:<key>:<subject>`) and tells each one through `system_health`
-`notification_dispatches` rows: an onset, reminders by class until it is acknowledged on
-Health, and one recovery once an OK is measured again across the hold. A newest result that
-is `unknown`, past its key's staleness budget or older than the key's registration is Not
-measured, and Not measured is inert: it neither opens, keeps, recovers nor reminds. Stdlib
-plus a caller-passed psycopg connection, so the API and the scripts import it with base
+failing cell (`cell:<key>:<subject>`) and tells each one by stamping it (`alert_count`,
+`alerted_at`): an onset, then reminders by class until it is acknowledged on Health; one
+recovery closes it once an OK is measured again across the hold. Health shows the incidents and
+the GitHub canary (scripts/health_canary.py) turns an alarm's unacknowledged rung into the
+operator's e-mail; no system alert reaches the bell (ruling R2, notifications W1). A newest
+result that is `unknown`, past its key's staleness budget or older than the key's registration
+is Not measured, and Not measured is inert: it neither opens, keeps, recovers nor reminds.
+Stdlib plus a caller-passed psycopg connection, so the API and the scripts import it with base
 dependencies only.
 """
 
 from __future__ import annotations
 
 import datetime as _dt
-import json
-from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,8 +36,6 @@ RECOVERY_HOLD_MIN_S = 1800
 UNMEASURED_CLOSE_DAYS = 7
 # The signature namespace of cell incidents, the only kind since the signature engine retired (621).
 CELL_PREFIX = "cell:"
-# Room for every failing cell's reason, yet one readable bell entry and one Telegram message.
-MESSAGE_MAX_CHARS = 1500
 
 _RANK = {"ok": 0, "warn": 1, "fail": 2}
 
@@ -47,7 +45,7 @@ _LOCK_SQL = "SELECT pg_try_advisory_xact_lock(hashtext('health_reconcile'))"
 # error as fail and no message, so a key is Not measured until the new harness measures it.
 # The budget is read as seconds: psycopg parses interval text only under the default IntervalStyle.
 _NEWEST_SQL = """
-SELECT hc.key, hc.class, hc.cadence_s, hc.label,
+SELECT hc.key, hc.class, hc.cadence_s,
        extract(epoch FROM hc.staleness_budget)::float8,
        latest.status, latest.run_at, latest.details -> 'cells'
   FROM health_checks hc
@@ -102,45 +100,6 @@ SELECT r.check_key, r.run_at, r.details -> 'cells'
 """
 
 
-def _system_health_channels(conn: Any) -> list[str]:
-    """Operator-chosen external channels for system alerts (default [] = in-app only)."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT value FROM app_settings WHERE key = 'system_health_channels'"
-        )
-        row = cur.fetchone()
-    raw = row[0] if row and row[0] is not None else None
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except (TypeError, ValueError):
-            return []
-    if not isinstance(raw, list):
-        return []
-    return [c for c in raw if isinstance(c, str) and c]
-
-
-def emit_system_alert(conn: Any, check_key: str, message: str, *, dedupe_key: str) -> bool:
-    """Insert one system_health dispatch for `check_key`; True when it landed (repeats no-op)."""
-    if not dedupe_key.startswith(f"sys:{check_key}:"):
-        raise ValueError(f"dedupe key {dedupe_key!r} is outside sys:{check_key}:")
-    channels = _system_health_channels(conn)
-    with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO notification_dispatches "
-            "  (source_kind, change_kind, channel, status, message, dedupe_key, target_channels) "
-            "VALUES ('system_health', 'system_alert', 'in_app', 'sent', %s, %s, %s::text[]) "
-            "ON CONFLICT (dedupe_key) DO NOTHING",
-            (message, dedupe_key, channels),
-        )
-        return (cur.rowcount or 0) > 0
-
-
-def _iso(run_at: _dt.datetime) -> str:
-    """Stable second-resolution UTC stamp for incident-anchored dedupe keys."""
-    return run_at.astimezone(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 def _as_utc(value: _dt.datetime) -> _dt.datetime:
     """Tolerate a naive timestamp from a caller or a fixture; the column is timestamptz."""
     if value.tzinfo is None:
@@ -160,7 +119,6 @@ class _Check:
     key: str
     cls: str
     cadence_s: int
-    label: str
     run_at: _dt.datetime | None
     cells: dict[str, dict[str, Any]]
 
@@ -218,12 +176,12 @@ def _cells(raw: Any) -> dict[str, dict[str, Any]]:
 
 def _check(row: tuple[Any, ...], at: _dt.datetime) -> _Check:
     """A registry row with its newest result; only a measured result inside its budget has cells."""
-    key, cls, cadence_s, label, budget_s, status, run_at, raw_cells = row
+    key, cls, cadence_s, budget_s, status, run_at, raw_cells = row
     run_at, cadence = _opt_utc(run_at), int(cadence_s)
     # pipeline_checks_public's effective_status: missing, unknown or stale is Not measured.
     measured = (status in _RANK and run_at is not None
                 and not _stale(run_at, budget_s, at))
-    return _Check(key, cls, cadence, label or key, run_at, _cells(raw_cells) if measured else {})
+    return _Check(key, cls, cadence, run_at, _cells(raw_cells) if measured else {})
 
 
 def _incident(row: tuple[Any, ...]) -> _Incident:
@@ -234,76 +192,32 @@ def _incident(row: tuple[Any, ...]) -> _Incident:
                      _opt_utc(alerted), _opt_utc(ok_since), acked is not None)
 
 
-def _rung(cls: str, elapsed_h: float) -> tuple[str, float] | None:
-    """The highest reminder rung an incident open `elapsed_h` hours has reached: (label, hours)."""
+def _rung(cls: str, elapsed_h: float) -> float | None:
+    """The hours of the highest reminder rung an incident open `elapsed_h` hours has reached."""
     if cls == "gauge":
         days = int(elapsed_h // GAUGE_RUNG_H)
-        return (f"d{days}", days * GAUGE_RUNG_H) if days >= 1 else None
+        return days * GAUGE_RUNG_H if days >= 1 else None
     weeks = int(elapsed_h // ALARM_WEEKLY_H)
     if weeks >= 1:
-        return f"w{weeks + 1}", weeks * ALARM_WEEKLY_H  # the 168 h rung opens week two
+        return weeks * ALARM_WEEKLY_H  # the 168 h rung opens week two
     reached = [h for h in ALARM_RUNGS_H if h <= elapsed_h]
-    return (f"{max(reached):g}h", max(reached)) if reached else None
+    return max(reached) if reached else None
 
 
-def _clip(text: str) -> str:
-    """Cap a notice at MESSAGE_MAX_CHARS."""
-    return text if len(text) <= MESSAGE_MAX_CHARS else text[: MESSAGE_MAX_CHARS - 1] + "…"
-
-
-def _named(subjects: Iterable[str]) -> str:
-    """The subjects a notice names, each once, sorted."""
-    return ", ".join(sorted(set(subjects)))
-
-
-def _anchor(incidents: list[_Incident]) -> str:
-    """A grouped notice's dedupe tail: `{oldest onset}:{lowest id}x{count}`."""
-    # An incident joins one notice per rung and one recovery, so its lowest id keeps two groups
-    # of one check apart when their cells are told in different passes.
-    oldest = min(i.first_seen_at for i in incidents)
-    return f"{_iso(oldest)}:{min(i.id for i in incidents)}x{len(incidents)}"
-
-
-def _onset(check: _Check, opened: list[tuple[_Incident, dict[str, Any]]]) -> str:
-    """`{label}: Problem — {subject}: {cell message}; …` for the cells this pass opened."""
-    parts = []
-    for inc, cell in opened:
-        text = str(cell.get("message") or "").strip()
-        parts.append(f"{inc.subject}: {text}" if text else inc.subject)
-    return f"{check.label}: Problem — {'; '.join(parts)}"
-
-
-def _reminder(
+def _reminded(
     check: _Check, incidents: list[_Incident], current: dict[int, str], at: _dt.datetime,
-) -> tuple[str, str, list[_Incident]] | None:
-    """The one reminder this check owes this pass (message, dedupe key, incidents), or None."""
-    due: list[tuple[_Incident, str]] = []
+) -> list[_Incident]:
+    """The incidents of `check` a reminder rung is due for this pass: measured failing or warning
+    now, unacknowledged, and not stamped since their highest rung opened."""
+    due = []
     for inc in incidents:
         if inc.id not in current or inc.acknowledged:
             continue
-        rung = _rung(check.cls, (at - inc.first_seen_at).total_seconds() / 3600)
-        if rung and (inc.alerted_at is None
-                     or inc.alerted_at < inc.first_seen_at + _dt.timedelta(hours=rung[1])):
-            due.append((inc, rung[0]))
-    if not due:
-        return None
-    oldest, rung_label = min(due, key=lambda d: d[0].first_seen_at)
-    told = [inc for inc, _ in due]
-    hours = (at - oldest.first_seen_at).total_seconds() / 3600
-    state = "Problem" if any(current[inc.id] == "fail" for inc in told) else "Watch"
-    names = _named(inc.subject for inc in told)
-    message = f"{check.label}: still {state} for {hours:.0f} h" + (f" — {names}" if names else "")
-    return message, f"sys:{check.key}:reminder:{rung_label}:{_anchor(told)}", told
-
-
-def _recovery(check: _Check, incidents: list[_Incident]) -> tuple[str, str]:
-    """The notice for the incidents a measured OK closed this pass: (message, dedupe key)."""
-    oldest = min(incidents, key=lambda i: i.first_seen_at)
-    ok_since = oldest.ok_since or oldest.first_seen_at
-    hours = (ok_since - oldest.first_seen_at).total_seconds() / 3600
-    names = _named(i.subject for i in incidents)
-    message = f"✓ {check.label}: {names + ' ' if names else ''}recovered after {hours:.0f} h"
-    return message, f"sys:{check.key}:recovery:{_anchor(incidents)}"
+        rung_h = _rung(check.cls, (at - inc.first_seen_at).total_seconds() / 3600)
+        if rung_h is not None and (inc.alerted_at is None
+                                   or inc.alerted_at < inc.first_seen_at + _dt.timedelta(hours=rung_h)):
+            due.append(inc)
+    return due
 
 
 def _measured_subjects(
@@ -334,7 +248,7 @@ def reconcile(conn: Any, *, now: _dt.datetime | None = None) -> dict[str, int]:
         incidents = [_incident(row) for row in cur.fetchall()]
         by_sig = {f"{CELL_PREFIX}{i.key}:{i.subject}": i for i in incidents}
 
-        opened: dict[str, list[tuple[_Incident, dict[str, Any]]]] = {}
+        opened: dict[str, list[_Incident]] = {}
         current: dict[int, str] = {}  # incident id -> fail | warn, as measured this pass
         recovered: dict[str, list[_Incident]] = {}
         for check in checks.values():
@@ -347,9 +261,8 @@ def reconcile(conn: Any, *, now: _dt.datetime | None = None) -> dict[str, int]:
                                                 "at": run_at})
                         row = cur.fetchone()
                         if row:
-                            new = _Incident(int(row[0]), check.key, subject, run_at, run_at,
-                                            None, None, False)
-                            opened.setdefault(check.key, []).append((new, cell))
+                            opened.setdefault(check.key, []).append(_Incident(
+                                int(row[0]), check.key, subject, run_at, run_at, None, None, False))
                     continue
                 if status != "ok":
                     if inc.last_seen_at < run_at or inc.ok_since is not None:
@@ -384,24 +297,20 @@ def reconcile(conn: Any, *, now: _dt.datetime | None = None) -> dict[str, int]:
                                            "ids": sorted(i.id for i in group)})
         counts["closed_silently"] = len(retired) + len(dark)
 
+        # Telling is stamping: one onset and at most one reminder per check per pass, each
+        # stamping the incidents it names; a recovery is its RESOLVE above. `notices` counts the
+        # rungs told, one per check and kind.
         by_key: dict[str, list[_Incident]] = {}
         for inc in incidents:
             by_key.setdefault(inc.key, []).append(inc)
         for key, check in checks.items():
-            if key in opened and check.run_at is not None:
-                counts["notices"] += int(emit_system_alert(
-                    conn, key, _clip(_onset(check, opened[key])),
-                    dedupe_key=f"sys:{key}:onset:{_iso(check.run_at)}"))
-                cur.execute(_STAMP_SQL, {"now": at, "ids": [i.id for i, _ in opened[key]]})
-            owed = _reminder(check, by_key.get(key, []), current, at)
-            if owed:
-                message, dedupe, reminded = owed
-                counts["notices"] += int(emit_system_alert(conn, key, _clip(message),
-                                                           dedupe_key=dedupe))
+            if key in opened:
+                cur.execute(_STAMP_SQL, {"now": at, "ids": [i.id for i in opened[key]]})
+                counts["notices"] += 1
+            reminded = _reminded(check, by_key.get(key, []), current, at)
+            if reminded:
                 cur.execute(_STAMP_SQL, {"now": at, "ids": [i.id for i in reminded]})
                 counts["reminded"] += len(reminded)
-            if key in recovered:
-                message, dedupe = _recovery(check, recovered[key])
-                counts["notices"] += int(emit_system_alert(conn, key, _clip(message),
-                                                           dedupe_key=dedupe))
+                counts["notices"] += 1
+        counts["notices"] += len(recovered)
     return counts

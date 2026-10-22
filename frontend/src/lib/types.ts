@@ -538,17 +538,14 @@ export interface Collection {
   created_at: string;
   updated_at: string;
   listing_count: number;
-  /* Monitored collections raise in-app change alerts on their member
-   * properties (price moves, delisting). `notify_channels` is the source's
-   * channel pick that the producer folds into notifications.target_channels —
-   * empty means in-app only. `is_system` marks the protected default
+  /* Monitored collections raise change alerts on their member properties
+   * (price moves, delisting). `is_system` marks the protected default
    * "monitoring" collection (can't be renamed or deleted). */
   monitoring_enabled: boolean;
-  notify_channels: string[];
   is_system: boolean;
   /* Sharing (migration 610). `owner_email` is null exactly when the caller owns
    * the collection (lib/collectionCache `isMine`); on a shared row monitoring
-   * reads off and notify_channels empty — the alerts are the owner's. */
+   * reads off — the alerts are the owner's. */
   owner_email: string | null;
   /* The owner sees every recipient; a recipient sees only its own grant, with
    * `email: null` (= you) — that account_id is the key to leave. */
@@ -1068,10 +1065,6 @@ export interface WatchdogSubscription {
   is_active: boolean;
   created_at: string;
   updated_at: string;
-  /* Non-in_app delivery channels this watchdog fans out to (e.g. ['email'])
-   * — folded into each dispatch's target_channels by the matcher (Sprint N).
-   * in_app is always implicit. */
-  channels: string[];
   dispatch_count: number;
 }
 
@@ -1120,10 +1113,7 @@ export type NotificationSourceKind =
   /* Something was shared with the caller (migrations 610 + 641): a collection
    * (collection_id set) or a pipeline (collection_id null); change_kind
    * 'shared', no listing subject — the `message` text. */
-  | 'share'
-  /* System-health alerts (migration 273/274 producer): pipeline stalls, credit
-   * outages, etc. No listing subject — the payload is the `message` text. */
-  | 'system_health';
+  | 'share';
 
 export interface WatchdogDispatch {
   id: string;
@@ -1134,24 +1124,16 @@ export interface WatchdogDispatch {
   subscription_name: string | null;
   collection_id: number | null;
   collection_name: string | null;
-  sreality_id: number;
-  /* Property grain (Slice 2b). `property_id` is the canonical property;
-   * `change_kind` is why this dispatch fired ('new' = newly matched the
-   * filter, 'price_drop' = a recent price decrease). `sreality_id` is the
-   * property's representative listing (what the feed links to). */
+  /* Property grain (Slice 2b). `property_id` is the property the event is
+   * about — set on every watchdog / collection_monitor row, null on a share;
+   * the row opens it (lib/dispatchTarget). `change_kind` is why this dispatch
+   * fired ('new' = newly matched the filter, 'price_drop' = a recent price
+   * decrease). */
   property_id: number | null;
   change_kind: string;
-  /* Free-text body for the rows with no listing subject: source_kind=
-   * 'system_health' (change_kind 'system_alert') and 'share'
-   * (change_kind 'shared'); null on watchdog / collection_monitor rows, which
-   * describe a listing subject instead. Those two kinds also carry no listing,
-   * so their `sreality_id` is null at runtime despite the type (widening it
-   * touches pages/Watchdog.tsx; owed). */
+  /* Free-text body of a `share` row (change_kind 'shared'), which has no
+   * listing subject; null on watchdog / collection_monitor rows. */
   message: string | null;
-  /* The check a system_health alert is about, read by the API off its dedupe key
-   * (`sys:<check_key>:…`), so the bell opens Health at that check; null on every
-   * other producer. */
-  check_key: string | null;
   /* What a `share` row shares, read by the API off its dedupe key
    * (`share:<kind>:<ref>:…`): the kind, and its id — the collection id, the
    * owner's account uuid for a pipeline, the dashboard uuid. Null on every
@@ -1165,16 +1147,6 @@ export interface WatchdogDispatch {
   trigger_price_czk: number | null;
   prev_price_czk: number | null;
   trigger_snapshot_id: number | null;
-  /* Non-in_app delivery channels the producer stamped (the Sprint N outbox
-   * reads this column); empty = in-app only. */
-  target_channels: string[];
-  estimation_run_id: number | null;
-  estimation_status: EstimationStatus | null;
-  estimation_kind: 'rent' | 'sale' | null;
-  estimated_monthly_rent_czk: number | null;
-  estimated_sale_price_czk: number | null;
-  gross_yield_pct: number | null;
-  confidence: Confidence | null;
   /* Listing-side fields joined via the matcher's LEFT JOIN. Null when
    * the listing has been hard-deleted (shouldn't happen — architectural
    * rule #3 forbids deletes — but render defensively). */
@@ -1196,12 +1168,11 @@ export interface WatchdogDispatch {
   last_seen_at: string | null;
   /* MF (Ministry of Finance) reference gross rental yield % — the
    * deterministic Cenová-mapa figure carried on the listing (migration 133).
-   * Sale apartments only; null on rentals / non-apartments / no territory.
-   * Shown alongside the comparables-based estimation yield. */
+   * Sale apartments only; null on rentals / non-apartments / no territory. */
   mf_gross_yield_pct: number | null;
   /* The portal the property was last seen on (`listings.source`, e.g.
    * 'sreality') + the listing's URL on that portal (`source_url`, may be null
-   * for older sreality rows). Drives the Portal column's clickable chip. */
+   * for older sreality rows). */
   source: string | null;
   source_url: string | null;
 }
@@ -1215,16 +1186,9 @@ export interface WatchdogDispatchesResponse {
   next_cursor: string | null;
 }
 
-/* Unseen dispatch counts (GET /notifications/unread-count). `unread_count` is
- * the total, or the scoped count when a source_kind is requested. */
+/* The caller's unseen notifications (GET /notifications/unread-count): the
+ * one number the nav badge and the feed's header show. */
 export interface NotificationUnreadCount {
-  watchdog: number;
-  collection_monitor: number;
-  share: number;
-  system_health: number;
-  /* `total` sums EVERY source_kind (incl. system_health); the nav bell badge
-   * reads `unread_count` (= total when unscoped), so system alerts count too. */
-  total: number;
   unread_count: number;
 }
 

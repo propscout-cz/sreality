@@ -30,7 +30,8 @@ export type HealthCell = {
 };
 
 /* One `ops_incidents` row of a cell (signature `cell:<key>:<subject>`): open, or closed in
- * the last 14 days. `notice_count` / `last_notice_at` are the bell's onset and reminders. */
+ * the last 14 days. `notice_count` / `last_notice_at` are the ladder's onset and reminders
+ * (`alert_count` / `alerted_at`; since ruling R2b, 2026-10-21, no system alert reaches the bell). */
 export type HealthIncident = {
   id: number;
   subject: string;

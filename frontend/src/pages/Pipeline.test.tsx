@@ -194,7 +194,6 @@ const collection = (id: number, name: string): Collection => ({
   updated_at: '2026-05-01T00:00:00Z',
   listing_count: 1,
   monitoring_enabled: false,
-  notify_channels: [],
   is_system: false,
   owner_email: null,
   shared_with: [],

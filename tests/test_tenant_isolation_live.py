@@ -1391,7 +1391,8 @@ def test_an_admin_reads_the_registry_view_as_the_caller(
 
 
 # Migration 364 stamps every system_health dispatch to the SYSTEM account (account_id is NOT
-# NULL), and no tenant is a member of it, so 292's tenant UPDATE arm never reached one.
+# NULL), and no tenant is a member of it, so no tenant arm reaches one; since migration 651 no
+# admin arm does either (system alerts left the bell, ruling R2).
 _SYSTEM_ACCOUNT = uuid.UUID("00000000-0000-0000-0000-000000000000")
 
 
@@ -1430,32 +1431,40 @@ def seeded_dispatches(
             cur.execute("DELETE FROM collections WHERE id = %s", (coll,))
 
 
-def test_a_platform_admin_marks_a_system_alert_read(
+def test_a_platform_admin_neither_reads_nor_marks_a_system_alert(
     svc: Any, tenants: dict[str, uuid.UUID], seeded_dispatches: dict[str, Any],
 ) -> None:
-    """Migration 619: all 861 system alerts sat unseen because no UPDATE arm reached a
-    SYSTEM-account row. RED by: dropping notification_dispatches_admin_update."""
+    """Migration 651: system alerts live on Health, so the bell, the badge and the feed count an
+    account's own rows only, a platform admin's included. The blanket UPDATE reads no column, so
+    the UPDATE policies alone judge it. RED by: restoring tenant_read's SYSTEM arm or
+    notification_dispatches_admin_update."""
+    with svc.cursor() as cur:
+        cur.execute("SELECT seen_at FROM notification_dispatches WHERE id = %s",
+                    (seeded_dispatches["system"],))
+        before = cur.fetchone()[0]
     with _platform_admin(svc, tenants["a_user"]):
         with scoped(tenants["a_user"]) as conn:
             with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM notification_dispatches WHERE id = %s",
+                            (seeded_dispatches["system"],))
+                assert cur.fetchone() is None, "the platform admin still reads a system alert"
+                cur.execute("UPDATE notification_dispatches SET seen_at = now()")
                 cur.execute(
                     "UPDATE notification_dispatches SET seen_at = now() WHERE id = %s",
                     (seeded_dispatches["system"],),
                 )
-                assert cur.rowcount == 1, "the platform admin cannot mark a system alert read"
+                assert cur.rowcount == 0, "the platform admin still marks a system alert read"
     with svc.cursor() as cur:
-        cur.execute(
-            "SELECT seen_at IS NOT NULL FROM notification_dispatches WHERE id = %s",
-            (seeded_dispatches["system"],),
-        )
-        assert cur.fetchone()[0] is True
+        cur.execute("SELECT seen_at FROM notification_dispatches WHERE id = %s",
+                    (seeded_dispatches["system"],))
+        assert cur.fetchone()[0] == before
 
 
 def test_a_platform_admin_cannot_rewrite_a_system_alert(
     svc: Any, tenants: dict[str, uuid.UUID], seeded_dispatches: dict[str, Any],
 ) -> None:
-    """The admin arm admits the ROW; the column grant keeps an alert's text, channels and
-    dedupe key out of every browser caller's reach, an admin's included.
+    """The column grant keeps every column but seen_at out of every browser caller's reach, an
+    admin's included, whichever row a policy would admit.
 
     RED by: restoring table-wide UPDATE on notification_dispatches to authenticated."""
     import psycopg
@@ -1464,8 +1473,9 @@ def test_a_platform_admin_cannot_rewrite_a_system_alert(
         with scoped(tenants["a_user"]) as conn:
             for sql in (
                 "UPDATE notification_dispatches SET message = 'rewritten' WHERE id = %s",
-                "UPDATE notification_dispatches SET target_channels = '{telegram}' WHERE id = %s",
+                "UPDATE notification_dispatches SET target_channels = '{email}' WHERE id = %s",
                 "UPDATE notification_dispatches SET dedupe_key = 'sys:forged' WHERE id = %s",
+                "UPDATE notification_dispatches SET estimation_run_id = NULL WHERE id = %s",
             ):
                 with pytest.raises(psycopg.errors.InsufficientPrivilege):
                     with conn.transaction():  # a SAVEPOINT, so the refusal cannot poison the txn
@@ -1484,10 +1494,12 @@ def test_a_tenant_cannot_touch_a_system_alert_and_still_marks_its_own_read(
 ) -> None:
     """An UPDATE that reads no column (no WHERE, no RETURNING) is judged by the UPDATE
     policies alone; with a WHERE the read policy, which hides SYSTEM rows from tenants,
-    would mask a broken admin arm. So the blanket statement is the probe of the arm's gate.
+    would mask an UPDATE arm that reaches them. So the blanket statement is the probe.
 
-    RED by: an admin arm without its gate, or a column grant missing seen_at or
-    estimation_run_id (the estimate kickoff from a notification writes it)."""
+    RED by: an UPDATE arm that reaches SYSTEM rows, a column grant missing seen_at, or one that
+    still carries estimation_run_id (migration 651: its one writer, "Estimate rent", is deleted)."""
+    import psycopg
+
     seen_at = "SELECT seen_at FROM notification_dispatches WHERE id = %s"
     with svc.cursor() as cur:
         cur.execute(seen_at, (seeded_dispatches["system"],))
@@ -1505,11 +1517,13 @@ def test_a_tenant_cannot_touch_a_system_alert_and_still_marks_its_own_read(
                 (seeded_dispatches["own"],),
             )
             assert cur.rowcount == 1, "a tenant can no longer mark its own notification read"
-            cur.execute(
-                "UPDATE notification_dispatches SET estimation_run_id = NULL WHERE id = %s",
-                (seeded_dispatches["own"],),
-            )
-            assert cur.rowcount == 1, "a tenant can no longer link an estimate to its notification"
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            with conn.transaction():  # a SAVEPOINT, so the refusal cannot poison the txn
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE notification_dispatches SET estimation_run_id = NULL WHERE id = %s",
+                        (seeded_dispatches["own"],),
+                    )
     with svc.cursor() as cur:
         cur.execute(seen_at, (seeded_dispatches["system"],))
         assert cur.fetchone()[0] == before, "a tenant's blanket update reached a system alert"

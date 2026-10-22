@@ -777,7 +777,7 @@ def _lags(results: list[tuple[_dt.datetime, dict[str, Any]]]) -> list[dict[str, 
 
 def _kinds(ladder: Any) -> list[str]:
     """What the ladder told, in order: onset, reminder or recovery."""
-    return [key.split(":")[2] for _, key, _ in ladder.dispatches]
+    return [t.kind for t in ladder.told]
 
 
 def _committing(k: int, **overrides: Any) -> dict[str, Any]:
@@ -839,7 +839,7 @@ def test_a_watch_opens_nothing_so_the_backlog_a_brake_leaves_reads_not_measured(
     assert lags[-1]["message"].startswith("Not measured: a brake lifted 23 min ago, inside")
     assert [_memory(lag) for lag in lags] == [{}] * 28
     ladder = _told("dedup", 600, results)
-    assert _incidents(ladder, "dedup") == [] and ladder.dispatches == []
+    assert _incidents(ladder, "dedup") == [] and ladder.told == []
 
 
 @pytest.mark.parametrize("last_ok", [4, 5])

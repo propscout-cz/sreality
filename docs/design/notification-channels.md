@@ -1,5 +1,7 @@
 # Notification channels — pluggable delivery layer (Sprint N)
 
+> **SUPERSEDED 2026-10-21** by [notifications-push/PROGRAM.md](./notifications-push/PROGRAM.md) (the delivery layer described here was removed in W1; kept as history)
+
 > **Status: DESIGN PROPOSAL (2026-06-20), NOT YET BUILT.** The delivery half
 > of the unified-notifications work. Consumes the shared event model defined in
 > [`notifications-unified.md`](./notifications-unified.md) (read that first for

@@ -21,7 +21,6 @@ import {
 import { FilterForm } from '@/components/FilterForm';
 import { PortalFilterControl } from '@/components/filter-controls/PortalFilterControl';
 import CityIndexRulesPicker from '@/components/CityIndexRulesPicker';
-import { DeliveryChannelsPicker } from '@/components/DeliveryChannelsPicker';
 import { LocationTypeahead } from '@/components/filter-controls';
 /* Lazy for the same reason as in Filters: this control carries maplibre-gl, and
  * /watchdog/:id is a statically-routed page, so a plain import put the map engine in
@@ -48,7 +47,6 @@ export default function WatchdogEdit() {
     DEFAULT_WATCHDOG_FILTER_SPEC,
   );
   const [isActive, setIsActive] = useState(true);
-  const [channels, setChannels] = useState<string[]>([]);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
@@ -56,7 +54,6 @@ export default function WatchdogEdit() {
       setName(existingQ.data.name);
       setSpec({ ...DEFAULT_WATCHDOG_FILTER_SPEC, ...existingQ.data.filter_spec });
       setIsActive(existingQ.data.is_active);
-      setChannels(existingQ.data.channels ?? []);
       setHydrated(true);
     }
   }, [existingQ.data, hydrated]);
@@ -67,11 +64,10 @@ export default function WatchdogEdit() {
         name,
         filter_spec: spec,
         is_active: isActive,
-        channels,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: watchdogKeys.all });
-      navigate(ROUTES.watchdogManage.build());
+      navigate(ROUTES.watchdog.build());
     },
   });
 
@@ -84,7 +80,7 @@ export default function WatchdogEdit() {
 
   // Watchdog creation now lives on Browse ("Create watchdog" from a saved
   // filter). This page is edit-only; a missing id has nowhere to go.
-  if (!id) return <Navigate to={ROUTES.watchdogManage.build()} replace />;
+  if (!id) return <Navigate to={ROUTES.watchdog.build()} replace />;
 
   return (
     <div className="px-6 py-8 max-w-3xl mx-auto">
@@ -118,12 +114,6 @@ export default function WatchdogEdit() {
               labelOn="Active"
               labelOff="Paused"
             />
-          </Row>
-        </Section>
-
-        <Section title="Delivery">
-          <Row label="Channels">
-            <DeliveryChannelsPicker value={channels} onChange={setChannels} />
           </Row>
         </Section>
 
@@ -224,7 +214,7 @@ export default function WatchdogEdit() {
 
         <div className="flex items-center justify-between gap-3 border-t border-[var(--color-rule)] pt-5">
           <Link
-            to={ROUTES.watchdogManage.build()}
+            to={ROUTES.watchdog.build()}
             className="text-sm text-[var(--color-ink-3)] hover:text-[var(--color-ink)]"
           >
             ← Cancel

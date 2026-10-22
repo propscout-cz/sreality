@@ -12,15 +12,6 @@ boundary on every request. Reads here take no account at all (`current_account_i
 is the scope); `POST /subscriptions` is the one write, and it carries exactly one
 account via `tenant_pool.require_account_id`. Doctrine:
 `.claude/skills/database/references/tenancy.md`.
-
-Two routes deliberately stay on the service-role connection + `require_token`:
-- `POST /dispatches/{id}/estimate` kicks off an estimation that reads the shared
-  `listings` table (RLS deny-all for `authenticated`, the A5 shape) and INSERTs an
-  `estimation_runs` row whose own `account_id` stamping is Wave-1 metering scope —
-  moving it correctly needs the two-connection split `POST /listings/lookup` uses,
-  a separate follow-up.
-- `POST /matcher/run` runs the platform-wide producer passes (service-role by
-  design, rule #16); the row-level trigger stamps each dispatch's `account_id`.
 """
 
 from __future__ import annotations
@@ -28,10 +19,9 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING, Any, Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from api import dependencies as deps
 from api import notifications as nf
 from api import tenant_pool
 from api.notifications import WatchdogFilterSpec
@@ -49,15 +39,12 @@ class CreateSubscriptionIn(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     filter_spec: WatchdogFilterSpec
     is_active: bool = True
-    # Non-in_app delivery channels (e.g. ['email']). in_app is always implicit.
-    channels: list[str] = Field(default_factory=list)
 
 
 class UpdateSubscriptionIn(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     filter_spec: WatchdogFilterSpec | None = None
     is_active: bool | None = None
-    channels: list[str] | None = None
 
 
 # --- subscriptions --------------------------------------------------------
@@ -83,7 +70,6 @@ def post_subscription(
         name=body.name,
         filter_spec=body.filter_spec,
         is_active=body.is_active,
-        channels=body.channels,
         account_id=account_id,
     )
 
@@ -111,7 +97,6 @@ def put_subscription(
         name=body.name,
         filter_spec=body.filter_spec,
         is_active=body.is_active,
-        channels=body.channels,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="subscription not found")
@@ -159,16 +144,10 @@ def get_dispatches(
 
 @router.get("/unread-count")
 def get_unread_count(
-    source_kind: nf.SourceKindFilter = "all",
     conn: Any = Depends(tenant_pool.tenant_conn),
 ) -> dict[str, int]:
-    """Unseen dispatch counts for the nav badge.
-
-    Returns one count per `SourceKind` (api/notifications.py) + `total` + `unread_count` —
-    `unread_count` is the total (or the scoped count when `source_kind` is set). RLS scopes the
-    count to the caller's own account.
-    """
-    return nf.get_unread_count(conn, source_kind=source_kind)
+    """`{"unread_count": N}`, the one unread number; RLS scopes it to the caller's own account."""
+    return nf.get_unread_count(conn)
 
 
 @router.post("/mark-all-seen")
@@ -194,68 +173,3 @@ def post_mark_seen(
         raise HTTPException(status_code=404, detail="dispatch not found")
     return row
 
-
-@router.post("/dispatches/{dispatch_id}/estimate")
-def post_kickoff_estimate(
-    dispatch_id: str,
-    background_tasks: BackgroundTasks,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    """Kick off a deterministic estimation in the background.
-
-    Synchronously: validate the dispatch exists, build the target spec
-    from `listings`, INSERT a `pending` `estimation_runs` row, link it
-    on the dispatch.
-
-    Background: `run_pending_estimation(run_id)` runs the actual
-    `estimate_yield` against a fresh DB connection, then UPDATEs the
-    run row to its terminal status. The frontend polls
-    `GET /notifications/dispatches?…` (or the run row directly) for
-    completion.
-
-    If the dispatch already has a run linked we surface the existing
-    row untouched — the operator can click again on a failed run via
-    the standard rerun affordance, not via this endpoint.
-
-    Stays on the service-role connection: it reads the shared `listings`
-    table (RLS deny-all for `authenticated`, the A5 shape) and stamps an
-    `estimation_runs` row whose per-account `account_id` is Wave-1 metering
-    scope — the correct tenant-pool move needs the two-connection split
-    `POST /listings/lookup` uses (a follow-up).
-    """
-    dispatch, run_id = nf.kickoff_estimation_for_dispatch(conn, dispatch_id)
-    if not dispatch:
-        raise HTTPException(status_code=404, detail="dispatch not found")
-    if run_id is not None:
-        background_tasks.add_task(nf.run_pending_estimation, run_id)
-    return dispatch
-
-
-# --- matcher utility (manual run + status) --------------------------------
-
-
-@router.post("/matcher/run")
-def post_matcher_run(
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    """Synchronously execute one matcher pass (both new-listing and
-    property-change matchers).
-
-    Useful for testing a freshly created subscription without waiting
-    for the next scheduler tick — the periodic loop continues to run
-    on its own clock. Idempotent against the (subscription_id,
-    property_id, change_kind) UNIQUE constraint.
-
-    Service-role by design: the producers scan the whole market (rule #16),
-    and the row-level trigger stamps each dispatch's `account_id`.
-    """
-    stats = nf.match_once(conn)
-    change_stats = nf.match_changes_once(conn)
-    monitor_stats = nf.match_monitored_collections_once(conn)
-    return {
-        "data": stats,
-        "change_data": change_stats,
-        "monitor_data": monitor_stats,
-    }

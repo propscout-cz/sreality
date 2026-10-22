@@ -37,7 +37,6 @@ const DATA: CollectionWithProperties = {
     updated_at: '2026-08-20T10:00:00Z',
     listing_count: 0,
     monitoring_enabled: false,
-    notify_channels: [],
     is_system: false,
     owner_email: null,
     shared_with: [],

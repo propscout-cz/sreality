@@ -458,11 +458,13 @@ def test_every_spatial_reader_takes_its_point_from_listing_location() -> None:
         "toolkit/velocity.py",
         "toolkit/transit_axis.py",
         "toolkit/neighborhoods.py",
-        "api/notifications.py",
         "api/estimation_runs.py",
     )
+    # The watchdog circle reads properties_public's lat/lng (its location ad's point, migration 636),
+    # so the matcher is held to the negative half only.
+    view_readers = ("api/notifications.py",)
     bare_l_geom = re.compile(r"(?<![a-z])l\.geom")
-    for rel in spatial:
+    for rel in spatial + view_readers:
         text = (REPO / rel).read_text(encoding="utf-8")
         code = "\n".join(
             line for line in text.splitlines() if not line.lstrip().startswith("#")
@@ -470,6 +472,8 @@ def test_every_spatial_reader_takes_its_point_from_listing_location() -> None:
         assert bare_l_geom.search(code) is None, f"{rel} still reads listings.geom"
         assert "listings.geom" not in code, f"{rel} still reads listings.geom"
         assert "COALESCE(p.geom" not in code, f"{rel} still reads properties.geom"
+        if rel in view_readers:
+            continue
         assert (
             "listing_location" in code
             or "COHORT_LOCATION_FROM" in code

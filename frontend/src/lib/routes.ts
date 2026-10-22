@@ -115,7 +115,6 @@ export const ROUTES = {
   pipeline: def('/pipeline'),
   datasets: def('/datasets'),
   watchdog: def('/watchdog'),
-  watchdogManage: def('/watchdog/manage'),
   watchdogEdit: def('/watchdog/:id/edit'),
   notifications: def('/notifications'),
   locationQuality: def('/location-quality'),

@@ -65,8 +65,6 @@ from api.portal_lookup import lookup_portal_listings
 from api.property_merge import router as property_merge_router
 from api.routes.admin import router as admin_router
 from api.routes.billing import router as billing_router
-from api.routes.resend_webhook import router as resend_webhook_router
-from api.routes.unsubscribe import router as unsubscribe_router
 from api.routes.brokers import router as brokers_router
 from api.routes.broker_review import router as broker_review_router
 from api.routes.outreach import router as outreach_router
@@ -180,19 +178,6 @@ async def _lifespan(_app: FastAPI) -> "AsyncIterator[None]":
             system_alerts_loop.system_alerts_loop(stop_event), name="system-alerts",
         ))
 
-    # Delivery outbox (Sprint N): only start it when a transport is actually
-    # configured (e.g. RESEND_API_KEY set) — otherwise it would query every
-    # interval to do nothing. So it is a true no-op (no task) until the operator
-    # provisions a channel and redeploys. OUTBOX_DRAIN_DISABLED force-disables it.
-    if not os.environ.get("OUTBOX_DRAIN_DISABLED") and any(
-        t.is_configured() for t in deps.get_transports().values()
-    ):
-        from api import notification_outbox
-        tasks.append(asyncio.create_task(
-            notification_outbox.outbox_loop(stop_event), name="notification-outbox",
-        ))
-        logging.info("notification outbox started (a transport is configured)")
-
     try:
         yield
     finally:
@@ -301,8 +286,6 @@ app.include_router(admin_router)
 # raw body vs STRIPE_WEBHOOK_SECRET), distinct from bearer/JWT and token-exempt;
 # GET /billing/me rides verify_jwt + the tenant pool like any per-account read.
 app.include_router(billing_router)
-app.include_router(resend_webhook_router)
-app.include_router(unsubscribe_router)
 # /notifications/* (Watchdog feed + subscription CRUD) goes through
 # the standard bearer gate — operator content, not configuration.
 app.include_router(notifications_router)
@@ -1307,7 +1290,7 @@ def post_create_collection(
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
     act_as: uuid.UUID | None = Depends(tenant_pool.act_as_header),
 ) -> dict[str, Any]:
-    curation.refuse_monitoring_while_acting(act_as, body.monitoring_enabled, body.notify_channels)
+    curation.refuse_monitoring_while_acting(act_as, body.monitoring_enabled)
     return curation.create_collection(conn, body, account_id=str(account_id))
 
 
@@ -1333,9 +1316,7 @@ def patch_collection(
     conn: Any = Depends(tenant_pool.tenant_conn),
     act_as: uuid.UUID | None = Depends(tenant_pool.act_as_header),
 ) -> dict[str, Any]:
-    curation.refuse_monitoring_while_acting(
-        act_as, body.monitoring_enabled is not None, body.notify_channels is not None,
-    )
+    curation.refuse_monitoring_while_acting(act_as, body.monitoring_enabled is not None)
     return curation.update_collection(conn, collection_id, body)
 
 

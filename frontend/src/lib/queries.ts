@@ -1789,8 +1789,6 @@ export const watchdogKeys = {
   all: ['watchdog'] as const,
   subscriptions: ['watchdog', 'subscriptions'] as const,
   subscription: (id: string) => ['watchdog', 'subscriptions', id] as const,
-  dispatches: (params: Record<string, unknown>) =>
-    ['watchdog', 'dispatches', params] as const,
 };
 
 /* Unified notifications feed (watchdog matches + collection-monitor events). */

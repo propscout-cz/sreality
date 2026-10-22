@@ -336,8 +336,8 @@ def test_dispatches_collapse_null_safe(cur, accounts):
 
 
 def _send(cur: Any, nid: uuid.UUID, coll: int) -> int:
-    """A delivered email, columns as api/channel_client.py claims a send (the outbox's
-    consumer/source/dedupe shape)."""
+    """A delivered email, in the consumer/source/dedupe shape the deleted channel client claimed
+    a send (W1 deleted the writer; the table and this carrier go in W3/W6)."""
     cur.execute(
         "INSERT INTO channel_sends "
         "  (consumer, notification_id, outreach_message_id, source_kind, source_id, "

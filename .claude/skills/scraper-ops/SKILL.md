@@ -423,9 +423,9 @@ medians, location payload shape via `claims_common.PAYLOAD_SHAPE_PREDICATES`, re
 (host `pg_cron`) whose cells judge what must not judge itself: `worker` (heartbeat over 10 min old), `health_lane` (no completed pass, a pass in flight or failing for 10 min), `stale:<key>` (an alarm past its staleness budget), `api` (the watchdog matcher's lease lapsed) and `unalerted` (a
 measured Problem with no incident); the ladder tells them, and they replace `worker_liveness` and the 24 h dead-man job.
 The canary's last step, `scripts/health_canary.py`, exits 2 when the DB does not answer and 1 on any `CANARY FAIL`: the
-newest `liveness` row is 30 min old, a failing liveness cell has no incident after 15 min, or an alarm's onset/reminder
-of the last 12 h is unread, undelivered and its incident open and unacknowledged after 15 min (never a gauge's). Bell only
-(Q1), so that red run's email is the external path. pg_cron watches the worker, the API and every alarm's freshness (the
+newest `liveness` row is 30 min old, a failing liveness cell has no incident after 15 min, or an open, unacknowledged alarm-class
+incident's latest rung (`ops_incidents.alerted_at`: onset, 6 h, 24 h, 72 h, weekly) is 15 min to 12 h old (never a gauge's). System alerts
+reach no bell (ruling R2b, 2026-10-21), so that red run's e-mail is the one external path. pg_cron watches the worker, the API and every alarm's freshness (the
 canary's keys too); the canary watches pg_cron and the ladder. **Rationale, watchers, sizing: `references/pipeline-verification.md`.**
 
 ## Reading the logs

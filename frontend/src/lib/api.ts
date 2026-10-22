@@ -2417,7 +2417,6 @@ export const createCollection = (input: {
   name: string;
   description?: string | null;
   monitoring_enabled?: boolean;
-  notify_channels?: string[];
 }): Promise<Collection> =>
   request<Collection>('/collections', { method: 'POST', json: input });
 
@@ -2427,7 +2426,6 @@ export const updateCollection = (
     name?: string | null;
     description?: string | null;
     monitoring_enabled?: boolean;
-    notify_channels?: string[];
   },
 ): Promise<Collection> =>
   request<Collection>(`/collections/${id}`, {
@@ -2768,18 +2766,6 @@ export const unsharePipeline = (
 
 /* ----- Watchdog notifications (Phase U2.7) ------------------------------- */
 
-export interface ListWatchdogDispatchesParams {
-  subscription_id?: string;
-  /* Scope to one producer. The Watchdog page passes 'watchdog' so the unified
-   * feed's collection_monitor rows (subscription_id NULL) don't leak onto it. */
-  source_kind?: NotificationSourceKind | 'all';
-  seen?: WatchdogSeenFilter;
-  limit?: number;
-  offset?: number;
-  /* Keyset cursor (the prior page's next_cursor). */
-  cursor?: string;
-}
-
 export const listWatchdogSubscriptions = (
   options: { includeInactive?: boolean } = {},
 ): Promise<{ data: WatchdogSubscription[]; total: number }> =>
@@ -2799,7 +2785,6 @@ export const createWatchdogSubscription = (input: {
   name: string;
   filter_spec: WatchdogFilterSpec;
   is_active?: boolean;
-  channels?: string[];
 }): Promise<WatchdogSubscription> =>
   request<WatchdogSubscription>('/notifications/subscriptions', {
     method: 'POST',
@@ -2812,7 +2797,6 @@ export const updateWatchdogSubscription = (
     name?: string;
     filter_spec?: WatchdogFilterSpec;
     is_active?: boolean;
-    channels?: string[];
   },
 ): Promise<WatchdogSubscription> =>
   request<WatchdogSubscription>(
@@ -2828,13 +2812,6 @@ export const deleteWatchdogSubscription = (
     { method: 'DELETE' },
   );
 
-export const listWatchdogDispatches = (
-  params: ListWatchdogDispatchesParams = {},
-): Promise<WatchdogDispatchesResponse> =>
-  request<WatchdogDispatchesResponse>('/notifications/dispatches', {
-    query: params as Record<string, QueryValue>,
-  });
-
 export const markWatchdogDispatchSeen = (
   dispatchId: string,
 ): Promise<WatchdogDispatch> =>
@@ -2842,29 +2819,6 @@ export const markWatchdogDispatchSeen = (
     `/notifications/dispatches/${encodeURIComponent(dispatchId)}/mark-seen`,
     { method: 'POST' },
   );
-
-export const kickoffWatchdogDispatchEstimate = (
-  dispatchId: string,
-): Promise<WatchdogDispatch> =>
-  request<WatchdogDispatch>(
-    `/notifications/dispatches/${encodeURIComponent(dispatchId)}/estimate`,
-    { method: 'POST' },
-  );
-
-export const runWatchdogMatcher = (): Promise<{
-  data: {
-    subscriptions_evaluated: number;
-    matches_inserted: number;
-    listings_in_window: number;
-  };
-}> =>
-  request<{
-    data: {
-      subscriptions_evaluated: number;
-      matches_inserted: number;
-      listings_in_window: number;
-    };
-  }>('/notifications/matcher/run', { method: 'POST' });
 
 /* ----- Unified notifications feed (Sprint C) ---------------------------- */
 
@@ -2874,12 +2828,12 @@ export interface ListNotificationsParams {
   collection_id?: number;
   seen?: WatchdogSeenFilter;
   limit?: number;
+  /* Keyset cursor: the prior page's next_cursor. */
   cursor?: string;
 }
 
-/* The unified feed: watchdog matches AND collection-monitor change events.
- * Same endpoint + row shape as the watchdog dispatches, just unscoped by
- * source (the LEFT-join feed serves both). */
+/* The one feed: watchdog matches, collection-monitor change events and shares,
+ * newest first, keyset-paged on (dispatched_at, id). */
 export const listNotifications = (
   params: ListNotificationsParams = {},
 ): Promise<WatchdogDispatchesResponse> =>
@@ -2887,12 +2841,8 @@ export const listNotifications = (
     query: params as Record<string, QueryValue>,
   });
 
-export const getNotificationUnreadCount = (
-  source_kind: NotificationSourceKind | 'all' = 'all',
-): Promise<NotificationUnreadCount> =>
-  request<NotificationUnreadCount>('/notifications/unread-count', {
-    query: { source_kind },
-  });
+export const getNotificationUnreadCount = (): Promise<NotificationUnreadCount> =>
+  request<NotificationUnreadCount>('/notifications/unread-count');
 
 export const markAllNotificationsSeen = (
   source_kind: NotificationSourceKind | 'all' = 'all',

@@ -3,7 +3,7 @@
  * Browse hands this modal its current filters. The modal builds the
  * WatchdogFilterSpec (filtersToWatchdogSpec), suggests a name
  * (watchdogNameSuggestion), and on confirm POSTs /notifications/subscriptions;
- * on success the watchdog shows up in the Watchdog feed / Manage list like any
+ * on success the watchdog shows up in the Watchdogs list like any
  * other.
  *
  * The map area is the one choice made here (rule 16: what Browse shows is what
@@ -27,7 +27,6 @@ import {
   type ListingFilters,
 } from '@/lib/filters';
 import Dialog from '@/components/Dialog';
-import { DeliveryChannelsPicker } from '@/components/DeliveryChannelsPicker';
 
 export const MAP_AREA_LABEL = 'Include the current map area in this watchdog';
 
@@ -39,7 +38,6 @@ export interface CreateWatchdogModalProps {
 export default function CreateWatchdogModal({ filters, onClose }: CreateWatchdogModalProps) {
   const navigate = useNavigate();
   const [name, setName] = useState(() => watchdogNameSuggestion(filters));
-  const [channels, setChannels] = useState<string[]>([]);
   const [withMapArea, setWithMapArea] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
   const titleId = useId();
@@ -64,10 +62,9 @@ export default function CreateWatchdogModal({ filters, onClose }: CreateWatchdog
         name: watchdogName,
         filter_spec: spec,
         is_active: true,
-        channels,
       }),
     onSuccess: () => {
-      navigate(ROUTES.watchdogManage.build());
+      navigate(ROUTES.watchdog.build());
     },
   });
 
@@ -121,15 +118,6 @@ export default function CreateWatchdogModal({ filters, onClose }: CreateWatchdog
           className="mt-1 w-full px-3 py-2 text-sm rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] text-[var(--color-ink)] focus-visible:border-[var(--color-copper)]"
         />
       </label>
-
-      <div className="mt-4">
-        <span className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)]">
-          Delivery
-        </span>
-        <div className="mt-1.5">
-          <DeliveryChannelsPicker value={channels} onChange={setChannels} />
-        </div>
-      </div>
 
       {offersMapArea ? (
         <button

@@ -619,10 +619,10 @@ def test_a_stored_spec_with_a_chip_without_a_code_mutes_only_its_watchdog() -> N
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [
-                (dead, {"districts": [{"name": "Jihlava"}]}, cursor_ts, ["in_app"]),
+                (dead, {"districts": [{"name": "Jihlava"}]}, cursor_ts),
                 (healthy, {"districts": [{"name": "Na Rybníčkách", "context": "Pardubice",
                                           "level": "ulice", "id": 666742}]},
-                 cursor_ts, ["in_app"]),
+                 cursor_ts),
             ],
             2,
         ),
@@ -660,7 +660,7 @@ def test_match_once_uses_per_subscription_cursor() -> None:
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [(sub_id, {"category_main": "byt", "category_type": "pronajem",
                        "districts": [{"name": "Praha", "level": "obec", "id": 554782}]},
-              cursor_ts, ["email", "in_app"])],
+              cursor_ts)],
             1,
         ),
         # Window upper-bound query (first_seen_at-keyed; the publication gate is gone)
@@ -710,18 +710,14 @@ def test_match_once_uses_per_subscription_cursor() -> None:
     assert "l.obec_id = ANY(%(district_codes_obec)s)" in sql
 
     # The 'new' dispatch INSERT writes the unified event shape: source_kind,
-    # a per-property dedupe_key, ON CONFLICT on that key (migration 206), and the
-    # producer-stamped target_channels (migration 208) — the subscription's
-    # channels minus the always-implicit 'in_app'.
-    insert_sql, insert_params = next(
+    # a per-property dedupe_key and ON CONFLICT on that key (migration 206).
+    insert_sql, _ = next(
         (sql, p) for sql, p in conn.executed
         if "INSERT INTO notification_dispatches" in sql
     )
     assert "'watchdog'" in insert_sql
     assert ":new:' || l.property_id::text" in insert_sql
     assert "ON CONFLICT (dedupe_key)" in insert_sql
-    assert "%(target_channels)s::text[]" in insert_sql
-    assert insert_params["target_channels"] == ["email"]
 
 
 def test_collection_monitor_noop_when_nothing_monitored() -> None:
@@ -846,72 +842,50 @@ def test_collection_monitor_gates_every_detector_on_monitor_since() -> None:
     assert "nd.dispatched_at > m.monitor_since" in reactivated_sql
 
 
-def test_get_unread_count_breaks_down_by_source() -> None:
-    script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
-        (
-            lambda s: "GROUP BY d.source_kind" in s,
-            [("watchdog", 4), ("collection_monitor", 3)],
-            0,
-        ),
-    ]
-    conn = _FakeConn(script)
-    out = get_unread_count(conn)  # type: ignore[arg-type]
-    assert out == {
-        "watchdog": 4, "collection_monitor": 3, "share": 0, "system_health": 0,
-        "total": 7, "unread_count": 7,
-    }
-    scoped = get_unread_count(conn, source_kind="collection_monitor")  # type: ignore[arg-type]
-    assert scoped["unread_count"] == 3
+def test_no_producer_writes_routing_or_the_legacy_id() -> None:
+    """Producers write facts (notifications program, north star 1): channel, status and
+    target_channels take their column defaults (migrations 057/206) until W6 drops them,
+    and nothing reads a dispatch's sreality_id any more."""
+    from api import shares
+    from api.notifications import match_changes_once
+
+    sub_row = (UUID("46a6005f-dc32-4d94-9ced-4d262b57ef6b"), {},
+               datetime(2026, 5, 14, tzinfo=timezone.utc))
+    conn = _FakeConn([
+        (lambda s: "FROM app_settings" in s, [], 0),
+        (lambda s: "FROM notification_subscriptions WHERE is_active" in s, [sub_row], 1),
+        (lambda s: "SELECT max(first_seen_at), count(*) FROM" in s,
+         [(datetime(2026, 5, 15, tzinfo=timezone.utc), 1)], 0),
+        (lambda s: "FROM listing_price_steps" in s, [(101, 5001, 4_900_000, 5_000_000)], 0),
+        (lambda s: "FROM collections WHERE monitoring_enabled = true" in s, [(1,)], 0),
+    ])
+    match_once(conn)  # type: ignore[arg-type]
+    conn.script[1] = (conn.script[1][0], [sub_row[:2]], 1)
+    match_changes_once(conn)  # type: ignore[arg-type]
+    match_monitored_collections_once(conn)  # type: ignore[arg-type]
+    statements = [s for s, _ in conn.executed if "INSERT INTO notification_dispatches" in s]
+    statements.append(" ".join(shares._INSERT_SHARE_DISPATCH_SQL.split()))
+    columns = [re.search(r"INSERT INTO notification_dispatches \(([^)]*)\)", s) for s in statements]
+    assert len(columns) == 8 and all(columns), statements
+    for match in columns:
+        named = {c.strip() for c in match.group(1).split(",")}
+        assert not named & {"channel", "status", "target_channels", "sreality_id"}, named
 
 
-def test_get_unread_count_sums_system_health_into_total() -> None:
-    # total sums EVERY kind, not a hardcoded watchdog+collection_monitor — the bug
-    # that previously dropped system_health alerts from the nav badge.
-    script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
-        (
-            lambda s: "GROUP BY d.source_kind" in s,
-            [("watchdog", 4), ("collection_monitor", 3), ("system_health", 2)],
-            0,
-        ),
-    ]
-    conn = _FakeConn(script)
-    out = get_unread_count(conn)  # type: ignore[arg-type]
-    assert out["system_health"] == 2
-    assert out["total"] == 9
-    assert out["unread_count"] == 9
-    scoped = get_unread_count(conn, source_kind="system_health")  # type: ignore[arg-type]
-    assert scoped["unread_count"] == 2
-
-
-def test_get_unread_count_names_the_share_kind() -> None:
-    # Every SourceKind gets its own count from the ONE alias; both share kinds are one 'share'
-    # producer (migrations 610 + 641).
-    script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
-        (lambda s: "GROUP BY d.source_kind" in s, [("share", 2)], 0),
-    ]
-    out = get_unread_count(_FakeConn(script))  # type: ignore[arg-type]
-    assert out["share"] == 2 and out["total"] == 2
-    assert "collection_share" not in out
+def test_the_unread_count_is_one_number() -> None:
+    """Bell and badge count one visible set (program § 3.6): no per-source breakdown, no scope."""
+    conn = _FakeConn([(lambda s: s.startswith("SELECT count(*) FROM notification_dispatches d"),
+                       [(7,)], 0)])
+    assert get_unread_count(conn) == {"unread_count": 7}  # type: ignore[arg-type]
+    [(sql, params)] = conn.executed
+    assert "GROUP BY" not in sql and "source_kind" not in sql and params is None
 
 
 def test_dispatch_select_projects_message() -> None:
-    # The feed row carries d.message so system_health alerts render their verbatim text.
+    # The feed row carries d.message, the share's sentence.
     from api.notifications import _DISPATCH_SELECT
 
     assert "d.message" in _DISPATCH_SELECT
-
-
-def test_dispatch_select_names_the_check_a_system_alert_is_about() -> None:
-    """The bell's "Open Health" opens Health at the alert's check, as the outbox's links do. Every system dedupe
-    key opens `sys:<key>:` (emit_system_alert refuses any other), so the key is its second segment; every other
-    producer's key (`wd:…`, `cm:…`) names no check and reads NULL. Checked live on 2026-10-19: all 882 system rows
-    agree with the outbox's `^sys:([a-z0-9_]+):` and no other row carries a key."""
-    from api.notifications import _DISPATCH_SELECT
-
-    assert (
-        "CASE WHEN d.source_kind = 'system_health' "
-        "THEN split_part(d.dedupe_key, ':', 2) END AS check_key"
-    ) in _DISPATCH_SELECT
 
 
 def test_dispatch_select_names_what_a_share_opens() -> None:
@@ -1013,7 +987,7 @@ def test_every_in_app_read_and_count_hides_dismissed_properties() -> None:
     for sql in reads:
         assert _HIDDEN in sql, sql
     totals = [s for s in reads if s.startswith("SELECT count(*) FROM notification_dispatches d")]
-    assert len(totals) == 2
+    assert len(totals) == 3  # the badge, and the two feed reads' first-page totals
 
 
 def test_a_dispatch_is_still_reachable_by_id() -> None:
@@ -1053,7 +1027,7 @@ def test_match_once_skips_subscription_with_no_listings() -> None:
         (lambda s: "FROM app_settings" in s, [(False,)], 0),
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
-            [(sub_id, {}, cursor_ts, [])],
+            [(sub_id, {}, cursor_ts)],
             1,
         ),
         # Window query returns (NULL, 0) — no fresh listings.
@@ -1087,9 +1061,9 @@ def test_match_once_skips_invalid_filter_spec() -> None:
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [
                 # Invalid: a map box with west >= east.
-                (bad_id, {"bounds": {"west": 14.5, "south": 50.0, "east": 14.0, "north": 50.2}}, cursor_ts, []),
+                (bad_id, {"bounds": {"west": 14.5, "south": 50.0, "east": 14.0, "north": 50.2}}, cursor_ts),
                 # Valid spec
-                (good_id, {}, cursor_ts, []),
+                (good_id, {}, cursor_ts),
             ],
             2,
         ),
@@ -1139,8 +1113,8 @@ def test_match_once_counts_failed_subscriptions(monkeypatch: pytest.MonkeyPatch)
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [
                 (UUID("cccccccc-cccc-cccc-cccc-cccccccccccc"), {"min_price_czk": 666},
-                 cursor_ts, []),
-                (UUID("dddddddd-dddd-dddd-dddd-dddddddddddd"), {}, cursor_ts, []),
+                 cursor_ts),
+                (UUID("dddddddd-dddd-dddd-dddd-dddddddddddd"), {}, cursor_ts),
             ],
             2,
         ),
@@ -1174,8 +1148,8 @@ def test_match_changes_once_counts_failed_subscriptions(
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [
-                (UUID("cccccccc-cccc-cccc-cccc-cccccccccccc"), {"min_price_czk": 666}, []),
-                (UUID("dddddddd-dddd-dddd-dddd-dddddddddddd"), {}, []),
+                (UUID("cccccccc-cccc-cccc-cccc-cccccccccccc"), {"min_price_czk": 666}),
+                (UUID("dddddddd-dddd-dddd-dddd-dddddddddddd"), {}),
             ],
             2,
         ),
@@ -1205,7 +1179,7 @@ def _gate_script(
         (lambda s: "FROM app_settings" in s, [], 0),
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
-            [(sub_id, {}, cursor_ts, [])],
+            [(sub_id, {}, cursor_ts)],
             1,
         ),
         (lambda s: "SELECT max(first_seen_at), count(*) FROM" in s, [upper], 0),
@@ -1320,7 +1294,7 @@ def test_match_once_gate_flag_off_restores_old_behavior() -> None:
         (lambda s: "FROM app_settings" in s, [(False,)], 0),
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
-            [(sub_id, {}, cursor_ts, [])],
+            [(sub_id, {}, cursor_ts)],
             1,
         ),
         (lambda s: "SELECT max(first_seen_at), count(*) FROM" in s, [(upper_ts, 2)], 0),
@@ -1390,7 +1364,7 @@ def test_match_changes_once_emits_price_drop_for_matching_subs() -> None:
         # active subscriptions
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
-            [(sub_id, {"category_main": "byt", "category_type": "pronajem"}, ["email"])],
+            [(sub_id, {"category_main": "byt", "category_type": "pronajem"})],
             1,
         ),
         # INSERT price_drop dispatches — 2 inserted
@@ -1418,10 +1392,6 @@ def test_match_changes_once_emits_price_drop_for_matching_subs() -> None:
     assert insert_params["drop_sids"] == [5001, 5002]
     assert insert_params["drop_prices"] == [4_900_000, 2_400_000]
     assert insert_params["drop_prevs"] == [5_000_000, 2_500_000]
-    # Producer-stamped delivery routing (migration 208) — subscription channels
-    # minus the always-implicit 'in_app'.
-    assert "%(target_channels)s::text[]" in insert_sql
-    assert insert_params["target_channels"] == ["email"]
 
 
 def test_match_changes_once_noops_when_no_recent_drops() -> None:
@@ -1444,190 +1414,3 @@ def test_match_changes_once_noops_when_no_recent_drops() -> None:
         "INSERT INTO notification_dispatches" in sql for sql, _ in conn.executed
     )
 
-
-# --- kickoff (Run estimation) regression --------------------------------------
-
-
-from api.notifications import _insert_pending_run
-
-
-def test_insert_pending_run_does_not_reference_nonexistent_columns() -> None:
-    """Regression: estimation_runs has NO category_main / category_type
-    columns. The kickoff INSERT must not name them (doing so 500s the
-    `/dispatches/{id}/estimate` endpoint, which silently no-ops the
-    'Run estimation' button). category_main/type ride in input_spec instead."""
-    script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
-        (lambda s: "INSERT INTO estimation_runs" in s, [(4242,)], 1),
-    ]
-    conn = _FakeConn(script)
-
-    spec = {
-        "lat": 50.0, "lng": 14.0, "area_m2": 60.0, "disposition": "2+kk",
-        "floor": 3, "exclude_listing_ids": [99],
-        "category_main": "byt", "category_type": "prodej",
-    }
-    run_id = _insert_pending_run(
-        conn,  # type: ignore[arg-type]
-        listing_id=99, spec=spec, estimate_kind="sale",
-    )
-    assert run_id == 4242
-
-    insert_sql, params = next(
-        (sql, p) for sql, p in conn.executed if "INSERT INTO estimation_runs" in sql
-    )
-    # The two phantom columns must NOT appear in the INSERT column list.
-    cols_clause = insert_sql.split("VALUES")[0]
-    assert "category_main" not in cols_clause
-    assert "category_type" not in cols_clause
-    # And the category survives inside the input_spec jsonb param instead.
-    spec_param = next(p for p in params if isinstance(p, str) and '"category_main"' in p)
-    assert '"category_type": "prodej"' in spec_param
-
-
-import api.notifications as nf
-
-
-def test_kickoff_always_runs_a_rent_estimate_even_for_a_sale_listing(monkeypatch) -> None:
-    """The watchdog 'Estimate rent' action runs a RENTAL estimate regardless of
-    the subject listing's own category_type — a sale flat gets a "what would it
-    rent for" figure. So input_spec must carry category_type='pronajem' and the
-    run's estimate_kind must be 'rent', even when the listing is 'prodej'."""
-    monkeypatch.setattr(
-        nf, "_fetch_dispatch",
-        lambda conn, did: {
-            "sreality_id": 12345, "listing_id": 987, "estimation_run_id": None,
-        },
-    )
-    monkeypatch.setattr(
-        nf, "_resolve_listing_for_estimate",
-        lambda conn, lid: {
-            "listing_id": lid, "sreality_id": 12345,
-            "lat": 50.08, "lng": 14.42, "area_m2": 62.0, "disposition": "2+kk",
-            "floor": 3, "category_main": "byt", "category_type": "prodej",
-            "price_czk": 4_500_000, "price_unit": "czk",
-        },
-    )
-    monkeypatch.setattr(nf, "_link_dispatch_run", lambda conn, did, rid: None)
-
-    captured: dict[str, Any] = {}
-
-    def _fake_insert(conn, *, listing_id, spec, estimate_kind):
-        captured["listing_id"] = listing_id
-        captured["spec"] = spec
-        captured["estimate_kind"] = estimate_kind
-        return 777
-
-    monkeypatch.setattr(nf, "_insert_pending_run", _fake_insert)
-
-    _dispatch, run_id = nf.kickoff_estimation_for_dispatch(object(), "d-1")  # type: ignore[arg-type]
-
-    assert run_id == 777
-    assert captured["listing_id"] == 987
-    assert captured["estimate_kind"] == "rent"
-    # Forces a rental comparable cohort even though the subject is 'prodej'.
-    assert captured["spec"]["category_type"] == "pronajem"
-    assert captured["spec"]["category_main"] == "byt"
-    # The subject's property is left out of its own cohort (decision 13).
-    assert captured["spec"]["exclude_listing_ids"] == [987]
-
-
-def test_kickoff_null_sreality_dispatch_resolves_on_the_surrogate(monkeypatch) -> None:
-    """Post-Gate-2 a listing has sreality_id NULL. The kickoff must resolve it on
-    listing_id, not `int(dispatch["sreality_id"])` (which raised TypeError -> 500),
-    and must exclude the subject's property from its own cohort."""
-    monkeypatch.setattr(
-        nf, "_fetch_dispatch",
-        lambda conn, did: {
-            "sreality_id": None, "listing_id": 555, "estimation_run_id": None,
-        },
-    )
-    monkeypatch.setattr(
-        nf, "_resolve_listing_for_estimate",
-        lambda conn, lid: {
-            "listing_id": lid, "sreality_id": None,
-            "lat": 49.2, "lng": 16.6, "area_m2": 70.0, "disposition": "3+kk",
-            "floor": 2, "category_main": "byt", "category_type": "pronajem",
-            "price_czk": 20_000, "price_unit": "czk",
-        },
-    )
-    monkeypatch.setattr(nf, "_link_dispatch_run", lambda conn, did, rid: None)
-
-    captured: dict[str, Any] = {}
-
-    def _fake_insert(conn, *, listing_id, spec, estimate_kind):
-        captured["listing_id"] = listing_id
-        captured["spec"] = spec
-        return 42
-
-    monkeypatch.setattr(nf, "_insert_pending_run", _fake_insert)
-
-    _dispatch, run_id = nf.kickoff_estimation_for_dispatch(object(), "d-2")  # type: ignore[arg-type]
-
-    assert run_id == 42
-    assert captured["listing_id"] == 555
-    assert captured["spec"]["exclude_listing_ids"] == [555]
-    assert "exclude_ids" not in captured["spec"]
-
-
-def test_kickoff_listing_less_dispatch_schedules_nothing(monkeypatch) -> None:
-    """A system_health alert has no listing at all (sreality_id AND listing_id
-    NULL — 35 such rows live today). It must not crash on int(None); it simply
-    has nothing to estimate."""
-    monkeypatch.setattr(
-        nf, "_fetch_dispatch",
-        lambda conn, did: {
-            "sreality_id": None, "listing_id": None, "estimation_run_id": None,
-        },
-    )
-
-    def _boom(*a, **k):  # resolving a listing must never be attempted
-        raise AssertionError("must not resolve a listing for a listing-less dispatch")
-
-    monkeypatch.setattr(nf, "_resolve_listing_for_estimate", _boom)
-
-    dispatch, run_id = nf.kickoff_estimation_for_dispatch(object(), "d-3")  # type: ignore[arg-type]
-
-    assert run_id is None
-    assert dispatch["listing_id"] is None
-
-
-def test_run_pending_excludes_the_subjects_property_by_its_listing(monkeypatch) -> None:
-    """On rehydration the one exclusion falls back to the run's own input_listing_id: never
-    a NULL (the old sreality arm's empty-cohort trap), never a sreality id.
-
-    _update_run_terminal, estimate_yield and load_filter_defaults are imported
-    lazily from their own modules inside run_pending_estimation (cycle-avoidance),
-    so they are patched at the SOURCE, not on `nf`."""
-    import api.estimate_yield as ey_mod
-    import api.estimation_runs as er_mod
-
-    captured: dict[str, Any] = {}
-
-    def _fake_estimate(conn, target, filters, _client=None, **kw):
-        captured["exclude_listing_ids"] = list(target.exclude_listing_ids)
-        return {"data": {}}
-
-    monkeypatch.setattr(ey_mod, "estimate_yield", _fake_estimate)
-    monkeypatch.setattr(er_mod, "_update_run_terminal", lambda *a, **k: None)
-
-    class _Defaults:
-        radius_m = 1000
-        area_band_pct = 0.2
-        disposition_match = "exact"
-        lifecycle = "active"
-        def max_age_days_for(self, _kind): return 30
-    monkeypatch.setattr(er_mod, "load_filter_defaults", lambda conn: _Defaults())
-
-    # input_sreality_id NULL, input_spec (no exclude_* keys), estimate_kind,
-    # input_listing_id — the classic post-Gate-2 pending row.
-    monkeypatch.setattr(nf.scraper_db, "connect", lambda: _FakeConn([
-        (lambda s: "FROM estimation_runs WHERE id" in s,
-         [(None, {"lat": 49.0, "lng": 16.0, "area_m2": 55.0,
-                  "disposition": "2+kk", "category_main": "byt",
-                  "category_type": "pronajem"}, "rent", 555)], 1),
-        (lambda s: "UPDATE estimation_runs SET status = 'running'" in s, [], 1),
-    ]))
-
-    nf.run_pending_estimation(999)
-
-    assert captured.get("exclude_listing_ids") == [555]

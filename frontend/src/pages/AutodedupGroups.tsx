@@ -95,7 +95,7 @@ import {
   type SplitState,
 } from '@/components/autodedup/UnitSplit';
 import useVerdictOverlay from '@/components/autodedup/useVerdictOverlay';
-import LoadMore from '@/components/autodedup/LoadMore';
+import LoadMore from '@/components/LoadMore';
 import Notice, { StoreNotReady } from '@/components/autodedup/Notice';
 
 const PAGE_SIZE = 20;
