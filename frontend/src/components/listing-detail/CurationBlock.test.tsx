@@ -23,9 +23,9 @@ vi.mock('@/lib/api', async (orig) => ({
   fetchArtifactLinks: vi.fn(),
   setPropertyArtifactLink: vi.fn(),
   deletePropertyArtifactLink: vi.fn(),
-  uploadNoteAttachment: vi.fn(),
-  fetchNoteAttachmentBlob: vi.fn(),
-  deleteNoteAttachment: vi.fn(),
+  uploadAttachment: vi.fn(),
+  fetchAttachmentBlob: vi.fn(),
+  deleteAttachment: vi.fn(),
   listCollections: vi.fn(),
 }));
 
@@ -37,17 +37,17 @@ vi.mock('@/lib/queries', async (orig) => ({
 
 import {
   createPropertyNote,
-  deleteNoteAttachment,
+  deleteAttachment,
   deletePropertyArtifactLink,
   deletePropertyNote,
-  fetchNoteAttachmentBlob,
+  fetchAttachmentBlob,
   fetchArtifactLinks,
   listCollections,
   listPropertyNotes,
   listTags,
   setPropertyArtifactLink,
   updatePropertyNote,
-  uploadNoteAttachment,
+  uploadAttachment,
 } from '@/lib/api';
 import {
   curationKeys,
@@ -211,7 +211,7 @@ describe('<CurationBlock> note attachments', () => {
     const user = userEvent.setup();
     mockReads();
     vi.mocked(createPropertyNote).mockResolvedValue({ ...NOTE, id: 12 } as never);
-    vi.mocked(uploadNoteAttachment).mockResolvedValue({} as never);
+    vi.mocked(uploadAttachment).mockResolvedValue({} as never);
     renderWithReads();
     const box = await screen.findByRole('textbox', { name: 'Notes' });
 
@@ -219,11 +219,12 @@ describe('<CurationBlock> note attachments', () => {
     dropOn(box, [file]);
     expect(within(screen.getByRole('list', { name: 'Files to attach' })).getByText('plan.pdf'))
       .toBeInTheDocument();
-    expect(uploadNoteAttachment).not.toHaveBeenCalled();
+    expect(uploadAttachment).not.toHaveBeenCalled();
 
     await user.type(box, 'Půdorys od makléře.');
     await user.click(screen.getByRole('button', { name: 'Save note' }));
-    await waitFor(() => expect(uploadNoteAttachment).toHaveBeenCalledWith(42, 12, file));
+    await waitFor(() => expect(uploadAttachment).toHaveBeenCalledWith(
+      42, file, expect.objectContaining({ note_id: 12 })));
     expect(createPropertyNote).toHaveBeenCalledWith(42, 'Půdorys od makléře.', 900, false);
     await waitFor(() => expect(screen.queryByRole('list', { name: 'Files to attach' })).toBeNull());
   });
@@ -232,7 +233,7 @@ describe('<CurationBlock> note attachments', () => {
     const user = userEvent.setup();
     mockReads();
     vi.mocked(createPropertyNote).mockResolvedValue({ ...NOTE, id: 12 } as never);
-    vi.mocked(uploadNoteAttachment).mockResolvedValue({} as never);
+    vi.mocked(uploadAttachment).mockResolvedValue({} as never);
     renderWithReads();
     await screen.findByRole('textbox', { name: 'Notes' });
 
@@ -244,12 +245,13 @@ describe('<CurationBlock> note attachments', () => {
 
   it('puts a file dropped on a saved note onto that note, not into the composer', async () => {
     mockReads();
-    vi.mocked(uploadNoteAttachment).mockResolvedValue({} as never);
+    vi.mocked(uploadAttachment).mockResolvedValue({} as never);
     const { invalidate } = renderWithReads();
     const file = pdf();
 
     dropOn(await savedNote(), [file]);
-    await waitFor(() => expect(uploadNoteAttachment).toHaveBeenCalledWith(42, NOTE.id, file));
+    await waitFor(() => expect(uploadAttachment).toHaveBeenCalledWith(
+      42, file, expect.objectContaining({ note_id: NOTE.id })));
     expect(createPropertyNote).not.toHaveBeenCalled();
     expect(screen.queryByRole('list', { name: 'Files to attach' })).toBeNull();
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({
@@ -264,7 +266,7 @@ describe('<CurationBlock> note attachments', () => {
     expect(await screen.findByText('drawing.svg: this file type cannot be attached'))
       .toBeInTheDocument();
     expect(screen.queryByRole('list', { name: 'Files to attach' })).toBeNull();
-    expect(uploadNoteAttachment).not.toHaveBeenCalled();
+    expect(uploadAttachment).not.toHaveBeenCalled();
   });
 
   it('shows a saved note’s image as a thumbnail, downloads the rest, and asks before removing',
@@ -273,29 +275,29 @@ describe('<CurationBlock> note attachments', () => {
       mockReads();
       const at = '2026-05-02T00:00:00+00:00';
       vi.mocked(listPropertyNotes).mockResolvedValue({ data: [{ ...NOTE, attachments: [
-        { id: 1, note_id: 11, filename: 'foto.png', mime_type: 'image/png', byte_size: 2048,
-          created_at: at },
-        { id: 2, note_id: 11, filename: 'plan.pdf', mime_type: 'application/pdf',
+        { id: 1, property_id: 42, note_id: 11, filename: 'foto.png', mime_type: 'image/png',
+          byte_size: 2048, created_at: at },
+        { id: 2, property_id: 42, note_id: 11, filename: 'plan.pdf', mime_type: 'application/pdf',
           byte_size: 4096, created_at: at },
       ] }] } as never);
-      vi.mocked(fetchNoteAttachmentBlob).mockResolvedValue(new Blob(['x']));
-      vi.mocked(deleteNoteAttachment).mockResolvedValue({ deleted: true } as never);
+      vi.mocked(fetchAttachmentBlob).mockResolvedValue(new Blob(['x']));
+      vi.mocked(deleteAttachment).mockResolvedValue({ deleted: true } as never);
       const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
       renderWithReads();
 
       const files = await screen.findByRole('list', { name: 'Attachments' });
       expect(await within(files).findByRole('img', { name: 'foto.png' })).toBeInTheDocument();
-      expect(fetchNoteAttachmentBlob).toHaveBeenCalledWith(42, 11, 1);
+      expect(fetchAttachmentBlob).toHaveBeenCalledWith(42, 1, expect.objectContaining({ w: 1080 }));
 
       await user.click(within(files).getByRole('button', { name: 'Download plan.pdf' }));
-      await waitFor(() => expect(fetchNoteAttachmentBlob).toHaveBeenCalledWith(42, 11, 2));
+      await waitFor(() => expect(fetchAttachmentBlob).toHaveBeenCalledWith(42, 2));
       await waitFor(() => expect(click).toHaveBeenCalled());
 
       await user.click(within(files).getByRole('button', { name: 'Remove plan.pdf' }));
-      expect(deleteNoteAttachment).not.toHaveBeenCalled();
+      expect(deleteAttachment).not.toHaveBeenCalled();
       expect(screen.getByText('Remove plan.pdf?')).toBeInTheDocument();
       await user.click(screen.getByRole('button', { name: 'Remove' }));
-      await waitFor(() => expect(deleteNoteAttachment).toHaveBeenCalledWith(42, 11, 2));
+      await waitFor(() => expect(deleteAttachment).toHaveBeenCalledWith(42, 2));
       click.mockRestore();
     });
 });
@@ -475,7 +477,7 @@ describe('<CurationBlock> shared notes', () => {
 
     // It bubbles to the composer and waits for a NEW note of mine.
     expect(await screen.findByText('plan.pdf')).toBeInTheDocument();
-    expect(uploadNoteAttachment).not.toHaveBeenCalled();
+    expect(uploadAttachment).not.toHaveBeenCalled();
   });
 
   it('offers no share checkbox while the property sits only in my unshared collection', async () => {

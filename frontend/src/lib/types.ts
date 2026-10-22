@@ -581,8 +581,8 @@ export interface Note {
    * the owner, and when; null when none, or when the owner edited it since. */
   edited_by_email?: string | null;
   edited_at?: string | null;
-  /* Its files, oldest first (migration 592). Only the list read carries them. */
-  attachments?: NoteAttachment[];
+  /* Its files, oldest first (migrations 592, 660). Only the list read carries them. */
+  attachments?: Attachment[];
 }
 
 /* A property's one operator-supplied link (migration 599). */
@@ -593,9 +593,11 @@ export interface ArtifactLink {
   updated_at: string;
 }
 
-export interface NoteAttachment {
+/* A file on a property (migration 660), optionally a note's. */
+export interface Attachment {
   id: number;
-  note_id: number;
+  property_id: number;
+  note_id: number | null;
   filename: string;
   mime_type: string;
   byte_size: number;

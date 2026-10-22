@@ -1,12 +1,12 @@
 /* The pre-check mirrors the API's rule: a named extension decides; a file without one goes by
  * its declared type; the note's cap counts what it already holds. */
 import { describe, expect, it } from 'vitest';
-import { attachmentProblem, fmtBytes, sortAttachments } from './noteAttachments';
+import { attachmentProblem, fmtBytes, sortAttachments } from './attachments';
 
 const file = (name: string, type = '', size = 10) =>
   new File([new Uint8Array(size)], name, { type });
 
-describe('noteAttachments', () => {
+describe('attachments', () => {
   it('lets a named extension decide, whatever type the browser declared', () => {
     expect(attachmentProblem(file('plan.PDF'))).toBeNull();
     expect(attachmentProblem(file('page.html', 'text/plain'))).toMatch(/cannot be attached/);
