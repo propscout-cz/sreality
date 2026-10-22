@@ -156,11 +156,13 @@ export default function FilterPresetBar({
       }
       onRename={(p, name, color) => update.mutateAsync({ id: p.id, name, color })}
       onDelete={(p) => remove.mutateAsync(p.id)}
+      /* A new preset takes the map area unless unticked (operator 2026-10-22);
+       * an update keeps the preset's own choice. */
       checkbox={
         filters.bounds != null
           ? {
               label: 'Include the current map area in this preset',
-              initial: (p) => p != null && readPresetSpec(p.filter_spec).filters.bounds != null,
+              initial: (p) => p == null || readPresetSpec(p.filter_spec).filters.bounds != null,
             }
           : undefined
       }

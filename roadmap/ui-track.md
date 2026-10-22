@@ -13,6 +13,8 @@ toolkit work.
   saved centre+radius frames its square, as Browse filters on (`filters.savedMapArea` over
   `effectiveBbox`); a preset without an area leaves the camera alone. One command, `ListingMap`
   `frame` (the `flyTo` twin), sent by `BrowseExperience` on the preset click.
+- **Built (same day):** "Include the current map area in this preset" is ticked by default when saving a
+  new preset (operator request); the Update dialog still starts from the preset's own choice.
 
 ### Condition filter: the "Neuvedeno" chip (2026-10-20, migration 644)
 - **Built:** Browse's "Condition (Stav objektu)" filter offers "Neuvedeno" as furnished and ownership
