@@ -142,12 +142,12 @@ class PortalSubstrate:
     """Where a portal's stored state lives, and the entry point that reads it.
 
     `takes_category` says the entry point accepts the row's stored category as an
-    argument. It is not a style choice: bazos, ceskereality and idnes declare those
-    parameters without defaults. bazos and ceskereality treat them as a fallback behind
-    the page's own breadcrumb; idnes passes them STRAIGHT THROUGH, so its two category
-    columns come from the index walk and this seam cannot re-derive them. remax and maxima
-    default them to None and read the page instead, so nothing is passed and their
-    categories DO re-derive.
+    argument. It is not a style choice: bazos and idnes declare those parameters without
+    defaults. bazos treats them as a fallback behind the page's own breadcrumb; idnes passes
+    them STRAIGHT THROUGH, so its two category columns come from the index walk and this seam
+    cannot re-derive them. remax, maxima and ceskereality default them to None and read the
+    page (ceskereality: its own URL) instead, so nothing is passed and their categories DO
+    re-derive.
     """
 
     kind: str
@@ -158,7 +158,7 @@ class PortalSubstrate:
 
 SUBSTRATE: dict[str, PortalSubstrate] = {
     "bazos": PortalSubstrate(PAGE, "scraper.bazos_parser", "parse_detail", True),
-    "ceskereality": PortalSubstrate(PAGE, "scraper.ceskereality_parser", "parse_detail", True),
+    "ceskereality": PortalSubstrate(PAGE, "scraper.ceskereality_parser", "parse_detail", False),
     "idnes": PortalSubstrate(PAGE, "scraper.idnes_parser", "parse_detail", True),
     "maxima": PortalSubstrate(PAGE, "scraper.maxima_parser", "parse_detail", False),
     "mmreality": PortalSubstrate(PAGE, "scraper.mmreality_parser", "parse_detail", False),

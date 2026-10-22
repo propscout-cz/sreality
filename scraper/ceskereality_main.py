@@ -45,7 +45,6 @@ from scraper.ceskereality_client import (
 from scraper.ceskereality_parser import (
     CATEGORY_MAIN,
     SALE_TYPE,
-    category_from_url,
     extract_subtype_slugs,
     heading_names_kraj,
     index_price,
@@ -776,11 +775,8 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
             return DrainItem(native_id=native_id, kind="gone")
         except Exception as exc:  # noqa: BLE001 - one listing must not kill the run
             return DrainItem(native_id=native_id, kind="error", error=str(exc))
-        cm, ct = category_from_url(url)
         try:
-            listing = parse_detail(
-                html, source_url=url, category_main=cm, category_type=ct,
-            )
+            listing = parse_detail(html, source_url=url)
         except Exception as exc:  # noqa: BLE001
             return DrainItem(native_id=native_id, kind="error", error=str(exc))
         return DrainItem(

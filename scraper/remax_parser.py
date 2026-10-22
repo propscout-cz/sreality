@@ -148,6 +148,9 @@ CATEGORY_BY_TITLE: tuple[tuple[str, str], ...] = (
     ("garaz", "ostatni"),
     ("stani", "ostatni"),
     ("objektu", "ostatni"),
+    # Last, so it labels only a title nothing above names: the "Komerční prostory" group's
+    # warehouses and "jiné prostory" (an "apartmán" filed there stays byt, by its title).
+    ("prostor", "komercni"),
 )
 
 # Construction labels -> the canonical codes the sreality parser emits.

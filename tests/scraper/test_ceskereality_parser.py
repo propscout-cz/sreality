@@ -282,6 +282,23 @@ def test_category_from_detail_url():
     assert category_from_url(
         "https://www.ceskereality.cz/pronajem/pozemky/stavebni-parcely/chyne/p-3227497.html"
     ) == ("pozemek", "pronajem")
+    # Auctions: the canonical `drazba` sreality and mmreality already store (129 active
+    # ceskereality ads held a NULL category_type until 2026-10-22, never nominable).
+    assert category_from_url(
+        "https://www.ceskereality.cz/drazby/rodinne-domy/chalupy/blovice/"
+        "drazby-chalupy-125-m2-pobrezni-3849308.html"
+    ) == ("dum", "drazba")
+
+
+def test_parse_detail_reads_its_category_off_its_own_url():
+    """The drain and the reparse heal pass no category: the page's URL names it, so a re-parse
+    of a stored /drazby/ page heals its NULL category_type. A category a caller passes wins."""
+    auction = _DETAIL_URL.replace("/prodej/byty/", "/drazby/byty/")
+    listing = parse_detail(DETAIL_HTML, source_url=auction)
+    assert (listing.category_main, listing.category_type) == ("byt", "drazba")
+    assert listing.price_unit == "za nemovitost"
+    kept = parse_detail(DETAIL_HTML, source_url=auction, category_main="dum", category_type="prodej")
+    assert (kept.category_main, kept.category_type) == ("dum", "prodej")
 
 
 

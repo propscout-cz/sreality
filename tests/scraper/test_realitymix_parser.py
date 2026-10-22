@@ -314,6 +314,21 @@ def test_resolve_category_falls_back_when_breadcrumb_truncated():
     assert resolve_category(BYT_HTML, _BYT_URL) == ("byt", "prodej")   # breadcrumb still wins when present
 
 
+def test_the_structured_title_names_the_family_a_truncated_breadcrumb_drops():
+    """277 active ads titled "Prodej chaty/rekreačního objektu" held a NULL category_main until
+    2026-10-22: the breadcrumb stops at the home crumb and the broker-written slug names no family
+    after `prodej-` ("rekreacni-chaty", "utulna-chata"). The h1 is realitymix's own vocabulary."""
+    chata = TRUNCATED_BREADCRUMB_HTML.replace(
+        "<h1>Pronájem pokoje 24 m²</h1>", "<h1>Prodej chaty/rekreačního objektu, 36 m²</h1>")
+    for url in ("https://realitymix.cz/detail/dolany/utulna-chata-78m-dolany-u-plzne-8685017.html",
+                "https://realitymix.cz/detail/ceska-briza/prodej-rekreacni-chaty-42-m-ceska-briza-8399081.html"):
+        listing = parse_detail(chata, source_url=url)
+        assert (listing.category_main, listing.category_type) == ("dum", "prodej")
+    assert resolve_category(chata, _BYT_URL, "Pronájem chaty/rekreačního objektu, 36 m²") == (
+        "dum", "pronajem")
+    assert resolve_category(BYT_HTML, _BYT_URL, "Prodej chaty/rekreačního objektu") == ("byt", "prodej")
+
+
 def test_street_recovered_from_slug_when_no_map():
     listing = parse_detail(NO_MAP_HTML, source_url=NO_MAP_SLUG_STREET_URL)
     assert listing.lat is None and listing.lon is None   # no #print-map on the page
