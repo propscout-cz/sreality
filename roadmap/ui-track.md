@@ -22,6 +22,17 @@ toolkit work.
   (`active_only_filter` / `inactive_only_filter`); folding them into one parameter is a re-sign that needs a
   three-step rollout (SPA tolerant first).
 
+### Back to Browse keeps the filters (2026-10-22, no migration)
+- **Built:** every way back from a property lands on the filtered Browse view that was left (operator
+  request 2026-10-22). The same-tab routes (card, then the crumb or the browser's Back) already did, as
+  Browse's whole view is the URL; two did not and went to a bare `/browse`: the nav's "Browse" entry, and
+  the crumb on a property opened in a new tab or from a map pin's plain link (no history entry to step
+  back to). Both now go to the last Browse query string, kept per browser in localStorage
+  (`sreality.browse.lastSearch`, `lib/lastBrowseView.ts`, written by the Browse page). On Browse itself
+  the nav entry stays the bare page, the reset, and a reset is remembered too.
+- **Not done:** the list's scroll position still starts at the top after Back (the list is an inner
+  scroller; restoring it means re-loading the pages above the card first).
+
 ### Filter presets frame their map area (2026-10-22, no migration)
 - **Built:** loading a preset that saved a map area moves the Browse map to that area (operator
   request 2026-10-22); before, the cohort filtered on the saved box while the camera stayed put. A

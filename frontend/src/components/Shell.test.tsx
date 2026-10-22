@@ -17,6 +17,7 @@ import Shell from './Shell';
 import * as auth from '@/lib/auth';
 import * as api from '@/lib/api';
 import * as pinAudit from '@/lib/pinAudit';
+import { writeLastBrowseSearch } from '@/lib/lastBrowseView';
 
 vi.mock('@/lib/auth', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/auth')>()),
@@ -56,14 +57,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function renderShellWith(element: React.ReactNode) {
+function renderShellWith(element: React.ReactNode, at = '/browse') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={['/browse']}>
+      <MemoryRouter initialEntries={[at]}>
         <Routes>
           <Route element={<Shell />}>
             <Route path="/browse" element={element} />
+            <Route path="/property/:propertyId" element={element} />
           </Route>
         </Routes>
       </MemoryRouter>
@@ -97,6 +99,33 @@ describe('<Shell> notifications badge', () => {
     await waitFor(() =>
       expect(link).toHaveAccessibleName('Notifications 5 unread notifications'),
     );
+  });
+});
+
+/* The nav's Browse entry is a way BACK to the view that was left: from another
+ * page it carries that view's filters; on Browse itself the same click stays the
+ * reset. */
+describe('<Shell> Browse entry', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('leads back to the remembered view from another page', () => {
+    writeLastBrowseSearch('?price=3000000-6000000&sort=price_asc');
+    renderShellWith(<p>page content</p>, '/property/7');
+    expect(screen.getByRole('link', { name: 'Browse' })).toHaveAttribute(
+      'href',
+      '/browse?price=3000000-6000000&sort=price_asc',
+    );
+  });
+
+  it('is the bare page on Browse itself, whatever is remembered', () => {
+    writeLastBrowseSearch('?price=3000000-6000000');
+    renderShellWith(<p>page content</p>, '/browse?price=3000000-6000000');
+    expect(screen.getByRole('link', { name: 'Browse' })).toHaveAttribute('href', '/browse');
+  });
+
+  it('is the bare page when nothing is remembered', () => {
+    renderShellWith(<p>page content</p>, '/property/7');
+    expect(screen.getByRole('link', { name: 'Browse' })).toHaveAttribute('href', '/browse');
   });
 });
 

@@ -15,6 +15,7 @@
 import { Suspense, useMemo } from 'react';
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
+import { lastBrowsePath } from '@/lib/lastBrowseView';
 import {
   useNewEstimationModal,
   type NewEstimationPrefill,
@@ -608,7 +609,10 @@ function Page({ children }: { children: React.ReactNode }) {
   );
 }
 
-function Crumb() {
+/* A history entry behind this page = step back to it (the exact Browse URL).
+ * None (a new tab, a map pin's plain link, a pasted address) = the Browse view
+ * this browser last had, not a bare, unfiltered /browse. */
+export function Crumb() {
   const navigate = useNavigate();
   const location = useLocation();
   const className =
@@ -623,7 +627,7 @@ function Crumb() {
     );
   }
   return (
-    <Link to={ROUTES.browse.build()} className={className}>
+    <Link to={lastBrowsePath()} className={className}>
       <BackArrow />
       <span>Back to browse</span>
     </Link>

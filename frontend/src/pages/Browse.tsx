@@ -3,8 +3,10 @@
  * surface also powers the "Explore area" modal (in-memory adapter). */
 import BrowseExperience from '@/components/BrowseExperience';
 import { useUrlBrowseState } from '@/lib/browseState';
+import { useRememberBrowseView } from '@/lib/lastBrowseView';
 
 export default function Browse() {
   const view = useUrlBrowseState();
+  useRememberBrowseView();
   return <BrowseExperience view={view} layout="page" />;
 }

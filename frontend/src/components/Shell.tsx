@@ -16,6 +16,7 @@ import { useBuildSkew } from '@/lib/useBuildSkew';
 import { MAIN_ID, useRouteFocus } from '@/lib/useRouteFocus';
 import SkipLink from './SkipLink';
 import { ROUTES } from '@/lib/routes';
+import { lastBrowsePath } from '@/lib/lastBrowseView';
 import { PIN_AUDIT_TOTAL_KEY, fetchPinAuditTotal } from '@/lib/pinAudit';
 import { fmtCount } from '@/lib/format';
 import { usePhoneShell } from '@/lib/phoneShell';
@@ -229,6 +230,9 @@ function TopBar() {
     return true;
   });
   const ownerTo = activeNavTo(location.pathname, items.map((i) => i.to));
+  /* From any other page, "Browse" is the way back to the view that was left, with
+   * its filters; ON Browse the same click is the reset, the bare page. */
+  const browseTo = ownerTo === ROUTES.browse.build() ? ROUTES.browse.build() : lastBrowsePath();
   /* `end` is honoured here, not just on the NavLink: Dashboard's `to` is
    * `/new-dedup`, which prefix-matches every page in the program — including
    * /new-dedup/pin-audit, a top-level entry of its own. Without this the
@@ -277,7 +281,7 @@ function TopBar() {
             return (
               <NavLink
                 key={item.to}
-                to={item.to}
+                to={item.to === ROUTES.browse.build() ? browseTo : item.to}
                 /* Exact matching for every entry that is NOT the current path's
                    owner, so a parent (/brokers) can't stay lit on a nested
                    sibling (/brokers/review). aria-current follows the same rule. */
