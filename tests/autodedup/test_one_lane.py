@@ -673,8 +673,9 @@ def test_an_advert_the_stream_holds_and_groups_with_no_one_never_rides_its_earli
 
 def test_an_advert_the_stream_never_fingerprinted_still_rides_the_merge_that_vouched_it() -> None:
     """What E965 keeps of E903: g11 merged 12 onto 200 with 11; the stream groups 10 with 11 and
-    holds no fingerprint for 12 (it never read it), so g11's live merge is the only word about
-    12 and it rides along. Once the stream reads 12 and groups it with no one, it is refused."""
+    holds no fingerprint for 12 (it never read it), so the plan vouches for 12 by g11's live
+    merge. The live reconcile holds the group until a pass reads 12 (E964 R2); once the stream
+    reads it and groups it with no one, it is refused."""
     db = LaneDb()
     db.live_scope()
     _pair_group(db, 11, [11, 12], [200, 250], gen="g11")
@@ -694,8 +695,14 @@ def test_an_advert_the_stream_never_fingerprinted_still_rides_the_merge_that_vou
     assert held.groups[0].listing_ids == [10, 11, 12]
     assert [g.reasons for g in refused.groups] == [[AP.SKIP_CARRIES_UNGROUPED]]
     assert refused.groups[0].detail["ungrouped_listings"] == [12]
-    assert out["counts"]["applied"] == 1 and out["counts"]["listings_moved"] == 2
-    assert db.listings[12]["property_id"] == db.listings[10]["property_id"] == 100
+    # E964 (R2): the live reconcile never carries an advert the stream never fingerprinted — the
+    # group waits until a pass reads 12, and then the stream's grouping decides (refused here).
+    assert out["counts"][reconcile.WAITING] == 1 and out["counts"]["applied"] == 0
+    db.read.add(12)
+    after = _lane(db)
+    assert after["counts"]["applied"] == 0
+    assert after["counts"]["skipped_by_reason"] == {AP.SKIP_CARRIES_UNGROUPED: 1}
+    assert db.listings[12]["property_id"] == 200
 
 
 def test_the_reconcile_never_splits() -> None:
