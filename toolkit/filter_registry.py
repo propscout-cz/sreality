@@ -461,7 +461,8 @@ PRICE_CHANGE_WINDOW_OPTIONS: tuple[EnumOption, ...] = (
 )
 
 # Source portals: one per ingesting portal, values = `listings.source` (pinned to
-# PORTAL_CLASSES by tests/toolkit/test_filter_registry.py).
+# PORTAL_CLASSES by tests/toolkit/test_filter_registry.py). Append-only: the order is the
+# `newest_ad_at_<portal>` column order of the read model (migrations 588/590, then 649).
 PORTAL_OPTIONS: tuple[EnumOption, ...] = (
     EnumOption("sreality", "Sreality", "Sreality"),
     EnumOption("bazos", "Bazoš", "Bazoš"),
@@ -472,6 +473,8 @@ PORTAL_OPTIONS: tuple[EnumOption, ...] = (
     EnumOption("mmreality", "M&M Reality", "M&M Reality"),
     EnumOption("remax", "RE/MAX", "RE/MAX"),
     EnumOption("realitymix", "RealityMix", "RealityMix"),
+    # Any other site, one pasted advert at a time; a card names the advert's own host.
+    EnumOption("web", "Web", "Web"),
 )
 
 # The single server-side label source, by `listings` column (the SPA reads the same options through

@@ -25,7 +25,7 @@ import {
 import { useListingBrokers } from '@/lib/hydration';
 import { buildAmenities, buildFacts } from '@/lib/listingFacts';
 import { areaKindOf, ppm2BasisFromToken } from '@/lib/measure';
-import { portalShort } from '@/lib/portals';
+import { portalBadge } from '@/lib/portals';
 import {
   fetchSoldComparables,
   fetchSoldCoverage,
@@ -232,7 +232,7 @@ export function AdsSection({
             className={`flex flex-col gap-0.5 pb-1 ${i > 0 ? 'border-t border-[var(--color-rule-soft)] pt-3' : ''}`}
           >
             <div className="flex items-center gap-2">
-              <span className={CHIP}>{portalShort(s.source)}</span>
+              <span className={CHIP}>{portalBadge(s.source, s.source_url)}</span>
               {s.id === canonicalId && (
                 <span className="text-[11px] text-[var(--color-ink-3)]">hlavní inzerát</span>
               )}

@@ -14,7 +14,8 @@ and what actually differs between portals is a handful of JSON keys plus three
 quirks (phone shape, phone normalisation, chunk materialisation). Onboarding a
 portal is therefore ONE row here, not four hand-copied statements; the first five
 sources below carried ~330 lines of near-identical SQL between them. mmreality,
-the sixth, was onboarded as a config row and never as SQL — the registry's point.
+the sixth, was onboarded as a config row and never as SQL — the registry's point;
+web, the seventh (any other site, keyed on the contact itself), is one row too.
 
 Read by `scripts.resolve_brokers` (which executes the statements) and by
 `scraper.db` (which sources enqueue into `dirty_broker_listings`, and which
@@ -168,8 +169,8 @@ class BrokerSource:
     # email_domain); they exist so a firm swap re-enqueues the listing.
     firm_keys: tuple[str, ...] = ()
     # A human-readable firm label worth CAPTURING onto broker_identities.agency_name
-    # (W4: _FIRM_DISPLAY_NAMES reads identities, not raw_json). Only idnes publishes
-    # one; the other portals' firm_keys are slugs/ids, not labels.
+    # (W4: _FIRM_DISPLAY_NAMES reads identities, not raw_json). idnes publishes one and
+    # web's JSON-LD seller names one; the other portals' firm_keys are slugs/ids, not labels.
     agency_label_key: str | None = None
 
     def fingerprint_keys(self) -> tuple[str, ...]:
@@ -282,6 +283,16 @@ BROKER_SOURCES: tuple[BrokerSource, ...] = (
         source="mmreality", block="broker", id_key="id", name_key="name",
         email_key="email", phone_key="phone", phone_prefix_420=True,
         write_contacts=False,
+    ),
+    # Any other site (the tenth portal). A page names no broker id of its own, so the parser
+    # keys the block on the contact itself: the lower-cased email, else the +420 phone, and
+    # writes no block at all when the page carries neither. `agency` is the JSON-LD seller's
+    # organisation name, a label worth capturing. Contacts are written: one key per contact,
+    # so two pastes from one broker share an identity and a third portal's twin can bridge.
+    BrokerSource(
+        source="web", block="broker", id_key="id", name_key="name",
+        email_key="email", phone_key="phone", phone_prefix_420=True,
+        firm_keys=("agency",), agency_label_key="agency",
     ),
 )
 

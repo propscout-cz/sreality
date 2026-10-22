@@ -489,6 +489,48 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "parking_lots": _cell("none", gap=None),
         "ownership": _cell("none", gap=None),
     },
+    # --- web: any other site, one pasted advert at a time --------------------
+    # No portal payload exists, so the deterministic parse (JSON-LD, OpenGraph, the shared
+    # grammars over title + description) writes its verdicts at the TOP LEVEL of raw_json and
+    # the five `structured` cells read those keys: the census reads the same top level
+    # (`coalesce(raw->'params', raw)`), so A1 checks them from the first bless. Every fact
+    # only prose states is a `text` cell with a closed gate, which is also what keeps it across
+    # a refetch (R4); the rest the page never states in a form anyone reads.
+    "web": {
+        "category_main": _cell("structured", "category_main",
+                               note="the title's byt/dům/pozemek/komerční/garáž word (the first "
+                                    "of JSON-LD name, og:title, h1, <title> that says)"),
+        "category_type": _cell("structured", "category_type",
+                               note="the title's prodej/pronájem word (the first of JSON-LD name, "
+                                    "og:title, h1, <title> that says)"),
+        "price_czk": _cell("structured", "price_czk",
+                           note="JSON-LD offer price, else scraper.price_text"),
+        "price_unit": _cell("derived"),
+        "area_m2": _cell("structured", "area_m2",
+                         note="JSON-LD floorSize, else scraper.area over the title + description"),
+        "area_basis": _cell("derived"),
+        "disposition": _cell("structured", "disposition", note="scraper.vocabulary.disposition"),
+        "floor": _cell("text", note="scraper.floor over the title + description",
+                       convention="word", gate=_UNGATED),
+        "total_floors": _cell("text", gate=_UNGATED),
+        "has_balcony": _cell("text", gate=_UNGATED),
+        "has_parking": _cell("text", gate=_UNGATED),
+        "has_lift": _cell("text", gate=_UNGATED),
+        "building_type": _cell("text", gate=_UNGATED),
+        "condition": _cell("text", gate=_UNGATED),
+        "energy_rating": _cell("text", gate=_UNGATED),
+        "estate_area": _cell("none", gap=None),
+        "usable_area": _cell("none", gap=None),
+        "garden_area": _cell("none", gap=None),
+        "category_sub_cb": _cell("none", gap=None),
+        "subtype": _cell("none", gap=None),
+        "furnished": _cell("none", gap=None),
+        "terrace": _cell("none", gap=None),
+        "cellar": _cell("none", gap=None),
+        "garage": _cell("none", gap=None),
+        "parking_lots": _cell("none", gap=None),
+        "ownership": _cell("none", gap=None),
+    },
 }
 
 # Census keys no cell reads, with the reason. The A2 gate refuses a key above the floor
@@ -673,6 +715,18 @@ IGNORED: dict[str, dict[str, str]] = {
         "coords": "location contract territory", "psc": "location",
         "locality_text": "location", "posted_date": "published_at",
         "views": "no column", "image_urls": "images phase",
+    },
+    "web": {
+        "title": "the text lane's substrate", "description": "listings.description",
+        "image_urls": "images phase", "broker": "broker attribution (toolkit.broker_sources)",
+        "jsonld": "the page's own structured blocks, kept as evidence; read by the parse",
+        "og": "the page's OpenGraph tags, kept as evidence; read by the parse",
+        "floor": "the parse's scraper.floor reading, written to listings.floor; the text cell "
+                 "owns the column",
+        "total_floors": "the parse's scraper.floor reading, written to listings.total_floors; "
+                        "the text cell owns the column",
+        "final_url": "where the fetch's redirects ended; evidence, no column (identity is the "
+                     "canonical URL)",
     },
 }
 

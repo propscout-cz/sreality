@@ -1,0 +1,60 @@
+name: "Scraping: Web index walk"
+
+# The tenth portal's walk: `web` is any site an operator pasted (scraper/web_main.py).
+# It has no index, so the walk pages nothing and reaches its end at once; the portal's
+# declared `indexless` seam then nominates every active web ad that has no queue row and
+# no page check in the last 24 h (NULL categories included) at the verify priority. The
+# worker's drain fetches each page and the page decides (rule #3): a live page refreshes
+# the ad, a 404/410 or a redirect off the page records a gone verdict, and a second one
+# 24 h+ later closes it. Records run_type='index'.
+#
+# Every 6 h, like the other portals' walks, although each ad is checked only once a day:
+# the walk is one query and fetches nothing, so delist_policy.RECHECK_THROTTLE (24 h) sets
+# the cadence, not the cron. A DAILY cron would not: the next day's walk lands less than
+# 24 h after the drain's completion, so every ad would be skipped one day in two. With
+# this cron an ad is checked every 24-30 h and a dead one closes 24-60 h after it dies.
+# Required secret: SUPABASE_DB_URL.
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      max_seconds:
+        description: wall-clock budget; the walk finalizes cleanly before this (blank = 300).
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: web-index-walk
+  cancel-in-progress: false
+
+jobs:
+  index-walk:
+    runs-on: ubuntu-latest
+    # One nomination query, no page fetched: minutes are the outer backstop only.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: pip install -e .
+
+      - name: Run web index walk
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          # The archive rail (tests/test_scrape_lane_r2_env.py) asks every lane of a portal
+          # with a contract for the bucket; this walk fetches no page, the drain does.
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          MAX_SECONDS: ${{ inputs.max_seconds || '300' }}
+        run: python -m scraper.web_main --index-only --max-seconds "$MAX_SECONDS"

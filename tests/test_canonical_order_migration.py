@@ -1,4 +1,8 @@
-"""Migration 588: an inlinable order function with 561's ACL; nine dates in one catalog-only ALTER."""
+"""Migration 588: an inlinable order function with 561's ACL; nine dates in one catalog-only ALTER.
+
+588 cannot be edited (rule 1), so it is pinned to the nine portals it shipped with: the first nine
+PORTAL_OPTIONS, in order. A later portal's date arrives in its own migration (web's in 649), and
+tests/test_recompute_property_stats.py checks every code's column against the whole history."""
 
 from __future__ import annotations
 
@@ -24,11 +28,17 @@ def test_the_order_function_stays_an_inlinable_invoker_sql_function_with_its_acl
     assert "grant execute on function public.property_canonical_listings(bigint) to service_role;" in CODE
 
 
+# The portals 588 shipped with: PORTAL_OPTIONS is append-only, so they stay its first nine.
+SHIPPED_588 = [o.value for o in PORTAL_OPTIONS[:9]]
+
+
 def test_the_nine_dates_arrive_in_one_catalog_only_alter_behind_a_lock_limit():
     alters = re.findall(r"alter table public\.properties (.*?);", CODE)
     assert len(alters) == 1
     columns = re.findall(r"add column if not exists newest_ad_at_(\w+) timestamptz,?", alters[0])
-    assert columns == [o.value for o in PORTAL_OPTIONS]
+    assert columns == SHIPPED_588
+    assert SHIPPED_588 == ["sreality", "bazos", "idnes", "maxima", "ceskereality", "bezrealitky",
+                           "mmreality", "remax", "realitymix"]
     assert not re.search(r"\b(default|not null|rename|index)\b", alters[0])
     assert CODE.index("set lock_timeout = '6s';") < CODE.index("alter table public.properties")
     assert not re.search(r"\bdrop\b", CODE.lower()), "588 is additive"
