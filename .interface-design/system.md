@@ -75,3 +75,8 @@ above for status and adds no token.
   while its own condition holds (a count above zero; a share above the page's bound) and the tile draws a brick
   dot beside its label, the word Problem sr-only. Copper stays "chosen or central", never a number's emphasis.
   Acknowledge is an outlined copper button: the operator's own act.
+- **Browse card price** (`ListingCards`, operator 2026-10-21 — the one exception to "numbers stay ink" outside
+  Health): a live ask is `--color-sage` semibold (Inter ships 400/500/600, so semibold is the heaviest real
+  weight; 4.58:1 on paper-2 in light, 7.22:1 in dark); a delisted card's price stays `ink-2` medium so a dead
+  ask never reads as live. Sage here means "a live ask", beside PriceDelta's sage ↓: the arrow and the signed
+  percentage carry the price move, never the colour alone. Copper stays off it ("never a number's emphasis").
