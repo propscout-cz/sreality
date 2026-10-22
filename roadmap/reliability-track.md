@@ -939,3 +939,23 @@ To check: `PAYLOAD stats appended=` in the worker log; the next `LOCATION_REFETC
 `ceskereality/town` 34 → ~23 within ~1 h of the refetch tick; `realitymix/town` 3 → 0 or a gone verdict.
 
 **Next:** W5 applies the rulings (Q3: the 24 towns the portal withholds; the text lane's scope).
+## 2026-10-22 — Health green sprint, wave 3a (shipped with this PR)
+
+idnes states a foreign ad's price in its own currency ("Cena v EUR 298 000 €") and shows it converted
+to Kč at the day's rate, and the crawlers' content hash read the Kč. Whenever the rate drifted past the
+0.5 % index tolerance (measured against the STORED Kč, so the drift accumulates), the whole foreign
+stock re-snapshotted at once: 8,468 re-snapshots in 24 h on 10-21/22, from 6,064 Spanish, 245 Croatian
+and 94 Italian ads (1,421 Czech), only `params.cena` and `price_text` differing; seven waves of 4–10k
+since 08-28 — a rule-2 violation feeding `listing_snapshots` and `dirty_properties`. Fixed here: the
+idnes parser reads the stated price into `price_native` (never a column; kept in `raw_json` as the
+evidence), and `ScrapedListing.hash_doc` reads it IN PLACE OF `price_czk` when present — one rule in
+the shared hash, no portal branch. A Kč-priced ad's hash input is byte-identical to before (a golden
+test pins the digest computed on the base commit); a foreign ad's hash changes once, by design.
+`price_czk` still updates latest-wins on every fetch, unhashed (rule 20's exception: the property
+rollup catches up at the daily sweep). Deleted: idnes's own `--price-change-min-pct` CLI override, which
+no workflow passed; the shared `operational_limits` row is the one override channel, as for every portal.
+- **Next:** the tolerance still re-enqueues the foreign stock on each crossing (a refetch wave of
+  ~6.4k detail fetches, now snapshot-free). Each foreign ad re-snapshots ONCE at its first detail fetch
+  after the deploy (the new hash), mostly inside the first crossing: about one ordinary wave, so
+  `parsing idnes/churn` may read red once more. The crossing after it must read ~0 foreign
+  re-snapshots, and the churn incident closes on that measured OK.
