@@ -235,13 +235,15 @@ def test_a_portal_without_two_walks_borrows_the_slowest_portals_gap() -> None:
     c = _cells(out)["remax/stuck"]
     assert c["facts"]["walk_gap_own"] is False and c["facts"]["limit_s"] == round(43 * _H)
     assert "the slowest portal's (it has no two finished walks in 14 d)" in c["message"]
+    young = dict(zip(*(_params(conn, dl._PRECISION_SQL)[k] for k in ("sources", "young_s"))))
+    assert (young["remax"], young["bazos"], young["sreality"]) == (19 * _H, 19 * _H, 9 * _H)
 
 
-def test_with_no_walk_gap_anywhere_the_stuck_arm_is_not_read() -> None:
+def test_with_no_walk_gap_anywhere_neither_stuck_nor_precision_is_read() -> None:
     out, conn = _check(walks=[], outflow=_outflow("bazos", 1_300, 1_400, 1_620, 1_380, 1_510))
-    assert dl._STUCK_SQL not in {sql for sql, _, _ in conn.sent}
-    assert "stuck" in out["details"]["not_measured"]
-    assert "bazos/stuck" not in _cells(out)
+    assert not {dl._STUCK_SQL, dl._PRECISION_SQL} & {sql for sql, _, _ in conn.sent}
+    assert {"stuck", "precision"} <= set(out["details"]["not_measured"])
+    assert not {"bazos/stuck", "bazos/precision"} & set(_cells(out))
 
 
 # --- verify backlog -----------------------------------------------------------------------------
@@ -313,37 +315,56 @@ def test_no_end_reached_walk_in_two_weeks_leaves_deferrals_not_measured() -> Non
 # --- precision -----------------------------------------------------------------------------------
 
 
+def test_the_cohort_starts_where_the_stuck_arm_says_the_walks_have_sighted_a_listed_ad() -> None:
+    """idnes walks every 9.2 h, sreality 6.6 h: 19.4-43.4 h and 14.2-38.2 h, both short of 50 h."""
+    # One bound, two arms: the stuck limit is the dwell plus the age the cohort starts at. An ad
+    # first sighted again 50 h after its flip was absent from end-reached walks after it: a
+    # re-list, and its flip has left the window before it comes back (the live test seeds it).
+    walks = [*_walks("idnes", every_h=9.2), *_walks("sreality", every_h=6.6)]
+    _, conn = _check(walks=walks)
+    params, limits = _params(conn, dl._PRECISION_SQL), _params(conn, dl._STUCK_SQL)
+    young = dict(zip(params["sources"], params["young_s"]))
+    assert params["sources"] == sorted(SOURCES) and params["span_s"] == 24 * _H
+    assert young["idnes"] == pytest.approx(19.4 * _H) and young["sreality"] == pytest.approx(
+        14.2 * _H)
+    for source, limit in zip(limits["sources"], limits["limits_s"]):
+        assert young[source] + dl._EFFECTIVE_DWELL_S == limit
+    assert max(young.values()) + params["span_s"] < 50 * _H
+
+
 def test_the_steady_state_reads_ok_on_the_cohorts_lower_bound() -> None:
-    """10-19: sreality 173 of 2,004 flipped 48-72 h ago are active again (8.6 %, LB ~7.5 %)."""
-    out, conn = _check(precision=[("sreality", 2_004, 173, 7_656, 800)])
+    """10-22 16:32Z: sreality 144 of 1,684 flipped in its window are active again (LB 7.3 %)."""
+    out, _ = _check(precision=[("sreality", 1_684, 144)])
     c = _cells(out)["sreality/precision"]
     assert c["status"] == "ok" and c["value"] == 8.6 and c["unit"] == "%"
-    assert c["facts"]["window"] == "48-72 h" and c["facts"]["lower_bound"] == pytest.approx(0.075,
+    assert c["facts"]["window"] == "13-37 h" and c["facts"]["lower_bound"] == pytest.approx(0.073,
                                                                                          abs=1e-3)
-    assert _params(conn, dl._PRECISION_SQL) == {"from_h": 48, "to_h": 72, "pool_d": 7}
+    assert c["message"] == ("144 of 1,684 ads made inactive 13-37 h ago (from the age a "
+                            "still-listed ad is sighted again by) are active again (8.6%, lower "
+                            "bound 7.3%)")
 
 
 def test_a_thirty_percent_revived_cohort_is_a_problem() -> None:
-    """Replay (h): the blink cohorts read 26-49 % active again 48-72 h after their flip."""
-    out, _ = _check(precision=[("sreality", 1_000, 300, 4_000, 1_000)])
+    """Replay (h): the blink cohorts read 26-49 % active again within hours of their flip."""
+    out, _ = _check(precision=[("sreality", 1_000, 300)])
     c = _cells(out)["sreality/precision"]
-    assert c["status"] == "fail" and "300 of 1,000 ads made inactive 48-72 h ago" in c["message"]
+    assert c["status"] == "fail" and "300 of 1,000 ads made inactive 13-37 h ago" in c["message"]
 
 
 def test_the_10_13_tail_reads_watch_on_its_lower_bound() -> None:
     """284 of 1,718 (16.5 %): its Wilson lower bound, ~14.9 %, sits under the Problem line."""
-    out, _ = _check(precision=[("sreality", 1_718, 284, 7_000, 800)])
+    out, _ = _check(precision=[("sreality", 1_718, 284)])
     assert _cells(out)["sreality/precision"]["status"] == "warn"
 
 
-def test_a_small_cohort_is_pooled_over_two_to_seven_days_or_not_measured() -> None:
-    pooled, _ = _check(precision=[("remax", 49, 1, 275, 11)])
-    c = _cells(pooled)["remax/precision"]
-    assert c["status"] == "ok" and c["facts"]["window"] == "2-7 d"
-    assert "11 of 275 ads made inactive 2-7 d ago" in c["message"]
-    thin, _ = _check(precision=[("maxima", 0, 0, 15, 0)])
-    c = _cells(thin)["maxima/precision"]
-    assert c["status"] == "unknown" and c["message"].startswith("Not measured: 15 ads")
+def test_a_portal_under_fifty_flips_in_its_window_is_not_measured_never_pooled() -> None:
+    out, _ = _check(precision=[("remax", 49, 11)])
+    cells = _cells(out)
+    assert cells["remax/precision"]["status"] == "unknown"
+    assert cells["remax/precision"]["message"] == (
+        "Not measured: 49 ads made inactive 13-37 h ago (from the age a still-listed ad is "
+        "sighted again by), under the 50 this arm needs")
+    assert cells["maxima/precision"]["message"].startswith("Not measured: 0 ads made inactive ")
 
 
 # --- the result -----------------------------------------------------------------------------------
@@ -354,7 +375,7 @@ def test_every_portal_of_the_fleet_gets_every_arm_whatever_its_ledgers_hold() ->
     ledger keeps its five cells (Not measured or OK) instead of dropping out of the check."""
     out, _ = _check(walks=_walks("sreality"), outflow=_outflow("bazos", 1_300, 1_400, 1_620,
                                                               1_380, 1_510),
-                    verify=[("idnes", 3, 0, 60.0)], precision=[("realitymix", 691, 3, 2_508, 37)])
+                    verify=[("idnes", 3, 0, 60.0)], precision=[("realitymix", 691, 3)])
     cells = _cells(out)
     for portal in SOURCES:
         for arm in ("outflow", "stuck", "verify_backlog", "deferrals", "precision"):

@@ -5,10 +5,10 @@ made inactive in 24 h against the quietest and the busiest 24 h within a few hou
 one to four weeks earlier), the stuck confirmations (active ads whose first unrefuted gone verdict
 has outlived the effective dwell and two of the portal's walk gaps), the verify backlog (the oldest
 presence check waiting), the deferrals (walks in which a unit reached the end whose nominations the
-flip cap held back) and the precision (the share of a 48-72 h old cohort of inactive ads that is
-active again). Its limits come from delist_policy's constants and each portal's own walks; it names
-no portal, takes the harness's `thresholds`, sends every statement through the per-check clock and
-imports neither the harness nor the worker.
+flip cap held back) and the precision (of a day's flips aged from when two walk gaps have sighted
+any ad still listed, the share active again). Its limits come from delist_policy's constants and
+each portal's own walks; it names no portal, takes the harness's `thresholds`, sends every
+statement through the per-check clock and imports neither the harness nor the worker.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import datetime as _dt
 import statistics
 from typing import Any
 
-from scraper.db import COMPLETION_RETENTION_DAYS, QUEUE_PRIORITY_VERIFY
+from scraper.db import QUEUE_PRIORITY_VERIFY
 from location_data.claims_common import SOURCES
 from scraper.delist_policy import GONE_DWELL, RECHECK_THROTTLE
 from scripts.checks.clock import fetchall
@@ -28,11 +28,8 @@ from scripts.checks.common import ago, as_utc, cell, iso, judged, num, result, w
 _EFFECTIVE_DWELL_S = max(GONE_DWELL, RECHECK_THROTTLE).total_seconds()
 # The same 24 h one to four weeks back: the same weekday and hour, so the weekend dip cancels out.
 _OUTFLOW_LAGS_D = (7, 14, 21, 28)
-# A cohort of fixed age: a blinking ad comes back within hours and the next walk sights it, so at
-# 48-72 h its revival has happened; a mixed 7-day window kept counting flips too young to tell.
-_COHORT_H = (48, 72)
-# A portal with too few flips in the cohort is pooled back as far as the ledger keeps them.
-_POOL_D = COMPLETION_RETENTION_DAYS
+# The precision cohort: a day of flips, so each hour's walks and takedowns count once.
+_COHORT_S = 24 * 3600.0
 # The walk-start gap is read over two weeks of finished walks, as the scraping check's G is.
 _WALK_DAYS = 14
 
@@ -102,21 +99,17 @@ select source, count(*)::int, count(*) filter (where claimed_at is not null)::in
  group by source
 """
 
-# A plain range over the pruned 7-day ledger: the planner reads it whole (about 200k rows) more
-# cheaply than per portal through (source, completed_at), which it prices about three times higher.
+# Per portal, a day of flips from the age the next walks sight a falsely delisted ad by (the stuck
+# arm's bound less the dwell). An ad first sighted later was missing from a walk that reached the
+# end after its flip: gone by rule 3's census, so its return is a re-list, never counted.
 _PRECISION_SQL = """
-select c.source,
-       count(*) filter (where c.completed_at >= now() - make_interval(hours => %(to_h)s))::int,
-       count(*) filter (where c.completed_at >= now() - make_interval(hours => %(to_h)s)
-                          and l.is_active)::int,
-       count(*)::int,
-       count(*) filter (where l.is_active)::int
-  from detail_queue_completions c
+select w.source, count(*)::int, count(*) filter (where l.is_active)::int
+  from unnest(%(sources)s::text[], %(young_s)s::float8[]) as w(source, young_s)
+  join detail_queue_completions c on c.source = w.source and c.outcome = 'flipped'
+   and c.completed_at < now() - make_interval(secs => w.young_s)
+   and c.completed_at >= now() - make_interval(secs => w.young_s + %(span_s)s::float8)
   left join listings l on l.source = c.source and l.source_id_native = c.native_id
- where c.outcome = 'flipped'
-   and c.completed_at < now() - make_interval(hours => %(from_h)s)
-   and c.completed_at >= now() - make_interval(days => %(pool_d)s)
- group by c.source
+ group by w.source
 """
 
 
@@ -148,9 +141,14 @@ def _walk_gaps(walks: dict[str, list[tuple[_dt.datetime, bool, int]]]) -> dict[s
     return gaps
 
 
+def _sighted_s(gap_s: float, thresholds: dict[str, Any]) -> float:
+    """2 x the p90 walk gap + the slack: by then the walks have sighted any ad still listed."""
+    return 2 * gap_s + float(thresholds["delisting_stuck_slack_h"]) * 3600
+
+
 def _stuck_limit_s(gap_s: float, thresholds: dict[str, Any]) -> float:
-    """The effective dwell + 2 x the p90 walk gap + the slack: a verdict older is stuck."""
-    return _EFFECTIVE_DWELL_S + 2 * gap_s + float(thresholds["delisting_stuck_slack_h"]) * 3600
+    """The effective dwell, then the walks' time to sight an ad: a verdict older is stuck."""
+    return _EFFECTIVE_DWELL_S + _sighted_s(gap_s, thresholds)
 
 
 def _outflow_cell(portal: str, windows: dict[tuple[int, int], int], align_h: int,
@@ -276,27 +274,21 @@ def _deferrals_cell(portal: str, walks: list[tuple[_dt.datetime, bool, int]],
     return judged(subject, conditions, ok, value=streak, unit="walks", portal=portal, facts=facts)
 
 
-def _precision_cell(portal: str, row: tuple[Any, ...] | None,
+def _precision_cell(portal: str, row: tuple[Any, ...] | None, young_s: float,
                     thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Of the ads made inactive 48-72 h ago, the share active again, judged on its Wilson bound."""
+    """Of a day's flips from the age the walks sight a still-listed ad by, the share active again."""
     subject = f"{portal}/precision"
-    cohort, cohort_active, pooled, pooled_active = (int(x) for x in (row or (0, 0, 0, 0)))
+    n, hits = (int(x) for x in (row or (0, 0)))
     min_n = int(thresholds["delisting_precision_min_n"])
-    young, old = _COHORT_H
-    pool = f"{young // 24}-{_POOL_D} d"
-    facts: dict[str, Any] = {"cohort": cohort, "cohort_active": cohort_active,
-                             "pooled": pooled, "pooled_active": pooled_active}
-    if cohort >= min_n:
-        hits, n, window = cohort_active, cohort, f"{young}-{old} h"
-    elif pooled >= min_n:
-        hits, n, window = pooled_active, pooled, pool
-    else:
-        return cell(subject, "unknown", f"Not measured: {pooled:,} ads made inactive {pool} ago, "
-                    f"under the {min_n} this arm needs", portal=portal, facts=facts)
+    window = f"{young_s / 3600:.0f}-{(young_s + _COHORT_S) / 3600:.0f} h"
+    facts: dict[str, Any] = {"flips": n, "flips_active": hits, "window": window}
+    made = f"made inactive {window} ago (from the age a still-listed ad is sighted again by)"
+    if n < min_n:
+        return cell(subject, "unknown", f"Not measured: {n:,} ads {made}, under the {min_n} this "
+                    "arm needs", portal=portal, facts=facts)
     share, low = hits / n, wilson_lower(hits, n)
-    facts.update(window=window, share=round(share, 4), lower_bound=round(low, 4))
-    said = (f"{hits:,} of {n:,} ads made inactive {window} ago are active again ({share:.1%}, "
-            f"lower bound {low:.1%})")
+    facts.update(share=round(share, 4), lower_bound=round(low, 4))
+    said = f"{hits:,} of {n:,} ads {made} are active again ({share:.1%}, lower bound {low:.1%})"
     warn = float(thresholds["delisting_precision_warn"])
     fail = float(thresholds["delisting_precision_fail"])
     conditions = []
@@ -319,20 +311,22 @@ def check_delisting(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
         outflow.setdefault(source, {})[int(lag), int(off)] = int(ads)
     verify = {row[0]: row[1:] for row in fetchall(conn, _VERIFY_SQL,
                                                    {"priority": QUEUE_PRIORITY_VERIFY})}
-    precision = {row[0]: row[1:] for row in fetchall(
-        conn, _PRECISION_SQL, {"from_h": _COHORT_H[0], "to_h": _COHORT_H[1], "pool_d": _POOL_D})}
+    portals = sorted(SOURCES)
     not_measured: dict[str, str] = {}
     stuck: dict[str, tuple[Any, ...]] | None = None
+    precision: dict[str, tuple[Any, ...]] = {}
     fallback_gap = max(gaps.values(), default=0.0)
+    young = {p: _sighted_s(gaps.get(p, fallback_gap), thresholds) for p in portals}
     if gaps:
         limits = {source: _stuck_limit_s(gap, thresholds) for source, gap in gaps.items()}
         stuck = {row[0]: row[1:] for row in fetchall(conn, _STUCK_SQL, {
             "sources": list(limits), "limits_s": list(limits.values()),
             "fallback_s": _stuck_limit_s(fallback_gap, thresholds)})}
+        precision = {row[0]: row[1:] for row in fetchall(conn, _PRECISION_SQL, {
+            "sources": portals, "young_s": list(young.values()), "span_s": _COHORT_S})}
     else:
-        not_measured["stuck"] = (f"no portal has two finished walks in {_WALK_DAYS} d to take a "
-                                 "walk gap from")
-    portals = sorted(SOURCES)
+        not_measured["stuck"] = not_measured["precision"] = (
+            f"no portal has two finished walks in {_WALK_DAYS} d to take a walk gap from")
     cells = []
     for portal in portals:
         cells.append(_outflow_cell(portal, outflow.get(portal, {}), align_h, thresholds))
@@ -341,5 +335,7 @@ def check_delisting(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
                                      thresholds))
         cells.append(_verify_cell(portal, verify.get(portal), thresholds))
         cells.append(_deferrals_cell(portal, walks.get(portal, []), thresholds))
-        cells.append(_precision_cell(portal, precision.get(portal), thresholds))
+        if stuck is not None:
+            cells.append(_precision_cell(portal, precision.get(portal), young[portal],
+                                         thresholds))
     return result("delisting", cells, not_measured)

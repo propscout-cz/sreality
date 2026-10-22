@@ -902,3 +902,23 @@ leaves holding prodej beside drazba (a clash checked only at merge) — the oper
 
 **Next:** W3, producers (idnes's daily EUR churn, the per-m² masquerade); W4, location producers; W5, the
 rulings Q1–Q3 applied; W6, the legacy layer (migration 643).
+## 2026-10-22 — Health green sprint, wave 5a (shipped with this PR)
+
+The `delisting` precision arm judges a flip at the age a false delist must show by. Plan:
+[`docs/design/health-dashboard.md`](../docs/design/health-dashboard.md) § 14 (Q2, settled by construction,
+no ruling).
+
+- **The defect.** The arm read the flips 48–72 h old, pooled over 2–7 d under 50. Rule 3 makes an
+  end-reached walk a census, so an ad still listed when we closed it is sighted again within 2 × the
+  portal's p90 walk gap + 1 h (the stuck limit less the dwell); one first sighted later was missing from a
+  walk that reached the end after its flip: a re-list. On 10-22 idnes read Problem at 106 of 407 (26 %):
+  104 were whole agency portfolios flipped one morning and back 2–3 days later under the same ids.
+- **The change.** Each portal's cohort is the day of flips from that age (`_sighted_s`, one bound shared with
+  the stuck limit; idnes 19–43 h, sreality 14–38 h at 10-22's gaps). The pooled fallback and the fixed
+  48–72 h constant are deleted: under 50 flips the cell is Not measured. mmreality's new-price re-lists stop
+  counting (Q2b).
+- **Live, 16:32Z, the final SQL:** idnes 11 of 1,270 (0.9 %), sreality 144 of 1,684 (8.6 %, lower bound
+  7.3 %), mmreality 6 of 127, remax 4 of 70, realitymix 6 of 463, bezrealitky 1 of 135, bazos 0 of 1,316,
+  ceskereality 0 of 751, all OK; maxima and web Not measured. 0.11 s, one index range per portal.
+
+To check: after the deploy, the idnes precision incident closes on a measured OK, verified on the page.

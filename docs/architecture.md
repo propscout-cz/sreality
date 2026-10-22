@@ -1344,7 +1344,8 @@ renumber.** Navigate by area:
    stuck arm counts the active ads whose first unrefuted verdict is older than the effective
    dwell + 2 × the portal's p90 walk-start gap + 1 h. The ledger's 7-day retention bounds the
    evidence; the gone-rate breaker is unchanged (ingest only). The same check's precision arm
-   reads the `flipped` rows 48-72 h old whose ads are active again. Deleted with it: sreality's
+   reads a day of `flipped` rows from 2 × the p90 walk gap + 1 h old (by then a walk has sighted any
+   ad still listed; a later return is a re-list) whose ads are active again. Deleted with it: sreality's
    HTML "tato stránka neexistuje" body scan (the live listing page carries that string in its
    bundle, so any HTML answer — a consent wall, an edge error — read as a removal; the API
    answers a real removal with a JSON 404, and 62 of 62 re-probed removals did) and
@@ -3008,10 +3009,10 @@ renumber.** Navigate by area:
     `delist_flip_refusals` is still written by `db.enqueue_presence_checks` and read by nothing
     since; a wave-9 drop removes the writer first. There is no latch: the next walk re-nominates
     what was deferred, so a real backlog drains in a few walks. The same check's precision arm watches
-    the hysteresis itself: per portal, of the `flipped` ledger rows 48-72 h old, the share whose
-    ad is active again — a revival after a confirmed verdict is a flip that was wrong; Watch
-    when its Wilson lower bound is above 10%, Problem above 15%, with n ≥ 50, else pooled over
-    2-7 d. It replaced `false_delist_share` (a mixed 7-day window, warn ≥5%, fail ≥20%).
+    the hysteresis itself: per portal, of a day of `flipped` ledger rows from 2 × its p90 walk
+    gap + 1 h old, the share whose ad is active again — a revival the walks see that soon is a
+    flip that was wrong, a later one a re-list; Watch when its Wilson lower bound is above 10%,
+    Problem above 15%, with n ≥ 50, else Not measured. It replaced `false_delist_share` (a mixed 7-day window, warn ≥5%, fail ≥20%).
     **The threshold is 10% with a 2,000-row category floor, and it is MEASURED (migration 452).**
     Across 60 days and 11,763 flipping sweeps the per-sweep share of a category is p95 = 1.8%,
     p99 = 3.4%, and then the tail jumps straight to 86% — routine churn and genuine incidents are
