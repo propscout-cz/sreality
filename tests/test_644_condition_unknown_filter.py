@@ -90,8 +90,9 @@ def test_one_transaction_gated_before_and_checked_after() -> None:
 
 
 def test_these_are_the_latest_definitions() -> None:
+    # 648 restated both with the energy-rating parameter appended (tests/test_648_browse_energy_rating_filter.py).
     for fn in FNS:
-        assert latest_definition(fn).name == NAME, fn
+        assert latest_definition(fn).name == "648_browse_energy_rating_filter.sql", fn
 
 
 def test_the_receipt_probes_the_two_functions() -> None:

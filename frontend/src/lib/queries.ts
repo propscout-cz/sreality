@@ -973,6 +973,7 @@ export const buildBrowseStatsArgs = (
     has_lift_filter:         triToBool(f.hasLift),
     has_parking_filter:      triToBool(f.hasParking),
     furnished_filter:        f.furnished.length ? f.furnished : null,
+    energy_rating_filter:    f.energyRatingMatch.length ? f.energyRatingMatch : null,
     ownership_filter:        f.ownership.length ? f.ownership : null,
     terrace_filter:          triToBool(f.terrace),
     cellar_filter:           triToBool(f.cellar),

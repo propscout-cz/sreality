@@ -205,13 +205,15 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
   {
     title: 'Advanced',
     keys: [
-      'mfGrossYieldPctMin', 'mfGrossYieldPctMax', 'brokerId', 'locationMode', 'centerRadius',
+      'energyRatingMatch', 'mfGrossYieldPctMin', 'mfGrossYieldPctMax', 'brokerId', 'locationMode', 'centerRadius',
       'cityIndexRules', 'minCityPopulation', 'maxCityPopulation',
       'nearPop5kmMin', 'nearPop15kmMin', 'nearJobs5kmMin', 'nearJobs15kmMin',
       'nearYouth5kmMin', 'nearYouth15kmMin', 'nearOverall5kmMin', 'nearOverall15kmMin',
       'priceGrowthRules',
     ],
     rows: [
+      /* PENB A–G. G is also the legal "no certificate" placeholder (registry note). */
+      { blocks: [form({ energy_rating_match: 'Energy rating (PENB)' })] },
       /* MF reference rent ÷ asking price: sale flats only, so Prodej only;
        * cleared on leaving Prodej (applySidebarUpdates). */
       {

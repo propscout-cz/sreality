@@ -121,7 +121,7 @@ def test_the_latest_definitions() -> None:
     parameter and one predicate (tom_observed_only); 630 re-pointed it at browse_list; 644
     swapped its condition conjunct. The Stats RPC's latest definition is pinned where it
     lives: tests/test_626_stats_dashboard.py."""
-    assert latest_definition(FN).name == "644_condition_unknown_filter.sql"
+    assert latest_definition(FN).name == "648_browse_energy_rating_filter.sql"
 
 
 def test_the_receipt_probes_the_function() -> None:

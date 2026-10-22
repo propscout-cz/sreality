@@ -979,6 +979,7 @@ export interface WatchdogFilterSpec {
   // the matcher honours them as Browse does, and an equality test pins
   // the Python spec to the WATCHDOG agenda so a filter can't drop again.
   building_material: Array<'cihla' | 'panel' | 'smisena' | 'ostatni'> | null;
+  energy_rating_match: string[] | null;
   min_garden_area: number | null;
   max_garden_area: number | null;
   tags: number[] | null;
@@ -1042,6 +1043,7 @@ export const DEFAULT_WATCHDOG_FILTER_SPEC: WatchdogFilterSpec = {
   price_change_window_days: null,
   total_price_change_pct: null,
   building_material: [],
+  energy_rating_match: [],
   min_garden_area: null,
   max_garden_area: null,
   tags: null,

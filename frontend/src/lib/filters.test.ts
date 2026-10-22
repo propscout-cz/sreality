@@ -118,6 +118,15 @@ describe('URL round-trip', () => {
     expect(filtersToWatchdogSpec(f).spec.condition_match).toEqual(['novostavba', '__unknown__']);
   });
 
+  it('round-trips the energy rating to the URL and the Watchdog, dropping a letter outside A–G', () => {
+    const f: ListingFilters = { ...DEFAULT_FILTERS, energyRatingMatch: ['A', 'B'] };
+    expect(toSearchParams(f).get('energy')).toBe('A,B');
+    expect(fromSearchParams(toSearchParams(f)).energyRatingMatch).toEqual(['A', 'B']);
+    expect(fromSearchParams(new URLSearchParams('energy=A,Z,g')).energyRatingMatch).toEqual(['A']);
+    expect(filtersToWatchdogSpec(f).spec.energy_rating_match).toEqual(['A', 'B']);
+    expect(toSearchParams(DEFAULT_FILTERS).has('energy')).toBe(false);
+  });
+
   it('round-trips the portals and drops a code that is not one of them', () => {
     const f: ListingFilters = { ...DEFAULT_FILTERS, portals: ['idnes', 'realitymix'] };
     expect(fromSearchParams(toSearchParams(f)).portals).toEqual(['idnes', 'realitymix']);

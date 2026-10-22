@@ -241,6 +241,10 @@ export interface ListingFilters {
    * categoryMain in (dum, komercni); see SUBTYPE_LABELS_BY_MAIN. */
   subtype: string[];
   buildingMaterial: BuildingMaterial[];
+  /* PENB letters A–G (registry `energy_rating_match`): a property matches when its
+   * rating — the first non-null across its ads in canonical order — is one of them;
+   * an unrated property never does. Empty = no constraint. */
+  energyRatingMatch: string[];
   estateAreaMin: number | null;
   estateAreaMax: number | null;
   usableAreaMin: number | null;
@@ -358,6 +362,7 @@ export const DEFAULT_FILTERS: ListingFilters = {
   categorySubCb: null,
   subtype: [],
   buildingMaterial: [],
+  energyRatingMatch: [],
   estateAreaMin: null,
   estateAreaMax: null,
   usableAreaMin: null,
@@ -445,6 +450,7 @@ const CATEGORY_TYPE_VALUES: ReadonlyArray<CategoryType> = [
 const BUILDING_MATERIAL_VALUES: ReadonlyArray<BuildingMaterial> = [
   'cihla', 'panel', 'smisena', 'ostatni',
 ];
+const ENERGY_RATING_VALUES: ReadonlyArray<string> = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
 
 const splitCsv = (s: string | null): string[] =>
   s == null || s === '' ? [] : s.split(',').map(decodeURIComponent);
@@ -608,6 +614,7 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
     buildingMaterial: splitCsv(sp.get('build')).filter((m): m is BuildingMaterial =>
       (BUILDING_MATERIAL_VALUES as ReadonlyArray<string>).includes(m),
     ),
+    energyRatingMatch: splitCsv(sp.get('energy')).filter((v) => ENERGY_RATING_VALUES.includes(v)),
     estateAreaMin: estateMin,
     estateAreaMax: estateMax,
     usableAreaMin: usableMin,
@@ -811,6 +818,7 @@ export const toSearchParams = (f: ListingFilters): URLSearchParams => {
   if (f.categorySubCb != null) sp.set('subcat', String(f.categorySubCb));
   if (f.subtype.length) sp.set('subtype', f.subtype.join(','));
   if (f.buildingMaterial.length) sp.set('build', f.buildingMaterial.join(','));
+  if (f.energyRatingMatch.length) sp.set('energy', f.energyRatingMatch.join(','));
   if (f.estateAreaMin != null || f.estateAreaMax != null) {
     sp.set('estate', fmtRange(f.estateAreaMin, f.estateAreaMax));
   }
@@ -1255,6 +1263,7 @@ export const REGISTRY_KEY_MAP = {
   portals_excluded_active_only: 'portalsExcludedActiveOnly',
   condition_match: 'conditionMatch',
   building_material: 'buildingMaterial',
+  energy_rating_match: 'energyRatingMatch',
   min_parking_lots: 'parkingLotsMin',
   min_garden_area: 'gardenAreaMin',
   max_garden_area: 'gardenAreaMax',
@@ -1479,6 +1488,7 @@ export function filtersToWatchdogSpec(
     min_estate_area: f.estateAreaMin,
     max_estate_area: f.estateAreaMax,
     building_material: f.buildingMaterial.length ? [...f.buildingMaterial] : null,
+    energy_rating_match: f.energyRatingMatch.length ? [...f.energyRatingMatch] : null,
     min_garden_area: f.gardenAreaMin,
     max_garden_area: f.gardenAreaMax,
     has_balcony: triToBoolNullable(f.hasBalcony),

@@ -128,6 +128,7 @@ class WatchdogFilterSpec(BaseModel):
     # by an equality test against the WATCHDOG agenda. A blob saved before that merge
     # holds `building_material` as one scalar bucket, which `_wrap_bare_str` lifts.
     building_material: list[str] | None = None
+    energy_rating_match: list[str] | None = None
     min_garden_area: float | None = None
     max_garden_area: float | None = None
 
