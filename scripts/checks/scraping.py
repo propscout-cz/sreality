@@ -465,17 +465,16 @@ def _fetch_error_cells(conn: Any, sources: list[str],
 # --- scraping: missing --------------------------------------------------------------------
 
 
-def _missing_cell(unit: _Unit, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """The share of a unit's declared total its newest end-reached walk did not collect."""
+def _missing_cell(unit: _Unit, thresholds: dict[str, Any]) -> dict[str, Any] | None:
+    """The share of a unit's declared total its newest end-reached walk did not collect; no cell
+    when that total cannot be judged, which the coverage residual says once (its question)."""
+    if _undeclared(unit, int(thresholds["scraping_missing_min_declared"]),
+                   int(thresholds["scraping_walk_recent_days"])):
+        return None
     subject = f"{unit.source}/missing/{unit.label}"
     facts = {"walk_started_at": iso(unit.end_at), "declared": unit.declared,
              "collected": unit.collected, "entries": unit.entries,
              "declared_is_upper_bound": unit.upper_bound}
-    why = _undeclared(unit, int(thresholds["scraping_missing_min_declared"]),
-                      int(thresholds["scraping_walk_recent_days"]))
-    if why:
-        return cell(subject, "unknown", f"Not measured: {why}", unit="%", portal=unit.source,
-                    facts=facts)
     declared, collected = int(unit.declared or 0), int(unit.collected or 0)
     share = (declared - collected) / declared
     return cell(subject, graded(share, float(thresholds["scraping_missing_warn"]),
@@ -493,7 +492,7 @@ def check_scraping(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
     cells = _walk_cells(portals, units, thresholds, at)
     cells += _inflow_cells(conn, sources, thresholds)
     cells += _fetch_error_cells(conn, sources, thresholds)
-    cells += [_missing_cell(u, thresholds) for u in units]
+    cells += [c for c in (_missing_cell(u, thresholds) for u in units) if c]
     return result("scraping", cells, {})
 
 

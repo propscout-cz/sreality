@@ -1076,7 +1076,8 @@ compares 7-day windows, and under 20 per 7 d it is Not measured; fetch errors ne
 are named in the message, not excluded; missing needs a declared total of 500
 (`scraping_missing_min_declared`), and an entry whose `total_is_count` is true ("declared is a count
 of what was seen": remax, maxima) or absent ("not yet recorded by this walk's adapter": every entry
-written before wave 4) is Not measured, never 0 %. Its facts carry `declared_is_upper_bound`
+written before wave 4) gets no missing cell, never 0 %: since 2026-10-22 the coverage residual alone
+says why (one verdict, one cell; it was 48 units shown twice). Its facts carry `declared_is_upper_bound`
 (ceskereality's national total includes ads filed under no kraj, about 0.8 % of its rentals, under
 the Watch line). One convention for every wave-4 share judged on a Wilson lower bound (fetch errors
 here; publishing's visible, stock and photos; delisting's precision): the cell's `value` is the raw
@@ -1241,7 +1242,7 @@ condition, told once when it first reads Problem and then once a day.
 | `<portal>/unnominated` | active ads whose `last_seen_at` is before the start of their unit's newest end-reached walk (an ad with no unit: the portal's newest walk in which every entry reached the end), that the walks' own predicate (`db.nominable_predicate`: no queue row, no completion within the 24 h recheck throttle) judged at that walk's start still calls nominable, less that walk's deferrals; a portal with no end-reached walk in 30 d reads Not measured | 25 or more (`coverage_unnominated_warn`) | 100 or more (`coverage_unnominated_fail`) |
 
 Residual needs D ≥ 500 (`coverage_residual_min_declared`), and an entry whose `total_is_count` is
-true or absent is Not measured, as in scraping's missing arm. Unnominated is the walks' own predicate
+true or absent is Not measured with its reason, the one cell that says so. Unnominated is the walks' own predicate
 (`db.NOMINABLE_PREDICATE`, `presence_candidates` and `web`) judged at that walk's start, so an ad the walk's
 throttle skipped is not stuck: until 2026-10-22 the check excused only checks after the last sighting and
 read sreality 52, bazos 43 and idnes 63 ads the walks had rightly skipped (all 0 under one predicate). Each

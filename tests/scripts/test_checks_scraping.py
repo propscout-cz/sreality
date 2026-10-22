@@ -204,11 +204,13 @@ def test_missing_watches_past_2_and_fails_past_5_percent(collected: int, status:
     ({"declared": 499, "collected": 400}, "under the 500 floor"),
     ({"undeclared": 1}, "declared no total"),
 ])
-def test_a_declared_total_that_cannot_be_judged_is_not_measured(over: dict[str, Any],
-                                                                 why: str) -> None:
-    """Never 0 %: a self-certified or unrecorded total reads Not measured with its reason."""
-    cell = _cells(_scraping([_unit(**over)])[0])["bazos/missing/byt-prodej"]
-    assert cell["status"] == "unknown" and why in cell["message"]
+def test_a_declared_total_that_cannot_be_judged_is_not_measured_once(over: dict[str, Any],
+                                                                      why: str) -> None:
+    """Never 0 %: the coverage residual reads Not measured with its reason; scraping has no cell."""
+    assert "bazos/missing/byt-prodej" not in _cells(_scraping([_unit(**over)])[0])
+    cell = _cells(_coverage([_unit(**over)])[0])["bazos/residual/byt-prodej"]
+    assert cell["status"] == "unknown" and cell["message"].startswith("Not measured: ")
+    assert why in cell["message"]
 
 
 def test_an_upper_bound_declared_total_is_carried_as_a_fact() -> None:
@@ -324,17 +326,6 @@ def test_the_residual_sets_ads_in_dwell_aside_and_reads_both_signs(held: int, pe
     assert (cell["status"], cell["unit"]) == (status, "%")
     assert cell["value"] == round((held - pending - 10_000) / 100, 2)
     assert (cell["facts"]["held"], cell["facts"]["in_dwell"]) == (held, pending)
-
-
-def test_a_self_certified_or_unrecorded_total_leaves_the_residual_not_measured() -> None:
-    out, _ = _coverage([_unit(counted=True), _unit("idnes", recorded=0)],
-                       held=[("bazos", "byt", "prodej", 10_000, 0),
-                             ("idnes", "byt", "prodej", 12_000, 0)])
-    cells = _cells(out)
-    assert cells["bazos/residual/byt-prodej"]["message"] == (
-        "Not measured: declared is a count of what was seen")
-    assert cells["idnes/residual/byt-prodej"]["message"] == (
-        "Not measured: not yet recorded by this walk's adapter")
 
 
 @pytest.mark.parametrize("ads, deferred, status", [(24, 0, "ok"), (25, 0, "warn"),
