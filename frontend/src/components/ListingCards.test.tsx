@@ -314,25 +314,26 @@ describe('<ListingCards> photo hydration', () => {
   });
 });
 
-/* The storey on the card title. browse_list carries no floor, so it arrives
-   through the hydration layer like the photos: the card paints without it and
-   the storey joins the title when its read lands. */
-describe('<ListingCards> the storey', () => {
-  const STOREY_TITLE_RE = /^Byt na prodej · 2\+kk · 62\sm² · 4\. patro z 5 podlaží$/;
+/* The storey is a small tag beside the place, never part of the headline. The
+   floor is not on browse_list, so it arrives through the hydration layer like the
+   photos: the card paints without it and the tag appears when its read lands. */
+describe('<ListingCards> the storey tag', () => {
   const storeyOf = (floor: number | null, total_floors: number | null) =>
     vi.mocked(queries.fetchListingFloors).mockResolvedValue(
       new Map([[111, { floor, total_floors }]]),
     );
 
-  it('appends the floor and the building\'s podlaží to an apartment\'s title', async () => {
-    storeyOf(4, 5);
+  it('tags an apartment with its floor and the building\'s podlaží, the title untouched', async () => {
+    storeyOf(2, 5);
 
     renderGrid({ floors: true });
 
-    expect(await screen.findByRole('link', { name: STOREY_TITLE_RE })).toBeInTheDocument();
+    const tag = await screen.findByText('2. patro z 5');
+    expect(tag).toHaveAttribute('title', '2. patro z 5 podlaží');
+    expect(screen.getByRole('link', { name: TITLE_RE })).toBeInTheDocument();
   });
 
-  it('paints the title without it while the floor read is still in flight', async () => {
+  it('paints the card without the tag while the floor read is still in flight', async () => {
     vi.mocked(queries.fetchListingFloors).mockReturnValue(
       new Promise(() => {}) as ReturnType<typeof queries.fetchListingFloors>,
     );
@@ -340,16 +341,34 @@ describe('<ListingCards> the storey', () => {
     renderGrid({ floors: true });
 
     expect(await screen.findByRole('link', { name: TITLE_RE })).toBeInTheDocument();
+    expect(screen.queryByText(/patro|přízemí/)).toBeNull();
   });
 
   it('reads the cohort once, keyed on the surrogate listing id', async () => {
-    storeyOf(4, 5);
+    storeyOf(2, 5);
 
     renderGrid({ floors: true });
 
-    await screen.findByRole('link', { name: STOREY_TITLE_RE });
+    await screen.findByText('2. patro z 5');
     expect(queries.fetchListingFloors).toHaveBeenCalledTimes(1);
     expect(queries.fetchListingFloors).toHaveBeenCalledWith([111], expect.anything());
+  });
+
+  it('keeps the tag in the place row, still showing when the ad has no place', async () => {
+    storeyOf(2, 5);
+
+    renderGrid({ floors: true, row: { ...ROW, display_label: null } as CardRow });
+
+    expect(await screen.findByText('2. patro z 5')).toBeInTheDocument();
+  });
+
+  it('drops the count when the building\'s podlaží is unknown', async () => {
+    storeyOf(3, null);
+
+    renderGrid({ floors: true });
+
+    const tag = await screen.findByText('3. patro');
+    expect(tag).toHaveAttribute('title', '3. patro');
   });
 
   it('says nothing for an ad with no floor, rather than a gap or a zero', async () => {
@@ -359,6 +378,7 @@ describe('<ListingCards> the storey', () => {
 
     await waitFor(() => expect(queries.fetchListingFloors).toHaveBeenCalled());
     expect(await screen.findByRole('link', { name: TITLE_RE })).toBeInTheDocument();
+    expect(screen.queryByText(/patro|přízemí|\bz 5\b/)).toBeNull();
   });
 
   it('keeps a house\'s ground floor off the card — "přízemí" on a house is noise', async () => {
@@ -371,12 +391,12 @@ describe('<ListingCards> the storey', () => {
     expect(screen.queryByText(/přízemí/)).toBeNull();
   });
 
-  it('shows a commercial unit\'s ground floor', async () => {
+  it('tags a commercial unit\'s ground floor', async () => {
     storeyOf(0, 3);
 
     renderGrid({ floors: true, row: { ...ROW, category_main: 'komercni', disposition: null } as CardRow });
 
-    expect(await screen.findByRole('link', { name: /přízemí z 3 podlaží$/ })).toBeInTheDocument();
+    expect(await screen.findByText('přízemí z 3')).toBeInTheDocument();
   });
 });
 
