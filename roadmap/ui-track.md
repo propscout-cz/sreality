@@ -219,7 +219,8 @@ toolkit work.
   `lib/measure` (rule 23).
   Follow-up: a photo strip per card (up to eight, cover first, the wash on each; `/feed` a lazy chunk), PR [#1785](https://github.com/waiff/sreality/pull/1785).
   Follow-up: full filters — the Filtry sheet (Browse's registry filters grouped as the sidebar, the view in the URL as Browse's, presets saved and updated from the phone), PR [#1866](https://github.com/waiff/sreality/pull/1866).
-  Photos sprint W1: one attachment store per property (`property_attachments`, migration 660; a note's files are the same records, 1080 px display copies behind the JWT proxy), PR [#1974](https://github.com/waiff/sreality/pull/1974); W2 next: the "Moje fotky" strip.
+  Photos sprint W1: one attachment store per property (`property_attachments`, migration 660; a note's files are the same records, 1080 px display copies behind the JWT proxy), PR [#1974](https://github.com/waiff/sreality/pull/1974).
+  Photos sprint W2: "Moje fotky" — the phone page's section after Poloha (Vyfotit / Z knihovny) and the desktop's Moje tab (Upload, drag-and-drop), the original in one viewer with Sdílet (share sheet) and Smazat, Vybrat, a split's file item, the zip's `moje-fotky/`, PR #PRNUM.
 - Next: the install walk on the iPhone (resolves W1: Safari install, sign-in inside the app,
   `visibilitychange` on resume, the worker's cost on feed photos); then W2 — the property page as
   reading + curation and the paste box (the fifth tab, Odkaz).
