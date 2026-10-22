@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from location_data import location_steps
 from location_data.claims_common import SERVED_LOCATION_PREDICATE, SOURCES
 from location_data.resolver.version import RESOLVER_VERSION
 from scripts.checks import clock, common
@@ -482,12 +483,13 @@ def test_the_location_population_is_active_ads_past_the_edge_publishing_ends_at(
 
 
 def test_the_location_counts_read_the_shared_predicates() -> None:
-    """Undetermined and disputed count as Czech; hidden is the consumer rule negated; the KÚ
-    arm reads the rank table, the current resolver and the current registry's excuse."""
+    """Town-less is the shared `town_missing_sql` (undetermined and disputed count as Czech);
+    hidden is the consumer rule negated; the KÚ arm reads the rank table, the current resolver
+    and the current registry's excuse."""
     flat = " ".join(qc._LOCATION_TOWN_COVERAGE_SQL.split())
     assert f"NOT {SERVED_LOCATION_PREDICATE}" in qc._LOCATION_TOWN_COVERAGE_SQL
     assert "AS hidden_n" in qc._LOCATION_TOWN_COVERAGE_SQL
-    assert "ll.country_status <> 'foreign' AND ll.obec_kod IS NULL" in flat
+    assert f"ll.listing_id IS NOT NULL AND {location_steps.town_missing_sql()}" in flat
     assert ("gr.is_address_grain AND ll.resolver_version = %(resolver_version)s AND "
             "ll.katastr_kod IS NULL") in flat
     # A town-less row is the town arm's alone: NULL NOT IN an empty degenerate set is true.
