@@ -222,4 +222,20 @@ describe('<PropertyPhotos>', () => {
     expect(vi.mocked(deleteAttachment).mock.calls.map(([, id]) => id)).toEqual([4, 1]);
     await waitFor(() => expect(screen.queryByText(/^Vybráno/)).toBeNull());
   });
+
+  it('offers a retry in place of Share when a picked original could not be read', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchAttachmentBlob).mockImplementation(async (_p, id, opts) => {
+      if (!opts?.w) throw new Error('down');
+      return new Blob([`${id}`], { type: 'image/jpeg' });
+    });
+    show();
+    await waitFor(() => expect(tiles()).toHaveLength(2));
+    await user.click(screen.getByRole('button', { name: 'Vybrat' }));
+    await user.click(screen.getByRole('button', { name: 'Vybrat a.jpg' }));
+    const retry = await screen.findByRole('button', { name: 'Zkusit znovu' });
+    vi.mocked(fetchAttachmentBlob).mockResolvedValue(new Blob(['ok'], { type: 'image/jpeg' }));
+    await user.click(retry);
+    expect(await screen.findByRole('button', { name: /^(Sdílet|Stáhnout)$/ })).toBeEnabled();
+  });
 });

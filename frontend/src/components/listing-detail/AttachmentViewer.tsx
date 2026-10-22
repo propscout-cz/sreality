@@ -15,7 +15,6 @@ import { bareImage, type Attachment } from '@/lib/types';
 
 export const PHOTO_WORDS = {
   en: {
-    lang: 'en',
     title: 'My photos',
     empty: 'No photos of your own yet',
     camera: 'Take photo',
@@ -42,12 +41,10 @@ export const PHOTO_WORDS = {
     readFailed: 'could not be loaded.',
     shareTitle: (id: number) => `Property #${id}`,
     shareFailed: 'Sharing failed',
-    fetchFailed: 'Some originals could not be loaded',
     retry: 'Retry',
     removeFailed: 'Deleting failed',
   },
   cs: {
-    lang: 'cs',
     title: 'Moje fotky',
     empty: 'Zatím žádné vlastní fotky',
     camera: 'Vyfotit',
@@ -74,7 +71,6 @@ export const PHOTO_WORDS = {
     readFailed: 'se nepodařilo načíst.',
     shareTitle: (id: number) => `Nemovitost #${id}`,
     shareFailed: 'Sdílení se nezdařilo',
-    fetchFailed: 'Některé originály se nepodařilo načíst',
     retry: 'Zkusit znovu',
     removeFailed: 'Smazání se nezdařilo',
   },

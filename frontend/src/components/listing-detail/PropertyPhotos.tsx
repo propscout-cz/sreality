@@ -90,6 +90,7 @@ export default function PropertyPhotos({
   const refresh = () => qc.invalidateQueries({ queryKey: notesKey });
 
   const add = async (files: File[]) => {
+    if (progress != null) return; // one batch at a time (a drop while uploading)
     const ok: File[] = [];
     const refused: string[] = [];
     for (const file of files) {
@@ -119,7 +120,7 @@ export default function PropertyPhotos({
 
   const chosen = photos.filter((a) => picked.has(a.id));
   const files = filesOf(originals.got, chosen);
-  const fetchFailed = chosen.some((a) => originals.got.get(a.id) === 'failed');
+  const unread = chosen.filter((a) => originals.got.get(a.id) === 'failed');
   const toggle = (a: Attachment) => {
     const next = new Set(picked);
     if (next.has(a.id)) next.delete(a.id);
@@ -270,18 +271,21 @@ export default function PropertyPhotos({
           </span>
           <button
             type="button"
-            disabled={chosen.length === 0 || files == null}
+            disabled={chosen.length === 0 || (files == null && unread.length === 0)}
             onClick={() => {
-              if (files == null) return;
-              shareFiles(files, words.shareTitle(property_id)).catch(() => setProblems([words.shareFailed]));
+              if (unread.length > 0) originals.want(unread);
+              else if (files != null)
+                shareFiles(files, words.shareTitle(property_id)).catch(() => setProblems([words.shareFailed]));
             }}
             className={`${OUTLINED} disabled:pointer-events-none disabled:opacity-40`}
           >
-            {chosen.length > 0 && files == null && !fetchFailed
-              ? words.preparing
-              : canShareFiles()
-                ? words.share(chosen.length)
-                : words.save(chosen.length)}
+            {unread.length > 0
+              ? words.retry
+              : chosen.length > 0 && files == null
+                ? words.preparing
+                : canShareFiles()
+                  ? words.share(chosen.length)
+                  : words.save(chosen.length)}
           </button>
           {chosen.length > 0 && (
             <TwoStep
@@ -294,11 +298,6 @@ export default function PropertyPhotos({
               onConfirm={() => void removeChosen()}
               touch
             />
-          )}
-          {fetchFailed && (
-            <button type="button" onClick={() => originals.want(chosen)} className="text-[0.8rem] text-[var(--color-brick)] underline underline-offset-2">
-              {words.fetchFailed} · {words.retry}
-            </button>
           )}
         </div>
       )}
