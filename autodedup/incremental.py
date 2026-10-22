@@ -165,6 +165,7 @@ class GuardRow:
     printed_storeys: tuple[tuple[str, tuple[int, ...]], ...] = ()
     worded_storeys: tuple[str, ...] = ()
     printed_disposition: str | None = None
+    printed_floors: tuple[int, ...] = ()
 
 
 def guard_row(fp: Fingerprint) -> GuardRow:
@@ -174,7 +175,7 @@ def guard_row(fp: Fingerprint) -> GuardRow:
     return GuardRow(fp.listing_id, fp.category_main, fp.category_type, fp.area_m2,
                     fp.disposition, fp.floor, True, fp.source, fp.printed_unit_area,
                     fp.printed_accessory_areas, fp.printed_storeys, fp.worded_storeys,
-                    fp.printed_disposition)
+                    fp.printed_disposition, fp.printed_floors)
 
 
 @dataclass(slots=True, frozen=True)
@@ -980,8 +981,8 @@ def _witness_payload(fp: Fingerprint) -> list[Any]:
     """W32w's readings, hashed only where one is non-default, so a W31 digest is unchanged and
     a witnessed row moves when its body's readings move."""
     readings = (fp.printed_unit_area, fp.printed_accessory_areas, fp.printed_storeys,
-                fp.worded_storeys, fp.printed_disposition)
-    return [list(readings)] if readings != (None, (), (), (), None) else []
+                fp.worded_storeys, fp.printed_disposition, fp.printed_floors)
+    return [list(readings)] if readings != (None, (), (), (), None, ()) else []
 
 
 def decision_digest(listing: Listing, images: Sequence[Image]) -> str:

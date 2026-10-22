@@ -193,6 +193,7 @@ class Fingerprint:
     printed_storeys: tuple[tuple[str, tuple[int, ...]], ...] = ()
     worded_storeys: tuple[str, ...] = ()
     printed_disposition: str | None = None
+    printed_floors: tuple[int, ...] = ()
 
 
 def _anchor_sort_key(image: Image) -> tuple[float, int, int]:
@@ -297,6 +298,7 @@ def build_fingerprint(
         printed_storeys=seen.storeys,
         worded_storeys=seen.worded_storeys,
         printed_disposition=seen.disposition,
+        printed_floors=seen.printed_floors,
     )
 
 

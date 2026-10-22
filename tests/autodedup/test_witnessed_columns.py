@@ -211,6 +211,31 @@ def test_w1_e280_reads_as_w31(row: Settings) -> None:
         assert facts(a, b, row, mode) == facts(a, b, W31, mode)
 
 
+HUMPOLEC = ("Nabízíme k pronájmu částečně vybavený byt 2+kk v Humpolci. Nachází se {storey} "
+            "cihlového domu. Byt o užitné ploše 35 m² je ve velmi dobrém stavu.")
+
+
+@pytest.mark.parametrize("row", [W32W, W33M, replace(W31, witness_area=True)],
+                         ids=["w32w", "w33m", "area_only"])
+def test_w1_an_area_witness_yields_to_disjoint_printed_storeys(row: Settings) -> None:
+    """Humpolec 2864 x 18649109: one sreality template, May then September, columns 35 and 33,
+    both bodies `o užitné ploše 35 m²` but `ve druhém patře` against `v prvním patře`. E280
+    refuses that pair on the storeys and so does W1: the area fact stays under every W row."""
+    second = HUMPOLEC.format(storey="ve druhém patře")
+    first = HUMPOLEC.format(storey="v prvním patře")
+    a = ad(2864, second, category_type="pronajem", area_m2=35.0, floor=3, total_floors=3)
+    b = ad(18649109, first, category_type="pronajem", area_m2=33.0, floor=2, total_floors=3)
+    assert "area" in facts(a, b, W31, PROMOTE)
+    assert "area" in facts(a, b, row, PROMOTE)
+    c = ad(3, second, category_type="pronajem", area_m2=35.0)
+    d = ad(4, first, category_type="pronajem", area_m2=30.0)
+    assert veto(c, d, W31) == veto(c, d, row) == "area"
+    e = ad(5, second, category_type="pronajem", area_m2=30.0)
+    assert veto(c, e, W31) == "area"
+    assert veto(c, e, row) is None
+    assert "area" not in facts(a, replace(b, description=second), row, PROMOTE)
+
+
 def test_w1_reads_the_unit_figure_by_its_size_word() -> None:
     assert unit_area_figures("Byt o ploše 54 m2 s 12 m2 terasou.") == frozenset({(54.0, 0)})
     assert unit_area_figures("Byt 2+kk 54 m2, 25 m2 velký obývák") == frozenset()

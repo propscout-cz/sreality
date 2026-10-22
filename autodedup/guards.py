@@ -26,6 +26,7 @@ from autodedup.text_facts import (
     outdoor_accessory_areas,
     printed_basement_storeys,
     printed_dispositions,
+    printed_floors,
     printed_floors_by_form,
     unit_area_figures,
     unit_designators,
@@ -59,6 +60,7 @@ class GuardSide(Protocol):
     printed_storeys: tuple[tuple[str, tuple[int, ...]], ...]
     worded_storeys: tuple[str, ...]
     printed_disposition: str | None
+    printed_floors: tuple[int, ...]
 
 
 # W1: an area composed of a printed figure and printed extras meets within 1 m2 or 2 %.
@@ -128,6 +130,7 @@ class Witnesses:
     storeys: tuple[tuple[str, tuple[int, ...]], ...] = ()
     worded_storeys: tuple[str, ...] = ()
     disposition: str | None = None
+    printed_floors: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +149,7 @@ class WitnessSide:
     printed_storeys: tuple[tuple[str, tuple[int, ...]], ...]
     worded_storeys: tuple[str, ...]
     printed_disposition: str | None
+    printed_floors: tuple[int, ...]
 
 
 def body_witnesses(description: str | None, cfg: Settings,
@@ -161,8 +165,10 @@ def body_witnesses(description: str | None, cfg: Settings,
     storeys, worded = ((_storey_witnesses(description, cfg.d43_prose_floor_words))
                        if cfg.witness_floor and flat else ((), ()))
     offered = printed_dispositions(description) if cfg.witness_disposition else frozenset()
+    floors = (tuple(sorted(printed_floors(description, True))) if cfg.witness_area and flat
+              else ())
     return Witnesses(unit, extras, storeys, worded,
-                     next(iter(offered)) if len(offered) == 1 else None)
+                     next(iter(offered)) if len(offered) == 1 else None, floors)
 
 
 def witness_side(listing: Listing, cfg: Settings, area_m2: float | None) -> WitnessSide:
@@ -171,7 +177,7 @@ def witness_side(listing: Listing, cfg: Settings, area_m2: float | None) -> Witn
     return WitnessSide(listing.source, listing.category_main, listing.category_type, area_m2,
                        listing.disposition, listing.floor, cfg.witnessing, seen.unit_area,
                        seen.accessory_areas, seen.storeys, seen.worded_storeys,
-                       seen.disposition)
+                       seen.disposition, seen.printed_floors)
 
 
 def _both_witnessed(a: GuardSide, b: GuardSide) -> bool:
@@ -274,10 +280,14 @@ def areas_witnessed(a: GuardSide, b: GuardSide, tol: float, cfg: Settings) -> bo
     Some figure of one side's F (`_area_figures`) is within `tol` of one of the other's, or one
     side's printed unit figure and its own extras compose a figure of the other (`_composed`);
     never where both bodies state unit figures that neither meet nor compose, which is two
-    stated areas. Every caller reads it only where the columns are already apart, so a reading
+    stated areas, nor where both bodies print storeys and no storey is common to them (E280's
+    `storeys_disagree`, read by the same `printed_floors`). Every caller reads it only where the columns are already apart, so a reading
     takes a column fact away and never adds one, and two columns that pass are the baseline's.
     A body is read only where both sides carry readings, so a row `rt_fp` serves reads as W31."""
     if not (cfg.witness_area and _two_flats(a, b) and _both_witnessed(a, b)):
+        return False
+    left, right = set(a.printed_floors), set(b.printed_floors)
+    if left and right and not left & right:
         return False
     if _composed(a, b) or _composed(b, a):
         return True
