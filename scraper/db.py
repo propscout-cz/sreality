@@ -12,7 +12,7 @@ import os
 import random
 import time
 import uuid
-from collections.abc import Callable, Collection, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from functools import lru_cache
@@ -916,87 +916,103 @@ def nominable_predicate(at: str = "now()") -> str:
 NOMINABLE_PREDICATE = nominable_predicate()
 
 
+# A nomination scope: the columns a walked unit's rows hold, a column left out meaning any value
+# ({"category_main": "byt", "category_type": "prodej"}; bazos adds its subtype, the agenda portals
+# drop category_main). One spelling for the units (presence_candidates) and for their complement,
+# the orphans (orphan_candidates), so the two cannot disagree on a NULL label.
+SCOPE_COLUMNS = ("category_main", "category_type", "subtype")
+
+
+def scope_sql(scope: Mapping[str, Any]) -> tuple[str, list[Any]]:
+    """`scope` as a predicate over `l` (`=` or `IS NULL`, so it stays indexable) and its parameters."""
+    unknown = set(scope) - set(SCOPE_COLUMNS)
+    if unknown:
+        raise ValueError(f"not a scope column: {sorted(unknown)}")
+    terms = [f"l.{c} IS NULL" if scope[c] is None else f"l.{c} = %s" for c in SCOPE_COLUMNS if c in scope]
+    return " AND ".join(terms) or "true", [scope[c] for c in SCOPE_COLUMNS if scope.get(c) is not None]
+
+
+def orphan_sql(scopes: Sequence[Mapping[str, Any]]) -> tuple[str, list[Any]]:
+    """In no scope of `scopes`. A NULL label makes `=` NULL, not false, so the union is coalesced."""
+    parts = [scope_sql(s) for s in scopes]
+    covered = " OR ".join(f"({sql})" for sql, _ in parts) or "false"
+    return f"NOT coalesce({covered}, false)", [p for _, params in parts for p in params]
+
+
 def presence_candidates(
     conn: psycopg.Connection,
     source: str,
-    category_main: str | None,
-    category_type: str,
+    scope: Mapping[str, Any],
     seen: set[Any],
     *,
     seen_key: str = "native",
-    subtype: str | None = None,
-    scope_subtype: bool = False,
 ) -> tuple[list[tuple[str, str | None, int | None]], int]:
-    """The active rows of this (source, category) that a COMPLETE walk did not
-    see, oldest sighting first, plus the scope's active row count.
+    """The active rows of one walked scope that a walk which reached the portal's end did not
+    see, oldest sighting first, plus the scope's active row count (rule #3: absence NOMINATES,
+    the page decides, so the query carries no rail -- a wrong nomination costs one fetch).
 
-    Rule #3 since 2026-09-07: index absence NOMINATES, it no longer delists. A
-    row the walk did not see is a candidate; the detail drain then visits its
-    page, and the page decides -- a positive gone signal (404/410, a redirect
-    off the listing, the portal's own "no longer active" text) flips it once a
-    second verdict confirms it (`delist_policy.gone_confirmed`), a live
-    page refreshes it, an error leaves it for the next pass. That is why this
-    query carries none of the old sweep's rails (no min_unseen_hours, no refusal):
-    a wrong nomination costs one fetch, not a live listing.
-
-    `seen_key` names what the walk's seen set holds: portal-native string ids
-    (`source_id_native`, every crawler portal) or sreality's integer ids
-    (`sreality_id`). `scope_subtype` narrows to `subtype` for portals whose fine
-    index sections collapse onto one category_main (bazos: chata + dum -> dum),
-    so one section's walk cannot nominate its siblings' rows every run.
-
-    `category_main=None` scopes by category_type alone: the agenda portals
-    (remax, maxima) walk one mixed sale/rent index whose completeness is proved
-    per AGENDA, and a listing's title-derived category can differ from its
-    detail-derived one, so nominating per category would nominate rows the
-    agenda walk did see.
-
-    Returns (native_id, detail_ref, price) triples: detail_ref is the stored
-    source_url for crawler portals and None for sreality (its fetch derives the
-    URL from the id); price is carried so the re-enqueue does not blank the
-    queue's observed price.
+    `seen_key` names what the seen set holds: `source_id_native` strings (every crawler) or
+    sreality's integer `sreality_id`s. Returns (native_id, detail_ref, price) triples: the price
+    rides along so the re-enqueue does not blank the queue's observed price.
     """
-    key_col = "sreality_id" if seen_key == "sreality_id" else "source_id_native"
-    ids = [x for x in seen if x is not None]
-    if seen_key == "sreality_id":
-        ids = [int(x) for x in ids]
-    else:
-        ids = [str(x) for x in ids]
-    if not ids:
-        # An empty bound array makes `<> ALL('{}')` true for every row: the whole scope.
-        raise ValueError(f"presence_candidates {source}: empty seen set would nominate the whole scope")
-    sub_clause = "\n              AND subtype IS NOT DISTINCT FROM %s" if scope_subtype else ""
-    cm_clause = "\n              AND category_main = %s" if category_main is not None else ""
-    scope_params: list[Any] = [source]
-    if category_main is not None:
-        scope_params.append(category_main)
-    scope_params.append(category_type)
-    if scope_subtype:
-        scope_params.append(subtype)
+    return _nominate(conn, source, *scope_sql(scope), seen, seen_key)
+
+
+def orphan_candidates(
+    conn: psycopg.Connection,
+    source: str,
+    scopes: Sequence[Mapping[str, Any]],
+    seen: set[Any] | None,
+    *,
+    seen_key: str = "native",
+) -> tuple[list[tuple[str, str | None, int | None]], int]:
+    """presence_candidates for the active rows in NO walked scope (a label no unit walks: a
+    NULL, an auction type the portal's walk does not ask for). `seen` is the whole walk's;
+    None nominates without an exclusion, for an indexless portal only (its walk sees nothing)."""
+    return _nominate(conn, source, *orphan_sql(scopes), seen, seen_key)
+
+
+def _count(conn: psycopg.Connection, source: str, where: str, params: list[Any]) -> int:
     with conn.cursor() as cur:
         cur.execute(
             f"""
             SELECT count(*)
-            FROM listings
-            WHERE is_active = true
-              AND source = %s{cm_clause}
-              AND category_type = %s{sub_clause}
-            """,
-            tuple(scope_params),
-        )
-        active_rows = int(cur.fetchone()[0])
-        cur.execute(
-            f"""
-            SELECT {key_col}::text, source_url, price_czk
             FROM listings l
             WHERE l.is_active = true
-              AND l.source = %s{cm_clause}
-              AND l.category_type = %s{sub_clause}
-              AND l.{key_col} <> ALL(%s)
+              AND l.source = %s
+              AND {where}
+            """,
+            (source, *params),
+        )
+        row = cur.fetchone()
+    return int(row[0]) if row else 0
+
+
+def _nominate(
+    conn: psycopg.Connection, source: str, where: str, params: list[Any],
+    seen: set[Any] | None, seen_key: str,
+) -> tuple[list[tuple[str, str | None, int | None]], int]:
+    key_col = "sreality_id" if seen_key == "sreality_id" else "source_id_native"
+    unseen, ids = "", ()
+    if seen is not None:
+        bound = [int(x) if seen_key == "sreality_id" else str(x) for x in seen if x is not None]
+        if not bound:
+            # An empty bound array makes `<> ALL('{}')` true for every row: the whole scope.
+            raise ValueError(f"presence_candidates {source}: empty seen set would nominate the whole scope")
+        unseen, ids = f"\n              AND l.{key_col} <> ALL(%s)", (bound,)
+    active_rows = _count(conn, source, where, params)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT l.{key_col}::text, l.source_url, l.price_czk
+            FROM listings l
+            WHERE l.is_active = true
+              AND l.source = %s
+              AND {where}{unseen}
               AND {NOMINABLE_PREDICATE}
             ORDER BY l.last_seen_at ASC NULLS FIRST, l.id
             """,
-            tuple(scope_params) + (ids,),
+            (source, *params, *ids),
         )
         rows = cur.fetchall()
     return (
@@ -1207,36 +1223,9 @@ def index_summary_native(
     return out
 
 
-def active_count(
-    conn: psycopg.Connection,
-    category_main: str,
-    category_type: str,
-    *,
-    source: str = "sreality",
-    subtype: str | None = None,
-    scope_subtype: bool = False,
-) -> int:
-    """Current active-listing count for one (source, category_main, category_type).
-
-    `scope_subtype=True` narrows to `subtype` (NULL-safe) so the count matches a
-    subtype-scoped `presence_candidates` nomination (bazos fine sections)."""
-    sub_clause = "\n              AND subtype IS NOT DISTINCT FROM %s" if scope_subtype else ""
-    params: list[Any] = [source, category_main, category_type]
-    if scope_subtype:
-        params.append(subtype)
-    with conn.cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT count(*) FROM listings
-            WHERE is_active = true
-              AND source = %s
-              AND category_main = %s
-              AND category_type = %s{sub_clause}
-            """,
-            tuple(params),
-        )
-        row = cur.fetchone()
-        return int(row[0]) if row else 0
+def active_count(conn: psycopg.Connection, source: str, scope: Mapping[str, Any]) -> int:
+    """The active ads of one nomination scope: what its walk is reconciled against."""
+    return _count(conn, source, *scope_sql(scope))
 
 
 def pending_image_downloads(

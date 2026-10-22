@@ -240,8 +240,8 @@ from the slow "download each ad" write:
 
 **Delisting is presence-verified (rule #3, 2026-09-07); the gate is STRUCTURAL (2026-09-08).** A
 walk that REACHED THE PORTAL'S END (`portal.walk_reached_end`: every unit walked, each page loop out
-on a portal terminator, no stop of ours) nominates every active row it did not see (`VERIFY cm=…
-candidates=… queued=… deferred=…`); the drain fetches each page; a positive gone signal (404/410, redirect off the listing,
+on a portal terminator, no stop of ours) nominates every active row of each unit's scope it did not see (`VERIFY cm=…
+candidates=… queued=… deferred=…`), and once EVERY unit did, the orphans in no scope (`VERIFY orphans …`, 2026-10-22); the drain fetches each page; a positive gone signal (404/410, redirect off the listing,
 "no longer active" text → `ListingGoneError`) is recorded (`detail_queue_completions` `gone`) and flips it (`flipped`) only when
 an earlier verdict ≥ `GONE_DWELL` (12 h) stands unrefuted (2026-10-09, portals blink; RUN `pending=`; Health: the `delisting` check) — effectively 24 h, as a walk re-nominates no ad checked within `RECHECK_THROTTLE` (24 h); a live page refreshes it. The COUNT never vetoes — a short walk that reached the end
 nominates and logs `COVERAGE`. No absence sweep, no staleness rail; `delist_flip_cap` throttles per
@@ -300,7 +300,7 @@ The detail-drain writes `scrape_runs` rows too (`run_type='detail'`), but only t
 A portal is one row per registry, never a branch (the registry list: `docs/architecture.md` § rule 21 and
 `docs/design/new-property-from-link.md` §3.4). Dispatch a new portal's first index walk at deploy: `scraping` judges every portal in `SOURCES` from that moment, so `<portal>/walks` reads Problem until its cron first fires (web, 2026-10-22).
 `web` (`scraper/web_main.py`) is `indexless`: its 6-hourly walk sees
-nothing, reaches the end and nominates every active row via its own `presence_candidates`; the worker drains it FIRST;
+nothing, reaches the end and nominates every active row as an orphan (its unit has no scope); the worker drains it FIRST;
 its pages go through `scraper/egress.py` (private ranges refused per hop, a wall-clock deadline, a decoded cap). A pasted
 link enters the same queue: `POST /listings/ingest {url}` (admin) resolves it with `portal_identity.resolve_url` and
 enqueues at NEW (a `given_up` row re-armed); `GET /listings/ingest/{source}/{native_id}` answers `refused | held | queued |
@@ -462,7 +462,7 @@ RUN, COVERAGE, the closing `INDEX total=…` and every DRAIN line; per-page INDE
   `portal_runner.reconcile_sightings`: per category (per district on sreality), per page in the bespoke
   probes (`offset=` sreality, `page=` ceskereality; mmreality labels `sale= cat=`) — ids handed to the drain
 - `VERIFY cm=... ct=... subtype=... candidates=N queued=M deferred=K active=A` — rows nominated for
-  a page check (rule #3); `VERIFY skipped ...: the walk did not reach the portal's end (our stop:
+  a page check (rule #3), once per scope; `VERIFY orphans candidates=...` the ads in no walked scope; `VERIFY skipped ...: the walk did not reach the portal's end (our stop:
   ...)` when it may not, and `COVERAGE cm=... ct=...` WARNS when it nominates while short; `VERIFY DEFERRED`/`OVERRIDE` from `scraper.db`, `VERIFY failed` on an exception, `VERIFY dropped N NULL id(s)` = a parser bug
 - `RECONCILE cm=... ct=... sreality=... collected=... active=...` — portal-reported total vs
   collected vs our active DB count (drift feeds the Health page)

@@ -256,7 +256,14 @@ class _Unit(NamedTuple):
     deferred: int
 
     @property
+    def labelled(self) -> bool:
+        return self.category_main is not None or self.category_type is not None
+
+    @property
     def label(self) -> str:
+        """An entry with no labels is the orphan scope's (rule 3; web's whole agenda)."""
+        if not self.labelled:
+            return "orphans"
         return f"{self.category_main or 'none'}-{self.category_type or 'none'}"
 
 
@@ -564,8 +571,9 @@ def check_coverage(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
     portals, units = _ledger(conn, thresholds)
     held = {(s, m, t): (int(h), int(p)) for s, m, t, h, p in
             fetchall(conn, _HELD_SQL, {"sources": sorted(SOURCES)})}
+    # A residual needs a declared total; an entry with no labels has none.
     cells = [_residual_cell(u, held.get((u.source, u.category_main, u.category_type), (0, 0)),
-                            thresholds) for u in units]
+                            thresholds) for u in units if u.labelled]
     cells += _unnominated_cells(conn, portals, units, thresholds, at)
     with_trends(conn, "coverage", cells, at)
     return result("coverage", cells, {})

@@ -73,14 +73,18 @@ class _Conn:
 # --- the nomination query --------------------------------------------------
 
 
+_BYT_PRODEJ = {"category_main": "byt", "category_type": "prodej"}
+
+
 def test_native_nomination_excludes_the_seen_set_and_returns_oldest_first():
     conn = _Conn(rows=[("a1", "https://p/a1", 100), ("a2", "https://p/a2", None)], active_rows=40)
-    cands, active = db.presence_candidates(conn, "remax", "byt", "prodej", {"s1", "s2"})
+    cands, active = db.presence_candidates(conn, "remax", _BYT_PRODEJ, {"s1", "s2"})
     assert active == 40
     assert cands == [("a1", "https://p/a1", 100), ("a2", "https://p/a2", None)]
     count_sql, count_params = conn.executed[0]
     select_sql, select_params = conn.executed[1]
-    assert "WHERE is_active = true AND source = %s AND category_main = %s AND category_type = %s" in count_sql
+    assert ("WHERE l.is_active = true AND l.source = %s AND l.category_main = %s "
+            "AND l.category_type = %s") in count_sql
     assert count_params == ("remax", "byt", "prodej")
     assert "l.source_id_native <> ALL(%s)" in select_sql
     assert "ORDER BY l.last_seen_at ASC NULLS FIRST" in select_sql
@@ -94,8 +98,7 @@ def test_sreality_nomination_keys_on_sreality_id_and_carries_no_ref():
     """sreality's fetch derives the URL from the id, and its walk's seen set is
     integers -- the query must exclude on sreality_id and hand back ref=None."""
     conn = _Conn(rows=[("123", "https://www.sreality.cz/x", 5_000_000)], active_rows=3)
-    cands, _ = db.presence_candidates(
-        conn, "sreality", "byt", "prodej", {123, 456}, seen_key="sreality_id")
+    cands, _ = db.presence_candidates(conn, "sreality", _BYT_PRODEJ, {123, 456}, seen_key="sreality_id")
     assert cands == [("123", None, 5_000_000)]
     select_sql, select_params = conn.executed[1]
     assert "l.sreality_id <> ALL(%s)" in select_sql
@@ -104,17 +107,72 @@ def test_sreality_nomination_keys_on_sreality_id_and_carries_no_ref():
 
 def test_subtype_scoping_narrows_the_nomination():
     """bazos: chata + dum both -> dum, so a chata section's walk must not nominate
-    every dum row it never intended to see."""
+    every dum row it never intended to see; its plain `dum` section is the NULL subtype."""
     conn = _Conn(rows=[], active_rows=0)
-    db.presence_candidates(conn, "bazos", "dum", "prodej", {"x"}, subtype="chata", scope_subtype=True)
+    db.presence_candidates(conn, "bazos", {"category_main": "dum", "category_type": "prodej", "subtype": "chata"}, {"x"})
     for sql, params in conn.executed:
-        assert "subtype IS NOT DISTINCT FROM %s" in sql
+        assert "AND l.subtype = %s" in sql
         assert params[3] == "chata"
+    conn = _Conn(rows=[], active_rows=0)
+    db.presence_candidates(conn, "bazos", {"category_main": "dum", "category_type": "prodej", "subtype": None}, {"x"})
+    assert "AND l.subtype IS NULL" in conn.executed[0][0]
+    assert conn.executed[0][1] == ("bazos", "dum", "prodej")
+
+
+def test_an_agenda_scope_leaves_the_category_open():
+    """remax/maxima prove completeness per agenda: their scope names the deal type alone."""
+    conn = _Conn(rows=[], active_rows=0)
+    db.presence_candidates(conn, "remax", {"category_type": "prodej"}, {"x"})
+    assert "category_main" not in conn.executed[0][0]
+    assert conn.executed[0][1] == ("remax", "prodej")
+
+
+def test_orphans_are_the_rows_in_no_walked_scope():
+    """Rule #3 made total: the complement of the walked scopes, NULL labels included (`=` on a
+    NULL is NULL, so the union is coalesced), excluding everything the walk saw."""
+    conn = _Conn(rows=[("o1", "https://p/o1", None)], active_rows=2)
+    cands, active = db.orphan_candidates(
+        conn, "ceskereality", [_BYT_PRODEJ, {"category_main": "dum", "category_type": "prodej"}],
+        {"s1"})
+    assert (cands, active) == ([("o1", "https://p/o1", None)], 2)
+    count_sql, count_params = conn.executed[0]
+    assert ("AND NOT coalesce((l.category_main = %s AND l.category_type = %s) OR "
+            "(l.category_main = %s AND l.category_type = %s), false)") in count_sql
+    assert count_params == ("ceskereality", "byt", "prodej", "dum", "prodej")
+    select_sql, select_params = conn.executed[1]
+    assert "l.source_id_native <> ALL(%s)" in select_sql
+    assert select_params[-1] == ["s1"]
+
+
+def test_an_indexless_portals_orphans_are_its_whole_agenda():
+    """`web`: no scope, no seen set: every active row, and no `<> ALL` to bind."""
+    conn = _Conn(rows=[], active_rows=5)
+    db.orphan_candidates(conn, "web", [], None)
+    select_sql, select_params = conn.executed[1]
+    assert "AND NOT coalesce(false, false)" in select_sql and "<> ALL" not in select_sql
+    assert select_params == ("web",)
+    with pytest.raises(ValueError):
+        db.orphan_candidates(_Conn(), "ceskereality", [_BYT_PRODEJ], set())
+
+
+def test_a_units_active_count_is_its_nomination_scopes():
+    """One definition: the count a walk is reconciled against is the scope it nominates from."""
+    scope = {"category_main": "dum", "category_type": "prodej", "subtype": None}
+    counted = _Conn(active_rows=11)
+    assert db.active_count(counted, "bazos", scope) == 11
+    nominated = _Conn(active_rows=11)
+    db.presence_candidates(nominated, "bazos", scope, {"x"})
+    assert counted.executed == nominated.executed[:1]
+
+
+def test_a_scope_names_only_scope_columns():
+    with pytest.raises(ValueError):
+        db.scope_sql({"category_main": "byt", "source": "web"})
 
 
 def test_nomination_drops_null_ids_from_the_seen_set():
     conn = _Conn(rows=[], active_rows=0)
-    db.presence_candidates(conn, "remax", "byt", "prodej", {"a", None})
+    db.presence_candidates(conn, "remax", _BYT_PRODEJ, {"a", None})
     assert conn.executed[1][1][3] == ["a"]
 
 
@@ -123,7 +181,7 @@ def test_an_all_null_seen_set_raises_before_any_sql():
     The runner never sends one; the bind site fails closed if anything else does."""
     conn = _Conn(rows=[], active_rows=0)
     with pytest.raises(ValueError):
-        db.presence_candidates(conn, "remax", "byt", "prodej", {None})
+        db.presence_candidates(conn, "remax", _BYT_PRODEJ, {None})
     assert conn.executed == []
 
 
@@ -134,7 +192,7 @@ def test_the_recheck_throttle_is_delist_policys_one_spelling(
     # db renders it in whole hours (`interval '{hours} hours'`): off the hour it would truncate.
     assert delist_policy.RECHECK_THROTTLE % timedelta(hours=1) == timedelta(0)
     conn = _Conn(rows=[], active_rows=0)
-    db.presence_candidates(conn, "remax", "byt", "prodej", {"s1"})
+    db.presence_candidates(conn, "remax", _BYT_PRODEJ, {"s1"})
     assert "AND c.completed_at > now() - interval '24 hours')" in conn.executed[1][0]
     monkeypatch.setattr(delist_policy, "RECHECK_THROTTLE", delist_policy.RECHECK_THROTTLE * 1.5)
     assert "AND c.completed_at > l.walk_start - interval '36 hours')" in " ".join(

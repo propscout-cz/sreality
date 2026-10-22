@@ -51,6 +51,7 @@ SOURCE = "ceskereality"
 SALE_TYPE: dict[str, str] = {
     "prodej": "prodej",
     "pronajem": "pronajem",
+    "drazby": "drazba",
 }
 CATEGORY_MAIN: dict[str, str] = {
     "byty": "byt",
@@ -479,9 +480,12 @@ def parse_detail(
     html: str,
     *,
     source_url: str,
-    category_main: str | None,
-    category_type: str | None,
+    category_main: str | None = None,
+    category_type: str | None = None,
 ) -> ScrapedListing:
+    """The listing on a detail page; its category is its URL's unless the caller passes one."""
+    url_main, url_type = category_from_url(source_url)
+    category_main, category_type = category_main or url_main, category_type or url_type
     tree = HTMLParser(html)
     source_id = native_id(SOURCE, source_url) or ""
     ld = _jsonld_product(html)

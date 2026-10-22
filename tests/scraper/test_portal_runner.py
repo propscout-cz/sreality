@@ -139,18 +139,24 @@ def _nominations(monkeypatch):
     """Capture what the runner nominates for a page check (rule #3, 2026-09-07:
     a walk that reached the portal's end nominates the rows it did not see; the
     drain's page visit decides)."""
-    cap: dict[str, list] = {"candidates": [], "queued": []}
+    cap: dict[str, list] = {"candidates": [], "queued": [], "orphans": []}
 
-    def fake_candidates(conn, source, cm, ct, seen, *, seen_key="native", **kw):
-        cap["candidates"].append((cm, set(seen), seen_key))
+    def fake_candidates(conn, source, scope, seen, *, seen_key="native"):
+        cap["candidates"].append((scope.get("category_main"), set(seen), seen_key))
         return ([("7", "https://x/7", None), ("8", "https://x/8", None)], 9)
 
+    def fake_orphans(conn, source, scopes, seen, *, seen_key="native"):
+        cap["orphans"].append(([dict(sc) for sc in scopes], seen))
+        return cap.get("orphan_rows", ([], 0))
+
     def fake_enqueue(conn, source, cm, ct, candidates, *, active_rows, subtype=None):
-        cap["queued"].append((cm, [c[0] for c in candidates], active_rows))
-        cap.setdefault("scopes", []).append((cm, subtype))
+        if candidates:                      # the real one queues nothing for an empty list
+            cap["queued"].append((cm, [c[0] for c in candidates], active_rows))
+            cap.setdefault("scopes", []).append((cm, ct, subtype))
         return len(candidates), 0
 
     monkeypatch.setattr(portal_runner.db, "presence_candidates", fake_candidates)
+    monkeypatch.setattr(portal_runner.db, "orphan_candidates", fake_orphans)
     monkeypatch.setattr(portal_runner.db, "enqueue_presence_checks", fake_enqueue)
     return cap
 
@@ -169,9 +175,10 @@ def test_index_walk_nominates_unseen_rows_when_the_walk_reached_the_portals_end(
     assert sum(c["listings_to_verify"] for c in agg["by_category"]) == 4
     assert agg["listings_scraped_new"] == 0
     assert p.conn.closed
-    # both verdicts land in scrape_runs.by_category (JSONB, no migration)
-    assert [(c["walk_reached_end"], c["walk_coverage"]) for c in agg["by_category"]] == [
-        (True, "complete"), (True, "complete"),
+    # both verdicts land in scrape_runs.by_category (JSONB, no migration); the orphans last
+    assert [(c["category_main"], c["walk_reached_end"], c["walk_coverage"])
+            for c in agg["by_category"]] == [
+        ("A", True, "complete"), ("B", True, "complete"), (None, True, "complete"),
     ]
 
 
@@ -247,38 +254,20 @@ def test_walk_counts_from_reconcile_reach_by_category(monkeypatch):
     assert agg["listings_found_new"] == 4
 
 
-def test_index_walk_uses_a_portal_override_for_nomination(monkeypatch):
-    """A portal whose index sections do not map 1:1 onto a category (bazos
-    subtypes, ceskereality sibling slices) supplies its own candidates; None
-    means 'not yet' and queues nothing."""
-    cap = _nominations(monkeypatch)
-    p = _FakePortal(reached_end=True)
-    seen_by: list = []
-
-    def presence_candidates(conn, category, seen):
-        seen_by.append(category)
-        return None if category == "A" else ([("42", "https://x/42", 100)], 3)
-
-    p.presence_candidates = presence_candidates
-    portal_runner.run_index_walk(p, dry_run=False)
-    assert seen_by == ["A", "B"]
-    assert cap["candidates"] == []                      # default nomination bypassed
-    assert cap["queued"] == [("B", ["42"], 3)]
-
-
-def test_index_walk_override_scope_reaches_the_throttle(monkeypatch):
-    """bazos narrows to a subtype, remax/maxima widen to an agenda; the throttle
-    and the operator override must see the scope the candidates came from."""
+def test_a_declared_scope_reaches_the_query_and_the_throttle(monkeypatch):
+    """bazos narrows to a subtype, remax/maxima widen to an agenda: the nomination query, the
+    throttle and the operator override all see the scope the portal declares."""
     cap = _nominations(monkeypatch)
     p = _FakePortal(reached_end=True, categories=["A"])
-    p.presence_candidates = lambda conn, category, seen: ([("1", "https://x/1", None)], 8, {"subtype": "chata"})
+    p.presence_scope = lambda c: {"category_main": c, "category_type": "t", "subtype": "chata"}
     portal_runner.run_index_walk(p, dry_run=False)
-    assert cap["scopes"] == [("A", "chata")]
-    p2 = _FakePortal(reached_end=True, categories=["A"])
-    p2.presence_candidates = lambda conn, category, seen: ([("1", "https://x/1", None)], 8, {"category_main": None})
+    assert cap["scopes"] == [("A", "t", "chata")]
+    p2 = _FakePortal(reached_end=True, categories=["A", "B"])
+    p2.presence_scope = lambda c: {"category_type": "t"}
     cap2 = _nominations(monkeypatch)
     portal_runner.run_index_walk(p2, dry_run=False)
-    assert cap2["scopes"] == [(None, None)]
+    assert cap2["scopes"] == [(None, "t", None)]           # one agenda: one nomination
+    assert cap2["orphans"] == [([{"category_type": "t"}], {1, 2})]
 
 
 def test_index_walk_that_saw_nothing_nominates_nothing(monkeypatch):
@@ -292,50 +281,38 @@ def test_index_walk_that_saw_nothing_nominates_nothing(monkeypatch):
     assert cap["candidates"] == [] and cap["queued"] == []
 
 
-def test_an_indexless_portal_nominates_through_its_own_seam_from_an_empty_walk(monkeypatch, caplog):
-    """`web` has no index: its walk sees nothing BY CONSTRUCTION, so the empty-seen refusal
-    would mean its ads are never re-checked and never delisted. A portal that DECLARES
-    `indexless` skips that refusal and nominates through its own presence_candidates; the
-    shared default query (which raises on an empty set) is never reached."""
-    cap = _nominations(monkeypatch)
-    p = _FakePortal(reached_end=True, categories=["agenda"])
+def _indexless(reached_end: bool = True) -> _FakePortal:
+    """`web`: one agenda descriptor with no labels, a walk that sees nothing by construction."""
+    p = _FakePortal(reached_end=reached_end, categories=["agenda"])
     p.indexless = True
-    p.walk_category = lambda c, conn, dry_run, limiter, deadline=None: (set(), {"found_new": 0, "enqueued": 0}, 0, 0, True)
-    asked: list[Any] = []
+    p.category_labels = lambda c: (None, None)
+    p.walk_category = lambda c, conn, dry_run, limiter, deadline=None: (
+        set(), {"found_new": 0, "enqueued": 0}, 0, 0, reached_end)
+    return p
 
-    def own(conn, category, seen):
-        asked.append((category, set(seen)))
-        return ([("https://a.example/1", "https://a.example/1", None)], 1, {"category_main": None})
 
-    p.presence_candidates = own
+def test_an_indexless_portals_ads_are_all_orphans_of_its_empty_walk(monkeypatch, caplog):
+    """`web` has no index: its walk sees nothing BY CONSTRUCTION, so the empty-seen refusal
+    would mean its ads are never re-checked and never delisted. Its unit has no scope, so every
+    active ad is an orphan, nominated with no seen set (the query's empty-array guard stays)."""
+    cap = _nominations(monkeypatch)
+    cap["orphan_rows"] = ([("https://a.example/1", "https://a.example/1", None)], 1)
     with caplog.at_level("WARNING", logger="scraper.portal_runner"):
-        rc, agg = portal_runner.run_index_walk(p, dry_run=False)
-    assert rc == 0 and asked == [("agenda", set())]
-    assert cap["candidates"] == []
+        rc, agg = portal_runner.run_index_walk(_indexless(), dry_run=False)
+    assert rc == 0 and cap["candidates"] == []
+    assert cap["orphans"] == [([], None)]
     assert cap["queued"] == [(None, ["https://a.example/1"], 1)]
+    assert cap["scopes"] == [(None, "", None)]
     assert agg["by_category"][0]["walk_coverage"] == "complete"
-    assert agg["by_category"][0]["listings_to_verify"] == 1
     assert not [r for r in caplog.records if "VERIFY skipped" in r.getMessage()]
     assert not [r for r in caplog.records if r.getMessage().startswith("COVERAGE")]
 
 
-def test_an_indexless_portal_without_its_own_seam_nominates_nothing(monkeypatch):
-    cap = _nominations(monkeypatch)
-    p = _FakePortal(reached_end=True, categories=["agenda"])
-    p.indexless = True
-    p.walk_category = lambda c, conn, dry_run, limiter, deadline=None: (set(), {"found_new": 0, "enqueued": 0}, 0, 0, True)
-    portal_runner.run_index_walk(p, dry_run=False)
-    assert cap["candidates"] == [] and cap["queued"] == []
-
-
 def test_an_indexless_walk_cut_short_nominates_nothing(monkeypatch):
     cap = _nominations(monkeypatch)
-    p = _FakePortal(reached_end=False, categories=["agenda"])
-    p.indexless = True
-    p.walk_category = lambda c, conn, dry_run, limiter, deadline=None: (set(), {"found_new": 0, "enqueued": 0}, 0, 0, False)
-    p.presence_candidates = lambda conn, category, seen: ([("x", "x", None)], 1, {"category_main": None})
-    portal_runner.run_index_walk(p, dry_run=False)
-    assert cap["queued"] == []
+    cap["orphan_rows"] = ([("x", "x", None)], 1)
+    portal_runner.run_index_walk(_indexless(reached_end=False), dry_run=False)
+    assert cap["orphans"] == [] and cap["queued"] == []
 
 
 def test_the_drains_gone_step_is_one_function_an_adapter_can_call(monkeypatch):
@@ -370,37 +347,121 @@ def test_a_page_that_is_another_portals_ad_is_rekeyed_under_that_portal(monkeypa
     assert gone == [("web", "https://bit.example/a")]
 
 
-def test_a_walk_that_saw_nothing_still_tells_a_buffering_portal(monkeypatch):
-    """Portals whose index slices may collapse onto one canonical category (realitymix,
-    and ceskereality's twin seam) count the slices they are handed and nominate on the last one. A slice
-    the runner refuses to nominate from must still be counted, or the group's counter
-    stays one short for ever and it never nominates again."""
+class _SlicedPortal(_FakePortal):
+    """Index slices that collapse onto one label (realitymix's `domy` + `chaty` -> dum): each
+    slice sees its own ids, and slice "A2" shares its scope with "A1"."""
+
+    def __init__(self, seen_by: dict[str, set[Any]], ended: set[str] | None = None) -> None:
+        super().__init__(categories=list(seen_by))
+        self._seen_by, self._ended = seen_by, ended if ended is not None else set(seen_by)
+
+    def category_labels(self, c):
+        return (c[0], "t")
+
+    def walk_category(self, c, conn, dry_run, limiter, deadline=None):
+        self.calls["walk"].append(c)
+        return (set(self._seen_by[c]), {"found_new": 0, "enqueued": 0}, len(self._seen_by[c]), 1,
+                c in self._ended)
+
+
+def test_slices_sharing_a_scope_nominate_once_with_their_union(monkeypatch):
+    """Nominating from ONE slice's seen set would nominate its sibling's whole population every
+    walk: the scope nominates once, on its last slice, excluding every id its slices saw."""
     cap = _nominations(monkeypatch)
-    p = _FakePortal(reached_end=True, categories=["A"])
-    p.walk_category = lambda c, conn, dry_run, limiter, deadline=None: (set(), {"found_new": 0, "enqueued": 0}, 0, 1, True)
-    noted: list[Any] = []
-    p.note_empty_slice = noted.append
-    portal_runner.run_index_walk(p, dry_run=False)
-    assert noted == ["A"]
-    assert cap["candidates"] == [] and cap["queued"] == []
+    _rc, agg = portal_runner.run_index_walk(
+        _SlicedPortal({"A1": {"a"}, "B1": {"b"}, "A2": {"c"}}), dry_run=False)
+    assert cap["candidates"] == [("B", {"b"}, "native"), ("A", {"a", "c"}, "native")]
+    assert [c["listings_to_verify"] for c in agg["by_category"]] == [0, 2, 2, 0]   # + orphans
 
 
-def test_an_all_null_seen_set_skips_and_notes_the_slice(monkeypatch, caplog):
+def test_a_sibling_slice_short_of_the_end_holds_back_its_scope(monkeypatch):
+    cap = _nominations(monkeypatch)
+    portal_runner.run_index_walk(
+        _SlicedPortal({"A1": {"a"}, "B1": {"b"}, "A2": {"c"}}, ended={"A1", "B1"}), dry_run=False)
+    assert cap["candidates"] == [("B", {"b"}, "native")]
+    assert cap["orphans"] == []                            # not every unit reached the end
+
+
+def test_a_slice_that_saw_nothing_still_counts_toward_its_scope(monkeypatch):
+    """A nationwide-empty sibling slug (pronajem/chaty) saw nothing; it still reached the end, or
+    its scope would wait for it for ever and never nominate again."""
+    cap = _nominations(monkeypatch)
+    portal_runner.run_index_walk(_SlicedPortal({"A1": {"a"}, "A2": set()}), dry_run=False)
+    assert cap["candidates"] == [("A", {"a"}, "native")]
+
+
+def test_an_all_null_seen_set_takes_the_saw_nothing_branch(monkeypatch, caplog):
     """A walk whose every id parsed to None saw nothing it can name: the NULLs are
     dropped, and the emptied set takes the saw-nothing branch, never the whole scope."""
     cap = _nominations(monkeypatch)
     p = _FakePortal(reached_end=True, categories=["A"])
     p.walk_category = lambda c, conn, dry_run, limiter, deadline=None: ({None}, {"found_new": 0, "enqueued": 0}, 1, 1, True)
-    noted: list[Any] = []
-    p.note_empty_slice = noted.append
     with caplog.at_level("WARNING", logger="scraper.portal_runner"):
         portal_runner.run_index_walk(p, dry_run=False)
-    assert cap["candidates"] == [] and cap["queued"] == []
-    assert noted == ["A"]
+    assert cap["candidates"] == [] and cap["queued"] == [] and cap["orphans"] == []
     assert any(m.startswith("VERIFY dropped 1 NULL id(s) from the seen set cm=A ct=t")
                for m in caplog.messages)
     assert any(m.startswith("VERIFY skipped cm=A ct=t: the walk saw no listings")
                for m in caplog.messages)
+    assert "VERIFY orphans skipped: the walk saw no listings" in caplog.messages
+
+
+def test_a_whole_end_reached_walk_nominates_the_ads_no_unit_covers(monkeypatch, caplog):
+    """Rule #3 made total. A sighting is label-blind, a unit's nomination is not: an active ad
+    whose label no unit walks (a NULL, an auction) is nominated once every unit reached the end,
+    against every id the walk saw, at the flip cap of a scope with no category."""
+    cap = _nominations(monkeypatch)
+    cap["orphan_rows"] = ([("9", "https://x/9", None)], 3)
+    with caplog.at_level("INFO", logger="scraper.portal_runner"):
+        _rc, agg = portal_runner.run_index_walk(_FakePortal(reached_end=True), dry_run=False)
+    assert cap["orphans"] == [(
+        [{"category_main": "A", "category_type": "t"}, {"category_main": "B", "category_type": "t"}],
+        {1, 2})]
+    assert cap["queued"][-1] == (None, ["9"], 3) and cap["scopes"][-1] == (None, "", None)
+    assert "VERIFY orphans candidates=1 queued=1 deferred=0 active=3" in caplog.messages
+    # Recorded as one more by_category entry, NULL-labelled (an indexless unit's shape), so the
+    # checks that sum `verify_deferred` and age a unit's end-reached walks see the orphans too.
+    orphans = agg["by_category"][-1]
+    assert (orphans["category_main"], orphans["category_type"], orphans["walk_reached_end"],
+            orphans["listings_to_verify"], orphans["verify_deferred"], orphans["active_db"],
+            orphans[portal_runner.DECLARED_TOTAL_KEY], orphans["collected"]) == (
+        None, None, True, 1, 0, 3, 0, 0)
+    assert set(orphans) == set(agg["by_category"][0])
+    assert sum(c["listings_to_verify"] for c in agg["by_category"]) == 5
+
+
+def test_a_failed_orphan_query_is_an_error_and_an_entry_short_of_the_end(monkeypatch, caplog):
+    """Not one log line: the run counts the error and the orphans' entry did not reach the end,
+    so the walks check ages their newest end-reached walk exactly as it ages a failed unit's."""
+    _nominations(monkeypatch)
+
+    def broken(*_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("statement timeout")
+
+    monkeypatch.setattr(portal_runner.db, "orphan_candidates", broken)
+    with caplog.at_level("ERROR", logger="scraper.portal_runner"):
+        rc, agg = portal_runner.run_index_walk(_FakePortal(reached_end=True), dry_run=False)
+    assert rc == 0 and agg["errors"] == 1
+    orphans = agg["by_category"][-1]
+    assert (orphans["category_main"], orphans["walk_reached_end"], orphans["walk_coverage"],
+            orphans[portal_runner.DECLARED_TOTAL_KEY], orphans["listings_to_verify"]) == (
+        None, False, "unknown", None, 0)
+    assert any(m.startswith("VERIFY orphans failed") for m in caplog.messages)
+
+
+@pytest.mark.parametrize("why", ["stopped_short", "failed", "narrowed", "dry_run"])
+def test_orphans_wait_for_a_walk_of_the_whole_portal(monkeypatch, why):
+    """An ad outside every walked unit is an orphan only when every unit of the portal's agenda
+    was walked to its end: a unit cut short, a failed one, or a dispatch narrowed to some units
+    (bazos --sale-type/--category) leaves the rest of the portal unproven."""
+    cap = _nominations(monkeypatch)
+    cap["orphan_rows"] = ([("9", "https://x/9", None)], 3)
+    p = _FakePortal(reached_end=True, walk_fails={"A"} if why == "failed" else None)
+    if why == "stopped_short":
+        p = _SlicedPortal({"A1": {"a"}, "B1": {"b"}}, ended={"B1"})
+    p.narrowed = why == "narrowed"
+    portal_runner.run_index_walk(p, dry_run=why == "dry_run")
+    assert cap["orphans"] == []
 
 
 def test_null_ids_are_dropped_before_nomination(monkeypatch):
@@ -511,7 +572,7 @@ def test_every_by_category_entry_says_how_its_declared_total_reads(monkeypatch):
     assert portal_runner.DECLARED_TOTAL_KEY == "sreality_result_size"  # read by matviews 233/354
     assert [(c[portal_runner.DECLARED_TOTAL_KEY], c["total_is_count"],
              c["declared_is_upper_bound"]) for c in agg["by_category"]] == [
-        (87, False, False), (87, False, False)]
+        (87, False, False), (87, False, False), (0, False, False)]   # the orphans declare 0
     counted = _FakePortal(walk_fails={"B"})
     counted.total_is_count = True
     counted.coverage_denominator_is_upper_bound = True
