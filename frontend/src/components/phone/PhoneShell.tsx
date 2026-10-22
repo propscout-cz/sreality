@@ -1,6 +1,7 @@
 /* The phone frame around the routes (#1766, design #1762): a 3.5 rem header with
- * the page's title, a back affordance off the tab roots and the account button;
- * a bottom tab bar for the five areas (W1's four and Odkaz, W2 #1767). Shell.tsx picks this frame or the
+ * the page's title, a back affordance off the tab roots, the bell (the unread
+ * count, opening Notifications; notifications push W5a, ruling R4) and the
+ * account button; a bottom tab bar for the five areas (W1's four and Odkaz, W2 #1767). Shell.tsx picks this frame or the
  * desktop one by `usePhoneShell()`; the route body is the same either way.
  *
  * THE HEADER IS EXACTLY `h-14`, as the desktop TopBar is (Shell.tsx explains
@@ -16,6 +17,7 @@ import SkipLink from '@/components/SkipLink';
 import { FunnelIcon } from '@/components/icons';
 import { useAuth } from '@/lib/auth';
 import { APP_SHORT } from '@/lib/brand';
+import { czPlural } from '@/lib/format';
 import { useTitleSegment } from '@/lib/pageTitle';
 import {
   PHONE_TABS,
@@ -29,10 +31,11 @@ import {
 } from '@/lib/phoneShell';
 import { ROUTES } from '@/lib/routes';
 import { useTheme, type ThemeMode } from '@/lib/theme';
+import { useUnreadCount } from '@/lib/unreadCount';
 import { MAIN_ID } from '@/lib/useRouteFocus';
 
 import BottomSheet, { SheetContext } from './BottomSheet';
-import { BackIcon, LinkIcon, PersonIcon, RollIcon } from './phoneIcons';
+import { BackIcon, BellIcon, LinkIcon, PersonIcon, RollIcon } from './phoneIcons';
 
 /* A short line a page may set beside the header's title (the feed's "5 nových
  * dnes"). Cleared when the page unmounts. A no-op outside the phone frame. */
@@ -125,6 +128,7 @@ function PhoneHeader({
 }) {
   const navigate = useNavigate();
   const segment = useTitleSegment();
+  const unread = useUnreadCount();
   const [accountOpen, setAccountOpen] = useState(false);
   const title = root && tab ? tab.label : (segment ?? APP_SHORT);
 
@@ -162,6 +166,7 @@ function PhoneHeader({
             {aside}
           </span>
         )}
+        {unread.visible && <NotificationBell count={unread.count} />}
         <button
           type="button"
           onClick={() => setAccountOpen(true)}
@@ -174,6 +179,42 @@ function PhoneHeader({
       </div>
       {accountOpen && <AccountSheet onClose={() => setAccountOpen(false)} />}
     </header>
+  );
+}
+
+/* The way to the notifications feed: Shell's one unread count (lib/unreadCount),
+ * the number the desktop badge and the app icon show, on a copper tally (copper
+ * = unread, as the feed's own dots) cut from the glyph by a paper rim. Hidden
+ * with the feed where the plan hides it. /notifications belongs to no tab, so
+ * the page opens with the header's back affordance, as a property does. */
+function NotificationBell({ count }: { count: number }) {
+  const { pathname } = useLocation();
+  const to = ROUTES.notifications.build();
+  const here = pathname === to;
+  return (
+    <Link
+      to={to}
+      aria-label={
+        count > 0
+          ? `Upozornění: ${count} ${czPlural(count, 'nepřečtené', 'nepřečtená', 'nepřečtených')}`
+          : 'Upozornění'
+      }
+      aria-current={here ? 'page' : undefined}
+      className={[
+        'relative flex h-11 w-11 shrink-0 items-center justify-center',
+        here ? 'text-[var(--color-ink)]' : 'text-[var(--color-ink-2)] active:text-[var(--color-ink)]',
+      ].join(' ')}
+    >
+      <BellIcon className="h-[22px] w-[22px]" />
+      {count > 0 && (
+        <span
+          aria-hidden
+          className="absolute left-[22px] top-[5px] flex h-[18px] min-w-[18px] items-center justify-center rounded-full border-[1.5px] border-[var(--color-paper)] bg-[var(--color-copper)] px-[3px] font-mono text-[10px] font-medium leading-none tabular-nums text-[var(--color-paper)]"
+        >
+          {count > 99 ? '99+' : count}
+        </span>
+      )}
+    </Link>
   );
 }
 
@@ -269,8 +310,9 @@ function AccountSheet({ onClose }: { onClose: () => void }) {
         </div>
       </div>
       <div className="mt-3 border-t border-[var(--color-rule-soft)]">
-        {/* The phone has no Admin menu and no bell, so this row is its one way to
-          * Health; admin-only, as the page is. */}
+        {/* The phone has no Admin menu, and system alerts never reach the bell
+          * (ruling R2b), so this row is its one way to Health; admin-only, as
+          * the page is. */}
         {isAdmin && (
           <Link
             to={ROUTES.health.build()}

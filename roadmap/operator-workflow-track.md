@@ -41,9 +41,12 @@ account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, e
       with the toolkit-api one-liner, paste it as a Railway Shared Variable on the API AND the realtime-worker, delete the
       file. Gate: CI-Postgres lease/claim/429 tests green; lane `unconfigured`, then `live_devices` 0; `/push/key` 503
       then 200. The SPA half (sw.js, the switch, `/n/:dispatchId`) is #1948.
-- [ ] **Next:** W2b the API matcher goes (lease, readers, gates; Migration B) · W5 the phone bell, badge and switch (R4)
-      and the on-device proof (your iPhone, a second account) · W6 the one destructive prune, backup first (R8; drops
-      `dedupe_key`, its UNIQUE and `trigger_snapshot_id`).
+- [ ] **Next:** W2b the API matcher goes (lease, readers, gates; Migration B; after 48 h of overlap) · W5b the account
+      sheet's switch, usePush, the identity binding and the on-device proof (your iPhone, a second account) · W6 the one
+      destructive prune, backup first (R8; drops `dedupe_key`, its UNIQUE and `trigger_snapshot_id`).
+- [ ] **W5a (built 2026-10-21, stacked on W1; done when merged)** — the phone surfaces that need no push plumbing
+      (R4, F9): one unread observer in Shell for both frames and the page (`lib/unreadCount`), the app-icon badge
+      from it, the phone header's bell beside Účet, and /notifications at phone width (one page, `max-md:`).
 
 ### Phase U-NEW-PROPERTY: a property from a pasted ad link (in progress, 2026-10-20)
 

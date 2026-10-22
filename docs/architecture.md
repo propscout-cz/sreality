@@ -778,6 +778,15 @@ rules. Identify which one a task belongs to before you start.
   bottom tab bar for the W1 areas, toasts above it — instead of the TopBar and footer; every
   route outside those areas renders its desktop page inside it, cramped but reachable, and the
   desktop frame is untouched. `/` redirects to `/feed` on the phone frame, `/browse` otherwise.
+  The phone header carries a bell beside the account button (notifications push W5a, ruling R4):
+  the unread count on a copper tally, opening `/notifications` under the back affordance (the page
+  belongs to no tab and has no phone fork: one `max-md:` pass), hidden where the plan's agenda hides
+  notifications. Its number comes from the ONE unread observer `Shell` mounts above both frames
+  (`lib/unreadCount.tsx`: the agenda gate and the 60 s poll the TopBar used to own), which the desktop
+  badge and the Notifications page read too, and which alone writes the installed app's icon badge
+  (`navigator.setAppBadge`, only when `isInstalledApp()`; cleared at zero and when `Shell` unmounts on
+  sign-out; every failure swallowed — iOS shows it only once notifications are allowed). The account
+  sheet keeps its admin Health row: system alerts never reach the bell (R2b).
   The feed (`pages/Feed.tsx`) adds no query path: it is Browse's `fetchListingsForCards` under
   Browse's query key (so dismissal, merge and pipeline sweeps reach it), presets applied the way
   Browse loads them, and a phone menu is the desktop menu's body in a bottom sheet
@@ -2409,7 +2418,9 @@ renumber.** Navigate by area:
     page (`/notifications`) reads every producer off one LEFT-join feed (the watchdog-only
     INNER join became a LEFT join + a `collections` join so monitor and share rows aren't dropped;
     its System tab and the duplicate `/watchdog` feed went in W1, `/watchdog` now lists the watchdogs,
-    and the feed pages with "Load more"), and a red nav unread badge polls `GET /notifications/unread-count`;
+    and the feed pages with "Load more"), and ONE unread observer (`frontend/src/lib/unreadCount.tsx`,
+    mounted once by `Shell`, W5a) polls `GET /notifications/unread-count` for the red desktop nav badge,
+    the phone header's bell, the page itself and the installed app's icon badge;
     `POST /notifications/mark-all-seen` clears it.)
     **The Stats tab is a dashboard over the SAME cohort (migration 626, `docs/design/stats-dashboard.md`).**
     One pivot RPC, `browse_stats_properties(<625's 74 cohort parameters>, spec)`, keeps 625's WHERE byte

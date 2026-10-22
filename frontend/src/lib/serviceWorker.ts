@@ -44,8 +44,9 @@ export function registerServiceWorker(): void {
 }
 
 /* `display-mode` alone is not trusted on iOS (a standalone app has been seen
- * matching `fullscreen`); `navigator.standalone` is Safari's own flag. */
-function isInstalledApp(): boolean {
+ * matching `fullscreen`); `navigator.standalone` is Safari's own flag. Also the
+ * app-icon badge's gate (lib/unreadCount): only an installed app has an icon. */
+export function isInstalledApp(): boolean {
   const standalone = (navigator as Navigator & { standalone?: boolean }).standalone === true;
   const displayMode = ['standalone', 'fullscreen'].some(
     (mode) => window.matchMedia?.(`(display-mode: ${mode})`).matches,
