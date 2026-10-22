@@ -253,7 +253,7 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   `api/attachments.py` replaces `api/note_attachments.py` and the building run's duplicate
   stack; `/properties/{id}/attachments` replaces the note-scoped routes; tiles draw a 1080 px
   display copy (`?w=1080`, made once, JWT proxy only); no HEIC.
-- **Done (photos sprint W2, 2026-10-23, PR #PRNUM):** "Moje fotky", one strip of the acting
+- **Done (photos sprint W2, 2026-10-23, PR [#1975](https://github.com/waiff/sreality/pull/1975)):** "Moje fotky", one strip of the acting
   identity's own photos per property (a note's are the same records, shown under the note too):
   the phone page's section after Poloha (Vyfotit / Z knihovny) and the desktop's Moje tab (Upload,
   drag-and-drop); tiles from the 1080 px copies open the original in one viewer (a note's photo
