@@ -118,7 +118,7 @@ Heal via `reparse.yml` (`--source <portal> --fields area_m2,estate_area,usable_a
 The sreality pipeline is **split by cadence (Phase 2)**: `index_walk.yml` ("Scraping: Sreality
 index walk", cron `*/15`) feeds `detail_drain.yml` ("Scraping: Sreality detail drain", cron
 `*/15`). The combined `scrape.yml` fallback (`scraper.main`'s `_run_full`) was deleted in C2-2
-(2026-10); an ad-hoc combined sreality run is `python -m scraper.sreality_main` with neither
+(2026-10); an ad-hoc combined run of any portal is `python -m scraper.<portal>_main` with neither
 phase flag (walk, then drain), locally. The bazos crawl is **cadence-split**
 like sreality (bazos walks 22 nationwide scopes (migration 488), ~1500 index pages — a combined run starves the
 drain): `bazos_index_walk.yml` ("Scraping: Bazos index walk", cron `0 */6`, full walk +
@@ -149,10 +149,7 @@ queue has work). idnes's `supports_complete_walk` was parked (migration 453) —
 2026-09-07, it gates no delisting; the walk is sliced into the 14 kraje + abroad, each slice's outcome
 in `portal_index_slices` (454), read back to walk the stalest slice first (the gate that re-earned the flag retired in wave 4).
 **Parked flags, the slice ledger and the retired gate: `references/coverage-and-delisting.md`.**
-There is no combined fallback workflow for a split portal anymore (sreality's `scrape.yml`
-went in C2-2); an ad-hoc combined run of any portal is `python -m scraper.<portal>_main`
-with neither `--index-only` nor `--drain-only`, run locally. The properties track adds
-`property_maintenance.yml` (**dirty-set incremental, cron `*/5`** — attaches new stragglers as
+The properties track adds `property_maintenance.yml` (**dirty-set incremental, cron `*/5`** — attaches new stragglers as
 singletons + recomputes only changed properties; rule #20) and
 `recompute_property_stats.yml` (the **daily full-sweep reconcile** at 04:15 — recomputes every
 property + clears the dirty queue under a `--max-seconds` budget; a budget stop clears only the range it
@@ -301,7 +298,8 @@ The detail-drain writes `scrape_runs` rows too (`run_type='detail'`), but only t
 ## Onboarding a portal — and the tenth, `web` (2026-10-21)
 
 A portal is one row per registry, never a branch (the registry list: `docs/architecture.md` § rule 21 and
-`docs/design/new-property-from-link.md` §3.4). `web` (`scraper/web_main.py`) is `indexless`: its 6-hourly walk sees
+`docs/design/new-property-from-link.md` §3.4). Dispatch a new portal's first index walk at deploy: `scraping` judges every portal in `SOURCES` from that moment, so `<portal>/walks` reads Problem until its cron first fires (web, 2026-10-22).
+`web` (`scraper/web_main.py`) is `indexless`: its 6-hourly walk sees
 nothing, reaches the end and nominates every active row via its own `presence_candidates`; the worker drains it FIRST;
 its pages go through `scraper/egress.py` (private ranges refused per hop, a wall-clock deadline, a decoded cap). A pasted
 link enters the same queue: `POST /listings/ingest {url}` (admin) resolves it with `portal_identity.resolve_url` and

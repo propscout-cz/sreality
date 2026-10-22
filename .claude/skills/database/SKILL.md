@@ -112,6 +112,7 @@ session state, with an expiry that self-heals a crashed holder
 (migration 277's Browse-rebuild included) are the one exception: each pg_cron call is a
 single local session, so a session advisory lock there is sound — don't generalize the
 lease-row fix to code that never sees the pooler.
+**A pg_cron command emits no NOTICE before its last statement**: a flushed NOTICE blocks pg_cron's single launcher until the command ends, freezing every job start (migration 658: a dead `drop table if exists`, ~68 s four times an hour).
 
 **Supabase MCP.** Claude Code has direct read/write access to the production Supabase
 project via the MCP integration. Use it for: inspecting the live schema, running SELECT
