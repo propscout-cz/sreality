@@ -40,7 +40,8 @@ Four properties define the write, and each one is load-bearing:
 There is NO time floor: every changed body is appended, because the claim lane mines the
 LATEST body (rule 25). A 7-day per-listing floor (W2a-7, 2026-08-14 to 2026-10-22) discarded
 a changed body inside its window, so a refetch that found a location the first fetch lacked
-never reached the lane (1,133 refusals a day on the HTML portals). The cap bounds the stock.
+never reached the lane (≥ 1,133 a day on the HTML portals, measured 2026-10-22). The cap
+bounds the stock.
 
 LIVE on all nine portals (826,948 rows as of 2026-09-21, oldest 2026-05-28). Scrapers
 never call `append_payload` directly: the one sanctioned form is
