@@ -263,18 +263,18 @@ lag, a 45 s budget and 2 000-row batches. Env knobs on the Railway service:
 **Location-refetch lane (location simplification W8, ships LIVE):** once a day
 (`LOCATION_REFETCH_INTERVAL_S`, default 86400, first tick after a
 `LOCATION_REFETCH_FIRST_DELAY_SECONDS` = 300 s delay so a redeploy loop cannot turn "daily" into
-"per restart"), queue the audit page's active "no data" listings for ONE more detail fetch.
+"per restart"), queue the active ads with no town (rule 25) for ONE more detail fetch.
 
 - **Why.** ceskereality and realitymix geocode an ad after publishing it; our detail fetch ran at
   discovery, read empty location fields, and the index card never changed, so no re-fetch was ever
   enqueued (measured 2026-09-14: 56 of 63 ceskereality and 56 of 112 realitymix rows in that bucket
   were fetched within two minutes of first sighting and never again).
-- **The audit relation IS the candidate list** — `location_pin_audit_mv` with
-  `state='unresolved'` + `quality='active_no_claims'`, joined to `listings` by PK for the live
-  `source_url` / `price_czk` / `is_active` (the matview is an hourly snapshot; a re-fetch must not
-  be aimed by a stale URL). Rows whose newest `portal_raw_pages` / `portal_raw_payloads` record is
-  younger than `LOCATION_REFETCH_MIN_AGE_S` (6 h) are skipped — re-reading a page fetched minutes
-  ago only re-reads the same empty moment.
+- **Rule 25's invariant IS the candidate list** — active `listings` LEFT JOIN `listing_location`
+  where `location_steps.town_missing_sql()` holds (not foreign, no town; no row counts), the set the
+  `location_town_coverage` check judges (until 2026-10-22: the pin-audit matview's
+  `active_no_claims` bucket, which missed kraj/okres-only ads). Rows whose newest `portal_raw_pages`
+  / `portal_raw_payloads` record is younger than `LOCATION_REFETCH_MIN_AGE_S` (6 h) are skipped —
+  re-reading a page fetched minutes ago only re-reads the same empty moment.
 - **Bounded per portal, oldest-fetched first.** `LOCATION_REFETCH_CAP_PER_SOURCE` (500) rows per
   portal per tick, so bazos's dead ads (their page answers with the category listing →
   `ListingGoneError` → delisted by the same fetch) drain over days instead of flooding one drain
@@ -284,10 +284,10 @@ lag, a 45 s budget and 2 000-row batches. Env knobs on the Railway service:
   most wants are the ones the drain gave up on; nothing else re-arms them). `claim_detail_batch`
   reserves a share of every claim for that class and never filters on `supports_complete_walk`, so
   every portal's drain — worker or Actions — serves them. Then the drain rewrites the page, the
-  `location_intake_fast` lane mines the new body within a minute, and the resolver answers.
+  archive appends it (no time floor since 2026-10-22), the `location_intake_fast` lane mines it
+  within a minute, and the resolver answers.
 - **No lease, no in-process lock.** One SELECT plus one INSERT per portal; the enqueue is idempotent
-  on `(source, native_id)` and never disturbs a claimed row. A missing `location_pin_audit_mv` (a
-  branch database) skips the tick with ONE warning per process.
+  on `(source, native_id)` and never disturbs a claimed row.
 - **A daily lane is not a dead lane.** The jobs check judges a lane late against the `interval_s`
   it wrote, only past `max(3 × interval, interval + 2 × last duration, 15 min)`, so a daily lane
   between ticks reads fine (each boot also runs one pass after the 300 s first delay); a failing
