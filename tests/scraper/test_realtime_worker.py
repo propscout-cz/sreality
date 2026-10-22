@@ -725,7 +725,7 @@ def test_the_worker_seeds_every_lane_before_any_lane_starts(monkeypatch):
     assert asyncio.run(rw._amain()) == 0
     assert events[0] == ("seed", {lane: {"interval_s": None} for lane in rw.LANES})
     assert events[1:] == [("lane", lane) for lane in rw.LANES]
-    assert len(set(rw.LANES)) == len(rw.LANES) == 16
+    assert len(set(rw.LANES)) == len(rw.LANES) == 17
 
 
 # --- health lane (Health dashboard W3) ----------------------------------------------------
@@ -807,7 +807,7 @@ def test_the_health_lane_ticks_on_a_constant_and_sits_before_autodedup() -> None
     assert (rw.HEALTH_TICK_SECONDS, rw.HEALTH_PASS_BUDGET_SECONDS) == (60.0, 500.0)
     from scripts import verify_pipeline
 
-    # Wave 6: the twelve worker budgets (675 s) outgrow one pass inside the watcher's 600 s
+    # Wave 6: the thirteen worker budgets (680 s) outgrow one pass inside the watcher's 600 s
     # in-flight line, so the pass is capped and run_due defers a gauge that no longer fits.
     hosted = [c for c in verify_pipeline.CHECKS if c.host == rw.WORKER_NAME]
     alarms = [c for c in hosted if c.cls == "alarm"]
@@ -950,14 +950,14 @@ def producers(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     return ran
 
 
-def test_the_notifications_lane_ticks_on_a_constant_between_autodedup_and_heartbeat() -> None:
+def test_the_notifications_lane_ticks_on_a_constant_between_autodedup_and_push() -> None:
     """The health/text_extract shape: nothing read, so nothing to fail; the brake is a deploy."""
     lane = inspect.getsource(rw._amain).split('("notifications"', 1)[1].split(")),", 1)[0]
     assert "lambda: NOTIFICATIONS_TICK_SECONDS" in lane
     assert "default_interval=NOTIFICATIONS_TICK_SECONDS" in lane
     assert rw.NOTIFICATIONS_TICK_SECONDS == 300.0
     at = rw.LANES.index("notifications")
-    assert rw.LANES[at - 1:at + 2] == ("autodedup", "notifications", "heartbeat")
+    assert rw.LANES[at - 1:at + 2] == ("autodedup", "notifications", "push")
     for forbidden in ("app_settings", "os.environ"):
         assert forbidden not in inspect.getsource(rw._notifications_sync)
     assert "- notifications:" in rw.__doc__

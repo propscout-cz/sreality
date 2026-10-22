@@ -14,6 +14,8 @@ Deliberately narrow. It pins ONLY the patterns actually emitted across a
 boundary — verified by reading the emitter, not assumed:
   /listing/:source/:nativeId   chrome-extension
   /collections                 chrome-extension (the save checklist's "Spravovat kolekce")
+  /n/:dispatchId               the push lane (api/push_delivery.py): one event's push, `?d=` its delivery
+  /notifications               the push lane: a coalesced push, `?d=` its first delivery
 Widening it past what actually crosses the boundary would make it a second full
 route table to maintain, which is the failure mode it exists to prevent.
 
@@ -28,6 +30,9 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 ROUTES_TS = REPO / "frontend" / "src" / "lib" / "routes.ts"
@@ -42,6 +47,12 @@ CROSS_TERRITORY = {
     "listingCanonical": "/listing/:source/:nativeId",
     "collections": "/collections",
 }
+
+
+# The routes every push links to, absolutely, from the backend (notifications push W4). The landing page ships with
+# the SPA's push wave (W5b, PR #1948): until it is in this tree its registry half waits; its shape is pinned anyway.
+PUSH_EMITTED = {"notificationOpen": "/n/:dispatchId", "notifications": "/notifications"}
+_LANDING_PAGE = REPO / "frontend" / "src" / "pages" / "NotificationOpen.tsx"
 
 
 def _registry() -> dict[str, str]:
@@ -98,6 +109,40 @@ def test_extension_builds_the_collections_route() -> None:
         "${APP_BASE_URL}/collections — if the link moved, check it still matches "
         "the SPA registry."
     )
+
+
+def _push_links() -> dict[str, str]:
+    """The path (no origin, no query) of each link the push lane builds: one event's, and a coalesced push's."""
+    from api import push_delivery as pd
+
+    def claimed(delivery: int) -> "pd.Claimed":
+        return pd.Claimed(delivery, 1, 1, "7f1c2e9a-0000-4000-8000-000000000001", None, False, True, False, 600,
+                          False, "https://web.push.apple.com/x", "p", "a", "https://app.example.cz",
+                          {"change_kind": "new"})
+
+    def path(rows: list[Any]) -> str:
+        navigate = pd.build_payload(rows, "https://app.example.cz", 1)["notification"]["navigate"]
+        assert navigate.startswith("https://app.example.cz/") and "?d=" in navigate, navigate
+        return navigate[len("https://app.example.cz"):].split("?", 1)[0]
+
+    return {"notificationOpen": path([claimed(5)]), "notifications": path([claimed(5), claimed(6)])}
+
+
+def test_the_push_lane_builds_the_routes_it_pins() -> None:
+    for key, built in _push_links().items():
+        assert _pattern_to_regex(PUSH_EMITTED[key]).match(built), (key, built)
+
+
+def test_the_registry_declares_every_route_a_push_opens() -> None:
+    """A rename in the SPA would leave every push in flight opening a dead page (and a 404 tap reads as the app
+    being broken); the emitter is api/push_delivery.py's LANDING_PATH / FEED_PATH."""
+    registry = _registry()
+    assert registry["notifications"] == PUSH_EMITTED["notifications"]
+    if "notificationOpen" not in registry and not _LANDING_PAGE.exists():
+        pytest.skip("the /n/:dispatchId landing ships with the SPA's push wave (W5b, PR #1948)")
+    assert registry.get("notificationOpen") == PUSH_EMITTED["notificationOpen"], (
+        "ROUTES.notificationOpen moved or went: every push links to /n/{dispatch}. Update "
+        "api/push_delivery.py LANDING_PATH and this contract together.")
 
 
 # The watcher upserts its own registry row inside health_liveness(), so its owner

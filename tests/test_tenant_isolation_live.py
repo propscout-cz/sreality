@@ -202,6 +202,10 @@ _ADMIN_ONLY_RELATIONS: list[str] = [
     # MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
     "health_checks",
     "ops_incidents",
+    # The push device registry and its delivery ledger (migration 654): service role only,
+    # no `_public` view. MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
+    "push_subscriptions",
+    "notification_deliveries",
 ]
 
 # Relations that read the above but are legitimately reachable without the gate.
