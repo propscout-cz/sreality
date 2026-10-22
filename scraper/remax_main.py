@@ -26,9 +26,10 @@ per-(cm,ct) total), so the runner can't gate a per-category sweep — instead th
 whole agenda (sale ≡ category_type) nominates every active row it did not see for
 a page check once the walk REACHED THE PORTAL'S END (rule #3, structural: remax
 said there is nothing after this page and no stop of OURS fired; the collected /
-declared ratio is logged, never a gate), scoped by category_type against the full
-walk's id set (its `presence_scope` is `{"category_type": …}`), never the
-title-derived slice. A gone detail fetch still flips that one listing at once.
+declared ratio is logged, never a gate): its `presence_scope` is
+`{"category_type": …}`, so the runner nominates it once, against the union of its
+descriptors' slices, which is the whole walk (`ostatni` catches every card no other
+descriptor claims). A gone detail fetch still flips that one listing at once.
 """
 
 from __future__ import annotations
@@ -239,10 +240,19 @@ class RemaxPortal(portal_runner.PortalDefaults):
         reason: StopReason = stop_reason or "slice_unreached"
         portal_end = stop_is_portal_end(reason)
         reached_end = walk_reached_end(portal_end=portal_end, our_stop=not portal_end)
+        coverage = walk_coverage(len(native_ids), total)
         LOG.info(
-            "INDEX done sale=%d pages=%d collected=%d total=%s stop=%s reached_end=%s",
-            sale, pages, len(native_ids), total, reason, reached_end,
+            "INDEX done sale=%d pages=%d collected=%d total=%s stop=%s reached_end=%s "
+            "coverage=%s", sale, pages, len(native_ids), total, reason, reached_end, coverage,
         )
+        if reached_end and coverage != "complete":
+            # An alarm, never a veto (rule #3): the walk reached remax's end, so the agenda
+            # nominates — but ending short of remax's own count means its pagination dropped
+            # rows, and the runner cannot see it (each descriptor's "declared" is its slice).
+            LOG.warning(
+                "COVERAGE agenda sale=%d collected=%d declared=%s verdict=%s stop=%s",
+                sale, len(native_ids), total, coverage, reason,
+            )
         walk = _AgendaWalk(
             native_ids, ref_map, price_map, cat_map, total, pages, reason, reached_end)
         self._agenda_cache[sale] = walk
@@ -323,39 +333,6 @@ class RemaxPortal(portal_runner.PortalDefaults):
     def presence_scope(self, category: dict[str, Any]) -> dict[str, Any] | None:
         ct = category.get("category_type")
         return None if ct is None else {"category_type": ct}
-
-    def presence_candidates(
-        self, conn: Any, category: dict[str, Any], seen: set[str],
-    ) -> tuple[list[tuple[str, str | None, int | None]], int] | None:
-        """Agenda-grain nomination (rule #3, 2026-09-07). The runner calls this
-        once per agenda scope, because remax's completeness is per AGENDA
-        (sale == category_type): the whole agenda, scoped by category_type, against
-        the FULL agenda walk's id set, never the title-derived per-category slices
-        (an id whose title maps to no descriptor's category would otherwise be
-        nominated by a walk that did see it); the passed `seen` is ignored. An
-        agenda that did not reach remax's end nominates nothing: its unseen set is
-        then the part of the index we never visited, not evidence of absence."""
-        ct = category.get("category_type")
-        sale = int(category.get("sale") or 1)
-        walk = self._agenda_cache.get(sale)
-        if walk is None or not walk.reached_end:
-            return None
-        coverage = walk_coverage(len(walk.native_ids), walk.total)
-        LOG.info(
-            "VERIFY agenda sale=%d ct=%s collected=%d total=%s stop=%s coverage=%s",
-            sale, ct, len(walk.native_ids), walk.total, walk.stop_reason, coverage,
-        )
-        if coverage != "complete":
-            # An alarm, never a veto (rule #3): the walk reached remax's end, so it
-            # nominates — but ending short of remax's own count means the portal's
-            # pagination dropped rows, and nothing else can see it here (the
-            # runner's coverage check compares len(seen) with len(seen) for this
-            # portal, since the per-category "declared" total IS what we collected).
-            LOG.warning(
-                "COVERAGE agenda sale=%d ct=%s collected=%d declared=%s verdict=%s stop=%s",
-                sale, ct, len(walk.native_ids), walk.total, coverage, walk.stop_reason,
-            )
-        return db.presence_candidates(conn, SOURCE, {"category_type": ct}, set(walk.native_ids))
 
     # --- detail-drain seams ---
     def fetch_detail(

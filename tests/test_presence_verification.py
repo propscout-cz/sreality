@@ -155,6 +155,16 @@ def test_an_indexless_portals_orphans_are_its_whole_agenda():
         db.orphan_candidates(_Conn(), "ceskereality", [_BYT_PRODEJ], set())
 
 
+def test_a_units_active_count_is_its_nomination_scopes():
+    """One definition: the count a walk is reconciled against is the scope it nominates from."""
+    scope = {"category_main": "dum", "category_type": "prodej", "subtype": None}
+    counted = _Conn(active_rows=11)
+    assert db.active_count(counted, "bazos", scope) == 11
+    nominated = _Conn(active_rows=11)
+    db.presence_candidates(nominated, "bazos", scope, {"x"})
+    assert counted.executed == nominated.executed[:1]
+
+
 def test_a_scope_names_only_scope_columns():
     with pytest.raises(ValueError):
         db.scope_sql({"category_main": "byt", "source": "web"})

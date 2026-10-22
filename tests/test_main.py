@@ -205,7 +205,7 @@ def patched_db(monkeypatch):
     )
     monkeypatch.setattr(
         scraper_main.db, "active_count",
-        lambda _conn, _cm, _ct, *, source="sreality": 0,
+        lambda _conn, _source, _scope: 0,
     )
     # Intercept SrealityClient construction in _build_client.
     monkeypatch.setattr(scraper_main, "SrealityClient", _FakeClient)

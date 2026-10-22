@@ -391,15 +391,6 @@ class BazosPortal(portal_runner.PortalDefaults):
         sub = SUBTYPE.get(category.get("category"))
         return {"category_main": cm, "category_type": ct, "subtype": sub}
 
-    def active_count(self, conn: Any, category: dict[str, str]) -> int | None:
-        cm, ct = self.category_labels(category)
-        if cm is None or ct is None:
-            return None
-        sub = SUBTYPE.get(category.get("category"))
-        return db.active_count(
-            conn, cm, ct, source=SOURCE, subtype=sub, scope_subtype=True
-        )
-
     # --- detail-drain seams ---
     def fetch_detail(
         self, client: BazosClient, native_id: str, detail_ref: str | None,
@@ -443,7 +434,11 @@ def _resolve_scopes(
         c for c in config.categories
         if SALE_TYPE.get(c.get("sale_type")) and CATEGORY_MAIN.get(c.get("category"))
     ]
-    return scopes or [{"sale_type": "prodam", "category": "byt"}]
+    if not scopes:
+        # A walk of one stand-in section would read the rest of the portal as orphans.
+        LOG.error("the registry maps no bazos scope: %s", config.categories)
+        return None
+    return scopes
 
 
 def main(argv: list[str] | None = None) -> int:

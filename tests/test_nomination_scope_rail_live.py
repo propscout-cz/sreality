@@ -33,9 +33,6 @@ pytestmark = pytest.mark.skipif(
     reason="TEST_DATABASE_URL not set — this rail runs in CI's migrations lane",
 )
 
-_UNSEEN = {"rail-not-an-ad"}
-
-
 @pytest.fixture()
 def conn() -> Iterator[Any]:
     """One connection in one transaction, always rolled back."""
@@ -52,10 +49,10 @@ def conn() -> Iterator[Any]:
         connection.close()
 
 
-def _scopes(conn: Any, source: str) -> list[dict[str, Any]]:
+def _portal_scopes(conn: Any, source: str) -> tuple[Any, list[dict[str, Any]]]:
     portal = portal_factory.build_portal(source, load_portal_config(conn, source))
     found = (portal_runner._scope(portal, c) for c in portal.categories())
-    return [dict(k) for k in {portal_runner._scope_key(s) for s in found if s is not None}]
+    return portal, [dict(k) for k in {portal_runner._scope_key(s) for s in found if s is not None}]
 
 
 def _labels(scopes: list[dict[str, Any]]) -> list[tuple[str | None, str | None, str | None]]:
@@ -67,21 +64,25 @@ def _labels(scopes: list[dict[str, Any]]) -> list[tuple[str | None, str | None, 
 
 @pytest.mark.parametrize("source", sorted(portal_factory.PORTAL_CLASSES))
 def test_every_active_ad_is_in_exactly_one_nomination_scope(conn: Any, source: str) -> None:
-    scopes = _scopes(conn, source)
+    portal, scopes = _portal_scopes(conn, source)
+    # The walk's own key: sreality excludes its seen set on the integer sreality_id it stores.
+    seen_key = getattr(portal, "seen_key", "native")
+    by_id = seen_key == "sreality_id"
     seeded = {}
     for i, (main, kind, subtype) in enumerate(_labels(scopes)):
-        native = f"rail-{i}"
+        native = str(900_000_000 + i)
         seeded[native] = (main, kind, subtype)
         conn.execute(
             "insert into listings (source, source_id_native, sreality_id, raw_json, category_main, "
             "category_type, subtype, is_active, last_seen_at) "
             "values (%s, %s, %s, '{}'::jsonb, %s, %s, %s, true, now() - interval '3 days')",
-            (source, native, 900_000_000 + i if source == "sreality" else None, main, kind, subtype))
+            (source, native, int(native) if by_id else None, main, kind, subtype))
+    unseen = {0} if by_id else {"rail-not-an-ad"}
     nominated: Counter[str] = Counter()
     for scope in scopes:
-        candidates, _ = db.presence_candidates(conn, source, scope, _UNSEEN)
+        candidates, _ = db.presence_candidates(conn, source, scope, unseen, seen_key=seen_key)
         nominated.update(n for n, _ref, _price in candidates if n in seeded)
-    orphans, _ = db.orphan_candidates(conn, source, scopes, _UNSEEN)
+    orphans, _ = db.orphan_candidates(conn, source, scopes, unseen, seen_key=seen_key)
     nominated.update(n for n, _ref, _price in orphans if n in seeded)
     wrong = {seeded[n]: nominated[n] for n in seeded if nominated[n] != 1}
     assert not wrong, (

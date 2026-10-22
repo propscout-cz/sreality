@@ -102,7 +102,7 @@ _HOUSE_NO_RE = re.compile(r"\s(\d{1,4}(?:/\d{1,4})?[a-z]?)$", re.IGNORECASE)
 # home crumb (e.g. room rentals "pronajem-pokoje-…").
 _SLUG_SALE_RE = re.compile(r"/(prodej|pronajem)-([a-zěščřžýáíéúůóťďň]+)", re.IGNORECASE)
 _SLUG_FAMILY_PREFIXES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("dum", ("dum", "domy", "domu", "rodinn", "vila", "chat", "chalup")),
+    ("dum", ("dum", "domy", "domu", "rodinn", "vil", "chat", "chalup")),
     ("byt", ("byt", "pokoj", "garsonk", "mezonet", "atypick")),
     ("pozemek", ("pozem", "parcel")),
     ("komercni", ("komer", "kancelar", "sklad", "nebytov", "obchod", "restaur")),

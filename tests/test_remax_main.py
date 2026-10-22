@@ -112,18 +112,6 @@ def _walk_sale_agenda(
     return index
 
 
-def _nominations(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
-    captured: list[Any] = []
-    monkeypatch.setattr(
-        remax_main.db, "presence_candidates",
-        lambda _c, source, scope, seen, **kw: (
-            captured.append((source, scope.get("category_main"), scope["category_type"], set(seen)))
-            or ([], 4)
-        ),
-    )
-    return captured
-
-
 def test_the_drain_owns_the_gone_flip() -> None:
     """The runner flips a gone listing through db.mark_listing_inactive; no
     portal carries a flip seam of its own."""
@@ -132,18 +120,17 @@ def test_the_drain_owns_the_gone_flip() -> None:
 
 
 def test_nomination_is_agenda_grain(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every prodej descriptor shares the agenda scope (category_type alone), so the runner
+    nominates the agenda once, excluding the union of its descriptors' slices: the whole walk."""
     portal = _portal()
     _walk_sale_agenda(monkeypatch, portal, {(1, 1): [_page(
         3, ("r1", "Prodej bytu 2+kk"), ("r2", "Prodej bytu"), ("r3", "Prodej rodinného domu"),
     )]})
-    captured = _nominations(monkeypatch)
-    # Every prodej descriptor shares the agenda scope, so the runner asks once per agenda.
     assert portal.presence_scope(_CATEGORIES[0]) == portal.presence_scope(_CATEGORIES[1]) == {
         "category_type": "prodej"}
-    assert portal.presence_candidates(object(), _CATEGORIES[0], {"r1", "r2"}) == ([], 4)
-    source, cm, ct, seen = captured[0]
-    assert source == "remax" and ct == "prodej" and cm is None   # agenda scope: category_type alone
-    assert seen == {"r1", "r2", "r3"}              # the FULL sale agenda, not the byt slice
+    union = set().union(*(portal.walk_category(c, object(), False, _Limiter())[0]
+                          for c in _CATEGORIES[:2]))
+    assert union == set(portal._agenda_cache[1].native_ids) == {"r1", "r2", "r3"}
 
 
 def test_reaching_the_portals_own_count_is_the_end(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -208,22 +195,22 @@ def test_walk_category_returns_the_agendas_structural_verdict(monkeypatch: pytes
 
 
 def test_a_walk_short_of_the_declared_total_still_reaches_the_end(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
     """The change of 2026-09-08: the count no longer vetoes. remax declares 10 but
     serves 2 and then a page that is empty twice, past the last page the total
     implies — structurally that walk reached the end, so it nominates and the
     shortfall is an alarm (COVERAGE), not a refusal."""
     portal = _portal()
-    _walk_sale_agenda(monkeypatch, portal, {
-        (1, 1): [_page(10, ("r1", "Prodej bytu"), ("r2", "Prodej bytu"))],
-        (1, 2): [_page(10)],
-    })
+    with caplog.at_level("WARNING", logger=remax_main.LOG.name):
+        _walk_sale_agenda(monkeypatch, portal, {
+            (1, 1): [_page(10, ("r1", "Prodej bytu"), ("r2", "Prodej bytu"))],
+            (1, 2): [_page(10)],
+        })
     walk = portal._agenda_cache[1]
     assert (walk.stop_reason, walk.reached_end) == ("empty_confirmed", True)
-    captured = _nominations(monkeypatch)
-    assert portal.presence_candidates(object(), _CATEGORIES[0], {"r1", "r2"}) is not None
-    assert captured[0][3] == {"r1", "r2"}
+    assert any(m.startswith("COVERAGE agenda sale=1 collected=2 declared=10")
+               for m in caplog.messages)
 
 
 def test_the_barren_rule_re_reads_the_same_url_exactly_once(
@@ -250,9 +237,6 @@ def test_a_blank_page_that_carries_cards_on_re_read_is_our_stop(
     })
     walk = portal._agenda_cache[1]
     assert (walk.stop_reason, walk.reached_end) == ("barren", False)
-    captured = _nominations(monkeypatch)
-    assert portal.presence_candidates(object(), _CATEGORIES[0], {"r1"}) is None
-    assert captured == []
 
 
 def test_a_blank_page_short_of_the_declared_last_page_is_not_confirmed(
@@ -279,9 +263,6 @@ def test_a_barren_first_page_with_no_total_is_never_confirmed(
     _walk_sale_agenda(monkeypatch, portal, {(1, 1): [_page(None)]})
     walk = portal._agenda_cache[1]
     assert (walk.stop_reason, walk.reached_end) == ("barren", False)
-    captured = _nominations(monkeypatch)
-    assert portal.presence_candidates(object(), _CATEGORIES[0], set()) is None
-    assert captured == []
 
 
 def test_a_repeated_page_is_our_stop_not_remaxs_clamp(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -297,9 +278,6 @@ def test_a_repeated_page_is_our_stop_not_remaxs_clamp(monkeypatch: pytest.Monkey
     })
     walk = portal._agenda_cache[1]
     assert (walk.stop_reason, walk.reached_end) == ("pager_stalled", False)
-    captured = _nominations(monkeypatch)
-    assert portal.presence_candidates(object(), _CATEGORIES[0], {"r1"}) is None
-    assert captured == []
 
 
 def test_a_blank_page_cannot_supply_its_own_total(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -339,9 +317,6 @@ def test_a_page_capped_walk_nominates_nothing(monkeypatch: pytest.MonkeyPatch) -
     _walk_sale_agenda(monkeypatch, portal, {(1, 1): [_page(2, ("r1", "Prodej bytu"), ("r2", "Prodej bytu"))]})
     walk = portal._agenda_cache[1]
     assert (walk.stop_reason, walk.reached_end) == ("page_cap", False)
-    captured = _nominations(monkeypatch)
-    assert portal.presence_candidates(object(), _CATEGORIES[0], {"r1", "r2"}) is None
-    assert captured == []
 
 
 def test_a_deadline_stop_nominates_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -354,9 +329,6 @@ def test_a_deadline_stop_nominates_nothing(monkeypatch: pytest.MonkeyPatch) -> N
     )
     walk = portal._agenda_cache[1]
     assert (walk.stop_reason, walk.reached_end) == ("deadline", False)
-    captured = _nominations(monkeypatch)
-    assert portal.presence_candidates(object(), _CATEGORIES[0], set()) is None
-    assert captured == []
 
 
 def test_a_failed_index_fetch_never_reads_as_an_end(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -372,6 +344,3 @@ def test_a_failed_index_fetch_never_reads_as_an_end(monkeypatch: pytest.MonkeyPa
     with pytest.raises(RuntimeError):
         portal.walk_category(_CATEGORIES[0], object(), False, _Limiter())
     assert portal._agenda_cache == {}
-    captured = _nominations(monkeypatch)
-    assert portal.presence_candidates(object(), _CATEGORIES[0], {"r1"}) is None
-    assert captured == []

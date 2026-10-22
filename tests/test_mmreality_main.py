@@ -466,7 +466,8 @@ def test_delisting_uses_the_runners_default_nomination():
 def test_active_count_is_category_scoped(monkeypatch):
     monkeypatch.setattr(
         mmreality_main.db, "active_count",
-        lambda conn, cm, ct, source: {("byt", "prodej", "mmreality"): 42}[(cm, ct, source)])
+        lambda conn, source, scope: {("mmreality", "byt", "prodej"): 42}[
+            (source, scope["category_main"], scope["category_type"])])
     assert _portal().active_count(object(), BYTY) == 42
     assert _portal().active_count(object(), {"index": "nemovitosti"}) is None
 

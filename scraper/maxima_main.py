@@ -24,8 +24,9 @@ The drain still derives each listing's category from the detail page itself
 maxima is `supports_complete_walk=true` via AGENDA-GRAIN nomination: it reports a
 per-AGENDA total (not per-category), so the runner can't gate a per-(cm,ct) sweep —
 instead the whole agenda (af ≡ category_type) is nominated once its walk reaches
-MAXIMA's end, scoped by category_type against the full walk's id
-set (its `presence_scope` is `{"category_type": …}`), never the title-derived per-category slice (which
+MAXIMA's end: its `presence_scope` is `{"category_type": …}`, so the runner nominates it
+once, against the union of its descriptors' slices, which is the whole walk (`ostatni`
+catches every card no other descriptor claims), never one title-derived slice (which
 could false-flip a listing whose index-time title category ≠ its detail-time one).
 "Reached the end" is STRUCTURAL (rule #3, 2026-09-08): the page loop exited on a
 terminator of maxima's own — its pager, its declared count, a corroborated empty
@@ -303,6 +304,15 @@ class MaximaPortal(portal_runner.PortalDefaults):
             "coverage=%s",
             af, pages, len(native_ids), total, stop, reached_end, coverage,
         )
+        if reached_end and coverage != "complete":
+            # The gap is nominated anyway and the page decides, but a walk that reached
+            # maxima's end short of maxima's own count is worth saying out loud (the runner's
+            # COVERAGE warning cannot: each descriptor's "declared" is its own slice).
+            LOG.warning(
+                "COVERAGE af=%d: reached maxima's end (%s) with %d of %s collected "
+                "(coverage=%s) -- nominating the gap anyway (rule #3)",
+                af, stop, len(native_ids), total, coverage,
+            )
         walk = _AgendaWalk(
             native_ids, ref_map, price_map, cat_map, total, pages,
             reached_end, stop, coverage,
@@ -345,40 +355,6 @@ class MaximaPortal(portal_runner.PortalDefaults):
     def presence_scope(self, category: dict[str, Any]) -> dict[str, Any] | None:
         ct = category.get("category_type")
         return None if ct is None else {"category_type": ct}
-
-    def presence_candidates(
-        self, conn: Any, category: dict[str, Any], seen: set[str],
-    ) -> tuple[list[tuple[str, str | None, int | None]], int] | None:
-        """Agenda-grain nomination (rule #3, 2026-09-07). The runner calls this
-        once per agenda scope, because maxima's end is reached per AGENDA
-        (af == category_type): the whole agenda, scoped by category_type, against
-        the FULL agenda walk's id set, never the title-derived per-category slices
-        (an id whose title maps to no descriptor's category would otherwise be
-        nominated by a walk that did see it); the passed `seen` is ignored. An
-        agenda whose walk stopped for a reason of OURS nominates nothing: its
-        unseen set is not evidence, it is the part of the index the walk never
-        reached. A count that came up short is not such a reason (rule #3,
-        structural since 2026-09-08)."""
-        ct = category.get("category_type")
-        af = int(category.get("af") or 1)
-        walk = self._agenda_cache.get(af)
-        if walk is None or not walk.reached_end:
-            return None
-        if walk.coverage != "complete":
-            # The gap is nominated anyway and the page decides — but a walk that
-            # reached maxima's end while short of maxima's own count is worth
-            # saying out loud (the runner's per-category COVERAGE warning cannot
-            # see this: maxima's per-category "expected" is the slice itself).
-            LOG.warning(
-                "COVERAGE af=%d ct=%s: reached maxima's end (%s) with %d of %s "
-                "collected (coverage=%s) -- nominating the gap anyway (rule #3)",
-                af, ct, walk.stop, len(walk.native_ids), walk.total, walk.coverage,
-            )
-        LOG.info(
-            "VERIFY agenda af=%d ct=%s collected=%d total=%s stop=%s",
-            af, ct, len(walk.native_ids), walk.total, walk.stop,
-        )
-        return db.presence_candidates(conn, SOURCE, {"category_type": ct}, set(walk.native_ids))
 
     # --- detail-drain seams ---
     def fetch_detail(

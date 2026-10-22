@@ -327,6 +327,7 @@ def test_the_structured_title_names_the_family_a_truncated_breadcrumb_drops():
     assert resolve_category(chata, _BYT_URL, "Pronájem chaty/rekreačního objektu, 36 m²") == (
         "dum", "pronajem")
     assert resolve_category(BYT_HTML, _BYT_URL, "Prodej chaty/rekreačního objektu") == ("byt", "prodej")
+    assert resolve_category(chata, _BYT_URL, "Prodej vily 300 m²") == ("dum", "prodej")
 
 
 def test_street_recovered_from_slug_when_no_map():

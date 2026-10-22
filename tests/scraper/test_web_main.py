@@ -88,8 +88,11 @@ def test_the_indexless_walk_reaches_the_end_and_nominates_null_category_rows(mon
     rc, agg = portal_runner.run_index_walk(portal, dry_run=False)
     assert rc == 0 and conn.closed
     assert queued == [(SOURCE, None, "", rows, 5)]
-    (entry,) = agg["by_category"]
-    assert (entry["walk_reached_end"], entry["walk_coverage"]) == (True, "complete")
+    unit, orphans = agg["by_category"]   # both NULL-labelled: its unit, then its orphans
+    assert [(e["category_main"], e["walk_reached_end"], e["walk_coverage"])
+            for e in (unit, orphans)] == [(None, True, "complete"), (None, True, "complete")]
+    assert (unit["listings_to_verify"], orphans["listings_to_verify"],
+            orphans["active_db"]) == (0, 2, 5)
     presence_sql, params = conn.executed[-1]
     assert "category_main" not in presence_sql and "<> ALL" not in presence_sql
     assert params == (SOURCE,) and db.NOMINABLE_PREDICATE in presence_sql

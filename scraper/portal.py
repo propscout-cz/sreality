@@ -452,7 +452,7 @@ _DEFAULTS: dict[str, PortalConfig] = {
         # so ads filed there were never enqueued — silently, for months). The fine
         # sections collapse onto one category_main (chata+dum, the four commercial,
         # pozemek+zahrada, garaz+ostatni), so the presence nomination is
-        # subtype-scoped (BazosPortal.presence_candidates). Mirrors the DB registry.
+        # subtype-scoped (BazosPortal.presence_scope). Mirrors the DB registry.
         # Still out by choice: "projekty" (Nové projekty — developer marketing that
         # also appears under byt/dum; no other portal has such a category) and the
         # rent-only "podnajem"/"ubytovani" (roommate + short-term lodging ads, not
@@ -536,7 +536,7 @@ _DEFAULTS: dict[str, PortalConfig] = {
         # (cached) and keeps the id-prefix slice for its category. Complete-walk
         # via AGENDA-GRAIN delisting: maxima reports a per-AGENDA total, so the
         # walk nominates the whole agenda's (af ≡ category_type) unseen rows once it
-        # reaches the agenda's end (db.presence_candidates, category_main=None),
+        # reaches the agenda's end (its presence_scope names category_type alone),
         # not the per-(cm,ct) slice. See maxima_main.
         supports_complete_walk=True,
         categories=[
@@ -564,8 +564,8 @@ _DEFAULTS: dict[str, PortalConfig] = {
         # title-derived slice for its category. Complete-walk via AGENDA-GRAIN
         # delisting: remax reports a per-AGENDA total, so the walk nominates the whole
         # agenda's (sale ≡ category_type) unseen rows once it reaches the agenda's end
-        # (db.presence_candidates, category_main=None), not the title-derived per-(cm,ct) slice. See
-        # remax_main.
+        # (its presence_scope names category_type alone), not the title-derived
+        # per-(cm,ct) slice. See remax_main.
         supports_complete_walk=True,
         categories=[
             {"category_main": "byt",      "category_type": "prodej",   "sale": 1},
@@ -683,8 +683,8 @@ _DEFAULTS: dict[str, PortalConfig] = {
         # The tenth portal: any site an operator pastes (scraper.web_main). It has no
         # index, so ONE agenda-wide descriptor stands for the whole portal: the walk sees
         # nothing by construction, reaches its end (declared total 0: coverage reads
-        # `complete`) and nominates through the adapter's own presence_candidates (the
-        # `indexless` seam, rule 3).
+        # `complete`) and, its descriptor having no scope, nominates every active ad as
+        # an orphan (the `indexless` seam, rule 3).
         supports_complete_walk=True,
         categories=[{"agenda": "all"}],
         split_threshold=None,

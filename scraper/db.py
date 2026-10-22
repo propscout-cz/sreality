@@ -972,6 +972,22 @@ def orphan_candidates(
     return _nominate(conn, source, *orphan_sql(scopes), seen, seen_key)
 
 
+def _count(conn: psycopg.Connection, source: str, where: str, params: list[Any]) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT count(*)
+            FROM listings l
+            WHERE l.is_active = true
+              AND l.source = %s
+              AND {where}
+            """,
+            (source, *params),
+        )
+        row = cur.fetchone()
+    return int(row[0]) if row else 0
+
+
 def _nominate(
     conn: psycopg.Connection, source: str, where: str, params: list[Any],
     seen: set[Any] | None, seen_key: str,
@@ -984,18 +1000,8 @@ def _nominate(
             # An empty bound array makes `<> ALL('{}')` true for every row: the whole scope.
             raise ValueError(f"presence_candidates {source}: empty seen set would nominate the whole scope")
         unseen, ids = f"\n              AND l.{key_col} <> ALL(%s)", (bound,)
+    active_rows = _count(conn, source, where, params)
     with conn.cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT count(*)
-            FROM listings l
-            WHERE l.is_active = true
-              AND l.source = %s
-              AND {where}
-            """,
-            (source, *params),
-        )
-        active_rows = int(cur.fetchone()[0])
         cur.execute(
             f"""
             SELECT l.{key_col}::text, l.source_url, l.price_czk
@@ -1217,36 +1223,9 @@ def index_summary_native(
     return out
 
 
-def active_count(
-    conn: psycopg.Connection,
-    category_main: str,
-    category_type: str,
-    *,
-    source: str = "sreality",
-    subtype: str | None = None,
-    scope_subtype: bool = False,
-) -> int:
-    """Current active-listing count for one (source, category_main, category_type).
-
-    `scope_subtype=True` narrows to `subtype` (NULL-safe) so the count matches a
-    subtype-scoped `presence_candidates` nomination (bazos fine sections)."""
-    sub_clause = "\n              AND subtype IS NOT DISTINCT FROM %s" if scope_subtype else ""
-    params: list[Any] = [source, category_main, category_type]
-    if scope_subtype:
-        params.append(subtype)
-    with conn.cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT count(*) FROM listings
-            WHERE is_active = true
-              AND source = %s
-              AND category_main = %s
-              AND category_type = %s{sub_clause}
-            """,
-            tuple(params),
-        )
-        row = cur.fetchone()
-        return int(row[0]) if row else 0
+def active_count(conn: psycopg.Connection, source: str, scope: Mapping[str, Any]) -> int:
+    """The active ads of one nomination scope: what its walk is reconciled against."""
+    return _count(conn, source, *scope_sql(scope))
 
 
 def pending_image_downloads(

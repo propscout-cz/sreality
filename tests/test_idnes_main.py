@@ -427,10 +427,10 @@ def test_active_count_source_scoped(monkeypatch):
     captured: dict[str, Any] = {}
     monkeypatch.setattr(
         idnes_main.db, "active_count",
-        lambda _c, cm, ct, source: (captured.update(cm=cm, ct=ct, source=source) or 42),
+        lambda _c, source, scope: (captured.update(source=source, **scope) or 42),
     )
     assert _portal().active_count(object(), {"sale_type": "prodej", "category": "byty"}) == 42
-    assert captured == {"cm": "byt", "ct": "prodej", "source": "idnes"}
+    assert captured == {"category_main": "byt", "category_type": "prodej", "source": "idnes"}
 
 
 class _DetailClient:

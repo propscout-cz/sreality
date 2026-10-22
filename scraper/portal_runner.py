@@ -153,10 +153,6 @@ class Portal(Protocol):
     #   nothing). bazos narrows to its section's subtype, remax/maxima widen to the
     #   agenda ({"category_type": ...}). Units with one scope nominate once, on the
     #   last, with their union; an active ad in no scope is an orphan (rule #3).
-    # presence_candidates(conn, category, seen) -> (candidates, active_rows) | None:
-    #   the candidates of the unit's scope when the walk's seen set is not the right
-    #   exclusion (remax/maxima: the whole agenda walk's ids). `candidates` are
-    #   (native_id, detail_ref, price) triples, oldest-unseen first.
     # narrowed (bool, default False): a dispatch walks a subset of the portal's units
     #   (bazos --sale-type/--category), so an ad in none of them is no orphan.
     # live_categories(limiter) -> (live, configured) | None: the portal's own
@@ -206,10 +202,8 @@ class PortalDefaults:
         return portal_factory.build_client_class(self.source)(limiter=limiter)
 
     def active_count(self, conn: Any, category: Any) -> int | None:
-        cm, ct = self.category_labels(category)  # type: ignore[attr-defined]
-        if cm is None or ct is None:
-            return None
-        return db.active_count(conn, cm, ct, source=self.source)
+        scope = _scope(self, category)  # type: ignore[arg-type]
+        return None if scope is None else db.active_count(conn, self.source, scope)
 
     def write_details(self, conn: Any, items: list[DrainItem]) -> dict[str, int]:
         """The HTML portals' flush: stage each detail page, ONE listing write, mark the pages parsed."""
@@ -367,30 +361,29 @@ def _queue_presence_checks(
             cm, ct,
         )
         return 0, 0
-    own = getattr(portal, "presence_candidates", None)
-    found = own(conn, category, group.seen) if own is not None else db.presence_candidates(
+    candidates, active_rows = db.presence_candidates(
         conn, portal.source, scope, group.seen, seen_key=getattr(portal, "seen_key", "native"))
-    if found is None:
-        return 0, 0
-    return _enqueue_nominated(portal, conn, scope, *found)
+    return _enqueue_nominated(portal, conn, scope, candidates, active_rows)
 
 
 def _queue_orphan_checks(
     portal: Portal, conn: Any, scopes: list[Scope], seen: set[Any],
-) -> tuple[int, int]:
+) -> tuple[int, int, int | None]:
     """Rule #3 made total: a walk whose EVERY unit reached the portal's end also nominates
     the active ads in no walked scope (a NULL label, an auction the walk does not ask for),
     against every id it saw. A sighting is label-blind and a unit's nomination is not, so
     without this an ad no unit covers is never checked once it leaves the index. An
     indexless portal's units cover nothing and its walk sees nothing: this is its whole
-    nomination. Otherwise an empty seen set nominates nothing, as above."""
+    nomination. Otherwise an empty seen set nominates nothing, as above. Returns (queued,
+    deferred, the orphans' active count)."""
     indexless = bool(getattr(portal, "indexless", False))
     if not seen and not indexless:
         LOG.warning("VERIFY orphans skipped: the walk saw no listings")
-        return 0, 0
+        return 0, 0, None
     candidates, active_rows = db.orphan_candidates(
         conn, portal.source, scopes, seen or None, seen_key=getattr(portal, "seen_key", "native"))
-    return _enqueue_nominated(portal, conn, {}, candidates, active_rows, label="orphans")
+    return (*_enqueue_nominated(portal, conn, {}, candidates, active_rows, label="orphans"),
+            active_rows)
 
 
 def _enqueue_nominated(
@@ -407,6 +400,35 @@ def _enqueue_nominated(
         label or f"cm={cm} ct={ct} subtype={sub}", len(candidates), queued, deferred, active_rows,
     )
     return queued, deferred
+
+
+def _entry(
+    cm: str | None, ct: str | None, *, declared: int | None, collected: int,
+    active_db: int | None, reached: bool, total_is_count: bool, upper_bound: bool,
+    counts: Mapping[str, int] | None = None, verified: tuple[int, int] = (0, 0),
+) -> dict[str, Any]:
+    """One scrape_runs.by_category entry: a walked unit's, or the orphans' (NULL labels, the
+    shape an indexless unit has always had), so the checks read both the same way."""
+    counts = counts or {}
+    return {
+        "category_main":        cm,
+        "category_type":        ct,
+        "listings_found_new":   counts.get("found_new", 0),
+        "listings_scraped_new": 0,
+        "listings_inactive":    0,   # the walk flips nothing; the drain does (rule #3)
+        "listings_to_verify":   verified[0],
+        "verify_deferred":      verified[1],
+        "listings_enqueued":    counts.get("enqueued", 0),
+        "images_discovered":    0,
+        "images_stored":        0,
+        DECLARED_TOTAL_KEY:     declared,
+        "collected":            collected,
+        "active_db":            active_db,
+        "walk_reached_end":     reached,
+        "walk_coverage":        walk_coverage(collected, declared),
+        "total_is_count":       total_is_count,
+        "declared_is_upper_bound": upper_bound,
+    }
 
 
 def _record_category_drift(portal: Portal, conn: Any, limiter: Any) -> None:
@@ -480,7 +502,6 @@ def run_index_walk(
     total_is_count = bool(getattr(portal, "total_is_count", False))
     upper_bound = bool(getattr(portal, "coverage_denominator_is_upper_bound", False))
     conn = None if dry_run else portal.connect_index()
-    orphans = (0, 0)
 
     try:
         _record_category_drift(portal, conn, limiter)
@@ -580,34 +601,30 @@ def run_index_walk(
                 cm_text, ct_text, cat_result_size, len(seen_ids), active_db,
             )
 
-            category_aggregates.append({
-                "category_main": cm_text,
-                "category_type": ct_text,
-                "listings_found_new":   cat_counts.get("found_new", 0),
-                "listings_scraped_new": 0,
-                "listings_inactive":    0,   # the walk flips nothing; the drain does (rule #3)
-                "listings_to_verify":   to_verify,
-                "verify_deferred":      deferred,
-                "listings_enqueued":    cat_counts.get("enqueued", 0),
-                "images_discovered":    0,
-                "images_stored":        0,
-                DECLARED_TOTAL_KEY:     cat_result_size,
-                "collected":            len(seen_ids),
-                "active_db":            active_db,
-                "walk_reached_end":     bool(reached_end),
-                "walk_coverage":        coverage,
-                "total_is_count":       total_is_count,
-                "declared_is_upper_bound": upper_bound,
-            })
+            category_aggregates.append(_entry(
+                cm_text, ct_text, declared=cat_result_size, collected=len(seen_ids),
+                active_db=active_db, reached=bool(reached_end), total_is_count=total_is_count,
+                upper_bound=upper_bound, counts=cat_counts, verified=(to_verify, deferred)))
 
         # Only a walk of the portal's WHOLE agenda knows an ad is in no unit: a dispatch that
         # narrowed it (bazos --sale-type/--category) leaves the rest of the portal unwalked.
+        # The orphans' entry is recorded like a unit's: a failed query is an error and an
+        # entry that did not reach the end, so the walks check ages it instead of a log line.
         if conn is not None and categories and ended == len(categories) and not getattr(
                 portal, "narrowed", False):
             try:
-                orphans = _queue_orphan_checks(portal, conn, [dict(k) for k in groups], walk_seen)
+                queued, deferred, orphan_rows = _queue_orphan_checks(
+                    portal, conn, [dict(k) for k in groups], walk_seen)
+                orphans = _entry(None, None, declared=0, collected=0, active_db=orphan_rows,
+                                 reached=True, total_is_count=total_is_count,
+                                 upper_bound=upper_bound, verified=(queued, deferred))
             except Exception as exc:  # noqa: BLE001 - a nomination failure is not a walk failure
                 LOG.exception("VERIFY orphans failed: %s -- nothing nominated this walk", exc)
+                failed_categories += 1
+                orphans = _entry(None, None, declared=None, collected=0, active_db=None,
+                                 reached=False, total_is_count=total_is_count,
+                                 upper_bound=upper_bound)
+            category_aggregates.append(orphans)
 
         LOG.info(
             "INDEX total=%d pages=%d enqueued=%d",
@@ -620,8 +637,8 @@ def run_index_walk(
     LOG.info(
         "RUN done pages=%d enqueued=%d to_verify=%d deferred=%d errors=%d",
         total_pages, total_enqueued,
-        sum(c["listings_to_verify"] for c in category_aggregates) + orphans[0],
-        sum(c["verify_deferred"] for c in category_aggregates) + orphans[1],
+        sum(c["listings_to_verify"] for c in category_aggregates),
+        sum(c["verify_deferred"] for c in category_aggregates),
         failed_categories,
     )
     scrape_agg: dict[str, Any] = {

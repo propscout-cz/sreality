@@ -105,6 +105,20 @@ def test_a_dispatch_narrowed_to_one_section_proves_no_orphan(monkeypatch, argv, 
     assert walked[0].narrowed is narrowed
 
 
+def test_a_registry_that_maps_no_section_fails_the_run(monkeypatch):
+    """No stand-in section: one walked section would read the rest of bazos as orphans."""
+    from dataclasses import replace
+
+    from scraper.portal import default_config
+
+    empty = replace(default_config("bazos"),
+                    categories=[{"sale_type": "prodam", "category": "projekty"}])
+    monkeypatch.setattr(bazos_main.portal_runner, "load_config", lambda *_a, **_k: empty)
+    monkeypatch.setattr(bazos_main.portal_runner, "run_index_walk",
+                        lambda *a, **k: pytest.fail("an unmapped registry must not walk"))
+    assert bazos_main.main(["--dry-run"]) == 2
+
+
 def test_main_rejects_unmapped_scope(monkeypatch):
     # argparse choices already constrain these, but the guard is belt-and-braces.
     assert bazos_main.SALE_TYPE.get("prodam") is not None
@@ -153,35 +167,24 @@ def test_nomination_scopes_the_categories_migration_488_added():
         assert (got["category_main"], got["subtype"]) == expected[scope["category"]], scope
 
 
-def test_active_count_scopes_the_categories_migration_488_added(monkeypatch):
+def test_active_count_counts_the_sections_own_scope(monkeypatch):
+    """The count a walk is reconciled against is its nomination scope's: one definition."""
     captured: dict[str, Any] = {}
     monkeypatch.setattr(
         bazos_main.db, "active_count",
-        lambda _c, cm, ct, *, source, subtype, scope_subtype: captured.update(
-            cm=cm, subtype=subtype) or 7,
+        lambda _c, source, scope: captured.update(source=source, **scope) or 7,
     )
     assert _portal().active_count(object(), _ZAHRADA_SALE) == 7
-    assert (captured["cm"], captured["subtype"]) == ("pozemek", "zahrada")
-    assert _portal().active_count(object(), _GARAZ_SALE) == 7
-    assert (captured["cm"], captured["subtype"]) == ("ostatni", "garaz")
+    assert captured == {"source": "bazos", "category_main": "pozemek",
+                        "category_type": "prodej", "subtype": "zahrada"}
+    assert _portal().active_count(object(), _BYT_RENT) == 7
+    assert (captured["category_main"], captured["subtype"]) == ("byt", None)
+    assert "active_count" not in bazos_main.BazosPortal.__dict__
 
 
 def test_the_old_sweep_seam_is_gone():
     assert not hasattr(bazos_main.BazosPortal, "mark_inactive")
     assert not hasattr(bazos_main.BazosPortal, "mark_gone")
-
-
-def test_active_count_source_scoped(monkeypatch):
-    captured: dict[str, Any] = {}
-    monkeypatch.setattr(
-        bazos_main.db, "active_count",
-        lambda _c, cm, ct, *, source, subtype, scope_subtype: captured.update(
-            cm=cm, ct=ct, source=source, subtype=subtype,
-            scope_subtype=scope_subtype) or 42,
-    )
-    assert _portal().active_count(object(), _BYT_RENT) == 42
-    assert captured == {"cm": "byt", "ct": "pronajem", "source": "bazos",
-                        "subtype": None, "scope_subtype": True}
 
 
 class _IdxClient:

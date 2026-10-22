@@ -142,14 +142,14 @@ def test_portal_config_categories_and_labels():
     assert p.category_labels(_CATEGORIES[3]) == ("byt", "pronajem")
 
 
-def test_active_count_source_scoped(monkeypatch):
+def test_active_count_counts_the_agenda_scope(monkeypatch):
     captured: dict[str, Any] = {}
     monkeypatch.setattr(
         maxima_main.db, "active_count",
-        lambda _c, cm, ct, source: captured.update(active=(cm, ct, source)) or 12,
+        lambda _c, source, scope: captured.update(active=(source, dict(scope))) or 12,
     )
     assert _portal().active_count(object(), _CATEGORIES[0]) == 12
-    assert captured["active"] == ("byt", "prodej", "maxima")
+    assert captured["active"] == ("maxima", {"category_type": "prodej"})
 
 
 _BASE = "https://nemovitosti.maxima.cz/nemovitosti/"
@@ -242,27 +242,16 @@ def test_a_page_with_no_pager_markup_corroborates_nothing(monkeypatch):
 
 
 def test_nomination_is_agenda_grain(monkeypatch):
-    # A complete sale agenda spanning byt + dum + ostatni. presence_candidates must
-    # nominate the WHOLE agenda (category_type=prodej) against EVERY agenda id —
-    # never the per-category byt slice; the runner asks once per agenda scope.
+    # A complete sale agenda spanning byt + dum + ostatni. Its descriptors share one scope
+    # (category_type=prodej), so the runner nominates the WHOLE agenda once, excluding the
+    # union of their slices -- every agenda id (ostatni catches what no title names).
     items = [_item("b1"), _item("b2"), _item("d1", "Prodej domu"), _item("o1", "Prodej")]
     portal = _portal()
     _walk_one_agenda(monkeypatch, portal, total=4, items=items)
-
-    captured: list[Any] = []
-    monkeypatch.setattr(
-        maxima_main.db, "presence_candidates",
-        lambda _c, source, scope, seen, **kw: (
-            captured.append((source, scope.get("category_main"), scope["category_type"], set(seen)))
-            or ([], 7)
-        ),
-    )
     assert portal.presence_scope(_CATEGORIES[0]) == portal.presence_scope(_CATEGORIES[1]) == {
         "category_type": "prodej"}
-    assert portal.presence_candidates(object(), _CATEGORIES[0], {"b1", "b2"}) == ([], 7)
-    source, cm, ct, seen = captured[0]
-    assert source == "maxima" and ct == "prodej" and cm is None   # agenda scope: category_type alone
-    assert seen == {"b1", "b2", "d1", "o1"}        # the FULL agenda, not the byt slice
+    union = set().union(*(portal.walk_category(c, None, True, None)[0] for c in _CATEGORIES[:3]))
+    assert union == set(portal._agenda_cache[1].native_ids) == {"b1", "b2", "d1", "o1"}
 
 
 def test_the_drain_owns_the_gone_flip():
@@ -279,32 +268,21 @@ def test_nomination_skips_uncorroborated_empty_page(monkeypatch):
     portal = _portal()
     _walk_one_agenda(monkeypatch, portal, total=10, items=[_item("b1"), _item("b2")])
     assert portal._agenda_cache[1].stop == "barren"
-    called = {"n": 0}
-    monkeypatch.setattr(
-        maxima_main.db, "presence_candidates",
-        lambda *a, **k: called.__setitem__("n", called["n"] + 1) or ([], 0),
-    )
-    assert portal.presence_candidates(object(), _CATEGORIES[0], {"b1", "b2"}) is None
-    assert called["n"] == 0
+    assert portal._agenda_cache[1].reached_end is False
 
 
-def test_nomination_ignores_unmeasurable_count(monkeypatch):
+def test_nomination_ignores_unmeasurable_count(monkeypatch, caplog):
     # The index parsed but its total never did (total=None) and no pager rendered.
     # The walk still ended on an empty page that follows pages which carried items
     # -- nothing can contradict it -- so it reached maxima's end and nominates.
     # The count is an alarm (coverage="unknown", logged), never a veto (rule #3).
     portal = _portal()
-    _walk_one_agenda(monkeypatch, portal, total=None, items=[_item("b1"), _item("b2")])
+    with caplog.at_level("WARNING", logger=maxima_main.LOG.name):
+        _walk_one_agenda(monkeypatch, portal, total=None, items=[_item("b1"), _item("b2")])
     assert portal._agenda_cache[1].stop == "empty_confirmed"
     assert portal._agenda_cache[1].coverage == "unknown"
-
-    captured: list[Any] = []
-    monkeypatch.setattr(
-        maxima_main.db, "presence_candidates",
-        lambda _c, source, scope, seen, **kw: captured.append(set(seen)) or ([], 3),
-    )
-    assert portal.presence_candidates(object(), _CATEGORIES[0], {"b1", "b2"}) == ([], 3)
-    assert captured == [{"b1", "b2"}]
+    assert portal._agenda_cache[1].reached_end is True
+    assert any(m.startswith("COVERAGE af=1: reached maxima's end") for m in caplog.messages)
 
 
 def test_nomination_ignores_overcollected_count(monkeypatch):
@@ -317,14 +295,7 @@ def test_nomination_ignores_overcollected_count(monkeypatch):
     _walk_one_agenda(monkeypatch, portal, total=2, items=items)
     assert portal._agenda_cache[1].stop == "declared_total_reached"
     assert portal._agenda_cache[1].coverage == "incomplete"
-
-    called = {"n": 0}
-    monkeypatch.setattr(
-        maxima_main.db, "presence_candidates",
-        lambda *a, **k: called.__setitem__("n", called["n"] + 1) or ([], 0),
-    )
-    assert portal.presence_candidates(object(), _CATEGORIES[0], {"b1"}) is not None
-    assert called["n"] == 1
+    assert portal._agenda_cache[1].reached_end is True
 
 
 class _IdxClient:
