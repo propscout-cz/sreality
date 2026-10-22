@@ -46,8 +46,6 @@ import { useMapOverlayRegistry } from '@/lib/mapOverlays';
 import {
   summarise,
   isDefault,
-  filtersToWatchdogSpec,
-  watchdogNameSuggestion,
   browseTitleSummary,
   toSearchParams,
   DEFAULT_FILTERS,
@@ -840,17 +838,9 @@ export default function BrowseExperience({
       </div>
 
       {f.watchdog && watchdogModalOpen
-        ? (() => {
-            const { spec, unsupported } = filtersToWatchdogSpec(filters);
-            return (
-              <CreateWatchdogModal
-                spec={spec}
-                unsupported={unsupported}
-                suggestedName={watchdogNameSuggestion(filters)}
-                onClose={() => setWatchdogModalOpen(false)}
-              />
-            );
-          })()
+        ? (
+            <CreateWatchdogModal filters={filters} onClose={() => setWatchdogModalOpen(false)} />
+          )
         : null}
     </div>
   );

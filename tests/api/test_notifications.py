@@ -30,17 +30,18 @@ def test_filter_spec_defaults() -> None:
     assert spec.category_type == "pronajem"
 
 
-def test_filter_spec_spatial_requires_all_three() -> None:
-    """lat/lng/radius_m must be all set or all None — partial spatial
-    filters silently broke the SQL in v1, so validate eagerly."""
-    with pytest.raises(ValueError):
-        WatchdogFilterSpec(lat=50.0, lng=14.0)  # radius_m missing
-    with pytest.raises(ValueError):
-        WatchdogFilterSpec(lat=50.0, radius_m=1000)  # lng missing
-
-    # All three set is OK.
-    s = WatchdogFilterSpec(lat=50.0, lng=14.0, radius_m=1000)
-    assert s.lat == 50.0
+def test_filter_spec_bounds_must_be_an_ordered_box() -> None:
+    """`bounds` is the SPA's MapBounds: west < east and south < north, or a 422 —
+    an inverted box would match nothing and mute the watchdog without a word."""
+    with pytest.raises(ValidationError):
+        WatchdogFilterSpec(bounds={"west": 14.5, "south": 50.0, "east": 14.3, "north": 50.2})
+    with pytest.raises(ValidationError):
+        WatchdogFilterSpec(bounds={"west": 14.3, "south": 50.2, "east": 14.5, "north": 50.0})
+    with pytest.raises(ValidationError):
+        WatchdogFilterSpec(bounds={"west": 14.3, "south": 50.0, "east": 14.5})
+    s = WatchdogFilterSpec(bounds={"west": 14.3, "south": 50.0, "east": 14.5, "north": 50.2})
+    assert s.bounds is not None
+    assert (s.bounds.west, s.bounds.north) == (14.3, 50.2)
 
 
 def test_build_clauses_default_category_main_unconstrained_type_rent() -> None:
@@ -72,27 +73,30 @@ def test_build_clauses_migrates_legacy_scalar_category_main() -> None:
     assert params["category_main_in"] == ["dum"]
 
 
-def test_build_clauses_skips_unset_spatial() -> None:
+def test_build_clauses_skips_unset_box() -> None:
     spec = WatchdogFilterSpec()
     where, params = _build_match_clauses(spec)
-    assert not any("ST_DWithin" in w for w in where)
-    assert "radius_m" not in params
+    assert not any("l.lat" in w or "l.lng" in w for w in where)
+    assert not any(k.startswith("bbox_") for k in params)
 
 
-def test_build_clauses_emits_spatial_when_set() -> None:
-    spec = WatchdogFilterSpec(lat=50.08, lng=14.42, radius_m=1500)
+def test_build_clauses_emits_the_map_box_when_set() -> None:
+    """Rule 16: the box is the lat/lng band Browse's list (`queries.ts applyFilters`)
+    and both stats RPCs (`bbox_*`) apply — no circle, no ST_DWithin, no own shape."""
+    spec = WatchdogFilterSpec(bounds={"west": 14.40, "south": 50.06, "east": 14.44, "north": 50.10})
     where, params = _build_match_clauses(spec)
-    assert any("ST_DWithin" in w for w in where)
-    # properties_public exposes lat/lng, not the raw geom column, so the
-    # spatial predicate builds the point from lat/lng (Slice 2b).
-    assert any("l.lat IS NOT NULL" in w for w in where)
-    assert any("ST_MakePoint(l.lng, l.lat)" in w for w in where)
+    assert "l.lng >= %(bbox_west)s" in where
+    assert "l.lng <= %(bbox_east)s" in where
+    assert "l.lat >= %(bbox_south)s" in where
+    assert "l.lat <= %(bbox_north)s" in where
+    assert not any("ST_DWithin" in w for w in where)
     # Anchored: `sl.geom` is the W5 consumer rule's own probe into listing_location,
     # which is not `properties_public.geom` and must not be flagged as one.
-    assert not any(re.search(r"(?<![a-z_])l\.geom\b", w) for w in where)
-    assert params["lat"] == 50.08
-    assert params["lng"] == 14.42
-    assert params["radius_m"] == 1500
+    assert not any(re.search(r"(?<![a-z_])l\.geom", w) for w in where)
+    assert params["bbox_west"] == 14.40
+    assert params["bbox_east"] == 14.44
+    assert params["bbox_south"] == 50.06
+    assert params["bbox_north"] == 50.10
 
 
 def test_build_clauses_city_quality_is_one_obec_predicate() -> None:
@@ -1082,8 +1086,8 @@ def test_match_once_skips_invalid_filter_spec() -> None:
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [
-                # Invalid: partial spatial filter (no radius).
-                (bad_id, {"lat": 50.0, "lng": 14.0}, cursor_ts, []),
+                # Invalid: a map box with west >= east.
+                (bad_id, {"bounds": {"west": 14.5, "south": 50.0, "east": 14.0, "north": 50.2}}, cursor_ts, []),
                 # Valid spec
                 (good_id, {}, cursor_ts, []),
             ],

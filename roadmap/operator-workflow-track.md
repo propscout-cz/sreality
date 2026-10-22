@@ -883,13 +883,21 @@ any newly-scraped listings.
   merge f2d7b359; `extra='ignore'`); `ComparableFilters` gains the garden pair; both models
   now EQUAL their agendas by test; Browse reads the generated `BUILDING_MATERIAL_BUCKETS`
   (fix/watchdog-dropped-filters, C4 PR 2).
+- ✅ M3 + watchdog map area (2026-10-21, feature/watchdog-map-area): the map box is the ONE
+  spatial shape — `WatchdogFilterSpec.bounds` (Browse's `MapBounds`) replaces `lat`/`lng`/
+  `radius_m` and the matcher's ST_DWithin circle; `api/location_filter.bounds_where` renders
+  the lat/lng band the list and both stats RPCs apply; `filtersToWatchdogSpec` reads the one
+  `effectiveBbox` (moved to `lib/filters.ts`, over the one `bboxAround` formula), so a
+  centre+radius pick saves as the square Browse filtered on and the viewport box rides along
+  through the create dialog's checkbox (ticked); `MapAreaControl` edits the box on
+  `/watchdog/:id/edit` ("Use current view"); the two map controls paint through
+  `lib/mapShape`. 0 stored specs carried a circle, so nothing was migrated.
 
 **Next (filter definition, tracked from C4)**
 
 - M2: the agent advertises 10 COMPARABLES ids that `_FCR_OVERRIDE_FIELDS` drops — changes
   agent cohorts, needs an operator ruling, own PR.
 - The agent's null `category_type` path (`api/agent.py`) — same posture as M2.
-- M3: center+radius is a circle in Python and a bounding square in Browse.
 - M4: `tom_days` reaches Stats but not the Browse list.
 - M7: integer area params in the browse RPCs. M11: canonical-advert row vs property rollup.
 - Browse's TS dispatch switches to `sql_kind` (drops `isMinId`/`isMaxId` + the duplicated

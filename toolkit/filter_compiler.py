@@ -8,7 +8,7 @@ relation needs where it lacks a column (rule 23), the filters it spells in its o
 Every relation is aliased `l`. The two adapters keep only what is not a filter:
 `toolkit/comparables._shared_filter_where` (`listings`: the target-relative clauses and the
 cohort invariants) and `api/notifications._build_match_clauses` (`properties_public`: the
-served predicate, the circle and the place chips).
+served predicate, the map box and the place chips).
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ LISTINGS_GRAIN = FilterGrain(
 PROPERTIES_GRAIN = FilterGrain(
     agenda=Agenda.WATCHDOG,
     exprs=MappingProxyType({"plot_area_m2": plot_area_sql("l")}),
-    caller_renders=frozenset({"location", "lat", "lng", "radius_m", "districts"}),
+    caller_renders=frozenset({"location", "bounds", "districts"}),
     clauses=MappingProxyType({"portals": "l.all_sources && %({id})s::text[]"}),
 )
 
