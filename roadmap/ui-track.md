@@ -7,6 +7,13 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Filter presets frame their map area (2026-10-22, no migration)
+- **Built:** loading a preset that saved a map area moves the Browse map to that area (operator
+  request 2026-10-22); before, the cohort filtered on the saved box while the camera stayed put. A
+  saved centre+radius frames its square, as Browse filters on (`filters.savedMapArea` over
+  `effectiveBbox`); a preset without an area leaves the camera alone. One command, `ListingMap`
+  `frame` (the `flyTo` twin), sent by `BrowseExperience` on the preset click.
+
 ### Condition filter: the "Neuvedeno" chip (2026-10-20, migration 644)
 - **Built:** Browse's "Condition (Stav objektu)" filter offers "Neuvedeno" as furnished and ownership
   do: a property whose condition is NULL or off the canon. One meaning on every surface (rule 16):
