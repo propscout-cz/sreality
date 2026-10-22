@@ -278,10 +278,9 @@ export interface ListingFilters {
   /* Browse-only broker scope ("Explore this broker's listings"). Null = off.
    * Deliberately NOT part of a saved preset's identity (PRESET_EXCLUDED_KEYS),
    * NOT in toolkit/filter_registry.py (must stay invisible to the agent /
-   * comparables / estimation agendas), and NOT settable from the filter
-   * sidebar — reachable only via the explore-broker modal's seed or a
-   * `?broker=` URL param, the same entry-only treatment `pipeline` gets
-   * before its own dedicated chip. A property-id allowlist (MS19): the
+   * comparables / estimation agendas). Set by the explore-broker modal's seed,
+   * a `?broker=` URL param, or the sidebar's Advanced → Broker search
+   * (filter-controls/BrokerFilterControl). A property-id allowlist (MS19): the
    * properties where one of this broker's ads matches the portal and status
    * filters, so one ad satisfies both (queries.ts:adScope). */
   brokerId: number | null;
