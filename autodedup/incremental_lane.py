@@ -314,7 +314,9 @@ SETTLE_LAG_S: int = 300
 # How far back the anti-join looks for a row that committed after the cursor passed its id.
 STRAGGLER_WINDOW: int = 5000
 # One round-robin slice of the revive sweep. 434k inactive rows at 20k a pass is a full cycle
-# every ~22 passes (~22 min at the worker's 60 s interval), which is the lane's revival latency.
+# every ~22 passes (~22 min at the worker's 60 s interval), which is the lane's revival latency
+# while no slice holds more revived ids than the feed's fifth of the claim: each fifth beyond
+# that keeps the cursor inside the slice one more pass (E970).
 REVIVE_SLICE: int = 20000
 # How many rows of its OWN cursor index a forward feed reads before the scope is resolved for
 # them (E79). Measured on the live corpus: the three feeds together take 23,234 rows a day —
@@ -395,7 +397,10 @@ BOOTSTRAP_MIN_CLAIM: int = 1
 # the one measurement taken before any was recorded — a conservative start the second pass
 # corrects. The row is halved BEFORE every pass, put back as soon as the pass commits and then
 # overwritten by its measurement (E941), so a pass the system kills mid-way has already halved
-# the next claim.
+# the next claim. A pass the pair budget refuses puts the row back too (E970): the refusal
+# measures the neighbourhood its claim brought, not the claim's size, and after a deploy that
+# moves the engine digest the reject ledger answers nothing, so every claim brings its whole
+# neighbourhood; halved at each refusal, the claim reached one advert and stayed there.
 PASS_BUDGET_S: float = PASS_DEADLINE_S / 2
 PASS_RATE_PER_S: float = 0.1
 # A rate is only recorded when the pass actually claimed enough for the quotient to mean
@@ -422,7 +427,9 @@ BOOTSTRAP_BUDGET_FRACTION: float = 0.75
 # release: most likely the kernel's OOM killer) took on more than its container could hold, so
 # the next process of the same container, which releases that lease before its take
 # (`rt_lease.release_predecessor`), halves `rt_claim_cap:<generation>` in the same commit, and
-# the limit every feed's share is cut from is min(max_listings, cap, the time budget's). The
+# the limit every feed's share is cut from is min(max_listings, cap, the time budget's); the
+# re-claims riding on top of it (E960) take at most the cap as well, since they are most of a
+# pass (E971) and a death that could not shrink them would recur at every pass they ride. The
 # death is the signal; no memory reading decides a halving. Nothing raises the cap again but a
 # seed or a bigger container (E948b): the store keeps growing under a generation (inactive
 # adverts stay in it), so a size that died in this container dies again, and doubling back to
@@ -439,9 +446,9 @@ BOOTSTRAP_BUDGET_FRACTION: float = 0.75
 # proves its dead predecessor ran under the smaller limit: that boot releases the lease and
 # halves nothing, since the death was the smaller container's.
 #
-# Below it a pass's memory is its neighbourhood read, not its claim: a smaller claim would only
-# slow the build. So at the floor a death is no claim's to cure — the neighbourhood read, the
-# revived feed (every revived id of a `REVIVE_SLICE` scan), a re-cut under the same lease, one
+# Below it a pass's memory is its neighbourhood read, not its claim (the feeds' limit and the
+# re-claims each at most the floor): a smaller claim would only slow the build. So at the floor
+# a death is no claim's to cure — the neighbourhood read, a re-cut under the same lease, one
 # bad advert — and its lease is left to its TTL, as before E948: releasing it at every boot
 # would restart the whole worker as fast as it can boot, and the TTL holds that to one death a
 # lease.
@@ -1350,8 +1357,9 @@ class SqlWork:
         self.rate_per_s = float(rate_per_s)
         self.claim_cap = claim_cap
         # E960: the adverts of the groups the last reconcile handed on that this pass re-claims
-        # (chosen and stamped ahead of the pass), offered on its FIRST claim only, so a retry
-        # after the pair budget refused is the normal feeds alone (E75); and how many wait.
+        # (chosen ahead of the pass and stamped tried once it ends on its own terms, E973),
+        # offered on its FIRST claim only, so a retry after the pair budget refused is the
+        # normal feeds alone (E75); and how many wait.
         self.stale_claims = [int(i) for i in stale_claims]
         self.stale_waiting = int(stale_waiting)
         self.stale_budget = int(stale_budget)
@@ -1360,7 +1368,8 @@ class SqlWork:
         # this pass is the one that empties it (E98).
         self.bootstrap_done = False
         self.bootstrap_backlog: int | None = None
-        # What bound this pass's claim — the count, the cap or the clock — for the run summary.
+        # What bound this pass's claim — the count, the cap or the clock — and the re-claims
+        # riding on top of it (`stale`), for the run summary and the rate's measurement.
         self.claim_bound: dict[str, Any] = {}
         self.parents = dict(parents or {})
         self.districts = dict(districts or {})
@@ -1396,9 +1405,7 @@ class SqlWork:
         # its time whether or not it wrote anything.
         by_time = max(BOOTSTRAP_MIN_CLAIM, int(self.pass_budget_s * self.rate_per_s))
         # E948: the size this container survived. It lowers the limit below, so the build's
-        # entered feed (the whole limit) and every other feed's fifth shrink with it; only the
-        # revived feed takes every revived id of its `revive_slice` scan, whatever the limit
-        # (owed since E941).
+        # entered feed (the whole limit) and every other feed's fifth shrink with it.
         cap = int(limit) if self.claim_cap is None else max(1, int(self.claim_cap))
         effective = max(1, min(int(limit), cap, by_time))
         self.claim_bound = {"max_listings": int(limit), "cap": cap,
@@ -1472,10 +1479,14 @@ class SqlWork:
             slice_max, slice_size, revived = (
                 (int(rows[0][0]), int(rows[0][1]), list(rows[0][2] or ()))
                 if rows else (after_revive, 0, []))
-            # A short slice is the end of the sweep, so the cursor wraps and the next pass
-            # starts the cycle again.
-            self._pending[CURSOR_REVIVE] = 0 if slice_size < self.revive_slice else slice_max
-            for listing_id in revived:
+            # E970: a fifth like every other feed, the cursor stopping at the last id taken. A
+            # short slice taken whole is the end of the sweep, so the cursor wraps and the next
+            # pass starts the cycle again.
+            taken = min(len(revived), share)
+            self._pending[CURSOR_REVIVE] = (int(revived[taken - 1]) if taken < len(revived)
+                                            else 0 if slice_size < self.revive_slice
+                                            else slice_max)
+            for listing_id in revived[:taken]:
                 items.append(WorkItem(int(listing_id), "revived", None, None))
 
         # The fifth feed (E79): the rows of this generation the scope has stopped holding.
@@ -1524,9 +1535,11 @@ class SqlWork:
             # longer holds it, so there is nothing to re-decide it into.
             retiring = {item.listing_id for item in items if item.retire}
             items.extend(self._evidence_feed(cursors[CURSOR_EVIDENCE][0], share, retiring))
-        # E960: the groups a merge waits on, re-claimed WHOLE, oldest wait first, so their pairs
-        # are re-decided on facts read now and the group merges in this pass's reconcile — on
-        # the pass's first claim only.
+        # E960: the groups a merge waits on, re-claimed WHOLE in `reconcile._rank`'s order
+        # (E974: Praha, the scope's towns, the rest; E972, E974: flats for sale, flats for rent,
+        # houses and commercial for sale, the rest; the oldest wait first within each; active and
+        # inactive groups together), so their pairs are re-decided on facts read now and
+        # the group merges in this pass's reconcile — on the pass's first claim only.
         self.attempt += 1
         if self.stale_claims or self.stale_waiting:
             retiring = {item.listing_id for item in items if item.retire}
@@ -1534,6 +1547,7 @@ class SqlWork:
                      if self.attempt == 1 else [])
             self.evidence = {**self.evidence, "stale": self.stale_waiting,
                              "stale_claimed": len(taken), "stale_budget": self.stale_budget}
+            self.claim_bound["stale"] = len(taken)
             items.extend(WorkItem(listing_id, "stale", None, None, redecide=True)
                          for listing_id in taken)
         for item in items:
@@ -2889,9 +2903,12 @@ def _measure_rate(claimed: int, elapsed_s: float, previous: float,
                   bound: Mapping[str, Any]) -> tuple[float | None, bool]:
     """The rate a pass stores (E98's blend, E951's doubling) and whether the doubling won."""
     # A claim the clock cut is a measurement at any size: without that, a rate halved to a
-    # one-listing claim would never be measured again.
+    # one-listing claim would never be measured again. The re-claims ride on top of the limit
+    # (E960), so they fill none of it (E971): 200 of them beside the feeds' ~30 would read as
+    # a filled claim at a limit of ~230 and double the rate the feeds' shares are cut from.
     limit = int(bound.get("limit") or 0)
-    saturated = bound.get("bound_by") == "time" and limit > 0 and claimed >= limit
+    fed = claimed - int(bound.get("stale") or 0)
+    saturated = bound.get("bound_by") == "time" and limit > 0 and fed >= limit
     if elapsed_s <= 0 or (claimed < PASS_RATE_MIN_CLAIM and not saturated):
         return None, False
     start = max(1e-6, previous)
@@ -2922,43 +2939,52 @@ def _stale_budget(conn: Any, generation: str, record: Mapping[str, Any], why: st
 
 def _stale_claims(conn: Any, generation: str, control: Mapping[str, Any],
                   handed: Sequence[Sequence[int]], store: "SqlStore",
-                  engine_since: str) -> tuple[list[int], int, int]:
-    """What this pass re-claims for the groups the reconcile handed on (E960), chosen BEFORE the
-    pass and stamped in a commit of its own (`rt_redecide_tried`), so a re-claim the pair budget
-    refuses or the deadline cuts is not tried again for `TRIED_BACKOFF_HOURS` and never holds
-    the head of the queue. None while no reconcile follows the pass (a seed of another
-    version, a closed apply scope) or while the reject ledger holds no row under this store's
-    key (after a deploy that moved it, every neighbour's reject would be re-scored). A build no
-    longer stops it (E964): its reconcile merges the blocks it has read whole.
+                  engine_since: str, cap: int) -> tuple[list[int], int, int, dict[str, str]]:
+    """What this pass re-claims for the groups the reconcile handed on (E960) in
+    `reconcile._rank`'s order — Praha, the scope's towns, the rest (E974), then flats for sale,
+    flats for rent, houses and commercial for sale, the rest (E972, E974:
+    `reconcile.CLAIM_ORDER`), active and inactive groups together — chosen BEFORE the pass, and the
+    back-off map with their groups stamped tried, which `run_incremental` writes
+    (`rt_redecide_tried`) once the pass ends on its own terms (E973). None while no reconcile
+    follows the pass (a seed of another version, a closed apply scope) or while the reject
+    ledger holds no row under this store's key (after a deploy that moved it, every neighbour's
+    reject would be re-scored). A build no longer stops it (E964): its reconcile merges the
+    blocks it has read whole.
     The count is bounded like the rate (`rt_redecide_budget`): written in flight ahead of the
     pass, a count a pass finds still in flight means the last pass that re-claimed died, so this
-    one offers none and halves the budget. Returns the adverts, how many of the queue's adverts
-    are stale, and the budget."""
+    one offers none and halves the budget. A pass takes at most the claim cap of it (E948): the
+    re-claims are most of a pass, so the death that halved the cap must shrink them, and a pass
+    that commits restores the record, never past the cap. Returns the adverts, how many of the
+    queue's adverts are stale, the budget and the back-off map."""
     record = control.get(reconcile.budget_key(generation))
     record = dict(record) if isinstance(record, Mapping) else {}
-    budget = max(1, int(record.get("budget") or reconcile.STALE_FLOOR))
+    budget = max(1, min(int(record.get("budget") or reconcile.STALE_FLOOR), int(cap)))
     if record.get("inflight"):
         budget = max(1, int(record["inflight"]) // 2)
         _stale_budget(conn, generation, {"budget": budget}, "redecide_halved")
-        return [], 0, budget
+        return [], 0, budget, {}
     if not handed or not seed_current(control, generation):
-        return [], 0, budget
-    if reconcile.read_scope(conn)[0] is None or not store.ledger_keyed():
-        return [], 0, budget
+        return [], 0, budget, {}
+    scope = reconcile.read_scope(conn)[0]
+    if scope is None or not store.ledger_keyed():
+        return [], 0, budget, {}
     ages = reconcile.refreshed(conn, generation, [i for group in handed for i in group],
                                fresh_hours=reconcile.FRESH_DECISION_HOURS,
-                               engine_since=engine_since)
+                               engine_since=engine_since, towns=reconcile.scope_towns(scope))
     tried = control.get(reconcile.tried_key(generation))
     taken, stamps = reconcile.select_claims(handed, ages,
                                             tried if isinstance(tried, Mapping) else {},
                                             datetime.now(timezone.utc), budget)
-    _exec(conn, RT_SETTING_WRITE_SQL, {
-        "key": reconcile.tried_key(generation), "value": json.dumps(stamps),
-        "updated_by": f"{LANE_NAME}:redecide"})
     if taken:
         _stale_budget(conn, generation, {"budget": budget, "inflight": len(taken)},
                       "redecide_ahead")
-    return taken, sum(1 for _at, stale in ages.values() if stale), budget
+    return taken, sum(1 for row in ages.values() if row.stale), budget, stamps
+
+
+def _write_tried(conn: Any, generation: str, stamps: Mapping[str, str]) -> None:
+    _exec(conn, RT_SETTING_WRITE_SQL, {
+        "key": reconcile.tried_key(generation), "value": json.dumps(dict(stamps)),
+        "updated_by": f"{LANE_NAME}:redecide"})
 
 
 def _write_rate(conn: Any, generation: str, rate: float, why: str) -> None:
@@ -3095,17 +3121,18 @@ def _put_back_rate(conn: Any, generation: str, rate_per_s: float,
 
 def _after_raise(fresh_conn: Callable[[], Any] | None, conn: Any, generation: str,
                  rate_per_s: float, holder: str, original: BaseException, *,
-                 halve: bool = True) -> None:
-    """What a pass that RAISED still owes, on ONE connection: E913's halving (E930) and its
-    lease's release (E931). Through `fresh_conn` when the caller gave one — the pass's own
-    connection may be the one the server terminated, and a lease that connection cannot
-    release sits until its TTL, skipping every pass of the next ~35 min as "leased" — else on
-    `conn`. The release tries the pass's own connection first, the fresh one only when that
-    fails and new ones from `fresh_conn` only when a database restart took both, so a live pass
-    releases the way every other end of a run does. Best effort:
-    a failure is noted on `original` rather than replacing it — the raise is the signal.
-    `halve=False` once the worker is shutting down (E941): the release still runs, and the
-    rate row is left as it stands, the half written ahead of the pass."""
+                 halve: bool = True, tried: Mapping[str, str] | None = None) -> None:
+    """What a pass that RAISED still owes, on ONE connection: E913's halving (E930), the
+    back-off of the groups it re-claimed (`tried`, E973) and its lease's release (E931).
+    Through `fresh_conn` when the caller gave one — the pass's own connection may be the one
+    the server terminated, and a lease that connection cannot release sits until its TTL,
+    skipping every pass of the next ~35 min as "leased" — else on `conn`. The release tries
+    the pass's own connection first, the fresh one only when that fails and new ones from
+    `fresh_conn` only when a database restart took both, so a live pass releases the way every
+    other end of a run does. Best effort: a failure is noted on `original` rather than
+    replacing it — the raise is the signal. `halve=False` once the worker is shutting down
+    (E941): the release still runs, and the rate row is left as it stands, the half written
+    ahead of the pass."""
     fresh: Any = None
     try:
         try:
@@ -3118,6 +3145,13 @@ def _after_raise(fresh_conn: Callable[[], Any] | None, conn: Any, generation: st
             original.add_note(f"halving {pass_rate_key(generation)} after the raise also "
                               f"failed ({type(exc).__name__}: {exc}); the next pass claims "
                               "the half written ahead of it")
+        if tried is not None:
+            try:
+                _write_tried(fresh if fresh is not None else conn, generation, tried)
+            except Exception as exc:  # noqa: BLE001 — best effort
+                original.add_note(f"stamping {reconcile.tried_key(generation)} after the raise "
+                                  f"also failed ({type(exc).__name__}: {exc}); its re-claims "
+                                  "may be offered again")
         rt_lease.release_after(conn, holder, original, fallback=fresh, connect=fresh_conn)
     finally:
         close = getattr(fresh, "close", None)
@@ -3147,11 +3181,12 @@ def run_incremental(conn_factory: Callable[[], Any], *,
     kernel's OOM killer — has already slowed the next claim; a pass that committed puts the
     previous rate back before its reconcile and overwrites it with its measurement after it
     (doubled when it had room, E951; an idle pass, too small to measure, leaves the previous
-    rate), and a refused one puts the previous rate back too. A pass past its deadline rolls
-    back and keeps the halving (E913); so does a pass that RAISED, which writes it again through
-    `fresh_conn` — a factory for a NEW connection, since its own may be dead — or on its own
-    connection when the caller gives none (E930). Every release of the pass's lease falls back
-    to new connections from it too, when a database restart took the pass's own.
+    rate), and a refused one — by the pair budget (E970) or a rail — puts the previous rate back
+    too. A pass past its deadline rolls back and keeps the halving (E913); so does a pass that
+    RAISED, which writes it again through `fresh_conn` — a factory for a NEW connection, since
+    its own may be dead — or on its own connection when the caller gives none (E930). Every
+    release of the pass's lease falls back to new connections from it too, when a database
+    restart took the pass's own.
 
     `holder` names the lease the pass takes (`pass_holder()` when the caller names none) and
     `stopping` says the caller is shutting down (E941): the worker's SIGTERM path releases
@@ -3290,8 +3325,8 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         engine_since = _engine_since(conn, generation, control.get(engine_key(generation)),
                                      store.engine_digest)
         handed = reconcile.handed_groups(control.get(reconcile.redecide_key(generation)))
-        stale_claims, stale_waiting, stale_budget = _stale_claims(
-            conn, generation, control, handed, store, engine_since)
+        stale_claims, stale_waiting, stale_budget, tried = _stale_claims(
+            conn, generation, control, handed, store, engine_since, int(cap["cap"]))
         work = SqlWork(conn, scope, generation, parents=parents, districts=districts,
                        bootstrap=bootstrap,
                        pass_budget_s=(BOOTSTRAP_BUDGET_FRACTION * PASS_DEADLINE_S if bootstrap
@@ -3368,7 +3403,8 @@ def run_incremental(conn_factory: Callable[[], Any], *,
             # counts — attempted on the pass's connection, then the fresh one, then new ones,
             # and noted on the raise when none could — so the `finally` releases nothing twice.
             _after_raise(fresh_conn, conn, generation, rate_per_s, holder, exc,
-                         halve=not shutting_down())
+                         halve=not shutting_down(),
+                         tried=tried if stale_claims and not shutting_down() else None)
             leased = False
             raise
         if stopped == STOPPING:
@@ -3378,24 +3414,36 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                     "reconcile": {"skipped": f"pass_{STOPPING}"}, "generation": generation,
                     "predecessor_released": predecessor, "claim_cap": cap,
                     "spent_usd": 0.0, **pass_memory()}
-        if stopped and not shutting_down():
+        # The pass did not die: it committed, or the pair budget refused it (E75), which measures
+        # the neighbourhood its claim brought, not the claim's size (E970).
+        survived = stopped == "pair_budget" or (not stopped and result is not None)
+        if survived and not shutting_down():
+            # E941: its claim did not kill it, so the half written ahead goes back NOW, before
+            # the reconcile, whose planning runs outside the pass's statement guards: a raise
+            # there would otherwise leave the half standing, and eight such passes take the
+            # claim to one advert. A committed pass's measurement below, once the reconcile has
+            # run, still overwrites it. E970: a refusal puts it back too; halved, the refusals
+            # after the 2026-10-19 digest move took the rate from 0.116 to 0.0002 and the claim
+            # to one advert.
+            _write_rate(conn, generation, rate_per_s, "restored")
+        elif stopped and not shutting_down():
             # E913: the next pass claims half as much (the half E941 wrote ahead, named).
             _write_rate(conn, generation, rate_per_s / 2.0, "halved")
-        if not stopped and result is not None and not shutting_down():
-            # E941: the pass committed, so its claim did not kill it — the half written ahead
-            # goes back NOW, before the reconcile, whose planning runs outside the pass's
-            # statement guards: a raise there would otherwise leave the half standing, and
-            # eight such passes take the claim to one advert. The measurement below, once the
-            # reconcile has run, still overwrites it.
-            _write_rate(conn, generation, rate_per_s, "restored")
-        if stale_claims and not shutting_down() and (
-                stopped == "pair_budget" or (not stopped and result is not None)):
-            # E960: the pass carrying the re-claims did not die. Committed WITH them (its first
-            # attempt), the budget is whole again; refused or retried without them, it stands.
-            committed = not stopped and result is not None and result.attempts == 1
-            _stale_budget(conn, generation,
-                          {"budget": reconcile.STALE_FLOOR if committed else stale_budget},
-                          "redecide_committed" if committed else "redecide_refused")
+        if stale_claims and not shutting_down():
+            # E973: the pass that carried the re-claims ended on its own terms — it committed,
+            # the pair budget refused them or its deadline cut it (a raise stamps on its own
+            # path) — so their groups wait `TRIED_BACKOFF_HOURS` (E960). Stamped only now: a
+            # pass the shutdown stopped, whose lease was lost or that the system killed wrote
+            # none, so a deploy never locks the head of the queue out (2026-10-20: 134 groups,
+            # 616 adverts, for 6 h); its count in flight still pauses and halves the next one.
+            _write_tried(conn, generation, tried)
+            if survived:
+                # E960: committed WITH them (its first attempt), the budget is whole again;
+                # refused or retried without them, it stands.
+                committed = not stopped and result is not None and result.attempts == 1
+                _stale_budget(conn, generation,
+                              {"budget": reconcile.STALE_FLOOR if committed else stale_budget},
+                              "redecide_committed" if committed else "redecide_refused")
         summary: dict[str, Any] = (result.to_json() if result is not None
                                    else {"counts": {}, "aborted": stopped})
         summary["aborted"] = stopped

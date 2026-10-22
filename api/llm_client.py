@@ -13,8 +13,7 @@ Two responsibilities:
    column distinguishes who served the request.
 
 The DB-backed system prompt / model lookups (`app_settings`) are
-still here for backwards compatibility with the URL parser and the
-summarize / image-compare callers. Agent-mode callers go through
+still here for the summarize / image-compare callers. Agent-mode callers go through
 the `skills` table instead.
 
 If a model is missing from a provider's PRICES dict, the call still
@@ -63,7 +62,6 @@ CalledFor = Literal[
     "refine_skill",
     "discover_condition_markers",
     "score_listing_condition",
-    "summarize_region_dispositions",
     "enrich_listing_description",
     "screen_exam_image",
     "suggest_exam_answer",
@@ -129,7 +127,7 @@ def provider_for_model(model: str) -> str:
 
 @dataclass
 class LLMResponse:
-    """Backwards-compatible response for the URL-parser + summary callers.
+    """Backwards-compatible response for the summary / vision callers.
 
     Today's non-agent callers expect a plain `text` string and a list
     of `{id, name, input}` tool-call dicts. Keep that shape so this
@@ -180,7 +178,7 @@ class LLMClient:
         messages: list[dict[str, Any]] | list[Message],
         system: str | None = None,
         tools: list[dict[str, Any]] | list[ToolSchema] | None = None,
-        model: str | None = None,
+        model: str,
         max_tokens: int = 4096,
         estimation_run_id: int | None = None,
         provider: str | None = None,
@@ -188,20 +186,19 @@ class LLMClient:
     ) -> LLMResponse:
         """Single API used by every LLM caller in the codebase.
 
-        Accepts either the legacy dict shapes (used by the URL parser
-        and the summary/vision tools) or the neutral Message /
-        ToolSchema types (used by the agent loop). Translates dicts
+        Accepts either the legacy dict shapes (used by the summary /
+        vision tools) or the neutral Message / ToolSchema types (used
+        by the agent loop). Translates dicts
         to neutral types before dispatch. `tool_choice` forces the named
         tool; it is forwarded only when set, so providers (and test
         fakes) that predate the parameter keep working for callers that
         don't use it.
         """
-        resolved_model = model or self.resolve_model()
         # A caller that passes only a model (e.g. a dedup lane reading its
         # app_settings value) doesn't know the backend; derive it from the id so
         # a gpt-* / gemini-* model routes correctly. An explicit provider wins.
         if provider is None:
-            provider = provider_for_model(resolved_model)
+            provider = provider_for_model(model)
         prov = self.provider(provider)
         neutral_messages = [_to_neutral_message(m) for m in messages]
         neutral_tools = [_to_neutral_tool(t) for t in (tools or [])]
@@ -215,7 +212,7 @@ class LLMClient:
                 system=system or "",
                 messages=neutral_messages,
                 tools=neutral_tools,
-                model=resolved_model,
+                model=model,
                 max_tokens=max_tokens,
                 **extra_kwargs,
             )
@@ -226,7 +223,7 @@ class LLMClient:
             # (it keyed off "no rows"). Best-effort: never let the bookkeeping mask the real
             # error — the original exception always re-raises unchanged.
             self._record_failure(
-                called_for=called_for, provider=provider, model=resolved_model,
+                called_for=called_for, provider=provider, model=model,
                 duration_ms=int((time.monotonic() - mono_start) * 1000),
                 estimation_run_id=estimation_run_id, error=str(exc),
             )
@@ -234,14 +231,14 @@ class LLMClient:
         duration_ms = int((time.monotonic() - mono_start) * 1000)
 
         cost = compute_cost_usd(
-            price=prov.price_for(resolved_model),
-            model=resolved_model,
+            price=prov.price_for(model),
+            model=model,
             usage=completion.usage,
         )
         llm_call_id = self._record_call(
             called_for=called_for,
             provider=provider,
-            model=resolved_model,
+            model=model,
             usage=completion.usage,
             cost_usd=cost,
             duration_ms=duration_ms,
@@ -298,7 +295,7 @@ class LLMClient:
         self._check_daily_cost(just_recorded=cost_usd)
         return call_id
 
-    def resolve_model(self, key: str = "llm_parse_model") -> str:
+    def resolve_model(self, key: str) -> str:
         with self._conn.cursor() as cur:
             cur.execute(
                 "SELECT value FROM app_settings WHERE key = %s",
@@ -312,7 +309,7 @@ class LLMClient:
             return value
         return DEFAULT_MODEL
 
-    def resolve_system_prompt(self, key: str = "llm_parse_system_prompt") -> str:
+    def resolve_system_prompt(self, key: str) -> str:
         with self._conn.cursor() as cur:
             cur.execute(
                 "SELECT value FROM app_settings WHERE key = %s",

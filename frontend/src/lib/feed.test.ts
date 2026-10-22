@@ -11,10 +11,12 @@ import {
   groupByDay,
   pragueClock,
   pragueDayKey,
-  withPortals,
+  feedSearch,
+  feedViewOf,
+  isNewestFirst,
+  sortLabel,
 } from './feed';
-import { NO_PORTALS } from './portals';
-import type { CardRow } from './queries';
+import { CARD_SORTS, DEFAULT_SORT, parseSort, type CardRow } from './queries';
 import type { FilterPreset } from './types';
 
 const preset = (filter_spec: FilterPreset['filter_spec']): FilterPreset => ({
@@ -44,8 +46,9 @@ describe('scope → filters', () => {
       dispositions: ['2+kk'],
       priceMax: 8_000_000,
       showDismissed: true,
-      pipeline: { stage_ids: [] },
-      collections: [4],
+      pipeline: { set: 'in', in: [], out: [] },
+      collections: { set: null, in: [4], out: [] },
+      tags: { set: 'out', in: [], out: [] },
     };
     const f = feedFiltersForPreset(preset({ filters: saved, sort: '-price_czk' }));
     expect(f.categoryType).toBe('prodej');
@@ -53,7 +56,8 @@ describe('scope → filters', () => {
     expect(f.priceMax).toBe(8_000_000);
     expect(f.showDismissed).toBe(false);
     expect(f.pipeline).toBeNull();
-    expect(f.collections).toEqual([]);
+    expect(f.collections).toBeNull();
+    expect(f.tags).toBeNull();
   });
 
   it('keeps a map area the operator saved with the preset', () => {
@@ -85,12 +89,41 @@ describe('scope → filters', () => {
     expect(f.categoryMain).toEqual(['dum']);
   });
 
-  it("lets the portal chips replace the scope's own portal filter, both sides, only when set", () => {
-    const f = { ...FEED_ALL_FILTERS, portals: ['bazos'], portalsExcluded: ['sreality'] };
-    expect(withPortals(f, null)).toEqual(f);
-    const chosen = { portals: ['idnes'], portalsExcluded: [], portalsExcludedActiveOnly: false };
-    expect(withPortals(f, chosen)).toEqual({ ...f, ...chosen });
-    expect(withPortals(f, NO_PORTALS)).toEqual({ ...f, ...NO_PORTALS });
+});
+
+describe("the view in the URL — Browse's contract", () => {
+  it('writes Vše as an explicit all-categories, any-deal, live-ads query', () => {
+    const sp = feedSearch({ filters: FEED_ALL_FILTERS, sort: DEFAULT_SORT, presetId: null });
+    expect(sp.toString()).toBe('cat=&deal=any&status=active');
+    expect(feedViewOf(sp)).toEqual({ filters: FEED_ALL_FILTERS, sort: DEFAULT_SORT, presetId: null });
+  });
+
+  it('carries the chosen preset and a non-default order, as Browse spells them', () => {
+    const view = {
+      filters: { ...DEFAULT_FILTERS, categoryType: 'prodej' as const, dispositions: ['2+kk' as const] },
+      sort: { field: 'price_czk' as const, direction: 'asc' as const },
+      presetId: 'vys',
+    };
+    const sp = feedSearch(view);
+    expect(sp.get('sort')).toBe('price_czk');
+    expect(sp.get('preset')).toBe('vys');
+    expect(feedViewOf(sp)).toEqual(view);
+  });
+
+  it('cuts only newest first into days', () => {
+    expect(isNewestFirst(DEFAULT_SORT)).toBe(true);
+    expect(isNewestFirst({ field: 'first_seen_at', direction: 'asc' })).toBe(false);
+    expect(isNewestFirst({ field: 'price_czk', direction: 'desc' })).toBe(false);
+  });
+
+  it('names every order a URL can reach by its menu label, never a raw token', () => {
+    const labels = CARD_SORTS.map((o) => o.label);
+    for (const field of ['first_seen_at', 'last_seen_at', 'price_czk', 'price_per_m2',
+                         'area_m2', 'mf_gross_yield_pct', 'estate_area']) {
+      expect(labels).toContain(sortLabel(parseSort(field)));
+      expect(labels).toContain(sortLabel(parseSort(`-${field}`)));
+    }
+    expect(sortLabel(parseSort('last_seen_at'))).toBe('Naposledy viděno');
   });
 });
 

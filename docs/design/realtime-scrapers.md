@@ -21,7 +21,7 @@ WRITE time, and five independent mechanisms (priority-bucketed claiming, transac
 `enqueued_at`, thread-pool completion-order fetch, batch-constant `now()`, concurrent drain
 processes) reorder a listing between discovery and that write. See
 `docs/design/portal-order-fidelity.md` for the full analysis and the fix
-(`listings.discovery_seq`, migration 368). The latency claim in this doc is unaffected — cron
+(`listings.discovery_seq`, migration 368; dropped with the per-ad lane by 618). The latency claim in this doc is unaffected — cron
 quantization is real and independent of ordering fidelity — but the queue was never actually
 order-preserving the way this sentence implied. The latency is **cron quantization on GitHub
 Actions**:
@@ -99,7 +99,8 @@ photo-sharing cross-portal merge ≤ 60 min · delisting ≤ 6 h market-wide / �
 notification ≤ 2 min after the property row exists. `published_at` (migration 266) and the
 `detail_queue_completions` ledger (migration 265) are the measurement substrate; health
 checks move from fixed batch-era thresholds to cadence/SLO-scaled ones, with reds pushed
-through the existing notification outbox.
+through the existing notification outbox (*superseded: the outbox was deleted 2026-10-21; system
+alerts live on Health and the canary e-mail, ruling R2b*).
 
 ## Costs & constraints
 
@@ -172,7 +173,8 @@ Budget shape, and the two rails that make the shared lease actually exclusive:
   unchanged: every loop tests the budget between batches and they run concurrently, so N workers
   still overrun by at most ONE batch.
 - `max_seconds` is clamped to ≤ 900 and `batch_size` to ≤ 1000, so a HEALTHY pass stays far below
-  `check_worker_lane_stall`'s 1200 s `in_flight` warn and below `LANE_PASS_TIMEOUT_SECONDS`.
+  the jobs check's 1,200 s in-flight Watch (`jobs_lane_inflight_warn_s`) and below
+  `LANE_PASS_TIMEOUT_SECONDS`.
   Throughput does not need a long pass — the queue IS the cursor.
 - **The lease TTL is `max_seconds + batch_size × 2 s` (floor 120 s), not a flat constant.**
   `lease.held` stamps `lease_expires_at` once and never renews it, and `drain.run` tests its
@@ -286,8 +288,11 @@ lag, a 45 s budget and 2 000-row batches. Env knobs on the Railway service:
 - **No lease, no in-process lock.** One SELECT plus one INSERT per portal; the enqueue is idempotent
   on `(source, native_id)` and never disturbs a claimed row. A missing `location_pin_audit_mv` (a
   branch database) skips the tick with ONE warning per process.
-- **A daily lane is not a dead lane.** `check_worker_lane_stall` reads `in_flight_s` — a pass
-  RUNNING too long — and skips a lane that is idle between passes, so no threshold changed.
+- **A daily lane is not a dead lane.** The jobs check judges a lane late against the `interval_s`
+  it wrote, only past `max(3 × interval, interval + 2 × last duration, 15 min)`, so a daily lane
+  between ticks reads fine (each boot also runs one pass after the 300 s first delay); a failing
+  pass of a lane whose interval is an hour or more is a Problem at once, since it passes about
+  once per boot.
 
 **Sold-comps lane (sold-comps W2, ships DARK):** fetch registered sales from reas.cz — an external
 FACT feed, not a tenth portal — for the towns the operator is actually working in. The interval is
@@ -369,7 +374,9 @@ nothing else.
 - **The engine bounds its own time (E913).** A pass reads its deadline (1,050 s) between steps and
   every 256 pair decisions; past it the one transaction rolls back (nothing written, no cursor
   moved), the lease is freed and the pass records its rate HALVED, so the next claim is half the
-  size. The claim is the engine's: its time budget (half the deadline) × the rate it measured. The
+  size. The claim is the engine's: its time budget (half the deadline) × the rate it measured. A
+  pass the pair budget refuses keeps the rate it started from (E970): the refusal measures the
+  neighbourhood, not the claim, and halving it froze the lane at one advert after a digest move. The
   worker's statement-refusing deadline wrapper and in-process back-off are gone. Deadline + one
   120 s statement stays under the 1,200 s stall warn and `LANE_PASS_TIMEOUT_SECONDS`; the 2,400 s
   lease also covers the reconcile's last group. A calibration re-cut is a tick of its own under the
@@ -382,8 +389,8 @@ nothing else.
   engine logs the release as it happens and, in the same commit, halves
   `rt_claim_cap:<generation>` (floor 25). The cap lowers the limit the feeds' shares are cut
   from, min(`max_listings`, cap, the time budget's), `bound_by` `cap` when it binds: in the build
-  the entered feed takes the whole limit and the others a fifth each on top; only the revived
-  feed takes every revived id of its 20,000-row slice, whatever the limit. Only a seed or a
+  the entered feed takes the whole limit and the others a fifth each on top, the revived feed
+  among them (E970: its cursor stops at the last id it took). Only a seed or a
   bigger container raises the cap again, since the store keeps growing and a size that died in
   this container would die again (E948b): the row records the biggest memory limit its deaths
   since the last seed or reset happened under (`limit_mb`, the cgroup limit read each pass; an
@@ -435,7 +442,8 @@ nothing else.
 - **A refusal is an error, never a crash.** The engine refuses by raising `SystemExit` (a storage
   budget, a scope it cannot walk, a missing migration); carried out of `asyncio.to_thread` that
   would stop the event loop and every lane, so the lane records it as `errors: 1` with the text,
-  counts it as a failed pass (`failed_passes`, `last_failure_at`) and logs it on the transition
+  counts it as a failed pass (`failed_passes`, `failing_since`, `last_error` = the refusal) and
+  logs it on the transition
   only. A pass that rolled back (deadline or pair budget) ran and counts as an error. Heartbeat
   `details.autodedup.last` = `{ran, claimed, scored (pairs), grouped (groups written), merged
   (production merges the reconcile made), reconcile (ran / its skip or stop reason) +
@@ -448,9 +456,10 @@ nothing else.
   reconcile_deferred (the run cap), must_link_dissolved (operator `same` closures the pass
   dissolved, E926), skipped (0/1) + reason (`recut` on a re-cut tick, E944), errors (0/1) +
   refused/aborted/recut_failed, recut (E944: the cut's outcome on a re-cut tick, or a death or an
-  `unfit` the pass recorded; also kept as the lane's own `recut` field until the worker restarts,
-  `rt_recut:<gen>.last` being the durable copy), calibration_built_age_days (E944),
-  deadline_exceeded, seconds, held, retired, latency_p50_s, latency_p95_s, bound_by, claim_cap
+  `unfit` the pass recorded; also kept as the lane's own `recut` field, which the boot seed
+  carries across a restart, `rt_recut:<gen>.last` being the durable copy),
+  calibration_built_age_days (E944),
+  deadline_exceeded, seconds, held, retired, bound_by, claim_cap
   ({cap, reason, limit_mb}) + predecessor_released (E948; a skip carries it only when set, or
   instead predecessor_kept, the lease the cap's floor left to its TTL), peak_rss_mb (E941) +
   rss_mb + memory_limit_mb (the container's cgroup limit, read each pass; E948, E948b; on every
@@ -466,8 +475,10 @@ nothing else.
   (E943: what the pair budget counts, the last claim's and each claim's), ledger_skipped +
   ledger_written (the wanted below-floor rejects the reject ledger answered instead of a re-score,
   and the rejects the pass ledgered), dirty + reads (E960: the probe-key neighbourhood the last
-  attempt re-retrieved from the store's keys and guard rows, and the adverts whose facts the pass
-  read, by why — claim, order, digest, decided, cluster, rail — summed over its attempts),
+  attempt re-retrieved from the store's keys and guard rows, a neighbourhood and never a backlog:
+  the build's backlog, rate and decision lag are the Health `dedup` check's, read from the stores;
+  and the adverts whose facts the pass read, by why — claim, order, digest, decided, cluster,
+  rail — summed over its attempts),
   enter_scan (E940: the scope-block walks of `public` — `walks` this pass, `pages` (the walks that
   came back a full `ENTER_SLICE` page, so the block goes on past them: a page, never a silent
   truncation), `page_of` (every block inside a cycle of pages, `[page, of]`, `of` null until its
@@ -485,6 +496,68 @@ nothing else.
   ago (or before the current engine) waits one more pass, which re-claims it (E960) — an
   arrival is refreshed in its own pass, so arrival merges do not wait; sub-hour photo merges need the vision producer moved inline, which
   is an operator decision (D901, rule 7).
+
+**Health lane (Health dashboard wave 3, ships LIVE):** the checks the registry hosts on
+`realtime-worker` (`jobs`, `capacity`, `llm` since wave 3; `scraping`, `publishing`, `delisting` and
+the `coverage` gauge since wave 4; `dedup` since Health dashboard sprint wave 5; `parsing` and the
+`data_quality`, `location_town_coverage` and `text_extraction` gauges since wave 6;
+`docs/design/health-dashboard.md` § 4) are measured
+here, every `HEALTH_TICK_SECONDS` (60 s), by THE harness:
+`scripts.verify_pipeline.run_due(conn, THRESHOLDS, "realtime-worker", now=…,
+lane_budget_s=HEALTH_PASS_BUDGET_SECONDS)`, never a copy.
+- **A constant tick, no switch.** The text_extract lane's shape: no `app_settings` row, so no read
+  that can fail and no fail-safe-0; the brake is a deploy. Due-ness is read from the stored
+  results, so a pass with nothing due is one indexed read and a restarted worker re-measures
+  nothing; alarms run before gauges, each check on its own clock (`CHECK_BUDGET_S`; 180 s for
+  `parsing`) inside the 500 s pass (since Health dashboard sprint wave 6: the alarms' 495 s always
+  fit, and a gauge whose budget no longer fits what is left waits for the next pass; 360 s in waves
+  4-5), and every result is stored as it lands, with `run_at` = the pass's start.
+- **One pass at a time.** `_HEALTH_PASS_LOCK`: the harness keeps per-run module state
+  (`scripts.checks.clock.LANE` and `PASS`, the per-pass memo), so a pass abandoned at
+  `LANE_PASS_TIMEOUT_SECONDS` must not overlap the next; a skipped pass is
+  `last.previous_pass_running`.
+- **The registry, once per process.** The first pass projects this host's `health_checks` rows
+  (`project_registry`: upsert its keys, delete its rows no Check declares), retried every pass
+  until it succeeds. The canary projects the `github-actions` rows the same way; neither touches
+  the other host's rows.
+- **Results are kept 35 days (Q5, 2026-10-18).** Once a day per process the pass deletes older
+  `pipeline_check_results` rows, 10,000 by `ctid` per statement until none is left. The attempt is
+  stamped first, so a prune that raises waits a day, never a minute; a restart's prune finds only
+  what aged out since the last one.
+- **Lazy import.** `verify_pipeline` is imported inside the pass. The image carries `scripts/`, but
+  `migrations/` is dockerignored, which is why `migration_drift` stays on GitHub.
+- Heartbeat `details.health.last` = `{measured: [keys], pruned: n}` (`pruned` is null on a pass
+  that did not prune). The watcher (`health_liveness()`, migration 620) judges the lane from its
+  own pass in this heartbeat entry (the `health_lane` cell, migration 621: no completed pass for 10
+  min, counted from the later of the last pass and the worker's boot, a pass in flight or failing
+  for 10 min).
+
+**The heartbeat row (Health dashboard wave 3).** `worker_heartbeats.details` holds one object per
+name in `LANES` (the module constant `_amain` registers its lanes from, and asserts) from boot.
+Per lane: `interval_s` (written on EVERY wake, the idle one included, so `interval <= 0` reads off
+rather than absent; null until the lane first wakes in this process, because the boot seed does
+not carry it, so a lane that never wakes reads "never woke", not late), `passes`,
+`failed_passes`, `last_pass_at`,
+`last_duration_s`, `started_at`, `in_flight_s` (resolved at the snapshot), `last`, `failing_since`
+(the first failed pass of the current streak; a completed pass clears it) and `last_error` (≤ 300
+chars: `pass exceeded 1800 s`, `<Type>: <message>` for a raise, text_extract's `fatal`, autodedup's
+refusal). A pass fails exactly where it did before: a raise, the 1,800 s timeout, text_extract
+`fatal`, autodedup's refusal. The probe and drain lanes add `portal_errors`,
+`{portal: {failing_since, last_error}}`, for a portal that raised or, on the probe, whose every
+category failed (`every category failed`: `run_index_probe`'s rc 1 raises nothing); the portal's
+next success deletes its entry, so does listing it in the lane's disabled sources, and a portal
+the pass did not attempt (proxy unset, nothing claimable, the pass stopped) keeps it. This
+replaced `_record_lane_failure`, a blocking `ops_incidents` signature write per failing portal on
+the pass's thread, retired with the signature engine. The heartbeat lane records its own pass like
+every lane (`last` = `{beat: true}`), and drain or images with a slice ≤ 0 record
+`{skipped: "slice<=0"}`: off, never late. **Boot seeding:** before the first beat replaces the
+row, `_seed_from_previous_beat` copies every lane key but `started_at`, `in_flight_s`,
+`interval_s` and the retired `last_failure_at` from the previous row, in one bounded try (one
+connect attempt, 10 s; a miss seeds nothing and logs once), so ~11 deploys a day reset no counter,
+streak, portal error or autodedup `recut`. The jobs check reads all of it (`lane/<lane>` and
+`lane/<lane>/<portal>` cells; the heartbeat lane itself is the watcher's to judge). The watcher
+reads `beat_at` for every worker, plus the `health` entry (`last_pass_at`, `failing_since`,
+`last_error`, `in_flight_s`) and the row's `started_at` for its `health_lane` cell (migration 621).
 
 **Liveness — the worker cannot freeze silently (2026-09-30).** From 2026-09-29 23:42 to 07:22 UTC
 the worker wrote no heartbeat and ran no lane, yet never exited. ceskereality answered 403 to
@@ -526,12 +599,13 @@ Four changes, each closing one link:
   `max_claims` at what is waiting) instead of 20 slots per pass whatever the work.
 - **Probe and drain hold pass locks** like the five lanes that already did, and so does the broker
   lane (Broker Unify W3; an abandoned pass's `broker_resolution_lock` row goes stale, so the lease
-  alone would let the next tick run beside it), all eight through one `_PassLock`: each pass runs in ONE thread, so a lane leaks at most one; a skipped pass records
-  `previous_pass_running`. While an abandoned pass still holds its lock, the lane's `in_flight_s`
-  keeps counting from that pass's start (a skip otherwise reads like a quick pass), so
-  `worker_lane_stall` warns at 20 min and fails at 60.
+  alone would let the next tick run beside it), all eight (the health lane's, wave 3, makes nine; the notifications lane's, notifications W2a, ten)
+  through one `_PassLock`: each pass runs in ONE thread, so a lane leaks at most one; a skipped pass
+  records `previous_pass_running`. While an abandoned pass still holds its lock, the lane's
+  `in_flight_s` keeps counting from that pass's start (a skip otherwise reads like a quick pass),
+  so the jobs check's lane cell reads Watch past 1,200 s in flight and Problem past 1,800 s.
 - **The heartbeat is the executor's canary.** It stays on the default executor every lane shares,
-  pinned at 32 threads (`LANE_EXECUTOR_THREADS`; fourteen lanes hold at most one each in normal
+  pinned at 32 threads (`LANE_EXECUTOR_THREADS`; the sixteen `LANES` hold at most one each in normal
   running), so anything that fills it (leaked threads from the lanes without a pass lock, say)
   stops the beats. Those threads share two glibc malloc arenas (`MALLOC_ARENA_MAX=2`, E949). A
   beat connects once with a 10 s timeout, so a slow connect cannot outlast the watchdog's bound
@@ -564,7 +638,7 @@ arm its own then). After a blocked
 portal recovers, reset its `portal_rate_state` row (`penalty_factor = 1`, `next_slot_at = now()`)
 before lifting the kill switches: a refused lease does not decay the penalty.
 
-**Deferred — W5b (health/SLO re-derivation):** cadence-scale the fixed thresholds
+**Deferred — W5b (health/SLO re-derivation):** *Superseded 2026-10-18 by `docs/design/health-dashboard.md`.* cadence-scale the fixed thresholds
 (`detail_queue_backlog` by oldest-row AGE not count — matview line ~301; `delisting_spike` as
 % of portal size — line ~264), close silent-greens (image-pipeline liveness, dedup
 dirty-banner staleness, drift no-baseline→warn, monitor-of-monitors on

@@ -21,6 +21,13 @@ without a (level, code) cannot exist: `DistrictChip` refuses one (a 422 on every
 write), the typeahead never makes one, and migration 606 deleted the last stored
 rows that held one. Nothing re-reads a chip by name — a name can mean several
 units ("Jihlava" is an obec AND an okres), so a re-guess could only widen.
+
+THE MAP BOX is the other spatial shape, and the only one (rule 16): `MapBounds` is
+Browse's `MapBounds` (`lib/filters.ts`), the box Browse filters on — its viewport, or
+the square around a centre+radius pick (`effectiveBbox`) — and `bounds_where` renders
+it as the lat/lng band Browse's list (`queries.ts applyFilters`) and both stats RPCs
+(`bbox_west` … `bbox_north`) apply, so a watchdog saved from Browse watches the rows
+Browse showed. A row with no point falls out of the band, as it does there.
 """
 
 from __future__ import annotations
@@ -29,7 +36,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, get_args
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 ChipLevel = Literal["kraj", "okres", "obec", "cast_obce", "ulice"]
 
@@ -37,8 +44,7 @@ ChipLevel = Literal["kraj", "okres", "obec", "cast_obce", "ulice"]
 # so the SPA, the API and the RPC bodies can be diffed.
 LEVEL_ORDER: tuple[ChipLevel, ...] = get_args(ChipLevel)
 # level -> the code column on every chip-filtered relation: `browse_projection`
-# (materialized as `browse_list` and `properties_map_mv`), `properties_public`,
-# `pipeline_board_public` and `listing_feed_public`.
+# (materialized as `browse_list`), `properties_public` and `pipeline_board_public`.
 LEVEL_COLUMN: dict[ChipLevel, str] = dict(zip(
     LEVEL_ORDER, ("region_id", "okres_id", "obec_id", "cast_obce_id", "ulice_id"), strict=True,
 ))
@@ -53,6 +59,21 @@ class DistrictChip(BaseModel):
     excluded: bool = False
     level: ChipLevel
     id: int = Field(gt=0)
+
+
+class MapBounds(BaseModel):
+    """The map box: WGS84 degrees, west < east and south < north (the SPA's `parseBounds` rule)."""
+
+    west: float = Field(ge=-180, le=180)
+    south: float = Field(ge=-90, le=90)
+    east: float = Field(ge=-180, le=180)
+    north: float = Field(ge=-90, le=90)
+
+    @model_validator(mode="after")
+    def _ordered(self) -> "MapBounds":
+        if not (self.west < self.east and self.south < self.north):
+            raise ValueError("bounds need west < east and south < north")
+        return self
 
 
 @dataclass(frozen=True)
@@ -127,3 +148,21 @@ def district_where(
         # in-memory `!hits` both KEEP such a row, and this makes SQL keep it too.
         where.append(f"NOT COALESCE({exc}, false)")
     return where, params
+
+
+def bounds_where(bounds: MapBounds | None, alias: str) -> tuple[list[str], dict[str, Any]]:
+    """Render the map box as the lat/lng band Browse applies; `alias` must expose `lat` + `lng`."""
+    if bounds is None:
+        return [], {}
+    if not alias:
+        raise ValueError("bounds_where requires an alias")
+    return (
+        [
+            f"{alias}.lng >= %(bbox_west)s", f"{alias}.lng <= %(bbox_east)s",
+            f"{alias}.lat >= %(bbox_south)s", f"{alias}.lat <= %(bbox_north)s",
+        ],
+        {
+            "bbox_west": bounds.west, "bbox_east": bounds.east,
+            "bbox_south": bounds.south, "bbox_north": bounds.north,
+        },
+    )

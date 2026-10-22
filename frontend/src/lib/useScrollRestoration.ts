@@ -3,7 +3,7 @@
  * restore WINDOW scroll on history navigation, but not the scrollTop of a
  * nested overflow element — which is exactly what the Browse cards column
  * is. So this is needed only for element-scrolled surfaces; the window-
- * scrolled ones (table / API feeds) rely on native restoration plus a warm
+ * scrolled ones (API feeds) rely on native restoration plus a warm
  * React Query cache (pages still rendered on Back → full height → native
  * restore lands correctly).
  *

@@ -19,8 +19,7 @@ import { districtChipKey } from '../lib/districtCodes';
 import type { DistrictChip } from '../lib/filters';
 import { LocationTypeahead } from '../components/filter-controls/LocationTypeahead';
 import ErrorBanner from '../components/ErrorBanner';
-import { Field, PickButton, Segmented, Switch } from '../components/controls';
-import { BufferedNumberInput } from '../components/FilterForm';
+import { DecimalField, Field, PickButton, Segmented, Switch } from '../components/controls';
 import { SUBTYPE_LABELS_BY_MAIN } from '@/lib/enums';
 import { ROUTES } from '@/lib/routes';
 import { fmtCount } from '../lib/format';
@@ -220,12 +219,13 @@ function BrokersDesktop() {
             ) : (
               <div className="flex items-center gap-2">
                 <div className="w-28">
-                  <BufferedNumberInput
+                  <DecimalField
+                    cell
+                    integer
+                    label="Minimální cena"
                     value={minPriceCzk}
-                    coerce="int"
                     placeholder={categoryType === 'pronajem' ? 'Kč/měsíc' : 'Kč'}
                     onChange={setMinPriceCzk}
-                    ariaLabel="Minimální cena"
                   />
                 </div>
                 <label

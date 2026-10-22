@@ -14,8 +14,8 @@ name: Broker resolution (full sweep + backfill)
 # Nominally runs after the property recompute (04:15); in practice GH throttling
 # drifts both into the same mid-morning window. mode=backfill is the same code
 # path (the first population); dispatch it once after this lands on main.
-# Source-agnostic — no `# portal:` tag. Shares the broker-resolution concurrency
-# group with the incremental job.
+# Source-agnostic. Shares the broker-resolution concurrency group with the
+# incremental job.
 #
 # Required secret: SUPABASE_DB_URL.
 

@@ -35,12 +35,6 @@ _PUBLIC_ALLOWLIST: frozenset[tuple[str, str]] = frozenset({
     ("GET", "/images/{key:path}"),    # R2 image proxy, opaque keys
     # Authenticates in-handler by verifying a Stripe HMAC over the raw request body.
     ("POST", "/billing/webhook"),
-    # Authenticates in-handler by verifying a Svix (Resend) HMAC over the raw body.
-    ("POST", "/webhooks/resend"),
-    # RFC 8058 one-click unsubscribe — the HMAC token in the path IS the auth, and it
-    # must render for a logged-out recipient (no session).
-    ("GET", "/u/{token}"),
-    ("POST", "/u/{token}"),
 })
 
 # Every route under these must resolve to require_admin. `/properties` as a whole is
@@ -167,7 +161,9 @@ def test_no_route_is_unauthenticated_by_accident() -> None:
 # `.claude/skills/database/references/tenancy.md`): reads on a tenant connection are
 # scoped by RLS alone — `current_account_ids()` is the ONE definition of who the
 # caller is; writes carry exactly ONE account, resolved once at the route edge by
-# `tenant_pool.require_account_id` (400 "no account for caller" on none).
+# `tenant_pool.require_account_id` (400 "no account for caller" on none) — or, for a write
+# to the eleven curation tables, `tenant_pool.require_acting_account_id` (the same, or under
+# X-Act-As the owner whose edit share migration 641 grants; tests/api/test_acting_routes_census.py).
 #
 # SCOPE, stated honestly. The subject is routes reaching `tenant_pool.tenant_conn`.
 # `_bucket` says "tenant" for anything reaching `verify_jwt`, which also covers the
@@ -219,12 +215,6 @@ _RLS_ONLY_ALLOWLIST: dict[str, str] = {
     "DELETE /collections/{collection_id}/properties/{property_id}": (
         "DELETE by id on a child-grain table — migration 292 USING clause"
     ),
-    "POST /collections/{collection_id}/shares": (
-        "the tenant UPDATE of the collection is the ownership gate (migration 290 USING); the "
-        "share row it then writes on the service role takes its owner from the collection by "
-        "trigger and its recipient from a confirmed email (migration 610), so no caller account "
-        "is named — tenancy.md's second 'tenant gate, then a service-role write'"
-    ),
     "DELETE /collections/{collection_id}/shares/{account_id}": (
         "DELETE by key — migration 610's party policy USING (owner revokes, recipient leaves)"
     ),
@@ -255,6 +245,27 @@ _RLS_ONLY_ALLOWLIST: dict[str, str] = {
         "UPDATE by a list of ids — migration 290's USING clause is the row set, so another "
         "account's id matches nothing"
     ),
+    "GET /stats/dashboards": (
+        "RLS-only read — migration 626's tenant policy (own) plus 647's shared-read arm "
+        "(dashboards shared with the caller); labels through share_party_emails()"
+    ),
+    "GET /stats/dashboard": (
+        "RLS-only read of the working board — migration 626's tenant policy (current_account_ids(), "
+        "the caller's own even under X-Act-As); 647's shared arm reads named rows only, so `name IS NULL` "
+        "is the caller's one unnamed row"
+    ),
+    "GET /stats/dashboards/{dashboard_id}": "RLS-only read (migrations 626 + 647, as above)",
+    "PUT /stats/dashboards/{dashboard_id}": (
+        "UPDATE by id — migration 626's USING clause; a shared row is visible, never updatable (404)"
+    ),
+    "DELETE /stats/dashboards/{dashboard_id}": "DELETE by id — migration 626 USING clause",
+    "PUT /stats/dashboards/reorder": (
+        "UPDATE by a list of ids — migration 626's USING clause is the row set, so another "
+        "account's (or a shared) dashboard matches nothing"
+    ),
+    "DELETE /stats/dashboards/{dashboard_id}/shares/{account_id}": (
+        "DELETE by key — migration 647's party policy USING (owner revokes, recipient leaves)"
+    ),
     "GET /notifications/subscriptions": (
         "RLS-only read (migration 290 on `notification_subscriptions`)"
     ),
@@ -281,6 +292,14 @@ _RLS_ONLY_ALLOWLIST: dict[str, str] = {
     "GET /estimations/{run_id}/feedback": (
         "RLS-only read (migration 292 on `estimation_feedback`) behind an RLS run probe"
     ),
+    "GET /pipeline/shares": (
+        "RLS-only read — migration 641's party policy on `pipeline_shares` (owner or recipient, "
+        "never while acting); labels through share_party_emails()"
+    ),
+    "DELETE /pipeline/shares/{account_id}": (
+        "DELETE by key — migration 641's party policy USING (owner revokes, recipient leaves); "
+        "`side` names which of the caller's two lists the counterparty sits in"
+    ),
     "GET /pipeline/stages": (
         "pure display read; `pipeline.list_stages` took no account as of W3 — migration "
         "294's policy on `pipeline_stages` is the scope"
@@ -295,6 +314,12 @@ _RLS_ONLY_ALLOWLIST: dict[str, str] = {
         "must yield the default plan rather than a 400 (see test_account_scope_census.py)"
     ),
 }
+
+
+# The two write-account dependencies (migration 641): own account, or the account acted for.
+_WRITE_ACCOUNT_DEPENDENCIES = frozenset({
+    tenant_pool.require_account_id, tenant_pool.require_acting_account_id,
+})
 
 
 def _tenant_conn_routes() -> list[tuple[str, str, set]]:
@@ -325,7 +350,7 @@ def test_tenant_routes_are_account_scoped() -> None:
     offenders = sorted(
         f"  {method} {path}"
         for method, path, calls in _tenant_conn_routes()
-        if tenant_pool.require_account_id not in calls
+        if not calls & _WRITE_ACCOUNT_DEPENDENCIES
         and f"{method} {path}" not in _RLS_ONLY_ALLOWLIST
     )
     assert not offenders, (
@@ -352,8 +377,8 @@ def test_route_scope_census_is_not_vacuous() -> None:
     )
     cards = [c for m, p, c in tenant if (m, p) == ("POST", "/pipeline/cards")]
     assert cards, "POST /pipeline/cards is not bucketed as a tenant-connection route"
-    assert tenant_pool.require_account_id in cards[0], (
-        "POST /pipeline/cards no longer declares require_account_id — the census above "
+    assert tenant_pool.require_acting_account_id in cards[0], (
+        "POST /pipeline/cards no longer declares require_acting_account_id — the census above "
         "can no longer detect an unscoped write"
     )
     stale = sorted(set(_RLS_ONLY_ALLOWLIST) - {f"{m} {p}" for m, p, _c in tenant})
@@ -404,11 +429,20 @@ def test_estimation_child_routes_ride_the_tenant_connection() -> None:
     )
 
 
-def test_the_share_route_opens_the_service_role_only_after_its_gate() -> None:
+@pytest.mark.parametrize("key", [
+    ("POST", "/collections/{collection_id}/shares"),
+    ("POST", "/pipeline/shares"),
+    # The push device routes (migration 654) have the same shape: the caller's own account at the edge,
+    # then the service role, since browser roles hold nothing on either push table.
+    ("PUT", "/push/subscription"),
+    ("DELETE", "/push/subscription"),
+    ("POST", "/push/opened"),
+])
+def test_the_share_routes_open_the_service_role_only_after_their_gate(key: tuple[str, str]) -> None:
     # tenancy.md's second "tenant gate, then a service-role write": a recipient's or a
     # bystander's refused POST must not have checked out a service-role connection first.
     routes = {(m, p): r for m, p, r in _api_routes()}
-    share = routes[("POST", "/collections/{collection_id}/shares")]
+    share = routes[key]
     calls = _reachable_calls(share.dependant)
     assert tenant_pool.tenant_conn in calls
     assert deps.get_db_conn not in calls, "the share route took the service role as a dependency again"

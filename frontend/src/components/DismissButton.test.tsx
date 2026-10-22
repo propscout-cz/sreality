@@ -46,7 +46,6 @@ const page = (...ids: number[]): InfiniteData<Page> => ({
 const SORT = { field: 'first_seen_at', direction: 'desc' };
 const HIDING = ['cards', DEFAULT_FILTERS, SORT];
 const REVEALED = ['cards', { ...DEFAULT_FILTERS, showDismissed: true }, SORT];
-const TABLE = ['table', DEFAULT_FILTERS, SORT];
 
 /* The app's own MutationCache, so a failed write's one global toast is real. */
 const newClient = () =>
@@ -55,11 +54,10 @@ const newClient = () =>
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
 
-function setup(variant?: 'overlay' | 'inline' | 'header') {
+function setup(variant?: 'overlay' | 'header') {
   const qc = newClient();
   qc.setQueryData(HIDING, page(42, 43));
   qc.setQueryData(REVEALED, page(42, 43));
-  qc.setQueryData(TABLE, page(42, 43));
   const view = render(
     <QueryClientProvider client={qc}>
       <DismissButton property_id={42} variant={variant} />
@@ -91,7 +89,6 @@ describe('<DismissButton>', () => {
     fireEvent.click(await live('Skrýt nemovitost'));
     await waitFor(() => expect(api.dismissProperty).toHaveBeenCalledWith(42));
     expect(ids(HIDING)).toEqual([43]);
-    expect(ids(TABLE)).toEqual([43]);
     expect(ids(REVEALED)).toEqual([42, 43]);
   });
 

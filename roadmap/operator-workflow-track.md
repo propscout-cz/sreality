@@ -7,11 +7,175 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
+### Phase U-NOTIFY-PUSH: Notifications push program (approved 2026-10-21)
+
+Program `docs/design/notifications-push/PROGRAM.md` (audit `AUDIT.md`, F1–F28; eleven rulings taken 2026-10-21). North
+star: one real-world change becomes one immutable row, owned by one account, shown in one feed and pushed to that
+account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, email (kept, inactive); Telegram is out.
+- [ ] **W1 (built 2026-10-21; done when merged)** — subtract the dead and the dangerous: Estimate rent and "Run matcher
+      now" (R10); the Email/Telegram picker, Settings › Delivery, Telegram, the outbox, ChannelClient, the Resend
+      transport, webhook and unsubscribe (R1, R5); the duplicate /watchdog feed and the System tab (R3); system alerts
+      leave the bell for Health + the canary e-mail (R2b, R9a; migration 651).
+- [ ] **W2a (built 2026-10-21, stacked on W1; done when merged + 48 h overlap gate)** — the worker's `notifications` lane
+      (300 s; steps watchdog_new / price / monitor, each its own transaction and `lane/notifications/<step>` cell) runs
+      the producers beside the API's matcher: the cursor and lookback go (24 h from `active_since`), one canonical-ad
+      price fragment (7 days), 'inactive' after 24 h gone (R6 a); keys byte-identical (render test), `event_ref` +
+      `actor_account_id` written; shares become `shared_collection | shared_dashboard | shared_pipeline` (migration 652:
+      the five columns, the `active_since` trigger, the wider CHECK, backfills). Gate: cells green, the 9-preset replay,
+      EXPLAIN < 2 s, the false-new baseline.
+- [ ] **W3 (built 2026-10-21, stacked on W2a; done when merged, migration 653 applied first)** — one event identity:
+      `notification_dispatches_identity_uq` over `EVENT_IDENTITY` (NULLS NOT DISTINCT, partial on `duplicate_of IS
+      NULL`; migration 653 = Migration C: 652's fills since A, system history keyed on its old key, exact repeats
+      marked, `dedupe_key` nullable, the feed index, the index CONCURRENTLY); every producer and the share grant
+      conflict on it and write no `dedupe_key` / `trigger_snapshot_id`; ONE `VISIBLE_SQL` (repeat, own-account
+      dismissal, retired watchdog) on every read, count and update (mark-seen of a hidden row: 404); deleting a
+      watchdog retires it (F21); the carrier is one UPDATE that re-points and marks `duplicate_of`, deleting nothing
+      (F6, F13); `share_ref` reads columns, no `split_part`. Gate: CI green; a merged 'new' row is marked and never
+      re-fires, 0 deleted; a retired watchdog's alerts hidden, rows kept; 0 identity violations.
+- [ ] **W4 backend (built 2026-10-21, stacked on W3; done when merged, migration 654 applied first)** — push plumbing,
+      dark: migration 654 = Migration D (`push_subscriptions`, `notification_deliveries`, service role only);
+      `api/push.py` (RFC 8291 aes128gcm + RFC 8292 VAPID, the RFC vector byte for byte); `GET /push/key`, `PUT`/`DELETE
+      /push/subscription`, `POST /push/opened` (never act); the Czech renderer; the worker's `push` lane (15 s; fan-out
+      with the one-share-a-day cap R11, a 2-min leased claim, one push per device, a 429 holds the device); the
+      `notifications` Health check (stall, recall, failures, unconfigured). **Operator:** generate `VAPID_PRIVATE_KEY`
+      with the toolkit-api one-liner, paste it as a Railway Shared Variable on the API AND the realtime-worker, delete the
+      file. Gate: CI-Postgres lease/claim/429 tests green; lane `unconfigured`, then `live_devices` 0; `/push/key` 503
+      then 200. The SPA half (sw.js, the switch, `/n/:dispatchId`) is #1948.
+- [ ] **Next:** W2b the API matcher goes (lease, readers, gates; Migration B; after 48 h of overlap) · the on-device proof
+      of W5 (your iPhone, a second account; after the VAPID key) · W6 the one destructive prune, backup first (R8; drops
+      `dedupe_key`, its UNIQUE and `trigger_snapshot_id`).
+- [ ] **W5a (built 2026-10-21, stacked on W1; done when merged)** — the phone surfaces that need no push plumbing
+      (R4, F9): one unread observer in Shell for both frames and the page (`lib/unreadCount`), the app-icon badge
+      from it, the phone header's bell beside Účet, and /notifications at phone width (one page, `max-md:`).
+- [ ] **W4-fe + W5b (built 2026-10-21, stacked on W5a; done when merged after W4's backend)** — sw.js `push`
+      (always one notification, then the badge) and `notificationclick` (focus + navigate, else open) with a vitest
+      harness over every payload shape; the landing `/n/:dispatchId` (mark-seen → `dispatchTarget`, `?d=` → `/push/opened`);
+      `lib/push` + `usePush` and the sheet's switch "Oznámení na tomto iPhonu"; re-sync on sign-in and the hourly
+      resume; binding follows identity (F18). Owed: the on-device proof (W5 gate, the operator's iPhone).
+
+### Phase U-NEW-PROPERTY: a property from a pasted ad link (in progress, 2026-10-20)
+
+Spec `docs/design/new-property-from-link.md` (PR #1913, approved 2026-10-20, six rulings in). North star: a
+pasted link is an ordinary ad — one identity rule, one fetch path (the drain), one write, one birth; the sites
+we do not crawl are the tenth portal `web`.
+- [ ] **W1 `feature/link-ingest`** — `scraper/portal_identity.py` (the one URL→(source, native id) canon; the
+      seven parsers import it; `tests/fixtures/portal_url_probes.json` pins Python and `portalIds.ts` alike),
+      `POST/GET /listings/ingest` (admin; enqueue, never fetch), the maintenance lane at 30 s + births inside the
+      daily sweep, `NewPropertyDialog` on Pipeline, Browse and the Odkaz tab, the extension's "Přidat do databáze".
+- [ ] **W2 `cleanup/estimation-four`** — estimation = add the ad, then estimate it (`listing_id` in, `url` out);
+      the LLM URL parser, both previews, `url_parser`, the orphan machinery and the sreality-only late-binder go.
+- [ ] **W3 `feature/web-portal`** — the tenth portal (deterministic parser, text-lane reading, `indexless`
+      presence seam, daily walk, contract, broker row, chip "Web"); after #1910.
+- [ ] **W4 `cleanup/estimation-four-schema`** — drop `parsed_url_cache`, nine parse columns, two settings, the
+      `idnes_reality` portals row (destructive, backup + OK given 2026-10-20; after 643).
+### Phase U-MERGE-LETTERS: merge mode as one statement of letters (live 2026-10-21 06:10Z, PR #1926 = 3e6a904d)
+- **Done (PR #1926, no migration):** Browse's merge mode marks cards with letters — a letter key marks the focused
+  card (the pointer focuses the card it is over; Tab / Shift+Tab move card to card; ← → page the photos),
+  a click writes the active letter (A at first, so click-click-merge still makes one group), the same
+  letter again clears, Backspace / Delete clear — and ONE click merges every letter in ONE transaction:
+  `POST /properties/merge {letters: {property_id: "A"}}`, the split's statement shape and codec, over
+  `toolkit.property_identity.merge_letters` (shared with the split's join; every property locked up front
+  in id order, each letter its own group; a refusal names the letter and writes nothing); one receipt per
+  letter; no ruling crosses letters; the Rulings page merges a pair as a one-letter statement. Rulings
+  D1–D6 and the as-built record: `docs/design/merge-letters/PROGRAM.md`.
+- **Owed:** the first real multi-letter merge by the operator (the read-only production check of the keys
+  passed 2026-10-21: 19 steps over 24 live cards, 0 console errors, nothing merged).
+
+### Phase U-MERGE-FEEDBACK: what Browse shows after a big merge (reported 2026-10-19, investigated 2026-10-20)
+
+The operator merged 26 inactive ads of one flat (Lužická 1681/17, Praha; byt 2+1, 50 m², 10.87 M Kč;
+survivor property 813505) and read Browse as if the merge had come undone. Root cause, read-only: the
+merge (15:15:29Z) landed inside the 15:15 list rebuild (15:15:00–15:16:01Z), whose swap discarded the
+merge's patch, so the 26 retired cards reappeared until the 15:30 rebuild — the patch race ONE PIN W1
+closed (migration 630 re-patches identity changes inside the rebuild). The detail page was right all
+along. The other "Lužická" cards are at least twelve different flats (prices 2.5–14.5 M, areas 50–88 m²);
+the only unmerged twin of the operator's flat is property 983290, one active sreality ad hidden by the
+status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 28 ads sit in one rt group
+(cluster 18836145) and its lane folds 983290 into 813505 at the next re-read under the 12 h freshness rule.
+- Open idea (not started): merge mode could name twins outside the current status/portal filter
+  ("3 more properties share this address") so a merge made under a narrow filter is not read as broken.
+
+### Phase U-VALUO: a Valuo valuation on the property page (in progress, 2026-10-19)
+- **Done (W2, backend):** migration 637 `valuo_valuations` (one row per paid call, service-role only, keyed by ad),
+  `GET`/`POST /properties/{id}/valuo` for every signed-in user (the caller's own account; save-before-call, same-request
+  reuse, 409 on a running twin, no retry), `api/valuo.py` as the one home of Valuo's vocabulary + the mapping with its
+  provenance and the operator's careful defaults, `api/valuo_client.py` (`VALUO_API_TOKEN` wins over
+  `VALUO_SANDBOX_API_TOKEN`), `api/http_json.py` folding the two `_http_get_json` copies (the Mapy key no longer reaches
+  logs), the admin-claim copies folded into `deps.is_admin`, the server label dicts into `filter_registry.label_cs`,
+  and the phone Poloha no longer calls a district point a town. Rationale: `docs/architecture.md` § rule 12.
+- **Done (W3, the section, on Valuo v3):** `<section id="valuo">` after Odhady on the property page for every signed-in
+  user (`components/listing-detail/ValuoSection.tsx` over `lib/valuo.ts`): the editor flips in place and is drawn from
+  the API's `fields` alone — exactly each type's v3 request schema (`api.valuo.com/v1/market-value/{type}`, commercial
+  included), the place editable — each value tagged with its provenance (`z inzerátu` / `odvozeno` / `předpoklad` /
+  `chybí` / `upraveno`), Valuo's refused parameters under their fields; the result card reads Valuo's confidence band
+  (`range_price`) on the ruler against the asking price, our latest run and MF, a reliability line (comparables, reach,
+  match; no grade) and the comparables with their photos (one `advert/detail` call, migration 646); a sandbox answer
+  is stored `sandbox` whatever the token's name; the history is the estimations' `RunHistory`, generalised; the phone
+  shows the latest answer only. The estimate card frame is one `EstimateCard`. Patterns: `.interface-design/system.md`.
+- **Settled (production call 2026-10-21, property 1012847):** Valuo's lease figures are MONTHLY (≈50 m² flats at
+  17 500–20 000 Kč, avg 18 850 Kč, 377 Kč/m²), so a lease shows `/měs` and the rent basis.
+- **Done (review fixes):** Valuo is a named shape-3 site in `tenancy.md` on the one no-account 400; its per-m² figures
+  are rule 23's named outside exception (`REGISTERED_SITES`); one error shape (`code`, one `unconfigured`), the location
+  reader out of the route module (`api/property_location.py`); a house's `garage_area` / `other_area` are user-set. SPA:
+  the editor's controls are `controls.tsx`'s form box (`box=`: one 34 px height, dashed absent, brick refused, the unit
+  inside), no local patches; one `useEstimationRuns` query for Odhady and the Valuo mark; both ledgers are `table.tsx`
+  `Column`s under `SectionLabel`/`Th`, their data ink-3; Valuo's failures in Czech.
+- **Done (W5, 2026-10-21):** "Náš přepočet" — a tick box per comparable (all ticked), a card under Valuo's own with the
+  total, the per-m² and its distance from Valuo, "orientační" from 3 kept and a band from 5, "Vrátit výchozí"; browser
+  only (`lib/valuo.ts` `recalc`: Valuo's weighted geometric mean, 0.11 % from its own on five real answers), nothing
+  stored, desktop only, offered only while the recipe lands within 1 % of Valuo's average. The subject's own ad (matched
+  by the portal id over ALL the property's ads, delisted too) is tagged "tento inzerát" and stays ticked; adding
+  comparables is not part of it. The unread record/summary names left the API payload (Valuo's answer is stored whole).
+- **Next:** one production call confirms whether a house's plot is sent; a per-plan monthly
+  quota counted from the rows before the production token; Valuo's own field messages still show as bare English under
+  a Czech caption (quote them as the failure card does: `Valuo: „…“`); ONE app-wide Czech translation pass (operator
+  ruling): the run ledger's `SUCCESS`/`FAILED` chips, the estimation block's English copy (`ESTIMATES`, the runs ledger's
+  `When` / `viewing` / `/mo` — `RunHistory`'s `when`/`viewing` and `PerMonth`'s `unit` go with it) stay English until
+  it. **Ruled 2026-10-21 (operator OK):** the Valuo routes answer a caller without an account with the one shared 400,
+  English `no account for caller` (it was „Přihlášený uživatel nemá účet, ocenění nelze uložit.“; no one reaches it:
+  signup seeds an account, 0 of 5 users lack one), and the sentence joins the app-wide translation pass above.
+
+### Phase U-CURATED-SCOPE: curated-set scope (done, 2026-10-19)
+- **Done:** tags, collections and pipeline stages became ONE kind of filter (brief + rulings:
+  `docs/design/curated-set-scope.md`): one value (`lib/setScope.ts` `SetScope`: in it / not in it /
+  in none of it), one URL grammar (`<set>` + `<set>_excluded`, `=any` on both), one control
+  (`CuratedSetFilter`, with "V žádné kolekci" / "Mimo pipeline" / "Bez štítků" and "V pipeline") on
+  the Browse sidebar, the phone sheet and the board bar. Membership is judged in the database under
+  the caller's RLS (migration 629: nine scope parameters + `hide_dismissed` on the four cohort
+  functions), so no property id rides a URL. All three are lenses outside preset identity, reset
+  by a preset click (ruling 2026-10-19). One settle (`lib/curationSettle.ts`) drops a card the moment a save,
+  funnel, tag or dismiss takes it out of the active lens. Layers A–C (858a5b5b, 91812539,
+  1ed93180). Deleted: `tagScope`, `collectionScope`, `PipelineScopePicker`, `TagFilterControl`,
+  `CollectionsPicker`, the three client resolvers + the denylist seam, `HIDING_DISMISSED`, the
+  board's second codec, the `cohortScoped` / `pipelineScoped` / `collectionScoped` props, the
+  registry's `tags_excluded`. Architecture § rules 18 + 22.
+- **Done (2026-10-20):** the contract migration 640 dropped `property_ids_excluded` from both
+  aggregate RPCs on the operator's word (revert shipped unapplied under `migrations/reverts/`).
+- **Next:** whole-collection / tag DELETEs and merges still revalidate broadly instead of settling.
+
+### Phase U-PIPE-SHARE: Pipeline sharing — view or edit another account's board, act as its owner (built, 2026-10-20; merges in the window)
+- **Approved (v1.2):** a share row (owner, recipient, mode read|edit); the recipient switches to the owner's
+  board in the Pipeline tab and, under an edit share, acts as the owner on curation ("Upravit jako
+  {email}"); a read share sees the board only. One identity function for curation, `acting_account_ids()`,
+  driven by an `x-act-as` header the database validates; nothing else widens; every delegated edit is
+  stamped in `delegated_edits`. Spec + rulings: `docs/design/pipeline-sharing.md`. Two waves.
+- **Built:** the spec in #1903; W1 (migration 641 + API + doctrine) in PR #1906; W2 (the SPA, §3.5) in
+  PR #1908 — the Pipeline tab's board switcher (desktop + phone), read boards without drag / stage menu /
+  trash / stage editor / tags, edit boards acting as the owner (the phone through the stage sheet), the
+  one `ShareBlock` on the pipeline and collection pages, the viewer's two-step leave, a revoked board
+  resetting with a toast, "Upravit jako {email}" + the in-page banner on the desktop property page
+  (sticky per device), the `share` notification row, and the delegated stamps on notes, cards and
+  stages (`lib/delegatedStamp`). W1 and W2 merge together inside the autodedup session's window, 641
+  applied immediately before (the `collection_share` → `share` rename couples them). Ruling 12
+  (`DELETE …?side=`) awaits the operator. **Owed:** the board cannot say "vámi" on a delegate's own
+  stamps — the SPA has no source for its own account id (an `own_account_id` on `GET /pipeline/shares`
+  would give it one); until then a delegate sees the time alone.
+
 ### Phase U-SHARE: Collection sharing, view-only (done, 2026-10-17)
 - **Done:** share a collection with another account by email, read-only (spec + rulings:
   `docs/design/collection-sharing.md`; a share is one row that widens READS only, `owner_email` is
   the one "mine vs shared" marker, a note crosses a share only when its author marks it shared).
-  Six waves: W1 #1833 (the write is the gate: one UPDATE/DELETE decides ownership, probes gone),
+  Seven waves: W1 #1833 (the write is the gate: one UPDATE/DELETE decides ownership, probes gone),
   W2 #1834 (dead `collections_public`/`tags_public` dropped, `account_id` NOT NULL on collections +
   tags, migrations 607/608), W3 #1835 (three SPA hooks replace 14 copies, the property page's second
   collection editor and the legacy note origin deleted), W4 #1837 (`collection_shares`, migration
@@ -20,18 +184,33 @@ per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
   me", the Sharing block, viewer pages, foreign notes read-only, the "Share with …" checkbox, the
   Shared tab, phone read-only in Czech), W6 #1839 (Chrome extension: "saved" and the save checklist
   are mine only, foreign notes read-only "od {email}", the "Sdílet s …" checkbox + "Sdíleno" /
-  "Nesdílet" toggle on the SPA's audience rule).
+  "Nesdílet" toggle on the SPA's audience rule). W7 PR #1840 (migration 613): the operator ruled
+  2026-10-17 that a marked note reaches shares made later too, so 610's consent-time anchor
+  (`property_notes.shared_at`, its trigger and the policy's time clause) is dropped; the bait-share
+  edge is accepted (spec §7, §8 ruling 9). 613 is applied AFTER the merge + Railway rollout.
 - **Next (unscheduled):**
-  - `property_notes.account_id` NOT NULL waits on the operator's ruling about the split preview's
-    bare-note case (the one pre-tenancy NULL row is attributed by #1829).
+  - `property_notes.account_id` NOT NULL — ruled 2026-10-17: NOT NULL after #1829 lands (it
+    attributes the one pre-tenancy NULL row); a follow-up migration numbered past 613; the split live test's bare (NULL-account) note must be
+    re-modelled first (`tests/test_property_split_live.py`).
   - `WatchdogDispatch.sreality_id` is typed `number` but is null on rows that carry no listing,
-    a `collection_share` row among them — widen the type with its readers.
+    a `share` row among them — widen the type with its readers.
   - pytest order pollution met in W1: `tests/api/test_curation.py`, then
     `tests/test_curation_account_stamping.py`, then `tests/api/test_auth.py` gives 15 × 503 "Auth is
     not configured"; each file passes alone and CI's path order (tests/api first) never hits it —
     find the fixture that leaks the auth state.
-  - Share notifications are in-app only: no per-recipient email delivery is built (ruling 5e).
-  - The operator ruling owed on the recipient-author bait-share edge (spec § 7).
+  - ~~Share notifications are in-app only: no per-recipient email delivery is built (ruling 5e).~~ Superseded
+    2026-10-21: shares are pushed to the recipient's iPhone from W4 (Phase U-NOTIFY-PUSH; ruling 5(e) superseded).
+
+### Phase U-PIPE-SIGNUP: Every account starts on the default board (done, 2026-10-16)
+- **Done:** migration 612 — one signup path (account, owner membership, the 10-stage default board with codes from
+  `seed_default_pipeline`, the monitoring collection, the 7-day trial), functions born private, the event ledger's stage FKs
+  account-qualified. Own PRs, same sprint (merge separately): #1828 the SPA draws an empty board's columns, #1830
+  migration 611 (tenant serial ids → identity; apply it BEFORE 612), #1831 the extension resets its caches on an
+  identity change; migration 613 drops `legacy_backfill_claim` (operator ruling 2026-10-17).
+- **Next (unscheduled):** ~~`notification_dispatches` needs a column-level UPDATE grant (its global `dedupe_key` is
+  browser-writable)~~ stale: 619 narrowed the browser's UPDATE to columns and 651 to `seen_at` alone; the global
+  `dedupe_key` itself is replaced in W3 (Phase U-NOTIFY-PUSH: nothing writes it since migration 653; W6 drops it). The 60 pre-299 public sequences still grant `authenticated` setval (one revoke migration + a
+  census arm).
 
 ### Phase U-LINK: Artifact link on the property (done, 2026-10-14)
 - **Done:** one operator-typed http(s) URL per property (`property_artifact_links`, migration 599),
@@ -55,9 +234,9 @@ per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
   the edit popover's stale `listing-tags` invalidation. Architecture § rule 18.
 - **Next (unscheduled):**
   - Browse cards and the Chrome-extension panel show no tag and cannot assign one; when they do,
-    `revalidateTags` grows the same `cohortScoped` knob `revalidateCollections` has.
-  - "Not in collection" on Browse: `property_ids_excluded` already carries it; only the
-    control and `collectionScope` are missing.
+    their writes settle through `settleTagWrite` (the `cohortScoped` knob is gone, U-CURATED-SCOPE).
+  - ~~"Not in collection" on Browse~~ — done 2026-10-19 in U-CURATED-SCOPE ("V žádné kolekci",
+    judged in SQL by migration 629, not by `property_ids_excluded`).
 
 ### Phase U-NOTE-FILES: Attachments on notes (done, 2026-10-07)
 - **Done:** files on a property's notes. Drop, paste or pick them into the Notes composer
@@ -105,7 +284,8 @@ per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 - **Next:** a chained detach restores one card (PR 5, draft #1681 — needs an operator decision:
   best-effort card identity inferred from the ledgers, or a stable card id via an additive migration).
   After PR 2 deploys, `dirty_broker_listings` depth steps up after merges (the fix
-  working); `property_sweep_last_complete` should stay fresh.
+  working); the `property_sweep` artifact (the `jobs` check's `artifact/property_sweep` cell since
+  Health wave 4, which retired `property_sweep_last_complete`) should stay fresh.
 
 ### Rule #22: converge the kanban + extension pipeline copies (partly done, 2026-10-01)
 - **Done (2026-10-01):** the kanban's move/remove no longer re-implement the hook —
@@ -411,7 +591,8 @@ from Browse, not just from the board.
   `stageAccent`/`stageBadge` replace the per-surface copies — the board fell back
   to grey for an uncoloured stage while the listing header fell back to copper.
   `PipelineFunnelButton` now serves the Browse cards AND the Table (which had no
-  pipeline affordance at all, quietly breaking rule #22's "every surface"), and
+  pipeline affordance at all, quietly breaking rule #22's "every surface"; the Table
+  tab itself was removed 2026-10-20), and
   `usePipelineCard` is the single add/remove/move hook + invalidation policy.
   The Chrome-extension panel mirrors the badge and tints its pill by stage, with
   the tag palette added to its by-value mirror of the SPA tokens.
@@ -436,8 +617,9 @@ from Browse, not just from the board.
   already supported — see architecture rule 21b — and which incidentally fixes
   a control that lied: clicking the selected deal-type pill wrote `deal=null`
   and silently snapped back to `pronajem`.
-- Next: nothing queued here; per-stage columns on the Table and a "days in stage"
-  signal are the obvious follow-ups if the scope gets heavy use.
+- Next: nothing queued here; a "days in stage" signal is the obvious follow-up if
+  the scope gets heavy use. (Per-stage columns on the Table: moot, the Table tab was
+  removed 2026-10-20.)
 
 ### Phase U-PIPE Phase 3i: The funnel opens a stage menu (done)
 The funnel was a toggle: clicking it on a property already in the pipeline
@@ -453,8 +635,8 @@ to advance a deal without opening the listing page. It now opens a shared menu.
   `property_pipeline.note` is a separate column with no writer.)
 - **One menu, three surfaces.** `PipelineStageMenu` (stage list badged from
   `code`, current stage checked, terminal stages under their own divider, then
-  a two-step remove) is opened by the Browse cards, the Browse table rows AND
-  the listing header — which drops its own `<select>` + bare ✕. Adding stays
+  a two-step remove) is opened by the Browse cards, the Browse table rows (gone
+  with the Table tab, 2026-10-20) AND the listing header — which drops its own `<select>` + bare ✕. Adding stays
   one click into the entry stage: cheap and reversible. The kanban keeps
   drag-to-move (rule #22) and its existing trash confirm; the Chrome extension
   keeps its `<select>` and gains the same confirm on ✕ via a generic
@@ -699,82 +881,16 @@ map, no stats, no price bounds on top.
   carries the availability and fail-open contract.
 - Next: dropping `properties_with_tags` once this SPA build has rolled out.
 
-### Phase U-ME: Manual rental estimates (next)
+### Phase U-ME: Manual rental estimates (retired 2026-10-19)
 
-Capture operator-judgement rent figures as first-class data and
-make them visible to both humans (a panel on Listing Detail) and
-the agent (a new toolkit tool, consulted by
-`rental_estimator_v1` before `record_estimate`). Bridges the gap
-between an operator's broker quote / portfolio benchmark / gut
-number and the agent's defensible distribution — today that
-private signal only lives in `listing_notes` free text where
-neither side can use it as a number.
-
-Shape locked with the operator:
-- Point estimate (`rent_czk` integer, CHECK 1000–1000000), not
-  a range. Simpler than mirroring the estimator's p25/p75 and
-  matches how operators actually write the number down.
-- One row per estimate; many per listing. Mutable rows with
-  full audit history on UPDATE and DELETE via a trigger (same
-  pattern as `app_settings_history` in migration 020).
-- Free-text `author` + `source_kind` CHECK ∈
-  `broker / gut / external_comp / portfolio / other` + optional
-  `notes` (≤4000 chars).
-
-Scope:
-- Migration 046: `manual_rental_estimates` (FK
-  `sreality_id`, the fields above, `created_at`, `updated_at`,
-  `updated_by`) + `manual_rental_estimates_history` (append-only,
-  `change_kind` ∈ `update / delete`) + BEFORE UPDATE / AFTER
-  DELETE trigger. `manual_rental_estimates_public` view with
-  anon select grant (same pattern as `listing_notes_public` in
-  migration 025). (Originally drafted as 043; renumbered after
-  main's Phase AI slice A claimed slot 043 with
-  `043_estimation_trace_payloads.sql`.)
-- API: new `api/manual_estimates.py` exposing CRUD over
-  `/listings/{id}/manual_estimates` (GET + POST) and
-  `/manual_estimates/{id}` (PATCH + DELETE). All bearer-gated
-  per CLAUDE.md toolkit rule #8 (since 2026-10-04 the three writes
-  take `require_admin` — `roadmap/public-release-track.md` item 11). Pydantic schemas appended to
-  `api/schemas.py`.
-- Toolkit: `toolkit/manual_estimates.py:get_manual_rental_estimates(conn,
-  sreality_id)` returns the standard `{data, metadata}` envelope
-  with `data.estimates` (empty list when none exist).
-  POST `/tools/get_manual_rental_estimates` route in
-  `api/main.py`.
-- Agent: handler + `_ToolDef` entry registered in
-  `api/agent.py:_build_tool_registry()` so the tool is callable
-  by name from the agent loop. Provider-agnostic — no changes
-  needed in `api/providers/`.
-- Migration 047: `UPDATE skills` for `rental_estimator_v1` *and*
-  `rental_estimator_full_v1` (the sibling skill added by main's
-  PR #77 — both want the new tool). Appends
-  `get_manual_rental_estimates` to `allowed_tools` (idempotent
-  guard via `not (allowed_tools @> ...)`), same shape as
-  migration 045's `read_floor_plan` add. The `system_prompt`
-  update that inserts the "CONSULT MANUAL ESTIMATES" step into
-  each skill's instructions is *not* part of this migration —
-  per migration 045's precedent, prompt edits are an operator
-  action via the Settings UI so we never overwrite hand-edits.
-  The on-disk `SKILL.md` files carry the inline numbered step
-  as canonical documentation. (Originally drafted as 046; bumped
-  alongside the 043 → 046 rename above.)
-- Frontend: `ManualEstimatesBlock` slotted into
-  `frontend/src/pages/ListingDetail.tsx` after `CurationBlock`
-  (manual estimates are operator-curated like tags/notes;
-  same shelf is the natural home). Reads via
-  `manual_rental_estimates_public` with the anon key; writes go
-  through the bearer-gated API endpoints. Wrappers in
-  `frontend/src/lib/api.ts` (`listManualEstimates`,
-  `createManualEstimate`, `updateManualEstimate`,
-  `deleteManualEstimate`). No design-token changes.
-
-Out of scope for this phase:
-- Manual estimates on sales / commercial listings (the field
-  is named `rent_czk` and CHECK-bounded; a future migration
-  generalises).
-- The agent's ad-hoc Python code execution capability — that's
-  Phase 7d above, deferred.
+Shipped as migrations 046/047: operator-recorded point rents per listing (`manual_rental_estimates` +
+`_history`, the "Ruční odhady" block on the property page and phone, four API routes, the agent tool
+`get_manual_rental_estimates` in both rental estimator skills). **Retired 2026-10-19** by operator ruling
+(Valuo sprint, ruling 7) as part of the line payment for the Valuo section: neither table ever held a row.
+Removed end to end in `cleanup/retire-manual-estimates`: the code, the tool (migration 638 takes it out of
+`skills.allowed_tools` and drops the verbatim "Consult manual estimates" bullet from
+`rental_estimator_full_v1`; apply it BEFORE the code deploys), and the storage (migration 639, destructive:
+backup + the operator's OK, applied after the code is gone). The original spec is in git history.
 
 ### Phase U2.7: New-listing notifications — in-app slice (shipped)
 
@@ -785,7 +901,9 @@ surfaces the yield once it lands. Email / SMS / push remain deferred
 (see open questions below). Cron cadence is still nightly; the
 operator can call `POST /notifications/matcher/run` from the UI's
 "Run matcher now" button to trigger an immediate evaluation against
-any newly-scraped listings.
+any newly-scraped listings *(superseded 2026-10-21: that button, the
+route and the per-row estimation kickoff were deleted in W1 of
+Phase U-NOTIFY-PUSH, ruling R10)*.
 
 **What shipped**
 
@@ -819,13 +937,21 @@ any newly-scraped listings.
   merge f2d7b359; `extra='ignore'`); `ComparableFilters` gains the garden pair; both models
   now EQUAL their agendas by test; Browse reads the generated `BUILDING_MATERIAL_BUCKETS`
   (fix/watchdog-dropped-filters, C4 PR 2).
+- ✅ M3 + watchdog map area (2026-10-21, feature/watchdog-map-area): the map box is the ONE
+  spatial shape — `WatchdogFilterSpec.bounds` (Browse's `MapBounds`) replaces `lat`/`lng`/
+  `radius_m` and the matcher's ST_DWithin circle; `api/location_filter.bounds_where` renders
+  the lat/lng band the list and both stats RPCs apply; `filtersToWatchdogSpec` reads the one
+  `effectiveBbox` (moved to `lib/filters.ts`, over the one `bboxAround` formula), so a
+  centre+radius pick saves as the square Browse filtered on and the viewport box rides along
+  through the create dialog's checkbox (ticked); `MapAreaControl` edits the box on
+  `/watchdog/:id/edit` ("Use current view"); the two map controls paint through
+  `lib/mapShape`. 0 stored specs carried a circle, so nothing was migrated.
 
 **Next (filter definition, tracked from C4)**
 
 - M2: the agent advertises 10 COMPARABLES ids that `_FCR_OVERRIDE_FIELDS` drops — changes
   agent cohorts, needs an operator ruling, own PR.
 - The agent's null `category_type` path (`api/agent.py`) — same posture as M2.
-- M3: center+radius is a circle in Python and a bounding square in Browse.
 - M4: `tom_days` reaches Stats but not the Browse list.
 - M7: integer area params in the browse RPCs. M11: canonical-advert row vs property rollup.
 - Browse's TS dispatch switches to `sql_kind` (drops `isMinId`/`isMaxId` + the duplicated
@@ -838,7 +964,9 @@ any newly-scraped listings.
   CHECK-bounded to `'in_app'` only; a future migration adds the new
   enum values and the dispatch worker grows a fan-out branch
   *(superseded: email + Telegram deliver through the `channel_sends`
-  ledger, migration 207, not a widened `channel` — rule #16)*.
+  ledger, migration 207, not a widened `channel` — rule #16; superseded
+  again 2026-10-21: Telegram is out, email inactive, iPhone push from W4
+  of Phase U-NOTIFY-PUSH)*.
 - 5-minute scrape cadence (Shape A from the original proposal).
   Today's nightly cron still applies; the matcher loop honestly
   surfaces "no fresh listings" between scrapes. A new

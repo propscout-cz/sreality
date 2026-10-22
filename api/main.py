@@ -1,7 +1,7 @@
 """FastAPI service exposing the analytical toolkit + estimate_yield.
 
 Tool routes return the standard toolkit envelope verbatim for the agent
-layer; non-tool routes (e.g. GET /estimations/preview) shape their own.
+layer; non-tool routes (e.g. GET /estimations) shape their own.
 """
 
 from __future__ import annotations
@@ -20,11 +20,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from api import curation
+from api import ingest as ingest_module
 from api import note_attachments
 from api import dismissals as dismissals_module
 from api import pipeline as pipeline_module
+from api import shares as shares_module
 from api import price_stats as price_stats_module
-from api import manual_estimates as me
 from api import dependencies as deps
 from api import maps
 from api import sreality_price_map
@@ -37,7 +38,6 @@ from api.building_runs import (
     assert_editable_for_attachments,
     confirm_units,
     create_building_run,
-    create_building_run_from_url,
     get_building_run,
     list_building_runs,
     re_extract,
@@ -55,25 +55,25 @@ from api.estimation_runs import (
     get_trace_payload,
     latest_rent_estimations_by_listing,
     list_estimation_runs,
-    preview_estimation,
     sweep_stuck_runs,
     update_scenario,
 )
 from api import notifications as nf_module
+from api import system_alerts_loop
 from api.labeling import router as labeling_router
 from api.portal_lookup import lookup_portal_listings
 from api.property_merge import router as property_merge_router
 from api.routes.admin import router as admin_router
 from api.routes.billing import router as billing_router
-from api.routes.resend_webhook import router as resend_webhook_router
-from api.routes.unsubscribe import router as unsubscribe_router
 from api.routes.brokers import router as brokers_router
 from api.routes.broker_review import router as broker_review_router
 from api.routes.outreach import router as outreach_router
 from api.routes.filter_presets import router as filter_presets_router
+from api.routes.stats_dashboards import router as stats_dashboards_router
 from api.routes.images import router as images_router
 from api.routes.property_download import router as property_download_router
 from api.routes.property_location import router as property_location_router
+from api.routes.valuo import router as valuo_router
 from api.routes.map_overlays import router as map_overlays_router
 from api.new_dedup_bakeoff import router as new_dedup_bakeoff_router
 from api.new_dedup_labeling import router as new_dedup_labeling_router
@@ -83,9 +83,9 @@ from api.routes.location_quality import router as location_quality_router
 from api.routes.new_dedup import router as new_dedup_router
 from api.routes.new_dedup_candidates import router as new_dedup_candidates_router
 from api.routes.notifications import router as notifications_router
+from api.routes.push import router as push_router
 from scraper import image_storage
 from scraper.db import sweep_stuck_scrape_runs
-from scraper.source_dispatcher import ParseError
 from toolkit import (
     ComparableFilters,
     TargetSpec,
@@ -104,18 +104,16 @@ from toolkit import (
     find_comparables_relaxed,
     find_distribution_outliers,
     summarize_listing,
-    summarize_region_dispositions,
     verify_listing_freshness,
 )
 from toolkit.image_similarity import ImageCompareError
 from toolkit.measures import MeasureBasisError
-from toolkit.region_annotations import RegionAnnotationError
 from toolkit.rent_map import compute_reference_rent
 from toolkit.summaries import SummarizeError
 
 @contextlib.asynccontextmanager
 async def _lifespan(_app: FastAPI) -> "AsyncIterator[None]":
-    """Spawn the Watchdog matcher loop alongside the request handler.
+    """Spawn the Watchdog matcher and the system-alerts loops alongside the request handler.
 
     On startup we also sweep any estimation_runs / building_runs left
     in a non-terminal status by a server crash mid-background-task,
@@ -125,12 +123,15 @@ async def _lifespan(_app: FastAPI) -> "AsyncIterator[None]":
     timeout (which can't self-finalize) are likewise stamped with an
     ended_at so they stop reading as 'stuck' on the Health page.
 
-    The loop opens its own per-pass DB connection and respects the
+    The matcher loop opens its own per-pass DB connection and respects the
     `notifications_matcher_interval_seconds` knob in `app_settings`.
     Setting that key to 0 keeps the task alive but idle, so an
     operator can disable matching without redeploying.
 
-    Disabled entirely when the env var `NOTIFICATIONS_MATCHER_DISABLED`
+    The system-alerts loop (api/system_alerts_loop.py) runs the health
+    ladder every minute on its own connection; it has no knob.
+
+    Both are disabled entirely when the env var `NOTIFICATIONS_MATCHER_DISABLED`
     is set — useful for tests / one-off CLI invocations that import
     api.main but don't want a background task chattering.
     """
@@ -174,19 +175,9 @@ async def _lifespan(_app: FastAPI) -> "AsyncIterator[None]":
         tasks.append(asyncio.create_task(
             nf_module.matcher_loop(stop_event), name="notifications-matcher",
         ))
-
-    # Delivery outbox (Sprint N): only start it when a transport is actually
-    # configured (e.g. RESEND_API_KEY set) — otherwise it would query every
-    # interval to do nothing. So it is a true no-op (no task) until the operator
-    # provisions a channel and redeploys. OUTBOX_DRAIN_DISABLED force-disables it.
-    if not os.environ.get("OUTBOX_DRAIN_DISABLED") and any(
-        t.is_configured() for t in deps.get_transports().values()
-    ):
-        from api import notification_outbox
         tasks.append(asyncio.create_task(
-            notification_outbox.outbox_loop(stop_event), name="notification-outbox",
+            system_alerts_loop.system_alerts_loop(stop_event), name="system-alerts",
         ))
-        logging.info("notification outbox started (a transport is configured)")
 
     try:
         yield
@@ -296,11 +287,13 @@ app.include_router(admin_router)
 # raw body vs STRIPE_WEBHOOK_SECRET), distinct from bearer/JWT and token-exempt;
 # GET /billing/me rides verify_jwt + the tenant pool like any per-account read.
 app.include_router(billing_router)
-app.include_router(resend_webhook_router)
-app.include_router(unsubscribe_router)
 # /notifications/* (Watchdog feed + subscription CRUD) goes through
 # the standard bearer gate — operator content, not configuration.
 app.include_router(notifications_router)
+# /push/* (push on this device: the VAPID public key, a device's registration and end, a tapped push's
+# open) — the key for any signed-in caller; the three writes are the caller's own account (never acted
+# for) on the service role, opened in the handler after that gate (api/routes/push.py).
+app.include_router(push_router)
 # /properties/merge|{id}/split|{id}/origins (merge MECHANICS: collapse an
 # operator-chosen set, split one property's adverts, where each came from)
 # — mutating operator actions, admin-gated (require_admin). Mounted before the
@@ -322,6 +315,9 @@ app.include_router(broker_review_router)
 # /filter-presets/* (named Browse filter presets: CRUD) — per-account content on
 # the JWT + tenant pool (RLS). Decoupled from /notifications (a preset never fires).
 app.include_router(filter_presets_router)
+# /stats/dashboards/* (named Stats dashboards: the same saved-set CRUD, plus read-only shares)
+# and /stats/dashboard (the account's working board) — tenant pool (RLS), migration 647.
+app.include_router(stats_dashboards_router)
 # /images/* redirects a listing-photo key to a presigned R2 URL. Public (like
 # /health) — an <img> tag can't send a bearer header and these are public
 # photos; the key regex keeps it scoped to listing images only.
@@ -334,6 +330,8 @@ app.include_router(property_download_router)
 # granularity and label, and Mapy's static map of it streamed through us on every view (Mapy's
 # terms forbid storing it; 4 credits a fetch, MAPY_STATIC_MAPS_ENABLED=0 turns it off). JWT-gated.
 app.include_router(property_location_router)
+# /properties/{id}/valuo — the Valuo section (GET editor + own history, POST a paid call); verify_jwt, tenancy shape 3.
+app.include_router(valuo_router)
 # /map-overlays + /map-overlays/{section}/{z}/{x}/{y}.mvt — the maps' reference overlays (metro,
 # flood zones, kraje): the layer registry and tiles pre-rendered at ingest, read by primary key and
 # cached a year (the URL carries the section version). JWT-gated; the overlay store is service-role only.
@@ -372,10 +370,11 @@ app.include_router(new_dedup_candidates_router)
 # operator's decision in `autodedup.verdicts` and, for a negative pair verdict, the
 # permanent `autodedup.must_not_link` (retracted when that verdict is reversed). The
 # operator merge and split routes (`/properties/merge`, `/properties/{id}/split`, through
-# toolkit.property_identity.record_rulings) write the same two tables. Both live inside schema `autodedup`, so shadow mode (D4) is
-# intact — no production table is written, and `listings`/`images` are read for display only. Everything else
-# is written by the lane (`python -m autodedup.lane`). See autodedup/progress_sql.py,
-# autodedup/ui_sql.py and docs/design/autodedup/PROGRAM.md (Q11, §9, §12).
+# toolkit.property_identity.record_rulings) write the same two tables. Both live inside
+# schema `autodedup`: no production table is written, and `listings`/`images` are read
+# for display only. Everything else is written by the lane (`python -m autodedup.lane`).
+# See autodedup/progress_sql.py, autodedup/ui_sql.py and docs/design/autodedup/PROGRAM.md
+# (Q11, §9, §12).
 app.include_router(autodedup_router)
 # /location/* (location-quality dashboard + operator corrections) — the consumer
 # of `listing_location`, the location program's one answer table (mig 501),
@@ -589,6 +588,9 @@ def post_compute_market_velocity(
         has_parking=body.has_parking,
         min_price_czk=body.min_price_czk,
         max_price_czk=body.max_price_czk,
+        tom_days_min=body.tom_days_min,
+        tom_days_max=body.tom_days_max,
+        tom_observed_only=body.tom_observed_only,
         category_main=body.category_main,
         category_type=body.category_type,
         include_unreliable=body.include_unreliable,
@@ -603,10 +605,6 @@ def post_compute_market_velocity(
         min_usable_area=body.min_usable_area,
         max_usable_area=body.max_usable_area,
         min_parking_lots=body.min_parking_lots,
-        building_condition_level_min=body.building_condition_level_min,
-        building_condition_level_max=body.building_condition_level_max,
-        apartment_condition_level_min=body.apartment_condition_level_min,
-        apartment_condition_level_max=body.apartment_condition_level_max,
     )
     return compute_market_velocity(
         conn, target, filters,
@@ -728,32 +726,6 @@ def post_listings_summaries(
     return {"data": out}
 
 
-@app.post("/tools/summarize_region_dispositions")
-def post_summarize_region_dispositions(
-    body: s.SummarizeRegionDispositionsIn,
-    conn: Any = Depends(deps.get_db_conn),
-    llm_client: Any = Depends(deps.get_llm_client),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    """Natural-language annotations for the Browse > Stats box plots.
-
-    Cached per (region, calendar day): the first viewer of a region today
-    pays for the LLM call; everyone else hits the cache.
-    """
-    try:
-        return summarize_region_dispositions(
-            conn, llm_client,
-            region_key=body.region_key,
-            dispositions=[d.model_dump() for d in body.dispositions],
-            ppm2_overall=body.ppm2_overall,
-            region_label=body.region_label,
-            ppm2_basis=body.ppm2_basis,
-            force_refresh=body.force_refresh,
-        )
-    except RegionAnnotationError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-
 @app.post("/tools/compare_listing_images")
 def post_compare_listing_images(
     body: s.CompareListingImagesIn,
@@ -788,24 +760,6 @@ def post_compute_listing_velocity(
     )
 
 
-@app.post("/estimations/preview")
-def post_estimations_preview(
-    body: s.PreviewEstimationIn,
-    conn: Any = Depends(deps.get_db_conn),
-    client: Any = Depends(deps.get_sreality_client),
-    llm_client: Any = Depends(deps.get_llm_client),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    try:
-        return preview_estimation(conn, client, llm_client, body)
-    except ParseError as exc:
-        raise HTTPException(status_code=502, detail=f"parse failed: {exc}")
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502, detail=f"upstream error: {type(exc).__name__}: {exc}",
-        )
-
-
 @app.post("/estimations")
 def post_estimations(
     body: s.CreateEstimationIn,
@@ -826,64 +780,6 @@ def post_estimations(
         conn, client, llm_client, body, background_tasks=background_tasks,
         account_id=str(account_id), claims=claims,
     )
-
-
-@app.get("/estimations/preview")
-def get_estimation_preview(
-    url: str = Query(..., description="A sreality.cz detail URL"),
-    conn: Any = Depends(deps.get_db_conn),
-    client: Any = Depends(deps.get_sreality_client),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    """Scrape a sreality URL and return its parsed spec without persisting.
-
-    Read-only. Lets the UI present the scraped fields for review/edit
-    before the user commits to POST /estimations.
-    """
-    import requests
-
-    from scraper.url_parser import parse_sreality_url
-
-    try:
-        parsed = parse_sreality_url(url, client=client, conn=conn)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except requests.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Could not fetch listing from sreality.cz: {exc}",
-        ) from exc
-
-    spec = parsed["spec"]
-    return {
-        "url":         parsed["source_url"],
-        "sreality_id": int(parsed["sreality_id"]),
-        "in_database": bool(parsed["in_database"]),
-        "fetched_at":  parsed["fetched_at"],
-        "spec": {
-            "lat":         spec.get("lat"),
-            "lng":         spec.get("lon"),
-            "area_m2":     spec.get("area_m2"),
-            "disposition": spec.get("disposition"),
-            "floor":       spec.get("floor"),
-        },
-        "listing": {
-            "price_czk":            spec.get("price_czk"),
-            "price_unit":           spec.get("price_unit"),
-            "category_main":        spec.get("category_main"),
-            "category_type":        spec.get("category_type"),
-            "locality":             spec.get("locality"),
-            "district":             spec.get("district"),
-            "total_floors":         spec.get("total_floors"),
-            "has_balcony":          spec.get("has_balcony"),
-            "has_lift":             spec.get("has_lift"),
-            "has_parking":          spec.get("has_parking"),
-            "building_type":        spec.get("building_type"),
-            "condition":            spec.get("condition"),
-            "energy_rating":        spec.get("energy_rating"),
-            "image_count":          len(parsed.get("images") or []),
-        },
-    }
 
 
 @app.get("/estimations/latest-by-listing")
@@ -1005,7 +901,7 @@ def post_estimation_feedback(
     admin = deps.is_admin(claims)
     refine = body.kick_off_refinement and admin
     gate = estimation_run_visible if admin else estimation_run_owned
-    with tenant_pool.tenant_transaction(claims) as conn:
+    with tenant_pool.tenant_transaction(claims, act_as=None, method="POST") as conn:
         if not gate(conn, run_id):
             raise HTTPException(status_code=404, detail="estimation run not found")
         row = feedback_module.insert_feedback(
@@ -1048,9 +944,6 @@ def list_estimations(
         ),
     ),
     sreality_ids: str | None = Query(default=None, include_in_schema=False),
-    source_kind: Literal[
-        "sreality", "bezrealitky", "idnes_reality", "remax", "unsupported"
-    ] | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     cursor: str | None = Query(default=None, description="Keyset cursor (next_cursor)"),
@@ -1102,7 +995,6 @@ def list_estimations(
             status=status,
             sreality_id=sreality_id,
             listing_ids=ids,
-            source_kind=source_kind,
             limit=limit,
             offset=offset,
             cursor=cursor,
@@ -1132,6 +1024,28 @@ def post_listings_lookup(
     return lookup_portal_listings(market_conn, conn, body.items)
 
 
+@app.post("/listings/ingest", response_model=s.IngestState)
+def post_listings_ingest(
+    body: s.IngestIn,
+    conn: Any = Depends(deps.get_db_conn),
+    _: dict = Depends(deps.require_admin),
+) -> dict[str, Any]:
+    """A pasted ad link → one ingest state; an ad we lack is queued for the worker's drain
+    (docs/design/new-property-from-link.md §3.2). Admins only in v1."""
+    return ingest_module.ingest_link(conn, body.url)
+
+
+@app.get("/listings/ingest/{source}/{native_id:path}", response_model=s.IngestState)
+def get_listings_ingest(
+    source: str,
+    native_id: str,
+    conn: Any = Depends(deps.get_db_conn),
+    _: dict = Depends(deps.require_admin),
+) -> dict[str, Any]:
+    """The same state, read-only: what the paste dialog polls while the drain works."""
+    return ingest_module.ingest_state(conn, source, native_id)
+
+
 @app.post("/buildings")
 def post_buildings(
     body: s.CreateBuildingIn,
@@ -1139,21 +1053,6 @@ def post_buildings(
     _: None = Depends(deps.require_token),
 ) -> dict[str, Any]:
     return create_building_run(conn, body)
-
-
-@app.post("/buildings/from_url")
-def post_buildings_from_url(
-    body: s.CreateBuildingFromUrlIn,
-    background_tasks: BackgroundTasks,
-    conn: Any = Depends(deps.get_db_conn),
-    sreality_client: Any = Depends(deps.get_sreality_client),
-    llm_client: Any = Depends(deps.get_llm_client),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    return create_building_run_from_url(
-        conn, sreality_client, llm_client, body,
-        background_tasks=background_tasks,
-    )
 
 
 @app.post("/buildings/{building_id}/confirm_units")
@@ -1329,6 +1228,9 @@ def post_estimate_yield(
         has_parking=body.has_parking,
         min_price_czk=body.min_price_czk,
         max_price_czk=body.max_price_czk,
+        tom_days_min=body.tom_days_min,
+        tom_days_max=body.tom_days_max,
+        tom_observed_only=body.tom_observed_only,
         category_main=body.category_main,
         category_type=body.category_type,
         include_unreliable=body.include_unreliable,
@@ -1343,10 +1245,6 @@ def post_estimate_yield(
         min_usable_area=body.min_usable_area,
         max_usable_area=body.max_usable_area,
         min_parking_lots=body.min_parking_lots,
-        building_condition_level_min=body.building_condition_level_min,
-        building_condition_level_max=body.building_condition_level_max,
-        apartment_condition_level_min=body.apartment_condition_level_min,
-        apartment_condition_level_max=body.apartment_condition_level_max,
     )
     try:
         result = estimate_yield(
@@ -1394,8 +1292,10 @@ def post_estimate_yield(
 def post_create_collection(
     body: s.CreateCollectionIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
+    act_as: uuid.UUID | None = Depends(tenant_pool.act_as_header),
 ) -> dict[str, Any]:
+    curation.refuse_monitoring_while_acting(act_as, body.monitoring_enabled)
     return curation.create_collection(conn, body, account_id=str(account_id))
 
 
@@ -1419,7 +1319,9 @@ def patch_collection(
     collection_id: int,
     body: s.UpdateCollectionIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
+    act_as: uuid.UUID | None = Depends(tenant_pool.act_as_header),
 ) -> dict[str, Any]:
+    curation.refuse_monitoring_while_acting(act_as, body.monitoring_enabled is not None)
     return curation.update_collection(conn, collection_id, body)
 
 
@@ -1454,11 +1356,13 @@ def delete_collection_property(
 # The second "tenant gate, then a service-role write" (tenancy.md): browser roles hold no INSERT on
 # collection_shares or notification_dispatches, so the share lands on the service role, opened in
 # the handler only after the gate passed (never a dependency: a refused caller costs no connection).
+# Sharing never delegates: require_account_id 403s under X-Act-As.
 @app.post("/collections/{collection_id}/shares")
 def post_collection_share(
     collection_id: int,
     body: s.ShareCollectionIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
+    _own: uuid.UUID = Depends(tenant_pool.require_account_id),
 ) -> dict[str, Any]:
     return curation.create_share(conn, deps.open_background_conn, collection_id, body)
 
@@ -1566,7 +1470,7 @@ def post_property_note(
     property_id: int,
     body: s.CreateNoteIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return curation.create_note(conn, property_id, body, account_id=str(account_id))
 
@@ -1602,7 +1506,7 @@ def put_property_artifact_link(
     property_id: int,
     body: s.SetArtifactLinkIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return curation.set_artifact_link(conn, property_id, body, account_id=str(account_id))
 
@@ -1669,7 +1573,7 @@ def get_tags(
 def post_tag(
     body: s.CreateTagIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return curation.create_tag(conn, body, account_id=str(account_id))
 
@@ -1710,10 +1614,8 @@ def delete_property_tag(
 
 
 # --- deal pipeline (migration 205; account-scoped since 294) ---------------
-# Phase 0: bookmark a property into the pipeline (entry stage) / remove it.
-# Membership reads go through property_pipeline_public via the anon key.
-# tenant_conn replaces get_db_conn + require_token: its verify_jwt fails
-# closed and every caller gets an RLS-scoped one-transaction connection.
+# Every route runs on the JWT-scoped tenant_conn; the SPA reads membership
+# itself through the security_invoker view property_pipeline_public.
 
 @app.get("/pipeline/stages")
 def get_pipeline_stages(
@@ -1727,7 +1629,7 @@ def get_pipeline_stages(
 def post_pipeline_stage(
     body: s.CreateStageIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.create_stage(conn, body, account_id=account_id)
 
@@ -1736,7 +1638,7 @@ def post_pipeline_stage(
 def post_pipeline_stages_reorder(
     body: s.ReorderStagesIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.reorder_stages(conn, body, account_id=account_id)
 
@@ -1746,7 +1648,7 @@ def patch_pipeline_stage(
     stage_id: int,
     body: s.UpdateStageIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.update_stage(conn, stage_id, body, account_id=account_id)
 
@@ -1755,7 +1657,7 @@ def patch_pipeline_stage(
 def delete_pipeline_stage(
     stage_id: int,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.archive_stage(conn, stage_id, account_id=account_id)
 
@@ -1764,7 +1666,7 @@ def delete_pipeline_stage(
 def post_pipeline_card(
     body: s.AddPipelineCardIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.add_card(conn, body, account_id=account_id)
 
@@ -1774,7 +1676,7 @@ def patch_pipeline_card(
     property_id: int,
     body: s.MoveCardIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.move_card(conn, property_id, body, account_id=account_id)
 
@@ -1783,9 +1685,43 @@ def patch_pipeline_card(
 def delete_pipeline_card(
     property_id: int,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.remove_card(conn, property_id, account_id=account_id)
+
+
+# --- pipeline sharing (migration 641) ----------------------------------------
+# A share lets its recipient act as the owner on curation (X-Act-As). Sharing is never delegated:
+# the owner is the caller's own account (require_account_id 403s under the header); the grant and
+# its notification are api/shares.py's service-role write, opened only after that gate.
+
+@app.get("/pipeline/shares")
+def get_pipeline_shares(
+    conn: Any = Depends(tenant_pool.tenant_conn),
+) -> dict[str, Any]:
+    return shares_module.list_pipeline_shares(conn)
+
+
+@app.post("/pipeline/shares")
+def post_pipeline_share(
+    body: s.SharePipelineIn,
+    conn: Any = Depends(tenant_pool.tenant_conn),
+    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+) -> dict[str, Any]:
+    shares_module.grant(
+        deps.open_background_conn, body.email, shares_module.PipelineShare(account_id, body.mode),
+    )
+    return shares_module.list_pipeline_shares(conn)
+
+
+@app.delete("/pipeline/shares/{account_id}")
+def delete_pipeline_share(
+    account_id: uuid.UUID,
+    side: s.ShareSide,
+    conn: Any = Depends(tenant_pool.tenant_conn),
+) -> dict[str, Any]:
+    """Stop sharing my board with `account_id` (side=shared_with) or leave theirs (shared_with_me)."""
+    return shares_module.revoke_pipeline(conn, str(account_id), side)
 
 
 # --- dismissals (migration 536) ---------------------------------------------
@@ -1796,7 +1732,7 @@ def delete_pipeline_card(
 def post_dismissal(
     body: s.DismissPropertyIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return dismissals_module.dismiss(conn, body, account_id=account_id)
 
@@ -1806,8 +1742,8 @@ def delete_dismissal(
     property_id: int,
     conn: Any = Depends(tenant_pool.tenant_conn),
 ) -> dict[str, Any]:
-    """RLS-only: "dismissed" is read under the plural current_account_ids(), so
-    undo lifts every active row the caller can see, not one account's."""
+    """RLS-only: "dismissed" is read under the plural acting_account_ids() (the caller's
+    accounts without X-Act-As), so undo lifts every active row the caller can see."""
     return dismissals_module.undismiss(conn, property_id)
 
 
@@ -1849,60 +1785,6 @@ def decide_skill_refinement(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-# --- manual rental estimates --------------------------------------------
-# Phase U-ME: point-estimate rental figures attached to a listing.
-# Shared reference data (migration 290): every account reads, only platform
-# admins write. The read stays token-gated; the writes require an admin JWT.
-
-
-@app.get("/listings/{sreality_id}/manual_estimates")
-def get_listing_manual_estimates(
-    sreality_id: int,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    return me.list_manual_estimates(conn, sreality_id)
-
-
-@app.post("/listings/{sreality_id}/manual_estimates")
-def post_listing_manual_estimate(
-    sreality_id: int,
-    body: s.CreateManualEstimateIn,
-    conn: Any = Depends(deps.get_db_conn),
-    claims: dict = Depends(deps.require_admin),
-) -> dict[str, Any]:
-    return me.create_manual_estimate(conn, sreality_id, body, claims)
-
-
-@app.patch("/manual_estimates/{estimate_id}")
-def patch_manual_estimate(
-    estimate_id: int,
-    body: s.UpdateManualEstimateIn,
-    conn: Any = Depends(deps.get_db_conn),
-    claims: dict = Depends(deps.require_admin),
-) -> dict[str, Any]:
-    return me.update_manual_estimate(conn, estimate_id, body, claims)
-
-
-@app.delete("/manual_estimates/{estimate_id}")
-def delete_manual_estimate(
-    estimate_id: int,
-    conn: Any = Depends(deps.get_db_conn),
-    _: dict = Depends(deps.require_admin),
-) -> dict[str, Any]:
-    return me.delete_manual_estimate(conn, estimate_id)
-
-
-@app.post("/tools/get_manual_rental_estimates")
-def post_get_manual_rental_estimates(
-    body: s.GetManualRentalEstimatesIn,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    from toolkit.manual_estimates import get_manual_rental_estimates
-    return get_manual_rental_estimates(conn, body.sreality_id)
-
-
 def _build_comparables_inputs(
     body: s.FindComparablesIn,
 ) -> tuple[TargetSpec, ComparableFilters]:
@@ -1930,6 +1812,9 @@ def _build_comparables_inputs(
         has_parking=body.has_parking,
         min_price_czk=body.min_price_czk,
         max_price_czk=body.max_price_czk,
+        tom_days_min=body.tom_days_min,
+        tom_days_max=body.tom_days_max,
+        tom_observed_only=body.tom_observed_only,
         category_main=body.category_main,
         category_type=body.category_type,
         include_unreliable=body.include_unreliable,
@@ -1944,9 +1829,5 @@ def _build_comparables_inputs(
         min_usable_area=body.min_usable_area,
         max_usable_area=body.max_usable_area,
         min_parking_lots=body.min_parking_lots,
-        building_condition_level_min=body.building_condition_level_min,
-        building_condition_level_max=body.building_condition_level_max,
-        apartment_condition_level_min=body.apartment_condition_level_min,
-        apartment_condition_level_max=body.apartment_condition_level_max,
     )
     return target, filters

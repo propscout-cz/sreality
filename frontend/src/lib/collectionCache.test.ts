@@ -30,7 +30,7 @@ import type { Collection } from './types';
 const own = (over: Partial<Collection> = {}): Collection => ({
   id: 1, name: 'Šortlist', description: null, created_at: '2026-10-01T00:00:00Z',
   updated_at: '2026-10-01T00:00:00Z', listing_count: 1, monitoring_enabled: false,
-  notify_channels: [], is_system: false, owner_email: null, shared_with: [], ...over,
+  is_system: false, owner_email: null, shared_with: [], ...over,
 });
 const sharedBy = (email: string, over: Partial<Collection> = {}): Collection =>
   own({ owner_email: email, shared_with: [{ account_id: 'me', email: null }], ...over });
@@ -170,20 +170,13 @@ describe('collection revalidation contract', () => {
     ]);
   });
 
-  /* When Browse is scoped to collections, membership IS the cohort: a removal
-   * has to drop the row from the list, not just un-fill a glyph. */
-  it('re-reads the Browse surfaces only when membership is the cohort', () => {
-    const off = vi.fn();
-    revalidateCollections({ invalidateQueries: off } as never, { collection_id: 7 });
-    expect(off).toHaveBeenCalledTimes(3);
-
-    const on = vi.fn();
-    revalidateCollections({ invalidateQueries: on } as never, { cohortScoped: true });
-    expect(on.mock.calls.map(([arg]) => arg.queryKey)).toEqual([
-      curationKeys.propertyCollectionMembers,
-      curationKeys.collections,
-      ...browseKeys.all,
-    ]);
+  /* What a membership change does to Browse is the settle's (lib/curationSettle):
+   * revalidating the collection reads never re-reads a Browse surface. */
+  it('never re-reads a Browse surface', () => {
+    const invalidateQueries = vi.fn();
+    revalidateCollections({ invalidateQueries } as never, { collection_id: 7, shareChanged: true });
+    const roots = invalidateQueries.mock.calls.map(([arg]) => arg.queryKey[0]);
+    for (const [root] of browseKeys.all) expect(roots).not.toContain(root);
   });
 });
 
@@ -199,8 +192,9 @@ function sources(dir: string, out: string[] = []): string[] {
 }
 
 // A read pairs the key with a queryFn; an invalidateQueries over it is a writer's refresh.
+// The key may carry the acting segment (lib/acting `actingKey(actAs, …)`).
 const KEY_READ =
-  /queryKey:\s*curationKeys\.(collections|propertyCollectionMembers),\s*queryFn\b/;
+  /queryKey:\s*(?:actingKey\(\s*\w+,\s*)?curationKeys\.(collections|propertyCollectionMembers)\)?,\s*queryFn\b/;
 const FETCHER_IMPORT =
   /import\s*\{[^}]*\b(listCollections|fetchPropertyCollectionMemberSet)\b[^}]*\}\s*from/;
 // lib/api.ts + lib/queries.ts define the fetchers; queries.ts's Browse collection

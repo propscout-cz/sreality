@@ -1,9 +1,4 @@
-/* The board card's broker tooltip.
- *
- * A non-admin session gets has_email / has_phone instead of the contact values
- * (the /brokers API masks per caller since 2026-08-12). Dropping the masked pair
- * silently would render exactly the same tooltip as a broker with no contact at
- * all — the honest-state gap this wave closes. */
+/* The board card's broker tooltip. */
 
 import { describe, expect, it } from 'vitest';
 import { brokerHoverTitle } from './BoardCard';
@@ -15,11 +10,13 @@ const broker = (over: Partial<ListingBroker>): ListingBroker => ({
   broker_id: 7,
   broker_display_name: 'Jan Novák',
   broker_firm_label: 'RE/MAX',
+  primary_email: null,
+  primary_phone: null,
   ...over,
 });
 
 describe('brokerHoverTitle', () => {
-  it('lists the real contact for an admin session', () => {
+  it('lists the contact', () => {
     expect(
       brokerHoverTitle(
         broker({ primary_phone: '+420 777 123 456', primary_email: 'jan@remax.cz' }),
@@ -27,14 +24,8 @@ describe('brokerHoverTitle', () => {
     ).toBe('Jan Novák · RE/MAX · +420 777 123 456 · jan@remax.cz');
   });
 
-  it('says the contact is admin-only when it is masked', () => {
-    expect(brokerHoverTitle(broker({ has_phone: true }))).toBe(
-      'Jan Novák · RE/MAX · kontakt jen pro adminy',
-    );
-  });
-
-  it('stays silent about contact when the broker genuinely has none', () => {
-    expect(brokerHoverTitle(broker({ has_email: false, has_phone: false }))).toBe(
+  it('stays silent about contact when the broker has none', () => {
+    expect(brokerHoverTitle(broker({}))).toBe(
       'Jan Novák · RE/MAX',
     );
   });

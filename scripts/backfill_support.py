@@ -38,7 +38,7 @@ _REBUILD_ACTIVE_SQL = """
 # Bound as a VALUE, not spelled into the query: a literal `%` in an executed SQL
 # string is a psycopg placeholder hazard, and `tests/test_sql_placeholders.py`
 # guards against exactly that. `\_` escapes the underscore so this matches
-# `rebuild_browse_list` / `rebuild_properties_map_mv` and not `rebuildXlist`.
+# `rebuild_browse_list` and not `rebuildXlist`.
 _REBUILD_LIKE = r"%rebuild\_%"
 
 _STATEMENT_TIMEOUT_SQL = "SET statement_timeout = '600s'"
@@ -46,7 +46,8 @@ _STATEMENT_TIMEOUT_SQL = "SET statement_timeout = '600s'"
 _REBUILD_POLL_SECONDS = 30.0
 
 # The window these three have to cover is the ~90 s of row locks the hourly MF-yield
-# recompute holds on `listings` twice an hour — the failure this rail exists for. With a
+# recompute held on `listings` twice an hour (retired: workflow deleted 8b0327b2, functions
+# dropped by migration 631) — the failure this rail was built for. With a
 # caller-armed `lock_timeout` the wait itself is bounded, so the RETRIES are what has to
 # outlast the holder: 4 attempts with a 15 s × attempt backoff give 15 + 30 + 45 = 90 s of
 # pauses on top of the four bounded waits (≥ 30 s each at the recommended lock_timeout),

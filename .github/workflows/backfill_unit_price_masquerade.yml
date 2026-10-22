@@ -16,7 +16,7 @@ name: Backfill unit-price masquerade (per-m² rate stored as price_czk)
 # is in the content hash but this writes NO snapshot, on the same reasoning as the
 # mmreality heal. The read is keyset-paginated and exhaustive; a pass that stopped
 # early logs "BACKFILL INCOMPLETE" with a `--after` resume cursor, and silence
-# means done. NOT a portal ingest workflow, so it carries no `# portal:` tag.
+# means done.
 #
 # The script DEFAULTS TO DRY-RUN: it reports and exits unless `write` is true.
 #

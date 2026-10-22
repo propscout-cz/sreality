@@ -117,7 +117,9 @@ def conns(monkeypatch):
         return tenant
 
     @contextlib.contextmanager
-    def _fake_tenant_transaction(claims: dict):
+    def _fake_tenant_transaction(claims: dict, *, act_as: Any, method: str):
+        # Feedback is identity-scoped (estimation_feedback): the route never acts.
+        assert act_as is None and method == "POST"
         tenant.opened += 1
         try:
             yield tenant

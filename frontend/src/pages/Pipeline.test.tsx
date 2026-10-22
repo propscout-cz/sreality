@@ -7,7 +7,7 @@
  * remove flow (stage moves are drag-only; the select fallback was removed).
  */
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -19,6 +19,15 @@ import * as queries from '@/lib/queries';
 import * as brokersApi from '@/lib/brokers';
 import { createMutationCache } from '@/lib/mutationCache';
 import * as toast from '@/lib/toast';
+import {
+  ACTIVE_BOARD_KEY,
+  getActiveBoard,
+  reloadActingStore,
+  resetActiveBoard,
+  setActiveBoard,
+} from '@/lib/acting';
+import { BOARD_GONE_MESSAGE } from '@/lib/pipelineShares';
+import { NewPropertyProvider } from '@/components/NewPropertyProvider';
 
 /* Every read the page makes has to be named here: the factories spread the
    real module, so an unnamed one runs for real and fails SOFT (request()
@@ -34,8 +43,20 @@ vi.mock('@/lib/api', async (importOriginal) => {
     attachTag: vi.fn(),
     detachTag: vi.fn(),
     fetchArtifactLinks: vi.fn(),
+    listPipelineShares: vi.fn(),
+    sharePipeline: vi.fn(),
+    unsharePipeline: vi.fn(),
+    createPipelineStage: vi.fn(),
+    ingestListing: vi.fn(),
+    addPipelineCard: vi.fn(),
   };
 });
+
+/* Only the "Nová nemovitost" provider asks who is signed in (admins only, v1). */
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth')>()),
+  useAuth: vi.fn(() => ({ isAdmin: true })),
+}));
 
 vi.mock('@/lib/queries', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/queries')>();
@@ -104,17 +125,15 @@ const CARDS: PipelineBoardCard[] = [
 
 /* The decoration fixtures, keyed on listing_id like the real layer. */
 /* W6: identity AND contact are one row now (migration 419), so there is no second
-   fixture to pair with this one — `masked` picks which half of the contact pair the
-   API sent, which is a property of the CALLER, not of the row. */
-const listingBroker = (masked: boolean) => ({
+   fixture to pair with this one. */
+const listingBroker = () => ({
   sreality_id: 111,
   listing_id: 111,
   broker_id: 7,
   broker_display_name: 'Jan Novák',
   broker_firm_label: 'RE/MAX',
-  ...(masked
-    ? { has_email: true, has_phone: true }
-    : { primary_email: 'jan@remax.cz', primary_phone: '420777123456' }),
+  primary_email: 'jan@remax.cz',
+  primary_phone: '420777123456',
 });
 
 /* Each card's ads, for its broker line (MS7). */
@@ -175,7 +194,6 @@ const collection = (id: number, name: string): Collection => ({
   updated_at: '2026-05-01T00:00:00Z',
   listing_count: 1,
   monitoring_enabled: false,
-  notify_channels: [],
   is_system: false,
   owner_email: null,
   shared_with: [],
@@ -235,9 +253,13 @@ function renderBoard(entry = '/pipeline') {
   );
 }
 
+/* Nobody shares a board with me unless a test says so (migration 641). */
+const NO_SHARES = { shared_with: [], shared_with_me: [] };
+
 describe('<Pipeline> board', () => {
   beforeEach(() => {
     localStorage.clear();
+    vi.mocked(api.listPipelineShares).mockResolvedValue(NO_SHARES);
     vi.mocked(api.listTags).mockResolvedValue({ data: TAGS });
     vi.mocked(api.attachTag).mockResolvedValue({ attached: true });
     vi.mocked(api.detachTag).mockResolvedValue({ detached: true });
@@ -256,7 +278,7 @@ describe('<Pipeline> board', () => {
       new Map([[42, [ad(111, 42)]]]),
     );
     vi.mocked(brokersApi.fetchListingBrokersByIds).mockResolvedValue(
-      new Map([[111, listingBroker(false)]]),
+      new Map([[111, listingBroker()]]),
     );
     vi.mocked(api.listCollections).mockResolvedValue({
       data: COLLECTIONS,
@@ -421,32 +443,17 @@ describe('<Pipeline> board', () => {
     expect(screen.queryByText('Načítání…')).not.toBeInTheDocument();
   });
 
-  /* The non-admin shape: the API sends has_email/has_phone INSTEAD of the
-     values. The card must keep the broker and say the contact is admin-only —
-     dropping it renders identically to a broker with no contact at all. */
-  it('marks a masked contact as admin-only instead of omitting it', async () => {
-    vi.mocked(brokersApi.fetchListingBrokersByIds).mockResolvedValue(
-      new Map([[111, listingBroker(true)]]),
-    );
-    renderBoard();
-    const broker = await screen.findByText('Jan Novák');
-    expect(broker.closest('a')).toHaveAttribute(
-      'title',
-      'Jan Novák · RE/MAX · kontakt jen pro adminy',
-    );
-  });
-
   /* MS7: the property's list, compact — the canonical ad's broker first, "+N"
      for the rest (an inactive ad's hidden while one is active), from two batched
      reads for the whole board. */
   it('shows the first broker of the property and counts the others', async () => {
     const other = (listing_id: number, broker_id: number, broker_display_name: string) =>
-      ({ ...listingBroker(false), listing_id, broker_id, broker_display_name });
+      ({ ...listingBroker(), listing_id, broker_id, broker_display_name });
     vi.mocked(queries.fetchPropertySourcesByPropertyIds)
       .mockClear()
       .mockResolvedValue(new Map([[42, [ad(110, 42), ad(111, 42), ad(112, 42, false)]]]));
     vi.mocked(brokersApi.fetchListingBrokersByIds).mockClear().mockResolvedValue(
-      new Map([[110, other(110, 8, 'Eva Malá')], [111, listingBroker(false)], [112, other(112, 9, 'Petr')]]),
+      new Map([[110, other(110, 8, 'Eva Malá')], [111, listingBroker()], [112, other(112, 9, 'Petr')]]),
     );
     renderBoard();
     expect((await screen.findByText('Jan Novák')).closest('a')).toHaveAttribute('href', '/brokers/7');
@@ -463,6 +470,41 @@ describe('<Pipeline> board', () => {
     expect(screen.queryByText('Sadová')).not.toBeInTheDocument();
     fireEvent.click(retry);
     expect(await screen.findByText('Sadová')).toBeInTheDocument();
+  });
+
+  /* A new account's board is its stage columns, empty, under the bar a full
+     board has — never a sentence in their place. */
+  it('draws every stage column and the bar for an empty board', async () => {
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([]);
+    renderBoard();
+    for (const s of STAGES) {
+      expect(await screen.findByRole('list', { name: s.label })).toBeInTheDocument();
+    }
+    expect(screen.getByText(/nemovitostí/).textContent).toBe('0 nemovitostí');
+    expect(screen.queryByText(/Zatím prázdné/)).not.toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Lokalita' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Řazení karet ve fázi' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Karty' })).toBeInTheDocument();
+  });
+
+  /* The frame waits for BOTH reads: a board that lands before its stages
+     would otherwise paint no columns at all. */
+  it('holds the skeleton until the stages land too', async () => {
+    vi.mocked(queries.fetchPipelineStages).mockReturnValue(new Promise(() => {}));
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([]);
+    renderBoard();
+    await waitFor(() =>
+      expect(screen.getByText(/nemovitostí/).textContent).toBe('0 nemovitostí'),
+    );
+    expect(screen.getByText('Načítání pipeline…')).toBeInTheDocument();
+  });
+
+  it('holds the skeleton, with the stages drawn, while the board is in flight', async () => {
+    vi.mocked(queries.fetchPipelineBoard).mockReturnValue(new Promise(() => {}));
+    renderBoard();
+    for (const s of STAGES) expect(await screen.findByText(s.label)).toBeInTheDocument();
+    expect(screen.getByText('Načítání pipeline…')).toBeInTheDocument();
+    expect(screen.getByText(/nemovitostí/).textContent).toBe('— nemovitostí');
   });
 
   it('filters the board by property type', async () => {
@@ -544,7 +586,8 @@ describe('<Pipeline> board', () => {
     const retry = await screen.findByRole('button', { name: /Kolekce se nepodařilo načíst/ });
     expect(screen.getByText(/nemovitostí/).textContent).toBe('2 nemovitostí');
     expect(screen.getByText('Sadová')).toBeInTheDocument();
-    expect(screen.queryByText('Kolekce')).not.toBeInTheDocument();
+    /* The retry stands in the row's place: no chip while the map is missing. */
+    expect(screen.queryByRole('button', { name: 'V žádné kolekci' })).not.toBeInTheDocument();
     vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[42, [7]]]));
     fireEvent.click(retry);
     await waitFor(() =>
@@ -552,9 +595,21 @@ describe('<Pipeline> board', () => {
     );
   });
 
-  /* The row reads the member map, NOT the collections list: a selection is a
-     live constraint, so its chip renders (pressed, under a placeholder name)
-     before the list arrives — otherwise the only way out is Reset. */
+  /* A failed collections LIST is a retry too — never "#7" chips filed under
+     "No longer available", which would read as a deleted collection. */
+  it('offers a retry, not placeholder chips, when the collections list fails', async () => {
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_DUM]);
+    vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[42, [7]]]));
+    vi.mocked(api.listCollections).mockRejectedValue(new Error('HTTP 500'));
+    renderBoard('/pipeline?collections=7');
+    expect(await screen.findByRole('button', { name: /Kolekce se nepodařilo načíst/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '#7' })).not.toBeInTheDocument();
+  });
+
+  /* While the collections list is still on its way the row stands on the member
+     map: a selection is a live constraint, so its chip renders (pressed, under
+     a placeholder name) before the list arrives — otherwise the only way out is
+     Reset. */
   it('offers the selected collection before the collections list resolves', async () => {
     vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_DUM]);
     vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(
@@ -588,6 +643,22 @@ describe('<Pipeline> board', () => {
       expect(screen.queryByText('Lesní')).not.toBeInTheDocument(),
     );
     expect(screen.getByText('Sadová')).toBeInTheDocument();
+    expect(screen.getByText(/nemovitostí/).textContent).toBe('1 z 2 nemovitostí');
+  });
+
+  /* Ruling 10 (2026-10-19): the bar's Kolekce row is the one curated-set
+     control, its "not in" chip included. */
+  it('narrows the board to the cards in no collection through "V žádné kolekci"', async () => {
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_DUM]);
+    vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(
+      new Map([[42, [7]]]),
+    );
+    renderBoard();
+    expect(await screen.findByText('Sadová')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'V žádné kolekci' }));
+    await waitFor(() => expect(screen.queryByText('Sadová')).not.toBeInTheDocument());
+    expect(screen.getByText('Lesní')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Šortlist' })).toBeDisabled();
     expect(screen.getByText(/nemovitostí/).textContent).toBe('1 z 2 nemovitostí');
   });
 
@@ -780,5 +851,298 @@ describe('<Pipeline> board', () => {
     expect(button).toHaveTextContent('Artifact');
     // The card without a link offers nothing.
     expect(screen.getAllByRole('link', { name: /^Artifact:/ })).toHaveLength(1);
+  });
+});
+
+/* Pipeline sharing (migration 641, design §3.5): the switcher, a shared board
+ * read through <ActingAs> (the owner's rows under the acting header), the read
+ * board's gating, the edit board's tools, my own board's Sharing block, the
+ * viewer's leave, and a revoked board falling back to my own. */
+describe('<Pipeline> shared boards', () => {
+  const READ = { account_id: 'owner-r', email: 'petr@example.cz', mode: 'read' as const };
+  const EDIT = { account_id: 'owner-e', email: 'jana@example.cz', mode: 'edit' as const };
+
+  beforeEach(() => {
+    localStorage.clear();
+    reloadActingStore();
+    for (const fn of [
+      toast.pushToast,
+      api.listTags,
+      api.fetchArtifactLinks,
+      api.unsharePipeline,
+      api.sharePipeline,
+      api.createPipelineStage,
+      api.removePipelineCard,
+    ]) {
+      vi.mocked(fn).mockClear();
+    }
+    vi.mocked(api.listPipelineShares).mockResolvedValue({ shared_with: [], shared_with_me: [READ, EDIT] });
+    vi.mocked(api.listTags).mockResolvedValue({ data: TAGS });
+    vi.mocked(queries.fetchPropertyTagMemberSet).mockResolvedValue(new Map([[42, [5]]]));
+    vi.mocked(api.fetchArtifactLinks).mockResolvedValue(new Map());
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES);
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue(CARDS);
+    vi.mocked(queries.fetchListingCovers).mockResolvedValue(new Map());
+    vi.mocked(queries.fetchPropertySourcesByPropertyIds).mockResolvedValue(new Map());
+    vi.mocked(brokersApi.fetchListingBrokersByIds).mockResolvedValue(new Map());
+    vi.mocked(api.listCollections).mockResolvedValue({ data: COLLECTIONS, total: COLLECTIONS.length });
+    vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map());
+  });
+  afterEach(() => resetActiveBoard());
+
+  it('lists my board and every board shared with me, and remembers the pick', async () => {
+    renderBoard();
+    const switcher = await screen.findByRole('group', { name: 'Zobrazený pipeline' });
+    expect(within(switcher).getByRole('button', { name: 'Můj pipeline' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(within(switcher).getByRole('button', { name: 'jana@example.cz · úpravy' }));
+    /* The page starts afresh on the picked board (keyed by it), switcher included. */
+    const after = await screen.findByRole('group', { name: 'Zobrazený pipeline' });
+    expect(within(after).getByRole('button', { name: 'jana@example.cz · úpravy' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(within(after).getByRole('button', { name: 'Můj pipeline' })).toHaveAttribute('aria-pressed', 'false');
+    expect(JSON.parse(localStorage.getItem(ACTIVE_BOARD_KEY) ?? 'null')).toEqual(EDIT);
+    /* The owner's board is read as the owner: the header rides every read. */
+    await waitFor(() =>
+      expect(queries.fetchPipelineBoard).toHaveBeenLastCalledWith(expect.objectContaining({ actAs: 'owner-e' })),
+    );
+  });
+
+  it('drops my tag / collection scope on a switch — its ids are my sets, not the owner\'s', async () => {
+    vi.mocked(queries.fetchPropertyTagMemberSet).mockImplementation(async (opts) =>
+      opts?.actAs ? new Map() : new Map([[42, [5]]]),
+    );
+    renderBoard('/pipeline?tags=5');
+    expect(await screen.findByText('Sadová')).toBeInTheDocument();
+    const switcher = await screen.findByRole('group', { name: 'Zobrazený pipeline' });
+    fireEvent.click(within(switcher).getByRole('button', { name: 'jana@example.cz · úpravy' }));
+    await waitFor(() =>
+      expect(queries.fetchPropertyTagMemberSet).toHaveBeenCalledWith(expect.objectContaining({ actAs: 'owner-e' })),
+    );
+    /* Kept, my tag 5 would match none of the owner's cards: an empty board. */
+    expect(await screen.findByText('Sadová')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reset' })).toBeNull();
+  });
+
+  it('shows a read board without drag, trash, stage editor, tags or sharing', async () => {
+    setActiveBoard(READ);
+    renderBoard();
+    expect(await screen.findByText('Sadová')).toBeInTheDocument();
+    expect(queries.fetchPipelineStages).toHaveBeenLastCalledWith(expect.objectContaining({ actAs: 'owner-r' }));
+    expect(screen.queryByLabelText('Přetáhnout kartu do jiné fáze')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Odebrat z pipeline' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Spravovat fáze' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Sdílení/ })).toBeNull();
+    expect(screen.queryByText('k prohlídce')).toBeNull();
+    /* The owner's curation is not readable under a read share: not even asked for. */
+    expect(api.listTags).not.toHaveBeenCalledWith({ actAs: 'owner-r' });
+    expect(api.fetchArtifactLinks).not.toHaveBeenCalledWith({ actAs: 'owner-r' });
+    expect(screen.getByText('petr@example.cz')).toBeInTheDocument();
+    expect(screen.getByText(/jen ke čtení/, { selector: 'span' })).toBeInTheDocument();
+  });
+
+  it('gives an edit board drag, trash, the stage editor and the owner\'s tags — all as the owner', async () => {
+    vi.mocked(api.createPipelineStage).mockResolvedValue(STAGES[0]);
+    setActiveBoard(EDIT);
+    renderBoard();
+    expect(await screen.findByLabelText('Přetáhnout kartu do jiné fáze')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Odebrat z pipeline' })).toBeInTheDocument();
+    expect(await screen.findByText('k prohlídce')).toBeInTheDocument();
+    expect(api.listTags).toHaveBeenCalledWith({ actAs: 'owner-e' });
+    expect(screen.queryByRole('button', { name: /^Sdílení/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Spravovat fáze' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Nová fáze' }), { target: { value: 'Prohlídka' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Přidat' }));
+    await waitFor(() =>
+      expect(api.createPipelineStage).toHaveBeenCalledWith({ label: 'Prohlídka' }, { actAs: 'owner-e' }),
+    );
+  });
+
+  it('removes a card from an edit board as the owner', async () => {
+    vi.mocked(api.removePipelineCard).mockResolvedValue({ removed: true });
+    setActiveBoard(EDIT);
+    renderBoard();
+    fireEvent.click(await screen.findByRole('button', { name: 'Odebrat z pipeline' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Odebrat' }));
+    await waitFor(() => expect(api.removePipelineCard).toHaveBeenCalledWith(42, { actAs: 'owner-e' }));
+  });
+
+  it('leaves a shared board in two steps and lands back on my own', async () => {
+    vi.mocked(api.unsharePipeline).mockResolvedValue({ deleted: true });
+    setActiveBoard(READ);
+    renderBoard();
+    fireEvent.click(await screen.findByRole('button', { name: 'Odebrat z mého seznamu' }));
+    expect(api.unsharePipeline).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Odebrat' }));
+    await waitFor(() => expect(api.unsharePipeline).toHaveBeenCalledWith('owner-r', 'shared_with_me'));
+    await waitFor(() => expect(getActiveBoard()).toBeNull());
+  });
+
+  it('falls back to my own board, with a toast, when the server no longer lists it', async () => {
+    setActiveBoard({ account_id: 'gone', email: 'x@example.cz', mode: 'edit' });
+    renderBoard();
+    await waitFor(() => expect(getActiveBoard()).toBeNull());
+    expect(toast.pushToast).toHaveBeenCalledWith('info', BOARD_GONE_MESSAGE);
+  });
+
+  it('falls back to my own board when the shared board reads no stages', async () => {
+    vi.mocked(queries.fetchPipelineStages).mockImplementation(async ({ actAs } = {}) =>
+      actAs ? [] : STAGES,
+    );
+    setActiveBoard(READ);
+    renderBoard();
+    await waitFor(() => expect(getActiveBoard()).toBeNull());
+    expect(toast.pushToast).toHaveBeenCalledWith('info', BOARD_GONE_MESSAGE);
+  });
+
+  /* Ruling 5: a card or stage last changed by a delegate is stamped. My own
+   * board names the delegate from my recipients; a shared board, where only my
+   * own grant is known, shows the time alone. */
+  describe('delegated stamps', () => {
+    const STAMPED = [{ ...CARDS[0], edited_by_account_id: 'acc-b', edited_at: '2026-10-20T10:00:00Z' }];
+    const STAMPED_STAGES = STAGES.map((st, i) =>
+      i === 0 ? { ...st, edited_by_account_id: 'acc-b', edited_at: '2026-10-20T11:00:00Z' } : st,
+    );
+
+    it('names my recipient on my own board — on the card and in the stage editor', async () => {
+      vi.mocked(api.listPipelineShares).mockResolvedValue({
+        shared_with: [{ account_id: 'acc-b', email: 'eva@example.cz', mode: 'edit' }],
+        shared_with_me: [],
+      });
+      vi.mocked(queries.fetchPipelineBoard).mockResolvedValue(STAMPED);
+      vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAMPED_STAGES);
+      renderBoard();
+      expect(await screen.findByText(/^upravil eva@example\.cz · /)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Spravovat fáze' }));
+      expect(await screen.findAllByText(/^upravil eva@example\.cz · /)).toHaveLength(2);
+    });
+
+    it('shows the time alone on a board shared with me', async () => {
+      vi.mocked(queries.fetchPipelineBoard).mockResolvedValue(STAMPED);
+      setActiveBoard(READ);
+      renderBoard();
+      expect(await screen.findByText(/^upraveno · /)).toBeInTheDocument();
+      expect(screen.queryByText(/^upravil /)).toBeNull();
+    });
+  });
+
+  describe('my own board\'s Sharing block', () => {
+    beforeEach(() => {
+      vi.mocked(api.listPipelineShares).mockResolvedValue({
+        shared_with: [{ account_id: 'acc-b', email: 'eva@example.cz', mode: 'edit' }],
+        shared_with_me: [],
+      });
+    });
+
+    it('shares with an email at a chosen mode, and shows a 422 under the field', async () => {
+      vi.mocked(api.sharePipeline).mockRejectedValueOnce(new api.ApiError('No account uses this email.', 422, null));
+      renderBoard();
+      fireEvent.click(await screen.findByRole('button', { name: 'Sdílení · 1' }));
+      fireEvent.change(screen.getByRole('textbox', { name: 'E-mail' }), { target: { value: 'nikdo@example.cz' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Úpravy' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Sdílet' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('No account uses this email.');
+      expect(api.sharePipeline).toHaveBeenCalledWith('nikdo@example.cz', 'edit');
+    });
+
+    it('lists recipients with their mode and stops sharing only after a confirm', async () => {
+      vi.mocked(api.unsharePipeline).mockResolvedValue({ deleted: true });
+      renderBoard();
+      fireEvent.click(await screen.findByRole('button', { name: 'Sdílení · 1' }));
+      const list = screen.getByRole('list', { name: 'Sdíleno s' });
+      expect(within(list).getByText('Úpravy')).toBeInTheDocument();
+      fireEvent.click(within(list).getByRole('button', { name: 'Přestat sdílet s eva@example.cz' }));
+      expect(api.unsharePipeline).not.toHaveBeenCalled();
+      fireEvent.click(within(list).getByRole('button', { name: 'Přestat sdílet' }));
+      await waitFor(() => expect(api.unsharePipeline).toHaveBeenCalledWith('acc-b', 'shared_with'));
+    });
+  });
+});
+
+/* "Nová nemovitost" (docs/design/new-property-from-link.md §3.6): the header's
+ * paste box, mounted under the Shell's provider. The card lands on the board on
+ * screen — the owner's on an edit share — and the page stays, with a toast. A
+ * read board offers no button. */
+describe('<Pipeline> Nová nemovitost', () => {
+  const READ = { account_id: 'owner-r', email: 'petr@example.cz', mode: 'read' as const };
+  const EDIT = { account_id: 'owner-e', email: 'jana@example.cz', mode: 'edit' as const };
+  const URL_IDNES = 'https://reality.idnes.cz/detail/prodej/byt/praha/6ad7ca9d45dd870c0a0b152a/';
+
+  function renderWithDialog() {
+    const qc = new QueryClient({
+      mutationCache: createMutationCache(),
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    return render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/pipeline']}>
+          <NewPropertyProvider>
+            <Pipeline />
+          </NewPropertyProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  async function addFromHeader() {
+    fireEvent.click(await screen.findByRole('button', { name: 'Nová nemovitost' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Nová nemovitost' });
+    fireEvent.change(within(dialog).getByLabelText('Odkaz na inzerát'), { target: { value: URL_IDNES } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Přidat' }));
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+    reloadActingStore();
+    vi.mocked(toast.pushToast).mockClear();
+    vi.mocked(api.addPipelineCard).mockReset().mockResolvedValue({ property_id: 456, stage_key: 'interested', added: true });
+    vi.mocked(api.ingestListing).mockReset().mockResolvedValue({
+      state: 'held',
+      message_cs: null,
+      source: 'idnes',
+      source_id_native: '6ad7ca9d45dd870c0a0b152a',
+      listing_id: 123,
+      is_active: true,
+      property_id: 456,
+      queue: null,
+    });
+    vi.mocked(api.listPipelineShares).mockResolvedValue({ shared_with: [], shared_with_me: [READ, EDIT] });
+    vi.mocked(api.listTags).mockResolvedValue({ data: TAGS });
+    vi.mocked(api.fetchArtifactLinks).mockResolvedValue(new Map());
+    vi.mocked(queries.fetchPropertyTagMemberSet).mockResolvedValue(new Map());
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES);
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue(CARDS);
+    vi.mocked(queries.fetchListingCovers).mockResolvedValue(new Map());
+    vi.mocked(queries.fetchPropertySourcesByPropertyIds).mockResolvedValue(new Map());
+    vi.mocked(brokersApi.fetchListingBrokersByIds).mockResolvedValue(new Map());
+    vi.mocked(api.listCollections).mockResolvedValue({ data: COLLECTIONS, total: COLLECTIONS.length });
+    vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map());
+  });
+  afterEach(() => resetActiveBoard());
+
+  it('adds the pasted ad to my board and stays, with a toast that opens it', async () => {
+    renderWithDialog();
+    await addFromHeader();
+    await waitFor(() => expect(api.addPipelineCard).toHaveBeenCalledWith(456));
+    await waitFor(() =>
+      expect(toast.pushToast).toHaveBeenCalledWith('ok', 'Přidáno do pipeline', 0, expect.objectContaining({ label: 'Otevřít' })),
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Pipeline obchodů' })).toBeInTheDocument();
+  });
+
+  it('adds it to the owner\'s board on an edit share', async () => {
+    setActiveBoard(EDIT);
+    renderWithDialog();
+    await addFromHeader();
+    await waitFor(() => expect(api.addPipelineCard).toHaveBeenCalledWith(456, { actAs: 'owner-e' }));
+  });
+
+  it('offers no button on a read board', async () => {
+    setActiveBoard(READ);
+    renderWithDialog();
+    expect(await screen.findByText('Sadová')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Nová nemovitost' })).toBeNull();
   });
 });

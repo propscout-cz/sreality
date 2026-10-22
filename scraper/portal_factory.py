@@ -1,12 +1,10 @@
 """One place that turns a source name into a Portal (or client) instance.
 
 Every caller that turns a source into a Portal needs the same table and the same
-two constructor exceptions: the realtime worker, to run a lane; the coverage
-gate, to ask a portal what its declared categories canonicalise to; and the
-sreality entrypoint, to build its portal from config. `portal_runner` reads the
-client table to make a portal's client. A second copy of either table is a second
-thing to get wrong, and the thing it would get wrong is not cosmetic — the gate
-mis-counting a portal's categories is what kept ceskereality permanently parked.
+two constructor exceptions: the realtime worker, to run a lane, and the sreality
+entrypoint, to build its portal from config. `portal_runner` reads the client
+table to make a portal's client. A second copy of either table is a second thing
+to get wrong.
 
 Imports are lazy and inside the functions on purpose: every portal module imports
 `scraper.portal_runner`, so a module-level import here would close a cycle.
@@ -85,42 +83,3 @@ def build_client_class(source: str) -> Any:
     attributes off it (`USE_PROXY`, `PROXY_REQUIRED`) rather than making one."""
     mod_name, cls_name = CLIENT_CLASSES[source]
     return getattr(importlib.import_module(mod_name), cls_name)
-
-
-def canonical_category_count(source: str, categories: list[dict[str, Any]]) -> int | None:
-    """How many DISTINCT canonical (category_main, category_type) pairs this
-    portal's declared categories map to — or None when it cannot be resolved.
-
-    NOT `len(categories)`, and that distinction is load-bearing. ceskereality
-    declares both `rodinne-domy` and `chaty-chalupy`, and BOTH canonicalise to
-    `dum` (sreality lumps chata/chalupa under "dům"), so its 12 config entries
-    can only ever produce 10 slice-ledger rows. A gate comparing the ledger's 10
-    against the config's 12 can never be satisfied — which is exactly what kept
-    ceskereality parked with no way out, and would have caught every other portal
-    whose config collapses the same way.
-
-    `category_labels` is the framework seam every portal already implements for
-    precisely this translation, so this reads the mapping rather than restating
-    it. Returns None if the portal cannot be built or maps nothing usable, so the
-    caller can fall back to a stricter number rather than a wrong one.
-    """
-    try:
-        portal = build_portal(source, _config_for(source, categories))
-        pairs = {portal.category_labels(c) for c in categories}
-        usable = {p for p in pairs if p and p[0] and p[1]}
-        return len(usable) or None
-    except Exception:  # noqa: BLE001 - an unresolvable mapping is not an error here
-        return None
-
-
-def _config_for(source: str, categories: list[dict[str, Any]]) -> PortalConfig:
-    from scraper.portal import default_config
-
-    base = default_config(source)
-    return PortalConfig(
-        source=base.source,
-        supports_complete_walk=base.supports_complete_walk,
-        categories=categories,
-        split_threshold=base.split_threshold,
-        limits=base.limits,
-    )

@@ -19,7 +19,7 @@ Nomination is STRUCTURAL since 2026-09-08 (architectural rule #3): a category al
 of whose slices ended because ceskereality said there was no more — a disabled next
 arrow, the region's own declared tail, a confirmed-empty region — nominates its
 unseen rows for a page check, and the PAGE decides; no portal flips a row from index
-absence any more. The count is a logged COVERAGE alarm, never a gate. Nomination is
+absence any more. The count is a logged COVERAGE warning, never a gate. Nomination is
 source-scoped, so it only ever touches ceskereality rows (rule #15). The detail URL carries the
 category (`/{sale}/{cat}/…`), so the drain derives each listing's category from
 its own URL — one config walks many categories. Coordinates come straight from the
@@ -74,8 +74,8 @@ SOURCE = "ceskereality"
 # --kraje, a fetch error, a barren page) fired anywhere in it.
 # scraper.portal.walk_reached_end spells that conjunction for all nine portals.
 # The arithmetic — scraper.portal.walk_is_complete, min ratio + over-collection
-# ceiling — stays exactly where it was but no longer gates: it is the slice
-# ledger's `outcome`, the descent trigger, and a coverage alarm. A region one row
+# ceiling — stays exactly where it was but no longer gates: it is each slice's
+# logged `outcome`, the descent trigger, and the COVERAGE warning. A region one row
 # short of its own declared count is a finished walk over a live index, not a
 # truncated one; that one row kept a 20,964-row category from nominating anything.
 # No staleness rail any more (rule #3, 2026-09-07): a walk that reached the end
@@ -120,16 +120,15 @@ _DESCENT_AXES: tuple[DescentAxis, ...] = ("subtype", "okres")
 class SliceResult:
     """One (kraj[, subtype[, okres]]) slice, carrying BOTH verdicts.
 
-    `outcome` is the arithmetic one and is unchanged — it is what the slice
-    ledger stores and what scripts/coverage_gate.py counts as `exhausted`.
-    `stop` is the structural one: why the page loop ended. Only `stop` decides
-    whether the category may nominate (rule #3), so a slice that paged to the
-    portal's end one row short of its own declared count reads `degraded` in the
-    ledger and `reached_end` at the gate.
+    `outcome` is the arithmetic one and is unchanged — it is what the SLICE line
+    logs and what the descent reads (`ceiling`). `stop` is the structural one:
+    why the page loop ended. Only `stop` decides whether the category may
+    nominate (rule #3), so a slice that paged to the portal's end one row short
+    of its own declared count logs `degraded` and reads `reached_end` at the gate.
 
     `kraj` stays the PARENT kraj on an okres grandchild (the okres slug rides in
-    `okres` and takes the kraj's slot in the URL), so the ledger keeps one row
-    per kraj however deep the descent went.
+    `okres` and takes the kraj's slot in the URL), so the walk's per-kraj verdict
+    holds however deep the descent went.
     """
 
     kraj: str
@@ -256,7 +255,7 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
         no more. An `okres` takes the kraj's slot in the URL and in the H1 proof.
 
         Two verdicts come back (see SliceResult): `stop`, the structural one that
-        gates nomination, and `outcome`, the arithmetic one the ledger keeps. The
+        gates nomination, and `outcome`, the arithmetic one the SLICE line logs. The
         load-bearing case is a 200 carrying ZERO cards: that is the site's real
         degraded response (the 404 is not — `Retry-After: 3` accompanies every 404
         here, nonexistent paths included), so it is `barren` — a stop of OURS —
@@ -275,7 +274,7 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
         def out(
             stop: StopReason, pages: int, *, outcome: SliceOutcome | None = None,
         ) -> SliceResult:
-            # The ledger's outcome stays the shared two-sided arithmetic verdict,
+            # The logged outcome stays the shared two-sided arithmetic verdict,
             # on DISTINCT ids (pages shift under a live walk, so len(rows)
             # double-counts). It no longer decides anything here — `stop` does.
             if outcome is None:
@@ -491,8 +490,8 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
         children's declared sum against its parent's, so a missing subtype or
         okres reads incomplete instead of silently dropping the residue. A
         residue or deadline marker declares only the part it stands for (parent
-        minus the children's declared sum), so the ledger's per-kraj sum stays the
-        kraj's own total however many markers a deep descent leaves."""
+        minus the children's declared sum), so the SLICE lines' per-kraj declared
+        sum stays the kraj's own total however many markers a deep descent leaves."""
         axis = next((a for a in _DESCENT_AXES if getattr(parent, a) is None), None)
         if axis is None:
             LOG.warning("DESCENT no axis left cm=%s ct=%s %s declared=%s",
@@ -545,50 +544,6 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
             results.append(replace(
                 parent, rows=[], pages=0, outcome="ceiling", declared_total=unwalked()))
         return results
-
-    def _record_slices(
-        self, conn: Any, category: dict[str, Any], kraje: tuple[str, ...] | list[str],
-        results: list[SliceResult], deadline_hit: bool,
-    ) -> None:
-        """Write this category's coverage to the slice ledger, ONE ROW PER KRAJ.
-
-        The aggregation is the whole point. A kraj past the page ceiling is
-        re-walked per subtype (and an over-ceiling subtype per okres), so it comes
-        back as several SliceResults sharing one kraj — and recording those
-        individually would poison the ledger the first time a kraj stopped
-        needing the descent: the `kraj/subtype-*` rows
-        from the old shape would linger, never be re-walked, and age forever.
-        The gate reads "every slice of this category exhausted inside the
-        window", so one permanently stale row is enough to hold the portal parked
-        for good. Collapsing to the kraj — the axis that is actually stable —
-        means the ledger's key set never changes shape.
-
-        A kraj counts as exhausted only when EVERY result for it did; the union
-        of its rows is what it collected. A kraj the deadline never reached is
-        not written at all, so it keeps its old timestamp and sorts first next
-        run (see db.slice_staleness — absent means never walked, not fresh).
-        """
-        if conn is None:
-            return
-        cm, ct = self.category_labels(category)
-        if cm is None or ct is None:
-            return
-        by_kraj: dict[str, list[SliceResult]] = {}
-        for r in results:
-            by_kraj.setdefault(r.kraj, []).append(r)
-        for kraj, parts in by_kraj.items():
-            positive = all(p.positive for p in parts)
-            outcome = "exhausted" if positive else next(
-                (p.outcome for p in parts if not p.positive), "incomplete")
-            # Children partition their parent, so their declared totals sum; an
-            # un-descended kraj is the single-element case of the same sum.
-            declared = sum(p.declared_total or 0 for p in parts) or None
-            db.record_index_slice(
-                conn, source=SOURCE, category_main=cm, category_type=ct,
-                slice_key=kraj, outcome=outcome, declared_total=declared,
-                collected=len({x[0] for p in parts for x in p.rows}),
-                pages=sum(p.pages for p in parts),
-            )
 
     def walk_category(
         self, category: dict[str, Any], conn: Any, dry_run: bool, limiter: RateLimiter,
@@ -649,8 +604,6 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
                 ref_map[nid] = ref
                 price_map[nid] = price
 
-        self._record_slices(conn, category, kraje, results, deadline_hit)
-
         pages = sum(r.pages for r in results)
         # Summed over the slices that REACHED THE PORTAL'S END, not the ones that
         # cleared 99.5% of their own count: a region walked to its last page is a
@@ -710,8 +663,8 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
             ),
         )
         if reached_end and national is not None and declared_sum < 0.97 * national:
-            # Not a gate (rule #3 nominates, the page decides), a coverage
-            # alarm: the region-less tail is under 1%, so a kraj-sum this far
+            # Not a gate (rule #3 nominates, the page decides), the COVERAGE
+            # warning: the region-less tail is under 1%, so a kraj-sum this far
             # below national means a region came back short or empty.
             LOG.warning(
                 "COVERAGE cm=%s ct=%s kraj-sum=%d national=%d: a region may be "

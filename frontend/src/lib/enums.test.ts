@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   categoryMainLabel,
+  enumLabel,
   categoryMainLabelPlural,
   categoryTypeLabel,
   listingKindLabel,
@@ -25,6 +26,25 @@ describe('categoryMainLabel', () => {
     expect(categoryMainLabel(undefined)).toBe('Nemovitost');
     expect(categoryMainLabel('')).toBe('Nemovitost');
     expect(categoryMainLabel('chata')).toBe('Nemovitost');
+  });
+});
+
+describe('enumLabel (one column, the registry\'s labels)', () => {
+  it('reads the label of a stored value off the filter registry', () => {
+    expect(enumLabel('condition', 'velmi_dobry')).toBe('Velmi dobrý');
+    expect(enumLabel('furnished', 'castecne')).toBe('Částečně');
+    expect(enumLabel('ownership', 'statni')).toBe('Státní/obecní');
+  });
+
+  it('never reads a bucket filter as column values', () => {
+    expect(enumLabel('building_type', 'drevo')).toBe('Dřevěná');
+    expect(enumLabel('building_type', 'ostatni')).toBe('ostatni');
+  });
+
+  it('returns the value itself when unknown, null when absent', () => {
+    expect(enumLabel('condition', 'nove')).toBe('nove');
+    expect(enumLabel('condition', null)).toBeNull();
+    expect(enumLabel('condition', '')).toBeNull();
   });
 });
 
@@ -84,7 +104,7 @@ describe('listingKind — disposition / subtype are complementary faces of one d
   });
 });
 
-describe('categoryMainLabelPlural + categoryTypeLabel (registry-derived, shared by Health)', () => {
+describe('categoryMainLabelPlural + categoryTypeLabel (registry-derived, shared by the stats and location-audit rollups)', () => {
   it('plural category headings', () => {
     expect(categoryMainLabelPlural('byt')).toBe('Byty');
     expect(categoryMainLabelPlural('dum')).toBe('Domy');

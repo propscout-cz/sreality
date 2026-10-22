@@ -1,4 +1,4 @@
-/* The Browse "experience": the filter sidebar + Map/Table/Stats tabs + the
+/* The Browse "experience": the filter sidebar + Map/Stats tabs + the
  * map-overlay layers, with all data fetching and transient view-state (hover
  * sync, growth pickers, resizable columns, merge mode, on-card estimates).
  *
@@ -8,6 +8,7 @@
  * small props — `layout` (sticky full-page vs contained) and `features` (which
  * page-chrome bits to show). Everything cohort-related is identical, so the two
  * surfaces can never drift. */
+import { haloPointsOf, NO_HOVER, nextHover, type HoverState, type HoverTarget } from '@/lib/hoverSync';
 import {
   Suspense,
   useCallback,
@@ -18,21 +19,25 @@ import {
   type CSSProperties,
 } from 'react';
 import { lazyChunk } from '@/lib/lazyChunk';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useNewPropertyDialog } from '@/components/NewPropertyProvider';
+import Skeleton from '@/components/Skeleton';
+import { useIsFetching, useMutation, useQuery } from '@tanstack/react-query';
 import Tabs, { type Tab } from '@/components/Tabs';
 import ResizeHandle from '@/components/ResizeHandle';
 import {
   useSidebarWidth,
+  useSidebarCollapsed,
   useMapSplitFraction,
   useMapCollapsed,
   useCardImageLarge,
   useCardCoverTag,
 } from '@/lib/browseLayout';
 import ImageSizeToggle from '@/components/ImageSizeToggle';
-import { FilterSidebar } from '@/components/Filters';
-import ListingTable from '@/components/ListingTable';
+import { FilterSidebar, FilterSidebarRail } from '@/components/Filters';
 import ListingCards from '@/components/ListingCards';
-import BrowseStatsView from '@/components/BrowseStats';
+/* The Stats tab (the chart builder, dnd-kit, recharts) is its own chunk: it is a
+ * secondary tab, and the first-visit bundle has a budget (scripts/bundle-budget.mjs). */
+const StatsDashboard = lazyChunk(() => import('@/components/stats/StatsDashboard'));
 import type { AnchorPoint, MapFlyToCommand } from '@/components/ListingMap';
 import type { MapySuggestion } from '@/lib/maps';
 import { fetchDatasets, fetchGrowth, fetchGrowthShapes, fetchSeries, priceStatsKeys } from '@/lib/priceStats';
@@ -41,10 +46,6 @@ import { useMapOverlayRegistry } from '@/lib/mapOverlays';
 import {
   summarise,
   isDefault,
-  regionKeyFromFilters,
-  regionLabelFromFilters,
-  filtersToWatchdogSpec,
-  watchdogNameSuggestion,
   browseTitleSummary,
   toSearchParams,
   DEFAULT_FILTERS,
@@ -52,21 +53,19 @@ import {
 } from '@/lib/filters';
 import { usePageTitle } from '@/lib/pageTitle';
 import { portalLabel } from '@/lib/portals';
-import { ppm2BasisFromToken } from '@/lib/measure';
 import CreateWatchdogModal from '@/components/CreateWatchdogModal';
-import { MergeSelection } from '@/components/CurationMarks';
-import MergeTakenBack from '@/components/MergeTakenBack';
-import PresetBar from '@/components/PresetBar';
+import MergeBar from '@/components/MergeBar';
+import FilterPresetBar from '@/components/FilterPresetBar';
 import type { ListingEstimate } from '@/lib/types';
 import {
   createEstimation,
-  fetchRegionDispositionAnnotations,
   isApiConfigured,
   latestEstimationsByListing,
 } from '@/lib/api';
 import { pushToast } from '@/lib/toast';
 import { browseKeys } from '@/lib/browseKeys';
-import { useMergePreview, useMergeProperties } from '@/lib/useMergeProperties';
+import { useMergeMode } from '@/lib/useMergeMode';
+import { useMergeProperties } from '@/lib/useMergeProperties';
 import {
   cityQualityKeys,
   fetchCityIndexDefinitions,
@@ -75,14 +74,10 @@ import {
   fetchCuratedCityPolygons,
   fetchListingsForCards,
   fetchListingsForMap,
-  fetchListingsForTable,
   fetchBrowseCount,
-  fetchBrowseStats,
   orderPortal,
   sortToParam,
   CARD_PAGE_SIZE,
-  TABLE_PAGE_SIZE,
-  type BrowseStats,
   type CardRow,
   type CityIndexDefinition,
   type CityIndexValue,
@@ -90,8 +85,6 @@ import {
   type CuratedCity,
   type MapResult,
   type SortDirection,
-  type SortField,
-  type TableRow,
 } from '@/lib/queries';
 import { useInfiniteList } from '@/lib/useInfiniteList';
 import { CardHydrationProvider } from '@/lib/hydration';
@@ -108,11 +101,13 @@ import type { BrowseViewState, TabKey } from '@/lib/browseState';
 const ListingMap = lazyChunk(() => import('@/components/ListingMap'));
 
 export interface BrowseFeatures {
-  /* Saved-filter preset bar — page only. */
+  /* The saved-set bars (filter presets; the Stats tab's dashboards) — page only. */
   presetBar?: boolean;
   /* "Create watchdog" CTA + name-prompt modal. */
   watchdog?: boolean;
-  /* Dedup merge mode toggle on the Listings cards — page only. */
+  /* "Nová nemovitost" (paste an ad link) beside it — page only. */
+  newProperty?: boolean;
+  /* Dedup merge mode toggle on the Properties cards — page only. */
   mergeMode?: boolean;
   /* The big "Browse" heading in the summary block — hidden in the modal,
    * which has its own header. */
@@ -130,6 +125,7 @@ export interface BrowseFeatures {
 const DEFAULT_FEATURES: Required<BrowseFeatures> = {
   presetBar: true,
   watchdog: true,
+  newProperty: true,
   mergeMode: true,
   title: true,
   sidebar: true,
@@ -151,6 +147,7 @@ export default function BrowseExperience({
 }) {
   const f = { ...DEFAULT_FEATURES, ...features };
   const isModal = layout === 'modal';
+  const newProperty = useNewPropertyDialog();
   const { filters, sort, tab, overlay, activePresetId } = view;
 
   // Browser-tab title reflects the active filters ("LR: 2+kk · 60–90 m² · Praha")
@@ -169,37 +166,14 @@ export default function BrowseExperience({
   );
   const [growthChartOnHover, setGrowthChartOnHover] = useState(false);
 
-  const setSortByField = (field: SortField) => {
-    const next =
-      sort.field === field
-        ? { field, direction: (sort.direction === 'asc' ? 'desc' : 'asc') as 'asc' | 'desc' }
-        : { field, direction: defaultDirectionFor(field) };
-    view.setSort(next);
-  };
-
   /* Map flyTo command. Set when the operator picks a place in the District
    * typeahead; ListingMap animates to the new centre. */
   const [mapFlyTo, setMapFlyTo] = useState<MapFlyToCommand | null>(null);
   const [watchdogModalOpen, setWatchdogModalOpen] = useState(false);
 
-  /* Dedup merge mode (page only). */
-  const [mergeMode, setMergeMode] = useState(false);
-  const [selectedForMerge, setSelectedForMerge] = useState<ReadonlySet<number>>(
-    () => new Set(),
-  );
-  const toggleSelectForMerge = useCallback((propertyId: number) => {
-    setSelectedForMerge((prev) => {
-      const next = new Set(prev);
-      if (next.has(propertyId)) next.delete(propertyId);
-      else next.add(propertyId);
-      return next;
-    });
-  }, []);
-  const exitMergeMode = useCallback(() => {
-    setMergeMode(false);
-    setSelectedForMerge(new Set());
-  }, []);
-  const mergeMut = useMergeProperties(exitMergeMode);
+  /* Merge mode (page only): one statement of letters over the cards. */
+  const mergeMode = useMergeMode();
+  const mergeMut = useMergeProperties(mergeMode.exit);
   const handleLocationPick = useCallback((s: MapySuggestion) => {
     if (!s.position) return;
     setMapFlyTo({
@@ -210,51 +184,35 @@ export default function BrowseExperience({
     });
   }, []);
 
-  /* Hover-sync between cards / table / map. Ephemeral component state. */
-  const [hoverState, setHoverState] = useState<{
-    ids: ReadonlySet<number>;
-    origin: 'map' | 'list' | null;
-  }>({ ids: new Set(), origin: null });
+  /* Hover-sync between cards / map: ephemeral state, one transition
+   * (lib/hoverSync). The cards hand over their rows' points for the map's
+   * locator halo; a map-origin hover carries none (the cursor is already
+   * on the spot). */
+  const [hoverState, setHoverState] = useState<HoverState>(NO_HOVER);
   const hoveredIds = hoverState.ids;
-  const setHovered = useCallback(
-    (ids: ReadonlyArray<number> | null, origin: 'map' | 'list') => {
-      setHoverState((prev) => {
-        if (ids == null || ids.length === 0) {
-          return prev.ids.size === 0
-            ? prev
-            : { ids: new Set<number>(), origin: null };
-        }
-        if (
-          prev.origin === origin &&
-          prev.ids.size === ids.length &&
-          ids.every((id) => prev.ids.has(id))
-        ) {
-          return prev;
-        }
-        return { ids: new Set(ids), origin };
-      });
-    },
+  const setHoveredFromMap = useCallback(
+    (ids: ReadonlyArray<number> | null) => setHoverState((prev) => nextHover(prev, ids, [], 'map')),
     [],
   );
-  const setHoveredFromMap = useCallback(
-    (ids: ReadonlyArray<number> | null) => setHovered(ids, 'map'),
-    [setHovered],
-  );
-  const setHoveredFromList = useCallback(
-    (ids: ReadonlyArray<number> | null) => setHovered(ids, 'list'),
-    [setHovered],
+  const setHoveredFromCards = useCallback(
+    (targets: ReadonlyArray<HoverTarget> | null) =>
+      setHoverState((prev) =>
+        nextHover(prev, targets?.map((t) => t.listing_id) ?? null, haloPointsOf(targets ?? []), 'list'),
+      ),
+    [],
   );
 
-  /* Operator-resizable columns + the map-collapsed preference (all per-browser
+  /* Operator-resizable columns + the sidebar/map-collapsed preferences (all per-browser
    * layout state, not part of the shareable view). When the map is collapsed
    * the cards take the full width and reflow to more columns automatically. */
   const sidebar = useSidebarWidth();
+  const sidebarCollapsed = useSidebarCollapsed();
   const mapSplit = useMapSplitFraction();
   const mapCollapsed = useMapCollapsed();
   const cardImageLarge = useCardImageLarge();
   const cardCoverTag = useCardCoverTag();
   const sortOrderPortal = orderPortal(filters, sort);
-  /* The map is only present on the Listings tab AND only when not collapsed —
+  /* The map is only present on the Properties tab AND only when not collapsed —
    * the single source of truth the data-fetch gates and the layout both read,
    * so they can never disagree. */
   const mapVisible = tab === 'map' && !mapCollapsed.value;
@@ -411,7 +369,7 @@ export default function BrowseExperience({
   );
 
   /* The ONE canonical cohort total — consumed by the header, the tab badge,
-   * the cards/table "of N" labels, and (as the denominator of its mappable
+   * the cards' "of N" label, and (as the denominator of its mappable
    * subset) the map pill. Enabled on EVERY tab so the number never changes
    * just by switching tabs, and never goes stale-until-refresh because a tab
    * gate suppressed its refetch. Its fetch/error state is surfaced in the
@@ -453,11 +411,16 @@ export default function BrowseExperience({
   const [estimates, setEstimates] = useState<Record<number, ListingEstimate>>(
     {},
   );
+  /* A submit the API refused (a 422 for an ad it cannot place) creates no run,
+   * so nothing in `estimates` would say it failed — the API's sentence is kept
+   * per card instead, until the next attempt. */
+  const [estimateRefusals, setEstimateRefusals] = useState<Record<number, string>>({});
   const requestedEstIdsRef = useRef<Set<number>>(new Set());
   const estimatesEnabled = tab === 'map' && isApiConfigured();
 
   useEffect(() => {
     setEstimates({});
+    setEstimateRefusals({});
     requestedEstIdsRef.current = new Set();
   }, [cardsRestorationKey]);
 
@@ -507,6 +470,18 @@ export default function BrowseExperience({
       }),
     onMutate: (srealityId) => {
       setEstimatingIds((prev) => new Set(prev).add(srealityId));
+      setEstimateRefusals((prev) => {
+        if (!(srealityId in prev)) return prev;
+        const next = { ...prev };
+        delete next[srealityId];
+        return next;
+      });
+    },
+    onError: (err, srealityId) => {
+      setEstimateRefusals((prev) => ({
+        ...prev,
+        [srealityId]: err instanceof Error ? err.message : 'Odhad se nepodařilo spustit',
+      }));
     },
     onSuccess: (run, srealityId) => {
       setEstimates((prev) => ({
@@ -531,89 +506,9 @@ export default function BrowseExperience({
     },
   });
 
-  const table = useInfiniteList<TableRow>({
-    queryKey: browseKeys.table(filters, sort),
-    queryFn: (cursor, signal) =>
-      fetchListingsForTable(filters, sort, cursor as KeysetCursor | null, { signal }),
-    pageSize: TABLE_PAGE_SIZE,
-    getRowId: (r) => r.property_id,
-    enabled: tab === 'table',
-    gcTime: 10 * 60_000,
-  });
-
-  const statsQuery = useQuery<BrowseStats, Error>({
-    queryKey: browseKeys.stats(filters),
-    queryFn: ({ signal }) => fetchBrowseStats(filters, { signal }),
-    placeholderData: (prev) => prev,
-    enabled: tab === 'stats',
-  });
-
-  const regionKey = useMemo(() => regionKeyFromFilters(filters), [filters]);
-  /* The cohort's basis, decided SERVER-side over the rows the percentiles came
-   * from (browse_stats_properties.ppm2_basis, migration 425) — not guessed from
-   * the filters, so it stays right when a cohort happens to contain only one
-   * basis despite `deal=any`. */
-  const statsBasis = useMemo(
-    () => ppm2BasisFromToken(statsQuery.data?.ppm2_basis),
-    [statsQuery.data],
-  );
-  /* `placeholderData: (prev) => prev` keeps the PREVIOUS cohort's payload on
-   * screen while the new one loads, so on the render where `filters` changes
-   * `regionKey` is already the new cohort while `statsQuery.data` is still the
-   * old one. Everything derived from the payload — the basis, the boxes — is
-   * therefore stale for that window, and the annotations query below must not
-   * act on it: an enabled=true computed from the OLD basis fires a paid LLM
-   * call whose body is the old distributions but whose region_key (and server
-   * cache key) is the new cohort, poisoning that cohort for the rest of the
-   * day. `enabled: false` does not cancel an in-flight v5 query, so the gate
-   * has to be on freshness, not on a later correction. */
-  const statsIsStale = statsQuery.isPlaceholderData;
-  const boxDispositions = useMemo(
-    () =>
-      (statsQuery.data?.dispositions ?? []).filter(
-        (d) => d.ppm2_box != null && d.ppm2_box.n >= 5,
-      ),
-    [statsQuery.data],
-  );
-  /* The unit the boxes are in, off the STATS ROWS (browse_stats_properties
-   * resolves it from the cohort itself), not re-derived from the deal/category
-   * filters here — a second derivation is a second definition, and this one
-   * would be the one that disagrees. Part of the query key: two bases are two
-   * different annotation texts, so they must not share a cache entry. */
-  const ppm2Basis = statsQuery.data?.ppm2_basis ?? null;
-  const annotationsQuery = useQuery({
-    queryKey: ['region-annotations', regionKey, ppm2Basis],
-    queryFn: () =>
-      fetchRegionDispositionAnnotations({
-        region_key: regionKey,
-        region_label: regionLabelFromFilters(filters),
-        ppm2_overall: statsQuery.data?.ppm2 ?? null,
-        /* The basis the numbers below are on, in the migration-425 vocabulary —
-         * a service boundary carries the SQL token, not this app's render-side
-         * shorthand. Without it the model is narrating bare Kč/m² and cannot
-         * know whether "319" is cheap or absurd. `enabled` below guarantees a
-         * single row basis here, so the lookup is total. */
-        ppm2_basis: ppm2Basis,
-        dispositions: boxDispositions.map((d) => ({
-          disposition: d.disposition,
-          n: d.n,
-          ppm2_box: d.ppm2_box,
-        })),
-      }),
-    /* A mixed-basis cohort is NOT annotated at all — not "annotated with a
-     * caveat". The distributions being described would be sale and rent stacked
-     * on one axis, so every sentence about them would be false, and it is a paid
-     * LLM call to produce it. The chart itself withholds the same cohort. */
-    enabled:
-      tab === 'stats'
-      && isApiConfigured()
-      && !statsIsStale
-      && boxDispositions.length > 0
-      && statsBasis != null
-      && statsBasis !== 'mixed',
-    staleTime: 60 * 60 * 1000,
-    retry: false,
-  });
+  /* The Stats tab is the account's chart board (components/stats); each card reads
+   * its own pivot, so the header's spinner follows any of them. */
+  const statsFetching = useIsFetching({ queryKey: browseKeys.statsAll });
 
   const cityOverlay = useMemo(() => {
     const cities = citiesQuery.data;
@@ -680,52 +575,53 @@ export default function BrowseExperience({
   ]);
 
   const tabs: ReadonlyArray<Tab<TabKey>> = [
-    { key: 'map', label: 'Listings', badge: cohortTotal?.toLocaleString('cs-CZ') },
-    { key: 'table', label: 'Table' },
+    { key: 'map', label: 'Properties', badge: cohortTotal?.toLocaleString('cs-CZ') },
     ...(f.stats ? [{ key: 'stats', label: 'Stats' } as Tab<TabKey>] : []),
   ];
 
   /* The listings PANEL's error drives the page banner. On the map tab that's the
    * cards list (cards.error) — a MAP-query failure is surfaced locally over the
    * map (mapError below), never blanking the listings: the two are independent
-   * surfaces, and the robust map source (properties_map_mv) makes a map failure
-   * rare anyway. */
-  const activeError =
-    tab === 'map' ? cards.error :
-    tab === 'table' ? table.error :
-    tab === 'stats' ? statsQuery.error :
-    null;
+   * surfaces. */
+  const activeError = tab === 'map' ? cards.error : null;
   const retryActive = () => {
     if (tab === 'map') cards.refetch();
-    else if (tab === 'table') table.refetch();
-    else if (tab === 'stats') void statsQuery.refetch();
   };
   const mapError = mapVisible ? mapQuery.error : null;
 
   return (
     <div className={`flex${isModal ? ' h-full' : ''}`} ref={outerRef}>
       {f.sidebar && (
-        <>
-          <FilterSidebar
-            filters={filters}
-            onChange={view.setFilters}
-            onLocationPick={handleLocationPick}
-            width={sidebar.value}
+        sidebarCollapsed.value ? (
+          <FilterSidebarRail
+            active={!isDefault(filters)}
+            onExpand={() => sidebarCollapsed.set(false)}
             layout={layout}
           />
+        ) : (
+          <>
+            <FilterSidebar
+              filters={filters}
+              onChange={view.setFilters}
+              onLocationPick={handleLocationPick}
+              width={sidebar.value}
+              layout={layout}
+              onCollapse={() => sidebarCollapsed.set(true)}
+            />
 
-          <ResizeHandle
-            ariaLabel="Resize the filters sidebar"
-            onMove={onSidebarDrag}
-            onEnd={sidebar.persist}
-            onReset={sidebar.reset}
-            className={
-              isModal
-                ? 'hidden lg:flex self-stretch h-full w-3 -mx-1.5'
-                : 'hidden lg:flex sticky top-14 self-start h-[calc(100dvh-3.5rem)] w-3 -mx-1.5'
-            }
-          />
-        </>
+            <ResizeHandle
+              ariaLabel="Resize the filters sidebar"
+              onMove={onSidebarDrag}
+              onEnd={sidebar.persist}
+              onReset={sidebar.reset}
+              className={
+                isModal
+                  ? 'hidden lg:flex self-stretch h-full w-3 -mx-1.5'
+                  : 'hidden lg:flex sticky top-14 self-start h-[calc(100dvh-3.5rem)] w-3 -mx-1.5'
+              }
+            />
+          </>
+        )
       )}
 
       <div
@@ -748,8 +644,7 @@ export default function BrowseExperience({
             showTitle={f.title}
             loading={
               tab === 'map' ? mapQuery.isLoading || cards.isLoading :
-              tab === 'table' ? table.isLoading :
-              tab === 'stats' ? statsQuery.isLoading :
+              tab === 'stats' ? statsFetching > 0 :
               false
             }
             onClearBounds={filters.bounds ? () => view.setBounds(null) : undefined}
@@ -759,10 +654,11 @@ export default function BrowseExperience({
                 : undefined
             }
             onCreateWatchdog={f.watchdog ? () => setWatchdogModalOpen(true) : undefined}
+            onNewProperty={f.newProperty && newProperty ? () => newProperty.open() : undefined}
           />
           {f.presetBar && (
             <div className="mt-3">
-              <PresetBar
+              <FilterPresetBar
                 filters={filters}
                 sort={sort}
                 activePresetId={activePresetId}
@@ -787,12 +683,10 @@ export default function BrowseExperience({
                   label="Card image size"
                 />
                 {f.mergeMode && (
-                  <MergeModeBar
-                    active={mergeMode}
-                    selected={selectedForMerge}
+                  <MergeBar
+                    merge={mergeMode}
                     merging={mergeMut.isPending}
-                    onToggle={() => (mergeMode ? exitMergeMode() : setMergeMode(true))}
-                    onMerge={() => mergeMut.mutate([...selectedForMerge])}
+                    onMerge={() => mergeMut.mutate(mergeMode.letters)}
                   />
                 )}
               </div>
@@ -815,11 +709,12 @@ export default function BrowseExperience({
                   : ({ '--map-w': `${mapSplit.value * 100}%` } as CSSProperties)
               }
             >
-              {/* Photos ONLY. The card grid renders no cover thumbnail and no
-                  broker line, so it must not fetch either — see CardDecorations. */}
+              {/* Photos and the storey ONLY. The card grid renders no cover
+                  thumbnail and no broker line, so it must not fetch either —
+                  see CardDecorations. */}
               <CardHydrationProvider
                 listingIds={cardListingIds}
-                renders={{ photos: CARD_PHOTOS_PER_CARD }}
+                renders={{ photos: CARD_PHOTOS_PER_CARD, floors: true }}
               >
               <ListingCards
                 rows={cards.isLoading ? null : cards.rows}
@@ -837,19 +732,16 @@ export default function BrowseExperience({
                 onCoverTag={cardCoverTag.set}
                 hasFilters={!isDefault(filters)}
                 hasBounds={filters.bounds != null}
-                pipelineScoped={filters.pipeline != null}
-                collectionScoped={filters.collections.length > 0}
                 hoveredIds={hoveredIds}
                 hoverOrigin={hoverState.origin}
-                onHover={setHoveredFromList}
+                onHover={setHoveredFromCards}
                 onSort={view.setSort}
                 onClearFilters={() => view.setFilters(DEFAULT_FILTERS)}
                 onClearBounds={() => view.setBounds(null)}
-                mergeMode={mergeMode}
-                selectedPropertyIds={selectedForMerge}
-                onToggleSelect={toggleSelectForMerge}
+                merge={mergeMode.active ? mergeMode : null}
                 estimates={estimates}
                 estimatingIds={estimatingIds}
+                estimateRefusals={estimateRefusals}
                 onEstimate={(srealityId) => estimateMut.mutate(srealityId)}
               />
               </CardHydrationProvider>
@@ -874,7 +766,7 @@ export default function BrowseExperience({
                     bounds={filters.bounds}
                     onBoundsChange={view.setBounds}
                     hoveredIds={hoveredIds}
-                    hoverOrigin={hoverState.origin}
+                    haloPoints={hoverState.points}
                     onHover={setHoveredFromMap}
                     centerCircle={
                       filters.locationMode === 'center_radius'
@@ -926,43 +818,15 @@ export default function BrowseExperience({
           </div>
         )}
 
-        {tab !== 'map' && (
+        {tab === 'stats' && (
           <div className={`px-6 pt-5 pb-8${isModal ? ' flex-1 min-h-0 overflow-y-auto' : ''}`}>
-            {tab === 'table' && (
-              <ListingTable
-                rows={table.isLoading ? null : table.rows}
-                total={cohortTotal}
-                sort={sort}
-                isLoading={table.isLoading}
-                isError={table.isError}
-                isFetchingNextPage={table.isFetchingNextPage}
-                hasNextPage={table.hasNextPage}
-                onReachEnd={table.fetchNextPage}
-                hasFilters={!isDefault(filters)}
-                pipelineScoped={filters.pipeline != null}
-                hoveredIds={hoveredIds}
-                onHover={setHoveredFromList}
-                onSort={setSortByField}
-                onClearFilters={() => view.setFilters(DEFAULT_FILTERS)}
+            <Suspense fallback={<Skeleton height={320} className="my-8" />}>
+              <StatsDashboard
+                filters={filters}
+                view={f.presetBar ? view : undefined}
+                onIncludeDismissed={() => view.setFilters({ ...filters, showDismissed: true })}
               />
-            )}
-            {tab === 'stats' && (
-              <BrowseStatsView
-                stats={statsQuery.data ?? null}
-                isLoading={statsQuery.isLoading}
-                isEmpty={!statsQuery.isLoading && (statsQuery.data?.total ?? 0) === 0}
-                basis={statsBasis}
-                cohort={{
-                  categoryMain: filters.categoryMain,
-                  categoryType: filters.categoryType,
-                }}
-                annotations={annotationsQuery.data?.data.annotations}
-                annotationsLoading={annotationsQuery.isFetching}
-                annotationsNote={
-                  annotationsQuery.data?.metadata.notes?.[0] ?? null
-                }
-              />
-            )}
+            </Suspense>
           </div>
         )}
 
@@ -974,17 +838,9 @@ export default function BrowseExperience({
       </div>
 
       {f.watchdog && watchdogModalOpen
-        ? (() => {
-            const { spec, unsupported } = filtersToWatchdogSpec(filters);
-            return (
-              <CreateWatchdogModal
-                spec={spec}
-                unsupported={unsupported}
-                suggestedName={watchdogNameSuggestion(filters)}
-                onClose={() => setWatchdogModalOpen(false)}
-              />
-            );
-          })()
+        ? (
+            <CreateWatchdogModal filters={filters} onClose={() => setWatchdogModalOpen(false)} />
+          )
         : null}
     </div>
   );
@@ -998,16 +854,6 @@ function zoomForSuggestionType(type: string): number {
   if (type === 'regional.region') return 8;
   if (type === 'regional.country') return 6;
   return 13;
-}
-
-function defaultDirectionFor(field: SortField): 'asc' | 'desc' {
-  if (
-    field === 'price_czk' ||
-    field === 'area_m2' ||
-    field === 'last_seen_at' ||
-    field === 'first_seen_at'
-  ) return 'desc';
-  return 'asc';
 }
 
 /* One portal's "Newest first" / "Oldest first" (MS19, queries.ts orderPortal), named in
@@ -1037,6 +883,7 @@ function FilterSummary({
   onClearBounds,
   onClearBroker,
   onCreateWatchdog,
+  onNewProperty,
 }: {
   filters: ListingFilters;
   order: { portal: string; direction: SortDirection } | null;
@@ -1052,12 +899,12 @@ function FilterSummary({
   loading: boolean;
   showTitle: boolean;
   onClearBounds?: () => void;
-  /* No sidebar control sets brokerId (see ListingFilters.brokerId) — reachable
-   * only via the explore-broker modal's seed or a `?broker=` URL param, so
-   * without this a scoped /browse?broker=<id> view (reached via "Go to
-   * Browse") would be a dead end with no way to leave the scope. */
+  /* The scope's way out in the header: a /browse?broker=<id> view (reached via
+   * "Go to Browse") opens with Advanced folded, so the sidebar's Broker control
+   * is out of sight (see ListingFilters.brokerId). */
   onClearBroker?: () => void;
   onCreateWatchdog?: () => void;
+  onNewProperty?: () => void;
 }) {
   return (
     <div className="flex items-start justify-between gap-4">
@@ -1119,16 +966,28 @@ function FilterSummary({
           )}
         </div>
       </div>
-      {onCreateWatchdog && (
-        <button
-          type="button"
-          onClick={onCreateWatchdog}
-          className="shrink-0 px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
-          title="Save the current filters as a watchdog — get notified when a new listing matches"
-        >
-          + Create watchdog
-        </button>
-      )}
+      <div className="shrink-0 flex items-center gap-2">
+        {/* Outlined: the copper primary on this header stays the watchdog. */}
+        {onNewProperty && (
+          <button
+            type="button"
+            onClick={onNewProperty}
+            className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)] text-[var(--color-ink-2)] hover:border-[var(--color-copper)] hover:text-[var(--color-copper)] transition-colors"
+          >
+            Nová nemovitost
+          </button>
+        )}
+        {onCreateWatchdog && (
+          <button
+            type="button"
+            onClick={onCreateWatchdog}
+            className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
+            title="Save the current filters as a watchdog — get notified when a new listing matches"
+          >
+            + Create watchdog
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -1141,7 +1000,7 @@ function MapSkeleton() {
   );
 }
 
-/* Listings-tab layout switch: fold the map panel away to give the cards the
+/* Properties-tab layout switch: fold the map panel away to give the cards the
  * full width (they reflow to more columns automatically), or bring it back.
  * Reuses the app's segmented-control idiom (LocationModeSection): paper-2
  * track, copper-fill active, borders-only — civic-archive consistent. The
@@ -1163,7 +1022,7 @@ function MapViewToggle({
   return (
     <div
       role="group"
-      aria-label="Listings layout"
+      aria-label="Properties layout"
       className="inline-flex items-center gap-0.5 p-0.5 rounded-[var(--radius-sm)] bg-[var(--color-paper-2)] border border-[var(--color-rule)]"
     >
       <button
@@ -1230,65 +1089,9 @@ function CardsGlyph() {
   );
 }
 
-/* Merge mode's bar: the ticked properties by number, each with its marks
-   (MS16), so what a merge will carry is in view before the click, and the
-   "Různé" rulings it would take back (MS12), read before the merge is offered. */
-export function MergeModeBar({
-  active,
-  selected,
-  merging,
-  onToggle,
-  onMerge,
-}: {
-  active: boolean;
-  selected: ReadonlySet<number>;
-  merging: boolean;
-  onToggle: () => void;
-  onMerge: () => void;
-}) {
-  const selectedCount = selected.size;
-  const preview = useMergePreview(selected);
-  const btn = 'px-3 py-1.5 text-sm rounded-[var(--radius-sm)] transition-colors disabled:opacity-50';
-  return (
-    <div className="flex items-center gap-2 shrink-0">
-      {active && (
-        <>
-          {selectedCount === 0 ? (
-            <span className="text-[0.75rem] text-[var(--color-ink-3)]">Pick listings to merge</span>
-          ) : (
-            <MergeSelection ids={selected} />
-          )}
-          {selectedCount >= 2 && <MergeTakenBack preview={preview} className="text-[0.75rem]" />}
-          <button
-            type="button"
-            onClick={onMerge}
-            disabled={merging || selectedCount < 2 || preview.isPending}
-            className={`${btn} bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)]`}
-          >
-            {merging ? 'Merging…' : `Merge ${selectedCount >= 2 ? selectedCount : ''}`.trim()}
-          </button>
-        </>
-      )}
-      <button
-        type="button"
-        onClick={onToggle}
-        disabled={merging}
-        className={`${btn} border ${
-          active
-            ? 'border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] hover:border-[var(--color-rule-strong)]'
-            : 'border-[var(--color-copper)] text-[var(--color-copper-2)] hover:bg-[var(--color-copper-soft)]'
-        }`}
-      >
-        {active ? 'Cancel' : 'Merge mode'}
-      </button>
-    </div>
-  );
-}
-
 /* Map-local failure notice. The map is its own surface — a map error shows here,
  * floating over the map, and never blanks the listings list (which loads fine on
- * its own keyset query). With the robust map source (properties_map_mv) this is
- * rare; the timeout copy stays as a graceful guide for an exceptionally broad area. */
+ * its own keyset query). The timeout copy is a guide for an exceptionally broad area. */
 function MapErrorOverlay({ error }: { error: Error }) {
   const isTimeout = /statement timeout|57014/i.test(error.message);
   return (

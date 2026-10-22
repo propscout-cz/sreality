@@ -16,33 +16,29 @@
 import { isAuthRetryableFetchError } from '@supabase/supabase-js';
 import type {
   BuildingAttachment,
-  BuildingListResponse,
   BuildingRun,
   Collection,
   CollectionWithProperties,
   ConfirmBuildingUnitsIn,
-  CreateBuildingFromUrlIn,
   UpdateBuildingInputsIn,
   CreateEstimationIn,
   EstimationFeedback,
   EstimationListParams,
   EstimationListResponse,
   EstimationRun,
+  IngestState,
   ListingEstimate,
   ListingSummaryBatchRow,
-  Ppm2Box,
-  ManualRentalEstimate,
-  CreateManualEstimateIn,
-  UpdateManualEstimateIn,
   ArtifactLink,
   Note,
   NoteAttachment,
-  ParseResult,
+  PipelineShareMode,
+  PipelineShares,
   PipelineStage,
   SkillRefinement,
-  SourceKind,
   Tag,
   TagColor,
+  DispatchChangeKind,
   NotificationSourceKind,
   NotificationUnreadCount,
   WatchdogDispatch,
@@ -55,47 +51,6 @@ import type {
 import type { DistrictChip, PresetSpec } from './filters';
 import type { WaterfallRow } from './locationWaterfall';
 import { supabase } from './supabase';
-
-/* Sources the backend allowlists for high-confidence parsing.
- * Anything else falls through to a best-effort parse. The order is
- * the order shown in the UI's "Supported:" tip line. Keep in sync
- * with scraper/source_dispatcher._KIND_SUFFIXES on the backend. */
-export const SUPPORTED_SOURCES: ReadonlyArray<{
-  kind: SourceKind;
-  label: string;
-  hostHint: string;
-}> = [
-  { kind: 'sreality',      label: 'sreality',      hostHint: 'sreality.cz' },
-  { kind: 'bezrealitky',   label: 'bezrealitky',   hostHint: 'bezrealitky.cz' },
-  { kind: 'idnes_reality', label: 'idnes-reality', hostHint: 'reality.idnes.cz' },
-  { kind: 'remax',         label: 'remax',         hostHint: 'remax-czech.cz' },
-];
-
-/* Display label for a source kind. Falls back to the raw kind so
- * unknown future kinds surface visibly rather than silently. */
-export const sourceKindLabel = (kind: SourceKind | null): string => {
-  if (kind == null) return '—';
-  if (kind === 'unsupported') return 'unsupported';
-  const found = SUPPORTED_SOURCES.find((s) => s.kind === kind);
-  return found ? found.label : kind;
-};
-
-/* Quick host-based classification — used by the URL input to choose
- * the right loading copy ("Fetching listing…" vs "Reading listing
- * with Claude…") before the request goes out. The backend re-classifies
- * authoritatively; this is a UX optimisation, not a security boundary. */
-export const classifyUrlHost = (url: string): SourceKind => {
-  let host: string;
-  try {
-    host = new URL(url.trim()).hostname.toLowerCase();
-  } catch {
-    return 'unsupported';
-  }
-  for (const { kind, hostHint } of SUPPORTED_SOURCES) {
-    if (host === hostHint || host.endsWith('.' + hostHint)) return kind;
-  }
-  return 'unsupported';
-};
 
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
 
@@ -150,7 +105,15 @@ export type QueryScalar = string | number | boolean;
  * arrive server-side as one unparseable value, so callers must not hand-roll it. */
 export type QueryValue = QueryScalar | readonly QueryScalar[] | undefined | null;
 
-interface RequestOptions extends Omit<RequestInit, 'body'> {
+/* The trailing option of every wrapper that may act (`{ actAs }`, lib/acting):
+ * the owner a pipeline share lets the caller act for (migration 641), sent as
+ * `X-Act-As`. Only the curation and pipeline wrappers take it; every other
+ * route answers as the caller and never sees it. */
+interface Acting {
+  actAs?: string | null;
+}
+
+interface RequestOptions extends Omit<RequestInit, 'body'>, Acting {
   query?: Record<string, QueryValue>;
   json?: unknown;
   /* Multipart body (file uploads). Mutually exclusive with `json`; no
@@ -241,7 +204,7 @@ async function send(
     );
   }
 
-  const { query, json, form, headers, signal, ...rest } = opts;
+  const { query, json, form, headers, signal, actAs, ...rest } = opts;
   const url = new URL(BASE_URL + path);
   if (query) {
     for (const [k, v] of Object.entries(query)) {
@@ -263,6 +226,7 @@ async function send(
     Accept: 'application/json',
     ...(json !== undefined ? { 'Content-Type': 'application/json' } : {}),
     ...(await authHeader()),
+    ...(actAs ? { 'X-Act-As': actAs } : {}),
     ...((headers as Record<string, string> | undefined) ?? {}),
   };
 
@@ -348,6 +312,15 @@ export const apiPost = <T>(
   signal?: AbortSignal,
 ): Promise<T> => request<T>(path, { method: 'POST', json: body, signal });
 
+export const apiPut = <T>(
+  path: string,
+  body: unknown,
+  signal?: AbortSignal,
+): Promise<T> => request<T>(path, { method: 'PUT', json: body, signal });
+
+export const apiDelete = <T>(path: string, signal?: AbortSignal): Promise<T> =>
+  request<T>(path, { method: 'DELETE', signal });
+
 /* GET for bytes (an image an <img> cannot fetch itself, since it sends no JWT). */
 export const apiGetBlob = (
   path: string,
@@ -355,21 +328,30 @@ export const apiGetBlob = (
   signal?: AbortSignal,
 ): Promise<Blob> => requestBlob(path, { query: params, signal });
 
-/* ----- estimations ------------------------------------------------------- */
+/* ----- a pasted ad link (docs/design/new-property-from-link.md §3.2) ------ */
 
-/* POST /estimations/preview — generic URL parser (sreality fast path
- * + LLM-driven per-source parser for everything else, dispatched on
- * the backend). When force_refresh is true the 7-day URL cache is
- * bypassed and a fresh parse is performed (the cache row is also
- * upserted on success). */
-export const previewListingUrl = (
+/* POST /listings/ingest — the server resolves the pasted text (its first URL)
+ * to one ad and answers ONE state; a link we do not hold is queued for the
+ * worker's drain. Market data only: never acts (no X-Act-As). */
+export const ingestListing = (
   url: string,
-  options: { force_refresh?: boolean } = {},
-): Promise<ParseResult> =>
-  request<ParseResult>('/estimations/preview', {
-    method: 'POST',
-    json: { url, force_refresh: options.force_refresh ?? false },
-  });
+  { signal }: { signal?: AbortSignal } = {},
+): Promise<IngestState> =>
+  request<IngestState>('/listings/ingest', { method: 'POST', json: { url }, signal });
+
+/* GET /listings/ingest/{source}/{native_id} — the same state, re-read while the
+ * page is fetched and the ad's property is born. */
+export const ingestState = (
+  source: string,
+  nativeId: string,
+  { signal }: { signal?: AbortSignal } = {},
+): Promise<IngestState> =>
+  request<IngestState>(
+    `/listings/ingest/${encodeURIComponent(source)}/${encodeURIComponent(nativeId)}`,
+    { signal },
+  );
+
+/* ----- estimations ------------------------------------------------------- */
 
 export const createEstimation = (
   input: CreateEstimationIn,
@@ -485,60 +467,6 @@ export const fetchListingSummaries = (
     json: { items },
   });
 
-/* POST /tools/summarize_region_dispositions — one-to-two-sentence
- * natural-language annotation per per-disposition Kč/m² box plot in
- * Browse > Stats. Generated server-side from the same ppm2_box payload
- * that drives the chart. Cached server-side per (region, calendar day):
- * the first viewer of a region today pays for the LLM call, everyone
- * else hits the cache. `region_key` is the caller's deterministic
- * serialization of the active filter set (see regionKeyFromFilters). */
-export interface RegionDispositionAnnotationsInput {
-  region_key: string;
-  dispositions: ReadonlyArray<{
-    disposition: string;
-    n: number;
-    ppm2_box: Ppm2Box | null;
-  }>;
-  ppm2_overall?: { p25: number; p50: number; p75: number } | null;
-  region_label?: string | null;
-  /* The unit those boxes are in — pass `BrowseStats.ppm2_basis` straight
-   * through, spelled in migration 425's own vocabulary. The annotator states it
-   * in the prompt instead of guessing, and REFUSES a `'mixed'` cohort outright
-   * (no LLM call, an explicit note): a box plot stacking monthly rents on
-   * purchase prices has no describable shape. Omitting it makes the annotator
-   * treat the unit as unknown, so it can no longer name Kč/m² even when the
-   * cohort is a plain sale cohort. It is also part of the server's per-day
-   * cache identity beside region_hash, so two bases never share one entry. */
-  ppm2_basis?: string | null;
-}
-
-export interface RegionDispositionAnnotationsResult {
-  data: {
-    region_key: string;
-    annotations: Record<string, string>;
-    model: string;
-    cost_usd: number | null;
-    cache_hit: boolean;
-    /* Echo of the basis, and its Czech unit — null for a cohort with no
-     * single one, which is exactly when nothing may name a unit. */
-    ppm2_basis?: string | null;
-    ppm2_unit?: string | null;
-  };
-  /* `notes` says WHY `annotations` is empty when the server declined to write
-   * any (today: a mixed cohort). Rendering it is the difference between an
-   * explained refusal and a blank panel. */
-  metadata: Record<string, unknown> & { notes?: string[] };
-}
-
-export const fetchRegionDispositionAnnotations = (
-  input: RegionDispositionAnnotationsInput,
-  signal?: AbortSignal,
-): Promise<RegionDispositionAnnotationsResult> =>
-  request<RegionDispositionAnnotationsResult>(
-    '/tools/summarize_region_dispositions',
-    { method: 'POST', json: input, signal },
-  );
-
 /* ----- freshness (Phase U2.5) -------------------------------------------- *
  *
  * POST /tools/verify_listing_freshness — on-demand re-fetch of one listing.
@@ -587,23 +515,8 @@ export const verifyListingFreshness = (
 
 /* ----- buildings (Phase B1) ---------------------------------------------- */
 
-export const createBuildingFromUrl = (
-  input: CreateBuildingFromUrlIn,
-): Promise<BuildingRun> =>
-  request<BuildingRun>('/buildings/from_url', {
-    method: 'POST',
-    json: input,
-  });
-
 export const getBuilding = (id: number): Promise<BuildingRun> =>
   request<BuildingRun>(`/buildings/${id}`);
-
-export const listBuildings = (
-  params: { source?: string; status?: string; limit?: number; offset?: number } = {},
-): Promise<BuildingListResponse> =>
-  request<BuildingListResponse>('/buildings', {
-    query: params as Record<string, QueryValue>,
-  });
 
 export const confirmBuildingUnits = (
   id: number,
@@ -642,13 +555,6 @@ export const uploadBuildingAttachment = (
   });
 };
 
-export const listBuildingAttachments = (
-  buildingId: number,
-): Promise<{ data: BuildingAttachment[] }> =>
-  request<{ data: BuildingAttachment[] }>(
-    `/buildings/${buildingId}/attachments`,
-  );
-
 export const deleteBuildingAttachment = (
   buildingId: number,
   attachmentId: number,
@@ -657,19 +563,6 @@ export const deleteBuildingAttachment = (
     `/buildings/${buildingId}/attachments/${attachmentId}`,
     { method: 'DELETE' },
   );
-
-/* Build a fetch URL for one attachment's raw bytes. The route is
- * bearer-gated, so callers that want to render the image in <img> tags
- * must either fetch via this helper and convert to a blob URL, or
- * include the token in a query param (we use the fetch + blob path,
- * which keeps the token out of the URL). */
-export const buildingAttachmentRawUrl = (
-  buildingId: number,
-  attachmentId: number,
-): string => {
-  if (!BASE_URL) return '';
-  return `${BASE_URL}/buildings/${buildingId}/attachments/${attachmentId}/raw`;
-};
 
 export const fetchBuildingAttachmentBlob = (
   buildingId: number,
@@ -1029,13 +922,6 @@ export const getNewDedupCandidateListings = (q: {
     },
   });
 
-export const listNewDedupCandidateGenerations = (): Promise<{
-  data: NewDedupCandidateRecentGeneration[];
-}> =>
-  request<{ data: NewDedupCandidateRecentGeneration[] }>(
-    '/new-dedup/candidates/generations'
-  );
-
 // Tag annotation matrix (docs/design/tag-annotation-matrix.md) — the
 // operator-curated tag taxonomy, the relabel sample, and the tri-state
 // (positive/negative/excluded) ground truth every per-tag classifier head
@@ -1052,7 +938,6 @@ export const TAG_STATES: readonly TagState[] = ['positive', 'negative', 'exclude
  * excluded from the ambiguity rate's numerator AND denominator, so pruning can
  * never dilute the signal. */
 export type TagExcludedReason = 'ambiguous' | 'pruned';
-export const TAG_EXCLUDED_REASONS: readonly TagExcludedReason[] = ['ambiguous', 'pruned'];
 
 /* Who or what decided a cell. 'human_confirmed' (machine proposed, human
  * affirmed) is deliberately NOT the same evidence as 'machine' (nobody checked).
@@ -1479,9 +1364,6 @@ export const listTagLabelNotes = (
   request<{ data: TagLabelNote[] }>(`/new-dedup/labeling/tags/${tagId}/notes`, {
     query: params,
   });
-
-export const getOpenNoteCounts = (): Promise<{ data: Record<string, number> }> =>
-  request<{ data: Record<string, number> }>('/new-dedup/labeling/notes/open-counts');
 
 export const absorbTagLabelNotes = (
   tagId: number, body: { definition_id: number; note_ids: number[] },
@@ -2400,7 +2282,8 @@ export function uploadRentMapFile(file: File): Promise<RentMapIngestResult> {
  * GET returns every kraj (admin_boundaries level='kraj') with its enabled
  * flag + count of unscored active listings; PUT replaces the full enabled
  * list (app_settings.condition_scoring_enabled_region_ids) and returns the
- * same payload. The scheduled batch job reads the same key. */
+ * same payload. Condition scoring is parked (rule 14): its workflows are
+ * dispatch-only, so the key only scopes a manually dispatched run. */
 
 export interface ConditionScoringRegion {
   id: number;
@@ -2523,8 +2406,10 @@ export const setFilterVisibility = (
 
 /* Collections */
 
-export const listCollections = (): Promise<{ data: Collection[]; total: number }> =>
-  request<{ data: Collection[]; total: number }>('/collections');
+export const listCollections = (
+  { actAs }: Acting = {},
+): Promise<{ data: Collection[]; total: number }> =>
+  request<{ data: Collection[]; total: number }>('/collections', { actAs });
 
 export const getCollection = (id: number): Promise<CollectionWithProperties> =>
   request<CollectionWithProperties>(`/collections/${id}`);
@@ -2533,7 +2418,6 @@ export const createCollection = (input: {
   name: string;
   description?: string | null;
   monitoring_enabled?: boolean;
-  notify_channels?: string[];
 }): Promise<Collection> =>
   request<Collection>('/collections', { method: 'POST', json: input });
 
@@ -2543,7 +2427,6 @@ export const updateCollection = (
     name?: string | null;
     description?: string | null;
     monitoring_enabled?: boolean;
-    notify_channels?: string[];
   },
 ): Promise<Collection> =>
   request<Collection>(`/collections/${id}`, {
@@ -2571,62 +2454,73 @@ export const unshareCollection = (
 export const addPropertiesToCollection = (
   id: number,
   property_ids: number[],
+  { actAs }: Acting = {},
 ): Promise<{ added: number; skipped: number }> =>
   request<{ added: number; skipped: number }>(`/collections/${id}/properties`, {
     method: 'POST',
     json: { property_ids },
+    actAs,
   });
 
 export const removePropertyFromCollection = (
   id: number,
   property_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ removed: boolean }> =>
   request<{ removed: boolean }>(
     `/collections/${id}/properties/${property_id}`,
-    { method: 'DELETE' },
+    { method: 'DELETE', actAs },
   );
 
 /* Tags */
 
-export const listTags = (): Promise<{ data: Tag[] }> =>
-  request<{ data: Tag[] }>('/tags');
+export const listTags = ({ actAs }: Acting = {}): Promise<{ data: Tag[] }> =>
+  request<{ data: Tag[] }>('/tags', { actAs });
 
-export const createTag = (input: { name: string; color: TagColor }): Promise<Tag> =>
-  request<Tag>('/tags', { method: 'POST', json: input });
+export const createTag = (
+  input: { name: string; color: TagColor },
+  { actAs }: Acting = {},
+): Promise<Tag> =>
+  request<Tag>('/tags', { method: 'POST', json: input, actAs });
 
 export const updateTag = (
   id: number,
   patch: { name?: string | null; color?: TagColor | null },
+  { actAs }: Acting = {},
 ): Promise<Tag> =>
-  request<Tag>(`/tags/${id}`, { method: 'PATCH', json: patch });
+  request<Tag>(`/tags/${id}`, { method: 'PATCH', json: patch, actAs });
 
-export const deleteTag = (id: number): Promise<{ deleted: true }> =>
-  request<{ deleted: true }>(`/tags/${id}`, { method: 'DELETE' });
+export const deleteTag = (id: number, { actAs }: Acting = {}): Promise<{ deleted: true }> =>
+  request<{ deleted: true }>(`/tags/${id}`, { method: 'DELETE', actAs });
 
 export const attachTag = (
   property_id: number,
   tag_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ attached: boolean }> =>
   request<{ attached: boolean }>(`/properties/${property_id}/tags`, {
     method: 'POST',
     json: { tag_id },
+    actAs,
   });
 
 export const detachTag = (
   property_id: number,
   tag_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ detached: boolean }> =>
   request<{ detached: boolean }>(
     `/properties/${property_id}/tags/${tag_id}`,
-    { method: 'DELETE' },
+    { method: 'DELETE', actAs },
   );
 
 /* Notes (per-property journal) */
 
 export const listPropertyNotes = (
   property_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ data: Note[] }> =>
-  request<{ data: Note[] }>(`/properties/${property_id}/notes`);
+  request<{ data: Note[] }>(`/properties/${property_id}/notes`, { actAs });
 
 export const createPropertyNote = (
   property_id: number,
@@ -2635,6 +2529,7 @@ export const createPropertyNote = (
   origin_listing_ref_id?: number,
   // The author's share mark; private when omitted.
   shared?: boolean,
+  { actAs }: Acting = {},
 ): Promise<Note> =>
   request<Note>(`/properties/${property_id}/notes`, {
     method: 'POST',
@@ -2643,6 +2538,7 @@ export const createPropertyNote = (
       ...(shared != null ? { shared } : {}),
       ...(origin_listing_ref_id != null ? { origin_listing_ref_id } : {}),
     },
+    actAs,
   });
 
 /* At least one field; marking shared leaves updated_at alone (API). */
@@ -2650,18 +2546,22 @@ export const updatePropertyNote = (
   property_id: number,
   note_id: number,
   patch: { body?: string; shared?: boolean },
+  { actAs }: Acting = {},
 ): Promise<Note> =>
   request<Note>(`/properties/${property_id}/notes/${note_id}`, {
     method: 'PATCH',
     json: patch,
+    actAs,
   });
 
 export const deletePropertyNote = (
   property_id: number,
   note_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ deleted: true }> =>
   request<{ deleted: true }>(`/properties/${property_id}/notes/${note_id}`, {
     method: 'DELETE',
+    actAs,
   });
 
 /* Artifact link (migration 599): one http(s) URL per property; PUT sets or replaces it.
@@ -2669,25 +2569,31 @@ export const deletePropertyNote = (
  * curation fact is read in — tags, collections, note counts), so a board of cards costs one
  * request, not one per card, and the property page reads the same entry. */
 
-export const fetchArtifactLinks = async (): Promise<Map<number, ArtifactLink>> => {
-  const { data } = await request<{ data: ArtifactLink[] }>('/artifact-links');
+export const fetchArtifactLinks = async (
+  { actAs }: Acting = {},
+): Promise<Map<number, ArtifactLink>> => {
+  const { data } = await request<{ data: ArtifactLink[] }>('/artifact-links', { actAs });
   return new Map(data.map((l) => [l.property_id, l]));
 };
 
 export const setPropertyArtifactLink = (
   property_id: number,
   url: string,
+  { actAs }: Acting = {},
 ): Promise<ArtifactLink> =>
   request<ArtifactLink>(`/properties/${property_id}/artifact-link`, {
     method: 'PUT',
     json: { url },
+    actAs,
   });
 
 export const deletePropertyArtifactLink = (
   property_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ deleted: boolean }> =>
   request<{ deleted: boolean }>(`/properties/${property_id}/artifact-link`, {
     method: 'DELETE',
+    actAs,
   });
 
 /* A note's files (migration 592): one file per request; the bytes come back through the API
@@ -2696,12 +2602,14 @@ export const uploadNoteAttachment = (
   property_id: number,
   note_id: number,
   file: File,
+  { actAs }: Acting = {},
 ): Promise<NoteAttachment> => {
   const form = new FormData();
   form.append('file', file, file.name);
   return request<NoteAttachment>(`/properties/${property_id}/notes/${note_id}/attachments`, {
     method: 'POST',
     form,
+    actAs,
   });
 };
 
@@ -2709,17 +2617,21 @@ export const fetchNoteAttachmentBlob = (
   property_id: number,
   note_id: number,
   attachment_id: number,
+  { actAs }: Acting = {},
 ): Promise<Blob> =>
-  requestBlob(`/properties/${property_id}/notes/${note_id}/attachments/${attachment_id}`);
+  requestBlob(`/properties/${property_id}/notes/${note_id}/attachments/${attachment_id}`, {
+    actAs,
+  });
 
 export const deleteNoteAttachment = (
   property_id: number,
   note_id: number,
   attachment_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ deleted: true }> =>
   request<{ deleted: true }>(
     `/properties/${property_id}/notes/${note_id}/attachments/${attachment_id}`,
-    { method: 'DELETE' },
+    { method: 'DELETE', actAs },
   );
 
 /* Dismissals (migration 536) — "never show me this property again", and its
@@ -2727,17 +2639,21 @@ export const deleteNoteAttachment = (
 
 export const dismissProperty = (
   property_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ property_id: number; added: boolean }> =>
   request<{ property_id: number; added: boolean }>('/dismissals', {
     method: 'POST',
     json: { property_id },
+    actAs,
   });
 
 export const undismissProperty = (
   property_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ property_id: number; removed: boolean }> =>
   request<{ property_id: number; removed: boolean }>(`/dismissals/${property_id}`, {
     method: 'DELETE',
+    actAs,
   });
 
 /* Deal pipeline (migration 205) — bookmark a property into the pipeline
@@ -2745,43 +2661,51 @@ export const undismissProperty = (
 
 export const addPipelineCard = (
   property_id: number,
-): Promise<{ property_id: number; stage_key: string; added: boolean }> =>
-  request<{ property_id: number; stage_key: string; added: boolean }>(
+  { actAs }: Acting = {},
+): Promise<{ property_id: number; stage_key: string; stage_label?: string; added: boolean }> =>
+  request<{ property_id: number; stage_key: string; stage_label?: string; added: boolean }>(
     '/pipeline/cards',
-    { method: 'POST', json: { property_id } },
+    { method: 'POST', json: { property_id }, actAs },
   );
 
 export const removePipelineCard = (
   property_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ removed: boolean }> =>
   request<{ removed: boolean }>(`/pipeline/cards/${property_id}`, {
     method: 'DELETE',
+    actAs,
   });
 
 export const movePipelineCard = (
   property_id: number,
   stage_id: number,
   board_position?: number,
+  { actAs }: Acting = {},
 ): Promise<{ property_id: number; stage_id: number; stage_key: string }> =>
   request<{ property_id: number; stage_id: number; stage_key: string }>(
     `/pipeline/cards/${property_id}`,
     {
       method: 'PATCH',
       json: board_position != null ? { stage_id, board_position } : { stage_id },
+      actAs,
     },
   );
 
 /* Stage management — operator-curated kanban columns (rename / recolor / add /
  * reorder / archive). The `key` slug is derived server-side from the label. */
 
-export const createPipelineStage = (input: {
-  label: string;
-  color?: TagColor | null;
-  is_terminal?: boolean;
-  /* Short funnel badge (migration 377); omit to fall back to the ordinal. */
-  code?: string | null;
-}): Promise<PipelineStage> =>
-  request<PipelineStage>('/pipeline/stages', { method: 'POST', json: input });
+export const createPipelineStage = (
+  input: {
+    label: string;
+    color?: TagColor | null;
+    is_terminal?: boolean;
+    /* Short funnel badge (migration 377); omit to fall back to the ordinal. */
+    code?: string | null;
+  },
+  { actAs }: Acting = {},
+): Promise<PipelineStage> =>
+  request<PipelineStage>('/pipeline/stages', { method: 'POST', json: input, actAs });
 
 export const updatePipelineStage = (
   stage_id: number,
@@ -2793,77 +2717,55 @@ export const updatePipelineStage = (
     /* Explicit null clears the badge back to the ordinal fallback. */
     code?: string | null;
   },
+  { actAs }: Acting = {},
 ): Promise<PipelineStage> =>
   request<PipelineStage>(`/pipeline/stages/${stage_id}`, {
     method: 'PATCH',
     json: patch,
+    actAs,
   });
 
 export const reorderPipelineStages = (
   ordered_ids: number[],
+  { actAs }: Acting = {},
 ): Promise<{ data: PipelineStage[] }> =>
   request<{ data: PipelineStage[] }>('/pipeline/stages/reorder', {
     method: 'POST',
     json: { ordered_ids },
+    actAs,
   });
 
 export const archivePipelineStage = (
   stage_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ archived: boolean; stage_id: number }> =>
   request<{ archived: boolean; stage_id: number }>(
     `/pipeline/stages/${stage_id}`,
-    { method: 'DELETE' },
+    { method: 'DELETE', actAs },
   );
 
-/* Manual rental estimates (Phase U-ME): shared reference data every account
- * reads; the writes are admin-only (require_admin), so they carry the user's
- * JWT. */
+/* Pipeline sharing (migration 641). Sharing never acts: these three are always
+ * the caller's own, so they take no `actAs` (and the API 403s one). GET lists
+ * both sides; POST shares (or changes the mode — 422 "No account uses this
+ * email." / own address); DELETE revokes a recipient (side=shared_with) or
+ * leaves an owner's board (side=shared_with_me). */
 
-export const listManualEstimates = (
-  sreality_id: number,
-): Promise<{ data: ManualRentalEstimate[] }> =>
-  request<{ data: ManualRentalEstimate[] }>(
-    `/listings/${sreality_id}/manual_estimates`,
-  );
+export const listPipelineShares = (): Promise<PipelineShares> =>
+  request<PipelineShares>('/pipeline/shares');
 
-export const createManualEstimate = (
-  sreality_id: number,
-  body: CreateManualEstimateIn,
-): Promise<ManualRentalEstimate> =>
-  request<ManualRentalEstimate>(
-    `/listings/${sreality_id}/manual_estimates`,
-    { method: 'POST', json: body },
-  );
+export const sharePipeline = (email: string, mode: PipelineShareMode): Promise<PipelineShares> =>
+  request<PipelineShares>('/pipeline/shares', { method: 'POST', json: { email, mode } });
 
-export const updateManualEstimate = (
-  estimate_id: number,
-  body: UpdateManualEstimateIn,
-): Promise<ManualRentalEstimate> =>
-  request<ManualRentalEstimate>(
-    `/manual_estimates/${estimate_id}`,
-    { method: 'PATCH', json: body },
-  );
-
-export const deleteManualEstimate = (
-  estimate_id: number,
-): Promise<{ deleted: true }> =>
-  request<{ deleted: true }>(`/manual_estimates/${estimate_id}`, {
+export const unsharePipeline = (
+  account_id: string,
+  side: 'shared_with' | 'shared_with_me',
+): Promise<{ deleted: boolean }> =>
+  request<{ deleted: boolean }>(`/pipeline/shares/${encodeURIComponent(account_id)}`, {
     method: 'DELETE',
+    query: { side },
   });
 
 /* ----- Watchdog notifications (Phase U2.7) ------------------------------- */
-
-export interface ListWatchdogDispatchesParams {
-  subscription_id?: string;
-  /* Scope to one producer. The Watchdog page passes 'watchdog' so the unified
-   * feed's collection_monitor rows (subscription_id NULL) don't leak onto it. */
-  source_kind?: NotificationSourceKind | 'all';
-  seen?: WatchdogSeenFilter;
-  limit?: number;
-  offset?: number;
-  /* Keyset cursor (the prior page's next_cursor). */
-  cursor?: string;
-}
 
 export const listWatchdogSubscriptions = (
   options: { includeInactive?: boolean } = {},
@@ -2884,7 +2786,6 @@ export const createWatchdogSubscription = (input: {
   name: string;
   filter_spec: WatchdogFilterSpec;
   is_active?: boolean;
-  channels?: string[];
 }): Promise<WatchdogSubscription> =>
   request<WatchdogSubscription>('/notifications/subscriptions', {
     method: 'POST',
@@ -2897,7 +2798,6 @@ export const updateWatchdogSubscription = (
     name?: string;
     filter_spec?: WatchdogFilterSpec;
     is_active?: boolean;
-    channels?: string[];
   },
 ): Promise<WatchdogSubscription> =>
   request<WatchdogSubscription>(
@@ -2913,13 +2813,6 @@ export const deleteWatchdogSubscription = (
     { method: 'DELETE' },
   );
 
-export const listWatchdogDispatches = (
-  params: ListWatchdogDispatchesParams = {},
-): Promise<WatchdogDispatchesResponse> =>
-  request<WatchdogDispatchesResponse>('/notifications/dispatches', {
-    query: params as Record<string, QueryValue>,
-  });
-
 export const markWatchdogDispatchSeen = (
   dispatchId: string,
 ): Promise<WatchdogDispatch> =>
@@ -2928,43 +2821,20 @@ export const markWatchdogDispatchSeen = (
     { method: 'POST' },
   );
 
-export const kickoffWatchdogDispatchEstimate = (
-  dispatchId: string,
-): Promise<WatchdogDispatch> =>
-  request<WatchdogDispatch>(
-    `/notifications/dispatches/${encodeURIComponent(dispatchId)}/estimate`,
-    { method: 'POST' },
-  );
-
-export const runWatchdogMatcher = (): Promise<{
-  data: {
-    subscriptions_evaluated: number;
-    matches_inserted: number;
-    listings_in_window: number;
-  };
-}> =>
-  request<{
-    data: {
-      subscriptions_evaluated: number;
-      matches_inserted: number;
-      listings_in_window: number;
-    };
-  }>('/notifications/matcher/run', { method: 'POST' });
-
 /* ----- Unified notifications feed (Sprint C) ---------------------------- */
 
 export interface ListNotificationsParams {
   source_kind?: NotificationSourceKind | 'all';
-  change_kind?: string;
+  change_kind?: DispatchChangeKind;
   collection_id?: number;
   seen?: WatchdogSeenFilter;
   limit?: number;
+  /* Keyset cursor: the prior page's next_cursor. */
   cursor?: string;
 }
 
-/* The unified feed: watchdog matches AND collection-monitor change events.
- * Same endpoint + row shape as the watchdog dispatches, just unscoped by
- * source (the LEFT-join feed serves both). */
+/* The one feed: watchdog matches, collection-monitor change events and shares,
+ * newest first, keyset-paged on (dispatched_at, id). */
 export const listNotifications = (
   params: ListNotificationsParams = {},
 ): Promise<WatchdogDispatchesResponse> =>
@@ -2972,12 +2842,8 @@ export const listNotifications = (
     query: params as Record<string, QueryValue>,
   });
 
-export const getNotificationUnreadCount = (
-  source_kind: NotificationSourceKind | 'all' = 'all',
-): Promise<NotificationUnreadCount> =>
-  request<NotificationUnreadCount>('/notifications/unread-count', {
-    query: { source_kind },
-  });
+export const getNotificationUnreadCount = (): Promise<NotificationUnreadCount> =>
+  request<NotificationUnreadCount>('/notifications/unread-count');
 
 export const markAllNotificationsSeen = (
   source_kind: NotificationSourceKind | 'all' = 'all',
@@ -2986,6 +2852,45 @@ export const markAllNotificationsSeen = (
     method: 'POST',
     query: { source_kind },
   });
+
+/* ----- Push (notifications push program W4/W5b) -------------------------
+ * One device = one push subscription, bound to the signed-in account (lib/push).
+ * The VAPID public key is read at runtime, never baked into the build. */
+
+/* `PushSubscription.toJSON()` plus the browser's user agent. */
+export interface PushSubscriptionBody {
+  endpoint: string;
+  expirationTime: number | null;
+  keys: { p256dh: string; auth: string };
+  user_agent: string;
+}
+
+export type PushEndReason = 'signed_out' | 'switched_off';
+
+/* The server's VAPID public key (base64url, a 65-byte P-256 point); a 503 while
+ * the server has none (push not configured). */
+export const getPushKey = (): Promise<{ public_key: string }> =>
+  request<{ public_key: string }>('/push/key');
+
+/* Registers (or re-sends) this device for the caller: idempotent, and an
+ * endpoint another account held moves to the caller. 422 when the endpoint is
+ * not Apple's push service or the keys are malformed. */
+export const putPushSubscription = (body: PushSubscriptionBody): Promise<void> =>
+  request<void>('/push/subscription', { method: 'PUT', json: body });
+
+/* Ends this device's row (an unknown endpoint is still 204). The endpoint rides
+ * in the body, never the URL. */
+export const deletePushSubscription = (
+  body: { endpoint: string; reason: PushEndReason },
+  opts: { signal?: AbortSignal } = {},
+): Promise<void> =>
+  request<void>('/push/subscription', { method: 'DELETE', json: body, signal: opts.signal });
+
+/* A tap on a push lands on `/n/{dispatch}?d={delivery}` (or the coalesced
+ * `/notifications?d=`): this stamps that the caller opened their own delivery.
+ * An unknown id is still 204. Best effort, never awaited by a navigation. */
+export const postPushOpened = (delivery: number): Promise<void> =>
+  request<void>('/push/opened', { method: 'POST', json: { delivery } });
 
 /* ----- Saved Browse filter presets (migration 151) ----------------------
  * Per account (migration 595, ticket #1761): every route rides the user's
@@ -3060,28 +2965,43 @@ export interface MergeResult {
   hidden_for_you: boolean | null;
 }
 
-/* Merge an operator-checked SET of properties (Browse mergeMode) into its oldest
- * record under one merge group; a split undoes it. A category clash over the
- * set's ads is a 409 whose message is the Czech sentence. */
-export const mergePropertySet = (
-  propertyIds: number[],
-): Promise<MergeResult> =>
-  request<MergeResult>('/properties/merge', {
-    method: 'POST',
-    json: { property_ids: propertyIds },
-  });
+/* A statement of letters: a letter A–Z per id, ids with the same letter one
+ * property afterwards — over properties in Browse's merge mode, over the adverts
+ * of one property in the split (MS18). `lettersParam` is its one wire form,
+ * `94020:A,94492:B`, ids ascending. */
+export type Letters = Record<number, string>;
+export const LETTERS: readonly string[] = Array.from({ length: 26 }, (_, i) =>
+  String.fromCharCode(65 + i),
+);
 
-/* How many "Různé" rulings a merge of these properties would take back (MS12),
- * read before the click; the merge itself answers the same count. */
-export interface MergePreview {
-  property_ids: number[];
-  rulings_taken_back: number;
+export function lettersParam(letters: Letters): string {
+  return Object.entries(letters)
+    .map(([id, letter]) => [Number(id), letter] as const)
+    .sort((a, b) => a[0] - b[0])
+    .map(([id, letter]) => `${id}:${letter}`)
+    .join(',');
 }
 
-export const getMergePreview = (propertyIds: readonly number[]): Promise<MergePreview> =>
-  request<MergePreview>('/properties/merge', {
-    query: { properties: propertyIds.join(',') },
-  });
+/* Make a statement over properties true: each letter merged into its oldest
+ * record under its own merge group, all in one transaction (a refusal writes
+ * nothing); one receipt per letter. A category clash over a letter's ads is a
+ * 409 whose message is the Czech sentence, naming the letter when there are
+ * several. A split undoes one letter's merge. */
+export interface MergeLettersResult {
+  letters: Record<string, MergeResult>;
+}
+
+export const mergeProperties = (letters: Letters): Promise<MergeLettersResult> =>
+  request<MergeLettersResult>('/properties/merge', { method: 'POST', json: { letters } });
+
+/* How many "Různé" rulings each letter would take back (MS12), read before the
+ * click; the merge itself answers the same counts. */
+export interface MergePreview {
+  letters: Record<string, { property_ids: number[]; rulings_taken_back: number }>;
+}
+
+export const getMergePreview = (letters: Letters): Promise<MergePreview> =>
+  request<MergePreview>('/properties/merge', { query: { letters: lettersParam(letters) } });
 
 /* The split by letters (MS18), `GET`/`POST /properties/{id}/split`: every ad of
  * the property with a letter, one letter = one property afterwards. The preview
@@ -3093,7 +3013,6 @@ export const getMergePreview = (propertyIds: readonly number[]): Promise<MergePr
 export const DETACH_REASON_MAX = 500;
 
 /* listings.id -> letter (A–Z). */
-export type SplitLetters = Record<number, string>;
 
 export interface SplitChoice {
   to: string;
@@ -3101,7 +3020,7 @@ export interface SplitChoice {
 }
 
 export interface SplitStatement {
-  letters: SplitLetters;
+  letters: Letters;
   /* Item key (`note:11`, `pipeline`, `collection:5`, `tag:7`, `dismissal`) ->
    * the letter that gets it and its copies; an absent key follows the preview. */
   choices?: Record<string, SplitChoice>;
@@ -3991,9 +3910,9 @@ export const getAutodedupStats = (): Promise<{
  * browser (the Supabase client is pinned to `public`), and `listings` is RLS
  * deny-all, so there is no second path to this data.
  *
- * SHADOW MODE (D4). Nothing here applies a merge. A verdict is the operator's
- * opinion recorded against a pair or a cluster; a negative PAIR verdict also
- * writes a permanent must-not-link server-side. The UI never says "merged".
+ * Nothing here applies a merge. A verdict is the operator's opinion recorded
+ * against a pair or a cluster; a negative PAIR verdict also writes a permanent
+ * must-not-link server-side. The UI never says "merged".
  *
  * Every filter below is a KEY the server validates against its own registry —
  * these are the names, never a predicate.
@@ -4201,8 +4120,8 @@ export interface AutodedupConflictRow {
   created_at: string;
 }
 
-/* One row of `autodedup.clusters`. `status` is never 'applied' in this program
- * (D4) and `property_id` never set. */
+/* One row of `autodedup.clusters`. `status` is never 'applied' and `property_id`
+ * never set: the engine's merges are recorded in `autodedup.applied_merges`. */
 export interface AutodedupClusterRow {
   cluster_key: number;
   generation: string;

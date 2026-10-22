@@ -29,7 +29,6 @@ name: "Ops: re-check crawler listings a sreality check falsely delisted"
 #
 # Non-destructive: it only adds queue rows, deduplicated against rows already queued; the
 # drains do every write through their usual paths (rule 3: page-verified, never deleted).
-# NOT a portal ingest workflow, so it carries no `# portal:` tag.
 #
 # Required GitHub secret: SUPABASE_DB_URL.
 

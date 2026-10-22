@@ -10,8 +10,7 @@ name: Backfill child listing_id (R2)
 #
 # Idempotent + resumable — each run picks up at the first row still needing work,
 # so re-dispatch until "0 row(s) filled". Its OWN concurrency group: a shared one
-# would let the portal ingest jobs starve it. NOT a portal workflow, so no
-# `# portal:` tag.
+# would let the portal ingest jobs starve it.
 #
 # Required GitHub secrets: SUPABASE_DB_URL, SUPABASE_DB_SESSION_URL (the script
 # uses the session pooler — the transaction pooler's ~2-minute statement cap

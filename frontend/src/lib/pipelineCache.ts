@@ -2,7 +2,7 @@
  * by every surface that writes a card (rule #22).
  *
  * Two caches hold "where is this property in the pipeline": `members` (the map
- * every funnel — Browse cards/table AND the listing-detail toggle, since W3 —
+ * every funnel — Browse cards AND the listing-detail toggle, since W3 —
  * renders from) and `board` (the kanban array, which also carries the
  * STRUCTURAL display fields `members` doesn't: price, place, area, is_active).
  * NOT the photo, and not the broker: those are decorations, they live in the
@@ -24,13 +24,14 @@
 
 import type { QueryClient, QueryKey } from '@tanstack/react-query';
 
+import { actingKey } from '@/lib/acting';
 import { dismissalKeys, pipelineKeys, type PipelineMembers } from '@/lib/queries';
-import { browseKeys } from '@/lib/browseKeys';
 import { cachePatch, type CachePatch } from '@/lib/useOptimisticWrite';
 import type { PipelineBoardCard, PipelineStage } from '@/lib/types';
 
-const MEMBERS = { queryKey: pipelineKeys.members, exact: true };
-const BOARD = { queryKey: pipelineKeys.board, exact: true };
+/* `actAs` (lib/acting): the owner's board entries while acting, else the caller's. */
+const MEMBERS = (actAs: string | null) => ({ queryKey: actingKey(actAs, pipelineKeys.members), exact: true });
+const BOARD = (actAs: string | null) => ({ queryKey: actingKey(actAs, pipelineKeys.board), exact: true });
 
 /* Show the property as sitting at `stage` — used for both "bookmarked into the
  * entry stage" and "moved to another stage".
@@ -39,9 +40,13 @@ const BOARD = { queryKey: pipelineKeys.board, exact: true };
  * board entry carries the property's display fields (price, place, area) that
  * a funnel click has no way to synthesise, so a NEW card reaches the board via
  * the revalidation instead of as a half-built row. */
-export function placeCard(property_id: number, stage: PipelineStage): CachePatch[] {
+export function placeCard(
+  property_id: number,
+  stage: PipelineStage,
+  actAs: string | null = null,
+): CachePatch[] {
   return [
-    cachePatch<PipelineMembers>(MEMBERS, (prev) => {
+    cachePatch<PipelineMembers>(MEMBERS(actAs), (prev) => {
       if (!prev) return prev;
       const next = new Map(prev);
       next.set(property_id, {
@@ -55,22 +60,22 @@ export function placeCard(property_id: number, stage: PipelineStage): CachePatch
       });
       return next;
     }),
-    cachePatch<PipelineBoardCard[]>(BOARD, (prev) =>
+    cachePatch<PipelineBoardCard[]>(BOARD(actAs), (prev) =>
       prev?.map((c) => (c.property_id === property_id ? { ...c, stage_id: stage.id } : c)),
     ),
   ];
 }
 
 /* Show the property as off the board. */
-export function dropCard(property_id: number): CachePatch[] {
+export function dropCard(property_id: number, actAs: string | null = null): CachePatch[] {
   return [
-    cachePatch<PipelineMembers>(MEMBERS, (prev) => {
+    cachePatch<PipelineMembers>(MEMBERS(actAs), (prev) => {
       if (!prev) return prev;
       const next = new Map(prev);
       next.delete(property_id);
       return next;
     }),
-    cachePatch<PipelineBoardCard[]>(BOARD, (prev) =>
+    cachePatch<PipelineBoardCard[]>(BOARD(actAs), (prev) =>
       prev?.filter((c) => c.property_id !== property_id),
     ),
   ];
@@ -84,14 +89,9 @@ export const PIPELINE_REVALIDATE: readonly QueryKey[] = [
   dismissalKeys.all,
 ];
 
-/* `cohortScoped` is the caller's one knob: when Browse is scoped to the
- * pipeline, membership IS the cohort — un-bookmarking must drop the row from
- * the list — so the Browse read surfaces have to refetch too. With the scope
- * off, membership changes nothing about which properties match, and refetching
- * map + every loaded card page + count + stats on a funnel click is pure waste. */
-export function pipelineRevalidation(cohortScoped: boolean): readonly QueryKey[] {
-  return cohortScoped ? [...PIPELINE_REVALIDATE, ...browseKeys.all] : PIPELINE_REVALIDATE;
-}
+/* The same list under an acting identity (lib/acting): the owner's entries. */
+export const pipelineRevalidate = (actAs: string | null): readonly QueryKey[] =>
+  actAs ? PIPELINE_REVALIDATE.map((k) => actingKey(actAs, k)) : PIPELINE_REVALIDATE;
 
 /* The same re-read for a write that is not a card write: a merge or split moves
  * cards between properties (the Browse merge, lib/mergedAdverts.refreshAfterSplit). */
@@ -105,8 +105,9 @@ export function revalidatePipeline(qc: QueryClient): void {
 export function cachedStage(
   qc: QueryClient,
   match: number | 'entry',
+  actAs: string | null = null,
 ): PipelineStage | null {
-  const stages = qc.getQueryData<PipelineStage[]>(pipelineKeys.stages) ?? [];
+  const stages = qc.getQueryData<PipelineStage[]>(actingKey(actAs, pipelineKeys.stages)) ?? [];
   const found =
     match === 'entry'
       ? stages.find((s) => s.is_entry)

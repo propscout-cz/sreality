@@ -7,10 +7,9 @@ export { RangeSlider, type RangeBounds } from './RangeSlider';
  * It statically imports `maplibre-gl` (~800 kB), and a barrel is a static edge:
  * `import { MultiselectChips } from '@/components/filter-controls'` pulled the whole
  * map engine into the entry chunk even in FilterForm, which never renders a map. Import
- * the component lazily from './LocationControl' at the two sites that actually draw one.
+ * it (and its sibling MapAreaControl, the Watchdog editor's box) lazily at the one site
+ * each that actually draws a map.
  * Types are erased at build time, so exporting `CenterRadius` here costs nothing. */
 export type { CenterRadius } from './LocationControl';
 export { LocationTypeahead } from './LocationTypeahead';
-export { AccountTagFilter, TagFilterControl } from './TagFilterControl';
-export { PipelineScopePicker } from './PipelineScopePicker';
 export type { EnumOptionLite } from './types';

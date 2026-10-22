@@ -72,11 +72,10 @@ class UiControl(StrEnum):
     TRISTATE = "tristate"              # any / yes / no
     SINGLE_SELECT = "single_select"    # dropdown
     NUMBER_INPUT = "number_input"      # single number
-    CSV_INPUT = "csv_input"            # comma-separated string list
     BOOLEAN = "boolean"                # plain checkbox
     LOCATION = "location"              # composite: districts + map + dot/radius
     CITY_INDEX_RULES = "city_index_rules"  # repeatable {index, op, threshold} rows
-    PIPELINE_SCOPE = "pipeline_scope"  # in-pipeline toggle + optional stage checkboxes
+    SET_SCOPE = "set_scope"            # curated set: element chips off/in/out + a "not in" chip
 
 
 class FilterType(StrEnum):
@@ -86,11 +85,10 @@ class FilterType(StrEnum):
     BOOL = "bool"
     STRING = "string"
     STRING_LIST = "string_list"
-    INT_LIST = "int_list"
     LOCATION = "location"            # composite — only used with UiControl.LOCATION
     DISTRICT_CHIP_LIST = "district_chip_list"  # location chips (api/location_filter.DistrictChip) — Browse/Watchdog
     CITY_INDEX_RULE_LIST = "city_index_rule_list"  # list of {index_name, op, value} — Browse/Watchdog city quality
-    PIPELINE_SCOPE = "pipeline_scope"             # composite {stage_ids} — deal-pipeline membership
+    SET_SCOPE = "set_scope"                       # composite {set, in, out} — curated-set membership
 
 
 # --- value containers -----------------------------------------------------
@@ -174,7 +172,7 @@ FILTER_BASES: frozenset[str] = frozenset({BASIS_DEPENDS_ON_CATEGORY, *PPM2_BASES
 # numeric filter cannot ship unlabelled by omission. Three kinds live here, and
 # nothing else may:
 #   * identifiers — a code, not a quantity (no arithmetic is valid on them);
-#   * ordinal levels — a 1..5 rank, where "5 units" is meaningless;
+#   * ordinal levels — a rank or a distance in ranks, where "5 units" is meaningless;
 #   * bare counts and 0–10 index scores, where the counted noun / the scale is
 #     the label and the description already states it.
 # It is NOT an escape hatch for a dimensioned quantity. If the number is in
@@ -185,11 +183,6 @@ UNITLESS_NUMERIC_FILTERS: frozenset[str] = frozenset(
         "category_sub_cb",
         # ordinal levels — a rank or a distance in ranks, not a dimension
         "floor_band",
-        # ordinal 1..5 condition ranks (rule #14)
-        "building_condition_level_min",
-        "building_condition_level_max",
-        "apartment_condition_level_min",
-        "apartment_condition_level_max",
         # counts of a named thing
         "price_change_count_min",
         "min_parking_lots",
@@ -299,6 +292,9 @@ CONDITION_OPTIONS: tuple[EnumOption, ...] = (
     EnumOption("spatny", "Špatný", "Poor"),
     EnumOption("k_demolici", "K demolici", "For demolition"),
 )
+# The filter's chips, not the canon: `condition` stays CONDITION_OPTIONS everywhere a value is
+# stored, keyed or pivoted; only the condition_match filter adds the "Neuvedeno" chip.
+CONDITION_FILTER_OPTIONS: tuple[EnumOption, ...] = (*CONDITION_OPTIONS, _UNKNOWN_OPTION)
 
 # No `unassessed` member: measured over all nine censuses, NO portal marks its `G` as the
 # statutory placeholder for an unassessed building. Every one of them states it as the
@@ -363,8 +359,6 @@ SUBTYPE_OPTIONS: tuple[EnumOption, ...] = (
     EnumOption("ostatni", "Ostatní", "Other", group="komercni"),
 )
 
-_SUBTYPE_LABEL_CS: dict[str, str] = {o.value: o.label_cs for o in SUBTYPE_OPTIONS}
-
 # THE canon, by `listings` column: what a stored value may BE. The producer side
 # (`scraper.vocabulary`) and the validity matrix (`scraper.field_census`) both read this
 # one table. Spelled out rather than scanned off the filters, because a scan gets two
@@ -388,7 +382,9 @@ SqlKind = Literal["eq", "any", "enum_or_unknown", "gte", "lte"]
 
 # Column-backed filters whose SQL is NOT "<column> <kind-op> value": a bucket that expands to
 # several column values, or a bound another filter rewrites. sql_kind() is None for them.
-COMPILED_BY_HOOK: frozenset[str] = frozenset({"building_material", "min_price_czk", "max_price_czk"})
+COMPILED_BY_HOOK: frozenset[str] = frozenset({
+    "building_material", "min_price_czk", "max_price_czk", "tom_observed_only",
+})
 
 
 def sql_kind(f: FilterDef) -> SqlKind | None:
@@ -422,14 +418,6 @@ def building_material_values(buckets: Sequence[str]) -> list[str]:
             if value not in out:
                 out.append(value)
     return out
-
-
-def subtype_label_cs(slug: str | None) -> str | None:
-    """Czech label for a portal-agnostic `subtype` slug, or None. The single
-    server-side label source (mirrors the SPA's enums.subtypeLabel, which is
-    generated from the same SUBTYPE_OPTIONS) — used where Python must render the
-    label itself, e.g. the Chrome-extension lookup payload."""
-    return _SUBTYPE_LABEL_CS.get(slug) if slug else None
 
 
 LIFECYCLE_OPTIONS: tuple[EnumOption, ...] = (
@@ -486,6 +474,34 @@ PORTAL_OPTIONS: tuple[EnumOption, ...] = (
     EnumOption("realitymix", "RealityMix", "RealityMix"),
 )
 
+# The single server-side label source, by `listings` column (the SPA reads the same options through
+# the generated registry): where Python renders a stored value itself — the PDF sheet, the extension
+# lookup payload, Valuo's rule notes.
+_LABELS_CS: dict[str, dict[str, str]] = {
+    column: {o.value: o.label_cs for o in options}
+    for column, options in (
+        ("category_main", CATEGORY_MAIN_OPTIONS), ("category_type", CATEGORY_TYPE_OPTIONS),
+        ("condition", CONDITION_OPTIONS), ("building_type", BUILDING_TYPE_OPTIONS),
+        ("disposition", DISPOSITION_OPTIONS), ("energy_rating", ENERGY_RATING_OPTIONS),
+        ("furnished", FURNISHED_OPTIONS), ("ownership", OWNERSHIP_OPTIONS),
+        ("price_unit", PRICE_UNIT_OPTIONS), ("subtype", SUBTYPE_OPTIONS), ("source", PORTAL_OPTIONS),
+    )
+}
+# Singular nouns, as the SPA's enums.CATEGORY_MAIN_LABELS (the registry's options are plural).
+CATEGORY_MAIN_NOUN_CS: dict[str, str] = {
+    "byt": "Byt", "dum": "Dům", "komercni": "Komerční prostor", "pozemek": "Pozemek", "ostatni": "Ostatní",
+}
+
+
+def label_cs(column: str, slug: str | None) -> str | None:
+    """The registry's Czech label for one stored value of `column`; None when empty or off-canon."""
+    return _LABELS_CS[column].get(slug) if slug else None
+
+
+def type_label_cs(category_main: str | None, subtype: str | None) -> str:
+    """listingTypeLabel: the subtype when the portal gave one, else the category noun."""
+    return label_cs("subtype", subtype) or CATEGORY_MAIN_NOUN_CS.get(category_main or "", "Nemovitost")
+
 
 # --- category constants ---------------------------------------------------
 # Stable category names used in the registry. Settings UI groups
@@ -529,16 +545,15 @@ def _build_registry() -> dict[str, FilterDef]:
             pg_column=None,
             default=None,
             description=(
-                "Where the listing must be. Composite filter with three "
+                "Where the listing must be. Composite filter with two "
                 "complementary sub-fields: a location chip list "
                 "(see the `districts` filter — RÚIAN code equality per "
-                "level), a map bounding box "
-                "(west/south/east/north on the resolved point), and a center+radius "
-                "pair (ST_DWithin around (lat,lng) within radius_m). "
-                "Districts is an independent AND-clause; the map vs "
-                "center+radius pair are mutually exclusive — when both "
-                "are set, center+radius wins. Leave everything null for "
-                "no spatial restriction."
+                "level) and a map box (`bounds`: west/south/east/north, "
+                "WGS84, a band on the property's lat/lng). The box is what "
+                "Browse filters on — its viewport, or the square around a "
+                "centre+radius pick — so a watchdog saved from Browse watches "
+                "the rows Browse showed. Both are independent AND-clauses. "
+                "Leave everything null for no spatial restriction."
             ),
             category=CATEGORY_SPATIAL,
             ui_control=UiControl.LOCATION,
@@ -805,12 +820,12 @@ def _build_registry() -> dict[str, FilterDef]:
         FilterDef(
             id="tom_days_min",
             type=FilterType.INT,
-            pg_column=None,  # computed: see listings_public.tom_days (migration 054)
+            pg_column="tom_days",  # a column of every read model; `listings` has none (compiler `exprs`)
             default=None,
             description=(
                 "Lower bound on time-on-market in days. TOM = "
-                "(now - first_seen_at) for active rows, "
-                "(last_seen_at - first_seen_at) for delisted rows. "
+                "(now - first_seen_at) for active ads, "
+                "(last_seen_at - first_seen_at) for inactive ads. "
                 "Inclusive."
             ),
             category=CATEGORY_VELOCITY,
@@ -822,7 +837,7 @@ def _build_registry() -> dict[str, FilterDef]:
         FilterDef(
             id="tom_days_max",
             type=FilterType.INT,
-            pg_column=None,
+            pg_column="tom_days",
             default=None,
             description=(
                 "Upper bound on time-on-market in days. See "
@@ -833,6 +848,21 @@ def _build_registry() -> dict[str, FilterDef]:
             agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES, Agenda.ESTIMATION}),
             constraints={"min": 0},
             unit="days",
+        ),
+        FilterDef(
+            id="tom_observed_only",
+            type=FilterType.BOOL,
+            pg_column="tom_observed",  # a Browse read-model column; `listings` spells the measure (compiler hook)
+            default=False,
+            description=(
+                "When true, only ads whose time on market is observed from the start: "
+                "first seen on an ordinary day, not in a portal's first or catch-up sweep "
+                "of their category, so TOM counts from the day the ad appeared. "
+                "False or unset: no constraint."
+            ),
+            category=CATEGORY_VELOCITY,
+            ui_control=UiControl.BOOLEAN,
+            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES, Agenda.ESTIMATION}),
         ),
         FilterDef(
             id="last_seen_min_days",
@@ -1090,12 +1120,15 @@ def _build_registry() -> dict[str, FilterDef]:
                 "this list. Czech values without diacritics, best to "
                 "worst: projekt, ve_vystavbe, novostavba, "
                 "po_rekonstrukci, velmi_dobry, dobry, udrzovany, "
-                "v_rekonstrukci, pred_rekonstrukci, spatny, k_demolici."
+                "v_rekonstrukci, pred_rekonstrukci, spatny, k_demolici. "
+                "The special `__unknown__` value matches listings whose "
+                "condition is not specified (NULL) or stored under a "
+                "non-canonical label. Empty list / null = no constraint."
             ),
             category=CATEGORY_PROPERTY,
             ui_control=UiControl.MULTISELECT,
             agendas=_ALL_AGENDAS,
-            enum_values=CONDITION_OPTIONS,
+            enum_values=CONDITION_FILTER_OPTIONS,
         ),
         FilterDef(
             id="building_type_match",
@@ -1142,87 +1175,19 @@ def _build_registry() -> dict[str, FilterDef]:
             description=(
                 "Restrict to energy ratings in this list (single "
                 "capital letters A through G). New constructions "
-                "trend A/B; pre-renovation panel buildings often G."
+                "trend A/B; pre-renovation panel buildings often G. "
+                "G is also the legal placeholder for 'no certificate', "
+                "which no portal marks apart. A property's rating is the "
+                "first non-null one across its ads in canonical order; "
+                "an unrated property never matches."
             ),
             category=CATEGORY_PROPERTY,
             ui_control=UiControl.MULTISELECT,
-            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
+            agendas=frozenset({
+                Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY,
+                Agenda.BROWSE, Agenda.WATCHDOG,
+            }),
             enum_values=ENERGY_RATING_OPTIONS,
-        ),
-        FilterDef(
-            id="building_condition_level_min",
-            type=FilterType.INT,
-            pg_column="building_condition_level",
-            default=None,
-            description=(
-                "Minimum building condition score (`building_condition_level "
-                ">= N`, 1..5). Set by toolkit.condition_scoring.score_listing_condition "
-                "off the curated Czech marker dictionary + 5-level rubric. "
-                "NULL rows (not yet scored) are excluded from the result. "
-                "5 = výborný stav (excellent), 4 = velmi dobrý stav, "
-                "3 = průměrný / udržovaný, 2 = vyžaduje rekonstrukci, "
-                "1 = kritický stav."
-            ),
-            category=CATEGORY_PROPERTY,
-            ui_control=UiControl.NUMBER_INPUT,
-            agendas=_ALL_AGENDAS,
-            constraints={"min": 1, "max": 5},
-            aliases=("buildingConditionLevelMin",),
-        ),
-        FilterDef(
-            id="apartment_condition_level_min",
-            type=FilterType.INT,
-            pg_column="apartment_condition_level",
-            default=None,
-            description=(
-                "Minimum apartment condition score (`apartment_condition_level "
-                ">= N`, 1..5). Same scorer as building_condition_level_min "
-                "but scoped to the unit itself rather than the building shell. "
-                "NULL rows (not yet scored) are excluded from the result. "
-                "5 = výborný stav (novostavba / po kompletní rekonstrukci), "
-                "4 = velmi dobrý stav (po rekonstrukci, new jádro / koupelna), "
-                "3 = průměrný, 2 = v původním stavu / před rekonstrukcí, "
-                "1 = umakartové jádro."
-            ),
-            category=CATEGORY_PROPERTY,
-            ui_control=UiControl.NUMBER_INPUT,
-            agendas=_ALL_AGENDAS,
-            constraints={"min": 1, "max": 5},
-            aliases=("apartmentConditionLevelMin",),
-        ),
-        FilterDef(
-            id="building_condition_level_max",
-            type=FilterType.INT,
-            pg_column="building_condition_level",
-            default=None,
-            description=(
-                "Maximum building condition score (`building_condition_level "
-                "<= N`, 1..5). Companion upper bound to "
-                "building_condition_level_min; same scorer and rubric. "
-                "NULL rows (not yet scored) are excluded from the result."
-            ),
-            category=CATEGORY_PROPERTY,
-            ui_control=UiControl.NUMBER_INPUT,
-            agendas=_ALL_AGENDAS,
-            constraints={"min": 1, "max": 5},
-            aliases=("buildingConditionLevelMax",),
-        ),
-        FilterDef(
-            id="apartment_condition_level_max",
-            type=FilterType.INT,
-            pg_column="apartment_condition_level",
-            default=None,
-            description=(
-                "Maximum apartment condition score (`apartment_condition_level "
-                "<= N`, 1..5). Companion upper bound to "
-                "apartment_condition_level_min; same scorer and rubric. "
-                "NULL rows (not yet scored) are excluded from the result."
-            ),
-            category=CATEGORY_PROPERTY,
-            ui_control=UiControl.NUMBER_INPUT,
-            agendas=_ALL_AGENDAS,
-            constraints={"min": 1, "max": 5},
-            aliases=("apartmentConditionLevelMax",),
         ),
         FilterDef(
             id="furnished",
@@ -1532,7 +1497,7 @@ def _build_registry() -> dict[str, FilterDef]:
         # browse filter whose `pg_column` is null, so a None here is not a note
         # about how the filter is applied — it is the filter silently not being
         # applied at all. Migration 535 publishes `plot_area_m2` on the Browse
-        # relations (browse_projection -> browse_list, properties_map_mv)
+        # relations (browse_projection -> browse_list)
         # precisely so this can point at a column; the
         # API-side readers call `toolkit.measures.plot_area_sql` over `listings`,
         # which has no such column. One definition, two spellings, same answer.
@@ -1636,75 +1601,58 @@ def _build_registry() -> dict[str, FilterDef]:
         # obec / okres level already says it, for every portal.
 
         # --- curation -----------------------------------------------------
+        # The three curated sets (docs/design/curated-set-scope.md) share one
+        # value, {set: 'in'|'out'|null, in: ids, out: ids}, judged in the database
+        # under the caller's RLS (migration 629). BROWSE-only: they are the
+        # operator's own state, so watching one would fire on their own clicks,
+        # and an operator's interest must never feed back into a valuation.
         FilterDef(
             id="tags",
-            type=FilterType.INT_LIST,
-            pg_column=None,  # resolved via property_tags (property grain)
+            type=FilterType.SET_SCOPE,
+            pg_column=None,  # judged via property_tags_public (migration 629)
             default=None,
             description=(
-                "Operator-curated tag ids. AND-semantics — a property "
-                "matches only if it carries every tag in the list. "
-                "Tag ids are stable across renames."
+                "Operator tags as a curated-set scope. NULL = no constraint. "
+                "`set` 'out' = the property carries no tag at all (the 'Bez štítků' "
+                "chip); `in` = it carries EVERY listed tag (AND); `out` = it carries "
+                "none of the listed tags. Tag ids are stable across renames."
             ),
             category=CATEGORY_CURATION,
-            ui_control=UiControl.MULTISELECT,
-            # BROWSE-only: the watchdog matcher has no tag clause (WatchdogFilterSpec has no tag field).
-            agendas=frozenset({Agenda.BROWSE}),
-        ),
-        FilterDef(
-            id="tags_excluded",
-            type=FilterType.INT_LIST,
-            pg_column=None,  # the tag rule's second side: a property-id DENYLIST (migration 598)
-            default=None,
-            description=(
-                "The other side of `tags`: drop every property that carries ANY "
-                "listed tag. Combines with `tags` ('tagged k prohlídce, not "
-                "tagged odmítnuto'). Empty list / null = no exclusion. BROWSE-only, "
-                "like `tags`."
-            ),
-            category=CATEGORY_CURATION,
-            ui_control=UiControl.MULTISELECT,
+            ui_control=UiControl.SET_SCOPE,
             agendas=frozenset({Agenda.BROWSE}),
         ),
         FilterDef(
             id="collections",
-            type=FilterType.INT_LIST,
-            pg_column=None,  # prefilter via collection_properties_public (mig 202)
+            type=FilterType.SET_SCOPE,
+            pg_column=None,  # judged via collection_properties_public (migration 629)
             default=None,
             description=(
-                "Collection ids the caller can read — own or shared with them "
-                "(migration 610). OR-semantics — a property "
-                "matches if it is in ANY collection in the list. Deliberately "
-                "the opposite of `tags` (AND): collections read as folders, so "
-                "two of them mean 'either folder'. Collection ids are "
-                "stable across renames. BROWSE-only, for "
-                "the same reasons as `pipeline`: watching a collection would "
-                "fire on the operator's own clicks, and their groupings must "
-                "never feed back into a valuation."
+                "Collections the caller can read — own or shared with them "
+                "(migration 610) — as a curated-set scope. NULL = no constraint. "
+                "`set` 'out' = the property is in no collection (the 'V žádné "
+                "kolekci' chip); `in` = it is in ANY listed collection (OR: "
+                "collections read as folders); `out` = it is in none of the listed "
+                "collections. Collection ids are stable across renames."
             ),
             category=CATEGORY_CURATION,
-            ui_control=UiControl.MULTISELECT,
+            ui_control=UiControl.SET_SCOPE,
             agendas=frozenset({Agenda.BROWSE}),
         ),
         FilterDef(
             id="pipeline",
-            type=FilterType.PIPELINE_SCOPE,
-            pg_column=None,  # prefilter via property_pipeline_public (mig 205/377)
+            type=FilterType.SET_SCOPE,
+            pg_column=None,  # judged via property_pipeline_public (migration 629)
             default=None,
             description=(
-                "Deal-pipeline scope (rule #22). NULL = no constraint. "
-                "`{stage_ids: []}` = the property has a pipeline card at ANY "
-                "stage; `{stage_ids: [12, 13]}` narrows to those stages. "
-                "Stage ids are account-scoped, so a scope carrying ids is "
-                "meaningful only inside the account that wrote it — the "
-                "empty-list form is the portable one. BROWSE-only: the "
-                "pipeline is the operator's own state, so watching for it "
-                "would fire on their own clicks, and it is deliberately "
-                "invisible to the estimation agent (an operator's interest "
-                "must never feed back into a valuation)."
+                "Deal-pipeline scope (rule #22) as a curated-set scope; elements "
+                "are stage ids. NULL = no constraint. `set` 'in' = a card at ANY stage "
+                "(the 'V pipeline' chip); `set` 'out' = no pipeline card at any "
+                "stage, terminal stages included (the 'Mimo pipeline' chip); `in` = a card "
+                "at ANY listed stage; `out` = no card at a listed stage. Stage ids "
+                "are account-scoped, so only the `set` side is portable."
             ),
             category=CATEGORY_CURATION,
-            ui_control=UiControl.PIPELINE_SCOPE,
+            ui_control=UiControl.SET_SCOPE,
             agendas=frozenset({Agenda.BROWSE}),
         ),
         FilterDef(
@@ -2114,7 +2062,7 @@ def effective_for(
 # --- JSON dump (used by /admin/filter-schema + scripts/generate_…) -------
 
 
-def _enum_to_json(e: EnumOption) -> dict[str, Any]:
+def enum_to_json(e: EnumOption) -> dict[str, Any]:
     out: dict[str, Any] = {"value": e.value, "label_cs": e.label_cs, "label_en": e.label_en}
     if e.group is not None:
         out["group"] = e.group
@@ -2135,7 +2083,7 @@ def _filter_to_json(f: FilterDef) -> dict[str, Any]:
         "unit": f.unit,
         "basis": f.basis,
         "enum_values": (
-            [_enum_to_json(e) for e in f.enum_values]
+            [enum_to_json(e) for e in f.enum_values]
             if f.enum_values else None
         ),
         "aliases": list(f.aliases) if f.aliases else [],
@@ -2250,6 +2198,7 @@ __all__ = [
     "BUILDING_MATERIAL_OPTIONS",
     "BUILDING_TYPE_OPTIONS",
     "CONDITION_OPTIONS",
+    "CONDITION_FILTER_OPTIONS",
     "ENERGY_RATING_OPTIONS",
     "DISPOSITION_OPTIONS",
     "PRICE_UNIT_OPTIONS",

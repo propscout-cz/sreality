@@ -281,25 +281,22 @@ def test_artifact_links_keep_the_survivors_per_account_and_stay_through_a_detach
 
 
 def _dispatch(cur: Any, coll: int, pid: int, listing_id: int, kind: str, *,
-              snapshot: int | None = None, price: int | None = None,
-              prev: int | None = None) -> tuple[uuid.UUID, str]:
+              event_ref: str | None = None, price: int | None = None,
+              prev: int | None = None) -> uuid.UUID:
     """A collection_monitor event, columns as the producer writes them (api/notifications.py)."""
     cur.execute(
         "INSERT INTO notification_dispatches "
-        "  (source_kind, collection_id, property_id, sreality_id, listing_id, change_kind, "
-        "   status, target_channels, trigger_snapshot_id, trigger_price_czk, "
-        "   prev_price_czk, dedupe_key) "
-        "VALUES ('collection_monitor', %s, %s, NULL, %s, %s, 'sent', %s::text[], %s, %s, %s, %s) "
-        "RETURNING id, dedupe_key",
-        (coll, pid, listing_id, kind, ["email"], snapshot, price, prev,
-         f"cm:{coll}:{kind}:lp-{uuid.uuid4()}"),
+        "  (source_kind, collection_id, property_id, listing_id, change_kind, "
+        "   trigger_price_czk, prev_price_czk, event_ref) "
+        "VALUES ('collection_monitor', %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+        (coll, pid, listing_id, kind, price, prev, event_ref),
     )
-    nid, key = cur.fetchone()
-    return nid, str(key)
+    return cur.fetchone()[0]
 
 
 def _seed_dispatches(cur: Any, accounts: tuple[uuid.UUID, uuid.UUID]) -> dict[str, Any]:
-    """A's collection alerted 'new' on S and on R plus a price drop on R; B's 'new' on R only."""
+    """A's collection alerted 'new' on S and on R, a price drop on R and 'inactive' on each at
+    its own epoch; B's 'new' on R only."""
     a, b = accounts
     s, r, s_advert, r_advert = _pair(cur)
     ca, cb = _collection(cur, a), _collection(cur, b)
@@ -308,25 +305,30 @@ def _seed_dispatches(cur: Any, accounts: tuple[uuid.UUID, uuid.UUID]) -> dict[st
         "s": s, "r": r, "advert": r_advert, "colls": [ca, cb],
         "s_new": _dispatch(cur, ca, s, s_advert, "new"),
         "r_new": _dispatch(cur, ca, r, r_advert, "new"),
-        "r_drop": _dispatch(cur, ca, r, r_advert, "price_drop", snapshot=drop,
+        "r_drop": _dispatch(cur, ca, r, r_advert, "price_drop", event_ref=str(drop),
                             price=4_900_000, prev=5_000_000),
+        "s_gone": _dispatch(cur, ca, s, s_advert, "inactive", event_ref="1760000500"),
+        "r_gone": _dispatch(cur, ca, r, r_advert, "inactive", event_ref="1760000100"),
         "b_new": _dispatch(cur, cb, r, r_advert, "new"),
     }
 
 
-def _dispatches(cur: Any, colls: list[int]) -> dict[uuid.UUID, tuple[int, str]]:
-    cur.execute("SELECT id, property_id, dedupe_key FROM notification_dispatches "
+def _dispatches(cur: Any, colls: list[int]) -> dict[uuid.UUID, tuple[int, uuid.UUID | None]]:
+    cur.execute("SELECT id, property_id, duplicate_of FROM notification_dispatches "
                 "WHERE collection_id = ANY(%s)", (colls,))
-    return {nid: (int(pid), key) for nid, pid, key in cur.fetchall()}
+    return {nid: (int(pid), dup) for nid, pid, dup in cur.fetchall()}
 
 
-def test_dispatches_collapse_null_safe(cur, accounts):
-    """The two 'new' rows of one collection collapse (subscription and snapshot both NULL); the
-    price drop and the other account's row move, every dedupe_key as it was written."""
+def test_dispatches_move_and_the_survivors_twin_is_marked_never_deleted(cur, accounts):
+    """F6, F13, F21: every alert of R lands on S and none is deleted. A's two 'new' rows are one
+    identity but the property, so R's is marked S's duplicate; the price drop, the other epoch's
+    'inactive' (which the old twin key collapsed) and B's alert move as themselves. A detach
+    leaves them all where they are: alerts write no carry rows."""
     seed = _seed_dispatches(cur, accounts)
-    s, (s_new, s_key), (r_drop, drop_key), (b_new, b_key) = (
-        seed["s"], seed["s_new"], seed["r_drop"], seed["b_new"])
-    kept = {s_new: (s, s_key), r_drop: (s, drop_key), b_new: (s, b_key)}
+    s = seed["s"]
+    kept = {seed["s_new"]: (s, None), seed["r_new"]: (s, seed["s_new"]),
+            seed["r_drop"]: (s, None), seed["s_gone"]: (s, None), seed["r_gone"]: (s, None),
+            seed["b_new"]: (s, None)}
 
     _merged(cur, s, seed["r"])
     assert _dispatches(cur, seed["colls"]) == kept
@@ -335,33 +337,53 @@ def test_dispatches_collapse_null_safe(cur, accounts):
     assert _dispatches(cur, seed["colls"]) == kept
 
 
-def _send(cur: Any, nid: uuid.UUID, coll: int) -> int:
-    """A delivered email, columns as api/channel_client.py claims a send (the outbox's
-    consumer/source/dedupe shape)."""
-    cur.execute(
-        "INSERT INTO channel_sends "
-        "  (consumer, notification_id, outreach_message_id, source_kind, source_id, "
-        "   channel, recipient, category, status, dedupe_key) "
-        "VALUES ('collection_monitor', %s, NULL, 'collection_monitor', %s, 'email', %s, "
-        "        'transactional', 'sent', %s) RETURNING id",
-        (nid, str(coll), "ci@replay.local", f"notif:{nid}:email"),
-    )
-    return int(cur.fetchone()[0])
+def test_a_tap_on_a_merged_duplicate_lands_on_the_survivors_alert(cur, accounts):
+    """mark-seen resolves an id a merge marked a duplicate to the row it duplicates and stamps
+    THAT row: the push for R's 'new' opens S's, read; R's own row stays unseen and hidden."""
+    from api.notifications import mark_dispatch_seen
 
-
-def test_a_delivered_alert_does_not_abort_the_merge(cur, accounts):
-    """The collapse DELETE would null the send's notification_id (ON DELETE SET NULL), which
-    channel_sends_check refuses, aborting the merge: the send moves to S's twin first. A send
-    on a row that moves (the price drop) keeps pointing at it."""
     seed = _seed_dispatches(cur, accounts)
-    (r_new, _key), (s_new, _s_key), (r_drop, _d_key) = (
-        seed["r_new"], seed["s_new"], seed["r_drop"])
-    sends = {_send(cur, r_new, seed["colls"][0]): s_new,
-             _send(cur, r_drop, seed["colls"][0]): r_drop}
-
     _merged(cur, seed["s"], seed["r"])
-    cur.execute("SELECT id, notification_id FROM channel_sends WHERE id = ANY(%s)", (list(sends),))
-    assert dict(cur.fetchall()) == sends, "a delivery record lost its event"
+    row = mark_dispatch_seen(cur.connection, str(seed["r_new"]))
+    assert row is not None and row["id"] == str(seed["s_new"]) and row["property_id"] == seed["s"]
+    cur.execute("SELECT id, seen_at IS NOT NULL FROM notification_dispatches WHERE id = ANY(%s)",
+                ([seed["s_new"], seed["r_new"]],))
+    assert dict(cur.fetchall()) == {seed["s_new"]: True, seed["r_new"]: False}
+
+
+def test_a_second_new_after_two_fresh_properties_merge_never_fires(cur, accounts):
+    """A watchdog alerted 'new' on R only (S matched later, or never). After the merge R's row
+    holds S's 'new' identity, so the producer's next pass over S, the survivor and still fresh,
+    conflicts on migration 653's index and writes nothing; another watchdog's 'new' on S still
+    lands. Where the watchdog had alerted on both, the feed (VISIBLE) shows one."""
+    from api.notifications import ON_EVENT_CONFLICT, VISIBLE_SQL
+
+    a, _b = accounts
+    subs = []
+    for _ in range(3):
+        cur.execute("INSERT INTO notification_subscriptions (account_id, name, filter_spec) "
+                    "VALUES (%s, 'lp', '{}'::jsonb) RETURNING id", (a,))
+        subs.append(cur.fetchone()[0])
+    once, other, both = subs
+    s, r, s_advert, r_advert = _pair(cur)
+    new = ("INSERT INTO notification_dispatches "
+           "  (subscription_id, source_kind, property_id, listing_id, change_kind, "
+           "   trigger_price_czk, event_ref) "
+           "VALUES (%s, 'watchdog', %s, %s, 'new', NULL, NULL) " + ON_EVENT_CONFLICT)
+    for sub, pid, advert in ((once, r, r_advert), (both, s, s_advert), (both, r, r_advert)):
+        cur.execute(new, (sub, pid, advert))
+        _require(cur.rowcount == 1, "a seed 'new' did not land")
+
+    _merged(cur, s, r)
+    cur.execute(new, (once, s, s_advert))
+    assert cur.rowcount == 0, "the survivor's 'new' was told a second time"
+    cur.execute(new, (other, s, s_advert))
+    assert cur.rowcount == 1, "the identity refused another watchdog's alert"
+    cur.execute("SELECT d.subscription_id, count(*) FILTER (WHERE " + VISIBLE_SQL + "), count(*) "
+                "FROM notification_dispatches d WHERE d.subscription_id = ANY(%s) GROUP BY 1",
+                (subs,))
+    assert {sub: (int(seen), int(rows)) for sub, seen, rows in cur.fetchall()} == {
+        once: (1, 1), other: (1, 1), both: (1, 2)}
 
 
 # --- the deal pipeline ------------------------------------------------------------------

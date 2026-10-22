@@ -8,7 +8,10 @@ Full plan, the binding decisions MS1–MS23 and the gates:
 Separate from [AUTODEDUP](autodedup.md), which decides *which* ads are the same unit. This sprint
 owns *what a merge and a split do*: the property's facts, its curation, and what the app says.
 
-## State (2026-10-06)
+## State (2026-10-18)
+- **Delivered.** W1b–W5 live since 2026-10-08; **W6 applied 2026-10-18 06:46 UTC** (migration 618,
+  first attempt, `618: landed`) after the R2 backup was read back (`backups/merge-sprint-w6/2026-10-18`), with the
+  engine braked 06:38–06:53 UTC; PR #1732 merged as 4311673b. Database −1.89 GB.
 - **Plan approved (PR #1693, merged 2026-10-06).** Decisions come from a four-round design interview; the
   last two questions were answered on 2026-10-03: our condition grades stay for now (Q48), and a
   per-portal "newest on this portal" sort stays, at property grain (Q49). The split rule follows the
@@ -39,7 +42,9 @@ owns *what a merge and a split do*: the property's facts, its curation, and what
       the card's portal badge, the broker lookup by property; the per-ad lane deleted in code (PR #1723,
       +2,067 / −1,575, the operator's ruling on the size owed; migration 590 applied before merge; gate: a
       cycle begun after W2a, the parity samples, the shadow rebuild, the nine page plans; objects wait for W6)
-- [ ] W6 — the one destructive window
+- [x] W6 — the one destructive window: migration 618 applied 2026-10-18 06:46 UTC, PR #1732 merged
+      (4311673b); the operator's ruling on the size owed; 3 tables, 6 columns, 3 functions, 2 views, a
+      sequence, a trigger and 3 indexes out, −1.89 GB
 
 ## Owed after W4
 - The category review's "Ponechat", once the AUTODEDUP session's verdict route lets a "same" through
@@ -49,6 +54,13 @@ owns *what a merge and a split do*: the property's facts, its curation, and what
 - Three properties left with no ads (65587, 65660, 302257; their ads now sit on 34632, 2872 and 338214)
   still show another property's ad. W5's daily recompute resets them to "no ads", which takes them out
   of Browse and the map: the first full sweep after the deploy does it, no manual write.
+
+## Owed now that W6 is applied
+- The AUTODEDUP session's drop of `properties.published_at` is unblocked; `properties_gate_cover_idx`
+  INCLUDEs that column, so its replacement comes first.
+- #1655 rebases onto the sprint; #1634 removes its two `listing_feed_public` reads (migration 575's pre-
+  and post-conditions) and takes a number above 618.
+- The operator's ruling on `browse_list_mf(bigint)`, an orphan once the per-ad view is gone (PROGRAM.md §8, item 7).
 
 ## Later (cut from scope, see PROGRAM.md §9)
 - The estimation subject lookup (MS20), with its own design.

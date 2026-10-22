@@ -181,13 +181,8 @@ def test_the_unwritable_columns_stay_absent(conn, column):
     )
 
 
-@pytest.mark.parametrize(
-    "function,artifact",
-    [("rebuild_browse_list", "browse_list"),
-     ("rebuild_properties_map_mv", "properties_map_mv")],
-)
-def test_both_blue_green_rebuilds_stamp_the_registry(conn, function, artifact):
-    """RED by: restoring either rebuild function's `update browse_read_model_state ...`
+def test_the_blue_green_rebuild_stamps_the_registry(conn):
+    """RED by: restoring the rebuild function's `update browse_read_model_state ...`
     stamp — which is exactly what a copy-paste from migration 276/277/299/371/376 does.
 
     Migration 371 already shipped one silent regression by rebuilding these bodies from an
@@ -201,6 +196,7 @@ def test_both_blue_green_rebuilds_stamp_the_registry(conn, function, artifact):
     catalog, so it also catches a body replaced directly against the database outside any
     migration file.
     """
+    function, artifact = "rebuild_browse_list", "browse_list"
     with conn.cursor() as cur:
         cur.execute("select prosrc from pg_proc where proname = %s", (function,))
         row = cur.fetchone()
@@ -241,8 +237,9 @@ def test_the_singleton_state_table_is_gone(conn):
 def test_the_public_view_has_no_union_adapter(conn):
     """RED by: re-adding the `union all` branch migration 437 shipped as TEMPORARY.
 
-    While both the base rows and the adapter existed, `browse_list` and `properties_map_mv`
-    appeared TWICE in derived_artifacts_public and the Health panel double-rendered them.
+    While both the base rows and the adapter existed, `browse_list` and the map matview
+    (retired since, migration 631) appeared TWICE in derived_artifacts_public and the
+    Health panel double-rendered them.
     The column list stays identical either way, so the column-contract test above cannot see
     this; only the view definition can.
     """

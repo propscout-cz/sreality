@@ -151,6 +151,14 @@ def _override_permits(
 # complete walk, so no column, no timer and no re-enqueue exist for this.
 GONE_DWELL = timedelta(hours=12)
 
+# `db.presence_candidates` nominates no ad with ANY completion (a verdict, a
+# refresh, a give-up) in the last RECHECK_THROTTLE: a page that errors keeps its
+# old last_seen_at and would otherwise sort first forever and take every verify
+# slot. It also spaces one ad's walk-path page checks, so a true removal closes
+# max(GONE_DWELL, RECHECK_THROTTLE) after its first verdict, plus the wait for
+# the next walk that reaches the end: the effective dwell the Health check reads.
+RECHECK_THROTTLE = timedelta(hours=24)
+
 
 def gone_confirmed(first_gone_at: datetime | None, now: datetime) -> bool:
     """True iff an earlier unrefuted gone verdict is at least GONE_DWELL old."""

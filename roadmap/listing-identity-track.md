@@ -154,11 +154,15 @@ Deliberately NOT done, with evidence rather than assumption:
   `sreality_id != null`) while risking a silent mis-key across six stateful sites that
   TypeScript cannot check, since both ids are `number` — and there is no
   `BrowseExperience.test.tsx`. Ship read + write together, with a component test.
+  *(2026-10-20: the API capability shipped — `CreateEstimationIn.listing_id`, ONE subject
+  matcher keyed on `listings.id`, an `ad:{source}:{native}` key both handles share — in W2 of
+  `docs/design/new-property-from-link.md`; the Browse chip's cutover is still its own PR.)*
 - **No CHECK constraint** pairing the two ids: it holds for every existing row but would
   500 future submits, since the insert's COALESCE legitimately leaves the surrogate NULL
-  for an unscraped sreality subject.
+  for an unscraped sreality subject. *(2026-10-20: the COALESCE and the URL arm are gone, so
+  it now holds by construction too.)*
 
-Still open (small follow-up PR): the late-binding window never evicts permanently
+Moot since 2026-10-20 (the late binder is deleted; every run is bound at submit): the late-binding window never evicts permanently
 unbindable rows (latent above ~5k such runs); the daily full sweep does not call the
 binder, only the incremental pass does; migration 359 declares a partial index while the
 live one is not partial (the safe direction — the binder needs `IS NULL` scans).

@@ -8,24 +8,19 @@
  * Every write is the SPA's own, unchanged (rule 22): the funnel is
  * `usePipelineCard` (out → a tap adds at the entry stage; in → the stage menu,
  * never a remove toggle), the bookmark is the collection save list, the eye is
- * `useDismissal` (hide with an undo toast; on a hidden property, restore); the pin
+ * `useDismissal` (hide with an undo toast; on a hidden property, restore), and
+ * each settles the feed's own Browse read in place (lib/curationSettle); the pin
  * writes nothing (the location sheet reads only while open). The
  * reads are the shared ones every Browse card dedupes onto: pipeline members +
  * stages, the collection member map, the per-property dismissal state. A failed
  * membership read is a retry, never the "add" verb (MS16). */
 
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-
 import CollectionMark from '@/components/CollectionMark';
 import { readFailed } from '@/components/ReadFailedMark';
 import { AlertIcon, EyeOffIcon, FunnelIcon } from '@/components/icons';
 import { useCollectionMembership } from '@/lib/collectionCache';
-import {
-  fetchPipelineMembers,
-  fetchPipelineStages,
-  pipelineKeys,
-} from '@/lib/queries';
+import { usePipelineMembers, usePipelineStages } from '@/lib/pipelineReads';
 import { stageAccent, stageBadge } from '@/lib/pipelineStage';
 import { useDismissal } from '@/lib/useDismissal';
 import { usePipelineCard } from '@/lib/usePipelineCard';
@@ -60,16 +55,8 @@ function RetryMark({ what, onRetry }: { what: string; onRetry: () => void }) {
  * stages reads (deduped across every card), the badge and the accent. The card
  * uses it for the stage wash, the margin for the funnel. */
 export function usePipelineLook(property_id: number) {
-  const membersQ = useQuery({
-    queryKey: pipelineKeys.members,
-    queryFn: fetchPipelineMembers,
-    staleTime: 30_000,
-  });
-  const stagesQ = useQuery({
-    queryKey: pipelineKeys.stages,
-    queryFn: fetchPipelineStages,
-    staleTime: 60_000,
-  });
+  const membersQ = usePipelineMembers();
+  const stagesQ = usePipelineStages();
   const member = membersQ.data?.get(property_id) ?? null;
   const look = member ? { id: member.stage_id, color: member.stage_color, code: member.stage_code } : null;
   return {

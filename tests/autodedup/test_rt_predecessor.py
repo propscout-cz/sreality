@@ -310,7 +310,7 @@ def test_the_cap_bounds_the_limit_under_the_count_and_over_the_clock() -> None:
 def test_outside_the_build_the_cap_shrinks_each_feeds_fifth() -> None:
     """During the build the entered feed takes the whole limit and the other feeds a fifth each
     on top; outside it the entered feed's share is a fifth too, so the cap shrinks it with the
-    limit. The revived feed alone takes every revived id of its slice, whatever the limit."""
+    limit. The revived feed takes its fifth like the others (E970)."""
     _, uncapped = _claim(None, rate_per_s=10.0, bootstrap=False)
     _, capped = _claim(250, rate_per_s=10.0, bootstrap=False)
     assert (len(uncapped), len(capped)) == (100, 50)

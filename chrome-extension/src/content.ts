@@ -12,7 +12,7 @@
  * worker (host_permissions + the portal's CORS don't apply there). */
 
 import styles from './styles.css?inline';
-import { detailRef, portalForHost, portalForUrl, type PortalRef } from '../../frontend/src/lib/portalIds';
+import { detailRef, portalForHost, type PortalRef } from '../../frontend/src/lib/portalIds';
 import {
   COLLECTION_SAVE_LABEL,
   bellIconSvg,
@@ -34,6 +34,8 @@ import {
   runIndexOverlay,
   type IndexOverlayHandle,
 } from './index_overlay';
+import { INGEST_STEP_CS, isAdminGate, outcomeMessage, runIngest, type IngestStep } from './ingest_flow';
+import { onAccountChange } from './session';
 import type {
   AgentQuota,
   ApiMessage,
@@ -46,6 +48,7 @@ import type {
   ExtCollection,
   ExtNote,
   ExtTag,
+  IngestState,
   PipelineCardResult,
   PipelineStage,
   PortalListing,
@@ -152,8 +155,8 @@ interface PanelState {
   /* Our scraped facts + its property's MF result for the subject listing. */
   listing: PortalListing | null;
   /* byt+prodej? Gates the estimation block; the MF block renders by the
-   * result's shape and the app link + facts show regardless. null = unknown
-   * (not in our DB and no URL category hint). */
+   * result's shape and the app link + facts show regardless. null = an ad we
+   * do not hold. */
   isSaleApt: boolean | null;
   /* Optional comparables estimation (full row) for the editable yield block. */
   run: EstimationRun | null;
@@ -222,6 +225,11 @@ interface PanelState {
   /* The caller's agent-estimation allowance (null = not loaded / fetch failed —
    * the counter is simply hidden, never blocking the estimate button). */
   quota: AgentQuota | null;
+  /* "Přidat do databáze" on an ad we do not hold: the step on screen while the
+   * flow runs (null = idle), and the sentence it ended on when it did not end
+   * with the ad held. */
+  ingestStep: IngestStep | null;
+  ingestMessage: string | null;
   errorMessage: string | null;
 }
 
@@ -239,16 +247,21 @@ function runtimeDetail(message: string | undefined): string {
   return message ?? 'runtime error';
 }
 
+/* Bumped by an account change (onAccountChange below, subscribed before any overlay's): a
+ * reply to anything asked earlier was authorised as the account that left, so call() never
+ * delivers it — nothing is painted with its rows. The auth messages always answer. */
+let sessionGen = 0;
+const ALWAYS_ANSWERED = new Set<ApiMessage['type']>(['get_auth_state', 'sign_in', 'sign_out']);
+
 export function call<T>(message: ApiMessage): Promise<ApiResult<T>> {
+  const gen = sessionGen;
   return new Promise((resolve) => {
     try {
       chrome.runtime.sendMessage(message, (response: ApiResult<T>) => {
-        if (chrome.runtime.lastError) {
-          resolve({
-            ok: false,
-            status: 0,
-            detail: runtimeDetail(chrome.runtime.lastError.message),
-          });
+        const error = chrome.runtime.lastError;  // read even when dropped: Chrome logs it unchecked
+        if (gen !== sessionGen && !ALWAYS_ANSWERED.has(message.type)) return;
+        if (error) {
+          resolve({ ok: false, status: 0, detail: runtimeDetail(error.message) });
           return;
         }
         resolve(response);
@@ -799,7 +812,7 @@ function mountPanel(): {
     }
     if (state.phase === 'deactivated') {
       renderAuthStrip(body, state);
-      body.appendChild(note('Tato nemovitost zatím není v naší databázi.'));
+      renderNotInDb(body, state);
       return;
     }
 
@@ -821,6 +834,25 @@ function mountPanel(): {
     if (state.errorMessage != null) body.appendChild(errorLine(state.errorMessage));
     // Focus + scroll are restored by render(), around this build.
   };
+
+  /* An ad we do not hold: say so and offer to add it. While the flow runs, its
+   * step stands where the button was; a refusal or failure is one sentence
+   * above the button, which a click re-sends (the API is idempotent). */
+  function renderNotInDb(body: HTMLElement, state: PanelState): void {
+    body.appendChild(note('Tato nemovitost zatím není v naší databázi.'));
+    if (state.ingestStep != null) {
+      body.appendChild(note(INGEST_STEP_CS[state.ingestStep], 'note--loading'));
+      return;
+    }
+    if (state.ingestMessage != null) body.appendChild(errorLine(state.ingestMessage));
+    if (ingestForbidden) return;
+    const add = document.createElement('button');
+    add.className = 'btn-primary';
+    add.type = 'button';
+    add.textContent = 'Přidat do databáze';
+    add.onclick = () => { void onIngest(); };
+    body.appendChild(add);
+  }
 
   function note(text: string, variant = ''): HTMLElement {
     const p = document.createElement('p');
@@ -1617,10 +1649,7 @@ function mountPanel(): {
    * flat); a rental flat shows its rent. No reason text is written here. */
   function renderMfBlock(body: HTMLElement, state: PanelState): void {
     const l = state.listing;
-    if (l == null || !l.found) {
-      body.appendChild(note('Tato nemovitost zatím není v naší databázi.'));
-      return;
-    }
+    if (l == null || !l.found) return;
     const shape = mfShape(l.mf_reference_rent);
     if (shape.kind === 'none') return;
     const mf = document.createElement('div');
@@ -1912,12 +1941,12 @@ function mountPanel(): {
 let state: PanelState;
 let render: (s: PanelState) => void;
 let panelShadow: ShadowRoot | null = null;
-/* The listing URL the panel currently represents — drives create_estimation.
- * On a detail page it's location.href; opened from an index card it's that
- * card's detail href (NOT the search page). */
+/* The listing URL the panel currently represents — what "Přidat do databáze"
+ * sends. On a detail page it's location.href; opened from an index card it's
+ * that card's detail href (NOT the search page). */
 let panelUrl = '';
-/* The same listing's portal ref, kept alongside panelUrl so onSignIn can
- * re-run openPanel() once a session lands, without the caller re-supplying it. */
+/* The same listing's portal ref, kept alongside panelUrl so an account change
+ * can re-run openPanel() without the caller re-supplying it. */
 let panelRef: PortalRef | null = null;
 let patchTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -2022,10 +2051,8 @@ function onEdit(
  * The panel's yield wants the MISSING half of the pair: a subject being sold
  * needs a rent, a subject already let needs a sale price. Land is never
  * estimated as a rent — a per-m² of parcel is a capital figure, and the server's
- * measure guard refuses to call an area-scaled capital per-m² a monthly rent.
- * A subject we don't have keeps the historical default. */
-function estimateKindFor(l: PortalListing | null): 'rent' | 'sale' {
-  if (l == null || !l.found) return 'rent';
+ * measure guard refuses to call an area-scaled capital per-m² a monthly rent. */
+function estimateKindFor(l: PortalListing): 'rent' | 'sale' {
   if (l.category_type === 'pronajem') return 'sale';
   if (l.category_main === 'pozemek') return 'sale';
   return 'rent';
@@ -2051,15 +2078,14 @@ function onReset(): void {
  * dropped, never the work. */
 async function onCreateRun(): Promise<void> {
   const epoch = renderEpoch;
-  setState((prev) => ({ ...prev, busy: true, errorMessage: null }));
   const subject = state.listing;
+  if (subject?.listing_id == null) return;
+  setState((prev) => ({ ...prev, busy: true, errorMessage: null }));
   const res = await call<EstimationRun>({
     type: 'create_estimation',
-    url: panelUrl,
+    listing_id: subject.listing_id,
     estimate_kind: estimateKindFor(subject),
-    // Only from a listing we actually have: a guess here would pin the whole
-    // comparable cohort to the wrong category.
-    category_main: subject?.found ? subject.category_main : null,
+    category_main: subject.category_main,
   });
   if (!res.ok) {
     // 429 = the monthly allowance is spent (the atomic quota gate). Refresh the
@@ -2096,6 +2122,50 @@ async function onCreateRun(): Promise<void> {
     return;
   }
   setStateIf(epoch, (prev) => seedFromRun({ ...prev, busy: false }, row));
+}
+
+/* "Přidat do databáze": the API enqueues the ad's page for the worker's drain
+ * and the flow polls its one state on the estimate's budget. Once the ad is held
+ * with a property the lookup is re-read (by the identity the server resolved)
+ * and painted through showListing, so the controls appear as for any ad we hold.
+ * Epoch-guarded like the estimate: leaving the page stops the poll, never the
+ * server-side work. The first admin-gate answer hides the button until the
+ * account changes: a non-admin is told once, not offered a click that always fails. */
+let ingestForbidden = false;
+
+async function onIngest(): Promise<void> {
+  const epoch = renderEpoch;
+  const outcome = await runIngest(panelUrl, {
+    call: (message) => call<IngestState>(message),
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    alive: () => epoch === renderEpoch,
+    onStep: (step) => setStateIf(epoch, (prev) => ({
+      ...prev, ingestStep: step, ingestMessage: null,
+    })),
+    intervalMs: POLL_INTERVAL_MS,
+    maxPolls: POLL_MAX_ATTEMPTS,
+  });
+  if (outcome.kind === 'cancelled') return;
+  if (outcome.kind !== 'held') {
+    if (isAdminGate(outcome)) ingestForbidden = true;
+    setStateIf(epoch, (prev) => ({
+      ...prev, ingestStep: null, ingestMessage: outcomeMessage(outcome, friendlyDetail),
+    }));
+    return;
+  }
+  const res = await call<PortalListing[]>({
+    type: 'lookup_listings',
+    items: [{ source: outcome.source, source_id: outcome.nativeId }],
+  });
+  if (epoch !== renderEpoch) return;
+  if (!res.ok) {
+    setStateIf(epoch, (prev) => ({
+      ...prev, ingestStep: null,
+      ingestMessage: `Načtení inzerátu selhalo: ${friendlyDetail(res.detail)}`,
+    }));
+    return;
+  }
+  await showListing(epoch, res.data[0] ?? null);
 }
 
 /* "Upgradovat" — no purchase flow yet (Wave 1); open the web app where plan
@@ -2475,20 +2545,14 @@ async function onMoveStage(stageId: number): Promise<void> {
   if (target != null && !target.is_terminal) setState(applyDismissedIf(propertyId, false, {}));
 }
 
-/* The operator-curated stage list, loaded once per page and cached at module
- * scope (stages change rarely — same staleness posture as the SPA's 60s cache).
- * Reused across panel re-opens so changing cards never re-fetches. A transient
- * failure retries a few times (bounded) so a single network blip can't strip
- * stage-changing for the page view; a persistent failure leaves the select on its
- * current-stage fallback and self-heals on the next panel open. */
+/* The operator-curated stage list, cached at module scope for the life of the
+ * tab until the account changes (unlike the SPA's 60 s cache; stages change
+ * rarely). Reused across panel re-opens so changing cards never re-fetches. A
+ * transient failure retries a few times (bounded) so a single network blip
+ * can't strip stage-changing for the page view; a persistent failure leaves the
+ * select on its current-stage fallback and self-heals on the next panel open. */
 let cachedStages: PipelineStage[] | null = null;
 let stagesLoading = false;
-
-/* Bumped on sign-out. A list read still in flight then was authorised as the
- * account that just left: it must neither refill a cache the next account
- * starts from, nor keep holding the loading flag that would turn that
- * account's own read away as a duplicate. */
-let sessionGen = 0;
 
 async function loadStages(): Promise<void> {
   if (cachedStages != null) {
@@ -2501,7 +2565,6 @@ async function loadStages(): Promise<void> {
   try {
     for (let attempt = 0; attempt < 3; attempt++) {
       const res = await call<PipelineStage[]>({ type: 'list_pipeline_stages' });
-      if (gen !== sessionGen) return;
       if (res.ok) {
         cachedStages = res.data;
         setState((prev) => ({ ...prev, stages: cachedStages }));
@@ -2539,7 +2602,6 @@ async function loadCollections(refresh = false): Promise<void> {
   try {
     for (let attempt = 0; attempt < 3; attempt++) {
       const res = await call<ExtCollection[]>({ type: 'list_collections' });
-      if (gen !== sessionGen) return;
       if (res.ok) {
         const changed = cachedCollections == null
           || collectionsKey(cachedCollections) !== collectionsKey(res.data);
@@ -2581,7 +2643,6 @@ async function loadTags(refresh = false): Promise<void> {
   try {
     for (let attempt = 0; attempt < 3; attempt++) {
       const res = await call<ExtTag[]>({ type: 'list_tags' });
-      if (gen !== sessionGen) return;
       if (res.ok) {
         const key = (list: ExtTag[]): string =>
           JSON.stringify(list.map((t) => [t.id, t.name, t.color]));
@@ -2601,6 +2662,22 @@ async function loadTags(refresh = false): Promise<void> {
     if (gen === sessionGen) tagsLoading = false;
   }
 }
+
+/* The lists and the open panel belong to the account that read them: an account change
+ * drops the lists (the next open re-reads them) and puts the panel on the prompt or re-reads it. */
+onAccountChange((user) => {
+  sessionGen++;
+  ingestForbidden = false;
+  cachedStages = cachedCollections = cachedTags = null;
+  stagesLoading = collectionsLoading = tagsLoading = false;
+  if (panelRef == null || document.getElementById(HOST_ELEMENT_ID) == null) return;
+  if (user != null) return void openPanel(panelRef, panelUrl);
+  renderEpoch++;
+  setState((prev) => ({
+    ...prev, phase: 'signed_out', authEmail: null, listing: null, errorMessage: null,
+    collections: null, stages: null, collectionsOpen: false, tags: null, tagsOpen: false,
+  }));
+});
 
 /* Fetch the caller's agent-estimation allowance for the "(zbývá X)" counter +
  * upgrade prompt. Best-effort: a failure leaves state.quota null (counter hidden,
@@ -2805,11 +2882,9 @@ async function onDeleteNoteConfirm(noteId: number): Promise<void> {
 
 /* Trigger the extension's own PKCE sign-in (Wave 1) — the background worker
  * owns chrome.identity (a content script can't call it directly), so this
- * just relays a message and re-runs openPanel() on success to reload
- * whatever the signed-out prompt was blocking. */
+ * just relays a message; the session landing is an account change, which
+ * re-opens the panel (onAccountChange). */
 async function onSignIn(): Promise<void> {
-  if (panelRef == null) return;
-  const ref = panelRef;
   setState((prev) => ({ ...prev, busy: true, errorMessage: null }));
   const res = await call<undefined>({ type: 'sign_in' });
   if (!res.ok) {
@@ -2817,30 +2892,13 @@ async function onSignIn(): Promise<void> {
       ...prev, busy: false, phase: 'signed_out',
       errorMessage: `Přihlášení selhalo: ${res.detail}`,
     }));
-    return;
   }
-  indexOverlay?.sessionChanged();
-  await openPanel(ref, panelUrl);
 }
 
+/* The session going is an account change, which puts the panel on the prompt. */
 async function onSignOut(): Promise<void> {
-  /* Both lists belong to the account that is leaving. The next sign-in on this
-   * tab may be a different account, which must not be offered these rows —
-   * nor have them refilled by a read still in flight (see sessionGen). */
-  sessionGen++;
-  cachedCollections = null;
-  cachedStages = null;
-  cachedTags = null;
-  collectionsLoading = false;
-  stagesLoading = false;
-  tagsLoading = false;
-  await call<undefined>({ type: 'sign_out' });
-  setState((prev) => ({
-    ...prev, phase: 'signed_out', authEmail: null, listing: null, errorMessage: null,
-    collections: null, stages: null, collectionsOpen: false, tags: null, tagsOpen: false,
-  }));
-  // The search-page cards under the panel were drawn for that account too.
-  indexOverlay?.sessionChanged();
+  const res = await call<undefined>({ type: 'sign_out' });
+  if (!res.ok) setState((prev) => ({ ...prev, errorMessage: friendlyDetail(res.detail) }));
 }
 
 /* Mounts/refreshes the floating panel for one listing. Used by the detail-page
@@ -2869,6 +2927,7 @@ export async function openPanel(
     tags: cachedTags, tagsFailed: false, tagsOpen: false, tagBusy: false, tagError: null,
     notes: null, notesFailed: false, noteBusy: false, quota: null, errorMessage: null,
     noteEditingId: null, noteConfirmDeleteId: null, noteRowBusy: false,
+    ingestStep: null, ingestMessage: null,
   };
   await minimizedReady;  // persisted minimized pref before first paint → no flash
   if (epoch !== renderEpoch) return;
@@ -2911,27 +2970,32 @@ export async function openPanel(
   /* The lookup for a listing the operator has already navigated away from must
    * not land — this is the apply that would otherwise show A's yield under B. */
   if (epoch !== renderEpoch) return;
+  await showListing(epoch, listing);
+}
 
-  const saleApt =
-    listing?.found
-      ? listing.category_main === 'byt' && listing.category_type === 'prodej'
-      : urlSaleApartmentHint(url);
-
-  /* Show the panel for ANY listing we have (app link + facts). The only dead
-   * end is a listing not in our DB whose URL clearly isn't a sale apartment —
-   * nothing to link, no MF, no estimate. */
-  const active = Boolean(listing?.found) || saleApt !== false;
+/* Paint one lookup row and start what a held ad needs. Shared by openPanel and
+ * the add-to-database flow (onIngest), so an ad the panel just added gets
+ * exactly the controls of any ad we hold. */
+async function showListing(
+  epoch: number, listing: PortalListing | null,
+): Promise<void> {
+  /* The panel is for an ad we hold (app link, facts, MF, estimate); an ad we
+   * lack gets only the offer to add it — an estimation is always of a held ad. */
+  const held = listing?.found ? listing : null;
+  const saleApt = held != null
+    ? held.category_main === 'byt' && held.category_type === 'prodej'
+    : null;
   setStateIf(epoch, (prev) => ({
-    ...prev, phase: active ? 'active' : 'deactivated',
-    listing, isSaleApt: saleApt,
+    ...prev, phase: held != null ? 'active' : 'deactivated',
+    listing, isSaleApt: saleApt, ingestStep: null, ingestMessage: null,
   }));
-  if (!active) return;
+  if (held == null) return;
 
   /* Agent estimates are metered — fetch the remaining allowance so the estimate
    * button can show "(zbývá X)" and flip to an upgrade prompt at zero. Only the
    * estimate block (sale apartments) uses it; non-blocking, and a failure just
    * leaves the counter hidden. */
-  if (saleApt !== false) void loadQuota();
+  if (saleApt) void loadQuota();
 
   /* For a property we have, load the stage list so the in-pipeline control can
    * offer stage changes, and the collection list so the save control can name
@@ -2940,7 +3004,7 @@ export async function openPanel(
    * an unchanged read redraws nothing): it decides what is saved and who a
    * shared note reaches, and a share or collection made in the app since the
    * tab loaded must not leave either wrong — the SPA re-reads after 30 s. */
-  if (listing?.found && listing.property_id != null) {
+  if (held.property_id != null) {
     void loadStages();
     void loadCollections(true);
     void loadTags();
@@ -2949,7 +3013,7 @@ export async function openPanel(
 
   /* Lazily load an existing estimation so the editable yield block appears
    * without blocking the MF headline (only the estimation section uses it). */
-  const est = saleApt !== false ? listing?.latest_estimation : null;
+  const est = saleApt ? held.latest_estimation : null;
   if (est != null) {
     const full = await call<EstimationRun>({
       type: 'get_estimation', run_id: est.estimation_id,
@@ -2957,17 +3021,6 @@ export async function openPanel(
     if (full.ok && full.data.status === 'success') {
       setStateIf(epoch, (prev) => seedFromRun(prev, full.data));
     }
-  }
-}
-
-/* URL-only sale-apartment hint for the not-in-our-DB case. */
-function urlSaleApartmentHint(url: string): boolean | null {
-  const portal = portalForUrl(url);
-  if (portal?.saleApartmentHint == null) return null;
-  try {
-    return portal.saleApartmentHint(new URL(url).pathname);
-  } catch {
-    return null;
   }
 }
 

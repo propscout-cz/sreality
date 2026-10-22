@@ -49,7 +49,6 @@ const COLLECTION: Collection = {
   updated_at: '2026-10-11T09:00:00Z',
   listing_count: 3,
   monitoring_enabled: true,
-  notify_channels: [],
   is_system: false,
   owner_email: null,
   shared_with: [],
@@ -122,7 +121,7 @@ describe('<CollectionDetail> on the phone', () => {
     await screen.findByRole('link', { name: /Místo 1/ });
     const [filters] = vi.mocked(queries.fetchListingsForCards).mock.calls[0];
     expect(filters).toEqual(collectionCardFilters(7));
-    expect(filters.collections).toEqual([7]);
+    expect(filters.collections).toEqual({ set: null, in: [7], out: [] });
     expect(filters.status).toBe('any');
     expect(filters.showDismissed).toBe(true);
     expect(filters.categoryType).toBeNull();

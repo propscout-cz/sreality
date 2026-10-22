@@ -5,8 +5,8 @@ reproducible from the same rows), and the STRUCTURAL validity of the checked-in 
 
 Structural, deliberately, and not freshness: a test that failed when a `generated_at` got
 older than 30 days would red `main` on a calendar date rather than on a defect, on a branch
-that touched nothing. Staleness is a `verify_pipeline` warning instead (`field_fill_matrix`),
-where it lands in front of the operator with the rest of the pipeline's health.
+that touched nothing. Staleness is the parsing alarm's `census` cell instead (Watch), where it
+lands in front of the operator with the rest of the pipeline's health.
 """
 
 from __future__ import annotations
@@ -21,6 +21,11 @@ from scraper.db import LISTING_COLUMNS
 from scraper.portal_factory import PORTAL_CLASSES
 
 _WHEN = _dt.datetime(2026, 9, 21, 19, 20, tzinfo=_dt.timezone.utc)
+# The harness's lines (THRESHOLDS parsing_fill_* / parsing_vocabulary_rise_*), as the parsing
+# check passes them: the arms are pure and take their numbers as arguments.
+_LIMITS = {"fill_drop_warn_pp": 0.10, "fill_drop_fail_pp": 0.20, "fill_drop_min_baseline": 0.10,
+           "fill_collapse_ratio": 0.25, "fill_collapse_min_rows": 50,
+           "off_canon_rise_warn_pp": 0.05, "off_canon_rise_fail_pp": 0.15}
 
 
 # --- the checked-in goldens ------------------------------------------------
@@ -187,17 +192,24 @@ def _baseline(**cells: dict) -> dict:
     return {"generated_at": _WHEN.isoformat(), "cells": cells}
 
 
+def _compare(live: dict, base: dict, **kw: object) -> tuple[list[str], list[str]]:
+    """(fail lines, warn lines), each `<key> <reason>`, as the old pair of lists read."""
+    findings = fc.compare_to_baseline(live, base, **{**_LIMITS, **kw})
+    return ([f"{f.key} {f.reason}" for f in findings if f.status == "fail"],
+            [f"{f.key} {f.reason}" for f in findings if f.status == "warn"])
+
+
 def test_live_equal_to_blessed_is_green() -> None:
     blessed = fc.load_baseline()
-    assert fc.compare_to_baseline(blessed, blessed) == ([], [])
+    assert fc.compare_to_baseline(blessed, blessed, **_LIMITS) == []
 
 
 def test_a_fill_collapse_fails_and_a_smaller_slip_warns() -> None:
     base = _baseline(**{"idnes/condition": {"fill": 0.88, "filled": 880, "n": 1000}})
-    fails, warns = fc.compare_to_baseline(
+    fails, warns = _compare(
         _baseline(**{"idnes/condition": {"fill": 0.60, "filled": 600, "n": 1000}}), base)
     assert fails and not warns
-    fails, warns = fc.compare_to_baseline(
+    fails, warns = _compare(
         _baseline(**{"idnes/condition": {"fill": 0.75, "filled": 750, "n": 1000}}), base)
     assert warns and not fails
 
@@ -210,7 +222,7 @@ def test_a_weeks_cohort_drift_does_not_flap() -> None:
     earlier newest-1,000 cohort rotated by 30+ pp on the same untouched parsers."""
     base = _baseline(**{"bezrealitky/disposition": {"fill": 0.55, "filled": 3148, "n": 5724}})
     live = _baseline(**{"bezrealitky/disposition": {"fill": 0.509, "filled": 2913, "n": 5724}})
-    assert fc.compare_to_baseline(live, base) == ([], [])
+    assert _compare(live, base) == ([], [])
 
 
 def test_a_partial_break_below_the_absolute_floor_still_fails() -> None:
@@ -218,13 +230,13 @@ def test_a_partial_break_below_the_absolute_floor_still_fails() -> None:
     invisible to a 10 pp rule, and is a four-fold collapse."""
     base = _baseline(**{"ceskereality/furnished": {"fill": 0.05, "filled": 50, "n": 1000}})
     live = _baseline(**{"ceskereality/furnished": {"fill": 0.01, "filled": 10, "n": 1000}})
-    fails, _ = fc.compare_to_baseline(live, base)
+    fails, _ = _compare(live, base)
     assert len(fails) == 1 and "ceskereality/furnished" in fails[0]
 
 
 def test_a_known_zero_cell_cannot_offend() -> None:
     base = _baseline(**{"remax/has_balcony": {"fill": 0.0, "filled": 0, "n": 1000}})
-    assert fc.compare_to_baseline(base, base) == ([], [])
+    assert _compare(base, base) == ([], [])
 
 
 def test_an_off_canon_rise_rings_and_names_the_new_spellings() -> None:
@@ -232,14 +244,49 @@ def test_an_off_canon_rise_rings_and_names_the_new_spellings() -> None:
     live = _baseline(**{
         "remax/condition": {"fill": 0.9, "filled": 900, "off_canon": 0.2,
                             "off_canon_values": ["zdena_kamenna"]}})
-    fails, _ = fc.compare_to_baseline(live, base)
+    fails, _ = _compare(live, base)
     assert len(fails) == 1 and "zdena_kamenna" in fails[0]
+    assert [f.arm for f in fc.compare_to_baseline(live, base, **_LIMITS)] == [fc.VOCABULARY]
+
+
+def test_the_lines_are_strict_at_the_matrixs_own_four_decimals() -> None:
+    """The health checks' one convention (common.graded): a line is crossed only when passed.
+    The legacy arms used >=, so exactly 10 / 20 pp of fill and 5 / 15 pp of off-canon moved."""
+    def drop(live_fill: float) -> list[tuple[str, str]]:
+        base = _baseline(**{"idnes/condition": {"fill": 0.65, "filled": 650, "n": 1000}})
+        live = _baseline(**{"idnes/condition": {"fill": live_fill, "filled": 1000, "n": 1000}})
+        return [(f.status, f.arm) for f in fc.compare_to_baseline(live, base, **_LIMITS)]
+
+    assert drop(0.55) == [] and drop(0.5499) == [("warn", fc.FILL)]
+    assert drop(0.45) == [("warn", fc.FILL)] and drop(0.4499) == [("fail", fc.FILL)]
+
+    def rise(live_off: float) -> list[tuple[str, str]]:
+        base = _baseline(**{"remax/condition": {"fill": 0.9, "filled": 900, "off_canon": 0.01}})
+        live = _baseline(**{"remax/condition": {"fill": 0.9, "filled": 900,
+                                                "off_canon": live_off}})
+        return [(f.status, f.arm) for f in fc.compare_to_baseline(live, base, **_LIMITS)]
+
+    assert rise(0.06) == [] and rise(0.0601) == [("warn", fc.VOCABULARY)]
+    assert rise(0.16) == [("warn", fc.VOCABULARY)] and rise(0.1601) == [("fail", fc.VOCABULARY)]
+
+
+def test_the_lines_are_the_callers_arguments_and_no_module_constant() -> None:
+    """The harness owns the numbers (THRESHOLDS); this module keeps none of its own."""
+    base = _baseline(**{"idnes/condition": {"fill": 0.65, "filled": 650, "n": 1000}})
+    live = _baseline(**{"idnes/condition": {"fill": 0.60, "filled": 600, "n": 1000}})
+    assert fc.compare_to_baseline(live, base, **_LIMITS) == []
+    tight = fc.compare_to_baseline(live, base, **{**_LIMITS, "fill_drop_warn_pp": 0.04})
+    assert [(f.key, f.status) for f in tight] == [("idnes/condition", "warn")]
+    with pytest.raises(TypeError):
+        fc.compare_to_baseline(live, base)  # type: ignore[call-arg]
+    assert not [name for name in vars(fc) if name.startswith(
+        ("FILL_DROP", "FILL_COLLAPSE", "OFF_CANON", "CENSUS_STALE"))]
 
 
 def test_a_cell_the_baseline_has_never_seen_arrives_green() -> None:
     """A new portal or a new column is blessed by the next re-bless, not by a red run."""
     live = _baseline(**{"newportal/condition": {"fill": 0.0, "filled": 0, "n": 1000}})
-    assert fc.compare_to_baseline(live, _baseline()) == ([], [])
+    assert _compare(live, _baseline()) == ([], [])
 
 
 def test_a_source_that_vanishes_from_the_matrix_fails_and_a_single_cell_warns() -> None:
@@ -251,22 +298,20 @@ def test_a_source_that_vanishes_from_the_matrix_fails_and_a_single_cell_warns() 
         "remax/floor": {"fill": 0.4, "filled": 400, "n": 1000},
         "idnes/condition": {"fill": 0.8, "filled": 800, "n": 1000},
     })
-    fails, warns = fc.compare_to_baseline(
-        _baseline(**{"idnes/condition": {"fill": 0.8, "filled": 800, "n": 1000}}), base)
-    assert len(fails) == 1 and "remax: 2 blessed cell(s) absent" in fails[0]
-    assert warns == []
+    gone = fc.compare_to_baseline(
+        _baseline(**{"idnes/condition": {"fill": 0.8, "filled": 800, "n": 1000}}), base, **_LIMITS)
+    # Every absent cell is a finding of its own, so each fill cell carries its own verdict.
+    assert [(f.key, f.arm, f.status) for f in gone] == [
+        ("remax/condition", fc.FILL, "fail"), ("remax/floor", fc.FILL, "fail")]
+    assert "all 2 of remax's blessed fields" in gone[0].reason
     # One cell of a source that is otherwise present is a warn, not a fail.
-    fails, warns = fc.compare_to_baseline(
+    fails, warns = _compare(
         _baseline(**{
             "remax/condition": {"fill": 0.8, "filled": 800, "n": 1000},
             "idnes/condition": {"fill": 0.8, "filled": 800, "n": 1000},
         }), base)
-    assert fails == [] and len(warns) == 1 and "remax: 1 blessed cell(s) absent" in warns[0]
-
-
-def test_booleans_never_false_reports_the_count_and_never_a_verdict() -> None:
-    matrix = fc.reduce_matrix(_MATRIX_ROWS, generated_at=_WHEN)
-    assert fc.booleans_never_false(matrix) == ["remax/has_lift 30/100 true, 0 false"]
+    assert fails == [] and len(warns) == 1 and "remax/floor" in warns[0]
+    assert "1 of remax's blessed fields are" in warns[0]
 
 
 def test_zero_fill_cells_are_read_from_whatever_matrix_is_passed() -> None:
@@ -282,12 +327,16 @@ def test_zero_fill_cells_are_read_from_whatever_matrix_is_passed() -> None:
 
 def test_stale_census_is_measured_in_days_against_the_stamp() -> None:
     fresh = {"portal": "remax", "generated_at": _WHEN.isoformat()}
-    assert fc.stale_censuses([fresh], now=_WHEN + _dt.timedelta(days=29)) == []
-    assert fc.stale_censuses([fresh], now=_WHEN + _dt.timedelta(days=31)) == [
+    assert fc.stale_censuses([fresh], now=_WHEN + _dt.timedelta(days=29), max_age_days=30) == []
+    # Strict, in whole days: 30 d 23 h is 30 d old, not past 30.
+    assert fc.stale_censuses([fresh], now=_WHEN + _dt.timedelta(days=30, hours=23),
+                             max_age_days=30) == []
+    assert fc.stale_censuses([fresh], now=_WHEN + _dt.timedelta(days=31), max_age_days=30) == [
         "remax census is 31d old"
     ]
+    assert fc.stale_censuses([fresh], now=_WHEN + _dt.timedelta(days=31), max_age_days=40) == []
     assert fc.stale_censuses(
-        [{"portal": "remax", "generated_at": "never"}], now=_WHEN
+        [{"portal": "remax", "generated_at": "never"}], now=_WHEN, max_age_days=30
     ) == ["remax has no readable generated_at"]
 
 
@@ -337,11 +386,11 @@ def test_an_inert_cell_may_collapse_without_ringing_but_not_go_off_canon() -> No
     it; a rising off-canon share still rings, whoever wrote the spelling."""
     base = {"cells": {"bazos/condition": {"n": 50000, "filled": 133, "fill": 0.003, "off_canon": 0.0}}}
     live = {"cells": {"bazos/condition": {"n": 50000, "filled": 30, "fill": 0.0006, "off_canon": 0.0}}}
-    assert fc.compare_to_baseline(live, base) != ([], [])
-    assert fc.compare_to_baseline(live, base, inert={"bazos/condition"}) == ([], [])
+    assert _compare(live, base) != ([], [])
+    assert _compare(live, base, inert={"bazos/condition"}) == ([], [])
     worse = {"cells": {"bazos/condition": {"n": 50000, "filled": 30, "fill": 0.0006, "off_canon": 0.2,
                                           "off_canon_values": ["smisana"]}}}
-    fails, _ = fc.compare_to_baseline(worse, base, inert={"bazos/condition"})
+    fails, _ = _compare(worse, base, inert={"bazos/condition"})
     assert fails
 
 

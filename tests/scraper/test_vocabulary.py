@@ -97,21 +97,6 @@ def test_a_numeric_zero_is_a_stated_absence_like_the_string() -> None:
     assert vocabulary.present(None) is None
 
 
-def test_the_llm_schema_offers_every_value_the_parsers_may_emit() -> None:
-    """The on-demand URL parser writes the SAME columns the nine scrapers write.
-
-    Its tool schema is generated from the canon, which since W5 IS the whole value space
-    — so the two producers of one column cannot disagree about it. `disposition` and
-    `price_unit` are enumerated too: the pill list now spans the entire grammar."""
-    from scraper.source_parsers.common import RECORD_LISTING_TOOL
-
-    properties = RECORD_LISTING_TOOL["input_schema"]["properties"]
-    for field in ("condition", "building_type", "energy_rating", "disposition",
-                  "price_unit"):
-        offered = set(properties[field]["properties"]["value"]["enum"]) - {None}
-        assert offered == set(vocabulary.CANON[field])
-
-
 def test_the_grammar_refuses_a_disposition_that_cannot_exist() -> None:
     """`N+M` with M outside {kk, 1}, or no rooms at all, is a digit pair the bazos
     free-text scan found — not a flat. Refused, counted, and never stored."""

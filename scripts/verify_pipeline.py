@@ -1,51 +1,30 @@
-"""verify_pipeline.py — scheduled pipeline-health harness.
+"""verify_pipeline.py — the health-check registry and the harness that measures it.
 
-Computes a fixed set of pipeline-health metrics (LLM error rate + burn rate, DB
-saturation, worker liveness, dual-write parity, property maintenance,
-broker-resolution freshness),
-writes one `pipeline_check_results` row per check, and rings the in-app bell once per
-INCIDENT (toolkit.system_alerts.emit_transition_alerts): at onset, again at 6h / 24h /
-72h / weekly while it stays red, and once when it recovers — not on every red run, and
-not on every edge (a check that flaps back to red inside the cooldown re-enters the same
-incident rather than opening a new one).
+`CHECKS` declares every check once: key, page section (`domain`), class (an alarm or a
+gauge), host, cadence, time budget, label, unit and owner page. A run from main projects its
+host's rows into `health_checks` (`project_registry`), then `run_due` measures the checks that
+are due by cadence (alarms first, each on its own wall clock) and stores one
+`pipeline_check_results` row per result the moment it completes, its message and cells inside
+`details`. A status is ok, warn, fail or unknown, and unknown means "not measured" (timed out,
+errored, or nothing to score): never OK. A measured status always rides on cells; a result
+without them is stored Not measured. A check the run's budget does not reach, or the worker's
+capped pass cannot fit, writes nothing and stays due. Nothing here tells anyone — the API's
+ladder (`toolkit.system_alerts.reconcile`) reads the stored results, opens one incident per
+failing cell and sends the notices — and no result changes the exit code: the canary's
+assertions (`scripts/health_canary.py`) are the one way a monitoring run goes red.
 
-Born from the 2026-07 incident: the pipeline stalled silently for two days
-(Anthropic credit exhaustion; 38k+ failed LLM calls) with no in-app signal. This
-job makes that loud and durable.
+Thresholds live in `THRESHOLDS` below, each beside its basis; changing one is a PR. The canary
+runs `main()` for `github-actions`; the worker's health lane calls `project_registry` and
+`run_due` for `realtime-worker` itself.
 
-Each check is isolated (one failing check writes a `fail` row with the error in
-`details`, never kills the run). Thresholds live in
-`app_settings.pipeline_check_thresholds` with the code defaults below as fallbacks.
+There is deliberately NO total-silence LLM check: every LLM producer left is dispatch-driven or
+on demand, so silence is the normal resting state (the longest gap in the 30 days to
+2026-09-21 was 143.8 h, and the old `llm_liveness` failed 52 of 347 runs on a healthy
+pipeline). The `text_extraction` gauge watches the one recurring lane: its stock through the
+lane's own predicate, its flow over the new ads that arrived.
 
-There is deliberately NO total-silence check any more. `llm_liveness` measured hours
-since the newest `llm_calls` row against a threshold sized to "the one recurring
-producer" — bazos description enrichment, deleted with its lane in field-capture W0.
-Every producer left (autodedup judging, labelling, estimations, URL parsing) is
-dispatch-driven or on demand, so silence is the normal resting state: the longest gap
-in the 30 days to 2026-09-21 was 143.8 h, and the check was already 52 fails / 347 runs
-against a healthy pipeline. A fixed hours threshold over an on-demand workload is a
-false-red generator, and the fix is not a bigger number — it is a per-lane instrument
-with its own baseline. That is `text_extraction_lag` (field-capture R8, W7): oldest
-ELIGIBLE-unextracted age and waiting count per source, computed from the text lane's own
-selector predicate, plus the wedge arm — rows eligible and the lane claiming none — and the
-abort arm — the provider stopped the lane's last pass. It covers the one recurring producer;
-`llm_errors` still catches "calls are failing" (state, not recency; credit per provider)
-and `llm_burn_rate`'s starvation arm "attempting and never succeeding". The
-residual, stated plainly: both of those derive from rows that EXIST, so a total stop on a
-lane R8 does not cover — every remaining producer is dispatch-driven — still reads `ok`.
-
-Each result is persisted AND alerted the moment its check completes, under a per-check
-and a whole-lane wall-clock budget (the acute lane's `_LANE_BUDGET_S`; the full lane's
-`full_lane_budget_s`, one per-check budget per registered check). The acute lane runs inside a job with
-`timeout-minutes: 5`, and it used to compute every result before writing any — so a
-timeout wrote zero rows and fired zero alerts, blinding `db_saturation` and
-`worker_liveness` at exactly the moment DB saturation would make the checks slow. A
-check that overruns its budget reports `warn` ("I could not measure this"), never `fail`
-and never `ok`.
-
-    python -m scripts.verify_pipeline            # compute + write + alert
-    python -m scripts.verify_pipeline --dry-run  # compute + log only, no writes
-    python -m scripts.verify_pipeline --weekly   # weekly-only checks + the heartbeat
+    python -m scripts.verify_pipeline            # the due checks of github-actions
+    python -m scripts.verify_pipeline --dry-run  # the same, writing nothing
 
 Needs only SUPABASE_DB_URL.
 """
@@ -57,3824 +36,578 @@ import datetime as _dt
 import json
 import logging
 import os
-import re
 import sys
 import time as _time
-from decimal import Decimal
-from pathlib import Path
-from typing import Any, Callable
-from urllib.parse import urlencode
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from typing import Any
 
-import requests
-
-from location_data import location_steps
-from location_data.resolver.version import RESOLVER_VERSION
-from scraper import attribute_contract, field_census, media as _media
-from scraper.db import QUEUE_PRIORITY_NEW, connect
-from scraper.image_storage import IMAGE_TRANSFORM_OPS, image_dimensions, with_transform
-from scraper.parser import parse_images
-from scraper.portal_base import _BASE_HEADERS as _PORTAL_HEADERS
-from scraper.sreality_client import (
-    CZ_COUNTRY_ID,
-    DETAIL_URL as _SREALITY_DETAIL_URL,
-    INDEX_URL as _SREALITY_INDEX_URL,
-    _unwrap_estate as _unwrap_sreality_estate,
+from scraper.db import connect
+from scripts.checks.clock import (
+    CHECK_BUDGET_S as _CHECK_BUDGET_S,
+    LANE as _LANE,
+    PASS as _PASS,
 )
-from toolkit.listing_identity import R2_CARRIERS as _PARITY_CARRIERS
-from toolkit.system_alerts import (
-    AlertPolicy,
-    check_states,
-    emit_transition_alerts,
-    emit_weekly_heartbeat,
+from scripts.checks.dedup import check_dedup
+from scripts.checks.delisting import check_delisting
+from scripts.checks.notifications import check_notifications
+from scripts.checks.platform import (
+    check_capacity,
+    check_jobs,
+    check_llm,
+    check_migration_drift,
 )
+from scripts.checks.publishing import check_publishing
+from scripts.checks.quality import (
+    check_data_quality,
+    check_location_town_coverage,
+    check_parsing,
+    check_text_extraction,
+)
+from scripts.checks.scraping import check_coverage, check_scraping
+from scripts.verify_outbound_urls import PROBE_BUDGET_S, check_outbound_url_conformance
+from toolkit.system_alerts import due_after_s as _due_after_s
 
-
-# The SQL mirror of `location_data.claims_common.sreality_payload_shape`, inlined here when
-# the refetch cohort was deleted (rule 25 W1-a) because this check is its only reader left.
-SREALITY_SHAPE_CASE_SQL = """
-    CASE
-      WHEN jsonb_typeof(raw_json->'locality') IS DISTINCT FROM 'object' THEN 'absent'
-      WHEN raw_json->'locality' ?| array['gps_lat','gps_lon','entity_type','inaccuracy_type','city','citypart'] THEN 'post_cutover'
-      WHEN raw_json->'locality' ?| array['name','value','accuracy'] THEN 'legacy'
-      ELSE 'absent'
-    END
-"""
 
 LOG = logging.getLogger("verify_pipeline")
 
-# Code fallbacks. The pipeline_check_thresholds seed (migration 274) is merged OVER
-# these in load_thresholds, so a key present here but not in the DB seed (e.g.
-# long_open_txn_warn_minutes, added with the llm-cost rollup) is served from this
-# default until a future seed migration includes it.
-DEFAULT_THRESHOLDS: dict[str, float] = {
-    "llm_error_rate_warn": 0.2,
-    "llm_spend_24h_warn_usd": 90,
+# Every threshold a check reads, each beside its basis: the one home, so changing one is a
+# reviewed PR. Nothing overrides it at run time (app_settings.pipeline_check_thresholds is
+# read by nothing since wave 3; migration 624 deletes the row).
+THRESHOLDS: dict[str, Any] = {
+    # --- jobs (platform alarm): every scheduled machine, one cell per job ------------------
+    # One red loses a whole cycle at a 24 h gap: location_registry_load's lone 09-01 timeout.
+    "jobs_gh_long_cycle_h": 24,
+    # 35 of migration 462's 63 red streaks were lone; recompute_mf_yields' 3rd red came 09-13.
+    "jobs_gh_streak_fail": 3,
+    # Late past 3 x the job's own p90 start gap: GitHub delivers about a fifth of cron's runs.
+    "jobs_gh_gap_p90_multiple": 3,
+    # recent_starts accumulates from wave 3, so the p90 arm is Not measured until 10 starts.
+    "jobs_gh_gap_min_starts": 10,
+    # The canary's measured 13.3 h maximum gap plus margin; the old check's 46 fails were real.
+    "jobs_poller_stale_h": 18,
+    # pg_cron keeps time: 2 of a job's last 3 finished runs failing is the job, not a blip.
+    "jobs_cron_fail_of_3": 2,
+    # 3 median start gaps with no start is two missed cycles, never a scheduler's jitter.
+    "jobs_cron_gap_multiple": 3,
+    # Under 5 starts in 7 days a job's gap is unknown, so its lateness arm is Not measured.
+    "jobs_cron_gap_min_starts": 5,
+    # Never late or failing under 15 min: each of ~11 deploys a day pauses lanes under 2 min.
+    "jobs_lane_floor_s": 900,
+    # 15 min of worker uptime before a lane that has not woken or passed can be judged.
+    "jobs_lane_boot_grace_s": 900,
+    # Eight portals at up to 120 s each make ~16 min an honest drain pass (the old stall warn).
+    "jobs_lane_inflight_warn_s": 1200,
+    # LANE_PASS_TIMEOUT_SECONDS: past it the worker abandons the pass (a wedge sat nine hours).
+    "jobs_lane_inflight_fail_s": 1800,
+    # Hourly-or-slower lanes pass about once per boot, so any failing_since there is a Problem.
+    "jobs_lane_daily_interval_s": 3600,
+    # Half the passes since the previous result failed: autodedup's failed_passes 6 on 10-02.
+    "jobs_lane_flap_share": 0.5,
+    # ...over at least 3 passes, so one failure in two passes is not a flap.
+    "jobs_lane_flap_min_passes": 3,
+    # --- capacity (platform alarm): is the database, and the worker's memory, keeping up ----
+    # browse-list-rebuild ran 15-28 x its ~9.9 s reference from 08-17: Watch at 3 x and 30 s.
+    "capacity_p50_warn_multiple": 3,
+    "capacity_p50_warn_floor_s": 30,
+    # Problem at 4 x and 60 s; a trailing 28-day baseline read recovered by early September.
+    "capacity_p50_fail_multiple": 4,
+    "capacity_p50_fail_floor_s": 60,
+    # Watch at a p95 of half the schedule interval: at twice that, runs overlap.
+    "capacity_p95_interval_warn": 0.5,
+    # 80 % of interval or statement_timeout: browse-list-rebuild hit 1,800 s 09-26..10-03.
+    "capacity_p95_interval_fail": 0.8,
+    # A whole post-reference week (one weekly p50) before the relative arm may judge.
+    "capacity_reference_min_days": 7,
+    # The first full day on the 2XL instance (p50 41-100 s); re-blessing is a dated PR. A rail fails once it is over 90 days old.
+    "CAPACITY_REFERENCE_FROM": _dt.date(2026, 10, 17),
+    # Timed-out health checks per 24 h: up to ~12 %/day in the saturation, 0 since 10-10.
+    "capacity_timeout_share_warn": 0.05,
+    "capacity_timeout_share_fail": 0.20,
+    # The saturation month's oldest open transaction was 18.3 min.
+    "capacity_open_xact_warn_min": 60,
+    "capacity_open_xact_fail_min": 360,
+    # Connections against max_connections: live 29 of 380.
+    "capacity_connections_warn": 0.7,
+    "capacity_connections_fail": 0.9,
+    # The worker's peak RSS against its container limit: live 7.4 of 22.9 GB.
+    "capacity_memory_warn": 0.8,
+    "capacity_memory_fail": 0.9,
+    # --- llm (platform alarm): are the providers serving, and is spend sane ----------------
+    # 20 % of 20+ calls in 24 h while the provider's newest call errors; 5 of 5 onsets real.
+    "llm_error_share_warn": 0.2,
+    "llm_error_share_min_calls": 20,
+    # 5+ attempts, no success in an hour: a refusing provider books $0 (the 11-day outage).
+    "llm_starved_min_attempts": 5,
+    # Normal spend is $22-32 a day; 130, not 90, is what production carried since mig 297.
+    "llm_spend_24h_warn_usd": 130,
     "llm_spend_24h_fail_usd": 150,
-    # false_delist_share: of the ads the drain CLOSED (ledger outcome 'flipped', 7 d), the
-    # share active again now -- a revival after a confirmed gone verdict is a flip that was
-    # wrong. Sized 2026-10-09 on the pre-hysteresis ledger (one verdict flipped): sreality
-    # 35%, mmreality 15%, remax 11%, bezrealitky 7%, idnes 6%, the rest under 2%. The dwell
-    # (12 h) is meant to hold every portal under the warn line; 20% is the old sreality
-    # order of magnitude, i.e. the rule stopped working. A portal with fewer than 50 flips in
-    # the window is not scored (a 12-flip share is noise) and a window where NO portal
-    # reached 50 is reported as unmeasured, never ok.
-    "false_delist_share_warn": 0.05,
-    "false_delist_share_fail": 0.20,
-    "false_delist_min_flips": 50,
-    # The llm-cost rollup (migration 437) absorbs late arrivals by re-scanning the
-    # trailing 3 hours on every tick: called_at defaults to now() = TRANSACTION START,
-    # so a call whose transaction opened at 10:59:59 and committed at 11:00:05 lands in
-    # the already-closed hour 10 and is repaired by the next tick. That holds ONLY while
-    # no transaction stays open longer than the window. Measured 2026-08-25 the oldest
-    # open transaction on this instance was 28.7 minutes — 6x inside the margin, but not
-    # a comfortable order of magnitude on an instance that runs 600-second cron
-    # statements. Warn at 1 hour: a third of the window, so there is time to act before
-    # correctness is at stake. No fail tier — a long transaction is not itself a fault.
-    "long_open_txn_warn_minutes": 60,
-    "db_cron_fail_rate_fail": 0.5,
-    "worker_stale_fail_minutes": 5,
-    "verification_stale_hours": 24,
-    # Ingestion. Measured on the QUEUE, so these are portal-size-independent: a
-    # healthy drain keeps the oldest never-fetched listing at minutes whatever the
-    # portal. Warn at 6h is well above the 6-hourly walk cadence (a listing found
-    # right after a drain legitimately waits until the next one) and far below the
-    # scale of a real fault; fail at 24h means a full day of a portal's new
-    # inventory is missing from Browse, the watchdog and every estimate. Under the
-    # 2026-08-17 starvation sreality reached 216h.
-    "acquisition_lag_warn_hours": 6,
-    "acquisition_lag_fail_hours": 24,
-    # The same shape one layer later (field-capture R8): how long a listing whose prose
-    # the text lane has not read has been waiting. The lane runs every 5 minutes and its
-    # 20-minute SLO is for INFLOW; a backlog drains at 500 rows a pass, and the age counts
-    # from first_seen_at, so a corpus re-read (a new SCHEMA_VERSION, prompt or model: ~31 h
-    # at W1) reads FAIL until it drains — expected. Warn at 48h, fail at 168h: a week of a
-    # portal's prose unread is the lane being dead, the failure nothing else can see.
-    "text_extraction_lag_warn_hours": 48,
-    "text_extraction_lag_fail_hours": 168,
-    # Walk coverage against the portal's own advertised total. Healthy portals sit
-    # at 0.0-0.2% (measured 2026-08-27: sreality 0.00%, realitymix 0.00%, bazos
-    # 0.16%). Warn at 5% is ~25x the observed noise floor. Fail at 15% is a portal
-    # whose delisting rail is ALSO suppressed by the same completeness gate, so a
-    # coverage hole that deep silently stops history as well as intake --
-    # ceskereality sits at 9.96% today, which is the known facet-partition gap and
-    # should read amber, not red, until that is fixed on its own merits.
-    # How many of the newest migrations to probe. 25 spans several weeks of this
-    # repo's cadence, so a drift is caught long before the window rolls past it,
-    # while keeping the probe to a few hundred catalog lookups.
-    # The drain lane legitimately loops eight portals at up to DRAIN_MAX_SECONDS
-    # (120 s) each, so ~16 min is a normal long pass. Warn above that, fail at an
-    # hour — no lane has a legitimate reason to spend an hour in one pass, and
-    # the observed wedge sat for NINE HOURS.
-    "worker_lane_stall_warn_seconds": 1200,
-    "worker_lane_stall_fail_seconds": 3600,
+    # A credit outage stays red after its callers back off: 72 h, never a 24 h window.
+    "llm_lookback_h": 72,
+    # --- scraping (portal alarm): is every portal still finding and fetching its ads ------
+    # Watch past 3 G (the median walk-start gap, 14 d: crawlers 7.15-7.33 h, sreality 4.42 h).
+    "scraping_walk_watch_gaps": 3,
+    # Problem past 6 G (crawlers ~43 h, sreality 26.5 h); no unit crossed it in the 14-day replay.
+    "scraping_walk_fail_gaps": 6,
+    # Under 10 finished gaps in 14 d a portal is scored on the slowest portal's G, never dropped.
+    "scraping_walk_fallback_min_gaps": 10,
+    # A unit walked lately with no end-reached walk in 14 d is a Problem whatever its G.
+    "scraping_walk_stale_days": 14,
+    # "Lately" is 30 d: a unit absent from every walk for 30 d has left its portal's walk.
+    "scraping_walk_recent_days": 30,
+    # Inflow: Problem under 20 % of the same 24 h 7/14/21/28 d back (0 in a 14-day backtest).
+    "scraping_inflow_fail_share": 0.2,
+    # Watch under 50 %: same-window baselines absorb the 30-45 % weekend dip.
+    "scraping_inflow_warn_share": 0.5,
+    # A spike past 300 % of the baseline is Watch, never Problem.
+    "scraping_inflow_spike_share": 3.0,
+    # Under 20 a day 7-day windows are compared; under 20 a week the cell is Not measured.
+    "scraping_inflow_min_baseline": 20,
+    # Fetch errors, Wilson LB of the ids attempted in 24 h: Watch past 2 % (worst day 0.18 %).
+    "scraping_fetch_err_warn": 0.02,
+    # Problem past 10 %: the old 25 % false FAIL's poison id is 1 of ~6,060 ids (0.02 %) here.
+    "scraping_fetch_err_fail": 0.10,
+    # Under 200 ids the window widens to 7 d, else the cell is Not measured.
+    "scraping_fetch_err_min_ids": 200,
+    # Missing, declared − collected at an end-reached walk: Watch past 2 % (walks: 99.96-100 %).
+    "scraping_missing_warn": 0.02,
+    # Problem past 5 %: a parser dropping cards on a walk that still reaches the portal's end.
+    "scraping_missing_fail": 0.05,
+    # A unit declaring under 500 ads is not scored: 10 missing ads would read 2 % there.
+    "scraping_missing_min_declared": 500,
+    # --- publishing (portal alarm): do discovered ads reach Browse, with their photos -----
+    # Ingest (oldest NEW row) and changes (CHANGED/FAILURE): Watch past 3 h (7-day max 122 min).
+    "publishing_queue_warn_h": 3,
+    # Problem past 6 h: a starved NEW queue (08-17) fails here; a politeness burst never does.
+    "publishing_queue_fail_h": 6,
+    # Visible: Wilson LB of new active ads not in browse_list past 2 % (2 of 2,374 on 10-17).
+    "publishing_visible_warn": 0.02,
+    # Problem past 10 %; queued ads are ingest's, so the 10-13 burst (1,110 ads waiting, oldest 119 min) stays green.
+    "publishing_visible_fail": 0.10,
+    # Under 50 ads the window widens to 72 h, else the cell is Not measured.
+    "publishing_visible_min_n": 50,
+    # Stock: active properties missing from browse_list past 0.1 % (live 20 of 362,883).
+    "publishing_stock_warn": 0.001,
+    # Problem when the Wilson LB is past 1 %: the 09-14 Browse drop read ~87 %.
+    "publishing_stock_fail": 0.01,
+    # The Problem arm needs at least 200 properties behind the share.
+    "publishing_stock_min_n": 200,
+    # Photos of ads first written 1-24 h ago: Wilson LB not stored past 2 % (1 of 30,137 today).
+    "publishing_photos_unstored_warn": 0.02,
+    # Problem past 10 %: the iDNES throttle took new ads' given-up photos from 5 % to 52 %.
+    "publishing_photos_unstored_fail": 0.10,
+    # Under 200 photos the photo arms are Not measured.
+    "publishing_photos_min_n": 200,
+    # Stored narrower than min_px: Watch past 10 % (today 0-2.8 %).
+    "publishing_photos_narrow_warn": 0.10,
+    # Problem past 50 %: a thumbnail-template regression drives it towards 100 %.
+    "publishing_photos_narrow_fail": 0.50,
+    # Narrow is under 600 px wide; stored medians sit at 1,199-1,600 px.
+    "publishing_photos_min_px": 600,
+    # The oldest dirty property past 4 h, above the sweep's 100-min lease hold (7-day max 3.4 h).
+    "publishing_dirty_warn_h": 4,
+    # Problem past 8 h: the 08-20 outage held dirty rows for 6 d; 09-15's 165 h was the sweep's age (the
+    # dirty queue stayed under 1 h that day), so the dirty arm alone would have missed it: jobs' sweep cell has it.
+    "publishing_dirty_fail_h": 8,
+    # --- delisting (portal alarm): are gone ads made inactive, on time and correctly ------
+    # Outflow: Problem under 20 % of the quietest 24 h within ±3 h of this hour 7/14/21/28 d back
+    # (10-10: 0 against 400-1,900).
+    "delisting_outflow_fail_share": 0.2,
+    # Watch under 50 %; revivals clear inactive_at 48-72 h on, so the ratio reads up to ~7 % high.
+    "delisting_outflow_warn_share": 0.5,
+    # A spike past 300 % of the busiest windows' median (baseline_busy)...
+    "delisting_outflow_spike_share": 3.0,
+    # ...and of at least 500 ads is Watch, never Problem.
+    "delisting_outflow_spike_min": 500,
+    # Under a baseline of 50 a day the cell is Not measured: the smallest portal, by its volume.
+    "delisting_outflow_min_baseline": 50,
+    # Each week back is read ±3 h around this hour, a drop on its quietest 24 h, a spike on its
+    # busiest: fixed windows read Problem when a walk ran 1 h 53 min late (10-05); 2-4 h open the
+    # replay's same 13 incidents, 3 h with an hour to spare.
+    "delisting_outflow_align_h": 3,
+    # Stuck: active ads past effective dwell + 2 × the p90 walk gap + slack; Watch at 25 (live 0).
+    "delisting_stuck_warn": 25,
+    # Problem at 250: verdict to inactive runs at p90 27.8-35.2 h, under limits of 38.9-47.5 h.
+    "delisting_stuck_fail": 250,
+    # The hour of slack in that limit.
+    "delisting_stuck_slack_h": 1,
+    # The oldest VERIFY-priority row: Watch past 6 h (7-day maximum 203 min).
+    "delisting_verify_warn_h": 6,
+    # Problem past 24 h: a whole day of nominations unchecked.
+    "delisting_verify_fail_h": 24,
+    # Watch after 2 end-reached walks in a row with deferrals; never Problem (a throttle by design).
+    "delisting_deferral_walks": 2,
+    # Precision: Wilson LB of 48-72 h flips active again past 10 % (sreality ~7 %, rest ≤ 4.9 %).
+    "delisting_precision_warn": 0.10,
+    # Problem past 15 %: the blink cohorts read 26-49 %.
+    "delisting_precision_fail": 0.15,
+    # Under 50 flips the cohort is pooled over 2-7 d.
+    "delisting_precision_min_n": 50,
+    # --- coverage (portal gauge): do we hold what each portal shows -----------------------
+    # Residual (H − P − D) / D: Watch past 2 % (0-0.15 % on idnes, sreality and bazos).
+    "coverage_residual_warn": 0.02,
+    # Problem past 5 %: ceskereality byt/prodej's 27-day hole read +37 %.
+    "coverage_residual_fail": 0.05,
+    # A unit declaring under 500 ads is not scored.
+    "coverage_residual_min_declared": 500,
+    # Cannot be nominated: Watch at 25 per portal (in-flight ads, ~9 on bazos, stay ok).
+    "coverage_unnominated_warn": 25,
+    # Problem at 100: 422 today, 124 on ceskereality and 298 on realitymix (a filed parser issue).
+    "coverage_unnominated_fail": 100,
+    # --- dedup (engine alarm): are rulings honoured, is the engine deciding and merging ---
+    # Rulings are binary: Problem at 1 pair ruled apart that the engine merged after the ruling
+    # (live 0 of 765), or at 1 active broker suppression whose two identities share a broker.
+    "dedup_rulings_fail": 1,
+    # Decisions an hour over 3 h, clipped at the build start and the last brake lift: Problem at 0
+    # with ads waiting and the lane on. The 10-02 stall decided nothing; builds ran 100-16,300/h
+    # (the Prague build's first wave 16,275; 1,771-7,654 once the blocks were walked).
+    "dedup_build_window_h": 3,
+    # Watch past an ETA of 7 d (a lower bound: ads waiting / that rate); the largest ETA 50.7 h.
+    "dedup_build_eta_warn_d": 7,
+    # The engine's newest merge while building: Watch past 48 h, never Problem (Prague's: 52.3 h).
+    "dedup_pause_warn_h": 48,
+    # In-scope ads first seen 1-24 h ago with no decision, Wilson LB: Watch past 1 % (healthy: 0).
+    "dedup_lag_warn": 0.01,
+    # Problem past 10 %: arrival to decision p50 10.8 / p90 55.9 min; the 10-19 stall read 13.1 %
+    # undecided (lower bound 10.2 %) at 09:00Z, Problem.
+    "dedup_lag_fail": 0.10,
+    # Under 20 ads in that cohort the arm is Not measured (about 400 arrive in scope a day).
+    "dedup_lag_min_n": 20,
+    # Problem past expiry by more than the lane's interval + 10 min, counted from the later of the
+    # expiry, the last brake lift and the build end: 8-10 strands, each re-taken in ~1 min.
+    "dedup_lease_fail_past_expiry_min": 10,
+    # Splits: Wilson LB of the engine's 7-14 d old merge groups an operator split; Watch past 2 %...
+    "dedup_splits_warn": 0.02,
+    # ...over at least 100 groups, else Not measured (10-19: 0 of 149; 7 of 8,319 ever split).
+    "dedup_splits_min_groups": 100,
+    # --- parsing (portal alarm): are newly scraped ads still read the way they were ---------
+    # Fill: Watch past a 10 pp drop from the blessed fill (the worst weekly drift was 4.1 pp over
+    # 90 cells on 09-21; idnes has_balcony 26.8 -> 13.7 % on 10-19 is wave 4's terraces-out
+    # definition converging, re-blessed in wave 6).
+    "parsing_fill_drop_warn_pp": 0.10,
+    # Problem past a 20 pp drop.
+    "parsing_fill_drop_fail_pp": 0.20,
+    # A drop is judged only on a blessed fill of at least 10 %.
+    "parsing_fill_drop_min_baseline": 0.10,
+    # Problem when a field keeps under a quarter of its blessed filled ads (a 5 -> 1 % break)...
+    "parsing_fill_collapse_ratio": 0.25,
+    # ...of at least 50 blessed filled ads.
+    "parsing_fill_collapse_min_rows": 50,
+    # Vocabulary: an off-canon share up 5 pp is Watch, 3.2 sigma of the 09-21 drift (0 off-canon
+    # values in 7 d and 28 d on every portal on 10-19)...
+    "parsing_vocabulary_rise_warn_pp": 0.05,
+    # ...up 15 pp Problem, 9.5 sigma.
+    "parsing_vocabulary_rise_fail_pp": 0.15,
+    # A field census older than 30 d, the reviewed-diff cadence, is a Watch census cell.
+    "parsing_census_stale_days": 30,
+    # Measures of new ads: the Wilson LB of ads first seen in 7 d with no per-m² input, above the
+    # cell's own stock share by 10 pp, is Watch (a coverage floor would ring 13 Problem and 6 Watch
+    # cells on standing gaps on 10-19)...
+    "parsing_measures_warn": 0.10,
+    # ...by 25 pp Problem: the old 90 % gap line never reads a partial break such as remax's
+    # price defect (~44 % of its pages with no price until 08-05).
+    "parsing_measures_fail": 0.25,
+    # ...over at least 50 ads first seen in 7 d (maxima's 21 a week stays Not measured).
+    "parsing_measures_min_n": 50,
+    # Median shift: the active stock's per-m² median against this check's own cell 6-14 d old,
+    # Watch past 2x (the largest move since 09-26 is 1.49x, bazos pozemek/prodej)...
+    "parsing_median_warn": 2.0,
+    # ...Problem past 3x (the 09-17 W19/W21 heals moved five per-m² medians 3.2-6.9x).
+    "parsing_median_fail": 3.0,
+    # ...when at least 200 ads carry that median in both weeks.
+    "parsing_median_min_n": 200,
+    # Payload shape: active ads first seen in 48 h whose location payload the reader cannot read,
+    # Watch past 3 % (0 of 35,127 arrivals in 28 d)...
+    "parsing_payload_warn": 0.03,
+    # ...Problem past 10 %: a source-side cutover reads 12.5 % one 6-hourly pass later.
+    "parsing_payload_fail": 0.10,
+    # ...over at least 30 ads (bezrealitky had 168 in 48 h on 10-19, maxima 2).
+    "parsing_payload_min_n": 30,
+    # Churn: re-snapshots per active ad in 24 h past 3x the portal's own 28-day median daily ratio
+    # is Watch (the ratio's daily medians 0.0055-0.0201 over 09-21..10-18; its 28-day maximum
+    # 0.0805, idnes on 10-01)...
+    "parsing_churn_warn_x": 3,
+    # ...past 6x Problem: idnes's FX-conversion re-snapshot waves read 6.6-11.9x its median day
+    # (09-24, 10-01: #683's class, a real churn storm the operator can fix at the source)...
+    "parsing_churn_fail_x": 6,
+    # ...with at least 500 re-snapshots in the 24 h.
+    "parsing_churn_min_snapshots": 500,
+    # --- data_quality (quality gauge): standing value-quality conditions; shares on Wilson LBs -
+    # Per-m² price floor: priced ads whose per-m² price the basis floor NULLs, Watch past 5 %...
+    "data_quality_floor_warn": 0.05,
+    # ...Problem past 10 %: realitymix komercni/pronajem 11.4 % of 4,140 (LB 10.5 %) on 10-19 is the
+    # expected Problem at ship (idnes and sreality ~0.5 %).
+    "data_quality_floor_fail": 0.10,
+    # ...over at least 100 priced ads in the arm (the stock, or ads first seen in 7 d).
+    "data_quality_floor_min_n": 100,
+    # Area and usable area over 10 % apart, land skipped: Watch past 20 % (worst 0.1 % on 10-19)...
+    "data_quality_divergence_warn": 0.20,
+    # ...Problem past 40 % (mmreality dum/prodej's plot-as-headline read 57 % before its heal)...
+    "data_quality_divergence_fail": 0.40,
+    # ...over at least 100 ads carrying both areas.
+    "data_quality_divergence_min_n": 100,
+    # Estate area equal to area + usable within 1 %, a sum the page computed: Watch past 5 % (worst
+    # sreality dum/pronajem 1.5 % of 875, LB 0.9 %, on 10-19)...
+    "data_quality_estate_sum_warn": 0.05,
+    # ...Problem past 10 %, which no coincidence reaches...
+    "data_quality_estate_sum_fail": 0.10,
+    # ...over at least 100 ads carrying all three areas.
+    "data_quality_estate_sum_min_n": 100,
+    # Active ads with no portal link, a count per portal (a codebook miss moves a count within a
+    # day, never a share of ~400k): Watch past 50 (11 on 10-19, all sreality)...
+    "data_quality_url_warn": 50,
+    # ...Problem past 500.
+    "data_quality_url_fail": 500,
+    # The stock's own no-measure share, Watch only past 95 % (remax rows with no category_main at 93-97 % on 10-19; sreality pozemek healed to 6 %)...
+    "data_quality_measure_gap_warn": 0.95,
+    # ...over at least 200 active ads.
+    "data_quality_measure_gap_min_n": 200,
+    # --- location_town_coverage (quality gauge): every active Czech ad has a town (rule 25) ---
+    # A current RÚIAN version older than 40 d is a Problem (monthly loads; 19 d old on 10-19)...
+    "location_registry_max_age_days": 40,
+    # ...as is a newer one staged 24 h without becoming current: a superseded load is cancelled,
+    # not failed, so the jobs check never sees it stall.
+    "location_registry_max_staged_hours": 24,
+    # --- text_extraction (quality gauge): are new ads' descriptions read promptly -------------
+    # Flow: Wilson LB of in-scope ads arrived in 24 h and not read yet, Watch past 5 % (0 of 707
+    # on 10-19)...
+    "text_extraction_flow_warn": 0.05,
+    # ...Problem past 25 %...
+    "text_extraction_flow_fail": 0.25,
+    # ...over at least 30 arrivals: a small portal's two new ads both refused have a lower bound of
+    # 34 % (wilson_lower(2, 2)), a Problem; bazos, the lane's one portal, had 707 on 10-19.
+    "text_extraction_flow_min_n": 30,
+    # Stock: Watch past an ETA of 14 d, waiting / readings in 24 h (4.3 d on 10-19: 55,285 waiting
+    # at 12,790 a day; the 10-03 credit outage read 324 d).
+    "text_extraction_eta_warn_d": 14,
+    # --- notifications (platform alarm, on the worker): does every push leave ----------------
+    # A delivery due longer than this is a lane that stopped claiming (it ticks every 15 s and a lease
+    # is 2 min, so a healthy row is never due past ~2.5 min).
+    "notifications_stall_min": 10,
+    # Fan-out runs every 15 s: an event 5 min old with an older live device and no ledger row was lost.
+    "notifications_recall_grace_min": 5,
+    # Problem at 3 terminal failures in 24 h (a single BadDeviceToken is one device's churn).
+    "notifications_failures_fail": 3,
+    # --- migration_drift (platform alarm, on GitHub): is every merged migration applied -------
+    # The newest 25 files span several weeks of this repo's cadence, so a drift is caught long
+    # before the window rolls past it, with a few hundred catalog lookups.
     "migration_drift_window": 25,
-    "walk_coverage_warn_gap": 0.05,
-    "walk_coverage_fail_gap": 0.15,
-    # Consecutive index walks in which ONE category was walked and did not reach the
-    # portal's end, so it nominated nothing (rule #3). Counted in walks, not hours,
-    # because the gate is per walk: GitHub fires the index crons every ~6-9 h whatever
-    # the cron line says, so 3 walks is ~1 day and 6 is ~2 days for a category walked
-    # every run (idnes's rotated categories take about twice as long). A single short
-    # walk (a throttled page, a deadline) is routine and clears on the next one; a day
-    # of them is a category that has stopped closing anything. The 2026-09-16 -> 10-13
-    # ceskereality byt/prodej hole ran 89 walks and only ever logged a WARNING. A
-    # category its portal has not walked in its last `_fail` walks warns instead.
-    "walk_end_streak_warn": 3,
-    "walk_end_streak_fail": 6,
-    # Portal-URL contract (docs/design/portal-listing-url.md). ABSOLUTE counts of active
-    # rows with no source_url, per source: the failure being watched — sreality adds a
-    # sub-category code the closed codebook does not know and every new row of it
-    # silently gets NULL — would never move a share against ~800k rows, but it moves a
-    # count within a day. Crawler portals always emit a URL, so any NULL there is a
-    # parser regression.
-    "outbound_url_null_warn": 50,
-    "outbound_url_null_fail": 500,
-    # Weekly live conformance (scripts/verify_outbound_urls.py): a slug defect fails a
-    # whole (category_main, category_sub_cb) cell together, a scattered 404 is a
-    # delisting rule #3 has not caught up with — so the fail arm is CONCENTRATION.
+    # --- outbound_url_conformance (quality alarm, on GitHub, weekly): do portal links open ----
+    # A scattered 404 is a delisting rule #3 has not caught up with: Watch when the whole
+    # sample's Wilson LB of non-conforming links is past 5 % (10-18: 6 of 44, LB 6.4 %, four of
+    # them relative redirects and bot walls the probe now resolves or calls refused)...
     "outbound_url_conformance_warn_share": 0.05,
+    # ...while a slug defect fails a whole (category_main, category_sub_cb) stratum together:
+    # Problem on a stratum of at least 3 samples...
     "outbound_url_conformance_cell_min": 3,
+    # ...more than 67 % of them non-conforming.
     "outbound_url_conformance_cell_fail_share": 0.67,
-    # Property maintenance (2026-08-06 incident: 4 days of silently dead daily
-    # sweeps + a stranded lease freezing every maintenance lane). The sweep
-    # stamps app_settings.property_sweep_last_complete ONLY on a complete
-    # cycle, which is one run or two (its resume cursor), so a healthy stamp is
-    # ~24h or ~48h old. Sized for the two-run cycle (operator, 2026-10-03), as
-    # broker_sweep_* is for its two-run lap: warn above 48h plus the spread in
-    # when a run finishes (GH's scheduled-run delay, the lease wait, the run:
-    # ~2.5h), fail a few hours on — a cycle whose second run never stamped. The
-    # price is a dead sweep flagged after ~2 days instead of ~30h; a run that
-    # stops on budget twice, or sweeps nothing, exits RED on its own.
-    # Dirty rows drain within ~2 min of the worker lane's tick — EXCEPT while the
-    # daily full sweep holds the maintenance lease, which blocks every incremental
-    # pass and only clears dirty_properties at the very end, so oldest-dirt ages
-    # 1:1 with sweep elapsed. That hold is bounded by the sweep's own budget
-    # (recompute_property_stats._MAX_BUDGET_SECONDS, raised to 6000s = 100 min in
-    # #1026) plus lease wait + finalize, so warn must sit ABOVE it or a perfectly
-    # healthy long sweep turns this axis amber and trains the operator to ignore
-    # it. 1.5h -> 2.5h; fail stays 3h. Raise this together with the sweep budget.
-    "property_sweep_warn_hours": 52,
-    "property_sweep_fail_hours": 56,
-    "property_dirty_warn_hours": 2.5,
-    "property_dirty_fail_hours": 3,
-    # Broker resolution. Same two axes as property maintenance, but the sweep axis
-    # measures a ROTATION LAP, not one run: attribution truncates on its --max-seconds
-    # budget on most days (480,000 of 535,007 ids on 2026-08-10), so the corpus is
-    # covered across one or two daily runs and the stamp lands once per lap. Warn
-    # above a two-run lap plus the 110-min backstop drift (48 + 1.9); fail above a
-    # three-run lap plus a fully missed day, which is a rotation that has genuinely
-    # stopped reconciling rather than one having a slow week.
-    "broker_sweep_warn_hours": 52,
-    "broker_sweep_fail_hours": 84,
-    # A third, independent axis on the RUN rather than the rotation.
-    # _record_sweep_progress stamps lap completion straight after attribution,
-    # ~17-25 min ahead of the tail (cross-source merge, the three rollups, the
-    # matview, the candidate generator, _finalize's dirty-clear) — so a sweep
-    # whose tail dies still leaves a minutes-old lap stamp and the lap axis
-    # certifies it. Deferring the stamp would only move the wrongness (a lap that
-    # HAS closed would then age from the previous one), so completion gets its own
-    # axis: the age of the last full run that reached _finalize's ended_at. That
-    # tail runs on every sweep regardless of lap closure, so steady state is ~24h
-    # and the lap's deliberately wide 52/84 would be far too slack here.
-    #
-    # Sized on the GAP between consecutive ended_at, which is a whole number of
-    # daily runs PLUS the spread in when a run finishes — GH's scheduled-run delay,
-    # the <=21-min lock wait and the run itself, ~2.5h live to 2026-08-12 (06:25 to
-    # 08:52 UTC on a 04:35 cron). So one ordinary night reaches ~26.5h (warn 30
-    # clears it), one MISSED night ~50.5h and two ~69.5h. Fail therefore has to sit
-    # between those last two: 50 sat below one missed night's worst case, which reds
-    # the hourly acute lane — an onset alert plus llm_health.yml's
-    # --exit-nonzero-on-fail emailing a second time — for a single miss the sweep's
-    # own red run already emailed about. 60 keeps one miss a warn and still fails
-    # two, and costs ~10h of detection latency on the nightly-dead tail this axis
-    # exists for, which warn already ambers within ~30h.
-    "broker_finished_warn_hours": 30,
-    "broker_finished_fail_hours": 60,
-    # The full sweep holds broker_resolution_lock for its whole run — every */10
-    # incremental skips cleanly meanwhile — and clears dirty_broker_listings only at
-    # finalize, so oldest-dirt ages 1:1 with the sweep and can legitimately reach
-    # that same 3h backstop (raised from 1.9h with resolve_brokers_full.yml's
-    # timeout-minutes 110 -> 180). Warn above it or a healthy long sweep turns the
-    # axis amber; the extra headroom covers the post-sweep catch-up drain (the
-    # incremental claims --batch-size 5000 per */10 tick = 30k/h).
-    "broker_dirty_warn_hours": 4,
-    "broker_dirty_fail_hours": 5,
-    # The suppression rail is a binary invariant, not a gradient: one active
-    # suppression whose two identities sit under the same broker means a NO the
-    # operator recorded was bypassed. No warn tier — there is no "slightly merged".
-    "broker_suppression_violations_fail": 1,
-    # --- per-m2 measure plausibility (W9) -----------------------------------
-    # Every number below is sized against a live measurement of production on
-    # 2026-08-25, BEFORE the W2 backfill healed the two defects — so each one is
-    # verified to fire on the bug it was written for and verified NOT to fire on
-    # the healthy portals in the same cell. migrations/427 records the full table.
-    #
-    # Median shift is week-over-week within ONE (source, category_main,
-    # category_type) cell, never across portals: cross-portal medians legitimately
-    # differ by up to 19x (portal mix), so a peer comparison cannot separate a bug
-    # from a rural land catalogue. The noisiest weekly move measurable today —
-    # medians of the NEW-ARRIVAL cohort, which swings far harder than the stock
-    # medians this check compares — is 1.47x on area and 1.90x on Kc/m2 across 21
-    # cells. Warn sits just above that, fail at 3x. The mmreality heal will move
-    # that cell 6.96x (area) and 7.45x (Kc/m2), so the gap is wide in both
-    # directions: no false alarm from an ordinary week, and a basis flip cannot
-    # sneak under it. 200 rows in BOTH weeks or the median is not compared — and
-    # 200 rows means 200 rows CARRYING THAT MEDIAN, not 200 rows in the cell. The
-    # two are wildly different live: 64 cells clear n_active >= 200, but only 58
-    # clear it on area support and 56 on Kc/m2 support, so gating on cell size
-    # would compare 6 and 8 cells' medians resting on as few as 9 values —
-    # bezrealitky pozemek/prodej is 1 643 active rows, 9 areas, a 17.6x spread
-    # across those 9, and two ordinary delistings move it past the 3x fail.
-    "ppm2_median_shift_warn_ratio": 2.0,
-    "ppm2_median_shift_fail_ratio": 3.0,
-    "ppm2_median_shift_min_rows": 200,
-    # Floor share is an absolute LEVEL, not a jump — the unit-price masquerade has
-    # been stationary for the whole life of the portals carrying it, so there is no
-    # jump to detect. Live: ceskereality komercni/pronajem 20.0%, realitymix 19.0%,
-    # realitymix pozemek/pronajem 15.7%, remax 11.3%, bazos 6.7% — against idnes and
-    # sreality at 0.5% on the same cell. fail 10% indicts the first four, warn 5%
-    # ambers bazos, and the two portals with a working per-area guard stay green.
-    "ppm2_basis_floor_share_warn": 0.05,
-    "ppm2_basis_floor_share_fail": 0.10,
-    "ppm2_basis_floor_min_rows": 100,
-    # Location payload-shape drift (W4's standing P6 check): share of rows FIRST SEEN in
-    # the trailing window whose payload has the shape the location contracts cannot
-    # read — sreality's `locality` object not post-cutover, bezrealitky's `ruianId` key
-    # absent. A fresh row always gets a detail fetch within the hour, so after a
-    # source-side cutover the share climbs as elapsed/window: with 48 h, one 6-hourly
-    # lane tick later it reads 12.5%, above fail — the bell rings on the first tick. A
-    # 7-day window would need ~1.4 days to cross the same line. The standing noise is
-    # the odd truncated payload (0 of 8,280 sampled on 2026-09-08), so warn sits at 3%.
-    # min_rows 30 lets bezrealitky's ~5.9k-row inventory score most windows.
-    "location_payload_shape_drift_warn": 0.03,
-    "location_payload_shape_drift_fail": 0.10,
-    "location_payload_shape_drift_min_rows": 30,
-    "location_payload_shape_drift_window_hours": 48,
-    # Area divergence: share of rows carrying BOTH areas whose values differ by more
-    # than the view's 10% material band. RE-MEASURED 2026-09-17 (W21), because the
-    # numbers this was sized against were taken before W1 and both had moved: the
-    # ONLY non-zero cell in the whole corpus is now mmreality dum/prodej at 57.1% of
-    # 2 638 pairs, and its 7d arm is 0.0% of 150 — the live parser has been right
-    # since W1 and what remains is 1 515 legacy rows still carrying the plot as their
-    # headline, which the W21 heal clears. realitymix byt, the 10.5% cell the 20%
-    # warn tier was chosen to leave green, now reads 0.0%; every other cell is 0.0%.
-    # The tiers are NOT tightened onto that floor while the one real offender is still
-    # pending a heal — a threshold moved to fit a corpus mid-repair calibrates on the
-    # repair, not on the noise. Revisit after the heal runs: with every cell at 0.0%
-    # there is room to go to 5%/20%.
-    "area_divergence_share_warn": 0.20,
-    "area_divergence_share_fail": 0.40,
-    "area_divergence_min_rows": 100,
-    # Derived-sum side column (W21, migration 534): the share of rows carrying all
-    # three areas whose `estate_area` equals `area_m2 + usable_area` within 1%. A side
-    # column holding a SUM the page computed is not a measurement — mmreality shipped
-    # exactly that for years by reading `totalArea` (= parcelArea + usableArea) as the
-    # parcel, and neither a null-check nor the divergence arm above can see it (the
-    # column is populated, and the headline was already the interior). Live 2026-09-17,
-    # mmreality is the top two cells — dum/pronajem 5.5% of 55 rows (below the floor)
-    # and dum/prodej 2.6% of 1 123, the worst SCORED cell — over a background where no
-    # other cell exceeds 1.4%. Those are coincidences (the relation only bites where a
-    # parcel happens to equal its interior), so read the tiers as a FORWARD guard sized
-    # on a real ranking: warn at 5% is ~2x the worst scored cell and ~3.5x the
-    # background, fail at 10% is a cell that cannot be coincidence.
-    "estate_sum_share_warn": 0.05,
-    "estate_sum_share_fail": 0.10,
-    "estate_sum_min_rows": 100,
-    # Coverage: the share of a cell's active rows the measure has NO INPUT for (no
-    # price, or no positive area). Severity is a property of the ARM, not of the
-    # number. The stock arm can only WARN: the live offenders were the four sreality
-    # `pozemek` cells at 100.0% and bezrealitky pozemek/prodej at 99.5% — three parsers
-    # kept the parcel out of `area_m2`, which is the only area the measure reads. W17
-    # closed that (the plot reaches `derive_headline_area` from every portal, and a one-off
-    # heal — since replaced by `scripts/reparse.py` — fixed the 52,183 stored rows), so those cells should
-    # clear; a land cell with no portal area at all stays a visible gap by charter (a NULL
-    # measure is never a guess), amber and named rather than a red tile nobody can clear.
-    # The next
-    # cell down is realitymix ostatni/pronajem at 89.4%, so 0.95 separates "this
-    # cell has no measure" from ordinary portal incompleteness with 5.6pp of
-    # headroom. The 7d arm FAILS at 0.90: a gap that large among the rows that
-    # arrived this week is a parser regression in flight, and the worst live 7d gap
-    # over cells with 200+ new rows is 0.358 — so the fail tier has 54pp of headroom
-    # and stays reserved for the case the other three axes go QUIET on.
-    "ppm2_coverage_gap_warn": 0.95,
-    "ppm2_coverage_gap_fail_7d": 0.90,
-    "ppm2_coverage_min_rows": 200,
-    # Workflow-failure poller liveness, keyed on the AGE of its own high-water cursor.
-    # Its cron is `*/30`, but the Actions throttle really runs it 80-256 min apart, so
-    # the fail tier has to clear the worst observed gap (~4.3h) with room to spare: warn
-    # at 6h is "two throttled polls missed", fail at 12h is unambiguous. The poller
-    # deliberately excludes its own runs from workflow_failures, so a dead poller cannot
-    # show up in the table it feeds — it just stops accumulating rows, which is exactly
-    # what a quiet week looks like. The cursor is the only thing that distinguishes them.
-    "workflow_poller_stale_warn_hours": 6.0,
-    "workflow_poller_stale_fail_hours": 12.0,
-    # Sreality image template canary. The CDN is an exact-template ALLOWLIST, not a
-    # transform language, and sreality has re-cut its catalogue once before with no
-    # notice: the day the deployed chain leaves the allowlist every request 400s,
-    # `_classify_image_failure` parks each one terminally, and the only symptom is a
-    # download lane that quietly stops storing bytes. The canary asks the live CDN,
-    # daily, whether the template we ACTUALLY ship still returns a full-size frame.
-    # The verdict is RELATIVE, never an absolute px floor: `res,1800,1800,1` fits inside
-    # the source and never upscales, so a listing whose first photo is a 640x480 original
-    # comes back at 640x480 through a perfectly healthy template (measured: ~4% of live
-    # byt/prodej first photos). An absolute floor would page on ordinary data. The
-    # estate's OWN declared width/height (the DETAIL payload carries them per image) says
-    # what the deployed chain should return; 0.9 tolerates the CDN's rounding (a
-    # 1867x1400 source measured 1800x1349 against an expected 1350) while the superseded
-    # `res,749,562,3` chain — the regression the master-template work undid — lands far
-    # under it on both axes, which is also how a CROP is caught. Timeout is the read half
-    # of a (5, 8) connect/read pair, bounded per call in the seam; worst case across the
-    # three calls is 39 s, inside the 45 s per-check budget.
-    # Floor convention: the mean (portal storey − idnes storey) over sibling pairs.
-    # A whole-storey offset is the defect (W8 measured +0.82..+1.05 on the six ground=1
-    # portals against +0.20 ceskereality / +0.10 bazos, the two that were already
-    # canonical), so the tiers sit between the two populations. The measure has a real
-    # noise floor — a sibling pair is a price/area/disposition match, not a proven
-    # duplicate — and it is NOT the same size on every portal: ceskereality reads +0.20
-    # against bazos's +0.10. That gap is NOT sample conditioning, though the portal does
-    # never state the ground storey (0 of its 34,363 floored rows read 0): restricting
-    # the idnes side to floor >= 1 too moves it only +0.199 -> +0.167 (n=7,166 of 7,394,
-    # measured 2026-09-22). What is left is a real sub-population — 925 of its pairs sit
-    # at exactly +1 against 92 below 0, a 10:1 asymmetry bazos does not have (565:264) —
-    # i.e. ceskereality carries an UNEXPLAINED one-storey defect on ~12 % of its pairs,
-    # tracked as an open finding in the W8 hand-over §6. warn is 0.35 to hold that portal
-    # amber-free while it is investigated, not because its reading is certified: simulated
-    # on the live corpus the six converted portals land -0.16..+0.06, well inside 0.25, so
-    # the wider tier protects exactly one portal and that portal is the open question.
-    # fail at 0.5 is half a storey — unreachable by noise, reachable only by a portal on
-    # the other scale. min_pairs 40 lets maxima score on its ~49 pairs and still refuses
-    # a mean of one or two adverts.
-    "floor_convention_delta_warn": 0.35,
-    "floor_convention_delta_fail": 0.50,
-    "floor_convention_min_pairs": 40,
-    "sreality_image_template_min_ratio": 0.9,
-    "sreality_image_template_timeout_s": 8.0,
-    # --- alert escalation policy (W3.4) -------------------------------------
-    # Not per-check thresholds: these govern toolkit.system_alerts, so EVERY check
-    # inherits one escalation policy instead of each one growing its own. Scalars, one
-    # key per rung, because load_thresholds drops any non-scalar from the DB merge — a
-    # JSON array here would be silently ignored and the code default would win forever.
-    # The rungs answer "red for six days, silent for six" (property_maintenance,
-    # 2026-08-20..26); the cooldown answers its mirror image, the 114 alternating
-    # onset/recovery alerts llm_errors produced for an outage that never recovered. It
-    # must stay above the acute lane's hourly cadence or hourly flapping still rings.
-    "alert_reescalate_1_hours": 6.0,
-    "alert_reescalate_2_hours": 24.0,
-    "alert_reescalate_3_hours": 72.0,
-    "alert_reescalate_weekly_hours": 168.0,
-    "alert_flap_cooldown_hours": 6.0,
+    # --- the registry ---------------------------------------------------------------------
+    # GitHub delivers a scheduled run up to ~13.3 h late, so its keys stale at cadence + 18 h.
+    "GITHUB_DELIVERY_SLACK_S": 18 * 3_600,
 }
 
-# --- lane + per-check wall-clock budgets (W0.4) -----------------------------
-#
-# The acute lane runs under `timeout-minutes: 5`. Before W0.4 `run_checks` computed EVERY
-# result before `write_results` persisted ANY of them, so a job timeout wrote zero rows and
-# fired zero alerts — blinding db_saturation and worker_liveness at exactly the moment (DB
-# saturation) that made the checks slow in the first place. Results are now persisted as
-# each check completes, and these budgets keep one slow check from eating the lane.
-#
-# THE ACUTE LANE's budget: 120s of llm_health.yml's 300s job. The remaining 180s is
-# deliberate headroom for process start, the threshold read and alert emission.
-_LANE_BUDGET_S = 120.0
-# No single check may hold the lane for more than this. The slowest today is
-# floor_convention's cross-portal self-join, 11-35s over four measured runs (the shared
-# measure_plausibility read is ~12s), so at its worst 45s is only 1.3x the known worst
-# case — a new check above ~20s starves the tail and needs its query reworked, not a
-# wider budget.
-_CHECK_BUDGET_S = 45.0
-# Process start, threshold read and alert emission, reserved out of every job's timeout.
+# Process start and the registry projection, reserved out of the harness step's limit on top
+# of the lane budget (test_the_canary_job_fits_every_github_check_due_at_once).
 _JOB_HEADROOM_S = 180.0
-# Outside run_checks (ad-hoc use, tests) keep the historical 10-minute ceiling.
-_DEFAULT_STATEMENT_TIMEOUT_MS = 600_000
-
-
-def full_lane_budget_s(*, weekly: bool) -> float:
-    """The FULL lane owes every registered check its own budget, so no check can starve
-    another. It used to share the acute lane's 120 s: over the 15 runs to 2026-09-21, 13
-    left 7-17 of the 24 checks `not_run`. A registry that outgrows verify_pipeline.yml's
-    job timeout fails CI (test_full_lane_budget_fits_its_job) instead of going quiet."""
-    return (len(_CHECKS) + (len(_WEEKLY_CHECKS) if weekly else 0)) * _CHECK_BUDGET_S
-
-
-class _LaneBudget:
-    """Mutable per-run budget state, reset at the top of every run_checks."""
-
-    def __init__(self) -> None:
-        self.deadline: float | None = None
-        self.statement_timeout_ms: float = _DEFAULT_STATEMENT_TIMEOUT_MS
-
-    def start(self, budget_s: float) -> None:
-        self.deadline = _time.monotonic() + budget_s
-
-    def reset(self) -> None:
-        self.deadline = None
-        self.statement_timeout_ms = _DEFAULT_STATEMENT_TIMEOUT_MS
-
-    def remaining(self) -> float | None:
-        if self.deadline is None:
-            return None
-        return self.deadline - _time.monotonic()
-
-    def arm_for_check(self, check_budget_s: float) -> float | None:
-        """Give the next check the smaller of its own budget and what the lane has
-        left; returns the remaining lane seconds (None = unbudgeted)."""
-        left = self.remaining()
-        if left is None:
-            self.statement_timeout_ms = _DEFAULT_STATEMENT_TIMEOUT_MS
-            return None
-        self.statement_timeout_ms = max(1000.0, min(check_budget_s, left) * 1000.0)
-        return left
-
-
-_LANE = _LaneBudget()
-
-
-# --- pure status derivation (unit-tested without a DB) ---------------------
-
-
-def _status_for_llm_errors(
-    per_called_for: list[dict[str, Any]],
-    credit_live: bool,
-    currently_failing: bool,
-    thresholds: dict[str, Any],
-) -> tuple[str, list[str]]:
-    """Return (status, offending called_for keys), gated on LIVE state.
-
-    The old check failed on ANY credit-balance error in a trailing 24h window, so it kept
-    screaming "everything is down" for up to a day after the account was topped up (it fired
-    ~22h post-recovery on 2026-07-09). Now a red state requires the outage to be LIVE —
-    `currently_failing` = the most recent llm_call is a failure (healthy traffic since the
-    last error clears it within minutes). Credit exhaustion (`credit_live`) is the
-    unconditional fail; otherwise a called_for erroring >warn_rate over >=20 calls fails only
-    while still live."""
-    if credit_live:
-        return "fail", []
-    if not currently_failing:
-        return "ok", []
-    warn_rate = thresholds["llm_error_rate_warn"]
-    offenders = [
-        c["called_for"]
-        for c in per_called_for
-        if c["total"] >= 20 and c["total"] > 0 and c["errors"] / c["total"] > warn_rate
-    ]
-    return ("fail" if offenders else "ok"), offenders
-
-
-def _llm_live_state(
-    last_err_at: Any, last_ok_at: Any, last_credit_err_at: Any,
-) -> tuple[bool, bool]:
-    """Derive (currently_failing, credit_live) from STATE, not recency.
-
-    `currently_failing` is simply "the newest call is a failure": `last_ok_at <
-    last_err_at`. It used to additionally require the failure to be newer than a
-    90-minute window (`min_live_at`), which is wrong for a reason worth stating —
-    **silence is not recovery.** A failure is superseded only by a newer SUCCESS,
-    never by elapsed time. The producers here have circuit breakers (`toolkit/
-    vision_batch.py` stops the labelling pass on the first fatal provider error;
-    the autodedup judge lane aborts its pass the same way), so once an outage is
-    total the traffic stops, the last error ages past the window, and the check
-    reads `ok`.
-
-    Measured: OpenAI was credit-exhausted for 11 days (63,547 error rows, zero
-    successes) and `llm_errors` read `ok` for most of it, flapping `fail` -> `ok`
-    within an hour on unchanged inputs and emitting 114 alerts alternating onset with
-    a literal "Recovered: llm_errors is healthy again" for an outage that never
-    recovered. Edge-triggered alerting turns a duty-cycle sample into a siren.
-    """
-    currently_failing = bool(
-        last_err_at is not None
-        and (last_ok_at is None or last_err_at > last_ok_at)
-    )
-    credit_live = bool(
-        currently_failing
-        and last_credit_err_at is not None
-        and (last_ok_at is None or last_credit_err_at > last_ok_at)
-    )
-    return currently_failing, credit_live
-
-
-def _status_for_poller_staleness(
-    hours: float | None, warn_hours: float, fail_hours: float,
-) -> str:
-    """Age of the workflow-failure poller's cursor -> status.
-
-    `None` (no cursor row at all) is `warn`, not `fail`: it is also the legitimate
-    first-run state, and a check that is red from the moment it ships teaches the
-    operator to ignore every check.
-    """
-    if hours is None:
-        return "warn"
-    if hours > fail_hours:
-        return "fail"
-    if hours > warn_hours:
-        return "warn"
-    return "ok"
-
-
-def _status_for_burn(spend_24h: float, warn_usd: float, fail_usd: float) -> str:
-    """Credit-depletion early warning: the account has run dry repeatedly (Jul 3-10)
-    because paid burn silently outpaces manual top-ups. Balance isn't queryable via
-    API, so trailing-24h SPEND is the runway proxy: warn = top-up cadence risk, fail =
-    runaway burn worth an email before the hard gate hits.
-
-    Upper arms only — see _status_for_burn_lanes for the arm that catches the OPPOSITE
-    failure, where spend collapses to zero because nothing is succeeding."""
-    if spend_24h > fail_usd:
-        return "fail"
-    if spend_24h > warn_usd:
-        return "warn"
-    return "ok"
-
-
-def _starved_lanes(per_called_for: list[dict[str, Any]]) -> list[str]:
-    """`called_for` lanes that are trying and getting nothing: attempts but no
-    success and no spend. Evaluated PER LANE on purpose — a 24h aggregate arm is
-    defeated by a single unrelated cheap success, which is exactly what happened: one
-    `summarize_region_dispositions` call held `llm_burn_rate` at $0.01 for ~24 of 30
-    sampled hours while the only recurring lane was totally dead."""
-    return [
-        c["called_for"] for c in per_called_for
-        if c.get("attempts", 0) > 0
-        and c.get("successes", 0) == 0
-        and (c.get("spend", 0) or 0) == 0
-    ]
-
-
-def _status_for_burn_lanes(
-    per_called_for: list[dict[str, Any]],
-    spend_24h: float,
-    warn_usd: float,
-    fail_usd: float,
-) -> tuple[str, str, list[str]]:
-    """Return (status, arm, starved lanes) for llm_burn_rate.
-
-    Three arms on two different axes, because `value=0.0` is otherwise ambiguous —
-    it is the maximally healthy number AND the signature of a total outage:
-      - `starved`: some lane has attempts but zero successes and zero spend -> fail.
-        `_record_failure` writes `cost_usd=0.0`, so a total outage drives spend DOWN.
-      - `idle`: nothing was attempted at all -> ok. Every LLM producer left is
-        dispatch-driven or on demand, so silence is the normal resting state and
-        no check judges it (see the module docstring's note on llm_liveness).
-      - `runaway`/`ok`: the existing upper spend arms.
-    The arm is carried in `details.arm` so a red or green zero is legible in logs.
-    """
-    starved = _starved_lanes(per_called_for)
-    if starved:
-        return "fail", "starved", starved
-    if not any(c.get("attempts", 0) for c in per_called_for):
-        return "ok", "idle", []
-    status = _status_for_burn(spend_24h, warn_usd, fail_usd)
-    return status, ("runaway" if status != "ok" else "ok"), []
-
-
-def _status_for_long_open_txn(oldest_minutes: float, warn_minutes: float) -> str:
-    """Warn (never fail) once the oldest open transaction passes `warn_minutes`.
-
-    A long transaction is not a fault in itself — it is the one condition under which the
-    llm-cost rollup's trailing re-scan stops being self-healing, so this is an advisory
-    axis, not a gate."""
-    return "warn" if oldest_minutes > warn_minutes else "ok"
-
-
-_MIN_CRON_RUNS = 3  # ignore jobs with too few finished runs to judge a rate
-
-
-def _status_for_cron(
-    jobs: list[dict[str, Any]], fail_rate: float,
-) -> tuple[str, list[str]]:
-    """Fail (naming the offenders) when any pg_cron job's failure rate over the window
-    exceeds `fail_rate` with >= _MIN_CRON_RUNS finished runs. This is the DB-saturation
-    signal: the fleet's heaviest jobs (health-matview refresh, browse-list rebuild) tip
-    over the pooler statement_timeout en masse when the DB is overloaded, and nothing
-    watched them (the 2026-07 incident surfaced as ~8 unrelated red workflows instead)."""
-    offenders = []
-    for j in jobs:
-        finished = j["ok"] + j["failed"]
-        if finished >= _MIN_CRON_RUNS and j["failed"] / finished > fail_rate:
-            offenders.append(f"{j['jobname']} {j['failed']}/{finished}")
-    return ("fail" if offenders else "ok"), offenders
-
-
-def _status_for_property_maintenance(
-    sweep_age_hours: float | None,
-    oldest_dirty_hours: float | None,
-    thresholds: dict[str, Any],
-) -> tuple[str, list[str]]:
-    """Worst-of over the two maintenance liveness axes.
-
-    `sweep_age_hours` is the age of the stamp the last COMPLETE sweep cycle wrote
-    (app_settings.property_sweep_last_complete: one run, or two through the
-    sweep's resume cursor) —
-    None means no stamp on record, which is a warn, not a fail: it is the
-    expected state between deploying this check and the first complete sweep,
-    and permanently red would train the operator to ignore the check. A dirty
-    row aging past its axis means the incremental drain (worker lane + cron)
-    is frozen. Both axes are O(1) reads: a per-row staleness scan over 620k
-    properties measured ~3.5 min live and would blow the hourly acute lane's
-    own 5-min job timeout — recreating the silent-`cancelled` mode this check
-    exists to catch."""
-    return _status_over_age_axes(
-        [("last complete sweep", sweep_age_hours,
-          thresholds["property_sweep_warn_hours"],
-          thresholds["property_sweep_fail_hours"]),
-         ("oldest dirty-queue row", oldest_dirty_hours,
-          thresholds["property_dirty_warn_hours"],
-          thresholds["property_dirty_fail_hours"])],
-        stamp_missing=sweep_age_hours is None,
-    )
-
-
-def _status_for_broker_resolution(
-    sweep_age_hours: float | None,
-    oldest_dirty_hours: float | None,
-    thresholds: dict[str, Any],
-    *,
-    finished_age_hours: float | None = None,
-    sweep_label: str = "last complete broker sweep",
-) -> tuple[str, list[str]]:
-    """Worst-of over the three broker-resolution liveness axes (rule-20 shape).
-
-    `sweep_age_hours` is how long ago the rotation last covered the whole corpus —
-    app_settings.broker_resolution_last_complete, which the sweep stamps when a LAP
-    closes, falling back to the open lap's start so a rotation that has never closed
-    one still ages into `fail` instead of parking on the missing-stamp warn. That is
-    the axis that matters: attribution breaks out on --max-seconds and, before the
-    rotation cursor, silently re-walked the same head every day — a green exit code
-    over a permanently unattributed tail. `finished_age_hours` is the independent
-    completion axis: the lap stamp lands before the sweep's whole tail, so it says
-    nothing about whether the merges, rollups, matview and dirty-clear ever ran —
-    only broker_resolution_runs.ended_at does. `oldest_dirty_hours` watches the */10
-    incremental drain of dirty_broker_listings, which is what attributes a new or
-    re-brokered listing inside the day. A missing completion axis is skipped, never
-    a fail: only the LAP stamp's absence is the deploy-day warn."""
-    return _status_over_age_axes(
-        [(sweep_label, sweep_age_hours,
-          thresholds["broker_sweep_warn_hours"],
-          thresholds["broker_sweep_fail_hours"]),
-         ("last finished full sweep", finished_age_hours,
-          thresholds["broker_finished_warn_hours"],
-          thresholds["broker_finished_fail_hours"]),
-         ("oldest broker dirty-queue row", oldest_dirty_hours,
-          thresholds["broker_dirty_warn_hours"],
-          thresholds["broker_dirty_fail_hours"])],
-        stamp_missing=sweep_age_hours is None,
-    )
-
-
-def _status_over_age_axes(
-    axes: list[tuple[str, float | None, float, float]], *, stamp_missing: bool,
-) -> tuple[str, list[str]]:
-    """Worst-of over (label, age_hours, warn_h, fail_h) axes; a None age is skipped.
-
-    A missing completion stamp is a warn, not a fail: it is the expected state
-    between deploying a check and the first complete sweep, and permanently red
-    would train the operator to ignore the check."""
-    status = "ok"
-    offenders: list[str] = []
-    if stamp_missing:
-        status = "warn"
-        offenders.append(
-            "no complete-sweep stamp on record (first sweep since deploy "
-            "still pending, or the sweep has never completed)")
-    for name, hours, warn_h, fail_h in axes:
-        if hours is None:
-            continue
-        # :g, not :.0f — the dirty thresholds are fractional, and rounding 2.5 down
-        # to "2" renders self-contradictory offenders like "2.6h (warn > 2h)".
-        if hours > fail_h:
-            status = "fail"
-            offenders.append(f"{name} {hours:.1f}h (fail > {fail_h:g}h)")
-        elif hours > warn_h:
-            if status == "ok":
-                status = "warn"
-            offenders.append(f"{name} {hours:.1f}h (warn > {warn_h:g}h)")
-    return status, offenders
-
-
-def _status_for_worker(
-    ages: list[tuple[str, float]], stale_minutes: float,
-) -> tuple[str, list[str]]:
-    """Fail when any heartbeating worker's last beat is older than `stale_minutes`. An
-    EMPTY list is ok (no worker deployed — not this check's job to demand one); the
-    realtime worker beats ~every 30s, so 5 min = 10 missed beats = down. `worker_heartbeats`
-    is written every 30s and, until now, read by nothing — a dead worker (it owns the
-    latency-critical loops) produced no signal at all."""
-    stale = [f"{w} ({age:.0f}m)" for (w, age) in ages if age > stale_minutes]
-    return ("fail" if stale else "ok"), stale
-
-
-# --- per-m2 measure plausibility (W9) --------------------------------------
-#
-# The four checks below exist because the OTHER health surfaces cannot see the
-# defects the per-m2 program fixed. `data_quality_by_source` tests 26 fields for
-# IS NOT NULL; both defects produce 100% non-NULL values. A null-check cannot see
-# a plot area sitting in a floor-area column, and it cannot see 136 Kc sitting in
-# a price column. These read `measure_plausibility_by_source` (migration 427)
-# instead, which measures what the value IS rather than whether it exists.
-
-
-def _cell_key(cell: dict[str, Any]) -> str:
-    """Stable (source, category_main, category_type) label — also the key the
-    week-over-week baseline is stored under, so it must not change spelling."""
-    return (
-        f"{cell['source']}/{cell['category_main'] or '?'}/{cell['category_type'] or '?'}"
-    )
-
-
-_STATUS_SEVERITY: dict[str, int] = {"ok": 0, "warn": 1, "fail": 2}
-
-
-def _worst_status(*statuses: str) -> str:
-    """The most severe of several arms' statuses. A check reports the worst thing it
-    saw, never an average — an `ok` arm beside a `fail` one certifies nothing."""
-    return max(statuses, key=lambda st: _STATUS_SEVERITY.get(st, 0))
-
-
-def _status_for_share(
-    cells: list[dict[str, Any]],
-    arms: list[tuple[str, str, str, float, float | None]],
-    *,
-    min_rows: int,
-    skip_category_main: frozenset[str] = frozenset(),
-) -> tuple[str, list[str], float, int]:
-    """Worst-of a share metric over cells × arms; (status, offenders, worst, scored).
-
-    `arms` is [(label, share_key, count_key, warn, fail)] — every one of these checks
-    has two: the whole active stock, and the rows first seen in the trailing 7 days.
-    The fresh arm is the one with low detection latency (a regression is ~100% of what
-    arrived since it shipped, but only churn-fraction of the stock), the stock arm
-    is the one that indicts a defect that has been standing for months. Alarming on
-    the worse of the two is what makes the pair catch both a new regression and an
-    old one. A cell under `min_rows` on an arm is skipped on that arm, not scored
-    zero — a 12-row cell's share is noise, and treating it as clean would let a
-    small portal hide.
-
-    Each arm carries its OWN warn/fail because severity is not a property of the
-    metric but of the arm: a standing coverage gap is amber (visible, named, nobody
-    can fix it today), the SAME share among this week's arrivals is a regression that
-    shipped and is red. `fail=None` means the arm can only amber.
-
-    `scored` is the count of (cell, arm) pairs that actually produced a number, and it
-    is the whole point of the return tuple: `worst` starts at 0.0, so a corpus where
-    every arm was skipped is indistinguishable by value from a corpus that was
-    measured and clean. Callers MUST refuse to report `ok` on scored == 0."""
-    status = "ok"
-    offenders: list[str] = []
-    worst = 0.0
-    scored = 0
-    for cell in cells:
-        if cell["category_main"] in skip_category_main:
-            continue
-        for label, share_key, count_key, warn, fail in arms:
-            share, n = cell.get(share_key), cell.get(count_key)
-            if share is None or n is None or n < min_rows:
-                continue
-            scored += 1
-            worst = max(worst, float(share))
-            if fail is not None and share >= fail:
-                status = "fail"
-            elif share >= warn:
-                if status == "ok":
-                    status = "warn"
-            else:
-                continue
-            hard = fail is not None and share >= fail
-            gate = "fail" if hard else "warn"
-            offenders.append(
-                f"{_cell_key(cell)} {label} {share:.1%} of {int(n)} "
-                f"({gate} >= {fail if hard else warn:.0%})"
-            )
-    return status, offenders, worst, scored
-
-
-def _status_for_median_shift(
-    cells: list[dict[str, Any]],
-    baseline: dict[str, Any] | None,
-    history_days: float | None,
-    thresholds: dict[str, Any],
-) -> tuple[str, list[str], float]:
-    """Week-over-week move of a cell's own median area and median Kc/m2.
-
-    Compared against ITSELF a week ago, never against other portals: cross-portal
-    medians differ by up to 19x for legitimate mix reasons (idnes' rural land is
-    8.5x the peer Kc/m2 and is not a bug), so a peer arm would be permanently red
-    on land and `ostatni` while adding nothing the two direct detectors catch. What
-    this arm catches that they cannot is the NEXT basis regression, on the run after
-    it ships, in a cell nobody thought to write a detector for.
-
-    Each of the two medians is gated on its own support count in BOTH weeks — the rows
-    that actually carry that value — and never on the cell's row count, which is a
-    different and much larger number. Returns the number of comparisons actually made:
-    `worst` starts at the identity ratio 1.0, so "compared 40 cells, all stable" and
-    "compared nothing at all" are the same number and only the count separates them.
-
-    A missing baseline is `ok` for the first week after deploy — there is nothing
-    the operator could do about it and a permanent amber trains them to ignore the
-    axis — but `warn` after that, because a check that has been erroring for two
-    weeks also leaves no baseline and must not read as green."""
-    warn_ratio = float(thresholds["ppm2_median_shift_warn_ratio"])
-    fail_ratio = float(thresholds["ppm2_median_shift_fail_ratio"])
-    min_rows = int(thresholds["ppm2_median_shift_min_rows"])
-    if not baseline:
-        if history_days is not None and history_days >= 8.0:
-            return "warn", [
-                "no usable baseline in the 6-14 day window although this check has "
-                f"{history_days:.0f} days of history — it has been failing or not running"
-            ], 0.0, 0
-        return "ok", [], 0.0, 0
-
-    status = "ok"
-    offenders: list[str] = []
-    worst = 1.0
-    compared = 0
-    for cell in cells:
-        prev = baseline.get(_cell_key(cell))
-        if not isinstance(prev, dict):
-            continue
-        for label, now_key, then_key, now_n_key, then_n_key in (
-            ("median area_m2", "median_area_m2", "area", "n_area_valued", "n_area"),
-            ("median Kc/m2", "median_price_per_m2", "ppm2", "n_ppm2_valued", "n_ppm2"),
-        ):
-            now_v, then_v = cell.get(now_key), prev.get(then_key)
-            if not now_v or not then_v:
-                continue
-            # Gate each median on ITS OWN support in both weeks, never on n_active.
-            # percentile_cont ignores NULLs, so a cell's median rests only on the rows
-            # carrying that value: bezrealitky pozemek/prodej has 1 643 active rows and
-            # 9 areas, and gating it on 1 643 compares two medians-of-9 whose live
-            # spread is 17.6x — two ordinary delistings move it past the 3.0x fail and
-            # ring the bell, with no parser change anywhere. A baseline row written
-            # before the counts existed carries neither key; it is skipped rather than
-            # falling back to `n`, which would silently restore the same false gate.
-            now_n, then_n = cell.get(now_n_key), prev.get(then_n_key)
-            if now_n is None or then_n is None or now_n < min_rows or then_n < min_rows:
-                continue
-            compared += 1
-            ratio = max(float(now_v) / float(then_v), float(then_v) / float(now_v))
-            worst = max(worst, ratio)
-            if ratio >= fail_ratio:
-                status = "fail"
-            elif ratio >= warn_ratio:
-                if status == "ok":
-                    status = "warn"
-            else:
-                continue
-            gate = "fail" if ratio >= fail_ratio else "warn"
-            offenders.append(
-                f"{_cell_key(cell)} {label} {float(now_v):,.0f} vs {float(then_v):,.0f} "
-                f"a week ago ({ratio:.2f}x, {gate} >= "
-                f"{fail_ratio if gate == 'fail' else warn_ratio:g}x)"
-            )
-    return status, offenders, worst, compared
-
-
-# --- thresholds ------------------------------------------------------------
-
-
-def load_thresholds(conn: Any) -> dict[str, Any]:
-    """app_settings.pipeline_check_thresholds merged over the code defaults, so a
-    missing key (or a whole missing row) always resolves to the seeded default."""
-    merged = dict(DEFAULT_THRESHOLDS)
+
+
+# --- the registry ------------------------------------------------------------
+
+HOSTS = ("realtime-worker", "github-actions", "pg_cron")
+CLASSES = ("alarm", "gauge")
+# The Health page's sections, in its order (frontend/src/lib/healthChecks.ts SECTIONS): a new
+# domain needs a section there, or the page has nowhere to show its checks.
+DOMAINS = ("portals", "dedup", "data_quality", "platform")
+
+_GITHUB, _WORKER = "github-actions", "realtime-worker"
+_TEN_MINUTES, _HALF_HOURLY = 600, 1_800
+_HOURLY, _SIX_HOURLY, _WEEKLY = 3_600, 21_600, 604_800
+# The worker and pg_cron keep time, so a key they host reads stale after 3 cadences; GitHub's
+# keys get their cadence plus THRESHOLDS["GITHUB_DELIVERY_SLACK_S"].
+_STALE_CADENCES = 3
+# The one check that leaves the database waits on third-party round trips, not on Postgres:
+# its budget is declared beside its HEAD loop, which stops itself at it (nothing outside can
+# preempt a request).
+_OUTBOUND_BUDGET_S = PROBE_BUDGET_S
+# Parsing reads the active stock several ways: the measure view it shares with data_quality
+# through the pass memo (~12 s cold, 3.45 s warm on 10-19), the field matrix (~12 s cold, 3.7 s
+# warm) and the payload, churn and baseline reads (about 5 s together cold on 10-19: 2.1 s,
+# 2.8 s and 29 ms). Four default budgets.
+_PARSING_BUDGET_S = 4 * _CHECK_BUDGET_S
+# The push ledger's four reads touch a few hundred rows (the 24 h event window, the live devices), so 5 s; it is
+# also what keeps every worker alarm due at once inside the 500 s pass (7 x 45 + 180 + 5).
+_NOTIFICATIONS_BUDGET_S = 5.0
+
+
+@dataclass(frozen=True)
+class Check:
+    """One registered check: its body, how it is judged, where it runs and how often."""
+
+    key: str
+    fn: Callable[[Any, dict[str, Any]], dict[str, Any]]
+    domain: str
+    cls: str
+    host: str
+    cadence_s: int
+    label: str
+    unit: str = ""
+    owner_path: str = ""
+    budget_s: float = _CHECK_BUDGET_S
+
+    @property
+    def staleness_budget(self) -> _dt.timedelta:
+        """How old the newest result may grow before the page reads the key Not measured."""
+        if self.host == _GITHUB:
+            return _dt.timedelta(seconds=self.cadence_s + THRESHOLDS["GITHUB_DELIVERY_SLACK_S"])
+        return _dt.timedelta(seconds=self.cadence_s * _STALE_CADENCES)
+
+    @property
+    def due_after_s(self) -> int:
+        """How old the newest result must be before a lane measures this check again."""
+        # Spelled in the ladder, whose recovery hold is two of these intervals.
+        return _due_after_s(self.cadence_s)
+
+
+# `run_due` runs a host's due alarms first, then its due gauges, each class in this order, and
+# a check its budget does not reach (or the worker's capped pass cannot fit) stays due for the
+# next run, so the order is a priority inside each class: cheap invariants first, the expensive
+# reads late and the outbound probe last. The page's `sort` is the position here.
+CHECKS: tuple[Check, ...] = (
+    # FIRST of the gauges: 2026-09-11 21:02 lost the last seven checks to the budget, this
+    # one among them, and the invariant the location programme is measured by reads in 3.1 s
+    # with the served predicate's hidden count on 10-19 (0.62 s without it; 6.5 s whole-corpus
+    # before).
+    Check("location_town_coverage", check_location_town_coverage, "data_quality", "gauge",
+          _WORKER, _SIX_HOURLY, "Location coverage", unit="cells",
+          owner_path="/location-quality"),
+    # The worker's health lane measures these thirteen (scripts/checks/: platform, the portal checks,
+    # dedup, push notifications, then parsing and the quality gauges). GitHub keeps what needs it: migration_drift
+    # reads a checkout, the outbound probe an address that is not the scrapers'.
+    Check("jobs", check_jobs, "platform", "alarm", _WORKER, _TEN_MINUTES, "Jobs",
+          unit="cells", owner_path="/settings"),  # Settings › GitHub Actions
+    Check("capacity", check_capacity, "platform", "alarm", _WORKER, _HALF_HOURLY, "Capacity",
+          unit="cells"),
+    Check("llm", check_llm, "platform", "alarm", _WORKER, _TEN_MINUTES, "LLM providers",
+          unit="cells", owner_path="/costs"),
+    # Domain "portals" is the page's portal matrix: one column per check, one row per portal.
+    Check("scraping", check_scraping, "portals", "alarm", _WORKER, _TEN_MINUTES, "Scraping",
+          unit="cells", owner_path="/scrapers"),
+    Check("publishing", check_publishing, "portals", "alarm", _WORKER, _TEN_MINUTES,
+          "Publishing", unit="cells", owner_path="/scrapers"),
+    Check("delisting", check_delisting, "portals", "alarm", _WORKER, _TEN_MINUTES,
+          "Delisting", unit="cells", owner_path="/scrapers"),
+    Check("coverage", check_coverage, "portals", "gauge", _WORKER, _HOURLY, "Coverage",
+          unit="cells", owner_path="/scrapers"),
+    Check("dedup", check_dedup, "dedup", "alarm", _WORKER, _TEN_MINUTES, "Engine",
+          unit="cells", owner_path="/autodedup/progress"),
+    # The push ledger (notifications push W4): stall, recall, failures, and the brake shown.
+    Check("notifications", check_notifications, "platform", "alarm", _WORKER, _TEN_MINUTES,
+          "Push notifications", unit="cells", owner_path="/notifications",
+          budget_s=_NOTIFICATIONS_BUDGET_S),
+    # LAST of the worker's alarms: the expensive reads. data_quality shares its measure read
+    # through the pass memo whenever both are due in one pass.
+    Check("parsing", check_parsing, "portals", "alarm", _WORKER, _SIX_HOURLY, "Parsing",
+          unit="cells", owner_path="/scrapers", budget_s=_PARSING_BUDGET_S),
+    # Owner: the per-portal page (value quality is a portal parser's debt; no page renders it).
+    Check("data_quality", check_data_quality, "data_quality", "gauge", _WORKER, _SIX_HOURLY,
+          "Data quality", unit="cells", owner_path="/scrapers"),
+    Check("text_extraction", check_text_extraction, "data_quality", "gauge", _WORKER, _HOURLY,
+          "Description reading", unit="cells", owner_path="/costs"),
+    Check("migration_drift", check_migration_drift, "platform", "alarm", _GITHUB, _HOURLY,
+          "Migration drift", unit="files"),
+    # LAST of the alarms: the check that leaves the database, so a lane that runs out of budget
+    # drops the outbound probe before any database alarm.
+    Check("outbound_url_conformance", check_outbound_url_conformance, "data_quality", "alarm",
+          _GITHUB, _WEEKLY, "Portal links open the right page", unit="cells",
+          budget_s=_OUTBOUND_BUDGET_S),
+)
+
+
+# The hosts this harness projects: those with a Check (`project_registry` refuses any other).
+# pg_cron's registry row is the watcher's own (migration 620); projecting that host would retire it.
+_HARNESS_HOSTS = tuple(dict.fromkeys(c.host for c in CHECKS))
+
+# --- the harness ---------------------------------------------------------------
+
+# Only rows since the key's declared_at count, as for the page and the ladder: a newly registered
+# or re-declared key is due in the very run that projects it, not a cadence later.
+_DUE_SQL = """
+select k.key,
+       (select max(r.run_at) from pipeline_check_results r
+         where r.check_key = k.key
+           and r.run_at >= coalesce(h.declared_at, '-infinity'::timestamptz))
+  from unnest(%(keys)s::text[]) as k(key)
+  left join health_checks h on h.key = k.key
+"""
+
+_HEALTH_CHECKS_ROWS_SQL = """
+select key, host, cadence_s, declared_at
+  from health_checks
+ where key = any(%(keys)s::text[])
+"""
+
+_HEALTH_CHECKS_UPSERT_SQL = """
+insert into health_checks
+       (key, domain, class, host, cadence_s, staleness_budget, label, unit, owner_path,
+        sort, declared_at)
+values (%(key)s, %(domain)s, %(class)s, %(host)s, %(cadence_s)s, %(staleness_budget)s,
+        %(label)s, %(unit)s, %(owner_path)s, %(sort)s, %(declared_at)s)
+on conflict (key) do update
+   set domain = excluded.domain, class = excluded.class, host = excluded.host,
+       cadence_s = excluded.cadence_s, staleness_budget = excluded.staleness_budget,
+       label = excluded.label, unit = excluded.unit, owner_path = excluded.owner_path,
+       sort = excluded.sort, declared_at = excluded.declared_at
+"""
+
+_HEALTH_CHECKS_RETIRE_SQL = """
+delete from health_checks
+ where host = %(host)s and not (key = any(%(keys)s::text[]))
+"""
+
+
+def due_checks(conn: Any, host: str, now: _dt.datetime) -> list[Check]:
+    """This host's checks, in registry order, whose newest result since their declared_at (any
+    status) is absent or at least `due_after_s` old."""
+    mine = [c for c in CHECKS if c.host == host]
+    if not mine:
+        return []
     with conn.cursor() as cur:
-        cur.execute(
-            "SELECT value FROM app_settings WHERE key = 'pipeline_check_thresholds'"
-        )
-        row = cur.fetchone()
-    raw = row[0] if row and row[0] is not None else None
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except (TypeError, ValueError):
-            raw = None
-    if isinstance(raw, dict):
-        for k, v in raw.items():
-            if isinstance(v, (int, float)):
-                merged[k] = v
-    return merged
+        cur.execute(_DUE_SQL, {"keys": [c.key for c in mine]})
+        newest = {key: run_at for key, run_at in cur.fetchall()}
+    return [c for c in mine
+            if newest.get(c.key) is None
+            or (now - newest[c.key]).total_seconds() >= c.due_after_s]
 
 
-def _statement_timeout_clause() -> str:
-    """The `SET LOCAL statement_timeout` value for the check currently running.
-
-    Server-side enforcement is what gives a check a real wall-clock bound: the
-    connection is autocommit and shared by every check, so a Python-side timeout
-    (a thread we cannot cancel, or a signal raised mid-query) would leave the
-    connection wedged for everyone after it. Postgres cancelling its own query is
-    the only mechanism that hands the connection back clean.
-    """
-    return f"{int(_LANE.statement_timeout_ms)}ms"
-
-
-def _fetchone(conn: Any, sql: str, params: Any = None) -> tuple[Any, ...] | None:
+def project_registry(conn: Any, host: str, now: _dt.datetime) -> dict[str, int]:
+    """Upsert this host's CHECKS into health_checks; delete its rows that no Check declares."""
+    if host not in _HARNESS_HOSTS:
+        raise ValueError(f"no Check is hosted on {host!r}: its registry rows (the watcher's, "
+                         "migration 620) are not this harness's to retire")
+    declared = [(sort, c) for sort, c in enumerate(CHECKS) if c.host == host]
     with conn.transaction(), conn.cursor() as cur:
-        cur.execute(f"SET LOCAL statement_timeout = '{_statement_timeout_clause()}'")
-        cur.execute(sql, params or ())
-        return cur.fetchone()
-
-
-def _fetchall(conn: Any, sql: str, params: Any = None) -> list[tuple[Any, ...]]:
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute(f"SET LOCAL statement_timeout = '{_statement_timeout_clause()}'")
-        cur.execute(sql, params or ())
-        return cur.fetchall()
-
-
-# --- checks ----------------------------------------------------------------
-
-_LLM_ERRORS_SQL = """
-select called_for,
-       count(*) as total,
-       count(*) filter (where error is not null) as errors
-from llm_calls
-where called_at > now() - interval '24 hours'
-group by called_for
-order by total desc
-"""
-
-# Liveness, PER PROVIDER: is a provider failing RIGHT NOW? Its newest failure vs ITS newest
-# success — a success after the last error means recovered, and nothing else does. Per
-# provider because credit is one account's state: the text lane calls OpenAI up to every
-# 5 minutes, so one comparison across all providers would let those successes clear an empty
-# Anthropic account (summaries, URL parsing, condition scoring) within minutes, and one
-# Anthropic success clear an OpenAI outage. The `min_live_at` staleness column was removed
-# in W0.3: see _llm_live_state for why bounding "live" by elapsed time made a total outage
-# read `ok`.
-_LLM_PROVIDER_STATE_SQL = """
-select provider,
-       max(called_at) filter (where error is not null) as last_err_at,
-       max(called_at) filter (where error is null) as last_ok_at,
-       max(called_at) filter (where credit) as last_credit_err_at,
-       count(*) filter (where credit) as credit_errors,
-       array_agg(distinct model) filter (where credit) as credit_models,
-       array_agg(distinct called_for) filter (where credit) as credit_jobs
-  from (select provider, model, called_for, called_at, error,
-               (error ilike %s or error ilike %s) as credit
-          from llm_calls
-         where called_at > now() - interval '24 hours') calls
- group by provider
-"""
-
-# Two providers, two wordings for the same outage: OpenAI's 429 says "You have no credits
-# remaining"; Anthropic's says "credit balance". 2026-08-25: the OpenAI wording went
-# unmatched since 08-15, so health stayed green through a real 10-day outage.
-_CREDIT_ERROR_PATTERNS = ("%credit balance%", "%no credits remaining%")
-
-
-def _llm_provider_states(rows: list[tuple[Any, ...]]) -> list[dict[str, Any]]:
-    """One JSON-ready live state per provider, from _LLM_PROVIDER_STATE_SQL's rows."""
-    states: list[dict[str, Any]] = []
-    for provider, last_err, last_ok, last_credit, credit_errors, models, jobs in rows:
-        failing, credit_live = _llm_live_state(last_err, last_ok, last_credit)
-        states.append({
-            "provider": provider, "currently_failing": failing, "credit_live": credit_live,
-            "credit_errors": int(credit_errors or 0),
-            "credit_models": sorted(models or []), "credit_jobs": sorted(jobs or []),
-            "last_error_at": str(last_err) if last_err else None,
-            "last_success_at": str(last_ok) if last_ok else None,
-        })
-    return states
-
-
-def check_llm_errors(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    rows = _fetchall(conn, _LLM_ERRORS_SQL)
-    state_rows = _fetchall(conn, _LLM_PROVIDER_STATE_SQL, _CREDIT_ERROR_PATTERNS)
-    providers = _llm_provider_states(state_rows)
-    credit_errors = sum(p["credit_errors"] for p in providers)
-    dead = [p for p in providers if p["credit_live"]]
-    credit_live = bool(dead)
-    # The rate arm still reads the newest call of ANY provider; only credit is per account.
-    last_err_at = max((r[1] for r in state_rows if r[1] is not None), default=None)
-    last_ok_at = max((r[2] for r in state_rows if r[2] is not None), default=None)
-    currently_failing = _llm_live_state(last_err_at, last_ok_at, None)[0]
-
-    per_called_for: list[dict[str, Any]] = []
-    tot = err = 0
-    for (called_for, total, errors) in rows:
-        total, errors = int(total), int(errors)
-        tot += total
-        err += errors
-        per_called_for.append({
-            "called_for": called_for, "total": total, "errors": errors,
-            "rate": round(errors / total, 4) if total else 0.0,
-        })
-    overall_rate = round(err / tot, 4) if tot else 0.0
-    status, offenders = _status_for_llm_errors(
-        per_called_for, credit_live, currently_failing, thresholds,
-    )
-
-    if credit_live:
-        # Names what failed, from the rows. The fixed list it replaces named every paid job and
-        # no provider: 2026-10-02..10 that took in Anthropic's (summaries, URL parsing), though
-        # no Anthropic call had failed.
-        message = "Out of LLM credit right now — " + "; ".join(
-            f"{p['provider']}: {p['credit_errors']} credit-balance errors in 24h on "
-            f"{', '.join(p['credit_models'])} ({', '.join(p['credit_jobs'])}) and no "
-            f"successful {p['provider']} call since" for p in dead
-        ) + (". Top up that account." if len(dead) == 1 else ". Top up those accounts.")
-    elif offenders:
-        message = (
-            f"LLM error rate exceeded {thresholds['llm_error_rate_warn']:.0%} and is still "
-            f"live for: {', '.join(offenders)} (24h window, >= 20 calls) — the provider is erroring."
-        )
-    else:
-        message = f"LLM calls healthy ({overall_rate:.1%} error rate over 24h)."
-    return {
-        "check_key": "llm_errors",
-        "status": status,
-        "value": overall_rate,
-        "details": {
-            "overall_rate": overall_rate,
-            "credit_balance_errors": credit_errors,
-            "currently_failing": currently_failing,
-            "credit_live": credit_live,
-            "last_error_at": str(last_err_at) if last_err_at else None,
-            "last_success_at": str(last_ok_at) if last_ok_at else None,
-            "warn_rate": thresholds["llm_error_rate_warn"],
-            "offending_called_for": offenders,
-            "per_called_for": per_called_for,
-            "per_provider": providers,
-        },
-        "message": message,
-    }
-
-
-_LLM_BURN_SQL = """
-select coalesce(sum(cost_usd), 0) as spend_24h
-from llm_calls where called_at > now() - interval '24 hours'
-"""
-
-# Per-lane attempts / successes / spend. NOT filtered on `cost_usd > 0` — that filter is
-# precisely what made a starved lane invisible: a lane that attempts and never succeeds
-# books cost_usd=0.0 on every row and simply vanishes from a spend-ranked query.
-_LLM_BURN_BY_LANE_SQL = """
-select called_for,
-       count(*) as attempts,
-       count(*) filter (where error is null) as successes,
-       round(coalesce(sum(cost_usd), 0)::numeric, 2) as spend
-from llm_calls
-where called_at > now() - interval '24 hours'
-group by called_for order by spend desc, attempts desc
-"""
-
-
-def check_llm_burn_rate(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Credit-runway guard on TWO axes (see _status_for_burn_lanes).
-
-    Upper arms catch runaway burn. The starvation arm catches the opposite and far more
-    common failure: `_record_failure` writes `cost_usd=0.0`, so a total provider outage
-    drives 24h spend toward zero — the maximally healthy number. This check reported
-    `ok value=0.0` for the entire 11-day OpenAI outage. Evaluated per `called_for` so one
-    unrelated cheap success cannot mask a dead lane.
-    """
-    warn_usd = float(thresholds["llm_spend_24h_warn_usd"])
-    fail_usd = float(thresholds["llm_spend_24h_fail_usd"])
-    row = _fetchone(conn, _LLM_BURN_SQL)
-    spend = float(row[0]) if row and row[0] is not None else 0.0
-    per_called_for = [
-        {"called_for": str(cf), "attempts": int(a), "successes": int(s), "spend": float(c)}
-        for (cf, a, s, c) in _fetchall(conn, _LLM_BURN_BY_LANE_SQL)
-    ]
-    top = [(c["called_for"], c["spend"]) for c in per_called_for if c["spend"] > 0][:3]
-    status, arm, starved = _status_for_burn_lanes(
-        per_called_for, spend, warn_usd, fail_usd)
-    top_str = ", ".join(f"{cf} ${s:.2f}" for cf, s in top) or "none"
-
-    if arm == "starved":
-        attempts = sum(
-            c["attempts"] for c in per_called_for if c["called_for"] in starved)
-        message = (
-            f"LLM lanes are burning attempts and producing nothing: {', '.join(starved)} "
-            f"({attempts} calls in 24h, zero successes, $0.00 spent). Spend near zero here "
-            "is the SYMPTOM, not health — the provider is refusing every call (credit "
-            "exhausted, key revoked, or model access lost)."
-        )
-    elif arm == "idle":
-        message = (
-            "No LLM calls attempted in 24h — nothing to bill and nothing to judge. "
-            "Every producer is dispatch-driven or on demand, so silence is normal."
-        )
-    elif status == "fail":
-        message = (
-            f"LLM spend is ${spend:.2f} in 24h (> ${fail_usd:.0f}) — at this burn the credit "
-            f"balance drains in days; check Plans & Billing / top up or throttle. Top spenders: {top_str}."
-        )
-    elif status == "warn":
-        message = (
-            f"LLM spend is ${spend:.2f} in 24h (> ${warn_usd:.0f}) — top-up cadence risk. "
-            f"Top spenders: {top_str}."
-        )
-    else:
-        message = f"LLM spend ${spend:.2f} in 24h (top: {top_str})."
-    return {
-        "check_key": "llm_burn_rate",
-        "status": status,
-        "value": round(spend, 2),
-        "details": {
-            "spend_24h_usd": round(spend, 2), "warn_usd": warn_usd,
-            "fail_usd": fail_usd, "top_spenders": dict(top),
-            # Which arm decided this, so a red or green `value=0.0` is legible.
-            "arm": arm, "starved_called_for": starved,
-            "per_called_for": per_called_for,
-        },
-        "message": message,
-    }
-
-
-# The cursor is stored as a jsonb scalar by record_workflow_failures._write_cursor, so it
-# comes back out with #>> '{}' exactly as that module's _read_cursor does.
-_WORKFLOW_POLLER_CURSOR_SQL = """
-select extract(epoch from (now() - (value #>> '{}')::timestamptz)) / 3600.0 as age_hours
-from app_settings where key = 'workflow_failures_cursor'
-"""
-
-
-def check_workflow_poller_liveness(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Is the workflow-failure poller still polling?
-
-    `workflow_failures` cannot answer this about itself. The poller excludes its own runs
-    from the table it feeds (or one red poll would re-alarm the surface forever), so when
-    it dies the table simply stops growing — indistinguishable from a healthy week. On
-    2026-08-26 the ingest fleet was red for hours and the ops surface stayed quiet.
-
-    The liveness signal is the age of its high-water cursor in `app_settings`, which every
-    successful poll rewrites. O(1): one indexed row by primary key.
-    """
-    warn_hours = float(thresholds["workflow_poller_stale_warn_hours"])
-    fail_hours = float(thresholds["workflow_poller_stale_fail_hours"])
-    row = _fetchone(conn, _WORKFLOW_POLLER_CURSOR_SQL)
-    hours = float(row[0]) if row and row[0] is not None else None
-    status = _status_for_poller_staleness(hours, warn_hours, fail_hours)
-    if hours is None:
-        message = (
-            "The workflow-failure poller has no cursor on record — it has never completed "
-            "a poll, or the app_settings row was cleared. Until it does, nothing is "
-            "watching for red workflow runs."
-        )
-    elif status == "ok":
-        message = f"Workflow-failure poller last advanced its cursor {hours:.1f}h ago."
-    else:
-        message = (
-            f"The workflow-failure poller has not advanced its cursor in {hours:.1f}h "
-            f"(warn > {warn_hours:.0f}h, fail > {fail_hours:.0f}h) — monitor_workflow_failures.yml "
-            "is failing, disabled, or wedged. Red workflow runs are going unrecorded right "
-            "now, and the Health page's failure list is silently frozen, not empty."
-        )
-    return {
-        "check_key": "workflow_poller_liveness",
-        "status": status,
-        "value": round(hours, 2) if hours is not None else None,
-        "details": {
-            "cursor_age_hours": round(hours, 2) if hours is not None else None,
-            "warn_hours": warn_hours, "fail_hours": fail_hours,
-            "cursor_present": hours is not None,
-        },
-        "message": message,
-    }
-
-
-_LONG_OPEN_TXN_SQL = """
-select coalesce(max(extract(epoch from (now() - xact_start)) / 60.0), 0) as oldest_min
-from pg_stat_activity
-where xact_start is not null and pid <> pg_backend_pid()
-"""
-
-_LONG_OPEN_TXN_TOP_SQL = """
-select coalesce(nullif(application_name, ''), backend_type) as who,
-       coalesce(state, 'unknown') as state,
-       round((extract(epoch from (now() - xact_start)) / 60.0)::numeric, 1) as age_min
-from pg_stat_activity
-where xact_start is not null and pid <> pg_backend_pid()
-order by xact_start
-limit 3
-"""
-
-
-def check_long_open_transaction(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """The one condition under which the llm-cost rollup stops self-healing.
-
-    `llm_calls.called_at` defaults to now() = transaction START, so a call whose transaction
-    opened just before an hour boundary and committed just after it lands in an
-    already-closed hour. `refresh_llm_cost_rollups` absorbs that by fully recomputing the
-    trailing 3 hours on every tick — never a double-count, never a drop that outlives one
-    tick — but only while no transaction outlives the window. Names the oldest backends so
-    the alert says WHAT to look at; the repair, if it ever fires, is one statement:
-    `select refresh_llm_cost_rollups('-infinity');`"""
-    warn_minutes = float(thresholds["long_open_txn_warn_minutes"])
-    row = _fetchone(conn, _LONG_OPEN_TXN_SQL)
-    oldest = float(row[0]) if row and row[0] is not None else 0.0
-    top = [
-        (str(who), str(state), float(age))
-        for (who, state, age) in _fetchall(conn, _LONG_OPEN_TXN_TOP_SQL)
-    ]
-    status = _status_for_long_open_txn(oldest, warn_minutes)
-    top_str = ", ".join(f"{who} [{state}] {age:.1f}m" for who, state, age in top) or "none"
-    if status == "warn":
-        message = (
-            f"Oldest open transaction is {oldest:.1f}m (> {warn_minutes:.0f}m) — the "
-            "llm-cost rollup's 3h trailing re-scan only absorbs late arrivals shorter than "
-            "the transaction that produced them. Oldest: "
-            f"{top_str}. Repair after it clears: select refresh_llm_cost_rollups('-infinity');"
-        )
-    else:
-        message = f"Oldest open transaction {oldest:.1f}m (oldest backends: {top_str})."
-    return {
-        "check_key": "long_open_transaction",
-        "status": status,
-        "value": round(oldest, 1),
-        "details": {"oldest_minutes": round(oldest, 1), "warn_minutes": warn_minutes,
-                    "oldest_backends": [
-                        {"who": who, "state": state, "age_minutes": age}
-                        for who, state, age in top
-                    ]},
-        "message": message,
-    }
-
-
-_DB_CRON_SQL = """
-select j.jobname,
-       count(*) filter (where d.status = 'succeeded') as ok,
-       count(*) filter (where d.status = 'failed')    as failed
-from cron.job_run_details d
-join cron.job j using (jobid)
-where d.start_time > now() - interval '6 hours'
-group by j.jobname
-"""
-
-
-def check_db_saturation(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Watch pg_cron's own run ledger for the DB-saturation signature. Skips cleanly if
-    the cron schema isn't visible (e.g. a branch DB without pg_cron) rather than false-fail."""
-    fail_rate = float(thresholds["db_cron_fail_rate_fail"])
-    try:
-        rows = _fetchall(conn, _DB_CRON_SQL)
-    except Exception as exc:  # noqa: BLE001 — cron schema not readable → warn (visible), never false-fail
-        # verify connects via SUPABASE_DB_URL (postgres role, which has cron access); this
-        # path only trips if that changes to a role lacking USAGE on schema cron. warn (not
-        # ok) so the /health page shows the check is INERT rather than silently green.
-        return {
-            "check_key": "db_saturation", "status": "warn", "value": None,
-            "details": {"skipped": f"cron.job_run_details unreadable: {exc}",
-                        "fix": "GRANT USAGE ON SCHEMA cron TO service_role;"},
-            "message": ("DB-saturation check is inert — can't read pg_cron's ledger. "
-                        "Fix: GRANT USAGE ON SCHEMA cron TO service_role;"),
-        }
-    jobs = [{"jobname": jn, "ok": int(ok), "failed": int(fl)} for (jn, ok, fl) in rows]
-    status, offenders = _status_for_cron(jobs, fail_rate)
-    worst_rate = max(
-        (j["failed"] / (j["ok"] + j["failed"]) for j in jobs if j["ok"] + j["failed"] > 0),
-        default=0.0,
-    )
-    if len(offenders) >= 2:
-        message = (
-            f"{len(offenders)} pg_cron jobs failing over the last 6h (> {fail_rate:.0%}): "
-            f"{', '.join(offenders)} — the database is likely saturated (statement timeouts hitting "
-            "multiple jobs at once)."
-        )
-    elif offenders:
-        message = (
-            f"pg_cron job failing over the last 6h (> {fail_rate:.0%}): {offenders[0]} — that job "
-            "(or a query it runs) is over the statement-timeout ceiling."
-        )
-    else:
-        message = f"pg_cron healthy (worst job failure rate {worst_rate:.0%} over 6h)."
-    return {
-        "check_key": "db_saturation",
-        "status": status,
-        "value": round(worst_rate, 3),
-        "details": {"offenders": offenders, "fail_rate": fail_rate,
-                    "jobs": {j["jobname"]: {"ok": j["ok"], "failed": j["failed"]} for j in jobs}},
-        "message": message,
-    }
-
-
-_WORKER_LIVENESS_SQL = """
-select worker, extract(epoch from (now() - max(beat_at))) / 60.0 as age_min
-from worker_heartbeats
-group by worker
-"""
-
-
-def check_worker_liveness(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Watch the realtime worker's heartbeat — it owns the latency-critical loops but
-    worker_heartbeats had no reader, so a dead worker was invisible."""
-    stale_minutes = float(thresholds["worker_stale_fail_minutes"])
-    rows = _fetchall(conn, _WORKER_LIVENESS_SQL)
-    ages = [(str(w), float(age)) for (w, age) in rows if age is not None]
-    status, stale = _status_for_worker(ages, stale_minutes)
-    oldest = max((age for _, age in ages), default=0.0)
-    if stale:
-        message = (
-            f"Realtime worker heartbeat is stale (> {stale_minutes:.0f}m): {', '.join(stale)} "
-            "— the worker owns newest-first probes, the detail drain and real-time dedup; those loops are down."
-        )
-    elif not ages:
-        message = "No worker heartbeats on record (worker not deployed) — nothing to watch."
-    else:
-        message = f"Realtime worker alive (last beat {oldest:.1f}m ago)."
-    return {
-        "check_key": "worker_liveness",
-        "status": status,
-        "value": round(oldest, 2),
-        "details": {"stale_minutes": stale_minutes,
-                    "workers": {w: round(age, 2) for (w, age) in ages}},
-        "message": message,
-    }
-
-
-# One O(1) round trip: the sweep-completion stamp + the tiny dirty queue.
-# Deliberately NOT a per-row staleness scan over properties — that measured
-# ~3.5 min live (620k-row heap × listings semi-join) and would blow the hourly
-# acute lane's 5-min job timeout, taking every other acute check's rows and
-# alerts down with it.
-_PROPERTY_MAINTENANCE_SQL = """
-select
-  (select extract(epoch from (now() - (value->>'completed_at')::timestamptz)) / 3600.0
-     from app_settings where key = 'property_sweep_last_complete')
-    as sweep_age_hours,
-  (select extract(epoch from (now() - min(d.marked_at))) / 3600.0
-     from dirty_properties d) as oldest_dirty_hours,
-  (select count(*) from dirty_properties) as dirty_depth
-"""
-
-
-def check_property_maintenance(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Watch the property-stats maintenance loop (rule 20): the daily full sweep,
-    the incremental dirty drain, and the lease that serializes them. Born from the
-    2026-08-06 incident — the sweep outgrew its job timeout and died `cancelled`
-    (not `failed`) for 4 days straight while each kill's stranded lease froze every
-    maintenance lane; no check watched any of it. The sweep axis reads the
-    completion stamp the (fixed) sweep writes on complete cycles only (one run,
-    or two through its resume cursor), so ANY way
-    the sweep dies — SIGKILL, runner death, chronic budget exhaustion — surfaces
-    as a stale stamp within hours."""
-    row = _fetchone(conn, _PROPERTY_MAINTENANCE_SQL)
-    sweep_age, oldest_dirty, dirty_depth = (
-        (None, None, 0) if row is None else (
-            float(row[0]) if row[0] is not None else None,
-            float(row[1]) if row[1] is not None else None,
-            int(row[2] or 0),
-        )
-    )
-    status, offenders = _status_for_property_maintenance(
-        sweep_age, oldest_dirty, thresholds)
-    if offenders:
-        message = (
-            "Property maintenance is falling behind: " + "; ".join(offenders)
-            + " — check the daily sweep's runs (timeout kills report as "
-            "cancelled) and the maintenance lease."
-        )
-    else:
-        message = (
-            f"Property maintenance healthy (last complete sweep "
-            f"{sweep_age:.1f}h ago, dirty queue {dirty_depth})."
-        )
-    return {
-        "check_key": "property_maintenance",
-        "status": status,
-        "value": round(sweep_age, 2) if sweep_age is not None else None,
-        "details": {
-            "sweep_age_hours": sweep_age,
-            "oldest_dirty_hours": oldest_dirty,
-            "dirty_depth": dirty_depth,
-            "offenders": offenders,
-        },
-        "message": message,
-    }
-
-
-# The broker analogue of _PROPERTY_MAINTENANCE_SQL, and O(1) for the same reason:
-# a per-row scan for unattributed listings is exactly the query resolve_brokers
-# deleted from its incremental (broker_identity_id IS NULL is a permanent state for
-# ~110k listings, so it detoasted the whole raw_json corpus for ~7 stragglers).
-_BROKER_RESOLUTION_SQL = """
-select
-  (select extract(epoch from (now() - (value->>'completed_at')::timestamptz)) / 3600.0
-     from app_settings where key = 'broker_resolution_last_complete')
-    as sweep_age_hours,
-  (select extract(epoch from (now() - (value->>'lap_started_at')::timestamptz)) / 3600.0
-     from app_settings where key = 'broker_sweep_cursor') as lap_age_hours,
-  (select extract(epoch from (now() - max(r.ended_at))) / 3600.0
-     from broker_resolution_runs r where r.mode = 'full' and r.ended_at is not null)
-    as finished_age_hours,
-  (select extract(epoch from (now() - min(d.marked_at))) / 3600.0
-     from dirty_broker_listings d) as oldest_dirty_hours,
-  (select count(*) from dirty_broker_listings) as dirty_depth
-"""
-
-
-def check_broker_resolution_freshness(
-    conn: Any, thresholds: dict[str, Any],
-) -> dict[str, Any]:
-    """Watch the broker-resolution loop — the daily full sweep and the */10
-    incremental drain. Born from the 2026-08-12 E2E review: the sweep broke out of
-    attribution on its budget, wiped the whole dirty queue anyway and restarted at
-    the same low id next time, so the newest ~10% of broker-bearing listings were
-    skipped every single day — and nothing watched it, because the job still exited
-    0. The sweep axis ages the rotation's last closed LAP; before any lap has
-    closed it ages the open one, so a rotation that never gets around the corpus
-    reds instead of hiding behind a missing stamp. The lap stamp lands before the
-    sweep's 17-25 min tail, so a separate axis ages the last run that actually
-    reached ended_at — a tail that dies is invisible to the other two."""
-    row = _fetchone(conn, _BROKER_RESOLUTION_SQL)
-    stamp_age, lap_age, finished_age, oldest_dirty, dirty_depth = (
-        (None, None, None, None, 0) if row is None else (
-            float(row[0]) if row[0] is not None else None,
-            float(row[1]) if row[1] is not None else None,
-            float(row[2]) if row[2] is not None else None,
-            float(row[3]) if row[3] is not None else None,
-            int(row[4] or 0),
-        )
-    )
-    sweep_age = stamp_age if stamp_age is not None else lap_age
-    status, offenders = _status_for_broker_resolution(
-        sweep_age, oldest_dirty, thresholds, finished_age_hours=finished_age,
-        sweep_label=("last complete broker sweep" if stamp_age is not None
-                     else "open rotation lap (no lap closed yet)"))
-    if offenders:
-        message = (
-            "Broker resolution is falling behind: " + "; ".join(offenders)
-            + " — check the daily sweep's runs (a budget-truncated sweep logs "
-            "'time budget reached during attribution' and still exits 0, and a "
-            "sweep whose tail dies still stamps its lap) and "
-            "broker_resolution_lock."
-        )
-    else:
-        finished_txt = (f"{finished_age:.1f}h ago" if finished_age is not None
-                        else "none on record")
-        message = (
-            f"Broker resolution healthy (last complete sweep "
-            f"{sweep_age:.1f}h ago, last finished run {finished_txt}, "
-            f"dirty queue {dirty_depth})."
-        )
-    return {
-        "check_key": "broker_resolution_freshness",
-        "status": status,
-        "value": round(sweep_age, 2) if sweep_age is not None else None,
-        "details": {
-            "sweep_age_hours": sweep_age,
-            "stamp_age_hours": stamp_age,
-            "lap_age_hours": lap_age,
-            "finished_age_hours": finished_age,
-            "oldest_dirty_hours": oldest_dirty,
-            "dirty_depth": dirty_depth,
-            "offenders": offenders,
-        },
-        "message": message,
-    }
-
-
-# Keep every parity scan bounded so the 6-hourly run never degenerates into a seq
-# scan of 8M images rows: look only at the newest slice above the watermark. A live
-# writer gap shows up continuously, so the recent window catches it just as well as
-# a full scan would — and stays index-driven as the tables grow.
-_PARITY_ID_LOOKBACK = 200_000
-_PARITY_TS_LOOKBACK_DAYS = 7
-
-
-def _parity_carrier_sql(carrier: dict[str, Any]) -> str:
-    table, cursor = carrier["table"], carrier["cursor"]
-    if carrier.get("kind") == "ts":
-        floor = f"greatest(w.cursor_ts, now() - interval '{_PARITY_TS_LOOKBACK_DAYS} days')"
-    else:
-        floor = (
-            f"greatest(w.cursor_id, coalesce((select max({cursor}) from {table}), 0)"
-            f" - {_PARITY_ID_LOOKBACK})"
-        )
-    skip = carrier.get("skip")
-    skip_clause = f" and not ({skip})" if skip else ""
-    parts: list[str] = []
-    for legacy, new in carrier["cols"]:
-        parts.append(f"count(*) filter (where t.{legacy} is not null and t.{new} is null{skip_clause})")
-        parts.append(
-            f"count(*) filter (where t.{legacy} is not null and t.{new} is not null"
-            f" and t.{new} is distinct from"
-            f" (select l.id from listings l where l.sreality_id = t.{legacy}){skip_clause})"
-        )
-        # Once Gate-2 flips, a brand-new non-sreality-portal row carries a NULL
-        # legacy id by design — the two filters above (both anchored on
-        # `t.{legacy} is not null`) silently stop seeing it. This counts rows
-        # where the surrogate is ALSO missing despite the legacy id being absent:
-        # the one shape of gap that is still detectable with no legacy value to
-        # cross-check against (existence, not correctness — there's nothing to
-        # compare a NULL legacy id to).
-        parts.append(f"count(*) filter (where t.{legacy} is null and t.{new} is null{skip_clause})")
-    return (
-        f"select {', '.join(parts)}, count(*) "
-        f"from {table} t, dual_write_watermark w "
-        f"where w.child = '{table}' and t.{cursor} > {floor}"
-    )
-
-
-def check_dual_write_parity(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """R2 dual-write parity: every row written since the watermark that carries a
-    legacy listing id must carry the matching surrogate, and it must be the RIGHT one.
-
-    Three distinct failures, all otherwise silent: a writer nobody censused keeps
-    stamping only the legacy id (gap), a writer stamps a surrogate belonging to a
-    different listing (mismatch — what a positional zip of an unordered RETURNING
-    produces), or — once Gate-2 flips and new non-sreality-portal rows carry a NULL
-    legacy id by design — a writer stamps NEITHER id (orphan; the gap/mismatch
-    filters are both anchored on "legacy is not null" and go blind to these rows).
-    Gap detection is structural: it observes rows, not code paths, so it catches
-    writers this refactor never enumerated.
-    """
-    unarmed: list[str] = []
-    gaps: dict[str, int] = {}
-    mismatches: dict[str, int] = {}
-    orphans: dict[str, int] = {}
-    scanned: dict[str, int] = {}
-    # Which carriers are armed has to be established SEPARATELY, before counting.
-    # The per-carrier query is aggregate-only, so with no watermark row it still
-    # returns one row of zeros — indistinguishable from "clean". Reading armedness
-    # off the counts would make every unarmed carrier silently green, which is the
-    # exact failure this check exists to catch.
-    armed = {str(r[0]) for r in _fetchall(conn, "select child from dual_write_watermark")}
-    for carrier in _PARITY_CARRIERS:
-        table = carrier["table"]
-        if table not in armed:
-            unarmed.append(table)
-            continue
-        rows = _fetchall(conn, _parity_carrier_sql(carrier))
-        row = rows[0]
-        for idx, (_legacy, new) in enumerate(carrier["cols"]):
-            gap, bad, orphan = (
-                int(row[idx * 3]), int(row[idx * 3 + 1]), int(row[idx * 3 + 2]),
-            )
-            if gap:
-                gaps[f"{table}.{new}"] = gap
-            if bad:
-                mismatches[f"{table}.{new}"] = bad
-            if orphan:
-                orphans[f"{table}.{new}"] = orphan
-        scanned[table] = int(row[-1])
-
-    if gaps or mismatches or orphans:
-        status = "fail"
-        bits: list[str] = []
-        if gaps:
-            bits.append("missing surrogate on "
-                        + ", ".join(f"{k} ({v} rows)" for k, v in sorted(gaps.items())))
-        if mismatches:
-            bits.append("WRONG surrogate on "
-                        + ", ".join(f"{k} ({v} rows)" for k, v in sorted(mismatches.items())))
-        if orphans:
-            bits.append("NEITHER id on (NULL-legacy, i.e. post-flip) "
-                        + ", ".join(f"{k} ({v} rows)" for k, v in sorted(orphans.items())))
-        message = (
-            "R2 dual-write parity broken: " + "; ".join(bits) + ". A writer is not "
-            "stamping listings.id (or is stamping the wrong one) — the child FK backfill "
-            "cannot converge until it is fixed."
-        )
-    elif len(unarmed) == len(_PARITY_CARRIERS):
-        status = "warn"
-        message = (
-            "R2 dual-write parity is INERT — no carrier has a dual_write_watermark row. "
-            "Arm it after the dual-write deploy: "
-            "python -m scripts.verify_pipeline --arm-dual-write-parity"
-        )
-    elif unarmed:
-        status = "warn"
-        message = (
-            f"R2 dual-write parity is partially armed — {len(unarmed)} carrier(s) have no "
-            f"watermark and are unwatched: {', '.join(sorted(unarmed))}."
-        )
-    else:
-        status = "ok"
-        message = (
-            f"R2 dual-write parity clean across {len(_PARITY_CARRIERS)} carriers "
-            f"({sum(scanned.values())} recent rows checked)."
-        )
-    return {
-        "check_key": "dual_write_parity",
-        "status": status,
-        "value": sum(gaps.values()) + sum(mismatches.values()) + sum(orphans.values()),
-        "details": {"gaps": gaps, "mismatches": mismatches, "orphans": orphans,
-                    "unarmed": unarmed, "scanned": scanned},
-        "message": message,
-    }
-
-
-def arm_dual_write_parity(conn: Any) -> list[str]:
-    """Seed/refresh each carrier's watermark from where its cursor stands NOW.
-
-    Run once, AFTER the dual-write deploy is live. Arming late is safe (rows written
-    in between merely look like backfill work); arming before the deploy would mark
-    old-code rows as post-dual-write and alarm falsely.
-    """
-    armed: list[str] = []
-    for carrier in _PARITY_CARRIERS:
-        table, cursor = carrier["table"], carrier["cursor"]
-        legacy, new = carrier["cols"][0]
-        is_ts = carrier.get("kind") == "ts"
-        col = "cursor_ts" if is_ts else "cursor_id"
-        default = "now()" if is_ts else "0"
-        with conn.cursor() as cur:
-            cur.execute(
-                f"insert into dual_write_watermark "
-                f"(child, legacy_col, new_col, cursor_col, {col}) "
-                f"select %s, %s, %s, %s, coalesce(max({cursor}), {default}) from {table} "
-                f"on conflict (child) do update set "
-                f"{col} = excluded.{col}, legacy_col = excluded.legacy_col, "
-                f"new_col = excluded.new_col, cursor_col = excluded.cursor_col, "
-                f"armed_at = now()",
-                (table, legacy, new, cursor),
-            )
-        armed.append(table)
-    return armed
-
-
-_BROKER_SUPPRESSION_SQL = """
-select
-  (select count(*) from broker_merge_suppressions where lifted_at is null) as active,
-  (select count(*) from broker_merge_suppressions where lifted_at is not null) as lifted,
-  (select count(*) from broker_merge_suppressions s
-     join broker_identities lo on lo.id = s.identity_lo
-     join broker_identities hi on hi.id = s.identity_hi
-    where s.lifted_at is null and lo.broker_id is not null
-      and lo.broker_id = hi.broker_id) as violations
-"""
-
-
-def check_broker_merge_suppression(
-    conn: Any, thresholds: dict[str, Any],
-) -> dict[str, Any]:
-    """Assert the one invariant the suppression rail exists to hold: two identities
-    the operator separated (unmerge) or refused (dismiss) never end up under one
-    broker again while the suppression is active. The nightly sweep re-derives its
-    whole candidate set from broker_identity_contacts, so before the rail an undone
-    merge simply came back the next night; a violation here means it was bypassed —
-    a lift that should have been recorded, a merge path that skips the rail, or the
-    apply-time backstop failing. An explicit operator merge LIFTS the suppression,
-    so a legitimate override never shows up as one."""
-    row = _fetchone(conn, _BROKER_SUPPRESSION_SQL)
-    active, lifted, violations = (
-        (0, 0, 0) if row is None
-        else (int(row[0] or 0), int(row[1] or 0), int(row[2] or 0)))
-    fail_at = int(thresholds["broker_suppression_violations_fail"])
-    status = "fail" if violations >= fail_at else "ok"
-    message = (
-        f"{violations} active broker merge suppression(s) are co-located under one "
-        "broker — an operator NO was bypassed; check broker_merge_suppressions "
-        "against broker_identities.broker_id and the sweep's suppressed_pairs count."
-        if status == "fail"
-        else f"Broker merge suppressions holding ({active} active, {lifted} lifted)."
-    )
-    return {
-        "check_key": "broker_merge_suppression",
-        "status": status,
-        "value": violations,
-        "details": {"active_suppressions": active, "lifted": lifted,
-                    "violations": violations},
-        "message": message,
-    }
-
-
-_PLAUSIBILITY_COLS = (
-    "source", "category_main", "category_type", "price_per_m2_basis", "n_active",
-    "median_area_m2", "median_usable_area", "median_price_per_m2",
-    "n_floor_eligible", "floor_null_share", "n_floor_eligible_7d", "floor_null_share_7d",
-    "n_area_pairs", "area_divergence_share", "n_area_pairs_7d", "area_divergence_share_7d",
-    "n_area_valued", "n_ppm2_valued", "n_active_7d",
-    "measure_input_gap_share", "measure_input_gap_share_7d",
-    # W21 (migration 534), appended to the view in that order.
-    "n_estate_triples", "estate_sum_share",
-)
-
-_MEASURE_PLAUSIBILITY_SQL = f"""
-select {', '.join(_PLAUSIBILITY_COLS)}
-from measure_plausibility_by_source
-order by source, category_main, category_type
-"""
-
-# One read per run, shared by all four measure checks. The view is a ~12 s
-# sequential scan of 386k active listings with an external merge sort; reading it
-# four times would quadruple that for four identical answers. Cleared at the top of
-# run_checks so a long-lived process (or a test) never serves a stale corpus.
-_PLAUSIBILITY_CACHE: dict[str, Any] = {}
-
-
-def _plausibility_cells(conn: Any) -> tuple[list[dict[str, Any]], str | None]:
-    """(cells, unavailable_reason). An unreadable view is reported, never raised:
-    between merging this PR and applying migration 427 the relation does not exist
-    yet, and three red tiles reading `relation does not exist` would be indistinguishable
-    from three real defects — the db_saturation precedent."""
-    if "cells" not in _PLAUSIBILITY_CACHE:
-        try:
-            rows = _fetchall(conn, _MEASURE_PLAUSIBILITY_SQL)
-        except Exception as exc:  # noqa: BLE001 — view missing / not granted → warn, never false-fail
-            _PLAUSIBILITY_CACHE["cells"], _PLAUSIBILITY_CACHE["error"] = [], str(exc)
-        else:
-            _PLAUSIBILITY_CACHE["cells"] = [
-                {k: (float(v) if isinstance(v, (int, Decimal)) and not isinstance(v, bool) else v)
-                 for k, v in zip(_PLAUSIBILITY_COLS, row)}
-                for row in rows
-            ]
-            _PLAUSIBILITY_CACHE["error"] = None
-    return _PLAUSIBILITY_CACHE["cells"], _PLAUSIBILITY_CACHE["error"]
-
-
-def _inert_measure_check(check_key: str, reason: str | None) -> dict[str, Any]:
-    """warn, not ok: a check that cannot read its input has not certified anything."""
-    detail = (
-        f"measure_plausibility_by_source is unreadable: {reason}"
-        if reason else
-        "measure_plausibility_by_source returned no rows (no active listings, or the "
-        "view's is_platform_admin() gate is failing for this job's role — it needs a "
-        "rolbypassrls role with no JWT claims)"
-    )
-    message = (
-        f"Per-m2 plausibility check '{check_key}' is INERT — {detail}. If migration 427 "
-        "has not been applied yet, apply it."
-    )
-    return {"check_key": check_key, "status": "warn", "value": None,
-            "details": {"skipped": detail}, "message": message}
-
-
-def _unmeasured_check(check_key: str, cells: int, needed: str) -> dict[str, Any]:
-    """The other half of `_inert_measure_check`: the view answered, with rows, and not
-    one of them could be scored. `_inert_measure_check` only fires on ZERO ROWS, which
-    is the rarer accident — the live shape is rows whose measurable content is empty
-    (sreality publishes 27k active `pozemek` rows with `area_m2` NULL on every one, so
-    those cells carry no floor-eligible rows, no area pairs and no medians). Every arm
-    skips them and `worst` never leaves its initial value, so the check would report
-    `ok` with a message asserting a fact it never checked. A check that scored nothing
-    has certified nothing; `value` is None so the tile renders an em-dash rather than a
-    0 that reads as a measurement."""
-    detail = (
-        f"{cells} cell(s) read but not one has {needed} — nothing was verified"
-    )
-    return {
-        "check_key": check_key, "status": "warn", "value": None,
-        "details": {"skipped": detail, "cells_read": cells, "arms_scored": 0},
-        "message": (
-            f"Per-m2 plausibility check '{check_key}' verified NOTHING — {detail}. "
-            "This is a coverage failure, not a clean bill of health: check that the "
-            "measure's inputs are still being written."
-        ),
-    }
-
-
-def check_ppm2_basis_floor_share(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Watch the share of measurable rows the per-basis floor NULLs, per portal and
-    basis. This is the detector for the unit-price masquerade: a portal that writes a
-    per-m2 UNIT price into `price_czk` (136 Kc for a commercial rental) produces a
-    perfectly non-NULL, perfectly typed number that every presence-based health surface
-    calls healthy, and that only the floor inside `measure_price_per_m2` rejects. The
-    denominator is rows that have a price, a positive area AND a decidable basis, so a
-    portal that stops publishing prices is billed to `ppm2_measure_coverage` — the
-    coverage arm — rather than accused of bad prices here."""
-    cells, unavailable = _plausibility_cells(conn)
-    if not cells:
-        return _inert_measure_check("ppm2_basis_floor_share", unavailable)
-    warn = float(thresholds["ppm2_basis_floor_share_warn"])
-    fail = float(thresholds["ppm2_basis_floor_share_fail"])
-    min_rows = int(thresholds["ppm2_basis_floor_min_rows"])
-    status, offenders, worst, scored = _status_for_share(
-        cells,
-        [("of priced rows", "floor_null_share", "n_floor_eligible", warn, fail),
-         ("of rows first seen in 7d", "floor_null_share_7d", "n_floor_eligible_7d",
-          warn, fail)],
-        min_rows=min_rows,
-    )
-    if not scored:
-        return _unmeasured_check(
-            "ppm2_basis_floor_share", len(cells),
-            f"{min_rows}+ rows carrying a price, a positive area and a decidable basis")
-    message = (
-        f"{len(offenders)} portal/basis cell(s) lose too much of their price to the "
-        f"per-basis floor (worst {worst:.1%}): " + "; ".join(offenders[:6])
-        + " — a per-m2 unit price is being written into price_czk; check that portal's "
-        "_parse_price against scraper/price_text.is_per_area_price."
-        if offenders
-        else f"Per-basis price floor healthy (worst {worst:.1%} of priced rows NULLed "
-             f"across {scored} scored portal/basis arm(s))."
-    )
-    return {
-        "check_key": "ppm2_basis_floor_share",
-        "status": status,
-        "value": round(worst * 100, 2),
-        "details": {"worst_share": round(worst, 4), "warn": warn, "fail": fail,
-                    "min_rows": min_rows, "offenders": offenders,
-                    "cells_read": len(cells), "arms_scored": scored},
-        "message": message,
-    }
-
-
-def check_area_vs_usable_divergence(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Watch the two ways an area column can be populated and still be the wrong number.
-
-    ARM 1 — `area_m2` against `usable_area` on rows that carry both. The direct detector
-    for a portal writing the PLOT into the headline floor-area column, which no presence
-    check can see because the column is populated on every row. Measured only over rows
-    carrying both areas (a portal that publishes one field is not divergent, it is silent)
-    and only above the view's 10% material band (rounding and balcony conventions are not
-    a basis error). `pozemek` is skipped by name: under Option A `area_m2` IS the plot for
-    land, so divergence there is the correct answer, not a defect.
-
-    ARM 2 (W21, migration 534) — `estate_area` against `area_m2 + usable_area`. A SIDE
-    column can be wrong in a way arm 1 structurally cannot see: mmreality's parser read
-    the page's own `totalArea` as the parcel for years, and `totalArea` is
-    `parcelArea + usableArea` — a derived sum, not a measurement. The headline was already
-    the interior, so arm 1 said nothing; the column was populated, so the null-check said
-    nothing; and the plot came out 44-50% too large on 1 178 active houses. This arm states
-    the invariant instead of the portal: a side column must not BE the sum of the other
-    two. Land is skipped here too — `estate_area` is NULL on most land by design, so the
-    arm has nothing to score there.
-
-    The two arms carry separate thresholds and are reported separately, because 57% of
-    divergence and 2.6% of sum-shaped rows are not the same scale of evidence and one
-    `worst` over both would mislabel whichever number won. `value` is THE FAILING ARM's
-    number: a tile whose headline figure comes from the clean arm while the status comes
-    from the other one is a check reporting a fact it did not fail on."""
-    cells, unavailable = _plausibility_cells(conn)
-    if not cells:
-        return _inert_measure_check("area_vs_usable_divergence", unavailable)
-    warn = float(thresholds["area_divergence_share_warn"])
-    fail = float(thresholds["area_divergence_share_fail"])
-    min_rows = int(thresholds["area_divergence_min_rows"])
-    status, offenders, worst, scored = _status_for_share(
-        cells,
-        [("of both-area rows", "area_divergence_share", "n_area_pairs", warn, fail),
-         ("of both-area rows first seen in 7d", "area_divergence_share_7d",
-          "n_area_pairs_7d", warn, fail)],
-        min_rows=min_rows,
-        skip_category_main=frozenset({"pozemek"}),
-    )
-    sum_warn = float(thresholds["estate_sum_share_warn"])
-    sum_fail = float(thresholds["estate_sum_share_fail"])
-    sum_min_rows = int(thresholds["estate_sum_min_rows"])
-    sum_status, sum_offenders, sum_worst, sum_scored = _status_for_share(
-        cells,
-        [("of three-area rows whose estate_area IS area_m2 + usable_area",
-          "estate_sum_share", "n_estate_triples", sum_warn, sum_fail)],
-        min_rows=sum_min_rows,
-        skip_category_main=frozenset({"pozemek"}),
-    )
-    if not scored and not sum_scored:
-        return _unmeasured_check(
-            "area_vs_usable_divergence", len(cells),
-            f"{min_rows}+ non-land rows carrying BOTH area_m2 and usable_area")
-    message = (
-        f"{len(offenders)} portal/category cell(s) disagree between area_m2 and usable_area "
-        f"(worst {worst:.1%}): " + "; ".join(offenders[:6])
-        + " — area_m2 is carrying a different physical area than the headline one; check "
-        "that parser against scraper/area.derive_headline_area."
-        if offenders
-        else f"area_m2 agrees with usable_area (worst {worst:.1%} of both-area rows "
-             f"across {scored} scored portal/category arm(s))."
-    )
-    if sum_offenders:
-        # Lead with the failing arm when it is the one that decided the status.
-        if _STATUS_SEVERITY[sum_status] > _STATUS_SEVERITY[status]:
-            message = (
-                f"{len(sum_offenders)} portal/category cell(s) carry a DERIVED SUM in "
-                f"estate_area (worst {sum_worst:.1%}): " + "; ".join(sum_offenders[:6])
-                + " — that portal's parser is reading a page-computed total as the "
-                "parcel; check its areas_from_params against the page's own parcel "
-                f"label. (area_m2 vs usable_area is clean at worst {worst:.1%}.)"
-            )
-        else:
-            message += (
-                f" Also {len(sum_offenders)} cell(s) carry a DERIVED SUM in estate_area "
-                f"(worst {sum_worst:.1%}): " + "; ".join(sum_offenders[:3])
-                + " — that portal's parser is reading a page-computed total as the "
-                "parcel; check its areas_from_params against the page's own parcel label."
-            )
-    # The headline number follows the SEVERITY, not the arm order: when only the
-    # derived-sum arm is in trouble, reporting arm 1's clean 0.0% beside a `fail`
-    # status is a tile that contradicts itself.
-    overall = _worst_status(status, sum_status)
-    value = (sum_worst if _STATUS_SEVERITY[sum_status] > _STATUS_SEVERITY[status]
-             else worst)
-    return {
-        "check_key": "area_vs_usable_divergence",
-        "status": overall,
-        "value": round(value * 100, 2),
-        "details": {"worst_share": round(worst, 4), "warn": warn, "fail": fail,
-                    "value_arm": ("estate_sum"
-                                  if _STATUS_SEVERITY[sum_status] > _STATUS_SEVERITY[status]
-                                  else "area_vs_usable"),
-                    "min_rows": min_rows, "offenders": offenders,
-                    "cells_read": len(cells), "arms_scored": scored,
-                    "estate_sum_worst_share": round(sum_worst, 4),
-                    "estate_sum_warn": sum_warn, "estate_sum_fail": sum_fail,
-                    "estate_sum_min_rows": sum_min_rows,
-                    "estate_sum_offenders": sum_offenders,
-                    "estate_sum_arms_scored": sum_scored,
-                    "skipped_category_main": ["pozemek"]},
-        "message": message,
-    }
-
-
-def check_ppm2_measure_coverage(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Watch the share of active rows the measure has NO INPUT for, per portal and basis.
-
-    The other three axes are ratios over rows that HAVE the inputs, which makes every one
-    of them blind in the same direction: a cell with nothing to measure scores no arm and
-    is skipped, and a skipped arm is indistinguishable from a clean one. This is the arm
-    that looks at the denominator. Live, `sreality` carries 27 174 active `pozemek` rows
-    with `area_m2` NULL on all of them (the plot size is in `estate_area`), so four cells
-    covering ~7% of the active corpus produce no per-m2 measure at all while the other
-    three axes call them healthy — and `data_quality_by_source` cannot see it either,
-    grouping by (source, field) with no category grain (sreality `area_m2` reads 71.7%
-    populated overall).
-
-    Rows the basis FLOOR rejected are not counted here — they have their inputs and
-    `ppm2_basis_floor_share` already indicts them; billing one portal twice for one
-    defect is how an operator learns to dismiss both tiles. Cells whose basis is
-    undecidable are skipped entirely: there the absent measure is the specified answer.
-
-    Severity splits by arm, not by size. A standing gap ambers — it is real, it is named,
-    and nothing shipped today caused it. The same gap among the rows that arrived THIS
-    WEEK is a parser regression in flight and fails: that is the case where the old
-    behaviour was actively perverse, since a portal that stopped writing `area_m2` would
-    have made the divergence and floor axes go QUIET."""
-    cells, unavailable = _plausibility_cells(conn)
-    if not cells:
-        return _inert_measure_check("ppm2_measure_coverage", unavailable)
-    warn = float(thresholds["ppm2_coverage_gap_warn"])
-    fail_7d = float(thresholds["ppm2_coverage_gap_fail_7d"])
-    min_rows = int(thresholds["ppm2_coverage_min_rows"])
-    status, offenders, worst, scored = _status_for_share(
-        cells,
-        [("of active rows", "measure_input_gap_share", "n_active", warn, None),
-         ("of rows first seen in 7d", "measure_input_gap_share_7d", "n_active_7d",
-          fail_7d, fail_7d)],
-        min_rows=min_rows,
-    )
-    if not scored:
-        return _unmeasured_check(
-            "ppm2_measure_coverage", len(cells),
-            f"{min_rows}+ active rows under a decidable basis")
-    message = (
-        f"{len(offenders)} portal/basis cell(s) have no per-m2 measure to speak of "
-        f"(worst {worst:.1%} of rows with no price or no area): " + "; ".join(offenders[:6])
-        + " — the measure is undefined for this cohort; check that the portal writes "
-        "area_m2 and price_czk for it (on land area_m2 IS the plot, since W17: a land cell "
-        "that reads empty means the portal published no area, or the row predates the heal)."
-        if offenders
-        else f"The per-m2 measure resolves across the corpus (worst cell {worst:.1%} of "
-             f"rows without inputs, across {scored} scored arm(s))."
-    )
-    return {
-        "check_key": "ppm2_measure_coverage",
-        "status": status,
-        "value": round(worst * 100, 2),
-        "details": {"worst_share": round(worst, 4), "warn": warn, "fail_7d": fail_7d,
-                    "min_rows": min_rows, "offenders": offenders,
-                    "cells_read": len(cells), "arms_scored": scored},
-        "message": message,
-    }
-
-
-# The baseline is this check's OWN result row from 6-14 days ago — no new table, no new
-# DDL. verify_pipeline.yml runs every 6h, so the window holds ~32 candidates and a few
-# missed runs cost nothing. Rows whose `details` carries no `cells` object (an errored run
-# writes {"error": ...}) are skipped rather than read as an empty baseline. `history_days`
-# separates "deployed three days ago" from "has recorded no usable baseline in two weeks",
-# which must not both read as green.
-_PPM2_BASELINE_SQL = """
-select
-  (select r.details -> 'cells'
-     from pipeline_check_results r
-    where r.check_key = 'ppm2_median_shift'
-      and r.run_at < now() - interval '6 days'
-      and r.run_at > now() - interval '14 days'
-      and jsonb_typeof(r.details -> 'cells') = 'object'
-    order by r.run_at desc
-    limit 1) as baseline_cells,
-  (select extract(epoch from (now() - min(r.run_at))) / 86400.0
-     from pipeline_check_results r
-    where r.check_key = 'ppm2_median_shift') as history_days
-"""
-
-
-def check_ppm2_median_shift(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Watch each (source, category_main, category_type) cell's own median area and median
-    Kc/m2 week over week. The two direct detectors above catch the two defect shapes we
-    have already seen; this is the general net for the shape we have not — any change that
-    moves a portal's headline number without the market moving. It cannot see a defect that
-    predates its own baseline, which is exactly why it is not the mmreality detector, and it
-    WILL fire when the W2 backfill heals mmreality (6.96x on area) — an expected move, and
-    the proof the axis is live."""
-    cells, unavailable = _plausibility_cells(conn)
-    if not cells:
-        return _inert_measure_check("ppm2_median_shift", unavailable)
-    min_rows = int(thresholds["ppm2_median_shift_min_rows"])
-    row = _fetchone(conn, _PPM2_BASELINE_SQL)
-    baseline = row[0] if row and isinstance(row[0], dict) else None
-    history_days = float(row[1]) if row and row[1] is not None else None
-    status, offenders, worst, compared = _status_for_median_shift(
-        cells, baseline, history_days, thresholds)
-    # Written for the NEXT run to compare against. `n_active >= min_rows` is only a size
-    # prefilter (support can never exceed it) — the two SUPPORT counts travel with the
-    # medians so next week's run can gate each median on the rows that actually carry it
-    # in BOTH weeks. Keeps `details` a few KB.
-    snapshot = {
-        _cell_key(c): {
-            "n": int(c["n_active"]),
-            "area": round(c["median_area_m2"], 2) if c["median_area_m2"] else None,
-            "ppm2": round(c["median_price_per_m2"], 2) if c["median_price_per_m2"] else None,
-            "n_area": int(c["n_area_valued"] or 0),
-            "n_ppm2": int(c["n_ppm2_valued"] or 0),
-        }
-        for c in cells if (c["n_active"] or 0) >= min_rows
-    }
-    if offenders:
-        message = (
-            f"{len(offenders)} per-m2 median(s) moved week-over-week beyond the plausible "
-            f"band (worst {worst:.2f}x): " + "; ".join(offenders[:6])
-            + " — either a parser changed what it writes, or a backfill just ran; confirm "
-            "which before dismissing."
-        )
-    elif baseline is None:
-        message = (
-            "Per-m2 medians recorded; no week-old baseline to compare against yet (the "
-            "first comparison lands one week after this check's first run)."
-        )
-    elif not compared:
-        # A baseline exists and not one median could be matched against it. Reporting
-        # "stable" here would be the loudest lie the axis can tell: it is exactly what a
-        # regression that NULLs area_m2 or price_czk platform-wide looks like.
-        status = "warn"
-        message = (
-            f"Per-m2 medians compared NOTHING against the {len(baseline)}-cell baseline "
-            f"from a week ago: no cell has {min_rows}+ rows carrying a median in both "
-            "weeks. Nothing was verified — check the measure's inputs."
-        )
-    else:
-        message = (
-            f"Per-m2 medians stable week-over-week (worst move {worst:.2f}x across "
-            f"{compared} median(s) compared)."
-        )
-    return {
-        "check_key": "ppm2_median_shift",
-        "status": status,
-        "value": round(worst, 3) if compared else None,
-        "details": {"worst_ratio": round(worst, 3) if compared else None,
-                    "offenders": offenders, "min_rows": min_rows,
-                    "medians_compared": compared,
-                    "baseline_cells": len(baseline or {}),
-                    "history_days": round(history_days, 1) if history_days is not None else None,
-                    "cells": snapshot},
-        "message": message,
-    }
-
-
-# --- ingestion: the axis nothing watched until 2026-08-27 --------------------
-#
-# Sixteen scraper health checks existed and fifteen compared our data to our own
-# data; all of them rendered as a dot on a page nobody is required to open. So a
-# portal could ingest ZERO new listings for nine days -- sreality did, 2026-08-17
-# to 08-27, while 15,064 discovered listings sat unfetched -- without a single
-# signal leaving the database. These two checks are the push half.
-
-# Deliberately keyed on the QUEUE, not on listings.first_seen_at. A "no new rows
-# in N hours" check needs a historical baseline, and the outage itself erodes
-# that baseline: nine days of zeros makes "zero is normal" the expected value,
-# so the guard goes quiet exactly when it should scream. The oldest unclaimed
-# never-fetched row has no such feedback loop -- a healthy drain keeps it at
-# minutes whatever the portal's size, and a starved one grows without bound.
-_ACQUISITION_LAG_SQL = """
-select source,
-       count(*) as waiting,
-       max(extract(epoch from (now() - enqueued_at)) / 3600.0) as oldest_hours,
-       percentile_cont(0.5) within group (
-         order by extract(epoch from (now() - enqueued_at)) / 3600.0
-       ) as median_hours
-  from listing_detail_queue
- where priority = %s and claimed_at is null and given_up = false
- group by source
-"""
-
-
-# The floor convention, measured against another portal rather than against labels.
-#
-# `listings.floor` was a ~50/50 MIX of two Czech conventions until W8: idnes, bazos and
-# ceskereality counted the ground storey 0, the other six counted it 1, so one flat read
-# 3 from its idnes row and 4 from its sreality row in the same Browse list. Nothing in
-# the repo could see it — there was no floor check of any kind — because a wrong-by-one
-# storey is perfectly typed, perfectly non-NULL and perfectly plausible.
-#
-# The measure needs no labels and no LLM: two adverts agreeing on price, area AND
-# disposition are the same flat often enough that the MEAN of their floor difference is a
-# clean convention signal. idnes is the reference because it is the one portal whose
-# parser has always read the Czech word ("2. patro (3. NP)"). A key counts only where the
-# side holds ONE storey for it (min = max), so a repeated price/area/disposition triple
-# cannot smear the difference.
-#
-# Measured on the live cluster over ~34.7k pairs: 27.0 / 35.1 / 11.0 / 16.1 s on four
-# EXPLAIN (ANALYZE) runs across two days. It is the MOST EXPENSIVE check in the lane and
-# by far the most VARIABLE — the plan is a BitmapAnd feeding a Bitmap Heap Scan that
-# spills (57k exact + 51k lossy heap blocks, ~116k buffers, ~85 % of them `read` even on
-# a warm cluster, so it never stays cached and its cost tracks whatever else is reading
-# `listings`) — which is why it is registered LAST among the DB checks and runs
-# under the same server-side `statement_timeout` as every other check: on a bad day it is
-# cancelled and reports `warn / timed out`, which says UNKNOWN, never a false green.
-_FLOOR_CONVENTION_SQL = """
-WITH k AS MATERIALIZED (
-    SELECT source, price_czk, area_m2, disposition, min(floor) AS f
-      FROM listings
-     WHERE is_active AND category_main = 'byt' AND floor IS NOT NULL
-       AND price_czk IS NOT NULL AND area_m2 IS NOT NULL AND disposition IS NOT NULL
-     GROUP BY 1, 2, 3, 4
-    HAVING min(floor) = max(floor)
-)
-SELECT o.source, count(*) AS pairs, avg(o.f - r.f)::double precision AS mean_delta
-  FROM k o JOIN k r USING (price_czk, area_m2, disposition)
- WHERE r.source = %(reference)s AND o.source <> %(reference)s
- GROUP BY 1
-"""
-
-_FLOOR_REFERENCE = "idnes"
-
-
-def _declared_floor_convention(source: str) -> str | None:
-    """The storey scale that portal's floor cell declares, or None for a source that
-    has no contract row (a portal added to the DB before its cell exists)."""
-    portal = attribute_contract.CONTRACT.get(source)
-    return portal["floor"].convention if portal else None
-
-
-def check_floor_convention(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Is every portal's `floor` on the SAME storey scale (ground = 0)?"""
-    # `_fetchall`, not a bare cursor: it is the only thing that emits the per-check
-    # `SET LOCAL statement_timeout`, and this is the one query in the lane expensive
-    # enough to need it (the cheap counter reads elsewhere can afford a raw cursor).
-    rows = _fetchall(conn, _FLOOR_CONVENTION_SQL, {"reference": _FLOOR_REFERENCE})
-
-    warn = float(thresholds["floor_convention_delta_warn"])
-    fail = float(thresholds["floor_convention_delta_fail"])
-    min_pairs = int(thresholds["floor_convention_min_pairs"])
-
-    per_source: dict[str, Any] = {}
-    offenders: list[str] = []
-    scale_offenders: list[str] = []
-    status = "ok"
-    worst = 0.0
-    scored = 0
-    for source, pairs, mean_delta in rows:
-        delta = float(mean_delta)
-        per_source[source] = {"pairs": int(pairs), "mean_delta": round(delta, 3)}
-        if int(pairs) < min_pairs:
-            continue
-        scored += 1
-        worst = max(worst, abs(delta))
-        if abs(delta) >= fail:
-            status = "fail"
-        elif abs(delta) >= warn and status != "fail":
-            status = "warn"
-        if abs(delta) >= warn:
-            offenders.append(f"{source} {delta:+.2f} ({pairs} pairs)")
-            scale_offenders.append(source)
-
-    if not scored:
-        # Rows without a scored arm certify nothing; `value` stays None so the tile
-        # shows an em-dash rather than a 0 that reads as agreement.
-        return {
-            "check_key": "floor_convention", "status": "warn", "value": None,
-            "details": {"skipped": f"no portal reached {min_pairs} sibling pairs",
-                        "per_source": per_source},
-            "message": (
-                "Floor-convention check verified NOTHING — no portal reached "
-                f"{min_pairs} sibling pairs against {_FLOOR_REFERENCE}. That is a "
-                "coverage failure, not a clean bill of health."),
-        }
-
-    if offenders:
-        # The runbook only applies to a portal whose contract cell says `ground1` — the
-        # heal is that conversion. Telling the operator to re-derive ceskereality (cell
-        # `ground0`) would shift 34,363 CORRECT rows down one storey, which is exactly
-        # what W8 and its hand-over forbid, so the two cases get different sentences.
-        convertible = [s for s in scale_offenders
-                       if _declared_floor_convention(s) == "ground1"]
-        remedy = (
-            "Heal it per docs/design/field-capture/handover-autodedup-floor.md §7 "
-            "(`python -m scripts.reparse --source <portal> --fields floor --write "
-            "--allow-snapshot-deferral`; the bare command is a dry run and `floor` is "
-            f"hashed): {', '.join(convertible)}."
-            if convertible else
-            "None of them declares `ground1`, so re-deriving is NOT the remedy — the "
-            "reading itself moved. Check that portal's parser and contract cell first."
-        )
-        message = (
-            f"{len(offenders)} portal(s) are on a different storey scale than "
-            f"{_FLOOR_REFERENCE} (worst {worst:.2f} storeys): " + "; ".join(offenders)
-            + " — a mean near +1 is the ground=1 reading. " + remedy
-        )
-    else:
-        message = (f"Every portal reads the same storey scale as {_FLOOR_REFERENCE} "
-                   f"(worst |mean| {worst:.2f} across {scored} scored portals).")
-    return {
-        "check_key": "floor_convention",
-        "status": status,
-        "value": round(worst, 3),
-        "details": {"per_source": per_source, "offenders": offenders,
-                    "reference": _FLOOR_REFERENCE, "warn": warn, "fail": fail,
-                    "min_pairs": min_pairs, "scored": scored},
-        "message": message,
-    }
-
-
-def check_acquisition_lag(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """How long a DISCOVERED but never-fetched listing has been waiting, per portal."""
-    with conn.cursor() as cur:
-        cur.execute(_ACQUISITION_LAG_SQL, (QUEUE_PRIORITY_NEW,))
-        rows = cur.fetchall()
-
-    warn_h = thresholds["acquisition_lag_warn_hours"]
-    fail_h = thresholds["acquisition_lag_fail_hours"]
-    per_source: dict[str, Any] = {}
-    offenders: list[str] = []
-    status = "ok"
-    worst = 0.0
-    for source, waiting, oldest_hours, median_hours in rows:
-        oldest = float(oldest_hours or 0.0)
-        per_source[source] = {
-            "waiting": int(waiting),
-            "oldest_hours": round(oldest, 2),
-            "median_hours": round(float(median_hours or 0.0), 2),
-        }
-        worst = max(worst, oldest)
-        if oldest >= fail_h:
-            status = "fail"
-            offenders.append(f"{source} {oldest:.1f}h ({waiting} waiting)")
-        elif oldest >= warn_h:
-            if status != "fail":
-                status = "warn"
-            offenders.append(f"{source} {oldest:.1f}h ({waiting} waiting)")
-
-    if offenders:
-        message = (
-            "New listings are queued but not being fetched: " + "; ".join(offenders)
-            + " -- the drain is not reaching its acquisition class. Check the detail-drain "
-            "runs and the realtime worker's drain lane."
-        )
-    else:
-        message = (
-            f"Acquisition healthy (oldest never-fetched listing {worst:.1f}h across "
-            f"{len(per_source)} portals)."
-        )
-    return {
-        "check_key": "acquisition_lag",
-        "status": status,
-        "value": round(worst, 2),
-        "details": {"per_source": per_source, "offenders": offenders},
-        "message": message,
-    }
-
-
-# The R8 invariant, and a literal twin of check_acquisition_lag above for the same reason
-# its docstring gives: a "nothing extracted in N hours" alarm needs a baseline the outage
-# itself erodes, while the oldest UN-EXTRACTED row grows without bound and cannot be
-# normalised away. The outage this replaces is the reason the program exists — the deleted
-# enrichment lane selected 223 of 50,205 bazos rows for two months while llm_liveness read
-# a global max(called_at), llm_burn_rate's starvation arm needed attempts > 0 and
-# worker_lane_stall read only in_flight_s. Every one of those is blind to a lane that
-# selects nothing, so this check reads the lane's OWN eligibility predicate
-# (`description_extraction.ELIGIBLE_LAG_SQL`, built from `_eligible_where`) and never
-# re-spells it: a re-spelling would recreate exactly the blindness it exists to end.
-# How stale the oldest eligible row must be before "the lane claimed 0 last pass" is read
-# as a wedge rather than as a quiet minute: 12 of the lane's own 5-minute intervals.
-_TEXT_EXTRACT_WEDGE_HOURS = 1.0
-
-_TEXT_EXTRACT_LANE_SQL = """
-select details -> 'text_extract' as lane,
-       extract(epoch from (now() - beat_at)) / 60.0 as beat_age_minutes
-  from worker_heartbeats where worker = 'realtime-worker'
-"""
-
-
-def check_text_extraction_lag(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """How long a listing the text lane has not read has been waiting, per portal."""
-    from toolkit import description_extraction as text_lane
-
-    model = text_lane.resolve_model(conn)
-    scope = text_lane.lane_scope(conn)
-    if not scope or model is None:
-        # Not a failure and not a silence: no open gate and no `llm_text` entry IS the
-        # lane being off, and it is reported as that rather than as health.
-        return {
-            "check_key": "text_extraction_lag", "status": "ok", "value": 0,
-            "details": {"scope": {k: list(v) for k, v in scope.items()},
-                        "model": model},
-            "message": (
-                "The text lane has nothing open to it"
-                + ("" if scope else
-                   " (no open contract gate and no `llm_text` entry — the lane reads "
-                   "nothing and spends nothing)")
-                + ("" if model else f"; app_settings.{text_lane.MODEL_SETTING} is unset")
-                + " — no listing is eligible and none is waiting."
-            ),
-        }
-    version = text_lane.extractor_version(model)
-    with conn.cursor() as cur:
-        cur.execute(text_lane.ELIGIBLE_LAG_SQL, {"version": version})
-        rows = cur.fetchall()
-        cur.execute(text_lane.EXTRACTION_LATENCY_SQL)
-        latency = cur.fetchone()
-        cur.execute(_TEXT_EXTRACT_LANE_SQL)
-        beat = cur.fetchone()
-
-    warn_h = thresholds["text_extraction_lag_warn_hours"]
-    fail_h = thresholds["text_extraction_lag_fail_hours"]
-    per_source: dict[str, Any] = {}
-    offenders: list[str] = []
-    status = "ok"
-    worst = 0.0
-    waiting_total = 0
-    for source, waiting, oldest_hours, median_hours in rows:
-        oldest = float(oldest_hours or 0.0)
-        waiting_total += int(waiting)
-        per_source[source] = {
-            "waiting": int(waiting),
-            "oldest_hours": round(oldest, 2),
-            "median_hours": round(float(median_hours or 0.0), 2),
-        }
-        worst = max(worst, oldest)
-        if oldest >= fail_h:
-            status = "fail"
-            offenders.append(f"{source} {oldest:.1f}h ({waiting} waiting)")
-        elif oldest >= warn_h:
-            if status != "fail":
-                status = "warn"
-            offenders.append(f"{source} {oldest:.1f}h ({waiting} waiting)")
-
-    # The wedge arm, and the one the thresholds cannot see: rows ARE eligible and the lane
-    # is claiming none of them. Either it never registered (the estimation lane's fate —
-    # absent from the heartbeat entirely, therefore invisible to every other monitor) or
-    # it is running and selecting nothing, which is the 2026-07 outage exactly.
-    lane = beat[0] if beat else None
-    lane_last = (lane or {}).get("last") or {}
-    claimed = int(lane_last.get("claimed") or 0)
-    # `claimed` is the LAST pass only, and bazos arrives in bursts (1,940 rows a day over
-    # ~147 distinct minutes), so a great many healthy 5-minute passes legitimately claim
-    # nothing. Reading that as a wedge would make this a false-red generator — the exact
-    # thing this file's docstring says it is here to replace. The durable form of the same
-    # signal is the OLDEST eligible row: a lane that is claiming will always have taken
-    # everything older than a few of its own intervals.
-    wedged = waiting_total > 0 and (
-        lane is None or (claimed == 0 and worst > _TEXT_EXTRACT_WEDGE_HOURS))
-    if wedged:
-        status = "fail"
-        offenders.append(
-            f"{waiting_total} eligible and the lane claimed "
-            + ("nothing — it is not in the heartbeat at all" if lane is None
-               else f"{claimed} on its last pass")
-        )
-    # The abort arm, needing neither an old row nor `claimed == 0`: the provider stopped the
-    # last pass (credit, quota, key) and will stop the next alike. 2026-10-02..10 the lane
-    # claimed 500 a pass and wrote nothing: the wedge arm never fired, and the check blamed
-    # backlog age, never the provider. (Its "Recovered" flaps then were its own statement
-    # timeouts, which never reach this arm.)
-    fatal = " ".join(str(lane_last.get("fatal") or "").split())[:200]
-    if fatal:
-        status = "fail"
-        offenders.insert(0, f"the provider stopped the lane's last pass ({fatal})")
-
-    p99 = float(latency[1]) if latency and latency[1] is not None else None
-    if offenders:
-        message = (
-            "Prose facts are not being extracted: " + "; ".join(offenders)
-            + (f" — the provider refused {lane_last.get('model') or model}: fix that "
-               f"account's credit or quota (app_settings.{text_lane.MODEL_SETTING} picks the "
-               "model) or, for a key error, OPENAI_API_KEY on the realtime worker's Railway "
-               "service." if fatal else
-               " — check the realtime worker's text_extract lane and OPENAI_API_KEY on "
-               "that Railway service.")
-        )
-    else:
-        message = (
-            f"Text extraction healthy (oldest unread advert {worst:.1f}h across "
-            f"{len(per_source)} portal(s), {waiting_total} waiting"
-            + (f", p99 {p99:.1f} min from first_seen_at against a "
-               f"{text_lane.SLO_MINUTES} min SLO" if p99 is not None else "")
-            + ")."
-        )
-    return {
-        "check_key": "text_extraction_lag",
-        "status": status,
-        "value": round(worst, 2),
-        "details": {
-            "per_source": per_source,
-            "offenders": offenders,
-            "waiting_total": waiting_total,
-            "model": model,
-            "extractor_version": version,
-            "scope": {k: list(v) for k, v in scope.items()},
-            "lane_last": lane_last or None,
-            "beat_age_minutes": round(float(beat[1]), 1) if beat and beat[1] else None,
-            # Reported, never a threshold of its own — the lag arms above are what ring.
-            "p99_minutes_from_first_seen": round(p99, 1) if p99 is not None else None,
-            "slo_minutes": text_lane.SLO_MINUTES,
-            "extractions_24h": int(latency[0]) if latency else 0,
-        },
-        "message": message,
-    }
-
-
-# The one comparison the platform makes against EXTERNAL truth: what the portal
-# says it has vs what the walk collected. It was already being recorded per
-# category in scrape_runs.by_category and read by nothing that can raise an alarm.
-#
-# `max_categories` is the portal's own recent best rather than portals.categories:
-# that registry row is stale for sreality (6 pairs on record, 20 walked in code),
-# so config would false-fire. Self-baselining also makes a TRUNCATED walk visible
-# -- categories a budget-stopped run never reached leave no by_category entry at
-# all, which otherwise makes the coverage number look BETTER by shrinking the
-# population it averages over.
-_WALK_COVERAGE_SQL = """
-with latest as (
-  select distinct on (source) source, started_at, by_category
-    from scrape_runs
-   where run_type = 'index' and ended_at is not null and by_category is not null
-     and started_at > now() - interval '48 hours'
-   order by source, started_at desc
-),
-best as (
-  select source, max(jsonb_array_length(by_category)) as max_categories
-    from scrape_runs
-   where run_type = 'index' and ended_at is not null and by_category is not null
-     and started_at > now() - interval '7 days'
-   group by source
-)
-select l.source,
-       jsonb_array_length(l.by_category) as categories_walked,
-       b.max_categories,
-       extract(epoch from (now() - l.started_at)) / 3600.0 as age_hours,
-       sum((c->>'collected')::bigint) filter (
-         where (c->>'sreality_result_size') is not null) as collected,
-       sum((c->>'sreality_result_size')::bigint) filter (
-         where (c->>'sreality_result_size') is not null) as portal_total,
-       count(*) filter (where (c->>'walk_reached_end')::boolean) as nominating
-  from latest l
-  join best b on b.source = l.source
-  left join lateral jsonb_array_elements(l.by_category) c on true
- group by l.source, l.by_category, l.started_at, b.max_categories
-"""
-
-# These portals derive their "advertised total" as len(seen) -- the number they
-# just collected -- so their gap is 0% BY CONSTRUCTION and proves nothing.
-# Reporting them as 100% covered would be the worst kind of green: a number that
-# cannot be wrong is not a measurement. (mmreality used to sit here too; since the
-# 2026-09 per-type split every mmreality category declares its own count, so it is
-# measured like the rest and only falls to `verifiable: false` if a walk records
-# no total at all.)
-_SELF_CERTIFYING_TOTALS = frozenset({"remax", "maxima"})
-
-
-def check_walk_coverage(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Collected vs portal-advertised inventory on the most recent index walk.
-
-    Since 2026-09-08 the count no longer gates nomination (rule #3), so this is the
-    standing rail on it. `categories_nominating` is reported beside the gap — the
-    count of categories whose walk reached the portal's end — but never changes the
-    status: a walk can legitimately reach the end and still be short. A category that
-    keeps NOT reaching it is `walk_end_streak`'s to ring."""
-    with conn.cursor() as cur:
-        cur.execute(_WALK_COVERAGE_SQL)
-        rows = cur.fetchall()
-
-    warn_gap = thresholds["walk_coverage_warn_gap"]
-    fail_gap = thresholds["walk_coverage_fail_gap"]
-    per_source: dict[str, Any] = {}
-    offenders: list[str] = []
-    unverified: list[str] = []
-    status = "ok"
-    worst = 0.0
-    for source, walked, max_cats, age_hours, collected, portal_total, nominating in rows:
-        entry: dict[str, Any] = {
-            "categories_walked": int(walked),
-            "categories_nominating": int(nominating or 0),
-            "categories_best_7d": int(max_cats or 0),
-            "age_hours": round(float(age_hours or 0.0), 2),
-            "collected": int(collected or 0),
-            "portal_total": int(portal_total) if portal_total is not None else None,
-        }
-        if int(walked) < int(max_cats or 0):
-            entry["truncated"] = True
-            offenders.append(
-                f"{source} walked {walked}/{max_cats} categories (truncated run)"
-            )
-            status = "fail" if status == "fail" else "warn"
-        if source in _SELF_CERTIFYING_TOTALS or not portal_total:
-            entry["gap_pct"] = None
-            entry["verifiable"] = False
-            unverified.append(source)
-        else:
-            gap = max(0.0, (float(portal_total) - float(collected or 0)) / float(portal_total))
-            entry["gap_pct"] = round(gap * 100, 2)
-            entry["verifiable"] = True
-            worst = max(worst, gap)
-            if gap >= fail_gap:
-                status = "fail"
-                offenders.append(f"{source} missing {gap * 100:.1f}% of its inventory")
-            elif gap >= warn_gap:
-                if status != "fail":
-                    status = "warn"
-                offenders.append(f"{source} missing {gap * 100:.1f}% of its inventory")
-        per_source[source] = entry
-
-    if offenders:
-        message = "Index walks are under-collecting: " + "; ".join(offenders) + "."
-    else:
-        message = (
-            f"Walk coverage healthy (worst verifiable gap {worst * 100:.1f}%; "
-            f"{len(unverified)} portal(s) cannot be verified: {', '.join(sorted(unverified)) or 'none'})."
-        )
-    return {
-        "check_key": "walk_coverage",
-        "status": status,
-        "value": round(worst * 100, 2),
-        "details": {"per_source": per_source, "offenders": offenders,
-                    "unverified": sorted(unverified)},
-        "message": message,
-    }
-
-
-# One row per (index run, category) over the window: did that walk reach the portal's
-# end? Two descriptors behind one label count as reached only if every one the run
-# WALKED did, so a run that stops between them reads the label as reached (a known
-# blind spot). A run that never started the category has no row: its streak skips
-# that run, and the cell counts its portal's walks since it was last walked instead
-# (`runs_since_walked`). The streak is counted in Python (`_walk_end_streaks`): a
-# gaps-and-islands window query would be harder to read than the loop, and the rows
-# are few (one per category per finished walk, nine portals, 14 days).
-_WALK_END_WINDOW_DAYS = 14
-_WALK_END_STREAK_SQL = """
-select r.id,
-       r.source,
-       r.started_at,
-       c->>'category_main' as category_main,
-       c->>'category_type' as category_type,
-       bool_and((c->>'walk_reached_end')::boolean) as reached_end
-  from scrape_runs r
-  cross join lateral jsonb_array_elements(
-         case when jsonb_typeof(r.by_category) = 'array' then r.by_category end) c
- where r.run_type = 'index'
-   and r.ended_at is not null
-   and r.started_at > now() - make_interval(days => %(days)s)
- group by r.id, r.source, r.started_at, c->>'category_main', c->>'category_type'
-"""
-
-
-def _utc_minute(ts: Any) -> str | None:
-    """A timestamp as 'YYYY-MM-DD HH:MM UTC' for operator-facing text."""
-    if ts is None:
-        return None
-    if isinstance(ts, _dt.datetime):
-        if ts.tzinfo is not None:
-            ts = ts.astimezone(_dt.timezone.utc)
-        return ts.strftime("%Y-%m-%d %H:%M UTC")
-    return str(ts)
-
-
-def _walk_end_streaks(rows: list[tuple[Any, ...]]) -> list[dict[str, Any]]:
-    """Per (source, category_main, category_type): walks since it last reached the end
-    (a NULL verdict is neither), and its portal's walks since it was last walked."""
-    by_cell: dict[tuple[Any, Any, Any], list[tuple[Any, Any, Any]]] = {}
-    source_runs: dict[Any, set[tuple[Any, Any]]] = {}
-    for run_id, source, started_at, cm, ct, reached in rows:
-        by_cell.setdefault((source, cm, ct), []).append((started_at, run_id, reached))
-        source_runs.setdefault(source, set()).add((started_at, run_id))
-    cells: list[dict[str, Any]] = []
-    for (source, cm, ct), runs in by_cell.items():
-        runs.sort(key=lambda r: (r[0], r[1]), reverse=True)
-        streak = walks = 0
-        last_end = None
-        for started_at, _run_id, reached in runs:
-            if reached is None:
-                continue
-            walks += 1
-            if last_end is not None:
-                continue
-            if reached:
-                last_end = started_at
-            else:
-                streak += 1
-        last_walked = runs[0][:2]
-        cells.append({
-            "source": source, "category_main": cm, "category_type": ct,
-            "streak": streak, "walks": walks,
-            "runs_since_walked": sum(1 for r in source_runs[source] if r > last_walked),
-            "last_walked_at": _utc_minute(runs[0][0]),
-            "last_reached_end_at": _utc_minute(last_end),
-        })
-    return cells
-
-
-def _walk_end_offender(c: dict[str, Any], fail: int) -> str:
-    label = f"{c['source']} {c['category_main'] or '*'}/{c['category_type'] or '*'}"
-    if c["runs_since_walked"] >= fail:
-        return (f"{label} not walked since {c['last_walked_at']} "
-                f"({c['runs_since_walked']} {c['source']} walks since)")
-    if c["last_reached_end_at"] is None:
-        return (f"{label} not at the portal's end for at least {c['streak']} walks "
-                f"(not reached in {_WALK_END_WINDOW_DAYS} d)")
-    return (f"{label} not at the portal's end for {c['streak']} walks "
-            f"(last reached {c['last_reached_end_at']})")
-
-
-def check_walk_end_streak(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Walks in a row each category was walked and did not reach the portal's end."""
-    rows = _fetchall(conn, _WALK_END_STREAK_SQL, {"days": _WALK_END_WINDOW_DAYS})
-    warn = int(thresholds["walk_end_streak_warn"])
-    fail = int(thresholds["walk_end_streak_fail"])
-    cells = _walk_end_streaks(rows)
-    for c in cells:
-        # A category its portal has not walked for `fail` of its own walks is starved or
-        # gone from the config: amber, never the bell, so a retired one cannot hold the
-        # check red until it ages out of the window.
-        c["status"] = (
-            "warn" if c["runs_since_walked"] >= fail
-            else "fail" if c["streak"] >= fail
-            else "warn" if c["streak"] >= warn
-            else "ok"
-        )
-    cells.sort(key=lambda c: (-_STATUS_SEVERITY[c["status"]], -c["streak"],
-                              -c["runs_since_walked"], c["source"] or "",
-                              c["category_main"] or "", c["category_type"] or ""))
-    scored = [c for c in cells if c["walks"]]
-    offenders = [_walk_end_offender(c, fail) for c in cells if c["status"] != "ok"]
-    details: dict[str, Any] = {
-        "per_category": cells, "offenders": offenders,
-        "warn": warn, "fail": fail, "window_days": _WALK_END_WINDOW_DAYS,
-    }
-    if not scored:
-        details["skipped"] = "no walk in the window carried a verdict — nothing was verified"
-        return {
-            "check_key": "walk_end_streak",
-            "status": "warn",
-            "value": None,
-            "details": details,
-            "message": (
-                f"walk_end_streak measured nothing: no finished index walk in the last "
-                f"{_WALK_END_WINDOW_DAYS} days carried a walk_reached_end verdict "
-                f"({len(cells)} categories read). Either no portal finished an index walk "
-                "in that window or portal_runner stopped writing walk_reached_end into "
-                "scrape_runs.by_category. No alerting check here judges index-walk "
-                "liveness, so read scrape_runs directly."
-            ),
-        }
-
-    worst = max((c["streak"] for c in scored if c["runs_since_walked"] < fail), default=0)
-    status = _worst_status("ok", *(c["status"] for c in cells))
-    if offenders:
-        unwalked = any(c["runs_since_walked"] >= fail for c in cells)
-        message = (
-            "Categories are not reaching the portal's end: "
-            + "; ".join(offenders[:6])
-            + (f" (+{len(offenders) - 6} more)" if len(offenders) > 6 else "")
-            + ". A walk that stops short of the end, or never starts the category, "
-            "nominates nothing for delisting (rule #3), so the category's gone ads stay "
-            "active and its stock drifts above the portal's own count. The index-walk log "
-            "names the stop: the category's 'VERIFY skipped' line, and the portal's "
-            "SLICE / DESCENT / COVERAGE lines for which slice it was."
-            + (" A category its portal no longer walks may instead have left the "
-               "portal's config." if unwalked else "")
-        )
-    else:
-        message = (
-            f"No category has missed the portal's end for {warn} walks in a row (worst "
-            f"{worst}; {len(scored)} categories scored in {_WALK_END_WINDOW_DAYS} days)."
-        )
-    return {
-        "check_key": "walk_end_streak",
-        "status": status,
-        "value": worst,
-        "details": details,
-        "message": message,
-    }
-
-
-# --- what every portal STATES vs what we STORED (field capture W1) ----------
-#
-# `data_quality_by_source` tests 26 fields for IS NOT NULL and nothing else, so it
-# cannot see the defect class this program exists to fix: a value that is present and
-# outside every canonical option list (13 live `condition` spellings against a filter
-# list of 6), or a cell that has read 0.0% since the parser was written because it
-# reads a key the portal never emits (remax `balkon`, ceskereality `vybavení`). This
-# check measures BOTH halves per (source, field), against a blessed baseline in
-# `data/field_capture/` rather than against a threshold tuned per cell.
-#
-# The two instruments read the SAME cohort (every active row) on purpose, so they can
-# never report two different fill rates for one cell. Who owns what: the view keeps the
-# seven probes with no `listings` column of their own (`geom`, `locality`, `street`,
-# `property_grouped`, the two condition levels, `source_url`); this check owns the 26
-# LISTING_COLUMNS attributes; the 19 they share are the view's to lose in a later wave.
-#
-# It carries no `pipeline_check_thresholds` entries on purpose: its numbers are sized
-# against the measured drift of that cohort (the arithmetic is in `scraper.field_census`),
-# and the field-capture program adds no settings.
-
-
-def check_field_fill_matrix(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Per (source, field): did fill COLLAPSE, or did off-canon validity get WORSE?
-
-    Both arms are relative to the blessed baseline, never to an absolute floor, because
-    a floor cannot see either live shape: a cell that is legitimately 0% (remax has no
-    balcony key to read) or a partial break (ceskereality's `furnished` key mismatch
-    would sit at ~2.5%, not 0%). The baseline records today's zeros and today's off-canon
-    values as KNOWN, so day one is green and still says them out loud.
-
-    A blessed cell the live matrix no longer produces is an offender of its own — the
-    denominator arm the ppm2 checks learned to carry, because the spine comes from
-    `portals.is_enabled` and from a source HAVING active rows, so the loudest possible
-    failure (a portal stops writing everything) would otherwise subtract itself from the
-    measurement and read as health.
-
-    Third arm, free of SQL: the checked-in per-portal key census going stale. A portal
-    that renames a key leaves the census — and every contract gate W2 will build on it —
-    agreeing with itself about a key space that no longer exists. That is a warn here,
-    deliberately not a CI test: a test keyed on the calendar reds `main` on a date rather
-    than on a defect."""
-    now = _dt.datetime.now(_dt.timezone.utc)
-    rows = _fetchall(conn, field_census.FIELD_MATRIX_SQL)
-    live = field_census.reduce_matrix(rows, generated_at=now)
-    baseline = field_census.load_baseline()
-    fails, warns = field_census.compare_to_baseline(
-        live, baseline, inert=attribute_contract.inert_cells())
-    stale = field_census.stale_censuses(field_census.load_censuses(), now=now)
-    zero_fill = field_census.zero_fill_cells(live)
-    never_false = field_census.booleans_never_false(live)
-    measured, blessed = len(live["cells"]), len(baseline.get("cells") or {})
-    # Which of the live zeros are KNOWN comes from the attribute contract's gap marker
-    # and nowhere else — one declaration, not a baseline flag saying the same thing in a
-    # second place. A zero whose cell still claims a producer is the loud case: the
-    # portal states the fact, the contract says we read it, and nothing arrives.
-    gaps = attribute_contract.known_gaps()
-    inert = attribute_contract.inert_cells()
-    undeclared = sorted(key for key in zero_fill if key not in gaps and key not in inert)
-
-    status = "fail" if fails else ("warn" if warns or stale or undeclared else "ok")
-    if fails or warns:
-        message = (
-            f"{len(fails) + len(warns)} (source, field) cell(s) moved against the blessed "
-            f"baseline ({measured} measured of {blessed} blessed): "
-            + "; ".join((fails + warns)[:6])
-            + f" — re-bless with `{field_census.BLESS_COMMAND}` only once the move is "
-            "confirmed to be a fix, not a regression."
-        )
-    elif stale or undeclared:
-        notes = list(stale)
-        if undeclared:
-            notes.append(
-                f"{len(undeclared)} zero-fill cell(s) whose contract cell still claims a "
-                f"live producer ({', '.join(undeclared[:4])})"
-            )
-        message = (
-            "Fill and validity are stable, but: " + "; ".join(notes)
-            + f" — a stale census is re-run with `{field_census.BLESS_COMMAND}`; an "
-            "undeclared zero is a cell that should be filling and is not."
-        )
-    else:
-        message = (
-            f"Fill and validity stable across {measured} of {blessed} blessed "
-            f"(source, field) cells. {len(zero_fill)} cell(s) carry no value at all and "
-            f"{len(never_false)} boolean cell(s) have never been written false — both "
-            "recorded, neither judged: which of them is a gap needs W2's contract."
-        )
-    return {
-        "check_key": "field_fill_matrix",
-        "status": status,
-        "value": len(fails) + len(warns),
-        "details": {
-            "offenders": fails + warns,
-            "stale_census": stale,
-            "cells_measured": measured,
-            "cells_blessed": blessed,
-            # The wave's whole point, reported every run until a contract claims them.
-            # Both lists are LIVE, so a cell a later wave repairs stops being named.
-            "zero_fill_cells": zero_fill,
-            # Split by the contract, so "W4 will wire it" and "this should be filling
-            # and is not" stop reading the same.
-            "zero_fill_known_gaps": {k: gaps[k] for k in zero_fill if k in gaps},
-            "zero_fill_undeclared": undeclared,
-            "booleans_never_false": never_false,
-            "baseline_generated_at": baseline.get("generated_at"),
-        },
-        "message": message,
-    }
-
-
-# --- migration drift: merged is not applied (2026-08-25 outage) -------------
-#
-# Applying a migration is a SEPARATE act from merging it, and nothing connected
-# the two. Migration 438 merged at 17:12 and was applied 29 hours later; in
-# between, every write on six portals violated a CHECK constraint the code
-# assumed existed, and scrape_runs.errors read 0 the whole time. CI proves a
-# migration REPLAYS against an empty database; it says nothing about production.
-#
-# This asks the live catalog directly: for each of the newest migrations, do the
-# objects it declares actually exist? The ledger (supabase_migrations.
-# schema_migrations) is deliberately NOT the oracle — see scripts/
-# migration_objects.py for why its names cannot be matched reliably.
-
-_MIGRATION_OBJECT_PROBE_SQL = """
-select o.kind, o.ident,
-  case o.kind
-    when 'relation' then to_regclass(o.ident) is not null
-    when 'function' then exists (
-      select 1 from pg_proc p
-        join pg_namespace n on n.oid = p.pronamespace
-       where n.nspname = 'public'
-         and p.proname = split_part(o.ident, '.', greatest(
-               array_length(string_to_array(o.ident, '.'), 1), 1)))
-    when 'column' then exists (
-      select 1 from information_schema.columns c
-       where c.table_schema = case when array_length(string_to_array(o.ident, '.'), 1) = 3
-                                   then split_part(o.ident, '.', 1) else 'public' end
-         and c.table_name = case when array_length(string_to_array(o.ident, '.'), 1) = 3
-                                 then split_part(o.ident, '.', 2) else split_part(o.ident, '.', 1) end
-         and c.column_name = split_part(o.ident, '.', array_length(string_to_array(o.ident, '.'), 1)))
-    when 'constraint' then exists (
-      select 1 from pg_constraint k
-        join pg_class rel on rel.oid = k.conrelid
-        join pg_namespace n on n.oid = rel.relnamespace
-       where n.nspname = case when array_length(string_to_array(o.ident, '.'), 1) = 3
-                              then split_part(o.ident, '.', 1) else 'public' end
-         and rel.relname = case when array_length(string_to_array(o.ident, '.'), 1) = 3
-                                then split_part(o.ident, '.', 2) else split_part(o.ident, '.', 1) end
-         and k.conname = split_part(o.ident, '.', array_length(string_to_array(o.ident, '.'), 1)))
-    when 'policy' then exists (
-      select 1 from pg_policies pl
-       where pl.schemaname = 'public'
-         and pl.tablename = split_part(o.ident, '.', 1)
-         and pl.policyname = split_part(o.ident, '.', 2))
-  end as present
-from unnest(%(kinds)s::text[], %(idents)s::text[]) as o(kind, ident)
-"""
-
-# to_regclass raises on a malformed identifier rather than returning NULL, so an
-# ident that survived parsing but is not a plain dotted name never reaches SQL.
-_SAFE_IDENT = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_$]*(?:\.[a-zA-Z_][a-zA-Z0-9_$]*){0,2}$")
-
-
-def check_migration_drift(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Are the newest merged migrations actually present in this database?"""
-    from scripts.migration_objects import load_migrations
-
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    newest = int(thresholds["migration_drift_window"])
-    migrations = load_migrations(Path(root) / "migrations", newest=newest)
-
-    probes: list[tuple[str, str]] = []
-    for mig in migrations:
-        for obj in mig.objects:
-            if _SAFE_IDENT.match(obj.ident):
-                probes.append((obj.kind, obj.ident))
-    present: dict[tuple[str, str], bool] = {}
-    if probes:
-        with conn.cursor() as cur:
-            cur.execute(_MIGRATION_OBJECT_PROBE_SQL, {
-                "kinds": [k for k, _ in probes], "idents": [i for _, i in probes],
+        cur.execute(_HEALTH_CHECKS_ROWS_SQL, {"keys": [c.key for _, c in declared]})
+        prior = {key: (row_host, cadence_s, declared_at)
+                 for key, row_host, cadence_s, declared_at in cur.fetchall()}
+        rows: list[dict[str, Any]] = []
+        for sort, c in declared:
+            old = prior.get(c.key)
+            # declared_at anchors "not measured yet" on the page, so only a new key or a
+            # changed host or cadence restarts it; a re-projection keeps the clock.
+            kept = old is not None and old[0] == c.host and old[1] == c.cadence_s
+            rows.append({
+                "key": c.key, "domain": c.domain, "class": c.cls, "host": c.host,
+                "cadence_s": c.cadence_s, "staleness_budget": c.staleness_budget,
+                "label": c.label, "unit": c.unit, "owner_path": c.owner_path,
+                "sort": sort, "declared_at": old[2] if kept else now,
             })
-            for kind, ident, is_present in cur.fetchall():
-                present[(kind, ident)] = bool(is_present)
-
-    missing_all: list[str] = []   # merged and demonstrably not applied
-    partial: list[str] = []       # some objects landed, some did not
-    unverifiable: list[str] = []  # declares nothing this parser can probe
-    for mig in migrations:
-        checkable = [o for o in mig.objects if _SAFE_IDENT.match(o.ident)]
-        if not checkable:
-            unverifiable.append(mig.filename)
-            continue
-        absent = [o for o in checkable if not present.get((o.kind, o.ident), False)]
-        if len(absent) == len(checkable):
-            missing_all.append(f"{mig.filename} ({checkable[0]} absent)")
-        elif absent:
-            partial.append(f"{mig.filename} ({len(absent)}/{len(checkable)} absent: {absent[0]})")
-
-    if missing_all:
-        status = "fail"
-        message = (
-            "Merged migrations are NOT applied to this database: "
-            + "; ".join(missing_all)
-            + " -- code that assumes this schema will fail on every write. Apply them."
-        )
-    elif partial:
-        status = "warn"
-        message = (
-            "Migrations only partly present: " + "; ".join(partial)
-            + " -- either a half-applied migration, or the object parser mis-read the file."
-        )
-    else:
-        status = "ok"
-        message = (
-            f"All {len(migrations) - len(unverifiable)} checkable of the newest "
-            f"{len(migrations)} migrations are present."
-        )
-    return {
-        "check_key": "migration_drift",
-        "status": status,
-        "value": len(missing_all),
-        "details": {
-            "window": newest,
-            "missing_entirely": missing_all,
-            "partially_missing": partial,
-            # Surfaced, not swallowed: these declare only grants, drops, data
-            # updates or cron changes, which this probe cannot see. A guard whose
-            # blind spot is invisible is worse than no guard.
-            "unverifiable": unverifiable,
-            "objects_probed": len(probes),
-        },
-        "message": message,
-    }
-
-
-# --- worker lanes: alive is not the same as working -------------------------
-#
-# `worker_liveness` already catches a DEAD worker (stale heartbeat). It cannot
-# catch a live worker with a wedged lane, which is what actually happened: the
-# realtime worker beat every 30 s for nine hours while its detail-drain lane
-# completed ONE pass and its images lane completed 486. `_lane_loop` awaits
-# run_pass() with no timeout and `_supervised` catches exceptions rather than
-# hangs, so an unbounded await inside a pass is both invisible and unrecoverable
-# short of a redeploy. The worker now stamps when a pass BEGINS and publishes
-# `in_flight_s`; this is the check that reads it.
-_WORKER_LANE_SQL = """
-select h.worker, l.key as lane,
-       (l.value->>'in_flight_s')::numeric as in_flight_s,
-       (l.value->>'passes')::int as passes,
-       (l.value->>'failed_passes')::int as failed_passes,
-       (l.value->>'last_duration_s')::numeric as last_duration_s,
-       extract(epoch from (now() - h.started_at)) / 60.0 as worker_uptime_min
-  from worker_heartbeats h, lateral jsonb_each(h.details) l
- where h.beat_at > now() - interval '10 minutes'
-   and jsonb_typeof(l.value) = 'object'
-"""
-
-
-def check_worker_lane_stall(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Is any always-on worker lane stuck inside a single pass?"""
-    with conn.cursor() as cur:
-        cur.execute(_WORKER_LANE_SQL)
-        rows = cur.fetchall()
-
-    warn_s = float(thresholds["worker_lane_stall_warn_seconds"])
-    fail_s = float(thresholds["worker_lane_stall_fail_seconds"])
-    lanes: dict[str, Any] = {}
-    offenders: list[str] = []
-    status = "ok"
-    worst = 0.0
-    for worker, lane, in_flight, passes, failed, last_duration, uptime in rows:
-        elapsed = float(in_flight) if in_flight is not None else None
-        lanes[f"{worker}.{lane}"] = {
-            "in_flight_s": elapsed,
-            "passes": int(passes or 0),
-            "failed_passes": int(failed or 0),
-            "last_duration_s": float(last_duration) if last_duration is not None else None,
-            "worker_uptime_min": round(float(uptime or 0), 1),
-        }
-        if elapsed is None:
-            continue
-        worst = max(worst, elapsed)
-        if elapsed >= fail_s:
-            status = "fail"
-            offenders.append(f"{worker}.{lane} stuck {elapsed / 60:.0f}min")
-        elif elapsed >= warn_s:
-            if status != "fail":
-                status = "warn"
-            offenders.append(f"{worker}.{lane} running {elapsed / 60:.0f}min")
-
-    if not rows:
-        # No beating worker at all is worker_liveness's job, not this check's.
-        # Saying "ok" here would be a lie; saying "fail" would double-alarm.
-        return {
-            "check_key": "worker_lane_stall", "status": "warn", "value": None,
-            "details": {"lanes": {}},
-            "message": "No worker heartbeat in the last 10 minutes — see worker_liveness.",
-        }
-    if offenders:
-        message = (
-            "Worker lane(s) stuck inside a single pass: " + "; ".join(offenders)
-            + " -- run_pass() has no timeout, so this will not clear without a redeploy."
-        )
-    else:
-        message = f"All {len(lanes)} worker lane(s) idle or mid-pass within budget."
-    return {
-        "check_key": "worker_lane_stall",
-        "status": status,
-        "value": round(worst, 1),
-        "details": {"lanes": lanes, "offenders": offenders},
-        "message": message,
-    }
-
-
-# --- a refused delisting sweep is an operator decision, not a log line -------
-_DELIST_REFUSAL_SQL = """
-select source, category_main, category_type, candidates, active_rows, cap, refused_at
-  from delist_flip_refusals
- where refused_at > now() - interval '7 days'
- order by refused_at desc
- limit 20
-"""
-
-
-def check_delist_flip_refused(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Did a walk nominate far more of a category for a page check than the
-    per-walk throttle lets through?
-
-    Since 2026-09-07 (rule #3) a row in `delist_flip_refusals` means DEFERRED,
-    not refused: the walk nominated more unseen rows than `delist_flip_cap`
-    allows per walk, the oldest share was queued for a page check and the rest
-    waits for the next walk. That is routine while a backlog drains. What is
-    NOT routine is a walk that saw less than half of a category it called
-    complete -- that is the signature of a broken walk (a retired slug, a
-    throttled portal), so it warns. The operator's move is to check the walk,
-    not to raise anything: the drain is already fetching the pages.
-    """
-    with conn.cursor() as cur:
-        cur.execute(_DELIST_REFUSAL_SQL)
-        rows = cur.fetchall()
-    if not rows:
-        return {
-            "check_key": "delist_flip_refused", "status": "ok", "value": 0,
-            "details": {"deferrals": []},
-            "message": "No walk nominated more than the per-walk throttle allows in 7 days.",
-        }
-    deferrals = [
-        {"source": s, "category_main": cm, "category_type": ct,
-         "candidates": int(cand), "active_rows": int(act), "cap": int(cap),
-         "deferred_at": ra.isoformat() if hasattr(ra, "isoformat") else str(ra)}
-        for s, cm, ct, cand, act, cap, ra in rows
-    ]
-    suspicious = [d for d in deferrals if d["active_rows"] and d["candidates"] > d["active_rows"] / 2]
-    worst = max(d["candidates"] for d in deferrals)
-    named = "; ".join(
-        f"{d['source']} {d['category_main'] or '*'}/{d['category_type']} "
-        f"{d['candidates']} of {d['active_rows']} (per-walk {d['cap']})"
-        for d in (suspicious or deferrals)[:3]
-    )
-    if suspicious:
-        return {
-            "check_key": "delist_flip_refused", "status": "warn", "value": worst,
-            "details": {"deferrals": deferrals},
-            "message": (
-                f"{len(suspicious)} walk(s) called complete while more than half of "
-                f"the category was unseen: {named}. Check the walk (a retired slug, a "
-                "throttled portal) -- nothing is deleted without a page check, but a "
-                "walk this short is not one to trust."
-            ),
-        }
-    return {
-        "check_key": "delist_flip_refused", "status": "ok", "value": worst,
-        "details": {"deferrals": deferrals},
-        "message": (
-            f"{len(deferrals)} nomination(s) throttled to the per-walk share, the rest "
-            f"deferred to the next walk: {named}. Routine while a backlog drains."
-        ),
-    }
-
-
-# --- a flip that a later sighting reversed was a false delisting -------------
-_FALSE_DELIST_SQL = """
-select c.source,
-       count(*) as flips,
-       count(*) filter (where l.is_active) as active_again
-  from detail_queue_completions c
-  join listings l on l.source = c.source and l.source_id_native = c.native_id
- where c.outcome = 'flipped'
-   and c.completed_at > now() - interval '7 days'
- group by c.source
- order by c.source
-"""
-
-
-def check_false_delist_share(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Of the ads the drain closed in the last 7 days, how many are active again?
-
-    Rule #3's hysteresis (2026-10-09) flips a listing only on a second gone verdict
-    at least GONE_DWELL after the first, so a revival after a flip means the portal
-    kept the ad down longer than the dwell and brought it back -- or the gone signal
-    misfired. Either way the flip was wrong and the operator saw an active ad marked
-    inactive. The ledger row (`detail_queue_completions.outcome = 'flipped'`, migration
-    594) is the only durable trace: reactivation clears `listings.inactive_at`.
-    Measured before the rule: sreality 35%, mmreality 15%, remax 11%.
-    """
-    with conn.cursor() as cur:
-        cur.execute(_FALSE_DELIST_SQL)
-        rows = cur.fetchall()
-
-    warn = float(thresholds["false_delist_share_warn"])
-    fail = float(thresholds["false_delist_share_fail"])
-    min_flips = int(thresholds["false_delist_min_flips"])
-    per_source: dict[str, Any] = {}
-    offenders: list[str] = []
-    unscored: list[str] = []
-    status = "ok"
-    worst = 0.0
-    scored = 0
-    for source, flips, active_again in rows:
-        flips = int(flips)
-        active_again = int(active_again)
-        share = active_again / flips if flips else 0.0
-        per_source[source] = {
-            "flips": flips, "active_again": active_again,
-            "share": round(share, 4), "scored": flips >= min_flips,
-        }
-        if flips < min_flips:
-            unscored.append(source)
-            continue
-        scored += 1
-        worst = max(worst, share)
-        if share >= fail:
-            status = "fail"
-            offenders.append(f"{source} {share:.1%} of {flips} flips active again")
-        elif share >= warn:
-            status = _worst_status(status, "warn")
-            offenders.append(f"{source} {share:.1%} of {flips} flips active again")
-
-    details = {"per_source": per_source, "offenders": offenders, "unscored": unscored,
-               "warn": warn, "fail": fail, "min_flips": min_flips}
-    if not scored:
-        return {
-            "check_key": "false_delist_share", "status": "warn", "value": None,
-            "details": details,
-            "message": (
-                f"No portal closed {min_flips}+ ads in 7 days -- the false-delist share "
-                "was verified for nothing (expected right after migration 594 ships; "
-                "a quiet week later it means the drain is not flipping at all)."
-            ),
-        }
-    if offenders:
-        message = (
-            "Ads closed by a confirmed gone verdict are back on the portal: "
-            + "; ".join(offenders[:6])
-            + " -- the portal keeps ads down longer than GONE_DWELL, or its gone "
-            "signal misfires. Read the flipped rows' pages before touching the dwell."
-        )
-    else:
-        message = (
-            f"False-delist share healthy (worst {worst:.1%} across {scored} scored "
-            f"portal(s); {len(unscored)} under {min_flips} flips not scored)."
-        )
-    return {
-        "check_key": "false_delist_share",
-        "status": status,
-        "value": round(worst * 100, 2),
-        "details": details,
-        "message": message,
-    }
-
-
-_LOCATION_PAYLOAD_SHAPE_DRIFT_SQL = f"""
-    SELECT source, count(*) AS n, count(*) FILTER (WHERE unexpected) AS unexpected
-    FROM (
-      SELECT source,
-             CASE WHEN source = 'sreality'
-                  THEN ({SREALITY_SHAPE_CASE_SQL}) <> 'post_cutover'
-                  ELSE NOT (raw_json ? 'ruianId')
-             END AS unexpected
-      FROM listings
-      WHERE source IN ('sreality', 'bezrealitky') AND is_active
-        AND first_seen_at > now() - make_interval(hours => %(window_hours)s)
-    ) fresh
-    GROUP BY source
-"""
-
-_LOCATION_SHAPE_REMEDY = {
-    "sreality": ("the v1 API changed the shape of `locality`; W1 intake is enrolling every "
-                 "new row into the refetch cohort, where a refetch cannot fix a NEW shape — "
-                 "update the sreality payload shape check in claims_intake.py "
-                 "(`sreality_payload_shape`) and re-extract"),
-    "bezrealitky": ("new rows arrive without the `ruianId` key; the GraphQL detail query lost "
-                    "the field W0 item 0m added — restore it in "
-                    "scraper/bezrealitky_client._DETAIL_QUERY (adding it back has no "
-                    "retroactive effect: the rows fetched meanwhile need a refetch)"),
-}
-
-
-def check_location_payload_shape_drift(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """W4's standing payload-schema-version check (06 §6.4 W4 gate, P6): the next
-    source-side shape change must force re-extraction instead of silently degrading.
-    Today a sreality payload of unknown shape classifies `absent`, is routed to the
-    refetch cohort and burns five fetches before retiring as `error` — nobody is told.
-    This check tells someone. Measured on rows first seen in the trailing window (48 h
-    by default), per source: after a cutover the share climbs as elapsed/window, so the
-    first 6-hourly tick already reads 12.5% and crosses fail — a 7-day window would sit
-    under it for ~1.4 days."""
-    warn = float(thresholds["location_payload_shape_drift_warn"])
-    fail = float(thresholds["location_payload_shape_drift_fail"])
-    min_rows = int(thresholds["location_payload_shape_drift_min_rows"])
-    window_hours = int(thresholds["location_payload_shape_drift_window_hours"])
-    rows = _fetchall(conn, _LOCATION_PAYLOAD_SHAPE_DRIFT_SQL, {"window_hours": window_hours})
-    cells = [{"source": s, "n": int(n), "unexpected": int(u),
-              "share": (int(u) / int(n)) if int(n) else None}
-             for s, n, u in rows]
-    scored = [c for c in cells if c["n"] >= min_rows]
-    if not scored:
-        detail = (f"{len(cells)} source(s) read, none with {min_rows}+ rows first seen in "
-                  f"{window_hours} h — nothing was verified")
-        return {"check_key": "location_payload_shape_drift", "status": "warn", "value": None,
-                "details": {"skipped": detail, "cells": cells, "arms_scored": 0},
-                "message": f"Location payload-shape drift verified NOTHING — {detail}."}
-    worst = max(c["share"] for c in scored)
-    status = "fail" if worst >= fail else "warn" if worst >= warn else "ok"
-    offenders = [f"{c['source']}: {c['share']:.1%} of {c['n']} rows first seen in "
-                 f"{window_hours}h — {_LOCATION_SHAPE_REMEDY[c['source']]}"
-                 for c in scored if c["share"] >= warn]
-    message = (
-        f"{len(offenders)} source(s) are landing payloads the location contracts cannot "
-        f"read (worst {worst:.1%}): " + "; ".join(offenders)
-        if offenders
-        else f"Location payload shapes stable (worst {worst:.1%} unexpected across "
-             f"{len(scored)} scored source(s))."
-    )
-    return {
-        "check_key": "location_payload_shape_drift",
-        "status": status,
-        "value": round(worst * 100, 2),
-        "details": {"worst_share": round(worst, 4), "warn": warn, "fail": fail,
-                    "min_rows": min_rows, "window_hours": window_hours, "cells": cells,
-                    "arms_scored": len(scored), "offenders": offenders},
-        "message": message,
-    }
-
-
-# The location programme's one invariant (CLAUDE.md rule 25): every listing has an answer
-# row, and every listing that is not foreign has a town (`obec_kod`). Per portal, absolute
-# counts, red when either is not zero — this is the line the S2 contract rewrites drive to
-# zero portal by portal and the guard that keeps it there. `country_status <> 'foreign'`
-# deliberately counts `undetermined` and `disputed` as Czech: foreign is a determination the
-# resolver makes, never a default for "no town found".
-#
-# `hidden_n` is the W5 consumer rule counted OUTSIDE the audit page (operator ruling
-# 2026-09-13): how many listings the consumer surfaces refuse to serve because the store has
-# no answer for them. It is the ONE definition
-# (location_data.claims_common.SERVED_LOCATION_PREDICATE), negated — never a hand-written
-# `geom IS NULL`, which would drift the day the rule gains an arm. Reported per portal and
-# never a threshold: it is a WORKLOAD number, not a failure. The check's own red/green is
-# `no_row + cz_no_town`.
-#
-# EVERY LISTING, no WHERE (W15, operator ruling 2026-09-14). This read used to be scoped to
-# the served set — live listings, plus the display listing of a live property — and its four
-# original counts additionally filtered on `l.is_active`. Both are gone: the location lane
-# covers the whole database, so the denominator is the portal's whole corpus. THE PER-PORTAL
-# SERIES THEREFORE CHANGED MEANING ON 2026-09-14 and the numbers before and after that date
-# are not comparable; `town_share` is the readable one across the step.
-#
-# W16 (operator ruling 2026-09-14): `town_n` and `hidden_n` are the SHARED step flags,
-# rendered from location_data/location_steps.py — the fourth spelling of "has a town" is
-# gone. `town_n` therefore now carries dedup's obec RANK floor as well as `obec_kod`
-# (measured: zero rows of movement on 2026-09-14, and from now on it is the number dedup can
-# block on). `cz_no_town_n` stays the coarser "no obec_kod at all", because THAT is the
-# contract gap the S2 rewrites drive to zero, and it is not a chain step.
-_LOCATION_STEP_FLAGS = location_steps.step_flags_sql()
-
-# The KÚ arm's one excuse (MF PR-B): an obec holding a KÚ the boundary loader recorded as
-# `degenerate_boundary_geometry` at the current version has a hole no address point can be
-# placed in, so its address-grain rows may lack a KÚ. `boundary_load_failed` is never one.
-_DEGENERATE_KU_OBCE_SQL = """
-    SELECT o.code
-      FROM registry_load_discrepancies d
-      JOIN ruian_admin_units k ON k.level = 'katastralni_uzemi' AND k.code = d.entity_code
-                              AND k.valid_to IS NULL
-      JOIN ruian_admin_units o ON o.id = k.parent_id
-     WHERE d.entity_kind = 'katastralni_uzemi'
-       AND d.discrepancy = 'degenerate_boundary_geometry'
-       AND d.registry_version_id = (SELECT id FROM registry_versions WHERE is_current)"""
-
-_LOCATION_TOWN_COVERAGE_SQL = f"""
-    SELECT l.source,
-           count(*)                                                   AS listings_n,
-           count(*) FILTER (WHERE ll.listing_id IS NULL)              AS no_row_n,
-           count(*) FILTER (WHERE ll.listing_id IS NOT NULL
-                              AND ll.country_status <> 'foreign'
-                              AND ll.obec_kod IS NULL)                AS cz_no_town_n,
-           count(*) FILTER (WHERE {_LOCATION_STEP_FLAGS["has_town"]}) AS town_n,
-           count(*) FILTER (WHERE NOT {_LOCATION_STEP_FLAGS["located"]})
-                                                                      AS hidden_n,
-           count(*) FILTER (WHERE ll.country_status = 'cz'
-                              AND gr.is_address_grain
-                              AND ll.resolver_version = %s
-                              AND ll.katastr_kod IS NULL
-                              AND ll.obec_kod NOT IN ({_DEGENERATE_KU_OBCE_SQL}))
-                                                                      AS address_no_ku_n
-      FROM listings l
-      LEFT JOIN listing_location ll ON ll.listing_id = l.id
-      LEFT JOIN location_granularity_rank gr ON gr.granularity = ll.granularity
-     GROUP BY l.source
-     ORDER BY l.source
-"""
-
-
-# Registry liveness, the second arm of the same check: every town above is a code of the
-# CURRENT registry version, so a registry that stopped moving ages every answer silently. Its
-# two failure shapes are both non-failures to Actions: a monthly run superseded by another
-# pending `location-batch` run is cancelled, not failed, and a load killed or refused mid-way
-# leaves an inert staged version. Red when the current vintage is over 40 days old (the
-# monthly cadence plus a re-dispatch margin) or a NEWER version has sat staged over 24 h (the
-# 6 h job plus a re-dispatch). An older staged version — one a later vintage overtook — is
-# history, not a stall. No row at all is red too: nothing is current.
-REGISTRY_MAX_AGE_DAYS = 40
-REGISTRY_MAX_STAGED_HOURS = 24
-
-_REGISTRY_LIVENESS_SQL = """
-    SELECT c.label AS current_label, current_date - c.source_date AS age_days,
-           s.label AS staged_label,
-           extract(epoch FROM now() - s.loaded_at) / 3600 AS staged_hours
-      FROM registry_versions c
-      LEFT JOIN LATERAL (
-            SELECT n.label, n.loaded_at
-              FROM registry_versions n
-             WHERE NOT n.is_current AND n.source_date > c.source_date
-             ORDER BY n.loaded_at
-             LIMIT 1) s ON true
-     WHERE c.is_current
-"""
-
-
-def _registry_liveness(conn: Any) -> tuple[list[str], dict[str, Any]]:
-    """(problems, details) of the registry-liveness arm; no problems when it is green."""
-    row = _fetchone(conn, _REGISTRY_LIVENESS_SQL)
-    if row is None:
-        return ["no current registry version"], {"current": None}
-    label, age_days, staged, staged_hours = row
-    details = {"current": label, "age_days": int(age_days), "staged": staged,
-               "staged_hours": None if staged_hours is None else round(float(staged_hours), 1)}
-    problems = []
-    if age_days > REGISTRY_MAX_AGE_DAYS:
-        problems.append(f"current {label} is {int(age_days)} days old "
-                        f"(> {REGISTRY_MAX_AGE_DAYS})")
-    if staged_hours is not None and staged_hours > REGISTRY_MAX_STAGED_HOURS:
-        problems.append(f"{staged} has sat staged {float(staged_hours):.0f} h "
-                        f"(> {REGISTRY_MAX_STAGED_HOURS} h) — re-dispatch location_registry_load")
-    return problems, details
-
-
-def check_location_town_coverage(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Red when ANY listing has no answer row, or any non-foreign one has no town. Absolute
-    counts, no threshold: the invariant is zero, and a number that is not zero names the
-    portal whose contract has to change.
-
-    The KÚ arm (MF PR-B) is the same kind of invariant: a Czech ADDRESS-GRAIN row
-    (`location_granularity_rank.is_address_grain`, never the enum's order) resolved by the
-    current `RESOLVER_VERSION` has a `katastr_kod`, because an address point lies in exactly
-    one KÚ — so a non-zero count is the 2026-09-13 failure class (KÚ geometry missing at the
-    registry version) caught directly. Rows still at an older version are the re-resolve's
-    backlog, not a defect; an obec holding a degenerate KÚ is excused.
-
-    `hidden` (W5) is the one number here that is not a defect: the listings the consumer rule
-    refuses to serve. It rides the same read so the number the audit page shows is visible
-    from the pipeline verifier too, and it never changes the status. The registry-liveness
-    arm (`_registry_liveness`) turns it red on its own."""
-    stalled, registry = _registry_liveness(conn)
-    stall_note = f" Registry stalled: {'; '.join(stalled)}." if stalled else ""
-    rows = _fetchall(conn, _LOCATION_TOWN_COVERAGE_SQL, (RESOLVER_VERSION,))
-    cells = [{"source": s, "listings": int(n), "no_row": int(nr), "cz_no_town": int(nt),
-              "town": int(t), "hidden": int(h), "address_no_ku": int(nk),
-              "town_share": (int(t) / int(n)) if int(n) else None}
-             for s, n, nr, nt, t, h, nk in rows]
-    no_row = sum(c["no_row"] for c in cells)
-    cz_no_town = sum(c["cz_no_town"] for c in cells)
-    address_no_ku = sum(c["address_no_ku"] for c in cells)
-    hidden = sum(c["hidden"] for c in cells)
-    listings = sum(c["listings"] for c in cells)
-    if not cells:
-        return {"check_key": "location_town_coverage",
-                "status": "fail" if stalled else "warn", "value": None,
-                "details": {"skipped": "no listings read", "cells": [], "registry": registry},
-                "message": "Location town coverage verified NOTHING — no listings read."
-                           + stall_note}
-    offenders = [f"{c['source']}: {c['no_row']:,} without a row, {c['cz_no_town']:,} Czech "
-                 f"without a town (of {c['listings']:,})"
-                 for c in cells if c["no_row"] or c["cz_no_town"]]
-    hidden_by_source = "; ".join(
-        f"{c['source']} {c['hidden']:,}"
-        for c in sorted(cells, key=lambda c: -c["hidden"]) if c["hidden"]
-    )
-    missing = no_row + cz_no_town
-    status = "fail" if missing or stalled or address_no_ku else "ok"
-    message = (
-        f"{missing:,} listings have no town "
-        f"({no_row:,} without an answer row, {cz_no_town:,} Czech without obec_kod): "
-        + "; ".join(offenders)
-        if missing
-        else f"Every one of {listings:,} listings has an answer row and every Czech one a town."
-    )
-    if address_no_ku:
-        message += (
-            f" {address_no_ku:,} Czech address-grain rows at {RESOLVER_VERSION} have no KÚ: "
-            + "; ".join(f"{c['source']} {c['address_no_ku']:,}"
-                        for c in cells if c["address_no_ku"])
-            + "."
-        )
-    if hidden:
-        message += (
-            f" Consumers currently hide {hidden:,} unresolved listings ({hidden_by_source})."
-        )
-    return {
-        "check_key": "location_town_coverage",
-        "status": status,
-        "value": missing,
-        "details": {"listings": listings, "no_row": no_row, "cz_no_town": cz_no_town,
-                    "address_no_ku": address_no_ku, "hidden": hidden, "cells": cells,
-                    "offenders": offenders, "registry": registry},
-        "message": message + stall_note,
-    }
-
-
-_OUTBOUND_URL_COVERAGE_SQL = """
-    SELECT source,
-           count(*)                                                       AS active_n,
-           count(*) FILTER (WHERE source_url IS NULL)                     AS null_n,
-           count(*) FILTER (WHERE source_url IS NULL
-                              AND first_seen_at > now() - interval '7 days') AS null_7d
-    FROM listings
-    WHERE is_active
-    GROUP BY source
-    ORDER BY source
-"""
-
-
-def check_outbound_url_coverage(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Active rows with no page URL, per portal — an ABSOLUTE count, not a share.
-
-    A listing's `source_url` is a stored fact for all nine portals (W0 of
-    docs/design/portal-listing-url.md): the eight crawlers emit the page they fetched,
-    sreality assembles its canonical from a closed codebook. The one silent failure is
-    sreality adding a sub-category code the codebook does not know — every new row of it
-    gets NULL, the SPA shows no chip, and a percentage over ~800k rows never notices.
-    A count of active NULLs does, within a day; `null_7d` names the fresh cohort so a
-    standing archive gap (rows the reconciler declined) is not mistaken for a regression.
-    The remedy is one codebook entry in scraper/sreality_url.py + a reconciler run.
-    """
-    with conn.cursor() as cur:
-        cur.execute(_OUTBOUND_URL_COVERAGE_SQL)
-        rows = cur.fetchall()
-    warn = int(thresholds["outbound_url_null_warn"])
-    fail = int(thresholds["outbound_url_null_fail"])
-    per_source = [
-        {"source": src, "active_n": int(active), "null_n": int(nulls), "null_7d": int(fresh)}
-        for src, active, nulls, fresh in rows
-    ]
-    worst = max(per_source, key=lambda r: r["null_n"], default=None)
-    worst_n = worst["null_n"] if worst else 0
-    status = "fail" if worst_n >= fail else "warn" if worst_n >= warn else "ok"
-    offenders = [r for r in per_source if r["null_n"] >= warn]
-    named = "; ".join(
-        f"{r['source']} {r['null_n']} active rows without a URL ({r['null_7d']} first seen "
-        f"in 7d)" for r in sorted(offenders, key=lambda r: -r["null_n"])[:4]
-    )
-    if offenders:
-        message = (
-            f"{named}. A sreality NULL means a sub-category code outside the closed "
-            "codebook (scraper/sreality_url.py) — add the entry; the row fills on its "
-            "next detail fetch. A crawler NULL is a parser regression."
-        )
-    else:
-        message = "Every active listing on every portal carries its page URL."
-    return {
-        "check_key": "outbound_url_coverage",
-        "status": status,
-        "value": worst_n,
-        "details": {"per_source": per_source, "warn": warn, "fail": fail},
-        "message": message,
-    }
-
-
-# --- the sreality image template canary (daily probe of the DEPLOYED chain) --
-#
-# The one check in this harness that leaves the database. Everything else reads
-# our own tables, which can only tell us what we already stored; a CDN that
-# started refusing our transform stores nothing, so there is no row to read.
-
-_SREALITY_PROBE_MAX_BYTES = 6 * 1024 * 1024
-
-# byt / prodej / CZ, one row, newest page — the same v1 search the walk uses, at
-# limit 1. Any live category would do; byt-prodej is simply the slice that is
-# never empty.
-_SREALITY_PROBE_PARAMS: dict[str, Any] = {
-    "category_main_cb": 1,
-    "category_type_cb": 1,
-    "locality_country_id": CZ_COUNTRY_ID,
-    "limit": 1,
-    "offset": 0,
-}
-
-
-def _fetch_sreality_probe(
-    url: str, timeout: tuple[float, float], max_bytes: int, *, accept: str = "*/*"
-) -> tuple[int, bytes]:
-    """The canary's ONE network seam — the whole check is hermetic behind it.
-
-    Two independent bounds, because neither covers the other and nothing outside can
-    preempt this call (the lane budget is armed only as a Postgres statement_timeout,
-    and run_checks tests the lane deadline BEFORE a check starts): `max_bytes` bounds
-    MEMORY if the CDN ever answers an image URL with a video, and the monotonic deadline
-    bounds WALL CLOCK — requests' read timeout is per socket read, so a peer trickling
-    one chunk per 7.9 s would otherwise hold the lane for minutes without ever tripping it.
-    """
-    connect_timeout, read_timeout = timeout
-    budget_s = connect_timeout + read_timeout
-    deadline = _time.monotonic() + budget_s
-    headers = {**_PORTAL_HEADERS, "Accept": accept}
-    with requests.get(url, timeout=timeout, headers=headers, stream=True) as response:
-        buf = bytearray()
-        for chunk in response.iter_content(chunk_size=65536):
-            buf += chunk
-            if len(buf) >= max_bytes:
-                break
-            if _time.monotonic() >= deadline:
-                raise requests.Timeout(
-                    f"probe exceeded its {budget_s:.0f}s wall-clock budget reading {url}"
-                )
-        return response.status_code, bytes(buf)
-
-
-def _probe_skipped(detail: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    """warn, never fail: the canary could not REACH sreality, so it verified nothing
-    about our transform — and a flaky network must not manufacture a red that reads as
-    'the CDN rejected our template'."""
-    return {
-        "check_key": "sreality_image_template",
-        "status": "warn",
-        "value": None,
-        "details": {"skipped": True, "reason": detail, **(extra or {})},
-        "message": (
-            f"Sreality image template verified NOTHING this run — {detail}. The "
-            "deployed transform is UNKNOWN, not healthy; if this persists the probe "
-            "itself needs attention."
-        ),
-    }
-
-
-def _fit_box(ops: str) -> tuple[int, int] | None:
-    """The (w, h) box the deployed chain's `res` op fits a frame inside.
-
-    Read OUT of IMAGE_TRANSFORM_OPS rather than restated beside it, so the expectation
-    moves with the template the day the template moves.
-    """
-    for op in ops.split("|"):
-        parts = op.split(",")
-        if parts[0] == "res" and len(parts) >= 3 and parts[1].isdigit() and parts[2].isdigit():
-            return int(parts[1]), int(parts[2])
-    return None
-
-
-def _expected_frame(source: tuple[int, int] | None, ops: str) -> tuple[int, int] | None:
-    """What the CDN should serve for a source frame of this size: fit inside the `res`
-    box, NEVER upscaled (verified live — a 1450x967 source comes back untouched)."""
-    box = _fit_box(ops)
-    if box is None or source is None:
-        return None
-    width, height = source
-    scale = min(1.0, box[0] / width, box[1] / height)
-    return max(1, round(width * scale)), max(1, round(height * scale))
-
-
-def _positive_int(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value > 0
-
-
-def _declared_source_size(estate: dict[str, Any], image_url: str) -> tuple[int, int] | None:
-    """The estate's own width/height for this image — the only honest yardstick for what
-    the transform should return (the CDN does not upscale a small original)."""
-    for img in estate.get("advert_images") or []:
-        if not isinstance(img, dict):
-            continue
-        url = img.get("url")
-        if not isinstance(url, str) or not url:
-            continue
-        if ("https:" + url if url.startswith("//") else url) != image_url:
-            continue
-        width, height = img.get("width"), img.get("height")
-        if _positive_int(width) and _positive_int(height):
-            return int(width), int(height)
-        return None
-    return None
-
-
-def check_sreality_image_template(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Does sreality's CDN still serve the transform template the download path ships?
-
-    Walks the live v1 index (one row) to a FRESH listing id, fetches that listing's
-    DETAIL payload — the endpoint whose `advert_images` carries the `{url, width,
-    height}` dicts `parse_images` and the download path both read; the search endpoint
-    sends bare URL strings the parser skips — and requests the first image through
-    `image_storage.with_transform`, so the probe is the deployed chain by construction
-    and cannot drift from it. Nothing stored is consulted: a stored URL proves only that
-    the template worked the day we stored it.
-
-    The failure mode that matters answers HTTP 200 with a smaller or cropped rendition,
-    which no status check would ever see. The verdict is RELATIVE — the served frame
-    against what the `res` op should yield for THIS estate's declared source size —
-    because the CDN never upscales, so a small original is not a template fault.
-    """
-    min_ratio = float(thresholds["sreality_image_template_min_ratio"])
-    read_timeout = float(thresholds["sreality_image_template_timeout_s"])
-    timeout = (5.0, read_timeout)
-    index_url = f"{_SREALITY_INDEX_URL}?{urlencode(_SREALITY_PROBE_PARAMS)}"
-
-    try:
-        status_code, body = _fetch_sreality_probe(
-            index_url, timeout, _SREALITY_PROBE_MAX_BYTES, accept="application/json")
-    except requests.RequestException as exc:
-        return _probe_skipped(f"the sreality index is unreachable ({exc})")
-    if status_code != 200:
-        return _probe_skipped(f"the sreality index answered HTTP {status_code}",
-                              {"http_status": status_code})
-    try:
-        payload = json.loads(body)
-    except ValueError as exc:
-        return _probe_skipped(f"the sreality index body is not JSON ({exc})")
-    results = (payload or {}).get("results") or []
-    if not results or not isinstance(results[0], dict):
-        return _probe_skipped("the sreality index returned no estates")
-    hash_id = results[0].get("hash_id")
-    if not isinstance(hash_id, (int, str)) or not str(hash_id).strip():
-        return _probe_skipped("the newest sreality estate carries no hash_id")
-
-    detail_url = _SREALITY_DETAIL_URL.format(id=hash_id)
-    try:
-        detail_status, detail_body = _fetch_sreality_probe(
-            detail_url, timeout, _SREALITY_PROBE_MAX_BYTES, accept="application/json")
-    except requests.RequestException as exc:
-        return _probe_skipped(f"the sreality detail endpoint is unreachable ({exc})",
-                              {"detail_url": detail_url})
-    if detail_status != 200:
-        return _probe_skipped(f"the sreality detail endpoint answered HTTP {detail_status}",
-                              {"detail_url": detail_url, "http_status": detail_status})
-    try:
-        detail_payload = json.loads(detail_body)
-    except ValueError as exc:
-        return _probe_skipped(f"the sreality detail body is not JSON ({exc})")
-    if not isinstance(detail_payload, dict):
-        return _probe_skipped("the sreality detail body is not an estate object")
-    estate = _unwrap_sreality_estate(detail_payload)
-    images = parse_images(estate)
-    if not images:
-        return _probe_skipped(f"sreality estate {hash_id} carries no images",
-                              {"detail_url": detail_url})
-
-    image_url = images[0]["url"]
-    transform = with_transform(image_url)
-    if transform == image_url:
-        # with_transform is a no-op off the sreality CDN host, so the bare URL would
-        # serve a normal photo and the check would report health for a template it
-        # never exercised. A host migration must surface, not green.
-        return _probe_skipped(
-            "the probed image is not on the sreality CDN host, so our transform is a "
-            "no-op on it — the template was not exercised",
-            {"image_url": image_url, "detail_url": detail_url},
-        )
-    source = _declared_source_size(estate, image_url)
-    expected = _expected_frame(source, IMAGE_TRANSFORM_OPS)
-    source_width, source_height = source if source else (None, None)
-    expected_width, expected_height = expected if expected else (None, None)
-    started = _time.monotonic()
-    try:
-        cdn_status, data = _fetch_sreality_probe(
-            transform, timeout, _SREALITY_PROBE_MAX_BYTES, accept="image/*")
-    except requests.RequestException as exc:
-        return _probe_skipped(f"the sreality CDN is unreachable ({exc})",
-                              {"image_url": image_url, "transform": transform})
-    # 403/429 is how sreality throttles (never a dead template) and a 5xx is
-    # theirs to fix — a transient must read as "verified nothing", not as a
-    # catalogue change, or one busy minute pages the operator.
-    if cdn_status in (403, 429) or cdn_status >= 500:
-        return _probe_skipped(f"the sreality CDN throttled or errored: HTTP {cdn_status}",
-                              {"image_url": image_url, "transform": transform,
-                               "http_status": cdn_status})
-    elapsed_ms = int((_time.monotonic() - started) * 1000)
-    size = image_dimensions(data) if _media.is_image_bytes(data) is not None else None
-    width, height = size if size else (None, None)
-    details: dict[str, Any] = {
-        "image_url": image_url, "transform": transform, "http_status": cdn_status,
-        "width": width, "height": height, "bytes": len(data), "elapsed_ms": elapsed_ms,
-        "source_width": source_width, "source_height": source_height,
-        "expected_width": expected_width, "expected_height": expected_height,
-        "min_ratio": min_ratio, "detail_url": detail_url,
-    }
-    # Both axes: a CROP keeps one of them and collapses the other (the superseded
-    # 749x562 chain cut a 3:2 frame to 4:3), so one-axis-only would miss it.
-    downgraded = bool(
-        expected_width and expected_height and width is not None and height is not None
-        and (width < expected_width * min_ratio or height < expected_height * min_ratio)
-    )
-
-    if cdn_status != 200:
-        message = (
-            f"Sreality REFUSED our image transform: HTTP {cdn_status} for "
-            f"`{IMAGE_TRANSFORM_OPS}`. Their CDN is an exact-template allowlist, so this "
-            "is a catalogue change — every image download is now parking terminally. "
-            "Re-derive the template from sreality's own frontend and update "
-            "scraper/image_storage.IMAGE_TRANSFORM_OPS."
-        )
-    elif width is None:
-        kind = "a non-image body" if _media.is_image_bytes(data) is None else "undecodable bytes"
-        message = (
-            f"Sreality answered HTTP 200 for our image transform but returned {kind} "
-            f"({len(data)} bytes) — the template is off their allowlist or the URL no "
-            "longer serves a photo. Check scraper/image_storage.IMAGE_TRANSFORM_OPS."
-        )
-    elif downgraded:
-        message = (
-            f"Sreality's CDN served {width}x{height} px for a "
-            f"{source_width}x{source_height} px source, where `{IMAGE_TRANSFORM_OPS}` "
-            f"should return {expected_width}x{expected_height} px — the template "
-            "silently downgraded (the superseded chain served 749 px and cropped to "
-            "4:3). Downloads are storing small, possibly cropped frames. Re-derive "
-            "IMAGE_TRANSFORM_OPS."
-        )
-    elif expected_width:
-        message = (
-            f"Sreality's image template is live: {width}x{height} px for a "
-            f"{source_width}x{source_height} px source, {len(data)} bytes in "
-            f"{elapsed_ms} ms."
-        )
-    else:
-        message = (
-            f"Sreality's image template is live: {width}x{height} px, {len(data)} bytes "
-            f"in {elapsed_ms} ms. The estate declares no source size for this image, so "
-            "the frame size itself was not judged this run."
-        )
-    status = "ok" if cdn_status == 200 and width is not None and not downgraded else "fail"
-    return {
-        "check_key": "sreality_image_template",
-        "status": status,
-        "value": width,
-        "details": details,
-        "message": message,
-    }
-
-
-_CHECKS: list[tuple[str, Callable[[Any, dict[str, Any]], dict[str, Any]]]] = [
-    # FIRST, and the position is the point: a lane runs _CHECKS in order under its budget
-    # and stamps whatever it did not reach `not_run` (2026-09-11 21:02 lost the last
-    # seven, this one among them). The invariant the location programme is measured by must
-    # never be the measurement a slower check starves — and it is one indexed join.
-    ("location_town_coverage", check_location_town_coverage),
-    ("llm_errors", check_llm_errors),
-    ("llm_burn_rate", check_llm_burn_rate),
-    ("long_open_transaction", check_long_open_transaction),
-    ("db_saturation", check_db_saturation),
-    ("worker_liveness", check_worker_liveness),
-    ("dual_write_parity", check_dual_write_parity),
-    ("property_maintenance", check_property_maintenance),
-    ("broker_resolution_freshness", check_broker_resolution_freshness),
-    ("broker_merge_suppression", check_broker_merge_suppression),
-    # Registered here (6h lane) but deliberately NOT in llm_health.yml's hourly --only
-    # list yet: ship, soak, then promote. Registration alone rings the in-app bell;
-    # the hourly lane is what emails.
-    ("workflow_poller_liveness", check_workflow_poller_liveness),
-    ("ppm2_median_shift", check_ppm2_median_shift),
-    ("ppm2_basis_floor_share", check_ppm2_basis_floor_share),
-    ("area_vs_usable_divergence", check_area_vs_usable_divergence),
-    ("ppm2_measure_coverage", check_ppm2_measure_coverage),
-    ("acquisition_lag", check_acquisition_lag),
-    ("walk_coverage", check_walk_coverage),
-    # walk_coverage's per-category twin (2026-10-13): consecutive walks a category did
-    # not reach the portal's end, i.e. nominated nothing. One scan of 14 days of
-    # scrape_runs. 6h lane + in-app bell; NOT in llm_health.yml's hourly --only list
-    # (ship, soak, promote).
-    ("walk_end_streak", check_walk_end_streak),
-    ("migration_drift", check_migration_drift),
-    ("worker_lane_stall", check_worker_lane_stall),
-    ("delist_flip_refused", check_delist_flip_refused),
-    # Rule #3's hysteresis watch (2026-10-09): flipped rows active again. 6h lane +
-    # in-app bell; NOT in llm_health.yml's hourly --only list yet (ship, soak, promote).
-    ("false_delist_share", check_false_delist_share),
-    # W4's standing P6 check. 6h lane + in-app bell; NOT in llm_health.yml's hourly
-    # --only list yet — ship, soak, then promote (the same ladder as the ppm2 checks).
-    ("location_payload_shape_drift", check_location_payload_shape_drift),
-    # Portal-URL contract: absolute count of active rows with no page URL. 6h lane +
-    # in-app bell; not in the hourly --only list (ship, soak, then promote).
-    ("outbound_url_coverage", check_outbound_url_coverage),
-    # The other ingest checks ask whether rows ARRIVE; this one asks whether their fields
-    # are filled and in-vocabulary. Third to last deliberately: at ~12s over the whole
-    # active stock it is one of the lane's two expensive DB checks, so it queues behind
-    # the cheap ones rather than spending their budget. 6h lane + in-app bell; not in
-    # llm_health.yml's hourly --only list (ship, soak, promote — the ppm2 ladder).
-    ("field_fill_matrix", check_field_fill_matrix),
-    # `acquisition_lag`'s twin one layer later — "did the row arrive" vs "was its prose
-    # ever read" — but registered HERE rather than beside it: once a gate is open the
-    # eligibility predicate as an aggregate over the whole eligible stock measured
-    # 9.4-10.0 s on 2026-09-22, which is field_fill_matrix's class, not acquisition_lag's
-    # indexed one. (With every gate closed it returns before it queries at all.) 6h lane +
-    # in-app bell; not in llm_health.yml's hourly --only list (ship, soak, promote).
-    ("text_extraction_lag", check_text_extraction_lag),
-    # The last DB check, and the most expensive one in the lane (11-35 s measured): a
-    # cross-portal self-join over every active byt row. It asks the question no fill or
-    # validity measure can — whether a populated, plausible integer is on the RIGHT SCALE.
-    # 6h lane + in-app bell; not in llm_health.yml's hourly --only list (ship, soak,
-    # promote — the ppm2 ladder). It reads RED until W8's heal has run on all six
-    # ground=1 portals; that is the gate, not a regression.
-    ("floor_convention", check_floor_convention),
-    # LAST deliberately: the only check that makes an outbound request, so if the
-    # lane budget runs out it is the one that goes unrun, never a DB check. 6h lane
-    # + in-app bell; not in llm_health.yml's hourly --only list (ship, soak, promote).
-    ("sreality_image_template", check_sreality_image_template),
-]
-# (the check body sits above this registry; the SQL it runs is
-# `_LOCATION_PAYLOAD_SHAPE_DRIFT_SQL`, built on the shape CASE the W4 gate shares)
-
-# No weekly-only CHECKS today (the merge-precision sample went with the legacy decision
-# engine), but the lane is no longer inert: main() emits the once-per-ISO-week health
-# heartbeat under --weekly (toolkit.system_alerts.emit_weekly_heartbeat).
-_WEEKLY_CHECKS: list[tuple[str, Callable[[Any, dict[str, Any]], dict[str, Any]]]] = []
+        if rows:
+            cur.executemany(_HEALTH_CHECKS_UPSERT_SQL, rows)
+        cur.execute(_HEALTH_CHECKS_RETIRE_SQL,
+                    {"host": host, "keys": [c.key for c in CHECKS]})
+        deleted = cur.rowcount
+    return {"upserted": len(rows), "deleted": max(deleted or 0, 0)}
 
 
 def _is_timeout_error(exc: BaseException) -> bool:
@@ -3885,159 +618,180 @@ def _is_timeout_error(exc: BaseException) -> bool:
     return "canceling statement due to statement timeout" in str(exc)
 
 
-def _timed_out_result(key: str, budget_s: float, exc: BaseException | None) -> dict[str, Any]:
-    """A check that ran past its budget is `warn`, never `fail`.
+def _timed_out_result(key: str, budget_s: float, elapsed_s: float,
+                      exc: BaseException) -> dict[str, Any]:
+    """A check cancelled by its wall clock measured nothing: unknown, never fail.
 
-    It reports "I could not measure this", which is a different claim from "I measured
-    this and it is broken" — and a lane under DB pressure would otherwise manufacture a
-    wall of false reds at the exact moment the operator needs to read the real one."""
+    "I could not measure this" is a different claim from "I measured this and it is broken",
+    and a lane under DB pressure would otherwise manufacture a wall of false reds at the
+    exact moment the operator needs to read the real one."""
     return {
         "check_key": key,
-        "status": "warn",
+        "status": "unknown",
         "value": None,
-        "details": {"timed_out": True, "budget_seconds": round(budget_s, 1),
-                    "error": str(exc) if exc is not None else None},
+        "details": {"cells": [], "timed_out": True, "budget_seconds": round(budget_s, 1),
+                    "elapsed_seconds": round(elapsed_s, 1), "error": str(exc)},
         "message": (
-            f"Check '{key}' exceeded its {budget_s:.0f}s budget and was cancelled — its "
-            "result is UNKNOWN this run, not healthy. Usually DB pressure; if it persists, "
-            "the check's query needs work."
+            f"Check '{key}' ran out of its {budget_s:.0f}s budget after {elapsed_s:.0f}s and "
+            "was cancelled, so it is Not measured this run (never healthy). Usually DB "
+            "pressure; if it persists, the check's query needs work."
         ),
     }
 
 
-def _not_run_result(key: str, budget_s: float) -> dict[str, Any]:
+def _errored_result(key: str, exc: BaseException) -> dict[str, Any]:
+    """A check that raised measured nothing: unknown, with the error kept."""
     return {
         "check_key": key,
-        "status": "warn",
+        "status": "unknown",
         "value": None,
-        "details": {"not_run": True, "lane_budget_seconds": round(budget_s, 1)},
-        "message": (
-            f"Check '{key}' did not run: the verification lane exhausted its "
-            f"{budget_s:.0f}s budget first. Result UNKNOWN this run."
-        ),
+        "details": {"cells": [], "errored": True, "error": str(exc)},
+        "message": f"Check '{key}' raised an error, so it is Not measured this run: {exc}",
     }
+
+
+_VERDICTS = ("ok", "warn", "fail")
+
+
+def _carries_cells(result: dict[str, Any]) -> bool:
+    """At least one judged cell: all the ladder reads (wave 6 deleted its implicit cell)."""
+    cells = (result.get("details") or {}).get("cells")
+    return isinstance(cells, list) and any(
+        isinstance(c, dict) and c.get("status") in _VERDICTS for c in cells)
+
+
+def _uncelled_result(key: str, status: str) -> dict[str, Any]:
+    """A verdict with no judged cell would read on the page and reach no incident: it is stored
+    Not measured instead, and the harness logs it as the check's defect."""
+    reason = f"the check returned {status} without a judged cell"
+    return {
+        "check_key": key,
+        "status": "unknown",
+        "value": None,
+        "details": {"cells": [], "skipped": reason},
+        "message": f"Check '{key}' is Not measured this run: {reason}.",
+    }
+
+
+def lane_budget_for(checks: Sequence[Check]) -> float:
+    """A lane owes every check it runs that check's own budget, so none can starve another."""
+    return float(sum(c.budget_s for c in checks))
+
+
+# A check fits the pass while its budget is at most what the pass has left plus this slack. The
+# lane's clock runs from `start`, so a check due alone (its lane IS its budget) is weighed a few
+# ns short of its budget and, with no slack, was deferred on every tick; one second also lets a
+# check before it overrun its own budget by the statement floor (clock.statement_timeout_ms).
+_FIT_SLACK_S = 1.0
 
 
 def run_checks(
-    conn: Any, thresholds: dict[str, Any], *, weekly: bool = False,
-    only: set[str] | None = None,
+    conn: Any, thresholds: dict[str, Any], *, checks: Sequence[Check],
     on_result: Callable[[dict[str, Any]], None] | None = None,
-    lane_budget_s: float | None = _LANE_BUDGET_S,
-    check_budget_s: float = _CHECK_BUDGET_S,
+    lane_budget_s: float | None = None, defer_unfit: bool = False,
 ) -> list[dict[str, Any]]:
-    """Run every check in isolation, handing each result to `on_result` AS IT COMPLETES.
-
-    A raising check becomes a `fail` row carrying the error, so one broken check never
-    aborts the run. `only` restricts to the named check keys (the acute lane's `--only`).
-
-    Two budgets bound the lane (W0.4). Each check gets `check_budget_s` (or whatever the
-    lane has left, whichever is smaller) enforced server-side as `statement_timeout`; if
-    it is cancelled it reports `warn` "timed out", not `fail`. When the lane budget is
-    gone the remaining checks are not started and report `warn` "not run". Both say
-    UNKNOWN rather than healthy — silence is never recovery.
-
-    `on_result` is what makes a timeout survivable: persisting per check means a killed
-    job keeps every result it had already computed instead of losing all of them.
-    """
+    """Run each check in isolation on its own wall clock, handing on_result each result as it
+    lands; a check the lane budget does not reach gets no result, so it stays due. With
+    `defer_unfit` a check whose budget no longer fits what the lane has left (plus
+    `_FIT_SLACK_S`), weighed before it starts, is not started either: deferred to the next pass,
+    never cut short into a Not measured row that holds it a cadence."""
     results: list[dict[str, Any]] = []
-    # The measure checks share one 12 s read of measure_plausibility_by_source; the
-    # cache is per RUN, never across runs.
-    _PLAUSIBILITY_CACHE.clear()
-    checks = list(_CHECKS) + (list(_WEEKLY_CHECKS) if weekly else [])
-    if only:
-        checks = [(k, fn) for (k, fn) in checks if k in only]
-
     _LANE.reset()
+    _PASS.start()
     if lane_budget_s is not None:
         _LANE.start(lane_budget_s)
     try:
-        for key, fn in checks:
-            left = _LANE.arm_for_check(check_budget_s)
+        for i, check in enumerate(checks):
+            left = _LANE.remaining()
             if left is not None and left <= 0:
-                LOG.error(
-                    "lane budget %.0fs exhausted; check %s not run", lane_budget_s, key)
-                result = _not_run_result(key, lane_budget_s or 0.0)
-            else:
-                started = _time.monotonic()
-                try:
-                    result = fn(conn, thresholds)
-                except Exception as exc:  # noqa: BLE001
-                    elapsed = _time.monotonic() - started
-                    if _is_timeout_error(exc):
-                        LOG.error("check %s timed out after %.1fs", key, elapsed)
-                        result = _timed_out_result(key, elapsed, exc)
-                    else:
-                        LOG.exception("check %s errored", key)
-                        result = {
-                            "check_key": key,
-                            "status": "fail",
-                            "value": None,
-                            "details": {"error": str(exc)},
-                            "message": f"Pipeline verification check '{key}' errored: {exc}",
-                        }
+                LOG.warning("lane budget %.0fs spent; not reached, so still due: %s",
+                            lane_budget_s or 0.0, ", ".join(c.key for c in checks[i:]))
+                break
+            if defer_unfit and left is not None and check.budget_s > left + _FIT_SLACK_S:
+                LOG.warning("DEFER %s: its %.0fs budget does not fit the %.0fs the pass has left; "
+                            "due next pass", check.key, check.budget_s, left)
+                continue
+            budget = _LANE.arm_for_check(check.budget_s)
+            started = _time.monotonic()
+            try:
+                result = check.fn(conn, thresholds)
+            except Exception as exc:  # noqa: BLE001 - one broken check never ends the lane
+                if _is_timeout_error(exc):
+                    spent = _time.monotonic() - started
+                    LOG.error("check %s timed out after %.1fs of its %.0fs budget",
+                              check.key, spent, budget)
+                    result = _timed_out_result(check.key, budget, spent, exc)
+                else:
+                    LOG.exception("check %s errored", check.key)
+                    result = _errored_result(check.key, exc)
+            if result.get("status") in _VERDICTS and not _carries_cells(result):
+                LOG.error("check %s returned %s without a judged cell; stored Not measured: %s",
+                          check.key, result["status"], str(result.get("message") or "")[:200])
+                result = _uncelled_result(check.key, result["status"])
+            elapsed = _time.monotonic() - started
+            if not isinstance(result.get("details"), dict):
+                result["details"] = {}
+            if not isinstance(result["details"].get("cells"), list):
+                result["details"]["cells"] = []
+            result["details"]["elapsed_ms"] = int(elapsed * 1000)
             results.append(result)
+            # Persisted per check, so a job killed mid-lane keeps everything it measured.
             if on_result is not None:
                 try:
                     on_result(result)
                 except Exception:  # noqa: BLE001 - persisting one result must not end the lane
-                    LOG.exception("could not persist result for check %s", key)
+                    LOG.exception("could not persist result for check %s", check.key)
     finally:
         _LANE.reset()
+        _PASS.reset()
     return results
 
 
 def insert_result(conn: Any, result: dict[str, Any], run_at: _dt.datetime) -> None:
-    """Persist ONE check result. Called as each check completes (W0.4)."""
+    """Persist ONE result; its message rides inside `details`, beside any cells it carries."""
+    details = dict(result.get("details") or {})
+    if result.get("message"):
+        details["message"] = result["message"]
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO pipeline_check_results (run_at, check_key, status, value, details) "
             "VALUES (%s, %s, %s, %s, %s::jsonb)",
             (run_at, result["check_key"], result["status"],
-             result.get("value"), json.dumps(result.get("details") or {})),
+             result.get("value"), json.dumps(details)),
         )
 
 
-def write_results(
-    conn: Any, results: list[dict[str, Any]], run_at: _dt.datetime,
-    *, policy: AlertPolicy | None = None,
-) -> dict[str, int]:
-    """Persist one row per check, then ring the bell per INCIDENT (onset / re-escalation
-    / recovery), not on every red run. Returns {onset, recovery, reescalation} counts.
-
-    The stored history is read BEFORE this run's rows are inserted, so the baseline is
-    the prior run — see toolkit.system_alerts.emit_transition_alerts.
-
-    main() no longer takes this path (it persists and alerts per check so a job timeout
-    keeps what it computed); kept for callers that already hold a full result list."""
-    pol = policy or AlertPolicy()
-    states = check_states(conn, policy=pol)
-    prev = {k: s.status for k, s in states.items() if s.status is not None}
-    for r in results:
-        insert_result(conn, r, run_at)
-    return emit_transition_alerts(
-        conn, results, prev, run_at, states=states, policy=pol)
+def run_due(
+    conn: Any, thresholds: dict[str, Any], host: str, *, now: _dt.datetime,
+    on_result: Callable[[Any, dict[str, Any], _dt.datetime], None] = insert_result,
+    lane_budget_s: float | None = None,
+) -> list[dict[str, Any]]:
+    """Measure this host's due checks, alarms before gauges, storing each result as it lands.
+    `lane_budget_s` caps the pass (the worker lane's 500 s) and defers a check that no longer
+    fits it to the next pass; uncapped (the canary), the lane is the due budgets' sum."""
+    # Due-ness is read from the stored results, so a restarted lane re-measures nothing, and
+    # the sort is stable: registry order holds inside each class.
+    due = sorted(due_checks(conn, host, now), key=lambda c: c.cls != "alarm")
+    if due:
+        LOG.info("DUE host=%s %d of %d checks: %s", host, len(due),
+                 sum(1 for c in CHECKS if c.host == host), ", ".join(c.key for c in due))
+    budget = lane_budget_for(due)
+    if lane_budget_s is not None:
+        budget = min(budget, lane_budget_s)
+    return run_checks(conn, thresholds, checks=due,
+                      on_result=lambda result: on_result(conn, result, now),
+                      lane_budget_s=budget, defer_unfit=lane_budget_s is not None)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true",
-                        help="Compute + log, write nothing (no result rows, no alerts).")
-    parser.add_argument("--weekly", action="store_true",
-                        help="Also run the weekly-only checks and emit the once-per-ISO"
-                             "-week health heartbeat (idempotent: the workflow appends "
-                             "this to all four of Monday's runs).")
-    parser.add_argument("--only", default="",
-                        help="Comma-separated check keys to run (e.g. 'llm_errors,llm_burn_rate' "
-                             "for the hourly LLM lane). Empty = all checks.")
-    parser.add_argument("--exit-nonzero-on-fail", action="store_true",
-                        help="Exit 1 if any run check is 'fail' — so the hourly LLM lane's "
-                             "GitHub run goes red and emails the operator (belt-and-braces "
-                             "for when the in-app bell path itself is down).")
-    parser.add_argument("--arm-dual-write-parity", action="store_true",
-                        help="Seed each R2 carrier's dual_write_watermark from where its "
-                             "cursor stands now, then exit. Run ONCE, after the dual-write "
-                             "deploy is live — arming before it would mark old-code rows as "
-                             "post-dual-write and alarm falsely.")
+                        help="Select and compute the due checks and log them; write nothing "
+                             "(no registry rows, no result rows).")
+    parser.add_argument("--host", default=_GITHUB, choices=(_GITHUB,),
+                        help="The host whose registry rows this run projects and whose due "
+                             "checks it measures: GitHub's only (the worker's health lane "
+                             "calls run_due itself).")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -4050,31 +804,22 @@ def main() -> int:
         print("ERROR: SUPABASE_DB_URL is not set.", file=sys.stderr)
         return 2
 
-    if args.arm_dual_write_parity:
-        with connect() as conn:
-            armed = arm_dual_write_parity(conn)
-        LOG.info("armed dual-write parity watermarks for %d carriers", len(armed))
-        return 0
-
-    only = {k.strip() for k in args.only.split(",") if k.strip()} or None
     run_at = _dt.datetime.now(_dt.timezone.utc)
-    counts = {"onset": 0, "recovery": 0, "reescalation": 0}
     written = 0
     with connect() as conn:
-        thresholds = load_thresholds(conn)
-        policy = AlertPolicy.from_thresholds(thresholds)
-        # The alerting baseline must be read BEFORE this run writes anything, and this
-        # run now writes incrementally — so it is captured here rather than inside a
-        # batch writer (see toolkit.system_alerts.emit_transition_alerts). It carries
-        # the stored history, not just the last status: the ladder needs each open
-        # incident's onset time to know which rung is due.
-        states = check_states(conn, policy=policy) if not args.dry_run else {}
-        prev = {k: s.status for k, s in states.items() if s.status is not None}
+        # A dispatch from a branch measures with that branch's CHECKS but never projects them:
+        # its registry would delete main's keys from the page until main's next run.
+        ref = os.environ.get("GITHUB_REF_NAME", "main")
+        if not args.dry_run and ref != "main":
+            LOG.info("REGISTRY host=%s not projected: this run is from %s, not main",
+                     args.host, ref)
+        elif not args.dry_run:
+            projected = project_registry(conn, args.host, run_at)
+            LOG.info("REGISTRY host=%s upserted=%d deleted=%d",
+                     args.host, projected["upserted"], projected["deleted"])
 
-        def _persist(result: dict[str, Any]) -> None:
-            """Persist + alert on THIS check, immediately. Both are per-check so a job
-            timeout mid-lane keeps the results it already has AND their alerts, instead
-            of losing every row (the pre-W0.4 behavior)."""
+        def _persist(db: Any, result: dict[str, Any], at: _dt.datetime) -> None:
+            """Log this result and, unless dry-running, store it the moment it completes."""
             nonlocal written
             LOG.info(
                 "CHECK %s status=%s value=%s",
@@ -4082,37 +827,12 @@ def main() -> int:
             )
             if args.dry_run:
                 return
-            insert_result(conn, result, run_at)
+            insert_result(db, result, at)
             written += 1
-            emitted = emit_transition_alerts(
-                conn, [result], prev, run_at, states=states, policy=policy)
-            for kind in counts:
-                counts[kind] += emitted[kind]
 
-        results = run_checks(
-            conn, thresholds, weekly=args.weekly, only=only, on_result=_persist,
-            lane_budget_s=(
-                _LANE_BUDGET_S if only else full_lane_budget_s(weekly=args.weekly)))
-        if args.dry_run:
-            LOG.info("dry-run: %d checks computed, no rows written", len(results))
-            return 0
-        if args.weekly:
-            # The weekly lane's heartbeat: one digest per ISO week, so the operator can
-            # tell "nothing is wrong" from "nothing is running". --weekly rides all four
-            # of Monday's runs, hence the week-grain dedupe key. Best-effort, like every
-            # other write here: a failed heartbeat must not discard the run's results.
-            try:
-                if emit_weekly_heartbeat(conn, results, states, run_at):
-                    LOG.info("emitted the weekly health heartbeat")
-            except Exception:  # noqa: BLE001
-                LOG.exception("could not emit the weekly health heartbeat")
-    LOG.info(
-        "verify_pipeline wrote %d rows, emitted %d onset + %d re-escalation + "
-        "%d recovery alerts",
-        written, counts["onset"], counts["reescalation"], counts["recovery"],
-    )
-    if args.exit_nonzero_on_fail and any(r["status"] == "fail" for r in results):
-        return 1
+        results = run_due(conn, THRESHOLDS, args.host, now=run_at, on_result=_persist)
+    LOG.info("verify_pipeline host=%s measured %d checks, wrote %d rows",
+             args.host, len(results), written)
     return 0
 
 

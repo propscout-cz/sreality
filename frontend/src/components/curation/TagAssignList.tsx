@@ -8,19 +8,20 @@
  *
  * Membership is a PROP, not a read: every surface answers it from the one
  * shared member map (curationKeys.propertyTagMembers). Writes are here, and
- * every one revalidates through lib/tagCache, so a tag put on a board card is
- * on the property page, the Browse cohort and the phone without a reload.
+ * every one settles through lib/tagCache, so a tag put on a board card is on
+ * the property page, the Browse cohort and the phone without a reload.
  */
 
 import { useMemo, useState, type RefObject } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import AnchoredPopover from '@/components/AnchoredPopover';
 import TagColorPicker from '@/components/TagColorPicker';
 import TagEditPopover from '@/components/curation/TagEditPopover';
-import { attachTag, createTag, detachTag, listTags } from '@/lib/api';
-import { curationKeys } from '@/lib/queries';
-import { revalidateTags } from '@/lib/tagCache';
+import { actOpts, useActAs } from '@/lib/acting';
+import { attachTag, createTag, detachTag } from '@/lib/api';
+import { revalidateTags, settleTagWrite } from '@/lib/tagCache';
+import { useTagReads } from '@/lib/useCardTags';
 import type { TagColor } from '@/lib/types';
 
 /* The trigger's accessible name, and the panel's — one string so a test that
@@ -114,28 +115,25 @@ export function TagAssignList({
   const [color, setColor] = useState<TagColor>('copper');
   const [createError, setCreateError] = useState<string | null>(null);
 
-  const tagsQ = useQuery({
-    queryKey: curationKeys.tags,
-    queryFn: listTags,
-    staleTime: 60_000,
-  });
+  const actAs = useActAs();
+  const { tagsQ } = useTagReads({ members: false });
   const tags = useMemo(() => tagsQ.data?.data ?? [], [tagsQ.data]);
 
   const attach = useMutation({
-    mutationFn: (tag_id: number) => attachTag(property_id, tag_id),
-    onSuccess: () => revalidateTags(qc),
+    mutationFn: (tag_id: number) => attachTag(property_id, tag_id, ...actOpts(actAs)),
+    onSuccess: (_, tag_id) => settleTagWrite(qc, property_id, tag_id, true, actAs),
   });
   const detach = useMutation({
-    mutationFn: (tag_id: number) => detachTag(property_id, tag_id),
-    onSuccess: () => revalidateTags(qc),
+    mutationFn: (tag_id: number) => detachTag(property_id, tag_id, ...actOpts(actAs)),
+    onSuccess: (_, tag_id) => settleTagWrite(qc, property_id, tag_id, false, actAs),
   });
   /* A new tag goes straight onto the property: that is why it was typed here. */
   const create = useMutation({
-    mutationFn: (name: string) => createTag({ name, color }),
+    mutationFn: (name: string) => createTag({ name, color }, ...actOpts(actAs)),
     onSuccess: (t) => {
       setCreateError(null);
       setQuery('');
-      revalidateTags(qc);
+      revalidateTags(qc, actAs);
       attach.mutate(t.id);
     },
     onError: (err: Error) => setCreateError(err.message || 'Štítek se nepodařilo vytvořit'),

@@ -74,7 +74,7 @@ import {
   type GroupFilterState,
 } from '@/components/autodedup/filterState';
 import useVerdictOverlay from '@/components/autodedup/useVerdictOverlay';
-import LoadMore from '@/components/autodedup/LoadMore';
+import LoadMore from '@/components/LoadMore';
 import Notice, { StoreNotReady } from '@/components/autodedup/Notice';
 import { Segmented } from '@/components/controls';
 import CandidateCard, {

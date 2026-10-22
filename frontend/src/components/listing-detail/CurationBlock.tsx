@@ -33,7 +33,10 @@ import {
   updatePropertyNote,
   uploadNoteAttachment,
 } from '@/lib/api';
-import { curationKeys, fetchPropertyTagMemberSet } from '@/lib/queries';
+import { actingKey, actOpts, useActAs } from '@/lib/acting';
+import { curationKeys } from '@/lib/queries';
+import { browseReads } from '@/lib/curationSettle';
+import { useTagReads } from '@/lib/useCardTags';
 import {
   isMine,
   shareAudience,
@@ -41,6 +44,7 @@ import {
 } from '@/lib/collectionCache';
 import { fmtAbsolute, fmtRelative } from '@/lib/format';
 import type { Note } from '@/lib/types';
+import DelegatedStamp from '@/components/DelegatedStamp';
 import ErrorBanner from '@/components/ErrorBanner';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
 import { TagAssignList } from '@/components/curation/TagAssignList';
@@ -112,11 +116,7 @@ export function PhoneTagsAndNotes({
  * rows and writes the board card opens in a popover and the phone card in a
  * sheet. Membership comes from the shared member map every tag chip reads. */
 function TagsRow({ property_id, label = 'Tags' }: { property_id: number; label?: string }) {
-  const membershipQ = useQuery({
-    queryKey: curationKeys.propertyTagMembers,
-    queryFn: fetchPropertyTagMemberSet,
-    staleTime: 30_000,
-  });
+  const { membersQ: membershipQ } = useTagReads({ index: false });
   const memberIds = useMemo(
     () => new Set(membershipQ.data?.get(property_id) ?? []),
     [membershipQ.data, property_id],
@@ -153,6 +153,7 @@ function TagsRow({ property_id, label = 'Tags' }: { property_id: number; label?:
  * desktop property page, Czech on the phone. */
 const NOTE_WORDS = {
   en: {
+    lang: 'en',
     shareWith: (who: string) => `Share with ${who}`,
     shared: 'Shared',
     sharedNobody: 'Shared · nobody can see it yet',
@@ -162,6 +163,7 @@ const NOTE_WORDS = {
     edited: 'edited',
   },
   cs: {
+    lang: 'cs',
     shareWith: (who: string) => `Sdílet s ${who}`,
     shared: 'Sdíleno',
     sharedNobody: 'Sdíleno · zatím to nikdo nevidí',
@@ -189,16 +191,21 @@ function NotesRow({
 }) {
   const qc = useQueryClient();
   const words = NOTE_WORDS[lang];
+  const actAs = useActAs();
+  const notesKey = actingKey(actAs, curationKeys.propertyNotes(property_id));
   /* Who a SHARED note here would reach: the counterparties of every share whose
    * collection holds this property. Empty = nobody, so no checkbox is offered;
-   * null = not known yet (a read loading or failed), which must never read as
-   * "nobody" — no checkbox, no share toggle, no "nobody can see it" claim. */
+   * null = not known (a read loading or failed), which must never read as
+   * "nobody" — no checkbox, no share toggle, no "nobody can see it" claim.
+   * Acting as the owner (design §3.6) it is never known: the owner's share rows
+   * are invisible under the header, so their collections read as shared with
+   * nobody — a false privacy claim on the owner's notes. */
   const membership = useCollectionMembership(property_id);
-  const audienceFailed = readFailed(membership.query);
+  const audienceFailed = actAs == null && readFailed(membership.query);
   const { ids: collectionIds, byId, ready: audienceReady } = membership;
   const audience = useMemo(
-    () => (audienceReady ? shareAudience(collectionIds, byId) : null),
-    [audienceReady, collectionIds, byId],
+    () => (actAs == null && audienceReady ? shareAudience(collectionIds, byId) : null),
+    [actAs, audienceReady, collectionIds, byId],
   );
   const canShare = audience != null && audience.length > 0;
   const [shareNew, setShareNew] = useState(false);
@@ -211,26 +218,29 @@ function NotesRow({
   const notesLabelId = useId();
 
   const notesQ = useQuery({
-    queryKey: curationKeys.propertyNotes(property_id),
-    queryFn: () => listPropertyNotes(property_id),
+    queryKey: notesKey,
+    queryFn: () => listPropertyNotes(property_id, ...actOpts(actAs)),
     staleTime: 30_000,
   });
 
-  const refreshNotes = () =>
-    qc.invalidateQueries({ queryKey: curationKeys.propertyNotes(property_id) });
+  const refreshNotes = () => qc.invalidateQueries({ queryKey: notesKey });
+  /* Browse's note marks — never moved by a note written as the owner. */
+  const refreshNoteCounts = () => {
+    for (const queryKey of browseReads(actAs, [curationKeys.noteCounts])) void qc.invalidateQueries({ queryKey });
+  };
 
   const create = useMutation({
     /* The note first, then its files one by one; a file that fails leaves the note saved and
      * is reported by name (drop it onto the note to try again). */
     mutationFn: async ({ text, files }: { text: string; files: File[] }) => {
       const note = await createPropertyNote(
-        property_id, text, listing_id, shareNew && canShare,
+        property_id, text, listing_id, shareNew && canShare, ...actOpts(actAs),
       );
       const failed: string[] = [];
       for (const [i, file] of files.entries()) {
         setProgress({ done: i, total: files.length });
         try {
-          await uploadNoteAttachment(property_id, note.id, file);
+          await uploadNoteAttachment(property_id, note.id, file, ...actOpts(actAs));
         } catch (err) {
           failed.push(`${file.name}: ${(err as Error).message || 'upload failed'}`);
         }
@@ -244,7 +254,7 @@ function NotesRow({
       setError(null);
       setProblems(failed);
       refreshNotes();
-      qc.invalidateQueries({ queryKey: curationKeys.noteCounts });
+      refreshNoteCounts();
     },
     onError: (err: ApiError | Error) =>
       setError(err.message || 'Failed to save note'),
@@ -387,14 +397,18 @@ function NotesRow({
                 note={n}
                 audience={audience}
                 words={words}
-                onSave={(text) => updatePropertyNote(property_id, n.id, { body: text }).then(refreshNotes)}
+                onSave={(text) =>
+                  updatePropertyNote(property_id, n.id, { body: text }, ...actOpts(actAs)).then(refreshNotes)
+                }
                 onToggleShared={() =>
-                  updatePropertyNote(property_id, n.id, { shared: !n.shared }).then(refreshNotes)
+                  updatePropertyNote(property_id, n.id, { shared: !n.shared }, ...actOpts(actAs)).then(
+                    refreshNotes,
+                  )
                 }
                 onDelete={() =>
-                  deletePropertyNote(property_id, n.id).then(() => {
+                  deletePropertyNote(property_id, n.id, ...actOpts(actAs)).then(() => {
                     refreshNotes();
-                    qc.invalidateQueries({ queryKey: curationKeys.noteCounts });
+                    refreshNoteCounts();
                   })
                 }
                 onFilesChanged={refreshNotes}
@@ -476,7 +490,7 @@ function ForeignNoteRow({
 }
 
 /* A note's time line: relative, the exact dates on hover, the author first on
- * another author's note. */
+ * another author's note; then its delegated stamp, if any. */
 function NoteMeta({
   note,
   words,
@@ -487,22 +501,26 @@ function NoteMeta({
   author?: string | null;
 }) {
   return (
-    <p
-      className="text-[0.7rem] tracking-wide text-[var(--color-ink-4)] cursor-help"
-      title={
-        note.updated_at
-          ? `Written ${fmtAbsolute(note.created_at)} · edited ${fmtAbsolute(note.updated_at)}`
-          : fmtAbsolute(note.created_at)
-      }
-    >
-      {author != null && (
-        <>
-          <span className="text-[var(--color-ink-3)]">{author}</span> ·{' '}
-        </>
-      )}
-      {fmtRelative(note.created_at)}
-      {note.updated_at && ` (${words.edited})`}
-    </p>
+    <>
+      <p
+        className="text-[0.7rem] tracking-wide text-[var(--color-ink-4)] cursor-help"
+        title={
+          note.updated_at
+            ? `Written ${fmtAbsolute(note.created_at)} · edited ${fmtAbsolute(note.updated_at)}`
+            : fmtAbsolute(note.created_at)
+        }
+      >
+        {author != null && (
+          <>
+            <span className="text-[var(--color-ink-3)]">{author}</span> ·{' '}
+          </>
+        )}
+        {fmtRelative(note.created_at)}
+        {note.updated_at && ` (${words.edited})`}
+      </p>
+      {/* Who last wrote it acting as the owner (ruling 5); nothing for the owner's own edits. */}
+      <DelegatedStamp stamp={note} lang={words.lang} />
+    </>
   );
 }
 
@@ -533,6 +551,7 @@ function OwnNoteRow({
   const [uploading, setUploading] = useState<File[]>([]);
   const [fileProblems, setFileProblems] = useState<string[]>([]);
 
+  const actAs = useActAs();
   const attachments = note.attachments ?? [];
   /* Dropped or picked files go straight onto this note, one by one; the list re-reads once
    * they are all in. */
@@ -547,7 +566,7 @@ function OwnNoteRow({
     const failed: string[] = [];
     for (const file of ok) {
       try {
-        await uploadNoteAttachment(property_id, note.id, file);
+        await uploadNoteAttachment(property_id, note.id, file, ...actOpts(actAs));
       } catch (err) {
         failed.push(`${file.name}: ${(err as Error).message || 'upload failed'}`);
       }

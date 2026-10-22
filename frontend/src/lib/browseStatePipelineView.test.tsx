@@ -55,7 +55,7 @@ describe('loadPipelineView (URL adapter)', () => {
     const h = mount('/browse?cat=byt&deal=pronajem&price_max=5000000&disp=2%2Bkk');
     act(() => h.state.loadPipelineView());
     expect(h.filters).toEqual(pipelineViewFilters());
-    expect(h.filters.pipeline).toEqual({ stage_ids: [] });
+    expect(h.filters.pipeline).toEqual({ set: 'in', in: [], out: [] });
     expect(h.filters.categoryMain).toEqual([]);
     expect(h.filters.categoryType).toBeNull();
     expect(h.filters.priceMax).toBeNull();
@@ -70,12 +70,12 @@ describe('loadPipelineView (URL adapter)', () => {
   });
 
   it('keeps the map-overlay knobs (they are not cohort filters)', () => {
-    const h = mount('/browse?cat=byt&rentmap=1&colorby=overall&tab=table');
+    const h = mount('/browse?cat=byt&rentmap=1&colorby=overall&tab=stats');
     act(() => h.state.loadPipelineView());
     const sp = new URLSearchParams(h.search);
     expect(sp.get('rentmap')).toBe('1');
     expect(sp.get('colorby')).toBe('overall');
-    expect(sp.get('tab')).toBe('table');
+    expect(sp.get('tab')).toBe('stats');
   });
 
   it('is undoable — the load pushes a history entry rather than replacing', () => {
@@ -87,5 +87,32 @@ describe('loadPipelineView (URL adapter)', () => {
     // the load PUSHES a history entry instead of replacing the current one.
     expect(h.filters.categoryMain).toEqual(['dum']);
     expect(h.filters.pipeline).toBeNull();
+  });
+});
+
+/* Operator ruling 2026-10-19: everything resets on a preset click and what the
+ * preset stores gets applied — the lenses stay outside preset identity, so a
+ * click turns them off like the broker scope and the dismissed reveal. */
+describe('loadPreset resets the lenses', () => {
+  it('turns off the active curated sets, the broker and the dismissed reveal', () => {
+    const h = mount(
+      '/browse?cat=dum&pipeline_excluded=any&collections=4&tags=1,2&broker=7&dismissed=show',
+    );
+    expect(h.filters.pipeline).toEqual({ set: 'out', in: [], out: [] });
+    act(() => h.state.loadPreset({
+      id: 'vys',
+      name: 'Vysočany byty',
+      filter_spec: { filters: { categoryMain: ['byt'], categoryType: 'prodej', dispositions: ['2+kk'] }, sort: null },
+      created_at: '2026-10-01T00:00:00Z',
+      updated_at: '2026-10-01T00:00:00Z',
+    } as never));
+    expect(h.filters.categoryMain).toEqual(['byt']);
+    expect(h.filters.dispositions).toEqual(['2+kk']);
+    expect(h.filters.pipeline).toBeNull();
+    expect(h.filters.collections).toBeNull();
+    expect(h.filters.tags).toBeNull();
+    expect(h.filters.brokerId).toBeNull();
+    expect(h.filters.showDismissed).toBe(false);
+    expect(h.state.activePresetId).toBe('vys');
   });
 });

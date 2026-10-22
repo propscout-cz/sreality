@@ -89,7 +89,7 @@ def _build_providers() -> dict[str, Any]:
         # (migration 302) — but NOTHING constructed the provider, and an unregistered
         # provider raises in `LLMClient.call` BEFORE the try/except that writes the
         # failure row, so a qwen misroute left ZERO llm_calls evidence and was invisible
-        # to llm_errors and llm_burn_rate alike. Lazy key (QWEN_API_KEY).
+        # to the llm check's provider cells. Lazy key (QWEN_API_KEY).
         "qwen":      QwenProvider(),
         # Our own vLLM pod (autodedup/oss_pod.py), routed by the `oss:` id prefix. Its
         # base_url is an EPHEMERAL pod URL read from OSS_LLM_BASE_URL, so constructing it
@@ -114,40 +114,6 @@ def get_llm_client(conn: Any = Depends(get_db_conn)) -> Any:
     """
     from api.llm_client import LLMClient
     return LLMClient(conn, providers=get_providers())
-
-
-_TRANSPORTS: dict[str, Any] | None = None
-
-
-def _build_transports() -> dict[str, Any]:
-    """Construct channel-transport singletons once (the `_build_providers`
-    mirror for notification delivery). Each transport reads its own secret
-    lazily and raises only on `send()`, so a missing key never fails boot.
-
-    Each transport reads its own secret lazily and raises only on `send()`, so
-    a missing key never fails boot; `is_configured()` lets a caller skip an
-    unconfigured channel. A transport only delivers once its secret is set AND a
-    watchdog/collection opts into its channel (so `target_channels` is non-empty):
-    email = Resend (`RESEND_API_KEY` + `EMAIL_FROM`), telegram = Bot API
-    (`TELEGRAM_BOT_TOKEN`). Adding a channel is one import + one entry here.
-    """
-    from api.transports.email_resend import ResendEmail
-    from api.transports.telegram import Telegram
-    return {"email": ResendEmail(), "telegram": Telegram()}
-
-
-def get_transports() -> dict[str, Any]:
-    global _TRANSPORTS
-    if _TRANSPORTS is None:
-        _TRANSPORTS = _build_transports()
-    return _TRANSPORTS
-
-
-def get_channel_client(conn: Any = Depends(get_db_conn)) -> Any:
-    """Per-request ChannelClient bound to the request's DB connection (the
-    `get_llm_client` mirror). Imported lazily to keep import-time light."""
-    from api.channel_client import ChannelClient
-    return ChannelClient(conn, transports=get_transports())
 
 
 # ONE credential. Every caller — a person in the SPA or the extension, or a machine
@@ -280,11 +246,11 @@ def account_scope(
     therefore never widen scope to another account's rows). Fails CLOSED at every
     branch — `_bearer` raises; nothing degrades to a wider or narrower row set.
 
-    Why not require_token + tenant_conn: `listings` and `parsed_url_cache` are
-    RLS-enabled-with-zero-policies, so the /estimations list query (which LEFT JOINs
-    both for locality_display) returns NULL for every row on a tenant connection —
-    silently, no error. The service-role connection plus an explicit predicate is the
-    only shape that scopes without blanking data.
+    Why not require_token + tenant_conn: `listings` is RLS-enabled-with-zero-policies,
+    so the /estimations list query (which LEFT JOINs it for locality_display) returns
+    NULL for every row on a tenant connection — silently, no error. The service-role
+    connection plus an explicit predicate is the only shape that scopes without
+    blanking data.
     """
     claims = _bearer(authorization)
     if claims is None:

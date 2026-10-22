@@ -11,7 +11,7 @@ name: Dedup — CLIP re-tag from stored embeddings (sharded)
 # taxonomy edit). A re-tagged row is stamped tagged_at=now() and drops out, so the run
 # self-drains; once caught up each scheduled run pre-checks (no model load) and no-ops.
 # No cutoff set -> immediate no-op. Sharded into 4 parallel jobs (image_id %% 4), CPU torch
-# + the `clip` extra. Secret: SUPABASE_DB_URL (no R2 needed). NOT a portal ingest (portal: null).
+# + the `clip` extra. Secret: SUPABASE_DB_URL (no R2 needed).
 
 on:
   schedule:
