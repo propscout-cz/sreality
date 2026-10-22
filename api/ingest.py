@@ -11,7 +11,7 @@ from typing import Any
 from scraper import db
 from scraper.portal_identity import (
     MAX_URL_LENGTH,
-    PORTALS,
+    SOURCES,
     TOO_LONG_CS,
     UNKNOWN_HOST_CS,
     Refused,
@@ -46,7 +46,7 @@ def ingest_link(conn: Any, text: str) -> dict[str, Any]:
 
 def ingest_state(conn: Any, source: str, native: str) -> dict[str, Any]:
     """GET: the same state, read-only — what a dialog polls while the drain works."""
-    if source not in PORTALS:
+    if source not in SOURCES:
         return _state("refused", message_cs=UNKNOWN_HOST_CS)
     if len(native) > MAX_URL_LENGTH:
         return _state("refused", message_cs=TOO_LONG_CS)

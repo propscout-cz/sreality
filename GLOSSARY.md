@@ -1,8 +1,8 @@
 # Property intelligence platform
 
-One market-wide view of Czech real estate built from the ads nine portals publish. Code and tables
-still carry some older names; the terms below are the ones to use in prose, UI text, documents and
-anything newly named.
+One market-wide view of Czech real estate built from the ads nine portals publish and the ads of any
+other site someone pastes a link to. Code and tables still carry some older names; the terms below
+are the ones to use in prose, UI text, documents and anything newly named.
 
 ## Language
 
@@ -57,7 +57,9 @@ are kept forever.
 _Avoid_: live, dead, delisted, deleted, removed, expired
 
 **Portal**:
-One of the advertising websites the platform collects from.
+One of the advertising websites the platform collects from. Nine are walked page by page; the tenth,
+Web, is every other site: its ads arrive only when someone pastes a link, and a Web ad is known by
+its link's canonical address (shown by its site's name), not by an id of the site's own.
 _Avoid_: site, source (in prose)
 
 **Snapshot**:

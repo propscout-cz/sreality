@@ -25,6 +25,7 @@ import {
   filtersEqualForPreset,
   filtersForPreset,
   readPresetSpec,
+  savedMapArea,
   filtersToWatchdogSpec,
   effectiveBbox,
   mapAreaLabel,
@@ -1123,6 +1124,32 @@ describe('effectiveBbox', () => {
       return b.east - b.west;
     };
     expect(span(70)).toBeGreaterThan(span(10));
+  });
+});
+
+/* A preset click puts the area it saved in the map frame (BrowseExperience →
+ * ListingMap `frame`); a preset without one leaves the camera where it is. */
+describe('savedMapArea', () => {
+  const bounds = { west: 14.3, south: 50.0, east: 14.5, north: 50.2 };
+
+  it('is the saved map area of a preset saved with it, null for one saved without', () => {
+    const f = { ...DEFAULT_FILTERS, dispositions: ['2+kk' as Disposition], bounds };
+    expect(savedMapArea({ filters: filtersForPreset(f, true), sort: null })).toEqual(bounds);
+    expect(savedMapArea({ filters: filtersForPreset(f, false), sort: null })).toBeNull();
+  });
+
+  it('frames the square around a saved centre+radius, as Browse filters on', () => {
+    const f: ListingFilters = {
+      ...DEFAULT_FILTERS,
+      locationMode: 'center_radius',
+      centerRadius: { lat: 50, lng: 14, radius_m: 1000 },
+      bounds,
+    };
+    expect(savedMapArea({ filters: f, sort: null })).toEqual(effectiveBbox(f));
+  });
+
+  it('reads the legacy bare-filters blob too', () => {
+    expect(savedMapArea({ ...DEFAULT_FILTERS, bounds })).toEqual(bounds);
   });
 });
 

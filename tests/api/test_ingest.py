@@ -145,7 +145,7 @@ def _get(client: Any, source: str, native: str) -> dict[str, Any]:
 
 @pytest.mark.parametrize("text, sentence", [
     ("dobrý den", "V textu není žádný odkaz."),
-    ("https://www.example.com/byt/1", "Tuto stránku zatím nečteme."),
+    ("https://auto.bazos.cz/inzerat/187654321/skoda.php", "Tuto stránku zatím nečteme."),
     ("https://www.sreality.cz/hledani/prodej/byty", "Tento odkaz nevede na jeden inzerát."),
     ("https://www.sreality.cz/detail/prodej/byt/x/2557083724?" + "a" * 600, "Odkaz je příliš dlouhý."),
 ])
@@ -168,6 +168,18 @@ def test_an_ad_we_lack_is_queued_at_new_with_its_url(client, store) -> None:
     q = store.queue[("idnes", IDNES_ID)]
     assert q["priority"] == db.QUEUE_PRIORITY_NEW
     assert q["detail_ref"] == IDNES
+
+
+def test_any_other_site_is_queued_as_the_tenth_portal_under_its_canonical_url(client, store) -> None:
+    body = _post(client, "https://www.RK-Novak.cz/byty/15/?utm_source=fb&id=2#foto")
+    assert body["state"] == "queued"
+    assert (body["source"], body["source_id_native"]) == ("web", "https://www.rk-novak.cz/byty/15?id=2")
+    assert store.queue[("web", "https://www.rk-novak.cz/byty/15?id=2")]["detail_ref"] == (
+        "https://www.rk-novak.cz/byty/15/?id=2")
+    # The SPA polls with encodeURIComponent: a web id carries `/` and `?`.
+    from urllib.parse import quote
+
+    assert _get(client, "web", quote("https://www.rk-novak.cz/byty/15?id=2", safe=""))["state"] == "queued"
 
 
 def test_sreality_is_queued_by_id_never_by_url(client, store) -> None:

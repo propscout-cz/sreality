@@ -74,6 +74,8 @@ _FAMILIES: dict[str, tuple[str, ...]] = {
 _POST_REGISTRY_FAMILIES: dict[str, tuple[str, ...]] = {
     # D3: write_contacts=False, so identity + link and NO contact upserts.
     "mmreality": ("identity", "link"),
+    # The tenth portal (any other site): keyed on its contact, so all four statements.
+    "web": ("identity", "email", "phone", "link"),
 }
 _ALL_FAMILIES = {**_FAMILIES, **_POST_REGISTRY_FAMILIES}
 
@@ -135,7 +137,7 @@ def test_the_generated_statements_are_exactly_the_pre_registry_families() -> Non
     migrated = sum(len(_FAMILIES[s]) for s in _FAMILIES)
     assert migrated == len(PRE_REGISTRY_SQL) == 16
     post = sum(len(_POST_REGISTRY_FAMILIES[s]) for s in _POST_REGISTRY_FAMILIES)
-    assert len(attribution_statements()) == migrated + post == 18
+    assert len(attribution_statements()) == migrated + post == 22
 
 
 def test_the_set_of_statements_that_deviate_is_frozen() -> None:
@@ -225,7 +227,7 @@ def test_registry_order_drives_the_full_sweep_source_scan() -> None:
     """Append-only: the tuple IS the sweep's `source = ANY(...)` scan and its
     per-chunk execution order, so a reorder silently changes both."""
     assert BROKER_SOURCE_NAMES == (
-        "sreality", "idnes", "ceskereality", "realitymix", "remax", "mmreality")
+        "sreality", "idnes", "ceskereality", "realitymix", "remax", "mmreality", "web")
 
 
 def test_fingerprint_keys_reproduce_the_pre_registry_allowlist() -> None:
@@ -233,21 +235,24 @@ def test_fingerprint_keys_reproduce_the_pre_registry_allowlist() -> None:
     Losing a key silently stops re-attribution for that portal; deriving it can
     only reorder the tuple, never change the set.
 
-    D3 added exactly one member, "id" — mmreality's own broker key. Widening the
-    allowlist is safe in one direction only, and this is that direction: the
-    fingerprint is read off `raw["broker"]` for EVERY attributed source, so a new
-    key can only make more blocks compare unequal (an extra re-attribution), never
-    fewer. The next assertion is what makes that concrete: no other portal writes a
-    bare "id" into its block, so for them the added slot is a constant None."""
+    D3 added exactly one member, "id" — mmreality's own broker key; the web portal
+    added "agency" (its JSON-LD seller's organisation). Widening the allowlist is safe
+    in one direction only, and this is that direction: the fingerprint is read off
+    `raw["broker"]` for EVERY attributed source, so a new key can only make more
+    blocks compare unequal (an extra re-attribution), never fewer. The next
+    assertions make that concrete: only the two portals that own a bare "id" or
+    "agency" write one into their block, so for the rest the slot is a constant None."""
     assert set(BROKER_FINGERPRINT_KEYS) == {
         "account_oid", "broker_id", "id", "name", "email", "phone",
-        "agency_name", "agency_slug", "agency_id"}
+        "agency", "agency_name", "agency_slug", "agency_id"}
     registered = {k for c in BROKER_SOURCES if c.block == "broker"
                   for k in c.fingerprint_keys()}
     assert set(BROKER_FINGERPRINT_KEYS) == registered
     owners = {c.source for c in BROKER_SOURCES
               if c.block == "broker" and "id" in c.fingerprint_keys()}
-    assert owners == {"mmreality"}
+    assert owners == {"mmreality", "web"}
+    assert {c.source for c in BROKER_SOURCES
+            if c.block == "broker" and "agency" in c.fingerprint_keys()} == {"web"}
 
 
 def test_mmreality_writes_an_identity_email_but_no_contact_rows() -> None:
@@ -291,6 +296,24 @@ def test_flipping_only_write_contacts_restores_mmrealitys_two_contact_upserts() 
     assert "'phone', c.phone" in statements[2]
     assert ("CASE WHEN length(regexp_replace(l.raw_json->'broker'->>'phone', "
             "'[^0-9]', '', 'g')) = 9 THEN '420' ||") in statements[2]
+
+
+def test_web_keys_on_its_contact_and_captures_the_seller_label() -> None:
+    """The tenth portal's config promises, in the generated SQL. A foreign page names no
+    broker id, so the parser keys the block on the contact (email, else phone): the
+    identity, both contact upserts and the link all read `raw["broker"]["id"]`, the
+    JSON-LD seller's organisation is captured as agency_name, and a bare 9-digit phone
+    gains 420 like toolkit.broker_resolver.normalize_phone."""
+    identity, email, phone, link = (_one("web", k) for k in ("identity", "email", "phone", "link"))
+    assert "INSERT INTO broker_identities" in identity
+    assert "(l.raw_json->'broker'->>'id') AS uid" in identity
+    assert "nullif(l.raw_json->'broker'->>'agency', '') AS agency" in identity
+    assert "lower(nullif(l.raw_json->'broker'->>'email', '')) AS email" in identity
+    assert "INSERT INTO broker_identity_contacts" in email and "'email', c.email" in email
+    assert "'phone', c.phone" in phone
+    assert ("CASE WHEN length(regexp_replace(l.raw_json->'broker'->>'phone', "
+            "'[^0-9]', '', 'g')) = 9 THEN '420' ||") in phone
+    assert "bi.source_broker_id_native = (l.raw_json->'broker'->>'id')" in link
 
 
 def test_write_contacts_is_opt_out_so_a_forgotten_flag_still_writes_contacts() -> None:

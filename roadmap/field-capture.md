@@ -167,6 +167,14 @@ estimate ≈ −7,260 / +2,860 LOC, −30 files, −2 tables, −8 workflows, 0 
       after #1638 is merged + deployed, re-run its count query, get the operator's OK, apply it
       from THAT branch, then merge it; then `reparse.yml fields=area_m2` per portal, then the
       autodedup lane re-seed (it reads snapshots only).
+- [ ] **`web` joins the census after its first week of pastes (the tenth portal, new-property-
+      from-link W3).** `scraper/attribute_contract.py` declares its 26 cells — five
+      `structured` over the parse's top-level `raw_json` keys, eight prose cells as `text`
+      behind closed gates (kept across a refetch, R4), the rest `none` — and the census
+      gates skip a portal no bless has measured (no census, no fill cell). Owed, operator:
+      `python -m scraper.field_census --bless` a week after the first paste writes
+      `census/web.json` + its baseline cells; A1/A2 then read it (every top-level `raw_json` key
+      the parse writes is already read or in `IGNORED['web']`).
 
 ## Hand-overs owed to the autodedup program (R12 — this program never edits theirs)
 

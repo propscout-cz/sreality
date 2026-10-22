@@ -46,6 +46,7 @@ from scraper.portal import (
     load_portal_config,
     walk_coverage,
 )
+from scraper.portal_identity import Resolved
 from scraper.rate_ledger import DEFAULT_LEASE_N, build_rate_limiter
 from scraper.rate_limit import RateLimiter
 
@@ -161,6 +162,10 @@ class Portal(Protocol):
     #   records any difference in portal_category_drift (alarm, not gate).
     # note_empty_slice(category): ceskereality + realitymix keep the sibling-slice
     #   counter honest when the runner refuses an empty seen set.
+    # indexless (bool, default False): the portal has no index to walk (`web`: any site an
+    #   operator pastes), so its walk sees nothing BY CONSTRUCTION and its finished walk
+    #   still nominates — through its own presence_candidates, which must exist. The
+    #   empty-seen refusal below stays for every other portal.
     # coverage_denominator_is_upper_bound: ceskereality; picks the COVERAGE log
     #   level and is written into every by_category entry as declared_is_upper_bound.
 
@@ -311,7 +316,8 @@ def _queue_presence_checks(
     if nulls:
         LOG.warning("VERIFY dropped %d NULL id(s) from the seen set cm=%s ct=%s", nulls, cm, ct)
         seen = {x for x in seen if x is not None}
-    if not seen:
+    indexless = bool(getattr(portal, "indexless", False))
+    if not seen and not indexless:
         # walk_coverage calls a measured zero complete (declared 0, collected 0),
         # and it is right to -- but "I saw nothing" proves nothing about what is
         # missing: with an empty seen set the nomination query's `<> ALL('{}')`
@@ -340,6 +346,10 @@ def _queue_presence_checks(
     custom = getattr(portal, "presence_candidates", None)
     if custom is not None:
         scope = custom(conn, category, seen)
+    elif indexless:
+        LOG.warning("VERIFY skipped: an indexless portal nominates only through its own "
+                    "presence_candidates, and %s has none", portal.source)
+        return 0, 0
     elif cm is None or ct is None:
         LOG.info("VERIFY skipped: category has no (category_main, category_type) label")
         return 0, 0
@@ -769,33 +779,55 @@ def _flush_drain_batch(
     return conn
 
 
+def record_gone_verdict(
+    conn: Any, source: str, native_id: str, now: datetime | None = None,
+) -> str:
+    """Rule #3's ONE gone step: record the verdict + dequeue the row; flip the listing only
+    when the ledger already holds an earlier unrefuted verdict GONE_DWELL old
+    (`delist_policy.gone_confirmed`). Returns flipped / closed (already inactive) / pending /
+    no_row. Idempotent under a replay (a second call finds the queue row gone and the
+    verdict it just wrote too young to confirm anything). The drain calls it for every gone
+    item; an adapter whose write step learns a page is gone (`rekey_detail`) calls the same
+    step, never a copy."""
+    now = now or datetime.now(timezone.utc)
+    exists, first_gone_at = db.gone_evidence(conn, source, native_id)
+    if not exists:
+        verdict = "no_row"
+    elif delist_policy.gone_confirmed(first_gone_at, now):
+        flipped = db.mark_listing_inactive(conn, source, native_id)
+        verdict = "flipped" if flipped else "closed"
+    else:
+        verdict = "pending"
+    # The ledger says what the drain DID: 'flipped' closed the ad, 'gone' only recorded
+    # the verdict (the evidence a later one confirms, or a sighting refutes).
+    db.complete_detail(conn, source, [native_id],
+                       outcome="flipped" if verdict == "flipped" else "gone")
+    return verdict
+
+
+def rekey_detail(conn: Any, source: str, native_id: str, target: Resolved) -> str:
+    """A fetched page that IS another portal's ad (`web`: a pasted shortener that redirects
+    to an sreality ad): queue that ad at NEW under its own portal and record this row's gone
+    verdict through `record_gone_verdict` — one identity per ad, never a second. Returns the
+    verdict. Idempotent like both steps it is made of."""
+    db.enqueue_detail(conn, target.source, [(
+        target.native_id, db.detail_ref(target.source, target.detail_ref), None,
+        db.QUEUE_PRIORITY_NEW)])
+    return record_gone_verdict(conn, source, native_id)
+
+
 def _drain_mark_gone(
     portal: Portal, conn: Any, native_id: str, priority: int, reconnect: Any,
 ) -> tuple[Any, str | None, str | None]:
-    """Record a gone verdict + dequeue it; flip the listing only when the ledger already
-    holds an earlier unrefuted verdict GONE_DWELL old (rule #3 hysteresis, `delist_policy.
-    gone_confirmed`). Transient-drop resilient. Returns (live conn, verdict, None) with
-    verdict in flipped / closed (already inactive) / pending / no_row, or (conn, None, error)
-    when the op failed."""
+    """Record a gone verdict through `record_gone_verdict`, transient-drop resilient.
+    Returns (live conn, verdict, None) with verdict in flipped / closed (already inactive) /
+    pending / no_row, or (conn, None, error) when the op failed."""
     now = datetime.now(timezone.utc)
 
-    def _op(c: Any) -> str:
-        exists, first_gone_at = db.gone_evidence(c, portal.source, native_id)
-        if not exists:
-            verdict = "no_row"
-        elif delist_policy.gone_confirmed(first_gone_at, now):
-            flipped = db.mark_listing_inactive(c, portal.source, native_id)
-            verdict = "flipped" if flipped else "closed"
-        else:
-            verdict = "pending"
-        # The ledger says what the drain DID: 'flipped' closed the ad, 'gone' only recorded
-        # the verdict (the evidence a later one confirms, or a sighting refutes).
-        db.complete_detail(c, portal.source, [native_id],
-                           outcome="flipped" if verdict == "flipped" else "gone")
-        return verdict
-
     try:
-        verdict, conn = db.run_resilient(conn, _op, reconnect=reconnect, label="drain.gone")
+        verdict, conn = db.run_resilient(
+            conn, lambda c: record_gone_verdict(c, portal.source, native_id, now),
+            reconnect=reconnect, label="drain.gone")
     except Exception as exc:  # noqa: BLE001 - one listing must not red the run
         if db.is_transient_db_error(exc):
             raise  # retries exhausted: a real outage reds the run, as before

@@ -1175,6 +1175,11 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
           "value": "realitymix",
           "label_cs": "RealityMix",
           "label_en": "RealityMix"
+        },
+        {
+          "value": "web",
+          "label_cs": "Web",
+          "label_en": "Web"
         }
       ],
       "aliases": [],
@@ -1241,6 +1246,11 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
           "value": "realitymix",
           "label_cs": "RealityMix",
           "label_en": "RealityMix"
+        },
+        {
+          "value": "web",
+          "label_cs": "Web",
+          "label_en": "Web"
         }
       ],
       "aliases": [],

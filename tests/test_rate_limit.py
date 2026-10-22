@@ -109,3 +109,16 @@ def test_reschedule_never_moves_next_slot_earlier(monkeypatch):
     lim.reschedule(1.0, clock.now + 0.2)  # earlier not_before must not win
     lim.acquire()
     assert sleeps == [1.0]
+
+
+def test_a_local_limiter_has_no_deadline_and_a_client_can_refuse_the_run() -> None:
+    """`refuse` is how a client that knows its next fetch cannot start in time (the `web`
+    client's host pacing) hands the rest of the run back; the runner reads `refused`."""
+    from scraper.rate_ledger import LedgerRateLimiter
+
+    local = RateLimiter(1.0)
+    assert local.deadline is None and not local.refused
+    local.refuse("deadline")
+    assert (local.refused, local.refused_reason) == (True, "deadline")
+    ledger = LedgerRateLimiter("web", 1.0, deadline=123.0, connect=lambda: None)
+    assert ledger.deadline == 123.0

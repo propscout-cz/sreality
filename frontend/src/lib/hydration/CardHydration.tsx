@@ -44,8 +44,8 @@ export interface CardHydration {
    * singleton so a consumer can memoize on identity. */
   photosFor: (listingId: number | null | undefined) => readonly ImagePublic[];
   /* A listing's storey (floor + building's podlaží), or null when it has none /
-   * not yet. The title it joins is already on screen, so there is no pending
-   * flag: the storey just appears, and a null never renders as a gap. */
+   * not yet. The card it tags is already on screen, so there is no pending
+   * flag: the tag just appears, and a null never renders as a gap. */
   floorFor: (listingId: number | null | undefined) => ListingFloor | null;
   /* True while the decoration is still in flight, so a card can reserve its
    * space instead of reflowing when the value lands. Distinct from "resolved to
@@ -90,7 +90,7 @@ export interface CardDecorations {
   /* Several photos per card for a carousel — the value is the client-side
    * retention cap (perId), which is part of the cache key. Omitted = off. */
   photos?: number;
-  /* The storey line of the card title (floor + building podlaží): three columns
+  /* The storey tag of the card (floor + building podlaží): three columns
    * of listings_public per page-sized bucket, off by default like the rest. */
   floors?: boolean;
 }

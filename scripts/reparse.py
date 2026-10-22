@@ -12,7 +12,8 @@ and the import-time assertion that the registry still agrees with `_HASH_FIELDS`
 the split is measured, not assumed:
 
   * `portal_raw_pages.html` (page_kind='detail') for the seven HTML portals — bazos,
-    ceskereality, idnes, maxima, mmreality, realitymix, remax. UNIQUE(source,
+    ceskereality, idnes, maxima, mmreality, realitymix, remax — and `web`, the tenth
+    portal (any pasted site, since 2026-10-21), staged the same way. UNIQUE(source,
     source_id_native, page_kind), upserted latest-wins in the SAME `write_details`
     transaction that writes the listings row, so it cannot lag the row it produced: the
     stored page IS the page the current columns were parsed from, which is why replaying it
@@ -165,6 +166,9 @@ SUBSTRATE: dict[str, PortalSubstrate] = {
     "remax": PortalSubstrate(PAGE, "scraper.remax_parser", "parse_detail", False),
     "bezrealitky": PortalSubstrate(RAW_JSON, "scraper.bezrealitky_parser", "parse_advert", False),
     "sreality": PortalSubstrate(RAW_JSON, "scraper.parser", "parse_listing", False),
+    # The tenth portal: its drain stages every page it parses, and the parse is
+    # deterministic over that page, so a re-derive is idempotent.
+    "web": PortalSubstrate(PAGE, "scraper.web_parser", "parse_detail", False),
 }
 
 # Derived from the two definitions that already exist, never restated (rule 21): a column

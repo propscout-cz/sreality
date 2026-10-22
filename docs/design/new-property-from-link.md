@@ -230,9 +230,10 @@ name/email/phone keys, firm_keys=('agency',))`, and `contracts/portals/web.yaml`
   declared seam: `_queue_presence_checks` skips the empty-seen refusal only for a portal that declares
   `indexless = True` (rule 21: a per-portal need is a `Portal` seam, never an `if source ==`); the
   existing empty-seen tests stay valid for every other portal. A no-op `set_index_page_cap` keeps the
-  probe lane quiet. `.github/workflows/web_index_walk.yml` (daily; the per-portal walk convention;
-  `web_main --index-only`) nominates; the drain fetches; `gone_evidence` + `GONE_DWELL` + `mark_listing_
-  inactive` apply unchanged, so a dead web ad closes 24–48 h after it dies. `delist_flip_cap` never
+  probe lane quiet. `.github/workflows/web_index_walk.yml` (every 6 h, so the 24 h `RECHECK_THROTTLE`
+  sets each ad's cadence — a daily cron would skip it one day in two; `web_main --index-only`)
+  nominates; the drain fetches; `gone_evidence` + `GONE_DWELL` + `mark_listing_
+  inactive` apply unchanged, so a dead web ad closes 24–60 h after it dies. `delist_flip_cap` never
   throttles it (below the 2,000-row floor) and the gone-rate breaker never trips on it (< 20 ingest
   fetches a run); both are stated, not special-cased.
 - Autodedup reads a `web` ad's PORTAL as its host (one helper `portal_of(listing)`, `source` for the
@@ -370,7 +371,7 @@ claimed — this sprint starts at **644**, re-checked at merge. #1910 edits `scr
 
 | Risk | Mitigation |
 |---|---|
-| a web ad is never delisted (the empty-seen guard) | the declared `indexless` seam + the portal's own `presence_candidates` (NULL categories included) + the daily walk; closes in 24–48 h |
+| a web ad is never delisted (the empty-seen guard) | the declared `indexless` seam + the portal's own `presence_candidates` (NULL categories included) + the 6-hourly walk (each ad checked every 24–30 h); closes in 24–60 h |
 | the drain thread blocks on a slow foreign site | `egress` wall-clock deadline + decoded-size cap; `shared_rate_limiter=True` so the drain's 120 s deadline refuses late acquires; `web` first in `REALTIME_SOURCES` |
 | SSRF through the worker, the image downloader or the URL prober | ONE `egress` session with IP pinning, private-range refusal on every hop, IPv6 ULA and mapped addresses, used by all three |
 | a wrapped or shortened link becomes a second identity | known wrappers unwrapped at resolve; a first-fetch redirect to a portal ad re-keys under that portal |
