@@ -49,7 +49,10 @@ section and shelf names, JetBrains Mono (`font-mono`) with `tabular-nums` on EVE
   dashed = absent.
 - **Comparables table** (the Valuo card): the first column is the comparable's first photo (fixed ~72×54 box, lazy;
   a broken image is a dashed empty box) opening the app's existing gallery; numbers mono tabular; a realised sale
-  price is tagged "prodáno"; the table scrolls inside its own box at narrow widths, never the page.
+  price is tagged "prodáno"; the table scrolls inside its own box at narrow widths, never the page. While our
+  recalculation is offered (`lib/valuo.ts` `recalcBase`) a tick sits before each photo and the copper "Náš přepočet" card
+  above the table keeps ONE height in every state (a sentence, a figure, a figure with its band), so the rows never
+  jump under the cursor.
 
 ## Health page (2026-10-19)
 Added after the Health page rebuild (`docs/design/health-dashboard.md` § 5, wave 8). It extends the ledger

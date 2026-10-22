@@ -78,6 +78,12 @@ value came from, which Valuo environment answered, and Valuo's answer in its own
 our own estimates, never counted as one of them.
 _Avoid_: Valuo estimate, Valuo run, external estimate
 
+**Recalculation** (UI: "Náš přepočet"):
+Our figure over the comparables of a Valuo valuation that the user leaves ticked, worked out in the browser from
+Valuo's own per-m² prices the way Valuo works out its average. Never stored, never counted as one of our estimates
+(a run of ours) and never presented as Valuo's answer.
+_Avoid_: our estimate, Valuo recalculation, náš odhad
+
 ### Changing what belongs together
 
 **Merge**:

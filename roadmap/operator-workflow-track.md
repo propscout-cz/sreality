@@ -74,9 +74,13 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   the editor's controls are `controls.tsx`'s form box (`box=`: one 34 px height, dashed absent, brick refused, the unit
   inside), no local patches; one `useEstimationRuns` query for Odhady and the Valuo mark; both ledgers are `table.tsx`
   `Column`s under `SectionLabel`/`Th`, their data ink-3; Valuo's failures in Czech.
-- **Next:** W5, our own recalculation over the comparables the user keeps (operator ruling 2026-10-20: v3 cannot
-  exclude any; Valuo's adjusted price/m² weighted by similarity, labelled ours) — plan first; one production call
-  confirms whether a house's plot is sent; a per-plan monthly
+- **Done (W5, 2026-10-21):** "Náš přepočet" — a tick box per comparable (all ticked), a card under Valuo's own with the
+  total, the per-m² and its distance from Valuo, "orientační" from 3 kept and a band from 5, "Vrátit výchozí"; browser
+  only (`lib/valuo.ts` `recalc`: Valuo's weighted geometric mean, 0.11 % from its own on five real answers), nothing
+  stored, desktop only, offered only while the recipe lands within 1 % of Valuo's average. The subject's own ad (matched
+  by the portal id over ALL the property's ads, delisted too) is tagged "tento inzerát" and stays ticked; adding
+  comparables is not part of it. The unread record/summary names left the API payload (Valuo's answer is stored whole).
+- **Next:** one production call confirms whether a house's plot is sent; a per-plan monthly
   quota counted from the rows before the production token; Valuo's own field messages still show as bare English under
   a Czech caption (quote them as the failure card does: `Valuo: „…“`); ONE app-wide Czech translation pass (operator
   ruling): the run ledger's `SUCCESS`/`FAILED` chips, the estimation block's English copy (`ESTIMATES`, the runs ledger's

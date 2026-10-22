@@ -1456,7 +1456,11 @@ renumber.** Navigate by area:
     energy class G is not sent (`assumed` —
     Czech ads without a PENB certificate must state G too), and a yes/no attribute is sent only
     when the ad says yes — portals store "not mentioned" as no (sreality's garage, bezrealitky's
-    lift), so a no stays `missing` with its reason.
+    lift), so a no stays `missing` with its reason. **Náš přepočet** (operator ruling 2026-10-21): the SPA
+    recomputes Valuo's own average over the comparables the user leaves ticked (a geometric mean of their
+    `adjusted_price_m2` weighted by `score_prct`, a realised sale twice; `frontend/src/lib/valuo.ts`), labelled
+    ours, held in page state only, never stored and never an `estimation_runs` row, and offered only while the
+    recipe over ALL comparables lands within 1 % of Valuo's `avg_price_m2`.
 
     Calibration — how a Valuo number is judged — reads production rows only, drops every row that
     leaned on an assumption for a required parameter (a success never lacks one: the POST refuses;
@@ -3310,7 +3314,9 @@ renumber.** Navigate by area:
     `llm-pipelines` skill. **Valuo's own per-m² figures** (`avg_price_m2`, `range_price_m2`,
     `std_price_m2`, each comparable's `price_m2` / `adjusted_price_m2`) are the other outside
     authority's numbers, over Valuo's `calc_area` and never this measure, shown verbatim under the
-    request's basis label (`api/valuo.result_basis`, a `REGISTERED_SITES` entry; rule 12).
+    request's basis label (`api/valuo.result_basis`, a `REGISTERED_SITES` entry; rule 12). The browser's
+    recalculation over the comparables a user keeps (rule 12) stays inside that exception: its per-m² is Valuo's
+    per-m² and its total that figure times Valuo's own `calc_area`, never a price divided by an area.
 
     **The headline area has ONE rule, and every portal feeds it the same way** (W17,
     2026-09-15). `scraper/area.derive_headline_area(category_main, usable, floor, total, plot,
