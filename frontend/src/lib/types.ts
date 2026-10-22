@@ -602,6 +602,9 @@ export interface Attachment {
   mime_type: string;
   byte_size: number;
   created_at: string;
+  /* Null iff the acting identity added it (the notes' share-aware field); another author's file
+   * reaches me only on a note they marked shared. */
+  owner_email?: string | null;
 }
 
 

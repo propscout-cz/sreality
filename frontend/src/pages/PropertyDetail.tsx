@@ -99,6 +99,7 @@ const ValuoSection = lazyChunk(() => import('@/components/listing-detail/ValuoSe
 const PropertyOverview = lazyChunk(() => import('@/components/listing-detail/PropertyOverview'));
 const PhotoMosaic = lazyChunk(() => import('@/components/listing-detail/PhotoMosaic'));
 const MineStrip = lazyChunk(() => import('@/components/listing-detail/MineStrip'));
+const PropertyPhotos = lazyChunk(() => import('@/components/listing-detail/PropertyPhotos'));
 const AuditPanel = lazyChunk(() => import('@/components/listing-detail/AuditPanel'));
 
 /* The phone layout is its own chunk: the desktop never downloads it, and the
@@ -463,11 +464,14 @@ export default function PropertyDetail() {
               <Skeleton height={120} />
             ),
           moje: (
-            /* Tags / artifact link / notes — property-grain (rule #18); the
-               pipeline and the collections are the header's verbs. */
+            /* Tags / artifact link / notes, then my own photos — property-grain
+               (rule #18); the pipeline and the collections are the header's verbs. */
             <Suspense fallback={<Skeleton height={140} />}>
               <ActingAs key={actingShare?.account_id ?? 'own'} share={actingShare}>
-                <CurationBlock property_id={propertyId} listing_id={property.id} />
+                <div className="space-y-7">
+                  <CurationBlock property_id={propertyId} listing_id={property.id} />
+                  <PropertyPhotos property_id={propertyId} />
+                </div>
               </ActingAs>
             </Suspense>
           ),

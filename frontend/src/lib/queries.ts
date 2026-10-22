@@ -1802,6 +1802,10 @@ export const curationKeys = {
   propertyCollectionMembers: ['curation', 'property-collection-members'] as const,
   propertyNotes: (property_id: number) =>
     ['curation', 'property-notes', property_id] as const,
+  /* A property's files (migration 660), under its notes' key: one record, so a write to either
+   * re-reads both. */
+  propertyFiles: (property_id: number) =>
+    ['curation', 'property-notes', property_id, 'files'] as const,
   /* Prefix of every property's notes: a share change moves which notes I can read. */
   allPropertyNotes: ['curation', 'property-notes'] as const,
   artifactLinks: ['curation', 'artifact-links'] as const,

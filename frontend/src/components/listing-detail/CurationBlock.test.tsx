@@ -300,6 +300,27 @@ describe('<CurationBlock> note attachments', () => {
       await waitFor(() => expect(deleteAttachment).toHaveBeenCalledWith(42, 2));
       click.mockRestore();
     });
+
+  it('opens a note’s photo in the viewer on its original, never a new tab (Photos W2)', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    vi.mocked(listPropertyNotes).mockResolvedValue({ data: [{ ...NOTE, attachments: [
+      { id: 1, property_id: 42, note_id: 11, filename: 'foto.png', mime_type: 'image/png',
+        byte_size: 2048, created_at: '2026-05-02T00:00:00+00:00' },
+    ] }] } as never);
+    vi.mocked(fetchAttachmentBlob).mockResolvedValue(new Blob(['x'], { type: 'image/png' }));
+    renderWithReads();
+
+    const files = await screen.findByRole('list', { name: 'Attachments' });
+    const tile = await within(files).findByRole('button', { name: 'Open foto.png' });
+    expect(files.querySelector('a[target="_blank"]')).toBeNull();
+    // Its × is there without a hover: a finger reaches it.
+    expect(within(files).getByRole('button', { name: 'Remove foto.png' }).className).not.toMatch(/opacity-0/);
+    await user.click(tile);
+    const viewer = await screen.findByRole('dialog');
+    await waitFor(() => expect(fetchAttachmentBlob).toHaveBeenCalledWith(42, 1, { actAs: null }));
+    expect(within(viewer).getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+  });
 });
 
 /* The per-property Artifact link (migration 599): one clickable http(s) URL, set, replaced and
