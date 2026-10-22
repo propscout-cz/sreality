@@ -107,6 +107,7 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
       'areaMin', 'areaMax', 'estateAreaMin', 'estateAreaMax', 'usableAreaMin', 'usableAreaMax',
       'conditionMatch', 'buildingMaterial', 'furnished',
       'hasBalcony', 'hasLift', 'hasParking', 'terrace', 'cellar', 'garage', 'parkingLotsMin',
+      'portals', 'portalsExcluded', 'portalsExcludedActiveOnly',
     ],
     rows: [
       { blocks: [form({ category_type: 'Listing for' })] },
@@ -161,19 +162,19 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
         ],
       },
       { blocks: [form({ min_parking_lots: 'Min parking spaces' })] },
+      /* Last in Essentials (operator, 2026-10-22): which portals' ads count. */
+      { blocks: [{ kind: 'custom', key: 'portals', label: 'Source portal', caption: true }] },
     ],
   },
   {
     title: 'Curation',
     keys: [
-      'pipeline', 'collections', 'tags',
-      'portals', 'portalsExcluded', 'portalsExcludedActiveOnly', 'withEstimates',
+      'pipeline', 'collections', 'tags', 'withEstimates',
     ],
     rows: [
       { blocks: [form({ pipeline: 'Pipeline' })] },
       { blocks: [form({ collections: 'Collections' })] },
       { blocks: [form({ tags: 'Tags' })] },
-      { blocks: [{ kind: 'custom', key: 'portals', label: 'Source portal', caption: true }] },
       { blocks: [form({ with_estimates: 'With estimates' })] },
     ],
   },
