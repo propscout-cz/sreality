@@ -300,16 +300,13 @@ The detail-drain writes `scrape_runs` rows too (`run_type='detail'`), but only t
 
 ## Onboarding a portal — and the tenth, `web` (2026-10-21)
 
-A portal is one row per registry, never a branch: `portal_factory`, `scraper.portal._DEFAULTS`, `REALTIME_SOURCES`,
-`reparse.SUBSTRATE`, `contracts/portals/<src>.yaml` (+ prefix, coordinate rule, lock, golden, `claims_common.SOURCES`),
-`BROKER_SOURCES`, `attribute_contract.CONTRACT` + `IGNORED`, `PORTAL_OPTIONS` (+ a migration: the `portals` row,
-`newest_ad_at_<src>`, `browse_projection` + `rebuild_browse_list` restated), `portal_identity` + its probe fixture, a
-`<src>_index_walk.yml`, the census bless after a week. `web` (`scraper/web_main.py`) is `indexless`: its 6-hourly walk
-sees nothing, reaches the end and nominates every active row via its own `presence_candidates`; the worker drains it
-FIRST; its pages go through `scraper/egress.py` (private ranges refused per hop, a wall-clock deadline, a decoded cap).
-A pasted link enters this same queue: `POST /listings/ingest {url}` (admin) resolves it with `portal_identity.resolve_url`
-and enqueues at NEW (a `given_up` row re-armed); `GET /listings/ingest/{source}/{native_id}` answers `refused | held |
-queued | gone | failed`; the API never fetches a page (`docs/design/new-property-from-link.md`).
+A portal is one row per registry, never a branch (the registry list: `docs/architecture.md` § rule 21 and
+`docs/design/new-property-from-link.md` §3.4). `web` (`scraper/web_main.py`) is `indexless`: its 6-hourly walk sees
+nothing, reaches the end and nominates every active row via its own `presence_candidates`; the worker drains it FIRST;
+its pages go through `scraper/egress.py` (private ranges refused per hop, a wall-clock deadline, a decoded cap). A pasted
+link enters the same queue: `POST /listings/ingest {url}` (admin) resolves it with `portal_identity.resolve_url` and
+enqueues at NEW (a `given_up` row re-armed); `GET /listings/ingest/{source}/{native_id}` answers `refused | held | queued |
+gone | failed`; the API never fetches a page.
 
 ## The real-time worker (`scraper/realtime_worker.py`)
 
