@@ -2,8 +2,8 @@
  * pipeline" plus every board shared with me, labelled `email · jen ke čtení |
  * úpravy`. The choice is the per-device ACTIVE BOARD (lib/acting); the page
  * renders a shared one inside <ActingAs>. Drawn only when there is something
- * to switch between. One component for the desktop header and the phone's
- * strip; only the chip size differs. */
+ * to switch between. One component for the desktop header (inline, beside the
+ * page title) and the phone's strip; only the chip size differs. */
 
 import { PickButton } from '@/components/controls';
 import { resetActiveBoard, setActiveBoard, sharedBoardLabel, type ActiveBoard } from '@/lib/acting';
@@ -34,7 +34,7 @@ export default function BoardSwitcher({
       className={
         size === 'phone'
           ? 'flex gap-1.5 overflow-x-auto px-4 py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'
-          : 'mt-4 flex flex-wrap gap-1'
+          : 'flex flex-wrap gap-1'
       }
     >
       <PickButton on={active == null} onClick={resetActiveBoard} className={chip}>
