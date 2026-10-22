@@ -977,7 +977,7 @@ def test_the_region_s_towns_come_from_the_one_reader_of_the_scope(
     _read(db, 10, 11)
     _lane(db)
     incremental_lane._stale_claims(db, RT, {seed_version_key(RT): SEED_VERSION}, [[10, 11]],
-                                   False, SimpleNamespace(ledger_keyed=lambda: True), None, 200)
+                                   SimpleNamespace(ledger_keyed=lambda: True), None, 200)
     assert seen == [[531057, 563510], [531057, 563510]], "the reconcile, then the re-claim"
 
 
