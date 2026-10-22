@@ -101,8 +101,8 @@ def _decider(claims: dict) -> str:
     return str(decided_by)
 
 
-# The acting account's moved items of one merge (MS15): notes counted, the rest named. A folded
-# item did not move; another account's rows never leave SQL. The service role reads here, so the
+# The acting account's moved items of one merge (MS15): notes counted, the rest named; files ride
+# without a line. A folded item did not move; another account's rows never leave SQL. The service role reads here, so the
 # account predicate is the gate (tenancy shape 3).
 _RECEIPT_SQL = """
 SELECT c.table_name, count(*),
@@ -114,7 +114,7 @@ LEFT JOIN property_pipeline pp ON c.table_name = 'property_pipeline'
      AND pp.account_id = c.account_id AND pp.property_id = c.to_property_id
 LEFT JOIN pipeline_stages ps ON ps.id = pp.stage_id
 WHERE c.merge_group_id = %(group)s::uuid AND c.account_id = %(account)s
-  AND c.kind = 'moved' AND c.table_name <> 'property_dismissals'
+  AND c.kind = 'moved' AND c.table_name NOT IN ('property_dismissals', 'property_attachments')
 GROUP BY c.table_name
 """
 

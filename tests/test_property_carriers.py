@@ -315,13 +315,14 @@ def _carrier(name: str) -> Any:
     return next(c for c in PROPERTY_CARRIERS if c.name == name)
 
 
-@pytest.mark.parametrize("name", ["collection_properties", "property_tags", "property_notes"])
+@pytest.mark.parametrize(
+    "name", ["collection_properties", "property_tags", "property_attachments", "property_notes"])
 def test_a_curation_table_folds_what_it_collapses_and_moves_the_rest(name):
-    """Each from the retired property, keyed on `keys[0]` (else `id`) and dated by `at`; a row
-    with no account moves as it is."""
+    """Each from the retired property, keyed on its `row_key` and dated by `at`; a row with no
+    account moves as it is."""
     table = _carrier(name)
     *collapse, move = table.sql
-    key = (table.keys or ("id",))[0]
+    key = table.row_key
     assert _n(move).endswith(f"RETURNING {key}, {table.at}, account_id")
     snap = {key: 5}
     cur = _walk(table, {**{s: [(5, T1, A, snap)] for s in collapse}, move: [(6, T2, None)]})
@@ -344,14 +345,25 @@ def test_the_artifact_link_collapses_within_an_account_and_leaves_no_carry_row()
     assert cur.carried == [] and len(cur.ran) == 2
 
 
-def test_alert_events_get_no_carry_rows_and_five_tables_get_them():
+def test_alert_events_get_no_carry_rows_and_six_tables_get_them():
     """MS14's default: the dispatch carrier runs its lock and its one UPDATE and hands back
-    nothing. The carry record's five tables (no CHECK pins them): the three above, the card, the
+    nothing. The carry record's six tables (no CHECK pins them): the four above, the card, the
     dismissal."""
     cur = _walk(_carrier("notification_dispatches"))
     assert len(cur.ran) == 2 and cur.carried == []
     assert {c.name for c in PROPERTY_CARRIERS if getattr(c, "at", None)} == {
-        "collection_properties", "property_tags", "property_notes"}
+        "collection_properties", "property_tags", "property_attachments", "property_notes"}
+
+
+def test_files_fold_per_account_and_bytes_and_move_before_their_notes():
+    """Migration 660: the same bytes once per account and property, so a twin folds (keyed on its
+    own id, never the account or the hash); the files move before the notes, whose trigger would
+    otherwise take them along without a carry row."""
+    files = _carrier("property_attachments")
+    collapse, _move = files.sql
+    assert files.row_key == "id" and files.keys == ("account_id", "sha256_hex")
+    assert "s.account_id IS NOT DISTINCT FROM r.account_id" in _n(collapse)
+    assert _names().index("property_attachments") < _names().index("property_notes")
 
 
 def test_the_pipeline_folds_each_losing_card_from_where_it_came_and_moves_the_winner():
@@ -521,7 +533,8 @@ def test_the_conflict_pass_never_lands_a_copy_or_a_fold_on_a_twin_and_no_dismiss
 
 
 def test_the_writes_run_in_order_and_spend_only_what_moved():
-    """Moves, copies (a note's with its attachments), re-creations, the carry stamp, then the lift
+    """Moves, copies (a note's without its files: they stay with the note), re-creations, the carry
+    stamp, then the lift
     on `left` and every landing; a route whose anchor did not move routes and spends nothing;
     counts as the dry run's. A move
     that changes no row (its account holds the item where it would land: an origin active again)
@@ -541,18 +554,16 @@ def test_the_writes_run_in_order_and_spend_only_what_moved():
     ran = [(f"{s.split()[0]} {s.split()[1 if s.startswith('UPDATE') else 2]}", p.get("to"))
            for s, p in cur.ran]
     assert ran == [("UPDATE property_notes", R1), ("UPDATE property_pipeline", R1),
-                   ("INSERT property_notes", L), ("INSERT property_note_attachments", None),
-                   ("INSERT collection_properties", R1),
+                   ("INSERT property_notes", L), ("INSERT collection_properties", R1),
                    ("UPDATE property_merge_carries", None), ("UPDATE property_dismissals", None),
                    ("UPDATE property_dismissals", None)]
-    assert cur.ran[3][1] == {"copy": 903, "key": 1}, "the note copy takes its attachments"
-    assert cur.ran[5][1] == {"ids": [5, 7, 11, 12]}, "what rides an ad that did not move: nothing"
-    assert [p for _s, p in cur.ran[6:]] == [{"s": L}, {"s": R1}]
+    assert cur.ran[4][1] == {"ids": [5, 7, 11, 12]}, "what rides an ad that did not move: nothing"
+    assert [p for _s, p in cur.ran[5:]] == [{"s": L}, {"s": R1}]
     assert counts == {"note_moves": 1, "carry_rows": 2}
     held = _RouteCur(held={("property_pipeline", None, ME)})
     assert carriers.route_curation(held, routes, left=L, landed={2: R1}) == {
         "note_moves": 1, "carry_rows": 1}
-    assert held.ran[5][1] == {"ids": [7, 11, 12]}, "the card that did not move keeps its row"
+    assert held.ran[4][1] == {"ids": [7, 11, 12]}, "the card that did not move keeps its row"
 
 
 @pytest.mark.usefixtures("ledger_carriers")

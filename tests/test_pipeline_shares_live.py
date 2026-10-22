@@ -25,7 +25,7 @@ pytestmark = REQUIRED_DB
 
 CURATION = (
     "collections", "tags", "property_notes", "collection_properties", "property_tags",
-    "property_note_attachments", "property_artifact_links", "property_dismissals",
+    "property_attachments", "property_artifact_links", "property_dismissals",
     "property_pipeline", "pipeline_stages", "property_pipeline_events",
 )
 BOARD = ("property_pipeline", "pipeline_stages", "property_pipeline_events")
@@ -110,9 +110,10 @@ def world(cur: Any) -> _World:  # noqa: F811
         (a.acc, card),
     )
     cur.execute(
-        "INSERT INTO property_note_attachments (note_id, account_id, storage_key, filename, "
-        "mime_type, byte_size, sha256_hex) VALUES (%s, %s, 'k', 'a.pdf', 'application/pdf', 1, %s)",
-        (note, a.acc, "0" * 64),
+        "INSERT INTO property_attachments (note_id, account_id, property_id, storage_key, "
+        "filename, mime_type, byte_size, sha256_hex) "
+        "VALUES (%s, %s, %s, 'k', 'a.pdf', 'application/pdf', 1, %s)",
+        (note, a.acc, card, "0" * 64),
     )
     cur.execute(
         "INSERT INTO property_artifact_links (account_id, property_id, url) "
@@ -398,9 +399,10 @@ def test_acting_never_reaches_the_owners_identity_scoped_rows(
     d_note = _one(cur, "INSERT INTO property_notes (account_id, property_id, body, shared) "
                   "VALUES (%s, %s, 'd-shared', true) RETURNING id", (d.acc, world.spare))
     cur.execute(
-        "INSERT INTO property_note_attachments (note_id, account_id, storage_key, filename, "
-        "mime_type, byte_size, sha256_hex) VALUES (%s, %s, 'k', 'd.pdf', 'application/pdf', 1, %s)",
-        (d_note, d.acc, "1" * 64),
+        "INSERT INTO property_attachments (note_id, account_id, property_id, storage_key, "
+        "filename, mime_type, byte_size, sha256_hex) "
+        "VALUES (%s, %s, %s, 'k', 'd.pdf', 'application/pdf', 1, %s)",
+        (d_note, d.acc, world.spare, "1" * 64),
     )
     cur.execute("INSERT INTO collection_shares (collection_id, recipient_account_id) VALUES (%s, %s)",
                 (dc_coll, c.acc))
@@ -408,7 +410,7 @@ def test_acting_never_reaches_the_owners_identity_scoped_rows(
         ("SELECT count(*) FROM collections WHERE id = %s", (dc_coll,)),
         ("SELECT count(*) FROM collection_properties WHERE collection_id = %s", (dc_coll,)),
         ("SELECT count(*) FROM property_notes WHERE id = %s", (d_note,)),
-        ("SELECT count(*) FROM property_note_attachments WHERE note_id = %s", (d_note,)),
+        ("SELECT count(*) FROM property_attachments WHERE note_id = %s", (d_note,)),
     )
     for sql, params in d_rows:
         assert _rows(cur, c, sql, params) == [(1,)], f"the D->C share seed is not visible: {sql}"
