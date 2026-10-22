@@ -21,7 +21,7 @@ import statistics
 from typing import Any, NamedTuple
 
 from location_data.claims_common import SOURCES
-from scraper.db import QUEUE_PRIORITY_NEW
+from scraper.db import QUEUE_PRIORITY_NEW, nominable_predicate
 from scraper.portal_runner import DECLARED_TOTAL_KEY
 from scripts.checks.clock import fetchall
 from scripts.checks.common import (
@@ -203,11 +203,10 @@ select h.source, h.category_main, h.category_type, h.held, coalesce(p.pending, 0
 """
 
 # Active ads unseen since before the start of their category's newest end-reached walk (with no
-# such walk, their portal's newest walk in which every entry reached the end), with no queue row
-# and nothing checked since their last sighting: no walk is nominating them. Since the sighting,
-# not the walk's start: an ad checked inside the 24 h recheck throttle before that walk is in
-# flight, not stuck (counted from the start, 2026-10-19 read ~3,600: Problem on five portals).
-_UNNOMINATED_SQL = """
+# such walk, their portal's newest walk in which every entry reached the end) that the walks' own
+# predicate, db.nominable_predicate judged at that start, still calls nominable: no walk is
+# nominating them (an ad the drain finished inside the recheck throttle before it was skipped).
+_UNNOMINATED_SQL = f"""
 with units as (
     select * from unnest(%(sources)s::text[], %(mains)s::text[], %(types)s::text[],
                          %(starts)s::timestamptz[])
@@ -216,7 +215,8 @@ portals as (
     select * from unnest(%(portal_sources)s::text[], %(portal_starts)s::timestamptz[])
            as p(source, start_at)),
 unseen as (
-    select l.source, l.source_id_native, l.last_seen_at, u.start_at is null as unwalked
+    select l.source, l.source_id_native, l.last_seen_at, u.start_at is null as unwalked,
+           coalesce(u.start_at, p.start_at) as walk_start
       from listings l
       join portals p on p.source = l.source
       left join units u on u.source = l.source
@@ -224,14 +224,10 @@ unseen as (
             and u.category_type is not distinct from l.category_type
      where l.is_active
        and coalesce(l.last_seen_at, '-infinity'::timestamptz) < coalesce(u.start_at, p.start_at))
-select s.source, count(*), count(*) filter (where s.unwalked), min(s.last_seen_at)
-  from unseen s
- where not exists (select 1 from listing_detail_queue q
-                    where q.source = s.source and q.native_id = s.source_id_native)
-   and not exists (select 1 from detail_queue_completions c
-                    where c.source = s.source and c.native_id = s.source_id_native
-                      and c.completed_at > coalesce(s.last_seen_at, '-infinity'::timestamptz))
- group by s.source
+select l.source, count(*), count(*) filter (where l.unwalked), min(l.last_seen_at)
+  from unseen l
+ where {nominable_predicate("l.walk_start")}
+ group by l.source
 """
 
 
@@ -469,17 +465,16 @@ def _fetch_error_cells(conn: Any, sources: list[str],
 # --- scraping: missing --------------------------------------------------------------------
 
 
-def _missing_cell(unit: _Unit, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """The share of a unit's declared total its newest end-reached walk did not collect."""
+def _missing_cell(unit: _Unit, thresholds: dict[str, Any]) -> dict[str, Any] | None:
+    """The share of a unit's declared total its newest end-reached walk did not collect; no cell
+    when that total cannot be judged, which the coverage residual says once (its question)."""
+    if _undeclared(unit, int(thresholds["scraping_missing_min_declared"]),
+                   int(thresholds["scraping_walk_recent_days"])):
+        return None
     subject = f"{unit.source}/missing/{unit.label}"
     facts = {"walk_started_at": iso(unit.end_at), "declared": unit.declared,
              "collected": unit.collected, "entries": unit.entries,
              "declared_is_upper_bound": unit.upper_bound}
-    why = _undeclared(unit, int(thresholds["scraping_missing_min_declared"]),
-                      int(thresholds["scraping_walk_recent_days"]))
-    if why:
-        return cell(subject, "unknown", f"Not measured: {why}", unit="%", portal=unit.source,
-                    facts=facts)
     declared, collected = int(unit.declared or 0), int(unit.collected or 0)
     share = (declared - collected) / declared
     return cell(subject, graded(share, float(thresholds["scraping_missing_warn"]),
@@ -497,7 +492,7 @@ def check_scraping(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
     cells = _walk_cells(portals, units, thresholds, at)
     cells += _inflow_cells(conn, sources, thresholds)
     cells += _fetch_error_cells(conn, sources, thresholds)
-    cells += [_missing_cell(u, thresholds) for u in units]
+    cells += [c for c in (_missing_cell(u, thresholds) for u in units) if c]
     return result("scraping", cells, {})
 
 

@@ -55,7 +55,6 @@ SALE_TYPE: dict[str, str] = {
 CATEGORY_MAIN: dict[str, str] = {
     "byty": "byt",
     "rodinne-domy": "dum",
-    "chaty-chalupy": "dum",          # sreality lumps chata/chalupa under "dům"
     "pozemky": "pozemek",
     "komercni-prostory": "komercni",
     "ostatni": "ostatni",

@@ -504,10 +504,11 @@ measured `ok` starts `ok_since` at the first OK, and the incident resolves
 due slack, never under 30 min (`max(2 × due_after_s(cadence), 30 min)`: a lane measures a check
 up to the slack early, so two measured intervals can sum to under two cadences): the newest OK's
 `run_at` must be at least the hold after the first OK; one lone OK never recovers. Two closes are
-silent: an incident whose key left the registry (`retired`), and a cell unmeasured for max(7 d,
-2 × cadence) — its `last_seen_at` older than that and its cell in no measured row inside it
-written since the key's `declared_at` — which closes silently (`unmeasured 7d`; two weeks for the
-weekly URL probe). Not measured never opens, recovers or ages an incident.
+silent: `retired`, an incident whose key left the registry or whose subject the key's newest in-budget
+measured result no longer lists (a renamed or dropped cell, since 2026-10-22), and `unmeasured 7d`, a
+cell the newest result does not judge (listed Not measured, or its key Not measured) whose last non-OK
+(a listed cell in its hold: its first OK) is older than max(7 d, 2 × cadence); two weeks for the weekly
+URL probe. Not measured never opens, recovers or ages an incident.
 
 **What it records.** Since W1 of the notifications push program (2026-10-21, ruling R2b;
 `docs/design/notifications-push/PROGRAM.md` § 3.8) the ladder writes no `notification_dispatches`
@@ -589,7 +590,7 @@ measures them in that pass (all four are due); the nine retired GitHub keys (`pp
 included); both sets show on the page in between. `location_town_coverage` keeps its key but changes host,
 so its `declared_at` restarts and it reads Not measured until the worker measures it; its open implicit
 incident `cell:location_town_coverage:location_town_coverage` matches none of the new `<portal>/town`
-subjects, so it is never reminded and closes silently (`unmeasured 7d`) within 7 days. A canary run checked
+subjects, so it is never reminded; since 2026-10-22 it closes as `retired` on the first pass. A canary run checked
 out at the old SHA that projects after the worker's first pass may move the row back to GitHub, and it
 stays so until the worker's next projection (one per process). Expected at ship: `data_quality` opens a
 Problem on realitymix's komerční/pronájem basis floor (11.4 % of 4,140 priced ads NULLed, lower bound 10.5
@@ -1075,7 +1076,8 @@ compares 7-day windows, and under 20 per 7 d it is Not measured; fetch errors ne
 are named in the message, not excluded; missing needs a declared total of 500
 (`scraping_missing_min_declared`), and an entry whose `total_is_count` is true ("declared is a count
 of what was seen": remax, maxima) or absent ("not yet recorded by this walk's adapter": every entry
-written before wave 4) is Not measured, never 0 %. Its facts carry `declared_is_upper_bound`
+written before wave 4) gets no missing cell, never 0 %: since 2026-10-22 the coverage residual alone
+says why (one verdict, one cell; it was 48 units shown twice). Its facts carry `declared_is_upper_bound`
 (ceskereality's national total includes ads filed under no kraj, about 0.8 % of its rentals, under
 the Watch line). One convention for every wave-4 share judged on a Wilson lower bound (fetch errors
 here; publishing's visible, stock and photos; delisting's precision): the cell's `value` is the raw
@@ -1237,13 +1239,14 @@ condition, told once when it first reads Problem and then once a day.
 | cell | measures | Watch | Problem |
 | --- | --- | --- | --- |
 | `<portal>/residual/<cm>-<ct>` | at the unit's newest end-reached walk, R = (H − P − D) / D: D the Σ declared of its entries, H its active ads now, P the active ads with a pending unrefuted gone verdict (in dwell) | R beyond ±2 % (`coverage_residual_warn`) | R beyond ±5 % (`coverage_residual_fail`) |
-| `<portal>/unnominated` | active ads whose `last_seen_at` is before the start of their unit's newest end-reached walk (an ad with no unit: the portal's newest walk in which every entry reached the end), with no queue row and no completion newer than the ad's last sighting, less that walk's deferrals; a portal with no end-reached walk in 30 d reads Not measured | 25 or more (`coverage_unnominated_warn`) | 100 or more (`coverage_unnominated_fail`) |
+| `<portal>/unnominated` | active ads whose `last_seen_at` is before the start of their unit's newest end-reached walk (an ad with no unit: the portal's newest walk in which every entry reached the end), that the walks' own predicate (`db.nominable_predicate`: no queue row, no completion within the 24 h recheck throttle) judged at that walk's start still calls nominable, less that walk's deferrals; a portal with no end-reached walk in 30 d reads Not measured | 25 or more (`coverage_unnominated_warn`) | 100 or more (`coverage_unnominated_fail`) |
 
 Residual needs D ≥ 500 (`coverage_residual_min_declared`), and an entry whose `total_is_count` is
-true or absent is Not measured, as in scraping's missing arm. Unnominated counts from the ad's last
-sighting, not from that walk's start: an ad checked inside the 24 h recheck throttle before the walk
-is in flight, not stuck (counted from the walk's start, 2026-10-19 read about 3,600 ads already
-being rechecked: Problem on five portals). Each cell's facts carry `trend` and `worse_7d`, the shared
+true or absent is Not measured with its reason, the one cell that says so. Unnominated is the walks' own predicate
+(`db.NOMINABLE_PREDICATE`, `presence_candidates` and `web`) judged at that walk's start, so an ad the walk's
+throttle skipped is not stuck: until 2026-10-22 the check excused only checks after the last sighting and
+read sreality 52, bazos 43 and idnes 63 ads the walks had rightly skipped (all 0 under one predicate). Each
+cell's facts carry `trend` and `worse_7d`, the shared
 gauge trend (the quality gauges section, below); until Health dashboard sprint wave 6 they were `trend_30d`
 (this check's own value 7 and 30 days ago) and `worse_than_7d` (the value grew), and the series restarted at
 that deploy.

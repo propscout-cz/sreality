@@ -7,7 +7,8 @@ recovery closes it once an OK is measured again across the hold. Health shows th
 the GitHub canary (scripts/health_canary.py) turns an alarm's unacknowledged rung into the
 operator's e-mail; no system alert reaches the bell (ruling R2, notifications W1). A newest
 result that is `unknown`, past its key's staleness budget or older than the key's registration
-is Not measured, and Not measured is inert: it neither opens, keeps, recovers nor reminds.
+is Not measured, and Not measured is inert: it neither opens, keeps, recovers nor reminds. A
+subject the newest measured result no longer lists has left its check and closes as retired.
 Stdlib plus a caller-passed psycopg connection, so the API and the scripts import it with base
 dependencies only.
 """
@@ -32,7 +33,7 @@ DUE_SLACK_MAX_S = 900
 # than this floor, after the first, so neither a lone green run nor two quick greens of a fast
 # check close an incident.
 RECOVERY_HOLD_MIN_S = 1800
-# A cell nobody has measured for a week can never close on a measured OK, so it closes silently.
+# A listed cell nobody measured for a week can never close on a measured OK, so it closes silently.
 UNMEASURED_CLOSE_DAYS = 7
 # The signature namespace of cell incidents, the only kind since the signature engine retired (621).
 CELL_PREFIX = "cell:"
@@ -89,17 +90,6 @@ UPDATE ops_incidents SET alert_count = alert_count + 1, alerted_at = %(now)s
  WHERE id = ANY(%(ids)s)
 """
 
-# The same registration guard as _NEWEST_SQL: a row the ladder ignores everywhere else must not
-# keep a cell it no longer measures from its silent close.
-_MEASURED_SINCE_SQL = """
-SELECT r.check_key, r.run_at, r.details -> 'cells'
-  FROM pipeline_check_results r
-  JOIN health_checks hc ON hc.key = r.check_key
- WHERE r.check_key = ANY(%(keys)s) AND r.status <> 'unknown' AND r.run_at >= %(since)s
-   AND r.run_at >= hc.declared_at
-"""
-
-
 def _as_utc(value: _dt.datetime) -> _dt.datetime:
     """Tolerate a naive timestamp from a caller or a fixture; the column is timestamptz."""
     if value.tzinfo is None:
@@ -121,6 +111,7 @@ class _Check:
     cadence_s: int
     run_at: _dt.datetime | None
     cells: dict[str, dict[str, Any]]
+    listed: set[str] | None  # every subject of a measured result, Not measured ones too; else None
 
 
 @dataclass
@@ -181,7 +172,11 @@ def _check(row: tuple[Any, ...], at: _dt.datetime) -> _Check:
     # pipeline_checks_public's effective_status: missing, unknown or stale is Not measured.
     measured = (status in _RANK and run_at is not None
                 and not _stale(run_at, budget_s, at))
-    return _Check(key, cls, cadence, run_at, _cells(raw_cells) if measured else {})
+    if not measured:
+        return _Check(key, cls, cadence, run_at, {}, None)
+    raw = raw_cells if isinstance(raw_cells, list) else []
+    listed = {str(c["subject"]) for c in raw if isinstance(c, dict) and c.get("subject")}
+    return _Check(key, cls, cadence, run_at, _cells(raw_cells), listed)
 
 
 def _incident(row: tuple[Any, ...]) -> _Incident:
@@ -220,17 +215,12 @@ def _reminded(
     return due
 
 
-def _measured_subjects(
-    cur: Any, checks: dict[str, _Check], keys: set[str], at: _dt.datetime,
-) -> dict[str, set[str]]:
-    """The subjects each key measured inside its unmeasured window."""
-    since = {k: at - _unmeasured_window(checks[k].cadence_s) for k in keys}
-    cur.execute(_MEASURED_SINCE_SQL, {"keys": sorted(keys), "since": min(since.values())})
-    seen: dict[str, set[str]] = {}
-    for key, run_at, cells in cur.fetchall():
-        if _as_utc(run_at) >= since[key]:
-            seen.setdefault(key, set()).update(_cells(cells))
-    return seen
+def _dark(inc: _Incident, check: _Check, at: _dt.datetime) -> bool:
+    """Unjudged by the newest result and last measured a window ago (a listed cell's OK counts)."""
+    if inc.subject in check.cells:
+        return False
+    ok = inc.ok_since if inc.ok_since and inc.subject in (check.listed or ()) else None
+    return (ok or inc.last_seen_at) < at - _unmeasured_window(check.cadence_s)
 
 
 def reconcile(conn: Any, *, now: _dt.datetime | None = None) -> dict[str, int]:
@@ -284,12 +274,10 @@ def reconcile(conn: Any, *, now: _dt.datetime | None = None) -> dict[str, int]:
         counts["recovered"] = len(closed)
 
         still_open = [i for i in incidents if i.id not in closed]
-        retired = [i for i in still_open if i.key not in checks]
-        dark = [i for i in still_open if i.key in checks
-                and i.last_seen_at < at - _unmeasured_window(checks[i.key].cadence_s)]
-        if dark:
-            seen = _measured_subjects(cur, checks, {i.key for i in dark}, at)
-            dark = [i for i in dark if i.subject not in seen.get(i.key, set())]
+        retired = [i for i in still_open if i.key not in checks or (
+            checks[i.key].listed is not None and i.subject not in checks[i.key].listed)]
+        gone = {i.id for i in retired}
+        dark = [i for i in still_open if i.id not in gone and _dark(i, checks[i.key], at)]
         unmeasured = f"unmeasured {UNMEASURED_CLOSE_DAYS}d"
         for reason, group in (("retired", retired), (unmeasured, dark)):
             if group:

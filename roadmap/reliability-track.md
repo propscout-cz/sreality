@@ -824,3 +824,38 @@ the shorter Progress tiles and, while a page loads, the still placeholders; Sett
 Settings as before.
 
 **Next:** wave 9 at its gate (wave 8's Next, above); wave 10 is done.
+
+## 2026-10-22 — Health green sprint, wave 1 (shipped with this PR)
+
+The first wave of the Health green sprint: the Health page measures the truth. Plan:
+[`docs/design/health-dashboard.md`](../docs/design/health-dashboard.md) § 14 (north star: a red leaves
+the page only through a root fix that leaves less behind) and its "Wave 1 as built" note.
+
+What wave 1 changed:
+- **pg_cron stops freezing** (migration 658). The Browse list rebuild ran a dead `drop table if exists
+  browse_list_next`; its NOTICE froze pg_cron's one launcher for the whole ~68 s rebuild, four times an
+  hour, so every job started alongside recorded a ~67 s run (the capacity Problem on
+  `cron/health-liveness`, "112 % of statement_timeout", and a canary leg). The statement is gone and
+  nothing else in the function changed.
+- **ceskereality's houses are counted once** (migration 659, #1854). The `chaty-chalupy` scope re-listed
+  ads the `rodinne-domy` walk already sees, so dum/prodej's declared total held ~2,000 houses twice
+  (residual −13.6 %; truly +1.8 %).
+- **One definition of "an ad awaiting nomination"** (`db.nominable_predicate`), shared by the walks,
+  `web`'s walk and the coverage check: the sreality, bazos and idnes `unnominated` warns read 0.
+  ceskereality (95) and realitymix (159) stay red: their NULL-category ads, wave 2.
+- **A dropped or renamed cell closes at once** as `retired`: the ghost `location_town_coverage`
+  incident closes on the first pass. A cell the check lists as Not measured still waits a week.
+- **One verdict, one cell**: a unit whose declared total cannot be judged shows once (coverage's
+  residual), not twice: 48 fewer Not-measured cells.
+- Two skill lines: a pg_cron command emits no NOTICE before its last statement; dispatch a new
+  portal's first walk at deploy.
+
+To check: 658 and 659 applied through `apply_migration.yml` before the merge; then, at :00 and :15, no
+interim `SET` row for the rebuild and liveness under 1 s, and the capacity cell OK about 23 h later; the
+next ceskereality walk logs `RECONCILE cm=dum ct=prodej` declaring ~11.6 k and its residual reads OK;
+the three `unnominated` cells OK at the next coverage pass; the ghost incident resolved `retired`.
+
+**Next:** W2, rule 3 made total (the 430 NULL-label ads nominable, the parsers fixed, the stored rows
+healed); W3, producers (idnes's daily EUR churn, the per-m² masquerade); W4, location producers (14 of
+the 38 town gaps); W5, the rulings Q1–Q3 applied; W6, the legacy layer (migration 643, on or after
+2026-10-23 13:00Z).

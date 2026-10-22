@@ -62,9 +62,10 @@ Independent of the analytical, UI, and map tracks.
   realitymix (151 NULL-category ads on 10-19, the oldest last seen 112 d ago) and Watch on
   ceskereality (96); #1854 ceskereality's chaty-chalupy scopes double-count ads already in
   rodinne-domy (its `dum`/`prodej` residual reads Problem, about −14 %: 13.7 k declared against
-  11.8 k held, from that unit's first walk after the deploy); #1858 make 24 h the one delisting
+  11.8 k held, from that unit's first walk after the deploy; fixed 2026-10-22 by migration 659,
+  Health green W1); #1858 make 24 h the one delisting
   dwell rule (Q3 a, ruled 2026-10-18), its own scraper PR.
-- **Next:** the five issues above; attach stragglers while the full sweep runs (the sweep holds
+- **Next:** the four open issues above (#1854 is fixed); attach stragglers while the full sweep runs (the sweep holds
   the maintenance lease up to 6,000 s and attaches only at its start, so the `publishing` check's
   visible cell rings for its duration on a sweep longer than about 40 min); and have
   `portal_runner` mark a deliberately capped walk (`--max-pages` / `--limit` / bazos region) in

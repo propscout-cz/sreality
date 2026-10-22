@@ -371,8 +371,8 @@ def test_a_page_that_is_another_portals_ad_is_rekeyed_under_that_portal(monkeypa
 
 
 def test_a_walk_that_saw_nothing_still_tells_a_buffering_portal(monkeypatch):
-    """Portals whose index slices collapse onto one canonical category (ceskereality,
-    realitymix) count the slices they are handed and nominate on the last one. A slice
+    """Portals whose index slices may collapse onto one canonical category (realitymix,
+    and ceskereality's twin seam) count the slices they are handed and nominate on the last one. A slice
     the runner refuses to nominate from must still be counted, or the group's counter
     stays one short for ever and it never nominates again."""
     cap = _nominations(monkeypatch)

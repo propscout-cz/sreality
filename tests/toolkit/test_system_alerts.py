@@ -17,7 +17,6 @@ _DECLARED = _dt.datetime(2026, 1, 1, tzinfo=_dt.timezone.utc)
 # Check.staleness_budget on the github-actions host: a cadence plus GitHub's 18 h delivery slack.
 _GITHUB_SLACK_S = 18 * 3600
 _CUTOVER = "c.run_at >= hc.declared_at"
-_MEASURED_CUTOVER = "r.run_at >= hc.declared_at"
 # An hourly key's hold: two 54-minute due intervals (a cadence less its 6-minute due slack).
 _HOURLY_HOLD = _dt.timedelta(minutes=108)
 _ZERO = {"opened": 0, "reminded": 0, "recovered": 0, "closed_silently": 0, "notices": 0}
@@ -77,13 +76,6 @@ class _FakeCursor:
             prefix = params["cells"].removesuffix("%")
             self._rows = [tuple(i[col] for col in _INCIDENT_COLUMNS) for i in c.open_incidents()
                           if i["signature"].startswith(prefix)]
-        elif "FROM pipeline_check_results" in norm:
-            guarded = _MEASURED_CUTOVER in norm  # again only where the statement states it
-            self._rows = [(key, at, details.get("cells"))
-                          for key in params["keys"]
-                          for at, status, _value, details in c.results.get(key, [])
-                          if status != "unknown" and at >= params["since"]
-                          and not (guarded and at < c.registry[key]["declared_at"])]
         elif norm.startswith("UPDATE ops_incidents"):
             self.rowcount = c.update(norm, params)
         else:
@@ -257,7 +249,8 @@ def test_a_fail_opens_one_incident_per_cell_and_tells_them_in_one_onset() -> Non
 def test_a_measured_result_without_a_verdict_cell_opens_keeps_and_tells_nothing() -> None:
     """Wave 6 deleted the implicit cell named by the key: no cell list, an empty one or rows with
     no verdict hold no cell, so even a fail opens nothing, and an open `cell:<key>:<key>` incident
-    of the old fallback is neither kept nor reminded; it closes silently once a week unmeasured."""
+    of the old fallback (the live ghost of 2026-10-19) is neither kept nor reminded: the measured
+    result does not list it, so it closes as retired on the first pass."""
     conn = _FakeConn()
     for key in ("llm_errors", "worker_lane_stall", "location_town_coverage"):
         conn.register(key, cadence_s=21600)
@@ -266,10 +259,8 @@ def test_a_measured_result_without_a_verdict_cell_opens_keeps_and_tells_nothing(
     implicit = conn.seed("location_town_coverage", first=_T0 - _h(30))  # its 24 h rung is due
     conn.result("location_town_coverage", _T0, "fail", value=13239,
                 cells=[{"source": "bazos", "hidden": 7294}])
-    assert reconcile(conn, now=_T0) == _ZERO
-    assert conn.open_incidents() == [implicit] and conn.writes() == []
-    assert reconcile(conn, now=_T0 + _h(139)) == {**_ZERO, "closed_silently": 1}
-    assert implicit["resolve_reason"] == "unmeasured 7d" and conn.told == []
+    assert reconcile(conn, now=_T0) == {**_ZERO, "closed_silently": 1}
+    assert implicit["resolve_reason"] == "retired" and conn.told == []
 
 
 def test_warn_never_opens_an_incident() -> None:
@@ -364,7 +355,7 @@ def test_a_cell_unmeasured_for_seven_days_closes_silently() -> None:
     conn.result("dual_write_parity", _T0 - _h(200), "fail")
     conn.result("dual_write_parity", _T0 - _h(1), "unknown")
     assert reconcile(conn, now=_T0) == {**_ZERO, "closed_silently": 2}
-    assert gone["resolve_reason"] == dark["resolve_reason"] == "unmeasured 7d"
+    assert (gone["resolve_reason"], dark["resolve_reason"]) == ("retired", "unmeasured 7d")
     assert holding["resolved_at"] is None  # measured OK inside the week, still in its hold
     assert conn.told == []
 
@@ -402,6 +393,22 @@ def test_a_weekly_check_keeps_its_incident_between_two_measurements() -> None:
                 cells=[_cell("sreality", "fail")])
     assert reconcile(conn, now=_T0) == _ZERO
     assert inc["resolved_at"] is None
+
+
+def test_a_cell_listed_not_measured_keeps_its_week_and_a_stale_result_retires_nothing() -> None:
+    """Listed Not measured: the week runs from its last non-OK (in its hold, from its first OK)."""
+    conn = _FakeConn()
+    conn.register("coverage", cls="gauge")
+    conn.register("llm_errors")  # hourly: a 19 h budget, so a 20 h old row is stale
+    listed = conn.seed("coverage", "bazos/x", first=_T0 - _h(200), last=_T0 - _h(170))
+    holding = conn.seed("coverage", "idnes/x", first=_T0 - _h(200), last=_T0 - _h(170),
+                        ok_since=_T0 - _h(100))
+    stale = conn.seed("llm_errors", "openai", first=_T0 - _h(80))
+    conn.result("coverage", _T0, "ok", cells=[_cell("bazos/x", "unknown"), _cell("idnes/x", "unknown")])
+    conn.result("llm_errors", _T0 - _h(20), "ok", cells=[_cell("anthropic", "ok")])
+    assert reconcile(conn, now=_T0) == {**_ZERO, "closed_silently": 1}
+    assert listed["resolve_reason"] == "unmeasured 7d" and conn.told == []
+    assert holding["resolved_at"] is None and stale["resolved_at"] is None
 
 
 def test_an_incident_of_a_retired_key_closes_silently() -> None:

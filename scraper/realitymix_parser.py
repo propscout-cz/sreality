@@ -48,8 +48,7 @@ from scraper.scraped_listing import ScrapedListing
 SOURCE = "realitymix"
 
 # realitymix family/offer URL segments -> our canonical labels (mirrors
-# parser.CATEGORY_*). chaty -> dum (sreality lumps chata/chalupa under "dům",
-# same as ceskereality's chaty-chalupy).
+# parser.CATEGORY_*). chaty -> dum (sreality lumps chata/chalupa under "dům").
 SALE_TYPE: dict[str, str] = {
     "prodej": "prodej",
     "pronajem": "pronajem",

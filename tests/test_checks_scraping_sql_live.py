@@ -17,7 +17,8 @@ transaction that always rolls back. The rules:
   greatest(claimed_at, enqueued_at), and an id given up 3+ times in 7 d is named and still counted;
 - held: active ads per portal and category, and those in dwell (a gone verdict newer than the last sighting);
 - unnominated: active ads last seen before their unit's newest end-reached walk started (the portal's
-  every-unit walk for a category none dates), with no queue row and no completion newer than the sighting;
+  every-unit walk for a category none dates), with no queue row and no completion inside the recheck throttle
+  before that start (db.nominable_predicate, the walks' own);
   the deferrals the cell sets aside are that walk's (the subtraction is Python, pinned hermetically);
 - trend (common, wave 6): the newest MEASURED result with a cells array is every series' source, and a
   subject it lacks is read from the newest measured result in the window whose cell carries a series.
@@ -326,10 +327,12 @@ def test_held_counts_active_ads_per_unit_and_those_in_dwell_once_each(seed: _See
 def test_unnominated_ads_are_active_unseen_since_their_walk_started_and_neither_queued_nor_checked(
         seed: _Seed) -> None:
     """byt's newest end-reached walk started 10 h ago, dum's 30 h ago (also the portal's every-unit walk,
-    which dates the categories no end-reached walk covers). Counted: a1 and a5 (last seen 12 h ago; a5's
-    check came before that sighting), b1 (35 h), c1 and p1 (40 h, unwalked). Not: a2 seen since, a3 queued,
-    a4 checked after its sighting though before the walk, a6 inactive, b2 and c2 seen since; and nothing of
-    a portal no walk reached the end of (sent with no start, as every portal without a walk is)."""
+    which dates the categories no end-reached walk covers). Counted: a1 (last seen 12 h ago), a7 (last seen
+    50 h ago, checked 40 h ago: after its sighting but over 24 h before the walk, which nominated it), b1
+    (35 h), c1 and p1 (40 h, unwalked). Not: a2 seen since, a3 queued, a4 and a5 checked inside the 24 h
+    before the walk (11 h and 13 h ago, after and before their sighting: the walk's throttle skipped both),
+    a6 inactive, b2 and c2 seen since; and nothing of a portal no walk reached the end of (sent with no
+    start, as every portal without a walk is)."""
     s, idle = seed.portal("unnominated"), seed.portal("idle")
     seed.walk(s, 30, [_entry("byt", deferred=5), _entry("dum")])
     seed.walk(s, 10, [_entry("byt", deferred=2), _entry("dum", reached=False),
@@ -340,6 +343,8 @@ def test_unnominated_ads_are_active_unseen_since_their_walk_started_and_neither_
     seed.queued(s, "a3", priority=QUEUE_PRIORITY_VERIFY)
     seed.completed(s, "a4", outcome="gone", completed_h=11)
     seed.completed(s, "a5", outcome="gone", completed_h=13)
+    seed.ad(s, "a7", last_seen_h=50)
+    seed.completed(s, "a7", outcome="gone", completed_h=40)
     seed.ad(s, "b1", main="dum", last_seen_h=35)
     seed.ad(s, "b2", main="dum", last_seen_h=20)
     seed.ad(s, "c1", main=None, kind=None, last_seen_h=40)
@@ -354,7 +359,7 @@ def test_unnominated_ads_are_active_unseen_since_their_walk_started_and_neither_
         "sources": [r["source"] for r in reached], "mains": [r["category_main"] for r in reached],
         "types": [r["category_type"] for r in reached], "starts": [r["end_at"] for r in reached],
         "portal_sources": [s, idle], "portal_starts": [reached[0]["all_reached_at"], None]}).fetchall()
-    assert rows == [(s, 5, 2, seed.ago(40))]
+    assert rows == [(s, 5, 2, seed.ago(50))]
 
 
 def test_the_trend_rolls_from_the_newest_measured_result_and_looks_back_for_a_missing_one(

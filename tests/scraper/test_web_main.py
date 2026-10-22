@@ -7,14 +7,12 @@ portal ad becomes that portal's ad; and one host is asked at most once per 10 s.
 
 from __future__ import annotations
 
-from datetime import timedelta
 from typing import Any
 
 import pytest
 import requests
 
 from scraper import db, egress, portal_runner, web_client
-from scraper.delist_policy import RECHECK_THROTTLE
 from scraper.portal import default_config
 from scraper.portal_base import ListingGoneError
 from scraper.portal_identity import Resolved
@@ -95,8 +93,7 @@ def test_the_indexless_walk_reaches_the_end_and_nominates_null_category_rows(mon
         True, "complete", 2)
     presence_sql, params = conn.executed[-1]
     assert "category_main" not in presence_sql and "category_type" not in presence_sql
-    assert params == {"source": SOURCE, "throttle": RECHECK_THROTTLE}
-    assert RECHECK_THROTTLE == timedelta(hours=24)
+    assert params == {"source": SOURCE} and db.NOMINABLE_PREDICATE in presence_sql
 
 
 def test_a_walk_whose_budget_is_already_spent_nominates_nothing(monkeypatch) -> None:

@@ -992,12 +992,10 @@ def test_search_url_puts_subtype_before_kraj():
         "https://www.ceskereality.cz/prodej/byty/praha/?strana=93")
 
 
-# --- cross-slice nomination ('rodinne-domy' + 'chaty-chalupy' -> dum) --------------------------
+# --- nomination (no ceskereality slice collapses since migration 659) -------------------------
 #
 # Rule #3 since 2026-09-07: a complete walk nominates its unseen rows for a page
-# check, it does not delist. Sibling slices that collapse onto one canonical
-# category still have to be buffered, because the runner calls the seam per
-# slice and one slice's seen set would nominate the sibling's whole population.
+# check, it does not delist; each (category_main, category_type) is one walked scope.
 
 def _nominating_portal(monkeypatch):
     calls: list[dict] = []
@@ -1007,29 +1005,6 @@ def _nominating_portal(monkeypatch):
             {"src": src, "cm": cm, "ct": ct, "seen": set(seen), **kw}) or ([], len(seen)),
     )
     return m.CeskerealityPortal(default_config("ceskereality")), calls
-
-
-def test_nomination_buffers_the_collapsing_group_and_nominates_once_with_union(monkeypatch):
-    portal, calls = _nominating_portal(monkeypatch)
-    # First dum slice buffers only: nominating here would send every chaty-chalupy row
-    # (same (dum, pronajem), never in the rodinne-domy slice's seen set) to the drain.
-    assert portal.presence_candidates(
-        object(), {"sale_type": "pronajem", "category": "rodinne-domy"}, {"r1", "r2"}) is None
-    assert calls == []
-    # The group's last complete slice nominates with the UNION.
-    out = portal.presence_candidates(
-        object(), {"sale_type": "pronajem", "category": "chaty-chalupy"}, {"c1"})
-    assert out == ([], 3)
-    assert calls == [{"src": "ceskereality", "cm": "dum", "ct": "pronajem", "seen": {"r1", "r2", "c1"}}]
-
-
-def test_nomination_missing_sibling_slice_nominates_nothing(monkeypatch):
-    # The runner only reaches this seam for COMPLETE slices; if rodinne-domy walked
-    # incomplete or failed, chaty-chalupy alone must not nominate (dum, prodej).
-    portal, calls = _nominating_portal(monkeypatch)
-    assert portal.presence_candidates(
-        object(), {"sale_type": "prodej", "category": "chaty-chalupy"}, {"c1"}) is None
-    assert calls == []
 
 
 def test_nomination_single_slice_group_nominates_immediately(monkeypatch):
