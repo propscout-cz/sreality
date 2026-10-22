@@ -3032,7 +3032,7 @@ export interface SplitStatement {
   expect: string;
 }
 
-export type SplitItemKind = 'note' | 'pipeline' | 'collection' | 'tag' | 'dismissal';
+export type SplitItemKind = 'note' | 'pipeline' | 'collection' | 'tag' | 'file' | 'dismissal';
 
 /* Why a fold is not re-created or a copy not made: you hold the item there
  * already (`held`), a hidden property where your live pipeline card lands

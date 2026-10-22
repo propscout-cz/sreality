@@ -591,7 +591,26 @@ def test_every_routing_statement_is_in_the_prepare_corpus_and_none_deletes():
     assert not [s for s in carriers.ROUTE_SQL if re.search(r"\bDELETE\b", s, re.I)]
     assert set(carriers._MOVE_SQL) == set(carriers._INSERT_SQL) == {
         "property_notes", "property_pipeline", "collection_properties", "property_tags",
-        "property_dismissals"}
+        "property_attachments", "property_dismissals"}
+
+
+def test_a_file_outside_a_note_routes_like_a_tag_and_its_copy_shares_the_stored_bytes():
+    """Photos W2: a noteless file is an item (a note's files follow the note through migration
+    660's trigger, so only noteless ones are listed). It goes back where its carry row says; the
+    acting account may move or copy it, a copy onto where the file itself lands being 'held'; a
+    copy is a new row over the same R2 object, never a note's."""
+    rows = [_row("move", "property_attachments", 80, ME, "file:80", origin=R1, ids=(15,)),
+            _row("move", "property_attachments", 81, ME, "file:81")]
+    assert _where(_plan(rows, {2: R1})) == {
+        "file:80": ("move", 2, (15,), None), "file:81": ("move", None, (), None)}
+    plan = _plan(rows, {2: R1, 3: None}, account=ME, choices={"file:81": (3, (2, 3))})
+    assert [(r.item, r.action, r.anchor, r.skipped) for r in plan if r.item == "file:81"] == [
+        ("file:81", "move", 3, None), ("file:81", "copy", 2, None),
+        ("file:81", "copy", 3, "held")]
+    assert "a.note_id IS NULL" in carriers._ROUTES_SQL
+    assert "note_id IS NULL" in carriers._MOVE_SQL["property_attachments"]
+    copy = carriers._INSERT_SQL["property_attachments"]
+    assert "storage_key" in copy and "note_id" not in copy
 
 
 def test_a_split_note_copy_keeps_the_shared_mark():

@@ -233,6 +233,25 @@ describe('splitReceiptText / pushSplitReceipt', () => {
     );
   });
 
+  it('names a photo outside a note by its file, moved and copied (Photos W2)', () => {
+    const text = splitReceiptText(
+      split({
+        curation: [
+          {
+            item: 'file:12', kind: 'file', label: 'foto-2026-10-23-141205.jpg', letter: 'B',
+            property_id: 43, copies: [{ letter: 'A', property_id: 42 }],
+          },
+        ],
+        rulings: { different: 1, same: 0, taken_back: 0 },
+      }),
+    );
+    expect(text).toBe(
+      'Rozděleno: A zůstává v #42; B → #43; C → nová #90. ' +
+        'Do B: soubor „foto-2026-10-23-141205.jpg“. Kopie do A: soubor „foto-2026-10-23-141205.jpg“. ' +
+        '„Různé“ zapsáno u 1 dvojice.',
+    );
+  });
+
   it('writes the picks for the preview in one order, nothing for none', () => {
     expect(choicesParam({})).toBe('');
     expect(

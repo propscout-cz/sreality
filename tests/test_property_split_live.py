@@ -560,3 +560,51 @@ def test_a_notes_files_go_with_the_note_and_its_copy_carries_none(cur, accounts)
     cur.execute("SELECT property_id, note_id FROM property_attachments WHERE sha256_hex = %s "
                 "AND account_id = %s", (digest, a))
     assert cur.fetchall() == [(r, note)]
+
+
+def _file(cur: Any, acc: uuid.UUID, pid: int, name: str, note: int | None = None) -> int:
+    cur.execute("INSERT INTO property_attachments (note_id, account_id, property_id, storage_key, "
+                "filename, mime_type, byte_size, sha256_hex, created_at) "
+                "VALUES (%s, %s, %s, %s, %s, 'image/jpeg', 10, %s, "
+                "now() - make_interval(secs => %s)) RETURNING id",
+                (note, acc, pid, f"custom-attachments/property/{pid}/{uuid.uuid4().hex}.jpg", name,
+                 uuid.uuid4().hex * 2, next(_AGO)))
+    return int(cur.fetchone()[0])
+
+
+def test_a_file_outside_a_note_is_an_item_the_user_moves_and_copies(cur, accounts):
+    """Photos W2: A's photo merged in from R goes home with R's ad by its carry row, named by its
+    file in the preview; A's photo on S, picked to B with a copy to A, moves to R and a new row over
+    the same stored bytes stays on S; B's photo follows the rule unseen; a photo in a note is no
+    item (it goes where the note goes)."""
+    a, b = accounts
+    (s, r), (s1, r1) = _props(cur, "sreality", "idnes")
+    _recomputed(cur, s, r)
+    on_r, on_s, theirs = _file(cur, a, r, "byt.jpg"), _file(cur, a, s, "koupelna.jpg"), _file(
+        cur, b, r, "jejich.jpg")
+    note = _note(cur, a, s, s1)
+    in_note = _file(cur, a, s, "plan.jpg", note=note)
+    _merge(cur, [s, r])
+    cur.execute("SELECT storage_key, sha256_hex FROM property_attachments WHERE id = %s", (on_s,))
+    stored = cur.fetchone()
+
+    preview, out = _split(cur, s, {s1: "A", r1: "B"}, a,
+                          choices={f"file:{on_s}": ("B", ("A",))})
+    assert sorted((i["item"], i["kind"], i["label"], i["letter"], i["why"])
+                  for i in preview["curation"] if i["kind"] == "file") == sorted([
+        (f"file:{on_r}", "file", "byt.jpg", "B", "came_from"),
+        (f"file:{on_s}", "file", "koupelna.jpg", "A", "stays")])
+    said = str(preview) + str(out)
+    assert f"file:{theirs}" not in said and f"file:{in_note}" not in said
+
+    cur.execute("SELECT id, property_id, note_id, storage_key, sha256_hex FROM property_attachments "
+                "WHERE account_id = %s ORDER BY id", (a,))
+    *moved, copy = cur.fetchall()  # the copy is the newest row
+    assert [(i, pid, n) for i, pid, n, _k, _h in moved] == [
+        (on_r, r, None), (on_s, r, None), (in_note, s, note)]
+    assert (copy[1], copy[2], copy[3], copy[4]) == (s, None, *stored), (
+        "the copy is a new row over the same stored bytes, on the letter that stayed")
+    cur.execute("SELECT property_id FROM property_attachments WHERE id = %s", (theirs,))
+    assert cur.fetchone() == (r,)
+    assert [(c["letter"], c["property_id"], [(x["letter"], x["property_id"]) for x in c["copies"]])
+            for c in out["curation"] if c["item"] == f"file:{on_s}"] == [("B", r, [("A", s)])]
