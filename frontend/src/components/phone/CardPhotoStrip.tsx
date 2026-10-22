@@ -1,7 +1,7 @@
 /* The feed card's photos as a strip (the operator's ask, 2026-10-13): the cover
  * first, then up to seven more of the ad's photos — the 1080 px copies — one 4:3
- * slide per swipe, in the property gallery's idiom (scroll-snap, the stage wash
- * on every photo, native lazy images). The dots sit on the photo in the margin's
+ * slide per swipe, in the property gallery's idiom (scroll-snap, native lazy
+ * images), the stage wash on every photo. The dots sit on the photo in the margin's
  * own translucent paper, so they read as the margin's material rather than a
  * control laid on the picture. An ad with more photos than the strip ends on a
  * plain slide that opens the property page, which holds every photo.
