@@ -1300,7 +1300,7 @@ def test_the_first_decision_is_read_from_its_own_column_of_the_stores_read() -> 
 
 def test_the_lane_scope_blocks_are_spelled_as_its_walks_key_them() -> None:
     scope = parse_scope(_LANE_SCOPE)
-    walked = {block.key for block in incremental_lane._enter_blocks(scope, {490245: 563510})}
+    walked = {block.key for block in incremental_lane.walk_blocks(scope, {490245: 563510})}
     assert set(scope.label().split()) == walked
 
 
