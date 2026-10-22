@@ -39,7 +39,8 @@ import { TwoStep } from '@/components/TwoStep';
 import BoardSwitcher from '@/components/pipeline/BoardSwitcher';
 import { useNewPropertyDialog } from '@/components/NewPropertyProvider';
 import DelegatedStamp from '@/components/DelegatedStamp';
-import { CURATED_SETS, matchesScope } from '@/lib/setScope';
+import { CURATED_SETS, matchesScope, normalizeScope, type SetScope } from '@/lib/setScope';
+import { ActiveFilters, FilterMenu, type ActiveFilter } from '@/components/pipeline/FilterMenu';
 import { offerCuratedSet } from '@/lib/curatedSetOffer';
 import {
   CuratedSetFilter,
@@ -56,7 +57,7 @@ import { CardHydrationProvider } from '@/lib/hydration';
 import { LocationTypeahead } from '@/components/filter-controls/LocationTypeahead';
 import { MultiselectChips } from '@/components/filter-controls/MultiselectChips';
 import { type EnumOptionLite } from '@/components/filter-controls/types';
-import { Field, Segmented } from '@/components/controls';
+import { Segmented } from '@/components/controls';
 import { type ListingStatus } from '@/lib/filters';
 import { filterById } from '@/lib/filterRegistry.generated';
 import TagColorPicker from '@/components/TagColorPicker';
@@ -280,43 +281,78 @@ function BoardPage({ active, shares }: { active: ActiveBoard; shares: PipelineSh
     return m;
   }, [stagesQ.data, filteredCards, sort]);
 
+  /* Every choice that is on, by name, each with its own × (the menus only count them). */
+  const activeFilters: ActiveFilter[] = [];
+  if (status !== 'any') {
+    activeFilters.push({
+      key: 'status',
+      label: STATUS_OPTIONS.find((o) => o.value === status)?.label ?? status,
+      onRemove: () => setStatus('any'),
+    });
+  }
+  for (const t of types) {
+    activeFilters.push({
+      key: `type:${t}`,
+      label: CATEGORY_MAIN_OPTIONS.find((o) => o.value === t)?.label ?? t,
+      onRemove: () => setTypes([...types].filter((x) => x !== t)),
+    });
+  }
+  for (const [name, word, elements] of [
+    ['collections', 'Kolekce', bar.collections],
+    ['tags', 'Štítek', bar.tags],
+  ] as const) {
+    const scope = scopes[name];
+    if (!scope) continue;
+    const labelOf = (id: number) => elements.find((e) => e.id === id)?.label ?? `#${id}`;
+    if (scope.set === 'out') {
+      activeFilters.push({ key: `${name}:none`, label: CURATED_SETS[name].notInLabel, out: true, onRemove: () => setScope(name, null) });
+    }
+    for (const id of scope.in) {
+      activeFilters.push({
+        key: `${name}:in:${id}`,
+        label: `${word}: ${labelOf(id)}`,
+        onRemove: () => setScope(name, normalizeScope({ ...scope, in: scope.in.filter((x) => x !== id) })),
+      });
+    }
+    for (const id of scope.out) {
+      activeFilters.push({
+        key: `${name}:out:${id}`,
+        label: `${word}: − ${labelOf(id)}`,
+        out: true,
+        onRemove: () => setScope(name, normalizeScope({ ...scope, out: scope.out.filter((x) => x !== id) })),
+      });
+    }
+  }
+
   return (
     <div className="px-6 py-8">
-      <header className="flex items-baseline justify-between">
-        <div>
-          <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-            Pipeline
-          </p>
-          <h1
-            className="mt-1.5 text-[2.4rem] leading-[1.05]"
-            style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
-          >
-            Pipeline obchodů
-          </h1>
-          {active != null && <ViewerLine share={active} />}
-        </div>
-        <div className="flex items-center gap-4">
-          <p className="text-[0.75rem] tracking-wide text-[var(--color-ink-3)] font-mono tabular-nums">
-            {/* An em dash while the count is genuinely unknown. Rendering 0
-                during the load states "your pipeline is empty", which is a
-                claim, not a placeholder — and it was briefly true on every
-                visit before the board resolved. */}
-            {boardQ.data === undefined
-              ? '—'
-              : filtersActive
-                ? `${filteredCards.length} z ${cards.length}`
-                : cards.length}{' '}
-            nemovitostí
-          </p>
-          {filtersActive && (
-            <button
-              type="button"
-              onClick={reset}
-              className="text-[0.7rem] tracking-wide uppercase text-[var(--color-ink-3)] hover:text-[var(--color-copper)] transition-colors"
-            >
-              Reset
-            </button>
-          )}
+      {/* The bar over the columns (operator's variant A, 2026-10-22). One title
+          row (name, board, count, actions) and ONE filter row: the long sets —
+          types, collections, tags — open from menus instead of laying every chip
+          out, so the bar keeps its height however many sets the account has.
+          Measured on 1440 × 900 with the test account's board: the column heads
+          moved from 330 px to 207 px (more with the operator's sets). */}
+      <header className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <h1
+          className="text-[1.5rem] leading-tight whitespace-nowrap"
+          style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
+        >
+          Pipeline obchodů
+        </h1>
+        <BoardSwitcher boards={shares?.shared_with_me ?? []} active={active} />
+        <p className="text-[0.75rem] tracking-wide text-[var(--color-ink-3)] font-mono tabular-nums whitespace-nowrap">
+          {/* An em dash while the count is genuinely unknown. Rendering 0
+              during the load states "your pipeline is empty", which is a
+              claim, not a placeholder — and it was briefly true on every
+              visit before the board resolved. */}
+          {boardQ.data === undefined
+            ? '—'
+            : filtersActive
+              ? `${filteredCards.length} z ${cards.length}`
+              : cards.length}{' '}
+          nemovitostí
+        </p>
+        <div className="ml-auto flex items-center gap-2">
           {/* Sharing is always my own board's (never delegated): not on a shared one. */}
           {active == null && (
             <button
@@ -343,20 +379,21 @@ function BoardPage({ active, shares }: { active: ActiveBoard; shares: PipelineSh
               {manage ? 'Hotovo' : 'Spravovat fáze'}
             </button>
           )}
-          {/* The card lands on the board shown: acting through its share. */}
+          {/* The card lands on the board shown: acting through its share. The
+              page's one primary action. */}
           {!readOnly && newProperty && (
             <button
               type="button"
               onClick={() => newProperty.open({ stay: true, acting: active })}
-              className={HEADER_BUTTON}
+              className={PRIMARY_BUTTON}
             >
+              <span aria-hidden>+</span>
               Nová nemovitost
             </button>
           )}
         </div>
       </header>
-
-      <BoardSwitcher boards={shares?.shared_with_me ?? []} active={active} />
+      {active != null && <ViewerLine share={active} />}
 
       {sharing && active == null && (
         <section className="mt-5 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-4">
@@ -366,64 +403,68 @@ function BoardPage({ active, shares }: { active: ActiveBoard; shares: PipelineSh
 
       {manage && !readOnly && stages.length > 0 && <StageManager stages={stages} />}
 
-      <div className="mt-5 flex flex-col gap-3">
-        <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
-          {bar.hasInactive && (
-            <Field label="Stav">
-              <Segmented
-                variant="solid"
-                options={STATUS_OPTIONS}
-                value={status}
-                onChange={setStatus}
-              />
-            </Field>
-          )}
-          {bar.types.length >= 2 && (
-            <Field label="Typ">
-              <MultiselectChips
-                value={[...types]}
-                options={bar.types}
-                onChange={setTypes}
-              />
-            </Field>
-          )}
-          {/* The curation lenses fail open (rule #22) and say so (MS16): the
-              control's read is the member map the offer stands on AND the
-              elements it names, so a failed list is a retry, not "#id" chips. */}
-          {(bar.showCollections || readFailed(collectionsRead)) && (
-            <Field label="Kolekce">
-              <CuratedSetFilter
-                set="collections"
-                elements={bar.collections}
-                value={scopes.collections}
-                onChange={(next) => setScope('collections', next)}
-                query={collectionsRead}
-              />
-            </Field>
-          )}
-          {(bar.showTags || readFailed(tagsRead)) && (
-            <Field label="Štítky">
-              <CuratedSetFilter
-                set="tags"
-                elements={bar.tags}
-                value={scopes.tags}
-                onChange={(next) => setScope('tags', next)}
-                query={tagsRead}
-              />
-            </Field>
-          )}
-          <Field label="Lokalita" className="min-w-[16rem] max-w-xl flex-1">
-            <LocationTypeahead
-              label="Lokalita"
-              value={districts}
-              onChange={(n) => setDistricts(n ?? [])}
-            />
-          </Field>
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <div role="group" aria-label="Lokalita" className="w-[18rem] max-w-full">
+          <LocationTypeahead
+            label="Lokalita"
+            value={districts}
+            onChange={(n) => setDistricts(n ?? [])}
+          />
         </div>
+        {bar.hasInactive && (
+          <div role="group" aria-label="Stav">
+            <Segmented
+              variant="solid"
+              options={STATUS_OPTIONS}
+              value={status}
+              onChange={setStatus}
+            />
+          </div>
+        )}
+        {bar.types.length >= 2 && (
+          <FilterMenu label="Typ" count={types.size}>
+            <MultiselectChips value={[...types]} options={bar.types} onChange={setTypes} />
+          </FilterMenu>
+        )}
+        {/* The curation lenses fail open (rule #22) and say so (MS16): the
+            control's read is the member map the offer stands on AND the
+            elements it names, so a failed list is a retry, not "#id" chips. */}
+        {(bar.showCollections || readFailed(collectionsRead)) && (
+          <FilterMenu label="Kolekce" count={scopeCount(scopes.collections)} failed={readFailed(collectionsRead)}>
+            <CuratedSetFilter
+              set="collections"
+              elements={bar.collections}
+              value={scopes.collections}
+              onChange={(next) => setScope('collections', next)}
+              query={collectionsRead}
+            />
+          </FilterMenu>
+        )}
+        {(bar.showTags || readFailed(tagsRead)) && (
+          <FilterMenu label="Štítky" count={scopeCount(scopes.tags)} failed={readFailed(tagsRead)}>
+            <CuratedSetFilter
+              set="tags"
+              elements={bar.tags}
+              value={scopes.tags}
+              onChange={(next) => setScope('tags', next)}
+              query={tagsRead}
+            />
+          </FilterMenu>
+        )}
+        {filtersActive && (
+          <button
+            type="button"
+            onClick={reset}
+            className="px-1 text-[0.8rem] text-[var(--color-copper)] hover:text-[var(--color-copper-2)] whitespace-nowrap"
+          >
+            Zrušit filtry
+          </button>
+        )}
         {/* Řazení and Karty are how the board PRESENTS the cohort, not which
-            deals are in it — their own row, and Reset leaves them alone. */}
-        <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
-          <Field label="Řazení" as="control">
+            deals are in it — the bar's far end, and Zrušit filtry leaves them alone. */}
+        <div className="ml-auto flex items-center gap-3">
+          <label className="inline-flex items-center gap-1.5 text-[0.78rem] text-[var(--color-ink-3)] whitespace-nowrap">
+            Řazení
             <select
               aria-label="Řazení karet ve fázi"
               value={
@@ -437,7 +478,7 @@ function BoardPage({ active, shares }: { active: ActiveBoard; shares: PipelineSh
                 );
                 if (picked) setSort({ field: picked.field, direction: picked.direction });
               }}
-              className="rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-2 py-1 text-[0.78rem] text-[var(--color-ink-2)] transition-colors hover:border-[var(--color-rule-strong)]"
+              className="h-8 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-2 text-[0.78rem] text-[var(--color-ink-2)] transition-colors hover:border-[var(--color-rule-strong)]"
             >
               {PIPELINE_SORT_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
@@ -445,8 +486,8 @@ function BoardPage({ active, shares }: { active: ActiveBoard; shares: PipelineSh
                 </option>
               ))}
             </select>
-          </Field>
-          <Field label="Karty" className="ml-auto">
+          </label>
+          <div role="group" aria-label="Karty">
             <SizeToggle
               label="Velikost karet"
               value={cardSize.value}
@@ -458,9 +499,11 @@ function BoardPage({ active, shares }: { active: ActiveBoard; shares: PipelineSh
                 glyph: CARD_SIZE_GLYPH[v],
               }))}
             />
-          </Field>
+          </div>
         </div>
       </div>
+      <ActiveFilters filters={activeFilters} />
+
 
       {readFailed(stagesQ) || readFailed(boardQ) ? (
         <ErrorBanner
@@ -498,7 +541,13 @@ function BoardPage({ active, shares }: { active: ActiveBoard; shares: PipelineSh
 }
 
 const HEADER_BUTTON =
-  'text-[0.72rem] tracking-[0.1em] uppercase px-2.5 py-1 rounded-[var(--radius-sm)] border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:border-[var(--color-rule-strong)] hover:text-[var(--color-ink)]';
+  'inline-flex items-center h-8 px-3 whitespace-nowrap rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] text-[0.8rem] text-[var(--color-ink-2)] hover:border-[var(--color-rule-strong)] hover:text-[var(--color-ink)] aria-pressed:border-[var(--color-copper)] aria-pressed:text-[var(--color-copper)]';
+const PRIMARY_BUTTON =
+  'inline-flex items-center gap-1.5 h-8 px-3.5 whitespace-nowrap rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[0.8rem] font-medium text-white hover:bg-[var(--color-copper-2)] transition-colors';
+
+/* How many choices a curated-set scope holds, for its menu's label. */
+const scopeCount = (s: SetScope | null | undefined): number =>
+  s ? (s.set ? 1 : 0) + s.in.length + s.out.length : 0;
 
 /* A board shared with me: whose it is, in which mode, and the one write a
  * recipient has on it — leaving (its own grant), which also puts this device

@@ -518,6 +518,14 @@ select s.listing_id, s.resolved_at
 # (3,175 buffers) and `rt_fp` (4,568), then 37,910 `listings_pkey` probes (151,785 buffers, all
 # hits) and a top-N heapsort: 159,660 buffers, 337 ms. It shrinks as the build reads; a fresh
 # build of the whole 200k scope would be ~5x that. Outside a build the statement above runs.
+# E978 widens "live" to VISIBLE: an advert that is live, or sits on a property holding a live
+# advert, or on a property whose read adverts belong to a group holding one (live ones first
+# within that half) — the adverts a
+# merge visible in Browse waits for under E977's per-group rail. Measured 2026-10-22 21:40Z after
+# the live ones were read: 1,264 of the 25,434 unread adverts are visible this way (895 by their
+# property alone), ~2.5 passes instead of ~15 h in id order; the two probes ride
+# `listings_property_id_idx` and `cluster_members`' key: 895 ms a limit-500 call measured live,
+# all buffer hits (25,434 unread).
 RT_SCOPE_BUILD_ENTRANTS_SQL = """
 select s.listing_id, s.resolved_at
   from autodedup.rt_scope_ids s
@@ -529,6 +537,25 @@ select s.listing_id, s.resolved_at
                     where f.generation = %(generation)s::text
                       and f.listing_id = s.listing_id)
  order by (select l.is_active
+                   or exists (select 1
+                                from public.listings o
+                               where o.property_id = l.property_id
+                                 and o.is_active)
+                   or exists (select 1
+                                from public.listings o
+                                join autodedup.cluster_members m
+                                  on m.generation = %(generation)s::text
+                                 and m.listing_id = o.id
+                                join autodedup.cluster_members m2
+                                  on m2.generation = m.generation
+                                 and m2.cluster_key = m.cluster_key
+                                join public.listings a
+                                  on a.id = m2.listing_id
+                                 and a.is_active
+                               where o.property_id = l.property_id)
+             from public.listings l
+            where l.id = s.listing_id) desc nulls last,
+          (select l.is_active
              from public.listings l
             where l.id = s.listing_id) desc nulls last,
           s.listing_id

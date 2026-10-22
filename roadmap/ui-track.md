@@ -21,6 +21,17 @@ toolkit work.
   inner headings, Price history's stats, Registered sales, Freshness); photos grouped by room on the
   Fotky tab.
 
+### Pipeline compact bar (2026-10-22, no migration)
+- **Done.** The operator picked variant A from a measured comparison (artifact "Hlavička Pipeline", built on the
+  live board: 170 cards, 10 stages, 8 collections, 6 tags). One title row (24 px title, the board switcher inline,
+  the count, Sdílení / Spravovat fáze, and "+ Nová nemovitost" as the page's one primary) and ONE filter row:
+  Lokalita, Stav, then Typ / Kolekce / Štítky as menus (`components/pipeline/FilterMenu`) that open the same
+  MultiselectChips / CuratedSetFilter the bar drew inline and count their choices; "Zrušit filtry" replaces the
+  header Reset; Řazení and Karty at the row's end. A row under the bar names every active choice with its own ×.
+  Measured on 1440 × 900 (test account): the column heads moved from 330 px to 207 px; the operator's sets no
+  longer add rows. The board switcher stays pills (inline), not the mock's dropdown: one click per board.
+- **Not done (from the same comparison):** variant B's stage strip and folding the closed stages into one column.
+
 ### Browse map rail, folded presets, merge bar that wraps (2026-10-22, no migration)
 - **Done.** The operator picked variant B (a vertical icon rail) and the folding preset section from a
   measured comparison (artifact "Ovládání mapy v Browse"). The map's four corner stacks became one rail at

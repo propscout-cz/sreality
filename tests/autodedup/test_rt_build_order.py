@@ -124,7 +124,8 @@ def test_outside_a_build_the_feed_is_the_id_cursor_it_always_was() -> None:
 def test_the_build_statement_reads_is_active_by_primary_key_and_takes_no_cursor() -> None:
     flat = " ".join(S.RT_SCOPE_BUILD_ENTRANTS_SQL.split())
     assert "%(after_id)s" not in flat
-    assert ("order by (select l.is_active from public.listings l where l.id = s.listing_id) "
+    assert "order by (select l.is_active or exists (select 1 from public.listings o where " in flat
+    assert ("(select l.is_active from public.listings l where l.id = s.listing_id) "
             "desc nulls last, s.listing_id limit %(limit)s") in flat
     assert ("not exists (select 1 from autodedup.rt_fp f where f.generation = "
             "%(generation)s::text and f.listing_id = s.listing_id)") in flat
@@ -155,3 +156,21 @@ def test_a_widening_build_reads_the_new_blocks_live_adverts_first(tmp_path: Path
     # its own fifth; nothing else reads an inactive advert of the new block.
     assert len(read - live) <= out["feeds"].get("straggler", 0)
     assert conn.cursors[CURSOR_ENTER]["last_listing_id"] == 0
+
+
+def test_e978_an_inactive_advert_on_a_live_property_or_a_live_group_comes_before_the_rest() -> None:
+    """E978: after the live adverts, the build reads the inactive ones a VISIBLE merge waits for —
+    on a property holding a live advert, or on a property whose read adverts sit in a group with
+    a live advert — before every other inactive advert; ids ascending within each half."""
+    world: dict[int, bool | None] = {10: False, 11: False, 12: False, 13: False, 14: True, 15: True}
+    db = _world(world)
+    # 11 shares property 500 with live 14; 12 is on property 600, whose read advert 16 sits in a
+    # group with live 15; 10 and 13 are inactive on properties nobody live touches.
+    for listing_id, prop in ((10, 100), (11, 500), (12, 600), (13, 300), (14, 500), (15, 700)):
+        db.listings[listing_id]["property_id"] = prop
+    db.listings[16] = {"id": 16, "is_active": False, "property_id": 600,
+                       "first_seen_at": db.now - timedelta(days=30)}
+    db.rt_fp[(GEN, 16)] = {"is_active": False}
+    db.cluster_members.update({(GEN, 9001, 16), (GEN, 9001, 15)})
+    assert _entered(_work(db, bootstrap=True), limit=50) == [14, 15, 11, 12, 10, 13]
+    assert _entered(_work(db, bootstrap=True), limit=3) == [14, 15, 11]

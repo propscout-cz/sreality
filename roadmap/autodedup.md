@@ -207,6 +207,9 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   `rt_fp` anti-join advances it); outside a build nothing changes. Praha's 11,864 live unread adverts are
   read in ~22 h instead of last, ~3 days in. Cost: one `listings_pkey` probe an unread advert, 337 ms a
   build pass measured. No decision module, digest unchanged. Alone it merges nothing earlier (E977).
+- **E978 (2026-10-22, visible first):** during a build the feed reads, after the live adverts, the inactive
+  ones a visible merge waits for (on a property with a live advert, or whose read adverts sit in a group
+  with one): 1,264 of Praha's 25,434 unread at 21:40Z, ~2.5 passes instead of ~15 h. Order only.
 - **E977 (2026-10-22, built; ships only on the operator's yes):** during a build, a block whose walk is
   complete holds back only the groups whose own adverts (members, carried riders) have no fingerprint, not
   every group in the block; a block never walked or mid-walk, an advert the snapshot does not place and the
