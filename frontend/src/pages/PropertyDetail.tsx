@@ -44,7 +44,7 @@ import {
 import { portalLabel } from '@/lib/portals';
 import { fetchPropertyOrigins } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { fmtCzk, fmtShortDate } from '@/lib/format';
+import { fmtCzk } from '@/lib/format';
 import type {
   ImagePublic,
   ListingPublic,
@@ -60,8 +60,6 @@ import {
   PropertyIdentity,
   type PriceNote,
 } from '@/components/listing-detail/ListingOverview';
-import PhotoMosaic from '@/components/listing-detail/PhotoMosaic';
-import MineStrip from '@/components/listing-detail/MineStrip';
 import { PropertyTabs, usePropertyTab } from '@/components/listing-detail/PropertyTabs';
 import type { LowestActive } from '@/components/listing-detail/PropertyOverview';
 import PipelineToggle from '@/components/listing-detail/PipelineToggle';
@@ -73,7 +71,6 @@ import { ActingBanner, EditAsOwnerToggle } from '@/components/listing-detail/Edi
 import { ActingAs, useEditAsOwnerShare } from '@/lib/acting';
 import { useBoardSelection } from '@/lib/pipelineShares';
 import { lazyChunk } from '@/lib/lazyChunk';
-import { SectionLabel } from '@/components/section';
 import MergedAdvertsSection from '@/components/listing-detail/MergedAdvertsSection';
 import PriceHistoryBlock from '@/components/listing-detail/PriceHistoryBlock';
 import FreshnessBlock from '@/components/listing-detail/FreshnessBlock';
@@ -96,9 +93,13 @@ const EstimationsBlock = lazyChunk(
 );
 const AdvertNotFoundBody = lazyChunk(() => import('@/components/listing-detail/AdvertNotFound'));
 const ValuoSection = lazyChunk(() => import('@/components/listing-detail/ValuoSection'));
-/* The overview tab reads the estimate, Valuo and sold-sales queries: its own
- * chunk, so Browse's first visit does not carry it. */
+/* The overview tab reads the estimate, Valuo and sold-sales queries, and the
+ * header's photos and "Moje" line read their own: each its own chunk, so Browse's
+ * first visit (scripts/bundle-budget.mjs) does not carry them. */
 const PropertyOverview = lazyChunk(() => import('@/components/listing-detail/PropertyOverview'));
+const PhotoMosaic = lazyChunk(() => import('@/components/listing-detail/PhotoMosaic'));
+const MineStrip = lazyChunk(() => import('@/components/listing-detail/MineStrip'));
+const AuditPanel = lazyChunk(() => import('@/components/listing-detail/AuditPanel'));
 
 /* The phone layout is its own chunk: the desktop never downloads it, and the
  * first visit stays inside scripts/bundle-budget.mjs. */
@@ -313,12 +314,14 @@ export default function PropertyDetail() {
       {/* The header: the canonical advert's photos left; the property as its
           Browse card shows it, and where it is, right. */}
       <div className="mt-4 grid items-start gap-x-8 gap-y-6 lg:items-stretch lg:grid-cols-[minmax(0,1.2fr)_minmax(340px,1fr)]">
-        <PhotoMosaic
-          images={images}
-          loading={imagesQ.isLoading}
-          isActive={property.is_active}
-          onAll={() => setTab('fotky')}
-        />
+        <Suspense fallback={<div className="h-[260px] sm:h-[360px] lg:h-full lg:min-h-[430px]" />}>
+          <PhotoMosaic
+            images={images}
+            loading={imagesQ.isLoading}
+            isActive={property.is_active}
+            onAll={() => setTab('fotky')}
+          />
+        </Suspense>
         <div className="min-w-0 space-y-5">
           <PropertyIdentity listing={property} priceNote={priceNote} />
           <LocationMap
@@ -343,9 +346,11 @@ export default function PropertyDetail() {
       </div>
       {/* What the operator has already decided comes before the numbers, on
           every tab (rule #18: property-grain). */}
-      <ActingAs key={actingShare?.account_id ?? 'own'} share={actingShare}>
-        <MineStrip property_id={propertyId} onOpen={() => setTab('moje')} />
-      </ActingAs>
+      <Suspense fallback={<div className="mt-6 h-[46px]" />}>
+        <ActingAs key={actingShare?.account_id ?? 'own'} share={actingShare}>
+          <MineStrip property_id={propertyId} onOpen={() => setTab('moje')} />
+        </ActingAs>
+      </Suspense>
       {/* Keyed on the property: which tabs were opened is per property. */}
       <PropertyTabs
         key={propertyId}
@@ -467,11 +472,9 @@ export default function PropertyDetail() {
             </Suspense>
           ),
           audit: (
-            <AuditPanel
-              property={property}
-              sources={sources}
-              checks={checksQ.data ?? []}
-            />
+            <Suspense fallback={<Skeleton height={160} />}>
+              <AuditPanel property={property} sources={sources} checks={checksQ.data ?? []} />
+            </Suspense>
           ),
         }}
       />
@@ -604,54 +607,6 @@ function SurvivorRedirect({ propertyId }: { propertyId: number }) {
   }
   if (isAdmin && q.isLoading) return <LoadingState />;
   return <NotFoundState id={String(propertyId)} />;
-}
-
-/* -------------------------------------------------------------------------- */
-/* Audit (how fresh the data is, and where it came from)                      */
-/* -------------------------------------------------------------------------- */
-
-/* Freshness checks are stored against the legacy sreality_id: empty by
-   construction for a non-sreality advert. Then every advert's portal id and the
-   span we saw it over — the handles to look it up by. */
-function AuditPanel({
-  property,
-  sources,
-  checks,
-}: {
-  property: PropertyPublic;
-  sources: PropertySource[];
-  checks: ListingFreshnessCheckPublic[];
-}) {
-  return (
-    <div className="space-y-10">
-      {property.sreality_id != null && (
-        <FreshnessBlock sreality_id={property.sreality_id} checks={checks} label="Kontroly aktuálnosti" />
-      )}
-      <div>
-        <SectionLabel>Identifikátory</SectionLabel>
-        <table className="mt-3 w-full max-w-2xl text-sm">
-          <tbody>
-            <tr className="border-b border-[var(--color-rule-soft)]">
-              <th scope="row" className="py-2 pr-4 text-left font-normal text-[var(--color-ink-2)]">Nemovitost</th>
-              <td className="py-2 font-mono tabular-nums">{property.property_id}</td>
-              <td />
-            </tr>
-            {sources.map((s) => (
-              <tr key={s.id} className="border-b border-[var(--color-rule-soft)]">
-                <th scope="row" className="py-2 pr-4 text-left font-normal text-[var(--color-ink-2)]">
-                  {portalLabel(s.source) ?? s.source}
-                </th>
-                <td className="py-2 pr-4 font-mono tabular-nums break-all">{s.source_id_native ?? '—'}</td>
-                <td className="py-2 font-mono tabular-nums text-[var(--color-ink-3)] whitespace-nowrap">
-                  {fmtShortDate(s.first_seen_at)} – {s.is_active ? 'dnes' : fmtShortDate(s.last_seen_at)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
 }
 
 /* -------------------------------------------------------------------------- */
