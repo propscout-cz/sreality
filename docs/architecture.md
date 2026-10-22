@@ -2193,7 +2193,23 @@ renumber.** Navigate by area:
     `SourceKind` alias in `api/notifications.py` is the list),
     deduped by a single per-event **`dedupe_key`** (`wd:{sub}:new:{property_id}` once-ever;
     `wd:{sub}:price_drop:{snapshot_id}` **per-snapshot**, so a property that keeps dropping fires
-    once per real cut — and so does the collection-monitor producer). **A price step is one
+    once per real cut — and so does the collection-monitor producer). **The producers run on ONE
+    clock (notifications W2a, migration 652):** the realtime worker's `notifications` lane runs
+    `match_once` (step `watchdog_new`), `match_changes_once` (`price`) and
+    `match_monitored_collections_once` (`monitor`) every 300 s, each step in its own transaction; a
+    failing step is its own `lane/notifications/<step>` jobs cell (red alone while the others write;
+    every statement commits on its own, so no INSERT's locks outlive it); the API's `matcher_loop`
+    runs the same three beside it until W2b. **The cursor is gone:** a watchdog's `new` is ONE INSERT
+    over properties first seen in the last 24 h and after its `active_since` (stamped by a trigger on
+    create, on every switch-on and on every filter edit: an edited watchdog is a new start), images-first gated (a hold ends inside the window, so it never loses a property), so a
+    late-matching property under a day old still fires and a resumed watchdog never floods; `price` is
+    ONE canonical-ad step fragment (`_CANONICAL_PRICE_STEPS`, 7 days, from `active_since` /
+    `monitor_since`) for both producers; `monitor`'s `inactive` waits out 24 h gone (a portal blink
+    sends neither Delisted nor Relisted). Every row also writes `event_ref` (the discriminator within
+    source, kind and property: snapshot id, inactive epoch, introducing listing, dashboard id,
+    pipeline mode) and a share its `actor_account_id`, with a target-less `ON CONFLICT DO NOTHING`;
+    the keys stay byte-identical to the pre-W2 grammar (a render test pins them) until W3's identity
+    index replaces them. **A price step is one
     advert's change against its OWN previous priced snapshot** — `listing_price_steps`
     (migration 559) is the one definition, read by the watchdog, the collection monitor and
     the property rollup alike; the two notification producers used to window every advert of
@@ -2220,8 +2236,8 @@ renumber.** Navigate by area:
     W1 (2026-10-21; W6 drops it). Its successor is the W4 push ledger: one row per (event, registered
     iPhone of the event's account), recipients resolved from `account_id` at send time, never routed
     by source (`docs/design/notifications-push/PROGRAM.md` § 3). **A SECOND producer is live (Sprint C):
-    `match_monitored_collections_once` (api/notifications.py, own daily cadence
-    `notifications_monitor_interval_seconds` + window `notifications_monitor_window_days`) emits
+    the collection monitor (`match_monitored_collections_once`, its price half in `match_changes_once`,
+    both on the lane's 300 s clock over a 7-day window) emits
     `source_kind='collection_monitor'` dispatches for every property in a `monitoring_enabled`
     collection — `price_drop`/`price_rise` (per-snapshot), `inactive`/`reactivated` (lifecycle;
     `reactivated` reads the prior `inactive` dispatch as the durable "was dead" marker since
@@ -2235,8 +2251,8 @@ renumber.** Navigate by area:
     the anchor closes). `monitoring_enabled_at` is stamped by a trigger on every false→true
     monitoring transition, so the anchor is correct across all write paths.
     `broker_change` is in the `change_kind` CHECK
-    (migration 209) but NOT yet emitted — `listing_broker_public` is current-state-only with no
-    change signal; the kind is reserved for when one exists. **The health ladder, `system_health`,
+    (migration 209) but never emitted — `listing_broker_public` is current-state-only with no
+    change signal; the kind leaves in W6. **The health ladder, `system_health`,
     was the third producer until W1** (migration 274; reshaped by migration 619 in wave 1 of the Health
     dashboard sprint, `docs/design/health-dashboard.md`; since ruling R2b, 2026-10-21, it writes no dispatch). Its measurer is ONE registry,
     `scripts/verify_pipeline.py` `CHECKS`: each check is declared once with its class (`alarm` or
@@ -2336,7 +2352,9 @@ renumber.** Navigate by area:
     (owner, recipient, mode), `share:pipeline:<owner>:<recipient>:<mode>`, written when the grant is
     new or widens to edit; `collection_id` NULL; "<owner email> shared their pipeline with you (view
     only|edit)") and for a dashboard share (647: `share:dashboard:<dashboard>:<recipient>`, once ever, `collection_id`
-    NULL, "<owner email> shared the dashboard "<name>" with you") — `subscription_id` NULL, `change_kind = 'shared'`, the one stored copy of an email
+    NULL, "<owner email> shared the dashboard "<name>" with you") — `subscription_id` NULL, `change_kind` naming what opens
+    (`shared_collection | shared_dashboard | shared_pipeline`, migration 652, which relabelled the old `'shared'` rows; the feed's
+    `share_kind` reads it), `actor_account_id` the sharer and `event_ref` the dashboard id or the mode, the one stored copy of an email
     in the sharing model (a snapshot at share time), in-app now and pushed from W4 (collection-sharing
     ruling 5(e)'s in-app-only superseded 2026-10-21, `docs/design/notifications-push/PROGRAM.md` § 3.1). Migration 641 renamed 610's `collection_share` rows and keys. It is stamped to
     the RECIPIENT by the route on the service role (tenants hold no INSERT on the table), and the
@@ -2684,7 +2702,7 @@ renumber.** Navigate by area:
     production with 20,000 dismissals stacked on the newest rows: card page 49 ms, exact count
     115 ms (31 ms baseline), Stats no slower, map clusters +95 ms.
     **Notifications: a dismissal hides, it never un-detects.** The watchdog matcher, change
-    detector and collection monitor are untouched — `match_once` advances its cursor whether or
+    detector and collection monitor are untouched — `match_once` reads its 24 h window whether or
     not it inserts, `:new:` dedupe keys are once-ever, and the `reactivated` detector keys off a
     prior `inactive` dispatch, so suppressing an INSERT would lose the event for good on undo.
     Instead every in-app read of `notification_dispatches` — the feed and its total, the unread

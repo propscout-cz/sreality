@@ -1068,16 +1068,18 @@ def test_a_new_share_writes_one_recipient_stamped_notification_and_returns_the_c
     assert share[1] == (1, _RECIPIENT) and "ON CONFLICT DO NOTHING RETURNING account_id" in share[0]
     assert len([q for q, _ in identity.executed if "notification_dispatches" in q]) == 1
     sql, params = dispatch
-    # One kind for both shares (migration 641): 'share', collection_id set for a collection.
-    assert "VALUES ('share', %s::bigint, 'shared', account_email(%s::uuid) || %s::text," in sql
+    # One source for every share (migration 641): 'share', collection_id set for a collection.
+    assert "VALUES ('share', %(collection_id)s::bigint, %(change_kind)s::text," in sql
     # One notification per (collection, recipient) ever: no time in the key, so a revoke +
     # re-share loop cannot refill the recipient's inbox.
     assert "ON CONFLICT DO NOTHING" in sql and "epoch" not in sql
-    # (collection, owner for the label, the text after it, recipient = the stamped account, key)
-    assert params == (
-        1, _OWNER, ' shared the collection "Byty" with you', _RECIPIENT,
-        f"share:collection:1:{_RECIPIENT}",
-    )
+    # The kind names what opens and the owner is the actor (migration 652); a collection share
+    # needs no event_ref.
+    assert params == {
+        "change_kind": "shared_collection", "collection_id": 1, "actor": _OWNER,
+        "message": ' shared the collection "Byty" with you', "recipient": _RECIPIENT,
+        "event_ref": None, "dedupe_key": f"share:collection:1:{_RECIPIENT}",
+    }
     assert identity.tx == ["commit"]
     # The gate ran first, and the response is re-read on the tenant connection.
     assert _gate(conn.executed[0][0]) and "FROM collections c" in conn.executed[-1][0]
