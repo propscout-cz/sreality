@@ -246,10 +246,21 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   note through merges and a split's note copy takes them. The bytes live in R2 under
   `custom-attachments/note/` and are served by the API, with an extension allowlist that
   admits no active types.
+- **Done (photos sprint W1, 2026-10-23, [#1974](https://github.com/waiff/sreality/pull/1974)):**
+  the files are the PROPERTY's, a note optional (`property_attachments`, migration 660): their
+  own merge carrier (the same bytes once per account and property), a deleted note leaves them
+  on the property, a note's move takes them along, a split's note copy carries none.
+  `api/attachments.py` replaces `api/note_attachments.py` and the building run's duplicate
+  stack; `/properties/{id}/attachments` replaces the note-scoped routes; tiles draw a 1080 px
+  display copy (`?w=1080`, made once, JWT proxy only); no HEIC.
 - **Next (unscheduled):**
   - The Chrome-extension panel lists a note's text only, not its files.
   - Nothing deletes R2 objects; a sweep for objects no row names would have to spare the
-    ones a split's copy shares.
+    ones a pre-660 split's copy shares.
+  - Owed by 660: drop the `property_note_attachments` compatibility view, the fill trigger and
+    its function once #1974 is live; drop `backup_660` a week later.
+  - A split routes no file with no note (it stays on the kept property) and its dialog has no
+    file item (`_ROUTES_SQL` item arm, a move/copy statement, a `SplitItemKind`).
 
 ### Rule #18: an executed no-orphan merge test (done, 2026-10-01)
 - **Done:** `tests/test_property_carriers_live.py` (PR 0 #1664, extended by the
