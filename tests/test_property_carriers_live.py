@@ -257,7 +257,7 @@ def test_notes_all_move(cur, accounts):
 def test_files_union_per_account_and_bytes_and_follow_their_note(cur, accounts):
     """Migration 660: A's twin (the same bytes on both sides) folds and B's moves; a note's file
     goes where its note goes, through the merge and back home with it on a detach; a file with no
-    note stays on the survivor (a detach routes no file yet)."""
+    note is a detach's item (photos W2): B's goes back where its carry row says, A's own stays."""
     a, b = accounts
     s, r, _s_advert, advert = _pair(cur)
     cur.execute("INSERT INTO property_notes (account_id, property_id, body) VALUES (%s, %s, 'n') "
@@ -283,7 +283,7 @@ def test_files_union_per_account_and_bytes_and_follow_their_note(cur, accounts):
     assert placed() == {"a_s": s, "a_r": None, "b_r": s, "noted": s}
 
     _detached(cur, advert, r)
-    assert placed() == {"a_s": s, "a_r": None, "b_r": s, "noted": r}
+    assert placed() == {"a_s": s, "a_r": None, "b_r": r, "noted": r}
 
 
 def test_artifact_links_keep_the_survivors_per_account_and_stay_through_a_detach(cur, accounts):
