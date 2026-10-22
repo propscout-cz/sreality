@@ -106,7 +106,7 @@ def test_the_latest_definitions() -> None:
     640 dropped this file's parameter, 644 swapped the condition conjunct, 648 appended the
     energy-rating parameter."""
     assert latest_definition("browse_map_cells").name == "648_browse_energy_rating_filter.sql"
-    assert latest_definition("portal_status_matches").name == "597_portal_exclusion.sql"
+    assert latest_definition("portal_status_matches").name == "657_status_is_the_propertys.sql"
 
 
 def test_the_receipt_probes_the_two_functions() -> None:

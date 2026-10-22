@@ -153,19 +153,19 @@ def test_batch_reads_are_bounded() -> None:
     assert len(conn.cur.seen[0][1][0]) == 1000
 
 
-def test_broker_property_ids_judges_the_portal_rule_over_the_brokers_own_ads() -> None:
-    """MS19: one ad satisfies broker AND portal, so the rule's inputs are aggregated over
-    this broker's ads only, never the property's; no listing_location join (the read model
-    serves a property by its canonical ad's place)."""
+def test_broker_property_ids_finds_the_brokers_own_ads_on_the_portals_in_the_status() -> None:
+    """MS19 (657): one ad satisfies broker AND portal, so the portal side and its status are
+    one predicate per ad of this broker; the property's own status is the caller's. No
+    listing_location join (the read model serves a property by its canonical ad's place)."""
     conn = _Conn([{"property_id": 10}, {"property_id": 11}])
     out = brokers.broker_property_ids(conn, 4, status="active", portals=("idnes",), limit=100)
     sql, params = conn.cur.seen[0]
     flat = " ".join(sql.split())
+    assert "SELECT DISTINCT l.property_id FROM listings l" in flat
     assert "WHERE bi.broker_id = %(broker_id)s AND l.property_id IS NOT NULL" in flat
-    assert "GROUP BY l.property_id" in flat
-    assert ("HAVING public.portal_status_matches( bool_or(l.is_active), "
-            "array_agg(DISTINCT l.source), coalesce(array_agg(DISTINCT l.source) "
-            "FILTER (WHERE l.is_active), '{}'::text[]), %(portals)s::text[], %(status)s)") in flat
+    assert ("AND (cardinality(%(portals)s::text[]) = 0 OR l.source = ANY(%(portals)s::text[])) "
+            "AND (%(status)s = 'any' OR l.is_active = (%(status)s = 'active'))") in flat
+    assert "GROUP BY" not in flat and "portal_status_matches" not in flat
     assert "listing_location" not in flat
     assert params == {"broker_id": 4, "portals": ["idnes"], "status": "active", "limit": 101}
     assert out["data"] == [10, 11]

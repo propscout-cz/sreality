@@ -20,10 +20,9 @@ The operator chose to replace them with charts the user builds, which deletes th
    add / remove / reorder. Stored whole. **Amended 2026-10-20** (`saved-dashboards.md`): ONE *working board* per
    account; named dashboards are many, may embed the filter, and may be shared read-only.
 3. A turnover chart requires ONE status in the sample (active or delisted) — the same refusal as mixed property
-   types. Plain percentiles over the picked sample; no survival estimator. (Migration 634: a row's status is
-   judged by the cohort's own portal rule, and a property delisted on the chosen portal but live elsewhere
-   has no measured run there — it leaves a turnover sample as excluded, never pooled; under a BROKER scope
-   the status fact stays the property's — a known gap, `roadmap/ui-track.md`.)
+   types. Plain percentiles over the picked sample; no survival estimator. (A row's status is its
+   property's, the one its card and pin draw — migration 657, which took back 634's per-portal lens, its
+   turnover set-aside and its broker gap.)
 4. "Mixed" = more than one `category_main` OR more than one `category_type` in the cohort.
 5. Bands: price per m² sale 5 000 / 10 000, rent 25 / 50; total price sale 250 000 / 500 000 / 1 000 000, rent
    1 000 / 2 500 / 5 000; floor area 5 / 10 m², byty only. Defined once (`toolkit/stats_registry.py`).

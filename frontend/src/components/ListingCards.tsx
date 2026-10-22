@@ -427,9 +427,10 @@ function Card({
   const orderedAt = orderPortal ? r[`newest_ad_at_${orderPortal}`] : null;
   const orderedDay = orderedAt ? fmtShortDate(orderedAt) : null;
   const orderDate = orderedDay && orderedDay !== fmtShortDate(r.first_seen_at) ? orderedDay : null;
-  /* MS19's badge: the portals with an active ad, or every portal marked inactive. */
+  /* MS19's badge: the portals with an active ad, or every portal once none is
+   * active (the card's surface and closed run already say which). */
   const activePortals = r.active_sources;
-  const badgePortals = activePortals.length ? activePortals : r.all_sources;
+  const badgePortals = (activePortals.length ? activePortals : r.all_sources).map(portalLabel).join(' · ');
 
   /* W7a: photos come from the shared hydration layer, not off `r`. They used to
      be awaited inside the cards read, so the whole grid waited on 24 cards'
@@ -529,7 +530,7 @@ function Card({
           * the property holds when it holds more than one. Status
           * is carried by the card surface, not a pill. Borders-only,
           * paper-3/85 + backdrop-blur over the photo. */}
-        <div className="absolute top-1 right-1 flex flex-col items-end gap-1">
+        <div className="absolute top-1 right-1 max-w-[calc(100%-0.5rem)] flex flex-col items-end gap-1">
           <CardBadge title={lifespanTitle}>
             {inactive ? (
               <>
@@ -558,14 +559,14 @@ function Card({
               </>
             )}
           </CardBadge>
-          {badgePortals.length > 0 && (
+          {badgePortals && (
+            /* Too long for a narrow card, it loses its END, never its start. */
             <CardBadge
-              title={activePortals.length
+              title={`${activePortals.length
                 ? 'Portály, kde má nemovitost aktivní inzerát'
-                : 'Portály, kde nemovitost inzerovala; žádný inzerát není aktivní'}
+                : 'Portály, kde nemovitost inzerovala; žádný inzerát není aktivní'}: ${badgePortals}`}
             >
-              <span className="opacity-60 mr-1">{activePortals.length ? 'portál' : 'neaktivní'}</span>
-              {badgePortals.map((p) => portalLabel(p)).join(' · ')}
+              <span className="truncate min-w-0">{badgePortals}</span>
             </CardBadge>
           )}
           {r.source_count >= 2 && (
@@ -858,7 +859,7 @@ function CardBadge({
         // A tooltip only shows if the badge is hit-testable: raised above the
         // stretched link's ::after (card-tip), below every control.
         title ? 'card-tip' : '',
-        'inline-flex items-center px-1.5 py-0.5 text-[0.6rem] tracking-[0.12em]',
+        'inline-flex max-w-full items-center px-1.5 py-0.5 text-[0.6rem] tracking-[0.12em]',
         'uppercase rounded-[var(--radius-xs)] border backdrop-blur-sm font-medium',
         'tabular-nums whitespace-nowrap',
         'bg-[var(--color-paper-3)]/85 border-[var(--color-rule)] text-[var(--color-ink-2)]',

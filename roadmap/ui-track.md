@@ -7,6 +7,21 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### One status: the property's, on every surface (2026-10-22, migration 657)
+- **Done.** Operator report 2026-10-21: Neaktivní + Sreality drew a property still live on remax (cards
+  and map). MS19 judged the status on the portal's ads while every surface draws the property's
+  `is_active`; ruling 2026-10-22: the status is the property's, a portal (or broker) asks for an ad there
+  in that same status. `portal_status_matches` became two conjuncts, `applyPortalRule` lost its
+  inactive-on-portal arm, the broker lookup became one per-ad predicate, the Stats pivot lost 634's lens
+  and turnover set-aside, and 634's broker known gap closed with it. Measured before: 2,184 of 159,711
+  "inactive on sreality" properties were live elsewhere (3,771 on idnes).
+- **Card portal badge:** no status word ("portál" / "neaktivní"); it overflowed a narrow card to the
+  LEFT and the photo cut "NE", so an ended card read "AKTIVNÍ …". Now bounded by the card, truncated at
+  its end, the full list in its tooltip.
+- **Next (owed, not on this path):** the two aggregate RPCs still take the status as two booleans
+  (`active_only_filter` / `inactive_only_filter`); folding them into one parameter is a re-sign that needs a
+  three-step rollout (SPA tolerant first).
+
 ### Filter presets frame their map area (2026-10-22, no migration)
 - **Built:** loading a preset that saved a map area moves the Browse map to that area (operator
   request 2026-10-22); before, the cohort filtered on the saved box while the camera stayed put. A
@@ -91,10 +106,8 @@ toolkit work.
 - **Status judged by the cohort's rule (2026-10-19, migration 634):** with a portal filter the pivot's
   `status` fact and the turnover gate read the portal rule (597), not the property's is_active — a property
   delisted on the chosen portal but live elsewhere no longer flips a Neaktivní cohort to "aktivní i neaktivní"
-  (it leaves a turnover sample as excluded instead). Known gap: under a BROKER scope the SPA sends no portal
-  and status any, so the status fact stays the property's and "broker + Neaktivní" can still read mixed
-  (2,169 of 355,514 broker-property pairs) — closing it needs the broker prefilter to carry per-property
-  broker-ad status.
+  (it leaves a turnover sample as excluded instead). **Superseded 2026-10-22 (migration 657):** the status
+  is the property's everywhere, so the lens, the set-aside and its broker gap are gone.
 - **Legacy vocabulary healed (2026-10-20, migration 642):** the 31 off-canon condition spellings (105 bazos
   listings) and 28 impossible dispositions (812 listings) that charted as raw-spelled "pod 5" rows now read
   as the canon or NULL; the mapping is pinned to `scraper/vocabulary.py` by its test. `backup_642` holds the

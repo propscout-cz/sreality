@@ -756,10 +756,10 @@ def _build_registry() -> dict[str, FilterDef]:
             pg_column=None,  # synthetic: drives is_active filter at the UI layer
             default="any",
             description=(
-                "Status filter for Browse. `any` shows both live and "
-                "delisted properties; `active` = a property with an active "
-                "ad on the selected portals (any active ad when none is "
-                "selected); `inactive` = ads there and none of them active. "
+                "Status filter for Browse, always the property's own: `any` "
+                "shows both live and delisted properties; `active` = a live "
+                "property (with a portal filter: with an active ad there); "
+                "`inactive` = a delisted property, every ad ended. "
                 "The Watchdog matcher ignores this (it fires on new "
                 "properties only) — use `lifecycle` for the analytical "
                 "surfaces."
@@ -1072,7 +1072,7 @@ def _build_registry() -> dict[str, FilterDef]:
                 "bazos, idnes, maxima, ceskereality, bezrealitky, mmreality, "
                 "remax, realitymix. A property matches when any of its ads is "
                 "on a listed portal, active or not; several = any of them; "
-                "with a status filter the status is judged on those ads; "
+                "with the `active` status that ad must be active; "
                 "estimation cohorts read the canonical ad's own portal. Empty "
                 "list / null = all portals."
             ),

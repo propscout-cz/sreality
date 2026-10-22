@@ -187,7 +187,7 @@ describe('<BrowseExperience> the cards\' cover photo', () => {
     expect(localStorage.getItem(COVER_KEY)).toBe('kitchen');
     const card = screen.getByTitle(/^Portály/).closest('li')!;
     expect(within(card).getByText(counterIs('3 / 4'))).toBeInTheDocument();
-    expect(within(card).getByTitle(/^Portály/).textContent).toBe('portáliDNES Reality · Sreality');
+    expect(within(card).getByTitle(/^Portály/).textContent).toBe('iDNES Reality · Sreality');
     expect(within(card).getByTitle(/^Nemovitost spojuje 2 inzeráty/)).toHaveTextContent(/^2\s*inzeráty$/);
     expect(within(card).getByTitle(/^Aktivní/).textContent).toContain(`·iDNESod${fmtShortDate(IDNES_DAY)}`);
   });

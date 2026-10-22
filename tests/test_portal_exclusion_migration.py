@@ -155,8 +155,9 @@ def test_every_recreated_function_restates_its_acl_and_nothing_cascades() -> Non
 
 def test_the_rule_is_still_this_file_and_598_builds_on_its_rpc_bodies() -> None:
     """598 re-stated both RPCs (one denylist parameter) and md5-gates its apply on these bodies;
-    tests/test_property_ids_excluded_migration.py pins its edits. The rule is still this file's."""
-    assert latest_definition("portal_status_matches").name == NAME
+    tests/test_property_ids_excluded_migration.py pins its edits. 657 restated the rule's body
+    (the status is the property's) under this file's signature."""
+    assert latest_definition("portal_status_matches").name == "657_status_is_the_propertys.sql"
     s598 = _read("598_property_ids_excluded.sql")
     for body in _function_bodies(SQL):
         assert _md5(body) in s598

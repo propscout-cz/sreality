@@ -974,17 +974,26 @@ describe('<ListingCards> the portal badge and the order date', () => {
 
   it('lists every portal with an active ad', () => {
     renderGrid({ row: { ...ROW, all_sources: ['idnes', 'sreality'], active_sources: ['idnes', 'sreality'] } });
-    expect(badge().textContent).toBe('portáliDNES Reality · Sreality');
+    expect(badge().textContent).toBe('iDNES Reality · Sreality');
   });
 
   it('lists only the live portals while one is live', () => {
     renderGrid({ row: { ...ROW, all_sources: ['bazos', 'idnes'], active_sources: ['idnes'] } });
-    expect(badge().textContent).toBe('portáliDNES Reality');
+    expect(badge().textContent).toBe('iDNES Reality');
   });
 
-  it('marks every portal inactive when no ad is live', () => {
+  it('lists every portal when no ad is live, with no status word (the card carries the status)', () => {
     renderGrid({ row: { ...ROW, is_active: false, all_sources: ['bazos', 'idnes'], active_sources: [] } });
-    expect(badge().textContent).toBe('neaktivníBazoš · iDNES Reality');
+    expect(badge().textContent).toBe('Bazoš · iDNES Reality');
+    expect(badge()).toHaveAttribute(
+      'title', 'Portály, kde nemovitost inzerovala; žádný inzerát není aktivní: Bazoš · iDNES Reality');
+  });
+
+  it('truncates a long list at its end, never its start, inside the card', () => {
+    renderGrid({ row: { ...ROW, is_active: false, all_sources: ['ceskereality', 'idnes', 'realitymix', 'sreality'], active_sources: [] } });
+    expect(badge().firstElementChild).toHaveClass('truncate', 'min-w-0');
+    expect(badge()).toHaveClass('max-w-full');
+    expect(badge().parentElement).toHaveClass('max-w-[calc(100%-0.5rem)]');
   });
 
   const lifespan = () => screen.getByTitle(/^Aktivní/).textContent;

@@ -2214,11 +2214,15 @@ renumber.** Navigate by area:
     does — and `_shared_filter_where` drops every advert of the subject's property
     (`exclude_listing_ids`, the one exclusion; decision 13), so comparables, velocity and the
     corridor count each property once.
-    **PORTALS AND BROKERS are one rule too (MS19, migration 590; two-sided since 597): a filter
-    selects ADS, the rows stay properties.** A property matches portal set P when any of its ads
-    is on P, active or not (`properties.all_sources`); the status switch is judged on those ads
-    (active = an active ad on P, `active_sources`; inactive = ads on P and none active); several
-    portals = any of them; with no portal the status is the property's own. **And it has no ad
+    **PORTALS AND BROKERS are one rule too (MS19, migration 590; two-sided since 597; the status
+    is the property's since 657): a filter selects ADS, the rows stay properties.** The status
+    switch is the PROPERTY's own `is_active` — the status every card, pin and Stats fact is drawn
+    with, so no row ever contradicts the switch (operator ruling 2026-10-22, after an "inactive on
+    sreality" cohort drew a property still live on remax). A portal set P asks for an ad on P in
+    that same status: an active ad under active (`active_sources`), any ad otherwise
+    (`properties.all_sources`; an ended property has only ended ads); several portals = any of
+    them. "Delisted on P but live elsewhere" is therefore no status: such a property is live, on
+    every surface. **And it has no ad
     on an EXCLUDED portal** (`portals_excluded`): any ad, active or ended (`all_sources`), or only
     active ones under `portals_excluded_active_only` (`active_sources`, the operator's choice per
     filter, ruled 2026-10-13); several excluded = none of them; both sides combine ("on idnes, not
@@ -2228,11 +2232,12 @@ renumber.** Navigate by area:
     twin on the excluded portal leaves its property in, and the operator ruled no caveat in the
     UI because it sharpens as the AUTODEDUP scope grows (measured 2026-10-13: outside the apply
     scope about half to three quarters of a "not on sreality" cohort have an unmerged sreality
-    twin). A broker filter is the include side over that broker's ads only, so broker + portal
-    means one ad satisfies both. ONE SQL function, `public.portal_status_matches` (seven
-    arguments since 597, the two exclusion ones defaulted), is read by both aggregate RPCs and
-    the broker lookup (`toolkit/brokers.broker_property_ids`, `GET /brokers/{id}/property-ids`,
-    which passes no exclusion); the Watchdog compiles its `any` arm and the exclusion
+    twin). A broker filter moves the portal side onto that broker's ads only (one of its ads on P
+    in the switch's status: `toolkit/brokers.broker_property_ids`, `GET /brokers/{id}/property-ids`),
+    so broker + portal means one ad satisfies both, while the status stays the property's. ONE SQL
+    function, `public.portal_status_matches` (seven arguments since 597, the two exclusion ones
+    defaulted; two independent conjuncts since 657), is read by both aggregate RPCs; the Watchdog
+    compiles its `any` arm and the exclusion
     (`PROPERTIES_GRAIN.clauses` + the `portals_excluded` hook; it has no status filter); the SPA
     renders it on PostgREST (`queries.ts applyPortalRule`: `ov` / `not.ov` on the two lists, a
     property-id allowlist under a broker). All three renderings are pinned to one table,
@@ -2532,10 +2537,8 @@ renumber.** Navigate by area:
     `excluded`: a NULL on a chosen dimension or on the measure excludes the property, never buckets
     it), statistics only for a cell of at least 5 properties, and a refusal instead of a guess
     (`empty`, `mixed_category`, `mixed_status` for turnover over a sample of two statuses — a row's
-    status judged by the cohort's own portal rule (597), so "inactive on sreality" stays one status
-    even where the property is live elsewhere; such a row leaves a turnover sample as excluded, its run on
-    that portal being unmeasured at property grain; under a broker scope the status fact stays the
-    property's, a known gap (migration 634),
+    status is its property's, as the cohort's portal rule judges it (657 took back 634's per-portal
+    lens, its turnover set-aside and its broker gap),
     `too_many_cells`, `bad_spec`). A place dimension keys on the RÚIAN code `browse_list` carries
     (`region_id` … `ulice_id`, rule 25's one code predicate), so two towns or streets of one name stay
     two cells and the pivot reads no listing location; the payload's `places` names each key through

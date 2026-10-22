@@ -1,10 +1,12 @@
-"""THE portal rule (MS19, migration 590; two-sided since 597), executed and pinned to the shared fixture.
+"""THE portal rule (MS19, migration 590; two-sided since 597; the status is the property's since 657),
+executed and pinned to the shared fixture.
 
 `tests/fixtures/portal_rule.json` is read by both languages. Here: every case through
 `public.portal_status_matches`, through both aggregate RPCs (Stats and, since migration 630,
 the map cells over `browse_list`) and, for the `any` rows, through the Watchdog's
 compiled clause (`toolkit.filter_compiler.PROPERTIES_GRAIN`); every broker case seeds its
-ads and runs the broker lookup (`toolkit.brokers.broker_property_ids`). The SPA half is
+ads, runs the broker lookup (`toolkit.brokers.broker_property_ids`, the portal side on the
+broker's ads) and keeps the property's own status beside it, as Browse does. The SPA half is
 `applyPortalRule` in queries.test.ts. Also live: the rebuild's one partial index per portal
 and the projection's and `browse_list`'s one shape. Offline: the fixture covers every arm.
 
@@ -187,14 +189,17 @@ def _seed_broker_case(cur: Any, case: dict[str, Any]) -> tuple[dict[str, int], i
 
 @live
 @pytest.mark.parametrize("case", BROKER_CASES, ids=_ids(BROKER_CASES))
-def test_the_broker_lookup_judges_the_brokers_own_ads(conn, case: dict[str, Any]) -> None:
+def test_the_broker_lookup_with_the_propertys_status_answers_the_table(
+        conn, case: dict[str, Any]) -> None:
     from toolkit.brokers import broker_property_ids
 
     with conn.cursor() as cur:
         brokers, property_id = _seed_broker_case(cur, case)
     out = broker_property_ids(conn, brokers[case["broker"]], status=case["status"],
                               portals=case["portals"])
-    assert (property_id in out["data"]) is case["expected"]
+    live = any(ad["is_active"] for ad in case["ads"])  # the property's is_active, over every ad
+    status = {"any": True, "active": live, "inactive": not live}[case["status"]]
+    assert (property_id in out["data"] and status) is case["expected"]
 
 
 @live
