@@ -103,10 +103,10 @@ export default function FilterPresetBar({
    * ON loads the pipeline over a NEUTRAL cohort (pipelineViewFilters) instead of
    * ANDing itself onto the filters set — as a modifier it showed 1 of 45 deals,
    * the rest hidden by Browse's byt + pronájem default. It is still NOT a preset:
-   * nothing is saved or updated; `pipeline` is outside preset identity
-   * (PRESET_EXCLUDED_KEYS), so it never marks a preset dirty; loading it
-   * deselects the active preset. OFF is a filter edit (drop the scope, keep the
-   * cohort since built); Back undoes the load. Per-stage narrowing lives in the
+   * nothing is saved or updated, and loading it deselects the active preset (a
+   * preset stores its pipeline scope like any filter, so a preset left active
+   * over the view would read as edited). OFF is a filter edit (drop the scope,
+   * keep the cohort since built); Back undoes the load. Per-stage narrowing lives in the
    * sidebar's Curation → Pipeline control. */
   const scope = filters.pipeline;
   const pipelineOn = scopeIncludes(scope);

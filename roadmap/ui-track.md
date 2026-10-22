@@ -30,6 +30,12 @@ toolkit work.
   `frame` (the `flyTo` twin), sent by `BrowseExperience` on the preset click.
 - **Built (same day):** "Include the current map area in this preset" is ticked by default when saving a
   new preset (operator request); the Update dialog still starts from the preset's own choice.
+- **Built (same day): a preset keeps every filter** (operator request, reversing the 2026-10-19 ruling): the
+  curated sets (pipeline, collections, tags), the broker and the dismissed reveal are stored, a change to one
+  offers "Update preset", and a click applies them — a preset saved before stored them off, so it turns them
+  off. Desktop and phone alike. Stats dashboards still leave them out (shareable; operator choice):
+  `filters.DASHBOARD_EXCLUDED_KEYS` / `filtersForDashboard`. Every other filter (velocity, price activity,
+  the rest of the 70) was already stored.
 
 ### Condition filter: the "Neuvedeno" chip (2026-10-20, migration 644)
 - **Built:** Browse's "Condition (Stav objektu)" filter offers "Neuvedeno" as furnished and ownership

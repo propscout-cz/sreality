@@ -5,8 +5,8 @@
  *
  * A scope is "Vše" or one of the account's saved Browse presets (#1760 Q16: the
  * presets, not the watchdogs). A preset is applied the way Browse loads one —
- * `readPresetSpec` tolerates old blobs, `filtersForPreset` drops the lenses that
- * ride outside a preset — and keeps a map area the operator saved with it. The
+ * `readPresetSpec` tolerates old blobs, every filter it stores applies, the
+ * lenses included — and keeps a map area the operator saved with it. The
  * preset's saved SORT is not used: choosing a scope is newest first by decision
  * (Q17); the Filtry sheet's Řazení row changes it from there. */
 

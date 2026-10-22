@@ -606,7 +606,8 @@ from Browse, not just from the board.
 - **A scope, not a preset.** The chip leads the preset row, but `pipeline` sits in
   `PRESET_EXCLUDED_KEYS`: it is never stored in a preset and never counted in the
   dirty comparison, so toggling it shows no "Update preset" and it survives
-  loading one. Per-stage narrowing lives in the sidebar (Curation → Pipeline).
+  loading one. (Superseded 2026-10-22: a preset stores the pipeline scope like every
+  filter — `roadmap/ui-track.md`.) Per-stage narrowing lives in the sidebar (Curation → Pipeline).
   Watchdogs report it as unsupported — the operator's own state can't be a
   trigger for their own clicks.
 - **Follow-up, same day:** the chip shipped as a MODIFIER and that was wrong —

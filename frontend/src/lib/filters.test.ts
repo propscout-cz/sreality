@@ -22,7 +22,9 @@ import {
   applyRegistryUpdate,
   applyRegistryUpdates,
   buildingMaterialToValues,
+  filtersEqualForDashboard,
   filtersEqualForPreset,
+  filtersForDashboard,
   filtersForPreset,
   readPresetSpec,
   savedMapArea,
@@ -861,73 +863,51 @@ describe('filter presets', () => {
     expect(filtersForPreset(f, false).priceMax).toBe(6_000_000);
   });
 
-  it('filtersForPreset always strips the pipeline scope', () => {
-    const f: ListingFilters = {
-      ...DEFAULT_FILTERS,
-      priceMax: 6_000_000,
-      pipeline: { set: null, in: [12], out: [] },
-    };
-    // Both branches: the scope is a lens, not preset criteria.
-    expect(filtersForPreset(f, false).pipeline).toBeNull();
-    expect(filtersForPreset(f, true).pipeline).toBeNull();
-  });
+  /* Operator ruling 2026-10-22 (reversing 2026-10-19): a preset keeps EVERY
+   * filter, the lenses included; only a dashboard — shareable — drops them. */
+  const LENSES: Partial<ListingFilters>[] = [
+    { pipeline: { set: 'in', in: [], out: [] } },
+    { pipeline: { set: null, in: [3, 9], out: [] } },
+    { collections: { set: null, in: [4], out: [] } },
+    { tags: { set: 'out', in: [], out: [] } },
+    { brokerId: 527 },
+    { showDismissed: true },
+  ];
 
-  it('never marks a preset dirty because of the pipeline scope', () => {
-    const saved: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 5_000_000 };
-    // This is the operator-visible contract: toggling Pipeline (or picking
-    // stages inside it) must NOT surface the "Update preset" button.
-    expect(
-      filtersEqualForPreset({ ...saved, pipeline: { set: 'in', in: [], out: [] } }, saved),
-    ).toBe(true);
-    expect(
-      filtersEqualForPreset({ ...saved, pipeline: { set: null, in: [3, 9], out: [] } }, saved),
-    ).toBe(true);
-    expect(
-      filtersEqualForPreset({ ...saved, pipeline: { set: 'out', in: [], out: [] } }, saved),
-    ).toBe(true);
-    // …and a real criteria change still is dirty, scope on or not.
-    expect(
-      filtersEqualForPreset(
-        { ...saved, priceMax: 4_000_000, pipeline: { set: 'in', in: [], out: [] } },
-        saved,
-      ),
-    ).toBe(false);
-  });
-
-  it('treats the dismissed reveal as a lens: stripped from presets, never dirtying one', () => {
-    const f: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 6_000_000, showDismissed: true };
-    expect(filtersForPreset(f, false).showDismissed).toBe(false);
-    expect(filtersForPreset(f, true).showDismissed).toBe(false);
-    const saved: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 5_000_000 };
-    expect(filtersEqualForPreset({ ...saved, showDismissed: true }, saved)).toBe(true);
-    expect(
-      filtersEqualForPreset({ ...saved, priceMax: 4_000_000, showDismissed: true }, saved),
-    ).toBe(false);
-  });
-
-  it('treats the broker scope as a lens too: stripped from presets, never dirtying one', () => {
-    const f: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 6_000_000, brokerId: 527 };
-    expect(filtersForPreset(f, false).brokerId).toBeNull();
-    expect(filtersForPreset(f, true).brokerId).toBeNull();
-    const saved: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 5_000_000 };
-    expect(filtersEqualForPreset({ ...saved, brokerId: 527 }, saved)).toBe(true);
-    expect(
-      filtersEqualForPreset({ ...saved, priceMax: 4_000_000, brokerId: 527 }, saved),
-    ).toBe(false);
-  });
-
-  it('treats the collection and tag scopes as lenses too: stripped, never dirtying a preset', () => {
-    const four = { set: null, in: [4], out: [] };
-    for (const key of ['collections', 'tags'] as const) {
-      const f: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 6_000_000, [key]: four };
-      expect(filtersForPreset(f, false)[key]).toBeNull();
-      expect(filtersForPreset(f, true)[key]).toBeNull();
-      const saved: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 5_000_000 };
-      expect(filtersEqualForPreset({ ...saved, [key]: { set: 'out', in: [], out: [] } }, saved))
-        .toBe(true);
-      expect(filtersEqualForPreset({ ...saved, priceMax: 4_000_000, [key]: four }, saved))
-        .toBe(false);
+  it('filtersForPreset keeps every lens, filtersForDashboard drops them', () => {
+    for (const lens of LENSES) {
+      const f: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 6_000_000, ...lens };
+      expect(filtersForPreset(f, false)).toMatchObject(lens);
+      expect(filtersForPreset(f, true)).toMatchObject(lens);
+      const dash = filtersForDashboard({ ...f, bounds: BOUNDS });
+      for (const key of Object.keys(lens) as (keyof ListingFilters)[]) {
+        expect(dash[key]).toEqual(DEFAULT_FILTERS[key]);
+      }
+      expect(dash.priceMax).toBe(6_000_000);
+      expect(dash.bounds).toBeNull();
     }
+  });
+
+  it('marks a preset edited when a lens changes, a dashboard never', () => {
+    const saved: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 5_000_000 };
+    for (const lens of LENSES) {
+      expect(filtersEqualForPreset({ ...saved, ...lens }, saved)).toBe(false);
+      expect(filtersEqualForPreset({ ...saved, ...lens }, { ...saved, ...lens })).toBe(true);
+      expect(filtersEqualForDashboard({ ...saved, ...lens }, saved)).toBe(true);
+      expect(filtersEqualForDashboard({ ...saved, priceMax: 4_000_000, ...lens }, saved)).toBe(false);
+    }
+  });
+
+  /* Every preset saved before 2026-10-22 stored the lenses off: it loads them off
+   * and reads clean against the same. */
+  it('reads a preset saved without lenses as storing them off', () => {
+    const { filters } = readPresetSpec({ filters: { categoryMain: ['byt'], priceMax: 5_000_000 } as ListingFilters, sort: null });
+    expect(filters.pipeline).toBeNull();
+    expect(filters.collections).toBeNull();
+    expect(filters.tags).toBeNull();
+    expect(filters.brokerId).toBeNull();
+    expect(filters.showDismissed).toBe(false);
+    expect(filtersEqualForPreset({ ...DEFAULT_FILTERS, categoryMain: ['byt'], priceMax: 5_000_000 }, filters)).toBe(true);
   });
 
   /* 0 of 7 live presets held a tag (2026-10-19), but a blob saved before

@@ -7,7 +7,8 @@
  * name-scoped label, so N chips no longer expose N identical "⋯" buttons.
  *
  * The rest pins what the fold into SavedSetBar must not change: the Pipeline
- * chip leads the row, "Update preset" re-captures filters + sort, a new preset
+ * chip leads the row, "Update preset" re-captures filters + sort (every filter,
+ * the curation lenses included — ruling 2026-10-22), a new preset
  * offers the map area only while one is applied (ticked for a new preset), and Edit
  * touches metadata only.
  */
@@ -128,6 +129,22 @@ describe('<FilterPresetBar> behaviour', () => {
     expect(id).toBe('p1');
     expect(patch).toMatchObject({ name: 'Praha 2+kk', color: null, filter_spec: { sort: sortToParam(DEFAULT_SORT) } });
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('offers "Update preset" when a curation filter drifts, and saves it into the preset', async () => {
+    vi.mocked(updateFilterPreset).mockResolvedValue(preset);
+    const outside = { set: 'out' as const, in: [], out: [] };
+    renderBar({
+      presets: [{ ...preset, filter_spec: { filters: DEFAULT_FILTERS, sort: null } }],
+      filters: { ...DEFAULT_FILTERS, pipeline: outside, collections: outside },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Update preset' }));
+    const dialog = screen.getByRole('dialog', { name: 'Update preset' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Update preset' }));
+    await waitFor(() => expect(updateFilterPreset).toHaveBeenCalledTimes(1));
+    const saved = vi.mocked(updateFilterPreset).mock.calls[0][1].filter_spec?.filters;
+    expect(saved?.pipeline).toEqual(outside);
+    expect(saved?.collections).toEqual(outside);
   });
 
   it('offers no update while the loaded preset is clean', () => {

@@ -254,7 +254,8 @@ export default function Feed() {
     window.scrollTo(0, 0);
   };
   /* A scope chip loads that scope as it stands, newest first (Q17); like a
-   * Browse preset click it resets every lens (ruling 2026-10-19). */
+   * Browse preset click it applies every filter the preset stores, the lenses
+   * included (ruling 2026-10-22). */
   const chooseScope = (next: string) => {
     const p = next === FEED_ALL_SCOPE ? null : (presets.find((x) => x.id === next) ?? null);
     show({ filters: feedFiltersForPreset(p), sort: DEFAULT_SORT, presetId: p?.id ?? null });

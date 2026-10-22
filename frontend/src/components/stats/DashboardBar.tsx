@@ -11,7 +11,7 @@ import { useEffect, useId, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import type { BrowseViewState } from '@/lib/browseState';
-import { filtersEqualForPreset, filtersForPreset, readPresetSpec, type PresetSpec } from '@/lib/filters';
+import { filtersEqualForDashboard, filtersForDashboard, readPresetSpec, type PresetSpec } from '@/lib/filters';
 import { DEFAULT_SORT, sortToParam } from '@/lib/queries';
 import {
   chartsEqual, createStatsDashboard, deleteStatsDashboard, listStatsDashboards, reorderStatsDashboards, sanitizeCharts,
@@ -133,12 +133,12 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
     if (!chartsEqual(working, sanitizeCharts(active.charts))) return true;
     if (active.filter_spec == null) return false;
     const spec = readPresetSpec(active.filter_spec);
-    return !filtersEqualForPreset(filters, spec.filters) || (spec.sort ?? sortToParam(DEFAULT_SORT)) !== sortParam;
+    return !filtersEqualForDashboard(filters, spec.filters) || (spec.sort ?? sortToParam(DEFAULT_SORT)) !== sortParam;
   }, [active, loadingBoard, working, filters, sortParam]);
 
-  /* A dashboard's filter is the preset blob, captured as a preset save captures
-   * it — never the map viewport. */
-  const currentSpec = (): PresetSpec => ({ filters: filtersForPreset(filters, false), sort: sortParam });
+  /* A dashboard's filter is the preset blob, captured without the map viewport
+   * and without the lenses (it can be shared; filters.DASHBOARD_EXCLUDED_KEYS). */
+  const currentSpec = (): PresetSpec => ({ filters: filtersForDashboard(filters), sort: sortParam });
   const adopt = (saved: SavedDashboard) => qc.setQueryData(listKey, withRow(saved.id, (d) => ({ ...d, ...saved })));
 
   /* ONE load: the stored charts into the working board, then the URL. */

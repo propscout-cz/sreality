@@ -2702,8 +2702,9 @@ renumber.** Navigate by area:
     "either folder". "Any collection" spans own + shared-with-me (the sharing ruling, 10-17).
     BROWSE-only for `pipeline`'s reasons (rule #22): a watchdog scoped to the operator's own
     groupings would fire on their own clicks, and the estimation agent must never see their taste.
-    Like the other lenses it sits OUTSIDE preset identity (`PRESET_EXCLUDED_KEYS`), so toggling
-    it never dirties a loaded preset, and a preset click resets it (ruling 2026-10-19).
+    Like the other lenses a preset stores it, dirties on it and applies it on a click (ruling
+    2026-10-22, reversing 2026-10-19); a Stats dashboard, shareable, leaves it out
+    (`DASHBOARD_EXCLUDED_KEYS`).
     **Curated sets are ONE kind of filter (2026-10-19, `docs/design/curated-set-scope.md`).**
     Tags, collections and pipeline stages share one value (`SetScope`: a whole-set side `in` /
     `out` plus `in` and `out` element lists — in it, not in it, in none of it), one URL grammar
@@ -2731,8 +2732,8 @@ renumber.** Navigate by area:
     (`components/curation/TagAssignList`: rows that attach or detach, a find-or-create box, the
     edit pencil — inline on the property page, a popover from the board card's chip row, a
     bottom sheet from the phone card) and ONE chip (`TagChip`). The filter control filters and
-    nothing else — editing a tag is the assign list's job; since 2026-10-19 `tags` is a lens
-    outside preset identity like the other two (0 of 7 stored presets held one). The membership
+    nothing else — editing a tag is the assign list's job; `tags` is a lens like the other two
+    (a preset stores it since 2026-10-22, a dashboard never). The membership
     read is complete-or-throw (`fetchAllRows`). **A curation write settles Browse in one place**
     (`lib/curationSettle.ts`, ruling 9): the write names the property and the lens it moved; every
     cached Browse cohort that engages that lens re-judges the property in memory against the
@@ -2866,8 +2867,8 @@ renumber.** Navigate by area:
     zero-arg call keeps 537's answer). `browse_stats_properties` / `browse_map_cells` take the
     same `hide_dismissed` flag (default false) and the nine. The SPA's `queries.ts:readSource`
     is the one seam: every cohort read calls the twin with `hide_dismissed: !showDismissed` plus
-    `scopeArgs(f)` — `?dismissed=show` reveals them, a lens outside preset identity like the
-    curated sets — and the sidebar says how many the cohort hides
+    `scopeArgs(f)` — `?dismissed=show` reveals them, a lens like the curated sets (a preset
+    stores it, a dashboard never) — and the sidebar says how many the cohort hides
     (the difference of two cached totals, fetched only once something is dismissed). A dismiss
     is the `dismissed` lens of `lib/curationSettle` (the row drops and the count drops by one at
     the click); a restore re-reads every Browse surface. Merge mode
@@ -3370,9 +3371,10 @@ renumber.** Navigate by area:
     (the write is pushed, not replaced). Turning the chip OFF is a plain filter edit that keeps
     the cohort the operator has since built, and the MODIFIER semantics still exist in the
     sidebar's Curation → Pipeline control (`CuratedSetFilter`: compose with current filters, pick
-    or exclude stages). It is still **not a preset**: `PRESET_EXCLUDED_KEYS` keeps it out of what
-    a preset stores and out of the dirty comparison, so it never offers "Update preset"; loading
-    a preset resets it with every lens (ruling 2026-10-19). A
+    or exclude stages). It is still **not a preset**: nothing is saved, and loading it deselects
+    the active preset. A preset stores the pipeline scope like every filter, so a change to it
+    offers "Update preset" and loading the preset applies it (ruling 2026-10-22, reversing
+    2026-10-19); a Stats dashboard leaves it out (`DASHBOARD_EXCLUDED_KEYS`). A
     watchdog can't use it (`UNSUPPORTED_LABELS`) — the operator's own state can't be a trigger. The
     extension bookmarks AND changes stage property-grain like every other surface: it reads
     `property_id` + membership (incl. `stage_id`) off the batched `POST /listings/lookup` (and
