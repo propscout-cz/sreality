@@ -328,6 +328,22 @@ def test_the_residual_sets_ads_in_dwell_aside_and_reads_both_signs(held: int, pe
     assert (cell["facts"]["held"], cell["facts"]["in_dwell"]) == (held, pending)
 
 
+def test_the_orphans_entry_is_a_walks_cell_and_never_a_residual() -> None:
+    """Rule 3's orphan scope (an entry with no labels; web's whole agenda) ages like a unit, as
+    `<portal>/walks/orphans`, and declares nothing: a residual needs a declared total."""
+    orphans = _unit("ceskereality", None, None, end_h=30.0, declared=0, collected=0, deferred=4)
+    walks = [_unit("ceskereality"), orphans]
+    cells = _cells(_scraping(walks)[0])
+    assert cells["ceskereality/walks/orphans"]["value"] == 30.0
+    assert not any("none" in subject for subject in cells)
+    out, _ = _coverage(walks, held=[("ceskereality", "byt", "prodej", 10_000, 0)],
+                       unnominated=[("ceskereality", 10, 0, _ago(days=3))])
+    cov = _cells(out)
+    assert [s for s in cov if s.startswith("ceskereality/residual/")] == [
+        "ceskereality/residual/byt-prodej"]
+    assert cov["ceskereality/unnominated"]["facts"]["deferred"] == 4
+
+
 @pytest.mark.parametrize("ads, deferred, status", [(24, 0, "ok"), (25, 0, "warn"),
                                                     (99, 0, "warn"), (100, 0, "fail"),
                                                     (130, 40, "warn")])

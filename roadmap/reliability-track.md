@@ -893,9 +893,9 @@ What wave 2 changed:
   one nomination query.
 
 To check: the next ceskereality and realitymix walks whose units all reached the end log
-`VERIFY orphans candidates=N`, and each portal gains a `walks/none-none` cell (hours since its last walk
-in which every unit reached the end) and a Not-measured `residual/none-none` (the orphans declare 0);
-after the reparse heal (the PR body's runbook, after the Prague read) and
+`VERIFY orphans candidates=N`, and each portal gains one cell, `walks/orphans` (hours since its last walk
+in which every unit reached the end; web's `walks/none-none` is renamed so); the orphans' entry declares no
+total, so it gets no residual; after the reparse heal (the PR body's runbook, after the Prague read) and
 two gone verdicts at least 24 h apart, `coverage ceskereality/unnominated` and `realitymix/unnominated`
 read 0 within ~2 days and their `no_walked_category` 0. Not here: the multi-ad properties the heal
 leaves holding prodej beside drazba (a clash checked only at merge) — the operator splits them.

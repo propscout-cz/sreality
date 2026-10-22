@@ -1188,7 +1188,7 @@ renumber.** Navigate by area:
    no category), and records them as one more `scrape_runs.by_category` entry with NULL labels
    (an indexless unit's shape), so the checks summing `verify_deferred` count their deferrals and
    a failed orphan query is a run error and an entry that did not reach the end, aged by the
-   walks check like a failed unit's. A portal with NO index declares `indexless = True` (`web`, the tenth portal,
+   walks check like a failed unit's (`<portal>/walks/orphans`; it declares no total, so no residual). A portal with NO index declares `indexless = True` (`web`, the tenth portal,
    since 2026-10-21): its one unit has no labels, so no scope, and its walk sees nothing by
    construction — every active `web` ad is an orphan, nominated with no seen set (the
    empty-seen refusal stays for every other portal). The rail:
