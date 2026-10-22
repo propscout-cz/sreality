@@ -275,9 +275,6 @@ def test_category_from_detail_url():
     assert category_from_url(
         "https://www.ceskereality.cz/pronajem/komercni-prostory/brno/y-12.html"
     ) == ("komercni", "pronajem")
-    assert category_from_url(
-        "https://www.ceskereality.cz/prodej/chaty-chalupy/x/z-9.html"
-    ) == ("dum", "prodej")
     # Full coverage: houses + land (the categories the original config omitted).
     assert category_from_url(
         "https://www.ceskereality.cz/prodej/rodinne-domy/rodinne-domy/drnovice/d-3700657.html"

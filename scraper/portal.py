@@ -632,8 +632,6 @@ _DEFAULTS: dict[str, PortalConfig] = {
             {"sale_type": "pronajem", "category": "byty"},
             {"sale_type": "prodej",   "category": "rodinne-domy"},
             {"sale_type": "pronajem", "category": "rodinne-domy"},
-            {"sale_type": "prodej",   "category": "chaty-chalupy"},
-            {"sale_type": "pronajem", "category": "chaty-chalupy"},
             {"sale_type": "prodej",   "category": "pozemky"},
             {"sale_type": "pronajem", "category": "pozemky"},
             {"sale_type": "prodej",   "category": "komercni-prostory"},

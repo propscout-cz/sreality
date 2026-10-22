@@ -121,7 +121,7 @@ def test_default_config_ceskereality():
     assert cfg.supports_complete_walk is True   # per-category total, no pagination cap
     assert cfg.split_threshold is None
     assert cfg.splits is False
-    assert len(cfg.categories) == 12            # 6 categories × prodej + pronajem
+    assert len(cfg.categories) == 10            # 5 categories × prodej + pronajem
     assert {c["sale_type"] for c in cfg.categories} == {"prodej", "pronajem"}
     assert all("sale_type" in c and "category" in c for c in cfg.categories)
     # houses + land (the categories the original branch config omitted) are present

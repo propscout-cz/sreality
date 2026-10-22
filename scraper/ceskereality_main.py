@@ -741,8 +741,8 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
         2026-09-07) -- once per (category_main, category_type), with the UNION
         of its slices' seen ids.
 
-        Several index slices collapse onto one canonical category ('rodinne-domy'
-        and 'chaty-chalupy' both -> dum), and the runner calls this per slice, so
+        Several index slices may collapse onto one canonical category (none has
+        since migration 659; realitymix's still do), and the runner calls this per slice, so
         nominating from ONE slice's seen set would nominate the sibling slice's
         whole population every walk. Buffer each complete slice's ids and
         nominate on the group's LAST complete slice. An incomplete or failed
