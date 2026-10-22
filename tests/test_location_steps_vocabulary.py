@@ -95,8 +95,9 @@ def test_every_shared_count_is_spelled_the_same_in_both_producers() -> None:
 
 def test_town_missing_is_one_fragment_the_check_and_the_refetch_lane_share() -> None:
     """Rule 25's invariant, broken, is spelled once: the check renders it, and scraper.db
-    (which imports location_data lazily) carries it VERBATIM, held here. RED by: a lane that
-    re-derives "no town" and queues a different set from the one the check judges."""
+    carries it VERBATIM (importing it there is a cycle: location_steps -> claims_common ->
+    loader_db -> scraper.db), held here. RED by: a lane that re-derives "no town" and queues a
+    different set from the one the check judges."""
     from scraper import db
     from scripts.checks import quality
 

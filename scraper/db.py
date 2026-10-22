@@ -2112,8 +2112,9 @@ def latest_completion_outcome(conn: psycopg.Connection, source: str, native_id: 
 #
 # The set is rule 25's invariant, broken: an active ad that is not determined
 # foreign and has no town. `location_steps.town_missing_sql()` is carried
-# VERBATIM because the scraper imports location_data lazily; the vocabulary
-# rail (tests/test_location_steps_vocabulary.py) pins the two. It is the set the
+# VERBATIM: importing it here is a cycle (location_steps -> claims_common ->
+# loader_db -> scraper.db); the vocabulary rail
+# (tests/test_location_steps_vocabulary.py) pins the two. It is the set the
 # `location_town_coverage` check judges, so an ad holding only a kraj or okres
 # claim, or one no property represents, gets its second look too.
 #
