@@ -360,47 +360,6 @@ def same_form_floor_gap(left: Mapping[str, frozenset[int]],
     return min(gaps) if gaps else None
 
 
-# --- the storeys BELOW ground (W32w, witness_floor) ------------------------------------------
-# `printed_floors` reads only storeys above ground, so one Vršovické náměstí 1+1 whose idnes body
-# says `(-1. PP)` while its column says 1 reads as no storey at all. A numbered `PP` or
-# `podzemní podlaží` is the storey below ground it numbers, `v suterénu` the first one; each is
-# returned as a negative storey (`1. PP` is -1), the scale the floor columns use below ground.
-# `polosuterén` is not read: a half-sunk storey is the ground floor on some portals.
-_BASEMENT_NUMBERED = re.compile(r"(?<![\d.,])-?\s?([1-9])\.?\s*(?:pp\b|podzemni\w*\s+podlazi)")
-_BASEMENT_WORD = re.compile(r"\bsuteren(?:u|em|ni\w*)?\b|\b(?:v|ve)\s+podzemni\w*\s+podlazi")
-
-
-def printed_basement_storeys(text: str | None) -> frozenset[int]:
-    """Every storey below ground the body prints, as a negative number (`1. PP` is -1)."""
-    return _printed_basement_storeys(text) if text else frozenset()
-
-
-@body_cached
-def _printed_basement_storeys(text: str) -> frozenset[int]:
-    folded = fact_text(text)
-    out = {-int(match.group(1)) for match in _BASEMENT_NUMBERED.finditer(folded)}
-    if _BASEMENT_WORD.search(folded):
-        out.add(-1)
-    return frozenset(out)
-
-
-# --- the disposition the body prints (W32w, witness_disposition) -----------------------------
-# The two standard Czech forms only, `N+kk` and `N+1`, in the spelling `disposition_norm` gives
-# a column. One idnes advert in Areál Hvězda is filed 5+kk and its own body sells `byt 5+1`.
-_PRINTED_DISPOSITION = re.compile(r"\b(\d)\s*\+\s*(kk|1)\b")
-
-
-def printed_dispositions(text: str | None) -> frozenset[str]:
-    """Every disposition the body prints, `3+kk` / `2+1`."""
-    return _printed_dispositions(text) if text else frozenset()
-
-
-@body_cached
-def _printed_dispositions(text: str) -> frozenset[str]:
-    return frozenset(f"{match.group(1)}+{match.group(2)}"
-                     for match in _PRINTED_DISPOSITION.finditer(fact_text(text)))
-
-
 # --- the storey the body predicates of the OFFERED unit (E181) ------------------------------
 # `printed_floors` is a SET of every storey a body names, and a body names the building's as
 # well as the unit's: one Dašice mill advert offers a space `umístěného v 2.NP` and mentions a
@@ -1095,6 +1054,164 @@ def _printed_areas(text: str) -> frozenset[tuple[float, int, str]]:
                 if hit.start() > best:
                     best, scope = hit.start(), name
         out.add((value, decimals[start], scope))
+    return frozenset(out)
+
+
+# --- W32w (research, the `witness_*` dials): what a body states beside its own columns -------
+# Read only under the dial that reads it, so no reader here moves a W31 decision. Each binds its
+# figure to the offered unit; a figure that may be another unit's, a room's, a cellar's or the
+# building's is not read at all.
+
+# The unit's own area: a size word in front of the figure, no accessory, room, land, office or
+# building noun in front of it and none straight after it (`s 12 m2 terasou`, `25 m2 velký
+# obývák`). `printed_areas` reads a figure as the unit's when no noun names it otherwise, which
+# counts those too. A building's NAMED size and a menu are dropped; the bare `celkovou plochou
+# 60 m2` is kept, because that is how a flat prints its own total (71409).
+_UNIT_AREA_CUE = re.compile(
+    r"\b(?:ploch\w*|plose|uzitn\w*|uzitkov\w*|podlahov\w*|vymer\w*|velikost\w*|rozloh\w*"
+    r"|rozloze|byt\w*\s+o)\b")
+_NOT_UNIT_NOUN: str = (
+    r"teras\w*|balk\w*|lodzi\w*|lodgi\w*|sklep\w*|koj\w*|komor\w*|spiz\w*|garaz\w*|stani\w*"
+    r"|pud[aeuy]|pudou|pudni\w*|dvur\w*|predzahrad\w*|atri\w*|zastaven\w*|pokoj\w*|loznic\w*"
+    r"|kuchyn\w*|koupeln\w*|predsin\w*|chodb\w*|jideln\w*|satn\w*|obyvak\w*|obyvaci\w*"
+    r"|zadver\w*|pradeln\w*|wc|toalet\w*|technick\w*|pozem\w*|parcel\w*|zahrad\w*"
+    r"|kancelar\w*|hal(?:a|y|e|u|ou)?|sklad\w*|budov\w*|objekt\w*|areal\w*|komplex\w*")
+_NOT_UNIT_BEFORE = re.compile(r"\b(?:" + _NOT_UNIT_NOUN + r")\b")
+_NOT_UNIT_AFTER = re.compile(
+    r"\s*(?:(?!(?:a|i|s|se|z|ze|plus|vcetne|nebo)\b)[a-z]+\s+)?(?:" + _NOT_UNIT_NOUN + r")\b")
+_BUILDING_NAMED = re.compile(
+    r"(?:budov|objekt|areal|komplex)\w*\s+(?:o\s+)?(?:celkov\w+\s+)?"
+    r"(?:velikosti|rozloze|ploche|plochou|vymere|vymera)\s+(?:cca\s+)?" + _AREA_NUMBER + r"\s*m2")
+
+
+def unit_area_figures(text: str | None) -> frozenset[tuple[float, int]]:
+    """W32w: `(m², printed decimals)` of every figure the body states as the unit's own area."""
+    return _unit_area_figures(text) if text else frozenset()
+
+
+@body_cached
+def _unit_area_figures(text: str) -> frozenset[tuple[float, int]]:
+    folded = fact_text(text)
+    mentions: list[tuple[int, int, float]] = []
+    raws: dict[int, str] = {}
+    for match in _M2_MENTION.finditer(folded):
+        value = _area_value(match.group(1))
+        if value is not None:
+            mentions.append((match.start(), match.end(), value))
+            raws[match.start()] = match.group(1)
+    skip = _menu_spans(folded, mentions) + [m.span() for m in _BUILDING_NAMED.finditer(folded)]
+    out: set[tuple[float, int]] = set()
+    for start, end, value in mentions:
+        if any(low <= start and end <= high for low, high in skip):
+            continue
+        if not STATED_AREA_MIN_M2 <= value <= STATED_AREA_MAX_M2:
+            continue
+        window = folded[max(0, start - AREA_SCOPE_WINDOW): start]
+        if (not _UNIT_AREA_CUE.search(window) or _NOT_UNIT_BEFORE.search(window)
+                or _NOT_UNIT_AFTER.match(folded, end)):
+            continue
+        out.add((value, _decimals_of(raws[start])))
+    return frozenset(out)
+
+
+# The storeys BELOW ground. `printed_floors` reads only storeys above it, so one Vršovické
+# náměstí 1+1 whose idnes body says `(-1. PP)` under a column of 1 reads as no storey at all. A
+# numbered `PP` or `podzemní podlaží` WITH its ordinal dot (`1 PP`, `1 podzemní podlaží` count the
+# building's storeys), `v suterénu` and `suterénní byt` are negative storeys, read of the offered
+# unit only: a unit noun shortly before, and no cellar, garage, parking or pram-room noun right
+# before (`sklep v suterénu`, `garážové stání v 1. PP`). `polosuterén` is a worded placement.
+_BASEMENT_NUMBERED = re.compile(r"(?<![\d.,])-?\s?([1-9])\.\s*(?:pp\b|podzemni\w*\s+podlazi)")
+_BASEMENT_WORD = re.compile(r"\bsuteren(?:u|em)\b|\b(?:v|ve)\s+podzemni\w*\s+podlazi\b")
+_BASEMENT_SELF = re.compile(r"\bsuterenni\w*\s+(?:byt|jednotk|prostor|apartman)\w*")
+_BASEMENT_SUBJECT = re.compile(
+    r"\b(?:byt\w*|jednotk\w*|prostor\w*|apartman\w*|atelier\w*|kancelar\w*|umisten\w*"
+    r"|situovan\w*|nachazi)")
+_BASEMENT_ACCESSORY = re.compile(
+    r"\b(?:sklep\w*|garaz\w*|stani\w*|koj\w*|kocarkarn\w*|parkovan\w*|parkovac\w*|sklad\w*"
+    r"|pradeln\w*|kolarn\w*|susarn\w*|technick\w*)")
+BASEMENT_SUBJECT_WINDOW: int = 48
+BASEMENT_ACCESSORY_WINDOW: int = 30
+
+
+def printed_basement_storeys(text: str | None) -> frozenset[int]:
+    """W32w: the storeys below ground the body places the offered unit on (`1. PP` is -1)."""
+    return _printed_basement_storeys(text) if text else frozenset()
+
+
+def _of_the_unit(folded: str, start: int) -> bool:
+    before = folded[max(0, start - BASEMENT_SUBJECT_WINDOW): start]
+    near = folded[max(0, start - BASEMENT_ACCESSORY_WINDOW): start]
+    return bool(_BASEMENT_SUBJECT.search(before)) and not _BASEMENT_ACCESSORY.search(near)
+
+
+@body_cached
+def _printed_basement_storeys(text: str) -> frozenset[int]:
+    folded = fact_text(text)
+    out = {-int(match.group(1)) for match in _BASEMENT_NUMBERED.finditer(folded)
+           if _of_the_unit(folded, match.start())}
+    if (any(_of_the_unit(folded, match.start()) for match in _BASEMENT_WORD.finditer(folded))
+            or _BASEMENT_SELF.search(folded)):
+        out.add(-1)
+    return frozenset(out)
+
+
+# Where the body places the unit in WORDS, as classes a printed storey is checked against:
+# `polosuterén` (below ground or the ground floor, by portal), `zvýšené přízemí` (the ground
+# floor or the one above it), `v přízemí` (ground), `v patře`, `v podkroví`, `v posledním
+# podlaží` (above ground).
+_SEMI_BASEMENT = re.compile(r"\bpolosuteren\w*")
+_RAISED_GROUND = re.compile(r"\bzvysen\w*\s+prizemi\w*")
+_ATTIC = re.compile(r"\bpodkrov\w*")
+
+
+def worded_storeys(text: str | None, words: bool = False) -> frozenset[str]:
+    """W32w: `semi`, `raised`, `ground`, `upper` — the placements the body states in words."""
+    return _worded_storeys(text, words) if text else frozenset()
+
+
+@body_cached
+def _worded_storeys(text: str, words: bool) -> frozenset[str]:
+    folded = fact_text(text)
+    out = set(ground_or_upper(text, words))
+    if states_top_storey(text) or _ATTIC.search(folded):
+        out.add("upper")
+    if _SEMI_BASEMENT.search(folded):
+        out.add("semi")
+    if _RAISED_GROUND.search(folded):
+        out.add("raised")
+    return frozenset(out)
+
+
+# The disposition the body SELLS: `N+kk` or `N+1` after an offer or label cue (`byt`,
+# `jednotka`, `dispozice:`, `prodej`, `pronájem`, at most two words between). A deposit idiom
+# (`kauce 2+1 nájem`) carries no cue; a neighbour's unit (`nabízíme také byt 2+kk`, `vedlejší
+# byt`) and a plural (`byty 2+kk`) are skipped. One idnes advert in Areál Hvězda is filed 5+kk
+# and its own body sells `byt 5+1` (39679).
+_DISPOSITION_CUED = re.compile(
+    r"\b(?:byt(?!y\b)\w*|jednotk\w*|dispozic\w*|prodej\w*|pronajem\w*|pronajmu)\s*:?\s*"
+    r"(?:(?!\d)[a-z]+\s+){0,2}?(\d)\s*\+\s*(kk|1)\b")
+_DISPOSITION_ELSEWHERE = re.compile(
+    r"\b(?:take|dalsi\w*|vedlejsi\w*|sousedni\w*|jin(?:y|e|a|ou|eho|em|ych)|ostatni\w*"
+    r"|kauce|zaloh\w*|vratn\w*)\b")
+_DISPOSITION_RENT_AFTER = re.compile(r"\s*(?:najem\w*|najm\w*|mesic\w*)\b")
+DISPOSITION_CONTEXT_WINDOW: int = 30
+
+
+def printed_dispositions(text: str | None) -> frozenset[str]:
+    """W32w: every disposition the body offers as its own, `3+kk` / `2+1`."""
+    return _printed_dispositions(text) if text else frozenset()
+
+
+@body_cached
+def _printed_dispositions(text: str) -> frozenset[str]:
+    folded = fact_text(text)
+    out: set[str] = set()
+    for match in _DISPOSITION_CUED.finditer(folded):
+        before = folded[max(0, match.start() - DISPOSITION_CONTEXT_WINDOW): match.start(1)]
+        if (_DISPOSITION_ELSEWHERE.search(before)
+                or _DISPOSITION_RENT_AFTER.match(folded, match.end())):
+            continue
+        out.add(f"{match.group(1)}+{match.group(2)}")
     return frozenset(out)
 
 

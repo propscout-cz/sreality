@@ -108,7 +108,15 @@ from autodedup.floor_convention import (
     same_camp,
     total_convention_shift,
 )
-from autodedup.guards import LAND_CATEGORY, area_rel_diff, area_relation
+from autodedup.guards import (
+    LAND_CATEGORY,
+    area_rel_diff,
+    area_relation,
+    areas_witnessed,
+    storeys_witnessed,
+    veto_disposition,
+    witness_side,
+)
 from autodedup.settings import Settings
 from autodedup.text_facts import (
     CHARGE_KINDS,
@@ -914,14 +922,23 @@ def storeys_disagree(a: Listing, b: Listing) -> bool:
     return bool(left) and bool(right) and not (left & right)
 
 
-def _printed_areas_prevail(a: Listing, b: Listing) -> bool:
+def _one_unit_figure(read: frozenset[tuple[float, int, str]]) -> bool:
+    return len({round(value, 1) for value, _decimals, scope in read if scope == "unit"}) == 1
+
+
+def _printed_areas_prevail(a: Listing, b: Listing, unit_required: bool = False) -> bool:
     """E280: both bodies print the SAME floor-area figures, and neither is a development's.
 
     Set EQUALITY, not overlap: a body that adds a cellar or a terrace to the other's figures is
     a different statement. Never inside a new development, where the next unit shares the
-    template and a square metre is the unit (E273/E275's line)."""
-    left = {round(value, 1) for value, _decimals, _scope in printed_areas(a.description)}
-    right = {round(value, 1) for value, _decimals, _scope in printed_areas(b.description)}
+    template and a square metre is the unit (E273/E275's line). `unit_required` (W32w's
+    `witness_area`): each body's set holds exactly ONE unit-scope figure, so one shared terrace
+    or cellar, or a two- or three-unit template's shared roster, excuses no two columns."""
+    read_a, read_b = printed_areas(a.description), printed_areas(b.description)
+    if unit_required and not (_one_unit_figure(read_a) and _one_unit_figure(read_b)):
+        return False
+    left = {round(value, 1) for value, _decimals, _scope in read_a}
+    right = {round(value, 1) for value, _decimals, _scope in read_b}
     return (bool(left) and left == right and not _development_pair(a, b)
             and not storeys_disagree(a, b))
 
@@ -969,7 +986,8 @@ def _price_sequential_path(
     code = _present(feats, "ref_code_shared") or 0.0
     gap = area_rel_diff(effective_area(a, settings), effective_area(b, settings))
     if (gap is not None and gap > 0.0 and not _column_rounding(a, b, settings)
-            and not (settings.d43_printed_area_prevails and _printed_areas_prevail(a, b))):
+            and not (settings.d43_printed_area_prevails
+                     and _printed_areas_prevail(a, b, settings.witness_area))):
         return False
     if lenient and gap is not None and not any(
             listing.category_main == "komercni" and listing.category_type == "pronajem"
@@ -2473,6 +2491,13 @@ def _floor_fact(a: Listing, b: Listing, cfg: Settings) -> bool:
         return False
     if (cfg.d43_floor_column_body_prevails and _bodies_print_one_storey(a, b, cfg)):
         return False
+    # W32w (witness_floor): two flat columns the bodies' own storeys contradict are no fact.
+    if (cfg.witness_floor and a.category_main == FLAT_CATEGORY
+            and b.category_main == FLAT_CATEGORY and a.floor is not None and b.floor is not None
+            and a.floor != b.floor
+            and storeys_witnessed(witness_side(a, cfg, a.area_m2),
+                                  witness_side(b, cfg, b.area_m2), cfg)):
+        return False
     gap = floor_gap(cfg.floor_camps if reads != "joint" else None,
                     a.source, a.floor, b.source, b.floor)
     if gap is not None:
@@ -2651,6 +2676,39 @@ def named_villa_conflict(a: Listing, b: Listing, cfg: Settings) -> tuple[str, st
     return None
 
 
+def _areas_witnessed(a: Listing, b: Listing, area_a: float | None, area_b: float | None,
+                     tol: float, cfg: Settings) -> bool:
+    """W1 (`witness_area`): the areas the two sides state meet within `tol` (`guards.area_readings`
+    over E293's effective columns)."""
+    return cfg.witness_area and areas_witnessed(
+        witness_side(a, cfg, area_a), witness_side(b, cfg, area_b), tol, cfg)
+
+
+def _dispositions_differ(a: Listing, b: Listing, cfg: Settings) -> bool:
+    """The two stated dispositions differ; under W5 (`witness_disposition`) each column is read
+    by the one disposition its own body offers."""
+    if not cfg.witness_disposition:
+        return a.disposition != b.disposition
+    return (veto_disposition(witness_side(a, cfg, a.area_m2))
+            != veto_disposition(witness_side(b, cfg, b.area_m2)))
+
+
+def _street_unstated(a: Listing, b: Listing, cfg: Settings) -> bool:
+    """W4 (`witness_street`): two resolver streets under ONE text of one source that prints no
+    street of its own key (335094: one sreality text re-posted, no street printed, the geocoder
+    placing it twice). A body naming its own key's street, two texts or two portals keep the
+    fact; agreeing prose never excuses it, because `prose_streets` leans towards agreement."""
+    if a.source is None or a.source != b.source:
+        return False
+    left, right = prose_streets(a.description), prose_streets(b.description)
+    if left != right:
+        return False
+    if (streets_agree({a.location.street_key}, left)
+            or streets_agree({b.location.street_key}, right)):
+        return False
+    return _read_one_text(a, b, cfg)
+
+
 def distinguishing_facts(
     a: Listing,
     b: Listing,
@@ -2693,15 +2751,18 @@ def distinguishing_facts(
     lenient = mode in (GATE, CLUSTER)
     gate_area_tol = cfg.d43_gate_area_tol if lenient else None
     # E280: two columns the two bodies' own printed figures contradict are not two areas.
-    printed_prevail = cfg.d43_printed_area_prevails and _printed_areas_prevail(a, b)
+    printed_prevail = cfg.d43_printed_area_prevails and _printed_areas_prevail(
+        a, b, cfg.witness_area)
     # E293: an empty land column is filled from the bažoš attribute block (identity when off).
     area_a, area_b = effective_area(a, cfg), effective_area(b, cfg)
     if gate_area_tol is not None:
         gap = area_rel_diff(area_a, area_b)
-        if gap is not None and gap > gate_area_tol and not printed_prevail:
+        if (gap is not None and gap > gate_area_tol and not printed_prevail
+                and not _areas_witnessed(a, b, area_a, area_b, gate_area_tol, cfg)):
             add("area", area_a, area_b)
     elif (area_relation(area_a, area_b, cfg) not in ("support", "unknown")
-            and not printed_prevail):
+            and not printed_prevail
+            and not _areas_witnessed(a, b, area_a, area_b, cfg.area_band_pct, cfg)):
         add("area", area_a, area_b)
 
     areas_a = stated_areas(a.description, a.area_m2)
@@ -2711,7 +2772,7 @@ def distinguishing_facts(
 
     is_land = LAND_CATEGORY in (a.category_main, b.category_main)
     if (not is_land and a.disposition is not None and b.disposition is not None
-            and a.disposition != b.disposition):
+            and _dispositions_differ(a, b, cfg)):
         add("disposition", a.disposition, b.disposition)
 
     # E133/N1: the floor gap with the portal's ground-floor convention taken out. Where the
@@ -2742,10 +2803,12 @@ def distinguishing_facts(
         excused = (floor_total_camp_shift(a, b, cfg)
                    or total_floors_agreeing_unit(a, b, cfg)
                    or printed_storeys_prevail(a, b))
-        # W32w (witness_total_floors): two columns no body prints a count beside are two form
-        # fields, not a stated fact; where a body prints one, E954 above has already read it.
-        unwitnessed = cfg.witness_total_floors and not (
-            printed_storey_counts(a.description) or printed_storey_counts(b.description))
+        # W32w (witness_total_floors): a ONE-storey gap between two columns no body prints a
+        # count beside is the attic or ground-floor count (11738, 512418), not a stated fact;
+        # two storeys or more stay one, and a printed count is E954's above.
+        unwitnessed = (cfg.witness_total_floors and delta_total == 1
+                       and not (printed_storey_counts(a.description)
+                                or printed_storey_counts(b.description)))
         if (delta_total and not joint and not camped and not ambiguous and not excused
                 and not unwitnessed):
             add("total_floors", a.total_floors, b.total_floors)
@@ -2802,12 +2865,10 @@ def distinguishing_facts(
             and a.location.obec_kod != b.location.obec_kod):
         add("obec", a.location.obec_name or a.location.obec_kod,
             b.location.obec_name or b.location.obec_kod)
-    # W32w (witness_street): the resolver's street is read only where both bodies print streets
-    # and share none; two bodies that name no street leave the geocoder's reading unstated.
     if (a.location.street_key and b.location.street_key
             and a.location.street_key != b.location.street_key
             and not (lenient and _pins_together(a, b, cfg.d43_street_min_distance_m))
-            and not (cfg.witness_street and prose_street_conflict(a, b) is None)):
+            and not (cfg.witness_street and _street_unstated(a, b, cfg))):
         add("street", a.location.street_key, b.location.street_key)
 
     # The compass direction, which is what separates two otherwise identical flats in one

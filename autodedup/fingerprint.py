@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Sequence
 
 from autodedup.dataset import Image, Listing
+from autodedup.guards import body_witnesses
 from autodedup.normalize import (
     disposition_norm,
     fact_text_folded,
@@ -31,16 +32,6 @@ from autodedup.normalize import (
 )
 from autodedup.settings import Settings
 from autodedup.stock import PLAIN as STOCK_PLAIN, StockIndex
-from autodedup.text_facts import (
-    cellar_areas,
-    ground_or_upper,
-    outdoor_accessory_areas,
-    printed_areas,
-    printed_basement_storeys,
-    printed_dispositions,
-    printed_floors_by_form,
-    states_top_storey,
-)
 from toolkit.room_taxonomy import ROOM_FAMILIES
 
 _TAXONOMY_PATH = Path(__file__).resolve().parents[1] / "data" / "clip_taxonomy.json"
@@ -194,54 +185,14 @@ class Fingerprint:
     inactive_at: str | None = None
     is_active: bool = True
     has_text: bool = False
-    # W32w (witnessed columns): what the body prints beside its columns, read only under the
-    # dial that reads it and empty otherwise. `listing_fp`/`rt_fp` carries none of these.
-    printed_unit_areas: tuple[float, ...] = ()
+    # W32w (witnessed columns): what the body states beside its columns, built only under the
+    # dials that read it (`guards.body_witnesses`). `rt_fp` has no columns for any of these.
+    witnessed: bool = False
+    printed_unit_area: float | None = None
     printed_accessory_areas: tuple[float, ...] = ()
     printed_storeys: tuple[tuple[str, tuple[int, ...]], ...] = ()
-    worded_storey: bool = False
+    worded_storeys: tuple[str, ...] = ()
     printed_disposition: str | None = None
-
-
-# W1: a body printing more unit figures than this is a project's price list, not one unit.
-WITNESS_AREA_MAX_UNIT_FIGURES: int = 3
-
-
-def witnessed_areas(description: str) -> tuple[tuple[float, ...], tuple[float, ...]]:
-    """W1: the unit-scope figures the body prints (`printed_areas`) and the accessory sizes it
-    states (`cellar_areas`, `outdoor_accessory_areas`: cellar, balcony, terrace, loggia, garden),
-    both empty for a body that prints more than `WITNESS_AREA_MAX_UNIT_FIGURES` unit figures.
-
-    The accessories are the two noun-bound readers, not `printed_areas`' accessory scope: that
-    scope drops every figure under 5 m² and reads a noun only BEFORE the figure, so `60 m², z
-    toho 4m² balkon a 2m² sklep` keeps neither extra, and its `koj` stem matches inside
-    `pokoj`, which would hand a room's size to the sum."""
-    unit = sorted({value for value, _decimals, scope in printed_areas(description)
-                   if scope == "unit"})
-    if len(unit) > WITNESS_AREA_MAX_UNIT_FIGURES:
-        return (), ()
-    accessory = {value for value, _decimals in cellar_areas(description)}
-    accessory |= {value for _kind, value, _decimals in outdoor_accessory_areas(description)}
-    return tuple(unit), tuple(sorted(accessory))
-
-
-def witnessed_storeys(description: str, words: bool
-                      ) -> tuple[tuple[tuple[str, tuple[int, ...]], ...], bool]:
-    """W2: the storeys the body prints by noun (`np`, `patro` on the NP scale, `pp` below
-    ground as negatives), and whether it places the unit in words (`v přízemí`, `v posledním
-    podlaží`), which no number carries."""
-    forms = dict(printed_floors_by_form(description, words))
-    forms["pp"] = printed_basement_storeys(description)
-    printed = tuple((form, tuple(sorted(values)))
-                    for form, values in sorted(forms.items()) if values)
-    worded = "ground" in ground_or_upper(description, words) or states_top_storey(description)
-    return printed, worded
-
-
-def witnessed_disposition(description: str) -> str | None:
-    """W5: the one disposition the body prints; a body printing several names none."""
-    printed = printed_dispositions(description)
-    return next(iter(printed)) if len(printed) == 1 else None
 
 
 def _anchor_sort_key(image: Image) -> tuple[float, int, int]:
@@ -289,12 +240,7 @@ def build_fingerprint(
         if family in by_family:
             by_family[family].append(image.image_id)
 
-    unit_areas, accessory_areas = (witnessed_areas(description) if settings.witness_area
-                                   else ((), ()))
-    storeys, worded = (witnessed_storeys(description, settings.d43_prose_floor_words)
-                       if settings.witness_floor else ((), False))
-    printed_dispo = (witnessed_disposition(description) if settings.witness_disposition
-                     else None)
+    seen = body_witnesses(description, settings)
 
     return Fingerprint(
         listing_id=listing.id,
@@ -345,11 +291,12 @@ def build_fingerprint(
         inactive_at=listing.inactive_at,
         is_active=listing.is_active,
         has_text=has_text,
-        printed_unit_areas=unit_areas,
-        printed_accessory_areas=accessory_areas,
-        printed_storeys=storeys,
-        worded_storey=worded,
-        printed_disposition=printed_dispo,
+        witnessed=settings.witnessing,
+        printed_unit_area=seen.unit_area,
+        printed_accessory_areas=seen.accessory_areas,
+        printed_storeys=seen.storeys,
+        worded_storeys=seen.worded_storeys,
+        printed_disposition=seen.disposition,
     )
 
 

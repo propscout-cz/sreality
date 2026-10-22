@@ -1067,22 +1067,35 @@ class Settings:
     d43_cellar_area_photo_yield: bool = False
     # --- W32w (research): witnessed columns ------------------------------------------------------
     # A portal COLUMN is a stated fact only until the ad's own text contradicts or composes it
-    # (convention 1, ruling 13). One dial per column; with all five off this is W31 exactly.
-    # Area: each side reads as its column plus the unit figures its body prints (a body printing
-    # more than three is a price list and witnesses nothing), or as one printed unit figure plus
-    # one or two printed accessories (`44 = 40 + 4 sklep`). Pair veto and cluster spread only.
+    # (convention 1, ruling 13). One dial per column; with all five off this is W31 exactly. At
+    # the pair veto a reading is applied only where BOTH sides carry readings
+    # (`GuardSide.witnessed`), so a row `rt_fp` serves is read as W31 reads it in either order,
+    # and the SQL lane refuses the three dials whose readings `rt_fp` has no columns for.
+    # Area (pair veto, cluster spread, D43 area limb): each side reads as its column; as its
+    # column and its one printed unit figure where its own extras compose the two (`44 = 40 + 4
+    # sklep`, void where both bodies print that extra); or as that figure alone where its body
+    # contradicts its column. A body stating two unit figures witnesses nothing; E280 needs a
+    # unit-scope figure in its equal set.
     witness_area: bool = False
-    # Floor: the flat floor veto is lifted where both bodies print the same nouns with every
-    # same-noun gap under two, or where the one body that prints a storey (`-1. PP` read too)
-    # prints the silent side's column.
+    # Floor (pair veto, D43 floor limb, flats): both bodies print one storey and the same one in
+    # a shared noun (one apart only `patro` against `NP`), or one body's one storey (`-1. PP`
+    # read too, of the unit only) is the silent side's column on that source's camp, where
+    # neither body words a placement against it.
     witness_floor: bool = False
-    # Total floors: the D43 limb fires only where a body prints a storey count.
+    # Total floors (D43): a ONE-storey gap between two columns no body prints a count beside is
+    # the attic or ground-floor count, not a fact; two storeys or more stay one.
     witness_total_floors: bool = False
-    # Street: the resolver's street fires only where both bodies print streets and share none.
+    # Street (D43): the resolver's street yields only to ONE text of one source that prints no
+    # street of its own key (335094); a printed street or two texts keep it.
     witness_street: bool = False
-    # Disposition: a body printing one disposition other than its own column is read by it in
-    # the pair veto.
+    # Disposition (pair veto, D43 disposition limb): a stated column is read by the one
+    # disposition its own body offers after a cue (`byt 5+1`), where the two differ.
     witness_disposition: bool = False
+
+    @property
+    def witnessing(self) -> bool:
+        """A W32w dial whose body readings travel with the side to the pair veto is on."""
+        return self.witness_area or self.witness_floor or self.witness_disposition
 
     def __post_init__(self) -> None:
         # A sweep file is JSON, so a tuple field arrives as a list: normalise before validating.

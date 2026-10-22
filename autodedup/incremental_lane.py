@@ -2187,8 +2187,20 @@ def named_config(args: Mapping[str, str], *, what: str
             f"`settings=w29,model=w6_gold`; the uncalibrated defaults are "
             f"`settings={DEFAULT_SETTINGS_NAME},model={PRIOR_MODEL_NAME}`, which is a choice "
             "this lane will not make on your behalf (E90a).")
-    return (named_settings(settings_name), named_model(model_name),
-            settings_name, model_name)
+    settings = refuse_unstored_readings(named_settings(settings_name))
+    return settings, named_model(model_name), settings_name, model_name
+
+
+def refuse_unstored_readings(settings: Settings) -> Settings:
+    """W32w's veto dials read body readings `rt_fp` has no columns for: a row this lane serves is
+    unwitnessed, so the lane would decide what the MemoryStore replay decides differently (E70).
+    Refused until `rt_fp` carries the readings, as E83/E85/E88 are."""
+    if settings.witnessing:
+        raise NotImplementedError(
+            "witness_area / witness_floor / witness_disposition (W32w) read body readings "
+            "rt_fp has no columns for: a pass would veto by columns what the replay admits by "
+            "the readings — add the rt_fp columns (or re-seed) first")
+    return settings
 
 
 def pass_config(recorded: Any, model_version: Any, generation: str
@@ -2205,7 +2217,8 @@ def pass_config(recorded: Any, model_version: Any, generation: str
         raise SystemExit(
             f"generation {generation!r} carries settings this build cannot read ({exc}) — "
             "re-seed it.") from exc
-    return settings, model_of_version(str(model_version) if model_version else None)
+    return (refuse_unstored_readings(settings),
+            model_of_version(str(model_version) if model_version else None))
 
 
 def phash_pop_rows(conn: Any) -> int:

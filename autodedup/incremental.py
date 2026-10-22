@@ -143,11 +143,14 @@ def _cut_key(cat_group: str | None, category_type: str | None) -> str:
 
 @dataclass(slots=True, frozen=True)
 class GuardRow:
-    """The five columns `pair_veto` reads, served from `listing_fp` without a gallery fetch.
+    """The six columns `pair_veto` reads, served from `listing_fp` without a gallery fetch, and
+    the W32w readings (`witnessed` and five more) the MemoryStore keeps beside them.
 
     Satisfies `guards.GuardSide` structurally, which is why the rule floor can refuse a
     candidate before the fan-out cap spends a slot on it (E17) without building its
-    fingerprint — the whole point of keeping retrieval cheap."""
+    fingerprint — the whole point of keeping retrieval cheap. `rt_fp` has no columns for the
+    readings, so a row the SQL store serves is unwitnessed and the veto reads it, in either
+    order, by its columns alone."""
 
     listing_id: int
     category_main: str | None
@@ -155,20 +158,23 @@ class GuardRow:
     area_m2: float | None
     disposition: str | None
     floor: int | None
-    # W32w: the body's readings the `witness_*` dials add to the veto. The MemoryStore keeps
-    # them with the row; `rt_fp` has no columns for them, so a row the SQL store serves carries
-    # the defaults and is read by its columns alone.
-    printed_unit_areas: tuple[float, ...] = ()
+    witnessed: bool = False
+    source: str | None = None
+    printed_unit_area: float | None = None
     printed_accessory_areas: tuple[float, ...] = ()
     printed_storeys: tuple[tuple[str, tuple[int, ...]], ...] = ()
-    worded_storey: bool = False
+    worded_storeys: tuple[str, ...] = ()
     printed_disposition: str | None = None
 
 
 def guard_row(fp: Fingerprint) -> GuardRow:
+    if not fp.witnessed:
+        return GuardRow(fp.listing_id, fp.category_main, fp.category_type, fp.area_m2,
+                        fp.disposition, fp.floor)
     return GuardRow(fp.listing_id, fp.category_main, fp.category_type, fp.area_m2,
-                    fp.disposition, fp.floor, fp.printed_unit_areas, fp.printed_accessory_areas,
-                    fp.printed_storeys, fp.worded_storey, fp.printed_disposition)
+                    fp.disposition, fp.floor, True, fp.source, fp.printed_unit_area,
+                    fp.printed_accessory_areas, fp.printed_storeys, fp.worded_storeys,
+                    fp.printed_disposition)
 
 
 @dataclass(slots=True, frozen=True)
@@ -964,10 +970,18 @@ def fp_digest(fp: Fingerprint, images: Sequence[Image]) -> str:
             sorted(fp.image_hashes), fp.n_images, fp.country_status,
             fp.first_seen_at, fp.last_seen_at, fp.inactive_at, fp.is_active,
             sorted((img.image_id, img.phash, img.pop, img.seq) for img in images),
-        ],
+        ] + _witness_payload(fp),
         sort_keys=True, default=str,
     )
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _witness_payload(fp: Fingerprint) -> list[Any]:
+    """W32w's readings, hashed only where one is non-default, so a W31 digest is unchanged and
+    a witnessed row moves when its body's readings move."""
+    readings = (fp.printed_unit_area, fp.printed_accessory_areas, fp.printed_storeys,
+                fp.worded_storeys, fp.printed_disposition)
+    return [list(readings)] if readings != (None, (), (), (), None) else []
 
 
 def decision_digest(listing: Listing, images: Sequence[Image]) -> str:
