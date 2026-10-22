@@ -158,7 +158,10 @@ Dashboards (`api/routes/stats_dashboards.py`, mounted like the presets router):
   "Jako ve filtru" (the Browse filter as set) or "Prodáno (trh)" (`lib/stats.soldMarketFilters`: inactive only,
   seen from birth, dismissed included, 2–60 days on market; every other filter holds). It applies to whatever
   dashboard is loaded, lives in the URL (`market=sold`, replace) and is never stored with a dashboard; Browse's
-  own filter, the dirty check and "Uložit změny" never see it. Browse-page only, as the bar is.
+  own filter, the dirty check and "Uložit změny" never see it.
+- **Every Stats tab is the same tab** (operator ask 2026-10-22): the explore modals show the dashboard bar and the
+  lens exactly as the Browse page does — one component, no `presetBar` gate; the modals' memory view state holds
+  the active dashboard and the lens as the URL does, and "Go to Browse" carries both (`dashboard`, `market`).
 - **Loading** (`onLoad`): ONE user action does two writes in order: `PUT /stats/dashboard {charts}` (copy into the
   working board, through `useOptimisticWrite` on the existing board cache), then the URL: if the dashboard carries
   `filter_spec`, `loadDashboard(d)` in `browseState.ts` writes the filters + sort exactly as `loadPreset` does
@@ -226,9 +229,8 @@ the dashboard carries a filter); left alone it sends the planned PUT, unticked i
 the shared dashboard's name and colour. The active one is saved as shown: the working charts and, when it carries a
 filter, the current filter and sort, as "Uložit změny" captures them (its dirty hint sends the recipient's edits
 there). Any other one is saved as stored. The copy becomes active only when the shared one was. (5) Own chips come
-first in their order, shared ones after them (not interleaved by the owner's positions). (6) The bar is Browse-page
-only: the modals' `presetBar: false` gates both saved-set bars, so the memory adapter's three dashboard members are
-no-ops. (7) The generic bar takes `onReorder` with the own items in their new order, `isOwn` (drags, renames, deletes,
+first in their order, shared ones after them (not interleaved by the owner's positions). (6) Superseded 2026-10-22: every Stats tab shows the dashboard bar (the preset bar stays
+Browse-page only). (7) The generic bar takes `onReorder` with the own items in their new order, `isOwn` (drags, renames, deletes,
 updates) for the planned `reorderable`, `checkbox` as a prop (the preset's box exists only while a map area is
 applied) and `suffix`; one hook beside it, `useSavedSet`, reads an instance's list and persists a drag (own rows
 first, shared after) for both. Delete and "Přestat sledovat" are the menu's two-step entries, as the preset's Delete…

@@ -20,7 +20,7 @@ import {
   type ExploreOrigin,
 } from './browseState';
 import { layersFromSearchParams } from './mapOverlays';
-import { DEFAULT_SORT } from './queries';
+import { DEFAULT_SORT, parseSort } from './queries';
 import type { ListingPublic, SavedDashboard } from './types';
 
 const TREBIC: Pick<ExploreAreaSeed, 'lat' | 'lng'> = { lat: 49.2147, lng: 15.8816 };
@@ -425,6 +425,29 @@ describe('the dashboard on the URL', () => {
     expect(params(result.current.search).has('market')).toBe(false);
   });
 
+  it('the explore modals hold the same dashboard and lens in memory, and Go to Browse carries both', () => {
+    const { result } = renderHook(() => useMemoryBrowseState({ filters: { ...DEFAULT_FILTERS, priceMax: 9_000_000 } }));
+    expect(result.current.activeDashboardId).toBeNull();
+    expect(result.current.statsMarket).toBe('filter');
+    act(() => result.current.loadDashboard(dashboard({ id: 'd-plain' })));
+    expect(result.current.activeDashboardId).toBe('d-plain');
+    expect(result.current.filters.priceMax).toBe(9_000_000);
+    act(() => result.current.loadDashboard(dashboard({ id: 'd-spec', filter_spec: SPEC })));
+    expect(result.current.activeDashboardId).toBe('d-spec');
+    expect(result.current.filters.priceMax).toBe(5_000_000);
+    expect(result.current.sort).toEqual(parseSort('-price_czk'));
+    act(() => result.current.setStatsMarket('sold'));
+    expect(result.current.statsMarket).toBe('sold');
+    const href = browseUrlFromState({
+      filters: result.current.filters, sort: result.current.sort, tab: 'stats', overlay: result.current.overlay,
+      activeDashboardId: result.current.activeDashboardId, statsMarket: result.current.statsMarket,
+    });
+    const sp = new URLSearchParams(href.split('?')[1]);
+    expect(sp.get('dashboard')).toBe('d-spec');
+    expect(sp.get('market')).toBe('sold');
+    expect(sp.get('tab')).toBe('stats');
+  });
+
   it('sets and clears the id alone, replacing the entry', () => {
     const { result } = urlState('/browse?tab=stats&cat=byt');
     act(() => result.current.view.setActiveDashboardId('d2'));
@@ -492,10 +515,4 @@ describe('the dashboard on the URL', () => {
     expect(sp.toString()).toBe(viaHelper.toString());
   });
 
-  it('has no dashboard in the in-memory (Explore) view', () => {
-    const { result } = renderHook(() => useMemoryBrowseState({ filters: DEFAULT_FILTERS }));
-    expect(result.current.activeDashboardId).toBeNull();
-    act(() => result.current.loadDashboard(dashboard({ filter_spec: SPEC })));
-    expect(result.current.filters).toEqual(DEFAULT_FILTERS);
-  });
 });

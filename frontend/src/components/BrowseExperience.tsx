@@ -836,8 +836,8 @@ export default function BrowseExperience({
             <Suspense fallback={<Skeleton height={320} className="my-8" />}>
               <StatsDashboard
                 filters={filters}
-                view={f.presetBar ? view : undefined}
-                market={f.presetBar ? { value: view.statsMarket, set: view.setStatsMarket } : undefined}
+                view={view}
+                market={{ value: view.statsMarket, set: view.setStatsMarket }}
                 onIncludeDismissed={() => view.setFilters({ ...filters, showDismissed: true })}
               />
             </Suspense>

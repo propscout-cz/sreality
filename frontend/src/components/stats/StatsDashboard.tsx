@@ -27,8 +27,8 @@ import DashboardBar, { type DashboardView } from './DashboardBar';
  * through PUT /stats/dashboard by the one optimistic write (lib/useOptimisticWrite)
  * — the chart list's edits and the dashboard bar's loads alike. No saved row ⇒ the
  * four default charts, and the first save persists the whole list. The named
- * dashboards' bar leads the tab where Browse hands over its view state (`view`;
- * the explore modals do not). */
+ * dashboards' bar and the sample lens lead the tab on every surface that shows it
+ * (the Browse page and the explore modals alike). */
 export default function StatsDashboard({
   filters,
   view,
@@ -37,7 +37,7 @@ export default function StatsDashboard({
 }: {
   filters: ListingFilters;
   view?: DashboardView;
-  /* The sample lens (Browse hands it over with the view; the explore modals do not). */
+  /* The sample lens; optional only so the chart list renders on its own in tests. */
   market?: { value: StatsMarket; set: (m: StatsMarket) => void };
   /* Flips the sidebar to Show dismissed, from the skew warning. */
   onIncludeDismissed?: () => void;
