@@ -21,7 +21,7 @@ from functools import lru_cache
 from html import unescape
 from typing import Any, Callable, Iterable, Mapping, TYPE_CHECKING, TypeVar
 
-from autodedup.normalize import fact_text
+from autodedup.normalize import fact_text, forget_folds
 
 if TYPE_CHECKING:  # pragma: no cover
     from autodedup.dataset import Listing
@@ -63,6 +63,7 @@ def clear_body_caches() -> None:
     reading is recomputed to the value a fresh process computes."""
     for reader in BODY_READERS:
         reader.cache_clear()
+    forget_folds()  # R1: normalize's folds are a reading of the body too (E949)
 
 
 CODE_MASK: str = "[KOD]"

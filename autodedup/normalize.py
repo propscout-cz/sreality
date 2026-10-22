@@ -59,6 +59,14 @@ _STUDIO = ("garsonier", "garsonk", "garzon", "studio")
 _token_hashes: dict[str, int] = {}
 _token_lanes: dict[str, int] = {}
 
+# R1: the fold of a text, memoised so a body is deaccented once a pass rather than once per reader
+# and per pair (fold was ~25 % of a profiled pass). Not a functools cache: E949's census admits
+# none outside the body registry. `text_facts.clear_body_caches` empties it when the lane's pass
+# ends; a pass that folds more distinct texts than the cap starts it over, which re-folds a text
+# to the same string.
+FOLD_MEMO_CAP: int = 1 << 15
+_folds: dict[str, str] = {}
+
 
 def deaccent(value: str) -> str:
     """Diacritics folded away; `Kč` -> `Kc`, `m²` -> `m2` (NFKD is a compatibility fold)."""
@@ -66,8 +74,20 @@ def deaccent(value: str) -> str:
 
 
 def fold(s: str | None) -> str:
-    """lower(deaccent(s)) — the one expensive step both normalisations start from."""
-    return deaccent(s).lower() if s else ""
+    """lower(deaccent(s)) — the one expensive step both normalisations start from, once a text."""
+    if not s:
+        return ""
+    folded = _folds.get(s)
+    if folded is None:
+        if len(_folds) >= FOLD_MEMO_CAP:
+            _folds.clear()
+        folded = _folds[s] = deaccent(s).lower()
+    return folded
+
+
+def forget_folds() -> None:
+    """Empty the fold memo: a fold depends on its text alone, so a re-fold is the same string."""
+    _folds.clear()
 
 
 def normalize_text(s: str | None) -> str:
