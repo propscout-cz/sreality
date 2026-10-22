@@ -26,7 +26,8 @@ export type CustomBlockKey =
   | 'city_population_hint'
   | 'market_growth'
   | 'portals'
-  | 'location_mode';
+  | 'location_mode'
+  | 'broker';
 
 export interface FormBlock {
   kind: 'form';
@@ -204,7 +205,7 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
   {
     title: 'Advanced',
     keys: [
-      'energyRatingMatch', 'mfGrossYieldPctMin', 'mfGrossYieldPctMax', 'locationMode', 'centerRadius',
+      'energyRatingMatch', 'mfGrossYieldPctMin', 'mfGrossYieldPctMax', 'brokerId', 'locationMode', 'centerRadius',
       'cityIndexRules', 'minCityPopulation', 'maxCityPopulation',
       'nearPop5kmMin', 'nearPop15kmMin', 'nearJobs5kmMin', 'nearJobs15kmMin',
       'nearYouth5kmMin', 'nearYouth15kmMin', 'nearOverall5kmMin', 'nearOverall15kmMin',
@@ -219,6 +220,9 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
         when: (f) => f.categoryType === 'prodej',
         blocks: [form({ min_mf_gross_yield_pct: 'MF gross yield %' })],
       },
+      /* The broker scope (ListingFilters.brokerId) by name: narrows the current
+       * filters to properties one of this broker's ads is on. */
+      { blocks: [{ kind: 'custom', key: 'broker', label: 'Broker', caption: true }] },
       {
         mapOnly: true,
         blocks: [{ kind: 'custom', key: 'location_mode', label: 'Map filter' }],

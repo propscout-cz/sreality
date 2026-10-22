@@ -129,7 +129,7 @@ describe('the registry walk', () => {
         'first_seen_min_days', 'last_seen_min_days', 'tom_days_min',
       ]],
       ['Advanced', [
-        'energy_rating_match', 'min_mf_gross_yield_pct', 'min_city_population',
+        'energy_rating_match', 'min_mf_gross_yield_pct', 'broker', 'min_city_population',
         'near_pop_5km_min', 'near_pop_15km_min', 'near_jobs_5km_min', 'near_jobs_15km_min',
         'near_youth_5km_min', 'near_youth_15km_min', 'near_overall_5km_min', 'near_overall_15km_min',
         'city_index_rules', 'market_growth',
@@ -219,6 +219,7 @@ const FILLED: ListingFilters = {
   tomDaysMax: 60,
   tomObservedOnly: true,
   energyRatingMatch: ['A', 'B'],
+  brokerId: 527,
 };
 
 describe('a filled sheet in the URL', () => {
