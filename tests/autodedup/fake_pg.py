@@ -1093,10 +1093,27 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
     if sql == S.RT_SCOPE_BUILD_ENTRANTS_SQL:
         cut = db.now - timedelta(seconds=int(p["lag"]))
 
+        def _live(listing_id: int) -> bool:
+            return bool((db.listings.get(listing_id) or {}).get("is_active"))
+
         def live_first(listing_id: int) -> int:
+            # E976/E978: visible first — the advert is live, or its property holds a live advert,
+            # or its property's adverts sit in a group holding one; no listings row last.
             row = db.listings.get(listing_id)
-            return 2 if row is None or row.get("is_active") is None else (
-                0 if row["is_active"] else 1)
+            if row is None or row.get("is_active") is None:
+                return 3
+            prop = row.get("property_id")
+            siblings = [] if prop is None else [
+                other_id for other_id, other in db.listings.items()
+                if other.get("property_id") == prop]
+            keys = {key for g, key, member in db.cluster_members
+                    if g == gen and member in siblings}
+            if row["is_active"]:
+                return 0
+            visible = (any(_live(other_id) for other_id in siblings)
+                       or any(_live(member) for g, key, member in db.cluster_members
+                              if g == gen and key in keys))
+            return 1 if visible else 2
 
         rows = sorted(((listing_id, row["resolved_at"])
                        for (g, _block, listing_id), row in db.scope_ids.items()
