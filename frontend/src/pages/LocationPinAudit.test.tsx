@@ -21,6 +21,7 @@ import * as pinAudit from '@/lib/pinAudit';
 import * as waterfall from '@/lib/locationWaterfall';
 import { LOCATION_STEPS } from '@/lib/locationSteps';
 import * as listingUrl from '@/lib/listingUrl';
+import { expectNoNestedInteractive } from '@/test/a11y';
 
 vi.mock('@/lib/pinAudit', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pinAudit')>();
@@ -282,6 +283,7 @@ describe('LocationPinAudit', () => {
      * column that could only ever say "žádná" would read as a finding. */
     expect(screen.queryByText('Stará data')).not.toBeInTheDocument();
     expect(within(row).getByText('má polohu')).toBeInTheDocument();
+    expectNoNestedInteractive(document.body);
   });
 
   it('states the split the ruling turns on, over the selected state', async () => {

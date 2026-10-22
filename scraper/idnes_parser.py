@@ -31,6 +31,7 @@ from scraper.area import PortalAreas, derive_headline_area, parse_area_text
 from scraper.attribute_contract import floor_convention, source_value, source_values
 from scraper.floor import floor_from_portal, total_floors_from_portal
 from scraper.broker_idnes import parse_idnes_broker
+from scraper.portal_identity import native_id
 from scraper.price_text import is_per_area_price
 from scraper.scraped_listing import ScrapedListing
 from scraper.street import street_from_locality
@@ -116,8 +117,6 @@ def subtype_from_title(text: str | None, category_main: str | None) -> str | Non
 _CZ_LAT_MIN, _CZ_LAT_MAX = 48.0, 51.5
 _CZ_LON_MIN, _CZ_LON_MAX = 12.0, 19.0
 
-# The detail-URL hash is the source_id_native (24 hex chars today; >=16 to be safe).
-_ID_RE = re.compile(r"/detail/[^?#]*?/([0-9a-f]{16,})/?(?:[?#]|$)")
 _INT_RE = re.compile(r"(\d+)")
 _PAGE_RE = re.compile(r"[?&]page=(\d+)")
 _DETAIL_PATH_RE = re.compile(r"/detail/([^/?#]+)/([^/?#]+)/")
@@ -248,13 +247,6 @@ def _in_cz_bbox(lat: float, lon: float) -> bool:
     return _CZ_LAT_MIN <= lat <= _CZ_LAT_MAX and _CZ_LON_MIN <= lon <= _CZ_LON_MAX
 
 
-def _id_from_href(href: str | None) -> str | None:
-    if not href:
-        return None
-    m = _ID_RE.search(href)
-    return m.group(1) if m else None
-
-
 def category_from_url(url: str) -> tuple[str | None, str | None]:
     """Derive (category_main, category_type) from a detail URL's path,
     /detail/{sale}/{cat}/... — the detail-drain recovers a listing's category
@@ -369,7 +361,7 @@ def parse_index(html: str) -> IndexPage:
             continue
         link = block.css_first("a.c-products__link")
         href = link.attributes.get("href") if link else None
-        source_id = _id_from_href(href)
+        source_id = native_id(SOURCE, href)
         if not source_id or not href or source_id in seen:
             continue
         seen.add(source_id)
@@ -515,7 +507,7 @@ def parse_detail(
     category_type: str | None,
 ) -> ScrapedListing:
     tree = HTMLParser(html)
-    source_id = _id_from_href(source_url) or ""
+    source_id = native_id(SOURCE, source_url) or ""
 
     title = _text(tree.css_first("h1")) or ""
     # The H1 is generic ("Prodej domu …"); the property type lives in the SEO

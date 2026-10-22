@@ -17,8 +17,9 @@ import { useMemo } from 'react';
 import { useQuery, type QueryClient } from '@tanstack/react-query';
 
 import { listCollections } from '@/lib/api';
+import { actingKey, actOpts, useActAs } from '@/lib/acting';
 import { curationKeys, fetchPropertyCollectionMemberSet } from '@/lib/queries';
-import { invalidateBrowseQueries } from '@/lib/browseInvalidation';
+import { settleMemberWrite } from '@/lib/curationSettle';
 import type { Collection } from '@/lib/types';
 
 const NO_COLLECTIONS: Collection[] = [];
@@ -56,15 +57,19 @@ export function shareAudience(
   return [...emails].sort();
 }
 
-/* The caller's collections (GET /collections). A failed read is a retry, never
- * "No collections yet" (MS16): callers branch on `query`, not on an empty list.
- * No keepPreviousData: the key is constant, so its only effect would be painting
- * the previous account's list after auth.tsx's identity-change clear(). */
-export function useCollections() {
+/* The caller's collections (GET /collections) — or, inside <ActingAs>, the
+ * owner's (lib/acting). A failed read is a retry, never "No collections yet"
+ * (MS16): callers branch on `query`, not on an empty list. No keepPreviousData:
+ * the key is constant per identity, so its only effect would be painting the
+ * previous account's list after auth.tsx's identity-change clear(). `enabled`
+ * false skips the read (a read-only board cannot see the owner's). */
+export function useCollections({ enabled = true }: { enabled?: boolean } = {}) {
+  const actAs = useActAs();
   const query = useQuery({
-    queryKey: curationKeys.collections,
-    queryFn: listCollections,
+    queryKey: actingKey(actAs, curationKeys.collections),
+    queryFn: () => listCollections(...actOpts(actAs)),
     staleTime: 30_000,
+    enabled,
   });
   const collections = query.data?.data ?? NO_COLLECTIONS;
   const byId = useMemo(
@@ -79,11 +84,13 @@ export function useCollections() {
 /* The whole-set member map (property_id -> collection ids), one read for every
  * glyph. Returned as the query itself: cohort readers need `data` undefined
  * while it is unresolved (fail-open, rule #22) and every mark needs refetch. */
-export function useCollectionMembers() {
+export function useCollectionMembers({ enabled = true }: { enabled?: boolean } = {}) {
+  const actAs = useActAs();
   return useQuery({
-    queryKey: curationKeys.propertyCollectionMembers,
-    queryFn: fetchPropertyCollectionMemberSet,
+    queryKey: actingKey(actAs, curationKeys.propertyCollectionMembers),
+    queryFn: ({ signal }) => fetchPropertyCollectionMemberSet({ signal, actAs }),
     staleTime: 30_000,
+    enabled,
   });
 }
 
@@ -136,13 +143,8 @@ export function useCollectionMembership(property_id: number) {
  * add/remove, a collection DELETE (migration 202 cascades its memberships away)
  * and a merge (property_carriers re-points collection_properties onto the
  * survivor) each change it. Pass `collection_id` when the write names one
- * collection, so its own page refetches too.
- *
- * `cohortScoped` is the same knob as `usePipelineCard({ cohortScoped })`: when
- * Browse is scoped to collections, membership IS the cohort, so the Browse
- * reads refetch too. Only a caller that knows the current filters can say so;
- * everyone else leaves it false (refetching every Browse surface on a save is
- * otherwise waste).
+ * collection, so its own page refetches too. What a membership change does to
+ * the Browse reads is `settleCollectionWrite`'s job, not this one's.
  *
  * `shareChanged` marks a share, revoke or leave: it changes which other
  * authors' shared notes the caller can read (migration 610), so every note
@@ -151,18 +153,32 @@ export function revalidateCollections(
   qc: QueryClient,
   {
     collection_id,
-    cohortScoped = false,
     shareChanged = false,
-  }: { collection_id?: number; cohortScoped?: boolean; shareChanged?: boolean } = {},
+    actAs = null,
+  }: { collection_id?: number; shareChanged?: boolean; actAs?: string | null } = {},
 ): void {
-  qc.invalidateQueries({ queryKey: curationKeys.propertyCollectionMembers });
-  qc.invalidateQueries({ queryKey: curationKeys.collections });
+  const key = (k: readonly unknown[]) => actingKey(actAs, k);
+  qc.invalidateQueries({ queryKey: key(curationKeys.propertyCollectionMembers) });
+  qc.invalidateQueries({ queryKey: key(curationKeys.collections) });
   if (collection_id != null) {
-    qc.invalidateQueries({ queryKey: curationKeys.collection(collection_id) });
+    qc.invalidateQueries({ queryKey: key(curationKeys.collection(collection_id)) });
   }
-  if (cohortScoped) invalidateBrowseQueries(qc);
   if (shareChanged) {
-    qc.invalidateQueries({ queryKey: curationKeys.allPropertyNotes });
-    qc.invalidateQueries({ queryKey: curationKeys.noteCounts });
+    qc.invalidateQueries({ queryKey: key(curationKeys.allPropertyNotes) });
+    qc.invalidateQueries({ queryKey: key(curationKeys.noteCounts) });
   }
 }
+
+/** One property added to / removed from one collection, landed: settled in the
+ * Browse reads (lib/curationSettle, ruling 9), then the collection reads re-read.
+ * Acting (`actAs`), only the owner's entries move: Browse never acts. */
+export const settleCollectionWrite = (
+  qc: QueryClient,
+  property_id: number,
+  collection_id: number,
+  member: boolean,
+  actAs: string | null = null,
+) =>
+  settleMemberWrite(qc, 'collections', property_id, collection_id, member, actAs).then(() =>
+    revalidateCollections(qc, { collection_id, actAs }),
+  );

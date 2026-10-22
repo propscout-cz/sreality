@@ -301,3 +301,20 @@ rule, the browser-side grouping of points (`lone`, member ids, the mark hover th
 line. Added: one `MapViewControls` above the map (the number input commits on blur or Enter, the
 tick box toggles the label layer's visibility). No migration: the function's `point_budget` default
 stays 2 000 and the SPA always passes the limit.
+
+**W5 (2026-10-20, operator ask: "when I hover a card, show the property's pin even when the map
+is zoomed out and the counts are grouped in tiles").** The locator halo (the ochre pool, ring and
+dot the map drops on a list-hovered property) read its coordinates from the MAP's rows, which W4
+emptied in count mode — so above the pin limit a hover showed nothing. Now the cards hand the map
+the hovered row's OWN point (`lat`, `lng` on `CARD_COLS`, the property's location ad): `onHover`
+reports the rows as `HoverTarget`s, Browse keeps the ids for the highlight and the points for the
+halo (`lib/hoverSync`: `HoverState`, `nextHover` — no MapLibre import, so Browse's first-visit chunk
+stays under its budget), and the map's `haloPoints` prop replaces
+`hoverOrigin` and its row lookup. The halo lands at the property's own point, which in count mode
+is somewhere inside the mark's tile, not on the pill (marks sit at the tile centre). A property
+without coordinates lights its card and nothing on the map, as in pin mode. The map never moves on
+hover (a pan would make the view jump as the cursor crosses the cards; a map move re-scopes the
+cards to the view anyway). Ledger: this wave adds more than it deletes (the point has to travel
+from the row to the map);
+deleted: `hoverOrigin` and the map's row lookup, the comparables map's inline halo builder (one
+`haloFeatures`), Browse's inline hover reducer.

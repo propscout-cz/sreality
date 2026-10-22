@@ -16,6 +16,10 @@ import * as auth from '@/lib/auth';
 import * as brokers from '@/lib/brokers';
 import * as queries from '@/lib/queries';
 import { fmtCzk } from '@/lib/format';
+import { act } from '@testing-library/react';
+import { getActiveBoard, resetActiveBoard, setActiveBoard, setEditAsOwner } from '@/lib/acting';
+import { PHONE_SHELL_QUERY } from '@/lib/phoneShell';
+import type { PipelineShare } from '@/lib/types';
 import type { ListingPublic, PropertySource } from '@/lib/types';
 
 /* The curation reads (header controls, curation block) answer empty, so every
@@ -30,6 +34,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
     listCollections: vi.fn(empty),
     listTags: vi.fn(empty),
     listPropertyNotes: vi.fn(empty),
+    listPipelineShares: vi.fn(async () => ({ shared_with: [], shared_with_me: [] })),
+    fetchArtifactLinks: vi.fn(async () => new Map()),
+    addPipelineCard: vi.fn(async () => ({ property_id: 774, stage_key: 'review', added: true })),
   };
 });
 
@@ -160,6 +167,7 @@ vi.mock('@/lib/queries', async (importOriginal) => {
     fetchPropertyCollectionMemberSet: vi.fn(async () => new Map()),
     fetchPropertyTagIds: vi.fn(async () => []),
     fetchIsDismissed: vi.fn(async () => false),
+    fetchPropertyTagMemberSet: vi.fn(async () => new Map()),
   };
 });
 vi.mock('@/lib/auth', async (importOriginal) => ({
@@ -172,11 +180,19 @@ vi.mock('@/lib/brokers', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/brokers')>()),
   fetchListingBrokersByIds: vi.fn(async () => new Map()),
 }));
+const openEstimation = vi.hoisted(() => vi.fn());
 vi.mock('@/components/NewEstimationModal', () => ({
-  useNewEstimationModal: () => ({ open: vi.fn() }),
+  useNewEstimationModal: () => ({ open: openEstimation }),
+}));
+vi.mock('@/components/listing-detail/ValuoSection', () => ({
+  default: ({ adUrls }: { adUrls: (string | null)[] }) => <div data-testid="valuo-ads">{JSON.stringify(adUrls)}</div>,
 }));
 vi.mock('@/components/ExploreAreaModal', () => ({
   useExploreAreaModal: () => ({ open: vi.fn() }),
+}));
+const openNewProperty = vi.hoisted(() => vi.fn());
+vi.mock('@/components/NewPropertyProvider', () => ({
+  useNewPropertyDialog: () => ({ open: openNewProperty }),
 }));
 
 /* The property as properties_public answers it: its canonical advert is 105054
@@ -251,6 +267,19 @@ function renderAt(path: string) {
   );
 }
 
+function renderAtState(pathname: string, state: unknown) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={[{ pathname, state }]}>
+        <Routes>
+          <Route path="listing/:source/:nativeId" element={<AdvertRedirect />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
 const where = () => screen.getByTestId('where').textContent;
 const rowToggle = (portal: string) =>
   within(screen.getAllByText(portal)[0].closest('li') as HTMLElement).getAllByRole('button')[0];
@@ -285,6 +314,14 @@ describe('<PropertyDetail> one property, one voice', () => {
     // The curation controls read, so the header offers them, never a retry.
     expect(await screen.findByRole('button', { name: /Přidat do pipeline/ })).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: 'Uložit do kolekce' })).toBeInTheDocument();
+  });
+
+  it('hands the Valuo section the link of every advert, a delisted one too (its own-ad tag needs them)', async () => {
+    vi.mocked(queries.fetchPropertySources).mockResolvedValue([SOURCES[0], { ...SOURCES[1], is_active: false }]);
+    renderAt('/property/774');
+
+    const ads = await screen.findByTestId('valuo-ads');
+    expect(JSON.parse(ads.textContent ?? '[]')).toEqual(SOURCES.map((s) => s.source_url));
   });
 
   it('charts the canonical advert alone when the advert list cannot be read', async () => {
@@ -383,6 +420,41 @@ describe('<PropertyDetail> one property, one voice', () => {
   });
 });
 
+/* The identity track's ask: "New estimation" is the canonical advert's, by its
+   listings.id, on any portal. It used to be bound to a portal URL and its runs to
+   a sreality id, so a property with no sreality advert could not be estimated. */
+describe('<PropertyDetail> New estimation', () => {
+  it('offers the estimate on a property with no sreality advert, bound to its canonical ad', async () => {
+    vi.mocked(queries.fetchProperty).mockResolvedValue({
+      ...PROPERTY,
+      id: 105053,
+      sreality_id: null,
+      source: 'idnes',
+      source_id_native: '6a147cfde222cf687509e018',
+      category_type: 'pronajem',
+    } as unknown as queries.PropertyPublic);
+    vi.mocked(queries.fetchPropertySources).mockResolvedValue([SOURCES[0]]);
+    openEstimation.mockClear();
+    renderAt('/property/774');
+
+    fireEvent.click(await screen.findByRole('button', { name: /New estimation/ }));
+    expect(openEstimation).toHaveBeenCalledWith({
+      listingId: 105053,
+      categoryMain: 'byt',
+      estimateKind: 'rent',
+    });
+  });
+
+  it('binds it to the canonical ad before the advert list arrives', async () => {
+    vi.mocked(queries.fetchPropertySources).mockReturnValue(new Promise(() => {}));
+    openEstimation.mockClear();
+    renderAt('/property/774');
+
+    fireEvent.click(await screen.findByRole('button', { name: /New estimation/ }));
+    expect(openEstimation).toHaveBeenCalledWith(expect.objectContaining({ listingId: 105054 }));
+  });
+});
+
 describe('<AdvertRedirect> old advert addresses', () => {
   it('lands the natural-key address on the property page with that advert’s row open', async () => {
     vi.mocked(queries.fetchAdvertProperty).mockResolvedValue({ id: 105053, property_id: 774 });
@@ -414,10 +486,47 @@ describe('<AdvertRedirect> old advert addresses', () => {
     expect(queries.fetchAdvertProperty).not.toHaveBeenCalled();
   });
 
-  it('says not found for an advert nobody has', async () => {
+  it('says in Czech that we lack the advert, and offers to add it with the pasted URL', async () => {
     vi.mocked(queries.fetchAdvertProperty).mockResolvedValue(null);
+    openNewProperty.mockClear();
+    const url = 'https://reality.bazos.cz/inzerat/196123456/byt.php';
+    renderAtState('/listing/bazos/196123456', { pastedUrl: url });
+    expect(await screen.findByRole('heading', { name: 'Tento inzerát v databázi nemáme.' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Otevřít na portálu Bazoš/ })).toHaveAttribute('href', url);
+    fireEvent.click(screen.getByRole('button', { name: 'Přidat do databáze' }));
+    expect(openNewProperty).toHaveBeenCalledWith({ url });
+  });
+
+  it('opens the dialog empty when the address carried no URL', async () => {
+    vi.mocked(queries.fetchAdvertProperty).mockResolvedValue(null);
+    openNewProperty.mockClear();
     renderAt('/listing/bazos/nope');
-    expect(await screen.findByText('Not found')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Přidat do databáze' }));
+    expect(openNewProperty).toHaveBeenCalledWith({});
+    expect(screen.queryByRole('link', { name: /Otevřít na portálu/ })).toBeNull();
+  });
+
+  it('waits for an advert we hold whose property is not born yet, then lands', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      vi.mocked(queries.fetchAdvertProperty)
+        .mockResolvedValueOnce({ id: 105053, property_id: null })
+        .mockResolvedValueOnce({ id: 105053, property_id: null })
+        .mockResolvedValue({ id: 105053, property_id: 774 });
+      renderAt('/listing/idnes/6a147cfde222cf687509e018');
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(screen.getByRole('status')).toHaveTextContent('Zakládám nemovitost…');
+      expect(screen.queryByText('Tento inzerát v databázi nemáme.')).toBeNull();
+      await act(() => vi.advanceTimersByTimeAsync(2_000));
+      expect(queries.fetchAdvertProperty).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole('status')).toHaveTextContent('Zakládám nemovitost…');
+      await act(() => vi.advanceTimersByTimeAsync(2_000));
+      await act(() => vi.advanceTimersByTimeAsync(10));
+      expect(queries.fetchAdvertProperty).toHaveBeenCalledTimes(3);
+      expect(where()).toBe('/property/774?advert=105053');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -432,13 +541,15 @@ describe('<AdvertRedirect> old advert addresses', () => {
    (105054) are deliberately different values; that difference is what pins the
    link below to the BROKER dossier rather than a listing-id-shaped route. */
 const attribution = (
-  contact: Partial<brokers.BrokerContactFields> = {},
+  contact: Partial<Pick<brokers.ListingBroker, 'primary_email' | 'primary_phone'>> = {},
 ): brokers.ListingBroker => ({
   sreality_id: 999,
   listing_id: 105054,
   broker_id: 7,
   broker_display_name: 'Jan Novák',
   broker_firm_label: 'RE/MAX Alfa',
+  primary_email: null,
+  primary_phone: null,
   ...contact,
 });
 const EVA = { ...attribution(), listing_id: 105053, broker_id: 8, broker_display_name: 'Eva Malá' };
@@ -452,11 +563,11 @@ describe('<BrokerList>', () => {
 
   const renderListing = () => renderAt('/property/774');
 
-  function withContact(contact: Partial<brokers.BrokerContactFields>) {
+  function withContact(contact: Parameters<typeof attribution>[0]) {
     vi.mocked(brokers.fetchListingBrokersByIds).mockResolvedValue(byAdvert(attribution(contact)));
   }
 
-  it('shows the real contact for an admin session, keyed on the attributed broker', async () => {
+  it('shows the contact to every signed-in user, keyed on the attributed broker', async () => {
     withContact({ primary_phone: '420777123456', primary_email: 'jan@remax.cz' });
 
     renderListing();
@@ -495,21 +606,8 @@ describe('<BrokerList>', () => {
     expect(screen.queryByText('Kontakt se nepodařilo načíst')).toBeNull();
   });
 
-  /* A non-admin gets has_* instead of the values; an em-dash there would claim
-     the broker is unreachable. Same three states as /brokers/:id, same copy. */
-  it('says a masked contact is on file rather than showing the empty dash', async () => {
-    withContact({ has_phone: true, has_email: true });
-
-    renderListing();
-
-    expect(
-      await screen.findByText(/telefon · kontakt na vyžádání/),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/e-mail · kontakt na vyžádání/)).toBeInTheDocument();
-  });
-
   it('keeps the plain dash when the broker genuinely has no contact', async () => {
-    withContact({ has_phone: false, has_email: false });
+    withContact({});
 
     renderListing();
 
@@ -582,5 +680,184 @@ describe('<BrokerList>', () => {
     renderListing();
     expect(await screen.findByText('z neaktivních inzerátů')).toBeInTheDocument();
     expect(screen.getByText('Eva Malá')).toBeInTheDocument();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Upravit jako {email} (design §3.5, §8-4, §8-10)                            */
+/* -------------------------------------------------------------------------- */
+
+const EDIT_BOARD: PipelineShare = { account_id: 'owner-1', email: 'owner@x.cz', mode: 'edit' };
+const READ_BOARD: PipelineShare = { account_id: 'owner-2', email: 'reader@x.cz', mode: 'read' };
+
+describe('<PropertyDetail> edit as the pipeline owner', () => {
+  beforeEach(() => {
+    resetActiveBoard();
+    vi.mocked(api.listPipelineShares).mockReset().mockResolvedValue({
+      shared_with: [],
+      shared_with_me: [EDIT_BOARD, READ_BOARD],
+    });
+    for (const fn of [
+      queries.fetchPipelineMembers,
+      queries.fetchIsDismissed,
+      queries.fetchPropertyTagMemberSet,
+      queries.fetchPropertyCollectionMemberSet,
+      api.listPropertyNotes,
+      api.listCollections,
+      api.listTags,
+      api.fetchArtifactLinks,
+      api.addPipelineCard,
+    ]) {
+      vi.mocked(fn).mockClear();
+    }
+  });
+
+  const toggle = () => screen.queryByRole('button', { name: 'Upravit jako owner@x.cz' });
+  const banner = () => screen.queryByText(/^Upravujete jako/);
+  const actedAs = (owner: string) =>
+    vi.mocked(queries.fetchPipelineMembers).mock.calls.some(([o]) => o?.actAs === owner);
+
+  it('offers nothing on my own board, and reads no share list', async () => {
+    renderAt('/property/774');
+    await screen.findByRole('heading', { level: 1 });
+    expect(toggle()).toBeNull();
+    expect(api.listPipelineShares).not.toHaveBeenCalled();
+  });
+
+  it('offers nothing while the active board is a read share', async () => {
+    act(() => setActiveBoard(READ_BOARD));
+    renderAt('/property/774');
+    await screen.findByRole('heading', { level: 1 });
+    await waitFor(() => expect(api.listPipelineShares).toHaveBeenCalled());
+    expect(screen.queryByRole('button', { name: /^Upravit jako/ })).toBeNull();
+  });
+
+  it('acts as the owner only once switched on, with the banner under the header', async () => {
+    act(() => setActiveBoard(EDIT_BOARD));
+    renderAt('/property/774');
+    const button = await screen.findByRole('button', { name: 'Upravit jako owner@x.cz' });
+    expect(button).toHaveAttribute('aria-pressed', 'false');
+    expect(banner()).toBeNull();
+    await waitFor(() => expect(queries.fetchPipelineMembers).toHaveBeenCalled());
+    expect(actedAs('owner-1')).toBe(false);
+
+    fireEvent.click(button);
+    expect(toggle()).toHaveAttribute('aria-pressed', 'true');
+    expect(banner()).toHaveTextContent('Upravujete jako owner@x.cz');
+    // The header's pipeline control and the curation block read as the owner.
+    await waitFor(() => expect(actedAs('owner-1')).toBe(true));
+    await waitFor(() =>
+      expect(api.listPropertyNotes).toHaveBeenCalledWith(774, { actAs: 'owner-1' }));
+    // Every curation control is inside the wrapper: save, dismiss, tags, link.
+    const OWNER = { actAs: 'owner-1' };
+    await waitFor(() => expect(api.listCollections).toHaveBeenCalledWith(OWNER));
+    await waitFor(() => expect(queries.fetchIsDismissed).toHaveBeenCalledWith(774, OWNER));
+    await waitFor(() => expect(api.listTags).toHaveBeenCalledWith(OWNER));
+    await waitFor(() =>
+      expect(queries.fetchPropertyTagMemberSet).toHaveBeenCalledWith(expect.objectContaining(OWNER)));
+    await waitFor(() => expect(api.fetchArtifactLinks).toHaveBeenCalledWith(OWNER));
+    // Ruling 4: the property is added to the OWNER's board from here.
+    fireEvent.click(await screen.findByRole('button', { name: /Přidat do pipeline/ }));
+    await waitFor(() => expect(api.addPipelineCard).toHaveBeenCalledWith(774, OWNER));
+  });
+
+  it('stays on across property pages until Ukončit', async () => {
+    act(() => setActiveBoard(EDIT_BOARD));
+    const first = renderAt('/property/774');
+    fireEvent.click(await screen.findByRole('button', { name: 'Upravit jako owner@x.cz' }));
+    first.unmount();
+
+    // Another property page, a fresh mount: still acting.
+    renderAt('/property/775');
+    expect(await screen.findByText(/^Upravujete jako/)).toBeInTheDocument();
+    await waitFor(() => expect(api.listPropertyNotes).toHaveBeenCalledWith(775, { actAs: 'owner-1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Ukončit' }));
+    expect(banner()).toBeNull();
+    expect(toggle()).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('ends when the active board goes back to my own', async () => {
+    act(() => setActiveBoard(EDIT_BOARD));
+    renderAt('/property/774');
+    fireEvent.click(await screen.findByRole('button', { name: 'Upravit jako owner@x.cz' }));
+    expect(banner()).not.toBeNull();
+    act(() => resetActiveBoard());
+    expect(banner()).toBeNull();
+    expect(toggle()).toBeNull();
+  });
+
+  it('ends on a switch to another owner\'s edit board — never acts as the first one there', async () => {
+    const OTHER: PipelineShare = { account_id: 'owner-3', email: 'other@x.cz', mode: 'edit' };
+    vi.mocked(api.listPipelineShares).mockResolvedValue({ shared_with: [], shared_with_me: [EDIT_BOARD, OTHER] });
+    act(() => setActiveBoard(EDIT_BOARD));
+    renderAt('/property/774');
+    fireEvent.click(await screen.findByRole('button', { name: 'Upravit jako owner@x.cz' }));
+    expect(banner()).not.toBeNull();
+    act(() => setActiveBoard(OTHER));
+    expect(banner()).toBeNull();
+    expect(await screen.findByRole('button', { name: 'Upravit jako other@x.cz' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+  });
+
+  it('ends, and offers nothing, once the owner lowers the share to read', async () => {
+    act(() => setActiveBoard(EDIT_BOARD));
+    const view = renderAt('/property/774');
+    fireEvent.click(await screen.findByRole('button', { name: 'Upravit jako owner@x.cz' }));
+    view.unmount();
+    vi.mocked(api.listPipelineShares).mockResolvedValue({
+      shared_with: [],
+      shared_with_me: [{ ...EDIT_BOARD, mode: 'read' }],
+    });
+    renderAt('/property/774');
+    await waitFor(() => expect(getActiveBoard()?.mode).toBe('read'));
+    expect(banner()).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Upravit jako/ })).toBeNull();
+  });
+
+  it('offers nothing before the server confirms the remembered board', async () => {
+    let answer!: (v: { shared_with: PipelineShare[]; shared_with_me: PipelineShare[] }) => void;
+    vi.mocked(api.listPipelineShares).mockReturnValue(new Promise((r) => (answer = r)));
+    act(() => setActiveBoard(EDIT_BOARD));
+    renderAt('/property/774');
+    await screen.findByRole('heading', { level: 1 });
+    expect(toggle()).toBeNull();
+    act(() => answer({ shared_with: [], shared_with_me: [EDIT_BOARD] }));
+    expect(await screen.findByRole('button', { name: 'Upravit jako owner@x.cz' })).toBeInTheDocument();
+  });
+
+  it('offers nothing on the phone, and reads no share list there (ruling 6)', async () => {
+    const original = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query === PHONE_SHELL_QUERY,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+    try {
+      act(() => setActiveBoard(EDIT_BOARD));
+      act(() => setEditAsOwner(true));
+      renderAt('/property/774');
+      await waitFor(() => expect(queries.fetchProperty).toHaveBeenCalled());
+      await act(async () => {});
+      expect(screen.queryByRole('button', { name: /^Upravit jako/ })).toBeNull();
+      expect(banner()).toBeNull();
+      expect(api.listPipelineShares).not.toHaveBeenCalled();
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+
+  it('drops a revoked board instead of offering to act on it', async () => {
+    vi.mocked(api.listPipelineShares).mockResolvedValue({ shared_with: [], shared_with_me: [] });
+    act(() => setActiveBoard(EDIT_BOARD));
+    renderAt('/property/774');
+    await waitFor(() => expect(getActiveBoard()).toBeNull());
+    expect(toggle()).toBeNull();
   });
 });

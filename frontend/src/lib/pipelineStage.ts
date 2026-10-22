@@ -1,6 +1,6 @@
 /* One definition of how a deal-pipeline stage LOOKS, shared by every surface
- * that renders the funnel (rule #22): Browse cards, the Table, the listing
- * header, the kanban board and its stage editor.
+ * that renders the funnel (rule #22): Browse cards, the listing header, the
+ * kanban board and its stage editor.
  *
  * Before this module the accent had two answers — Pipeline.tsx fell back to
  * `--color-rule-strong` for an uncoloured stage while PipelineToggle.tsx fell
@@ -33,12 +33,12 @@ export const stageAccent = (stage: Pick<StageLook, 'color'> | null): StageAccent
 
 /* The badge the funnel renders.
  *
- * `code` (migration 377) is the operator's own short label for the stage — the
- * live board numbers its stages 1,2,3,4 and then 9,9,9 for the three closed
- * ones, so the number is NOT the ordinal and must never be derived from
- * `position`. When a stage has no code we fall back to its 1-based ordinal
- * among the live stages, ordered as the board is; that keeps a freshly created
- * stage badged sensibly without writing a guessed value into the database.
+ * `code` (migration 377) is the account's own short label for the stage —
+ * several closed stages share a code, so the number is NOT the ordinal and must
+ * never be derived from `position`. When a stage has no code we fall back to its
+ * 1-based ordinal among the live stages, ordered as the board is; that keeps a
+ * freshly created stage badged sensibly without writing a guessed value into
+ * the database.
  *
  * `stages` is the ordered live stage list (pipeline_stages_public, already
  * ordered by position). A stage that isn't in it — archived under a card that

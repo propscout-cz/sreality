@@ -42,7 +42,6 @@ from toolkit import (
     find_comparables_along_axis,
     find_comparables_relaxed,
     find_distribution_outliers,
-    get_manual_rental_estimates,
     read_floor_plan,
     summarize_listing,
     verify_listing_freshness,
@@ -429,29 +428,6 @@ def _build_tool_registry() -> dict[str, _ToolDef]:
                 "required": [],
             },
             handler=_handle_compare_listing_images,
-        ),
-        "get_manual_rental_estimates": _ToolDef(
-            name="get_manual_rental_estimates",
-            description=(
-                "Fetch operator-recorded manual rental estimates "
-                "attached to a listing. Returns 0+ point estimates; "
-                "each row has rent_czk (monthly), author, source_kind "
-                "(broker / gut / external_comp / portfolio / other), "
-                "optional notes, and timestamps. Manual estimates are "
-                "operator judgement, not comparables — use them to "
-                "reconcile against your distribution, never to "
-                "replace it. Returns an empty list if none exist."
-            ),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "sreality_id": {"type": "integer", "description": _SREALITY_ID_DESC},
-                    "listing_id": {"type": "integer", "description": _LISTING_ID_DESC},
-                },
-                # At-least-one of sreality_id / listing_id enforced in the handler.
-                "required": [],
-            },
-            handler=_handle_get_manual_rental_estimates,
         ),
         "read_floor_plan": _ToolDef(
             name="read_floor_plan",
@@ -904,10 +880,6 @@ _FCR_OVERRIDE_FIELDS: tuple[tuple[str, Callable[[Any], Any]], ...] = (
     ("min_usable_area", float),
     ("max_usable_area", float),
     ("min_parking_lots", int),
-    ("building_condition_level_min", int),
-    ("building_condition_level_max", int),
-    ("apartment_condition_level_min", int),
-    ("apartment_condition_level_max", int),
 )
 
 
@@ -962,10 +934,6 @@ def _filters_snapshot(
         "min_usable_area": filters.min_usable_area,
         "max_usable_area": filters.max_usable_area,
         "min_parking_lots": filters.min_parking_lots,
-        "building_condition_level_min": filters.building_condition_level_min,
-        "building_condition_level_max": filters.building_condition_level_max,
-        "apartment_condition_level_min": filters.apartment_condition_level_min,
-        "apartment_condition_level_max": filters.apartment_condition_level_max,
     }
 
 
@@ -1209,12 +1177,6 @@ def _handle_verify_listing_freshness(
         **_listing_id_kwargs(args),
         max_age_hours=int(args.get("max_age_hours", 24)),
     )
-
-
-def _handle_get_manual_rental_estimates(
-    args: dict[str, Any], state: _LoopState,
-) -> dict[str, Any]:
-    return get_manual_rental_estimates(state.conn, **_listing_id_kwargs(args))
 
 
 def _handle_compute_market_velocity(
@@ -1796,8 +1758,6 @@ def _initial_user_message(
             "disposition": target.disposition,
             "floor": target.floor,
             "condition": cond.get("condition"),
-            "apartment_condition_level": cond.get("apartment_condition_level"),
-            "building_condition_level": cond.get("building_condition_level"),
         },
         "filters": {
             "radius_m": filters.radius_m,

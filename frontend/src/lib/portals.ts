@@ -5,6 +5,7 @@
  * (capitalised) for a portal not yet in the registry enum. */
 import { filterById } from './filterRegistry.generated';
 import type { ListingFilters } from './filters';
+import { cycle } from './setScope';
 
 const PORTAL_LABELS: Record<string, string> = Object.fromEntries(
   (filterById('portals')?.enum_values ?? []).map((o) => [o.value, o.label_cs]),
@@ -15,8 +16,8 @@ export function portalLabel(source: string | null | undefined): string | null {
   return PORTAL_LABELS[source] ?? source.charAt(0).toUpperCase() + source.slice(1);
 }
 
-/* Short, hand-tuned portal names for compact chrome — e.g. the Health page's
- * per-run "Site" tag. Diacritic
+/* Short, hand-tuned portal names for compact chrome — e.g. the Health matrix's
+ * row heads and the portal tags on listing cards and ad rows. Diacritic
  * spellings (Bazoš) the registry's machine labels don't carry. Falls back to
  * the registry label, then the raw source code. */
 export const PORTAL_SHORT_LABEL: Record<string, string> = {
@@ -43,28 +44,14 @@ export const NO_PORTALS: PortalChoice = {
 /* THE chip transition, for every portal control (Browse, the Watchdog editor, the
  * phone Feed): one tap moves a portal off → on it → not on it → off, and "active
  * ads only" lives only while something is excluded. Builds the three fields
- * explicitly, so a caller may pass a whole ListingFilters. */
+ * explicitly, so a caller may pass a whole ListingFilters. lib/setScope `cycle`
+ * is the one transition. */
 export function cyclePortal(c: PortalChoice, p: string): PortalChoice {
-  const without = (xs: ReadonlyArray<string>) => xs.filter((x) => x !== p);
-  if (c.portals.includes(p)) {
-    return {
-      portals: without(c.portals),
-      portalsExcluded: [...c.portalsExcluded, p],
-      portalsExcludedActiveOnly: c.portalsExcludedActiveOnly,
-    };
-  }
-  if (c.portalsExcluded.includes(p)) {
-    const portalsExcluded = without(c.portalsExcluded);
-    return {
-      portals: [...c.portals],
-      portalsExcluded,
-      portalsExcludedActiveOnly: portalsExcluded.length > 0 && c.portalsExcludedActiveOnly,
-    };
-  }
+  const { inc, exc } = cycle(c.portals, c.portalsExcluded, p);
   return {
-    portals: [...c.portals, p],
-    portalsExcluded: [...c.portalsExcluded],
-    portalsExcludedActiveOnly: c.portalsExcludedActiveOnly,
+    portals: inc,
+    portalsExcluded: exc,
+    portalsExcludedActiveOnly: exc.length > 0 && c.portalsExcludedActiveOnly,
   };
 }
 

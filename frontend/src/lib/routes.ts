@@ -115,9 +115,11 @@ export const ROUTES = {
   pipeline: def('/pipeline'),
   datasets: def('/datasets'),
   watchdog: def('/watchdog'),
-  watchdogManage: def('/watchdog/manage'),
   watchdogEdit: def('/watchdog/:id/edit'),
   notifications: def('/notifications'),
+  // Where a push tap lands (notifications push § 3.5): marks the dispatch read,
+  // then replaces itself with what it is about (lib/dispatchTarget).
+  notificationOpen: def('/n/:dispatchId'),
   locationQuality: def('/location-quality'),
   settings: def('/settings'),
   newDedup: def('/new-dedup'),
@@ -138,7 +140,7 @@ export const ROUTES = {
   autodedupProgress: def('/autodedup/progress'),
   // The W5 validation views. `groups` is the proposed-cluster review queue,
   // `residual` the pairs the engine did NOT join, and `pair` the full-evidence
-  // page both of them drill into. Nothing here applies a merge (ruling D4).
+  // page both of them drill into. Nothing here applies a merge.
   autodedupGroups: def('/autodedup/groups'),
   autodedupResidual: def('/autodedup/residual'),
   autodedupPair: def('/autodedup/pair/:lo/:hi'),
@@ -152,7 +154,6 @@ export const ROUTES = {
   // Every pair the LLM judge read, for the operator to check; blind by default.
   autodedupJudge: def('/autodedup/judge'),
   scrapers: def('/scrapers'),
-  devConfidenceIndicator: def('/dev/confidence-indicator'),
 } as const;
 
 export type RouteKey = keyof typeof ROUTES;

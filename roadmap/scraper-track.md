@@ -5,6 +5,72 @@
 Scraper-specific evolution beyond Phase 1's nightly index walk.
 Independent of the analytical, UI, and map tracks.
 
+### Condition scoring PARKED — no surface reads the frozen 1–5 levels (2026-10-20, done)
+- **Done:** operator ruling 2026-10-20 ("keep the scoring engine for now, but make sure it does
+  not impact anything"; rule #14). The crons have been off since PR #730 (2026-07-09) and the last
+  level was written 2026-06-18 (~4% of properties). Kept: `toolkit/condition_scoring.py`, the four
+  scripts, the six dispatch-only workflows, `listing_condition_scores`, the two
+  `listings.*_condition_level` columns, their data, the Settings per-kraj toggle (a toggle alone
+  runs nothing) and the engine's tests. Retired from every surface: the four
+  `*_condition_level_min/_max` registry filters (Browse sidebar + URL `bld_cond_*`/`apt_cond_*`,
+  Browse RPC args, Watchdog spec + labels + summary chips, comparables, the API request models,
+  the agent's tunables and tool schema; a stored Watchdog spec still deserialises and any value
+  raises via `filter_compiler.RETIRED_FILTERS`), the agent's `target.*_condition_level` facts
+  (`target.condition` stays), and the estimator prompt's level guidance (migration 645, applied
+  BEFORE the code deploy). Saved state changed: none (0 watchdogs, 0 of 7 presets carried them).
+- **Owed:** drop the four dead level parameters from `browse_stats_properties` /
+  `browse_map_cells` after this deploys (597's order: the SPA stopped sending them first).
+- **Done by #1924 (2026-10-21):** `_load_subject_condition` reads the subject by `listings.id`, so a
+  subject from any portal reaches the agent with its `target.condition`.
+- **Resume blockers** (an operator ruling first: which surface may read the levels again): the
+  engine keys on `sreality_id` (cache, selector, propagation), builds its text input from
+  sreality's `raw_json` shape (`text` / `items`, `_build_text_payload`), runs on Anthropic only
+  (`build_batch_request_params`), selects by a full scan of
+  unscored active listings, and every stored level is from 2026-06-18 or earlier (stale against
+  today's snapshots).
+
+### Health wave 4 — portal checks on the worker; the coverage gate and two slice writers retired (2026-10-19, done)
+- **Done:** the portal alarms move from GitHub to the worker as the `scraping`, `publishing` and
+  `delisting` checks and the `coverage` gauge (`docs/design/health-dashboard.md` § 6, wave 4;
+  reference: the scraper-ops skill's `references/pipeline-verification.md`), replacing
+  `walk_coverage`, `walk_end_streak`, `acquisition_lag`, `false_delist_share`,
+  `delist_flip_refused`, `property_maintenance` and the sreality image-template probe. Scraper
+  seams, behaviour unchanged: `Portal.total_is_count` (remax, maxima: their "total" is the count of
+  what the walk saw) and the existing `coverage_denominator_is_upper_bound` land in every
+  `scrape_runs.by_category` entry as `total_is_count` / `declared_is_upper_bound`;
+  `portal_runner.DECLARED_TOTAL_KEY` spells `'sreality_result_size'` once;
+  `delist_policy.RECHECK_THROTTLE` names `db.presence_candidates`' 24 h re-check exclusion (its SQL
+  byte-identical), so the effective dwell `max(GONE_DWELL, RECHECK_THROTTLE)` = 24 h is stated where
+  it is spelled; the daily full sweep stamps the `property_sweep` derived artifact (migration 622)
+  instead of `app_settings.property_sweep_last_complete`.
+- **Done:** `coverage_gate` deleted — `scripts/coverage_gate.py`, `coverage_gate.yml`, its tests,
+  `portal_factory.canonical_category_count` and `_config_for` — with ceskereality's `_record_slices`
+  and mmreality's `_record_slice` + `SLICE_KEY`, the slice writes only it read. It had been a no-op
+  since every scraper portal's flag came back true (its newest evaluation is from 2026-09-13). idnes
+  keeps its slice ledger for its stalest-first order (`slice_staleness`).
+- **Left for wave 9** (a data delete is the destructive gate; only the first is on wave 9's list
+  so far): `portal_coverage_gate` (153 rows), the 150 unread ceskereality and mmreality rows of
+  `portal_index_slices`, `portals.supports_complete_walk` (no writer now; the SPA's portal posture
+  still reads it) and `delist_flip_refusals`, still written by `db.enqueue_presence_checks` and
+  read by nothing since `delist_flip_refused` went (a wave-9 drop removes the writer first).
+- **Filed by the Health investigation (2026-10-18), owed to this track:** #1851 a sreality ad that
+  answers HTTP 409 (615387212) is given up and re-armed forever by the walk's re-arm; #1852 the
+  bazos rate-ledger lease overflows `smallint`, so every GitHub bazos walk falls back to per-process
+  pacing (the cause of the NEW-queue bursts of 10-12, 10-13 and 10-16); #1853 422 active ads with a
+  NULL category (ceskereality 124, realitymix 298) sit outside every nomination scope and can never
+  become inactive — the `coverage` gauge's `unnominated` cells read them until it lands: Problem on
+  realitymix (151 NULL-category ads on 10-19, the oldest last seen 112 d ago) and Watch on
+  ceskereality (96); #1854 ceskereality's chaty-chalupy scopes double-count ads already in
+  rodinne-domy (its `dum`/`prodej` residual reads Problem, about −14 %: 13.7 k declared against
+  11.8 k held, from that unit's first walk after the deploy); #1858 make 24 h the one delisting
+  dwell rule (Q3 a, ruled 2026-10-18), its own scraper PR.
+- **Next:** the five issues above; attach stragglers while the full sweep runs (the sweep holds
+  the maintenance lease up to 6,000 s and attaches only at its start, so the `publishing` check's
+  visible cell rings for its duration on a sweep longer than about 40 min); and have
+  `portal_runner` mark a deliberately capped walk (`--max-pages` / `--limit` / bazos region) in
+  each `by_category` entry: since wave 4 such a dispatch is no longer a miss, but it still counts
+  as a finished walk and shortens its portal's gap G, which the walks arm's limits are built on.
+
 ### ceskereality byt/prodej parked over the 99-page ceiling — byty + pozemky subtype maps (2026-10-13, done)
 - **Found:** Praha byt/prodej crossed 1,980 rows (a filtered URL's 99 pages × 20) on 2026-09-16.
   `byty` had no `SUBTYPE_SLUGS` entry, and the fallback read the kraj page's ONE-segment links
@@ -38,7 +104,8 @@ Independent of the analytical, UI, and map tracks.
   praha-1..10 summed to 2,148 of prodej/byty 2,161 (13 short) — not a partition — and the largest
   Praha subtype is byty-2-kk at 638 (32 pages). Find where the 13 live before mapping; until then an
   over-ceiling Praha subtype logs `DESCENT no okres axis … owed=OKRES_SLUGS['praha']` and parks its
-  category exactly as byt/prodej did; (ii) a health
+  category exactly as byt/prodej did; (ii) a health (done: `walk_end_streak` 10-13, the `scraping`
+  walks arm since 2026-10-19)
   signal for "category has not reached the portal's end for N consecutive walks" — the WARNING sat
   unread for 27 days — that also covers a MAPPED category's `DESCENT residue` (a new or renamed
   subtype), which `index_completeness` cannot see: the children still collect ~99% of the total;
@@ -49,7 +116,8 @@ Independent of the analytical, UI, and map tracks.
   Health, not new incidents: `index_completeness` green at the first walk (W1); `stale_active` ~4.8k
   → ~2.9k at W1 → ~80 (WARN, see (v)) about 2 days later — first gone verdicts across W1–W3, each flip
   ≥ 24 h after its first verdict (`presence_candidates` skips rows completed in the last 24 h, so the
-  second verdict outlasts `GONE_DWELL`'s 12 h); ceskereality `delisting_latency` FAIL for ~7 days
+  second verdict outlasts `GONE_DWELL`'s 12 h: the effective dwell, named `RECHECK_THROTTLE` in
+  Health wave 4, #1858); ceskereality `delisting_latency` FAIL for ~7 days
   after the flips (their `last_seen_at` is 2–4 weeks old; fail is p90 > 72 h) and `delisting_spike`
   up to WARN while the ~3.6k surplus drains under `delist_flip_cap`; (iv) a self-repairing descent:
   `SUBTYPE_SLUGS` hides the page-link fallback, so a stale map parks the category exactly as this
@@ -59,7 +127,8 @@ Independent of the analytical, UI, and map tracks.
   ceskereality rows with `category_type` NULL, unseen > 7 d, sit outside every nomination scope
   (`db.presence_candidates` filters `category_type = %s`), so `stale_active` rests at WARN: a
   one-off VERIFY-priority enqueue (precedent `scripts/renominate_false_gone_crawler_rows.py`) plus a
-  rule that nominates NULL-category rows per source.
+  rule that nominates NULL-category rows per source (#1853: 422 ads on 10-18, ceskereality and
+  realitymix; the `coverage` gauge's `unnominated` cells count them since Health wave 4).
 
 ### ceskereality byt/prodej unnominated for 89 walks — the `walk_end_streak` alarm (2026-10-13, done)
 - **Found:** ceskereality byt/prodej did not reach the portal's end for 89 consecutive index walks
@@ -76,13 +145,18 @@ Independent of the analytical, UI, and map tracks.
   dropped from the config — capped at warn so a retired one cannot hold the bell red).
   Warn ≥ 3 walks (~1 day at the real 6–9 h cron cadence for a category walked every run), fail ≥ 6;
   each offender names its last reached end, or "at least N walks (not reached in 14 d)". A window
-  with no verdict is an unmeasured warn (value None), never ok. It also catches a mapped category's
-  `DESCENT residue` (the residue slice stays `ceiling`, so the walk reads `reached_end=false`), which
-  `index_completeness` cannot see. 6 h lane + in-app bell; not in `llm_health.yml`'s hourly `--only`
-  list.
-- **Next:** soak, then promote into the hourly `--only` list (the emailing lane); have
+  with no verdict reads Not measured (`unknown`, value None) since Health W1, never ok. It also
+  catches a mapped category's `DESCENT residue` (the residue slice stays `ceiling`, so the walk
+  reads `reached_end=false`), which
+  `index_completeness` cannot see. 6 h lane + in-app bell; the hourly `--only` promotion is
+  superseded 2026-10-18 (Health W1: the lanes run due checks; any failing alarm on either lane emails).
+  Retired 2026-10-19 (Health wave 4) into the `scraping` alarm's walks arm: per unit, the hours since
+  its newest end-reached walk against its portal's own walk gap.
+- **Next:** ~~soak, then promote into the hourly `--only` list (the emailing lane)~~ superseded
+  2026-10-18 (Health W1: the lanes run due checks; any failing alarm on either lane emails); have
   `portal_runner` mark a deliberately capped walk (`--max-pages` / `--limit` / bazos region) in each
-  `by_category` entry so the check skips it — today each such dispatch counts as a miss.
+  `by_category` entry so the check skips it — today each such dispatch counts as a miss (moved to
+  the Health wave 4 entry above: no longer a miss, still a finished walk in the gap G).
 
 ### Delisting hysteresis — portals blink (2026-10-09, shipped)
 - **Found:** a gone verdict flipped an ad on one 404; sreality takes ads down (index AND detail)
@@ -96,7 +170,10 @@ Independent of the analytical, UI, and map tracks.
   HTML not-found body scan, `freshness._record_gone`'s own flip (nominates at VERIFY instead).
 - **Done (same day):** `verify_pipeline` `false_delist_share` — per portal, the share of `flipped`
   ledger rows (7 d) active again; warn ≥5%, fail ≥20%, under 50 flips unscored, nothing scored =
-  unmeasured warn; 6 h lane + bell, not in the hourly `--only` list yet (soak, then promote).
+  Not measured (`unknown`) since Health W1; 6 h lane + bell; the hourly `--only` promotion is
+  superseded 2026-10-18 (Health W1: the lanes run due checks; any failing alarm on either lane emails).
+  Retired 2026-10-19 (Health wave 4) into the `delisting` check's precision arm (`flipped` rows
+  48-72 h old, a Wilson lower bound).
 - **Next:** C2-2 (below) deletes the last legacy flip caller; one-off heal — re-verify the rows a
   single pre-594 verdict closed (sreality 10.7k, idnes 9.5k, bezrealitky 0.9k, remax 0.4k,
   mmreality 0.6k over 14 d) at VERIFY priority, pilot 25/portal then release.
@@ -108,8 +185,8 @@ Independent of the analytical, UI, and map tracks.
   the UA; only `CeskerealityClient` opts in (census test). Canary drain through the prod proxy (run
   36995661138): 0×403, 5/5 pages, errors=0 → `portal_rate_state` reset, both `app_settings` kill switches
   lifted, both workflows re-enabled, full walk dispatched 10:30Z. img.ceskereality.cz needs no hints.
-- **Next:** the on-demand URL parser (`source_parsers/common.py`, honest bot UA) and
-  `scripts/verify_outbound_urls.py` (unproxied HEAD) still 403 on ceskereality — pre-existing exposure;
+- **Next:** `scripts/verify_outbound_urls.py` (unproxied HEAD) still 403s on ceskereality (the on-demand
+  URL parser that shared the exposure was deleted 2026-10-20) — pre-existing exposure;
   new ceskereality rows/day fell 800→2 on 09-26..09-29 BEFORE the wall, unexplained; a fully blocked walk
   ends green (`errors=0`, `walk_coverage='complete'` with collected=0) and the drain budget is not enforced
   inside a chunk — observability follow-ups from the 10-02 review.
@@ -370,11 +447,11 @@ Independent of the analytical, UI, and map tracks.
   attempt (street held under a NULL provenance stamp → #1406) and passed 40/40 after. Rails seeded:
   coverage ok (20 active sreality rows without a URL, warn at 50), conformance ok 2.27 % (1/44 = an
   mmreality page answering 403 to HEAD — a portal quirk, not a URL defect; a crawler-portal HEAD
-  refusal is a known soft spot of the probe). **Filed, not built:**
-  the SPA's `api.ts` source registry is missing ceskereality/realitymix, BUT `estimation_runs.
-  source_kind`'s CHECK (mig 020) lists neither either — a URL of those portals pasted into the
-  estimation flow may violate the constraint; needs its own investigation (inbound URL→portal
-  registries, four copies), not a 4-line SPA patch.
+  refusal is a known soft spot of the probe). **Resolved 2026-10-20:** the filed gap (the SPA's
+  `api.ts` source registry and `estimation_runs.source_kind`'s CHECK both missing ceskereality /
+  realitymix) is gone with its cause — W1 of `docs/design/new-property-from-link.md` gave every
+  inbound URL one identity canon (`scraper/portal_identity.py` + its pinned SPA mirror), and W2
+  deleted the estimation URL arm that wrote `source_kind`.
 
 ### The nomination gate went STRUCTURAL — counts stopped vetoing (2026-09-08, done)
 - The 5th element of `walk_category` now means **"the walk reached the portal's end"**
@@ -387,9 +464,10 @@ Independent of the analytical, UI, and map tracks.
   rule** (an empty page is ours until a re-fetch corroborates it). sreality's swallowed HTTP
   422 deep-pagination refusal is now exposed as `cap_hit` and counts as our stop.
 - `walk_coverage` is unchanged and still drives ceskereality's descent, idnes's resample and
-  sreality's national fallback — as a logged `COVERAGE` alarm, never a gate. Both facts land
+  sreality's national fallback — as a logged `COVERAGE` warning, never a gate. Both facts land
   in `scrape_runs.by_category` (`walk_reached_end` + `walk_coverage`, no migration) and
-  `verify_pipeline`'s coverage check reports `categories_nominating` beside the gap.
+  `verify_pipeline`'s coverage check reports `categories_nominating` beside the gap (retired
+  2026-10-19 into the `scraping` and `coverage` checks).
 - bazos CI budget: `timeout-minutes` 75 → 130 with `--max-seconds 6600`. Since migration 488
   (22 scopes, ~2,400 pages) GitHub was cancelling the walk at 75 min, so the tail scopes never
   walked and the `scrape_run` was never finalized.
@@ -427,7 +505,7 @@ Independent of the analytical, UI, and map tracks.
   realitymix/mmreality rows, plus any whose filled `raw_json` values, spec cells, images or
   price dropped — content, since the HTML parsers' key set is fixed) and erroring + given-up is
   negligible (else first make the `enqueue_presence_checks` re-arm skip inactive listings — it
-  re-arms given-up rows forever). Finish every pass within 7 days: the "already read as gone" skip
+  re-arms given-up rows forever, #1851). Finish every pass within 7 days: the "already read as gone" skip
   and the readout read `detail_queue_completions` (7-day retention); a later pass only re-fetches.
 
 ### mmreality: ten per-type indexes, proved against the portal's own count (2026-09-06, done)
@@ -438,7 +516,8 @@ Independent of the analytical, UI, and map tracks.
 - Walk is now one category per (sale type × property type), ten in all, each proved by
   the shared `walk_is_complete` arithmetic, written to the slice ledger (one row per
   category), (then) swept by the since-deleted absence sweep behind the 12 h rail.
-  Migration 481 set the ten descriptors; the coverage gate flips the flag from evidence.
+  Migration 481 set the ten descriptors; the coverage gate flips the flag from evidence (the
+  slice write and the gate retired 2026-10-19, Health wave 4).
 - **Next:** watch `portal_coverage_gate` for mmreality's three-cycle streak (~a day).
   **Superseded 2026-09-07:** presence verification nominates the stale rows; the page decides,
   so no flip cap is released by hand.
@@ -581,7 +660,9 @@ scale to 5–10 portals.
   check in `verify_pipeline` (hourly acute lane) alarms on the
   `property_sweep_last_complete` stamp age (written on complete walks only —
   O(1); the per-row staleness scan measured ~3.5 min live and would have
-  blown the acute lane's own 5-min timeout) + oldest dirty-queue row age.
+  blown the acute lane's own 5-min timeout) + oldest dirty-queue row age (retired 2026-10-19,
+  Health wave 4: a completed cycle stamps the `property_sweep` derived artifact, the `jobs`
+  check's `artifact/property_sweep` cell, and the dirty queue is `publishing`'s `fleet/dirty`).
   Known follow-ups: (1) the batch UPDATE rewrites all ~515k live rows daily
   with no changed-only guard — the suspected driver of the runtime growth
   (bloat feedback); measure and add an `IS DISTINCT FROM` guard as its own
@@ -693,8 +774,8 @@ already existed in the database.
 > property foundation + property-grain read/notification slices). The
 > scope notes below are background; the doc is the source of truth.
 
-Today's non-sreality flow is *parse on demand* via
-`source_dispatcher` (LLM call per URL, cached 7 days). To make
+The non-sreality flow was then *parse on demand* via
+`source_dispatcher` (LLM call per URL, cached 7 days; deleted 2026-10-20). To make
 bezrealitky / idnes / remax / maxima comparables (and other portals
 as the operator opens them) show up in `find_comparables`, those
 portals need to land in the `listings` table itself. **Hard

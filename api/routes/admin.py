@@ -101,6 +101,11 @@ class SetEntitlementIn(BaseModel):
     status: Literal["active", "trialing", "past_due", "canceled"] = "active"
 
 
+class AcknowledgeIn(BaseModel):
+    # The pattern also keeps LIKE's `%` and the `:` separator out of the signature prefix.
+    key: str = Field(pattern=r"^[a-z0-9_]+$", max_length=80)
+
+
 # --- skills ---------------------------------------------------------------
 
 @router.get("/skills")
@@ -450,8 +455,8 @@ def post_rent_map_fetch(
 _CONDITION_REGIONS_SETTING = "condition_scoring_enabled_region_ids"
 
 # Mirrors the toolkit's "functionally active" definition (rule #4) plus the
-# not-yet-scored condition, so the counts here equal what the batch submit
-# job would pick up for that kraj.
+# not-yet-scored condition, so the counts here equal what a dispatched batch
+# submit run would pick up for that kraj.
 _UNSCORED_ACTIVE_PREDICATE = (
     "l.is_active AND l.last_seen_at > now() - interval '30 days' "
     "AND l.building_condition_level IS NULL "
@@ -471,8 +476,8 @@ def get_condition_scoring_regions(
 ) -> dict[str, Any]:
     """Per-kraj condition-scoring switchboard: every kraj with its enabled
     flag + the count of active listings still awaiting a condition score.
-    The batch submit job reads the same app_settings key, so toggling a
-    kraj on here is all it takes for the next scheduled run to drain it."""
+    Condition scoring is parked (rule 14): its workflows are dispatch-only, so
+    a toggle alone runs nothing; it scopes the next manually dispatched run."""
     return {"data": _condition_regions_payload(conn)}
 
 
@@ -504,8 +509,8 @@ def put_condition_scoring_regions(
             (
                 _CONDITION_REGIONS_SETTING,
                 json.dumps(enabled),
-                "admin_boundaries ids (level=kraj) the scheduled "
-                "condition-scoring batch job drains automatically",
+                "admin_boundaries ids (level=kraj) a manually dispatched "
+                "condition-scoring run drains (parked: no schedule)",
                 "settings_ui",
             ),
         )
@@ -822,6 +827,25 @@ def _fetch_plan(conn: "psycopg.Connection", key: str) -> dict[str, Any]:
         row = cur.fetchone()
     assert row is not None
     return _plan_to_dict(row)
+
+
+# --- health: acknowledge a check's open incidents (migration 619) -----------
+
+@router.post("/health/acknowledge")
+def post_health_acknowledge(
+    body: AcknowledgeIn,
+    conn: Any = Depends(deps.get_db_conn),
+) -> dict[str, Any]:
+    """Stop the reminders of one check's open incidents; each still closes on a measured OK."""
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(
+            "UPDATE ops_incidents SET acknowledged_at = now() "
+            "WHERE resolved_at IS NULL AND acknowledged_at IS NULL "
+            "AND starts_with(signature, 'cell:' || %s::text || ':')",
+            (body.key,),
+        )
+        acknowledged = cur.rowcount
+    return {"key": body.key, "acknowledged": acknowledged}
 
 
 # --- helpers --------------------------------------------------------------

@@ -39,10 +39,10 @@ def test_column_on_a_public_table_stays_two_part() -> None:
 
 
 def test_a_three_part_column_ident_is_probeable() -> None:
-    from scripts.verify_pipeline import _SAFE_IDENT
+    from scripts.migration_objects import SAFE_IDENT
 
-    assert _SAFE_IDENT.match("autodedup.clusters.block_grain")
-    assert not _SAFE_IDENT.match("a.b.c.d")
+    assert SAFE_IDENT.match("autodedup.clusters.block_grain")
+    assert not SAFE_IDENT.match("a.b.c.d")
 
 
 def test_constraint_on_a_non_public_table_keeps_its_schema() -> None:

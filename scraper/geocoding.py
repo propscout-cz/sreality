@@ -1,8 +1,8 @@
 """Mapy.cz geocoding wrapper.
 
-Used by the source-kind dispatcher when a non-sreality listing's HTML
-gives a locality string but no coordinates. Uses Mapy.cz over Google /
-OSM for first-party Czech address coverage.
+`geocode()` serves scripts/seed_curated_cities.py; the Mapy key-failover
+helpers are shared by api/maps.py and api/routes/property_location.py. Uses
+Mapy.cz over Google / OSM for first-party Czech address coverage.
 
 # Schema (confirmed against a live api.mapy.com response)
 
@@ -54,12 +54,14 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar
 
 import requests
 
 LOG = logging.getLogger(__name__)
+_T = TypeVar("_T")
 
 GEOCODE_URL = "https://api.mapy.com/v1/geocode"
 
@@ -113,8 +115,8 @@ def geocode_enabled() -> bool:
     return (os.environ.get(ENABLE_ENV) or "").strip().lower() in {"1", "true", "yes"}
 
 
-class _KeyFailover(Exception):
-    """Internal signal: this key was rejected/throttled — try the next key."""
+class MapyKeyRefused(Exception):
+    """This key was rejected/throttled and a backup key remains — try the next key."""
 
     def __init__(self, status: int) -> None:
         super().__init__(f"Mapy.cz key rejected with status {status}")
@@ -133,6 +135,20 @@ def mapy_api_keys() -> list[str]:
         if value and value not in keys:
             keys.append(value)
     return keys
+
+
+def with_mapy_key_failover(
+    call: Callable[[str, bool], _T], keys: list[str], *, log: logging.Logger, refused: str,
+) -> _T:
+    """`call(key, last)` per Mapy key in priority order; a MapyKeyRefused from any key but the last
+    logs `refused` (key n, key count, status) on the caller's logger and tries the next. The one
+    failover of geocode, /maps suggest and the static map; here, as scraper lanes never import api/."""
+    for i, key in enumerate(keys[:-1]):
+        try:
+            return call(key, False)
+        except MapyKeyRefused as exc:
+            log.warning(refused, i + 1, len(keys), exc.status)
+    return call(keys[-1], True)
 
 
 @dataclass(frozen=True)
@@ -176,26 +192,14 @@ def geocode(
 
     sess = session or requests.Session()
     base_params = {"query": locality, "lang": lang, "limit": limit}
-    last_status: int | None = None
-    for i, key in enumerate(keys):
-        params = {**base_params, "apikey": key}
-        try:
-            payload = _request_with_retry(
-                sess, params,
-                timeout_s=timeout_s, max_retries=max_retries,
-                allow_failover=i < len(keys) - 1,
-            )
-        except _KeyFailover as exc:
-            last_status = exc.status
-            LOG.warning(
-                "Mapy.cz key %d/%d rejected (status=%s); failing over to backup",
-                i + 1, len(keys), exc.status,
-            )
-            continue
-        return _payload_to_result(payload)
-    # Unreachable: the last key runs with allow_failover=False and raises a real
-    # error directly rather than signalling failover.
-    raise GeocodingError(f"Mapy.cz request failed: status {last_status}")
+    payload = with_mapy_key_failover(
+        lambda key, last: _request_with_retry(
+            sess, {**base_params, "apikey": key},
+            timeout_s=timeout_s, max_retries=max_retries, allow_failover=not last,
+        ),
+        keys, log=LOG, refused="Mapy.cz key %d/%d rejected (status=%s); failing over to backup",
+    )
+    return _payload_to_result(payload)
 
 
 def _request_with_retry(
@@ -220,7 +224,7 @@ def _request_with_retry(
             )
             continue
         if allow_failover and r.status_code in KEY_LEVEL_STATUS:
-            raise _KeyFailover(r.status_code)
+            raise MapyKeyRefused(r.status_code)
         if r.status_code in RETRYABLE_STATUS:
             error = requests.HTTPError(
                 f"{r.status_code} from {GEOCODE_URL}", response=r,

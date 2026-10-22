@@ -76,7 +76,7 @@ export interface OptimisticWrite<V, R> {
    *  Rollback: a store the query cache can't see (React state) was already painted; this undoes it. */
   patch?: (vars: V, qc: QueryClient) => readonly CachePatch[] | Rollback;
   /** Prefixes re-read after every settle; `failed` lets a site widen the re-read on failure. */
-  revalidate?: readonly QueryKey[] | ((vars: V, failed: boolean) => readonly QueryKey[]);
+  revalidate?: readonly QueryKey[] | ((vars: V, failed: boolean, qc: QueryClient) => readonly QueryKey[]);
   /** Pure function of vars; what `pendingFor` is asked about. */
   pendingKey?: (vars: V) => PendingKey;
   onSuccess?: (data: R, vars: V) => void;
@@ -204,7 +204,7 @@ export function useOptimisticWrite<V = void, R = unknown>({
     onError: onError && ((error, vars) => onError(error, vars)),
     onSettled: (_data, error, vars, rollback) => {
       if (error) rollback?.(); // before the re-read
-      const keys = typeof revalidate === 'function' ? revalidate(vars, error != null) : revalidate;
+      const keys = typeof revalidate === 'function' ? revalidate(vars, error != null, qc) : revalidate;
       for (const queryKey of keys) void qc.invalidateQueries({ queryKey });
     },
   });

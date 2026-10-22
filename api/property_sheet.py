@@ -39,16 +39,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-from toolkit.filter_registry import (
-    BUILDING_TYPE_OPTIONS,
-    CATEGORY_TYPE_OPTIONS,
-    CONDITION_OPTIONS,
-    FURNISHED_OPTIONS,
-    OWNERSHIP_OPTIONS,
-    PORTAL_OPTIONS,
-    PRICE_UNIT_OPTIONS,
-    subtype_label_cs,
-)
+from toolkit.filter_registry import CATEGORY_MAIN_NOUN_CS, label_cs, type_label_cs
 
 _FONT_DIR = Path(__file__).parent / "fonts"
 SANS, SANS_BOLD, DISPLAY = "Inter", "Inter-SemiBold", "Fraunces-SemiBold"
@@ -75,21 +66,6 @@ NBSP = "\u00a0"
 # not promise thread safety; FastAPI runs this sync route on a thread pool.
 _BUILD_LOCK = threading.Lock()
 
-_DEAL = {o.value: o.label_cs for o in CATEGORY_TYPE_OPTIONS}
-_BUILDING = {o.value: o.label_cs for o in BUILDING_TYPE_OPTIONS}
-_CONDITION = {o.value: o.label_cs for o in CONDITION_OPTIONS}
-_FURNISHED = {o.value: o.label_cs for o in FURNISHED_OPTIONS}
-_OWNERSHIP = {o.value: o.label_cs for o in OWNERSHIP_OPTIONS}
-_PORTAL = {o.value: o.label_cs for o in PORTAL_OPTIONS}
-_PRICE_UNIT = {o.value: o.label_cs for o in PRICE_UNIT_OPTIONS}
-# Singular nouns, as the SPA's enums.CATEGORY_MAIN_LABELS (the registry's are plural).
-_CATEGORY_MAIN = {
-    "byt": "Byt",
-    "dum": "Dům",
-    "komercni": "Komerční prostor",
-    "pozemek": "Pozemek",
-    "ostatni": "Ostatní",
-}
 
 
 @cache
@@ -179,18 +155,15 @@ def _phone(p: str) -> str:
     return p
 
 
-def _label(labels: dict[str, str], slug: str | None) -> str | None:
+def _label(column: str, slug: str | None) -> str | None:
     """The registry's Czech label; a value outside it is a portal's own word, shown as such."""
     if not slug:
         return None
-    return labels.get(slug) or slug[:1].upper() + slug[1:]
+    return label_cs(column, slug) or slug[:1].upper() + slug[1:]
 
 
 def type_label(prop: dict[str, Any]) -> str:
-    """listingTypeLabel: the subtype when the portal gave one, else the category noun."""
-    return subtype_label_cs(prop.get("subtype")) or _CATEGORY_MAIN.get(
-        prop.get("category_main") or "", "Nemovitost"
-    )
+    return type_label_cs(prop.get("category_main"), prop.get("subtype"))
 
 
 def headline(prop: dict[str, Any]) -> str:
@@ -222,11 +195,11 @@ def _facts(prop: dict[str, Any]) -> list[tuple[str, str]]:
         ("Podlaží", _floor(prop.get("floor"), prop.get("total_floors"))),
         ("Pozemek", _area(prop.get("estate_area"))),
         ("Zahrada", _area(prop.get("garden_area"))),
-        ("Stavba", _label(_BUILDING, prop.get("building_type"))),
-        ("Stav", _label(_CONDITION, prop.get("condition"))),
+        ("Stavba", _label("building_type", prop.get("building_type"))),
+        ("Stav", _label("condition", prop.get("condition"))),
         ("Energetická třída", prop.get("energy_rating")),
-        ("Vlastnictví", _OWNERSHIP.get(prop.get("ownership") or "")),
-        ("Vybavení", _FURNISHED.get(prop.get("furnished") or "")),
+        ("Vlastnictví", label_cs("ownership", prop.get("ownership"))),
+        ("Vybavení", label_cs("furnished", prop.get("furnished"))),
     ]
     return [(k, v) for k, v in facts if v]
 
@@ -339,7 +312,7 @@ def _ads_table(ads: list[dict[str, Any]], canonical_id: int, st: dict[str, Parag
         Paragraph("Poprvé viděn", st["th"]),
     ]]
     for ad in ads:
-        portal = escape(_PORTAL.get(ad.get("source") or "", ad.get("source") or "—"))
+        portal = escape(label_cs("source", ad.get("source")) or ad.get("source") or "—")
         if ad.get("id") == canonical_id:
             portal += f'<font color="{_hex(INK_3)}">{NBSP}· hlavní inzerát</font>'
         cell: list[Flowable] = [Paragraph(portal, st["value"])]
@@ -399,8 +372,8 @@ def render_property_sheet(
     st = _styles()
     story: list[Flowable] = []
 
-    deal = _DEAL.get(prop.get("category_type") or "")
-    eyebrow = " · ".join(p for p in (deal, _CATEGORY_MAIN.get(prop.get("category_main") or "")) if p)
+    deal = label_cs("category_type", prop.get("category_type"))
+    eyebrow = " · ".join(p for p in (deal, CATEGORY_MAIN_NOUN_CS.get(prop.get("category_main") or "")) if p)
     if prop.get("is_active"):
         status = f'<font color="{_hex(SAGE)}">●</font>{NBSP}Aktivní'
     else:
@@ -420,7 +393,7 @@ def render_property_sheet(
         # The seller hid it — real source state, not missing data (ListingOverview).
         story.append(Paragraph(f'<font color="{_hex(INK_3)}" size="18">Cena na vyžádání</font>', st["price"]))
     else:
-        unit = _PRICE_UNIT.get(prop.get("price_unit") or "", prop.get("price_unit"))
+        unit = label_cs("price_unit", prop.get("price_unit")) or prop.get("price_unit")
         unit_html = (f'<font name="{SANS}" size="11" color="{_hex(INK_3)}">'
                      f"{NBSP}/{NBSP}{escape(unit)}</font>") if unit else ""
         story.append(Paragraph(_czk(price) + unit_html, st["price"]))

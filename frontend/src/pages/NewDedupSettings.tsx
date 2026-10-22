@@ -19,12 +19,12 @@ import {
   type NewDedupSetting,
 } from '@/lib/api';
 import { Switch } from '@/components/controls';
+import ErrorBanner from '@/components/ErrorBanner';
 import {
   CollapsibleSection,
   InfoHint,
   InfoModeToggle,
   useInfoMode,
-  ErrorBanner,
 } from '@/components/settings/SectionChrome';
 
 const CATEGORY_ORDER = [
@@ -67,7 +67,7 @@ export default function NewDedupSettings() {
         <InfoModeToggle expanded={infoExpanded} onChange={setInfoExpanded} />
       </div>
 
-      {q.error && <ErrorBanner message={(q.error as Error).message} />}
+      {q.error && <ErrorBanner message={(q.error as Error).message} flush />}
       {!q.data && !q.error && (
         <p className="mt-6 text-sm text-[var(--color-ink-3)]">Loading settings…</p>
       )}

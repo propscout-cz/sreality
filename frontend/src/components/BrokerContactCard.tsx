@@ -9,8 +9,8 @@ import {
 /* The broker's two reachable channels — one card, shared by /brokers/:id and the
    property page's broker list so the same broker reads identically on both surfaces.
    Typed on BrokerContactFields, not BrokerPublic: the masked pair is all the card
-   consumes, and which half arrives (primary_* for an admin, has_* otherwise) is a
-   property of the CALLER, not of the row. */
+   consumes. The property page's rows always carry the values; /brokers/:id sends
+   has_* in their place to a non-admin. */
 export default function BrokerContactCard({
   broker,
 }: {

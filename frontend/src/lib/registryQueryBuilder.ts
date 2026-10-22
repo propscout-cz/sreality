@@ -12,7 +12,7 @@
  * right PostgREST call based on its `type` and id suffix:
  *
  *   - `tristate` (`has_balcony`, `terrace`, …)           → `.eq(col, true|false)` when not 'any'
- *   - `string_list` (`condition_match`, `dispositions`)  → `.in(col, values)` when non-empty
+ *   - `string_list` (`dispositions`, `subtype`)          → `.in(col, values)` when non-empty
  *   - id starts with `min_` OR ends with `_min`          → `.gte(col, value)`
  *   - id starts with `max_` OR ends with `_max`          → `.lte(col, value)`
  *   - plain `string` / `int` / `float` / `bool`          → `.eq(col, value)`
@@ -58,6 +58,9 @@ export const HAND_CODED_BROWSE_FILTERS: ReadonlySet<string> = new Set([
   // first_seen_at / last_change_at.
   'recently_added_days',
   'recently_changed_days',
+  // An on/off "only" filter: on → `tom_observed = true`, off → no predicate
+  // (an auto-dispatched false would select the sweep-discovered ads instead).
+  'tom_observed_only',
   // One enum → IN over multiple building_type values (cihla/panel/smisena/ostatni-bucket).
   'building_material',
   // Multi-chip → RUIAN code equality per level (districtCodes.districtsFilterClause).
@@ -66,10 +69,13 @@ export const HAND_CODED_BROWSE_FILTERS: ReadonlySet<string> = new Set([
   // predicate the plain `.in` auto-path can't express.
   'furnished',
   'ownership',
-  // Operator tags — a property-id prefilter (queries.ts resolveBrowsePrefilters):
-  // `tags` an allowlist, `tags_excluded` the one denylist (migration 598).
+  'condition_match',
+  // The curated sets (tags, collections, pipeline) are judged by the SOURCE's
+  // own arguments, not a predicate: queries.ts:readSource passes
+  // lib/setScope.scopeArgs to the *_visible() SRF (migration 629).
   'tags',
-  'tags_excluded',
+  'collections',
+  'pipeline',
   // Merged price-history pair (migration 173): the window picks which
   // precomputed count column the threshold reads, and the signed
   // total-change predicate flips direction on sign — both hand-coded in
@@ -80,15 +86,8 @@ export const HAND_CODED_BROWSE_FILTERS: ReadonlySet<string> = new Set([
   // With-estimates is a property-id allowlist prefilter
   // (property_estimates_public), not a column predicate.
   'with_estimates',
-  // The deal-pipeline scope is likewise a property-id allowlist prefilter
-  // (property_pipeline_public), resolved in queries.ts:resolvePipelinePrefilter
-  // — there is no pipeline column on the browse read model to narrow on.
-  'pipeline',
-  // Collection membership, the same shape again: an allowlist resolved from
-  // collection_properties_public in queries.ts:resolveCollectionPrefilter.
-  'collections',
-  // Dismissed properties are excluded by the SOURCE, not a predicate:
-  // queries.ts:readSource reads the *_visible() twin unless it is set (mig 537).
+  // Dismissed properties are excluded by the SOURCE too: readSource passes
+  // `hide_dismissed` to the same SRF (migrations 537 + 629).
   'show_dismissed',
   // Price bounds are hand-coded (not the plain `.gte`/`.lte` auto-path) so they
   // can branch on `include_no_price`: when that toggle is on AND a bound is set,
@@ -107,25 +106,6 @@ export const HAND_CODED_BROWSE_FILTERS: ReadonlySet<string> = new Set([
   // Resolved SERVER-side to an obec allowlist (curated_cities_matching ->
   // obec_ids_filter) before the query is built; the RPC parameter went in 597.
   'city_index_rules',
-]);
-
-/* Browse-agenda filters that reach some OTHER surface but are NOT applied to
- * the Browse LIST query at all. Not the same claim as HAND_CODED_BROWSE_FILTERS,
- * and deliberately a separate set: that one says "queries.ts applies this by
- * hand", and blessing a filter with it that nothing applies is exactly the
- * defect the W21 drift test exists to catch. Each entry is a KNOWN GAP with a
- * named owner, not a design. */
-export const BROWSE_FILTERS_NOT_ON_THE_LIST_QUERY: ReadonlySet<string> = new Set([
-  /* KNOWN GAP (found by the W21 drift test, pre-existing, NOT introduced by it).
-   * `tomDaysMin/Max` are sent to the Stats RPC (`browse_stats_properties`,
-   * queries.ts ~1301) and to NOTHING else — the cards/table/map cohort ignores
-   * them, so the Stats panel and the list it sits above can disagree about the
-   * cohort. `tom_days` IS a browse_projection column, so the fix is the same one
-   * migration 535 applied to the plot measure: point `pg_column` at it. Left
-   * alone here because it changes what saved presets return and belongs to
-   * whoever owns the Browse cohort, not to the area wave. */
-  'tom_days_min',
-  'tom_days_max',
 ]);
 
 /* Minimal PostgREST builder shape we need to call into. The real

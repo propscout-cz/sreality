@@ -3,7 +3,7 @@
  * Every control on this page is a bare input/select with only a placeholder or
  * nothing at all to identify it. What is pinned here is the ACCESSIBLE NAME of
  * each one, computed against the rendered DOM: the inspector query box, the
- * correction form it opens, and the page's source scope.
+ * correction form it opens, and the page's source scope; and no control sits inside another.
  *
  * Hermetic: every `/location/*` wrapper is mocked. The one panel that needs a
  * large fixture (source overview) is deliberately failed — its error banner is
@@ -20,6 +20,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import LocationQuality from './LocationQuality';
 import * as lq from '../lib/locationQuality';
 import type { Inspector } from '../lib/locationQuality';
+import { expectNoNestedInteractive } from '@/test/a11y';
 
 vi.mock('../lib/locationQuality', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/locationQuality')>();
@@ -73,5 +74,6 @@ describe('LocationQuality accessible names', () => {
     });
     expect(form.getByRole('textbox', { name: 'Corrected value' })).toBeInTheDocument();
     expect(form.getByRole('textbox', { name: 'Note' })).toBeInTheDocument();
+    expectNoNestedInteractive(document.body);
   });
 });

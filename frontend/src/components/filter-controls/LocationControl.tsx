@@ -16,9 +16,9 @@
  * approximation in meters (maplibre has no native circle-in-meters
  * layer); the polygon is recomputed whenever lat/lng/radius change.
  *
- * Designed to be embedded inside <FilterForm> in a future commit; for
- * this PR the Watchdog form drops it in directly to replace its three
- * separate lat / lng / radius_m number inputs.
+ * Browse's sidebar (centre+radius mode) is its one site. The Watchdog
+ * editor draws the map box with its sibling, MapAreaControl; both paint
+ * their dashed shape through lib/mapShape so the two cannot drift.
  */
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
@@ -26,15 +26,14 @@ import maplibregl from 'maplibre-gl';
 
 import { NumberCell } from '@/components/controls';
 import { createMap } from '@/lib/basemap';
+import type { CenterRadius } from '@/lib/filters';
 import { circleRing } from '@/lib/geoRing';
+import { addDashedShape, setDashedShape } from '@/lib/mapShape';
+
+export type { CenterRadius };
 
 const PRAGUE = { lng: 14.4378, lat: 50.0755, zoom: 11 };
-
-export interface CenterRadius {
-  lat: number;
-  lng: number;
-  radius_m: number;
-}
+const CIRCLE = 'radius-circle';
 
 interface LocationControlProps {
   value: CenterRadius | null;
@@ -88,29 +87,7 @@ export function LocationControl({
     mapRef.current = map;
 
     map.on('load', () => {
-      map.addSource('radius-circle', {
-        type: 'geojson',
-        data: emptyPolygon(),
-      });
-      map.addLayer({
-        id: 'radius-circle-fill',
-        type: 'fill',
-        source: 'radius-circle',
-        paint: {
-          'fill-color': '#b58438',
-          'fill-opacity': 0.10,
-        },
-      });
-      map.addLayer({
-        id: 'radius-circle-outline',
-        type: 'line',
-        source: 'radius-circle',
-        paint: {
-          'line-color': '#b58438',
-          'line-width': 1.4,
-          'line-dasharray': [2, 2],
-        },
-      });
+      addDashedShape(map, CIRCLE);
 
       // If we already have a value at mount time, render the marker
       // and circle now.
@@ -150,9 +127,7 @@ export function LocationControl({
     if (value == null) {
       markerRef.current?.remove();
       markerRef.current = null;
-      const src = map.getSource('radius-circle') as
-        | maplibregl.GeoJSONSource | undefined;
-      if (src) src.setData(emptyPolygon());
+      setDashedShape(map, CIRCLE, null);
       return;
     }
     upsertMarker(map, markerRef, value.lat, value.lng, onChangeRef);
@@ -300,35 +275,12 @@ function setCircle(
   lng: number,
   radius_m: number,
 ) {
-  const src = map.getSource('radius-circle') as
-    | maplibregl.GeoJSONSource | undefined;
-  if (!src) return;
-  src.setData(circlePolygon(lat, lng, radius_m));
+  if (!setDashedShape(map, CIRCLE, circleRing(lat, lng, radius_m))) return;
   // Stash the current radius on the marker so its `dragend` callback
   // can preserve it without going through React state.
   const marker = (map as unknown as { _markerCache?: maplibregl.Marker })
     ._markerCache;
   if (marker) (marker as unknown as { _curRadius?: number })._curRadius = radius_m;
-}
-
-function circlePolygon(
-  lat: number,
-  lng: number,
-  radius_m: number,
-): GeoJSON.Feature<GeoJSON.Polygon> {
-  return {
-    type: 'Feature',
-    properties: {},
-    geometry: { type: 'Polygon', coordinates: [circleRing(lat, lng, radius_m)] },
-  };
-}
-
-function emptyPolygon(): GeoJSON.Feature<GeoJSON.Polygon> {
-  return {
-    type: 'Feature',
-    properties: {},
-    geometry: { type: 'Polygon', coordinates: [[]] },
-  };
 }
 
 function parseCoord(raw: string): number | null {

@@ -18,6 +18,7 @@ import DayRule from '@/components/phone/DayRule';
 import { RollEmpty } from '@/components/phone/RollParts';
 import { CHIP, CHIP_DIVIDER, CHIP_MD, CHIP_ROW, CHIP_SM, chipState } from '@/components/phone/chips';
 import { ChevronIcon, ClearIcon, PinIcon, SearchIcon } from '@/components/phone/phoneIcons';
+import { placeLabelOf } from '@/components/phone/placeLabel';
 import { LocationTypeahead } from '@/components/filter-controls/LocationTypeahead';
 import {
   LEADER_METRIC_OPTIONS,
@@ -46,16 +47,6 @@ const LIMIT = 100;
 
 const CATEGORY_WORD: Record<string, string> = { byt: 'byty', dum: 'domy' };
 const OFFER_WORD: Record<string, string> = { prodej: 'prodej', pronajem: 'pronájem' };
-
-/* "Celá ČR", "Praha", "Praha +2", "Celá ČR − Žižkov", "Celá ČR −2" — short
- * enough for a chip and a rule. Every chip counts; an include leads, else the
- * whole country minus the excludes. */
-export function placeLabelOf(chips: ReadonlyArray<DistrictChip>): string {
-  const lead = chips.find((c) => !c.excluded);
-  if (lead) return chips.length === 1 ? lead.name : `${lead.name} +${chips.length - 1}`;
-  if (chips.length === 0) return 'Celá ČR';
-  return chips.length === 1 ? `Celá ČR − ${chips[0].name}` : `Celá ČR −${chips.length}`;
-}
 
 /* The ranked figure and its noun: active properties, or every ad ever. */
 export function metricFigure(r: BrokerLeaderRow, metric: LeaderMetric): { value: number; unit: string } {

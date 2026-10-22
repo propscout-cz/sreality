@@ -14,6 +14,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
 import CollectionSaveToggle from './CollectionSaveToggle';
+import { ActingAs } from '@/lib/acting';
 import type { Collection } from '@/lib/types';
 import * as api from '@/lib/api';
 import * as queries from '@/lib/queries';
@@ -43,7 +44,6 @@ const collection = (over: Partial<Collection>): Collection =>
     updated_at: '2026-01-01T00:00:00Z',
     listing_count: 0,
     monitoring_enabled: false,
-    notify_channels: [],
     is_system: false,
     ...over,
   }) as Collection;
@@ -141,6 +141,41 @@ describe('<CollectionSaveToggle>', () => {
       expect(api.addPropertiesToCollection).toHaveBeenCalledWith(9, [42]),
     );
     expect(api.removePropertyFromCollection).not.toHaveBeenCalled();
+  });
+
+  it('inside <ActingAs> saves to the owner\'s collection, and never links to my own Collections page', async () => {
+    const owner = { account_id: 'owner-1', email: 'jana@example.cz', mode: 'edit' as const };
+    vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map());
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const view = render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <ActingAs share={owner}>
+            <CollectionSaveToggle property_id={42} />
+          </ActingAs>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Uložit do kolekce' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Praha 5/ }));
+    await waitFor(() => expect(api.addPropertiesToCollection).toHaveBeenCalledWith(9, [42], { actAs: 'owner-1' }));
+    expect(api.listCollections).toHaveBeenCalledWith({ actAs: 'owner-1' });
+    view.unmount();
+
+    // The owner has none: a note, not a link to a page that would make it mine.
+    vi.mocked(api.listCollections).mockResolvedValue({ data: [], total: 0 });
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <ActingAs share={owner}>
+            <CollectionSaveToggle property_id={42} />
+          </ActingAs>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Uložit do kolekce' }));
+    expect(await screen.findByText('The owner has no collections')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Create a collection/ })).toBeNull();
   });
 
   /* Same click, opposite direction, when the row is already checked — the panel

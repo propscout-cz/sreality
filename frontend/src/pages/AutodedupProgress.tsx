@@ -8,16 +8,13 @@
  * open. It is the first UI the program ships (PROGRAM.md §12, W1), ahead of the
  * validation views, for exactly that reason.
  *
- * NOTHING HERE IS A PRODUCTION CHANGE. The whole trial is shadow mode (ruling
- * D4): the engine decides and stores inside its own schema and merges nothing.
- * The page says so in the lede rather than leaving the reader to infer it.
+ * THE ENGINE'S LIVE STATE IS HEALTH'S. It merges in production inside the apply
+ * scope (E904); the lede links the Health `dedup` row instead of copying it.
  *
  * THE STRIP CARRIES THE GATES, NOT ONLY THE TOTALS (PROGRAM.md §12). Spend is
- * meaningless without the cap it is spent against, so the strip prints both, and
- * the mode — SHADOW, for the life of this program (D4/E39) — is a chip, not a
- * sentence buried in the lede. The caps and the mode are program CONSTANTS from
- * ruling D2/E39, not measurements, so they render with no backend at all and are
- * never subject to the "not yet" idiom below.
+ * meaningless without the cap it is spent against, so the strip prints both. The
+ * caps are program CONSTANTS from ruling D2, not measurements, so they render
+ * with no backend at all and are never subject to the "not yet" idiom below.
  *
  * "NOT YET" IS A REAL ANSWER. Until migration 528 is applied there is no store
  * to read, and until a lane has written a row there is nothing to total. Both
@@ -36,11 +33,12 @@ import {
   getAutodedupStats,
   type AutodedupIteration,
 } from '@/lib/api';
-import LoadMore from '@/components/autodedup/LoadMore';
+import LoadMore from '@/components/LoadMore';
 import Notice, { StoreNotReady } from '@/components/autodedup/Notice';
 import ErrorBanner from '@/components/ErrorBanner';
-import { ROUTES, withQuery } from '@/lib/routes';
+import { ROUTES, withHash, withQuery } from '@/lib/routes';
 import Spinner from '@/components/Spinner';
+import Stat from '@/components/Stat';
 import { Chevron, useCollapsed } from '@/components/settings/SectionChrome';
 import { useInfiniteList, type InfiniteListPage } from '@/lib/useInfiniteList';
 import { fmtAbsolute, fmtCount, fmtUsd } from '@/lib/format';
@@ -56,9 +54,6 @@ const PAGE_SIZE = 25;
  * budget. Constants of the program, not figures the store reports. */
 const PROGRAM_CAP_USD = 200;
 const RUN_CAP_USD = 25;
-
-/* Ruling D4 / E39: shadow mode is the default AND the only mode for W0–W7. */
-const MODE = 'SHADOW';
 
 const TH = 'py-1 pr-3 font-medium whitespace-nowrap align-top';
 const HEAD = 'text-left text-[0.65rem] tracking-[0.1em] uppercase text-[var(--color-ink-3)]';
@@ -87,20 +82,6 @@ function StatusBadge({ status }: { status: IterationStatus }) {
     >
       {status}
     </span>
-  );
-}
-
-/* --------------------------------------------------------------- KPI tiles */
-
-function Tile({ label, value, hint }: { label: string; value: string; hint: string }) {
-  return (
-    <div className="rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-4 py-3">
-      <div className="text-[0.6rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
-        {label}
-      </div>
-      <div className="mt-1 text-xl font-mono tabular-nums text-[var(--color-ink)]">{value}</div>
-      <div className="mt-1 text-[0.68rem] leading-relaxed text-[var(--color-ink-3)]">{hint}</div>
-    </div>
   );
 }
 
@@ -179,7 +160,7 @@ function KeyValues({
 const ACTIONS_RUN_RE = /^https?:\/\/(www\.)?github\.com\/[^/]+\/[^/]+\/actions\/runs\/\d+/i;
 const ACTIONS_ARTIFACT_RE = /^https?:\/\/(www\.)?github\.com\/.*\/artifacts\/\d+/i;
 
-export function artifactLabel(key: string, url: string): string {
+function artifactLabel(key: string, url: string): string {
   if (ACTIONS_ARTIFACT_RE.test(url)) return 'Artifact download';
   if (ACTIONS_RUN_RE.test(url)) return 'Actions run';
   return key;
@@ -188,7 +169,7 @@ export function artifactLabel(key: string, url: string): string {
 /* Two jsonb blobs are "the same" when they carry the same keys with the same
  * values — compared on SORTED keys, because the lane builds the two dicts in
  * different places and a key order is not a difference. */
-export function sameBlob(
+function sameBlob(
   a: Record<string, unknown> | null | undefined,
   b: Record<string, unknown> | null | undefined,
 ): boolean {
@@ -367,15 +348,15 @@ export default function AutodedupProgress() {
         <h1 className="text-2xl leading-tight">AUTODEDUP · Progress</h1>
         <p className="mt-1 text-sm text-[var(--color-ink-2)] leading-relaxed max-w-[52rem]">
           An <em>autonomous</em> engine that looks for the same real-world property advertised on
-          several portals, or re-posted later, and decides by itself whether the two are one. It is
-          being trialled on four small blocks — two towns, one Prague quarter, and a deliberately
-          hard negative-control set drawn from Praha: address points that carry listings on more
-          than one floor, i.e. the same building, different unit — before it is allowed near
-          anything else. Which blocks those are is the operator's choice and is recorded on each
-          iteration below, not in this paragraph. The whole trial runs in{' '}
-          <strong>shadow mode</strong>: it decides, stores its decisions in a schema of its own and{' '}
-          <strong>merges nothing</strong>. No listing, property or merge in the live database is
-          touched by any row on this page.
+          several portals, or re-posted later, and decides by itself whether the two are one. The
+          engine merges in production inside the apply scope; live lane health is on{' '}
+          <Link
+            to={withHash(ROUTES.health.build(), '#dedup')}
+            className="text-[var(--color-copper-2)] underline decoration-dotted underline-offset-2"
+          >
+            Health
+          </Link>
+          .
         </p>
         <p className="mt-2 text-[0.78rem] leading-relaxed text-[var(--color-ink-3)] max-w-[52rem]">
           Below is the program's own log, one entry per iteration, newest first: what was tried, on
@@ -393,22 +374,13 @@ export default function AutodedupProgress() {
         </p>
       </header>
 
-      {/* The mode is a constant of this program, not a reading — it renders
-        * before any query lands and never says "not yet" (D4/E39). */}
-      <p className="mt-4 flex items-center gap-2 text-[0.7rem] text-[var(--color-ink-3)]">
-        <span className="rounded-[var(--radius-xs)] border border-[var(--color-ochre)] bg-[var(--color-ochre-soft)] px-1.5 py-0.5 tracking-[0.12em] uppercase text-[var(--color-ochre)]">
-          {MODE}
-        </span>
-        merges nothing — every decision stays inside the program's own schema.
-      </p>
-
       <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Tile
+        <Stat
           label="Iterations"
           value={pending ? '…' : s == null ? NOT_YET : fmtCount(s.n_iterations)}
           hint="Entries written to the program log so far."
         />
-        <Tile
+        <Stat
           label="Spent so far"
           value={
             pending
@@ -421,14 +393,14 @@ export default function AutodedupProgress() {
             RUN_CAP_USD,
           )} is the hard cap on any single run.`}
         />
-        <Tile
+        <Stat
           label="Waves closed"
           value={
             pending ? '…' : s == null ? NOT_YET : `${wavesClosed} of ${s.waves.length}`
           }
           hint="Waves whose newest iteration finished; the rest are still open."
         />
-        <Tile
+        <Stat
           label="Current wave"
           value={pending ? '…' : currentWave == null ? NOT_YET : currentWave}
           hint="The wave the newest iteration belongs to."

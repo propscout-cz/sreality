@@ -93,8 +93,8 @@ tenant-scoped:
   the row just written. `verify_jwt` is authentication; `tenant_conn` (via RLS) is
   authorization — a route needing per-account isolation must use it, not `get_db_conn`. There
   is NO fallback connection (the static-`API_TOKEN` bypass was deleted 2026-09-11): an unset
-  `TENANT_POOL_DB_URL` raises. The `legacy_backfill_claim` TABLE stays (signup CAS).
-  `tenant_transaction(claims)` is the same block as a context manager, for one named
+  `TENANT_POOL_DB_URL` raises.
+  `tenant_transaction(claims, act_as=, method=)` is the same block as a context manager, for one named
   exception (`references/tenancy.md`): it commits before slow service-role work.
 
 **Pooler-safe mutual exclusion: lease-row CAS, not session advisory locks (migration
@@ -132,13 +132,14 @@ already exist on disk (`276_browse_read_model.sql` / `276_listings_geo_cell_key.
 both pairs coexist harmlessly because the runner orders by filename, not the numeric
 prefix alone, but don't count on that.
 
-**This Supabase project's default privileges auto-GRANT, not just on tables.** New
-tables get `anon`/`authenticated` grants by default (the Phase-0 hardening's root
-cause); migration 287 found the **same default ACL applies to new functions** — a
-freshly created `SECURITY DEFINER` function is directly callable by `anon` via PostgREST
-RPC until explicitly revoked (`revoke execute on function ... from anon, authenticated`),
-even though `revoke ... from public` is a no-op against an explicit ACL entry. Revoke
-explicitly on every new function; grant back only the roles that need it.
+**Default privileges: a new table reaches `authenticated` read-only; a new function is born
+private (migration 612).** Tables: 299 stripped `anon` and the write verbs, and the table's
+deny-all RLS (CI-enforced) is the backstop. Functions: 612 removed the built-in PUBLIC EXECUTE
+(the global form; 299's per-schema form could not) and the per-schema grant to `authenticated`,
+so a new function reaches only `postgres` + `service_role`; `CREATE OR REPLACE` keeps the ACL a
+function already has. Recipe, on every function you write: `revoke all on function <sig> from
+public, anon, authenticated;`, then `grant execute` to `authenticated` (or `service_role`) only
+where a caller needs it.
 
 ## Migration safety policy (under autopilot)
 
@@ -148,7 +149,7 @@ explicitly on every new function; grant back only the roles that need it.
 - **Open with `set local lock_timeout = '5s';` when a migration GRANT/REVOKEs or
   CREATE-OR-REPLACEs a hot or cron-refreshed relation** (any matview, `browse_list`, `listings`).
   Those take ACCESS EXCLUSIVE and a whole-transaction loop holds every lock it already took —
-  without a timeout it queues behind, or blocks, the `*/10` health refresh or the map rebuild.
+  without a timeout it queues behind, or blocks, the `*/10` health refresh or the `*/15` list rebuild.
 - **Destructive migrations** (`DROP TABLE`/`COLUMN`, type-changing `ALTER`, `DELETE`
   without `WHERE`, `TRUNCATE`) — **pause for explicit operator OK** ("yes, apply it") and
   back up the affected data *first* (`backup_before_drop.yml`, to R2). There's no staging
@@ -170,16 +171,16 @@ crash killed the batch before its counters were written. Order the two so the sc
 never behind the code: apply, verify with a SELECT, then merge.
 
 `verify_pipeline`'s **`migration_drift`** check (2026-08-27) now catches the gap within one
-6-hourly tick and pushes an alarm. It probes the LIVE CATALOG for the objects the newest 25
+hourly canary tick, one cell per migration file since Health wave 6, and pushes an alarm. It probes the LIVE CATALOG for the objects the newest 25
 migrations declare — tables, views, indexes, functions, added columns, added constraints,
 policies — parsed by `scripts/migration_objects.py`. It deliberately does NOT read
 `supabase_migrations.schema_migrations`: that ledger's `name` is whatever the applier passed,
 so it matches the repo filename sometimes (`444_listings_discovered_at`) and not others
 (441 is recorded as `stamp_derived_artifact`, unnumbered), and it carries ad-hoc migrations
 with no repo file at all. The catalog cannot lie; the ledger can. Migrations that only drop,
-grant or update data declare nothing probeable and are reported in an explicit
-`unverifiable` list rather than counted as passing. A function is probed by NAME only, so a
-re-signed or rewritten function (590, 597) reads present before it is applied: prove those with
+grant or update data declare nothing probeable and read Not measured ("unverifiable") rather than
+passing; an object a later migration drops is not probed on its creator (613 → 610). A function is probed by NAME only, so a
+re-signed or rewritten function (590, 597), like a dropped-and-recreated policy (613), reads present before it is applied: prove those with
 their own `$post$` block and a call with the new arguments.
 
 **Billing (migration 298, PR #769 — Phase 1 increment 5)** extends the same RLS pattern:
@@ -199,18 +200,18 @@ policy before assuming service-role-only access still applies everywhere. The mo
 `00000000-0000-0000-0000-000000000000`) + `account_members(account_id, user_id, role)` + a
 separate `admins(user_id)` platform-admin allowlist (migration 286). Two SECURITY DEFINER
 helpers, `current_account_ids()` and `is_platform_admin()` (keyed off the JWT `sub` claim via
-`account_members`/`admins`), are the **sole** definition point for every per-account RLS policy
-since — don't hand-roll a second way to check tenancy.
+`account_members`/`admins`), are the definition point for every per-account RLS policy; 641 adds the one
+sanctioned second, `acting_account_ids()`, read only by the eleven curation policies (§ Delegation) — don't hand-roll a third.
 
-Per-table RLS pattern, repeated across migrations 290 (6 curation tables: `collections`, `tags`,
-`property_notes`, `filter_presets`, `notification_subscriptions`, `manual_rental_estimates`),
+Per-table RLS pattern, repeated across migrations 290 (5 live curation tables: `collections`, `tags`,
+`property_notes`, `filter_presets`, `notification_subscriptions`; its sixth was dropped by 639),
 291 (`estimation_runs`/`building_runs`, `account_id` NULLABLE, defaults to SYSTEM), 292 (6
 child-grain tables incl. `notification_dispatches`, `account_id` **trigger-derived** from the
 parent row, not caller-supplied), and 294 (pipeline tables): `revoke all ... from anon,
 authenticated` → `grant select/insert/update/delete ... to authenticated` → a `for all
 using/with check (account_id in (select current_account_ids()))` policy. **An integer surrogate id is
 `bigint generated always as identity`** (611), never `bigserial`: a browser-chosen id pre-claims the sequence
-and breaks every account's inserts; a uuid id (`gen_random_uuid()`) cannot be pre-claimed and stays as is. **Sharing (610)** widens READS only: `collection_shares` (owner-stamped, no browser INSERT) + four `FOR SELECT` `*_shared_read` policies; writes stay owner-only; a share is never membership (`references/tenancy.md`).
+and breaks every account's inserts; a uuid id (`gen_random_uuid()`) cannot be pre-claimed and stays as is. **Sharing (610; Stats dashboards 647, same shape)** widens READS only: `collection_shares` (owner-stamped, no browser INSERT) + four `FOR SELECT` `*_shared_read` policies; writes stay owner-only; a share is never membership (`references/tenancy.md`). **Delegation (641)**: a pipeline share lets its recipient ACT AS the owner (`x-act-as` header → `acting_account_ids()`, fail-closed, read mode on GET only, every write stamped in `delegated_edits`) on the eleven curation tables (a read share: the three pipeline tables only); every other policy keeps `current_account_ids()` (`references/tenancy.md` § Delegation).
 
 `property_pipeline` gets a **composite PK swap**, `(property_id)` → `(account_id,
 property_id)`, migration 295 — the one table where the PK itself changed. **Explicitly
@@ -232,21 +233,16 @@ PostgREST); read a listing's identity on the tenant conn through `listing_natura
 and market facts through a service-role connection (as `portal_lookup` does). Don't add a
 `USING (true)` policy to `listings`.
 
-**First-signup backfill race**: the on-signup trigger (migration 294) does an atomic
-INSERT-with-`ON CONFLICT` CAS into `legacy_backfill_claim` (mirrors the lease-row CAS pattern
-above) — whoever signs up first wins and claims every pre-tenancy NULL-`account_id` row via
-`backfill_legacy_account_id`; every later signup instead gets `seed_default_pipeline` /
-`seed_default_collections`. The migration comment flags this as unsafe once public
-(non-operator) signup ships — revisit before then.
+**Signup** (`handle_new_user`, one path since migration 612): the Signup bullet in `references/tenancy.md`.
 
 **THE TENANCY DOCTRINE — four shapes, only four.** Full version, the table-by-table migration
 list and policy text, and the two test rules that would have caught the 2026-09 seven-week
 outage: `references/tenancy.md`. (1) **Reads on a tenant connection are scoped by RLS alone** —
 `current_account_ids()` is the ONE definition of who the caller is (PLURAL, because membership
-is); a read route takes no account, and an UPDATE/DELETE *by id* is this shape too and is its own
+is; on the eleven curation tables `acting_account_ids()`, equal to it without the `x-act-as` header); a read route takes no account, and an UPDATE/DELETE *by id* is this shape too and is its own
 ownership gate (rowcount 0 → 404, never a SELECT probe: that proves visibility, not ownership).
 (2) **Writes carry exactly ONE account, resolved once at the route edge** by
-`tenant_pool.require_account_id` — `400 "no account for caller"` on none, never a silent NULL nor
+`tenant_pool.require_account_id` (a curation write: its twin `require_acting_account_id`) — `400 "no account for caller"` on none, never a silent NULL nor
 a SYSTEM fallback. (3) **An explicit
 `account_id = %s` predicate appears ONLY on a service-role connection**
 (`toolkit/pipeline_identity.py`, `api/estimation_runs.py`, the Stripe webhook), where RLS is off
@@ -263,41 +259,40 @@ allowlisted with a reason) + `tests/api/test_account_scope_census.py` (no nullab
 defined once) into `browse_list` — an **UNLOGGED
 table**, blue-green rebuilt every 15 minutes by a `SECURITY DEFINER` pg_cron function
 (`rebuild_browse_list()`, `pg_try_advisory_xact_lock` guards overlapping runs, `ANALYZE`
-*before* the swap is mandatory or the planner uses stale stats on the fresh table).
-`properties_map_mv` stays a real `MATERIALIZED VIEW` (30-min cadence) fed from the same
-projection. (The publication-gate predicate is **gone** from the projection as of migration
+*before* the swap is mandatory or the planner uses stale stats on the fresh table). Since 630 it lays the table out by category, lat, lng, builds `browse_list_map_idx` (the map index is only cheap on a heap in its own order) and, once its DROP holds the lock, re-patches every property a `property_merge_events` row created or undid since the previous run (less 15 min).
+The map reads `browse_list` too: 631 dropped the 30-min `properties_map_mv` matview and its rebuild. (The publication-gate predicate is **gone** from the projection as of migration
 475 — flipped inert in August, then removed with the rest of the legacy dedup engine, rule
 #15. `properties.published_at` survives as a frozen historical column that constrains
-nothing.) This retired the old `scripts/refresh_map_mv.py` GH Actions cron entirely —
+nothing.) Moving the rebuilds to pg_cron retired the old `scripts/refresh_map_mv.py` GH Actions cron entirely —
 pg_cron runs on-the-minute where GH Actions cron was measured ~2× jittered (see
 `gh-actions-cron-throttle-fleet` if you need the numbers).
 
 **Appending a column to `browse_projection`** (migration 584's recipe; append LAST, each body verbatim from its
-latest definer): take both rebuild advisory locks (`statement_timeout` > the 1800 s cron cap); in ONE transaction
-`alter table browse_list add column` FIRST (the positional `sync_browse_list` insert and `browse_list_visible()`'s
-`l.*` must never see it narrower than the view), the view, then bridge `properties_map_visible()` with
-`null::<type> as <col>` ONLY while the matview lacks the column (EXECUTE + `-- ci-allow-dynamic:`; a static bridge
-breaks re-runs); then, `lock_timeout 0` under the held re-entrant keys, force the map rebuild + restore its source, then the list's.
+latest definer): take the list rebuild's advisory lock (`statement_timeout` > the 1800 s cron cap); in ONE transaction
+`alter table browse_list add column` FIRST (the positional `sync_browse_list` insert and `browse_list_visible(...)`'s
+`l.*` must never see it narrower than the view), then the view; then, `lock_timeout 0` under the held re-entrant key, force the list's rebuild.
 **Removing a column** (590's recipe): in ONE transaction alter `browse_list` FIRST (`sync_browse_list` locks it before the view), rename the
-view aside (the matview + its source follow by OID), create the new one, re-create both row-type sources (the map's as a static bridge); then
-the rebuild at top level (a body inside a DO block is apply-time DDL to the receipt parser); force the list, then map + legacy drop.
+view aside (its row-type source follows by OID), create the new one, re-create `browse_list_visible(...)`; then
+the rebuild at top level (a body inside a DO block is apply-time DDL to the receipt parser); force the list, then the legacy drop.
 
-**A property row is its canonical advert's** (migrations 561, 588): `properties.repr_listing_ref_id`
-= rank 1 of `property_canonical_listings(property_id)` (active, map point, earliest first seen among
-active / latest last seen among inactive, trust, id), written by the one rollup; every read model
-joins place/floor/description/broker through it, and `properties_public.listing_id` is it
-(`repr_since`: when it last changed; alerts count only its later price steps; the rollup clears
-`city_proximity_computed_at` with it). The rollup also writes `all_sources` / `active_sources` (sorted
-portal lists) and the nine `newest_ad_at_<portal>` dates (MS19), projected since 590 together with `source_count` (one partial index per portal on `browse_list`).
+**A property row is its canonical advert's, its place its location advert's** (migrations 561, 588, 635, 636):
+`properties.repr_listing_ref_id` = rank 1 of `property_canonical_listings(property_id)` (active, map point, earliest
+first seen among active / latest last seen among inactive, trust, id), written by the one rollup; every read model
+joins floor/description/broker through it, and `properties_public.listing_id` is it (`repr_since`: when it last
+changed; alerts count only its later price steps). `location_listing_ref_id` = rank 1 of its `location_rank` (point,
+then foreign, then the finest rung whatever the status, then the canonical order), set in the same statements, NULL
+with it (636's CHECK); every property surface joins `listing_location` on it, and the rollup clears
+`city_proximity_computed_at` when IT changes. The rollup also writes `all_sources` / `active_sources` (sorted portal
+lists) and the nine `newest_ad_at_<portal>` dates (MS19), projected since 590 together with `source_count` (one partial index per portal on `browse_list`).
 
-**Re-signing `browse_stats_properties` / `browse_map_cells`** (one SPA builder, named arguments): a new DEFAULTED parameter may be applied before the SPA ships; REMOVING one the deployed SPA still sends is PGRST202 (Stats + map cells dead) until the next deploy, so the SPA stops sending it, deploys, THEN the migration drops it (597's order). DROP the exact signature + CREATE + restate the ACL in ONE transaction, md5-gated on the live body.
+**Re-signing `browse_stats_properties` / `browse_map_cells`** (one SPA builder, named arguments): a new DEFAULTED parameter may be applied before the SPA ships; REMOVING one the deployed SPA still sends is PGRST202 (Stats + map cells dead) until the next deploy, so the SPA stops sending it, deploys, THEN the migration drops it (597's order). DROP the exact signature + CREATE + restate the ACL in ONE transaction, md5-gated on the live body (pg_proc.prosrc: the whole dollar-quoted string, its first and last newline included). Stats = 625's 74 cohort parameters + `spec` (626, the dashboard pivot) + 629's nine curated-set scope parameters (both functions; `spec` and the map's `point_budget` shape the answer, never the cohort). Gate a re-sign on a plan probe first: `docs/agents/db-plan-probe.md` (no DDL; PostgREST's call shape; RLS as the caller).
 
-**Three functions depend on `browse_projection`'s row type** (migration 537:
-`browse_list_visible()`, `properties_map_visible()`, and `listing_feed_visible()` on
-`listing_feed_public`'s) — the SPA's default Browse sources, minus the caller's dismissed
-properties. A non-CASCADE `drop view browse_projection` now fails; drop and recreate them in
-the same migration. Keep them `language sql stable`, invoker, no `SET`: that is what lets the
-planner inline them, so PostgREST's filters/ORDER BY/LIMIT still reach `browse_list`'s index.
+**One function depends on `browse_projection`'s row type** (537; since 629 ten defaulted parameters: `hide_dismissed`
++ the nine `<set>_set/_in/_out`): `browse_list_visible(...)` — the SPA's ONE Browse source since 630 (list, count and
+map pins), judging dismissals + curated membership under the caller's RLS (a zero-arg call = 537's answer); its map
+twin `properties_map_visible(...)` went with the matview in 631. A non-CASCADE `drop view browse_projection` now fails; drop and recreate it in the
+same migration. Keep it `language sql stable`, invoker, no `SET`: that is what lets the planner
+inline it, so PostgREST's filters/ORDER BY/LIMIT still reach `browse_list`'s index.
 
 **A single-value filter must reach `browse_list` as `=`, never as `= ANY`.** The serving
 index is `(category_main, category_type, first_seen_at DESC, property_id DESC)` and Browse's
@@ -324,21 +319,21 @@ Filter this view by `listing_id`, always. Its sreality-keyed sibling
 (`fetchImagesByListingIds` in `frontend/src/lib/queries.ts`) exists for the frozen-comparable
 id space and is NOT interchangeable — worth knowing before W7a collapses the image loaders.
 
-**Never hand-retype `rebuild_browse_list()`/`rebuild_properties_map_mv()`.** Both blue-green
-DROP+CREATE their object every tick, including the `GRANT SELECT ... TO authenticated` (never
-`anon` — migration 299 deliberately narrowed this) and, for `browse_list`, the district/price
+**Never hand-retype `rebuild_browse_list()`.** It blue-green
+DROP+CREATEs `browse_list` every tick, including the `GRANT SELECT ... TO authenticated` (never
+`anon` — migration 299 deliberately narrowed this) and the district/price
 covering indexes (migration 283's 9-column form, not migration 277's original 3-column form).
 Migration 371 copied from an outdated body and silently reintroduced BOTH the anon grant and
 the narrow indexes while its own commit message claimed no behavior change — live-anon-readable
 for an unknown period, fixed in migration 376. Always `CREATE OR REPLACE` from the CURRENT
 function body (`pg_get_functiondef`), never from an old migration file or a design doc's
-emergency-rollback snippet. Both functions now also self-check after granting
+emergency-rollback snippet. It also self-checks after granting
 (`if has_table_privilege('anon', ..., 'SELECT') then raise exception`) — a regression RAISEs,
 rolling back the whole tick so the last known-good object stays published instead of a
-mis-permissioned one, and the artifact's `derived_artifacts.last_succeeded_at` (surfaced on
-the Health page, migration 440) stops advancing within one cycle. `tests/test_browse_grant_drift.py`
-is the matching OFFLINE gate — it reaches inside `EXECUTE`-embedded DDL for these two relations
-specifically, unlike `test_migration_rls_grants.py`'s scanner, which treats dollar-quoted
+mis-permissioned one, and the artifact's `derived_artifacts.last_succeeded_at` (migration 440; on
+Health, the `jobs` check's `artifact/<name>` cell, Problem past its `staleness_budget`) stops advancing within one cycle. `tests/test_browse_grant_drift.py`
+is the matching OFFLINE gate — it reaches inside `EXECUTE`-embedded DDL for `browse_list` and the retired
+`properties_map_mv` specifically, unlike `test_migration_rls_grants.py`'s scanner, which treats dollar-quoted
 function bodies as opaque by design.
 
 **Every derived artifact declares its own freshness in `derived_artifacts`** (migration 437,
@@ -346,19 +341,22 @@ completed by 440) — one row per artifact carrying `producer` / `host` / `caden
 `staleness_budget`, plus `complete_through`, `last_succeeded_at`, `last_duration_ms`,
 `last_rows`. It **replaced** the singleton `browse_read_model_state`, which migration 440
 dropped along with its `_public` view, 437's temporary UNION adapter, and the SPA reader —
-all 14 artifacts (12 matviews + `browse_list` + `llm_cost_hour_rollup`) are ordinary rows now.
-Same posture as 276: RLS on with zero policies, everything revoked, published through
-`derived_artifacts_public` (enumerated columns, `authenticated` only, not `security_invoker` —
-owner rights are what read through the RLS wall). **A new derived artifact needs a registry
-row**, and `tests/test_derived_artifacts_registry.py` goes RED without one — its `_W7_BACKLOG`
-exemption set is now empty and **nothing may be added to it**. Two budgets are deliberately
-NOT their cadence and 440's header carries the measurements: the six health matviews get
-45 min (not 10 — the 30d p95 gap is 15.8 min and a 10-min budget reads red on the healthy
-case), and `broker_region_type_stats` gets 30 h (not 24 — its daily sweep itself runs up to
-2h01m, so 24 h alarms on every healthy run). `rent_map_cells`'s `host` is honestly
-`api-request`: it is refreshed inside a FastAPI request handler — don't launder it into a
-cron string. `llm_cost_rollup_state` is a watermark FOR an artifact, not an artifact, and is
-deliberately unregistered.
+every artifact is an ordinary row now. Same posture as 276: RLS on with zero policies,
+everything revoked, published through `derived_artifacts_public` (enumerated columns,
+`authenticated` only, not `security_invoker` — owner rights are what read through the RLS
+wall). **A new derived artifact needs a registry row**, and
+`tests/test_derived_artifacts_registry.py` goes RED without one — its `_W7_BACKLOG` exemption
+set is now empty and **nothing may be added to it**. Three budgets are deliberately NOT their
+cadence: the six health matviews get 45 min (not 10 — the 30d p95 gap is 15.8 min and a 10-min
+budget reads red on the healthy case) and `broker_region_type_stats` 30 h (not 24 — its daily
+sweep itself runs up to 2h01m, so 24 h alarms on every healthy run), both measured in 440's
+header; `property_sweep` (migration 622, the daily full sweep's completed cycle, stamped by
+`recompute_property_stats` in place of `app_settings.property_sweep_last_complete`) gets 38 h,
+because the `jobs` check adds GitHub's 18 h delivery slack to a `github-actions` row: Problem
+at 56 h, as ruled for the two-run cycle. `rent_map_cells`'s `host` is honestly `api-request`:
+it is refreshed inside a FastAPI request handler — don't launder it into a cron string.
+`llm_cost_rollup_state` is a watermark FOR an artifact, not an artifact, and is deliberately
+unregistered.
 There is deliberately **no `last_error` column**: a plpgsql `exception when others then
 update …; raise;` handler cannot persist its write (the re-raise unwinds the subtransaction
 it ran in — verified live), so such a column could only ever be NULL and would publish
@@ -396,7 +394,7 @@ claimed otherwise and drove the blocking design — never re-derive that claim f
 Every matview therefore needs one plain unique index (`tests/test_matview_indexes.py` pins
 this for all matviews, plus the exact broker index set — migration 508's DROP+CREATE
 silently lost 414's covering index and no test noticed). Pre-578 SQL producers
-(`refresh_health_matviews`, `refresh_location_pin_audit_mv`, the blue-green rebuilds) keep
+(`refresh_health_matviews`, `refresh_location_pin_audit_mv`, the blue-green `rebuild_browse_list()`) keep
 their pinned inline shapes; new SQL producers call the chokepoint.
 
 **A `SECURITY DEFINER` gate in a view's WHERE is per-row ONLY when it is combined with a
@@ -458,8 +456,9 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   wants one, is computed in the filter layer, never at ingest.
 - **A listing has ONE location and it lives in `listing_location`** (27 cols, migrations 501/566).
   `listings` and `properties` carry NO place column at all: read a listing's place by joining
-  `listing_location ll on ll.listing_id = l.id` (from `properties p`, on `p.repr_listing_ref_id`
-  — a property's place is its representative listing's). The codes are `ll.obec_kod` /
+  `listing_location ll on ll.listing_id = l.id` (from `properties p`, on `p.location_listing_ref_id`, never the
+  canonical advert, since 636; a cohort goes spatial-first: `ll` → `properties lp on lp.location_listing_ref_id =
+  ll.listing_id and lp.status = 'active'` → `listings l on l.id = lp.repr_listing_ref_id`). The codes are `ll.obec_kod` /
   `okres_kod` / `kraj_kod` / `cast_obce_kod` / `ulice_kod` (RÚIAN, = `admin_boundaries.id` for obec), the
   labels `ll.obec_name` / `okres_name` / `street_name`. One trap: `ll.geom` IS
   `geometry(Point,4326)`, so a metre-based `ST_DWithin`/`ST_Distance` must cast

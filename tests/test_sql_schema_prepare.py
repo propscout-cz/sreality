@@ -78,11 +78,12 @@ _ALLOWLIST: list[tuple[str, str, str]] = [
         "job_id bigint, ..., active boolean)",
     ),
     (
-        "verify_pipeline.py",
-        "cron.job_run_details",
-        "pg_cron's run-history lives in the extension-managed `cron` schema, not "
-        "in migrations, so the replayed schema can't see it; check_db_saturation "
-        "reads it defensively and warns if unreadable",
+        "scripts/checks/platform.py",
+        "cron.",
+        "pg_cron's cron.job and cron.job_run_details live in the extension-managed "
+        "`cron` schema, not in migrations, so the replayed schema can't see them; "
+        "the jobs and capacity checks read them (verified read-only against "
+        "production) and read Not measured when they cannot",
     ),
 ]
 

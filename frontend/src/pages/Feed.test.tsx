@@ -1,16 +1,18 @@
 /* Nové (#1766): the roll is Browse's read — `fetchListingsForCards` with the
  * scope's filters and Browse's newest-first sort — cut into Prague days under
  * "Dnes HH:MM" / "Včera" / dated rules; a preset chip swaps the cohort, a
- * portal chip narrows it, and "Skryté" switches to the hidden properties. */
+ * portal chip narrows it, "Skryté" switches to the hidden properties, and the
+ * Filtry sheet edits the view, which lives in the URL as Browse's does. */
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { usePhoneHeaderAside } from '@/components/phone/PhoneShell';
 import * as api from '@/lib/api';
 import { DEFAULT_FILTERS, type ListingFilters } from '@/lib/filters';
-import { FEED_ALL_FILTERS, FEED_SCOPE_KEY } from '@/lib/feed';
+import { FEED_ALL_FILTERS, FEED_QUERY_KEY, FEED_SCOPE_KEY, feedSearch } from '@/lib/feed';
 import * as queries from '@/lib/queries';
 import type { CardRow, DismissedCardRow, PipelineMembers } from '@/lib/queries';
 import type { FilterPreset } from '@/lib/types';
@@ -21,10 +23,19 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   listFilterPresets: vi.fn(),
 }));
+vi.mock('@/components/phone/PhoneShell', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/components/phone/PhoneShell')>()),
+  usePhoneHeaderAside: vi.fn(),
+}));
+vi.mock('@/lib/pgRead', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pgRead')>()),
+  pgRead: vi.fn(() => new Promise<never>(() => {})),
+}));
 vi.mock('@/lib/queries', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/queries')>();
   return {
     ...actual,
+    fetchBrowseCount: vi.fn(),
     fetchListingsForCards: vi.fn(),
     fetchDismissedCards: vi.fn(),
     fetchDismissedCount: vi.fn(),
@@ -39,6 +50,8 @@ vi.mock('@/lib/queries', async (importOriginal) => {
 const row = (id: number, first_seen_at: string, extra: Partial<CardRow> = {}): CardRow => ({
   property_id: id,
   listing_id: id * 10,
+  lat: 50.08,
+  lng: 14.43,
   sreality_id: null,
   display_label: `Místo ${id}`,
   disposition: '2+kk',
@@ -56,6 +69,7 @@ const row = (id: number, first_seen_at: string, extra: Partial<CardRow> = {}): C
   source: 'sreality',
   source_id_native: String(id),
   mf_gross_yield_pct: null,
+  plot_area_m2: null,
   total_price_change_pct: null,
   price_change_count: 0,
   all_sources: ['sreality'],
@@ -96,6 +110,7 @@ beforeEach(() => {
     nextCursor: null,
   });
   vi.mocked(queries.fetchDismissedCount).mockResolvedValue(6);
+  vi.mocked(queries.fetchBrowseCount).mockResolvedValue(1234);
   vi.mocked(queries.fetchPipelineMembers).mockResolvedValue(new Map() as PipelineMembers);
   vi.mocked(queries.fetchPipelineStages).mockResolvedValue([]);
   vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map());
@@ -108,11 +123,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function renderFeed() {
+function renderFeed(path = '/feed') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={['/feed']}>
+      <MemoryRouter initialEntries={[path]}>
         <Feed />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -122,6 +137,19 @@ function renderFeed() {
 const lastFilters = (): ListingFilters => {
   const calls = vi.mocked(queries.fetchListingsForCards).mock.calls;
   return calls[calls.length - 1][0];
+};
+
+const lastAside = (): string | null => {
+  const calls = vi.mocked(usePhoneHeaderAside).mock.calls;
+  return calls[calls.length - 1][0];
+};
+
+/* The preset's own filters as the feed reads them, two steps further. */
+const PRESET_FILTERS: ListingFilters = { ...DEFAULT_FILTERS, categoryType: 'prodej', dispositions: ['2+kk'] };
+const feedPath = (filters: ListingFilters, extra: Record<string, string> = {}, presetId: string | null = 'vys') => {
+  const sp = feedSearch({ filters, sort: queries.DEFAULT_SORT, presetId });
+  for (const [k, v] of Object.entries(extra)) sp.set(k, v);
+  return `/feed?${sp.toString()}`;
 };
 
 describe('<Feed>', () => {
@@ -201,6 +229,69 @@ describe('<Feed>', () => {
     vi.mocked(queries.fetchListingsForCards).mockResolvedValue({ rows: [], nextCursor: null });
     renderFeed();
     expect(await screen.findByText('V tomhle výběru nic není.')).toBeInTheDocument();
+  });
+
+  it("opens a Browse link's scope, marking the preset it has left and counting what it added", async () => {
+    renderFeed(feedPath({ ...PRESET_FILTERS, priceMax: 6_000_000, hasLift: 'yes' }));
+    await waitFor(() => expect(lastFilters().priceMax).toBe(6_000_000));
+    expect(lastFilters().dispositions).toEqual(['2+kk']);
+    const chip = await screen.findByRole('button', { name: 'Vysočany byty (upraveno)' });
+    expect(chip).toHaveAttribute('aria-pressed', 'true');
+    expect(chip.textContent).toBe('Vysočany byty· (upraveno)');
+    expect(screen.getByRole('button', { name: 'Filtry (2 navíc)' })).toBeInTheDocument();
+    /* Past the preset, the header counts the scope rather than today. */
+    await waitFor(() => expect(lastAside()).toBe('1\u00a0234 nemovitostí'));
+    expect(localStorage.getItem(FEED_QUERY_KEY)).toContain('price=');
+  });
+
+  it('keeps the preset unmarked under a lens that rides outside it (rule 22)', async () => {
+    renderFeed(feedPath({ ...PRESET_FILTERS, pipeline: { set: 'in', in: [], out: [] } }));
+    expect(await screen.findByRole('button', { name: 'Vysočany byty' })).toHaveAttribute('aria-pressed', 'true');
+    /* …but it is still a filter beyond the scope. */
+    expect(screen.getByRole('button', { name: 'Filtry (1 navíc)' })).toBeInTheDocument();
+  });
+
+  it('reads an unmodified scope with no marks and remembers only the scope', async () => {
+    renderFeed(feedPath(PRESET_FILTERS));
+    await screen.findByText('Místo 1', { exact: false });
+    expect(screen.getByRole('button', { name: 'Vysočany byty' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Filtry' })).toBeInTheDocument();
+    await waitFor(() => expect(localStorage.getItem(FEED_SCOPE_KEY)).toBe('vys'));
+    expect(localStorage.getItem(FEED_QUERY_KEY)).toBeNull();
+  });
+
+  it('reopens a modified view remembered on this device from a bare /feed', async () => {
+    localStorage.setItem(FEED_QUERY_KEY, 'cat=&deal=any&status=active&disposition=3%2Bkk');
+    renderFeed();
+    await waitFor(() => expect(lastFilters().dispositions).toEqual(['3+kk']));
+    expect(lastFilters().categoryType).toBeNull();
+  });
+
+  it('draws another order as one roll under its name, with the total in the header', async () => {
+    renderFeed(feedPath(FEED_ALL_FILTERS, { sort: 'price_czk' }, null));
+    await screen.findByText('Místo 1', { exact: false });
+    const calls = vi.mocked(queries.fetchListingsForCards).mock.calls;
+    expect(calls[calls.length - 1][1]).toEqual({ field: 'price_czk', direction: 'asc' });
+    expect(screen.getByText('Price: low → high · 14:32')).toBeInTheDocument();
+    expect(screen.queryByText('Včera')).toBeNull();
+    await waitFor(() => expect(lastAside()).toBe('1\u00a0234 nemovitostí'));
+  });
+
+  it('opens the Filtry sheet and applies its draft to the roll', async () => {
+    const user = userEvent.setup();
+    renderFeed();
+    await screen.findByText('Místo 1', { exact: false });
+    await user.click(screen.getByRole('button', { name: 'Filtry' }));
+    /* The sheet is a chunk of its own: a loading sheet holds its place first. */
+    expect(await screen.findByRole('dialog', { name: 'Filtry' })).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: /^Disposition/ }, { timeout: 5000 }));
+    const sheet = screen.getByRole('dialog', { name: 'Filtry' });
+    await user.click(within(sheet).getByRole('button', { name: '3+kk' }));
+    await user.click(await within(sheet).findByRole('button', { name: 'Zobrazit 1\u00a0234 nemovitostí' }));
+    await waitFor(() => expect(lastFilters().dispositions).toEqual(['3+kk']));
+    expect(screen.queryByRole('dialog', { name: 'Filtry' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Vše (upraveno)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Filtry (1 navíc)' })).toBeInTheDocument();
   });
 
   it('offers a retry when the read fails', async () => {

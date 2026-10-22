@@ -116,6 +116,38 @@ def test_load_migrations_window_takes_the_newest():
     assert [m.number for m in newest] == [m.number for m in every[-5:]]
 
 
+def _declared(root: Path) -> list[list[str]]:
+    return [[str(o) for o in m.objects] for m in load_migrations(root, newest=0)]
+
+
+def test_a_later_drop_retires_the_earlier_declaration(tmp_path):
+    """W6 (migration 618) drops a view 567, 584 and 617 declared: its absence is 618's doing,
+    not a sign those files were never applied, so they stop declaring it. A drop in prose or
+    inside a function body is not a drop."""
+    (tmp_path / "001_a.sql").write_text(
+        "create view public.feed as select 1;\n"
+        "create or replace function public.feed_visible() returns int as $$ select 1 $$"
+        " language sql;\n"
+        "alter table listings add column if not exists seq bigint;\n"
+        "create table kept (id int);\n")
+    (tmp_path / "002_b.sql").write_text(
+        "-- drop table kept is prose\n"
+        "create or replace function f() returns void as $$ begin drop table kept; end $$"
+        " language plpgsql;\n"
+        "do $x$ begin drop function if exists public.feed_visible(); end $x$;\n"
+        "drop view if exists feed;\n"
+        "alter table public.listings drop column if exists seq;\n")
+    assert _declared(tmp_path) == [["relation:kept"], ["function:f"]]
+
+
+def test_a_file_that_drops_and_recreates_keeps_declaring(tmp_path):
+    """618's pipeline views, 597's map function, 590's views: dropped and created in one file.
+    The re-created object exists after the later file, so the earlier declaration stays probed."""
+    (tmp_path / "001_a.sql").write_text("create view v as select 1;")
+    (tmp_path / "002_b.sql").write_text("drop view if exists v; create view v as select 2;")
+    assert _declared(tmp_path) == [["relation:v"], ["relation:v"]]
+
+
 def test_every_recent_migration_is_either_probeable_or_openly_unverifiable():
     """A parser that silently returns nothing for most files would render the
     whole check green while proving nothing. Hold the line: most recent
@@ -132,3 +164,14 @@ def test_every_recent_migration_is_either_probeable_or_openly_unverifiable():
     migs = load_migrations(_MIGRATIONS, newest=40)
     probeable = [m for m in migs if m.objects]
     assert len(probeable) >= 21, [m.filename for m in migs if not m.objects]
+
+
+def test_an_object_a_later_migration_drops_is_not_probed_on_the_earlier_one():
+    """613 drops 610's shared_at column and its stamp function (and recreates the policy it
+    drops): the drift check must not read 610 as half-applied once 613 is live."""
+    by_name = {m.filename: {str(o) for o in m.objects} for m in load_migrations(_MIGRATIONS, newest=0)}
+    m610 = by_name["610_collection_shares.sql"]
+    assert "column:property_notes.shared_at" not in m610
+    assert "function:stamp_property_notes_shared_at" not in m610
+    assert "column:property_notes.shared" in m610
+    assert "policy:property_notes.property_notes_shared_read" in m610

@@ -15,9 +15,10 @@ dirty drain). The drain is there since W6
 `properties` in ~2 min and then waited a measured 11.7 min on average (94 rebuilds over 24 h;
 worst 36.6) for the wholesale rebuild to carry it into Browse. It is a FAST PATH, not a
 guarantee: a rebuild snapshots `browse_projection` at its start and swaps the new table in at
-its end, so a patch committed inside that window writes a table that is about to be dropped and
-is simply superseded (283 succeeded rebuilds / 72 h, mean 237 s against a 900 s cadence = in
-flight ~26% of wall-clock).
+its end (61.9 s of every 900 s, measured 2026-10-19), so a patch committed inside that window
+writes a table that is about to be dropped. Since migration 630 the rebuild re-patches every
+property a merge, detach or split touched since its previous run before the swap; any other
+patch in the window is superseded until the next rebuild.
 """
 
 from __future__ import annotations

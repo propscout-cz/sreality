@@ -269,12 +269,11 @@ def test_gate_recognizes_the_known_pattern():
 # on a 600 s budget while its rebuild had grown 173 s -> 257 s -> 405 s with the
 # corpus; it then timed out 11 times in 6 h, `browse_list` froze at 315,827 active
 # rows for two and a half hours, and the */15 job burning 10 minutes in every 15
-# starved `browse-map-rebuild` -- whose whole schedule is two single minutes an
-# hour -- out of the scheduler entirely. Migration 522 raised both and cut the
-# projection's cost; these pins are what stop the budgets drifting back down.
+# starved the map matview's rebuild (retired with it, migration 631) out of the
+# scheduler entirely. Migration 522 raised both budgets and cut the projection's
+# cost; this pin is what stops the list's budget drifting back down.
 _READ_MODEL_BUDGETS = {
     "browse-list-rebuild": ("1800s", "rebuild_browse_list"),
-    "browse-map-rebuild": ("1500s", "rebuild_properties_map_mv"),
 }
 
 
@@ -295,9 +294,9 @@ def test_read_model_rebuild_budgets_scale_with_the_corpus(job_name: str) -> None
     assert fn in command, f"{origin}: {job_name} no longer calls {fn}()"
 
 
-def test_the_rebuilds_release_their_lock_on_a_cancel() -> None:
-    """Both rebuilds are cancelled by design whenever they outlive their budget, so
-    the lock they take has to survive that. A SESSION advisory lock does not: it was
+def test_the_rebuild_releases_its_lock_on_a_cancel() -> None:
+    """The list rebuild is cancelled by design whenever it outlives its budget, so
+    the lock it takes has to survive that. A SESSION advisory lock does not: it was
     released in an `exception when others` handler, and PL/pgSQL's OTHERS does not
     match QUERY_CANCELED -- so all 11 statement-timeout cancellations on 2026-09-14
     unwound straight past the release. Nothing broke only because pg_cron opens a
@@ -306,21 +305,21 @@ def test_the_rebuilds_release_their_lock_on_a_cancel() -> None:
     `cron.job_run_details` reported success. A TRANSACTION advisory lock is released
     by Postgres on commit, rollback AND cancel, so the handler is not needed and
     cannot be got wrong (migration 522)."""
-    for fn in ("rebuild_browse_list", "rebuild_properties_map_mv"):
-        body, origin = _latest_function_bodies_for(fn)
-        assert f"pg_try_advisory_xact_lock(hashtext('{fn}'))" in body, (
-            f"{origin}: {fn}() must take its advisory lock with "
-            f"pg_try_advisory_xact_lock -- a session lock leaks on a cancel."
-        )
-        assert "pg_advisory_unlock" not in body, (
-            f"{origin}: {fn}() still calls pg_advisory_unlock. With a transaction "
-            f"lock that is at best dead code and at worst a release of somebody "
-            f"else's key; the transaction owns the lock now."
-        )
-        assert "skipping tick" in body, (
-            f"{origin}: {fn}() lost the NOTICE on its skip path -- a tick that "
-            f"declined to run must say so in the server log."
-        )
+    fn = "rebuild_browse_list"
+    body, origin = _latest_function_bodies_for(fn)
+    assert f"pg_try_advisory_xact_lock(hashtext('{fn}'))" in body, (
+        f"{origin}: {fn}() must take its advisory lock with "
+        f"pg_try_advisory_xact_lock -- a session lock leaks on a cancel."
+    )
+    assert "pg_advisory_unlock" not in body, (
+        f"{origin}: {fn}() still calls pg_advisory_unlock. With a transaction "
+        f"lock that is at best dead code and at worst a release of somebody "
+        f"else's key; the transaction owns the lock now."
+    )
+    assert "skipping tick" in body, (
+        f"{origin}: {fn}() lost the NOTICE on its skip path -- a tick that "
+        f"declined to run must say so in the server log."
+    )
 
 
 def _latest_function_bodies_for(fn: str) -> tuple[str, str]:

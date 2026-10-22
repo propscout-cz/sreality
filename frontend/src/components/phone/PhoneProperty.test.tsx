@@ -31,7 +31,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     listCollections: vi.fn(empty),
     listTags: vi.fn(empty),
     listPropertyNotes: vi.fn(empty),
-    listManualEstimates: vi.fn(empty),
+    listEstimations: vi.fn(empty),
     /* Poloha: the location JSON and the static map's bytes. */
     apiGet: vi.fn(async (path: string) =>
       path.endsWith('/location')
@@ -59,7 +59,6 @@ vi.mock('@/lib/queries', async (importOriginal) => {
     fetchPropertyCollectionMemberSet: vi.fn(async () => new Map()),
     fetchPropertyTagIds: vi.fn(async () => []),
     fetchIsDismissed: vi.fn(async () => false),
-    fetchEstimationsForListings: vi.fn(async () => ({ data: [], total: 0 })),
     fetchSoldCoverage: vi.fn(async () => null),
     fetchSoldComparables: vi.fn(async () => []),
   };
@@ -291,7 +290,7 @@ describe('the phone property page', () => {
     expect(await screen.findByText('Vývoj ceny', {}, LOADED)).toBeInTheDocument();
     expect(await screen.findByText('Poznámky', {}, LOADED)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Stáhnout \(PDF \+ fotky\)/ })).toBeInTheDocument();
-    await waitFor(() => expect(queries.fetchEstimationsForListings).toHaveBeenCalled());
+    await waitFor(() => expect(api.listEstimations).toHaveBeenCalled());
     noMaps();
     /* The whole page with its lazy chunks: slower than one card on a loaded runner. */
   }, 15_000);
@@ -367,7 +366,7 @@ describe('the phone property page', () => {
     vi.mocked(queries.fetchAdvertProperty).mockResolvedValue(null);
     const url = 'https://reality.bazos.cz/inzerat/196123456/byt.php';
     renderAt({ pathname: '/listing/bazos/196123456', state: { pastedUrl: url } });
-    expect(await screen.findByText('Tento inzerát v databázi nemáme', {}, LOADED)).toBeInTheDocument();
+    expect(await screen.findByText('Tento inzerát v databázi nemáme.', {}, LOADED)).toBeInTheDocument();
     expect(screen.getByText('196123456')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Otevřít na portálu Bazoš/ })).toHaveAttribute('href', url);
   });

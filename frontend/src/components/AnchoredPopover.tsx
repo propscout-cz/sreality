@@ -4,10 +4,9 @@
  * (TagEditPopover, the filter dropdowns): those live inside their own container
  * and only work because that container neither clips nor stacks. The controls
  * on a Browse card do not have that luxury — the pipeline funnel and the
- * collection trigger sit inside the photo's `overflow-hidden` frame, and on the
- * Table the funnel sits inside a horizontal scroller. An absolutely-positioned
- * menu there is clipped to the photo. Portalling to <body> with
- * `position: fixed` escapes both.
+ * collection trigger sit inside the photo's `overflow-hidden` frame. An
+ * absolutely-positioned menu there is clipped to the photo. Portalling to
+ * <body> with `position: fixed` escapes it.
  *
  * Deliberately minimal, and deliberately not a dependency (rule 7): anchor rect
  * → fixed coordinates, flip up when the panel would fall off the bottom, clamp
@@ -145,7 +144,7 @@ export default function AnchoredPopover({
       anchorRef.current?.focus();
       onClose();
     };
-    /* capture: a scroll inside ANY ancestor (the Table's scroller, the page)
+    /* capture: a scroll inside ANY ancestor (the cards' scroll column, the page)
      * moves the anchor, and scroll events do not bubble. */
     document.addEventListener('pointerdown', onDocPointerDown, true);
     document.addEventListener('keydown', onKeyDown);
@@ -207,9 +206,8 @@ export default function AnchoredPopover({
       /* NO panel-wide click suppression. It used to preventDefault every click
        * in here, because React routes a portal's synthetic events up the REACT
        * tree — so a click in the panel reached the Browse card's wrapping
-       * <Link> and navigated. That wrapper is gone (ListingCards), the Table's
-       * <tr> has never had an onClick, and the listing header's pill is not
-       * inside anything clickable; the three callers are the whole population.
+       * <Link> and navigated. That wrapper is gone (ListingCards), and the
+       * listing header's pill is not inside anything clickable.
        * Keeping it would break the one link the panels legitimately contain —
        * the collection popover's "Create a collection →". */
       style={{

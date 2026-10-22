@@ -17,46 +17,20 @@
  * Visual note: enum mixes are single-hue horizontal bars — magnitude of one
  * measure, so one hue; identity color would be noise. */
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Field } from '@/components/controls';
+import ErrorBanner from '@/components/ErrorBanner';
+import Panel from '@/components/Panel';
+import Skeleton from '@/components/Skeleton';
+import Stat from '@/components/Stat';
 import {
   fetchCorpusSummary, fetchInspector, fetchInspectorByNative, fetchSourceOverview,
   submitCorrection,
   LOCATION_SOURCES,
   type CorrectionResult, type Inspector, type MixRow, type SourceOverview,
 } from '../lib/locationQuality';
-import { ApiError } from '../lib/api';
 import { fmtCount, fmtRelative } from '../lib/format';
-
-/* ---------- shared bits (Costs.tsx idiom) ---------- */
-
-function Card({ title, accessory, children }: {
-  title: string; accessory?: React.ReactNode; children: React.ReactNode;
-}) {
-  return (
-    <section className="rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)]">
-      <header className="flex items-center gap-3 border-b border-[var(--color-rule-soft)] px-4 py-2.5">
-        <h2 className="text-[0.7rem] tracking-[0.12em] uppercase text-[var(--color-ink-3)]">{title}</h2>
-        {accessory ? <div className="ml-auto">{accessory}</div> : null}
-      </header>
-      <div className="px-4 py-3">{children}</div>
-    </section>
-  );
-}
-
-function Stat({ label, value, hint, accent, danger }: {
-  label: string; value: string; hint?: string; accent?: boolean; danger?: boolean;
-}) {
-  const tone = danger ? 'text-[var(--color-brick)]' : accent ? 'text-[var(--color-copper)]' : '';
-  return (
-    <div className="rounded-[var(--radius-sm)] border border-[var(--color-rule-soft)] bg-[var(--color-paper-2)] px-3 py-2">
-      <div className="text-[0.65rem] tracking-[0.1em] uppercase text-[var(--color-ink-3)]">{label}</div>
-      <div className={`font-mono tabular-nums text-xl ${tone}`}>{value}</div>
-      {hint ? <div className="text-[0.68rem] text-[var(--color-ink-4)]">{hint}</div> : null}
-    </div>
-  );
-}
 
 function BarList({ rows, total }: { rows: MixRow[]; total: number }) {
   if (rows.length === 0) {
@@ -87,19 +61,6 @@ function BarList({ rows, total }: { rows: MixRow[]; total: number }) {
   );
 }
 
-function errText(e: unknown): string {
-  if (e instanceof ApiError) return e.message;
-  return e instanceof Error ? e.message : String(e);
-}
-
-function ErrorBanner({ error }: { error: unknown }) {
-  return (
-    <div className="rounded-[var(--radius-sm)] border border-[var(--color-brick)] bg-[var(--color-brick-soft)] px-3 py-2 text-sm text-[var(--color-brick)]">
-      {errText(error)}
-    </div>
-  );
-}
-
 /* ---------- source overview panels ---------- */
 
 function OverviewPanels({ ov }: { ov: SourceOverview }) {
@@ -109,24 +70,24 @@ function OverviewPanels({ ov }: { ov: SourceOverview }) {
     <>
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
         <Stat label="Active rows" value={fmtCount(t.active_rows)} />
-        <Stat label="With a town" value={pct(t.with_obec_kod)} hint={`${fmtCount(t.with_obec_kod)} rows`} accent />
+        <Stat label="With a town" value={pct(t.with_obec_kod)} hint={`${fmtCount(t.with_obec_kod)} rows`} />
         <Stat label="≥ building" value={pct(t.building_or_better)} hint={`${fmtCount(t.building_or_better)} rows`} />
         <Stat label="≥ street" value={pct(t.street_or_better)} hint={`${fmtCount(t.street_or_better)} rows`} />
         <Stat label="kód ADM" value={pct(t.with_adm_kod)} hint={`${fmtCount(t.with_ulice_kod)} with a street code`} />
-        <Stat label="Disputed" value={fmtCount(t.disputed)} danger={t.disputed > 0} />
+        <Stat label="Disputed" value={fmtCount(t.disputed)} status={t.disputed ? 'fail' : undefined} />
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <Card title="Granularity × count (listing grain)">
+        <Panel title="Granularity × count (listing grain)">
           <BarList rows={ov.mixes.granularity ?? []} total={t.active_rows} />
-        </Card>
-        <Card title="Match confidence">
+        </Panel>
+        <Panel title="Match confidence">
           <BarList rows={ov.mixes.match_confidence ?? []} total={t.active_rows} />
-        </Card>
+        </Panel>
       </div>
 
       <div className="mt-4">
-        <Card
+        <Panel
           title="Registry version"
           accessory={ov.current_registry ? (
             <span className="text-[0.7rem] text-[var(--color-ink-3)]">
@@ -139,14 +100,14 @@ function OverviewPanels({ ov }: { ov: SourceOverview }) {
               label="On an older registry"
               value={pct(t.stale_registry)}
               hint={`${fmtCount(t.stale_registry)} rows`}
-              danger={t.active_rows > 0 && t.stale_registry > t.active_rows / 2}
+              status={t.active_rows > 0 && t.stale_registry > t.active_rows / 2 ? 'fail' : undefined}
             />
           </div>
           <p className="mt-2 text-[0.7rem] text-[var(--color-ink-4)]">
             Rows on an older registry version re-resolve on the next drain after a registry load —
             a growing stale share means the drain is behind, not that data got worse.
           </p>
-        </Card>
+        </Panel>
       </div>
     </>
   );
@@ -172,7 +133,7 @@ function InspectorSection({ source }: { source: string }) {
   });
   const ins = inspector.data?.data ?? null;
   return (
-    <Card title="Listing inspector (read-your-writes)">
+    <Panel title="Listing inspector (read-your-writes)">
       <form
         className="flex items-end gap-2 max-w-md"
         onSubmit={(e) => { e.preventDefault(); setSubmitted(query); }}
@@ -195,9 +156,9 @@ function InspectorSection({ source }: { source: string }) {
           Inspect
         </button>
       </form>
-      {inspector.error ? <div className="mt-3"><ErrorBanner error={inspector.error} /></div> : null}
+      {inspector.error ? <ErrorBanner message={inspector.error.message} /> : null}
       {ins ? <InspectorBody ins={ins} onCorrected={() => inspector.refetch()} /> : null}
-    </Card>
+    </Panel>
   );
 }
 
@@ -317,7 +278,7 @@ function CorrectionForm({ listingId, onDone }: { listingId: number; onDone: () =
           {mut.isPending ? 'Applying…' : 'Correct'}
         </button>
       </form>
-      {mut.error ? <div className="mt-2"><ErrorBanner error={mut.error} /></div> : null}
+      {mut.error ? <ErrorBanner message={mut.error.message} /> : null}
       {result ? (
         <div className="mt-2 text-[0.75rem] text-[var(--color-ink-2)]">
           {result.restatement ? 'Restated an existing claim' : 'Claim appended'} ·{' '}
@@ -355,20 +316,6 @@ export default function LocationQuality() {
   const refreshedAt = overview.dataUpdatedAt
     ? fmtRelative(new Date(overview.dataUpdatedAt).toISOString())
     : null;
-  const select = useMemo(
-    () => (
-      <Field label="Source" as="control">
-        <select
-          className="rounded-[var(--radius-xs)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-2 py-1.5 text-sm"
-          value={source}
-          onChange={(e) => setSource(e.target.value)}
-        >
-          {LOCATION_SOURCES.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
-      </Field>
-    ),
-    [source],
-  );
 
   return (
     <div className="px-6 pt-5 pb-8 max-w-screen-2xl mx-auto">
@@ -380,27 +327,33 @@ export default function LocationQuality() {
             {refreshedAt ? <> · refreshed {refreshedAt}</> : null}
           </p>
         </div>
-        {select}
+        <Field label="Source" as="control">
+          <select
+            className="rounded-[var(--radius-xs)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-2 py-1.5 text-sm"
+            value={source}
+            onChange={(e) => setSource(e.target.value)}
+          >
+            {LOCATION_SOURCES.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </Field>
       </header>
 
       <div className="mt-4 space-y-4">
 
-        {overview.error ? <ErrorBanner error={overview.error} /> : null}
+        {overview.error ? <ErrorBanner message={overview.error.message} /> : null}
         {overview.isLoading && !ov ? (
-          <div className="animate-pulse space-y-4">
+          <div className="space-y-4">
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="h-16 rounded-[var(--radius-sm)] border border-[var(--color-rule-soft)] bg-[var(--color-paper-2)]" />
-              ))}
+              {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} height={64} />)}
             </div>
-            <div className="h-[280px] rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)]" />
+            <Skeleton height={280} />
           </div>
         ) : ov ? <OverviewPanels ov={ov} /> : null}
 
         <InspectorSection source={source} />
 
-        <Card title="All sources (active listings, listing grain)">
-          {summary.error ? <ErrorBanner error={summary.error} /> : (
+        <Panel title="All sources (active listings, listing grain)">
+          {summary.error ? <ErrorBanner message={summary.error.message} /> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm max-w-3xl">
                 <thead>
@@ -442,7 +395,7 @@ export default function LocationQuality() {
               </table>
             </div>
           )}
-        </Card>
+        </Panel>
       </div>
     </div>
   );

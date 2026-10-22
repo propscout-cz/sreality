@@ -5,19 +5,19 @@ Three invariant families, all deterministic and offline (no database):
 1. NO GATE — the publication gate is GONE (migration 475, NEW DEDUP Wave 0:
    its only stamper was the removed dedup engine). The EFFECTIVE
    (latest-migration) definitions of `properties_public` (live view: detail
-   pages, watchdog matcher), `browse_projection` (migration 276: the ONE
-   projection both Browse read models materialize from) and
-   `listing_feed_public` must not call `publication_gate_enabled()` at all.
+   pages, watchdog matcher) and `browse_projection` (migration 276: the ONE
+   projection the Browse read model, `browse_list`, materializes from) must not call
+   `publication_gate_enabled()` at all.
 
    Why this is still worth a test rather than a deletion: the function was
    SECURITY DEFINER and the planner cannot inline it, so a bare call in a WHERE
    ran ONCE PER ROW — ~87k times for the byt+pronájem cohort, the PR-#707
    incident. It survived as a scalar subquery `(SELECT publication_gate_enabled())`
    only because that made it an InitPlan. Anything re-introducing a per-row
-   SECURITY DEFINER call into these three definitions repeats that outage, so
+   SECURITY DEFINER call into these definitions repeats that outage, so
    the guard now watches for the whole class returning, not for its wrapping.
 
-2. REBUILD INVARIANTS — the pg_cron rebuild functions (migration 277) must
+2. REBUILD INVARIANTS — the pg_cron rebuild function (migration 277) must
    ANALYZE the replacement relation BEFORE swapping it live (autovacuum never
    analyzes a fresh relation in time; every Browse read's plan comes from
    pg_statistic — no stats = seq scans and bad plans), and must pg_notify PostgREST
@@ -43,6 +43,7 @@ from toolkit.filter_registry import REGISTRY, Agenda
 REPO = Path(__file__).resolve().parents[1]
 MIGRATIONS = REPO / "migrations"
 QUERIES_TS = REPO / "frontend" / "src" / "lib" / "queries.ts"
+BROWSE_SORT_TS = REPO / "frontend" / "src" / "lib" / "browseSort.ts"
 GATE_CALL = re.compile(r"publication_gate_enabled\s*\(\s*\)", re.IGNORECASE)
 # Strip line comments so a comment that merely *describes* the bad pattern
 # ("...a BARE call: publication_gate_enabled()...") isn't flagged. `--` covers
@@ -135,9 +136,7 @@ def _view_block(view: str) -> tuple[str, str]:
     return "\n".join(out), f"{src.name}:{view}"
 
 
-@pytest.mark.parametrize(
-    "view", ["properties_public", "browse_projection", "listing_feed_public"]
-)
+@pytest.mark.parametrize("view", ["properties_public", "browse_projection"])
 def test_read_path_view_has_no_publication_gate(view: str) -> None:
     sql, label = _view_block(view)
     _assert_no_gate(sql, label)
@@ -195,14 +194,6 @@ def test_list_rebuild_analyzes_before_swap_and_notifies() -> None:
     )
 
 
-def test_map_rebuild_analyzes_before_swap_and_notifies() -> None:
-    _rebuild_invariants(
-        "rebuild_properties_map_mv",
-        "properties_map_mv_next",
-        "alter materialized view properties_map_mv_next rename",
-    )
-
-
 # ------------------------------------------------------- resolved-but-empty --
 
 @pytest.mark.parametrize("fn", ["browse_stats_properties", "browse_map_cells"])
@@ -214,7 +205,7 @@ def test_a_resolved_but_empty_allowlist_yields_zero_rows(fn: str) -> None:
         assert f"{param} is null or" in sql, f"{label}: {param} lost its null guard"
         assert f"array_length({param}" not in sql, (
             f"{label}: {param} now treats '{{}}' as no constraint. The callers pass a "
-            f"resolved-empty allowlist straight through as [] (fetchBrowseStats does not "
+            f"resolved-empty allowlist straight through as [] (the Stats fetcher does not "
             f"short-circuit), so this widens the cohort to the whole market."
         )
 
@@ -222,15 +213,15 @@ def test_a_resolved_but_empty_allowlist_yields_zero_rows(fn: str) -> None:
 # ------------------------------------------------------- the consumer rule --
 
 
-@pytest.mark.parametrize("view", ["browse_projection", "listing_feed_public"])
+@pytest.mark.parametrize("view", ["browse_projection"])
 def test_the_effective_list_definition_carries_the_consumer_rule(view: str) -> None:
     """W5, operator ruling 2026-09-13: a listing reaches a consumer only once
     `listing_location` has an answer for it. `browse_projection` is where Browse, Stats
-    and the map all get it from — `browse_list` and `properties_map_mv` are both
-    `select * from browse_projection` — so this is the one definition that has to carry
-    it, and the EFFECTIVE (highest-numbered) migration is the only one worth asking.
+    and the map all get it from — `browse_list` is `select * from browse_projection` — so
+    this is the one definition that has to carry it, and the EFFECTIVE (highest-numbered)
+    migration is the only one worth asking.
 
-    RED by: a later migration re-creating either view from an older body and dropping
+    RED by: a later migration re-creating the view from an older body and dropping
     the clause on the way — exactly the failure mode `_latest_migration_defining` exists
     for. The character-level pin against the Python constant is
     tests/test_location_w5_serve_resolved.py.
@@ -243,7 +234,7 @@ def test_the_effective_list_definition_carries_the_consumer_rule(view: str) -> N
     straight off `ll`. They select the identical rows (probed on production: 40,000
     properties, 0 disagreements). The EXISTS form costs a second full pass over an
     821k-row table, which is why `browse_projection` — rebuilt whole every 15 minutes —
-    uses the join form and the feed still uses the subquery.
+    uses the join form.
 
     What this rail actually guarantees, in BOTH spellings: the rule is still there, it
     still reads `listing_location`, and it still carries BOTH arms of the answer (a
@@ -316,9 +307,9 @@ def _ts_string_const(name: str) -> str:
 
 
 def _sortable_fields() -> set[str]:
-    src = QUERIES_TS.read_text()
+    src = BROWSE_SORT_TS.read_text()
     m = re.search(r"const SORTABLE_FIELDS[^;]+;", src)
-    assert m, "queries.ts: SORTABLE_FIELDS not found"
+    assert m, "browseSort.ts: SORTABLE_FIELDS not found"
     return set(re.findall(r"'(\w+)'", m.group(0)))
 
 
@@ -360,12 +351,10 @@ def test_frontend_read_contract_subset_of_projection() -> None:
         if d.pg_column and Agenda.BROWSE in d.agendas
     }
     card_cols = set(_ts_string_const("CARD_COLS").split(","))
-    table_cols = set(_ts_string_const("TABLE_COLS").split(","))
     map_cols = set(_ts_string_const("MAP_COLS").split(","))
     contract = (
         registry_cols
         | card_cols
-        | table_cols
         | map_cols
         | _sortable_fields()
         | HAND_CODED_FILTER_COLUMNS

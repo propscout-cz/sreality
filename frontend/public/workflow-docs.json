@@ -5,7 +5,6 @@
       "filename": "aggregate_condition_markers.yml",
       "name": "Dev: aggregate condition markers (one-off Phase A bootstrap)",
       "description": "Runs scripts/aggregate_condition_markers.py against the live `listing_marker_extractions` rows to produce data/condition_markers_v1.json, then commits the JSON back to the running branch so the operator can review it in the PR diff.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -51,7 +50,6 @@
       "filename": "apply_listings_pk_swap.yml",
       "name": "R2 GATE 1 — listings PK swap",
       "description": "The destructive step of the listing-identity refactor: swaps listings' PRIMARY KEY from sreality_id to the surrogate id (runbook § 6). Catalog-only — no table scan, no data rewrite — and reversible in place while zero NULL sreality_id rows exist (see scripts/apply_listings_pk_swap.py).",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -95,7 +93,6 @@
       "filename": "apply_migration.yml",
       "name": "Ops: apply one migration file",
       "description": "Applies ONE numbered migration file from `migrations/` to the database with `psql -f` — the same statement-autocommit semantics as the CI schema replay (`migrations.yml`), so a file the replay accepted applies identically here. This is the no-MCP path for the database skill's apply-before-merge rule: dispatch it with `--ref <branch>` while the PR is still open, so a merged file is never unapplied (the migration-438 class of outage).",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -142,7 +139,6 @@
       "filename": "apply_r2_constraints.yml",
       "name": "Apply R2 constraints (indexes + FKs)",
       "description": "Phase B of the listing-identity refactor (docs/design/listing-identity-r2-pk-swap-runbook.md § 3). Indexes each surrogate column the backfill filled, then mirrors the legacy FK onto it (NOT VALID -> VALIDATE) wherever the legacy column had one.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -184,7 +180,6 @@
       "filename": "apply_r2_phase_d_prep.yml",
       "name": "Apply R2 Phase D prep (NOT NULL relax, small PK swaps, listings indexes)",
       "description": "Phase D of the listing-identity refactor (docs/design/listing-identity-r2-pk-swap-runbook.md § 5, steps 2-5). Drops NOT NULL on every R2_CARRIERS legacy column still enforcing it, swaps estimation_cohort_entries's PK onto (estimation_run_id, listing_id), and pre-builds the two indexes + id NOT NULL that Gate 1's PK swap on `listings` itself will need. All additive/reversible — no writer-deploy dependency (see scripts/apply_r2_phase_d_prep.py's docstring for why dirty_broker_listings is NOT included here).",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -218,7 +213,6 @@
       "filename": "apply_r2_unique_guards.yml",
       "name": "Apply R2 unique guards (indexes + NOT NULL checks)",
       "description": "Phase B2 of the listing-identity refactor (docs/design/listing-identity-r2-pk-swap-runbook.md § 3, items 4-5). Builds new unique indexes on the surrogate listing_id column(s) alongside the still-live legacy sreality_id-keyed ones, then adds a validated CHECK (listing_id IS NOT NULL) wherever the legacy column is itself NOT NULL.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -260,7 +254,6 @@
       "filename": "autodedup.yml",
       "name": "AUTODEDUP: engine lane",
       "description": "The lane for the autonomous dedup engine programme — one dispatch-only entry point (`python -m autodedup.lane`) whose `mode` input selects what it does. Isolated from the dedup_sim simulation lane: new package, new workflow, nothing shared. `mode` is validated in Python rather than as a YAML choice list, so adding a mode needs no workflow edit.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -307,7 +300,6 @@
       "filename": "backfill_child_listing_ids.yml",
       "name": "Backfill child listing_id (R2)",
       "description": "One-off, dispatch-only backfill for the R2 leg of the listing-identity refactor (docs/design/listing-identity-r2-pk-swap-runbook.md § 2 A4). Fills the surrogate listings.id onto the 22 carrier tables migrations 320-325 added columns to, for rows written BEFORE dual-write shipped. No re-fetch, no LLM, no snapshots.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -377,7 +369,6 @@
       "filename": "backfill_idnes_brokers.yml",
       "name": "Data: backfill idnes broker blocks",
       "description": "One-shot backfill: reparse the staged idnes detail HTML (portal_raw_pages) into listings.raw_json.broker via scraper.broker_idnes.parse_idnes_broker. raw_json.broker is OUT of the content hash (_HASH_FIELDS is typed columns only), so this never churns snapshots. The broker resolver then attributes idnes brokers from raw_json.broker like sreality's raw_json.user. No re-fetch, no LLM, no new secrets.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -417,8 +408,7 @@
     {
       "filename": "backfill_render_score.yml",
       "name": "Backfill image render_score (one-shot, from stored embeddings)",
-      "description": "One-shot corrective for migration 239: the clip_tag backfill skips already-tagged images, so images tagged before the render axis shipped have render_score NULL (the listing-detail render badge is hidden and the byt render exclusion is inert on them). This re-scores the render-vs-photo axis from each image's STORED CLIP embedding — no R2 download, no image re-inference — so it is fast (vector dot products). Horizontally sharded into 4 jobs (image_id %% 4). Resumable + idempotent (a scored row drops out of the render_score-IS-NULL partial index, migration 240). Dispatch-only. Secret: SUPABASE_DB_URL (no R2 needed). NOT a portal ingest (portal: null).",
-      "portal": null,
+      "description": "One-shot corrective for migration 239: the clip_tag backfill skips already-tagged images, so images tagged before the render axis shipped have render_score NULL (the listing-detail render badge is hidden and the byt render exclusion is inert on them). This re-scores the render-vs-photo axis from each image's STORED CLIP embedding — no R2 download, no image re-inference — so it is fast (vector dot products). Horizontally sharded into 4 jobs (image_id %% 4). Resumable + idempotent (a scored row drops out of the render_score-IS-NULL partial index, migration 240). Dispatch-only. Secret: SUPABASE_DB_URL (no R2 needed).",
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -455,8 +445,7 @@
     {
       "filename": "backfill_unit_price_masquerade.yml",
       "name": "Backfill unit-price masquerade (per-m² rate stored as price_czk)",
-      "description": "One-off, dispatch-only quarantine for the per-m² measure program's W2 heal. ceskereality, realitymix and bazos each render commercial and land offers at a RATE (\"100 Kč za m²/měsíc\", \"45 Kč / (za m²)\") and the pre-W1 parsers wrote that rate into `price_czk`, which every consumer reads as a total. Unlike the mmreality area damage this is NOT repairable — the true total was never on the page — so it is a QUARANTINE: `price_czk` goes to NULL and the convicting text is recorded in `raw_json.unit_price_quarantined_*`, reversible until the next refetch repopulates the price correctly through W1's parse-time rail. A row is quarantined ONLY when the portal's own price cell, re-read from already-staged state, carries the anchored per-area marker (CONFIRMATION, NEVER MAGNITUDE); rows whose cell cannot be read are left alone and counted as `unconfirmed`. bazos confirms nothing by design — its cell is a bare \"170 Kč\" and the m² basis lives only in prose — and stays wired to report that zero honestly. `price_czk` is in the content hash but this writes NO snapshot, on the same reasoning as the mmreality heal. The read is keyset-paginated and exhaustive; a pass that stopped early logs \"BACKFILL INCOMPLETE\" with a `--after` resume cursor, and silence means done. NOT a portal ingest workflow, so it carries no `# portal:` tag.",
-      "portal": null,
+      "description": "One-off, dispatch-only quarantine for the per-m² measure program's W2 heal. ceskereality, realitymix and bazos each render commercial and land offers at a RATE (\"100 Kč za m²/měsíc\", \"45 Kč / (za m²)\") and the pre-W1 parsers wrote that rate into `price_czk`, which every consumer reads as a total. Unlike the mmreality area damage this is NOT repairable — the true total was never on the page — so it is a QUARANTINE: `price_czk` goes to NULL and the convicting text is recorded in `raw_json.unit_price_quarantined_*`, reversible until the next refetch repopulates the price correctly through W1's parse-time rail. A row is quarantined ONLY when the portal's own price cell, re-read from already-staged state, carries the anchored per-area marker (CONFIRMATION, NEVER MAGNITUDE); rows whose cell cannot be read are left alone and counted as `unconfirmed`. bazos confirms nothing by design — its cell is a bare \"170 Kč\" and the m² basis lives only in prose — and stays wired to report that zero honestly. `price_czk` is in the content hash but this writes NO snapshot, on the same reasoning as the mmreality heal. The read is keyset-paginated and exhaustive; a pass that stopped early logs \"BACKFILL INCOMPLETE\" with a `--after` resume cursor, and silence means done.",
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -542,7 +531,6 @@
       "filename": "backup_before_drop.yml",
       "name": "Ops: back up what a destructive migration drops",
       "description": "Dumps what a DROP TABLE / DROP COLUMN migration is about to destroy, BEFORE it is applied (CLAUDE.md rule 1 / the `database` skill: back up first, then the operator's explicit OK). Each target is `table` (pg_dump of the whole relation) or `table:key,col[,col...]` (a CSV of the key plus those columns, rows where one of them is set), uploaded to R2 under backups/<label>/<UTC date>/ and read back. Never a workflow artifact: the repository is public. workflow_dispatch only; safe to re-run (a same-day re-run overwrites).",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -585,7 +573,6 @@
       "filename": "bazos_detail_drain.yml",
       "name": "Scraping: Bazos detail drain",
       "description": "The slow half of the bazos cadence split (architectural rule #19, like sreality/idnes). Claims a bounded slice of listing_detail_queue (source='bazos', enqueued by bazos_index_walk.yml), fetches each ad's detail page on a rate-limited worker pool, parses it (the real category comes off the page breadcrumb), and writes via listing_write.write_listings (the one listing write; new rows land property_id NULL and the straggler-attach births the singleton). Records run_type='detail' (index_pages=0). The drain records image-URL rows; the shared images.yml job downloads the bytes to R2.",
-      "portal": "bazos",
       "manual": true,
       "schedules": [
         {
@@ -648,7 +635,6 @@
       "filename": "bazos_index_walk.yml",
       "name": "Scraping: Bazos index walk",
       "description": "The fast half of the bazos cadence split (architectural rule #19, like sreality/idnes). Walks the ENTIRE index of every configured scope (no --max-pages), touch_listings bumps last_seen on still-listed ads, presence nomination (rule #3) nominates unseen ones for a page check once the walk reached the portal's end (source-scoped and throttled; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='bazos'). No detail fetch — the drain (bazos_detail_drain.yml) consumes the queue. Records run_type='index'.",
-      "portal": "bazos",
       "manual": true,
       "schedules": [
         {
@@ -743,8 +729,7 @@
     {
       "filename": "broker_resolution.yml",
       "name": "Broker resolution (incremental)",
-      "description": "Broker intelligence: the THROTTLED BACKSTOP of the incremental identity resolver (Broker Unify W3). The primary host is the realtime worker's broker_maintenance lane; both call THE same driver, scripts.resolve_brokers.run_incremental_pass — drain the dirty_broker_listings queue until empty (new + content-changed listings enqueued at write time by the detail writers, plus delist/revive flips mirrored in by the property drain), attribute to per-source broker_identities, ensure firms, attach singleton canonical brokers, recompute ONLY the affected brokers' rollups + memberships (one merged statement), and republish the leaderboard matview CONCURRENTLY when its derived_artifacts stamp is older than ~an hour. So this cron matters exactly when the worker is down. O(changes); source-agnostic maintenance job, so it carries NO `# portal:` tag. Shares the broker-resolution concurrency group with the full sweep so the two never mutate at once.",
-      "portal": null,
+      "description": "Broker intelligence: the THROTTLED BACKSTOP of the incremental identity resolver (Broker Unify W3). The primary host is the realtime worker's broker_maintenance lane; both call THE same driver, scripts.resolve_brokers.run_incremental_pass — drain the dirty_broker_listings queue until empty (new + content-changed listings enqueued at write time by the detail writers, plus delist/revive flips mirrored in by the property drain), attribute to per-source broker_identities, ensure firms, attach singleton canonical brokers, recompute ONLY the affected brokers' rollups + memberships (one merged statement), and republish the leaderboard matview CONCURRENTLY when its derived_artifacts stamp is older than ~an hour. So this cron matters exactly when the worker is down. O(changes); source-agnostic maintenance job. Shares the broker-resolution concurrency group with the full sweep so the two never mutate at once.",
       "manual": true,
       "schedules": [
         {
@@ -770,7 +755,6 @@
       "filename": "build-extension.yml",
       "name": "CI: build Chrome extension",
       "description": "Builds the chrome-extension/ bundle and uploads dist/ as a workflow artifact you can download from the Actions tab. Keeps the build off the operator's laptop (no local Node install needed).",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": true,
@@ -799,7 +783,6 @@
       "filename": "ceskereality_detail_drain.yml",
       "name": "Scraping: Českéreality detail drain",
       "description": "The slow half of the ceskereality cadence split (architectural rule #19, like sreality/idnes). Claims a bounded slice of listing_detail_queue (source='ceskereality', enqueued by ceskereality_index_walk.yml), fetches each listing page on a rate-limited worker pool, parses it to a ScrapedListing, and writes via listing_write.write_listings (the one listing write; new rows land property_id NULL and the straggler-attach births the singleton). The per-listing category is derived from its detail URL. Records run_type='detail' (index_pages=0). The drain records image-URL rows; the shared images.yml job downloads the bytes to R2.",
-      "portal": "ceskereality",
       "manual": true,
       "schedules": [
         {
@@ -863,7 +846,6 @@
       "filename": "ceskereality_index_walk.yml",
       "name": "Scraping: Českéreality index walk",
       "description": "The fast half of the ceskereality cadence split (architectural rule #19, like sreality/idnes). Walks the ENTIRE index of every configured category (no --max-pages), touch_listings bumps last_seen on still-listed ids, presence nomination (rule #3) nominates unseen ones for a page check once the walk reached the portal's end (source-scoped; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='ceskereality'). No detail fetch — the drain (ceskereality_detail_drain.yml) consumes the queue. Records run_type='index'.",
-      "portal": "ceskereality",
       "manual": true,
       "schedules": [
         {
@@ -919,7 +901,6 @@
       "filename": "clear_unmeasured_fills.yml",
       "name": "Ops: clear the deleted enrichment lane's unmeasured fills (field-capture W7, step iii)",
       "description": "Runs scripts/clear_unmeasured_enrichment_fills.py — the operator-approved destructive step (iii) of the field-capture program: blank the `floor` values and the silence-based `false` booleans the DELETED description-enrichment lane wrote on bazos rows and never measured (its own docstring has the counts: ~21k cells, sixteen on active listings). dry_run=true (the default) only counts. The real write needs dry_run=false AND confirm=APPLY, and the script REFUSES to blank a cell it has not first copied into the backup table (listing_id, column_name, value) — a proportionate backup for a table too hot for a data-only pg_dump. Same guard shape as reparse.yml.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -973,7 +954,6 @@
       "filename": "clip_retag.yml",
       "name": "Dedup — CLIP re-tag from stored embeddings (sharded)",
       "description": "Re-runs the CLIP zero-shot tagging over ALREADY-tagged images from their STORED embeddings (image_clip_embeddings) — NO R2 download, NO image re-inference, just the taxonomy's text anchors dotted with each stored vector. How a TAXONOMY change (new logical tags, sharpened anchors) reaches the back catalogue cheaply; new / not-yet-tagged images go through clip_tag.yml, which loads the same live taxonomy.",
-      "portal": null,
       "manual": true,
       "schedules": [
         {
@@ -1015,8 +995,7 @@
     {
       "filename": "clip_tag.yml",
       "name": "Dedup — CLIP image tagging (sharded)",
-      "description": "Backfills image_clip_tags + image_clip_embeddings: the self-hosted CLIP zero-shot tag per stored image (free replacement for the paid room classifier on the coarse dedup-relevant tags, and the FIRST tagger for dum/pozemek/komercni). Runs GLOBAL full-scale by default (the Středočeský priority drain is complete; pass region_id on dispatch to re-prioritise a kraj). ACTIVE-listing images first; idempotent + resumable (a tagged image drops out of the next select), so once caught up the hourly runs are cheap no-ops that just keep pace with new inflow. Horizontally sharded into 4 parallel jobs (image_id %% 4), each with its own runner + cap, like images.yml. Installs CPU torch + the `clip` extra (transformers); the production CLIP could move to int8-ONNX later as an optimization. NOT a portal ingest job (untagged, portal: null).",
-      "portal": null,
+      "description": "Backfills image_clip_tags + image_clip_embeddings: the self-hosted CLIP zero-shot tag per stored image (free replacement for the paid room classifier on the coarse dedup-relevant tags, and the FIRST tagger for dum/pozemek/komercni). Runs GLOBAL full-scale by default (the Středočeský priority drain is complete; pass region_id on dispatch to re-prioritise a kraj). ACTIVE-listing images first; idempotent + resumable (a tagged image drops out of the next select), so once caught up the hourly runs are cheap no-ops that just keep pace with new inflow. Horizontally sharded into 4 parallel jobs (image_id %% 4), each with its own runner + cap, like images.yml. Installs CPU torch + the `clip` extra (transformers); the production CLIP could move to int8-ONNX later as an optimization.",
       "manual": true,
       "schedules": [
         {
@@ -1090,7 +1069,6 @@
       "filename": "compare_condition_models.yml",
       "name": "Scoring: Condition model A/B (Haiku vs Sonnet)",
       "description": "Read-only validation harness for a cheaper condition-scoring model. For a sample of listings that already have a baseline-model score on their latest snapshot, it re-runs the SAME scoring request through a candidate model and reports per-axis agreement (exact / within-1 / mean abs diff / bias) plus the candidate vs baseline cost ratio.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -1165,7 +1143,6 @@
       "filename": "compute_image_phash.yml",
       "name": "Compute image pHash (multi-portal dedup)",
       "description": "Backfills images.phash (a 64-bit perceptual dHash per stored image) for the Tier-2 dedup sweep's cheap image corroborator. Downloads stored bytes from R2 on a small worker pool, hashes them, writes images.phash per row (autocommit, so a timeout/cancel preserves completed work). Idempotent + resumable; a no-op if R2 env vars are missing. ACTIVE-listing images are selected first, so dedup-relevant photos hash ahead of the historical backlog.",
-      "portal": null,
       "manual": true,
       "schedules": [
         {
@@ -1222,8 +1199,7 @@
     {
       "filename": "condition_score_batches.yml",
       "name": "Scraping: Sreality condition scoring (batch API)",
-      "description": "Phase 1.8b — async condition scoring via the Anthropic Message Batches API (50% cheaper than the synchronous condition_scores.yml job). Two modes, selected by the `mode` input:",
-      "portal": null,
+      "description": "PARKED (rule #14, operator ruling 2026-10-20): both crons are off and no filter, agent fact or estimate reads the levels. Phase 1.8b — async condition scoring via the Anthropic Message Batches API (50% cheaper than the synchronous condition_scores.yml job). Two modes, selected by the `mode` input:",
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -1287,9 +1263,8 @@
     },
     {
       "filename": "condition_scores.yml",
-      "name": "Scraping: Sreality condition scoring (hourly + manual backfill)",
-      "description": "Decoupled condition-scoring job. Scores building/apartment condition (1..5) for active listings whose latest snapshot doesn't yet have a row in `listing_condition_scores`, writing both the cache row AND the two listings.*_condition_level columns in one transaction per listing (autocommit — every successful score commits independently, so a timeout or cancel preserves the rows already done). Resumable: scored listings drop out of the next selection.",
-      "portal": null,
+      "name": "Scraping: Sreality condition scoring (PARKED, manual backfill)",
+      "description": "PARKED (rule #14, operator ruling 2026-10-20): dispatch-only, and no filter, agent fact or estimate reads the levels it writes. Decoupled condition-scoring job. Scores building/apartment condition (1..5) for active listings whose latest snapshot doesn't yet have a row in `listing_condition_scores`, writing both the cache row AND the two listings.*_condition_level columns in one transaction per listing (autocommit — every successful score commits independently, so a timeout or cancel preserves the rows already done). Resumable: scored listings drop out of the next selection.",
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -1364,53 +1339,9 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/condition_scores.yml"
     },
     {
-      "filename": "coverage_gate.yml",
-      "name": "Ops: index coverage gate",
-      "description": "Decides, from evidence, whether a portal whose delisting is PARKED (supports_complete_walk = false) has earned it back.",
-      "portal": null,
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "15 3,9,15,21 * * *",
-          "human": "15 3,9,15,21 * * *"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "source",
-          "description": "evaluate one portal only (blank = every parked portal)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "evaluate and report, but write nothing and un-park nothing",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "coverage-gate",
-      "cancelInProgress": false,
-      "timeoutMinutes": 10,
-      "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/coverage_gate.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/coverage_gate.yml"
-    },
-    {
       "filename": "detail_drain.yml",
       "name": "Scraping: Sreality detail drain (Phase 2)",
       "description": "The slow half of the Phase-2 cadence split, now on the shared portal framework: `scraper.sreality_main --drain-only` drives SrealityPortal through the one generic portal_runner. Claims a bounded slice of listing_detail_queue (source='sreality', enqueued by index_walk.yml), fetches each listing's detail on a rate-limited worker pool (429/403 auto-penalize), and writes them in batches via listing_write.write_listings (the one listing write, set-based, one transaction per ~100 listings) on the Session-mode pooler — the Phase-1 prepared-statement win. New listings land with property_id NULL; the recompute_property_stats straggler-attach births each a singleton.",
-      "portal": "sreality",
       "manual": true,
       "schedules": [
         {
@@ -1482,7 +1413,6 @@
       "filename": "dinov3_bakeoff_manifest.yml",
       "name": "Dedup — DINOv3 bake-off manifest",
       "description": "Builds the MANIFEST for the DINOv3 encoder bake-off and nothing else. It draws the five near-duplicate populations of ENCODER-DECISION.md §5.2 out of Postgres, mints a 7-day presigned R2 URL per image, and writes one JSON file — so the GPU pod that eventually reads it needs no database and no credentials. This lane does NOT launch a pod, does not download any model weights, and spends nothing: running `scripts/dinov3_bakeoff.py` against the manifest on a real GPU is a separate, MANUAL step the operator performs by hand when they choose to spend the ~$2 the design doc estimates.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -1578,7 +1508,6 @@
       "filename": "dinov3_embed_backfill.yml",
       "name": "NEW DEDUP: DINOv3 corpus embedding (RunPod)",
       "description": "Embeds stored images with DINOv3 ViT-B/16 on a rented GPU pod, writing one 768-d halfvec per image into image_dinov3_embeddings under the six-fact encoder identity (model, revision, library, pooling, resolution, preprocessing, dtype). Manual dispatch only — this is not a steady-state lane, and it is INERT until the bake-off fills in data/dinov3_config.json: the loader refuses to run while any of the six facts is null.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -1689,7 +1618,6 @@
       "filename": "discover_condition_markers.yml",
       "name": "Dev: discover condition markers (one-off Phase A bootstrap)",
       "description": "One-off Phase A driver for the building/apartment condition-scoring feature. Runs scripts/discover_condition_markers.py against the real Supabase DB and the Anthropic API to mine Czech condition markers from a stratified sample of listings.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -1758,8 +1686,7 @@
     {
       "filename": "docs-budget.yml",
       "name": "Docs budget",
-      "description": "Enforces the always-loaded context budgets from CLAUDE.md's Context-discipline rule (line caps on CLAUDE.md/ROADMAP.md/skill bodies, a word cap on skill frontmatter descriptions, and routing completeness — every .claude/skills/ dir must appear in CLAUDE.md's \"Where the detail lives\" table) on any PR touching those paths, and warns (non-blocking) when a PR changes code a skill documents without touching that skill.",
-      "portal": null,
+      "description": "Enforces the always-loaded context budgets from CLAUDE.md's Context-discipline rule (line caps on CLAUDE.md/ROADMAP.md/skill bodies, a word cap on skill frontmatter descriptions, and routing completeness — every .claude/skills/ dir must appear in CLAUDE.md's \"Where the detail lives\" table) on any PR touching those paths, and warns (non-blocking) when a PR changes code a skill documents without touching that skill or when a doc line it adds names a code symbol that exists nowhere in the code trees.",
       "manual": false,
       "schedules": [],
       "onPush": false,
@@ -1778,7 +1705,6 @@
       "filename": "draw_exam_cohort.yml",
       "name": "Labeling: draw exam cohort",
       "description": "Draws and seals the sealed exam (migration 458) — the images the per-tag probes are GRADED on and must never be trained on. Pure SQL against the embedding store: no GPU, no torch, no R2, no LLM key. The stratified half of the exam is added by the screening lane, which is the one that spends money.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -1847,8 +1773,7 @@
     {
       "filename": "draw_tag_candidates.yml",
       "name": "Labeling: draw tag candidates",
-      "description": "Tops up each tag's candidate review queue by CLIP centroid retrieval. Pure SQL against the embedding store — no GPU, no torch, no R2, no LLM key, and it writes only tag_candidates rows, which carry no training semantics (migration 450), so a bad run is deleted rather than unwound. Source-agnostic maintenance job, so it carries NO `# portal:` tag.",
-      "portal": null,
+      "description": "Tops up each tag's candidate review queue by CLIP centroid retrieval. Pure SQL against the embedding store — no GPU, no torch, no R2, no LLM key, and it writes only tag_candidates rows, which carry no training semantics (migration 450), so a bad run is deleted rather than unwound. Source-agnostic maintenance job.",
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -1913,7 +1838,6 @@
       "filename": "drop_r2_legacy_fks.yml",
       "name": "Drop R2 legacy child FKs",
       "description": "Phase D step 6 of the listing-identity refactor (docs/design/listing-identity-r2-pk-swap-runbook.md § 5, item 6). Drops the legacy child FKs onto listings(sreality_id) — integrity is already held by the parallel listing_id -> listings(id) FKs Phase B validated. Not gate-destructive: re-addable any time (NOT VALID -> VALIDATE).",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -1947,7 +1871,6 @@
       "filename": "export_raw_pages_archive.yml",
       "name": "Export portal_raw_pages archive to R2",
       "description": "Location-data program W0 item 0o: the ~447k-row / 14 GB portal_raw_pages archive is the only surviving copy of several portals' best location signal, so a full off-database copy goes to R2 under backups/portal-raw-pages/<snapshot>/. Chunked + resumable — re-dispatch with the same snapshot date to continue an interrupted run; the final step verifies the manifest row count against the DB. Deletion of the live table is guarded by tests/test_portal_raw_pages_guard.py. workflow_dispatch only; re-run with a new snapshot date for a fresh export.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -1987,70 +1910,9 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/export_raw_pages_archive.yml"
     },
     {
-      "filename": "fetch-fixtures.yml",
-      "name": "Fixtures: source HTML (anonymized)",
-      "description": "Manual trigger only. Fetches each listing URL, runs the anonymization in scripts/fetch_and_anonymize_fixtures.py, and commits the resulting fixtures to the current branch. Operator runs this once per source refresh; tests then read the saved files instead of hitting the internet.",
-      "portal": null,
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "bezrealitky_url",
-          "description": "bezrealitky.cz listing URL (leave blank to skip)",
-          "required": false,
-          "type": "string",
-          "default": "https://www.bezrealitky.cz/nemovitosti-byty-domy/547214-nabidka-pronajem-bytu-pod-harfou-hlavni-mesto-praha",
-          "options": null
-        },
-        {
-          "name": "idnes_url",
-          "description": "reality.idnes.cz listing URL (leave blank to skip)",
-          "required": false,
-          "type": "string",
-          "default": "https://reality.idnes.cz/detail/pronajem/byt/brno-veveri/69f8c898e58c5ab7d70f3505/",
-          "options": null
-        },
-        {
-          "name": "remax_url",
-          "description": "remax-czech.cz listing URL (leave blank to skip)",
-          "required": false,
-          "type": "string",
-          "default": "https://www.remax-czech.cz/reality/detail/438735/pronajem-bytu-1-kk-v-osobnim-vlastnictvi-31-m2-praha-8-liben",
-          "options": null
-        },
-        {
-          "name": "bazos_index_url",
-          "description": "reality.bazos.cz search/index URL (leave blank to skip)",
-          "required": false,
-          "type": "string",
-          "default": "https://reality.bazos.cz/prodam/byt/",
-          "options": null
-        },
-        {
-          "name": "bazos_detail_url",
-          "description": "reality.bazos.cz single-listing detail URL (leave blank to skip)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [],
-      "concurrencyGroup": null,
-      "cancelInProgress": null,
-      "timeoutMinutes": 5,
-      "permissions": "contents: write",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/fetch-fixtures.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/fetch-fixtures.yml"
-    },
-    {
       "filename": "fetch_rent_map.yml",
       "name": "Jobs: fetch MF rent map (monthly)",
       "description": "Auto-grab the Ministry of Finance \"Cenová mapa nájemného\" (rent price map) from the MF infografika page, parse it, and append a new rent_map revision — unless the file's sha256 already exists (then it's a no-op). The MF data updates 4×/year (published within 45 days of each quarter end), so a monthly cron mostly no-ops and catches the new release within ~30 days. The same data also lands via manual upload from the Settings page; both share api.rent_map.ingest_bytes, so the latest revision always wins. Every run then re-renders the map's rent choropleth (the `rent_map` reference overlay).",
-      "portal": null,
       "manual": true,
       "schedules": [
         {
@@ -2096,7 +1958,6 @@
       "filename": "fetch_sreality_fixtures.yml",
       "name": "Fixtures: sreality v1 JSON",
       "description": "Manual trigger only. Fetches a real search response + one real detail response from a GitHub runner IP (this repo's dev sandbox is 403'd by sreality), scrubs emails/phone numbers, and commits the result as tests/fixtures/sample_search.json + sample_listing.json on the current branch. The live /api/v1/estates API is snake_case (id key `hash_id`, detail wrapped under `result`); these fixtures pin the true shape so the parser tests guard reality instead of the HAR-derived camelCase guess.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -2139,8 +2000,7 @@
     {
       "filename": "frontend-build.yml",
       "name": "CI: frontend build",
-      "description": "Builds the frontend/ Vite SPA on every push or pull request that touches frontend code, to catch build/type errors before deploy. Type-checks (the service worker too), lints for Rules of Hooks, builds the production bundle, checks the service worker and web app manifest made it into dist/, reports every chunk's gzipped size, and enforces a blocking first-visit JS budget that also fails if maplibre or recharts return to the pre-lazy-import path. Does not deploy.",
-      "portal": null,
+      "description": "Builds the frontend/ Vite SPA on every pull request, and on a push to main that touches frontend code, to catch build/type errors before deploy. Type-checks (the service worker too), lints for Rules of Hooks, builds the production bundle, checks the service worker and web app manifest made it into dist/, reports every chunk's gzipped size, and enforces a blocking first-visit JS budget that also fails if maplibre or recharts return to the pre-lazy-import path. Does not deploy.",
       "manual": false,
       "schedules": [],
       "onPush": true,
@@ -2162,7 +2022,6 @@
       "filename": "idnes_detail_drain.yml",
       "name": "Scraping: iDNES Reality detail drain",
       "description": "The slow half of the iDNES cadence split (architectural rule #19, like sreality). Claims a bounded slice of listing_detail_queue (source='idnes', enqueued by idnes_index_walk.yml), fetches each listing page on a rate-limited worker pool, parses it to a ScrapedListing, and writes via listing_write.write_listings (the one listing write; new rows land property_id NULL and the straggler-attach births the singleton). The per-listing category is derived from its detail URL. Records run_type='detail' (index_pages=0). The drain records image-URL rows; the shared images.yml job downloads the bytes to R2.",
-      "portal": "idnes",
       "manual": true,
       "schedules": [
         {
@@ -2227,7 +2086,6 @@
       "filename": "idnes_index_walk.yml",
       "name": "Scraping: iDNES Reality index walk",
       "description": "The fast half of the iDNES cadence split (architectural rule #19, like sreality). Walks the ENTIRE index of every configured category (no --max-pages), touch_listings bumps last_seen on still-listed ids, unseen ids are nominated for a page check (rule #3) once the walk reached the portal's end (source-scoped; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='idnes'). No detail fetch — the drain (idnes_detail_drain.yml) consumes the queue. Records run_type='index'.",
-      "portal": "idnes",
       "manual": true,
       "schedules": [
         {
@@ -2275,7 +2133,6 @@
       "filename": "images.yml",
       "name": "Scraping: image backlog drain (sharded)",
       "description": "THE backlog image-download workflow. Images are fully decoupled from every portal's crawl (the crawls only record image-URL rows; this job uploads the bytes to R2), so this is the owner of the deep backlog across ALL portals (sreality, idnes, bazos, bezrealitky, maxima, mmreality). Source-agnostic.",
-      "portal": null,
       "manual": true,
       "schedules": [
         {
@@ -2330,7 +2187,6 @@
       "filename": "images_fresh.yml",
       "name": "Scraping: fresh-listing image fast lane",
       "description": "Low-latency image fetch for the NEWEST active listings across ALL portals, so a freshly-scraped card renders a photo within minutes instead of waiting for the 2-hourly sharded backlog drain (images.yml). The frontend can only show an image once its bytes are in R2 (storage_path set) — original portal URLs are hotlink/expiry-protected — so racing those URLs on fresh listings is also what prevents the image loss we already saw (~43k+ sreality images lost to expiry).",
-      "portal": null,
       "manual": true,
       "schedules": [
         {
@@ -2378,7 +2234,6 @@
       "filename": "index_walk.yml",
       "name": "Scraping: Sreality index walk (Phase 2)",
       "description": "The fast half of the Phase-2 cadence split, now on the shared portal framework: `scraper.sreality_main --index-only` drives SrealityPortal through the one generic portal_runner (the same loop every other portal uses). Walks the COMPLETE index of every configured category pair (scraper.main.CATEGORIES — the full category cross product incl. pozemek/ostatni/drazba/podil; district-split + national fallback above the deep-pagination cap), bumps last_seen on still-listed ids (touch), nominates unseen ids for a page check once the walk reached the portal's own end (rule #3 — the walk flips nothing; the drain fetches each nominated page and the PAGE decides), and enqueues new + price-changed ids into listing_detail_queue (source='sreality'). It does NO detail fetching, so it finishes in minutes and delistings surface fast.",
-      "portal": "sreality",
       "manual": true,
       "schedules": [
         {
@@ -2425,7 +2280,6 @@
       "filename": "ingest_boundaries.yml",
       "name": "Data: ingest admin boundaries",
       "description": "Loads ČÚZK RÚIAN administrative-unit polygons (kraj / okres / obec / KÚ) into the admin_boundaries table. Manual-only; boundaries change rarely (a few municipal mergers / cadastral re-alignments per year), so there is no cron. Re-run when ČÚZK publishes a notable update or when the operator wants to bring in newly-created units.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -2479,7 +2333,6 @@
       "filename": "ingest_map_overlays.yml",
       "name": "Data: ingest map overlays",
       "description": "Ingests the map reference overlays (Prague metro from IPR Praha's Metropolitní plán, the national flood-zone register from VÚV TGM, kraj borders from admin_boundaries, Prague's university sites from IPR Praha classed by MŠMT's student counts, the MF rent map from rent_map_values × admin_boundaries) into map_overlay_* and renders each section's vector tiles. Quarterly, two days after the quarter starts; dispatch by hand after a publisher revises its data.",
-      "portal": null,
       "manual": true,
       "schedules": [
         {
@@ -2493,7 +2346,7 @@
       "inputs": [
         {
           "name": "sections",
-          "description": "Sections to ingest (comma-separated: metro,flood,kraje,universities,rent_map). Empty = all.",
+          "description": "Sections to ingest (comma-separated: metro,flood,kraje,universities,railway,rent_map). Empty = all.",
           "required": false,
           "type": "string",
           "default": "",
@@ -2530,7 +2383,6 @@
       "filename": "label_images.yml",
       "name": "Labeling: bulk machine labels",
       "description": "The LLM builds the training set for named heads: one call per image carrying the ACTIVE definitions, verdicts written to image_tag_labels as source='machine' (migration 468 gives the pass its own called_for so its price is measured separately). See scripts/label_images.py for the rails.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -2659,7 +2511,6 @@
       "filename": "label_proposal_backfill.yml",
       "name": "NEW DEDUP — Labeling secondary-CLIP proposals (sharded, dispatch-only)",
       "description": "Wave 1 (docs/design/new-dedup/PROGRAM.md): scores every image currently in dedup_sim.labeling_sample against the operator's active Taxonomy v1 labels (dedup_sim.taxonomy_labels) using the stronger secondary CLIP checkpoint (dedup_sim_settings' labeling_secondary_model), writing one proposal row per image into dedup_sim.label_proposals for review on the Labeling page. Dispatch-only, not cron — the sample grows in bursts as the operator works through the program, not continuously. No-op if R2 is unconfigured or the taxonomy is still empty. Horizontally sharded (image_id %% 2), like the production clip_tag.yml but smaller (this is a curated sample, not the full corpus).",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -2709,36 +2560,9 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/label_proposal_backfill.yml"
     },
     {
-      "filename": "llm_health.yml",
-      "name": "Monitoring: acute health (hourly)",
-      "description": "The fast lane of verify_pipeline: runs the ACUTE checks — LLM errors, LLM burn rate, DB saturation (pg_cron failure rate), realtime-worker liveness, property- maintenance staleness (sweep death / stranded lease), broker-resolution freshness (budget-truncated daily sweep / frozen dirty drain) and the broker merge-suppression invariant (an operator NO bypassed; O(1)) — hourly, and exits non-zero when any is `fail` so GitHub emails the operator on a red scheduled run. This is the belt-and-braces channel for when the in-app bell path itself is down; the bell is rung (edge-triggered) by the checks via emit_transition_alerts, so an incident alerts once — not per run — and clears on recovery. The 6h full verify_pipeline run additionally covers these (shared emitter keys → no double-alert) plus the slower structural checks (dedup debt, latency, engine cycle).",
-      "portal": null,
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "15 * * * *",
-          "human": "Every hour at :15"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "llm-health",
-      "cancelInProgress": false,
-      "timeoutMinutes": 5,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/llm_health.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/llm_health.yml"
-    },
-    {
       "filename": "load_obec_population.yml",
       "name": "Jobs: load obec population (manual)",
       "description": "Load ČSÚ municipality population into admin_boundaries.population for EVERY obec (not just the 206 curated cities). Reads the committed DataStat export data/csu_population.json (OBY02AT02 — download from https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02). Idempotent: only changed rows are written. Dispatch this after committing a refreshed export. This is the population source the \"within X km of a municipality with population > N\" proximity filter reads.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -2759,7 +2583,6 @@
       "filename": "location_claims_intake.yml",
       "name": "Jobs: Location claim intake",
       "description": "THE claim lane (CLAUDE.md rule 25: one store, one lane). Deterministic extraction of location claims from BOTH substrates we hold for a listing, all nine portals:",
-      "portal": null,
       "manual": true,
       "schedules": [
         {
@@ -2852,7 +2675,6 @@
       "filename": "location_claims_retire.yml",
       "name": "Ops: retire claims under old contract versions",
       "description": "Deletes every `location_claims` row written under a RETIRED contract version (`portal_contracts.is_active = false`) — W6-a of the location simplification sprint, ~9.5 M of ~13.2 M rows measured 2026-09-13. NOT invisible to the resolver: since v5.3 it reads, PER CLAIM TYPE, the newest version <= the active one a listing carries (`resolve_db._claims_sql`), and the rail below is per LISTING. Location reader W3: do NOT dispatch while text-less delisted bazos rows hold their bazos@7 town — they never get a reading, so until the rail is per type that is permanent. Nothing is enqueued — unlike `contracts.py --retract`, which withdraws evidence that was wrong.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -2907,7 +2729,6 @@
       "filename": "location_registry_load.yml",
       "name": "Location: RÚIAN registry load",
       "description": "The monthly RÚIAN registry load (design 04 §4.4.2): ONE `full` load per vintage, 1st 10:00 UTC. It HEAD-probes the vintage, archives both CSV zips AND the 253 MB state SHP boundary pack to R2, then stage -> blocking assertions -> merge -> boundaries (three geometries per unit, an unchanged unit's authoritative row carried from the previous version) -> gazetteer -> completeness assertion -> pointer swap into ONE new registry_version. A version publishes only when the state, every obec and every katastrální území has its geometry, so a killed or incomplete run leaves an inert staged version that any later dispatch resumes.",
-      "portal": null,
       "manual": true,
       "schedules": [
         {
@@ -2956,7 +2777,6 @@
       "filename": "location_resolve.yml",
       "name": "Location: resolve",
       "description": "The steady-state resolution lane of the location subsystem. Without it a newly scraped listing gets claims and never gets an answer row in `listing_location` — invisible to every consumer of the location programme.",
-      "portal": null,
       "manual": true,
       "schedules": [
         {
@@ -3023,7 +2843,6 @@
       "filename": "migrations.yml",
       "name": "CI: schema replay + SQL correctness",
       "description": "Two gates on one throwaway Postgres, hermetic (no secrets, never touches prod):",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": true,
@@ -3043,7 +2862,7 @@
       "concurrencyGroup": null,
       "cancelInProgress": null,
       "timeoutMinutes": 15,
-      "permissions": null,
+      "permissions": "contents: read, pull-requests: read",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/migrations.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/migrations.yml"
     },
@@ -3051,7 +2870,6 @@
       "filename": "mirror_model_weights.yml",
       "name": "Mirror model weights to R2 (one-off)",
       "description": "Copies externally-licensed model weight files (first use: DINOv3) into our own R2 bucket under models/<name>/ with a sha256 manifest, so no production job ever depends on Meta's time-limited download links or on a Hugging Face token. Dispatch only. The URLs are pasted as a workflow input: they are signed, short-lived links, masked in the job log by the script and never stored — the manifest records only the host, file name, size and hash. Default is a DRY RUN (download + hash, upload nothing); tick `apply` to upload.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -3105,37 +2923,9 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/mirror_model_weights.yml"
     },
     {
-      "filename": "monitor_workflow_failures.yml",
-      "name": "Monitoring: workflow failures",
-      "description": "Polls the GitHub Actions API on a `*/30` cron (the Actions throttle actually runs it 80–256 min apart) and records failed runs (failure / timed_out / startup_failure, plus `cancelled` that ran long enough to be a timeout-kill rather than a supersession) into `workflow_failures`, so the Health page can list them — GitHub only emails about failed SCHEDULED runs, leaving every other red run invisible unless the operator opens the Actions tab. Coverage is a high-water-mark cursor (app_settings.workflow_failures_cursor), not a fixed lookback, so no red run is dropped in the throttle gap.",
-      "portal": null,
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "*/30 * * * *",
-          "human": "Every 30 minutes"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [],
-      "secrets": [
-        "GITHUB_TOKEN",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "monitor-workflow-failures",
-      "cancelInProgress": false,
-      "timeoutMinutes": 5,
-      "permissions": "contents: read, actions: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/monitor_workflow_failures.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/monitor_workflow_failures.yml"
-    },
-    {
       "filename": "new_dedup_candidates.yml",
       "name": "NEW DEDUP: candidate generation (path C)",
       "description": "Level 0 of the rebuilt dedup: find the listing pairs worth comparing later, by path C — \"same town\" (the location engine's obec_kod) plus disposition (rung C1) or, when a disposition is missing on either side, area (rung C3). Manual dispatch only; nothing runs on a schedule. Design: docs/design/new-dedup/PROGRAM.md, ledger 2026-09-10.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -3223,7 +3013,6 @@
       "filename": "new_dedup_runpod_smoke_test.yml",
       "name": "NEW DEDUP RunPod smoke test (one-off)",
       "description": "Proves the RunPod pipeline end-to-end (docs/design/new-dedup/PROGRAM.md, Wave 1): launch the cheapest available GPU pod, run a trivial CUDA op, confirm it, guarantee teardown either way (scripts/runpod_client.py's run_job). Not scheduled — manual trigger only, matching the design's \"manual batches only\" cost-conscious posture. Wave 5's real embedding batches will reuse the same client, different payload.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -3244,7 +3033,6 @@
       "filename": "property_maintenance.yml",
       "name": "Jobs: property maintenance (incremental)",
       "description": "Phase 3 of the scaling roadmap: real-time properties. This is the FAST, FREQUENT half of property maintenance — the dirty-set incremental pass. It runs scripts/recompute_property_stats --incremental, which:",
-      "portal": null,
       "manual": true,
       "schedules": [
         {
@@ -3290,7 +3078,6 @@
       "filename": "realitymix_detail_drain.yml",
       "name": "Scraping: RealityMix detail drain",
       "description": "The slow half of the realitymix cadence split (architectural rule #19, like sreality/idnes/ceskereality). Claims a bounded slice of listing_detail_queue (source='realitymix', enqueued by realitymix_index_walk.yml), fetches each listing page on a rate-limited worker pool, parses it to a ScrapedListing, and writes via listing_write.write_listings (the one listing write; new rows land property_id NULL and the straggler-attach births the singleton). The per-listing category is read from the page's BreadcrumbList JSON-LD. Records run_type='detail' (index_pages=0). The drain records image-URL rows; the shared images.yml job downloads the bytes to R2.",
-      "portal": "realitymix",
       "manual": true,
       "schedules": [
         {
@@ -3354,7 +3141,6 @@
       "filename": "realitymix_index_walk.yml",
       "name": "Scraping: RealityMix index walk",
       "description": "The fast half of the realitymix cadence split (architectural rule #19, like sreality/idnes/ceskereality). Walks the ENTIRE index of every configured category (no --max-pages), touch_listings bumps last_seen on still-listed ids, presence nomination (rule #3) nominates unseen ones for a page check once the walk reached the portal's end (source-scoped; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='realitymix'). No detail fetch — the drain (realitymix_detail_drain.yml) consumes the queue. Records run_type='index'.",
-      "portal": "realitymix",
       "manual": true,
       "schedules": [
         {
@@ -3401,7 +3187,6 @@
       "filename": "recompute_city_proximity.yml",
       "name": "Jobs: recompute city proximity (hourly)",
       "description": "Recompute properties.home_obec_pop + near_{pop,jobs,youth,overall}_{5,15}km (migration 142) so the Browse / Watchdog city-proximity + Min Population filters read precomputed indexed columns instead of a per-request spatial RPC. Incremental hourly run fills newly-ingested properties within the hour; the same function rebuilds everything after a population / city-index load.",
-      "portal": null,
       "manual": true,
       "schedules": [
         {
@@ -3436,7 +3221,6 @@
       "filename": "recompute_property_stats.yml",
       "name": "Jobs: recompute property stats (daily full reconcile)",
       "description": "DAILY FULL SWEEP for the canonical `properties` parent. Attaches any straggler unlinked listings, then recomputes EVERY property's is_active rollup, source / site counts, first/last-seen span, representative child, current price, and the price-history aggregates (drop / rise counts, max drop %) from the union of its children's snapshots. Finally it clears the dirty_properties rows queued before it started, for the id range it recomputed.",
-      "portal": null,
       "manual": true,
       "schedules": [
         {
@@ -3490,7 +3274,6 @@
       "filename": "reextract.yml",
       "name": "Data: re-extract a field from stored pages",
       "description": "Replays the CURRENT parser over already-stored `portal_raw_pages` HTML to recover the two things a portal publishes that are NOT `listings` columns: the `images` child rows and the `raw_json.broker` block. Every typed column is `reparse.yml`'s work. No re-fetch, no LLM, no new secrets — and it repairs INACTIVE listings too, which a re-fetch structurally cannot.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -3562,7 +3345,6 @@
       "filename": "refresh_population.yml",
       "name": "Data: refresh city populations (Wikidata)",
       "description": "FALLBACK SOURCE. The preferred population source is now the official ČSÚ DataStat export \"Počet obyvatel v obcích k 1. 1.\" — download the JSON from https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02, commit it to data/csu_population.json, and run \"Data: seed curated cities\" (which ingests the JSON directly). Use this Wikidata fetcher only when you can't get the official file.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -3601,7 +3383,6 @@
       "filename": "refresh_stale_images.yml",
       "name": "Jobs: refresh stale image URLs",
       "description": "Re-opens active listings whose photos aren't in R2 yet so their (possibly rotated) source image URLs get refreshed. Portals rotate image CDN URLs over weeks; a listing whose images the newest-first backfill never reached before its URLs rotated is stuck — the stored URL 404s, the frontend fallback can't load it, and the image downloader can't fetch it. This sweep (scripts.refresh_stale_image_urls) re-enqueues such listings into the source-generic listing_detail_queue; the detail drain re-fetches them, record_images repoints each not-yet-stored image's URL to the current one, and the image backfill (images.yml) then stores the bytes.",
-      "portal": null,
       "manual": true,
       "schedules": [
         {
@@ -3660,7 +3441,6 @@
       "filename": "renominate_false_gone.yml",
       "name": "Ops: re-check crawler listings a sreality check falsely delisted",
       "description": "Runs scripts/renominate_false_gone_crawler_rows.py (operator decision 2026-10-02): crawler listings (bazos, idnes, ...) carry a synthetic negative sreality_id, and until item 3 a sreality freshness fetch of that id read \"not found\" and flipped them inactive. This sends each such row to its OWN portal's detail drain as a presence check (QUEUE_PRIORITY_VERIFY), so a live page reactivates it and a gone page leaves it inactive with its inactive_at untouched. apply=false (the default) only prints the per-source counts.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -3724,7 +3504,6 @@
       "filename": "reparse.yml",
       "name": "Ops: re-parse stored rows through the portal's own parser",
       "description": "The ONE re-parse seam (`scripts/reparse.py`) — the dispatch that carries a parser fix back to rows already in `listings`, replacing the one-off `backfill_*.py` family. It re-runs the portal's OWN `parse_detail` / `parse_advert` / `parse_listing` over the substrate declared for that portal — `portal_raw_pages.html` on the seven HTML portals (100 % coverage, inactive rows included, staged in the same drain transaction that writes the row, so it cannot lag it) and `listings.raw_json` on sreality + bezrealitky, which stage no body at all. No fetch, no R2, no network.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -3843,8 +3622,7 @@
     {
       "filename": "resolve_brokers_full.yml",
       "name": "Broker resolution (full sweep + backfill)",
-      "description": "Broker intelligence: the daily full-sweep RECONCILE + the one-shot backfill. Re-attributes a rotating lap of broker-bearing listings from raw_json (keyset-batched so the raw_json scan never times out over the pooler), recomputes ALL broker rollups + memberships in ONE merged statement (recompute_brokers(None), Broker Unify W3 — the old 9-window loop paid ~27 full index walks and 100+ min), rebuilds firm rollups, runs the cross-source merge step, generates candidates, and clears the dirty queue — the self-healing backstop for anything the incremental drain missed. It no longer publishes the leaderboard matview: that is the drain path's job (hourly-if-stale, worker lane + broker_resolution.yml), so serving freshness stopped depending on this job's length or its GH-cron-drifted start time. Nominally runs after the property recompute (04:15); in practice GH throttling drifts both into the same mid-morning window. mode=backfill is the same code path (the first population); dispatch it once after this lands on main. Source-agnostic — no `# portal:` tag. Shares the broker-resolution concurrency group with the incremental job.",
-      "portal": null,
+      "description": "Broker intelligence: the daily full-sweep RECONCILE + the one-shot backfill. Re-attributes a rotating lap of broker-bearing listings from raw_json (keyset-batched so the raw_json scan never times out over the pooler), recomputes ALL broker rollups + memberships in ONE merged statement (recompute_brokers(None), Broker Unify W3 — the old 9-window loop paid ~27 full index walks and 100+ min), rebuilds firm rollups, runs the cross-source merge step, generates candidates, and clears the dirty queue — the self-healing backstop for anything the incremental drain missed. It no longer publishes the leaderboard matview: that is the drain path's job (hourly-if-stale, worker lane + broker_resolution.yml), so serving freshness stopped depending on this job's length or its GH-cron-drifted start time. Nominally runs after the property recompute (04:15); in practice GH throttling drifts both into the same mid-morning window. mode=backfill is the same code path (the first population); dispatch it once after this lands on main. Source-agnostic. Shares the broker-resolution concurrency group with the incremental job.",
       "manual": true,
       "schedules": [
         {
@@ -3890,7 +3668,6 @@
       "filename": "runpod_reap.yml",
       "name": "Ops: terminate a RunPod pod by id",
       "description": "The bake-off tears its pod down in a `finally`, but a terminate call that times out on RunPod's side (run 35731041090: \"POD MAY STILL BE BILLING\") leaves a pod nobody can reach from a shell without the key. This is the one-input remedy: write the receipt `autodedup.oss_pod --reap` already understands and let it DELETE the pod. Idempotent — an already-gone pod counts as success.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -3920,7 +3697,6 @@
       "filename": "scrape_bezrealitky.yml",
       "name": "Scraping: Bezrealitky scraper (pilot)",
       "description": "Scheduled (every 6h) + manual scraper for bezrealitky.cz on the shared portal framework. Bezrealitky is a JSON-API portal (public GraphQL at api.bezrealitky.cz) like sreality: the index walk pages listAdverts and enqueues new/price-changed ids into listing_detail_queue, then the detail drain fetches advert(id), parses to a ScrapedListing, and writes via listing_write.write_listings (the one listing write; new rows land property_id NULL and the straggler-attach births the singleton).",
-      "portal": "bezrealitky",
       "manual": true,
       "schedules": [
         {
@@ -3991,7 +3767,6 @@
       "filename": "scrape_maxima.yml",
       "name": "Scraping: Maxima Reality scraper (pilot)",
       "description": "Scheduled (every 6h) + manual scraper for nemovitosti.maxima.cz on the shared portal framework. Maxima is a single real-estate agency that publishes its whole catalogue (~220 listings) as one server-rendered WordPress index (no JSON API, no per-category URL): the index walk pages the catalogue and enqueues new/price-changed ids into listing_detail_queue, then the detail drain fetches each /nemovitosti/{id}/ page, parses to a ScrapedListing, and writes via listing_write.write_listings (the one listing write; new rows land property_id NULL and the straggler-attach births the singleton).",
-      "portal": "maxima",
       "manual": true,
       "schedules": [
         {
@@ -4054,7 +3829,6 @@
       "filename": "scrape_mmreality.yml",
       "name": "Scraping: M&M Reality scraper (pilot)",
       "description": "Scheduled scraper for mmreality.cz on the shared portal framework. M&M Reality is a server-rendered HTML portal whose detail pages embed a complete structured estate object (a Vue `:property` prop): the index walk pages the mixed-category /nemovitosti/ results and enqueues new/price-changed ids into listing_detail_queue, then the detail drain fetches each listing page, decodes its :property JSON to a ScrapedListing, and writes via listing_write.write_listings (the one listing write; new rows land property_id NULL and the straggler-attach births the singleton).",
-      "portal": "mmreality",
       "manual": true,
       "schedules": [
         {
@@ -4126,7 +3900,6 @@
       "filename": "scrape_price_stats.yml",
       "name": "Scraping: Sreality price stats (ceny-nemovitosti, weekly + manual)",
       "description": "Ingests the aggregate market statistics sreality publishes at /ceny-nemovitosti (NOT individual listings) into the price_stat_* tables. For each active dataset (one named filter set) × tracked municipality × {prodej, pronájem} it fetches the per-month series from the login-gated estate_prices JSON API, then recomputes the per-city derived metrics (CAGR growth, gross yield) + refreshes the map choropleth. Design: docs/design/price-stats-datasets.md.",
-      "portal": null,
       "manual": true,
       "schedules": [
         {
@@ -4204,7 +3977,6 @@
       "filename": "scrape_remax.yml",
       "name": "Scraping: RE/MAX scraper (pilot)",
       "description": "Scheduled (every 6h) + manual scraper for remax-czech.cz on the shared portal framework. RE/MAX is a national franchise catalogue (~7,900 listings) served as a single server-rendered search index (no JSON API, no per-category URL) split only by an offer-type flag (sale=1 prodej / sale=2 pronájem): the index walk pages each agenda and enqueues new/price-changed ids into listing_detail_queue, then the detail drain fetches each /reality/detail/{id}/ page, parses to a ScrapedListing, and writes via listing_write.write_listings (the one listing write; new rows land property_id NULL and the straggler-attach births the singleton).",
-      "portal": "remax",
       "manual": true,
       "schedules": [
         {
@@ -4275,7 +4047,6 @@
       "filename": "screen_exam_cohort.yml",
       "name": "Labeling: screen exam cohort",
       "description": "The vision screening pass behind the exam's stratified frame (migrations 458+459). gpt-5-mini looks at each image and guesses which routing tags MIGHT apply; those guesses never become training data and the operator never sees them. They exist so the exam can be enriched: a random 250 images holds three or four garages, which cannot grade anything, while a stratified 250 holds around sixteen.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -4367,7 +4138,6 @@
       "filename": "seed_broker_settings.yml",
       "name": "Data: seed broker settings (free-email + franchise domains)",
       "description": "One-shot workflow that populates the two app_settings rows created as `[]` placeholders by migration 186 — `broker_free_email_domains` and `broker_franchise_domains` — from the committed JSON files (data/broker_free_email_domains.json + data/broker_franchise_domains.json).",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -4400,7 +4170,6 @@
       "filename": "seed_condition_settings.yml",
       "name": "Data: seed condition settings (rubric + markers)",
       "description": "One-shot workflow that populates the two large app_settings rows created by migration 072 — `llm_condition_rubric` and `llm_condition_marker_dictionary` — from the committed JSON files (data/condition_rubric_v1.json + data/condition_markers_curated.json).",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -4433,7 +4202,6 @@
       "filename": "seed_curated_cities.yml",
       "name": "Data: seed curated cities",
       "description": "One-shot workflow that geocodes the cities in data/obce_v_datech_2025.csv via Mapy.cz, then writes them into curated_cities + city_index_definitions + city_index_revisions + city_index_values (+ city_population from data/csu_population.json when present).",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -4479,7 +4247,6 @@
       "filename": "smoke_agent.yml",
       "name": "Dev: agent smoke test",
       "description": "Manual invocation only. Runs scripts/smoke_agent.py against the real Supabase DB and a real LLM provider. Picks a recent Prague 2+kk rental by default; --sreality-id overrides. Real LLM credits are spent — typically under $0.10 per run.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -4527,36 +4294,9 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/smoke_agent.yml"
     },
     {
-      "filename": "sreality_image_canary.yml",
-      "name": "Monitoring: sreality image template (daily)",
-      "description": "Runs the ONE outbound check of the verify harness — `sreality_image_template`, which requests a fresh sreality photo through the deployed download template (`scraper/image_storage.IMAGE_TRANSFORM_OPS`) and judges the served frame against the estate's declared size — on a lane of its own. It is registered LAST in verify_pipeline's registry so a slow CDN can never starve a database check, but that also means the 6-hourly verify lane routinely exhausts its 120 s budget before reaching it (observed on its first run). Here it has the budget to itself, once a day, the way `llm_health.yml` gives the acute checks theirs. A `fail` reds this run and rings the incident ladder; a throttle, a network error or an empty index is a `warn` that verified nothing.",
-      "portal": null,
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "40 5 * * *",
-          "human": "Daily at 05:40 UTC"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "sreality-image-canary",
-      "cancelInProgress": false,
-      "timeoutMinutes": 10,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/sreality_image_canary.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/sreality_image_canary.yml"
-    },
-    {
       "filename": "sreality_image_remaster.yml",
       "name": "Jobs: sreality image re-master",
       "description": "Re-downloads stored sreality photos at the whole-frame `SQUARE_1800_JPG` master template and OVERWRITES each row's existing R2 object in place, under the `images.storage_path` the row already carries — the ~3.55M rows with `rendition IS NULL` hold the superseded `res,749,562,3` CROP, which cost ~85% of photos their edges. sreality ROTATES image URLs when a listing is edited, so a 404/410 (or a dead-URL 400/401/415) on the stored URL is re-resolved from the listing's CURRENT detail payload by image `order`, and the fresh URL is stored with the bytes. Every success stamps `rendition` + decoded dimensions and re-arms the phash/CLIP lanes; bytes that come back as the 749x562 crop are an anomaly and are never stamped.",
-      "portal": null,
       "manual": true,
       "schedules": [
         {
@@ -4619,7 +4359,6 @@
       "filename": "tag_model.yml",
       "name": "NEW DEDUP: tag model (promote / score / activate)",
       "description": "Runs the tag model lane: turn one cell of a finished tagging bake-off into a versioned, permanent model, score images with it, and then — as a separate, explicit step — make that version the one the product reads. Manual dispatch only; one stage per run; CPU only, no GPU, no R2, no money.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -4760,7 +4499,6 @@
       "filename": "tagging_bakeoff.yml",
       "name": "NEW DEDUP: tagging bake-off (manifest / embed / train)",
       "description": "Runs the tagging bake-off: embed every labelled training photo (plus the 250 sealed-exam photos) under several encoder configurations — \"arms\" — then train and compare a per-tag yes/no classifier on each, so the choice of encoder is decided by measurement instead of by argument. Manual dispatch only; one stage per run.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -4909,8 +4647,7 @@
     {
       "filename": "test.yml",
       "name": "CI: tests",
-      "description": "CI test suite, runs on every push and pull request. Two parallel jobs: a Python job (verifies the filter-registry and workflow-docs codegen are fresh, then runs pytest) and a frontend job (TypeScript type-check + vitest pure-function tests). This is the build gate for every branch.",
-      "portal": null,
+      "description": "CI test suite, runs on every pull request and on every push to main. Two parallel jobs: a Python job (verifies the filter-registry and workflow-docs codegen are fresh, then runs pytest) and a frontend job (TypeScript type-check + vitest pure-function tests). This is the build gate for every branch.",
       "manual": false,
       "schedules": [],
       "onPush": true,
@@ -4929,7 +4666,6 @@
       "filename": "text_extraction_bakeoff.yml",
       "name": "Field capture: text-extraction bake-off",
       "description": "Decides which model may write a prose-only fact, and at what price (field-capture W7, ruling R10). MANUAL DISPATCH ONLY — it spends money and nothing in the lane calls it.",
-      "portal": null,
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -5013,50 +4749,14 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/text_extraction_bakeoff.yml"
     },
     {
-      "filename": "verify_outbound_urls.yml",
-      "name": "Monitoring: portal URL conformance",
-      "description": "Weekly live check that the stored portal URLs still resolve (W3 of the portal-URL contract, docs/design/portal-listing-url.md). Samples ACTIVE rows — a rotating quarter of sreality's sub-category codebook chosen by the ISO week (three rows per code) plus one row per crawler portal — and sends ~44 HEAD requests at <= 2/s. Status-code HEAD only: never follows a redirect, never reads a body, never authenticates. Writes one `outbound_url_conformance` row into pipeline_check_results and rings the in-app bell through the shared transition alerts. Thresholds by CONCENTRATION: a whole (category, sub-code) cell failing together is a slug defect; a scattered 404 is a delisting the presence check has not reached. Its own lane, deliberately outside verify_pipeline's DB-only budget.",
-      "portal": null,
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "17 5 * * 2",
-          "human": "17 5 * * 2"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "dry_run",
-          "description": "Probe + log only; write no result row and send no alert",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "portal-url-conformance",
-      "cancelInProgress": false,
-      "timeoutMinutes": 15,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/verify_outbound_urls.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/verify_outbound_urls.yml"
-    },
-    {
       "filename": "verify_pipeline.yml",
-      "name": "Monitoring: pipeline verification",
-      "description": "Computes pipeline-health metrics — street/geo dedup debt, the per-source eligibility funnel, merge latency, dedup-engine cycle health, and the LLM error rate — into `pipeline_check_results`, and rings the in-app notification bell (a `system_health` notification_dispatches row) for every `fail`. Born from the 2026-07 incident where the pipeline stalled silently for two days (Anthropic credit exhaustion) with no in-app signal and ~39k suspect unmerged byt pairs sat invisible. On Mondays it also records a random merge-precision sample for operator spot-review.",
-      "portal": null,
+      "name": "Monitoring: health canary (hourly)",
+      "description": "The health canary: the one monitoring workflow, and the one alarm path that needs neither Supabase's scheduler (pg_cron) nor Railway. Each run records failed production runs, measures the GitHub-hosted health checks that are due, then asserts that the watchers and the teller are alive. Only those assertions are meant to turn a run red, and GitHub emails the operator about a red scheduled run.",
       "manual": true,
       "schedules": [
         {
-          "cron": "20 */6 * * *",
-          "human": "Every 6 hours at :20"
+          "cron": "15 * * * *",
+          "human": "Every hour at :15"
         }
       ],
       "onPush": false,
@@ -5065,7 +4765,7 @@
       "inputs": [
         {
           "name": "dry_run",
-          "description": "Compute + log only; write no result rows and send no alerts",
+          "description": "Measure and log the due checks without storing results or registry rows (the poller and the assertions still run)",
           "required": false,
           "type": "boolean",
           "default": "false",
@@ -5073,12 +4773,13 @@
         }
       ],
       "secrets": [
+        "GITHUB_TOKEN",
         "SUPABASE_DB_URL"
       ],
       "concurrencyGroup": "pipeline-verification",
       "cancelInProgress": false,
-      "timeoutMinutes": 30,
-      "permissions": "contents: read",
+      "timeoutMinutes": 19,
+      "permissions": "contents: read, actions: read",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/verify_pipeline.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/verify_pipeline.yml"
     }

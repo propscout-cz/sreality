@@ -82,14 +82,20 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   once (every lane write fenced, 30 s drain). Follow-up 2026-10-10: a pass whose connections a
   database restart took retries the lease's release on new ones, every 20 s for up to 180 s,
   before falling back to its TTL.
-  Owed: the cgroup memory limit, the revive cap, `verify_pipeline`'s heartbeat check.
+  Owed: the cgroup memory limit (delivered by E948, below), the revive cap (shipped as E970,
+  2026-10-19: the revived feed takes its fifth of the claim, its cursor stopping at the last id
+  taken) and a `verify_pipeline` judgement of the lane (delivered as the Health `dedup` check, below).
 - **E948 (2026-10-10, a worker that died holding the lease):** its restart in place (same hostname
   and pid) releases that lease before its take and halves the claim cap in the same commit (floor
   25; only a seed or, E948b, a bigger container raises it); at the floor the lease waits out its
   TTL as before, so a death no claim can cure never loops the worker. The heartbeat adds
   `claim_cap`, `predecessor_released` / `predecessor_kept`, `rss_mb` and the cgroup
-  `memory_limit_mb` (E941's owed reading). Still owed (E941): the revive cap, since the revived
-  feed ignores the claim's limit, and the `verify_pipeline` heartbeat check.
+  `memory_limit_mb` (E941's owed reading). The revive cap shipped as E970 (2026-10-19). The
+  `verify_pipeline` judgement E941 owed is delivered as the Health `dedup` check (label "Engine",
+  Health dashboard sprint wave 5, `scripts/checks/dedup.py`): it judges the engine's state, build,
+  merge pause, decision lag, lease, rulings and splits from the durable stores, not from the
+  heartbeat's per-pass counters (of the heartbeat it reads only the worker's start and its newest
+  beat, to tell a predecessor's lease from the live worker's).
   **E948b:** the cap row records the memory limit its deaths happened under (`limit_mb`, read
   each pass), and a container limit grown ≥ 25 % resets the cap to 500 before the next pass,
   without a seed; a boot that also finds a dead predecessor releases its lease without halving
@@ -148,6 +154,16 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   that leaves `clip_tagged_at` alone must empty the ledger; a sighting (`last_seen_at`) re-scores an
   advert's rejects as it does its stored pairs. Next (E943's other half, before Prague): facts only
   for the claim and the scored endpoints, the decision digest stored on `rt_fp`.
+- **E974 (2026-10-21, the operator's region order):** the waiting groups are re-claimed Praha first, then
+  the eight towns the apply scope names with a `town:` block, then the rest (the Středočeský kraj okresy
+  to come); within each, flats for sale, flats for rent, houses and commercial for sale, the rest.
+  Active and inactive groups together: the operator's ruling of 2026-10-21 ("aktivní i neaktivní
+  dohromady") retired E973's active-first level. An order only: no decision module, digest unchanged.
+- **E975 (2026-10-21, the sweep slice):** the reconcile sweeps 2,000 groups a pass past its cursor (was
+  200): with Prague's 34k clusters the hand-on ran dry at 12:00Z and the merges fell to a third; a cycle
+  is ~2 h now and the discovery matches the re-claim. One constant, no decision module, digest unchanged.
+  Owed: the three `applied_merges` overlap scans of the reconcile's planning read id arrays that grow with
+  the list (DIAGNOSIS recommendation 3: an index they can use) before they near the 2-min statement timeout.
 - **Next:** three live days and checkpoint C2, then the last commit deletes the batch
   `apply`/`unapply` modes; `legacy_retire` runs per area under the live generation since W8 (E953, 2026-10-14). Widening the scope is the operator's call.
 - **Open (operator decision, before the C2 deletion):** the undo path once `mode=unapply` is gone.
@@ -155,6 +171,11 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   the commit that deletes the modes must name what replaces it. `legacy_retire` rides on
   `mode=apply` (`retire_legacy=1`), and since E953 also runs alone under `generation=rt,blocks=`
   (the per-area undo before an area goes live), so that commit must keep the `rt` form.
+- **Input from ONE PIN (2026-10-19): cross-town conflicting ad pairs as merge-quality input.** ~34 of
+  1,580 sampled live conflicts (property ids 1–158,046) cross a town line. A property whose ads
+  sit in two towns may be a wrong merge, and since migration 636 its pin stands at the finer ad's
+  point, which can be the other building's. Census SQL in the ONE PIN W0/W1 receipts
+  (`~/one-pin-artifacts/` on the operator machine; `docs/design/one-pin/PROGRAM.md` W3).
 - **Next (W8, E953):** per area, before it enters the apply scope: brake, the area into the scope
   row, `mode=apply` `generation=rt,retire_legacy=1,blocks=town:<code>` dry run, then live, then
   the interval back. Beroun (`town:531057`) first, once the lane has read it after the 10-14

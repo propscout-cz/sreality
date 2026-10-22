@@ -25,11 +25,15 @@ import {
 import { fmtCount, fmtRelative, fmtUsd, fmtUsdPerCall } from '@/lib/format';
 import { useTokenColors } from '@/lib/useTokenColors';
 import { timeLabel, timeLabelFull, valueAxisSpec } from '@/lib/chartAxis';
+import ErrorBanner from '@/components/ErrorBanner';
 import GrainToggle, { type Grain } from '@/components/GrainToggle';
+import Panel from '@/components/Panel';
+import Skeleton from '@/components/Skeleton';
+import Stat from '@/components/Stat';
 
 /* Operator dashboard for LLM spend — aggregates of the `llm_calls` audit
  * table via `llm_cost_daily_public` (migration 280) and its hour-grain
- * twin `llm_cost_hourly_public` (migration 281). Read-only, anon.
+ * twin `llm_cost_hourly_public` (migration 281).
  *
  * The page has three day labels — the "Today" tile, the daily chart's axis and
  * its tooltip — and since migration 437 all three mean the SAME civil day
@@ -44,12 +48,9 @@ const TOKEN_KEYS = [
   '--color-ink-3',
   '--color-rule',
   '--color-paper-2',
-  '--color-tag-ochre',
-  '--color-tag-slate',
   '--color-tag-brick',
   '--color-tag-teal',
   '--color-tag-plum',
-  '--color-tag-sage',
   '--color-tag-sand',
   '--color-tag-copper',
 ];
@@ -75,13 +76,9 @@ export default function Costs() {
         </div>
       </div>
 
-      {error ? (
-        <div className="mt-4 rounded-[var(--radius-md)] border border-[var(--color-brick)]/30 bg-[var(--color-brick-soft)] px-4 py-3 text-sm text-[var(--color-brick)]">
-          Failed to load cost data: {(error as Error).message}
-        </div>
-      ) : null}
+      {error ? <ErrorBanner title="Failed to load cost data:" message={error.message} /> : null}
 
-      {isLoading && !data ? <Skeleton /> : data ? <Body rows={data} /> : null}
+      {isLoading && !data ? <Loading /> : data ? <Body rows={data} /> : null}
     </div>
   );
 }
@@ -116,18 +113,17 @@ function Body({ rows }: { rows: LlmCostDailyRow[] }) {
           label="Projected / month"
           value={fmtUsd(kpis.projectedMonth)}
           hint="7-day average × 30"
-          accent
         />
         <Stat label="Calls · 7 d" value={fmtCount(kpis.calls7)} />
         <Stat
           label="Errors · 7 d"
           value={fmtCount(kpis.errors7)}
-          danger={kpis.errors7 > 0}
+          status={kpis.errors7 ? 'fail' : undefined}
           hint={kpis.errors7 > 0 ? 'failed calls, unbilled' : undefined}
         />
       </div>
 
-      <Card
+      <Panel
         title={
           grain === 'hour'
             ? `Hourly spend · last ${CHART_HOURS} h · by feature`
@@ -138,7 +134,7 @@ function Body({ rows }: { rows: LlmCostDailyRow[] }) {
         {grain === 'hour' ? (
           hourlyQuery.error ? (
             <p className="text-sm text-[var(--color-brick)]">
-              Failed to load hourly data: {(hourlyQuery.error as Error).message}
+              Failed to load hourly data: {hourlyQuery.error.message}
             </p>
           ) : !hourly ? (
             <p className="text-sm text-[var(--color-ink-3)]">Loading hourly spend…</p>
@@ -148,15 +144,15 @@ function Body({ rows }: { rows: LlmCostDailyRow[] }) {
         ) : (
           <CostChart series={daily} grain="day" />
         )}
-      </Card>
+      </Panel>
 
-      <Card title="By feature · 7 d / 30 d">
+      <Panel title="By feature · 7 d / 30 d">
         <FeatureTable features={features} />
-      </Card>
+      </Panel>
 
-      <Card title="By model · last 30 d">
+      <Panel title="By model · last 30 d">
         <ModelTable models={models} />
-      </Card>
+      </Panel>
     </div>
   );
 }
@@ -377,65 +373,14 @@ function ModelTable({ models }: { models: ReturnType<typeof summarizeByModel> })
   );
 }
 
-function Card({
-  title,
-  accessory,
-  children,
-}: {
-  title: string;
-  accessory?: React.ReactNode;
-  children: React.ReactNode;
-}) {
+function Loading() {
   return (
-    <section className="rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-5 py-4">
-      <div className="flex items-center justify-between gap-3">
-        <h3 className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] font-medium">
-          {title}
-        </h3>
-        {accessory ?? null}
-      </div>
-      <div className="mt-3">{children}</div>
-    </section>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  hint,
-  accent,
-  danger,
-}: {
-  label: string;
-  value: string;
-  hint?: string;
-  accent?: boolean;
-  danger?: boolean;
-}) {
-  const tone = danger
-    ? 'text-[var(--color-brick)]'
-    : accent
-      ? 'text-[var(--color-copper-2)]'
-      : 'text-[var(--color-ink)]';
-  return (
-    <div className="rounded-[var(--radius-sm)] border border-[var(--color-rule-soft)] bg-[var(--color-paper-2)] px-3 py-2">
-      <div className="text-[0.62rem] tracking-[0.1em] uppercase text-[var(--color-ink-3)]">{label}</div>
-      <div className={`font-mono tabular-nums text-xl ${tone}`}>{value}</div>
-      {hint ? <div className="text-[0.68rem] text-[var(--color-ink-4)]">{hint}</div> : null}
-    </div>
-  );
-}
-
-function Skeleton() {
-  return (
-    <div className="mt-4 space-y-4 animate-pulse">
+    <div className="mt-4 space-y-4">
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <div key={i} className="h-16 rounded-[var(--radius-sm)] border border-[var(--color-rule-soft)] bg-[var(--color-paper-2)]" />
-        ))}
+        {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} height={64} />)}
       </div>
-      <div className="h-[320px] rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)]" />
-      <div className="h-[240px] rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)]" />
+      <Skeleton height={320} />
+      <Skeleton height={240} />
     </div>
   );
 }

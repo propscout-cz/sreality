@@ -47,10 +47,16 @@ const DB_BUSY = new Set(['55P03', '40P01']);
 /* Every PostgREST builder: .from()…, .rpc()…, and .maybeSingle()/.single(). */
 export interface PgBuilder extends PromiseLike<PostgrestSingleResponse<unknown>> {
   retry(enabled: boolean): unknown;
+  setHeader(name: string, value: string): unknown;
 }
 
 export interface PgReadOptions {
   signal?: AbortSignal;
+  /* The owner whose board a pipeline share lets the caller read (migration
+   * 641, lib/acting): sent as `x-act-as`. A view read is a GET, so a READ share
+   * acts on it; an .rpc() is a POST and sees no curation under one — never act
+   * through an RPC. Null/absent: the caller's own rows, as before. */
+  actAs?: string | null;
 }
 
 export interface PgResult<T> {
@@ -60,12 +66,13 @@ export interface PgResult<T> {
 
 export async function pgRead<T = unknown>(
   builder: PgBuilder,
-  { signal }: PgReadOptions = {},
+  { signal, actAs }: PgReadOptions = {},
 ): Promise<PgResult<T>> {
   if (signal?.aborted) throw signal.reason;
   const deadline = AbortSignal.timeout(PG_DEADLINE_MS);
   const stop = signal ? AbortSignal.any([signal, deadline]) : deadline;
   builder.retry(false);
+  if (actAs) builder.setHeader('x-act-as', actAs);
   /* maybeSingle()/single() return `this` at runtime (postgrest-js); only their
    * declared type drops abortSignal. */
   (builder as PgBuilder & { abortSignal(s: AbortSignal): unknown }).abortSignal(stop);
