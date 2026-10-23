@@ -453,7 +453,7 @@ def test_the_captured_bodies_carry_no_broker_identity():
     for path in sorted(_BODIES.glob("*.json")):
         doc = json.loads(path.read_text(encoding="utf-8"))
         assert set(doc["raw_json"]) <= {
-            "id", "title", "price_text", "locality_text", "maxima_ref", "coords", "params"}
+            "id", "title", "price_text", "locality_text", "coords", "params"}
         blob = json.dumps(doc, ensure_ascii=False)
         assert not re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", blob), path.name
         assert not re.search(r"(?<!\d)(?:\+420[ ]?)?\d{3}[ ]\d{3}[ ]\d{3}(?!\d)", blob), \

@@ -515,6 +515,7 @@ def parse_detail(html: str, *, source_url: str) -> ScrapedListing:
         source=SOURCE,
         source_id_native=source_id,
         source_url=source_url,
+        ad_reference=vocabulary.reference(_detail_reference(tree)),
         category_main=category_main,
         category_type=category_type,
         price_czk=price_czk,
@@ -554,6 +555,22 @@ def parse_detail(html: str, *, source_url: str) -> ScrapedListing:
         description=description,
         raw=raw,
     )
+
+
+def _detail_reference(tree: HTMLParser) -> str | None:
+    """The `Číslo zakázky:` row of the short-props table the price row sits in — the one
+    place the page prints the advertiser's own number; the spec list never carries it."""
+    price_row = tree.css_first("tr.advert-description__short-props-price")
+    table = price_row.parent if price_row is not None else None
+    while table is not None and table.tag != "table":
+        table = table.parent
+    if table is None:
+        return None
+    for row in table.css("tr"):
+        cells = row.css("td")
+        if len(cells) >= 2 and vocabulary.fold(_text(cells[0])).startswith("cislo_zakazky"):
+            return _text(cells[-1])
+    return None
 
 
 def _detail_price_text(tree: HTMLParser) -> str | None:

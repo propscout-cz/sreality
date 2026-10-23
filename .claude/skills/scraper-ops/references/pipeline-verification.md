@@ -230,7 +230,7 @@ the run that stops naming it. Boolean cells never written `false` are reported t
 whether silence means `false` or `unknown` is an absence
 semantics the contract declares, so there is nothing yet to be right or wrong against.
 
-**Who owns which field.** The fill arm owns the 26 `LISTING_COLUMNS` attributes. `data_quality_by_source`'s
+**Who owns which field.** The fill arm owns the 27 `LISTING_COLUMNS` attributes. `data_quality_by_source`'s
 seven probes with no attribute column (`geom`, `locality`, `street`, `property_grouped`, `source_url`, the
 two condition levels) froze with its capture in Health dashboard sprint wave 6 (migration 633 unscheduled
 `capture-data-quality`; wave 9 drops the view): a portal link is the `data_quality` gauge's `url/<portal>`

@@ -98,6 +98,7 @@ DETAIL_HTML = """
 <dl class="g-info">
   <div class="g-info__col">
     <div class="i-info"><span class="i-info__title">Vlastnictví</span><span class="i-info__value"> soukromé </span></div>
+    <div class="i-info"><span class="i-info__title">ID nemovitosti</span><span class="i-info__value"> 00075-1 </span></div>
     <div class="i-info"><span class="i-info__title">Plocha užitná</span><span class="i-info__value"> 41 m² </span></div>
     <div class="i-info"><span class="i-info__title">Konstrukce</span><span class="i-info__value"> Cihlová </span></div>
     <div class="i-info"><span class="i-info__title">Balkóny</span><span class="i-info__value"> Balkon </span></div>
@@ -170,6 +171,8 @@ def test_parse_detail_full():
     assert listing.source == "ceskereality"
     assert listing.source_id_native == "3754200"
     assert listing.source_url == _DETAIL_URL
+    # The broker's own code, not the portal id — kept verbatim, suffix included.
+    assert listing.ad_reference == "00075-1"
     assert listing.category_main == "byt"
     assert listing.category_type == "prodej"
     assert listing.price_czk == 6_999_000
