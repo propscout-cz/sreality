@@ -1780,7 +1780,7 @@ renumber.** Navigate by area:
     estimate's band on the valuation ruler; beside them the brokers with their contact and the sold
     median — each from the SAME query and rule as the tab it opens, so the two never disagree. The
     "Okolí dashboard" tab (`MarketTile`, 2026-10-23) draws the account's ONE dashboard marked for it
-    (`stats_dashboards.property_card`, migration 663, any name, never a filter; set up in Browse ›
+    (`stats_dashboards.property_card`, migration 664, any name, never a filter; set up in Browse ›
     Statistiky) over ONE neighbourhood definition,
     `lib/neighbourhood` — the property's type, deal, disposition and ownership (one it does not state is
     left unset and named), Browse's centre + radius around it (250 m – 2 km, 500 m default, the square

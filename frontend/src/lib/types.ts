@@ -1113,7 +1113,7 @@ export interface SavedDashboard {
   owner_email: string | null;
   shared_with: CollectionShare[];
   /* The caller's ONE dashboard the property page's "Okolí dashboard" tab draws (migration
-   * 663); always false on a dashboard shared with the caller. Optional while an API without
+   * 664); always false on a dashboard shared with the caller. Optional while an API without
    * it may answer (a deploy skew reads as "none"). */
   property_card?: boolean;
 }

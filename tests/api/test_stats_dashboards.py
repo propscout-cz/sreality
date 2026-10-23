@@ -194,7 +194,7 @@ def test_an_update_changes_what_was_sent_and_an_explicit_null_clears_the_filter(
     assert edit[0] == "Nové" and json.loads(edit[1]) == [_NORMAL] and edit[2] == str(_ID)
 
 
-# --- the property page's "Okolí dashboard" (migration 663) ------------------------
+# --- the property page's "Okolí dashboard" (migration 664) ------------------------
 
 def test_the_property_card_moves_in_one_transaction_and_drops_the_filter(client, conn) -> None:
     card = (*_OWN[:3], None, *_OWN[4:10], True)
@@ -206,7 +206,7 @@ def test_the_property_card_moves_in_one_transaction_and_drops_the_filter(client,
     assert res.status_code == 200, res.text
     assert res.json()["property_card"] is True and res.json()["filter_spec"] is None
     (clear_sql, clear), (set_sql, set_), (get_sql, _get) = conn.executed
-    # The caller's other row lets go first, so 663's one-per-account index never sees two.
+    # The caller's other row lets go first, so 664's one-per-account index never sees two.
     assert clear_sql == ("UPDATE stats_dashboards SET property_card = false WHERE property_card AND id <> %s "
                          "AND account_id IN (SELECT current_account_ids())")
     assert set_sql == ("UPDATE stats_dashboards SET property_card = true, filter_spec = NULL, updated_at = now() "

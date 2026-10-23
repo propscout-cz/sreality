@@ -65,7 +65,7 @@ describe('isPropertyCard', () => {
     expect(isPropertyCard({ owner_email: null, property_card: true })).toBe(true);
     expect(isPropertyCard({ owner_email: 'jana@example.com', property_card: true })).toBe(false);
     expect(isPropertyCard({ owner_email: null, property_card: false })).toBe(false);
-    // An API from before migration 663 sends no flag: no card, never a crash.
+    // An API from before migration 664 sends no flag: no card, never a crash.
     expect(isPropertyCard({ owner_email: null })).toBe(false);
   });
 });

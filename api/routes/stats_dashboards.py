@@ -1,5 +1,5 @@
 """Stats dashboards (migration 647, docs/design/saved-dashboards.md): the saved set, its shares, the working board,
-and the one the property page's "Okolí dashboard" tab draws (migration 663)."""
+and the one the property page's "Okolí dashboard" tab draws (migration 664)."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ DASHBOARDS = saved_sets.SavedSetKind(
                         "'account_id', s.recipient_account_id, "
                         f"'email', {shares.party_label('s.recipient_account_id')}) ORDER BY s.created_at), "
                         "'[]'::json) FROM stats_dashboard_shares s WHERE s.dashboard_id = t.id)"),
-        # The owner's own choice only (migration 663): a recipient never reads another account's as theirs.
+        # The owner's own choice only (migration 664): a recipient never reads another account's as theirs.
         ("property_card", f"(t.property_card AND {_IS_MINE_SQL})"),
     ),
     row_scope="name IS NOT NULL",
@@ -66,7 +66,7 @@ _SAVE_WORKING_BOARD_SQL = (
 )
 
 # The property card moves in one transaction: the caller's other row lets go, then this one takes it and drops its
-# filter (663's CHECK: a property card carries none). Both are RLS-scoped UPDATEs by the caller's own accounts; a
+# filter (664's CHECK: a property card carries none). Both are RLS-scoped UPDATEs by the caller's own accounts; a
 # shared or unnamed row matches nothing in the second, which is the 404.
 _CLEAR_PROPERTY_CARD_SQL = (
     "UPDATE stats_dashboards SET property_card = false "

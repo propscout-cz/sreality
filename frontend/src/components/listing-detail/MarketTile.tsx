@@ -1,6 +1,6 @@
 /* The property page's "Okolí dashboard" tab (operator 2026-10-23): a small dashboard
  * of THIS property's neighbourhood. Its charts are the account's ONE dashboard marked
- * for it (migration 663, any name), set up in Browse › Statistiky; its
+ * for it (migration 664, any name), set up in Browse › Statistiky; its
  * sample is lib/neighbourhood's — the property's type, deal, disposition and
  * ownership, a radius around it, and only the building material and condition
  * left to the user — under the Stats tab's own lens ("Prodáno (trh)" by default,

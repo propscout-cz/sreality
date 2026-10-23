@@ -39,7 +39,7 @@ export const DEFAULT_SCOPE: NeighbourhoodScope = {
 };
 
 /* The dashboard the property page's "Okolí dashboard" tab draws: the account's ONE
- * dashboard marked so (migration 663), under any name; Browse › Statistiky creates one
+ * dashboard marked so (migration 664), under any name; Browse › Statistiky creates one
  * as "Okolí dashboard" or makes any own dashboard it (docs/design/saved-dashboards.md). */
 export const PROPERTY_CARD_LABEL = 'Okolí dashboard';
 export const isPropertyCard = (d: { owner_email: string | null; property_card?: boolean }): boolean =>

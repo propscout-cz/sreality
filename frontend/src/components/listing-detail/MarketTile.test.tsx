@@ -1,5 +1,5 @@
 /* The property page's "Okolí dashboard" tab: the account's ONE dashboard marked for
- * it (migration 663, any name), drawn over the property's neighbourhood
+ * it (migration 664, any name), drawn over the property's neighbourhood
  * (lib/neighbourhood) under the Stats lens, and one click from the explore window over
  * the very same sample. */
 import { beforeEach, describe, expect, it, vi } from 'vitest';

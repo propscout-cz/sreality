@@ -7,7 +7,7 @@
  * duplicated as stored ("Duplikovat": a new row, "<name> (kopie)"). A dashboard
  * shared WITH the account is read-only: Načíst, Uložit jako vlastní, Přestat sledovat.
  * ONE own dashboard, under any name, is the property page's "Okolí dashboard"
- * (migration 663, lib/neighbourhood): its chip says so, it carries no filter (the
+ * (migration 664, lib/neighbourhood): its chip says so, it carries no filter (the
  * save dialog greys the box out), any other own dashboard's menu can make it so
  * ("Použít jako okolí dashboard"), and while the account has none the bar offers to
  * create it from the working board. */
