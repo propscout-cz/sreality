@@ -122,20 +122,12 @@ class IdnesPortal(portal_runner.PortalDefaults):
         config: PortalConfig,
         *,
         max_pages: int | None = None,
-        price_change_min_pct: float | None = None,
     ) -> None:
         self._categories = config.categories
         self._max_pages = max_pages
         self.index_rate = config.limits.index_rate
         self.shared_rate_limiter = config.limits.shared_rate_limiter
-        # CLI override > per-portal config (the standard limits chain). Absorbs
-        # the daily FX re-display drift of idnes's foreign inventory so the
-        # walk doesn't enqueue phantom "price changed" refetches (see
-        # PortalLimits.price_change_min_pct).
-        self.price_change_min_pct = (
-            price_change_min_pct if price_change_min_pct is not None
-            else config.limits.price_change_min_pct
-        )
+        self.price_change_min_pct = config.limits.price_change_min_pct
         # Read once in connect_index, before the runner asks for categories.
         # Empty = every slice sorts as never-walked, which is the safe default:
         # it walks everything rather than skipping on stale bookkeeping.
@@ -696,11 +688,7 @@ def main(argv: list[str] | None = None) -> int:
     portal_runner.configure_logging(args.verbose)
 
     config = portal_runner.load_config(SOURCE, args.dry_run)
-    portal = IdnesPortal(
-        config,
-        max_pages=args.max_pages,
-        price_change_min_pct=args.price_change_min_pct,
-    )
+    portal = IdnesPortal(config, max_pages=args.max_pages)
 
     # Resolve operational limits: CLI override > per-portal DB config > default.
     workers = args.workers if args.workers is not None else config.limits.detail_workers
@@ -756,12 +744,6 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument(
         "--rate", type=float, default=None,
         help="detail-fetch requests/second ceiling (default: per-portal config)",
-    )
-    p.add_argument(
-        "--price-change-min-pct", type=float, default=None,
-        help="relative index-price move below which a listing reads as "
-             "unchanged in the walk diff (default: per-portal config; "
-             "0 = exact compare)",
     )
     p.add_argument(
         "--max-seconds", type=float, default=None,
