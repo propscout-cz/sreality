@@ -345,7 +345,7 @@ A heal through the W3 seam writes only the named `listings` columns and a `dirty
    `properties_public` where `first_seen_at > last_matched_first_seen_at` for that subscription, plus a re-scan of
    `first_seen_at <= cursor AND > now() - lookback`, where `lookback = max(60, 2 × notifications_new_requires_image_
    timeout_minutes)` — 60 minutes on today's settings (neither image-gate key is set in `app_settings`, so both
-   defaults apply). `properties.first_seen_at` is `min(child.first_seen_at)` (`scripts/recompute_property_stats.py`
+   defaults apply; the image gate is superseded 2026-10-23 by the publication rule, migs 668/669). `properties.first_seen_at` is `min(child.first_seen_at)` (`scripts/recompute_property_stats.py`
    :179) and no heal writes `listings.first_seen_at`, so a property older than the window cannot re-enter it however
    its columns move. 685 of 461k active properties were inside that 60-minute window at the time of measurement.
 2. **The dedupe key is once-ever per property.** `wd:{sub}:new:{property_id}`, UNIQUE, `ON CONFLICT DO NOTHING`

@@ -7,7 +7,7 @@ is `CAP` old — the one bounded wait, so an engine backlog can delay a property
 ONE expression, `visible_since`, defines both: published <=> visible_since <= now(); a watchdog's
 "what appears after it was switched on" is visible_since > active_since.
 
-The SQL surfaces carry the inline text verbatim (browse_projection, migration 668), pinned against
+The SQL surfaces carry the inline text verbatim (browse_projection, migration 669), pinned against
 this module by tests/test_668_publication_gate.py; the Python sites render the EXISTS form, each
 registered in tests/test_property_location_ad_rail.py PUBLISHED_RULE_SITES. One cap, spelled here only.
 """
@@ -35,5 +35,5 @@ def published_property_predicate(property_id: str = "l.property_id", *, alias: s
             f" AND {published_predicate(alias)})")
 
 
-# The text browse_projection carries verbatim (migration 668).
+# The text browse_projection carries verbatim (migration 669).
 PUBLISHED_PREDICATE = published_predicate()

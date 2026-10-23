@@ -78,9 +78,9 @@ Both tables: RLS on, no browser grant, in `_ADMIN_ONLY_RELATIONS`; neither names
 
 ### 3.3 Runtime: two worker lanes
 - **`notifications`, constant 300 s** (the health/text_extract shape: no settings row; the brake is a deploy). Steps report through `portal_errors`, so `lane/notifications/<step>` goes red alone.
-  - **watchdog_new:** one INSERT per live watchdog over `first_seen_at > greatest(now() − 24 h, active_since)`, image gate fixed; the cursor, lookback and two settings classes go.
-  - **price:** one canonical-ad fragment (today two), 7 days from `active_since`/`monitor_since`.
-  - **monitor:** 'inactive' only after 24 h gone; 'reactivated' keyed on its inactive dispatch's epoch; new_source unchanged (merge anchoring would push weeks-old ads). Price and monitor windows are constants (7 days); the image-gate timeout is clamped to 23 h so a held property is released inside the 24 h window (W2a).
+  - **watchdog_new:** one INSERT per live watchdog over published properties first seen in the last 24 h and visible since after `active_since` (the publication rule, migs 668/669, replaced the image gate 2026-10-23); the cursor, lookback and two settings classes go.
+  - **price:** one canonical-ad fragment (today two), 7 days from `active_since`/`monitor_since`; a watchdog's on published properties only (both watchdog producers share `_build_match_clauses`, the published rule second after the served rule), a monitored collection's ungated (a change on a curated property is no first appearance).
+  - **monitor:** 'inactive' only after 24 h gone; 'reactivated' keyed on its inactive dispatch's epoch; new_source unchanged (merge anchoring would push weeks-old ads). Price and monitor windows are constants (7 days); the publication cap (6 h) releases a held property inside the 24 h window (the image gate's 23 h clamp went with it, 2026-10-23).
 - **`push`, constant 15 s.** One brake: remove `VAPID_PRIVATE_KEY` from the worker; the lane reports "unconfigured" (a warn cell, §3.9).
 - **No lock:** producers are idempotent on the identity index; the claim is a compare-and-set.
 - **The API keeps** the health teller (a dead worker cannot silence its own alarms) and `shares.grant`; `NOTIFICATIONS_MATCHER_DISABLED` becomes `HEALTH_TELLER_DISABLED` (W2b).
@@ -145,7 +145,7 @@ Delete the unused Resend transport, webhook, unsubscribe and suppression (R5). L
 ### 3.9 Measures (data quality)
 **`notifications` Health check (W4: module, CHECKS row, `owner_path`, test):** **stall**, a pending row due > 10 min; **recall**, a VISIBLE unseen event < 24 h, an older live device, and no delivery row 5 min after dispatch (lost pushes); **failures**, ≥ 3 failed in 24 h; **brake shown**, push unconfigured while a live device exists (warn). The three-strike rule is prevention-only: no server signal sees it.
 
-**Gauges (design-doc SQL, reviewed after 7 days):** false-new ('new' where another ad was first seen > 1 day earlier; baseline recomputed in W2a, as 5.1% used > 7 days); double-new (`duplicate_of`); flap (Delisted → Relisted ≤ 48 h); detection and send latency; delivery and skip mix; rows per apns-id; open rate (`opened_at` ≤ 30 min after `sent_at`); churn by `end_reason`.
+**Gauges (design-doc SQL, reviewed after 7 days):** false-new ('new' where another ad was first seen > 1 day earlier; baseline recomputed in W2a, as 5.1% used > 7 days; since 2026-10-23 the count of 'new' rows the retraction arm of `VISIBLE_SQL` withdraws); double-new (`duplicate_of`); flap (Delisted → Relisted ≤ 48 h); detection and send latency; delivery and skip mix; rows per apns-id; open rate (`opened_at` ≤ 30 min after `sent_at`); churn by `end_reason`.
 
 ## 4. Additions vs deletions ledger
 
@@ -237,12 +237,12 @@ Decided by your brief: shares are pushed; push is for the iPhone, an app rule (t
 - **The policy drop does not remove R2 (c)'s special case:** under (c) the rows must stay readable in a System tab.
 - **`collection_idx` stays:** this revision keeps the collection FK.
 
-**We will NOT:** build a native app, Android or desktop push, or another channel; keep per-watchdog channels, preferences or cadence settings; add a matcher dedup (rule 15); keep per-attempt history; ship a VAPID key in the frontend; push system alerts or a backlog; add a dependency; drive any production write ourselves.
+**We will NOT:** build a native app, Android or desktop push, or another channel; keep per-watchdog channels, preferences or cadence settings; add a matcher dedup (rule 15; the publication gate of 2026-10-23 reads the engine's own verdicts and decides nothing); keep per-attempt history; ship a VAPID key in the frontend; push system alerts or a backlog; add a dependency; drive any production write ourselves.
 
 ## 8. Audit findings: resolved and deferred
 
-**Resolved:** F1; F2, F10 (leased ledger); F3, F7 (routing by account); F4; F5 (R2, R9); F6 (one identity); F8 (R1); F9 (R4); F11 (device origin); F12; F14 (dwell); F15, F23, F26 (new ledger); F16; F18 (identity-bound unsubscribe); F24, F28 (`/n/{id}`); F25 (R3); F27.
+**Resolved:** F1; F2, F10 (leased ledger); F3, F7 (routing by account); F4; F5 (R2, R9); F6 (one identity); F8 (R1); F9 (R4); F11 (device origin); F12; F13 (the publication gate: operator rulings 2026-10-23, migs 668/669 — 'new' waits until its property is settled or 6 h old, and a cap-fired 'new' a merge makes older withdraws itself); F14 (dwell); F15, F23, F26 (new ledger); F16; F18 (identity-bound unsubscribe); F24, F28 (`/n/{id}`); F25 (R3); F27.
 
-**Partly resolved:** F13 (measured; holding 'new' pushes for autodedup needs 30 days of gauges and a ruling); F17 (no stored sender text, a cap; the 422 email oracle goes to roadmap item 11); F19 (the bell's live price stays, a UX change); F20 (new_source deferred); F21 (a deleted collection still takes its alerts; retiring collections touches every curation carrier); F22 (precision measured).
+**Partly resolved:** F17 (no stored sender text, a cap; the 422 email oracle goes to roadmap item 11); F19 (the bell's live price stays, a UX change); F20 (new_source deferred); F21 (a deleted collection still takes its alerts; retiring collections touches every curation carrier); F22 (precision measured; since 2026-10-23 a 'new' whose property a merge makes more than a day older is withdrawn, the retraction arm).
 
 **Deferred:** server-side agenda enforcement; pipeline-share taps on the shared board; presets vs watchdogs; one label map; collection retirement.

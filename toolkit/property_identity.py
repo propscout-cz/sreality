@@ -146,6 +146,13 @@ VALUES (%(group)s, %(table)s, %(row_key)s, %(row_at)s, %(account_id)s, %(from_pr
         %(survivor)s, %(kind)s, %(snapshot)s)
 """
 
+# Publication never regresses on a merge (migration 668): a settled retired property's stamp
+# passes to a survivor not yet settled.
+_CARRY_SETTLED_SQL = (
+    "UPDATE properties s SET settled_at = r.settled_at FROM properties r "
+    "WHERE s.id = %s AND r.id = %s AND s.settled_at IS NULL AND r.settled_at IS NOT NULL"
+)
+
 # One statement touching `status` and `is_active` together: a retired property is never left
 # active between two writes; the last write of a pair.
 _RETIRE_SQL = """
@@ -503,8 +510,8 @@ def _gate_ads(conn: psycopg.Connection, ids: list[int]) -> None:
 def _merge_pair(cur: psycopg.Cursor, step: carriers.MergeStep, *, reason: str,
                 confidence: float | None, markers: dict[str, Any] | None) -> int:
     """One retired property into the survivor under the set's lock and gate: the ledger, the
-    re-point, every carrier in order, the carry record of what they moved or folded, the retire.
-    Returns the ledger rows written."""
+    re-point, every carrier in order, the carry record of what they moved or folded, the
+    publication stamp, the retire. Returns the ledger rows written."""
     cur.execute(_LEDGER_SQL, {
         "group": step.group, "survivor": step.survivor, "retired": step.retired,
         "reason": reason, "confidence": confidence,
@@ -520,6 +527,7 @@ def _merge_pair(cur: psycopg.Cursor, step: carriers.MergeStep, *, reason: str,
             {**row._asdict(), "group": step.group, "survivor": step.survivor,
              "snapshot": None if row.snapshot is None else Jsonb(row.snapshot)}
             for row in carried])
+    cur.execute(_CARRY_SETTLED_SQL, (step.survivor, step.retired))
     cur.execute(_RETIRE_SQL, (step.survivor, step.retired))
     return moved
 

@@ -72,6 +72,19 @@ account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, e
       harness over every payload shape; the landing `/n/:dispatchId` (mark-seen → `dispatchTarget`, `?d=` → `/push/opened`);
       `lib/push` + `usePush` and the sheet's switch "Oznámení na tomto iPhonu"; re-sync on sign-in and the hourly
       resume; binding follows identity (F18). Owed: the on-device proof (W5 gate, the operator's iPhone).
+- [x] **The publication gate (this PR; migrations 668 + 669; operator rulings 2026-10-23 Q1–Q6; closes F13)** — a
+      property is shown (Browse, the map, Stats) and told (the watchdog) only once published: `properties.settled_at`,
+      stamped by the maintenance pass when its first photo is stored (or it has none) and the engine is done with its
+      ads, or 6 h after it was first seen (`toolkit/publication.py`, one cap, no flags). The image gate went (its two
+      settings rows never existed in production); a merge carries the stamp to the survivor; the 'new' window is keyed
+      on visibility; a 'new' whose property a merge makes more than a day older leaves the feed, badge and push (a tap
+      still lands); the publishing check's `unpublished` stage. Apply: 668 before the merge, 669 after the worker's rollout.
+- [ ] **Next after the publication gate:** (a) the phone feed's day buckets and "Newest first" on the visible-since
+      moment, not `first_seen_at` — needs a ruling; (b) drop `properties.published_at` + `publish_reason` + their three
+      indexes (the autodedup session's owed drop, now moot for serving too); (c) a worker CLIP lane, so settlement
+      ends in minutes rather than at the cap; (d) let the settled rule ignore the engine's standing refusals
+      (`autodedup/apply.py` `SKIP_SPANS_GROUPS`, `SKIP_CARRIES_UNGROUPED`) once measured; (e) delete
+      `api/notifications._read_int_setting` after #1951.
 
 ### Phase U-NEW-PROPERTY: a property from a pasted ad link (in progress, 2026-10-20)
 

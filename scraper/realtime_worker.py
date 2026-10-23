@@ -21,7 +21,7 @@ matcher-loop pattern of api/notifications):
              image downloads via the one existing machinery
              (scraper.main._run_image_downloads: per-host semaphore + breaker,
              active-only newest-first) — the latency lever that feeds the
-             images-first publication gate in api/notifications. Coexists with
+             publication rule (a first stored photo, migrations 668/669). Coexists with
              images_fresh.yml (idempotent storage_path-IS-NULL selection);
              without R2 env vars the lane logs once and idles (the proxy-skip
              posture).
@@ -36,7 +36,8 @@ matcher-loop pattern of api/notifications):
              per-pair totals to sreality_count_probe_state (migration 270).
 - maintenance: every `realtime_maintenance_interval_seconds` (default 30), one
              incremental property-maintenance pass — straggler attach + dirty-set
-             recompute, via scripts.recompute_property_stats.
+             recompute + settle (`settled_at` on fresh properties the pipeline is
+             done with, migration 668), via scripts.recompute_property_stats.
              run_incremental_pass (THE same implementation the GH cron runs;
              never forked). Exists because GH throttles property_maintenance.yml
              (nominal */5) to a measured 2h median / 4.1h worst — this lane is
@@ -124,10 +125,11 @@ matcher-loop pattern of api/notifications):
 - notifications: every NOTIFICATIONS_TICK_SECONDS (300, a constant), the three
              notification producers of api/notifications (notifications push program
              W2a): watchdog_new (a live watchdog's matches first seen in the last 24 h,
-             images-first gated), price (the canonical advert's price steps of the last
-             7 days, for watchdogs and monitored collections) and monitor (a monitored
-             property gone for a day, back, or on a new portal). Each step its own
-             connection and transaction; a failing step is its own `portal_errors` cell.
+             once published: migrations 668/669), price (the canonical advert's price
+             steps of the last 7 days, for watchdogs and monitored collections) and
+             monitor (a monitored property gone for a day, back, or on a new portal).
+             Each step its own connection and transaction; a failing step is its own
+             `portal_errors` cell.
              Beside the API's matcher_loop until W2b; the one identity index
              (migration 653) makes the overlap a union.
 - push:      every PUSH_TICK_SECONDS (15, a constant), one pass of the push ledger
@@ -1555,13 +1557,14 @@ async def _maintenance_pass(stop_event: asyncio.Event, state: dict[str, Any]) ->
         "skipped": bool(stats.get("skipped")),
         "attached": stats.get("attached", 0),
         "recomputed": stats.get("recomputed", 0),
+        "settled": stats.get("settled", 0),
     }
     if last["skipped"]:
         LOG.info("MAINTENANCE lane skipped (lease held by cron or daily sweep)")
     else:
         LOG.info(
-            "MAINTENANCE lane attached=%d recomputed=%d",
-            last["attached"], last["recomputed"],
+            "MAINTENANCE lane attached=%d recomputed=%d settled=%d",
+            last["attached"], last["recomputed"], last["settled"],
         )
     _record_pass(state, "maintenance", last)
 

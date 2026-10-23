@@ -23,6 +23,9 @@
    job recomputes the figures from the location advert's point (an advert without one keeps the
    earlier figures until it gains one: the job reads only a point); the job's own UPDATE refuses
    a row whose location advert moved while it ran (migration 636).
+3. Settle (the incremental pass only, after the drain): stamp `settled_at` once on each fresh
+   property the pipeline is done with and patch its Browse row at once (`_settle_fresh`,
+   migrations 668/669). A property is published once settled or 6 h old (`toolkit/publication.py`).
 
 Batched by property-id range so each statement stays well under the
 transaction-pooler statement timeout. autocommit=True means each batch
@@ -45,7 +48,7 @@ the completion stamp (derived_artifacts, migration 622) independently.
 Two run modes (Phase 3 -- real-time properties):
 
   * --incremental (cron */5, property_maintenance.yml): attach new stragglers + recompute
-    ONLY the properties queued in `dirty_properties` by the writers. O(changes).
+    ONLY the properties queued in `dirty_properties` by the writers + settle. O(changes).
   * full (default, daily reconcile, recompute_property_stats.yml): attach (again after
     every batch) + recompute EVERY property (one cycle, resumed across runs when the budget
     cuts it) + reconcile childless + clear the queue. The self-healing backstop
@@ -74,6 +77,7 @@ from typing import Any
 from scraper import db
 from toolkit.browse_read_model import sync_browse_list
 from toolkit.filter_registry import PORTAL_OPTIONS
+from toolkit.publication import CAP_SQL
 
 LOG = logging.getLogger("recompute_property_stats")
 
@@ -489,8 +493,8 @@ def _attach_stragglers(conn: Any, limit: int = STRAGGLER_BATCH) -> int:
 # and the slice is mostly recently-dirtied properties — the ones the autodedup lane (5 s
 # lock_timeout) and a split (5 s, busy 409) are likeliest to touch. A patch that times out
 # unwinds only its savepoint and the next rebuild carries the row; a recompute that times out
-# rolls the slice back and the next pass replays it. Drain only: the full sweep and the
-# straggler attach share `_bounded` and keep the session default.
+# rolls the slice back and the next pass replays it. The drain and the settle step only: the full
+# sweep and the straggler attach share `_bounded` and keep the session default.
 _DRAIN_LOCK_TIMEOUT = "5s"
 
 
@@ -529,6 +533,87 @@ def _drain_dirty(
             cur.execute(_DELETE_DIRTY_SQL, {"ids": ids, "cutoff": cutoff})
         total += len(ids)
     return total
+
+
+# The publication stamp (migration 668, operator rulings 2026-10-23): a property is served once
+# the pipeline has SETTLED it, or once it is CAP old (`toolkit/publication.py`; browse_projection
+# carries the rule from migration 669, the watchdog renders it). Settled is read off what the
+# pipeline has already written, never a judgement of our own:
+#   - its first photo is stored, or none of its ads has a photo to wait for (ruling 3: the
+#     images-first alert gate folds into this);
+#   - the engine has read every ad (an `rt_fp` row in its generation);
+#   - the engine holds no pending question about any of them (a pair held for evidence);
+#   - no engine group puts one of its ads with an ad on another property, or on none yet: the
+#     merge that would retire it, or fold another into it, has not landed. Outside the apply scope
+#     it never lands and the cap publishes the property (ruling 4: no special case).
+# Only active, unsettled properties first seen within the cap are candidates: past it a stamp
+# changes nothing, so the cap bounds the statement (~1.7k rows, 134 ms measured) and it takes no
+# LIMIT. A property a merge, split or drain slice holds is skipped (SKIP LOCKED) and taken next
+# pass; the engine's tables are read, never locked. Stamped once: no later change takes it back.
+_SETTLE_SQL = f"""
+    WITH cand AS (
+      SELECT p.id FROM properties p
+      WHERE p.settled_at IS NULL AND p.status = 'active'
+        AND p.first_seen_at >= now() - {CAP_SQL}
+      FOR NO KEY UPDATE OF p SKIP LOCKED
+    ),
+    settled AS (
+      SELECT c.id FROM cand c
+      WHERE (EXISTS (SELECT 1 FROM listings l JOIN images i ON i.listing_id = l.id
+                      WHERE l.property_id = c.id AND i.storage_path IS NOT NULL)
+             OR NOT EXISTS (SELECT 1 FROM listings l JOIN images i ON i.listing_id = l.id
+                             WHERE l.property_id = c.id))
+        AND NOT EXISTS (SELECT 1 FROM listings l
+                         WHERE l.property_id = c.id
+                           AND NOT EXISTS (SELECT 1 FROM autodedup.rt_fp f
+                                            WHERE f.generation = %(generation)s
+                                              AND f.listing_id = l.id))
+        AND NOT EXISTS (SELECT 1 FROM listings l
+                          JOIN autodedup.pairs x
+                            ON x.generation = %(generation)s AND x.decision = %(held)s
+                           AND (x.listing_lo = l.id OR x.listing_hi = l.id)
+                         WHERE l.property_id = c.id)
+        AND NOT EXISTS (SELECT 1 FROM listings l
+                          JOIN autodedup.cluster_members m
+                            ON m.generation = %(generation)s AND m.listing_id = l.id
+                          JOIN autodedup.cluster_members o
+                            ON o.generation = m.generation AND o.cluster_key = m.cluster_key
+                          JOIN listings ol ON ol.id = o.listing_id
+                         WHERE l.property_id = c.id AND ol.property_id IS DISTINCT FROM c.id)
+    )
+    UPDATE properties p SET settled_at = now()
+      FROM settled s
+     WHERE p.id = s.id AND p.settled_at IS NULL
+    RETURNING p.id
+"""
+
+
+def _settle_fresh(conn: Any, *, renew: Callable[[], Any]) -> int:
+    """Stamp the fresh properties the pipeline is done with (`_SETTLE_SQL`), then bring their Browse
+    rows in (its own transaction, as a drain slice); returns how many it stamped. A database error costs
+    this step only (the next pass retries, and the cap publishes a property meanwhile), never the
+    pass; a lost lease still stops it."""
+    import psycopg
+
+    from autodedup.incremental import EVIDENCE_HOLD_REASON, GENERATION
+
+    try:
+        renew()
+        # The stamp commits ALONE: it row-locks the properties it stamps (FOR NO KEY UPDATE), and the
+        # engine's reconcile merges under a 5 s lock_timeout, so nothing else may run inside this
+        # transaction -- a merge waits behind one statement at most (autodedup session, 2026-10-23).
+        with _bounded(conn):
+            with conn.cursor() as cur:
+                cur.execute(f"SET LOCAL lock_timeout = '{_DRAIN_LOCK_TIMEOUT}'")
+                cur.execute(_SETTLE_SQL, {"generation": GENERATION, "held": EVIDENCE_HOLD_REASON})
+                ids = [int(r[0]) for r in cur.fetchall()]
+        if ids:
+            with _bounded(conn):
+                properties_changed(conn, ids)
+    except psycopg.Error as exc:
+        LOG.warning("MAINTENANCE settle failed, the next pass retries: %s", exc)
+        return 0
+    return len(ids)
 
 
 def _max_property_id(conn: Any) -> int:
@@ -756,7 +841,8 @@ def run_incremental_pass(conn: Any, batch_size: int = 2000) -> dict[str, Any]:
     behind the GH cron (property_maintenance.yml) and the realtime worker's
     maintenance lane: attach new stragglers, then bring the dirty set current through
     `properties_changed` (recompute, `browse_list` patch, broker queue), so a change reaches
-    Browse on this lane's cadence rather than at the next */15 wholesale rebuild.
+    Browse on this lane's cadence rather than at the next */15 wholesale rebuild, then settle
+    the fresh properties the pipeline is done with (`_settle_fresh`).
     Serialized by the maintenance lease; a caller that
     finds the lease held returns {"skipped": True} — the concurrent pass is
     doing the same work, and the next tick is seconds away. A pass normally
@@ -765,17 +851,20 @@ def run_incremental_pass(conn: Any, batch_size: int = 2000) -> dict[str, Any]:
     """
     holder = _new_holder("incremental")
     if not _try_lease(conn, holder, _LEASE_TTL):
-        return {"skipped": True, "attached": 0, "recomputed": 0}
+        return {"skipped": True, "attached": 0, "recomputed": 0, "settled": 0}
+
+    def renew() -> None:
+        _renew_lease(conn, holder)
+
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT now()")
             cutoff = cur.fetchone()[0]
         attached = _attach_stragglers(conn)
-        recomputed = _drain_dirty(
-            conn, batch_size, cutoff,
-            renew=lambda: _renew_lease(conn, holder),
-        )
-        return {"skipped": False, "attached": attached, "recomputed": recomputed}
+        recomputed = _drain_dirty(conn, batch_size, cutoff, renew=renew)
+        settled = _settle_fresh(conn, renew=renew)
+        return {"skipped": False, "attached": attached, "recomputed": recomputed,
+                "settled": settled}
     finally:
         _release_lease(conn, holder)
 
@@ -789,7 +878,7 @@ def main() -> int:
     parser.add_argument(
         "--incremental", action="store_true",
         help="Dirty-set mode: attach new stragglers + recompute only queued "
-             "properties. Default is the full "
+             "properties + settle fresh ones. Default is the full "
              "sweep over every property (the daily reconcile backstop).",
     )
     parser.add_argument(
@@ -884,8 +973,8 @@ def main() -> int:
             )
             return 0
 
-        # Incremental: attach new stragglers, then recompute only the queued
-        # (dirty) properties. The full-table sweep is the daily reconcile.
+        # Incremental: attach new stragglers, recompute only the queued (dirty)
+        # properties, then settle. The full-table sweep is the daily reconcile.
         # Shared implementation with the realtime worker's maintenance lane.
         if args.incremental:
             stats = run_incremental_pass(conn, args.batch_size)
@@ -897,8 +986,8 @@ def main() -> int:
                 )
                 return 0
             LOG.info(
-                "RECOMPUTE incremental done attached=%d recomputed=%d elapsed=%.1fs",
-                stats["attached"], stats["recomputed"], elapsed,
+                "RECOMPUTE incremental done attached=%d recomputed=%d settled=%d elapsed=%.1fs",
+                stats["attached"], stats["recomputed"], stats["settled"], elapsed,
             )
             return 0
 

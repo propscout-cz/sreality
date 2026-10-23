@@ -266,12 +266,31 @@ def test_each_step_writes_its_carry_rows_after_every_carrier_and_before_its_reti
     retires = [i for i, s in enumerate(order) if s.startswith("UPDATE properties SET status")]
     assert [db.log[i][1][1] for i in retires] == [7, 9]
     for at in retires:
-        assert order[at - 3: at] == ["carrier:pipeline", "INSERT INTO property_merge_carries",
-                                     "INSERT INTO property_merge_carries"]
+        assert order[at - 4: at] == ["carrier:pipeline", "INSERT INTO property_merge_carries",
+                                     "INSERT INTO property_merge_carries",
+                                     " ".join(pi._CARRY_SETTLED_SQL.split())]
     monkeypatch.setattr(carriers, "PROPERTY_CARRIERS", (RecordingCarrier("notes"),))
     quiet = _Ledger({1: 3, 2: 7})
     _merge(quiet, [3, 7])
     assert quiet.carries == [] and quiet.sql("property_merge_carries") == []
+
+
+def test_each_step_carries_the_publication_stamp_after_its_carriers_and_before_its_retire():
+    """Publication never regresses on a merge (migration 668): once its carriers and carry rows
+    are written, each step hands the retired property's `settled_at` to a survivor holding none,
+    then retires it."""
+    db = _Ledger({1: 3, 2: 7, 3: 9})
+    _merge(db, [3, 7, 9])
+    stamp = " ".join(pi._CARRY_SETTLED_SQL.split())
+    assert "WHERE s.id = %s AND r.id = %s AND s.settled_at IS NULL AND r.settled_at IS NOT NULL" \
+        in stamp
+    assert db.sql(stamp) == [(3, 7), (3, 9)]
+    last = carriers.PROPERTY_CARRIERS[-1].name
+    for rid in (7, 9):
+        at = next(i for i, (s, p) in enumerate(db.log) if s == stamp and p[1] == rid)
+        assert db.log[at + 1] == (" ".join(pi._RETIRE_SQL.split()), (3, rid))
+        assert max(i for i, (s, p) in enumerate(db.log)
+                   if s == f"carrier:{last}" and p.retired == rid) < at
 
 
 def test_an_operator_merge_rules_every_cross_pair_of_the_ticked_cards_same():
