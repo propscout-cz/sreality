@@ -45,6 +45,11 @@ on:
           - ""
           - pronajem
           - prodej
+      category_main:
+        description: Limit to these categories, comma-separated, e.g. komercni,pozemek (blank = every one)
+        required: false
+        default: ""
+        type: string
       write:
         description: Actually write. Left false, this only reports what would change.
         required: false
@@ -109,6 +114,7 @@ jobs:
           if [ -n "${{ inputs.batch_size }}" ]; then ARGS="$ARGS --batch-size ${{ inputs.batch_size }}"; fi
           if [ -n "${{ inputs.source }}" ]; then ARGS="$ARGS --source ${{ inputs.source }}"; fi
           if [ -n "${{ inputs.category_type }}" ]; then ARGS="$ARGS --category-type ${{ inputs.category_type }}"; fi
+          if [ -n "${{ inputs.category_main }}" ]; then ARGS="$ARGS --category-main ${{ inputs.category_main }}"; fi
           if [ -n "${{ inputs.limit }}" ]; then ARGS="$ARGS --limit ${{ inputs.limit }}"; fi
           if [ -n "${{ inputs.max_seconds }}" ]; then ARGS="$ARGS --max-seconds ${{ inputs.max_seconds }}"; fi
           if [ "${{ inputs.write }}" = "true" ]; then ARGS="$ARGS --write"; fi

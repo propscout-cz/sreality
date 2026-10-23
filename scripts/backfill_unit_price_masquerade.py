@@ -88,7 +88,7 @@ one that `--limit` cut short — logs `BACKFILL INCOMPLETE`; silence means done.
 
 Usage:  python -m scripts.backfill_unit_price_masquerade --dry-run
         python -m scripts.backfill_unit_price_masquerade --source realitymix --write
-        python -m scripts.backfill_unit_price_masquerade --source remax --category-type pronajem
+        python -m scripts.backfill_unit_price_masquerade --source remax --category-main komercni --category-type pronajem
 Required: SUPABASE_DB_URL.
 """
 
@@ -116,6 +116,7 @@ LOG = logging.getLogger("backfill_unit_price_masquerade")
 
 SOURCES: tuple[str, ...] = ("ceskereality", "realitymix", "remax", "bazos")
 CATEGORY_TYPES: tuple[str, ...] = ("prodej", "pronajem", "drazba", "podil")
+CATEGORY_MAINS: tuple[str, ...] = ("byt", "dum", "komercni", "pozemek", "ostatni")
 
 # Each portal's own amount scanner — the marker test is anchored to the text
 # immediately AFTER the amount, so the amount has to be found the way that
@@ -172,6 +173,8 @@ _ALL_IDS_SQL = """
       AND l.price_czk IS NOT NULL
       AND (%(category_types)s::text[] IS NULL
            OR l.category_type = ANY(%(category_types)s::text[]))
+      AND (%(category_mains)s::text[] IS NULL
+           OR l.category_main = ANY(%(category_mains)s::text[]))
       AND l.id > %(after)s::bigint
     ORDER BY l.id
 """
@@ -198,6 +201,8 @@ _COUNT_SQL = """
     WHERE source = ANY(%(sources)s::text[]) AND price_czk IS NOT NULL
       AND (%(category_types)s::text[] IS NULL
            OR category_type = ANY(%(category_types)s::text[]))
+      AND (%(category_mains)s::text[] IS NULL
+           OR category_main = ANY(%(category_mains)s::text[]))
     GROUP BY source
 """
 
@@ -263,6 +268,15 @@ def _log_summary(quarantined: Counter[str], unconfirmed: Counter[str],
                     "resume with --after %d", cursor, cursor)
 
 
+def _scope_values(parser: argparse.ArgumentParser, flag: str, given: list[str] | None,
+                  allowed: tuple[str, ...]) -> list[str] | None:
+    """Flatten a repeatable, comma-separated flag; None (every value) when absent."""
+    values = [t.strip() for v in given or [] for t in v.split(",") if t.strip()]
+    if not set(values) <= set(allowed):
+        parser.error(f"{flag} must be among {', '.join(allowed)}")
+    return values or None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", action="append", choices=SOURCES,
@@ -270,6 +284,9 @@ def main() -> int:
     parser.add_argument("--category-type", action="append", default=None,
                         help="Restrict to these deal types (repeatable or comma-"
                              "separated, e.g. pronajem). Default: every type.")
+    parser.add_argument("--category-main", action="append", default=None,
+                        help="Restrict to these categories (repeatable or comma-"
+                             "separated, e.g. komercni,pozemek). Default: every one.")
     parser.add_argument("--limit", type=int, default=None,
                         help="Max listings examined this run. Default: the whole corpus.")
     parser.add_argument("--batch-size", type=int, default=1000,
@@ -298,13 +315,15 @@ def main() -> int:
         return 2
 
     sources = list(args.source or SOURCES)
-    category_types = [t.strip() for v in args.category_type or [] for t in v.split(",")
-                      if t.strip()] or None
-    if category_types and not set(category_types) <= set(CATEGORY_TYPES):
-        parser.error(f"--category-type must be among {', '.join(CATEGORY_TYPES)}")
-    scope = {"sources": sources, "category_types": category_types}
-    LOG.info("BACKFILL start sources=%s category_types=%s batch=%d limit=%s after=%d "
-             "dry_run=%s", ",".join(sources), ",".join(category_types or ["all"]),
+    category_types = _scope_values(parser, "--category-type", args.category_type,
+                                   CATEGORY_TYPES)
+    category_mains = _scope_values(parser, "--category-main", args.category_main,
+                                   CATEGORY_MAINS)
+    scope = {"sources": sources, "category_types": category_types,
+             "category_mains": category_mains}
+    LOG.info("BACKFILL start sources=%s category_types=%s category_mains=%s batch=%d "
+             "limit=%s after=%d dry_run=%s", ",".join(sources),
+             ",".join(category_types or ["all"]), ",".join(category_mains or ["all"]),
              args.batch_size, args.limit, args.after, args.dry_run)
     start = time.monotonic()
     verdicts: Counter[str] = Counter()

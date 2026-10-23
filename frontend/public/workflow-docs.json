@@ -479,6 +479,14 @@
           ]
         },
         {
+          "name": "category_main",
+          "description": "Limit to these categories, comma-separated, e.g. komercni,pozemek (blank = every one)",
+          "required": false,
+          "type": "string",
+          "default": "",
+          "options": null
+        },
+        {
           "name": "write",
           "description": "Actually write. Left false, this only reports what would change.",
           "required": false,
