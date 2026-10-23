@@ -7,12 +7,23 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Property page, second pass: notes in place, tags in the header (2026-10-23, no migration)
+- **Done** (operator's list, 2026-10-23): the minimap has zoom only (no overlays, no scale, the
+  attribution folded to its (i)); the status pill links to the latest active advert; the tags are a
+  "Štítky" button beside the collections; the "Moje" line became the notes section — notes read,
+  written, edited and shared in place, the artifact link (or "+ Odkaz na artefakt") in its header,
+  one-line composer that opens on focus, cards with labelled Upravit / Smazat / Přiložit, Czech
+  throughout (the phone's notes too); Přehled's adverts and price moves are one card with a simple
+  chart, right under the description; Trh v okolí folded into Cena a hodnota (price history, Valuo,
+  registered sales, our estimates); the Moje tab is gone ("Moje fotky" moved to Fotky). Old `?tab=trh`
+  and `?tab=moje` addresses land on the tab that took them over.
+
 ### Property page: a header and tabs (2026-10-23, no migration)
 - **Done.** The operator picked design A from four proposals (artifact "Property page redesign") and
   asked for the brokers' contact on the first tab and the description above "Je cena v pořádku?". The
   page was thirteen stacked blocks with the photos eighth, under the whole estimation chapter. Now:
   a header (photo mosaic, identity, map), a "Moje" line (tags, latest note, artifact link), then tabs
-  Přehled · Fotky · Cena a hodnota · Trh v okolí · Inzeráty · Moje · Audit. Přehled answers each
+  Přehled · Fotky · Cena a hodnota · Trh v okolí · Inzeráty · Moje · Audit (second pass: five tabs). Přehled answers each
   question in one card, read from the same query as its tab; the ask sits on the valuation ruler
   against our estimate's p25–p75 (or Valuo's band). `?tab=` keeps the tab; the old deep links
   (`?run=`, `#estimations`, `?advert=`, `?letters=`) land on their section's tab. Detail:
@@ -220,7 +231,7 @@ toolkit work.
   Follow-up: a photo strip per card (up to eight, cover first, the wash on each; `/feed` a lazy chunk), PR [#1785](https://github.com/waiff/sreality/pull/1785).
   Follow-up: full filters — the Filtry sheet (Browse's registry filters grouped as the sidebar, the view in the URL as Browse's, presets saved and updated from the phone), PR [#1866](https://github.com/waiff/sreality/pull/1866).
   Photos sprint W1: one attachment store per property (`property_attachments`, migration 660; a note's files are the same records, 1080 px display copies behind the JWT proxy), PR [#1974](https://github.com/waiff/sreality/pull/1974).
-  Photos sprint W2: "Moje fotky" — the phone page's section after Poloha (Vyfotit / Z knihovny) and the desktop's Moje tab (Upload, drag-and-drop), the original in one viewer with Sdílet (share sheet) and Smazat, Vybrat, a split's file item, the zip's `moje-fotky/`, PR [#1975](https://github.com/waiff/sreality/pull/1975).
+  Photos sprint W2: "Moje fotky" — the phone page's section after Poloha (Vyfotit / Z knihovny) and the desktop's Moje tab (Upload, drag-and-drop; the Fotky tab since 2026-10-23), the original in one viewer with Sdílet (share sheet) and Smazat, Vybrat, a split's file item, the zip's `moje-fotky/`, PR [#1975](https://github.com/waiff/sreality/pull/1975).
 - Next: the install walk on the iPhone (resolves W1: Safari install, sign-in inside the app,
   `visibilitychange` on resume, the worker's cost on feed photos); then W2 — the property page as
   reading + curation and the paste box (the fifth tab, Odkaz).

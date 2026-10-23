@@ -98,8 +98,9 @@ const ValuoSection = lazyChunk(() => import('@/components/listing-detail/ValuoSe
  * first visit (scripts/bundle-budget.mjs) does not carry them. */
 const PropertyOverview = lazyChunk(() => import('@/components/listing-detail/PropertyOverview'));
 const PhotoMosaic = lazyChunk(() => import('@/components/listing-detail/PhotoMosaic'));
-const MineStrip = lazyChunk(() => import('@/components/listing-detail/MineStrip'));
 const PropertyPhotos = lazyChunk(() => import('@/components/listing-detail/PropertyPhotos'));
+/* The tag assign list rides in with it (scripts/bundle-budget.mjs). */
+const TagsToggle = lazyChunk(() => import('@/components/listing-detail/TagsToggle'));
 const AuditPanel = lazyChunk(() => import('@/components/listing-detail/AuditPanel'));
 
 /* The phone layout is its own chunk: the desktop never downloads it, and the
@@ -254,6 +255,18 @@ export default function PropertyDetail() {
   const editAsShare = useEditAsOwnerShare();
   const actingShare = activeBoard != null ? editAsShare : null;
 
+  /* The status pill opens the latest active advert on its portal (operator
+     2026-10-23) — the one seen most recently, the canonical one on a tie; with
+     none active, the advert seen last. Its stored URL, never rebuilt (rule 21). */
+  const statusHref = useMemo(() => {
+    const live = sources.filter((s) => s.is_active && s.source_url);
+    const pool = live.length > 0 ? live : sources.filter((s) => s.source_url);
+    const latest = [...pool].sort(
+      (a, b) => b.last_seen_at.localeCompare(a.last_seen_at) || Number(b.id === advertId) - Number(a.id === advertId),
+    )[0];
+    return latest?.source_url ?? property?.source_url ?? null;
+  }, [sources, advertId, property?.source_url]);
+
   // The open tab, from the address. Above the early returns (#310).
   const [tab, setTab] = usePropertyTab(property?.id ?? null);
 
@@ -305,6 +318,9 @@ export default function PropertyDetail() {
           <ActingAs key={actingShare?.account_id ?? 'own'} share={actingShare}>
             <PipelineToggle property_id={propertyId} />
             <CollectionSaveToggle property_id={propertyId} />
+            <Suspense fallback={<span className="inline-flex h-[1.9rem] w-24" aria-hidden />}>
+              <TagsToggle property_id={propertyId} />
+            </Suspense>
             <DismissButton property_id={propertyId} variant="header" />
             {/* Its zip packs the acting identity's own photos. */}
             <DownloadPropertyButton propertyId={propertyId} images={images} />
@@ -325,7 +341,7 @@ export default function PropertyDetail() {
           />
         </Suspense>
         <div className="min-w-0 space-y-5">
-          <PropertyIdentity listing={property} priceNote={priceNote} />
+          <PropertyIdentity listing={property} priceNote={priceNote} statusHref={statusHref} />
           <LocationMap
             listing={property}
             heightClass="h-[170px]"
@@ -346,11 +362,12 @@ export default function PropertyDetail() {
           />
         </div>
       </div>
-      {/* What the operator has already decided comes before the numbers, on
-          every tab (rule #18: property-grain). */}
-      <Suspense fallback={<div className="mt-6 h-[46px]" />}>
+      {/* The operator's notes (and the artifact link), read and written in place
+          on every tab — what has been decided comes before the numbers (rule #18:
+          property-grain). The tags are the header's Štítky button. */}
+      <Suspense fallback={<div className="mt-6 h-[120px]" />}>
         <ActingAs key={actingShare?.account_id ?? 'own'} share={actingShare}>
-          <MineStrip property_id={propertyId} onOpen={() => setTab('moje')} />
+          <CurationBlock property_id={propertyId} listing_id={property.id} />
         </ActingAs>
       </Suspense>
       {/* Keyed on the property: which tabs were opened is per property. */}
@@ -376,19 +393,60 @@ export default function PropertyDetail() {
             </Suspense>
           ),
           fotky: (
-            <GalleryBlock
-              images={images}
-              isActive={property.is_active}
-              loading={imagesQ.isLoading}
-              label="Všechny fotky"
-              emptyText="Žádné fotky."
-            />
+            /* My own photos (Photos W2), then the canonical advert's. */
+            <div className="space-y-10">
+              <Suspense fallback={<Skeleton height={120} />}>
+                <ActingAs key={actingShare?.account_id ?? 'own'} share={actingShare}>
+                  <PropertyPhotos property_id={propertyId} lang="cs" />
+                </ActingAs>
+              </Suspense>
+              <GalleryBlock
+                images={images}
+                isActive={property.is_active}
+                loading={imagesQ.isLoading}
+                label="Fotky z inzerátu"
+                emptyText="Žádné fotky."
+              />
+            </div>
           ),
           hodnota: (
-            /* The estimation chapter (MF reference + our runs), then Valuo's paid
-               outside valuation as its own section, never inside ours (rule 12),
-               then how the asking price moved. */
+            /* The operator's order (2026-10-23): how the ask moved; Valuo's paid
+               outside valuation; the registered sales near this point (reas.cz,
+               the only REALIZED prices on the page — a sale is never linked to a
+               property, rule #15); then our estimation chapter (MF reference +
+               our runs), never mixed with Valuo's (rule 12). */
             <div className="space-y-12">
+              <PriceHistoryBlock
+                property={property}
+                adverts={chartAdverts}
+                snapshots={snapshotsQ.data ?? NO_SNAPSHOTS}
+                label="Vývoj ceny"
+              />
+              <Suspense fallback={<Skeleton height={140} />}>
+                <ValuoSection
+                  property={property}
+                  listingIds={advertIds}
+                  adUrls={sources.map((s) => s.source_url)}
+                  bare
+                />
+              </Suspense>
+              <Suspense fallback={<Skeleton height={160} />}>
+                {property.lat != null && property.lng != null ? (
+                  /* Keyed on the property: the block's radius and category seed
+                     are mount-time state. */
+                  <SoldCompsBlock
+                    key={propertyId}
+                    categoryMain={property.category_main}
+                    lat={property.lat}
+                    lng={property.lng}
+                    propertyId={propertyId}
+                  />
+                ) : (
+                  <p className="text-sm text-[var(--color-ink-3)]">
+                    Bez souřadnic nelze hledat prodeje v okolí.
+                  </p>
+                )}
+              </Suspense>
               <Suspense fallback={<Skeleton height={180} />}>
                 <EstimationsBlock
                   listing={property}
@@ -398,43 +456,7 @@ export default function PropertyDetail() {
                   bare
                 />
               </Suspense>
-              <Suspense fallback={<Skeleton height={140} />}>
-                <ValuoSection
-                  property={property}
-                  listingIds={advertIds}
-                  adUrls={sources.map((s) => s.source_url)}
-                  bare
-                />
-              </Suspense>
-              <PriceHistoryBlock
-                property={property}
-                adverts={chartAdverts}
-                snapshots={snapshotsQ.data ?? NO_SNAPSHOTS}
-                label="Vývoj ceny"
-              />
             </div>
-          ),
-          trh: (
-            /* The only REALIZED prices on the page — registered sales near this
-               point. A sale is never linked to a property (rule #15 does not
-               reach a transactions fact). */
-            <Suspense fallback={<Skeleton height={160} />}>
-              {property.lat != null && property.lng != null ? (
-                /* Keyed on the property: the block's radius and category seed
-                   are mount-time state. */
-                <SoldCompsBlock
-                  key={propertyId}
-                  categoryMain={property.category_main}
-                  lat={property.lat}
-                  lng={property.lng}
-                  propertyId={propertyId}
-                />
-              ) : (
-                <p className="text-sm text-[var(--color-ink-3)]">
-                  Bez souřadnic nelze hledat prodeje v okolí.
-                </p>
-              )}
-            </Suspense>
           ),
           inzeraty:
             sources.length > 0 ? (
@@ -464,18 +486,6 @@ export default function PropertyDetail() {
             ) : (
               <Skeleton height={120} />
             ),
-          moje: (
-            /* Tags / artifact link / notes, then my own photos — property-grain
-               (rule #18); the pipeline and the collections are the header's verbs. */
-            <Suspense fallback={<Skeleton height={140} />}>
-              <ActingAs key={actingShare?.account_id ?? 'own'} share={actingShare}>
-                <div className="space-y-7">
-                  <CurationBlock property_id={propertyId} listing_id={property.id} />
-                  <PropertyPhotos property_id={propertyId} />
-                </div>
-              </ActingAs>
-            </Suspense>
-          ),
           audit: (
             <Suspense fallback={<Skeleton height={160} />}>
               <AuditPanel property={property} sources={sources} checks={checksQ.data ?? []} />

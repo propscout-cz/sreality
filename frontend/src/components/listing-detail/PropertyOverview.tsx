@@ -1,7 +1,9 @@
-/* The property page's first tab, Přehled (operator ruling 2026-10-22, design A):
- * one card per question, each with the answer and a way into its tab — the
- * description, then the brokers and how to reach them; is the price right; how
- * the price moved; where it is advertised; what flats nearby actually sold for.
+/* The property page's first tab, Přehled (operator ruling 2026-10-22, design A;
+ * 2026-10-23: the adverts and the price moves are one card, right under the
+ * description): one card per question, each with the answer and a way into its
+ * tab — the description; where it is advertised and how its price moved; is the
+ * price right; beside them the brokers and how to reach them, and what flats
+ * nearby actually sold for.
  *
  * Every figure here is read from the same query, with the same rule, as the tab
  * it summarises, so the two can never disagree: our estimate is the estimations
@@ -16,7 +18,6 @@ import Skeleton from '@/components/Skeleton';
 import Stat from '@/components/Stat';
 import { SectionLabel } from '@/components/section';
 import RangeStrip from '@/components/estimation/RangeStrip';
-import { timeLabelFull } from '@/lib/chartAxis';
 import {
   czPlural,
   fmtCount,
@@ -30,7 +31,7 @@ import {
 import { ppm2BasisFromToken } from '@/lib/measure';
 import { mfShape } from '@/lib/mfReference';
 import { portalLabel } from '@/lib/portals';
-import { buildPriceSeries, priceChangeEvents, type PriceAdvert } from '@/lib/priceHistory';
+import { buildPriceSeries, priceChangeEvents, type PriceAdvert, type PriceSeries } from '@/lib/priceHistory';
 import {
   fetchSoldComparables,
   SOLD_COMPS_LIMIT,
@@ -46,8 +47,6 @@ import type { PropertyTabId } from './PropertyTabs';
 
 const CARD =
   'min-w-0 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-5 pt-4 pb-5';
-const WIDE = 'flex-[2_1_32rem]';
-const NARROW = 'flex-[1_1_18rem]';
 
 export interface LowestActive {
   price: number;
@@ -78,10 +77,10 @@ export default function PropertyOverview({
 }) {
   const description = property.description?.trim() ?? '';
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-start gap-4">
+    <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+      <div className="min-w-0 space-y-4">
         {description && (
-          <div className={`${CARD} ${WIDE}`}>
+          <div className={CARD}>
             <DescriptionBody
               text={description}
               label="Popis"
@@ -91,27 +90,27 @@ export default function PropertyOverview({
             />
           </div>
         )}
+        <AdvertsPriceCard
+          property={property}
+          sources={sources}
+          failed={sourcesFailed}
+          onRetry={onRetrySources}
+          adverts={chartAdverts}
+          snapshots={snapshots}
+          onOpenPrice={() => onOpen('hodnota')}
+          onOpenAdverts={() => onOpen('inzeraty')}
+        />
+        <ValueCard property={property} advertIds={advertIds} lowest={lowest} onOpen={() => onOpen('hodnota')} />
+      </div>
+      <div className="min-w-0 space-y-4">
         <BrokerList
           adverts={sources}
           canonicalId={property.id}
           advertsFailed={sourcesFailed}
           onRetryAdverts={onRetrySources}
-          className={`${CARD} ${NARROW}`}
+          className={CARD}
         />
-      </div>
-      <div className="flex flex-wrap items-stretch gap-4">
-        <ValueCard property={property} advertIds={advertIds} lowest={lowest} onOpen={() => onOpen('hodnota')} />
-        <PriceCard property={property} adverts={chartAdverts} snapshots={snapshots} onOpen={() => onOpen('hodnota')} />
-      </div>
-      <div className="flex flex-wrap items-stretch gap-4">
-        <AdvertsCard
-          sources={sources}
-          canonicalId={property.id}
-          failed={sourcesFailed}
-          onRetry={onRetrySources}
-          onOpen={() => onOpen('inzeraty')}
-        />
-        <MarketCard property={property} onOpen={() => onOpen('trh')} />
+        <MarketCard property={property} onOpen={() => onOpen('hodnota')} />
       </div>
     </div>
   );
@@ -121,13 +120,13 @@ function Card({
   title,
   action,
   onAction,
-  className,
+  className = '',
   children,
 }: {
   title: string;
   action: string;
   onAction: () => void;
-  className: string;
+  className?: string;
   children: ReactNode;
 }) {
   return (
@@ -229,7 +228,7 @@ function ValueCard({
   const yieldHint = property.mf_gross_yield_pct != null ? `hrubý výnos ${fmtPct(property.mf_gross_yield_pct)}` : undefined;
 
   return (
-    <Card title="Je cena v pořádku?" action="Cena a hodnota" onAction={onOpen} className={WIDE}>
+    <Card title="Je cena v pořádku?" action="Cena a hodnota" onAction={onOpen}>
       {verdict && <p className="text-[0.95rem] text-[var(--color-ink)]">{verdict}</p>}
       {strip && <div className="mt-4">{strip}</div>}
       <div className="mt-4 grid grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-2">
@@ -280,105 +279,107 @@ function ValueCard({
 }
 
 /* -------------------------------------------------------------------------- */
-/* How the price moved                                                        */
+/* Where it is advertised, and how its price moved                            */
 /* -------------------------------------------------------------------------- */
 
-const MOVES_SHOWN = 3;
+/* Copper first, ink tints after (system.md); a track past the solid set is dashed. */
+const TRACK_COLORS = ['var(--color-copper)', 'var(--color-ink-2)', 'var(--color-ink-3)'];
+const trackStyle = (i: number) => ({
+  color: TRACK_COLORS[Math.min(i, TRACK_COLORS.length - 1)],
+  dashed: i >= TRACK_COLORS.length,
+});
 
-function PriceCard({
+/* The adverts as one list, each with its own price line on one small chart —
+ * the simple view; the full chart, its axes and every dated move are the Cena a
+ * hodnota tab's (PriceHistoryBlock, the same series). */
+function AdvertsPriceCard({
   property,
+  sources,
+  failed,
+  onRetry,
   adverts,
   snapshots,
-  onOpen,
+  onOpenPrice,
+  onOpenAdverts,
 }: {
   property: PropertyPublic;
+  sources: PropertySource[];
+  failed: boolean;
+  onRetry: () => void;
   adverts: PriceAdvert[];
   snapshots: ListingSnapshotPublic[];
-  onOpen: () => void;
+  onOpenPrice: () => void;
+  onOpenAdverts: () => void;
 }) {
   // Captured once (PriceHistoryBlock's #310 note): a per-render `now` re-derives the series.
   const [now] = useState(() => Date.now());
-  const changes = useMemo(
-    () => priceChangeEvents(buildPriceSeries(adverts, snapshots, now)),
-    [adverts, snapshots, now],
-  );
-  return (
-    <Card title="Vývoj ceny" action="Graf" onAction={onOpen} className={NARROW}>
-      <div className="grid grid-cols-3 gap-2">
-        <Stat label="Na trhu" value={fmtTomDays(property.tom_days)} />
-        <Stat label="Změny ceny" value={String(property.price_change_count ?? 0)} />
-        <Stat label="Celkem" value={fmtPct(property.total_price_change_pct, { signed: true })} />
-      </div>
-      {changes.length > 0 && (
-        <ul aria-label="Poslední změny ceny" className="mt-3 divide-y divide-[var(--color-rule-soft)]">
-          {changes.slice(0, MOVES_SHOWN).map((c) => (
-            <li key={`${c.seriesId}-${c.t}`} className="flex flex-wrap items-baseline justify-between gap-x-3 py-1.5 text-[0.8rem]">
-              <span className="text-[var(--color-ink-2)]">
-                {c.label}{' '}
-                <span className="font-mono tabular-nums text-[var(--color-ink-3)]">{timeLabelFull(c.t, 'day')}</span>
-              </span>
-              <span className="font-mono tabular-nums text-[var(--color-ink)]">
-                {fmtCzk(c.to)} <span className="text-[var(--color-ink-3)]">{c.pct < 0 ? '↓' : '↑'} {fmtPct(c.pct, { signed: true })}</span>
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </Card>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* Where it is advertised                                                     */
-/* -------------------------------------------------------------------------- */
-
-function AdvertsCard({
-  sources,
-  canonicalId,
-  failed,
-  onRetry,
-  onOpen,
-}: {
-  sources: PropertySource[];
-  canonicalId: number;
-  failed: boolean;
-  onRetry: () => void;
-  onOpen: () => void;
-}) {
+  const series = useMemo(() => buildPriceSeries(adverts, snapshots, now), [adverts, snapshots, now]);
+  const lastMove = useMemo(() => {
+    const byTrack = new Map<number, number>();
+    for (const c of priceChangeEvents(series)) if (!byTrack.has(c.seriesId)) byTrack.set(c.seriesId, c.pct);
+    return byTrack;
+  }, [series]);
+  const trackIndex = new Map(series.map((s, i) => [s.id, i]));
   const ordered = useMemo(
     () =>
       [...sources].sort(
         (a, b) =>
-          Number(b.id === canonicalId) - Number(a.id === canonicalId) || Number(b.is_active) - Number(a.is_active),
+          Number(b.id === property.id) - Number(a.id === property.id) || Number(b.is_active) - Number(a.is_active),
       ),
-    [sources, canonicalId],
+    [sources, property.id],
   );
+  const changes = property.price_change_count ?? 0;
+  const summary = [
+    `na trhu ${fmtTomDays(property.tom_days)}`,
+    changes === 0 ? 'cena beze změny' : `${changes} ${czPlural(changes, 'změna', 'změny', 'změn')} ceny`,
+    property.total_price_change_pct ? `celkem ${fmtPct(property.total_price_change_pct, { signed: true })}` : null,
+  ].filter(Boolean);
+
   return (
-    <Card title={`Inzeráty · ${sources.length}`} action="Všechny inzeráty" onAction={onOpen} className={NARROW}>
+    <Card title={`Inzeráty a vývoj ceny · ${sources.length}`} action="Detail ceny" onAction={onOpenPrice}>
+      <p className="text-[0.85rem] text-[var(--color-ink-2)]">{summary.join(' · ')}</p>
+      {series.length > 0 && (
+        <div className="mt-3">
+          <PriceSparkline series={series} activeIds={new Set(sources.filter((s) => s.is_active).map((s) => s.id))} />
+        </div>
+      )}
       {failed ? (
-        <p className="text-sm text-[var(--color-brick)]">
+        <p className="mt-3 text-sm text-[var(--color-brick)]">
           Inzeráty se nepodařilo načíst
           <button type="button" onClick={onRetry} className="ml-3 font-medium underline underline-offset-2 hover:no-underline">
             Zkusit znovu
           </button>
         </p>
       ) : (
-        <ul className="divide-y divide-[var(--color-rule-soft)]">
+        <ul aria-label="Inzeráty" className="mt-3 divide-y divide-[var(--color-rule-soft)]">
           {ordered.map((s) => {
             const portal = portalLabel(s.source) ?? s.source;
+            const i = trackIndex.get(s.id);
+            const style = i != null ? trackStyle(i) : null;
+            const move = lastMove.get(s.id);
             return (
               <li key={s.id} className="flex items-center gap-3 py-2 text-sm">
                 <span
                   aria-hidden
-                  className={`h-2 w-2 shrink-0 rounded-full ${s.is_active ? 'bg-[var(--color-sage)]' : 'border-[1.5px] border-[var(--color-ink-3)]'}`}
+                  className="h-0 w-4 shrink-0 border-t-2"
+                  style={{
+                    borderColor: style?.color ?? 'transparent',
+                    borderTopStyle: style?.dashed ? 'dashed' : 'solid',
+                    opacity: s.is_active ? 1 : 0.5,
+                  }}
                 />
                 <span className={`min-w-0 flex-1 truncate ${s.is_active ? 'text-[var(--color-ink)]' : 'text-[var(--color-ink-3)]'}`}>
                   {portal}
-                  {s.id === canonicalId && (
+                  {s.id === property.id && (
                     <span className="ml-2 text-[0.6rem] uppercase tracking-[0.16em] text-[var(--color-ink-3)]">hlavní</span>
                   )}
                   {!s.is_active && <span className="ml-2 text-[0.75rem]">neaktivní</span>}
                 </span>
+                {move != null && (
+                  <span className="font-mono text-[0.75rem] tabular-nums text-[var(--color-ink-3)]">
+                    {move < 0 ? '↓' : '↑'} {fmtPct(Math.abs(move))}
+                  </span>
+                )}
                 <span className={`font-mono tabular-nums ${s.is_active ? 'text-[var(--color-ink)]' : 'text-[var(--color-ink-3)]'}`}>
                   {fmtCzk(s.price_czk)}
                 </span>
@@ -400,7 +401,69 @@ function AdvertsCard({
           })}
         </ul>
       )}
+      <button
+        type="button"
+        onClick={onOpenAdverts}
+        className="mt-2 text-[0.8rem] text-[var(--color-copper)] hover:underline underline-offset-2"
+      >
+        Všechny inzeráty →
+      </button>
     </Card>
+  );
+}
+
+/* Every advert's step line on one small frame: the lowest and highest ask and the
+ * first and last day as plain text around it, nothing else. */
+function PriceSparkline({ series, activeIds }: { series: PriceSeries[]; activeIds: ReadonlySet<number> }) {
+  const prices = series.flatMap((s) => s.points.map((p) => p.price));
+  const t0 = Math.min(...series.map((s) => s.points[0].t));
+  const t1 = Math.max(...series.map((s) => s.endT), t0 + 1);
+  const lo = Math.min(...prices);
+  const hi = Math.max(...prices);
+  const pad = hi === lo ? Math.max(1, hi * 0.02) : (hi - lo) * 0.12;
+  const W = 600;
+  const H = 120;
+  const x = (t: number) => ((t - t0) / (t1 - t0)) * W;
+  const y = (p: number) => H - ((p - (lo - pad)) / (hi - lo + 2 * pad)) * H;
+  const path = (s: PriceSeries) =>
+    s.points.map((p, i) => (i === 0 ? `M${x(p.t)} ${y(p.price)}` : `H${x(p.t)} V${y(p.price)}`)).join(' ') +
+    ` H${x(Math.max(s.endT, s.points[s.points.length - 1].t))}`;
+  return (
+    <figure className="m-0">
+      <div className="flex justify-between font-mono text-[0.7rem] tabular-nums text-[var(--color-ink-3)]">
+        <span>{fmtCzk(hi)}</span>
+        {hi !== lo && <span>nejnižší {fmtCzk(lo)}</span>}
+      </div>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
+        role="img"
+        aria-label={`Cena inzerátů od ${fmtShortDate(new Date(t0).toISOString())} do dneška`}
+        className="mt-1 block h-[110px] w-full"
+      >
+        <line x1="0" x2={W} y1={H - 0.5} y2={H - 0.5} stroke="var(--color-rule-strong)" vectorEffect="non-scaling-stroke" />
+        {[...series].reverse().map((s) => {
+          const i = series.indexOf(s);
+          const style = trackStyle(i);
+          return (
+            <path
+              key={s.id}
+              d={path(s)}
+              fill="none"
+              stroke={style.color}
+              strokeWidth={i === 0 ? 2.5 : 1.75}
+              strokeDasharray={style.dashed ? '5 4' : undefined}
+              opacity={activeIds.has(s.id) ? 1 : 0.5}
+              vectorEffect="non-scaling-stroke"
+            />
+          );
+        })}
+      </svg>
+      <figcaption className="mt-1 flex justify-between font-mono text-[0.7rem] tabular-nums text-[var(--color-ink-3)]">
+        <span>{fmtShortDate(new Date(t0).toISOString())}</span>
+        <span>dnes</span>
+      </figcaption>
+    </figure>
   );
 }
 
@@ -469,7 +532,7 @@ function MarketCard({ property, onOpen }: { property: PropertyPublic; onOpen: ()
     );
   }
   return (
-    <Card title="Trh v okolí" action="Prodeje" onAction={onOpen} className={NARROW}>
+    <Card title="Trh v okolí" action="Prodeje" onAction={onOpen}>
       {body}
       <p className="mt-3 text-[0.7rem] text-[var(--color-ink-3)]">
         Jediné skutečně zaplacené ceny na stránce · katastr přes reas.cz

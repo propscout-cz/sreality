@@ -327,8 +327,9 @@ label); checked = every layer of the section on (variant = the first); the expan
 chip (only when checked) holds per-layer checkboxes when the section has > 1 layer (the section
 checkbox is tri-state), variant radios when present, the legend (swatch per class: filled square,
 line, dashed line, dot), a hint "Přibližte mapu" when the map zoom < minzoom, the note, and a footer
-"Data k {source_revised_at ?? fetched_at} · {attribution}". `compact` (DetailMap, ComparablesMap):
-chips only, no panel. The chip markup is ONE component, `OverlayChip`, also adopted by
+"Data k {source_revised_at ?? fetched_at} · {attribution}". `compact` (ComparablesMap): chips only,
+no panel. (The property page's header minimap, `DetailMap`, carries no overlays since 2026-10-23 —
+operator: zoom is its only control.) The chip markup is ONE component, `OverlayChip`, also adopted by
 `RentMapControls`, `GrowthMapControls` and `CityMapControls` (four copies of the same class string
 today).
 
@@ -352,9 +353,9 @@ panel closed; the stack folds to one button, remembered per browser. The count p
   absent = the remembered selection. Every change writes `layers=` to the URL (Browse) and the
   remembered value. Add `layers` to `OVERLAY_URL_KEYS`, `setOverlay`, `browseUrlFromState`, the
   round-trip test. Memory adapter (Explore modal): initial = remembered.
-- `DetailMap` and `ComparablesMap`: local state initialised from the remembered selection, written
-  back on change; both mount the hook (`beforeId` 'pin' / 'comparables-point') and the compact
-  controls. `ListingMap`: under the first growth-choropleth layer (where the rent map and the
+- `ComparablesMap`: local state initialised from the remembered selection, written back on change;
+  it mounts the hook (`beforeId` 'comparables-point') and the compact controls. (`DetailMap` did too
+  until 2026-10-23.) `ListingMap`: under the first growth-choropleth layer (where the rent map and the
   kraj borders have always sat), so a choropleth on top still tints them as before.
 - Delete: `rent_map_kraje_public` fetch (`fetchRentMapKraje`, `RentMapKraj`), `rentKrajeQuery`,
   `toKrajFC`, the `rent-kraje` source/layer/effect, the nested Kraje checkbox, `showKraje`,
@@ -437,7 +438,7 @@ Backend, as built (2026-10-15):
 | schema | `migrations/600_map_overlays.sql`; `tests/test_map_overlays_live.py` (CI DB lane: control point, render function on a square + a line + a point, tile bytes contain the layer name); the pytest line in `.github/workflows/migrations.yml` |
 | ingest | `scripts/ingest_map_overlays.py`; `.github/workflows/ingest_map_overlays.yml`; `ingest_boundaries.yml` final step; `frontend/src/lib/workflowDocs.generated.ts`; `tests/scripts/test_ingest_map_overlays.py` + `tests/fixtures/map_overlays/*.json` (small real samples) |
 | api | `api/routes/map_overlays.py`; `api/main.py` registration; `tests/api/test_map_overlays.py` |
-| spa | `frontend/src/lib/mapOverlays.ts`, `geoRing.ts`, `persistedFlag.ts`, `basemap.ts`, `browseState.ts`, `queries.ts`; `components/MapOverlayControls.tsx`, `OverlayChip.tsx`, `ListingMap.tsx`, `BrowseExperience.tsx`, `listing-detail/DetailMap.tsx`, `estimation/ComparablesMap.tsx`, `filter-controls/LocationControl.tsx`; tests |
+| spa | `frontend/src/lib/mapOverlays.ts`, `geoRing.ts`, `persistedFlag.ts`, `basemap.ts`, `browseState.ts`, `queries.ts`; `components/MapOverlayControls.tsx`, `OverlayChip.tsx`, `ListingMap.tsx`, `BrowseExperience.tsx`, `estimation/ComparablesMap.tsx`, `filter-controls/LocationControl.tsx`; tests |
 | docs | this file; `docs/architecture.md` (new section + cross-reference map); `roadmap/map-track.md`; `GLOSSARY.md` ("Reference overlay"); `.claude/skills/toolkit-api/SKILL.md` (the two routes; trim a line first, the file is at its cap); `.claude/skills/database/SKILL.md` (one line: the overlay store is a mirror, rendered tiles, ingest workflow) |
 
 ## Deploy sequence

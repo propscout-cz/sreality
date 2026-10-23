@@ -1,5 +1,9 @@
-/* Tags + artifact link + notes for a single PROPERTY. Wired into PropertyDetail
- * (and, as PhoneTagsAndNotes, into the phone property page).
+/* The operator's own words about a single PROPERTY. On the desktop property page
+ * the default export is the "Poznámky" section under the header (operator
+ * 2026-10-23): the notes, read and written in place, with the artifact link in
+ * the section's header; the tags are the header's "Štítky" button (TagsToggle).
+ * The phone property page renders tags + artifact link + notes as
+ * PhoneTagsAndNotes.
  *
  * Curation is property-grain (migration 202): a tag / note describes the
  * real-world property, so this block operates on the listing's `property_id`.
@@ -19,7 +23,7 @@
  * retry and never drawn as an empty list or an unticked toggle (MS16).
  */
 
-import { useId, useMemo, useState } from 'react';
+import { useId, useMemo, useState, type ReactNode } from 'react';
 import {
   useMutation,
   useQuery,
@@ -71,21 +75,19 @@ export default function CurationBlock({
   listing_id: number;
 }) {
   return (
-    <div className="space-y-7">
-      {/* The pipeline bookmark and the collection save live in the header
-          action bar (PipelineToggle, CollectionSaveToggle) — a verb belongs at
-          the top, next to "New estimation", not buried below the estimates.
-          This block keeps the secondary curation: tags, artifact link, notes. */}
-      <TagsRow property_id={property_id} />
-      <ArtifactLinkRow property_id={property_id} />
-      <NotesRow property_id={property_id} listing_id={listing_id} />
+    <div className="mt-6 rounded-[var(--radius-lg)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-5 pt-4 pb-5">
+      <NotesRow
+        property_id={property_id}
+        listing_id={listing_id}
+        aside={<ArtifactLinkRow property_id={property_id} bare />}
+      />
     </div>
   );
 }
 
-/* The phone property page's tags + notes (#1767): the same rows, Czech labels,
- * the notes composer always open. Collections sit in the page's curation row
- * there (the collection sheet), so they are not repeated. */
+/* The phone property page's tags + notes (#1767): the same rows, the notes
+ * composer always open. Collections sit in the page's curation row there (the
+ * collection sheet), so they are not repeated. */
 export function PhoneTagsAndNotes({
   property_id,
   listing_id,
@@ -96,14 +98,8 @@ export function PhoneTagsAndNotes({
   return (
     <div className="space-y-7">
       <TagsRow property_id={property_id} label="Štítky" />
-      <ArtifactLinkRow property_id={property_id} label="Odkaz na artefakt" />
-      <NotesRow
-        property_id={property_id}
-        listing_id={listing_id}
-        label="Poznámky"
-        lang="cs"
-        alwaysOpen
-      />
+      <ArtifactLinkRow property_id={property_id} />
+      <NotesRow property_id={property_id} listing_id={listing_id} alwaysOpen />
     </div>
   );
 }
@@ -149,48 +145,42 @@ function TagsRow({ property_id, label = 'Tags' }: { property_id: number; label?:
 /* Notes                                                                      */
 /* -------------------------------------------------------------------------- */
 
-/* The note rows' words in each page's language (ruling 8): English on the
- * desktop property page, Czech on the phone. */
-const NOTE_WORDS = {
-  en: {
-    lang: 'en',
-    shareWith: (who: string) => `Share with ${who}`,
-    shared: 'Shared',
-    sharedNobody: 'Shared · nobody can see it yet',
-    unshare: 'Make private',
-    noteFrom: 'Note from',
-    noteBy: 'Note by',
-    edited: 'edited',
-  },
-  cs: {
-    lang: 'cs',
-    shareWith: (who: string) => `Sdílet s ${who}`,
-    shared: 'Sdíleno',
-    sharedNobody: 'Sdíleno · zatím to nikdo nevidí',
-    unshare: 'Nesdílet',
-    noteFrom: 'Poznámka z',
-    noteBy: 'Poznámka od',
-    edited: 'upraveno',
-  },
+const WORDS = {
+  lang: 'cs',
+  shareWith: (who: string) => `Sdílet s ${who}`,
+  shared: 'Sdíleno',
+  sharedNobody: 'Sdíleno · zatím to nikdo nevidí',
+  unshare: 'Nesdílet',
+  noteFrom: 'Poznámka z',
+  noteBy: 'Poznámka od',
+  edited: 'upraveno',
 } as const;
-type NoteWords = (typeof NOTE_WORDS)[keyof typeof NOTE_WORDS];
 
-function NotesRow({
+/* The newest few; the rest one click away, so the section stays a glance on every tab. */
+const NOTES_SHOWN = 3;
+const BODY_MAX = 4000;
+
+const PRIMARY =
+  'inline-flex items-center px-3.5 py-1.5 text-[0.8rem] font-medium rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors';
+const QUIET =
+  'inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[0.8rem] rounded-[var(--radius-sm)] text-[var(--color-ink-3)] hover:text-[var(--color-ink)] hover:bg-[var(--color-paper-2)] disabled:opacity-50 transition-colors';
+
+export function NotesRow({
   property_id,
   listing_id,
-  label = 'Notes',
-  lang = 'en',
+  label = 'Poznámky',
   alwaysOpen = false,
+  aside,
 }: {
   property_id: number;
   listing_id: number;
   label?: string;
-  lang?: keyof typeof NOTE_WORDS;
-  /* The phone keeps the composer in view: its curation row's "Poznámka" scrolls here. */
+  /* The phone keeps the composer open: its curation row's "Poznámka" scrolls here. */
   alwaysOpen?: boolean;
+  /* Drawn at the right of the heading (the desktop section: the artifact link). */
+  aside?: ReactNode;
 }) {
   const qc = useQueryClient();
-  const words = NOTE_WORDS[lang];
   const actAs = useActAs();
   const notesKey = actingKey(actAs, curationKeys.propertyNotes(property_id));
   /* Who a SHARED note here would reach: the counterparties of every share whose
@@ -215,6 +205,10 @@ function NotesRow({
   const [staged, setStaged] = useState<File[]>([]);
   const [problems, setProblems] = useState<string[]>([]);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  /* Opened by a focus, closed only by Zrušit or a save — never by a blur: a file
+   * picker's dialog blurs the page, and the pick must land in an open composer. */
+  const [opened, setOpened] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const notesLabelId = useId();
 
   const notesQ = useQuery({
@@ -242,7 +236,7 @@ function NotesRow({
         try {
           await uploadAttachment(property_id, file, { note_id: note.id, actAs });
         } catch (err) {
-          failed.push(`${file.name}: ${(err as Error).message || 'upload failed'}`);
+          failed.push(`${file.name}: ${(err as Error).message || 'nahrání selhalo'}`);
         }
       }
       return failed;
@@ -253,11 +247,12 @@ function NotesRow({
       setStaged([]);
       setError(null);
       setProblems(failed);
+      setOpened(false);
       refreshNotes();
       refreshNoteCounts();
     },
     onError: (err: ApiError | Error) =>
-      setError(err.message || 'Failed to save note'),
+      setError(err.message || 'Poznámku se nepodařilo uložit'),
     onSettled: () => setProgress(null),
   });
 
@@ -276,37 +271,35 @@ function NotesRow({
   const failed = readFailed(notesQ);
   const trimmed = body.trim();
   const canSave = (trimmed.length > 0 || staged.length > 0) && !create.isPending;
+  /* The composer reads as one line until it is used; then its tools appear. */
+  const expanded = alwaysOpen || opened || body.length > 0 || staged.length > 0 || create.isPending;
+  const shown = showAll ? notes : notes.slice(0, NOTES_SHOWN);
 
   return (
-    <details
-      className="group"
-      open={alwaysOpen || failed || notes.length > 0 || staged.length > 0 || problems.length > 0 || composerDrop.over}
-      {...composerDrop.handlers}
-    >
-      <summary className="cursor-pointer list-none flex items-baseline justify-between gap-4">
-        <SectionLabel>
+    <section aria-labelledby={notesLabelId} className="relative" {...composerDrop.handlers}>
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <h2 className="flex items-baseline gap-2 font-sans text-[0.7rem] font-medium uppercase tracking-[0.18em] text-[var(--color-ink-3)]">
           <span id={notesLabelId}>{label}</span>
-          <span className="ml-2 font-mono tabular-nums text-[var(--color-ink-4)] tracking-normal">
+          <span className="font-mono tracking-normal tabular-nums text-[var(--color-ink-3)]">
             {failed ? '(—)' : `(${notes.length})`}
           </span>
-        </SectionLabel>
-        <span className="text-[0.7rem] tracking-wide text-[var(--color-ink-3)] group-open:hidden">
-          Show
-        </span>
-        <span className="text-[0.7rem] tracking-wide text-[var(--color-ink-3)] hidden group-open:inline">
-          Hide
-        </span>
-      </summary>
+        </h2>
+        {aside}
+      </div>
 
       <form
         onSubmit={(e) => {
           e.preventDefault();
           if (!canSave) return;
           // A files-only note still needs a body (1-4000 chars); its file names say what it holds.
-          const text = trimmed || `Attached: ${staged.map((f) => f.name).join(', ')}`.slice(0, 4000);
+          const text = trimmed || `Přílohy: ${staged.map((f) => f.name).join(', ')}`.slice(0, BODY_MAX);
           create.mutate({ text, files: staged });
         }}
-        className="relative mt-3"
+        onFocus={() => setOpened(true)}
+        className={[
+          'mt-3 rounded-[var(--radius-md)] border bg-[var(--color-paper-3)] transition-colors',
+          expanded ? 'border-[var(--color-copper)]/50' : 'border-[var(--color-rule-strong)] hover:border-[var(--color-copper)]/50',
+        ].join(' ')}
       >
         <textarea
           aria-labelledby={notesLabelId}
@@ -318,106 +311,125 @@ function NotesRow({
             e.preventDefault();
             stage(files);
           }}
-          placeholder="Add a note… (drop or paste files to attach)"
-          rows={2}
-          maxLength={4000}
-          className="w-full px-3 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)] resize-y"
+          placeholder="Napište poznámku… soubory sem přetáhněte nebo vložte"
+          rows={expanded ? 3 : 1}
+          maxLength={BODY_MAX}
+          className="block w-full resize-none bg-transparent px-3.5 py-2.5 text-sm leading-relaxed text-[var(--color-ink)] placeholder:text-[var(--color-ink-3)]"
         />
-        <StagedFiles
-          files={staged}
-          onRemove={(file) => setStaged((prev) => prev.filter((f) => f !== file))}
-          disabled={create.isPending}
-        />
-        {canShare && (
-          <label className="mt-2 flex items-center gap-2 w-fit text-[0.75rem] text-[var(--color-ink-2)] cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={shareNew}
-              onChange={(e) => setShareNew(e.target.checked)}
-              disabled={create.isPending}
-              className="accent-[var(--color-ink-2)]"
-            />
-            <span>{words.shareWith(audience.join(', '))}</span>
-          </label>
-        )}
-        {audienceFailed && (
-          <div className="mt-2">
-            <ReadFailedMark
-              what="Sdílení"
-              variant="header"
-              onRetry={() => void membership.query.refetch()}
-            />
+        {expanded && (
+          <div className="border-t border-[var(--color-rule-soft)] px-2 py-2">
+            <div className="px-1.5">
+              <StagedFiles
+                files={staged}
+                onRemove={(file) => setStaged((prev) => prev.filter((f) => f !== file))}
+                disabled={create.isPending}
+              />
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-1">
+                <AttachButton
+                  onFiles={stage}
+                  label="Přiložit soubory"
+                  text="Přiložit"
+                  showText
+                  disabled={create.isPending || staged.length >= NOTE_ATTACHMENT_MAX_FILES}
+                />
+                {canShare && (
+                  <label className="flex cursor-pointer select-none items-center gap-2 px-2 text-[0.8rem] text-[var(--color-ink-2)]">
+                    <input
+                      type="checkbox"
+                      checked={shareNew}
+                      onChange={(e) => setShareNew(e.target.checked)}
+                      disabled={create.isPending}
+                      className="accent-[var(--color-copper)]"
+                    />
+                    <span>{WORDS.shareWith(audience.join(', '))}</span>
+                  </label>
+                )}
+                {audienceFailed && (
+                  <ReadFailedMark what="Sdílení" variant="header" onRetry={() => void membership.query.refetch()} />
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {body.length > BODY_MAX - 400 && (
+                  <span className="font-mono text-[0.72rem] tabular-nums text-[var(--color-ink-3)]">
+                    {body.length} / {BODY_MAX}
+                  </span>
+                )}
+                {!alwaysOpen && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBody('');
+                      setStaged([]);
+                      setShareNew(false);
+                      setError(null);
+                      setOpened(false);
+                    }}
+                    disabled={create.isPending}
+                    className={QUIET}
+                  >
+                    Zrušit
+                  </button>
+                )}
+                <button type="submit" disabled={!canSave} className={PRIMARY}>
+                  {create.isPending
+                    ? progress
+                      ? `Nahrávám ${progress.done + 1} / ${progress.total}…`
+                      : 'Ukládám…'
+                    : 'Uložit poznámku'}
+                </button>
+              </div>
+            </div>
           </div>
         )}
-        <div className="mt-2 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <AttachButton
-              onFiles={stage}
-              label="Attach files"
-              showText
-              disabled={create.isPending || staged.length >= NOTE_ATTACHMENT_MAX_FILES}
-            />
-            <p className="text-[0.7rem] text-[var(--color-ink-4)] tabular-nums">
-              {body.length} / 4000
-            </p>
-          </div>
-          <button
-            type="submit"
-            disabled={!canSave}
-            className="px-3 py-1 text-[0.78rem] rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          >
-            {create.isPending
-              ? progress
-                ? `Uploading ${progress.done + 1} / ${progress.total}…`
-                : 'Saving…'
-              : 'Save note'}
-          </button>
-        </div>
-        {error && (
-          <p className="mt-1.5 text-[0.7rem] text-[var(--color-brick)]">{error}</p>
-        )}
-        <FileProblems problems={problems} onDismiss={() => setProblems([])} />
-        {composerDrop.over && <DropHint label="Drop files to attach to a new note" />}
       </form>
+      {error && <p className="mt-1.5 text-[0.75rem] text-[var(--color-brick)]">{error}</p>}
+      <FileProblems problems={problems} onDismiss={() => setProblems([])} dismissLabel="Zavřít" />
+      {composerDrop.over && <DropHint label="Pusťte soubory — přiloží se k nové poznámce" />}
 
       {failed ? (
-        <ErrorBanner
-          title="Poznámky"
-          message="se nepodařilo načíst."
-          onRetry={() => void notesQ.refetch()}
-        />
+        <div className="mt-3">
+          <ErrorBanner title="Poznámky" message="se nepodařilo načíst." onRetry={() => void notesQ.refetch()} />
+        </div>
       ) : notesQ.isLoading ? (
-        <p className="mt-3 text-sm text-[var(--color-ink-3)]">Loading…</p>
+        <p className="mt-3 text-sm text-[var(--color-ink-3)]">Načítám…</p>
       ) : notes.length === 0 ? null : (
-        <ul className="mt-4 space-y-3">
-          {notes.map((n) => (
-            <li key={n.id}>
-              <NoteRow
-                property_id={property_id}
-                note={n}
-                audience={audience}
-                words={words}
-                onSave={(text) =>
-                  updatePropertyNote(property_id, n.id, { body: text }, ...actOpts(actAs)).then(refreshNotes)
-                }
-                onToggleShared={() =>
-                  updatePropertyNote(property_id, n.id, { shared: !n.shared }, ...actOpts(actAs)).then(
-                    refreshNotes,
-                  )
-                }
-                onDelete={() =>
-                  deletePropertyNote(property_id, n.id, ...actOpts(actAs)).then(() => {
-                    refreshNotes();
-                    refreshNoteCounts();
-                  })
-                }
-                onFilesChanged={refreshNotes}
-              />
-            </li>
-          ))}
-        </ul>
+        <>
+          <ul className="mt-3 space-y-2">
+            {shown.map((n) => (
+              <li key={n.id}>
+                <NoteRow
+                  property_id={property_id}
+                  note={n}
+                  audience={audience}
+                  onSave={(text) =>
+                    updatePropertyNote(property_id, n.id, { body: text }, ...actOpts(actAs)).then(refreshNotes)
+                  }
+                  onToggleShared={() =>
+                    updatePropertyNote(property_id, n.id, { shared: !n.shared }, ...actOpts(actAs)).then(
+                      refreshNotes,
+                    )
+                  }
+                  onDelete={() =>
+                    deletePropertyNote(property_id, n.id, ...actOpts(actAs)).then(() => {
+                      refreshNotes();
+                      refreshNoteCounts();
+                    })
+                  }
+                  onFilesChanged={refreshNotes}
+                />
+              </li>
+            ))}
+          </ul>
+          {notes.length > NOTES_SHOWN && (
+            <button type="button" onClick={() => setShowAll((v) => !v)} className={`${QUIET} mt-1`}>
+              {showAll ? 'Zobrazit méně' : `Zobrazit všechny poznámky (${notes.length})`}
+            </button>
+          )}
+        </>
       )}
-    </details>
+    </section>
   );
 }
 
@@ -425,7 +437,6 @@ function NoteRow({
   property_id,
   note,
   audience,
-  words,
   onSave,
   onToggleShared,
   onDelete,
@@ -434,21 +445,19 @@ function NoteRow({
   property_id: number;
   note: Note;
   audience: readonly string[] | null;
-  words: NoteWords;
   onSave: (body: string) => Promise<unknown>;
   onToggleShared: () => Promise<unknown>;
   onDelete: () => Promise<unknown>;
   onFilesChanged: () => Promise<unknown>;
 }) {
   if (!isMine(note)) {
-    return <ForeignNoteRow property_id={property_id} note={note} words={words} />;
+    return <ForeignNoteRow property_id={property_id} note={note} />;
   }
   return (
     <OwnNoteRow
       property_id={property_id}
       note={note}
       audience={audience}
-      words={words}
       onSave={onSave}
       onToggleShared={onToggleShared}
       onDelete={onDelete}
@@ -457,69 +466,50 @@ function NoteRow({
   );
 }
 
+const CARD = 'relative rounded-[var(--radius-md)] border px-3.5 py-3';
+
 /* Another author's SHARED note (they marked it; a share put it in reach): read
  * only — no attach, edit, delete or drop zone, files open but carry no ×. A
- * neutral border, not copper: it is not mine to work. */
-function ForeignNoteRow({
-  property_id,
-  note,
-  words,
-}: {
-  property_id: number;
-  note: Note;
-  words: NoteWords;
-}) {
+ * neutral card one step down: it is not mine to work. */
+function ForeignNoteRow({ property_id, note }: { property_id: number; note: Note }) {
   return (
-    <div
-      className="relative border-l-2 border-[var(--color-rule-strong)] pl-3"
-      aria-label={`${words.noteBy} ${note.owner_email} · ${fmtAbsolute(note.created_at)}`}
-      role="group"
+    <article
+      className={`${CARD} border-[var(--color-rule)] bg-[var(--color-paper)]`}
+      aria-label={`${WORDS.noteBy} ${note.owner_email} · ${fmtAbsolute(note.created_at)}`}
     >
-      <p className="text-sm text-[var(--color-ink)] whitespace-pre-wrap break-words">{note.body}</p>
-      <NoteAttachmentList
-        propertyId={property_id}
-        attachments={note.attachments ?? []}
-        uploading={[]}
-        lang={words.lang}
-      />
-      <div className="mt-1">
-        <NoteMeta note={note} words={words} author={note.owner_email} />
+      <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-[var(--color-ink)]">{note.body}</p>
+      <NoteAttachmentList propertyId={property_id} attachments={note.attachments ?? []} uploading={[]} lang="cs" />
+      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+        <NoteMeta note={note} author={note.owner_email} />
+        <span className="text-[0.72rem] text-[var(--color-ink-3)]">· jen ke čtení</span>
       </div>
-    </div>
+    </article>
   );
 }
 
 /* A note's time line: relative, the exact dates on hover, the author first on
  * another author's note; then its delegated stamp, if any. */
-function NoteMeta({
-  note,
-  words,
-  author,
-}: {
-  note: Note;
-  words: NoteWords;
-  author?: string | null;
-}) {
+function NoteMeta({ note, author }: { note: Note; author?: string | null }) {
   return (
     <>
       <p
-        className="text-[0.7rem] tracking-wide text-[var(--color-ink-4)] cursor-help"
+        className="cursor-help text-[0.75rem] text-[var(--color-ink-3)]"
         title={
           note.updated_at
-            ? `Written ${fmtAbsolute(note.created_at)} · edited ${fmtAbsolute(note.updated_at)}`
+            ? `Napsáno ${fmtAbsolute(note.created_at)} · upraveno ${fmtAbsolute(note.updated_at)}`
             : fmtAbsolute(note.created_at)
         }
       >
         {author != null && (
           <>
-            <span className="text-[var(--color-ink-3)]">{author}</span> ·{' '}
+            <span className="text-[var(--color-ink-2)]">{author}</span> ·{' '}
           </>
         )}
         {fmtRelative(note.created_at)}
-        {note.updated_at && ` (${words.edited})`}
+        {note.updated_at && ` (${WORDS.edited})`}
       </p>
       {/* Who last wrote it acting as the owner (ruling 5); nothing for the owner's own edits. */}
-      <DelegatedStamp stamp={note} lang={words.lang} />
+      <DelegatedStamp stamp={note} lang="cs" />
     </>
   );
 }
@@ -528,7 +518,6 @@ function OwnNoteRow({
   property_id,
   note,
   audience,
-  words,
   onSave,
   onToggleShared,
   onDelete,
@@ -537,7 +526,6 @@ function OwnNoteRow({
   property_id: number;
   note: Note;
   audience: readonly string[] | null;
-  words: NoteWords;
   onSave: (body: string) => Promise<unknown>;
   onToggleShared: () => Promise<unknown>;
   onDelete: () => Promise<unknown>;
@@ -568,7 +556,7 @@ function OwnNoteRow({
       try {
         await uploadAttachment(property_id, file, { note_id: note.id, actAs });
       } catch (err) {
-        failed.push(`${file.name}: ${(err as Error).message || 'upload failed'}`);
+        failed.push(`${file.name}: ${(err as Error).message || 'nahrání selhalo'}`);
       }
     }
     await onFilesChanged();
@@ -585,34 +573,34 @@ function OwnNoteRow({
         attachments={attachments}
         uploading={uploading}
         onRemoved={onFilesChanged}
-        lang={words.lang}
+        lang="cs"
       />
-      <FileProblems problems={fileProblems} onDismiss={() => setFileProblems([])} />
+      <FileProblems problems={fileProblems} onDismiss={() => setFileProblems([])} dismissLabel="Zavřít" />
     </>
   );
 
   return (
-    <div
-      className="relative border-l-2 border-[var(--color-copper)]/40 pl-3"
-      aria-label={`${words.noteFrom} ${fmtAbsolute(note.created_at)}`}
-      role="group"
+    <article
+      className={`${CARD} ${editing ? 'border-[var(--color-copper)]/50' : 'border-[var(--color-rule)]'} bg-[var(--color-paper-3)]`}
+      aria-label={`${WORDS.noteFrom} ${fmtAbsolute(note.created_at)}`}
       {...drop.handlers}
     >
       {editing ? (
         <>
           <textarea
-            aria-label="Edit note"
+            aria-label="Upravit poznámku"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            rows={2}
-            maxLength={4000}
+            rows={3}
+            maxLength={BODY_MAX}
             autoFocus
-            className="w-full px-3 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] resize-y"
+            className="block w-full resize-y rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-3 py-2 text-sm leading-relaxed text-[var(--color-ink)] focus:border-[var(--color-copper)]"
           />
-          <div className="mt-1.5 flex items-center justify-between gap-3">
-            <p className="text-[0.7rem] text-[var(--color-ink-4)] tabular-nums">
-              {draft.length} / 4000
-            </p>
+          {files}
+          <div className="mt-2 flex items-center justify-between gap-3">
+            <span className="font-mono text-[0.72rem] tabular-nums text-[var(--color-ink-3)]">
+              {draft.length} / {BODY_MAX}
+            </span>
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
@@ -622,9 +610,9 @@ function OwnNoteRow({
                   setError(null);
                 }}
                 disabled={busy}
-                className="px-2 py-1 text-[0.75rem] text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)] disabled:opacity-50"
+                className={QUIET}
               >
-                Cancel
+                Zrušit
               </button>
               <button
                 type="button"
@@ -638,123 +626,111 @@ function OwnNoteRow({
                   setError(null);
                   onSave(trimmed)
                     .then(() => setEditing(false))
-                    .catch((err: ApiError | Error) =>
-                      setError(err.message || 'Failed to save note'))
+                    .catch((err: ApiError | Error) => setError(err.message || 'Poznámku se nepodařilo uložit'))
                     .finally(() => setBusy(false));
                 }}
                 disabled={busy || trimmed.length === 0}
-                className="px-3 py-1 text-[0.75rem] rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className={PRIMARY}
               >
-                {busy ? 'Saving…' : 'Save'}
+                {busy ? 'Ukládám…' : 'Uložit'}
               </button>
             </div>
           </div>
-          {files}
-          {error && (
-            <p className="mt-1.5 text-[0.7rem] text-[var(--color-brick)]">{error}</p>
-          )}
+          {error && <p className="mt-1.5 text-[0.75rem] text-[var(--color-brick)]">{error}</p>}
         </>
       ) : (
         <>
-          <div className="flex items-start justify-between gap-3">
-            <p className="text-sm text-[var(--color-ink)] whitespace-pre-wrap break-words">
-              {note.body}
-            </p>
-            <div className="flex items-center gap-0.5 shrink-0">
-              <AttachButton
-                onFiles={(picked) => void attach(picked)}
-                label="Attach files to this note"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  setDraft(note.body);
-                  setEditing(true);
-                }}
-                aria-label="Edit note"
-                title="Edit note"
-                className="inline-flex items-center justify-center w-5 h-5 rounded-[var(--radius-xs)] text-[var(--color-ink-4)] hover:text-[var(--color-ink-2)] hover:bg-[var(--color-paper-2)] transition-colors"
-              >
-                <PencilIcon className="h-[11px] w-[11px]" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmingDelete(true)}
-                aria-label="Delete note"
-                title="Delete note"
-                className="inline-flex items-center justify-center w-5 h-5 rounded-[var(--radius-xs)] text-[var(--color-ink-4)] hover:text-[var(--color-brick)] hover:bg-[var(--color-paper-2)] transition-colors"
-              >
-                <TrashIcon className="h-[11px] w-[11px]" />
-              </button>
-            </div>
-          </div>
+          <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-[var(--color-ink)]">{note.body}</p>
           {files}
           {confirmingDelete ? (
-            <div className="mt-1.5 flex items-center gap-2">
-              <span className="text-[0.7rem] text-[var(--color-brick)]">
+            <div className="mt-2 flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] bg-[var(--color-brick-soft)] px-2.5 py-1.5">
+              <span className="text-[0.8rem] text-[var(--color-brick)]">
                 {attachments.length > 0
-                  ? `Delete this note? Its ${attachments.length === 1 ? 'file stays' : `${attachments.length} files stay`} with the property.`
-                  : 'Delete this note?'}
+                  ? `Smazat poznámku? ${attachments.length === 1 ? 'Její soubor zůstane' : `Jejích ${attachments.length} souborů zůstane`} u nemovitosti.`
+                  : 'Smazat poznámku?'}
               </span>
               <button
                 type="button"
                 onClick={() => {
                   setBusy(true);
                   onDelete().catch((err: ApiError | Error) => {
-                    setError(err.message || 'Failed to delete note');
+                    setError(err.message || 'Poznámku se nepodařilo smazat');
                     setBusy(false);
                     setConfirmingDelete(false);
                   });
                 }}
                 disabled={busy}
-                className="px-2 py-0.5 text-[0.7rem] tracking-wide rounded-[var(--radius-sm)] bg-[var(--color-brick-soft)] text-[var(--color-brick)] hover:bg-[var(--color-brick)]/15 disabled:opacity-50 transition-colors"
+                className="px-2.5 py-1 text-[0.8rem] font-medium rounded-[var(--radius-sm)] bg-[var(--color-brick)] text-white hover:opacity-90 disabled:opacity-50"
               >
-                {busy ? 'Deleting…' : 'Delete'}
+                {busy ? 'Mažu…' : 'Smazat'}
               </button>
-              <button
-                type="button"
-                onClick={() => setConfirmingDelete(false)}
-                disabled={busy}
-                className="text-[0.7rem] tracking-wide text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)] disabled:opacity-50"
-              >
-                Cancel
+              <button type="button" onClick={() => setConfirmingDelete(false)} disabled={busy} className={QUIET}>
+                Zrušit
               </button>
             </div>
           ) : (
-            <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-              <NoteMeta note={note} words={words} />
-              {note.shared && (
-                <span className="text-[0.62rem] tracking-[0.12em] uppercase text-[var(--color-ink-3)]">
-                  {audience != null && audience.length === 0 ? words.sharedNobody : words.shared}
-                </span>
-              )}
-              {/* Making private is always safe; sharing names who it reaches, and
-                  waits until that is known. */}
-              {(note.shared || (audience != null && audience.length > 0)) && (
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <NoteMeta note={note} />
+                {note.shared && (
+                  <span className="rounded-[var(--radius-xs)] bg-[var(--color-copper-soft)] px-1.5 py-0.5 text-[0.68rem] uppercase tracking-[0.1em] text-[var(--color-copper)]">
+                    {audience != null && audience.length === 0 ? WORDS.sharedNobody : WORDS.shared}
+                  </span>
+                )}
+                {/* Making private is always safe; sharing names who it reaches, and
+                    waits until that is known. */}
+                {(note.shared || (audience != null && audience.length > 0)) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBusy(true);
+                      setError(null);
+                      onToggleShared()
+                        .catch((err: ApiError | Error) => setError(err.message || 'Poznámku se nepodařilo upravit'))
+                        .finally(() => setBusy(false));
+                    }}
+                    disabled={busy}
+                    className="text-[0.75rem] text-[var(--color-ink-3)] underline-offset-2 hover:text-[var(--color-ink)] hover:underline disabled:opacity-50"
+                  >
+                    {note.shared ? WORDS.unshare : WORDS.shareWith((audience ?? []).join(', '))}
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center">
+                <AttachButton
+                  onFiles={(picked) => void attach(picked)}
+                  label="Přiložit soubory k poznámce"
+                  text="Přiložit"
+                  showText
+                />
                 <button
                   type="button"
                   onClick={() => {
-                    setBusy(true);
-                    setError(null);
-                    onToggleShared()
-                      .catch((err: ApiError | Error) =>
-                        setError(err.message || 'Failed to update note'))
-                      .finally(() => setBusy(false));
+                    setDraft(note.body);
+                    setEditing(true);
                   }}
-                  disabled={busy}
-                  className="text-[0.7rem] tracking-wide text-[var(--color-ink-3)] underline-offset-2 hover:text-[var(--color-ink)] hover:underline disabled:opacity-50"
+                  aria-label="Upravit poznámku"
+                  className={QUIET}
                 >
-                  {note.shared ? words.unshare : words.shareWith((audience ?? []).join(', '))}
+                  <PencilIcon className="h-3.5 w-3.5" />
+                  <span aria-hidden>Upravit</span>
                 </button>
-              )}
+                <button
+                  type="button"
+                  onClick={() => setConfirmingDelete(true)}
+                  aria-label="Smazat poznámku"
+                  className={`${QUIET} hover:text-[var(--color-brick)]`}
+                >
+                  <TrashIcon className="h-3.5 w-3.5" />
+                  <span aria-hidden>Smazat</span>
+                </button>
+              </div>
             </div>
           )}
-          {error && !confirmingDelete && (
-            <p className="mt-1.5 text-[0.7rem] text-[var(--color-brick)]">{error}</p>
-          )}
+          {error && !confirmingDelete && <p className="mt-1.5 text-[0.75rem] text-[var(--color-brick)]">{error}</p>}
         </>
       )}
-      {drop.over && <DropHint label="Drop to attach to this note" />}
-    </div>
+      {drop.over && <DropHint label="Pusťte soubory — přiloží se k této poznámce" />}
+    </article>
   );
 }

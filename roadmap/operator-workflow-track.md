@@ -255,7 +255,7 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   display copy (`?w=1080`, made once, JWT proxy only); no HEIC.
 - **Done (photos sprint W2, 2026-10-23, PR [#1975](https://github.com/waiff/sreality/pull/1975)):** "Moje fotky", one strip of the acting
   identity's own photos per property (a note's are the same records, shown under the note too):
-  the phone page's section after Poloha (Vyfotit / Z knihovny) and the desktop's Moje tab (Upload,
+  the phone page's section after Poloha (Vyfotit / Z knihovny) and the desktop's Fotky tab (Upload,
   drag-and-drop); tiles from the 1080 px copies open the original in one viewer (a note's photo
   too, no more new tab) with Share (the share sheet with the original files, else a download) and
   Delete behind a second tap; Vybrat for Share (N) / Delete (N). A split lists a file with no note

@@ -100,12 +100,26 @@ function renderWithReads() {
   return { ...view, invalidate };
 }
 
+/* The phone's tags + artifact link + notes: the desktop keeps the tags in the
+ * header's Štítky button (TagsToggle), so the inline tag rows are tested here. */
+function renderPhone() {
+  mockReads();
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter>
+        <PhoneTagsAndNotes property_id={42} listing_id={900} />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
 /* Ruling 6 (docs/design/collection-sharing.md): the header's "Uložit do kolekce"
  * is the property page's one collection editor; this block has no second one. */
 describe('<CurationBlock> collections', () => {
   it('renders no collection row', async () => {
     renderBlock();
-    await screen.findByRole('textbox', { name: 'Notes' });
+    await screen.findByRole('textbox', { name: 'Poznámky' });
     expect(screen.queryByText('Collections')).toBeNull();
     expect(screen.queryByRole('link', { name: /Manage/ })).toBeNull();
     // The collection reads feed only the notes' share audience: no save control here.
@@ -114,14 +128,14 @@ describe('<CurationBlock> collections', () => {
 });
 
 describe('<CurationBlock> control names', () => {
-  it('names the note composer by the visible Notes heading', async () => {
+  it('names the note composer by the visible Poznámky heading', async () => {
     renderBlock();
-    expect(await screen.findByRole('textbox', { name: 'Notes' }))
-      .toHaveAccessibleName('Notes');
+    expect(await screen.findByRole('textbox', { name: 'Poznámky' }))
+      .toHaveAccessibleName('Poznámky');
   });
 
   it('names the tag find-or-create box', async () => {
-    renderBlock();
+    renderPhone();
     expect(await screen.findByRole('textbox', { name: 'Najít nebo vytvořit štítek' }))
       .toBeInTheDocument();
   });
@@ -129,9 +143,9 @@ describe('<CurationBlock> control names', () => {
   it('names the note editor that autoFocus lands in', async () => {
     const user = userEvent.setup();
     renderBlock();
-    await user.click(await screen.findByRole('button', { name: 'Edit note' }));
-    const editor = screen.getByRole('textbox', { name: 'Edit note' });
-    expect(editor).toHaveAccessibleName('Edit note');
+    await user.click(await screen.findByRole('button', { name: 'Upravit poznámku' }));
+    const editor = screen.getByRole('textbox', { name: 'Upravit poznámku' });
+    expect(editor).toHaveAccessibleName('Upravit poznámku');
     expect(document.activeElement).toBe(editor);
   });
 });
@@ -148,12 +162,12 @@ describe('<CurationBlock> note counts', () => {
     const counts = () =>
       invalidate.mock.calls.filter(([f]) => f?.queryKey === curationKeys.noteCounts).length;
 
-    await user.type(await screen.findByRole('textbox', { name: 'Notes' }), 'Volat v pondělí.');
-    await user.click(screen.getByRole('button', { name: 'Save note' }));
+    await user.type(await screen.findByRole('textbox', { name: 'Poznámky' }), 'Volat v pondělí.');
+    await user.click(screen.getByRole('button', { name: 'Uložit poznámku' }));
     await waitFor(() => expect(counts()).toBe(1));
 
-    await user.click(screen.getByRole('button', { name: 'Delete note' }));
-    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    await user.click(screen.getByRole('button', { name: 'Smazat poznámku' }));
+    await user.click(screen.getByRole('button', { name: 'Smazat' }));
     await waitFor(() => expect(counts()).toBe(2));
   });
 });
@@ -178,9 +192,8 @@ describe('<CurationBlock> failed reads', () => {
   });
 
   it('says the tags failed instead of offering an empty picker, and reads them again', async () => {
-    mockReads();
     vi.mocked(fetchPropertyTagMemberSet).mockRejectedValueOnce(new Error('HTTP 500'));
-    renderWithReads();
+    renderPhone();
 
     const tags = await banner('Štítky');
     expect(screen.queryByRole('textbox', { name: 'Najít nebo vytvořit štítek' })).toBeNull();
@@ -199,7 +212,7 @@ describe('<CurationBlock> note attachments', () => {
     fireEvent.dragOver(el, { dataTransfer });
     fireEvent.drop(el, { dataTransfer });
   };
-  const savedNote = () => screen.findByRole('group', { name: /^Note from/ });
+  const savedNote = () => screen.findByRole('article', { name: /^Poznámka z/ });
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -213,7 +226,7 @@ describe('<CurationBlock> note attachments', () => {
     vi.mocked(createPropertyNote).mockResolvedValue({ ...NOTE, id: 12 } as never);
     vi.mocked(uploadAttachment).mockResolvedValue({} as never);
     renderWithReads();
-    const box = await screen.findByRole('textbox', { name: 'Notes' });
+    const box = await screen.findByRole('textbox', { name: 'Poznámky' });
 
     const file = pdf();
     dropOn(box, [file]);
@@ -222,7 +235,7 @@ describe('<CurationBlock> note attachments', () => {
     expect(uploadAttachment).not.toHaveBeenCalled();
 
     await user.type(box, 'Půdorys od makléře.');
-    await user.click(screen.getByRole('button', { name: 'Save note' }));
+    await user.click(screen.getByRole('button', { name: 'Uložit poznámku' }));
     await waitFor(() => expect(uploadAttachment).toHaveBeenCalledWith(
       42, file, expect.objectContaining({ note_id: 12 })));
     expect(createPropertyNote).toHaveBeenCalledWith(42, 'Půdorys od makléře.', 900, false);
@@ -235,12 +248,13 @@ describe('<CurationBlock> note attachments', () => {
     vi.mocked(createPropertyNote).mockResolvedValue({ ...NOTE, id: 12 } as never);
     vi.mocked(uploadAttachment).mockResolvedValue({} as never);
     renderWithReads();
-    await screen.findByRole('textbox', { name: 'Notes' });
+    // The composer reads as one line until it is used; its tools appear on focus.
+    await user.click(await screen.findByRole('textbox', { name: 'Poznámky' }));
 
     await user.upload(screen.getAllByTestId('attach-input')[0], pdf());
-    await user.click(screen.getByRole('button', { name: 'Save note' }));
+    await user.click(screen.getByRole('button', { name: 'Uložit poznámku' }));
     await waitFor(() => expect(createPropertyNote).toHaveBeenCalledWith(
-      42, 'Attached: plan.pdf', 900, false));
+      42, 'Přílohy: plan.pdf', 900, false));
   });
 
   it('puts a file dropped on a saved note onto that note, not into the composer', async () => {
@@ -261,7 +275,7 @@ describe('<CurationBlock> note attachments', () => {
   it('names a refused file and never sends it', async () => {
     mockReads();
     renderWithReads();
-    dropOn(await screen.findByRole('textbox', { name: 'Notes' }),
+    dropOn(await screen.findByRole('textbox', { name: 'Poznámky' }),
       [new File(['<svg/>'], 'drawing.svg', { type: 'image/svg+xml' })]);
     expect(await screen.findByText('drawing.svg: this file type cannot be attached'))
       .toBeInTheDocument();
@@ -319,7 +333,7 @@ describe('<CurationBlock> note attachments', () => {
     await user.click(tile);
     const viewer = await screen.findByRole('dialog');
     await waitFor(() => expect(fetchAttachmentBlob).toHaveBeenCalledWith(42, 1, { actAs: null }));
-    expect(within(viewer).getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+    expect(within(viewer).getByRole('button', { name: 'Smazat' })).toBeInTheDocument();
   });
 });
 
@@ -331,15 +345,17 @@ describe('<CurationBlock> artifact link', () => {
     vi.mocked(deletePropertyArtifactLink).mockReset();
   });
 
-  it('offers an empty field, names it by its heading, and saves a link', async () => {
+  it('offers "+ Odkaz na artefakt", opens a named field, and saves a link', async () => {
     const user = userEvent.setup();
     mockReads();
     vi.mocked(setPropertyArtifactLink).mockResolvedValue(LINK);
     renderWithReads();
 
-    const field = await screen.findByRole('textbox', { name: 'Artifact link' });
+    expect(screen.queryByRole('textbox', { name: 'Odkaz na artefakt' })).toBeNull();
+    await user.click(await screen.findByRole('button', { name: /Odkaz na artefakt/ }));
+    const field = screen.getByRole('textbox', { name: 'Odkaz na artefakt' });
     await user.type(field, '  https://claude.ai/artifact/abc123 ');
-    await user.click(screen.getByRole('button', { name: 'Save link' }));
+    await user.click(screen.getByRole('button', { name: 'Uložit odkaz' }));
 
     await waitFor(() =>
       expect(setPropertyArtifactLink).toHaveBeenCalledWith(42, 'https://claude.ai/artifact/abc123'));
@@ -363,8 +379,9 @@ describe('<CurationBlock> artifact link', () => {
         </MemoryRouter>
       </QueryClientProvider>,
     );
-    await user.type(await screen.findByRole('textbox', { name: 'Artifact link' }), 'https://claude.ai/artifact/abc123');
-    await user.click(screen.getByRole('button', { name: 'Save link' }));
+    await user.click(await screen.findByRole('button', { name: /Odkaz na artefakt/ }));
+    await user.type(screen.getByRole('textbox', { name: 'Odkaz na artefakt' }), 'https://claude.ai/artifact/abc123');
+    await user.click(screen.getByRole('button', { name: 'Uložit odkaz' }));
     await waitFor(() =>
       expect(setPropertyArtifactLink).toHaveBeenCalledWith(42, 'https://claude.ai/artifact/abc123', { actAs: 'owner-1' }));
     expect(fetchArtifactLinks).toHaveBeenCalledWith({ actAs: 'owner-1' });
@@ -376,10 +393,11 @@ describe('<CurationBlock> artifact link', () => {
     mockReads();
     renderWithReads();
 
-    await user.type(await screen.findByRole('textbox', { name: 'Artifact link' }), 'javascript:alert(1)');
-    await user.click(screen.getByRole('button', { name: 'Save link' }));
+    await user.click(await screen.findByRole('button', { name: /Odkaz na artefakt/ }));
+    await user.type(screen.getByRole('textbox', { name: 'Odkaz na artefakt' }), 'javascript:alert(1)');
+    await user.click(screen.getByRole('button', { name: 'Uložit odkaz' }));
 
-    expect(await screen.findByText(/starting with http/)).toBeInTheDocument();
+    expect(await screen.findByText(/začínající http/)).toBeInTheDocument();
     expect(setPropertyArtifactLink).not.toHaveBeenCalled();
   });
 
@@ -391,31 +409,31 @@ describe('<CurationBlock> artifact link', () => {
     renderWithReads();
 
     expect(await screen.findByRole('link', { name: 'claude.ai/artifact/abc123' })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Edit artifact link' }));
-    const field = screen.getByRole('textbox', { name: 'Artifact link' });
+    await user.click(screen.getByRole('button', { name: 'Upravit odkaz na artefakt' }));
+    const field = screen.getByRole('textbox', { name: 'Odkaz na artefakt' });
     expect(field).toHaveValue(LINK.url);
     await user.clear(field);
     await user.type(field, 'https://example.cz/page');
-    await user.click(screen.getByRole('button', { name: 'Save link' }));
+    await user.click(screen.getByRole('button', { name: 'Uložit odkaz' }));
 
     expect(await screen.findByRole('link', { name: 'example.cz/page' })).toHaveAttribute(
       'href', 'https://example.cz/page');
     expect(setPropertyArtifactLink).toHaveBeenCalledWith(42, 'https://example.cz/page');
   });
 
-  it('asks before removing, then clears the field', async () => {
+  it('asks before removing, then offers to add one again', async () => {
     const user = userEvent.setup();
     mockReads();
     vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map([[42, LINK]]));
     vi.mocked(deletePropertyArtifactLink).mockResolvedValue({ deleted: true });
     renderWithReads();
 
-    await user.click(await screen.findByRole('button', { name: 'Remove artifact link' }));
+    await user.click(await screen.findByRole('button', { name: 'Odebrat odkaz na artefakt' }));
     expect(deletePropertyArtifactLink).not.toHaveBeenCalled();
-    await user.click(screen.getByRole('button', { name: 'Remove' }));
+    await user.click(screen.getByRole('button', { name: 'Odebrat' }));
 
     await waitFor(() => expect(deletePropertyArtifactLink).toHaveBeenCalledWith(42));
-    expect(await screen.findByRole('textbox', { name: 'Artifact link' })).toHaveValue('');
+    expect(await screen.findByRole('button', { name: /Odkaz na artefakt/ })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /claude\.ai/ })).not.toBeInTheDocument();
   });
 
@@ -436,7 +454,8 @@ describe('<CurationBlock> artifact link', () => {
     renderWithReads();
 
     expect(await screen.findByText(/Odkaz na artefakt/)).toBeInTheDocument();
-    expect(screen.queryByRole('textbox', { name: 'Artifact link' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: 'Odkaz na artefakt' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Odkaz na artefakt/ })).not.toBeInTheDocument();
   });
 });
 
@@ -454,7 +473,7 @@ describe('<CurationBlock> shared notes', () => {
     vi.mocked(listCollections).mockResolvedValue({ data: [SHARED_COLLECTION], total: 1 });
     vi.mocked(fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[42, [7]]]));
   };
-  const noteGroup = () => screen.findByRole('group', { name: /^Note/ });
+  const noteGroup = () => screen.findByRole('article', { name: /^Poznámka/ });
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -471,15 +490,15 @@ describe('<CurationBlock> shared notes', () => {
     }] } as never);
     renderWithReads();
 
-    const note = await screen.findByRole('group', { name: /^Note by petr@example\.cz · / });
+    const note = await screen.findByRole('article', { name: /^Poznámka od petr@example\.cz · / });
     expect(within(note).getByText('Sousedi jsou hlučni.')).toBeInTheDocument();
     expect(within(note).getByText('petr@example.cz')).toBeInTheDocument();
-    for (const verb of [/Edit note/, /Delete note/, /Attach files/, /Remove plan\.pdf/]) {
+    for (const verb of [/Upravit poznámku/, /Smazat poznámku/, /Přiložit soubory/, /Remove plan\.pdf/]) {
       expect(within(note).queryByRole('button', { name: verb })).toBeNull();
     }
     // The file still opens.
     expect(within(note).getByRole('button', { name: 'Download plan.pdf' })).toBeInTheDocument();
-    expect(within(note).queryByRole('button', { name: /^Share|Make private/ })).toBeNull();
+    expect(within(note).queryByRole('button', { name: /^Sdílet|Nesdílet/ })).toBeNull();
   });
 
   it('never takes a file dropped on another author\'s note onto that note', async () => {
@@ -489,7 +508,7 @@ describe('<CurationBlock> shared notes', () => {
     }] } as never);
     renderWithReads();
 
-    const note = await screen.findByRole('group', { name: /^Note by petr@example\.cz/ });
+    const note = await screen.findByRole('article', { name: /^Poznámka od petr@example\.cz/ });
     const file = new File(['%PDF'], 'plan.pdf', { type: 'application/pdf' });
     const dataTransfer = { files: [file], types: ['Files'], dropEffect: 'none' };
     fireEvent.dragEnter(note, { dataTransfer });
@@ -512,9 +531,9 @@ describe('<CurationBlock> shared notes', () => {
 
     // Both reads settled: the mark now states the audience is empty.
     const note = await noteGroup();
-    expect(await within(note).findByText('Shared · nobody can see it yet')).toBeInTheDocument();
-    expect(screen.queryByRole('checkbox', { name: /Share with/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /^Share/ })).toBeNull();
+    expect(await within(note).findByText('Sdíleno · zatím to nikdo nevidí')).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /Sdílet s/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Sdílet s/ })).toBeNull();
   });
 
   it('never says "nobody" while the collection list is still loading', async () => {
@@ -525,11 +544,11 @@ describe('<CurationBlock> shared notes', () => {
     renderWithReads();
 
     const note = await noteGroup();
-    expect(within(note).getByText('Shared')).toBeInTheDocument();
+    expect(within(note).getByText('Sdíleno')).toBeInTheDocument();
     expect(within(note).queryByText(/nobody/)).toBeNull();
     // Making private stays safe; sharing waits until the audience is known.
-    expect(within(note).getByRole('button', { name: 'Make private' })).toBeInTheDocument();
-    expect(screen.queryByRole('checkbox', { name: /Share with/ })).toBeNull();
+    expect(within(note).getByRole('button', { name: 'Nesdílet' })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /Sdílet s/ })).toBeNull();
   });
 
   it('says a failed collection read failed, instead of "nobody", and retries it', async () => {
@@ -538,16 +557,18 @@ describe('<CurationBlock> shared notes', () => {
     vi.mocked(listCollections).mockRejectedValue(new Error('boom'));
     vi.mocked(listPropertyNotes).mockResolvedValue({ data: [{ ...NOTE, shared: true }] } as never);
     renderWithReads();
+    // The share tools sit in the composer, which opens on focus.
+    await user.click(await screen.findByRole('textbox', { name: 'Poznámky' }));
 
     const retry = await screen.findByRole('button', { name: /Sdílení se nepodařilo načíst/ });
     const note = await noteGroup();
-    expect(within(note).getByText('Shared')).toBeInTheDocument();
+    expect(within(note).getByText('Sdíleno')).toBeInTheDocument();
     expect(within(note).queryByText(/nobody/)).toBeNull();
-    expect(screen.queryByRole('checkbox', { name: /Share with/ })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: /Sdílet s/ })).toBeNull();
 
     withAudience();
     await user.click(retry);
-    expect(await screen.findByRole('checkbox', { name: 'Share with petr@example.cz' }))
+    expect(await screen.findByRole('checkbox', { name: 'Sdílet s petr@example.cz' }))
       .toBeInTheDocument();
   });
 
@@ -558,17 +579,17 @@ describe('<CurationBlock> shared notes', () => {
     vi.mocked(createPropertyNote).mockResolvedValue({ ...NOTE, id: 12 } as never);
     renderWithReads();
 
-    const box = await screen.findByRole('checkbox', { name: 'Share with petr@example.cz' });
+    await user.type(await screen.findByRole('textbox', { name: 'Poznámky' }), 'Makléř slevní.');
+    const box = await screen.findByRole('checkbox', { name: 'Sdílet s petr@example.cz' });
     expect(box).not.toBeChecked();
-    await user.type(screen.getByRole('textbox', { name: 'Notes' }), 'Makléř slevní.');
     await user.click(box);
-    await user.click(screen.getByRole('button', { name: 'Save note' }));
+    await user.click(screen.getByRole('button', { name: 'Uložit poznámku' }));
     await waitFor(() =>
       expect(createPropertyNote).toHaveBeenCalledWith(42, 'Makléř slevní.', 900, true));
-    // Every note needs its own consent: the box clears once the note is saved.
-    await waitFor(() => expect(box).not.toBeChecked());
-    await user.type(screen.getByRole('textbox', { name: 'Notes' }), 'Druhá.');
-    await user.click(screen.getByRole('button', { name: 'Save note' }));
+    // Every note needs its own consent: the box is clear for the next note.
+    await user.type(screen.getByRole('textbox', { name: 'Poznámky' }), 'Druhá.');
+    expect(screen.getByRole('checkbox', { name: 'Sdílet s petr@example.cz' })).not.toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Uložit poznámku' }));
     await waitFor(() =>
       expect(createPropertyNote).toHaveBeenLastCalledWith(42, 'Druhá.', 900, false));
   });
@@ -582,8 +603,8 @@ describe('<CurationBlock> shared notes', () => {
     renderWithReads();
 
     const note = await noteGroup();
-    expect(await within(note).findByText('Shared')).toBeInTheDocument();
-    await user.click(within(note).getByRole('button', { name: 'Make private' }));
+    expect(await within(note).findByText('Sdíleno')).toBeInTheDocument();
+    await user.click(within(note).getByRole('button', { name: 'Nesdílet' }));
     await waitFor(() => expect(updatePropertyNote).toHaveBeenCalledWith(42, 11, { shared: false }));
   });
 
@@ -595,9 +616,9 @@ describe('<CurationBlock> shared notes', () => {
     renderWithReads();
 
     const note = await noteGroup();
-    expect(within(note).queryByText('Shared')).toBeNull();
+    expect(within(note).queryByText('Sdíleno')).toBeNull();
     // The toggle names who the note will reach; no tooltip carries it.
-    await user.click(await within(note).findByRole('button', { name: 'Share with petr@example.cz' }));
+    await user.click(await within(note).findByRole('button', { name: 'Sdílet s petr@example.cz' }));
     await waitFor(() => expect(updatePropertyNote).toHaveBeenCalledWith(42, 11, { shared: true }));
   });
 
@@ -607,8 +628,8 @@ describe('<CurationBlock> shared notes', () => {
     renderWithReads();
 
     const note = await noteGroup();
-    expect(await within(note).findByText('Shared · nobody can see it yet')).toBeInTheDocument();
-    expect(within(note).getByRole('button', { name: 'Make private' })).toBeInTheDocument();
+    expect(await within(note).findByText('Sdíleno · zatím to nikdo nevidí')).toBeInTheDocument();
+    expect(within(note).getByRole('button', { name: 'Nesdílet' })).toBeInTheDocument();
   });
 
   it('acting as the owner never claims "nobody": the owner\'s audience is unknown under the header (§3.6)', async () => {
@@ -633,14 +654,14 @@ describe('<CurationBlock> shared notes', () => {
 
     const note = await noteGroup();
     expect(listPropertyNotes).toHaveBeenCalledWith(42, { actAs: 'owner-1' });
-    expect(within(note).getByText('Shared')).toBeInTheDocument();
+    expect(within(note).getByText('Sdíleno')).toBeInTheDocument();
     expect(within(note).queryByText(/nobody/)).toBeNull();
-    expect(within(note).getByRole('button', { name: 'Make private' })).toBeInTheDocument();
+    expect(within(note).getByRole('button', { name: 'Nesdílet' })).toBeInTheDocument();
     expect(screen.queryByRole('checkbox')).toBeNull();
 
     // A note deleted as the owner re-reads the owner's notes, never Browse's note marks.
-    fireEvent.click(within(note).getByRole('button', { name: 'Delete note' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+    fireEvent.click(within(note).getByRole('button', { name: 'Smazat poznámku' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Smazat' }));
     await waitFor(() => expect(deletePropertyNote).toHaveBeenCalledWith(42, 11, { actAs: 'owner-1' }));
     await waitFor(() =>
       expect(invalidate).toHaveBeenCalledWith({ queryKey: actingKey('owner-1', curationKeys.propertyNotes(42)) }),
@@ -662,7 +683,7 @@ describe('<CurationBlock> shared notes', () => {
     expect(await screen.findByRole('checkbox', { name: 'Sdílet s petr@example.cz' }))
       .not.toBeChecked();
     // The row's own label speaks the page's language too.
-    const note = await screen.findByRole('group', { name: /^Poznámka z / });
+    const note = await screen.findByRole('article', { name: /^Poznámka z / });
     expect(await within(note).findByText('Sdíleno')).toBeInTheDocument();
     expect(within(note).getByRole('button', { name: 'Nesdílet' })).toBeInTheDocument();
   });
@@ -673,11 +694,11 @@ describe('<CurationBlock> shared notes', () => {
     vi.mocked(updatePropertyNote).mockResolvedValue(NOTE as never);
     renderWithReads();
 
-    await user.click(await screen.findByRole('button', { name: 'Edit note' }));
-    const editor = screen.getByRole('textbox', { name: 'Edit note' });
+    await user.click(await screen.findByRole('button', { name: 'Upravit poznámku' }));
+    const editor = screen.getByRole('textbox', { name: 'Upravit poznámku' });
     await user.clear(editor);
     await user.type(editor, 'Nový text.');
-    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await user.click(screen.getByRole('button', { name: 'Uložit' }));
     await waitFor(() =>
       expect(updatePropertyNote).toHaveBeenCalledWith(42, 11, { body: 'Nový text.' }));
   });
@@ -695,8 +716,8 @@ describe('<CurationBlock> delegated stamp', () => {
       ],
     } as never);
     renderWithReads();
-    expect(await screen.findByText(/^edited by c@example\.cz · /)).toBeInTheDocument();
-    expect(screen.getAllByText(/^edited by /)).toHaveLength(1);
+    expect(await screen.findByText(/^upravil c@example\.cz · /)).toBeInTheDocument();
+    expect(screen.getAllByText(/^upravil /)).toHaveLength(1);
   });
 
   it('speaks Czech on the phone', async () => {
