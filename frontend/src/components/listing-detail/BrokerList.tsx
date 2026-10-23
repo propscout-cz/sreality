@@ -1,5 +1,6 @@
-/* Who is selling this property and how to reach them — on the overview tab, so
- * the contact is one glance from the photos (operator 2026-10-22).
+/* Who is selling this property, how to reach them, and the number each of their
+ * ads prints for callers — on the overview tab, so the contact is one glance from
+ * the photos (operator 2026-10-22; the ad reference 2026-10-23).
  *
  * MS7 (lib/brokers.propertyBrokers), from one batched read the advert rows share.
  * A failed read says so with a retry, never "no broker" (the dark state that hid
@@ -77,7 +78,7 @@ export default function BrokerList({
                 {b.broker_firm_label ?? 'nezávislý / neznámá kancelář'}
               </p>
             </div>
-            <BrokerContactCard broker={b} />
+            <BrokerContactCard broker={b} ads={b.ads} />
           </li>
         ))}
       </ul>

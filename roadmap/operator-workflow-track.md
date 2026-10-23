@@ -7,6 +7,26 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
+### Phase U-AD-REFERENCE: the number a broker advertises under, on the broker card (2026-10-23)
+
+Operator ask: in the property page's Makléř section, show the ad id the broker advertises under, so it
+can be quoted on a call; make sure it is scraped correctly. Rulings 2026-10-23: one card on both shells;
+an ad without a number reads "<portál> —", never the portal's own id; the number is kept verbatim
+(portal prefixes included); the PDF sheet's broker block gets the same lines; the broker page and the
+Inzeráty lists stay without it; history is healed now.
+
+- [x] **W1 — the column (PR #1984, migration 667).** `listings.ad_reference`, one contract cell per portal
+      (field-capture track).
+- [ ] **W2 — the heal.** `reparse.yml fields=ad_reference` per portal, maxima → remax → mmreality →
+      realitymix → ceskereality → idnes → sreality, the property queue drained between portals.
+- [x] **W3 — the card (this PR).** `propertyBrokers` keeps each broker's ads; ONE `BrokerContactCard`
+      (desktop + phone, `ads` optional so /brokers/:id is unchanged) quotes `<portál> · <číslo>` per ad with
+      the same copy button; ONE copy behaviour in `lib/clipboard` (the phone's strip, its copy helper and
+      the phone broker page's duplicate went); `PropertySource` loses the never-read `sreality_id` and the
+      false `source_id_native: null`; the select list is pinned to `property_sources_public`.
+- [ ] **W4 — the PDF sheet.** `api/routes/property_download.py` selects the column; its `property_brokers`
+      twin returns each broker's ads; `_broker_block` prints one `<portál>  <číslo|—>` line per ad.
+
 ### Phase U-NOTIFY-PUSH: Notifications push program (approved 2026-10-21)
 
 Program `docs/design/notifications-push/PROGRAM.md` (audit `AUDIT.md`, F1–F28; eleven rulings taken 2026-10-21). North

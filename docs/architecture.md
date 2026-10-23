@@ -1757,7 +1757,11 @@ renumber.** Navigate by area:
     display-only line (`priceHistory.lowestActivePrice`), and the chart (with a key) and its dated
     moves draw every advert's own line, labelled by portal. The
     merged-adverts section is the ONLY list of adverts (a singleton's one advert included), each
-    advert's own facts, broker and stored portal link in its row. Every property-grain surface links
+    advert's own facts, broker and stored portal link in its row; the broker card lists no advert
+    -- under each broker's contact it quotes the AD REFERENCE of the ads that broker advertises
+    (`ad_reference`, migration 667: one `<portál> · <číslo>` line per ad, a dash when the ad prints
+    none, never the portal id in its place), on both shells through ONE `BrokerContactCard` and
+    ONE copy behaviour (`lib/clipboard`). Every property-grain surface links
     `propertyPath(property_id)` (`lib/listingUrl`). Old advert addresses -- `/listing/{source}/
     {native}` (emails, the extension), `/listing/{sreality_id}`, `/listing?property=` -- are
     aliases (`AdvertRedirect`) that resolve the advert's property and open its row

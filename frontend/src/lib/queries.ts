@@ -1128,7 +1128,7 @@ export const fetchAdvertProperty = async (
 };
 
 const PROPERTY_SOURCE_COLS =
-  'id,property_id,sreality_id,source,source_url,source_id_native,is_active,price_czk,first_seen_at,last_seen_at';
+  'id,property_id,source,source_url,source_id_native,ad_reference,is_active,price_czk,first_seen_at,last_seen_at';
 
 /* Every advert of one property, oldest first — the merged-adverts section's rows. */
 export const fetchPropertySources = async (

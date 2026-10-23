@@ -143,7 +143,7 @@ describe('makeHydration lookup', () => {
     [42, {
       brokers: [{ sreality_id: null, listing_id: 7, broker_id: 3,
                   broker_display_name: 'A', broker_firm_label: null,
-                  primary_email: null, primary_phone: null }],
+                  primary_email: null, primary_phone: null, ads: [] }],
       fromInactive: false,
     }],
   ]);
