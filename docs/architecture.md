@@ -1773,7 +1773,14 @@ renumber.** Navigate by area:
     with none active, the one seen last), its stored URL. The minimap (`DetailMap`) has zoom and
     nothing else: no overlays, no scale, the attribution folded to its (i). Then the notes section
     (`CurationBlock`, read as the acting identity): notes read, written, edited and shared in place,
-    the artifact link (or "+ Odkaz na artefakt") in its header. Under it,
+    the artifact link (or "+ Odkaz na artefakt") in its header. A VIEWING is a note with a date
+    (`property_notes.viewing_at`, migration 666; the text then optional): the composer's "Prohlídka"
+    (desktop: "Naplánovat prohlídku" in the heading) adds a Prague day + time (`lib/viewings`), the
+    property's upcoming viewings lead the list under a calendar leaf, and the phone's sixth tab,
+    Prohlídky (`pages/phone/PhoneViewings`, `GET /viewings` = the acting identity's own), lists them
+    one day at a time — arrows, swipe, a date wheel, Nadcházející / Vše, jumps to the nearest day
+    with one. No table, carrier or registry of its own: a viewing is shared, carried and split as
+    the note it is (the split copy keeps the date). Under it,
     `components/listing-detail/PropertyTabs`: Přehled · Fotky · Cena a hodnota · Okolí dashboard · Inzeráty · Audit.
     Přehled (`PropertyOverview`, its own chunk) answers each question in one card — the
     description, then the adverts with a simple chart of each one's price, then the ask against our

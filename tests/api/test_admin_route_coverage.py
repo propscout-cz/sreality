@@ -216,6 +216,7 @@ _RLS_ONLY_ALLOWLIST: dict[str, str] = {
         "DELETE by key — migration 610's party policy USING (owner revokes, recipient leaves)"
     ),
     "GET /properties/{property_id}/notes": "RLS-only read (migration 290 on `property_notes`)",
+    "GET /viewings": "RLS-only read (migration 290 on `property_notes`), the caller's own rows",
     "GET /artifact-links": "RLS-only read (migration 599 on `property_artifact_links`)",
     "DELETE /properties/{property_id}/artifact-link": (
         "DELETE of the caller's own row by property — migration 599 USING clause"

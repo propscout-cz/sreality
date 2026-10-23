@@ -570,8 +570,11 @@ export interface Note {
   property_id: number;
   body: string;
   created_at: string;
-  /* Null until the author edits the body; marking shared is not an edit. */
+  /* Null until the author edits the body or the viewing date; marking shared is not an edit. */
   updated_at: string | null;
+  /* A viewing is a note with a date (migration 666): when its author sees the
+   * property in person; null on a plain note. Its body may then be empty. */
+  viewing_at?: string | null;
   /* The author's consent for the people they share this property with to read
    * it (migration 610); a foreign note is always shared. */
   shared: boolean;

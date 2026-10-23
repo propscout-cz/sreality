@@ -618,3 +618,11 @@ def test_a_split_note_copy_keeps_the_shared_mark():
     # hide the note from a share.
     columns, select = carriers._INSERT_SQL["property_notes"].split("SELECT", 1)
     assert re.search(r"\bshared\b", columns) and re.search(r"\bshared\b", select)
+
+
+def test_a_split_note_copy_keeps_its_viewing_date():
+    # Migration 666: a viewing is a note with a date; a copy without it would turn the viewing
+    # into a note that is empty when it carried no text, which the table's check refuses.
+    columns, select = carriers._INSERT_SQL["property_notes"].split("SELECT", 1)
+    assert re.search(r"\bviewing_at\b", columns) and re.search(r"\bviewing_at\b", select)
+    assert "'Prohlídka ' || to_char(n.viewing_at" in carriers._ROUTES_SQL

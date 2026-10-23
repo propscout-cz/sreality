@@ -2,8 +2,8 @@
  * the page's title, a back affordance off the tab roots, the bell (the unread
  * count, opening Notifications; notifications push W5a, ruling R4) and the
  * account button, whose sheet holds the theme, this iPhone's push switch (W5b),
- * the desktop view and sign-out; a bottom tab bar for the five areas (W1's four
- * and Odkaz, W2 #1767). Shell.tsx picks this frame or the desktop one by
+ * the desktop view and sign-out; a bottom tab bar for the six areas (W1's four,
+ * Odkaz, W2 #1767, and Prohlídky). Shell.tsx picks this frame or the desktop one by
  * `usePhoneShell()`; the route body is the same either way.
  *
  * THE HEADER IS EXACTLY `h-14`, as the desktop TopBar is (Shell.tsx explains
@@ -37,7 +37,7 @@ import { useUnreadCount } from '@/lib/unreadCount';
 import { MAIN_ID } from '@/lib/useRouteFocus';
 
 import BottomSheet, { SheetContext } from './BottomSheet';
-import { BackIcon, BellIcon, LinkIcon, PersonIcon, RollIcon } from './phoneIcons';
+import { BackIcon, BellIcon, CalendarIcon, LinkIcon, PersonIcon, RollIcon } from './phoneIcons';
 import PushSwitch from './PushSwitch';
 
 /* A short line a page may set beside the header's title (the feed's "5 nových
@@ -224,6 +224,7 @@ function NotificationBell({ count }: { count: number }) {
 const TAB_ICON: Record<PhoneTabKey, ReactNode> = {
   feed: <RollIcon className="h-[22px] w-[22px]" />,
   pipeline: <FunnelIcon className="h-[22px] w-[22px]" />,
+  viewings: <CalendarIcon className="h-[22px] w-[22px]" />,
   collections: <CollectionMark className="h-[22px] w-[22px]" />,
   brokers: <PersonIcon className="h-[22px] w-[22px]" />,
   link: <LinkIcon className="h-[22px] w-[22px]" />,
@@ -237,7 +238,7 @@ function TabBar({ pathname, marked, hidden }: { pathname: string; marked: PhoneT
       className="fixed inset-x-0 bottom-0 z-30 border-t border-[var(--color-rule-strong)] bg-[var(--color-paper)]"
       style={{ paddingBottom: TAB_BAR_INSET }}
     >
-      <div className="grid h-14 grid-cols-5">
+      <div className="grid h-14 grid-cols-6">
         {PHONE_TABS.map((t) => {
           const owns = t.owns(pathname);
           const on = owns || t.key === marked.key;

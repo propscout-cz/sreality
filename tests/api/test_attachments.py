@@ -284,8 +284,8 @@ def test_a_delete_removes_the_row_scoped_to_the_property_and_keeps_the_bytes(cli
 
 def test_the_notes_list_carries_each_notes_files(conn):
     conn.notes = [
-        (8, 5, "druhá", False, _WHEN, None, None, None, None),
-        (7, 5, "první", False, _WHEN, None, None, None, None),
+        (8, 5, "druhá", False, _WHEN, None, None, None, None, None),
+        (7, 5, "první", False, _WHEN, None, None, None, None, None),
     ]
     conn.files = [(41, 5, 7, "plan.pdf", "application/pdf", 10, _WHEN, None)]
     data = curation.list_notes(conn, 5)["data"]
