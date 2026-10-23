@@ -25,6 +25,7 @@ from urllib.parse import quote
 
 from fastapi import HTTPException, Response, UploadFile
 
+from api.shares import party_label
 from scraper import image_storage
 from toolkit.property_identity import resolve_active_property_id
 
@@ -68,7 +69,13 @@ MAX_FILES_WITHOUT_NOTE = 100
 # Making a display copy decodes a whole photo; the API is one process.
 _COPY_SLOTS = threading.BoundedSemaphore(4)
 
-_PROJECTION = "id, property_id, note_id, filename, mime_type, byte_size, created_at"
+# owner_email: null iff the acting identity added it (curation's one share-aware field); another
+# author's file is readable only on a note they marked shared (migration 660).
+_PROJECTION = (
+    "id, property_id, note_id, filename, mime_type, byte_size, created_at, "
+    "CASE WHEN account_id IN (SELECT acting_account_ids()) THEN NULL "
+    f"ELSE {party_label('account_id')} END AS owner_email"
+)
 _BUILDING_PROJECTION = (
     "id, building_run_id, storage_key, filename, mime_type, byte_size, width_px, height_px, "
     "sha256_hex, uploaded_by, created_at"
@@ -304,6 +311,7 @@ def _to_attachment(row: tuple[Any, ...]) -> dict[str, Any]:
         "mime_type": row[4],
         "byte_size": int(row[5]),
         "created_at": created.isoformat() if isinstance(created, datetime) else created,
+        "owner_email": row[7],
     }
 
 

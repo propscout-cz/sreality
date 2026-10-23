@@ -336,7 +336,8 @@ class Route(NamedTuple):
     origin: int | None  # the property it came from, back there when this detach gives it ads
     stage_id: int | None  # a card's stage
     carry_ids: tuple[int, ...]  # standing carry rows it consumes (stamped undone)
-    item: str  # 'note:<id>' | 'pipeline' | 'collection:<id>' | 'tag:<id>' | 'dismissal' | 'fold:<id>'
+    item: str  # 'note:<id>' | 'pipeline' | 'collection:<id>' | 'tag:<id>' | 'file:<id>'
+    #            | 'dismissal' | 'fold:<id>'
     label: str | None
     skipped: str | None = None
 
@@ -345,9 +346,9 @@ class Route(NamedTuple):
 # dismissal only) with the ad a note was written on while that ad is on `left`, and the carry rows
 # it came by, oldest first; then each fold. A carry row counts only toward `left` through its
 # merged-away chain, only `group`'s when one is given, and only while it stands (a fold of the
-# survivor's own item, from = to, while its merge has a ledger row standing). Files are no item: a
-# note's go where the note goes (migration 660's trigger), the rest stay, and a folded file's twin
-# (the same bytes) is still here.
+# survivor's own item, from = to, while its merge has a ledger row standing). A file is an item only
+# outside a note (a note's go where the note goes, migration 660's trigger); a folded file is never
+# re-made: its twin, the same bytes, is still here.
 _ROUTES_SQL = (
     """
 WITH RECURSIVE tree(id) AS (
@@ -382,6 +383,10 @@ WITH RECURSIVE tree(id) AS (
     SELECT 'property_dismissals', d.id, d.account_id, d.dismissed_at, 'dismissal', NULL, NULL,
            NULL, NULL
       FROM property_dismissals d WHERE d.property_id = %(left)s AND d.lifted_at IS NULL
+    UNION ALL
+    SELECT 'property_attachments', a.id, a.account_id, a.created_at, 'file:' || a.id::text,
+           a.filename, NULL, NULL, NULL
+      FROM property_attachments a WHERE a.property_id = %(left)s AND a.note_id IS NULL
 ), carry AS (
     SELECT c.* FROM property_merge_carries c
      WHERE c.to_property_id IN (SELECT id FROM tree)
@@ -456,10 +461,17 @@ _MOVE_SQL: dict[str, str] = {
         "WHERE d.id = %(key)s AND d.property_id = %(left)s "
         "AND NOT EXISTS (SELECT 1 FROM property_dismissals x "
         "  WHERE x.property_id = %(to)s AND x.account_id = d.account_id AND x.lifted_at IS NULL)"),
+    "property_attachments": (
+        "UPDATE property_attachments a SET property_id = %(to)s "
+        "WHERE a.id = %(key)s AND a.property_id = %(left)s AND a.note_id IS NULL "
+        "AND NOT EXISTS (SELECT 1 FROM property_attachments x "
+        "  WHERE x.property_id = %(to)s AND x.account_id = a.account_id "
+        "  AND x.sha256_hex = a.sha256_hex)"),
 }
 
 # A copy or a re-created fold (MS18): a note keeps its text, dates, origin ad and shared mark
-# (migration 610; read from its row, wherever it went); a card keeps its stage, last in its column, its dates now; the rest
+# (migration 610; read from its row, wherever it went); a card keeps its stage, last in its column, its dates now; a file
+# its name, date and stored bytes (the same R2 object: originals are never deleted); the rest
 # dated now. Never over a row already there.
 _INSERT_SQL: dict[str, str] = {
     "property_notes": (
@@ -482,6 +494,12 @@ _INSERT_SQL: dict[str, str] = {
     "property_dismissals": (
         "INSERT INTO property_dismissals (account_id, property_id) VALUES (%(account)s, %(to)s) "
         "ON CONFLICT (property_id, account_id) WHERE lifted_at IS NULL DO NOTHING"),
+    "property_attachments": (
+        "INSERT INTO property_attachments (property_id, account_id, storage_key, filename, "
+        "  mime_type, byte_size, sha256_hex, created_at) "
+        "SELECT %(to)s, account_id, storage_key, filename, mime_type, byte_size, sha256_hex, "
+        "  created_at FROM property_attachments WHERE id = %(key)s "
+        "ON CONFLICT (account_id, property_id, sha256_hex) DO NOTHING"),
 }
 
 _STAMP_SQL = (
@@ -498,10 +516,11 @@ _SETTLE_ORDER = {"property_pipeline": 0, "property_dismissals": 2}
 
 
 def _holding(r: Route) -> tuple[str, Any] | None:
-    """What a route puts where it lands, as a conflict knows it; a note never conflicts."""
+    """What a route puts where it lands, as a conflict knows it; a note never conflicts, a file
+    with itself (the same bytes held there otherwise: its write's own key skips it)."""
     if r.table == "property_notes":
         return None
-    if r.table in ("collection_properties", "property_tags"):
+    if r.table in ("collection_properties", "property_tags", "property_attachments"):
         return (r.table, r.key)
     return (r.table, r.account_id)
 

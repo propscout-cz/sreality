@@ -4,6 +4,7 @@ import type { ImagePublic } from '@/lib/types';
 import { imageSrc } from '@/lib/imageUrl';
 import ImageTagBadge from '@/components/ImageTagBadge';
 import ImageRenderBadge from '@/components/ImageRenderBadge';
+import Spinner from '@/components/Spinner';
 import { DialogClose } from '@/components/Dialog';
 import { useDialog } from '@/lib/useDialog';
 
@@ -156,6 +157,8 @@ export default function ImageLightbox({
   indexRef.current = i;
   const current = images[i];
   if (!current) return null;
+  /* No address yet: bytes the caller is still fetching (a user's own photo, behind the JWT). */
+  const src = imageSrc(current);
   const badge = tagAt?.(i) ?? {
     tag: current.clip_fine_tag,
     confidence: current.clip_confidence,
@@ -248,11 +251,13 @@ export default function ImageLightbox({
                 >
                   Image unavailable
                 </div>
+              ) : !src ? (
+                <Spinner size={22} className="text-white/70" />
               ) : (
                 <>
                   <img
                     key={current.id}
-                    src={imageSrc(current)}
+                    src={src}
                     alt=""
                     onError={() => setErrored(true)}
                     className={[

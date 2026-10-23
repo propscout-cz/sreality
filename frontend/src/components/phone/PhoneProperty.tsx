@@ -5,7 +5,8 @@
  * (bare — the stage is the curation row's); the price in Fraunces with its move and its
  * per-m² under its basis (rule 23, through lib/measure — never price ÷ area); the
  * curation row; then hairline-separated sections, Poloha first (a streamed Mapy
- * static image through the API, never a WebGL map on the phone).
+ * static image through the API, never a WebGL map on the phone), then "Moje fotky"
+ * (the camera and the user's own photos, PropertyPhotos).
  *
  * PropertyDetail owns every read and hands them down, so the phone and the
  * desktop page are two drawings of ONE set of queries. Out on the phone: the
@@ -54,6 +55,7 @@ import {
 
 const EstimationsBlock = lazyChunk(() => import('@/components/listing-detail/EstimationsBlock'));
 const ValuoSection = lazyChunk(() => import('@/components/listing-detail/ValuoSection'));
+const PropertyPhotos = lazyChunk(() => import('@/components/listing-detail/PropertyPhotos'));
 const PhoneTagsAndNotes = lazyChunk(() =>
   import('@/components/listing-detail/CurationBlock').then((m) => ({ default: m.PhoneTagsAndNotes })),
 );
@@ -202,6 +204,11 @@ export default function PhoneProperty({
 
       <div className="divide-y divide-[var(--color-rule)] border-t border-[var(--color-rule)]">
         <LocationSection propertyId={propertyId} />
+        <div className={BLOCK}>
+          <Suspense fallback={<Skeleton height={168} />}>
+            <PropertyPhotos property_id={propertyId} lang="cs" camera />
+          </Suspense>
+        </div>
         <FactsSection property={property} />
         <DescriptionSection text={property.description} />
         <AdsSection

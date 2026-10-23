@@ -99,6 +99,7 @@ const ValuoSection = lazyChunk(() => import('@/components/listing-detail/ValuoSe
 const PropertyOverview = lazyChunk(() => import('@/components/listing-detail/PropertyOverview'));
 const PhotoMosaic = lazyChunk(() => import('@/components/listing-detail/PhotoMosaic'));
 const MineStrip = lazyChunk(() => import('@/components/listing-detail/MineStrip'));
+const PropertyPhotos = lazyChunk(() => import('@/components/listing-detail/PropertyPhotos'));
 const AuditPanel = lazyChunk(() => import('@/components/listing-detail/AuditPanel'));
 
 /* The phone layout is its own chunk: the desktop never downloads it, and the
@@ -293,8 +294,8 @@ export default function PropertyDetail() {
         {/* The page-level verbs, grouped top-right, in the same order as the
             controls on a Browse card: track this deal in the pipeline, save the
             property to a collection (monitoring rides on the collection), dismiss
-            it — all property-grain (rule #18) — then download the ad (a PDF + the
-            gallery's photos) and run a new estimation. */}
+            it — all property-grain (rule #18) — then download the ad (a PDF, the
+            gallery's photos and my own) and run a new estimation. */}
         <div className="flex flex-wrap items-center justify-end gap-2">
           {activeBoard?.mode === 'edit' && (
             <EditAsOwnerToggle share={activeBoard} on={actingShare != null} />
@@ -305,8 +306,9 @@ export default function PropertyDetail() {
             <PipelineToggle property_id={propertyId} />
             <CollectionSaveToggle property_id={propertyId} />
             <DismissButton property_id={propertyId} variant="header" />
+            {/* Its zip packs the acting identity's own photos. */}
+            <DownloadPropertyButton propertyId={propertyId} images={images} />
           </ActingAs>
-          <DownloadPropertyButton propertyId={propertyId} images={images} />
           <NewEstimationButton prefill={newEstimationPrefill} />
         </div>
       </div>
@@ -463,11 +465,14 @@ export default function PropertyDetail() {
               <Skeleton height={120} />
             ),
           moje: (
-            /* Tags / artifact link / notes — property-grain (rule #18); the
-               pipeline and the collections are the header's verbs. */
+            /* Tags / artifact link / notes, then my own photos — property-grain
+               (rule #18); the pipeline and the collections are the header's verbs. */
             <Suspense fallback={<Skeleton height={140} />}>
               <ActingAs key={actingShare?.account_id ?? 'own'} share={actingShare}>
-                <CurationBlock property_id={propertyId} listing_id={property.id} />
+                <div className="space-y-7">
+                  <CurationBlock property_id={propertyId} listing_id={property.id} />
+                  <PropertyPhotos property_id={propertyId} />
+                </div>
               </ActingAs>
             </Suspense>
           ),

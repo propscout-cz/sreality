@@ -480,6 +480,7 @@ function ForeignNoteRow({
         propertyId={property_id}
         attachments={note.attachments ?? []}
         uploading={[]}
+        lang={words.lang}
       />
       <div className="mt-1">
         <NoteMeta note={note} words={words} author={note.owner_email} />
@@ -584,6 +585,7 @@ function OwnNoteRow({
         attachments={attachments}
         uploading={uploading}
         onRemoved={onFilesChanged}
+        lang={words.lang}
       />
       <FileProblems problems={fileProblems} onDismiss={() => setFileProblems([])} />
     </>
@@ -591,7 +593,7 @@ function OwnNoteRow({
 
   return (
     <div
-      className="group relative border-l-2 border-[var(--color-copper)]/40 pl-3"
+      className="relative border-l-2 border-[var(--color-copper)]/40 pl-3"
       aria-label={`${words.noteFrom} ${fmtAbsolute(note.created_at)}`}
       role="group"
       {...drop.handlers}
@@ -658,7 +660,7 @@ function OwnNoteRow({
             <p className="text-sm text-[var(--color-ink)] whitespace-pre-wrap break-words">
               {note.body}
             </p>
-            <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+            <div className="flex items-center gap-0.5 shrink-0">
               <AttachButton
                 onFiles={(picked) => void attach(picked)}
                 label="Attach files to this note"

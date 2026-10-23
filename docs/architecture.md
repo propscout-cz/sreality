@@ -935,9 +935,10 @@ rules. Identify which one a task belongs to before you start.
   and mutation key with `actingKey` (`['acting', owner, …]`; outside a provider the key is
   byte-identical to before) and hand `{ actAs }` to `lib/api` `request` (the `X-Act-As` header) or
   `pgRead` (`setHeader`); the "Browse never acts" rule lives once, in `lib/curationSettle`
-  (`settlePatches` / `settleRereads` / `browseReads` take `actAs` and answer nothing for it). Only the header's pipeline / collection / dismiss controls, the
-  "Moje" line under the header (`MineStrip`) and `CurationBlock` (tags, artifact link, notes) are
-  wrapped on the property page; estimations, Valuo,
+  (`settlePatches` / `settleRereads` / `browseReads` take `actAs` and answer nothing for it). Only the header's pipeline / collection / dismiss controls and
+  download (its zip packs the acting identity's own photos), the "Moje" line under the header
+  (`MineStrip`), `CurationBlock` (tags, artifact link, notes) and "Moje fotky" (`PropertyPhotos`)
+  are wrapped on the property page; estimations, Valuo,
   the maps, sold comps, merges, Browse, Collections, Notifications, watchdog, presets and the
   extension never act, and sharing calls (`/pipeline/shares`, `/collections/{id}/shares`) never
   carry the header. A read board renders without drag, stage menu, trash, stage editor, tag chips
@@ -2791,7 +2792,19 @@ renumber.** Navigate by area:
     carries none). A deleted note leaves its files on the property (`ON DELETE SET NULL`), and the
     `(note_id, account_id)` key lets a file name only its own account's note. Under shares they
     follow the note rule: readable where their note is, so a file with no note is its account's
-    (and its edit delegates') alone. A detach routes no file of its own (no split-dialog item yet).
+    (and its edit delegates') alone (`owner_email`, null iff the acting identity added it, tells
+    them apart, as on notes). A file with no note is a split's item like a tag (`file:<id>`, its
+    name the label): back where its carry row says, or where the user picks, a copy being a new row
+    over the same stored bytes; a note's files go with the note, and a folded file is never re-made
+    (its twin, the same bytes, stays). **"Moje fotky"** (`listing-detail/PropertyPhotos`, photos
+    sprint W2) is every image of the acting identity on the property, a note's included: the phone
+    page's section after Poloha (Vyfotit: the camera, one capture per tap, named
+    `foto-<date>-<time>`; Z knihovny) and the desktop's Moje tab (Upload, drag-and-drop), a roll of
+    1080 px tiles that open the original in the viewer a note's photos use too
+    (`AttachmentViewer`: Share via the share sheet with the original as a `File`, else a download;
+    Delete behind a second tap); the app never writes to the camera roll itself. The property's
+    `download.zip` packs those originals under `moje-fotky/`, read on the tenant connection as the
+    acting identity.
     Dropped, pasted or picked in `CurationBlock`, sent one per request to `POST
     /properties/{id}/attachments` (`note_id` optional; tenant connection, the acting account),
     stored in R2 under the private `custom-attachments/property/` prefix as uploaded (EXIF intact)

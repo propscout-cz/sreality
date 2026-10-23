@@ -1,6 +1,7 @@
 /* Files on operator notes (migrations 592, 660: a property's files, a note's by reference): the drop
  * zones, the file picker, the composer's staged files and a saved note's attachments. The API stores
- * and serves the bytes; an image's thumbnail is a blob URL of its 1080 px display copy. */
+ * and serves the bytes; an image's thumbnail is a blob URL of its 1080 px display copy, and a tap
+ * opens the original in the viewer "Moje fotky" uses (the same records). */
 
 import { useEffect, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent } from 'react';
@@ -8,8 +9,10 @@ import { actOpts, useActAs } from '@/lib/acting';
 import { ApiError, deleteAttachment, fetchAttachmentBlob } from '@/lib/api';
 import type { Attachment } from '@/lib/types';
 import { ATTACHMENT_ACCEPT, fmtBytes, isPreviewableImage } from '@/lib/attachments';
+import { saveBlob } from '@/lib/shareFiles';
 import { useBlobUrl } from '@/lib/useBlobUrl';
 import { FileIcon, PaperclipIcon } from '@/components/icons';
+import AttachmentViewer, { type PhotoLang } from './AttachmentViewer';
 
 const carriesFiles = (e: { dataTransfer: DataTransfer | null }): boolean =>
   Array.from(e.dataTransfer?.types ?? []).includes('Files');
@@ -135,9 +138,11 @@ export function AttachButton({
 export function FileProblems({
   problems,
   onDismiss,
+  dismissLabel = 'Dismiss',
 }: {
   problems: string[];
   onDismiss: () => void;
+  dismissLabel?: string;
 }) {
   if (problems.length === 0) return null;
   return (
@@ -152,7 +157,7 @@ export function FileProblems({
         onClick={onDismiss}
         className="shrink-0 text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]"
       >
-        Dismiss
+        {dismissLabel}
       </button>
     </div>
   );
@@ -199,7 +204,7 @@ function StagedFile({
       name={file.name}
       size={file.size}
       thumbnail={preview.url}
-      remove={{ label: `Remove ${file.name}`, onClick: onRemove, disabled, always: true }}
+      remove={{ label: `Remove ${file.name}`, onClick: onRemove, disabled }}
     />
   );
 }
@@ -211,18 +216,22 @@ export function NoteAttachmentList({
   attachments,
   uploading,
   onRemoved,
+  lang,
 }: {
   propertyId: number;
   attachments: Attachment[];
   uploading: File[];
   /* Absent = read-only (another author's note): the tiles open, but carry no ×. */
   onRemoved?: () => Promise<unknown>;
+  lang: PhotoLang;
 }) {
   const [confirming, setConfirming] = useState<Attachment | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [viewing, setViewing] = useState<number | null>(null);
   const actAs = useActAs();
   if (attachments.length === 0 && uploading.length === 0) return null;
+  const images = attachments.filter((a) => isPreviewableImage(a.mime_type));
 
   const remove = (a: Attachment) => {
     setBusy(true);
@@ -242,6 +251,7 @@ export function NoteAttachmentList({
             <SavedAttachment
               propertyId={propertyId}
               attachment={a}
+              onView={() => setViewing(images.indexOf(a))}
               onRemove={onRemoved ? () => setConfirming(a) : undefined}
             />
           </li>
@@ -276,6 +286,16 @@ export function NoteAttachmentList({
         </div>
       )}
       {error && <p className="mt-1.5 text-[0.7rem] text-[var(--color-brick)]">{error}</p>}
+      {viewing != null && (
+        <AttachmentViewer
+          propertyId={propertyId}
+          photos={images}
+          startIndex={viewing}
+          onClose={() => setViewing(null)}
+          onRemoved={onRemoved}
+          lang={lang}
+        />
+      )}
     </div>
   );
 }
@@ -283,10 +303,12 @@ export function NoteAttachmentList({
 function SavedAttachment({
   propertyId,
   attachment,
+  onView,
   onRemove,
 }: {
   propertyId: number;
   attachment: Attachment;
+  onView: () => void;
   onRemove?: () => void;
 }) {
   const image = isPreviewableImage(attachment.mime_type);
@@ -305,7 +327,7 @@ function SavedAttachment({
         name={attachment.filename}
         size={attachment.byte_size}
         thumbnail={thumb.url}
-        href={thumb.url}
+        onOpen={onView}
         remove={remove}
       />
     );
@@ -331,25 +353,12 @@ function SavedAttachment({
   );
 }
 
-function saveBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  // Firefox starts the save asynchronously; revoking at once can cancel it.
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
-}
-
 /* --- one tile: a thumbnail square, or a file chip ------------------------- */
 
 function FileTile({
   name,
   size,
   thumbnail,
-  href,
   onOpen,
   loading = false,
   uploading = false,
@@ -359,14 +368,11 @@ function FileTile({
   name: string;
   size: number;
   thumbnail: string | null;
-  href?: string;
   onOpen?: () => void;
   loading?: boolean;
   uploading?: boolean;
   status?: string;
-  /* `always`: the × shows without hover (a staged file); a saved file's shows on hover, like
-   * the note's own edit/delete. */
-  remove?: { label: string; onClick: () => void; disabled?: boolean; always?: boolean };
+  remove?: { label: string; onClick: () => void; disabled?: boolean };
 }) {
   const title = `${name} · ${fmtBytes(size)}`;
   const removeButton = remove && (
@@ -376,7 +382,7 @@ function FileTile({
       disabled={remove.disabled}
       aria-label={remove.label}
       title={remove.label}
-      className={`absolute -top-1.5 -right-1.5 inline-flex items-center justify-center w-4 h-4 rounded-full border border-[var(--color-rule)] bg-[var(--color-paper)] text-[0.65rem] leading-none text-[var(--color-ink-3)] hover:text-[var(--color-brick)] hover:border-[var(--color-brick)] disabled:opacity-40 transition-opacity ${remove.always ? '' : 'opacity-0 group-hover/tile:opacity-100 focus-visible:opacity-100'}`}
+      className="absolute -top-1.5 -right-1.5 inline-flex items-center justify-center w-4 h-4 rounded-full border border-[var(--color-rule)] bg-[var(--color-paper)] text-[0.65rem] leading-none text-[var(--color-ink-3)] hover:text-[var(--color-brick)] hover:border-[var(--color-brick)] disabled:opacity-40"
     >
       ×
     </button>
@@ -387,12 +393,12 @@ function FileTile({
       <img src={thumbnail} alt={name} className="h-full w-full object-cover" draggable={false} />
     );
     return (
-      <div className="group/tile relative h-14 w-14" title={title}>
+      <div className="relative h-14 w-14" title={title}>
         <div className="h-full w-full overflow-hidden rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-inset)]">
-          {href ? (
-            <a href={href} target="_blank" rel="noopener noreferrer" aria-label={`Open ${name}`}>
+          {onOpen ? (
+            <button type="button" onClick={onOpen} aria-label={`Open ${name}`} className="block h-full w-full">
               {img}
-            </a>
+            </button>
           ) : (
             img
           )}
@@ -414,7 +420,7 @@ function FileTile({
   const chip =
     'inline-flex items-center gap-1.5 h-8 pl-2 pr-2.5 text-[0.72rem] rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)]';
   return (
-    <div className="group/tile relative" title={title}>
+    <div className="relative" title={title}>
       {onOpen ? (
         <button
           type="button"

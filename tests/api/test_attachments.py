@@ -68,7 +68,7 @@ class _Cur:
             self._rows = [(self.db.count,)]
         elif sql.startswith("INSERT INTO property_attachments"):
             pid, note_id, _acc, _key, filename, mime, size, _sha = params
-            self._rows = [] if self.db.duplicate else [(41, pid, note_id, filename, mime, size, _WHEN)]
+            self._rows = [] if self.db.duplicate else [(41, pid, note_id, filename, mime, size, _WHEN, None)]
         elif sql.startswith("SELECT storage_key"):
             self._rows = [self.db.stored] if self.db.stored else []
         elif sql.startswith("DELETE"):
@@ -143,7 +143,7 @@ def test_an_upload_with_no_note_lands_under_the_property_in_the_acting_accounts_
     assert res.status_code == 200
     assert res.json() == {"id": 41, "property_id": 5, "note_id": None, "filename": "Plán bytu.pdf",
                           "mime_type": "application/pdf", "byte_size": len(_PDF),
-                          "created_at": _WHEN.isoformat()}
+                          "created_at": _WHEN.isoformat(), "owner_email": None}
     [(key, data, mime)] = r2.put
     assert key.startswith("custom-attachments/property/5/") and key.endswith(".pdf")
     assert (data, mime) == (_PDF, "application/pdf")
@@ -206,11 +206,14 @@ def test_an_empty_or_oversized_file_is_refused(client, conn, r2, monkeypatch):
 
 
 def test_the_list_reads_the_propertys_files_optionally_one_notes(client, conn):
-    conn.files = [(41, 5, 7, "plan.pdf", "application/pdf", 10, _WHEN),
-                  (42, 5, None, "IMG.jpg", "image/jpeg", 20, _WHEN)]
-    assert [f["note_id"] for f in client.get("/properties/5/attachments").json()["data"]] == [7, None]
+    conn.files = [(41, 5, 7, "plan.pdf", "application/pdf", 10, _WHEN, "b@x.cz"),
+                  (42, 5, None, "IMG.jpg", "image/jpeg", 20, _WHEN, None)]
+    data = client.get("/properties/5/attachments").json()["data"]
+    assert [(f["note_id"], f["owner_email"]) for f in data] == [(7, "b@x.cz"), (None, None)]
     client.get("/properties/5/attachments", params={"note_id": 7})
     assert conn.ran[-1][1] == (5, 7, 7)
+    # Moje fotky reads mine as the notes do: owner_email is null iff the acting identity added it.
+    assert "account_id IN (SELECT acting_account_ids()) THEN NULL" in conn.ran[-1][0]
 
 
 def test_a_read_serves_the_original_typed_as_stored_never_sniffed(client, conn, r2):
@@ -284,7 +287,7 @@ def test_the_notes_list_carries_each_notes_files(conn):
         (8, 5, "druhá", False, _WHEN, None, None, None, None),
         (7, 5, "první", False, _WHEN, None, None, None, None),
     ]
-    conn.files = [(41, 5, 7, "plan.pdf", "application/pdf", 10, _WHEN)]
+    conn.files = [(41, 5, 7, "plan.pdf", "application/pdf", 10, _WHEN, None)]
     data = curation.list_notes(conn, 5)["data"]
     assert [(n["id"], [f["id"] for f in n["attachments"]]) for n in data] == [(8, []), (7, [41])]
 

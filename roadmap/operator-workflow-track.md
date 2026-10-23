@@ -253,14 +253,22 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   `api/attachments.py` replaces `api/note_attachments.py` and the building run's duplicate
   stack; `/properties/{id}/attachments` replaces the note-scoped routes; tiles draw a 1080 px
   display copy (`?w=1080`, made once, JWT proxy only); no HEIC.
+- **Done (photos sprint W2, 2026-10-23, PR [#1975](https://github.com/waiff/sreality/pull/1975)):** "Moje fotky", one strip of the acting
+  identity's own photos per property (a note's are the same records, shown under the note too):
+  the phone page's section after Poloha (Vyfotit / Z knihovny) and the desktop's Moje tab (Upload,
+  drag-and-drop); tiles from the 1080 px copies open the original in one viewer (a note's photo
+  too, no more new tab) with Share (the share sheet with the original files, else a download) and
+  Delete behind a second tap; Vybrat for Share (N) / Delete (N). A split lists a file with no note
+  as its own item (move or copy; a copy shares the stored bytes). The property's zip packs the
+  originals under `moje-fotky/`.
 - **Next (unscheduled):**
   - The Chrome-extension panel lists a note's text only, not its files.
   - Nothing deletes R2 objects; a sweep for objects no row names would have to spare the
     ones a pre-660 split's copy shares.
   - Owed by 660: drop the `property_note_attachments` compatibility view, the fill trigger and
     its function once #1974 is live; drop `backup_660` a week later.
-  - A split routes no file with no note (it stays on the kept property) and its dialog has no
-    file item (`_ROUTES_SQL` item arm, a move/copy statement, a `SplitItemKind`).
+  - A photo with no note is never shared (no per-photo mark): only a marked note's files cross a
+    share.
 
 ### Rule #18: an executed no-orphan merge test (done, 2026-10-01)
 - **Done:** `tests/test_property_carriers_live.py` (PR 0 #1664, extended by the
