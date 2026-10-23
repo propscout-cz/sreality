@@ -17,15 +17,23 @@ Inzeráty lists stay without it; history is healed now.
 
 - [x] **W1 — the column (PR #1984, migration 667).** `listings.ad_reference`, one contract cell per portal
       (field-capture track).
-- [ ] **W2 — the heal.** `reparse.yml fields=ad_reference` per portal, maxima → remax → mmreality →
-      realitymix → ceskereality → idnes → sreality, the property queue drained between portals.
-- [x] **W3 — the card (this PR).** `propertyBrokers` keeps each broker's ads; ONE `BrokerContactCard`
+- [x] **W2 — the heal (2026-10-23 10:45–18:05Z, `reparse.yml fields=ad_reference`, one portal at a time, the
+      property queue drained between them; the autodedup session gated idnes + sreality behind its W8 run).** Active
+      ads filled: maxima 283/283, remax 9,653/9,654, mmreality 10,700/10,701, realitymix 50,124/50,142, ceskereality
+      50,371/50,371, idnes 109,855/110,248, sreality 96,453/109,694 (87.9 %: 13,190 active ads print no code —
+      private sellers — and 51 are the oldest wrapped payloads). History: 750k of 830k rows; the rest are pages
+      that print no number or the ~32k wrapped sreality payloads no heal can read. Witness: on the 98,880
+      properties carrying both an idnes and a sreality ad, 67.7 % of codes agree verbatim once `IDNES-` is
+      stripped; the rest differ on the portals themselves (re-listed order numbers, leading zeros).
+- [x] **W3 — the card (PR #1985, live 11:28Z; checked read-only in production on desktop + phone).** `propertyBrokers` keeps each broker's ads; ONE `BrokerContactCard`
       (desktop + phone, `ads` optional so /brokers/:id is unchanged) quotes `<portál> · <číslo>` per ad with
       the same copy button; ONE copy behaviour in `lib/clipboard` (the phone's strip, its copy helper and
       the phone broker page's duplicate went); `PropertySource` loses the never-read `sreality_id` and the
       false `source_id_native: null`; the select list is pinned to `property_sources_public`.
-- [ ] **W4 — the PDF sheet.** `api/routes/property_download.py` selects the column; its `property_brokers`
-      twin returns each broker's ads; `_broker_block` prints one `<portál>  <číslo|—>` line per ad.
+- [x] **W4 — the PDF sheet (PR #1986, live 11:31Z).** `api/routes/property_download.py` selects the column; its
+      `property_brokers` twin returns each broker's ads; `_broker_block` prints one `<portál>  <číslo|—>` line per ad.
+      Aftermath: the day's merges put the first-visit bundle 16 B over its budget (main's `build` red); PR #1987 moved
+      the paste-a-building page behind `lazyChunk` (−5.5 kB gzip), live 12:29Z.
 
 ### Phase U-NOTIFY-PUSH: Notifications push program (approved 2026-10-21)
 

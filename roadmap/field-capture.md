@@ -183,9 +183,10 @@ estimate ≈ −7,260 / +2,860 LOC, −30 files, −2 tables, −8 workflows, 0 
       normalised by `vocabulary.reference` (verbatim, whitespace collapsed, blank → NULL). Out of the hash; the
       six IGNORED reference entries and the three `*_ref` shadow keys went; selected into no autodedup artifact
       (`export_sql.UNEXPORTED_COLUMNS`). The program's second ruled column exception (PROGRAM.md §3, operator
-      ruling 2026-10-23). Owed after merge: the heal (`reparse.yml fields=ad_reference`, maxima → remax →
-      mmreality → realitymix → ceskereality → idnes → sreality, the queue drained between portals); the card
-      (W3) and the PDF sheet (W4) live on the operator-workflow track.
+      ruling 2026-10-23). Healed the same day over every row (`reparse.yml fields=ad_reference`, portal by portal,
+      the queue drained between them): 750k of 830k rows carry a reference; active fill 100 % on the five HTML
+      broker portals, 99.6 % idnes, 87.9 % sreality (private sellers print none). The card (W3) and the PDF sheet
+      (W4) are on the operator-workflow track (phase U-AD-REFERENCE).
 
 ## Hand-overs owed to the autodedup program (R12 — this program never edits theirs)
 
