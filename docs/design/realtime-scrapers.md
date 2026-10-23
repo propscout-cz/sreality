@@ -64,7 +64,11 @@ settings-paced asyncio-loop pattern — matcher/outbox). It runs, as continuous 
    re-download hop) → CLIP tag via a warm-model loop (~0.5 img/s steady inflow vs
    ~10 img/s/4 vCPU capacity) → dedup dirty enqueue → matcher wake. A listing is not
    surfaced as "new" (watchdog dispatch, new-listing feeds) until its first image is
-   stored, with a timeout fallback for listings that genuinely have no photos.
+   stored, with a timeout fallback for listings that genuinely have no photos. — *superseded
+   2026-10-23 by the publication rule (rule 16, migrations 668/669, `toolkit/publication.py`): the
+   maintenance lane's pass stamps `properties.settled_at` once a property's first photo is stored
+   (or it has none) and the engine is done with its ads, and Browse, the map, stats and the
+   watchdog serve a property once it is settled or 6 h old; the image gate is deleted.*
 4. **Targeted gone-probes** for watchdog/pipeline/collection properties (the per-listing
    `ListingGoneError` → immediate inactive flip already exists) — minutes-grade delisting
    for WATCHED properties; market-wide delisting stays completeness-gated on the walks.
@@ -94,9 +98,11 @@ Postgres SKIP LOCKED is the industry-standard substrate and already proven here)
 ## SLOs (operator-accepted 2026-07-02)
 
 Google-SRE format, measured on stage watermarks (p95, warn at ~75% of target): new listing
-visible ≤ 15 min · images stored ≤ 20 min · **no publication without images** (gate above) ·
+visible ≤ 15 min (*superseded 2026-10-23 by the publication rule: a property is shown when
+published — settled, or 6 h old*) · images stored ≤ 20 min · **no publication without images** (gate above; *superseded 2026-10-23 by the publication rule*) ·
 photo-sharing cross-portal merge ≤ 60 min · delisting ≤ 6 h market-wide / ≤ 30 min watched ·
-notification ≤ 2 min after the property row exists. `published_at` (migration 266) and the
+notification ≤ 2 min after the property row exists (*superseded 2026-10-23 by the publication
+rule: a property is told when published — settled, or 6 h old*). `published_at` (migration 266) and the
 `detail_queue_completions` ledger (migration 265) are the measurement substrate; health
 checks move from fixed batch-era thresholds to cadence/SLO-scaled ones, with reds pushed
 through the existing notification outbox (*superseded: the outbox was deleted 2026-10-21; system
@@ -118,7 +124,8 @@ Wave A+B (2026-07, shipped as PRs #678–#683 + published_at/pozemek follow-ups)
 fixes real-time would amplify (cross-slice delisting flap, remax rent starvation, idnes FX
 churn, sreality hash flaps, idnes area truncation) + the measurement substrate. Wave C
 (#688–#692, shipped): the always-on worker (`scraper/realtime_worker.py`, ships dark behind
-`REALTIME_WORKER_ENABLED`) + `LedgerRateLimiter` + probe lanes + images-first gate.
+`REALTIME_WORKER_ENABLED`) + `LedgerRateLimiter` + probe lanes + images-first gate (superseded 2026-10-23 by the
+publication rule, migrations 668/669).
 
 **Waves W1–W5 (shipped 2026-07-04):**
 - **W1** (#694) — per-source drain-disable knob (`realtime_drain_disabled_sources`), the

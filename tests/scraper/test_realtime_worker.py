@@ -1300,14 +1300,14 @@ def test_maintenance_lane_registered_and_live_by_default():
 
 def test_maintenance_pass_records_counters(monkeypatch):
     def fake_sync() -> dict[str, Any]:
-        return {"skipped": False, "attached": 7, "recomputed": 12}
+        return {"skipped": False, "attached": 7, "recomputed": 12, "settled": 3}
 
     monkeypatch.setattr(rw, "_maintenance_sync", fake_sync)
     state = rw._new_state()
     asyncio.run(rw._maintenance_pass(asyncio.Event(), state))
     lane = state["lanes"]["maintenance"]
     assert lane["passes"] == 1
-    assert lane["last"] == {"skipped": False, "attached": 7, "recomputed": 12}
+    assert lane["last"] == {"skipped": False, "attached": 7, "recomputed": 12, "settled": 3}
 
 
 def test_maintenance_pass_records_lock_skip(monkeypatch):
@@ -1315,7 +1315,7 @@ def test_maintenance_pass_records_lock_skip(monkeypatch):
     # sweep holds the advisory lock — the lane records the skip and moves on.
     monkeypatch.setattr(
         rw, "_maintenance_sync",
-        lambda: {"skipped": True, "attached": 0, "recomputed": 0})
+        lambda: {"skipped": True, "attached": 0, "recomputed": 0, "settled": 0})
     state = rw._new_state()
     asyncio.run(rw._maintenance_pass(asyncio.Event(), state))
     assert state["lanes"]["maintenance"]["last"]["skipped"] is True

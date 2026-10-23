@@ -728,7 +728,6 @@ def test_a_stored_spec_with_a_chip_without_a_code_mutes_only_its_watchdog() -> N
     healthy = UUID("5b1e4c8e-0d1f-4a77-9c3e-2a6f1d0b9e10")
     since = datetime(2026, 10, 16, 12, 0, 0, tzinfo=timezone.utc)
     conn = _FakeConn([
-        (lambda s: "FROM app_settings" in s, [], 0),
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [
@@ -750,14 +749,14 @@ def test_a_stored_spec_with_a_chip_without_a_code_mutes_only_its_watchdog() -> N
 
 
 def test_match_once_reads_one_24h_window_from_active_since() -> None:
-    """F1: ONE INSERT per live watchdog over `first_seen_at > greatest(now() − 24 h,
-    active_since)` — a late-matching property under a day old still fires, a watchdog
-    switched on alerts only on what appears afterwards (R6 (a)), and nothing advances:
-    no cursor, no window upper bound, no lookback re-scan."""
+    """F1: ONE INSERT per live watchdog over `first_seen_at > now() − 24 h` and `visible_since >
+    active_since` — a late-matching property under a day old still fires, a watchdog switched
+    on alerts only on what becomes visible afterwards (R6 (a)), so a property first seen before
+    it and published after it is still told, and nothing advances: no cursor, no window upper
+    bound, no lookback re-scan."""
     sub_id = UUID("46a6005f-dc32-4d94-9ced-4d262b57ef6b")
     since = datetime(2026, 10, 21, 9, 0, 0, tzinfo=timezone.utc)
     conn = _FakeConn([
-        (lambda s: "FROM app_settings" in s, [], 0),
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [(sub_id, {"category_main": "byt", "category_type": "pronajem",
@@ -777,8 +776,11 @@ def test_match_once_reads_one_24h_window_from_active_since() -> None:
                         "WHERE is_active = true AND retired_at IS NULL")
     [(sql, params)] = [(s, p) for s, p in conn.executed
                        if "INSERT INTO notification_dispatches" in s]
-    assert ("l.first_seen_at > greatest(now() - %(new_window)s::interval, %(active_since)s)"
-            in sql)
+    assert "l.first_seen_at > now() - %(new_window)s::interval AND " in sql
+    from toolkit.publication import visible_since_sql
+    assert ("EXISTS (SELECT 1 FROM properties pp WHERE pp.id = l.property_id AND "
+            f"{visible_since_sql('pp')} > %(active_since)s)") in sql
+    assert "greatest(" not in sql and "l.first_seen_at > %(active_since)s" not in sql
     assert params["new_window"] == "24 hours" and params["active_since"] == since
     assert params["subscription_id"] == str(sub_id)
     # The spec made it through the one compiler (rule 16).
@@ -797,7 +799,7 @@ def test_match_once_reads_one_24h_window_from_active_since() -> None:
     assert conn.transactions == 1, "one transaction per watchdog"
     executed = " ".join(s for s, _ in conn.executed)
     for gone in ("last_matched_first_seen_at", "max(first_seen_at)", "UPDATE notification_subscriptions",
-                 "image_lookback_minutes", "window_size"):
+                 "image_lookback_minutes", "window_size", "app_settings", "storage_path"):
         assert gone not in executed, gone
 
 
@@ -805,7 +807,6 @@ def test_a_quiet_pass_writes_nothing_and_never_touches_the_watchdog() -> None:
     """No matching property is the steady state: one INSERT that writes 0 rows, and the
     subscription row is never written (there is no cursor to move)."""
     conn = _FakeConn([
-        (lambda s: "FROM app_settings" in s, [(False,)], 0),
         (lambda s: "FROM notification_subscriptions WHERE is_active" in s,
          [(UUID("00000000-0000-0000-0000-000000000001"), {},
            datetime(2030, 1, 1, tzinfo=timezone.utc))], 1),
@@ -935,7 +936,6 @@ def test_no_producer_writes_routing_or_the_legacy_id() -> None:
     sub_row = (UUID("46a6005f-dc32-4d94-9ced-4d262b57ef6b"), {},
                datetime(2026, 5, 14, tzinfo=timezone.utc))
     conn = _FakeConn([
-        (lambda s: "FROM app_settings" in s, [], 0),
         (lambda s: "FROM notification_subscriptions WHERE is_active" in s, [sub_row], 1),
         (lambda s: "FROM collections WHERE monitoring_enabled = true" in s, [(1,)], 0),
     ])
@@ -1044,31 +1044,41 @@ def test_mark_all_seen_scoped_filters_by_source() -> None:
 # --- VISIBLE: one fragment for every in-app read, count and update (program § 3.6) ---
 
 
-def test_visible_is_one_fragment_whose_three_arms_hold_on_the_service_role() -> None:
-    """Not a marked repeat, not dismissed by the event's OWN account, not from a retired watchdog.
-    The account is named, never left to the caller's policy: W4's fan-out reads on the service
-    role, which bypasses RLS, so `property_dismissals_public` (no account column) would there
-    hide every account's alert once anyone dismissed the property."""
-    from api.notifications import VISIBLE_SQL
+def test_visible_is_reachable_and_not_retracted_on_every_role() -> None:
+    """REACHABLE: not a marked repeat, not dismissed by the event's OWN account, not from a retired
+    watchdog; VISIBLE adds: not a retracted 'new'. The account is named, never left to the caller's
+    policy: W4's fan-out reads on the service role, which bypasses RLS, so
+    `property_dismissals_public` (no account column) would there hide every account's alert once
+    anyone dismissed the property; the retraction reads `properties`, which every signed-in caller
+    reads whole (migration 349), so it too answers the same on both. The push ledger embeds the
+    one fragment by reference."""
+    from api import push_delivery as pd
+    from api.notifications import REACHABLE_SQL, RETRACTED_SQL, VISIBLE_SQL
 
-    arms = [a.strip() for a in VISIBLE_SQL.split(" AND ", 1)]
+    arms = [a.strip() for a in REACHABLE_SQL.split(" AND ", 1)]
     assert arms[0] == "d.duplicate_of IS NULL"
     assert ("NOT EXISTS (SELECT 1 FROM property_dismissals pd WHERE pd.property_id = d.property_id "
-            "AND pd.account_id = d.account_id AND pd.lifted_at IS NULL)") in VISIBLE_SQL
-    assert VISIBLE_SQL.endswith(
+            "AND pd.account_id = d.account_id AND pd.lifted_at IS NULL)") in REACHABLE_SQL
+    assert REACHABLE_SQL.endswith(
         "AND (d.subscription_id IS NULL OR EXISTS (SELECT 1 FROM notification_subscriptions ws "
         "WHERE ws.id = d.subscription_id AND ws.retired_at IS NULL))")
     assert "property_dismissals_public" not in VISIBLE_SQL
+    assert VISIBLE_SQL == f"{REACHABLE_SQL} AND NOT {RETRACTED_SQL}"
+    assert pd.VISIBLE_SQL is VISIBLE_SQL
+    for sql in (pd.FANOUT_SQL, pd.CLAIM_SQL, pd.UNREAD_SQL, pd.RECALL_SQL):
+        assert VISIBLE_SQL in sql
 
 
 def test_every_in_app_read_count_and_update_carries_visible() -> None:
-    """The badge, the feed, its total, mark-all-seen, mark-seen and each watchdog's dispatch
-    count must agree on what is visible — a count that includes rows the list hides is the
-    badge-vs-list divergence migrations 351/378 exist to close, and a bell that counts a merge's
-    marked repeat or a retired watchdog's alert would count an alert the feed never shows."""
+    """The badge, the feed, its total, mark-all-seen and each watchdog's dispatch count must agree
+    on what is visible — a count that includes rows the list hides is the badge-vs-list divergence
+    migrations 351/378 exist to close, and a bell that counts a merge's marked repeat or a retired
+    watchdog's alert would count an alert the feed never shows. The tap path (mark-seen and the
+    row it returns) reads REACHABLE: a retracted alert leaves attention, never a direct tap on a
+    push already sent, which opens the property the alert now names."""
     from api.notifications import (
-        _RESOLVE_DISPATCH_SQL, VISIBLE_SQL, get_subscription, list_dispatches, list_subscriptions,
-        mark_dispatch_seen,
+        _RESOLVE_DISPATCH_SQL, REACHABLE_SQL, VISIBLE_SQL, get_subscription, list_dispatches,
+        list_subscriptions, mark_dispatch_seen,
     )
 
     resolve = " ".join(_RESOLVE_DISPATCH_SQL.split())
@@ -1080,28 +1090,33 @@ def test_every_in_app_read_count_and_update_carries_visible() -> None:
     list_dispatches(conn, subscription_id="s-1", seen="unseen")  # type: ignore[arg-type]
     get_subscription(conn, "s-1")  # type: ignore[arg-type]
     list_subscriptions(conn)  # type: ignore[arg-type]
+    shown = [s for s, _ in conn.executed if "notification_dispatches" in s]
     mark_dispatch_seen(conn, "d-1")  # type: ignore[arg-type]
     # mark-seen's first statement only resolves the id it was handed (to the row a merge marked it
-    # a duplicate of); the row it stamps and returns is VISIBLE-checked like every other.
-    reads = [s for s, _ in conn.executed if "notification_dispatches" in s and s != resolve]
-    assert len(reads) == 11
-    for sql in reads:
+    # a duplicate of); the row it stamps and returns is REACHABLE-checked.
+    tapped = [s for s, _ in conn.executed[len(shown):]
+              if "notification_dispatches" in s and s != resolve]
+    assert len(shown) == 9 and len(tapped) == 2
+    for sql in shown:
         assert VISIBLE_SQL in sql, sql
-    totals = [s for s in reads if s.startswith("SELECT count(*) FROM notification_dispatches d")]
+    for sql in tapped:
+        assert REACHABLE_SQL in sql and VISIBLE_SQL not in sql, sql
+    totals = [s for s in shown if s.startswith("SELECT count(*) FROM notification_dispatches d")]
     assert len(totals) == 3  # the badge, and the two feed reads' first-page totals
-    updates = [s for s in reads if s.startswith("UPDATE notification_dispatches d SET seen_at")]
+    updates = [s for s in shown + tapped
+               if s.startswith("UPDATE notification_dispatches d SET seen_at")]
     assert len(updates) == 3  # mark-all-seen twice, mark-seen once
 
 
 def test_a_hidden_dispatch_is_a_404_on_mark_seen(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A repeat, a dismissed property's or a retired watchdog's dispatch is not visible, so
+    """A repeat, a dismissed property's or a retired watchdog's dispatch is not reachable, so
     marking it seen changes nothing and finds nothing: the route answers 404 (program § 3.5:
     the tap then lands on /notifications)."""
     from fastapi.testclient import TestClient
 
     from api import tenant_pool
     from api.main import app
-    from api.notifications import VISIBLE_SQL, mark_dispatch_seen
+    from api.notifications import REACHABLE_SQL, mark_dispatch_seen
 
     conn = _FakeConn([
         (lambda s: s.startswith("SELECT coalesce(d.duplicate_of, d.id)"), [("d-1",)], 1),
@@ -1110,8 +1125,8 @@ def test_a_hidden_dispatch_is_a_404_on_mark_seen(monkeypatch: pytest.MonkeyPatch
     assert mark_dispatch_seen(conn, "d-1") is None  # type: ignore[arg-type]
     _resolve, update, fetch = (s for s, _ in conn.executed)
     assert update == ("UPDATE notification_dispatches d SET seen_at = now() "
-                      f"WHERE d.id = %s AND d.seen_at IS NULL AND {VISIBLE_SQL}")
-    assert fetch.endswith(f"WHERE d.id = %s AND {VISIBLE_SQL}")
+                      f"WHERE d.id = %s AND d.seen_at IS NULL AND {REACHABLE_SQL}")
+    assert fetch.endswith(f"WHERE d.id = %s AND {REACHABLE_SQL}")
 
     app.dependency_overrides[tenant_pool.tenant_conn] = lambda: _FakeConn([])
     try:
@@ -1167,8 +1182,8 @@ def test_detection_never_consults_dismissals() -> None:
 
     for fn in (nf.match_once, nf.match_changes_once, nf.match_monitored_collections_once):
         assert "dismiss" not in inspect.getsource(fn), fn.__name__
-    for sql in (nf._MONITORED_CTE, nf._CANONICAL_PRICE_STEPS, nf._IMAGE_GATE_SQL,
-                nf._WATCHDOG_NEW_SQL, nf._WATCHDOG_PRICE_SQL, nf._MONITOR_PRICE_SQL,
+    for sql in (nf._MONITORED_CTE, nf._CANONICAL_PRICE_STEPS, nf._WATCHDOG_NEW_SQL,
+                nf._WATCHDOG_PRICE_SQL, nf._MONITOR_PRICE_SQL,
                 nf._MONITOR_INACTIVE_SQL, nf._MONITOR_REACTIVATED_SQL,
                 nf._MONITOR_NEW_SOURCE_SQL):
         assert "dismiss" not in sql
@@ -1182,7 +1197,6 @@ def test_match_once_skips_invalid_filter_spec() -> None:
     since = datetime(2026, 5, 1, tzinfo=timezone.utc)
 
     script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
-        (lambda s: "FROM app_settings" in s, [], 0),
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [
@@ -1227,7 +1241,6 @@ def test_a_spec_the_compiler_refuses_is_invalid_never_failed(
     _raise_for_poison(monkeypatch)
     since = datetime(2026, 5, 1, tzinfo=timezone.utc)
     script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
-        (lambda s: "FROM app_settings" in s, [], 0),
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [
@@ -1259,7 +1272,6 @@ def test_a_watchdog_whose_statement_fails_rolls_back_alone() -> None:
                 raise psycopg.errors.QueryCanceled("canceling statement due to statement timeout")
 
     conn = _FakeConn([
-        (lambda s: "FROM app_settings" in s, [], 0),
         (lambda s: "FROM notification_subscriptions WHERE is_active" in s,
          [(bad, {}, since), (good, {}, since)], 2),
         (lambda s: "INSERT INTO notification_dispatches" in s, [], 4),
@@ -1296,103 +1308,58 @@ def test_match_changes_once_counts_a_refused_spec_as_invalid(
                      "collection_changes_inserted": 2}
 
 
-# --- images-first publication gate (Wave C-4) ----------------------------
+# --- the publication rule (rule 16, migrations 668/669, toolkit/publication.py) ---
 
 
-from api.notifications import (
-    IMAGE_GATE_ZERO_ROWS_FLOOR_MINUTES,
-    ImageGateSettings,
-    _read_bool_setting,
-)
+def test_the_published_rule_is_the_second_unconditional_clause() -> None:
+    """Browse serves a property only once it is published (browse_projection, migration 669);
+    the matcher reads properties_public, which does not gate, so it renders the one rule itself,
+    right after the served rule, for every spec — a blank one and a full one alike."""
+    from location_data.claims_common import served_location_predicate
+    from toolkit.publication import published_property_predicate
+
+    rule = published_property_predicate("l.property_id")
+    box = {"west": 14.3, "south": 50.0, "east": 14.5, "north": 50.2}
+    for spec in (WatchdogFilterSpec(),
+                 WatchdogFilterSpec(category_main_in=["byt"], min_price_czk=1, bounds=box)):
+        where, _ = _build_match_clauses(spec)
+        assert where[:2] == [served_location_predicate("l.location_listing_ref_id"), rule]
+        assert where.count(rule) == 1
 
 
-def _gate_script(sub_id: UUID, since: datetime) -> list[tuple[Any, list[tuple[Any, ...]], int]]:
-    return [
-        # app_settings all default → gate ON (default true), timeout 30.
-        (lambda s: "FROM app_settings" in s, [], 0),
-        (
-            lambda s: "FROM notification_subscriptions WHERE is_active" in s,
-            [(sub_id, {}, since)],
-            1,
-        ),
-        (lambda s: "INSERT INTO notification_dispatches" in s, [], 1),
-    ]
+def test_both_watchdog_producers_tell_only_a_published_property() -> None:
+    """'new' and price_drop both compile the spec through `_build_match_clauses`, so both carry
+    the rule; the collection monitor does not (a change on a curated property is not its first
+    appearance)."""
+    from api.notifications import match_changes_once
+    from toolkit.publication import published_property_predicate
+
+    rule = published_property_predicate("l.property_id")
+    sub_row = (UUID("46a6005f-dc32-4d94-9ced-4d262b57ef6b"), {},
+               datetime(2026, 10, 23, tzinfo=timezone.utc))
+    conn = _FakeConn([
+        (lambda s: "FROM notification_subscriptions WHERE is_active" in s, [sub_row], 1),
+    ])
+    match_once(conn)  # type: ignore[arg-type]
+    match_changes_once(conn)  # type: ignore[arg-type]
+    inserts = [s for s, _ in conn.executed if "INSERT INTO notification_dispatches" in s]
+    watchdog = [s for s in inserts if "'watchdog'" in s]
+    assert len(watchdog) == 2 and all(rule in s for s in watchdog)
+    monitor = [s for s in inserts if s not in watchdog]
+    assert monitor and not any(rule in s for s in monitor)
 
 
-def test_match_once_image_gate_holds_new_properties_without_losing_them() -> None:
-    """Default-on gate: the window INSERT requires a stored image (or a release arm).
-    A held property is still inside the 24 h window on the next pass, so the first
-    pass after its release dispatches it — the hold never loses it, and no separate
-    lookback exists."""
-    sub_id = UUID("00000000-0000-0000-0000-00000000000a")
-    conn = _FakeConn(_gate_script(sub_id, datetime(2026, 7, 1, tzinfo=timezone.utc)))
-    stats = match_once(conn)  # type: ignore[arg-type]
-
-    [(sql, params)] = [(s, p) for s, p in conn.executed if "INSERT INTO notification_dispatches" in s]
-    # The three release arms, set-based inside the INSERT's WHERE:
-    assert "gi.storage_path IS NOT NULL" in sql                                   # (a)
-    assert "make_interval(mins => %(image_timeout_minutes)s)" in sql              # (b)
-    assert "make_interval(mins => %(image_zero_rows_floor_minutes)s)" in sql      # (c)
-    assert "AND NOT EXISTS" in sql
-    assert params["image_timeout_minutes"] == 30
-    assert params["image_zero_rows_floor_minutes"] == IMAGE_GATE_ZERO_ROWS_FLOOR_MINUTES
-    assert "image_lookback_minutes" not in sql
-    assert stats["matches_inserted"] == 1
-
-
-def test_match_once_gate_flag_off_restores_old_behavior() -> None:
-    """`notifications_new_requires_image` = false → the one window INSERT carries no gate SQL."""
-    sub_id = UUID("00000000-0000-0000-0000-00000000000c")
-    script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
-        # Every app_settings read returns false-y → the gate flag reads False.
-        (lambda s: "FROM app_settings" in s, [(False,)], 0),
-        (
-            lambda s: "FROM notification_subscriptions WHERE is_active" in s,
-            [(sub_id, {}, datetime(2026, 7, 1, tzinfo=timezone.utc))],
-            1,
-        ),
-        (lambda s: "INSERT INTO notification_dispatches" in s, [], 2),
-    ]
-    conn = _FakeConn(script)
-    stats = match_once(conn)  # type: ignore[arg-type]
-    [sql] = [s for s, _ in conn.executed if "INSERT INTO notification_dispatches" in s]
-    assert "storage_path" not in sql and "image_timeout_minutes" not in sql
-    assert stats["matches_inserted"] == 2
-
-
-def test_the_image_gate_hold_always_ends_inside_the_window() -> None:
-    """A hold past the 24 h window would let a held property leave it unreleased: the
-    timeout is clamped below the window, with passes to spare for the release."""
-    from api.notifications import (
-        IMAGE_GATE_TIMEOUT_CEILING_MINUTES,
-        NEW_WINDOW,
-        _load_image_gate_settings,
-    )
-
-    def gate(rows: list[tuple[Any, ...]]) -> ImageGateSettings:
-        conn = _FakeConn([(lambda s: "FROM app_settings" in s, rows, 0)])
-        return _load_image_gate_settings(conn)  # type: ignore[arg-type]
+def test_the_retraction_arm_hides_a_new_its_property_now_predates() -> None:
+    """Ruling 5: a 'new' is hidden exactly when the property it now names was first seen more
+    than NEW_WINDOW before the alert was told — derived, no column, no placeholder (every
+    statement embedding VISIBLE keeps its own parameters)."""
+    from api.notifications import NEW_WINDOW, RETRACTED_SQL, VISIBLE_SQL
 
     assert NEW_WINDOW == "24 hours"
-    assert IMAGE_GATE_TIMEOUT_CEILING_MINUTES * 60 + 2 * 300 < 24 * 3600
-    assert gate([]) == ImageGateSettings(enabled=True, timeout_minutes=30)
-    assert gate([(5000,)]).timeout_minutes == IMAGE_GATE_TIMEOUT_CEILING_MINUTES
-    assert gate([(0,)]).timeout_minutes == 1
-
-
-def test_read_bool_setting_parses_jsonb_shapes() -> None:
-    def read(rows: list[tuple[Any, ...]], default: bool = True) -> bool:
-        conn = _FakeConn([(lambda s: "FROM app_settings" in s, rows, 0)])
-        return _read_bool_setting(conn, "k", default=default)  # type: ignore[arg-type]
-
-    assert read([], default=True) is True         # absent → default
-    assert read([], default=False) is False
-    assert read([(True,)]) is True
-    assert read([(False,)]) is False
-    assert read([("false",)]) is False
-    assert read([("TRUE",)]) is True
-    assert read([(0,)]) is False
-    assert read([(1,)]) is True
+    assert RETRACTED_SQL == (
+        "(d.change_kind = 'new' AND EXISTS (SELECT 1 FROM properties rp WHERE rp.id = d.property_id"
+        " AND rp.first_seen_at <= d.dispatched_at - interval '24 hours'))")
+    assert "%" not in VISIBLE_SQL
 
 
 # --- match_changes_once (the property-change matcher, Slice 2b) ----------

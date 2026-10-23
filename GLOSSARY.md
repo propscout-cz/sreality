@@ -88,6 +88,20 @@ _Avoid_: backfill day, horizon, go-live day
 An ad first seen on an ordinary day, not in a sweep, so its time on market counts from the day it appeared. An ad first seen in a sweep was already on the market, and its time on market is a lower bound.
 _Avoid_: uncensored ad, fresh ad, left-censored (for the opposite)
 
+**Settled**:
+A property the pipeline is done with: its first photo is stored (or it has none), and the engine has
+read every one of its ads, holds no pending question about them and keeps none of them in a group
+that also holds an ad on another property, or on none yet. Stamped once, by property maintenance; a
+merge passes a settled property's stamp to the survivor only when that publishes the survivor
+earlier, so publication never regresses, and never moves later.
+_Avoid_: evaluated, checked, dedup-checked
+
+**Published**:
+A property Browse, the map, Stats and the watchdog serve: from the moment it is settled, or 6 hours
+after it was first seen, whichever comes first. The 6 hours are the cap, so a slow engine can delay
+a property but never hide it. Its page opens by its link either way.
+_Avoid_: gated-in, live (for this)
+
 **Valuo valuation**:
 A price for one property bought from Valuo, an outside valuation service: what was sent, where each
 value came from, which Valuo environment answered, and Valuo's answer in its own words. Shown beside

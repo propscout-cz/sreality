@@ -320,7 +320,7 @@ Per-lane notes:
 - **Property-maintenance lane**, every 30 s (PR #716) — `run_incremental_pass` against `dirty_properties`
   (rule #20), far more often than the 5-min GH cron; serialized with it + the daily sweep by the lease-row
   CAS (PR #717): **never a session advisory lock on a pooled connection** — the first cut stranded. Each drain
-  slice = ONE `properties_changed` txn (recompute, Browse patch, `dirty_broker_listings` mirror), as merge/detach run inline.
+  slice = ONE `properties_changed` txn (recompute, Browse patch, `dirty_broker_listings` mirror), as merge/detach run inline; then `_settle_fresh` stamps `settled_at` (rule 16, mig 668) on properties under 6 h old the pipeline is done with — the stamp commits alone, then `sync_browse_list` patches their Browse rows, best-effort (`settled` in the log + heartbeat; its error warns, never fails the pass).
 - **Broker-maintenance lane** (Broker Unify W3) — same cadence; `scripts.resolve_brokers.
   run_incremental_pass` (`broker_resolution.yml` runs the SAME driver as backstop): drain until empty,
   recompute affected brokers (one merged statement), republish `broker_region_type_stats` via the
@@ -383,8 +383,8 @@ Per-lane notes:
   Needs `OPENAI_API_KEY`; a pass the provider stopped (`last.fatal`: credit, quota, key) is a FAILED pass (`failed_passes`, `failing_since`, `last_error`, same interval; `aborted` with no `fatal` = its own $/time ceiling, not a failure); rails = the `text_extraction` gauge (new ads' flow, the backlog's ETA), the `jobs` check's `lane/text_extract` cell and, for a provider stop, the `llm` credit cell. Sizing, cache key, write gate: `llm-pipelines`.
 - **Notifications lane** (notifications push W2a, `docs/design/notifications-push/PROGRAM.md` § 3.3) — the three producers of
   `api/notifications` on ONE clock: CONSTANT 300 s, no flag/setting/env var (the brake is a deploy). Steps `watchdog_new` (`match_once`:
-  a live watchdog's matches first seen in the last 24 h and after its `active_since` (create, switch-on, filter edit), images-first
-  gated; no cursor), `price` (`match_changes_once`: one canonical-ad step fragment, 7 days, watchdogs + monitored collections) and
+  a live watchdog's published matches first seen in the last 24 h and visible since after its `active_since` (create, switch-on,
+  filter edit; the publication rule, rule 16); no cursor), `price` (`match_changes_once`: one canonical-ad step fragment, 7 days, watchdogs + monitored collections) and
   `monitor` (inactive after 24 h gone, reactivated, new_source), each on its own connection, committing per statement (one watchdog's
   INSERT, one detector; `SET LOCAL statement_timeout` 120 s; the notification-events lock SHARED first, so a merge waits one statement
   at most and never deadlocks, architecture § rule 16). Why steps: a step that raises or has a

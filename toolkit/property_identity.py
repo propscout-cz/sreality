@@ -29,6 +29,7 @@ from autodedup import ui_sql as usql
 from scraper.db import create_singleton_properties
 from scripts.recompute_property_stats import properties_changed
 from toolkit import property_carriers as carriers
+from toolkit.publication import CAP_SQL
 from toolkit.property_carriers import MergeSource, Route  # re-exported: callers read them here
 from toolkit.room_taxonomy import category_main_compatible
 
@@ -145,6 +146,17 @@ INSERT INTO property_merge_carries (merge_group_id, table_name, row_key, row_at,
 VALUES (%(group)s, %(table)s, %(row_key)s, %(row_at)s, %(account_id)s, %(from_property)s,
         %(survivor)s, %(kind)s, %(snapshot)s)
 """
+
+# Publication never regresses on a merge, and never moves later (migration 668): a settled retired
+# property's stamp passes to a survivor not yet settled, only when that publishes the survivor
+# before its own cap would (the survivor is the oldest record, so the cap may have published it long
+# ago; a stamp younger than that would move its visibility forward, and tell a watchdog a property
+# it could already see).
+_CARRY_SETTLED_SQL = (
+    "UPDATE properties s SET settled_at = r.settled_at FROM properties r "
+    "WHERE s.id = %s AND r.id = %s AND s.settled_at IS NULL AND r.settled_at IS NOT NULL "
+    f"AND r.settled_at < s.first_seen_at + {CAP_SQL}"
+)
 
 # One statement touching `status` and `is_active` together: a retired property is never left
 # active between two writes; the last write of a pair.
@@ -503,8 +515,8 @@ def _gate_ads(conn: psycopg.Connection, ids: list[int]) -> None:
 def _merge_pair(cur: psycopg.Cursor, step: carriers.MergeStep, *, reason: str,
                 confidence: float | None, markers: dict[str, Any] | None) -> int:
     """One retired property into the survivor under the set's lock and gate: the ledger, the
-    re-point, every carrier in order, the carry record of what they moved or folded, the retire.
-    Returns the ledger rows written."""
+    re-point, every carrier in order, the carry record of what they moved or folded, the
+    publication stamp, the retire. Returns the ledger rows written."""
     cur.execute(_LEDGER_SQL, {
         "group": step.group, "survivor": step.survivor, "retired": step.retired,
         "reason": reason, "confidence": confidence,
@@ -520,6 +532,7 @@ def _merge_pair(cur: psycopg.Cursor, step: carriers.MergeStep, *, reason: str,
             {**row._asdict(), "group": step.group, "survivor": step.survivor,
              "snapshot": None if row.snapshot is None else Jsonb(row.snapshot)}
             for row in carried])
+    cur.execute(_CARRY_SETTLED_SQL, (step.survivor, step.retired))
     cur.execute(_RETIRE_SQL, (step.survivor, step.retired))
     return moved
 

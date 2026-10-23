@@ -13,9 +13,14 @@ name: "Jobs: property maintenance (incremental)"
 #   2. Recomputes ONLY the properties the writers queued in dirty_properties
 #      (a child listing was inserted / price-changed / inactivated / reactivated
 #      since the last pass). O(changes), not O(all properties).
+#   3. Settles: stamps properties.settled_at (migration 668, rule 16's
+#      publication rule) once on each property first seen in the last 6 h that
+#      the pipeline is done with (first photo stored or none, the engine done
+#      with its ads); the stamp commits alone, then the Browse patch.
 #
-# So a new / edited / delisted listing is reflected in `properties` (and Browse)
-# within one interval (~5 min) instead of waiting up to a full hourly recompute.
+# So a new / edited / delisted listing is reflected in `properties` within one
+# interval (~5 min) instead of waiting up to a full hourly recompute; a NEW
+# property reaches Browse once it is published (settled, or 6 h old).
 #
 # POSTURE (2026-07-08): this cron is the BACKSTOP, not the cadence. GitHub
 # throttles this repo's schedules to ~hourly at best — this workflow's nominal

@@ -10,7 +10,8 @@ latency-critical path: newest-first delta probes per portal (2-5 min; live-verif
 capability per portal, sreality via count-delta probes pending a BFF sort spike) →
 continuous detail drain → per-listing images-first processing (download + INLINE pHash +
 warm-CLIP tag; a listing is not published/notified before its first image is stored —
-operator decision) → dedup dirty enqueue → matcher wake. Prerequisite: a DB-backed shared
+operator decision; *superseded 2026-10-23 by the publication rule, rule 16: a property is shown
+and told once published, settled or 6 h old*) → dedup dirty enqueue → matcher wake. Prerequisite: a DB-backed shared
 politeness ledger (RateLimiter is per-process today; two runtimes must share one budget
 per portal). GH Actions keeps the free heavy lanes (full reconcile walks, backfills, batch
 scans, monitors).

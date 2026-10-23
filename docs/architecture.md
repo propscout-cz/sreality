@@ -1848,8 +1848,11 @@ renumber.** Navigate by area:
     (`listings.first_seen_at`), which is what it keyed on before migration 273. **Migration 475
     finished it:** the predicate is out of `properties_public` / `browse_projection` /
     `listing_feed_public`, and `publication_gate_enabled()` + `publication_gate_health_public`
-    are dropped.
-    `properties.published_at` / `publish_reason` are kept frozen as a historical record. The
+    are dropped. (A different gate returned on 2026-10-23, rule 16's publication rule: a NEW
+    `toolkit/publication.py` under the old name, stamped from the engine's own tables and capped at
+    6 h, so no engine backlog can hide the market again.)
+    `properties.published_at` / `publish_reason` are kept frozen as a historical record; the live
+    publication fact is `properties.settled_at` (migration 668), a new column with one meaning. The
     legacy decision ledger (`dedup_pair_audit`), the manual-feedback and golden-pair tables, and
     the paid LLM verdict caches are **frozen, not dropped**: no code writes them and the new
     design never reads them. The engine's queue/state tables went in that **same migration 475**,
@@ -2255,8 +2258,8 @@ renumber.** Navigate by area:
     rendered per relation. `toolkit/filter_compiler.compile_filter_where` compiles every
     column-backed FilterDef from its derived `sql_kind` and every irregular one from ONE hook
     table. It does this for the Watchdog matcher (`properties_public`, adapter
-    `api/notifications._build_match_clauses`, which adds the served predicate, the map box and
-    the place chips) and for every estimation cohort (`listings`, adapter
+    `api/notifications._build_match_clauses`, which adds the served predicate, the published rule,
+    the map box and the place chips) and for every estimation cohort (`listings`, adapter
     `toolkit/comparables._shared_filter_where`: comparables, velocity, the transit corridor).
     Browse is not compiled in Python. Its TS auto-dispatch is pinned to the same generated
     `sql_kind` (vitest + `tests/fixtures/filter_sql_kinds.json`). Its hand-coded half and the
@@ -2379,6 +2382,63 @@ renumber.** Navigate by area:
     EXCLUDE chip keeps rows whose code at that level is NULL (`NOT COALESCE(…, false)` in SQL,
     `or(col.is.null,col.not.in.(…))` in PostgREST), because an exclude subtracts what it MATCHES
     and the bare spelling made "not Prague" quietly mean "not Prague AND located".
+    **A property is SHOWN and TOLD only once PUBLISHED (operator rulings 2026-10-23, Q1–Q6;
+    migrations 668/669; `toolkit/publication.py`, the one spelling and the one cap).** One stored
+    fact and one rule: published ⇔ `coalesce(settled_at, first_seen_at + interval '6 hours') <=
+    now()` (that coalesce is the property's *visible since*). The maintenance pass stamps
+    `properties.settled_at` once (`scripts/recompute_property_stats._settle_fresh`, after the dirty
+    drain, set-based over properties first seen in the last 6 h; the daily sweep never stamps) when
+    the pipeline is done with the property: its first photo is stored or it has none, the engine has
+    read every ad (`autodedup.rt_fp` of the live generation), holds no pending question about them
+    (`autodedup.pairs` at the evidence hold) and keeps none in a group that also holds an ad on
+    another property, or on none yet (`autodedup.cluster_members`). The stamp commits ALONE (it
+    row-locks what it stamps, and the engine's merges run under a 5 s lock timeout, so a merge waits
+    behind one statement at most); then `sync_browse_list` patches the stamped properties' Browse
+    rows in its own transaction, best-effort (a miss waits for the */15 rebuild). The stamper reads
+    the engine's own tables and decides nothing — no second opinion on duplicates anywhere. A merge
+    passes a settled retired property's stamp to an unsettled survivor only when that publishes the
+    survivor earlier (`r.settled_at < s.first_seen_at + 6 h`, `toolkit/property_identity._CARRY_SETTLED_SQL`;
+    the survivor is the oldest record, so its cap may have published it long ago): publication never
+    regresses, and never moves later.
+    **Why:** the watchdog told 'new' about a singleton minutes after its birth, before the engine
+    had read it (audit F13: ~2.6 % of new properties were a cross-post of a live older property,
+    ~5 % a second ad of one new property), and Browse showed the same half-read property. The cap
+    is what migration 273's gate lacked (its only stamper was the removed engine, so it would have
+    hidden the market, rule 15): a slow engine delays a property, never hides it. One cap
+    everywhere, no flags, no special case outside the apply scope (an ad the engine does not read
+    waits for the cap). **Measured at the ruling:** fleet-wide ~4–9 % of new properties settle
+    before the cap and the rest publish at 6 h; inside the area the engine reads ~15–25 %; photos are
+    never the binding condition. It folded in and deleted the images-first alert gate (2026-07-02;
+    its two settings rows, `notifications_new_requires_image[_timeout_minutes]`, never existed in
+    production, so ruling 6's delete had nothing to delete). **Gated:** everything
+    `browse_projection` feeds (669's one WHERE arm after the consumer rule: `browse_list`, the
+    map, Stats, a curated-scope Browse, the phone feed's, collection's and broker's cards) and
+    both watchdog producers (`_build_match_clauses`: the published rule second, unconditional,
+    after the served rule). **Ungated:** `properties_public` read by id (the property page, the
+    extension, the boards, push rendering), the collection monitor, estimation subjects and
+    comparables, broker lists and the engine's candidates — the gate is about a property's FIRST
+    APPEARANCE; a change on a property a user already curates is not one, and a direct link must
+    open (rule 25 keeps the same boundary for location). A cap-released property enters
+    `browse_list` at the */15 rebuild after its 6 h mark (mean ~9 min, worst measured ~40 min);
+    the publishing health check counts a held property in its expected `unpublished` stage, judged
+    at the newest rebuild's start, never as a blocker. **A false 'new' withdraws itself (ruling 5):** `VISIBLE_SQL` (the feed, the badge,
+    push) = `REACHABLE_SQL` (not a repeat, not dismissed, its watchdog not retired) AND NOT
+    retracted: a 'new' is retracted when the property it now names was first seen more than
+    `NEW_WINDOW` (24 h) before the alert was told — a merge re-points alerts to the survivor, the
+    oldest property, so a cap-fired 'new' for a duplicate leaves the feed, the badge and push once the
+    engine merges it; a tap on a push already sent reads `REACHABLE_SQL` and still lands on the
+    survivor. Residue: a survivor first seen 6–24 h before the alert keeps it; a split leaves alerts
+    in place, so a retraction survives it. **Rollout:** 669 also stamps `settled_at = first_seen_at`
+    on the properties first seen in the 24 h before it is applied (the old code served them
+    ungated from their first sight, so that IS their visible-since moment: the watchdog window stays
+    honest, told what became visible after a watchdog started, never what it could already see),
+    and is applied promptly after the worker's rollout (until then the new watchdog window counts
+    every unstamped property visible only at its 6 h mark). The rule's latest-definition rail is `tests/test_browse_read_path_guardrail.py`;
+    `tests/test_668_publication_gate.py` pins 669's own text.
+    **Known seams (follow-up rulings, unchanged here):** the phone feed's day buckets and "Newest
+    first" run on `first_seen_at`, so a released property files under the day it appeared on the
+    market; the desktop collection page reads by id and shows a held property its phone twin hides
+    for up to 6 h.
     `notification_dispatches` is the **unified notification event table** (migration 206 —
     physical name kept; conceptually "notifications"): one source-generic, append-only event row per
     `(source_kind ∈ {watchdog, collection_monitor, share}, subject,
@@ -2401,8 +2461,9 @@ renumber.** Navigate by area:
     failing step is its own `lane/notifications/<step>` jobs cell (red alone while the others write;
     every statement commits on its own, so no INSERT's locks outlive it); the API's `matcher_loop`
     runs the same three beside it until W2b. **The cursor is gone:** a watchdog's `new` is ONE INSERT
-    over properties first seen in the last 24 h and after its `active_since` (stamped by a trigger on
-    create, on every switch-on and on every filter edit: an edited watchdog is a new start), images-first gated (a hold ends inside the window, so it never loses a property), so a
+    over published properties first seen in the last 24 h and visible since after its `active_since` (stamped by a trigger on
+    create, on every switch-on and on every filter edit: an edited watchdog is a new start; keyed on visibility, the publication
+    rule above, so a property first seen up to 6 h before a watchdog starts and published after it is still told), so a
     late-matching property under a day old still fires and a resumed watchdog never floods; `price` is
     ONE canonical-ad step fragment (`_CANONICAL_PRICE_STEPS`, 7 days, from `active_since` /
     `monitor_since`) for both producers; `monitor`'s `inactive` waits out 24 h gone (a portal blink
@@ -2443,7 +2504,9 @@ renumber.** Navigate by area:
     leaves the list, and its rows stay for analysis; deleting a collection still cascades its rows
     (collection retirement is deferred). What any reader sees is ONE fragment, **`VISIBLE_SQL`**: not a
     marked repeat, not about a property the event's own account dismissed, not from a retired
-    watchdog — the same under RLS and on the service role. **Delivery and detection are SEPARATE:** in-app delivery is the event row itself;
+    watchdog, not a 'new' a merge withdrew (the publication rule above) — the same under RLS and on the
+    service role; a tap on an alert reads `REACHABLE_SQL`, the same fragment without the withdrawal arm,
+    so a merge never strands a push already sent. **Delivery and detection are SEPARATE:** in-app delivery is the event row itself;
     external delivery is a ledger of its own, never a `channel`-column widen. (The old
     migration-057 comment claiming a new channel was "a one-line ALTER" was **false**: migration
     096 dropped `channel` from the dedup key, so the grain could never carry a second channel —
@@ -2963,10 +3026,11 @@ renumber.** Navigate by area:
     not it inserts, a `new` identity is once-ever, and the `reactivated` detector keys off a
     prior `inactive` dispatch, so suppressing an INSERT would lose the event for good on undo.
     Instead every in-app read of `notification_dispatches` — the feed and its total, the unread
-    badge, mark-all-seen, mark-seen, each watchdog's dispatch count — carries the one `VISIBLE_SQL`
+    badge, mark-all-seen, each watchdog's dispatch count — carries the one `VISIBLE_SQL`
     fragment (since W3; its dismissal arm names the event's own account on the active row, so the
-    service role agrees with RLS), so the badge and the list cannot disagree; a hidden dispatch is a
-    404 by id. The W4 push fans out only these VISIBLE rows, so a dismissed property is never
+    service role agrees with RLS), so the badge and the list cannot disagree; a read by id (a tap,
+    mark-seen) carries `REACHABLE_SQL`, the same dismissal arm, so a dismissed property's dispatch is
+    a 404 by id. The W4 push fans out only these VISIBLE rows, so a dismissed property is never
     pushed (the outbox drain that skipped it the same way was deleted in W1).
     **One control.** `<DismissButton>` (`overlay` on the Browse card beside the funnel,
     `header` on the listing page) over one hook, `lib/useDismissal`. A click hides with no confirm — nothing is destroyed — and a single
@@ -3119,7 +3183,9 @@ renumber.** Navigate by area:
     237 s against a 900 s cadence). The drain is race-free +
     terminating: it claims rows dirtied at/before a run cutoff and deletes only those untouched
     since (a mid-run re-dirty bumps `marked_at` past the cutoff → survives to the next pass).
-    New listings (`property_id` NULL) are born by straggler-attach, not the queue (≤ 2000 a pass,
+    The incremental pass then ends with `_settle_fresh`, which stamps `settled_at` (rule 16's
+    publication rule) on the fresh properties the pipeline is done with; the stamp commits alone,
+    then the Browse patch (`sync_browse_list`). New listings (`property_id` NULL) are born by straggler-attach, not the queue (≤ 2000 a pass,
     brought current by `properties_changed`), every 30 s on the worker's lane and after each batch
     of the daily full sweep, under the lease that sweep already holds. The
     **daily full sweep** (`recompute_property_stats.yml`, no `--incremental`, 04:15 UTC) is the
@@ -4023,6 +4089,8 @@ renumber.** Navigate by area:
     detail — the store's 27 columns by role, the lane's two halves and their cursors, the contract
     rails, the resolver's four stages, the served-listing predicate, what deliberately stays
     outside the store, and the incident lessons — is `docs/architecture.md` § Location data.
+    Rule 16's publication rule (migration 669) keeps the same boundary: the list surfaces and the
+    watchdog wait until a property is published; detail by id never waits.
 
 ## Broker identity merges — auto-merge and the suppression rail
 

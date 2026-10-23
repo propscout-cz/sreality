@@ -281,8 +281,8 @@ def test_the_property_stage_is_quiet_since_the_sweep_shortened() -> None:
 def _stock_rows(fleet: int, fleet_missing: int,
                 portals: dict[str, tuple[int, int]]) -> list[tuple[Any, ...]]:
     """_STOCK_SQL's rows: each missing property's canonical ad has no servable location."""
-    return [*((p, n, missing, 0, 0) for p, (n, missing) in portals.items()),
-            (None, fleet, fleet_missing, 0, 0)]
+    return [*((p, n, missing, 0, 0, 0) for p, (n, missing) in portals.items()),
+            (None, fleet, fleet_missing, 0, 0, 0)]
 
 
 def test_the_browse_drop_of_09_14_fails_the_stock_arm_from_its_first_rebuild() -> None:
