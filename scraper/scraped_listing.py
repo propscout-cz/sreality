@@ -55,6 +55,9 @@ _LISTING_FIELDS: tuple[str, ...] = (
     # The listing's page on its portal — identity, not content (never hashed); rides
     # LISTING_COLUMNS like every other column (docs/design/portal-listing-url.md).
     "source_url",
+    # The advertiser's own number for the offer (migration 666) — identity-adjacent like
+    # source_url, so never hashed: a reference names the offer, it is not its content.
+    "ad_reference",
 )
 
 
@@ -117,6 +120,10 @@ class ScrapedListing:
     # UTC in the timestamptz column), a full datetime where the portal exposes
     # one (bezrealitky's timeActivated). Out of the content hash (see above).
     published_at: datetime | date | None = None
+    # The advertiser's own number for the offer, as the ad prints it ("Číslo zakázky",
+    # "ID zakázky", "ID nemovitosti"); the attribute contract's `ad_reference` cell, read
+    # through `vocabulary.reference`. None when the ad prints no such number.
+    ad_reference: str | None = None
     # The source's own payload, stored verbatim in listings.raw_json.
     raw: dict[str, Any] = field(default_factory=dict)
 

@@ -62,6 +62,20 @@ Web, is every other site: its ads arrive only when someone pastes a link, and a 
 its link's canonical address (shown by its site's name), not by an id of the site's own.
 _Avoid_: site, source (in prose)
 
+**Portal id**:
+The id a portal gives an ad: the number in the ad's web address on most portals, iDNES's long code, a
+Web ad's canonical address. Unique within its portal; the key the scrapers track an ad by, and the
+platform's own row number for the ad is a different thing (an ad's `id`).
+_Avoid_: native id (in prose), hash id, listing id
+
+**Ad reference**:
+The number the advertiser prints on the ad for callers, kept exactly as printed: "ID zakázky" on
+Sreality, "Číslo zakázky" on iDNES, RE/MAX and Realitymix, "ID nemovitosti" on České reality. On a
+broker portal it is the broker's own order number; on an agency's own site (Maxima, M&M) it is the
+portal id. An ad may print none (a private seller). Shown beside the broker's contact so it can be
+quoted on a call; never replaced by another number when it is missing.
+_Avoid_: reference number, order number, advert code, zakázka (in English prose)
+
 **Snapshot**:
 One kept version of an ad's content. A new snapshot exists only when the content changed.
 _Avoid_: version, revision, scrape

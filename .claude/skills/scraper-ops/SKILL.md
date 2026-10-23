@@ -22,9 +22,9 @@ test / log helpers: `scripts/test-summary.sh` and `scripts/logs.sh <run-id> [pat
    for crawler portals, `scraped_listing._LISTING_FIELDS`. Whether a parser NULL erases is decided per
    (source, column) by the producer from step 2 (`text`/`none` preserve, `structured`/`derived` clear);
    `_PRESERVE_IF_NULL_COLUMNS` is the GLOBAL identity pair (`published_at`, `source_url`) and must not grow.
-4. Backfill old rows from NARROW typed columns via a `scripts/backfill_*.py` dispatch job (never a
-   `raw_json` pass — ~62 KB/row detoast); NULL is acceptable for a nullable column. The new cell reaches
-   the `parsing` alarm's fill arm only once the OPERATOR re-blesses (`--bless` needs the prod DB).
+4. Heal old rows through the ONE re-parse seam, `reparse.yml` (`source=<portal> fields=<col>`, dry run
+   first, `--missing` to resume; `--allow-snapshot-deferral` only for a HASHED column — `ad_reference` is not).
+   The new cell reaches the `parsing` alarm's fill arm only once the OPERATOR re-blesses (`--bless`, prod DB).
 
 ## Refreshing portal HTML fixtures
 

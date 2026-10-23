@@ -68,6 +68,8 @@ BYT_HTML = """
 <table><tbody>
   <tr class="advert-description__short-props-price"><td>Cena:</td>
     <td>5 290 000 Kč &nbsp;<button>Nabídněte cenu</button></td></tr>
+  <tr><td>Datum k nastěhování:</td><td>01.10.2026</td></tr>
+  <tr><td>Číslo zakázky:</td><td>REALITYMIX-N02161</td></tr>
 </tbody></table>
 <div id="print-map" data-gps-lon="14.604206388889" data-gps-lat="49.989288333333"
      data-address="Luční, Nupaky, okres Praha-východ"></div>
@@ -181,6 +183,8 @@ def test_parse_detail_byt_full():
     listing = parse_detail(BYT_HTML, source_url=_BYT_URL)
     assert listing.source == "realitymix"
     assert listing.source_id_native == "8414569"
+    # The short-props row beside the price, verbatim with the portal's prefix.
+    assert listing.ad_reference == "REALITYMIX-N02161"
     assert listing.source_url == _BYT_URL
     assert listing.category_main == "byt"
     assert listing.category_type == "prodej"

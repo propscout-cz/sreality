@@ -89,6 +89,10 @@ LISTING_COLUMNS: tuple[str, ...] = (
     # assembles it in scraper.sreality_url) — a stored fact read everywhere and
     # reconstructed nowhere. Out of every content hash (identity, not content).
     "source_url",
+    # The advertiser's own number for the offer, as the ad prints it (migration 666) —
+    # the attribute contract's `ad_reference` cell. Out of the content hash like the two
+    # identity columns above: a reference names the offer, it is not the offer's content.
+    "ad_reference",
 )
 
 # Postgres type for each LISTING_COLUMN: the jsonb_to_recordset column spec of
@@ -124,6 +128,7 @@ _LISTING_COLUMN_PGTYPE: dict[str, str] = {
     "description": "text",
     "published_at": "timestamptz",
     "source_url": "text",
+    "ad_reference": "text",
 }
 assert set(_LISTING_COLUMN_PGTYPE) == set(LISTING_COLUMNS), (
     "_LISTING_COLUMN_PGTYPE drifted from LISTING_COLUMNS"

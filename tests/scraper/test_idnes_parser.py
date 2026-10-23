@@ -220,7 +220,8 @@ def test_parse_detail_full():
     assert listing.garage is False
     assert listing.parking_lots is None
     assert listing.description.startswith("Nabízíme")
-    assert listing.raw["idnes_ref"] == "IDNES-943453"
+    assert listing.ad_reference == "IDNES-943453"
+    assert "idnes_ref" not in listing.raw
     assert len(listing.raw["image_urls"]) == 2
     assert listing.raw["image_urls"][0].endswith("img1.jpg")  # ?gt=r stripped
     assert listing.raw["coords"]["source"] == "page"

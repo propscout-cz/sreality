@@ -105,8 +105,12 @@ def test_pii_exclusion_list_is_pinned() -> None:
 def test_exported_columns_cover_listing_columns_exactly_once() -> None:
     promoted = set(export_sql.PROMOTED_COLUMNS)
     attrs = set(export_sql.ATTR_COLUMNS)
-    assert not promoted & attrs
-    assert promoted | attrs == set(LISTING_COLUMNS)
+    unexported = set(export_sql.UNEXPORTED_COLUMNS)
+    assert not promoted & attrs and not unexported & (promoted | attrs)
+    assert promoted | attrs | unexported == set(LISTING_COLUMNS)
+    # An unexported column is a decision, never an oversight: it may not reach the cohort SQL.
+    for column in unexported:
+        assert f"l.{column}" not in export_sql.COHORT_LISTINGS_SQL
     assert "description" in promoted  # exported, but only after scrubbing
 
 

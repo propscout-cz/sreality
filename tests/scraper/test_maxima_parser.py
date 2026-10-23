@@ -197,7 +197,8 @@ def test_parse_detail_full():
     assert listing.cellar is None
     assert listing.terrace is None       # absent row -> unknown, not guessed False
     assert listing.description.startswith("K prodeji")
-    assert listing.raw["maxima_ref"] == "B50087758"
+    assert listing.ad_reference == "B50087758"
+    assert "maxima_ref" not in listing.raw
     # Only this listing's images (by upper id), not the OTHER9999 recommendation.
     assert len(listing.raw["image_urls"]) == 2
     assert all("B50087758" in u for u in listing.raw["image_urls"])
