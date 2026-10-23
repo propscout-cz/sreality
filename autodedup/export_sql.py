@@ -62,7 +62,7 @@ ATTR_COLUMNS: tuple[str, ...] = (
 # every stored decision's digest and re-opens the rt generation's pairs; a column enters
 # here, not `attrs`, until the engine is ruled to read it.
 UNEXPORTED_COLUMNS: tuple[str, ...] = (
-    # The advertiser's own offer number (migration 666, 2026-10-23). The engine still mines
+    # The advertiser's own offer number (migration 667, 2026-10-23). The engine still mines
     # codes from the description (`autodedup.text_facts.reference_codes`); reading the
     # structured column instead is a ruling for the autodedup track, not an export change.
     "ad_reference",

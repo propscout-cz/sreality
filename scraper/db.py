@@ -89,7 +89,7 @@ LISTING_COLUMNS: tuple[str, ...] = (
     # assembles it in scraper.sreality_url) — a stored fact read everywhere and
     # reconstructed nowhere. Out of every content hash (identity, not content).
     "source_url",
-    # The advertiser's own number for the offer, as the ad prints it (migration 666) —
+    # The advertiser's own number for the offer, as the ad prints it (migration 667) —
     # the attribute contract's `ad_reference` cell. Out of the content hash like the two
     # identity columns above: a reference names the offer, it is not the offer's content.
     "ad_reference",

@@ -1,4 +1,4 @@
--- 666_listings_ad_reference.sql -- The advertiser's own number for the offer, as ONE typed column (operator request
+-- 667_listings_ad_reference.sql -- The advertiser's own number for the offer, as ONE typed column (operator request
 -- 2026-10-23: "show in the Makléř section the ad id the broker advertises under, so I can quote it when I call; make
 -- sure we scrape it correctly"). ADDITIVE: one nullable text column on listings, appended LAST to
 -- property_sources_public; nothing dropped, rewritten or backfilled here.
@@ -34,7 +34,7 @@ comment on column listings.ad_reference is
   'The advertiser''s own number for the offer, exactly as the ad prints it (ID zakázky / Číslo zakázky / '
   'ID nemovitosti / Číslo nabídky). Producer: scraper/attribute_contract.py cell ad_reference, normalised by '
   'scraper.vocabulary.reference (verbatim, whitespace collapsed). NULL = the ad prints no such number. '
-  'Not in the content hash (migration 666).';
+  'Not in the content hash (migration 667).';
 
 create or replace view property_sources_public as
  select property_id,

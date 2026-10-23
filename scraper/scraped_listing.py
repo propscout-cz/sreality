@@ -55,7 +55,7 @@ _LISTING_FIELDS: tuple[str, ...] = (
     # The listing's page on its portal — identity, not content (never hashed); rides
     # LISTING_COLUMNS like every other column (docs/design/portal-listing-url.md).
     "source_url",
-    # The advertiser's own number for the offer (migration 666) — identity-adjacent like
+    # The advertiser's own number for the offer (migration 667) — identity-adjacent like
     # source_url, so never hashed: a reference names the offer, it is not its content.
     "ad_reference",
 )

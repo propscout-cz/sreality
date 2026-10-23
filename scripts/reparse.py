@@ -177,7 +177,7 @@ SUBSTRATE: dict[str, PortalSubstrate] = {
 # content hash defers a snapshot to the row's next detail fetch, which
 # `--allow-snapshot-deferral` makes explicit. Two healable columns sit outside the hash —
 # `area_basis` (a provenance stamp, migration 423) and `ad_reference` (the advertiser's own
-# number, migration 666: identity-adjacent like source_url) — so healing either churns
+# number, migration 667: identity-adjacent like source_url) — so healing either churns
 # nothing. A column joining either definition extends the gate here on its own.
 HEALABLE: tuple[str, ...] = tuple(
     c for c in LISTING_COLUMNS if c not in _PRESERVE_IF_NULL_COLUMNS)

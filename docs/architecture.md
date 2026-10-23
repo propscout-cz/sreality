@@ -24,7 +24,7 @@ emits". That is now one table and one module rather than nine copies of each:
 
 - **`scraper/attribute_contract.py`** — the ATTRIBUTE contract: one cell per (portal, typed
   column), all 10 × 27 declared (the 27th, `ad_reference` — the advertiser's own offer number, kept
-  verbatim and never hashed — since migration 666), carrying the producer (`structured` = named payload keys,
+  verbatim and never hashed — since migration 667), carrying the producer (`structured` = named payload keys,
   `text` = mined from the ad prose, `derived` = the URL/breadcrumb/title, `none`), the source-key
   PRECEDENCE (replacing the inline `params.get(a) or params.get(b)` chains), what a MISSING key
   means (`false` on bezrealitky's real booleans, `unknown` everywhere else), the default

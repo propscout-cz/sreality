@@ -176,7 +176,7 @@ estimate ≈ −7,260 / +2,860 LOC, −30 files, −2 tables, −8 workflows, 0 
       `census/web.json` + its baseline cells; A1/A2 then read it (every top-level `raw_json` key
       the parse writes is already read or in `IGNORED['web']`).
 
-- [x] **Ad reference (PR #1984, 2026-10-23; migration 666) — the advertiser's own offer number, one typed
+- [x] **Ad reference (PR #1984, 2026-10-23; migration 667) — the advertiser's own offer number, one typed
       column.** sreality `advert_code`, idnes/remax "Číslo zakázky", ceskereality "ID nemovitosti", maxima "ID
       zakázky", mmreality's object id (its "Číslo nabídky") and realitymix's short-props row (a `derived` reader,
       `_detail_reference`, never a params key) all fill `listings.ad_reference`, declared on all ten portals and
