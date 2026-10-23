@@ -68,12 +68,16 @@ export function PropertyIdentity({
   listing,
   priceNote,
   showStatus = true,
+  statusHref,
 }: {
   listing: ListingPublic;
   /* Rendered under the headline price, or in its place when the listing states
    * none. Estimation Detail leaves it empty. */
   priceNote?: PriceNote;
   showStatus?: boolean;
+  /* The status pill opens this advert on its portal (the property page: the
+   * latest active advert's stored URL). */
+  statusHref?: string | null;
 }) {
   // Identity tokens, most-specific first: subtype ("Ubytování", "Rodinný dům")
   // and/or disposition ("2+kk"). Commercial/houses keep their kind instead of
@@ -115,7 +119,7 @@ export function PropertyIdentity({
           )}
         </p>
         {showStatus && (
-          <StatusPill isActive={listing.is_active} lastSeenAt={listing.last_seen_at} />
+          <StatusPill isActive={listing.is_active} lastSeenAt={listing.last_seen_at} href={statusHref} />
         )}
       </div>
       <h1
@@ -203,26 +207,49 @@ export function LocationMap({
   );
 }
 
-function StatusPill({ isActive, lastSeenAt }: { isActive: boolean; lastSeenAt: string }) {
-  const title = lastSeenAt ? `Last seen ${fmtAbsolute(lastSeenAt)}` : undefined;
-  if (isActive) {
+function StatusPill({
+  isActive,
+  lastSeenAt,
+  href,
+}: {
+  isActive: boolean;
+  lastSeenAt: string;
+  href?: string | null;
+}) {
+  const seen = lastSeenAt ? `Last seen ${fmtAbsolute(lastSeenAt)}` : undefined;
+  const className = [
+    'shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 text-[0.7rem] tracking-wide rounded-[var(--radius-sm)] border',
+    isActive
+      ? 'bg-[var(--color-copper-soft)] text-[var(--color-copper)] border-[var(--color-copper)]/20'
+      : 'bg-[var(--color-brick-soft)] text-[var(--color-brick)] border-[var(--color-brick)]/20',
+    href ? 'hover:border-current transition-colors' : '',
+  ].join(' ');
+  const body = (
+    <>
+      {isActive && <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-sage)]" aria-hidden />}
+      {isActive ? 'Active' : 'Inactive'}
+      {href && <span aria-hidden>↗</span>}
+    </>
+  );
+  if (!href) {
     return (
-      <span
-        className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 text-[0.7rem] tracking-wide rounded-[var(--radius-sm)] bg-[var(--color-copper-soft)] text-[var(--color-copper)] border border-[var(--color-copper)]/20"
-        title={title}
-      >
-        <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-sage)]" aria-hidden />
-        Active
+      <span className={className} title={seen}>
+        {body}
       </span>
     );
   }
   return (
-    <span
-      className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 text-[0.7rem] tracking-wide rounded-[var(--radius-sm)] bg-[var(--color-brick-soft)] text-[var(--color-brick)] border border-[var(--color-brick)]/20"
-      title={title}
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={className}
+      title={[isActive ? 'Otevřít poslední aktivní inzerát' : 'Otevřít naposledy viděný inzerát', seen]
+        .filter(Boolean)
+        .join(' · ')}
     >
-      Inactive
-    </span>
+      {body}
+    </a>
   );
 }
 

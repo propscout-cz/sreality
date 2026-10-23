@@ -10,12 +10,17 @@ describe('tabFromAddress', () => {
   });
 
   it('lets ?tab= win over everything else', () => {
-    expect(at('tab=trh&run=5', '#estimations')).toBe('trh');
+    expect(at('tab=audit&run=5', '#estimations')).toBe('audit');
     expect(at('tab=prehled&advert=11')).toBe('prehled');
   });
 
   it('ignores a ?tab= it does not know', () => {
     expect(at('tab=bogus')).toBe('prehled');
+  });
+
+  it('sends a retired tab to the one that took it over', () => {
+    expect(at('tab=trh')).toBe('hodnota');
+    expect(at('tab=moje')).toBe('prehled');
   });
 
   it('sends the estimation links to Cena a hodnota', () => {

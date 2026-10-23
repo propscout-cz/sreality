@@ -308,12 +308,10 @@ describe('<PropertyDetail> one property, one voice', () => {
     await waitFor(() => expect(queries.fetchImagesByListing).toHaveBeenCalledWith(105054, expect.anything()));
     await waitFor(() =>
       expect(queries.fetchSnapshotsForListings).toHaveBeenCalledWith([105053, 105054], expect.anything()));
-    // The price moves are the property's, as Browse filters on them — on the overview's card.
-    // The overview is its own chunk: the first test to open it waits for the import.
-    const stat = async (label: string) =>
-      (await screen.findByText(label, {}, { timeout: 5000 })).parentElement?.nextSibling;
-    expect(await stat('Změny ceny')).toHaveTextContent('2');
-    expect(await stat('Na trhu')).toHaveTextContent('62 dní');
+    // The price moves are the property's, as Browse filters on them — on the overview's
+    // adverts card. The overview is its own chunk: the first test to open it waits for it.
+    expect(await screen.findByText(/na trhu 62 dní · 2 změny ceny · celkem -4,5 %/, {}, { timeout: 5000 }))
+      .toBeInTheDocument();
     // The curation controls read, so the header offers them, never a retry.
     expect(await screen.findByRole('button', { name: /Přidat do pipeline/ })).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: 'Uložit do kolekce' })).toBeInTheDocument();
@@ -467,6 +465,32 @@ describe('<PropertyDetail> tabs', () => {
     renderAt('/property/774?advert=105054');
     await screen.findByRole('heading', { level: 1 });
     expect(selected()).toHaveTextContent('Přehled');
+  });
+
+  it('opens the latest active advert from the status pill — the canonical one on a tie', async () => {
+    renderAt('/property/774');
+    expect(await screen.findByRole('link', { name: /Active/ })).toHaveAttribute('href', 'https://www.sreality.cz/detail/y');
+  });
+
+  it('opens the advert seen most recently when it is not the canonical one', async () => {
+    vi.mocked(queries.fetchPropertySources).mockResolvedValue([
+      { ...SOURCES[0], last_seen_at: '2026-01-05T00:00:00Z' },
+      SOURCES[1],
+    ]);
+    renderAt('/property/774');
+    await waitFor(() =>
+      expect(screen.getByRole('link', { name: /Active/ })).toHaveAttribute('href', 'https://reality.idnes.cz/detail/x/'));
+  });
+
+  it('offers the tags as a header button beside the collections', async () => {
+    renderAt('/property/774');
+    expect(await screen.findByRole('button', { name: 'Štítky' })).toBeInTheDocument();
+  });
+
+  it('sends the retired Trh v okolí address to Cena a hodnota', async () => {
+    renderAt('/property/774?tab=trh');
+    await screen.findByRole('heading', { level: 1 });
+    expect(selected()).toHaveTextContent('Cena a hodnota');
   });
 
   it('counts the photos and the adverts on their tabs', async () => {

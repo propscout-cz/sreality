@@ -89,11 +89,14 @@ export function DropHint({ label }: { label: string }) {
 export function AttachButton({
   onFiles,
   label,
+  text = 'Attach',
   showText = false,
   disabled = false,
 }: {
   onFiles: (files: File[]) => void;
   label: string;
+  /* The visible word beside the clip when `showText`. */
+  text?: string;
   showText?: boolean;
   disabled?: boolean;
 }) {
@@ -108,12 +111,12 @@ export function AttachButton({
         title={label}
         className={
           showText
-            ? 'inline-flex items-center gap-1 px-1.5 py-0.5 text-[0.72rem] rounded-[var(--radius-xs)] text-[var(--color-ink-3)] hover:text-[var(--color-copper)] hover:bg-[var(--color-paper-2)] disabled:opacity-40 transition-colors'
+            ? 'inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[0.8rem] rounded-[var(--radius-sm)] text-[var(--color-ink-3)] hover:text-[var(--color-copper)] hover:bg-[var(--color-paper-2)] disabled:opacity-40 transition-colors'
             : 'inline-flex items-center justify-center w-5 h-5 rounded-[var(--radius-xs)] text-[var(--color-ink-4)] hover:text-[var(--color-ink-2)] hover:bg-[var(--color-paper-2)] disabled:opacity-40 transition-colors'
         }
       >
         <PaperclipIcon className={showText ? 'h-3.5 w-3.5' : 'h-[11px] w-[11px]'} />
-        {showText && <span aria-hidden>Attach</span>}
+        {showText && <span aria-hidden>{text}</span>}
       </button>
       <input
         ref={input}

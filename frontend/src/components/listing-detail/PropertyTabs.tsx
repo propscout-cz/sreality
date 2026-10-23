@@ -1,5 +1,6 @@
-/* The property page's tabs (operator ruling 2026-10-22, design A): one tab per
- * question the page answers, so nothing sits nine screens down. The open tab
+/* The property page's tabs (operator ruling 2026-10-22, design A; 2026-10-23: the
+ * registered sales joined Cena a hodnota, the notes moved under the header): one
+ * tab per question the page answers, so nothing sits nine screens down. The open tab
  * lives in the address (`?tab=`), switched with `replace` so Back still leaves
  * the page; an address with no `?tab=` opens the tab its other parts point at
  * (an estimation run, an advert row), else the overview. A tab is mounted the
@@ -8,17 +9,18 @@
 import { useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 
-export type PropertyTabId = 'prehled' | 'fotky' | 'hodnota' | 'trh' | 'inzeraty' | 'moje' | 'audit';
+export type PropertyTabId = 'prehled' | 'fotky' | 'hodnota' | 'inzeraty' | 'audit';
 
 export const PROPERTY_TABS: ReadonlyArray<{ id: PropertyTabId; label: string }> = [
   { id: 'prehled', label: 'Přehled' },
   { id: 'fotky', label: 'Fotky' },
   { id: 'hodnota', label: 'Cena a hodnota' },
-  { id: 'trh', label: 'Trh v okolí' },
   { id: 'inzeraty', label: 'Inzeráty' },
-  { id: 'moje', label: 'Moje' },
   { id: 'audit', label: 'Audit' },
 ];
+
+/* Tabs that were folded into others, kept for the addresses already handed out. */
+const RETIRED: Record<string, PropertyTabId> = { trh: 'hodnota', moje: 'prehled' };
 
 const isTabId = (v: string | null): v is PropertyTabId => PROPERTY_TABS.some((t) => t.id === v);
 
@@ -34,6 +36,7 @@ export function tabFromAddress(
 ): PropertyTabId {
   const asked = params.get('tab');
   if (isTabId(asked)) return asked;
+  if (asked != null && asked in RETIRED) return RETIRED[asked];
   if (params.has('run') || hash === '#estimations' || hash === '#feedback') return 'hodnota';
   const advert = Number(params.get('advert')) || null;
   if (params.has('letters') || (advert != null && advert !== canonicalListingId)) return 'inzeraty';
