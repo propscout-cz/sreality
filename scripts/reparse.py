@@ -39,7 +39,7 @@ the split is measured, not assumed:
     `parse_errors`, the report WARNs on them, and no heal can reach them.
 
 `portal_raw_payloads` is NOT this seam's substrate and the two are easy to confuse: that one
-is the append-on-change R2-backed archive with a 7-day per-listing floor, whose staleness
+is the append-on-change R2-backed archive, whose 7-day per-listing floor (removed 2026-10-22)
 made an earlier heal skip 89 % of its population (examined=3000, body_stale=2672).
 
 **raw_json is INSUFFICIENT on the HTML portals, and idnes proves it.** Its amenity booleans

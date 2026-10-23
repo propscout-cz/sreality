@@ -79,8 +79,8 @@ matcher-loop pattern of api/notifications):
              (`LOCATION_INTAKE_FAST_ENABLED=0` idles it). One lane, two
              schedules: see the constant block below.
 - location_refetch: every `LOCATION_REFETCH_INTERVAL_S` (default 86400, first
-             tick a few minutes after start), queue the audit page's active
-             "no data" listings for ONE more detail fetch, at
+             tick a few minutes after start), queue the active ads with no town
+             (rule 25, `location_steps.town_missing_sql`) for ONE more detail fetch, at
              db.QUEUE_PRIORITY_VERIFY and capped at
              `LOCATION_REFETCH_CAP_PER_SOURCE` (default 500) rows per portal per
              tick. ceskereality and realitymix geocode an ad AFTER publishing it,
@@ -489,8 +489,6 @@ LOCATION_REFETCH_CAP_DEFAULT = 500
 # reason to compete for that minute; and a deploy loop must not fire a queue-writing pass
 # every time the container restarts.
 LOCATION_REFETCH_FIRST_DELAY_SECONDS = 300.0
-# log-once-per-process guard: the audit matview is absent (a branch database).
-_LOCATION_REFETCH_VIEW_WARNED = False
 
 # sold_comps lane (sold-comps W2): REGISTERED SALES FOR THE TOWNS THE OPERATOR IS
 # ACTUALLY WORKING IN. A sale is an external fact with no account and no listing, so
@@ -2046,14 +2044,12 @@ async def _location_intake_fast_pass(
 
 
 def _location_refetch_sync() -> dict[str, Any]:
-    """One daily tick: read the audit set's active no-data rows whose page is old
-    enough, and queue them for one more detail fetch at VERIFY priority.
+    """One daily tick: read the active ads with no town whose page is old enough, and
+    queue them for one more detail fetch at VERIFY priority.
 
     No lease and no in-process lock: the pass is one SELECT plus one INSERT per portal,
     the enqueue is idempotent on (source, native_id), and a second caller would at worst
     re-write rows it already wrote."""
-    global _LOCATION_REFETCH_VIEW_WARNED
-
     started = time.monotonic()
     min_age = _read_location_refetch_min_age()
     cap = _read_location_refetch_cap()
@@ -2061,14 +2057,6 @@ def _location_refetch_sync() -> dict[str, Any]:
     try:
         rows = db.location_refetch_candidates(
             conn, min_age_seconds=min_age, cap_per_source=cap)
-        if rows is None:
-            if not _LOCATION_REFETCH_VIEW_WARNED:
-                _LOCATION_REFETCH_VIEW_WARNED = True
-                LOG.warning(
-                    "LOCATION_REFETCH: location_pin_audit_mv is absent on this database; "
-                    "the lane has nothing to read and skips every tick")
-            return {"ran": False, "reason": "audit_view_missing",
-                    "seconds": round(time.monotonic() - started, 1)}
         by_source: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
             by_source.setdefault(row["source"], []).append(row)

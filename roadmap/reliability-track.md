@@ -922,3 +922,20 @@ no ruling).
   ceskereality 0 of 751, all OK; maxima and web Not measured. 0.11 s, one index range per portal.
 
 To check: after the deploy, the idnes precision incident closes on a measured OK, verified on the page.
+## 2026-10-22 — Health green sprint, wave 4 (shipped with this PR)
+
+Location producers: the claim lane sees the page the drain just fetched. Plan:
+[`docs/design/health-dashboard.md`](../docs/design/health-dashboard.md) § 14 and its "Wave 4 as built" note.
+
+What wave 4 changed:
+- **The payload archive appends every changed body.** Its 7-day per-listing floor (W2a-7) discarded a
+  refetched body inside the window, so the town the second fetch found never reached the claim lane
+  (≥ 1,133 refusals a day). Reversed W2a-7 decision; ~1.1k more R2 PUTs a day.
+- **The refetch lane selects rule 25's invariant** (`location_steps.town_missing_sql()`: active, not
+  foreign, no town), the set the `location_town_coverage` check judges, instead of the pin-audit
+  matview's `active_no_claims` bucket, which missed ads holding only a kraj or okres claim.
+
+To check: `PAYLOAD stats appended=` in the worker log; the next `LOCATION_REFETCH lane` line queues ~26;
+`ceskereality/town` 34 → ~23 within ~1 h of the refetch tick; `realitymix/town` 3 → 0 or a gone verdict.
+
+**Next:** W5 applies the rulings (Q3: the 24 towns the portal withholds; the text lane's scope).

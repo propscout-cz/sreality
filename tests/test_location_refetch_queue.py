@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from location_data import location_steps
 from scraper import db
 
 
@@ -32,9 +33,7 @@ class _Cur:
     def execute(self, sql: str, params: Any = None) -> None:
         s = " ".join(sql.split())
         self._conn.executed.append((s, params))
-        if "to_regclass" in s:
-            self._rows = [(self._conn.view_present,)]
-        elif "location_pin_audit_mv" in s:
+        if "listing_location" in s:
             self._rows = list(self._conn.candidate_rows)
         else:
             self._rows = []
@@ -48,11 +47,9 @@ class _Cur:
 
 
 class _Conn:
-    def __init__(self, *, view_present: bool = True,
-                 candidate_rows: list[tuple[Any, ...]] | None = None,
+    def __init__(self, *, candidate_rows: list[tuple[Any, ...]] | None = None,
                  affected: int = 0) -> None:
         self.executed: list[tuple[str, Any]] = []
-        self.view_present = view_present
         self.candidate_rows = candidate_rows or []
         self.affected = affected
 
@@ -67,20 +64,19 @@ def _row(source: str, nid: str, url: str | None, total: int) -> tuple[Any, ...]:
     return (source, nid, url, 4_500_000, _WHEN, total)
 
 
-def test_candidates_are_the_audit_pages_active_no_data_bucket() -> None:
+def test_candidates_are_the_active_ads_rule_25_calls_town_less() -> None:
     conn = _Conn(candidate_rows=[
         _row("ceskereality", "3876635", "https://ceskereality.cz/3876635", 63),
     ])
     out = db.location_refetch_candidates(conn, min_age_seconds=21600, cap_per_source=500)
 
     sql, params = conn.executed[-1]
-    # The audit relation IS the list — it is not re-derived here, so the page the
-    # operator reads and the rows this queues can never diverge.
-    assert "location_pin_audit_mv" in sql
-    assert "a.state = 'unresolved'" in sql and "a.quality = 'active_no_claims'" in sql
-    # ... but the ROW is taken live from listings: the matview is an hourly snapshot and
-    # a re-fetch must not be aimed by a stale URL, nor sent at a since-delisted listing.
-    assert "JOIN listings l ON l.id = a.listing_id" in sql and "l.is_active" in sql
+    # The set the town-coverage check judges, by the same fragment: an ad with only a
+    # kraj claim, or with no answer row at all, is as town-less as one with no claims.
+    assert " ".join(location_steps.town_missing_sql().split()) in sql
+    assert "FROM listings l LEFT JOIN listing_location ll ON ll.listing_id = l.id" in sql
+    assert "WHERE l.is_active" in sql and "location_pin_audit_mv" not in sql
+    assert len(conn.executed) == 1
     assert params == {"min_age": 21600.0, "cap": 500}
     assert out == [{
         "source": "ceskereality", "native_id": "3876635",
@@ -100,15 +96,6 @@ def test_only_pages_older_than_the_min_age_and_oldest_first_within_a_cap() -> No
     assert "row_number() OVER (PARTITION BY c.source ORDER BY c.last_fetch_at" in sql
     assert "WHERE rn <= %(cap)s::int" in sql
     assert params["cap"] == 2
-
-
-def test_a_missing_audit_view_is_none_not_an_empty_set() -> None:
-    # A caller must tell "nothing to do" from "this database cannot answer": the lane
-    # skips its tick instead of reporting a clean zero for ever.
-    conn = _Conn(view_present=False)
-    assert db.location_refetch_candidates(
-        conn, min_age_seconds=21600, cap_per_source=500) is None
-    assert len(conn.executed) == 1, "the candidate query never runs without the view"
 
 
 def test_sreality_is_fetched_by_id_never_by_its_stored_url() -> None:
