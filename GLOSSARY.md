@@ -219,6 +219,12 @@ of any share the author is party to whose collection holds that property, includ
 after the note was marked. Unmarked notes stay private.
 _Avoid_: public note, team note
 
+**Viewing** (UI: "Prohlídka"):
+A note with a date: when its author sees, or saw, the property in person. Its text, which may be
+empty, is what to check there and later what they found. It is shared, carried and split like any
+note. The phone's Prohlídky tab lists the account's own viewings one day at a time.
+_Avoid_: appointment, visit, meeting, event
+
 **Tag**:
 A coloured label an account puts on a property; a property carries any number. A tag filter
 has two sides: must carry every chosen tag, must carry none of the excluded ones; or carry no

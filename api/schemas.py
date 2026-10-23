@@ -14,7 +14,8 @@ from typing import Annotated, Any, Literal
 
 from fastapi import HTTPException
 from pydantic import (
-    AfterValidator, BaseModel, BeforeValidator, Field, TypeAdapter, field_validator, model_validator,
+    AfterValidator, AwareDatetime, BaseModel, BeforeValidator, Field, TypeAdapter, field_validator,
+    model_validator,
 )
 
 from api.location_filter import DistrictChip
@@ -494,13 +495,21 @@ class AddPropertiesToCollectionIn(BaseModel):
 
 
 class CreateNoteIn(BaseModel):
-    body: str = Field(min_length=1, max_length=4000)
+    body: str = Field(default="", max_length=4000)
     # The advert's surrogate id the operator was viewing when they wrote the note —
     # display provenance ("written while viewing this advert") and a split's routing
     # key, never a grouping key. The legacy origin_listing_id column is derived from it.
     origin_listing_ref_id: int | None = None
     # The author's consent mark (migration 610): the parties of a share holding this property may read it.
     shared: bool = False
+    # A viewing is a note with a date (migration 666): when the author sees the property in person.
+    viewing_at: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def _text_or_viewing(self) -> "CreateNoteIn":
+        if not self.body and self.viewing_at is None:
+            raise ValueError("a note needs text or a viewing date")
+        return self
 
 
 ShareMode = Literal["read", "edit"]
@@ -551,8 +560,17 @@ class CreateTagIn(BaseModel):
 
 
 class UpdateNoteIn(BaseModel):
-    body: str | None = Field(default=None, min_length=1, max_length=4000)
+    # Empty only on a viewing (the table's check); `viewing_at` sent as null clears the date,
+    # left out keeps it.
+    body: str | None = Field(default=None, max_length=4000)
     shared: bool | None = None
+    viewing_at: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def _text_or_viewing(self) -> "UpdateNoteIn":
+        if self.body == "" and "viewing_at" in self.model_fields_set and self.viewing_at is None:
+            raise ValueError("a note needs text or a viewing date")
+        return self
 
 
 class UpdateTagIn(BaseModel):

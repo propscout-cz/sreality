@@ -2530,19 +2530,24 @@ export const listPropertyNotes = (
 
 export const createPropertyNote = (
   property_id: number,
-  body: string,
-  // The viewed listing's surrogate id — the note's provenance.
-  origin_listing_ref_id?: number,
-  // The author's share mark; private when omitted.
-  shared?: boolean,
+  note: {
+    body: string;
+    // The viewed listing's surrogate id — the note's provenance.
+    origin_listing_ref_id?: number;
+    // The author's share mark; private when omitted.
+    shared?: boolean;
+    // A viewing is a note with a date (migration 666); the body may then be empty.
+    viewing_at?: string | null;
+  },
   { actAs }: Acting = {},
 ): Promise<Note> =>
   request<Note>(`/properties/${property_id}/notes`, {
     method: 'POST',
     json: {
-      body,
-      ...(shared != null ? { shared } : {}),
-      ...(origin_listing_ref_id != null ? { origin_listing_ref_id } : {}),
+      body: note.body,
+      ...(note.shared != null ? { shared: note.shared } : {}),
+      ...(note.origin_listing_ref_id != null ? { origin_listing_ref_id: note.origin_listing_ref_id } : {}),
+      ...(note.viewing_at != null ? { viewing_at: note.viewing_at } : {}),
     },
     actAs,
   });
@@ -2551,7 +2556,8 @@ export const createPropertyNote = (
 export const updatePropertyNote = (
   property_id: number,
   note_id: number,
-  patch: { body?: string; shared?: boolean },
+  /* viewing_at: null clears the date, left out keeps it. */
+  patch: { body?: string; shared?: boolean; viewing_at?: string | null },
   { actAs }: Acting = {},
 ): Promise<Note> =>
   request<Note>(`/properties/${property_id}/notes/${note_id}`, {
@@ -2559,6 +2565,9 @@ export const updatePropertyNote = (
     json: patch,
     actAs,
   });
+
+/* The caller's own viewings across every property, earliest first (the Prohlídky tab). */
+export const listViewings = (): Promise<{ data: Note[] }> => request<{ data: Note[] }>('/viewings');
 
 export const deletePropertyNote = (
   property_id: number,

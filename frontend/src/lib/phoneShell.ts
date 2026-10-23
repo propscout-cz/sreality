@@ -71,10 +71,11 @@ export function usePhoneShell(): boolean {
 export const TAB_BAR_INSET = 'max(8px, env(safe-area-inset-bottom))';
 export const TAB_BAR_SPACE = `calc(56px + ${TAB_BAR_INSET})`;
 
-/* The five areas of the bottom tab bar: the four of W1 and Odkaz (paste a
- * link, W2 #1767). `owns` decides which tab a path belongs to: a collection's
- * own page is under Sbírky, a broker's under Makléři. */
-export type PhoneTabKey = 'feed' | 'pipeline' | 'collections' | 'brokers' | 'link';
+/* The six areas of the bottom tab bar: the four of W1, Odkaz (paste a link,
+ * W2 #1767) and Prohlídky (my viewings, migration 666). `owns` decides which
+ * tab a path belongs to: a collection's own page is under Sbírky, a broker's
+ * under Makléři. */
+export type PhoneTabKey = 'feed' | 'pipeline' | 'viewings' | 'collections' | 'brokers' | 'link';
 
 export interface PhoneTab {
   key: PhoneTabKey;
@@ -89,6 +90,7 @@ const under = (pathname: string, root: string): boolean =>
 export const PHONE_TABS: ReadonlyArray<PhoneTab> = [
   { key: 'feed', label: 'Nové', to: ROUTES.feed.build(), owns: (p) => under(p, ROUTES.feed.pattern) },
   { key: 'pipeline', label: 'Pipeline', to: ROUTES.pipeline.build(), owns: (p) => under(p, ROUTES.pipeline.pattern) },
+  { key: 'viewings', label: 'Prohlídky', to: ROUTES.viewings.build(), owns: (p) => under(p, ROUTES.viewings.pattern) },
   {
     key: 'collections',
     label: 'Sbírky',
