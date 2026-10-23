@@ -1778,7 +1778,14 @@ renumber.** Navigate by area:
     Přehled (`PropertyOverview`, its own chunk) answers each question in one card — the
     description, then the adverts with a simple chart of each one's price, then the ask against our
     estimate's band on the valuation ruler; beside them the brokers with their contact and the sold
-    median — each from the SAME query and rule as the tab it opens, so the two never disagree.
+    median — each from the SAME query and rule as the tab it opens, so the two never disagree; then,
+    full width, the "Trh v okolí" tile (`MarketTile`, 2026-10-23): the account's dashboard named
+    "Trh v okolí" (set up in Browse › Statistiky) drawn over ONE neighbourhood definition,
+    `lib/neighbourhood` — the property's type, deal, disposition and ownership (one it does not state is
+    left unset and named), Browse's centre + radius around it (250 m – 2 km, 500 m default, the square
+    every Browse reader filters on), the user's building material and condition, under the Stats lens
+    "Prodáno (trh)" (default) or "Vše". Its "Prozkoumat okolí" opens the explore window (the one entry
+    point; the minimap carries none) over the same filter, lens and dashboard, Stats tab open.
     Fotky is "Moje fotky" then the advert's photos; Cena a hodnota is, in the operator's order, the
     price history, Valuo, the registered sales (reas.cz), then our estimation chapter. The open tab
     is `?tab=` (switched with `replace`, so Back still leaves the page); an address without it opens

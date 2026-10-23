@@ -8,11 +8,12 @@ import ErrorBanner from '@/components/ErrorBanner';
 import Skeleton from '@/components/Skeleton';
 import { Segmented } from '@/components/controls';
 import {
+  MARKET_CAPTION,
   MAX_CHARTS,
   fetchDashboard,
+  marketSample,
   newChart,
   saveDashboard,
-  soldMarketFilters,
   statsDashboardKey,
   type ChartSpec,
   type StatsMarket,
@@ -60,9 +61,9 @@ export default function StatsDashboard({
     }
   });
 
-  /* What every chart counts: the Browse filter, or the sold market over it. */
-  const sold = market?.value === 'sold';
-  const sample = useMemo(() => (sold ? soldMarketFilters(filters) : filters), [sold, filters]);
+  /* What every chart counts: the Browse filter, or a market lens over it. */
+  const lens = market?.value ?? 'filter';
+  const sample = useMemo(() => marketSample(filters, lens), [lens, filters]);
 
   const board = useQuery<ChartSpec[], Error>({
     queryKey: statsDashboardKey,
@@ -136,17 +137,14 @@ export default function StatsDashboard({
           options={[
             { value: 'filter' as const, label: 'Jako ve filtru' },
             { value: 'sold' as const, label: 'Prodáno (trh)' },
+            { value: 'all' as const, label: 'Vše' },
           ]}
           value={market.value}
           onChange={market.set}
         />
       ) : null}
       <DismissedSkewNotice filters={sample} onInclude={onIncludeDismissed} />
-      <p className="text-[0.75rem] text-[var(--color-ink-3)]">
-        {sold
-          ? 'Prodáno (trh): jen neaktivní nemovitosti sledované od vzniku, 2–60 dní na trhu, včetně skrytých; ostatní filtry platí.'
-          : 'Každý graf počítá nemovitosti z filtru; sestava grafů je uložená k vašemu účtu.'}
-      </p>
+      <p className="text-[0.75rem] text-[var(--color-ink-3)]">{MARKET_CAPTION[lens]}</p>
       <div className="grid grid-cols-1 items-start gap-5 2xl:grid-cols-2">
         {listed.map((c, i) => (
           <StatsChart

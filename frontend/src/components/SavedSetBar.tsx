@@ -66,7 +66,7 @@ export interface SavedSetBarProps<T extends SavedSetItem> {
   onReorder: (next: T[]) => void;
   /* An item the account owns: it drags, renames, deletes and updates. Default: all. */
   isOwn?: (item: T) => boolean;
-  /* A small ink-3 suffix after the chip's name (a shared chip's owner). */
+  /* A small ink-3 suffix after the chip's name (a shared chip's owner; an own chip's role). */
   suffix?: (item: T) => string | null;
   /* Menu entries the instance adds (between Edit… and Delete on an own chip). */
   chipMenu?: (item: T) => SavedSetMenuItem[];
@@ -205,8 +205,9 @@ export default function SavedSetBar<T extends SavedSetItem>({
     const marked = item.id === activeId && dirty;
     const entries = menu?.id === item.id ? menuFor(item) : null;
     const owner = suffix?.(item);
-    /* "<name> — <by> <owner>": two shared chips of one name stay two for a screen reader. */
-    const ownerLead = ['—', copy.shared?.by].filter(Boolean).join(' ');
+    /* "<name> — <by> <owner>": two shared chips of one name stay two for a screen reader;
+     * an own chip's suffix is its role, read without "by". */
+    const ownerLead = ['—', isOwn(item) ? null : copy.shared?.by].filter(Boolean).join(' ');
     const named = owner ? `${item.name} ${ownerLead} ${owner}` : item.name;
     const editedHint = isOwn(item) ? copy.editedHint : (copy.shared?.editedHint ?? copy.editedHint);
     /* The accent is the chip's colour (shared tag palette) or copper when

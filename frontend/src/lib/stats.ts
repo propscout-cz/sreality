@@ -24,6 +24,7 @@ import { categoryMainLabelPlural, categoryTypeLabel } from './enums';
 import { filterById } from './filterRegistry.generated';
 import { fmtCount } from './format';
 import { csCollator } from './collator';
+import type { StatsMarket } from './statsMarket';
 import type { SavedDashboard, TagColor } from './types';
 import {
   STATS_REGISTRY,
@@ -217,10 +218,13 @@ const dashboardPath = (id: string, tail = ''): string =>
 export const listStatsDashboards = (): Promise<DashboardList> =>
   apiGet<DashboardList>('/stats/dashboards');
 
-/* The Stats tab's sample lens (operator 2026-10-22). "filter" = the Browse filter as set;
- * "sold" = the sold market over it: inactive only, seen from birth, dismissed included,
- * 2–60 days on market; every other filter holds. Browse's own filter never changes. */
-export type StatsMarket = 'filter' | 'sold';
+/* The Stats tab's sample lens (operator 2026-10-22; "all" 2026-10-23). "filter" = the
+ * Browse filter as set; "sold" = the sold market over it: inactive only, seen from birth,
+ * dismissed included, 2–60 days on market; "all" = every listing it covers, active and
+ * inactive, dismissed included, with no time-on-market bound. Every other filter holds;
+ * Browse's own filter never changes. The property page's "Trh v okolí" tile offers the
+ * same "sold" and "all" (lib/neighbourhood). */
+export { isStatsMarket, type StatsMarket } from './statsMarket';
 export const SOLD_MARKET_DAYS = { min: 2, max: 60 } as const;
 export const soldMarketFilters = (f: ListingFilters): ListingFilters => ({
   ...f,
@@ -230,6 +234,23 @@ export const soldMarketFilters = (f: ListingFilters): ListingFilters => ({
   tomDaysMin: SOLD_MARKET_DAYS.min,
   tomDaysMax: SOLD_MARKET_DAYS.max,
 });
+export const allMarketFilters = (f: ListingFilters): ListingFilters => ({
+  ...f,
+  status: 'any',
+  tomObservedOnly: false,
+  showDismissed: true,
+  tomDaysMin: null,
+  tomDaysMax: null,
+});
+/* The sample a lens counts. */
+export const marketSample = (f: ListingFilters, market: StatsMarket): ListingFilters =>
+  market === 'sold' ? soldMarketFilters(f) : market === 'all' ? allMarketFilters(f) : f;
+export const MARKET_CAPTION: Record<StatsMarket, string> = {
+  filter: 'Každý graf počítá nemovitosti z filtru; sestava grafů je uložená k vašemu účtu.',
+  sold: 'Prodáno (trh): jen neaktivní nemovitosti sledované od vzniku, 2–60 dní na trhu, včetně skrytých; ostatní filtry platí.',
+  all: 'Vše: aktivní i neaktivní nemovitosti, včetně skrytých, bez omezení doby na trhu; ostatní filtry platí.',
+};
+
 
 export const createStatsDashboard = (input: {
   name: string;

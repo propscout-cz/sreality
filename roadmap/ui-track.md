@@ -7,6 +7,18 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Property page: the "Trh v okolí" dashboard tile (2026-10-23, no migration)
+- **Done** (operator ask + rulings 2026-10-23): Přehled ends with a full-width tile drawing the account's
+  dashboard named "Trh v okolí" (Browse › Statistiky offers "+ Trh v okolí · karta nemovitosti"; its chip says
+  "karta nemovitosti") over the property's neighbourhood — its type, deal, disposition and ownership (an unstated
+  one is dropped and named), a radius (250 m – 2 km, 500 m default, Browse's centre + radius square), building
+  material and condition chips — under "Prodáno (trh)" (default) or "Vše". ONE neighbourhood definition
+  (`lib/neighbourhood`) also seeds the explore window, which the tile's "Prozkoumat okolí" opens with the same
+  filter, lens and dashboard (the minimap's Explore area button is gone; the 5 km seed deleted). The Stats tab's
+  Vzorek gains "Vše". The reas.cz sold card stays beside it.
+- **Next (offered, not built):** a true circle instead of the square (a new location predicate in the shared
+  compiler, rule 16).
+
 ### Property page, second pass: notes in place, tags in the header (2026-10-23, no migration)
 - **Done** (operator's list, 2026-10-23): the minimap has zoom only (no overlays, no scale, the
   attribution folded to its (i)); the status pill links to the latest active advert; the tags are a

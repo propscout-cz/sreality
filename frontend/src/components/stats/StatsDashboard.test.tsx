@@ -142,7 +142,7 @@ describe('<StatsDashboard>', () => {
     renderBoard({ value: 'sold', set });
     await screen.findAllByRole('heading', { level: 3 });
     const lens = screen.getByRole('group', { name: 'Vzorek' });
-    expect(within(lens).getAllByRole('button').map((b) => b.textContent)).toEqual(['Jako ve filtru', 'Prodáno (trh)']);
+    expect(within(lens).getAllByRole('button').map((b) => b.textContent)).toEqual(['Jako ve filtru', 'Prodáno (trh)', 'Vše']);
     await waitFor(() => expect(vi.mocked(stats.fetchStatsPivot)).toHaveBeenCalled());
     for (const [f] of vi.mocked(stats.fetchStatsPivot).mock.calls) {
       expect(f).toEqual(stats.soldMarketFilters(DEFAULT_FILTERS));
@@ -150,6 +150,17 @@ describe('<StatsDashboard>', () => {
     expect(screen.getByText(/^Prodáno \(trh\): jen neaktivní/)).toBeInTheDocument();
     fireEvent.click(within(lens).getByRole('button', { name: 'Jako ve filtru' }));
     expect(set).toHaveBeenCalledWith('filter');
+  });
+
+  it('counts every chart over all listings under Vše: any status, dismissed included, no time-on-market bound', async () => {
+    vi.mocked(stats.fetchStatsPivot).mockClear();
+    renderBoard({ value: 'all', set: vi.fn() });
+    await screen.findAllByRole('heading', { level: 3 });
+    await waitFor(() => expect(vi.mocked(stats.fetchStatsPivot)).toHaveBeenCalled());
+    for (const [f] of vi.mocked(stats.fetchStatsPivot).mock.calls) {
+      expect(f).toEqual({ ...DEFAULT_FILTERS, status: 'any', showDismissed: true, tomObservedOnly: false, tomDaysMin: null, tomDaysMax: null });
+    }
+    expect(screen.getByText(/^Vše: aktivní i neaktivní/)).toBeInTheDocument();
   });
 
   it('shows no lens where Browse hands none over, and counts the filter as set', async () => {

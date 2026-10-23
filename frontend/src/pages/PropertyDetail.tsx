@@ -26,7 +26,6 @@ import {
   useNewEstimationModal,
   type NewEstimationPrefill,
 } from '@/components/NewEstimationModal';
-import { useExploreAreaModal } from '@/components/ExploreAreaModal';
 import Spinner from '@/components/Spinner';
 import { listingTypeLabel } from '@/lib/enums';
 import { usePageTitle } from '@/lib/pageTitle';
@@ -346,18 +345,11 @@ export default function PropertyDetail() {
             listing={property}
             heightClass="h-[170px]"
             footer={
-              /* Our own market view first, then the external links — where
-                 exactly is this, and what does it sell for. */
-              <div className="space-y-1.5">
-                <ExploreAreaButton listing={property} images={images} />
-                {property.lat != null && property.lng != null && (
-                  <ExternalMapLinks
-                    lat={property.lat}
-                    lng={property.lng}
-                    label={property.display_label}
-                  />
-                )}
-              </div>
+              /* Where exactly is this, elsewhere. The neighbourhood's market
+                 (and "Prozkoumat okolí") is Přehled's Trh v okolí tile. */
+              property.lat != null && property.lng != null ? (
+                <ExternalMapLinks lat={property.lat} lng={property.lng} label={property.display_label} />
+              ) : null
             }
           />
         </div>
@@ -388,6 +380,7 @@ export default function PropertyDetail() {
                 chartAdverts={chartAdverts}
                 snapshots={snapshotsQ.data ?? NO_SNAPSHOTS}
                 lowest={lowest ?? null}
+                images={images}
                 onOpen={setTab}
               />
             </Suspense>
@@ -673,62 +666,6 @@ function NewEstimationButton({ prefill }: { prefill?: NewEstimationPrefill }) {
       <span className="text-[0.95em] leading-none">+</span>
       <span>New estimation</span>
     </button>
-  );
-}
-
-/* Opens the "Explore area" modal (full Browse focused on this property's ~5 km
-   neighbourhood, pre-filtered to its category + disposition). Rendered under the
-   header map via LocationMap's footer, which only shows when the
-   listing has coordinates — the null guard here is defensive. */
-function ExploreAreaButton({
-  listing,
-  images,
-}: {
-  listing: ListingPublic;
-  images: ImagePublic[];
-}) {
-  const { open } = useExploreAreaModal();
-  if (listing.lat == null || listing.lng == null) return null;
-  const label = [listing.display_label, listing.disposition]
-    .filter(Boolean)
-    .join(' · ');
-  return (
-    <button
-      type="button"
-      onClick={() =>
-        open({
-          lat: listing.lat as number,
-          lng: listing.lng as number,
-          categoryMain: listing.category_main,
-          categoryType: listing.category_type,
-          disposition: listing.disposition,
-          label: label || undefined,
-          // The property we came FROM — already loaded on this page, passed
-          // through (no refetch) to pin it on the modal map + show its photos
-          // and facts in the modal's top panel.
-          origin: { listing, images },
-        })
-      }
-      className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-[0.8rem] rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] text-[var(--color-ink-2)] hover:border-[var(--color-copper)] hover:text-[var(--color-copper)] transition-colors"
-      title="Explore the surrounding market on the map — same disposition, all layers"
-    >
-      <MapPinGlyph />
-      <span>Explore area</span>
-    </button>
-  );
-}
-
-function MapPinGlyph() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path
-        d="M8 1.5c2.5 0 4.5 2 4.5 4.5 0 3-4.5 8-4.5 8S3.5 9 3.5 6C3.5 3.5 5.5 1.5 8 1.5z"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinejoin="round"
-      />
-      <circle cx="8" cy="6" r="1.6" stroke="currentColor" strokeWidth="1.2" />
-    </svg>
   );
 }
 

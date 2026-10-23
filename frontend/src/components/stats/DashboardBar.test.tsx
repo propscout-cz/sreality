@@ -210,6 +210,29 @@ describe('<DashboardBar> the list', () => {
     expect(screen.queryByRole('button', { name: /^Přesunout dashboard: Od Jany/ })).toBeNull();
   });
 
+  it('offers to create the property card\'s "Trh v okolí" dashboard from the working board while none exists', async () => {
+    const template = row({ id: 'd-tpl', name: 'Trh v okolí', charts: [A] });
+    vi.mocked(listStatsDashboards)
+      .mockResolvedValueOnce({ data: LIST, total: LIST.length })
+      .mockResolvedValue({ data: [...LIST, template], total: LIST.length + 1 });
+    vi.mocked(createStatsDashboard).mockResolvedValue(template);
+    renderBar();
+    fireEvent.click(await chip(/^\+ Trh v okolí/));
+    await waitFor(() => expect(createStatsDashboard).toHaveBeenCalledWith({ name: 'Trh v okolí', charts: [A] }));
+    // Created, it is a chip that names its role — read without "sdílí" — and the offer is gone.
+    expect(await chip('Trh v okolí — karta nemovitosti')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^\+ Trh v okolí/ })).toBeNull();
+    await waitFor(() => expect(url().get('dashboard')).toBe('d-tpl'));
+  });
+
+  it('never takes a shared "Trh v okolí" for the account\'s own template', async () => {
+    const foreign = row({ ...SHARED, id: 'd-foreign', name: 'Trh v okolí' });
+    vi.mocked(listStatsDashboards).mockResolvedValue({ data: [OWN, foreign], total: 2 });
+    renderBar();
+    expect(await chip(/^\+ Trh v okolí/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Trh v okolí — sdílí jana@example.com' })).toBeInTheDocument();
+  });
+
   it('keeps two shared chips of one name apart for a screen reader', async () => {
     const twin = row({ ...SHARED, id: 'd-twin', owner_email: 'petr@example.com' });
     vi.mocked(listStatsDashboards).mockResolvedValue({ data: [SHARED, twin], total: 2 });

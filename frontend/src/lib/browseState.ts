@@ -17,7 +17,6 @@ import { useCallback, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   DEFAULT_FILTERS,
-  bboxAround,
   fromSearchParams,
   pipelineViewFilters,
   readPresetSpec,
@@ -40,8 +39,8 @@ import {
   useRememberedLayers,
   writeRememberedLayers,
 } from '@/lib/mapOverlays';
-import type { Disposition, FilterPreset, ListingPublic, SavedDashboard } from '@/lib/types';
-import type { StatsMarket } from '@/lib/stats';
+import type { FilterPreset, ListingPublic, SavedDashboard } from '@/lib/types';
+import { isStatsMarket, type StatsMarket } from '@/lib/statsMarket';
 
 export type TabKey = 'map' | 'stats';
 
@@ -195,7 +194,8 @@ export function useUrlBrowseState(): BrowseViewState {
   }, [searchParams, rememberedLayers]);
   const activePresetId = searchParams.get('preset');
   const activeDashboardId = searchParams.get('dashboard');
-  const statsMarket: StatsMarket = searchParams.get('market') === 'sold' ? 'sold' : 'filter';
+  const marketParam = searchParams.get('market');
+  const statsMarket: StatsMarket = isStatsMarket(marketParam) ? marketParam : 'filter';
 
   const preserveExtras = useCallback(
     (sp: URLSearchParams): URLSearchParams => {
@@ -300,7 +300,7 @@ export function useUrlBrowseState(): BrowseViewState {
   const setStatsMarket = useCallback(
     (next: StatsMarket) => {
       const sp = new URLSearchParams(searchParams);
-      if (next === 'sold') sp.set('market', 'sold');
+      if (next !== 'filter') sp.set('market', next);
       else sp.delete('market');
       setSearchParams(sp, { replace: true });
     },
@@ -407,10 +407,6 @@ export function useMemoryBrowseState(init: {
 const CATEGORY_MAINS = ['byt', 'dum', 'komercni', 'pozemek', 'ostatni'] as const;
 const CATEGORY_TYPES = ['prodej', 'pronajem'] as const;
 
-/* Default viewport span when opening Browse focused on a property: the camera
- * frames ~5 km across and the cohort is "everything in that viewport". */
-export const EXPLORE_VIEWPORT_KM = 5;
-
 /* The property the operator opened "Explore area" FROM. Carried through the
  * payload from the trigger site (where it's already fully loaded), never
  * re-fetched — so the anchor pin + the origin-property panel show EXACTLY the
@@ -422,41 +418,6 @@ export interface ExploreOrigin {
   listing: ListingPublic;
   images: ImageRef[];
 }
-
-export interface ExploreAreaSeed {
-  lat: number;
-  lng: number;
-  categoryMain: string | null;
-  categoryType: string | null;
-  disposition: Disposition | null;
-  origin?: ExploreOrigin;
-}
-
-/* Build the modal's initial cohort filter from a listing: same category +
- * disposition, scoped to a ~5 km viewport around the property's coordinates.
- * Disposition is dropped when null (komerční / pozemek / unparsed). Category
- * falls back to the Browse default if the listing isn't one of the three the
- * UI supports (e.g. pozemek) — Browse can't render those anyway. */
-export const browseFiltersForArea = (
-  seed: ExploreAreaSeed,
-  km: number = EXPLORE_VIEWPORT_KM,
-): ListingFilters => {
-  const categoryMain: ListingFilters['categoryMain'] =
-    (CATEGORY_MAINS as readonly string[]).includes(seed.categoryMain ?? '')
-      ? [seed.categoryMain as ListingFilters['categoryMain'][number]]
-      : [...DEFAULT_FILTERS.categoryMain];
-  const categoryType = (CATEGORY_TYPES as readonly string[]).includes(seed.categoryType ?? '')
-    ? (seed.categoryType as ListingFilters['categoryType'])
-    : DEFAULT_FILTERS.categoryType;
-  return {
-    ...DEFAULT_FILTERS,
-    categoryMain,
-    categoryType,
-    dispositions: seed.disposition ? [seed.disposition] : [],
-    bounds: bboxAround(seed.lat, seed.lng, km),
-    locationMode: 'viewport',
-  };
-};
 
 /* The broker-explore modal's seed: the broker page's OWN Typ/Nabídka pill
  * selection (BrokerDetail.tsx), carried over so filtering the inventory table
@@ -512,7 +473,7 @@ export const browseUrlFromState = (s: {
   if (!s.overlay.priceLabels) sp.set('labels', '0');
   if (s.overlay.pinLimit !== PIN_LIMIT_DEFAULT) sp.set('pins', String(s.overlay.pinLimit));
   if (s.activeDashboardId) sp.set('dashboard', s.activeDashboardId);
-  if (s.statsMarket === 'sold') sp.set('market', 'sold');
+  if (s.statsMarket && s.statsMarket !== 'filter') sp.set('market', s.statsMarket);
   const qs = sp.toString();
   // Concatenated rather than withQuery(): `sp` is built here key by key and may
   // one day carry a repeated key, which a Record round-trip would collapse.
