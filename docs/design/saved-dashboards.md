@@ -157,11 +157,21 @@ Dashboards (`api/routes/stats_dashboards.py`, mounted like the presets router):
   "Přestat sledovat"; an own chip's menu offers "Přejmenovat", "Duplikovat" (a new row as stored, named
   "<name> (kopie)", the active dashboard untouched — operator ask 2026-10-22), "Sdílet…" (a small modal holding
   `ShareBlock`, no modes, `lang="cs"`) and "Smazat" (two-step).
-- **The sample lens** (operator ask 2026-10-22): a two-way control "Vzorek" at the top of the Stats tab,
-  "Jako ve filtru" (the Browse filter as set) or "Prodáno (trh)" (`lib/stats.soldMarketFilters`: inactive only,
-  seen from birth, dismissed included, 2–60 days on market; every other filter holds). It applies to whatever
-  dashboard is loaded, lives in the URL (`market=sold`, replace) and is never stored with a dashboard; Browse's
-  own filter, the dirty check and "Uložit změny" never see it.
+- **The sample lens** (operator ask 2026-10-22; "Vše" 2026-10-23): a control "Vzorek" at the top of the Stats
+  tab, "Jako ve filtru" (the Browse filter as set), "Prodáno (trh)" (`lib/stats.soldMarketFilters`: inactive only,
+  seen from birth, dismissed included, 2–60 days on market) or "Vše" (`allMarketFilters`: active and inactive,
+  dismissed included, no time-on-market bound); every other filter holds (`marketSample`). It applies to whatever
+  dashboard is loaded, lives in the URL (`market=sold|all`, replace; `lib/statsMarket` keeps the name and guard
+  out of the first-visit bundle) and is never stored with a dashboard; Browse's own filter, the dirty check and
+  "Uložit změny" never see it.
+- **The property card's dashboard** (operator ask 2026-10-23): the account's OWN dashboard named exactly
+  "Trh v okolí" (`lib/neighbourhood.MARKET_TEMPLATE_NAME`, `isMarketTemplate`; the first such by position; a
+  shared one never counts) is drawn by the property page's "Trh v okolí" tile over that property's neighbourhood.
+  Its chip's suffix says "karta nemovitosti"; while the account has none, the bar leads with
+  "+ Trh v okolí · karta nemovitosti", which saves the working board under that name (no filter) and activates
+  it. It is edited like any dashboard (load, edit, "Uložit změny"); a filter stored with it is ignored by the
+  tile, whose sample is `lib/neighbourhood`'s. Renaming it un-makes it the template. No schema: a name, not a
+  flag (ruled 2026-10-23: one reserved dashboard).
 - **Every Stats tab is the same tab** (operator ask 2026-10-22): the explore modals show the dashboard bar and the
   lens exactly as the Browse page does — one component, no `presetBar` gate; the modals' memory view state holds
   the active dashboard and the lens as the URL does, and "Go to Browse" carries both (`dashboard`, `market`).

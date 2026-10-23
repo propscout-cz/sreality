@@ -5,7 +5,10 @@
  * one board write, `onLoadCharts` — then writes the URL (browseState.
  * loadDashboard); it changes only on "Uložit změny". An own dashboard can be
  * duplicated as stored ("Duplikovat": a new row, "<name> (kopie)"). A dashboard
- * shared WITH the account is read-only: Načíst, Uložit jako vlastní, Přestat sledovat. */
+ * shared WITH the account is read-only: Načíst, Uložit jako vlastní, Přestat sledovat.
+ * The own dashboard named "Trh v okolí" is the property page's tile (lib/neighbourhood):
+ * its chip says "karta nemovitosti", and while the account has none the bar offers to
+ * create it from the working board. */
 
 import { useEffect, useId, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -23,6 +26,7 @@ import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import Dialog, { DialogClose } from '@/components/Dialog';
 import SavedSetBar, { useSavedSet, type SavedSetCopy, type SavedSetMenuItem } from '@/components/SavedSetBar';
 import ShareBlock from '@/components/ShareBlock';
+import { MARKET_TEMPLATE_NAME, isMarketTemplate } from '@/lib/neighbourhood';
 
 export type DashboardView = Pick<
   BrowseViewState,
@@ -259,6 +263,24 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
 
   if (!enabled) return null;
   const sharing = items.find((d) => d.id === sharingId);
+  /* The first own one of that name is the template, as the tile reads it. */
+  const template = items.find(isMarketTemplate);
+  const createTemplate =
+    query.isSuccess && template == null ? (
+      <button
+        type="button"
+        onClick={() =>
+          void create
+            .mutateAsync({ name: MARKET_TEMPLATE_NAME, charts: working })
+            .then((created) => activate(created.id))
+        }
+        disabled={create.isPending}
+        title="Uloží současné grafy jako dashboard „Trh v okolí“, který se ukáže na kartě každé nemovitosti"
+        className="inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-dashed border-[var(--color-rule-strong)] px-2.5 py-1 text-[0.8rem] text-[var(--color-ink-2)] hover:border-[var(--color-copper)] hover:text-[var(--color-copper)] disabled:opacity-50 transition-colors"
+      >
+        + {MARKET_TEMPLATE_NAME} <span className="text-[var(--color-ink-3)]">· karta nemovitosti</span>
+      </button>
+    ) : null;
 
   return (
     <>
@@ -267,8 +289,9 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
         activeId={activeDashboardId}
         dirty={dirty}
         copy={COPY}
-        suffix={(d) => d.owner_email}
+        suffix={(d) => d.owner_email ?? (d.id === template?.id ? 'karta nemovitosti' : null)}
         chipMenu={chipMenu}
+        leading={createTemplate}
         onLoad={load}
         onSaveNew={(name, withFilter, color) =>
           create
