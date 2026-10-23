@@ -178,7 +178,8 @@ begin
   if v_def not like '%settled_at%' then
     raise exception '669: browse_projection does not carry the published rule';
   end if;
-  if v_def not like '%(ll.geom IS NOT NULL OR ll.country_status = ''foreign'')%' then
+  -- pg_get_viewdef re-spells the WHERE (casts, parentheses), so the rule is checked by its tokens.
+  if v_def not like '%ll.geom IS NOT NULL%' or v_def not like '%ll.country_status%foreign%' then
     raise exception '669: browse_projection lost the consumer rule (rule 25)';
   end if;
   if (select count(*) from pg_attribute a
