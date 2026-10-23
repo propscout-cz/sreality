@@ -14,7 +14,7 @@ The characterisation harness W2 refactors against. Three corpora, one recorder:
     EVERY key of the chain at once with distinguishable values, so which key wins is
     recorded rather than assumed.
 
-Each probe records the 26 typed attribute columns (`field_census.ATTRIBUTE_FIELDS`) the
+Each probe records the 27 typed attribute columns (`field_census.ATTRIBUTE_FIELDS`) the
 parse produced. The goldens in `tests/fixtures/field_capture/golden/` were generated from
 the parsers as they stood BEFORE the vocabulary module existed; the refactor is correct
 exactly when they do not move.

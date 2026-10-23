@@ -167,6 +167,19 @@ def test_portal_text_loses_glyphs_the_font_lacks_and_is_escaped():
     assert sheet._clean("Byt 🏡 <b>&") == "Byt  &lt;b&gt;&amp;"
 
 
+def test_the_broker_block_quotes_each_ads_reference_and_dashes_a_missing_one():
+    from reportlab.platypus import Paragraph
+
+    jana = {**BROKERS[0], "ads": [{**ADS[0], "ad_reference": "N2617152"},
+                                  {**ADS[1], "ad_reference": None}]}
+    block = sheet._broker_block(jana, sheet._styles())
+    texts = [f.text for f in block._content if isinstance(f, Paragraph)]
+    assert any(sheet._portal(ADS[0]) in t and "N2617152" in t for t in texts)
+    # No number printed: the portal and a dash — never the portal's own id in its place.
+    assert any(t.endswith(f"{sheet._portal(ADS[1])}{sheet.NBSP * 2}—</font>") for t in texts)
+    assert not any("43" in t for t in texts)
+
+
 def test_a_masked_contact_says_hidden_never_none():
     assert "skrytý" in sheet._contact("Telefon", None, True, None)
     assert sheet._contact("Telefon", None, False, None) is None

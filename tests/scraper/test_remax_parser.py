@@ -298,7 +298,8 @@ def test_parse_detail_full():
     assert listing.terrace is None
     assert listing.furnished == "ano"
     assert listing.description.startswith("K prodeji")
-    assert listing.raw["remax_ref"] == "ID 259-NP01246"
+    assert listing.ad_reference == "ID 259-NP01246"
+    assert "remax_ref" not in listing.raw
     # Only this listing's images, full-resolution (no _th350), recommended excluded.
     assert listing.raw["image_urls"] == [
         "https://mlsf.remax-czech.cz/data//zs/440872/3387561.jpg",

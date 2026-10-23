@@ -1084,6 +1084,30 @@ export const fetchProperty = async (
   };
 };
 
+/* The few facts a viewing's row names its property by, for a set of properties
+ * (the Prohlídky tab): the same `properties_public` row the property page reads. */
+const PROPERTY_SUMMARY_COLS =
+  'property_id,listing_id,is_active,category_main,category_type,disposition,subtype,' +
+  'area_m2,price_czk,display_label';
+
+export type PropertySummary = Pick<
+  CardRow,
+  | 'property_id' | 'is_active' | 'category_main' | 'category_type' | 'disposition' | 'subtype'
+  | 'area_m2' | 'price_czk' | 'display_label'
+> & { listing_id: number | null };
+
+export const fetchPropertySummaries = async (
+  propertyIds: readonly number[],
+  { signal }: PgReadOptions = {},
+): Promise<Map<number, PropertySummary>> => {
+  if (propertyIds.length === 0) return new Map();
+  const { data } = await pgRead<PropertySummary[] | null>(
+    supabase.from('properties_public').select(PROPERTY_SUMMARY_COLS).in('property_id', [...propertyIds]),
+    { signal },
+  );
+  return new Map((data ?? []).map((r) => [r.property_id, r]));
+};
+
 /* An advert address (the natural key, or the legacy sreality id) → the advert's
  * surrogate id and its property, which is all the alias routes need to land on
  * the property page. listings_public is unfiltered, so a just-scraped advert
@@ -1104,7 +1128,7 @@ export const fetchAdvertProperty = async (
 };
 
 const PROPERTY_SOURCE_COLS =
-  'id,property_id,sreality_id,source,source_url,source_id_native,is_active,price_czk,first_seen_at,last_seen_at';
+  'id,property_id,source,source_url,source_id_native,ad_reference,is_active,price_czk,first_seen_at,last_seen_at';
 
 /* Every advert of one property, oldest first — the merged-adverts section's rows. */
 export const fetchPropertySources = async (
@@ -1810,6 +1834,9 @@ export const curationKeys = {
   allPropertyNotes: ['curation', 'property-notes'] as const,
   artifactLinks: ['curation', 'artifact-links'] as const,
   noteCounts: ['curation', 'note-counts'] as const,
+  /* The caller's viewings (migration 666), under every note's prefix: a note write or a share
+   * change that re-reads notes re-reads the Prohlídky tab too. */
+  viewings: ['curation', 'property-notes', 'viewings'] as const,
 };
 
 /* Deal pipeline (migration 205). The "is this property bookmarked + at which

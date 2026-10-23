@@ -358,7 +358,11 @@ WITH RECURSIVE tree(id) AS (
     WHERE p.status = 'merged_away'
 ), item AS (
     SELECT 'property_notes'::text AS tbl, n.id AS row_key, n.account_id, n.created_at AS row_at,
-           'note:' || n.id::text AS item, left(n.body, 60) AS label, NULL::bigint AS stage_id,
+           'note:' || n.id::text AS item,
+           coalesce(nullif(left(n.body, 60), ''),
+                    'Prohlídka ' || to_char(n.viewing_at AT TIME ZONE 'Europe/Prague',
+                                            'FMDD. FMMM. YYYY HH24:MI')) AS label,
+           NULL::bigint AS stage_id,
            NULL::boolean AS live,
            CASE WHEN EXISTS (SELECT 1 FROM listings l WHERE l.id = n.origin_listing_ref_id
                                AND l.property_id = %(left)s)
@@ -469,16 +473,16 @@ _MOVE_SQL: dict[str, str] = {
         "  AND x.sha256_hex = a.sha256_hex)"),
 }
 
-# A copy or a re-created fold (MS18): a note keeps its text, dates, origin ad and shared mark
+# A copy or a re-created fold (MS18): a note keeps its text, dates (its viewing's too), origin ad and shared mark
 # (migration 610; read from its row, wherever it went); a card keeps its stage, last in its column, its dates now; a file
 # its name, date and stored bytes (the same R2 object: originals are never deleted); the rest
 # dated now. Never over a row already there.
 _INSERT_SQL: dict[str, str] = {
     "property_notes": (
         "INSERT INTO property_notes (property_id, body, origin_listing_id, origin_listing_ref_id, "
-        "  created_at, updated_at, shared, account_id) "
+        "  created_at, updated_at, shared, account_id, viewing_at) "
         "SELECT %(to)s, body, origin_listing_id, origin_listing_ref_id, created_at, updated_at, "
-        "  shared, account_id FROM property_notes WHERE id = %(key)s"),
+        "  shared, account_id, viewing_at FROM property_notes WHERE id = %(key)s"),
     "property_pipeline": (
         "INSERT INTO property_pipeline (property_id, stage_id, board_position, account_id) "
         "SELECT %(to)s::bigint, %(stage)s::bigint, coalesce(max(board_position), 0) + 1, "

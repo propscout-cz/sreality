@@ -58,6 +58,8 @@ const AutodedupJudge = lazyChunk(() => import('./pages/AutodedupJudge'));
 // the feed's chunk after its first launch (`/assets/*` cache-first).
 const LinkPage = lazyChunk(() => import('./pages/Link'));
 const Feed = lazyChunk(() => import('./pages/Feed'));
+// Prohlídky, the sixth tab: phone-designed and its own chunk, as the other tabs.
+const PhoneViewings = lazyChunk(() => import('./pages/phone/PhoneViewings'));
 // Where a tapped push lands (notifications push § 3.5): opened from a
 // notification only, so outside the first visit.
 const NotificationOpen = lazyChunk(() => import('./pages/NotificationOpen'));
@@ -112,6 +114,15 @@ export const routes: RouteObject[] = [
           </Suspense>
         ),
         handle: { title: 'Odkaz' },
+      },
+      {
+        path: ROUTES.viewings.childPath,
+        element: (
+          <PhoneSuspense>
+            <PhoneViewings />
+          </PhoneSuspense>
+        ),
+        handle: { title: 'Prohlídky' },
       },
       { path: ROUTES.property.childPath, element: <PropertyDetail />, handle: { title: 'Property' } },
       // Advert addresses, kept forever (emails, the extension, bookmarks): the

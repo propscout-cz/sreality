@@ -7,6 +7,18 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Viewings: "datum prohlídky" on a property, the phone's Prohlídky tab (2026-10-23, migration 666)
+- **Done** (operator ask 2026-10-23): a viewing is a note with a date (`property_notes.viewing_at`; the
+  text optional on a viewing), so it is written, shared, carried and split as a note — no table, carrier
+  or registry of its own. The Poznámky section books one ("Naplánovat prohlídku" in the desktop heading,
+  "Prohlídka" in the composer; native Prague day + time pickers), moves or drops its date in the editor,
+  and leads with the property's upcoming viewings under a calendar leaf. The Phone app's sixth tab,
+  Prohlídky (`/viewings`, `GET /viewings`): the account's own viewings one day at a time in time order,
+  Nadcházející / Vše, arrows + swipe + a date wheel + "Dnes", jumps to the nearest day with a viewing, a
+  "now" rule on today; a row opens its property.
+- **Next (offered, not built):** a push reminder before a viewing; "Přidat do kalendáře" (an .ics file
+  for the iPhone calendar).
+
 ### Property page: "Okolí dashboard", its own tab and its own dashboard (2026-10-23, migration 664)
 - **Done** (operator asks 2026-10-23): the neighbourhood dashboard moved off Přehled onto its own tab,
   "Okolí dashboard". The dashboard it draws is ONE own dashboard per account under any name

@@ -39,7 +39,7 @@ the split is measured, not assumed:
     `parse_errors`, the report WARNs on them, and no heal can reach them.
 
 `portal_raw_payloads` is NOT this seam's substrate and the two are easy to confuse: that one
-is the append-on-change R2-backed archive with a 7-day per-listing floor, whose staleness
+is the append-on-change R2-backed archive, whose 7-day per-listing floor (removed 2026-10-22)
 made an earlier heal skip 89 % of its population (examined=3000, body_stale=2672).
 
 **raw_json is INSUFFICIENT on the HTML portals, and idnes proves it.** Its amenity booleans
@@ -175,9 +175,10 @@ SUBSTRATE: dict[str, PortalSubstrate] = {
 # preserve-if-null at the ingest boundary is not a heal's to clear (an absent value there
 # means "the parser could not read it", never "the portal withdrew it"), and a column in the
 # content hash defers a snapshot to the row's next detail fetch, which
-# `--allow-snapshot-deferral` makes explicit. `area_basis` is the one healable column
-# outside the hash (a provenance stamp, migration 423), so healing it churns nothing. A
-# column joining either definition extends the gate here on its own.
+# `--allow-snapshot-deferral` makes explicit. Two healable columns sit outside the hash —
+# `area_basis` (a provenance stamp, migration 423) and `ad_reference` (the advertiser's own
+# number, migration 667: identity-adjacent like source_url) — so healing either churns
+# nothing. A column joining either definition extends the gate here on its own.
 HEALABLE: tuple[str, ...] = tuple(
     c for c in LISTING_COLUMNS if c not in _PRESERVE_IF_NULL_COLUMNS)
 

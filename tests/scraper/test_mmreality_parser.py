@@ -175,6 +175,7 @@ def test_parse_detail_full_mapping():
     assert listing.source == "mmreality"
     assert listing.source_id_native == "944445"
     assert listing.source_url == url
+    assert listing.ad_reference == "944445"  # M&M's Číslo nabídky is its own offer number
     assert listing.category_main == "byt"
     assert listing.category_type == "prodej"
     assert listing.price_czk == 3_190_000

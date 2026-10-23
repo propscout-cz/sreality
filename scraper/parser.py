@@ -149,6 +149,7 @@ def parse_listing(raw: dict[str, Any]) -> dict[str, Any]:
         # seo names + its closed sub-category codebook; None (counted upstream) when a
         # part is missing, and preserve-if-null at the write so a None never erases.
         "source_url": sreality_url.from_payload(raw)[0],
+        "ad_reference": vocabulary.reference(read("ad_reference")),
     }
 
 

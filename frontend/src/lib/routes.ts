@@ -91,6 +91,8 @@ export const ROUTES = {
   feed: def('/feed'),
   // The Phone app's fifth tab (#1767): paste a portal link, land on its property.
   link: def('/link'),
+  // The Phone app's sixth tab: my viewings, one day at a time (migration 666).
+  viewings: def('/viewings'),
   // THE property page (decision 11): one real property, one stable address.
   property: def('/property/:propertyId'),
   // Advert addresses, kept forever as aliases (bookmarks, emails, the

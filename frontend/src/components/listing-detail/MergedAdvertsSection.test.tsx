@@ -47,10 +47,10 @@ const SOURCES: PropertySource[] = [
   {
     property_id: 42,
     id: 101,
-    sreality_id: 555,
     source: 'sreality',
     source_url: 'https://www.sreality.cz/detail/prodej/byt/2+kk/praha/555',
     source_id_native: '555',
+    ad_reference: 'N2617152',
     is_active: true,
     price_czk: 5_000_000,
     first_seen_at: '2026-01-05T08:00:00Z',
@@ -59,10 +59,10 @@ const SOURCES: PropertySource[] = [
   {
     property_id: 42,
     id: 202,
-    sreality_id: -77,
     source: 'idnes',
     source_url: 'https://reality.idnes.cz/detail/prodej/byt/praha/abc123/',
     source_id_native: 'abc123',
+    ad_reference: 'IDNES-N2617152',
     is_active: false,
     price_czk: 5_200_000,
     first_seen_at: '2025-11-02T08:00:00Z',
@@ -340,11 +340,10 @@ describe('<MergedAdvertsSection> rows', () => {
  * one; 303 and 404, which merges brought, are the other. */
 const FOUR: PropertySource[] = [
   ...SOURCES,
-  { ...SOURCES[1], id: 303, sreality_id: -78, source: 'bazos', source_id_native: 'z9', source_url: null },
+  { ...SOURCES[1], id: 303, source: 'bazos', source_id_native: 'z9', source_url: null },
   {
     ...SOURCES[1],
     id: 404,
-    sreality_id: -79,
     source: 'ceskereality',
     source_id_native: 'c4',
     source_url: 'https://www.ceskereality.cz/prodej/byty/c4.html',
@@ -352,7 +351,7 @@ const FOUR: PropertySource[] = [
 ];
 const FIVE: PropertySource[] = [
   ...FOUR,
-  { ...SOURCES[1], id: 505, sreality_id: -80, source: 'bezrealitky', source_id_native: 'b5', source_url: null },
+  { ...SOURCES[1], id: 505, source: 'bezrealitky', source_id_native: 'b5', source_url: null },
 ];
 const FOUR_ORIGINS = originsOf(
   ownAd(101),

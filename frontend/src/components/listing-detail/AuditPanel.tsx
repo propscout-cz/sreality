@@ -38,7 +38,7 @@ export default function AuditPanel({
                 <th scope="row" className="py-2 pr-4 text-left font-normal text-[var(--color-ink-2)]">
                   {portalLabel(s.source) ?? s.source}
                 </th>
-                <td className="py-2 pr-4 font-mono tabular-nums break-all">{s.source_id_native ?? '—'}</td>
+                <td className="py-2 pr-4 font-mono tabular-nums break-all">{s.source_id_native}</td>
                 <td className="py-2 font-mono tabular-nums text-[var(--color-ink-3)] whitespace-nowrap">
                   {fmtShortDate(s.first_seen_at)} – {s.is_active ? 'dnes' : fmtShortDate(s.last_seen_at)}
                 </td>

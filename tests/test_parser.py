@@ -37,6 +37,13 @@ def test_sreality_id(sample):
     assert parse_listing(sample)["sreality_id"] == 3292504140
 
 
+def test_ad_reference(sample):
+    # The broker's own "ID zakázky", verbatim; a blank code (a private seller's ad) is None.
+    assert parse_listing(sample)["ad_reference"] == "N2617152"
+    assert parse_listing({**sample, "advert_code": "  "})["ad_reference"] is None
+    assert parse_listing({**sample, "advert_code": " KJ "})["ad_reference"] == "KJ"
+
+
 def test_category(sample):
     row = parse_listing(sample)
     assert row["category_main"] == "byt"

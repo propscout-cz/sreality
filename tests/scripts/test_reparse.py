@@ -85,7 +85,7 @@ def test_the_two_registries_still_describe_the_live_contract() -> None:
     outside the content hash — the only one whose heal churns no snapshot anywhere."""
     assert _PRESERVE_IF_NULL_COLUMNS == {"published_at", "source_url"}
     assert set(mod.HEALABLE) == set(LISTING_COLUMNS) - _PRESERVE_IF_NULL_COLUMNS
-    assert set(mod.HEALABLE) - set(_HASH_FIELDS) == {"area_basis"}
+    assert set(mod.HEALABLE) - set(_HASH_FIELDS) == {"area_basis", "ad_reference"}
 
 
 def test_fields_is_validated_against_the_registry() -> None:

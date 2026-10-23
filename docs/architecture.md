@@ -23,7 +23,8 @@ narrative below says its typed fields are "normalised to the same canonical labe
 emits". That is now one table and one module rather than nine copies of each:
 
 - **`scraper/attribute_contract.py`** — the ATTRIBUTE contract: one cell per (portal, typed
-  column), all 9 × 26 declared, carrying the producer (`structured` = named payload keys,
+  column), all 10 × 27 declared (the 27th, `ad_reference` — the advertiser's own offer number, kept
+  verbatim and never hashed — since migration 667), carrying the producer (`structured` = named payload keys,
   `text` = mined from the ad prose, `derived` = the URL/breadcrumb/title, `none`), the source-key
   PRECEDENCE (replacing the inline `params.get(a) or params.get(b)` chains), what a MISSING key
   means (`false` on bezrealitky's real booleans, `unknown` everywhere else), the default
@@ -1756,7 +1757,11 @@ renumber.** Navigate by area:
     display-only line (`priceHistory.lowestActivePrice`), and the chart (with a key) and its dated
     moves draw every advert's own line, labelled by portal. The
     merged-adverts section is the ONLY list of adverts (a singleton's one advert included), each
-    advert's own facts, broker and stored portal link in its row. Every property-grain surface links
+    advert's own facts, broker and stored portal link in its row; the broker card lists no advert
+    -- under each broker's contact it quotes the AD REFERENCE of the ads that broker advertises
+    (`ad_reference`, migration 667: one `<portál> · <číslo>` line per ad, a dash when the ad prints
+    none, never the portal id in its place), on both shells through ONE `BrokerContactCard` and
+    ONE copy behaviour (`lib/clipboard`). Every property-grain surface links
     `propertyPath(property_id)` (`lib/listingUrl`). Old advert addresses -- `/listing/{source}/
     {native}` (emails, the extension), `/listing/{sreality_id}`, `/listing?property=` -- are
     aliases (`AdvertRedirect`) that resolve the advert's property and open its row
@@ -1773,7 +1778,14 @@ renumber.** Navigate by area:
     with none active, the one seen last), its stored URL. The minimap (`DetailMap`) has zoom and
     nothing else: no overlays, no scale, the attribution folded to its (i). Then the notes section
     (`CurationBlock`, read as the acting identity): notes read, written, edited and shared in place,
-    the artifact link (or "+ Odkaz na artefakt") in its header. Under it,
+    the artifact link (or "+ Odkaz na artefakt") in its header. A VIEWING is a note with a date
+    (`property_notes.viewing_at`, migration 666; the text then optional): the composer's "Prohlídka"
+    (desktop: "Naplánovat prohlídku" in the heading) adds a Prague day + time (`lib/viewings`), the
+    property's upcoming viewings lead the list under a calendar leaf, and the phone's sixth tab,
+    Prohlídky (`pages/phone/PhoneViewings`, `GET /viewings` = the acting identity's own), lists them
+    one day at a time — arrows, swipe, a date wheel, Nadcházející / Vše, jumps to the nearest day
+    with one. No table, carrier or registry of its own: a viewing is shared, carried and split as
+    the note it is (the split copy keeps the date). Under it,
     `components/listing-detail/PropertyTabs`: Přehled · Fotky · Cena a hodnota · Okolí dashboard · Inzeráty · Audit.
     Přehled (`PropertyOverview`, its own chunk) answers each question in one card — the
     description, then the adverts with a simple chart of each one's price, then the ask against our
@@ -3662,13 +3674,13 @@ renumber.** Navigate by area:
     `listings.description`. Those are exactly the strings the naive regex mis-read, so
     re-reading them with the fixed grammar IS the heal — no fetch, no object store, no R2.
     **That substrate was chosen the hard way.** The first cut re-parsed the ARCHIVED body out
-    of `portal_raw_payloads` + the bucket and, because the payload writer holds a 7-day
-    per-listing floor, the archive lags the live row; a gate that refused to apply a stale
-    body skipped **89 % of the population** on the first production dry run (examined=3000,
-    would change=85, body_stale=2672), and the heal was very nearly a no-op. `raw_json`
-    cannot lag: it is rewritten by the same transaction that writes the areas, so the
-    staleness question does not arise. **That script is GONE since the field-capture
-    program's W3** — the same heal is now `reparse.yml --source <portal> --fields
+    of `portal_raw_payloads` + the bucket and, because the payload writer then held a 7-day
+    per-listing floor (removed 2026-10-22), the archive lagged the live row; a gate that
+    refused to apply a stale body skipped **89 % of the population** on the first production
+    dry run (examined=3000, would change=85, body_stale=2672), and the heal was very nearly a
+    no-op. `raw_json` cannot lag: it is rewritten by the same transaction that writes the
+    areas, so the staleness question does not arise. **That script is GONE since the
+    field-capture program's W3** — the same heal is now `reparse.yml --source <portal> --fields
     area_m2,estate_area,usable_area,garden_area`, which replays the portal's whole
     `parse_detail` over `portal_raw_pages.html`. That substrate is staged in the SAME drain
     transaction as the listings row, so it cannot lag either, and it carries the page rather
@@ -4356,8 +4368,8 @@ killed run) skips the tick with a `yielded_to=<batch_id>` heartbeat note — not
 the hourly run re-reads its own 15-minute-lag slice, and only new-listing latency degrades to that
 run while a full walk is in progress.
 
-**A PAGE THAT CARRIED NO LOCATION GETS A SECOND LOOK (W8).** ceskereality and realitymix
-geocode an ad AFTER publishing it. Measured 2026-09-14, of the audit page's active "no data" rows
+**A PAGE THAT CARRIED NO LOCATION GETS A SECOND LOOK (W8).** ceskereality and realitymix geocode an
+ad AFTER publishing it. Measured 2026-09-14, of the audit page's active "no data" rows
 (`location_pin_audit_mv`, `state='unresolved'` + `quality='active_no_claims'`) 56 of 63 ceskereality
 and 56 of 112 realitymix listings had been fetched within TWO MINUTES of first sighting and never
 fetched again: our one detail fetch read the page while its location fields were still empty, the
@@ -4365,22 +4377,28 @@ index card never changed afterwards, so nothing ever re-enqueued them and the li
 for ever. Checked live the same day, ceskereality 3876635 now carries "Zlín, ulice Mlýnská" and
 coordinates — so the fix is a re-fetch, not a contract change. The `location_refetch` lane in
 `scraper/realtime_worker.py` runs once a day (`LOCATION_REFETCH_INTERVAL_S`, first tick ~5 minutes
-after start, `LOCATION_REFETCH_ENABLED=0` idles it), asks the audit relation for those rows — joined
-to `listings` by primary key, so the URL it aims at and the row's liveness are current and not an
-hour-old snapshot — keeps the ones whose newest stored page or payload is older than
+after start, `LOCATION_REFETCH_ENABLED=0` idles it), selects the active ads rule 25 calls town-less
+— `location_steps.town_missing_sql()`, the fragment the `location_town_coverage` check counts with,
+carried verbatim in `scraper/db.py` (which imports `location_data` lazily) and pinned by the
+vocabulary rail — so an ad holding only a kraj or okres claim, or one no property represents, is
+re-read too (until 2026-10-22 the lane read the pin-audit matview's `active_no_claims` bucket and
+missed both). It keeps the ones whose newest stored page or payload is older than
 `LOCATION_REFETCH_MIN_AGE_S` (6 h, so a listing discovered today gets its second look on tomorrow's
-tick), and enqueues at most `LOCATION_REFETCH_CAP_PER_SOURCE` (500) per portal, longest-unfetched
-first, into `listing_detail_queue` at `QUEUE_PRIORITY_VERIFY`. It enqueues and nothing else: the
-drain re-fetches and rewrites the page, the fast intake lane mines the new body within a minute, the
-resolver answers. `enqueue_location_refetch` is its own writer rather than `enqueue_detail` because
-the two directions differ — `LEAST` on priority (a second look must never promote a row above the
-new listings the drain is fetching) and `given_up=false, attempts=0`, since the rows it most wants
-are exactly the ones the drain gave up on and no claim can see (rule #5). The bound is what makes it
-polite: bazos's share of that bucket is dead ads whose page answers with the category listing, which
-raises `ListingGoneError` and delists the row, so a portal carrying thousands of them drains over
-days instead of flooding one drain pass. A daily lane never reads as a dead one: the `jobs` check
-calls a lane late only past max(3 × its interval, its interval + 2 × its last pass's duration,
-15 min) since its last pass.
+tick; there is no first-seen term, so the lane acts before the check judges), and enqueues at most
+`LOCATION_REFETCH_CAP_PER_SOURCE` (500) per portal, longest-unfetched first, into
+`listing_detail_queue` at `QUEUE_PRIORITY_VERIFY`. It enqueues and nothing else: the drain
+re-fetches and rewrites the page, the archive appends it (every changed body: the 7-day per-listing
+floor W2a-7 put on `payloads.append_payload` discarded exactly this refetch and was removed
+2026-10-22), the fast intake lane mines it within a minute, the resolver answers.
+`enqueue_location_refetch` is its own writer rather than `enqueue_detail` because the two directions
+differ — `LEAST` on priority (a second look must never promote a row above the new listings the
+drain is fetching) and `given_up=false, attempts=0`, since the rows it most wants are exactly the
+ones the drain gave up on and no claim can see (rule #5). The bound is what makes it polite: bazos's
+share of that bucket is dead ads whose page answers with the category listing, which raises
+`ListingGoneError` and delists the row, so a portal carrying thousands of them drains over days
+instead of flooding one drain pass. A daily lane never reads as a dead one: the `jobs` check calls a
+lane late only past max(3 × its interval, its interval + 2 × its last pass's duration, 15 min) since
+its last pass.
 
 **The cursor is the lane's only memory, and every run has a budget.**
 `location_claim_batches.cursor_after_id` holds a `listings.id` in full mode and a
