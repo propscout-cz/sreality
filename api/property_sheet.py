@@ -287,7 +287,14 @@ def _contact(label: str, value: str | None, on_file: bool | None, href: str | No
     return None
 
 
+def _portal(ad: dict[str, Any]) -> str:
+    return escape(label_cs("source", ad.get("source")) or ad.get("source") or "—")
+
+
 def _broker_block(b: dict[str, Any], st: dict[str, ParagraphStyle]) -> KeepTogether:
+    """BrokerContactCard: the two channels, then the AD REFERENCE of each ad this broker
+    advertises (the number its page prints for callers, verbatim); an ad that prints none
+    reads "<portál>  —", never the portal's own id in its place."""
     email = b.get("primary_email")
     phone = b.get("primary_phone")
     lines = [
@@ -295,6 +302,9 @@ def _broker_block(b: dict[str, Any], st: dict[str, ParagraphStyle]) -> KeepToget
                  f"tel:+{phone}" if phone and phone.isdigit() else None),
         _contact("E-mail", email, b.get("has_email"), f"mailto:{email}" if email else None),
     ]
+    for ad in b.get("ads") or []:
+        lines.append(_contact(_portal(ad), ad.get("ad_reference"), None, None)
+                     or f'<font color="{_hex(INK_3)}">{_portal(ad)}{NBSP*2}—</font>')
     flow: list[Flowable] = [
         Paragraph(_clean(b.get("broker_display_name") or "Neznámý makléř"), st["name"]),
         Paragraph(_clean(b.get("broker_firm_label") or "nezávislý / neznámá kancelář"), st["small"]),
@@ -312,7 +322,7 @@ def _ads_table(ads: list[dict[str, Any]], canonical_id: int, st: dict[str, Parag
         Paragraph("Poprvé viděn", st["th"]),
     ]]
     for ad in ads:
-        portal = escape(label_cs("source", ad.get("source")) or ad.get("source") or "—")
+        portal = _portal(ad)
         if ad.get("id") == canonical_id:
             portal += f'<font color="{_hex(INK_3)}">{NBSP}· hlavní inzerát</font>'
         cell: list[Flowable] = [Paragraph(portal, st["value"])]
