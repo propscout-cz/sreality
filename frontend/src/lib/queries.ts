@@ -945,9 +945,9 @@ export const buildBrowseStatsArgs = (
     garden_area_min_filter:  f.gardenAreaMin,
     garden_area_max_filter:  f.gardenAreaMax,
     parking_lots_min_filter: f.parkingLotsMin,
-    /* The portal rule (portal_status_matches): the status is the property's. */
-    active_only_filter:      f.status === 'active',
-    inactive_only_filter:    f.status === 'inactive',
+    /* The portal rule (portal_status_matches): the status is the property's,
+     * one value as the list sends it (migrations 661/662). */
+    status_filter:           f.status,
     last_seen_min_days:      f.lastSeenMinDays,
     last_seen_max_days:      f.lastSeenMaxDays,
     first_seen_min_days:     f.firstSeenMinDays,

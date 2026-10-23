@@ -37,7 +37,7 @@ _TABLE = json.loads(
     (Path(__file__).resolve().parent / "fixtures" / "portal_rule.json").read_text(encoding="utf-8"))
 CASES = _TABLE["cases"]
 BROKER_CASES = _TABLE["broker_cases"]
-_STATUS_ARGS = {"any": (False, False), "active": (True, False), "inactive": (False, True)}
+_STATUSES = ("any", "active", "inactive")
 _PORTALS = [o.value for o in PORTAL_OPTIONS]
 _IDS = itertools.count(970_000_001)
 
@@ -52,7 +52,7 @@ def _ids(cases: list[dict[str, Any]]) -> list[str]:
 def test_the_table_covers_every_arm_both_ways() -> None:
     seen = {(min(len(c["portals"]), 2), min(len(c["excluded"]), 1), c["status"], c["expected"])
             for c in CASES}
-    for key in itertools.product((0, 1, 2), (0, 1), _STATUS_ARGS, (True, False)):
+    for key in itertools.product((0, 1, 2), (0, 1), _STATUSES, (True, False)):
         if key == (0, 0, "any", False):
             continue  # no portal, no exclusion and no status is no constraint
         assert key in seen, key
@@ -117,9 +117,8 @@ def test_the_watchdogs_clauses_are_the_any_arm(conn, case: dict[str, Any]) -> No
 
 
 def _rpc_args(case: dict[str, Any]) -> dict[str, Any]:
-    active_only, inactive_only = _STATUS_ARGS[case["status"]]
-    return {"portal": case["portals"] or None, "active_only": active_only,
-            "inactive_only": inactive_only, "excluded": case["excluded"] or None,
+    return {"portal": case["portals"] or None, "status": case["status"],
+            "excluded": case["excluded"] or None,
             "excluded_active_only": case["excluded_active_only"]}
 
 
@@ -135,7 +134,7 @@ def test_stats_counts_the_table(conn, case: dict[str, Any]) -> None:
             (next(_IDS), case["is_active"], case["all_sources"], case["active_sources"]))
         cur.execute(
             "select public.browse_stats_properties(portal_filter => %(portal)s::text[], "
-            "active_only_filter => %(active_only)s, inactive_only_filter => %(inactive_only)s, "
+            "status_filter => %(status)s, "
             "portal_excluded_filter => %(excluded)s::text[], "
             "portal_excluded_active_only => %(excluded_active_only)s, "
             "spec => '{\"rows\": [], \"cols\": [], \"measure\": \"price\"}'::jsonb)",
@@ -155,7 +154,7 @@ def test_the_map_cells_count_the_table(conn, case: dict[str, Any]) -> None:
              case["active_sources"]))
         cur.execute(
             "select public.browse_map_cells(portal_filter => %(portal)s::text[], "
-            "active_only_filter => %(active_only)s, inactive_only_filter => %(inactive_only)s, "
+            "status_filter => %(status)s, "
             "portal_excluded_filter => %(excluded)s::text[], "
             "portal_excluded_active_only => %(excluded_active_only)s, point_budget => 2000)",
             _rpc_args(case))

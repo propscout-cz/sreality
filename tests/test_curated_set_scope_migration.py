@@ -191,8 +191,8 @@ def test_every_recreated_function_restates_its_acl_and_nothing_cascades() -> Non
 # conjunct of both RPCs (tests/test_644_condition_unknown_filter.py), 648 appended the energy-rating
 # parameter (tests/test_648_browse_energy_rating_filter.py); the rest is 629's.
 _LATER = {
-    "browse_stats_properties": "657_status_is_the_propertys.sql",
-    "browse_map_cells": "648_browse_energy_rating_filter.sql",
+    "browse_stats_properties": "662_status_filter_contract.sql",
+    "browse_map_cells": "662_status_filter_contract.sql",
 }
 
 

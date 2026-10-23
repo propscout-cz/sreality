@@ -103,7 +103,7 @@ def test_the_revert_restores_644s_statements() -> None:
 
 def test_these_are_the_latest_definitions() -> None:
     # 657 restated the Stats pivot without the status lens (tests/test_657_status_is_the_propertys.py).
-    later = {"browse_stats_properties": "657_status_is_the_propertys.sql"}
+    later = dict.fromkeys(FNS, "662_status_filter_contract.sql")  # 657 the lens, 661/662 the status parameter
     for fn in FNS:
         assert latest_definition(fn).name == later.get(fn, NAME), fn
 
