@@ -136,9 +136,13 @@ def test_the_cohort_where_is_625s_byte_for_byte() -> None:
 
     bt = base_now.index(_ANCHOR.rstrip("\n"))
     base_now = base_now[: bt + 1] + [_ENERGY.rstrip("\n")] + base_now[bt + 1:]
+    # 662 reads the Status filter as one parameter (tests/test_661_662_status_filter.py).
+    st = base_now.index("            case when active_only_filter then 'active' when inactive_only_filter "
+                        "then 'inactive' else 'any' end,")
+    base_now[st] = "            status_filter,"
     start = later.index(base[anchor - 1]) + 1
     end = later.index(base[anchor + 1], start)
-    assert later[:start] + later[end:] == base_now, "the effective WHERE is not 625's minus 640's drop, 644's swap, 648's conjunct, plus one inserted block"
+    assert later[:start] + later[end:] == base_now, "the effective WHERE is not 625's minus 640's drop, 644's swap, 648's conjunct, 662's status, plus one inserted block"
     block = " ".join(later[start:end])
     assert later[start].lstrip().startswith("-- migration 629: the curated-set scope")
     assert all(f"{c}_set" in block for c in ("tags", "collections", "pipeline")), block

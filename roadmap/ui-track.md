@@ -76,9 +76,10 @@ toolkit work.
 - **Card portal badge:** no status word ("portál" / "neaktivní"); it overflowed a narrow card to the
   LEFT and the photo cut "NE", so an ended card read "AKTIVNÍ …". Now bounded by the card, truncated at
   its end, the full list in its tooltip.
-- **Next (owed, not on this path):** the two aggregate RPCs still take the status as two booleans
-  (`active_only_filter` / `inactive_only_filter`); folding them into one parameter is a re-sign that needs a
-  three-step rollout (SPA tolerant first).
+- **One status parameter (2026-10-23, migrations 661 + 662):** the two aggregate RPCs took the Status filter as
+  two booleans (`active_only_filter` / `inactive_only_filter`, four states for a three-value fact). Expand /
+  migrate / contract: 661 adds a trailing `status_filter` (applied before the SPA merge), the SPA sends only it,
+  662 drops the booleans once that SPA is deployed and open tabs have reloaded. One deploy window.
 
 ### Back to Browse keeps the filters (2026-10-22, no migration)
 - **Built:** every way back from a property lands on the filtered Browse view that was left (operator
