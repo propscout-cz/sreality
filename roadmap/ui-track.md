@@ -145,6 +145,10 @@ toolkit work.
   floor area ("180 m² · 850 m² pozemku"; a pozemek's area already is its plot). Same plan and cost as
   the price sort (~90 ms, houses for sale). Owed: the phone property page's line has no lot until
   `properties_public` carries the measure.
+- **Done: Street name sort 2026-10-23** (operator request; migration 665). The cards menu (desktop + phone
+  Řazení) gains "Ulice: A → Z / Z → A" on `browse_list.street_name`, the location ad's street under the
+  Czech collation (Č after C, Ch after H); a property with no street (62% of active) sorts last both
+  ways. A sort key only: the card still prints `display_label`, the street filter stays `ulice_id`.
 - **Shipped (2026-10-22): Advanced → Energy rating (PENB A–G)**, Browse + Watchdog (migration 648:
   `energy_rating_filter` on the Stats and map-tile RPCs; `browse_list` already carried the column). A
   property's rating is the first non-null across its ads; G is also the legal "no certificate"
