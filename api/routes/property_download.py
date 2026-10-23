@@ -70,19 +70,23 @@ def _fetch_all(fetch: Any, keys: list[str]) -> list[bytes]:
 def property_brokers(
     ads: list[dict[str, Any]], by_listing: dict[int, dict[str, Any]], canonical_id: int
 ) -> tuple[list[dict[str, Any]], bool]:
-    """lib/brokers.propertyBrokers: the brokers of the active ads, one per person, the
-    canonical ad's first; with no active ad, those of all its ads, flagged."""
+    """lib/brokers.propertyBrokers: the brokers of the active ads, one per person carrying
+    the ads that person advertises (`ads`), the canonical ad's first; with no active ad,
+    those of all its ads, flagged."""
     active = [a for a in ads if a["is_active"]]
     pool = active or ads
     ordered = sorted(pool, key=lambda a: a["id"] != canonical_id)
-    seen: set[int] = set()
+    seen: dict[int, dict[str, Any]] = {}
     out: list[dict[str, Any]] = []
     for ad in ordered:
         b = by_listing.get(ad["id"])
-        if b is None or b["broker_id"] in seen:
+        if b is None:
             continue
-        seen.add(b["broker_id"])
-        out.append(b)
+        row = seen.get(b["broker_id"])
+        if row is None:
+            row = seen[b["broker_id"]] = {**b, "ads": []}
+            out.append(row)
+        row["ads"].append(ad)
     return out, not active
 
 
@@ -102,7 +106,7 @@ def get_property_download(
         if prop is None:
             raise HTTPException(status_code=404, detail="Property not found")
         cur.execute(
-            "select id, source, source_url, is_active, price_czk, first_seen_at"
+            "select id, source, source_url, ad_reference, is_active, price_czk, first_seen_at"
             " from property_sources_public where property_id = %s"
             " order by first_seen_at, id",
             (property_id,),
