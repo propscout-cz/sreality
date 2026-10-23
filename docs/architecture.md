@@ -1774,13 +1774,14 @@ renumber.** Navigate by area:
     nothing else: no overlays, no scale, the attribution folded to its (i). Then the notes section
     (`CurationBlock`, read as the acting identity): notes read, written, edited and shared in place,
     the artifact link (or "+ Odkaz na artefakt") in its header. Under it,
-    `components/listing-detail/PropertyTabs`: Přehled · Fotky · Cena a hodnota · Inzeráty · Audit.
+    `components/listing-detail/PropertyTabs`: Přehled · Fotky · Cena a hodnota · Okolí dashboard · Inzeráty · Audit.
     Přehled (`PropertyOverview`, its own chunk) answers each question in one card — the
     description, then the adverts with a simple chart of each one's price, then the ask against our
     estimate's band on the valuation ruler; beside them the brokers with their contact and the sold
-    median — each from the SAME query and rule as the tab it opens, so the two never disagree; then,
-    full width, the "Trh v okolí" tile (`MarketTile`, 2026-10-23): the account's dashboard named
-    "Trh v okolí" (set up in Browse › Statistiky) drawn over ONE neighbourhood definition,
+    median — each from the SAME query and rule as the tab it opens, so the two never disagree. The
+    "Okolí dashboard" tab (`MarketTile`, 2026-10-23) draws the account's ONE dashboard marked for it
+    (`stats_dashboards.property_card`, migration 664, any name, never a filter; set up in Browse ›
+    Statistiky) over ONE neighbourhood definition,
     `lib/neighbourhood` — the property's type, deal, disposition and ownership (one it does not state is
     left unset and named), Browse's centre + radius around it (250 m – 2 km, 500 m default, the square
     every Browse reader filters on), the user's building material and condition, under the Stats lens

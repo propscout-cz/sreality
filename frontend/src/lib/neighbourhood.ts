@@ -38,11 +38,12 @@ export const DEFAULT_SCOPE: NeighbourhoodScope = {
   conditionMatch: [],
 };
 
-/* The dashboard the tile draws: the account's own dashboard of this name
- * (Browse › Stats offers to create it; docs/design/saved-dashboards.md). */
-export const MARKET_TEMPLATE_NAME = 'Trh v okolí';
-export const isMarketTemplate = (d: { name: string | null; owner_email: string | null }): boolean =>
-  d.owner_email == null && d.name === MARKET_TEMPLATE_NAME;
+/* The dashboard the property page's "Okolí dashboard" tab draws: the account's ONE
+ * dashboard marked so (migration 664), under any name; Browse › Statistiky creates one
+ * as "Okolí dashboard" or makes any own dashboard it (docs/design/saved-dashboards.md). */
+export const PROPERTY_CARD_LABEL = 'Okolí dashboard';
+export const isPropertyCard = (d: { owner_email: string | null; property_card?: boolean }): boolean =>
+  d.owner_email == null && d.property_card === true;
 
 const registryValues = (id: string): ReadonlySet<string> =>
   new Set((FILTER_REGISTRY.filters.find((f) => f.id === id)?.enum_values ?? []).map((o) => String(o.value)));

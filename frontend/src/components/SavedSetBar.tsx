@@ -70,8 +70,13 @@ export interface SavedSetBarProps<T extends SavedSetItem> {
   suffix?: (item: T) => string | null;
   /* Menu entries the instance adds (between Edit… and Delete on an own chip). */
   chipMenu?: (item: T) => SavedSetMenuItem[];
-  /* The one checkbox the save and update dialogs offer; `initial(null)` on a save. */
-  checkbox?: { label: string; initial: (item: T | null) => boolean };
+  /* The one checkbox the save and update dialogs offer; `initial(null)` on a save. `disabled`
+   * answers why it is greyed out for an item, or null where it is not. */
+  checkbox?: {
+    label: string;
+    initial: (item: T | null) => boolean;
+    disabled?: (item: T | null) => string | null;
+  };
   /* Chips that lead the row and are not saved sets (Browse's Pipeline scope). */
   leading?: ReactNode;
   /* Fold the chips behind a "<label> <count>" toggle: folded, only the active
@@ -375,7 +380,15 @@ export default function SavedSetBar<T extends SavedSetItem>({
           words={copy}
           mode={modal.mode}
           initial={modal.item}
-          checkbox={checkbox && modal.mode !== 'edit' ? { label: checkbox.label, initial: checkbox.initial(modal.item) } : null}
+          checkbox={
+            checkbox && modal.mode !== 'edit'
+              ? {
+                  label: checkbox.label,
+                  initial: checkbox.initial(modal.item),
+                  disabledHint: checkbox.disabled?.(modal.item) ?? null,
+                }
+              : null
+          }
           onSubmit={(name, checked, color) =>
             (modal.mode === 'save'
               ? onSaveNew(name, checked, color)

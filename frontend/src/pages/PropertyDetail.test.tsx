@@ -487,6 +487,13 @@ describe('<PropertyDetail> tabs', () => {
     expect(await screen.findByRole('button', { name: 'Štítky' })).toBeInTheDocument();
   });
 
+  it('gives the neighbourhood dashboard its own tab, Okolí dashboard', async () => {
+    renderAt('/property/774?tab=okoli');
+    await screen.findByRole('heading', { level: 1 });
+    expect(selected()).toHaveTextContent('Okolí dashboard');
+    expect(await screen.findByRole('region', { name: 'Okolí dashboard' }, { timeout: 5000 })).toBeInTheDocument();
+  });
+
   it('sends the retired Trh v okolí address to Cena a hodnota', async () => {
     renderAt('/property/774?tab=trh');
     await screen.findByRole('heading', { level: 1 });

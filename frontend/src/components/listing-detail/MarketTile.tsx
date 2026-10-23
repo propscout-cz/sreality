@@ -1,6 +1,6 @@
-/* The property page's "Trh v okolí" tile (operator 2026-10-23): a small dashboard
- * of THIS property's neighbourhood. Its charts are the account's dashboard named
- * "Trh v okolí", set up in Browse › Statistiky (the bar offers to create it); its
+/* The property page's "Okolí dashboard" tab (operator 2026-10-23): a small dashboard
+ * of THIS property's neighbourhood. Its charts are the account's ONE dashboard marked
+ * for it (migration 664, any name), set up in Browse › Statistiky; its
  * sample is lib/neighbourhood's — the property's type, deal, disposition and
  * ownership, a radius around it, and only the building material and condition
  * left to the user — under the Stats tab's own lens ("Prodáno (trh)" by default,
@@ -17,9 +17,9 @@ import {
   DEFAULT_SCOPE,
   RADII_M,
   fmtRadius,
-  isMarketTemplate,
+  isPropertyCard,
   neighbourhoodFilters,
-  MARKET_TEMPLATE_NAME,
+  PROPERTY_CARD_LABEL,
   type NeighbourhoodMarket,
   type NeighbourhoodScope,
   type RadiusM,
@@ -93,7 +93,7 @@ export default function MarketTile({
     queryFn: listStatsDashboards,
     enabled: isApiConfigured(),
   });
-  const template = listQ.data?.data.find(isMarketTemplate) ?? null;
+  const template = listQ.data?.data.find(isPropertyCard) ?? null;
   const charts = useMemo(() => (template ? sanitizeCharts(template.charts) : []), [template]);
 
   const hood = useMemo(() => neighbourhoodFilters(property, scope), [property, scope]);
@@ -137,8 +137,8 @@ export default function MarketTile({
   } else if (!template) {
     body = (
       <div className="rounded-[var(--radius-md)] border border-dashed border-[var(--color-rule-strong)] px-4 py-5 text-sm text-[var(--color-ink-2)]">
-        Grafy pro tuto dlaždici nastavíte v Browse › Statistiky: uložte tam dashboard „{MARKET_TEMPLATE_NAME}“
-        (tlačítko „+ {MARKET_TEMPLATE_NAME} · karta nemovitosti“).
+        Grafy pro tuto kartu nastavíte v Browse › Statistiky: tlačítkem „+ {PROPERTY_CARD_LABEL}“ uložíte
+        současné grafy, nebo v menu kteréhokoli svého dashboardu zvolíte „Použít jako okolí dashboard“.
         <div className="mt-3">
           <Link to={withQuery(ROUTES.browse.build(), { tab: 'stats' })} className="text-[var(--color-copper)] hover:underline underline-offset-2">
             Otevřít Statistiky →
@@ -147,7 +147,7 @@ export default function MarketTile({
       </div>
     );
   } else if (charts.length === 0) {
-    body = <Quiet>Dashboard „{MARKET_TEMPLATE_NAME}“ zatím nemá žádný graf.</Quiet>;
+    body = <Quiet>Dashboard „{template.name}“ zatím nemá žádný graf.</Quiet>;
   } else {
     body = (
       <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
@@ -160,11 +160,11 @@ export default function MarketTile({
 
   return (
     <section
-      aria-label="Trh v okolí"
+      aria-label={PROPERTY_CARD_LABEL}
       className="min-w-0 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-5 pt-4 pb-5"
     >
       <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <SectionLabel>Trh v okolí</SectionLabel>
+        <SectionLabel>{template?.name ?? PROPERTY_CARD_LABEL}</SectionLabel>
         {hood && (
           <button
             type="button"
