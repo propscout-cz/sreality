@@ -291,6 +291,8 @@ describe('propertyBrokers', () => {
     const out = propertyBrokers([ad(1), ad(2), ad(3), ad(4)], byListing, 3);
     expect(ids(out)).toEqual([30, 10]);
     expect(out.fromInactive).toBe(false);
+    // Each person keeps the ads they advertise, the canonical ad's first.
+    expect(out.brokers.map((b) => b.ads.map((a) => a.id))).toEqual([[3], [1, 2]]);
     // An inactive ad's broker is hidden while another ad is active.
     expect(ids(propertyBrokers([ad(1), ad(3, false)], byListing, 1))).toEqual([10]);
   });
