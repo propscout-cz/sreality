@@ -154,8 +154,11 @@ class _FakeCursor:
             # The one-shot id list: every match above the cursor, no LIMIT.
             if self._conn.raise_on_select:
                 raise RuntimeError("statement timeout")
-            rows = [r for r in self._conn.corpus if r[0] > params["after"]]
+            cts = params["category_types"]
+            rows = [r for r in self._conn.corpus
+                    if r[0] > params["after"] and (cts is None or r[4] in cts)]
             self._conn.id_list_queries += 1
+            self._conn.id_params = params
             self._rows = [(r[0],) for r in rows]
         elif "UPDATE listings" in sql:
             self._conn.quarantined.append(params["id"])
@@ -176,6 +179,7 @@ class _FakeConn:
         self.raise_on_select = raise_on_select
         self.pages: list[int] = []
         self.id_list_queries = 0
+        self.id_params: dict = {}
         self.quarantined: list[int] = []
 
     def cursor(self) -> _FakeCursor:
@@ -293,6 +297,36 @@ def test_payload_projection_matches_the_positional_unpacking():
     assert names == ["id", "source", "source_id_native", "category_main",
                      "category_type", "property_id", "price_czk", "area_m2",
                      "raw_price_text"]
+
+
+def test_category_type_narrows_the_id_list_and_the_default_is_every_type(monkeypatch):
+    # The per-m² masquerade lives in rent cells; a pronajem-only run must reach
+    # no sale row, and no flag must keep the whole corpus.
+    corpus = [(*r[:4], "prodej" if r[0] > 6 else "pronajem", *r[5:]) for r in _corpus(12)]
+    conn, _ = _run(monkeypatch, corpus, ["--category-type", "pronajem", "--write"])
+    assert mod.main() == 0
+    assert conn.id_params["category_types"] == ["pronajem"]
+    assert conn.quarantined == [1, 3, 5]
+    conn, _ = _run(monkeypatch, corpus, ["--write"])
+    assert mod.main() == 0
+    assert conn.id_params["category_types"] is None
+    assert conn.quarantined == [1, 3, 5, 7, 9, 11]
+
+
+def test_category_type_takes_commas_and_repeats_and_refuses_a_typo(monkeypatch):
+    conn, _ = _run(monkeypatch, _corpus(2),
+                   ["--category-type", "pronajem,prodej", "--category-type", "drazba"])
+    assert mod.main() == 0
+    assert conn.id_params["category_types"] == ["pronajem", "prodej", "drazba"]
+    _run(monkeypatch, _corpus(2), ["--category-type", "pronájem"])
+    with pytest.raises(SystemExit):
+        mod.main()
+
+
+def test_the_category_filter_sits_in_the_id_list_and_the_count():
+    for sql in (mod._ALL_IDS_SQL, mod._COUNT_SQL):
+        assert "category_type = ANY(%(category_types)s::text[])" in sql
+        assert "%(category_types)s::text[] IS NULL" in sql
 
 
 def test_a_limit_equal_to_the_corpus_is_still_a_clean_finish(monkeypatch, caplog):

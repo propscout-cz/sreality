@@ -88,6 +88,7 @@ one that `--limit` cut short — logs `BACKFILL INCOMPLETE`; silence means done.
 
 Usage:  python -m scripts.backfill_unit_price_masquerade --dry-run
         python -m scripts.backfill_unit_price_masquerade --source realitymix --write
+        python -m scripts.backfill_unit_price_masquerade --source remax --category-type pronajem
 Required: SUPABASE_DB_URL.
 """
 
@@ -114,6 +115,7 @@ from scraper.remax_parser import _text as _remax_text
 LOG = logging.getLogger("backfill_unit_price_masquerade")
 
 SOURCES: tuple[str, ...] = ("ceskereality", "realitymix", "remax", "bazos")
+CATEGORY_TYPES: tuple[str, ...] = ("prodej", "pronajem", "drazba", "podil")
 
 # Each portal's own amount scanner — the marker test is anchored to the text
 # immediately AFTER the amount, so the amount has to be found the way that
@@ -168,6 +170,8 @@ _ALL_IDS_SQL = """
     FROM listings l
     WHERE l.source = ANY(%(sources)s::text[])
       AND l.price_czk IS NOT NULL
+      AND (%(category_types)s::text[] IS NULL
+           OR l.category_type = ANY(%(category_types)s::text[]))
       AND l.id > %(after)s::bigint
     ORDER BY l.id
 """
@@ -192,6 +196,8 @@ _STATEMENT_TIMEOUT_SQL = "SET statement_timeout = '600s'"
 _COUNT_SQL = """
     SELECT source, count(*) FROM listings
     WHERE source = ANY(%(sources)s::text[]) AND price_czk IS NOT NULL
+      AND (%(category_types)s::text[] IS NULL
+           OR category_type = ANY(%(category_types)s::text[]))
     GROUP BY source
 """
 
@@ -261,6 +267,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", action="append", choices=SOURCES,
                         help="Restrict to one portal; repeatable. Default: every source.")
+    parser.add_argument("--category-type", action="append", default=None,
+                        help="Restrict to these deal types (repeatable or comma-"
+                             "separated, e.g. pronajem). Default: every type.")
     parser.add_argument("--limit", type=int, default=None,
                         help="Max listings examined this run. Default: the whole corpus.")
     parser.add_argument("--batch-size", type=int, default=1000,
@@ -289,8 +298,14 @@ def main() -> int:
         return 2
 
     sources = list(args.source or SOURCES)
-    LOG.info("BACKFILL start sources=%s batch=%d limit=%s after=%d dry_run=%s",
-             ",".join(sources), args.batch_size, args.limit, args.after, args.dry_run)
+    category_types = [t.strip() for v in args.category_type or [] for t in v.split(",")
+                      if t.strip()] or None
+    if category_types and not set(category_types) <= set(CATEGORY_TYPES):
+        parser.error(f"--category-type must be among {', '.join(CATEGORY_TYPES)}")
+    scope = {"sources": sources, "category_types": category_types}
+    LOG.info("BACKFILL start sources=%s category_types=%s batch=%d limit=%s after=%d "
+             "dry_run=%s", ",".join(sources), ",".join(category_types or ["all"]),
+             args.batch_size, args.limit, args.after, args.dry_run)
     start = time.monotonic()
     verdicts: Counter[str] = Counter()
     quarantined: Counter[str] = Counter()
@@ -303,12 +318,12 @@ def main() -> int:
         with db.connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(_STATEMENT_TIMEOUT_SQL)
-                cur.execute(_COUNT_SQL, {"sources": sources})
+                cur.execute(_COUNT_SQL, scope)
                 for source, n in cur.fetchall():
                     LOG.info("BACKFILL priced_rows source=%-14s %7d", source, n)
 
             with conn.cursor() as cur:
-                cur.execute(_ALL_IDS_SQL, {"sources": sources, "after": args.after})
+                cur.execute(_ALL_IDS_SQL, {**scope, "after": args.after})
                 all_ids = [r[0] for r in cur.fetchall()]
             truncated = args.limit is not None and len(all_ids) > args.limit
             if truncated:

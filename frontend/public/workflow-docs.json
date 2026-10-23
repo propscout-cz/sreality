@@ -467,6 +467,18 @@
           ]
         },
         {
+          "name": "category_type",
+          "description": "Limit to one deal type (blank = every type)",
+          "required": false,
+          "type": "choice",
+          "default": "",
+          "options": [
+            "",
+            "pronajem",
+            "prodej"
+          ]
+        },
+        {
           "name": "write",
           "description": "Actually write. Left false, this only reports what would change.",
           "required": false,

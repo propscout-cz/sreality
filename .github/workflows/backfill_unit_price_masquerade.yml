@@ -36,6 +36,15 @@ on:
           - realitymix
           - remax
           - bazos
+      category_type:
+        description: Limit to one deal type (blank = every type)
+        required: false
+        default: ""
+        type: choice
+        options:
+          - ""
+          - pronajem
+          - prodej
       write:
         description: Actually write. Left false, this only reports what would change.
         required: false
@@ -99,6 +108,7 @@ jobs:
           ARGS="--after ${{ inputs.after || '0' }}"
           if [ -n "${{ inputs.batch_size }}" ]; then ARGS="$ARGS --batch-size ${{ inputs.batch_size }}"; fi
           if [ -n "${{ inputs.source }}" ]; then ARGS="$ARGS --source ${{ inputs.source }}"; fi
+          if [ -n "${{ inputs.category_type }}" ]; then ARGS="$ARGS --category-type ${{ inputs.category_type }}"; fi
           if [ -n "${{ inputs.limit }}" ]; then ARGS="$ARGS --limit ${{ inputs.limit }}"; fi
           if [ -n "${{ inputs.max_seconds }}" ]; then ARGS="$ARGS --max-seconds ${{ inputs.max_seconds }}"; fi
           if [ "${{ inputs.write }}" = "true" ]; then ARGS="$ARGS --write"; fi
