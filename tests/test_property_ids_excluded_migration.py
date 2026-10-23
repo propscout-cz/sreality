@@ -105,7 +105,7 @@ def test_the_latest_definitions() -> None:
     WHERE) is pinned by tests/test_626_stats_dashboard.py; 630 re-pointed it at browse_list;
     640 dropped this file's parameter, 644 swapped the condition conjunct, 648 appended the
     energy-rating parameter."""
-    assert latest_definition("browse_map_cells").name == "648_browse_energy_rating_filter.sql"
+    assert latest_definition("browse_map_cells").name == "662_status_filter_contract.sql"  # 661/662: the status as one parameter
     assert latest_definition("portal_status_matches").name == "657_status_is_the_propertys.sql"
 
 

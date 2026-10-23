@@ -885,7 +885,7 @@ describe('Browse Stats resolves through the one prefilter path', () => {
     expect(fetchBrokerPropertyIds).toHaveBeenCalledWith(527, 'active', ['idnes']);
     expect(rpcArgs[0].property_ids_filter).toEqual([1]);
     expect(rpcArgs[0].portal_filter).toBeNull();
-    expect(rpcArgs[0].active_only_filter).toBe(true);
+    expect(rpcArgs[0].status_filter).toBe('active');
     /* The exclusion is about the property, so it reaches the RPC under a broker too. */
     expect(rpcArgs[0].portal_excluded_filter).toEqual(['sreality']);
     expect(rpcArgs[0].portal_excluded_active_only).toBe(true);
@@ -897,7 +897,9 @@ describe('Browse Stats resolves through the one prefilter path', () => {
       NO_PREFILTERS,
     );
     expect(args.portal_filter).toEqual(['idnes']);
-    expect([args.active_only_filter, args.inactive_only_filter]).toEqual([false, true]);
+    expect(args.status_filter).toBe('inactive');
+    expect(args).not.toHaveProperty('active_only_filter');
+    expect(args).not.toHaveProperty('inactive_only_filter');
   });
 
   it('never names the retired listing_ids_filter on the map, and carries the broker', async () => {

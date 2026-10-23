@@ -118,7 +118,7 @@ def _register(cur: Any) -> None:
 
 
 def _pivot(cur: Any, pids: list[int], spec: Any, **args: Any) -> dict[str, Any]:
-    """`args`: further cohort parameters by name (portal_filter, inactive_only_filter, ...)."""
+    """`args`: further cohort parameters by name (portal_filter, status_filter, ...)."""
     extra = "".join(f", {k} => %({k})s" for k in args)
     cur.execute(
         "select public.browse_stats_properties(property_ids_filter => %(pids)s::bigint[], "
@@ -237,12 +237,12 @@ def test_the_status_fact_is_the_propertys_under_a_portal_filter(cur) -> None:
     elsewhere = _add(cur, active=True, tom=50, sources=["sreality", "bezrealitky"], active_sources=["bezrealitky"])
     cohort = gone + [elsewhere]
     inactive = _pivot(cur, cohort, {"rows": [], "cols": [], "measure": "tom_days"},
-                      portal_filter=["sreality"], inactive_only_filter=True)
+                      portal_filter=["sreality"], status_filter="inactive")
     assert (inactive["filtered"], inactive["sample"], inactive["excluded"], inactive["status"],
             inactive["refused"]) == (5, 5, 0, "inactive", None)
     assert inactive["cells"][0]["n"] == 5 and inactive["cells"][0]["median"] == 102
     active = _pivot(cur, cohort, {"rows": [], "cols": [], "measure": "price"},
-                    portal_filter=["sreality"], active_only_filter=True)
+                    portal_filter=["sreality"], status_filter="active")
     assert (active["filtered"], active["refused"]) == (0, "empty")
     any_status = _pivot(cur, cohort, {"rows": [], "cols": [], "measure": "tom_days"}, portal_filter=["sreality"])
     assert (any_status["filtered"], any_status["status"], any_status["refused"]) == (6, "mixed", "mixed_status")

@@ -25,7 +25,7 @@ _PREDICATE = "((lat IS NOT NULL) AND (lng IS NOT NULL))"
 # the status pill sends without a portal chip.
 _DEFAULT = ("category_main_filter => '{byt}'::text[], category_type_filter => 'pronajem', "
             "hide_dismissed => true")
-_CALLS = {"any": _DEFAULT, "active": _DEFAULT + ", active_only_filter => true"}
+_CALLS = {"any": _DEFAULT, "active": _DEFAULT + ", status_filter => 'active'"}
 _MUST_READ = {"any": {"category_main", "category_type", "lat", "lng", "property_id"},
               "active": {"category_main", "category_type", "lat", "lng", "property_id",
                          "is_active"}}
