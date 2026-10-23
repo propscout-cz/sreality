@@ -12,7 +12,6 @@ import ForgotPassword from './pages/ForgotPassword';
 import UpdatePassword from './pages/UpdatePassword';
 import Browse from './pages/Browse';
 import PropertyDetail, { AdvertRedirect } from './pages/PropertyDetail';
-import BuildingDetail from './pages/BuildingDetail';
 import EstimationDetail from './pages/EstimationDetail';
 import EstimationList from './pages/EstimationList';
 import Brokers from './pages/Brokers';
@@ -63,6 +62,9 @@ const PhoneViewings = lazyChunk(() => import('./pages/phone/PhoneViewings'));
 // Where a tapped push lands (notifications push § 3.5): opened from a
 // notification only, so outside the first visit.
 const NotificationOpen = lazyChunk(() => import('./pages/NotificationOpen'));
+// Paste-a-building (rule 13): an operator flow opened by its own link, never on a
+// first visit — its page and unit editor are their own chunk, like the admin pages.
+const BuildingDetail = lazyChunk(() => import('./pages/BuildingDetail'));
 
 function AdminPage({ children }: { children: ReactNode }) {
   return (
@@ -142,7 +144,15 @@ export const routes: RouteObject[] = [
       { path: ROUTES.brokerDetail.childPath, element: <BrokerDetail />, handle: { title: 'Broker' } },
       { path: ROUTES.outreach.childPath, element: <AdminPage><Outreach /></AdminPage>, handle: { title: 'Outreach' } },
       { path: ROUTES.outreachDetail.childPath, element: <AdminPage><OutreachDetail /></AdminPage>, handle: { title: 'Campaign' } },
-      { path: ROUTES.buildingDetail.childPath, element: <BuildingDetail />, handle: { title: 'Building' } },
+      {
+        path: ROUTES.buildingDetail.childPath,
+        element: (
+          <Suspense fallback={<Skeleton height={240} className="mx-4 my-4" />}>
+            <BuildingDetail />
+          </Suspense>
+        ),
+        handle: { title: 'Building' },
+      },
       { path: ROUTES.collections.childPath, element: <Collections />, handle: { title: 'Collections' } },
       { path: ROUTES.collectionDetail.childPath, element: <CollectionDetail />, handle: { title: 'Collection' } },
       { path: ROUTES.pipeline.childPath, element: <Pipeline />, handle: { title: 'Pipeline' } },
