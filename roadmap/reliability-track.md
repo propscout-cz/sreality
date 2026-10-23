@@ -921,7 +921,11 @@ no ruling).
   7.3 %), mmreality 6 of 127, remax 4 of 70, realitymix 6 of 463, bezrealitky 1 of 135, bazos 0 of 1,316,
   ceskereality 0 of 751, all OK; maxima and web Not measured. 0.11 s, one index range per portal.
 
-To check: after the deploy, the idnes precision incident closes on a measured OK, verified on the page.
+To check: after the deploy, the idnes precision incident closes on a measured OK, verified on the page.- **Wave 5b (2026-10-23, shipped with the next PR):** `jobs lane/<name>` read "late" once after every brake
+  lift because `_lane`'s switch-on clock only applied when the lane had no pass at all; a pass from before
+  the pause won. The reference is now the later of the last pass and the previous measurement when the lane
+  read off then (autodedup, 15:54Z: a 5 h brake, incident 1005 opened on a healthy first pass of 117 merges).
+
 ## 2026-10-22 — Health green sprint, wave 4 (shipped with this PR)
 
 Location producers: the claim lane sees the page the drain just fetched. Plan:

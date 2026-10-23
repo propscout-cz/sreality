@@ -327,12 +327,14 @@ def _lane(lane: str, info: dict[str, Any], previous: dict[str, Any], thresholds:
     floor = float(thresholds["jobs_lane_floor_s"])
     bound = max(3 * interval, interval + 2 * (_num(info.get("last_duration_s")) or 0.0), floor)
     # A lane switched on since the previous measurement (it read off then) has nothing to be late
-    # from until it completes a pass: its clock starts at that measurement, never at the boot
-    # (autodedup came off its brake at 02:40 on 2026-10-19 and read "late ... 2.1 h" at once).
+    # from until it completes a pass: its clock starts at that measurement, never at the boot nor
+    # at a pass from before the pause (autodedup came off its brake at 02:40 on 2026-10-19 and read
+    # "late ... 2.1 h" at once; on 2026-10-23 a 5 h brake left a pre-brake pass as the clock).
     held = previous.get(subject) or {}
     held_interval = _num((held.get("facts") or {}).get("interval_s"))
     was_off = held_interval is not None and held_interval <= 0
-    reference = last_pass or (max(previous_at, booted) if was_off and previous_at else booted)
+    reference = max(stamp for stamp in (last_pass, previous_at if was_off else None,
+                                        booted if last_pass is None else None) if stamp)
     since = (now - reference).total_seconds()
     conditions: list[tuple[str, str]] = []
     if since > bound and uptime > bound:
