@@ -26,12 +26,15 @@ Runs in CI's migrations lane (`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED=1`); skipp
 from __future__ import annotations
 
 import datetime as _dt
+import re
 import os
 import uuid
 from collections.abc import Iterable, Iterator
 from typing import Any
 
 import pytest
+
+from toolkit.publication import CAP_SQL
 
 from location_data.claims_common import SOURCES
 from scraper.db import (QUEUE_PRIORITY_CHANGED, QUEUE_PRIORITY_FAILURE, QUEUE_PRIORITY_NEW,
@@ -44,6 +47,9 @@ from scripts.verify_pipeline import THRESHOLDS
 _DB_URL = os.environ.get("TEST_DATABASE_URL")
 _REQUIRED = os.environ.get("DB_RAILS_REQUIRED") == "1"
 _H = _dt.timedelta(hours=1)
+# The seeds' default age is the cap plus an hour, read off the rule, never retyped.
+_CAP = int(re.fullmatch(r"interval '(\d+) hours?'", CAP_SQL).group(1)) * _H
+
 _MIN = _dt.timedelta(minutes=1)
 PORTALS = sorted(SOURCES)
 
@@ -90,8 +96,8 @@ def _ad(conn: Any, source: str, *, seen: _dt.timedelta = 2 * _H, active: bool = 
 
 
 def _property(conn: Any, *, status: str = "active", active: bool = True,
-              born: _dt.timedelta = 3 * _H, seen: _dt.timedelta = 7 * _H) -> int:
-    """First seen `seen` ago: past the 6 h cap by default, so browse_projection serves it unsettled."""
+              born: _dt.timedelta = 3 * _H, seen: _dt.timedelta = _CAP + _H) -> int:
+    """First seen `seen` ago: past the cap by default, so browse_projection serves it unsettled."""
     return conn.execute("insert into properties (status, is_active, created_at, first_seen_at) "
                         "values (%s, %s, now() - make_interval(secs => %s), now() - make_interval(secs => %s)) "
                         "returning id",
@@ -113,7 +119,7 @@ def _located(conn: Any, listing_id: int, shape: tuple[bool, str, str], *,
 
 def _held(conn: Any, source: str, *, status: str = "active", active: bool = True,
           born: _dt.timedelta = 3 * _H, shape: tuple[bool, str, str] | None = _POINT,
-          resolved: _dt.timedelta = 3 * _H, seen: _dt.timedelta = 7 * _H) -> int:
+          resolved: _dt.timedelta = 3 * _H, seen: _dt.timedelta = _CAP + _H) -> int:
     """A property whose one ad, first written 2 h ago, is its canonical and location ad; `shape` None leaves it
     unresolved."""
     pid = _property(conn, status=status, active=active, born=born, seen=seen)

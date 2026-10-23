@@ -1,4 +1,4 @@
-"""Publishing: do discovered ads reach Browse quickly, with their photos, and does Browse keep
+"""Publishing: do discovered ads reach Browse once published, with their photos, and does Browse keep
 holding what is servable? Per portal, `check_publishing` judges ingest (the oldest never-fetched
 ad waiting in the detail queue), changes (the oldest repriced ad waiting), visible (new active ads
 whose property is not in browse_list), stock (active properties missing from browse_list) and
@@ -22,8 +22,9 @@ from scripts.checks.common import (NEW_AD_H, ago, as_utc, cell, graded as _grade
                                    now, result, wilson_lower)
 from toolkit.publication import visible_since_sql
 
-# A new ad gets its property within ~2 min, its location within ~10 min (p95 9.5 min) and its
-# Browse row at the next */15 rebuild, so one first written under 30 min ago is still on its way.
+# A new ad gets its property within ~2 min, its location within ~10 min (p95 9.5 min) and its Browse
+# row once published (settled, or at the 6 h cap -- the 'unpublished' stage below) and then at the next
+# */15 rebuild, so one first written under 30 min ago is still on its way.
 _VISIBLE_GRACE_MIN = 30
 _WINDOW_H = NEW_AD_H
 _WIDE_WINDOW_H = 72

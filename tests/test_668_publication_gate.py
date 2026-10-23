@@ -95,11 +95,18 @@ def test_669_refuses_any_body_but_665s_and_any_schema_without_668() -> None:
 
 def test_669_changes_the_gated_view_and_nothing_else() -> None:
     """No pg_proc body in either file (migration 656's $pre$ reads every function's source; 668's statements are
-    pinned above) and no other relation: the detail-by-id surfaces (properties_public) stay ungated, as rule 25
-    keeps them for the location rule."""
+    pinned above) and no other relation but the one transition UPDATE: the detail-by-id surfaces
+    (properties_public) stay ungated, as rule 25 keeps them for the location rule."""
     ddl = [s for s in _statements(S669)
            if re.match(r"(?:create|alter|drop|grant|revoke|comment|insert|update|delete|truncate)\b", s)]
-    assert len(ddl) == 1 and ddl[0].startswith("create or replace view browse_projection as select"), ddl
+    assert len(ddl) == 2, ddl
+    # The transition stamp: a property served ungated from its first sight is visible since then, so the
+    # watchdog window (keyed on that moment) never backfills what a watchdog already saw; a day reaches
+    # back as far as the 'new' window does, and the cap publishes everything older.
+    assert ddl[0] == ("update public.properties set settled_at = first_seen_at "
+                      "where settled_at is null and first_seen_at > now() - interval ''"), ddl[0]  # literals folded
+    assert "interval '24 hours'" in _code(S669) or "now() - interval '24 hours'" in S669
+    assert ddl[1].startswith("create or replace view browse_projection as select"), ddl
 
 
 def test_the_headers_state_the_apply_order() -> None:
@@ -110,3 +117,18 @@ def test_the_headers_state_the_apply_order() -> None:
     assert "APPLY ORDER -- the REVERSE of the usual additive order" in h669
     assert "merge the PR, confirm Railway's realtime-worker rollout" in h669
     assert "THEN apply this file through apply_migration.yml (--ref main), never the MCP" in h669
+
+
+def test_the_cap_ends_inside_the_new_window_with_room_for_two_ticks() -> None:
+    """A property that never settles is published at first_seen_at + CAP, and 'new' is told only while
+    first_seen_at is inside NEW_WINDOW (api/notifications.match_once): the cap must end inside the window
+    with at least two notification ticks (5 min each) to spare, or a cap-published property would never be
+    told. The relation, not the two literals, is what correctness rests on."""
+    import re
+
+    from api.notifications import NEW_WINDOW
+    from toolkit.publication import CAP_SQL
+
+    cap_h = int(re.fullmatch(r"interval '(\d+) hours?'", CAP_SQL).group(1))
+    window_h = int(re.fullmatch(r"(\d+) hours?", NEW_WINDOW).group(1))
+    assert cap_h * 3600 + 2 * 300 < window_h * 3600

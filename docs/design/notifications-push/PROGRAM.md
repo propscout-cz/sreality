@@ -241,7 +241,7 @@ Decided by your brief: shares are pushed; push is for the iPhone, an app rule (t
 
 ## 8. Audit findings: resolved and deferred
 
-**Resolved:** F1; F2, F10 (leased ledger); F3, F7 (routing by account); F4; F5 (R2, R9); F6 (one identity); F8 (R1); F9 (R4); F11 (device origin); F12; F13 (the publication gate: operator rulings 2026-10-23, migs 668/669 — 'new' waits until its property is settled or 6 h old, and a cap-fired 'new' a merge makes older withdraws itself); F14 (dwell); F15, F23, F26 (new ledger); F16; F18 (identity-bound unsubscribe); F24, F28 (`/n/{id}`); F25 (R3); F27.
+**Resolved:** F1; F2, F10 (leased ledger); F3, F7 (routing by account); F4; F5 (R2, R9); F6 (one identity); F8 (R1); F9 (R4); F11 (device origin); F12; F13 (the publication gate: operator rulings 2026-10-23, migs 668/669 — 'new' waits until its property is settled or 6 h old, and a 'new' a merge re-points to a property first seen more than 24 h before the alert withdraws itself); F14 (dwell); F15, F23, F26 (new ledger); F16; F18 (identity-bound unsubscribe); F24, F28 (`/n/{id}`); F25 (R3); F27.
 
 **Partly resolved:** F17 (no stored sender text, a cap; the 422 email oracle goes to roadmap item 11); F19 (the bell's live price stays, a UX change); F20 (new_source deferred); F21 (a deleted collection still takes its alerts; retiring collections touches every curation carrier); F22 (precision measured; since 2026-10-23 a 'new' whose property a merge makes more than a day older is withdrawn, the retraction arm).
 

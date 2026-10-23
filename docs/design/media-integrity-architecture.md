@@ -257,7 +257,10 @@ non-fix — set it in the cron command or at role level.
 1050654's photos landed **67 seconds** after our fetch and it still holds zero rows six days later.
 The 5-minute floor is exactly the window the race lives in. The one component that notices zero
 image rows treats it as expected and bypasses. *(The gate is superseded 2026-10-23 by the
-publication rule, migrations 668/669, and deleted.)*
+publication rule, migrations 668/669, and deleted — but the finding is not closed: the rule's photo
+arm keeps the zero-rows release, now with no floor at all (a property whose ads have no image rows
+counts as having no photos), so the race is bounded only by the rule's engine-read condition (the
+engine must have read every ad before the property settles) and the 6 h cap.)*
 
 **I. `scripts/refresh_stale_image_urls.py`** — two doc errors: (i) *"Lowest priority so the refresh
 never delays genuine new-listing detail fetches"* — repairs are enqueued at the **same**

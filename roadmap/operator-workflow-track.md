@@ -76,9 +76,12 @@ account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, e
       property is shown (Browse, the map, Stats) and told (the watchdog) only once published: `properties.settled_at`,
       stamped by the maintenance pass when its first photo is stored (or it has none) and the engine is done with its
       ads, or 6 h after it was first seen (`toolkit/publication.py`, one cap, no flags). The image gate went (its two
-      settings rows never existed in production); a merge carries the stamp to the survivor; the 'new' window is keyed
-      on visibility; a 'new' whose property a merge makes more than a day older leaves the feed, badge and push (a tap
-      still lands); the publishing check's `unpublished` stage. Apply: 668 before the merge, 669 after the worker's rollout.
+      settings rows never existed in production); a merge passes a settled property's stamp to the survivor only when
+      that publishes it earlier (publication never regresses, and never moves later); the 'new' window is keyed on
+      visibility; a 'new' a merge re-points to a property first seen more than 24 h before the alert leaves the feed,
+      badge and push (a tap still lands); the publishing check's `unpublished` stage ("not yet published", never a
+      blocker). Apply: 668 before the merge, 669 promptly after the worker's rollout (it stamps `settled_at =
+      first_seen_at` on the properties first seen in the 24 h before it, which were served ungated).
 - [ ] **Next after the publication gate:** (a) the phone feed's day buckets and "Newest first" on the visible-since
       moment, not `first_seen_at` — needs a ruling; (b) drop `properties.published_at` + `publish_reason` + their three
       indexes (the autodedup session's owed drop, now moot for serving too); (c) a worker CLIP lane, so settlement

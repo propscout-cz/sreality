@@ -544,6 +544,8 @@ PUBLISHED_RULE_SITES: dict[tuple[str, str, str], tuple[str, str]] = {
         ("property", "the stamper reads only properties the cap has not yet published"),
     ("scripts/checks/publishing.py", "_STAGE_TAIL", 'visible_since_sql("p")'):
         ("property", "publishing's 'unpublished' stage, judged at the newest rebuild's start"),
+    ("toolkit/property_identity.py", "_CARRY_SETTLED_SQL", "CAP_SQL"):
+        ("property", "a merge passes a stamp to the survivor only when that publishes it before its cap"),
 }
 _PUBLICATION_FILE = "toolkit/publication.py"
 _PUBLICATION_NAMES = {n: v for n, v in vars(publication).items() if not n.startswith("_")

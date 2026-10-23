@@ -29,6 +29,7 @@ from autodedup import ui_sql as usql
 from scraper.db import create_singleton_properties
 from scripts.recompute_property_stats import properties_changed
 from toolkit import property_carriers as carriers
+from toolkit.publication import CAP_SQL
 from toolkit.property_carriers import MergeSource, Route  # re-exported: callers read them here
 from toolkit.room_taxonomy import category_main_compatible
 
@@ -146,11 +147,15 @@ VALUES (%(group)s, %(table)s, %(row_key)s, %(row_at)s, %(account_id)s, %(from_pr
         %(survivor)s, %(kind)s, %(snapshot)s)
 """
 
-# Publication never regresses on a merge (migration 668): a settled retired property's stamp
-# passes to a survivor not yet settled.
+# Publication never regresses on a merge, and never moves later (migration 668): a settled retired
+# property's stamp passes to a survivor not yet settled, only when that publishes the survivor
+# before its own cap would (the survivor is the oldest record, so the cap may have published it long
+# ago; a stamp younger than that would move its visibility forward, and tell a watchdog a property
+# it could already see).
 _CARRY_SETTLED_SQL = (
     "UPDATE properties s SET settled_at = r.settled_at FROM properties r "
-    "WHERE s.id = %s AND r.id = %s AND s.settled_at IS NULL AND r.settled_at IS NOT NULL"
+    "WHERE s.id = %s AND r.id = %s AND s.settled_at IS NULL AND r.settled_at IS NOT NULL "
+    f"AND r.settled_at < s.first_seen_at + {CAP_SQL}"
 )
 
 # One statement touching `status` and `is_active` together: a retired property is never left

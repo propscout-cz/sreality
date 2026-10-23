@@ -98,9 +98,11 @@ Postgres SKIP LOCKED is the industry-standard substrate and already proven here)
 ## SLOs (operator-accepted 2026-07-02)
 
 Google-SRE format, measured on stage watermarks (p95, warn at ~75% of target): new listing
-visible ≤ 15 min · images stored ≤ 20 min · **no publication without images** (gate above; *superseded 2026-10-23 by the publication rule*) ·
+visible ≤ 15 min (*superseded 2026-10-23 by the publication rule: a property is shown when
+published — settled, or 6 h old*) · images stored ≤ 20 min · **no publication without images** (gate above; *superseded 2026-10-23 by the publication rule*) ·
 photo-sharing cross-portal merge ≤ 60 min · delisting ≤ 6 h market-wide / ≤ 30 min watched ·
-notification ≤ 2 min after the property row exists. `published_at` (migration 266) and the
+notification ≤ 2 min after the property row exists (*superseded 2026-10-23 by the publication
+rule: a property is told when published — settled, or 6 h old*). `published_at` (migration 266) and the
 `detail_queue_completions` ledger (migration 265) are the measurement substrate; health
 checks move from fixed batch-era thresholds to cadence/SLO-scaled ones, with reds pushed
 through the existing notification outbox (*superseded: the outbox was deleted 2026-10-21; system

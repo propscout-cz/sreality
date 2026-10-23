@@ -320,7 +320,7 @@ Per-lane notes:
 - **Property-maintenance lane**, every 30 s (PR #716) — `run_incremental_pass` against `dirty_properties`
   (rule #20), far more often than the 5-min GH cron; serialized with it + the daily sweep by the lease-row
   CAS (PR #717): **never a session advisory lock on a pooled connection** — the first cut stranded. Each drain
-  slice = ONE `properties_changed` txn (recompute, Browse patch, `dirty_broker_listings` mirror), as merge/detach run inline; then `_settle_fresh` stamps `settled_at` (rule 16, mig 668) on properties under 6 h old the pipeline is done with, Browse-patching them (`settled` in the log + heartbeat; its error warns, never fails the pass).
+  slice = ONE `properties_changed` txn (recompute, Browse patch, `dirty_broker_listings` mirror), as merge/detach run inline; then `_settle_fresh` stamps `settled_at` (rule 16, mig 668) on properties under 6 h old the pipeline is done with — the stamp commits alone, then `sync_browse_list` patches their Browse rows, best-effort (`settled` in the log + heartbeat; its error warns, never fails the pass).
 - **Broker-maintenance lane** (Broker Unify W3) — same cadence; `scripts.resolve_brokers.
   run_incremental_pass` (`broker_resolution.yml` runs the SAME driver as backstop): drain until empty,
   recompute affected brokers (one merged statement), republish `broker_region_type_stats` via the

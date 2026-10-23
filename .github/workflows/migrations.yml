@@ -733,7 +733,7 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"
-        run: pytest tests/test_location_ad_readers_live.py tests/test_property_location_ad_rail.py -q
+        run: pytest tests/test_location_ad_readers_live.py tests/test_property_location_ad_rail.py tests/test_publication_settle_live.py -q
 
       # MF reference rent is ONE read-time measure (migration 565), read by the two serving
       # views (browse_projection, properties_public) with the stored KU (566/567, replayed

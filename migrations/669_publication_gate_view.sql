@@ -3,7 +3,8 @@
 -- governs Browse, the map and stats, not alerts alone; Q2: the cap is 6 h; Q4: one cap everywhere).
 --
 -- WHAT. ONE WHERE arm, the published rule, rendered from toolkit/publication.py and pinned verbatim by
--- tests/test_668_publication_gate.py (the latest-definition rail, as the consumer rule is pinned):
+-- tests/test_668_publication_gate.py; the latest definition is held to it by
+-- tests/test_browse_read_path_guardrail.py, as the consumer rule is:
 --       and coalesce(p.settled_at, p.first_seen_at + interval '6 hours') <= now()
 -- The watchdog producers render the same rule on properties_public (api/notifications._build_match_clauses,
 -- rule 16: Watchdog and Browse share one definition of "matches"); the publishing health check judges its
@@ -15,7 +16,7 @@
 -- list rebuild's advisory key (held to the commit). CREATE OR REPLACE keeps the view's ACL and reloptions.
 -- No forced rebuild: the next */15 rebuild applies the rule -- a property the cap releases enters
 -- browse_list on the rebuild after its 6 h mark (mean ~9 min, worst measured ~40 min); a settled one is
--- patched in at once by the maintenance pass's properties_changed.
+-- patched in at once by the maintenance pass's Browse patch (sync_browse_list, best-effort).
 --
 -- APPLY ORDER -- the REVERSE of the usual additive order, on purpose: merge the PR, confirm Railway's
 -- realtime-worker rollout (gh api .../commits/<sha>/status), THEN apply this file through apply_migration.yml
@@ -25,7 +26,11 @@
 -- a 'not yet in Browse' blocker on six portals, open ops_incidents and page the operator. With the new code
 -- live first, the hold is already in force for alerts and the stamper is stamping; this file only extends
 -- it to Browse. Not in a list rebuild's minutes (:00-:02, :15-:17, :30-:32, :45-:47: the advisory wait hits
--- the lock limit). Every statement is idempotent; a re-run is a no-op. ROLLBACK: forward only (rule 1).
+-- the lock limit). Apply PROMPTLY after the rollout: until this file lands, the new watchdog window (keyed on the
+-- moment a property became visible) sees every unstamped property as visible at first_seen_at + 6 h, so a watchdog
+-- started in the last day could be told properties it already saw in the still-ungated Browse; step 1 below closes
+-- that for everything born before the apply. Every statement is idempotent; a re-run is a no-op. ROLLBACK:
+-- forward only (rule 1).
 -- Verify, after the next */15 rebuild:
 --   select count(*) from browse_list b join properties p on p.id = b.property_id
 --     where p.settled_at is null and p.first_seen_at > now() - interval '6 hours';  -- 0
@@ -51,6 +56,18 @@ begin
   end if;
 end
 $pre$;
+
+-- ---------------------------------------------------------------------------
+-- 1. The transition: every property born in the day before this apply was served ungated from its first
+--    sight, so its visible-since moment IS its first sight. Stamping it so keeps the watchdog window honest
+--    (a watchdog is told what became visible after it started, never what it could already see) and
+--    changes nothing in Browse (such a property is published either way). Older rows need no stamp: the
+--    'new' window reaches back 24 h and the cap publishes them. Idempotent (settled_at IS NULL).
+-- ---------------------------------------------------------------------------
+update public.properties
+   set settled_at = first_seen_at
+ where settled_at is null
+   and first_seen_at > now() - interval '24 hours';
 
 begin;
 

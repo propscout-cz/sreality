@@ -548,23 +548,21 @@ def _drain_dirty(
 #     it never lands and the cap publishes the property (ruling 4: no special case).
 # Only active, unsettled properties first seen within the cap are candidates: past it a stamp
 # changes nothing, so the cap bounds the statement (~1.7k rows, 134 ms measured) and it takes no
-# LIMIT. A property a merge, split or drain slice holds is skipped (SKIP LOCKED) and taken next
-# pass; the engine's tables are read, never locked. Stamped once: no later change takes it back.
+# LIMIT. ONE query judges and locks: the row lock lands only on the rows that settle (a few per
+# pass), never on every candidate; a property a merge, split or drain slice holds is skipped
+# (SKIP LOCKED) and taken next pass; the engine's tables are read, never locked. Stamped once: no
+# later change takes it back.
 _SETTLE_SQL = f"""
-    WITH cand AS (
+    WITH settled AS (
       SELECT p.id FROM properties p
       WHERE p.settled_at IS NULL AND p.status = 'active'
         AND p.first_seen_at >= now() - {CAP_SQL}
-      FOR NO KEY UPDATE OF p SKIP LOCKED
-    ),
-    settled AS (
-      SELECT c.id FROM cand c
-      WHERE (EXISTS (SELECT 1 FROM listings l JOIN images i ON i.listing_id = l.id
-                      WHERE l.property_id = c.id AND i.storage_path IS NOT NULL)
+        AND (EXISTS (SELECT 1 FROM listings l JOIN images i ON i.listing_id = l.id
+                      WHERE l.property_id = p.id AND i.storage_path IS NOT NULL)
              OR NOT EXISTS (SELECT 1 FROM listings l JOIN images i ON i.listing_id = l.id
-                             WHERE l.property_id = c.id))
+                             WHERE l.property_id = p.id))
         AND NOT EXISTS (SELECT 1 FROM listings l
-                         WHERE l.property_id = c.id
+                         WHERE l.property_id = p.id
                            AND NOT EXISTS (SELECT 1 FROM autodedup.rt_fp f
                                             WHERE f.generation = %(generation)s
                                               AND f.listing_id = l.id))
@@ -572,14 +570,15 @@ _SETTLE_SQL = f"""
                           JOIN autodedup.pairs x
                             ON x.generation = %(generation)s AND x.decision = %(held)s
                            AND (x.listing_lo = l.id OR x.listing_hi = l.id)
-                         WHERE l.property_id = c.id)
+                         WHERE l.property_id = p.id)
         AND NOT EXISTS (SELECT 1 FROM listings l
                           JOIN autodedup.cluster_members m
                             ON m.generation = %(generation)s AND m.listing_id = l.id
                           JOIN autodedup.cluster_members o
                             ON o.generation = m.generation AND o.cluster_key = m.cluster_key
                           JOIN listings ol ON ol.id = o.listing_id
-                         WHERE l.property_id = c.id AND ol.property_id IS DISTINCT FROM c.id)
+                         WHERE l.property_id = p.id AND ol.property_id IS DISTINCT FROM p.id)
+      FOR NO KEY UPDATE OF p SKIP LOCKED
     )
     UPDATE properties p SET settled_at = now()
       FROM settled s
@@ -589,30 +588,28 @@ _SETTLE_SQL = f"""
 
 
 def _settle_fresh(conn: Any, *, renew: Callable[[], Any]) -> int:
-    """Stamp the fresh properties the pipeline is done with (`_SETTLE_SQL`), then bring their Browse
-    rows in (its own transaction, as a drain slice); returns how many it stamped. A database error costs
-    this step only (the next pass retries, and the cap publishes a property meanwhile), never the
-    pass; a lost lease still stops it."""
+    """Stamp the fresh properties the pipeline is done with (`_SETTLE_SQL`), then patch their Browse
+    rows in; returns how many it stamped. The stamp commits ALONE: it row-locks what it stamps, and
+    the engine's reconcile merges under a 5 s lock_timeout, so a merge waits behind one statement at
+    most (autodedup session, 2026-10-23). The patch is `sync_browse_list` on its own -- no recompute
+    (a stamp changes no rolled-up fact), no row lock, best-effort (the next rebuild carries a lost
+    patch). A database error in the stamp costs this step only (the next pass retries, and the cap
+    publishes a property meanwhile), never the pass; a lost lease still stops it."""
     import psycopg
 
     from autodedup.incremental import EVIDENCE_HOLD_REASON, GENERATION
 
+    renew()
     try:
-        renew()
-        # The stamp commits ALONE: it row-locks the properties it stamps (FOR NO KEY UPDATE), and the
-        # engine's reconcile merges under a 5 s lock_timeout, so nothing else may run inside this
-        # transaction -- a merge waits behind one statement at most (autodedup session, 2026-10-23).
         with _bounded(conn):
             with conn.cursor() as cur:
                 cur.execute(f"SET LOCAL lock_timeout = '{_DRAIN_LOCK_TIMEOUT}'")
                 cur.execute(_SETTLE_SQL, {"generation": GENERATION, "held": EVIDENCE_HOLD_REASON})
                 ids = [int(r[0]) for r in cur.fetchall()]
-        if ids:
-            with _bounded(conn):
-                properties_changed(conn, ids)
     except psycopg.Error as exc:
         LOG.warning("MAINTENANCE settle failed, the next pass retries: %s", exc)
         return 0
+    sync_browse_list(conn, ids)
     return len(ids)
 
 

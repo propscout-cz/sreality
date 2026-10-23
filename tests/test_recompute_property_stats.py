@@ -503,14 +503,14 @@ def test_run_incremental_pass_unlocks_on_failure():
     assert _find(conn, "SET holder = NULL")
 
 
-_SETTLED = (lambda s: s.startswith("WITH cand AS"), [(41,), (42,)])
+_SETTLED = (lambda s: s.startswith("WITH settled AS"), [(41,), (42,)])
 
 
 def test_the_pass_settles_last_and_brings_each_stamped_property_into_browse_at_once():
     """After the drain: the lease renewed first, then the stamp ALONE in its transaction under the
     drain's lock-wait ceiling, bound to the engine's own generation and hold reason (it row-locks
-    what it stamps, and the engine's merges wait 5 s at most), then `properties_changed` over
-    exactly the stamped ids in a transaction of its own."""
+    what it stamps, and the engine's merges wait 5 s at most), then the Browse patch alone
+    (`sync_browse_list`: no recompute, no row lock) over exactly the stamped ids."""
     from autodedup.incremental import EVIDENCE_HOLD_REASON, GENERATION
     from scripts.recompute_property_stats import (_RECOMPUTE_SCOPED_SQL, _SETTLE_SQL,
                                                   run_incremental_pass)
@@ -525,8 +525,9 @@ def test_the_pass_settles_last_and_brings_each_stamped_property_into_browse_at_o
     assert sqls[at - 2:at] == ["SET LOCAL statement_timeout = '10min'",
                                "SET LOCAL lock_timeout = '5s'"]
     assert conn.executed[at][1] == {"generation": GENERATION, "held": EVIDENCE_HOLD_REASON}
-    assert sqls[at + 1] == "SET LOCAL statement_timeout = '10min'"
-    assert conn.executed[at + 2] == (" ".join(_RECOMPUTE_SCOPED_SQL.split()), {"ids": [41, 42]})
+    assert conn.executed[at + 1] == ("DELETE FROM browse_list WHERE property_id = ANY(%s)", ([41, 42],))
+    assert "INSERT INTO browse_list" in sqls[at + 2]
+    assert not any(" ".join(_RECOMPUTE_SCOPED_SQL.split()) == q for q in sqls[at:])
 
 
 def test_a_failed_settle_is_logged_and_the_pass_still_returns(caplog: Any) -> None:
@@ -540,7 +541,7 @@ def test_a_failed_settle_is_logged_and_the_pass_still_returns(caplog: Any) -> No
             orig = cur.execute
 
             def execute(sql, params=None):
-                if sql.lstrip().startswith("WITH cand AS"):
+                if sql.lstrip().startswith("WITH settled AS"):
                     raise psycopg.errors.LockNotAvailable("lock timeout")
                 return orig(sql, params)
 
@@ -556,14 +557,17 @@ def test_a_failed_settle_is_logged_and_the_pass_still_returns(caplog: Any) -> No
 
 
 def test_the_settle_statement_reads_the_engine_and_locks_only_fresh_properties():
-    """The cap bounds it (no LIMIT); the engine's tables are read, never locked, and its
-    generation and hold reason are bound, never spelled."""
+    """The cap bounds it (no LIMIT); ONE query judges and locks, so the row lock lands only on the
+    rows that settle; the engine's tables are read, never locked, and its generation and hold
+    reason are bound, never spelled."""
     import scripts.recompute_property_stats as rps
     from toolkit.publication import CAP_SQL
 
     flat = " ".join(rps._SETTLE_SQL.split())
     assert f"p.first_seen_at >= now() - {CAP_SQL}" in flat and "LIMIT" not in flat
     assert flat.count("FOR ") == 1 and "FOR NO KEY UPDATE OF p SKIP LOCKED" in flat
+    assert flat.index("autodedup.cluster_members") < flat.index("FOR NO KEY UPDATE"), "judge first, lock last"
+    assert flat.count("WITH ") == 1 and "cand" not in flat
     assert all(t in flat for t in ("autodedup.rt_fp", "autodedup.pairs",
                                    "autodedup.cluster_members"))
     assert "'rt'" not in flat and "evidence_pending" not in flat
