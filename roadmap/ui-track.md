@@ -7,6 +7,14 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Property page: "Okolí dashboard", its own tab and its own dashboard (2026-10-23, migration 663)
+- **Done** (operator asks 2026-10-23): the neighbourhood dashboard moved off Přehled onto its own tab,
+  "Okolí dashboard". The dashboard it draws is ONE own dashboard per account under any name
+  (`stats_dashboards.property_card`, a partial unique index + a CHECK: named, no filter), no longer the
+  dashboard named "Trh v okolí" (663 marked that one). Browse › Statistiky: the chip says "okolí dashboard",
+  the save dialog greys "Uložit i nastavení filtru" out for it, any own dashboard's menu offers
+  "Použít jako okolí dashboard", "+ Okolí dashboard" creates one. API: `PUT /stats/dashboards/{id}/property-card`.
+
 ### Property page: the "Trh v okolí" dashboard tile (2026-10-23, no migration)
 - **Done** (operator ask + rulings 2026-10-23): Přehled ends with a full-width tile drawing the account's
   dashboard named "Trh v okolí" (Browse › Statistiky offers "+ Trh v okolí · karta nemovitosti"; its chip says

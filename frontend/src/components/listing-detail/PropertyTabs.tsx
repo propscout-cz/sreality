@@ -9,12 +9,13 @@
 import { useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 
-export type PropertyTabId = 'prehled' | 'fotky' | 'hodnota' | 'inzeraty' | 'audit';
+export type PropertyTabId = 'prehled' | 'fotky' | 'hodnota' | 'okoli' | 'inzeraty' | 'audit';
 
 export const PROPERTY_TABS: ReadonlyArray<{ id: PropertyTabId; label: string }> = [
   { id: 'prehled', label: 'Přehled' },
   { id: 'fotky', label: 'Fotky' },
   { id: 'hodnota', label: 'Cena a hodnota' },
+  { id: 'okoli', label: 'Okolí dashboard' },
   { id: 'inzeraty', label: 'Inzeráty' },
   { id: 'audit', label: 'Audit' },
 ];

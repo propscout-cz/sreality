@@ -6,8 +6,10 @@
  * loadDashboard); it changes only on "Uložit změny". An own dashboard can be
  * duplicated as stored ("Duplikovat": a new row, "<name> (kopie)"). A dashboard
  * shared WITH the account is read-only: Načíst, Uložit jako vlastní, Přestat sledovat.
- * The own dashboard named "Trh v okolí" is the property page's tile (lib/neighbourhood):
- * its chip says "karta nemovitosti", and while the account has none the bar offers to
+ * ONE own dashboard, under any name, is the property page's "Okolí dashboard"
+ * (migration 663, lib/neighbourhood): its chip says so, it carries no filter (the
+ * save dialog greys the box out), any other own dashboard's menu can make it so
+ * ("Použít jako okolí dashboard"), and while the account has none the bar offers to
  * create it from the working board. */
 
 import { useEffect, useId, useMemo, useState } from 'react';
@@ -18,7 +20,8 @@ import { filtersEqualForDashboard, filtersForDashboard, readPresetSpec, type Pre
 import { DEFAULT_SORT, sortToParam } from '@/lib/queries';
 import {
   chartsEqual, createStatsDashboard, deleteStatsDashboard, listStatsDashboards, reorderStatsDashboards, sanitizeCharts,
-  shareStatsDashboard, statsDashboardKeys, unshareStatsDashboard, updateStatsDashboard, type ChartSpec, type DashboardList,
+  setPropertyCardDashboard, shareStatsDashboard, statsDashboardKeys, unshareStatsDashboard, updateStatsDashboard,
+  type ChartSpec, type DashboardList,
 } from '@/lib/stats';
 import type { SavedDashboard } from '@/lib/types';
 import { pushToast } from '@/lib/toast';
@@ -26,7 +29,7 @@ import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import Dialog, { DialogClose } from '@/components/Dialog';
 import SavedSetBar, { useSavedSet, type SavedSetCopy, type SavedSetMenuItem } from '@/components/SavedSetBar';
 import ShareBlock from '@/components/ShareBlock';
-import { MARKET_TEMPLATE_NAME, isMarketTemplate } from '@/lib/neighbourhood';
+import { PROPERTY_CARD_LABEL, isPropertyCard } from '@/lib/neighbourhood';
 
 export type DashboardView = Pick<
   BrowseViewState,
@@ -188,6 +191,29 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
     onError: toastOnError('Dashboard se nepodařilo uložit'),
   });
 
+  /* The property card moves: this row takes it and drops its filter, the previous one lets go. */
+  const makeCard = useOptimisticWrite<string, SavedDashboard>({
+    mutationKey: ['write', 'stats-dashboards', 'property-card'],
+    mutationFn: setPropertyCardDashboard,
+    patch: (id) => [
+      cachePatch<DashboardList>({ queryKey: listKey, exact: true }, (prev) =>
+        prev && {
+          ...prev,
+          data: prev.data.map((d) =>
+            d.id === id
+              ? { ...d, property_card: true, filter_spec: null }
+              : isOwn(d) && d.property_card
+                ? { ...d, property_card: false }
+                : d,
+          ),
+        },
+      ),
+    ],
+    revalidate: (_id, failed) => (failed ? [listKey] : []),
+    onSuccess: adopt,
+    onError: toastOnError('Okolí dashboard se nepodařilo nastavit'),
+  });
+
   /* Off the caller's list: the owner deletes it; a recipient leaves with its own
    * grant — the only row in its `shared_with`. */
   const drop = useOptimisticWrite({
@@ -248,9 +274,18 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
 
   const chipMenu = (d: SavedDashboard): SavedSetMenuItem[] => {
     if (isOwn(d)) {
+      const asCard: SavedSetMenuItem[] = isPropertyCard(d)
+        ? []
+        : [{
+            label: 'Použít jako okolí dashboard',
+            onSelect: () => makeCard.mutateAsync(d.id),
+            // A property card carries no filter: one stored here goes, so say it first.
+            ...(d.filter_spec != null ? { confirm: { label: 'Použít a odebrat jeho filtr', busy: 'Ukládám…' } } : {}),
+          }];
       return [
         { label: 'Duplikovat', onSelect: () => duplicate(d) },
         { label: 'Sdílet…', onSelect: () => setSharingId(d.id) },
+        ...asCard,
       ];
     }
     const leave = { label: 'Přestat sledovat', confirm: { label: 'Opravdu přestat sledovat', busy: 'Odcházím…' } };
@@ -263,22 +298,21 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
 
   if (!enabled) return null;
   const sharing = items.find((d) => d.id === sharingId);
-  /* The first own one of that name is the template, as the tile reads it. */
-  const template = items.find(isMarketTemplate);
-  const createTemplate =
-    query.isSuccess && template == null ? (
+  const card = items.find(isPropertyCard);
+  const createCard =
+    query.isSuccess && card == null ? (
       <button
         type="button"
         onClick={() =>
           void create
-            .mutateAsync({ name: MARKET_TEMPLATE_NAME, charts: working })
-            .then((created) => activate(created.id))
+            .mutateAsync({ name: PROPERTY_CARD_LABEL, charts: working })
+            .then((created) => makeCard.mutateAsync(created.id).then(() => activate(created.id)))
         }
-        disabled={create.isPending}
-        title="Uloží současné grafy jako dashboard „Trh v okolí“, který se ukáže na kartě každé nemovitosti"
+        disabled={create.isPending || makeCard.isPending}
+        title="Uloží současné grafy jako dashboard, který se ukáže na kartě Okolí dashboard u každé nemovitosti"
         className="inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-dashed border-[var(--color-rule-strong)] px-2.5 py-1 text-[0.8rem] text-[var(--color-ink-2)] hover:border-[var(--color-copper)] hover:text-[var(--color-copper)] disabled:opacity-50 transition-colors"
       >
-        + {MARKET_TEMPLATE_NAME} <span className="text-[var(--color-ink-3)]">· karta nemovitosti</span>
+        + {PROPERTY_CARD_LABEL}
       </button>
     ) : null;
 
@@ -289,9 +323,9 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
         activeId={activeDashboardId}
         dirty={dirty}
         copy={COPY}
-        suffix={(d) => d.owner_email ?? (d.id === template?.id ? 'karta nemovitosti' : null)}
+        suffix={(d) => d.owner_email ?? (isPropertyCard(d) ? 'okolí dashboard' : null)}
         chipMenu={chipMenu}
-        leading={createTemplate}
+        leading={createCard}
         onLoad={load}
         onSaveNew={(name, withFilter, color) =>
           create
@@ -308,6 +342,10 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
         checkbox={{
           label: 'Uložit i nastavení filtru',
           initial: (d) => d != null && d.filter_spec != null,
+          disabled: (d) =>
+            d != null && isPropertyCard(d)
+              ? 'Okolí dashboard filtr nenese: na kartě nemovitosti se filtruje podle té nemovitosti.'
+              : null,
         }}
       />
       {/* "Sdílet…": the one ShareBlock (read-only shares, no modes) in a small dialog. */}

@@ -39,10 +39,9 @@ import {
   type PropertyPublic,
 } from '@/lib/queries';
 import { COVERED_CATEGORIES, RADII_M, summarizeSold } from '@/lib/soldComps';
-import type { ImagePublic, ListingSnapshotPublic, PropertySource, SoldComparable } from '@/lib/types';
+import type { ListingSnapshotPublic, PropertySource, SoldComparable } from '@/lib/types';
 import { band, shownPrice, useValuoPage } from '@/lib/valuo';
 import BrokerList from './BrokerList';
-import MarketTile from './MarketTile';
 import { DescriptionBody } from './ListingOverview';
 import type { PropertyTabId } from './PropertyTabs';
 
@@ -63,11 +62,9 @@ export default function PropertyOverview({
   chartAdverts,
   snapshots,
   lowest,
-  images,
   onOpen,
 }: {
   property: PropertyPublic;
-  images: ImagePublic[];
   sources: PropertySource[];
   sourcesFailed: boolean;
   onRetrySources: () => void;
@@ -114,10 +111,6 @@ export default function PropertyOverview({
           className={CARD}
         />
         <MarketCard property={property} onOpen={() => onOpen('hodnota')} />
-      </div>
-      {/* The neighbourhood dashboard, full width (operator 2026-10-23). */}
-      <div className="min-w-0 lg:col-span-2">
-        <MarketTile property={property} images={images} />
       </div>
     </div>
   );

@@ -47,13 +47,15 @@ _NORMAL = {"id": "c1", "view": "box", "stats": ["median"], "rows": ["disposition
 _SPEC = {"filters": {"categoryMain": "byt", "districts": [
     {"name": "Brno", "context": None, "level": "obec", "id": 582786}]}, "sort": "-price_czk"}
 
-# (id, name, charts, filter_spec, created_at, updated_at, position, color, owner_email, shared_with)
+# (id, name, charts, filter_spec, created_at, updated_at, position, color, owner_email, shared_with,
+#  property_card)
 _OWN = (_ID, "Praha byty", [_NORMAL], _SPEC, _AT, _AT, 0, "sage", None,
-        [{"account_id": str(_RECIPIENT), "email": "b@x.cz"}])
+        [{"account_id": str(_RECIPIENT), "email": "b@x.cz"}], False)
 _OWN_PAYLOAD = {
     "id": str(_ID), "name": "Praha byty", "charts": [_NORMAL], "filter_spec": _SPEC,
     "created_at": _AT.isoformat(), "updated_at": _AT.isoformat(), "position": 0, "color": "sage",
     "owner_email": None, "shared_with": [{"account_id": str(_RECIPIENT), "email": "b@x.cz"}],
+    "property_card": False,
 }
 
 
@@ -144,7 +146,7 @@ def test_a_bad_body_is_a_422_and_writes_nothing(client, conn, body) -> None:
 
 def test_the_list_is_named_dashboards_own_and_shared_in_the_saved_order(client, conn) -> None:
     shared = (uuid.uuid4(), "Jejich", [], None, _AT, _AT, 3, None, "owner@x.cz",
-              [{"account_id": str(_ACCT), "email": None}])
+              [{"account_id": str(_ACCT), "email": None}], False)
     conn.script = [(_starts("SELECT t.id"), [_OWN, shared])]
     res = client.get("/stats/dashboards")
     assert res.status_code == 200
@@ -190,6 +192,61 @@ def test_an_update_changes_what_was_sent_and_an_explicit_null_clears_the_filter(
     # An omitted filter is KEPT (it is not in the SET); the charts are the registry's.
     assert edit_sql.startswith("UPDATE stats_dashboards t SET name = %s, charts = %s::jsonb, updated_at = now()")
     assert edit[0] == "Nové" and json.loads(edit[1]) == [_NORMAL] and edit[2] == str(_ID)
+
+
+# --- the property page's "Okolí dashboard" (migration 663) ------------------------
+
+def test_the_property_card_moves_in_one_transaction_and_drops_the_filter(client, conn) -> None:
+    card = (*_OWN[:3], None, *_OWN[4:10], True)
+    conn.script = [
+        (_starts("UPDATE stats_dashboards SET property_card = true"), [(_ID,)]),
+        (_starts("SELECT t.id"), [card]),
+    ]
+    res = client.put(f"/stats/dashboards/{_ID}/property-card")
+    assert res.status_code == 200, res.text
+    assert res.json()["property_card"] is True and res.json()["filter_spec"] is None
+    (clear_sql, clear), (set_sql, set_), (get_sql, _get) = conn.executed
+    # The caller's other row lets go first, so 663's one-per-account index never sees two.
+    assert clear_sql == ("UPDATE stats_dashboards SET property_card = false WHERE property_card AND id <> %s "
+                         "AND account_id IN (SELECT current_account_ids())")
+    assert set_sql == ("UPDATE stats_dashboards SET property_card = true, filter_spec = NULL, updated_at = now() "
+                       "WHERE id = %s AND name IS NOT NULL AND account_id IN (SELECT current_account_ids()) RETURNING id")
+    assert clear == set_ == (_ID,)
+    assert get_sql.startswith("SELECT t.id")
+
+
+def test_a_shared_or_unknown_dashboard_never_becomes_the_property_card(client, conn) -> None:
+    """The SET names the caller's own accounts and a named row: anything else matches nothing, the 404."""
+    res = client.put(f"/stats/dashboards/{_ID}/property-card")
+    assert res.status_code == 404
+    assert [sql.split(" WHERE")[0] for sql, _ in conn.executed] == [
+        "UPDATE stats_dashboards SET property_card = false",
+        "UPDATE stats_dashboards SET property_card = true, filter_spec = NULL, updated_at = now()",
+    ]
+
+
+def test_the_projection_reads_the_property_card_as_the_owners_alone() -> None:
+    assert ("(t.property_card AND t.account_id IN (SELECT current_account_ids())) AS property_card"
+            ) in ss._projection(DASHBOARDS)
+
+
+class _Refused(psycopg.errors.CheckViolation):
+    def __init__(self, constraint: str) -> None:
+        super().__init__("check")
+        self._constraint = constraint
+
+    @property
+    def diag(self) -> Any:  # type: ignore[override]
+        return type("Diag", (), {"constraint_name": self._constraint})()
+
+
+def test_a_filter_on_the_property_card_is_a_422_any_other_check_stays_a_500(client, conn) -> None:
+    conn.script = [(_starts("UPDATE stats_dashboards t SET"), _Refused("stats_dashboards_property_card_check"))]
+    res = client.put(f"/stats/dashboards/{_ID}", json={"filter_spec": _SPEC})
+    assert res.status_code == 422 and res.json()["detail"] == "The property page's dashboard carries no filter."
+    conn.script = [(_starts("UPDATE stats_dashboards t SET"), _Refused("stats_dashboards_charts_check"))]
+    with pytest.raises(psycopg.errors.CheckViolation):
+        client.put(f"/stats/dashboards/{_ID}", json={"filter_spec": _SPEC})
 
 
 def test_a_null_name_or_board_keeps_the_stored_one() -> None:
@@ -445,6 +502,7 @@ def test_every_dashboard_route_rides_the_tenant_connection_and_the_writes_that_i
         "GET /stats/dashboards/{dashboard_id}", "PUT /stats/dashboards/{dashboard_id}",
         "DELETE /stats/dashboards/{dashboard_id}", "POST /stats/dashboards/{dashboard_id}/shares",
         "DELETE /stats/dashboards/{dashboard_id}/shares/{account_id}",
+        "PUT /stats/dashboards/{dashboard_id}/property-card",
         "GET /stats/dashboard", "PUT /stats/dashboard",
     }
     # The working-board GET is a tenant read (shape 1): RLS alone, no account.

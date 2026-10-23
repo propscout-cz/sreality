@@ -101,6 +101,8 @@ const PropertyPhotos = lazyChunk(() => import('@/components/listing-detail/Prope
 /* The tag assign list rides in with it (scripts/bundle-budget.mjs). */
 const TagsToggle = lazyChunk(() => import('@/components/listing-detail/TagsToggle'));
 const AuditPanel = lazyChunk(() => import('@/components/listing-detail/AuditPanel'));
+/* The Okolí dashboard tab: the account's neighbourhood dashboard over this property. */
+const MarketTile = lazyChunk(() => import('@/components/listing-detail/MarketTile'));
 
 /* The phone layout is its own chunk: the desktop never downloads it, and the
  * first visit stays inside scripts/bundle-budget.mjs. */
@@ -380,7 +382,6 @@ export default function PropertyDetail() {
                 chartAdverts={chartAdverts}
                 snapshots={snapshotsQ.data ?? NO_SNAPSHOTS}
                 lowest={lowest ?? null}
-                images={images}
                 onOpen={setTab}
               />
             </Suspense>
@@ -450,6 +451,11 @@ export default function PropertyDetail() {
                 />
               </Suspense>
             </div>
+          ),
+          okoli: (
+            <Suspense fallback={<Skeleton height={240} />}>
+              <MarketTile property={property} images={images} />
+            </Suspense>
           ),
           inzeraty:
             sources.length > 0 ? (

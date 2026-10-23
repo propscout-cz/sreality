@@ -261,6 +261,10 @@ _RLS_ONLY_ALLOWLIST: dict[str, str] = {
         "UPDATE by id — migration 626's USING clause; a shared row is visible, never updatable (404)"
     ),
     "DELETE /stats/dashboards/{dashboard_id}": "DELETE by id — migration 626 USING clause",
+    "PUT /stats/dashboards/{dashboard_id}/property-card": (
+        "UPDATE by id under migration 626's USING clause, both statements also naming "
+        "current_account_ids(): another account's or a shared dashboard matches nothing (404)"
+    ),
     "PUT /stats/dashboards/reorder": (
         "UPDATE by a list of ids — migration 626's USING clause is the row set, so another "
         "account's (or a shared) dashboard matches nothing"

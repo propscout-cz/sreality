@@ -35,6 +35,7 @@ vi.mock('@/lib/stats', async (orig) => {
     fetchStatsPivot: vi.fn(),
     listStatsDashboards: vi.fn(),
     createStatsDashboard: vi.fn(),
+    setPropertyCardDashboard: vi.fn(),
     updateStatsDashboard: vi.fn(),
     deleteStatsDashboard: vi.fn(),
     reorderStatsDashboards: vi.fn(),
@@ -48,6 +49,7 @@ import {
   createStatsDashboard,
   deleteStatsDashboard,
   listStatsDashboards,
+  setPropertyCardDashboard,
   shareStatsDashboard,
   statsDashboardKeys,
   unshareStatsDashboard,
@@ -191,6 +193,7 @@ beforeEach(() => {
   __resetLoadedDashboardForTests();
   vi.mocked(listStatsDashboards).mockReset().mockResolvedValue({ data: LIST, total: LIST.length });
   vi.mocked(createStatsDashboard).mockReset();
+  vi.mocked(setPropertyCardDashboard).mockReset();
   vi.mocked(updateStatsDashboard).mockReset();
   vi.mocked(deleteStatsDashboard).mockReset();
   vi.mocked(shareStatsDashboard).mockReset();
@@ -210,27 +213,58 @@ describe('<DashboardBar> the list', () => {
     expect(screen.queryByRole('button', { name: /^Přesunout dashboard: Od Jany/ })).toBeNull();
   });
 
-  it('offers to create the property card\'s "Trh v okolí" dashboard from the working board while none exists', async () => {
-    const template = row({ id: 'd-tpl', name: 'Trh v okolí', charts: [A] });
+  it('offers "+ Okolí dashboard" while no own dashboard is the property page\'s: it saves the working board and marks it', async () => {
+    const created = row({ id: 'd-card', name: 'Okolí dashboard', charts: [A] });
+    const card = { ...created, property_card: true };
     vi.mocked(listStatsDashboards)
       .mockResolvedValueOnce({ data: LIST, total: LIST.length })
-      .mockResolvedValue({ data: [...LIST, template], total: LIST.length + 1 });
-    vi.mocked(createStatsDashboard).mockResolvedValue(template);
+      .mockResolvedValue({ data: [...LIST, card], total: LIST.length + 1 });
+    vi.mocked(createStatsDashboard).mockResolvedValue(created);
+    vi.mocked(setPropertyCardDashboard).mockResolvedValue(card);
     renderBar();
-    fireEvent.click(await chip(/^\+ Trh v okolí/));
-    await waitFor(() => expect(createStatsDashboard).toHaveBeenCalledWith({ name: 'Trh v okolí', charts: [A] }));
-    // Created, it is a chip that names its role — read without "sdílí" — and the offer is gone.
-    expect(await chip('Trh v okolí — karta nemovitosti')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^\+ Trh v okolí/ })).toBeNull();
-    await waitFor(() => expect(url().get('dashboard')).toBe('d-tpl'));
+    fireEvent.click(await chip('+ Okolí dashboard'));
+    await waitFor(() => expect(createStatsDashboard).toHaveBeenCalledWith({ name: 'Okolí dashboard', charts: [A] }));
+    await waitFor(() => expect(setPropertyCardDashboard).toHaveBeenCalledWith('d-card'));
+    // Marked, it is a chip that names its role — read without "sdílí" — and the offer is gone.
+    expect(await chip('Okolí dashboard — okolí dashboard')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '+ Okolí dashboard' })).toBeNull();
+    await waitFor(() => expect(url().get('dashboard')).toBe('d-card'));
   });
 
-  it('never takes a shared "Trh v okolí" for the account\'s own template', async () => {
-    const foreign = row({ ...SHARED, id: 'd-foreign', name: 'Trh v okolí' });
-    vi.mocked(listStatsDashboards).mockResolvedValue({ data: [OWN, foreign], total: 2 });
+  it('is the marked dashboard under any name; a name alone or a shared mark makes none', async () => {
+    const mine = row({ ...OWN, id: 'd-mine', name: 'Moje okolí', property_card: true });
+    const foreign = row({ ...SHARED, id: 'd-foreign', name: 'Trh v okolí', property_card: false });
+    vi.mocked(listStatsDashboards).mockResolvedValue({ data: [mine, foreign], total: 2 });
     renderBar();
-    expect(await chip(/^\+ Trh v okolí/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Trh v okolí — sdílí jana@example.com' })).toBeInTheDocument();
+    expect(await chip('Moje okolí — okolí dashboard')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '+ Okolí dashboard' })).toBeNull();
+  });
+
+  it('takes no dashboard for the property page\'s by its name alone (#1977\'s rule is gone)', async () => {
+    vi.mocked(listStatsDashboards).mockResolvedValue({ data: [row({ ...OWN, name: 'Trh v okolí' })], total: 1 });
+    renderBar();
+    expect(await chip('+ Okolí dashboard')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Trh v okolí' })).toBeInTheDocument();
+  });
+
+  it('makes any other own dashboard the property page\'s from its menu, asking first when it carries a filter', async () => {
+    const card = row({ ...OWN, id: 'd-card', name: 'Okolí', property_card: true });
+    vi.mocked(listStatsDashboards).mockResolvedValue({ data: [card, OWN, WITH_FILTER], total: 3 });
+    vi.mocked(setPropertyCardDashboard).mockImplementation(async (id) => ({ ...OWN, id, property_card: true }));
+    renderBar();
+    await menuFor('Okolí — okolí dashboard');
+    expect(menuItems()).not.toContain('Použít jako okolí dashboard');
+    await menuFor('Ceny');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Použít jako okolí dashboard' }));
+    await waitFor(() => expect(setPropertyCardDashboard).toHaveBeenCalledWith('d-own'));
+    // The cache moves the mark at once: one chip says it.
+    expect(await chip('Ceny — okolí dashboard')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Okolí' })).toBeInTheDocument();
+    // A dashboard with a filter loses it as the card: the menu asks first.
+    await menuFor('Domy');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Použít jako okolí dashboard' }));
+    expect(setPropertyCardDashboard).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('menuitem', { name: 'Použít a odebrat jeho filtr' })).toBeInTheDocument();
   });
 
   it('keeps two shared chips of one name apart for a screen reader', async () => {
@@ -244,7 +278,7 @@ describe('<DashboardBar> the list', () => {
   it('offers rename, duplicate, share and a two-step delete on an own chip; load, copy and leave on a shared one', async () => {
     renderBar();
     await menuFor('Ceny');
-    expect(menuItems()).toEqual(['Přejmenovat', 'Duplikovat', 'Sdílet…', 'Smazat…']);
+    expect(menuItems()).toEqual(['Přejmenovat', 'Duplikovat', 'Sdílet…', 'Použít jako okolí dashboard', 'Smazat…']);
     await menuFor('Od Jany — sdílí jana@example.com');
     expect(menuItems()).toEqual(['Načíst', 'Uložit jako vlastní', 'Přestat sledovat']);
   });
@@ -387,6 +421,20 @@ describe('<DashboardBar> saving', () => {
   };
   const box = (dialog: HTMLElement) => within(dialog).getByRole('button', { name: 'Uložit i nastavení filtru' });
   const submit = (dialog: HTMLElement) => fireEvent.click(within(dialog).getByRole('button', { name: 'Uložit změny' }));
+
+  it('greys the filter box out on the property page\'s dashboard and never sends a filter for it', async () => {
+    const card = row({ ...OWN, filter_spec: null, property_card: true });
+    vi.mocked(listStatsDashboards).mockResolvedValue({ data: [card], total: 1 });
+    loadedBefore('d-own');
+    vi.mocked(updateStatsDashboard).mockResolvedValue({ ...card, charts: [A, B] });
+    renderBar('/browse?tab=stats&dashboard=d-own', [A, B]);
+    const dialog = await openUpdate();
+    expect(box(dialog)).toBeDisabled();
+    expect(box(dialog)).toHaveAttribute('aria-pressed', 'false');
+    expect(within(dialog).getByText(/Okolí dashboard filtr nenese/)).toBeInTheDocument();
+    submit(dialog);
+    await waitFor(() => expect(updateStatsDashboard).toHaveBeenCalledWith('d-own', { name: 'Ceny', color: null, charts: [A, B] }));
+  });
 
   it('marks a drifted board dirty and saves the working charts back, the filter untouched', async () => {
     loadedBefore('d-own');

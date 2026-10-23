@@ -266,6 +266,11 @@ export const updateStatsDashboard = (
 
 export const deleteStatsDashboard = (id: string): Promise<unknown> => apiDelete(dashboardPath(id));
 
+/* Make one own dashboard the property page's "Okolí dashboard" (migration 663): the
+ * account's previous one lets go, and this one drops its filter. Answers the row. */
+export const setPropertyCardDashboard = (id: string): Promise<SavedDashboard> =>
+  apiPut<SavedDashboard>(dashboardPath(id, '/property-card'), {});
+
 /* The caller's own dashboards in their new order; answers the canonical list. */
 export const reorderStatsDashboards = (ids: string[]): Promise<DashboardList> =>
   apiPut<DashboardList>('/stats/dashboards/reorder', { ids });

@@ -36,6 +36,8 @@ class SavedSetKind:
     order_by: str = "t.position ASC, t.created_at DESC"
     # The caller's own rows, where RLS also shows rows shared with them: a new row's position counts only these.
     own_rows: str = ""
+    # (constraint, 422 detail): a table CHECK a client can trip with a valid body; any other CHECK is drift (500).
+    refusals: tuple[tuple[str, str], ...] = ()
 
 
 def _projection(kind: SavedSetKind) -> str:
@@ -158,7 +160,13 @@ def update(
     if not fields:
         return _one(conn, kind, _get_for_update_sql(kind), (set_id,))
     params = [_jsonb(v) if f in kind.blob_columns else v for f, v in fields.items()]
-    return _one(conn, kind, _update_sql(kind, tuple(fields)), [*params, set_id])
+    try:
+        return _one(conn, kind, _update_sql(kind, tuple(fields)), [*params, set_id])
+    except psycopg.errors.CheckViolation as exc:
+        detail = dict(kind.refusals).get(exc.diag.constraint_name or "")
+        if detail is None:
+            raise
+        raise HTTPException(status_code=422, detail=detail) from exc
 
 
 def delete(conn: psycopg.Connection, kind: SavedSetKind, set_id: str) -> bool:
