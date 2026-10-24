@@ -1237,7 +1237,8 @@ renumber.** Navigate by area:
    what the numeric gate was silently defending against, so a structural flag that skips the
    split is a safety regression. **THE BARREN RULE**: a page with zero items is `barren` (OURS)
    until proven otherwise — re-fetch the same URL once through the limiter, and only if it is
-   still empty AND at or past the position the declared total implies (or no total was ever
+   still empty AND on or past the last PAGE the declared total implies — page grain, as the 404
+   rule places it, because a portal's counter over-counts by a handful (or no total was ever
    readable and an earlier page of this unit carried items) does it become `empty_confirmed`. A
    confirmation that cannot be obtained is not a confirmation, and a unit whose FIRST page is
    barren with no declared total is never confirmed. What this trades away, deliberately: the

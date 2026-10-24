@@ -963,3 +963,21 @@ no workflow passed; the shared `operational_limits` row is the one override chan
   after the deploy (the new hash), mostly inside the first crossing: about one ordinary wave, so
   `parsing idnes/churn` may read red once more. The crossing after it must read ~0 foreign
   re-snapshots, and the churn incident closes on that measured OK.
+
+## 2026-10-24 — Health green sprint, wave 7a (shipped with this PR)
+
+bazos's counter over-counts by a handful (ads removed between the count and the page render), so the
+page after the last served one is often blank while the count still says two or three ads remain. The
+barren rule re-reads that blank and then placed it ROW-exactly (`offset >= total`), while the 404 rule
+two methods up has placed a 404 at PAGE grain since 2026-09-09 for exactly this reason. A scope a page
+short of its count therefore read `barren` — a stop of ours — and nominated nothing: prodam/byt 9,040
+of 9,042 (10-24 03:56), 9,099 of 9,102 (10-23 21:11), 9,026 of 9,041 (10-22 11:26); byt-pronajem,
+pozemek-prodej and ostatni-pronajem the same shape on other days, a different unit cut almost every
+walk, and the Health page read `scraping bazos/walks/orphans` Watch (the orphan scope nominates only on
+a walk where every unit reached the end). Fixed here: the blank is placed by `_classify_gone` — ONE
+rule for "where the count puts the end", shared by the 404 and the empty page — and two byte-identical
+duplicate statements in the page loop (`page_size = 0`, `page_size = max(...)`) are gone. Expected:
+every bazos unit ends on a terminator unless the blank sits a whole page or more before the count's
+end; the orphans arm closes on the next end-reached walk.
+- **Next:** idnes's sibling (wave 7b: a page the portal refuses with a 500 costs one page, not the
+  slice) is built on `fix/idnes-refused-page` and waits for the operator's rule-3 ruling.
