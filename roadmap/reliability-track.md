@@ -981,3 +981,28 @@ every bazos unit ends on a terminator unless the blank sits a whole page or more
 end; the orphans arm closes on the next end-reached walk.
 - **Next:** idnes's sibling (wave 7b: a page the portal refuses with a 500 costs one page, not the
   slice) is built on `fix/idnes-refused-page` and waits for the operator's rule-3 ruling.
+
+## 2026-10-24 — Health green sprint, wave 8a (shipped with this PR)
+
+ceskereality keeps a re-categorised ad answering 200 at its OLD URL with the new page: 3639104 is stored
+as `/prodej/komercni-prostory/apartman/…`, its page's canonical is `/prodej/byty/byty-3-kk/…`, H1
+"Prodej bytu 3+kk". `parse_detail` read the category off the URL we requested and stored that same URL,
+so the label never followed the ad: the byt/prodej walk sighted it (sightings are label-blind) while the
+komercni/prodej scope nominated it at every walk (rule 3 is label-scoped) and the drain refetched it live,
+part of the ~818 wasted ceskereality verify fetches a day, with Browse filing it under the wrong category.
+Measured 10-24 over the stored pages: 113 ads (85 active) whose canonical names another category (25 a
+prodej↔pronájem flip), 1,004 (633 active) whose canonical path differs at all (most a slug edited after
+an area change), the canonical's id equal to the stored one on every row. Fixed here: `_page_url` reads
+`<link rel="canonical">` and, when its path is a detail path carrying the same id, the ad's category AND
+`source_url` come from that path on the www host (every page canonicalises to a regional one); the
+requested URL is the fallback. A page whose canonical is the path we asked for parses byte-identically (a
+golden test pins the hash computed on the base commit). Deleted: `parse_detail`'s `category_main` /
+`category_type` parameters and their precedence line, which no caller passed.
+- **Heal:** the live ones heal themselves at their next verify fetch (their old scope still nominates
+  them; one genuine snapshot each, `source_url` with it). A day after the deploy, `reparse.yml`
+  `source=ceskereality fields=category_main,category_type` (dry run, then `allow_snapshot_deferral=true`)
+  heals the rest: `<n>` rows, ~28 inactive expected. The reparse cannot write `source_url`
+  (preserve-if-null), so an inactive row keeps its old URL. A relabel can leave a multi-ad property mixed
+  (rule 15 gates merges only): ~10 newly, listed for the operator to split.
+- **Next:** the ~780 agency-gone ads the same investigation found stay live pages; closing them needs
+  the operator's rule-3 ruling (corroborated absence vs a recheck backoff).

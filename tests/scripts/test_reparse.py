@@ -56,9 +56,9 @@ def test_raw_json_is_declared_for_exactly_the_two_portals_that_stage_no_body() -
 
 
 def test_the_category_argument_is_declared_only_where_the_parser_demands_it() -> None:
-    """remax, maxima and ceskereality default it to None and read the page (ceskereality: its
-    URL), so the seam passes nothing and their categories DO re-derive. bazos/idnes declare it
-    without a default."""
+    """remax and maxima default it to None and read the page, ceskereality takes none (its
+    page's canonical URL names it), so the seam passes nothing and their categories DO
+    re-derive. bazos/idnes declare it without a default."""
     import inspect
     import importlib
 

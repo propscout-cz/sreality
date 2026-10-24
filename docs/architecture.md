@@ -427,8 +427,10 @@ total ("Máme tady N…") with no deep-pagination cap, so every kraj slice can b
 declared tail; a category all of whose slices reached that end nominates its unseen rows for a
 page check (rule #3, source-scoped) even when the declared counts add up short — which is the
 whole point of the 2026-09-08 structural gate, since one 87-row Karlovarský slice collecting 86
-had been vetoing a 20,964-row category. The detail URL carries the category, so the drain derives each listing's category from
-its own URL — one config (the `portals` row, migration 249) walks all 12 (cm × offer-type) descriptors.
+had been vetoing a 20,964-row category. The detail URL carries the category, so the drain derives each listing's category AND
+its `source_url` from the page's `<link rel="canonical">` path, host normalised to www (every page canonicalises to a regional
+host), the requested URL the fallback (no canonical, or one naming another id) — a re-categorised ad keeps answering 200 at its
+old URL, which froze its label until 2026-10-24. One config (the `portals` row, migration 249) walks all 12 (cm × offer-type) descriptors.
 The client rides the residential proxy (`USE_PROXY`) with the shared Chrome browser `User-Agent` plus
 matching `sec-ch-ua` client hints (`CLIENT_HINTS` — since 2026-09-29 the site's own nginx 403s a hint-less
 Chrome UA), at a polite rate. The site's robots.txt disallows generic bots; sending browser-like headers is
