@@ -145,9 +145,9 @@ class PortalSubstrate:
     argument. It is not a style choice: bazos and idnes declare those parameters without
     defaults. bazos treats them as a fallback behind the page's own breadcrumb; idnes passes
     them STRAIGHT THROUGH, so its two category columns come from the index walk and this seam
-    cannot re-derive them. remax, maxima and ceskereality default them to None and read the
-    page (ceskereality: its own URL) instead, so nothing is passed and their categories DO
-    re-derive.
+    cannot re-derive them. remax and maxima default them to None and read the page, and
+    ceskereality takes none (the page's canonical URL names it), so nothing is passed and their
+    categories DO re-derive.
     """
 
     kind: str
