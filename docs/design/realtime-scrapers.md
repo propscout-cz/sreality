@@ -84,11 +84,11 @@ the API's loop), so the API's one loop is the health teller*). It runs, as conti
    not a per-batch wake; the API runs none.*
 
 **Cold lane — GitHub Actions keeps** the delay-tolerant heavy work it does well and for
-free: full reconcile index walks (completeness + delisting evidence), image/CLIP backfills,
+free: full reconcile index walks (completeness + delisting evidence), CLIP backfills,
 dedup full scans + batch lanes, monitors, CI. Self-chaining (`SCRAPE_CHAIN_TOKEN`) is
 legacy backlog acceleration — do not extend it to new lanes. — *Since Actions-exit W0 (#2010,
-2026-10) this worker is the ONLY runtime of the detail drain, fresh-image downloads and the
-incremental property and broker maintenance: the five portal drains, `images_fresh.yml`,
+2026-10) this worker is the ONLY runtime of the detail drain, image downloads (#2011 added the
+inactive residue) and the incremental property and broker maintenance: the five portal drains, `images_fresh.yml`,
 `property_maintenance.yml` and `broker_resolution.yml` that ran beside it as backstops are
 deleted (in their last week the GitHub drains wrote 1–5 % of each portal's completions, bazos
 about 5 %; the PR's pre-checks hold the measurement).

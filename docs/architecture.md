@@ -1463,8 +1463,8 @@ renumber.** Navigate by area:
    the master (best-effort, `image_storage.copy_key`), so the next request makes it from the new
    bytes. Writing copies at download (two widths) waits on the operator's cost hold. Downstream, the
    image phase's bound is wall-clock (`--image-max-seconds`), not the count cap — per-image cost
-   moved, and a count cap calibrated against the old rate overruns the CI job timeout into a SIGKILL
-   that skips finalize.
+   moved, and a count cap calibrated against the old rate overran the CI image jobs' timeout into a
+   SIGKILL that skipped finalize (the worker's images lane bounds itself by its slice instead).
 7. **No new dependencies without justification.** Each entry in `pyproject.toml` should
    have a clear reason. Prefer the stdlib.
 8. **Latest-wins data model with snapshot history.** The `listings` table always reflects

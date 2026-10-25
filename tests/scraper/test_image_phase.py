@@ -372,6 +372,14 @@ def test_pending_image_downloads_fills_the_rest_from_the_inactive_residue():
     assert params_r == (5, 3)
 
 
+def test_pending_image_downloads_returns_an_image_once_when_its_ad_flips_between_tiers():
+    # The tiers are two statements: an ad that goes inactive between them would
+    # otherwise put its image in both, and one batch would fetch it twice.
+    conn = _ScriptedConn([_pending_row(9)], [_pending_row(9), _pending_row(3)])
+    out = scraper_db.pending_image_downloads(conn, limit=5)
+    assert [r[0] for r in out] == [9, 3]
+
+
 def test_pending_image_downloads_sources_filter_scopes_both_tiers():
     conn = _ScriptedConn()
     scraper_db.pending_image_downloads(conn, limit=500, sources=("idnes", "bazos"))

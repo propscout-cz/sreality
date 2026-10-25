@@ -1239,6 +1239,8 @@ def active_count(conn: psycopg.Connection, source: str, scope: Mapping[str, Any]
 # pending set instead (#2011).
 _PENDING_IMAGE_TIERS = ("l.is_active = true", "l.is_active IS NOT TRUE")
 
+PendingImage = tuple[int, int, int | None, str, str | None, str | None, int | None]
+
 
 def pending_image_downloads(
     conn: psycopg.Connection,
@@ -1246,7 +1248,7 @@ def pending_image_downloads(
     limit: int = 1000,
     *,
     sources: tuple[str, ...] | None = None,
-) -> list[tuple[int, int, int | None, str, str | None, str | None, int | None]]:
+) -> list[PendingImage]:
     """Return (image_id, listing_id, sequence, sreality_url, category_main,
     category_type, sreality_id) rows that still need download.
 
@@ -1270,11 +1272,11 @@ def pending_image_downloads(
     (category_main, category_type) on the scrape_runs row.
     """
     extra = ""
-    filters: list[Any] = [max_attempts]
+    params: list[Any] = [max_attempts]
     if sources:
         extra = " AND l.source = ANY(%s)"
-        filters.append(list(sources))
-    rows: list[tuple[int, int, int | None, str, str | None, str | None, int | None]] = []
+        params.append(list(sources))
+    rows: list[PendingImage] = []
     with conn.cursor() as cur:
         for tier in _PENDING_IMAGE_TIERS:
             remaining = limit - len(rows)
@@ -1293,9 +1295,12 @@ def pending_image_downloads(
                 ORDER BY i.id DESC
                 LIMIT %s
                 """,
-                (*filters, remaining),
+                (*params, remaining),
             )
-            rows.extend(cur.fetchall())
+            # Two statements, two snapshots: an ad that flips between them would
+            # put its image in both tiers.
+            seen = {r[0] for r in rows}
+            rows.extend(r for r in cur.fetchall() if r[0] not in seen)
     return rows
 
 

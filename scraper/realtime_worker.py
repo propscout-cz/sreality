@@ -211,7 +211,7 @@ DRAIN_MAX_SECONDS = 120.0
 LEDGER_MAX_WAIT_SECONDS = DRAIN_MAX_SECONDS
 IMAGES_INTERVAL_DEFAULT = 60
 IMAGES_SLICE_DEFAULT = 500
-# Modest beside the old Actions image lanes' 32: the worker slice is small.
+# Modest: the worker slice is small (500 by default).
 IMAGES_WORKERS = 8
 HEARTBEAT_INTERVAL_SECONDS = 30.0
 # Ten missed beats. When no heartbeat pass has FINISHED for this long the watchdog exits
