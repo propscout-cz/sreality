@@ -336,6 +336,46 @@ How long an ad must stay gone from its portal, in practice, before the platform 
 check, although the rule asks for 12.
 _Avoid_: dwell (alone), grace period, delisting delay
 
+### Running the platform
+
+**Scheduled job**:
+One piece of production work that repeats on its own timer, such as a portal walk or the daily
+property sweep, with one definition and one record of when it is due and who is running it.
+_Avoid_: workflow (alone), cron, task, automation
+
+**Lane**:
+One always-on loop inside a worker that does a small piece of work again and again, such as draining
+the detail queue or downloading images.
+_Avoid_: thread, loop, daemon
+
+**Realtime worker**:
+The always-on service that runs the lanes that keep the platform fresh within minutes: probes, the
+detail drain, images, property maintenance, notifications and the health lane.
+_Avoid_: the worker (where the job runner could be meant), hot lane, batch-worker
+
+**Job runner**:
+The always-on service, run as two identical copies, that takes each scheduled job when it is due, runs it
+as its own program, stops it when it overruns its budget, and records how it ended.
+_Avoid_: batch-worker, cron worker, scheduler service, jobs runner
+
+**Job run**:
+One execution of a scheduled job, with who ran it, when it started and ended, how it ended and what it used.
+_Avoid_: execution, pass (a pass belongs to a lane), run (alone, which is the AI term above)
+
+**Attended tool**:
+A piece of work a person starts with a click and watches, such as applying a migration, taking a
+backup or re-parsing stored pages. It never runs on a timer.
+_Avoid_: manual workflow, dispatch job, ops job
+
+**Backstop**:
+A scheduled job that repeats a lane's work so the work still happens while that lane is down.
+_Avoid_: fallback job, safety cron, shadow run
+
+**Actions workflow**:
+One file GitHub runs for us, always named with the qualifier: the tests on a pull request, the canary,
+an attended tool. Never "workflow" alone, which is the AI term above.
+_Avoid_: workflow (alone), pipeline, GitHub job
+
 ### Health
 
 **Check**:
