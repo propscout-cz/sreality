@@ -386,6 +386,26 @@ Independent of the analytical, UI, and map tracks.
   not a parser fix; bazos gains no side columns (its free text carries no labelled parcel); and
   the unverified-key census across the nine portals is still unwritten.
 
+### R2 key unique per image row (2026-10-25, code done; 670 owed)
+- **Shipped (code):** a photo's R2 key is `img/{listing_id}/{images.id}.jpg` (`image_storage.image_key`).
+  Both older shapes (`{sreality_id}/{seq:04d}`, `{listings.id}/{seq:04d}`) drew the prefix from one
+  number range, so a new listing could overwrite an older listing's photo; 152 keys / 304 rows by
+  2026-10-25. Old keys stay serveable (`LISTING_PHOTO_KEY_RE`); `docs/architecture.md` rule 6.
+- **Owed, in order:** (1) apply `migrations/670_repair_colliding_image_storage_paths.sql` with the
+  operator's OK, only after Railway AND the GH image workflows run the `img/` key code (180 rows on 26
+  listings go back to the download queue). (2) One R2 pass over the 152 keys in the backup
+  (`select distinct storage_path from backup_670.images_r2_key_collision`): delete every
+  `thumb/w1080/<key>.webp` (a copy is rebuilt from the master on its next request, so deleting a correct
+  one costs nothing; this clears the possibly stale copy of the 9 owner rows on one inactive bazos listing
+  that 670 leaves in place, uploaded after 2026-10-12 11:12Z). The other 124 objects stay in use by their
+  owner. (3) Once the 180 rows re-downloaded, drop `backup_670` in a forward migration (`drop table if
+  exists backup_670.images_r2_key_collision; drop schema if exists backup_670;`). Check first:
+  `select count(*) filter (where storage_path like 'img/%'), count(*) from images where id in (select
+  image_id from backup_670.images_r2_key_collision)` (a row with `unavailable_reason` set is done too).
+  Only then delete the 28 objects no row holds any more (the backup's `where owns_object` keys, after
+  checking no `images` row holds one; a restore would point back at them), or leave them to the R2
+  orphan sweep (not built yet).
+
 ### sreality photos: the whole frame, and provenance on every stored row (2026-09-11, in progress)
 - **Shipped:** downloads moved off sreality's `res,749,562,3|shr,,20|jpg,90` (mode 3 = a 4:3 CROP;
   ~85% of photos lost their edges, one floor plan lost a whole floor) onto their `SQUARE_1800_JPG`

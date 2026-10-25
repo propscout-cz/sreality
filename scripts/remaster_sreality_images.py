@@ -4,7 +4,7 @@
 lost ~85% of photos' edges). This lane re-downloads each one through
 `image_storage.IMAGE_TRANSFORM_OPS` and OVERWRITES the row's existing R2 object
 under its stored `images.storage_path` — reused verbatim, never recomputed via
-`image_key()`, because the bucket holds two key schemes and a recomputed key
+`image_key()`, because the bucket holds three key shapes and a recomputed key
 would orphan the old object and re-point nothing. The stamp
 (`db.mark_image_remastered`) records the new rendition + decoded dimensions and
 runs `invalidate_derived_signals`, so the phash and CLIP lanes recompute the
@@ -40,7 +40,6 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import re
 import sys
 import threading
 import time
@@ -64,10 +63,6 @@ from scraper.portal import deadline_reached
 from scraper.portal_base import ListingGoneError
 
 LOG = logging.getLogger("remaster_sreality_images")
-
-# The serve-path key shape, re-declared because `api.routes.images` imports
-# fastapi, which the scraper runtime does not carry. Parity is a test.
-_KEY_RE = re.compile(r"^-?\d+/\d{4}\.jpg$")
 
 _LISTING_PAGE = 2000
 _IMAGE_BATCH = 200
@@ -149,7 +144,7 @@ _PENDING_REMAINS_SQL = """
     WHERE l.source = 'sreality'
       AND abs(hashint8(l.id)::bigint) %% %(n)s = %(k)s
       AND i.storage_path IS NOT NULL
-      AND i.storage_path ~ '^-?[0-9]+/[0-9]{4}\\.jpg$'
+      AND i.storage_path ~ '^(img/[0-9]+/[0-9]+|-?[0-9]+/[0-9]{4})\\.jpg$'
       AND i.rendition IS NULL
       AND i.sreality_url LIKE '%%sdn.cz%%'
     LIMIT 1
@@ -367,7 +362,7 @@ def remaster_one(
 ) -> _Outcome:
     """Worker: download, validate, overwrite the R2 object. No DB I/O here."""
     host = _image_host(row.sreality_url)
-    if not row.storage_path or not _KEY_RE.match(row.storage_path):
+    if not row.storage_path or not image_storage.LISTING_PHOTO_KEY_RE.match(row.storage_path):
         return _Outcome(row=row, kind="bad_key", host=host, note=str(row.storage_path))
 
     fresh_url: str | None = None
@@ -538,7 +533,7 @@ def _apply(conn: Any, outcome: _Outcome, stats: _Stats) -> None:
     else:
         stats.bad_key += 1
         # No rendition claim: the key shape is this lane's refusal, not a fact
-        # about the bytes, and widening `_KEY_RE` later must be able to recover
+        # about the bytes, and widening `LISTING_PHOTO_KEY_RE` later must be able to recover
         # these rows. `_PENDING_REMAINS_SQL` skips them so they can't block the
         # completion stamp.
         db.mark_image_remaster_deferred(conn, outcome.row.image_id)
