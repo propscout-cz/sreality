@@ -1,10 +1,11 @@
 -- 643_drop_legacy_health_layer.sql -- the old health layer goes: its 10-minute refresh, 8 matviews, 12 views,
--- 11 functions, 4 tables, 5 columns, 8 registry rows and 3 settings rows (Health dashboard sprint, wave 9 = Health
+-- 11 functions, 5 tables, 5 columns, 8 registry rows and 3 settings rows (Health dashboard sprint, wave 9 = Health
 -- green sprint, wave 6; docs/design/health-dashboard.md, "Wave 9: Drop the old health layer" and section 14). The
 -- plan and the headers of migrations 620 and 621 call this file 624; it is 643 as applied, because 624 would replay
 -- before 625-640, which production applied first. Its sixth column, portals.scrape_cadence_minutes, goes in 663: 649
--- (applied before this file, replayed after it) inserts the web portal's row naming that column, and 650 (#1939)
--- must replay after this file (it drops parsed_url_cache, which parsed_url_activity reads), so no one number fits.
+-- (applied before this file, replayed after it) inserts the web portal's row naming that column, so that drop needs a
+-- later number. 650 (#1939) leaves the retired URL parser's table parsed_url_cache and its view parsed_url_activity
+-- to this file (portal_health_mv reads the view, refresh_health_matviews() refreshes it unguarded): both go here.
 --
 -- ===========================================================================
 -- DESTRUCTIVE, with the operator's OK (ruling Q5; the apply on or after 2026-10-23 13:00Z, section 14). Applied only
@@ -12,7 +13,7 @@
 --   (1) 48 h in which no browser role read a dropped view or called a dropped function (pg_stat_statements by
 --       userid, against the baseline of 2026-10-19 23:50Z, so not before 2026-10-21 23:50Z), and a second 24 h
 --       zero-reads check (section 14, wave 6);
---   (2) the R2 backup has been read back (backup_before_drop.yml, label health-legacy-643: the four tables and
+--   (2) the R2 backup has been read back (backup_before_drop.yml, label health-legacy-643: the five tables and
 --       data_quality_snapshots whole; the definitions of the 8 matviews and 12 views; ops_incidents' five engine
 --       columns and portals.scrape_cadence_minutes as key + column CSVs; derived_artifacts and app_settings whole).
 -- The code that still writes the old layer survives this file, so it is applied from the PR's branch before the merge
@@ -57,7 +58,8 @@
 --      recent_scrape_runs(integer), workflow_failure_summary(integer), recent_workflow_failures(integer) and
 --      emit_verification_stale_alert(): one overload each, dropped by its exact signature.
 --   5. Tables pipeline_check_results_retired_2026_09_22 (551; 1,822 rows), portal_coverage_gate (455; 153),
---      dual_write_watermark (326; 22) and ops_incident_runs (463; 611, unwritten since 2026-10-18).
+--      dual_write_watermark (326; 22), ops_incident_runs (463; 611, unwritten since 2026-10-18) and the retired URL
+--      parser's cache parsed_url_cache (020; 0 live rows on 2026-10-25, read only by parsed_url_activity).
 --   6. Columns ops_incidents.workflow_paths, origins, sample_run_url, sample_excerpt and failure_count (the signature
 --      engine's, 462). No index or constraint covers any of them. (portals.scrape_cadence_minutes, 114: in 663.)
 --   7. Rows: the eight matviews' derived_artifacts rows (18 -> 10 live); the app_settings rows
@@ -131,7 +133,8 @@ declare
     'derived_artifacts_public', 'worker_liveness', 'detail_latency_recent', 'listing_presence_checks_public',
     'scrape_runs_public', 'listing_detail_queue_public', 'listing_fetch_failures_public', 'parsed_url_activity',
     'portals_public', 'portal_listing_counts', 'data_quality_by_source', 'pipeline_check_history_public',
-    'pipeline_check_results_retired_2026_09_22', 'portal_coverage_gate', 'dual_write_watermark', 'ops_incident_runs'];
+    'pipeline_check_results_retired_2026_09_22', 'portal_coverage_gate', 'dual_write_watermark', 'ops_incident_runs',
+    'parsed_url_cache'];
   c_fns constant text[] := array[
     'refresh_health_matviews', 'health_summary', 'portal_health_summary', 'scraper_health_checks',
     'category_trends', 'image_storage_overview', 'images_failure_overview', 'recent_scrape_runs',
@@ -330,6 +333,7 @@ drop function if exists public.emit_verification_stale_alert();
 drop table if exists public.pipeline_check_results_retired_2026_09_22;
 drop table if exists public.portal_coverage_gate;
 drop table if exists public.dual_write_watermark;
+drop table if exists public.parsed_url_cache;
 drop table if exists public.ops_incident_runs;
 
 -- ---------------------------------------------------------------------------
@@ -426,7 +430,7 @@ begin
       'derived_artifacts_public', 'worker_liveness', 'detail_latency_recent', 'listing_presence_checks_public',
       'scrape_runs_public', 'listing_detail_queue_public', 'listing_fetch_failures_public', 'parsed_url_activity',
       'portals_public', 'portal_listing_counts', 'data_quality_by_source', 'pipeline_check_history_public',
-      'pipeline_check_results_retired_2026_09_22', 'portal_coverage_gate', 'dual_write_watermark',
+      'pipeline_check_results_retired_2026_09_22', 'portal_coverage_gate', 'dual_write_watermark', 'parsed_url_cache',
       'ops_incident_runs']) as n
    where to_regclass('public.' || n) is not null;
   if v_left is not null then
