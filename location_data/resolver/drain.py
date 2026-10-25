@@ -13,8 +13,8 @@ Batch discipline (learned three times):
   poisonous listing still costs its own row and not the batch;
 * `statement_timeout` / `lock_timeout` set with `SET LOCAL` INSIDE the batch transaction
   (outside one, on this codebase's autocommit connections, `SET LOCAL` is a silent no-op);
-* a lease-row CAS on `location_jobs`, never a session advisory lock — a lock taken on one
-  pooler backend and released on another strands;
+* a lease-row CAS on `scheduled_jobs` (`scraper.job_lease.held`), never a session advisory
+  lock — a lock taken on one pooler backend and released on another strands;
 * **judge the queue by OLDEST-ROW AGE, not by length** (the repo's standing rule);
 * the slice is ordered `(enqueued_at, listing_id)` — a bare timestamp sort reshuffles on
   every call, because a batch enqueue shares one `now()` and the tie order is arbitrary;
@@ -87,17 +87,16 @@ from typing import Any
 import psycopg
 
 from location_data import loader_db
-from location_data.resolver import core, lease, projection, resolve_db
+from location_data.resolver import core, projection, resolve_db
 from location_data.resolver.bind import REGISTRY_PIN_CONFLICT_M
 from location_data.resolver.geo import distance_between
 from location_data.resolver.types import Claim, ResolverContext
 from location_data.resolver.version import RESOLVER_VERSION
-from scraper import db
+from scraper import db, job_lease
 
 LOG = logging.getLogger("location_data.resolver.drain")
 
 JOB_NAME = "location_resolve_incremental"
-CONCURRENCY_GROUP = "location-resolve"
 DEFAULT_BATCH = 250
 DEFAULT_MAX_SECONDS = 600
 BACKOFF_SECONDS = (60, 300, 900, 3600, 21600)
@@ -1038,12 +1037,7 @@ def main(argv: list[str] | None = None) -> int:
         # success that enqueued nothing (run 34482389394).
         if args.full_sweep:
             enqueue_full_sweep(conn, window=args.sweep_window)
-        with lease.held(
-            conn,
-            JOB_NAME,
-            cadence="15 minutes",
-            concurrency_group=CONCURRENCY_GROUP,
-        ) as acquired:
+        with job_lease.held(conn, JOB_NAME, cadence="15 minutes") as acquired:
             if not acquired:
                 LOG.info(
                     "DRAIN skipped: another run holds the %s lease%s", JOB_NAME,

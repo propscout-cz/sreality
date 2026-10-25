@@ -26,7 +26,8 @@ scans, monitors).
   pay-at-decision-time (pHash → CLIP cosine → bounded live forensics), the floor-plan gate on its
   OWN budget; `dedup_batches.yml` is dispatch-only. (Supersedes the old "batch-warmer revival".)
 - **W3 (#696, migration 270)** — sreality count-probe lane (`pagination.total` deltas → opt-in
-  targeted `index_walk`; sreality's v1 API is sort-blind so it can't do a newest-first probe).
+  targeted `index_walk`; sreality's v1 API is sort-blind so it can't do a newest-first probe). Deleted in
+  Actions-exit W0 (#2015).
 - **W4** — idnes/bazos street-coverage measurement: the RÚIAN resolver lever is **exhausted** (coord
   precision ceiling — idnes coords >15 m from address points, bazos coords are shared page-link
   pins); the 61%/51% eligibility is not resolver-fixable without better coord extraction.

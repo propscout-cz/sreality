@@ -218,8 +218,8 @@ component is slimmed twice — each wave rewrites one component and slims its st
     the main thread. Each batch logs its own `N bodies/s`; `scripts/bench_page_extraction.py`
     takes the same number off the committed fixtures with no database (16 cores, 1 500 bodies:
     317 → 512 b/s at 2 workers, 1 512 b/s at 16). No new flag, no `INTAKE_VERSION` bump — the
-    claims are identical; `LOCATION_INTAKE_WORKERS` exists only for a runner that misreports
-    its CPU count. The lane also **self-chains** now: GitHub fires the `35 * * * *` cron ~7
+    claims are identical; the `LOCATION_INTAKE_WORKERS` override for a runner that misreports its
+    CPU count went in Actions exit W1 (#2021): the width is `scraper.cpus.job_cpus()`. The lane also **self-chains** now: GitHub fires the `35 * * * *` cron ~7
     times a day (no tick at 02:35 or 03:35 on 2026-09-12), so a 250 000-body backlog drained at
     ~6 000 bodies a fired tick however fast the extraction got. A run dispatches ONE successor
     with the same budget and batch size when it reports an unfinished half THAT IT MOVED

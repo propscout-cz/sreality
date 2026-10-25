@@ -407,6 +407,10 @@ _ADMIN_ONLY_RELATIONS = frozenset({
     # `_public` view; the /push routes and the worker's push lane are their one writer each.
     "push_subscriptions",
     "notification_deliveries",
+    # The scheduled-jobs lease and its run history (migration 675): holders, host names and log tails, service role
+    # only, no `_public` view (the Health job cells read them inside the pg_cron watcher).
+    "scheduled_jobs",
+    "job_runs",
 })
 
 _CREATE_GATED_OBJ = re.compile(

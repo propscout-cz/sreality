@@ -1206,7 +1206,7 @@ def _finalize_run(
                 listings_updated=agg.get("listings_updated", 0),
                 listings_inactive=agg.get("listings_inactive", 0),
                 images_discovered=agg.get("images_discovered", 0),
-                images_stored=0,  # bytes are uploaded async by images.yml, not here
+                images_stored=0,  # bytes are uploaded async by the worker's images lane, not here
                 errors=agg.get("errors", 0),
                 by_category=agg.get("by_category", []),
                 # The drain persists its counters per chunk (crash-survivable);

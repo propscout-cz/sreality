@@ -230,8 +230,7 @@ def test_probe_reads_a_refusal_the_walk_swallowed():
 
 
 def test_probe_requires_a_probe_seam():
-    # sreality's portal implements neither seam (its count-probe lane is a
-    # separate design) -> a loud error, not a silent full walk.
+    # sreality's portal implements neither seam -> a loud error, not a silent full walk.
     bare = SimpleNamespace(source="sreality", index_rate=1.0)
     with pytest.raises(TypeError):
         portal_runner.run_index_probe(bare, dry_run=True)

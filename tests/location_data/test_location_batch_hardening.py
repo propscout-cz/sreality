@@ -25,7 +25,7 @@ hours. The drain is also the one member that is latency-bound rather than instan
 detoast), so it contributed least to the incident and lost most to the queueing. It READS
 the claim spine that the intake and the archive sweep WRITE, so it never carried their
 "must never overlap" constraint. Its guards are now the job-level `location-resolve` group
-and the `location_jobs` lease CAS; `test_the_resolve_drain_is_out_of_the_shared_group` below
+and the `scheduled_jobs` lease CAS; `test_the_resolve_drain_is_out_of_the_shared_group` below
 is the rail that keeps it out.
 
 AMENDED 2026-09-12 (W1-a3): a member SELF-CHAINS again. The hourly cron fires ~7 times a day
@@ -132,7 +132,7 @@ def test_the_resolve_drain_is_out_of_the_shared_group():
 
     Re-adding the drain to `location-batch` would re-starve it behind the self-chaining
     archive sweeps — the failure this reverses. Its own two guards have to stay: the
-    per-lane job group (never overlaps itself) and, in the drain, the `location_jobs`
+    per-lane job group (never overlaps itself) and, in the drain, the `scheduled_jobs`
     lease CAS (never overlaps the Railway worker lane)."""
     wf = _workflow("location_resolve.yml")
     group = (wf.get("concurrency") or {}).get("group", "")
@@ -157,7 +157,7 @@ def test_the_resolve_drain_is_out_of_the_shared_group():
         f"the drain's per-lane guard is {inner!r} — without it two ticks overlap"
     )
     assert "lease" in inspect.getsource(drain.main), (
-        "drain.main no longer takes the location_jobs lease — with the outer group gone "
+        "drain.main no longer takes the scheduled_jobs lease — with the outer group gone "
         "that CAS is the only thing keeping a second drainer out"
     )
 

@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from scraper.cpus import job_cpus
+
 
 @dataclass(frozen=True)
 class ProposalResult:
@@ -52,7 +54,7 @@ class ProposalTagger:
         if not labels:
             raise ValueError("no active taxonomy labels to propose against")
         os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "60")
-        torch.set_num_threads(threads or (os.cpu_count() or 4))
+        torch.set_num_threads(threads or job_cpus())
         # Mirrors clip_tagger.Tagger.load's retry: concurrent sharded jobs
         # downloading the same weights occasionally 503 / time out.
         model = processor = None

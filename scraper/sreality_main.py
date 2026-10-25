@@ -23,8 +23,8 @@ What stays sreality-specific lives behind the Portal seams, unchanged:
   (db.mark_listing_inactive, which also clears the failure row), and
   listing_fetch_failures bookkeeping behind record_failure.
 
-scraper.main keeps the image-download phase used by images.yml — it does
-not move here. Cadence split (rule #19): index_walk.yml runs `--index-only`
+scraper.main keeps the image-download phase the worker's images lane runs —
+it does not move here. Cadence split (rule #19): index_walk.yml runs `--index-only`
 every 15 min; the realtime worker's drain lane drains, and `--drain-only`
 with a --max-seconds budget is the hand run. Omitting
 both flags runs both phases (dispatch-only combined fallback). Records an

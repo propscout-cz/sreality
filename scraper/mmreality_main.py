@@ -432,9 +432,9 @@ def main(argv: list[str] | None = None) -> int:
         else config.limits.max_detail_per_run
     )
 
-    # Omitting both flags runs the index walk then the detail drain in one job
-    # (the pilot's combined run, bounded by --max-pages / --max-detail). The
-    # split flags exist so a large backfill can be cadence-split like sreality.
+    # The schedule walks only (--index-only) and the realtime worker drains; omitting
+    # both flags runs both phases, an ad-hoc combined run bounded by --max-pages /
+    # --max-detail.
     rc = 0
     if not args.drain_only:
         rc = portal_runner.run_phase(

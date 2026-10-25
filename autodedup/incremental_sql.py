@@ -526,6 +526,14 @@ select s.listing_id, s.resolved_at
 # property alone), ~2.5 passes instead of ~15 h in id order; the two probes ride
 # `listings_property_id_idx` and `cluster_members`' key: 895 ms a limit-500 call measured live,
 # all buffer hits (25,434 unread).
+# E979, the operator's ruling 2026-10-25: a newly widened block is read FIRST, in a category order
+# the operator chooses — Liberec (`obec:563889`) first, flats for rent, then houses for sale, then
+# flats for sale, then the rest. The order is data, not code: `rt_build_priority:<generation>`
+# (`incremental_lane.parse_build_priority`). Two keys go in front of E978's: the advert's block is
+# a named one, then (inside one) its `category_main/category_type` position in the list, an
+# unlisted category after the listed ones, read by primary key as the others are; outside a named
+# block that key is 0. Empty arrays (no row, or a malformed one) make both keys constant, so the
+# order is exactly E978's.
 RT_SCOPE_BUILD_ENTRANTS_SQL = """
 select s.listing_id, s.resolved_at
   from autodedup.rt_scope_ids s
@@ -536,7 +544,15 @@ select s.listing_id, s.resolved_at
                      from autodedup.rt_fp f
                     where f.generation = %(generation)s::text
                       and f.listing_id = s.listing_id)
- order by (select l.is_active
+ order by (s.block_key = any(%(priority_blocks)s::text[])) desc,
+          case when s.block_key = any(%(priority_blocks)s::text[])
+               then coalesce((select array_position(%(priority_cats)s::text[],
+                                                    l.category_main || '/' || l.category_type)
+                                from public.listings l
+                               where l.id = s.listing_id),
+                             cardinality(%(priority_cats)s::text[]) + 1)
+               else 0 end,
+          (select l.is_active
                    or exists (select 1
                                 from public.listings o
                                where o.property_id = l.property_id

@@ -247,3 +247,39 @@ def test_delisting_uses_the_runners_default_nomination():
     assert not hasattr(p, "mark_gone")
     assert not hasattr(p, "presence_candidates")
     assert getattr(p, "seen_key", "native") == "native"
+
+
+class _Conn:
+    def __enter__(self) -> "_Conn":
+        return self
+
+    def __exit__(self, *a: Any) -> None:
+        return None
+
+    def close(self) -> None:
+        pass
+
+
+@pytest.mark.parametrize("argv,phases", [
+    (["--index-only"], [("index", {"max_seconds": 600.0})]),
+    (["--drain-only"], [("detail", {"max_seconds": 600.0})]),
+    ([], [("index", {"max_seconds": 600.0}), ("detail", {"max_seconds": 600.0})]),
+])
+def test_the_cadence_split_runs_the_phases_asked_for(
+        monkeypatch: pytest.MonkeyPatch, argv: list[str], phases: list[tuple[str, dict[str, Any]]]) -> None:
+    """The schedule walks (`--index-only`) and the realtime worker drains; the drain keeps the run's budget too."""
+    from scraper import portal_runner
+
+    calls: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(portal_runner, "load_config", lambda _source, dry_run=False: PortalConfig(
+        source="bezrealitky", supports_complete_walk=True, categories=[], split_threshold=None))
+    monkeypatch.setattr(bezrealitky_main.db, "connect", lambda: _Conn())
+    monkeypatch.setattr(bezrealitky_main.db, "scrape_run_start", lambda _c, run_type, source: len(calls) + 1)
+    monkeypatch.setattr(bezrealitky_main.db, "scrape_run_finalize", lambda *_a, **_k: None)
+    monkeypatch.setattr(bezrealitky_main.portal_runner, "run_index_walk",
+                        lambda portal, dry_run, **kw: calls.append(("index", kw)) or (0, {}))
+    monkeypatch.setattr(bezrealitky_main.portal_runner, "run_detail_drain",
+                        lambda portal, dry_run, **kw: calls.append(("detail", kw)) or (0, {}))
+
+    assert bezrealitky_main.main([*argv, "--max-seconds", "600"]) == 0
+    assert [(phase, {"max_seconds": kw.get("max_seconds")}) for phase, kw in calls] == phases

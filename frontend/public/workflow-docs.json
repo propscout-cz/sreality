@@ -528,7 +528,7 @@
     {
       "filename": "clip_tag.yml",
       "name": "Dedup — CLIP image tagging (sharded)",
-      "description": "Backfills image_clip_tags + image_clip_embeddings: the self-hosted CLIP zero-shot tag per stored image (free replacement for the paid room classifier on the coarse dedup-relevant tags, and the FIRST tagger for dum/pozemek/komercni). Runs GLOBAL full-scale by default (the Středočeský priority drain is complete; pass region_id on dispatch to re-prioritise a kraj). ACTIVE-listing images first; idempotent + resumable (a tagged image drops out of the next select), so once caught up the hourly runs are cheap no-ops that just keep pace with new inflow. Horizontally sharded into 4 parallel jobs (image_id %% 4), each with its own runner + cap, like images.yml. Installs CPU torch + the `clip` extra (transformers); the production CLIP could move to int8-ONNX later as an optimization.",
+      "description": "Backfills image_clip_tags + image_clip_embeddings: the self-hosted CLIP zero-shot tag per stored image (free replacement for the paid room classifier on the coarse dedup-relevant tags, and the FIRST tagger for dum/pozemek/komercni). Runs GLOBAL full-scale by default (the Středočeský priority drain is complete; pass region_id on dispatch to re-prioritise a kraj). ACTIVE-listing images first; idempotent + resumable (a tagged image drops out of the next select), so once caught up the hourly runs are cheap no-ops that just keep pace with new inflow. Horizontally sharded into 4 parallel jobs (image_id %% 4), each with its own runner + cap. Installs CPU torch + the `clip` extra (transformers); the production CLIP could move to int8-ONNX later as an optimization.",
       "manual": true,
       "schedules": [
         {
@@ -1450,60 +1450,6 @@
       "permissions": null,
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/idnes_index_walk.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/idnes_index_walk.yml"
-    },
-    {
-      "filename": "images.yml",
-      "name": "Scraping: image backlog drain (sharded)",
-      "description": "THE backlog image-download workflow. Images are fully decoupled from every portal's crawl (the crawls only record image-URL rows; this job uploads the bytes to R2), so this is the owner of the deep backlog across ALL portals (sreality, idnes, bazos, bezrealitky, maxima, mmreality). Source-agnostic.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "0 */2 * * *",
-          "human": "Every 2 hours"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_image_downloads",
-          "description": "Override per-shard images-per-run cap (blank = 18000; 0 = drain to empty / suspicious-stop)",
-          "required": false,
-          "type": "string",
-          "default": null,
-          "options": null
-        },
-        {
-          "name": "image_workers",
-          "description": "Override concurrent workers per shard (blank = 32)",
-          "required": false,
-          "type": "string",
-          "default": null,
-          "options": null
-        },
-        {
-          "name": "images_active_only",
-          "description": "Restrict to active listings only. Default false: drain the full backlog incl. inactive (the fresh fast lane already covers new actives).",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": null,
-      "cancelInProgress": null,
-      "timeoutMinutes": 110,
-      "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/images.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/images.yml"
     },
     {
       "filename": "index_walk.yml",
@@ -2435,7 +2381,7 @@
     {
       "filename": "refresh_stale_images.yml",
       "name": "Jobs: refresh stale image URLs",
-      "description": "Re-opens active listings whose photos aren't in R2 yet so their (possibly rotated) source image URLs get refreshed. Portals rotate image CDN URLs over weeks; a listing whose images the newest-first backfill never reached before its URLs rotated is stuck — the stored URL 404s, the frontend fallback can't load it, and the image downloader can't fetch it. This sweep (scripts.refresh_stale_image_urls) re-enqueues such listings into the source-generic listing_detail_queue; the detail drain re-fetches them, record_images repoints each not-yet-stored image's URL to the current one, and the image backfill (images.yml) then stores the bytes.",
+      "description": "Re-opens active listings whose photos aren't in R2 yet so their (possibly rotated) source image URLs get refreshed. Portals rotate image CDN URLs over weeks; a listing whose images the newest-first backfill never reached before its URLs rotated is stuck — the stored URL 404s, the frontend fallback can't load it, and the image downloader can't fetch it. This sweep (scripts.refresh_stale_image_urls) re-enqueues such listings into the source-generic listing_detail_queue; the detail drain re-fetches them, record_images repoints each not-yet-stored image's URL to the current one, and the realtime worker's images lane then stores the bytes.",
       "manual": true,
       "schedules": [
         {
@@ -2708,34 +2654,10 @@
         },
         {
           "name": "max_seconds",
-          "description": "wall-clock budget for the run (default 1500s, under the 30-min job timeout)",
+          "description": "wall-clock budget for the walk (default 1500s, under the 30-min job timeout)",
           "required": false,
           "type": "string",
           "default": "",
-          "options": null
-        },
-        {
-          "name": "max_detail",
-          "description": "cap detail-drain claims this run",
-          "required": false,
-          "type": "string",
-          "default": "2000",
-          "options": null
-        },
-        {
-          "name": "rate",
-          "description": "detail-fetch requests/second ceiling",
-          "required": false,
-          "type": "string",
-          "default": "2.0",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "detail-fetch workers (concurrency; raise for a one-time backfill)",
-          "required": false,
-          "type": "string",
-          "default": "8",
           "options": null
         }
       ],
@@ -2774,30 +2696,6 @@
           "required": false,
           "type": "string",
           "default": "",
-          "options": null
-        },
-        {
-          "name": "max_detail",
-          "description": "cap detail-drain claims this run (blank = drain the queue)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "rate",
-          "description": "detail-fetch requests/second ceiling",
-          "required": false,
-          "type": "string",
-          "default": "1.0",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "detail-fetch workers (concurrency; raise for a one-time backfill)",
-          "required": false,
-          "type": "string",
-          "default": "2",
           "options": null
         }
       ],
@@ -2839,32 +2737,8 @@
           "options": null
         },
         {
-          "name": "max_detail",
-          "description": "cap detail-drain claims this run (raise for a one-time backfill)",
-          "required": false,
-          "type": "string",
-          "default": "4000",
-          "options": null
-        },
-        {
-          "name": "rate",
-          "description": "detail-fetch requests/second ceiling",
-          "required": false,
-          "type": "string",
-          "default": "2.0",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "detail-fetch workers (concurrency; raise for a one-time backfill)",
-          "required": false,
-          "type": "string",
-          "default": "4",
-          "options": null
-        },
-        {
           "name": "max_seconds",
-          "description": "detail-drain wall-clock budget; it finalizes cleanly before this. Blank = 2400 (40 min).",
+          "description": "walk wall-clock budget; it finalizes cleanly before this. Blank = 2400 (40 min).",
           "required": false,
           "type": "string",
           "default": "",
@@ -2987,35 +2861,11 @@
           "options": null
         },
         {
-          "name": "max_detail",
-          "description": "cap detail-drain claims this run (blank = per-portal config)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
           "name": "max_seconds",
-          "description": "wall-clock budget for the detail drain (seconds)",
+          "description": "wall-clock budget for the walk (seconds)",
           "required": false,
           "type": "string",
           "default": "2100",
-          "options": null
-        },
-        {
-          "name": "rate",
-          "description": "detail-fetch requests/second ceiling",
-          "required": false,
-          "type": "string",
-          "default": "2.0",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "detail-fetch workers (concurrency; raise for a one-time backfill)",
-          "required": false,
-          "type": "string",
-          "default": "4",
           "options": null
         }
       ],
