@@ -10,7 +10,7 @@ of 1 January). Save it as ``data/csu_population.json`` and the seed
 matching municipalities to ``curated_cities`` by ``(name, kraj)`` with a
 diacritics-insensitive fallback.
 
-This replaces the Wikidata SPARQL fetcher (``fetch_population_wikidata.py``)
+This replaced the Wikidata SPARQL fetcher (deleted 2026-10-25)
 as the population source: the operator now downloads the official ČSÚ file
 directly instead of relying on a third-party mirror.
 

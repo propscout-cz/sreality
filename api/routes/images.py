@@ -14,8 +14,8 @@ presign the private `custom-attachments/` uploads that share the bucket.
 `?w=1080` asks for the phone-size copy instead (#1765): a WebP 1080 px wide at
 `thumb/w1080/<key without .jpg>.webp`, derived from the validated key (never taken from
 the client), made from the full-size photo on its first request and redirected
-to like any photo after that. Any failure serves the full-size photo instead. A
-re-master that overwrites the photo deletes its copy (scripts/remaster_sreality_images.py).
+to like any photo after that. Any failure serves the full-size photo instead. Nothing
+replaces a stored photo's bytes today; a job that did would have to delete this copy too.
 """
 
 from __future__ import annotations

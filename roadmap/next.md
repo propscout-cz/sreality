@@ -259,17 +259,12 @@ overlay that can be heatmap-color-coded by any chosen index.
   silently turned the geographic filter into a no-op on the first
   draft. `fetchBrowseStats` now passes the four params; Stats and
   Map/Table can never disagree on a city-quality cohort again.
-- **Population fetcher**: `scripts/fetch_population_wikidata.py`
-  queries Wikidata's public SPARQL endpoint for every Czech
-  municipality's `population (P1082) @ point in time (P585)`,
-  matches by `(name, kraj)` against the curated list, and writes
-  `data/csu_population_2024.csv` — the file the seed script
-  already loads on present. Wired through
-  `.github/workflows/refresh_population.yml` for operator-triggered
-  refresh; no DB access required (the workflow just regenerates
-  the committed CSV).
+- **Population fetcher** (deleted 2026-10-25, Actions exit W0, with its
+  `refresh_population.yml` workflow): a Wikidata SPARQL fallback that
+  wrote `data/csu_population_2024.csv`; its only run failed and the ČSÚ
+  file below superseded it.
 - **Population source switched to the official ČSÚ DataStat file.**
-  The Wikidata fetcher is now a fallback; the preferred source is the
+  The preferred source is the
   official export "Počet obyvatel v obcích k 1. 1." (download from
   https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02). The operator
   commits the downloaded JSON-stat file to `data/csu_population.json`;

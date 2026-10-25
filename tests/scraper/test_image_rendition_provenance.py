@@ -1,13 +1,12 @@
-"""Rails for the re-master provenance write path (migration 496).
+"""Rails for the image provenance write path (migration 496).
 
 Three concerns, all hermetic (hand-rolled fake connections, no DB):
   1. `invalidate_derived_signals` emits exactly the two producer-predicate
      resets, gates the DINOv3 delete behind BOTH `drop_dinov3` and a
      `to_regclass` probe, and does no SQL at all for empty input.
-  2. `mark_image_remastered` writes exactly the provenance SET list and never
-     `storage_path` / `download_attempts` (the R2 key is reused, and a
-     re-master is not a download attempt), with a PLAIN `phash` assignment.
-  3. The NEVER-touch rail: neither function's SQL may name any label store,
+  2. `mark_image_stored` writes provenance only when it was measured and is
+     byte-identical to its pre-496 form otherwise.
+  3. The NEVER-touch rail: the chokepoint's SQL may name no label store,
      review table or embedding cache the visual-signal program owns.
 """
 
@@ -119,7 +118,7 @@ def test_invalidate_drop_dinov3_skips_delete_when_table_absent():
     assert not any("DELETE" in s for s in stmts)
 
 
-# ---- mark_image_remastered --------------------------------------------------
+# ---- SET-list helper --------------------------------------------------------
 
 
 _SET_COL_RE = re.compile(r"^\s*([a-z_]+)\s*=", re.MULTILINE)
@@ -129,45 +128,6 @@ def _set_columns(sql: str) -> set[str]:
     """Column names on the left of `=` inside an UPDATE's SET list."""
     body = sql.split("SET", 1)[1].split("WHERE", 1)[0]
     return set(_SET_COL_RE.findall(body))
-
-
-def test_mark_image_remastered_set_list_is_exactly_the_provenance_columns():
-    conn = _RecordingConn()
-    scraper_db.mark_image_remastered(
-        conn, 42, rendition="sreality-1800-fit", width=1800, height=1200,
-        phash=-99, sreality_url="https://d18-a.sdn.cz/x.jpg",
-    )
-
-    # [0] is the invalidation, [1] the stamp.
-    sql, params = conn.cursor_obj.executed[1]
-    assert _set_columns(sql) == {
-        "rendition", "stored_width", "stored_height",
-        "phash", "last_download_attempt_at", "sreality_url",
-    }
-    assert "storage_path" not in sql
-    assert "download_attempts" not in sql
-    assert params == ("sreality-1800-fit", 1800, 1200, -99,
-                      "https://d18-a.sdn.cz/x.jpg", 42)
-
-
-def test_mark_image_remastered_phash_is_a_plain_assignment():
-    """A failed inline hash must leave NULL for the phash lane, never resurrect
-    the hash of bytes that no longer exist."""
-    sql = scraper_db._MARK_IMAGE_REMASTERED_SQL
-    assert "phash = %s" in sql
-    assert "COALESCE(%s, phash)" not in sql
-    assert "COALESCE(%s, sreality_url)" in sql  # the URL IS preserved
-
-
-def test_mark_image_remastered_invalidates_first():
-    conn = _RecordingConn()
-    scraper_db.mark_image_remastered(
-        conn, 42, rendition="native", width=None, height=None, phash=None,
-    )
-    stmts = _sql(conn)
-    assert "clip_tagged_at = NULL" in stmts[0]
-    assert "rendition = %s" in stmts[1]
-    assert conn.cursor_obj.executed[1][1] == ("native", None, None, None, None, 42)
 
 
 # ---- the NEVER-touch rail ---------------------------------------------------
@@ -200,7 +160,6 @@ def test_provenance_sql_never_names_a_curation_or_cache_table():
         scraper_db._INVALIDATE_DERIVED_SIGNALS_SQL,
         scraper_db._DINOV3_TABLE_PROBE_SQL,
         scraper_db._DROP_DINOV3_EMBEDDINGS_SQL,
-        scraper_db._MARK_IMAGE_REMASTERED_SQL,
     ))
     for name in FORBIDDEN_TABLES:
         assert name not in corpus, f"{name} must never be touched here"

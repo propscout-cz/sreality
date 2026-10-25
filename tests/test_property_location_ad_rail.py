@@ -476,7 +476,6 @@ R7_SUBJECT_SITES: dict[tuple[str, str], str] = {
     ("api/estimation_runs.py", "_LIST_FROM"): "the /estimations list's place label (location only; facts diverge)",
     ("api/estimation_runs.py", "_SUBJECT_MF_FACTS_SQL"): "the subject's MF reference-rent facts",
     ("toolkit/velocity.py", "_fetch_listing_for_velocity"): "the velocity subject",
-    ("scripts/smoke_agent.py", "_pick_target"): "the smoke agent's subject",
 }
 _COHORT_CALL = "_shared_filter_where"
 

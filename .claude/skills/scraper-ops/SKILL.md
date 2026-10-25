@@ -156,10 +156,10 @@ property + clears the dirty queue under a `--max-seconds` budget; a budget stop 
 swept and saves `app_settings.property_sweep_cursor`, where the next run resumes the cycle (if <36h old);
 a resumed run that stops again exits RED; only a whole cycle stamps the `property_sweep` artifact, judged by `jobs`). The visual-signal producers run alongside:
 `compute_image_phash.yml` (hourly pHash BACKSTOP only — the image drain hashes the bytes in hand and writes `phash` in the
-`storage_path` UPDATE, so this job takes just `phash IS NULL` rows: `IMAGES done phash_missed` + re-master re-arms), `clip_tag.yml`
+`storage_path` UPDATE, so this job takes just `phash IS NULL` rows: `IMAGES done phash_missed`), `clip_tag.yml`
 (`scripts/clip_tag_backfill.py` — zero-shot CLIP room/plot tags into `image_clip_tags` + a 512-d vector into `image_clip_embeddings`),
 `clip_retag.yml` (re-runs the zero-shot over each image's STORED embedding when the taxonomy changes, per
-`app_settings.clip_taxonomy_retag_after`; no R2 download, no re-inference) and `backfill_render_score.yml` (render-vs-photo axis). Newest and
+`app_settings.clip_taxonomy_retag_after`; no R2 download, no re-inference). Newest and
 **dispatch-only**: `dinov3_embed_backfill.yml` (GPU, inert until the encoder config is complete),
 `tagging_bakeoff.yml` (GPU, the encoder EXPERIMENT, `dedup_sim` only), `tag_model.yml` (CPU, ONE
 versioned tag model, mig 490 — the tag is the argmax head) and `new_dedup_candidates.yml` (CPU, Level 0
@@ -277,10 +277,6 @@ R2 key = `img/{listing_id}/{images.id}.jpg`, unique per ROW (rule #6); a stored 
   ACTIVE listings' photos first, so a fresh card renders an image in minutes, not 2 hours.
 - `refresh_stale_images.yml` (every 6h) — re-enqueues active listings whose un-downloaded image URLs
   rotated/went stale into `listing_detail_queue` (low priority) so the detail drain repoints them.
-- `sreality_image_remaster.yml` (`15 */2`, 6 shards; scheduled runs gated on the `SREALITY_REMASTER_CRON` repo
-  variable — the kill-switch, dispatch always runs) — re-downloads `rendition IS NULL` rows at the master template,
-  OVERWRITING each R2 object under its stored key, then deleting its `thumb/w1080/…webp` phone copy (best-effort:
-  a failure logs `REMASTER copy_delete_failed`); dead URLs re-resolve from live detail. Final: `REMASTER done …`.
 
 **Cadence:** `*/15` for each half, deliberately — frequent index walks surface delistings fast, while
 the bounded drain keeps a steady, polite fetch volume. GitHub throttles scheduled workflows, so effective
