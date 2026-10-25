@@ -535,8 +535,8 @@ is what the `delisting` check's limits are built on.
 flipped; a second one 12h+ later flips)` is the provisional branch; `DETAIL id=…
 gone (is_active=false)` the flip; `gone (already inactive)` a confirmed verdict
 on a row something else closed. `DRAIN progress` and `RUN done` carry `pending=`
-beside `gone=`; `scrape_runs.listings_inactive` (GitHub drains only — the
-worker writes no `scrape_runs` row) counts every verdict that is not pending —
+beside `gone=`; `scrape_runs.listings_inactive` (a hand `--drain-only` run or a
+combined scraper's drain phase only — the worker writes no `scrape_runs` row) counts every verdict that is not pending —
 flipped, already inactive, no row — so it is not a flip count; the `delisting`
 check's outflow arm counts `listings.inactive_at` stamps instead.
 

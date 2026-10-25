@@ -13,7 +13,7 @@ name: "Scraping: Sreality index walk (Phase 2)"
 # detail fetching, so it finishes in minutes and delistings surface fast.
 #
 # This replaced the index+detail+sweep of the legacy scrape.yml (deleted in
-# C2-2, 2026-10). The companion detail_drain.yml consumes the queue.
+# C2-2, 2026-10). The realtime worker's drain lane consumes the queue.
 # Records run_type='index' with index_pages>0, which is what the Health
 # liveness check keys off (freshness/delisting depend on the index walk, not
 # the drain).

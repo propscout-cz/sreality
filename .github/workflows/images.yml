@@ -9,8 +9,8 @@ name: "Scraping: image backlog drain (sharded)"
 # 5-portal inflow (~14k/hr) on top of a ~900k backlog, so the queue grew and
 # fresh listings rendered imageless. This runs the image phase as N=4 parallel
 # jobs, each owning the `image_id mod 4 == shard` slice (--image-shard k/4), for
-# ~4x throughput with no cross-job coordination. The near-real-time fresh fast
-# lane (images_fresh.yml) owns new-listing latency separately.
+# ~4x throughput with no cross-job coordination. The realtime worker's images
+# lane owns new-listing latency separately.
 #
 #   * Default drains ALL pending images (active + inactive); the selection
 #     orders active listings first so what's left of the fresh gap drains first.
