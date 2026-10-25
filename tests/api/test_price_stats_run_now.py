@@ -1,5 +1,4 @@
-"""The price-stats "run now" dispatch: its own env (GH_DISPATCH_TOKEN, GH_REPO) through the GitHub
-dispatch POST (scraper.github_dispatch)."""
+"""The price-stats "run now" dispatch: its own env (GH_DISPATCH_TOKEN, GH_REPO) and GitHub's dispatch POST."""
 
 from __future__ import annotations
 

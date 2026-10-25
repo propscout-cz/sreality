@@ -6,6 +6,7 @@ run_index_probe / run_detail_drain / db.connect are monkeypatched.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import contextlib
 import inspect
@@ -1101,15 +1102,12 @@ def test_build_portal_from_baked_config(source):
 # --- no GitHub dispatch from the worker (#2015) ----------------------------------------
 
 
-def test_the_worker_runs_sixteen_lanes_and_no_count_probe():
-    assert len(rw.LANES) == 16
-    assert "count_probe" not in rw.LANES
-
-
 def test_no_worker_code_path_posts_a_workflow_dispatch():
-    # The count-probe lane was the worker's only trigger of a GitHub workflow.
-    src = inspect.getsource(rw)
-    assert "github_dispatch" not in src and "/dispatches" not in src
+    # The count-probe lane was the worker's only trigger of a GitHub workflow; its helper went with it.
+    tree = ast.parse(inspect.getsource(rw))
+    strings = [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+    assert not [s for s in strings if "/dispatches" in s or "api.github.com" in s]
+    assert not (Path(rw.__file__).parent / "github_dispatch.py").exists()
 
 
 # --- maintenance pass --------------------------------------------------------------

@@ -54,8 +54,8 @@ the API's loop), so the API's one loop is the health teller*). It runs, as conti
    `docs/design/portal-order-fidelity.md`). **Update (2026-08-04, portal-order-fidelity
    Phase 4):** sreality also joined `REALTIME_SOURCES` with its own bespoke
    `probe_category` (the ceskereality pattern — per-page early-stop diff, UNSPLIT since
-   the 422 is offset- not size-triggered), complementing the count-probe lane
-   (deleted in Actions-exit W0, #2015). **mmreality** — proxied, low-frequency only (cost).
+   the 422 is offset- not size-triggered); it once complemented the count-probe lane,
+   deleted in Actions-exit W0 (#2015). **mmreality** — proxied, low-frequency only (cost).
    Probes reuse the safe partial-walk primitive: diff + enqueue, `complete=False`, so a
    probe can never falsely delist (rule #3 machinery unchanged).
 2. **Continuous detail drain** off the existing SKIP LOCKED queue (multi-runtime-safe by
