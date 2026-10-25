@@ -745,7 +745,12 @@ describe('<CurationBlock> delegated stamp', () => {
  * the heading (desktop) or its own toolbar (phone), the text optional; the
  * section leads with the property's upcoming viewings under a calendar leaf. */
 describe('<CurationBlock> viewings', () => {
-  const inDays = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString();
+  // Anchored at local noon: the formatter counts Prague calendar days, and a plain
+  // now ± 24 h lands on the wrong day just after midnight or across a DST change
+  // (main went red at 00:11 local on the clocks-back night, 2026-10-25).
+  const noon = new Date();
+  noon.setHours(12, 0, 0, 0);
+  const inDays = (n: number) => new Date(noon.getTime() + n * 86_400_000).toISOString();
 
   it('books a viewing with no text from the heading, on the Prague clock', async () => {
     const user = userEvent.setup();
