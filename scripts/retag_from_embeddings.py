@@ -8,8 +8,8 @@ than `app_settings.clip_taxonomy_retag_after` (the campaign cutoff — set it to
 a re-tag after a taxonomy edit), and stamps `tagged_at = now()` on each, so a re-tagged row
 drops out of the scan. No cutoff set → nothing to do. Sharded (--shard k/--shards N) like
 clip_tag, whose workflow runs this as each shard's last step. Active-listing images only
-(that is where embeddings are stored). New / not-yet-
-tagged images go through the normal clip_tag backfill, which loads the same live taxonomy.
+(that is where embeddings are stored). New / not-yet-tagged images go through the normal
+clip_tag backfill, which loads the same live taxonomy.
 Install: CPU torch + `.[clip]`.
 """
 
