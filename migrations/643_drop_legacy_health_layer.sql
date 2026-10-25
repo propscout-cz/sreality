@@ -133,8 +133,8 @@ declare
     'derived_artifacts_public', 'worker_liveness', 'detail_latency_recent', 'listing_presence_checks_public',
     'scrape_runs_public', 'listing_detail_queue_public', 'listing_fetch_failures_public', 'parsed_url_activity',
     'portals_public', 'portal_listing_counts', 'data_quality_by_source', 'pipeline_check_history_public',
-    'pipeline_check_results_retired_2026_09_22', 'portal_coverage_gate', 'dual_write_watermark', 'ops_incident_runs',
-    'parsed_url_cache'];
+    'pipeline_check_results_retired_2026_09_22', 'portal_coverage_gate', 'dual_write_watermark', 'parsed_url_cache',
+    'ops_incident_runs'];
   c_fns constant text[] := array[
     'refresh_health_matviews', 'health_summary', 'portal_health_summary', 'scraper_health_checks',
     'category_trends', 'image_storage_overview', 'images_failure_overview', 'recent_scrape_runs',

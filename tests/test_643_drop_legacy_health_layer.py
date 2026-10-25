@@ -28,7 +28,7 @@ VIEWS = ["derived_artifacts_public", "worker_liveness", "detail_latency_recent",
          "portals_public", "portal_listing_counts", "data_quality_by_source", "pipeline_check_history_public"]
 # ops_incident_runs last: dropping its FK locks ops_incidents.
 TABLES = ["pipeline_check_results_retired_2026_09_22", "portal_coverage_gate", "dual_write_watermark",
-          "ops_incident_runs"]
+          "parsed_url_cache", "ops_incident_runs"]
 FUNCTIONS = ["refresh_health_matviews", "health_summary", "portal_health_summary", "scraper_health_checks",
              "category_trends", "image_storage_overview", "images_failure_overview", "recent_scrape_runs",
              "workflow_failure_summary", "recent_workflow_failures", "emit_verification_stale_alert"]
@@ -239,7 +239,7 @@ def test_the_dml_touches_only_the_registry_the_settings_and_the_incidents() -> N
 
 def test_the_cadence_column_goes_after_649_and_643_before_650() -> None:
     """RED by: the column drop back in 643, which replays before 649's web row names it (the replay stops there), or
-    663 renumbered before 649. 650 (#1939) needs 643 first: parsed_url_activity reads the table it drops."""
+    663 renumbered before 649. 650 (#1939) leaves parsed_url_cache and parsed_url_activity to 643."""
     assert ("column", CADENCE) not in _dropped(SQL)
     web = (MIGRATIONS / "649_web_portal.sql").read_text(encoding="utf-8")
     assert "scrape_cadence_minutes" in _code(web), "649 no longer names the column: 663 could fold back into 643"
