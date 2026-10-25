@@ -6,6 +6,10 @@
 > AR12 in three parts); eight are needed before the proof of concept. Wave 0 (§ 7) is worth doing whether or not the
 > rest is approved. **The program commits only to W0, W1, a 3-day scout spike and W2;** every later wave waits for a
 > demand trigger (§ 7).
+>
+> **Rearranged MVP path (2026-10-25, after the operator's instructions: open-ended agent set, results first, no overkill):**
+> [MVP.md](./MVP.md) re-sequences the committed path into M0 → M1 → M2 (about 3 weeks) and says where every deferred
+> piece of this document went. This file stays the reference design for everything after M2.
 
 *Operator brief of 2026-10-25 (13 points); `main` @ 3f0ff5b8a. Ten audits and eight research tracks fed three drafts,
 scored by three judges; this synthesis builds on the most reuse-heavy draft, and § 4.1 lists where it changed course.
