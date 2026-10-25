@@ -46,6 +46,16 @@ def test_the_header_says_destructive_and_when_it_may_be_applied() -> None:
     assert "backup_before_drop.yml" in header
 
 
+def test_the_heal_is_applied_from_its_own_branch_and_merged_after() -> None:
+    """apply_migration.yml is dispatched with the open PR's branch, so a merged file is never
+    unapplied (and migration_drift never sees a merged, unapplied 671)."""
+    header = _header_text()
+    assert "apply_migration.yml --ref cleanup/g3-plot-echo-heal" in header
+    assert "--ref main" not in header
+    assert "Merge this PR only once applied" in header
+    assert "scraper.field_census --bless" in header
+
+
 def test_the_file_has_one_hit_predicate_for_the_one_column() -> None:
     assert len(_hit_predicates()) == 1
     assert "set estate_area = null" in _BODY

@@ -3,13 +3,14 @@
 --
 -- ===================================================================================================
 -- DESTRUCTIVE (a stored value becomes NULL). APPLY ONLY AFTER the plot rule (`scraper.area.stated_plot`,
--- same PR) is MERGED AND DEPLOYED, with the off-database backup taken (step 3 below) AND the operator's
--- explicit OK. Never applied by the PR that adds it.
+-- the PR this one is stacked on) is MERGED AND DEPLOYED, with the off-database backup taken (step 3 below)
+-- AND the operator's explicit OK. Applied from THIS PR's branch while the PR is open; the PR merges only
+-- once applied (step 9), so a merged file is never unapplied.
 -- ===================================================================================================
 --
--- THE RULING. General ruling 3 (2026-09-30) + the operator's answers of 2026-10-01, rebuilt on current main by
--- the operator's ruling 5a (2026-10-25; the originals were PR #1668 + #1669, migration 583, never merged). On 14
--- of 14 live pages opened (idnes, realitymix, mmreality; ceskereality answered 403 and was read from its stored
+-- THE RULING. General ruling 3 (2026-09-30) + the operator's answers of 2026-10-01, rebuilt on current main on
+-- the operator's go-ahead of 2026-10-25 (the originals, PR #1668 + #1669 with migration 583, never merged and are
+-- superseded). On 14 of 14 live pages opened (idnes, realitymix, mmreality; ceskereality answered 403 and was read from its stored
 -- pages) the portal ITSELF prints one figure in the plot box and the floor-area box. Not our key maps: the
 -- missing rule was "a plot equal to the floor area on a commercial unit is not a plot" and "a flat never carries
 -- a plot at all". That rule is `scraper.area.stated_plot`, called BEFORE the content hash at the contract
@@ -62,32 +63,38 @@
 --   1. any row's category_main is not 'byt' or 'komercni' (impossible by construction: the predicate moved).
 --   2. any P2 row carries area_basis = 'plot': a dwelling stamped as land is a row re-categorised after a
 --      land-era derive -- OUR residue, not the advertiser's. 0 on 2026-10-25.
---   3. the ACTIVE komerční rows with area_basis NULL (925 on 2026-10-25) have not been sampled: they hit by the
---      usable arm alone, and an active unstamped row was never re-derived. (A flat hits whatever its basis.)
+--   3. the ACTIVE komerční rows with area_basis NULL (925 on 2026-10-25) moved by more than 10 % since: they hit
+--      by the usable arm alone, and an active unstamped row was never re-derived. The 2026-10-25 hand-read read
+--      them with the rest (it sorted every active hit, whatever its basis). (A flat hits whatever its basis.)
 --   4. the ACTIVE P2 total is over 3,000 or the ACTIVE P1 total is over 4,000, or all rails over 18,000: the
 --      predicate or the data moved since the census above.
 --   5. more than 10 P1 rows on sreality, or more than 1 P2 row on sreality -- read the one there is first.
 --
--- APPLY ORDER.
---   1. The plot rule merged AND deployed (Railway's commit status for the realtime-worker + the next detail
---      drain on main). Before that, a live detail refetch RE-WRITES an echo (`estate_area` is a `structured`
---      cell, so the parse's value lands on every write); a row that did gets caught by a re-run after deploy.
---      Between the merge and the apply, verify_pipeline's `migration_drift` reads this file's backup table
---      ABSENT -- expected, and gone at the apply.
---   2. The COUNT QUERY, compared with the census; the stop conditions; a stratified hand-read of P2 hits by
---      portal x komerční subtype (garáž, sklad, výroba/areál, ubytování, činžovní dům, zemědělský) -- the
---      #1630 -> #1637 lesson. Known false-positive classes: the reverse case (idnes 19082282, a campsite whose
---      land is typed into both boxes: the TRUE plot goes) and a garage whose parcel really is its floor area.
+-- APPLY ORDER. Before any of it, the rule's own PR merged past its gate (scraper track W22): the stratified
+-- hand-read of the active komerční hits (done 2026-10-25: right on ~93 %; the REVERSE case -- an areál, farm,
+-- camp or petrol station whose TRUE parcel is typed into both boxes -- ~170 active rows, 93 confirmed by the
+-- advert's own text) read and ruled on by the operator, and the autodedup programme told. This file clears the
+-- same class on the stored rows, inactive ones included (the backup keeps every value).
+--   1. The plot rule DEPLOYED (Railway's commit status for the realtime-worker + the next detail drain on main).
+--      Before that, a live detail refetch RE-WRITES an echo (`estate_area` is a `structured` cell, so the
+--      parse's value lands on every write); a row that did gets caught by a re-run after deploy.
+--   2. The COUNT QUERY, compared with the census; the stop conditions.
 --   3. The off-database copy (to R2, the database skill's destructive gate):
 --        gh workflow run backup_before_drop.yml -f label=plot-echo-heal -f targets="listings:id,estate_area"
 --   4. The operator's OK (destructive).
---   5. The autodedup programme told, and its lane paused if it wants a fresh seed (interval 0): this file writes
---      NO snapshot, so the lane's `changed` feed (listing_snapshots) never sees a healed row, and the engine's
+--   5. The autodedup lane paused if the programme wants a fresh seed (interval 0): this file writes NO
+--      snapshot, so the lane's `changed` feed (listing_snapshots) never sees a healed row, and the engine's
 --      plot features (`plot_area_rel_diff` / `plot_area_exact`) read the echo until it re-reads the rows.
---   6. gh workflow run apply_migration.yml --ref main -f file=671_plot_column_echo_heal.sql -f dry_run=false
---      -f confirm=APPLY
+--   6. gh workflow run apply_migration.yml --ref cleanup/g3-plot-echo-heal -f file=671_plot_column_echo_heal.sql
+--      -f dry_run=false -f confirm=APPLY
 --   7. `rt_seed fresh=true` (or what the programme decides), then resume the lane; re-run the COUNT QUERY --
 --      expected: no rows (re-run this file if a row a concurrent drain held was skipped).
+--   8. Re-bless the field census from a terminal with SUPABASE_DB_URL (`python -m scraper.field_census --bless`)
+--      and commit the regenerated `data/field_capture/` files to this branch: ceskereality `estate_area` is
+--      blessed at fill 0.6145 and this file takes it to ~0.52 (30,267 -> 25,679 of 49,367 active on
+--      2026-10-25), a 9.4 pp drop 0.6 pp short of `parsing_fill_drop_warn_pp` -- the parsing cell must measure
+--      the new intended fill, not drift into Watch.
+--   9. Merge this PR only once applied (and re-blessed).
 --
 -- HOW. One transaction; one statement does the work: a `hit` CTE (FOR UPDATE SKIP LOCKED -- a row a drain is
 -- writing right now is left for a re-run instead of waited on) -> every hit copied into
