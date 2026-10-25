@@ -1,9 +1,10 @@
 """Ingestion entrypoint for price-stats datasets.
 
-Resolves the configured municipalities (localities/suggest, cached), then for
-each active dataset × locality × {prodej, pronájem} fetches the full monthly
-series from estate_prices and upserts it, recomputes the per-city derived
-metrics, and refreshes the map choropleth. Pure HTTP fetch + psycopg writes;
+Resolves the configured municipalities (localities/suggest, cached), then walks
+ONE queue of (dataset, locality) stalest first across the active datasets,
+fetching each locality's {prodej, pronájem} monthly series from estate_prices
+until the time budget; recomputes the per-city derived metrics of every dataset
+it reached, and refreshes the map choropleth. Pure HTTP fetch + psycopg writes;
 the session cookie comes from `scraper.sreality_auth`.
 
   python -m scraper.price_stats_main                 # all active datasets
@@ -78,8 +79,7 @@ def _dataset_localities(
     localities/suggest + coordinate PIP (resolve_obce_by_geo), so a dataset can
     target the full obec breakdown — not only the spatial-join-mapped subset.
     """
-    obec_ids = dataset.get("obec_ids")
-    ids = [int(x) for x in obec_ids] if obec_ids else None
+    ids = _obec_ids(dataset)
     if ids and not dry_run:
         db.resolve_obce(conn, ids)
         names = db.unresolved_obec_names(conn, ids)
@@ -143,8 +143,8 @@ def resolve_localities(
 
 
 @dataclass
-class Plan:
-    """One dataset's share of a run: its localities, its window, and its run row once the queue reaches it."""
+class DatasetRun:
+    """One dataset's share of a run: what to fetch, and its run row's tallies once reached."""
 
     dataset: dict[str, Any]
     localities: list[dict[str, Any]]
@@ -155,56 +155,60 @@ class Plan:
     observations: int = 0
 
 
-def work_queue(plans: list[Plan]) -> list[tuple[Plan, dict[str, Any]]]:
-    """Every (dataset, locality) of the run, stalest first ACROSS datasets, never fetched first: a dataset
-    bigger than one budget can no longer starve the datasets after it."""
-    def staleness(item: tuple[Plan, dict[str, Any]]) -> tuple[bool, float, str, int]:
-        plan, loc = item
-        last = loc.get("last_fetched_at")
-        return last is not None, last.timestamp() if last else 0.0, loc["name"], plan.dataset["id"]
+QueueItem = tuple[DatasetRun, dict[str, Any]]
 
-    return sorted(((plan, loc) for plan in plans for loc in plan.localities), key=staleness)
+
+def work_queue(runs: list[DatasetRun]) -> list[QueueItem]:
+    """Every (dataset, locality) of the run, stalest first ACROSS datasets, never fetched first: a
+    dataset bigger than one budget can no longer starve the datasets after it."""
+    def staleness(item: QueueItem) -> tuple[bool, float, str, int]:
+        run, loc = item
+        last = loc.get("last_fetched_at")
+        return last is not None, last.timestamp() if last else 0.0, loc["name"], run.dataset["id"]
+
+    return sorted(((run, loc) for run in runs for loc in run.localities), key=staleness)
 
 
 def _scrape_locality(
-    conn: Any, client: PriceStatsClient, plan: Plan, loc: dict[str, Any], *, chunk_months: int, dry_run: bool,
+    conn: Any, client: PriceStatsClient, run: DatasetRun, loc: dict[str, Any], *,
+    chunk_months: int, dry_run: bool,
 ) -> int:
     """Both categories' series for one locality; returns the observations written."""
     loc_obs = 0
     for category_type_cb in CATEGORIES:
         series = _fetch_with_auth_retry(
-            client, plan.dataset, loc, category_type_cb,
-            start_ym=plan.start_ym, end_ym=plan.end_ym, chunk_months=chunk_months,
+            client, run.dataset, loc, category_type_cb,
+            start_ym=run.start_ym, end_ym=run.end_ym, chunk_months=chunk_months,
         )
         months = series["months"]
         LOG.info(
             "SERIES dataset=%s city=%s ct=%d months=%d",
-            plan.dataset["id"], loc["name"], category_type_cb, len(months),
+            run.dataset["id"], loc["name"], category_type_cb, len(months),
         )
         if not dry_run and months:
             loc_obs += db.upsert_observations(
                 conn,
-                dataset_id=plan.dataset["id"],
+                dataset_id=run.dataset["id"],
                 entity_type=loc["entity_type"],
                 entity_id=loc["entity_id"],
                 category_type_cb=category_type_cb,
                 months=months,
-                run_id=plan.run_id,
+                run_id=run.run_id,
             )
     if not dry_run:
         # No prodej AND no pronájem series → mark insufficient-data so
         # future runs skip it (TTL); data → drop any stale marker.
         if loc_obs > 0:
-            db.clear_no_data(conn, plan.dataset["id"], loc["entity_type"], loc["entity_id"])
+            db.clear_no_data(conn, run.dataset["id"], loc["entity_type"], loc["entity_id"])
         else:
-            db.record_no_data(conn, plan.dataset["id"], loc["entity_type"], loc["entity_id"])
+            db.record_no_data(conn, run.dataset["id"], loc["entity_type"], loc["entity_id"])
     return loc_obs
 
 
 def run_queue(
     conn: Any,
     client: PriceStatsClient,
-    queue: list[tuple[Plan, dict[str, Any]]],
+    queue: list[QueueItem],
     *,
     window_years: int,
     chunk_months: int,
@@ -213,45 +217,53 @@ def run_queue(
 ) -> bool:
     """Scrape the queue in order. Returns True if it stopped early on the time budget
     (partial — the stalest localities were done; the next run continues)."""
-    reached: list[Plan] = []
+    reached: list[DatasetRun] = []
     finished: set[int] = set()
+    current: DatasetRun | None = None
     budget_hit = False
     try:
-        for i, (plan, loc) in enumerate(queue):
+        for i, (run, loc) in enumerate(queue):
             if deadline_reached(deadline):
                 LOG.warning("BUDGET reached, stopped at locality %d/%d", i, len(queue))
                 budget_hit = True
                 break
-            if plan.run_id is None:
-                plan.run_id = 0 if dry_run else db.start_run(
-                    conn, plan.dataset["id"], cities_total=len(plan.localities)
+            current = run
+            if run.run_id is None:
+                run.run_id = 0 if dry_run else db.start_run(
+                    conn, run.dataset["id"], cities_total=len(run.localities)
                 )
-                reached.append(plan)
-            plan.observations += _scrape_locality(
-                conn, client, plan, loc, chunk_months=chunk_months, dry_run=dry_run
+                reached.append(run)
+            run.observations += _scrape_locality(
+                conn, client, run, loc, chunk_months=chunk_months, dry_run=dry_run
             )
-            plan.done += 1
+            run.done += 1
             if not dry_run:
                 db.update_run_progress(
-                    conn, plan.run_id, cities_done=plan.done, observations=plan.observations
+                    conn, run.run_id, cities_done=run.done, observations=run.observations
                 )
         if not dry_run:
-            for plan in reached:
-                metrics = db.recompute_metrics(conn, plan.dataset["id"], window_years=window_years)
+            for run in reached:
+                current = run
+                metrics = db.recompute_metrics(conn, run.dataset["id"], window_years=window_years)
                 db.finish_run(
-                    conn, plan.run_id, status="success",
-                    localities=len(plan.localities), observations=plan.observations,
+                    conn, run.run_id, status="success",
+                    localities=len(run.localities), observations=run.observations,
                 )
-                finished.add(plan.dataset["id"])
+                finished.add(run.dataset["id"])
                 LOG.info(
                     "DATASET done id=%s observations=%d cities=%d/%d metrics=%d",
-                    plan.dataset["id"], plan.observations, plan.done, len(plan.localities), metrics,
+                    run.dataset["id"], run.observations, run.done, len(run.localities), metrics,
                 )
     except Exception as exc:
         if not dry_run:
-            for plan in reached:
-                if plan.dataset["id"] not in finished:
-                    db.finish_run(conn, plan.run_id, status="failed", error=str(exc)[:2000])
+            # The dataset that raised carries the error; the others name it, so no banner blames
+            # a dataset for another one's failure.
+            for run in reached:
+                if run.dataset["id"] in finished:
+                    continue
+                error = (str(exc) if run is current
+                         else f"stopped by dataset {current.dataset['id']}: {exc}")
+                db.finish_run(conn, run.run_id, status="failed", error=error[:2000])
         raise
     return budget_hit
 
@@ -322,18 +334,18 @@ def main(argv: list[str] | None = None) -> int:
         LOG.warning("no active datasets")
         return 0
 
-    plans = []
+    runs: list[DatasetRun] = []
     for dataset in datasets:
         locs = _dataset_localities(conn, client, dataset, dry_run=args.dry_run)
         if not locs:
             LOG.warning("dataset %s has no localities to fetch", dataset["id"])
             continue
-        plans.append(Plan(dataset, locs, *_dataset_window(dataset, start_ym, end_ym)))
+        runs.append(DatasetRun(dataset, locs, *_dataset_window(dataset, start_ym, end_ym)))
 
     # Counted after the localities resolve, so a newly resolved locality is not mistaken for progress.
-    before = 0 if args.dry_run else _coverage_remaining(conn, datasets)
+    before = 0 if args.dry_run else _never_scraped(conn, datasets)
     if run_queue(
-        conn, client, work_queue(plans),
+        conn, client, work_queue(runs),
         window_years=args.window_years, chunk_months=args.chunk_months,
         dry_run=args.dry_run, deadline=deadline,
     ):
@@ -342,26 +354,27 @@ def main(argv: list[str] | None = None) -> int:
     if not args.dry_run:
         db.refresh_choropleth(conn)
         LOG.info("CHOROPLETH refreshed")
-        after = _coverage_remaining(conn, datasets)
+        after = _never_scraped(conn, datasets)
         # A run that shrank the never-scraped set chains once more; one that did not never re-triggers,
         # and a complete set leaves refresh to the weekly schedule.
         _emit_chain(0 < after < before, before=before, after=after)
     return 0
 
 
-def _coverage_remaining(conn: Any, datasets: list[dict[str, Any]]) -> int:
-    """Localities the active datasets have never scraped (neither data nor a no-data marker)."""
-    return sum(
-        db.coverage_remaining(
-            conn, ds["id"], [int(x) for x in ds["obec_ids"]] if ds.get("obec_ids") else None,
-        )
-        for ds in datasets
-    )
+def _obec_ids(dataset: dict[str, Any]) -> list[int] | None:
+    """The dataset's selected obce; None = the global resolved set."""
+    return [int(x) for x in dataset["obec_ids"]] if dataset.get("obec_ids") else None
+
+
+def _never_scraped(conn: Any, datasets: list[dict[str, Any]]) -> int:
+    """Localities the datasets have never scraped (neither data nor a no-data marker), summed."""
+    return sum(db.coverage_remaining(conn, ds["id"], _obec_ids(ds)) for ds in datasets)
 
 
 def _emit_chain(chain: bool, *, before: int, after: int) -> None:
     """Hand the chain decision to the workflow's `Chain next run` step."""
-    LOG.info("CHAIN=%s never-scraped localities before=%d after=%d", "1" if chain else "0", before, after)
+    LOG.info("CHAIN=%s never-scraped localities before=%d after=%d",
+             "1" if chain else "0", before, after)
     out = os.environ.get("GITHUB_OUTPUT")
     if out:
         with open(out, "a", encoding="utf-8") as f:

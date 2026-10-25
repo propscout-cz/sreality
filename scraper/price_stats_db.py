@@ -232,7 +232,8 @@ def localities_ordered(
     always advances the cities that need it most, so full coverage is reached
     across runs (and then refreshes oldest-first) rather than re-doing city 1
     every run. `obec_ids` None = the global resolved set. Each row carries its
-    `last_fetched_at` (NULL = never), which orders the queue across datasets.
+    `last_fetched_at` — the last fetch, else the last empty check, NULL only for a
+    locality never scraped — which orders the queue across datasets.
 
     Localities the scraper recently checked and found EMPTY (a
     price_stat_locality_no_data marker within `no_data_ttl_days`) are skipped,
@@ -242,7 +243,8 @@ def localities_ordered(
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
-            SELECT l.entity_type, l.entity_id, l.name, l.obec_id, o.mf AS last_fetched_at
+            SELECT l.entity_type, l.entity_id, l.name, l.obec_id,
+                   coalesce(o.mf, nd.checked_at) AS last_fetched_at
               FROM price_stat_localities l
               LEFT JOIN (
                 SELECT entity_type, entity_id, max(fetched_at) AS mf
@@ -257,7 +259,7 @@ def localities_ordered(
              WHERE (%(obec_ids)s IS NULL OR l.obec_id = ANY(%(obec_ids)s))
                AND (nd.checked_at IS NULL
                     OR nd.checked_at < now() - make_interval(days => %(ttl)s))
-             ORDER BY o.mf ASC NULLS FIRST, l.name
+             ORDER BY coalesce(o.mf, nd.checked_at) ASC NULLS FIRST, l.name
             """,
             {"did": dataset_id, "obec_ids": obec_ids, "ttl": no_data_ttl_days},
         )
