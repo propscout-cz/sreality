@@ -2312,7 +2312,12 @@ renumber.** Navigate by area:
     that same status: an active ad under active (`active_sources`), any ad otherwise
     (`properties.all_sources`; an ended property has only ended ads); several portals = any of
     them. "Delisted on P but live elsewhere" is therefore no status: such a property is live, on
-    every surface. **And it has no ad
+    every surface. So with a portal selected, Vše + P is MORE than Aktivní + P plus Neaktivní + P,
+    by design (operator ruling 2026-10-25, "Option A"): an active property whose ad on P is inactive
+    is in neither, only in Vše (1–2 % per portal, read 2026-10-25: sreality 3,605, idnes 4,572;
+    never with no portal). Aktivní + P answers "what can I open on P now"; the rejected Option B
+    (any ad on P under Aktivní) would close the sum but list ads P no longer shows. Do not "fix"
+    the sum; `tests/fixtures/portal_rule.json` pins both sides. **And it has no ad
     on an EXCLUDED portal** (`portals_excluded`): any ad, active or ended (`all_sources`), or only
     active ones under `portals_excluded_active_only` (`active_sources`, the operator's choice per
     filter, ruled 2026-10-13); several excluded = none of them; both sides combine ("on idnes, not
