@@ -79,7 +79,7 @@ class _Conn:
         return [
             (1,)
             for row in self._images
-            if row[0] not in retired and remaster._KEY_RE.match(row[4] or "")
+            if row[0] not in retired and image_storage.LISTING_PHOTO_KEY_RE.match(row[4] or "")
         ][:1]
 
     def answer(self, sql: str, params: Any) -> list[tuple[Any, ...]]:
@@ -530,7 +530,7 @@ def test_bad_storage_path_is_never_uploaded_and_never_claims_a_rendition(
 
     assert stats.bad_key == 1 and not r2.puts
     # A key shape this lane refuses is not a fact about the bytes: no rendition
-    # claim, so widening `_KEY_RE` later can still recover the row.
+    # claim, so widening `LISTING_PHOTO_KEY_RE` later can still recover the row.
     assert [sql for sql, _ in _updates(conn)] == [
         " ".join(db._MARK_IMAGE_REMASTER_DEFERRED_SQL.split())
     ]
@@ -640,8 +640,11 @@ def test_the_completion_probe_ignores_the_rail_and_the_keys_we_refuse() -> None:
     pattern = re.search(r"storage_path ~ '([^']+)'", probe)
     assert pattern is not None
     compiled = re.compile(pattern.group(1))
-    for key in ("101/0003.jpg", "-9/0001.jpg", "sreality/101/3.jpeg", "101/3.jpg", "101/0003.png"):
-        assert bool(compiled.match(key)) is bool(remaster._KEY_RE.match(key))
+    for key in (
+        "101/0003.jpg", "-9/0001.jpg", "img/101/9001.jpg", "sreality/101/3.jpeg", "101/3.jpg",
+        "101/0003.png", "img/101.jpg", "x/img/101/9001.jpg",
+    ):
+        assert bool(compiled.match(key)) is bool(image_storage.LISTING_PHOTO_KEY_RE.match(key))
 
 
 def test_each_shard_stamps_its_own_sub_key_under_one_row() -> None:
@@ -654,13 +657,6 @@ def test_each_shard_stamps_its_own_sub_key_under_one_row() -> None:
     # one home must not read as "the lane is done".
     assert "COALESCE(app_settings.value, '{}'::jsonb) || excluded.value" in sql
     assert "jsonb_build_object( %(shard)s::text," in sql
-
-
-def test_key_regex_matches_the_serve_path_shape() -> None:
-    pytest.importorskip("fastapi")
-    from api.routes.images import _KEY_RE as serve_key_re
-
-    assert remaster._KEY_RE.pattern == serve_key_re.pattern
 
 
 def test_db_helpers_write_exactly_what_they_promise() -> None:

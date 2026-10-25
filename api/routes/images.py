@@ -7,12 +7,12 @@ route mints a short-lived presigned GET so a *private* bucket can stream bytes
 straight to the browser without proxying them through us.
 
 Unauthenticated (like /health) — listing photos are public data and an <img>
-tag can't send a bearer header. The key is constrained to the listing-image
-shape `-?<id>/<seq>.jpg` so this can never presign the operator-private
-`custom-attachments/` building uploads that share the bucket.
+tag can't send a bearer header. The key must match
+`image_storage.LISTING_PHOTO_KEY_RE` (the listing-photo shapes only) so this can never
+presign the private `custom-attachments/` uploads that share the bucket.
 
 `?w=1080` asks for the phone-size copy instead (#1765): a WebP 1080 px wide at
-`thumb/w1080/<id>/<seq>.webp`, derived from the validated key (never taken from
+`thumb/w1080/<key without .jpg>.webp`, derived from the validated key (never taken from
 the client), made from the full-size photo on its first request and redirected
 to like any photo after that. Any failure serves the full-size photo instead. A
 re-master that overwrites the photo deletes its copy (scripts/remaster_sreality_images.py).
@@ -24,7 +24,6 @@ import asyncio
 import io
 import logging
 import os
-import re
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import RedirectResponse
@@ -35,9 +34,6 @@ from scraper import image_storage
 LOG = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/images", tags=["images"])
-
-# `{native_id}/{seq:04d}.jpg`; native_id is negative for non-sreality portals.
-_KEY_RE = re.compile(r"^-?\d+/\d{4}\.jpg$")
 
 # Presign lifetime (R2/SigV4 max is 7 days). The 302 is cached only briefly on purpose:
 # a long cache means a serve-path change (e.g. an R2 credential rotation) leaves browsers
@@ -149,7 +145,8 @@ async def _copy_redirect(
 
 @router.get("/{key:path}")
 async def get_image(key: str, w: str | None = None) -> RedirectResponse:
-    if not _KEY_RE.match(key) or (w is not None and w not in _COPY_WIDTHS):
+    valid_key = image_storage.LISTING_PHOTO_KEY_RE.match(key)
+    if not valid_key or (w is not None and w not in _COPY_WIDTHS):
         raise HTTPException(status_code=404, detail="Not found")
     client = await run_in_threadpool(r2_client)
     if client is None:

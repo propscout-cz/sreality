@@ -1,7 +1,7 @@
 """Tests for GET /images/{key} — the public presigned-R2 redirect.
 
 The redirect is unauthenticated (like /health), redirects a listing-image key
-to a presigned R2 URL, and refuses any key that isn't the listing-image shape
+to a presigned R2 URL, and refuses any key that isn't a listing-image shape
 so it can never presign the operator-private `custom-attachments/` uploads that
 share the bucket. `?w=1080` redirects to the phone-size copy, making it from the
 full-size photo on its first request and falling back to the full-size photo on any
@@ -86,6 +86,14 @@ def test_negative_id_key_allowed(client):
     assert res.status_code == 302
 
 
+def test_current_row_unique_key_redirects(client):
+    # `img/{listing_id}/{image_id}.jpg` — every newly stored photo; the legacy shapes above
+    # stay serveable because nothing recomputes a stored row's key.
+    res = client.get("/images/img/443628/226547358.jpg", follow_redirects=False)
+    assert res.status_code == 302
+    assert res.headers["location"].endswith("/bucket/img/443628/226547358.jpg?sig=abc")
+
+
 def test_public_even_when_auth_is_strict(client, monkeypatch):
     monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
     res = client.get("/images/2872083276/0001.jpg", follow_redirects=False)
@@ -100,6 +108,8 @@ def test_public_even_when_auth_is_strict(client, monkeypatch):
         "../etc/passwd",                          # traversal
         "2872083276",                             # no sequence
         "foo/0001.jpg",                           # non-numeric id
+        "img/custom-attachments/building/1.jpg",  # the namespace is not a free prefix
+        "thumb/w1080/img/1/2.webp",               # a copy only through ?w=
     ],
 )
 def test_non_image_keys_rejected(client, key):
@@ -185,6 +195,12 @@ def test_negative_id_copy_key(client, fake_r2):
     fake_r2.objects["-4671/0009.jpg"] = _jpeg(1200, 900)
     res = client.get("/images/-4671/0009.jpg?w=1080", follow_redirects=False)
     assert res.headers["location"].endswith("thumb/w1080/-4671/0009.webp?sig=abc")
+
+
+def test_row_unique_key_copy_key(client, fake_r2):
+    fake_r2.objects["img/443628/226547358.jpg"] = _jpeg(1200, 900)
+    res = client.get("/images/img/443628/226547358.jpg?w=1080", follow_redirects=False)
+    assert res.headers["location"].endswith("thumb/w1080/img/443628/226547358.webp?sig=abc")
 
 
 @pytest.mark.parametrize("w", ["480", "1800", "abc", "", "1080.0"])

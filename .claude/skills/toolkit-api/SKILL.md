@@ -394,7 +394,7 @@ Image storage (Cloudflare R2, S3-compatible):
   if R2 rejects a backdated signature). Capped at half the 7-day presign TTL, or the last URL minted
   in a bucket would already be expired.
 - **Phone copy** (#1765): `GET /images/{key}?v=2&w=1080` (any other `w` → 404) redirects to
-  `thumb/w1080/{id}/{seq}.webp` (WebP q75), made from the master on first request (≤ 4 at once);
+  `thumb/w1080/<key without .jpg>.webp` (WebP q75), made from the master on first request (≤ 4 at once);
   any failure → a 5-min redirect to the master. SPA: `imageSrc(img, { w: 1080 })`. An attachment's copy
   (`GET /properties/{id}/attachments/{aid}?w=1080`, `api/attachments.py`) is made the same way under
   `thumb/w1080/custom-attachments/…` but streamed through that JWT route, never presigned.

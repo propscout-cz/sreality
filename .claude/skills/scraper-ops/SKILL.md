@@ -270,6 +270,7 @@ records image-URL rows — bytes land in R2 via these jobs). sreality comes thro
 (`res,1800,1800,1|shr,,20|jpg,80`: whole frame, ≤1800px), an exact-template allowlist, so a stored legacy chain is NORMALISED
 onto it (only `rot` survives) and every row is stamped `rendition` + `stored_width`/`stored_height` (mig 496): **phash/CLIP
 compare only WITHIN a rendition**. Timeout guard = `--image-max-seconds`, NOT the count cap (~11k/hr basis predates it).
+R2 key = `img/{listing_id}/{images.id}.jpg`, unique per ROW (rule #6); a stored row keeps its legacy `{id}/{seq:04d}.jpg` forever.
 - `images.yml` (2-hourly) — THE deep backlog drain across ALL portals, **sharded into 4 parallel jobs**
   (`--image-shard k/4` = the `image_id mod 4` slice), each with its own cap, breaker and runner IP.
 - `images_fresh.yml` (`*/15` + self-chaining via `SCRAPE_CHAIN_TOKEN` while work remains) — newest

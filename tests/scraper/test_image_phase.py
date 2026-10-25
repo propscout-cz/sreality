@@ -502,10 +502,12 @@ def test_fetch_one_image_success_with_semaphore(monkeypatch):
             return None
 
     key, phash, rendition, dims, err = scraper_main._fetch_one_image(
-        7, 0, "https://h/x.jpg", _R2(), sem
+        7, 51, "https://h/x.jpg", _R2(), sem
     )
     assert err is None
-    assert key == scraper_main.image_storage.image_key(7, 0)
+    # A literal with distinct ids, so a swapped-argument regression shows: the image id is
+    # what makes the key unique per row.
+    assert key == "img/7/51.jpg"
     assert phash == 42
     assert (rendition, dims) == ("native", None)  # non-sreality host, unmeasurable bytes
     assert sem.acquire(blocking=False)  # slot was released
@@ -618,11 +620,11 @@ def test_phash_failure_never_fails_the_store(monkeypatch):
             return None
 
     key, phash, rendition, dims, err = scraper_main._fetch_one_image(
-        7, 0, "https://h/x.jpg", _R2(), None
+        7, 51, "https://h/x.jpg", _R2(), None
     )
     assert err is None
     assert phash is None
-    assert key == scraper_main.image_storage.image_key(7, 0)
+    assert key == scraper_main.image_storage.image_key(7, 51)
 
 
 class _RecordingConn:
@@ -726,13 +728,13 @@ def _drive_image_loop(
         scraper_main.db, "mark_image_listing_taken_down", lambda conn, sid: 0
     )
 
-    def _fake_fetch(sid, seq, url, r2, semaphore=None, proxies=None):
+    def _fake_fetch(lid, image_id, url, r2, semaphore=None, proxies=None):
         if fetch_delay:
             time.sleep(fetch_delay)
         err = fetch_result(url)
         phash = None if err is not None else 777
         return (
-            scraper_main.image_storage.image_key(sid, seq), phash,
+            scraper_main.image_storage.image_key(lid, image_id), phash,
             scraper_main.image_storage.rendition_for(url),
             None if err is not None else (1800, 1200),
             err,
@@ -893,6 +895,15 @@ def test_stored_non_sreality_image_is_stamped_native(monkeypatch):
     )
     assert call["rendition"] == scraper_main.image_storage.RENDITION_NATIVE
     assert (call["width"], call["height"]) == (640, 480)
+
+
+def test_the_loop_stores_each_row_under_its_own_row_unique_key(monkeypatch):
+    """image 1, listing 500, sequence 0: the key names the listing and the ROW, never the
+    position, so neither a reused number nor a repeated sequence can share an object."""
+    call = _drive_real_fetch_loop(
+        monkeypatch, "https://www.bazos.cz/img/1/1/1.jpg", dimensions=(640, 480)
+    )
+    assert (call["image_id"], call["key"]) == (1, "img/500/1.jpg")
 
 
 def test_unmeasurable_bytes_store_with_size_left_untouched(monkeypatch):

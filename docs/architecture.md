@@ -1389,7 +1389,18 @@ renumber.** Navigate by area:
    photos. The `images` table tracks per-image download state via `storage_path`,
    `download_attempts`, and `last_download_attempt_at`. Image-download is a separate phase
    after the scrape phase; it's a no-op if R2 env vars are missing, so a partial deploy
-   never breaks the scrape. **A throttle is the portal's answer about our rate, never the image's
+   never breaks the scrape. **The bucket key is unique per `images` ROW:**
+   `img/{listing_id}/{images.id}.jpg` (`image_storage.image_key`, 2026-10-25). Both earlier shapes drew
+   the prefix from ONE numeric range (`{sreality_id}/{seq:04d}` before Gate 2, `{listings.id}/{seq:04d}`
+   after it), so a new listing whose id equalled an older listing's `sreality_id` minted that listing's
+   keys and its upload silently overwrote the older photo, and the re-master lane later re-uploaded some
+   of the old rows over the new ones. Either way one row rendered another property's photo with a pHash
+   and CLIP vector of bytes it no longer had (152 keys / 304 rows by 2026-10-25; migration 670 re-queues
+   every row that does not hold its object, applied after deploy). Nothing recomputes a stored row's key,
+   so the two legacy shapes stay serveable forever: `image_storage.LISTING_PHOTO_KEY_RE` enumerates all
+   three and is the ONE whitelist of the public `GET /images/{key}` and of the re-master lane. It stays
+   anchored and enumerated, never a prefix, or it starts presigning the private `custom-attachments/`
+   uploads that share the bucket. **A throttle is the portal's answer about our rate, never the image's
    failure** (2026-10-06): a 429, or the 403 a WAF follows a burst with, burns no `download_attempts`
    (`db.mark_image_throttled` stamps the error and the time only) and parks the HOST — a cool-down that
    outlives the run (module state in `scraper/main.py`: 15 min doubling to 2 h, or the portal's
@@ -1441,7 +1452,7 @@ renumber.** Navigate by area:
    serves a master into a thumbnail-sized `<img>`: more R2 egress and page weight, the accepted
    price of not having lost the photo's edges. **Since 2026-10-12 (#1765) the API makes one small copy
    ON REQUEST:** `GET /images/{key}?w=1080` (any other `w` is a 404) redirects to
-   `thumb/w1080/{id}/{seq}.webp` (WebP q75, EXIF rotation applied, ≤ 1080 px wide), which the route
+   `thumb/w1080/<key without .jpg>.webp` (WebP q75, EXIF rotation applied, ≤ 1080 px wide), which the route
    builds from the master on its first request (≤ 4 at once, `api/routes/images.py`) and, on any
    failure, swaps for a 5-minute redirect to the master; only the pipeline board's thumbnails and the
    property page's grid tiles ask for it. **A re-master deletes the copy** right after it overwrites
