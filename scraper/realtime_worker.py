@@ -11,7 +11,7 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              never nominates.
 - drain:     every `realtime_drain_interval_seconds` (default 30), claim a
              bounded slice of the shared listing_detail_queue per source that
-             has claimable rows; the only drain of the cadence-split portals
+             has claimable rows; the only drain of the walk-only portals
              (SKIP LOCKED keeps it safe beside a combined scraper's own drain
              phase and a hand --drain-only run). Sources listed in
              `realtime_drain_disabled_sources` are skipped — a per-source
@@ -44,8 +44,8 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              Browse read model) within minutes". Safe beside the daily sweep
              and a hand run: all callers serialize on the maintenance
              lease row (migration 279 — pooler-proof CAS; a session advisory
-             lock strands over the transaction pooler) — a concurrent caller
-             skips.
+             lock strands over the transaction pooler) — an incremental caller
+             skips while it is held, the sweep waits for it.
 - broker_maintenance: every `realtime_maintenance_interval_seconds` (shared
              with the maintenance lane — same cadence class, no new setting),
              one drain-until-empty broker pass via scripts.resolve_brokers.
@@ -294,11 +294,10 @@ class _PassLock:
 # maintenance lane: the incremental property-maintenance pass (straggler attach
 # + dirty-set recompute — scripts.recompute_property_stats.
 # run_incremental_pass), every MAINTENANCE_INTERVAL_DEFAULT seconds — the pass's
-# only scheduled runtime since the GH cron that GitHub throttled to a 2h median
-# (2026-07-07 audit) was deleted (Actions-exit W0, #2010). Ships LIVE (the fix is
-# the point); interval <= 0 idles it. Safe beside the daily sweep and a hand run
-# by construction: all serialize on the maintenance lease row (migration 279)
-# inside run_incremental_pass (a concurrent caller skips).
+# only scheduled runtime. Ships LIVE (the fix is the point); interval <= 0 idles
+# it. Safe beside the daily sweep and a hand run by construction: all serialize
+# on the maintenance lease row (migration 279) inside run_incremental_pass (this
+# lane skips while another writer holds it).
 # 30 s, not 120: the attach is the only birth, so this bounds how long a new ad
 # (a pasted one too) waits for its property; an idle pass costs ~6 ms (2026-10-20).
 MAINTENANCE_INTERVAL_DEFAULT = 30

@@ -646,9 +646,9 @@ def _resume_point(saved: tuple[Any, ...] | None, max_id: int) -> tuple[int, int,
     return int(next_lo), int(runs or 0), cycle_started_at
 
 
-# A single-row LEASE serializes EVERY property-maintenance writer: the GH
-# incremental cron, the daily full sweep, AND the realtime worker's maintenance
-# lane (property_maintenance_lease, migration 279). Claimed by ONE atomic
+# A single-row LEASE serializes EVERY property-maintenance writer: the realtime
+# worker's maintenance lane, the daily full sweep, AND a hand --incremental run
+# (property_maintenance_lease, migration 279). Claimed by ONE atomic
 # UPDATE ... RETURNING, so it is sound over the transaction-mode pooler —
 # unlike a session advisory lock, whose lock/unlock statements can land on
 # DIFFERENT pooled backends (the #716 defect: the unlock silently no-ops and

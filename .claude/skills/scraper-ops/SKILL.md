@@ -117,7 +117,7 @@ Heal via `reparse.yml` (`--source <portal> --fields area_m2,estate_area,usable_a
 
 The sreality pipeline is **split by cadence (Phase 2)**: `index_walk.yml` ("Scraping: Sreality
 index walk", cron `*/15`) feeds the worker's drain lane — since W0 (#2010) the ONLY drain of the
-five cadence-split portals (sreality, bazos, idnes, ceskereality, realitymix). The combined `scrape.yml` fallback (`scraper.main`'s `_run_full`) was deleted in C2-2
+walk-only portals (sreality, bazos, idnes, ceskereality, realitymix, web). The combined `scrape.yml` fallback (`scraper.main`'s `_run_full`) was deleted in C2-2
 (2026-10); an ad-hoc combined run of any portal is `python -m scraper.<portal>_main` with neither
 phase flag (walk, then drain), locally. The bazos crawl is **cadence-split**
 like sreality (bazos walks 22 nationwide scopes (migration 488), ~1500 index pages — a combined run starves the
@@ -231,8 +231,8 @@ from the slow "download each ad" write:
   (`connect_session()`, prepared statements), the crawlers `connect()`. New listings land `property_id` NULL and become
   **singletons** via `recompute_property_stats`'s bounded straggler-attach (the write carries no matching at all;
   grouping is out-of-band and operator-ordered, rule #15). A gone fetch records its verdict + dequeues it (flips only
-  under rule #3's hysteresis); a transient error bumps the queue row's `attempts` (given up after 5) and stays queued. Records `run_type='detail'`,
-  `index_pages=0`. The queue persists across runs, so a bounded run never loses work; a SIGKILLed
+  under rule #3's hysteresis); a transient error bumps the queue row's `attempts` (given up after 5) and stays queued. A hand run records `run_type='detail'`,
+  `index_pages=0`; the worker writes no `scrape_runs` row (its passes are in the heartbeat). The queue persists across runs, so a bounded run never loses work; a SIGKILLed
   claim is recovered by the next run's `reclaim_stale_claims`.
 
 **Delisting is presence-verified (rule #3, 2026-09-07); the gate is STRUCTURAL (2026-09-08).** A
@@ -262,8 +262,8 @@ toggles; empty = none; a toggle alone runs nothing), and `propagate_condition_le
 property's genuine score to its cross-portal siblings (`listings.condition_levels_propagated_from`
 records provenance) before every submit/backfill. Resume blockers: `roadmap/scraper-track.md`.
 
-**Images** stay decoupled across four workflows (the scrape split has no image phase; the drain only
-records image-URL rows — bytes land in R2 via these jobs). sreality comes through their `SQUARE_1800_JPG` template
+**Images** stay decoupled from the scrape (the scrape split has no image phase; the drain only
+records image-URL rows — bytes land in R2 via the jobs below). sreality comes through their `SQUARE_1800_JPG` template
 (`res,1800,1800,1|shr,,20|jpg,80`: whole frame, ≤1800px), an exact-template allowlist, so a stored legacy chain is NORMALISED
 onto it (only `rot` survives) and every row is stamped `rendition` + `stored_width`/`stored_height` (mig 496): **phash/CLIP
 compare only WITHIN a rendition**. Timeout guard = `--image-max-seconds`, NOT the count cap (~11k/hr basis predates it).
@@ -279,8 +279,8 @@ R2 key = `img/{listing_id}/{images.id}.jpg`, unique per ROW (rule #6); a stored 
   OVERWRITING each R2 object under its stored key, then deleting its `thumb/w1080/…webp` phone copy (best-effort:
   a failure logs `REMASTER copy_delete_failed`); dead URLs re-resolve from live detail. Final: `REMASTER done …`.
 
-**Cadence:** `*/15` for each half, deliberately — frequent index walks surface delistings fast, while
-the bounded drain keeps a steady, polite fetch volume. GitHub throttles scheduled workflows, so effective
+**Cadence:** the sreality walk runs `*/15` (frequent index walks surface delistings fast) and the worker's
+drain lane every 30 s keeps a steady, polite fetch volume. GitHub throttles scheduled workflows, so a walk's effective
 cadence is slower, and Health judges the gap a portal keeps, not a declared one: the `scraping` check's `<portal>/walks/<unit>`
 cells age a unit's newest end-reached walk against G, the median start gap of the portal's finished walks over 14 d (under 10
 gaps, the slowest portal's G): Watch past 3 G, Problem past 6 G (crawlers ~43 h, sreality 26.5 h) or with no end-reached walk

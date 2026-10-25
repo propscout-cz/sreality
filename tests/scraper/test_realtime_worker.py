@@ -1290,9 +1290,8 @@ def test_count_probe_pass_no_change_skips_dispatch(monkeypatch):
 
 
 def test_maintenance_lane_registered_and_live_by_default():
-    # Ships LIVE: the lane is the incremental pass's only scheduled runtime (the
-    # GH */5 cron, throttled to a ~2h median, is deleted), so merging must
-    # activate it. Interval <= 0 remains the kill-switch.
+    # Ships LIVE: the lane is the incremental pass's only scheduled runtime, so
+    # merging must activate it. Interval <= 0 remains the kill-switch.
     assert rw.MAINTENANCE_INTERVAL_DEFAULT == 30
     src = inspect.getsource(rw._amain)
     assert '("maintenance"' in src
