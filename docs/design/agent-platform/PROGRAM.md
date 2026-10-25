@@ -8,8 +8,9 @@
 > demand trigger (§ 7).
 >
 > **Rearranged MVP path (2026-10-25, after the operator's instructions: open-ended agent set, results first, no overkill):**
-> [MVP.md](./MVP.md) re-sequences the committed path into M0 → M1 → M2 (about 3 weeks) and says where every deferred
-> piece of this document went. This file stays the reference design for everything after M2.
+> [MVP.md](./MVP.md) re-sequences the committed path into M0 → M1 → M2 → M3 (about 8 weeks; rulings taken 2026-10-25, MVP.md § 4)
+> and says where every deferred piece of this document went. This file stays the reference design for everything
+> after M3.
 
 *Operator brief of 2026-10-25 (13 points); `main` @ 3f0ff5b8a. Ten audits and eight research tracks fed three drafts,
 scored by three judges; this synthesis builds on the most reuse-heavy draft, and § 4.1 lists where it changed course.
@@ -155,8 +156,8 @@ These ten items are worth doing even if nothing else here is approved. **This is
 its exit checks.
 1. **Move the three services from `railway.json` to Infrastructure as Code by 2026-11-15** (Railway's hard cutoff is
    2026-12-01; F5; RESEARCH §7.3). Language: TypeScript (GA), one .railway/railway.ts file the Railway CLI evaluates;
-   no Node code enters the Python tree. Actions-exit W2 (PR #2000) plans the same move: if #2000 has not merged by
-   2026-11-08, W0 does the cutover alone.
+   no Node code enters the Python tree. *Superseded by ruling Q24 (2026-10-25): this programme moves the three existing services in its M0 and
+   Actions-exit W2 (#2025) keeps only its new runner service.*
 2. **Rotate every credential stored on Railway before 2026-10-21** (F6; RESEARCH §7.7), from a per-secret consumer
    inventory: the API, the worker, the GitHub Actions secrets of the 34 scheduled workflows, the operator's local
    .env, any extension build. Dependency order, the database password last and in a quiet window; every consumer is
@@ -1071,28 +1072,30 @@ about 2.5–3.5 weeks after W0 and W1.
 
 ## 9. Rulings owed
 
-> **Rulings taken 2026-10-25 (operator grill):** AR1 (rotation under way; VAPID excluded), AR2 (Agent, Tool added), AR3
-> (per-agent models; Claude Opus 5.5 for code agents), AR4 (re-taken: Claude hosted code execution, ADR-0005), AR5
-> (estimator rebuilt, M2), AR6 (ADR-0001), AR8 (agent-worker now, after IaC), AR9 (propose-then-apply, ADR-0004), AR13
-> (re-taken: parity, ADR-0002), AR16 (re-taken: Supabase Storage, ADR-0006), AR20 (M0–M3, gate after M1), plus MVP-A/B/C
-> and the photo assessment (ADR-0007). Answers and consequences: [MVP.md](./MVP.md) § 4. The rest below stay owed for
-> their waves.
+> **Rulings taken 2026-10-25 (operator grill; answers in [MVP.md](./MVP.md) § 4):** AR1 (rotation under way; VAPID
+> excluded), AR2 (Agent, Tool added), AR3 (text agents gpt-5.6-luna then qwen3.7-flash; code agents Claude Opus 5.5,
+> evals decide), AR4 (re-taken: Claude hosted code execution, ADR-0005), AR5 (estimator rebuilt, M2), AR6 (ADR-0001),
+> AR7 (city-index half: agents that rank may read them, never an estimate; ADR-0002), AR8 (agent-worker now, after
+> IaC), AR9 (propose-then-apply, ADR-0004), AR12a (drafter part: drafts only, mailto handoff), AR13 (re-taken: agents
+> see contacts as the user does, ≤20 per call, recorded; MCP stays masked; ADR-0002), AR14 (Valuo part: ≤3 calls per
+> run, a monthly cap per account), AR16 (re-taken: Supabase Storage, ADR-0006), AR20 (M0–M3, gate after M1), plus
+> MVP-A/B/C and the photo assessment (ADR-0007; rule 14 amended). The rest below stay owed for their waves.
 
 | Needed before | Rulings |
 |---|---|
-| W0 | AR1 |
-| W1 | AR5 |
-| W2 (the proof of concept) | AR4 (its first option), AR6, AR8, AR9, AR14, AR20; AR3 confirms the models |
-| W3 | AR7, AR10 |
-| W4 | AR15, AR16, AR18 (openpyxl) |
+| W0 | AR1 (taken) |
+| W1 | AR5 (taken) |
+| W2 (the proof of concept) | AR4, AR6, AR8, AR9, AR14, AR20, AR3: all taken 2026-10-25 (MVP.md § 4) |
+| W3 | AR7 (city-index half taken), AR10 |
+| W4 | AR15, AR16 (re-taken: Supabase Storage), AR18 (openpyxl) |
 | W5 | AR11, AR18 (mcp) |
-| W6 | AR4 (options b and c) |
-| W7 | AR12a; AR12b and counsel before M1 |
+| W6 | AR4 (re-taken: Claude hosted code, ADR-0005) |
+| W7 | AR12a (drafter part taken); AR12b and counsel before mail stage 1 |
 | W8 | AR17; AR12c before M2 |
-| Any time | AR2, AR13, AR19 |
+| Any time | AR2 (taken), AR13 (re-taken: parity, ADR-0002), AR19 |
 
-External dependencies: PR #2000 (the Actions-exit program; W0's IaC move and W3's trigger tick), the brand-domain
-cutover (W5), counsel (W7's M1).
+External dependencies: PR #2000 (the Actions-exit program; W3's trigger tick; the IaC move is this programme's since
+ruling Q24), the brand-domain cutover (W5), counsel (W7's mail stage 1).
 
 - **AR1. Confirm credential rotation after Railway's 2026-10-21 incident.** *Recommend:* rotate now from the consumer
   inventory (§ 2.1), one secret at a time, the database password last; delete `RUNPOD_API_KEY` from the API.
@@ -1106,7 +1109,7 @@ cutover (W5), counsel (W7's M1).
   a stronger model of any vendor where evals justify it; no runtime that locks the provider; price the proof of
   concept against the chosen model. *Touches:* memory llm-provider-preference-no-anthropic; the `app_settings` model
   keys.
-- **AR4. Re-take Phase 7d.** Its premise, a sandboxed subprocess on the Railway container, fails on F9. *Options:* (a)
+- **AR4. Re-take Phase 7d.** *Taken 2026-10-25: Claude hosted code execution (ADR-0005).* Its premise, a sandboxed subprocess on the Railway container, fails on F9. *Options:* (a)
   renderers only; (b) plus a secretless code-runner with mandatory network denial; (c) a Railway Sandbox VM per run in
   an empty project; (d) E2B or Modal; (e) provider-hosted; (f) defer. *Recommend:* (a) now, (b) if the probe proves
   denial, (c) as the second rung if its own probe passes; (d) and (e) stay excluded. *Touches:*
@@ -1120,12 +1123,12 @@ cutover (W5), counsel (W7's M1).
 - **AR7. What "matches" means for agents and MCP; city indexes.** *Recommend:* Watchdog semantics
   (`compile_filter_where` with the served and published predicates); the scout may use city indexes only through a
   saved watchdog spec, and never in an estimate. *Touches:* rules 16 and 17 (`CLAUDE.md:185-194`).
-- **AR8. The executor host, the logins, and scheduling through PR #2000.** *Recommend:* agent-worker, a new Railway
+- **AR8. The executor host, the logins, and scheduling through PR #2000.** *Taken 2026-10-25: agent-worker now, after the IaC move (MVP.md § 3).* *Recommend:* agent-worker, a new Railway
   service in the API project (W2), with the three narrow logins and no service DSN, and the code-runner (W6) with its
   own slim image; IaC only; scheduled and event workflows through one JOBS entry and one scheduled_jobs lease. *Or:*
   the executor as a lane in the API process for W2, one service less, with agent-worker required at the triggers in
   § 3.3. *Touches:* PR #2000's rulings; CLAUDE.md's host lines; the scraper-ops and database skills.
-- **AR9. Which agent writes need no approval.** *Recommend:* only adding to a collection the run itself created; every
+- **AR9. Which agent writes need no approval.** *Taken 2026-10-25: none; propose-then-apply (ADR-0004).* *Recommend:* only adding to a collection the run itself created; every
   other curation or pipeline write asks; costly and external actions always ask, are refused under act-as, and an
   agent file cannot loosen that. *Touches:* rules 18 and 22.
 - **AR10. A fourth notification producer for "run finished" or "approval needed".** *Recommend:* defer; the Runs page
@@ -1145,7 +1148,7 @@ cutover (W5), counsel (W7's M1).
   own, and the approved cutover redirects the apex to app. *Recommend:* (a) a static homepage on the apex, because M2
   is the user-as-controller path this program prefers. The alternative, (b), keeps the redirect and skips M2.
   *Touches:* the brand-domain W1 apex and null-MX rulings.
-- **AR13. Unmasked broker contacts for agents and MCP.** The 2026-10-18 ruling (PR #1867) unmasks
+- **AR13. Unmasked broker contacts for agents and MCP.** *Re-taken 2026-10-25: agents see contacts as the user does, ≤20 per call, recorded; MCP masked (ADR-0002).* The 2026-10-18 ruling (PR #1867) unmasks
   `POST /brokers/by-listings` for every signed-in caller (F58). *Recommend:* never expose unmasked contacts to agents
   or MCP (`include_pii` fixed to false in their ctx); add a rate limit to the REST route. *Touches:*
   `api/routes/brokers.py:129-136`.
@@ -1157,7 +1160,7 @@ cutover (W5), counsel (W7's M1).
   bodies 2 years; suppression forever; `llm_calls` rows older than 2 years rolled up; an account-erasure path that
   deletes bytes too, built in W4 and extended to correspondence in W7. *Touches:* rule 9 (the ephemeral-ledger
   precedent); the note in `migrations/043_estimation_trace_payloads.sql`; F55.
-- **AR16. A new EU-jurisdiction R2 bucket for artifacts.** *Recommend:* yes, with its own tokens; whether user
+- **AR16. A new EU-jurisdiction R2 bucket for artifacts.** *Re-taken 2026-10-25: Supabase Storage (ADR-0006).* *Recommend:* yes, with its own tokens; whether user
   attachments move there later is a separate question. *Touches:* the toolkit-api skill's R2 section.
 - **AR17. When to bind runs in the database.** *Recommend:* in W8, triggered by paying tenants, a second operator or any
   agent-worker incident; the grant census it needs is done in W2. *Touches:* `current_account_ids()` and

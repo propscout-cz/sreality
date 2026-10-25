@@ -109,10 +109,10 @@ Headline scope:
   ships with B2).
 
 ### Phase 7 slice 2: Async + full toolkit + UI mode toggle
-> **Proposal under review (2026-10-25):** `docs/design/agent-platform/PROGRAM.md` § 3.4 proposes the async
-> execution this slice describes as a generic run ledger (agent_runs + step journal) on a dedicated executor, and
-> its ruling AR4 re-takes Phase 7d below (Railway service containers cannot build the sandbox 7d assumed). Nothing
-> here changes until the operator rules.
+> **Ruled 2026-10-25 (agent-platform grill, ADR-0005):** this slice and Phase 7d below are superseded by
+> `docs/design/agent-platform/MVP.md`: a generic run ledger on a dedicated agent-worker service, and agent Python on
+> Claude's hosted code execution (provider-hosted, which 7d excluded; the operator re-took that ruling, accepting
+> Claude-only code agents and US processing).
 
 Builds on slice 1.
 - Async execution: real `status='pending'/'running'` lifecycle with
@@ -137,7 +137,7 @@ Scoped now, implemented later — sequenced after the manual
 rental estimates work (Phase U-ME) so the simpler, contained
 schema feature lands first.
 
-Operator-confirmed approach:
+**Superseded 2026-10-25 by ADR-0005 (see the note under slice 2).** Operator-confirmed approach (2026):
 - Self-hosted sandboxed subprocess on the Railway container.
   No third-party sandbox (rules out e2b), no provider-hosted
   code-exec beta (rules out Anthropic's `code_execution_20250522`

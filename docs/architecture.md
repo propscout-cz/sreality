@@ -3395,6 +3395,9 @@ renumber.** Navigate by area:
     selected deal-type pill (which `PillRow` has always offered) wrote `deal=null`, which
     `enumOr` silently snapped back to `pronajem` — the control lied about what it could do.
 
+    **Amendment 2026-10-25 (ADR-0002, operator grill):** agents that RANK (the scout) may read the curated city indexes
+    under the user's login; no price estimate reads them, and the estimation agenda is unchanged.
+
 22. **The deal pipeline is single-valued, property-grain operator state (migration 205).**
     `property_pipeline` holds at most ONE card per property per account (PK
     `(account_id, property_id)` since migration 295) at one `stage_id` (`pipeline_stages`, a

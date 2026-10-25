@@ -307,14 +307,14 @@ _Avoid_: prompt, recipe
 
 **Agent**:
 A configured specialist that carries out workflows inside the platform: which model it uses, which
-skills it follows, which tools it may call, its limits, and when it must ask a person. An agent is
+skills it follows, which tools it may call, its limits, and, once mid-run questions exist, when it must ask a person. An agent is
 defined in a file, never in a settings screen.
 _Avoid_: agent profile, bot, assistant (that word means the user's own AI account)
 
 **Tool**:
 One named platform operation with a typed input and a factual output, such as "find comparables"
 or "add to a collection", that an agent, a screen or an assistant can call. A tool declares whether
-it reads market data, reads or writes the user's own data, spends money, or leaves the platform.
+it reads market data, reads or writes the user's own data, spends money, runs code, or (later) leaves the platform.
 _Avoid_: function, endpoint, capability (in prose)
 
 **Run**:

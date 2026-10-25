@@ -236,6 +236,8 @@ it (`api/`). They do not apply to the scraper.
     A `*_SQL` constant is therefore NOT evidence of coverage — one unquoted `{slot}` and the
     sweep walks past. `tests/test_measure_sql_prepare.py` is the gate for all six and must
     gain a line when a seventh appears.
+- **Agents (ruling Q29, 2026-10-25, ADR-0002):** an agent run sees broker contacts as its user sees them, at most 20 contacts
+  per call, every read recorded on the run; assistants over MCP stay masked.
 
 ## Error contract and the transport deadline (Broker Unify W2)
 
