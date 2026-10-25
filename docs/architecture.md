@@ -3704,8 +3704,9 @@ renumber.** Navigate by area:
     is also what keeps the heal's first batch from aborting on a 22003.
 
     **A figure in the plot box is not always a plot** (general ruling 3, 2026-09-30; the
-    operator's flat answers, 2026-10-01; rebuilt on current main under ruling 5a, 2026-10-25 —
-    the original PRs #1668 / #1669 never merged). On 14 of 14 live pages the readers opened
+    operator's flat answers, 2026-10-01; rebuilt on current main on the operator's go-ahead of
+    2026-10-25 — the original PRs #1668 / #1669 never merged and are superseded). On 14 of 14
+    live pages the readers opened
     (idnes, realitymix, mmreality; ceskereality answered 403 and was read from its stored
     pages) the portal itself prints ONE figure in the plot box and the floor-area box — a
     10 m² cellar with a 10 m² "plot", an 852 m² hall whose "Plocha parcely" is its own
@@ -3728,14 +3729,19 @@ renumber.** Navigate by area:
     contract cells stay `structured` with a note only — `none` / `text` would make the column
     preserve-if-null (`db._preserved_columns`) and freeze every stored echo. Each affected
     LIVE row clears at its next detail fetch with one genuine snapshot; a STORED echo clears
-    only by migration 671 (destructive, applied after the rule deploys, with a backup and the
-    operator's OK: byt = every stored plot, komerční = the equality rule, active AND inactive
-    — 14,404 rows on 2026-10-25, 5,574 of them active), because `scripts/reparse.py` never
-    blanks. Readers follow without a change: `plot_area_m2` (migration 534) reads
-    `estate_area` off land. Named residuals: the reverse case (idnes 19082282, a campsite's
-    8 616 m² land typed into the usable box) keeps the wrong area and loses the true plot,
-    and a pre-stamp komerční row of the realitymix "Plocha" shape (usable and basis NULL)
-    escapes the heal.
+    only by migration 671 (its own PR, destructive: applied from that PR's branch after the
+    rule deploys, with a backup and the operator's OK, and merged only once applied: byt =
+    every stored plot, komerční = the equality rule, active AND inactive — 14,404 rows on
+    2026-10-25, 5,574 of them active), because `scripts/reparse.py` never blanks. Readers
+    follow without a change: `plot_area_m2` (migration 534) reads `estate_area` off land.
+    Named residuals: the **reverse case** — an areál, farm, camp or petrol station whose TRUE
+    parcel the advertiser typed into BOTH boxes keeps the wrong floor figure and loses the
+    true plot. It is a class, not the one campsite the original found (idnes 19082282): the
+    2026-10-25 hand-read of the 2,356 active komerční hits found 93 whose own description
+    states a parcel equal to the figure, all of them this case, and estimates ~170 in all
+    (~7 %), concentrated in sklad / výroba / zemědělský / ubytování ads above ~2,000 m²; no
+    stored column tells them apart (zastavěná plocha has none). Also: a pre-stamp komerční
+    row of the realitymix "Plocha" shape (usable and basis NULL) escapes the heal.
 
     **The area NUMBER has one grammar too** (the scraper track's W19, 2026-09-17 — not
     the location program's). Picking the right measure is only half the rule; reading the
