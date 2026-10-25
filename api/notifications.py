@@ -775,20 +775,6 @@ def _commit_one(conn: "psycopg.Connection", sql: str, params: dict[str, Any]) ->
         return cur.rowcount or 0
 
 
-def _read_int_setting(
-    conn: "psycopg.Connection", key: str, *, default: int,
-) -> int:
-    with conn.cursor() as cur:
-        cur.execute("SELECT value FROM app_settings WHERE key = %s", (key,))
-        row = cur.fetchone()
-    if row is None or row[0] is None:
-        return default
-    try:
-        return int(row[0])
-    except (TypeError, ValueError):
-        return default
-
-
 # The watchdogs a producer serves: switched on and not retired (migration 652; deleting a
 # watchdog retires it, `delete_subscription`).
 _LIVE_WATCHDOGS_SQL = (

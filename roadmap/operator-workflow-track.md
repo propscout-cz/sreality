@@ -91,8 +91,7 @@ account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, e
       moment, not `first_seen_at` — needs a ruling; (b) drop `properties.published_at` + `publish_reason` + their three
       indexes (the autodedup session's owed drop, now moot for serving too); (c) a worker CLIP lane, so settlement
       ends in minutes rather than at the cap; (d) let the settled rule ignore the engine's standing refusals
-      (`autodedup/apply.py` `SKIP_SPANS_GROUPS`, `SKIP_CARRIES_UNGROUPED`) once measured; (e) delete
-      `api/notifications._read_int_setting` after #1951.
+      (`autodedup/apply.py` `SKIP_SPANS_GROUPS`, `SKIP_CARRIES_UNGROUPED`) once measured; (e) done in #1951: `api/notifications._read_int_setting` deleted (no caller left once the matcher went).
 - [ ] **W2b (built 2026-10-21, stacked on W4; held until W2a has had 48 h of overlap in production; migration 655 applied
       first)** — one clock in the worker: `matcher_loop` goes with its lease, three interval readers, three thread
       wrappers and two daily gates; the API's lifespan starts the health teller alone, under `HEALTH_TELLER_DISABLED`
