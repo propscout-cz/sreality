@@ -25,7 +25,7 @@ name: "Scraping: RE/MAX scraper (pilot)"
 #
 # Required secret: SUPABASE_DB_URL. (Coordinates come from each card's / detail
 # page's data-gps, so no MAPY_CZ_API_KEY is needed. Image bytes are downloaded
-# separately by images.yml.)
+# separately by the realtime worker's images lane.)
 
 on:
   schedule:

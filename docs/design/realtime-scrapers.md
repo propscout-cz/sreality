@@ -84,17 +84,19 @@ the API's loop), so the API's one loop is the health teller*). It runs, as conti
    not a per-batch wake; the API runs none.*
 
 **Cold lane — GitHub Actions keeps** the delay-tolerant heavy work it does well and for
-free: full reconcile index walks (completeness + delisting evidence), image/CLIP backfills,
+free: full reconcile index walks (completeness + delisting evidence), CLIP backfills,
 dedup full scans + batch lanes, monitors, CI. Self-chaining (`SCRAPE_CHAIN_TOKEN`) is
 legacy backlog acceleration — do not extend it to new lanes. — *Since Actions-exit W0 (#2010,
-2026-10) this worker is the ONLY runtime of the detail drain, fresh-image downloads and the
-incremental property and broker maintenance: the five portal drains, `images_fresh.yml`,
+2026-10) this worker is the ONLY runtime of the detail drain, image downloads (#2011 added the
+inactive residue) and the incremental property and broker maintenance: the five portal drains, `images_fresh.yml`,
 `property_maintenance.yml` and `broker_resolution.yml` that ran beside it as backstops are
 deleted (in their last week the GitHub drains wrote 1–5 % of each portal's completions, bazos
 about 5 %; the PR's pre-checks hold the measurement).
 Still on GitHub for now: the walks and the daily property and broker sweeps (until the job runner
-takes them), the four combined scrapers' own drain phase (walk-only in W1, #2021) and
-`images.yml`'s deep backlog (to be folded into the images lane, #2011).
+takes them) and the four combined scrapers' own drain phase (walk-only in W1, #2021). Since #2011
+the images lane also drains the inactive-image residue `images.yml` owned (each tier walks the
+pending index newest-first, the residue filling what the active tier leaves), so no image download
+runs on GitHub.
 `realtime_drain_disabled_sources` therefore freezes a portal's queue: no other scheduled drain
 takes it over (a combined scraper's own phase aside).*
 

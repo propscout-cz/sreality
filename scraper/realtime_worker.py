@@ -21,9 +21,10 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              `realtime_images_slice`-capped slice (default 500) of pending
              image downloads via the one existing machinery
              (scraper.main._run_image_downloads: per-host semaphore + breaker,
-             active-only newest-first) — the latency lever that feeds the
-             publication rule (a first stored photo, migrations 668/669). Coexists with
-             images.yml's deep backlog (idempotent storage_path-IS-NULL selection);
+             active ads newest-first) — the latency lever that feeds the
+             publication rule (a first stored photo, migrations 668/669). The
+             inactive residue fills what the active tier leaves of a slice, so
+             the lane is the only image drain (images.yml folded in, #2011);
              without R2 env vars the lane logs once and idles (the proxy-skip
              posture).
 - count_probe: every `realtime_sreality_count_interval_seconds` (default 600),
@@ -210,8 +211,7 @@ DRAIN_MAX_SECONDS = 120.0
 LEDGER_MAX_WAIT_SECONDS = DRAIN_MAX_SECONDS
 IMAGES_INTERVAL_DEFAULT = 60
 IMAGES_SLICE_DEFAULT = 500
-# Modest beside the Actions lanes' 32: the worker slice is small and the lane
-# shares the CDNs with images.yml.
+# Modest: the worker slice is small (500 by default).
 IMAGES_WORKERS = 8
 HEARTBEAT_INTERVAL_SECONDS = 30.0
 # Ten missed beats. When no heartbeat pass has FINISHED for this long the watchdog exits
@@ -1311,12 +1311,12 @@ async def _drain_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None:
 
 
 def _run_images_sync(max_downloads: int) -> dict[str, Any]:
-    # Reuse THE image machinery (per-host semaphore, breaker, active-only +
-    # newest-first via db.pending_image_downloads) — never fork it. Lazy import
-    # keeps scraper.main off the worker's startup path.
+    # Reuse THE image machinery (per-host semaphore, breaker, active ads
+    # newest-first then the inactive residue via db.pending_image_downloads) —
+    # never fork it. Lazy import keeps scraper.main off the worker's startup path.
     from scraper.main import _run_image_downloads
 
-    return _run_image_downloads(max_downloads, IMAGES_WORKERS, active_only=True)
+    return _run_image_downloads(max_downloads, IMAGES_WORKERS)
 
 
 async def _images_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None:

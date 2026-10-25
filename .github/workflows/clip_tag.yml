@@ -8,7 +8,7 @@ name: Dedup — CLIP image tagging (sharded)
 # resumable (a tagged image drops out of the next select), so once caught up the
 # hourly runs are cheap no-ops that just keep pace with new inflow.
 # Horizontally sharded into 4 parallel jobs (image_id %% 4), each with its own
-# runner + cap, like images.yml. Installs CPU torch + the `clip` extra
+# runner + cap. Installs CPU torch + the `clip` extra
 # (transformers); the production CLIP could move to int8-ONNX later as an
 # optimization.
 #
