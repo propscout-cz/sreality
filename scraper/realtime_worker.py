@@ -11,10 +11,11 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              never nominates.
 - drain:     every `realtime_drain_interval_seconds` (default 30), claim a
              bounded slice of the shared listing_detail_queue per source that
-             has claimable rows. SKIP LOCKED makes this safe beside the GitHub
-             Actions drains by construction. Sources listed in
+             has claimable rows; the only drain of the walk-only portals
+             (SKIP LOCKED keeps it safe beside a combined scraper's own drain
+             phase and a hand --drain-only run). Sources listed in
              `realtime_drain_disabled_sources` are skipped — a per-source
-             kill-switch (e.g. to freeze a portal's queue at low attempts
+             kill-switch that freezes a portal's queue (e.g. at low attempts
              during a proxy outage instead of burning them to given_up).
 - images:    every `realtime_images_interval_seconds` (default 60), drain a
              `realtime_images_slice`-capped slice (default 500) of pending
@@ -22,7 +23,7 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              (scraper.main._run_image_downloads: per-host semaphore + breaker,
              active-only newest-first) — the latency lever that feeds the
              publication rule (a first stored photo, migrations 668/669). Coexists with
-             images_fresh.yml (idempotent storage_path-IS-NULL selection);
+             images.yml's deep backlog (idempotent storage_path-IS-NULL selection);
              without R2 env vars the lane logs once and idles (the proxy-skip
              posture).
 - count_probe: every `realtime_sreality_count_interval_seconds` (default 600),
@@ -38,25 +39,22 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              incremental property-maintenance pass — straggler attach + dirty-set
              recompute + settle (`settled_at` on fresh properties the pipeline is
              done with, migration 668), via scripts.recompute_property_stats.
-             run_incremental_pass (THE same implementation the GH cron runs;
-             never forked). Exists because GH throttles property_maintenance.yml
-             (nominal */5) to a measured 2h median / 4.1h worst — this lane is
-             what actually delivers "a new/changed listing reaches properties
-             (and the Browse read model) within minutes". Safe beside the GH
-             cron + daily sweep: all callers serialize on the maintenance
+             run_incremental_pass — the pass's only scheduled runtime: it is
+             what delivers "a new/changed listing reaches properties (and the
+             Browse read model) within minutes". Safe beside the daily sweep
+             and a hand run: all callers serialize on the maintenance
              lease row (migration 279 — pooler-proof CAS; a session advisory
-             lock strands over the transaction pooler) — a concurrent caller
-             skips.
+             lock strands over the transaction pooler) — an incremental caller
+             skips while it is held, the sweep waits for it.
 - broker_maintenance: every `realtime_maintenance_interval_seconds` (shared
              with the maintenance lane — same cadence class, no new setting),
              one drain-until-empty broker pass via scripts.resolve_brokers.
-             run_incremental_pass (THE same implementation broker_resolution.yml
-             runs; never forked). Attributes dirty listings to brokers,
-             recomputes only the affected brokers' rollups, and republishes the
-             leaderboard matview when its derived_artifacts stamp is older than
-             ~an hour — so broker numbers stop being a once-daily artifact of
-             the GH-throttled full sweep (Broker Unify W3). Safe beside the GH
-             cron + daily sweep: all callers serialize on broker_resolution_lock;
+             run_incremental_pass, the pass's only scheduled runtime. Attributes
+             dirty listings to brokers, recomputes only the affected brokers'
+             rollups, and republishes the leaderboard matview when its
+             derived_artifacts stamp is older than ~an hour — so broker numbers
+             stop being a once-daily artifact of the full sweep (Broker Unify
+             W3). Safe beside the daily sweep and a hand run: all callers serialize on broker_resolution_lock;
              a concurrent caller skips. Its own pass lock keeps an abandoned pass,
              whose lease row goes stale, from running beside the next one.
 - location_resolve: every `realtime_location_resolve_interval_seconds`
@@ -213,7 +211,7 @@ LEDGER_MAX_WAIT_SECONDS = DRAIN_MAX_SECONDS
 IMAGES_INTERVAL_DEFAULT = 60
 IMAGES_SLICE_DEFAULT = 500
 # Modest beside the Actions lanes' 32: the worker slice is small and the lane
-# shares the CDNs with images_fresh.yml.
+# shares the CDNs with images.yml.
 IMAGES_WORKERS = 8
 HEARTBEAT_INTERVAL_SECONDS = 30.0
 # Ten missed beats. When no heartbeat pass has FINISHED for this long the watchdog exits
@@ -295,14 +293,11 @@ class _PassLock:
 
 # maintenance lane: the incremental property-maintenance pass (straggler attach
 # + dirty-set recompute — scripts.recompute_property_stats.
-# run_incremental_pass, THE same implementation the GH cron runs), every
-# MAINTENANCE_INTERVAL_DEFAULT seconds. Exists because GH Actions throttles this
-# repo's schedules to ~hourly at best — property_maintenance.yml (nominal */5)
-# measured a 2h MEDIAN / 4.1h worst gap (2026-07-07 audit), so "a new listing
-# reaches properties/Browse within ~5 min" was off by ~24x. Ships LIVE (the
-# fix is the point); interval <= 0 idles it. Safe beside the GH cron + daily
-# sweep by construction: all three serialize on the maintenance lease row
-# (migration 279) inside run_incremental_pass (a concurrent caller skips).
+# run_incremental_pass), every MAINTENANCE_INTERVAL_DEFAULT seconds — the pass's
+# only scheduled runtime. Ships LIVE (the fix is the point); interval <= 0 idles
+# it. Safe beside the daily sweep and a hand run by construction: all serialize
+# on the maintenance lease row (migration 279) inside run_incremental_pass (this
+# lane skips while another writer holds it).
 # 30 s, not 120: the attach is the only birth, so this bounds how long a new ad
 # (a pasted one too) waits for its property; an idle pass costs ~6 ms (2026-10-20).
 MAINTENANCE_INTERVAL_DEFAULT = 30
@@ -1536,8 +1531,8 @@ _HEARTBEAT_SQL = """
 def _maintenance_sync() -> dict[str, Any]:
     """One incremental property-maintenance pass on the worker's own
     connection. Reuses THE script implementation (never forks it); the lease
-    row inside run_incremental_pass makes this safe beside the GH cron and the
-    daily full sweep — a concurrent caller returns skipped. Lazy import keeps
+    row inside run_incremental_pass makes this safe beside the daily full
+    sweep and a hand run — a concurrent caller returns skipped. Lazy import keeps
     scripts.recompute_property_stats off the worker's startup path."""
     from scripts.recompute_property_stats import run_incremental_pass
 
@@ -1561,7 +1556,7 @@ async def _maintenance_pass(stop_event: asyncio.Event, state: dict[str, Any]) ->
         "settled": stats.get("settled", 0),
     }
     if last["skipped"]:
-        LOG.info("MAINTENANCE lane skipped (lease held by cron or daily sweep)")
+        LOG.info("MAINTENANCE lane skipped (lease held by the daily sweep or a hand run)")
     else:
         LOG.info(
             "MAINTENANCE lane attached=%d recomputed=%d settled=%d",
@@ -1573,8 +1568,8 @@ async def _maintenance_pass(stop_event: asyncio.Event, state: dict[str, Any]) ->
 def _broker_maintenance_sync() -> dict[str, Any]:
     """One drain-until-empty broker pass on the worker's own connection. Reuses
     THE script implementation (never forks it); broker_resolution_lock inside
-    run_incremental_pass makes this safe beside the GH cron and the daily full
-    sweep — a concurrent caller returns skipped. In ONE thread holding the lane's pass
+    run_incremental_pass makes this safe beside the daily full sweep and a
+    hand run — a concurrent caller returns skipped. In ONE thread holding the lane's pass
     lock (see _probe_sync). Lazy import keeps scripts.resolve_brokers off the worker's
     startup path."""
     if not _BROKER_MAINTENANCE_PASS_LOCK.try_enter():

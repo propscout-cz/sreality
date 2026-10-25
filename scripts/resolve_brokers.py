@@ -3,7 +3,7 @@
 Mirrors scripts.recompute_property_stats: a pure-SQL, set-based, idempotent driver
 that runs OFF the scrape hot path. Three modes:
 
-  * --incremental (cron */10): drain the dirty_broker_listings queue (new +
+  * --incremental (the realtime worker's broker lane; by hand): drain the dirty_broker_listings queue (new +
     content-changed listings, enqueued at write time by the writer —
     listing_write.write_listings (all portals) —
     rule #20), re-attribute exactly those, then recompute only the affected
@@ -1127,11 +1127,11 @@ def _affected(conn: Any, listing_ids: list[int]) -> list[int]:
         return [int(r[0]) for r in cur.fetchall()]
 
 
-# The leaderboard matview republishes from the DRAIN path (worker lane every
-# ~2 min + broker_resolution.yml as the throttled backstop), not from the daily
+# The leaderboard matview republishes from the DRAIN path (the worker lane every
+# ~30 s), not from the daily
 # sweep — freshness stopped being coupled to a 1.5-3h job that GH cron drift
 # parks in working hours (Broker Unify W3). The derived_artifacts stamp is the
-# clock, so both hosts share one cadence with no new setting; the chokepoint
+# clock, so the cadence needs no new setting; the chokepoint
 # (migration 578) refreshes CONCURRENTLY (readers never block; measured 85 s),
 # stamps rows + duration in-DB, and skips (-1) when a refresh is in flight.
 _MATVIEW_REFRESH_AFTER = "55 minutes"
@@ -1770,8 +1770,7 @@ def _run_incremental(conn: Any, free: list[str], franchise: list[str],
     # after a pooler drop redoes exactly the same work rather than losing it. Note
     # what "claim" does NOT mean here: _CLAIM_DIRTY is a plain SELECT on an autocommit
     # connection — no row lock, no claim marker, nothing another run would respect.
-    # Exclusion comes from broker_resolution_lock (plus this workflow's own
-    # concurrency group); the scoped _DELETE_DIRTY is what keeps a concurrent
+    # Exclusion comes from broker_resolution_lock; the scoped _DELETE_DIRTY is what keeps a concurrent
     # enqueue safe. The 2026-08-10 23:10 red died on the rollup below with
     # 'SSL connection has been closed'.
     ids = sorted(claimed)
@@ -1801,8 +1800,8 @@ def _run_incremental(conn: Any, free: list[str], franchise: list[str],
 
 def run_incremental_pass(conn: Any, batch_size: int = 5000, *,
                          reconnect: Callable[[], Any] | None = None) -> dict[str, Any]:
-    """THE incremental broker-maintenance driver (Broker Unify W3), shared by
-    broker_resolution.yml and the realtime worker's broker lane — mirrors
+    """THE incremental broker-maintenance driver (Broker Unify W3), run by the
+    realtime worker's broker lane and `--incremental` by hand — mirrors
     scripts.recompute_property_stats.run_incremental_pass. Skips cleanly when
     another resolution run holds the lock, drains the dirty queue until empty
     (not one slice per invocation — the one-slice shape left 2,300-row, 5 h+
@@ -1883,7 +1882,7 @@ def main() -> int:
             # THE incremental driver (run_incremental_pass) owns the lock skip,
             # the drain-until-empty loop and the stale-matview republish — the
             # realtime worker's broker lane calls the same function, so this
-            # workflow entry is only its throttled GH backstop.
+            # entry is only the hand run.
             res = run_incremental_pass(conn, args.batch_size, reconnect=reconnect)
             if not res.get("skipped"):
                 LOG.info(

@@ -2,11 +2,11 @@
 
 `SrealityPortal` wraps this module's walk / fetch helpers for the shared
 portal_runner; the scheduled entrypoint is `scraper.sreality_main`
-(index_walk.yml / detail_drain.yml). The image phase reads pending image rows
+(index_walk.yml; the realtime worker drains). The image phase reads pending image rows
 and uploads their bytes to Cloudflare R2 (a no-op without the R2_* env vars).
 
 Run with exactly one mode:
-    python -m scraper.main --images-only           # image phase (images.yml, images_fresh.yml)
+    python -m scraper.main --images-only           # image phase (images.yml)
     python -m scraper.main --index-only --dry-run  # sreality index walk, no DB writes
     python -m scraper.main --drain-only            # sreality detail drain
     python -m scraper.main --images-only --max-image-downloads 500 --image-workers 16
@@ -431,8 +431,8 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--images-only",
         action="store_true",
         help=(
-            "run only the image-download phase. Used by images.yml / "
-            "images_fresh.yml to drain the R2 backlog without walking the index."
+            "run only the image-download phase. Used by images.yml "
+            "to drain the R2 backlog without walking the index."
         ),
     )
     p.add_argument(
@@ -462,7 +462,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help=(
             "restrict the image-download phase to images attached to "
             "currently-active listings, ordered newest-first. Used by "
-            "images_fresh.yml (and images.yml's active slice) to prioritise "
+            "images.yml's active slice to prioritise "
             "the user-visible coverage gap; without it inactive listings' "
             "photos keep filling in as bandwidth allows."
         ),

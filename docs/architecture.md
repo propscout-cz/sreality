@@ -129,8 +129,8 @@ them; `tests/scraper/test_portal_category_coverage.py` now fails CI whenever a p
 in the fleet carries such a category) and the rent-only `podnajem`/`ubytovani` (roommate
 search and short-term lodging classifieds, not the sale or rental of a property). So — like
 sreality/idnes (rule #19) — it is **cadence-split**: `bazos_index_walk.yml` (every 6h, full
-walk + presence nomination + enqueue) feeds the bounded `bazos_detail_drain.yml` (hourly,
-`--max-seconds` budget). A combined run can't do both inside one job (the full 22-scope walk is
+walk + presence nomination + enqueue) feeds the realtime worker's drain lane (bazos's only
+drain since Actions-exit W0, #2010). A combined run can't do both inside one job (the full 22-scope walk is
 ~2400 index pages ≈ 85-90 min at the portal's 0.5 req/s index rate since migration 488 added
 pozemek/zahrada/garaz/ostatni — a 130-minute job timeout with a 110-minute budget — which eats
 the window, starving the drain); narrow ad-hoc runs go through the split
@@ -232,7 +232,7 @@ a page check (rule #3, source-scoped) and the page decides.
 
 **Data source (reality.idnes.cz).** A scheduled scraper (`scraper/idnes_client.py`,
 `idnes_parser.py`, `idnes_main.py` — **cadence-split** like sreality/bazos:
-`idnes_index_walk.yml` every 6h feeds the hourly bounded `idnes_detail_drain.yml`) tagged
+`idnes_index_walk.yml` every 6h feeds the realtime worker's drain lane) tagged
 `source='idnes'`. iDNES is an HTML portal (like bazos, not a JSON API) but a STRUCTURED one:
 `idnes_parser` reads the `<dl>` spec table, a clean price element, and **precise per-listing
 coordinates from the page's embedded map config** (`"center":[lon,lat]`), so there is no
@@ -397,8 +397,8 @@ ruling 3): a pasted link of any portal becomes an ad through `POST /listings/ing
 **Data source (ceskereality.cz).** A scheduled scraper (`scraper/ceskereality_client.py`,
 `ceskereality_parser.py`, `ceskereality_main.py`) tagged `source='ceskereality'`. It is large
 (~49k listings), so — like sreality/idnes — it is **cadence-split**: `ceskereality_index_walk.yml`
-(every 6h, full walk + presence nomination + enqueue) feeds the hourly bounded
-`ceskereality_detail_drain.yml` (`--max-seconds` budget). The index walk partitions each
+(every 6h, full walk + presence nomination + enqueue) feeds the realtime worker's drain
+lane. The index walk partitions each
 category on the **14 declared kraj slugs** (`KRAJ_SLUGS`, a proven row-level partition —
 never the rendered facet block, which is a top-10-by-popularity list), pages each slice to
 its own declared tail (a *filtered* search URL caps at 99 pages / 1,980 rows; the famous
@@ -3110,7 +3110,7 @@ renumber.** Navigate by area:
     does not carry. Enqueues
     ids into one of two service classes — ACQUISITION (`QUEUE_PRIORITY_NEW`, never fetched) or
     REFRESH (everything else, ranked failure-retry > price-changed > refetch-cohort).
-    `detail_drain.yml` (`--drain-only`, `run_type='detail'`) claims a bounded slice
+    The drain (the realtime worker's drain lane; by hand `--drain-only`, `run_type='detail'`) claims a bounded slice
     (`FOR UPDATE SKIP LOCKED`) **composed from both classes**: `claim_detail_batch` reserves
     `QUEUE_ACQUISITION_RESERVE` (half) of each batch for acquisition and gives refresh the rest,
     with unused reserve backfilling to refresh inside the SQL. This is load-bearing, not a tuning
@@ -3208,12 +3208,13 @@ renumber.** Navigate by area:
     change, or a revival, or a write under an inactive property), `mark_listing_inactive`
     (delisting: the drain and freshness), `touch_listings_by_id` (re-sighting reactivation, via `reconcile_sightings`) — enqueue the affected `property_id` into `dirty_properties`
     (migration 106) with a cheap set-based `INSERT ... ON CONFLICT DO UPDATE SET marked_at`.
-    `property_maintenance.yml` (`recompute_property_stats --incremental`, cron `*/5`) attaches
+    The realtime worker's maintenance lane (`recompute_property_stats.run_incremental_pass`, every
+    30 s; its only runtime since Actions-exit W0, #2010, deleted `property_maintenance.yml`) attaches
     new stragglers (singletons only — the old geo Tier-1 matcher was removed; grouping is
     out-of-band, rule #15) and recomputes **only the queued properties** (the full
     recompute SQL scoped to
-    `id = ANY(...)`), so a new/edited/delisted listing reaches `properties` within ~5 min (~30 s
-    on the worker's maintenance lane) and the job is **O(changes)**, not O(all properties). Reaching
+    `id = ANY(...)`), so a new/edited/delisted listing reaches `properties` within ~30 s
+    and the pass is **O(changes)**, not O(all properties). Reaching
     **Browse** is a second step, because `browse_projection` reads `properties` and Browse reads
     the `browse_list` snapshot: since field-capture W6 the drain patches `browse_list` for exactly
     the ids it recomputed — each slice runs `properties_changed` (recompute, `sync_browse_list`,
@@ -3259,9 +3260,10 @@ renumber.** Navigate by area:
     The maintenance lease is one 15-minute TTL
     heartbeat-renewed every batch/slice, so a killed job freezes maintenance for minutes, not
     hours. (There is no scheduled dedup job any more — the automatic decision
-    layer was removed in the 2026-08 cutoff, rule #15.) Both
-    maintenance jobs share the `sreality-property-maintenance` concurrency group so they never
-    mutate `properties` concurrently. Inline merge/detach run `properties_changed` (the drain's
+    layer was removed in the 2026-08 cutoff, rule #15.) The
+    worker's lane and the daily sweep never mutate `properties` concurrently because both take
+    that lease; the sweep's `sreality-property-maintenance` concurrency group only queues a
+    second sweep behind the first. Inline merge/detach run `properties_changed` (the drain's
     own after-step: scoped recompute, Browse patch, broker queue) directly, and never enqueue
     `dirty_properties`.
     A residual of removing the

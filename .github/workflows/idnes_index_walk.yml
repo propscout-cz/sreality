@@ -5,8 +5,8 @@ name: "Scraping: iDNES Reality index walk"
 # touch_listings bumps last_seen on still-listed ids, unseen ids are nominated for
 # a page check (rule #3) once the walk reached the portal's end (source-scoped; the
 # page, not the count, decides), and new/price-changed ids are enqueued into
-# listing_detail_queue (source='idnes'). No detail fetch — the drain
-# (idnes_detail_drain.yml) consumes the queue. Records run_type='index'.
+# listing_detail_queue (source='idnes'). No detail fetch — the realtime
+# worker's drain lane consumes the queue. Records run_type='index'.
 #
 # WHY split: iDNES is large (~2400 index pages across byty+domy × prodej+pronájem,
 # ~60k listings), so a full index walk takes most of a job's window — a combined

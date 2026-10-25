@@ -23,8 +23,8 @@ A `--sale-type`/`--category` dispatch override narrows to a single scope.
 
 Cadence split, like sreality/idnes (rule #19): the full 14-scope index walk is
 ~1500 pages (≈ 50 min), so it cannot share one job with the detail drain without
-starving it. `bazos_index_walk.yml` runs `--index-only` (every 6h); the bounded
-`bazos_detail_drain.yml` runs `--drain-only` (hourly, `--max-seconds` budget).
+starving it. `bazos_index_walk.yml` runs `--index-only` (every 6h); the realtime
+worker's drain lane drains (`--drain-only` is the hand run).
 Omitting both flags runs both phases back-to-back — an ad-hoc combined run for
 local debugging / narrow scopes; no workflow uses it.
 """

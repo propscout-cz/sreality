@@ -1,6 +1,6 @@
 ---
 name: scraper-ops
-description: Use when running, debugging, or extending the scrapers — triggering the per-portal index-walk/detail-drain workflows, adding a new scraper field without breaking data, refreshing portal HTML fixtures, reading the pipeline logs (INDEX/ENQUEUE/VERIFY/DRAIN/IMAGES line shapes), the always-on real-time worker (probe/drain/images/count-probe/property-maintenance/broker-maintenance/estimation/location-resolve/location-intake-fast/location-refetch/sold-comps/text-extract/health/autodedup/notifications/push/heartbeat lanes), the visual-signal producer jobs (image pHash, CLIP tagging/retag, DINOv3 corpus embedding on RunPod), or the pipeline verification/alerting harness. Also covers condition-scoring (parked) and image-download workflow cadence. Triggers on: index_walk, detail_drain, gh workflow run, delist_policy, presence check, scrape_runs, fixtures, RUN done, a new listings column, onboarding a portal, reading a scrape log, realtime_worker, sold_comps, clip_tag, dinov3_embed_backfill, compute_image_phash, verify_pipeline, health_canary, health_liveness, health lane, job cell, missing lane, match_once, reason line.
+description: Use when running, debugging, or extending the scrapers — triggering the per-portal index-walk workflows, adding a new scraper field without breaking data, refreshing portal HTML fixtures, reading the pipeline logs (INDEX/ENQUEUE/VERIFY/DRAIN/IMAGES line shapes), the always-on real-time worker (probe/drain/images/count-probe/property-maintenance/broker-maintenance/estimation/location-resolve/location-intake-fast/location-refetch/sold-comps/text-extract/health/autodedup/notifications/push/heartbeat lanes), the visual-signal producer jobs (image pHash, CLIP tagging/retag, DINOv3 corpus embedding on RunPod), or the pipeline verification/alerting harness. Also covers condition-scoring (parked) and image-download workflow cadence. Triggers on: index_walk, detail_drain, gh workflow run, delist_policy, presence check, scrape_runs, fixtures, RUN done, a new listings column, onboarding a portal, reading a scrape log, realtime_worker, sold_comps, clip_tag, dinov3_embed_backfill, compute_image_phash, verify_pipeline, health_canary, health_liveness, health lane, job cell, missing lane, match_once, reason line.
 ---
 
 # Scraper operations
@@ -116,14 +116,13 @@ Heal via `reparse.yml` (`--source <portal> --fields area_m2,estate_area,usable_a
 ## How to manually trigger the scrapers
 
 The sreality pipeline is **split by cadence (Phase 2)**: `index_walk.yml` ("Scraping: Sreality
-index walk", cron `*/15`) feeds `detail_drain.yml` ("Scraping: Sreality detail drain", cron
-`*/15`). The combined `scrape.yml` fallback (`scraper.main`'s `_run_full`) was deleted in C2-2
+index walk", cron `*/15`) feeds the worker's drain lane — since W0 (#2010) the ONLY drain of the
+walk-only portals (sreality, bazos, idnes, ceskereality, realitymix, web). The combined `scrape.yml` fallback (`scraper.main`'s `_run_full`) was deleted in C2-2
 (2026-10); an ad-hoc combined run of any portal is `python -m scraper.<portal>_main` with neither
 phase flag (walk, then drain), locally. The bazos crawl is **cadence-split**
 like sreality (bazos walks 22 nationwide scopes (migration 488), ~1500 index pages — a combined run starves the
 drain): `bazos_index_walk.yml` ("Scraping: Bazos index walk", cron `0 */6`, full walk +
-nominate unseen + enqueue) feeds `bazos_detail_drain.yml` ("Scraping: Bazos detail drain", cron
-`45 * * * *`, bounded `--max-seconds`). Bazos's ad text needs a post-publication pass the other
+nominate unseen + enqueue) feeds the worker's drain lane. Bazos's ad text needs a post-publication pass the other
 portals' structured pages don't: field-capture W7 runs it as the worker's `text_extract` lane
 (`toolkit/description_extraction.py`), never in the scrape — the LLM is behind publication, never
 in front of it.
@@ -143,13 +142,11 @@ phases in one job via `remax_main`, bounded by `--max-detail` + a `--max-seconds
 ~7,900-listing backlog drains over several ticks). The idnes scrape is
 **cadence-split** like sreality (iDNES is large — 4,235 index pages, ~110k listings):
 `idnes_index_walk.yml` ("Scraping: iDNES Reality index walk", `idnes_main --index-only`, cron
-`15 */6`) feeds `idnes_detail_drain.yml` ("Scraping: iDNES Reality detail drain", `--drain-only`,
-hourly `30 * * * *`, bounded by `--max-seconds`; `SCRAPE_CHAIN_TOKEN` re-dispatches it while the
-queue has work). idnes's `supports_complete_walk` was parked (migration 453) — posture only since
+`15 */6`) feeds the worker's drain lane. idnes's `supports_complete_walk` was parked (migration 453) — posture only since
 2026-09-07, it gates no delisting; the walk is sliced into the 14 kraje + abroad, each slice's outcome
 in `portal_index_slices` (454), read back to walk the stalest slice first (the gate that re-earned the flag retired in wave 4).
 **Parked flags, the slice ledger and the retired gate: `references/coverage-and-delisting.md`.**
-The properties track adds `property_maintenance.yml` (**dirty-set incremental, cron `*/5`** — attaches new stragglers as
+The properties track runs the worker's maintenance lane (**dirty-set incremental, every 30 s** — attaches new stragglers as
 singletons + recomputes only changed properties; rule #20) and
 `recompute_property_stats.yml` (the **daily full-sweep reconcile** at 04:15 — recomputes every
 property + clears the dirty queue under a `--max-seconds` budget; a budget stop clears only the range it
@@ -227,15 +224,15 @@ from the slow "download each ad" write:
   the drain's page check decides each nominated row. Records `run_type='index'`, `index_pages>0` (what Health
   liveness keys off). Uses the **transaction pooler** (`connect()`) — bulk set-based statements,
   no per-listing loop.
-- **`detail_drain.yml` (slow, async, bounded).** Claims a bounded slice of the queue
-  (`--max-detail`, default the per-portal `max_detail_per_run`), fetches details on a rate-limited pool, and writes
+- **The detail drain (the worker's drain lane; by hand `--drain-only`).** Claims a bounded slice of the queue
+  (`realtime_drain_slice` per source a pass; by hand `--max-detail`), fetches details on a rate-limited pool, and writes
   each ~100-item flush through **`listing_write.write_listings`** on all nine portals (set-based, ONE transaction:
   upsert, images/videos, failure clear, snapshot-on-change, dirty marks). sreality uses the **session pooler**
   (`connect_session()`, prepared statements), the crawlers `connect()`. New listings land `property_id` NULL and become
   **singletons** via `recompute_property_stats`'s bounded straggler-attach (the write carries no matching at all;
   grouping is out-of-band and operator-ordered, rule #15). A gone fetch records its verdict + dequeues it (flips only
-  under rule #3's hysteresis); a transient error bumps the queue row's `attempts` (given up after 5) and stays queued. Records `run_type='detail'`,
-  `index_pages=0`. The queue persists across runs, so a bounded run never loses work; a SIGKILLed
+  under rule #3's hysteresis); a transient error bumps the queue row's `attempts` (given up after 5) and stays queued. A hand run records `run_type='detail'`,
+  `index_pages=0`; the worker writes no `scrape_runs` row (its passes are in the heartbeat). The queue persists across runs, so a bounded run never loses work; a SIGKILLed
   claim is recovered by the next run's `reclaim_stale_claims`.
 
 **Delisting is presence-verified (rule #3, 2026-09-07); the gate is STRUCTURAL (2026-09-08).** A
@@ -265,21 +262,21 @@ toggles; empty = none; a toggle alone runs nothing), and `propagate_condition_le
 property's genuine score to its cross-portal siblings (`listings.condition_levels_propagated_from`
 records provenance) before every submit/backfill. Resume blockers: `roadmap/scraper-track.md`.
 
-**Images** stay decoupled across four workflows (the scrape split has no image phase; the drain only
-records image-URL rows — bytes land in R2 via these jobs). sreality comes through their `SQUARE_1800_JPG` template
+**Images** stay decoupled from the scrape (the scrape split has no image phase; the drain only
+records image-URL rows — bytes land in R2 via the jobs below). sreality comes through their `SQUARE_1800_JPG` template
 (`res,1800,1800,1|shr,,20|jpg,80`: whole frame, ≤1800px), an exact-template allowlist, so a stored legacy chain is NORMALISED
 onto it (only `rot` survives) and every row is stamped `rendition` + `stored_width`/`stored_height` (mig 496): **phash/CLIP
 compare only WITHIN a rendition**. Timeout guard = `--image-max-seconds`, NOT the count cap (~11k/hr basis predates it).
 R2 key = `img/{listing_id}/{images.id}.jpg`, unique per ROW (rule #6); a stored row keeps its legacy `{id}/{seq:04d}.jpg` forever.
 - `images.yml` (2-hourly) — THE deep backlog drain across ALL portals, **sharded into 4 parallel jobs**
   (`--image-shard k/4` = the `image_id mod 4` slice), each with its own cap, breaker and runner IP.
-- `images_fresh.yml` (`*/15` + self-chaining via `SCRAPE_CHAIN_TOKEN` while work remains) — newest
-  ACTIVE listings' photos first, so a fresh card renders an image in minutes, not 2 hours.
+- the worker's `images` lane (every 60 s, `realtime_images_slice`) — newest ACTIVE listings' photos first, so a
+  fresh card renders an image in minutes; since W0 (#2010) the only fresh-image runtime.
 - `refresh_stale_images.yml` (every 6h) — re-enqueues active listings whose un-downloaded image URLs
   rotated/went stale into `listing_detail_queue` (low priority) so the detail drain repoints them.
 
-**Cadence:** `*/15` for each half, deliberately — frequent index walks surface delistings fast, while
-the bounded drain keeps a steady, polite fetch volume. GitHub throttles scheduled workflows, so effective
+**Cadence:** the sreality walk runs `*/15` (frequent index walks surface delistings fast) and the worker's
+drain lane every 30 s keeps a steady, polite fetch volume. GitHub throttles scheduled workflows, so a walk's effective
 cadence is slower, and Health judges the gap a portal keeps, not a declared one: the `scraping` check's `<portal>/walks/<unit>`
 cells age a unit's newest end-reached walk against G, the median start gap of the portal's finished walks over 14 d (under 10
 gaps, the slowest portal's G): Watch past 3 G, Problem past 6 G (crawlers ~43 h, sreality 26.5 h) or with no end-reached walk
@@ -306,19 +303,19 @@ gone | failed`; the API never fetches a page.
 
 A dark-by-default, always-on Railway service (a 2nd process from the SAME image, gated by
 `REALTIME_WORKER_ENABLED`) running every lane registered in `_amain`. Its probe/drain/images/count-probe
-core replaces cron quantization for the latency-critical path (the GH Actions crons above stay the
-throughput/completeness backbone); the other lanes host background jobs, `health` measures the worker-hosted checks
+core replaces cron quantization for the latency-critical path (the GH walks above stay the completeness
+backbone; the drain, images and maintenance lanes have no GitHub twin since W0, #2010); the other lanes host background jobs, `health` measures the worker-hosted checks
 every 60 s and `heartbeat` beats `worker_heartbeats`. Design + shipped waves: `docs/design/realtime-scrapers.md`. **Liveness (2026-09-30, after a silent 7 h 40 min freeze):** every lane, the heartbeat included, runs on one pinned default executor (32 threads), so the heartbeat is its canary; a daemon **watchdog** dumps every thread's stack and `os._exit(1)`s once no heartbeat pass has FINISHED for `LIVENESS_BOUND_SECONDS` (300 s; a beat that fails still finishes, so a refused write cannot crash-loop the worker), and Railway restarts it — `WATCHDOG no heartbeat pass finished` in the log is that exit, `WATCHDOG pass lock of <lane> held over 3600s` the same exit for a lane wedged behind its lock (`PASS_LOCK_BOUND_SECONDS`, 2 x the pass timeout). The dump writes to a non-blocking stderr (a full pipe cuts it short, never holds the exit) and a `faulthandler` exit timer armed first `_exit(1)`s it if it is still alive 15 s later (a C thread, no GIL; not a signal, which the kernel drops for PID 1). All eleven lanes with a pass lock (`_PassLock`: probe, drain, broker_maintenance, location_resolve, location_intake_fast, sold_comps, text_extract, health, autodedup, notifications, push) run each pass in ONE thread, so each leaks at most one; a skipped pass is `last.previous_pass_running`, and while an abandoned pass still holds the lock the lane's `in_flight_s` keeps counting from that pass's start, so the `jobs` check's `lane/<lane>` cell sees the wedge (Watch past 1,200 s, Problem past 1,800 s). The worker's probe, drain and sold_comps lanes bound each wait in the shared rate ledger (`scraper/rate_ledger.py`) at `LEDGER_MAX_WAIT_SECONDS` (120 s), and the drain's limiter also refuses every acquire past its `DRAIN_MAX_SECONDS` deadline: a farther window is refused without moving the frontier and that portal is given up for the pass (`budget_refused` in the heartbeat, drain claims handed back untouched, the sold_comps tick stopped with no ledger row for the refused cell; `RATE budget refused` in the log); a drain whose time budget runs out mid-chunk hands back the same way but counts `deadline_stopped` (`DRAIN time budget reached mid-chunk`), not a block. The Actions walks and drains and the `reas_main` CLI pass no bound and wait as the ledger says. The retry after a 403 leases one slot (that debt capped at one lease batch), and a drain's lease is sized to its claims.
 Per-lane notes:
-- **Per-source kill switches** `realtime_probe_disabled_sources` / `realtime_drain_disabled_sources` (JSON lists, read every pass, no redeploy; PR #694) — a portal leaves that lane, its GH Actions cadence untouched.
+- **Per-source kill switches** `realtime_probe_disabled_sources` / `realtime_drain_disabled_sources` (JSON lists, read every pass, no redeploy; PR #694) — a portal leaves that lane. A drain-disabled portal's queue FREEZES: no GitHub drain takes it over since W0 (#2010); only the four combined scrapers' own drain phase ignores the list, until W1 (#2021).
 - **sreality count-probe lane** (migration 270, PR #696) — a per-`(category_main, category_type)` count
   check that sees a market-wide count swing faster than a full index walk; opted in, it dispatches `index_walk.yml` early.
 - **Property-maintenance lane**, every 30 s (PR #716) — `run_incremental_pass` against `dirty_properties`
-  (rule #20), far more often than the 5-min GH cron; serialized with it + the daily sweep by the lease-row
+  (rule #20), the only incremental runtime since W0 (#2010); serialized with the daily sweep by the lease-row
   CAS (PR #717): **never a session advisory lock on a pooled connection** — the first cut stranded. Each drain
   slice = ONE `properties_changed` txn (recompute, Browse patch, `dirty_broker_listings` mirror), as merge/detach run inline; then `_settle_fresh` stamps `settled_at` (rule 16, mig 668) on properties under 6 h old the pipeline is done with — the stamp commits alone, then `sync_browse_list` patches their Browse rows, best-effort (`settled` in the log + heartbeat; its error warns, never fails the pass).
 - **Broker-maintenance lane** (Broker Unify W3) — same cadence; `scripts.resolve_brokers.
-  run_incremental_pass` (`broker_resolution.yml` runs the SAME driver as backstop): drain until empty,
+  run_incremental_pass` (its only runtime since W0, #2010; the daily full sweep stays): drain until empty,
   recompute affected brokers (one merged statement), republish `broker_region_type_stats` via the
   mig-578 chokepoint when its registry stamp is >~1 h old; `broker_resolution_lock` serializes.
 - **Estimation job lane** (migration 349, Wave 1 W1-3 / Phase 1 Amendment A10) — moves agent +
@@ -466,7 +463,7 @@ RUN, COVERAGE, the closing `INDEX total=…` and every DRAIN line; per-page INDE
 - `INDEX total=N pages=M enqueued=K` once at end of the walk
 - `RUN done pages=N enqueued=M to_verify=V deferred=D errors=E` (E = failed categories)
 
-**Detail drain** (`detail_drain.yml` and the per-portal drains):
+**Detail drain** (the worker's drain lane, a `--drain-only` run, a combined scraper's drain phase):
 - `DRAIN reclaimed stale claims=N` when a prior SIGKILLed run left claims behind
 - `DRAIN starting source=... max_claims=... workers=W batch=B budget=Ss` once
 - `DETAIL id=... gone (is_active=false)` / `DETAIL id=... error: ...` per non-ok listing; `DRAIN gone-rate breaker: ...` once when >50% of ≥20 ingest fetches read gone (later gones become failures); `gone flip matched no listing` when a gone key matches no row (INFO for a never-fetched NEW id); `could not mark id=... inactive` = a failed flip, retried (counted in errors)
@@ -480,7 +477,7 @@ RUN, COVERAGE, the closing `INDEX total=…` and every DRAIN line; per-page INDE
   interval (auto-recovers on subsequent healthy fetches)
 - `RUN done pages=0 new=... updated=... unchanged=... gone=... errors=... claimed=...`
 
-**Image workflows** (`images.yml` / `images_fresh.yml`, `--images-only`):
+**Image downloads** (`images.yml`, the worker's `images` lane, `--images-only`):
 - `IMAGES start cap=... workers=... active_only=... shard=... sources=...` once
 - `IMAGES progress=N downloaded=... errors=... taken_down=... source_unavailable=...` every 50
 - `IMAGE listing_taken_down sid=... marked=N` / `IMAGE source_unavailable id=...` per classified

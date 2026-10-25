@@ -6,7 +6,7 @@ name: "Scraping: Bazos index walk"
 # nominates unseen ones for a page check once the walk reached the portal's end
 # (source-scoped and throttled; the page, not the count, decides), and
 # new/price-changed ids are enqueued into listing_detail_queue
-# (source='bazos'). No detail fetch — the drain (bazos_detail_drain.yml) consumes
+# (source='bazos'). No detail fetch — the realtime worker's drain lane consumes
 # the queue. Records run_type='index'.
 #
 # WHY split: bazos now walks 22 nationwide scopes (byt/dum/chata/restaurace/

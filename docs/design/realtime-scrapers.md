@@ -86,7 +86,17 @@ the API's loop), so the API's one loop is the health teller*). It runs, as conti
 **Cold lane — GitHub Actions keeps** the delay-tolerant heavy work it does well and for
 free: full reconcile index walks (completeness + delisting evidence), image/CLIP backfills,
 dedup full scans + batch lanes, monitors, CI. Self-chaining (`SCRAPE_CHAIN_TOKEN`) is
-legacy backlog acceleration — do not extend it to new lanes.
+legacy backlog acceleration — do not extend it to new lanes. — *Since Actions-exit W0 (#2010,
+2026-10) this worker is the ONLY runtime of the detail drain, fresh-image downloads and the
+incremental property and broker maintenance: the five portal drains, `images_fresh.yml`,
+`property_maintenance.yml` and `broker_resolution.yml` that ran beside it as backstops are
+deleted (in their last week the GitHub drains wrote 1–5 % of each portal's completions, bazos
+about 5 %; the PR's pre-checks hold the measurement).
+Still on GitHub for now: the walks and the daily property and broker sweeps (until the job runner
+takes them), the four combined scrapers' own drain phase (walk-only in W1, #2021) and
+`images.yml`'s deep backlog (to be folded into the images lane, #2011).
+`realtime_drain_disabled_sources` therefore freezes a portal's queue: no other scheduled drain
+takes it over (a combined scraper's own phase aside).*
 
 **Prerequisite: shared politeness.** `RateLimiter` is per-process; a Railway lane beside
 Actions walks would double-hit portals with two independent limiters. Before the probe lane

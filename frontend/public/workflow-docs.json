@@ -306,71 +306,9 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/backup_before_drop.yml"
     },
     {
-      "filename": "bazos_detail_drain.yml",
-      "name": "Scraping: Bazos detail drain",
-      "description": "The slow half of the bazos cadence split (architectural rule #19, like sreality/idnes). Claims a bounded slice of listing_detail_queue (source='bazos', enqueued by bazos_index_walk.yml), fetches each ad's detail page on a rate-limited worker pool, parses it (the real category comes off the page breadcrumb), and writes via listing_write.write_listings (the one listing write; new rows land property_id NULL and the straggler-attach births the singleton). Records run_type='detail' (index_pages=0). The drain records image-URL rows; the shared images.yml job downloads the bytes to R2.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "45 * * * *",
-          "human": "Every hour at :45"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_seconds",
-          "description": "wall-clock drain budget, finalizes cleanly before timeout (blank = 2400 = 40 min)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "max_detail",
-          "description": "hard cap on ads claimed this run (blank = none; the time budget governs)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "concurrent detail-fetch workers (blank = 2)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "rate",
-          "description": "global detail-fetch rate cap, req/s (blank = 0.6)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "bazos-detail-drain",
-      "cancelInProgress": false,
-      "timeoutMinutes": 50,
-      "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/bazos_detail_drain.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/bazos_detail_drain.yml"
-    },
-    {
       "filename": "bazos_index_walk.yml",
       "name": "Scraping: Bazos index walk",
-      "description": "The fast half of the bazos cadence split (architectural rule #19, like sreality/idnes). Walks the ENTIRE index of every configured scope (no --max-pages), touch_listings bumps last_seen on still-listed ads, presence nomination (rule #3) nominates unseen ones for a page check once the walk reached the portal's end (source-scoped and throttled; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='bazos'). No detail fetch — the drain (bazos_detail_drain.yml) consumes the queue. Records run_type='index'.",
+      "description": "The fast half of the bazos cadence split (architectural rule #19, like sreality/idnes). Walks the ENTIRE index of every configured scope (no --max-pages), touch_listings bumps last_seen on still-listed ads, presence nomination (rule #3) nominates unseen ones for a page check once the walk reached the portal's end (source-scoped and throttled; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='bazos'). No detail fetch — the realtime worker's drain lane consumes the queue. Records run_type='index'.",
       "manual": true,
       "schedules": [
         {
@@ -463,31 +401,6 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/bazos_index_walk.yml"
     },
     {
-      "filename": "broker_resolution.yml",
-      "name": "Broker resolution (incremental)",
-      "description": "Broker intelligence: the THROTTLED BACKSTOP of the incremental identity resolver (Broker Unify W3). The primary host is the realtime worker's broker_maintenance lane; both call THE same driver, scripts.resolve_brokers.run_incremental_pass — drain the dirty_broker_listings queue until empty (new + content-changed listings enqueued at write time by the detail writers, plus delist/revive flips mirrored in by the property drain), attribute to per-source broker_identities, ensure firms, attach singleton canonical brokers, recompute ONLY the affected brokers' rollups + memberships (one merged statement), and republish the leaderboard matview CONCURRENTLY when its derived_artifacts stamp is older than ~an hour. So this cron matters exactly when the worker is down. O(changes); source-agnostic maintenance job. Shares the broker-resolution concurrency group with the full sweep so the two never mutate at once.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "*/10 * * * *",
-          "human": "Every 10 minutes"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "broker-resolution-incremental",
-      "cancelInProgress": false,
-      "timeoutMinutes": 20,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/broker_resolution.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/broker_resolution.yml"
-    },
-    {
       "filename": "build-extension.yml",
       "name": "CI: build Chrome extension",
       "description": "Builds the chrome-extension/ bundle and uploads dist/ as a workflow artifact you can download from the Actions tab. Keeps the build off the operator's laptop (no local Node install needed).",
@@ -516,72 +429,9 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/build-extension.yml"
     },
     {
-      "filename": "ceskereality_detail_drain.yml",
-      "name": "Scraping: Českéreality detail drain",
-      "description": "The slow half of the ceskereality cadence split (architectural rule #19, like sreality/idnes). Claims a bounded slice of listing_detail_queue (source='ceskereality', enqueued by ceskereality_index_walk.yml), fetches each listing page on a rate-limited worker pool, parses it to a ScrapedListing, and writes via listing_write.write_listings (the one listing write; new rows land property_id NULL and the straggler-attach births the singleton). The per-listing category is derived from its detail URL. Records run_type='detail' (index_pages=0). The drain records image-URL rows; the shared images.yml job downloads the bytes to R2.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "50 * * * *",
-          "human": "Every hour at :50"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_seconds",
-          "description": "wall-clock drain budget, finalizes cleanly before timeout (blank = 2400 = 40 min)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "max_detail",
-          "description": "hard cap on listings claimed this run (blank = none; the time budget governs)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "concurrent detail-fetch workers (blank = 2)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "rate",
-          "description": "global detail-fetch rate cap, req/s (blank = 0.7, polite)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SCRAPER_PROXY_URL",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "ceskereality-detail-drain",
-      "cancelInProgress": false,
-      "timeoutMinutes": 50,
-      "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/ceskereality_detail_drain.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/ceskereality_detail_drain.yml"
-    },
-    {
       "filename": "ceskereality_index_walk.yml",
       "name": "Scraping: Českéreality index walk",
-      "description": "The fast half of the ceskereality cadence split (architectural rule #19, like sreality/idnes). Walks the ENTIRE index of every configured category (no --max-pages), touch_listings bumps last_seen on still-listed ids, presence nomination (rule #3) nominates unseen ones for a page check once the walk reached the portal's end (source-scoped; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='ceskereality'). No detail fetch — the drain (ceskereality_detail_drain.yml) consumes the queue. Records run_type='index'.",
+      "description": "The fast half of the ceskereality cadence split (architectural rule #19, like sreality/idnes). Walks the ENTIRE index of every configured category (no --max-pages), touch_listings bumps last_seen on still-listed ids, presence nomination (rule #3) nominates unseen ones for a page check once the walk reached the portal's end (source-scoped; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='ceskereality'). No detail fetch — the realtime worker's drain lane consumes the queue. Records run_type='index'.",
       "manual": true,
       "schedules": [
         {
@@ -1020,77 +870,6 @@
       "permissions": "contents: read",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/condition_scores.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/condition_scores.yml"
-    },
-    {
-      "filename": "detail_drain.yml",
-      "name": "Scraping: Sreality detail drain (Phase 2)",
-      "description": "The slow half of the Phase-2 cadence split, now on the shared portal framework: `scraper.sreality_main --drain-only` drives SrealityPortal through the one generic portal_runner. Claims a bounded slice of listing_detail_queue (source='sreality', enqueued by index_walk.yml), fetches each listing's detail on a rate-limited worker pool (429/403 auto-penalize), and writes them in batches via listing_write.write_listings (the one listing write, set-based, one transaction per ~100 listings) on the Session-mode pooler — the Phase-1 prepared-statement win. New listings land with property_id NULL; the recompute_property_stats straggler-attach births each a singleton.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "*/15 * * * *",
-          "human": "Every 15 minutes"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_seconds",
-          "description": "wall-clock drain budget, finalizes cleanly before timeout (blank = 2400 = 40 min)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "max_detail",
-          "description": "cap listings claimed + fetched this run (blank = per-portal config, 12000)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "concurrent detail-fetch workers (blank = per-portal config, 8)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "rate",
-          "description": "global detail-fetch rate cap, req/s (blank = per-portal config, 6.0)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "Report the claimable queue depth and exit without claiming",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SUPABASE_DB_SESSION_URL",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "sreality-detail-drain",
-      "cancelInProgress": false,
-      "timeoutMinutes": 50,
-      "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/detail_drain.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/detail_drain.yml"
     },
     {
       "filename": "dinov3_bakeoff_manifest.yml",
@@ -1626,73 +1405,9 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/frontend-build.yml"
     },
     {
-      "filename": "idnes_detail_drain.yml",
-      "name": "Scraping: iDNES Reality detail drain",
-      "description": "The slow half of the iDNES cadence split (architectural rule #19, like sreality). Claims a bounded slice of listing_detail_queue (source='idnes', enqueued by idnes_index_walk.yml), fetches each listing page on a rate-limited worker pool, parses it to a ScrapedListing, and writes via listing_write.write_listings (the one listing write; new rows land property_id NULL and the straggler-attach births the singleton). The per-listing category is derived from its detail URL. Records run_type='detail' (index_pages=0). The drain records image-URL rows; the shared images.yml job downloads the bytes to R2.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "30 * * * *",
-          "human": "Every hour at :30"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_seconds",
-          "description": "wall-clock drain budget, finalizes cleanly before timeout (blank = 2400 = 40 min)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "max_detail",
-          "description": "hard cap on listings claimed this run (blank = none; the time budget governs)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "concurrent detail-fetch workers (blank = 8)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "rate",
-          "description": "global detail-fetch rate cap, req/s (blank = 4.0)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SCRAPER_PROXY_URL",
-        "SCRAPE_CHAIN_TOKEN",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "idnes-detail-drain",
-      "cancelInProgress": false,
-      "timeoutMinutes": 50,
-      "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/idnes_detail_drain.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/idnes_detail_drain.yml"
-    },
-    {
       "filename": "idnes_index_walk.yml",
       "name": "Scraping: iDNES Reality index walk",
-      "description": "The fast half of the iDNES cadence split (architectural rule #19, like sreality). Walks the ENTIRE index of every configured category (no --max-pages), touch_listings bumps last_seen on still-listed ids, unseen ids are nominated for a page check (rule #3) once the walk reached the portal's end (source-scoped; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='idnes'). No detail fetch — the drain (idnes_detail_drain.yml) consumes the queue. Records run_type='index'.",
+      "description": "The fast half of the iDNES cadence split (architectural rule #19, like sreality). Walks the ENTIRE index of every configured category (no --max-pages), touch_listings bumps last_seen on still-listed ids, unseen ids are nominated for a page check (rule #3) once the walk reached the portal's end (source-scoped; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='idnes'). No detail fetch — the realtime worker's drain lane consumes the queue. Records run_type='index'.",
       "manual": true,
       "schedules": [
         {
@@ -1789,53 +1504,6 @@
       "permissions": null,
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/images.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/images.yml"
-    },
-    {
-      "filename": "images_fresh.yml",
-      "name": "Scraping: fresh-listing image fast lane",
-      "description": "Low-latency image fetch for the NEWEST active listings across ALL portals, so a freshly-scraped card renders a photo within minutes instead of waiting for the 2-hourly sharded backlog drain (images.yml). The frontend can only show an image once its bytes are in R2 (storage_path set) — original portal URLs are hotlink/expiry-protected — so racing those URLs on fresh listings is also what prevents the image loss we already saw (~43k+ sreality images lost to expiry).",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "*/15 * * * *",
-          "human": "Every 15 minutes"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_image_downloads",
-          "description": "Override per-run cap (blank = 2500)",
-          "required": false,
-          "type": "string",
-          "default": null,
-          "options": null
-        },
-        {
-          "name": "image_workers",
-          "description": "Override concurrent workers (blank = 32)",
-          "required": false,
-          "type": "string",
-          "default": null,
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SCRAPE_CHAIN_TOKEN",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "images-fresh",
-      "cancelInProgress": false,
-      "timeoutMinutes": 20,
-      "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/images_fresh.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/images_fresh.yml"
     },
     {
       "filename": "index_walk.yml",
@@ -2561,117 +2229,9 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/new_dedup_candidates.yml"
     },
     {
-      "filename": "property_maintenance.yml",
-      "name": "Jobs: property maintenance (incremental)",
-      "description": "Phase 3 of the scaling roadmap: real-time properties. This is the FAST, FREQUENT half of property maintenance — the dirty-set incremental pass. It runs scripts/recompute_property_stats --incremental, which:",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "*/5 * * * *",
-          "human": "Every 5 minutes"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "batch_size",
-          "description": "Properties recomputed per statement",
-          "required": true,
-          "type": "string",
-          "default": "2000",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "Report straggler + dirty + property counts and exit without writing",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "sreality-property-maintenance",
-      "cancelInProgress": false,
-      "timeoutMinutes": 10,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/property_maintenance.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/property_maintenance.yml"
-    },
-    {
-      "filename": "realitymix_detail_drain.yml",
-      "name": "Scraping: RealityMix detail drain",
-      "description": "The slow half of the realitymix cadence split (architectural rule #19, like sreality/idnes/ceskereality). Claims a bounded slice of listing_detail_queue (source='realitymix', enqueued by realitymix_index_walk.yml), fetches each listing page on a rate-limited worker pool, parses it to a ScrapedListing, and writes via listing_write.write_listings (the one listing write; new rows land property_id NULL and the straggler-attach births the singleton). The per-listing category is read from the page's BreadcrumbList JSON-LD. Records run_type='detail' (index_pages=0). The drain records image-URL rows; the shared images.yml job downloads the bytes to R2.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "40 * * * *",
-          "human": "Every hour at :40"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_seconds",
-          "description": "wall-clock drain budget, finalizes cleanly before timeout (blank = 2400 = 40 min)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "max_detail",
-          "description": "hard cap on listings claimed this run (blank = none; the time budget governs)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "concurrent detail-fetch workers (blank = 4)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "rate",
-          "description": "global detail-fetch rate cap, req/s (blank = 1.5)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SCRAPE_CHAIN_TOKEN",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "realitymix-detail-drain",
-      "cancelInProgress": false,
-      "timeoutMinutes": 50,
-      "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/realitymix_detail_drain.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/realitymix_detail_drain.yml"
-    },
-    {
       "filename": "realitymix_index_walk.yml",
       "name": "Scraping: RealityMix index walk",
-      "description": "The fast half of the realitymix cadence split (architectural rule #19, like sreality/idnes/ceskereality). Walks the ENTIRE index of every configured category (no --max-pages), touch_listings bumps last_seen on still-listed ids, presence nomination (rule #3) nominates unseen ones for a page check once the walk reached the portal's end (source-scoped; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='realitymix'). No detail fetch — the drain (realitymix_detail_drain.yml) consumes the queue. Records run_type='index'.",
+      "description": "The fast half of the realitymix cadence split (architectural rule #19, like sreality/idnes/ceskereality). Walks the ENTIRE index of every configured category (no --max-pages), touch_listings bumps last_seen on still-listed ids, presence nomination (rule #3) nominates unseen ones for a page check once the walk reached the portal's end (source-scoped; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='realitymix'). No detail fetch — the realtime worker's drain lane consumes the queue. Records run_type='index'.",
       "manual": true,
       "schedules": [
         {
@@ -3018,7 +2578,7 @@
     {
       "filename": "resolve_brokers_full.yml",
       "name": "Broker resolution (full sweep + backfill)",
-      "description": "Broker intelligence: the daily full-sweep RECONCILE + the one-shot backfill. Re-attributes a rotating lap of broker-bearing listings from raw_json (keyset-batched so the raw_json scan never times out over the pooler), recomputes ALL broker rollups + memberships in ONE merged statement (recompute_brokers(None), Broker Unify W3 — the old 9-window loop paid ~27 full index walks and 100+ min), rebuilds firm rollups, runs the cross-source merge step, generates candidates, and clears the dirty queue — the self-healing backstop for anything the incremental drain missed. It no longer publishes the leaderboard matview: that is the drain path's job (hourly-if-stale, worker lane + broker_resolution.yml), so serving freshness stopped depending on this job's length or its GH-cron-drifted start time. Nominally runs after the property recompute (04:15); in practice GH throttling drifts both into the same mid-morning window. mode=backfill is the same code path (the first population); dispatch it once after this lands on main. Source-agnostic. Shares the broker-resolution concurrency group with the incremental job.",
+      "description": "Broker intelligence: the daily full-sweep RECONCILE + the one-shot backfill. Re-attributes a rotating lap of broker-bearing listings from raw_json (keyset-batched so the raw_json scan never times out over the pooler), recomputes ALL broker rollups + memberships in ONE merged statement (recompute_brokers(None), Broker Unify W3 — the old 9-window loop paid ~27 full index walks and 100+ min), rebuilds firm rollups, runs the cross-source merge step, generates candidates, and clears the dirty queue — the self-healing backstop for anything the incremental drain missed. It no longer publishes the leaderboard matview: that is the drain path's job (hourly-if-stale, the realtime worker's broker lane), so serving freshness stopped depending on this job's length or its GH-cron-drifted start time. Nominally runs after the property recompute (04:15); in practice GH throttling drifts both into the same mid-morning window. mode=backfill is the same code path (the first population); dispatch it once after this lands on main. Source-agnostic. broker_resolution_lock keeps it apart from the worker's incremental broker lane.",
       "manual": true,
       "schedules": [
         {
