@@ -21,6 +21,10 @@ from autodedup.features import DEFAULT_VOCABULARY_ATTR_KEYS
 # lower.
 CONTEXT_RULE_MIN_IMAGES_FLOOR: float = 4.0
 
+# C4: the category_main vocabulary `area_reject_pct_by_category` is keyed by: the census's own
+# `CATEGORY_MAIN`, restated because importing the census would widen the decision closure.
+CATEGORY_MAIN: tuple[str, ...] = ("byt", "dum", "pozemek", "komercni", "ostatni")
+
 # E84: one minute, the floor under K-B's window separation. No scrape cadence in this program
 # re-lists an advert within a minute of its last sighting, so the bar can only catch two adverts
 # the same index walk saw for the first and only time.
@@ -32,6 +36,11 @@ class Settings:
     area_band_tol: float = 0.20
     area_reject_pct: float = 0.08
     area_band_pct: float = 0.03
+    # C4: the pair veto's area bar per category_main (`guards.area_veto_pct`), read only where
+    # BOTH sides state the same category and it has an entry; every other pair keeps
+    # `area_reject_pct`. Only the veto reads it: `area_relation`, D43's area limbs and the
+    # cluster spread keep their own bars. Empty = w31.
+    area_reject_pct_by_category: dict[str, float] = field(default_factory=dict)
     catalog_df: int = 8
     # E83 (W10): E9's population test cannot tell a marketing catalogue from a broker re-posting
     # ONE advert nine times, so a frame is stock only when its carriers are several PARTIES.
@@ -1076,6 +1085,9 @@ class Settings:
         }
         self.floor_camps = {str(key): int(value)
                             for key, value in dict(self.floor_camps).items()}
+        self.area_reject_pct_by_category = {
+            str(key): float(value)
+            for key, value in dict(self.area_reject_pct_by_category).items()}
         self.merge_policy = {str(key): str(value)
                              for key, value in dict(self.merge_policy).items()}
         self.d43_rental_colive_cross_portal_limbs = tuple(
@@ -1091,6 +1103,14 @@ class Settings:
                 f"area_band_pct must be in [0, area_reject_pct]: {self.area_band_pct} "
                 f"> {self.area_reject_pct}"
             )
+        for key, value in self.area_reject_pct_by_category.items():
+            if key not in CATEGORY_MAIN:
+                raise ValueError(
+                    f"area_reject_pct_by_category key must be a category_main "
+                    f"({', '.join(CATEGORY_MAIN)}): {key}")
+            if not self.area_band_pct <= value < 1.0:
+                raise ValueError(
+                    f"area_reject_pct_by_category[{key}] must be in [area_band_pct, 1): {value}")
         if not 0.0 <= self.t_lo <= self.t_hi <= 1.0:
             raise ValueError(f"thresholds must satisfy 0 <= t_lo <= t_hi <= 1: "
                              f"t_lo={self.t_lo} t_hi={self.t_hi}")

@@ -61,6 +61,13 @@ def area_relation(
     return "support"
 
 
+def area_veto_pct(a: GuardSide, b: GuardSide, cfg: Settings) -> float:
+    """C4: the area veto's bar, the pair's shared category's own where it has one, else E5's."""
+    if a.category_main is not None and a.category_main == b.category_main:
+        return cfg.area_reject_pct_by_category.get(a.category_main, cfg.area_reject_pct)
+    return cfg.area_reject_pct
+
+
 def pair_veto(a: GuardSide, b: GuardSide, settings: Settings | None = None) -> str | None:
     """The name of the first hard guard the pair breaks (E2-E5), or None when it passes.
 
@@ -71,7 +78,9 @@ def pair_veto(a: GuardSide, b: GuardSide, settings: Settings | None = None) -> s
         return "category_type"
     if not category_main_compatible(a.category_main, b.category_main):
         return "category_main"
-    if area_relation(a.area_m2, b.area_m2, cfg) == "reject":
+    area_tol = area_veto_pct(a, b, cfg)
+    gap = area_rel_diff(a.area_m2, b.area_m2)
+    if gap is not None and gap > area_tol:
         return "area"
     is_land = LAND_CATEGORY in (a.category_main, b.category_main)
     if (not is_land and a.disposition is not None and b.disposition is not None
