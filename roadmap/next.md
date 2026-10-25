@@ -109,6 +109,11 @@ Headline scope:
   ships with B2).
 
 ### Phase 7 slice 2: Async + full toolkit + UI mode toggle
+> **Proposal under review (2026-10-25):** `docs/design/agent-platform/PROGRAM.md` § 3.4 proposes the async
+> execution this slice describes as a generic run ledger (agent_runs + step journal) on a dedicated executor, and
+> its ruling AR4 re-takes Phase 7d below (Railway service containers cannot build the sandbox 7d assumed). Nothing
+> here changes until the operator rules.
+
 Builds on slice 1.
 - Async execution: real `status='pending'/'running'` lifecycle with
   a background worker and a polling endpoint. Removes the
