@@ -472,6 +472,8 @@ NEW DEDUP (docs/design/new-dedup/PROGRAM.md, Wave 1):
   `launch_pod`/`run_job`/`run_job_with_fallback` — the REST body's `env` **object** (`{"K": "v"}`, not GraphQL's
   `[{key, value}]` list; omitted when empty), never `start_cmd`, which is argv in the pod record. Never logged.
 - `HF_TOKEN` — Actions secret only. HuggingFace token for **gated** weights (`facebook/dinov3-*` is `gated: manual`; even `config.json` 401s), read by `scraper/dinov3_tagger.py` and forwarded into the pod.
+- `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ZONE_ID` — repo-root `.env` only, read by no code: lets a session edit `propscout.cz` DNS
+  (token scope: Zone Read, DNS Edit, Single Redirect Edit). `app.`/`api.` stay DNS-only — brand-domain `PROGRAM.md` W1.
 
 Frontend / extension (build-time only, inlined into the browser bundle — *not* backend
 runtime): `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` (the publishable anon key, safe in

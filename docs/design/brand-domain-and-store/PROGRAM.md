@@ -1,7 +1,7 @@
 # Brand domain, Chrome Web Store, MCP server — program plan
 
-**Status: approved 2026-10-06. W1 (domain cutover) is running on `propscout.cz` since 2026-10-25 —
-see "W1 as run" below; W0 and W2–W6 are not started.**
+**Status: approved 2026-10-06. W1 (domain cutover) is LIVE on `propscout.cz` since 2026-10-25 (#2005) —
+see "W1 as run" below; its old hosts go after 7 quiet days. W0 and W2–W6 are not started.**
 Investigated 2026-09-26. Spot-checked against `main` (`03b72cda`) and production on 2026-10-03
 (§ 11 lists what moved in between).
 
@@ -162,8 +162,13 @@ opened by the coding session.
   event) and push re-subscription (no subscription existed).
 - **Out of this cutover:** the brand rename (`frontend/src/lib/brand.ts` still says Limen Reality),
   the Supabase custom domain, the cleanup and safeguard PRs of step 7.
-- **Never delete and re-add a Railway custom domain** while its certificate is pending: each
-  re-add is another Let's Encrypt order, and five duplicates block the name for a week.
+- **Certificates:** Railway's first request to Let's Encrypt raced the new DNS records and came
+  back "rate limit reached", marked not retryable. It never retried on its own, and the dashboard
+  offers no retry button. **Removing and re-adding the domain once fixed it within minutes.** That
+  is safe while no certificate has been issued: Let's Encrypt's five-per-week duplicate limit
+  counts only issued certificates. A re-add keeps the `_railway-verify` TXT token but **changes
+  the CNAME target** (now `app` → `m6ov874e.up.railway.app`, `api` → `vdeask3z.up.railway.app`), and
+  a record re-created by hand in Cloudflare comes back **proxied**: set it to DNS-only again.
 
 ### W2 — Public pages on the brand domain
 
@@ -350,7 +355,7 @@ with no hostname in it.
 | Sign-in from the store build never returns | The new redirect address is missing from Supabase's allowlist. Hard checklist item in W5. |
 | Empty host permissions break API calls | Only if CORS lacks the extension origin. Verified by preflight and a full sign-in plus lookup before publishing. |
 | Railway reuses an old image after a variable change | Check the build log; Redeploy if "Skipped Builds" is on |
-| Certificate lockout | Never delete and re-add a domain to retry |
+| Certificate lockout | Re-add a domain at most once, and only while it has no issued certificate (W1 as run) |
 | CI publishes at the wrong moment | State handling in § 4 W4 |
 | A release breaks installed copies | Additive-API rule; permission ratchet test |
 | CI refresh token expires weekly | Separate project with audience Internal, never Testing |
