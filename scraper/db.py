@@ -1483,9 +1483,10 @@ def sweep_stuck_scrape_runs(
 
     A GitHub-Actions job killed at the job timeout (SIGKILL) can't write
     ended_at; stamp it on the next API boot so no row stays open forever. The
-    row keeps by_category = '[]', so no health check ever counts it as a
-    finished walk. Counters are left as-is on purpose: the index walk
-    (bump_index_pages) and the detail-drain (bump_scrape_run_counts) persist their
+    row keeps the by_category entries its walk wrote as each category ended
+    (#2019), so the health checks count exactly the categories it finished and
+    no other. Counters are left as-is on purpose: the index walk
+    (bump_index_progress) and the detail-drain (bump_scrape_run_counts) persist their
     counts incrementally as they go, so a swept row already carries the real
     totals of whatever committed before the kill. The cutoff must stay above the
     LONGEST scrape job timeout so a still-running walk is never finalized — the
@@ -1679,26 +1680,25 @@ def slice_staleness(
     return out
 
 
-def bump_index_pages(conn: psycopg.Connection, run_id: int, n: int) -> None:
-    """Add n to a scrape_runs row's index_pages immediately, best-effort.
+def bump_index_progress(conn: psycopg.Connection, run_id: int, pages: int, entry: dict[str, Any]) -> None:
+    """Add one finished category to a scrape_runs row now: its pages and its by_category entry, one statement.
 
-    The index walk calls this after each category commits so Health liveness
-    (which keys off scrape_runs.index_pages > 0) reflects real progress even
-    when a long walk is SIGKILLed by its job timeout before it can finalize.
-    The walk connection is autocommit, so each bump persists on its own.
-    Finalize uses GREATEST(index_pages, ...), so the final reconcile never
-    clobbers an accumulated total. Audit bookkeeping must never break a walk.
+    The index walk calls this after each category so Health liveness (which keys off
+    scrape_runs.index_pages > 0) and the walk's per-category progress survive a SIGKILL
+    before finalize: one statement, so the page count and the entry never disagree. The
+    walk connection is autocommit. Finalize writes GREATEST(index_pages, ...) and the whole
+    by_category list, so the final reconcile never clobbers what accumulated. Audit
+    bookkeeping must never break a walk.
     """
-    if n <= 0:
-        return
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE scrape_runs SET index_pages = index_pages + %s WHERE id = %s",
-                (int(n), run_id),
+                "UPDATE scrape_runs SET index_pages = index_pages + %s,"
+                " by_category = by_category || jsonb_build_array(%s::jsonb) WHERE id = %s",
+                (max(0, int(pages)), Jsonb(entry), run_id),
             )
     except Exception:  # noqa: BLE001 - never let bookkeeping abort a walk
-        LOG.warning("bump_index_pages failed for run %s", run_id, exc_info=True)
+        LOG.warning("bump_index_progress failed for run %s", run_id, exc_info=True)
 
 
 def bump_scrape_run_counts(
@@ -1717,7 +1717,7 @@ def bump_scrape_run_counts(
     The detail-drain commits each batch in its own transaction, but its in-memory
     counts used to surface only via the runner's terminal return — so a mid-run
     crash (or a SIGKILL) left the scrape_runs row reading 0 despite committed
-    writes. Bumping per chunk (like bump_index_pages does for index_pages) keeps
+    writes. Bumping per chunk (like bump_index_progress does for index_pages) keeps
     the counts on the row regardless of how the run ends. The drain connection is
     autocommit, so each bump persists on its own; finalize for a drain run is told
     NOT to re-write these columns (bump_already_applied), so the happy path counts

@@ -107,7 +107,7 @@ def test_probe_writes_no_scrape_run_bookkeeping(monkeypatch):
     # keys liveness + reconciliation on index_pages > 0 rows).
     touched: list = []
     monkeypatch.setattr(db, "scrape_run_start", lambda *a, **k: touched.append("start") or 1)
-    monkeypatch.setattr(db, "bump_index_pages", lambda *a, **k: touched.append("bump"))
+    monkeypatch.setattr(db, "bump_index_progress", lambda *a, **k: touched.append("bump"))
     monkeypatch.setattr(db, "scrape_run_finalize", lambda *a, **k: touched.append("final"))
     p = _ProbePortal()
     rc, _ = portal_runner.run_index_probe(p, dry_run=False)

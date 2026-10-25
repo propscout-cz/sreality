@@ -21,7 +21,8 @@ whose window starts further out than that, without moving the frontier, and
 raises RateBudgetUnavailable on that acquire and every later one; one built with
 a `deadline` does the same for every acquire after it and every window starting
 after it (`refused_reason` "cap" or "deadline" says which). Only the realtime worker
-passes either; the Actions walks and drains wait as long as the ledger says. On
+passes either; the Actions walks and drains wait as long as the ledger says. A stop
+signal refuses any limiter ("stop", scraper/stop.py), never overwriting a "cap". On
 2026-09-29 ceskereality answered 403 to everything, each retry leased a fresh
 batch, the frontier ran an hour ahead and every caller slept there: the worker's
 probe and drain threads never came back and starved its thread pool.
@@ -148,6 +149,7 @@ class LedgerRateLimiter(RateLimiter):
         return self._deadline
 
     def acquire(self) -> None:
+        self.refuse_on_stop()
         with self._lease_lock:
             if (not self.refused and self._deadline is not None
                     and time.monotonic() >= self._deadline):

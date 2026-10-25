@@ -73,4 +73,5 @@ jobs:
           ARGS="--index-only"
           if [ -n "$MAX_PAGES" ]; then ARGS="$ARGS --max-pages $MAX_PAGES"; fi
           echo "python -m scraper.maxima_main $ARGS"
-          eval "python -m scraper.maxima_main $ARGS"
+          # exec: a cancel's SIGINT must reach Python, which finalizes the run (#2019), not the shell around it.
+          eval "exec python -m scraper.maxima_main $ARGS"
