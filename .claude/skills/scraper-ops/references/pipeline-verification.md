@@ -869,7 +869,7 @@ stored episode is autodedup's 10-02 stall, when the lane showed `failed_passes` 
 `worker_lane_stall` read OK.
 
 **What the heartbeat carries** (`scraper/realtime_worker.py`, wave 3). `_amain` registers every
-lane from the module constant `LANES` — `probe`, `drain`, `images`, `count_probe`, `maintenance`,
+lane from the module constant `LANES` — `probe`, `drain`, `images`, `maintenance`,
 `broker_maintenance`, `estimation`, `location_resolve`, `location_intake_fast`, `location_refetch`,
 `sold_comps`, `text_extract`, `health`, `autodedup`, `notifications`, `push`, `heartbeat` — seeds each with `interval_s`
 None before any task starts, and asserts that the names it registers equal `LANES`; nothing imports

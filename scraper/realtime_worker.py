@@ -27,15 +27,6 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              the lane is the only image drain (images.yml folded in, #2011);
              without R2 env vars the lane logs once and idles (the proxy-skip
              posture).
-- count_probe: every `realtime_sreality_count_interval_seconds` (default 600),
-             poll pagination.total per sreality (cm, ct) pair (one cheap request
-             each — SrealityClient.probe_result_size). sreality's v1 API ignores
-             sort params, so a newest-first probe is impossible; a count change
-             beyond +-1 jitter is the cheap "something appeared/left" signal, and
-             (when dispatch is opted in — a token env AND the
-             realtime_sreality_count_dispatch_enabled setting) it triggers a
-             targeted index_walk sooner than the */15 cron. Always records
-             per-pair totals to sreality_count_probe_state (migration 270).
 - maintenance: every `realtime_maintenance_interval_seconds` (default 30), one
              incremental property-maintenance pass — straggler attach + dirty-set
              recompute + settle (`settled_at` on fresh properties the pipeline is
@@ -232,14 +223,14 @@ HEARTBEAT_CONNECT_TIMEOUT_SECONDS = 10
 # (scripts/checks/platform.WORKER_LANES, a pinned mirror) reads a lane absent from the
 # beat as a worker older than its code.
 LANES: tuple[str, ...] = (
-    "probe", "drain", "images", "count_probe", "maintenance", "broker_maintenance",
+    "probe", "drain", "images", "maintenance", "broker_maintenance",
     "estimation", "location_resolve", "location_intake_fast", "location_refetch",
     "sold_comps", "text_extract", "health", "autodedup", "notifications", "push", "heartbeat",
 )
 # Every lane's blocking work, the heartbeat's included, runs on asyncio's default
 # executor, which makes the heartbeat its canary: if leaked threads fill it, beats stop
 # and the watchdog restarts the worker. Pinned rather than min(32, cpu+4), so the
-# headroom does not depend on what the container reports: the seventeen LANES hold at most
+# headroom does not depend on what the container reports: the sixteen LANES hold at most
 # one thread each in normal running.
 LANE_EXECUTOR_THREADS = 32
 IDLE_WAIT_SECONDS = 60.0
@@ -665,17 +656,6 @@ _AUTODEDUP_LAST_OUTCOME: str | None = None
 # logs it, unless the claim cap is at its floor.
 _BOOTED_EPOCH: int = int(time.time())
 
-# sreality count-probe lane (W3): sreality's v1 search API ignores every sort
-# param, so its own probe (added Phase 4 of portal-order-fidelity) can only
-# diff ids seen on a shallow unsplit page walk, not request a true newest-first
-# ordering — this lane is a CHEAP, COMPLEMENTARY total-count signal, not made
-# redundant by that probe. It polls pagination.total per (cm, ct) every
-# COUNT_PROBE_INTERVAL_DEFAULT seconds; a change beyond +-COUNT_PROBE_JITTER can
-# trigger a targeted index_walk sooner than the */15 cron. Interval <= 0 idles it.
-COUNT_PROBE_INTERVAL_DEFAULT = 600
-COUNT_PROBE_JITTER = 1  # |new-old| within this band is API noise, not a real change
-COUNT_PROBE_RATE_PER_S = 2.0  # ~20 total-only requests in ~10s, politely paced
-
 # The probe-capable portals (design doc: newest-first index order, or a bespoke
 # probe_category). Stable order = polite, predictable per-pass sequencing. Also
 # the set the drain lane serves — the worker only drains portals it knows how
@@ -718,17 +698,6 @@ _DRAIN_PASS_LOCK = _PassLock("drain")
 # broker_resolution_lock row goes stale after _LOCK_STALE_MIN, so without this the next
 # tick would take the lease and run a second pass beside it, a thread per abandoned pass.
 _BROKER_MAINTENANCE_PASS_LOCK = _PassLock("broker_maintenance")
-
-# Count-probe walk DISPATCH is double-gated — a token env var AND the
-# realtime_sreality_count_dispatch_enabled setting (default off) — so the lane
-# ships dark for triggering (it still RECORDS per-pair totals for observability).
-# index_walk.yml has no per-category inputs, so a trigger is a FULL walk.
-DISPATCH_TOKEN_ENVS = ("WORKER_DISPATCH_TOKEN", "SCRAPE_CHAIN_TOKEN")
-DISPATCH_REPO = os.environ.get("WORKER_GH_REPO", "waiff/sreality")
-DISPATCH_WORKFLOW = "index_walk.yml"
-DISPATCH_REF = os.environ.get("WORKER_GH_REF", "main")
-# log-once-per-process guard when dispatch is enabled but no token is configured.
-_DISPATCH_WARNED: set[str] = set()
 
 # log-once-per-process guard: the resolve lane running on the TRANSACTION pooler.
 _RESOLVE_SESSION_WARNED = False
@@ -804,11 +773,6 @@ def _read_disabled_sources() -> set[str]:
 
 def _read_drain_disabled_sources() -> set[str]:
     return _read_source_set("realtime_drain_disabled_sources")
-
-
-def _read_count_probe_interval() -> int:
-    return _read_int(
-        "realtime_sreality_count_interval_seconds", COUNT_PROBE_INTERVAL_DEFAULT)
 
 
 def _read_maintenance_interval() -> int:
@@ -981,10 +945,6 @@ def _read_flag(key: str) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in ("true", "1", "yes", "on")
     return bool(value)
-
-
-def _read_count_dispatch_enabled() -> bool:
-    return _read_flag("realtime_sreality_count_dispatch_enabled")
 
 
 # --- portal construction ----------------------------------------------------
@@ -1353,169 +1313,6 @@ async def _images_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None
         totals["stopped_suspicious"],
     )
     _record_pass(state, "images", totals)
-
-
-# --- count-probe lane (sreality) ---------------------------------------------
-
-
-def _dispatch_token() -> str | None:
-    for env in DISPATCH_TOKEN_ENVS:
-        tok = os.environ.get(env)
-        if tok:
-            return tok
-    return None
-
-
-def _count_probe_sync() -> dict[str, Any]:
-    """One cheap pagination.total request per sreality (cm, ct) pair; diff against
-    sreality_count_probe_state and upsert. Returns the pairs whose total moved beyond
-    +-COUNT_PROBE_JITTER. A FIRST sighting (no prior total) is recorded but never flagged,
-    so first-populating the table can't trigger a walk. No detail/enqueue: the count is the
-    only cheap signal sreality's sort-blind v1 API gives."""
-    from scraper.main import CATEGORIES, _build_client
-    from scraper.rate_limit import RateLimiter
-
-    limiter = RateLimiter(COUNT_PROBE_RATE_PER_S)
-    prior: dict[tuple[int, int], int | None] = {}
-    conn = db.connect()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT category_main_cb, category_type_cb, last_total "
-                "FROM sreality_count_probe_state")
-            for cm, ct, total in cur.fetchall():
-                prior[(int(cm), int(ct))] = None if total is None else int(total)
-    finally:
-        with contextlib.suppress(Exception):
-            conn.close()
-
-    changed: list[dict[str, Any]] = []
-    errors = 0
-    rows: list[tuple[int, int, int, bool]] = []  # cm, ct, new_total, is_changed
-    for cm, ct in CATEGORIES:
-        try:
-            total = _build_client(cm, ct, limiter=limiter).probe_result_size()
-        except Exception as exc:  # noqa: BLE001 - one category must not end the pass
-            LOG.warning("COUNT-PROBE cm=%s ct=%s failed: %s", cm, ct, exc)
-            errors += 1
-            continue
-        if total is None:
-            errors += 1
-            continue
-        old = prior.get((cm, ct))
-        is_changed = old is not None and abs(total - old) > COUNT_PROBE_JITTER
-        rows.append((cm, ct, total, is_changed))
-        if is_changed:
-            changed.append({"cm": cm, "ct": ct, "old": old, "new": total})
-    _upsert_count_state(rows)
-    return {"pairs": len(rows), "changed": changed, "errors": errors}
-
-
-def _upsert_count_state(rows: list[tuple[int, int, int, bool]]) -> None:
-    if not rows:
-        return
-    conn = db.connect()  # autocommit
-    try:
-        with conn.cursor() as cur:
-            for cm, ct, total, is_changed in rows:
-                cur.execute(
-                    """
-                    INSERT INTO sreality_count_probe_state
-                        (category_main_cb, category_type_cb, last_total,
-                         last_checked_at, last_changed_at)
-                    VALUES (%s, %s, %s, now(), CASE WHEN %s THEN now() ELSE NULL END)
-                    ON CONFLICT (category_main_cb, category_type_cb) DO UPDATE SET
-                        last_total      = EXCLUDED.last_total,
-                        last_checked_at = now(),
-                        last_changed_at = CASE WHEN %s THEN now()
-                            ELSE sreality_count_probe_state.last_changed_at END
-                    """,
-                    (cm, ct, total, is_changed, is_changed),
-                )
-    finally:
-        with contextlib.suppress(Exception):
-            conn.close()
-
-
-def _seconds_since_last_sreality_index_walk() -> float | None:
-    conn = db.connect()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT extract(epoch FROM (now() - max(started_at))) "
-                "FROM scrape_runs WHERE source = 'sreality' AND index_pages > 0")
-            row = cur.fetchone()
-        return float(row[0]) if row and row[0] is not None else None
-    finally:
-        with contextlib.suppress(Exception):
-            conn.close()
-
-
-def _post_workflow_dispatch(token: str) -> bool:
-    from scraper.github_dispatch import post_workflow_dispatch
-
-    try:
-        resp = post_workflow_dispatch(
-            DISPATCH_REPO, DISPATCH_WORKFLOW, token, {"ref": DISPATCH_REF}, timeout=30)
-    except Exception as exc:  # noqa: BLE001 - a dispatch hiccup must not kill the lane
-        LOG.warning("count-probe: dispatch POST failed: %s", exc)
-        return False
-    if resp.status_code == 204:
-        LOG.info("count-probe: dispatched %s (ref=%s)", DISPATCH_WORKFLOW, DISPATCH_REF)
-        return True
-    LOG.warning("count-probe: dispatch returned %s: %s",
-                resp.status_code, resp.text[:200])
-    return False
-
-
-def _maybe_dispatch_index_walk(
-    changed: list[dict[str, Any]], cooldown_seconds: float,
-) -> dict[str, Any]:
-    """Trigger ONE targeted index_walk when a count changed, IF dispatch is enabled
-    (the setting AND a token env) and no sreality index walk is fresher than
-    cooldown_seconds — a debounce against the */15 cron AND prior triggers (both land in
-    scrape_runs as index rows). index_walk.yml has no per-category inputs, so this is a
-    full walk. Returns {dispatched, reason}."""
-    if not changed:
-        return {"dispatched": False, "reason": "no_change"}
-    if not _read_count_dispatch_enabled():
-        return {"dispatched": False, "reason": "disabled"}
-    token = _dispatch_token()
-    if not token:
-        if "token" not in _DISPATCH_WARNED:
-            _DISPATCH_WARNED.add("token")
-            LOG.warning(
-                "count-probe: dispatch enabled but no token env (%s) set; recording only",
-                "/".join(DISPATCH_TOKEN_ENVS))
-        return {"dispatched": False, "reason": "no_token"}
-    age = _seconds_since_last_sreality_index_walk()
-    if age is not None and age < cooldown_seconds:
-        return {"dispatched": False, "reason": "fresh_walk", "age": int(age)}
-    ok = _post_workflow_dispatch(token)
-    return {"dispatched": ok, "reason": "triggered" if ok else "dispatch_failed"}
-
-
-async def _count_probe_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None:
-    if stop_event.is_set():
-        return
-    agg = await asyncio.to_thread(_count_probe_sync)
-    dispatched = False
-    if agg["changed"]:
-        cooldown = float(await asyncio.to_thread(_read_count_probe_interval))
-        try:
-            disp = await asyncio.to_thread(
-                _maybe_dispatch_index_walk, agg["changed"], cooldown)
-            dispatched = bool(disp.get("dispatched"))
-        except Exception:  # noqa: BLE001 - a dispatch decision must not end the pass
-            LOG.exception("COUNT-PROBE dispatch decision failed")
-    LOG.info(
-        "COUNT-PROBE pairs=%d changed=%d errors=%d dispatched=%s",
-        agg["pairs"], len(agg["changed"]), agg["errors"], dispatched,
-    )
-    _record_pass(state, "count_probe", {
-        "pairs": agg["pairs"], "changed": len(agg["changed"]),
-        "errors": agg["errors"], "dispatched": dispatched,
-    })
 
 
 _HEARTBEAT_SQL = """
@@ -3142,11 +2939,6 @@ async def _amain() -> int:
             lambda: _images_pass(stop_event, state),
             state,
             default_interval=IMAGES_INTERVAL_DEFAULT)),
-        ("count_probe", lambda: _lane_loop(
-            "count_probe", stop_event, _read_count_probe_interval,
-            lambda: _count_probe_pass(stop_event, state),
-            state,
-            default_interval=COUNT_PROBE_INTERVAL_DEFAULT)),
         ("maintenance", lambda: _lane_loop(
             "maintenance", stop_event, _read_maintenance_interval,
             lambda: _maintenance_pass(stop_event, state),
