@@ -4,8 +4,9 @@
 -- ===================================================================================================
 -- DESTRUCTIVE (a stored value becomes NULL). APPLY ONLY AFTER the plot rule (`scraper.area.stated_plot`,
 -- the PR this one is stacked on) is MERGED AND DEPLOYED, with the off-database backup taken (step 3 below)
--- AND the operator's explicit OK. Applied from THIS PR's branch while the PR is open; the PR merges only
--- once applied (step 9), so a merged file is never unapplied.
+-- AND the operator's explicit OK. Merged TOGETHER with the rule in one PR (operator's call, 2026-10-25) and
+-- applied from `main` once the rule is deployed; the migration_drift cell reads this file's backup table
+-- ABSENT only between that merge and the apply.
 -- ===================================================================================================
 --
 -- THE RULING. General ruling 3 (2026-09-30) + the operator's answers of 2026-10-01, rebuilt on current main on
@@ -70,7 +71,7 @@
 --      predicate or the data moved since the census above.
 --   5. more than 10 P1 rows on sreality, or more than 1 P2 row on sreality -- read the one there is first.
 --
--- APPLY ORDER. Before any of it, the rule's own PR merged past its gate (scraper track W22): the stratified
+-- APPLY ORDER. Before any of it, this PR (rule + heal) merged past its gate (scraper track W22): the stratified
 -- hand-read of the active komerční hits (done 2026-10-25: right on ~93 %; the REVERSE case -- an areál, farm,
 -- camp or petrol station whose TRUE parcel is typed into both boxes -- ~170 active rows, 93 confirmed by the
 -- advert's own text) read and ruled on by the operator, and the autodedup programme told. This file clears the
@@ -85,16 +86,16 @@
 --   5. The autodedup lane paused if the programme wants a fresh seed (interval 0): this file writes NO
 --      snapshot, so the lane's `changed` feed (listing_snapshots) never sees a healed row, and the engine's
 --      plot features (`plot_area_rel_diff` / `plot_area_exact`) read the echo until it re-reads the rows.
---   6. gh workflow run apply_migration.yml --ref cleanup/g3-plot-echo-heal -f file=671_plot_column_echo_heal.sql
+--   6. gh workflow run apply_migration.yml --ref main -f file=671_plot_column_echo_heal.sql
 --      -f dry_run=false -f confirm=APPLY
 --   7. `rt_seed fresh=true` (or what the programme decides), then resume the lane; re-run the COUNT QUERY --
 --      expected: no rows (re-run this file if a row a concurrent drain held was skipped).
 --   8. Re-bless the field census from a terminal with SUPABASE_DB_URL (`python -m scraper.field_census --bless`)
---      and commit the regenerated `data/field_capture/` files to this branch: ceskereality `estate_area` is
+--      and commit the regenerated `data/field_capture/` files in a small follow-up PR: ceskereality `estate_area` is
 --      blessed at fill 0.6145 and this file takes it to ~0.52 (30,267 -> 25,679 of 49,367 active on
 --      2026-10-25), a 9.4 pp drop 0.6 pp short of `parsing_fill_drop_warn_pp` -- the parsing cell must measure
 --      the new intended fill, not drift into Watch.
---   9. Merge this PR only once applied (and re-blessed).
+--   9. Re-run the COUNT QUERY once more after the next detail drain; a re-run of this file is safe.
 --
 -- HOW. One transaction; one statement does the work: a `hit` CTE (FOR UPDATE SKIP LOCKED -- a row a drain is
 -- writing right now is left for a re-run instead of waited on) -> every hit copied into

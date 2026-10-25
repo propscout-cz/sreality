@@ -46,13 +46,13 @@ def test_the_header_says_destructive_and_when_it_may_be_applied() -> None:
     assert "backup_before_drop.yml" in header
 
 
-def test_the_heal_is_applied_from_its_own_branch_and_merged_after() -> None:
-    """apply_migration.yml is dispatched with the open PR's branch, so a merged file is never
-    unapplied (and migration_drift never sees a merged, unapplied 671)."""
+def test_the_heal_is_applied_from_main_after_the_rule_deploys() -> None:
+    """One PR carries the rule and the heal (operator's call, 2026-10-25); apply_migration.yml is
+    dispatched from main after the rule is deployed, never from a side branch."""
     header = _header_text()
-    assert "apply_migration.yml --ref cleanup/g3-plot-echo-heal" in header
-    assert "--ref main" not in header
-    assert "Merge this PR only once applied" in header
+    assert "apply_migration.yml --ref main" in header
+    assert "g3-plot-echo" not in header
+    assert "applied from `main` once the rule is deployed" in header
     assert "scraper.field_census --bless" in header
 
 

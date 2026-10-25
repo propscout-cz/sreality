@@ -386,7 +386,7 @@ Independent of the analytical, UI, and map tracks.
   not a parser fix; bazos gains no side columns (its free text carries no labelled parcel); and
   the unverified-key census across the nine portals is still unwritten.
 - **W22 (2026-10-25, rebuilt on current main on the operator's go-ahead of 2026-10-25 from the
-  unmerged, superseded #1668 / #1669; heal = migration 671 in its own PR, stacked on the rule) —
+  unmerged, superseded #1668 / #1669; heal = migration 671, merged in the same PR, applied after the rule deploys) —
   a figure in the plot box is not always a plot.** General ruling 3 (2026-09-30) + the
   operator's flat answers (2026-10-01): on 14 of 14 live pages the portal itself printed one
   figure in the plot box and the floor-area box (not our key maps). ONE rule,
@@ -418,11 +418,10 @@ Independent of the analytical, UI, and map tracks.
   a guard for the areál shape first (no stored column separates it: zastavěná plocha has no
   column, and prose is the text lane's); the autodedup programme told (the live-lane plot
   features `plot_area_rel_diff` / `plot_area_exact` move at each row's first refetch).
-  **Owed after the rule is live (the heal's PR, migration 671):** the count re-run against the
+  **Owed after the rule is live (migration 671, same PR, unapplied until then):** the count re-run against the
   header's census and stop conditions (925 active komerční hits carry no basis stamp; 1 sreality
   P2 row); `backup_before_drop.yml`; the operator's OK; the autodedup lane paused for a re-seed
-  (the heal writes no snapshot); the apply FROM THE HEAL'S BRANCH, and that PR merged only once
-  applied; `rt_seed fresh=true`; then re-bless the field census (`python -m scraper.field_census
+  (the heal writes no snapshot); the apply from `main` (`apply_migration.yml --ref main`); `rt_seed fresh=true`; then re-bless the field census (`python -m scraper.field_census
   --bless`): ceskereality `estate_area` is blessed at fill 0.6145 and the heal takes it to ~0.52
   (30,267 → 25,679 of 49,367 active), 9.4 pp — 0.6 pp short of `parsing_fill_drop_warn_pp`.
   **Owed later:** the mmreality-dum residue check; the optional `verify_pipeline` arm (byt /

@@ -3771,10 +3771,9 @@ renumber.** Navigate by area:
     contract cells stay `structured` with a note only — `none` / `text` would make the column
     preserve-if-null (`db._preserved_columns`) and freeze every stored echo. Each affected
     LIVE row clears at its next detail fetch with one genuine snapshot; a STORED echo clears
-    only by migration 671 (its own PR, destructive: applied from that PR's branch after the
-    rule deploys, with a backup and the operator's OK, and merged only once applied: byt =
-    every stored plot, komerční = the equality rule, active AND inactive — 14,404 rows on
-    2026-10-25, 5,574 of them active), because `scripts/reparse.py` never blanks. Readers
+    only by migration 671 (same PR, destructive: applied from `main` after the rule is deployed, with
+    the backup and the operator's OK: byt = every stored plot, komerční = the equality rule, active AND
+    inactive — 14,404 rows on 2026-10-25, 5,574 of them active), because `scripts/reparse.py` never blanks. Readers
     follow without a change: `plot_area_m2` (migration 534) reads `estate_area` off land.
     Named residuals: the **reverse case** — an areál, farm, camp or petrol station whose TRUE
     parcel the advertiser typed into BOTH boxes keeps the wrong floor figure and loses the

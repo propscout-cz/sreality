@@ -751,8 +751,8 @@ loses a figure that added nothing; idnes dum carries 1,668 active echoes and no 
   existing type on its @3 claims until re-mined, and a type with no claim at any version contributes nothing.
   **The fill is not automatic** — the bodies-half hash gate re-arms PAGE entries and bezrealitky has none, so the
   corpus-wide mine needs one dispatched `location_claims_intake.yml` at `mode=full source=bezrealitky`.
-- ⏳ **Branch protection on `main`** (PR + CI check, no review requirement) — an operator action on a GitHub
-  settings page, not a code change. Last, announced first, because it changes how every parallel session merges.
+- ✅ **Branch protection on `main`** enabled 2026-09-22 (PR + the CI checks required, no review) — the closing
+  step, announced first because it changed how every parallel session merges.
 
 ## 6. Cut from scope (reported, not built)
 
