@@ -230,7 +230,7 @@ from autodedup.model import LogisticModel
 from autodedup.score_sql import CLUSTER_CONFLICT_INSERT_SQL
 from autodedup.settings import Settings
 from autodedup.text_facts import body_cache_entries, clear_body_caches
-from scraper.cgroup import CGROUP_ROOT, memory_limit_mb
+from scraper.cgroup import memory_ceiling_mb
 
 LOG = logging.getLogger(__name__)
 
@@ -536,18 +536,7 @@ SNAPSHOT_BYTES_PER_ROW: int = 300
 # 699,050 adverts on a public runner (E940's whole cut: 56 kB, ~149,800), though MAX_SCHEMA_MB
 # binds first, above ~470k. The 323,128 of the re-seed: ~3.7 GiB.
 CUT_PEAK_BYTES_PER_LISTING: int = 12 * 1024
-
-
-def _physical_memory_mb() -> float:
-    return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1_048_576
-
-
-def container_memory_mb(root: str = CGROUP_ROOT) -> float:
-    """What this process may use: its cgroup's limit, capped at the machine's memory (no limit: the machine's)."""
-    return min(memory_limit_mb(root) or float("inf"), _physical_memory_mb())
-
-
-SEED_MEMORY_MB: float = container_memory_mb() / 2
+SEED_MEMORY_MB: float = memory_ceiling_mb() / 2
 # How many `phash_pop` rows one `executemany` carries. The trial cohort's 41,791 hashes are
 # 9 chunks; the number is the score lane's, for the same reason (bound-parameter size).
 POP_CHUNK: int = 5_000

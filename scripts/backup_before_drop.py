@@ -1,8 +1,8 @@
 """Back up what a destructive migration drops, to R2, before the migration is applied.
 
 Run by the backup_before_drop workflow (CLAUDE.md rule 1 / the `database` skill: back up first,
-then the operator's OK to apply). R2 and never a workflow artifact: the repository is public,
-so an artifact is downloadable by anyone signed in to GitHub. A target is a whole relation (`table`: pg_dump, schema + data) or a column set
+then the operator's OK to apply). R2 and never a workflow artifact: an artifact is not
+private storage (any reader of the repository can download it) and expires. A target is a whole relation (`table`: pg_dump, schema + data) or a column set
 (`table:key,col[,col...]`: a CSV of the key and the columns, only rows where one of them is
 set, so an absent row restores as the NULL it was), or a backup already made on disk (`--file`,
 the retired-claims CSV), streamed as it is. Uses SUPABASE_DB_SESSION_URL when set:
@@ -114,6 +114,14 @@ def _copy_rows(dump: bytes) -> int:
     return rows
 
 
+def _landed(r2: R2Client, key: str, size: int, what: str) -> bool:
+    """A backup counts only once R2 reads it back at the size we sent."""
+    if r2.object_size(key) == size:
+        return True
+    LOG.error("FAILED %s: %s did not read back at %d bytes", what, key, size)
+    return False
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
@@ -145,8 +153,7 @@ def main(argv: list[str] | None = None) -> int:
         # Streamed from disk (multipart): the retired-claims CSV runs to gigabytes.
         key, size = f"{prefix}/{os.path.basename(path)}", os.path.getsize(path)
         r2.upload_file(key, path, content_type="application/gzip")
-        if r2.object_size(key) != size:
-            LOG.error("FAILED %s: %s did not read back at %d bytes", path, key, size)
+        if not _landed(r2, key, size, path):
             failures.append(path)
             continue
         LOG.info("%s -> %s (%d bytes)", path, key, size)
@@ -160,8 +167,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
         key = f"{prefix}/{target.filename}"
         r2.upload_bytes(key, data, content_type="application/gzip")
-        if r2.object_size(key) != len(data):
-            LOG.error("FAILED %s: %s did not read back at %d bytes", target.table, key, len(data))
+        if not _landed(r2, key, len(data), target.table):
             failures.append(target.table)
             continue
         LOG.info("%s -> %s (%d rows, %d bytes gzipped)", target.table, key, rows, len(data))

@@ -105,18 +105,19 @@ jobs:
           set -o pipefail
           psql -X -v ON_ERROR_STOP=1 "$DATABASE_URL" \
             -c "\copy (select c.* from location_claims c join portal_contract_entries e on e.id = c.contract_entry_id join portal_contracts pc on pc.id = e.contract_id where not pc.is_active) to stdout csv header" \
-            | gzip > "retired_claims_${GITHUB_RUN_ID}.csv.gz"
-          ls -l "retired_claims_${GITHUB_RUN_ID}.csv.gz"
-          echo "backup size: $(du -h "retired_claims_${GITHUB_RUN_ID}.csv.gz" | cut -f1) ($(stat -c%s "retired_claims_${GITHUB_RUN_ID}.csv.gz") bytes)"
+            | gzip > "retired_claims_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}.csv.gz"
+          ls -l "retired_claims_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}.csv.gz"
+          echo "backup size: $(du -h "retired_claims_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}.csv.gz" | cut -f1) ($(stat -c%s "retired_claims_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}.csv.gz") bytes)"
 
-      # One object a run (the run id names it), read back at its size before anything is deleted.
+      # One object an attempt (run id + attempt name it: a re-run after a partial delete must not
+      # overwrite the first attempt's larger backup), read back at its size before anything is deleted.
       - name: Store the backup in R2
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-        run: python -m scripts.backup_before_drop retired-claims --file "retired_claims_${GITHUB_RUN_ID}.csv.gz"
+        run: python -m scripts.backup_before_drop retired-claims --file "retired_claims_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}.csv.gz"
 
       - name: Guard the real delete
         if: ${{ !inputs.dry_run }}

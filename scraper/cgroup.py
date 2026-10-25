@@ -21,3 +21,12 @@ def memory_limit_mb(root: str = CGROUP_ROOT) -> float | None:
             return None
         return round(limit / 1_048_576.0, 1) if limit < _CGROUP_V1_UNLIMITED_BYTES else None
     return None
+
+
+def physical_memory_mb() -> float:
+    return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1_048_576
+
+
+def memory_ceiling_mb(root: str = CGROUP_ROOT) -> float:
+    """What this process may use: its cgroup's limit, capped at the machine's memory (no limit: the machine's)."""
+    return min(memory_limit_mb(root) or float("inf"), physical_memory_mb())

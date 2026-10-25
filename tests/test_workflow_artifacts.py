@@ -32,6 +32,7 @@ def test_the_retired_claims_backup_goes_to_r2_never_to_an_artifact() -> None:
     (store,) = [s for s in job["steps"] if "scripts.backup_before_drop" in s.get("run", "")]
     assert "retired-claims --file" in store["run"]
     assert {"R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME"} <= set(store["env"])
-    # One object a run: a second run the same day must not overwrite the first one's rows.
+    # One object an attempt: a re-run after a partial delete must not overwrite the first attempt's rows.
     dump = next(s for s in job["steps"] if "\\copy" in s.get("run", ""))
-    assert "${GITHUB_RUN_ID}" in dump["run"] and "${GITHUB_RUN_ID}" in store["run"]
+    name = "retired_claims_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}.csv.gz"
+    assert name in dump["run"] and name in store["run"]

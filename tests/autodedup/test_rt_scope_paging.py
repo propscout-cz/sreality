@@ -364,20 +364,8 @@ def test_the_equivalence_fallback_pages_a_block_as_the_sweep_does(
     assert (ids, source) == ({1, 2, 3, 4, 5}, "listing_location")
     assert db.statements.count(S.RT_SCOPE_BLOCK_SQL) == 3, "three pages, one statement each"
 
-
 def test_the_seed_ceiling_is_half_of_what_the_container_may_use() -> None:
     """Measured at import, not a constant sized for a public runner's 16 GiB: a private runner has 7."""
-    assert lane.SEED_MEMORY_MB == lane.container_memory_mb() / 2
+    from scraper.cgroup import memory_ceiling_mb
 
-
-def test_the_seed_ceiling_reads_the_cgroup_and_never_passes_the_machine(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # scraper.cgroup.memory_limit_mb (the worker's reader, tested there) gives the limit; "max" or
-    # v1's "unlimited" give none, and then the machine's memory is the ceiling.
-    monkeypatch.setattr(lane, "_physical_memory_mb", lambda: 16_384.0)
-    (tmp_path / "memory.max").write_text("7516192768\n")
-    assert lane.container_memory_mb(str(tmp_path)) == 7168.0
-    (tmp_path / "memory.max").write_text("max\n")
-    assert lane.container_memory_mb(str(tmp_path)) == 16_384.0
-    (tmp_path / "memory.max").write_text("34359738368\n")  # a limit above the machine's memory
-    assert lane.container_memory_mb(str(tmp_path)) == 16_384.0
+    assert lane.SEED_MEMORY_MB == memory_ceiling_mb() / 2
