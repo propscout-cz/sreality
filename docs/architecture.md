@@ -5022,7 +5022,7 @@ the one member that is latency-bound rather than instance-bound — a handful of
 and one answer-row write per listing, no COPY, no corpus scan, no detoast — and it READS the claim
 spine the intake WRITES, so it never carried a must-never-overlap constraint, while at 0.7 listings/s
 and a queue above 100k a self-chaining group member starved it to zero ticks in three hours. Its
-guards are the job-level `location-resolve` group plus the `location_jobs` lease CAS, which is also
+guards are the job-level `location-resolve` group plus the `scheduled_jobs` lease CAS, which is also
 what keeps it exclusive against the always-on Railway worker's resolve lane. **No batch statement
 runs without a ceiling**: `statement_timeout = 0` is for genuine bulk phases (COPY, index build,
 whole-table rebuild) and nothing else; per-unit and per-batch work arms `SET LOCAL statement_timeout`

@@ -1,6 +1,7 @@
 """`health_liveness()`, the pg_cron watcher, writes one `liveness` row of cells (migration 620, its lane cell 621,
-its explicit cells 633, no API cell since 655). The `migration_633` tests run that file's own unschedule and
-post-condition, the `migration_655` tests that file's post-condition (not copies).
+its explicit cells 633, no API cell since 655, one subject per worker since 675). The `migration_633` tests run that
+file's own unschedule and post-condition, the `migration_655` and `migration_675` tests those files' post-conditions
+(not copies).
 
 Executed against the replayed schema inside a transaction that always rolls back. Runs in CI's migrations
 lane (`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED=1`): the watcher's step, and 633's step for the `migration_633`
@@ -19,6 +20,7 @@ _DB_URL = os.environ.get("TEST_DATABASE_URL")
 _REQUIRED = os.environ.get("DB_RAILS_REQUIRED") == "1"
 _MIGRATION_629 = Path(__file__).resolve().parents[1] / "migrations" / "633_health_explicit_cells.sql"
 _MIGRATION_655 = Path(__file__).resolve().parents[1] / "migrations" / "655_health_liveness_without_api_cell.sql"
+_MIGRATION_675 = Path(__file__).resolve().parents[1] / "migrations" / "675_scheduled_jobs_expand.sql"
 # pg_cron's job table and unschedule(bigint), as the file calls them: the replay has no pg_cron.
 _CRON_STUB = """
 create schema cron;
@@ -137,8 +139,11 @@ def test_each_dead_watcher_fails_one_cell(cur):
     assert _counts(cur) == before
     assert status == "fail"
     assert float(value) == 0.0
-    assert {c["facts"]["worker"]: c["status"] for c in cells["worker"]} == {
-        "liveness-test-stale": "fail", "liveness-test-fresh": "ok"}
+    # 675: each heartbeat is its own subject, so each worker's incident is its own.
+    assert {s: [(c["status"], c["facts"]["worker"]) for c in cs] for s, cs in cells.items()
+            if s.startswith("worker")} == {
+        "worker/liveness-test-stale": [("fail", "liveness-test-stale")],
+        "worker/liveness-test-fresh": [("ok", "liveness-test-fresh")]}
     assert [c["message"] for c in cells["stale:aaa_stale"]] == ["aaa_stale not measured for 20.0 h (budget 19 h)"]
     assert "stale:bbb_untold" not in cells
     [untold] = cells["unalerted"]
@@ -163,7 +168,7 @@ def test_everything_alive_writes_one_ok_row(cur):
 
     assert status == "ok"
     assert details["message"] == "Watchers: all alive"
-    assert set(cells) == {"worker"}
+    assert set(cells) == {"worker/liveness-test-fresh"}
     assert all(c["status"] == "ok" for c in details["cells"])
 
 
@@ -242,7 +247,8 @@ def test_a_dead_worker_folds_its_keys_and_its_lane_into_its_cell(cur):
     status, _value, _details, cells = _liveness(cur)
 
     assert status == "fail"
-    assert [(c["status"], c["facts"]["worker"]) for c in cells["worker"]] == [("fail", "realtime-worker")]
+    assert [(c["status"], c["facts"]["worker"]) for c in cells["worker/realtime-worker"]] == [
+        ("fail", "realtime-worker")]
     assert "stale:aaa_stale" in cells
     assert "stale:ccc_lane" not in cells
     # Folded subjects stay inert: their open incidents get no "no longer failing" cell either.
@@ -403,3 +409,21 @@ def test_migration_655_post_condition_refuses_a_watcher_still_reading_the_lease(
                        match="655: health_liveness\\(\\) still judges the API's matcher lease"):
         with cur.connection.transaction():
             cur.execute(_statement("do $post$", "$post$;", _MIGRATION_655))
+
+
+def test_migration_675_post_condition_holds_and_keeps_one_liveness_row(cur):
+    _beat(cur, "liveness-test-fresh", "0 minutes")
+    cur.execute(_statement("do $post$", "$post$;", _MIGRATION_675))
+    cur.execute("select count(*) from pipeline_check_results where check_key = 'liveness'")
+    assert cur.fetchone()[0] == 1
+
+
+def test_migration_675_post_condition_refuses_one_subject_for_every_worker(cur):
+    """The guard bites: 655's body, re-created inside the test's transaction, names every worker `worker`."""
+    import psycopg
+
+    cur.execute(_statement("create or replace function public.health_liveness()", "$fn$;", _MIGRATION_655))
+    with pytest.raises(psycopg.errors.RaiseException,
+                       match="675: health_liveness\\(\\) does not give each worker its own subject"):
+        with cur.connection.transaction():
+            cur.execute(_statement("do $post$", "$post$;", _MIGRATION_675))
