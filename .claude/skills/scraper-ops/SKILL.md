@@ -268,10 +268,9 @@ records image-URL rows — bytes land in R2 via the jobs below). sreality comes 
 onto it (only `rot` survives) and every row is stamped `rendition` + `stored_width`/`stored_height` (mig 496): **phash/CLIP
 compare only WITHIN a rendition**. Timeout guard = `--image-max-seconds`, NOT the count cap (~11k/hr basis predates it).
 R2 key = `img/{listing_id}/{images.id}.jpg`, unique per ROW (rule #6); a stored row keeps its legacy `{id}/{seq:04d}.jpg` forever.
-- `images.yml` (2-hourly) — THE deep backlog drain across ALL portals, **sharded into 4 parallel jobs**
-  (`--image-shard k/4` = the `image_id mod 4` slice), each with its own cap, breaker and runner IP.
-- the worker's `images` lane (every 60 s, `realtime_images_slice`) — newest ACTIVE listings' photos first, so a
-  fresh card renders an image in minutes; since W0 (#2010) the only fresh-image runtime.
+- the worker's `images` lane (every 60 s, `realtime_images_slice`) — THE image drain across ALL portals: newest ACTIVE
+  listings' photos first, so a fresh card renders an image in minutes, then the inactive residue in what the slice
+  leaves (each tier walks the pending index newest-first; no sort). Since W0 the only runtime (#2010, #2011).
 - `refresh_stale_images.yml` (every 6h) — re-enqueues active listings whose un-downloaded image URLs
   rotated/went stale into `listing_detail_queue` (low priority) so the detail drain repoints them.
 - `sreality_image_remaster.yml` (`15 */2`, 6 shards; scheduled runs gated on the `SREALITY_REMASTER_CRON` repo
@@ -481,12 +480,12 @@ RUN, COVERAGE, the closing `INDEX total=…` and every DRAIN line; per-page INDE
   interval (auto-recovers on subsequent healthy fetches)
 - `RUN done pages=0 new=... updated=... unchanged=... gone=... errors=... claimed=...`
 
-**Image downloads** (`images.yml`, the worker's `images` lane, `--images-only`):
-- `IMAGES start cap=... workers=... active_only=... shard=... sources=...` once
+**Image downloads** (the worker's `images` lane; `--images-only` by hand):
+- `IMAGES start cap=... budget=... workers=... per_host=... sources=...` once
 - `IMAGES progress=N downloaded=... errors=... taken_down=... source_unavailable=...` every 50
 - `IMAGE listing_taken_down sid=... marked=N` / `IMAGE source_unavailable id=...` per classified
   failure (an inline freshness check flips a taken-down listing inactive + bulk-marks its images)
-- `IMAGES STOP suspicious ...` when the transient-failure circuit-breaker trips (exits 75; the next cron tick retries)
+- `IMAGES STOP suspicious ...` when the transient-failure circuit-breaker trips (exit 0; the lane's next pass retries)
 - `IMAGES done downloaded=... errors=... taken_down=... source_unavailable=... attempted=... phash_missed=...` (`phash_missed` =
   stored but inline-unhashed, 0 in steady state; its cause is one `IMAGE phash_inline_failed` WARNING per kind per run)
 

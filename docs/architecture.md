@@ -320,8 +320,8 @@ keeps writing and reading its own slices for its stalest-first order.
 The detail URL carries the category
 (`/detail/{sale}/{cat}/…`), so the drain derives each listing's category from its own URL —
 one config (the `portals` row, migrations 110/111) walks many categories (byty + domy ×
-prodej + pronájem today). Image-URL rows are recorded by the drain; the shared `images.yml`
-job downloads the bytes to R2 (source-agnostic).
+prodej + pronájem today). Image-URL rows are recorded by the drain; the realtime worker's
+`images` lane downloads the bytes to R2 (source-agnostic).
 
 **Data source (mmreality.cz).** A crawler (`scraper/mmreality_client.py`,
 `mmreality_parser.py`, `mmreality_main.py`, workflow `scrape_mmreality.yml` — pilot,

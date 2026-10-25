@@ -515,22 +515,19 @@ def test_images_pass_without_r2_logs_once_and_idles(monkeypatch, caplog):
     assert len(warnings) == 1
 
 
-def test_run_images_sync_reuses_main_machinery_active_only(monkeypatch):
+def test_run_images_sync_reuses_main_machinery_over_the_whole_queue(monkeypatch):
+    # No scope argument: the lane drains active ads first, then the inactive residue.
     from scraper import main as scraper_main
 
     seen: dict[str, Any] = {}
 
-    def fake_run(max_downloads, workers, active_only=False, **kw):
-        seen.update(
-            max_downloads=max_downloads, workers=workers, active_only=active_only,
-        )
+    def fake_run(*args, **kw):
+        seen.update(args=args, kw=kw)
         return _images_agg()
 
     monkeypatch.setattr(scraper_main, "_run_image_downloads", fake_run)
     assert rw._run_images_sync(250)["images_stored"] == 4
-    assert seen == {
-        "max_downloads": 250, "workers": rw.IMAGES_WORKERS, "active_only": True,
-    }
+    assert seen == {"args": (250, rw.IMAGES_WORKERS), "kw": {}}
 
 
 # --- heartbeat -----------------------------------------------------------------

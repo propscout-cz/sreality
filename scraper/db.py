@@ -1233,20 +1233,25 @@ def active_count(conn: psycopg.Connection, source: str, scope: Mapping[str, Any]
     return _count(conn, source, *scope_sql(scope))
 
 
+# Active ads, then the inactive residue (an inactive ad, or an image whose listing
+# row is missing). Each tier walks images_pending_actionable_idx newest-first and
+# stops at its LIMIT; one ORDER BY over a computed tier key sorted the whole
+# pending set instead (#2011).
+_PENDING_IMAGE_TIERS = ("l.is_active = true", "l.is_active IS NOT TRUE")
+
+
 def pending_image_downloads(
     conn: psycopg.Connection,
     max_attempts: int = 5,
     limit: int = 1000,
-    active_only: bool = False,
     *,
-    shard: tuple[int, int] | None = None,
     sources: tuple[str, ...] | None = None,
 ) -> list[tuple[int, int, int | None, str, str | None, str | None, int | None]]:
     """Return (image_id, listing_id, sequence, sreality_url, category_main,
     category_type, sreality_id) rows that still need download.
 
     BOTH ids are returned because the drain needs each for a different job:
-    `listing_id` keys the R2 object and the shard (it survives Gate 2), while
+    `listing_id` keys the R2 object (it survives Gate 2), while
     `sreality_id` is what the taken-down classification path needs — a
     freshness check is a sreality portal fetch, so it is inherently legacy-keyed
     and simply does not apply to a listing without one.
@@ -1256,69 +1261,42 @@ def pending_image_downloads(
     images terminally classified as unavailable (unavailable_reason IS
     NOT NULL — e.g. the parent listing was taken down).
 
-    With `active_only=True`, restrict to images whose parent listing is
-    `is_active = true` — the backfill workflow's prioritisation knob,
-    so the cap-bounded slice goes to listings users can still browse.
-
-    `shard=(k, n)` partitions the pending queue by the PARENT LISTING —
-    `hash(listing_id) mod n == k` — so N parallel drainer jobs each own a
-    disjoint slice (horizontal scale-out) AND a single listing's photos all
-    fall in ONE shard. Sharding on `image_id` instead would stripe a
-    listing's photos across shards that drain at slightly different rates,
-    so a recent listing renders half its photos until the slowest shard
-    catches up; keying on the listing makes a listing flip to complete in
-    one burst. The id is HASHED (not raw modulo) because sreality ids are
-    multiples of 4, so `sreality_id % n` would pile everything into one
-    shard. `sources` restricts to specific `listings.source` values
-    (per-CDN scoping). Both are pure selection predicates; the download
-    path stays source-agnostic.
-
-    Ordering puts active listings first (when both kinds are in scope)
-    and newest within each tier so freshly-discovered active images
-    drain before old inactive ones. The category columns come from the
-    parent listing so the image-download phase can attribute its
-    results per (category_main, category_type) on the scrape_runs row.
+    Active listings come first, newest first; the inactive residue fills
+    whatever of `limit` the active tier leaves, so it drains only when the
+    active queue is short. `sources` restricts to specific `listings.source`
+    values (per-CDN scoping) — a pure selection predicate; the download path
+    stays source-agnostic. The category columns come from the parent listing
+    so the image-download phase can attribute its results per
+    (category_main, category_type) on the scrape_runs row.
     """
-    where_active = "AND l.is_active = true" if active_only else ""
-    order_clause = (
-        "ORDER BY i.id DESC"
-        if active_only
-        else "ORDER BY (l.is_active IS TRUE) DESC NULLS LAST, i.id DESC"
-    )
-    # Append predicates conditionally so the default call's params stay
-    # exactly (max_attempts, limit) — tests assert that shape.
     extra = ""
-    params: list[Any] = [max_attempts]
+    filters: list[Any] = [max_attempts]
     if sources:
-        extra += " AND l.source = ANY(%s)"
-        params.append(list(sources))
-    if shard is not None:
-        k, n = shard
-        # Hash the listing id (not the image id) so a listing's photos all land
-        # in one shard, and hash it (not raw modulo) because sreality ids are
-        # multiples of 4 — raw `sreality_id % n` collapses everything into one
-        # shard. `& 2147483647` clears the sign bit (no abs() overflow risk).
-        # Shards on the SURROGATE (R2): post-Gate-2 images.sreality_id is NULL
-        # for a non-sreality listing, hashint8(NULL) is NULL, and `NULL % n = k`
-        # is NULL — so those images would match NO shard and never drain at all.
-        extra += " AND (hashint8(i.listing_id) & 2147483647) %% %s = %s"
-        params.extend([n, k])
-    params.append(limit)
-    sql = f"""
-        SELECT i.id, i.listing_id, i.sequence, i.sreality_url,
-               l.category_main, l.category_type, i.sreality_id
-        FROM images i
-        LEFT JOIN listings l ON l.id = i.listing_id
-        WHERE i.storage_path IS NULL
-          AND i.unavailable_reason IS NULL
-          AND i.download_attempts < %s
-          {where_active}{extra}
-        {order_clause}
-        LIMIT %s
-    """
+        extra = " AND l.source = ANY(%s)"
+        filters.append(list(sources))
+    rows: list[tuple[int, int, int | None, str, str | None, str | None, int | None]] = []
     with conn.cursor() as cur:
-        cur.execute(sql, tuple(params))
-        return list(cur.fetchall())
+        for tier in _PENDING_IMAGE_TIERS:
+            remaining = limit - len(rows)
+            if remaining <= 0:
+                break
+            cur.execute(
+                f"""
+                SELECT i.id, i.listing_id, i.sequence, i.sreality_url,
+                       l.category_main, l.category_type, i.sreality_id
+                FROM images i
+                LEFT JOIN listings l ON l.id = i.listing_id
+                WHERE i.storage_path IS NULL
+                  AND i.unavailable_reason IS NULL
+                  AND i.download_attempts < %s
+                  AND {tier}{extra}
+                ORDER BY i.id DESC
+                LIMIT %s
+                """,
+                (*filters, remaining),
+            )
+            rows.extend(cur.fetchall())
+    return rows
 
 
 # Provenance columns ride the SAME write as the bytes (migration 496), but only

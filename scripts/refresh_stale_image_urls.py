@@ -6,7 +6,7 @@ it, and the image downloader can't fetch it either. This sweep re-enqueues such 
 into the source-generic `listing_detail_queue`; the detail drain then re-fetches them and
 `listing_write.write_listings` repoints each not-yet-stored image's URL to the current one (it also
 resets download_attempts and clears unavailable_reason for storage_path-NULL rows), after
-which the image backfill (images.yml) can store the bytes.
+which the realtime worker's images lane can store the bytes.
 
 Targeted + bounded: only ACTIVE listings with at least one not-yet-stored image that are
 either older than --min-age (the stranded backlog the newest-first backfill never reached)
