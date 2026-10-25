@@ -4631,7 +4631,14 @@ pointer its contract reads. The predicates and remedies replace the harness's
 shape needs, and the reader takes the first that answers — that, not a second entry, is how a portal
 whose payload changed shape keeps reading the older one (sreality@3: 30,265 delisted rows were frozen
 on the pre-cutover JSON, whose whole address is one line in `/locality/value` with the pin in `/map`,
-and every rail the primary locator has applies to each alternative). Two further rails: `ReaderContract`
+and every rail the primary locator has applies to each alternative). A PAGE entry's alternative may
+name another page reader (`reader:`), held to the entry's own surface and extraction method so a
+claim's provenance is true whichever path answered; `page_readers.read_entry` walks the paths above
+the reader, and the payload readers keep walking their own through `claims_common.locator_reads`.
+That is how idnes@6 reads an unpinned ad's street off its map highlight ("Zvýrazněná ulice <name>",
+the one feature with no id, picked by its title) and off the address line when the page has no
+highlight, and how realitymix@7 reads its heading before the map's `data-address` (operator ruling
+2026-10-25). Two further rails: `ReaderContract`
 records each reader's whole `locator` appetite (the keys it requires plus the ones it merely reads),
 derived back out of the reader bodies by an AST scan over each reader and the helpers it delegates
 its locator to, and a locator key outside that union is refused — a declared key no reader consults

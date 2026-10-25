@@ -13,9 +13,19 @@
 # its own address twice inside `.b-detail__info`). Measured 2026-09-12: 3,263 active idnes
 # listings sat at `country_status='undetermined'` with a Croatian obec_name as their only
 # claim.
+#
+# v6 (operator ruling 2026-10-25): the STREET is read off the map first. An ad with no exact
+# address carries no subject pin; idnes highlights its street instead, as one unlabelled
+# feature titled "Zvýrazněná ulice <name>", and only when the page has no such feature does
+# the address line answer. Both paths go through `address_part_street:loose` / no word-ending
+# test: since W18 a street is kept only when it binds in RÚIAN in the ad's town, which is
+# the check the morphology list stood in for. Measured 2026-10-25: 22,124 active idnes ads
+# sat on their town's centre point; 2,540 of them name a street ("Mahulenina", "Boženy
+# Němcové", "17. listopadu") the word-ending test refused, and the map named the same street
+# on 25 of 25 sampled pages.
 
 portal: idnes
-contract_version: 5
+contract_version: 6
 
 persistence:
   # What this portal's body carries that changes without the listing changing —
@@ -83,7 +93,8 @@ extractions:
     subject_scope: {kind: id_match, on_miss: fail}
     guards: [reject_outside_cz_bbox]
     notes: "The subject feature's own Point, by id equality — never features[0]; the portal
-      maps only exact-address listings, so a blurred page carries no feature and no pin."
+      pins only exact-address listings, so a blurred page carries no subject feature and no
+      pin. Its one unlabelled feature is the street highlight `id.det.street` reads."
 
   - id: id.det.no_exact_disclaimer
     locator_kind: html_selector
@@ -175,15 +186,30 @@ extractions:
     notes: "The část obce / quarter beside the town; equal to it on an undivided obec."
 
   - id: id.det.street
-    locator_kind: html_selector
-    extraction_method: html_selector_parse
+    locator_kind: map_config
+    extraction_method: regex_text
     page_kind: detail
-    locator: {reader: html_text, css: ".b-detail__info"}
+    locator:
+      reader: json_regex
+      css: "script[data-maptiler-json]"
+      then: "/geojson/features"
+      exclude_where: {json_pointer: "/properties/isSimilar", equals: true}
+      json_pointer: "/properties/title"
+      pattern: "^\\s*Zvýrazněná ulice\\s+(?P<street>\\S(?:.*\\S)?)\\s*$"
+      group: street
+      fallback:
+        - reader: html_regex
+          css: ".b-detail__info"
+          pattern: "(?P<line>\\S(?:.*\\S)?)"
+          group: line
+          transform: ["address_part_street:loose"]
     claim_type: street_name
-    transform: ["address_part_street"]
     subject_scope: {subject_scoped: true}
-    notes: "The leading segment, and only when an obec segment follows it and the shared
-      street tests admit it — a town-only line claims no street."
+    notes: "The map's highlighted street, picked by its own title and never by position —
+      the 20 neighbour features carry full addresses. A town-only ad is highlighted as
+      'Zvýrazněná obec', which this pattern refuses. No highlight (an exact ad, a page with
+      no map): the address line's leading segment, only when an obec segment follows it and
+      it is not the town itself."
 
   - id: id.det.cp
     locator_kind: html_selector
@@ -191,7 +217,7 @@ extractions:
     page_kind: detail
     locator: {reader: html_text, css: ".b-detail__info"}
     claim_type: house_number_cp
-    transform: ["address_part_house_number", "split_cp_co:cp"]
+    transform: ["address_part_house_number:loose", "split_cp_co:cp"]
     subject_scope: {subject_scoped: true}
     notes: "The number glued to the street segment ('Krkonošská 512/3'), čp half."
 
@@ -201,6 +227,6 @@ extractions:
     page_kind: detail
     locator: {reader: html_text, css: ".b-detail__info"}
     claim_type: house_number_co
-    transform: ["address_part_house_number", "split_cp_co:co"]
+    transform: ["address_part_house_number:loose", "split_cp_co:co"]
     subject_scope: {subject_scoped: true}
     notes: "The čo half of the same number; absent unless the page writes '512/3'."
