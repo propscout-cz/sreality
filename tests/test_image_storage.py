@@ -152,18 +152,6 @@ def test_download_image_normalises_a_legacy_chain(monkeypatch):
     assert captured == ["https://d18-a.sdn.cz/x/y.jpeg?fl=res,1800,1800,1|shr,,20|jpg,80"]
 
 
-def test_download_image_honours_an_explicit_transform_ops(monkeypatch):
-    """The re-master lane needs to request a template other than the default."""
-    import scraper.image_storage as image_storage
-
-    captured: list[str] = []
-    _patch_get(monkeypatch, captured, _StreamResp(b""))
-    image_storage.download_image(
-        "https://d18-a.sdn.cz/x/y.jpeg", transform_ops="res,400,400,1|jpg,70"
-    )
-    assert captured == ["https://d18-a.sdn.cz/x/y.jpeg?fl=res,400,400,1|jpg,70"]
-
-
 def test_download_image_rejects_oversize_content_length(monkeypatch):
     """A Content-Length over the cap is rejected before the body is read."""
     import scraper.image_storage as image_storage

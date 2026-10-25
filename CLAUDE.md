@@ -154,8 +154,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     on cache miss; a POI's category is set by the *query*, not OSM tags; taxonomy in `toolkit/amenities.CATEGORY_TAGS`.
 11. **`transit_lines` + `transit_line_fetches` are a parallel OSM mirror** for route geometry (migration
     028) — written by `find_comparables_along_axis`; one row per (relation, member way); tram/subway/bus; 30-day TTL.
-12. **`estimation_runs` is the single source of truth for every estimation; every run must be created through `create_estimation_run`** (owed fork:
-    `scripts/smoke_agent.py`). The row is INSERTed at submit (`pending`/`running`; `failed` if setup fails), then the executor
+12. **`estimation_runs` is the single source of truth for every estimation; every run must be created through `create_estimation_run`**. The row is INSERTed at submit (`pending`/`running`; `failed` if setup fails), then the executor
     UPDATEs its terminal `status` in place; failed runs still persist a row (HTTP 200 + `status='failed'`); re-runs INSERT with `parent_run_id`; a
     run's RESULT is immutable (its yield `scenario` is not; `input_listing_id` is set at submit, never late-bound; an ad we do not hold or cannot place is a 422 before any row). Sources: `ui`/`api`/`clickup`/`extension`.
     A paid outside valuation (Valuo) is not our estimate: one row per call in `valuo_valuations`, written only by `api/valuo.py`.

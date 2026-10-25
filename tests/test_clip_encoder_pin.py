@@ -31,7 +31,6 @@ _UNPINNED_ALLOWED = {
 _TAGGING_WORKFLOWS = (
     "clip_tag.yml",
     "clip_retag.yml",
-    "backfill_render_score.yml",
     "label_proposal_backfill.yml",
 )
 
@@ -91,7 +90,7 @@ def test_embedding_writer_stamps_the_revision():
 
 
 def test_tagging_workflows_exist():
-    # These four are the only installers of the clip extra; if one is renamed the
+    # These three are the only installers of the clip extra; if one is renamed the
     # pin's blast radius changes and this file's assumptions need re-checking.
     for name in _TAGGING_WORKFLOWS:
         assert (_ROOT / ".github" / "workflows" / name).exists(), name

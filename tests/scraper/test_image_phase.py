@@ -880,7 +880,7 @@ def _drive_real_fetch_loop(monkeypatch, url, *, dimensions):
 
 def test_stored_sreality_image_carries_master_rendition_and_measured_size(monkeypatch):
     """Bytes fetched through the 1800 template are stamped with WHAT they are —
-    the re-master lane's pending predicate keys on exactly this."""
+    the rendition cohorts (architecture rule 6) key on exactly this."""
     call = _drive_real_fetch_loop(
         monkeypatch, "https://d18-a.sdn.cz/d_18/x/y.jpeg", dimensions=(1800, 1200)
     )

@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from scraper import db, image_storage
+from scraper import image_storage
 
 MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "670_repair_colliding_image_storage_paths.sql"
 SQL = MIGRATION.read_text(encoding="utf-8")
@@ -27,10 +27,10 @@ def _cleared() -> set[str]:
     return set(re.findall(r"(\w+)\s*=\s*(?:null|0)\b", _update()))
 
 
-def test_clears_what_the_derived_signal_chokepoint_clears() -> None:
-    chokepoint = set(re.findall(r"(\w+)\s*=\s*NULL", db._INVALIDATE_DERIVED_SIGNALS_SQL))
-    assert chokepoint == {"phash", "clip_tagged_at"}
-    assert chokepoint <= _cleared()
+def test_clears_the_two_producer_predicates() -> None:
+    # phash and clip_tagged_at are the pHash and CLIP lanes' own selection predicates
+    # (architecture rule 6): nulling them is what re-arms both after a row's bytes change.
+    assert {"phash", "clip_tagged_at"} <= _cleared()
 
 
 def test_a_cleared_row_satisfies_the_download_queue_predicate() -> None:

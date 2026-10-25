@@ -193,7 +193,7 @@ it (`api/`). They do not apply to the scraper.
     provider argument. Adding a provider is a new file implementing the same Protocol,
     registered in `api/dependencies.py:_build_providers` — AND, separately, in every hand-built provider map (`scraper/main.py`,
     the condition scripts, `scripts/bakeoff_text_extraction.py`, `autodedup/judge_lane.py`, `toolkit/vision_batch.py`,
-    `toolkit/description_extraction.py`; the API, the worker and `smoke_agent.py` use `get_providers()`), and a model whose
+    `toolkit/description_extraction.py`; the API and the worker use `get_providers()`), and a model whose
     provider is unregistered raises in `LLMClient.call` BEFORE the try/except that writes the failure row, so a misroute leaves ZERO `llm_calls` evidence and is
     invisible to the `llm` health check. `LLMClient` is the audit orchestrator — every call
     writes one row to `llm_calls` with provider, model, tokens, USD cost, and a `called_for`
@@ -465,8 +465,8 @@ Scraper orchestration:
 NEW DEDUP (docs/design/new-dedup/PROGRAM.md, Wave 1):
 - `RUNPOD_API_KEY` — Actions secret only (no Railway/frontend use). Auths `scripts/runpod_client.py`'s REST
   (`rest.runpod.io/v1`) + GraphQL (`api.runpod.io/graphql`) calls to launch/poll/terminate on-demand GPU pods.
-  Two `workflow_dispatch` lanes: `new_dedup_runpod_smoke_test.yml` (infra proof) and `dinov3_embed_backfill.yml`
-  (the DINOv3 corpus embedding pass, never yet run on real data). Every job goes through `RunPodClient.run_job`,
+  Its workflow consumers: `autodedup.yml`, `dinov3_bakeoff_manifest.yml`, `dinov3_embed_backfill.yml`, `runpod_reap.yml`, `tagging_bakeoff.yml`, `text_extraction_bakeoff.yml`
+  (`dinov3_embed_backfill` is the DINOv3 corpus embedding pass, never yet run on real data). Every job goes through `RunPodClient.run_job`,
   which terminates the pod in a `finally` however the job ends — the actual cost-safety guarantee (the pod API has no "run
   once and stop" flag). Credentials reach a pod ONLY via the optional `env: dict[str, str]` on
   `launch_pod`/`run_job`/`run_job_with_fallback` — the REST body's `env` **object** (`{"K": "v"}`, not GraphQL's

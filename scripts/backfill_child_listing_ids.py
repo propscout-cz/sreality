@@ -72,7 +72,7 @@ def _predicate(
     `skip` excludes rows an UPDATE legally cannot write (see R2_CARRIERS). It is
     part of the predicate itself, so counting and updating agree — a row skipped by
     one but counted by the other would keep "remaining" permanently above zero and
-    make the self-chaining workflow re-dispatch forever.
+    make a chained re-run loop forever.
     """
     if repair:
         base = (
@@ -279,16 +279,16 @@ def main() -> int:
                 conn, carrier, args.batch, args.repair, deadline,
             )
             total += filled
-        # The chain condition, computed on the SAME connection at the end of the
-        # run: how much is genuinely left. Reported as a machine-readable marker so
-        # the workflow can decide whether to re-dispatch itself rather than a human
-        # having to. Zero means every carrier is clean and the chain stops.
+        # How much is genuinely left, computed on the SAME connection at the end of
+        # the run and reported as a machine-readable marker, so a caller can decide
+        # whether to run again rather than a human having to. Zero means every
+        # carrier is clean.
         if not args.dry_run:
             pending = sum(_remaining(conn, c, args.repair) for c in carriers)
-            # STDOUT, not the logger: logging writes to stderr, and the workflow
-            # decides whether to chain by grepping this marker out of captured
-            # output. Printing it here makes that decision independent of how
-            # logging happens to be configured.
+            # STDOUT, not the logger: logging writes to stderr, and a caller decides
+            # whether to run again by grepping this marker out of captured output.
+            # Printing it here makes that decision independent of how logging
+            # happens to be configured.
             print(f"PENDING={pending}", flush=True)
             log.info("PENDING=%d", pending)
     log.info("done: %d row(s) %s", total, "pending" if args.dry_run else "filled")
