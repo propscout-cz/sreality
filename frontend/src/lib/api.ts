@@ -47,9 +47,11 @@ import type {
   WatchdogSeenFilter,
   WatchdogSubscription,
   FilterPreset,
+  FilterPresetGroup,
 } from './types';
 import type { DistrictChip, PresetSpec } from './filters';
 import type { WaterfallRow } from './locationWaterfall';
+import type { SavedSetLayout } from './savedSetLayout';
 import { supabase } from './supabase';
 
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
@@ -2909,11 +2911,10 @@ export const postPushOpened = (delivery: number): Promise<void> =>
  * Per account (migration 595, ticket #1761): every route rides the user's
  * JWT and RLS. */
 
-export const listFilterPresets = (): Promise<{
-  data: FilterPreset[];
-  total: number;
-}> =>
-  request<{ data: FilterPreset[]; total: number }>('/filter-presets');
+export type FilterPresetList = { data: FilterPreset[]; total: number; groups: FilterPresetGroup[] };
+
+/* The presets in their one order, and the boxes they sort into (migration 672). */
+export const listFilterPresets = (): Promise<FilterPresetList> => request<FilterPresetList>('/filter-presets');
 
 export const createFilterPreset = (input: {
   name: string;
@@ -2941,13 +2942,29 @@ export const deleteFilterPreset = (id: string): Promise<{ deleted: true }> =>
 
 /* Persist a new display order (full ordered id-list, 0 = first). Returns the
  * canonical list so the caller can adopt the server's view. */
-export const reorderFilterPresets = (
-  ids: string[],
-): Promise<{ data: FilterPreset[]; total: number }> =>
-  request<{ data: FilterPreset[]; total: number }>('/filter-presets/reorder', {
+export const reorderFilterPresets = (ids: string[]): Promise<FilterPresetList> =>
+  request<FilterPresetList>('/filter-presets/reorder', {
     method: 'PUT',
     json: { ids },
   });
+
+/* The whole arrangement after a drag (lib/savedSetLayout): the boxes in order,
+ * every preset in order with its box. Answers with the canonical list. */
+export const layoutFilterPresets = (layout: SavedSetLayout): Promise<FilterPresetList> =>
+  request<FilterPresetList>('/filter-presets/layout', { method: 'PUT', json: layout });
+
+export const createFilterPresetGroup = (input: { name: string; color?: TagColor | null }): Promise<FilterPresetGroup> =>
+  request<FilterPresetGroup>('/filter-preset-groups', { method: 'POST', json: input });
+
+export const updateFilterPresetGroup = (
+  id: string,
+  patch: { name?: string; color?: TagColor | null },
+): Promise<FilterPresetGroup> =>
+  request<FilterPresetGroup>(`/filter-preset-groups/${encodeURIComponent(id)}`, { method: 'PUT', json: patch });
+
+/* Its presets fall loose; none is deleted. */
+export const deleteFilterPresetGroup = (id: string): Promise<{ deleted: true }> =>
+  request<{ deleted: true }>(`/filter-preset-groups/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
 /* ----- Operator merge mechanics (multi-portal) ----------------------------
  * Mounted under `/properties/*` since the NEW DEDUP cutoff (docs/design/

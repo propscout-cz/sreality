@@ -38,11 +38,14 @@ class SavedSetKind:
     own_rows: str = ""
     # (constraint, 422 detail): a table CHECK a client can trip with a valid body; any other CHECK is drift (500).
     refusals: tuple[tuple[str, str], ...] = ()
+    # The kind whose rows box this kind's (a preset's group, migration 672): each row then carries `group_id`,
+    # the list answers with the groups too, and PUT <prefix>/layout rewrites boxes and membership in one go.
+    groups: "SavedSetKind | None" = None
 
 
 def _projection(kind: SavedSetKind) -> str:
     cols = ["t.id", "t.name", *(f"t.{c}" for c in kind.blob_columns),
-            "t.created_at", "t.updated_at", "t.position", "t.color"]
+            "t.created_at", "t.updated_at", "t.position", "t.color", *(["t.group_id"] if kind.groups else [])]
     return ", ".join([*cols, *(f"{sql} AS {field}" for field, sql in kind.projection_extra)])
 
 
@@ -91,6 +94,15 @@ def _reorder_sql(kind: SavedSetKind) -> str:
             f"{_where(kind, 't.id = v.id')}")
 
 
+def _layout_sql(kind: SavedSetKind) -> str:
+    # One order over every row, each with its group (NULL = loose); the (group_id, account_id) key refuses a group
+    # that is not the row's own account's.
+    return (f"UPDATE {kind.table} t SET position = v.pos, group_id = v.group_id "
+            "FROM (SELECT id, group_id, (ord - 1) AS pos "
+            "FROM unnest(%s::uuid[], %s::uuid[]) WITH ORDINALITY AS u(id, group_id, ord)) v"
+            f"{_where(kind, 't.id = v.id')}")
+
+
 def _fields(kind: SavedSetKind) -> tuple[str, ...]:
     return ("name", *kind.blob_columns, "color")
 
@@ -98,7 +110,8 @@ def _fields(kind: SavedSetKind) -> tuple[str, ...]:
 def statements(kind: SavedSetKind) -> tuple[str, ...]:
     """Every statement the kind runs (its update with every field set), for the CI PREPARE sweep."""
     return (_list_sql(kind), _get_sql(kind), _get_for_update_sql(kind), _insert_sql(kind),
-            _update_sql(kind, _fields(kind)), _delete_sql(kind), _reorder_sql(kind))
+            _update_sql(kind, _fields(kind)), _delete_sql(kind), _reorder_sql(kind),
+            *((_layout_sql(kind),) if kind.groups else ()))
 
 
 def _jsonb(value: Any) -> str | None:
@@ -107,9 +120,11 @@ def _jsonb(value: Any) -> str | None:
 
 def _row(kind: SavedSetKind, row: tuple[Any, ...]) -> dict[str, Any]:
     fields = ("id", "name", *kind.blob_columns, "created_at", "updated_at", "position", "color",
-              *(field for field, _sql in kind.projection_extra))
+              *(("group_id",) if kind.groups else ()), *(field for field, _sql in kind.projection_extra))
     out = dict(zip(fields, row))
     out["id"] = str(out["id"])
+    if kind.groups:
+        out["group_id"] = None if out["group_id"] is None else str(out["group_id"])
     for at in ("created_at", "updated_at"):
         out[at] = out[at].isoformat() if out[at] else ""
     for blob in kind.empty_on_read:
@@ -175,11 +190,36 @@ def delete(conn: psycopg.Connection, kind: SavedSetKind, set_id: str) -> bool:
         return cur.rowcount > 0
 
 
-def reorder(conn: psycopg.Connection, kind: SavedSetKind, ids: list[str]) -> list[dict[str, Any]]:
-    """Rewrite `position` to the given id order (0 = first); unlisted ids keep theirs; the list comes back."""
+def reorder(conn: psycopg.Connection, kind: SavedSetKind, ids: list[str]) -> None:
+    """Rewrite `position` to the given id order (0 = first); unlisted ids keep theirs."""
     with conn.cursor() as cur:
         cur.execute(_reorder_sql(kind), (ids,))
-    return list_rows(conn, kind)
+
+
+def listing(conn: psycopg.Connection, kind: SavedSetKind) -> dict[str, Any]:
+    """The list route's answer: the rows, and the kind's groups when it has them."""
+    rows = list_rows(conn, kind)
+    out: dict[str, Any] = {"data": rows, "total": len(rows)}
+    if kind.groups:
+        out["groups"] = list_rows(conn, kind.groups)
+    return out
+
+
+def layout(
+    conn: psycopg.Connection, kind: SavedSetKind, groups: list[str], items: list[tuple[str, str | None]],
+) -> dict[str, Any]:
+    """Rewrite the boxes' order and every listed row's order and group in one transaction; the list comes back.
+    Unlisted ids keep theirs; a group that is not the caller's own is a 422."""
+    assert kind.groups is not None, f"{kind.noun} has no groups"
+    with conn.cursor() as cur:
+        if groups:
+            cur.execute(_reorder_sql(kind.groups), (groups,))
+        if items:
+            try:
+                cur.execute(_layout_sql(kind), ([i for i, _ in items], [g for _, g in items]))
+            except psycopg.errors.ForeignKeyViolation as exc:
+                raise HTTPException(status_code=422, detail=f"{kind.groups.noun} not found") from exc
+    return listing(conn, kind)
 
 
 def row_or_404(kind: SavedSetKind, row: dict[str, Any] | None) -> dict[str, Any]:
@@ -191,6 +231,17 @@ def row_or_404(kind: SavedSetKind, row: dict[str, Any] | None) -> dict[str, Any]
 
 class ReorderIn(BaseModel):
     ids: list[uuid.UUID] = Field(..., min_length=1)
+
+
+class LayoutItem(BaseModel):
+    id: uuid.UUID
+    group_id: uuid.UUID | None = None
+
+
+class LayoutIn(BaseModel):
+    """The whole arrangement after a drag: the boxes in order, and every row in order with its box."""
+    groups: list[uuid.UUID] = Field(default_factory=list)
+    items: list[LayoutItem] = Field(default_factory=list)
 
 
 def _runs(*sql: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -208,11 +259,12 @@ def saved_set_router(kind: SavedSetKind, prefix: str) -> APIRouter:
     router = APIRouter(prefix=prefix, tags=[prefix.strip("/").replace("/", "-")])
     one = f"/{{{kind.id_param}}}"
 
+    lists = (_list_sql(kind), *((_list_sql(kind.groups),) if kind.groups else ()))
+
     @router.get("")
-    @_runs(_list_sql(kind))
+    @_runs(*lists)
     def list_route(conn: Any = Depends(tenant_pool.tenant_conn)) -> dict[str, Any]:
-        rows = list_rows(conn, kind)
-        return {"data": rows, "total": len(rows)}
+        return listing(conn, kind)
 
     @router.post("")
     @_runs(_insert_sql(kind))
@@ -225,10 +277,17 @@ def saved_set_router(kind: SavedSetKind, prefix: str) -> APIRouter:
 
     # Declared before the `/{id}` routes so PUT <prefix>/reorder is matched here, not captured by `/{id}`.
     @router.put("/reorder")
-    @_runs(_reorder_sql(kind), _list_sql(kind))
+    @_runs(_reorder_sql(kind), *lists)
     def reorder_route(body: ReorderIn, conn: Any = Depends(tenant_pool.tenant_conn)) -> dict[str, Any]:
-        rows = reorder(conn, kind, [str(i) for i in body.ids])
-        return {"data": rows, "total": len(rows)}
+        reorder(conn, kind, [str(i) for i in body.ids])
+        return listing(conn, kind)
+
+    if kind.groups:
+        @router.put("/layout")
+        @_runs(_reorder_sql(kind.groups), _layout_sql(kind), *lists)
+        def layout_route(body: LayoutIn, conn: Any = Depends(tenant_pool.tenant_conn)) -> dict[str, Any]:
+            return layout(conn, kind, [str(g) for g in body.groups],
+                          [(str(i.id), None if i.group_id is None else str(i.group_id)) for i in body.items])
 
     @router.get(one)
     @_runs(_get_sql(kind))

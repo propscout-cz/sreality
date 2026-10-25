@@ -13,6 +13,8 @@ TENANT_TABLES: tuple[str, ...] = (
     "tags",
     "property_notes",
     "filter_presets",
+    # Migration 672: the boxes presets sit in.
+    "filter_preset_groups",
     "notification_subscriptions",
     "collection_properties",
     "property_tags",
