@@ -66,6 +66,7 @@ from api.routes.billing import router as billing_router
 from api.routes.brokers import router as brokers_router
 from api.routes.broker_review import router as broker_review_router
 from api.routes.outreach import router as outreach_router
+from api.routes.filter_presets import group_router as filter_preset_groups_router
 from api.routes.filter_presets import router as filter_presets_router
 from api.routes.stats_dashboards import router as stats_dashboards_router
 from api.routes.images import router as images_router
@@ -308,6 +309,7 @@ app.include_router(broker_review_router)
 # /filter-presets/* (named Browse filter presets: CRUD) — per-account content on
 # the JWT + tenant pool (RLS). Decoupled from /notifications (a preset never fires).
 app.include_router(filter_presets_router)
+app.include_router(filter_preset_groups_router)
 # /stats/dashboards/* (named Stats dashboards: the same saved-set CRUD, plus read-only shares)
 # and /stats/dashboard (the account's working board) — tenant pool (RLS), migration 647.
 app.include_router(stats_dashboards_router)

@@ -261,6 +261,37 @@ bar, its dialog and the preset instance came to 707 (956 as first cut), not ~600
 data, a shared chip and instance menu entries. (11) Inherited from PresetBar: shadows and the 0.65rem caption, against
 system.md; a follow-up design pass may align both bars at once.
 
+## Groups (migration 672, 2026-10-25)
+
+**Operator ask (2026-10-25):** group the Browse presets: a group gets a bordered box, and a preset moves into a
+box, between boxes, or back out.
+
+A group is a saved set with no blob: `filter_preset_groups` (id, account_id, name 1..200, color under 201's
+palette, position, created_at, updated_at; RLS `filter_preset_groups_tenant_rw` on `current_account_ids()`, never
+acting). It is a second `SavedSetKind` (`GROUPS`, `blob_columns=()`) at `/filter-preset-groups`, with the six
+factory routes. `filter_presets.group_id` (NULL = loose) is keyed `(group_id, account_id)` →
+`filter_preset_groups (id, account_id)` `ON DELETE SET NULL (group_id)`. A preset can only name its own account's
+group. Deleting a group leaves its presets loose and deletes none of them.
+
+- **The kind option.** `SavedSetKind.groups` names the kind whose rows box this kind's. When it is set, every row
+  carries `group_id`, the list answers `{data, total, groups}`, and the router adds `PUT <prefix>/layout`
+  (`saved_sets.layout`). Dashboards declare no groups, so their SQL, rows and routes are unchanged.
+- **One order.** A preset's `position` stays one order over all the account's presets. The layout write sends the
+  loose row first, then each box in box order, so a surface that ignores groups (the phone's scope row) reads the
+  desktop order. `PUT /filter-presets/layout {groups: [ids], items: [{id, group_id}]}` rewrites the box positions
+  and every listed preset's position and group in one transaction, and answers with the canonical list. A group
+  the account does not hold trips the key: a 422, and nothing moves.
+- **The bar.** `SavedSetBar`'s optional `groups` prop (`SavedSetGroups`: items, words, `onLayout`, create / edit /
+  delete) draws each group as a box after the loose chips. A chip drags into a box, between boxes and back out, as in
+  dnd-kit's multiple-containers recipe. One `DndContext` holds the chips and the boxes, and a custom collision
+  makes a dragged box consider boxes only. While a boxed chip is dragged, a "Drop here to ungroup" target ends the
+  loose row. A box drags by its own grip. The chip menu offers "Move to <group>" and "Take out of group", which is
+  the keyboard and touch route. Folded ("Presety N"), the bar shows the active chip alone, with no boxes. The
+  arrangement logic is pure and unit-tested (`lib/savedSetLayout.ts`). `useSavedSet` takes `layout` and paints a
+  drop optimistically (`applyLayout`).
+- **Not built:** folding one box, boxes on the phone, and choosing a group in the save dialog. A new preset lands
+  loose: at the end of the loose row on the desktop, last on the phone.
+
 ## Subtraction ledger (production lines, tests and docs excluded)
 
 Planned: deleted the Table tab (~575, wave 1); `fetchDashboard`'s pgRead and the single-membership caveat (~20);

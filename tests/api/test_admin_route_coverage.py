@@ -248,6 +248,17 @@ _RLS_ONLY_ALLOWLIST: dict[str, str] = {
         "UPDATE by a list of ids — migration 290's USING clause is the row set, so another "
         "account's id matches nothing"
     ),
+    "PUT /filter-presets/layout": (
+        "UPDATE by a list of ids on both tables — the 290 and 672 USING clauses are the row sets, and "
+        "672's (group_id, account_id) key refuses another account's group"
+    ),
+    "GET /filter-preset-groups": "RLS-only read (migration 672 policy on `filter_preset_groups`)",
+    "GET /filter-preset-groups/{group_id}": "RLS-only read (migration 672)",
+    "PUT /filter-preset-groups/{group_id}": "UPDATE by id — migration 672 USING clause",
+    "DELETE /filter-preset-groups/{group_id}": "DELETE by id — migration 672 USING clause",
+    "PUT /filter-preset-groups/reorder": (
+        "UPDATE by a list of ids — migration 672's USING clause is the row set"
+    ),
     "GET /stats/dashboards": (
         "RLS-only read — migration 626's tenant policy (own) plus 647's shared-read arm "
         "(dashboards shared with the caller); labels through share_party_emails()"

@@ -437,6 +437,7 @@ describe('the dashboard on the URL', () => {
         updated_at: '',
         position: 0,
         color: null,
+        group_id: null,
       }),
     );
     const sp = params(result.current.search);

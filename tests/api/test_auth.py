@@ -252,7 +252,8 @@ def client(monkeypatch):
     monkeypatch.setattr(api_saved_sets, "create", lambda conn, kind, values, *, account_id: _dashboard)
     monkeypatch.setattr(api_saved_sets, "update", lambda conn, kind, set_id, fields: _dashboard)
     monkeypatch.setattr(api_saved_sets, "delete", lambda conn, kind, set_id: True)
-    monkeypatch.setattr(api_saved_sets, "reorder", lambda conn, kind, ids: [])
+    monkeypatch.setattr(api_saved_sets, "reorder", lambda conn, kind, ids: None)
+    monkeypatch.setattr(api_saved_sets, "layout", lambda conn, kind, groups, items: {"data": [], "total": 0})
     monkeypatch.setattr(
         api_stats_dashboards, "share_dashboard",
         lambda conn, open_identity_conn, dashboard_id, body: _dashboard,
@@ -369,6 +370,9 @@ def _jwt_gated_calls() -> list:
         # Saved sets + the Stats boards (migration 647): per account on the tenant pool.
         ("GET",    "/filter-presets", None),
         ("POST",   "/filter-presets", {"name": "p", "filter_spec": {}}),
+        ("PUT",    "/filter-presets/layout", {"items": []}),
+        ("POST",   "/filter-preset-groups", {"name": "g"}),
+        ("DELETE", f"/filter-preset-groups/{_DASHBOARD}", None),
         ("GET",    "/stats/dashboards", None),
         ("POST",   "/stats/dashboards", {"name": "n", "charts": []}),
         ("PUT",    "/stats/dashboards/reorder", {"ids": [_DASHBOARD]}),

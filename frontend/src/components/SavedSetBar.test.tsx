@@ -7,8 +7,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 import { ApiError } from '@/lib/api';
-import { PRESET_COPY } from './FilterPresetBar';
-import SavedSetBar, { type SavedSetBarProps, type SavedSetItem } from './SavedSetBar';
+import { PRESET_COPY, PRESET_GROUP_COPY } from './FilterPresetBar';
+import SavedSetBar, { type SavedSetBarProps, type SavedSetGroups, type SavedSetItem } from './SavedSetBar';
 
 /* The preset's words, plus the two a shared chip needs (presets have none). */
 const COPY = { ...PRESET_COPY, shared: { by: 'shared by', editedHint: 'Edited — save a copy of your own' } };
@@ -180,6 +180,104 @@ describe('<SavedSetBar> menus', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Delete…' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Confirm delete' }));
     await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Confirm delete' })).toBeEnabled());
+  });
+});
+
+describe('<SavedSetBar> groups', () => {
+  const GROUPS = [
+    { id: 'g1', name: 'Praha', color: 'plum' as const },
+    { id: 'g2', name: 'Brno', color: null },
+  ];
+  const grouped = (id: string, name: string, group_id: string | null): Item => ({ ...mine(id, name), group_id });
+  const GROUPED: Item[] = [grouped('a', 'Alfa', null), grouped('b', 'Beta', 'g1'), grouped('c', 'Gama', 'g1')];
+
+  function renderGroups(over: Partial<SavedSetGroups> = {}, props: Partial<SavedSetBarProps<Item>> = {}) {
+    const groups: SavedSetGroups = {
+      items: GROUPS,
+      copy: PRESET_GROUP_COPY,
+      onLayout: vi.fn(),
+      onCreate: vi.fn(async () => undefined),
+      onEdit: vi.fn(async () => undefined),
+      onDelete: vi.fn(async () => undefined),
+      ...over,
+    };
+    renderBar({ items: GROUPED, groups, ...props });
+    return groups;
+  }
+
+  it('draws each group as a box holding its chips, an empty one inviting a drag', () => {
+    renderGroups();
+    const praha = screen.getByRole('group', { name: 'Praha' });
+    expect(within(praha).getAllByRole('button', { name: /^(Alfa|Beta|Gama)$/ }).map((b) => b.textContent)).toEqual([
+      'Beta',
+      'Gama',
+    ]);
+    expect(within(screen.getByRole('group', { name: 'Brno' })).getByText('Drag presets here')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Alfa' }).closest('[role="group"]')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Move group: Praha' })).toBeInTheDocument();
+    // A lone loose chip still drags: it can go into a box.
+    expect(screen.getByRole('button', { name: 'Reorder preset: Alfa' })).toBeInTheDocument();
+  });
+
+  it('moves a chip into a box and back out from its menu, writing the whole layout', () => {
+    const { onLayout } = renderGroups();
+    openMenu('Alfa');
+    const entries = within(screen.getByRole('menu')).getAllByRole('menuitem').map((m) => m.textContent);
+    expect(entries).toEqual(['Edit…', 'Move to Praha', 'Move to Brno', 'Delete…']);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Move to Brno' }));
+    expect(onLayout).toHaveBeenLastCalledWith({
+      groups: ['g1', 'g2'],
+      items: [
+        { id: 'b', group_id: 'g1' },
+        { id: 'c', group_id: 'g1' },
+        { id: 'a', group_id: 'g2' },
+      ],
+    });
+    openMenu('Beta');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Take out of group' }));
+    expect(onLayout).toHaveBeenLastCalledWith({
+      groups: ['g1', 'g2'],
+      items: [
+        { id: 'a', group_id: null },
+        { id: 'b', group_id: null },
+        { id: 'c', group_id: 'g1' },
+      ],
+    });
+  });
+
+  it('creates and edits a group through the name and colour dialog', async () => {
+    const { onCreate, onEdit } = renderGroups();
+    fireEvent.click(screen.getByRole('button', { name: '+ New group' }));
+    const dialog = screen.getByRole('dialog', { name: 'New preset group' });
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Group name' }), { target: { value: 'Ostrava' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create group' }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledWith('Ostrava', null));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Group options: Praha' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit…' }));
+    const edit = screen.getByRole('dialog', { name: 'Edit group' });
+    expect(within(edit).getByRole('textbox', { name: 'Group name' })).toHaveValue('Praha');
+    fireEvent.click(within(edit).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onEdit).toHaveBeenCalledWith(GROUPS[0], 'Praha', 'plum'));
+  });
+
+  it('deletes a group in two steps, saying its presets stay', async () => {
+    const { onDelete } = renderGroups();
+    fireEvent.click(screen.getByRole('button', { name: 'Group options: Brno' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete group…' }));
+    expect(onDelete).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete group, keep presets' }));
+    await waitFor(() => expect(onDelete).toHaveBeenCalledWith(GROUPS[1]));
+  });
+
+  it('folded, shows the active chip alone with no boxes and no new-group button', () => {
+    localStorage.removeItem('test.groups.expanded');
+    renderGroups({}, { activeId: 'b', collapse: { label: 'Presety', storageKey: 'test.groups.expanded', show: 's', fold: 'f' } });
+    expect(screen.queryByRole('group')).toBeNull();
+    expect(screen.queryByRole('button', { name: '+ New group' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Beta' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Alfa' })).toBeNull();
   });
 });
 
