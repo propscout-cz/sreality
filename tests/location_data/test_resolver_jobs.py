@@ -218,7 +218,7 @@ def test_main_enqueues_the_sweep_before_the_drain_lease_is_even_attempted(monkey
     assert drain.main(["--full-sweep", "--max-seconds", "1"]) == 0
     executed = [t for t, _ in state["executed"]]
     inserts = [i for i, t in enumerate(executed) if t.startswith("insert into dirty_locations")]
-    acquires = [i for i, t in enumerate(executed) if "location_jobs" in t and "lease" in t]
+    acquires = [i for i, t in enumerate(executed) if "scheduled_jobs" in t and "lease" in t]
     assert inserts, "the sweep did not enqueue"
     assert acquires, "the drain never attempted its lease"
     assert max(inserts) < min(acquires), "the enqueue must run BEFORE the lease is attempted"
@@ -1078,9 +1078,9 @@ def test_the_lease_stays_on_the_callers_connection_and_no_worker_touches_it(monk
         list(range(301, 307)), workers=3, batch_size=2, parties=3, monkeypatch=monkeypatch)
 
     for conn in [caller, *opened]:
-        assert not [t for t in _texts(conn) if "location_jobs" in t]
+        assert not [t for t in _texts(conn) if "scheduled_jobs" in t]
     for fn in (drain.run, drain._run_workers):
-        assert "lease.held" not in inspect.getsource(fn)
+        assert "job_lease.held" not in inspect.getsource(fn)
     # ...and the caller's own connection runs the ONE corpus constant and nothing else: it
     # is the lease's connection, and a thread must never share it.
     assert [t for t in _texts(caller) if not t.startswith("set local")] == [

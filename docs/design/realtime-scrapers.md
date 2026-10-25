@@ -170,8 +170,8 @@ drain now also runs from this worker, not only from `location_resolve.yml`. The 
 round trips, not work — ~11 registry round trips per listing at ~120 ms from a US GitHub runner
 measured **0.7 listings/s**, and GitHub fires the schedule ~7x/day against a >100k queue. The
 worker sits beside the database in the EU (~1–2 ms) and runs continuously. It **reuses**
-`location_data.resolver.drain.run()` and `lease.held()` — no copy of the drain, the CAS or the
-resolver — and takes the SAME `location_jobs` lease row (`drain.JOB_NAME`, imported never
+`location_data.resolver.drain.run()` and `scraper.job_lease.held()` — no copy of the drain, the CAS
+or the resolver — and takes the SAME `scheduled_jobs` lease row (`drain.JOB_NAME`, imported never
 re-spelled) on the drain's own session-pooler connection, so the worker lane and the
 Actions lane can never drain at once; a busy lease is a cheap no-op (`{"acquired": false}` in
 the heartbeat, logged on the transition only). The GH lane stays the backstop and keeps
