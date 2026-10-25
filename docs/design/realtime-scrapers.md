@@ -84,18 +84,20 @@ the API's loop), so the API's one loop is the health teller*). It runs, as conti
    not a per-batch wake; the API runs none.*
 
 **Cold lane — GitHub Actions keeps** the delay-tolerant heavy work it does well and for
-free: full reconcile index walks (completeness + delisting evidence), image/CLIP backfills,
+free: full reconcile index walks (completeness + delisting evidence), CLIP backfills,
 dedup full scans + batch lanes, monitors, CI. Self-chaining (`SCRAPE_CHAIN_TOKEN`) is
 legacy backlog acceleration — do not extend it to new lanes. — *Since Actions-exit W0 (#2010,
-2026-10) this worker is the ONLY runtime of the detail drain, fresh-image downloads and the
-incremental property and broker maintenance: the five portal drains, `images_fresh.yml`,
+2026-10) this worker is the ONLY runtime of the detail drain, image downloads (#2011 added the
+inactive residue) and the incremental property and broker maintenance: the five portal drains, `images_fresh.yml`,
 `property_maintenance.yml` and `broker_resolution.yml` that ran beside it as backstops are
 deleted (in their last week the GitHub drains wrote 1–5 % of each portal's completions, bazos
 about 5 %; the PR's pre-checks hold the measurement).
 Still on GitHub for now: the walks and the daily property and broker sweeps (until the job runner
-takes them) and `images.yml`'s deep backlog (to be folded into the images lane, #2011); the four
-combined scrapers only walk since W1 (#2021). `realtime_drain_disabled_sources` therefore freezes a
-portal's queue: no other scheduled drain takes it over.*
+takes them); the four combined scrapers only walk since W1 (#2021). Since #2011 the images lane also
+drains the inactive-image residue `images.yml` owned (each tier walks the pending index newest-first,
+the residue filling what the active tier leaves), so no image download runs on GitHub.
+`realtime_drain_disabled_sources` therefore freezes a portal's queue: no other scheduled drain
+takes it over.*
 
 **Prerequisite: shared politeness.** `RateLimiter` is per-process; a Railway lane beside
 Actions walks would double-hit portals with two independent limiters. Before the probe lane
@@ -167,8 +169,8 @@ drain now also runs from this worker, not only from `location_resolve.yml`. The 
 round trips, not work — ~11 registry round trips per listing at ~120 ms from a US GitHub runner
 measured **0.7 listings/s**, and GitHub fires the schedule ~7x/day against a >100k queue. The
 worker sits beside the database in the EU (~1–2 ms) and runs continuously. It **reuses**
-`location_data.resolver.drain.run()` and `lease.held()` — no copy of the drain, the CAS or the
-resolver — and takes the SAME `location_jobs` lease row (`drain.JOB_NAME`, imported never
+`location_data.resolver.drain.run()` and `scraper.job_lease.held()` — no copy of the drain, the CAS
+or the resolver — and takes the SAME `scheduled_jobs` lease row (`drain.JOB_NAME`, imported never
 re-spelled) on the drain's own session-pooler connection, so the worker lane and the
 Actions lane can never drain at once; a busy lease is a cheap no-op (`{"acquired": false}` in
 the heartbeat, logged on the transition only). The GH lane stays the backstop and keeps

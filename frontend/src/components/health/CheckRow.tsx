@@ -253,8 +253,8 @@ function Message({ text }: { text: string }) {
 
 /* One cell: its word and dot, subject, value, message, and the facts worth a glance. An OK cell
  * hides below 768 px unless the link targets it. Only the first line of a subject carries its
- * anchor (and takes focus when a link lands on it), so a repeated subject (one `worker` cell per
- * heartbeat) never duplicates an id. */
+ * anchor (and takes focus when a link lands on it), so a repeated subject never duplicates an id
+ * (each worker heartbeat is its own `worker/<name>` subject since migration 675). */
 function CellLine({
   checkKey,
   cell,

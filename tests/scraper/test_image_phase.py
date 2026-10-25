@@ -301,12 +301,16 @@ def test_suspicious_stop_taken_down_does_not_count():
 
 
 class _ScriptedCursor:
-    def __init__(self, rows: list[tuple[Any, ...]]) -> None:
+    """Each execute() serves the next scripted row list (empty once exhausted)."""
+
+    def __init__(self, *results: list[tuple[Any, ...]]) -> None:
         self.executed: list[tuple[str, Any]] = []
-        self._rows = rows
+        self._results = list(results)
+        self._rows: list[tuple[Any, ...]] = []
 
     def execute(self, sql: str, params: Any = None) -> None:
         self.executed.append((sql, params))
+        self._rows = self._results.pop(0) if self._results else []
 
     def fetchall(self) -> list[tuple[Any, ...]]:
         return self._rows
@@ -319,15 +323,19 @@ class _ScriptedCursor:
 
 
 class _ScriptedConn:
-    def __init__(self, rows: list[tuple[Any, ...]]) -> None:
-        self.cursor_obj = _ScriptedCursor(rows)
+    def __init__(self, *results: list[tuple[Any, ...]]) -> None:
+        self.cursor_obj = _ScriptedCursor(*results)
 
     def cursor(self) -> _ScriptedCursor:
         return self.cursor_obj
 
 
+def _pending_row(image_id: int) -> tuple[Any, ...]:
+    return (image_id, image_id * 10, 0, f"https://cdn/{image_id}.jpg", "byty", "prodej", None)
+
+
 def test_pending_image_downloads_excludes_unavailable_and_given_up():
-    conn = _ScriptedConn([])
+    conn = _ScriptedConn()
     scraper_db.pending_image_downloads(conn, limit=500)
     sql, params = conn.cursor_obj.executed[0]
     assert "storage_path IS NULL" in sql
@@ -336,51 +344,49 @@ def test_pending_image_downloads_excludes_unavailable_and_given_up():
     assert params == (5, 500)
 
 
-def test_pending_image_downloads_active_only_filters_and_orders():
-    conn = _ScriptedConn([])
-    scraper_db.pending_image_downloads(conn, limit=500, active_only=True)
+def test_pending_image_downloads_reads_active_newest_first_without_a_sort_key():
+    # The active tier walks the pending index newest-first: no computed sort key,
+    # so the plan never sorts the whole pending set.
+    full = [_pending_row(i) for i in (9, 8, 7)]
+    conn = _ScriptedConn(full)
+    out = scraper_db.pending_image_downloads(conn, limit=3)
+    assert out == full
+    assert len(conn.cursor_obj.executed) == 1  # a full active tier never reads the residue
     sql, _params = conn.cursor_obj.executed[0]
     assert "l.is_active = true" in sql
-    # active_only path: pure newest-first within the active slice.
     assert "ORDER BY i.id DESC" in sql
+    assert "IS TRUE) DESC" not in sql
 
 
-def test_pending_image_downloads_default_orders_active_first():
-    conn = _ScriptedConn([])
-    scraper_db.pending_image_downloads(conn, limit=500)
-    sql, _params = conn.cursor_obj.executed[0]
-    # Default path tier-orders active before inactive, newest first.
-    assert "(l.is_active IS TRUE) DESC NULLS LAST, i.id DESC" in sql
+def test_pending_image_downloads_fills_the_rest_from_the_inactive_residue():
+    active = [_pending_row(9), _pending_row(8)]
+    residue = [_pending_row(3), _pending_row(1)]
+    conn = _ScriptedConn(active, residue)
+    out = scraper_db.pending_image_downloads(conn, limit=5)
+    assert out == active + residue
+    (sql_a, params_a), (sql_r, params_r) = conn.cursor_obj.executed
+    assert "l.is_active = true" in sql_a and params_a == (5, 5)
+    # The residue: inactive ads AND images whose listing row is missing.
+    assert "l.is_active IS NOT TRUE" in sql_r
+    assert "ORDER BY i.id DESC" in sql_r
+    assert params_r == (5, 3)
 
 
-def test_pending_image_downloads_shard_appends_modulo():
-    conn = _ScriptedConn([])
-    scraper_db.pending_image_downloads(conn, limit=500, shard=(2, 4))
-    sql, params = conn.cursor_obj.executed[0]
-    assert "(hashint8(i.listing_id) & 2147483647) %% %s = %s" in sql
-    # max_attempts, then shard (n, k), then limit — modulus N before remainder K.
-    assert params == (5, 4, 2, 500)
+def test_pending_image_downloads_returns_an_image_once_when_its_ad_flips_between_tiers():
+    # The tiers are two statements: an ad that goes inactive between them would
+    # otherwise put its image in both, and one batch would fetch it twice.
+    conn = _ScriptedConn([_pending_row(9)], [_pending_row(9), _pending_row(3)])
+    out = scraper_db.pending_image_downloads(conn, limit=5)
+    assert [r[0] for r in out] == [9, 3]
 
 
-def test_pending_image_downloads_sources_filter():
-    conn = _ScriptedConn([])
+def test_pending_image_downloads_sources_filter_scopes_both_tiers():
+    conn = _ScriptedConn()
     scraper_db.pending_image_downloads(conn, limit=500, sources=("idnes", "bazos"))
-    sql, params = conn.cursor_obj.executed[0]
-    assert "l.source = ANY(%s)" in sql
-    assert params == (5, ["idnes", "bazos"], 500)
-
-
-def test_pending_image_downloads_shard_and_sources_and_active():
-    conn = _ScriptedConn([])
-    scraper_db.pending_image_downloads(
-        conn, limit=500, active_only=True, shard=(0, 3), sources=("idnes",)
-    )
-    sql, params = conn.cursor_obj.executed[0]
-    assert "l.is_active = true" in sql
-    assert "l.source = ANY(%s)" in sql
-    assert "(hashint8(i.listing_id) & 2147483647) %% %s = %s" in sql
-    # Order of bound params: max_attempts, sources, shard(n, k), limit.
-    assert params == (5, ["idnes"], 3, 0, 500)
+    assert len(conn.cursor_obj.executed) == 2
+    for sql, params in conn.cursor_obj.executed:
+        assert "l.source = ANY(%s)" in sql
+        assert params == (5, ["idnes", "bazos"], 500)
 
 
 # ---- _run_image_downloads gates --------------------------------------------

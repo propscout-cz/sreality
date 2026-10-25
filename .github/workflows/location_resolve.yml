@@ -21,7 +21,7 @@ name: "Location: resolve"
 # resolution identity that now has three, `pin_clusters` fed a precision axis the answer
 # table does not carry, and the job had been unscheduled since 2026-08-11 anyway.
 #
-# Both jobs take a lease-row CAS on location_jobs, never a session advisory lock (a lock
+# Both jobs take a lease-row CAS on scheduled_jobs, never a session advisory lock (a lock
 # taken on one transaction-pooler backend and released on another strands), and the
 # concurrency group below is the second guard. The CAS is correct on either pooler mode,
 # which is why the drain can take the SESSION pooler for its prepared-statement throughput.
@@ -132,7 +132,7 @@ concurrency:
 #   and its chain the same afternoon; see the mode-conditional group above.
 #
 # Two guards remain and are the real ones: the job-level `location-resolve` group below
-# (this lane never overlaps ITSELF) and the `location_jobs` lease-row CAS in the drain
+# (this lane never overlaps ITSELF) and the `scheduled_jobs` lease-row CAS in the drain
 # (a second drainer — including the Railway worker lane — finds the lease held and exits).
 # Rails: tests/location_data/test_location_batch_hardening.py.
 

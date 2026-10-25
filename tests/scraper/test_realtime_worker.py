@@ -515,22 +515,19 @@ def test_images_pass_without_r2_logs_once_and_idles(monkeypatch, caplog):
     assert len(warnings) == 1
 
 
-def test_run_images_sync_reuses_main_machinery_active_only(monkeypatch):
+def test_run_images_sync_reuses_main_machinery_over_the_whole_queue(monkeypatch):
+    # No scope argument: the lane drains active ads first, then the inactive residue.
     from scraper import main as scraper_main
 
     seen: dict[str, Any] = {}
 
-    def fake_run(max_downloads, workers, active_only=False, **kw):
-        seen.update(
-            max_downloads=max_downloads, workers=workers, active_only=active_only,
-        )
+    def fake_run(*args, **kw):
+        seen.update(args=args, kw=kw)
         return _images_agg()
 
     monkeypatch.setattr(scraper_main, "_run_image_downloads", fake_run)
     assert rw._run_images_sync(250)["images_stored"] == 4
-    assert seen == {
-        "max_downloads": 250, "workers": rw.IMAGES_WORKERS, "active_only": True,
-    }
+    assert seen == {"args": (250, rw.IMAGES_WORKERS), "kw": {}}
 
 
 # --- heartbeat -----------------------------------------------------------------
@@ -1509,7 +1506,7 @@ def test_a_hung_pass_is_abandoned_and_the_lane_keeps_going(monkeypatch):
 # two things a test must pin are therefore identity (the shared JOB_NAME lease on
 # the drain's own connection, so the GH lane and this one can never drain at
 # once) and boundedness (a budget that stays under the in-flight Watch and the lane
-# pass timeout). Hermetic: drain.run / lease.held / open_connection are stubbed.
+# pass timeout). Hermetic: drain.run / job_lease.held / open_connection are stubbed.
 
 
 class _ResolveConn:
@@ -1560,7 +1557,7 @@ def _patch_resolver(
         return _stub_stats(workers=workers)
 
     monkeypatch.setattr(rw.db, "connect_session", lambda *a, **k: conn)
-    monkeypatch.setattr("location_data.resolver.lease.held", fake_held)
+    monkeypatch.setattr("scraper.job_lease.held", fake_held)
     monkeypatch.setattr("location_data.resolver.drain.run", run or default_run)
     monkeypatch.setattr(rw, "_read_location_resolve_max_seconds", lambda: 240)
     monkeypatch.setattr(rw, "_read_location_resolve_batch_size", lambda: 250)
@@ -1678,8 +1675,7 @@ def test_location_resolve_sync_takes_the_shared_resolver_lease(monkeypatch):
     # THE shared lease row — a re-spelled literal here would be a silent loss of
     # mutual exclusion with location_resolve.yml.
     assert captured["job_name"] == drain.JOB_NAME
-    assert captured["concurrency_group"] == drain.CONCURRENCY_GROUP
-    assert captured["ttl_seconds"] == rw._location_resolve_lease_ttl(240, 250)
+    assert captured["ttl_s"] == rw._location_resolve_lease_ttl(240, 250)
     # ...and it must be held on the connection the drain actually uses.
     assert captured["conn"] is conn
     assert captured["run_conn"] is conn
@@ -1748,7 +1744,7 @@ def test_location_resolve_sync_reports_transaction_pooler_fallback(monkeypatch):
 
 def test_location_resolve_sync_closes_the_connection_and_reraises_when_the_drain_fails(
         monkeypatch):
-    # The raise IS the signal: lease.held stamps last_outcome='failed' and
+    # The raise IS the signal: job_lease.held stamps last_outcome='failed' and
     # re-raises, _lane_loop records the failed pass. Swallowing it would make a
     # broken drain look like a healthy idle lane.
     def boom(*a, **k):
@@ -1796,7 +1792,7 @@ def test_location_resolve_sync_refuses_to_run_beside_an_abandoned_pass(
 
     _patch_resolver(monkeypatch, run=never)
     monkeypatch.setattr(
-        "location_data.resolver.lease.held",
+        "scraper.job_lease.held",
         lambda *a, **k: (_ for _ in ()).throw(
             AssertionError("the lease must not be touched while a pass is live")))
     assert rw._RESOLVE_PASS_LOCK.try_enter()  # stands in for the still-running thread

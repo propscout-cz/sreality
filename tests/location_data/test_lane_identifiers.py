@@ -12,19 +12,13 @@ The collision is not cosmetic. These strings are PRIMARY KEYS in the coordinatio
     scan_mode)` and nothing else — so two lanes sharing one would resume from each other's
     cursor over a different table, silently, and each would claim coverage the other
     achieved. No error, no duplicate row, just a hole where the unscanned rows were.
-  * `JOB_NAME` keys `location_jobs`, whose lease is a CAS on that row: two lanes sharing one
+  * `JOB_NAME` keys `scheduled_jobs`, whose lease is a CAS on that row: two lanes sharing one
     would lock each other out at random and each would log "another run holds the lease".
   * the extractor-version constants ride into `location_claim_batches.extractor_version`,
     which is what a run ledger's "what did this version write" question is answered by —
     two lanes sharing one makes it un-decidable. (W1-b: rollback itself is no longer scoped
     by that string. `contracts.retract` DELETEs by `contract_entry_id`, and
     `location_claim_retractions` is gone with the rest of the append-only ledger.)
-
-`CONCURRENCY_GROUP` is deliberately NOT in that list. It is the serialisation group, so
-sharing one is the mechanism working: `payload_prune` and `payload_backfill` both declare
-`location-payload` precisely because both move bodies in `portal_raw_payloads` and 01 §9.1's
-lease is what keeps them off each other. What IS checked about it is that a lane declaring
-one half of a lease declares the other.
 
 So the fix is a gate, not a rename. This file is that gate.
 
@@ -70,7 +64,6 @@ _NAMESPACE_OF: dict[str, str] = {
     # schedule must never mistake for its own.
     "READINGS_FAST_LANE": "lane",
     "JOB_NAME": "job_name",
-    "CONCURRENCY_GROUP": "concurrency_group",
     "INTAKE_VERSION": "extractor_version",
     # Kept as registered SPELLINGS of the same column even though rule 25 W1-a left one
     # claim lane: this map is what `test_a_lane_also_declares_the_version_it_stamps_on_its_
@@ -81,10 +74,6 @@ _NAMESPACE_OF: dict[str, str] = {
     "BACKFILL_VERSION": "extractor_version",
     "LLM_VERSION": "extractor_version",
 }
-
-# `concurrency_group` is scanned (the lease-halves test reads it) but exempt from
-# uniqueness: it is the serialisation group, so two lanes sharing one is the mechanism.
-_UNIQUE_NAMESPACES = frozenset({"lane", "job_name", "extractor_version"})
 
 _VERSION_NAMES = frozenset(
     name for name, namespace in _NAMESPACE_OF.items() if namespace == "extractor_version")
@@ -149,8 +138,6 @@ def _collisions(
     `location_claims_remine_archive` — one lane, one lease, one name)."""
     by_value: dict[tuple[str, str], set[str]] = {}
     for namespace, _name, value, module in declarations:
-        if namespace not in _UNIQUE_NAMESPACES:
-            continue
         by_value.setdefault((namespace, value), set()).add(module)
     return {key: sorted(modules) for key, modules in by_value.items() if len(modules) > 1}
 
@@ -171,7 +158,7 @@ def test_no_two_location_lanes_share_a_coordination_identifier():
         "two location lanes claim the same coordination identifier:\n"
         + "\n".join(f"  {namespace} = {value!r} in {', '.join(modules)}"
                     for (namespace, value), modules in sorted(found.items()))
-        + "\n\nThese strings are primary keys in `location_claim_batches` / `location_jobs`."
+        + "\n\nThese strings are primary keys in `location_claim_batches` / `scheduled_jobs`."
           " Sharing one is not a duplicate row, it is two lanes reading and overwriting each"
           " other's resume cursor with no error anywhere. Rename the NEWER lane (the one"
           " that has not run in production yet) and give it its own workflow + concurrency"
@@ -204,13 +191,6 @@ def test_a_lane_also_declares_the_version_it_stamps_on_its_batches():
         f"_NAMESPACE_OF so its uniqueness is checked too")
 
 
-def test_a_leased_lane_declares_both_halves_of_its_lease():
-    """`lease.held()` takes a job name AND a concurrency group; a lane that declares one
-    without the other has half a lease and the missing half becomes a literal at the call
-    site, where nothing checks it against anyone else's."""
-    assert _modules_declaring("JOB_NAME") == _modules_declaring("CONCURRENCY_GROUP")
-
-
 # ------------------------------------------------------------------ the detector itself
 
 def test_the_detector_reports_two_modules_claiming_one_value():
@@ -219,17 +199,6 @@ def test_the_detector_reports_two_modules_claiming_one_value():
         ("lane", "LANE", "location_claims_remine", "location_data/page_readers.py"),
     ]) == {("lane", "location_claims_remine"): [
         "location_data/claims_remine.py", "location_data/page_readers.py"]}
-
-
-def test_the_detector_exempts_the_serialisation_group():
-    """Two lanes sharing a concurrency group is the group doing its job — `payload_prune`
-    and `payload_backfill` share `location-payload` on purpose."""
-    assert _collisions([
-        ("concurrency_group", "CONCURRENCY_GROUP", "location-payload",
-         "location_data/payload_prune.py"),
-        ("concurrency_group", "CONCURRENCY_GROUP", "location-payload",
-         "location_data/payload_backfill.py"),
-    ]) == {}
 
 
 def test_the_detector_allows_one_module_to_reuse_a_value_across_namespaces():

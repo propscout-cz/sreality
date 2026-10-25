@@ -320,8 +320,8 @@ keeps writing and reading its own slices for its stalest-first order.
 The detail URL carries the category
 (`/detail/{sale}/{cat}/…`), so the drain derives each listing's category from its own URL —
 one config (the `portals` row, migrations 110/111) walks many categories (byty + domy ×
-prodej + pronájem today). Image-URL rows are recorded by the drain; the shared `images.yml`
-job downloads the bytes to R2 (source-agnostic).
+prodej + pronájem today). Image-URL rows are recorded by the drain; the realtime worker's
+`images` lane downloads the bytes to R2 (source-agnostic).
 
 **Data source (mmreality.cz).** A crawler (`scraper/mmreality_client.py`,
 `mmreality_parser.py`, `mmreality_main.py`, workflow `scrape_mmreality.yml` — pilot,
@@ -1460,8 +1460,8 @@ renumber.** Navigate by area:
    copy (`image_storage.copy_key`) so the next request makes it from the new bytes; none does
    today. Writing copies at download (two widths) waits on the operator's cost hold. Downstream, the
    image phase's bound is wall-clock (`--image-max-seconds`), not the count cap — per-image cost
-   moved, and a count cap calibrated against the old rate overruns the CI job timeout into a SIGKILL
-   that skips finalize.
+   moved, and a count cap calibrated against the old rate overran the CI image jobs' timeout into a
+   SIGKILL that skipped finalize (the worker's images lane bounds itself by its slice instead).
 7. **No new dependencies without justification.** Each entry in `pyproject.toml` should
    have a clear reason. Prefer the stdlib.
 8. **Latest-wins data model with snapshot history.** The `listings` table always reflects
@@ -5024,7 +5024,7 @@ the one member that is latency-bound rather than instance-bound — a handful of
 and one answer-row write per listing, no COPY, no corpus scan, no detoast — and it READS the claim
 spine the intake WRITES, so it never carried a must-never-overlap constraint, while at 0.7 listings/s
 and a queue above 100k a self-chaining group member starved it to zero ticks in three hours. Its
-guards are the job-level `location-resolve` group plus the `location_jobs` lease CAS, which is also
+guards are the job-level `location-resolve` group plus the `scheduled_jobs` lease CAS, which is also
 what keeps it exclusive against the always-on Railway worker's resolve lane. **No batch statement
 runs without a ceiling**: `statement_timeout = 0` is for genuine bulk phases (COPY, index build,
 whole-table rebuild) and nothing else; per-unit and per-batch work arms `SET LOCAL statement_timeout`

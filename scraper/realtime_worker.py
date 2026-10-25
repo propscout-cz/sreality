@@ -21,9 +21,10 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              `realtime_images_slice`-capped slice (default 500) of pending
              image downloads via the one existing machinery
              (scraper.main._run_image_downloads: per-host semaphore + breaker,
-             active-only newest-first) — the latency lever that feeds the
-             publication rule (a first stored photo, migrations 668/669). Coexists with
-             images.yml's deep backlog (idempotent storage_path-IS-NULL selection);
+             active ads newest-first) — the latency lever that feeds the
+             publication rule (a first stored photo, migrations 668/669). The
+             inactive residue fills what the active tier leaves of a slice, so
+             the lane is the only image drain (images.yml folded in, #2011);
              without R2 env vars the lane logs once and idles (the proxy-skip
              posture).
 - count_probe: every `realtime_sreality_count_interval_seconds` (default 600),
@@ -67,7 +68,7 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              default 4, clamped — a throughput knob, not a flag; see the
              constant block below). DARK until
              `realtime_location_resolve_enabled` is set. Safe beside
-             location_resolve.yml: both take the SAME location_jobs lease row.
+             location_resolve.yml: both take the SAME scheduled_jobs lease row.
 - location_intake_fast: every `LOCATION_INTAKE_FAST_INTERVAL_S` (default 60),
              ONE bounded pass of THE claim lane's incremental listing scan
              (location_data.claims_intake.run, the same code
@@ -210,8 +211,7 @@ DRAIN_MAX_SECONDS = 120.0
 LEDGER_MAX_WAIT_SECONDS = DRAIN_MAX_SECONDS
 IMAGES_INTERVAL_DEFAULT = 60
 IMAGES_SLICE_DEFAULT = 500
-# Modest beside the Actions lanes' 32: the worker slice is small and the lane
-# shares the CDNs with images.yml.
+# Modest: the worker slice is small (500 by default).
 IMAGES_WORKERS = 8
 HEARTBEAT_INTERVAL_SECONDS = 30.0
 # Ten missed beats. When no heartbeat pass has FINISHED for this long the watchdog exits
@@ -325,7 +325,7 @@ ESTIMATION_STUCK_MINUTES_DEFAULT = 15
 # dirty_locations queue. This worker sits next to the database in the EU, so the
 # same code costs ~1-2 ms per trip and runs continuously. The GH lane STAYS as
 # the backstop (and owns --full-sweep / --dry-run / --listing-id); the two can
-# never drain at once because both take the SAME location_jobs lease row.
+# never drain at once because both take the SAME scheduled_jobs lease row.
 # Named location_resolve, never "resolve"/"drain": this worker already has a
 # lane called `drain` (the portal detail drain) whose heartbeat key and
 # jobs cell (`lane/drain`) would become unreadable.
@@ -1311,12 +1311,12 @@ async def _drain_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None:
 
 
 def _run_images_sync(max_downloads: int) -> dict[str, Any]:
-    # Reuse THE image machinery (per-host semaphore, breaker, active-only +
-    # newest-first via db.pending_image_downloads) — never fork it. Lazy import
-    # keeps scraper.main off the worker's startup path.
+    # Reuse THE image machinery (per-host semaphore, breaker, active ads
+    # newest-first then the inactive residue via db.pending_image_downloads) —
+    # never fork it. Lazy import keeps scraper.main off the worker's startup path.
     from scraper.main import _run_image_downloads
 
-    return _run_image_downloads(max_downloads, IMAGES_WORKERS, active_only=True)
+    return _run_image_downloads(max_downloads, IMAGES_WORKERS)
 
 
 async def _images_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None:
@@ -1724,14 +1724,15 @@ def _tune_resolver_log_level(*, idle: bool) -> None:
 
 def _location_resolve_sync() -> dict[str, Any]:
     """One bounded pass of THE resolver drain (location_data.resolver.drain.run)
-    under THE shared location_jobs lease, so this lane and location_resolve.yml
+    under THE shared scheduled_jobs lease, so this lane and location_resolve.yml
     can never drain at once — plus an in-process lock, because an abandoned pass
     outlives its lease. Lazy import keeps location_data off the worker's startup
-    path; module-attribute calls (drain.run / lease.held) keep both patchable in
-    tests. No try/except around run(): a raise is the signal — lease.held stamps
-    last_outcome='failed' and re-raises, and _lane_loop records the failed
-    pass."""
-    from location_data.resolver import drain, lease
+    path; module-attribute calls (drain.run / job_lease.held) keep both patchable
+    in tests. No try/except around run(): a raise is the signal — job_lease.held
+    stamps last_outcome='failed' and re-raises, and _lane_loop records the
+    failed pass."""
+    from location_data.resolver import drain
+    from scraper import job_lease
 
     global _RESOLVE_SESSION_WARNED, _RESOLVE_LEASE_BUSY_LOGGED, _RESOLVE_LAST_IDLE
 
@@ -1766,28 +1767,26 @@ def _location_resolve_sync() -> dict[str, Any]:
         conn = db.connect_session()
         try:
             # The lease MUST be taken on the drain's own connection (drain.main
-            # does the same); JOB_NAME/CONCURRENCY_GROUP are imported, never
-            # re-spelled — a typo'd literal is a SILENT loss of mutual
-            # exclusion. cadence/runner only ever land on a fresh DB
-            # (_UPSERT_JOB_SQL is ON CONFLICT DO NOTHING); runtime attribution
-            # comes from lease_holder, so never "fix" location_jobs.runner by
-            # writing to it.
-            with lease.held(
+            # does the same); JOB_NAME is imported, never re-spelled — a typo'd
+            # literal is a SILENT loss of mutual exclusion. cadence/runner only
+            # ever land on a fresh DB (_UPSERT_LANE_SQL is ON CONFLICT DO
+            # NOTHING); runtime attribution comes from lease_holder, so never
+            # "fix" scheduled_jobs.runner by writing to it.
+            with job_lease.held(
                 conn,
                 drain.JOB_NAME,
                 cadence="15 minutes",
-                concurrency_group=drain.CONCURRENCY_GROUP,
                 runner="railway-realtime-worker",
-                ttl_seconds=_location_resolve_lease_ttl(max_seconds, batch_size),
+                ttl_s=_location_resolve_lease_ttl(max_seconds, batch_size),
             ) as acquired:
                 if not acquired:
                     if not _RESOLVE_LEASE_BUSY_LOGGED:
                         _RESOLVE_LEASE_BUSY_LOGGED = True
-                        # Never says WHY: _ACQUIRE_SQL carries `AND enabled`, so
-                        # a lease held by location_resolve.yml and an operator's
-                        # `location_jobs.enabled = false` are the same answer
-                        # here, and guessing between them misdirects whoever is
-                        # asking why the queue is not draining.
+                        # Never says WHY: a lease held by location_resolve.yml
+                        # and an operator's pause (scheduled_jobs.paused_until)
+                        # are the same answer here, and guessing between them
+                        # misdirects whoever is asking why the queue is not
+                        # draining.
                         LOG.info(
                             "LOCATION_RESOLVE lane skipped: the %s lease was not "
                             "acquired", drain.JOB_NAME,
