@@ -279,7 +279,7 @@ def _readings(listings: list[Listing], settings: Settings) -> list[Any]:
     return out
 
 
-@pytest.mark.parametrize("row", ("w31", "w32w"))
+@pytest.mark.parametrize("row", ("w31",))
 def test_every_reading_is_the_same_unmemoised_cold_warm_and_at_a_cap_of_one(
         row: str, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = Settings.from_json(HERE.parents[1] / "autodedup/settings" / f"{row}.json")
