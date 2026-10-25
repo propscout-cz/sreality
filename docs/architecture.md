@@ -4447,7 +4447,7 @@ writes is not evidence a portal published.
   with the active contract-version set it was taken under (`bazos@5,bezrealitky@2,…`) and honoured
   only while that set holds, because a bump is the one event that makes rows BELOW it eligible again;
   an unstampable body is re-fetched once per version set instead of once per pass.
-  Bodies are extracted **across PROCESSES** (`page_readers.extract_pages`, `os.cpu_count()` wide) —
+  Bodies are extracted **across PROCESSES** (`page_readers.extract_pages`, `scraper.cpus.job_cpus()` wide: the runner's `JOB_CPUS`, else the container's quota, never the host's core count) —
   the parse is pure CPU and threads cannot share it, one core held a 1 500-body batch at 143–313 s
   against ~48 s to fetch it — with `forkserver`, never `fork`, because the lane holds an open psycopg
   connection inside the batch transaction and a forked child finalizing its copy of that socket would

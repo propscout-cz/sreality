@@ -127,19 +127,17 @@ portals' structured pages don't: field-capture W7 runs it as the worker's `text_
 (`toolkit/description_extraction.py`), never in the scrape — the LLM is behind publication, never
 in front of it.
 The bezrealitky scrape is
-`scrape_bezrealitky.yml` ("Scraping: Bezrealitky scraper (pilot)", every 6h + dispatch; runs
-both index walk + detail drain in one job via `bezrealitky_main`). The maxima scrape is
-`scrape_maxima.yml` ("Scraping: Maxima Reality scraper (pilot)", every 6h + dispatch; the
-~220-listing catalogue fits both phases in one job via `maxima_main`). The mmreality scrape is
+`scrape_bezrealitky.yml` ("Scraping: Bezrealitky scraper (pilot)", every 6h + dispatch). The maxima scrape is
+`scrape_maxima.yml` ("Scraping: Maxima Reality scraper (pilot)", every 6h + dispatch). These four combined
+scrapers (bezrealitky, maxima, mmreality, remax) only WALK since Actions exit W1 (#2021): each workflow passes
+`--index-only` and the worker's drain lane drains them, as it already did nearly every row. The mmreality scrape is
 `scrape_mmreality.yml` ("Scraping: M&M Reality scraper (pilot)", cron `50 */6` + dispatch —
 every request via the residential `SCRAPER_PROXY_URL` (CF 403s datacenter IPs; `USE_PROXY` +
 `PROXY_REQUIRED=True` so the worker skips it when unset — idnes is proxied too but sets
 `PROXY_REQUIRED=False`, being throttled rather than blocked; ceskereality (own nginx, not CF) is the one
 portal with `CLIENT_HINTS=True`: since 09-29 it 403s a Chrome UA without sec-ch-ua hints, no proxy fixes);
-runs both phases in one job via `mmreality_main`, bounded by `--max-pages`/`--max-detail`). The remax
-scrape is `scrape_remax.yml` ("Scraping: RE/MAX scraper (pilot)", every 6h + dispatch; runs both
-phases in one job via `remax_main`, bounded by `--max-detail` + a `--max-seconds` budget so the
-~7,900-listing backlog drains over several ticks). The idnes scrape is
+bounded by `--max-pages`/`--max-seconds`). The remax scrape is `scrape_remax.yml` ("Scraping: RE/MAX
+scraper (pilot)", every 6h + dispatch; a `--max-seconds` walk budget). The idnes scrape is
 **cadence-split** like sreality (iDNES is large — 4,235 index pages, ~110k listings):
 `idnes_index_walk.yml` ("Scraping: iDNES Reality index walk", `idnes_main --index-only`, cron
 `15 */6`) feeds the worker's drain lane. idnes's `supports_complete_walk` was parked (migration 453) — posture only since

@@ -38,6 +38,7 @@ import os
 import re
 from typing import Any
 
+from scraper.cpus import job_cpus
 from scraper.dinov3_config import load_dinov3_config, validate_config
 
 # Geometry arms of the bake-off (ENCODER-DECISION §3.2). All three are implemented
@@ -188,7 +189,7 @@ def _load_model_and_processor(model_id: str, revision: str, torch_dtype, threads
     from transformers import AutoImageProcessor, AutoModel
 
     os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "60")
-    torch.set_num_threads(threads or (os.cpu_count() or 4))
+    torch.set_num_threads(threads or job_cpus())
     token = os.environ.get("HF_TOKEN")
     # `revision=` stays an EXPLICIT keyword at the call site, not a **kwargs member:
     # tests/test_clip_encoder_pin.py's AST sweep reads the call, and a pin it cannot

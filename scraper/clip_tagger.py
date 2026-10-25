@@ -19,6 +19,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from scraper.cpus import job_cpus
+
 _TAXONOMY_PATH = Path(__file__).resolve().parent.parent / "data" / "clip_taxonomy.json"
 
 
@@ -72,7 +74,7 @@ class Tagger:
         from transformers import CLIPModel, CLIPProcessor
 
         os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "60")
-        torch.set_num_threads(threads or (os.cpu_count() or 4))
+        torch.set_num_threads(threads or job_cpus())
         tax = load_taxonomy()
         model_id = tax["model"]
         # A bare model name resolves to whatever the hub's `main` holds at download

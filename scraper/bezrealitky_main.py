@@ -349,14 +349,19 @@ def main(argv: list[str] | None = None) -> int:
 
     # Index-walk (enqueue) then detail-drain (fetch + ingest), through the one
     # shared runner. Two scrape_runs rows ('index' + 'detail'), like sreality.
-    rc = portal_runner.run_phase(
-        portal, "index", portal_runner.run_index_walk, args.dry_run,
-        max_seconds=args.max_seconds,
-    )
-    if rc == 0:
+    # --index-only / --drain-only are the cadence split every portal shares (the
+    # schedule walks only: the realtime worker drains); omitting both runs both.
+    rc = 0
+    if not args.drain_only:
+        rc = portal_runner.run_phase(
+            portal, "index", portal_runner.run_index_walk, args.dry_run,
+            max_seconds=args.max_seconds,
+        )
+    if rc == 0 and not args.index_only:
         rc = portal_runner.run_phase(
             portal, "detail", portal_runner.run_detail_drain, args.dry_run,
             max_claims=max_detail, detail_workers=workers, detail_rate=rate,
+            max_seconds=args.max_seconds,
         )
     return rc
 
@@ -404,6 +409,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
             "suppressed (rule #3) rather than the job being killed by the CI "
             "timeout with nothing recorded; the drain uses it the same way."
         ),
+    )
+    p.add_argument(
+        "--index-only", action="store_true",
+        help="walk the index + enqueue only (no detail drain)",
+    )
+    p.add_argument(
+        "--drain-only", action="store_true",
+        help="drain the detail queue only (no index walk)",
     )
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--verbose", action="store_true")
