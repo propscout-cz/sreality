@@ -307,9 +307,8 @@ class SrealityClient(BasePortalClient):
         """
         if self._limiter is not None:
             self._limiter.acquire()
-        else:
-            if stop.wait(self.detail_delay_s - (time.monotonic() - self._last_detail_at)):
-                self._stopped()
+        elif stop.wait(self.detail_delay_s - (time.monotonic() - self._last_detail_at)):
+            self._stopped()
         url = DETAIL_URL.format(id=sreality_id)
         try:
             payload = self._get_json(url)

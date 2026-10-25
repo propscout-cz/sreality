@@ -49,7 +49,7 @@ from scraper.portal import (
 )
 from scraper.portal_identity import Resolved
 from scraper.rate_ledger import DEFAULT_LEASE_N, build_rate_limiter
-from scraper.rate_limit import RateLimiter
+from scraper.rate_limit import OUR_REFUSALS, RateLimiter
 
 LOG = logging.getLogger("scraper.portal_runner")
 
@@ -1129,7 +1129,7 @@ def run_detail_drain(
                     conn, lambda c: db.release_claims(c, portal.source, deferred),
                     reconnect=portal.connect_drain, label="drain.release",
                 )
-                if limiter.refused_reason in ("deadline", "stop"):
+                if limiter.refused_reason in OUR_REFUSALS:
                     LOG.info(
                         "DRAIN %s mid-chunk; %d claims handed back source=%s",
                         "stop signal" if limiter.refused_reason == "stop" else "time budget reached",
@@ -1182,8 +1182,8 @@ def run_detail_drain(
         "listings_inactive":    counts["gone"],
         "images_discovered":    counts["images_discovered"],
         "errors":               counts["errors"],
-        "budget_refused":       int(limiter.refused and limiter.refused_reason not in ("deadline", "stop")),
-        "deadline_stopped":     int(limiter.refused_reason in ("deadline", "stop")),
+        "budget_refused":       int(limiter.refused and limiter.refused_reason not in OUR_REFUSALS),
+        "deadline_stopped":     int(limiter.refused_reason in OUR_REFUSALS),
         "by_category":          [],
     }
     return (0, scrape_agg)
@@ -1256,8 +1256,9 @@ def run_phase(
     The contract is now explicit: **`ended_at` means the phase completed.** A
     crash bumps `errors` and deliberately leaves `ended_at` NULL before
     re-raising, so a crashed index walk never reads as a finished walk to the
-    `scraping` or `delisting` check (its walk cells keep aging). No check reads
-    `errors`.
+    `scraping` or `delisting` check. Once the stuck sweep stamps it, only the
+    categories it finished (each written as it ended, `db.bump_index_progress`)
+    count; the cells of the rest keep aging. No check reads `errors`.
 
     A stop signal (SIGTERM / SIGINT, `scraper.stop`) is the deadline arriving early:
     the phase ends after the request in hand, is finalized like any deadline stop

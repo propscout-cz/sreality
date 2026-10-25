@@ -16,6 +16,10 @@ import time
 
 from scraper import stop
 
+# Refusals of OUR making — the run's time budget ran out, or a stop signal arrived — as against "cap", a portal the
+# shared ledger blocked: the drain hands the claims back either way, but only "cap" is a blocked portal.
+OUR_REFUSALS = frozenset({"deadline", "stop"})
+
 
 class RateLimiter:
     def __init__(
@@ -35,11 +39,11 @@ class RateLimiter:
         self._recovery_factor = recovery_factor
         self._lock = threading.Lock()
         self._next_at = 0.0  # time.monotonic() reference
-        # Set once a bounded shared ledger (scraper/rate_ledger.py) refused this run a
-        # slot. Read by the runner, because every portal's fetch_detail turns the raised
-        # refusal into an ordinary "error" item. A local limiter never refuses.
-        # `refused_reason` says why: "cap" (the next slot lay past the caller's wait
-        # bound: a blocked portal) or "deadline" (the run's time budget ran out).
+        # Set once this run is refused a slot: by a bounded shared ledger (scraper/rate_ledger.py)
+        # or by a stop signal. Read by the runner, because every portal's fetch_detail turns the
+        # raised refusal into an ordinary "error" item. A local limiter refuses only on a stop.
+        # `refused_reason` says why: "cap" (the next slot lay past the caller's wait bound: a
+        # blocked portal), "deadline" (the run's time budget ran out) or "stop" (a stop signal).
         self.refused = False
         self.refused_reason: str | None = None
 
@@ -58,7 +62,8 @@ class RateLimiter:
     def refuse_on_stop(self) -> None:
         """After a stop signal, refuse the run and raise, so the runner hands every unfetched claim back."""
         if stop.requested():
-            self.refuse("stop")
+            if not self.refused:  # a portal the ledger already blocked stays reported as blocked
+                self.refuse("stop")
             raise stop.StopRequested("a stop signal arrived")
 
     def acquire(self) -> None:

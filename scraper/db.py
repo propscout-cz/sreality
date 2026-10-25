@@ -1500,8 +1500,9 @@ def sweep_stuck_scrape_runs(
 
     A GitHub-Actions job killed at the job timeout (SIGKILL) can't write
     ended_at; stamp it on the next API boot so no row stays open forever. The
-    row keeps by_category = '[]', so no health check ever counts it as a
-    finished walk. Counters are left as-is on purpose: the index walk
+    row keeps the by_category entries its walk wrote as each category ended
+    (#2019), so the health checks count exactly the categories it finished and
+    no other. Counters are left as-is on purpose: the index walk
     (bump_index_progress) and the detail-drain (bump_scrape_run_counts) persist their
     counts incrementally as they go, so a swept row already carries the real
     totals of whatever committed before the kill. The cutoff must stay above the
