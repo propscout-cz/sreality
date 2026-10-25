@@ -115,7 +115,7 @@ Both tables: RLS on, no browser grant, in `_ADMIN_ONLY_RELATIONS`; neither names
 **sw.js (+30), iOS 16.4–18.3:** `push` always calls `showNotification` ("Nové upozornění" → /notifications if unparsable) and `setAppBadge(app_badge)` in one `waitUntil`; `notificationclick` opens `data.navigate`. A vitest harness asserts both on every path (three silent pushes remove every subscription). It ships 24 h before W5; its header notes that unregistering ends push below 18.4.
 
 **Routes (four), all in `_NEVER_ACTS`:**
-- `GET /push/key`: `require_token`, no connection; the public key derived from `VAPID_PRIVATE_KEY` (one shared variable, API + worker; no `VITE_`), 503 when unset.
+- `GET /push/key`: `require_token`, no connection; the public key derived from `VAPID_PRIVATE_KEY` (the same value set on the API and on the worker, per service: they are separate Railway projects; no `VITE_`), 503 when unset.
 - `PUT`/`DELETE /push/subscription`, `POST /push/opened`: `require_account_id`, then `deps.open_background_conn` (the share routes' shape and rail, named in tenancy.md). PUT checks host, key lengths and Origin (non-Apple → 422), keeps 10 live devices (built: the least recently seen beyond 10 'replaced'; 5 in the plan), and in one transaction ends another account's live row for the endpoint, then upserts the caller's without touching `created_at`. DELETE ends it (signed_out | switched_off). opened stamps `opened_at` on the caller's tapped push.
 
 ### 3.5 Renderer and link
@@ -192,7 +192,7 @@ Migration numbers are claimed at merge (648 is #1938's). Additive ones run throu
 - **Scope:** push.py, lane, renderer, routes, share cap; sw.js + vitest; `/n/:dispatchId` pinned in the route contract with its emitter; the Health check; `_NEVER_ACTS`, share-route rail, `_ADMIN_ONLY_RELATIONS`, tenancy.md shape; rule 16 and ruling 5(e) for shares. **Migration D (additive):** the two tables, no seeds.
 - **Gate:** RFC vector, TTL floor, sanitised-error tests; CI-Postgres: concurrent claims never share a row, a killed claim returns after its lease, a 429 holds the device; lane "unconfigured", then "no devices"; `/push/key` 503 then 200; sw.js served ≥ 24 h before W5.
 - **Docs:** architecture.md § service worker; scraper-ops (lane, check); toolkit-api env table.
-- **You:** R7, R11. You run a one-line generator I give you that writes the key to a file only you can read and prints nothing, so it never enters this session; then Railway → Shared Variables → New → `VAPID_PRIVATE_KEY` → paste → attach to API and realtime-worker → delete the file.
+- **You:** R7, R11. You run a one-line generator I give you that writes the key to a file only you can read and prints nothing, so it never enters this session; then Railway → project API → service sreality → Variables → New Variable `VAPID_PRIVATE_KEY` → paste → Deploy, and the same in project realtime-worker (separate Railway projects, so a Shared Variable cannot span them) → delete the file. *(Corrected 2026-10-25; the key was set this way the same day.)*
 
 **W5: phone surfaces and on-device proof.**
 - **Scope:** bell, Shell observer, badge; switch, usePush, identity binding; phone-width feed; PhoneShell's "no bell" comment and test; GLOSSARY (Notification, Push device).

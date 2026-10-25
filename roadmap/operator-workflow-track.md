@@ -66,8 +66,8 @@ account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, e
       /push/subscription`, `POST /push/opened` (never act); the Czech renderer; the worker's `push` lane (15 s; fan-out
       with the one-share-a-day cap R11, a 2-min leased claim, one push per device, a 429 holds the device); the
       `notifications` Health check (stall, recall, failures, unconfigured). **Operator:** generate `VAPID_PRIVATE_KEY`
-      with the toolkit-api one-liner, paste it as a Railway Shared Variable on the API AND the realtime-worker, delete the
-      file. Gate: CI-Postgres lease/claim/429 tests green; lane `unconfigured`, then `live_devices` 0; `/push/key` 503
+      with the toolkit-api one-liner, paste the same value into each service's Variables (the API and the realtime-worker are separate Railway
+      projects), delete the file — done 2026-10-25. Gate: CI-Postgres lease/claim/429 tests green; lane `unconfigured`, then `live_devices` 0; `/push/key` 503
       then 200. The SPA half (sw.js, the switch, `/n/:dispatchId`) is #1948.
 - [x] **W5a (merged #1947 + live 2026-10-22)** — the phone surfaces that need no push plumbing
       (R4, F9): one unread observer in Shell for both frames and the page (`lib/unreadCount`), the app-icon badge
