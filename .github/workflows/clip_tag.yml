@@ -12,6 +12,9 @@ name: Dedup — CLIP image tagging (sharded)
 # (transformers); the production CLIP could move to int8-ONNX later as an
 # optimization.
 #
+# Each shard then re-tags from stored embeddings when a taxonomy campaign is open (the last
+# step; clip_retag.yml folded in, #2014).
+#
 # Required secrets: SUPABASE_DB_URL + the R2_* set (same as compute_image_phash.yml).
 
 on:
@@ -103,3 +106,14 @@ jobs:
           fi
           if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
           python -m scripts.clip_tag_backfill $ARGS
+
+      # Re-tag ALREADY-tagged images from their STORED embeddings (image_clip_embeddings) —
+      # no R2 download, no re-inference, just the live taxonomy's text anchors dotted with each
+      # vector: how a taxonomy change reaches the back catalogue. Campaign-driven: rows tagged
+      # before app_settings.clip_taxonomy_retag_after are re-tagged and stamped, so a campaign
+      # self-drains; with none open the script pre-checks without loading the model and exits
+      # (3-5 s). Runs even when tagging failed (it reads no R2). The 30-min budget fits the
+      # 55-min job beside the tag step (p95 12 min, max 17 min over the last 48 runs).
+      - name: Re-tag from stored embeddings
+        if: ${{ !cancelled() && inputs.dry_run != 'true' }}
+        run: python -m scripts.retag_from_embeddings --shards 4 --shard ${{ matrix.shard }} --max-seconds 1800 --limit 0

@@ -30,7 +30,6 @@ _UNPINNED_ALLOWED = {
 
 _TAGGING_WORKFLOWS = (
     "clip_tag.yml",
-    "clip_retag.yml",
     "label_proposal_backfill.yml",
 )
 
@@ -90,7 +89,25 @@ def test_embedding_writer_stamps_the_revision():
 
 
 def test_tagging_workflows_exist():
-    # These three are the only installers of the clip extra; if one is renamed the
+    # These two are the only installers of the clip extra; if one is renamed the
     # pin's blast radius changes and this file's assumptions need re-checking.
     for name in _TAGGING_WORKFLOWS:
         assert (_ROOT / ".github" / "workflows" / name).exists(), name
+
+
+def test_retag_runs_in_the_tagging_workflow_after_tag_in_each_shard():
+    # One torch install per shard serves both: the hourly retag workflow installed it four times
+    # an hour to find nothing to re-tag (#2014).
+    import yaml
+
+    assert not (_ROOT / ".github" / "workflows" / "clip_retag.yml").exists()
+    doc = yaml.safe_load((_ROOT / ".github" / "workflows" / "clip_tag.yml").read_text())
+    (job,) = doc["jobs"].values()
+    assert job["strategy"]["matrix"]["shard"] == [0, 1, 2, 3]
+    runs = [step.get("run", "") for step in job["steps"]]
+    tag = next(i for i, run in enumerate(runs) if "scripts.clip_tag_backfill" in run)
+    retag = next(i for i, run in enumerate(runs) if "scripts.retag_from_embeddings" in run)
+    assert tag < retag
+    assert "--shards 4 --shard ${{ matrix.shard }}" in runs[retag]
+    # A failed tag step (an R2 outage) must not stop the retag, which reads only stored vectors.
+    assert job["steps"][retag]["if"] == "${{ !cancelled() && inputs.dry_run != 'true' }}"
