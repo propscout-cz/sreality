@@ -115,7 +115,7 @@
 -- hand-read of the active komerční hits (done 2026-10-25: right on ~93 %; the REVERSE case -- an areál, farm,
 -- camp or petrol station whose TRUE parcel is typed into both boxes -- ~170 active rows, 93 confirmed by the
 -- advert's own text) answered by the operator's ruling of 2026-10-25 (the text evidence above, which keeps those
--- the text confirms), the (b) arm's measured read ruled on, and the autodedup programme told. This file clears
+-- the text confirms), the (b) arm KEPT at merge (2026-10-25: a kept figure loses nothing), and the autodedup programme told. This file clears
 -- the same class on the stored rows, inactive ones included (the backup keeps every value).
 --   1. The plot rule DEPLOYED (Railway's commit status for the realtime-worker + the next detail drain on main).
 --      Before that, a live detail refetch RE-WRITES an echo (`estate_area` is a `structured` cell, so the
@@ -124,12 +124,13 @@
 --   3. The off-database copy (to R2, the database skill's destructive gate):
 --        gh workflow run backup_before_drop.yml -f label=plot-echo-heal -f targets="listings:id,estate_area"
 --   4. The operator's OK (destructive).
---   5. The autodedup lane paused if the programme wants a fresh seed (interval 0): this file writes NO
---      snapshot, so the lane's `changed` feed (listing_snapshots) never sees a healed row, and the engine's
---      plot features (`plot_area_rel_diff` / `plot_area_exact`) read the echo until it re-reads the rows.
+--   5. NO autodedup re-seed and no pause (the programme's answer, 2026-10-25): this file writes NO snapshot, so the
+--      lane's `changed` feed never sees a healed row, but the live settings already discount the echo
+--      (`d43_plot_column_echo`) and E960 re-reads members' current facts before any merge; a re-claim of the
+--      affected in-scope ads through the normal queue is offered on the operator's OK.
 --   6. gh workflow run apply_migration.yml --ref main -f file=671_plot_column_echo_heal.sql
 --      -f dry_run=false -f confirm=APPLY
---   7. `rt_seed fresh=true` (or what the programme decides), then resume the lane; re-run the COUNT QUERY --
+--   7. Re-run the COUNT QUERY --
 --      expected: no rows (re-run this file if a row a concurrent drain held was skipped).
 --   8. Re-bless the field census from a terminal with SUPABASE_DB_URL (`python -m scraper.field_census --bless`)
 --      and commit the regenerated `data/field_capture/` files in a small follow-up PR: ceskereality `estate_area` is

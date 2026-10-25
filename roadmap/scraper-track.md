@@ -434,13 +434,17 @@ Independent of the analytical, UI, and map tracks.
   "zastavěná plocha a nádvoří 705 m², zahrada 547 m²") and about half a multi-storey building's
   floor area beside its smaller footprint ("zastavěná 336 m², užitná 490 m²", mostly under
   1,000 m²).
-  **Owed before the rule merges:** the operator reads the (b) result and rules (keep it, or drop
-  (b) so a built-up statement alone keeps nothing); the autodedup programme told (the live-lane
-  plot features `plot_area_rel_diff` / `plot_area_exact` move at each row's first refetch).
+  **Ruled at merge (2026-10-25, the cleanup session; the operator informed in PR #1999):** (b) is KEPT —
+  a kept figure loses nothing (the ~19 echoes it keeps are the status quo and stay the text lane's to
+  read), while dropping it would blank ~19 true parcels. The autodedup programme was told (sizes sent
+  2026-10-25; no objection; the live-lane plot features `plot_area_rel_diff` / `plot_area_exact` move
+  at each row's first refetch).
   **Owed after the rule is live (migration 671, same PR, unapplied until then):** the count re-run against the
   header's census and stop conditions (895 active komerční hits carry no basis stamp; 1 sreality
-  P2 row); `backup_before_drop.yml`; the operator's OK; the autodedup lane paused for a re-seed
-  (the heal writes no snapshot); the apply from `main` (`apply_migration.yml --ref main`); `rt_seed fresh=true`; then re-bless the field census (`python -m scraper.field_census
+  P2 row); `backup_before_drop.yml`; the operator's OK; NO re-seed and no pause (the autodedup session,
+  2026-10-25: the engine already discounts the echo via `d43_plot_column_echo`, and E960 re-reads members' current facts before a merge;
+  it offers a re-claim of the affected in-scope ads through the normal queue on the operator's OK); the apply from `main`
+  (`apply_migration.yml --ref main`); then re-bless the field census (`python -m scraper.field_census
   --bless`): ceskereality `estate_area` is blessed at fill 0.6145 and the heal takes it to ~0.52
   (30,275 → 25,734 of 49,383 active), 9.3 pp — 0.7 pp short of `parsing_fill_drop_warn_pp`.
   **Owed later:** the mmreality-dum residue check; the optional `verify_pipeline` arm (byt /
