@@ -1,5 +1,5 @@
 -- 671_plot_column_echo_heal.sql -- clear the stored plots that are not plots: a flat's (every one), and a
--- commercial unit's that merely repeats its own floor figure.
+-- commercial unit's that merely repeats its own floor figure while its own advert text does not say it is the parcel.
 --
 -- ===================================================================================================
 -- DESTRUCTIVE (a stored value becomes NULL). APPLY ONLY AFTER the plot rule (`scraper.area.stated_plot`,
@@ -21,8 +21,10 @@
 -- inactive or unchanged row is never refetched.
 --
 -- THE RAILS. The predicate below is exactly the parser rule over the stored cells. Its literals are pinned to the
--- Python constants by tests/test_migration_671_rails.py (the category sets, the labelled bases, and the
--- predicate replayed against `stated_plot` over a grid) and the file is EXECUTED over seeded hits and misses by
+-- Python constants by tests/test_migration_671_rails.py (the category sets, the labelled bases, the text-evidence
+-- pattern `scraper.area.PLOT_TEXT_EVIDENCE_SRC` with its separator class and dotted-thousands test -- carried here
+-- VERBATIM, one text Python's `re` and Postgres's regex both read -- and the predicate replayed against `stated_plot`
+-- over a grid of cells and descriptions) and the file is EXECUTED over seeded hits and misses by
 -- tests/test_migration_671_live.py (CI migrations job):
 --   P1  byt with any estate_area (`PLOT_FREE_CATEGORIES`): a flat never carries a plot. On ceskereality the
 --       flat "plots" were the doubled floor figure, the placeholder 1, the whole building's parcel or a
@@ -30,19 +32,32 @@
 --   P2  komercni whose estate_area equals the usable measure, OR equals the headline `area_m2` when
 --       `area_basis` is a LABELLED interior measure ('usable' / 'floor' / 'total' = `PLOT_ECHO_BASES`).
 --       NOT compared, by the ruling: a title / prose fallback (basis 'unknown' -- "Prodej areálu 3 400 m²" IS
---       the site), zastavěná plocha (a building may cover its whole parcel), and a HOUSE (the operator kept the
---       dum rule as it is; a garage's parcel really is its footprint). Equality is the columns' own:
---       numeric(9,1) against numeric(9,1) / numeric(7,1) -- what the Python rule compares too (0.1 m², half up).
+--       the site), a zastavěná plocha figure for equality (a building may cover its whole parcel), and a HOUSE
+--       (the operator kept the dum rule as it is; a garage's parcel really is its footprint). Equality is the
+--       columns' own: numeric(9,1) against numeric(9,1) / numeric(7,1) -- what the Python rule compares too
+--       (0.1 m², half up).
+--       EXCEPT when the advert's own `description` says the figure is a parcel (operator, 2026-10-25: equality
+--       alone is not evidence): (a) it states a parcel ("pozemek" / "parcela" in any case form, "plocha
+--       pozemku" ...) EQUAL to the figure (m² or ha, at column scale) -- kept; else (c) a parcel it states that
+--       DIFFERS -- the box echoes the floor, a hit; else (b) a built-up area ("zastavěná plocha" ...) SMALLER
+--       than the figure -- kept; else (d) no statement -- a hit. The title is not read: no stored column holds it.
 -- NOT HERE: dum, pozemek (area_m2 IS the plot), ostatni. UNDER-HEAL, NAMED (not a false hit): a komerční echo
 -- that predates the basis stamp with `usable_area` NULL (the realitymix "Plocha" shape: usable NULL, basis
 -- NULL) is missed; the usable arm still catches a pre-stamp row whose `usable_area` carries the figure.
 --
--- CENSUS (2026-10-25, read-only, this file's own predicate; 2026-09-30 counted ACTIVE rows only):
+-- CENSUS (2026-10-25, read-only, this file's own predicate WITH the text evidence; 2026-09-30 counted ACTIVE
+-- rows only):
 --   P1 byt       active 3,218   inactive 6,751
---   P2 komercni  active 2,356   inactive 2,079
---   = 14,404 listings on 13,244 properties.
---   Active rows with area_basis NULL among the hits: 1,579 (ceskereality byt 654, ceskereality komercni 499,
---   idnes komercni 367, realitymix komercni 59) -- rows whose last detail write predates the basis stamp.
+--   P2 komercni  active 2,226   inactive 1,961
+--   = 14,156 listings on 13,020 properties (5,444 active).
+--   The text evidence keeps 248 komerční plots the equality alone cleared (the first census, 14,404 listings on
+--   13,244 properties, had P2 active 2,356 / inactive 2,079): active 92 by (a) + 38 by (b), inactive 89 + 29.
+--   Still cleared among the 2,356 active equality hits: 149 by (c), 2,077 by (d) -- 104 of those at >= 3,000 m²,
+--   where the hand-read found about half to be areál sites whose text names no parcel (the named residual).
+--   (b) is the weak arm: of the 38 active rows it keeps, a read found about half parcels and about half a
+--   multi-storey building's floor area beside its smaller footprint -- the operator rules on it (scraper track W22).
+--   Active rows with area_basis NULL among the hits: 1,549 (ceskereality byt 654, ceskereality komercni 497,
+--   idnes komercni 341, realitymix komercni 57) -- rows whose last detail write predates the basis stamp.
 --   sreality: 7 P1 rows, 1 P2 row (it publishes no plot on a flat or a commercial unit as a rule).
 --
 -- THE COUNT QUERY (read-only). Run it before the apply, record it with the apply, and again after:
@@ -56,7 +71,32 @@
 --             or (category_main = 'komercni'
 --                 and (estate_area = usable_area
 --                      or (estate_area = area_m2
---                          and area_basis in ('usable','floor','total')))))
+--                          and area_basis in ('usable','floor','total')))
+--                 and not coalesce((
+--                   select bool_or(e.parcel and e.m2 = estate_area)
+--                          or (not bool_or(e.parcel) and bool_or(not e.parcel and e.m2 < estate_area))
+--                     from (select m[1] !~ '^[Zz]' as parcel,
+--                                  round(replace(case when n.t ~ '^[0-9]{1,3}(?:\.[0-9]{3})+(?:,[0-9]+)?$'
+--                                                     then replace(n.t, '.', '') else n.t end,
+--                                                ',', '.')::numeric
+--                                        * case when m[3] ~ '^[hH]' then 10000 else 1 end, 1) as m2
+--                             from regexp_matches(description,
+--                    '(?<![A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽa-záčďéěíňóřšťúůýž])([Pp]ozem|POZEM|[Pp]arcel|PARCEL|[Zz]asta'
+--                    'v[ěe]n|ZASTAV[ĚE]N)[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽa-záčďéěíňóřšťúůýž]*(?:(?!(?:[0-9]{1,3}(?:['
+--                    '\u0020\u00a0\u202f\u2009\u200b\u200c\u200d\u2060][0-9]{3})+(?:[.,][0-9]+)?|[0-9]{1,3'
+--                    '}(?:\.[0-9]{3})+(?:,[0-9]+)?|[0-9]+(?:[.,][0-9]+)?)[\u0020\u0009\u000a\u000d\u00a0'
+--                    '\u202f\u2009]*(?:[mM](?:²|[\u0020\u0009\u000a\u000d\u00a0\u202f\u2009]?2)|[hH][aA]|['
+--                    'hH]ektar[a-záčďéěíňóřšťúůýž]*)(?![0-9A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽa-záčďéěíňóřšťúůýž])|[Pp]ozem'
+--                    '|POZEM|[Pp]arcel|PARCEL|[Zz]astav[ěe]n|ZASTAV[ĚE]N|[.][\u0020\u0009\u000a\u000d'
+--                    '\u00a0\u202f\u2009]*[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ]|[\u000a\u000d][\u0020\u0009\u000a\u000d'
+--                    '\u00a0\u202f\u2009]*[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ])[^•|;!?]){0,40}([0-9]{1,3}(?:[\u0020\u00a0'
+--                    '\u202f\u2009\u200b\u200c\u200d\u2060][0-9]{3})+(?:[.,][0-9]+)?|[0-9]{1,3}(?:\.[0-9]{'
+--                    '3})+(?:,[0-9]+)?|[0-9]+(?:[.,][0-9]+)?)[\u0020\u0009\u000a\u000d\u00a0\u202f\u2009]*'
+--                    '([mM](?:²|[\u0020\u0009\u000a\u000d\u00a0\u202f\u2009]?2)|[hH][aA]|[hH]ektar[a-záčďé'
+--                    'ěíňóřšťúůýž]*)(?![0-9A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽa-záčďéěíňóřšťúůýž])', 'g') m,
+--                                  lateral (select regexp_replace(m[2], '[\u0020\u00a0\u202f\u2009\u200b\u200c\u200d\u2060]', '', 'g')
+--                                             as t) n) e),
+--                   false)))
 --   ) r group by rail, source, category_main, is_active, area_basis
 --   order by rail, source, category_main, is_active, area_basis;
 --
@@ -64,7 +104,7 @@
 --   1. any row's category_main is not 'byt' or 'komercni' (impossible by construction: the predicate moved).
 --   2. any P2 row carries area_basis = 'plot': a dwelling stamped as land is a row re-categorised after a
 --      land-era derive -- OUR residue, not the advertiser's. 0 on 2026-10-25.
---   3. the ACTIVE komerční rows with area_basis NULL (925 on 2026-10-25) moved by more than 10 % since: they hit
+--   3. the ACTIVE komerční rows with area_basis NULL (895 on 2026-10-25) moved by more than 10 % since: they hit
 --      by the usable arm alone, and an active unstamped row was never re-derived. The 2026-10-25 hand-read read
 --      them with the rest (it sorted every active hit, whatever its basis). (A flat hits whatever its basis.)
 --   4. the ACTIVE P2 total is over 3,000 or the ACTIVE P1 total is over 4,000, or all rails over 18,000: the
@@ -74,8 +114,9 @@
 -- APPLY ORDER. Before any of it, this PR (rule + heal) merged past its gate (scraper track W22): the stratified
 -- hand-read of the active komerční hits (done 2026-10-25: right on ~93 %; the REVERSE case -- an areál, farm,
 -- camp or petrol station whose TRUE parcel is typed into both boxes -- ~170 active rows, 93 confirmed by the
--- advert's own text) read and ruled on by the operator, and the autodedup programme told. This file clears the
--- same class on the stored rows, inactive ones included (the backup keeps every value).
+-- advert's own text) answered by the operator's ruling of 2026-10-25 (the text evidence above, which keeps those
+-- the text confirms), the (b) arm's measured read ruled on, and the autodedup programme told. This file clears
+-- the same class on the stored rows, inactive ones included (the backup keeps every value).
 --   1. The plot rule DEPLOYED (Railway's commit status for the realtime-worker + the next detail drain on main).
 --      Before that, a live detail refetch RE-WRITES an echo (`estate_area` is a `structured` cell, so the
 --      parse's value lands on every write); a row that did gets caught by a re-run after deploy.
@@ -92,8 +133,8 @@
 --      expected: no rows (re-run this file if a row a concurrent drain held was skipped).
 --   8. Re-bless the field census from a terminal with SUPABASE_DB_URL (`python -m scraper.field_census --bless`)
 --      and commit the regenerated `data/field_capture/` files in a small follow-up PR: ceskereality `estate_area` is
---      blessed at fill 0.6145 and this file takes it to ~0.52 (30,267 -> 25,679 of 49,367 active on
---      2026-10-25), a 9.4 pp drop 0.6 pp short of `parsing_fill_drop_warn_pp` -- the parsing cell must measure
+--      blessed at fill 0.6145 and this file takes it to ~0.52 (30,275 -> 25,734 of 49,383 active on
+--      2026-10-25), a 9.3 pp drop 0.7 pp short of `parsing_fill_drop_warn_pp` -- the parsing cell must measure
 --      the new intended fill, not drift into Watch.
 --   9. Re-run the COUNT QUERY once more after the next detail drain; a re-run of this file is safe.
 --
@@ -170,7 +211,32 @@ with hit as (
           or (l.category_main = 'komercni'
               and (l.estate_area = l.usable_area
                    or (l.estate_area = l.area_m2
-                       and l.area_basis in ('usable','floor','total')))))
+                       and l.area_basis in ('usable','floor','total')))
+              and not coalesce((
+                select bool_or(e.parcel and e.m2 = l.estate_area)
+                       or (not bool_or(e.parcel) and bool_or(not e.parcel and e.m2 < l.estate_area))
+                  from (select m[1] !~ '^[Zz]' as parcel,
+                               round(replace(case when n.t ~ '^[0-9]{1,3}(?:\.[0-9]{3})+(?:,[0-9]+)?$'
+                                                  then replace(n.t, '.', '') else n.t end,
+                                             ',', '.')::numeric
+                                     * case when m[3] ~ '^[hH]' then 10000 else 1 end, 1) as m2
+                          from regexp_matches(l.description,
+                 '(?<![A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽa-záčďéěíňóřšťúůýž])([Pp]ozem|POZEM|[Pp]arcel|PARCEL|[Zz]asta'
+                 'v[ěe]n|ZASTAV[ĚE]N)[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽa-záčďéěíňóřšťúůýž]*(?:(?!(?:[0-9]{1,3}(?:['
+                 '\u0020\u00a0\u202f\u2009\u200b\u200c\u200d\u2060][0-9]{3})+(?:[.,][0-9]+)?|[0-9]{1,3'
+                 '}(?:\.[0-9]{3})+(?:,[0-9]+)?|[0-9]+(?:[.,][0-9]+)?)[\u0020\u0009\u000a\u000d\u00a0'
+                 '\u202f\u2009]*(?:[mM](?:²|[\u0020\u0009\u000a\u000d\u00a0\u202f\u2009]?2)|[hH][aA]|['
+                 'hH]ektar[a-záčďéěíňóřšťúůýž]*)(?![0-9A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽa-záčďéěíňóřšťúůýž])|[Pp]ozem'
+                 '|POZEM|[Pp]arcel|PARCEL|[Zz]astav[ěe]n|ZASTAV[ĚE]N|[.][\u0020\u0009\u000a\u000d'
+                 '\u00a0\u202f\u2009]*[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ]|[\u000a\u000d][\u0020\u0009\u000a\u000d'
+                 '\u00a0\u202f\u2009]*[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ])[^•|;!?]){0,40}([0-9]{1,3}(?:[\u0020\u00a0'
+                 '\u202f\u2009\u200b\u200c\u200d\u2060][0-9]{3})+(?:[.,][0-9]+)?|[0-9]{1,3}(?:\.[0-9]{'
+                 '3})+(?:,[0-9]+)?|[0-9]+(?:[.,][0-9]+)?)[\u0020\u0009\u000a\u000d\u00a0\u202f\u2009]*'
+                 '([mM](?:²|[\u0020\u0009\u000a\u000d\u00a0\u202f\u2009]?2)|[hH][aA]|[hH]ektar[a-záčďé'
+                 'ěíňóřšťúůýž]*)(?![0-9A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽa-záčďéěíňóřšťúůýž])', 'g') m,
+                               lateral (select regexp_replace(m[2], '[\u0020\u00a0\u202f\u2009\u200b\u200c\u200d\u2060]', '', 'g')
+                                          as t) n) e),
+                false)))
      for update of l skip locked
 ), saved as (
   insert into backup_671.listing_plots
@@ -207,7 +273,32 @@ begin
           or (l.category_main = 'komercni'
               and (l.estate_area = l.usable_area
                    or (l.estate_area = l.area_m2
-                       and l.area_basis in ('usable','floor','total')))));
+                       and l.area_basis in ('usable','floor','total')))
+              and not coalesce((
+                select bool_or(e.parcel and e.m2 = l.estate_area)
+                       or (not bool_or(e.parcel) and bool_or(not e.parcel and e.m2 < l.estate_area))
+                  from (select m[1] !~ '^[Zz]' as parcel,
+                               round(replace(case when n.t ~ '^[0-9]{1,3}(?:\.[0-9]{3})+(?:,[0-9]+)?$'
+                                                  then replace(n.t, '.', '') else n.t end,
+                                             ',', '.')::numeric
+                                     * case when m[3] ~ '^[hH]' then 10000 else 1 end, 1) as m2
+                          from regexp_matches(l.description,
+                 '(?<![A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽa-záčďéěíňóřšťúůýž])([Pp]ozem|POZEM|[Pp]arcel|PARCEL|[Zz]asta'
+                 'v[ěe]n|ZASTAV[ĚE]N)[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽa-záčďéěíňóřšťúůýž]*(?:(?!(?:[0-9]{1,3}(?:['
+                 '\u0020\u00a0\u202f\u2009\u200b\u200c\u200d\u2060][0-9]{3})+(?:[.,][0-9]+)?|[0-9]{1,3'
+                 '}(?:\.[0-9]{3})+(?:,[0-9]+)?|[0-9]+(?:[.,][0-9]+)?)[\u0020\u0009\u000a\u000d\u00a0'
+                 '\u202f\u2009]*(?:[mM](?:²|[\u0020\u0009\u000a\u000d\u00a0\u202f\u2009]?2)|[hH][aA]|['
+                 'hH]ektar[a-záčďéěíňóřšťúůýž]*)(?![0-9A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽa-záčďéěíňóřšťúůýž])|[Pp]ozem'
+                 '|POZEM|[Pp]arcel|PARCEL|[Zz]astav[ěe]n|ZASTAV[ĚE]N|[.][\u0020\u0009\u000a\u000d'
+                 '\u00a0\u202f\u2009]*[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ]|[\u000a\u000d][\u0020\u0009\u000a\u000d'
+                 '\u00a0\u202f\u2009]*[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ])[^•|;!?]){0,40}([0-9]{1,3}(?:[\u0020\u00a0'
+                 '\u202f\u2009\u200b\u200c\u200d\u2060][0-9]{3})+(?:[.,][0-9]+)?|[0-9]{1,3}(?:\.[0-9]{'
+                 '3})+(?:,[0-9]+)?|[0-9]+(?:[.,][0-9]+)?)[\u0020\u0009\u000a\u000d\u00a0\u202f\u2009]*'
+                 '([mM](?:²|[\u0020\u0009\u000a\u000d\u00a0\u202f\u2009]?2)|[hH][aA]|[hH]ektar[a-záčďé'
+                 'ěíňóřšťúůýž]*)(?![0-9A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽa-záčďéěíňóřšťúůýž])', 'g') m,
+                               lateral (select regexp_replace(m[2], '[\u0020\u00a0\u202f\u2009\u200b\u200c\u200d\u2060]', '', 'g')
+                                          as t) n) e),
+                false)));
   if left_over > 0 then
     raise notice '671: % row(s) a concurrent write held were skipped -- re-run the file', left_over;
   end if;

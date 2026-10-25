@@ -108,8 +108,9 @@ def parse_listing(raw: dict[str, Any]) -> dict[str, Any]:
     )
     # This row never crosses ScrapedListing (sreality hashes the raw payload), so the
     # plot rule is called here — the same rule, not a second copy of it (rule 21).
+    description = _description(raw)
     estate_area = stated_plot(category_main, estate_area, usable=usable,
-                              headline=area_m2, headline_basis=area_basis)
+                              headline=area_m2, headline_basis=area_basis, text=description)
 
     return {
         "sreality_id": sreality_id,
@@ -144,7 +145,7 @@ def parse_listing(raw: dict[str, Any]) -> dict[str, Any]:
         "garage": vocabulary.yes_no(read("garage")),
         "parking_lots": _int_or_none(read("parking_lots")),
         "ownership": vocabulary.canonical("ownership", SOURCE, label("ownership")),
-        "description": _description(raw),
+        "description": description,
         # sreality exposes no publish date — `edited` (day-granular last-edit,
         # present on ~40% of rows) is the weak fallback bound for publish-to-
         # ingest SLO math, not first publication.

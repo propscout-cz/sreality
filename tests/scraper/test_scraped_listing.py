@@ -157,3 +157,21 @@ def test_a_plot_that_is_the_floor_area_is_declined_before_the_content_hash() -> 
     house = _listing(category_main="dum", area_m2=210.0, area_basis="usable",
                      usable_area=210.0, estate_area=80.0)
     assert house.estate_area == 80.0
+
+
+def test_the_plot_rule_reads_the_description_before_the_content_hash() -> None:
+    """Equality alone is not evidence (W22, 2026-10-25): the same call site hands the rule
+    the advert's description, so a petrol station whose text states the parcel it typed
+    into both boxes keeps its plot — in the column AND the hash — while a unit whose text
+    names a different parcel still hashes the echo as absence."""
+    station = _listing(category_main="komercni", area_m2=994.0, area_basis="usable",
+                       usable_area=994.0, estate_area=994.0,
+                       description="Čerpací stanice LPG. Celková výměra pozemku činí 994m².")
+    assert station.estate_area == 994.0
+    assert station.hash_doc()["estate_area"] == 994.0
+    assert replace(station).estate_area == 994.0
+    unit = _listing(category_main="komercni", area_m2=495.0, area_basis="usable",
+                    usable_area=495.0, estate_area=495.0,
+                    description="Objekt s užitnou plochou 495 m² na pozemku o výměře 1 484 m².")
+    assert unit.estate_area is None
+    assert unit.hash_doc()["estate_area"] is None

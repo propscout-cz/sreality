@@ -145,9 +145,12 @@ class ScrapedListing:
         # The ONE call site of the plot rule for every portal that crosses this contract
         # (rule 21): the last point before the content hash, so a declined plot is hashed
         # as absence (rules 2/8) rather than NULLed after the hash at the write boundary.
+        # The description is the rule's evidence; the title is not, because no stored
+        # column holds it and migration 671 must decide a stored row on the same text.
         object.__setattr__(self, "estate_area", stated_plot(
             self.category_main, self.estate_area, usable=self.usable_area,
-            headline=self.area_m2, headline_basis=self.area_basis))
+            headline=self.area_m2, headline_basis=self.area_basis,
+            text=self.description))
 
     def hash_doc(self) -> dict[str, Any]:
         """The crawlers' hash document: the 28 _HASH_FIELDS, price_native in place of price_czk when stated."""
