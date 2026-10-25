@@ -8,6 +8,12 @@
 	root * /srv
 	encode gzip zstd
 
+	# The retired Railway address forwards to the brand domain, path and query
+	# kept, until both old addresses are removed (brand-domain PROGRAM.md W1).
+	# Railway's healthcheck arrives as healthcheck.railway.app, so it is untouched.
+	@retired_host host sreality-production-1bb6.up.railway.app
+	redir @retired_host https://app.propscout.cz{uri} 301
+
 	# Liveness endpoint Railway hits per railway.json healthcheckPath.
 	# Exclusive handle block — no fall-through to try_files/file_server.
 	handle /healthz {
