@@ -124,6 +124,7 @@ from location_data.claims_common import (  # noqa: F401 - the lane's public voca
     value_norm_mirror,
 )
 from scraper import db, street
+from scraper.cpus import job_cpus
 from toolkit import description_extraction as text_lane
 
 LOG = logging.getLogger("location_data.claims_intake")
@@ -2013,7 +2014,7 @@ def run(
              mode, source or "*", batch_size, batch_id,
              ",".join(sorted(page_capable)) or "-", "yes" if store else "no",
              f"{max_seconds:.0f}s" if max_seconds is not None else "none",
-             page_readers.extraction_workers())
+             job_cpus())
 
     budget = _Budget(max_seconds)
     # Resolved once, not per listing: the extractor is called 20 000 times a batch.

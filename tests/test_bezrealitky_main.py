@@ -265,7 +265,8 @@ class _Conn:
     (["--drain-only"], [("detail", {"max_seconds": 600.0})]),
     ([], [("index", {"max_seconds": 600.0}), ("detail", {"max_seconds": 600.0})]),
 ])
-def test_the_cadence_split_runs_the_phases_asked_for(monkeypatch, argv, phases):
+def test_the_cadence_split_runs_the_phases_asked_for(
+        monkeypatch: pytest.MonkeyPatch, argv: list[str], phases: list[tuple[str, dict[str, Any]]]) -> None:
     """The schedule walks (`--index-only`) and the realtime worker drains; the drain keeps the run's budget too."""
     from scraper import portal_runner
 

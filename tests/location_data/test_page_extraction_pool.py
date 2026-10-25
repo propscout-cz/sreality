@@ -67,7 +67,7 @@ ENTRIES = {"remax": [_entry("remax")], "idnes": [_entry("idnes")]}
 def pooled(monkeypatch: pytest.MonkeyPatch) -> None:
     """Two workers and a floor of one body, so the pooled path is the one under test.
 
-    `JOB_CPUS` rather than a patched `extraction_workers`: a CI runner that
+    `JOB_CPUS` rather than a patched `job_cpus`: a CI runner that
     reports a single CPU would otherwise take the main-thread path and every assertion
     below would pass without a process ever starting."""
     monkeypatch.setenv(cpus.JOB_CPUS_ENV, "2")

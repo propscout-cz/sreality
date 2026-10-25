@@ -1495,16 +1495,11 @@ EXTRACTION_TIMEOUT_S = 120.0
 _WORKER: dict[str, Any] = {}
 
 
-def extraction_workers() -> int:
-    """How many extraction processes: the CPUs this job may use, never the host's core count."""
-    return job_cpus()
-
-
 def pool_width(tasks: int) -> int:
     """The width `extract_pages` will actually use for a batch of this size — 1 is the main
     thread. ONE definition, because the lane logs this number beside its bodies/s and a log
     line that guessed it would be the only evidence anyone reads."""
-    workers = extraction_workers()
+    workers = job_cpus()
     return workers if workers >= 2 and tasks >= PARALLEL_MIN_BODIES else 1
 
 

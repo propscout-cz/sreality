@@ -347,10 +347,9 @@ def main(argv: list[str] | None = None) -> int:
             portal, dry_run=args.dry_run, probe_pages=args.probe_pages)
         return rc
 
-    # Index-walk (enqueue) then detail-drain (fetch + ingest), through the one
-    # shared runner. Two scrape_runs rows ('index' + 'detail'), like sreality.
-    # --index-only / --drain-only are the cadence split every portal shares (the
-    # schedule walks only: the realtime worker drains); omitting both runs both.
+    # The schedule walks only (--index-only) and the realtime worker drains; omitting
+    # both flags runs both phases, an ad-hoc combined run (an 'index' and a 'detail'
+    # scrape_runs row).
     rc = 0
     if not args.drain_only:
         rc = portal_runner.run_phase(

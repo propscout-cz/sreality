@@ -32,7 +32,7 @@ that overlays estimates on portal pages.
 
 A **dark-by-default always-on worker** (`scraper/realtime_worker.py`, a 2nd Railway service from the SAME image, gated by
 `REALTIME_WORKER_ENABLED`) runs every lane registered in `_amain`: newest-first probes and the sreality count-probe over the GH walks, the ONLY
-runtime of the detail drain (bar the four combined scrapers' own phase), fresh images and incremental property/broker maintenance, plus estimation, location resolve/intake/refetch,
+runtime of the detail drain, fresh images and incremental property/broker maintenance, plus estimation, location resolve/intake/refetch,
 sold comps, text extraction, health checks, autodedup, notification producers (their one clock) and push, heartbeats (`docs/design/realtime-scrapers.md`).
 ## Territories
 

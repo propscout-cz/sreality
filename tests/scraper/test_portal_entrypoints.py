@@ -23,5 +23,5 @@ def test_the_entrypoint_accepts_both_halves_of_the_split(source: str) -> None:
     assert (drain.index_only, drain.drain_only) == (False, True)
 
 
-def test_the_census_covers_every_portal() -> None:
-    assert len(PORTAL_CLASSES) == 10
+def test_the_census_is_not_vacuous() -> None:
+    assert len(PORTAL_CLASSES) >= 10, "the portal list shrank: a parametrised census over it proves less"
