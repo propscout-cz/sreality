@@ -824,5 +824,6 @@ forward-only, no backfill.
 > ruling 1a). It is forward-only and has no backfill, as decided, but the second segment is the row id, not
 > `{seq}`. A key on `{seq}` stays POSITIONAL: every NULL-sequence row of a listing maps to one
 > `.../0000.jpg`, and `sequence` is not a stable identity for a photo (§ 3.3). Migration 670 re-queues the
-> rows whose object another row overwrote (152 keys by 2026-10-25); rationale in `docs/architecture.md`
-> rule 6.
+> rows whose object another row overwrote (152 keys by 2026-10-25), plus the owners on active listings
+> uploaded after the phone-size copies shipped (2026-10-12), whose copy may hold the other photo; rationale
+> in `docs/architecture.md` rule 6.

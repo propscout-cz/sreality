@@ -4,7 +4,9 @@
 -- (scraper/image_storage.image_key) is live on Railway AND on the GitHub image workflows. This file puts rows back
 -- in the download queue, and two drains take them within minutes (`images_fresh.yml` on */15 plus its self-chain, and
 -- the realtime worker's images lane): under the old code each would upload straight back into the colliding key and
--- overwrite the photo this file leaves in place. A run before deploy is not fatal -- run the file again after deploy.
+-- overwrite the photo this file leaves in place. A run before deploy is not fatal: a cleared row may then re-download
+-- under an old-shape key that collides again, and the next run after deploy clears it again. Each run clears what it
+-- finds; the backup keeps every row's first-seen values.
 --
 -- THE BUG. A listing photo's R2 key was `{sreality_id}/{seq:04d}.jpg` before Gate 2 and `{listings.id}/{seq:04d}.jpg`
 -- after it. Both numbers come from one range, so when a new listing's id equals an older listing's sreality_id, the new
@@ -36,10 +38,14 @@
 --
 -- WHAT. Every row that does NOT own its key gets its stored state cleared, which puts it back in the download queue
 -- (`pending_image_downloads`: storage_path NULL, unavailable_reason NULL, attempts under the cap). It re-downloads under
--- its own `img/` key. The OWNER is cleared too when its upload came after 2026-10-12 11:12Z. That is when the phone-size
--- copy shipped (#1776: `thumb/w1080/<key>.webp`, made on first request and never re-checked). A copy made before that
--- upload may still hold the other row's photo, and SQL cannot delete an R2 object. A new key gets a new copy. Counted:
--- 152 losers + 37 such owners = 189 rows on 27 listings. The other 115 owners keep their object and their key.
+-- its own `img/` key. The OWNER is cleared too when its upload came after 2026-10-12 11:12Z AND its listing is active.
+-- 11:12Z is when the phone-size copy shipped (#1776: `thumb/w1080/<key>.webp`, made on first request and never
+-- re-checked). A copy made before that upload may still hold the other row's photo, and SQL cannot delete an R2 object.
+-- A new key gets a new copy. The owner on an INACTIVE listing keeps its object: its portal URL may be dead, and a dead
+-- URL would turn a correct photo into a placeholder to fix a copy that may not exist (one is made only when `?w=1080`
+-- is asked for). Its possible stale copy is owed to a one-off R2 delete (roadmap/scraper-track.md). This is wider than
+-- #959, which re-queued only the losers. Counted 2026-10-25: 152 losers + 28 such owners = 180 rows on 26 listings.
+-- The other 124 owners keep their object and their key; 9 of them (one inactive bazos listing) uploaded after 11:12Z.
 --
 -- WHICH COLUMNS. `storage_path`, plus everything that describes the bytes: `phash` (the download writes
 -- `COALESCE(new, phash)`, so a stale hash would survive a failed inline hash) and `clip_tagged_at` (the CLIP lane's
@@ -63,11 +69,13 @@
 -- The `sequence IS NULL` case (two rows of one listing both minting `.../0000.jpg`) is the only other way to share a key.
 -- `image_key` closes it going forward. This file repairs it only inside the pairs.
 --
--- BACKUP FIRST (642's pattern). Schema backup_670 is owner-only. Before any change, it holds every row this file clears,
--- with its old values. The UPDATE is driven FROM the backup, so no row can change without being in it. RE-RUNNABLE: the
--- backup is INSERT ... ON CONFLICT DO NOTHING, so a row keeps its first-seen values. The clear is a compare-and-set on the
--- backed-up key, so a row that has since re-downloaded under `img/` is never touched again. RESTORE, should this be
--- overruled (only rows still unstored are touched):
+-- BACKUP FIRST (642's pattern). Schema backup_670 is owner-only. It holds every row this file clears, with its old
+-- values. The pick, the backup and the clear are ONE statement, so they read one snapshot, and the clear needs the row in
+-- the backup (inserted now, or by an earlier run), so no row can change without being in it. RE-RUNNABLE AND
+-- CONVERGENT: the backup is INSERT ... ON CONFLICT DO NOTHING, so a row keeps its first-seen values, while the clear
+-- takes every row THIS run picks, as a compare-and-set on the key this run read. A row that collides again under a new
+-- key is cleared again; a row that re-downloaded under `img/` is never picked again (that key has one holder). RESTORE,
+-- should this be overruled (only rows still unstored are touched; a row cleared twice gets its first-seen values):
 --   update public.images i
 --      set storage_path = b.storage_path, phash = b.phash, clip_tagged_at = b.clip_tagged_at,
 --          rendition = b.rendition, stored_width = b.stored_width, stored_height = b.stored_height,
@@ -77,7 +85,10 @@
 --    where b.image_id = i.id and i.storage_path is null;
 -- Drop the backup in a FORWARD migration, once the re-downloads have landed (`drop table if exists
 -- backup_670.images_r2_key_collision; drop schema if exists backup_670;`), so the migration_drift probe retires what it saw
--- this file declare. The 152 old objects (and their copies) are orphaned in R2, for the owed orphan sweep.
+-- this file declare. R2 after this file (counted 2026-10-25): 124 of the 152 shared objects stay in use by their owner;
+-- the 28 whose owner this file re-queues too are held by no row (a restore points back at them, so they go only with
+-- the backup). That R2 follow-up, and the phone-size copies of the 9 inactive-listing owners, are owed in
+-- roadmap/scraper-track.md.
 --
 -- ONE TRANSACTION. Replay-safe on CI's empty schema: no pairs, so nothing is backed up or cleared. Row locks only, on at
 -- most a few hundred rows. The timeouts are set twice on purpose: the plain SETs are the apply workflow's contract, and
@@ -92,7 +103,7 @@ set local lock_timeout = '5s';
 set local statement_timeout = '120s';
 
 -- ---------------------------------------------------------------------------
--- 1. The backup. Copied, not moved; never granted to a browser role.
+-- 1. The backup table. Copied, not moved; never granted to a browser role.
 -- ---------------------------------------------------------------------------
 create schema if not exists backup_670;
 revoke all on schema backup_670 from anon, authenticated;
@@ -117,6 +128,10 @@ create table if not exists backup_670.images_r2_key_collision (
 alter table backup_670.images_r2_key_collision enable row level security;
 revoke all on all tables in schema backup_670 from anon, authenticated;
 
+-- ---------------------------------------------------------------------------
+-- 2. Pick, back up, clear: one statement. A row is cleared only if this run picked it, it is in the backup, and it
+--    still holds the key this run read (a drain that re-downloads it meanwhile wins).
+-- ---------------------------------------------------------------------------
 with pair as (
   select o.id as legacy_listing_id, n.id as current_listing_id
     from public.listings o
@@ -128,9 +143,10 @@ with pair as (
 holder as (
   select i.id, i.listing_id, i.storage_path, i.phash, i.clip_tagged_at, i.rendition,
          i.stored_width, i.stored_height, i.download_attempts, i.last_download_attempt_at,
-         i.last_error, i.unavailable_reason,
+         i.last_error, i.unavailable_reason, l.is_active,
          coalesce(i.rendition, '') in ('sreality-1800-fit', 'native') as measured
     from public.images i
+    join public.listings l on l.id = i.listing_id
    where i.listing_id in (select legacy_listing_id from pair union select current_listing_id from pair)
      and i.storage_path is not null
 ),
@@ -144,23 +160,27 @@ ranked as (
                     (split_part(h.storage_path, '/', 1) = h.listing_id::text) desc,
                     h.id desc) as rank_in_key
     from holder h
+),
+picked as (
+  select r.*
+    from ranked r
+   where r.holders > 1
+     and (r.rank_in_key > 1
+          or (r.measured and r.is_active
+              and r.last_download_attempt_at >= timestamptz '2026-10-12 11:12:05+00'))
+),
+backed_up as (
+  insert into backup_670.images_r2_key_collision (
+    image_id, listing_id, storage_path, owns_object, phash, clip_tagged_at, rendition, stored_width,
+    stored_height, download_attempts, last_download_attempt_at, last_error, unavailable_reason
+  )
+  select p.id, p.listing_id, p.storage_path, p.rank_in_key = 1, p.phash, p.clip_tagged_at, p.rendition,
+         p.stored_width, p.stored_height, p.download_attempts, p.last_download_attempt_at, p.last_error,
+         p.unavailable_reason
+    from picked p
+  on conflict (image_id) do nothing
+  returning image_id
 )
-insert into backup_670.images_r2_key_collision (
-  image_id, listing_id, storage_path, owns_object, phash, clip_tagged_at, rendition, stored_width,
-  stored_height, download_attempts, last_download_attempt_at, last_error, unavailable_reason
-)
-select r.id, r.listing_id, r.storage_path, r.rank_in_key = 1, r.phash, r.clip_tagged_at, r.rendition,
-       r.stored_width, r.stored_height, r.download_attempts, r.last_download_attempt_at, r.last_error,
-       r.unavailable_reason
-  from ranked r
- where r.holders > 1
-   and (r.rank_in_key > 1
-        or (r.measured and r.last_download_attempt_at >= timestamptz '2026-10-12 11:12:05+00'))
-on conflict (image_id) do nothing;
-
--- ---------------------------------------------------------------------------
--- 2. The clear, driven by the backup: a row changes only if it is in the backup AND still holds the backed-up key.
--- ---------------------------------------------------------------------------
 update public.images i
    set storage_path       = null,
        phash              = null,
@@ -171,9 +191,11 @@ update public.images i
        download_attempts  = 0,
        last_error         = null,
        unavailable_reason = null
-  from backup_670.images_r2_key_collision b
- where b.image_id = i.id
-   and i.storage_path = b.storage_path;
+  from picked p
+ where p.id = i.id
+   and i.storage_path = p.storage_path
+   and (p.id in (select image_id from backed_up)
+        or exists (select 1 from backup_670.images_r2_key_collision b where b.image_id = p.id));
 
 -- ---------------------------------------------------------------------------
 -- 3. Post-condition: no key is held by two rows inside the pairs. (Empty on the CI replay, so it passes there too.)

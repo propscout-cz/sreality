@@ -18,7 +18,7 @@ BACKUP = "backup_670.images_r2_key_collision"
 
 
 def _update() -> str:
-    match = re.search(r"update public\.images i\s+set (.*?)\s+from " + re.escape(BACKUP), CODE, re.S)
+    match = re.search(r"update public\.images i\s+set (.*?)\s+from picked p\b", CODE, re.S)
     assert match is not None
     return match.group(1)
 
@@ -38,11 +38,37 @@ def test_a_cleared_row_satisfies_the_download_queue_predicate() -> None:
     assert {"rendition", "stored_width", "stored_height", "last_error"} <= _cleared()
 
 
-def test_the_clear_is_driven_by_the_backup_and_is_a_compare_and_set() -> None:
-    assert CODE.index(f"insert into {BACKUP}") < CODE.index("update public.images i")
-    assert "on conflict (image_id) do nothing" in CODE
-    tail = CODE[CODE.index("update public.images i"):CODE.index("do $post$")]
-    assert "where b.image_id = i.id" in tail and "and i.storage_path = b.storage_path" in tail
+def _statement() -> str:
+    start = CODE.index("with pair as (")
+    return CODE[start:CODE.index(";", CODE.index("update public.images i"))]
+
+
+def test_pick_backup_and_clear_are_one_statement() -> None:
+    statement = _statement()
+    assert CODE.count("update public.images i") == 1 and CODE.count(f"insert into {BACKUP}") == 1
+    assert statement.index(f"insert into {BACKUP}") < statement.index("update public.images i")
+    assert ";" not in statement
+
+
+def test_every_cleared_row_is_in_the_backup_with_its_first_seen_values() -> None:
+    statement = _statement()
+    insert = statement[statement.index(f"insert into {BACKUP}"):statement.index("update public.images i")]
+    assert "from picked p" in insert
+    assert "on conflict (image_id) do nothing" in insert and "returning image_id" in insert
+    tail = statement[statement.index("update public.images i"):]
+    assert "p.id in (select image_id from backed_up)" in tail
+    assert f"exists (select 1 from {BACKUP} b where b.image_id = p.id)" in tail
+
+
+def test_the_clear_is_a_compare_and_set_on_the_key_this_run_read() -> None:
+    tail = _statement()[_statement().index("update public.images i"):]
+    assert "where p.id = i.id" in tail and "and i.storage_path = p.storage_path" in tail
+
+
+def test_an_owner_is_re_queued_only_on_an_active_listing() -> None:
+    picked = CODE[CODE.index("picked as ("):CODE.index("backed_up as (")]
+    assert "r.rank_in_key > 1" in picked
+    assert re.search(r"r\.measured and r\.is_active\s+and r\.last_download_attempt_at >= ", picked)
 
 
 def test_measured_renditions_are_the_ones_only_post_provenance_uploads_write() -> None:

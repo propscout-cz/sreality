@@ -1396,8 +1396,10 @@ renumber.** Navigate by area:
    keys and its upload silently overwrote the older photo, and the re-master lane later re-uploaded some
    of the old rows over the new ones. Either way one row rendered another property's photo with a pHash
    and CLIP vector of bytes it no longer had (152 keys / 304 rows by 2026-10-25; migration 670 re-queues
-   every row that does not hold its object, applied after deploy). Nothing recomputes a stored row's key,
-   so the two legacy shapes stay serveable forever: `image_storage.LISTING_PHOTO_KEY_RE` enumerates all
+   every row that does not hold its object, plus the owners on active listings uploaded after the
+   phone-size copies shipped (2026-10-12), whose copy may hold the other photo; applied after deploy).
+   Nothing recomputes a stored row's key, so the two legacy shapes stay serveable forever:
+   `image_storage.LISTING_PHOTO_KEY_RE` enumerates all
    three and is the ONE whitelist of the public `GET /images/{key}` and of the re-master lane. It stays
    anchored and enumerated, never a prefix, or it starts presigning the private `custom-attachments/`
    uploads that share the bucket. **A throttle is the portal's answer about our rate, never the image's
