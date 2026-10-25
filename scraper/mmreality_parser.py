@@ -498,6 +498,7 @@ def parse_detail(html: str, *, source_url: str) -> ScrapedListing:
         source=SOURCE,
         source_id_native=source_id,
         source_url=source_url,
+        ad_reference=vocabulary.reference(read("ad_reference")),
         category_main=category_main,
         category_type=category_type,
         price_czk=price_czk,

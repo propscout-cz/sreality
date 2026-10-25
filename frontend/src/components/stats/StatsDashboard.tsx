@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { arrayMove } from '@dnd-kit/sortable';
 import type { ListingFilters } from '@/lib/filters';
@@ -6,13 +6,17 @@ import { pushToast } from '@/lib/toast';
 import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import ErrorBanner from '@/components/ErrorBanner';
 import Skeleton from '@/components/Skeleton';
+import { Segmented } from '@/components/controls';
 import {
+  MARKET_CAPTION,
   MAX_CHARTS,
   fetchDashboard,
+  marketSample,
   newChart,
   saveDashboard,
   statsDashboardKey,
   type ChartSpec,
+  type StatsMarket,
 } from '@/lib/stats';
 import DismissedSkewNotice from './DismissedSkewNotice';
 import StatsChart, { type CardFocus } from './StatsChart';
@@ -24,15 +28,18 @@ import DashboardBar, { type DashboardView } from './DashboardBar';
  * through PUT /stats/dashboard by the one optimistic write (lib/useOptimisticWrite)
  * — the chart list's edits and the dashboard bar's loads alike. No saved row ⇒ the
  * four default charts, and the first save persists the whole list. The named
- * dashboards' bar leads the tab where Browse hands over its view state (`view`;
- * the explore modals do not). */
+ * dashboards' bar and the sample lens lead the tab on every surface that shows it
+ * (the Browse page and the explore modals alike). */
 export default function StatsDashboard({
   filters,
   view,
+  market,
   onIncludeDismissed,
 }: {
   filters: ListingFilters;
   view?: DashboardView;
+  /* The sample lens; optional only so the chart list renders on its own in tests. */
+  market?: { value: StatsMarket; set: (m: StatsMarket) => void };
   /* Flips the sidebar to Show dismissed, from the skew warning. */
   onIncludeDismissed?: () => void;
 }) {
@@ -53,6 +60,10 @@ export default function StatsDashboard({
       addRef.current.focus();
     }
   });
+
+  /* What every chart counts: the Browse filter, or a market lens over it. */
+  const lens = market?.value ?? 'filter';
+  const sample = useMemo(() => marketSample(filters, lens), [lens, filters]);
 
   const board = useQuery<ChartSpec[], Error>({
     queryKey: statsDashboardKey,
@@ -120,16 +131,26 @@ export default function StatsDashboard({
   return (
     <div className="space-y-4">
       {view ? <DashboardBar view={view} working={charts} onLoadCharts={(next) => save.mutateAsync(next)} /> : null}
-      <DismissedSkewNotice filters={filters} onInclude={onIncludeDismissed} />
-      <p className="text-[0.75rem] text-[var(--color-ink-3)]">
-        Každý graf počítá nemovitosti z filtru; sestava grafů je uložená k vašemu účtu.
-      </p>
+      {market ? (
+        <Segmented
+          label="Vzorek"
+          options={[
+            { value: 'filter' as const, label: 'Jako ve filtru' },
+            { value: 'sold' as const, label: 'Prodáno (trh)' },
+            { value: 'all' as const, label: 'Vše' },
+          ]}
+          value={market.value}
+          onChange={market.set}
+        />
+      ) : null}
+      <DismissedSkewNotice filters={sample} onInclude={onIncludeDismissed} />
+      <p className="text-[0.75rem] text-[var(--color-ink-3)]">{MARKET_CAPTION[lens]}</p>
       <div className="grid grid-cols-1 items-start gap-5 2xl:grid-cols-2">
         {listed.map((c, i) => (
           <StatsChart
             key={c.id}
             chart={c}
-            filters={filters}
+            filters={sample}
             saving={save.isPending}
             focus={focus?.id === c.id ? focus.req : null}
             onSave={(next) => save.mutateAsync(charts.map((x) => (x.id === c.id ? next : x)))}
@@ -144,7 +165,7 @@ export default function StatsDashboard({
           <StatsChart
             key={pending.id}
             chart={pending}
-            filters={filters}
+            filters={sample}
             startEditing
             saving={save.isPending}
             onSave={async (next) => {

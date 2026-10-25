@@ -89,10 +89,12 @@ def test_the_ts_module_declares_the_same_levels_and_columns() -> None:
 # status fact read the cohort's own portal rule (tests/test_stats_status_lens_migration.py); 630 re-pointed the map's at browse_list;
 # 640 dropped the id denylist; 644 gave the condition conjunct the `__unknown__` chip
 # (tests/test_644_condition_unknown_filter.py); 648 appended the energy-rating parameter
-# (tests/test_648_browse_energy_rating_filter.py). Re-read the chip arms when this moves again.
+# (tests/test_648_browse_energy_rating_filter.py); 657 took the Stats status lens back
+# (tests/test_657_status_is_the_propertys.py); 662 took the status as one parameter
+# (tests/test_661_662_status_filter.py). Re-read the chip arms when this moves again.
 _LATEST_RPC_DEFINITION = {
-    "browse_stats_properties": "648_browse_energy_rating_filter.sql",
-    "browse_map_cells": "648_browse_energy_rating_filter.sql",
+    "browse_stats_properties": "662_status_filter_contract.sql",
+    "browse_map_cells": "662_status_filter_contract.sql",
 }
 
 
@@ -221,25 +223,26 @@ def test_the_rpc_signatures_keep_the_chip_parameters() -> None:
     and tests/test_property_ids_excluded_migration.py pin each step. 626 appended the
     Stats pivot's chart `spec`, which shapes the answer and never the cohort; 629 the
     nine curated-set scope parameters (tests/test_curated_set_scope_migration.py); 648
-    the energy-rating filter (tests/test_648_browse_energy_rating_filter.py)."""
+    the energy-rating filter (tests/test_648_browse_energy_rating_filter.py); 661/662 moved
+    the status from two booleans to one trailing `status_filter`."""
     gone = {"tag_ids", "districts_context_filter", "city_index_rules", "city_proximity",
             "with_estimates", "listing_ids_filter"}
     # 640 dropped 598's denylist once 629 judged membership in the database.
-    gone_later = {"property_ids_excluded"}
+    gone_later = {"property_ids_excluded", "active_only_filter", "inactive_only_filter"}
     for func, previous, own in (
         ("browse_stats_properties", "436_city_quality_obec_key.sql", ["spec"]),
         ("browse_map_cells", "439_browse_map_cells.sql", []),
     ):
         new = _params_of(latest_definition(func).read_text(encoding="utf-8"), func)
         old = _params_of((MIGRATIONS / previous).read_text(encoding="utf-8"), func)
-        assert new == [p for p in old if p not in gone] + [
+        assert new == [p for p in old if p not in gone | gone_later] + [
             p for p in (
             "hide_dismissed", "portal_excluded_filter", "portal_excluded_active_only",
             "property_ids_excluded", "tom_observed_only", *own,
             # 629: the curated-set scope, three sets x (set, in, out), judged under RLS.
             "tags_set", "tags_in", "tags_out", "collections_set", "collections_in",
             "collections_out", "pipeline_set", "pipeline_in", "pipeline_out",
-            "energy_rating_filter",
+            "energy_rating_filter", "status_filter",
             ) if p not in gone_later
         ], f"{func}: parameter list changed"
         for chip_param in (

@@ -21,7 +21,12 @@ from autodedup import apply as A
 from autodedup import apply_sql as S
 from autodedup import legacy_retire as L
 from autodedup import rt_lease
-from autodedup.incremental_sql import RT_SCOPE_SCAN_SEEN_SQL
+from autodedup.incremental_sql import (
+    RT_SCOPE_OKRES_OBCE_SQL,
+    RT_SCOPE_PARENT_OBEC_SQL,
+    RT_SCOPE_SCAN_SEEN_SQL,
+    RT_SETTINGS_MANY_SQL,
+)
 from tests.autodedup.test_apply import GEN, FakeDb
 from tests._property_ledger import _Ledger, ledger_carriers  # noqa: F401 — the fixture
 from toolkit.property_carriers import NOTIFICATION_EVENTS_LOCK_SQL
@@ -65,8 +70,9 @@ class RetireDb(FakeDb):
 
     def dispatch(self, sql: str, p: dict[str, Any]) -> list[tuple]:
         if sql == L.AREA_SQL:
-            return [(lid,) for lid, (town, quarter) in sorted(self.location.items())
-                    if town in p["towns"] or quarter in p["quarters"]]
+            return [(lid,) for lid in sorted(self.location)
+                    if self.where(lid)[0] in p["towns"] or self.where(lid)[1] in p["quarters"]
+                    or self.where(lid)[2] in p["districts"]]
         if sql == L.GROUPS_SQL:
             # Driven from the area: its adverts' own ledger rows, and the rows whose SURVIVOR
             # holds one of them (never the retired side: `retired_property_id` is unindexed).
@@ -454,7 +460,7 @@ def test_the_step_needs_blocks() -> None:
         L.area_params(None)
     with pytest.raises(ValueError, match="town:<code>"):
         L.area_params(["obec:1"])
-    assert L.area_params(TRIAL) == {"towns": [TOWN], "quarters": [QUARTER]}
+    assert L.area_params(TRIAL) == {"towns": [TOWN], "quarters": [QUARTER], "districts": []}
 
 
 # ------------------------------------------------------------------ inside the apply mode
@@ -1180,6 +1186,11 @@ class LiveStreamDb(RetireDb):
         self.walked: set[str] = set(RT_KEYS)
         self.unread: set[str] = set()
         self.not_fingerprinted: set[int] = set()
+        # `rt_scope:rt` and the register the W8 gate maps a named area through (E964 R1): no
+        # scope row, every area stands for itself.
+        self.rt_scope: Any = None
+        self.parents: dict[int, int] = {}
+        self.districts: dict[int, list[int]] = {}
 
     def dispatch(self, sql: str, p: dict[str, Any]) -> list[tuple]:
         if sql == L.UNREAD_SQL:
@@ -1189,6 +1200,13 @@ class LiveStreamDb(RetireDb):
             return [(block,) for block in sorted(self.walked)]
         if sql == S.RC_UNREAD_BLOCKS_SQL:
             return [(block,) for block in sorted(self.unread)]
+        if sql == RT_SETTINGS_MANY_SQL:
+            return ([("rt_scope:rt", self.rt_scope)]
+                    if self.rt_scope is not None and "rt_scope:rt" in p["keys"] else [])
+        if sql == RT_SCOPE_PARENT_OBEC_SQL:
+            return [(q, self.parents[q]) for q in p["codes"] if q in self.parents]
+        if sql == RT_SCOPE_OKRES_OBCE_SQL:
+            return [(k, o) for k in p["codes"] for o in self.districts.get(k, ())]
         return super().dispatch(sql, p)
 
 

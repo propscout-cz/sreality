@@ -473,6 +473,15 @@ jobs:
                  tests/test_checks_delisting_sql_live.py tests/test_checks_dedup_sql_live.py \
                  tests/test_checks_quality_sql_live.py -q
 
+      # Rule 3 made total (Health green wave 2): every portal built from its replayed `portals` row, one
+      # seeded active ad per label (NULLs included), the real nomination queries run: each ad is returned by
+      # exactly one walked unit's scope or by the orphan scope, never by none and never by two.
+      - name: Every active ad is in exactly one nomination scope (rule 3)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_nomination_scope_rail_live.py -q
+
       # 633 makes the watcher read explicit cells only, as the ladder does since wave 6: a failing result without a
       # verdict cell is no cell, never "a measured Problem with no incident" under its key (the watcher's step above
       # pins the arm). It also unschedules the frozen data-quality capture and restates the measure view's comment.
@@ -616,6 +625,16 @@ jobs:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: pytest tests/test_dissolved_closures_live.py -q
 
+      # E940, EXECUTED: the paged scope walk's three statements on seeded rows — a town's and an
+      # okres's keyset pages to their short end, the prune bounded to one page's id range, and
+      # the "read to its end" gate of RT_SCOPE_SCAN_SEEN_SQL over the page row. The fakes
+      # re-implement each predicate in Python, so a neutralised one passes there.
+      - name: The scope walk pages a block by a keyset and prunes only a page's range (E940)
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: pytest tests/test_rt_scope_paging_live.py -q
+
       # The Judge page (migration 576), EXECUTED: which pairs its population holds (every judged
       # pair, oss excluded, and every sealed sample pair), each pair's headline, what each of the
       # four reasons picks and where the cap of 100 cuts, and that the cursor pages the one
@@ -714,7 +733,7 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"
-        run: pytest tests/test_location_ad_readers_live.py tests/test_property_location_ad_rail.py -q
+        run: pytest tests/test_location_ad_readers_live.py tests/test_property_location_ad_rail.py tests/test_publication_settle_live.py -q
 
       # MF reference rent is ONE read-time measure (migration 565), read by the two serving
       # views (browse_projection, properties_public) with the stored KU (566/567, replayed
@@ -768,8 +787,8 @@ jobs:
       # MS19 (migration 590): portal and broker filters select ADS, rows stay properties. ONE
       # fixture (tests/fixtures/portal_rule.json, also read by queries.test.ts) through
       # portal_status_matches, both aggregate RPCs, the Watchdog's compiled clause and the
-      # broker lookup over seeded ads; plus the rebuild's nine per-portal indexes and the
-      # projection's and browse_list's one shape. Always rolled back.
+      # broker lookup over seeded ads; plus the rebuild's per-portal index (one per
+      # PORTAL_OPTIONS code) and the projection's and browse_list's one shape. Always rolled back.
       - name: One portal rule on every surface (migration 590)
         timeout-minutes: 5
         env:

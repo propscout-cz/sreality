@@ -1275,8 +1275,8 @@ def _handle_read_floor_plan(
             "estimation has no building_run_id set"
         )
     attachment_id = int(args["attachment_id"])
-    from api.attachments import fetch_attachment
-    row = fetch_attachment(state.conn, attachment_id)
+    from api.attachments import fetch_building_attachment
+    row = fetch_building_attachment(state.conn, attachment_id)
     if row is None:
         raise ValueError(f"attachment_id={attachment_id} not found")
     if row["building_run_id"] != state.building_run_id:

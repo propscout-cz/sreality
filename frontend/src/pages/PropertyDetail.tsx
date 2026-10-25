@@ -9,17 +9,23 @@
  * header's is named under it (MS8). The merged-adverts section is the only list
  * of adverts, each advert's own facts in its row; `?advert=<id>` opens that row.
  *
+ * Under the header (photos, identity, map) and the "Moje" line, the page is
+ * tabs (operator ruling 2026-10-22, design A — components/listing-detail/
+ * PropertyTabs): Přehled answers each question in one card, the other tabs hold
+ * the full sections. The open tab is `?tab=`; older deep links keep landing on
+ * their section's tab.
+ *
  * Every advert address ever handed out (`/listing/{source}/{native}`,
  * `/listing/{sreality_id}`, `/listing?property=`) is an alias: `AdvertRedirect`
  * resolves the advert's property and lands here with its row open. */
 import { Suspense, useMemo } from 'react';
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
+import { lastBrowsePath } from '@/lib/lastBrowseView';
 import {
   useNewEstimationModal,
   type NewEstimationPrefill,
 } from '@/components/NewEstimationModal';
-import { useExploreAreaModal } from '@/components/ExploreAreaModal';
 import Spinner from '@/components/Spinner';
 import { listingTypeLabel } from '@/lib/enums';
 import { usePageTitle } from '@/lib/pageTitle';
@@ -34,9 +40,6 @@ import {
   fetchImagesByListing,
   type PropertyPublic,
 } from '@/lib/queries';
-import { propertyBrokers } from '@/lib/brokers';
-import { useListingBrokers } from '@/lib/hydration';
-import BrokerContactCard from '@/components/BrokerContactCard';
 import { portalLabel } from '@/lib/portals';
 import { fetchPropertyOrigins } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -50,7 +53,14 @@ import type {
 } from '@/lib/types';
 import { lowestActivePrice, type PriceAdvert } from '@/lib/priceHistory';
 import Skeleton from '@/components/Skeleton';
-import { ListingOverview } from '@/components/listing-detail/ListingOverview';
+import {
+  GalleryBlock,
+  LocationMap,
+  PropertyIdentity,
+  type PriceNote,
+} from '@/components/listing-detail/ListingOverview';
+import { PropertyTabs, usePropertyTab } from '@/components/listing-detail/PropertyTabs';
+import type { LowestActive } from '@/components/listing-detail/PropertyOverview';
 import PipelineToggle from '@/components/listing-detail/PipelineToggle';
 import DismissButton from '@/components/DismissButton';
 import CollectionSaveToggle from '@/components/listing-detail/CollectionSaveToggle';
@@ -60,7 +70,6 @@ import { ActingBanner, EditAsOwnerToggle } from '@/components/listing-detail/Edi
 import { ActingAs, useEditAsOwnerShare } from '@/lib/acting';
 import { useBoardSelection } from '@/lib/pipelineShares';
 import { lazyChunk } from '@/lib/lazyChunk';
-import { Hairline, SectionLabel } from '@/components/section';
 import MergedAdvertsSection from '@/components/listing-detail/MergedAdvertsSection';
 import PriceHistoryBlock from '@/components/listing-detail/PriceHistoryBlock';
 import FreshnessBlock from '@/components/listing-detail/FreshnessBlock';
@@ -83,6 +92,17 @@ const EstimationsBlock = lazyChunk(
 );
 const AdvertNotFoundBody = lazyChunk(() => import('@/components/listing-detail/AdvertNotFound'));
 const ValuoSection = lazyChunk(() => import('@/components/listing-detail/ValuoSection'));
+/* The overview tab reads the estimate, Valuo and sold-sales queries, and the
+ * header's photos and "Moje" line read their own: each its own chunk, so Browse's
+ * first visit (scripts/bundle-budget.mjs) does not carry them. */
+const PropertyOverview = lazyChunk(() => import('@/components/listing-detail/PropertyOverview'));
+const PhotoMosaic = lazyChunk(() => import('@/components/listing-detail/PhotoMosaic'));
+const PropertyPhotos = lazyChunk(() => import('@/components/listing-detail/PropertyPhotos'));
+/* The tag assign list rides in with it (scripts/bundle-budget.mjs). */
+const TagsToggle = lazyChunk(() => import('@/components/listing-detail/TagsToggle'));
+const AuditPanel = lazyChunk(() => import('@/components/listing-detail/AuditPanel'));
+/* The Okolí dashboard tab: the account's neighbourhood dashboard over this property. */
+const MarketTile = lazyChunk(() => import('@/components/listing-detail/MarketTile'));
 
 /* The phone layout is its own chunk: the desktop never downloads it, and the
  * first visit stays inside scripts/bundle-budget.mjs. */
@@ -163,7 +183,8 @@ export default function PropertyDetail() {
   // (the header's stored one waits for the recompute). Only the property's deal
   // type counts, so a legacy sale-and-rent property never offers a rent as its
   // price; if the deal types cannot be read, every active advert counts.
-  const priceNote = useMemo(() => {
+  // undefined = not known yet, null = none cheaper.
+  const lowest = useMemo<LowestActive | null | undefined>(() => {
     if (!property || (detailsQ.data === undefined && !detailsQ.isError)) return undefined;
     const deals = detailsQ.data;
     const low = lowestActivePrice(
@@ -172,15 +193,18 @@ export default function PropertyDetail() {
         : sources,
       canonical ? canonical.price_czk : property.price_czk,
     );
-    if (!low) return undefined;
-    const portals = low.sources.map((s) => portalLabel(s) ?? s).join(', ');
+    if (!low) return null;
+    return { price: low.price, portals: low.sources.map((s) => portalLabel(s) ?? s).join(', ') };
+  }, [property, detailsQ.data, detailsQ.isError, sources, canonical]);
+  const priceNote = useMemo<PriceNote | undefined>(() => {
+    if (!property || !lowest) return undefined;
     const perMonth = property.category_type === 'pronajem' ? ' / měs' : '';
     return {
-      text: `Nejnižší aktivní cena: ${fmtCzk(low.price)}${perMonth} · ${portals}`,
+      text: `Nejnižší aktivní cena: ${fmtCzk(lowest.price)}${perMonth} · ${lowest.portals}`,
       title:
         'Nejnižší cena mezi aktivními inzeráty — jen pro informaci; nevstupuje do ceny za m², výnosu, hlídání ani filtrů',
     };
-  }, [property, detailsQ.data, detailsQ.isError, sources, canonical]);
+  }, [property, lowest]);
 
   // Bind the page's "New estimation" CTA to the canonical advert (`id`, its
   // listings.id) — any portal's, so a property without a sreality advert is
@@ -232,6 +256,21 @@ export default function PropertyDetail() {
   const editAsShare = useEditAsOwnerShare();
   const actingShare = activeBoard != null ? editAsShare : null;
 
+  /* The status pill opens the latest active advert on its portal (operator
+     2026-10-23) — the one seen most recently, the canonical one on a tie; with
+     none active, the advert seen last. Its stored URL, never rebuilt (rule 21). */
+  const statusHref = useMemo(() => {
+    const live = sources.filter((s) => s.is_active && s.source_url);
+    const pool = live.length > 0 ? live : sources.filter((s) => s.source_url);
+    const latest = [...pool].sort(
+      (a, b) => b.last_seen_at.localeCompare(a.last_seen_at) || Number(b.id === advertId) - Number(a.id === advertId),
+    )[0];
+    return latest?.source_url ?? property?.source_url ?? null;
+  }, [sources, advertId, property?.source_url]);
+
+  // The open tab, from the address. Above the early returns (#310).
+  const [tab, setTab] = usePropertyTab(property?.id ?? null);
+
   if (propertyId == null) return <NotFoundState id={idParam ?? null} />;
   if (propertyQ.isLoading) return <LoadingState />;
   if (propertyQ.error) return <FailedState error={propertyQ.error} />;
@@ -269,8 +308,8 @@ export default function PropertyDetail() {
         {/* The page-level verbs, grouped top-right, in the same order as the
             controls on a Browse card: track this deal in the pipeline, save the
             property to a collection (monitoring rides on the collection), dismiss
-            it — all property-grain (rule #18) — then download the ad (a PDF + the
-            gallery's photos) and run a new estimation. */}
+            it — all property-grain (rule #18) — then download the ad (a PDF, the
+            gallery's photos and my own) and run a new estimation. */}
         <div className="flex flex-wrap items-center justify-end gap-2">
           {activeBoard?.mode === 'edit' && (
             <EditAsOwnerToggle share={activeBoard} on={actingShare != null} />
@@ -280,110 +319,179 @@ export default function PropertyDetail() {
           <ActingAs key={actingShare?.account_id ?? 'own'} share={actingShare}>
             <PipelineToggle property_id={propertyId} />
             <CollectionSaveToggle property_id={propertyId} />
+            <Suspense fallback={<span className="inline-flex h-[1.9rem] w-24" aria-hidden />}>
+              <TagsToggle property_id={propertyId} />
+            </Suspense>
             <DismissButton property_id={propertyId} variant="header" />
+            {/* Its zip packs the acting identity's own photos. */}
+            <DownloadPropertyButton propertyId={propertyId} images={images} />
           </ActingAs>
-          <DownloadPropertyButton propertyId={propertyId} images={images} />
           <NewEstimationButton prefill={newEstimationPrefill} />
         </div>
       </div>
       {actingShare && <ActingBanner share={actingShare} />}
-      <ListingOverview
-        listing={property}
-        priceNote={priceNote}
-        images={images}
-        imagesLoading={imagesQ.isLoading}
-        mapFooter={
-          /* Under the header map: our own market view first, then the external
-             links — where exactly is this, and what does it sell for. */
-          <div className="space-y-1.5">
-            <ExploreAreaButton listing={property} images={images} />
-            {property.lat != null && property.lng != null && (
-              <ExternalMapLinks
-                lat={property.lat}
-                lng={property.lng}
-                label={property.display_label}
-              />
-            )}
-          </div>
-        }
-        curationSlot={
-          /* Tags / artifact link / notes — property-grain (rule #18), directly
-             under the description and above the estimates: what the operator
-             has already decided about this property comes before the numbers. */
-          <Suspense fallback={<Skeleton height={140} />}>
-            <ActingAs key={actingShare?.account_id ?? 'own'} share={actingShare}>
-              <CurationBlock property_id={propertyId} listing_id={property.id} />
-            </ActingAs>
-          </Suspense>
-        }
-        estimatesSlot={
-          /* The estimation chapter: MF reference + our runs, side by side —
-             in the prime slot after the curation. Renders nothing for a
-             property with no estimable data. Valuo's paid outside valuation
-             follows as its own section, never inside ours (rule 12). */
-          <>
-            <Suspense fallback={<Skeleton height={180} />}>
-              <EstimationsBlock listing={property} listingIds={advertIds} prefill={newEstimationPrefill} />
-            </Suspense>
-            <Suspense fallback={<Skeleton height={140} />}>
-              <ValuoSection property={property} listingIds={advertIds} adUrls={sources.map((s) => s.source_url)} />
-            </Suspense>
-          </>
-        }
-      />
-      <BrokerList
-        adverts={sources}
-        canonicalId={property.id}
-        advertsFailed={sourcesFailed}
-        onRetryAdverts={() => void sourcesQ.refetch()}
-      />
-      {sources.length > 0 && (
-        <>
-          <Hairline />
-          {/* Keyed on the property: the split letters, reason and refusal are
-              mount-time state, and property → property reuses this instance. */}
-          <MergedAdvertsSection
-            key={propertyId}
-            propertyId={propertyId}
-            canonicalListingId={property.id}
-            sources={sources}
-            // The header already IS the canonical advert; any other opens its row.
-            openAdvertId={advertParam !== property.id ? advertParam : null}
-            initialLetters={initialLetters}
+      {/* The header: the canonical advert's photos left; the property as its
+          Browse card shows it, and where it is, right. */}
+      <div className="mt-4 grid items-start gap-x-8 gap-y-6 lg:items-stretch lg:grid-cols-[minmax(0,1.2fr)_minmax(340px,1fr)]">
+        <Suspense fallback={<div className="h-[260px] sm:h-[360px] lg:h-full lg:min-h-[430px]" />}>
+          <PhotoMosaic
+            images={images}
+            loading={imagesQ.isLoading}
+            isActive={property.is_active}
+            onAll={() => setTab('fotky')}
           />
-        </>
-      )}
-      <Hairline />
-      <Suspense fallback={<Skeleton height={160} />}>
-        {/* The only REALIZED prices on the page — registered sales near this
-            point, which is why they sit beside the estimates rather than with
-            the portal history below. A sale is never linked to a property
-            (rule #15 does not reach a transactions fact). */}
-        {property.lat != null && property.lng != null && (
-          /* Keyed on the property: every property route renders the SAME
-             element, so property → property reuses this instance, and the
-             block's radius and category seed are mount-time state. */
-          <SoldCompsBlock
-            key={propertyId}
-            categoryMain={property.category_main}
-            lat={property.lat}
-            lng={property.lng}
-            propertyId={propertyId}
+        </Suspense>
+        <div className="min-w-0 space-y-5">
+          <PropertyIdentity listing={property} priceNote={priceNote} statusHref={statusHref} />
+          <LocationMap
+            listing={property}
+            heightClass="h-[170px]"
+            footer={
+              /* Where exactly is this, elsewhere. The neighbourhood's market
+                 (and "Prozkoumat okolí") is Přehled's Trh v okolí tile. */
+              property.lat != null && property.lng != null ? (
+                <ExternalMapLinks lat={property.lat} lng={property.lng} label={property.display_label} />
+              ) : null
+            }
           />
-        )}
+        </div>
+      </div>
+      {/* The operator's notes (and the artifact link), read and written in place
+          on every tab — what has been decided comes before the numbers (rule #18:
+          property-grain). The tags are the header's Štítky button. */}
+      <Suspense fallback={<div className="mt-6 h-[120px]" />}>
+        <ActingAs key={actingShare?.account_id ?? 'own'} share={actingShare}>
+          <CurationBlock property_id={propertyId} listing_id={property.id} />
+        </ActingAs>
       </Suspense>
-      <Hairline />
-      <PriceHistoryBlock
-        property={property}
-        adverts={chartAdverts}
-        snapshots={snapshotsQ.data ?? NO_SNAPSHOTS}
+      {/* Keyed on the property: which tabs were opened is per property. */}
+      <PropertyTabs
+        key={propertyId}
+        tab={tab}
+        onSelect={setTab}
+        counts={{ fotky: images.length, inzeraty: sources.length }}
+        panels={{
+          prehled: (
+            <Suspense fallback={<Skeleton height={320} />}>
+              <PropertyOverview
+                property={property}
+                sources={sources}
+                sourcesFailed={sourcesFailed}
+                onRetrySources={() => void sourcesQ.refetch()}
+                advertIds={advertIds}
+                chartAdverts={chartAdverts}
+                snapshots={snapshotsQ.data ?? NO_SNAPSHOTS}
+                lowest={lowest ?? null}
+                onOpen={setTab}
+              />
+            </Suspense>
+          ),
+          fotky: (
+            /* My own photos (Photos W2), then the canonical advert's. */
+            <div className="space-y-10">
+              <Suspense fallback={<Skeleton height={120} />}>
+                <ActingAs key={actingShare?.account_id ?? 'own'} share={actingShare}>
+                  <PropertyPhotos property_id={propertyId} lang="cs" />
+                </ActingAs>
+              </Suspense>
+              <GalleryBlock
+                images={images}
+                isActive={property.is_active}
+                loading={imagesQ.isLoading}
+                label="Fotky z inzerátu"
+                emptyText="Žádné fotky."
+              />
+            </div>
+          ),
+          hodnota: (
+            /* The operator's order (2026-10-23): how the ask moved; Valuo's paid
+               outside valuation; the registered sales near this point (reas.cz,
+               the only REALIZED prices on the page — a sale is never linked to a
+               property, rule #15); then our estimation chapter (MF reference +
+               our runs), never mixed with Valuo's (rule 12). */
+            <div className="space-y-12">
+              <PriceHistoryBlock
+                property={property}
+                adverts={chartAdverts}
+                snapshots={snapshotsQ.data ?? NO_SNAPSHOTS}
+                label="Vývoj ceny"
+              />
+              <Suspense fallback={<Skeleton height={140} />}>
+                <ValuoSection
+                  property={property}
+                  listingIds={advertIds}
+                  adUrls={sources.map((s) => s.source_url)}
+                  bare
+                />
+              </Suspense>
+              <Suspense fallback={<Skeleton height={160} />}>
+                {property.lat != null && property.lng != null ? (
+                  /* Keyed on the property: the block's radius and category seed
+                     are mount-time state. */
+                  <SoldCompsBlock
+                    key={propertyId}
+                    categoryMain={property.category_main}
+                    lat={property.lat}
+                    lng={property.lng}
+                    propertyId={propertyId}
+                  />
+                ) : (
+                  <p className="text-sm text-[var(--color-ink-3)]">
+                    Bez souřadnic nelze hledat prodeje v okolí.
+                  </p>
+                )}
+              </Suspense>
+              <Suspense fallback={<Skeleton height={180} />}>
+                <EstimationsBlock
+                  listing={property}
+                  listingIds={advertIds}
+                  prefill={newEstimationPrefill}
+                  label="Odhady"
+                  bare
+                />
+              </Suspense>
+            </div>
+          ),
+          okoli: (
+            <Suspense fallback={<Skeleton height={240} />}>
+              <MarketTile property={property} images={images} />
+            </Suspense>
+          ),
+          inzeraty:
+            sources.length > 0 ? (
+              /* Keyed on the property: the split letters, reason and refusal
+                 are mount-time state, and property → property reuses this
+                 instance. */
+              <MergedAdvertsSection
+                key={propertyId}
+                propertyId={propertyId}
+                canonicalListingId={property.id}
+                sources={sources}
+                // The header already IS the canonical advert; any other opens its row.
+                openAdvertId={advertParam !== property.id ? advertParam : null}
+                initialLetters={initialLetters}
+              />
+            ) : sourcesFailed ? (
+              <p className="text-sm text-[var(--color-brick)]">
+                Inzeráty se nepodařilo načíst
+                <button
+                  type="button"
+                  onClick={() => void sourcesQ.refetch()}
+                  className="ml-3 font-medium underline underline-offset-2 hover:no-underline"
+                >
+                  Zkusit znovu
+                </button>
+              </p>
+            ) : (
+              <Skeleton height={120} />
+            ),
+          audit: (
+            <Suspense fallback={<Skeleton height={160} />}>
+              <AuditPanel property={property} sources={sources} checks={checksQ.data ?? []} />
+            </Suspense>
+          ),
+        }}
       />
-      <Hairline />
-      {/* Freshness checks are stored against the legacy sreality_id: empty by
-          construction for a non-sreality advert. */}
-      {property.sreality_id != null && (
-        <FreshnessBlock sreality_id={property.sreality_id} checks={checksQ.data ?? []} />
-      )}
     </Page>
   );
 }
@@ -516,99 +624,21 @@ function SurvivorRedirect({ propertyId }: { propertyId: number }) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Brokers (who is selling this, and how to reach them)                       */
-/* -------------------------------------------------------------------------- */
-
-/* MS7 (lib/brokers.propertyBrokers), from one batched read the advert rows share.
-   A failed read says so with a retry, never "no broker" (the dark state that hid
-   the PostgREST revocation here for a month). Loading and "no broker" render
-   nothing, hairline included: most properties have no attributed broker. */
-function BrokerList({
-  adverts,
-  canonicalId,
-  advertsFailed,
-  onRetryAdverts,
-}: {
-  adverts: PropertySource[];
-  canonicalId: number;
-  advertsFailed: boolean;
-  onRetryAdverts: () => void;
-}) {
-  const ids = useMemo(() => adverts.map((a) => a.id), [adverts]);
-  const read = useListingBrokers(ids);
-
-  if (advertsFailed || read.isError) {
-    return (
-      <>
-        <Hairline />
-        <SectionLabel>Makléř</SectionLabel>
-        <p className="mt-3 text-sm text-[var(--color-brick)]">
-          Makléře se nepodařilo načíst
-          <button
-            type="button"
-            onClick={advertsFailed ? onRetryAdverts : read.refetch}
-            className="ml-3 font-medium underline underline-offset-2 hover:no-underline"
-          >
-            Zkusit znovu
-          </button>
-        </p>
-      </>
-    );
-  }
-  const { brokers, fromInactive } = propertyBrokers(adverts, read.brokers, canonicalId);
-  if (brokers.length === 0) return null;
-
-  return (
-    <>
-      <Hairline />
-      <div>
-        <SectionLabel>
-          {brokers.length > 1 ? 'Makléři' : 'Makléř'}
-          {fromInactive && (
-            <span className="ml-2 normal-case tracking-normal font-normal text-[var(--color-ink-4)]">
-              z neaktivních inzerátů
-            </span>
-          )}
-        </SectionLabel>
-        <ul className="mt-3 space-y-4">
-          {brokers.map((b) => (
-            <li key={b.broker_id} className="flex flex-wrap items-start justify-between gap-4">
-              <div className="min-w-0">
-                <Link
-                  to={ROUTES.brokerDetail.build({ id: b.broker_id })}
-                  title={b.broker_display_name ?? undefined}
-                  className="inline-flex items-center gap-1.5 text-[1.05rem] leading-tight text-[var(--color-ink)] hover:text-[var(--color-copper-2)] transition-colors"
-                >
-                  <span className="truncate">{b.broker_display_name ?? 'Neznámý makléř'}</span>
-                  <OutArrow />
-                </Link>
-                <p className="mt-1 text-sm text-[var(--color-ink-3)]">
-                  {b.broker_firm_label ?? 'nezávislý / neznámá kancelář'}
-                </p>
-              </div>
-              <BrokerContactCard broker={b} />
-            </li>
-          ))}
-        </ul>
-      </div>
-    </>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
 /* Layout primitives                                                          */
 /* -------------------------------------------------------------------------- */
 
 function Page({ children }: { children: React.ReactNode }) {
-  // max-w-5xl matches the platform's other work surfaces (Estimations,
-  // Buildings, Collections); the header uses the width for its two-column
-  // identity + map layout.
+  // One step wider than the other work surfaces (max-w-5xl): the header sets
+  // the photos beside the identity + map column.
   return (
-    <div className="px-6 py-8 max-w-5xl mx-auto">{children}</div>
+    <div className="px-6 py-8 max-w-6xl mx-auto">{children}</div>
   );
 }
 
-function Crumb() {
+/* A history entry behind this page = step back to it (the exact Browse URL).
+ * None (a new tab, a map pin's plain link, a pasted address) = the Browse view
+ * this browser last had, not a bare, unfiltered /browse. */
+export function Crumb() {
   const navigate = useNavigate();
   const location = useLocation();
   const className =
@@ -623,7 +653,7 @@ function Crumb() {
     );
   }
   return (
-    <Link to={ROUTES.browse.build()} className={className}>
+    <Link to={lastBrowsePath()} className={className}>
       <BackArrow />
       <span>Back to browse</span>
     </Link>
@@ -642,62 +672,6 @@ function NewEstimationButton({ prefill }: { prefill?: NewEstimationPrefill }) {
       <span className="text-[0.95em] leading-none">+</span>
       <span>New estimation</span>
     </button>
-  );
-}
-
-/* Opens the "Explore area" modal (full Browse focused on this property's ~5 km
-   neighbourhood, pre-filtered to its category + disposition). Rendered under the
-   header map via ListingOverview's mapFooter slot, which only shows when the
-   listing has coordinates — the null guard here is defensive. */
-function ExploreAreaButton({
-  listing,
-  images,
-}: {
-  listing: ListingPublic;
-  images: ImagePublic[];
-}) {
-  const { open } = useExploreAreaModal();
-  if (listing.lat == null || listing.lng == null) return null;
-  const label = [listing.display_label, listing.disposition]
-    .filter(Boolean)
-    .join(' · ');
-  return (
-    <button
-      type="button"
-      onClick={() =>
-        open({
-          lat: listing.lat as number,
-          lng: listing.lng as number,
-          categoryMain: listing.category_main,
-          categoryType: listing.category_type,
-          disposition: listing.disposition,
-          label: label || undefined,
-          // The property we came FROM — already loaded on this page, passed
-          // through (no refetch) to pin it on the modal map + show its photos
-          // and facts in the modal's top panel.
-          origin: { listing, images },
-        })
-      }
-      className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-[0.8rem] rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] text-[var(--color-ink-2)] hover:border-[var(--color-copper)] hover:text-[var(--color-copper)] transition-colors"
-      title="Explore the surrounding market on the map — same disposition, all layers"
-    >
-      <MapPinGlyph />
-      <span>Explore area</span>
-    </button>
-  );
-}
-
-function MapPinGlyph() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path
-        d="M8 1.5c2.5 0 4.5 2 4.5 4.5 0 3-4.5 8-4.5 8S3.5 9 3.5 6C3.5 3.5 5.5 1.5 8 1.5z"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinejoin="round"
-      />
-      <circle cx="8" cy="6" r="1.6" stroke="currentColor" strokeWidth="1.2" />
-    </svg>
   );
 }
 
@@ -806,30 +780,6 @@ function BackArrow() {
         stroke="currentColor"
         strokeWidth="1.25"
         strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function OutArrow() {
-  return (
-    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
-      <line
-        x1="1"
-        y1="9"
-        x2="8.5"
-        y2="1.5"
-        stroke="currentColor"
-        strokeWidth="1.25"
-        strokeLinecap="round"
-      />
-      <polyline
-        points="3.5,1.5 8.5,1.5 8.5,6.5"
-        stroke="currentColor"
-        strokeWidth="1.25"
-        fill="none"
-        strokeLinecap="round"
-        strokeLinejoin="round"
       />
     </svg>
   );

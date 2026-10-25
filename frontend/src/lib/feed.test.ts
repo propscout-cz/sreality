@@ -38,7 +38,7 @@ describe('scope → filters', () => {
     expect(FEED_ALL_FILTERS.showDismissed).toBe(false);
   });
 
-  it("applies a preset's criteria and drops the lenses that ride outside it", () => {
+  it("applies every filter a preset stores, the lenses included", () => {
     const saved: ListingFilters = {
       ...DEFAULT_FILTERS,
       categoryMain: ['byt'],
@@ -54,10 +54,10 @@ describe('scope → filters', () => {
     expect(f.categoryType).toBe('prodej');
     expect(f.dispositions).toEqual(['2+kk']);
     expect(f.priceMax).toBe(8_000_000);
-    expect(f.showDismissed).toBe(false);
-    expect(f.pipeline).toBeNull();
-    expect(f.collections).toBeNull();
-    expect(f.tags).toBeNull();
+    expect(f.showDismissed).toBe(true);
+    expect(f.pipeline).toEqual({ set: 'in', in: [], out: [] });
+    expect(f.collections).toEqual({ set: null, in: [4], out: [] });
+    expect(f.tags).toEqual({ set: 'out', in: [], out: [] });
   });
 
   it('keeps a map area the operator saved with the preset', () => {

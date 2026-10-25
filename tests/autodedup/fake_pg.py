@@ -20,12 +20,14 @@ from __future__ import annotations
 
 import json
 import re
+import zlib
 from datetime import datetime, timedelta, timezone
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterator, Mapping, Sequence
 
 from autodedup import export_sql as E
 from autodedup import incremental_sql as S
 from autodedup import apply_sql as A
+from autodedup.calibration_cut import decode_payload
 from autodedup.decide import CERTIFICATES
 from autodedup.indistinguishable import FEATURE_SLOTS
 from autodedup.score_sql import CLUSTER_CONFLICT_INSERT_SQL
@@ -35,6 +37,15 @@ from autodedup.score_lane import CLUSTER_INSERT_SQL, CLUSTER_MEMBER_INSERT_SQL
 # The reject ledger's key a test store is built with when the test is not about the ledger
 # (E943: `SqlStore` takes both, so the lookup and the write read one source).
 LEDGER_KEY: dict[str, str] = {"calibration_digest": "c", "engine_digest": "e"}
+
+# The stored form (E963) of the empty calibration a test seeds a generation with when the test is
+# not about the calibration, and the digest its row must name for the reader to take it.
+EMPTY_PAYLOAD: bytes = zlib.compress(b"{}")
+EMPTY_DIGEST: str = decode_payload(EMPTY_PAYLOAD).digest()
+
+
+# PostgreSQL's ceiling on one varlena value (`MaxAllocSize`, Appendix K's "field size: 1 GB").
+BYTEA_MAX = (1 << 30) - 1
 
 
 def _jsonb(value: Any) -> Any:
@@ -90,6 +101,8 @@ class FakePg:
         self.clip_tags: list[dict[str, Any]] = []
         self.clip_vectors: dict[int, str] = {}
         self.phash_pop: dict[int, int] = {}
+        # The population rows an upsert actually WROTE (a new tuple version each).
+        self.phash_pop_writes = 0
         self.statements: list[str] = []
         # Which statements the pass issued INSIDE its transaction. `set_config(..., true)` is
         # only a guard where the transaction can see it (W9d-4), and over the transaction-mode
@@ -99,8 +112,10 @@ class FakePg:
         # What the open transaction rolls back to: `other_session` writes into it what a
         # second session commits while that transaction is open.
         self.tx_state: dict[str, Any] | None = None
-        # `public.ruian_admin_units`: cast_obce code -> parent obec code (W9d-3).
+        # `public.ruian_admin_units`: cast_obce code -> parent obec code (W9d-3), and an okres
+        # placed under a kraj -> its obce (E961).
         self.admin_parents: dict[int, int] = {}
+        self.admin_districts: dict[int, list[int]] = {}
         # The scope's membership snapshot and the two ledgers W9e rails the lane with: the
         # entrant cadence's scan log and the rolling-day retirement log.
         self.scope_ids: dict[tuple[str, str, int], dict[str, Any]] = {}
@@ -215,6 +230,9 @@ class _Cursor:
     def fetchall(self) -> list[tuple]:
         return list(self.rows)
 
+    def __iter__(self) -> Iterator[tuple]:
+        return iter(list(self.rows))
+
     def executemany(self, sql: str, seq: Sequence[Mapping[str, Any]]) -> None:
         for params in seq:
             self.execute(sql, params)
@@ -303,14 +321,16 @@ def _aliases(sql: str) -> list[str]:
 
 def _in_scope(db: FakePg, listing_id: Any, p: Mapping[str, Any]) -> bool:
     """The scope predicate the feeds spell in SQL: `listing_location` by primary key, then the
-    two code lists. `all_scope` holds everything, a location row included or not."""
+    three code lists. `all_scope` holds everything, a location row included or not."""
     if p.get("all_scope"):
         return True
     location = db.locations.get(int(listing_id)) or {}
     obec = location.get("obec_kod")
     cast_obce = location.get("cast_obce_kod")
+    okres = location.get("okres_kod")
     return ((obec is not None and obec in set(p.get("obec") or ()))
-            or (cast_obce is not None and cast_obce in set(p.get("cast_obce") or ())))
+            or (cast_obce is not None and cast_obce in set(p.get("cast_obce") or ()))
+            or (okres is not None and okres in set(p.get("okres") or ())))
 
 
 def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noqa: C901
@@ -752,12 +772,24 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
     if sql == S.RT_PHASH_POP_COUNT_SQL:
         return [(len(db.phash_pop),)]
     if sql == S.RT_PHASH_POP_WRITE_SQL:
-        db.phash_pop[int(p["phash"])] = int(p["n_listings"])
+        # The `is distinct from` limb is READ from the statement (E964 review F6): an upsert that
+        # stopped skipping an unmoved count rewrites it here, as it would in Postgres.
+        phash, n = int(p["phash"]), int(p["n_listings"])
+        if db.phash_pop.get(phash) != n or "is distinct from excluded.n_listings" not in sql:
+            db.phash_pop_writes += 1
+        db.phash_pop[phash] = n
         return []
 
     # --------------------------------------------- A10: the calibration cut (E912)
     if sql == S.RT_CUT_SCOPE_IDS_SQL:
         return sorted({(listing_id,) for (g, _block, listing_id) in db.scope_ids if g == gen})
+    # E964: the widening reads what it keeps instead of rebuilding it.
+    if sql == S.RT_SCOPE_IDS_OF_BLOCKS_SQL:
+        keys = set(str(key) for key in p["block_keys"])
+        return sorted({(listing_id,) for (g, block, listing_id) in db.scope_ids
+                       if g == gen and block in keys})
+    if sql == S.RT_FP_HELD_SQL:
+        return [(sum(1 for i in set(int(i) for i in p["ids"]) if (gen, i) in db.rt_fp),)]
     if sql == S.RT_CUT_HASHES_SQL:
         wanted = set(int(i) for i in p["ids"])
         return sorted({(int(row["phash"]),) for row in db.image_rows
@@ -911,10 +943,16 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
         held = p["held"]
         return [] if row is None else [(gen, row["digest"], row["n_listings"],
                                         None if held is not None and held == row["digest"]
-                                        else _jsonb(row["payload"]), row["artifact_url"],
+                                        else row.get("payload_zlib"),
                                         _jsonb(row["settings"]), row["model_version"],
                                         row.get("built_at", db.now))]
+    if sql == S.RT_CALIBRATION_SCORER_SQL:
+        row = db.calibration.get(gen)
+        return [] if row is None else [(_jsonb(row["settings"]), row["model_version"])]
     if sql == S.RT_CALIBRATION_WRITE_SQL:
+        blob = p["payload_zlib"]
+        # A bytea is one varlena: at most 1 GB, where a jsonb value stops at 256 MiB (E963).
+        assert isinstance(blob, bytes) and len(blob) <= BYTEA_MAX, type(blob)
         db.calibration[gen] = {**p, "built_at": db.now}
         return []
 
@@ -991,12 +1029,23 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
                  len(slice_ids), departed)]
     # The sixth feed (W9d-3), as W9e pays for it (R3): the wide block walk on `public` is a
     # cadence-driven REFRESH of the snapshot, and an ordinary pass claims out of the snapshot.
+    # E940: one PAGE, the keyset after the block's cursor.
     if sql == S.RT_SCOPE_BLOCK_SQL:
         obec, cast_obce = p["obec"], p.get("cast_obce")
         found = sorted(
             listing_id for listing_id, place in db.locations.items()
-            if place.get("obec_kod") == obec
+            if place.get("obec_kod") == obec and listing_id > int(p["after_id"])
             and (cast_obce is None or place.get("cast_obce_kod") == cast_obce))
+        return [(i, db.locations[i].get("resolved_at")) for i in found[:int(p["limit"])]]
+    # E961: an okres through its obce (the index), filtered on its own code, plus the adverts
+    # located to the district alone (no obec, granularity `okres`).
+    if sql == S.RT_SCOPE_OKRES_BLOCK_SQL:
+        obce = set(p["obce"])
+        found = sorted(
+            listing_id for listing_id, place in db.locations.items()
+            if place.get("okres_kod") == p["okres"] and listing_id > int(p["after_id"])
+            and (place.get("obec_kod") in obce
+                 or (place.get("obec_kod") is None and place.get("granularity") == "okres")))
         return [(i, db.locations[i].get("resolved_at")) for i in found[:int(p["limit"])]]
     if sql == S.RT_SCOPE_IDS_WRITE_SQL:
         for listing_id, resolved in zip(p["listing_ids"], p["resolved"]):
@@ -1008,9 +1057,12 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
                 "refreshed_at": db.now}
         return []
     if sql == S.RT_SCOPE_IDS_PRUNE_SQL:
+        # Only the page's own id range: after the cursor, up to its end (None: the block's).
         keep = set(int(i) for i in p["listing_ids"])
+        low, high = int(p["after_id"]), p["page_end"]
         db.scope_ids = {key: row for key, row in db.scope_ids.items()
                         if not (key[0] == gen and key[1] == str(p["block_key"])
+                                and low < key[2] and (high is None or key[2] <= int(high))
                                 and key[2] not in keep)}
         return []
     if sql == S.RT_SCOPE_IDS_DELETE_SQL:
@@ -1023,6 +1075,11 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
         db.scope_ids = {key: row for key, row in db.scope_ids.items()
                         if not (key[0] == gen and key[1] not in keep)}
         return []
+    if sql == S.RT_SCOPE_SCAN_PRUNE_BLOCKS_SQL:
+        keep = set(str(b) for b in p["block_keys"])
+        db.scope_scans = [row for row in db.scope_scans
+                          if not (row["generation"] == gen and row["block_key"] not in keep)]
+        return []
     if sql == S.RT_SCOPE_ENTRANTS_SQL:
         cut = db.now - timedelta(seconds=int(p["lag"]))
         rows = sorted((listing_id, row["resolved_at"])
@@ -1030,6 +1087,40 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
                       if g == gen and listing_id > int(p["after_id"])
                       and (row["resolved_at"] is None or row["resolved_at"] <= cut)
                       and (gen, listing_id) not in db.rt_fp)
+        return rows[:int(p["limit"])]
+    # E976: the build's feed — live adverts first, then inactive, then no `listings` row; ids
+    # ascending within each; no id cursor.
+    if sql == S.RT_SCOPE_BUILD_ENTRANTS_SQL:
+        cut = db.now - timedelta(seconds=int(p["lag"]))
+
+        def _live(listing_id: int) -> bool:
+            return bool((db.listings.get(listing_id) or {}).get("is_active"))
+
+        def live_first(listing_id: int) -> int:
+            # E976/E978: visible first — the advert is live, or its property holds a live advert,
+            # or its property's adverts sit in a group holding one; no listings row last.
+            row = db.listings.get(listing_id)
+            if row is None or row.get("is_active") is None:
+                return 3
+            prop = row.get("property_id")
+            siblings = [] if prop is None else [
+                other_id for other_id, other in db.listings.items()
+                if other.get("property_id") == prop]
+            keys = {key for g, key, member in db.cluster_members
+                    if g == gen and member in siblings}
+            if row["is_active"]:
+                return 0
+            visible = (any(_live(other_id) for other_id in siblings)
+                       or any(_live(member) for g, key, member in db.cluster_members
+                              if g == gen and key in keys))
+            return 1 if visible else 2
+
+        rows = sorted(((listing_id, row["resolved_at"])
+                       for (g, _block, listing_id), row in db.scope_ids.items()
+                       if g == gen
+                       and (row["resolved_at"] is None or row["resolved_at"] <= cut)
+                       and (gen, listing_id) not in db.rt_fp),
+                      key=lambda r: (live_first(r[0]), r[0]))
         return rows[:int(p["limit"])]
     if sql == S.RT_SCOPE_SCAN_STATE_SQL:
         out: dict[str, list[Any]] = {}
@@ -1046,8 +1137,20 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
         return [(block, (db.now - last).total_seconds(), scans)
                 for block, (last, scans) in sorted(out.items())]
     if sql == S.RT_SCOPE_SCAN_SEEN_SQL:
+        # Walked AND read to its end: not a block whose first cycle of pages is open (E940).
+        pages = db.settings.get(f"rt_scope_pages:{gen}") or {}
         return sorted({(row["block_key"],) for row in db.scope_scans
-                       if row["generation"] == gen})
+                       if row["generation"] == gen
+                       and (pages.get(row["block_key"]) or {}).get("of", 1) != 0})
+    # The reconcile's other half of "fully read": a snapshot row the build has not reached.
+    if sql == A.RC_UNREAD_BLOCKS_SQL:
+        return sorted({(block,) for (g, block, listing_id) in db.scope_ids
+                       if g == gen and (gen, listing_id) not in db.rt_fp})
+    # Which scope block holds each member (the reconcile's half of "fully read", A9).
+    if sql == A.RC_MEMBER_BLOCKS_SQL:
+        wanted = set(int(i) for i in p["listing_ids"])
+        return sorted((listing_id, block) for (g, block, listing_id) in db.scope_ids
+                      if g == gen and listing_id in wanted)
     if sql == S.RT_SCOPE_BACKLOG_SQL:
         return [(sum(1 for (g, _block, listing_id) in db.scope_ids
                      if g == gen and (gen, listing_id) not in db.rt_fp),)]
@@ -1071,6 +1174,9 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
     if sql == S.RT_SCOPE_PARENT_OBEC_SQL:
         return [(int(code), int(db.admin_parents[int(code)])) for code in p["codes"]
                 if int(code) in db.admin_parents]
+    if sql == S.RT_SCOPE_OKRES_OBCE_SQL:
+        return [(int(code), int(obec)) for code in p["codes"]
+                for obec in db.admin_districts.get(int(code), ())]
     if sql == S.RT_REVIVED_SQL:
         slice_ids = sorted(i for g, i in db.rt_fp
                            if g == gen and not db.rt_fp[(g, i)]["is_active"]

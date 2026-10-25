@@ -220,7 +220,8 @@ def test_parse_detail_full():
     assert listing.garage is False
     assert listing.parking_lots is None
     assert listing.description.startswith("Nabízíme")
-    assert listing.raw["idnes_ref"] == "IDNES-943453"
+    assert listing.ad_reference == "IDNES-943453"
+    assert "idnes_ref" not in listing.raw
     assert len(listing.raw["image_urls"]) == 2
     assert listing.raw["image_urls"][0].endswith("img1.jpg")  # ?gt=r stripped
     assert listing.raw["coords"]["source"] == "page"
@@ -624,6 +625,27 @@ def test_the_top_of_the_floor_select_is_absence_and_the_page_keeps_saying_it():
         category_main="byt", category_type="prodej")
     assert listing.floor is None
     assert listing.raw["params"]["podlaží"] == "20. patro a vyšší"
+
+
+def test_a_foreign_price_note_is_the_stated_price_and_a_kc_page_states_none() -> None:
+    """idnes_c1 (Malinska, Krk) states "Cena v EUR 298 000 €" in its price note and the
+    headline in Kč at the day's rate (7 229 480 Kč); the EUR figure is what the ad asks. The
+    archived Kč page's note ("vč. provize a právního servisu") is no price at all."""
+    from pathlib import Path
+
+    fixtures = Path(__file__).parent.parent / "fixtures"
+    foreign = parse_detail(
+        (fixtures / "location_w2a_refetch" / "idnes_c1.html").read_text(encoding="utf-8"),
+        source_url="https://reality.idnes.cz/detail/prodej/byt/malinska/c1/",
+        category_main="byt", category_type="prodej")
+    assert (foreign.price_native, foreign.price_czk) == ("298000 EUR", 7_229_480)
+    assert foreign.raw["price_native"] == "298000 EUR"
+
+    czech = parse_detail(
+        (fixtures / "portal_html" / "idnes_detail.html").read_text(encoding="utf-8"),
+        source_url="https://reality.idnes.cz/detail/prodej/dum/x/6a71888887e5da33ca081ad8/",
+        category_main="dum", category_type="prodej")
+    assert (czech.price_native, czech.price_czk) == (None, 7_900_000)
 
 
 def test_a_room_rental_under_a_five_room_disposition_keeps_the_room_s_size() -> None:

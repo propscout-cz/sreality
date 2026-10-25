@@ -148,6 +148,9 @@ CATEGORY_BY_TITLE: tuple[tuple[str, str], ...] = (
     ("garaz", "ostatni"),
     ("stani", "ostatni"),
     ("objektu", "ostatni"),
+    # Last, so it labels only a title nothing above names: the "Komerční prostory" group's
+    # warehouses and "jiné prostory" (an "apartmán" filed there stays byt, by its title).
+    ("prostor", "komercni"),
 )
 
 # Construction labels -> the canonical codes the sreality parser emits.
@@ -676,7 +679,6 @@ def parse_detail(
         # so no re-mine can mistake it for the subject's again.
         "display_address": header_addr,
         "carousel_address": carousel_address,
-        "remax_ref": params.get("cislo zakazky"),
         "broker": _broker(tree),
         "image_urls": image_urls,
         "params": params,
@@ -687,6 +689,7 @@ def parse_detail(
         source=SOURCE,
         source_id_native=source_id,
         source_url=source_url,
+        ad_reference=vocabulary.reference(read("ad_reference")),
         category_main=category_main,
         category_type=category_type,
         subtype=subtype_of(read("subtype"), source_url),

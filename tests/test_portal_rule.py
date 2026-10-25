@@ -1,10 +1,12 @@
-"""THE portal rule (MS19, migration 590; two-sided since 597), executed and pinned to the shared fixture.
+"""THE portal rule (MS19, migration 590; two-sided since 597; the status is the property's since 657),
+executed and pinned to the shared fixture.
 
 `tests/fixtures/portal_rule.json` is read by both languages. Here: every case through
 `public.portal_status_matches`, through both aggregate RPCs (Stats and, since migration 630,
 the map cells over `browse_list`) and, for the `any` rows, through the Watchdog's
 compiled clause (`toolkit.filter_compiler.PROPERTIES_GRAIN`); every broker case seeds its
-ads and runs the broker lookup (`toolkit.brokers.broker_property_ids`). The SPA half is
+ads, runs the broker lookup (`toolkit.brokers.broker_property_ids`, the portal side on the
+broker's ads) and keeps the property's own status beside it, as Browse does. The SPA half is
 `applyPortalRule` in queries.test.ts. Also live: the rebuild's one partial index per portal
 and the projection's and `browse_list`'s one shape. Offline: the fixture covers every arm.
 
@@ -35,7 +37,7 @@ _TABLE = json.loads(
     (Path(__file__).resolve().parent / "fixtures" / "portal_rule.json").read_text(encoding="utf-8"))
 CASES = _TABLE["cases"]
 BROKER_CASES = _TABLE["broker_cases"]
-_STATUS_ARGS = {"any": (False, False), "active": (True, False), "inactive": (False, True)}
+_STATUSES = ("any", "active", "inactive")
 _PORTALS = [o.value for o in PORTAL_OPTIONS]
 _IDS = itertools.count(970_000_001)
 
@@ -50,7 +52,7 @@ def _ids(cases: list[dict[str, Any]]) -> list[str]:
 def test_the_table_covers_every_arm_both_ways() -> None:
     seen = {(min(len(c["portals"]), 2), min(len(c["excluded"]), 1), c["status"], c["expected"])
             for c in CASES}
-    for key in itertools.product((0, 1, 2), (0, 1), _STATUS_ARGS, (True, False)):
+    for key in itertools.product((0, 1, 2), (0, 1), _STATUSES, (True, False)):
         if key == (0, 0, "any", False):
             continue  # no portal, no exclusion and no status is no constraint
         assert key in seen, key
@@ -115,9 +117,8 @@ def test_the_watchdogs_clauses_are_the_any_arm(conn, case: dict[str, Any]) -> No
 
 
 def _rpc_args(case: dict[str, Any]) -> dict[str, Any]:
-    active_only, inactive_only = _STATUS_ARGS[case["status"]]
-    return {"portal": case["portals"] or None, "active_only": active_only,
-            "inactive_only": inactive_only, "excluded": case["excluded"] or None,
+    return {"portal": case["portals"] or None, "status": case["status"],
+            "excluded": case["excluded"] or None,
             "excluded_active_only": case["excluded_active_only"]}
 
 
@@ -133,7 +134,7 @@ def test_stats_counts_the_table(conn, case: dict[str, Any]) -> None:
             (next(_IDS), case["is_active"], case["all_sources"], case["active_sources"]))
         cur.execute(
             "select public.browse_stats_properties(portal_filter => %(portal)s::text[], "
-            "active_only_filter => %(active_only)s, inactive_only_filter => %(inactive_only)s, "
+            "status_filter => %(status)s, "
             "portal_excluded_filter => %(excluded)s::text[], "
             "portal_excluded_active_only => %(excluded_active_only)s, "
             "spec => '{\"rows\": [], \"cols\": [], \"measure\": \"price\"}'::jsonb)",
@@ -153,7 +154,7 @@ def test_the_map_cells_count_the_table(conn, case: dict[str, Any]) -> None:
              case["active_sources"]))
         cur.execute(
             "select public.browse_map_cells(portal_filter => %(portal)s::text[], "
-            "active_only_filter => %(active_only)s, inactive_only_filter => %(inactive_only)s, "
+            "status_filter => %(status)s, "
             "portal_excluded_filter => %(excluded)s::text[], "
             "portal_excluded_active_only => %(excluded_active_only)s, point_budget => 2000)",
             _rpc_args(case))
@@ -187,20 +188,26 @@ def _seed_broker_case(cur: Any, case: dict[str, Any]) -> tuple[dict[str, int], i
 
 @live
 @pytest.mark.parametrize("case", BROKER_CASES, ids=_ids(BROKER_CASES))
-def test_the_broker_lookup_judges_the_brokers_own_ads(conn, case: dict[str, Any]) -> None:
+def test_the_broker_lookup_with_the_propertys_status_answers_the_table(
+        conn, case: dict[str, Any]) -> None:
     from toolkit.brokers import broker_property_ids
 
     with conn.cursor() as cur:
         brokers, property_id = _seed_broker_case(cur, case)
     out = broker_property_ids(conn, brokers[case["broker"]], status=case["status"],
                               portals=case["portals"])
-    assert (property_id in out["data"]) is case["expected"]
+    live = any(ad["is_active"] for ad in case["ads"])  # the property's is_active, over every ad
+    status = {"any": True, "active": live, "inactive": not live}[case["status"]]
+    assert (property_id in out["data"] and status) is case["expected"]
 
 
 @live
 def test_the_rebuild_builds_one_partial_index_per_portal(conn) -> None:
     """The one-portal "Newest first" page and count read these (migration 590). A tenth
-    portal is offered only with its line here (tests/test_recompute_property_stats.py)."""
+    portal is offered only with its line here (tests/test_recompute_property_stats.py).
+    Live, they exist once `rebuild_browse_list()` has run since the portal's migration (649
+    forces no rebuild); in CI's migrations lane test_browse_map_cells_plan.py's fixture
+    commits one earlier in the same job."""
     with conn.cursor() as cur:
         cur.execute("select indexname, indexdef from pg_indexes where schemaname = 'public' "
                     "and tablename = 'browse_list' and indexname like 'browse_list_newest_ad_at_%'")
@@ -217,7 +224,8 @@ def test_the_rebuild_builds_one_partial_index_per_portal(conn) -> None:
 @live
 def test_the_projection_and_the_read_model_have_one_shape(conn) -> None:
     """`sync_browse_list` inserts by POSITION (`insert into browse_list select * from
-    browse_projection`): two relations, one column list, the twelve appended last."""
+    browse_projection`): two relations, one column list, 590's twelve one block, and each
+    later portal's date appended after it."""
     shapes = {}
     with conn.cursor() as cur:
         for rel in ("browse_projection", "browse_list"):
@@ -229,8 +237,11 @@ def test_the_projection_and_the_read_model_have_one_shape(conn) -> None:
     assert shapes["browse_list"] == shapes["browse_projection"]
     names = [n for n, _ in shapes["browse_projection"]]
     assert "asset_id" not in names
-    # One contiguous block in portal order; later columns may follow it (584's recipe appends
-    # every new projection column LAST, so the block is not pinned to the end).
+    # 590's twelve are one contiguous block in portal order; later columns may follow it (584's
+    # recipe appends every new projection column LAST, so the block is not pinned to the end),
+    # and a portal since 590 (`web`, migration 649) has its date among them, in portal order.
     at = names.index("all_sources")
     assert names[at:at + 12] == ["all_sources", "active_sources", "source_count",
-                                 *(f"newest_ad_at_{p}" for p in _PORTALS)]
+                                 *(f"newest_ad_at_{p}" for p in _PORTALS[:9])]
+    assert [c for c in names[at + 12:] if c.startswith("newest_ad_at_")] == [
+        f"newest_ad_at_{p}" for p in _PORTALS[9:]]

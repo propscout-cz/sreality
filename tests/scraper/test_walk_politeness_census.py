@@ -91,6 +91,7 @@ def test_the_sighting_diff_makes_no_http_request(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(db, "enqueue_detail", lambda _c, _s, entries: len(entries))
     monkeypatch.setattr(
         db, "presence_candidates", lambda *_a, **_k: ([("z", None, None)], 3))
+    monkeypatch.setattr(db, "orphan_candidates", lambda *_a, **_k: ([("o", None, None)], 1))
     monkeypatch.setattr(
         db, "enqueue_presence_checks", lambda *_a, **_k: (1, 0))
 
@@ -98,8 +99,11 @@ def test_the_sighting_diff_makes_no_http_request(monkeypatch: pytest.MonkeyPatch
         object(), "remax", {"a": ("r", 200), "b": ("r", 5)}, min_change_pct=0.0)
     assert out == {"found_new": 1, "enqueued": 2}
     fake = SimpleNamespace(source="remax")
+    scope = {"category_main": "byt", "category_type": "prodej"}
+    groups = {portal_runner._scope_key(scope): portal_runner._ScopeGroup(left=1)}
     assert portal_runner._queue_presence_checks(
-        fake, object(), {"category_main": "byt"}, {"a"}, "byt", "prodej") == (1, 0)
+        fake, object(), {"category_main": "byt"}, scope, groups, {"a"}, "byt", "prodej") == (1, 0)
+    assert portal_runner._queue_orphan_checks(fake, object(), [scope], {"a"}) == (1, 0, 1)
 
 
 def _client_calls_without_limiter(tree: ast.AST) -> list[str]:

@@ -824,3 +824,185 @@ the shorter Progress tiles and, while a page loads, the still placeholders; Sett
 Settings as before.
 
 **Next:** wave 9 at its gate (wave 8's Next, above); wave 10 is done.
+
+## 2026-10-22 — Health green sprint, wave 1 (shipped with this PR)
+
+The first wave of the Health green sprint: the Health page measures the truth. Plan:
+[`docs/design/health-dashboard.md`](../docs/design/health-dashboard.md) § 14 (north star: a red leaves
+the page only through a root fix that leaves less behind) and its "Wave 1 as built" note.
+
+What wave 1 changed:
+- **pg_cron stops freezing** (migration 658). The Browse list rebuild ran a dead `drop table if exists
+  browse_list_next`; its NOTICE froze pg_cron's one launcher for the whole ~68 s rebuild, four times an
+  hour, so every job started alongside recorded a ~67 s run (the capacity Problem on
+  `cron/health-liveness`, "112 % of statement_timeout", and a canary leg). The statement is gone and
+  nothing else in the function changed.
+- **ceskereality's houses are counted once** (migration 659, #1854). The `chaty-chalupy` scope re-listed
+  ads the `rodinne-domy` walk already sees, so dum/prodej's declared total held ~2,000 houses twice
+  (residual −13.6 %; truly +1.8 %).
+- **One definition of "an ad awaiting nomination"** (`db.nominable_predicate`), shared by the walks,
+  `web`'s walk and the coverage check: the sreality, bazos and idnes `unnominated` warns read 0.
+  ceskereality (95) and realitymix (159) stay red: their NULL-category ads, wave 2.
+- **A dropped or renamed cell closes at once** as `retired`: the ghost `location_town_coverage`
+  incident closes on the first pass. A cell the check lists as Not measured still waits a week.
+- **One verdict, one cell**: a unit whose declared total cannot be judged shows once (coverage's
+  residual), not twice: 48 fewer Not-measured cells.
+- Two skill lines: a pg_cron command emits no NOTICE before its last statement; dispatch a new
+  portal's first walk at deploy.
+
+To check: 658 and 659 applied through `apply_migration.yml` before the merge; then, at :00 and :15, no
+interim `SET` row for the rebuild and liveness under 1 s, and the capacity cell OK about 23 h later; the
+next ceskereality walk logs `RECONCILE cm=dum ct=prodej` declaring ~11.6 k and its residual reads OK;
+the three `unnominated` cells OK at the next coverage pass; the ghost incident resolved `retired`.
+
+**Next:** W2, rule 3 made total (the 430 NULL-label ads nominable, the parsers fixed, the stored rows
+healed); W3, producers (idnes's daily EUR churn, the per-m² masquerade); W4, location producers (14 of
+the 38 town gaps); W5, the rulings Q1–Q3 applied; W6, the legacy layer (migration 643, on or after
+2026-10-23 13:00Z).
+
+## 2026-10-22 — Health green sprint, wave 2 (shipped with this PR)
+
+Rule 3 made total (issue #1853). A sighting is label-blind (`reconcile_sightings` touches by id) but a
+unit's nomination was label-bound, so an active ad whose label no walked unit covers was never
+page-checked once it left the index: 703 NULL-label ads on 2026-10-22, 430 of them unclosable since June
+(ceskereality's 129 `/drazby/` auctions, realitymix's 301 ads whose breadcrumb is truncated, 277 of them
+"Prodej chaty/rekreačního objektu"). Health read them as `ceskereality/unnominated` 94 and
+`realitymix/unnominated` 157.
+
+What wave 2 changed:
+- **The parsers emit the canonical label.** ceskereality maps `/drazby/` to `drazba` (sreality's and
+  mmreality's word) and its parser reads the category off its own URL, so `scripts/reparse.py`
+  re-derives it; realitymix reads the family from the structured h1 before the broker-written slug
+  when the breadcrumb is truncated; remax labels a "prostor" title komercni when nothing above names it
+  (the 273 "Komerční prostory" warehouses: nominable already, invisible to every category filter).
+- **The runner owns nomination scopes.** A unit's scope is its two labels unless the portal declares
+  `presence_scope` (bazos: the section's subtype; remax, maxima: the agenda); units sharing a scope
+  nominate once, on the last of them, with their union, and a unit's active count is the same scope's.
+  Deleted: the two slice-buffer copies (ceskereality, realitymix) and `note_empty_slice`, bazos's
+  override and its `active_count`, `web`'s own query, remax's and maxima's agenda queries (an agenda's
+  union is its whole walk) and `db.active_count`'s own subtype clause.
+- **Orphans are nominated.** A walk whose every unit reached the end, over the portal's whole agenda,
+  also nominates the active ads in no walked scope (`db.orphan_candidates`, NULL labels included)
+  against every id it saw, under the same flip cap and dwell (`VERIFY orphans …`), recorded as one more
+  `by_category` entry with NULL labels (an indexless unit's shape): the checks count its deferrals, and
+  a failed orphan query is a run error and an entry short of the end. `web`'s whole agenda is that
+  scope. A bazos dispatch narrowed to one section is `narrowed` and proves no orphan; a registry that
+  maps no bazos section fails the run (rc 2) instead of walking a stand-in one.
+- **A rail:** `tests/test_nomination_scope_rail_live.py` (CI migrations lane) builds every portal from
+  its replayed `portals` row, seeds one active ad per label and requires each to come back from exactly
+  one nomination query.
+
+To check: the next ceskereality and realitymix walks whose units all reached the end log
+`VERIFY orphans candidates=N`, and each portal gains one cell, `walks/orphans` (hours since its last walk
+in which every unit reached the end; web's `walks/none-none` is renamed so); the orphans' entry declares no
+total, so it gets no residual; after the reparse heal (the PR body's runbook, after the Prague read) and
+two gone verdicts at least 24 h apart, `coverage ceskereality/unnominated` and `realitymix/unnominated`
+read 0 within ~2 days and their `no_walked_category` 0. Not here: the multi-ad properties the heal
+leaves holding prodej beside drazba (a clash checked only at merge) — the operator splits them.
+
+**Next:** W3, producers (idnes's daily EUR churn, the per-m² masquerade); W4, location producers; W5, the
+rulings Q1–Q3 applied; W6, the legacy layer (migration 643).
+## 2026-10-22 — Health green sprint, wave 5a (shipped with this PR)
+
+The `delisting` precision arm judges a flip at the age a false delist must show by. Plan:
+[`docs/design/health-dashboard.md`](../docs/design/health-dashboard.md) § 14 (Q2, settled by construction,
+no ruling).
+
+- **The defect.** The arm read the flips 48–72 h old, pooled over 2–7 d under 50. Rule 3 makes an
+  end-reached walk a census, so an ad still listed when we closed it is sighted again within 2 × the
+  portal's p90 walk gap + 1 h (the stuck limit less the dwell); one first sighted later was missing from a
+  walk that reached the end after its flip: a re-list. On 10-22 idnes read Problem at 106 of 407 (26 %):
+  104 were whole agency portfolios flipped one morning and back 2–3 days later under the same ids.
+- **The change.** Each portal's cohort is the day of flips from that age (`_sighted_s`, one bound shared with
+  the stuck limit; idnes 19–43 h, sreality 14–38 h at 10-22's gaps). The pooled fallback and the fixed
+  48–72 h constant are deleted: under 50 flips the cell is Not measured. mmreality's new-price re-lists stop
+  counting (Q2b).
+- **Live, 16:32Z, the final SQL:** idnes 11 of 1,270 (0.9 %), sreality 144 of 1,684 (8.6 %, lower bound
+  7.3 %), mmreality 6 of 127, remax 4 of 70, realitymix 6 of 463, bezrealitky 1 of 135, bazos 0 of 1,316,
+  ceskereality 0 of 751, all OK; maxima and web Not measured. 0.11 s, one index range per portal.
+
+To check: after the deploy, the idnes precision incident closes on a measured OK, verified on the page.- **Wave 5b (2026-10-23, shipped with the next PR):** `jobs lane/<name>` read "late" once after every brake
+  lift because `_lane`'s switch-on clock only applied when the lane had no pass at all; a pass from before
+  the pause won. The reference is now the later of the last pass and the previous measurement when the lane
+  read off then (autodedup, 15:54Z: a 5 h brake, incident 1005 opened on a healthy first pass of 117 merges).
+
+## 2026-10-22 — Health green sprint, wave 4 (shipped with this PR)
+
+Location producers: the claim lane sees the page the drain just fetched. Plan:
+[`docs/design/health-dashboard.md`](../docs/design/health-dashboard.md) § 14 and its "Wave 4 as built" note.
+
+What wave 4 changed:
+- **The payload archive appends every changed body.** Its 7-day per-listing floor (W2a-7) discarded a
+  refetched body inside the window, so the town the second fetch found never reached the claim lane
+  (≥ 1,133 refusals a day). Reversed W2a-7 decision; ~1.1k more R2 PUTs a day.
+- **The refetch lane selects rule 25's invariant** (`location_steps.town_missing_sql()`: active, not
+  foreign, no town), the set the `location_town_coverage` check judges, instead of the pin-audit
+  matview's `active_no_claims` bucket, which missed ads holding only a kraj or okres claim.
+
+To check: `PAYLOAD stats appended=` in the worker log; the next `LOCATION_REFETCH lane` line queues ~26;
+`ceskereality/town` 34 → ~23 within ~1 h of the refetch tick; `realitymix/town` 3 → 0 or a gone verdict.
+
+**Next:** W5 applies the rulings (Q3: the 24 towns the portal withholds; the text lane's scope).
+## 2026-10-22 — Health green sprint, wave 3a (shipped with this PR)
+
+idnes states a foreign ad's price in its own currency ("Cena v EUR 298 000 €") and shows it converted
+to Kč at the day's rate, and the crawlers' content hash read the Kč. Whenever the rate drifted past the
+0.5 % index tolerance (measured against the STORED Kč, so the drift accumulates), the whole foreign
+stock re-snapshotted at once: 8,468 re-snapshots in 24 h on 10-21/22, from 6,064 Spanish, 245 Croatian
+and 94 Italian ads (1,421 Czech), only `params.cena` and `price_text` differing; seven waves of 4–10k
+since 08-28 — a rule-2 violation feeding `listing_snapshots` and `dirty_properties`. Fixed here: the
+idnes parser reads the stated price into `price_native` (never a column; kept in `raw_json` as the
+evidence), and `ScrapedListing.hash_doc` reads it IN PLACE OF `price_czk` when present — one rule in
+the shared hash, no portal branch. A Kč-priced ad's hash input is byte-identical to before (a golden
+test pins the digest computed on the base commit); a foreign ad's hash changes once, by design.
+`price_czk` still updates latest-wins on every fetch, unhashed (rule 20's exception: the property
+rollup catches up at the daily sweep). Deleted: idnes's own `--price-change-min-pct` CLI override, which
+no workflow passed; the shared `operational_limits` row is the one override channel, as for every portal.
+- **Next:** the tolerance still re-enqueues the foreign stock on each crossing (a refetch wave of
+  ~6.4k detail fetches, now snapshot-free). Each foreign ad re-snapshots ONCE at its first detail fetch
+  after the deploy (the new hash), mostly inside the first crossing: about one ordinary wave, so
+  `parsing idnes/churn` may read red once more. The crossing after it must read ~0 foreign
+  re-snapshots, and the churn incident closes on that measured OK.
+
+## 2026-10-24 — Health green sprint, wave 7a (shipped with this PR)
+
+bazos's counter over-counts by a handful (ads removed between the count and the page render), so the
+page after the last served one is often blank while the count still says two or three ads remain. The
+barren rule re-reads that blank and then placed it ROW-exactly (`offset >= total`), while the 404 rule
+two methods up has placed a 404 at PAGE grain since 2026-09-09 for exactly this reason. A scope a page
+short of its count therefore read `barren` — a stop of ours — and nominated nothing: prodam/byt 9,040
+of 9,042 (10-24 03:56), 9,099 of 9,102 (10-23 21:11), 9,026 of 9,041 (10-22 11:26); byt-pronajem,
+pozemek-prodej and ostatni-pronajem the same shape on other days, a different unit cut almost every
+walk, and the Health page read `scraping bazos/walks/orphans` Watch (the orphan scope nominates only on
+a walk where every unit reached the end). Fixed here: the blank is placed by `_classify_gone` — ONE
+rule for "where the count puts the end", shared by the 404 and the empty page — and two byte-identical
+duplicate statements in the page loop (`page_size = 0`, `page_size = max(...)`) are gone. Expected:
+every bazos unit ends on a terminator unless the blank sits a whole page or more before the count's
+end; the orphans arm closes on the next end-reached walk.
+- **Next:** idnes's sibling (wave 7b: a page the portal refuses with a 500 costs one page, not the
+  slice) is built on `fix/idnes-refused-page` and waits for the operator's rule-3 ruling.
+
+## 2026-10-24 — Health green sprint, wave 8a (shipped with this PR)
+
+ceskereality keeps a re-categorised ad answering 200 at its OLD URL with the new page: 3639104 is stored
+as `/prodej/komercni-prostory/apartman/…`, its page's canonical is `/prodej/byty/byty-3-kk/…`, H1
+"Prodej bytu 3+kk". `parse_detail` read the category off the URL we requested and stored that same URL,
+so the label never followed the ad: the byt/prodej walk sighted it (sightings are label-blind) while the
+komercni/prodej scope nominated it at every walk (rule 3 is label-scoped) and the drain refetched it live,
+part of the ~818 wasted ceskereality verify fetches a day, with Browse filing it under the wrong category.
+Measured 10-24 over the stored pages: 113 ads (85 active) whose canonical names another category (25 a
+prodej↔pronájem flip), 1,004 (633 active) whose canonical path differs at all (most a slug edited after
+an area change), the canonical's id equal to the stored one on every row. Fixed here: `_page_url` reads
+`<link rel="canonical">` and, when its path is a detail path carrying the same id, the ad's category AND
+`source_url` come from that path on the www host (every page canonicalises to a regional one); the
+requested URL is the fallback. A page whose canonical is the path we asked for parses byte-identically (a
+golden test pins the hash computed on the base commit). Deleted: `parse_detail`'s `category_main` /
+`category_type` parameters and their precedence line, which no caller passed.
+- **Heal:** the live ones heal themselves at their next verify fetch (their old scope still nominates
+  them; one genuine snapshot each, `source_url` with it). A day after the deploy, `reparse.yml`
+  `source=ceskereality fields=category_main,category_type` (dry run, then `allow_snapshot_deferral=true`)
+  heals the rest: `<n>` rows, ~28 inactive expected. The reparse cannot write `source_url`
+  (preserve-if-null), so an inactive row keeps its old URL. A relabel can leave a multi-ad property mixed
+  (rule 15 gates merges only): ~10 newly, listed for the operator to split.
+- **Next:** the ~780 agency-gone ads the same investigation found stay live pages; closing them needs
+  the operator's rule-3 ruling (corroborated absence vs a recheck backoff).

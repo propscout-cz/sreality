@@ -376,7 +376,6 @@ def parse_detail(
         "title": title,
         "price_text": price_text,
         "locality_text": locality,
-        "maxima_ref": params.get("id zakázky"),
         "image_urls": image_urls,
         "params": params,
     }
@@ -390,6 +389,7 @@ def parse_detail(
         source=SOURCE,
         source_id_native=source_id,
         source_url=source_url,
+        ad_reference=vocabulary.reference(read("ad_reference")),
         category_main=category_main,
         category_type=category_type,
         price_czk=price_czk,

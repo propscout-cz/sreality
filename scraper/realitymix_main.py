@@ -32,7 +32,7 @@ import logging
 from math import ceil
 from typing import Any
 
-from scraper import db, portal_runner
+from scraper import portal_runner
 from scraper.portal import (
     PortalConfig,
     StopReason,
@@ -82,10 +82,6 @@ class RealitymixPortal(portal_runner.PortalDefaults):
         self.index_rate = config.limits.index_rate
         self.shared_rate_limiter = config.limits.shared_rate_limiter
         self.price_change_min_pct = config.limits.price_change_min_pct
-        # per-(cm, ct) union of complete slices' seen ids + completed-slice
-        # counts — the cross-slice nomination buffer (see presence_candidates).
-        self._sweep_seen: dict[tuple[str, str], set[str]] = {}
-        self._sweep_done: dict[tuple[str, str], int] = {}
 
     # --- index-walk seams ---
     def set_index_page_cap(self, pages: int | None) -> None:
@@ -267,43 +263,6 @@ class RealitymixPortal(portal_runner.PortalDefaults):
             walk_coverage(len(seen), total, stopped_early=not reached_end),
         )
         return seen, counts, total, pages, reached_end
-
-    def note_empty_slice(self, category: dict[str, Any]) -> None:
-        """A slice the runner refused to nominate from (it saw nothing) still counts
-        as one of the group's slices — otherwise a nationwide-empty sibling slug
-        (pronajem/chaty on an aggregator) would hold its whole (category_main,
-        category_type) group below `expected` for ever, and no row of that group
-        would ever be nominated again. It contributes no ids."""
-        cm, ct = self.category_labels(category)
-        if cm is None or ct is None:
-            return
-        key = (cm, ct)
-        self._sweep_seen.setdefault(key, set())
-        self._sweep_done[key] = self._sweep_done.get(key, 0) + 1
-
-    def presence_candidates(
-        self, conn: Any, category: dict[str, Any], seen: set[str],
-    ) -> tuple[list[tuple[str, str | None, int | None]], int] | None:
-        """Nominate this category's unseen rows for a page check (rule #3,
-        2026-09-07) -- once per (category_main, category_type), with the UNION
-        of its slices' seen ids. Several index slices collapse onto one
-        canonical category ('domy' and 'chaty' both -> dum) and the runner calls
-        this per slice; nominating from one slice's seen set would nominate the
-        sibling's whole population every walk. Buffer, nominate on the group's
-        LAST slice to reach the portal's end; a sibling that stopped on one of
-        OUR stops never reaches this call, so nothing is nominated this walk and
-        the next walk retries."""
-        cm, ct = self.category_labels(category)
-        if cm is None or ct is None:
-            return None
-        key = (cm, ct)
-        group = self._sweep_seen.setdefault(key, set())
-        group.update(seen)
-        self._sweep_done[key] = self._sweep_done.get(key, 0) + 1
-        expected = sum(1 for c in self._categories if self.category_labels(c) == key)
-        if self._sweep_done[key] < expected:
-            return None
-        return db.presence_candidates(conn, SOURCE, cm, ct, group)
 
     # --- detail-drain seams ---
     def fetch_detail(

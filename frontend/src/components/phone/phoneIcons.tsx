@@ -75,6 +75,16 @@ export function ChevronIcon(p: IconProps) {
   );
 }
 
+/* A viewing (migration 666): a calendar leaf, the Prohlídky tab and the composer's toggle. */
+export function CalendarIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <rect x="4" y="5.5" width="16" height="14.5" rx="1.5" />
+      <path d="M4 10h16M8.5 3.5v4M15.5 3.5v4" />
+    </Svg>
+  );
+}
+
 export function PlusIcon(p: IconProps) {
   return (
     <Svg {...p}>

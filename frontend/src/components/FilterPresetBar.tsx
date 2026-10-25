@@ -28,6 +28,9 @@ export interface FilterPresetBarProps {
   onLoadPipelineView: () => void;
 }
 
+/* Whether the preset chips are unfolded (the bar folds to the active chip). */
+export const PRESETS_EXPANDED_KEY = 'sreality.browse.presetsExpanded';
+
 export const PRESET_COPY: SavedSetCopy = {
   kind: 'Filter preset',
   empty: 'No saved presets yet.',
@@ -103,10 +106,10 @@ export default function FilterPresetBar({
    * ON loads the pipeline over a NEUTRAL cohort (pipelineViewFilters) instead of
    * ANDing itself onto the filters set — as a modifier it showed 1 of 45 deals,
    * the rest hidden by Browse's byt + pronájem default. It is still NOT a preset:
-   * nothing is saved or updated; `pipeline` is outside preset identity
-   * (PRESET_EXCLUDED_KEYS), so it never marks a preset dirty; loading it
-   * deselects the active preset. OFF is a filter edit (drop the scope, keep the
-   * cohort since built); Back undoes the load. Per-stage narrowing lives in the
+   * nothing is saved or updated, and loading it deselects the active preset (a
+   * preset stores its pipeline scope like any filter, so a preset left active
+   * over the view would read as edited). OFF is a filter edit (drop the scope,
+   * keep the cohort since built); Back undoes the load. Per-stage narrowing lives in the
    * sidebar's Curation → Pipeline control. */
   const scope = filters.pipeline;
   const pipelineOn = scopeIncludes(scope);
@@ -149,6 +152,7 @@ export default function FilterPresetBar({
       dirty={dirty}
       copy={PRESET_COPY}
       leading={pipelineChip}
+      collapse={{ label: 'Presety', storageKey: PRESETS_EXPANDED_KEY, show: 'Zobrazit všechny presety', fold: 'Sbalit presety' }}
       onLoad={onLoad}
       onSaveNew={(name, withMapArea, color) => create.mutateAsync({ name, filter_spec: specOf(withMapArea), color })}
       onUpdate={(p, name, withMapArea, color) =>
@@ -156,11 +160,13 @@ export default function FilterPresetBar({
       }
       onRename={(p, name, color) => update.mutateAsync({ id: p.id, name, color })}
       onDelete={(p) => remove.mutateAsync(p.id)}
+      /* A new preset takes the map area unless unticked (operator 2026-10-22);
+       * an update keeps the preset's own choice. */
       checkbox={
         filters.bounds != null
           ? {
               label: 'Include the current map area in this preset',
-              initial: (p) => p != null && readPresetSpec(p.filter_spec).filters.bounds != null,
+              initial: (p) => p == null || readPresetSpec(p.filter_spec).filters.bounds != null,
             }
           : undefined
       }

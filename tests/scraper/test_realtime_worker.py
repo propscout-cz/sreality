@@ -24,6 +24,7 @@ from typing import Any
 import pytest
 from psycopg.types.json import Jsonb
 
+from scraper import portal_factory
 from scraper import realtime_worker as rw
 from scraper.portal import default_config
 
@@ -256,13 +257,13 @@ def test_probe_pass_filters_disabled_and_proxied(monkeypatch):
     asyncio.run(scenario())
     # ceskereality and mmreality are proxied (USE_PROXY, proxy REQUIRED) and
     # SCRAPER_PROXY_URL is unset. sreality (Phase 4 of portal-order-fidelity) is
-    # neither disabled nor proxied, so it runs too.
-    assert ran == ["bezrealitky", "idnes", "maxima", "realitymix", "sreality"]
+    # neither disabled nor proxied, so it runs too; so does `web`, first.
+    assert ran == ["web", "bezrealitky", "idnes", "maxima", "realitymix", "sreality"]
     probe = state["lanes"]["probe"]
     assert probe["passes"] == 1
-    assert probe["last"]["portals"] == 5
+    assert probe["last"]["portals"] == 6
     assert probe["last"]["skipped"] == 4      # bazos + remax disabled, ceskereality + mmreality proxied
-    assert probe["last"]["enqueued"] == 10
+    assert probe["last"]["enqueued"] == 12
 
 
 def test_probe_pass_includes_proxied_portal_when_env_set(monkeypatch):
@@ -1083,6 +1084,13 @@ def test_registry_is_internally_consistent():
     assert set(rw._PORTAL_CLASSES) == set(rw.REALTIME_SOURCES) - {"bazos"}
 
 
+def test_pasted_sites_drain_first():
+    """The drain lane takes sources one after another with a budget each: `web` first, so a
+    paste waits for the drain interval, never for nine other portals' budgets."""
+    assert rw.REALTIME_SOURCES[0] == "web"
+    assert set(rw.REALTIME_SOURCES) == set(portal_factory.PORTAL_CLASSES)
+
+
 @pytest.mark.parametrize("source", rw.REALTIME_SOURCES)
 def test_build_portal_from_baked_config(source):
     portal = rw._build_portal(source, default_config(source))
@@ -1292,14 +1300,14 @@ def test_maintenance_lane_registered_and_live_by_default():
 
 def test_maintenance_pass_records_counters(monkeypatch):
     def fake_sync() -> dict[str, Any]:
-        return {"skipped": False, "attached": 7, "recomputed": 12}
+        return {"skipped": False, "attached": 7, "recomputed": 12, "settled": 3}
 
     monkeypatch.setattr(rw, "_maintenance_sync", fake_sync)
     state = rw._new_state()
     asyncio.run(rw._maintenance_pass(asyncio.Event(), state))
     lane = state["lanes"]["maintenance"]
     assert lane["passes"] == 1
-    assert lane["last"] == {"skipped": False, "attached": 7, "recomputed": 12}
+    assert lane["last"] == {"skipped": False, "attached": 7, "recomputed": 12, "settled": 3}
 
 
 def test_maintenance_pass_records_lock_skip(monkeypatch):
@@ -1307,7 +1315,7 @@ def test_maintenance_pass_records_lock_skip(monkeypatch):
     # sweep holds the advisory lock — the lane records the skip and moves on.
     monkeypatch.setattr(
         rw, "_maintenance_sync",
-        lambda: {"skipped": True, "attached": 0, "recomputed": 0})
+        lambda: {"skipped": True, "attached": 0, "recomputed": 0, "settled": 0})
     state = rw._new_state()
     asyncio.run(rw._maintenance_pass(asyncio.Event(), state))
     assert state["lanes"]["maintenance"]["last"]["skipped"] is True
@@ -2188,7 +2196,7 @@ def _refetch_row(source: str, nid: str, total: int = 3, **over: Any) -> dict[str
 
 def _patch_refetch(
     monkeypatch: pytest.MonkeyPatch,
-    rows: list[dict[str, Any]] | None,
+    rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Stub the two db entry points the lane touches and capture their calls."""
     captured: dict[str, Any] = {"enqueued": [], "kwargs": {}}
@@ -2202,7 +2210,7 @@ def _patch_refetch(
 
     conn = _Conn()
 
-    def fake_candidates(c: Any, **kwargs: Any) -> list[dict[str, Any]] | None:
+    def fake_candidates(c: Any, **kwargs: Any) -> list[dict[str, Any]]:
         captured["conn"] = c
         captured["kwargs"] = kwargs
         return rows
@@ -2214,7 +2222,6 @@ def _patch_refetch(
     monkeypatch.setattr(rw.db, "connect", lambda *a, **k: conn)
     monkeypatch.setattr(rw.db, "location_refetch_candidates", fake_candidates)
     monkeypatch.setattr(rw.db, "enqueue_location_refetch", fake_enqueue)
-    monkeypatch.setattr(rw, "_LOCATION_REFETCH_VIEW_WARNED", False)
     captured["conn_obj"] = conn
     return captured
 
@@ -2275,21 +2282,6 @@ def test_location_refetch_tick_queues_every_portal_at_verify_priority(
         "candidates": 2, "queued": 2, "backlog": 63}
     assert out["sources"]["realitymix"]["backlog"] == 112
     assert captured["conn_obj"].closed is True
-
-
-def test_location_refetch_tick_skips_when_the_audit_view_is_missing(
-        monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    captured = _patch_refetch(monkeypatch, None)
-
-    with caplog.at_level(logging.WARNING, logger="scraper.realtime_worker"):
-        first = rw._location_refetch_sync()
-        second = rw._location_refetch_sync()
-
-    assert first["ran"] is False and first["reason"] == "audit_view_missing"
-    assert second["ran"] is False
-    assert captured["enqueued"] == [], "nothing is queued without the audit set"
-    # Once per process, not once a tick.
-    assert sum("location_pin_audit_mv is absent" in r.message for r in caplog.records) == 1
 
 
 def test_location_refetch_pass_records_the_heartbeat_shape(
@@ -2815,7 +2807,8 @@ def test_a_second_probe_pass_while_one_is_in_flight_is_skipped_and_counted(monke
         probe = state["lanes"]["probe"]
         assert probe["passes"] == 1
         assert probe["last"] == {"previous_pass_running": True}
-        assert ran == ["bazos", "bezrealitky", "ceskereality"]  # no second thread started
+        # no second thread started: the abandoned pass got as far as the blocked portal
+        assert ran == list(rw.REALTIME_SOURCES[: rw.REALTIME_SOURCES.index("ceskereality") + 1])
     finally:
         release.set()
         abandoned.join(5)

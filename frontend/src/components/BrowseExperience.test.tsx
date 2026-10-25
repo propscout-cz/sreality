@@ -42,8 +42,10 @@ vi.mock('@/lib/api', async (importOriginal) => ({
 vi.mock('@/lib/pgRead', () => ({ pgRead: vi.fn(() => new Promise<never>(() => {})) }));
 /* The Stats tab's board has its own tests (components/stats); here only the wiring. */
 vi.mock('@/components/stats/StatsDashboard', () => ({
-  default: ({ filters }: { filters: ListingFilters }) => (
-    <div data-testid="stats-dashboard">{filters.portals.join(',')}</div>
+  default: ({ filters, view, market }: { filters: ListingFilters; view?: unknown; market?: { value: string } }) => (
+    <div data-testid="stats-dashboard" data-view={view ? 'yes' : 'no'} data-market={market?.value ?? ''}>
+      {filters.portals.join(',')}
+    </div>
   ),
 }));
 /* Only the "Nová nemovitost" provider asks who is signed in (admins only, v1). */
@@ -187,7 +189,7 @@ describe('<BrowseExperience> the cards\' cover photo', () => {
     expect(localStorage.getItem(COVER_KEY)).toBe('kitchen');
     const card = screen.getByTitle(/^Portály/).closest('li')!;
     expect(within(card).getByText(counterIs('3 / 4'))).toBeInTheDocument();
-    expect(within(card).getByTitle(/^Portály/).textContent).toBe('portáliDNES Reality · Sreality');
+    expect(within(card).getByTitle(/^Portály/).textContent).toBe('iDNES Reality · Sreality');
     expect(within(card).getByTitle(/^Nemovitost spojuje 2 inzeráty/)).toHaveTextContent(/^2\s*inzeráty$/);
     expect(within(card).getByTitle(/^Aktivní/).textContent).toContain(`·iDNESod${fmtShortDate(IDNES_DAY)}`);
   });
@@ -251,7 +253,11 @@ describe('<BrowseExperience> Stats tab', () => {
         </MemoryRouter>
       </QueryClientProvider>,
     );
-    expect(await screen.findByTestId('stats-dashboard')).toHaveTextContent('idnes');
+    const board = await screen.findByTestId('stats-dashboard');
+    expect(board).toHaveTextContent('idnes');
+    /* The modal layout (no preset bar) still hands over the view and the lens: one Stats tab everywhere. */
+    expect(board).toHaveAttribute('data-view', 'yes');
+    expect(board).toHaveAttribute('data-market', 'filter');
   });
 });
 

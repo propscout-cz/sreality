@@ -63,7 +63,7 @@ _BUSY = (pg_errors.LockNotAvailable, pg_errors.DeadlockDetected, pg_errors.Query
 STALE = "Nemovitost se mezitím změnila; nic se nezapsalo."
 _KINDS = {"property_notes": "note", "property_pipeline": "pipeline",
           "collection_properties": "collection", "property_tags": "tag",
-          "property_dismissals": "dismissal"}
+          "property_attachments": "file", "property_dismissals": "dismissal"}
 _EARLIEST = datetime.min.replace(tzinfo=timezone.utc)
 
 

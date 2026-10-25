@@ -68,6 +68,8 @@ BYT_HTML = """
 <table><tbody>
   <tr class="advert-description__short-props-price"><td>Cena:</td>
     <td>5 290 000 Kč &nbsp;<button>Nabídněte cenu</button></td></tr>
+  <tr><td>Datum k nastěhování:</td><td>01.10.2026</td></tr>
+  <tr><td>Číslo zakázky:</td><td>REALITYMIX-N02161</td></tr>
 </tbody></table>
 <div id="print-map" data-gps-lon="14.604206388889" data-gps-lat="49.989288333333"
      data-address="Luční, Nupaky, okres Praha-východ"></div>
@@ -181,6 +183,8 @@ def test_parse_detail_byt_full():
     listing = parse_detail(BYT_HTML, source_url=_BYT_URL)
     assert listing.source == "realitymix"
     assert listing.source_id_native == "8414569"
+    # The short-props row beside the price, verbatim with the portal's prefix.
+    assert listing.ad_reference == "REALITYMIX-N02161"
     assert listing.source_url == _BYT_URL
     assert listing.category_main == "byt"
     assert listing.category_type == "prodej"
@@ -312,6 +316,22 @@ def test_resolve_category_falls_back_when_breadcrumb_truncated():
     assert listing.category_main == "byt"
     assert listing.category_type == "pronajem"
     assert resolve_category(BYT_HTML, _BYT_URL) == ("byt", "prodej")   # breadcrumb still wins when present
+
+
+def test_the_structured_title_names_the_family_a_truncated_breadcrumb_drops():
+    """277 active ads titled "Prodej chaty/rekreačního objektu" held a NULL category_main until
+    2026-10-22: the breadcrumb stops at the home crumb and the broker-written slug names no family
+    after `prodej-` ("rekreacni-chaty", "utulna-chata"). The h1 is realitymix's own vocabulary."""
+    chata = TRUNCATED_BREADCRUMB_HTML.replace(
+        "<h1>Pronájem pokoje 24 m²</h1>", "<h1>Prodej chaty/rekreačního objektu, 36 m²</h1>")
+    for url in ("https://realitymix.cz/detail/dolany/utulna-chata-78m-dolany-u-plzne-8685017.html",
+                "https://realitymix.cz/detail/ceska-briza/prodej-rekreacni-chaty-42-m-ceska-briza-8399081.html"):
+        listing = parse_detail(chata, source_url=url)
+        assert (listing.category_main, listing.category_type) == ("dum", "prodej")
+    assert resolve_category(chata, _BYT_URL, "Pronájem chaty/rekreačního objektu, 36 m²") == (
+        "dum", "pronajem")
+    assert resolve_category(BYT_HTML, _BYT_URL, "Prodej chaty/rekreačního objektu") == ("byt", "prodej")
+    assert resolve_category(chata, _BYT_URL, "Prodej vily 300 m²") == ("dum", "prodej")
 
 
 def test_street_recovered_from_slug_when_no_map():

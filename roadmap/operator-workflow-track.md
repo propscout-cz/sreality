@@ -7,6 +7,34 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
+### Phase U-AD-REFERENCE: the number a broker advertises under, on the broker card (2026-10-23)
+
+Operator ask: in the property page's Makléř section, show the ad id the broker advertises under, so it
+can be quoted on a call; make sure it is scraped correctly. Rulings 2026-10-23: one card on both shells;
+an ad without a number reads "<portál> —", never the portal's own id; the number is kept verbatim
+(portal prefixes included); the PDF sheet's broker block gets the same lines; the broker page and the
+Inzeráty lists stay without it; history is healed now.
+
+- [x] **W1 — the column (PR #1984, migration 667).** `listings.ad_reference`, one contract cell per portal
+      (field-capture track).
+- [x] **W2 — the heal (2026-10-23 10:45–18:05Z, `reparse.yml fields=ad_reference`, one portal at a time, the
+      property queue drained between them; the autodedup session gated idnes + sreality behind its W8 run).** Active
+      ads filled: maxima 283/283, remax 9,653/9,654, mmreality 10,700/10,701, realitymix 50,124/50,142, ceskereality
+      50,371/50,371, idnes 109,855/110,248, sreality 96,453/109,694 (87.9 %: 13,190 active ads print no code —
+      private sellers — and 51 are the oldest wrapped payloads). History: 750k of 830k rows; the rest are pages
+      that print no number or the ~32k wrapped sreality payloads no heal can read. Witness: on the 98,880
+      properties carrying both an idnes and a sreality ad, 67.7 % of codes agree verbatim once `IDNES-` is
+      stripped; the rest differ on the portals themselves (re-listed order numbers, leading zeros).
+- [x] **W3 — the card (PR #1985, live 11:28Z; checked read-only in production on desktop + phone).** `propertyBrokers` keeps each broker's ads; ONE `BrokerContactCard`
+      (desktop + phone, `ads` optional so /brokers/:id is unchanged) quotes `<portál> · <číslo>` per ad with
+      the same copy button; ONE copy behaviour in `lib/clipboard` (the phone's strip, its copy helper and
+      the phone broker page's duplicate went); `PropertySource` loses the never-read `sreality_id` and the
+      false `source_id_native: null`; the select list is pinned to `property_sources_public`.
+- [x] **W4 — the PDF sheet (PR #1986, live 11:31Z).** `api/routes/property_download.py` selects the column; its
+      `property_brokers` twin returns each broker's ads; `_broker_block` prints one `<portál>  <číslo|—>` line per ad.
+      Aftermath: the day's merges put the first-visit bundle 16 B over its budget (main's `build` red); PR #1987 moved
+      the paste-a-building page behind `lazyChunk` (−5.5 kB gzip), live 12:29Z.
+
 ### Phase U-NOTIFY-PUSH: Notifications push program (approved 2026-10-21)
 
 Program `docs/design/notifications-push/PROGRAM.md` (audit `AUDIT.md`, F1–F28; eleven rulings taken 2026-10-21). North
@@ -52,6 +80,22 @@ account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, e
       harness over every payload shape; the landing `/n/:dispatchId` (mark-seen → `dispatchTarget`, `?d=` → `/push/opened`);
       `lib/push` + `usePush` and the sheet's switch "Oznámení na tomto iPhonu"; re-sync on sign-in and the hourly
       resume; binding follows identity (F18). Owed: the on-device proof (W5 gate, the operator's iPhone).
+- [x] **The publication gate (this PR; migrations 668 + 669; operator rulings 2026-10-23 Q1–Q6; closes F13)** — a
+      property is shown (Browse, the map, Stats) and told (the watchdog) only once published: `properties.settled_at`,
+      stamped by the maintenance pass when its first photo is stored (or it has none) and the engine is done with its
+      ads, or 6 h after it was first seen (`toolkit/publication.py`, one cap, no flags). The image gate went (its two
+      settings rows never existed in production); a merge passes a settled property's stamp to the survivor only when
+      that publishes it earlier (publication never regresses, and never moves later); the 'new' window is keyed on
+      visibility; a 'new' a merge re-points to a property first seen more than 24 h before the alert leaves the feed,
+      badge and push (a tap still lands); the publishing check's `unpublished` stage ("not yet published", never a
+      blocker). Apply: 668 before the merge, 669 promptly after the worker's rollout (it stamps `settled_at =
+      first_seen_at` on the properties first seen in the 24 h before it, which were served ungated).
+- [ ] **Next after the publication gate:** (a) the phone feed's day buckets and "Newest first" on the visible-since
+      moment, not `first_seen_at` — needs a ruling; (b) drop `properties.published_at` + `publish_reason` + their three
+      indexes (the autodedup session's owed drop, now moot for serving too); (c) a worker CLIP lane, so settlement
+      ends in minutes rather than at the cap; (d) let the settled rule ignore the engine's standing refusals
+      (`autodedup/apply.py` `SKIP_SPANS_GROUPS`, `SKIP_CARRIES_UNGROUPED`) once measured; (e) delete
+      `api/notifications._read_int_setting` after #1951.
 
 ### Phase U-NEW-PROPERTY: a property from a pasted ad link (in progress, 2026-10-20)
 
@@ -252,10 +296,29 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   note through merges and a split's note copy takes them. The bytes live in R2 under
   `custom-attachments/note/` and are served by the API, with an extension allowlist that
   admits no active types.
+- **Done (photos sprint W1, 2026-10-23, [#1974](https://github.com/waiff/sreality/pull/1974)):**
+  the files are the PROPERTY's, a note optional (`property_attachments`, migration 660): their
+  own merge carrier (the same bytes once per account and property), a deleted note leaves them
+  on the property, a note's move takes them along, a split's note copy carries none.
+  `api/attachments.py` replaces `api/note_attachments.py` and the building run's duplicate
+  stack; `/properties/{id}/attachments` replaces the note-scoped routes; tiles draw a 1080 px
+  display copy (`?w=1080`, made once, JWT proxy only); no HEIC.
+- **Done (photos sprint W2, 2026-10-23, PR [#1975](https://github.com/waiff/sreality/pull/1975)):** "Moje fotky", one strip of the acting
+  identity's own photos per property (a note's are the same records, shown under the note too):
+  the phone page's section after Poloha (Vyfotit / Z knihovny) and the desktop's Fotky tab (Upload,
+  drag-and-drop); tiles from the 1080 px copies open the original in one viewer (a note's photo
+  too, no more new tab) with Share (the share sheet with the original files, else a download) and
+  Delete behind a second tap; Vybrat for Share (N) / Delete (N). A split lists a file with no note
+  as its own item (move or copy; a copy shares the stored bytes). The property's zip packs the
+  originals under `moje-fotky/`.
 - **Next (unscheduled):**
   - The Chrome-extension panel lists a note's text only, not its files.
   - Nothing deletes R2 objects; a sweep for objects no row names would have to spare the
-    ones a split's copy shares.
+    ones a pre-660 split's copy shares.
+  - Owed by 660: drop the `property_note_attachments` compatibility view, the fill trigger and
+    its function once #1974 is live; drop `backup_660` a week later.
+  - A photo with no note is never shared (no per-photo mark): only a marked note's files cross a
+    share.
 
 ### Rule #18: an executed no-orphan merge test (done, 2026-10-01)
 - **Done:** `tests/test_property_carriers_live.py` (PR 0 #1664, extended by the
@@ -612,7 +675,8 @@ from Browse, not just from the board.
 - **A scope, not a preset.** The chip leads the preset row, but `pipeline` sits in
   `PRESET_EXCLUDED_KEYS`: it is never stored in a preset and never counted in the
   dirty comparison, so toggling it shows no "Update preset" and it survives
-  loading one. Per-stage narrowing lives in the sidebar (Curation → Pipeline).
+  loading one. (Superseded 2026-10-22: a preset stores the pipeline scope like every
+  filter — `roadmap/ui-track.md`.) Per-stage narrowing lives in the sidebar (Curation → Pipeline).
   Watchdogs report it as unsupported — the operator's own state can't be a
   trigger for their own clicks.
 - **Follow-up, same day:** the chip shipped as a MODIFIER and that was wrong —

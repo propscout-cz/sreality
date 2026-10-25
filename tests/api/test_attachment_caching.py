@@ -26,13 +26,14 @@ from api import main as api_main
 def client(monkeypatch):
     monkeypatch.setattr(
         attachments_module,
-        "fetch_attachment",
-        lambda conn, aid: {"id": aid, "building_run_id": 7},
+        "fetch_building_attachment",
+        lambda conn, aid: {"id": aid, "building_run_id": 7, "storage_key": "k",
+                           "mime_type": "image/jpeg", "filename": "plan.jpg"},
     )
     monkeypatch.setattr(
         attachments_module,
-        "download_attachment_bytes",
-        lambda conn, aid: (b"\xff\xd8\xff-jpeg-bytes", "image/jpeg", "plan.jpg"),
+        "storage",
+        lambda: type("R2", (), {"download_bytes": lambda self, key: b"\xff\xd8\xff-jpeg-bytes"})(),
     )
     api_main.app.dependency_overrides[deps.get_db_conn] = lambda: object()
     api_main.app.dependency_overrides[deps.require_token] = lambda: None

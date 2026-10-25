@@ -69,9 +69,10 @@ export default function StatsChart({
 }: {
   chart: ChartSpec;
   filters: ListingFilters;
-  /* Settles when the board's save does; a rejection keeps the card in edit mode. */
-  onSave: (next: ChartSpec) => Promise<unknown>;
-  onRemove: () => void;
+  /* Settles when the board's save does; a rejection keeps the card in edit mode.
+   * Absent with onRemove: a read-only card (the property page's Trh v okolí tile). */
+  onSave?: (next: ChartSpec) => Promise<unknown>;
+  onRemove?: () => void;
   /* −1 / +1 within the board; absent where the card cannot move that way. */
   onMove?: { earlier?: () => void; later?: () => void };
   startEditing?: boolean;
@@ -137,7 +138,7 @@ export default function StatsChart({
     focusNext.current = 'edit';
   };
   const save = async () => {
-    if (problem || saving) return;
+    if (problem || saving || !onSave) return;
     try {
       await onSave(draft);
     } catch {
@@ -165,7 +166,7 @@ export default function StatsChart({
         <h3 id={headingId} ref={refTo('heading')} tabIndex={-1} className="min-w-0 text-[1.02rem] leading-snug">
           {title}
         </h3>
-        {!editing && (
+        {!editing && onSave && (
           <div className="ml-auto flex shrink-0 items-center gap-0.5">
             {confirming ? (
               <>

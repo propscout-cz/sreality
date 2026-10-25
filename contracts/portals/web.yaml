@@ -1,0 +1,89 @@
+# web — contract v1: any other site, one advert pasted by the operator (the tenth portal).
+# A `web` page is a site we have never seen before, so nothing on it can be addressed by a
+# selector, a payload pointer or a URL slug: this contract is TEXT-ONLY. Every entry reads the
+# text lane's stored reading of the advert (`location_data.text_reading`: V1 quote verbatim, V2
+# value grounded in it, V3 an offer in Czechia, V4 a number's marker) — the same five entries
+# bazos declares, read off the same headline + description, so the reader's rules are one set.
+# No pin: a JSON-LD `geo` point is a later `contract_version` that needs its own licence ruling,
+# so `claims_common.COORDINATE_RULES['web']` is `none` and a town alone resolves the ad to its
+# obec centroid. No `regressions:`: the golden is the empty gate
+# (tests/fixtures/location_w2/golden/web@1.json) until a pasted advert earns a frozen reading.
+
+portal: web
+contract_version: 1
+
+persistence:
+  # The HTML floor and nothing above it (`location_data.payload_norm` BASE_PROFILE): every
+  # web page is a site nobody has diffed, so no selector of ours can name what changes on it
+  # between fetches. Declared rather than left absent so the detail surface is a reviewed
+  # statement like the other nine portals'; a measured per-host rule would be a new block.
+  volatile_paths:
+    detail:
+      base: html
+  version_cap: 20
+
+exclusion_zones:
+  - locator_kind: html_selector
+    locator: {css: "body > header, footer, nav, aside"}
+    reason: >
+      Site chrome on a site nobody has reviewed: the agency's own office address sits in the
+      header or footer of nearly every real-estate site, and an aside lists other adverts.
+      No entry reads the page today; the zone is what a later DOM entry inherits.
+
+extractions:
+  - id: wb.txt.town
+    locator_kind: description
+    extraction_method: llm_text
+    page_kind: detail
+    locator: {reader: text_reading, slot: town}
+    claim_type: obec_name
+    licence_class: portal
+    blur_evidence: none
+    prior: {granularity: obec}
+    subject_scope: {subject_scoped: true}
+    notes: "The town the advert names for the property itself — never a place near it."
+
+  - id: wb.txt.part_of_town
+    locator_kind: description
+    extraction_method: llm_text
+    page_kind: detail
+    locator: {reader: text_reading, slot: part_of_town}
+    claim_type: cast_obce_name
+    licence_class: portal
+    blur_evidence: none
+    subject_scope: {subject_scoped: true}
+    notes: "A quarter, část obce or sídliště; the register decides which level it is."
+
+  - id: wb.txt.street
+    locator_kind: description
+    extraction_method: llm_text
+    page_kind: detail
+    locator: {reader: text_reading, slot: street}
+    claim_type: street_name
+    licence_class: portal
+    blur_evidence: none
+    subject_scope: {subject_scoped: true}
+    notes: "The property's own street, nominative; published only where it binds in the town."
+
+  - id: wb.txt.house_number_cp
+    locator_kind: description
+    extraction_method: llm_text
+    page_kind: detail
+    locator: {reader: text_reading, slot: house_number_cp,
+              fallback: [{slot: house_number_ev}]}
+    claim_type: house_number_cp
+    licence_class: portal
+    blur_evidence: none
+    subject_scope: {subject_scoped: true}
+    notes: "The č.p.; else the č.ev., claimed as 'č.ev. N' so the resolver types it."
+
+  - id: wb.txt.house_number_co
+    locator_kind: description
+    extraction_method: llm_text
+    page_kind: detail
+    locator: {reader: text_reading, slot: house_number_co}
+    claim_type: house_number_co
+    licence_class: portal
+    blur_evidence: none
+    subject_scope: {subject_scoped: true}
+    notes: "The č.o., marked or in the form 'Street N/M'."

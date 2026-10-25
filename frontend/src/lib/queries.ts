@@ -10,7 +10,6 @@ import { fetchBrokerPropertyIds } from './brokers';
 import type { LlmCostDailyRow, LlmCostHourlyRow } from './llmCosts';
 import {
   type ListingFilters,
-  type ListingStatus,
   buildingMaterialToValues,
   effectiveBbox,
   isoNDaysAgo,
@@ -134,25 +133,23 @@ export {
 } from './browseSort';
 
 /* -------------------------------------------------------------------------- */
-/* THE PORTAL RULE (MS19, migration 590; two-sided since 597): portal and     */
-/* broker filters select ADS; rows are always properties.                     */
+/* THE PORTAL RULE (MS19, migration 590; two-sided since 597; status since    */
+/* 657): the status is the PROPERTY's; portal and broker filters select ADS.  */
 /* -------------------------------------------------------------------------- */
-/* A property matches portal set P when any of its ads is on P, active or not
- * (`all_sources`); the status switch is judged on those ads: active = an active
- * ad on P (`active_sources`), inactive = ads on P and none of them active. With
- * no portal the status is the property's own. AND it has no ad on an excluded
- * portal — any ad, or only active ones under `portalsExcludedActiveOnly`. One
- * rule in three renderings, pinned to each other by tests/fixtures/
- * portal_rule.json: this one (list, cards, count, map points),
- * `public.portal_status_matches` (Stats, map cells, the broker lookup) and the
- * Watchdog's compiled clauses.
+/* The status switch is the property's own `is_active`, the status every row is
+ * drawn with. A portal set P asks for an ad on P in that same status: an active
+ * ad under active (`active_sources`), any ad otherwise (`all_sources`: an ended
+ * property has only ended ads). AND it has no ad on an excluded portal — any
+ * ad, or only active ones under `portalsExcludedActiveOnly`. One rule in three
+ * renderings, pinned to each other by tests/fixtures/portal_rule.json: this one
+ * (list, cards, count, map points), `public.portal_status_matches` (Stats, map
+ * cells) and the Watchdog's compiled clauses.
  *
- * A broker filter moves the include side onto the broker's own ads: the server
- * judges portal and status over them (fetchBrokerPropertyIds), so one ad
- * satisfies both and that side steps aside here. The exclusion is a statement
- * about the PROPERTY, so neither a broker nor the status switch moves it. */
-export const adScope = (f: ListingFilters): { portals: string[]; status: ListingStatus } =>
-  f.brokerId != null ? { portals: [], status: 'any' } : { portals: f.portals, status: f.status };
+ * A broker filter moves the portal side onto the broker's own ads: the server
+ * finds its ads on P in the switch's status (fetchBrokerPropertyIds), so one ad
+ * satisfies both and that side steps aside here. The status and the exclusion
+ * are statements about the PROPERTY, so a broker moves neither. */
+export const adPortals = (f: ListingFilters): string[] => (f.brokerId != null ? [] : f.portals);
 
 interface PortalRuleBuilder {
   eq(c: string, v: unknown): PortalRuleBuilder;
@@ -161,17 +158,10 @@ interface PortalRuleBuilder {
 }
 
 export const applyPortalRule = <T>(q: T, f: ListingFilters): T => {
-  const { portals, status } = adScope(f);
   let r = q as unknown as PortalRuleBuilder;
-  if (portals.length === 0) {
-    if (status === 'active') r = r.eq('is_active', true);
-    else if (status === 'inactive') r = r.eq('is_active', false);
-  } else if (status === 'active') {
-    r = r.overlaps('active_sources', portals);
-  } else {
-    r = r.overlaps('all_sources', portals);
-    if (status === 'inactive') r = r.not('active_sources', 'ov', `{${portals.join(',')}}`);
-  }
+  if (f.status !== 'any') r = r.eq('is_active', f.status === 'active');
+  const portals = adPortals(f);
+  if (portals.length) r = r.overlaps(f.status === 'active' ? 'active_sources' : 'all_sources', portals);
   if (f.portalsExcluded.length) {
     const ads = f.portalsExcludedActiveOnly ? 'active_sources' : 'all_sources';
     r = r.not(ads, 'ov', `{${f.portalsExcluded.join(',')}}`);
@@ -537,8 +527,9 @@ async function resolveEstimatesPrefilter(
  * API (fetchBrokerPropertyIds) instead of PostgREST. A resolution failure
  * (e.g. no session) throws and surfaces as a normal query error like any other
  * prefilter failing — it must never silently degrade to "no constraint" (the
- * fail-open filter trap). The server applies the portal rule over the broker's
- * own ads (adScope), so this is a property_id allowlist like the others. */
+ * fail-open filter trap). The server finds the broker's own ads on the portals
+ * in the switch's status (adPortals), so this is a property_id allowlist like
+ * the others. */
 async function resolveBrokerPrefilter(f: ListingFilters): Promise<number[] | null> {
   if (f.brokerId == null) return null;
   return fetchBrokerPropertyIds(f.brokerId, f.status, f.portals);
@@ -916,7 +907,7 @@ export const buildBrowseStatsArgs = (
     : null;
 
   const effBbox = effectiveBbox(f);
-  const scope = adScope(f);
+  const portals = adPortals(f);
 
   return {
     category_main_filter:    f.categoryMain.length ? f.categoryMain : null,
@@ -954,10 +945,9 @@ export const buildBrowseStatsArgs = (
     garden_area_min_filter:  f.gardenAreaMin,
     garden_area_max_filter:  f.gardenAreaMax,
     parking_lots_min_filter: f.parkingLotsMin,
-    /* The portal rule (MS19): the RPC judges status on the selected portals' ads
-     * (portal_status_matches); under a broker the server already judged both. */
-    active_only_filter:      scope.status === 'active',
-    inactive_only_filter:    scope.status === 'inactive',
+    /* The portal rule (portal_status_matches): the status is the property's,
+     * one value as the list sends it (migrations 661/662). */
+    status_filter:           f.status,
     last_seen_min_days:      f.lastSeenMinDays,
     last_seen_max_days:      f.lastSeenMaxDays,
     first_seen_min_days:     f.firstSeenMinDays,
@@ -1011,7 +1001,7 @@ export const buildBrowseStatsArgs = (
     total_price_change_pct_filter: f.totalPriceChangePct,
     /* Migration 537 — the caller's dismissed properties, excluded server-side. */
     hide_dismissed:                !f.showDismissed,
-    portal_filter:           scope.portals.length ? scope.portals : null,
+    portal_filter:           portals.length ? portals : null,
     /* Migration 597 — the property-level side: under a broker too. */
     portal_excluded_filter:      f.portalsExcluded.length ? f.portalsExcluded : null,
     portal_excluded_active_only: f.portalsExcludedActiveOnly,
@@ -1094,6 +1084,30 @@ export const fetchProperty = async (
   };
 };
 
+/* The few facts a viewing's row names its property by, for a set of properties
+ * (the Prohlídky tab): the same `properties_public` row the property page reads. */
+const PROPERTY_SUMMARY_COLS =
+  'property_id,listing_id,is_active,category_main,category_type,disposition,subtype,' +
+  'area_m2,price_czk,display_label';
+
+export type PropertySummary = Pick<
+  CardRow,
+  | 'property_id' | 'is_active' | 'category_main' | 'category_type' | 'disposition' | 'subtype'
+  | 'area_m2' | 'price_czk' | 'display_label'
+> & { listing_id: number | null };
+
+export const fetchPropertySummaries = async (
+  propertyIds: readonly number[],
+  { signal }: PgReadOptions = {},
+): Promise<Map<number, PropertySummary>> => {
+  if (propertyIds.length === 0) return new Map();
+  const { data } = await pgRead<PropertySummary[] | null>(
+    supabase.from('properties_public').select(PROPERTY_SUMMARY_COLS).in('property_id', [...propertyIds]),
+    { signal },
+  );
+  return new Map((data ?? []).map((r) => [r.property_id, r]));
+};
+
 /* An advert address (the natural key, or the legacy sreality id) → the advert's
  * surrogate id and its property, which is all the alias routes need to land on
  * the property page. listings_public is unfiltered, so a just-scraped advert
@@ -1114,7 +1128,7 @@ export const fetchAdvertProperty = async (
 };
 
 const PROPERTY_SOURCE_COLS =
-  'id,property_id,sreality_id,source,source_url,source_id_native,is_active,price_czk,first_seen_at,last_seen_at';
+  'id,property_id,source,source_url,source_id_native,ad_reference,is_active,price_czk,first_seen_at,last_seen_at';
 
 /* Every advert of one property, oldest first — the merged-adverts section's rows. */
 export const fetchPropertySources = async (
@@ -1812,10 +1826,17 @@ export const curationKeys = {
   propertyCollectionMembers: ['curation', 'property-collection-members'] as const,
   propertyNotes: (property_id: number) =>
     ['curation', 'property-notes', property_id] as const,
+  /* A property's files (migration 660), under its notes' key: one record, so a write to either
+   * re-reads both. */
+  propertyFiles: (property_id: number) =>
+    ['curation', 'property-notes', property_id, 'files'] as const,
   /* Prefix of every property's notes: a share change moves which notes I can read. */
   allPropertyNotes: ['curation', 'property-notes'] as const,
   artifactLinks: ['curation', 'artifact-links'] as const,
   noteCounts: ['curation', 'note-counts'] as const,
+  /* The caller's viewings (migration 666), under every note's prefix: a note write or a share
+   * change that re-reads notes re-reads the Prohlídky tab too. */
+  viewings: ['curation', 'property-notes', 'viewings'] as const,
 };
 
 /* Deal pipeline (migration 205). The "is this property bookmarked + at which

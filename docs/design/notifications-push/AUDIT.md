@@ -165,6 +165,8 @@ The 'new' event is keyed per (subscription, property_id) and fires within 5-35 m
 
 **Proposed fix.** (1) Stop deleting the evidence by making the Dispatches carrier a plain APPEND table (see the carrier finding). (2) Add one SQL gauge, the 'new' refutation rate: 'new' dispatches whose current property has an ad live at dispatched_at and first seen more than 1 day earlier. (3) Operator ruling for push: either accept and label, or hold the 'new' push (not the bell row) inside the autodedup apply scope until the lane has reconciled the singleton. Do not build a second dedup check in the matcher.
 
+**Closed 2026-10-23 (operator rulings Q1–Q6, migrations 668/669).** (1) landed in W3: the carrier marks a repeat, never deletes. (3) was ruled wider than proposed, not the push alone and not only inside the apply scope: a property is shown (Browse, the map, Stats) and told (the watchdog, bell and push alike) only once published, that is settled by the maintenance pass (first photo stored or none, the engine has read every ad, holds no pending question about them and keeps none in a group that also holds an ad on another property, or on none yet) or 6 h old (`toolkit/publication.py`). The gate reads the engine's own tables and decides nothing, so no second duplicate check exists. (2) is the count of 'new' alerts `VISIBLE_SQL` now withdraws: one whose property, after a merge, was first seen more than 24 h before the alert leaves the feed, the badge and push (a tap on a push already sent still lands, on the survivor).
+
 ### F14 (medium) Collection-monitor 'inactive' alerts are mostly contradicted by a later 'reactivated' (the detector has no confirmation dwell)
 
 `api/notifications.py:1625`

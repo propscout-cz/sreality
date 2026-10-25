@@ -93,6 +93,20 @@ def test_every_shared_count_is_spelled_the_same_in_both_producers() -> None:
         assert _squeeze(expr) in funnel, name
 
 
+def test_town_missing_is_one_fragment_the_check_and_the_refetch_lane_share() -> None:
+    """Rule 25's invariant, broken, is spelled once: the check renders it, and scraper.db
+    carries it VERBATIM (importing it there is a cycle: location_steps -> claims_common ->
+    loader_db -> scraper.db), held here. RED by: a lane that re-derives "no town" and queues a
+    different set from the one the check judges."""
+    from scraper import db
+    from scripts.checks import quality
+
+    missing = _squeeze(ls.town_missing_sql())
+    assert _squeeze(ls.step_flags_sql()["has_town"]) in missing
+    assert missing in _squeeze(db._LOCATION_REFETCH_CANDIDATES_SQL)
+    assert missing in _squeeze(quality._LOCATION_TOWN_COVERAGE_SQL)
+
+
 def test_the_consumer_rule_is_imported_and_never_retyped() -> None:
     """`located` is claims_common's own rule. RED by: a local `geom IS NOT NULL` here,
     which would leave this chain behind the next change to what "served" means."""

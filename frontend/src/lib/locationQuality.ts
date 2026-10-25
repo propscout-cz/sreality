@@ -78,7 +78,7 @@ type Envelope<T> = { data: T; metadata?: Record<string, unknown> };
 
 export const LOCATION_SOURCES = [
   'bezrealitky', 'sreality', 'bazos', 'idnes', 'mmreality', 'remax',
-  'ceskereality', 'realitymix', 'maxima',
+  'ceskereality', 'realitymix', 'maxima', 'web',
 ] as const;
 
 export const fetchCorpusSummary = () =>

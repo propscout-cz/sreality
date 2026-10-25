@@ -86,14 +86,16 @@ class CurationTable:
     APPEND table (no keys: every row moves). The table name is code-controlled, never input.
     `keys` must include an account-owned id or `account_id`: the collapse joins on them alone.
     With `at` (the row's own timestamp column) its rows enter the carry record: the collapsed
-    ones folded, with their snapshot, the rest moved; the row key is `keys[0]`, else `id`."""
+    ones folded, with their snapshot, the rest moved; the row key is `row_key`, else `keys[0]`,
+    else `id`."""
 
-    def __init__(self, table: str, keys: tuple[str, ...] = (), *, at: str | None = None) -> None:
+    def __init__(self, table: str, keys: tuple[str, ...] = (), *, at: str | None = None,
+                 row_key: str | None = None) -> None:
         self.name = table
         self.keys = keys
         self.at = at
         self.columns: tuple[tuple[str, str], ...] = ((table, "property_id"),)
-        key = keys[0] if keys else "id"
+        self.row_key = key = row_key or (keys[0] if keys else "id")
         move = (f"UPDATE {table} SET property_id = %(survivor)s "
                 f"WHERE property_id = %(retired)s"
                 + (f" RETURNING {key}, {at}, account_id" if at else ""))
@@ -253,6 +255,10 @@ class Dismissals:
 PROPERTY_CARRIERS: tuple[Carrier, ...] = (
     CurationTable("collection_properties", ("collection_id",), at="added_at"),
     CurationTable("property_tags", ("tag_id",), at="attached_at"),
+    # Before the notes: a note's move takes its files along (migration 660's trigger), so each
+    # file is moved or folded here first, with its carry row. The same bytes once per account.
+    CurationTable("property_attachments", ("account_id", "sha256_hex"), at="created_at",
+                  row_key="id"),
     CurationTable("property_notes", at="created_at"),
     # One link per (account, property), no `at`: no carry row, so a detach leaves it where it is,
     # and a collision keeps the survivor's link (migration 599).
@@ -330,7 +336,8 @@ class Route(NamedTuple):
     origin: int | None  # the property it came from, back there when this detach gives it ads
     stage_id: int | None  # a card's stage
     carry_ids: tuple[int, ...]  # standing carry rows it consumes (stamped undone)
-    item: str  # 'note:<id>' | 'pipeline' | 'collection:<id>' | 'tag:<id>' | 'dismissal' | 'fold:<id>'
+    item: str  # 'note:<id>' | 'pipeline' | 'collection:<id>' | 'tag:<id>' | 'file:<id>'
+    #            | 'dismissal' | 'fold:<id>'
     label: str | None
     skipped: str | None = None
 
@@ -339,7 +346,9 @@ class Route(NamedTuple):
 # dismissal only) with the ad a note was written on while that ad is on `left`, and the carry rows
 # it came by, oldest first; then each fold. A carry row counts only toward `left` through its
 # merged-away chain, only `group`'s when one is given, and only while it stands (a fold of the
-# survivor's own item, from = to, while its merge has a ledger row standing).
+# survivor's own item, from = to, while its merge has a ledger row standing). A file is an item only
+# outside a note (a note's go where the note goes, migration 660's trigger); a folded file is never
+# re-made: its twin, the same bytes, is still here.
 _ROUTES_SQL = (
     """
 WITH RECURSIVE tree(id) AS (
@@ -349,7 +358,11 @@ WITH RECURSIVE tree(id) AS (
     WHERE p.status = 'merged_away'
 ), item AS (
     SELECT 'property_notes'::text AS tbl, n.id AS row_key, n.account_id, n.created_at AS row_at,
-           'note:' || n.id::text AS item, left(n.body, 60) AS label, NULL::bigint AS stage_id,
+           'note:' || n.id::text AS item,
+           coalesce(nullif(left(n.body, 60), ''),
+                    'Prohlídka ' || to_char(n.viewing_at AT TIME ZONE 'Europe/Prague',
+                                            'FMDD. FMMM. YYYY HH24:MI')) AS label,
+           NULL::bigint AS stage_id,
            NULL::boolean AS live,
            CASE WHEN EXISTS (SELECT 1 FROM listings l WHERE l.id = n.origin_listing_ref_id
                                AND l.property_id = %(left)s)
@@ -374,6 +387,10 @@ WITH RECURSIVE tree(id) AS (
     SELECT 'property_dismissals', d.id, d.account_id, d.dismissed_at, 'dismissal', NULL, NULL,
            NULL, NULL
       FROM property_dismissals d WHERE d.property_id = %(left)s AND d.lifted_at IS NULL
+    UNION ALL
+    SELECT 'property_attachments', a.id, a.account_id, a.created_at, 'file:' || a.id::text,
+           a.filename, NULL, NULL, NULL
+      FROM property_attachments a WHERE a.property_id = %(left)s AND a.note_id IS NULL
 ), carry AS (
     SELECT c.* FROM property_merge_carries c
      WHERE c.to_property_id IN (SELECT id FROM tree)
@@ -417,7 +434,7 @@ SELECT 'fold', f.table_name, f.row_key, f.account_id, 'fold:' || f.id::text,
   LEFT JOIN tags tg ON f.table_name = 'property_tags' AND tg.id = f.row_key
   LEFT JOIN pipeline_stages st ON f.table_name = 'property_pipeline'
        AND st.id = (f.snapshot ->> 'stage_id')::bigint AND st.archived_at IS NULL
- WHERE f.kind = 'folded'
+ WHERE f.kind = 'folded' AND f.table_name <> 'property_attachments'
  ORDER BY 1, 5
 """
 )
@@ -448,17 +465,24 @@ _MOVE_SQL: dict[str, str] = {
         "WHERE d.id = %(key)s AND d.property_id = %(left)s "
         "AND NOT EXISTS (SELECT 1 FROM property_dismissals x "
         "  WHERE x.property_id = %(to)s AND x.account_id = d.account_id AND x.lifted_at IS NULL)"),
+    "property_attachments": (
+        "UPDATE property_attachments a SET property_id = %(to)s "
+        "WHERE a.id = %(key)s AND a.property_id = %(left)s AND a.note_id IS NULL "
+        "AND NOT EXISTS (SELECT 1 FROM property_attachments x "
+        "  WHERE x.property_id = %(to)s AND x.account_id = a.account_id "
+        "  AND x.sha256_hex = a.sha256_hex)"),
 }
 
-# A copy or a re-created fold (MS18): a note keeps its text, dates, origin ad and shared mark
-# (migration 610; read from its row, wherever it went); a card keeps its stage, last in its column, its dates now; the rest
+# A copy or a re-created fold (MS18): a note keeps its text, dates (its viewing's too), origin ad and shared mark
+# (migration 610; read from its row, wherever it went); a card keeps its stage, last in its column, its dates now; a file
+# its name, date and stored bytes (the same R2 object: originals are never deleted); the rest
 # dated now. Never over a row already there.
 _INSERT_SQL: dict[str, str] = {
     "property_notes": (
         "INSERT INTO property_notes (property_id, body, origin_listing_id, origin_listing_ref_id, "
-        "  created_at, updated_at, shared, account_id) "
+        "  created_at, updated_at, shared, account_id, viewing_at) "
         "SELECT %(to)s, body, origin_listing_id, origin_listing_ref_id, created_at, updated_at, "
-        "  shared, account_id FROM property_notes WHERE id = %(key)s RETURNING id"),
+        "  shared, account_id, viewing_at FROM property_notes WHERE id = %(key)s"),
     "property_pipeline": (
         "INSERT INTO property_pipeline (property_id, stage_id, board_position, account_id) "
         "SELECT %(to)s::bigint, %(stage)s::bigint, coalesce(max(board_position), 0) + 1, "
@@ -474,16 +498,12 @@ _INSERT_SQL: dict[str, str] = {
     "property_dismissals": (
         "INSERT INTO property_dismissals (account_id, property_id) VALUES (%(account)s, %(to)s) "
         "ON CONFLICT (property_id, account_id) WHERE lifted_at IS NULL DO NOTHING"),
-}
-
-# What a copy brings with it, keyed on the copy's new id: a note's attachments, pointing at the
-# same stored bytes (never deleted); each takes its account from the new note (migration 592).
-_AFTER_COPY_SQL: dict[str, str] = {
-    "property_notes": (
-        "INSERT INTO property_note_attachments (note_id, storage_key, filename, mime_type, "
-        "  byte_size, sha256_hex, created_at) "
-        "SELECT %(copy)s, storage_key, filename, mime_type, byte_size, sha256_hex, created_at "
-        "FROM property_note_attachments WHERE note_id = %(key)s ORDER BY id"),
+    "property_attachments": (
+        "INSERT INTO property_attachments (property_id, account_id, storage_key, filename, "
+        "  mime_type, byte_size, sha256_hex, created_at) "
+        "SELECT %(to)s, account_id, storage_key, filename, mime_type, byte_size, sha256_hex, "
+        "  created_at FROM property_attachments WHERE id = %(key)s "
+        "ON CONFLICT (account_id, property_id, sha256_hex) DO NOTHING"),
 }
 
 _STAMP_SQL = (
@@ -492,8 +512,7 @@ _STAMP_SQL = (
 )
 
 # Every routing statement (the PREPARE corpus reads the tuple); none deletes anything.
-ROUTE_SQL = (_ROUTES_SQL, *_MOVE_SQL.values(), *_INSERT_SQL.values(), *_AFTER_COPY_SQL.values(),
-             _STAMP_SQL)
+ROUTE_SQL = (_ROUTES_SQL, *_MOVE_SQL.values(), *_INSERT_SQL.values(), _STAMP_SQL)
 
 # Cards first, so a dismissal is settled against where each account's live card ends; within a
 # table the user's copies before the folds re-created by default.
@@ -501,10 +520,11 @@ _SETTLE_ORDER = {"property_pipeline": 0, "property_dismissals": 2}
 
 
 def _holding(r: Route) -> tuple[str, Any] | None:
-    """What a route puts where it lands, as a conflict knows it; a note never conflicts."""
+    """What a route puts where it lands, as a conflict knows it; a note never conflicts, a file
+    with itself (the same bytes held there otherwise: its write's own key skips it)."""
     if r.table == "property_notes":
         return None
-    if r.table in ("collection_properties", "property_tags"):
+    if r.table in ("collection_properties", "property_tags", "property_attachments"):
         return (r.table, r.key)
     return (r.table, r.account_id)
 
@@ -624,8 +644,8 @@ def route_curation(
     cur: psycopg.Cursor, routes: Sequence[Route], *, left: int, landed: Mapping[int, int],
 ) -> dict[str, int]:
     """Make `curation_plan`'s answer true once the ads moved (`landed`: each ad that moved -> where
-    it is now): the moves, the copies (a note copy reads its row wherever it went and takes its
-    attachments, and a copy to the property left lands once its source has gone), the re-created
+    it is now): the moves, the copies (a note copy reads its row wherever it went, and a copy to
+    the property left lands once its source has gone), the re-created
     folds, the carry stamp, then the live-deal lift on `left` and on every property an ad landed
     on (rule 22, the dismissal carrier's own statement). A route whose anchor did not move routes
     nothing; one is counted where its write changed a row: a move onto an item its account already
@@ -641,8 +661,6 @@ def route_curation(
                 "key": r.key, "account": r.account_id, "stage": r.stage_id})
             if cur.rowcount:
                 wrote.append(r)
-                if action == "copy" and (follow := _AFTER_COPY_SQL.get(r.table)):
-                    cur.execute(follow, {"copy": cur.fetchone()[0], "key": r.key})
 
     def spent(r: Route) -> bool:
         # a move consumes its carry rows where it moved (or was chosen to stay); a fold is

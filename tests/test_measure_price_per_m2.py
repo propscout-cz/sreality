@@ -102,7 +102,7 @@ def _seed(
         "UPDATE properties SET category_main = %s, category_type = %s, "
         "       current_price_czk = %s, area_m2 = %s, disposition = '3+kk', "
         "       status = 'active', is_active = true, "
-        "       published_at = now(), repr_listing_id = %s, "
+        "       settled_at = now(), repr_listing_id = %s, "
         "       repr_listing_ref_id = %s, location_listing_ref_id = %s "
         " WHERE id = %s",
         (category_main, category_type, price, area, sid, lid, lid, pid),

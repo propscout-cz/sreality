@@ -40,6 +40,7 @@ pytestmark = REQUIRED_DB
 _CARRIED = (
     "collection_properties",
     "property_tags",
+    "property_attachments",
     "property_notes",
     "property_artifact_links",
     "notification_dispatches",
@@ -84,9 +85,10 @@ _IDENTITY = {
     "property_pipeline": ("NULL::bigint", "added_at"),
     "collection_properties": ("collection_id", "added_at"),
     "property_tags": ("tag_id", "attached_at"),
+    "property_attachments": ("id", "created_at"),
     "property_dismissals": ("id", "dismissed_at"),
 }
-_FOLD_DELETES = ("property_pipeline", "collection_properties", "property_tags")
+_FOLD_DELETES = ("property_pipeline", "collection_properties", "property_tags", "property_attachments")
 _AGO = itertools.count(1)  # now() is one instant per transaction: seeded rows get their own
 
 
@@ -250,6 +252,38 @@ def test_notes_all_move(cur, accounts):
     # written on no advert, each note goes back where its carry row says it came from
     assert _detached(cur, advert, r) == {"carry_rows": 3, "note_moves": 0}
     assert placed() == before
+
+
+def test_files_union_per_account_and_bytes_and_follow_their_note(cur, accounts):
+    """Migration 660: A's twin (the same bytes on both sides) folds and B's moves; a note's file
+    goes where its note goes, through the merge and back home with it on a detach; a file with no
+    note is a detach's item (photos W2): B's goes back where its carry row says, A's own stays."""
+    a, b = accounts
+    s, r, _s_advert, advert = _pair(cur)
+    cur.execute("INSERT INTO property_notes (account_id, property_id, body) VALUES (%s, %s, 'n') "
+                "RETURNING id", (a, r))
+    note = int(cur.fetchone()[0])
+    files = {}
+    for name, acc, pid, sha, nid in (("a_s", a, s, "a", None), ("a_r", a, r, "a", None),
+                                     ("b_r", b, r, "a", None), ("noted", a, r, "b", note)):
+        cur.execute("INSERT INTO property_attachments (account_id, property_id, note_id, "
+                    "storage_key, filename, mime_type, byte_size, sha256_hex, created_at) "
+                    "VALUES (%s, %s, %s, %s, 'f.jpg', 'image/jpeg', 1, %s, "
+                    "now() - make_interval(secs => %s)) RETURNING id",
+                    (acc, pid, nid, f"test/{uuid.uuid4().hex}", sha * 64, next(_AGO)))
+        files[name] = int(cur.fetchone()[0])
+
+    def placed() -> dict[str, int | None]:
+        cur.execute("SELECT id, property_id FROM property_attachments WHERE id = ANY(%s)",
+                    (list(files.values()),))
+        where = {int(i): int(p) for i, p in cur.fetchall()}
+        return {name: where.get(i) for name, i in files.items()}
+
+    _merged(cur, s, r)
+    assert placed() == {"a_s": s, "a_r": None, "b_r": s, "noted": s}
+
+    _detached(cur, advert, r)
+    assert placed() == {"a_s": s, "a_r": None, "b_r": r, "noted": r}
 
 
 def test_artifact_links_keep_the_survivors_per_account_and_stay_through_a_detach(cur, accounts):

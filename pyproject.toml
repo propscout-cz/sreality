@@ -5,6 +5,11 @@ description = "Daily scraper for Czech rental listings from sreality.cz"
 requires-python = ">=3.12"
 dependencies = [
   "requests>=2.32",
+  # Already installed with requests; pinned for scraper/egress.py, which reads a foreign
+  # page one socket read at a time (`HTTPResponse.read1`, urllib3 2.3+) and caps DECODED
+  # bytes, which holds only where the decoders honour `max_length` (2.6+, the
+  # CVE-2025-66471 decompression-bomb fix).
+  "urllib3>=2.6",
   "psycopg[binary]>=3.2",
   "boto3>=1.34",
   # Deterministic HTML parsing for the bazos crawler (scraper/bazos_parser.py).

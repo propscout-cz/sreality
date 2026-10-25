@@ -9,28 +9,19 @@ import {
   applySavedFilter,
   PIN_LIMIT_MAX,
   PIN_LIMIT_MIN,
-  browseFiltersForArea,
   browseFiltersForBroker,
   browseUrlFromState,
   parsePinLimit,
   parseTab,
   useMemoryBrowseState,
   useUrlBrowseState,
-  type ExploreAreaSeed,
-  type ExploreOrigin,
 } from './browseState';
+import { DEFAULT_SCOPE, neighbourhoodFilters } from './neighbourhood';
 import { layersFromSearchParams } from './mapOverlays';
-import { DEFAULT_SORT } from './queries';
-import type { ListingPublic, SavedDashboard } from './types';
+import { DEFAULT_SORT, parseSort } from './queries';
+import type { SavedDashboard } from './types';
 
-const TREBIC: Pick<ExploreAreaSeed, 'lat' | 'lng'> = { lat: 49.2147, lng: 15.8816 };
-
-/* A throwaway origin — the decoupling tests only care that it is IGNORED by the
- * cohort builders, so its contents are irrelevant. */
-const SOME_ORIGIN: ExploreOrigin = {
-  listing: { sreality_id: 42, is_active: true } as ListingPublic,
-  images: [],
-};
+const TREBIC = { lat: 49.2147, lng: 15.8816 };
 
 describe('bboxAround', () => {
   it('produces a well-ordered box ~km across centred on the point', () => {
@@ -45,69 +36,7 @@ describe('bboxAround', () => {
   });
 });
 
-describe('browseFiltersForArea', () => {
-  it('seeds category + disposition + viewport bounds from a byt listing', () => {
-    const f = browseFiltersForArea({
-      ...TREBIC,
-      categoryMain: 'byt',
-      categoryType: 'prodej',
-      disposition: '2+1',
-    });
-    expect(f.categoryMain).toEqual(['byt']);
-    expect(f.categoryType).toBe('prodej');
-    expect(f.dispositions).toEqual(['2+1']);
-    expect(f.locationMode).toBe('viewport');
-    expect(f.bounds).not.toBeNull();
-    expect(f.bounds!.west).toBeLessThan(f.bounds!.east);
-  });
-
-  it('drops the disposition filter when the listing has no disposition', () => {
-    const f = browseFiltersForArea({
-      ...TREBIC,
-      categoryMain: 'dum',
-      categoryType: 'prodej',
-      disposition: null,
-    });
-    expect(f.categoryMain).toEqual(['dum']);
-    expect(f.dispositions).toEqual([]);
-  });
-
-  it('seeds pozemek now that Browse supports all five categories', () => {
-    const f = browseFiltersForArea({
-      ...TREBIC,
-      categoryMain: 'pozemek',
-      categoryType: 'prodej',
-      disposition: null,
-    });
-    expect(f.categoryMain).toEqual(['pozemek']);
-  });
-
-  it('falls back to the default category for an unknown category', () => {
-    const f = browseFiltersForArea({
-      ...TREBIC,
-      categoryMain: 'spaceship',
-      categoryType: 'prodej',
-      disposition: null,
-    });
-    expect(f.categoryMain).toEqual(DEFAULT_FILTERS.categoryMain);
-  });
-
-  it('IGNORES origin — the anchor never leaks into the cohort filters', () => {
-    const seed: ExploreAreaSeed = {
-      ...TREBIC,
-      categoryMain: 'byt',
-      categoryType: 'prodej',
-      disposition: '2+1',
-    };
-    const withoutOrigin = browseFiltersForArea(seed);
-    const withOrigin = browseFiltersForArea({ ...seed, origin: SOME_ORIGIN });
-    // The cohort is computed purely from the seed fields; origin is display-only
-    // (anchor pin + top panel), so the two filter sets must be identical.
-    expect(withOrigin).toEqual(withoutOrigin);
-  });
-});
-
-/* Unlike browseFiltersForArea, an unset ("Vše") category must resolve to NO
+/* An unset ("Vše") category must resolve to NO
  * constraint — not Browse's narrow default (['byt'] / 'pronajem'). A broker who
  * mostly sells houses would otherwise open to an empty or wrong map. */
 describe('browseFiltersForBroker', () => {
@@ -134,27 +63,28 @@ describe('browseFiltersForBroker', () => {
 });
 
 describe('browseUrlFromState ↔ fromSearchParams round-trip', () => {
-  it('carries category + disposition + bounds to the Browse URL', () => {
-    const filters = browseFiltersForArea({
-      ...TREBIC,
-      categoryMain: 'byt',
-      categoryType: 'prodej',
-      disposition: '3+kk',
-    });
+  it('carries a property neighbourhood (type, deal, disposition, ownership, centre + radius) and its lens to the Browse URL', () => {
+    const { filters } = neighbourhoodFilters(
+      { ...TREBIC, category_main: 'byt', category_type: 'prodej', disposition: '3+kk', ownership: 'osobni' },
+      DEFAULT_SCOPE,
+    )!;
     const url = browseUrlFromState({
       filters,
       sort: DEFAULT_SORT,
-      tab: 'map',
+      tab: 'stats',
       overlay: DEFAULT_OVERLAY,
+      statsMarket: 'all',
     });
-    const parsed = fromSearchParams(new URLSearchParams(url.split('?')[1]));
+    const sp = new URLSearchParams(url.split('?')[1]);
+    expect(sp.get('market')).toBe('all');
+    const parsed = fromSearchParams(sp);
     expect(parsed.categoryMain).toEqual(['byt']);
     expect(parsed.categoryType).toBe('prodej');
     expect(parsed.dispositions).toEqual(['3+kk']);
-    // bbox serialises at 5-decimal precision
-    expect(parsed.bounds).not.toBeNull();
-    expect(parsed.bounds!.west).toBeCloseTo(filters.bounds!.west, 4);
-    expect(parsed.bounds!.north).toBeCloseTo(filters.bounds!.north, 4);
+    expect(parsed.ownership).toEqual(['osobni']);
+    expect(parsed.locationMode).toBe('center_radius');
+    expect(parsed.centerRadius?.radius_m).toBe(500);
+    expect(parsed.centerRadius?.lat).toBeCloseTo(TREBIC.lat, 4);
   });
 
   /* The rent map is a registry layer now, its size category the variant: the
@@ -410,6 +340,44 @@ describe('the dashboard on the URL', () => {
     expect(result.current.view.activeDashboardId).toBe('d1');
   });
 
+  it('reads, sets and clears the Stats lens `market=sold` alone, replacing the entry and keeping the filter', () => {
+    const { result } = urlState('/browse?tab=stats&cat=byt');
+    expect(result.current.view.statsMarket).toBe('filter');
+    act(() => result.current.view.setStatsMarket('sold'));
+    expect(params(result.current.search).get('market')).toBe('sold');
+    expect(result.current.view.statsMarket).toBe('sold');
+    expect(result.current.nav).toBe('REPLACE');
+    expect(params(result.current.search).get('cat')).toBe('byt');
+    expect(result.current.view.filters.status).toBe('any');
+    act(() => result.current.view.setFilters({ ...DEFAULT_FILTERS, priceMax: 4_000_000 }));
+    expect(params(result.current.search).get('market')).toBe('sold');
+    act(() => result.current.view.setStatsMarket('filter'));
+    expect(params(result.current.search).has('market')).toBe(false);
+  });
+
+  it('the explore modals hold the same dashboard and lens in memory, and Go to Browse carries both', () => {
+    const { result } = renderHook(() => useMemoryBrowseState({ filters: { ...DEFAULT_FILTERS, priceMax: 9_000_000 } }));
+    expect(result.current.activeDashboardId).toBeNull();
+    expect(result.current.statsMarket).toBe('filter');
+    act(() => result.current.loadDashboard(dashboard({ id: 'd-plain' })));
+    expect(result.current.activeDashboardId).toBe('d-plain');
+    expect(result.current.filters.priceMax).toBe(9_000_000);
+    act(() => result.current.loadDashboard(dashboard({ id: 'd-spec', filter_spec: SPEC })));
+    expect(result.current.activeDashboardId).toBe('d-spec');
+    expect(result.current.filters.priceMax).toBe(5_000_000);
+    expect(result.current.sort).toEqual(parseSort('-price_czk'));
+    act(() => result.current.setStatsMarket('sold'));
+    expect(result.current.statsMarket).toBe('sold');
+    const href = browseUrlFromState({
+      filters: result.current.filters, sort: result.current.sort, tab: 'stats', overlay: result.current.overlay,
+      activeDashboardId: result.current.activeDashboardId, statsMarket: result.current.statsMarket,
+    });
+    const sp = new URLSearchParams(href.split('?')[1]);
+    expect(sp.get('dashboard')).toBe('d-spec');
+    expect(sp.get('market')).toBe('sold');
+    expect(sp.get('tab')).toBe('stats');
+  });
+
   it('sets and clears the id alone, replacing the entry', () => {
     const { result } = urlState('/browse?tab=stats&cat=byt');
     act(() => result.current.view.setActiveDashboardId('d2'));
@@ -477,10 +445,4 @@ describe('the dashboard on the URL', () => {
     expect(sp.toString()).toBe(viaHelper.toString());
   });
 
-  it('has no dashboard in the in-memory (Explore) view', () => {
-    const { result } = renderHook(() => useMemoryBrowseState({ filters: DEFAULT_FILTERS }));
-    expect(result.current.activeDashboardId).toBeNull();
-    act(() => result.current.loadDashboard(dashboard({ filter_spec: SPEC })));
-    expect(result.current.filters).toEqual(DEFAULT_FILTERS);
-  });
 });

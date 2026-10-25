@@ -1,10 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import maplibregl from 'maplibre-gl';
+import { useEffect, useRef } from 'react';
 
-import MapOverlayControls from '@/components/MapOverlayControls';
 import { createMap } from '@/lib/basemap';
-import { useMapOverlays } from '@/lib/mapOverlayDraw';
-import { useMapOverlayRegistry, useRememberedLayers } from '@/lib/mapOverlays';
 
 interface Props {
   lat: number;
@@ -15,26 +11,28 @@ interface Props {
   heightClass?: string;
 }
 
+/* The header's minimap: where the property is, nothing else (operator 2026-10-23)
+ * — zoom is its one control; no overlay toggles, no scale. The attribution the
+ * tiles' licence asks for stays, folded into its (i) button until opened. */
 export default function DetailMap({ lat, lng, isActive, heightClass }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<maplibregl.Map | null>(null);
-  const [ready, setReady] = useState(false);
-  const overlayRegistry = useMapOverlayRegistry().data;
-  const [overlayLayers, setOverlayLayers] = useRememberedLayers();
 
   useEffect(() => {
     if (!containerRef.current) return;
-    const map = createMap(containerRef.current, {
+    const container = containerRef.current;
+    const map = createMap(container, {
       center: [lng, lat],
       // Two levels out from the original 14.5 — the header map is for grasping
       // the neighbourhood context (river, arterials, districts), not the street.
       zoom: 12.5,
       interactive: true,
       cooperativeGestures: false,
+      scaleControl: false,
     });
-    mapRef.current = map;
 
     map.on('load', () => {
+      // MapLibre opens the compact attribution on a wide map; fold it to the (i).
+      container.querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show');
       map.addSource('pin', {
         type: 'geojson',
         data: {
@@ -55,17 +53,10 @@ export default function DetailMap({ lat, lng, isActive, heightClass }: Props) {
           'circle-opacity': isActive ? 1 : 0.6,
         },
       });
-      setReady(true);
     });
 
-    return () => {
-      setReady(false);
-      map.remove();
-      mapRef.current = null;
-    };
+    return () => map.remove();
   }, [lat, lng, isActive]);
-
-  useMapOverlays(mapRef.current, ready, overlayRegistry, overlayLayers, 'pin');
 
   return (
     <div
@@ -79,16 +70,6 @@ export default function DetailMap({ lat, lng, isActive, heightClass }: Props) {
         className="absolute inset-0"
         style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, width: '100%', height: '100%' }}
       />
-      {/* Top-left: the zoom buttons own the top-right corner, the scale and
-          attribution the bottom. */}
-      <div className="pointer-events-none absolute top-2 left-2 right-12">
-        <MapOverlayControls
-          compact
-          registry={overlayRegistry}
-          selection={overlayLayers}
-          onChange={setOverlayLayers}
-        />
-      </div>
     </div>
   );
 }

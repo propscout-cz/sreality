@@ -15,6 +15,7 @@
 
 import { isAuthRetryableFetchError } from '@supabase/supabase-js';
 import type {
+  Attachment,
   BuildingAttachment,
   BuildingRun,
   Collection,
@@ -31,7 +32,6 @@ import type {
   ListingSummaryBatchRow,
   ArtifactLink,
   Note,
-  NoteAttachment,
   PipelineShareMode,
   PipelineShares,
   PipelineStage,
@@ -539,21 +539,27 @@ export const updateBuildingInputs = (
     json: input,
   });
 
-/* Multipart upload — bypasses the JSON helper. Each call uploads ONE
- * file; the caller fans out for multi-file pickers. The server replies
- * with the inserted BuildingAttachment row. */
+/* ONE file per multipart POST (the caller fans out for a multi-file pick); the server answers
+ * with the row it stored. Every attachment upload, a property's or a building run's. */
+const uploadFile = <T>(
+  path: string,
+  file: File,
+  fields: Record<string, string | number | null | undefined> = {},
+  opts: RequestOptions = {},
+): Promise<T> => {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  for (const [name, value] of Object.entries(fields)) {
+    if (value != null) form.append(name, String(value));
+  }
+  return request<T>(path, { ...opts, method: 'POST', form });
+};
+
 export const uploadBuildingAttachment = (
   buildingId: number,
   file: File,
-): Promise<BuildingAttachment> => {
-  const form = new FormData();
-  form.append('file', file, file.name);
-  return request<BuildingAttachment>(`/buildings/${buildingId}/attachments`, {
-    method: 'POST',
-    query: { source: 'ui' },
-    form,
-  });
-};
+): Promise<BuildingAttachment> =>
+  uploadFile(`/buildings/${buildingId}/attachments`, file, {}, { query: { source: 'ui' } });
 
 export const deleteBuildingAttachment = (
   buildingId: number,
@@ -570,11 +576,11 @@ export const fetchBuildingAttachmentBlob = (
 ): Promise<Blob> =>
   requestBlob(`/buildings/${buildingId}/attachments/${attachmentId}/raw`);
 
-/* The property page's download: a PDF of the ad plus the canonical ad's stored
- * photos, zipped by the API — R2 sends no CORS header, so the SPA cannot read the
- * bytes behind /images/{key} and zip them itself. */
-export const fetchPropertyDownload = (propertyId: number): Promise<Blob> =>
-  requestBlob(`/properties/${propertyId}/download.zip`);
+/* The property page's download: a PDF of the ad, the canonical ad's stored photos and the
+ * acting identity's own photos (moje-fotky/), zipped by the API — R2 sends no CORS header,
+ * so the SPA cannot read the bytes behind /images/{key} and zip them itself. */
+export const fetchPropertyDownload = (propertyId: number, { actAs }: Acting = {}): Promise<Blob> =>
+  requestBlob(`/properties/${propertyId}/download.zip`, { actAs });
 
 /* ----- admin / Settings page --------------------------------------------
  *
@@ -2524,19 +2530,24 @@ export const listPropertyNotes = (
 
 export const createPropertyNote = (
   property_id: number,
-  body: string,
-  // The viewed listing's surrogate id — the note's provenance.
-  origin_listing_ref_id?: number,
-  // The author's share mark; private when omitted.
-  shared?: boolean,
+  note: {
+    body: string;
+    // The viewed listing's surrogate id — the note's provenance.
+    origin_listing_ref_id?: number;
+    // The author's share mark; private when omitted.
+    shared?: boolean;
+    // A viewing is a note with a date (migration 666); the body may then be empty.
+    viewing_at?: string | null;
+  },
   { actAs }: Acting = {},
 ): Promise<Note> =>
   request<Note>(`/properties/${property_id}/notes`, {
     method: 'POST',
     json: {
-      body,
-      ...(shared != null ? { shared } : {}),
-      ...(origin_listing_ref_id != null ? { origin_listing_ref_id } : {}),
+      body: note.body,
+      ...(note.shared != null ? { shared: note.shared } : {}),
+      ...(note.origin_listing_ref_id != null ? { origin_listing_ref_id: note.origin_listing_ref_id } : {}),
+      ...(note.viewing_at != null ? { viewing_at: note.viewing_at } : {}),
     },
     actAs,
   });
@@ -2545,7 +2556,8 @@ export const createPropertyNote = (
 export const updatePropertyNote = (
   property_id: number,
   note_id: number,
-  patch: { body?: string; shared?: boolean },
+  /* viewing_at: null clears the date, left out keeps it. */
+  patch: { body?: string; shared?: boolean; viewing_at?: string | null },
   { actAs }: Acting = {},
 ): Promise<Note> =>
   request<Note>(`/properties/${property_id}/notes/${note_id}`, {
@@ -2553,6 +2565,9 @@ export const updatePropertyNote = (
     json: patch,
     actAs,
   });
+
+/* The caller's own viewings across every property, earliest first (the Prohlídky tab). */
+export const listViewings = (): Promise<{ data: Note[] }> => request<{ data: Note[] }>('/viewings');
 
 export const deletePropertyNote = (
   property_id: number,
@@ -2596,43 +2611,41 @@ export const deletePropertyArtifactLink = (
     actAs,
   });
 
-/* A note's files (migration 592): one file per request; the bytes come back through the API
- * because the bucket is private and sends no CORS header. */
-export const uploadNoteAttachment = (
+/* A property's files (migration 660), each optionally a note's. The bytes come back through the
+ * API because the bucket is private and sends no CORS header; `w: 1080` asks for an image's
+ * display copy instead of the original. */
+export const listAttachments = (
   property_id: number,
-  note_id: number,
+  { note_id, actAs }: Acting & { note_id?: number } = {},
+): Promise<{ data: Attachment[] }> =>
+  request<{ data: Attachment[] }>(`/properties/${property_id}/attachments`, {
+    query: { note_id },
+    actAs,
+  });
+
+export const uploadAttachment = (
+  property_id: number,
   file: File,
-  { actAs }: Acting = {},
-): Promise<NoteAttachment> => {
-  const form = new FormData();
-  form.append('file', file, file.name);
-  return request<NoteAttachment>(`/properties/${property_id}/notes/${note_id}/attachments`, {
-    method: 'POST',
-    form,
-    actAs,
-  });
-};
+  { note_id, actAs }: Acting & { note_id?: number } = {},
+): Promise<Attachment> =>
+  uploadFile(`/properties/${property_id}/attachments`, file, { note_id }, { actAs });
 
-export const fetchNoteAttachmentBlob = (
+export const fetchAttachmentBlob = (
   property_id: number,
-  note_id: number,
   attachment_id: number,
-  { actAs }: Acting = {},
+  { w, actAs }: Acting & { w?: 1080 } = {},
 ): Promise<Blob> =>
-  requestBlob(`/properties/${property_id}/notes/${note_id}/attachments/${attachment_id}`, {
-    actAs,
-  });
+  requestBlob(`/properties/${property_id}/attachments/${attachment_id}`, { query: { w }, actAs });
 
-export const deleteNoteAttachment = (
+export const deleteAttachment = (
   property_id: number,
-  note_id: number,
   attachment_id: number,
   { actAs }: Acting = {},
 ): Promise<{ deleted: true }> =>
-  request<{ deleted: true }>(
-    `/properties/${property_id}/notes/${note_id}/attachments/${attachment_id}`,
-    { method: 'DELETE', actAs },
-  );
+  request<{ deleted: true }>(`/properties/${property_id}/attachments/${attachment_id}`, {
+    method: 'DELETE',
+    actAs,
+  });
 
 /* Dismissals (migration 536) — "never show me this property again", and its
  * undo. State is read via property_dismissals_public. */
@@ -3028,7 +3041,7 @@ export interface SplitStatement {
   expect: string;
 }
 
-export type SplitItemKind = 'note' | 'pipeline' | 'collection' | 'tag' | 'dismissal';
+export type SplitItemKind = 'note' | 'pipeline' | 'collection' | 'tag' | 'file' | 'dismissal';
 
 /* Why a fold is not re-created or a copy not made: you hold the item there
  * already (`held`), a hidden property where your live pipeline card lands

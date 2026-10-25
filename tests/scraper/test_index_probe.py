@@ -86,6 +86,10 @@ def test_probe_never_nominates(monkeypatch):
         lambda *a, **k: pytest.fail("a probe must not nominate"),
     )
     monkeypatch.setattr(
+        portal_runner.db, "orphan_candidates",
+        lambda *a, **k: pytest.fail("a probe must not nominate orphans"),
+    )
+    monkeypatch.setattr(
         portal_runner.db, "enqueue_presence_checks",
         lambda *a, **k: pytest.fail("a probe must not queue page checks"),
     )

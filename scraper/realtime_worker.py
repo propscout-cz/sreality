@@ -21,7 +21,7 @@ matcher-loop pattern of api/notifications):
              image downloads via the one existing machinery
              (scraper.main._run_image_downloads: per-host semaphore + breaker,
              active-only newest-first) — the latency lever that feeds the
-             images-first publication gate in api/notifications. Coexists with
+             publication rule (a first stored photo, migrations 668/669). Coexists with
              images_fresh.yml (idempotent storage_path-IS-NULL selection);
              without R2 env vars the lane logs once and idles (the proxy-skip
              posture).
@@ -36,7 +36,8 @@ matcher-loop pattern of api/notifications):
              per-pair totals to sreality_count_probe_state (migration 270).
 - maintenance: every `realtime_maintenance_interval_seconds` (default 30), one
              incremental property-maintenance pass — straggler attach + dirty-set
-             recompute, via scripts.recompute_property_stats.
+             recompute + settle (`settled_at` on fresh properties the pipeline is
+             done with, migration 668), via scripts.recompute_property_stats.
              run_incremental_pass (THE same implementation the GH cron runs;
              never forked). Exists because GH throttles property_maintenance.yml
              (nominal */5) to a measured 2h median / 4.1h worst — this lane is
@@ -79,8 +80,8 @@ matcher-loop pattern of api/notifications):
              (`LOCATION_INTAKE_FAST_ENABLED=0` idles it). One lane, two
              schedules: see the constant block below.
 - location_refetch: every `LOCATION_REFETCH_INTERVAL_S` (default 86400, first
-             tick a few minutes after start), queue the audit page's active
-             "no data" listings for ONE more detail fetch, at
+             tick a few minutes after start), queue the active ads with no town
+             (rule 25, `location_steps.town_missing_sql`) for ONE more detail fetch, at
              db.QUEUE_PRIORITY_VERIFY and capped at
              `LOCATION_REFETCH_CAP_PER_SOURCE` (default 500) rows per portal per
              tick. ceskereality and realitymix geocode an ad AFTER publishing it,
@@ -124,10 +125,11 @@ matcher-loop pattern of api/notifications):
 - notifications: every NOTIFICATIONS_TICK_SECONDS (300, a constant), the three
              notification producers of api/notifications (notifications push program
              W2a): watchdog_new (a live watchdog's matches first seen in the last 24 h,
-             images-first gated), price (the canonical advert's price steps of the last
-             7 days, for watchdogs and monitored collections) and monitor (a monitored
-             property gone for a day, back, or on a new portal). Each step its own
-             connection and transaction; a failing step is its own `portal_errors` cell.
+             once published: migrations 668/669), price (the canonical advert's price
+             steps of the last 7 days, for watchdogs and monitored collections) and
+             monitor (a monitored property gone for a day, back, or on a new portal).
+             Each step its own connection and transaction; a failing step is its own
+             `portal_errors` cell.
              Beside the API's matcher_loop until W2b; the one identity index
              (migration 653) makes the overlap a union.
 - push:      every PUSH_TICK_SECONDS (15, a constant), one pass of the push ledger
@@ -489,8 +491,6 @@ LOCATION_REFETCH_CAP_DEFAULT = 500
 # reason to compete for that minute; and a deploy loop must not fire a queue-writing pass
 # every time the container restarts.
 LOCATION_REFETCH_FIRST_DELAY_SECONDS = 300.0
-# log-once-per-process guard: the audit matview is absent (a branch database).
-_LOCATION_REFETCH_VIEW_WARNED = False
 
 # sold_comps lane (sold-comps W2): REGISTERED SALES FOR THE TOWNS THE OPERATOR IS
 # ACTUALLY WORKING IN. A sale is an external fact with no account and no listing, so
@@ -683,9 +683,11 @@ COUNT_PROBE_RATE_PER_S = 2.0  # ~20 total-only requests in ~10s, politely paced
 # The probe-capable portals (design doc: newest-first index order, or a bespoke
 # probe_category). Stable order = polite, predictable per-pass sequencing. Also
 # the set the drain lane serves — the worker only drains portals it knows how
-# to build.
+# to build. `web` (pasted sites) goes FIRST: the drain lane takes sources one after
+# another with a budget each, so a paste waits only for the drain interval, never for
+# nine other portals' budgets (docs/design/new-property-from-link.md §3.2).
 REALTIME_SOURCES: tuple[str, ...] = (
-    "bazos", "bezrealitky", "ceskereality", "idnes",
+    "web", "bazos", "bezrealitky", "ceskereality", "idnes",
     "maxima", "mmreality", "realitymix", "remax", "sreality",
 )
 
@@ -1555,13 +1557,14 @@ async def _maintenance_pass(stop_event: asyncio.Event, state: dict[str, Any]) ->
         "skipped": bool(stats.get("skipped")),
         "attached": stats.get("attached", 0),
         "recomputed": stats.get("recomputed", 0),
+        "settled": stats.get("settled", 0),
     }
     if last["skipped"]:
         LOG.info("MAINTENANCE lane skipped (lease held by cron or daily sweep)")
     else:
         LOG.info(
-            "MAINTENANCE lane attached=%d recomputed=%d",
-            last["attached"], last["recomputed"],
+            "MAINTENANCE lane attached=%d recomputed=%d settled=%d",
+            last["attached"], last["recomputed"], last["settled"],
         )
     _record_pass(state, "maintenance", last)
 
@@ -2044,14 +2047,12 @@ async def _location_intake_fast_pass(
 
 
 def _location_refetch_sync() -> dict[str, Any]:
-    """One daily tick: read the audit set's active no-data rows whose page is old
-    enough, and queue them for one more detail fetch at VERIFY priority.
+    """One daily tick: read the active ads with no town whose page is old enough, and
+    queue them for one more detail fetch at VERIFY priority.
 
     No lease and no in-process lock: the pass is one SELECT plus one INSERT per portal,
     the enqueue is idempotent on (source, native_id), and a second caller would at worst
     re-write rows it already wrote."""
-    global _LOCATION_REFETCH_VIEW_WARNED
-
     started = time.monotonic()
     min_age = _read_location_refetch_min_age()
     cap = _read_location_refetch_cap()
@@ -2059,14 +2060,6 @@ def _location_refetch_sync() -> dict[str, Any]:
     try:
         rows = db.location_refetch_candidates(
             conn, min_age_seconds=min_age, cap_per_source=cap)
-        if rows is None:
-            if not _LOCATION_REFETCH_VIEW_WARNED:
-                _LOCATION_REFETCH_VIEW_WARNED = True
-                LOG.warning(
-                    "LOCATION_REFETCH: location_pin_audit_mv is absent on this database; "
-                    "the lane has nothing to read and skips every tick")
-            return {"ran": False, "reason": "audit_view_missing",
-                    "seconds": round(time.monotonic() - started, 1)}
         by_source: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
             by_source.setdefault(row["source"], []).append(row)
@@ -2426,6 +2419,9 @@ def _autodedup_outcome(
             reads=counts.get("reads"),
             # E960: the waiting groups' adverts the committed attempt re-claimed.
             stale_claimed=(summary.get("evidence") or {}).get("stale_claimed"),
+            # E940: the entrant sweep's walks of `public` — a full page is a page, never a
+            # silent truncation.
+            enter_scan=_autodedup_enter_scan(summary.get("enter_scan")),
         )
 
     if summary is not None:
@@ -2443,6 +2439,24 @@ def _autodedup_outcome(
             last.setdefault(key, summary.get(key))
         last.setdefault("memory_limit_mb", memory_limit_mb)
     return last
+
+
+def _autodedup_enter_scan(raw: Any) -> dict[str, Any] | None:
+    """The pass's scope-block walks for the heartbeat (E940): `walks` this pass, `pages` (the
+    walks that came back a full page, so the block goes on past them), `page_of` (each block
+    inside a cycle of pages: `[page, of]`, `of` None until its first cycle ends), `stalled` (a
+    cursor that has paged `PAGE_STALL_PAGES` without an end) and, when the daily cap stopped the
+    pass, `skipped` and the blocks it left `unfinished`. None: the pass walked nothing and no
+    block is mid-cycle."""
+    if not isinstance(raw, dict) or not raw:
+        return None
+    out: dict[str, Any] = {
+        "walks": len(raw.get("blocks") or ()), "pages": int(raw.get("pages") or 0),
+        "page_of": dict(raw.get("page_of") or {}), "stalled": list(raw.get("stalled") or ())}
+    for key in ("scans_24h", "cap", "skipped", "unfinished", "seconds"):
+        if raw.get(key) is not None:
+            out[key] = raw[key]
+    return out
 
 
 def _autodedup_sync() -> dict[str, Any]:
@@ -2489,7 +2503,7 @@ def _autodedup_run(started: float) -> dict[str, Any]:
             if not _AUTODEDUP_STORE_WARNED:
                 _AUTODEDUP_STORE_WARNED = True
                 LOG.warning(
-                    "AUTODEDUP: the autodedup real-time store (migrations 539/540/596/604) is "
+                    "AUTODEDUP: the autodedup real-time store (migrations 539/540/596/604/616) is "
                     "absent on this database; the lane skips every tick")
             return _autodedup_outcome(started, skipped="store_absent")
         _AUTODEDUP_STORE_WARNED = False

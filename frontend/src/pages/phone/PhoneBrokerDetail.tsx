@@ -33,13 +33,13 @@ import {
 import { categoryMainLabelPlural, categoryTypeLabel } from '@/lib/enums';
 import { FEED_ALL_FILTERS, dayRuleLabel, pragueDayKey } from '@/lib/feed';
 import type { ListingFilters } from '@/lib/filters';
+import { COPY_WORDS, copyText } from '@/lib/clipboard';
 import { czPlural, fmtCount } from '@/lib/format';
 import type { KeysetCursor } from '@/lib/keyset';
 import { usePageTitle } from '@/lib/pageTitle';
 import { portalsWord } from '@/components/phone/FeedCard';
 import { CARD_PAGE_SIZE, DEFAULT_SORT, fetchListingsForCards, type CardRow } from '@/lib/queries';
 import { ROUTES } from '@/lib/routes';
-import { pushToast } from '@/lib/toast';
 import { useInfiniteList } from '@/lib/useInfiniteList';
 
 import { Initials } from './PhoneBrokers';
@@ -197,9 +197,10 @@ function Mark({ children }: { children: ReactNode }) {
   );
 }
 
-/* The number on an inset strip with "Kopírovat": the clipboard when the page
- * may write it, else the number selected for the system's own copy. A masked
- * number reads as masked, never as absent (the desktop card's words). */
+/* The number on an inset strip with "Kopírovat" (lib/clipboard: the clipboard
+ * when the page may write it, else the number selected for the system's own
+ * copy). A masked number reads as masked, never as absent (the desktop card's
+ * words). */
 function PhoneLine({ state }: { state: ContactState }) {
   const numRef = useRef<HTMLAnchorElement>(null);
   if (state.state !== 'value') {
@@ -214,25 +215,7 @@ function PhoneLine({ state }: { state: ContactState }) {
     );
   }
   const pretty = prettyPhone(state.value);
-  const select = () => {
-    const el = numRef.current;
-    const sel = window.getSelection();
-    if (el && sel) {
-      const range = document.createRange();
-      range.selectNodeContents(el);
-      sel.removeAllRanges();
-      sel.addRange(range);
-    }
-    pushToast('info', 'Číslo je označené, zkopírujte ho.');
-  };
-  const copy = () => {
-    if (!navigator.clipboard?.writeText) {
-      select();
-      return;
-    }
-    /* writeText rejects on a denied permission or an insecure origin. */
-    navigator.clipboard.writeText(pretty).then(() => pushToast('ok', 'Číslo zkopírováno.'), select);
-  };
+  const copy = () => void copyText(pretty, numRef.current, COPY_WORDS.phone);
   return (
     <div className="mt-4 flex items-center justify-between gap-2 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-inset)] py-1 pl-3 pr-1">
       <a

@@ -1,7 +1,7 @@
 /* The phone frame (#1766): Shell draws it under 768 px unless this device asked
  * for the desktop view; the routes inside are unchanged. The header is exactly
- * h-14 (the desktop panes pin to 3.5 rem), the tab bar carries the five areas
- * (W1's four and Odkaz), a page outside the tab roots gets a back affordance,
+ * h-14 (the desktop panes pin to 3.5 rem), the tab bar carries the six areas
+ * (W1's four, Odkaz and Prohlídky), a page outside the tab roots gets a back affordance,
  * the header's bell carries the unread count to Notifications (W5a, ruling R4),
  * and the account sheet holds this iPhone's push switch (W5b), the way to the
  * desktop view and, for an admin, the phone's one way to Health. */
@@ -92,7 +92,7 @@ function renderAt(path: string) {
 }
 
 describe('phone frame', () => {
-  it('draws a 3.5 rem header and five tabs on a narrow screen', () => {
+  it('draws a 3.5 rem header and six tabs on a narrow screen', () => {
     setNarrow(true);
     renderAt('/feed');
     expect(screen.getByText('feed body')).toBeInTheDocument();
@@ -100,8 +100,9 @@ describe('phone frame', () => {
     expect(header.firstElementChild).toHaveClass('h-14');
     expect(within(header).getByRole('heading', { name: 'Nové' })).toBeInTheDocument();
     const tabs = within(screen.getByRole('navigation', { name: 'Hlavní navigace' })).getAllByRole('link');
-    expect(tabs.map((t) => t.textContent)).toEqual(['Nové', 'Pipeline', 'Sbírky', 'Makléři', 'Odkaz']);
-    expect(tabs[4]).toHaveAttribute('href', '/link');
+    expect(tabs.map((t) => t.textContent)).toEqual(['Nové', 'Pipeline', 'Prohlídky', 'Sbírky', 'Makléři', 'Odkaz']);
+    expect(tabs[2]).toHaveAttribute('href', '/viewings');
+    expect(tabs[5]).toHaveAttribute('href', '/link');
     expect(tabs[0]).toHaveAttribute('aria-current', 'page');
     /* No back affordance on a tab root; no desktop nav or footer. */
     expect(screen.queryByRole('button', { name: /Nové$/ })).toBeNull();

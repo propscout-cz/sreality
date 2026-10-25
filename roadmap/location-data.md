@@ -1972,6 +1972,13 @@ is harmless because the key is the hash of the bytes.
   Nothing that PERSISTS is lost: the next fetch past the window archives the page whole. Only
   content that appears *and* disappears inside one window is missed, which is the transient
   noise the profiles are hand-written to drop anyway.
+  - **REMOVED 2026-10-22 (Health green W4).** Rule 25 (2026-09-11) made this archive the claim
+    lane's LATEST-body substrate, and the floor then discarded exactly the refetch that carried a
+    location: 1,133 changed bodies refused in 24 h on the HTML portals (a lower bound), 3,009
+    listings with a staged page newer than their newest archived body over 7 days, 11
+    ceskereality ads town-less while their refetched page named the town. The cost premise
+    (8.9 GB/day of Postgres INSERT-then-DELETE at ~20 KB rows) died with bodies in R2 (713 B
+    rows): the removal costs ~1.1k R2 PUTs a day (+8 %, ~28 MB). The cap still bounds the stock.
 - **Why both.** The cap bounds the STOCK, the floor bounds the FLOW, and the flow is what a
   100 %-churn portal actually costs: idnes at ~4 fetches/day would write 8.9 GB/day of
   INSERT-then-DELETE against a 4.4 GB standing archive — dead tuples, WAL and autovacuum an

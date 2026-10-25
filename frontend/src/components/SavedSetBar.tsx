@@ -20,6 +20,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 
 import { isApiConfigured } from '@/lib/api';
+import { usePersistedFlag } from '@/lib/persistedFlag';
 import type { TagColor } from '@/lib/types';
 import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import SavedSetSaveModal, { type SaveModalWords } from '@/components/SavedSetSaveModal';
@@ -65,14 +66,22 @@ export interface SavedSetBarProps<T extends SavedSetItem> {
   onReorder: (next: T[]) => void;
   /* An item the account owns: it drags, renames, deletes and updates. Default: all. */
   isOwn?: (item: T) => boolean;
-  /* A small ink-3 suffix after the chip's name (a shared chip's owner). */
+  /* A small ink-3 suffix after the chip's name (a shared chip's owner; an own chip's role). */
   suffix?: (item: T) => string | null;
   /* Menu entries the instance adds (between Edit… and Delete on an own chip). */
   chipMenu?: (item: T) => SavedSetMenuItem[];
-  /* The one checkbox the save and update dialogs offer; `initial(null)` on a save. */
-  checkbox?: { label: string; initial: (item: T | null) => boolean };
+  /* The one checkbox the save and update dialogs offer; `initial(null)` on a save. `disabled`
+   * answers why it is greyed out for an item, or null where it is not. */
+  checkbox?: {
+    label: string;
+    initial: (item: T | null) => boolean;
+    disabled?: (item: T | null) => string | null;
+  };
   /* Chips that lead the row and are not saved sets (Browse's Pipeline scope). */
   leading?: ReactNode;
+  /* Fold the chips behind a "<label> <count>" toggle: folded, only the active
+   * chip shows. The choice is remembered per browser under `storageKey`. */
+  collapse?: { label: string; storageKey: string; show: string; fold: string };
 }
 
 type SavedSetList<T> = { data: T[]; total: number };
@@ -123,7 +132,7 @@ export const chipBase =
 
 export default function SavedSetBar<T extends SavedSetItem>({
   items, loading = false, activeId, dirty, copy, onLoad, onSaveNew, onUpdate, onRename, onDelete, onReorder,
-  isOwn = () => true, suffix, chipMenu, checkbox, leading,
+  isOwn = () => true, suffix, chipMenu, checkbox, leading, collapse,
 }: SavedSetBarProps<T>) {
   const barRef = useRef<HTMLDivElement>(null);
   const dirtyId = useId();
@@ -132,8 +141,11 @@ export default function SavedSetBar<T extends SavedSetItem>({
   const [menu, setMenu] = useState<{ id: string; armed?: number } | null>(null);
   const [running, setRunning] = useState(false);
 
-  const own = items.filter(isOwn);
-  const shared = items.filter((i) => !isOwn(i));
+  const expanded = usePersistedFlag(collapse?.storageKey ?? '', false);
+  const collapsed = collapse != null && !expanded.value;
+  const shown = collapsed ? items.filter((i) => i.id === activeId) : items;
+  const own = shown.filter(isOwn);
+  const shared = shown.filter((i) => !isOwn(i));
   const active = items.find((i) => i.id === activeId);
 
   /* Click-away closes the per-chip kebab menu. */
@@ -198,8 +210,9 @@ export default function SavedSetBar<T extends SavedSetItem>({
     const marked = item.id === activeId && dirty;
     const entries = menu?.id === item.id ? menuFor(item) : null;
     const owner = suffix?.(item);
-    /* "<name> — <by> <owner>": two shared chips of one name stay two for a screen reader. */
-    const ownerLead = ['—', copy.shared?.by].filter(Boolean).join(' ');
+    /* "<name> — <by> <owner>": two shared chips of one name stay two for a screen reader;
+     * an own chip's suffix is its role, read without "by". */
+    const ownerLead = ['—', isOwn(item) ? null : copy.shared?.by].filter(Boolean).join(' ');
     const named = owner ? `${item.name} ${ownerLead} ${owner}` : item.name;
     const editedHint = isOwn(item) ? copy.editedHint : (copy.shared?.editedHint ?? copy.editedHint);
     /* The accent is the chip's colour (shared tag palette) or copper when
@@ -309,6 +322,23 @@ export default function SavedSetBar<T extends SavedSetItem>({
     <div ref={barRef} className="flex items-center gap-2 flex-wrap">
       {leading}
 
+      {collapse && items.length > 0 ? (
+        <button
+          type="button"
+          onClick={expanded.toggle}
+          aria-expanded={!collapsed}
+          title={collapsed ? collapse.show : collapse.fold}
+          className={`${chipBase} gap-1.5 px-2.5 py-1 font-medium bg-[var(--color-paper-2)] border-[var(--color-rule)] text-[var(--color-ink)] hover:border-[var(--color-rule-strong)]`}
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden
+            className={`transition-transform ${collapsed ? '' : 'rotate-90'}`}>
+            <path d="M3.5 2 6.5 5l-3 3" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span>{collapse.label}</span>
+          <span className="font-mono tabular-nums text-[0.7rem] text-[var(--color-ink-3)]">{items.length}</span>
+        </button>
+      ) : null}
+
       {items.length === 0 && !loading ? (
         <span className="text-[0.75rem] text-[var(--color-ink-4)]">{copy.empty}</span>
       ) : null}
@@ -350,7 +380,15 @@ export default function SavedSetBar<T extends SavedSetItem>({
           words={copy}
           mode={modal.mode}
           initial={modal.item}
-          checkbox={checkbox && modal.mode !== 'edit' ? { label: checkbox.label, initial: checkbox.initial(modal.item) } : null}
+          checkbox={
+            checkbox && modal.mode !== 'edit'
+              ? {
+                  label: checkbox.label,
+                  initial: checkbox.initial(modal.item),
+                  disabledHint: checkbox.disabled?.(modal.item) ?? null,
+                }
+              : null
+          }
           onSubmit={(name, checked, color) =>
             (modal.mode === 'save'
               ? onSaveNew(name, checked, color)

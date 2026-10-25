@@ -261,6 +261,11 @@ Items marked *(default)* were not asked; they are engineering defaults the opera
   the user picks so per filter. The exclusion is about the property, so the status switch and a
   broker filter do not move it. One three-state chip per portal (off → on it → not on it) on Browse,
   the Watchdog editor and the phone Feed; no caveat about unmerged duplicates in the UI.
+  **Amendment, operator ruling 2026-10-22 (migration 657): the status is the PROPERTY's.** "Neaktivní +
+  Sreality" drew a property still live on remax: judged on the portal's ads, the switch admitted rows every
+  surface draws as live. Now the status is the property's own and a portal (or broker) asks for an ad there
+  in that same status (an active ad under Aktivní, any ad otherwise); the row's badge lists portals with no
+  status word, since the card already carries the status.
 - **MS20 — Estimation subject = the property**, through one lookup. Recorded, not built here (§9).
 
 ### Housekeeping

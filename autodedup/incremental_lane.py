@@ -39,7 +39,7 @@ import os
 import socket
 import sys
 import time
-from contextlib import nullcontext, suppress
+from contextlib import contextmanager, nullcontext, suppress
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,6 +51,7 @@ except ImportError:  # pragma: no cover — no getrusage outside Unix
     resource = None  # type: ignore[assignment]
 
 from autodedup import indistinguishable, normalize, reconcile, rt_lease
+from autodedup.calibration_cut import CalibrationCut, decode_payload, encode_payload
 from autodedup.dataset import Image, Listing
 from autodedup.export import (
     DEFAULT_CLIP_MODEL,
@@ -108,13 +109,17 @@ from autodedup.incremental_scope import (
     CORPUS_PROJECTION_MB,
     Scope,
     ScopeError,
+    Widening,
     guard_agrees,
     parse_scope,
     resolve_scope,
+    widening,
 )
 from autodedup.incremental_sql import (
+    ENTER_SLICE,
     RT_CALIBRATION_PRESENT_SQL,
     RT_CALIBRATION_READ_SQL,
+    RT_CALIBRATION_SCORER_SQL,
     RT_CALIBRATION_WRITE_SQL,
     RT_CELL_READ_SQL,
     RT_CELL_UPSERT_SQL,
@@ -136,6 +141,7 @@ from autodedup.incremental_sql import (
     RT_EVIDENCE_RELEASE_SQL,
     RT_FP_COUNT_SQL,
     RT_FP_DELETE_SQL,
+    RT_FP_HELD_SQL,
     RT_FRESH_BLOCK_CELL_SQL,
     RT_FRESH_CLUSTER_CONFLICTS_SQL,
     RT_FRESH_CLUSTER_MEMBERS_SQL,
@@ -187,12 +193,17 @@ from autodedup.incremental_sql import (
     RT_SCHEMA_SIZE_SQL,
     RT_SCOPE_BACKLOG_SQL,
     RT_SCOPE_BLOCK_SQL,
+    RT_SCOPE_BUILD_ENTRANTS_SQL,
     RT_SCOPE_ENTRANTS_SQL,
     RT_SCOPE_IDS_DELETE_SQL,
+    RT_SCOPE_IDS_OF_BLOCKS_SQL,
     RT_SCOPE_IDS_PRUNE_BLOCKS_SQL,
     RT_SCOPE_IDS_PRUNE_SQL,
     RT_SCOPE_IDS_WRITE_SQL,
+    RT_SCOPE_OKRES_BLOCK_SQL,
+    RT_SCOPE_OKRES_OBCE_SQL,
     RT_SCOPE_PARENT_OBEC_SQL,
+    RT_SCOPE_SCAN_PRUNE_BLOCKS_SQL,
     RT_SCOPE_SCAN_SEEN_SQL,
     RT_SCOPE_SCAN_STATE_SQL,
     RT_SCOPE_SCAN_WRITE_SQL,
@@ -256,6 +267,12 @@ RULINGS_OVERLAP_S: float = 300.0
 # each pass measures, the claim cap a death halves (E948) and a bigger container resets
 # (E948b), the storage watermark (E914), and the re-cut a pass found due (E944).
 SCOPE_SETTING: str = "rt_scope"
+# E940: each scope block's page cursor, ONE row a generation (`rt_scope_pages:<generation>`),
+# `{block key: {after, page, of}}` — the listing id its next walk starts after (0: a new cycle),
+# the pages its current cycle has walked, and the pages its last full cycle took (0: none has
+# ended yet, so the block is not read whole; `RT_SCOPE_SCAN_SEEN_SQL` spells the key too). Only
+# a block that pages has an entry; the fresh reset empties the row with its generation.
+PAGES_SETTING: str = "rt_scope_pages"
 RECUT_SETTING: str = "rt_recut"
 PASS_RATE_SETTING: str = "rt_pass_rate_per_s"
 CLAIM_CAP_SETTING: str = "rt_claim_cap"
@@ -311,12 +328,11 @@ FEED_WINDOW: int = 1000
 # One round-robin slice of the scope-drift sweep, over this generation's own fingerprint rows.
 # Under the trial scope (4,969 listings) one slice covers the whole store every pass.
 DRIFT_SLICE: int = 20000
-# How many rows one REFRESH of a scope block may snapshot (W9e/R3). The trial scope's largest
-# block is Praha-Vysočany at 1,439 rows; the cap exists so a mis-typed obec code cannot pull a
-# whole city into `rt_scope_ids`, and it does not reduce the scan's cost — the `limit` is
-# applied after the bitmap heap scan, which is precisely why a smaller `enter_slice` was never
-# the answer to what that scan costs.
-ENTER_SLICE: int = 20000
+# `ENTER_SLICE`, the walk's PAGE, lives beside the walks it pages (`incremental_sql`, E961, E940).
+# A block whose current cycle has walked this many pages without reaching its end is `stalled` in
+# the walk's report and the log (E940): Praha, the largest block the register holds, is 9 pages,
+# so 16 is a cursor that does not advance, never a block that large.
+PAGE_STALL_PAGES: int = 16
 # --- the evidence sweep (E92) ---------------------------------------------------------------
 #
 # One round-robin slice of the SEVENTH feed, over this generation's own `rt_fp` rows. The
@@ -338,12 +354,22 @@ EVIDENCE_HORIZON_HOURS: float = 48.0
 # How often a scope block's membership is re-walked on `public`, by grain and in HOURS. A town
 # block is an index-served bitmap scan of its own obec (Jablonec: 2,745 buffers = 21 MB, 61 ms);
 # a QUARTER has no index of its own at all and costs 29,568 buffers = 231 MB, 6.4 s, cold every
-# time. So they do not deserve the same cadence, and neither is per-pass work.
-ENTER_INTERVAL_HOURS: dict[str, float] = {"obec": 1.0, "cast_obce": 6.0}
+# time. So they do not deserve the same cadence, and neither is per-pass work. An OKRES (E961)
+# is index-served like a town but is a dozen towns' rows: Praha-východ, kraj 27's largest, is
+# 13,935 buffers = 109 MB (0.70 a row; the kraj's 12 ~7,600 at that). At a town's 1 h one would
+# read 334k buffers a day, more than a quarter's 118k; at a quarter's 6 h it reads at most 56k
+# (avg 30k), under what one town (66k) or quarter (118k) block already spends; a kraj-only
+# scope's 12 districts ask 48 walks a day. The walk is the TAIL's feed (an arrival is the
+# forward and straggler feeds'), so 6 h costs latency only where it is measured in days.
+ENTER_INTERVAL_HOURS: dict[str, float] = {"obec": 1.0, "cast_obce": 6.0, "okres": 6.0}
 # The hard ceiling on those walks, per generation and per rolling day (W9e/R3). The cadence
 # above is what the lane INTENDS to spend; this is what it is allowed to spend when an interval
-# is mis-set to zero or the block list grows. Under the trial scope the cadence asks for 52 a
-# day (24 + 24 + 4) against this 60.
+# is mis-set to zero or the block list grows. The trial scope's cadence asked 52 a day (24 + 24
+# + 4); the live scope (8 towns + 112 Prague quarters) asks 640 and Prague + kraj 27's 12 okresy
+# 688, so the cap binds, and it binds the TAIL only: an arrival is the forward feeds' (E961). A
+# page is a walk (E940) and the cadence is per walk, so paging adds no walk a day: a block of n
+# pages is read whole every n of its walks. The cap governs PASSES; the seed walks its whole
+# scope under none (E940), and its walks count in the rolling day the passes after it read.
 MAX_ENTER_SCANS_PER_DAY: int = 60
 # --- the bootstrap phase (E98) ---------------------------------------------------------------
 #
@@ -450,23 +476,26 @@ MAX_RETIRE_FRACTION: float = 0.05
 # TOAST included). It is the TRIAL's shadow rail and nothing more: the operator pays for the
 # schema by the megabyte, so a lane that has not been watched for a week must not be able to
 # double it. `rt_scope = all` is gated by `CORPUS_PROJECTION_MB` (17,000) through
-# `guard_agrees`, and this budget stays far below it, so raising it never enables the corpus.
+# `guard_agrees`, and this budget stays below it, so raising it never enables the corpus.
 #
-# 6,000 MB since E946 (2026-10-16; 1,500 since E941, 800 since E916, 400 before that; MB here
-# are MiB, as the guard computes them), sized for the Prague seeds of S4 (E939, D907): the eight
-# towns of S1 plus all 157 Prague quarters, ~170,000 located adverts against 39,838 in the
-# store, then a second seed with Prague's ~36,000 no-quarter adverts (E940 + E945), ~206,000.
-# Measured and recorded (2026-10-16, read-only): the schema reads 996 MB after S1's second build
-# (pairs 630, the reject ledger 118, fp_key 108), generation `rt` ~750 MB of it (the share a
-# fresh reset frees); the build writes BUILD_BYTES_PER_LISTING an advert, ~3,400 MB for 170,000.
-# So the seed's second check (E941) projects ~996 - ~750 + ~60 + 3,400 = ~3,700 MB; the second
-# seed, on files the first left at that high-water mark, ~4,500 MB; arrivals at E79's ~20 % of
-# the store a month are ~800 MB a month at that size. 6,000 holds the two seeds and about two
-# months of arrivals, not a third widening, and stays far under CORPUS_PROJECTION_MB. E941's
-# 1,500 was sized the same way for S1's 38,000 (464 + 60 - 129 + 668 = ~1,063 projected, ~1,137
-# with the ledger; the second build measured 996 for 39,838). A DELETE never shrinks a file, so
-# the schema's size is a high-water mark that pruned generations leave behind.
-MAX_SCHEMA_MB: float = 6000.0
+# 10,000 MB since E940 (2026-10-17; 6,000 since E946, 1,500 since E941, 800 since E916, 400
+# before that; MB here are MiB, as the guard computes them), sized for the re-seed that lists
+# Prague whole and kraj 27 (E939 S4, E961): seven towns (25,527 located adverts), obec:554782
+# paged (167,548, 9 pages) and the 12 okresy of kraj 27 (130,053), 323,128 adverts — measured
+# 2026-10-17 06:25Z, read-only. The schema reads 1,241.6 MB (pairs 756, fp_key 173, the reject
+# ledger 124, phash_pop 63), generation `rt` ~953 MB of it by row share (the space a fresh reset
+# frees for reuse); the walk writes ~0.29 kB a snapshot row (~90 MB), the cut upserts the new
+# scope's photo hashes into phash_pop (CUT_BYTES_PER_LISTING, 339 MB for 323,128), and the build
+# writes BUILD_BYTES_PER_LISTING an advert, 6,311 MB. So the seed's second check (E941, before
+# the cut since E940) projects 1,242 - 953 + 90 + 339 + 6,311 = ~7,030 MB, over E946's 6,000;
+# 10,000 leaves ~2,970 MB, about two months of arrivals at E79's ~20 % of the store a month
+# (~1,262 MiB at that size), not a further widening, and stays under
+# CORPUS_PROJECTION_MB, so `rt_scope = all` stays refused. The database is 131.7 GB of a disk of
+# ~200 GB (67 %, D907), so 10 GB is ~5 % of it. E946's 6,000 was sized the same way for the
+# eight towns plus all 157 Prague quarters (~170,000, ~3,700 MB projected) and E941's 1,500 for
+# S1's 38,000. A DELETE never shrinks a file, so the schema's size is a high-water mark that
+# pruned generations leave behind.
+MAX_SCHEMA_MB: float = 10000.0
 # What the build writes for ONE in-scope advert — its rt_fp row, its fp_key rows, its share of
 # the stored pairs and of the groups — at what the live store costs, not at E916's row bytes:
 # on 2026-10-09 generation `rt` held 129.2 MB for 7,298 adverts, 18.1 KiB an advert (its
@@ -475,9 +504,43 @@ MAX_SCHEMA_MB: float = 6000.0
 # the trial build's row cost (2.76 pairs an advert at 2,869 B). Plus E943's reject ledger:
 # ~10-12 below-floor rejects an advert at the end of a build, ~182 B each with its key, ~2 KiB.
 BUILD_BYTES_PER_LISTING: int = 20 * 1024
+# What the seed's calibration CUT writes for one in-scope advert: its share of the pHash
+# population (`phash_pop`, upserted by hash). The seed's second storage check runs BEFORE the cut
+# (E940: a refusal must not spend the cut first), so it projects this instead of reading it.
+# Measured 2026-10-17: phash_pop 63 MiB for the 10-16 seed's 428,798 hashes (~154 B a row with
+# its index) at 7.08 hashes an advert, ~1.1 kB; an upper bound, since a hash already held costs
+# nothing.
+CUT_BYTES_PER_LISTING: int = 1100
+# What one membership-snapshot row costs (`rt_scope_ids`, with its two indexes): E940's (h)
+# measured ~90 MB for the 323,128 rows of the planned re-seed, ~0.29 kB a row. A seed that
+# writes its walk before its second storage check reads it off the schema; the widening (E964)
+# walks read-only and writes last, so it projects it.
+SNAPSHOT_BYTES_PER_ROW: int = 300
+# What the cut HOLDS for one advert at its peak. Until E962 it kept every scope advert's facts
+# and fingerprint until the calibration was built (~41 kB held, ~58 kB at the peak, cohort 18);
+# it now folds each chunk and drops it (`calibration_cut`), so an advert costs its counts and
+# its share of the pHash population. The largest count is `block_token_df`, keyed per (obec,
+# cast_obce) block: a vocabulary saturates inside its block, not across blocks, so the cost
+# follows how many adverts share a block. Cohort 18 (17,458 adverts, w31; 74 blocks, 90 % of
+# its adverts in blocks of 200 or more): 10.4 token entries an advert, ~4 kB of RSS. Re-blocked
+# to kraj 27's distribution (3,334 blocks; 28 % of rows in blocks of 10-49, 32 % in 50-199; the
+# review of E962): 43.9 entries, 8.06 kB of RSS and 678 B of payload an advert; a seed of mostly
+# villages ~9-10 kB all in. Plus the population (120 B a hash at its peak, 7.08 hashes an
+# advert: 0.85 kB), libpq's copy of its rows and the payload's two serialisations: 12 kB with
+# headroom. The seed runs on GitHub's ubuntu-latest, 16 GiB, and a cut past it is OOM-killed,
+# stranding `rt_lease` for SEED_LEASE_TTL_S (the lease is taken before the transaction and
+# SIGKILL runs no release). So right after its walk, before the cut, the seed refuses a scope
+# whose peak would pass HALF the runner — the rule a widened scope's gate holds the worker to
+# (E939) — 8,192 MiB / 12 kB = 699,050 adverts (E940's whole cut: 56 kB, ~149,800), though
+# MAX_SCHEMA_MB binds first, above ~470k. The 323,128 of the re-seed: ~3.7 GiB.
+CUT_PEAK_BYTES_PER_LISTING: int = 12 * 1024
+SEED_MEMORY_MB: float = 8192.0
 # How many `phash_pop` rows one `executemany` carries. The trial cohort's 41,791 hashes are
 # 9 chunks; the number is the score lane's, for the same reason (bound-parameter size).
 POP_CHUNK: int = 5_000
+# How many scope adverts one `RT_FP_HELD_SQL` carries when a widening counts what the store
+# already fingerprints (E964): ~0.4 MB of bound ids a statement, 18 statements at 872k.
+HELD_CHUNK: int = 50_000
 # How many listing ids one fact statement set carries (`SqlFacts.facts`). The pass re-reads the
 # WHOLE probe-key neighbourhood of its claim every pass, and a bootstrap's neighbourhood grows
 # with the store (~3,300 listings and ~40,000 images with a ~kB CLIP vector each by the eighth
@@ -1115,8 +1178,8 @@ class SqlFacts:
         # WRITE the table: the calibration cut (A10) measures the scope's hashes first and
         # builds the fingerprints it is cut from on exactly those counts. The pass never
         # passes this — its population is the table's or unknown (E91).
-        self.population = None if population is None else {
-            int(key): int(value) for key, value in population.items()}
+        # Held as handed, never copied (E962: the cut's is ~2.3M hashes at the re-seed).
+        self.population = population
         self.reads = 0
         self.statements = 0
         # The population readout, for the pass summary: how many phash-bearing images this pass
@@ -1263,6 +1326,7 @@ class SqlWork:
                  revive_slice: int = REVIVE_SLICE, window: int = FEED_WINDOW,
                  drift_slice: int = DRIFT_SLICE, enter_slice: int = ENTER_SLICE,
                  parents: Mapping[int, int] | None = None,
+                 districts: Mapping[int, Sequence[int]] | None = None,
                  max_retire_fraction: float = MAX_RETIRE_FRACTION,
                  enter_interval_hours: Mapping[str, float] | None = None,
                  max_enter_scans_per_day: int = MAX_ENTER_SCANS_PER_DAY,
@@ -1309,7 +1373,8 @@ class SqlWork:
         # riding on top of it (`stale`), for the run summary and the rate's measurement.
         self.claim_bound: dict[str, Any] = {}
         self.parents = dict(parents or {})
-        self.enter_blocks = _enter_blocks(scope, self.parents)
+        self.districts = dict(districts or {})
+        self.enter_blocks = walk_blocks(scope, self.parents, self.districts)
         self.statements = 0
         self.windows: dict[str, int] = {}
         # What this pass spent on `public` for the entrant feed, for the run summary: a block
@@ -1355,8 +1420,15 @@ class SqlWork:
         share = max(1, limit // 5)
         # During the bootstrap phase the entrant feed is not one of seven equals: it is the
         # build. Every other feed keeps its share, so an arrival, a delisting or a photograph
-        # landing mid-build is still decided in the pass that sees it.
-        enter_share = limit if self.bootstrap else share
+        # landing mid-build is still decided in the pass that sees it. A build's first attempt
+        # carries its re-claims INSIDE that limit (E964 x E971): on top of it, a build's limit
+        # + 200 re-claims outgrows the ~300 adverts the worker's memory holds. They go first,
+        # so a widening's days of build never stall the merges waiting on them, and the build
+        # takes what they leave, never less than a fifth: a build pass then holds no more than
+        # a build or a steady pass did before E964.
+        reserved = len(self.stale_claims) if self.bootstrap and self.attempt == 0 else 0
+        enter_share = max(share, limit - reserved) if self.bootstrap else share
+        self.claim_bound["enter"] = enter_share
         scope = self.scope.params()
         items: list[WorkItem] = []
         self._pending = {}
@@ -1447,15 +1519,23 @@ class SqlWork:
         # a cadence, one block at a time, under a rolling-day cap.
         if self.enter_slice and self.enter_blocks:
             pointer = self.refresh_scope_ids(cursors[CURSOR_ENTER][1])
-            after_enter = cursors[CURSOR_ENTER][0]
-            rows = self._query(RT_SCOPE_ENTRANTS_SQL, {
-                "generation": self.generation, "after_id": after_enter,
-                "lag": self.lag, "limit": enter_share})
+            if self.bootstrap:
+                # E976: a build reads the LIVE adverts first, under no id cursor (two keys are
+                # no keyset): the `rt_fp` anti-join advances it, so its id half stays 0 and the
+                # feed outside the build starts again at the snapshot's first id.
+                rows = self._query(RT_SCOPE_BUILD_ENTRANTS_SQL, {
+                    "generation": self.generation, "lag": self.lag, "limit": enter_share})
+                self._pending[CURSOR_ENTER] = (0, pointer)
+            else:
+                after_enter = cursors[CURSOR_ENTER][0]
+                rows = self._query(RT_SCOPE_ENTRANTS_SQL, {
+                    "generation": self.generation, "after_id": after_enter,
+                    "lag": self.lag, "limit": enter_share})
+                # Short of the share means the snapshot is walked out: the cursor wraps so the
+                # next cycle re-offers whatever the settle lag held back this time.
+                self._pending[CURSOR_ENTER] = (
+                    (int(rows[-1][0]), pointer) if len(rows) >= enter_share else (0, pointer))
             self.windows["entered"] = len(rows)
-            # Short of the share means the snapshot is walked out: the cursor wraps so the
-            # next cycle re-offers whatever the settle lag held back this time.
-            self._pending[CURSOR_ENTER] = (
-                (int(rows[-1][0]), pointer) if len(rows) >= enter_share else (0, pointer))
             for row in rows:
                 items.append(WorkItem(int(row[0]), "entered", _epoch(row[1]), None))
             if self.bootstrap:
@@ -1565,8 +1645,9 @@ class SqlWork:
         return [WorkItem(listing_id, "evidence", None, None, redecide=True)
                 for listing_id in wanted]
 
-    def refresh_scope_ids(self, pointer: int) -> int:
-        """Re-walk ONE scope block on `public`, but only when its cadence says so (W9e/R3).
+    def refresh_scope_ids(self, pointer: int, *, seed: bool = False) -> int:
+        """Re-walk scope blocks on `public`, but only when the cadence says so (W9e/R3), ONE PAGE
+        a walk (E940).
 
         This is the whole cost of the entrant feed, and it used to be paid every cycle: the
         quarter block is a 29,265-block bitmap heap scan of its parent obec — 231 MB and 6.4 s,
@@ -1580,16 +1661,37 @@ class SqlWork:
         costs in latency it costs only on the TAIL: an entrant that arrived recently is already
         the straggler sweep's.
 
+        A walk reads the `enter_slice` rows after the block's page cursor (`PAGES_SETTING`); a
+        full page moves the cursor to its last row and a short one — the block's end — back to
+        0, and each page prunes only its own id range, so a block larger than a page is listed
+        whole over consecutive walks and the entrant feed claims each page as it lands. The
+        cadence is per walk: a block of n pages is read whole every n intervals.
+
+        `seed=True` is `rt_seed`'s walk: every block of the scope, each paged to its end in this
+        one call and under no daily cap — a seed is a one-off listing that the calibration and
+        the build's storage check are cut over; the cap governs passes.
+
         Returns the block pointer the cursor should carry, so ties (nothing scanned yet) rotate
         instead of always naming the same block."""
         blocks = self.enter_blocks
+        began = time.time()
         self.statements += 1
         _exec(self.conn, RT_SCOPE_IDS_PRUNE_BLOCKS_SQL, {
             "generation": self.generation, "block_keys": [block.key for block in blocks]})
         state = {str(row[0]): (row[1], int(row[2] or 0))
                  for row in self._query(RT_SCOPE_SCAN_STATE_SQL, {
                      "generation": self.generation, "hours": 24})}
+        pages, held = self._pages()
         start = int(pointer) % len(blocks)
+        # THE BOOTSTRAP PHASE (E98). A cadence is what keeps a steady-state lane off `public`;
+        # a scope nothing has listed yet has no steady state, and one block a pass means the
+        # entrant feed offers nothing at all until the pass that walks the block a listing is
+        # in. So while the phase is on, every block this generation has not yet READ TO ITS END
+        # is walked in the same pass — a page each, the cadence ignored, the cap not — and a
+        # block read whole once falls back to the cadence immediately, because re-walking
+        # Vysočany is 231 MB of cold heap reads and the phase is about listing it, not about
+        # refreshing it.
+        seen = self._walked_ever() if self.bootstrap and not seed else set()
         due: list[tuple[float, int, int]] = []
         for offset in range(len(blocks)):
             index = (start + offset) % len(blocks)
@@ -1597,61 +1699,185 @@ class SqlWork:
             age, _scans = state.get(block.key, (None, 0))
             interval = float(self.enter_interval_hours.get(
                 block.grain, ENTER_INTERVAL_HOURS.get(block.grain, 6.0))) * 3600.0
-            if age is None:
+            if seed or age is None or (self.bootstrap and block.key not in seen):
                 due.append((float("inf"), offset, index))
             elif float(age) >= interval:
                 due.append((float(age), offset, index))
         if not due:
+            self._report_pages(pages, [], 0, began)
             return start
         scans_24h = sum(scans for _age, scans in state.values())
-        # THE BOOTSTRAP PHASE (E98). A cadence is what keeps a steady-state lane off `public`;
-        # a scope nothing has listed yet has no steady state, and one block a pass means the
-        # entrant feed offers nothing at all until the pass that walks the block a listing is
-        # in. So while the phase is on, every block this generation has NEVER walked is walked
-        # in the same pass — the cadence is ignored, the cap is not — and a block already
-        # walked once falls back to the cadence immediately, because re-walking Vysočany is
-        # 231 MB of cold heap reads and the phase is about listing it, not about refreshing it.
-        seen = self._walked_ever() if self.bootstrap else set()
         order = [index for _age, _offset, index in
                  sorted(due, key=lambda row: (-row[0], row[1]))]
-        wanted = ([index for index in order if blocks[index].key not in seen]
-                  if self.bootstrap else []) or order[:1]
+        if seed:
+            wanted = order
+        else:
+            wanted = ([index for index in order if blocks[index].key not in seen]
+                      if self.bootstrap else []) or order[:1]
         walked: list[dict[str, Any]] = []
         last = start
-        for index in wanted:
-            if scans_24h >= self.max_enter_scans_per_day:
+        unwalked: list[str] | None = None
+        for position, index in enumerate(wanted):
+            if not seed and scans_24h >= self.max_enter_scans_per_day:
                 # A count, not a crash: the pass goes on claiming out of the snapshot it has.
-                self.enter_scan = {"skipped": "daily cap", "scans_24h": scans_24h,
-                                   "cap": self.max_enter_scans_per_day, "blocks": walked}
-                return last if walked else start
+                unwalked = [blocks[rest].key for rest in wanted[position:]]
+                break
             block = blocks[index]
+            entry = pages.get(block.key) or {}
+            after = int(entry.get("after") or 0)
+            page = int(entry.get("page") or 0) if after else 0
+            # A block with no entry but a scan behind it was read whole by its last walk (only a
+            # block that pages keeps an entry), so a page it now fills opens a LATER cycle, not
+            # its first: it stays read. `of` 0 is a first cycle only with no walk behind it.
+            of = (int(entry.get("of") or 0) if block.key in pages
+                  else 1 if block.key in state else 0)
             started = time.time()
-            rows = self._query(RT_SCOPE_BLOCK_SQL, {
-                "obec": block.obec, "cast_obce": block.cast_obce, "limit": self.enter_slice})
-            elapsed_ms = (time.time() - started) * 1000.0
-            listing_ids = [int(row[0]) for row in rows]
-            params = {"generation": self.generation, "block_key": block.key,
-                      "listing_ids": listing_ids}
-            if listing_ids:
-                self.statements += 1
-                _exec(self.conn, RT_SCOPE_IDS_WRITE_SQL,
-                      {**params, "resolved": [_iso(row[1]) for row in rows]})
-            self.statements += 1
-            _exec(self.conn, RT_SCOPE_IDS_PRUNE_SQL, params)
-            self.statements += 1
-            _exec(self.conn, RT_SCOPE_SCAN_WRITE_SQL, {
-                "generation": self.generation, "block_key": block.key,
-                "rows_found": len(listing_ids), "elapsed_ms": round(elapsed_ms, 3)})
-            scans_24h += 1
-            walked.append({"block": block.key, "rows": len(listing_ids),
-                           "elapsed_ms": round(elapsed_ms, 3)})
+            for rows, end in block.pages(self._query, self.enter_slice, after):
+                elapsed_ms = (time.time() - started) * 1000.0
+                self._write_page(block.key, rows, after, end, elapsed_ms)
+                scans_24h += 1
+                page += 1
+                walked.append({"block": block.key, "rows": len(rows), "after_id": after,
+                               "page": page, "of": page if end is None else (of or None),
+                               "end": end is None, "elapsed_ms": round(elapsed_ms, 3)})
+                after, page, of = (0, 0, page) if end is None else (end, page, of)
+                pages[block.key] = {"after": after, "page": page, "of": of}
+                if not seed:
+                    break
+                started = time.time()
             last = (index + 1) % len(blocks)
-        self.enter_scan = {**walked[-1], "scans_24h": scans_24h,
-                           "cap": self.max_enter_scans_per_day, "blocks": walked}
-        return last
+        if walked:
+            self._write_pages(pages, held)
+        self._report_pages(pages, walked, scans_24h, began, unwalked=unwalked)
+        return last if walked else start
+
+    def _write_page(self, block_key: str, rows: Sequence[Sequence[Any]], after: int,
+                    end: int | None, elapsed_ms: float) -> None:
+        """One page of a block's walk into the snapshot (E940): its rows upserted, its own id
+        range pruned of what it no longer lists, and the walk in the scan ledger."""
+        listing_ids = [int(row[0]) for row in rows]
+        params = {"generation": self.generation, "block_key": block_key,
+                  "listing_ids": listing_ids}
+        if listing_ids:
+            self.statements += 1
+            _exec(self.conn, RT_SCOPE_IDS_WRITE_SQL,
+                  {**params, "resolved": [_iso(row[1]) for row in rows]})
+        self.statements += 1
+        _exec(self.conn, RT_SCOPE_IDS_PRUNE_SQL, {**params, "after_id": after, "page_end": end})
+        self.statements += 1
+        _exec(self.conn, RT_SCOPE_SCAN_WRITE_SQL, {
+            "generation": self.generation, "block_key": block_key,
+            "rows_found": len(listing_ids), "elapsed_ms": round(elapsed_ms, 3)})
+
+    def list_blocks(self, blocks: Sequence["EnterBlock"]
+                    ) -> list[tuple["EnterBlock", list["ListedPage"]]]:
+        """Every page of each of `blocks`, read to its end and WRITTEN NOWHERE (E964): the
+        widening seed lists first and writes last, so its transaction opens only after its cut
+        has read everything (`write_listed` writes these pages as the seed's walk would)."""
+        out: list[tuple[EnterBlock, list[ListedPage]]] = []
+        for block in blocks:
+            walk: list[ListedPage] = []
+            after = 0
+            started = time.time()
+            for rows, end in block.pages(self._query, self.enter_slice, 0):
+                walk.append(ListedPage(list(rows), after, end,
+                                       round((time.time() - started) * 1000.0, 3)))
+                after = int(end or 0)
+                started = time.time()
+            out.append((block, walk))
+        return out
+
+    def write_listed(self, listed: Sequence[tuple["EnterBlock", Sequence["ListedPage"]]]) -> None:
+        """What `list_blocks` read, written as `refresh_scope_ids(seed=True)` writes a walk: the
+        snapshot rows and scan rows of a block the scope no longer names pruned (a block a wider
+        one REPLACED, E964: its adverts are listed again under the wider block), each page
+        upserted and its range pruned, a scan row a page, and each walked block's page cursor at
+        the end of a full cycle; the cursors of the blocks not walked stand."""
+        began = time.time()
+        keys = {"generation": self.generation,
+                "block_keys": [block.key for block in self.enter_blocks]}
+        self.statements += 2
+        _exec(self.conn, RT_SCOPE_IDS_PRUNE_BLOCKS_SQL, keys)
+        # E964 review F4: a replaced block's scan rows go with its snapshot rows, so it reads as
+        # never walked — W8 refuses `town:531057` once the lane walks it as `okres:3202`, as it
+        # refuses any area at a grain the lane does not walk (E961 (g)).
+        _exec(self.conn, RT_SCOPE_SCAN_PRUNE_BLOCKS_SQL, keys)
+        pages, held = self._pages()
+        walked: list[dict[str, Any]] = []
+        for block, walk in listed:
+            for number, page in enumerate(walk, 1):
+                self._write_page(block.key, page.rows, page.after, page.end, page.elapsed_ms)
+                walked.append({"block": block.key, "rows": len(page.rows),
+                               "after_id": page.after, "page": number,
+                               "of": number if page.end is None else None,
+                               "end": page.end is None, "elapsed_ms": page.elapsed_ms})
+            pages[block.key] = {"after": 0, "page": 0, "of": len(walk)}
+        if walked:
+            self._write_pages(pages, held)
+        self._report_pages(pages, walked, len(walked), began)
+
+    def _pages(self) -> tuple[dict[str, dict[str, int]], bool]:
+        """Each scope block's page cursor (E940), and whether the generation has a row: a block
+        with no entry starts at page one."""
+        key = pages_key(self.generation)
+        self.statements += 1
+        raw = lane_settings(self.conn, [key]).get(key)
+        held = raw if isinstance(raw, Mapping) else {}
+        return ({str(block): {name: int((entry or {}).get(name) or 0)
+                              for name in ("after", "page", "of")}
+                 for block, entry in held.items()}, bool(held))
+
+    def _write_pages(self, pages: Mapping[str, Mapping[str, int]], held: bool) -> None:
+        """The page cursors, written with the snapshot they describe, in the same transaction
+        (a rolled-back pass rolls its pages back with it). Only a block that pages keeps an
+        entry — one mid-cycle, or one whose last full cycle took more than a page — and a block
+        the scope no longer holds keeps none."""
+        keys = {block.key for block in self.enter_blocks}
+        kept = {key: dict(entry) for key, entry in sorted(pages.items())
+                if key in keys and (entry.get("after") or int(entry.get("of") or 0) > 1)}
+        if not (kept or held):
+            return
+        self.statements += 1
+        _exec(self.conn, RT_SETTING_WRITE_SQL, {
+            "key": pages_key(self.generation), "value": json.dumps(kept),
+            "updated_by": f"{LANE_NAME}:walk"})
+
+    def _report_pages(self, pages: Mapping[str, Mapping[str, int]],
+                      walked: list[dict[str, Any]], scans_24h: int, began: float, *,
+                      unwalked: Sequence[str] | None = None) -> None:
+        """The walk's report (E940): every walk (`blocks`, each with its `page` of its cycle and
+        the cycle's `of`, None before the block's first cycle has ended, and whether it reached
+        the `end`), how many were full `pages` (the block goes on past them), each block inside
+        a cycle as `page_of` `[page, of]`, the blocks a cursor that does not advance has
+        `stalled`, and — when the cap stopped the pass (`unwalked`: the due blocks it never
+        reached) — the blocks it left `unfinished`: those, and every block inside a cycle.
+        Never a silent truncation."""
+        page_of = {key: [int(entry["page"]), int(entry.get("of") or 0) or None]
+                   for key, entry in sorted(pages.items()) if entry.get("after")}
+        stalled = sorted(key for key, (page, _of) in page_of.items()
+                         if page >= PAGE_STALL_PAGES)
+        # Logged when a stalled block is WALKED, not on every pass that reads the row.
+        if paged := sorted({walk["block"] for walk in walked if walk["block"] in stalled}):
+            LOG.warning("AUTODEDUP: scope block(s) %s have walked %d+ pages without reaching "
+                        "their end — the page cursor is not advancing (E940)",
+                        ", ".join(paged), PAGE_STALL_PAGES)
+        paging = {"page_of": page_of, "stalled": stalled}
+        if not walked and unwalked is None:
+            # Nothing was due: what an earlier claim of this pass walked stands.
+            if page_of or self.enter_scan:
+                self.enter_scan = {**self.enter_scan, **paging}
+            return
+        self.enter_scan = {**(walked[-1] if walked else {}), "scans_24h": scans_24h,
+                           "cap": self.max_enter_scans_per_day, "blocks": walked,
+                           "pages": sum(1 for walk in walked if not walk["end"]), **paging,
+                           "seconds": round(time.time() - began, 3)}
+        if unwalked is not None:
+            self.enter_scan["skipped"] = "daily cap"
+            self.enter_scan["unfinished"] = sorted({*page_of, *unwalked})
 
     def _walked_ever(self) -> set[str]:
-        """The scope blocks this generation HAS a scan row for, ever (E98).
+        """The scope blocks this generation has READ TO THEIR END at least once, ever (E98,
+        E940): a scan row, and no page cursor still inside the block's first cycle.
 
         Not the cadence's own state query: that one is windowed to a rolling day, so a block
         walked two days ago reads the same as a block never walked, and "every block has been
@@ -1803,8 +2029,9 @@ class RetireRefusal(Exception):
 
 @dataclass(frozen=True, slots=True)
 class EnterBlock:
-    """One block of the scope as the entrant sweep reads it: always an obec (the index this
-    schema HAS), plus the quarter code when the block is a quarter (a filter, not an index).
+    """One block of the scope as the entrant sweep reads it: always through obce (the index
+    this schema HAS) — a town's own, a quarter's parent with the quarter code as a filter, or
+    an okres's own obce with the okres code as a filter (E961; neither code is indexed).
 
     `grain` and `code` are the SCOPE's own spelling of the block, because that is what the
     cadence and the scan ledger are keyed by (W9e/R3) — a quarter walked through its parent
@@ -1812,15 +2039,55 @@ class EnterBlock:
 
     grain: str
     code: int
-    obec: int
+    obec: int | None = None
     cast_obce: int | None = None
+    obce: tuple[int, ...] = ()
 
     @property
     def key(self) -> str:
         return f"{self.grain}:{self.code}"
 
+    def walk(self, limit: int, after_id: int = 0) -> tuple[str, dict[str, Any]]:
+        """The statement and parameters that list ONE PAGE of this block on `public` (E940):
+        its first `limit` rows after `after_id`, in listing-id order — a keyset, never an
+        OFFSET."""
+        page = {"after_id": int(after_id), "limit": int(limit)}
+        if self.grain == "okres":
+            return RT_SCOPE_OKRES_BLOCK_SQL, {"okres": self.code, "obce": list(self.obce),
+                                              **page}
+        return RT_SCOPE_BLOCK_SQL, {"obec": self.obec, "cast_obce": self.cast_obce, **page}
 
-def _enter_blocks(scope: Scope, parents: Mapping[int, int]) -> tuple[EnterBlock, ...]:
+    def pages(self, query: Callable[[str, Mapping[str, Any]], Sequence[Sequence[Any]]],
+              limit: int, after_id: int = 0) -> Iterator[tuple[Sequence[Sequence[Any]],
+                                                               int | None]]:
+        """The block a page a statement from `after_id`: each page's rows and the id the next
+        page starts after — None once a page comes back short, which is the block's END. A full
+        page is never the end, however many rows the block holds (E940). The sweep takes one
+        page a walk, the seed and `rt_equivalence` every page."""
+        limit = max(int(limit), 1)
+        while True:
+            rows = query(*self.walk(limit, after_id))
+            end = int(rows[-1][0]) if len(rows) >= limit else None
+            yield rows, end
+            if end is None:
+                return
+            after_id = end
+
+
+@dataclass(frozen=True, slots=True)
+class ListedPage:
+    """One page a read-only walk listed (E964): its rows, the id it starts after, the id the next
+    page starts after (None: the block's end) and what the read took."""
+
+    rows: Sequence[Sequence[Any]]
+    after: int
+    end: int | None
+    elapsed_ms: float
+
+
+def walk_blocks(scope: Scope, parents: Mapping[int, int],
+                districts: Mapping[int, Sequence[int]] | None = None) -> tuple[EnterBlock, ...]:
+    """The scope's blocks as the entrant sweep walks them (and `rt_equivalence` reads them)."""
     if scope.whole_corpus:
         return ()        # nothing can enter a scope that already holds everything
     blocks: list[EnterBlock] = []
@@ -1830,9 +2097,13 @@ def _enter_blocks(scope: Scope, parents: Mapping[int, int]) -> tuple[EnterBlock,
         parent = parents.get(int(code))
         # A quarter with no parent is refused by `resolve_scope_parents` before a pass is
         # built, so here it can only be a caller that resolved none: sweep what CAN be swept
-        # rather than refusing a second time in the wrong place.
+        # rather than refusing a second time in the wrong place. An okres alike.
         if parent is not None:
             blocks.append(EnterBlock("cast_obce", int(code), int(parent), int(code)))
+    for code in scope.okres_codes:
+        obce = (districts or {}).get(int(code))
+        if obce:
+            blocks.append(EnterBlock("okres", int(code), obce=tuple(sorted(int(o) for o in obce))))
     return tuple(blocks)
 
 
@@ -1868,6 +2139,44 @@ def resolve_scope_parents(conn: Any, scope: Scope) -> dict[int, int]:
     return found
 
 
+def resolve_scope_districts(conn: Any, scope: Scope,
+                            parents: Mapping[int, int]) -> dict[int, tuple[int, ...]]:
+    """Each okres block's obce, read once a pass from the RÚIAN register (E961) — the index
+    its walk rides, since `okres_kod` has none.
+
+    The quarter's two rules, one grain up: an okres the register cannot place under a kraj
+    with its obce is a hard error, and so is a town or a quarter beside its own okres — the
+    district's block already holds every advert of it, twice in the snapshot and its merges
+    tied to the whole district's walk (E941's reason). A kraj grain would carry the same rule
+    over its okresy; there is none. `parents` is `resolve_scope_parents`' answer, the obec each
+    quarter sits in."""
+    codes = [int(code) for code in scope.okres_codes]
+    if scope.whole_corpus or not codes:
+        return {}
+    found: dict[int, set[int]] = {}
+    for okres, obec in _rows(conn, RT_SCOPE_OKRES_OBCE_SQL, {"codes": codes}):
+        found.setdefault(int(okres), set()).add(int(obec))
+    missing = [code for code in codes if code not in found]
+    if missing:
+        raise ScopeError(
+            f"rt_scope names okres {missing} which public.ruian_admin_units cannot place under "
+            "a kraj with its obce — refusing to run a scope the entrant sweep cannot walk")
+    okres_of = {obec: okres for okres, obce in found.items() for obec in obce}
+    beside = ([(f"obec:{code}", okres_of[code]) for code in scope.obec_codes
+               if code in okres_of]
+              + [(f"cast_obce:{code}", okres_of[parents[code]]) for code in scope.cast_obce_codes
+                 if parents.get(code) in okres_of])
+    if beside:
+        raise ScopeError(
+            "rt_scope names " + ", ".join(block for block, _okres in beside)
+            + " beside its own okres "
+            + ", ".join(sorted({f"okres:{okres}" for _block, okres in beside}))
+            + " — the okres's block already holds every advert of them, so they would be "
+            "snapshotted twice and their merges would wait on the whole okres's walk. Name "
+            "the okres or what lies inside it, not both")
+    return {okres: tuple(sorted(obce)) for okres, obce in found.items()}
+
+
 def lane_settings(conn: Any, keys: Sequence[str]) -> dict[str, Any]:
     """The lane's own rows out of `autodedup.settings` — one statement, not one each."""
     out: dict[str, Any] = {}
@@ -1890,6 +2199,11 @@ def _number(value: Any, fallback: float) -> float:
 def scope_setting_key(generation: str) -> str:
     """`rt_scope:<generation>` (W9e/R4) — the scope the seed cut the generation for."""
     return f"{SCOPE_SETTING}:{generation}"
+
+
+def pages_key(generation: str) -> str:
+    """`rt_scope_pages:<generation>` (E940) — the page cursors of the blocks that page."""
+    return f"{PAGES_SETTING}:{generation}"
 
 
 def bootstrap_setting_key(generation: str) -> str:
@@ -2009,7 +2323,8 @@ def generation_bytes(conn: Any, generation: str) -> dict[str, dict[str, int]]:
 def storage_guard(conn: Any, generation: str, scope: Scope,
                   max_schema_mb: float = MAX_SCHEMA_MB, *,
                   replacing: bool = False, replaced_bytes: int | None = None,
-                  build_listings: int | None = None) -> dict[str, Any]:
+                  build_listings: int | None = None, snapshot_rows: int = 0,
+                  widening: bool = False) -> dict[str, Any]:
     """Read what schema `autodedup` costs BEFORE the pass writes anything, and refuse over
     budget (E79) — non-zero, cursor unmoved, nothing written, never a warning in a log line.
     It also holds the second half of the whole-corpus gate: `all` is a scope only when the
@@ -2023,10 +2338,20 @@ def storage_guard(conn: Any, generation: str, scope: Scope,
     schema as it stands.
 
     `build_listings` is the seed's SECOND check (E941), inside its transaction after the walk
-    and the cut: the schema as it now stands — the snapshot and the pHash population the seed
-    just wrote included — plus what the build will write, `BUILD_BYTES_PER_LISTING` for every
-    listing in scope. A fresh seed hands in the first check's `replaced_bytes`: its reset's
-    DELETE shrank no file, and the generation's share of each table now reads as nothing."""
+    and BEFORE the cut (E940): the schema as it now stands — the snapshot the walk just wrote
+    included — plus what the cut and the build will write, `CUT_BYTES_PER_LISTING` and
+    `BUILD_BYTES_PER_LISTING` for every listing in scope. A fresh seed hands in the first
+    check's `replaced_bytes`: its reset's DELETE shrank no file, and the generation's share of
+    each table now reads as nothing.
+
+    A `widening` (E964) builds only the adverts its store does not hold yet (`build_listings`);
+    its re-cut rewrites only the hashes whose count moved, which are those adverts' photographs
+    (`RT_PHASH_POP_WRITE_SQL`), so the cut is projected over the same count; and it has written
+    no snapshot yet — its walk is read-only — so it projects the `snapshot_rows` it will write
+    at `SNAPSHOT_BYTES_PER_ROW`. A widening's `cut_mb` is therefore a LOWER bound (E964 review
+    R3): the rewrite also covers the hashes of held adverts no earlier cut measured and old
+    hashes whose corpus count moved, at most the whole scope's `CUT_BYTES_PER_LISTING` (~340 MB
+    at 323k); a `recut=true` with nothing owed reports 0."""
     bytes_now = schema_bytes(conn)
     mb = bytes_now / 1_048_576.0
     previous = lane_settings(conn, [STORAGE_WATERMARK]).get(STORAGE_WATERMARK) or {}
@@ -2054,24 +2379,36 @@ def storage_guard(conn: Any, generation: str, scope: Scope,
         report["replaced_mb"] = round(replaced / 1_048_576.0, 2)
         report["replaced_bytes"] = int(replaced)       # carried raw into the second check
     if build_listings is not None:
-        build = max(int(build_listings), 0) * BUILD_BYTES_PER_LISTING
-        checked_mb += build / 1_048_576.0
-        report["build_listings"] = max(int(build_listings), 0)
+        listings = max(int(build_listings), 0)
+        build = listings * BUILD_BYTES_PER_LISTING
+        cut = listings * CUT_BYTES_PER_LISTING
+        snapshot = max(int(snapshot_rows), 0) * SNAPSHOT_BYTES_PER_ROW
+        checked_mb += (build + cut + snapshot) / 1_048_576.0
+        report["build_listings"] = listings
         report["build_mb"] = round(build / 1_048_576.0, 2)
+        report["cut_mb"] = round(cut / 1_048_576.0, 2)
+        if snapshot_rows:
+            report["snapshot_rows"] = int(snapshot_rows)
+            report["snapshot_mb"] = round(snapshot / 1_048_576.0, 2)
     if replaced is not None or build_listings is not None:
         report["projected_mb"] = round(checked_mb, 2)
     if checked_mb > float(max_schema_mb):
         if build_listings is not None:
             freed = (f", less the {report['replaced_mb']:.1f} MB of generation {generation!r} "
                      "its reset deleted" if replaced is not None else "")
+            listed = (f", the walk's {report['snapshot_rows']:,} snapshot rows "
+                      f"(~{report['snapshot_mb']:.1f} MB)" if snapshot_rows else "")
             raise StorageRefusal(
-                f"after the seed's walk and cut, schema autodedup is {mb:.1f} MB{freed}; the "
-                f"build of the {report['build_listings']:,} listings in scope adds "
-                f"~{report['build_mb']:.1f} MB ({BUILD_BYTES_PER_LISTING // 1024} kB a "
-                f"listing), so the projected {checked_mb:.1f} MB is over the "
-                f"{float(max_schema_mb):.0f} MB MAX_SCHEMA_MB budget — refusing: the seed's "
-                "transaction rolls back and nothing was written. Narrow rt_scope, prune a "
-                "batch generation (score keep_generations=<n>) or raise the constant.")
+                f"after the seed's walk, schema autodedup is {mb:.1f} MB{freed}; the cut's "
+                f"pHash population (~{report['cut_mb']:.1f} MB){listed} and the build of the "
+                f"{report['build_listings']:,} listings "
+                f"{'its store does not hold yet' if widening else 'in scope'} "
+                f"(~{report['build_mb']:.1f} MB, "
+                f"{BUILD_BYTES_PER_LISTING // 1024} kB a listing) bring it to a projected "
+                f"{checked_mb:.1f} MB, over the {float(max_schema_mb):.0f} MB MAX_SCHEMA_MB "
+                "budget — refusing before the cut: the seed's transaction rolls back and "
+                "nothing was written. Narrow rt_scope, prune a batch generation (score "
+                "keep_generations=<n>) or raise the constant.")
         if replacing:
             raise StorageRefusal(
                 f"schema autodedup is {mb:.1f} MB and {report['replaced_mb']:.1f} MB of it is "
@@ -2141,7 +2478,8 @@ def reset_generation(conn: Any, generation: str, *, holder: str) -> dict[str, in
     deleted["scan_cursor"] = int(rows[0][0] or 0) if rows else 0
     rows = _rows(conn, RT_FRESH_SETTINGS_SQL, {
         "keys": [engine_key(generation), reconcile.redecide_key(generation),
-                 reconcile.tried_key(generation), reconcile.budget_key(generation)]})
+                 reconcile.tried_key(generation), reconcile.budget_key(generation),
+                 pages_key(generation)]})
     deleted["settings"] = int(rows[0][0] or 0) if rows else 0
     rows = _rows(conn, RT_FRESH_LEASE_SQL, {"name": LANE_NAME, "holder": holder})
     deleted["rt_lease"] = int(rows[0][0] or 0) if rows else 0
@@ -2265,19 +2603,36 @@ _CALIBRATIONS: dict[str, tuple[str, Calibration]] = {}
 
 def read_calibration(conn: Any, generation: str = GENERATION
                      ) -> tuple[Sequence[Any], Calibration]:
-    """The generation's calibration row and its calibration, the payload read once a digest."""
+    """The generation's calibration row and its calibration, the payload read once a digest.
+
+    The one reader of `payload_zlib` (E963). The row handed back holds no payload, so a pass
+    does not keep the compressed bytes beside the calibration they decoded to."""
     held = _CALIBRATIONS.get(generation)
     rows = _rows(conn, RT_CALIBRATION_READ_SQL,
                  {"generation": generation, "held": held[0] if held else None})
     if not rows:
         raise SystemExit(f"no calibration for generation {generation!r} — seed it")
-    digest, payload = str(rows[0][1]), rows[0][3]
-    if held is not None and payload is None and held[0] == digest:
-        return rows[0], held[1]
-    calibration = Calibration.from_json(
-        payload if isinstance(payload, dict) else json.loads(payload or "{}"))
+    row = (*rows[0][:3], None, *rows[0][4:])
+    digest, blob = str(rows[0][1]), rows[0][3]
+    if held is not None and blob is None and held[0] == digest:
+        return row, held[1]
+    if blob is None:
+        # A row cut before E963 carries its payload in the retired jsonb column, which nothing
+        # reads: deciding under an empty calibration would stamp decisions nobody took.
+        raise SystemExit(
+            f"the calibration of generation {generation!r} (digest {digest!r}) has no "
+            "payload_zlib — it was cut before E963 (migration 616). Re-seed it under the brake: "
+            "`gh workflow run autodedup.yml -f mode=rt_seed "
+            "-f args=\"settings=<name>,model=<name>,fresh=true\"`.")
+    calibration = decode_payload(bytes(blob))
+    # The stored bytes must decode to the calibration the row names: a drift between the
+    # encoding and the decoding refuses here, before it is memoised under the wrong digest.
+    if calibration.digest() != digest:
+        raise SystemExit(
+            f"the calibration of generation {generation!r} decodes to digest "
+            f"{calibration.digest()!r}, not the row's {digest!r} — refusing to decide under it")
     _CALIBRATIONS[generation] = (digest, calibration)
-    return rows[0], calibration
+    return row, calibration
 
 
 def recut_due(recut: Any, built_at: Any) -> bool:
@@ -2398,6 +2753,143 @@ def run_recut(conn: Any, settings: Settings, model_version: str | None, generati
         return out
 
 
+def seed_memory(scope_listings: int, memory_mb: float = SEED_MEMORY_MB) -> dict[str, Any]:
+    """What the seed's calibration cut will hold at its peak (E940; streamed since E962), refused
+    over SEED_MEMORY_MB before the cut starts: an OOM kill mid-cut strands `rt_lease` for
+    SEED_LEASE_TTL_S."""
+    peak_mb = max(int(scope_listings), 0) * CUT_PEAK_BYTES_PER_LISTING / 1_048_576.0
+    report = {"scope_listings": int(scope_listings), "cut_peak_mb": round(peak_mb, 1),
+              "seed_memory_mb": float(memory_mb)}
+    if peak_mb > float(memory_mb):
+        raise SystemExit(
+            f"rt_seed refused: the calibration cut (streamed, E962) holds "
+            f"~{CUT_PEAK_BYTES_PER_LISTING // 1024} kB an advert at its peak, so the "
+            f"{int(scope_listings):,} adverts the walk listed would peak at ~{peak_mb:,.0f} MiB, "
+            f"over SEED_MEMORY_MB {float(memory_mb):,.0f} (half the runner's 16 GiB): the "
+            "runner would kill the seed mid-cut and strand autodedup.rt_lease for "
+            f"{SEED_LEASE_TTL_S:,} s. Narrow rt_scope. Nothing was written.")
+    return report
+
+
+def _population(conn: Any, hashes: list[int]) -> dict[int, int]:
+    """E91's population of `hashes` (sorted): ONE statement, because `public.images` has no
+    index on `phash` (D8) and a statement a slice would be a sequential scan a slice. Its rows
+    are read off the cursor one at a time rather than fetched into a list first (E962: ~2.3M
+    rows for the 323k-advert re-seed, ~280 MB of tuples next to the dict they fill); libpq
+    still holds the whole result while they are read, ~64-72 B a row (~150 MB at 2.3M)."""
+    if not hashes:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(COHORT_PHASH_POP_SQL, {"hashes": hashes})
+        return {int(row[0]): int(row[1]) for row in cur}
+
+
+@dataclass(frozen=True, slots=True)
+class Cut:
+    """A calibration cut READ and not yet written (E964 review F6): the calibration, the pHash
+    population it measured, and the receipt `write_cut` completes."""
+
+    calibration: Calibration
+    population: dict[int, int]
+    report: dict[str, Any]
+
+
+@contextmanager
+def _cut_read(conn: Any, own: bool, read_by: float | None,
+              stopping: Callable[[], bool] | None, *, bound: bool) -> Iterator[None]:
+    """One step of the cut's reads. In the caller's transaction (`own` False) it is bounded as
+    the cut always was (`bound`: every step under a deadline, else the population's); in a
+    transaction of its OWN (the widening, E964) every step is, because `set_config(..., true)` is
+    local to a transaction and its locks end with it — so no lock on `listings`, `images` or
+    `listing_location` outlives the step that took it."""
+    if own:
+        with _transaction(conn):
+            _cut_bound(conn, read_by, stopping)
+            yield
+        return
+    if bound:
+        _cut_bound(conn, read_by, stopping)
+    yield
+
+
+def read_cut(conn: Any, settings: Settings, generation: str = GENERATION, *,
+             chunk: int = CUT_CHUNK, deadline: float | None = None, reserve_s: float = 0.0,
+             stopping: Callable[[], bool] | None = None, ids: Iterable[int] | None = None,
+             own_transactions: bool = False) -> Cut:
+    """The cut's reads and its compute, writing nothing: over what the scope snapshot holds, or
+    over `ids` (the scope a widening listed and has not written yet). `own_transactions` runs
+    each read step in a short transaction of its own (the widening reads for hours before its
+    one transaction opens, E964 review F6). Under a `deadline` the reads stop `reserve_s`
+    before it (E944)."""
+    clock = time.perf_counter()
+    read_by = None if deadline is None else deadline - reserve_s
+    # Sorted here as well as by the statement: the stream folds its slices in ascending id
+    # (`CalibrationCut.fold`), the order the oracle adds them in.
+    if ids is None:
+        with _cut_read(conn, own_transactions, read_by, stopping, bound=False):
+            ids = [int(row[0]) for row in _rows(conn, RT_CUT_SCOPE_IDS_SQL,
+                                                {"generation": generation})]
+    ids = sorted({int(i) for i in ids})
+    if not ids:
+        raise CalibrationRefusal(
+            f"the scope snapshot of generation {generation!r} holds no listing — nothing to "
+            "cut a calibration over. Refusing rather than freezing an empty one.")
+    hashes: set[int] = set()
+    for start in range(0, len(ids), chunk):
+        with _cut_read(conn, own_transactions, read_by, stopping, bound=read_by is not None):
+            hashes |= {int(row[0]) for row in _rows(conn, RT_CUT_HASHES_SQL,
+                                                    {"ids": ids[start:start + chunk]})}
+    n_hashes = len(hashes)
+    # The set goes before the statement runs (~84 B a hash): only its sorted list is bound.
+    wanted = sorted(hashes)
+    del hashes
+    with _cut_read(conn, own_transactions, read_by, stopping, bound=True):
+        population = _population(conn, wanted)
+    del wanted
+    facts = SqlFacts(conn, population=population, stopping=stopping)
+    # E962: each chunk's facts and fingerprints are folded into the cut and dropped before the
+    # next chunk is read, so the cut holds counts, never the scope (`calibration_cut`).
+    cut = CalibrationCut(settings)
+    for start in range(0, len(ids), chunk):
+        with _cut_read(conn, own_transactions, read_by, stopping, bound=read_by is not None):
+            # Fingerprints read no CLIP vector, so the cut skips the read that would move ~2 kB
+            # per photograph for nothing.
+            read = facts.facts(ids[start:start + chunk], clip=False)
+        cut.fold({listing_id: build_fingerprint(listing, images, settings)
+                  for listing_id, (listing, images) in read.items()},
+                 {listing_id: listing for listing_id, (listing, _images) in read.items()})
+        del read
+    calibration = cut.build(generation)
+    del cut
+    return Cut(calibration, population, {
+        "digest": calibration.digest(), "n_listings": calibration.n_listings,
+        "scope_listings": len(ids), "hashes": n_hashes, "hashes_measured": len(population),
+        "statements": facts.statements + 4, "read_seconds": round(time.perf_counter() - clock, 3)})
+
+
+def write_cut(conn: Any, cut: Cut, settings: Settings, model_version: str | None,
+              generation: str = GENERATION) -> dict[str, Any]:
+    """`read_cut`'s calibration and population into the store, inside the caller's transaction,
+    so the switch is atomic with whatever the caller writes beside it. The population upsert
+    rewrites only a hash whose count moved (`RT_PHASH_POP_WRITE_SQL`)."""
+    clock = time.perf_counter()
+    order = sorted(cut.population)
+    for start in range(0, len(order), POP_CHUNK):
+        _exec_many(conn, RT_PHASH_POP_WRITE_SQL, [
+            {"phash": phash, "n_listings": cut.population[phash]}
+            for phash in order[start:start + POP_CHUNK]])
+    # E963: zlib over the canonical JSON in a bytea, so no jsonb ceiling (256 MiB) binds a cut.
+    _exec(conn, RT_CALIBRATION_WRITE_SQL, {
+        "generation": generation, "digest": cut.calibration.digest(),
+        "n_listings": cut.calibration.n_listings,
+        "payload_zlib": encode_payload(cut.calibration),
+        "settings": json.dumps(settings.to_dict(), sort_keys=True),
+        "model_version": model_version})
+    report = dict(cut.report)
+    report["seconds"] = round(report.pop("read_seconds") + time.perf_counter() - clock, 3)
+    return report
+
+
 def cut_calibration(conn: Any, settings: Settings, model_version: str | None,
                     generation: str = GENERATION, *, chunk: int = CUT_CHUNK,
                     deadline: float | None = None, reserve_s: float = 0.0,
@@ -2414,51 +2906,13 @@ def cut_calibration(conn: Any, settings: Settings, model_version: str | None,
     the switch is atomic inside the caller's transaction. A cut is not a generation (E915):
     stored decisions keep the digest they were taken under and are re-decided only when a feed
     re-claims their listing. Under a `deadline` the reads stop `reserve_s` before it, so the
-    build and the writes keep that much of it (E944)."""
-    clock = time.perf_counter()
-    read_by = None if deadline is None else deadline - reserve_s
-    ids = [int(row[0]) for row in _rows(conn, RT_CUT_SCOPE_IDS_SQL, {"generation": generation})]
-    if not ids:
-        raise CalibrationRefusal(
-            f"the scope snapshot of generation {generation!r} holds no listing — nothing to "
-            "cut a calibration over. Refusing rather than freezing an empty one.")
-    hashes: set[int] = set()
-    for start in range(0, len(ids), chunk):
-        if read_by is not None:
-            _cut_bound(conn, read_by, stopping)
-        hashes |= {int(row[0]) for row in _rows(conn, RT_CUT_HASHES_SQL,
-                                                {"ids": ids[start:start + chunk]})}
-    _cut_bound(conn, read_by, stopping)
-    population = ({int(row[0]): int(row[1]) for row in _rows(
-        conn, COHORT_PHASH_POP_SQL, {"hashes": sorted(hashes)})} if hashes else {})
-    facts = SqlFacts(conn, population=population, stopping=stopping)
-    listings: dict[int, Listing] = {}
-    fps: dict[int, Any] = {}
-    for start in range(0, len(ids), chunk):
-        if read_by is not None:
-            _cut_bound(conn, read_by, stopping)
-        # Fingerprints read no CLIP vector, so the cut skips the read that would move ~2 kB per
-        # photograph for nothing.
-        for listing_id, (listing, images) in facts.facts(ids[start:start + chunk],
-                                                         clip=False).items():
-            listings[listing_id] = listing
-            fps[listing_id] = build_fingerprint(listing, images, settings)
-    calibration = Calibration.build(fps, listings, settings, generation)
+    build and the writes keep that much of it (E944). `read_cut` + `write_cut`, in the caller's
+    transaction; the widening calls the two apart (E964)."""
+    cut = read_cut(conn, settings, generation, chunk=chunk, deadline=deadline,
+                   reserve_s=reserve_s, stopping=stopping)
     if deadline is not None:
         _cut_bound(conn, deadline, stopping)
-    rows = [{"phash": phash, "n_listings": n} for phash, n in sorted(population.items())]
-    for start in range(0, len(rows), POP_CHUNK):
-        _exec_many(conn, RT_PHASH_POP_WRITE_SQL, rows[start:start + POP_CHUNK])
-    payload = json.dumps(calibration.to_json(), ensure_ascii=False, sort_keys=True)
-    _exec(conn, RT_CALIBRATION_WRITE_SQL, {
-        "generation": generation, "digest": calibration.digest(),
-        "n_listings": calibration.n_listings, "payload": payload, "artifact_url": None,
-        "settings": json.dumps(settings.to_dict(), sort_keys=True),
-        "model_version": model_version})
-    return {"digest": calibration.digest(), "n_listings": calibration.n_listings,
-            "scope_listings": len(ids), "hashes": len(hashes),
-            "hashes_measured": len(population), "statements": facts.statements + 4,
-            "seconds": round(time.perf_counter() - clock, 3)}
+    return write_cut(conn, cut, settings, model_version, generation)
 
 
 def _measure_rate(claimed: int, elapsed_s: float, previous: float,
@@ -2467,7 +2921,8 @@ def _measure_rate(claimed: int, elapsed_s: float, previous: float,
     # A claim the clock cut is a measurement at any size: without that, a rate halved to a
     # one-listing claim would never be measured again. The re-claims ride on top of the limit
     # (E960), so they fill none of it (E971): 200 of them beside the feeds' ~30 would read as
-    # a filled claim at a limit of ~230 and double the rate the feeds' shares are cut from.
+    # a filled claim at a limit of ~230 and double the rate the feeds' shares are cut from. A
+    # build's sit inside its limit (E964) and still fill none: such a pass blends, never doubles.
     limit = int(bound.get("limit") or 0)
     fed = claimed - int(bound.get("stale") or 0)
     saturated = bound.get("bound_by") == "time" and limit > 0 and fed >= limit
@@ -2500,7 +2955,7 @@ def _stale_budget(conn: Any, generation: str, record: Mapping[str, Any], why: st
 
 
 def _stale_claims(conn: Any, generation: str, control: Mapping[str, Any],
-                  handed: Sequence[Sequence[int]], bootstrap: bool, store: "SqlStore",
+                  handed: Sequence[Sequence[int]], store: "SqlStore",
                   engine_since: str, cap: int) -> tuple[list[int], int, int, dict[str, str]]:
     """What this pass re-claims for the groups the reconcile handed on (E960) in
     `reconcile._rank`'s order — Praha, the scope's towns, the rest (E974), then flats for sale,
@@ -2508,9 +2963,10 @@ def _stale_claims(conn: Any, generation: str, control: Mapping[str, Any],
     `reconcile.CLAIM_ORDER`), active and inactive groups together — chosen BEFORE the pass, and the
     back-off map with their groups stamped tried, which `run_incremental` writes
     (`rt_redecide_tried`) once the pass ends on its own terms (E973). None while no reconcile
-    follows the pass (the build, a seed of another version, a closed apply scope) or while the
-    reject ledger holds no row under this store's key (after a deploy that moved it, every
-    neighbour's reject would be re-scored).
+    follows the pass (a seed of another version, a closed apply scope) or while the reject
+    ledger holds no row under this store's key (after a deploy that moved it, every neighbour's
+    reject would be re-scored). A build no longer stops it (E964): its reconcile merges the
+    blocks it has read whole, and its claim holds the re-claims inside its limit (`SqlWork.claim`).
     The count is bounded like the rate (`rt_redecide_budget`): written in flight ahead of the
     pass, a count a pass finds still in flight means the last pass that re-claimed died, so this
     one offers none and halves the budget. A pass takes at most the claim cap of it (E948): the
@@ -2524,7 +2980,7 @@ def _stale_claims(conn: Any, generation: str, control: Mapping[str, Any],
         budget = max(1, int(record["inflight"]) // 2)
         _stale_budget(conn, generation, {"budget": budget}, "redecide_halved")
         return [], 0, budget, {}
-    if not handed or bootstrap or not seed_current(control, generation):
+    if not handed or not seed_current(control, generation):
         return [], 0, budget, {}
     scope = reconcile.read_scope(conn)[0]
     if scope is None or not store.ledger_keyed():
@@ -2731,11 +3187,12 @@ def run_incremental(conn_factory: Callable[[], Any], *,
     """One bounded pass of THE lane, then its reconcile, under one lease (E914, A9).
 
     The worker's `autodedup` lane is the only caller and runs it only while its interval is
-    above 0. The pass decides, groups and commits; then, outside the bootstrap phase and inside
-    what is left of its time, the reconcile turns the groups it re-clustered into production
-    merges; then, when the pHash population has drifted below `COVERAGE_FLOOR`, the calibration
-    is due: the next tick re-cuts it instead of passing, under the same lease and a deadline of
-    its own (`run_recut`, E944), and a pass reads its payload once a digest (`read_calibration`).
+    above 0. The pass decides, groups and commits; then, inside what is left of its time — in a
+    build too, waiting on the groups of the blocks it has not read whole (E964) — the reconcile
+    turns the groups it re-clustered into production merges; then, when the pHash population
+    has drifted below `COVERAGE_FLOOR`, the calibration is due: the next tick re-cuts it instead
+    of passing, under the same lease and a deadline of its own (`run_recut`, E944), and a pass
+    reads its payload once a digest (`read_calibration`).
     The rate is halved BEFORE the pass (E941), in a write of its own that commits
     before the pass's transaction opens, so a pass the system kills — a deploy, a restart, the
     kernel's OOM killer — has already slowed the next claim; a pass that committed puts the
@@ -2795,8 +3252,8 @@ def run_incremental(conn_factory: Callable[[], Any], *,
     try:
         present = _rows(conn, RT_STORE_PRESENT_SQL)
         if not present or not present[0][0]:
-            raise SystemExit("autodedup realtime store absent — migration 539, 596 or 604 "
-                             "not applied")
+            raise SystemExit("autodedup realtime store absent — migration 539, 596, 604 or "
+                             "616 not applied")
         if not _rows(conn, RT_CALIBRATION_PRESENT_SQL, {"generation": generation}):
             return {"skipped": "unseeded",
                     "reason": (f"generation {generation!r} has no calibration — seed it with "
@@ -2815,6 +3272,7 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         try:
             scope = pass_scope(read_scope_setting(control, generation))
             parents = resolve_scope_parents(conn, scope)
+            districts = resolve_scope_districts(conn, scope, parents)
         except ScopeError as exc:
             raise SystemExit(f"{SCOPE_SETTING}: {exc}") from exc
         bootstrap = setting_flag(control.get(bootstrap_setting_key(generation)))
@@ -2854,19 +3312,19 @@ def run_incremental(conn_factory: Callable[[], Any], *,
             return {"skipped": STOPPING, "reason": "the worker is shutting down",
                     "predecessor_released": predecessor, "spent_usd": 0.0}
         row, calibration = read_calibration(conn, generation)
-        settings, model = pass_config(row[5], row[6], generation)
+        settings, model = pass_config(row[4], row[5], generation)
         # E944: read again under the lease — a re-cut stopped while this tick waited for it has
         # put its row back since `control` was read.
         recut = lane_settings(conn, [recut_key(generation)]).get(recut_key(generation))
         cutting = isinstance(recut, Mapping) and bool(recut.get("cutting"))
-        recut = recut_died(conn, generation, holder, recut, row[7])
+        recut = recut_died(conn, generation, holder, recut, row[6])
         died = recut["last"] if cutting else None
         # The scope as it now stands: the last cut's count, or the store's fingerprinted adverts
         # when the scope has grown since.
         scope_listings = max(int(row[2] or 0),
                              int((storage.get("rows") or {}).get("rt_fp") or 0))
-        if (recut_unfit(bootstrap, scope_listings, recut, row[7]) is None
-                and recut_due(recut, row[7]) and _recut_age_ok(recut, row[7])):
+        if (recut_unfit(bootstrap, scope_listings, recut, row[6]) is None
+                and recut_due(recut, row[6]) and _recut_age_ok(recut, row[6])):
             # E944: the tick a pass found the population drifted re-cuts instead of passing.
             return {"skipped": "recut",
                     "reason": "the pHash population fell below the floor: the calibration is "
@@ -2874,7 +3332,7 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                     "recut": run_recut(conn, settings, model.version, generation, holder=holder,
                                        before=str(row[1]), recut=recut, deadline=deadline,
                                        stopping=stopping),
-                    "calibration": {"built_age_days": age_days(row[7])},
+                    "calibration": {"built_age_days": age_days(row[6])},
                     "generation": generation, "predecessor_released": predecessor,
                     "claim_cap": cap, "spent_usd": 0.0, **pass_memory()}
         store = SqlStore(conn, generation, calibration_digest=calibration.digest(),
@@ -2885,8 +3343,9 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                                      store.engine_digest)
         handed = reconcile.handed_groups(control.get(reconcile.redecide_key(generation)))
         stale_claims, stale_waiting, stale_budget, tried = _stale_claims(
-            conn, generation, control, handed, bootstrap, store, engine_since, int(cap["cap"]))
-        work = SqlWork(conn, scope, generation, parents=parents, bootstrap=bootstrap,
+            conn, generation, control, handed, store, engine_since, int(cap["cap"]))
+        work = SqlWork(conn, scope, generation, parents=parents, districts=districts,
+                       bootstrap=bootstrap,
                        pass_budget_s=(BOOTSTRAP_BUDGET_FRACTION * PASS_DEADLINE_S if bootstrap
                                       else PASS_BUDGET_S),
                        rate_per_s=rate_per_s, claim_cap=int(cap["cap"]),
@@ -3005,10 +3464,15 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         summary: dict[str, Any] = (result.to_json() if result is not None
                                    else {"counts": {}, "aborted": stopped})
         summary["aborted"] = stopped
-        # A9: the reconcile, after the pass committed and under the same lease. Off during
-        # the build (a half-built store is missing groups), off after a pass that rolled back,
-        # and off over a generation no seed of this design built (the 09-21 `rt` predates F2:
-        # its groups are not the ones this build would draw).
+        # A9: the reconcile, after the pass committed and under the same lease. Off after a pass
+        # that rolled back, and off over a generation no seed of this design built (the 09-21
+        # `rt` predates F2: its groups are not the ones this build would draw). ON during a
+        # build (E964): what a half-built store is missing is held back BLOCK by block — a
+        # group with an advert in a block the build has not read whole waits
+        # (`block_not_fully_read`), so a widening's new blocks pause only their own groups and
+        # every block the store already held keeps merging; in a block whose walk is complete,
+        # only the groups whose own adverts are unread (E977). A whole-corpus scope has no block
+        # for that rail to wait on (it walks none), so its build still holds the reconcile.
         if stopped:
             summary["reconcile"] = {"skipped": f"pass_{stopped}"}
         elif shutting_down():
@@ -3022,7 +3486,7 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                            f"{control.get(seed_version_key(generation))!r}, not "
                            f"{SEED_VERSION!r}: re-seed with `mode=rt_seed "
                            "args=settings=w29,model=w6_gold,fresh=true` before it merges")}
-        elif bootstrap:
+        elif bootstrap and scope.whole_corpus:
             summary["reconcile"] = {"skipped": "bootstrap"}
         else:
             reconcile_started = time.perf_counter()
@@ -3034,7 +3498,7 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                 # E941: every group's transaction ends with the pass's lease check, so a lease
                 # released after the pass committed stops the merges at the next group.
                 fence=lambda group_conn: rt_lease.hold(group_conn, holder),
-                engine_since=engine_since, waiting=handed)
+                engine_since=engine_since, waiting=handed, building=bootstrap)
             # What the reconcile cost inside the pass, so G2's rate is read with it in (B3).
             summary["reconcile"]["seconds"] = round(time.perf_counter() - reconcile_started, 3)
         elapsed = time.perf_counter() - started
@@ -3074,10 +3538,10 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         if (not stopped and owns_the_lane() and coverage is not None
                 and coverage < COVERAGE_FLOOR
                 and facts.images_with_phash >= RECUT_MIN_IMAGES
-                and not recut_due(recut, row[7]) and _recut_age_ok(recut, row[7])):
-            unfit = recut_unfit(bootstrap, scope_listings, recut, row[7])
+                and not recut_due(recut, row[6]) and _recut_age_ok(recut, row[6])):
+            unfit = recut_unfit(bootstrap, scope_listings, recut, row[6])
             value = {**(recut if isinstance(recut, Mapping) else {}),
-                     "due": None if unfit else _iso(row[7])}
+                     "due": None if unfit else _iso(row[6])}
             if unfit:
                 at = datetime.now(timezone.utc).isoformat()
                 summary["recut"] = value["last"] = {
@@ -3111,8 +3575,8 @@ def run_incremental(conn_factory: Callable[[], Any], *,
             "released_this_pass": result.released if result is not None else 0,
             "redecided": result.redecided if result is not None else 0,
         }
-        summary["calibration"] = {"digest": calibration.digest(), "built_at": _iso(row[7]),
-                                  "built_age_days": age_days(row[7])}
+        summary["calibration"] = {"digest": calibration.digest(), "built_at": _iso(row[6]),
+                                  "built_age_days": age_days(row[6])}
         # E943: the reject ledger's engine key; a pass after it moved decides every reject anew.
         summary["engine_digest"] = store.engine_digest
         summary["retention"] = {"store_floor": settings.store_floor,
@@ -3150,27 +3614,226 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                 close()
 
 
-RT_SEED_ARGS: frozenset[str] = frozenset({"settings", "model", SCOPE_SETTING, "fresh",
+RT_SEED_ARGS: frozenset[str] = frozenset({"settings", "model", SCOPE_SETTING, "fresh", "recut",
                                           rt_lease.RELEASE_ARG})
+
+
+def plan_widening(conn: Any, control: Mapping[str, Any], scope: Scope,
+                  parents: Mapping[int, int], districts: Mapping[int, Sequence[int]],
+                  settings: Settings, model: LogisticModel, generation: str, *,
+                  recut: bool = False) -> Widening:
+    """Whether `scope` WIDENS the seeded `generation` (E964), refused otherwise — before the
+    storage guard, the lease and any write. A widening keeps every block of the persisted scope
+    or replaces it by one that contains it (`incremental_scope.contains`: an okres its towns
+    and their quarters, a town its quarters), adds at least one, and keeps the scorer the
+    generation was seeded with; and only a store this design seeded (`SEED_VERSION`) widens.
+    The same scope widens nothing and is refused unless `recut` asks for a plain re-cut over the
+    whole scope (E964 review F7). Everything else on a seeded generation is a rebuild,
+    `fresh=true`."""
+    if not seed_current(control, generation):
+        raise SystemExit(
+            f"generation {generation!r} was seeded at "
+            f"{control.get(seed_version_key(generation))!r}, not {SEED_VERSION!r}: its store "
+            "is not one this design merges from, so it is rebuilt, never widened — pass "
+            "fresh=true. Nothing was written.")
+    try:
+        old = pass_scope(read_scope_setting(control, generation))
+        old_parents = resolve_scope_parents(conn, old)
+        plan = widening(old, scope, {**old_parents, **parents}, districts)
+    except ScopeError as exc:
+        raise SystemExit(f"{SCOPE_SETTING}: {exc} — pass fresh=true to rebuild. Nothing was "
+                         "written.") from exc
+    if plan.dropped:
+        raise SystemExit(
+            f"rt_scope {scope.label()!r} drops "
+            f"{' '.join(block.key for block in plan.dropped)} of generation {generation!r}'s "
+            f"scope {old.label()!r}: no block it names contains them. A widening keeps every "
+            "block or replaces it by one that contains it (an okres its towns and their "
+            "quarters, a town its quarters); a narrower or reshaped scope is a REBUILD — its "
+            "adverts would otherwise leave the store a drift share at a time under "
+            "MAX_RETIRE_FRACTION — so pass fresh=true. Nothing was written.")
+    if not plan.added and not recut:
+        raise SystemExit(
+            f"generation {generation!r} is already seeded over {old.label()!r} and rt_scope "
+            "names that scope again: it widens nothing. The lane re-cuts the calibration itself "
+            "only while the scope holds at most RECUT_MAX_LISTINGS "
+            f"({RECUT_MAX_LISTINGS:,}) adverts (E944); above that the last seed's cut stands. "
+            "Pass recut=true to re-cut it over the whole scope (it re-keys the reject ledger: "
+            "every wanted reject is scored once more), a WIDER rt_scope to widen the "
+            "generation (E964), or fresh=true to rebuild it (a new scorer or a narrower "
+            "scope). Nothing was written.")
+    recorded = _rows(conn, RT_CALIBRATION_SCORER_SQL, {"generation": generation})
+    held_settings, held_model = pass_config(recorded[0][0] if recorded else None,
+                                            recorded[0][1] if recorded else None, generation)
+    if held_settings.to_dict() != settings.to_dict() or held_model.version != model.version:
+        raise SystemExit(
+            f"generation {generation!r} is scored by model {held_model.version!r} and its own "
+            "settings; this seed names another scorer. A widening keeps the scorer every "
+            "stored decision was taken under — a new scorer is a REBUILD: pass fresh=true. "
+            "Nothing was written.")
+    return plan
+
+
+def _held(conn: Any, generation: str, ids: Sequence[int]) -> int:
+    """How many of `ids` the generation already fingerprints, `HELD_CHUNK` at a time (E964)."""
+    return sum(int(_rows(conn, RT_FP_HELD_SQL, {
+        "generation": generation, "ids": list(ids[start:start + HELD_CHUNK])})[0][0] or 0)
+        for start in range(0, len(ids), HELD_CHUNK))
+
+
+def _check_replaced(conn: Any, plan: Widening,
+                    listed: Sequence[tuple["EnterBlock", Sequence["ListedPage"]]],
+                    generation: str) -> None:
+    """Refuse a replacement the wider block does not actually hold (E964 review F8): every
+    advert the snapshot lists under a REPLACED block must be listed again by the block replacing
+    it, unless the replaced block itself no longer lists it (it moved out since its last walk).
+    A register error would otherwise drop held adverts from the snapshot, and the drift sweep
+    would retire them up to MAX_RETIRE_FRACTION. The replaced block is walked again only when
+    something is missing."""
+    walked = {block.key: {int(row[0]) for page in walk for row in page.rows}
+              for block, walk in listed}
+    for old_key, new_key in sorted(plan.replaced.items()):
+        missing = {int(row[0]) for row in _rows(conn, RT_SCOPE_IDS_OF_BLOCKS_SQL, {
+            "generation": generation, "block_keys": [old_key]})} - walked.get(new_key, set())
+        if not missing:
+            continue
+        old = parse_scope(old_key)
+        parents = resolve_scope_parents(conn, old)
+        again = SqlWork(conn, old, generation, parents=parents, bootstrap=True,
+                        enter_slice=ENTER_SLICE)
+        still = sorted(missing & {int(row[0]) for _block, walk in again.list_blocks(
+            again.enter_blocks) for page in walk for row in page.rows})
+        if still:
+            raise SystemExit(
+                f"rt_scope: {new_key} does not list {len(still):,} adverts {old_key} still "
+                f"holds ({', '.join(str(i) for i in still[:10])}{' …' if len(still) > 10 else ''})"
+                f": the register places {old_key} inside {new_key} but the walks disagree, so "
+                "the replacement would drop held adverts from the snapshot. Name both blocks' "
+                "registers right, or keep the block. Nothing was written.")
+
+
+def widen_generation(conn: Any, plan: Widening, scope: Scope, *, parents: Mapping[int, int],
+                     districts: Mapping[int, Sequence[int]], settings: Settings,
+                     model: LogisticModel, generation: str, holder: str,
+                     digest_before: str, widened_from: Any) -> dict[str, Any]:
+    """`rt_seed` over a seeded generation with a WIDER scope (E964), or with the same scope and
+    `recut=true` (no block added: a plain re-cut over the whole scope): every row the generation
+    holds stays — pairs, clusters, fingerprints, postings, the reject ledger, the forward
+    cursors — the blocks it has not read whole are listed, the calibration is cut again over
+    the WHOLE scope, and the build phase opens for what the store does not hold yet.
+
+    Read first, write last: the one transaction opens only once everything is read, so it
+    holds an XID (and the vacuum horizon) and its locks only while it writes, never while the
+    cut reads (~11.5 ms an advert, hours at hundreds of thousands).
+      1. the walk, READ-ONLY and outside any transaction (`SqlWork.list_blocks`): every block
+         the persisted scope did not name (an added block, a wider block replacing one) and
+         every block it named that this generation has not read to its end, each paged to its
+         end; a replaced block's adverts checked to be listed again (`_check_replaced`);
+      2. what that decides, still before any write: the scope's adverts (the snapshot's in the
+         blocks not walked again, plus the walk's), how many the store already fingerprints,
+         the second storage check — the build of the adverts the store does not hold, the
+         population rows the re-cut moves, the snapshot rows the walk will write — and the
+         cut's memory;
+      3. the cut's reads and compute (`read_cut`), each read step in a short transaction of its
+         own, so no lock on `public` outlives its step;
+      4. ONE transaction: the cut's writes (`write_cut`: the population, the calibration row),
+         the walk's pages (a replaced block's snapshot and scan rows pruned: its adverts are the
+         wider block's rows now), the entrant sweep from the start, the scope row, the build
+         phase when something is owed, and the lease's fence last. A refusal anywhere rolls all
+         of it back.
+    The forward cursors are NOT moved: an arrival in a block the store already holds while the
+    new blocks build is claimed by the feed that sees it, as on any pass. The rate, the claim
+    cap, the engine row and the reconcile's queue stand: the store is the same store."""
+    began = time.perf_counter()
+    work = SqlWork(conn, scope, generation, parents=parents, districts=districts,
+                   bootstrap=True, enter_slice=ENTER_SLICE)
+    added = {block.key for block in plan.added}
+    seen = work._walked_ever()
+    to_walk = [block for block in work.enter_blocks
+               if block.key in added or block.key not in seen]
+    walked_keys = {block.key for block in to_walk}
+    listed = work.list_blocks(to_walk)
+    _check_replaced(conn, plan, listed, generation)
+    walk_s = round(time.perf_counter() - began, 3)
+    kept_keys = [block.key for block in work.enter_blocks if block.key not in walked_keys]
+    ids = sorted({int(row[0]) for _block, walk in listed for page in walk for row in page.rows}
+                 | ({int(row[0]) for row in _rows(conn, RT_SCOPE_IDS_OF_BLOCKS_SQL, {
+                     "generation": generation, "block_keys": kept_keys})} if kept_keys else set()))
+    held = _held(conn, generation, ids)
+    snapshot_rows = sum(len(page.rows) for _block, walk in listed for page in walk)
+    try:
+        build_storage = storage_guard(conn, generation, scope, build_listings=len(ids) - held,
+                                      snapshot_rows=snapshot_rows, widening=True)
+    except StorageRefusal as exc:
+        raise SystemExit(str(exc)) from exc
+    memory = seed_memory(len(ids))
+    record = {
+        "mode": "widening" if added else "recut",
+        "from": parse_scope(widened_from).as_json(), "to": scope.as_json(),
+        "added": sorted(added), "replaced": dict(sorted(plan.replaced.items())),
+        "walked": sorted(walked_keys), "scope_listings": len(ids), "held": held,
+        "owed": len(ids) - held,
+    }
+    cut_began = time.perf_counter()
+    # The cut's hours of reads run BEFORE the transaction, each step in a short transaction of
+    # its own (E964 review F6): no XID, and no lock on `public` held past its step.
+    try:
+        computed = read_cut(conn, settings, generation, ids=ids, own_transactions=True)
+    except CalibrationRefusal as exc:
+        raise SystemExit(f"{scope.label()!r}: {exc}") from exc
+    cut_s = round(time.perf_counter() - cut_began, 3)
+    with _transaction(conn):
+        cut = write_cut(conn, computed, settings, model.version, generation)
+        work.write_listed(listed)
+        # The build lists the snapshot from its first id: the new blocks' adverts sit all
+        # through the id range, behind wherever the sweep stood.
+        _exec(conn, RT_CURSOR_WRITE_SQL, {"name": CURSOR_ENTER, "last_listing_id": 0,
+                                          "last_snapshot_id": 0, "watermark": None})
+        rows = [(scope_setting_key(generation), scope.as_json())]
+        if record["owed"]:
+            rows.append((bootstrap_setting_key(generation), True))
+        for key, value in rows:
+            _exec(conn, RT_SETTING_WRITE_SQL, {"key": key, "value": json.dumps(value),
+                                               "updated_by": f"{LANE_NAME}:rt_seed_widen"})
+        # E941's fence, last: a lease released under a seed that ran for hours (a
+        # `release_lease=` dispatch naming it) rolls the widening back instead of committing
+        # beside the next holder.
+        rt_lease.hold(conn, holder)
+    return {
+        "mode": record["mode"],
+        "widening": record,
+        "calibration": {**cut, "digest_before": digest_before,
+                        "moved": cut["digest"] != digest_before},
+        "enter_scan": dict(work.enter_scan),
+        "storage_build": build_storage,
+        "seed_memory": memory,
+        "seconds": {"walk": walk_s, "cut": cut_s,
+                    "write": round(time.perf_counter() - cut_began - cut_s, 3),
+                    "total": round(time.perf_counter() - began, 3)},
+    }
 
 
 def run_rt_seed(
     conn_factory: Callable[[], Any], args: Mapping[str, str], out_dir: Path
 ) -> dict[str, Any]:
-    """`--mode rt_seed`: (re)build THE generation from the database (A10, E912).
+    """`--mode rt_seed`: build THE generation from the database (A10, E912), or WIDEN it (E964).
 
     It names the scorer (`settings`, `model`) and the scope (`rt_scope`, else the row the
-    previous seed wrote, else the trial blocks), walks every scope block once, cuts the
-    calibration and the pHash population from the database, starts the cursors at TODAY and
-    opens the build phase — every in-scope listing then arrives through the passes, the one
-    path the replay proof covers (E98). A generation already seeded is rebuilt only with
-    `fresh=true`, which first empties it (E97) inside the same transaction; production merges
-    are never touched. It takes the lane's lease and refuses while a pass holds it — stop the
-    worker's lane first (interval 0).
+    previous seed wrote, else the trial blocks), walks every scope block to its end (E940),
+    cuts the calibration and the pHash population from the database, starts the cursors at
+    TODAY and opens the build phase — every in-scope listing then arrives through the passes, the
+    one path the replay proof covers (E98). A generation already seeded is rebuilt only with
+    `fresh=true`, which first empties it (E97) inside the same transaction; without it, a scope
+    that WIDENS the seeded one widens the generation instead (`widen_generation`: nothing
+    emptied, the new blocks listed, the calibration re-cut over the whole scope, the forward
+    cursors kept, the build phase open for the new blocks only — `plan_widening` refuses a
+    narrower or reshaped scope, the same scope and another scorer). Production merges are never
+    touched. It takes the lane's lease and refuses while a pass holds it — stop the worker's
+    lane first (interval 0).
 
     THE ORDER (E916), every step before the transaction read-only:
-      1. refuse an unknown arg, an absent store, a seeded generation without `fresh=true`,
-         and a scope that does not resolve;
+      1. refuse an unknown arg, an absent store, a scope that does not resolve, and on a
+         seeded generation without `fresh=true` anything `plan_widening` refuses;
       2. the storage guard. With `fresh=true` it reads the schema size AND what this
          generation's rows hold of every table step 5 empties, and refuses only when the
          PROJECTED size (schema minus those rows) is over MAX_SCHEMA_MB — re-measuring after
@@ -3179,7 +3842,8 @@ def run_rt_seed(
          Without `fresh=true` it checks the schema as it stands, exactly as a pass does;
       3. release a named stale lease, if asked;
       4. take the lease (refuse while a pass holds it);
-      5. ONE transaction: the reset (fresh only), the block walk, the calibration cut, the
+      5. a widening: `widen_generation`'s own order (read first, write last). Any other seed:
+         ONE transaction: the reset (fresh only), the block walk, the calibration cut, the
          SECOND storage check (E941: the schema as it now stands, less what a fresh reset
          freed, plus `BUILD_BYTES_PER_LISTING` for every listing in scope — what the build
          writes), the cursors and the control rows. A refusal inside it rolls every row back,
@@ -3198,24 +3862,26 @@ def run_rt_seed(
     try:
         present = _rows(conn, RT_STORE_PRESENT_SQL)
         if not present or not present[0][0]:
-            raise SystemExit("autodedup realtime store absent — migration 539, 596 or 604 "
-                             "not applied")
+            raise SystemExit("autodedup realtime store absent — migration 539, 596, 604 or "
+                             "616 not applied")
         existing = _rows(conn, RT_CALIBRATION_PRESENT_SQL, {"generation": generation})
-        if existing and not fresh:
-            raise SystemExit(
-                f"generation {generation!r} is already seeded (calibration "
-                f"{str(existing[0][1])!r}, cut {existing[0][2]}) — the calibration re-cuts "
-                "itself when the pHash population drifts; a new scorer or scope is a REBUILD: "
-                "pass fresh=true. Nothing was written.")
-        control = lane_settings(conn, [scope_setting_key(generation)])
+        control = lane_settings(conn, [scope_setting_key(generation),
+                                       seed_version_key(generation)])
         try:
             scope = resolve_scope(args.get(SCOPE_SETTING),
                                   read_scope_setting(control, generation))
-            # Proved at SEED time: a quarter the register cannot place is a scope whose
-            # entrant sweep could never walk it (W9d-3).
+            # Proved at SEED time: a quarter or an okres the register cannot place is a scope
+            # whose entrant sweep could never walk it (W9d-3, E961).
             parents = resolve_scope_parents(conn, scope)
+            districts = resolve_scope_districts(conn, scope, parents)
         except ScopeError as exc:
             raise SystemExit(f"{SCOPE_SETTING}: {exc}") from exc
+        recut = str(args.get("recut") or "").strip().lower() == "true"
+        if recut and (fresh or not existing):
+            raise SystemExit("recut=true re-cuts a seeded generation over its own scope; a first "
+                             "or fresh seed cuts anyway. Nothing was written.")
+        plan = (plan_widening(conn, control, scope, parents, districts, settings, model,
+                              generation, recut=recut) if existing and not fresh else None)
         try:
             # E916: a fresh seed is budgeted on what the schema holds WITHOUT the rows it is
             # about to delete; any other seed on the schema as it stands.
@@ -3230,29 +3896,62 @@ def run_rt_seed(
                 "app_settings.realtime_autodedup_interval_seconds to 0, wait for the lease to "
                 "clear, and seed again. Nothing was written.")
         leased = True
+        if plan is not None:
+            widened = widen_generation(
+                conn, plan, scope, parents=parents, districts=districts, settings=settings,
+                model=model, generation=generation, holder=holder,
+                digest_before=str(existing[0][1]),
+                widened_from=read_scope_setting(control, generation))
+            summary = {
+                "generation": generation,
+                **widened,
+                "settings_name": settings_name,
+                "model_name": model_name,
+                "model_version": model.version,
+                "fresh": False,
+                "bootstrap": bool(widened["widening"]["owed"]),
+                "scope": scope.as_json(),
+                "storage": storage,
+                "peak_rss_mb": peak_rss_mb(),
+                "lease_released": released,
+                "spent_usd": 0.0,
+            }
+            Path(out_dir).mkdir(parents=True, exist_ok=True)
+            (Path(out_dir) / "rt_seed.json").write_text(
+                json.dumps(summary, indent=2, sort_keys=True, default=str), encoding="utf-8")
+            return summary
         reset: dict[str, int] = {}
         with _transaction(conn):
             if fresh:
                 reset = reset_generation(conn, generation, holder=holder)
-            # The scope's blocks, walked once now: the cut is taken over what they hold, and
-            # the build phase starts with every block already listed.
-            work = SqlWork(conn, scope, generation, parents=parents, bootstrap=True)
+            # E940: EVERY block of the scope, each read to its end (a page a statement) and under
+            # no daily cap — the cut, A10's re-cut refusal above RECUT_MAX_LISTINGS and E941's
+            # second storage check are all taken over what the walk listed, so a block cut to
+            # its first page, or a block the cap left for tomorrow, would bias the one and
+            # under-count the other for the generation's life. The build starts listed whole.
+            work = SqlWork(conn, scope, generation, parents=parents, districts=districts,
+                           bootstrap=True, enter_slice=ENTER_SLICE)
             if work.enter_blocks:
-                work.refresh_scope_ids(0)
+                work.refresh_scope_ids(0, seed=True)
+            # E940: what the walk listed decides two refusals, and both run BEFORE the cut — the
+            # seed's hour (~11.5 ms an advert) — so neither spends it first. The count is the
+            # cut's own: the snapshot's distinct adverts.
+            scope_listings = len(_rows(conn, RT_CUT_SCOPE_IDS_SQL, {"generation": generation}))
+            # E941: the first check saw the schema before this seed wrote a row. The walk has
+            # now written the snapshot; the cut will write the pHash population and the build
+            # BUILD_BYTES_PER_LISTING for every listing in scope: refuse here, inside the
+            # transaction, so the reset and the walk roll back.
+            try:
+                build_storage = storage_guard(
+                    conn, generation, scope, build_listings=scope_listings,
+                    replaced_bytes=int(storage["replaced_bytes"]) if fresh else None)
+            except StorageRefusal as exc:
+                raise SystemExit(str(exc)) from exc
+            memory = seed_memory(scope_listings)
             try:
                 cut = cut_calibration(conn, settings, model.version, generation)
             except CalibrationRefusal as exc:
                 raise SystemExit(f"{scope.label()!r}: {exc}") from exc
-            # E941: the first check saw the schema before this seed wrote a row. The walk and
-            # the cut have now written the snapshot and the pHash population, and the build
-            # will write BUILD_BYTES_PER_LISTING for every listing they put in scope: refuse
-            # here, inside the transaction, so the reset, the walk and the cut roll back.
-            try:
-                build_storage = storage_guard(
-                    conn, generation, scope, build_listings=int(cut["scope_listings"]),
-                    replaced_bytes=int(storage["replaced_bytes"]) if fresh else None)
-            except StorageRefusal as exc:
-                raise SystemExit(str(exc)) from exc
             seeded = _rows(conn, RT_SEED_CURSORS_SQL)[0]
             _exec(conn, RT_CURSOR_WRITE_SQL, {
                 "name": CURSOR_NEW, "last_listing_id": int(seeded[0]),
@@ -3303,6 +4002,10 @@ def run_rt_seed(
             "enter_scan": dict(work.enter_scan),
             "storage": storage,
             "storage_build": build_storage,
+            # E940: the cut's projected peak against SEED_MEMORY_MB, and what the seed's
+            # process actually peaked at — the receipt E962's bound is measured from.
+            "seed_memory": memory,
+            "peak_rss_mb": peak_rss_mb(),
             "lease_released": released,
             "spent_usd": 0.0,
         }

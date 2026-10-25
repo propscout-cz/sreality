@@ -87,8 +87,8 @@
 #
 # Stated limits. inactive_at is cleared on a revival, so the outflow's older hours are net of
 # revivals. "Active again" is read at export, not at each tick: a cohort's later revivals count
-# early. The ledger's pool reaches back only to its first row, so the 2-7 d pool is partial
-# before 10-19. The stuck arm sees the episodes that ended in a flip (10-12's flips, whose verdicts
+# early, a re-list among them, so the replay's precision is an upper bound. A cohort is read once
+# its day lies in the ledger, on whole hours. The stuck arm sees the episodes that ended in a flip (10-12's flips, whose verdicts
 # predate the ledger, carry none) and the verdicts pending at export; a verdict refuted by a
 # sighting leaves no time in the ledger, so those episodes are missing, and each hour's flips
 # count as stuck together once its oldest verdict passes the limit (an upper bound). The ledger
@@ -101,6 +101,7 @@ import datetime as _dt
 import functools
 import itertools
 from typing import Any
+from unittest import mock
 
 from scripts.checks import delisting as dl
 from scripts.verify_pipeline import THRESHOLDS
@@ -111,6 +112,7 @@ _HOUR, _DAY = _dt.timedelta(hours=1), _dt.timedelta(days=1)
 _KEY = "delisting"
 _GAP = (_utc("2026-10-09T21:39:52Z"), _utc("2026-10-11T06:04:18Z"))
 _EXPORTED = _utc("2026-10-19T05:00:00Z")
+_LEDGER_FROM = _utc("2026-10-12T01:00:00Z")
 
 
 def _int(text: str) -> int:
@@ -133,10 +135,21 @@ def _sum(prefix: list[int], base: _dt.datetime, start: _dt.datetime, end: _dt.da
     return prefix[j] - prefix[i]
 
 
+@functools.cache
+def _fleet() -> tuple[str, ...]:
+    """The portals the recorded window held. A portal onboarded since is absent from every
+    fixture here, so the replay judges the fleet it recorded, never a later portal as unknown."""
+    fleet = tuple(sorted({r["source"] for r in _fixture("health_delisting_walks_40d.csv")}))
+    assert set(fleet) <= set(dl.SOURCES)
+    return fleet
+
+
 def _replay(ticks: list[_dt.datetime], answers: Any,
             thresholds: dict[str, Any] = THRESHOLDS) -> tuple[Any, list[tuple[Any, Any]]]:
     """check_delisting at each tick on `answers(at)`, told through the ladder."""
-    results = [(at, dl.check_delisting(_Conn(answers(at), now=at), thresholds)) for at in ticks]
+    with mock.patch.object(dl, "SOURCES", _fleet()):
+        results = [(at, dl.check_delisting(_Conn(answers(at), now=at), thresholds))
+                   for at in ticks]
     return _told(_KEY, 600, results), results
 
 
@@ -208,16 +221,17 @@ def _outflow_rows(at: _dt.datetime, params: dict[str, Any]) -> list[tuple[Any, .
     return rows
 
 
-def _precision_rows(at: _dt.datetime, revive: tuple[str, str, float] | None) -> list[Any]:
+def _precision_rows(at: _dt.datetime, revive: tuple[str, str, float] | None,
+                    params: dict[str, Any]) -> list[Any]:
+    """_PRECISION_SQL's rows at `at`: each portal's day of flips from the young edge it was sent."""
     (base, flips), (_, back) = _flips(revive)
-    young, old = (at - h * _HOUR for h in dl._COHORT_H)
-    pool = at - dl._POOL_D * _DAY
     rows = []
-    for source, sums in flips.items():
-        pooled = _sum(sums, base, pool, young)
-        if pooled:
-            rows.append((source, _sum(sums, base, old, young), _sum(back[source], base, old, young),
-                         pooled, _sum(back[source], base, pool, young)))
+    for source, young_s in zip(params["sources"], params["young_s"]):
+        young = at - _dt.timedelta(seconds=young_s)
+        old = young - _dt.timedelta(seconds=params["span_s"])
+        n = _sum(flips[source], base, old, young) if source in flips else 0
+        if n and old >= _LEDGER_FROM:
+            rows.append((source, n, _sum(back[source], base, old, young)))
     return rows
 
 
@@ -297,12 +311,11 @@ def _outflow_replay(align_h: int | None = None) -> tuple[Any, list[tuple[Any, An
 
 @functools.cache
 def _ledger_replay(revive: tuple[str, str, float] | None = None) -> tuple[Any, list[Any]]:
-    """10-12..10-19 hourly on the ledger's arms; the cohort is read once it lies in the ledger."""
-    first_cohort = _utc("2026-10-12T01:00:00Z") + dl._COHORT_H[1] * _HOUR
+    """10-12..10-19 hourly on the ledger's arms."""
     ticks = _ticks(_utc("2026-10-12T02:00:00Z"), _EXPORTED, _HOUR)
     return _replay(ticks, lambda at: {
         dl._WALKS_SQL: _walk_rows(at), dl._OUTFLOW_SQL: [], dl._VERIFY_SQL: _verify_rows(at),
-        dl._PRECISION_SQL: _precision_rows(at, revive) if at >= first_cohort else [],
+        dl._PRECISION_SQL: functools.partial(_precision_rows, at, revive),
         dl._STUCK_SQL: functools.partial(_stuck_rows, at)})
 
 
@@ -406,36 +419,45 @@ def test_aligned_windows_silence_the_10_05_walk_shift_and_keep_every_stall_day()
 
 
 def test_the_first_post_dwell_cohorts_ring_precision_where_their_ads_came_back() -> None:
-    """The 10-13 01-03Z flips (49 % and 64 % back) ring at 48 h and close on 10-16."""
+    """The 10-13 01-03Z flips (sreality 231 of 472 back, idnes 136 of 318) ring once they enter
+    each portal's window (15-39 h, 20-44 h) and close a day on (they rang at 48 h, closed 10-16)."""
     ladder, results = _ledger_replay()
-    assert _onsets(ladder, "precision") == [("sreality/precision", "10-15 04:00"),
-                                            ("idnes/precision", "10-15 08:00")]
+    assert _onsets(ladder, "precision") == [("sreality/precision", "10-13 20:00"),
+                                            ("idnes/precision", "10-14 05:00")]
     for inc in _incidents(ladder, _KEY):
         onset = dict(_arm(results, inc["subject"]))[inc["first_seen_at"]]
         assert onset["status"] == "fail" and onset["facts"]["lower_bound"] > 0.15, onset
         assert inc["resolve_reason"] == "measured ok"
-        assert inc["resolved_at"].strftime("%m-%d") == "10-16"
+    assert {i["subject"]: i["resolved_at"].strftime("%m-%d %H:%M") for i in _incidents(
+        ladder, _KEY)} == {"sreality/precision": "10-14 21:00", "idnes/precision": "10-15 00:00"}
 
 
 def test_once_that_tail_aged_out_the_ledgers_week_opens_nothing() -> None:
-    """From 10-16 the steady state: sreality ~7-8 % active again, every other portal lower."""
+    """From 10-16 the steady state: sreality ~5-8 % active again, every other portal lower."""
+    # But for sreality's last 12 h: from 10-18 17:00 its window holds the 10-18 01Z wave (737
+    # flips, 210 active at export, among them the whole sreality portfolios of the two agencies
+    # the idnes Problem traced). Read at export, 28 h on, it counts returns the check at 17:00,
+    # 16 h on, cannot see yet: a Watch the stated limits make an upper bound, and no incident.
     ladder, results = _ledger_replay()
     after = _utc("2026-10-16T04:00:00Z")
     assert [i for i in _incidents(ladder, _KEY) if i["first_seen_at"] >= after] == []
-    late = [c for at, r in results if at >= after for c in r["details"]["cells"]
+    late = [(at, c) for at, r in results if at >= after for c in r["details"]["cells"]
             if c["subject"].endswith("/precision")]
-    assert late and {c["status"] for c in late} <= {"ok", "unknown"}
+    watch = [(at, c["subject"]) for at, c in late if c["status"] not in {"ok", "unknown"}]
+    assert late and {c["status"] for _, c in late} == {"ok", "unknown", "warn"}
+    assert {subject for _, subject in watch} == {"sreality/precision"}
+    assert min(at for at, _ in watch) == _utc("2026-10-18T17:00:00Z")
 
 
 def test_a_day_revived_at_thirty_percent_rings_precision_as_it_matures() -> None:
     """SYNTHETIC (h): sreality's 10-16 flips set 30 % active again (the blink read 26-49 %)."""
-    # The real week rings nothing then; this one rings within the day the cohort turns 48 h, and
-    # every other incident is the real replay's.
+    # The real week rings nothing then; this one rings on 10-17, as the day's flips enter the
+    # 15-39 h window (it rang on 10-18 at 48 h), and every other incident is the real replay's.
     real, _ = _ledger_replay()
     revived, _ = _ledger_replay(("sreality", "2026-10-16", 0.30))
     extra = [o for o in _onsets(revived, "precision") if o not in _onsets(real, "precision")]
     assert len(extra) == 1 and extra[0][0] == "sreality/precision"
-    assert "10-18 00:00" <= extra[0][1] < "10-19 00:00"
+    assert "10-17 00:00" <= extra[0][1] < "10-18 00:00"
 
 
 # --- stuck, verify backlog, deferrals ----------------------------------------------------------

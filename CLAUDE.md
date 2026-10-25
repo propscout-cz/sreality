@@ -8,13 +8,13 @@ keeps getting broken, fix it here — don't repeat the correction by hand.
 
 A **market-wide real-estate intelligence platform** for the Czech market. It began as an
 hourly sreality.cz scraper and now collects, enriches, and reasons over property data from
-**nine portals**. Store of record: Postgres (Supabase, `eu-west-1` Ireland, PostGIS) with full
+**ten portals**. Store of record: Postgres (Supabase, `eu-west-1` Ireland, PostGIS) with full
 listing history.
 
 Data layered together:
-- **Scraped listings** from nine portals — sreality (JSON v1 API), bazos (HTML crawler), bezrealitky (GraphQL
+- **Scraped listings** from ten portals — sreality (JSON v1 API), bazos (HTML crawler), bezrealitky (GraphQL
   API), mmreality (Vue-embedded JSON, proxied), idnes / remax / ceskereality / maxima (structured HTML) and
-  realitymix (structured HTML, Centrum.cz aggregator) — landing in one `listings`/`listing_snapshots` contract
+  realitymix (structured HTML, Centrum.cz aggregator) and `web` (any other site, by pasted link; deterministic parser, no index) — landing in one `listings`/`listing_snapshots` contract
   with one canonical vocabulary. Per-portal ingest detail: `docs/architecture.md` § Data sources.
 - **Geo data** — coordinates, districts, ČÚZK/RÚIAN admin boundaries, transit geometry, OSM amenities.
 - **Operator-supplied** — curated city-quality indexes, collections, building decompositions, estimation inputs.
@@ -133,7 +133,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
    earlier gone verdict ≥ `delist_policy.GONE_DWELL` (12 h) old with no sighting since** (`db.gone_evidence`;
    portals blink — sreality took 35–70% of its "gone" ads back within hours), a live page refreshes it, an error
    waits. `walk_coverage` is a logged `COVERAGE` warning, NEVER a gate. No staleness rail, no absence sweep, no
-   `supports_complete_walk` gate. `delist_flip_cap` (10%, floor 2k) THROTTLES nominations per walk (rest deferred;
+   `supports_complete_walk` gate (an `indexless` portal — `web` — nominates via its own `presence_candidates` seam). `delist_flip_cap` (10%, floor 2k) THROTTLES nominations per walk (rest deferred;
    `.overrides` lift it). Budget + gone-rate breaker + effective dwell `max(GONE_DWELL, RECHECK_THROTTLE)` = 24 h:
    `scraper/delist_policy.py`; every flip goes through `db.mark_listing_inactive` (guarded, stamps `inactive_at` once, dirties the property).
 4. **`last_seen_at` is driven by index sightings + successful detail fetches only; failed fetches never
@@ -185,10 +185,10 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
 16. **Watchdog + Browse share one definition of "matches"**, rendered per relation: the Watchdog + every cohort compile
     the registry in `toolkit/filter_compiler.compile_filter_where`; Browse's TS + RPCs are pinned per shared predicate only
     (`sql_kind`, place plan, rule-23 measures, served predicate, portal rule). **Portal + broker filters select ADS, rows stay properties (MS19):**
-    P matches when any ad is on P (`all_sources`), status judged on those ads; a broker likewise, both = one ad; estimation cohorts stay per-ad. `notification_dispatches` = the append-only event table,
+    the status is the PROPERTY's (the one every row is drawn with, mig 657); P asks for an ad on P in that status (`active_sources` under active, else `all_sources`); a broker likewise, both = one ad; estimation cohorts stay per-ad. `notification_dispatches` = the append-only event table,
     **three producers**: `watchdog` + `collection_monitor` (property-grain; 'new' once-ever, a price step per snapshot
     (`event_ref`); a `monitor_since` anchor so a pre-membership change never fires) + `share` (not property-grain; recipient-stamped by `api/shares.py`;
-    collection mig 610 + pipeline mig 641 + dashboard mig 647; in-app and pushed, one push per sharer a day). Producers write facts, never routing (no channel, status or target stamping). **System alerts are no producer** (ruling R2b 2026-10-21): the health ladder's per-cell `ops_incidents` (mig 619) is told on Health + the canary e-mail only. **Delivery is separate from detection**: in-app = the row; external = `notification_deliveries` (push, one row per event × device, leased claims; `channel_sends` retired, W6), `docs/design/notifications-push/PROGRAM.md`. **One identity index** `notification_dispatches_identity_uq` over `EVENT_IDENTITY` (mig 653), NULLS NOT DISTINCT, partial on `duplicate_of IS NULL`, decides "same event?" for producers (`ON CONFLICT`) and merges; a merge re-points and marks a duplicate, never deletes; a deleted watchdog is retired; one `VISIBLE_SQL` hides both from every read.
+    collection mig 610 + pipeline mig 641 + dashboard mig 647; in-app and pushed, one push per sharer a day). Producers write facts, never routing (no channel, status or target stamping). **System alerts are no producer** (ruling R2b 2026-10-21): the health ladder's per-cell `ops_incidents` (mig 619) is told on Health + the canary e-mail only. **Delivery is separate from detection**: in-app = the row; external = `notification_deliveries` (push, one row per event × device, leased claims; `channel_sends` retired, W6), `docs/design/notifications-push/PROGRAM.md`. **One identity index** `notification_dispatches_identity_uq` over `EVENT_IDENTITY` (mig 653), NULLS NOT DISTINCT, partial on `duplicate_of IS NULL`, decides "same event?" for producers (`ON CONFLICT`) and merges; a merge re-points and marks a duplicate, never deletes; a deleted watchdog is retired; `REACHABLE_SQL` hides both from every read, and `VISIBLE_SQL` (feed, badge, push) = `REACHABLE_SQL` minus a 'new' a merge withdrew. **A property is SERVED (Browse, map, stats, the watchdog) only when PUBLISHED:** SETTLED (`properties.settled_at`, stamped by the maintenance pass: first photo stored or none, and the engine done with its ads) or 6 h old (`toolkit/publication.py`, migs 668/669; detail by id stays ungated, as rule 25); a 'new' hides once a merge re-points it to a property first seen more than 24 h before the alert.
 17. **City-quality indexes are a normalized, operator-curated time series** (`curated_cities` + `city_index_*`
     + `city_population`) — a new index needs no migration; latest revision wins; agenda-gated to **Browse +
     Watchdog only** (the estimation agent never sees them, preserving deterministic estimates).
@@ -225,7 +225,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     one thing: out → a click adds at the entry stage; in → move, or remove behind a two-step confirm. **Never a remove toggle** — close deals into a terminal
     stage. Stages are per account: signup seeds the default board (migration 612), the account curates it via the API; a board is shared by account (`pipeline_shares`, mig 641: read or edit, an edit delegate manages cards AND stages as the owner, `require_acting_account_id`; sharing itself never delegates). The badge is
     `pipeline_stages.code` (migration 377), never derived from `position` or the label. Browse's pipeline scope (`?pipeline[_excluded]=any|<stage ids>`) is a
-    curated-set scope judged in the database under the caller's RLS (migration 629, rule #18) and OUTSIDE preset identity; the chip LOADS
+    curated-set scope judged in the database under the caller's RLS (migration 629, rule #18); a preset stores it like every filter, a shareable dashboard never (2026-10-22); the chip LOADS
     A VIEW, the sidebar's Curation → Pipeline control modifies. That needs `category_type` nullable
     (`?deal=any`, the "Vše" pill, `FilterDef.nullable`) — NULL has always meant "no constraint" to comparables,
     the watchdog matcher and browse_stats; never an `any` enum member (it would reach the estimation agent).
@@ -252,7 +252,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     predicate (`claims_common.SERVED_LOCATION_PREDICATE`, mig 514); detail-by-id surfaces stay reachable. Invariant:
     **every served listing has a row, every active Czech listing has a town** (`location_town_coverage` red until
     zero; foreign is a determination, never a default); a field is added only by operator ruling (katastr_kod
-    2026-09, ulice_id 2026-10) or after a measured slowdown, only to `browse_list`. § Location data in `docs/architecture.md`.
+    2026-09, ulice_id 2026-10, street_name 2026-10 as a sort key) or after a measured slowdown, only to `browse_list`. § Location data in `docs/architecture.md`.
 ## Coding conventions
 
 - Type hints on every signature. `requests` for HTTP, `psycopg` for DB — don't add `httpx` / `aiohttp` / `sqlalchemy` / `supabase-py` lightly (rule #7).

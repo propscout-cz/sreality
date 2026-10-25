@@ -56,7 +56,7 @@ def _healthy() -> dict[str, Any]:
     return {
         pub._QUEUE_SQL: [],
         pub._VISIBLE_SQL: [(p, True, "visible", 500) for p in PORTALS],
-        pub._STOCK_SQL: [*((p, 50_000, 0, 0, 0) for p in PORTALS), (None, 362_000, 0, 0, 0)],
+        pub._STOCK_SQL: [*((p, 50_000, 0, 0, 0, 0) for p in PORTALS), (None, 362_000, 0, 0, 0, 0)],
         pub._PHOTOS_SQL: [_photo(p) for p in PORTALS],
         pub._DIRTY_SQL: [(0, None)],
     }
@@ -198,6 +198,32 @@ def test_an_ad_waiting_for_the_next_rebuild_is_a_fact_not_a_blocker() -> None:
     assert "200 waiting for Browse's next rebuild" in c["message"]
 
 
+def test_a_property_not_yet_published_is_expected_never_a_blocker() -> None:
+    """The publication rule holds a fresh property back up to 6 h by design (migrations 668/669):
+    tallied and named, like the rebuild's lag, never in the blocked share."""
+    rows = [(PORTALS[0], True, "visible", 200), (PORTALS[0], True, "unpublished", 280),
+            (PORTALS[0], True, "waiting_for_rebuild", 15), (PORTALS[0], True, "no_property", 5)]
+    c = _cells(_check(_VISIBLE_SQL=rows)[0])[f"{PORTALS[0]}/visible"]
+    assert c["status"] == "ok" and c["facts"]["blocked"] == 5
+    assert c["facts"]["stages"]["unpublished"] == 280
+    assert c["message"].endswith("5 no property; 280 not yet published; "
+                                 "15 waiting for Browse's next rebuild")
+
+
+def test_unpublished_is_judged_after_location_before_the_rebuilds_lag_on_its_start() -> None:
+    """Off the newest rebuild's start (r.at), never now(): a property the cap or the stamp
+    released after that start is not in it yet either."""
+    from toolkit.publication import visible_since_sql
+
+    tail = " ".join(pub._STAGE_TAIL.split())
+    arms = [tail.index(a) for a in ("then 'location_not_served'",
+                                    f"when {visible_since_sql('p')} > r.at then 'unpublished'",
+                                    "then 'waiting_for_rebuild'")]
+    assert arms == sorted(arms)
+    for sql in (pub._VISIBLE_SQL, pub._STOCK_SQL):
+        assert "now()" not in sql.split("case", 1)[1].split("end as stage", 1)[0]
+
+
 def test_visible_reads_new_active_ads_per_portal_through_the_first_seen_index() -> None:
     _, conn = _check()
     assert _params(conn, pub._VISIBLE_SQL) == {"sources": PORTALS, "window_h": 24, "wide_h": 72,
@@ -217,9 +243,9 @@ def test_location_is_judged_on_the_location_ad_with_the_imported_served_predicat
 # --- stock -------------------------------------------------------------------------------------
 
 
-def _stock(n: int, location: int = 0, browse: int = 0, waiting: int = 0,
-           *, fleet: tuple[int, ...] = (362_000, 0, 0, 0)) -> list[tuple[Any, ...]]:
-    return [(PORTALS[0], n, location, browse, waiting), (None, *fleet)]
+def _stock(n: int, location: int = 0, browse: int = 0, waiting: int = 0, unpublished: int = 0,
+           *, fleet: tuple[int, ...] = (362_000, 0, 0, 0, 0)) -> list[tuple[Any, ...]]:
+    return [(PORTALS[0], n, location, browse, waiting, unpublished), (None, *fleet)]
 
 
 @pytest.mark.parametrize("missing, status", [(40, "ok"), (60, "warn"), (1_000, "fail")])
@@ -239,24 +265,25 @@ def test_stock_fails_only_with_200_properties_behind_the_share() -> None:
 
 
 def test_the_fleet_stock_cell_counts_every_active_property_once() -> None:
-    out, _ = _check(_STOCK_SQL=_stock(50_000, fleet=(362_000, 30_000, 0, 0)))
+    out, _ = _check(_STOCK_SQL=_stock(50_000, fleet=(362_000, 30_000, 0, 0, 0)))
     c = _cells(out)["fleet/stock"]
     assert c["status"] == "fail" and c["portal"] is None
     assert c["facts"]["properties"] == 362_000 and c["facts"]["missing"] == 30_000
     assert c["message"].startswith("30,000 of 362,000 active properties are missing from Browse")
 
 
-def test_stock_names_its_stages_and_never_counts_the_rebuilds_lag() -> None:
-    c = _cells(_check(_STOCK_SQL=_stock(50_000, location=17, waiting=900))[0])[
+def test_stock_names_its_stages_and_never_counts_the_rebuilds_lag_or_the_hold() -> None:
+    c = _cells(_check(_STOCK_SQL=_stock(50_000, location=17, waiting=900, unpublished=1_700))[0])[
         f"{PORTALS[0]}/stock"]
     assert c["status"] == "ok" and c["facts"]["missing"] == 17
     assert c["facts"]["stages"] == {"location_not_served": 17, "not_in_browse_list": 0,
-                                    "waiting_for_rebuild": 900}
-    assert "17 location not served; 900 waiting for Browse's next rebuild" in c["message"]
+                                    "waiting_for_rebuild": 900, "unpublished": 1_700}
+    assert c["message"].endswith("17 location not served; 1,700 not yet published; "
+                                 "900 waiting for Browse's next rebuild")
 
 
 def test_a_portal_holding_no_active_property_is_not_measured() -> None:
-    out, _ = _check(_STOCK_SQL=[(None, 362_000, 0, 0, 0)])
+    out, _ = _check(_STOCK_SQL=[(None, 362_000, 0, 0, 0, 0)])
     c = _cells(out)[f"{PORTALS[0]}/stock"]
     assert c["status"] == "unknown"
     assert c["message"].startswith("Not measured: no active properties")

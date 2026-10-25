@@ -230,7 +230,7 @@ the run that stops naming it. Boolean cells never written `false` are reported t
 whether silence means `false` or `unknown` is an absence
 semantics the contract declares, so there is nothing yet to be right or wrong against.
 
-**Who owns which field.** The fill arm owns the 26 `LISTING_COLUMNS` attributes. `data_quality_by_source`'s
+**Who owns which field.** The fill arm owns the 27 `LISTING_COLUMNS` attributes. `data_quality_by_source`'s
 seven probes with no attribute column (`geom`, `locality`, `street`, `property_grouped`, `source_url`, the
 two condition levels) froze with its capture in Health dashboard sprint wave 6 (migration 633 unscheduled
 `capture-data-quality`; wave 9 drops the view): a portal link is the `data_quality` gauge's `url/<portal>`
@@ -504,10 +504,11 @@ measured `ok` starts `ok_since` at the first OK, and the incident resolves
 due slack, never under 30 min (`max(2 × due_after_s(cadence), 30 min)`: a lane measures a check
 up to the slack early, so two measured intervals can sum to under two cadences): the newest OK's
 `run_at` must be at least the hold after the first OK; one lone OK never recovers. Two closes are
-silent: an incident whose key left the registry (`retired`), and a cell unmeasured for max(7 d,
-2 × cadence) — its `last_seen_at` older than that and its cell in no measured row inside it
-written since the key's `declared_at` — which closes silently (`unmeasured 7d`; two weeks for the
-weekly URL probe). Not measured never opens, recovers or ages an incident.
+silent: `retired`, an incident whose key left the registry or whose subject the key's newest in-budget
+measured result no longer lists (a renamed or dropped cell, since 2026-10-22), and `unmeasured 7d`, a
+cell the newest result does not judge (listed Not measured, or its key Not measured) whose last non-OK
+(a listed cell in its hold: its first OK) is older than max(7 d, 2 × cadence); two weeks for the weekly
+URL probe. Not measured never opens, recovers or ages an incident.
 
 **What it records.** Since W1 of the notifications push program (2026-10-21, ruling R2b;
 `docs/design/notifications-push/PROGRAM.md` § 3.8) the ladder writes no `notification_dispatches`
@@ -589,7 +590,7 @@ measures them in that pass (all four are due); the nine retired GitHub keys (`pp
 included); both sets show on the page in between. `location_town_coverage` keeps its key but changes host,
 so its `declared_at` restarts and it reads Not measured until the worker measures it; its open implicit
 incident `cell:location_town_coverage:location_town_coverage` matches none of the new `<portal>/town`
-subjects, so it is never reminded and closes silently (`unmeasured 7d`) within 7 days. A canary run checked
+subjects, so it is never reminded; since 2026-10-22 it closes as `retired` on the first pass. A canary run checked
 out at the old SHA that projects after the worker's first pass may move the row back to GitHub, and it
 stays so until the worker's next projection (one per process). Expected at ship: `data_quality` opens a
 Problem on realitymix's komerční/pronájem basis floor (11.4 % of 4,140 priced ads NULLed, lower bound 10.5
@@ -1063,7 +1064,7 @@ counts; with fewer than 10 gaps, the slowest portal's G).
 
 | cell | measures | Watch | Problem |
 | --- | --- | --- | --- |
-| `<portal>/walks/<cm>-<ct>` | hours since the START of the newest finished walk in which the unit reached the end | above 3 G (`scraping_walk_watch_gaps`) | above 6 G (`scraping_walk_fail_gaps`), or a unit walked in the last 30 d (`scraping_walk_recent_days`) with no end-reached walk in 14 d (`scraping_walk_stale_days`); a portal short of 10 gaps (`scraping_walk_fallback_min_gaps`) is scored on the slowest portal's G |
+| `<portal>/walks/<cm>-<ct>` | hours since the START of the newest finished walk in which the unit reached the end; `<portal>/walks/orphans` is the entry with no labels, the orphan scope's (rule 3, 2026-10-22: written only when every unit reached the end, short of it when the orphan query failed; web's whole agenda) | above 3 G (`scraping_walk_watch_gaps`) | above 6 G (`scraping_walk_fail_gaps`), or a unit walked in the last 30 d (`scraping_walk_recent_days`) with no end-reached walk in 14 d (`scraping_walk_stale_days`); a portal short of 10 gaps (`scraping_walk_fallback_min_gaps`) is scored on the slowest portal's G |
 | `<portal>/walks` | for every portal of `claims_common.SOURCES`, on every pass: the hours since the START of its newest finished walk, with the units its walks of the last 30 d recorded (facts `finished_at`, `units`) | never: its units' own cells judge them | no walk in 30 d recorded a unit (no walk at all, or none finished), so a portal never drops out: it keeps its inflow, fetch-error and unnominated cells, and this cell's incident recovers on a measured OK |
 | `<portal>/inflow` | ads discovered in the trailing 24 h — ads first seen in it, plus NEW-priority queue rows enqueued in it that have no listings row — against the median of the same 24 h 7, 14, 21 and 28 d earlier (ads only: those queue rows are gone by then) | below 50 % (`scraping_inflow_warn_share`), or above 300 % (`scraping_inflow_spike_share`) | below 20 % (`scraping_inflow_fail_share`) |
 | `<portal>/fetch_errors` | of the ids attempted in 24 h (terminal `detail_queue_completions` plus live queue rows with `attempts > 0` claimed or enqueued in the window), the share with a failed attempt, judged on its Wilson lower bound | above 2 % (`scraping_fetch_err_warn`) | above 10 % (`scraping_fetch_err_fail`) |
@@ -1075,7 +1076,8 @@ compares 7-day windows, and under 20 per 7 d it is Not measured; fetch errors ne
 are named in the message, not excluded; missing needs a declared total of 500
 (`scraping_missing_min_declared`), and an entry whose `total_is_count` is true ("declared is a count
 of what was seen": remax, maxima) or absent ("not yet recorded by this walk's adapter": every entry
-written before wave 4) is Not measured, never 0 %. Its facts carry `declared_is_upper_bound`
+written before wave 4) gets no missing cell, never 0 %: since 2026-10-22 the coverage residual alone
+says why (one verdict, one cell; it was 48 units shown twice). Its facts carry `declared_is_upper_bound`
 (ceskereality's national total includes ads filed under no kraj, about 0.8 % of its rentals, under
 the Watch line). One convention for every wave-4 share judged on a Wilson lower bound (fetch errors
 here; publishing's visible, stock and photos; delisting's precision): the cell's `value` is the raw
@@ -1113,8 +1115,8 @@ page's SQL checks on the same questions keep rendering until wave 9.
 | --- | --- | --- | --- |
 | `<portal>/ingest` | age (from `enqueued_at`) of the oldest NEW-priority queue row, claimed or not, not given up, with no listings row for `(source, native_id)` — so `refresh_stale_image_urls`' known ads at that priority do not count | above 3 h (`publishing_queue_warn_h`) | above 6 h (`publishing_queue_fail_h`) |
 | `<portal>/changes` | the same for the oldest CHANGED or FAILURE row, not given up | above 3 h | above 6 h |
-| `<portal>/visible` | of active ads first written 30 min-24 h ago, the share whose property is not in `browse_list`, judged on its Wilson lower bound, split by the stage that blocks it: no property (`property_id` NULL), property not active (`status <> 'active'`), location not served (the property's canonical ad fails the consumer rule, `claims_common.served_location_predicate`, re-keyed onto that ad as `browse_projection` judges it), else not yet in `browse_list`; a property born after the newest successful rebuild started (`derived_artifacts.last_succeeded_at` of `browse_list`), or whose canonical ad's location was resolved or re-resolved after it (`listing_location.resolved_at`, rewritten on every re-resolve: the resolver never patches `browse_list`), is shown as waiting for the next rebuild, a fact, not a blocker | above 2 % (`publishing_visible_warn`) | above 10 % (`publishing_visible_fail`) |
-| `<portal>/stock`, `fleet/stock` | of properties with `status = 'active' AND is_active`, the share missing from `browse_list`, by the same stages; a portal cell counts the properties with an active ad on that portal (counted from listings' `source`, `is_active` and `property_id` columns), the fleet cell all of them | above 0.1 % (`publishing_stock_warn`) | Wilson lower bound above 1 % (`publishing_stock_fail`) |
+| `<portal>/visible` | of active ads first written 30 min-24 h ago, the share whose property is not in `browse_list`, judged on its Wilson lower bound, split by the stage that blocks it: no property (`property_id` NULL), property not active (`status <> 'active'`), location not served (the property's canonical ad fails the consumer rule, `claims_common.served_location_predicate`, re-keyed onto that ad as `browse_projection` judges it), else not yet in `browse_list`; a property the publication rule had not published when the newest successful rebuild started (`derived_artifacts.last_succeeded_at` of `browse_list`; rule 16, `toolkit/publication.py`: neither settled nor 6 h old at that start) is shown as not yet published, expected like the rebuild wait, never a blocker; else a property born after that start, or whose canonical ad's location was resolved or re-resolved after it (`listing_location.resolved_at`, rewritten on every re-resolve: the resolver never patches `browse_list`), is shown as waiting for the next rebuild, a fact, not a blocker | above 2 % (`publishing_visible_warn`) | above 10 % (`publishing_visible_fail`) |
+| `<portal>/stock`, `fleet/stock` | of properties with `status = 'active' AND is_active`, the share missing from `browse_list`, by the same stages (not yet published and waiting for the next rebuild included: expected, never a blocker); a portal cell counts the properties with an active ad on that portal (counted from listings' `source`, `is_active` and `property_id` columns), the fleet cell all of them | above 0.1 % (`publishing_stock_warn`) | Wilson lower bound above 1 % (`publishing_stock_fail`) |
 | `<portal>/photos` | of the photos of ads first written 1-24 h ago, excluding `unavailable_reason = 'listing_taken_down'`: not stored (`storage_path IS NULL`: pending, throttled, given up, `source_unavailable`, `not_an_image`), judged on its Wilson lower bound; and narrow, `stored_width` under 600 px (`publishing_photos_min_px`) among stored photos with a width | not stored above 2 % (`publishing_photos_unstored_warn`); narrow above 10 % (`publishing_photos_narrow_warn`) | not stored above 10 % (`publishing_photos_unstored_fail`); narrow above 50 % (`publishing_photos_narrow_fail`) |
 | `fleet/dirty` | age of the oldest `dirty_properties.marked_at` | above 4 h (`publishing_dirty_warn_h`) | above 8 h (`publishing_dirty_fail_h`) |
 
@@ -1146,8 +1148,8 @@ the guard the deleted `test_property_dirty_warn_clears_a_full_length_sweep` used
 
 Known limits: `listing_taken_down` can only be set for sreality, so a crawler ad made inactive
 within 24 h leaves photos pending or `source_unavailable`, which count as not stored; a failed
-`browse_list` rebuild only grows the "waiting for the next rebuild" fact on visible and stock, never
-a blocker, so it is told once, by the `jobs` check's `artifact/browse_list` cell; narrow's floor is
+`browse_list` rebuild only grows the "waiting for the next rebuild" and "not yet published" facts on
+visible and stock (both judged at the newest rebuild's start), never a blocker, so it is told once, by the `jobs` check's `artifact/browse_list` cell; narrow's floor is
 an absolute 600 px, so a downgrade that stays above it (the one on record, the 749 px CROPPED frames
 `docs/architecture.md` describes under Photos) reads 0 % narrow (owed: judge the stored width
 against the declared source width); a change's age can include time its row spent at VERIFY, because
@@ -1178,21 +1180,18 @@ last 24 h; named in wave 4, unchanged), whose larger is the **effective dwell**,
 | `<portal>/stuck` | active ads whose first unrefuted gone verdict — the earliest `gone` completion newer than the ad's `last_seen_at`, found per ad before counting (`db.gone_evidence`'s rule) — is older than the effective dwell + 2 × the portal's p90 walk-start gap (finished walks, 14 d) + 1 h (`delisting_stuck_slack_h`) | 25 or more (`delisting_stuck_warn`) | 250 or more (`delisting_stuck_fail`) |
 | `<portal>/verify_backlog` | age of the oldest VERIFY-priority queue row, claimed or not, not given up | above 6 h (`delisting_verify_warn_h`) | above 24 h (`delisting_verify_fail_h`) |
 | `<portal>/deferrals` | the flip cap's `verify_deferred`, summed per finished walk | 2 consecutive walks in which a unit reached the end, each with deferrals (`delisting_deferral_walks`) | never: the cap is a throttle by design |
-| `<portal>/precision` | of the `flipped` completions 48-72 h old, the share whose ad is active again (`listings.is_active` now), judged on its Wilson lower bound | above 10 % (`delisting_precision_warn`) | above 15 % (`delisting_precision_fail`) |
+| `<portal>/precision` | of a day of `flipped` completions from 2 × the portal's p90 walk-start gap + 1 h old (the stuck limit less the dwell: the age by which a walk has sighted any ad still listed), the share whose ad is active again (`listings.is_active` now), judged on its Wilson lower bound; a later return is a re-list, never counted | above 10 % (`delisting_precision_warn`) | above 15 % (`delisting_precision_fail`) |
 
 Minimum evidence: outflow needs a `baseline` of 50 a day (`delisting_outflow_min_baseline`), else
 Not measured — maxima is unscored by its volume, never by its name, and because the floor is judged
 on the quietest windows, remax and mmreality read Not measured about 68 % and 50 % of hours (45 %
 each on fixed windows; judging the floor on the busiest median is an open ruling); precision needs 50 flips
-(`delisting_precision_min_n`), else the cohort is pooled over 2-7 d. Outflow reads all its windows
+(`delisting_precision_min_n`) in its window, else Not measured; nothing is pooled. Outflow reads all its windows
 in one statement: one `listings_inactive_at_idx` range per lag (the 24 h widened by ±3 h), binned by
 the hour, then summed into the windows; a range per window made the planner seq-scan `listings`
 (4.6 s against 0.12 s, 10-19).
-The precision cohort reads a plain `completed_at` range over the pruned 7-day ledger with no portal
-predicate: the planner reads it whole (about 200k rows, a parallel seq scan, ~0.3 s) more cheaply
-than per portal through `detail_queue_completions_source_completed_idx`, which it prices about three
-times higher; the gone index is partial on `outcome = 'gone'`, so it cannot serve the `flipped`
-rows.
+The precision cohort reads one `detail_queue_completions_source_completed_idx` range per portal, its
+window's edge sent through an unnest (~0.11 s, 10-22).
 
 Basis: on 10-10 all nine portals made 0 ads inactive (no `inactive_at` stamp from 2026-10-09 21:39Z
 to 10-11 06:04Z) against medians of 400-1,900 a day. A crawler's flips land in bursts at its walk
@@ -1208,17 +1207,18 @@ oldest pending verdict 27.2 h; first verdict to inactive runs at p90 27.8-35.2 h
 Deferrals: the 10-13/15 ceskereality catch-up deferred nominations in two runs (2 walks, then 3) and cleared itself each time. Precision: the
 post-dwell steady state is sreality ~7 % (lower bound ~6 %) and at most 4.9 % (≤ 2.1 %) elsewhere;
 the blink cohorts read 26-49 %, and the pre-hysteresis ledger, where one verdict flipped, put
-sreality at 35 %, mmreality 15 %, remax 11 %, bezrealitky 7 % and idnes 6 %. The fixed 48-72 h
-horizon removes the right-censoring that kept `false_delist_share` non-OK on 23 of its 24 runs. When
+sreality at 35 %, mmreality 15 %, remax 11 %, bezrealitky 7 % and idnes 6 %. On 10-22 the 48-72 h
+horizon read idnes Problem (106 of 407): 104 were whole agency portfolios back 2-3 days after their
+flip under the same ids, re-lists; at the walk-gap window it reads 11 of 1,270. A fixed horizon removes the right-censoring that kept `false_delist_share` non-OK on 23 of its 24 runs. When
 precision rings, read the flipped rows' pages (`detail_queue_completions` → `listings.source_url`)
 before touching the dwell. At ship, sreality's 10-18 flip cohort reads ~17.5 % active again (lower
 bound ~15.5 %), so its precision cell may open Problem on 10-20/21: the blink tail that the 24 h
 rule (#1858) addresses, told truthfully, not suppressed.
 
 Known limits: the stuck limit uses the portal-level walk gap, which understates portals whose units
-rotate (idnes walks stalest-first; ceskereality and realitymix nominate per slice group; remax and
-maxima per agenda); deferrals are judged per portal, because an agenda portal files an agenda's
-deferrals on its first descriptor and a sibling-buffer portal on a group's last, and a walk counts
+rotate (idnes walks stalest-first; units sharing a scope nominate once per walk: realitymix's
+slices, remax's and maxima's agendas); deferrals are judged per portal, because a shared scope files
+its deferrals on its last unit and the orphans (rule 3, 2026-10-22) on a NULL-label entry, and a walk counts
 there when any unit reached the end (coverage's portal-level walk needs every unit to: each answers
 its own question); outflow compares windows, not walks, so a walk that runs further off its baseline
 weeks' timing than the alignment absorbs can still read as a dip; location-refetch rows share the
@@ -1236,14 +1236,15 @@ condition, told once when it first reads Problem and then once a day.
 
 | cell | measures | Watch | Problem |
 | --- | --- | --- | --- |
-| `<portal>/residual/<cm>-<ct>` | at the unit's newest end-reached walk, R = (H − P − D) / D: D the Σ declared of its entries, H its active ads now, P the active ads with a pending unrefuted gone verdict (in dwell) | R beyond ±2 % (`coverage_residual_warn`) | R beyond ±5 % (`coverage_residual_fail`) |
-| `<portal>/unnominated` | active ads whose `last_seen_at` is before the start of their unit's newest end-reached walk (an ad with no unit: the portal's newest walk in which every entry reached the end), with no queue row and no completion newer than the ad's last sighting, less that walk's deferrals; a portal with no end-reached walk in 30 d reads Not measured | 25 or more (`coverage_unnominated_warn`) | 100 or more (`coverage_unnominated_fail`) |
+| `<portal>/residual/<cm>-<ct>` | at the unit's newest end-reached walk, R = (H − P − D) / D: D the Σ declared of its entries, H its active ads now, P the active ads with a pending unrefuted gone verdict (in dwell); a residual needs a declared total, so the orphans' entry (no labels) has none | R beyond ±2 % (`coverage_residual_warn`) | R beyond ±5 % (`coverage_residual_fail`) |
+| `<portal>/unnominated` | active ads whose `last_seen_at` is before the start of their unit's newest end-reached walk (an ad with no unit: the portal's newest walk in which every entry reached the end), that the walks' own predicate (`db.nominable_predicate`: no queue row, no completion within the 24 h recheck throttle) judged at that walk's start still calls nominable, less that walk's deferrals; a portal with no end-reached walk in 30 d reads Not measured | 25 or more (`coverage_unnominated_warn`) | 100 or more (`coverage_unnominated_fail`) |
 
 Residual needs D ≥ 500 (`coverage_residual_min_declared`), and an entry whose `total_is_count` is
-true or absent is Not measured, as in scraping's missing arm. Unnominated counts from the ad's last
-sighting, not from that walk's start: an ad checked inside the 24 h recheck throttle before the walk
-is in flight, not stuck (counted from the walk's start, 2026-10-19 read about 3,600 ads already
-being rechecked: Problem on five portals). Each cell's facts carry `trend` and `worse_7d`, the shared
+true or absent is Not measured with its reason, the one cell that says so. Unnominated is the walks' own predicate
+(`db.NOMINABLE_PREDICATE`, `presence_candidates` and `orphan_candidates`) judged at that walk's start, so an ad the walk's
+throttle skipped is not stuck: until 2026-10-22 the check excused only checks after the last sighting and
+read sreality 52, bazos 43 and idnes 63 ads the walks had rightly skipped (all 0 under one predicate). Each
+cell's facts carry `trend` and `worse_7d`, the shared
 gauge trend (the quality gauges section, below); until Health dashboard sprint wave 6 they were `trend_30d`
 (this check's own value 7 and 30 days ago) and `worse_than_7d` (the value grew), and the series restarted at
 that deploy.

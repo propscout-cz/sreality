@@ -158,6 +158,7 @@ def patched_db(monkeypatch):
     """Patch every db.* helper used by the index walk + the per-category client."""
     calls: dict[str, list] = {
         "nominated": [],
+        "orphans": [],
         "enqueue": [],
         "seen_key": [],
     }
@@ -186,9 +187,16 @@ def patched_db(monkeypatch):
     # were recorded so every guard test keeps its meaning.
     monkeypatch.setattr(
         scraper_main.db, "presence_candidates",
-        lambda _conn, source, cm, ct, ids, *, seen_key="native", **kw: (
+        lambda _conn, source, scope, ids, *, seen_key="native": (
             calls["seen_key"].append(seen_key)
-            or calls["nominated"].append((cm, ct, set(ids))) or ([], 0)
+            or calls["nominated"].append((scope["category_main"], scope["category_type"], set(ids)))
+            or ([], 0)
+        ),
+    )
+    monkeypatch.setattr(
+        scraper_main.db, "orphan_candidates",
+        lambda _conn, source, scopes, ids, *, seen_key="native": (
+            calls["orphans"].append((len(scopes), seen_key)) or ([], 0)
         ),
     )
     monkeypatch.setattr(
@@ -197,7 +205,7 @@ def patched_db(monkeypatch):
     )
     monkeypatch.setattr(
         scraper_main.db, "active_count",
-        lambda _conn, _cm, _ct, *, source="sreality": 0,
+        lambda _conn, _source, _scope: 0,
     )
     # Intercept SrealityClient construction in _build_client.
     monkeypatch.setattr(scraper_main, "SrealityClient", _FakeClient)
@@ -676,6 +684,8 @@ def test_index_walk_enqueues_and_nominates(patched_db, monkeypatch):
     rc, agg = scraper_main._run_index_walk(dry_run=False)
     assert rc == 0
     assert len(patched_db["nominated"]) == len(scraper_main.CATEGORIES)
+    # Every one of the 20 labels is walked: the orphan scope is their complement, keyed the same way.
+    assert patched_db["orphans"] == [(len(scraper_main.CATEGORIES), "sreality_id")]
     assert len(patched_db["enqueue"]) == len(scraper_main.CATEGORIES)
     # index_summary returns {} (fixture) -> every id is new (priority 0).
     all_entries = [e for batch in patched_db["enqueue"] for e in batch]
@@ -713,7 +723,7 @@ def test_index_walk_skips_inactive_when_incomplete(patched_db, monkeypatch):
     monkeypatch.setattr(_FakeClient, "iter_index", capped_iter_index)
     rc, _agg = scraper_main._run_index_walk(dry_run=False)
     assert rc == 0
-    assert patched_db["nominated"] == []
+    assert patched_db["nominated"] == [] and patched_db["orphans"] == []
     assert patched_db["enqueue"]  # enqueue is independent of the walk's end
 
 

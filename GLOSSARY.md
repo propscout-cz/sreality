@@ -1,8 +1,8 @@
 # Property intelligence platform
 
-One market-wide view of Czech real estate built from the ads nine portals publish. Code and tables
-still carry some older names; the terms below are the ones to use in prose, UI text, documents and
-anything newly named.
+One market-wide view of Czech real estate built from the ads nine portals publish and the ads of any
+other site someone pastes a link to. Code and tables still carry some older names; the terms below
+are the ones to use in prose, UI text, documents and anything newly named.
 
 ## Language
 
@@ -57,8 +57,24 @@ are kept forever.
 _Avoid_: live, dead, delisted, deleted, removed, expired
 
 **Portal**:
-One of the advertising websites the platform collects from.
+One of the advertising websites the platform collects from. Nine are walked page by page; the tenth,
+Web, is every other site: its ads arrive only when someone pastes a link, and a Web ad is known by
+its link's canonical address (shown by its site's name), not by an id of the site's own.
 _Avoid_: site, source (in prose)
+
+**Portal id**:
+The id a portal gives an ad: the number in the ad's web address on most portals, iDNES's long code, a
+Web ad's canonical address. Unique within its portal; the key the scrapers track an ad by, and the
+platform's own row number for the ad is a different thing (an ad's `id`).
+_Avoid_: native id (in prose), hash id, listing id
+
+**Ad reference**:
+The number the advertiser prints on the ad for callers, kept exactly as printed: "ID zakázky" on
+Sreality, "Číslo zakázky" on iDNES, RE/MAX and Realitymix, "ID nemovitosti" on České reality. On a
+broker portal it is the broker's own order number; on an agency's own site (Maxima, M&M) it is the
+portal id. An ad may print none (a private seller). Shown beside the broker's contact so it can be
+quoted on a call; never replaced by another number when it is missing.
+_Avoid_: reference number, order number, advert code, zakázka (in English prose)
 
 **Snapshot**:
 One kept version of an ad's content. A new snapshot exists only when the content changed.
@@ -71,6 +87,20 @@ _Avoid_: backfill day, horizon, go-live day
 **Newly listed ad**:
 An ad first seen on an ordinary day, not in a sweep, so its time on market counts from the day it appeared. An ad first seen in a sweep was already on the market, and its time on market is a lower bound.
 _Avoid_: uncensored ad, fresh ad, left-censored (for the opposite)
+
+**Settled**:
+A property the pipeline is done with: its first photo is stored (or it has none), and the engine has
+read every one of its ads, holds no pending question about them and keeps none of them in a group
+that also holds an ad on another property, or on none yet. Stamped once, by property maintenance; a
+merge passes a settled property's stamp to the survivor only when that publishes the survivor
+earlier, so publication never regresses, and never moves later.
+_Avoid_: evaluated, checked, dedup-checked
+
+**Published**:
+A property Browse, the map, Stats and the watchdog serve: from the moment it is settled, or 6 hours
+after it was first seen, whichever comes first. The 6 hours are the cap, so a slow engine can delay
+a property but never hide it. Its page opens by its link either way.
+_Avoid_: gated-in, live (for this)
 
 **Valuo valuation**:
 A price for one property bought from Valuo, an outside valuation service: what was sent, where each
@@ -217,6 +247,12 @@ of any share the author is party to whose collection holds that property, includ
 after the note was marked. Unmarked notes stay private.
 _Avoid_: public note, team note
 
+**Viewing** (UI: "Prohlídka"):
+A note with a date: when its author sees, or saw, the property in person. Its text, which may be
+empty, is what to check there and later what they found. It is shared, carried and split like any
+note. The phone's Prohlídky tab lists the account's own viewings one day at a time.
+_Avoid_: appointment, visit, meeting, event
+
 **Tag**:
 A coloured label an account puts on a property; a property carries any number. A tag filter
 has two sides: must carry every chosen tag, must carry none of the excluded ones; or carry no
@@ -228,8 +264,9 @@ An account's decision to hide a property from its own Browse.
 _Avoid_: hide, mute, ignore, archive
 
 **Lens**:
-A filter over the account's own curation that sits outside a preset's identity: the three curated-set
-scopes, the broker scope and the dismissed reveal; it never dirties a preset, and a preset click resets it.
+A filter over the account's own curation: the three curated-set scopes, the broker scope and the
+dismissed reveal. A preset stores it like every filter (since 2026-10-22); a Stats dashboard, which can be
+shared, never does.
 _Avoid_: view, mode, preset filter, overlay
 
 **Fold**:

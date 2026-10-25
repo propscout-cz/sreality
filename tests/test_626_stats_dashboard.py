@@ -136,9 +136,13 @@ def test_the_cohort_where_is_625s_byte_for_byte() -> None:
 
     bt = base_now.index(_ANCHOR.rstrip("\n"))
     base_now = base_now[: bt + 1] + [_ENERGY.rstrip("\n")] + base_now[bt + 1:]
+    # 662 reads the Status filter as one parameter (tests/test_661_662_status_filter.py).
+    st = base_now.index("            case when active_only_filter then 'active' when inactive_only_filter "
+                        "then 'inactive' else 'any' end,")
+    base_now[st] = "            status_filter,"
     start = later.index(base[anchor - 1]) + 1
     end = later.index(base[anchor + 1], start)
-    assert later[:start] + later[end:] == base_now, "the effective WHERE is not 625's minus 640's drop, 644's swap, 648's conjunct, plus one inserted block"
+    assert later[:start] + later[end:] == base_now, "the effective WHERE is not 625's minus 640's drop, 644's swap, 648's conjunct, 662's status, plus one inserted block"
     block = " ".join(later[start:end])
     assert later[start].lstrip().startswith("-- migration 629: the curated-set scope")
     assert all(f"{c}_set" in block for c in ("tags", "collections", "pipeline")), block
@@ -243,8 +247,8 @@ def test_the_place_names_reach_the_invoker_pivot_through_an_owner_rights_view() 
     tail = ", ".join(f"l.{n}" for n in places)
     for slot in [*(f"k{i}" for i in range(1, 7)), "kc"]:
         assert f"{tail}) as {slot}," in stmt, slot
-    # 634 appended the two source arrays (the status lens reads them) after the five codes.
-    assert f"l.garage, {tail}, l.all_sources, l.active_sources\n    from browse_list l\n" in stmt
+    # 634 appended the two source arrays for its status lens; 657 took them back with the lens.
+    assert f"l.garage, {tail}\n    from browse_list l\n" in stmt
     for gone in ("listing_location", "listing_place_names_public", "v_geo", "ruian_admin_units",
                  "ruian_streets", "kraj_name", "okres_name", "obec_name", "cast_obce_name", "street_name"):
         assert gone not in stmt, gone

@@ -28,64 +28,78 @@ export default function MergeBar({
   const used = merge.groups.map(([letter]) => letter);
   const next = LETTERS.find((letter) => !used.includes(letter));
   const chips = next ? [...used, next] : used;
+  const toggle = (
+    <button
+      type="button"
+      onClick={merge.active ? merge.exit : merge.enter}
+      disabled={merging}
+      className={`${BTN} border ${
+        merge.active
+          ? 'border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] hover:border-[var(--color-rule-strong)]'
+          : 'border-[var(--color-copper)] text-[var(--color-copper-2)] hover:bg-[var(--color-copper-soft)]'
+      }`}
+    >
+      {merge.active ? 'Cancel' : 'Merge mode'}
+    </button>
+  );
+  if (!merge.active) return <div className="shrink-0">{toggle}</div>;
+  /* Two columns: the letters and the statement wrap in the left one however many
+   * letters are in use, so Merge and Cancel never leave the right edge. */
   return (
-    <div className="flex items-center gap-2 shrink-0">
-      {merge.active && (
-        <>
-          <div
-            role="radiogroup"
-            aria-label="Písmeno, které zapíše kliknutí"
-            className="flex items-center gap-1"
-          >
-            {chips.map((letter) => (
-              <button
-                key={letter}
-                type="button"
-                role="radio"
-                aria-checked={letter === merge.activeLetter}
-                onClick={() => merge.setActiveLetter(letter)}
-                className={`${CHIP} ${
-                  letter === merge.activeLetter
-                    ? 'border-[var(--color-copper)] bg-[var(--color-copper-soft)] text-[var(--color-copper-2)]'
-                    : 'border-[var(--color-rule)] text-[var(--color-ink-2)] hover:border-[var(--color-rule-strong)]'
-                }`}
-              >
-                {letter}
-              </button>
-            ))}
-          </div>
-          {merge.groups.length === 0 ? (
-            <span className="text-[0.75rem] text-[var(--color-ink-3)]">
-              Click a card to mark it {merge.activeLetter}, or press a letter on it
-            </span>
-          ) : (
-            <MergeStatement groups={merge.groups} />
-          )}
-          {merge.complete && <MergeTakenBack preview={preview} className="text-[0.75rem]" />}
-          <button
-            type="button"
-            onClick={onMerge}
-            disabled={merging || !merge.complete || preview.isPending}
-            className={`${BTN} bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)]`}
-          >
-            {merging ? 'Merging…' : used.length ? `Merge ${used.join(', ')}` : 'Merge'}
-          </button>
-        </>
-      )}
-      <button
-        type="button"
-        onClick={merge.active ? merge.exit : merge.enter}
-        disabled={merging}
-        className={`${BTN} border ${
-          merge.active
-            ? 'border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] hover:border-[var(--color-rule-strong)]'
-            : 'border-[var(--color-copper)] text-[var(--color-copper-2)] hover:bg-[var(--color-copper-soft)]'
-        }`}
-      >
-        {merge.active ? 'Cancel' : 'Merge mode'}
-      </button>
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 min-w-0">
+        <div
+          role="radiogroup"
+          aria-label="Písmeno, které zapíše kliknutí"
+          className="flex flex-wrap items-center gap-1"
+        >
+          {chips.map((letter) => (
+            <button
+              key={letter}
+              type="button"
+              role="radio"
+              aria-checked={letter === merge.activeLetter}
+              onClick={() => merge.setActiveLetter(letter)}
+              className={`${CHIP} ${
+                letter === merge.activeLetter
+                  ? 'border-[var(--color-copper)] bg-[var(--color-copper-soft)] text-[var(--color-copper-2)]'
+                  : 'border-[var(--color-rule)] text-[var(--color-ink-2)] hover:border-[var(--color-rule-strong)]'
+              }`}
+            >
+              {letter}
+            </button>
+          ))}
+        </div>
+        {merge.groups.length === 0 ? (
+          <span className="text-[0.75rem] text-[var(--color-ink-3)]">
+            Click a card to mark it {merge.activeLetter}, or press a letter on it
+          </span>
+        ) : (
+          <MergeStatement groups={merge.groups} />
+        )}
+        {merge.complete && <MergeTakenBack preview={preview} className="text-[0.75rem]" />}
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onMerge}
+          disabled={merging || !merge.complete || preview.isPending}
+          title={used.length ? `Merge ${used.join(', ')}` : undefined}
+          className={`${BTN} whitespace-nowrap bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)]`}
+        >
+          {merging ? 'Merging…' : mergeLabel(used)}
+        </button>
+        {toggle}
+      </div>
     </div>
   );
+}
+
+/* Up to three letters by name; more would grow the button, so it counts them
+ * (the statement beside it names every one). */
+function mergeLabel(used: string[]): string {
+  if (used.length === 0) return 'Merge';
+  return used.length <= 3 ? `Merge ${used.join(', ')}` : `Merge ${used.length} groups`;
 }
 
 /* The statement: each letter with its properties by number and their marks,

@@ -17,7 +17,7 @@ import { supabase } from './supabase';
 import {
   BROWSE_SELECT_COLUMNS,
   CARD_SORTS,
-  adScope,
+  adPortals,
   applyPortalRule,
   applyPrefilters,
   buildBrowseStatsArgs,
@@ -258,19 +258,10 @@ interface RuleCase {
   excluded_active_only: boolean;
   expected: boolean;
 }
-interface BrokerCase {
-  name: string;
-  ads: Array<{ broker: string; source: string; is_active: boolean }>;
-  broker: string;
-  portals: string[];
-  status: 'any' | 'active' | 'inactive';
-  expected: boolean;
-}
-
 /* Records what applyPortalRule asks PostgREST for, as predicates over a row. */
 const PORTAL_RULE = JSON.parse(
   readFileSync(join(process.cwd(), '..', 'tests', 'fixtures', 'portal_rule.json'), 'utf-8'),
-) as { cases: RuleCase[]; broker_cases: BrokerCase[] };
+) as { cases: RuleCase[] };
 const PORTALS = (filterById('portals')?.enum_values ?? []).map((o) => String(o.value));
 
 class RuleRecorder {
@@ -312,7 +303,7 @@ const ruleRow = (c: Pick<RuleCase, 'is_active' | 'all_sources' | 'active_sources
 const ruleMatches = (f: ListingFilters, row: RuleRow): boolean =>
   applyPortalRule(new RuleRecorder(), f).preds.every((p) => p(row));
 
-describe('the portal rule (MS19)', () => {
+describe('the portal rule (MS19; the status is the property\'s since 657)', () => {
   const filtersFor = (c: Partial<RuleCase> & Pick<RuleCase, 'portals' | 'status'>): ListingFilters => ({
     ...DEFAULT_FILTERS, portals: c.portals, status: c.status,
     portalsExcluded: c.excluded ?? [], portalsExcludedActiveOnly: c.excluded_active_only ?? false,
@@ -324,25 +315,12 @@ describe('the portal rule (MS19)', () => {
     });
   }
 
-  /* The broker lookup answers the same rule over ONE broker's ads (portal and broker =
-   * one ad): the same rendering over the aggregate of the broker's ads agrees with it. */
-  for (const c of PORTAL_RULE.broker_cases) {
-    it(`broker: ${c.name}`, () => {
-      const own = c.ads.filter((ad) => ad.broker === c.broker);
-      const sources = (ads: typeof own) => [...new Set(ads.map((ad) => ad.source))].sort();
-      const row = ruleRow({
-        is_active: own.some((ad) => ad.is_active),
-        all_sources: sources(own),
-        active_sources: sources(own.filter((ad) => ad.is_active)),
-      });
-      expect(ruleMatches(filtersFor(c), row)).toBe(c.expected);
-    });
-  }
-
-  it('steps aside under a broker: the server judged portal and status on its ads', () => {
+  /* The broker cases (the portal side on one broker's ads) run in the DB lane,
+   * tests/test_portal_rule.py: here the portal side steps aside and the status stays. */
+  it('under a broker the portal side steps aside and the status stays the property\'s', () => {
     const f = { ...DEFAULT_FILTERS, brokerId: 527, portals: ['idnes', 'remax'], status: 'inactive' as const };
-    expect(adScope(f)).toEqual({ portals: [], status: 'any' });
-    expect(applyPortalRule(new RuleRecorder(), f).ops).toEqual([]);
+    expect(adPortals(f)).toEqual([]);
+    expect(applyPortalRule(new RuleRecorder(), f).ops).toEqual(['is_active.eq']);
   });
 
   it('keeps the exclusion under a broker: it is a statement about the property', () => {
@@ -361,7 +339,7 @@ describe('the portal rule (MS19)', () => {
 
   it('keeps the one-portal conjunct under a broker, so the order stays indexable', () => {
     const f = { ...DEFAULT_FILTERS, brokerId: 527, portals: ['idnes'], status: 'active' as const };
-    expect(applyPortalRule(new RuleRecorder(), f).ops).toEqual(['newest_ad_at_idnes.not.is']);
+    expect(applyPortalRule(new RuleRecorder(), f).ops).toEqual(['is_active.eq', 'newest_ad_at_idnes.not.is']);
   });
 
   it('adds the conjunct for exactly one portal, and it narrows nothing', () => {
@@ -393,8 +371,8 @@ describe('the one-portal order', () => {
   });
 
   it('passes every other sort straight through', () => {
-    for (const field of ['price_czk', 'price_per_m2', 'area_m2', 'plot_area_m2', 'last_seen_at',
-                         'mf_gross_yield_pct'] as const) {
+    for (const field of ['price_czk', 'price_per_m2', 'area_m2', 'plot_area_m2', 'street_name',
+                         'last_seen_at', 'mf_gross_yield_pct'] as const) {
       expect(orderPortal(withPortals(['idnes']), { field, direction: 'desc' })).toBeNull();
       expect(effectiveSort(withPortals(['idnes']), { field, direction: 'desc' }))
         .toEqual({ field, direction: 'desc' });
@@ -431,7 +409,7 @@ describe('the one-portal order', () => {
     await fetchBrowseCount({ ...withPortals(['idnes']), status: 'active' });
     expect(s.calls).toContainEqual(['overlaps', ['active_sources', ['idnes']]]);
     expect(s.calls).toContainEqual(['not', ['newest_ad_at_idnes', 'is', null]]);
-    expect(s.calls.some(([m, a]) => m === 'eq' && a[0] === 'is_active')).toBe(false);
+    expect(s.calls).toContainEqual(['eq', ['is_active', true]]);
     vi.restoreAllMocks();
   });
 });
@@ -504,6 +482,32 @@ describe('the cards sort menu', () => {
       ['or', ['plot_area_m2.gt.850,and(plot_area_m2.eq.850,property_id.gt.7),plot_area_m2.is.null']]);
     vi.restoreAllMocks();
     expect(BROWSE_SELECT_COLUMNS.cards.split(',')).toContain('plot_area_m2');
+  });
+
+  it('offers street name both ways', () => {
+    const byLabel = new Map(CARD_SORTS.map((o) => [o.label, o.spec]));
+    expect(byLabel.get('Ulice: A → Z')).toEqual({ field: 'street_name', direction: 'asc' });
+    expect(byLabel.get('Ulice: Z → A')).toEqual({ field: 'street_name', direction: 'desc' });
+    expect(parseSort('-street_name')).toEqual({ field: 'street_name', direction: 'desc' });
+  });
+
+  /* A street name carries the reserved chars of PostgREST's or=() (nám. Míru), so the
+   * cursor quotes it; rows without a street come last both ways. */
+  it('pages the cards by street with a quoted cursor and the rows without a street last', async () => {
+    const s = stubReads();
+    await fetchListingsForCards(
+      DEFAULT_FILTERS,
+      { field: 'street_name', direction: 'desc' },
+      { value: 'nám. Míru', id: 7 },
+    );
+    expect(s.calls.filter(([m]) => m === 'order').map(([, a]) => a)).toEqual([
+      ['street_name', { ascending: false, nullsFirst: false }],
+      ['property_id', { ascending: false }],
+    ]);
+    expect(s.calls).toContainEqual(
+      ['or', ['street_name.lt."nám. Míru",and(street_name.eq."nám. Míru",property_id.lt.7),street_name.is.null']]);
+    expect(String(s.calls.find(([m]) => m === 'select')?.[1][0])).toContain('street_name');
+    vi.restoreAllMocks();
   });
 });
 
@@ -898,7 +902,7 @@ describe('Browse Stats resolves through the one prefilter path', () => {
     }
   });
 
-  it('carries the broker in property_ids_filter; the server judged its portal and status', async () => {
+  it('carries the broker in property_ids_filter; the server found its ads, the status stays the property\'s', async () => {
     const { rpcArgs } = stubReads();
     await fetchStatsPivot({
       ...DEFAULT_FILTERS, brokerId: 527, portals: ['idnes'], status: 'active',
@@ -907,7 +911,7 @@ describe('Browse Stats resolves through the one prefilter path', () => {
     expect(fetchBrokerPropertyIds).toHaveBeenCalledWith(527, 'active', ['idnes']);
     expect(rpcArgs[0].property_ids_filter).toEqual([1]);
     expect(rpcArgs[0].portal_filter).toBeNull();
-    expect(rpcArgs[0].active_only_filter).toBe(false);
+    expect(rpcArgs[0].status_filter).toBe('active');
     /* The exclusion is about the property, so it reaches the RPC under a broker too. */
     expect(rpcArgs[0].portal_excluded_filter).toEqual(['sreality']);
     expect(rpcArgs[0].portal_excluded_active_only).toBe(true);
@@ -919,7 +923,9 @@ describe('Browse Stats resolves through the one prefilter path', () => {
       NO_PREFILTERS,
     );
     expect(args.portal_filter).toEqual(['idnes']);
-    expect([args.active_only_filter, args.inactive_only_filter]).toEqual([false, true]);
+    expect(args.status_filter).toBe('inactive');
+    expect(args).not.toHaveProperty('active_only_filter');
+    expect(args).not.toHaveProperty('inactive_only_filter');
   });
 
   it('never names the retired listing_ids_filter on the map, and carries the broker', async () => {

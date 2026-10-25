@@ -244,10 +244,9 @@ describe('<Feed>', () => {
     expect(localStorage.getItem(FEED_QUERY_KEY)).toContain('price=');
   });
 
-  it('keeps the preset unmarked under a lens that rides outside it (rule 22)', async () => {
+  it('marks the preset left under a lens it does not store, like any filter (ruling 2026-10-22)', async () => {
     renderFeed(feedPath({ ...PRESET_FILTERS, pipeline: { set: 'in', in: [], out: [] } }));
-    expect(await screen.findByRole('button', { name: 'Vysočany byty' })).toHaveAttribute('aria-pressed', 'true');
-    /* …but it is still a filter beyond the scope. */
+    expect(await screen.findByRole('button', { name: 'Vysočany byty (upraveno)' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: 'Filtry (1 navíc)' })).toBeInTheDocument();
   });
 

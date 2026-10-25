@@ -125,12 +125,12 @@ class BazosPortal(portal_runner.PortalDefaults):
         items: list[tuple[str, str, int | None]] = []  # (native, detail_path, idx_price)
         total: int | None = None
         pages = 0
-        page_size = 0  # largest page bazos served this scope; places a 404 at page grain
         offset = 0
         # The largest page this scope has served. bazos publishes no page size, so
         # the walk measures it: it is what tells a SHORT tail page (bazos ran out
         # of ads) from a FULL page that claims no next page — the shape a renamed
-        # pager selector produces on page 1 of every scope.
+        # pager selector produces on page 1 of every scope — and what places a
+        # 404 or a blank page at page grain against the declared total.
         page_size = 0
         # A walk cut short by the wall-clock budget is NOT a finished walk: this
         # flag poisons the numeric coverage record below (the structural verdict
@@ -174,7 +174,6 @@ class BazosPortal(portal_runner.PortalDefaults):
             page_size = max(page_size, len(page.items))
             if page.total is not None:
                 total = page.total
-            page_size = max(page_size, len(page.items))
             LOG.info(
                 "INDEX offset=%d items=%d total=%s", offset, len(page.items), page.total
             )
@@ -201,6 +200,7 @@ class BazosPortal(portal_runner.PortalDefaults):
                 stop = self._confirm_barren(
                     client, sale_type, cat, offset,
                     total=total, collected=len(seen), pages=pages,
+                    page_size=page_size,
                 )
                 break
             if page.next_offset is None:
@@ -341,12 +341,15 @@ class BazosPortal(portal_runner.PortalDefaults):
 
     def _confirm_barren(
         self, client: BazosClient, sale_type: str, cat: str, offset: int, *,
-        total: int | None, collected: int, pages: int,
+        total: int | None, collected: int, pages: int, page_size: int = 0,
     ) -> StopReason:
         """Re-fetch an items-less page once and classify it (rule #3's barren rule).
 
-        Still empty AND at or past what the declared total implies — or no total
-        was ever readable and an earlier page of this scope carried items — is
+        Still empty AND on the last PAGE the declared total implies (placed by
+        `_classify_gone`, the one rule that places a 404 — the counter over-counts
+        by a handful, so 2026-10-23/24 prodam/byt served 9,040 of 9,042 and a
+        row-exact rule held a 9k scope open for three walks) — or no total was
+        ever readable and an earlier page of this scope carried items — is
         bazos's end; anything else stays `barren`, a stop of ours. A confirmation
         that cannot be obtained is not a confirmation, so a scope whose FIRST page
         is barren with no total is never confirmed."""
@@ -362,6 +365,7 @@ class BazosPortal(portal_runner.PortalDefaults):
             # which is what keeps a barren FIRST page from confirming itself.
             return self._classify_gone(
                 total=total, collected=collected, pages=pages, offset=offset,
+                page_size=page_size,
             )
         if parse_index(html).items:
             # The blank was a fluke, so this page's ads were missed: the walk is
@@ -372,7 +376,11 @@ class BazosPortal(portal_runner.PortalDefaults):
                 sale_type, cat, offset,
             )
             return "barren"
-        if (total is not None and offset >= total) or (total is None and collected > 0):
+        placed = self._classify_gone(
+            total=total, collected=collected, pages=pages, offset=offset,
+            page_size=page_size,
+        )
+        if stop_is_portal_end(placed) or (total is None and collected > 0):
             return "empty_confirmed"
         LOG.warning(
             "INDEX barren page uncorroborated sale_type=%s category=%s offset=%d "
@@ -381,30 +389,15 @@ class BazosPortal(portal_runner.PortalDefaults):
         )
         return "barren"
 
-    def presence_candidates(
-        self, conn: Any, category: dict[str, str], seen: set[str],
-    ) -> tuple[list[tuple[str, str | None, int | None]], int, dict[str, Any]] | None:
-        cm, ct = self.category_labels(category)
-        if cm is None or ct is None:
-            return None
-        # Scope the nomination to this section's subtype: bazos walks fine
-        # sections that collapse onto one category_main (chata + dum -> dum), so
-        # an un-scoped per-section nomination would send every sibling section's
-        # rows to the drain for a page check on every walk.
-        sub = SUBTYPE.get(category.get("category"))
-        candidates, active_rows = db.presence_candidates(
-            conn, SOURCE, cm, ct, seen, subtype=sub, scope_subtype=True,
-        )
-        return candidates, active_rows, {"subtype": sub}
-
-    def active_count(self, conn: Any, category: dict[str, str]) -> int | None:
+    def presence_scope(self, category: dict[str, str]) -> dict[str, Any] | None:
+        # Scoped to the section's subtype: bazos walks fine sections that collapse onto
+        # one category_main (chata + dum -> dum), so a per-label nomination would send
+        # every sibling section's rows to the drain for a page check on every walk.
         cm, ct = self.category_labels(category)
         if cm is None or ct is None:
             return None
         sub = SUBTYPE.get(category.get("category"))
-        return db.active_count(
-            conn, cm, ct, source=SOURCE, subtype=sub, scope_subtype=True
-        )
+        return {"category_main": cm, "category_type": ct, "subtype": sub}
 
     # --- detail-drain seams ---
     def fetch_detail(
@@ -449,7 +442,11 @@ def _resolve_scopes(
         c for c in config.categories
         if SALE_TYPE.get(c.get("sale_type")) and CATEGORY_MAIN.get(c.get("category"))
     ]
-    return scopes or [{"sale_type": "prodam", "category": "byt"}]
+    if not scopes:
+        # A walk of one stand-in section would read the rest of the portal as orphans.
+        LOG.error("the registry maps no bazos scope: %s", config.categories)
+        return None
+    return scopes
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -470,6 +467,7 @@ def main(argv: list[str] | None = None) -> int:
     portal.index_rate = limits.index_rate
     portal.shared_rate_limiter = limits.shared_rate_limiter
     portal.price_change_min_pct = limits.price_change_min_pct
+    portal.narrowed = bool(args.sale_type or args.category)
 
     # Resolve operational limits: CLI override > per-portal DB config > default.
     workers = args.workers if args.workers is not None else limits.detail_workers

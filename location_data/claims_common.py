@@ -24,7 +24,7 @@ from scraper import street
 
 SOURCES = (
     "sreality", "bezrealitky", "bazos", "idnes", "mmreality", "remax", "ceskereality",
-    "realitymix", "maxima",
+    "realitymix", "maxima", "web",
 )
 
 # THE CONSUMER RULE (operator ruling 2026-09-13, rule 25). A listing is SERVED to
@@ -131,6 +131,9 @@ COORDINATE_RULES: dict[str, CoordinateRule] = {
     # rows drained before that carry no stamp and stay refused
     # (`coordinate_provenance_unestablished`) until their next 6 h drain rewrites raw_json.
     "remax": CoordinateRule("geom_column", frozenset({"page"})),
+    # Any other site: contracts/portals/web.yaml is text-only, and a JSON-LD `geo` point on a
+    # page nobody has reviewed is not licensed until a contract_version bump argues for it.
+    "web": CoordinateRule("none"),
 }
 
 # The two substrates the ladder can be asked about. `COORDINATE_RULES` above describes the

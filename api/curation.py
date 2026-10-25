@@ -23,7 +23,7 @@ from typing import Any, Callable, ContextManager
 import psycopg
 from fastapi import HTTPException
 
-from api import note_attachments
+from api import attachments
 from api import schemas as s
 from api import shares
 from toolkit.property_identity import (
@@ -326,20 +326,23 @@ def delete_share(
 
 
 # owner_email: null iff the acting identity wrote it; a foreign note is readable only when marked
-# shared. edited_by_email / edited_at: the note's delegated stamp (owner-only; cleared by a later body edit).
+# shared. edited_by_email / edited_at: the note's delegated stamp (owner-only; cleared by a later edit).
+# viewing_at: a viewing is a note with a date (migration 666).
 _NOTE_PROJECTION = (
-    "n.id, n.property_id, n.body, n.shared, n.created_at, n.updated_at, "
+    "n.id, n.property_id, n.body, n.shared, n.created_at, n.updated_at, n.viewing_at, "
     f"CASE WHEN {_is_mine('n.account_id')} THEN NULL ELSE {shares.party_label('n.account_id')} END "
     "  AS owner_email, "
     f"{shares.delegated_stamp('property_notes', 'n.id::text', 'greatest(n.updated_at, n.created_at)')}"
 )
 
-# Marking shared is not an edit: updated_at moves only with the body.
+# Marking shared is not an edit: updated_at moves only with the body or the viewing date.
 _UPDATE_NOTE_SQL = (
-    "UPDATE property_notes n SET body = coalesce(%s::text, n.body), "
-    "  shared = coalesce(%s::boolean, n.shared), "
-    "  updated_at = CASE WHEN %s::text IS NOT NULL THEN now() ELSE n.updated_at END "
-    "WHERE n.id = %s AND n.property_id = %s "
+    "UPDATE property_notes n SET body = coalesce(%(body)s::text, n.body), "
+    "  shared = coalesce(%(shared)s::boolean, n.shared), "
+    "  viewing_at = CASE WHEN %(set_viewing)s::boolean THEN %(viewing_at)s::timestamptz ELSE n.viewing_at END, "
+    "  updated_at = CASE WHEN %(body)s::text IS NOT NULL OR %(set_viewing)s::boolean THEN now() "
+    "    ELSE n.updated_at END "
+    "WHERE n.id = %(id)s AND n.property_id = %(property_id)s "
     f"RETURNING {_NOTE_PROJECTION}"
 )
 
@@ -350,12 +353,22 @@ _LIST_NOTES_SQL = (
 
 _CREATE_NOTE_SQL = (
     "INSERT INTO property_notes AS n "
-    "  (property_id, body, shared, origin_listing_id, origin_listing_ref_id, account_id) "
+    "  (property_id, body, shared, origin_listing_id, origin_listing_ref_id, viewing_at, account_id) "
     "VALUES (%s, %s, %s, "
     "  (SELECT sreality_id FROM listing_natural_key_public WHERE id = %s), "
-    "  %s, %s) "
+    "  %s, %s, %s) "
     f"RETURNING {_NOTE_PROJECTION}"
 )
+
+# The acting identity's own viewings, in date order: the Prohlídky tab's one read. A shared note
+# from another author stays on its property page; this is the caller's calendar.
+_LIST_VIEWINGS_SQL = (
+    f"SELECT {_NOTE_PROJECTION} FROM property_notes n "
+    f"WHERE n.viewing_at IS NOT NULL AND {_is_mine('n.account_id')} "
+    "ORDER BY n.viewing_at, n.id"
+)
+
+_TEXT_OR_VIEWING = "a note needs text or a viewing date"
 
 
 def list_notes(
@@ -368,7 +381,7 @@ def list_notes(
         cur.execute(_LIST_NOTES_SQL, (pid,))
         rows = cur.fetchall()
     notes = [_to_note(r) for r in rows]
-    files = note_attachments.attachments_by_note(conn, [n["id"] for n in notes])
+    files = attachments.attachments_by_note(conn, [n["id"] for n in notes])
     return {"data": [{**n, "attachments": files[n["id"]]} for n in notes]}
 
 
@@ -401,7 +414,7 @@ def create_note(
             cur.execute(_CREATE_NOTE_SQL, (
                 pid, body.body, body.shared,
                 body.origin_listing_ref_id, body.origin_listing_ref_id,
-                account_id,
+                body.viewing_at, account_id,
             ))
             row = cur.fetchone()
     except psycopg.errors.ForeignKeyViolation:
@@ -416,20 +429,33 @@ def update_note(
     note_id: int,
     body: s.UpdateNoteIn,
 ) -> dict[str, Any]:
-    """Edit or (un)mark a note in place; the UPDATE is the ownership gate, scoped by (id, property_id)."""
-    if body.body is None and body.shared is None:
+    """Edit, (un)mark or (re)date a note in place; the UPDATE is the ownership gate, scoped by
+    (id, property_id). An empty body without a viewing date is the table's check: a 422."""
+    set_viewing = "viewing_at" in body.model_fields_set
+    if body.body is None and body.shared is None and not set_viewing:
         raise HTTPException(422, "nothing to update")
     # The note itself was re-pointed onto the survivor at merge, so a stale
     # property_id makes that pair unsatisfiable and a live note reads as 404.
     property_id = resolve_active_property_id(conn, property_id) or property_id
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute(
-            _UPDATE_NOTE_SQL, (body.body, body.shared, body.body, note_id, property_id),
-        )
-        row = cur.fetchone()
+    params = {"body": body.body, "shared": body.shared, "set_viewing": set_viewing,
+              "viewing_at": body.viewing_at, "id": note_id, "property_id": property_id}
+    try:
+        with conn.transaction(), conn.cursor() as cur:
+            cur.execute(_UPDATE_NOTE_SQL, params)
+            row = cur.fetchone()
+    except psycopg.errors.CheckViolation:
+        raise HTTPException(422, _TEXT_OR_VIEWING)
     if row is None:
         raise HTTPException(404, "note not found")
     return _to_note(row)
+
+
+def list_viewings(conn: "psycopg.Connection") -> dict[str, Any]:
+    """The caller's viewings across every property, earliest first (migration 666)."""
+    with conn.cursor() as cur:
+        cur.execute(_LIST_VIEWINGS_SQL)
+        rows = cur.fetchall()
+    return {"data": [_to_note(r) for r in rows]}
 
 
 def delete_note(
@@ -668,9 +694,10 @@ def _to_note(row: tuple[Any, ...]) -> dict[str, Any]:
         "shared":      bool(row[3]),
         "created_at":  _iso(row[4]),
         "updated_at":  _iso(row[5]),
-        "owner_email": row[6],
-        "edited_by_email": row[7],
-        "edited_at":   _iso(row[8]),
+        "viewing_at":  _iso(row[6]),
+        "owner_email": row[7],
+        "edited_by_email": row[8],
+        "edited_at":   _iso(row[9]),
     }
 
 

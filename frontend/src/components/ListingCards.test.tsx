@@ -314,25 +314,26 @@ describe('<ListingCards> photo hydration', () => {
   });
 });
 
-/* The storey on the card title. browse_list carries no floor, so it arrives
-   through the hydration layer like the photos: the card paints without it and
-   the storey joins the title when its read lands. */
-describe('<ListingCards> the storey', () => {
-  const STOREY_TITLE_RE = /^Byt na prodej · 2\+kk · 62\sm² · 4\. patro z 5 podlaží$/;
+/* The storey is a small tag beside the place, never part of the headline. The
+   floor is not on browse_list, so it arrives through the hydration layer like the
+   photos: the card paints without it and the tag appears when its read lands. */
+describe('<ListingCards> the storey tag', () => {
   const storeyOf = (floor: number | null, total_floors: number | null) =>
     vi.mocked(queries.fetchListingFloors).mockResolvedValue(
       new Map([[111, { floor, total_floors }]]),
     );
 
-  it('appends the floor and the building\'s podlaží to an apartment\'s title', async () => {
-    storeyOf(4, 5);
+  it('tags an apartment with its floor and the building\'s podlaží, the title untouched', async () => {
+    storeyOf(2, 5);
 
     renderGrid({ floors: true });
 
-    expect(await screen.findByRole('link', { name: STOREY_TITLE_RE })).toBeInTheDocument();
+    const tag = await screen.findByText('2. patro z 5');
+    expect(tag).toHaveAttribute('title', '2. patro z 5 podlaží');
+    expect(screen.getByRole('link', { name: TITLE_RE })).toBeInTheDocument();
   });
 
-  it('paints the title without it while the floor read is still in flight', async () => {
+  it('paints the card without the tag while the floor read is still in flight', async () => {
     vi.mocked(queries.fetchListingFloors).mockReturnValue(
       new Promise(() => {}) as ReturnType<typeof queries.fetchListingFloors>,
     );
@@ -340,16 +341,34 @@ describe('<ListingCards> the storey', () => {
     renderGrid({ floors: true });
 
     expect(await screen.findByRole('link', { name: TITLE_RE })).toBeInTheDocument();
+    expect(screen.queryByText(/patro|přízemí/)).toBeNull();
   });
 
   it('reads the cohort once, keyed on the surrogate listing id', async () => {
-    storeyOf(4, 5);
+    storeyOf(2, 5);
 
     renderGrid({ floors: true });
 
-    await screen.findByRole('link', { name: STOREY_TITLE_RE });
+    await screen.findByText('2. patro z 5');
     expect(queries.fetchListingFloors).toHaveBeenCalledTimes(1);
     expect(queries.fetchListingFloors).toHaveBeenCalledWith([111], expect.anything());
+  });
+
+  it('keeps the tag in the place row, still showing when the ad has no place', async () => {
+    storeyOf(2, 5);
+
+    renderGrid({ floors: true, row: { ...ROW, display_label: null } as CardRow });
+
+    expect(await screen.findByText('2. patro z 5')).toBeInTheDocument();
+  });
+
+  it('drops the count when the building\'s podlaží is unknown', async () => {
+    storeyOf(3, null);
+
+    renderGrid({ floors: true });
+
+    const tag = await screen.findByText('3. patro');
+    expect(tag).toHaveAttribute('title', '3. patro');
   });
 
   it('says nothing for an ad with no floor, rather than a gap or a zero', async () => {
@@ -359,6 +378,7 @@ describe('<ListingCards> the storey', () => {
 
     await waitFor(() => expect(queries.fetchListingFloors).toHaveBeenCalled());
     expect(await screen.findByRole('link', { name: TITLE_RE })).toBeInTheDocument();
+    expect(screen.queryByText(/patro|přízemí|\bz 5\b/)).toBeNull();
   });
 
   it('keeps a house\'s ground floor off the card — "přízemí" on a house is noise', async () => {
@@ -371,12 +391,12 @@ describe('<ListingCards> the storey', () => {
     expect(screen.queryByText(/přízemí/)).toBeNull();
   });
 
-  it('shows a commercial unit\'s ground floor', async () => {
+  it('tags a commercial unit\'s ground floor', async () => {
     storeyOf(0, 3);
 
     renderGrid({ floors: true, row: { ...ROW, category_main: 'komercni', disposition: null } as CardRow });
 
-    expect(await screen.findByRole('link', { name: /přízemí z 3 podlaží$/ })).toBeInTheDocument();
+    expect(await screen.findByText('přízemí z 3')).toBeInTheDocument();
   });
 });
 
@@ -928,7 +948,7 @@ describe('<ListingCards> merge mode with a multi-photo card', () => {
 });
 
 /* MS19: a card is a property. Its badge names the portals where it has an active ad
- * (or, with none active, every portal it had, marked inactive), and under one
+ * (or, with none active, every portal it had; the card itself carries the status), and under one
  * portal's "Newest first" a card whose date there is not its own first seen says so. */
 describe('<ListingCards> the title names the lot', () => {
   const title = () => screen.findByRole('link', { name: /na prodej/ });
@@ -954,17 +974,28 @@ describe('<ListingCards> the portal badge and the order date', () => {
 
   it('lists every portal with an active ad', () => {
     renderGrid({ row: { ...ROW, all_sources: ['idnes', 'sreality'], active_sources: ['idnes', 'sreality'] } });
-    expect(badge().textContent).toBe('portáliDNES Reality · Sreality');
+    expect(badge().textContent).toBe('iDNES Reality · Sreality');
   });
 
   it('lists only the live portals while one is live', () => {
     renderGrid({ row: { ...ROW, all_sources: ['bazos', 'idnes'], active_sources: ['idnes'] } });
-    expect(badge().textContent).toBe('portáliDNES Reality');
+    expect(badge().textContent).toBe('iDNES Reality');
   });
 
-  it('marks every portal inactive when no ad is live', () => {
+  it('lists every portal when no ad is live, with no status word (the card carries the status)', () => {
     renderGrid({ row: { ...ROW, is_active: false, all_sources: ['bazos', 'idnes'], active_sources: [] } });
-    expect(badge().textContent).toBe('neaktivníBazoš · iDNES Reality');
+    expect(badge().textContent).toBe('Bazoš · iDNES Reality');
+    expect(badge()).toHaveAttribute(
+      'title', 'Portály, kde nemovitost inzerovala; žádný inzerát není aktivní: Bazoš · iDNES Reality');
+  });
+
+  it('truncates a long list at its end, never its start, inside the card', () => {
+    renderGrid({ row: { ...ROW, is_active: false, all_sources: ['ceskereality', 'idnes', 'realitymix', 'sreality'], active_sources: [] } });
+    expect(badge().firstElementChild).toHaveClass('truncate', 'min-w-0');
+    expect(badge()).toHaveClass('max-w-full');
+    expect(badge().parentElement).toHaveClass('max-w-[calc(100%-0.5rem)]');
+    /* Only the portal list truncates: the lifespan run keeps its whole text. */
+    expect(screen.getByTitle(/^Neaktivní/)).not.toHaveClass('max-w-full');
   });
 
   const lifespan = () => screen.getByTitle(/^Aktivní/).textContent;

@@ -13,8 +13,8 @@
  * The footer's menu saves the draft as a new preset or writes it back into the
  * chosen one (two steps), through the preset API Browse uses. A preset is its
  * FILTERS on the phone (the feed opens every scope newest first), so an update
- * keeps the preset's stored order; the curated-set lenses, the broker and the
- * dismissed reveal never ride into one (`filtersForPreset`, rule 22). */
+ * keeps the preset's stored order. Every filter rides into it, the curated-set
+ * lenses, the broker and the dismissed reveal included (`filtersForPreset`). */
 
 import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';

@@ -64,7 +64,11 @@ settings-paced asyncio-loop pattern — matcher/outbox). It runs, as continuous 
    re-download hop) → CLIP tag via a warm-model loop (~0.5 img/s steady inflow vs
    ~10 img/s/4 vCPU capacity) → dedup dirty enqueue → matcher wake. A listing is not
    surfaced as "new" (watchdog dispatch, new-listing feeds) until its first image is
-   stored, with a timeout fallback for listings that genuinely have no photos.
+   stored, with a timeout fallback for listings that genuinely have no photos. — *superseded
+   2026-10-23 by the publication rule (rule 16, migrations 668/669, `toolkit/publication.py`): the
+   maintenance lane's pass stamps `properties.settled_at` once a property's first photo is stored
+   (or it has none) and the engine is done with its ads, and Browse, the map, stats and the
+   watchdog serve a property once it is settled or 6 h old; the image gate is deleted.*
 4. **Targeted gone-probes** for watchdog/pipeline/collection properties (the per-listing
    `ListingGoneError` → immediate inactive flip already exists) — minutes-grade delisting
    for WATCHED properties; market-wide delisting stays completeness-gated on the walks.
@@ -94,9 +98,11 @@ Postgres SKIP LOCKED is the industry-standard substrate and already proven here)
 ## SLOs (operator-accepted 2026-07-02)
 
 Google-SRE format, measured on stage watermarks (p95, warn at ~75% of target): new listing
-visible ≤ 15 min · images stored ≤ 20 min · **no publication without images** (gate above) ·
+visible ≤ 15 min (*superseded 2026-10-23 by the publication rule: a property is shown when
+published — settled, or 6 h old*) · images stored ≤ 20 min · **no publication without images** (gate above; *superseded 2026-10-23 by the publication rule*) ·
 photo-sharing cross-portal merge ≤ 60 min · delisting ≤ 6 h market-wide / ≤ 30 min watched ·
-notification ≤ 2 min after the property row exists. `published_at` (migration 266) and the
+notification ≤ 2 min after the property row exists (*superseded 2026-10-23 by the publication
+rule: a property is told when published — settled, or 6 h old*). `published_at` (migration 266) and the
 `detail_queue_completions` ledger (migration 265) are the measurement substrate; health
 checks move from fixed batch-era thresholds to cadence/SLO-scaled ones, with reds pushed
 through the existing notification outbox (*superseded: the outbox was deleted 2026-10-21; system
@@ -118,7 +124,8 @@ Wave A+B (2026-07, shipped as PRs #678–#683 + published_at/pozemek follow-ups)
 fixes real-time would amplify (cross-slice delisting flap, remax rent starvation, idnes FX
 churn, sreality hash flaps, idnes area truncation) + the measurement substrate. Wave C
 (#688–#692, shipped): the always-on worker (`scraper/realtime_worker.py`, ships dark behind
-`REALTIME_WORKER_ENABLED`) + `LedgerRateLimiter` + probe lanes + images-first gate.
+`REALTIME_WORKER_ENABLED`) + `LedgerRateLimiter` + probe lanes + images-first gate (superseded 2026-10-23 by the
+publication rule, migrations 668/669).
 
 **Waves W1–W5 (shipped 2026-07-04):**
 - **W1** (#694) — per-source drain-disable knob (`realtime_drain_disabled_sources`), the
@@ -263,18 +270,18 @@ lag, a 45 s budget and 2 000-row batches. Env knobs on the Railway service:
 **Location-refetch lane (location simplification W8, ships LIVE):** once a day
 (`LOCATION_REFETCH_INTERVAL_S`, default 86400, first tick after a
 `LOCATION_REFETCH_FIRST_DELAY_SECONDS` = 300 s delay so a redeploy loop cannot turn "daily" into
-"per restart"), queue the audit page's active "no data" listings for ONE more detail fetch.
+"per restart"), queue the active ads with no town (rule 25) for ONE more detail fetch.
 
 - **Why.** ceskereality and realitymix geocode an ad after publishing it; our detail fetch ran at
   discovery, read empty location fields, and the index card never changed, so no re-fetch was ever
   enqueued (measured 2026-09-14: 56 of 63 ceskereality and 56 of 112 realitymix rows in that bucket
   were fetched within two minutes of first sighting and never again).
-- **The audit relation IS the candidate list** — `location_pin_audit_mv` with
-  `state='unresolved'` + `quality='active_no_claims'`, joined to `listings` by PK for the live
-  `source_url` / `price_czk` / `is_active` (the matview is an hourly snapshot; a re-fetch must not
-  be aimed by a stale URL). Rows whose newest `portal_raw_pages` / `portal_raw_payloads` record is
-  younger than `LOCATION_REFETCH_MIN_AGE_S` (6 h) are skipped — re-reading a page fetched minutes
-  ago only re-reads the same empty moment.
+- **Rule 25's invariant IS the candidate list** — active `listings` LEFT JOIN `listing_location`
+  where `location_steps.town_missing_sql()` holds (not foreign, no town; no row counts), the set the
+  `location_town_coverage` check judges (until 2026-10-22: the pin-audit matview's
+  `active_no_claims` bucket, which missed kraj/okres-only ads). Rows whose newest `portal_raw_pages`
+  / `portal_raw_payloads` record is younger than `LOCATION_REFETCH_MIN_AGE_S` (6 h) are skipped —
+  re-reading a page fetched minutes ago only re-reads the same empty moment.
 - **Bounded per portal, oldest-fetched first.** `LOCATION_REFETCH_CAP_PER_SOURCE` (500) rows per
   portal per tick, so bazos's dead ads (their page answers with the category listing →
   `ListingGoneError` → delisted by the same fetch) drain over days instead of flooding one drain
@@ -284,10 +291,10 @@ lag, a 45 s budget and 2 000-row batches. Env knobs on the Railway service:
   most wants are the ones the drain gave up on; nothing else re-arms them). `claim_detail_batch`
   reserves a share of every claim for that class and never filters on `supports_complete_walk`, so
   every portal's drain — worker or Actions — serves them. Then the drain rewrites the page, the
-  `location_intake_fast` lane mines the new body within a minute, and the resolver answers.
+  archive appends it (no time floor since 2026-10-22), the `location_intake_fast` lane mines it
+  within a minute, and the resolver answers.
 - **No lease, no in-process lock.** One SELECT plus one INSERT per portal; the enqueue is idempotent
-  on `(source, native_id)` and never disturbs a claimed row. A missing `location_pin_audit_mv` (a
-  branch database) skips the tick with ONE warning per process.
+  on `(source, native_id)` and never disturbs a claimed row.
 - **A daily lane is not a dead lane.** The jobs check judges a lane late against the `interval_s`
   it wrote, only past `max(3 × interval, interval + 2 × last duration, 15 min)`, so a daily lane
   between ticks reads fine (each boot also runs one pass after the 300 s first delay); a failing
@@ -478,7 +485,15 @@ nothing else.
   attempt re-retrieved from the store's keys and guard rows, a neighbourhood and never a backlog:
   the build's backlog, rate and decision lag are the Health `dedup` check's, read from the stores;
   and the adverts whose facts the pass read, by why — claim, order, digest, decided, cluster,
-  rail — summed over its attempts)}`; an
+  rail — summed over its attempts),
+  enter_scan (E940: the scope-block walks of `public` — `walks` this pass, `pages` (the walks that
+  came back a full `ENTER_SLICE` page, so the block goes on past them: a page, never a silent
+  truncation), `page_of` (every block inside a cycle of pages, `[page, of]`, `of` null until its
+  first cycle has ended — such a block is unread to the reconcile and W8 until then), `stalled`
+  (a cycle 16 pages long without an end: the cursor is not advancing, logged), `scans_24h`/`cap`,
+  and `skipped: daily cap` + `unfinished` (every due block the pass never reached and every block
+  inside a cycle) when the cap stopped the pass; null when the pass walked
+  nothing and no block is mid-cycle)}`; an
   absent store (migrations 539/540/596/604) = `skipped: store_absent` + one warning. A change of the reconcile state is logged once, and the
   engine logs each release of a dead predecessor's lease.
 - **Latency floor.** The engine ignores rows younger than its settle lag (`SETTLE_LAG_S`, 300 s,

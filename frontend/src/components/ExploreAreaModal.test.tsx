@@ -15,6 +15,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { expectDialogContract } from '@/test/a11y';
+import { DEFAULT_FILTERS } from '@/lib/filters';
 import { ExploreAreaProvider, useExploreAreaModal } from './ExploreAreaModal';
 
 vi.mock('@/lib/queries', async (importOriginal) => ({
@@ -28,11 +29,9 @@ function Opener() {
       type="button"
       onClick={() =>
         open({
+          filters: DEFAULT_FILTERS,
           lat: 50.08,
           lng: 14.42,
-          categoryMain: 'byt',
-          categoryType: 'prodej',
-          disposition: null,
           label: 'Okoli nemovitosti',
         })
       }

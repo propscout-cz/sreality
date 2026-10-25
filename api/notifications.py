@@ -11,7 +11,9 @@ Two responsibilities:
    `notifications` lane and, until W2b, by the API's `matcher_loop` beside it. They
    write one `notification_dispatches` row per event over fixed windows (a watchdog's
    'new' over properties first seen in the last 24 h); the one identity index
-   (`EVENT_IDENTITY`, migration 653) makes every re-run idempotent.
+   (`EVENT_IDENTITY`, migration 653) makes every re-run idempotent. A watchdog tells a
+   property only once it is PUBLISHED — settled by the pipeline or 6 h old, the rule
+   Browse serves by (`toolkit/publication.py`, migrations 668/669).
 
 `WatchdogFilterSpec` is intentionally a separate model from
 `ComparableFilters`: the watchdog matcher does NOT require a target
@@ -46,6 +48,7 @@ from location_data.claims_common import served_location_predicate
 from scraper import db as scraper_db
 from toolkit.filter_compiler import PROPERTIES_GRAIN, compile_filter_where
 from toolkit.property_carriers import NOTIFICATION_EVENTS_SHARED_LOCK_SQL
+from toolkit.publication import published_property_predicate, visible_since_sql
 
 if TYPE_CHECKING:
     import psycopg
@@ -240,8 +243,8 @@ def _build_match_clauses(
 
     The matcher prepends a watermark / window clause; this helper owns
     the spec-derived part only. Spec-derived clauses come from
-    `compile_filter_where(…, PROPERTIES_GRAIN)`; only the served predicate,
-    the map box and the place chips are rendered here.
+    `compile_filter_where(…, PROPERTIES_GRAIN)`; only the served and published
+    predicates, the map box and the place chips are rendered here.
     """
     # THE CONSUMER RULE (W5, operator ruling 2026-09-13), unconditional and first.
     # Browse inherits it from `browse_projection` (migration 512); the matcher cannot,
@@ -251,7 +254,11 @@ def _build_match_clauses(
     # (`properties_public.location_listing_ref_id`, migration 636), as browse_projection
     # keys it. Without it a watchdog would fire on a listing nobody can find in Browse,
     # and "matches" would mean two different things.
-    where: list[str] = [served_location_predicate("l.location_listing_ref_id")]
+    # THE PUBLICATION RULE (rule 16, operator ruling 2026-10-23), unconditional and second,
+    # for the same reason: browse_projection carries it (migration 669), properties_public
+    # does not, so both producers render `toolkit/publication.py` here on the property.
+    where: list[str] = [served_location_predicate("l.location_listing_ref_id"),
+                        published_property_predicate("l.property_id")]
     params: dict[str, Any] = {}
 
     # The map box, on the lat/lng properties_public projects off the location ad's
@@ -303,18 +310,32 @@ def _row_to_sub(row: tuple[Any, ...], dispatch_count: int) -> SubscriptionRow:
     )
 
 
+# How far back a watchdog's 'new' looks (program § 3.3); the retraction below reads it too.
+NEW_WINDOW = "24 hours"
+
 # VISIBLE (program § 3.6): what an account sees of its alerts, ONE fragment over
 # `notification_dispatches d`, carried by every in-app read, count and update (the feed and its
-# total, the unread count, mark-all-seen, mark-seen, each watchdog's count) and by W4's push
-# fan-out. Three arms, each answering the same under RLS and on the service role:
+# total, the unread count, mark-all-seen, each watchdog's count) and by W4's push fan-out, claim,
+# badge and recall (api/push_delivery.py, by reference). REACHABLE's three arms, each answering
+# the same under RLS and on the service role:
 #   - not a marked repeat (`duplicate_of`, written by a merge since migration 653);
 #   - not about a property the EVENT'S OWN account dismissed (migration 536's active row, probed
 #     on its (property_id, account_id) index: the service role bypasses RLS, so the account is
 #     named, never left to the caller's policy);
 #   - not from a retired watchdog (a delete retires it, F21; its rows stay for analysis).
-# Detection still writes every row — the `reactivated` detector reads prior ones — so an undo
-# brings it back intact; a system_health row (property_id NULL) is never dismissed.
-VISIBLE_SQL = (
+# And not RETRACTED (operator ruling 2026-10-23, Q5): a 'new' is hidden exactly when the property
+# it now names was first seen more than NEW_WINDOW before the alert was told. No 'new' is told so
+# (the producer's window), but a merge re-points alerts to the oldest property, so a 'new' the 6 h
+# cap released for a duplicate hides itself once the engine merges it. Derived, no column: it
+# survives a split (a detach leaves alerts where they are), and a survivor first seen 6 to 24 h
+# before the alert keeps it (a known residue). The interval is a literal, so every statement
+# embedding the fragment keeps its own parameters. A retraction withdraws an alert from attention —
+# feed, badge, push — never from a direct tap: the tap path (mark_dispatch_seen, _fetch_dispatch)
+# reads REACHABLE, so a push the user was already sent opens the property the alert now names (a
+# merge survives a tap). Detection still writes every row — the `reactivated` detector reads prior
+# ones — so an undo brings it back intact; a system_health row (property_id NULL) is never
+# dismissed nor retracted.
+REACHABLE_SQL = (
     "d.duplicate_of IS NULL "
     "AND NOT EXISTS (SELECT 1 FROM property_dismissals pd "
     "WHERE pd.property_id = d.property_id AND pd.account_id = d.account_id "
@@ -322,6 +343,11 @@ VISIBLE_SQL = (
     "AND (d.subscription_id IS NULL OR EXISTS (SELECT 1 FROM notification_subscriptions ws "
     "WHERE ws.id = d.subscription_id AND ws.retired_at IS NULL))"
 )
+RETRACTED_SQL = (
+    "(d.change_kind = 'new' AND EXISTS (SELECT 1 FROM properties rp WHERE rp.id = d.property_id"
+    f" AND rp.first_seen_at <= d.dispatched_at - interval '{NEW_WINDOW}'))"
+)
+VISIBLE_SQL = f"{REACHABLE_SQL} AND NOT {RETRACTED_SQL}"
 
 
 def list_subscriptions(
@@ -630,10 +656,10 @@ _RESOLVE_DISPATCH_SQL = (
 def mark_dispatch_seen(
     conn: "psycopg.Connection", dispatch_id: str,
 ) -> dict[str, Any] | None:
-    """Mark one visible dispatch seen and return it. An id a merge later marked a duplicate
+    """Mark one reachable dispatch seen and return it. An id a merge later marked a duplicate
     resolves to the row it duplicates first, which is the one stamped and returned, so a tap on an
     old push lands on the survivor's alert; None (the route's 404) when the resolved row is missing
-    or hidden (VISIBLE_SQL)."""
+    or unreachable (REACHABLE_SQL: a retracted alert still opens)."""
     with conn.cursor() as cur:
         cur.execute(_RESOLVE_DISPATCH_SQL, (dispatch_id,))
         row = cur.fetchone()
@@ -642,7 +668,7 @@ def mark_dispatch_seen(
         target = str(row[0])
         cur.execute(
             "UPDATE notification_dispatches d SET seen_at = now() "
-            f"WHERE d.id = %s AND d.seen_at IS NULL AND {VISIBLE_SQL}",
+            f"WHERE d.id = %s AND d.seen_at IS NULL AND {REACHABLE_SQL}",
             (target,),
         )
     return _fetch_dispatch(conn, target)
@@ -654,7 +680,7 @@ def _fetch_dispatch(
     sql = (
         f"SELECT {_DISPATCH_SELECT} "
         f"{_DISPATCH_FROM}"
-        f"WHERE d.id = %s AND {VISIBLE_SQL}"
+        f"WHERE d.id = %s AND {REACHABLE_SQL}"
     )
     with conn.cursor() as cur:
         cur.execute(sql, (dispatch_id,))
@@ -683,8 +709,8 @@ def mark_all_seen(
 ) -> int:
     """Mark every visible unseen dispatch (optionally scoped to a source) as seen.
 
-    A hidden dispatch (VISIBLE_SQL: a repeat, a dismissed property's, a retired watchdog's) keeps
-    its unseen state, so a dismissal undone brings it back unread.
+    A hidden dispatch (VISIBLE_SQL: a repeat, a dismissed property's, a retired watchdog's, a
+    retracted 'new') keeps its unseen state, so a dismissal undone brings it back unread.
     """
     sql = (
         "UPDATE notification_dispatches d SET seen_at = now() "
@@ -708,10 +734,14 @@ def mark_all_seen(
 # duplicate. `event_ref` (migration 652) is the discriminator within (source, kind, property);
 # each producer's equals what 652 backfilled from the pre-W3 key on the rows written before it
 # (tests/api/test_notifications.py renders and pins both), so no event already told re-fires.
+# A watchdog's two producers tell a property only once it is PUBLISHED (`_build_match_clauses`;
+# toolkit/publication.py, migrations 668/669: settled by the pipeline, or 6 h old), as Browse
+# serves it; that rule replaced the images-first gate 'new' was held by. The collection monitor's
+# do not: a change on a property the user curated is not its first appearance.
 
-# How far back each producer looks (program § 3.3, ruling R6 (a)). A watchdog's windows also
-# start no earlier than its `active_since`, a collection's no earlier than `monitor_since`.
-NEW_WINDOW = "24 hours"
+# How far back each producer looks (program § 3.3, ruling R6 (a)); NEW_WINDOW sits above with the
+# fragment that also reads it. A watchdog tells only what became visible after its `active_since`
+# ('new') or changed after it (price); a collection no earlier than `monitor_since`.
 PRICE_WINDOW = "7 days"
 MONITOR_WINDOW = "7 days"
 # 'Delisted' only once the property has stayed gone this long (F14): the delist pipeline's
@@ -761,80 +791,6 @@ def _read_int_setting(
         return int(row[0])
     except (TypeError, ValueError):
         return default
-
-
-def _read_bool_setting(
-    conn: "psycopg.Connection", key: str, *, default: bool,
-) -> bool:
-    with conn.cursor() as cur:
-        cur.execute("SELECT value FROM app_settings WHERE key = %s", (key,))
-        row = cur.fetchone()
-    if row is None or row[0] is None:
-        return default
-    value = row[0]
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    if isinstance(value, (int, float)):
-        return bool(value)
-    return default
-
-
-# --- images-first publication gate (operator decision 2026-07-02) ----------
-#
-# Never surface a NEW listing before its first image is stored. A candidate
-# property is dispatchable only when (a) any of its listings has a stored
-# image, OR (b) it is older than the timeout (portals with slow CDNs / genuinely
-# photoless listings must not be silenced forever), OR (c) it has ZERO image
-# rows at all AND is past a short floor — image rows appear at detail write, so
-# zero rows after the floor ≈ no photos at source. The gate HOLDS a property:
-# every pass re-reads the whole 24 h window, so a held property is dispatched on
-# the first pass after its release, never lost.
-
-IMAGE_GATE_ZERO_ROWS_FLOOR_MINUTES = 5
-# A hold must end inside the 24 h window or the property would leave it unreleased: a
-# timeout past this is clamped, leaving an hour (twelve passes) to dispatch the release.
-IMAGE_GATE_TIMEOUT_CEILING_MINUTES = 23 * 60
-
-_IMAGE_GATE_SQL = (
-    "( EXISTS ("
-    "    SELECT 1 FROM listings gl"
-    "    JOIN images gi ON gi.listing_id = gl.id"
-    "    WHERE gl.property_id = l.property_id"
-    "      AND gi.storage_path IS NOT NULL"
-    "  )"
-    "  OR l.first_seen_at < now() - make_interval(mins => %(image_timeout_minutes)s)"
-    "  OR ("
-    "    l.first_seen_at < now()"
-    "      - make_interval(mins => %(image_zero_rows_floor_minutes)s)"
-    "    AND NOT EXISTS ("
-    "      SELECT 1 FROM listings gl"
-    "      JOIN images gi ON gi.listing_id = gl.id"
-    "      WHERE gl.property_id = l.property_id"
-    "    )"
-    "  )"
-    ")"
-)
-
-
-@dataclass
-class ImageGateSettings:
-    enabled: bool
-    timeout_minutes: int
-
-
-def _load_image_gate_settings(conn: "psycopg.Connection") -> ImageGateSettings:
-    enabled = _read_bool_setting(
-        conn, "notifications_new_requires_image", default=True,
-    )
-    timeout = _read_int_setting(
-        conn, "notifications_new_requires_image_timeout_minutes", default=30,
-    )
-    return ImageGateSettings(
-        enabled=enabled,
-        timeout_minutes=min(max(1, timeout), IMAGE_GATE_TIMEOUT_CEILING_MINUTES),
-    )
 
 
 # The watchdogs a producer serves: switched on and not retired (migration 652; deleting a
@@ -904,29 +860,26 @@ _WATCHDOG_NEW_SQL = (
 
 
 def match_once(conn: "psycopg.Connection") -> dict[str, int]:
-    """Step watchdog_new: one 'new' dispatch per (live watchdog, matching property first
-    seen inside the last 24 h and after the watchdog last started).
+    """Step watchdog_new: one 'new' dispatch per (live watchdog, matching published property
+    first seen inside the last 24 h that became visible after the watchdog last started).
 
-    ONE INSERT per watchdog over a fixed window, `first_seen_at > greatest(now() − 24 h,
-    active_since)` (F1): a property whose match facts arrive late (its location resolves
-    an hour on) still fires while it is under a day old, and a watchdog created, switched
-    back on or given a new filter (each restamps `active_since`, migration 652) alerts only
-    on what appears afterwards, never a backfill (R6 (a)). The identity (watchdog, 'new',
+    ONE INSERT per watchdog over a fixed window, `first_seen_at > now() − 24 h` and
+    `visible_since > active_since` (F1; `toolkit/publication.py`): a property whose match facts
+    arrive late (its location resolves an hour on) still fires while it is under a day old, and
+    a watchdog created, switched back on or given a new filter (each restamps `active_since`,
+    migration 652) alerts only on what becomes VISIBLE afterwards, never a backfill (R6 (a)).
+    Keyed on visibility, not first seen (the publication gate's critique, 2026-10-23): a property
+    first seen up to 6 h before a watchdog starts and published after it is still told. One not
+    yet published (`_build_match_clauses`) is HELD and told by the first pass after it is; the
+    6 h cap ends every hold inside the 24 h window, so none is lost. The identity (watchdog, 'new',
     property; no event_ref) is once ever and the only idempotence — no cursor, no lookback.
-
-    Images-first gate (`notifications_new_requires_image`, default on): the INSERT also
-    requires `_IMAGE_GATE_SQL`, so a brand-new property with pending image downloads is
-    HELD and dispatched by the first pass after its images land or its timeout expires.
     """
-    gate = _load_image_gate_settings(conn)
     extra_where = [
-        "l.first_seen_at > greatest(now() - %(new_window)s::interval, %(active_since)s)",
+        "l.first_seen_at > now() - %(new_window)s::interval",
+        "EXISTS (SELECT 1 FROM properties pp WHERE pp.id = l.property_id AND "
+        + visible_since_sql("pp") + " > %(active_since)s)",
     ]
     params: dict[str, Any] = {"new_window": NEW_WINDOW}
-    if gate.enabled:
-        extra_where.append(_IMAGE_GATE_SQL)
-        params["image_timeout_minutes"] = gate.timeout_minutes
-        params["image_zero_rows_floor_minutes"] = IMAGE_GATE_ZERO_ROWS_FLOOR_MINUTES
 
     subs = _live_watchdogs(conn)
     tally = _Tally(evaluated=len(subs))

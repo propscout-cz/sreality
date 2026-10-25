@@ -17,6 +17,7 @@ from api import dependencies as deps
 from api import main as api_main
 from api.routes import location_quality as routes
 from location_data import operator_corrections as oc
+from location_data.claims_common import SOURCES
 from toolkit import location_quality
 
 
@@ -82,6 +83,17 @@ def test_source_overview_passes_through(admin_client, monkeypatch):
     res = admin_client.get("/location/quality/source/bezrealitky")
     assert res.status_code == 200
     assert res.json()["data"]["source"] == "bezrealitky"
+
+
+@pytest.mark.parametrize("source", SOURCES)
+def test_every_location_source_is_accepted(admin_client, monkeypatch, source):
+    """The picker offers `claims_common.SOURCES` (the tenth portal, `web`, included)."""
+    monkeypatch.setattr(
+        location_quality, "source_overview",
+        lambda conn, source: {"data": {"source": source}, "metadata": {}},
+    )
+    res = admin_client.get(f"/location/quality/source/{source}")
+    assert res.status_code == 200 and res.json()["data"]["source"] == source
 
 
 def test_the_deleted_route_families_are_gone(admin_client):

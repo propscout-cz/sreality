@@ -31,7 +31,7 @@ import re
 from pathlib import Path
 
 from tests._admin_gate_shape import gate_is_sound
-from tests._tenant_registry import TENANT_TABLES
+from tests._tenant_registry import RENAMED_TENANT_TABLES, TENANT_TABLES
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 # Phase 0 (299) is the baseline: it establishes the posture this gate protects.
@@ -223,7 +223,8 @@ def _offending_write_grants(sql: str) -> list[str]:
         if "authenticated" in roles:
             # allowed only on the tenant registry (and only when EVERY target is
             # a registry table — a mixed grant is rejected to force an explicit split)
-            if not objs or any(o not in TENANT_TABLES for o in objs):
+            if not objs or any(o not in TENANT_TABLES and o not in RENAMED_TENANT_TABLES
+                               for o in objs):
                 out.append(f"WRITE to authenticated on non-tenant table: {collapsed}")
     return out
 
@@ -626,8 +627,8 @@ _SHARE_POLICY_PIN: dict[str, tuple[str, str, frozenset[str]]] = {
     "collection_properties_shared_read": (
         "collection_properties", "select", frozenset({"authenticated"})),
     "property_notes_shared_read": ("property_notes", "select", frozenset({"authenticated"})),
-    "property_note_attachments_shared_read": (
-        "property_note_attachments", "select", frozenset({"authenticated"})),
+    "property_attachments_shared_read": (
+        "property_attachments", "select", frozenset({"authenticated"})),
 }
 
 
@@ -702,7 +703,7 @@ _ACTING_POLICIES: dict[str, str] = {
     "property_notes_tenant_rw": "property_notes",
     "collection_properties_tenant_rw": "collection_properties",
     "property_tags_tenant_rw": "property_tags",
-    "property_note_attachments_tenant_rw": "property_note_attachments",
+    "property_attachments_tenant_rw": "property_attachments",
     "property_artifact_links_tenant_rw": "property_artifact_links",
     "property_dismissals_tenant_rw": "property_dismissals",
     "property_pipeline_tenant_rw": "property_pipeline",

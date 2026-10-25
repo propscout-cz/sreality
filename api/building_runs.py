@@ -575,8 +575,8 @@ def update_building_inputs(
 def _fetch_attachments(
     conn: "psycopg.Connection", building_id: int,
 ) -> list[dict[str, Any]]:
-    from api.attachments import list_attachments
-    return list_attachments(conn, building_id)
+    from api.attachments import list_building_attachments
+    return list_building_attachments(conn, building_id)
 
 
 def assert_editable_for_attachments(

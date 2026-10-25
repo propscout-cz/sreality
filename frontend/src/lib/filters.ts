@@ -273,20 +273,20 @@ export interface ListingFilters {
   withEstimates: boolean;
   /* Browse-only. False (the default) hides the caller's dismissed properties,
    * server-side (migration 537); true reveals them. A lens over the operator's
-   * own state, so it sits OUTSIDE preset identity (PRESET_EXCLUDED_KEYS). */
+   * own state: a preset keeps it, a dashboard does not (DASHBOARD_EXCLUDED_KEYS). */
   showDismissed: boolean;
   /* Browse-only deal-pipeline scope (rule #22, lib/setScope; elements = stage
-   * ids). Null = off. A lens over the operator's own state, so it sits OUTSIDE
-   * a saved preset's identity (PRESET_EXCLUDED_KEYS), like tags + collections. */
+   * ids). Null = off. A lens over the operator's own state, like tags +
+   * collections: a preset keeps it, a dashboard does not (DASHBOARD_EXCLUDED_KEYS). */
   pipeline: SetScope | null;
   /* Browse-only broker scope ("Explore this broker's listings"). Null = off.
-   * Deliberately NOT part of a saved preset's identity (PRESET_EXCLUDED_KEYS),
+   * A preset keeps it, a dashboard does not (DASHBOARD_EXCLUDED_KEYS); it is
    * NOT in toolkit/filter_registry.py (must stay invisible to the agent /
    * comparables / estimation agendas). Set by the explore-broker modal's seed,
    * a `?broker=` URL param, or the sidebar's Advanced → Broker search
    * (filter-controls/BrokerFilterControl). A property-id allowlist (MS19): the
-   * properties where one of this broker's ads matches the portal and status
-   * filters, so one ad satisfies both (queries.ts:adScope). */
+   * properties where one of this broker's ads is on the portals in the status
+   * switch's status, so one ad satisfies both (queries.ts:adPortals). */
   brokerId: number | null;
   /* Operator tags (migration 025, lib/setScope): the in side needs EVERY element
    * (AND). Ids, not names, so renames stay queryable. Null = off; a lens. */
@@ -1083,40 +1083,38 @@ export const pipelineViewFilters = (): ListingFilters => ({
   pipeline: { set: 'in', in: [], out: [] },
 });
 
-/* Filter fields that ride ALONGSIDE a preset rather than inside it: they are
- * reset before persisting and ignored when deciding whether a loaded preset is
- * dirty. A preset describes MARKET CRITERIA ("2+kk, 60–90 m², Praha"); the
- * curated sets (tags, collections, pipeline), the broker and the dismissed
- * reveal are lenses over the operator's own state, orthogonal to every preset
- * and combinable with all of them — so toggling one must never offer to bake
- * itself into the saved filters. A preset click resets every one of them and
- * applies what the preset stores (operator ruling 2026-10-19).
- *
- * `bounds` is deliberately NOT here: it is opt-in per save (the "include map
- * area" toggle), which is a different rule, expressed below. */
-const PRESET_EXCLUDED_KEYS = [
+/* A preset keeps EVERY filter, the lenses included — the curated sets (tags,
+ * collections, pipeline), the broker and the dismissed reveal: they are in what
+ * it stores and in its dirty comparison, and a preset click applies them
+ * (operator ruling 2026-10-22, reversing 2026-10-19; a preset saved before
+ * stored them off, so it turns them off). A saved Stats DASHBOARD leaves them
+ * out: it can be shared (migration 647), and they are lenses over the owner's
+ * own state — tag, collection and stage ids, dismissals — that mean nothing in
+ * a recipient's account. Reset before persisting, ignored when deciding whether
+ * a loaded dashboard is dirty. */
+const DASHBOARD_EXCLUDED_KEYS = [
   'tags', 'collections', 'pipeline', 'brokerId', 'showDismissed',
 ] as const satisfies ReadonlyArray<keyof ListingFilters>;
 
-const stripPresetExcluded = (f: ListingFilters): ListingFilters => {
+const stripDashboardExcluded = (f: ListingFilters): ListingFilters => {
   const out = { ...f };
-  for (const k of PRESET_EXCLUDED_KEYS) {
+  for (const k of DASHBOARD_EXCLUDED_KEYS) {
     (out as Record<string, unknown>)[k] = DEFAULT_FILTERS[k];
   }
   return out;
 };
 
-/** Build the spec to persist. The transient map viewport (`bounds`) is
- *  dropped unless the operator opts to include the current map area, so a
- *  criteria-only preset doesn't pin a stale bounding box; the
- *  PRESET_EXCLUDED_KEYS lenses are always dropped. */
+/** A preset's filters to persist: every filter, the transient map viewport
+ *  (`bounds`) only while the operator keeps the current map area ticked, so a
+ *  criteria-only preset doesn't pin a stale bounding box. */
 export const filtersForPreset = (
   f: ListingFilters,
   includeMapArea: boolean,
-): ListingFilters => {
-  const base = stripPresetExcluded(f);
-  return includeMapArea ? base : { ...base, bounds: null };
-};
+): ListingFilters => (includeMapArea ? f : { ...f, bounds: null });
+
+/** A dashboard's filters to persist: never the map viewport, never a lens. */
+export const filtersForDashboard = (f: ListingFilters): ListingFilters =>
+  stripDashboardExcluded(filtersForPreset(f, false));
 
 /* Merge a stored (possibly stale-typed) filter blob onto DEFAULT_FILTERS,
  * dropping any field whose CARDINALITY drifted since it was saved — e.g. a
@@ -1191,6 +1189,12 @@ export const readPresetSpec = (
   return { filters: coerceStoredFilters(filters), sort: sortToParam(parseSort(sort)) };
 };
 
+/* The area a saved filter puts in the map frame when it is loaded: the box it
+ * filters on (effectiveBbox — a saved map area, or the square around a saved
+ * centre+radius); null when it saved no area, and the camera stays put. */
+export const savedMapArea = (spec: PresetSpec | ListingFilters): MapBounds | null =>
+  effectiveBbox(readPresetSpec(spec).filters);
+
 const canonicalParams = (sp: URLSearchParams): string =>
   [...sp.entries()]
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
@@ -1206,14 +1210,22 @@ export const filtersEqualForPreset = (
   current: ListingFilters,
   saved: ListingFilters,
 ): boolean => {
-  // The lenses sit outside preset identity: switching one on must not light up
-  // "Update preset", and a preset saved before they existed must not read as
-  // dirty the moment one is toggled.
-  const a = toSearchParams(stripPresetExcluded({ ...DEFAULT_FILTERS, ...current }));
-  const b = toSearchParams(stripPresetExcluded({ ...DEFAULT_FILTERS, ...saved }));
+  const a = toSearchParams({ ...DEFAULT_FILTERS, ...current });
+  const b = toSearchParams({ ...DEFAULT_FILTERS, ...saved });
   if (!b.has('bbox')) a.delete('bbox');
   return canonicalParams(a) === canonicalParams(b);
 };
+
+/** The dashboard's twin: the lenses sit outside a dashboard's identity, so
+ *  switching one on never lights up "Uložit změny". */
+export const filtersEqualForDashboard = (
+  current: ListingFilters,
+  saved: ListingFilters,
+): boolean =>
+  filtersEqualForPreset(
+    stripDashboardExcluded({ ...DEFAULT_FILTERS, ...current }),
+    stripDashboardExcluded({ ...DEFAULT_FILTERS, ...saved }),
+  );
 
 
 /* -------------------------------------------------------------------------- */

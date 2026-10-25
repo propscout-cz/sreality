@@ -28,7 +28,8 @@ TENANT_TABLES: tuple[str, ...] = (
     "property_pipeline_events",
     "entitlements",
     "property_dismissals",
-    "property_note_attachments",
+    # Migration 660: a property's files (592's property_note_attachments, renamed).
+    "property_attachments",
     "property_artifact_links",
     # Migration 610: owner-stamped by trigger; browser roles SELECT + DELETE, never INSERT.
     "collection_shares",
@@ -42,3 +43,9 @@ TENANT_TABLES: tuple[str, ...] = (
     # Migration 647: account_id = the owner, stamped from the dashboard; browser roles SELECT + DELETE.
     "stats_dashboard_shares",
 )
+
+# A tenant table's earlier name, which older migrations still grant on (592) and which may survive as
+# a compatibility view (660's, until its drop). Not a table: the live checks read TENANT_TABLES alone.
+RENAMED_TENANT_TABLES: dict[str, str] = {
+    "property_note_attachments": "property_attachments",
+}

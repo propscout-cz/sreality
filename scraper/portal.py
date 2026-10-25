@@ -452,7 +452,7 @@ _DEFAULTS: dict[str, PortalConfig] = {
         # so ads filed there were never enqueued — silently, for months). The fine
         # sections collapse onto one category_main (chata+dum, the four commercial,
         # pozemek+zahrada, garaz+ostatni), so the presence nomination is
-        # subtype-scoped (BazosPortal.presence_candidates). Mirrors the DB registry.
+        # subtype-scoped (BazosPortal.presence_scope). Mirrors the DB registry.
         # Still out by choice: "projekty" (Nové projekty — developer marketing that
         # also appears under byt/dum; no other portal has such a category) and the
         # rent-only "podnajem"/"ubytovani" (roommate + short-term lodging ads, not
@@ -536,7 +536,7 @@ _DEFAULTS: dict[str, PortalConfig] = {
         # (cached) and keeps the id-prefix slice for its category. Complete-walk
         # via AGENDA-GRAIN delisting: maxima reports a per-AGENDA total, so the
         # walk nominates the whole agenda's (af ≡ category_type) unseen rows once it
-        # reaches the agenda's end (db.presence_candidates, category_main=None),
+        # reaches the agenda's end (its presence_scope names category_type alone),
         # not the per-(cm,ct) slice. See maxima_main.
         supports_complete_walk=True,
         categories=[
@@ -564,8 +564,8 @@ _DEFAULTS: dict[str, PortalConfig] = {
         # title-derived slice for its category. Complete-walk via AGENDA-GRAIN
         # delisting: remax reports a per-AGENDA total, so the walk nominates the whole
         # agenda's (sale ≡ category_type) unseen rows once it reaches the agenda's end
-        # (db.presence_candidates, category_main=None), not the title-derived per-(cm,ct) slice. See
-        # remax_main.
+        # (its presence_scope names category_type alone), not the title-derived
+        # per-(cm,ct) slice. See remax_main.
         supports_complete_walk=True,
         categories=[
             {"category_main": "byt",      "category_type": "prodej",   "sale": 1},
@@ -632,8 +632,6 @@ _DEFAULTS: dict[str, PortalConfig] = {
             {"sale_type": "pronajem", "category": "byty"},
             {"sale_type": "prodej",   "category": "rodinne-domy"},
             {"sale_type": "pronajem", "category": "rodinne-domy"},
-            {"sale_type": "prodej",   "category": "chaty-chalupy"},
-            {"sale_type": "pronajem", "category": "chaty-chalupy"},
             {"sale_type": "prodej",   "category": "pozemky"},
             {"sale_type": "pronajem", "category": "pozemky"},
             {"sale_type": "prodej",   "category": "komercni-prostory"},
@@ -678,6 +676,24 @@ _DEFAULTS: dict[str, PortalConfig] = {
         limits=PortalLimits(
             index_rate=1.0, detail_workers=4, detail_rate=1.5,
             max_detail_per_run=2000,
+        ),
+    ),
+    "web": PortalConfig(
+        source="web",
+        # The tenth portal: any site an operator pastes (scraper.web_main). It has no
+        # index, so ONE agenda-wide descriptor stands for the whole portal: the walk sees
+        # nothing by construction, reaches its end (declared total 0: coverage reads
+        # `complete`) and, its descriptor having no scope, nominates every active ad as
+        # an orphan (the `indexless` seam, rule 3).
+        supports_complete_walk=True,
+        categories=[{"agenda": "all"}],
+        split_threshold=None,
+        # shared_rate_limiter: the drain's deadline binds inside a chunk only through the
+        # ledger, and a foreign site must never hold the worker's drain lane past it. Two
+        # workers; the per-HOST pacing (one page load per 10 s) lives in web_client.
+        limits=PortalLimits(
+            index_rate=1.0, detail_workers=2, detail_rate=1.0,
+            shared_rate_limiter=True,
         ),
     ),
 }

@@ -25,8 +25,9 @@ export interface SavedSetSaveModalProps {
   mode: keyof SaveModalWords['dialog'];
   /* The set being updated or edited; null on a save. */
   initial: { name: string; color: TagColor | null } | null;
-  /* The one checkbox this flow offers, with its starting state; null = none. */
-  checkbox: { label: string; initial: boolean } | null;
+  /* The one checkbox this flow offers, with its starting state; null = none. A
+   * `disabledHint` greys it out, unticked, and says why under it. */
+  checkbox: { label: string; initial: boolean; disabledHint?: string | null } | null;
   /* The write: the dialog stays open and busy until it settles, and says why it failed. */
   onSubmit: (name: string, checked: boolean, color: TagColor | null) => Promise<unknown>;
   onClose: () => void;
@@ -34,7 +35,8 @@ export interface SavedSetSaveModalProps {
 
 export default function SavedSetSaveModal({ words, mode, initial, checkbox, onSubmit, onClose }: SavedSetSaveModalProps) {
   const [name, setName] = useState(initial?.name ?? '');
-  const [checked, setChecked] = useState(checkbox?.initial ?? false);
+  const off = checkbox?.disabledHint ?? null;
+  const [checked, setChecked] = useState(off == null && (checkbox?.initial ?? false));
   const [color, setColor] = useState<TagColor | null>(initial?.color ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -54,7 +56,7 @@ export default function SavedSetSaveModal({ words, mode, initial, checkbox, onSu
     setBusy(true);
     setError(null);
     try {
-      await onSubmit(trimmed, checkbox != null && checked, color);
+      await onSubmit(trimmed, checkbox != null && off == null && checked, color);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : words.failed);
     } finally {
@@ -94,11 +96,14 @@ export default function SavedSetSaveModal({ words, mode, initial, checkbox, onSu
       </div>
 
       {checkbox ? (
+        <>
         <button
           type="button"
           onClick={() => setChecked((v) => !v)}
           aria-pressed={checked}
-          className="mt-3 flex w-full items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-3 py-2 text-left transition-colors hover:border-[var(--color-rule-strong)]"
+          disabled={off != null}
+          aria-describedby={off != null ? `${titleId}-off` : undefined}
+          className="mt-3 flex w-full items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-3 py-2 text-left transition-colors hover:border-[var(--color-rule-strong)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-[var(--color-rule)]"
         >
           <span
             className={[
@@ -113,6 +118,12 @@ export default function SavedSetSaveModal({ words, mode, initial, checkbox, onSu
           </span>
           <span className="text-[0.8rem] text-[var(--color-ink-2)]">{checkbox.label}</span>
         </button>
+        {off != null ? (
+          <p id={`${titleId}-off`} className="mt-1.5 text-[0.75rem] text-[var(--color-ink-3)]">
+            {off}
+          </p>
+        ) : null}
+        </>
       ) : null}
 
       {error ? <p className="mt-3 text-[0.8rem] text-[var(--color-brick)]">{error}</p> : null}

@@ -3,18 +3,25 @@
  * named chart set, optionally with the Browse filter it was saved over (the
  * preset blob). Loading one COPIES it into the working board — StatsDashboard's
  * one board write, `onLoadCharts` — then writes the URL (browseState.
- * loadDashboard); it changes only on "Uložit změny". A dashboard shared WITH the
- * account is read-only: Načíst, Uložit jako vlastní, Přestat sledovat. */
+ * loadDashboard); it changes only on "Uložit změny". An own dashboard can be
+ * duplicated as stored ("Duplikovat": a new row, "<name> (kopie)"). A dashboard
+ * shared WITH the account is read-only: Načíst, Uložit jako vlastní, Přestat sledovat.
+ * ONE own dashboard, under any name, is the property page's "Okolí dashboard"
+ * (migration 664, lib/neighbourhood): its chip says so, it carries no filter (the
+ * save dialog greys the box out), any other own dashboard's menu can make it so
+ * ("Použít jako okolí dashboard"), and while the account has none the bar offers to
+ * create it from the working board. */
 
 import { useEffect, useId, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import type { BrowseViewState } from '@/lib/browseState';
-import { filtersEqualForPreset, filtersForPreset, readPresetSpec, type PresetSpec } from '@/lib/filters';
+import { filtersEqualForDashboard, filtersForDashboard, readPresetSpec, type PresetSpec } from '@/lib/filters';
 import { DEFAULT_SORT, sortToParam } from '@/lib/queries';
 import {
   chartsEqual, createStatsDashboard, deleteStatsDashboard, listStatsDashboards, reorderStatsDashboards, sanitizeCharts,
-  shareStatsDashboard, statsDashboardKeys, unshareStatsDashboard, updateStatsDashboard, type ChartSpec, type DashboardList,
+  setPropertyCardDashboard, shareStatsDashboard, statsDashboardKeys, unshareStatsDashboard, updateStatsDashboard,
+  type ChartSpec, type DashboardList,
 } from '@/lib/stats';
 import type { SavedDashboard } from '@/lib/types';
 import { pushToast } from '@/lib/toast';
@@ -22,6 +29,7 @@ import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import Dialog, { DialogClose } from '@/components/Dialog';
 import SavedSetBar, { useSavedSet, type SavedSetCopy, type SavedSetMenuItem } from '@/components/SavedSetBar';
 import ShareBlock from '@/components/ShareBlock';
+import { PROPERTY_CARD_LABEL, isPropertyCard } from '@/lib/neighbourhood';
 
 export type DashboardView = Pick<
   BrowseViewState,
@@ -61,6 +69,11 @@ const isOwn = (d: SavedDashboard): boolean => d.owner_email == null;
 /* A failed dashboard write, said in the Stats tab's words (StatsDashboard's
  * "Grafy se nepodařilo uložit: …"); declaring it silences the global toast. */
 const toastOnError = (what: string) => (err: Error) => pushToast('err', `${what}: ${err.message}`);
+
+/* The copy's name, within the API's 200 characters (api/schemas.py). */
+const COPY_SUFFIX = ' (kopie)';
+const NAME_MAX = 200;
+export const copyName = (name: string): string => `${name.slice(0, NAME_MAX - COPY_SUFFIX.length)}${COPY_SUFFIX}`;
 
 /* The dashboard this browser tab last loaded (a click, an arrival, a save). The
  * URL's `dashboard` asks for a load only when it names ANOTHER one. A tab switch,
@@ -127,12 +140,12 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
     if (!chartsEqual(working, sanitizeCharts(active.charts))) return true;
     if (active.filter_spec == null) return false;
     const spec = readPresetSpec(active.filter_spec);
-    return !filtersEqualForPreset(filters, spec.filters) || (spec.sort ?? sortToParam(DEFAULT_SORT)) !== sortParam;
+    return !filtersEqualForDashboard(filters, spec.filters) || (spec.sort ?? sortToParam(DEFAULT_SORT)) !== sortParam;
   }, [active, loadingBoard, working, filters, sortParam]);
 
-  /* A dashboard's filter is the preset blob, captured as a preset save captures
-   * it — never the map viewport. */
-  const currentSpec = (): PresetSpec => ({ filters: filtersForPreset(filters, false), sort: sortParam });
+  /* A dashboard's filter is the preset blob, captured without the map viewport
+   * and without the lenses (it can be shared; filters.DASHBOARD_EXCLUDED_KEYS). */
+  const currentSpec = (): PresetSpec => ({ filters: filtersForDashboard(filters), sort: sortParam });
   const adopt = (saved: SavedDashboard) => qc.setQueryData(listKey, withRow(saved.id, (d) => ({ ...d, ...saved })));
 
   /* ONE load: the stored charts into the working board, then the URL. */
@@ -176,6 +189,29 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
     revalidate: (_vars, refused) => (refused ? [listKey] : []),
     onSuccess: adopt,
     onError: toastOnError('Dashboard se nepodařilo uložit'),
+  });
+
+  /* The property card moves: this row takes it and drops its filter, the previous one lets go. */
+  const makeCard = useOptimisticWrite<string, SavedDashboard>({
+    mutationKey: ['write', 'stats-dashboards', 'property-card'],
+    mutationFn: setPropertyCardDashboard,
+    patch: (id) => [
+      cachePatch<DashboardList>({ queryKey: listKey, exact: true }, (prev) =>
+        prev && {
+          ...prev,
+          data: prev.data.map((d) =>
+            d.id === id
+              ? { ...d, property_card: true, filter_spec: null }
+              : isOwn(d) && d.property_card
+                ? { ...d, property_card: false }
+                : d,
+          ),
+        },
+      ),
+    ],
+    revalidate: (_id, failed) => (failed ? [listKey] : []),
+    onSuccess: adopt,
+    onError: toastOnError('Okolí dashboard se nepodařilo nastavit'),
   });
 
   /* Off the caller's list: the owner deletes it; a recipient leaves with its own
@@ -225,8 +261,33 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
       });
   };
 
+  /* An own dashboard copied AS STORED (the working board is "Uložit jako dashboard"'s
+   * business): a new row under "<name> (kopie)", joining the list; the active
+   * dashboard stays active. */
+  const duplicate = (d: SavedDashboard) =>
+    create.mutateAsync({
+      name: copyName(d.name),
+      charts: sanitizeCharts(d.charts),
+      filter_spec: d.filter_spec ?? undefined,
+      color: d.color,
+    });
+
   const chipMenu = (d: SavedDashboard): SavedSetMenuItem[] => {
-    if (isOwn(d)) return [{ label: 'Sdílet…', onSelect: () => setSharingId(d.id) }];
+    if (isOwn(d)) {
+      const asCard: SavedSetMenuItem[] = isPropertyCard(d)
+        ? []
+        : [{
+            label: 'Použít jako okolí dashboard',
+            onSelect: () => makeCard.mutateAsync(d.id),
+            // A property card carries no filter: one stored here goes, so say it first.
+            ...(d.filter_spec != null ? { confirm: { label: 'Použít a odebrat jeho filtr', busy: 'Ukládám…' } } : {}),
+          }];
+      return [
+        { label: 'Duplikovat', onSelect: () => duplicate(d) },
+        { label: 'Sdílet…', onSelect: () => setSharingId(d.id) },
+        ...asCard,
+      ];
+    }
     const leave = { label: 'Přestat sledovat', confirm: { label: 'Opravdu přestat sledovat', busy: 'Odcházím…' } };
     return [
       { label: 'Načíst', onSelect: () => load(d) },
@@ -237,6 +298,23 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
 
   if (!enabled) return null;
   const sharing = items.find((d) => d.id === sharingId);
+  const card = items.find(isPropertyCard);
+  const createCard =
+    query.isSuccess && card == null ? (
+      <button
+        type="button"
+        onClick={() =>
+          void create
+            .mutateAsync({ name: PROPERTY_CARD_LABEL, charts: working })
+            .then((created) => makeCard.mutateAsync(created.id).then(() => activate(created.id)))
+        }
+        disabled={create.isPending || makeCard.isPending}
+        title="Uloží současné grafy jako dashboard, který se ukáže na kartě Okolí dashboard u každé nemovitosti"
+        className="inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-dashed border-[var(--color-rule-strong)] px-2.5 py-1 text-[0.8rem] text-[var(--color-ink-2)] hover:border-[var(--color-copper)] hover:text-[var(--color-copper)] disabled:opacity-50 transition-colors"
+      >
+        + {PROPERTY_CARD_LABEL}
+      </button>
+    ) : null;
 
   return (
     <>
@@ -245,8 +323,9 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
         activeId={activeDashboardId}
         dirty={dirty}
         copy={COPY}
-        suffix={(d) => d.owner_email}
+        suffix={(d) => d.owner_email ?? (isPropertyCard(d) ? 'okolí dashboard' : null)}
         chipMenu={chipMenu}
+        leading={createCard}
         onLoad={load}
         onSaveNew={(name, withFilter, color) =>
           create
@@ -263,6 +342,10 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
         checkbox={{
           label: 'Uložit i nastavení filtru',
           initial: (d) => d != null && d.filter_spec != null,
+          disabled: (d) =>
+            d != null && isPropertyCard(d)
+              ? 'Okolí dashboard filtr nenese: na kartě nemovitosti se filtruje podle té nemovitosti.'
+              : null,
         }}
       />
       {/* "Sdílet…": the one ShareBlock (read-only shares, no modes) in a small dialog. */}

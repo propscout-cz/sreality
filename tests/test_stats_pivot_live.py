@@ -118,7 +118,7 @@ def _register(cur: Any) -> None:
 
 
 def _pivot(cur: Any, pids: list[int], spec: Any, **args: Any) -> dict[str, Any]:
-    """`args`: further cohort parameters by name (portal_filter, inactive_only_filter, ...)."""
+    """`args`: further cohort parameters by name (portal_filter, status_filter, ...)."""
     extra = "".join(f", {k} => %({k})s" for k in args)
     cur.execute(
         "select public.browse_stats_properties(property_ids_filter => %(pids)s::bigint[], "
@@ -228,26 +228,24 @@ def test_more_than_one_category_is_refused(cur, other: dict[str, Any]) -> None:
     assert None in (out["category_main"], out["category_type"])
 
 
-def test_the_status_fact_follows_the_cohorts_own_portal_rule(cur) -> None:
-    """Migration 631. 'Inactive on sreality' admits a property still live on bezrealitky (597: the portal
-    rule judges the selected portals' ads). The pivot judges that row the same way, so the cohort reads
-    inactive and turnover draws -- over the five closed runs: the row whose property still runs has no
-    measured run on sreality and is set aside as excluded (ruling 3), while a price chart keeps it.
-    Without a portal filter the same property is simply active."""
+def test_the_status_fact_is_the_propertys_under_a_portal_filter(cur) -> None:
+    """Migration 657: the status is the property's on every surface. A property whose sreality ad
+    ended but which is still live on bezrealitky is NOT in "Neaktivní on sreality" (it is live), so
+    that cohort reads inactive and turnover draws over the five closed runs with nothing set aside;
+    "any status on sreality" keeps it as the live row it is, and turnover refuses the mix."""
     gone = [_add(cur, active=False, tom=100 + i) for i in range(5)]
     elsewhere = _add(cur, active=True, tom=50, sources=["sreality", "bezrealitky"], active_sources=["bezrealitky"])
     cohort = gone + [elsewhere]
-    lens = _pivot(cur, cohort, {"rows": [], "cols": [], "measure": "tom_days"},
-                  portal_filter=["sreality"], inactive_only_filter=True)
-    assert (lens["filtered"], lens["sample"], lens["excluded"], lens["status"], lens["refused"]) == (6, 5, 1, "inactive", None)
-    assert lens["cells"][0]["n"] == 5 and lens["cells"][0]["median"] == 102
-    price = _pivot(cur, cohort, {"rows": [], "cols": [], "measure": "price"},
-                   portal_filter=["sreality"], inactive_only_filter=True)
-    assert (price["sample"], price["excluded"], price["status"]) == (6, 0, "inactive")
-    plain = _pivot(cur, cohort, {"rows": [], "cols": [], "measure": "tom_days"}, inactive_only_filter=True)
-    assert (plain["filtered"], plain["status"], plain["refused"]) == (5, "inactive", None)
-    both = _pivot(cur, cohort, {"rows": [], "cols": [], "measure": "tom_days"})
-    assert (both["filtered"], both["status"], both["refused"]) == (6, "mixed", "mixed_status")
+    inactive = _pivot(cur, cohort, {"rows": [], "cols": [], "measure": "tom_days"},
+                      portal_filter=["sreality"], status_filter="inactive")
+    assert (inactive["filtered"], inactive["sample"], inactive["excluded"], inactive["status"],
+            inactive["refused"]) == (5, 5, 0, "inactive", None)
+    assert inactive["cells"][0]["n"] == 5 and inactive["cells"][0]["median"] == 102
+    active = _pivot(cur, cohort, {"rows": [], "cols": [], "measure": "price"},
+                    portal_filter=["sreality"], status_filter="active")
+    assert (active["filtered"], active["refused"]) == (0, "empty")
+    any_status = _pivot(cur, cohort, {"rows": [], "cols": [], "measure": "tom_days"}, portal_filter=["sreality"])
+    assert (any_status["filtered"], any_status["status"], any_status["refused"]) == (6, "mixed", "mixed_status")
 
 
 def test_turnover_needs_one_status_and_price_does_not(cur) -> None:

@@ -33,10 +33,10 @@ vi.mock('@/lib/toast', async (importOriginal) => ({
   pushToast: vi.fn(),
 }));
 
-const renderBoard = () =>
+const renderBoard = (market?: { value: stats.StatsMarket; set: (m: stats.StatsMarket) => void }) =>
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <StatsDashboard filters={DEFAULT_FILTERS} />
+      <StatsDashboard filters={DEFAULT_FILTERS} market={market} />
     </QueryClientProvider>,
   );
 
@@ -134,5 +134,41 @@ describe('<StatsDashboard>', () => {
     expect(await screen.findByText(/relation does not exist/)).toBeInTheDocument();
     expect(screen.queryByRole('heading', { level: 3 })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Přidat graf' })).toBeNull();
+  });
+
+  it('offers the sample lens and counts every chart over the sold market when it is on', async () => {
+    vi.mocked(stats.fetchStatsPivot).mockClear();
+    const set = vi.fn();
+    renderBoard({ value: 'sold', set });
+    await screen.findAllByRole('heading', { level: 3 });
+    const lens = screen.getByRole('group', { name: 'Vzorek' });
+    expect(within(lens).getAllByRole('button').map((b) => b.textContent)).toEqual(['Jako ve filtru', 'Prodáno (trh)', 'Vše']);
+    await waitFor(() => expect(vi.mocked(stats.fetchStatsPivot)).toHaveBeenCalled());
+    for (const [f] of vi.mocked(stats.fetchStatsPivot).mock.calls) {
+      expect(f).toEqual(stats.soldMarketFilters(DEFAULT_FILTERS));
+    }
+    expect(screen.getByText(/^Prodáno \(trh\): jen neaktivní/)).toBeInTheDocument();
+    fireEvent.click(within(lens).getByRole('button', { name: 'Jako ve filtru' }));
+    expect(set).toHaveBeenCalledWith('filter');
+  });
+
+  it('counts every chart over all listings under Vše: any status, dismissed included, no time-on-market bound', async () => {
+    vi.mocked(stats.fetchStatsPivot).mockClear();
+    renderBoard({ value: 'all', set: vi.fn() });
+    await screen.findAllByRole('heading', { level: 3 });
+    await waitFor(() => expect(vi.mocked(stats.fetchStatsPivot)).toHaveBeenCalled());
+    for (const [f] of vi.mocked(stats.fetchStatsPivot).mock.calls) {
+      expect(f).toEqual({ ...DEFAULT_FILTERS, status: 'any', showDismissed: true, tomObservedOnly: false, tomDaysMin: null, tomDaysMax: null });
+    }
+    expect(screen.getByText(/^Vše: aktivní i neaktivní/)).toBeInTheDocument();
+  });
+
+  it('shows no lens where Browse hands none over, and counts the filter as set', async () => {
+    vi.mocked(stats.fetchStatsPivot).mockClear();
+    renderBoard();
+    await screen.findAllByRole('heading', { level: 3 });
+    expect(screen.queryByRole('group', { name: 'Vzorek' })).toBeNull();
+    await waitFor(() => expect(vi.mocked(stats.fetchStatsPivot)).toHaveBeenCalled());
+    for (const [f] of vi.mocked(stats.fetchStatsPivot).mock.calls) expect(f).toEqual(DEFAULT_FILTERS);
   });
 });

@@ -43,8 +43,9 @@ import { REGISTRY_KEY_MAP, type ListingFilters } from './filters';
 /* Registry IDs whose shape is too irregular for the auto-dispatcher.
  * `queries.ts:applyFilters` handles these directly. */
 export const HAND_CODED_BROWSE_FILTERS: ReadonlySet<string> = new Set([
-  // The portal rule (MS19): status and portals are judged together on the
-  // property's ads (all_sources / active_sources), queries.ts:applyPortalRule.
+  // The portal rule (MS19, 657): the status is the property's, the portals ask
+  // for an ad there in that status (all_sources / active_sources),
+  // queries.ts:applyPortalRule.
   'status',
   'portals',
   'portals_excluded',

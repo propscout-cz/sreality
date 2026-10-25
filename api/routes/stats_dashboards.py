@@ -1,4 +1,5 @@
-"""Stats dashboards (migration 647, docs/design/saved-dashboards.md): the saved set, its shares, the working board."""
+"""Stats dashboards (migration 647, docs/design/saved-dashboards.md): the saved set, its shares, the working board,
+and the one the property page's "Okolí dashboard" tab draws (migration 664)."""
 
 from __future__ import annotations
 
@@ -7,7 +8,7 @@ import uuid
 from typing import Any, Callable, ContextManager
 
 import psycopg
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from api import dependencies as deps
 from api import saved_sets
@@ -32,8 +33,11 @@ DASHBOARDS = saved_sets.SavedSetKind(
                         "'account_id', s.recipient_account_id, "
                         f"'email', {shares.party_label('s.recipient_account_id')}) ORDER BY s.created_at), "
                         "'[]'::json) FROM stats_dashboard_shares s WHERE s.dashboard_id = t.id)"),
+        # The owner's own choice only (migration 664): a recipient never reads another account's as theirs.
+        ("property_card", f"(t.property_card AND {_IS_MINE_SQL})"),
     ),
     row_scope="name IS NOT NULL",
+    refusals=(("stats_dashboards_property_card_check", "The property page's dashboard carries no filter."),),
     # Own dashboards first, then those shared with the caller (the SPA splits the list the same way).
     order_by=f"({_IS_MINE_SQL}) DESC, t.position ASC, t.created_at DESC",
     own_rows=_IS_MINE_SQL,
@@ -61,8 +65,38 @@ _SAVE_WORKING_BOARD_SQL = (
     "RETURNING updated_at"
 )
 
+# The property card moves in one transaction: the caller's other row lets go, then this one takes it and drops its
+# filter (664's CHECK: a property card carries none). Both are RLS-scoped UPDATEs by the caller's own accounts; a
+# shared or unnamed row matches nothing in the second, which is the 404.
+_CLEAR_PROPERTY_CARD_SQL = (
+    "UPDATE stats_dashboards SET property_card = false "
+    "WHERE property_card AND id <> %s AND account_id IN (SELECT current_account_ids())"
+)
+_SET_PROPERTY_CARD_SQL = (
+    "UPDATE stats_dashboards SET property_card = true, filter_spec = NULL, updated_at = now() "
+    "WHERE id = %s AND name IS NOT NULL AND account_id IN (SELECT current_account_ids()) RETURNING id"
+)
+
 router = APIRouter(tags=["stats-dashboards"])
 router.include_router(saved_sets.saved_set_router(DASHBOARDS, "/stats/dashboards"))
+
+
+def make_property_card(conn: psycopg.Connection, dashboard_id: uuid.UUID) -> dict[str, Any]:
+    """Make one own named dashboard the property page's "Okolí dashboard" (one per account; it carries no filter)."""
+    with conn.cursor() as cur:
+        cur.execute(_CLEAR_PROPERTY_CARD_SQL, (dashboard_id,))
+        cur.execute(_SET_PROPERTY_CARD_SQL, (dashboard_id,))
+        if cur.fetchone() is None:
+            raise HTTPException(status_code=404, detail="dashboard not found")
+    return saved_sets.row_or_404(DASHBOARDS, saved_sets.get(conn, DASHBOARDS, str(dashboard_id)))
+
+
+@router.put("/stats/dashboards/{dashboard_id}/property-card")
+def put_property_card(
+    dashboard_id: uuid.UUID,
+    conn: Any = Depends(tenant_pool.tenant_conn),
+) -> dict[str, Any]:
+    return make_property_card(conn, dashboard_id)
 
 
 def working_board(conn: psycopg.Connection) -> dict[str, Any] | None:

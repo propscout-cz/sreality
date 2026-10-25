@@ -48,8 +48,7 @@ from scraper.scraped_listing import ScrapedListing
 SOURCE = "realitymix"
 
 # realitymix family/offer URL segments -> our canonical labels (mirrors
-# parser.CATEGORY_*). chaty -> dum (sreality lumps chata/chalupa under "dům",
-# same as ceskereality's chaty-chalupy).
+# parser.CATEGORY_*). chaty -> dum (sreality lumps chata/chalupa under "dům").
 SALE_TYPE: dict[str, str] = {
     "prodej": "prodej",
     "pronajem": "pronajem",
@@ -103,7 +102,7 @@ _HOUSE_NO_RE = re.compile(r"\s(\d{1,4}(?:/\d{1,4})?[a-z]?)$", re.IGNORECASE)
 # home crumb (e.g. room rentals "pronajem-pokoje-…").
 _SLUG_SALE_RE = re.compile(r"/(prodej|pronajem)-([a-zěščřžýáíéúůóťďň]+)", re.IGNORECASE)
 _SLUG_FAMILY_PREFIXES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("dum", ("dum", "domy", "rodinn", "vila", "chat", "chalup")),
+    ("dum", ("dum", "domy", "domu", "rodinn", "vil", "chat", "chalup")),
     ("byt", ("byt", "pokoj", "garsonk", "mezonet", "atypick")),
     ("pozemek", ("pozem", "parcel")),
     ("komercni", ("komer", "kancelar", "sklad", "nebytov", "obchod", "restaur")),
@@ -231,14 +230,17 @@ def _category_from_slug(source_url: str) -> tuple[str | None, str | None]:
     return cm, ct
 
 
-def resolve_category(html: str, source_url: str) -> tuple[str | None, str | None]:
-    """category (main, type): the BreadcrumbList JSON-LD, with the URL slug
-    filling whichever half a truncated breadcrumb left None."""
+def resolve_category(html: str, source_url: str, title: str = "") -> tuple[str | None, str | None]:
+    """category (main, type): the BreadcrumbList JSON-LD, then the structured h1 title
+    ("Prodej chaty/rekreačního objektu, 182 m²", read as a slug), then the broker-written URL
+    slug, each filling whichever half is still None."""
     cm, ct = category_from_breadcrumb(html)
-    if cm is not None and ct is not None:
-        return cm, ct
-    slug_cm, slug_ct = _category_from_slug(source_url)
-    return cm or slug_cm, ct or slug_ct
+    for fallback in ("/" + re.sub(r"[^a-z0-9]+", "-", _strip_diacritics(title).lower()), source_url):
+        if cm is not None and ct is not None:
+            break
+        slug_cm, slug_ct = _category_from_slug(fallback)
+        cm, ct = cm or slug_cm, ct or slug_ct
+    return cm, ct
 
 
 def _slug_street(source_url: str) -> str | None:
@@ -465,11 +467,10 @@ def areas_from_params(
 def parse_detail(html: str, *, source_url: str) -> ScrapedListing:
     tree = HTMLParser(html)
     source_id = native_id(SOURCE, source_url) or ""
-    category_main, category_type = resolve_category(html, source_url)
+    title = _text(tree.css_first("h1")) or ""
+    category_main, category_type = resolve_category(html, source_url, title)
     params = _detail_params(tree)
     read = partial(source_value, SOURCE, params=params)
-
-    title = _text(tree.css_first("h1")) or ""
 
     price_czk, price_unit = _parse_price(_detail_price_text(tree), category_type)
 
@@ -514,6 +515,7 @@ def parse_detail(html: str, *, source_url: str) -> ScrapedListing:
         source=SOURCE,
         source_id_native=source_id,
         source_url=source_url,
+        ad_reference=vocabulary.reference(_detail_reference(tree)),
         category_main=category_main,
         category_type=category_type,
         price_czk=price_czk,
@@ -553,6 +555,22 @@ def parse_detail(html: str, *, source_url: str) -> ScrapedListing:
         description=description,
         raw=raw,
     )
+
+
+def _detail_reference(tree: HTMLParser) -> str | None:
+    """The `Číslo zakázky:` row of the short-props table the price row sits in — the one
+    place the page prints the advertiser's own number; the spec list never carries it."""
+    price_row = tree.css_first("tr.advert-description__short-props-price")
+    table = price_row.parent if price_row is not None else None
+    while table is not None and table.tag != "table":
+        table = table.parent
+    if table is None:
+        return None
+    for row in table.css("tr"):
+        cells = row.css("td")
+        if len(cells) >= 2 and vocabulary.fold(_text(cells[0])).startswith("cislo_zakazky"):
+            return _text(cells[-1])
+    return None
 
 
 def _detail_price_text(tree: HTMLParser) -> str | None:

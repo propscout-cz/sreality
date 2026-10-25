@@ -397,8 +397,10 @@ the count must never veto:
   served and advances by what arrived.
 
 **What to read in a log.** Nomination itself is unchanged:
-`VERIFY cm=… ct=… subtype=… candidates=… queued=… deferred=… active=…`. Two
-lines changed shape:
+`VERIFY cm=… ct=… subtype=… candidates=… queued=… deferred=… active=…`, once per
+scope; since 2026-10-22 a walk whose every unit reached the end adds
+`VERIFY orphans candidates=… queued=… deferred=… active=…` for the active ads in no
+walked scope (a NULL label, an auction type no unit walks). Two lines changed shape:
 
 - `COVERAGE cm=… ct=…: the walk reached the portal's end but collected N of M
   (coverage=…) -- the gap is nominated, the page decides (rule #3)` — a WARNING
@@ -543,9 +545,9 @@ HTML body is now a parse error, retried. `freshness._record_gone` no longer flip
 it nominates at `QUEUE_PRIORITY_VERIFY` so the drain's one decider rules.
 
 **Health.** The `delisting` alarm (wave 4) judges the rule per portal: its
-precision arm is the share of `flipped` ledger rows 48-72 h old whose ad is active
-again (a Wilson lower bound; Watch above 10%, Problem above 15%, n ≥ 50, else
-pooled over 2-7 d) — the false-flip rate the rule is meant to hold near the blink
+precision arm is the share of a day of `flipped` ledger rows from 2 × the portal's
+p90 walk gap + 1 h old whose ad is active again (a Wilson lower bound; Watch above
+10%, Problem above 15%, n ≥ 50, else Not measured) — the false-flip rate the rule is meant to hold near the blink
 tail beyond the dwell — and its stuck arm counts the active ads whose first
 unrefuted verdict is older than the effective dwell + 2 × the portal's p90 walk
 gap + 1 h; outflow, the verify backlog and the flip cap's deferrals are its other

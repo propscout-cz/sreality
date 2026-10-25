@@ -1,11 +1,14 @@
 """GET /properties/{property_id}/download.zip — the property page's download button.
 
-One zip: a PDF of the ad as the page shows it (api/property_sheet.py) plus the canonical
-ad's stored photos in gallery order, the ones the page's gallery shows. Built here because
-the R2 bucket sends no CORS header, so the SPA cannot read the bytes behind /images/{key}.
-Listing data only: nothing the operator curated (tags, notes, collections, pipeline) is read.
-Signed-in users only, since it proxies photo bytes through us; a broker's phone and e-mail
-follow the /brokers/* PII policy (values for an admin, "hidden" for anyone else).
+One zip: a PDF of the ad as the page shows it (api/property_sheet.py), the canonical ad's
+stored photos in gallery order (the ones the page's gallery shows), and in `moje-fotky/` the
+originals of the acting account's own photos of the property ("Moje fotky", migration 660: the
+strip's photos, a note's included), oldest first. Built here because the R2 bucket sends no CORS
+header, so the SPA cannot read the bytes behind /images/{key}. The ad's data is read on the
+service role; the own photos on the caller's tenant connection (RLS, X-Act-As as the attachment
+routes), and of the curation nothing else (tags, notes, collections, pipeline). Signed-in users
+only, since it proxies photo bytes through us; a broker's phone and e-mail follow the /brokers/*
+PII policy (values for an admin, "hidden" for anyone else).
 """
 
 from __future__ import annotations
@@ -20,7 +23,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from psycopg.rows import dict_row
 
+from api import attachments
 from api import dependencies as deps
+from api import tenant_pool
 from api.property_sheet import render_property_sheet
 from api.routes.images import r2_client
 from toolkit import brokers
@@ -40,23 +45,48 @@ _PROPERTY_COLS = (
 # Parallel R2 reads: a 40-photo listing fetched serially spends seconds on round trips alone.
 _ZIP_FETCH_WORKERS = 8
 
+# The acting identity's own images on the property (a merged-away id has none: the 404 above).
+_OWN_PHOTOS_SQL = (
+    "SELECT storage_key, filename FROM property_attachments "
+    "WHERE property_id = %s AND account_id IN (SELECT acting_account_ids()) "
+    "AND mime_type = ANY(%s) ORDER BY created_at, id"
+)
+_PHOTO_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"]
+
+
+def _fetch_all(fetch: Any, keys: list[str]) -> list[bytes]:
+    """Every object or a 502: a half-filled zip would pass for the full set."""
+    if not keys:
+        return []
+    try:
+        with ThreadPoolExecutor(max_workers=_ZIP_FETCH_WORKERS) as pool:
+            return list(pool.map(fetch, keys))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail="A photo could not be read from storage"
+        ) from exc
+
 
 def property_brokers(
     ads: list[dict[str, Any]], by_listing: dict[int, dict[str, Any]], canonical_id: int
 ) -> tuple[list[dict[str, Any]], bool]:
-    """lib/brokers.propertyBrokers: the brokers of the active ads, one per person, the
-    canonical ad's first; with no active ad, those of all its ads, flagged."""
+    """lib/brokers.propertyBrokers: the brokers of the active ads, one per person carrying
+    the ads that person advertises (`ads`), the canonical ad's first; with no active ad,
+    those of all its ads, flagged."""
     active = [a for a in ads if a["is_active"]]
     pool = active or ads
     ordered = sorted(pool, key=lambda a: a["id"] != canonical_id)
-    seen: set[int] = set()
+    seen: dict[int, dict[str, Any]] = {}
     out: list[dict[str, Any]] = []
     for ad in ordered:
         b = by_listing.get(ad["id"])
-        if b is None or b["broker_id"] in seen:
+        if b is None:
             continue
-        seen.add(b["broker_id"])
-        out.append(b)
+        row = seen.get(b["broker_id"])
+        if row is None:
+            row = seen[b["broker_id"]] = {**b, "ads": []}
+            out.append(row)
+        row["ads"].append(ad)
     return out, not active
 
 
@@ -65,6 +95,7 @@ def get_property_download(
     property_id: int,
     conn: Any = Depends(deps.get_db_conn),
     claims: dict = Depends(deps.verify_jwt),
+    tconn: Any = Depends(tenant_pool.tenant_conn),
 ) -> Response:
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
@@ -75,7 +106,7 @@ def get_property_download(
         if prop is None:
             raise HTTPException(status_code=404, detail="Property not found")
         cur.execute(
-            "select id, source, source_url, is_active, price_czk, first_seen_at"
+            "select id, source, source_url, ad_reference, is_active, price_czk, first_seen_at"
             " from property_sources_public where property_id = %s"
             " order by first_seen_at, id",
             (property_id,),
@@ -97,19 +128,17 @@ def get_property_download(
         ads, {r["listing_id"]: r for r in rows}, prop["listing_id"]
     )
 
+    with tconn.cursor() as cur:
+        cur.execute(_OWN_PHOTOS_SQL, (property_id, _PHOTO_TYPES))
+        own = cur.fetchall()
+
     photos: list[bytes] = []
     if keys:
         client = r2_client()
         if client is None:
             raise HTTPException(status_code=503, detail="Image storage not configured")
-        try:
-            with ThreadPoolExecutor(max_workers=_ZIP_FETCH_WORKERS) as pool:
-                photos = list(pool.map(client.download_bytes, keys))
-        except Exception as exc:
-            # A half-filled zip would pass for the full set.
-            raise HTTPException(
-                status_code=502, detail="A photo could not be read from storage"
-            ) from exc
+        photos = _fetch_all(client.download_bytes, keys)
+    mine = _fetch_all(attachments.storage().download_bytes, [k for k, _n in own]) if own else []
 
     sheet = render_property_sheet(
         prop,
@@ -126,6 +155,10 @@ def get_property_download(
         archive.writestr(f"property-{property_id}.pdf", sheet)
         for n, data in enumerate(photos, start=1):
             archive.writestr(f"{n:0{width}d}.jpg", data)
+        # Numbered: a phone names every capture alike ("image.jpg").
+        mine_width = max(2, len(str(len(mine))))
+        for n, ((_key, filename), data) in enumerate(zip(own, mine), start=1):
+            archive.writestr(f"moje-fotky/{n:0{mine_width}d}-{filename}", data)
     return Response(
         content=buf.getvalue(),
         media_type="application/zip",

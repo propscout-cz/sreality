@@ -1,5 +1,6 @@
 """Tests for GET /properties/{id}/download.zip — the property page's download button:
-a PDF of the ad plus the canonical ad's stored photos, zipped server-side.
+a PDF of the ad, the canonical ad's stored photos and the caller's own photos ("Moje fotky"),
+zipped server-side.
 
 The renderer is replaced by a recorder here, so these tests pin what the route READS
 and HANDS the sheet (the PII policy, the page's broker order, the cover photo) and how
@@ -17,8 +18,10 @@ import pytest
 fastapi = pytest.importorskip("fastapi")
 TestClient = pytest.importorskip("fastapi.testclient").TestClient
 
+from api import attachments
 from api import dependencies as deps
 from api import main as api_main
+from api import tenant_pool
 from api.routes import images as images_route
 from api.routes import property_download
 from scraper import image_storage
@@ -80,6 +83,29 @@ class _Conn:
         return _Cursor(self)
 
 
+class _TenantConn:
+    """The caller's tenant connection: the one read of their own photos."""
+
+    def __init__(self) -> None:
+        self.own: list[tuple[str, str]] = []
+        self.statements: list[tuple[str, tuple]] = []
+
+    def cursor(self) -> "_TenantConn":
+        return self
+
+    def __enter__(self) -> "_TenantConn":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        return None
+
+    def execute(self, sql: str, params: tuple) -> None:
+        self.statements.append((" ".join(sql.split()), params))
+
+    def fetchall(self) -> list[tuple[str, str]]:
+        return self.own
+
+
 class _FakeR2:
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
@@ -93,9 +119,9 @@ def fake_r2(monkeypatch):
     r2 = _FakeR2()
     monkeypatch.setattr(image_storage, "is_configured", lambda: True)
     monkeypatch.setattr(image_storage.R2Client, "from_env", classmethod(lambda cls, **_kw: r2))
-    images_route._client = None  # reset the module-level lazy singleton
+    images_route._client = attachments._client = None  # reset the module-level lazy singletons
     yield r2
-    images_route._client = None
+    images_route._client = attachments._client = None
 
 
 @pytest.fixture()
@@ -121,10 +147,16 @@ def claims():
 
 
 @pytest.fixture()
-def conn(claims):
+def tconn():
+    return _TenantConn()
+
+
+@pytest.fixture()
+def conn(claims, tconn):
     c = _Conn()
     api_main.app.dependency_overrides[deps.get_db_conn] = lambda: c
     api_main.app.dependency_overrides[deps.verify_jwt] = lambda: claims
+    api_main.app.dependency_overrides[tenant_pool.tenant_conn] = lambda: tconn
     yield c
     api_main.app.dependency_overrides.clear()
 
@@ -152,6 +184,32 @@ def test_zip_holds_the_sheet_then_every_stored_photo_in_gallery_order(client, fa
     assert sheet[0]["cover"] == b"third"
 
 
+def test_my_own_photos_ride_along_in_moje_fotky_numbered_oldest_first(
+        client, fake_r2, sheet, conn, tconn):
+    """The caller's own image originals (a note's too), read on the tenant connection as the
+    acting identity, numbered because a phone names every capture "image.jpg"."""
+    conn.keys = ["42/0001.jpg"]
+    tconn.own = [("custom-attachments/property/7/a.jpg", "image.jpg"),
+                 ("custom-attachments/property/7/b.png", "image.jpg")]
+    fake_r2.objects = {"42/0001.jpg": b"portal", "custom-attachments/property/7/a.jpg": b"first",
+                       "custom-attachments/property/7/b.png": b"second"}
+    archive = zipfile.ZipFile(io.BytesIO(client.get("/properties/7/download.zip").content))
+    assert archive.namelist() == ["property-7.pdf", "01.jpg", "moje-fotky/01-image.jpg",
+                                  "moje-fotky/02-image.jpg"]
+    assert archive.read("moje-fotky/02-image.jpg") == b"second"
+    [(sql, params)] = tconn.statements
+    assert "account_id IN (SELECT acting_account_ids())" in sql and params[0] == 7
+    assert "image/jpeg" in params[1] and "application/pdf" not in params[1]
+    assert not [s for s, _p in conn.statements if "property_attachments" in s], (
+        "the service role never reads curation")
+    assert sheet[0]["cover"] == b"portal", "the sheet's cover stays the ad's"
+
+
+def test_a_missing_own_photo_fails_the_whole_zip(client, fake_r2, sheet, conn, tconn):
+    tconn.own = [("custom-attachments/property/7/gone.jpg", "image.jpg")]
+    assert client.get("/properties/7/download.zip").status_code == 502
+
+
 def test_a_property_without_stored_photos_still_gets_its_sheet(client, sheet, conn):
     res = client.get("/properties/7/download.zip")
     assert res.status_code == 200
@@ -177,6 +235,8 @@ def test_brokers_follow_the_page_order_active_ads_only(client, sheet, conn):
     # The canonical ad's broker first, then the other active ads'; the inactive ad's dropped.
     assert [b["broker_id"] for b in call["brokers"]] == [1, 2]
     assert call["brokers_from_inactive"] is False
+    # Each person carries the ads they advertise, for the sheet's ad-reference lines.
+    assert [[a["id"] for a in b["ads"]] for b in call["brokers"]] == [[42], [41]]
 
 
 def test_with_no_active_ad_every_ads_broker_shows_flagged(client, sheet, conn):
@@ -185,6 +245,7 @@ def test_with_no_active_ad_every_ads_broker_shows_flagged(client, sheet, conn):
     client.get("/properties/7/download.zip")
     assert [b["broker_id"] for b in sheet[0]["brokers"]] == [1, 2, 3]
     assert sheet[0]["brokers_from_inactive"] is True
+    assert [[a["id"] for a in b["ads"]] for b in sheet[0]["brokers"]] == [[42], [41], [43]]
 
 
 def test_a_non_admin_gets_masked_broker_contacts(client, sheet, conn):

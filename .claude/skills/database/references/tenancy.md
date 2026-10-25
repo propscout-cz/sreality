@@ -53,8 +53,9 @@ UPDATE` trigger** from the owning parent row (a plain `DEFAULT` can't see a sibl
 column on `NEW`, and a trigger also covers ad-hoc SQL / forgotten code paths that a
 column default would miss): `collection_properties` (parent `collections`),
 `property_tags` (parent `tags`), `notification_dispatches`, `estimation_cohort_entries`,
-`estimation_trace_payloads`, `estimation_feedback`, `building_run_attachments` (and, later,
-`property_note_attachments`, parent `property_notes`, migration 592). Because
+`estimation_trace_payloads`, `estimation_feedback`, `building_run_attachments` (592's
+`property_note_attachments` was one until 660 made it `property_attachments`, account from the
+route, a `(note_id, account_id)` key in place of the trigger). Because
 Postgres evaluates `WITH CHECK` **after** `BEFORE` triggers run, a tenant inserting a
 child row that points at another tenant's parent gets `account_id = NULL` back from the
 RLS-filtered parent lookup (the trigger runs as the invoking role) — or the OWNER's account when
@@ -92,7 +93,7 @@ after resolving a confirmed email); either party deletes (revoke / leave). Reads
 four `FOR SELECT` policies (`*_shared_read` on `collections`, `collection_properties`,
 `property_notes` — only rows the author marked `shared`, through any share between the author and
 the reader that holds the property, made before or after the mark (migration 613 dropped 610's `shared_at`
-consent time by ruling) — and `property_note_attachments`);
+consent time by ruling) — and `property_attachments`, readable where its note is, 660);
 the owner's `FOR ALL` policies decide every write, unchanged. Visibility rule:
 `docs/design/collection-sharing.md` §3.2.
 
@@ -120,7 +121,7 @@ Two questions, two functions. `current_account_ids()` answers **who the caller I
 untouched; `acting_account_ids(for_board boolean default false)` (`SECURITY DEFINER`, `RETURNS TABLE (account_id
 uuid)`) answers **whom the caller acts FOR on curation**. Exactly eleven policies read the second, in
 `USING` and `WITH CHECK` (switched by `ALTER POLICY`; the three pipeline tables pass `true`): `collections`, `tags`, `property_notes`,
-`collection_properties`, `property_tags`, `property_note_attachments`, `property_artifact_links`,
+`collection_properties`, `property_tags`, `property_attachments`, `property_artifact_links`,
 `property_dismissals`, `property_pipeline`, `pipeline_stages`, `property_pipeline_events`. **Every
 other table keeps `current_account_ids()`** — billing, estimations, watchdog, presets, notifications (their routes never act
 as another account; the push tables, `push_subscriptions` and `notification_deliveries`, are admin-only, migration 654),
@@ -263,7 +264,7 @@ and the write would 500 on `WITH CHECK` or report a false success. A refusal tha
 collection's 409) is raised inside the transaction so it rolls back; a pre-write check that must
 see the row takes `SELECT … FOR UPDATE`, which applies the UPDATE policy. Example:
 `api/curation.py` (`update_collection`, `delete_collection`, `add_properties_to_collection`,
-`update_note`) and `api/note_attachments.add_attachment`.
+`update_note`) and `api/attachments.add_attachment`.
 
 **2. Writes carry exactly ONE account, resolved once at the route edge.**
 `tenant_pool.require_account_id` (FastAPI dependency; a curation write declares its twin

@@ -12,7 +12,7 @@ import os
 import random
 import time
 import uuid
-from collections.abc import Callable, Collection, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from functools import lru_cache
@@ -89,6 +89,10 @@ LISTING_COLUMNS: tuple[str, ...] = (
     # assembles it in scraper.sreality_url) — a stored fact read everywhere and
     # reconstructed nowhere. Out of every content hash (identity, not content).
     "source_url",
+    # The advertiser's own number for the offer, as the ad prints it (migration 667) —
+    # the attribute contract's `ad_reference` cell. Out of the content hash like the two
+    # identity columns above: a reference names the offer, it is not the offer's content.
+    "ad_reference",
 )
 
 # Postgres type for each LISTING_COLUMN: the jsonb_to_recordset column spec of
@@ -124,6 +128,7 @@ _LISTING_COLUMN_PGTYPE: dict[str, str] = {
     "description": "text",
     "published_at": "timestamptz",
     "source_url": "text",
+    "ad_reference": "text",
 }
 assert set(_LISTING_COLUMN_PGTYPE) == set(LISTING_COLUMNS), (
     "_LISTING_COLUMN_PGTYPE drifted from LISTING_COLUMNS"
@@ -893,100 +898,126 @@ def _touch_chunk_by_id(cur: Any, chunk: list[int]) -> int:
     return cur.rowcount or 0
 
 
+# Rule #3's one definition of an ad awaiting nomination, over a relation aliased `l` (source,
+# source_id_native): the drain does not hold it (a queue row: waiting, claimed or given up) and
+# finished nothing on it within delist_policy.RECHECK_THROTTLE before `at`. Without the two, a page
+# that errors keeps its old last_seen_at, sorts first forever and takes every verify slot. The walks
+# nominate by it at now(); the Health check's `unnominated` counts by it at the walk's start.
+_NOMINABLE_TEMPLATE = """NOT EXISTS (
+        SELECT 1 FROM listing_detail_queue q
+        WHERE q.source = l.source AND q.native_id = l.source_id_native)
+  AND NOT EXISTS (
+        SELECT 1 FROM detail_queue_completions c
+        WHERE c.source = l.source AND c.native_id = l.source_id_native
+          AND c.completed_at > {at} - interval '{hours} hours')"""
+
+
+def nominable_predicate(at: str = "now()") -> str:
+    """Rule #3's "awaiting nomination" judged at the SQL instant `at` (RECHECK_THROTTLE in hours)."""
+    hours = int(delist_policy.RECHECK_THROTTLE.total_seconds() // 3600)
+    return _NOMINABLE_TEMPLATE.format(at=at, hours=hours)
+
+
+NOMINABLE_PREDICATE = nominable_predicate()
+
+
+# A nomination scope: the columns a walked unit's rows hold, a column left out meaning any value
+# ({"category_main": "byt", "category_type": "prodej"}; bazos adds its subtype, the agenda portals
+# drop category_main). One spelling for the units (presence_candidates) and for their complement,
+# the orphans (orphan_candidates), so the two cannot disagree on a NULL label.
+SCOPE_COLUMNS = ("category_main", "category_type", "subtype")
+
+
+def scope_sql(scope: Mapping[str, Any]) -> tuple[str, list[Any]]:
+    """`scope` as a predicate over `l` (`=` or `IS NULL`, so it stays indexable) and its parameters."""
+    unknown = set(scope) - set(SCOPE_COLUMNS)
+    if unknown:
+        raise ValueError(f"not a scope column: {sorted(unknown)}")
+    terms = [f"l.{c} IS NULL" if scope[c] is None else f"l.{c} = %s" for c in SCOPE_COLUMNS if c in scope]
+    return " AND ".join(terms) or "true", [scope[c] for c in SCOPE_COLUMNS if scope.get(c) is not None]
+
+
+def orphan_sql(scopes: Sequence[Mapping[str, Any]]) -> tuple[str, list[Any]]:
+    """In no scope of `scopes`. A NULL label makes `=` NULL, not false, so the union is coalesced."""
+    parts = [scope_sql(s) for s in scopes]
+    covered = " OR ".join(f"({sql})" for sql, _ in parts) or "false"
+    return f"NOT coalesce({covered}, false)", [p for _, params in parts for p in params]
+
+
 def presence_candidates(
     conn: psycopg.Connection,
     source: str,
-    category_main: str | None,
-    category_type: str,
+    scope: Mapping[str, Any],
     seen: set[Any],
     *,
     seen_key: str = "native",
-    subtype: str | None = None,
-    scope_subtype: bool = False,
 ) -> tuple[list[tuple[str, str | None, int | None]], int]:
-    """The active rows of this (source, category) that a COMPLETE walk did not
-    see, oldest sighting first, plus the scope's active row count.
+    """The active rows of one walked scope that a walk which reached the portal's end did not
+    see, oldest sighting first, plus the scope's active row count (rule #3: absence NOMINATES,
+    the page decides, so the query carries no rail -- a wrong nomination costs one fetch).
 
-    Rule #3 since 2026-09-07: index absence NOMINATES, it no longer delists. A
-    row the walk did not see is a candidate; the detail drain then visits its
-    page, and the page decides -- a positive gone signal (404/410, a redirect
-    off the listing, the portal's own "no longer active" text) flips it once a
-    second verdict confirms it (`delist_policy.gone_confirmed`), a live
-    page refreshes it, an error leaves it for the next pass. That is why this
-    query carries none of the old sweep's rails (no min_unseen_hours, no refusal):
-    a wrong nomination costs one fetch, not a live listing.
-
-    `seen_key` names what the walk's seen set holds: portal-native string ids
-    (`source_id_native`, every crawler portal) or sreality's integer ids
-    (`sreality_id`). `scope_subtype` narrows to `subtype` for portals whose fine
-    index sections collapse onto one category_main (bazos: chata + dum -> dum),
-    so one section's walk cannot nominate its siblings' rows every run.
-
-    `category_main=None` scopes by category_type alone: the agenda portals
-    (remax, maxima) walk one mixed sale/rent index whose completeness is proved
-    per AGENDA, and a listing's title-derived category can differ from its
-    detail-derived one, so nominating per category would nominate rows the
-    agenda walk did see.
-
-    Returns (native_id, detail_ref, price) triples: detail_ref is the stored
-    source_url for crawler portals and None for sreality (its fetch derives the
-    URL from the id); price is carried so the re-enqueue does not blank the
-    queue's observed price.
+    `seen_key` names what the seen set holds: `source_id_native` strings (every crawler) or
+    sreality's integer `sreality_id`s. Returns (native_id, detail_ref, price) triples: the price
+    rides along so the re-enqueue does not blank the queue's observed price.
     """
-    key_col = "sreality_id" if seen_key == "sreality_id" else "source_id_native"
-    ids = [x for x in seen if x is not None]
-    if seen_key == "sreality_id":
-        ids = [int(x) for x in ids]
-    else:
-        ids = [str(x) for x in ids]
-    if not ids:
-        # An empty bound array makes `<> ALL('{}')` true for every row: the whole scope.
-        raise ValueError(f"presence_candidates {source}: empty seen set would nominate the whole scope")
-    sub_clause = "\n              AND subtype IS NOT DISTINCT FROM %s" if scope_subtype else ""
-    cm_clause = "\n              AND category_main = %s" if category_main is not None else ""
-    scope_params: list[Any] = [source]
-    if category_main is not None:
-        scope_params.append(category_main)
-    scope_params.append(category_type)
-    if scope_subtype:
-        scope_params.append(subtype)
-    recheck_h = int(delist_policy.RECHECK_THROTTLE.total_seconds() // 3600)
+    return _nominate(conn, source, *scope_sql(scope), seen, seen_key)
+
+
+def orphan_candidates(
+    conn: psycopg.Connection,
+    source: str,
+    scopes: Sequence[Mapping[str, Any]],
+    seen: set[Any] | None,
+    *,
+    seen_key: str = "native",
+) -> tuple[list[tuple[str, str | None, int | None]], int]:
+    """presence_candidates for the active rows in NO walked scope (a label no unit walks: a
+    NULL, an auction type the portal's walk does not ask for). `seen` is the whole walk's;
+    None nominates without an exclusion, for an indexless portal only (its walk sees nothing)."""
+    return _nominate(conn, source, *orphan_sql(scopes), seen, seen_key)
+
+
+def _count(conn: psycopg.Connection, source: str, where: str, params: list[Any]) -> int:
     with conn.cursor() as cur:
         cur.execute(
             f"""
             SELECT count(*)
-            FROM listings
-            WHERE is_active = true
-              AND source = %s{cm_clause}
-              AND category_type = %s{sub_clause}
-            """,
-            tuple(scope_params),
-        )
-        active_rows = int(cur.fetchone()[0])
-        # Two exclusions keep the oldest-unseen order from jamming. A row that
-        # already has a queue row (waiting, claimed, or given up after five
-        # failures) is in the drain's hands, and a row the drain finished
-        # within delist_policy.RECHECK_THROTTLE was just checked; without these,
-        # a page that errors keeps its old last_seen_at, sorts first forever and
-        # eats every throttle slot while the rows behind it are never nominated.
-        cur.execute(
-            f"""
-            SELECT {key_col}::text, source_url, price_czk
             FROM listings l
             WHERE l.is_active = true
-              AND l.source = %s{cm_clause}
-              AND l.category_type = %s{sub_clause}
-              AND l.{key_col} <> ALL(%s)
-              AND NOT EXISTS (
-                    SELECT 1 FROM listing_detail_queue q
-                    WHERE q.source = l.source AND q.native_id = l.{key_col}::text)
-              AND NOT EXISTS (
-                    SELECT 1 FROM detail_queue_completions c
-                    WHERE c.source = l.source AND c.native_id = l.{key_col}::text
-                      AND c.completed_at > now() - interval '{recheck_h} hours')
+              AND l.source = %s
+              AND {where}
+            """,
+            (source, *params),
+        )
+        row = cur.fetchone()
+    return int(row[0]) if row else 0
+
+
+def _nominate(
+    conn: psycopg.Connection, source: str, where: str, params: list[Any],
+    seen: set[Any] | None, seen_key: str,
+) -> tuple[list[tuple[str, str | None, int | None]], int]:
+    key_col = "sreality_id" if seen_key == "sreality_id" else "source_id_native"
+    unseen, ids = "", ()
+    if seen is not None:
+        bound = [int(x) if seen_key == "sreality_id" else str(x) for x in seen if x is not None]
+        if not bound:
+            # An empty bound array makes `<> ALL('{}')` true for every row: the whole scope.
+            raise ValueError(f"presence_candidates {source}: empty seen set would nominate the whole scope")
+        unseen, ids = f"\n              AND l.{key_col} <> ALL(%s)", (bound,)
+    active_rows = _count(conn, source, where, params)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT l.{key_col}::text, l.source_url, l.price_czk
+            FROM listings l
+            WHERE l.is_active = true
+              AND l.source = %s
+              AND {where}{unseen}
+              AND {NOMINABLE_PREDICATE}
             ORDER BY l.last_seen_at ASC NULLS FIRST, l.id
             """,
-            tuple(scope_params) + (ids,),
+            (source, *params, *ids),
         )
         rows = cur.fetchall()
     return (
@@ -1197,36 +1228,9 @@ def index_summary_native(
     return out
 
 
-def active_count(
-    conn: psycopg.Connection,
-    category_main: str,
-    category_type: str,
-    *,
-    source: str = "sreality",
-    subtype: str | None = None,
-    scope_subtype: bool = False,
-) -> int:
-    """Current active-listing count for one (source, category_main, category_type).
-
-    `scope_subtype=True` narrows to `subtype` (NULL-safe) so the count matches a
-    subtype-scoped `presence_candidates` nomination (bazos fine sections)."""
-    sub_clause = "\n              AND subtype IS NOT DISTINCT FROM %s" if scope_subtype else ""
-    params: list[Any] = [source, category_main, category_type]
-    if scope_subtype:
-        params.append(subtype)
-    with conn.cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT count(*) FROM listings
-            WHERE is_active = true
-              AND source = %s
-              AND category_main = %s
-              AND category_type = %s{sub_clause}
-            """,
-            tuple(params),
-        )
-        row = cur.fetchone()
-        return int(row[0]) if row else 0
+def active_count(conn: psycopg.Connection, source: str, scope: Mapping[str, Any]) -> int:
+    """The active ads of one nomination scope: what its walk is reconciled against."""
+    return _count(conn, source, *scope_sql(scope))
 
 
 def pending_image_downloads(
@@ -2111,35 +2115,29 @@ def latest_completion_outcome(conn: psycopg.Connection, source: str, native_id: 
 # carries "Zlín, ulice Mlýnská" and coordinates. The claim lane mines PAGES, so
 # the fix is a second fetch, not a contract change.
 #
-# The audit relation IS the list — `location_pin_audit_mv` state='unresolved' +
-# quality='active_no_claims' is exactly "live, the resolver has spoken, and no
-# admissible evidence was ever found" — so this asks it rather than
-# re-deriving the set. `listings` is joined by primary key for the row's LIVE
-# source_url / price / is_active, because the matview is an hourly snapshot and
-# a re-fetch must not be aimed by a stale URL.
-_LOCATION_REFETCH_AUDIT_MV = "location_pin_audit_mv"
-
+# The set is rule 25's invariant, broken: an active ad that is not determined
+# foreign and has no town. `location_steps.town_missing_sql()` is carried
+# VERBATIM: importing it here is a cycle (location_steps -> claims_common ->
+# loader_db -> scraper.db); the vocabulary rail
+# (tests/test_location_steps_vocabulary.py) pins the two. It is the set the
+# `location_town_coverage` check judges, so an ad holding only a kraj or okres
+# claim, or one no property represents, gets its second look too.
+#
 # "Old enough to be worth another look." A listing fetched minutes ago would
 # only be re-read at the same empty moment; six hours is well past the portals'
 # geocoding lag and it means a row discovered today gets its second look on
 # tomorrow's tick rather than in a fortnight.
 _LOCATION_REFETCH_CANDIDATES_SQL = """
-WITH audit AS (
-    SELECT a.listing_id
-    FROM location_pin_audit_mv a
-    WHERE a.state = 'unresolved'
-      AND a.is_active
-      AND a.quality = 'active_no_claims'
-),
-cand AS (
+WITH cand AS (
     SELECT l.source,
            l.source_id_native,
            l.source_url,
            l.price_czk,
            GREATEST(COALESCE(pg.fetched_at, '-infinity'::timestamptz),
                     COALESCE(pl.observed_at, '-infinity'::timestamptz)) AS last_fetch_at
-    FROM audit a
-    JOIN listings l ON l.id = a.listing_id
+    FROM listings l
+    LEFT JOIN listing_location ll ON ll.listing_id = l.id
+    LEFT JOIN location_granularity_rank gr ON gr.granularity = ll.granularity
     LEFT JOIN LATERAL (
         SELECT max(p.fetched_at) AS fetched_at
         FROM portal_raw_pages p
@@ -2152,6 +2150,9 @@ cand AS (
     ) pl ON true
     WHERE l.is_active
       AND l.source_id_native IS NOT NULL
+      AND not coalesce((ll.country_status = 'foreign'), false)
+      and not coalesce((ll.obec_kod is not null and gr.rank >= (SELECT r.rank
+          FROM location_granularity_rank r WHERE r.granularity = 'obec')), false)
 ),
 old AS (
     SELECT c.*,
@@ -2173,24 +2174,11 @@ def location_refetch_candidates(
     *,
     min_age_seconds: int,
     cap_per_source: int,
-) -> list[dict[str, Any]] | None:
-    """Listings whose page carried no location and whose page is old enough to
-    re-read, oldest-fetched first, at most `cap_per_source` per portal.
-
-    None (not an empty list) when the audit matview is absent: a caller must be
-    able to tell "nothing to do" from "this database cannot answer", and on a
-    branch database without the location relations the lane skips instead of
-    raising every tick. `source_total` carries the UNCAPPED per-portal backlog,
-    so a capped tick still says how much is left for tomorrow.
-    """
+) -> list[dict[str, Any]]:
+    """Active ads with no town whose page is old enough to re-read, oldest-fetched
+    first, at most `cap_per_source` per portal. `source_total` carries the UNCAPPED
+    per-portal backlog, so a capped tick still says how much is left for tomorrow."""
     with conn.cursor() as cur:
-        cur.execute(
-            "SELECT to_regclass(%s) IS NOT NULL",
-            (f"public.{_LOCATION_REFETCH_AUDIT_MV}",),
-        )
-        row = cur.fetchone()
-        if not row or not row[0]:
-            return None
         cur.execute(
             _LOCATION_REFETCH_CANDIDATES_SQL,
             {"min_age": float(min_age_seconds), "cap": int(cap_per_source)},

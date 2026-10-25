@@ -1,6 +1,8 @@
 /* "Explore area" modal — opens the full Browse experience focused on a single
- * property's neighbourhood (~5 km viewport) and pre-filtered to its category +
- * disposition. Reuses <BrowseExperience> via the in-memory state adapter, so
+ * property's neighbourhood: the property page's "Trh v okolí" tile passes its own
+ * filter (lib/neighbourhood: type, deal, disposition, ownership, centre + radius,
+ * building, condition), its lens and its dashboard, so the window starts exactly
+ * where the tile is. Reuses <BrowseExperience> via the in-memory state adapter, so
  * the map, filters, tabs and every overlay are identical to the Browse page.
  *
  * App-wide-triggerable via the same provider+hook pattern as NewEstimationModal
@@ -22,16 +24,27 @@ import BrowseExperience from '@/components/BrowseExperience';
 import OriginPropertyPanel from '@/components/OriginPropertyPanel';
 import type { AnchorPoint } from '@/components/ListingMap';
 import {
-  browseFiltersForArea,
   browseUrlFromState,
   useMemoryBrowseState,
-  type ExploreAreaSeed,
+  type ExploreOrigin,
+  type TabKey,
 } from '@/lib/browseState';
+import type { ListingFilters } from '@/lib/filters';
+import type { StatsMarket } from '@/lib/stats';
 
-export type ExploreAreaPayload = ExploreAreaSeed & {
+export interface ExploreAreaPayload {
+  /* The window's starting filter. */
+  filters: ListingFilters;
+  /* Where the origin pin sits. */
+  lat: number;
+  lng: number;
+  tab?: TabKey;
+  market?: StatsMarket;
+  dashboard?: string | null;
+  origin?: ExploreOrigin;
   /* Human label for the modal header (e.g. "Třebíč - Borovina · 2+1"). */
   label?: string;
-};
+}
 
 interface ModalCtx {
   open: (payload: ExploreAreaPayload) => void;
@@ -81,8 +94,12 @@ function ExploreAreaModal({
   payload: ExploreAreaPayload;
   onClose: () => void;
 }) {
-  const initialFilters = useMemo(() => browseFiltersForArea(payload), [payload]);
-  const view = useMemoryBrowseState({ filters: initialFilters });
+  const view = useMemoryBrowseState({
+    filters: payload.filters,
+    tab: payload.tab,
+    market: payload.market,
+    dashboard: payload.dashboard,
+  });
 
   /* The property the operator came FROM — pinned on the map (anchor) and shown
    * in the top panel, both independent of the filter cohort. Memoized so the
@@ -111,6 +128,8 @@ function ExploreAreaModal({
     sort: view.sort,
     tab: view.tab,
     overlay: view.overlay,
+    activeDashboardId: view.activeDashboardId,
+    statsMarket: view.statsMarket,
   });
 
   return (

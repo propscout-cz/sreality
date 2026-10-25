@@ -374,7 +374,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "string",
       "pg_column": null,
       "default": "any",
-      "description": "Status filter for Browse. `any` shows both live and delisted properties; `active` = a property with an active ad on the selected portals (any active ad when none is selected); `inactive` = ads there and none of them active. The Watchdog matcher ignores this (it fires on new properties only) — use `lifecycle` for the analytical surfaces.",
+      "description": "Status filter for Browse, always the property's own: `any` shows both live and delisted properties; `active` = a live property (with a portal filter: with an active ad there); `inactive` = a delisted property, every ad ended. The Watchdog matcher ignores this (it fires on new properties only) — use `lifecycle` for the analytical surfaces.",
       "category": "Status",
       "ui_control": "pill_group",
       "agendas": [
@@ -1115,7 +1115,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "string_list",
       "pg_column": "source",
       "default": null,
-      "description": "Restrict the cohort to one or more source portals: sreality, bazos, idnes, maxima, ceskereality, bezrealitky, mmreality, remax, realitymix. A property matches when any of its ads is on a listed portal, active or not; several = any of them; with a status filter the status is judged on those ads; estimation cohorts read the canonical ad's own portal. Empty list / null = all portals.",
+      "description": "Restrict the cohort to one or more source portals: sreality, bazos, idnes, maxima, ceskereality, bezrealitky, mmreality, remax, realitymix. A property matches when any of its ads is on a listed portal, active or not; several = any of them; with the `active` status that ad must be active; estimation cohorts read the canonical ad's own portal. Empty list / null = all portals.",
       "category": "Property",
       "ui_control": "multiselect",
       "agendas": [
@@ -1175,6 +1175,11 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
           "value": "realitymix",
           "label_cs": "RealityMix",
           "label_en": "RealityMix"
+        },
+        {
+          "value": "web",
+          "label_cs": "Web",
+          "label_en": "Web"
         }
       ],
       "aliases": [],
@@ -1241,6 +1246,11 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
           "value": "realitymix",
           "label_cs": "RealityMix",
           "label_en": "RealityMix"
+        },
+        {
+          "value": "web",
+          "label_cs": "Web",
+          "label_en": "Web"
         }
       ],
       "aliases": [],

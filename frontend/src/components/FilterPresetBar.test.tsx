@@ -7,8 +7,10 @@
  * name-scoped label, so N chips no longer expose N identical "⋯" buttons.
  *
  * The rest pins what the fold into SavedSetBar must not change: the Pipeline
- * chip leads the row, "Update preset" re-captures filters + sort, a new preset
- * offers the map area only while one is applied, and Edit touches metadata only.
+ * chip leads the row, "Update preset" re-captures filters + sort (every filter,
+ * the curation lenses included — ruling 2026-10-22), a new preset
+ * offers the map area only while one is applied (ticked for a new preset), and Edit
+ * touches metadata only.
  */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
@@ -41,7 +43,7 @@ vi.mock('@/lib/api', async (orig) => ({
 }));
 
 import { createFilterPreset, deleteFilterPreset, updateFilterPreset } from '@/lib/api';
-import FilterPresetBar from './FilterPresetBar';
+import FilterPresetBar, { PRESETS_EXPANDED_KEY } from './FilterPresetBar';
 
 const BOUNDS = { west: 14.3, south: 50.0, east: 14.5, north: 50.1 };
 
@@ -78,6 +80,7 @@ function renderBar({
 }
 
 beforeEach(() => {
+  localStorage.removeItem(PRESETS_EXPANDED_KEY);
   vi.mocked(createFilterPreset).mockReset();
   vi.mocked(updateFilterPreset).mockReset();
   vi.mocked(deleteFilterPreset).mockReset();
@@ -111,8 +114,27 @@ describe('<FilterPresetBar> behaviour', () => {
   it('loads a preset on a chip click', () => {
     const onLoad = vi.fn();
     renderBar({ onLoad, activePresetId: null });
+    fireEvent.click(screen.getByRole('button', { name: /^Presety/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Praha 2+kk' }));
     expect(onLoad).toHaveBeenCalledWith(preset);
+  });
+
+  /* Eleven presets wrapped onto three rows above the map; folded, the bar keeps
+   * one row and the preset in force. */
+  it('folds to the active preset, and the Presety toggle unfolds them all, remembered', () => {
+    const other = { ...preset, id: 'p2', name: 'Brno 3+1' };
+    const { unmount } = renderBar({ presets: [preset, other], activePresetId: 'p1' });
+    const toggle = screen.getByRole('button', { name: /^Presety/ });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).toHaveTextContent('2');
+    expect(screen.getByRole('button', { name: 'Praha 2+kk' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Brno 3+1' })).toBeNull();
+    fireEvent.click(toggle);
+    expect(screen.getByRole('button', { name: 'Brno 3+1' })).toBeInTheDocument();
+    unmount();
+    renderBar({ presets: [preset, other], activePresetId: 'p1' });
+    expect(screen.getByRole('button', { name: /^Presety/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'Brno 3+1' })).toBeInTheDocument();
   });
 
   it('offers "Update preset" on a dirty preset and saves filters + sort back into it', async () => {
@@ -129,20 +151,35 @@ describe('<FilterPresetBar> behaviour', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
+  it('offers "Update preset" when a curation filter drifts, and saves it into the preset', async () => {
+    vi.mocked(updateFilterPreset).mockResolvedValue(preset);
+    const outside = { set: 'out' as const, in: [], out: [] };
+    renderBar({
+      presets: [{ ...preset, filter_spec: { filters: DEFAULT_FILTERS, sort: null } }],
+      filters: { ...DEFAULT_FILTERS, pipeline: outside, collections: outside },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Update preset' }));
+    const dialog = screen.getByRole('dialog', { name: 'Update preset' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Update preset' }));
+    await waitFor(() => expect(updateFilterPreset).toHaveBeenCalledTimes(1));
+    const saved = vi.mocked(updateFilterPreset).mock.calls[0][1].filter_spec?.filters;
+    expect(saved?.pipeline).toEqual(outside);
+    expect(saved?.collections).toEqual(outside);
+  });
+
   it('offers no update while the loaded preset is clean', () => {
     renderBar({ presets: [{ ...preset, filter_spec: { filters: DEFAULT_FILTERS, sort: null } }], filters: DEFAULT_FILTERS });
     expect(screen.getByRole('button', { name: 'Praha 2+kk' })).toHaveAccessibleDescription('Load preset: Praha 2+kk');
     expect(screen.queryByRole('button', { name: 'Update preset' })).toBeNull();
   });
 
-  it('saves a new preset with the map area only when asked, and selects it', async () => {
+  it('saves a new preset with the map area by default, and selects it', async () => {
     const onActivePresetIdChange = vi.fn();
     vi.mocked(createFilterPreset).mockResolvedValue({ ...preset, id: 'p2', name: 'Okno' });
     renderBar({ filters: { ...DEFAULT_FILTERS, bounds: BOUNDS }, activePresetId: null, onActivePresetIdChange });
     fireEvent.click(screen.getByRole('button', { name: '+ Save preset' }));
     const dialog = screen.getByRole('dialog', { name: 'Save filters as a preset' });
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Preset name' }), { target: { value: 'Okno' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Include the current map area in this preset' }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save preset' }));
     await waitFor(() => expect(createFilterPreset).toHaveBeenCalledTimes(1));
     const input = vi.mocked(createFilterPreset).mock.calls[0][0];
@@ -151,15 +188,28 @@ describe('<FilterPresetBar> behaviour', () => {
     await waitFor(() => expect(onActivePresetIdChange).toHaveBeenCalledWith('p2'));
   });
 
-  it('drops the map area from a new preset by default', async () => {
+  it('drops the map area from a new preset when unticked', async () => {
     vi.mocked(createFilterPreset).mockResolvedValue({ ...preset, id: 'p2' });
     renderBar({ filters: { ...DEFAULT_FILTERS, bounds: BOUNDS }, activePresetId: null });
     fireEvent.click(screen.getByRole('button', { name: '+ Save preset' }));
     const dialog = screen.getByRole('dialog', { name: 'Save filters as a preset' });
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Preset name' }), { target: { value: 'Kritéria' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Include the current map area in this preset' }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save preset' }));
     await waitFor(() => expect(createFilterPreset).toHaveBeenCalledTimes(1));
     expect(vi.mocked(createFilterPreset).mock.calls[0][0].filter_spec.filters.bounds).toBeNull();
+  });
+
+  it('keeps a preset saved without the map area without it on update', async () => {
+    vi.mocked(updateFilterPreset).mockResolvedValue(preset);
+    renderBar({ filters: { ...DEFAULT_FILTERS, bounds: BOUNDS } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update preset' }));
+    const dialog = screen.getByRole('dialog', { name: 'Update preset' });
+    const box = within(dialog).getByRole('button', { name: 'Include the current map area in this preset' });
+    expect(box).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Update preset' }));
+    await waitFor(() => expect(updateFilterPreset).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(updateFilterPreset).mock.calls[0][1].filter_spec?.filters.bounds).toBeNull();
   });
 
   it('edits the name and colour only', async () => {

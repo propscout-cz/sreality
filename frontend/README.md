@@ -67,7 +67,8 @@ Node 20+ required.
 - The R2 bucket sends **no CORS header**: an `<img>` displays a photo, but
   `fetch()` cannot read its bytes. So the property page's "Stáhnout" button
   asks the API for `GET /properties/{id}/download.zip` (JWT), which reads the
-  stored photos from R2 and zips them server-side with a PDF of the ad.
+  stored photos from R2 and zips them server-side with a PDF of the ad and, in
+  `moje-fotky/`, the originals of the user's own photos.
 
 ## Project layout
 
@@ -178,8 +179,8 @@ Under 768 px wide, `Shell.tsx` renders the routes inside the phone frame
 (`src/components/phone/PhoneShell.tsx`) instead of the desktop top bar:
 an `h-14` header (never taller — the Browse and Pipeline panes pin to
 3.5 rem) with a bell (the unread count, opening `/notifications`), a
-five-tab bar (Nové `/feed`, Pipeline, Sbírky, Makléři, Odkaz
-`/link`) and an account sheet (the theme, this iPhone's push switch
+six-tab bar (Nové `/feed`, Pipeline, Prohlídky `/viewings`, Sbírky,
+Makléři, Odkaz `/link`) and an account sheet (the theme, this iPhone's push switch
 "Oznámení na tomto iPhonu" — `src/components/phone/PushSwitch.tsx` over
 `src/lib/usePush.ts`, offered on an iPhone or iPad only, its subscription
 bound to the signed-in user by `src/lib/auth.tsx` and `src/lib/push.ts`
@@ -197,9 +198,14 @@ design renders its desktop page inside the frame. The feed (`/feed`,
 URL as Browse does; its cards are `src/components/phone/FeedCard.tsx`, and
 its Filtry sheet (`src/components/phone/FilterSheet.tsx`) draws Browse's
 filter set from the sidebar's own layout table (`src/lib/filterLayout.ts`). The property page draws
-`src/components/phone/PhoneProperty.tsx` from `PropertyDetail`'s own reads;
+`src/components/phone/PhoneProperty.tsx` from `PropertyDetail`'s own reads
+(Poloha, then "Moje fotky" — `src/components/listing-detail/PropertyPhotos.tsx`,
+the camera and the user's own photos, the same strip the desktop's Moje tab
+shows — then Fakta and the rest);
 Odkaz (`src/pages/Link.tsx`) takes a pasted portal link to
-`/listing/:source/:nativeId`. To see the frame on a desktop browser, narrow
+`/listing/:source/:nativeId`. Prohlídky (`src/pages/phone/PhoneViewings.tsx`)
+lists the account's viewings (notes with a date, `src/lib/viewings.ts`) one
+day at a time, from `GET /viewings`. To see the frame on a desktop browser, narrow
 the window below 768 px or use the device toolbar.
 
 ### Build-time vs runtime env vars

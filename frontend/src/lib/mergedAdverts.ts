@@ -123,6 +123,8 @@ export function splitItemWords(kind: SplitItemKind, label: string | null): strin
       return `kolekce ${named}`.trim();
     case 'tag':
       return `štítek ${named}`.trim();
+    case 'file':
+      return `soubor ${named}`.trim();
     default:
       return 'skrytí z vašeho Browse';
   }

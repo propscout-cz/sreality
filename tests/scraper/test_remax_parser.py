@@ -161,6 +161,13 @@ def test_category_from_typ():
     assert category_from_typ("Hotely, penziony a restaurace") == "komercni"
     # Nájemní domy land under komercni — every portal keys cinzovni_dum there.
     assert category_from_typ("Nájemní domy") == "komercni"
+    # The seventh group carries no category of its own: the title decides. 273 active ads
+    # (warehouses, "jiné prostory") held a NULL category_main until 2026-10-22, their titles
+    # naming no noun the fallback knew; an "apartmán" filed there stays a flat.
+    assert category_from_typ("Komerční prostory") is None
+    assert category_of("Komerční prostory", "Pronájem skladovacích prostor, Praha 10") == "komercni"
+    assert category_of("Komerční prostory", "Prodej jiných prostor 1000 m², Horní Cerekev") == "komercni"
+    assert category_of("Komerční prostory", "Prodej apartmánu 460 m², Josefův Důl") == "byt"
 
 
 def test_subtype_of():
@@ -291,7 +298,8 @@ def test_parse_detail_full():
     assert listing.terrace is None
     assert listing.furnished == "ano"
     assert listing.description.startswith("K prodeji")
-    assert listing.raw["remax_ref"] == "ID 259-NP01246"
+    assert listing.ad_reference == "ID 259-NP01246"
+    assert "remax_ref" not in listing.raw
     # Only this listing's images, full-resolution (no _th350), recommended excluded.
     assert listing.raw["image_urls"] == [
         "https://mlsf.remax-czech.cz/data//zs/440872/3387561.jpg",

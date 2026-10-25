@@ -57,6 +57,7 @@ import {
   toggleStat,
   statUsed,
   viewBlock,
+  soldMarketFilters,
   type ChartSpec,
 } from './stats';
 
@@ -657,5 +658,16 @@ describe('the named dashboards\' routes', () => {
     // A revoke (owner) and a leave (recipient, its own grant) are the one DELETE.
     await unshareStatsDashboard('d1', 'acct-1');
     expect(apiDelete).toHaveBeenLastCalledWith('/stats/dashboards/d1/shares/acct-1');
+  });
+});
+
+describe('soldMarketFilters — the "Prodáno (trh)" lens', () => {
+  it('overrides exactly status, seen-from-birth, dismissed and the 2–60 day window; every other filter holds', () => {
+    const set = { ...DEFAULT_FILTERS, priceMax: 5_000_000, status: 'active' as const, tomDaysMin: 10, showDismissed: false };
+    const sold = soldMarketFilters(set);
+    expect(sold).toEqual({
+      ...set, status: 'inactive', tomObservedOnly: true, showDismissed: true, tomDaysMin: 2, tomDaysMax: 60,
+    });
+    expect(set.status).toBe('active');
   });
 });

@@ -45,7 +45,10 @@ select to_regclass('autodedup.fp_key')         is not null
    and to_regclass('autodedup.rt_reject_ledger') is not null
    and exists (select 1 from pg_attribute
                 where attrelid = to_regclass('autodedup.rt_fp')
-                  and attname = 'dd' and not attisdropped) as present
+                  and attname = 'dd' and not attisdropped)
+   and exists (select 1 from pg_attribute
+                where attrelid = to_regclass('autodedup.rt_calibration')
+                  and attname = 'payload_zlib' and not attisdropped) as present
 """
 
 # A pass is one transaction (E75) and a statement that runs away is a lease held past its TTL,
@@ -196,7 +199,8 @@ select coalesce(max(w.id), %(after_id)s::bigint) as window_max,
   left join public.listing_location ll
          on ll.listing_id = w.id
         and (ll.obec_kod = any(%(obec)s::bigint[])
-             or ll.cast_obce_kod = any(%(cast_obce)s::bigint[]))
+             or ll.cast_obce_kod = any(%(cast_obce)s::bigint[])
+             or ll.okres_kod = any(%(okres)s::bigint[]))
 """
 
 # The proof rather than the assumption: any id at or below the cursor that this generation has
@@ -222,7 +226,8 @@ select w.id, w.first_seen_at
   left join public.listing_location ll
          on ll.listing_id = w.id
         and (ll.obec_kod = any(%(obec)s::bigint[])
-             or ll.cast_obce_kod = any(%(cast_obce)s::bigint[]))
+             or ll.cast_obce_kod = any(%(cast_obce)s::bigint[])
+             or ll.okres_kod = any(%(okres)s::bigint[]))
  where (%(all_scope)s::boolean or ll.listing_id is not null)
    and not exists (
          select 1
@@ -259,7 +264,8 @@ select coalesce(max(w.snapshot_id), %(after_id)s::bigint) as window_max,
   left join public.listing_location ll
          on ll.listing_id = w.listing_id
         and (ll.obec_kod = any(%(obec)s::bigint[])
-             or ll.cast_obce_kod = any(%(cast_obce)s::bigint[]))
+             or ll.cast_obce_kod = any(%(cast_obce)s::bigint[])
+             or ll.okres_kod = any(%(okres)s::bigint[]))
 """
 
 # The flip feed pages on the FULL key, so its window END is a pair and not the maximum of
@@ -290,7 +296,8 @@ select (select w2.inactive_at from win w2
   left join public.listing_location ll
          on ll.listing_id = w.id
         and (ll.obec_kod = any(%(obec)s::bigint[])
-             or ll.cast_obce_kod = any(%(cast_obce)s::bigint[]))
+             or ll.cast_obce_kod = any(%(cast_obce)s::bigint[])
+             or ll.okres_kod = any(%(okres)s::bigint[]))
 """
 
 # One row back, never the slice: the sweep reads a bounded window of this generation's inactive
@@ -315,7 +322,8 @@ select coalesce(max(f.listing_id), %(after_id)s::bigint) as slice_max,
   left join public.listing_location ll
          on ll.listing_id = f.listing_id
         and (ll.obec_kod = any(%(obec)s::bigint[])
-             or ll.cast_obce_kod = any(%(cast_obce)s::bigint[]))
+             or ll.cast_obce_kod = any(%(cast_obce)s::bigint[])
+             or ll.okres_kod = any(%(okres)s::bigint[]))
 """
 
 # The FIFTH feed, and the one the scope owes (E79): a listing the operator's geocoder MOVES —
@@ -341,7 +349,8 @@ select coalesce(max(f.listing_id), %(after_id)s::bigint) as slice_max,
   left join public.listing_location ll
          on ll.listing_id = f.listing_id
         and (ll.obec_kod = any(%(obec)s::bigint[])
-             or ll.cast_obce_kod = any(%(cast_obce)s::bigint[]))
+             or ll.cast_obce_kod = any(%(cast_obce)s::bigint[])
+             or ll.okres_kod = any(%(okres)s::bigint[]))
 """
 
 # The SIXTH feed, and the one the scope owes in the other direction (W9d-3):
@@ -371,6 +380,28 @@ select coalesce(max(f.listing_id), %(after_id)s::bigint) as slice_max,
 # arrives is already claimed by the straggler sweep (the last N rows of `listings`, anti-joined
 # on `rt_fp`), so this feed exists for the long tail — an old listing re-geocoded into the
 # scope — which is measured in days rather than in minutes.
+#
+# How many rows one WALK of a scope block reads: its PAGE (W9e/R3; E940). A block larger than a
+# page is listed over consecutive walks in listing-id order from its page cursor
+# (`incremental_lane.PAGES_SETTING`), each page one walk for the cadence and the cap, so its
+# snapshot is never cut to its oldest rows (until E940 a walk that filled it kept the block's
+# oldest 20,000 for ever; E961 named such a walk TRUNCATED and refused it at the seed). A page
+# bounds what ONE statement returns and writes, not what the walk costs: a town's or a
+# district's cursor is a filter on the block's own bitmap, and Praha's pages are ordered pkey
+# walks of about one bitmap's buffers each. Over a page on 2026-10-17: Praha (167,548 rows, 9
+# pages), Brno (41,082, 3), Ostrava (26,243, 2), and Praha-východ (19,812, +105 a day) within
+# ~2 days.
+ENTER_SLICE: int = 20000
+
+# One statement lists ONE PAGE of a block (E940): its first `limit` rows after `after_id` in
+# listing-id order — a keyset on the primary key, never an OFFSET — so a block larger than a page
+# is read whole over several walks instead of being cut to its oldest page. Measured live
+# `EXPLAIN (ANALYZE, BUFFERS)`, 2026-10-17, warm, six of Praha's nine pages as a town block
+# (167,548 rows): a full page is an ordered walk of `listing_location_pkey` filtered on the obec,
+# 27,832-74,481 buffers and 80-155 ms, and the short last page a BitmapAnd of the pkey and the
+# town index, 4,622 buffers and 40 ms; a quarter (Vysočany) is its city's bitmap, 36,121
+# buffers and 93 ms, with the cursor a filter. Every plan stays index-served, far inside the
+# pass's 120 s statement timeout.
 RT_SCOPE_BLOCK_SQL = """
 select ll.listing_id  as listing_id,
        ll.resolved_at as resolved_at
@@ -378,13 +409,37 @@ select ll.listing_id  as listing_id,
  where ll.obec_kod = %(obec)s::bigint
    and (%(cast_obce)s::bigint is null
         or ll.cast_obce_kod = %(cast_obce)s::bigint)
+   and ll.listing_id > %(after_id)s::bigint
  order by ll.listing_id
  limit %(limit)s
 """
 
-# The snapshot write. One block is replaced whole: what the scan found is upserted, and what it
-# no longer finds is pruned — a listing the geocoder moved OUT leaves the snapshot here and is
-# retired by the drift sweep there, which is the other direction and keeps its own rail.
+# An okres block (E961) is the town index again, not a scan: `okres_kod` has no index either, so
+# the walk reaches the district through ITS obce (`RT_SCOPE_OKRES_OBCE_SQL`) on `(obec_kod,
+# granularity)`, and the same index's `obec_kod is null` range for the adverts located to the
+# district alone (94 in the corpus on 2026-10-17, granularity `okres`). `okres_kod` is the filter
+# that makes the block exactly what the feeds' predicate holds — 19,812 rows for Praha-východ
+# either way. Measured live `EXPLAIN (ANALYZE, BUFFERS)` on Praha-východ (110 obce, the largest
+# of kraj 27): a BitmapOr of the two index scans, **13,935 buffers = 109 MB, 71 ms** warm — half
+# a quarter's 231 MB, because a quarter's bitmap is its whole city and a district's is only its
+# own rows.
+# Paged like a town (E940): the cursor is a heap filter on the same bitmap, so every page of a
+# district costs about its whole bitmap (Praha-východ's first page, 2026-10-17: 13,935 buffers).
+RT_SCOPE_OKRES_BLOCK_SQL = """
+select ll.listing_id  as listing_id,
+       ll.resolved_at as resolved_at
+  from public.listing_location ll
+ where ll.okres_kod = %(okres)s::bigint
+   and (ll.obec_kod = any(%(obce)s::bigint[])
+        or (ll.obec_kod is null and ll.granularity = 'okres'))
+   and ll.listing_id > %(after_id)s::bigint
+ order by ll.listing_id
+ limit %(limit)s
+"""
+
+# The snapshot write. One PAGE is replaced whole: what the walk found is upserted, and what the
+# page's id range no longer holds is pruned — a listing the geocoder moved OUT leaves the snapshot
+# here and is retired by the drift sweep there, which is the other direction and keeps its own rail.
 # `resolved_at` travels as TEXT and is cast per element: a block whose rows all carry a NULL
 # `resolved_at` would otherwise hand psycopg a list with nothing to infer a type from, and
 # Postgres has no cast from `text[]` to `timestamptz[]`.
@@ -400,10 +455,15 @@ on conflict (generation, block_key, listing_id) do update set
     refreshed_at = now()
 """
 
+# A page proves the block's membership for ITS id range only (E940): after the cursor, up to its
+# last row, or to the block's end when the page came back short (`page_end` NULL). So a page never
+# prunes a row the cycle has not reached, and one cycle's pages partition the ids, each pruned once.
 RT_SCOPE_IDS_PRUNE_SQL = """
 delete from autodedup.rt_scope_ids s
  where s.generation = %(generation)s::text
    and s.block_key = %(block_key)s::text
+   and s.listing_id > %(after_id)s::bigint
+   and (%(page_end)s::bigint is null or s.listing_id <= %(page_end)s::bigint)
    and not (s.listing_id = any(%(listing_ids)s::bigint[]))
 """
 
@@ -445,6 +505,63 @@ select s.listing_id, s.resolved_at
  limit %(limit)s
 """
 
+# The same feed during a BUILD (E976): the LIVE adverts first, ids ascending within each half,
+# and an advert with no `listings` row last. A widening's backlog is mostly the scope's history —
+# Praha's on 2026-10-22: 37,910 unread of 200,625, 11,864 of them live, the live ones' median id
+# 18.7M against 0.5M overall — so in id order the build reached the adverts a merge is visible on
+# last, ~3 days in. Two keys cannot be a keyset, so this statement takes no id cursor: the
+# `rt_fp` anti-join is what advances it (a decided advert has a row; every advert with a
+# `listings` row yields facts, so none is offered for ever) and the settle lag still holds a fresh
+# resolution back. `is_active` is read by primary key, one probe an unread advert, as a scalar
+# subquery so the planner cannot turn it into a hash or merge join over `listings`. Measured live
+# `EXPLAIN (ANALYZE, BUFFERS)`, 2026-10-22, limit 200: a parallel hash anti-join of the snapshot
+# (3,175 buffers) and `rt_fp` (4,568), then 37,910 `listings_pkey` probes (151,785 buffers, all
+# hits) and a top-N heapsort: 159,660 buffers, 337 ms. It shrinks as the build reads; a fresh
+# build of the whole 200k scope would be ~5x that. Outside a build the statement above runs.
+# E978 widens "live" to VISIBLE: an advert that is live, or sits on a property holding a live
+# advert, or on a property whose read adverts belong to a group holding one (live ones first
+# within that half) — the adverts a
+# merge visible in Browse waits for under E977's per-group rail. Measured 2026-10-22 21:40Z after
+# the live ones were read: 1,264 of the 25,434 unread adverts are visible this way (895 by their
+# property alone), ~2.5 passes instead of ~15 h in id order; the two probes ride
+# `listings_property_id_idx` and `cluster_members`' key: 895 ms a limit-500 call measured live,
+# all buffer hits (25,434 unread).
+RT_SCOPE_BUILD_ENTRANTS_SQL = """
+select s.listing_id, s.resolved_at
+  from autodedup.rt_scope_ids s
+ where s.generation = %(generation)s::text
+   and (s.resolved_at is null
+        or s.resolved_at <= now() - make_interval(secs => %(lag)s))
+   and not exists (select 1
+                     from autodedup.rt_fp f
+                    where f.generation = %(generation)s::text
+                      and f.listing_id = s.listing_id)
+ order by (select l.is_active
+                   or exists (select 1
+                                from public.listings o
+                               where o.property_id = l.property_id
+                                 and o.is_active)
+                   or exists (select 1
+                                from public.listings o
+                                join autodedup.cluster_members m
+                                  on m.generation = %(generation)s::text
+                                 and m.listing_id = o.id
+                                join autodedup.cluster_members m2
+                                  on m2.generation = m.generation
+                                 and m2.cluster_key = m.cluster_key
+                                join public.listings a
+                                  on a.id = m2.listing_id
+                                 and a.is_active
+                               where o.property_id = l.property_id)
+             from public.listings l
+            where l.id = s.listing_id) desc nulls last,
+          (select l.is_active
+             from public.listings l
+            where l.id = s.listing_id) desc nulls last,
+          s.listing_id
+ limit %(limit)s
+"""
+
 # The cadence's two inputs, in one statement: how long ago each block was walked, and how many
 # walks this generation has spent in the rolling day the cap is measured over. `age_s` is
 # computed by the SERVER — a runner's clock is not the database's, and the cadence is the only
@@ -457,6 +574,14 @@ select s.block_key                                                     as block_
   from autodedup.rt_scope_scan s
  where s.generation = %(generation)s::text
  group by s.block_key
+"""
+
+# A block a widening REPLACED (E964) leaves the scan ledger with its snapshot rows, so nothing reads
+# it as walked: the lane walks its adverts under the block that contains it now.
+RT_SCOPE_SCAN_PRUNE_BLOCKS_SQL = """
+delete from autodedup.rt_scope_scan s
+ where s.generation = %(generation)s::text
+   and not (s.block_key = any(%(block_keys)s::text[]))
 """
 
 RT_SCOPE_SCAN_WRITE_SQL = """
@@ -501,6 +626,26 @@ select u.code as cast_obce_kod, p.code as obec_kod
  where u.level = 'cast_obce'
    and u.code = any(%(codes)s::bigint[])
    and u.valid_to is null
+"""
+
+# An okres block's obce, and the proof it IS an okres: the register's current okres row under a
+# kraj (all 76 have one), then its obce through the `parent_id` index (the register holds one
+# current row per obec, so there are no versions to choose between). An okres the register
+# cannot place under a kraj, or one with no obec, is a scope the sweep cannot walk.
+# `EXPLAIN (ANALYZE, BUFFERS)` for the 12 okresy of kraj 27: three Index Scans (`(level, code)`,
+# the primary key, `parent_id`), 1,144 obce, 369 buffers, 2.0 ms.
+RT_SCOPE_OKRES_OBCE_SQL = """
+select o.code as okres_kod, c.code as obec_kod
+  from public.ruian_admin_units o
+  join public.ruian_admin_units k
+    on k.id = o.parent_id
+   and k.level = 'kraj'
+  join public.ruian_admin_units c
+    on c.parent_id = o.id
+   and c.level = 'obec'
+ where o.level = 'okres'
+   and o.code = any(%(codes)s::bigint[])
+   and o.valid_to is null
 """
 
 # ------------------------------------------------------------------ the storage budget (E79)
@@ -715,13 +860,17 @@ select p.phash, p.n_listings
 # the calibration was cut — so the live lane joins against exactly the statistic the batch
 # engine scored with, at zero cost against `public`. Migration 528's prose says "only hashes on
 # >= 3 listings"; that was never true of the table, only of an intention, and a population of 1
-# or 2 is the difference between "this photo is unique" and "nobody measured it".
+# or 2 is the difference between "this photo is unique" and "nobody measured it". A hash whose
+# count did not move is not rewritten (E964 review F6): a re-cut over a 323k scope upserted every
+# one of its ~2.3M hashes, a new tuple version each, where only the hashes the new adverts'
+# photographs add or move change.
 RT_PHASH_POP_WRITE_SQL = """
 insert into autodedup.phash_pop (phash, n_listings, computed_at)
 values (%(phash)s::bigint, %(n_listings)s::integer, now())
 on conflict (phash) do update set
     n_listings  = excluded.n_listings,
     computed_at = now()
+ where autodedup.phash_pop.n_listings is distinct from excluded.n_listings
 """
 
 RT_PHASH_POP_COUNT_SQL = """
@@ -1228,13 +1377,15 @@ select c.generation, c.digest, c.built_at
  where c.generation = %(generation)s::text
 """
 
-# E944: `held` is the digest of the calibration the caller already holds; the payload (5.7 MB
-# of text at 39.5k adverts) comes back NULL while it is still the stored one, so a pass reads it
+# E963: the payload is `payload_zlib` — the canonical JSON (`calibration_cut.encode_payload`)
+# zlib-compressed in a bytea, under bytea's 1 GB where a jsonb value stops at 256 MiB of binary.
+# `read_calibration` is its one reader. E944: `held` is the digest of the calibration the caller
+# already holds; the payload comes back NULL while it is still the stored one, so a pass reads it
 # once per digest. NULL `held` reads it always.
 RT_CALIBRATION_READ_SQL = """
 select c.generation, c.digest, c.n_listings,
-       case when c.digest = %(held)s::text then null else c.payload end as payload,
-       c.artifact_url, c.settings, c.model_version, c.built_at
+       case when c.digest = %(held)s::text then null else c.payload_zlib end as payload_zlib,
+       c.settings, c.model_version, c.built_at
   from autodedup.rt_calibration c
  where c.generation = %(generation)s::text
 """
@@ -1257,15 +1408,14 @@ select distinct i.phash
 """
 
 RT_CALIBRATION_WRITE_SQL = """
-insert into autodedup.rt_calibration (generation, digest, n_listings, payload, artifact_url,
-                                      settings, model_version, built_at)
-values (%(generation)s::text, %(digest)s::text, %(n_listings)s::integer, %(payload)s::jsonb,
-        %(artifact_url)s::text, %(settings)s::jsonb, %(model_version)s::text, now())
+insert into autodedup.rt_calibration (generation, digest, n_listings, payload_zlib, settings,
+                                      model_version, built_at)
+values (%(generation)s::text, %(digest)s::text, %(n_listings)s::integer,
+        %(payload_zlib)s::bytea, %(settings)s::jsonb, %(model_version)s::text, now())
 on conflict (generation) do update set
     digest        = excluded.digest,
     n_listings    = excluded.n_listings,
-    payload       = excluded.payload,
-    artifact_url  = excluded.artifact_url,
+    payload_zlib  = excluded.payload_zlib,
     settings      = excluded.settings,
     model_version = excluded.model_version,
     built_at      = now()
@@ -1484,11 +1634,18 @@ select count(*)::bigint from gone
 # Which blocks this generation has EVER walked, with no 24-hour window on it. The cadence's own
 # state query is windowed (a block last walked two days ago has to read as due), but the
 # bootstrap phase ends on "every block has been walked once", which is a question about all of
-# history and cannot be asked of a rolling day.
+# history and cannot be asked of a rolling day. Walked means READ TO ITS END (E940): a block
+# still inside its first cycle of pages — `of` 0 in the generation's page row
+# (`incremental_lane.PAGES_SETTING`, spelled here too) — is not walked yet; a block with no entry
+# there was read whole by its first walk (every scan before E940 was).
 RT_SCOPE_SCAN_SEEN_SQL = """
 select distinct s.block_key
   from autodedup.rt_scope_scan s
  where s.generation = %(generation)s::text
+   and not exists (select 1
+                     from autodedup.settings p
+                    where p.key = 'rt_scope_pages:' || s.generation
+                      and (p.value -> s.block_key ->> 'of')::int = 0)
 """
 
 # How many in-scope listings this generation has not fingerprinted yet — the bootstrap phase's
@@ -1502,6 +1659,37 @@ select count(*)::bigint
                      from autodedup.rt_fp f
                     where f.generation = %(generation)s::text
                       and f.listing_id = s.listing_id)
+"""
+
+# ------------------------------------------------------------------ the widening seed (E964)
+#
+# A seed that WIDENS a seeded generation keeps every row it holds, so it reads what it keeps
+# instead of rebuilding it: the snapshot's adverts in the blocks it does not walk again (the
+# scope snapshot's primary key, generation and block first), how many of the scope's adverts
+# the store already fingerprints (the build is the rest; `rt_fp`'s primary key, a slice at a
+# time), and the scorer the generation was seeded with (`RT_CALIBRATION_SCORER_SQL` below).
+RT_SCOPE_IDS_OF_BLOCKS_SQL = """
+select distinct s.listing_id
+  from autodedup.rt_scope_ids s
+ where s.generation = %(generation)s::text
+   and s.block_key = any(%(block_keys)s::text[])
+ order by s.listing_id
+"""
+
+RT_FP_HELD_SQL = """
+select count(*)::bigint
+  from autodedup.rt_fp f
+ where f.generation = %(generation)s::text
+   and f.listing_id = any(%(ids)s::bigint[])
+"""
+
+# The generation's scorer, never its payload: a reader that decides nothing (`rt_equivalence`)
+# leaves the payload to `read_calibration` (E963); the widening seed compares the scorer it is
+# named with against it (E964).
+RT_CALIBRATION_SCORER_SQL = """
+select c.settings, c.model_version
+  from autodedup.rt_calibration c
+ where c.generation = %(generation)s::text
 """
 
 # ------------------------------------------------------------------ live equivalence (E99)
