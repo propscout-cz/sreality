@@ -33,7 +33,10 @@ An agent is added by adding files, never Python, when these hold:
    truncates. The loop, later MCP and later REST are adapters at this seam, which already has two adapters today.
 2. **Parity (ADR-0002).** Every database function the screens call (Browse search over all its filters, the stats
    dashboard, map counts and overlays, sold comparables, collections, pipeline, notes, brokers) is a registry entry
-   run under the user's own login through `tenant_transaction`. Regional datapoints, including the curated city
+   run under the user's own login through `tenant_transaction`. One exception stands until the narrow database
+   logins arrive: the toolkit's market-wide analytics (comparables, velocity, distribution) keep reading base tables on
+   the service connection, as today, and return market facts only; every entry that touches a user's own data runs
+   under the user's login. Regional datapoints, including the curated city
    indexes, are readable by agents that rank; no price estimate reads them (rule 17, amended). Broker contacts are
    what the user sees, at most 20 per call, every read recorded on the run. A screen capability an agent lacks is a
    bug. **Typed operations only (ADR-0003):** no model-written SQL; the forms cover what the screens do.
@@ -98,16 +101,19 @@ the user sees the draft with an "open in my mail" link and sends it; no thread t
 **M0, days 1–5: the floor, and the move agent-worker needs.**
 - Two pull requests: revoke the browser's INSERT/UPDATE on `estimation_runs` and `building_runs` (migration 291:29-30 grants them
   table-wide today) and grant UPDATE (scenario) only, so the scenario PATCH keeps working;
-  `/buildings*` admin-only; `verify_jwt` pins the issuer, requires `sub`, `exp`, `role`, refuses `client_id`; boot
+  `/buildings*` admin-only; `verify_jwt` pins the issuer, requires `sub`, `exp`, `role`, refuses client_id; boot
   refuses `API_AUTH_OPTIONAL` under `RAILWAY_ENVIRONMENT`; `force_refresh` admin-only; delete `RUNPOD_API_KEY` from the API; the run-start allowlist as an `app_settings`
   key (absent = nobody; M1b only reads it): hejtmanekp@gmail.com, k.haskova@gmail.com and the test accounts the build needs.
 - **The Railway config move (Config as Code → IaC) for the three existing services, by this programme, this week.**
   Actions-exit W2 (#2025, blocked by the repo transfer #2008) plans the same move for four services including its new
   job runner; by ruling Q24 this programme takes the three existing services forward now and #2025 keeps only the
-  runner. agent-worker cannot be created before this is done.
+  runner (agreed with the Actions-exit owner 2026-10-25). The IaC file carries per-service replicas, memory and CPU
+  limits, drainingSeconds and a Dockerfile build argument per service, so #2025 can add its runner (2 replicas, 8 GB /
+  4 vCPU, 180 s drain) to the same file; the three railway*.json files are deleted in the same change; the M0 issue
+  number is posted on #2025 so its blocking edge becomes real. agent-worker cannot be created before this is done.
 - The remaining credential rotation through a guided script (`/wizard`): the database password and the two DSNs, the
-  Supabase service key, the R2 key, Stripe, the GitHub token, Mapy, Valuo, the smoke-test accounts; database last.
-  Already rotated: the AI provider keys, RunPod, Cloudflare. VAPID is new and stays.
+  Supabase service key, the R2 access key pair, Stripe, the GitHub token, Mapy, Valuo, the smoke-test accounts; database last.
+  Already rotated: the AI provider keys, RunPod, the Cloudflare API token. VAPID is new and stays.
 
 *Exit:* a trial JWT gets 403 on `/buildings` and `force_refresh`; a PostgREST INSERT into `estimation_runs` is denied
 while the scenario PATCH works; boot refuses `API_AUTH_OPTIONAL`; a foreign-issuer token gets 401; the Railway IaC plan shows no diff for all three services after a forced redeploy; every rotated secret has one verification.
@@ -116,7 +122,7 @@ while the scenario PATCH works; boot refuses `API_AUTH_OPTIONAL`; a foreign-issu
 - *M1a (days 6–12):* `api/capabilities/` with the entries of § 2 (the Search agenda in `filter_registry`, the stats
   mapper with a census that every dashboard parameter is mapped, market_evidence, the dossier and context reads,
   the broker reads with the 20-contact cap); the read-only helper (`tenant_transaction` with a read_only flag, 8 s
-  statement timeout, row cap); the skills loader; the generic loop and `submit_result`; the Anthropic provider
+  statement timeout, row cap); the skills loader; the generic loop and submit_result; the Anthropic provider
   carries the hosted code tool and the Files API; skills/regional_scout_v1/ with `references/` slots;
   scripts/agent_run.py with a record mode, run locally against production data read-only. The operator grades 10
   shortlists on Opus 5.5 and, where no code is needed, on gpt-5.6-luna. Below 7 of 10, change the skill, not the spine.
@@ -195,7 +201,7 @@ start runs, what agent search means, and model-written SQL.
 - **Journal resume:** retry from the start, twice; returns for runs over about 5 minutes or $0.50.
 - **Dollar reservations, priorities, reserved slots:** two allowlisted accounts, a per-account cap, a per-run token
   cap and a platform daily ceiling bound spend. Return when the allowlist opens.
-- **Lock files, `agents/*.yaml`, `capability_calls`, the status trigger:** the commit sha, one skill per agent, the
+- **Lock files, `agents/*.yaml`, capability_calls, the status trigger:** the commit sha, one skill per agent, the
   step journal and the brake answer the same questions.
 - **The code-runner Railway service and the Sandbox rung (PROGRAM §3.3):** not needed while code runs on Claude's
   hosted tool; reopen if an agent must run code on a non-Claude model or on our own infrastructure.
@@ -209,7 +215,7 @@ start runs, what agent search means, and model-written SQL.
 | §2.1 items 3 (probes), 9 (extension sender check), 10 (attachment key trigger) | later | before our own code runner; before any extension sink; before shares grow |
 | §2.1 items 4–8 | **M0** | n/a |
 | §3.1 registry, explicit arguments, error shim | **M1a** | n/a |
-| §3.1 cost class, `market_cache` class, REST from the registry | dropped / later | MCP or a second HTTP consumer |
+| §3.1 cost class, market_cache class, REST from the registry | dropped / later | MCP or a second HTTP consumer |
 | §3.2 skills in git, pinned at submit | **M1a** | n/a |
 | §3.2 `agents/*.yaml`, lock files, refiner PRs | later | multi-skill agent; second author |
 | §3.3 generic loop, hard caps; agent-worker | **M1a / M1b** | n/a |
@@ -219,7 +225,7 @@ start runs, what agent search means, and model-written SQL.
 | §3.5 principal at submit, one claims builder, read-only reads, no act-as on runs | **M1b** | n/a |
 | §3.5 effect classes beyond read/write/costly/code, approvals, narrow logins, GUC narrowing, W8 binding | later | mid-run asks; strangers on the allowlist; paying tenants |
 | §3.6 artifacts | **M1b**, Supabase Storage | n/a |
-| §3.7 MCP, `capability_calls` | W5 | domain cutover + a user asks |
+| §3.7 MCP, capability_calls | W5 | domain cutover + a user asks |
 | §3.8 mail | M3 drafts; W7 for the ledger and inbound | demand + rulings |
 | §3.9 E0 cassettes + security subset; live script | **M1b** | n/a |
 | §3.9 E1, E2, judges, review queue, Langfuse | later | PROGRAM's triggers |
@@ -235,3 +241,4 @@ start runs, what agent search means, and model-written SQL.
 2. The facet list v1 for the photo assessment (Claude drafts in M1a; operator edits).
 3. The remaining credential rotation (operator, with the wizard, M0).
 4. The monthly Valuo cap per account (operator; a number).
+5. Post the M0 issue or PR number on Actions-exit #2025 once `/to-tickets` creates it.

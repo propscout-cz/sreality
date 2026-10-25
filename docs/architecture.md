@@ -3395,6 +3395,11 @@ renumber.** Navigate by area:
     selected deal-type pill (which `PillRow` has always offered) wrote `deal=null`, which
     `enumOr` silently snapped back to `pronajem` — the control lied about what it could do.
 
+    **Amendment 2026-10-25 (ADR-0007, operator grill):** agents may call a NEW structured photo assessment (facets with a
+    score and an evidence note each, cached per photo set and prompt version, at most 10 properties per run, defined in
+    `docs/design/agent-platform/MVP.md`). The parked 1..5 levels stay unread by every surface, cohort statistics keep the
+    portal-stated `listings.condition`, and Browse shows no facet until a further ruling.
+
     **Amendment 2026-10-25 (ADR-0002, operator grill):** agents that RANK (the scout) may read the curated city indexes
     under the user's login; no price estimate reads them, and the estimation agenda is unchanged.
 
