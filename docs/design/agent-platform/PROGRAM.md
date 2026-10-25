@@ -1071,6 +1071,13 @@ about 2.5–3.5 weeks after W0 and W1.
 
 ## 9. Rulings owed
 
+> **Rulings taken 2026-10-25 (operator grill):** AR1 (rotation under way; VAPID excluded), AR2 (Agent, Tool added), AR3
+> (per-agent models; Claude Opus 5.5 for code agents), AR4 (re-taken: Claude hosted code execution, ADR-0005), AR5
+> (estimator rebuilt, M2), AR6 (ADR-0001), AR8 (agent-worker now, after IaC), AR9 (propose-then-apply, ADR-0004), AR13
+> (re-taken: parity, ADR-0002), AR16 (re-taken: Supabase Storage, ADR-0006), AR20 (M0–M3, gate after M1), plus MVP-A/B/C
+> and the photo assessment (ADR-0007). Answers and consequences: [MVP.md](./MVP.md) § 4. The rest below stay owed for
+> their waves.
+
 | Needed before | Rulings |
 |---|---|
 | W0 | AR1 |
