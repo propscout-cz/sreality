@@ -47,7 +47,7 @@ the completion stamp (derived_artifacts, migration 622) independently.
 
 Two run modes (Phase 3 -- real-time properties):
 
-  * --incremental (cron */5, property_maintenance.yml): attach new stragglers + recompute
+  * --incremental (by hand; the realtime worker's maintenance lane runs it every 30 s): attach new stragglers + recompute
     ONLY the properties queued in `dirty_properties` by the writers + settle. O(changes).
   * full (default, daily reconcile, recompute_property_stats.yml): attach (again after
     every batch) + recompute EVERY property (one cycle, resumed across runs when the budget
@@ -835,7 +835,7 @@ def _release_lease(conn: Any, holder: str,
 
 def run_incremental_pass(conn: Any, batch_size: int = 2000) -> dict[str, Any]:
     """ONE incremental property-maintenance pass — THE shared implementation
-    behind the GH cron (property_maintenance.yml) and the realtime worker's
+    behind `--incremental` and the realtime worker's
     maintenance lane: attach new stragglers, then bring the dirty set current through
     `properties_changed` (recompute, `browse_list` patch, broker queue), so a change reaches
     Browse on this lane's cadence rather than at the next */15 wholesale rebuild, then settle

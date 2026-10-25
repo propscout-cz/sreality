@@ -1127,8 +1127,8 @@ def _affected(conn: Any, listing_ids: list[int]) -> list[int]:
         return [int(r[0]) for r in cur.fetchall()]
 
 
-# The leaderboard matview republishes from the DRAIN path (worker lane every
-# ~2 min + broker_resolution.yml as the throttled backstop), not from the daily
+# The leaderboard matview republishes from the DRAIN path (the worker lane every
+# ~30 s), not from the daily
 # sweep — freshness stopped being coupled to a 1.5-3h job that GH cron drift
 # parks in working hours (Broker Unify W3). The derived_artifacts stamp is the
 # clock, so both hosts share one cadence with no new setting; the chokepoint
@@ -1801,8 +1801,8 @@ def _run_incremental(conn: Any, free: list[str], franchise: list[str],
 
 def run_incremental_pass(conn: Any, batch_size: int = 5000, *,
                          reconnect: Callable[[], Any] | None = None) -> dict[str, Any]:
-    """THE incremental broker-maintenance driver (Broker Unify W3), shared by
-    broker_resolution.yml and the realtime worker's broker lane — mirrors
+    """THE incremental broker-maintenance driver (Broker Unify W3), run by the
+    realtime worker's broker lane and `--incremental` by hand — mirrors
     scripts.recompute_property_stats.run_incremental_pass. Skips cleanly when
     another resolution run holds the lock, drains the dirty queue until empty
     (not one slice per invocation — the one-slice shape left 2,300-row, 5 h+

@@ -351,9 +351,9 @@ Database:
   Connection string → Session pooler, port 5432; same host/user as `SUPABASE_DB_URL`, just
   port 5432 not 6543). **Optional**; used only by the scraper's hot detail-write loop
   (`connect_session()`, i.e. the Phase-2 detail-drain's batched writes) so its repeated SQL
-  gets prepared statements. Unset → falls back to `SUPABASE_DB_URL`. Set it as an Actions
-  secret on `detail_drain.yml` (and the Railway env var only if the API ever calls
-  `connect_session()`).
+  gets prepared statements. Unset → falls back to `SUPABASE_DB_URL`. Set it on the realtime
+  worker's Railway service, the drain's only runtime since W0 (#2010), as an Actions secret for
+  a hand `--drain-only` run, and on the API only if it ever calls `connect_session()`.
 - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` — set as Actions secrets for forward
   compatibility; the v1 scraper connects to Postgres directly and does not need them.
   (`SUPABASE_SERVICE_ROLE_KEY` is the 2025 `sb_secret_...` token, **not** a JWT.) **On the
