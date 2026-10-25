@@ -238,10 +238,18 @@ class ReaderContract:
     reads_stored_body: bool = False
 
     @property
+    def walks_paths(self) -> bool:
+        """Whether a `locator.fallback` on this reader is ever read: on every page reader,
+        because `page_readers.read_entry` walks the paths above the reader; on a payload
+        reader only where the reader itself calls `locator_reads`."""
+        return self.reads_stored_body or "fallback" in self.optional_keys
+
+    @property
     def appetite(self) -> frozenset[str]:
         """Every `locator` key this reader reads. `reader` is the locator's own
         discriminator rather than a value looked up, so it is always legal."""
-        return self.locator_keys | self.optional_keys | frozenset({"reader"})
+        paths = frozenset({"fallback"}) if self.walks_paths else frozenset()
+        return self.locator_keys | self.optional_keys | paths | frozenset({"reader"})
 
 
 # One row per `location_data.claims_intake` reader. Payload readers address `raw_json` by
@@ -356,7 +364,7 @@ READER_CONTRACTS: dict[str, ReaderContract] = {
     "html_marker": ReaderContract(
         substrates=_DOM_SURFACES, methods=_DECLARED_QUALITY,
         locator_keys=frozenset({"css", "value_label"}),
-        optional_keys=frozenset({"attr", "contains"}),
+        optional_keys=frozenset({"attr", "blank_attrs", "contains"}),
         reads_stored_body=True),
     # --- W2 reader canon, embedded-JSON family: ONE acquisition layer (css + optional attr
     # + optional decode + optional subject match) and five extractors over it. `css` is
@@ -415,7 +423,7 @@ READER_CONTRACTS: dict[str, ReaderContract] = {
         substrates=_JSONLD_SURFACES, methods=_BREADCRUMB_METHOD,
         locator_keys=frozenset({"css", "type", "anchor_slugs", "level"}),
         consults_transforms=True,
-        optional_keys=frozenset({"attr", "decode", "script_match"}),
+        optional_keys=frozenset({"attr", "decode", "levels_by_anchor", "script_match"}),
         reads_stored_body=True),
     # --- W3: the text lane's STORED READING of the advert (`location_data.text_reading`), the
     # lane's third substrate. `slot` names the reading's cell; a `fallback` slot answers when
@@ -543,7 +551,8 @@ STORED_PAGE_KIND = "detail"
 
 
 def _check_fallback(
-    reader: str, spec: ReaderContract, raw: Any, *, where: str,
+    reader: str, spec: ReaderContract, raw: Any, *, surface: str, method: str,
+    transforms: list[str], guards: list[str], where: str,
 ) -> None:
     """`locator.fallback`: ordered alternative PATHS inside the one entry (W7-b).
 
@@ -553,11 +562,19 @@ def _check_fallback(
     path too, and `claims_common.locator_reads` takes the first that answers.
 
     Every rail the primary locator has applies to each alternative, because an alternative is
-    a read, not an annotation: it addresses the value through the SAME reader's required
-    keys (a `point_pair` fallback names both halves of the pair), it may carry its own
-    `transform` where the two shapes need different normalisers, and it may say nothing else
-    — a key the reader never consults would be as inert here as on the primary, which is the
-    defect `bzs.det.link_pin` shipped.
+    a read, not an annotation: it addresses the value through its reader's required keys (a
+    `point_pair` fallback names both halves of the pair), it may carry its own `transform`
+    where the two shapes need different normalisers, and it may say nothing else — a key the
+    reader never consults would be as inert here as on the primary, which is the defect
+    `bzs.det.link_pin` shipped.
+
+    A PAGE path may hand over to another page reader (`reader:`), because a page can state
+    one fact in two documents no one reader reads — idnes puts an unpinned ad's street in its
+    map config and in its address line. It is held to the entry's own surface and method, so
+    a claim's provenance is true whichever path answered, and it is run as a whole entry
+    (`page_readers.read_entry`), so it may name any key its reader consults. A payload path
+    stays on the entry's reader: those readers walk their own paths and read only the
+    required keys off each.
     """
     if raw is None:
         return
@@ -565,28 +582,50 @@ def _check_fallback(
         raise ContractError(
             f"{where}: locator.fallback is an ORDERED list of alternative reads "
             f"(got {raw!r}); one mapping per path, tried in the order written")
-    allowed = spec.locator_keys | frozenset({"transform"})
     for index, alternative in enumerate(raw):
         at = f"{where}: locator.fallback[{index}]"
         if not isinstance(alternative, dict):
             raise ContractError(f"{at} is not a mapping ({alternative!r})")
-        for key in sorted(spec.locator_keys):
+        named = str(alternative.get("reader") or reader)
+        path_spec = READER_CONTRACTS.get(named)
+        if named != reader:
+            if not spec.reads_stored_body:
+                raise ContractError(
+                    f"{at} names reader '{named}'; payload reader '{reader}' walks its own "
+                    f"paths, so every one of them is read through '{reader}'")
+            if path_spec is None or not path_spec.reads_stored_body:
+                raise ContractError(
+                    f"{at} names reader '{named}', which does not read the stored page; a "
+                    f"page path may hand over only to another page reader")
+            if surface not in path_spec.substrates or method not in path_spec.methods:
+                raise ContractError(
+                    f"{at}: reader '{named}' does not read '{surface}' by '{method}', and "
+                    f"every path stamps the entry's own provenance (00 §3)")
+            if guards and not path_spec.consults_guards:
+                raise ContractError(
+                    f"{at}: reader '{named}' never evaluates guards, so this path would "
+                    f"admit what the entry's {guards} reject")
+        assert path_spec is not None
+        allowed = ((path_spec.appetite - {"fallback"}) | {"transform"}
+                   if spec.reads_stored_body else spec.locator_keys | {"transform"})
+        for key in sorted(path_spec.locator_keys):
             if not alternative.get(key):
                 raise ContractError(
-                    f"{at} does not name locator.{key}; reader '{reader}' indexes it "
+                    f"{at} does not name locator.{key}; reader '{named}' indexes it "
                     f"unguarded, so this path would KeyError on the first row that "
                     f"reaches it rather than falling through")
         unread = sorted(set(alternative) - allowed)
         if unread:
             raise ContractError(
-                f"{at} names {', '.join(unread)}, which reader '{reader}' never reads on "
+                f"{at} names {', '.join(unread)}, which reader '{named}' never reads on "
                 f"a fallback path ({', '.join(sorted(allowed))}); a declaration that "
                 f"cannot be consulted is a rail that looks enforced and is not")
-        for transform_spec in [str(t) for t in (alternative.get("transform") or [])]:
+        declared = alternative.get("transform")
+        for transform_spec in [str(t) for t in (transforms if declared is None else declared)]:
             name = transform_spec.partition(":")[0]
-            if not spec.consults_transforms:
+            if not path_spec.consults_transforms:
                 raise ContractError(
-                    f"{at}: reader '{reader}' never applies transforms, so '{name}' "
+                    f"{at}: reader '{named}' never applies transforms, so '{name}' "
                     f"would silently not run")
             if name not in IMPLEMENTED_TRANSFORMS:
                 raise ContractError(
@@ -652,7 +691,8 @@ def _check_executable(
             f"{', '.join(sorted(spec.appetite))}, so the declaration is inert — either the "
             f"reader widens or the key goes")
 
-    _check_fallback(reader, spec, locator.get("fallback"), where=where)
+    _check_fallback(reader, spec, locator.get("fallback"), surface=surface, method=method,
+                    transforms=transforms, guards=guards, where=where)
 
     for transform_spec in transforms:
         name = transform_spec.partition(":")[0]

@@ -37,6 +37,7 @@ from location_data.page_readers import (
     ArchivedPayload,
     _licensed_coordinate,
     extract_page,
+    read_entry,
     stamp_page_claim,
 )
 from location_data.resolver.normalize import normalize_match_key
@@ -110,7 +111,7 @@ def read(entry_id: str, doc: ScopedDocument | None = None, *,
          listing: ListingRow | None = None, entry: Entry | None = None):
     entry = entry or ENTRIES[entry_id]
     doc = document() if doc is None else doc
-    return PAGE_READERS[str(entry.reader)](entry, listing or row(), payload(), doc)
+    return read_entry(entry, listing or row(), payload(), doc)
 
 
 def value(entry_id: str, doc: ScopedDocument | None = None) -> str | None:
@@ -126,8 +127,8 @@ def og_title(title: str) -> ScopedDocument:
 
 # ------------------------------------------------------------------ the contract shape
 
-def test_the_version_is_six():
-    assert CONTRACT.version == 6
+def test_the_version_is_seven():
+    assert CONTRACT.version == 7
 
 
 def test_the_entry_id_set_is_exactly_these_ten():
@@ -267,7 +268,10 @@ def test_the_one_segment_address_line_is_a_street_and_is_never_claimed_as_the_to
         pin = doc.css_first("div#print-map, div#map")
         assert pin is not None and pin.attributes["data-address"] == "Plzeňská"
         assert value(TOWN_ENTRY, doc) == "praha"
-        assert "Plzeňská" not in {value(entry_id, doc) for entry_id in ENTRY_TYPES}
+        # v7: the heading ("Plzeňská, Praha 5") names it in the street slot, where it belongs.
+        assert value("rm.det.map_street", doc) == "Plzeňská"
+        assert "Plzeňská" not in {value(entry_id, doc) for entry_id in ENTRY_TYPES
+                                  if entry_id != "rm.det.map_street"}
 
 
 def test_the_breadcrumb_cannot_carry_the_town_on_a_prague_page():
@@ -371,6 +375,23 @@ def test_the_quarter_is_never_the_town_restated():
                     if q and normalize_match_key(q) == normalize_match_key(town)]
 
 
+def test_a_prague_chain_carries_its_quarter_one_crumb_higher():
+    """Prague's one crumb is kraj and obec (`Praha -> Praha 9 -> Běchovice`), so at the
+    default depth every Prague ad claimed no quarter — 713 active ones on 2026-10-25."""
+    crumbs = [("https://realitymix.cz/reality/byty/pronajem/praha", "Praha"),
+              ("https://realitymix.cz/reality/byty/pronajem/praha/praha-9", "Praha 9"),
+              ("https://realitymix.cz/reality/byty/pronajem/praha/praha-9/bechovice",
+               "Běchovice")]
+    items = ",".join(
+        f'{{"@type":"ListItem","position":{n},"item":{{"@id":"{url}","name":"{name}"}}}}'
+        for n, (url, name) in enumerate(crumbs, start=5))
+    doc = document('<html><head><script type="application/ld+json">'
+                   '{"@type":"BreadcrumbList","itemListElement":[' + items + ']}'
+                   '</script></head><body></body></html>')
+    assert value("rm.det.breadcrumb_kraj", doc) == "Praha"
+    assert value("rm.det.breadcrumb_quarter", doc) == "Běchovice"
+
+
 def test_a_chain_that_stops_at_the_obec_claims_no_quarter():
     body = ('<html><head><script type="application/ld+json">'
             '{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":['
@@ -439,14 +460,17 @@ def test_an_unruled_coordinate_locator_counts_a_refusal_not_a_silence():
     assert result.claims == []
 
 
-def test_a_blank_gps_attribute_produces_no_declaration_at_all():
-    """Carried over from the superseded suite. `data-gps-lat=""` is neither branch: the
-    attribute is PRESENT, so the `:not()` selector does not match, and the coordinate reader
-    has no number — an honest under-claim rather than a guess about which branch ran."""
+def test_a_blank_gps_attribute_declares_the_estimated_position():
+    """`data-gps-lat=""` is the geocoding branch: the map script places a pin only
+    `if (gpsLat && gpsLon)`, and an empty string is false there. v6 read it as neither branch
+    (`:not([attr])` cannot see an empty attribute) and declared nothing on any active ad;
+    v7 asks the script's own question of the node `rm.det.gps` reads."""
     doc = document('<html><body><div id="print-map" data-gps-lat="" data-gps-lon="" '
                    'data-address="Zlín"></div></body></html>')
-    assert read("rm.det.agency_est_flag", doc) == []
+    assert value("rm.det.agency_est_flag", doc) == "estimated"
     assert read("rm.det.gps", doc) == []
+    no_map = document("<html><body><p>no map block</p></body></html>")
+    assert read("rm.det.agency_est_flag", no_map) == []
 
 
 def test_the_declaration_is_silent_wherever_the_portal_supplied_a_pin():
@@ -457,15 +481,32 @@ def test_the_declaration_is_silent_wherever_the_portal_supplied_a_pin():
 
 # ------------------------------------------------------------------ the address line
 
-def test_the_captured_page_quarter_is_not_published_as_a_street():
-    """8662169's `data-address` segment 0 is "Stráň", a ČÁST OBCE — corroborated by
-    `data-form-address` and by the breadcrumb tail — so a positional street read would
-    fabricate a street here. The gate cuts both ways and the direction is deliberate: b1's
-    real street "Čsl. partyzánů" fails `looks_like_czech_street` and is under-claimed, and a
-    one-segment line ("Plzeňská") is refused for arity."""
-    assert value("rm.det.map_street") is None
-    assert value("rm.det.map_street", document(B1)) is None
-    assert value("rm.det.map_street", document(A1)) is None
+def test_the_street_slot_is_claimed_as_written_and_the_register_decides_what_it_names():
+    """v7 drops the word-ending test (operator ruling 2026-10-25). It under-claimed real
+    streets — b1's "Čsl. partyzánů" — and what it guarded against is the resolver's call
+    since W18: a street is kept only when it binds in RÚIAN in the ad's town, and a slot
+    naming a part of that town binds as the part (`resolver/composite.py`, v5.7). So
+    8662169's "Stráň", a ČÁST OBCE of Potůčky, is claimed as the page writes it and is not
+    served as a street."""
+    assert value("rm.det.map_street") == "Stráň"
+    assert value("rm.det.map_street", document(B1)) == "Čsl. partyzánů"
+    assert value("rm.det.map_street", document(A1)) == "Plzeňská"
+
+
+def test_the_heading_answers_first_and_the_map_line_only_on_a_page_without_one():
+    """The map block is absent on most unpinned pages (20 of 22 sampled 2026-10-25) while
+    the heading is on every page since mid-August; a stored body older than that has only
+    the map line, and a bump re-reads every stored body."""
+    heading = ('<p class="advert-detail-heading__address">Na Korunce, Praha-Běchovice, '
+               'Běchovice</p>')
+    map_line = '<div id="map" data-gps-lat="" data-gps-lon="" data-address="Jiná, Praha 9">'
+    assert value("rm.det.map_street",
+                 document(f"<html><body>{heading}{map_line}</div></body></html>")) == "Na Korunce"
+    assert value("rm.det.map_street",
+                 document(f"<html><body>{map_line}</div></body></html>")) == "Jiná"
+    town_only = '<p class="advert-detail-heading__address">Jablunkov, okr. Frýdek-Místek</p>'
+    assert value("rm.det.map_street",
+                 document(f"<html><body>{town_only}</body></html>")) is None
 
 
 @pytest.mark.parametrize("address,street,okres", [
@@ -515,6 +556,7 @@ def test_the_lane_over_the_captured_body_yields_exactly_these_claims():
         ("rm.det.breadcrumb_kraj", "Karlovarský kraj"),
         ("rm.det.breadcrumb_quarter", "Stráň"),
         ("rm.det.map_okres", "Karlovy Vary"),
+        ("rm.det.map_street", "Stráň"),
     }
     assert not result.refusals
     assert all(c.surface == "archived_html" for c in result.claims)
