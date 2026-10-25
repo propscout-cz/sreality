@@ -174,9 +174,9 @@ tagging/pHash/embedding lanes above ARE kept running because the rebuilt engine 
 consumes them, so treat a stalled `clip_tag.yml` or `compute_image_phash.yml` as a real problem.
 
 **CLIP tagging persists an embedding for every TAGGED image** (PR #748, ~19% coverage gap; PR #751 backfilled the tagged-but-vectorless backlog).
-**Any job that REPLACES an image's bytes under its existing `storage_path`** (the sreality re-master lane — `images.rendition` / `stored_width` /
-`stored_height`, migration 496) **must go through `db.invalidate_derived_signals`**: the one chokepoint that re-arms these producers by nulling their
-OWN predicates (`phash`, `clip_tagged_at`). It deletes no label/review/CLIP-cache row; DINOv3 vectors go only on `drop_dinov3=True` (hand-dispatched GPU refill).
+**Any job that REPLACES an image's bytes under its existing `storage_path`** (none since the sreality re-master lane finished and was
+deleted, 2026-10-25) **must null `phash` and `clip_tagged_at` in the same transaction as its `rendition` stamp** (migration 496): those are
+these producers' OWN predicates, so they recompute on their own; it deletes no label/review/CLIP-cache row.
 
 **No drain geocodes, and no place columns.** W4-c dropped every location column from `listings`
 and `properties`, so a parser's coordinate/locality/street reading is evidence for the resolver,

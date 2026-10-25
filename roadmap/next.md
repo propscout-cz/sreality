@@ -261,8 +261,8 @@ overlay that can be heatmap-color-coded by any chosen index.
   Map/Table can never disagree on a city-quality cohort again.
 - **Population fetcher** (deleted 2026-10-25, Actions exit W0, with its
   `refresh_population.yml` workflow): a Wikidata SPARQL fallback that
-  wrote `data/csu_population_2024.csv`; its only run failed and the ČSÚ
-  file below superseded it.
+  wrote `data/csu_population_2024.csv`; both of its runs (2026-05-19)
+  failed and the ČSÚ file below superseded it.
 - **Population source switched to the official ČSÚ DataStat file.**
   The preferred source is the
   official export "Počet obyvatel v obcích k 1. 1." (download from

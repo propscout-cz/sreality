@@ -1402,7 +1402,7 @@ renumber.** Navigate by area:
    phone-size copies shipped (2026-10-12), whose copy may hold the other photo; applied after deploy).
    Nothing recomputes a stored row's key, so the two legacy shapes stay serveable forever:
    `image_storage.LISTING_PHOTO_KEY_RE` enumerates all
-   three and is the ONE whitelist of the public `GET /images/{key}` and of the re-master lane. It stays
+   three and is the ONE whitelist of the public `GET /images/{key}`. It stays
    anchored and enumerated, never a prefix, or it starts presigning the private `custom-attachments/`
    uploads that share the bucket. **A throttle is the portal's answer about our rate, never the image's
    failure** (2026-10-06): a 429, or the 403 a WAF follows a burst with, burns no `download_attempts`
@@ -1427,10 +1427,11 @@ renumber.** Navigate by area:
    native file; `sreality-1800-fit` the uncropped master; `sreality-749-crop` assessed/source
    gone/crop retained, TERMINAL; `native` a non-sreality file), plus `stored_width`/`stored_height`
    measured at upload. A job that REPLACES an object's bytes under its existing `storage_path`
-   must stamp `rendition` + dimensions and run `db.invalidate_derived_signals` in the same
-   transaction — the one chokepoint that re-arms the phash + CLIP lanes by nulling their own
-   predicates (`phash`, `clip_tagged_at`) and deletes no label, review or CLIP-cache row. **No job
-   replaces stored bytes today**: the sreality re-master lane, the only one that ever did, ran
+   must, in the same transaction as its `rendition` + dimensions stamp, null `phash` and
+   `clip_tagged_at` — the pHash and CLIP lanes' own selection predicates, so both recompute on
+   their own — and delete no label, review or CLIP-cache row. **No job replaces stored bytes
+   today** (the chokepoint that did this, `invalidate_derived_signals`, went with its only
+   caller): the sreality re-master lane, the only one that ever did, ran
    2026-09-11 → 2026-10-25 (all six shards stamped `app_settings.sreality_remaster_last_complete`,
    zero stored sreality rows left with `rendition IS NULL`) and was deleted with its workflow
    (Actions exit W0). What it left behind: a `sreality-749-crop` row is one whose source was gone
@@ -1439,7 +1440,7 @@ renumber.** Navigate by area:
    that order, exactly as the `(listing_id, sequence)` images upsert, the detail drain and
    `refresh_stale_images` do. Labels keyed on `images.id` follow the position, not the photograph;
    that is a property of the upsert key.
-   **Two consequences of the template switch, both permanent.**
+   **Two consequences of the template switch: (a) permanent, (b) until a thumbnail rendition exists.**
    (a) *The visual-signal corpus is MIXED-RENDITION.* dHash and CLIP are framing-sensitive, so the
    same photo stored as the old 4:3 crop and as the whole frame yields materially different signals:
    **phash/CLIP are comparable only WITHIN a rendition**, and any cross-row query (the duplicate

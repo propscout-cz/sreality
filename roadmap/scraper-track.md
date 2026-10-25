@@ -484,8 +484,8 @@ Independent of the analytical, UI, and map tracks.
   **The re-master lane ran to completion and was deleted** (6 shards, `15 */2`, 2026-09-11 →
   2026-10-25, Actions exit W0): it re-downloaded the ~3.55M `rendition IS NULL` rows at the master
   template and OVERWROTE each R2 object under its stored `storage_path`, re-arming phash/CLIP through
-  `invalidate_derived_signals`; a dead stored URL (sreality ROTATES image URLs when a listing is
-  edited) re-resolved from the listing's CURRENT detail by image `order`; a row whose source was gone
+  `invalidate_derived_signals`; a dead stored URL (sreality ROTATES image URLs when an ad is
+  edited) re-resolved from the ad's CURRENT detail page by image `order`; a row whose source was gone
   retired as `sreality-749-crop` only after two sightings 20h apart. Done when all six shard sub-keys
   sat in `app_settings.sreality_remaster_last_complete` (2026-10-25 19:04 UTC) and no stored sreality
   row lacked a `rendition` (0 on deletion day). phash/CLIP stay comparable only WITHIN a rendition.
