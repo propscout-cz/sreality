@@ -117,7 +117,8 @@ Heal via `reparse.yml` (`--source <portal> --fields area_m2,estate_area,usable_a
 
 The sreality pipeline is **split by cadence (Phase 2)**: `index_walk.yml` ("Scraping: Sreality
 index walk", cron `*/15`) feeds the worker's drain lane — since W0 (#2010) the ONLY drain of the
-walk-only portals (sreality, bazos, idnes, ceskereality, realitymix, web). The combined `scrape.yml` fallback (`scraper.main`'s `_run_full`) was deleted in C2-2
+walk-only portals (sreality, bazos, idnes, ceskereality, realitymix, web), and since W1 (#2021) of
+the four combined scrapers too (bezrealitky, maxima, mmreality, remax: their workflows pass `--index-only`). The combined `scrape.yml` fallback (`scraper.main`'s `_run_full`) was deleted in C2-2
 (2026-10); an ad-hoc combined run of any portal is `python -m scraper.<portal>_main` with neither
 phase flag (walk, then drain), locally. The bazos crawl is **cadence-split**
 like sreality (bazos walks 22 nationwide scopes (migration 488), ~1500 index pages — a combined run starves the
@@ -127,19 +128,17 @@ portals' structured pages don't: field-capture W7 runs it as the worker's `text_
 (`toolkit/description_extraction.py`), never in the scrape — the LLM is behind publication, never
 in front of it.
 The bezrealitky scrape is
-`scrape_bezrealitky.yml` ("Scraping: Bezrealitky scraper (pilot)", every 6h + dispatch; runs
-both index walk + detail drain in one job via `bezrealitky_main`). The maxima scrape is
-`scrape_maxima.yml` ("Scraping: Maxima Reality scraper (pilot)", every 6h + dispatch; the
-~220-listing catalogue fits both phases in one job via `maxima_main`). The mmreality scrape is
+`scrape_bezrealitky.yml` ("Scraping: Bezrealitky scraper (pilot)", every 6h + dispatch). The maxima scrape is
+`scrape_maxima.yml` ("Scraping: Maxima Reality scraper (pilot)", every 6h + dispatch). These four combined
+scrapers (bezrealitky, maxima, mmreality, remax) only WALK since Actions exit W1 (#2021): each workflow passes
+`--index-only` and the worker's drain lane drains them, as it already did nearly every row. The mmreality scrape is
 `scrape_mmreality.yml` ("Scraping: M&M Reality scraper (pilot)", cron `50 */6` + dispatch —
 every request via the residential `SCRAPER_PROXY_URL` (CF 403s datacenter IPs; `USE_PROXY` +
 `PROXY_REQUIRED=True` so the worker skips it when unset — idnes is proxied too but sets
 `PROXY_REQUIRED=False`, being throttled rather than blocked; ceskereality (own nginx, not CF) is the one
 portal with `CLIENT_HINTS=True`: since 09-29 it 403s a Chrome UA without sec-ch-ua hints, no proxy fixes);
-runs both phases in one job via `mmreality_main`, bounded by `--max-pages`/`--max-detail`). The remax
-scrape is `scrape_remax.yml` ("Scraping: RE/MAX scraper (pilot)", every 6h + dispatch; runs both
-phases in one job via `remax_main`, bounded by `--max-detail` + a `--max-seconds` budget so the
-~7,900-listing backlog drains over several ticks). The idnes scrape is
+bounded by `--max-pages`/`--max-seconds`). The remax scrape is `scrape_remax.yml` ("Scraping: RE/MAX
+scraper (pilot)", every 6h + dispatch; a `--max-seconds` walk budget). The idnes scrape is
 **cadence-split** like sreality (iDNES is large — 4,235 index pages, ~110k listings):
 `idnes_index_walk.yml` ("Scraping: iDNES Reality index walk", `idnes_main --index-only`, cron
 `15 */6`) feeds the worker's drain lane. idnes's `supports_complete_walk` was parked (migration 453) — posture only since
@@ -306,7 +305,7 @@ core replaces cron quantization for the latency-critical path (the GH walks abov
 backbone; the drain, images and maintenance lanes have no GitHub twin since W0, #2010); the other lanes host background jobs, `health` measures the worker-hosted checks
 every 60 s and `heartbeat` beats `worker_heartbeats`. Design + shipped waves: `docs/design/realtime-scrapers.md`. **Liveness (2026-09-30, after a silent 7 h 40 min freeze):** every lane, the heartbeat included, runs on one pinned default executor (32 threads), so the heartbeat is its canary; a daemon **watchdog** dumps every thread's stack and `os._exit(1)`s once no heartbeat pass has FINISHED for `LIVENESS_BOUND_SECONDS` (300 s; a beat that fails still finishes, so a refused write cannot crash-loop the worker), and Railway restarts it — `WATCHDOG no heartbeat pass finished` in the log is that exit, `WATCHDOG pass lock of <lane> held over 3600s` the same exit for a lane wedged behind its lock (`PASS_LOCK_BOUND_SECONDS`, 2 x the pass timeout). The dump writes to a non-blocking stderr (a full pipe cuts it short, never holds the exit) and a `faulthandler` exit timer armed first `_exit(1)`s it if it is still alive 15 s later (a C thread, no GIL; not a signal, which the kernel drops for PID 1). All eleven lanes with a pass lock (`_PassLock`: probe, drain, broker_maintenance, location_resolve, location_intake_fast, sold_comps, text_extract, health, autodedup, notifications, push) run each pass in ONE thread, so each leaks at most one; a skipped pass is `last.previous_pass_running`, and while an abandoned pass still holds the lock the lane's `in_flight_s` keeps counting from that pass's start, so the `jobs` check's `lane/<lane>` cell sees the wedge (Watch past 1,200 s, Problem past 1,800 s). The worker's probe, drain and sold_comps lanes bound each wait in the shared rate ledger (`scraper/rate_ledger.py`) at `LEDGER_MAX_WAIT_SECONDS` (120 s), and the drain's limiter also refuses every acquire past its `DRAIN_MAX_SECONDS` deadline: a farther window is refused without moving the frontier and that portal is given up for the pass (`budget_refused` in the heartbeat, drain claims handed back untouched, the sold_comps tick stopped with no ledger row for the refused cell; `RATE budget refused` in the log); a drain whose time budget runs out mid-chunk hands back the same way but counts `deadline_stopped` (`DRAIN time budget reached mid-chunk`), not a block. The Actions walks and drains and the `reas_main` CLI pass no bound and wait as the ledger says. The retry after a 403 leases one slot (that debt capped at one lease batch), and a drain's lease is sized to its claims.
 Per-lane notes:
-- **Per-source kill switches** `realtime_probe_disabled_sources` / `realtime_drain_disabled_sources` (JSON lists, read every pass, no redeploy; PR #694) — a portal leaves that lane. A drain-disabled portal's queue FREEZES: no GitHub drain takes it over since W0 (#2010); only the four combined scrapers' own drain phase ignores the list, until W1 (#2021).
+- **Per-source kill switches** `realtime_probe_disabled_sources` / `realtime_drain_disabled_sources` (JSON lists, read every pass, no redeploy; PR #694) — a portal leaves that lane. A drain-disabled portal's queue FREEZES: no GitHub drain takes it over (W0 #2010; the four combined scrapers only walk since W1 #2021).
 - The sreality count-probe lane and its `index_walk.yml` dispatch were deleted in W0 (#2015): the worker triggers no
   GitHub workflow. Its `sreality_count_probe_state` table (mig 270) stays until a backed-up drop.
 - **Property-maintenance lane**, every 30 s (PR #716) — `run_incremental_pass` against `dirty_properties`
@@ -462,7 +461,7 @@ RUN, COVERAGE, the closing `INDEX total=…` and every DRAIN line; per-page INDE
 - `INDEX total=N pages=M enqueued=K` once at end of the walk
 - `RUN done pages=N enqueued=M to_verify=V deferred=D errors=E` (E = failed categories)
 
-**Detail drain** (the worker's drain lane, a `--drain-only` run, a combined scraper's drain phase):
+**Detail drain** (the worker's drain lane, or an ad-hoc `--drain-only` / flagless run):
 - `DRAIN reclaimed stale claims=N` when a prior SIGKILLed run left claims behind
 - `DRAIN starting source=... max_claims=... workers=W batch=B budget=Ss` once
 - `DETAIL id=... gone (is_active=false)` / `DETAIL id=... error: ...` per non-ok listing; `DRAIN gone-rate breaker: ...` once when >50% of ≥20 ingest fetches read gone (later gones become failures); `gone flip matched no listing` when a gone key matches no row (INFO for a never-fetched NEW id); `could not mark id=... inactive` = a failed flip, retried (counted in errors)

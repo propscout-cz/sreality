@@ -2654,34 +2654,10 @@
         },
         {
           "name": "max_seconds",
-          "description": "wall-clock budget for the run (default 1500s, under the 30-min job timeout)",
+          "description": "wall-clock budget for the walk (default 1500s, under the 30-min job timeout)",
           "required": false,
           "type": "string",
           "default": "",
-          "options": null
-        },
-        {
-          "name": "max_detail",
-          "description": "cap detail-drain claims this run",
-          "required": false,
-          "type": "string",
-          "default": "2000",
-          "options": null
-        },
-        {
-          "name": "rate",
-          "description": "detail-fetch requests/second ceiling",
-          "required": false,
-          "type": "string",
-          "default": "2.0",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "detail-fetch workers (concurrency; raise for a one-time backfill)",
-          "required": false,
-          "type": "string",
-          "default": "8",
           "options": null
         }
       ],
@@ -2720,30 +2696,6 @@
           "required": false,
           "type": "string",
           "default": "",
-          "options": null
-        },
-        {
-          "name": "max_detail",
-          "description": "cap detail-drain claims this run (blank = drain the queue)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "rate",
-          "description": "detail-fetch requests/second ceiling",
-          "required": false,
-          "type": "string",
-          "default": "1.0",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "detail-fetch workers (concurrency; raise for a one-time backfill)",
-          "required": false,
-          "type": "string",
-          "default": "2",
           "options": null
         }
       ],
@@ -2785,32 +2737,8 @@
           "options": null
         },
         {
-          "name": "max_detail",
-          "description": "cap detail-drain claims this run (raise for a one-time backfill)",
-          "required": false,
-          "type": "string",
-          "default": "4000",
-          "options": null
-        },
-        {
-          "name": "rate",
-          "description": "detail-fetch requests/second ceiling",
-          "required": false,
-          "type": "string",
-          "default": "2.0",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "detail-fetch workers (concurrency; raise for a one-time backfill)",
-          "required": false,
-          "type": "string",
-          "default": "4",
-          "options": null
-        },
-        {
           "name": "max_seconds",
-          "description": "detail-drain wall-clock budget; it finalizes cleanly before this. Blank = 2400 (40 min).",
+          "description": "walk wall-clock budget; it finalizes cleanly before this. Blank = 2400 (40 min).",
           "required": false,
           "type": "string",
           "default": "",
@@ -2933,35 +2861,11 @@
           "options": null
         },
         {
-          "name": "max_detail",
-          "description": "cap detail-drain claims this run (blank = per-portal config)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
           "name": "max_seconds",
-          "description": "wall-clock budget for the detail drain (seconds)",
+          "description": "wall-clock budget for the walk (seconds)",
           "required": false,
           "type": "string",
           "default": "2100",
-          "options": null
-        },
-        {
-          "name": "rate",
-          "description": "detail-fetch requests/second ceiling",
-          "required": false,
-          "type": "string",
-          "default": "2.0",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "detail-fetch workers (concurrency; raise for a one-time backfill)",
-          "required": false,
-          "type": "string",
-          "default": "4",
           "options": null
         }
       ],

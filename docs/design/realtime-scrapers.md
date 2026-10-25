@@ -93,12 +93,11 @@ inactive residue) and the incremental property and broker maintenance: the five 
 deleted (in their last week the GitHub drains wrote 1–5 % of each portal's completions, bazos
 about 5 %; the PR's pre-checks hold the measurement).
 Still on GitHub for now: the walks and the daily property and broker sweeps (until the job runner
-takes them) and the four combined scrapers' own drain phase (walk-only in W1, #2021). Since #2011
-the images lane also drains the inactive-image residue `images.yml` owned (each tier walks the
-pending index newest-first, the residue filling what the active tier leaves), so no image download
-runs on GitHub.
+takes them); the four combined scrapers only walk since W1 (#2021). Since #2011 the images lane also
+drains the inactive-image residue `images.yml` owned (each tier walks the pending index newest-first,
+the residue filling what the active tier leaves), so no image download runs on GitHub.
 `realtime_drain_disabled_sources` therefore freezes a portal's queue: no other scheduled drain
-takes it over (a combined scraper's own phase aside).*
+takes it over.*
 
 **Prerequisite: shared politeness.** `RateLimiter` is per-process; a Railway lane beside
 Actions walks would double-hit portals with two independent limiters. Before the probe lane
