@@ -181,9 +181,12 @@ with 0 index runs `ended_at NULL` > 6 h and nominations per cycle ± 10 %.
 ### W2 — The runner, live with the smallest jobs
 One migration (rename + alias view, the new columns, `resource`, `job_runs` with its unique open-run index,
 per-worker liveness subjects); `scraper/job_lease.py` (moved + claim/renew/fence/release), `scraper/jobs.py`,
-`scraper/job_runner.py`, the `job/<name>` SQL arm, the request-only `run_job.yml`; `.railway/railway.ts`
-for four services with Railway's plan-on-PR/apply-on-merge recipe (the three `railway*.json` deleted). First
-jobs: stale_images, rent_map, map_overlays. Each later PR adds registry lines and deletes the matching
+`scraper/job_runner.py`, the `job/<name>` SQL arm, the request-only `run_job.yml`; the `job-runner` service
+added to `.railway/railway.ts`. **Scope change 2026-10-25 (operator ruling Q24, agent-platform grill):** the
+move of the three existing services to that file with Railway's plan-on-PR/apply-on-merge recipe, and the
+deletion of the three `railway*.json`, is the agent-platform programme's M0 (PR #2004, `MVP.md` § M0, due
+within the week, hard cutoff 2026-12-01); #2025 reuses the file and lands it for all four only if M0 has not
+landed by then. First jobs: stale_images, rent_map, map_overlays. Each later PR adds registry lines and deletes the matching
 YAMLs; a new row's first slot comes after `now() + timeout_s`; rollback is a revert.
 **Gate (7 days):** every job cell green; ≥ 3 deploys survived with interrupted runs re-claimed within 1 min;
 one request run, one pause with expiry and one self-fence drill exercised; 0 unique-index violations, 0
