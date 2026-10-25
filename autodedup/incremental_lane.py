@@ -36,6 +36,7 @@ import json
 import logging
 import math
 import os
+import re
 import socket
 import sys
 import time
@@ -278,6 +279,10 @@ RECUT_SETTING: str = "rt_recut"
 PASS_RATE_SETTING: str = "rt_pass_rate_per_s"
 CLAIM_CAP_SETTING: str = "rt_claim_cap"
 ENGINE_SETTING: str = "rt_engine"
+# E979, the one exception: a row the OPERATOR writes by hand — the blocks a build reads first and
+# the category order inside them, `{"blocks": ["obec:563889"], "categories": [["byt", "pronajem"],
+# ...]}`. Absent or malformed, the build reads in E978's order.
+BUILD_PRIORITY_SETTING: str = "rt_build_priority"
 # The reconcile's skip over a generation no seed of this design built.
 SEED_MISMATCH: str = "seed_version"
 # E941: a pass that sees the worker shutting down, and one whose lease ended under it.
@@ -1340,7 +1345,8 @@ class SqlWork:
                  claim_cap: int | None = None,
                  stale_claims: Sequence[int] = (),
                  stale_waiting: int = 0,
-                 stale_budget: int = reconcile.STALE_FLOOR) -> None:
+                 stale_budget: int = reconcile.STALE_FLOOR,
+                 build_priority: tuple[Sequence[str], Sequence[str]] = ((), ())) -> None:
         self.conn = conn
         self.scope = scope
         self.generation = generation
@@ -1366,6 +1372,9 @@ class SqlWork:
         self.stale_claims = [int(i) for i in stale_claims]
         self.stale_waiting = int(stale_waiting)
         self.stale_budget = int(stale_budget)
+        # E979: the blocks a build reads first and the `main/type` category order inside them.
+        self.priority_blocks = [str(block) for block in build_priority[0]]
+        self.priority_cats = [str(cat) for cat in build_priority[1]]
         self.attempt = 0
         # Set by `claim` while the phase is on: the entrant backlog it measured, and whether
         # this pass is the one that empties it (E98).
@@ -1525,8 +1534,11 @@ class SqlWork:
                 # E976: a build reads the LIVE adverts first, under no id cursor (two keys are
                 # no keyset): the `rt_fp` anti-join advances it, so its id half stays 0 and the
                 # feed outside the build starts again at the snapshot's first id.
+                # E979: the operator's blocks first, in their category order; empty: E978's.
                 rows = self._query(RT_SCOPE_BUILD_ENTRANTS_SQL, {
-                    "generation": self.generation, "lag": self.lag, "limit": enter_share})
+                    "generation": self.generation, "lag": self.lag, "limit": enter_share,
+                    "priority_blocks": self.priority_blocks,
+                    "priority_cats": self.priority_cats})
                 self._pending[CURSOR_ENTER] = (0, pointer)
             else:
                 after_enter = cursors[CURSOR_ENTER][0]
@@ -2233,6 +2245,49 @@ def recut_key(generation: str) -> str:
     """`rt_recut:<generation>` — `due`: the cut stamp of the calibration a pass found the
     population drifted under; `tried_at`: when the lane last re-cut, done or not (E944)."""
     return f"{RECUT_SETTING}:{generation}"
+
+
+def build_priority_key(generation: str) -> str:
+    """`rt_build_priority:<generation>` — the operator's build order (E979)."""
+    return f"{BUILD_PRIORITY_SETTING}:{generation}"
+
+
+_PRIORITY_BLOCK = re.compile(r"(obec|cast_obce|okres):([0-9]+)")
+
+
+def parse_build_priority(value: Any) -> tuple[list[str], list[str]]:
+    """The operator's build priority (E979) as (block keys, `main/type` categories). Anything
+    malformed is no priority at all — logged, never raised — so the build reads in E978's order."""
+    if value is None:
+        return [], []
+    try:
+        if isinstance(value, str):
+            value = json.loads(value)
+        blocks = value["blocks"]
+        categories = value.get("categories") or []
+        if not isinstance(blocks, list) or not isinstance(categories, list) or not blocks:
+            raise ValueError("blocks must be a non-empty list, categories a list")
+        keys: list[str] = []
+        for block in blocks:
+            match = _PRIORITY_BLOCK.fullmatch(block) if isinstance(block, str) else None
+            if match is None:
+                raise ValueError(f"block {block!r} is not grain:code")
+            key = f"{match[1]}:{int(match[2])}"      # the snapshot's spelling, `ScopeBlock.key`
+            if key not in keys:
+                keys.append(key)
+        cats: list[str] = []
+        for pair in categories:
+            if (not isinstance(pair, list) or len(pair) != 2
+                    or not all(isinstance(part, str) and part and "/" not in part
+                               for part in pair)):
+                raise ValueError(f"category {pair!r} is not [main, type]")
+            if f"{pair[0]}/{pair[1]}" not in cats:
+                cats.append(f"{pair[0]}/{pair[1]}")
+    except (TypeError, ValueError, KeyError, AttributeError) as exc:
+        LOG.warning("AUTODEDUP: %s ignored, the build reads in E978's order: %s",
+                    BUILD_PRIORITY_SETTING, exc)
+        return [], []
+    return keys, cats
 
 
 def full_claim_cap(reason: str | None = None, limit_mb: float | None = None) -> dict[str, Any]:
@@ -3274,7 +3329,8 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                                        engine_key(generation),
                                        reconcile.redecide_key(generation),
                                        reconcile.tried_key(generation),
-                                       reconcile.budget_key(generation)])
+                                       reconcile.budget_key(generation),
+                                       build_priority_key(generation)])
         try:
             scope = pass_scope(read_scope_setting(control, generation))
             parents = resolve_scope_parents(conn, scope)
@@ -3356,7 +3412,9 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                                       else PASS_BUDGET_S),
                        rate_per_s=rate_per_s, claim_cap=int(cap["cap"]),
                        stale_claims=stale_claims, stale_waiting=stale_waiting,
-                       stale_budget=stale_budget)
+                       stale_budget=stale_budget,
+                       build_priority=parse_build_priority(
+                           control.get(build_priority_key(generation))))
         result = None
         stopped = ""
         # E941: halved AHEAD, outside the transaction (`db.connect` is autocommit), so it stands

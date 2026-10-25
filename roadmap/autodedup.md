@@ -210,6 +210,10 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
 - **E978 (2026-10-22, visible first):** during a build the feed reads, after the live adverts, the inactive
   ones a visible merge waits for (on a property with a live advert, or whose read adverts sit in a group
   with one): 1,264 of Praha's 25,434 unread at 21:40Z, ~2.5 passes instead of ~15 h. Order only.
+- **E979 (2026-10-25, the operator's build order):** a build reads the blocks named in
+  `autodedup.settings` `rt_build_priority:<generation>` first, in that row's category order (Liberec
+  `obec:563889`: flats for rent, houses for sale, flats for sale, the rest), then E978's order. Data, not
+  code: changing it needs no deploy; no row or a malformed one is E978's order exactly. Order only.
 - **E977 (2026-10-22, built; ships only on the operator's yes):** during a build, a block whose walk is
   complete holds back only the groups whose own adverts (members, carried riders) have no fingerprint, not
   every group in the block; a block never walked or mid-walk, an advert the snapshot does not place and the

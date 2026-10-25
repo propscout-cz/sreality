@@ -108,7 +108,10 @@ minutes, the "holder" pid was mid-way through an unrelated statement on another 
 The pooler-proof primitive is a **single-row lease** claimed by one atomic
 `UPDATE ... RETURNING` compare-and-set — atomic on whatever backend it lands on, no
 session state, with an expiry that self-heals a crashed holder
-(`property_maintenance_lease`, `scripts/recompute_property_stats.py`). pg_cron functions
+(`property_maintenance_lease`, `scripts/recompute_property_stats.py`). Scheduled jobs share ONE such row
+table, `scheduled_jobs` (mig 675, ex-`location_jobs`), through `scraper/job_lease.py`: `claim` (due, live, no
+sibling holding its `resource`) / `renew` / `Lease.fenced` / `release`, and `job_runs`' unique open-run indexes
+(per job, per resource) refuse a lost race in the database; `held` is the schedule-free lane form. pg_cron functions
 (migration 277's Browse-rebuild included) are the one exception: each pg_cron call is a
 single local session, so a session advisory lock there is sound — don't generalize the
 lease-row fix to code that never sees the pooler.
@@ -480,11 +483,11 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   ACTIVE-contract + operator claims, so a wrong contract is RETRACTED (DELETE + re-resolve enqueue,
   `contracts.py --retract`) and a merely SUPERSEDED version's claims are deleted with NO enqueue by
   `location_claims_retire.yml` (backup to R2 `backups/retired-claims/`, then keyset batches) — run it after a retirement. The live set is `location_claims`,
-  `listing_location`, `location_granularity_rank`, `dirty_locations`, `location_jobs`,
+  `listing_location`, `location_granularity_rank`, `dirty_locations`, `scheduled_jobs`,
   `portal_contracts`/`_entries` + RÚIAN. Every heavy batch lane shares the ONE `location-batch`
   Actions group + arms `SET LOCAL statement_timeout` — **except the resolve DRAIN**: latency-bound
   not instance-bound, it runs outside the group and from the Railway worker too, serialized ONLY by
-  the `location_jobs` lease + pass lock — **idle it before a heavy batch**; `full-resolve` DOES stay
+  the `scheduled_jobs` lease + pass lock (pause the row, `paused_until`) — **idle it before a heavy batch**; `full-resolve` DOES stay
   in the group. RÚIAN loaders + drain run on **`connect_session()`** (the loader refuses the fallback
   — a 3 M-row COPY needs session GUCs). Rationale: `docs/architecture.md` § Location data.
 

@@ -272,7 +272,7 @@ select beat_at, started_at, details from worker_heartbeats where worker = %(work
 # OLDER process beating beside this one (a deploy overlap). It cannot see a lone worker on old code: that worker runs
 # the old check too, and only Railway's per-service commit status shows it (the W2b gate reads that).
 WORKER_LANES: tuple[str, ...] = (
-    "probe", "drain", "images", "count_probe", "maintenance", "broker_maintenance",
+    "probe", "drain", "images", "maintenance", "broker_maintenance",
     "estimation", "location_resolve", "location_intake_fast", "location_refetch",
     "sold_comps", "text_extract", "health", "autodedup", "notifications", "push", "heartbeat",
 )
