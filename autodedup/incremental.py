@@ -965,7 +965,7 @@ def decision_digest(listing: Listing, images: Sequence[Image]) -> str:
     """What a below-floor decision depends on of ONE side (E943): the whole listing and its
     gallery as the engine reads them, CLIP tags included. Not the CLIP vectors, which an
     unscored endpoint is read without: `clip_tagged_at` stands for them, the stamp the CLIP job
-    writes last, after the tags and the vector, and a byte replacement nulls
+    writes last, after the tags and the vector, and a re-master nulls
     (`invalidate_derived_signals`).
 
     Not `fp_digest`: that hashes the body as its SimHash and token count, which a one-token edit
