@@ -385,6 +385,49 @@ Independent of the analytical, UI, and map tracks.
   ("zastavěná plocha" / mmreality's `builtUpArea`) with no column to hold it — a schema question,
   not a parser fix; bazos gains no side columns (its free text carries no labelled parcel); and
   the unverified-key census across the nine portals is still unwritten.
+- **W22 (2026-10-25, rebuilt on current main on the operator's go-ahead of 2026-10-25 from the
+  unmerged, superseded #1668 / #1669; heal = migration 671 in its own PR, stacked on the rule) —
+  a figure in the plot box is not always a plot.** General ruling 3 (2026-09-30) + the
+  operator's flat answers (2026-10-01): on 14 of 14 live pages the portal itself printed one
+  figure in the plot box and the floor-area box (not our key maps). ONE rule,
+  `scraper.area.stated_plot`, at ONE call site before the content hash
+  (`ScrapedListing.__post_init__`; sreality's `parse_listing` calls it itself): a byt NEVER
+  carries a plot; a komerční plot equal (0.1 m²) to the usable measure or a LABELLED headline
+  (usable / floor / total) is absence; dum / pozemek / ostatni unchanged; never compared against
+  a title fallback or zastavěná plocha. Contract cells stay `structured`. Live rows clear at
+  their next fetch (one snapshot each, which cannot be undone); stored echoes need migration 671
+  (DESTRUCTIVE, not applied: 14,404 rows on 2026-10-25 — byt 3,218 active + 6,751 inactive,
+  komerční 2,356 active + 2,079 inactive).
+  **Hand-read, done 2026-10-25 (read-only):** all 2,356 active komerční hits sorted by what the
+  advert's OWN description says about a parcel ("pozem…" / "parcel…" + a figure in m²), then read.
+  93 state a parcel EQUAL to the figure, and all 93 are the **reverse case**: an areál, farm, camp,
+  petrol station or penzion whose TRUE parcel was typed into both boxes (a 30,000 m² areál with
+  ~5,000 m² built up; a 164,000 m² riding farm; a 994 m² LPG station) — the rule drops the true
+  plot and keeps the wrong floor figure (ceskereality 26, realitymix 15, idnes 46 — sklad 12,
+  výroba 10, no subtype 11, ubytování 4, zemědělský 4, obchodní prostor 3, restaurace 2 —,
+  mmreality 6). 148 state a DIFFERENT parcel (14 read: 12 echoes — a 495 m² unit whose prose
+  names a 1,484 m² parcel —, 2 reverse). 2,115 state none (19 read by size: every one under
+  3,000 m² with text is the unit's own floor — an 18 m² store, a 119 m² shop, halls, an attic;
+  of the six read among the 110 at ≥ 3,000 m², three are areál sites — the reverse case —, two
+  halls, one has no text). So the rule is right on roughly 93 % of the active komerční hits and
+  drops a TRUE parcel on an estimated ~170 of them (93 confirmed by the advert's own text),
+  concentrated in areál-type ads above ~2,000 m² (sklad, výroba, zemědělský, ubytování,
+  restaurace / camp); the figure stays in the advert's text. The original's campsite
+  (idnes 19082282) was one of a class, not a one-off.
+  **Owed before the rule merges:** the operator reads that number and rules — merge as ruled, or
+  a guard for the areál shape first (no stored column separates it: zastavěná plocha has no
+  column, and prose is the text lane's); the autodedup programme told (the live-lane plot
+  features `plot_area_rel_diff` / `plot_area_exact` move at each row's first refetch).
+  **Owed after the rule is live (the heal's PR, migration 671):** the count re-run against the
+  header's census and stop conditions (925 active komerční hits carry no basis stamp; 1 sreality
+  P2 row); `backup_before_drop.yml`; the operator's OK; the autodedup lane paused for a re-seed
+  (the heal writes no snapshot); the apply FROM THE HEAL'S BRANCH, and that PR merged only once
+  applied; `rt_seed fresh=true`; then re-bless the field census (`python -m scraper.field_census
+  --bless`): ceskereality `estate_area` is blessed at fill 0.6145 and the heal takes it to ~0.52
+  (30,267 → 25,679 of 49,367 active), 9.4 pp — 0.6 pp short of `parsing_fill_drop_warn_pp`.
+  **Owed later:** the mmreality-dum residue check; the optional `verify_pipeline` arm (byt /
+  komerční rows with `estate_area = area_m2`, ~0 after the heal); the forward drop of the
+  heal's backup schema after a month.
 
 ### R2 key unique per image row (2026-10-25, code done; 670 owed)
 - **Shipped (code):** a photo's R2 key is `img/{listing_id}/{images.id}.jpg` (`image_storage.image_key`).
