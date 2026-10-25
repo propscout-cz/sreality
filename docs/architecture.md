@@ -1391,7 +1391,20 @@ renumber.** Navigate by area:
    photos. The `images` table tracks per-image download state via `storage_path`,
    `download_attempts`, and `last_download_attempt_at`. Image-download is a separate phase
    after the scrape phase; it's a no-op if R2 env vars are missing, so a partial deploy
-   never breaks the scrape. **A throttle is the portal's answer about our rate, never the image's
+   never breaks the scrape. **The bucket key is unique per `images` ROW:**
+   `img/{listing_id}/{images.id}.jpg` (`image_storage.image_key`, 2026-10-25). Both earlier shapes drew
+   the prefix from ONE numeric range (`{sreality_id}/{seq:04d}` before Gate 2, `{listings.id}/{seq:04d}`
+   after it), so a new listing whose id equalled an older listing's `sreality_id` minted that listing's
+   keys and its upload silently overwrote the older photo, and the re-master lane later re-uploaded some
+   of the old rows over the new ones. Either way one row rendered another property's photo with a pHash
+   and CLIP vector of bytes it no longer had (152 keys / 304 rows by 2026-10-25; migration 670 re-queues
+   every row that does not hold its object, plus the owners on active listings uploaded after the
+   phone-size copies shipped (2026-10-12), whose copy may hold the other photo; applied after deploy).
+   Nothing recomputes a stored row's key, so the two legacy shapes stay serveable forever:
+   `image_storage.LISTING_PHOTO_KEY_RE` enumerates all
+   three and is the ONE whitelist of the public `GET /images/{key}` and of the re-master lane. It stays
+   anchored and enumerated, never a prefix, or it starts presigning the private `custom-attachments/`
+   uploads that share the bucket. **A throttle is the portal's answer about our rate, never the image's
    failure** (2026-10-06): a 429, or the 403 a WAF follows a burst with, burns no `download_attempts`
    (`db.mark_image_throttled` stamps the error and the time only) and parks the HOST — a cool-down that
    outlives the run (module state in `scraper/main.py`: 15 min doubling to 2 h, or the portal's
@@ -1443,7 +1456,7 @@ renumber.** Navigate by area:
    serves a master into a thumbnail-sized `<img>`: more R2 egress and page weight, the accepted
    price of not having lost the photo's edges. **Since 2026-10-12 (#1765) the API makes one small copy
    ON REQUEST:** `GET /images/{key}?w=1080` (any other `w` is a 404) redirects to
-   `thumb/w1080/{id}/{seq}.webp` (WebP q75, EXIF rotation applied, ≤ 1080 px wide), which the route
+   `thumb/w1080/<key without .jpg>.webp` (WebP q75, EXIF rotation applied, ≤ 1080 px wide), which the route
    builds from the master on its first request (≤ 4 at once, `api/routes/images.py`) and, on any
    failure, swaps for a 5-minute redirect to the master; only the pipeline board's thumbnails and the
    property page's grid tiles ask for it. **A re-master deletes the copy** right after it overwrites
@@ -3732,6 +3745,61 @@ renumber.** Navigate by area:
     declines the measure rather than stamping a basis for a value the row cannot store, which
     is also what keeps the heal's first batch from aborting on a 22003.
 
+    **A figure in the plot box is not always a plot** (general ruling 3, 2026-09-30; the
+    operator's flat answers, 2026-10-01; rebuilt on current main on the operator's go-ahead of
+    2026-10-25 — the original PRs #1668 / #1669 never merged and are superseded). On 14 of 14
+    live pages the readers opened
+    (idnes, realitymix, mmreality; ceskereality answered 403 and was read from its stored
+    pages) the portal itself prints ONE figure in the plot box and the floor-area box — a
+    10 m² cellar with a 10 m² "plot", an 852 m² hall whose "Plocha parcely" is its own
+    footprint while the real 6 841 m² parcel sits only in the prose. We stored what the page
+    said and every per-portal key map was right; what was missing was one rule, so it is one
+    function, `scraper.area.stated_plot(category_main, plot, usable, headline, headline_basis, text)`,
+    called at ONE site for every portal that crosses the ScrapedListing contract
+    (`ScrapedListing.__post_init__`, the last point before the content hash, so the declined
+    value is hashed as absence like every other refused measure — rules 2/8; `reparse.py`
+    replays `parse_detail` and so passes it too) and once more in sreality's `parse_listing`,
+    whose row never crosses the contract (the same function, not a copy — rule 21). The rule:
+    on a **byt** the plot is ALWAYS absent (a flat has no parcel of its own; what the flat
+    plots held was the doubled floor figure, the placeholder 1 or the whole building's
+    parcel); on **komerční** a plot equal — at the column's 0.1 m², half up — to the usable
+    measure or to a headline whose basis is a LABELLED interior measure (`usable` / `floor` /
+    `total`) is absent — **unless the advert's own description says the figure is a parcel**
+    (operator, 2026-10-25: equality alone is not evidence; a size threshold was rejected as a
+    patch). The echo branch reads the description with ONE pattern,
+    `scraper.area.PLOT_TEXT_EVIDENCE_SRC` (a parcel statement — "pozemek" / "parcela" in any
+    case form, "plocha pozemku" — or a built-up one — "zastavěná plocha" / "zastavěné plochy" —
+    then at most 40 characters that cross no sentence end, bullet, other statement or earlier
+    figure, then a figure in m² or ha in the shared number grammar): (a) a stated parcel
+    EQUAL to the figure (column scale, ha converted) keeps it; else (c) a stated parcel that
+    DIFFERS means the box echoes the floor — dropped, the true parcel left to the text; else
+    (b) a built-up area SMALLER than the figure keeps it; else (d) no statement — dropped. The
+    title is not read (no stored column holds it, and migration 671 must decide on the same
+    text); the pattern avoids `\b` / `\s` / `\d` / case flags so Python and Postgres read it
+    identically. **dum**, pozemek and ostatni are untouched (the operator kept the
+    house rule as it is — a garage's parcel really is its footprint). Never compared: a title
+    / prose fallback (`unknown`: "Prodej areálu 3 400 m²" IS the site, and the real parcel
+    would be dropped) and zastavěná plocha as a COLUMN (none exists; a building may cover its
+    whole parcel). The
+    contract cells stay `structured` with a note only — `none` / `text` would make the column
+    preserve-if-null (`db._preserved_columns`) and freeze every stored echo. Each affected
+    LIVE row clears at its next detail fetch with one genuine snapshot; a STORED echo clears
+    only by migration 671 (same PR, destructive: applied from `main` after the rule is deployed, with
+    the backup and the operator's OK: byt = every stored plot, komerční = the equality rule with the
+    same text evidence over the stored `description`, active AND inactive — 14,156 rows on 2026-10-25,
+    5,444 of them active), because `scripts/reparse.py` never blanks. Readers
+    follow without a change: `plot_area_m2` (migration 534) reads `estate_area` off land.
+    The **reverse case** — an areál, farm, camp or petrol station whose TRUE parcel the
+    advertiser typed into BOTH boxes — is what the text evidence answers: the 2026-10-25
+    hand-read of the 2,356 active komerční hits found 93 whose description states a parcel
+    equal to the figure, all of them this case; the pattern finds 92 (the hand-read's own
+    93 / 148 / 2,115 split to within one row) and keeps every one, and (b) keeps 38 more.
+    Named residuals: areál ads whose text names the site without a parcel word ("areál o
+    rozloze …"; about half of the 104 still-dropped hits at ≥ 3,000 m²); (b) is a weak
+    signal — on the 38 it keeps, about half are a multi-storey building's floor area beside
+    its smaller footprint, not a parcel; and a pre-stamp komerční row of the realitymix
+    "Plocha" shape (usable and basis NULL) escapes the heal.
+
     **The area NUMBER has one grammar too** (the scraper track's W19, 2026-09-17 — not
     the location program's). Picking the right measure is only half the rule; reading the
     figure is the other half, and it was **five private copies** of a regex until now — four
@@ -3895,7 +3963,10 @@ renumber.** Navigate by area:
     without a word. The fix is the name, **not** a writer change. **The writer rule, stated once:** a
     parser fills `estate_area` ONLY from a parcel cell the page itself LABELS — sreality,
     bezrealitky, idnes, ceskereality, maxima and (from W21) mmreality all do, land rows
-    included, and that is faithful reporting rather than duplication. What no parser may do is
+    included, and that is faithful reporting rather than duplication — **and only when what
+    that cell holds is a plot at all** (general ruling 3, above): never on a byt, and on
+    komerční not when it merely repeats the usable / labelled headline figure and its own
+    text does not say it is the parcel (`scraper.area.stated_plot`, at the contract boundary). What no parser may do is
     SYNTHESISE the column from `area_m2` for the four portals whose land pages carry no parcel
     label: that would copy the headline into a second column on 32k rows, leave every future
     portal to remember the rule, and make the data lie in order to spare the reader a function

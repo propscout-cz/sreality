@@ -164,8 +164,8 @@ R2_PREFIX = "payloads"
 # stripped): the second row's own bytes would never be uploaded and its `body_sha256`
 # would not match the object it points at. `source` is the only free-form component,
 # and it comes from our own portal registry — validated anyway, because a key built
-# from unvalidated input is how a path escape gets written (the images lane's _KEY_RE
-# is the same boundary).
+# from unvalidated input is how a path escape gets written (the images lane's
+# image_storage.LISTING_PHOTO_KEY_RE is the same boundary).
 _SOURCE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
 _CONTENT_ENCODINGS = ("identity", "gzip")

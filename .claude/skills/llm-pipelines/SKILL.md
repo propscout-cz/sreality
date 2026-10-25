@@ -79,6 +79,7 @@ calls an LLM must do the same.
   arrivals, never through the eligibility predicate), p95 minutes to the first reading beside the 20 min
   SLO, and the backlog's ETA; a provider stop (`last.fatal`, a failed
   pass in the heartbeat) is the `llm` check's credit cell and the `jobs` check's `lane/text_extract` cell. `app_settings.enrichment_model` is the one switch. `docs/design/field-capture/PROGRAM.md`.
+  A komerční parcel the plot rule (`scraper.area.stated_plot`) drops because the description names a DIFFERENT one lives only in that text — the text lane's to fill (no `estate_area` cell is gated open today).
 
 **Vision image downscaling is unified in `toolkit/vision_images.py` — one helper, two
 tiers.** Every image→LLM call routes R2 bytes through `image_block(r2, key, max_edge)`

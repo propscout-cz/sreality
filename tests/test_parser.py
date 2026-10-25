@@ -408,3 +408,32 @@ def test_parking_lots_is_the_count_and_parking_lots_key_is_the_flag():
                           "parking": 0})
     assert zero["parking_lots"] == 0
     assert zero["has_parking"] is False
+
+
+def test_a_flat_or_an_echoed_commercial_plot_is_declined_on_sreality_too() -> None:
+    """sreality's row never crosses ScrapedListing (its hash is the raw payload's), so
+    `parse_listing` calls `scraper.area.stated_plot` itself — one rule, two callers (rule
+    21). sreality publishes no plot on a flat or a commercial unit today (census
+    2026-09-30: komerční 0 of 19,365 active rows, byt 0-2), so this pins the shape of the
+    no-op rather than a live population; a house keeps its parcel (the W17 test above)."""
+    flat = parse_listing(_estate(category_main_cb={"name": "Byty", "value": 1},
+                                 usable_area=40, estate_area=40))
+    assert (flat["area_m2"], flat["area_basis"], flat["usable_area"]) == (40.0, "usable", 40.0)
+    assert flat["estate_area"] is None
+    echo = parse_listing(_estate(category_main_cb={"name": "Komerční", "value": 4},
+                                 usable_area=120, estate_area=120))
+    assert echo["estate_area"] is None
+    parcel = parse_listing(_estate(category_main_cb={"name": "Komerční", "value": 4},
+                                   usable_area=120, estate_area=1700))
+    assert parcel["estate_area"] == 1700.0
+    # The rule reads the advert's description here too (W22, 2026-10-25): a parcel the
+    # text states EQUAL to the figure keeps it; a different one leaves the echo declined.
+    stated = parse_listing(_estate(
+        category_main_cb={"name": "Komerční", "value": 4}, usable_area=2200, estate_area=2200,
+        advert_description="Areál na pozemku o celkové výměře 2 200 m², zastavěná plocha 376 m²."))
+    assert stated["estate_area"] == 2200.0
+    assert stated["description"].startswith("Areál")
+    other = parse_listing(_estate(
+        category_main_cb={"name": "Komerční", "value": 4}, usable_area=120, estate_area=120,
+        advert_description="Sklad 120 m² na pozemku o výměře 680 m²."))
+    assert other["estate_area"] is None

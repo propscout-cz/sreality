@@ -151,7 +151,7 @@ estimate ≈ −7,260 / +2,860 LOC, −30 files, −2 tables, −8 workflows, 0 
       needs one dispatched `location_claims_intake.yml` at `mode=full source=bezrealitky`
       (the bodies-half hash gate re-arms page entries only, and this portal has none).
      
-      Still owed: branch protection on `main` (operator action, last, announced first).
+      Branch protection on `main` enabled 2026-09-22 (PR + the CI checks required, no review). Program DELIVERED.
 - [x] **Value bands at ingest + their backfill (PR #1630, 2026-09-26; autodedup A4/B3).**
       idnes `"20. patro a vyšší"` is a floor sentinel; a bare storey outside -3..40 and a
       building count outside 1..40 are absence on every portal (`scraper/floor.py`); the

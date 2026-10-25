@@ -1283,8 +1283,8 @@ def _run_image_downloads(
             # Skip images whose parent listing is already known gone (we'd just
             # re-mark them) AND images on a quarantined host (its transient rate
             # crossed the bar this run — leave them pending for the next run).
-            filtered_pending: list[tuple[Any, ...]] = []
-            for image_id, lid, seq, url, cm, ct, sid in pending:
+            filtered_pending: list[tuple[int, int, str]] = []
+            for image_id, lid, _seq, url, cm, ct, sid in pending:
                 if sid is not None and sid in gone_listings:
                     continue
                 host = _image_host(url)
@@ -1296,7 +1296,7 @@ def _run_image_downloads(
                 cat_lookup[image_id] = (cm, ct)
                 sid_by_image[image_id] = sid
                 host_by_image[image_id] = host
-                filtered_pending.append((image_id, lid, seq, url, cm, ct))
+                filtered_pending.append((image_id, lid, url))
 
             if not filtered_pending:
                 # Nothing fetchable in this slice: every row is a known-gone
@@ -1317,11 +1317,11 @@ def _run_image_downloads(
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 future_to_id = {
                     pool.submit(
-                        _fetch_one_image, lid, seq, url, r2,
+                        _fetch_one_image, lid, image_id, url, r2,
                         _semaphore_for(host_by_image[image_id]),
                         proxied_hosts.get(host_by_image[image_id]),
                     ): image_id
-                    for image_id, lid, seq, url, _cm, _ct in filtered_pending
+                    for image_id, lid, url in filtered_pending
                 }
                 for future in as_completed(future_to_id):
                     image_id = future_to_id[future]
@@ -1600,8 +1600,8 @@ def _phash_or_none(data: bytes) -> int | None:
 
 
 def _fetch_one_image(
-    sreality_id: int,
-    sequence: int | None,
+    listing_id: int,
+    image_id: int,
     url: str,
     r2: image_storage.R2Client,
     semaphore: "threading.BoundedSemaphore | None" = None,
@@ -1624,7 +1624,7 @@ def _fetch_one_image(
     wraps only the CDN download — the R2 upload (a different host) runs
     unbounded — so a small portal CDN isn't dogpiled by the full worker pool.
     """
-    key = image_storage.image_key(sreality_id, sequence)
+    key = image_storage.image_key(listing_id, image_id)
     rendition = image_storage.rendition_for(url)
     try:
         if semaphore is not None:
