@@ -304,6 +304,15 @@ def test_the_deployment_before_the_rename_keeps_its_lease_through_the_alias(cur:
     assert cur.fetchone() == ("v",)
 
 
+def test_no_browser_role_reaches_the_lease_tables(cur: Any) -> None:
+    """The alias view is ungated on purpose (tests/test_tenant_isolation_live.py::_ADMIN_GATE_ALLOWLIST): its ACL is
+    the guard, so the ACL is asserted here."""
+    for relation in ("scheduled_jobs", "job_runs", "location_jobs"):
+        for role in ("anon", "authenticated"):
+            cur.execute("SELECT has_table_privilege(%s, %s, 'SELECT')", (role, f"public.{relation}"))
+            assert cur.fetchone() == (False,), (role, relation)
+
+
 def _sessions(n: int) -> list[Any]:
     return [psycopg.connect(db_url(), autocommit=True, options="-c statement_timeout=20000 -c lock_timeout=10000")
             for _ in range(n)]

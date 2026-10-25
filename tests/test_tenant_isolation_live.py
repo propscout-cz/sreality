@@ -213,6 +213,11 @@ _ADMIN_ONLY_RELATIONS: list[str] = [
 # EVERY entry needs a comment justifying it — an unexplained name here is how this
 # class of bug comes back.
 _ADMIN_GATE_ALLOWLIST: list[str] = [
+    # location_jobs (migration 675): the TEMPORARY alias of scheduled_jobs that keeps the deployment predating the
+    # rename on its lease until the merge; it drops with the dead lease columns. Safe by its ACL, like
+    # llm_cost_hour_union below: security invoker over an RLS table, every privilege revoked from public, anon and
+    # authenticated, asserted by tests/scraper/test_job_lease_live.py::test_no_browser_role_reaches_the_lease_tables.
+    "location_jobs",
     # The internal union source behind llm_cost_{daily,hourly}_public (migration 437).
     # Verified live at merge: relacl is {postgres,service_role} only -- no anon, no
     # authenticated, no PUBLIC -- and has_table_privilege is false for BOTH browser
