@@ -2169,7 +2169,7 @@
     {
       "filename": "load_obec_population.yml",
       "name": "Jobs: load obec population (manual)",
-      "description": "Load ČSÚ municipality population into admin_boundaries.population for EVERY obec (not just the 206 curated cities). Reads the committed DataStat export data/csu_population.json (OBY02AT02 — download from https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02). Idempotent: only changed rows are written. Dispatch this after committing a refreshed export. This is the population source the \"within X km of a municipality with population > N\" proximity filter reads.",
+      "description": "Load ČSÚ municipality population into admin_boundaries.population for EVERY obec (not just the 206 curated cities). Reads the committed DataStat export data/csu_population.json (OBY02AT02 — download from https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02). Idempotent: only changed rows are written. Dispatch this after committing a refreshed export. This is the population source the \"within X km of a municipality with population > N\" proximity filter reads; the job ends with the full city-proximity rebuild that turns it into the precomputed columns.",
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -2181,7 +2181,7 @@
       ],
       "concurrencyGroup": "load-obec-population",
       "cancelInProgress": false,
-      "timeoutMinutes": 15,
+      "timeoutMinutes": 90,
       "permissions": "contents: read",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/load_obec_population.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/load_obec_population.yml"
@@ -2713,40 +2713,6 @@
       "permissions": null,
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/realitymix_index_walk.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/realitymix_index_walk.yml"
-    },
-    {
-      "filename": "recompute_city_proximity.yml",
-      "name": "Jobs: recompute city proximity (hourly)",
-      "description": "Recompute properties.home_obec_pop + near_{pop,jobs,youth,overall}_{5,15}km (migration 142) so the Browse / Watchdog city-proximity + Min Population filters read precomputed indexed columns instead of a per-request spatial RPC. Incremental hourly run fills newly-ingested properties within the hour; the same function rebuilds everything after a population / city-index load.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "40 * * * *",
-          "human": "Every hour at :40"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "full",
-          "description": "Rebuild every property (not just new ones)",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "recompute-city-proximity",
-      "cancelInProgress": false,
-      "timeoutMinutes": 25,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/recompute_city_proximity.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/recompute_city_proximity.yml"
     },
     {
       "filename": "recompute_property_stats.yml",
@@ -3636,7 +3602,7 @@
       ],
       "concurrencyGroup": null,
       "cancelInProgress": null,
-      "timeoutMinutes": 15,
+      "timeoutMinutes": 90,
       "permissions": "contents: write",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/seed_curated_cities.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/seed_curated_cities.yml"
