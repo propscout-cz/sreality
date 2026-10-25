@@ -419,9 +419,9 @@ def test_a_late_lane_fails_past_its_bound_and_only_once_the_worker_has_been_up_t
     in_time = {"probe": _lane(last_pass_at=_iso(minutes=14))}
     assert _cells(_jobs(lanes=in_time)[0])["lane/probe"]["status"] == "ok"
     # The previous process's pass, 35 min ago; this one is up 20 min, under the 30 min bound.
-    seeded = {"count_probe": _lane(interval_s=600.0, last_duration_s=10.0,
-                                   last_pass_at=_iso(minutes=35))}
-    young = _cells(_jobs(lanes=seeded, booted=_ago(minutes=20))[0])["lane/count_probe"]
+    seeded = {"sold_comps": _lane(interval_s=600.0, last_duration_s=10.0,
+                                  last_pass_at=_iso(minutes=35))}
+    young = _cells(_jobs(lanes=seeded, booted=_ago(minutes=20))[0])["lane/sold_comps"]
     assert young["status"] == "ok"
 
 
@@ -1184,12 +1184,11 @@ def test_a_refusal_is_read_once_as_the_failed_pass_the_worker_books_it() -> None
 
 
 def test_other_lanes_errors_and_a_ceiling_bounded_text_pass_are_never_an_abort() -> None:
-    """probe, drain and count_probe count failed categories or fetches in `last.errors`, and
+    """probe and drain count failed categories or fetches in `last.errors`, and
     text_extract failed calls; text_extract's `aborted` is True for a pass its own $/time ceiling
     bounded ("bounded, not failed"). Each is a completed pass: OK, at once and read twice."""
     lanes = {"probe": _lane(last={"portals": 9, "new": 12, "errors": 3}),
              "drain": _lane(interval_s=30.0, last={"new": 40, "errors": 3}),
-             "count_probe": _lane(interval_s=600.0, last={"errors": 2}),
              "text_extract": _lane(interval_s=300.0,
                                    last={"claimed": 50, "errors": 4, "aborted": True})}
     before = [{"subject": f"lane/{lane}", "facts": {"last_aborted": True, "passes": 39,

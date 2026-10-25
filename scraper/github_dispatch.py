@@ -1,5 +1,5 @@
-"""GitHub's workflow_dispatch POST, for the price-stats "run now" route and the worker's count-probe.
-In scraper/ because the worker never imports api/; each caller keeps its own env and judges the answer."""
+"""GitHub's workflow_dispatch POST, for the price-stats "run now" route; the caller keeps its own env and
+judges the answer. The worker dispatches nothing since its count-probe lane went (#2015)."""
 
 from __future__ import annotations
 

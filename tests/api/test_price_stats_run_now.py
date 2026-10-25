@@ -1,5 +1,5 @@
 """The price-stats "run now" dispatch: its own env (GH_DISPATCH_TOKEN, GH_REPO) through the GitHub
-dispatch POST it shares with the worker's count-probe (scraper.github_dispatch)."""
+dispatch POST (scraper.github_dispatch)."""
 
 from __future__ import annotations
 
