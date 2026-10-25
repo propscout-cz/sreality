@@ -14,6 +14,8 @@ from __future__ import annotations
 import threading
 import time
 
+from scraper import stop
+
 
 class RateLimiter:
     def __init__(
@@ -53,8 +55,15 @@ class RateLimiter:
         without spending an attempt."""
         self.refused, self.refused_reason = True, reason
 
+    def refuse_on_stop(self) -> None:
+        """After a stop signal, refuse the run and raise, so the runner hands every unfetched claim back."""
+        if stop.requested():
+            self.refuse("stop")
+            raise stop.StopRequested("a stop signal arrived")
+
     def acquire(self) -> None:
-        """Block until this thread's slot; sleep happens outside the lock."""
+        """Block until this thread's slot (the wait is outside the lock and ends at a stop signal)."""
+        self.refuse_on_stop()
         with self._lock:
             now = time.monotonic()
             scheduled = max(now, self._next_at)
@@ -64,8 +73,8 @@ class RateLimiter:
                     self._base_interval, self._interval * self._recovery_factor
                 )
             wait = scheduled - now
-        if wait > 0:
-            time.sleep(wait)
+        if stop.wait(wait):
+            self.refuse_on_stop()
 
     def penalize(self) -> None:
         """Widen the interval after sreality signals we're going too fast."""

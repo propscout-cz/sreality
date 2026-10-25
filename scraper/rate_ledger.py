@@ -148,6 +148,7 @@ class LedgerRateLimiter(RateLimiter):
         return self._deadline
 
     def acquire(self) -> None:
+        self.refuse_on_stop()
         with self._lease_lock:
             if (not self.refused and self._deadline is not None
                     and time.monotonic() >= self._deadline):

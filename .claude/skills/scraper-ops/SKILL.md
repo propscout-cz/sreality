@@ -213,6 +213,12 @@ from the slow "download each ad" write:
   **wall-clock deadline checked per PAGE** (`--max-seconds` → `run_index_walk` →
   `walk_category` → `portal.deadline_reached`); a deadline is a stop of OURS, so such a
   walk reports `reached_end=False`, nominates nothing, and keeps everything it collected.
+  A **stop signal** (SIGTERM/SIGINT: a deploy, a cancel, the job runner's timeout) is that
+  deadline arriving early (`scraper/stop.py`, installed by `run_phase`, #2019): `deadline_reached`
+  reads it, the rate limiters and the HTTP client's backoff wait on it, a request in hand
+  finishes (its timeout capped at the limiter's budget left), the run is finalized with no
+  error, and the process exits 143; each category's pages and `by_category` entry are written
+  together as it ends (`db.bump_index_progress`), so a SIGKILL keeps them.
   Never hand-roll it, and never add a portal without wiring the flag through —
   `tests/scraper/test_walk_deadline_wiring.py` fails the build if you do. Ids are classified by the
   one shared `portal.classify_index_sighting` (**an index card with no price reads `unchanged`,

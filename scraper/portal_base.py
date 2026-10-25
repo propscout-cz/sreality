@@ -19,9 +19,11 @@ import logging
 import os
 import re
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import requests
+
+from scraper import stop
 
 if TYPE_CHECKING:
     from scraper.rate_limit import RateLimiter
@@ -173,9 +175,8 @@ class BasePortalClient:
         if self._limiter is not None:
             self._limiter.acquire()
             return
-        elapsed = time.monotonic() - self._last_at
-        if elapsed < self.request_delay_s:
-            time.sleep(self.request_delay_s - elapsed)
+        if stop.wait(self.request_delay_s - (time.monotonic() - self._last_at)):
+            self._stopped()
 
     def _request(
         self,
@@ -204,20 +205,21 @@ class BasePortalClient:
         """
         error: Exception | None = None
         for attempt in range(self.max_retries + 1):
-            if attempt > 0:
-                time.sleep(2.0 ** (attempt - 1))
+            if attempt > 0 and stop.wait(2.0 ** (attempt - 1)) or stop.requested():
+                self._stopped()
             if pace:
                 self._pace()
+            timeout, capped = self._timeout()
             try:
                 if json_body is not None or method == "POST":
                     response = self._session.post(
-                        url, json=json_body, timeout=self.timeout_s
+                        url, json=json_body, timeout=timeout
                     )
                 elif params is None:
-                    response = self._session.get(url, timeout=self.timeout_s)
+                    response = self._session.get(url, timeout=timeout)
                 else:
                     response = self._session.get(
-                        url, params=params, timeout=self.timeout_s
+                        url, params=params, timeout=timeout
                     )
                 self._last_at = time.monotonic()
                 status = response.status_code
@@ -241,5 +243,23 @@ class BasePortalClient:
                     "GET %s attempt %d/%d failed: %s",
                     url, attempt + 1, self.max_retries + 1, exc,
                 )
+                if capped and isinstance(exc, requests.Timeout):
+                    # The run's budget cut this request, not the listing: refused, so the
+                    # runner hands the claim back instead of spending an attempt.
+                    self._limiter.refuse("deadline")
+                    raise
         assert error is not None
         raise error
+
+    def _timeout(self) -> tuple[float, bool]:
+        """The request timeout, capped at what the limiter's budget has left, so a hung request ends inside it."""
+        deadline = self._limiter.deadline if self._limiter is not None else None
+        if deadline is None:
+            return self.timeout_s, False
+        left = max(0.1, deadline - time.monotonic())
+        return min(self.timeout_s, left), left < self.timeout_s
+
+    def _stopped(self) -> NoReturn:
+        if self._limiter is not None:
+            self._limiter.refuse("stop")
+        raise stop.StopRequested("a stop signal arrived")
