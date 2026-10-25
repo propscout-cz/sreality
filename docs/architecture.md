@@ -4784,18 +4784,23 @@ portal's payload or its own page, and every other stamp is class E outright.
   (Q3), else none. Only an operator correction outranks the registry. It also fills
   **the position: the portal pin when admissible, else the finest bound unit's point on surface** — the boundary's stored
   inscribed-circle centre, inside the polygon where `ST_Centroid` need not be, read off the same
-  chain rather than as a tenth registry question. It WALKS that chain, because RÚIAN draws no polygon
-  for a část obce or a městský obvod and `ruian_streets` carries no geometry at all, so the finest
-  bound unit is often precisely the one with no point of its own; it refuses `stat` and
-  `region soudržnosti`, whose point would place a listing at the centre of the country. Grade,
-  confidence and radius are untouched — the LEVEL is what says how coarse a position is — and
+  chain rather than as a tenth registry question. RÚIAN draws no polygon for a část obce, so since
+  v5.8 a bound část stands at the centroid of its own valid doors (`part_point`, the street's
+  derivation, which also answers its KÚ by the door rule) — before, it climbed to its town's point,
+  and 23,618 active quarter-level ads stood there, Prague's in Vinohrady. Otherwise FILL WALKS the
+  chain to the first unit with a point (a městský obvod has none either; a street placed the row in
+  BIND already); it refuses `stat` and `region soudržnosti`, whose point would place a listing at the
+  centre of the country. Grade and confidence are untouched — the LEVEL is what says how coarse a
+  position is — the radius is floored by the placed-on entity's reach (the část's farthest door, the
+  polygon's `containment_radius_m`: Praha 17.6 km where the `obec` constant says 1 km), and
   `disputed` is never set by this path. Foreign and undetermined rows bind no Czech unit, so they
   keep `geom NULL` by construction.
 * **GRADE** (`grade.py`) is two tables: `match_confidence` from how many INDEPENDENT fields agreed
   with the bound entity (`exact` an address point the pin corroborates, `high` ≥ 2 fields, `medium`
   one, `low` a tie-break or nothing), and `uncertainty_radius_m` from a per-level constant dict
   carrying migration 383's own v1 numbers — floored by the STREET's extent when a street placed the
-  row (W18), so a radius can never understate the thing the position came off. A portal's declared
+  row (W18), and by the část's or the unit's reach when FILL did (v5.8), so a radius can never
+  understate the thing the position came off. A portal's declared
   precision reaches the confidence and never the grain (see the position ladder below).
 * **CHECK** (`check.py`) decides the country and whether the row disagrees with itself. `disputed` is
   ONE nullable text column whose value IS the reason: `pin_outside_obec` (the pin is kept, the

@@ -90,6 +90,7 @@ def resolve(
     filled = step_fill.fill(
         binding, constraints, ctx.registry,
         operator=step_bind.operator_fields(admissible),
+        place=not position.has_position,
     )
     if not position.has_position:
         position = step_fill.position(filled, binding)

@@ -106,8 +106,10 @@ def radius_m(granularity: str, *, floor_m: float | None = None) -> float:
 
     A street is not a point: when the row sits at the centroid of a street's address points,
     the honest radius is the one that reaches its FARTHEST door — 1,288 m for Jiráskova in
-    Mladá Boleslav, where the level constant says 300. The floor only ever RAISES the number,
-    so every other row keeps exactly the radius it had.
+    Mladá Boleslav, where the level constant says 300. Since v5.8 FILL's placements carry the
+    same floor: a část obce its farthest door (Břevnov 2.9 km against 750 m), a unit its
+    polygon's reach from the point (Praha 17.6 km against 1 km). The floor only ever RAISES
+    the number, and a pin-placed row has none.
     """
     return max(RADIUS_M[granularity], floor_m or 0.0)
 

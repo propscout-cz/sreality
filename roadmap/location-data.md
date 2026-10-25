@@ -1198,6 +1198,17 @@ component is slimmed twice — each wave rewrites one component and slims its st
   containment of the exact point (measured 2026-10-19; street level 98.5 %). The ads agree where
   both are exact (p90 0 m); the misses are the radius, not the evidence. Calibrating a radius is a
   `RESOLVER_VERSION` bump through the ordinary lane.
+- **The fallback point — resolver v5.8, 2026-10-25** (operator ruling 2026-10-25; no migration). It
+  answers the item above for the rows FILL places; a blurred portal pin keeps its level constant. A
+  bound část obce no pin placed stands at the centroid of its own doors (`part_point`, which folds
+  `part_katastr_kod` — one question for its point and its KÚ), no longer on its town's point: 23,618
+  active quarter-level ads stood on a town point (Břevnov's doors: 1.1 km from 19437599's street,
+  where Prague's point was 9 km). A FILL placement's radius is floored by the placed-on entity's
+  reach — the část's farthest door (Břevnov 2.9 km), the polygon's `containment_radius_m` (Praha
+  17.6 km, against the 1 km and 750 m constants). The bump re-queues the corpus. Left: 266
+  městský-obvod rows still take their town's point (`momc_unit_id` carries no index). Autodedup
+  reads these points as `same_exact_pin` / `pin_pop` (any grain); a shared quarter centroid is a
+  smaller population than Prague's one point, which is an operator call for that program.
 - **Owed — two copies the subtraction mandate still carries** (rules-wording audit, 2026-10-01; rule 25
   now reads as practised: a net-positive location PR says why in its body, and the operator rules on
   it). `operator_corrections.py`'s write is its own transcription of the 18-column claim INSERT, the

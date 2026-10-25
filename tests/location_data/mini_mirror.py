@@ -32,6 +32,7 @@ from location_data.resolver.types import (
     AddressPoint,
     AdminUnit,
     Claim,
+    PartPoint,
     ResolverContext,
     Street,
     StreetPoint,
@@ -91,11 +92,17 @@ class MiniMirror:
                            part_unit_ids=tuple(sorted({p.cast_obce_unit_id for p in points},
                                                       key=lambda u: (u is None, u or 0))))
 
-    def part_katastr_kod(self, unit_id: int) -> int | None:
-        return _doors_katastr([
-            p for p in self.points
-            if p.cast_obce_unit_id == unit_id and p.lat is not None and p.lon is not None
-        ])
+    def part_point(self, unit_id: int) -> PartPoint | None:
+        """`_PART_POINT_SQL` in python, the street's derivation over the část's doors."""
+        points = [p for p in self.points
+                  if p.cast_obce_unit_id == unit_id and p.lat is not None and p.lon is not None]
+        if not points:
+            return None
+        lat = sum(p.lat for p in points) / len(points)
+        lon = sum(p.lon for p in points) / len(points)
+        extent = max(haversine_m(lat, lon, p.lat, p.lon) for p in points)
+        return PartPoint(lat=lat, lon=lon, extent_m=extent, point_count=len(points),
+                         katastr_kod=_doors_katastr(points))
 
     def admin_units_by_name(self, name_norm: str, *, levels: Sequence[str] = ()) -> list[AdminUnit]:
         """By the unit's own key or, as `ruian_name_index` also indexes it, by its name with the
