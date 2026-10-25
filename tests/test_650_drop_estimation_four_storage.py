@@ -27,9 +27,9 @@ def _dropped_columns(table: str) -> set[str]:
 def test_the_nine_columns_go_and_the_backup_saves_everything_dropped() -> None:
     targets = re.search(r'-f targets="([^"]+)"', SQL).group(1).split()
     saved = {t.split(":")[0]: set(t.split(":")[1].split(",")) for t in targets if ":" in t}
-    # Whole tables: parsed_url_cache goes; the two settings' current values exist nowhere else
+    # Whole tables: the two settings' current values exist nowhere else (the parse cache table waits for 643)
     # (020's history trigger fires on UPDATE only); the portals row rides along.
-    assert {"parsed_url_cache", "app_settings", "portals"} <= set(targets)
+    assert {"app_settings", "portals"} <= set(targets)
     for table, cols in COLUMNS.items():
         assert _dropped_columns(table) == cols, table
         assert saved[table] == cols | {"id"}, table
@@ -39,8 +39,6 @@ def test_every_drop_is_idempotent_and_nothing_cascades() -> None:
     assert "cascade" not in CODE.lower()
     drops = re.findall(r"\bdrop (?:view|table|column)\b(?! if exists)", CODE)
     assert drops == []
-    assert "drop view if exists public.parsed_url_activity;" in CODE
-    assert "drop table if exists public.parsed_url_cache;" in CODE
 
 
 def test_the_rows_go() -> None:
@@ -50,5 +48,5 @@ def test_the_rows_go() -> None:
 
 def test_one_transaction_checked_after() -> None:
     at = CODE.index
-    assert (at("set lock_timeout = '5s';") < at("begin;") < at("drop view if exists")
+    assert (at("set lock_timeout = '5s';") < at("begin;") < at("alter table public.estimation_runs")
             < at("delete from public.portals") < at("do $post$") < at("commit;") < at("reset lock_timeout;"))

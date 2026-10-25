@@ -15,19 +15,19 @@
 -- ===========================================================================
 -- DESTRUCTIVE. Applied only with the operator's OK (given 2026-10-20, ruling 5) and AFTER a backup:
 --   gh workflow run backup_before_drop.yml -f label=estimation-four-storage \
---     -f targets="parsed_url_cache estimation_runs:id,source_kind,parse_confidence,parse_confidence_per_field,source_html,subject_attributes building_runs:id,source_kind,parse_confidence,parse_confidence_per_field,source_html app_settings portals"
+--     -f targets="estimation_runs:id,source_kind,parse_confidence,parse_confidence_per_field,source_html,subject_attributes building_runs:id,source_kind,parse_confidence,parse_confidence_per_field,source_html app_settings portals"
 -- (app_settings and portals whole: both small, and the two deleted settings' current values exist nowhere else,
 -- see WHAT GOES 4).
--- and only AFTER W2's rollout (done 2026-10-21: no deployed code reads these) and AFTER migration 643 (#1910) is
--- applied: 643 drops the view parsed_url_activity and the matview chain that read parsed_url_cache; this file drops
--- the view defensively (if exists) and never CASCADEs — anything else that still depends on these must fail the
--- apply, not vanish with it. The same holds for the CI schema replay: until 643 is on main, the replay stops at this
--- file's first drop (portal_health_mv still reads parsed_url_activity), so this file merges after #1910.
+-- and only AFTER W2's rollout (done 2026-10-21: no deployed code reads these). The parser's TABLE parsed_url_cache
+-- and its view parsed_url_activity are NOT dropped here: the legacy matview portal_health_mv still reads the view and
+-- refresh_health_matviews() (pg_cron, every 10 min) refreshes that matview unguarded, so they go with migration 643
+-- (#1980, the Health layer drop), whose header already sequences them. Never CASCADE: anything else that still
+-- depends on the nine columns must fail the apply, not vanish with it.
 -- Forward only (rule 1): no restore wanted.
 -- ===========================================================================
 --
 -- WHAT GOES
---   1. table public.parsed_url_cache (020) and, if still present, the view public.parsed_url_activity (318).
+--   1. (deferred to 643/#1980) table public.parsed_url_cache (020) + view public.parsed_url_activity (318).
 --   2. estimation_runs: source_kind (+ its CHECK + index), parse_confidence (+ CHECK), parse_confidence_per_field,
 --      source_html (020), subject_attributes (138).
 --   3. building_runs: source_kind, parse_confidence, parse_confidence_per_field, source_html (035).
@@ -46,9 +46,6 @@ set lock_timeout = '5s';
 set statement_timeout = '60s';
 
 begin;
-
-drop view if exists public.parsed_url_activity;
-drop table if exists public.parsed_url_cache;
 
 alter table public.estimation_runs
   drop column if exists source_kind,
@@ -69,10 +66,6 @@ delete from public.portals where source = 'idnes_reality';
 
 do $post$
 begin
-  if to_regclass('public.parsed_url_cache') is not null
-     or to_regclass('public.parsed_url_activity') is not null then
-    raise exception '650 did not land: parsed_url_cache or parsed_url_activity still exists';
-  end if;
   if exists (select 1 from information_schema.columns
               where table_schema = 'public'
                 and column_name in ('source_kind', 'parse_confidence', 'parse_confidence_per_field', 'source_html',
