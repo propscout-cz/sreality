@@ -75,6 +75,7 @@ way every other refused measure does.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
@@ -304,7 +305,10 @@ PLOT_ECHO_BASES: frozenset[str] = frozenset({"usable", "floor", "total"})
 _SIDE_AREA_QUANTUM = Decimal("0.1")
 
 
-def _at_side_scale(value: float) -> Decimal:
+def _at_side_scale(value: float | None) -> Decimal | None:
+    """None for an absent or non-finite figure, which is never compared."""
+    if value is None or not math.isfinite(value):
+        return None
     return Decimal(str(value)).quantize(_SIDE_AREA_QUANTUM, rounding=ROUND_HALF_UP)
 
 
@@ -324,9 +328,10 @@ def stated_plot(
     if category_main not in PLOT_ECHO_CATEGORIES:
         return plot
     stated = _at_side_scale(plot)
-    if usable is not None and _at_side_scale(usable) == stated:
+    if stated is None:
+        return plot
+    if _at_side_scale(usable) == stated:
         return None
-    if (headline is not None and headline_basis in PLOT_ECHO_BASES
-            and _at_side_scale(headline) == stated):
+    if headline_basis in PLOT_ECHO_BASES and _at_side_scale(headline) == stated:
         return None
     return plot

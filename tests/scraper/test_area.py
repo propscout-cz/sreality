@@ -1,5 +1,7 @@
 """The one area grammar and the one headline-area precedence, shared by all nine portals."""
 
+import math
+
 from scraper.area import (
     AREA_BASES,
     MAX_AREA_M2,
@@ -449,6 +451,19 @@ def test_the_plot_equality_is_read_at_column_scale() -> None:
     assert stated_plot("komercni", 100.04, usable=100.0) is None
     assert stated_plot("komercni", 100.0, usable=100.05) == 100.0
     assert stated_plot("komercni", 100.05, usable=100.0) == 100.05
+
+
+def test_a_non_finite_figure_is_never_compared() -> None:
+    """sreality's numeric reader turns "Infinity" into inf and NaN passes through; a figure
+    like that is not compared (Decimal would raise on quantize) and the plot passes
+    through untouched to the writer's numeric guard (`db.sane_listing_numerics` nulls an
+    infinite one), as it did before the rule."""
+    inf, nan = float("inf"), float("nan")
+    assert stated_plot("komercni", 10.0, usable=inf) == 10.0
+    assert stated_plot("komercni", 10.0, usable=nan, headline=inf, headline_basis="usable") == 10.0
+    assert stated_plot("komercni", inf, usable=10.0) == inf
+    assert math.isnan(stated_plot("komercni", nan, usable=10.0))
+    assert stated_plot("byt", inf) is None
 
 
 def test_the_plot_rule_is_idempotent() -> None:
