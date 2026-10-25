@@ -303,7 +303,19 @@ _Avoid_: job, automation, task
 **Skill**:
 The instructions an AI follows to carry out a workflow, whether it runs in a user's assistant or
 inside the platform.
-_Avoid_: prompt, agent profile, recipe
+_Avoid_: prompt, recipe
+
+**Agent**:
+A configured specialist that carries out workflows inside the platform: which model it uses, which
+skills it follows, which tools it may call, its limits, and when it must ask a person. An agent is
+defined in a file, never in a settings screen.
+_Avoid_: agent profile, bot, assistant (that word means the user's own AI account)
+
+**Tool**:
+One named platform operation with a typed input and a factual output, such as "find comparables"
+or "add to a collection", that an agent, a screen or an assistant can call. A tool declares whether
+it reads market data, reads or writes the user's own data, spends money, or leaves the platform.
+_Avoid_: function, endpoint, capability (in prose)
 
 **Run**:
 One execution of a workflow, with its inputs and its result. A run usually concerns one property.
