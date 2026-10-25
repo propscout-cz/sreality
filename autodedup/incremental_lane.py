@@ -230,6 +230,7 @@ from autodedup.model import LogisticModel
 from autodedup.score_sql import CLUSTER_CONFLICT_INSERT_SQL
 from autodedup.settings import Settings
 from autodedup.text_facts import body_cache_entries, clear_body_caches
+from scraper.cgroup import CGROUP_ROOT, memory_limit_mb
 
 LOG = logging.getLogger(__name__)
 
@@ -527,14 +528,26 @@ SNAPSHOT_BYTES_PER_ROW: int = 300
 # review of E962): 43.9 entries, 8.06 kB of RSS and 678 B of payload an advert; a seed of mostly
 # villages ~9-10 kB all in. Plus the population (120 B a hash at its peak, 7.08 hashes an
 # advert: 0.85 kB), libpq's copy of its rows and the payload's two serialisations: 12 kB with
-# headroom. The seed runs on GitHub's ubuntu-latest, 16 GiB, and a cut past it is OOM-killed,
-# stranding `rt_lease` for SEED_LEASE_TTL_S (the lease is taken before the transaction and
-# SIGKILL runs no release). So right after its walk, before the cut, the seed refuses a scope
-# whose peak would pass HALF the runner — the rule a widened scope's gate holds the worker to
-# (E939) — 8,192 MiB / 12 kB = 699,050 adverts (E940's whole cut: 56 kB, ~149,800), though
-# MAX_SCHEMA_MB binds first, above ~470k. The 323,128 of the re-seed: ~3.7 GiB.
+# headroom. The seed runs on a GitHub-hosted runner (16 GiB public, 7 GiB private), and a cut
+# past it is OOM-killed, stranding `rt_lease` for SEED_LEASE_TTL_S (the lease is taken before the
+# transaction and SIGKILL runs no release). So right after its walk, before the cut, the seed
+# refuses a scope whose peak would pass HALF of what the container may use — the rule a widened
+# scope's gate holds the worker to (E939) — measured at import (#2016): 8,192 MiB / 12 kB =
+# 699,050 adverts on a public runner (E940's whole cut: 56 kB, ~149,800), though MAX_SCHEMA_MB
+# binds first, above ~470k. The 323,128 of the re-seed: ~3.7 GiB.
 CUT_PEAK_BYTES_PER_LISTING: int = 12 * 1024
-SEED_MEMORY_MB: float = 8192.0
+
+
+def _physical_memory_mb() -> float:
+    return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1_048_576
+
+
+def container_memory_mb(root: str = CGROUP_ROOT) -> float:
+    """What this process may use: its cgroup's limit, capped at the machine's memory (no limit: the machine's)."""
+    return min(memory_limit_mb(root) or float("inf"), _physical_memory_mb())
+
+
+SEED_MEMORY_MB: float = container_memory_mb() / 2
 # How many `phash_pop` rows one `executemany` carries. The trial cohort's 41,791 hashes are
 # 9 chunks; the number is the score lane's, for the same reason (bound-parameter size).
 POP_CHUNK: int = 5_000
@@ -2765,7 +2778,7 @@ def seed_memory(scope_listings: int, memory_mb: float = SEED_MEMORY_MB) -> dict[
             f"rt_seed refused: the calibration cut (streamed, E962) holds "
             f"~{CUT_PEAK_BYTES_PER_LISTING // 1024} kB an advert at its peak, so the "
             f"{int(scope_listings):,} adverts the walk listed would peak at ~{peak_mb:,.0f} MiB, "
-            f"over SEED_MEMORY_MB {float(memory_mb):,.0f} (half the runner's 16 GiB): the "
+            f"over SEED_MEMORY_MB {float(memory_mb):,.0f} (half the container's memory limit): the "
             "runner would kill the seed mid-cut and strand autodedup.rt_lease for "
             f"{SEED_LEASE_TTL_S:,} s. Narrow rt_scope. Nothing was written.")
     return report

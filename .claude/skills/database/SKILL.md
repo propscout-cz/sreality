@@ -479,7 +479,7 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   reading in `claims_intake`, a retraction, a retirement). The resolver reads only
   ACTIVE-contract + operator claims, so a wrong contract is RETRACTED (DELETE + re-resolve enqueue,
   `contracts.py --retract`) and a merely SUPERSEDED version's claims are deleted with NO enqueue by
-  `location_claims_retire.yml` (backup artifact, then keyset batches) — run it after a retirement. The live set is `location_claims`,
+  `location_claims_retire.yml` (backup to R2 `backups/retired-claims/`, then keyset batches) — run it after a retirement. The live set is `location_claims`,
   `listing_location`, `location_granularity_rank`, `dirty_locations`, `location_jobs`,
   `portal_contracts`/`_entries` + RÚIAN. Every heavy batch lane shares the ONE `location-batch`
   Actions group + arms `SET LOCAL statement_timeout` — **except the resolve DRAIN**: latency-bound

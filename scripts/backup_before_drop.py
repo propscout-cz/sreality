@@ -4,7 +4,8 @@ Run by the backup_before_drop workflow (CLAUDE.md rule 1 / the `database` skill:
 then the operator's OK to apply). R2 and never a workflow artifact: the repository is public,
 so an artifact is downloadable by anyone signed in to GitHub. A target is a whole relation (`table`: pg_dump, schema + data) or a column set
 (`table:key,col[,col...]`: a CSV of the key and the columns, only rows where one of them is
-set, so an absent row restores as the NULL it was). Uses SUPABASE_DB_SESSION_URL when set:
+set, so an absent row restores as the NULL it was), or a backup already made on disk (`--file`,
+the retired-claims CSV), streamed as it is. Uses SUPABASE_DB_SESSION_URL when set:
 pg_dump and COPY want a stable session, which the transaction pooler does not give.
 """
 
@@ -117,18 +118,22 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("label", help="names the backup: R2 backups/<label>/<UTC date>/")
-    parser.add_argument("targets", nargs="+", help="`table` or `table:key,col[,col...]`")
+    parser.add_argument("targets", nargs="*", help="`table` or `table:key,col[,col...]`")
+    parser.add_argument("--file", action="append", default=[], metavar="PATH",
+                        help="a backup already made on disk (a gzip), streamed to R2 as it is")
     args = parser.parse_args(argv)
 
     if not _LABEL.match(args.label):
         parser.error(f"bad label {args.label!r}: a-z 0-9 and -")
+    if not args.targets and not args.file:
+        parser.error("name a target or a --file")
     try:
-        targets = parse_targets(args.targets)
+        targets = parse_targets(args.targets) if args.targets else []
     except ValueError as exc:
         parser.error(str(exc))
 
     db_url = os.environ.get("SUPABASE_DB_SESSION_URL") or os.environ.get("SUPABASE_DB_URL")
-    if not db_url:
+    if targets and not db_url:
         LOG.error("SUPABASE_DB_SESSION_URL / SUPABASE_DB_URL not set")
         return 1
 
@@ -136,6 +141,15 @@ def main(argv: list[str] | None = None) -> int:
     r2 = R2Client.from_env()
 
     failures: list[str] = []
+    for path in args.file:
+        # Streamed from disk (multipart): the retired-claims CSV runs to gigabytes.
+        key, size = f"{prefix}/{os.path.basename(path)}", os.path.getsize(path)
+        r2.upload_file(key, path, content_type="application/gzip")
+        if r2.object_size(key) != size:
+            LOG.error("FAILED %s: %s did not read back at %d bytes", path, key, size)
+            failures.append(path)
+            continue
+        LOG.info("%s -> %s (%d bytes)", path, key, size)
     for target in targets:
         dump = _dump_columns if target.columns else _dump_table
         try:
@@ -155,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
     if failures:
         LOG.error("Failed: %s", ", ".join(failures))
         return 1
-    LOG.info("Backup complete: %d target(s) under %s", len(targets), prefix)
+    LOG.info("Backup complete: %d target(s) under %s", len(targets) + len(args.file), prefix)
     return 0
 
 
