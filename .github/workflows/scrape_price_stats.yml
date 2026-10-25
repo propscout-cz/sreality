@@ -13,8 +13,9 @@ name: "Scraping: Sreality price stats (ceny-nemovitosti, weekly + manual)"
 # SREALITY_SESSION_COOKIE bypasses the browser entirely. RUN mode=probe FIRST
 # to prove auth works before a full run.
 #
-# Cadence: weekly — the published series is monthly, so a full re-walk once a
-# week keeps it current with negligible request volume.
+# Cadence: one scheduled run a week — the published series is monthly. A run walks
+# one queue, stalest first across the active datasets (never-scraped first), until
+# its time budget; a run that shrank the never-scraped set chains ONE more run.
 #
 # Required GitHub secrets:
 #   SUPABASE_DB_URL          — same one every workflow uses
@@ -70,6 +71,7 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+      actions: write   # the chain step dispatches this workflow with the job's own token
     env:
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       SREALITY_LOGIN_EMAIL: ${{ secrets.SREALITY_LOGIN_EMAIL }}
@@ -117,28 +119,23 @@ jobs:
           echo "Running with: $ARGS"
           eval python -m scraper.price_stats_main $ARGS
 
-      # Self-chaining: a budget-bounded run only scrapes a slice of a large
-      # dataset, so re-dispatch back-to-back until coverage is complete (the
-      # ingestion writes deferred=1 while any selected obec is still unscraped;
-      # 0 once every obec has data or a no-data marker, so this can't loop on an
-      # already-covered dataset). Re-dispatch preserves the inputs (same
-      # dataset_id / window). Needs the SCRAPE_CHAIN_TOKEN PAT (GITHUB_TOKEN
-      # can't re-trigger a workflow); no-op without it — fall back to manual
-      # re-runs / the weekly cron. Skipped for probe / resolve / dry-run.
-      - name: Chain next run (continue until coverage complete)
-        if: ${{ success() && steps.ingest.outputs.deferred == '1' && inputs.dry_run != 'true' }}
+      # One more run, only when this one made progress: the ingestion writes
+      # chain=1 when it shrank the never-scraped set and some remains, so a run that
+      # covered nothing new never re-triggers and a complete set leaves refresh to
+      # the weekly schedule. The job's own GITHUB_TOKEN can dispatch it: GitHub
+      # exempts workflow_dispatch from its rule that a GITHUB_TOKEN event starts no
+      # new run. Re-dispatch keeps the inputs (dataset_id / window). Skipped for
+      # probe / resolve / dry-run.
+      - name: Chain next run (only after progress)
+        if: ${{ success() && steps.ingest.outputs.chain == '1' && inputs.dry_run != 'true' }}
         env:
-          CHAIN_TOKEN: ${{ secrets.SCRAPE_CHAIN_TOKEN }}
+          CHAIN_TOKEN: ${{ github.token }}
         run: |
-          if [ -z "$CHAIN_TOKEN" ]; then
-            echo "SCRAPE_CHAIN_TOKEN not set — no auto-continue. Re-run manually or wait for the weekly cron."
-            exit 0
-          fi
           MODE='${{ inputs.mode }}'; if [ -z "$MODE" ]; then MODE="full"; fi
-          echo "Coverage incomplete — re-dispatching (mode=$MODE, dataset=${{ inputs.dataset_id }})."
+          echo "Progress made, coverage incomplete — re-dispatching (mode=$MODE, dataset=${{ inputs.dataset_id }})."
           # Capture the HTTP status: the dispatch API returns 204 on success.
-          # curl -sS alone returns 0 even on a 4xx, which would let a wrong-scope
-          # SCRAPE_CHAIN_TOKEN fail the chain SILENTLY — so check it and fail loud.
+          # curl -sS alone returns 0 even on a 4xx, which would let a token without
+          # actions: write fail the chain SILENTLY — so check it and fail loud.
           code=$(curl -sS -o /tmp/chain_resp -w '%{http_code}' -X POST \
             -H "Authorization: Bearer $CHAIN_TOKEN" \
             -H "Accept: application/vnd.github+json" \
@@ -146,7 +143,7 @@ jobs:
             "https://api.github.com/repos/${{ github.repository }}/actions/workflows/scrape_price_stats.yml/dispatches" \
             -d "{\"ref\":\"${{ github.ref_name }}\",\"inputs\":{\"mode\":\"$MODE\",\"dataset_id\":\"${{ inputs.dataset_id }}\",\"start_year\":\"${{ inputs.start_year }}\",\"window_years\":\"${{ inputs.window_years }}\"}}")
           if [ "$code" != "204" ]; then
-            echo "::error::Chain re-dispatch failed (HTTP $code). Check SCRAPE_CHAIN_TOKEN — it must be a fine-grained PAT for THIS repo with Actions: read+write. Response: $(cat /tmp/chain_resp)"
+            echo "::error::Chain re-dispatch failed (HTTP $code). The job's GITHUB_TOKEN needs permissions: actions: write. Response: $(cat /tmp/chain_resp)"
             exit 1
           fi
           echo "Re-dispatch accepted (HTTP 204) — next run is queued."

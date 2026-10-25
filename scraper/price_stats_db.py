@@ -184,9 +184,8 @@ def coverage_remaining(
 ) -> int:
     """Localities (selected, or all) the dataset hasn't scraped yet — those with
     NEITHER an observation NOR a no-data marker. > 0 means a coverage pass is
-    still incomplete; the self-chaining workflow keeps re-dispatching until this
-    reaches 0 (then leaves periodic refresh to the weekly cron, so it never
-    loops forever re-scraping already-covered obce)."""
+    still incomplete; the workflow chains one more run only when a run shrank
+    this count (periodic refresh is the weekly schedule's job)."""
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -232,7 +231,8 @@ def localities_ordered(
     (never-scraped first, then oldest). A time-budgeted / partial run thus
     always advances the cities that need it most, so full coverage is reached
     across runs (and then refreshes oldest-first) rather than re-doing city 1
-    every run. `obec_ids` None = the global resolved set.
+    every run. `obec_ids` None = the global resolved set. Each row carries its
+    `last_fetched_at` (NULL = never), which orders the queue across datasets.
 
     Localities the scraper recently checked and found EMPTY (a
     price_stat_locality_no_data marker within `no_data_ttl_days`) are skipped,
@@ -242,7 +242,7 @@ def localities_ordered(
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
-            SELECT l.entity_type, l.entity_id, l.name, l.obec_id
+            SELECT l.entity_type, l.entity_id, l.name, l.obec_id, o.mf AS last_fetched_at
               FROM price_stat_localities l
               LEFT JOIN (
                 SELECT entity_type, entity_id, max(fetched_at) AS mf

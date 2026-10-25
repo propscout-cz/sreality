@@ -2950,7 +2950,6 @@
         }
       ],
       "secrets": [
-        "SCRAPE_CHAIN_TOKEN",
         "SREALITY_LOGIN_EMAIL",
         "SREALITY_LOGIN_PASSWORD",
         "SREALITY_SESSION_COOKIE",
@@ -2959,7 +2958,7 @@
       "concurrencyGroup": "price-stats",
       "cancelInProgress": false,
       "timeoutMinutes": 60,
-      "permissions": "contents: read",
+      "permissions": "contents: read, actions: write",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/scrape_price_stats.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/scrape_price_stats.yml"
     },
