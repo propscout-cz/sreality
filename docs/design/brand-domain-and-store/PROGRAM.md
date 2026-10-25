@@ -1,6 +1,7 @@
 # Brand domain, Chrome Web Store, MCP server — program plan
 
-**Status: PLAN, awaiting operator approval. Nothing here is built.**
+**Status: approved 2026-10-06. W1 (domain cutover) is running on `propscout.cz` since 2026-10-25 —
+see "W1 as run" below; W0 and W2–W6 are not started.**
 Investigated 2026-09-26. Spot-checked against `main` (`03b72cda`) and production on 2026-10-03
 (§ 11 lists what moved in between).
 
@@ -142,6 +143,26 @@ opened by the coding session.
 7. PRs: domain (smoke-check default host, dead example hosts); cleanup (dead build argument,
    dead env lines); safeguard (delete the static-token routes nothing calls — after the operator
    confirms no ClickUp automation or personal script uses the token).
+
+#### W1 as run (operator rulings 2026-10-25; W1 alone, the rest of this program not started)
+
+- **Hosts:** `app.propscout.cz` (SPA) and `api.propscout.cz` (API), DNS-only on Cloudflare. The bare
+  domain and `www` reach the app by a Cloudflare **302** redirect rule — temporary on purpose: the
+  bare domain is kept for a future homepage, and browsers cache a 301 indefinitely.
+- **Old hosts:** the old SPA host answers **301** to the same path and query on `app.` (a `host`
+  matcher in `frontend/Caddyfile`); the old API host keeps serving. Both Railway domains are removed
+  **together**, once **both** have had no traffic for 7 days. Then the old origin leaves
+  `CORS_ALLOW_ORIGINS` and the Supabase redirect allowlist, and a follow-up PR deletes the redirect.
+- **Extension:** rebuilt in the cutover against the new hosts (`EXT_API_BASE_URL`,
+  `EXT_APP_BASE_URL`); still installed unpacked, so each user re-downloads it.
+- **Email:** the bare domain publishes null MX + `v=spf1 -all`. The existing `_dmarc` policy and the
+  Resend records on `r.propscout.cz` are left as they were.
+- **Dropped:** the Stripe step (no `STRIPE_WEBHOOK_SECRET` is set on the API; Stripe never sent an
+  event) and push re-subscription (no subscription existed).
+- **Out of this cutover:** the brand rename (`frontend/src/lib/brand.ts` still says Limen Reality),
+  the Supabase custom domain, the cleanup and safeguard PRs of step 7.
+- **Never delete and re-add a Railway custom domain** while its certificate is pending: each
+  re-add is another Let's Encrypt order, and five duplicates block the name for a week.
 
 ### W2 — Public pages on the brand domain
 

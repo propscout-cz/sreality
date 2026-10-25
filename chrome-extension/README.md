@@ -439,7 +439,7 @@ service must allow that origin or every request will be blocked.
 5. Set the value to a comma-separated list including the extension's
    origin. Example:
    ```
-   https://your-spa.up.railway.app,chrome-extension://eibnegoankipleeegjilnjhpnbaedpjd
+   https://app.propscout.cz,chrome-extension://eibnegoankipleeegjilnjhpnbaedpjd
    ```
    Keep any existing origins (your SPA's URL) and just append the
    `chrome-extension://...` one. **No spaces** around the comma.

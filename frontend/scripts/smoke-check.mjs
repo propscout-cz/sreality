@@ -53,7 +53,7 @@ function loadRootEnv() {
 }
 loadRootEnv();
 
-const BASE_URL = process.env.SMOKE_CHECK_BASE_URL || 'https://sreality-production-1bb6.up.railway.app';
+const BASE_URL = process.env.SMOKE_CHECK_BASE_URL || 'https://app.propscout.cz';
 const SHOT_DIR = path.join(__dirname, '.smoke-shots');
 mkdirSync(SHOT_DIR, { recursive: true });
 
