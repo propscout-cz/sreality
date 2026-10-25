@@ -117,8 +117,8 @@ estimate ≈ −7,260 / +2,860 LOC, −30 files, −2 tables, −8 workflows, 0 
       attempt count and is given up on after 5, so a permanent refusal is never re-billed for ever.
       `false` needs an explicit negation in the evidence quote; every value needs a quote verbatim
       in the description; floor comes back as the advert's own words for `scraper/floor.py`.
-      `LLM_DAILY_COST_WARN_USD` → $15 (R11). `scripts/clear_unmeasured_enrichment_fills.py` is
-      destructive step (iii), dry-run first: 21,459 values (floor 6,340; false has_balcony 7,103,
+      `LLM_DAILY_COST_WARN_USD` → $15 (R11). `scripts/clear_unmeasured_enrichment_fills.py` (deleted
+      2026-10-25, Actions exit W0) was destructive step (iii), dry-run first: 21,459 values (floor 6,340; false has_balcony 7,103,
       has_lift 6,655, has_parking 1,361) — all bazos, and all but SIXTEEN on inactive rows.
 - [x] **W8 — floor: ground = 0 everywhere.** The convention is contract DATA
       (`ground0` | `ground1` | `word` per portal) and `scraper.floor.floor_from_portal`

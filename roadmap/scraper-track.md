@@ -128,7 +128,7 @@ Independent of the analytical, UI, and map tracks.
   spurious link fails closed: it pushes the children's sum past the parent's); (v) 81 active
   ceskereality rows with `category_type` NULL, unseen > 7 d, sit outside every nomination scope
   (`db.presence_candidates` filters `category_type = %s`), so `stale_active` rests at WARN: a
-  one-off VERIFY-priority enqueue (precedent `scripts/renominate_false_gone_crawler_rows.py`) plus a
+  one-off VERIFY-priority enqueue (precedent: the 2026-10-02 false-gone renomination below) plus a
   rule that nominates NULL-category rows per source (#1853: 422 ads on 10-18, ceskereality and
   realitymix; the `coverage` gauge's `unnominated` cells count them since Health wave 4).
 
@@ -481,23 +481,17 @@ Independent of the analytical, UI, and map tracks.
   provenance is now written on every download: `rendition` + decoded `stored_width`/`stored_height`.
   The image phase gained a wall-clock bound (`--image-max-seconds`, both workflows) because the count
   cap's throughput basis predates the bigger master.
-  **The re-master lane now exists** (`scripts/remaster_sreality_images.py` +
-  `sreality_image_remaster.yml`, 6 shards, `15 */2`): it re-downloads the ~3.55M `rendition IS NULL`
-  rows at the master template and OVERWRITES each R2 object under its stored `storage_path`, stamping
-  provenance + re-arming phash/CLIP through `mark_image_remastered`. sreality ROTATES image URLs when a
-  listing is edited (~75% of stored URLs are dead on the longest-lived actives), so a 404/410/dead-URL
-  on the stored URL re-resolves from the listing's CURRENT detail by image `order` and persists the
-  fresh URL; bytes that come back 749x562 are an anomaly (never uploaded, never stamped as a master).
-  Every outcome stamps the attempt clock, and retiring a row from the queue always takes two sightings
-  20h apart, so one CDN blip can never claim `sreality-749-crop`. **Sequence: pilot with
-  `listing_ids` (and/or `dry_run`) first, read the `REMASTER done …` line, THEN arm the cron by setting
-  the `SREALITY_REMASTER_CRON` repo variable to `on`** — until it is armed the schedule is inert.
-- **Next:** (1) run the re-master to completion — each shard merges its OWN sub-key (`"k/6"`) into
-  `app_settings.sreality_remaster_last_complete` once it has walked its slice out AND confirmed no
-  convertible row is left, so the lane is done when all six sub-keys are there; until then phash/CLIP
-  are comparable only WITHIN a rendition; (2) a thumbnail rendition — the SPA/extension currently serve a
-  master into every grid tile; (3) re-measure one image shard at the new template and resize
-  `MAX_IMG` / the fresh lane's cap from the result; (4) one census of what stored chains actually
+  **The re-master lane ran to completion and was deleted** (6 shards, `15 */2`, 2026-09-11 →
+  2026-10-25, Actions exit W0): it re-downloaded the ~3.55M `rendition IS NULL` rows at the master
+  template and OVERWROTE each R2 object under its stored `storage_path`, re-arming phash/CLIP through
+  `invalidate_derived_signals`; a dead stored URL (sreality ROTATES image URLs when an ad is
+  edited) re-resolved from the ad's CURRENT detail page by image `order`; a row whose source was gone
+  retired as `sreality-749-crop` only after two sightings 20h apart. Done when all six shard sub-keys
+  sat in `app_settings.sreality_remaster_last_complete` (2026-10-25 19:04 UTC) and no stored sreality
+  row lacked a `rendition` (0 on deletion day). phash/CLIP stay comparable only WITHIN a rendition.
+- **Next:** (1) a thumbnail rendition — the SPA/extension currently serve a
+  master into every grid tile; (2) re-measure one image shard at the new template and resize
+  `MAX_IMG` / the fresh lane's cap from the result; (3) one census of what stored chains actually
   carry — `SELECT DISTINCT split_part(op, ',', 1) FROM (SELECT unnest(string_to_array(split_part(
   sreality_url, 'fl=', 2), '|')) op FROM images WHERE sreality_url LIKE '%fl=%') t` — to confirm the
   kept-op allowlist (`rot`) drops nothing that carried meaning.
@@ -581,13 +575,14 @@ Independent of the analytical, UI, and map tracks.
   no longer runs a sreality freshness fetch), the ~430-line dead absence sweep and all nine
   `mark_gone` adapters deleted.
 - 2026-10-02 (operator decision 2, option 1): the rows that sreality fetch falsely delisted get a
-  real page check on their own portal. `scripts/renominate_false_gone_crawler_rows.py` via
-  `renominate_false_gone.yml` (dry run default; `apply`, per-source `limit` defaulting to the 25-row
-  pilot, `source`, read-only `readout_since`) queues each at `QUEUE_PRIORITY_VERIFY`; a live page
+  real page check on their own portal. A one-off renomination script behind a dispatch-only
+  workflow (dry run default; `apply`, per-source `limit` defaulting to the 25-row pilot, `source`,
+  read-only `readout_since`; dispatched six times on 2026-10-02, both deleted 2026-10-25 in Actions
+  exit W0) queued each at `QUEUE_PRIORITY_VERIFY`; a live page
   reactivates, a gone one stays put. Prod 2026-10-01: 7,023 crawler rows carry the sreality `gone`
   verdict, 5,884 inactive, 2,061 with the flip signature — an UPPER BOUND, since the unguarded old
   writer also re-stamped rows their portal had long closed (pages ceskereality/realitymix/mmreality
-  still answer with HTTP 200). **Next:** once on `main`: dry run → `apply` with `limit=25` → once the
+  still answer with HTTP 200). **Protocol:** dry run → `apply` with `limit=25` → once the
   drains ran, `readout_since` = the time the apply log prints; release (`limit=all`) only if
   `written_unseen=0`, every `CHECK` row opens as a live detail page (all ceskereality/
   realitymix/mmreality rows, plus any whose filled `raw_json` values, spec cells, images or

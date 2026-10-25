@@ -21,7 +21,8 @@ WHAT THE DEFAULT RUN ASKS. The operator's questions, one arm each:
     ~1800 px wide, so 768 and above mostly UPSAMPLED the biggest portal. Whether that
     buys anything is the measurement. That premise EXPIRED on 2026-09-11: sreality now
     downloads the whole frame at up to 1800 px, so the corpus is mixed-rendition
-    (`images.rendition`) until the re-master lane finishes and a re-run of these arms
+    (`images.rendition`; the re-master finished 2026-10-25, `sreality-749-crop` rows
+    stay the crop cohort) and a re-run of these arms
     measures a different population from run 1's.
   * "is a bigger model worth it?"                      -> DINOv3 ViT-L/16 @512
   * "what if the licence falls through?"               -> DINOv2-L/14-with-registers

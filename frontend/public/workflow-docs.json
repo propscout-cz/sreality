@@ -47,49 +47,6 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/aggregate_condition_markers.yml"
     },
     {
-      "filename": "apply_listings_pk_swap.yml",
-      "name": "R2 GATE 1 — listings PK swap",
-      "description": "The destructive step of the listing-identity refactor: swaps listings' PRIMARY KEY from sreality_id to the surrogate id (runbook § 6). Catalog-only — no table scan, no data rewrite — and reversible in place while zero NULL sreality_id rows exist (see scripts/apply_listings_pk_swap.py).",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "mode",
-          "description": "preflight (safe, read-only) | window (THE SWAP) | resume-cron | rollback",
-          "required": true,
-          "type": "choice",
-          "default": "preflight",
-          "options": [
-            "preflight",
-            "window",
-            "resume-cron",
-            "rollback"
-          ]
-        },
-        {
-          "name": "confirm",
-          "description": "Type APPLY to arm window/rollback. Ignored for preflight.",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_SESSION_URL",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "apply-listings-pk-swap",
-      "cancelInProgress": false,
-      "timeoutMinutes": 30,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/apply_listings_pk_swap.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/apply_listings_pk_swap.yml"
-    },
-    {
       "filename": "apply_migration.yml",
       "name": "Ops: apply one migration file",
       "description": "Applies ONE numbered migration file from `migrations/` to the database with `psql -f` — the same statement-autocommit semantics as the CI schema replay (`migrations.yml`), so a file the replay accepted applies identically here. This is the no-MCP path for the database skill's apply-before-merge rule: dispatch it with `--ref <branch>` while the PR is still open, so a merged file is never unapplied (the migration-438 class of outage).",
@@ -134,121 +91,6 @@
       "permissions": "contents: read",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/apply_migration.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/apply_migration.yml"
-    },
-    {
-      "filename": "apply_r2_constraints.yml",
-      "name": "Apply R2 constraints (indexes + FKs)",
-      "description": "Phase B of the listing-identity refactor (docs/design/listing-identity-r2-pk-swap-runbook.md § 3). Indexes each surrogate column the backfill filled, then mirrors the legacy FK onto it (NOT VALID -> VALIDATE) wherever the legacy column had one.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "table",
-          "description": "Single carrier table (blank = all)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "Report what each column still needs and exit",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_SESSION_URL",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "apply-r2-constraints",
-      "cancelInProgress": false,
-      "timeoutMinutes": 180,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/apply_r2_constraints.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/apply_r2_constraints.yml"
-    },
-    {
-      "filename": "apply_r2_phase_d_prep.yml",
-      "name": "Apply R2 Phase D prep (NOT NULL relax, small PK swaps, listings indexes)",
-      "description": "Phase D of the listing-identity refactor (docs/design/listing-identity-r2-pk-swap-runbook.md § 5, steps 2-5). Drops NOT NULL on every R2_CARRIERS legacy column still enforcing it, swaps estimation_cohort_entries's PK onto (estimation_run_id, listing_id), and pre-builds the two indexes + id NOT NULL that Gate 1's PK swap on `listings` itself will need. All additive/reversible — no writer-deploy dependency (see scripts/apply_r2_phase_d_prep.py's docstring for why dirty_broker_listings is NOT included here).",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "dry_run",
-          "description": "Report what each step still needs and exit",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_SESSION_URL",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "apply-r2-phase-d-prep",
-      "cancelInProgress": false,
-      "timeoutMinutes": 180,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/apply_r2_phase_d_prep.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/apply_r2_phase_d_prep.yml"
-    },
-    {
-      "filename": "apply_r2_unique_guards.yml",
-      "name": "Apply R2 unique guards (indexes + NOT NULL checks)",
-      "description": "Phase B2 of the listing-identity refactor (docs/design/listing-identity-r2-pk-swap-runbook.md § 3, items 4-5). Builds new unique indexes on the surrogate listing_id column(s) alongside the still-live legacy sreality_id-keyed ones, then adds a validated CHECK (listing_id IS NOT NULL) wherever the legacy column is itself NOT NULL.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "table",
-          "description": "Single carrier table (blank = all)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "Report what each guard still needs and exit",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_SESSION_URL",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "apply-r2-unique-guards",
-      "cancelInProgress": false,
-      "timeoutMinutes": 180,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/apply_r2_unique_guards.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/apply_r2_unique_guards.yml"
     },
     {
       "filename": "autodedup.yml",
@@ -297,75 +139,6 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/autodedup.yml"
     },
     {
-      "filename": "backfill_child_listing_ids.yml",
-      "name": "Backfill child listing_id (R2)",
-      "description": "One-off, dispatch-only backfill for the R2 leg of the listing-identity refactor (docs/design/listing-identity-r2-pk-swap-runbook.md § 2 A4). Fills the surrogate listings.id onto the 22 carrier tables migrations 320-325 added columns to, for rows written BEFORE dual-write shipped. No re-fetch, no LLM, no snapshots.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "table",
-          "description": "Single carrier table (blank = all 22)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "batch",
-          "description": "Cursor-window width for id-cursor carriers",
-          "required": false,
-          "type": "string",
-          "default": "50000",
-          "options": null
-        },
-        {
-          "name": "max_seconds",
-          "description": "Wall-clock budget in seconds (blank = no budget)",
-          "required": false,
-          "type": "string",
-          "default": "4800",
-          "options": null
-        },
-        {
-          "name": "repair",
-          "description": "Also overwrite surrogates that are set but WRONG",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        },
-        {
-          "name": "dry_run",
-          "description": "Report what each carrier needs and exit",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        }
-      ],
-      "secrets": [
-        "SCRAPE_CHAIN_TOKEN",
-        "SUPABASE_DB_SESSION_URL",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "backfill-child-listing-ids",
-      "cancelInProgress": false,
-      "timeoutMinutes": 90,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/backfill_child_listing_ids.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/backfill_child_listing_ids.yml"
-    },
-    {
       "filename": "backfill_idnes_brokers.yml",
       "name": "Data: backfill idnes broker blocks",
       "description": "One-shot backfill: reparse the staged idnes detail HTML (portal_raw_pages) into listings.raw_json.broker via scraper.broker_idnes.parse_idnes_broker. raw_json.broker is OUT of the content hash (_HASH_FIELDS is typed columns only), so this never churns snapshots. The broker resolver then attributes idnes brokers from raw_json.broker like sreality's raw_json.user. No re-fetch, no LLM, no new secrets.",
@@ -404,43 +177,6 @@
       "permissions": "contents: read",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/backfill_idnes_brokers.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/backfill_idnes_brokers.yml"
-    },
-    {
-      "filename": "backfill_render_score.yml",
-      "name": "Backfill image render_score (one-shot, from stored embeddings)",
-      "description": "One-shot corrective for migration 239: the clip_tag backfill skips already-tagged images, so images tagged before the render axis shipped have render_score NULL (the listing-detail render badge is hidden and the byt render exclusion is inert on them). This re-scores the render-vs-photo axis from each image's STORED CLIP embedding — no R2 download, no image re-inference — so it is fast (vector dot products). Horizontally sharded into 4 jobs (image_id %% 4). Resumable + idempotent (a scored row drops out of the render_score-IS-NULL partial index, migration 240). Dispatch-only. Secret: SUPABASE_DB_URL (no R2 needed).",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_seconds",
-          "description": "Per-shard wall-clock budget",
-          "required": false,
-          "type": "string",
-          "default": "3000",
-          "options": null
-        },
-        {
-          "name": "limit",
-          "description": "Per-shard cap (0 = until time budget)",
-          "required": false,
-          "type": "string",
-          "default": "0",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": null,
-      "cancelInProgress": null,
-      "timeoutMinutes": 60,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/backfill_render_score.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/backfill_render_score.yml"
     },
     {
       "filename": "backfill_unit_price_masquerade.yml",
@@ -746,59 +482,6 @@
       "permissions": null,
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/ceskereality_index_walk.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/ceskereality_index_walk.yml"
-    },
-    {
-      "filename": "clear_unmeasured_fills.yml",
-      "name": "Ops: clear the deleted enrichment lane's unmeasured fills (field-capture W7, step iii)",
-      "description": "Runs scripts/clear_unmeasured_enrichment_fills.py — the operator-approved destructive step (iii) of the field-capture program: blank the `floor` values and the silence-based `false` booleans the DELETED description-enrichment lane wrote on bazos rows and never measured (its own docstring has the counts: ~21k cells, sixteen on active listings). dry_run=true (the default) only counts. The real write needs dry_run=false AND confirm=APPLY, and the script REFUSES to blank a cell it has not first copied into the backup table (listing_id, column_name, value) — a proportionate backup for a table too hot for a data-only pg_dump. Same guard shape as reparse.yml.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "columns",
-          "description": "Comma-separated subset of floor,has_lift,has_balcony,has_parking (blank = all four)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "true = count only. false = write (needs confirm=APPLY).",
-          "required": false,
-          "type": "boolean",
-          "default": "true",
-          "options": null
-        },
-        {
-          "name": "confirm",
-          "description": "Type APPLY to arm the real write. Ignored when dry_run=true.",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "backup_table",
-          "description": "Where every blanked cell is copied first (a plain identifier).",
-          "required": false,
-          "type": "string",
-          "default": "listings_w7_clear_backup",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "reparse",
-      "cancelInProgress": false,
-      "timeoutMinutes": 60,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/clear_unmeasured_fills.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/clear_unmeasured_fills.yml"
     },
     {
       "filename": "clip_retag.yml",
@@ -1614,39 +1297,6 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/draw_tag_candidates.yml"
     },
     {
-      "filename": "drop_r2_legacy_fks.yml",
-      "name": "Drop R2 legacy child FKs",
-      "description": "Phase D step 6 of the listing-identity refactor (docs/design/listing-identity-r2-pk-swap-runbook.md § 5, item 6). Drops the legacy child FKs onto listings(sreality_id) — integrity is already held by the parallel listing_id -> listings(id) FKs Phase B validated. Not gate-destructive: re-addable any time (NOT VALID -> VALIDATE).",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "dry_run",
-          "description": "List what would be dropped and exit",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_SESSION_URL",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "drop-r2-legacy-fks",
-      "cancelInProgress": false,
-      "timeoutMinutes": 180,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/drop_r2_legacy_fks.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/drop_r2_legacy_fks.yml"
-    },
-    {
       "filename": "export_raw_pages_archive.yml",
       "name": "Export portal_raw_pages archive to R2",
       "description": "Location-data program W0 item 0o: the ~447k-row / 14 GB portal_raw_pages archive is the only surviving copy of several portals' best location signal, so a full off-database copy goes to R2 under backups/portal-raw-pages/<snapshot>/. Chunked + resumable — re-dispatch with the same snapshot date to continue an interrupted run; the final step verifies the manifest row count against the DB. Deletion of the live table is guarded by tests/test_portal_raw_pages_guard.py. workflow_dispatch only; re-run with a new snapshot date for a fresh export.",
@@ -1732,49 +1382,6 @@
       "permissions": "contents: read",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/fetch_rent_map.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/fetch_rent_map.yml"
-    },
-    {
-      "filename": "fetch_sreality_fixtures.yml",
-      "name": "Fixtures: sreality v1 JSON",
-      "description": "Manual trigger only. Fetches a real search response + one real detail response from a GitHub runner IP (this repo's dev sandbox is 403'd by sreality), scrubs emails/phone numbers, and commits the result as tests/fixtures/sample_search.json + sample_listing.json on the current branch. The live /api/v1/estates API is snake_case (id key `hash_id`, detail wrapped under `result`); these fixtures pin the true shape so the parser tests guard reality instead of the HAR-derived camelCase guess.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "category_main",
-          "description": "category_main_cb (1=byt, 2=dum, 4=komercni)",
-          "required": false,
-          "type": "string",
-          "default": "1",
-          "options": null
-        },
-        {
-          "name": "category_type",
-          "description": "category_type_cb (1=prodej, 2=pronajem)",
-          "required": false,
-          "type": "string",
-          "default": "1",
-          "options": null
-        },
-        {
-          "name": "detail_id",
-          "description": "Override detail hash_id (blank = first search result)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [],
-      "concurrencyGroup": null,
-      "cancelInProgress": null,
-      "timeoutMinutes": 5,
-      "permissions": "contents: write",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/fetch_sreality_fixtures.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/fetch_sreality_fixtures.yml"
     },
     {
       "filename": "frontend-build.yml",
@@ -2535,62 +2142,6 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/migrations.yml"
     },
     {
-      "filename": "mirror_model_weights.yml",
-      "name": "Mirror model weights to R2 (one-off)",
-      "description": "Copies externally-licensed model weight files (first use: DINOv3) into our own R2 bucket under models/<name>/ with a sha256 manifest, so no production job ever depends on Meta's time-limited download links or on a Hugging Face token. Dispatch only. The URLs are pasted as a workflow input: they are signed, short-lived links, masked in the job log by the script and never stored — the manifest records only the host, file name, size and hash. Default is a DRY RUN (download + hash, upload nothing); tick `apply` to upload.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "urls",
-          "description": "Weight file URLs, one per line (from Meta's download e-mail)",
-          "required": true,
-          "type": "string",
-          "default": null,
-          "options": null
-        },
-        {
-          "name": "prefix",
-          "description": "R2 key prefix",
-          "required": false,
-          "type": "string",
-          "default": "models/dinov3",
-          "options": null
-        },
-        {
-          "name": "apply",
-          "description": "Upload to R2 and write the manifest (unticked = dry run)",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        },
-        {
-          "name": "note",
-          "description": "Manifest note, e.g. 'licence accepted by <who> on <date> via <route>'",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY"
-      ],
-      "concurrencyGroup": "mirror-model-weights",
-      "cancelInProgress": false,
-      "timeoutMinutes": 45,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/mirror_model_weights.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/mirror_model_weights.yml"
-    },
-    {
       "filename": "new_dedup_candidates.yml",
       "name": "NEW DEDUP: candidate generation (path C)",
       "description": "Level 0 of the rebuilt dedup: find the listing pairs worth comparing later, by path C — \"same town\" (the location engine's obec_kod) plus disposition (rung C1) or, when a disposition is missing on either side, area (rung C3). Manual dispatch only; nothing runs on a schedule. Design: docs/design/new-dedup/PROGRAM.md, ledger 2026-09-10.",
@@ -2676,26 +2227,6 @@
       "permissions": "contents: read",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/new_dedup_candidates.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/new_dedup_candidates.yml"
-    },
-    {
-      "filename": "new_dedup_runpod_smoke_test.yml",
-      "name": "NEW DEDUP RunPod smoke test (one-off)",
-      "description": "Proves the RunPod pipeline end-to-end (docs/design/new-dedup/PROGRAM.md, Wave 1): launch the cheapest available GPU pod, run a trivial CUDA op, confirm it, guarantee teardown either way (scripts/runpod_client.py's run_job). Not scheduled — manual trigger only, matching the design's \"manual batches only\" cost-conscious posture. Wave 5's real embedding batches will reuse the same client, different payload.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [],
-      "secrets": [
-        "RUNPOD_API_KEY"
-      ],
-      "concurrencyGroup": "new-dedup-runpod-smoke-test",
-      "cancelInProgress": false,
-      "timeoutMinutes": 15,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/new_dedup_runpod_smoke_test.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/new_dedup_runpod_smoke_test.yml"
     },
     {
       "filename": "realitymix_index_walk.yml",
@@ -2902,44 +2433,6 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/reextract.yml"
     },
     {
-      "filename": "refresh_population.yml",
-      "name": "Data: refresh city populations (Wikidata)",
-      "description": "FALLBACK SOURCE. The preferred population source is now the official ČSÚ DataStat export \"Počet obyvatel v obcích k 1. 1.\" — download the JSON from https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02, commit it to data/csu_population.json, and run \"Data: seed curated cities\" (which ingests the JSON directly). Use this Wikidata fetcher only when you can't get the official file.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "year",
-          "description": "Latest year to accept (e.g. 2024, 2025)",
-          "required": false,
-          "type": "string",
-          "default": "2024",
-          "options": null
-        },
-        {
-          "name": "commit",
-          "description": "Commit the regenerated CSV back to the branch",
-          "required": false,
-          "type": "choice",
-          "default": "true",
-          "options": [
-            "true",
-            "false"
-          ]
-        }
-      ],
-      "secrets": [],
-      "concurrencyGroup": null,
-      "cancelInProgress": null,
-      "timeoutMinutes": 10,
-      "permissions": "contents: write",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/refresh_population.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/refresh_population.yml"
-    },
-    {
       "filename": "refresh_stale_images.yml",
       "name": "Jobs: refresh stale image URLs",
       "description": "Re-opens active listings whose photos aren't in R2 yet so their (possibly rotated) source image URLs get refreshed. Portals rotate image CDN URLs over weeks; a listing whose images the newest-first backfill never reached before its URLs rotated is stuck — the stored URL 404s, the frontend fallback can't load it, and the image downloader can't fetch it. This sweep (scripts.refresh_stale_image_urls) re-enqueues such listings into the source-generic listing_detail_queue; the detail drain re-fetches them, record_images repoints each not-yet-stored image's URL to the current one, and the image backfill (images.yml) then stores the bytes.",
@@ -2996,69 +2489,6 @@
       "permissions": null,
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/refresh_stale_images.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/refresh_stale_images.yml"
-    },
-    {
-      "filename": "renominate_false_gone.yml",
-      "name": "Ops: re-check crawler listings a sreality check falsely delisted",
-      "description": "Runs scripts/renominate_false_gone_crawler_rows.py (operator decision 2026-10-02): crawler listings (bazos, idnes, ...) carry a synthetic negative sreality_id, and until item 3 a sreality freshness fetch of that id read \"not found\" and flipped them inactive. This sends each such row to its OWN portal's detail drain as a presence check (QUEUE_PRIORITY_VERIFY), so a live page reactivates it and a gone page leaves it inactive with its inactive_at untouched. apply=false (the default) only prints the per-source counts.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "apply",
-          "description": "false = count only. true = enqueue the page checks.",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        },
-        {
-          "name": "limit",
-          "description": "Max rows enqueued PER SOURCE, newest flip first. 25 = the pilot; 'all' = release the rest",
-          "required": false,
-          "type": "string",
-          "default": "25",
-          "options": null
-        },
-        {
-          "name": "source",
-          "description": "One crawler source (blank = every source but sreality)",
-          "required": false,
-          "type": "choice",
-          "default": "",
-          "options": [
-            "",
-            "bazos",
-            "bezrealitky",
-            "ceskereality",
-            "idnes",
-            "maxima",
-            "mmreality",
-            "realitymix",
-            "remax"
-          ]
-        },
-        {
-          "name": "readout_since",
-          "description": "Read-only readout of the rows queued since this UTC time (the apply log prints it); leave apply=false",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "renominate-false-gone",
-      "cancelInProgress": false,
-      "timeoutMinutes": 30,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/renominate_false_gone.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/renominate_false_gone.yml"
     },
     {
       "filename": "reparse.yml",
@@ -3695,38 +3125,6 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/screen_exam_cohort.yml"
     },
     {
-      "filename": "seed_broker_settings.yml",
-      "name": "Data: seed broker settings (free-email + franchise domains)",
-      "description": "One-shot workflow that populates the two app_settings rows created as `[]` placeholders by migration 186 — `broker_free_email_domains` and `broker_franchise_domains` — from the committed JSON files (data/broker_free_email_domains.json + data/broker_franchise_domains.json).",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "dry_run",
-          "description": "Print domain counts and exit without UPDATEing",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": null,
-      "cancelInProgress": null,
-      "timeoutMinutes": 5,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/seed_broker_settings.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/seed_broker_settings.yml"
-    },
-    {
       "filename": "seed_condition_settings.yml",
       "name": "Data: seed condition settings (rubric + markers)",
       "description": "One-shot workflow that populates the two large app_settings rows created by migration 072 — `llm_condition_rubric` and `llm_condition_marker_dictionary` — from the committed JSON files (data/condition_rubric_v1.json + data/condition_markers_curated.json).",
@@ -3802,118 +3200,6 @@
       "permissions": "contents: write",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/seed_curated_cities.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/seed_curated_cities.yml"
-    },
-    {
-      "filename": "smoke_agent.yml",
-      "name": "Dev: agent smoke test",
-      "description": "Manual invocation only. Runs scripts/smoke_agent.py against the real Supabase DB and a real LLM provider. Picks a recent Prague 2+kk rental by default; --sreality-id overrides. Real LLM credits are spent — typically under $0.10 per run.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "provider",
-          "description": "LLM provider (anthropic or gemini)",
-          "required": true,
-          "type": "choice",
-          "default": "anthropic",
-          "options": [
-            "anthropic",
-            "gemini"
-          ]
-        },
-        {
-          "name": "sreality_id",
-          "description": "Specific listing id to estimate (leave blank to pick a recent Prague 2+kk)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "skill",
-          "description": "Skill row name",
-          "required": false,
-          "type": "string",
-          "default": "rental_estimator_v1",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "ANTHROPIC_API_KEY",
-        "GEMINI_API_KEY",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": null,
-      "cancelInProgress": null,
-      "timeoutMinutes": 5,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/smoke_agent.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/smoke_agent.yml"
-    },
-    {
-      "filename": "sreality_image_remaster.yml",
-      "name": "Jobs: sreality image re-master",
-      "description": "Re-downloads stored sreality photos at the whole-frame `SQUARE_1800_JPG` master template and OVERWRITES each row's existing R2 object in place, under the `images.storage_path` the row already carries — the ~3.55M rows with `rendition IS NULL` hold the superseded `res,749,562,3` CROP, which cost ~85% of photos their edges. sreality ROTATES image URLs when a listing is edited, so a 404/410 (or a dead-URL 400/401/415) on the stored URL is re-resolved from the listing's CURRENT detail payload by image `order`, and the fresh URL is stored with the bytes. Every success stamps `rendition` + decoded dimensions and re-arms the phash/CLIP lanes; bytes that come back as the 749x562 crop are an anomaly and are never stamped.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "15 */2 * * *",
-          "human": "Every 2 hours at :15"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_images",
-          "description": "Per-shard images-per-run cap (0 = uncapped, bounded by --max-seconds)",
-          "required": false,
-          "type": "string",
-          "default": "16000",
-          "options": null
-        },
-        {
-          "name": "listing_ids",
-          "description": "Pilot mode: comma-separated listings.id (ignores the shard slice)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "Select and report only: no network, no writes",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        },
-        {
-          "name": "reopen",
-          "description": "With listing_ids: un-retire their 'sreality-749-crop' rows first (two-strike path again)",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": null,
-      "cancelInProgress": null,
-      "timeoutMinutes": 110,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/sreality_image_remaster.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/sreality_image_remaster.yml"
     },
     {
       "filename": "tag_model.yml",
