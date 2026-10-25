@@ -116,9 +116,8 @@ LISTING_PHOTO_KEY_RE = re.compile(r"^(?:img/[0-9]+/[0-9]+|-?[0-9]+/[0-9]{4})\.jp
 
 
 # The phone-size copies `GET /images/{key}?w=` (#1765) and an attachment's `?w=` make on
-# first request, kept here because the API and the re-master lane (which must delete a copy
-# when it overwrites the photo it was made from) both need the key, and the scraper runtime
-# carries no fastapi.
+# first request, kept beside the key shape they derive from (`api/routes/images.py` and
+# `api/attachments.py` read them; the scraper runtime carries no fastapi).
 COPY_WIDTHS: tuple[int, ...] = (1080,)
 
 
@@ -244,8 +243,7 @@ def _session() -> requests.Session:
 
 
 def download_image(
-    url: str, timeout: float = 15.0, *, transform_ops: str = IMAGE_TRANSFORM_OPS,
-    proxies: Mapping[str, str] | None = None,
+    url: str, timeout: float = 15.0, *, proxies: Mapping[str, str] | None = None,
 ) -> bytes:
     """Download one image, capped at media.MAX_IMAGE_BYTES.
 
@@ -260,7 +258,7 @@ def download_image(
     redirect's 157 bytes travel through the proxy; the bytes come straight from
     the CDN. A proxied site that serves the bytes itself is read through the proxy.
     """
-    target = with_transform(url, transform_ops)
+    target = with_transform(url)
     if proxies:
         egress.check_url(target)
         hop = _session().get(

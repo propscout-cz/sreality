@@ -1,11 +1,11 @@
 """The R2 carrier registry — every table that mirrors a legacy listing id.
 
-One definition, four readers since the dual-write parity check retired (Health sprint
-wave 3, Q6): `scripts.backfill_child_listing_ids` fills each carrier's surrogate column, and
-`scripts.apply_r2_constraints`, `scripts.apply_r2_unique_guards` and
-`scripts.apply_r2_phase_d_prep` walk each carrier's column pairs for their DDL. A carrier is
-added in one line here; the backfill's skip predicates are pinned in
-tests/scripts/test_backfill_child_listing_ids.py.
+One definition, three readers since the dual-write parity check retired (Health sprint
+wave 3, Q6) and the Phase D script went (2026-10-25; migration 337 replays it):
+`scripts.backfill_child_listing_ids` fills each carrier's surrogate column, and
+`scripts.apply_r2_constraints` and `scripts.apply_r2_unique_guards` walk each carrier's
+column pairs for their DDL. A carrier is added in one line here; the backfill's skip
+predicates are pinned in tests/scripts/test_backfill_child_listing_ids.py.
 
 `legacy` is the column holding the old smart key (`listings.sreality_id`), `new`
 the surrogate (`listings.id`) added by migrations 320-325. `cursor` is a
