@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import os
+import signal
 import threading
 import time
 from pathlib import Path
@@ -114,10 +116,11 @@ class _FakeLimiter:
     def __init__(self) -> None:
         self.acquired = 0
         self.penalized = 0
+        self.refused = False
         self.refused_reason: str | None = None
 
     def refuse(self, reason: str) -> None:
-        self.refused_reason = reason
+        self.refused, self.refused_reason = True, reason
 
     def acquire(self) -> None:
         self.acquired += 1
@@ -281,14 +284,19 @@ def test_client_hints_never_contradict_a_non_chrome_ua_override():
 
 # --- a stop signal (#2019) ---
 
-class _TimingOutSession(_Session):
-    def __init__(self) -> None:
-        super().__init__([])
-        self.timeouts: list[float] = []
+class _HangingSession(_Session):
+    """A request that never answers: only a stop signal (or its own timeout) ends it."""
 
     def get(self, url, params=None, timeout=None):
-        self.timeouts.append(timeout)
-        raise requests.Timeout("read timed out")
+        self.calls.append((url, params))
+        time.sleep(30)
+        raise AssertionError("the hung request was not cut short")
+
+
+def _later(seconds: float, action) -> threading.Timer:
+    timer = threading.Timer(seconds, action)
+    timer.start()
+    return timer
 
 
 def test_a_stop_before_an_attempt_sends_nothing_and_refuses_the_run() -> None:
@@ -304,33 +312,31 @@ def test_a_stop_before_an_attempt_sends_nothing_and_refuses_the_run() -> None:
 def test_a_stop_ends_a_backoff_at_once() -> None:
     stop.install()
     c = _client([_Resp(503), _Resp(200)], max_retries=3)
-    threading.Timer(0.05, stop.EVENT.set).start()
-    started = time.monotonic()
-    with pytest.raises(stop.StopRequested):
-        c._request("http://x/")
-    assert time.monotonic() - started < 0.8, "the 1 s backoff ran to its end"
+    timer = _later(0.05, stop.EVENT.set)
+    try:
+        started = time.monotonic()
+        with pytest.raises(stop.StopRequested):
+            c._request("http://x/")
+        assert time.monotonic() - started < 0.8, "the 1 s backoff ran to its end"
+    finally:
+        timer.cancel()
     assert len(c._session.calls) == 1
 
 
-def test_a_hung_request_ends_inside_the_budget_and_hands_the_claim_back() -> None:
-    """Capped at what the limiter's budget has left, and that timeout is the budget's, not the listing's: no retry,
-    and the run is refused so the drain defers the claim instead of spending an attempt."""
+def test_a_stop_signal_cuts_a_hung_request_short_and_refuses_the_run() -> None:
+    """The signal handler raises inside the request in hand on the main thread, so a walk finalizes within the drain
+    window however slow the portal is (GitHub's cancel kills 10 s after its SIGINT)."""
+    stop.install()
     lim = _FakeLimiter()
-    lim.deadline = time.monotonic() + 2.0
     c = BasePortalClient(limiter=lim, timeout_s=30.0)
-    c._session = _TimingOutSession()
-    with pytest.raises(requests.Timeout):
-        c._request("http://x/")
-    [timeout] = c._session.timeouts
-    assert 1.0 < timeout <= 2.0
-    assert lim.refused_reason == "deadline"
-
-
-def test_without_a_budget_a_timeout_retries_as_before(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(time, "sleep", lambda *a, **k: None)
-    c = BasePortalClient(limiter=_FakeLimiter(), timeout_s=30.0, max_retries=1)
-    c._session = _TimingOutSession()
-    with pytest.raises(requests.Timeout):
-        c._request("http://x/")
-    assert c._session.timeouts == [30.0, 30.0]
-
+    c._session = _HangingSession([])
+    timer = _later(0.1, lambda: os.kill(os.getpid(), signal.SIGTERM))
+    try:
+        started = time.monotonic()
+        with pytest.raises(stop.StopRequested):
+            c._request("http://x/")
+        assert time.monotonic() - started < 2.0
+    finally:
+        timer.cancel()
+    assert len(c._session.calls) == 1
+    assert lim.refused_reason == "stop"

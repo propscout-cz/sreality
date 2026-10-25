@@ -50,7 +50,6 @@ def _stop_signal_untouched():
 
     handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
     yield
-    stop.EVENT.clear()
-    stop._installed = False
+    stop.reset()
     for sig, handler in handlers.items():
         signal.signal(sig, handler)

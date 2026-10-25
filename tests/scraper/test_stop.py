@@ -24,10 +24,33 @@ def test_a_signal_sets_the_event_and_a_repeat_changes_nothing(first: signal.Sign
 
 def test_an_installed_wait_ends_at_once_on_a_stop() -> None:
     stop.install()
-    threading.Timer(0.05, stop.EVENT.set).start()
-    started = time.monotonic()
-    assert stop.wait(5.0)
-    assert time.monotonic() - started < 1.0
+    timer = threading.Timer(0.05, stop.EVENT.set)
+    timer.start()
+    try:
+        started = time.monotonic()
+        assert stop.wait(5.0)
+        assert time.monotonic() - started < 1.0
+    finally:
+        timer.cancel()
+
+
+def test_the_signal_cuts_only_a_request_in_hand() -> None:
+    """Inside `interruptible` the handler raises; outside it (a finalize under way) it only sets the event."""
+    stop.install()
+    with pytest.raises(stop.StopRequested), stop.interruptible():
+        os.kill(os.getpid(), signal.SIGTERM)
+        time.sleep(1)
+    stop.reset()
+    stop.install()
+    os.kill(os.getpid(), signal.SIGTERM)
+    assert stop.requested()
+
+
+def test_reset_forgets_the_stop_and_the_install() -> None:
+    stop.install()
+    stop.EVENT.set()
+    stop.reset()
+    assert not stop.requested() and not stop._installed
 
 
 def test_before_install_a_wait_is_the_plain_sleep_it_replaced(monkeypatch: pytest.MonkeyPatch) -> None:

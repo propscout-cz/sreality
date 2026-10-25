@@ -133,10 +133,23 @@ def test_a_stop_ends_the_wait_for_a_slot_and_refuses_the_run() -> None:
     stop.install()
     lim = RateLimiter(0.2)  # five seconds between slots
     lim.acquire()
-    threading.Timer(0.05, stop.EVENT.set).start()
-    started = time.monotonic()
+    timer = threading.Timer(0.05, stop.EVENT.set)
+    timer.start()
+    try:
+        started = time.monotonic()
+        with pytest.raises(stop.StopRequested):
+            lim.acquire()
+        assert time.monotonic() - started < 1.0
+    finally:
+        timer.cancel()
+    assert (lim.refused, lim.refused_reason) == (True, "stop")
+
+
+def test_a_stop_never_rewrites_a_blocked_portals_refusal() -> None:
+    lim = RateLimiter(1.0)
+    lim.refuse("cap")
+    stop.EVENT.set()
     with pytest.raises(stop.StopRequested):
         lim.acquire()
-    assert time.monotonic() - started < 1.0
-    assert (lim.refused, lim.refused_reason) == (True, "stop")
+    assert lim.refused_reason == "cap"
 

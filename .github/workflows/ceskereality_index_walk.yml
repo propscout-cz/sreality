@@ -86,4 +86,5 @@ jobs:
           if [ -n "$MAX_PAGES" ]; then ARGS="$ARGS --max-pages $MAX_PAGES"; fi
           if [ -n "$KRAJ" ]; then ARGS="$ARGS --kraj $KRAJ"; fi
           echo "python -m scraper.ceskereality_main $ARGS"
-          eval "python -m scraper.ceskereality_main $ARGS"
+          # exec: a cancel's SIGINT must reach Python, which finalizes the run (#2019), not the shell around it.
+          eval "exec python -m scraper.ceskereality_main $ARGS"

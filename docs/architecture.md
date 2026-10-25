@@ -3122,8 +3122,9 @@ renumber.** Navigate by area:
     the one shared `portal.deadline_reached` — never an inline comparison, which is trivially
     invertible into a walk that runs to the job timeout while looking correct. Since #2019 it
     also reads the process's stop event (`scraper/stop.py`; SIGTERM/SIGINT, installed by
-    `run_phase`), so a deploy or a cancel is a deadline arriving early: one more request at
-    most, a finalized run with no error, exit 143, and the cut category nominates nothing. Checking only
+    `run_phase`), so a deploy or a cancel is a deadline arriving early: the request in hand is
+    cut short, the run is finalized with no error, the process exits 143, and the cut category
+    nominates nothing. Checking only
     BETWEEN categories is not enough and was the idnes failure: one idnes category is ~1,050
     pages, so the outer check never came round and GitHub SIGKILLed the job at page 599 in 9 of
     12 runs, each recording zero categories. Equally load-bearing is that the budget is actually
