@@ -108,7 +108,8 @@ _UNGATED = Gate(passed=False, note="awaiting the W7 bake-off panel (R7: >= 95 %)
 # make the column preserve-if-null (`db._preserved_columns`), so a stored echo would
 # never clear and a real house plot would freeze.
 _PLOT_NOTE = ("ruling 3: never a plot on a byt; on komerční declined when it equals the "
-              "usable / labelled headline figure (scraper.area.stated_plot)")
+              "usable / labelled headline figure and the description does not state it as "
+              "the parcel (scraper.area.stated_plot)")
 
 
 # sreality paints the sale STATUS over the condition / building-type NAME on a reserved or

@@ -2,15 +2,19 @@
 
 671 NULLs the stored `estate_area` values `scraper.area.stated_plot` declines, and its header
 asserts that each arm is exactly that rule. The CI schema replay runs the file only on an
-empty schema, so nothing else would notice a later change to the category sets or the
-labelled bases letting the file NULL plots the parser still keeps. The live half, over
-seeded hits and misses, is tests/test_migration_671_live.py.
+empty schema, so nothing else would notice a later change to the category sets, the
+labelled bases or the text-evidence pattern letting the file NULL plots the parser still
+keeps. The pattern is ONE text both engines read: the file carries `scraper.area`'s own
+constant verbatim (asserted below), Python's `re` evaluates the file's literal here, and
+Postgres evaluates it in the live half over seeded hits and misses
+(tests/test_migration_671_live.py).
 """
 
 from __future__ import annotations
 
 import itertools
 import re
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 from scraper import area
@@ -82,17 +86,63 @@ def test_the_category_literals_are_the_rules_sets() -> None:
     assert "unknown" not in area.PLOT_ECHO_BASES and "plot" not in area.PLOT_ECHO_BASES
 
 
+def _literal_after(predicate: str, opener: str) -> str:
+    """The SQL string literal(s) right after `opener`, adjacent pieces joined (the file
+    wraps the long pattern over lines; Postgres concatenates them)."""
+    rest = predicate[predicate.index(opener) + len(opener):]
+    pieces = re.match(r"((?:'[^']*' ?)+)", rest)
+    assert pieces, opener
+    return "".join(re.findall(r"'([^']*)'", pieces[1]))
+
+
+_NBSP = chr(0x00A0)
+_TEXTS: tuple[str | None, ...] = (
+    None,
+    "Pozemek o výměře 852 m².",                                  # (a) for 852
+    "Zastavěná plocha 10 m².",                                  # (b) for 852 / 6841
+    "Pozemek 6 841 m², zastavěná plocha 10 m².",                # (a) 6841, (c) over (b)
+    "Areál na pozemcích o výměře 0,0852 ha.",                   # (a) for 852, in ha
+    "Pozemek. Kancelář 852 m².",                                # a sentence end: (d)
+    f"Celkem pozemky 6{_NBSP}841{_NBSP}m2, parcela 1.200 m2.",  # (a) 6841, grouped
+    "Prodej skladu 852 m2 v areálu.",                           # (d)
+)
+
+
+def _sql_text_keeps(predicate: str, plot: float, text: str | None) -> bool:
+    """The file's `not coalesce((select bool_or ...), false)` arm, evaluated in Python over
+    the file's OWN literals: the pattern, the separator class, the dotted-thousands test,
+    ha x 10000, round(x, 1), and the parcel / built-up split on the stem's first letter."""
+    for literal in ("m[1] !~ '^[Zz]' as parcel", "case when m[3] ~ '^[hH]' then 10000 else 1 end",
+                    "then replace(n.t, '.', '') else n.t end, ',', '.')::numeric", ", 1) as m2"):
+        assert literal in predicate, literal
+    pattern = re.compile(_literal_after(predicate, "regexp_matches(l.description, "))
+    seps = re.compile(_literal_after(predicate, "regexp_replace(m[2], "))
+    dotted = re.compile(_literal_after(predicate, "case when n.t ~ "))
+    rows = []
+    for m in pattern.finditer(text or ""):
+        t = seps.sub("", m[2])
+        t = (t.replace(".", "") if dotted.search(t) else t).replace(",", ".")
+        m2 = (Decimal(t) * (10000 if re.match("^[hH]", m[3]) else 1)).quantize(
+            Decimal("0.1"), rounding=ROUND_HALF_UP)
+        rows.append((not re.match("^[Zz]", m[1]), m2))
+    stored = Decimal(str(plot)).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+    return (any(parcel and m2 == stored for parcel, m2 in rows)
+            or (not any(parcel for parcel, _ in rows)
+                and any(not parcel and m2 < stored for parcel, m2 in rows)))
+
+
 def test_the_predicate_declines_exactly_what_the_rule_declines() -> None:
     """The hit predicate, evaluated in Python over a grid, against `stated_plot`: every
     category the vocabulary emits, every basis, a plot that equals the usable measure,
-    the headline, both, or neither, and NULLs on each side. SQL three-valued logic is
-    spelled out: a comparison against NULL is NULL, and `or` with NULL is NULL unless the
-    other arm is true, so the row is NOT selected."""
+    the headline, both, or neither, NULLs on each side, and a description that states the
+    same parcel, a different one, a smaller built-up area, or nothing. SQL three-valued
+    logic is spelled out: a comparison against NULL is NULL, and `or` with NULL is NULL
+    unless the other arm is true, so the row is NOT selected."""
     predicate = _hit_predicates()[0]
     assert "l.estate_area is not null" in predicate
 
     def sql_hit(category: str | None, plot: float | None, usable: float | None,
-                headline: float | None, basis: str | None) -> bool:
+                headline: float | None, basis: str | None, text: str | None) -> bool:
         if plot is None:
             return False
         if category == "byt":
@@ -102,16 +152,44 @@ def test_the_predicate_declines_exactly_what_the_rule_declines() -> None:
         usable_eq = None if usable is None else plot == usable
         headline_eq = (None if headline is None else plot == headline) and (
             basis in ("usable", "floor", "total"))
-        return bool(usable_eq) or bool(headline_eq)
+        return (bool(usable_eq) or bool(headline_eq)) and not _sql_text_keeps(
+            predicate, plot, text)
 
     figures = (None, 10.0, 852.0, 6841.0)
-    for category, plot, usable, headline, basis in itertools.product(
+    kept_by_text = 0
+    for category, plot, usable, headline, basis, text in itertools.product(
             ("byt", "dum", "komercni", "pozemek", "ostatni", None),
-            figures, figures, figures, tuple(sorted(area.AREA_BASES)) + (None,)):
-        case = (category, plot, usable, headline, basis)
+            figures, figures, figures, tuple(sorted(area.AREA_BASES)) + (None,), _TEXTS):
+        case = (category, plot, usable, headline, basis, text)
         declined = plot is not None and area.stated_plot(
-            category, plot, usable=usable, headline=headline, headline_basis=basis) is None
+            category, plot, usable=usable, headline=headline, headline_basis=basis,
+            text=text) is None
         assert declined == sql_hit(*case), case
+        kept_by_text += (category == "komercni" and plot is not None and plot == usable
+                         and not declined)
+    assert kept_by_text, "the grid never exercised the text arm"
+
+
+def test_the_text_pattern_is_the_rules_own_constant_in_a_portable_spelling() -> None:
+    """ONE pattern text for both engines: the file carries `scraper.area`'s constants
+    verbatim, and the text avoids every construct whose meaning differs between Python's
+    `re` and Postgres's regex (`\\b` is a backspace there, `\\s` / `\\d` / `\\w` and case
+    folding follow the locale, an inline flag is a different syntax) and every literal
+    invisible character (each is an escape)."""
+    predicate = _hit_predicates()[0]
+    source = area.PLOT_TEXT_EVIDENCE_SRC
+    assert _literal_after(predicate, "regexp_matches(l.description, ") == source
+    assert _literal_after(predicate, "case when n.t ~ ") == area.AREA_DOTTED_THOUSANDS_SRC
+    assert _literal_after(predicate, "regexp_replace(m[2], ") == (
+        "[" + area.AREA_THOUSANDS_SEPS_SRC + "]")
+    assert not re.search(r"\\[bBsSdDwWAZ]|\(\?[aiLmsux]", source)
+    assert all(ch.isprintable() and not ch.isspace() for ch in source)
+    assert "'" not in source
+    stem = re.compile(r"(?:" + re.search(r"\]\)\(([^()]*)\)", source)[1] + ")")
+    for word in ("pozemek", "Pozemku", "POZEMKY", "parcela", "Parcely", "PARCEL"):
+        assert stem.match(word) and not re.match("^[Zz]", stem.match(word)[0]), word
+    for word in ("zastavěná", "Zastavene", "ZASTAVĚNÁ"):
+        assert stem.match(word) and re.match("^[Zz]", stem.match(word)[0]), word
 
 
 def test_the_rule_reads_at_the_columns_scale_so_sql_equality_is_the_same_test() -> None:

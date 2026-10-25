@@ -3754,7 +3754,7 @@ renumber.** Navigate by area:
     10 m² cellar with a 10 m² "plot", an 852 m² hall whose "Plocha parcely" is its own
     footprint while the real 6 841 m² parcel sits only in the prose. We stored what the page
     said and every per-portal key map was right; what was missing was one rule, so it is one
-    function, `scraper.area.stated_plot(category_main, plot, usable, headline, headline_basis)`,
+    function, `scraper.area.stated_plot(category_main, plot, usable, headline, headline_basis, text)`,
     called at ONE site for every portal that crosses the ScrapedListing contract
     (`ScrapedListing.__post_init__`, the last point before the content hash, so the declined
     value is hashed as absence like every other refused measure — rules 2/8; `reparse.py`
@@ -3764,25 +3764,41 @@ renumber.** Navigate by area:
     plots held was the doubled floor figure, the placeholder 1 or the whole building's
     parcel); on **komerční** a plot equal — at the column's 0.1 m², half up — to the usable
     measure or to a headline whose basis is a LABELLED interior measure (`usable` / `floor` /
-    `total`) is absent; **dum**, pozemek and ostatni are untouched (the operator kept the
+    `total`) is absent — **unless the advert's own description says the figure is a parcel**
+    (operator, 2026-10-25: equality alone is not evidence; a size threshold was rejected as a
+    patch). The echo branch reads the description with ONE pattern,
+    `scraper.area.PLOT_TEXT_EVIDENCE_SRC` (a parcel statement — "pozemek" / "parcela" in any
+    case form, "plocha pozemku" — or a built-up one — "zastavěná plocha" / "zastavěné plochy" —
+    then at most 40 characters that cross no sentence end, bullet, other statement or earlier
+    figure, then a figure in m² or ha in the shared number grammar): (a) a stated parcel
+    EQUAL to the figure (column scale, ha converted) keeps it; else (c) a stated parcel that
+    DIFFERS means the box echoes the floor — dropped, the true parcel left to the text; else
+    (b) a built-up area SMALLER than the figure keeps it; else (d) no statement — dropped. The
+    title is not read (no stored column holds it, and migration 671 must decide on the same
+    text); the pattern avoids `\b` / `\s` / `\d` / case flags so Python and Postgres read it
+    identically. **dum**, pozemek and ostatni are untouched (the operator kept the
     house rule as it is — a garage's parcel really is its footprint). Never compared: a title
     / prose fallback (`unknown`: "Prodej areálu 3 400 m²" IS the site, and the real parcel
-    would be dropped) and zastavěná plocha (a building may cover its whole parcel). The
+    would be dropped) and zastavěná plocha as a COLUMN (none exists; a building may cover its
+    whole parcel). The
     contract cells stay `structured` with a note only — `none` / `text` would make the column
     preserve-if-null (`db._preserved_columns`) and freeze every stored echo. Each affected
     LIVE row clears at its next detail fetch with one genuine snapshot; a STORED echo clears
     only by migration 671 (same PR, destructive: applied from `main` after the rule is deployed, with
-    the backup and the operator's OK: byt = every stored plot, komerční = the equality rule, active AND
-    inactive — 14,404 rows on 2026-10-25, 5,574 of them active), because `scripts/reparse.py` never blanks. Readers
+    the backup and the operator's OK: byt = every stored plot, komerční = the equality rule with the
+    same text evidence over the stored `description`, active AND inactive — 14,156 rows on 2026-10-25,
+    5,444 of them active), because `scripts/reparse.py` never blanks. Readers
     follow without a change: `plot_area_m2` (migration 534) reads `estate_area` off land.
-    Named residuals: the **reverse case** — an areál, farm, camp or petrol station whose TRUE
-    parcel the advertiser typed into BOTH boxes keeps the wrong floor figure and loses the
-    true plot. It is a class, not the one campsite the original found (idnes 19082282): the
-    2026-10-25 hand-read of the 2,356 active komerční hits found 93 whose own description
-    states a parcel equal to the figure, all of them this case, and estimates ~170 in all
-    (~7 %), concentrated in sklad / výroba / zemědělský / ubytování ads above ~2,000 m²; no
-    stored column tells them apart (zastavěná plocha has none). Also: a pre-stamp komerční
-    row of the realitymix "Plocha" shape (usable and basis NULL) escapes the heal.
+    The **reverse case** — an areál, farm, camp or petrol station whose TRUE parcel the
+    advertiser typed into BOTH boxes — is what the text evidence answers: the 2026-10-25
+    hand-read of the 2,356 active komerční hits found 93 whose description states a parcel
+    equal to the figure, all of them this case; the pattern finds 92 (the hand-read's own
+    93 / 148 / 2,115 split to within one row) and keeps every one, and (b) keeps 38 more.
+    Named residuals: areál ads whose text names the site without a parcel word ("areál o
+    rozloze …"; about half of the 104 still-dropped hits at ≥ 3,000 m²); (b) is a weak
+    signal — on the 38 it keeps, about half are a multi-storey building's floor area beside
+    its smaller footprint, not a parcel; and a pre-stamp komerční row of the realitymix
+    "Plocha" shape (usable and basis NULL) escapes the heal.
 
     **The area NUMBER has one grammar too** (the scraper track's W19, 2026-09-17 — not
     the location program's). Picking the right measure is only half the rule; reading the
@@ -3949,8 +3965,8 @@ renumber.** Navigate by area:
     bezrealitky, idnes, ceskereality, maxima and (from W21) mmreality all do, land rows
     included, and that is faithful reporting rather than duplication — **and only when what
     that cell holds is a plot at all** (general ruling 3, above): never on a byt, and on
-    komerční not when it merely repeats the usable / labelled headline figure
-    (`scraper.area.stated_plot`, at the contract boundary). What no parser may do is
+    komerční not when it merely repeats the usable / labelled headline figure and its own
+    text does not say it is the parcel (`scraper.area.stated_plot`, at the contract boundary). What no parser may do is
     SYNTHESISE the column from `area_m2` for the four portals whose land pages carry no parcel
     label: that would copy the headline into a second column on 32k rows, leave every future
     portal to remember the rule, and make the data lie in order to spare the reader a function

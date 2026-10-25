@@ -393,11 +393,13 @@ Independent of the analytical, UI, and map tracks.
   `scraper.area.stated_plot`, at ONE call site before the content hash
   (`ScrapedListing.__post_init__`; sreality's `parse_listing` calls it itself): a byt NEVER
   carries a plot; a komerční plot equal (0.1 m²) to the usable measure or a LABELLED headline
-  (usable / floor / total) is absence; dum / pozemek / ostatni unchanged; never compared against
-  a title fallback or zastavěná plocha. Contract cells stay `structured`. Live rows clear at
+  (usable / floor / total) is absence UNLESS the advert's own description says it is a parcel
+  (the text evidence below); dum / pozemek / ostatni unchanged; never compared against
+  a title fallback or a zastavěná plocha column. Contract cells stay `structured`. Live rows clear at
   their next fetch (one snapshot each, which cannot be undone); stored echoes need migration 671
-  (DESTRUCTIVE, not applied: 14,404 rows on 2026-10-25 — byt 3,218 active + 6,751 inactive,
-  komerční 2,356 active + 2,079 inactive).
+  (DESTRUCTIVE, not applied). **The count, with the text evidence (2026-10-25): 14,156 rows on
+  13,020 properties — byt 3,218 active + 6,751 inactive, komerční 2,226 active + 1,961
+  inactive** (equality alone counted 14,404: komerční 2,356 + 2,079).
   **Hand-read, done 2026-10-25 (read-only):** all 2,356 active komerční hits sorted by what the
   advert's OWN description says about a parcel ("pozem…" / "parcel…" + a figure in m²), then read.
   93 state a parcel EQUAL to the figure, and all 93 are the **reverse case**: an areál, farm, camp,
@@ -414,16 +416,33 @@ Independent of the analytical, UI, and map tracks.
   concentrated in areál-type ads above ~2,000 m² (sklad, výroba, zemědělský, ubytování,
   restaurace / camp); the figure stays in the advert's text. The original's campsite
   (idnes 19082282) was one of a class, not a one-off.
-  **Owed before the rule merges:** the operator reads that number and rules — merge as ruled, or
-  a guard for the areál shape first (no stored column separates it: zastavěná plocha has no
-  column, and prose is the text lane's); the autodedup programme told (the live-lane plot
-  features `plot_area_rel_diff` / `plot_area_exact` move at each row's first refetch).
+  **Ruled 2026-10-25 — the advert's text is the evidence, not a size threshold** (rejected as
+  a patch): `stated_plot` reads the description (`text=`, same one site before the hash; the
+  title is not read — no stored column holds it) with ONE pattern,
+  `scraper.area.PLOT_TEXT_EVIDENCE_SRC`, which 671 carries verbatim (Python's `re` and
+  Postgres read the same text — the rails and live tests, and a one-off 12,000-string fuzz
+  against a local Postgres 16, found no disagreement):
+  (a) a stated parcel EQUAL to the figure (m² or ha) keeps it; else (c) a stated parcel that
+  DIFFERS drops it (the box echoes the floor; the true parcel stays in the text); else (b) a
+  built-up area SMALLER than the figure keeps it; else (d) dropped. Re-sorting the 2,356
+  active hits with it (read-only): 92 / 149 / 2,115 (the hand-read's 93 / 148 / 2,115 to
+  within one row). **Kept now: all 92 stated-equal reverse cases** (+ 89 inactive). **Still
+  dropped: all 149 different-parcel hits** (+ 136 inactive) **and 2,077 of the 2,115
+  no-parcel hits** (+ 1,825 inactive); (b) keeps the other 38 (+ 29 inactive). Residuals,
+  named: 104 still-dropped hits at ≥ 3,000 m² — about half areál sites whose text names the
+  site without a parcel word; and (b) is weak — reading its 38, about half are parcels (areál,
+  "zastavěná plocha a nádvoří 705 m², zahrada 547 m²") and about half a multi-storey building's
+  floor area beside its smaller footprint ("zastavěná 336 m², užitná 490 m²", mostly under
+  1,000 m²).
+  **Owed before the rule merges:** the operator reads the (b) result and rules (keep it, or drop
+  (b) so a built-up statement alone keeps nothing); the autodedup programme told (the live-lane
+  plot features `plot_area_rel_diff` / `plot_area_exact` move at each row's first refetch).
   **Owed after the rule is live (migration 671, same PR, unapplied until then):** the count re-run against the
-  header's census and stop conditions (925 active komerční hits carry no basis stamp; 1 sreality
+  header's census and stop conditions (895 active komerční hits carry no basis stamp; 1 sreality
   P2 row); `backup_before_drop.yml`; the operator's OK; the autodedup lane paused for a re-seed
   (the heal writes no snapshot); the apply from `main` (`apply_migration.yml --ref main`); `rt_seed fresh=true`; then re-bless the field census (`python -m scraper.field_census
   --bless`): ceskereality `estate_area` is blessed at fill 0.6145 and the heal takes it to ~0.52
-  (30,267 → 25,679 of 49,367 active), 9.4 pp — 0.6 pp short of `parsing_fill_drop_warn_pp`.
+  (30,275 → 25,734 of 49,383 active), 9.3 pp — 0.7 pp short of `parsing_fill_drop_warn_pp`.
   **Owed later:** the mmreality-dum residue check; the optional `verify_pipeline` arm (byt /
   komerční rows with `estate_area = area_m2`, ~0 after the heal); the forward drop of the
   heal's backup schema after a month.

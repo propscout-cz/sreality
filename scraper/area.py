@@ -67,8 +67,10 @@ narrow no-break space and the thin space idnes never had to handle.
 
 `stated_plot` is the third rule, for the PLOT column: a flat never carries one, and a
 commercial unit's "plot" that merely repeats its floor figure is not a plot (general
-ruling 3, 2026-09-30; the operator's flat answers, 2026-10-01). It runs at the contract
-boundary — `ScrapedListing.__post_init__` for every portal that crosses it, and
+ruling 3, 2026-09-30; the operator's flat answers, 2026-10-01) — unless the advert's own
+description says the figure IS its parcel (2026-10-25: equality alone is not evidence),
+read with `PLOT_TEXT_EVIDENCE_SRC`, which migration 671 carries verbatim. It runs at the
+contract boundary — `ScrapedListing.__post_init__` for every portal that crosses it, and
 sreality's `parse_listing` itself — so the declined value reaches the content hash the
 way every other refused measure does.
 """
@@ -99,12 +101,24 @@ AREA_THOUSANDS_SEPS = "\u0020\u00a0\u202f\u2009\u200b\u200c\u200d\u2060"
 # dot followed by exactly three digits, the way brokers key "1.910 m2" / "12.100 m2" /
 # "1.994,71 m²" (Czech decimals take a comma, so a 3-digit group after a dot is never a
 # fraction; "1.5 m2" keeps its dot as the decimal it is) — and a plain number.
+# Spelled in ASCII digits and escaped separators because Postgres reads the same text:
+# migration 671 carries it verbatim inside PLOT_TEXT_EVIDENCE_SRC, and `\d` would be
+# Unicode digits to Python's `re` but ASCII to Postgres.
+
+
+def _escaped(chars: str) -> str:
+    """`chars` as `\\uXXXX` escapes, which Python's `re` and Postgres's regex both read."""
+    return "".join(f"\\u{ord(char):04x}" for char in chars)
+
+
+AREA_THOUSANDS_SEPS_SRC = _escaped(AREA_THOUSANDS_SEPS)
 AREA_NUMBER_SRC = (
-    rf"\d{{1,3}}(?:[{AREA_THOUSANDS_SEPS}]\d{{3}})+(?:[.,]\d+)?"
-    rf"|\d{{1,3}}(?:\.\d{{3}})+(?:,\d+)?"
-    rf"|\d+(?:[.,]\d+)?"
+    rf"[0-9]{{1,3}}(?:[{AREA_THOUSANDS_SEPS_SRC}][0-9]{{3}})+(?:[.,][0-9]+)?"
+    rf"|[0-9]{{1,3}}(?:\.[0-9]{{3}})+(?:,[0-9]+)?"
+    rf"|[0-9]+(?:[.,][0-9]+)?"
 )
-_DOTTED_THOUSANDS_RE = re.compile(r"^\d{1,3}(?:\.\d{3})+(?:,\d+)?$")
+AREA_DOTTED_THOUSANDS_SRC = r"^[0-9]{1,3}(?:\.[0-9]{3})+(?:,[0-9]+)?$"
+_DOTTED_THOUSANDS_RE = re.compile(AREA_DOTTED_THOUSANDS_SRC)
 AREA_TEXT_RE = re.compile(
     rf"(?<![\d+.,])"
     rf"({AREA_NUMBER_SRC})"
@@ -113,14 +127,19 @@ AREA_TEXT_RE = re.compile(
 )
 
 
-def area_token_to_float(token: str) -> float:
-    """One matched number token -> its value: separators stripped, a dotted-thousands
-    token's dots with them, the decimal comma read as a point."""
+def _area_token_text(token: str) -> str:
+    """One matched number token as a plain decimal: separators stripped, a
+    dotted-thousands token's dots with them, the decimal comma read as a point."""
     for sep in AREA_THOUSANDS_SEPS:
         token = token.replace(sep, "")
     if _DOTTED_THOUSANDS_RE.match(token):
         token = token.replace(".", "")
-    return float(token.replace(",", "."))
+    return token.replace(",", ".")
+
+
+def area_token_to_float(token: str) -> float:
+    """One matched number token -> its value (see `_area_token_text`)."""
+    return float(_area_token_text(token))
 
 
 def parse_area_text(text: str | None) -> float | None:
@@ -294,22 +313,76 @@ PLOT_FREE_CATEGORIES: frozenset[str] = frozenset({"byt"})
 # ruling 3, 2026-09-30: 1,383 ceskereality, 651 idnes, 427 realitymix, 53 mmreality
 # active rows; on all 14 live pages opened the portal itself prints one figure in the
 # plot box and the floor-area box). NOT compared: a title / prose fallback (`unknown` —
-# "Prodej areálu 3 400 m²" IS the site, and the real parcel would be dropped),
-# zastavěná plocha (a building may really cover its whole parcel), and a house's plot
-# (the operator kept the dum rule as it is: a garage's parcel really is its footprint).
+# "Prodej areálu 3 400 m²" IS the site, and the real parcel would be dropped), a
+# zastavěná plocha figure for equality (a building may really cover its whole parcel), and
+# a house's plot (the operator kept the dum rule as it is: a garage's parcel really is its
+# footprint).
 PLOT_ECHO_CATEGORIES: frozenset[str] = frozenset({"komercni"})
 PLOT_ECHO_BASES: frozenset[str] = frozenset({"usable", "floor", "total"})
 
 # The scale the side columns store (numeric(9,1)): two figures that read back equal ARE
 # equal, whatever their float tails; half up, as Postgres rounds on the write.
 _SIDE_AREA_QUANTUM = Decimal("0.1")
+_HECTARE_M2 = Decimal(10_000)
+
+# But EQUALITY ALONE IS NOT EVIDENCE (operator, 2026-10-25): an areál, farm, camp or petrol
+# station whose TRUE parcel the advertiser typed into both boxes looks exactly like an echo.
+# The advert's own text tells them apart, so the echo branch reads it: a parcel statement
+# ("pozemek" / "parcela" in any case form, "plocha pozemku", ...) or a built-up statement
+# ("zastavěná plocha" / "zastavěné plochy", ...), then at most 40 characters, then a figure in
+# m² or ha. The 40 never cross a sentence end, a bullet, another statement or an earlier
+# figure, so the figure read is the statement's own, whichever engine reads it — this text
+# is ALSO migration 671's (Python's `re` and Postgres's regex read it identically; no `\b`,
+# `\s`, `\d` or case flag, whose meanings differ between the two). Groups: the statement's
+# stem, the number (AREA_NUMBER_SRC), the unit.
+_UPPER = "A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ"
+_LOWER = "a-záčďéěíňóřšťúůýž"
+_GAP = "[" + _escaped(" \t\n\r" + chr(0x00A0) + chr(0x202F) + chr(0x2009)) + "]"
+_LINE_BREAK = "[" + _escaped("\n\r") + "]"
+_UNIT_SRC = rf"[mM](?:²|{_GAP}?2)|[hH][aA]|[hH]ektar[{_LOWER}]*"
+_FIGURE_SRC = rf"(?:{AREA_NUMBER_SRC}){_GAP}*(?:{_UNIT_SRC})(?![0-9{_UPPER}{_LOWER}])"
+_STATEMENT_SRC = r"[Pp]ozem|POZEM|[Pp]arcel|PARCEL|[Zz]astav[ěe]n|ZASTAV[ĚE]N"
+PLOT_TEXT_EVIDENCE_SRC = (
+    rf"(?<![{_UPPER}{_LOWER}])({_STATEMENT_SRC})[{_UPPER}{_LOWER}]*"
+    rf"(?:(?!{_FIGURE_SRC}|{_STATEMENT_SRC}|[.]{_GAP}*[{_UPPER}]|{_LINE_BREAK}{_GAP}*[{_UPPER}])"
+    rf"[^•|;!?]){{0,40}}"
+    rf"({AREA_NUMBER_SRC}){_GAP}*({_UNIT_SRC})(?![0-9{_UPPER}{_LOWER}])"
+)
+_PLOT_TEXT_EVIDENCE_RE = re.compile(PLOT_TEXT_EVIDENCE_SRC)
 
 
 def _at_side_scale(value: float | None) -> Decimal | None:
-    """None for an absent or non-finite figure, which is never compared."""
-    if value is None or not math.isfinite(value):
+    """None for an absent, non-finite or unstorable figure, which is never compared (a
+    plot like that passes through to the writer's numeric guard, as it did before)."""
+    if value is None or not math.isfinite(value) or abs(value) >= MAX_SIDE_AREA_M2:
         return None
     return Decimal(str(value)).quantize(_SIDE_AREA_QUANTUM, rounding=ROUND_HALF_UP)
+
+
+def _text_figure(number: str, unit: str) -> Decimal | None:
+    """A stated figure in m² at column scale, exactly as migration 671 reads it (decimal
+    arithmetic, ha x 10,000); None when no stored plot could equal or exceed it."""
+    figure = Decimal(_area_token_text(number)) * (_HECTARE_M2 if unit[0] in "hH" else 1)
+    if figure >= MAX_SIDE_AREA_M2:
+        return None
+    return figure.quantize(_SIDE_AREA_QUANTUM, rounding=ROUND_HALF_UP)
+
+
+def _text_confirms_plot(plot: Decimal, text: str | None) -> bool:
+    """Whether the advert's text makes a plot-box figure that equals the floor figure a
+    parcel after all: (a) it states a parcel EQUAL to it; else (c) a parcel it states
+    that differs means the box echoes the floor; else (b) a built-up area SMALLER than
+    it means the figure is a parcel; else (d) no statement, an echo."""
+    parcel_stated = built_up_smaller = False
+    for match in _PLOT_TEXT_EVIDENCE_RE.finditer(text or ""):
+        figure = _text_figure(match[2], match[3])
+        if match[1][0] in "Zz":
+            built_up_smaller = built_up_smaller or (figure is not None and figure < plot)
+            continue
+        if figure == plot:
+            return True
+        parcel_stated = True
+    return built_up_smaller and not parcel_stated
 
 
 def stated_plot(
@@ -319,10 +392,12 @@ def stated_plot(
     usable: float | None = None,
     headline: float | None = None,
     headline_basis: str | None = None,
+    text: str | None = None,
 ) -> float | None:
     """The parcel a page STATES, or None when its plot box holds no plot: never on a byt;
     on komerční not when it equals, at column scale, the usable measure or a headline
-    whose basis is a labelled interior measure (PLOT_ECHO_BASES)."""
+    whose basis is a labelled interior measure (PLOT_ECHO_BASES) — unless the advert's
+    own `text` (its description) says the figure is a parcel (`_text_confirms_plot`)."""
     if plot is None or category_main in PLOT_FREE_CATEGORIES:
         return None
     if category_main not in PLOT_ECHO_CATEGORIES:
@@ -330,8 +405,8 @@ def stated_plot(
     stated = _at_side_scale(plot)
     if stated is None:
         return plot
-    if _at_side_scale(usable) == stated:
-        return None
-    if headline_basis in PLOT_ECHO_BASES and _at_side_scale(headline) == stated:
-        return None
-    return plot
+    echoes = _at_side_scale(usable) == stated or (
+        headline_basis in PLOT_ECHO_BASES and _at_side_scale(headline) == stated)
+    if not echoes or _text_confirms_plot(stated, text):
+        return plot
+    return None

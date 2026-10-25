@@ -426,3 +426,14 @@ def test_a_flat_or_an_echoed_commercial_plot_is_declined_on_sreality_too() -> No
     parcel = parse_listing(_estate(category_main_cb={"name": "Komerční", "value": 4},
                                    usable_area=120, estate_area=1700))
     assert parcel["estate_area"] == 1700.0
+    # The rule reads the advert's description here too (W22, 2026-10-25): a parcel the
+    # text states EQUAL to the figure keeps it; a different one leaves the echo declined.
+    stated = parse_listing(_estate(
+        category_main_cb={"name": "Komerční", "value": 4}, usable_area=2200, estate_area=2200,
+        advert_description="Areál na pozemku o celkové výměře 2 200 m², zastavěná plocha 376 m²."))
+    assert stated["estate_area"] == 2200.0
+    assert stated["description"].startswith("Areál")
+    other = parse_listing(_estate(
+        category_main_cb={"name": "Komerční", "value": 4}, usable_area=120, estate_area=120,
+        advert_description="Sklad 120 m² na pozemku o výměře 680 m²."))
+    assert other["estate_area"] is None

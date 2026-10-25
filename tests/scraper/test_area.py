@@ -476,3 +476,93 @@ def test_the_plot_rule_is_idempotent() -> None:
                            headline_basis=basis)
         assert stated_plot(category, once, usable=usable, headline=headline,
                            headline_basis=basis) == once
+
+
+# ---------------------------------------------------------------------------
+# W22 revised (operator, 2026-10-25): equality alone is not evidence; the advert's own
+# text is. Real-shaped from the hand-read of the 2,356 active komerční hits.
+# ---------------------------------------------------------------------------
+_NBSP = chr(0x00A0)
+
+
+def _komercni(plot: float, text: str | None, *, usable: float | None = None,
+              headline: float | None = None, basis: str | None = "usable") -> float | None:
+    return stated_plot("komercni", plot, usable=plot if usable is None else usable,
+                       headline=plot if headline is None else headline,
+                       headline_basis=basis, text=text)
+
+
+def test_a_text_that_states_the_same_parcel_keeps_the_plot() -> None:
+    """(a): the advert names a parcel EQUAL to the figure, so the figure is the parcel
+    typed into both boxes — the reverse case — and both columns keep it."""
+    lpg = ("Nabízíme k prodeji čerpací stanici LPG s prodejnou a zázemím. Celková výměra "
+           "pozemku činí 994m², příjezd přímo ze silnice I. třídy.")
+    assert _komercni(994.0, lpg) == 994.0
+    farm = ("Jezdecký areál se stájemi pro 40 koní, krytou halou a výběhy, na pozemcích "
+            "o výměře 16,4 ha.")
+    assert _komercni(164_000.0, farm, usable=None, basis="total") == 164_000.0
+    areal = (f"Výrobní areál s halami a administrativní budovou. Celková výměra pozemků "
+             f"30{_NBSP}000{_NBSP}m², zastavěná plocha cca 5{_NBSP}000 m².")
+    assert _komercni(30_000.0, areal) == 30_000.0
+    # Dotted thousands, a later statement equal after an earlier part, and caps.
+    assert _komercni(3123.0, "Pozemek pod stavbou 410 m2; celkem pozemkem - 3.123 m2") == 3123.0
+    assert _komercni(13703.0, "AREÁL NA PRODEJ. POZEMEK 13 703 m²") == 13703.0
+
+
+def test_a_text_that_states_a_smaller_built_up_area_keeps_the_plot() -> None:
+    """(b): no parcel named, but a built-up area SMALLER than the figure — the figure
+    is bigger than the building's footprint, so it is read as the parcel."""
+    areal = ("Prodej areálu o celkové rozloze 30 000 m² s výrobními halami. Zastavěná "
+             "plocha činí 5 012 m², zbytek tvoří zpevněné plochy.")
+    assert _komercni(30_000.0, areal) == 30_000.0
+    assert _komercni(1252.0, "Zastavěná plocha a nádvoří 705 m², zahrada 547 m².") == 1252.0
+    # A built-up area EQUAL to the figure is the footprint again: not evidence.
+    assert _komercni(828.0, "Hala o zastavěné ploše 828 m² a užitné ploše 730 m².") is None
+    # "nezastavěná" (unbuilt) is not a built-up statement.
+    assert _komercni(4000.0, "Nezastavěná plocha 1 200 m² slouží jako parkoviště.") is None
+
+
+def test_a_text_that_states_a_different_parcel_drops_the_plot() -> None:
+    """(c): the advert names a parcel that DIFFERS, so the plot box echoes the floor; the
+    true parcel lives only in the text (the text lane's to fill). It outranks (b)."""
+    unit = ("Komerční objekt s užitnou plochou 495 m² na pozemku o výměře 1 484 m², "
+            "vhodný pro sklad nebo dílnu.")
+    assert _komercni(495.0, unit) is None
+    both = "Zastavěná plocha 166 m², pozemek 865 m². Dvě podlaží, sklep."
+    assert _komercni(250.0, both) is None
+    # The statement's OWN figure is read, never one past a sentence end.
+    assert _komercni(200.0, "Dům stojí na pozemku. Za domem je dvorek cca 200 m².") is None
+
+
+def test_no_parcel_statement_drops_the_plot() -> None:
+    """(d): no statement at all — the 2,115 hits whose text names neither — is an echo."""
+    assert _komercni(18.0, "Pronájem skladu 18 m² v přízemí, vlastní vchod.") is None
+    assert _komercni(18.0, None) is None
+    assert _komercni(18.0, "") is None
+    # A per-m² price after the keyword is not a figure in m².
+    assert _komercni(82.0, "Cena pozemků v místě 9.000-11.000 Kč za m².") is None
+
+
+def test_the_text_is_read_only_on_the_echo_branch() -> None:
+    """The byt limb and the dům / pozemek / ostatní pass-through ignore the text."""
+    stated = "Celková výměra pozemku činí 64 m²."
+    assert stated_plot("byt", 64.0, usable=64.0, headline=64.0, headline_basis="usable",
+                       text=stated) is None
+    assert stated_plot("dum", 92.0, usable=92.0, headline=92.0, headline_basis="usable",
+                       text="Pozemek 1 500 m².") == 92.0
+    assert stated_plot("pozemek", 1400.0, headline=1400.0, headline_basis="plot",
+                       text="Pozemek 900 m².") == 1400.0
+    assert stated_plot("komercni", 6841.0, usable=None, headline=852.0,
+                       headline_basis="total", text="Pozemek 900 m².") == 6841.0
+
+
+def test_an_absurd_figure_in_the_text_or_the_box_never_raises() -> None:
+    """A figure no column can hold is never equal to a plot and never smaller than one,
+    but a parcel stated with it still counts as a parcel stated; a box figure like that
+    passes through to the writer's numeric guard, as a non-finite one does."""
+    huge = "9" * 40
+    assert _komercni(500.0, f"Pozemek {huge} m².") is None
+    assert _komercni(500.0, f"Zastavěná plocha {huge} m².") is None
+    assert _komercni(500.0, f"Pozemek {huge} ha, pozemek 500 m².") == 500.0
+    assert stated_plot("komercni", 1e30, usable=1e30, text=None) == 1e30
+    assert stated_plot("komercni", 10.0, usable=1e30) == 10.0
