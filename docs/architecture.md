@@ -3369,8 +3369,7 @@ renumber.** Navigate by area:
     `CASE WHEN %(source)s = 'sreality'` legacy `sreality_id` fills in `db.enqueue_detail` and
     `db.enqueue_location_refetch`, `portal_factory.build_portal`'s bazos and sreality
     constructor special-cases (both predate the config-taking constructor), and
-    `realtime_worker._PORTAL_CLASSES`'s `k != "bazos"` (the worker's sreality count-probe is a
-    documented sreality-only lane, not this); (c) `scraper/main.py` is sreality's module yet owns
+    `realtime_worker._PORTAL_CLASSES`'s `k != "bazos"`; (c) `scraper/main.py` is sreality's module yet owns
     the cross-portal image pipeline (`_run_image_downloads`) the real-time worker imports.
     The needs-detail queue is **source-generic** (`listing_detail_queue` keyed on
     `(source, native_id)` + `detail_ref`, migration 108) so every portal shares the one queue and
