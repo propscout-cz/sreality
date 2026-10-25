@@ -13,7 +13,16 @@ import sys
 import pytest
 
 from scripts import dinov3_embed_dispatch as dispatch
+from scripts import pod_bootstrap
 from scripts.runpod_client import GpuOption
+
+SIGNED = "https://r2.example/pods/abc.tar.gz?sig"
+
+
+@pytest.fixture(autouse=True)
+def _no_archive_publish(monkeypatch):
+    """A real launch publishes `git archive` to R2; here it hands back a fixed signed URL."""
+    monkeypatch.setattr(pod_bootstrap, "archive_env", lambda ref, **_k: {"PODBOOT_ARCHIVE_URL": SIGNED})
 
 IDENTITY = {
     "model": "facebook/dinov3-vitb16-pretrain-lvd1689m",
@@ -32,7 +41,7 @@ IDENTITY = {
 def test_start_cmd_runs_the_payload_at_the_pinned_ref():
     cmd = dispatch.build_start_cmd(ref="abc123", backfill_args=["--limit=10"])
     assert cmd[0] == "bash" and cmd[1] == "-c"
-    assert "git fetch --depth 1 origin abc123" in cmd[2]
+    assert "code-abc123.tar.gz" in cmd[2]
     assert "python -m scripts.dinov3_embed_backfill --limit=10" in cmd[2]
 
 
@@ -163,7 +172,9 @@ def test_dispatch_hands_the_pod_its_credentials_and_a_wait_window_that_outlives_
 
     assert dispatch.main() == 0
     job = client.jobs[0]
-    assert set(job["env"]) == set(dispatch.POD_ENV_KEYS)
+    # The credentials, plus the signed URL of this sha's code (the repository is private, #2016).
+    assert set(job["env"]) == set(dispatch.POD_ENV_KEYS) | {"PODBOOT_ARCHIVE_URL"}
+    assert job["env"]["PODBOOT_ARCHIVE_URL"] == SIGNED and SIGNED not in job["start_cmd"][2]
     # run_job always times out for on-demand Pods and then terminates in its `finally`,
     # so the wait window IS the pod's lifetime — it must outlive the payload's budget
     # plus the clone+install startup, or teardown lands mid-batch.

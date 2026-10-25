@@ -1,4 +1,4 @@
-"""The shell a rented GPU pod runs before the payload: report, fetch this repo at a sha,
+"""The shell a rented GPU pod runs before the payload: report, fetch our code at a sha,
 stand up a Python 3.12 interpreter, install torch, install us — reporting after every
 step. One module because both RunPod lanes (`dinov3_embed_dispatch`,
 `tagging_bakeoff_dispatch`) need the identical thing and every 2026-09-08 failure was
@@ -59,6 +59,12 @@ SIX BUGS THIS EXISTS TO NOT REPEAT, all paid for on 2026-09-08:
     torchvision built against a different CUDA than the torch beside it fails at import
     rather than at install.
 
+THE CODE IS A SIGNED ARCHIVE, NOT A CLONE (#2016). The repository is private, and a pod holds
+no credential for it. The dispatcher publishes `git archive` of the sha to R2 (`archive_env`)
+and hands the pod a short-lived signed URL in its env (`PODBOOT_ARCHIVE_URL`, never argv). The
+tarball is kept under `$PODBOOT_ROOT`, outside the checkout the fetch step demolishes, so a
+RunPod restart re-extracts it after the URL has expired.
+
 TORCH AND TORCHVISION COME FROM THE cu118 INDEX, in one command. The image is CUDA
 11.8-era and cu118 is the flavour with the widest cp312 coverage on the PyTorch index
 (cp312 through torch 2.7.1 / torchvision 0.22.1; cu121 stops at 2.5.1). One command
@@ -84,9 +90,10 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
-REPO_URL = "https://github.com/waiff/sreality"
+# Long enough for the pod to queue and boot; the first pass downloads, a restart reuses the file.
+ARCHIVE_TTL_S = 6 * 3600
 # THE CONTAINER DISK, NOT `/workspace`. `/workspace` is RunPod's default mount point for
 # the pod VOLUME, which the lanes no longer rent (and which defaulted to 1 GB — far less
 # than torch needs). Every path below is derived from `$PODBOOT_ROOT`, which defaults to
@@ -203,17 +210,21 @@ def build_bootstrap_script(*, ref: str, module: str, payload_args: Sequence[str]
         'done ) >> "$PODBOOT_LOG" 2>&1 &',
         "PODBOOT_BEAT=$!",
         "step fetch",
-        # IDEMPOTENT BY DEMOLITION. `git remote add origin` on a second pass fails with
-        # "remote origin already exists" (exit 3) — the whole of attempt 3's restart
-        # loop. A fresh directory cannot be in a half-built state either.
+        # The signed archive, downloaded once by the image's own python (stdlib, no curl
+        # assumed) through a `.part` file, so a killed download is never mistaken for one.
+        f'PODBOOT_ARCHIVE="$PODBOOT_ROOT/code-{_archive_name(ref)}"',
+        'if [ ! -s "$PODBOOT_ARCHIVE" ]; then',
+        '  x "$PODBOOT_PY" -c \'import sys, urllib.request; '
+        'urllib.request.urlretrieve(sys.argv[1], sys.argv[2])\' '
+        '"${PODBOOT_ARCHIVE_URL:-}" "$PODBOOT_ARCHIVE.part"',
+        '  x mv "$PODBOOT_ARCHIVE.part" "$PODBOOT_ARCHIVE"',
+        "fi",
+        # IDEMPOTENT BY DEMOLITION: a fresh directory cannot be in a half-built state (the
+        # old `git remote add origin` failed every second pass with "already exists").
         'rm -rf "$PODBOOT_ROOT/sreality"',
         'mkdir -p "$PODBOOT_ROOT/sreality"',
         'cd "$PODBOOT_ROOT/sreality"',
-        # Fetch BY SHA. `--branch` resolves a branch or tag only and would fail here.
-        "x git init -q",
-        f"x git remote add origin {REPO_URL}",
-        f"x git fetch --depth 1 origin {ref}",
-        "x git checkout -q FETCH_HEAD",
+        'x tar -xzf "$PODBOOT_ARCHIVE"',
         'report "step=fetch ok"',
         "step uv",
         # The image's own pip (3.10) installs uv; uv then provides the 3.12 the project
@@ -259,6 +270,28 @@ def build_bootstrap_script(*, ref: str, module: str, payload_args: Sequence[str]
         'if [ "$PODBOOT_SLEEP_S" = "0" ]; then sleep infinity; '
         'else sleep "$PODBOOT_SLEEP_S"; fi',
     ])
+
+
+def _archive_name(ref: str) -> str:
+    return f"{ref.replace('/', '_')}.tar.gz"
+
+
+def _r2() -> Any:
+    from scraper.image_storage import R2Client
+
+    return R2Client.from_env()
+
+
+def archive_env(ref: str, *, repo_dir: str = ".") -> dict[str, str]:
+    """Publish `git archive` of `ref` to R2 and return the pod env entry carrying its signed URL."""
+    key = f"pods/{_archive_name(ref)}"
+    r2 = _r2()
+    with tempfile.TemporaryDirectory(prefix="podarchive-") as tmp:
+        path = f"{tmp}/code.tar.gz"
+        subprocess.run(["git", "-C", repo_dir, "archive", "--format=tar.gz", "-o", path, ref],
+                       check=True)
+        r2.upload_file(key, path, content_type="application/gzip")
+    return {"PODBOOT_ARCHIVE_URL": r2.presigned_get(key, expires_in=ARCHIVE_TTL_S)}
 
 
 def build_start_cmd(*, ref: str, module: str, payload_args: Sequence[str],

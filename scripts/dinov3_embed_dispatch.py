@@ -56,7 +56,6 @@ from scripts.runpod_client import NoCapacityError, RunPodClient, RunPodError
 
 LOG = logging.getLogger("dinov3_embed_dispatch")
 
-REPO_URL = pod_bootstrap.REPO_URL
 # The image supplies git, pip and a CUDA driver. It does NOT supply a usable Python:
 # its 3.10 is below this project's >=3.12 floor, so the pod bootstraps its own
 # interpreter and torch (scripts/pod_bootstrap.py). Chasing a newer image tag is not
@@ -319,6 +318,8 @@ def main() -> int:
     if not api_key:
         LOG.error("RUNPOD_API_KEY not set")
         return 1
+    # The pod's code: a signed archive of this sha, never the private repository (#2016).
+    env.update(pod_bootstrap.archive_env(args.ref))
 
     client = RunPodClient(api_key)
     try:

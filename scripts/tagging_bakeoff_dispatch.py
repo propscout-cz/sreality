@@ -78,7 +78,6 @@ LOG = logging.getLogger("tagging_bakeoff_dispatch")
 
 STAGES = ("manifest", "embed", "train")
 
-REPO_URL = pod_bootstrap.REPO_URL
 # The image supplies a CUDA driver and nothing else that matters: its Python is 3.10 and
 # this project requires >=3.12, so the pod bootstraps its own interpreter
 # (scripts/pod_bootstrap.py). Do not "fix" this tag by chasing a Python version.
@@ -532,6 +531,8 @@ def _run_pod(plan: Plan, args: argparse.Namespace) -> int:
     if not api_key:
         LOG.error("RUNPOD_API_KEY not set")
         return 1
+    # The pod's code: a signed archive of this sha, never the private repository (#2016).
+    env.update(pod_bootstrap.archive_env(args.ref))
 
     client = RunPodClient(api_key)
     try:

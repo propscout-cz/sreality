@@ -26,18 +26,22 @@ def _script(ref: str = "2d00061db1089dad5d42cf51124494c2cdbd1032") -> str:
         ref=ref, module="scripts.tagging_bakeoff_embed", payload_args=["--run-id=1"])
 
 
-def test_the_repo_is_fetched_by_sha_never_cloned_by_branch():
-    # `git clone --branch <sha>` fails with "Remote branch ... not found in upstream
-    # origin" (exit 128) — and under `set -euo pipefail` that is the whole pod.
+def test_the_code_comes_from_the_signed_archive_never_from_the_repository():
+    # The repository is private (#2016): a pod has no credential to fetch it, so the dispatcher
+    # publishes `git archive` of the sha to R2 and the pod downloads that, by a signed URL
+    # that travels in its env.
     script = _script()
-    assert "--branch" not in script
-    assert "git clone" not in script
-    assert "git fetch --depth 1 origin 2d00061db1089dad5d42cf51124494c2cdbd1032" in script
-    assert "git checkout -q FETCH_HEAD" in script
-    # Order matters: a remote must exist before the fetch, and the fetch before checkout.
-    assert (script.index("git remote add origin")
-            < script.index("git fetch --depth 1")
-            < script.index("git checkout -q FETCH_HEAD"))
+    assert not [line for line in script.splitlines() if line.lstrip().startswith("x git ")]
+    assert "github.com" not in script
+    archive = '"$PODBOOT_ROOT/code-2d00061db1089dad5d42cf51124494c2cdbd1032.tar.gz"'
+    assert f"PODBOOT_ARCHIVE={archive}" in script
+    assert '"${PODBOOT_ARCHIVE_URL:-}"' in script
+    # Kept outside the demolished checkout: a RunPod restart re-extracts it after the URL expired.
+    assert 'if [ ! -s "$PODBOOT_ARCHIVE" ]; then' in script
+    assert (script.index('if [ ! -s "$PODBOOT_ARCHIVE" ]; then')
+            < script.index('rm -rf "$PODBOOT_ROOT/sreality"')
+            < script.index('x tar -xzf "$PODBOOT_ARCHIVE"')
+            < script.index('report "step=fetch ok"'))
 
 
 def test_the_interpreter_is_bootstrapped_not_inherited():
@@ -96,7 +100,7 @@ def test_every_step_reports_before_the_next_one_starts():
     assert script.index('report "step=disk') < script.index("uv pip install torch")
     # The reporter is installed and callable BEFORE the first real step, or the first
     # step's failure is again invisible.
-    assert script.index("report.py") < script.index("git init")
+    assert script.index("report.py") < script.index("tar -xzf")
 
 
 def test_the_reporter_runs_on_the_images_python_not_the_venv():
@@ -158,7 +162,7 @@ def test_both_lanes_run_the_same_bootstrap():
         ref="abc123", module="scripts.tagging_bakeoff_embed", payload_args=["--run-id=1"])
     for cmd in (a, b):
         assert cmd[0] == "bash" and cmd[1] == "-c"
-        assert "git fetch --depth 1 origin abc123" in cmd[2]
+        assert "code-abc123.tar.gz" in cmd[2]
         assert "uv venv --python 3.12" in cmd[2]
         assert "--branch" not in cmd[2]
         assert 'report "step=torch ok"' in cmd[2]
@@ -222,7 +226,7 @@ def test_the_work_dir_is_on_the_container_disk_not_the_pod_volume():
 
 
 def test_a_second_pass_over_the_same_disk_is_harmless_and_says_which_pass_it_is(tmp_path):
-    # RunPod re-runs the docker start command whenever it exits, so pass 2 met
+    # RunPod re-runs the docker start command whenever it exits, so pass 2 once met
     # `git remote add origin` -> "remote origin already exists" (exit 3) and looped.
     root = tmp_path / "podboot"
     root.mkdir()
@@ -302,3 +306,38 @@ def test_preflight_passes_for_the_script_we_ship_and_fails_for_a_broken_one():
 
     broken_ok, broken_lines = pod_bootstrap.preflight("set -euo pipefail\nif then fi\n")
     assert not broken_ok and broken_lines
+
+
+def test_a_ref_with_a_slash_names_one_archive_file():
+    script = pod_bootstrap.build_bootstrap_script(
+        ref="feature/x", module="scripts.tagging_bakeoff_embed", payload_args=[])
+    assert 'PODBOOT_ARCHIVE="$PODBOOT_ROOT/code-feature_x.tar.gz"' in script
+
+
+def test_the_archive_url_travels_in_the_env_never_in_argv():
+    # A signed URL is a credential for its lifetime; argv is visible in the pod record.
+    assert "PODBOOT_ARCHIVE_URL=" not in _script()
+
+
+def test_the_dispatcher_publishes_git_archive_of_the_sha_and_hands_a_signed_url(monkeypatch):
+    calls: dict[str, object] = {}
+
+    def run(argv, check):
+        calls["argv"] = argv
+        open(argv[argv.index("-o") + 1], "wb").write(b"tar")
+
+    class R2:
+        def upload_file(self, key, path, content_type="application/zip"):
+            calls["upload"] = (key, content_type)
+
+        def presigned_get(self, key, expires_in=604800, anchor_seconds=0):
+            calls["signed"] = (key, expires_in)
+            return f"https://r2.example/{key}?sig"
+
+    monkeypatch.setattr(pod_bootstrap.subprocess, "run", run)
+    monkeypatch.setattr(pod_bootstrap, "_r2", lambda: R2())
+    env = pod_bootstrap.archive_env("abc123")
+    assert calls["argv"][0] == "git" and "archive" in calls["argv"] and calls["argv"][-1] == "abc123"
+    assert calls["upload"] == ("pods/abc123.tar.gz", "application/gzip")
+    assert calls["signed"] == ("pods/abc123.tar.gz", pod_bootstrap.ARCHIVE_TTL_S)
+    assert env == {"PODBOOT_ARCHIVE_URL": "https://r2.example/pods/abc123.tar.gz?sig"}
