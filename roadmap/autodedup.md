@@ -229,6 +229,11 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   sit in two towns may be a wrong merge, and since migration 636 its pin stands at the finer ad's
   point, which can be the other building's. Census SQL in the ONE PIN W0/W1 receipts
   (`~/one-pin-artifacts/` on the operator machine; `docs/design/one-pin/PROGRAM.md` W3).
+- **Owed: the share-sale merge (E932; the operator's rulings N5–N10, 2026-10-01):** an advert selling a
+  share of a property (`podil`) merges with the same property's sale advert at the same price, and the
+  merged property reads "Prodej". Built and measured on the pre-Prague engine in PR #1655, never shipped;
+  closed 2026-10-25 on the operator's ruling 4b, its code kept at tag `archive/feature-autodedup-share-sale`.
+  Rebuild it on the current engine once the Prague work is quiet.
 - **Next (W8, E953):** per area, before it enters the apply scope: brake, the area into the scope
   row, `mode=apply` `generation=rt,retire_legacy=1,blocks=town:<code>` dry run, then live, then
   the interval back. Beroun (`town:531057`) first, once the lane has read it after the 10-14
