@@ -1,24 +1,10 @@
-"""Fill properties.home_obec_pop + near_{pop,jobs,youth,overall}_{5,15}km.
+"""The FULL city-proximity rebuild (--full): the last step of the population load and the curated-city seed.
 
-Thin driver around the SQL function `recompute_city_proximity(p_full)`
-(migration 142). The function does a small-anchor spatial join per property to
-precompute the city-proximity columns Browse / Watchdog filter on, so those
-filters are plain indexed-column predicates instead of a per-request spatial
-RPC (no anon 3s statement-timeout).
-
-The hourly incremental call runs on pg_cron (job recompute-city-proximity,
-migration 674): properties whose `city_proximity_computed_at` is NULL — new
-ones, and ones whose location ad changed since their figures were computed (the
-property rollup clears the stamp). This script is the FULL rebuild (--full), the
-last step of the population load and the curated-city seed, since those shift
-the precomputed maxes of every property; without --full it makes one
-incremental call by hand. Only properties whose location ad has a map point are
-computed; the rest keep their figures. Requires SUPABASE_DB_URL.
-
---full walks the placeable properties in id batches, one short transaction each:
-clear the batch's stamp, then let the incremental call refill it. One statement
-over all ~975k of them would run near an hour and hold every row lock it took
-until it ended.
+The hourly incremental `recompute_city_proximity(false)` runs on pg_cron (migration 674); a population or
+city-index load shifts the precomputed maxes of every property, which only this walk recomputes: the placeable
+properties in id batches, one short transaction each (restamp the batch, let the incremental call refill it),
+since one statement over ~975k of them would run near an hour holding every row lock it took. Without --full,
+one incremental call by hand. Requires SUPABASE_DB_URL.
 """
 
 from __future__ import annotations
@@ -33,8 +19,12 @@ import psycopg
 
 LOG = logging.getLogger("recompute_city_proximity")
 
-FULL_BATCH = 10_000
+FULL_BATCH = 5_000
+DEADLOCK_ATTEMPTS = 3
 _TIMEOUT_SQL = "set local statement_timeout = '20min'"
+# The function takes this lock itself; a batch takes it FIRST, before its restamp's row locks, or the hourly
+# pg_cron run could hold it while waiting on a restamped row (a deadlock).
+_LOCK_SQL = "select pg_advisory_xact_lock(hashtext('recompute_city_proximity'))"
 
 # The next batch of properties the function can place (a map point at the location ad), by id.
 _RESTAMP_BATCH_SQL = """
@@ -52,7 +42,7 @@ returning p.id
 """
 
 
-def _recompute(cur: Any) -> int:
+def _fill_unstamped(cur: Any) -> int:
     cur.execute("select recompute_city_proximity(false)")
     return int(cur.fetchone()[0])
 
@@ -61,21 +51,35 @@ def incremental(conn: Any) -> int:
     """One incremental call (what pg_cron runs hourly); returns the rows written."""
     with conn.transaction(), conn.cursor() as cur:
         cur.execute(_TIMEOUT_SQL)
-        return _recompute(cur)
+        return _fill_unstamped(cur)
+
+
+def _batch(conn: Any, after: int, size: int) -> tuple[list[int], int]:
+    """One batch in one transaction, retried whole when the property rollup wins a deadlock."""
+    attempt = 1
+    while True:
+        try:
+            with conn.transaction(), conn.cursor() as cur:
+                cur.execute(_TIMEOUT_SQL)
+                cur.execute(_LOCK_SQL)
+                cur.execute(_RESTAMP_BATCH_SQL, {"after": after, "size": size})
+                ids = [row[0] for row in cur.fetchall()]
+                return ids, (_fill_unstamped(cur) if ids else 0)
+        except psycopg.errors.DeadlockDetected:
+            if attempt == DEADLOCK_ATTEMPTS:
+                raise
+            attempt += 1
+            LOG.warning("full rebuild: batch after property %d lost a deadlock; retrying", after)
 
 
 def full_rebuild(conn: Any, batch_size: int = FULL_BATCH) -> int:
     """Recompute every placeable property, one batch per transaction; returns the rows written."""
     after, written = 0, 0
     while True:
-        with conn.transaction(), conn.cursor() as cur:
-            cur.execute(_TIMEOUT_SQL)
-            cur.execute(_RESTAMP_BATCH_SQL, {"after": after, "size": batch_size})
-            ids = [row[0] for row in cur.fetchall()]
-            if not ids:
-                return written
-            written += _recompute(cur)
-        after = max(ids)
+        ids, n = _batch(conn, after, batch_size)
+        if not ids:
+            return written
+        after, written = max(ids), written + n
         LOG.info("full rebuild: through property %d, %d written", after, written)
 
 

@@ -1,11 +1,4 @@
-"""Migration 674 (Actions exit W0, #2012): the hourly city-proximity refresh runs on pg_cron, not GitHub.
-
-The offline half reads the files: the workflow is gone, the migration schedules the hourly call and the
-history trim, and the two attended tools that shift the precomputed maxes end with the full rebuild. The live
-half runs in CI's migrations job (`TEST_DATABASE_URL`; every test rolls back): the function must raise no
-NOTICE, because a NOTICE inside a pg_cron command blocks pg_cron's single launcher until the command ends
-(migration 658).
-"""
+"""Migration 674 (#2012), city proximity on pg_cron: offline over the files, live in CI's migrations job (rolled back)."""
 
 from __future__ import annotations
 
@@ -58,10 +51,11 @@ def test_the_attended_tools_end_with_the_full_rebuild(workflow: str) -> None:
     assert "secrets.SUPABASE_DB_URL" in str(job.get("env", {}).get("SUPABASE_DB_URL"))
 
 
-def test_a_dry_run_seed_skips_the_full_rebuild() -> None:
+def test_the_seed_rebuilds_after_a_real_seed_even_when_the_geocode_push_failed() -> None:
     doc = yaml.safe_load((WORKFLOWS / "seed_curated_cities.yml").read_text())
     (job,) = doc["jobs"].values()
-    assert job["steps"][-1]["if"] == "${{ inputs.dry_run != 'true' }}"
+    assert [s.get("id") for s in job["steps"]].count("seed") == 1
+    assert job["steps"][-1]["if"] == "${{ !cancelled() && steps.seed.outcome == 'success' && inputs.dry_run != 'true' }}"
 
 
 @REQUIRED_DB

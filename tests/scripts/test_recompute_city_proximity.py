@@ -1,10 +1,10 @@
-"""scripts/recompute_city_proximity: the full rebuild walks the placeable properties in id batches, one short
-transaction each (restamp the batch, let the incremental call refill it); without --full, one incremental call.
-Offline, over a fake connection; the SQL itself runs live in tests/test_674_city_proximity_pg_cron.py."""
+"""scripts/recompute_city_proximity over a fake connection; its SQL runs live in tests/test_674_city_proximity_pg_cron.py."""
 
 from __future__ import annotations
 
 from typing import Any
+
+import psycopg
 
 from scripts import recompute_city_proximity as rcp
 
@@ -19,6 +19,9 @@ class _Cursor:
         if "returning p.id" in sql:
             self._rows = [(i,) for i in self._conn.batches.pop(0)]
         elif "recompute_city_proximity(false)" in sql:
+            if self._conn.deadlocks:
+                self._conn.deadlocks -= 1
+                raise psycopg.errors.DeadlockDetected("deadlock detected")
             self._rows = [(self._conn.written,)]
 
     def fetchall(self) -> list[tuple[Any, ...]]:
@@ -50,6 +53,7 @@ class _Conn:
 
     def __init__(self, batches: list[list[int]], written: int = 0) -> None:
         self.batches, self.written = batches, written
+        self.deadlocks = 0  # how many recompute calls raise DeadlockDetected before one succeeds
         self.log: list[list[tuple[str, Any]]] = []
 
     def transaction(self) -> _Txn:
@@ -65,12 +69,34 @@ def test_the_full_rebuild_runs_one_transaction_per_batch_until_none_is_left() ->
     assert len(conn.log) == 3
     for txn in conn.log:
         assert txn[0][0] == "set local statement_timeout = '20min'"
-    (_, first), (_, second), (_, last) = (txn[1] for txn in conn.log)
+        # The function's lock BEFORE the restamp's row locks: taken after them, the hourly pg_cron run could
+        # hold the lock while waiting on a restamped row, and Postgres would abort one side as a deadlock.
+        assert txn[1][0] == "select pg_advisory_xact_lock(hashtext('recompute_city_proximity'))"
+    (_, first), (_, second), (_, last) = (txn[2] for txn in conn.log)
     assert first == {"after": 0, "size": 2}
     assert second == {"after": 3, "size": 2}, "the keyset advances past the batch's highest id"
     assert last == {"after": 7, "size": 2}
-    assert [sql for sql, _ in conn.log[0][2:]] == ["select recompute_city_proximity(false)"]
-    assert conn.log[2][2:] == [], "an empty batch ends the walk without another recompute"
+    assert [sql for sql, _ in conn.log[0][3:]] == ["select recompute_city_proximity(false)"]
+    assert conn.log[2][3:] == [], "an empty batch ends the walk without another recompute"
+
+
+def test_a_batch_that_loses_a_deadlock_is_retried_and_the_walk_goes_on() -> None:
+    # The property rollup can still hold a row the batch needs; the batch rolls back whole, so a retry is safe.
+    conn = _Conn([[3, 1], [3, 1], []], written=2)
+    conn.deadlocks = 1
+    assert rcp.full_rebuild(conn, batch_size=2) == 2
+    assert [txn[2][1] for txn in conn.log] == [{"after": 0, "size": 2}] * 2 + [{"after": 3, "size": 2}]
+
+
+def test_a_batch_that_keeps_losing_deadlocks_fails_the_run() -> None:
+    conn = _Conn([[3, 1]] * rcp.DEADLOCK_ATTEMPTS, written=2)
+    conn.deadlocks = rcp.DEADLOCK_ATTEMPTS
+    try:
+        rcp.full_rebuild(conn, batch_size=2)
+    except psycopg.errors.DeadlockDetected:
+        assert len(conn.log) == rcp.DEADLOCK_ATTEMPTS
+    else:
+        raise AssertionError("a batch that never commits must fail the run, not end it green")
 
 
 def test_the_restamp_reaches_only_properties_the_function_can_place() -> None:
