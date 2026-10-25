@@ -1588,3 +1588,19 @@ The six questions, each with the answer the plan is built on: Q1 ceskereality's 
 - **One verdict, one cell**: coverage's residual keeps "the declared total cannot be judged" (its question is "do we hold what each portal shows?"); scraping's missing arm emits no cell for such a unit (48 fewer Not-measured cells; none had an open incident).
 - **Skills**: database 498 → 499 lines; scraper-ops 500 → 498 (a duplicated "no combined fallback" passage folded into its first statement).
 - **Measured ledger** (`git diff --numstat` against 8de51b414): code +67 / −85; migrations +147 / −0; tests +92 / −82; docs +113 / −22. Code per item: 2 +3/−7, 3 +38/−39, 4 +19/−31, 5 +7/−8.
+
+### Wave 4 as built (2026-10-22)
+
+- **D1 in place of L1.** The claim lane keeps mining the R2 archive; the archive's 7-day per-listing floor is deleted, so every changed body appends. The floor (W2a-7) refused ≥ 1,133 changed bodies a day on the HTML portals, among them the refetch that named the town of the 11 class-A ceskereality ads; its cost premise (8.9 GB/day of Postgres INSERT-then-DELETE) died when bodies moved to R2. Cost: ~1.1k more R2 PUTs a day (+8 %). L1 was dropped: ~390 MB/day of TOAST reads through shared_buffers, and "already mined" would have needed a new column and a 791k-row seed on a 26 GB hot table. The group advisory lock stays (it serialises re-pin and prune).
+- **L2.** `location_refetch` selects `location_steps.town_missing_sql()` over active ads (page older than 6 h, no first-seen term), not the pin-audit matview's `active_no_claims` bucket: 26 candidates at 16:05Z (ceskereality 22, realitymix 3, mmreality 1) against the bucket's 9. The matview and its pg_cron refresh stay (the pin-audit page reads them).
+- **One fragment.** `town_missing_sql` is the check's `cz_no_town_n`, the lane's set (carried verbatim: `location_steps` → `claims_common` → `loader_db` imports `scraper.db`, so importing it there is a cycle) and `located_no_town`'s spelling; the vocabulary rail pins all three.
+- **Expected:** class A gains claims within ~1 h of the deploy (refetch tick +5 min, VERIFY drain, append, fast intake, resolver); `ceskereality/town` 34 → ~23, `realitymix/town` 3 → 0 (or 3 if their pages are gone but still listed), mmreality stays 1; the 24 withheld towns await Q3.
+
+### Wave 5b as built (2026-10-23)
+
+`jobs lane/<name>` read "late" once after every brake lift: `_lane`'s switch-on clock (the previous
+measurement, for a lane that read off then) only applied when the lane had no pass at all, so a pass
+from before the pause won and `since` counted from it (autodedup, 15:54Z: a 5 h brake, incident 1005
+on a healthy first pass of 117 merges). The reference is now the later of the last pass and the
+previous measurement when the lane was off; the boot only when no pass exists. Check code + one
+test; no migration, no data.

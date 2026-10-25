@@ -20,7 +20,7 @@ import { isApiConfigured } from '@/lib/api';
 import {
   DEFAULT_SCOPE,
   RADII_M,
-  isMarketTemplate,
+  isPropertyCard,
   neighbourhoodFilters,
   type NeighbourhoodScope,
   type RadiusM,
@@ -121,7 +121,7 @@ export function useExploreNeighbourhood(property: PropertyPublic, images: ImageP
         lng,
         tab: 'stats',
         market: scope.market,
-        dashboard: dashboards?.data.find(isMarketTemplate)?.id ?? null,
+        dashboard: dashboards?.data.find(isPropertyCard)?.id ?? null,
         origin: { listing: property, images },
         label: [property.display_label, property.disposition].filter(Boolean).join(' · ') || undefined,
       }),

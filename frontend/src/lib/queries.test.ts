@@ -371,8 +371,8 @@ describe('the one-portal order', () => {
   });
 
   it('passes every other sort straight through', () => {
-    for (const field of ['price_czk', 'price_per_m2', 'area_m2', 'plot_area_m2', 'last_seen_at',
-                         'mf_gross_yield_pct'] as const) {
+    for (const field of ['price_czk', 'price_per_m2', 'area_m2', 'plot_area_m2', 'street_name',
+                         'last_seen_at', 'mf_gross_yield_pct'] as const) {
       expect(orderPortal(withPortals(['idnes']), { field, direction: 'desc' })).toBeNull();
       expect(effectiveSort(withPortals(['idnes']), { field, direction: 'desc' }))
         .toEqual({ field, direction: 'desc' });
@@ -482,6 +482,32 @@ describe('the cards sort menu', () => {
       ['or', ['plot_area_m2.gt.850,and(plot_area_m2.eq.850,property_id.gt.7),plot_area_m2.is.null']]);
     vi.restoreAllMocks();
     expect(BROWSE_SELECT_COLUMNS.cards.split(',')).toContain('plot_area_m2');
+  });
+
+  it('offers street name both ways', () => {
+    const byLabel = new Map(CARD_SORTS.map((o) => [o.label, o.spec]));
+    expect(byLabel.get('Ulice: A → Z')).toEqual({ field: 'street_name', direction: 'asc' });
+    expect(byLabel.get('Ulice: Z → A')).toEqual({ field: 'street_name', direction: 'desc' });
+    expect(parseSort('-street_name')).toEqual({ field: 'street_name', direction: 'desc' });
+  });
+
+  /* A street name carries the reserved chars of PostgREST's or=() (nám. Míru), so the
+   * cursor quotes it; rows without a street come last both ways. */
+  it('pages the cards by street with a quoted cursor and the rows without a street last', async () => {
+    const s = stubReads();
+    await fetchListingsForCards(
+      DEFAULT_FILTERS,
+      { field: 'street_name', direction: 'desc' },
+      { value: 'nám. Míru', id: 7 },
+    );
+    expect(s.calls.filter(([m]) => m === 'order').map(([, a]) => a)).toEqual([
+      ['street_name', { ascending: false, nullsFirst: false }],
+      ['property_id', { ascending: false }],
+    ]);
+    expect(s.calls).toContainEqual(
+      ['or', ['street_name.lt."nám. Míru",and(street_name.eq."nám. Míru",property_id.lt.7),street_name.is.null']]);
+    expect(String(s.calls.find(([m]) => m === 'select')?.[1][0])).toContain('street_name');
+    vi.restoreAllMocks();
   });
 });
 

@@ -7,9 +7,11 @@ the check sends, then the cells it feeds. The rules pinned:
 
 - visible: an active ad first written 30 min-24 h ago (72 h for the wider window) is in Browse, or held at the first
   stage that stops it: no property, property not active, its property's location ad's location not served (no
-  listing_location row, or one with neither a point nor a foreign determination), waiting for the next rebuild (a
-  property born, or a location ad resolved again, after the newest browse_list rebuild started: a fact, never a
-  blocker), else not yet in Browse. A property held at its status or location is one browse_projection does not serve.
+  listing_location row, or one with neither a point nor a foreign determination), unpublished (the publication rule
+  had not published the property when the newest browse_list rebuild started: settled after it, or neither settled
+  nor 6 h old then), waiting for the next rebuild (a property born, or a location ad resolved again, after that
+  start), else not yet in Browse; unpublished and waiting are facts, never blockers. A property held at its status,
+  location or publication is one browse_projection does not serve.
 - The location ad is the rollup's location rank 1 of property_canonical_listings (migration 635), never the ad being
   counted and not necessarily the canonical ad.
 - stock: an active property counts once per portal it holds an active ad on, and once for the fleet.
@@ -24,12 +26,15 @@ Runs in CI's migrations lane (`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED=1`); skipp
 from __future__ import annotations
 
 import datetime as _dt
+import re
 import os
 import uuid
 from collections.abc import Iterable, Iterator
 from typing import Any
 
 import pytest
+
+from toolkit.publication import CAP_SQL
 
 from location_data.claims_common import SOURCES
 from scraper.db import (QUEUE_PRIORITY_CHANGED, QUEUE_PRIORITY_FAILURE, QUEUE_PRIORITY_NEW,
@@ -42,6 +47,9 @@ from scripts.verify_pipeline import THRESHOLDS
 _DB_URL = os.environ.get("TEST_DATABASE_URL")
 _REQUIRED = os.environ.get("DB_RAILS_REQUIRED") == "1"
 _H = _dt.timedelta(hours=1)
+# The seeds' default age is the cap plus an hour, read off the rule, never retyped.
+_CAP = int(re.fullmatch(r"interval '(\d+) hours?'", CAP_SQL).group(1)) * _H
+
 _MIN = _dt.timedelta(minutes=1)
 PORTALS = sorted(SOURCES)
 
@@ -88,10 +96,12 @@ def _ad(conn: Any, source: str, *, seen: _dt.timedelta = 2 * _H, active: bool = 
 
 
 def _property(conn: Any, *, status: str = "active", active: bool = True,
-              born: _dt.timedelta = 3 * _H) -> int:
-    return conn.execute("insert into properties (status, is_active, created_at) "
-                        "values (%s, %s, now() - make_interval(secs => %s)) returning id",
-                        (status, active, born.total_seconds())).fetchone()[0]
+              born: _dt.timedelta = 3 * _H, seen: _dt.timedelta = _CAP + _H) -> int:
+    """First seen `seen` ago: past the cap by default, so browse_projection serves it unsettled."""
+    return conn.execute("insert into properties (status, is_active, created_at, first_seen_at) "
+                        "values (%s, %s, now() - make_interval(secs => %s), now() - make_interval(secs => %s)) "
+                        "returning id",
+                        (status, active, born.total_seconds(), seen.total_seconds())).fetchone()[0]
 
 
 def _located(conn: Any, listing_id: int, shape: tuple[bool, str, str], *,
@@ -109,10 +119,10 @@ def _located(conn: Any, listing_id: int, shape: tuple[bool, str, str], *,
 
 def _held(conn: Any, source: str, *, status: str = "active", active: bool = True,
           born: _dt.timedelta = 3 * _H, shape: tuple[bool, str, str] | None = _POINT,
-          resolved: _dt.timedelta = 3 * _H) -> int:
+          resolved: _dt.timedelta = 3 * _H, seen: _dt.timedelta = _CAP + _H) -> int:
     """A property whose one ad, first written 2 h ago, is its canonical and location ad; `shape` None leaves it
     unresolved."""
-    pid = _property(conn, status=status, active=active, born=born)
+    pid = _property(conn, status=status, active=active, born=born, seen=seen)
     ad = _ad(conn, source, active=active, property_id=pid)
     conn.execute("update properties set repr_listing_ref_id = %s, location_listing_ref_id = %s where id = %s",
                  (ad, ad, pid))
@@ -255,17 +265,44 @@ def test_stock_counts_an_active_property_once_per_portal_it_holds_an_active_ad_o
     _held(conn, "remax", active=False)
 
     rows = {source: tuple(counts) for source, *counts in conn.execute(pub._STOCK_SQL).fetchall()}
-    assert rows == {"remax": (3, 1, 1, 0), "bazos": (2, 0, 0, 1), None: (4, 1, 1, 1)}
+    assert rows == {"remax": (3, 1, 1, 0, 0), "bazos": (2, 0, 0, 1, 0), None: (4, 1, 1, 1, 0)}
 
     cells = _by_subject(pub._stock_cells(conn, THRESHOLDS, PORTALS))
+    expected = {"waiting_for_rebuild": 0, "unpublished": 0}
     assert {subject: (cells[subject]["facts"]["properties"], cells[subject]["facts"]["missing"],
                       cells[subject]["facts"]["stages"])
             for subject in ("remax/stock", "bazos/stock", "fleet/stock")} == {
-        "remax/stock": (3, 2, {"location_not_served": 1, "not_in_browse_list": 1, "waiting_for_rebuild": 0}),
-        "bazos/stock": (2, 0, {"location_not_served": 0, "not_in_browse_list": 0, "waiting_for_rebuild": 1}),
-        "fleet/stock": (4, 2, {"location_not_served": 1, "not_in_browse_list": 1, "waiting_for_rebuild": 1}),
+        "remax/stock": (3, 2, {"location_not_served": 1, "not_in_browse_list": 1, **expected}),
+        "bazos/stock": (2, 0, {"location_not_served": 0, "not_in_browse_list": 0, **expected,
+                               "waiting_for_rebuild": 1}),
+        "fleet/stock": (4, 2, {"location_not_served": 1, "not_in_browse_list": 1, **expected,
+                               "waiting_for_rebuild": 1}),
     }
     assert cells["idnes/stock"]["status"] == "unknown"
+
+
+def test_a_property_not_yet_published_when_the_rebuild_started_is_unpublished_never_a_blocker(conn: Any) -> None:
+    """Judged after the location and before the rebuild's lag, on the newest rebuild's start: a fresh property not
+    settled (browse_projection does not serve it) and one settled after that start (served now, not in that rebuild)
+    are unpublished; one settled before it is not yet in Browse; an unresolved one is held at its location first."""
+    _rebuilt(conn, 20 * _MIN)
+    fresh, late, early = (_held(conn, "remax", seen=2 * _H) for _ in range(3))
+    unresolved = _held(conn, "remax", seen=2 * _H, shape=None)
+    for pid, settled in ((late, 10 * _MIN), (early, 30 * _MIN)):
+        conn.execute("update properties set settled_at = now() - make_interval(secs => %s) where id = %s",
+                     (settled.total_seconds(), pid))
+
+    assert _visible(conn) == {("remax", True, "unpublished"): 2, ("remax", True, "not_in_browse_list"): 1,
+                              ("remax", True, "location_not_served"): 1}
+    assert _projected(conn, (fresh, late, early, unresolved)) == {late, early}
+    rows = {source: tuple(counts) for source, *counts in conn.execute(pub._STOCK_SQL).fetchall()}
+    assert rows == {"remax": (4, 1, 1, 0, 2), None: (4, 1, 1, 0, 2)}
+
+    visible = _by_subject(pub._visible_cells(conn, {**THRESHOLDS, "publishing_visible_min_n": 4}, PORTALS))
+    facts = visible["remax/visible"]["facts"]
+    assert (facts["ads"], facts["blocked"], facts["stages"]["unpublished"]) == (4, 2, 2)
+    stock = _by_subject(pub._stock_cells(conn, THRESHOLDS, PORTALS))["remax/stock"]["facts"]
+    assert (stock["missing"], stock["stages"]["unpublished"]) == (2, 2)
 
 
 def test_photos_count_new_ads_photos_but_a_taken_down_ads_and_name_the_top_reason_without_its_url(conn: Any) -> None:

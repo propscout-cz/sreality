@@ -192,8 +192,10 @@ recovery row and is marked seen by hand — `notification_dispatches` is append-
 ## 3. What this program never does
 
 - Puts an LLM, a cache probe, or any per-row statement between a sighting and publication.
-- Adds a flag, an `app_settings` key, an env var, or a column — one ruled exception: the location reader's
-  claim-lane stamp `listing_description_enrichments.mined_contract_version` (W3, migration 581, ruling 2026-09-30).
+- Adds a flag, an `app_settings` key, an env var, or a column — two ruled exceptions: the location reader's
+  claim-lane stamp `listing_description_enrichments.mined_contract_version` (W3, migration 581, ruling 2026-09-30)
+  and `listings.ad_reference`, the advertiser's own offer number the broker card quotes (migration 667, operator
+  ruling 2026-10-23).
 - Blanks a stated value, writes history in bulk, or lets a heal bump `last_seen_at`.
 - Touches autodedup code/docs, or lets an attribute edit move a location contract's governed hash.
 
@@ -343,7 +345,7 @@ A heal through the W3 seam writes only the named `listings` columns and a `dirty
    `properties_public` where `first_seen_at > last_matched_first_seen_at` for that subscription, plus a re-scan of
    `first_seen_at <= cursor AND > now() - lookback`, where `lookback = max(60, 2 × notifications_new_requires_image_
    timeout_minutes)` — 60 minutes on today's settings (neither image-gate key is set in `app_settings`, so both
-   defaults apply). `properties.first_seen_at` is `min(child.first_seen_at)` (`scripts/recompute_property_stats.py`
+   defaults apply; the image gate is superseded 2026-10-23 by the publication rule, migs 668/669). `properties.first_seen_at` is `min(child.first_seen_at)` (`scripts/recompute_property_stats.py`
    :179) and no heal writes `listings.first_seen_at`, so a property older than the window cannot re-enter it however
    its columns move. 685 of 461k active properties were inside that 60-minute window at the time of measurement.
 2. **The dedupe key is once-ever per property.** `wd:{sub}:new:{property_id}`, UNIQUE, `ON CONFLICT DO NOTHING`

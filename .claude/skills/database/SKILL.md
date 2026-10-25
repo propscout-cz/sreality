@@ -261,10 +261,10 @@ defined once) into `browse_list` — an **UNLOGGED
 table**, blue-green rebuilt every 15 minutes by a `SECURITY DEFINER` pg_cron function
 (`rebuild_browse_list()`, `pg_try_advisory_xact_lock` guards overlapping runs, `ANALYZE`
 *before* the swap is mandatory or the planner uses stale stats on the fresh table). Since 630 it lays the table out by category, lat, lng, builds `browse_list_map_idx` (the map index is only cheap on a heap in its own order) and, once its DROP holds the lock, re-patches every property a `property_merge_events` row created or undid since the previous run (less 15 min).
-The map reads `browse_list` too: 631 dropped the 30-min `properties_map_mv` matview and its rebuild. (The publication-gate predicate is **gone** from the projection as of migration
-475 — flipped inert in August, then removed with the rest of the legacy dedup engine, rule
-#15. `properties.published_at` survives as a frozen historical column that constrains
-nothing.) Moving the rebuilds to pg_cron retired the old `scripts/refresh_map_mv.py` GH Actions cron entirely —
+The map reads `browse_list` too: 631 dropped the 30-min `properties_map_mv` matview and its rebuild. (The legacy publication-gate predicate went in migration
+475 with the removed engine, rule #15; `properties.published_at` survives as a frozen historical column that
+constrains nothing. Since 669 `browse_projection`'s WHERE carries rule 16's publication rule, an inline column expression
+(no function, so no per-row call): the live fact is `properties.settled_at` (668), spelled once in `toolkit/publication.py`.) Moving the rebuilds to pg_cron retired the old `scripts/refresh_map_mv.py` GH Actions cron entirely —
 pg_cron runs on-the-minute where GH Actions cron was measured ~2× jittered (see
 `gh-actions-cron-throttle-fleet` if you need the numbers).
 

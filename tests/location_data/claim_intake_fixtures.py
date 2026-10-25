@@ -267,7 +267,6 @@ IDNES_PAGE: dict[str, Any] = {
     "id": "1234567",
     "title": "Prodej bytu 3+1",
     "locality_text": "Březno - Nechranice, okres Chomutov",
-    "idnes_ref": "abc",
     "coords": {"source": "page", "confidence": None, "matched_type": None},
     "params": {},
 }
@@ -310,7 +309,6 @@ CESKEREALITY_PAGE: dict[str, Any] = {
 # must mint nothing either, because maxima declares no payload coordinate entry.
 MAXIMA_PAGE: dict[str, Any] = {
     "id": "d40031686",
-    "maxima_ref": "d40031686",
     "locality_text": "Liberec, Liberec XIV-Ruprechtice, Baltská",
     "coords": {"source": "page"},
 }
@@ -320,7 +318,6 @@ REMAX: dict[str, Any] = {
     "id": "445781",
     "title": "Prodej bytu 2+kk 54 m², Praha 3 - Žižkov",
     "address": "V Horní Stromce, Praha 3, Vinohrady, okres Hlavní město Praha",
-    "remax_ref": "445781",
     "params": {"umisteni objektu": "Centrum obce"},
 }
 
@@ -338,7 +335,6 @@ REMAX_DISPLAY_ADDRESS: dict[str, Any] = {
     "price_text": "9 450 000 Kč",
     "display_address": "ulice Roháčova, Praha 3 - Žižkov",
     "carousel_address": "V Horní Stromce, Praha 3, Vinohrady, okres Hlavní město Praha",
-    "remax_ref": "446190",
     "params": {"umisteni objektu": "Centrum obce"},
 }
 
@@ -349,7 +345,6 @@ REMAX_BOTH_ADDRESS_KEYS: dict[str, Any] = {
     "title": "Prodej bytu 2+kk 54 m², Praha 3 - Žižkov",
     "display_address": "ulice Roháčova, Praha 3 - Žižkov",
     "address": "V Horní Stromce, Praha 3, Vinohrady, okres Hlavní město Praha",
-    "remax_ref": "445781",
     "params": {"umisteni objektu": "Centrum obce"},
 }
 

@@ -31,7 +31,7 @@ import MarketTile from './MarketTile';
 
 const TEMPLATE: SavedDashboard = {
   id: 'd-tpl',
-  name: 'Trh v okolí',
+  name: 'Okolí dashboard',
   charts: [],
   filter_spec: null,
   position: 0,
@@ -40,6 +40,7 @@ const TEMPLATE: SavedDashboard = {
   updated_at: '2026-10-23T08:00:00+00:00',
   owner_email: null,
   shared_with: [],
+  property_card: true,
 };
 
 /* Each test its own property: the building and condition picks are held per property. */

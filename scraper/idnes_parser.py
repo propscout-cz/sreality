@@ -125,6 +125,9 @@ _DETAIL_PATH_RE = re.compile(r"/detail/([^/?#]+)/([^/?#]+)/")
 # &nbsp;/&zwj; between groups). Stops at the first non-space, non-digit char.
 _PRICE_RUN_RE = re.compile(r"\d[\d\s\u00a0\u200b\u200c\u200d\u2060]*")
 _PRICE_MAX = 2_147_483_647  # listings.price_czk is a Postgres integer
+# A foreign-priced ad's price note, "Cena v EUR 298 000 €": the price the ad asks, which the
+# headline only shows converted to Kč at the day's rate.
+_NATIVE_PRICE_RE = re.compile(rf"cena v ([a-z]{{3}})\s*({_PRICE_RUN_RE.pattern})", re.IGNORECASE)
 # Map config: "center":[lon, lat]. CZ lat/lon ranges don't overlap, so a swap is
 # caught by the bbox guard rather than producing a bogus point.
 _CENTER_RE = re.compile(r'"center"\s*:\s*\[\s*(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)\s*\]')
@@ -296,6 +299,14 @@ def _parse_price(text: str | None, category_type: str | None) -> tuple[int | Non
         return None, unit
     value = int(digits)
     return (value if value <= _PRICE_MAX else None), unit
+
+
+def _native_price(tree: HTMLParser) -> str | None:
+    """The price the page states in a foreign currency ("298000 EUR"), else None."""
+    m = _NATIVE_PRICE_RE.search(_text(tree.css_first(".wrapper-price-notes")) or "")
+    if m is None or m.group(1).upper() == "CZK":
+        return None
+    return f"{re.sub(r'\D', '', m.group(2))} {m.group(1).upper()}"
 
 
 def _parse_int(text: str | None) -> int | None:
@@ -529,6 +540,7 @@ def parse_detail(
                 struck.decompose()
     price_text = _strip_mortgage_cta(_text(price_node) or _text(params.get("cena")))
     price_czk, price_unit = _parse_price(price_text, category_type)
+    price_native = _native_price(tree)
 
     locality = _text(tree.css_first(".b-detail__info"))
     lat, lon, coord_provenance = _resolve_coords(html)
@@ -563,8 +575,8 @@ def parse_detail(
         "id": source_id,
         "title": title,
         "price_text": price_text,
+        "price_native": price_native,
         "locality_text": locality,
-        "idnes_ref": _text(params.get("číslo zakázky")),
         "image_urls": image_urls,
         "coords": coord_provenance,
         "params": params_text,
@@ -578,11 +590,13 @@ def parse_detail(
         source=SOURCE,
         source_id_native=source_id,
         source_url=source_url,
+        ad_reference=vocabulary.reference(read("ad_reference")),
         category_main=category_main,
         category_type=category_type,
         subtype=subtype_from_title(f"{og_title} {title}", category_main),
         price_czk=price_czk,
         price_unit=price_unit,
+        price_native=price_native,
         area_m2=areas.area_m2,
         area_basis=areas.area_basis,
         usable_area=areas.usable_area,

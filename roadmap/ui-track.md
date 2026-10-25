@@ -7,6 +7,26 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Viewings: "datum prohlídky" on a property, the phone's Prohlídky tab (2026-10-23, migration 666)
+- **Done** (operator ask 2026-10-23): a viewing is a note with a date (`property_notes.viewing_at`; the
+  text optional on a viewing), so it is written, shared, carried and split as a note — no table, carrier
+  or registry of its own. The Poznámky section books one ("Naplánovat prohlídku" in the desktop heading,
+  "Prohlídka" in the composer; native Prague day + time pickers), moves or drops its date in the editor,
+  and leads with the property's upcoming viewings under a calendar leaf. The Phone app's sixth tab,
+  Prohlídky (`/viewings`, `GET /viewings`): the account's own viewings one day at a time in time order,
+  Nadcházející / Vše, arrows + swipe + a date wheel + "Dnes", jumps to the nearest day with a viewing, a
+  "now" rule on today; a row opens its property.
+- **Next (offered, not built):** a push reminder before a viewing; "Přidat do kalendáře" (an .ics file
+  for the iPhone calendar).
+
+### Property page: "Okolí dashboard", its own tab and its own dashboard (2026-10-23, migration 664)
+- **Done** (operator asks 2026-10-23): the neighbourhood dashboard moved off Přehled onto its own tab,
+  "Okolí dashboard". The dashboard it draws is ONE own dashboard per account under any name
+  (`stats_dashboards.property_card`, a partial unique index + a CHECK: named, no filter), no longer the
+  dashboard named "Trh v okolí" (664 marked that one). Browse › Statistiky: the chip says "okolí dashboard",
+  the save dialog greys "Uložit i nastavení filtru" out for it, any own dashboard's menu offers
+  "Použít jako okolí dashboard", "+ Okolí dashboard" creates one. API: `PUT /stats/dashboards/{id}/property-card`.
+
 ### Property page: the "Trh v okolí" dashboard tile (2026-10-23, no migration)
 - **Done** (operator ask + rulings 2026-10-23): Přehled ends with a full-width tile drawing the account's
   dashboard named "Trh v okolí" (Browse › Statistiky offers "+ Trh v okolí · karta nemovitosti"; its chip says
@@ -138,6 +158,10 @@ toolkit work.
   floor area ("180 m² · 850 m² pozemku"; a pozemek's area already is its plot). Same plan and cost as
   the price sort (~90 ms, houses for sale). Owed: the phone property page's line has no lot until
   `properties_public` carries the measure.
+- **Done: Street name sort 2026-10-23** (operator request; migration 665). The cards menu (desktop + phone
+  Řazení) gains "Ulice: A → Z / Z → A" on `browse_list.street_name`, the location ad's street under the
+  Czech collation (Č after C, Ch after H); a property with no street (62% of active) sorts last both
+  ways. A sort key only: the card still prints `display_label`, the street filter stays `ulice_id`.
 - **Shipped (2026-10-22): Advanced → Energy rating (PENB A–G)**, Browse + Watchdog (migration 648:
   `energy_rating_filter` on the Stats and map-tile RPCs; `browse_list` already carried the column). A
   property's rating is the first non-null across its ads; G is also the legal "no certificate"

@@ -1,6 +1,7 @@
-/* The property page's "Trh v okolí" tile: the account's dashboard of that name,
- * drawn over the property's neighbourhood (lib/neighbourhood) under the Stats
- * lens, and one click from the explore window over the very same sample. */
+/* The property page's "Okolí dashboard" tab: the account's ONE dashboard marked for
+ * it (migration 664, any name), drawn over the property's neighbourhood
+ * (lib/neighbourhood) under the Stats lens, and one click from the explore window over
+ * the very same sample. */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -32,7 +33,7 @@ import MarketTile from './MarketTile';
 const CHART: ChartSpec = { id: 'c1', view: 'table', rows: [], cols: [], measure: 'ppm2', stats: ['median'] };
 const dashboard = (over: Partial<SavedDashboard>): SavedDashboard => ({
   id: 'd-tpl',
-  name: 'Trh v okolí',
+  name: 'Moje okolí',
   charts: [CHART],
   filter_spec: null,
   position: 0,
@@ -41,6 +42,7 @@ const dashboard = (over: Partial<SavedDashboard>): SavedDashboard => ({
   updated_at: '2026-10-23T08:00:00+00:00',
   owner_email: null,
   shared_with: [],
+  property_card: true,
   ...over,
 });
 
@@ -78,9 +80,10 @@ beforeEach(() => {
 });
 
 describe('<MarketTile>', () => {
-  it('draws the Trh v okolí dashboard over the property\'s neighbourhood, sold market within 500 m by default', async () => {
+  it('draws the marked dashboard, under its own name, over the property\'s neighbourhood, sold market within 500 m by default', async () => {
     renderTile();
     await screen.findByRole('heading', { level: 3 });
+    expect(screen.getByText('Moje okolí')).toBeInTheDocument();
     expect(screen.getByText(/Byt · .*2\+kk · .* · do 500 m/)).toBeInTheDocument();
     const { filters } = neighbourhoodFilters(PROPERTY, DEFAULT_SCOPE)!;
     await waitFor(() => expect(lastPivotFilters()).toEqual(marketSample(filters, 'sold')));
@@ -105,9 +108,12 @@ describe('<MarketTile>', () => {
     await waitFor(() => expect(lastPivotFilters()?.ownership).toEqual([]));
   });
 
-  it('points to Browse › Statistiky while the account has no Trh v okolí dashboard (a shared one does not count)', async () => {
+  it('points to Browse › Statistiky while no own dashboard is marked (a shared one, or one merely named so, does not count)', async () => {
     vi.mocked(listStatsDashboards).mockResolvedValue({
-      data: [dashboard({ owner_email: 'jana@example.com' }), dashboard({ id: 'd-other', name: 'Ceny' })],
+      data: [
+        dashboard({ owner_email: 'jana@example.com', property_card: false }),
+        dashboard({ id: 'd-other', name: 'Trh v okolí', property_card: false }),
+      ],
       total: 2,
     });
     renderTile();

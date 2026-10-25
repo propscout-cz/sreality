@@ -52,7 +52,8 @@ def cur() -> Iterator[Any]:
 
 
 def _property(cur: Any) -> int:
-    cur.execute("INSERT INTO properties DEFAULT VALUES RETURNING id")
+    """Settled at birth: a seed is a published property, so browse_projection serves it (migration 669)."""
+    cur.execute("INSERT INTO properties (settled_at) VALUES (now()) RETURNING id")
     return int(cur.fetchone()[0])
 
 

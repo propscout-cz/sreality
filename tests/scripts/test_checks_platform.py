@@ -481,6 +481,16 @@ def test_a_lane_switched_on_after_boot_counts_from_the_previous_measurement_not_
     assert overdue["status"] == "fail" and overdue["message"].startswith("late: no completed pass")
     # With no previous measurement to date the switch-on, the boot is the clock, as before.
     assert _cells(_jobs(lanes=starting)[0])["lane/autodedup"]["status"] == "fail"
+    # A pass from BEFORE the pause is not the clock either: autodedup came off a 5 h brake at
+    # 15:54 on 2026-10-23 with its 11:22 pass on record and read "late ... 4.7 h" at once.
+    resumed = {"autodedup": _lane(interval_s=10.0, passes=400, last_pass_at=_iso(minutes=300),
+                                  in_flight_s=40.0)}
+    back = _cells(_jobs(lanes=resumed, previous=off_before,
+                        previous_at=_ago(minutes=9))[0])["lane/autodedup"]
+    assert back["status"] == "ok", back["message"]
+    stale = _cells(_jobs(lanes=resumed, previous=off_before,
+                         previous_at=_ago(minutes=20))[0])["lane/autodedup"]
+    assert stale["status"] == "fail" and stale["message"].startswith("late: no completed pass")
 
 
 def test_flapping_is_half_of_three_or_more_passes_failed_since_the_previous_result() -> None:

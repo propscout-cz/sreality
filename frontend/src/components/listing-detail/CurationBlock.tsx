@@ -11,6 +11,11 @@
  * provenance — "written while viewing this advert"). Collection membership is
  * the header's "Uložit do kolekce" (CollectionSaveToggle), not a row here.
  *
+ * A viewing is a note with a date (migration 666, lib/viewings): the composer's
+ * "Prohlídka" adds a day and time and makes the text optional, and the property's
+ * upcoming viewings lead the list under a calendar leaf; the phone's Prohlídky
+ * tab reads the same notes.
+ *
  * Notes cross a share only when their author marks them shared (migration 610,
  * docs/design/collection-sharing.md §3.7): the composer offers the mark when the
  * property has an AUDIENCE (lib/collectionCache `shareAudience`), and another
@@ -48,6 +53,17 @@ import {
 } from '@/lib/collectionCache';
 import { fmtAbsolute, fmtRelative } from '@/lib/format';
 import type { Note } from '@/lib/types';
+import {
+  defaultSlot,
+  isUpcoming,
+  sectionOrder,
+  slotInstant,
+  slotIsComplete,
+  viewingSlot,
+  viewingWhen,
+  type ViewingSlot,
+} from '@/lib/viewings';
+import { CalendarIcon } from '@/components/phone/phoneIcons';
 import DelegatedStamp from '@/components/DelegatedStamp';
 import ErrorBanner from '@/components/ErrorBanner';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
@@ -55,6 +71,7 @@ import { TagAssignList } from '@/components/curation/TagAssignList';
 import { PencilIcon, TrashIcon } from '@/components/icons';
 import { SectionLabel } from '@/components/section';
 import ArtifactLinkRow from './ArtifactLinkRow';
+import { ViewingFields, ViewingHead, ViewingToggle } from './NoteViewing';
 import { NOTE_ATTACHMENT_MAX_FILES, sortAttachments } from '@/lib/attachments';
 import {
   AttachButton,
@@ -158,6 +175,7 @@ const WORDS = {
 
 /* The newest few; the rest one click away, so the section stays a glance on every tab. */
 const NOTES_SHOWN = 3;
+const NO_NOTES: Note[] = [];
 const BODY_MAX = 4000;
 
 const PRIMARY =
@@ -200,6 +218,8 @@ export function NotesRow({
   const canShare = audience != null && audience.length > 0;
   const [shareNew, setShareNew] = useState(false);
   const [body, setBody] = useState('');
+  /* Set = the new note is a viewing on this Prague day and time. */
+  const [slot, setSlot] = useState<ViewingSlot | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Files waiting for the note to be saved, and what a drop or an upload could not take.
   const [staged, setStaged] = useState<File[]>([]);
@@ -217,7 +237,12 @@ export function NotesRow({
     staleTime: 30_000,
   });
 
-  const refreshNotes = () => qc.invalidateQueries({ queryKey: notesKey });
+  /* The Prohlídky tab reads the same notes. */
+  const refreshNotes = () =>
+    Promise.all([
+      qc.invalidateQueries({ queryKey: notesKey }),
+      qc.invalidateQueries({ queryKey: curationKeys.viewings }),
+    ]);
   /* Browse's note marks — never moved by a note written as the owner. */
   const refreshNoteCounts = () => {
     for (const queryKey of browseReads(actAs, [curationKeys.noteCounts])) void qc.invalidateQueries({ queryKey });
@@ -226,9 +251,11 @@ export function NotesRow({
   const create = useMutation({
     /* The note first, then its files one by one; a file that fails leaves the note saved and
      * is reported by name (drop it onto the note to try again). */
-    mutationFn: async ({ text, files }: { text: string; files: File[] }) => {
+    mutationFn: async ({ text, files, viewing_at }: { text: string; files: File[]; viewing_at: string | null }) => {
       const note = await createPropertyNote(
-        property_id, text, listing_id, shareNew && canShare, ...actOpts(actAs),
+        property_id,
+        { body: text, origin_listing_ref_id: listing_id, shared: shareNew && canShare, viewing_at },
+        ...actOpts(actAs),
       );
       const failed: string[] = [];
       for (const [i, file] of files.entries()) {
@@ -243,6 +270,7 @@ export function NotesRow({
     },
     onSuccess: (failed) => {
       setBody('');
+      setSlot(null);
       setShareNew(false);
       setStaged([]);
       setError(null);
@@ -267,13 +295,17 @@ export function NotesRow({
   const composerDrop = useFileDrop(stage);
   useStrayFileDropGuard();
 
-  const notes = notesQ.data?.data ?? [];
+  const notes = notesQ.data?.data ?? NO_NOTES;
   const failed = readFailed(notesQ);
   const trimmed = body.trim();
-  const canSave = (trimmed.length > 0 || staged.length > 0) && !create.isPending;
+  /* A viewing needs a whole date and time and nothing else; a note, text or files. */
+  const canSave =
+    (slot ? slotIsComplete(slot) : trimmed.length > 0 || staged.length > 0) && !create.isPending;
   /* The composer reads as one line until it is used; then its tools appear. */
-  const expanded = alwaysOpen || opened || body.length > 0 || staged.length > 0 || create.isPending;
-  const shown = showAll ? notes : notes.slice(0, NOTES_SHOWN);
+  const expanded =
+    alwaysOpen || opened || body.length > 0 || staged.length > 0 || slot != null || create.isPending;
+  const ordered = useMemo(() => sectionOrder(notes), [notes]);
+  const shown = showAll ? ordered : ordered.slice(0, NOTES_SHOWN);
 
   return (
     <section aria-labelledby={notesLabelId} className="relative" {...composerDrop.handlers}>
@@ -284,7 +316,23 @@ export function NotesRow({
             {failed ? '(—)' : `(${notes.length})`}
           </span>
         </h2>
-        {aside}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          {/* The desktop composer is one line until used: the viewing is one click from the heading. */}
+          {!alwaysOpen && slot == null && (
+            <button
+              type="button"
+              onClick={() => {
+                setSlot(defaultSlot());
+                setOpened(true);
+              }}
+              className={QUIET}
+            >
+              <CalendarIcon className="h-3.5 w-3.5" />
+              <span>Naplánovat prohlídku</span>
+            </button>
+          )}
+          {aside}
+        </div>
       </div>
 
       <form
@@ -292,8 +340,10 @@ export function NotesRow({
           e.preventDefault();
           if (!canSave) return;
           // A files-only note still needs a body (1-4000 chars); its file names say what it holds.
-          const text = trimmed || `Přílohy: ${staged.map((f) => f.name).join(', ')}`.slice(0, BODY_MAX);
-          create.mutate({ text, files: staged });
+          // A viewing's date says what it is: its text may stay empty.
+          const text =
+            trimmed || (slot ? '' : `Přílohy: ${staged.map((f) => f.name).join(', ')}`.slice(0, BODY_MAX));
+          create.mutate({ text, files: staged, viewing_at: slot ? slotInstant(slot) : null });
         }}
         onFocus={() => setOpened(true)}
         className={[
@@ -301,6 +351,11 @@ export function NotesRow({
           expanded ? 'border-[var(--color-copper)]/50' : 'border-[var(--color-rule-strong)] hover:border-[var(--color-copper)]/50',
         ].join(' ')}
       >
+        {slot && (
+          <div className="border-b border-[var(--color-rule-soft)] px-3.5 py-2.5">
+            <ViewingFields slot={slot} onChange={setSlot} disabled={create.isPending} />
+          </div>
+        )}
         <textarea
           aria-labelledby={notesLabelId}
           value={body}
@@ -311,7 +366,11 @@ export function NotesRow({
             e.preventDefault();
             stage(files);
           }}
-          placeholder="Napište poznámku… soubory sem přetáhněte nebo vložte"
+          placeholder={
+            slot
+              ? 'Co na prohlídce ověřit, kontakt na makléře… (nepovinné)'
+              : 'Napište poznámku… soubory sem přetáhněte nebo vložte'
+          }
           rows={expanded ? 3 : 1}
           maxLength={BODY_MAX}
           className="block w-full resize-none bg-transparent px-3.5 py-2.5 text-sm leading-relaxed text-[var(--color-ink)] placeholder:text-[var(--color-ink-3)]"
@@ -334,6 +393,7 @@ export function NotesRow({
                   showText
                   disabled={create.isPending || staged.length >= NOTE_ATTACHMENT_MAX_FILES}
                 />
+                <ViewingToggle slot={slot} onChange={setSlot} disabled={create.isPending} className={QUIET} />
                 {canShare && (
                   <label className="flex cursor-pointer select-none items-center gap-2 px-2 text-[0.8rem] text-[var(--color-ink-2)]">
                     <input
@@ -361,6 +421,7 @@ export function NotesRow({
                     type="button"
                     onClick={() => {
                       setBody('');
+                      setSlot(null);
                       setStaged([]);
                       setShareNew(false);
                       setError(null);
@@ -377,7 +438,9 @@ export function NotesRow({
                     ? progress
                       ? `Nahrávám ${progress.done + 1} / ${progress.total}…`
                       : 'Ukládám…'
-                    : 'Uložit poznámku'}
+                    : slot
+                      ? 'Uložit prohlídku'
+                      : 'Uložit poznámku'}
                 </button>
               </div>
             </div>
@@ -403,8 +466,8 @@ export function NotesRow({
                   property_id={property_id}
                   note={n}
                   audience={audience}
-                  onSave={(text) =>
-                    updatePropertyNote(property_id, n.id, { body: text }, ...actOpts(actAs)).then(refreshNotes)
+                  onSave={(patch) =>
+                    updatePropertyNote(property_id, n.id, patch, ...actOpts(actAs)).then(refreshNotes)
                   }
                   onToggleShared={() =>
                     updatePropertyNote(property_id, n.id, { shared: !n.shared }, ...actOpts(actAs)).then(
@@ -445,7 +508,7 @@ function NoteRow({
   property_id: number;
   note: Note;
   audience: readonly string[] | null;
-  onSave: (body: string) => Promise<unknown>;
+  onSave: (patch: NotePatch) => Promise<unknown>;
   onToggleShared: () => Promise<unknown>;
   onDelete: () => Promise<unknown>;
   onFilesChanged: () => Promise<unknown>;
@@ -468,6 +531,15 @@ function NoteRow({
 
 const CARD = 'relative rounded-[var(--radius-md)] border px-3.5 py-3';
 
+/* What the editor sends: only what changed (viewing_at null drops the date). */
+type NotePatch = { body?: string; viewing_at?: string | null };
+
+const sameInstant = (a: string | null, b: string | null): boolean =>
+  a == null || b == null ? a === b : new Date(a).getTime() === new Date(b).getTime();
+
+const noteLabel = (prefix: string, note: Note): string =>
+  note.viewing_at ? `Prohlídka ${viewingWhen(note.viewing_at)}` : `${prefix} ${fmtAbsolute(note.created_at)}`;
+
 /* Another author's SHARED note (they marked it; a share put it in reach): read
  * only — no attach, edit, delete or drop zone, files open but carry no ×. A
  * neutral card one step down: it is not mine to work. */
@@ -477,13 +549,29 @@ function ForeignNoteRow({ property_id, note }: { property_id: number; note: Note
       className={`${CARD} border-[var(--color-rule)] bg-[var(--color-paper)]`}
       aria-label={`${WORDS.noteBy} ${note.owner_email} · ${fmtAbsolute(note.created_at)}`}
     >
-      <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-[var(--color-ink)]">{note.body}</p>
+      <NoteText note={note} />
       <NoteAttachmentList propertyId={property_id} attachments={note.attachments ?? []} uploading={[]} lang="cs" />
       <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
         <NoteMeta note={note} author={note.owner_email} />
         <span className="text-[0.72rem] text-[var(--color-ink-3)]">· jen ke čtení</span>
       </div>
     </article>
+  );
+}
+
+/* A note's text, under its viewing's leaf when it is one; a viewing may have none. */
+function NoteText({ note }: { note: Note }) {
+  return (
+    <>
+      {note.viewing_at && <ViewingHead iso={note.viewing_at} />}
+      {note.body && (
+        <p
+          className={`${note.viewing_at ? 'mt-2.5 ' : ''}whitespace-pre-wrap break-words text-sm leading-relaxed text-[var(--color-ink)]`}
+        >
+          {note.body}
+        </p>
+      )}
+    </>
   );
 }
 
@@ -526,13 +614,14 @@ function OwnNoteRow({
   property_id: number;
   note: Note;
   audience: readonly string[] | null;
-  onSave: (body: string) => Promise<unknown>;
+  onSave: (patch: NotePatch) => Promise<unknown>;
   onToggleShared: () => Promise<unknown>;
   onDelete: () => Promise<unknown>;
   onFilesChanged: () => Promise<unknown>;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(note.body);
+  const [draftSlot, setDraftSlot] = useState<ViewingSlot | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -566,6 +655,36 @@ function OwnNoteRow({
   const drop = useFileDrop((files) => void attach(files));
 
   const trimmed = draft.trim();
+  const openEditor = () => {
+    setDraft(note.body);
+    setDraftSlot(note.viewing_at ? viewingSlot(note.viewing_at) : null);
+    setEditing(true);
+  };
+  const closeEditor = () => {
+    setEditing(false);
+    setDraft(note.body);
+    setError(null);
+  };
+  /* Only what changed; a viewing may lose its text, a plain note never. */
+  const canSaveEdit = draftSlot ? slotIsComplete(draftSlot) : trimmed.length > 0;
+  const save = () => {
+    const patch: NotePatch = {};
+    if (trimmed !== note.body) patch.body = trimmed;
+    const at = draftSlot ? slotInstant(draftSlot) : null;
+    if (!sameInstant(at, note.viewing_at ?? null)) patch.viewing_at = at;
+    if (Object.keys(patch).length === 0) {
+      closeEditor();
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    onSave(patch)
+      .then(() => setEditing(false))
+      .catch((err: ApiError | Error) => setError(err.message || 'Poznámku se nepodařilo uložit'))
+      .finally(() => setBusy(false));
+  };
+  const ahead = note.viewing_at != null && isUpcoming(note.viewing_at);
+  const deleteQuestion = note.viewing_at ? 'Smazat prohlídku?' : 'Smazat poznámku?';
   const files = (
     <>
       <NoteAttachmentList
@@ -581,12 +700,17 @@ function OwnNoteRow({
 
   return (
     <article
-      className={`${CARD} ${editing ? 'border-[var(--color-copper)]/50' : 'border-[var(--color-rule)]'} bg-[var(--color-paper-3)]`}
-      aria-label={`${WORDS.noteFrom} ${fmtAbsolute(note.created_at)}`}
+      className={`${CARD} ${editing ? 'border-[var(--color-copper)]/50' : ahead ? 'border-[var(--color-copper)]/35' : 'border-[var(--color-rule)]'} bg-[var(--color-paper-3)]`}
+      aria-label={noteLabel(WORDS.noteFrom, note)}
       {...drop.handlers}
     >
       {editing ? (
         <>
+          {draftSlot && (
+            <div className="mb-2">
+              <ViewingFields slot={draftSlot} onChange={setDraftSlot} disabled={busy} />
+            </div>
+          )}
           <textarea
             aria-label="Upravit poznámku"
             value={draft}
@@ -597,41 +721,24 @@ function OwnNoteRow({
             className="block w-full resize-y rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-3 py-2 text-sm leading-relaxed text-[var(--color-ink)] focus:border-[var(--color-copper)]"
           />
           {files}
-          <div className="mt-2 flex items-center justify-between gap-3">
-            <span className="font-mono text-[0.72rem] tabular-nums text-[var(--color-ink-3)]">
-              {draft.length} / {BODY_MAX}
-            </span>
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => {
-                  setEditing(false);
-                  setDraft(note.body);
-                  setError(null);
-                }}
-                disabled={busy}
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-[0.72rem] tabular-nums text-[var(--color-ink-3)]">
+                {draft.length} / {BODY_MAX}
+              </span>
+              {/* Dropping the date of a viewing with no text would leave nothing: delete it instead. */}
+              <ViewingToggle
+                slot={draftSlot}
+                onChange={setDraftSlot}
+                disabled={busy || (draftSlot != null && trimmed.length === 0)}
                 className={QUIET}
-              >
+              />
+            </div>
+            <div className="flex items-center gap-1.5">
+              <button type="button" onClick={closeEditor} disabled={busy} className={QUIET}>
                 Zrušit
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (trimmed.length === 0 || trimmed === note.body) {
-                    setEditing(false);
-                    setDraft(note.body);
-                    return;
-                  }
-                  setBusy(true);
-                  setError(null);
-                  onSave(trimmed)
-                    .then(() => setEditing(false))
-                    .catch((err: ApiError | Error) => setError(err.message || 'Poznámku se nepodařilo uložit'))
-                    .finally(() => setBusy(false));
-                }}
-                disabled={busy || trimmed.length === 0}
-                className={PRIMARY}
-              >
+              <button type="button" onClick={save} disabled={busy || !canSaveEdit} className={PRIMARY}>
                 {busy ? 'Ukládám…' : 'Uložit'}
               </button>
             </div>
@@ -640,14 +747,14 @@ function OwnNoteRow({
         </>
       ) : (
         <>
-          <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-[var(--color-ink)]">{note.body}</p>
+          <NoteText note={note} />
           {files}
           {confirmingDelete ? (
             <div className="mt-2 flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] bg-[var(--color-brick-soft)] px-2.5 py-1.5">
               <span className="text-[0.8rem] text-[var(--color-brick)]">
                 {attachments.length > 0
-                  ? `Smazat poznámku? ${attachments.length === 1 ? 'Její soubor zůstane' : `Jejích ${attachments.length} souborů zůstane`} u nemovitosti.`
-                  : 'Smazat poznámku?'}
+                  ? `${deleteQuestion} ${attachments.length === 1 ? 'Její soubor zůstane' : `Jejích ${attachments.length} souborů zůstane`} u nemovitosti.`
+                  : deleteQuestion}
               </span>
               <button
                 type="button"
@@ -705,10 +812,7 @@ function OwnNoteRow({
                 />
                 <button
                   type="button"
-                  onClick={() => {
-                    setDraft(note.body);
-                    setEditing(true);
-                  }}
+                  onClick={openEditor}
                   aria-label="Upravit poznámku"
                   className={QUIET}
                 >

@@ -570,8 +570,11 @@ export interface Note {
   property_id: number;
   body: string;
   created_at: string;
-  /* Null until the author edits the body; marking shared is not an edit. */
+  /* Null until the author edits the body or the viewing date; marking shared is not an edit. */
   updated_at: string | null;
+  /* A viewing is a note with a date (migration 666): when its author sees the
+   * property in person; null on a plain note. Its body may then be empty. */
+  viewing_at?: string | null;
   /* The author's consent for the people they share this property with to read
    * it (migration 610); a foreign note is always shared. */
   shared: boolean;
@@ -1112,6 +1115,10 @@ export interface SavedDashboard {
   updated_at: string;
   owner_email: string | null;
   shared_with: CollectionShare[];
+  /* The caller's ONE dashboard the property page's "Okolí dashboard" tab draws (migration
+   * 664); always false on a dashboard shared with the caller. Optional while an API without
+   * it may answer (a deploy skew reads as "none"). */
+  property_card?: boolean;
 }
 
 export type NotificationSourceKind =
@@ -1218,13 +1225,15 @@ export type WatchdogSeenFilter = 'all' | 'seen' | 'unseen';
 export interface PropertySource {
   property_id: number;
   /* The child listing's SURROGATE id (property_sources_public.id = listings.id,
-   * migration 334). NEVER null — per-advert loaders key on it, never on
-   * sreality_id, which a post-Gate-2 non-sreality row may not have. */
+   * migration 334). NEVER null — per-advert loaders key on it. */
   id: number;
-  sreality_id: number;
   source: string;
   source_url: string | null;
-  source_id_native: string | null;
+  /* The portal's own id for the ad (GLOSSARY "Portal id"); NOT NULL since migration 314. */
+  source_id_native: string;
+  /* The AD REFERENCE (GLOSSARY): the number the ad prints for callers, verbatim; null
+   * when it prints none (migration 667). Never replaced by another number. */
+  ad_reference: string | null;
   is_active: boolean;
   price_czk: number | null;
   first_seen_at: string;

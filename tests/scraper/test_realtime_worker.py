@@ -1300,14 +1300,14 @@ def test_maintenance_lane_registered_and_live_by_default():
 
 def test_maintenance_pass_records_counters(monkeypatch):
     def fake_sync() -> dict[str, Any]:
-        return {"skipped": False, "attached": 7, "recomputed": 12}
+        return {"skipped": False, "attached": 7, "recomputed": 12, "settled": 3}
 
     monkeypatch.setattr(rw, "_maintenance_sync", fake_sync)
     state = rw._new_state()
     asyncio.run(rw._maintenance_pass(asyncio.Event(), state))
     lane = state["lanes"]["maintenance"]
     assert lane["passes"] == 1
-    assert lane["last"] == {"skipped": False, "attached": 7, "recomputed": 12}
+    assert lane["last"] == {"skipped": False, "attached": 7, "recomputed": 12, "settled": 3}
 
 
 def test_maintenance_pass_records_lock_skip(monkeypatch):
@@ -1315,7 +1315,7 @@ def test_maintenance_pass_records_lock_skip(monkeypatch):
     # sweep holds the advisory lock — the lane records the skip and moves on.
     monkeypatch.setattr(
         rw, "_maintenance_sync",
-        lambda: {"skipped": True, "attached": 0, "recomputed": 0})
+        lambda: {"skipped": True, "attached": 0, "recomputed": 0, "settled": 0})
     state = rw._new_state()
     asyncio.run(rw._maintenance_pass(asyncio.Event(), state))
     assert state["lanes"]["maintenance"]["last"]["skipped"] is True
@@ -2196,7 +2196,7 @@ def _refetch_row(source: str, nid: str, total: int = 3, **over: Any) -> dict[str
 
 def _patch_refetch(
     monkeypatch: pytest.MonkeyPatch,
-    rows: list[dict[str, Any]] | None,
+    rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Stub the two db entry points the lane touches and capture their calls."""
     captured: dict[str, Any] = {"enqueued": [], "kwargs": {}}
@@ -2210,7 +2210,7 @@ def _patch_refetch(
 
     conn = _Conn()
 
-    def fake_candidates(c: Any, **kwargs: Any) -> list[dict[str, Any]] | None:
+    def fake_candidates(c: Any, **kwargs: Any) -> list[dict[str, Any]]:
         captured["conn"] = c
         captured["kwargs"] = kwargs
         return rows
@@ -2222,7 +2222,6 @@ def _patch_refetch(
     monkeypatch.setattr(rw.db, "connect", lambda *a, **k: conn)
     monkeypatch.setattr(rw.db, "location_refetch_candidates", fake_candidates)
     monkeypatch.setattr(rw.db, "enqueue_location_refetch", fake_enqueue)
-    monkeypatch.setattr(rw, "_LOCATION_REFETCH_VIEW_WARNED", False)
     captured["conn_obj"] = conn
     return captured
 
@@ -2283,21 +2282,6 @@ def test_location_refetch_tick_queues_every_portal_at_verify_priority(
         "candidates": 2, "queued": 2, "backlog": 63}
     assert out["sources"]["realitymix"]["backlog"] == 112
     assert captured["conn_obj"].closed is True
-
-
-def test_location_refetch_tick_skips_when_the_audit_view_is_missing(
-        monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    captured = _patch_refetch(monkeypatch, None)
-
-    with caplog.at_level(logging.WARNING, logger="scraper.realtime_worker"):
-        first = rw._location_refetch_sync()
-        second = rw._location_refetch_sync()
-
-    assert first["ran"] is False and first["reason"] == "audit_view_missing"
-    assert second["ran"] is False
-    assert captured["enqueued"] == [], "nothing is queued without the audit set"
-    # Once per process, not once a tick.
-    assert sum("location_pin_audit_mv is absent" in r.message for r in caplog.records) == 1
 
 
 def test_location_refetch_pass_records_the_heartbeat_shape(

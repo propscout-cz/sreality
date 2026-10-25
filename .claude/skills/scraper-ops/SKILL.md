@@ -12,8 +12,8 @@ test / log helpers: `scripts/test-summary.sh` and `scripts/logs.sh <run-id> [pat
 
 ## Adding a new scraper field without breaking existing data
 
-1. Add the column with a new numbered migration (`alter table listings add column ...`). Never
-   touch `001_initial.sql`.
+1. Add the column with a new numbered migration (`alter table listings add column ...`). Never touch `001_initial.sql`.
+   Content that is no column is hash-only (`locality`; `price_native`, a page's own foreign-currency price, hashed IN PLACE OF `price_czk` so the portal's daily FX re-conversion never snapshots).
 2. Declare the cell in `scraper/attribute_contract.py` for EVERY portal (producer, source-key
    precedence, absence semantics, sentinels) and read it in the parser through `source_value` /
    `source_label`; a label→value mapping belongs in `scraper/vocabulary.py`, never in the parser.
@@ -22,9 +22,9 @@ test / log helpers: `scripts/test-summary.sh` and `scripts/logs.sh <run-id> [pat
    for crawler portals, `scraped_listing._LISTING_FIELDS`. Whether a parser NULL erases is decided per
    (source, column) by the producer from step 2 (`text`/`none` preserve, `structured`/`derived` clear);
    `_PRESERVE_IF_NULL_COLUMNS` is the GLOBAL identity pair (`published_at`, `source_url`) and must not grow.
-4. Backfill old rows from NARROW typed columns via a `scripts/backfill_*.py` dispatch job (never a
-   `raw_json` pass — ~62 KB/row detoast); NULL is acceptable for a nullable column. The new cell reaches
-   the `parsing` alarm's fill arm only once the OPERATOR re-blesses (`--bless` needs the prod DB).
+4. Heal old rows through the ONE re-parse seam, `reparse.yml` (`source=<portal> fields=<col>`, dry run
+   first, `--missing` to resume; `--allow-snapshot-deferral` only for a HASHED column — `ad_reference` is not).
+   The new cell reaches the `parsing` alarm's fill arm only once the OPERATOR re-blesses (`--bless`, prod DB).
 
 ## Refreshing portal HTML fixtures
 
@@ -98,8 +98,8 @@ held by `tests/test_scrape_lane_r2_env.py`; MISSING when the path was first call
 INVISIBLE: the append warns `payload archive needs R2 for …` and archives nothing while the scrape
 stays green. Railway's worker: own dashboard. Over `LOCATION_PAYLOAD_R2_THRESHOLD_BYTES` (2048,
 TOAST) compressed spills to `body_r2_key` — every portal but bezrealitky, whose small bodies archive
-inline. Knobs: `LOCATION_PAYLOAD_VERSION_CAP` (2), `LOCATION_PAYLOAD_MIN_APPEND_INTERVAL_DAYS` (7,
-per-listing time floor; 0 disables), `LOCATION_PAYLOAD_STATS_EVERY` (200).
+inline. Every changed body appends (no time floor since 2026-10-22: the claim lane mines the latest).
+Knobs: `LOCATION_PAYLOAD_VERSION_CAP` (2), `LOCATION_PAYLOAD_STATS_EVERY` (200).
 
 Verify with `select source, page_kind, count(*), max(version_seq) from portal_raw_payloads group by 1,2;`
 — append-on-CHANGE, so an unchanged refetch must add no row; `detail` is the only kind you will see.
@@ -320,7 +320,7 @@ Per-lane notes:
 - **Property-maintenance lane**, every 30 s (PR #716) — `run_incremental_pass` against `dirty_properties`
   (rule #20), far more often than the 5-min GH cron; serialized with it + the daily sweep by the lease-row
   CAS (PR #717): **never a session advisory lock on a pooled connection** — the first cut stranded. Each drain
-  slice = ONE `properties_changed` txn (recompute, Browse patch, `dirty_broker_listings` mirror), as merge/detach run inline.
+  slice = ONE `properties_changed` txn (recompute, Browse patch, `dirty_broker_listings` mirror), as merge/detach run inline; then `_settle_fresh` stamps `settled_at` (rule 16, mig 668) on properties under 6 h old the pipeline is done with — the stamp commits alone, then `sync_browse_list` patches their Browse rows, best-effort (`settled` in the log + heartbeat; its error warns, never fails the pass).
 - **Broker-maintenance lane** (Broker Unify W3) — same cadence; `scripts.resolve_brokers.
   run_incremental_pass` (`broker_resolution.yml` runs the SAME driver as backstop): drain until empty,
   recompute affected brokers (one merged statement), republish `broker_region_type_stats` via the
@@ -356,14 +356,14 @@ Per-lane notes:
   warn once, JSON only. Heartbeat `details.location_intake_fast.last` = `{listings,
   claims_inserted, enqueued, bodies_mined, bodies_complete, seconds, cursor, bodies_cursor}`.
 - **Location-refetch lane** (W8) — once a day (`LOCATION_REFETCH_INTERVAL_S` 86400, first tick 5 min
-  after start; `LOCATION_REFETCH_ENABLED=0` idles) queue the audit page's active "no data" rows
-  (`location_pin_audit_mv` `state='unresolved'`+`quality='active_no_claims'`, joined to `listings` by
-  PK) whose newest stored page/payload is older than `LOCATION_REFETCH_MIN_AGE_S` (6 h) into
+  after start; `LOCATION_REFETCH_ENABLED=0` idles) queue the active ads rule 25 calls town-less
+  (`location_steps.town_missing_sql()`, the town-coverage check's fragment, verbatim in `db.py`)
+  whose newest stored page/payload is older than `LOCATION_REFETCH_MIN_AGE_S` (6 h) into
   `listing_detail_queue` at VERIFY, ≤`LOCATION_REFETCH_CAP_PER_SOURCE` (500)/portal/tick,
   oldest-fetched first. ceskereality/realitymix geocode AFTER publishing; the drain + intake lane do
   the rest, and a bazos dead ad delists on the same fetch. Heartbeat
   `details.location_refetch.last` = `{candidates, queued, sources:{src:{candidates,queued,backlog}},
-  min_age_s, cap, seconds}`; no audit view = skip + one warning.
+  min_age_s, cap, seconds}`.
 - **Sold-comps lane** (sold-comps W2, migration 544) — registered sales from reas.cz (an external FACT
   feed, NOT a tenth portal) for ≤5 obec cells a pass: towns where the deal pipeline holds a live card AND
   the obec has an `admin_boundaries` polygon (an unboxable cell writes no ledger row, so it would sit at
@@ -383,8 +383,8 @@ Per-lane notes:
   Needs `OPENAI_API_KEY`; a pass the provider stopped (`last.fatal`: credit, quota, key) is a FAILED pass (`failed_passes`, `failing_since`, `last_error`, same interval; `aborted` with no `fatal` = its own $/time ceiling, not a failure); rails = the `text_extraction` gauge (new ads' flow, the backlog's ETA), the `jobs` check's `lane/text_extract` cell and, for a provider stop, the `llm` credit cell. Sizing, cache key, write gate: `llm-pipelines`.
 - **Notifications lane** (notifications push W2a, `docs/design/notifications-push/PROGRAM.md` § 3.3) — the three producers of
   `api/notifications` on ONE clock: CONSTANT 300 s, no flag/setting/env var (the brake is a deploy). Steps `watchdog_new` (`match_once`:
-  a live watchdog's matches first seen in the last 24 h and after its `active_since` (create, switch-on, filter edit), images-first
-  gated; no cursor), `price` (`match_changes_once`: one canonical-ad step fragment, 7 days, watchdogs + monitored collections) and
+  a live watchdog's published matches first seen in the last 24 h and visible since after its `active_since` (create, switch-on,
+  filter edit; the publication rule, rule 16); no cursor), `price` (`match_changes_once`: one canonical-ad step fragment, 7 days, watchdogs + monitored collections) and
   `monitor` (inactive after 24 h gone, reactivated, new_source), each on its own connection, committing per statement (one watchdog's
   INSERT, one detector; `SET LOCAL statement_timeout` 120 s; the notification-events lock SHARED first, so a merge waits one statement
   at most and never deadlocks, architecture § rule 16). Why steps: a step that raises or has a

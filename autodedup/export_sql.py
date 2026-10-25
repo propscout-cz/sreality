@@ -57,6 +57,17 @@ ATTR_COLUMNS: tuple[str, ...] = (
     "published_at",
 )
 
+# LISTING_COLUMNS the artifact deliberately does NOT carry, with the reason. `attrs` is
+# hashed into `decision_digest` (autodedup/incremental.py), so a column that joins it moves
+# every stored decision's digest and re-opens the rt generation's pairs; a column enters
+# here, not `attrs`, until the engine is ruled to read it.
+UNEXPORTED_COLUMNS: tuple[str, ...] = (
+    # The advertiser's own offer number (migration 667, 2026-10-23). The engine still mines
+    # codes from the description (`autodedup.text_facts.reference_codes`); reading the
+    # structured column instead is a ruling for the autodedup track, not an export change.
+    "ad_reference",
+)
+
 # Selected, never exported: the two hash inputs behind `broker_key` (E28).
 BROKER_HASH_INPUT_COLUMNS: tuple[str, ...] = ("broker_phone", "broker_email")
 

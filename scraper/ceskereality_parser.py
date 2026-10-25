@@ -37,6 +37,7 @@ from selectolax.parser import HTMLParser, Node
 from scraper import street, vocabulary
 from scraper.area import PortalAreas, derive_headline_area, parse_area_text
 from scraper.attribute_contract import floor_convention, source_value, source_values
+from scraper.ceskereality_client import detail_url
 from scraper.floor import floor_from_portal
 from scraper.portal_identity import native_id
 from scraper.price_text import is_per_area_price
@@ -130,13 +131,27 @@ def _in_cz_bbox(lat: float, lon: float) -> bool:
 
 def category_from_url(url: str) -> tuple[str | None, str | None]:
     """Derive (category_main, category_type) from a detail URL's path,
-    /{sale}/{category}/… — the detail-drain recovers a listing's category from
-    its own URL since the shared queue doesn't carry it."""
+    /{sale}/{category}/… — the shared queue doesn't carry a category, so
+    `parse_detail` reads it off the page's own URL (`_page_url`)."""
     path = re.sub(r"^https?://[^/]+", "", url or "")
     m = _PATH_RE.match(path)
     if not m:
         return None, None
     return CATEGORY_MAIN.get(m.group(2)), SALE_TYPE.get(m.group(1))
+
+
+def _page_url(tree: HTMLParser, requested: str) -> str:
+    """The ad's own URL: its canonical path on the www host, else the URL we requested."""
+    # A re-categorised ad keeps answering 200 at its old URL with the new page (3639104:
+    # /prodej/komercni-prostory/… serves /prodej/byty/…), so only the canonical names its
+    # category; the canonical's host is regional on every page and says nothing.
+    node = tree.css_first('link[rel="canonical"]')
+    path = re.sub(r"^https?://[^/]+", "", (node.attributes.get("href") if node else None) or "")
+    if not _PATH_RE.match(path):
+        return requested
+    url = detail_url(path)
+    own_id = native_id(SOURCE, requested)
+    return url if own_id is not None and native_id(SOURCE, url) == own_id else requested
 
 
 def index_price(text: str | None) -> int | None:
@@ -476,17 +491,11 @@ def areas_from_params(
     )
 
 
-def parse_detail(
-    html: str,
-    *,
-    source_url: str,
-    category_main: str | None = None,
-    category_type: str | None = None,
-) -> ScrapedListing:
-    """The listing on a detail page; its category is its URL's unless the caller passes one."""
-    url_main, url_type = category_from_url(source_url)
-    category_main, category_type = category_main or url_main, category_type or url_type
+def parse_detail(html: str, *, source_url: str) -> ScrapedListing:
+    """The listing on a detail page; its category and `source_url` are the page's own URL's."""
     tree = HTMLParser(html)
+    source_url = _page_url(tree, source_url)
+    category_main, category_type = category_from_url(source_url)
     source_id = native_id(SOURCE, source_url) or ""
     ld = _jsonld_product(html)
     offers = ld.get("offers") if isinstance(ld.get("offers"), dict) else {}
@@ -560,6 +569,7 @@ def parse_detail(
         source=SOURCE,
         source_id_native=source_id,
         source_url=source_url,
+        ad_reference=vocabulary.reference(read("ad_reference")),
         category_main=category_main,
         category_type=category_type,
         price_czk=price_czk,

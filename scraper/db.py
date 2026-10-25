@@ -89,6 +89,10 @@ LISTING_COLUMNS: tuple[str, ...] = (
     # assembles it in scraper.sreality_url) — a stored fact read everywhere and
     # reconstructed nowhere. Out of every content hash (identity, not content).
     "source_url",
+    # The advertiser's own number for the offer, as the ad prints it (migration 667) —
+    # the attribute contract's `ad_reference` cell. Out of the content hash like the two
+    # identity columns above: a reference names the offer, it is not the offer's content.
+    "ad_reference",
 )
 
 # Postgres type for each LISTING_COLUMN: the jsonb_to_recordset column spec of
@@ -124,6 +128,7 @@ _LISTING_COLUMN_PGTYPE: dict[str, str] = {
     "description": "text",
     "published_at": "timestamptz",
     "source_url": "text",
+    "ad_reference": "text",
 }
 assert set(_LISTING_COLUMN_PGTYPE) == set(LISTING_COLUMNS), (
     "_LISTING_COLUMN_PGTYPE drifted from LISTING_COLUMNS"
@@ -2110,35 +2115,29 @@ def latest_completion_outcome(conn: psycopg.Connection, source: str, native_id: 
 # carries "Zlín, ulice Mlýnská" and coordinates. The claim lane mines PAGES, so
 # the fix is a second fetch, not a contract change.
 #
-# The audit relation IS the list — `location_pin_audit_mv` state='unresolved' +
-# quality='active_no_claims' is exactly "live, the resolver has spoken, and no
-# admissible evidence was ever found" — so this asks it rather than
-# re-deriving the set. `listings` is joined by primary key for the row's LIVE
-# source_url / price / is_active, because the matview is an hourly snapshot and
-# a re-fetch must not be aimed by a stale URL.
-_LOCATION_REFETCH_AUDIT_MV = "location_pin_audit_mv"
-
+# The set is rule 25's invariant, broken: an active ad that is not determined
+# foreign and has no town. `location_steps.town_missing_sql()` is carried
+# VERBATIM: importing it here is a cycle (location_steps -> claims_common ->
+# loader_db -> scraper.db); the vocabulary rail
+# (tests/test_location_steps_vocabulary.py) pins the two. It is the set the
+# `location_town_coverage` check judges, so an ad holding only a kraj or okres
+# claim, or one no property represents, gets its second look too.
+#
 # "Old enough to be worth another look." A listing fetched minutes ago would
 # only be re-read at the same empty moment; six hours is well past the portals'
 # geocoding lag and it means a row discovered today gets its second look on
 # tomorrow's tick rather than in a fortnight.
 _LOCATION_REFETCH_CANDIDATES_SQL = """
-WITH audit AS (
-    SELECT a.listing_id
-    FROM location_pin_audit_mv a
-    WHERE a.state = 'unresolved'
-      AND a.is_active
-      AND a.quality = 'active_no_claims'
-),
-cand AS (
+WITH cand AS (
     SELECT l.source,
            l.source_id_native,
            l.source_url,
            l.price_czk,
            GREATEST(COALESCE(pg.fetched_at, '-infinity'::timestamptz),
                     COALESCE(pl.observed_at, '-infinity'::timestamptz)) AS last_fetch_at
-    FROM audit a
-    JOIN listings l ON l.id = a.listing_id
+    FROM listings l
+    LEFT JOIN listing_location ll ON ll.listing_id = l.id
+    LEFT JOIN location_granularity_rank gr ON gr.granularity = ll.granularity
     LEFT JOIN LATERAL (
         SELECT max(p.fetched_at) AS fetched_at
         FROM portal_raw_pages p
@@ -2151,6 +2150,9 @@ cand AS (
     ) pl ON true
     WHERE l.is_active
       AND l.source_id_native IS NOT NULL
+      AND not coalesce((ll.country_status = 'foreign'), false)
+      and not coalesce((ll.obec_kod is not null and gr.rank >= (SELECT r.rank
+          FROM location_granularity_rank r WHERE r.granularity = 'obec')), false)
 ),
 old AS (
     SELECT c.*,
@@ -2172,24 +2174,11 @@ def location_refetch_candidates(
     *,
     min_age_seconds: int,
     cap_per_source: int,
-) -> list[dict[str, Any]] | None:
-    """Listings whose page carried no location and whose page is old enough to
-    re-read, oldest-fetched first, at most `cap_per_source` per portal.
-
-    None (not an empty list) when the audit matview is absent: a caller must be
-    able to tell "nothing to do" from "this database cannot answer", and on a
-    branch database without the location relations the lane skips instead of
-    raising every tick. `source_total` carries the UNCAPPED per-portal backlog,
-    so a capped tick still says how much is left for tomorrow.
-    """
+) -> list[dict[str, Any]]:
+    """Active ads with no town whose page is old enough to re-read, oldest-fetched
+    first, at most `cap_per_source` per portal. `source_total` carries the UNCAPPED
+    per-portal backlog, so a capped tick still says how much is left for tomorrow."""
     with conn.cursor() as cur:
-        cur.execute(
-            "SELECT to_regclass(%s) IS NOT NULL",
-            (f"public.{_LOCATION_REFETCH_AUDIT_MV}",),
-        )
-        row = cur.fetchone()
-        if not row or not row[0]:
-            return None
         cur.execute(
             _LOCATION_REFETCH_CANDIDATES_SQL,
             {"min_age": float(min_age_seconds), "cap": int(cap_per_source)},

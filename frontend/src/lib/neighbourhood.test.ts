@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_FILTERS, effectiveBbox } from './filters';
-import { DEFAULT_SCOPE, isMarketTemplate, neighbourhoodFilters } from './neighbourhood';
+import { DEFAULT_SCOPE, isPropertyCard, neighbourhoodFilters } from './neighbourhood';
 import { marketSample } from './stats';
 
 const FLAT = {
@@ -60,10 +60,12 @@ describe('neighbourhoodFilters — one neighbourhood for the tile and the explor
   });
 });
 
-describe('isMarketTemplate', () => {
-  it('is the account\'s own dashboard named Trh v okolí, never a shared one', () => {
-    expect(isMarketTemplate({ name: 'Trh v okolí', owner_email: null })).toBe(true);
-    expect(isMarketTemplate({ name: 'Trh v okolí', owner_email: 'jana@example.com' })).toBe(false);
-    expect(isMarketTemplate({ name: 'Trh v okolí (kopie)', owner_email: null })).toBe(false);
+describe('isPropertyCard', () => {
+  it('is the account\'s own dashboard marked for the property page, whatever its name; never a shared one', () => {
+    expect(isPropertyCard({ owner_email: null, property_card: true })).toBe(true);
+    expect(isPropertyCard({ owner_email: 'jana@example.com', property_card: true })).toBe(false);
+    expect(isPropertyCard({ owner_email: null, property_card: false })).toBe(false);
+    // An API from before migration 664 sends no flag: no card, never a crash.
+    expect(isPropertyCard({ owner_email: null })).toBe(false);
   });
 });

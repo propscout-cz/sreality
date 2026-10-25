@@ -164,14 +164,19 @@ Dashboards (`api/routes/stats_dashboards.py`, mounted like the presets router):
   dashboard is loaded, lives in the URL (`market=sold|all`, replace; `lib/statsMarket` keeps the name and guard
   out of the first-visit bundle) and is never stored with a dashboard; Browse's own filter, the dirty check and
   "Uložit změny" never see it.
-- **The property card's dashboard** (operator ask 2026-10-23): the account's OWN dashboard named exactly
-  "Trh v okolí" (`lib/neighbourhood.MARKET_TEMPLATE_NAME`, `isMarketTemplate`; the first such by position; a
-  shared one never counts) is drawn by the property page's "Trh v okolí" tile over that property's neighbourhood.
-  Its chip's suffix says "karta nemovitosti"; while the account has none, the bar leads with
-  "+ Trh v okolí · karta nemovitosti", which saves the working board under that name (no filter) and activates
-  it. It is edited like any dashboard (load, edit, "Uložit změny"); a filter stored with it is ignored by the
-  tile, whose sample is `lib/neighbourhood`'s. Renaming it un-makes it the template. No schema: a name, not a
-  flag (ruled 2026-10-23: one reserved dashboard).
+- **The property page's "Okolí dashboard"** (operator asks 2026-10-23; migration 664): ONE own dashboard per
+  account, under ANY name, is drawn by the property page's "Okolí dashboard" tab over that property's
+  neighbourhood (`lib/neighbourhood`). It is a row flag, `stats_dashboards.property_card`: a partial unique index
+  keeps one per account, and a CHECK keeps it named and filterless (the tab builds its own sample, and a stored
+  filter would replace it when the explore window loads the dashboard). The API projects the flag as the
+  caller's own only and moves it with `PUT /stats/dashboards/{id}/property-card` (one transaction: the previous
+  one lets go, this one takes it and drops its filter; a shared or unknown id is a 404); a generic PUT that
+  tries to give it a filter is a 422 (`SavedSetKind.refusals`). In the bar: its chip's suffix says
+  "okolí dashboard"; the save dialog greys "Uložit i nastavení filtru" out for it, saying why; any other own
+  dashboard's menu offers "Použít jako okolí dashboard" (asking first when it carries a filter); while the
+  account has none, the bar leads with "+ Okolí dashboard", which saves the working board and marks it. It is
+  edited like any dashboard (load, edit, "Uložit změny"), renamed freely, and deleting it leaves none.
+  #1977's first cut found it by the name "Trh v okolí"; 664 marked that row.
 - **Every Stats tab is the same tab** (operator ask 2026-10-22): the explore modals show the dashboard bar and the
   lens exactly as the Browse page does — one component, no `presetBar` gate; the modals' memory view state holds
   the active dashboard and the lens as the URL does, and "Go to Browse" carries both (`dashboard`, `market`).

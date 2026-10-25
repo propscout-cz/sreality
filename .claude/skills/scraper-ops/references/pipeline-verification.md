@@ -230,7 +230,7 @@ the run that stops naming it. Boolean cells never written `false` are reported t
 whether silence means `false` or `unknown` is an absence
 semantics the contract declares, so there is nothing yet to be right or wrong against.
 
-**Who owns which field.** The fill arm owns the 26 `LISTING_COLUMNS` attributes. `data_quality_by_source`'s
+**Who owns which field.** The fill arm owns the 27 `LISTING_COLUMNS` attributes. `data_quality_by_source`'s
 seven probes with no attribute column (`geom`, `locality`, `street`, `property_grouped`, `source_url`, the
 two condition levels) froze with its capture in Health dashboard sprint wave 6 (migration 633 unscheduled
 `capture-data-quality`; wave 9 drops the view): a portal link is the `data_quality` gauge's `url/<portal>`
@@ -1115,8 +1115,8 @@ page's SQL checks on the same questions keep rendering until wave 9.
 | --- | --- | --- | --- |
 | `<portal>/ingest` | age (from `enqueued_at`) of the oldest NEW-priority queue row, claimed or not, not given up, with no listings row for `(source, native_id)` — so `refresh_stale_image_urls`' known ads at that priority do not count | above 3 h (`publishing_queue_warn_h`) | above 6 h (`publishing_queue_fail_h`) |
 | `<portal>/changes` | the same for the oldest CHANGED or FAILURE row, not given up | above 3 h | above 6 h |
-| `<portal>/visible` | of active ads first written 30 min-24 h ago, the share whose property is not in `browse_list`, judged on its Wilson lower bound, split by the stage that blocks it: no property (`property_id` NULL), property not active (`status <> 'active'`), location not served (the property's canonical ad fails the consumer rule, `claims_common.served_location_predicate`, re-keyed onto that ad as `browse_projection` judges it), else not yet in `browse_list`; a property born after the newest successful rebuild started (`derived_artifacts.last_succeeded_at` of `browse_list`), or whose canonical ad's location was resolved or re-resolved after it (`listing_location.resolved_at`, rewritten on every re-resolve: the resolver never patches `browse_list`), is shown as waiting for the next rebuild, a fact, not a blocker | above 2 % (`publishing_visible_warn`) | above 10 % (`publishing_visible_fail`) |
-| `<portal>/stock`, `fleet/stock` | of properties with `status = 'active' AND is_active`, the share missing from `browse_list`, by the same stages; a portal cell counts the properties with an active ad on that portal (counted from listings' `source`, `is_active` and `property_id` columns), the fleet cell all of them | above 0.1 % (`publishing_stock_warn`) | Wilson lower bound above 1 % (`publishing_stock_fail`) |
+| `<portal>/visible` | of active ads first written 30 min-24 h ago, the share whose property is not in `browse_list`, judged on its Wilson lower bound, split by the stage that blocks it: no property (`property_id` NULL), property not active (`status <> 'active'`), location not served (the property's canonical ad fails the consumer rule, `claims_common.served_location_predicate`, re-keyed onto that ad as `browse_projection` judges it), else not yet in `browse_list`; a property the publication rule had not published when the newest successful rebuild started (`derived_artifacts.last_succeeded_at` of `browse_list`; rule 16, `toolkit/publication.py`: neither settled nor 6 h old at that start) is shown as not yet published, expected like the rebuild wait, never a blocker; else a property born after that start, or whose canonical ad's location was resolved or re-resolved after it (`listing_location.resolved_at`, rewritten on every re-resolve: the resolver never patches `browse_list`), is shown as waiting for the next rebuild, a fact, not a blocker | above 2 % (`publishing_visible_warn`) | above 10 % (`publishing_visible_fail`) |
+| `<portal>/stock`, `fleet/stock` | of properties with `status = 'active' AND is_active`, the share missing from `browse_list`, by the same stages (not yet published and waiting for the next rebuild included: expected, never a blocker); a portal cell counts the properties with an active ad on that portal (counted from listings' `source`, `is_active` and `property_id` columns), the fleet cell all of them | above 0.1 % (`publishing_stock_warn`) | Wilson lower bound above 1 % (`publishing_stock_fail`) |
 | `<portal>/photos` | of the photos of ads first written 1-24 h ago, excluding `unavailable_reason = 'listing_taken_down'`: not stored (`storage_path IS NULL`: pending, throttled, given up, `source_unavailable`, `not_an_image`), judged on its Wilson lower bound; and narrow, `stored_width` under 600 px (`publishing_photos_min_px`) among stored photos with a width | not stored above 2 % (`publishing_photos_unstored_warn`); narrow above 10 % (`publishing_photos_narrow_warn`) | not stored above 10 % (`publishing_photos_unstored_fail`); narrow above 50 % (`publishing_photos_narrow_fail`) |
 | `fleet/dirty` | age of the oldest `dirty_properties.marked_at` | above 4 h (`publishing_dirty_warn_h`) | above 8 h (`publishing_dirty_fail_h`) |
 
@@ -1148,8 +1148,8 @@ the guard the deleted `test_property_dirty_warn_clears_a_full_length_sweep` used
 
 Known limits: `listing_taken_down` can only be set for sreality, so a crawler ad made inactive
 within 24 h leaves photos pending or `source_unavailable`, which count as not stored; a failed
-`browse_list` rebuild only grows the "waiting for the next rebuild" fact on visible and stock, never
-a blocker, so it is told once, by the `jobs` check's `artifact/browse_list` cell; narrow's floor is
+`browse_list` rebuild only grows the "waiting for the next rebuild" and "not yet published" facts on
+visible and stock (both judged at the newest rebuild's start), never a blocker, so it is told once, by the `jobs` check's `artifact/browse_list` cell; narrow's floor is
 an absolute 600 px, so a downgrade that stays above it (the one on record, the 749 px CROPPED frames
 `docs/architecture.md` describes under Photos) reads 0 % narrow (owed: judge the stored width
 against the declared source width); a change's age can include time its row spent at VERIFY, because

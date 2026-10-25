@@ -425,6 +425,7 @@ _HANDLERS: dict[str, Callable[[_Ledger, Any], Any]] = {
         (pi._SIZES_SQL, _Ledger._sizes),
         (pi._LEDGER_SQL, _Ledger._ledger),
         (pi._REPOINT_SQL, _Ledger._repoint),
+        (pi._CARRY_SETTLED_SQL, _Ledger._nothing),  # the fake holds no publication stamp
         (pi._RETIRE_SQL, _Ledger._retire),
         (pi._PLACES_SQL, _Ledger._places),
         ("SELECT property_id FROM listings WHERE id = %s", _Ledger._property_of),

@@ -222,10 +222,10 @@ const SOURCES: PropertySource[] = [
   {
     property_id: 774,
     id: 105053,
-    sreality_id: -11876,
     source: 'idnes',
     source_url: 'https://reality.idnes.cz/detail/x/',
     source_id_native: '6a147cfde222cf687509e018',
+    ad_reference: 'IDNES-N8080',
     is_active: true,
     price_czk: 5_200_000,
     first_seen_at: '2025-11-01T00:00:00Z',
@@ -234,10 +234,10 @@ const SOURCES: PropertySource[] = [
   {
     property_id: 774,
     id: 105054,
-    sreality_id: 999,
     source: 'sreality',
     source_url: 'https://www.sreality.cz/detail/y',
     source_id_native: '999',
+    ad_reference: 'N8080',
     is_active: true,
     price_czk: 5_000_000,
     first_seen_at: '2025-12-01T00:00:00Z',
@@ -485,6 +485,13 @@ describe('<PropertyDetail> tabs', () => {
   it('offers the tags as a header button beside the collections', async () => {
     renderAt('/property/774');
     expect(await screen.findByRole('button', { name: 'Štítky' })).toBeInTheDocument();
+  });
+
+  it('gives the neighbourhood dashboard its own tab, Okolí dashboard', async () => {
+    renderAt('/property/774?tab=okoli');
+    await screen.findByRole('heading', { level: 1 });
+    expect(selected()).toHaveTextContent('Okolí dashboard');
+    expect(await screen.findByRole('region', { name: 'Okolí dashboard' }, { timeout: 5000 })).toBeInTheDocument();
   });
 
   it('sends the retired Trh v okolí address to Cena a hodnota', async () => {
@@ -735,6 +742,25 @@ describe('<BrokerList>', () => {
     ).toBeInTheDocument();
     expect(screen.queryByText(/telefon —/)).not.toBeInTheDocument();
     expect(screen.queryByText(/e-mail —/)).not.toBeInTheDocument();
+  });
+
+  it('quotes, under the contact, the number each of the broker’s ads prints for callers', async () => {
+    renderListing();
+    // Jan advertises the sreality ad: its reference, labelled by portal, with a copy button.
+    expect(await screen.findByText('N8080')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'kopírovat číslo zakázky (Sreality)' })).toBeInTheDocument();
+    // The idnes ad is nobody's here, so its number is quoted for no one.
+    expect(screen.queryByText('IDNES-N8080')).toBeNull();
+  });
+
+  it('reads "<portál> —" for an ad that prints no number, never the portal’s own id', async () => {
+    vi.mocked(queries.fetchPropertySources).mockResolvedValue([SOURCES[0], { ...SOURCES[1], ad_reference: null }]);
+    renderListing();
+    // Scoped to the section: the header's own "ID 999" line is the identity sprint's, not the card's.
+    const section = within(await screen.findByRole('region', { name: /^Makléř/ }));
+    expect(section.getByText('Sreality —')).toBeInTheDocument();
+    expect(section.queryByText('999')).toBeNull();
+    expect(section.queryByRole('button', { name: /číslo zakázky/ })).toBeNull();
   });
 
   it('lists each person once, the canonical advert’s broker first', async () => {

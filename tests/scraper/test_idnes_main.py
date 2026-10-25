@@ -8,11 +8,12 @@ db seams are monkeypatched.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from scraper import db, idnes_main
 from scraper.idnes_main import IdnesPortal
-from scraper.portal import default_config
+from scraper.portal import PortalConfig, default_config
 
 _JITTER_ID = "aaaaaaaaaaaaaaaaaaaaaa01"   # stored 23 692 431, index +0.075%
 _CUT_ID = "aaaaaaaaaaaaaaaaaaaaaa02"      # stored 10 000 000, index -1%
@@ -58,7 +59,7 @@ class _FakeClient:
         return self._html, 200
 
 
-def _walk(monkeypatch, ids: list[str], **portal_kw: Any) -> dict[str, Any]:
+def _walk(monkeypatch, ids: list[str], config: PortalConfig | None = None) -> dict[str, Any]:
     captured: dict[str, Any] = {"touched": [], "entries": []}
 
     def fake_summary(conn: Any, source: str, native_ids: list[str]) -> dict[str, Any]:
@@ -77,7 +78,7 @@ def _walk(monkeypatch, ids: list[str], **portal_kw: Any) -> dict[str, Any]:
     monkeypatch.setattr(
         idnes_main, "IdnesClient", lambda limiter=None: _FakeClient(_index_html(ids))
     )
-    portal = IdnesPortal(default_config("idnes"), **portal_kw)
+    portal = IdnesPortal(config or default_config("idnes"))
     seen, counts, total, pages, complete = portal.walk_category(
         {"sale_type": "prodej", "category": "byty"},
         conn=object(), dry_run=False, limiter=None,
@@ -102,9 +103,10 @@ def test_fx_jitter_reads_unchanged_while_genuine_cut_enqueues(monkeypatch):
 
 
 def test_zero_tolerance_override_restores_exact_compare(monkeypatch):
-    got = _walk(
-        monkeypatch, [_JITTER_ID, _CUT_ID], price_change_min_pct=0.0
-    )
+    # The override channel is the shared limits row (operational_limits), as for every portal.
+    base = default_config("idnes")
+    exact = replace(base, limits=replace(base.limits, price_change_min_pct=0.0))
+    got = _walk(monkeypatch, [_JITTER_ID, _CUT_ID], exact)
     assert got["touched"] == [5101, 5102]
     enqueued = {e[0]: e[3] for e in got["entries"]}
     assert enqueued == {

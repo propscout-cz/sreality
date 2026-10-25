@@ -150,10 +150,10 @@ const RENT = {
 const ad = (over: Partial<PropertySource>): PropertySource => ({
   property_id: 304388,
   id: 9001,
-  sreality_id: 2861372748,
   source: 'sreality',
   source_url: 'https://www.sreality.cz/detail/prodej/byt/2+kk/praha-vysocany-freyova/2861372748',
   source_id_native: '2861372748',
+  ad_reference: null,
   is_active: true,
   price_czk: 7_490_000,
   first_seen_at: '2026-09-30T08:00:00Z',
@@ -165,7 +165,6 @@ const SALE_ADS = [
   ad({}),
   ad({
     id: 9002,
-    sreality_id: -12,
     source: 'idnes',
     source_url: 'https://reality.idnes.cz/detail/prodej/byt/praha-9/6a147cfde222cf687509e018/',
     source_id_native: '6a147cfde222cf687509e018',
@@ -320,7 +319,7 @@ describe('the phone property page', () => {
   it('draws a rent: the monthly price and per-m² in Kč/m²/měs, no MF badge', async () => {
     vi.mocked(queries.fetchProperty).mockResolvedValue(RENT);
     vi.mocked(queries.fetchPropertySources).mockResolvedValue([
-      ad({ property_id: 5, id: 5005, sreality_id: -4411, source: 'bezrealitky', price_czk: 22_500 }),
+      ad({ property_id: 5, id: 5005, source: 'bezrealitky', price_czk: 22_500 }),
     ]);
     renderAt('/property/5');
     const page = await screen.findByRole('article', { name: 'Nemovitost' }, LOADED);

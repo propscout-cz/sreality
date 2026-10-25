@@ -153,6 +153,8 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "garage": _cell("structured", "garage"),
         "parking_lots": _cell("structured", "parking"),
         "ownership": _cell("structured", "ownership", sentinels=_SREALITY_UNSET),
+        "ad_reference": _cell("structured", "advert_code",
+                                note="the page's ID zakázky; blank on a private seller's ad"),
     },
     # --- bezrealitky: the GraphQL advert -----------------------------------
     "bezrealitky": {
@@ -189,6 +191,8 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "parking_lots": _cell("none", gap=None),
         "ownership": _cell("structured", "ownership",
                            sentinels=("UNDEFINED", "OSTATNI")),
+        "ad_reference": _cell("none", gap=None,
+                                note="an owners' portal: the ad prints only its portal id (Číslo inzerátu)"),
     },
     # --- mmreality: the Vue `:property` estate object ----------------------
     "mmreality": {
@@ -236,6 +240,8 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "garage": _cell("structured", "garage", "accessoryGroups"),
         "parking_lots": _cell("structured", "parkingPlaces"),
         "ownership": _cell("structured", "ownership", sentinels=("neuvedeno",)),
+        "ad_reference": _cell("structured", "id",
+                                note="the page's Číslo nabídky is M&M's own offer number: the estate object's id"),
     },
     # --- ceskereality: the `i-info` spec list ------------------------------
     "ceskereality": {
@@ -285,6 +291,8 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         # carries one, so there is nothing for W4 or any later wave to wire.
         "parking_lots": _cell("none", gap=None),
         "ownership": _cell("structured", "vlastnictví"),
+        "ad_reference": _cell("structured", "id nemovitosti",
+                                note="the broker's own code (often with a -1 suffix), not the portal id"),
     },
     # --- idnes: the `<dl>` spec rows ---------------------------------------
     "idnes": {
@@ -328,6 +336,8 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "garage": _cell("structured", "dvojgaráž", "parkování"),
         "parking_lots": _cell("structured", "počet parkovacích míst"),
         "ownership": _cell("structured", "vlastnictví"),
+        "ad_reference": _cell("structured", "číslo zakázky",
+                                note="printed with the portal's IDNES- prefix, kept verbatim"),
     },
     # --- maxima: the `slider_label` spec table -----------------------------
     "maxima": {
@@ -364,6 +374,8 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "garage": _cell("structured", "garáž"),
         "parking_lots": _cell("none", gap=None),
         "ownership": _cell("structured", "vlastnictví"),
+        "ad_reference": _cell("structured", "id zakázky",
+                                note="the agency's own number IS the portal id, printed upper-case"),
     },
     # --- realitymix: the `detail-information__data-item` spec list ---------
     "realitymix": {
@@ -407,6 +419,9 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "garage": _cell("structured", "ostatní"),
         "parking_lots": _cell("structured", "počet míst k parkování"),
         "ownership": _cell("structured", "vlastnictví"),
+        "ad_reference": _cell("derived",
+                                note="the short-props 'Číslo zakázky:' row beside the price row "
+                                     "(_detail_reference), never a spec-list key"),
     },
     # --- remax: the `pd-detail-info__row` spec rows ------------------------
     "remax": {
@@ -443,6 +458,8 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "garage": _cell("structured", "garaz"),
         "parking_lots": _cell("structured", "pocet parkovacich mist"),
         "ownership": _cell("structured", "vlastnictvi"),
+        "ad_reference": _cell("structured", "cislo zakazky",
+                                note="printed as 'ID <office>-<number>', kept verbatim"),
     },
     # --- bazos: no spec table at all; the ad's own words -------------------
     "bazos": {
@@ -488,6 +505,7 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "garage": _cell("none", gap=None),
         "parking_lots": _cell("none", gap=None),
         "ownership": _cell("none", gap=None),
+        "ad_reference": _cell("none", gap=None, note="private ads: the page prints only its portal id"),
     },
     # --- web: any other site, one pasted advert at a time --------------------
     # No portal payload exists, so the deterministic parse (JSON-LD, OpenGraph, the shared
@@ -530,6 +548,7 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "garage": _cell("none", gap=None),
         "parking_lots": _cell("none", gap=None),
         "ownership": _cell("none", gap=None),
+        "ad_reference": _cell("none", gap=None),
     },
 }
 
@@ -539,7 +558,7 @@ CONTRACT: dict[str, dict[str, Cell]] = {
 IGNORED: dict[str, dict[str, str]] = {
     "sreality": {
         "hash_id": "identity", "seo": "identity, not an attribute",
-        "advert_code": "the portal's own reference number", "edited": "published_at",
+        "edited": "published_at",
         "locality": "location contract territory (contracts/portals/sreality.yaml)",
         "object_location": "location", "premise": "broker intelligence",
         "user": "broker intelligence",
@@ -609,7 +628,7 @@ IGNORED: dict[str, dict[str, str]] = {
         "image_urls": "images phase", "description": "the text lane's substrate",
     },
     "mmreality": {
-        "id": "identity", "slug": "identity", "source_url": "identity",
+        "slug": "identity", "source_url": "identity",
         "shortTitle": "identity", "originalTitle": "identity",
         "active": "lifecycle", "accurate": "location", "country": "location",
         "countryCode": "location", "countryId": "location", "district": "location",
@@ -631,7 +650,6 @@ IGNORED: dict[str, dict[str, str]] = {
         "balconyArea": "no column", "loggiaArea": "no column",
     },
     "ceskereality": {
-        "id nemovitosti": "the portal's own reference number",
         "datum vložení": "published_at",
         "příjezdy": "no column", "dopravní spojení": "no column",
         "elektřina": "no column", "kanalizace": "no column", "zdroje vody": "no column",
@@ -647,7 +665,6 @@ IGNORED: dict[str, dict[str, str]] = {
     },
     "idnes": {
         "celková plocha": "total area beside the usable area the parser reads: a second area field needs a ruling (filed, Health dashboard sprint wave 6)",
-        "číslo zakázky": "the portal's own reference number",
         "spočítej stěhování": "a CTA, always json null",
         "spočítej vyklizení": "a CTA, always json null",
         "datum nastěhování": "no column", "topení": "no column",
@@ -669,7 +686,7 @@ IGNORED: dict[str, dict[str, str]] = {
         "zastavěná plocha": "no column (a built-up area, not a headline measure)",
     },
     "maxima": {
-        "id zakázky": "the portal's own reference number", "topení": "no column",
+        "topení": "no column",
         "voda": "no column", "odpad": "no column", "plyn": "no column",
         "elektřina": "no column", "doprava": "no column", "typ domu": "no column",
         "poloha domu": "no column", "bazén": "no column",
@@ -695,7 +712,6 @@ IGNORED: dict[str, dict[str, str]] = {
         "celková plocha": "no column (a whole-building total, not the užitná measure)",
     },
     "remax": {
-        "cislo zakazky": "the portal's own reference number",
         "k nastehovani": "no column", "doprava": "no column", "voda": "no column",
         "odpad": "no column", "plyn": "no column", "elektrina": "no column",
         "telekomunikace": "no column", "ostatni rozvody": "no column",

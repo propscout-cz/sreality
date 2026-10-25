@@ -55,6 +55,7 @@ import {
   fetchPropertyTagMemberSet,
 } from '@/lib/queries';
 import { ActingAs, actingKey } from '@/lib/acting';
+import { viewingWhen } from '@/lib/viewings';
 import CurationBlock, { PhoneTagsAndNotes } from './CurationBlock';
 
 const TAG: Tag = {
@@ -71,6 +72,11 @@ const LINK: ArtifactLink = {
   property_id: 42, url: 'https://claude.ai/artifact/abc123',
   created_at: '2026-05-03T00:00:00+00:00', updated_at: '2026-05-03T00:00:00+00:00',
 };
+
+/* What the composer sends for a note written on advert 900. */
+const sent = (body: string, shared: boolean, viewing_at: string | null = null) => ({
+  body, origin_listing_ref_id: 900, shared, viewing_at,
+});
 
 function mockReads() {
   vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map());
@@ -238,7 +244,7 @@ describe('<CurationBlock> note attachments', () => {
     await user.click(screen.getByRole('button', { name: 'Uložit poznámku' }));
     await waitFor(() => expect(uploadAttachment).toHaveBeenCalledWith(
       42, file, expect.objectContaining({ note_id: 12 })));
-    expect(createPropertyNote).toHaveBeenCalledWith(42, 'Půdorys od makléře.', 900, false);
+    expect(createPropertyNote).toHaveBeenCalledWith(42, sent('Půdorys od makléře.', false));
     await waitFor(() => expect(screen.queryByRole('list', { name: 'Files to attach' })).toBeNull());
   });
 
@@ -253,8 +259,7 @@ describe('<CurationBlock> note attachments', () => {
 
     await user.upload(screen.getAllByTestId('attach-input')[0], pdf());
     await user.click(screen.getByRole('button', { name: 'Uložit poznámku' }));
-    await waitFor(() => expect(createPropertyNote).toHaveBeenCalledWith(
-      42, 'Přílohy: plan.pdf', 900, false));
+    await waitFor(() => expect(createPropertyNote).toHaveBeenCalledWith(42, sent('Přílohy: plan.pdf', false)));
   });
 
   it('puts a file dropped on a saved note onto that note, not into the composer', async () => {
@@ -585,13 +590,13 @@ describe('<CurationBlock> shared notes', () => {
     await user.click(box);
     await user.click(screen.getByRole('button', { name: 'Uložit poznámku' }));
     await waitFor(() =>
-      expect(createPropertyNote).toHaveBeenCalledWith(42, 'Makléř slevní.', 900, true));
+      expect(createPropertyNote).toHaveBeenCalledWith(42, sent('Makléř slevní.', true)));
     // Every note needs its own consent: the box is clear for the next note.
     await user.type(screen.getByRole('textbox', { name: 'Poznámky' }), 'Druhá.');
     expect(screen.getByRole('checkbox', { name: 'Sdílet s petr@example.cz' })).not.toBeChecked();
     await user.click(screen.getByRole('button', { name: 'Uložit poznámku' }));
     await waitFor(() =>
-      expect(createPropertyNote).toHaveBeenLastCalledWith(42, 'Druhá.', 900, false));
+      expect(createPropertyNote).toHaveBeenLastCalledWith(42, sent('Druhá.', false)));
   });
 
   it('marks my shared note and turns the mark off with a PATCH of {shared} alone', async () => {
@@ -733,5 +738,83 @@ describe('<CurationBlock> delegated stamp', () => {
       </QueryClientProvider>,
     );
     expect(await screen.findByText(/^upravil c@example\.cz · /)).toBeInTheDocument();
+  });
+});
+
+/* Migration 666: a viewing is a note with a date. The composer adds one from
+ * the heading (desktop) or its own toolbar (phone), the text optional; the
+ * section leads with the property's upcoming viewings under a calendar leaf. */
+describe('<CurationBlock> viewings', () => {
+  const inDays = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString();
+
+  it('books a viewing with no text from the heading, on the Prague clock', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    vi.mocked(createPropertyNote).mockResolvedValue({ ...NOTE, id: 12 } as never);
+    const { invalidate } = renderWithReads();
+
+    await user.click(await screen.findByRole('button', { name: 'Naplánovat prohlídku' }));
+    const fields = screen.getByRole('group', { name: 'Termín prohlídky' });
+    fireEvent.change(within(fields).getByLabelText('Den prohlídky'), { target: { value: '2030-05-14' } });
+    fireEvent.change(within(fields).getByLabelText('Čas prohlídky'), { target: { value: '14:30' } });
+    // A viewing's text is optional, and the save says what it saves.
+    await user.click(screen.getByRole('button', { name: 'Uložit prohlídku' }));
+    await waitFor(() =>
+      expect(createPropertyNote).toHaveBeenCalledWith(42, sent('', false, '2030-05-14T12:30:00.000Z')));
+    // The Prohlídky tab reads the same notes: it is re-read too.
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: curationKeys.viewings }));
+    expect(screen.queryByRole('group', { name: 'Termín prohlídky' })).toBeNull();
+  });
+
+  it('drops the date again, and a plain note still needs its text', async () => {
+    const user = userEvent.setup();
+    renderPhone();
+    await user.click(await screen.findByRole('button', { name: 'Prohlídka' }));
+    expect(screen.getByRole('button', { name: 'Uložit prohlídku' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Odebrat termín' }));
+    expect(screen.queryByRole('group', { name: 'Termín prohlídky' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Uložit poznámku' })).toBeDisabled();
+  });
+
+  it('leads with an upcoming viewing under its leaf, a past one keeps its place', async () => {
+    mockReads();
+    const ahead = inDays(3);
+    vi.mocked(listPropertyNotes).mockResolvedValue({
+      data: [
+        { ...NOTE, id: 20, body: 'Nejnovější poznámka.', created_at: inDays(-1) },
+        { ...NOTE, id: 21, body: 'Proběhla, hezké.', viewing_at: inDays(-5), created_at: inDays(-2) },
+        { ...NOTE, id: 22, body: '', viewing_at: ahead, created_at: inDays(-3) },
+      ],
+    } as never);
+    renderWithReads();
+
+    const cards = await screen.findAllByRole('article');
+    expect(cards[0]).toHaveAccessibleName(`Prohlídka ${viewingWhen(ahead)}`);
+    expect(within(cards[0]).getByText(`Prohlídka · ${viewingWhen(ahead)}`)).toBeInTheDocument();
+    expect(within(cards[0]).getByText('za 3 dny')).toBeInTheDocument();
+    expect(cards[1]).toHaveTextContent('Nejnovější poznámka.');
+    expect(within(cards[2]).getByText('proběhla před 5 dny')).toBeInTheDocument();
+    expect(within(cards[2]).getByText('Proběhla, hezké.')).toBeInTheDocument();
+  });
+
+  it('moves a viewing with a PATCH of {viewing_at} alone, and asks before deleting it as a viewing', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    vi.mocked(listPropertyNotes).mockResolvedValue({
+      data: [{ ...NOTE, body: 'Vzít metr.', viewing_at: '2030-05-14T12:30:00+00:00' }],
+    } as never);
+    vi.mocked(updatePropertyNote).mockResolvedValue(NOTE as never);
+    renderWithReads();
+
+    await user.click(await screen.findByRole('button', { name: 'Upravit poznámku' }));
+    const fields = screen.getByRole('group', { name: 'Termín prohlídky' });
+    expect(within(fields).getByLabelText('Čas prohlídky')).toHaveValue('14:30');
+    fireEvent.change(within(fields).getByLabelText('Čas prohlídky'), { target: { value: '16:00' } });
+    await user.click(screen.getByRole('button', { name: 'Uložit' }));
+    await waitFor(() =>
+      expect(updatePropertyNote).toHaveBeenCalledWith(42, 11, { viewing_at: '2030-05-14T14:00:00.000Z' }));
+
+    await user.click(screen.getByRole('button', { name: 'Smazat poznámku' }));
+    expect(screen.getByText('Smazat prohlídku?')).toBeInTheDocument();
   });
 });

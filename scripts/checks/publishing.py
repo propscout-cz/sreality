@@ -1,10 +1,11 @@
-"""Publishing: do discovered ads reach Browse quickly, with their photos, and does Browse keep
+"""Publishing: do discovered ads reach Browse once published, with their photos, and does Browse keep
 holding what is servable? Per portal, `check_publishing` judges ingest (the oldest never-fetched
 ad waiting in the detail queue), changes (the oldest repriced ad waiting), visible (new active ads
 whose property is not in browse_list), stock (active properties missing from browse_list) and
 photos (new ads' photos not stored, or stored narrow); for the fleet, stock and dirty (the oldest
 property waiting for maintenance). Each not-in-Browse count is split by the stage that blocks it,
-judged on the property's location ad as browse_projection judges it. The portal list is imported
+judged on the property's location ad and the publication rule as browse_projection judges them
+(a property not yet published is expected, never a blocker). The portal list is imported
 and every statement runs on the per-check clock; the module imports neither the harness nor the
 worker.
 """
@@ -19,9 +20,11 @@ from scraper.db import QUEUE_PRIORITY_CHANGED, QUEUE_PRIORITY_FAILURE, QUEUE_PRI
 from scripts.checks.clock import fetchall, fetchone
 from scripts.checks.common import (NEW_AD_H, ago, as_utc, cell, graded as _graded, iso, judged,
                                    now, result, wilson_lower)
+from toolkit.publication import visible_since_sql
 
-# A new ad gets its property within ~2 min, its location within ~10 min (p95 9.5 min) and its
-# Browse row at the next */15 rebuild, so one first written under 30 min ago is still on its way.
+# A new ad gets its property within ~2 min, its location within ~10 min (p95 9.5 min) and its Browse
+# row once published (settled, or at the 6 h cap -- the 'unpublished' stage below) and then at the next
+# */15 rebuild, so one first written under 30 min ago is still on its way.
 _VISIBLE_GRACE_MIN = 30
 _WINDOW_H = NEW_AD_H
 _WIDE_WINDOW_H = 72
@@ -29,24 +32,30 @@ _WIDE_WINDOW_H = 72
 _PHOTOS_GRACE_H = 1
 
 # The stages that keep an ad's property out of browse_list, in the order they are judged; the
-# rebuild's own lag is a fact, not a blocker (the jobs check judges the rebuild itself).
+# publication rule's hold and the rebuild's own lag are expected, facts not blockers (the jobs
+# check judges the rebuild itself).
 _STAGES = {
     "no_property": "no property",
     "property_not_active": "property not active",
     "location_not_served": "location not served",
     "not_in_browse_list": "not yet in Browse",
 }
+_UNPUBLISHED = "unpublished"
 _WAITING = "waiting_for_rebuild"
+_EXPECTED = {_UNPUBLISHED: "not yet published", _WAITING: "waiting for Browse's next rebuild"}
 
 _REBUILT_CTE = """rebuilt as materialized (
     select max(last_succeeded_at) as at from derived_artifacts where name = 'browse_list')"""
 
-# Judged on the property's LOCATION ad, as browse_projection is. A property born, or whose
-# location ad's location was resolved, after the newest rebuild started cannot be in it yet:
+# Judged on the property's LOCATION ad, as browse_projection is. A property the publication rule
+# (toolkit/publication.py, migrations 668/669) had not published when the newest rebuild started
+# is unpublished: still held, or released since, judged on that start, never on now(). A property
+# born, or whose location ad's location was resolved, after that start cannot be in it yet:
 # the resolver never patches browse_list, so such an ad waits for the next */15 rebuild.
 _STAGE_TAIL = f"""
             when not {served_location_predicate("p.location_listing_ref_id")}
                 then 'location_not_served'
+            when {visible_since_sql("p")} > r.at then '{_UNPUBLISHED}'
             when p.created_at > r.at
                  or (select ll.resolved_at from listing_location ll
                       where ll.listing_id = p.location_listing_ref_id) > r.at
@@ -110,7 +119,8 @@ held as (
 select h.source, count(*) as properties,
        count(m.id) filter (where m.stage = 'location_not_served') as location_not_served,
        count(m.id) filter (where m.stage = 'not_in_browse_list') as not_in_browse_list,
-       count(m.id) filter (where m.stage = '{_WAITING}') as waiting
+       count(m.id) filter (where m.stage = '{_WAITING}') as waiting,
+       count(m.id) filter (where m.stage = '{_UNPUBLISHED}') as unpublished
   from held h
   left join missing m on m.id = h.property_id
  group by h.source
@@ -118,7 +128,8 @@ union all
 select null, (select count(*) from properties p where p.status = 'active' and p.is_active),
        count(*) filter (where stage = 'location_not_served'),
        count(*) filter (where stage = 'not_in_browse_list'),
-       count(*) filter (where stage = '{_WAITING}')
+       count(*) filter (where stage = '{_WAITING}'),
+       count(*) filter (where stage = '{_UNPUBLISHED}')
   from missing
 """
 
@@ -169,6 +180,10 @@ def _pct(share: float) -> str:
 
 def _stages(counts: dict[str, int]) -> str:
     return ", ".join(f"{counts[s]:,} {label}" for s, label in _STAGES.items() if counts.get(s))
+
+
+def _expected(counts: dict[str, int]) -> str:
+    return "".join(f"; {counts[s]:,} {label}" for s, label in _EXPECTED.items() if counts.get(s))
 
 
 # --- ingest and changes -------------------------------------------------------------------
@@ -242,13 +257,12 @@ def _visible_cells(conn: Any, thresholds: dict[str, Any],
         lower = wilson_lower(blocked, n) or 0.0
         facts.update(blocked=blocked, lower_bound=round(lower, 4))
         cohort = f"active ads first written {_VISIBLE_GRACE_MIN} min-{window} h ago"
-        waiting = stages.get(_WAITING, 0)
-        rebuild = f"; {waiting:,} waiting for Browse's next rebuild" if waiting else ""
+        expected = _expected(stages)
         if blocked:
             message = (f"{blocked:,} of {n:,} {cohort} are not in Browse ({_pct(blocked / n)}; "
-                       f"lower bound {_pct(lower)}): {_stages(stages)}{rebuild}")
+                       f"lower bound {_pct(lower)}): {_stages(stages)}{expected}")
         else:
-            message = f"none of {n:,} {cohort} is kept out of Browse{rebuild}"
+            message = f"none of {n:,} {cohort} is kept out of Browse{expected}"
         cells.append(cell(f"{portal}/visible", _graded(lower, warn, fail), message,
                           value=round(100 * blocked / n, 2), unit="%", portal=portal,
                           facts=facts))
@@ -259,34 +273,36 @@ def _stock_cells(conn: Any, thresholds: dict[str, Any],
                  portals: list[str]) -> list[dict[str, Any]]:
     """Per portal and for the fleet, the share of active properties missing from browse_list."""
     read = {source: (int(n or 0), {"location_not_served": int(lns or 0),
-                                   "not_in_browse_list": int(nib or 0)}, int(waiting or 0))
-            for source, n, lns, nib, waiting in fetchall(conn, _STOCK_SQL)}
+                                   "not_in_browse_list": int(nib or 0),
+                                   _WAITING: int(waiting or 0),
+                                   _UNPUBLISHED: int(unpublished or 0)})
+            for source, n, lns, nib, waiting, unpublished in fetchall(conn, _STOCK_SQL)}
     min_n = int(thresholds["publishing_stock_min_n"])
     warn, fail = (float(thresholds["publishing_stock_warn"]),
                   float(thresholds["publishing_stock_fail"]))
     cells = []
     for portal in [*portals, None]:
         subject = f"{portal}/stock" if portal else "fleet/stock"
-        n, stages, waiting = read.get(portal, (0, {}, 0))
+        n, stages = read.get(portal, (0, {}))
         holding = (f"active properties holding an active ad of {portal}" if portal
                    else "active properties")
         if not n:
             cells.append(cell(subject, "unknown", f"Not measured: no {holding}", unit="%",
                               portal=portal))
             continue
-        blocked = sum(stages.values())
+        blocked = sum(stages.get(s, 0) for s in _STAGES)
         share, lower = blocked / n, wilson_lower(blocked, n) or 0.0
-        facts = {"properties": n, "missing": blocked, "stages": {**stages, _WAITING: waiting},
+        facts = {"properties": n, "missing": blocked, "stages": stages,
                  "lower_bound": round(lower, 5)}
-        rebuild = f"; {waiting:,} waiting for Browse's next rebuild" if waiting else ""
+        expected = _expected(stages)
         missing = (f"{blocked:,} of {n:,} {holding} are missing from Browse ({_pct(share)}; "
-                   f"lower bound {_pct(lower)}): {_stages(stages)}{rebuild}")
+                   f"lower bound {_pct(lower)}): {_stages(stages)}{expected}")
         conditions: list[tuple[str, str]] = []
         if n >= min_n and lower > fail:
             conditions.append(("fail", missing))
         elif share > warn:
             conditions.append(("warn", missing))
-        ok = missing if blocked else f"none of {n:,} {holding} is missing from Browse{rebuild}"
+        ok = missing if blocked else f"none of {n:,} {holding} is missing from Browse{expected}"
         cells.append(judged(subject, conditions, ok, value=round(100 * share, 3), unit="%",
                             portal=portal, facts=facts))
     return cells

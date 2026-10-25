@@ -1476,6 +1476,11 @@ def delete_property_note(
     return curation.delete_note(conn, property_id, note_id)
 
 
+@app.get("/viewings")
+def get_viewings(conn: Any = Depends(tenant_pool.tenant_conn)) -> dict[str, Any]:
+    return curation.list_viewings(conn)
+
+
 @app.get("/artifact-links")
 def get_artifact_links(
     conn: Any = Depends(tenant_pool.tenant_conn),

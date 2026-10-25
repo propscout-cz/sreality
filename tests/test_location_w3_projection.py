@@ -37,6 +37,7 @@ W4A = "507_location_w4a_readers.sql"
 W4C = "508_location_w4c_legacy_drops.sql"
 STREET = "584_serve_street_code.sql"
 W5 = "590_read_model_portal_rule.sql"
+STREET_SORT = "665_browse_street_sort.sql"
 
 # What S4 removes from each view it re-creates. `obec` SURVIVES on the two views
 # the pipeline board reads: the board's town sort orders by the TOWN, which is
@@ -175,7 +176,7 @@ _WIDENING_STEPS = [(W3, v) for v in _WIDENED] + [
     (W3_S3, "pipeline_board_public"),
 ] + [(STREET, v) for v in (
     "browse_projection", "listing_feed_public", "properties_public", "pipeline_board_public",
-)]
+)] + [(STREET_SORT, "browse_projection")]
 
 
 @pytest.mark.parametrize("after,view", _WIDENING_STEPS)

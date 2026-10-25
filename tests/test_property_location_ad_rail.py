@@ -5,8 +5,9 @@ Arm 1 reads SQL (every view and function body of the replayed schema, every stat
 lists the runtime modules that name both `repr_listing_ref_id` and `listing_location`, because SQL assembled inside a
 function reaches arm 1 nowhere; arm 4 pins the R7 subject sites to `SUBJECT_LOCATION_JOIN` and every cohort to
 `COHORT_LOCATION_FROM`, the shapes an ad-keyed join would otherwise pass (docs/design/one-pin/PROGRAM.md "W4", rulings
-R7 and R8). The schema half of arm 1 runs
-in CI's migrations lane (`TEST_DATABASE_URL`); the rest runs everywhere.
+R7 and R8); arm 5 registers every read of the publication rule (toolkit/publication.py, rule 16, migrations 668/669),
+the served rule's twin. The schema half of arm 1 runs in CI's migrations lane (`TEST_DATABASE_URL`); the rest runs
+everywhere.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import pytest
 from location_data.claims_common import served_location_predicate
 from tests import sql_corpus
 from tests._live_property import REQUIRED_DB, cur  # noqa: F401 -- `cur` is the fixture
+from toolkit import publication
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "migrations"
@@ -45,6 +47,8 @@ CENSUS: dict[str, str] = {
     "autodedup/ui_sql.py": "identity: which ad is canonical, shown beside each ad's own place in the review pages",
     "location_data/claims_common.py": "the one definition: the R8 cohort shape joins the location ad's property to "
                                       "its canonical ad, the comparable (price, area, snapshot_id: rule 8)",
+    "scraper/db.py": "identity: a singleton is born with its one ad as canonical AND location ad; the refetch lane's "
+                     "`listing_location` join is ad-grain (`ll.listing_id = l.id`, rule 25's town-less ads)",
 }
 
 # Every call of the served rule (rule 25) and every read of its constant, by (module, scope, the listing-id key it is
@@ -525,3 +529,119 @@ def test_every_cohort_counts_a_property_once_through_the_shared_cohort_shape() -
            if s.key == _COHORT_CALL and (s.path, s.scope) not in shaped]
     assert any(s.key == _COHORT_CALL for s in refs), f"no call of {_COHORT_CALL} found: the scan is broken"
     assert not bad, "\n".join(bad)
+
+
+# --------------------------------------------------------------------------- arm 5: the publication rule's readers
+
+# Every Python read of toolkit/publication.py, by (module, scope, what it renders): its grain and why. The rule is a
+# property's; browse_projection carries its text verbatim (tests/test_668_publication_gate.py), these render it.
+PUBLISHED_RULE_SITES: dict[tuple[str, str, str], tuple[str, str]] = {
+    ("api/notifications.py", "_build_match_clauses", 'published_property_predicate("l.property_id")'):
+        ("property", "both watchdog producers over properties_public, published as browse_projection publishes"),
+    ("api/notifications.py", "match_once", 'visible_since_sql("pp")'):
+        ("property", "the 'new' window: a watchdog tells what became visible after it started"),
+    ("scripts/recompute_property_stats.py", "_SETTLE_SQL", "CAP_SQL"):
+        ("property", "the stamper reads only properties the cap has not yet published"),
+    ("scripts/checks/publishing.py", "_STAGE_TAIL", 'visible_since_sql("p")'):
+        ("property", "publishing's 'unpublished' stage, judged at the newest rebuild's start"),
+    ("toolkit/property_identity.py", "_CARRY_SETTLED_SQL", "CAP_SQL"):
+        ("property", "a merge passes a stamp to the survivor only when that publishes it before its cap"),
+}
+_PUBLICATION_FILE = "toolkit/publication.py"
+_PUBLICATION_NAMES = {n: v for n, v in vars(publication).items() if not n.startswith("_")
+                      and (isinstance(v, str) or getattr(v, "__module__", None) == publication.__name__)}
+
+
+def _literal(node: ast.expr) -> str:
+    return f'"{node.value}"' if isinstance(node, ast.Constant) and isinstance(node.value, str) else (
+        "{" + ast.unparse(node) + "}")
+
+
+def _rendered(name: str, call: ast.Call) -> str:
+    """A call by its arguments, the first one defaulted as the function defaults it (the served census's `_key`)."""
+    first = next(iter(inspect.signature(_PUBLICATION_NAMES[name]).parameters.values()))
+    node = call.args[0] if call.args else next((k.value for k in call.keywords if k.arg == first.name), None)
+    parts = [_literal(node) if node is not None else f'"{first.default}"', *map(_literal, call.args[1:])]
+    parts += [f"{k.arg}={_literal(k.value)}" for k in call.keywords if k.arg != first.name]
+    return f"{name}({', '.join(parts)})"
+
+
+class _PublicationReads(_Sites):
+    """Every read of a toolkit/publication.py name: a call keyed by what it renders, a constant by its name."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__(path)
+        self.imports = False
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        self.imports |= node.module == "toolkit.publication" or (
+            node.module == "toolkit" and any(a.name == "publication" for a in node.names))
+
+    def visit_Import(self, node: ast.Import) -> None:
+        self.imports |= any(a.name == "toolkit.publication" for a in node.names)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", None)
+        if name in _PUBLICATION_NAMES and callable(_PUBLICATION_NAMES[name]):
+            self._add(node, _rendered(name, node))
+            for arg in [*node.args, *(k.value for k in node.keywords)]:
+                self.visit(arg)
+        else:
+            self.generic_visit(node)
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if node.id in _PUBLICATION_NAMES and isinstance(node.ctx, ast.Load):
+            self._add(node, node.id)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if node.attr in _PUBLICATION_NAMES and isinstance(node.ctx, ast.Load):
+            self._add(node, node.attr)
+        else:
+            self.generic_visit(node)
+
+
+def test_every_read_of_the_publication_rule_is_registered() -> None:
+    """A new reader fails until it says what it renders and why; a registered one that stops reading must leave."""
+    sites: list[Site] = []
+    importers: set[str] = set()
+    for path in sql_corpus._source_files():
+        rel = path.relative_to(ROOT).as_posix()
+        if rel == _PUBLICATION_FILE:
+            continue
+        visitor = _PublicationReads(rel)
+        visitor.visit(ast.parse(path.read_text(encoding="utf-8"), rel))
+        sites += visitor.sites
+        if visitor.imports:
+            importers.add(rel)
+    found = Counter((s.path, s.scope, s.key) for s in sites)
+    new = [f"{s.path}:{s.line}: {s.key} in {s.scope} is not registered. Add ({s.path!r}, {s.scope!r}, {s.key!r}): "
+           f"(grain, why) to PUBLISHED_RULE_SITES" for s in sites if (s.path, s.scope, s.key) not in PUBLISHED_RULE_SITES]
+    missing = [f"{path} {scope}: {key} is registered but not read there: render the rule there through "
+               f"toolkit.publication, or remove the entry" for path, scope, key in PUBLISHED_RULE_SITES
+               if (path, scope, key) not in found]
+    silent = [f"{path}: imports toolkit.publication and reads nothing of it" for path in sorted(importers)
+              if path not in {s.path for s in sites}]
+    assert not new + missing + silent, "\n".join(new + missing + silent)
+
+
+def _sql_strings(tree: ast.AST) -> list[tuple[int, str]]:
+    """Every string literal but a docstring: the SQL a module runs, never its prose."""
+    docs = {id(n.body[0].value) for n in ast.walk(tree)
+            if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and n.body and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)}
+    return [(n.lineno, n.value) for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docs]
+
+
+def test_no_module_spells_the_publication_rule_by_hand() -> None:
+    """One rule and one cap, spelled in toolkit/publication.py only: a copy in SQL would drift from browse_projection."""
+    rule = re.compile(r"coalesce\(\s*[\w.]*settled_at", re.I)
+    bad = []
+    for path in sql_corpus._source_files():
+        rel = path.relative_to(ROOT).as_posix()
+        if rel == _PUBLICATION_FILE:
+            continue
+        for line, text in _sql_strings(ast.parse(path.read_text(encoding="utf-8"), rel)):
+            if rule.search(text) or ("first_seen_at" in text and publication.CAP_SQL in text):
+                bad.append(f"{rel}:{line}: the publication rule or its cap spelled by hand")
+    assert not bad, "\n".join([*bad, "render it with toolkit.publication (visible_since_sql, CAP_SQL, ...)"])

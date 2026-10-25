@@ -235,6 +235,8 @@ def test_brokers_follow_the_page_order_active_ads_only(client, sheet, conn):
     # The canonical ad's broker first, then the other active ads'; the inactive ad's dropped.
     assert [b["broker_id"] for b in call["brokers"]] == [1, 2]
     assert call["brokers_from_inactive"] is False
+    # Each person carries the ads they advertise, for the sheet's ad-reference lines.
+    assert [[a["id"] for a in b["ads"]] for b in call["brokers"]] == [[42], [41]]
 
 
 def test_with_no_active_ad_every_ads_broker_shows_flagged(client, sheet, conn):
@@ -243,6 +245,7 @@ def test_with_no_active_ad_every_ads_broker_shows_flagged(client, sheet, conn):
     client.get("/properties/7/download.zip")
     assert [b["broker_id"] for b in sheet[0]["brokers"]] == [1, 2, 3]
     assert sheet[0]["brokers_from_inactive"] is True
+    assert [[a["id"] for a in b["ads"]] for b in sheet[0]["brokers"]] == [[42], [41], [43]]
 
 
 def test_a_non_admin_gets_masked_broker_contacts(client, sheet, conn):

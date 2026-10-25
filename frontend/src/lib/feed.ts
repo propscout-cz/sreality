@@ -128,7 +128,8 @@ export const pragueDayKey = (at: Date | string | number): string =>
 /* 'HH:MM' on the Prague clock. */
 export const pragueClock = (at: Date | number): string => CLOCK.format(at);
 
-const shiftDay = (dayKey: string, days: number): string => {
+/* The Prague day `days` after (or before) a day key. */
+export const shiftDay = (dayKey: string, days: number): string => {
   const [y, m, d] = dayKey.split('-').map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d + days));
   return dt.toISOString().slice(0, 10);
