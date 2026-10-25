@@ -27,6 +27,10 @@ from psycopg import sql
 from scraper.db import connect_session
 from scraper.image_storage import R2Client
 
+# A stored page body (estimation_runs.source_html, up to ~200 KB) is larger than csv's default
+# 128 KiB field limit; the reader only counts rows for the receipt, so the limit is lifted.
+csv.field_size_limit(sys.maxsize)
+
 LOG = logging.getLogger(__name__)
 
 _LABEL = re.compile(r"^[a-z0-9][a-z0-9-]*$")
