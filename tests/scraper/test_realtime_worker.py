@@ -1679,7 +1679,7 @@ def test_location_resolve_sync_takes_the_shared_resolver_lease(monkeypatch):
     # THE shared lease row — a re-spelled literal here would be a silent loss of
     # mutual exclusion with location_resolve.yml.
     assert captured["job_name"] == drain.JOB_NAME
-    assert captured["ttl_seconds"] == rw._location_resolve_lease_ttl(240, 250)
+    assert captured["ttl_s"] == rw._location_resolve_lease_ttl(240, 250)
     # ...and it must be held on the connection the drain actually uses.
     assert captured["conn"] is conn
     assert captured["run_conn"] is conn
@@ -1748,7 +1748,7 @@ def test_location_resolve_sync_reports_transaction_pooler_fallback(monkeypatch):
 
 def test_location_resolve_sync_closes_the_connection_and_reraises_when_the_drain_fails(
         monkeypatch):
-    # The raise IS the signal: lease.held stamps last_outcome='failed' and
+    # The raise IS the signal: job_lease.held stamps last_outcome='failed' and
     # re-raises, _lane_loop records the failed pass. Swallowing it would make a
     # broken drain look like a healthy idle lane.
     def boom(*a, **k):

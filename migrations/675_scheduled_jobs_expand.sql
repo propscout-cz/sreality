@@ -29,6 +29,7 @@
 --     recovers through the existing recovery arm.
 --
 -- ci-allow-ungated: health_liveness it reads the health ledgers and the worker heartbeat and writes one pipeline_check_results row; execute revoked from public, anon and authenticated
+-- ci-allow-ungated: location_jobs a temporary alias for the service role's deployed lease text; security invoker over an RLS table, every privilege revoked from public, anon and authenticated
 --
 -- APPLY through apply_migration.yml (--ref the feature branch) BEFORE merging: the merged code reads scheduled_jobs.
 -- Applied first, the deployed worker and location_resolve.yml keep their lease through the alias view.
@@ -84,7 +85,7 @@ comment on table scheduled_jobs is
   'One row per scheduled job or leased lane (migration 384 as location_jobs, generalised by 675): a lease-row CAS '
   '(lease_holder, lease_expires_at) claimed by scraper/job_lease.py, due on the epoch-anchored cadence grid plus '
   'offset_s. Retired rows stay. Dead since 675, dropped behind a backup receipt: enabled, concurrency_group, '
-  'alert_route, note.';
+  'alert_route, note, and the location_jobs_stale index over enabled.';
 
 update scheduled_jobs
    set retired_at = now()
@@ -97,7 +98,7 @@ create or replace view location_jobs with (security_invoker = true) as
 select job_name, cadence, concurrency_group, runner, enabled, lease_holder, lease_expires_at, last_started_at,
        last_success_at, last_outcome, last_error, consecutive_failures, alert_route, note
   from scheduled_jobs;
-revoke all on location_jobs from anon, authenticated;
+revoke all on location_jobs from public, anon, authenticated;
 comment on view location_jobs is
   'TEMPORARY alias of scheduled_jobs (migration 675) for the deployment that predates the rename; drops with the '
   'dead lease columns.';
@@ -123,7 +124,7 @@ create unique index if not exists job_runs_one_open_per_resource on job_runs (re
   where ended_at is null and resource is not null;
 create index if not exists job_runs_by_job on job_runs (job_name, started_at desc);
 alter table job_runs enable row level security;
-revoke all on job_runs from anon, authenticated;
+revoke all on job_runs from public, anon, authenticated;
 comment on table job_runs is
   'One row per run of a scheduled job (migration 675), opened by the claim and closed in place by the release or, '
   'as lost, by the next claim after its lease expired. One open run per job and per resource, by unique index. '

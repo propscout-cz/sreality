@@ -203,6 +203,10 @@ _ADMIN_ONLY_RELATIONS: list[str] = [
     # no `_public` view. MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
     "push_subscriptions",
     "notification_deliveries",
+    # The scheduled-jobs lease and its run history (migration 675): service role only, no `_public` view.
+    # MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
+    "scheduled_jobs",
+    "job_runs",
 ]
 
 # Relations that read the above but are legitimately reachable without the gate.
