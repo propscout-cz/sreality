@@ -22,7 +22,7 @@ SIGNED = "https://r2.example/pods/abc.tar.gz?sig"
 @pytest.fixture(autouse=True)
 def _no_archive_publish(monkeypatch):
     """A real launch publishes `git archive` to R2; here it hands back a fixed signed URL."""
-    monkeypatch.setattr(pod_bootstrap, "archive_env", lambda ref, **_k: {"PODBOOT_ARCHIVE_URL": SIGNED})
+    monkeypatch.setattr(pod_bootstrap, "publish_archive_env", lambda ref, **_k: {"PODBOOT_ARCHIVE_URL": SIGNED})
 
 IDENTITY = {
     "model": "facebook/dinov3-vitb16-pretrain-lvd1689m",

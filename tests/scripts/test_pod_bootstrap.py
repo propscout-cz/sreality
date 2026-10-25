@@ -336,7 +336,7 @@ def test_the_dispatcher_publishes_git_archive_of_the_sha_and_hands_a_signed_url(
 
     monkeypatch.setattr(pod_bootstrap.subprocess, "run", run)
     monkeypatch.setattr(pod_bootstrap, "_r2", lambda: R2())
-    env = pod_bootstrap.archive_env("abc123")
+    env = pod_bootstrap.publish_archive_env("abc123")
     assert calls["argv"][0] == "git" and "archive" in calls["argv"] and calls["argv"][-1] == "abc123"
     assert calls["upload"] == ("pods/abc123.tar.gz", "application/gzip")
     assert calls["signed"] == ("pods/abc123.tar.gz", pod_bootstrap.ARCHIVE_TTL_S)

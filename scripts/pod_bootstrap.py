@@ -10,10 +10,8 @@ SIX BUGS THIS EXISTS TO NOT REPEAT, all paid for on 2026-09-08:
     ~$0.50). `--branch` takes a branch or a tag, never a commit sha, and the dispatchers
     pass `GITHUB_SHA`. The pod died in seconds ("fatal: Remote branch ... not found in
     upstream origin", exit 128) under `set -euo pipefail` and then idled, billing. The
-    fetch-by-sha form below is the one that works against GitHub: `git init` +
-    `git remote add` + `git fetch --depth 1 origin <sha>` + `checkout FETCH_HEAD`. Never
-    reintroduce `--branch` — a branch name would work and a sha would not, so it fails
-    only in production.
+    pod now fetches no git at all (a signed archive of the sha, see below); a sha is the
+    archive's name, never a branch to resolve.
   * THE IMAGE'S PYTHON IS 3.10 AND `pyproject.toml` REQUIRES >=3.12, so even a fixed
     clone would have died on `pip install -e '.[clip]'`. RunPod's newer image tags do
     not name a Python version, so the interpreter is BOOTSTRAPPED rather than inherited:
@@ -60,7 +58,7 @@ SIX BUGS THIS EXISTS TO NOT REPEAT, all paid for on 2026-09-08:
     rather than at install.
 
 THE CODE IS A SIGNED ARCHIVE, NOT A CLONE (#2016). The repository is private, and a pod holds
-no credential for it. The dispatcher publishes `git archive` of the sha to R2 (`archive_env`)
+no credential for it. The dispatcher publishes `git archive` of the sha to R2 (`publish_archive_env`)
 and hands the pod a short-lived signed URL in its env (`PODBOOT_ARCHIVE_URL`, never argv). The
 tarball is kept under `$PODBOOT_ROOT`, outside the checkout the fetch step demolishes, so a
 RunPod restart re-extracts it after the URL has expired.
@@ -224,7 +222,8 @@ def build_bootstrap_script(*, ref: str, module: str, payload_args: Sequence[str]
         'rm -rf "$PODBOOT_ROOT/sreality"',
         'mkdir -p "$PODBOOT_ROOT/sreality"',
         'cd "$PODBOOT_ROOT/sreality"',
-        'x tar -xzf "$PODBOOT_ARCHIVE"',
+        # A complete but corrupt archive is dropped, so the next pass downloads it again.
+        'x tar -xzf "$PODBOOT_ARCHIVE" || { rm -f "$PODBOOT_ARCHIVE"; false; }',
         'report "step=fetch ok"',
         "step uv",
         # The image's own pip (3.10) installs uv; uv then provides the 3.12 the project
@@ -282,14 +281,13 @@ def _r2() -> Any:
     return R2Client.from_env()
 
 
-def archive_env(ref: str, *, repo_dir: str = ".") -> dict[str, str]:
+def publish_archive_env(ref: str) -> dict[str, str]:
     """Publish `git archive` of `ref` to R2 and return the pod env entry carrying its signed URL."""
     key = f"pods/{_archive_name(ref)}"
     r2 = _r2()
     with tempfile.TemporaryDirectory(prefix="podarchive-") as tmp:
         path = f"{tmp}/code.tar.gz"
-        subprocess.run(["git", "-C", repo_dir, "archive", "--format=tar.gz", "-o", path, ref],
-                       check=True)
+        subprocess.run(["git", "archive", "--format=tar.gz", "-o", path, ref], check=True)
         r2.upload_file(key, path, content_type="application/gzip")
     return {"PODBOOT_ARCHIVE_URL": r2.presigned_get(key, expires_in=ARCHIVE_TTL_S)}
 
