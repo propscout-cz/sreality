@@ -1449,7 +1449,8 @@ def test_a_real_pass_leaves_no_body_behind_and_reads_its_rss_after_the_trim(
     last = rw._autodedup_sync()
 
     assert last["ran"] is True and last["errors"] == 0, last
-    assert set(last["memo_entries"]) == {"text_facts", "body_align", "shingles", "tokens"}
+    assert set(last["memo_entries"]) == {
+        "text_facts", "body_align", "shingles", "tokens", "folds"}
     assert last["memo_entries"]["text_facts"] >= 1 and last["memo_entries"]["body_align"] >= 1
     assert last["memo_entries"]["tokens"] >= 1
     assert incremental_lane.memo_entries() == dict.fromkeys(last["memo_entries"], 0)

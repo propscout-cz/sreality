@@ -37,7 +37,7 @@ from autodedup.normalize import fold, normalize_folded, shingles
 from tests.autodedup import lane_world
 from tests.autodedup.fake_pg import FakePg
 
-MEMOS = ("text_facts", "body_align", "shingles", "tokens")
+MEMOS = ("text_facts", "body_align", "shingles", "tokens", "folds")
 BODIES = (
     "Prodej bytu 2+kk ve 3. patre cihloveho domu, sklep a balkon, klidna lokalita u parku. " * 3,
     "Pronajem bytu 3+1 v 5. podlazi, po rekonstrukci, garaz a terasa, vyhled na reku Nisu. " * 3,
@@ -91,7 +91,8 @@ def _reads_then(monkeypatch: pytest.MonkeyPatch, then: Any) -> None:
 def _all_empty() -> bool:
     return (incremental_lane.memo_entries() == dict.fromkeys(MEMOS, 0)
             and not indistinguishable._SHINGLE_MEMO
-            and not normalize._token_hashes and not normalize._token_lanes)
+            and not normalize._token_hashes and not normalize._token_lanes
+            and not normalize._folds and not text_facts._folds)
 
 
 # ------------------------------------------------------------------ (c) the memos
@@ -99,6 +100,8 @@ def _all_empty() -> bool:
 
 def test_a_pass_reports_its_memos_and_then_leaves_them_empty(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Read before the pass: `tokens` folds its text through the memo the pass must leave empty.
+    distinct_tokens = len(set(normalize.tokens(BODIES[0])))
     world = _seeded(tmp_path)
     _reads_then(monkeypatch, incremental_lane.run_pass_bounded)
     at_clear = _spy_on_the_clear(monkeypatch)
@@ -111,7 +114,8 @@ def test_a_pass_reports_its_memos_and_then_leaves_them_empty(
     assert out["memo_entries"]["shingles"] == len(BODIES)
     assert out["memo_entries"]["body_align"] >= len(BODIES)
     assert out["memo_entries"]["text_facts"] >= len(BODIES)
-    assert out["memo_entries"]["tokens"] >= len(set(normalize.tokens(BODIES[0])))
+    assert out["memo_entries"]["tokens"] >= distinct_tokens
+    assert out["memo_entries"]["folds"] >= len(BODIES)
     assert _all_empty()
 
 
@@ -240,7 +244,9 @@ def test_a_raised_pass_is_freed_the_moment_the_lane_drops_its_raise(
     assert held and not alive_after_drop
 
 
-# Every cache the engine builds with functools that is not a body reader's, and its bound.
+# Every cache the engine builds with functools that is not a body reader's, and its bound. The two
+# fold memos (`normalize._folds`, `text_facts._folds`) are plain dicts, each an LRU bounded at
+# `normalize.FOLD_MEMO_CAP` texts, counted as "folds" and emptied with the rest (test_fold_memo).
 CACHES_OUTSIDE_THE_REGISTRY: dict[str, str] = {
     "text_facts.body_cached": "builds each body reader's cache and registers it (BODY_READERS)",
     "text_facts._house_number_patterns": "keyed on a street, not a body: 4,096 patterns at most",

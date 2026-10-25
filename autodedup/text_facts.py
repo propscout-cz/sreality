@@ -21,7 +21,7 @@ from functools import lru_cache
 from html import unescape
 from typing import Any, Callable, Iterable, Mapping, TYPE_CHECKING, TypeVar
 
-from autodedup.normalize import fact_text
+from autodedup.normalize import fact_text, remembered_fold
 
 if TYPE_CHECKING:  # pragma: no cover
     from autodedup.dataset import Listing
@@ -131,8 +131,17 @@ _BUILDING_TOTAL = re.compile(
 )
 
 
+# R1: this module's own fold, memoised like `normalize.fold` for the per-pair readers. Not shared
+# with it: `_ACCENTS` and the combining class disagree on U+034F and U+1DC0-1DFF.
+_folds: dict[str, str] = {}
+
+
 def fold(text: str) -> str:
     """Deaccented lowercase — the folding every pattern here is written against."""
+    return remembered_fold(_folds, text, _fold_now)
+
+
+def _fold_now(text: str) -> str:
     return _ACCENTS.sub("", unicodedata.normalize("NFKD", text)).lower()
 
 
