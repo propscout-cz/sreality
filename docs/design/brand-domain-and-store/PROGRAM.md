@@ -155,8 +155,9 @@ opened by the coding session.
   `CORS_ALLOW_ORIGINS` and the Supabase redirect allowlist, and a follow-up PR deletes the redirect.
 - **Extension:** rebuilt in the cutover against the new hosts (`EXT_API_BASE_URL`,
   `EXT_APP_BASE_URL`); still installed unpacked, so each user re-downloads it.
-- **Email:** the bare domain publishes null MX + `v=spf1 -all`. The existing `_dmarc` policy and the
-  Resend records on `r.propscout.cz` are left as they were.
+- **Email:** the bare domain's mail is Google Workspace (MX + SPF + site verification, added
+  2026-10-25 17:27Z; they replaced a null MX + `v=spf1 -all` added earlier that day). The `_dmarc`
+  policy and the Resend records on `r.propscout.cz` are not part of this cutover.
 - **Dropped:** the Stripe step (no `STRIPE_WEBHOOK_SECRET` is set on the API; Stripe never sent an
   event) and push re-subscription (no subscription existed).
 - **Out of this cutover:** the brand rename (`frontend/src/lib/brand.ts` still says Limen Reality),
