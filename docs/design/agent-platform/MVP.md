@@ -247,7 +247,7 @@ start runs, what agent search means, and model-written SQL.
 
 | Ticket | What landed | Owed after merge |
 |---|---|---|
-| #2061 M0 credential rotation wizard | `scripts/rotate_credentials.sh` (13 stages, database last) and the per-secret inventory `.claude/skills/toolkit-api/references/secrets-inventory.md` | the operator runs the wizard in a window from sreality-e9; § 9 fills in as it goes |
+| #2061 M0 credential rotation wizard | `scripts/rotate_credentials.sh` (17 stages, resumable with `--from N`, database last) and the per-secret inventory `.claude/skills/toolkit-api/references/secrets-inventory.md` | the operator runs the wizard in a window from sreality-e9; § 9 fills in as it goes |
 
 ## 9. Credential rotation log
 
@@ -265,6 +265,7 @@ Inventory: `.claude/skills/toolkit-api/references/secrets-inventory.md`.
 | GitHub tokens | pending | |
 | Stripe | pending | |
 | Supabase secret key | pending | |
+| Supabase legacy JWT secret | pending | |
 | Old credentials revoked | pending | |
 | Database password and connection strings | pending | |
 | Tenant pool password | pending | |

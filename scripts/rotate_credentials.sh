@@ -188,14 +188,19 @@ finish() {
 # ──────────────────────────────────────────────────────────────────────────
 # STAGES: credential rotation after Railway's 2026-10-21 incident (agent platform M0, #2061).
 #
-# Run from the main checkout (it holds .env and frontend/.env.local):  scripts/rotate_credentials.sh
-# The inventory this follows: .claude/skills/toolkit-api/references/secrets-inventory.md
-# Pattern (Railway's "dual-key overlap"): make each NEW credential while the old one still works, stage it on
-# Railway without deploying, deploy each service once, verify, and only then revoke the old ones. The database
-# password has no overlap (Supabase keeps one), so it goes last, in a quiet window.
+#   scripts/rotate_credentials.sh            # from the main checkout: it holds .env and frontend/.env.local
+#   scripts/rotate_credentials.sh --from 14  # resume at a stage; the database (14-17) runs as one block
+#
+# Inventory: .claude/skills/toolkit-api/references/secrets-inventory.md. Railway's "dual-key overlap": make each NEW
+# credential while the old one still works, stage it on Railway without deploying, deploy each service once, check,
+# and only then revoke the old ones. Supabase keeps ONE postgres password, so the database goes last, in a quiet
+# window. A row of MVP.md § 9 is dated only once its check passed; .env remembers what a run rotated (ROTATED_*).
 # ──────────────────────────────────────────────────────────────────────────
 
-TOTAL_STAGES=13
+TOTAL_STAGES=17
+FROM=1
+if [[ "${1:-}" == "--from" ]]; then FROM="${2:-}"; fi
+if ! [[ "$FROM" =~ ^[0-9]+$ ]] || (( FROM < 1 || FROM > 14 )); then echo "usage: $0 [--from 1..14]"; exit 2; fi
 
 cd "$(git rev-parse --show-toplevel)"
 
@@ -204,91 +209,84 @@ SUPA="https://supabase.com/dashboard/project/$REF"
 API="https://api.propscout.cz"
 RW_API="https://railway.com/project/78652c43-bb7f-401b-a3de-5f532f76f72c/service/79e65a88-1629-439e-a961-a815f83539de/variables"
 RW_WORKER="https://railway.com/project/6f6ac731-10a5-4a28-b831-350ead8a4a97/service/59c41eb8-f84f-4f9d-b0af-747fe04f04ce/variables"
+RW_SPA="https://railway.com/project/cc62432a-5cd0-4c1a-8e3f-ba5d0bf79140/service/99dc269d-a82d-44a6-a32e-8829b0887baf/variables"
 MVP="docs/design/agent-platform/MVP.md"
+STAMP=$(date +%Y%m%d)
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "waiff/sreality")
 
-# _dotenv FILE KEY: a value from a dotenv file, quotes stripped; empty when absent.
-_dotenv() {
-  [[ -f "$1" ]] || return 0
-  grep -E "^$2=" "$1" | tail -n1 | cut -d= -f2- | sed -e 's/^["'\'']//' -e 's/["'\'']$//'
-}
+# _dotenv FILE KEY: a dotenv value, quotes stripped; empty when the file or the key is absent.
+_dotenv() { { sed -n "s/^$2=//p" "$1" 2>/dev/null || true; } | tail -n1 | sed -e "s/^[\"']//" -e "s/[\"']\$//"; }
 SUPABASE_URL=$(_dotenv frontend/.env.local VITE_SUPABASE_URL)
 SUPABASE_URL=${SUPABASE_URL:-https://$REF.supabase.co}
 PUBLISHABLE_KEY=$(_dotenv frontend/.env.local VITE_SUPABASE_ANON_KEY)
 
-# clip VALUE puts a secret on the clipboard so it is pasted, never printed.
+# clip VALUE puts a secret on the clipboard, to be pasted rather than shown.
 clip() {
   if   command -v clip.exe >/dev/null 2>&1; then printf '%s' "$1" | clip.exe
   elif command -v pbcopy   >/dev/null 2>&1; then printf '%s' "$1" | pbcopy
   elif command -v wl-copy  >/dev/null 2>&1; then printf '%s' "$1" | wl-copy
   elif command -v xclip    >/dev/null 2>&1; then printf '%s' "$1" | xclip -selection clipboard
-  else warn "no clipboard tool; the value follows, copy it and clear your terminal after"; printf '  %s\n' "$1"; return; fi
+  else warn "no clipboard tool, so the value is shown once; the next screen clears it"; printf '  %s\n' "$1"; return 0; fi
   note "copied to your clipboard"
 }
 
-# stage_on_railway URL "Service" NAME VALUE: edit one variable on a service, staged, not deployed.
-stage_on_railway() {
-  local url="$1" service="$2" name="$3" value="$4"
-  say "${BOLD}Railway $service → $name${RESET}"
-  open_url "$url"
-  clip "$value"
-  step "On the Variables tab, find $name. If it is not there, this service does not hold it: skip to the next."
-  step "Click its ⋮ menu → Edit, select the old value, paste (Ctrl-V), click the tick."
-  step "Railway shows the edit as a staged change with a Deploy button at the top: do NOT deploy yet."
-  pause "Done (or not present)? Press Enter"
-}
+tail4() { printf '…%s' "${1: -4}"; }
 
-# delete_on_railway URL "Service" NAME: remove one variable, staged.
-delete_on_railway() {
-  say "${BOLD}Railway $2 → delete $3${RESET}"
-  open_url "$1"
-  step "On the Variables tab, find $3; if present click its ⋮ menu → Remove. Do NOT deploy yet."
-  pause "Done (or not present)? Press Enter"
-}
+# done_mark KEY VALUE / done_value KEY: what an earlier run rotated, kept in .env (no secret: names, ids, tails).
+done_mark() { write_env "ROTATED_$1" "$2"; }
+done_value() { _existing "ROTATED_$1" || true; }
 
-# deploy_on_railway URL "Service": apply that project's staged changes in one deploy.
-deploy_on_railway() {
-  say "${BOLD}Railway $2 → deploy the staged changes${RESET}"
-  open_url "$1"
-  step "Click Deploy on the staged-changes banner and review the list: it should show only this run's edits."
-  step "Wait until the new deployment reads Active (the old one serves until the new one is healthy)."
-  pause "Active? Press Enter"
+# http_status METHOD URL BODY [CURL-CONFIG-LINE…]: the HTTP status ("000" when unreachable). Bearers, keys and the
+# body travel in a curl config on stdin, never in argv; URL may be empty when a config line carries it.
+http_status() {
+  local method="$1" url="$2" body="$3"; shift 3
+  { (( $# )) && printf '%s\n' "$@"
+    if [[ -n "$body" ]]; then
+      local b=${body//\\/\\\\}; b=${b//\"/\\\"}
+      printf 'header = "Content-Type: application/json"\ndata-binary = "%s"\n' "$b"
+    fi
+    true; } | curl -s -o /dev/null -w '%{http_code}' -X "$method" -K - ${url:+"$url"} || true
 }
+bearer() { printf 'header = "Authorization: Bearer %s"' "$1"; }
 
-# status METHOD URL [BEARER] [BODY]: the HTTP status; the bearer travels in a curl config on stdin, never argv.
-status() {
-  local method="$1" url="$2" bearer="${3:-}" body="${4:-}"
-  { [[ -n "$bearer" ]] && printf 'header = "Authorization: Bearer %s"\n' "$bearer"
-    [[ -n "$body" ]] && printf 'header = "Content-Type: application/json"\ndata = "%s"\n' "${body//\"/\\\"}"
-    true; } | curl -s -o /dev/null -w '%{http_code}' -X "$method" -K - "$url" || true
-}
-
-# check "what" CODE EXPECTED: one verification line; returns non-zero on a miss.
+# check "what" GOT WANT: one verification line; non-zero on a miss.
 check() {
-  if [[ "$2" == "$3" ]]; then printf '  %s✓ %s (%s)%s\n' "$GREEN" "$1" "$2" "$RESET"
-  else printf '  %s✗ %s: got %s, expected %s%s\n' "$RED" "$1" "$2" "$3" "$RESET"; return 1; fi
+  if [[ "$2" == "$3" ]]; then printf '  %s✓ %s%s\n' "$GREEN" "$1" "$RESET"
+  else printf '  %s✗ %s: got %s, expected %s%s\n' "$RED" "$1" "${2:-nothing}" "$3" "$RESET"; return 1; fi
 }
 
-# record "Secret row" "verification": stamp today's date on that row of MVP.md § 9.
+# verify "what" CMD…: run a check command quietly; ✓ or ✗; its status.
+verify() {
+  local label="$1"; shift
+  if "$@" >/dev/null 2>&1; then printf '  %s✓ %s%s\n' "$GREEN" "$label" "$RESET"
+  else printf '  %s✗ %s%s\n' "$RED" "$label" "$RESET"; return 1; fi
+}
+
+# record "Row" "verified by": date that row of MVP.md § 9 (an already dated row is left as it is).
 record() {
-  python3 - "$MVP" "$1" "$2" <<'PY'
-import datetime, pathlib, sys
+  local out
+  out=$(python3 - "$MVP" "$1" "$2" <<'PY'
+import datetime, pathlib, re, sys
 path, label, how = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 text = path.read_text()
-old = f"| {label} | pending | |"
-if old not in text:
-    sys.exit(f"MVP.md § 9 has no pending row for {label!r}")
-path.write_text(text.replace(old, f"| {label} | {datetime.date.today():%Y-%m-%d} | {how} |"))
+row = re.search(rf"^\| {re.escape(label)} \| ([^|]*) \|", text, re.M)
+if not row:
+    print(f"MVP.md § 9 has no row {label!r}: add it, then date it by hand")
+elif row.group(1).strip() != "pending":
+    print(f"{label}: already recorded ({row.group(1).strip()})")
+else:
+    path.write_text(text.replace(f"| {label} | pending | |", f"| {label} | {datetime.date.today():%Y-%m-%d} | {how} |", 1))
+    print(f"recorded {label} in MVP.md § 9")
 PY
-  printf '  %s✓ recorded%s %s in %s § 9\n' "$GREEN" "$RESET" "$1" "$MVP"
+) || out="MVP.md could not be updated; date the row $1 by hand"
+  note "$out"
 }
 
-# newpass: 32 URL-safe characters, so a DSN needs no escaping.
 newpass() { python3 -c 'import secrets, string; a = string.ascii_letters + string.digits; print("".join(secrets.choice(a) for _ in range(32)))'; }
 
-# user_token EMAIL PASSWORD: a session JWT for a smoke-test account, or empty.
+# user_token EMAIL PASSWORD: a session JWT for a smoke-test login, or empty.
 user_token() {
-  EMAIL="$1" PASSWORD="$2" URL="$SUPABASE_URL" KEY="$PUBLISHABLE_KEY" python3 - <<'PY'
+  EMAIL="$1" PASSWORD="$2" URL="$SUPABASE_URL" KEY="$PUBLISHABLE_KEY" python3 - <<'PY' 2>/dev/null || true
 import json, os, urllib.request
 req = urllib.request.Request(os.environ["URL"] + "/auth/v1/token?grant_type=password", method="POST",
     data=json.dumps({"email": os.environ["EMAIL"], "password": os.environ["PASSWORD"]}).encode(),
@@ -299,316 +297,495 @@ except Exception:
     print("")
 PY
 }
+member_token() { user_token "$(_existing SMOKE_TEST_NONADMIN_EMAIL || true)" "$(_existing SMOKE_TEST_NONADMIN_PASSWORD || true)"; }
 
-# api_checks: the live API answers on every credential it holds (DB, tenant pool, R2, Mapy).
-api_checks() {
-  local tok ok=0
-  tok=$(user_token "$(_existing SMOKE_TEST_NONADMIN_EMAIL || true)" "$(_existing SMOKE_TEST_NONADMIN_PASSWORD || true)")
-  check "API /health" "$(status GET "$API/health")" 200 || ok=1
-  if curl -s "$API/health" | grep -q '"image_storage":"configured"'; then check "API R2 configured" yes yes; else check "API R2 configured" no yes || ok=1; fi
-  if [[ -z "$tok" ]]; then warn "no smoke-test sign-in; the signed-in checks are skipped"; return 1; fi
-  check "GET /estimations (service DSN)" "$(status GET "$API/estimations?limit=1" "$tok")" 200 || ok=1
-  check "GET /pipeline/stages (tenant pool DSN)" "$(status GET "$API/pipeline/stages" "$tok")" 200 || ok=1
-  check "GET /maps/suggest (Mapy key)" "$(status GET "$API/maps/suggest?query=Praha&limit=1" "$tok")" 200 || ok=1
-  return $ok
+# presigned_key_id: the R2 access key id the live API signs photo URLs with (an id, public in every photo URL).
+presigned_key_id() {
+  local loc
+  loc=$(curl -s -o /dev/null -w '%{redirect_url}' "$API/images/img/1/1.jpg" || true)
+  python3 -c 'import sys, urllib.parse as u; q = u.parse_qs(u.urlsplit(sys.argv[1]).query); print(q.get("X-Amz-Credential", [""])[0].split("/")[0])' "$loc"
 }
 
-banner "Rotate the credentials stored on Railway and GitHub (M0, #2061)"
+# db_ok DSN [EXPECTED_USER]: the DSN connects (and is that role).
+db_ok() {
+  DSN="$1" WANT="${2:-}" python3 -c '
+import os, psycopg
+with psycopg.connect(os.environ["DSN"], prepare_threshold=None, connect_timeout=15) as c:
+    who = c.execute("select current_user").fetchone()[0]
+assert not os.environ["WANT"] or who == os.environ["WANT"], who' 2>/dev/null
+}
+
+r2_reads() {
+  R2A="$R2_ACCOUNT_ID" R2B="$R2_BUCKET_NAME" R2K="$NEW_R2_ACCESS_KEY_ID" R2S="$NEW_R2_SECRET_ACCESS_KEY" python3 -c '
+import os, boto3
+endpoint = "https://" + os.environ["R2A"] + ".r2.cloudflarestorage.com"
+s3 = boto3.client("s3", endpoint_url=endpoint, region_name="auto",
+                  aws_access_key_id=os.environ["R2K"], aws_secret_access_key=os.environ["R2S"])
+s3.head_bucket(Bucket=os.environ["R2B"])
+s3.list_objects_v2(Bucket=os.environ["R2B"], MaxKeys=1)'
+}
+
+# gh_can_dispatch TOKEN: the token reaches $REPO and holds Actions: write. Enabling the dispatch target while it is
+# already active is the no-op write that proves it (403 without the permission); a disabled workflow is left alone.
+gh_can_dispatch() {
+  local wf="https://api.github.com/repos/$REPO/actions/workflows/scrape_price_stats.yml" state
+  state=$(printf '%s\n' "$(bearer "$1")" | curl -s -K - "$wf" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("state", ""))' 2>/dev/null || true)
+  [[ "$state" == "active" ]] || { warn "scrape_price_stats.yml is '${state:-unreadable}', so the write probe is skipped"; return 1; }
+  [[ "$(http_status PUT "$wf/enable" "" "$(bearer "$1")")" == 204 ]]
+}
+
+# stage_on_railway URL "Service" NAME VALUE: edit one variable, staged, not deployed.
+stage_on_railway() {
+  say "${BOLD}Railway $2 → $3${RESET}"
+  open_url "$1"
+  clip "$4"
+  step "Variables tab → $3. If this service has no $3, skip it (press Enter)."
+  step "Its ⋮ menu → Edit → select the old value → paste (Ctrl-V) → the tick."
+  step "Railway lists the edit as a staged change with a Deploy button: do NOT deploy yet."
+  pause "Done, or not present? Press Enter"
+}
+
+# deploy_on_railway URL "Service" [must]: apply that project's staged changes in one deploy.
+deploy_on_railway() {
+  say "${BOLD}Railway $2 → deploy the staged changes${RESET}"
+  open_url "$1"
+  step "The staged-changes banner → review the list: only this run's edits and deletions."
+  if [[ "${3:-}" != must ]] && ! confirm "Deploy $2 now? (it restarts the service; deletions become final)"; then
+    SKIPPED+=("deploy the staged changes on Railway $2"); return 1
+  fi
+  step "Click Deploy; wait until the new deployment reads Active (the old one serves until then)."
+  pause "Active? Press Enter"
+}
+
+# eyeball "question": the operator confirms what only the dashboard shows.
+eyeball() { confirm "$1"; }
 
 # ── 1 ─────────────────────────────────────────────────────────────────────
-stage "Before you start"
-say "Railway advised replacing every credential stored there before 2026-10-21. This wizard replaces"
-say "the ones the 2026-10-25 grill listed (MVP.md § 4, Q13), one at a time, each with a check."
-say ""
-step "Ask sreality-e9 for a window: each Railway deploy restarts the realtime worker (and the dedup lease)."
-step "Keep two browser tabs signed in: Railway, and Supabase (project $REF)."
-step "The database comes last (stages 11-13) and briefly breaks new connections: do it in a quiet hour."
-missing=()
-for tool in gh curl python3; do command -v "$tool" >/dev/null 2>&1 || missing+=("$tool"); done
-python3 -c 'import boto3, psycopg' 2>/dev/null || missing+=("python: boto3 + psycopg (pip install -e \".[dev,api]\")")
-gh auth status >/dev/null 2>&1 || missing+=("gh auth login")
-[[ -n "$PUBLISHABLE_KEY" ]] || missing+=("frontend/.env.local VITE_SUPABASE_ANON_KEY")
-if (( ${#missing[@]} )); then warn "missing: ${missing[*]}"; confirm "Continue anyway?" || exit 1; fi
-note "repository: $REPO · API: $API"
-pause "Window agreed with sreality-e9? Press Enter"
+s_start() {
+  stage "Before you start"
+  say "Railway advised replacing every credential stored there before 2026-10-21. This replaces the ones the"
+  say "2026-10-25 grill listed (MVP.md § 4, Q13), each with a check, and dates each in MVP.md § 9."
+  step "Ask sreality-e9 for a window: each Railway deploy restarts that service (the worker carries the dedup lease)."
+  step "Keep Railway and the Supabase dashboard (project $REF) signed in, in one browser."
+  step "The database (stages 14-17) briefly refuses new connections: a quiet hour. Stop any time; resume with --from N."
+  local missing=() tool
+  for tool in gh curl python3; do command -v "$tool" >/dev/null 2>&1 || missing+=("$tool"); done
+  python3 -c 'import boto3, psycopg' 2>/dev/null || missing+=("python boto3 + psycopg (pip install -e \".[dev,api]\")")
+  gh auth status >/dev/null 2>&1 || missing+=("gh auth login")
+  [[ "$PUBLISHABLE_KEY" == sb_publishable_* ]] || missing+=("frontend/.env.local VITE_SUPABASE_ANON_KEY (sb_publishable_…)")
+  if (( ${#missing[@]} )); then warn "missing: ${missing[*]}"; confirm "Continue anyway?" || exit 1; fi
+  note "repository $REPO · API $API · starting at stage $FROM"
+  pause "Window agreed with sreality-e9? Press Enter"
+}
 
 # ── 2 ─────────────────────────────────────────────────────────────────────
-stage "Smoke-test accounts (automatic)"
-say "The two production test logins live only in .env. For each: sign in with the current password,"
-say "set a new random one through Supabase Auth, save it, and sign in again with it."
-changed=0
-for who in ADMIN NONADMIN; do
-  email=$(_existing "SMOKE_TEST_${who}_EMAIL" || true)
-  oldpw=$(_existing "SMOKE_TEST_${who}_PASSWORD" || true)
-  if [[ -z "$email" || -z "$oldpw" ]]; then warn "SMOKE_TEST_${who}_EMAIL/_PASSWORD not in .env: skipped"; continue; fi
-  tok=$(user_token "$email" "$oldpw")
-  if [[ -z "$tok" ]]; then warn "$email: the saved password no longer signs in; reset it in Supabase → Authentication → Users"; continue; fi
-  pw=$(newpass)
-  code=$(PASSWORD="$pw" python3 -c 'import json, os; print(json.dumps({"password": os.environ["PASSWORD"]}))' \
-    | curl -s -o /dev/null -w '%{http_code}' -X PUT -H "apikey: $PUBLISHABLE_KEY" -H "Content-Type: application/json" \
-           -K <(printf 'header = "Authorization: Bearer %s"\n' "$tok") --data-binary @- "$SUPABASE_URL/auth/v1/user")
-  check "$email password changed" "$code" 200 || continue
-  write_env "SMOKE_TEST_${who}_PASSWORD" "$pw"
-  changed=$((changed + 1))
-  if [[ -n "$(user_token "$email" "$pw")" ]]; then check "$email signs in with the new password" yes yes; else check "$email signs in with the new password" no yes || true; fi
-done
-(( changed )) && record "Smoke-test accounts" "sign-in with the new password"
-pause
+s_smoke() {
+  stage "Smoke-test accounts (automatic)"
+  say "The two production test logins live only in .env. For each: sign in, set a new random password through"
+  say "Supabase Auth, and keep it only once a sign-in with it works (a copy waits in *_PASSWORD_NEXT meanwhile)."
+  local who email oldpw pw tok present=0 changed=0
+  for who in ADMIN NONADMIN; do
+    email=$(_existing "SMOKE_TEST_${who}_EMAIL" || true)
+    oldpw=$(_existing "SMOKE_TEST_${who}_PASSWORD" || true)
+    [[ -n "$email" && -n "$oldpw" ]] || { warn "SMOKE_TEST_${who}_EMAIL/_PASSWORD not in .env: skipped"; continue; }
+    present=$((present + 1))
+    tok=$(user_token "$email" "$oldpw")
+    if [[ -z "$tok" ]]; then
+      pw=$(_existing "SMOKE_TEST_${who}_PASSWORD_NEXT" || true)
+      if [[ -n "$pw" && -n "$(user_token "$email" "$pw")" ]]; then
+        write_env "SMOKE_TEST_${who}_PASSWORD" "$pw"; write_env "SMOKE_TEST_${who}_PASSWORD_NEXT" ""
+        check "$email: the interrupted run's new password signs in" yes yes; changed=$((changed + 1))
+      else warn "$email: no saved password signs in; reset it in Supabase → Authentication → Users"; fi
+      continue
+    fi
+    pw=$(newpass)
+    write_env "SMOKE_TEST_${who}_PASSWORD_NEXT" "$pw"
+    http_status PUT "$SUPABASE_URL/auth/v1/user" "{\"password\": \"$pw\"}" "$(bearer "$tok")" \
+      "header = \"apikey: $PUBLISHABLE_KEY\"" >/dev/null
+    if [[ -n "$(user_token "$email" "$pw")" ]]; then
+      write_env "SMOKE_TEST_${who}_PASSWORD" "$pw"; write_env "SMOKE_TEST_${who}_PASSWORD_NEXT" ""
+      check "$email signs in with the new password" yes yes; changed=$((changed + 1))
+    elif [[ -n "$(user_token "$email" "$oldpw")" ]]; then warn "$email: the change did not take; the old password stays"
+    else warn "$email: neither password signs in; SMOKE_TEST_${who}_PASSWORD_NEXT holds the one just set"; fi
+  done
+  if (( present && changed == present )); then record "Smoke-test accounts" "sign-in with the new password"; fi
+  pause
+}
 
 # ── 3 ─────────────────────────────────────────────────────────────────────
-stage "Cloudflare R2: a new access key pair"
-open_url "https://dash.cloudflare.com/?to=/:account/r2/api-tokens"
-step "R2 → Manage API tokens → Create API token (an R2 token, not a user token)."
-step "Name it sreality-$(date +%Y%m%d); Permissions: Object Read & Write; apply to the images bucket (or all, as today's)."
-step "Create; the page shows the Access Key ID and the Secret Access Key ONCE. Keep the page open."
-ask R2_ACCOUNT_ID "R2 account id (the long hex id on the R2 overview page):"
-ask R2_BUCKET_NAME "Bucket name [sreality-images]:"
-R2_BUCKET_NAME=${R2_BUCKET_NAME:-sreality-images}
-ask_secret NEW_R2_ACCESS_KEY_ID "Paste the new Access Key ID:"
-ask_secret NEW_R2_SECRET_ACCESS_KEY "Paste the new Secret Access Key:"
-if R2A="$R2_ACCOUNT_ID" R2B="$R2_BUCKET_NAME" R2K="$NEW_R2_ACCESS_KEY_ID" R2S="$NEW_R2_SECRET_ACCESS_KEY" python3 - <<'PY'
-import os, boto3
-s3 = boto3.client("s3", endpoint_url=f"https://{os.environ['R2A']}.r2.cloudflarestorage.com",
-                  aws_access_key_id=os.environ["R2K"], aws_secret_access_key=os.environ["R2S"], region_name="auto")
-s3.head_bucket(Bucket=os.environ["R2B"])
-s3.list_objects_v2(Bucket=os.environ["R2B"], MaxKeys=1)
-PY
-then check "new R2 key reads $R2_BUCKET_NAME" ok ok
-else check "new R2 key reads $R2_BUCKET_NAME" failed ok || { warn "fix the token (bucket scope, Read & Write) and re-run"; exit 1; }
-fi
-set_secret R2_ACCESS_KEY_ID "$NEW_R2_ACCESS_KEY_ID"
-set_secret R2_SECRET_ACCESS_KEY "$NEW_R2_SECRET_ACCESS_KEY"
-for svc in "API|$RW_API" "worker|$RW_WORKER"; do
-  stage_on_railway "${svc#*|}" "${svc%%|*}" R2_ACCESS_KEY_ID "$NEW_R2_ACCESS_KEY_ID"
-  stage_on_railway "${svc#*|}" "${svc%%|*}" R2_SECRET_ACCESS_KEY "$NEW_R2_SECRET_ACCESS_KEY"
-done
-note "The OLD token stays valid until stage 10, so nothing breaks meanwhile."
-record "R2 access key pair" "boto3 head_bucket; API /health image_storage"
+s_r2() {
+  stage "Cloudflare R2: a new access key pair"
+  open_url "https://dash.cloudflare.com/?to=/:account/r2/api-tokens"
+  step "R2 → Manage API tokens → Create API token (an R2 token)."
+  step "Name: sreality-$STAMP · Permissions: Object Read & Write · the images bucket (or all, as today's token)."
+  step "Create: the page shows the Access Key ID and the Secret Access Key ONCE. Keep it open."
+  ask R2_ACCOUNT_ID "R2 account id (on the R2 overview page):"
+  ask R2_BUCKET_NAME "Bucket name (Enter for sreality-images):"
+  R2_BUCKET_NAME=${R2_BUCKET_NAME:-sreality-images}
+  write_env R2_ACCOUNT_ID "$R2_ACCOUNT_ID"; write_env R2_BUCKET_NAME "$R2_BUCKET_NAME"
+  ask_secret NEW_R2_ACCESS_KEY_ID "Paste the new Access Key ID:"
+  ask_secret NEW_R2_SECRET_ACCESS_KEY "Paste the new Secret Access Key:"
+  verify "the new pair reads $R2_BUCKET_NAME" r2_reads || { warn "fix the token (bucket, Read & Write), then: --from 3"; exit 1; }
+  set_secret R2_ACCESS_KEY_ID "$NEW_R2_ACCESS_KEY_ID"
+  set_secret R2_SECRET_ACCESS_KEY "$NEW_R2_SECRET_ACCESS_KEY"
+  local svc
+  for svc in "API|$RW_API" "worker|$RW_WORKER"; do
+    stage_on_railway "${svc#*|}" "${svc%%|*}" R2_ACCESS_KEY_ID "$NEW_R2_ACCESS_KEY_ID"
+    stage_on_railway "${svc#*|}" "${svc%%|*}" R2_SECRET_ACCESS_KEY "$NEW_R2_SECRET_ACCESS_KEY"
+  done
+  done_mark R2_KEY_ID "$NEW_R2_ACCESS_KEY_ID"; done_mark R2_TOKEN "sreality-$STAMP"
+  note "The old token keeps working until stage 12."
+}
 
 # ── 4 ─────────────────────────────────────────────────────────────────────
-stage "Mapy.com: new API keys"
-open_url "https://developer.mapy.com/"
-step "Sign in → open the project that holds today's key → API keys → create a new key."
-step "Do the same for the backup key's project (MAPY2), if you keep one."
-ask_secret NEW_MAPY "Paste the new primary key (MAPY_CZ_API_KEY):"
-ask_secret NEW_MAPY2 "Paste the new backup key (MAPY2_CZ_API_KEY; Enter to skip):"
-for pair in "MAPY_CZ_API_KEY|$NEW_MAPY" "MAPY2_CZ_API_KEY|${NEW_MAPY2:-}"; do
-  name=${pair%%|*}; key=${pair#*|}
-  [[ -n "$key" ]] || { note "$name skipped"; continue; }
-  code=$(printf 'url = "https://api.mapy.com/v1/geocode?query=Praha&lang=cs&limit=1&apikey=%s"\n' "$key" | curl -s -o /dev/null -w '%{http_code}' -K -)
-  check "$name geocodes" "$code" 200 || { warn "Mapy refused the key; check it and re-run"; exit 1; }
-  set_secret "$name" "$key"
-  stage_on_railway "$RW_API" API "$name" "$key"
-  stage_on_railway "$RW_WORKER" worker "$name" "$key"
-done
-record "Mapy keys" "api.mapy.com geocode 200"
+s_mapy() {
+  stage "Mapy.com: new API keys"
+  open_url "https://developer.mapy.com/"
+  step "Sign in → the project holding today's key → API keys → create a key. The backup key's project likewise."
+  ask_secret NEW_MAPY "Paste the new primary key (MAPY_CZ_API_KEY):"
+  ask_secret NEW_MAPY2 "Paste the new backup key (MAPY2_CZ_API_KEY; Enter if you keep none):"
+  local pair name key code
+  for pair in "MAPY_CZ_API_KEY|$NEW_MAPY" "MAPY2_CZ_API_KEY|$NEW_MAPY2"; do
+    name=${pair%%|*}; key=${pair#*|}
+    [[ -n "$key" ]] || { note "$name: no new key"; continue; }
+    code=$(http_status GET "" "" "url = \"https://api.mapy.com/v1/geocode?query=Praha&lang=cs&limit=1&apikey=$key\"")
+    check "$name geocodes Praha" "$code" 200 || { warn "Mapy refused it; check the key, then: --from 4"; exit 1; }
+    set_secret "$name" "$key"
+    stage_on_railway "$RW_API" API "$name" "$key"
+    stage_on_railway "$RW_WORKER" worker "$name" "$key"
+    done_mark "${name}_TAIL" "$(tail4 "$key")"
+  done
+}
 
 # ── 5 ─────────────────────────────────────────────────────────────────────
-stage "Valuo: new API tokens"
-say "Valuo issues the tokens; get a new production token and a new sandbox token the way you got"
-say "today's (their portal or your Valuo contact). They live on the Railway API only, never locally."
-ask_secret NEW_VALUO "Paste the new production token (VALUO_API_TOKEN; Enter to skip):"
-ask_secret NEW_VALUO_SANDBOX "Paste the new sandbox token (VALUO_SANDBOX_API_TOKEN; Enter to skip):"
-valuo_ok=""
-for pair in "VALUO_API_TOKEN|${NEW_VALUO:-}" "VALUO_SANDBOX_API_TOKEN|${NEW_VALUO_SANDBOX:-}"; do
-  name=${pair%%|*}; key=${pair#*|}
-  [[ -n "$key" ]] || { note "$name skipped"; continue; }
-  if confirm "Check $name with an advert lookup for NO adverts (prices nothing)?"; then
-    code=$(status POST "https://api.valuo.com/v1/advert/detail" "$key" '{"country_code": "cs", "ids": []}')
-    if [[ "$code" == 401 || "$code" == 403 ]]; then check "$name accepted" "$code" "not 401/403" || exit 1
-    else check "$name accepted (status $code, not an auth refusal)" ok ok; fi
-  fi
-  stage_on_railway "$RW_API" API "$name" "$key"
-  valuo_ok="yes"
-done
-[[ -n "$valuo_ok" ]] && record "Valuo tokens" "advert/detail with no ids: no 401/403"
+s_valuo() {
+  stage "Valuo: new API tokens"
+  say "Valuo issues them: a new production and a new sandbox token, the way you got today's (their portal or"
+  say "your Valuo contact). They live on the Railway API only, never locally."
+  ask_secret NEW_VALUO "Paste the new production token (VALUO_API_TOKEN; Enter to skip):"
+  ask_secret NEW_VALUO_SANDBOX "Paste the new sandbox token (VALUO_SANDBOX_API_TOKEN; Enter to skip):"
+  local pair name key code
+  for pair in "VALUO_API_TOKEN|$NEW_VALUO" "VALUO_SANDBOX_API_TOKEN|$NEW_VALUO_SANDBOX"; do
+    name=${pair%%|*}; key=${pair#*|}
+    [[ -n "$key" ]] || { note "$name skipped"; continue; }
+    while true; do
+      # An advert lookup for no adverts prices nothing; 401/403 is a refused token, 000/5xx says nothing.
+      code=$(http_status POST "https://api.valuo.com/v1/advert/detail" '{"country_code": "cs", "ids": []}' "$(bearer "$key")")
+      if [[ "$code" =~ ^(2|4)[0-9][0-9]$ && "$code" != 401 && "$code" != 403 ]]; then check "$name accepted (HTTP $code)" ok ok; break; fi
+      check "$name accepted" "$code" "2xx or 4xx other than 401/403" || true
+      confirm "Retry the check?" || { warn "$name not staged"; key=""; break; }
+    done
+    [[ -n "$key" ]] || continue
+    stage_on_railway "$RW_API" API "$name" "$key"
+    done_mark "${name}_TAIL" "$(tail4 "$key")"
+  done
+}
 
 # ── 6 ─────────────────────────────────────────────────────────────────────
-stage "GitHub: new fine-grained tokens"
-say "Two tokens, each scoped to $REPO alone with Actions: Read and write (Metadata: read is automatic):"
-say "  GH_DISPATCH_TOKEN  → Railway API (the price-stats 'run now' dispatch)"
-say "  SCRAPE_CHAIN_TOKEN → GitHub secret (the price-stats chain step)"
-warn "A token scoped to the old owner breaks when the repository moves (Actions exit #2008)."
-if confirm "Has the repository reached its final owner ($REPO)?"; then
+s_github() {
+  stage "GitHub: new fine-grained tokens"
+  say "Two tokens, each for $REPO alone with Actions: Read and write (Metadata: read is automatic):"
+  say "  GH_DISPATCH_TOKEN → Railway API (price stats' 'run now')   SCRAPE_CHAIN_TOKEN → GitHub secret (its chain step)"
+  warn "A token scoped to the old owner breaks when the repository moves (Actions exit #2008)."
+  confirm "Has the repository reached its final owner ($REPO)?" || { SKIPPED+=("GitHub tokens: --from 6 after the transfer"); return 0; }
   open_url "https://github.com/settings/personal-access-tokens/new"
-  step "Token name gh-dispatch-$(date +%Y%m%d); Resource owner: the repo's owner; Only select repositories: $REPO."
-  step "Repository permissions → Actions: Read and write. Generate; copy it."
+  step "Name gh-dispatch-$STAMP · Resource owner: the repo's owner · Only select repositories: $REPO."
+  step "Repository permissions → Actions: Read and write. Generate; copy."
   ask_secret NEW_GH_DISPATCH "Paste the GH_DISPATCH_TOKEN token:"
-  step "Generate a second token the same way, named scrape-chain-$(date +%Y%m%d)."
+  step "A second one the same way, named scrape-chain-$STAMP."
   ask_secret NEW_CHAIN "Paste the SCRAPE_CHAIN_TOKEN token:"
+  local pair
   for pair in "GH_DISPATCH_TOKEN|$NEW_GH_DISPATCH" "SCRAPE_CHAIN_TOKEN|$NEW_CHAIN"; do
-    check "${pair%%|*} reads $REPO's workflows" "$(status GET "https://api.github.com/repos/$REPO/actions/workflows?per_page=1" "${pair#*|}")" 200 || exit 1
+    verify "${pair%%|*} can dispatch on $REPO (Actions: write)" gh_can_dispatch "${pair#*|}" \
+      || { warn "give it Actions: Read and write on $REPO only, then: --from 6"; exit 1; }
   done
   stage_on_railway "$RW_API" API GH_DISPATCH_TOKEN "$NEW_GH_DISPATCH"
   set_secret SCRAPE_CHAIN_TOKEN "$NEW_CHAIN"
-  record "GitHub tokens" "GET actions/workflows 200"
-else
-  SKIPPED+=("GitHub tokens: re-run stage 6 after the repository transfer (#2008)")
-fi
+  done_mark GH_DISPATCH_TOKEN_TAIL "$(tail4 "$NEW_GH_DISPATCH")"; done_mark GH_TOKENS "gh-dispatch-$STAMP, scrape-chain-$STAMP"
+}
 
 # ── 7 ─────────────────────────────────────────────────────────────────────
-stage "Stripe: check what is stored"
-say "The 2026-10-25 audit found no Stripe secret on Railway (the billing webhook fails closed) and no code"
-say "reads STRIPE_SECRET_KEY. Check, and roll only what is actually stored."
-open_url "$RW_API"
-if confirm "Does the API service hold STRIPE_WEBHOOK_SECRET or STRIPE_SECRET_KEY?"; then
-  open_url "https://dashboard.stripe.com/webhooks"
-  step "Webhooks → the propscout endpoint → Signing secret → Roll secret (keep the old one valid 24 h); copy it."
-  ask_secret NEW_STRIPE_WEBHOOK "Paste the new signing secret (whsec_…):"
-  stage_on_railway "$RW_API" API STRIPE_WEBHOOK_SECRET "$NEW_STRIPE_WEBHOOK"
-  step "If STRIPE_SECRET_KEY is stored too: Developers → API keys → Secret key → Roll key, and stage it the same way."
-  pause
-  record "Stripe" "rolled; 'Send test event' after the deploy"
-else
-  record "Stripe" "nothing stored on Railway or GitHub"
-fi
+s_stripe() {
+  stage "Stripe: check what is stored"
+  say "The 2026-10-25 audit found no Stripe secret on Railway (the billing webhook fails closed) and no code reads"
+  say "STRIPE_SECRET_KEY. Roll only what is stored."
+  local gh_stripe
+  gh_stripe=$(gh secret list --json name -q '.[].name' 2>/dev/null | grep '^STRIPE' || true)
+  note "GitHub secrets named STRIPE*: ${gh_stripe:-none}"
+  open_url "$RW_API"
+  if confirm "Does the Railway API service hold STRIPE_WEBHOOK_SECRET or STRIPE_SECRET_KEY?"; then
+    open_url "https://dashboard.stripe.com/webhooks"
+    step "Webhooks → the propscout endpoint → Signing secret → Roll secret (keep the old one valid 24 h); copy."
+    ask_secret NEW_STRIPE_WEBHOOK "Paste the new signing secret (whsec_…):"
+    stage_on_railway "$RW_API" API STRIPE_WEBHOOK_SECRET "$NEW_STRIPE_WEBHOOK"
+    step "STRIPE_SECRET_KEY stored too? Developers → API keys → Secret key → Roll key, and stage it the same way."
+    pause
+    done_mark STRIPE "rolled"
+  elif [[ -z "$gh_stripe" ]]; then
+    record "Stripe" "nothing stored: none on the Railway API (looked), no STRIPE* GitHub secret"
+  else
+    warn "GitHub holds $gh_stripe, which no workflow reads: roll it in Stripe, or delete it (gh secret delete)"
+  fi
+}
 
 # ── 8 ─────────────────────────────────────────────────────────────────────
-stage "Supabase: a new secret key, and the dead copies"
-open_url "$SUPA/settings/api-keys"
-step "API Keys → Secret keys → + New secret key; name it github-$(date +%Y%m%d); copy it (sb_secret_…)."
-ask_secret NEW_SB_SECRET "Paste the new secret key:"
-code=$(printf 'header = "apikey: %s"\n' "$NEW_SB_SECRET" | curl -s -o /dev/null -w '%{http_code}' -K - "$SUPABASE_URL/auth/v1/admin/users?per_page=1")
-check "new secret key opens the Auth admin API" "$code" 200 || exit 1
-set_secret SUPABASE_SERVICE_ROLE_KEY "$NEW_SB_SECRET"
-note "No code reads SUPABASE_SERVICE_ROLE_KEY today; it is kept for forward compatibility."
-say ""
-say "Dead copies (no reader since 2026-10-13, or never on this service):"
-delete_on_railway "$RW_API" API API_TOKEN
-delete_on_railway "$RW_API" API SUPABASE_JWT_SECRET
-delete_on_railway "$RW_API" API RUNPOD_API_KEY
-if confirm "Delete the GitHub secret EXT_API_TOKEN (the extension's retired static key)?"; then
-  gh secret delete EXT_API_TOKEN >/dev/null 2>&1 && note "deleted EXT_API_TOKEN" || warn "EXT_API_TOKEN was not deleted"
-fi
-if [[ "$PUBLISHABLE_KEY" == sb_publishable_* ]] && confirm "Set EXT_SUPABASE_ANON_KEY to the SPA's publishable key (the extension build's one Supabase key)?"; then
-  set_secret EXT_SUPABASE_ANON_KEY "$PUBLISHABLE_KEY"
-  note "Rebuild the extension (Actions → build-extension) and update the installed copies before stage 10's last step."
-fi
-record "Supabase secret key" "Auth admin API 200"
+s_supabase_key() {
+  stage "Supabase: a new secret key"
+  open_url "$SUPA/settings/api-keys"
+  step "API Keys → Secret keys → + New secret key · name github-$STAMP · copy it (sb_secret_…)."
+  ask_secret NEW_SB_SECRET "Paste the new secret key:"
+  check "it opens the Auth admin API" \
+    "$(http_status GET "$SUPABASE_URL/auth/v1/admin/users?per_page=1" "" "header = \"apikey: $NEW_SB_SECRET\"")" 200 \
+    || { warn "copy the whole sb_secret_… key, then: --from 8"; exit 1; }
+  set_secret SUPABASE_SERVICE_ROLE_KEY "$NEW_SB_SECRET"
+  done_mark SB_KEY "github-$STAMP"
+  record "Supabase secret key" "Auth admin API 200 (its one copy is the GitHub secret; no code reads it)"
+  note "The old secret keys go in stage 12."
+}
 
 # ── 9 ─────────────────────────────────────────────────────────────────────
-stage "Deploy the staged changes, then check"
-deploy_on_railway "$RW_API" API
-deploy_on_railway "$RW_WORKER" worker
-api_checks || warn "a check failed: fix it before revoking anything in stage 10"
-open_url "https://app.propscout.cz/health"
-step "On Health, the worker's heartbeat is fresh and no lane reports an auth or connection error."
-pause "All green? Press Enter"
+s_dead_copies() {
+  stage "Dead copies: delete what nothing reads"
+  say "Read by nothing since 2026-10-13 (the API accepts only a Supabase JWT and verifies it against the JWKS)."
+  say "RUNPOD_API_KEY on the API is deleted at #2059's deploy, with sreality-e9, not here."
+  local name
+  for name in API_TOKEN SUPABASE_JWT_SECRET; do
+    if confirm "Delete $name from the Railway API service?"; then
+      open_url "$RW_API"
+      step "Variables tab → $name → ⋮ → Remove. Do NOT deploy yet."
+      pause "Done, or not present? Press Enter"
+    fi
+  done
+  if confirm "Delete the GitHub secret EXT_API_TOKEN (the extension's retired static key)?"; then
+    if gh secret delete EXT_API_TOKEN >/dev/null 2>&1; then note "deleted EXT_API_TOKEN"; else warn "EXT_API_TOKEN was not deleted"; fi
+  fi
+}
 
 # ── 10 ────────────────────────────────────────────────────────────────────
-stage "Revoke the old credentials"
-warn "From here the old values stop working. Every check in stage 9 must have been green."
-confirm "Revoke now?" || { SKIPPED+=("stage 10: revoke the old credentials"); finish; exit 0; }
-open_url "https://dash.cloudflare.com/?to=/:account/r2/api-tokens"
-step "R2 API tokens: delete the token(s) older than sreality-$(date +%Y%m%d)."
-pause
-open_url "https://developer.mapy.com/"
-step "Mapy: delete the old key(s) in each project."
-pause
-step "Valuo: ask Valuo to revoke the old production and sandbox tokens."
-open_url "https://github.com/settings/personal-access-tokens"
-step "GitHub: delete the old dispatch and chain tokens (and any classic token they replaced, under Tokens (classic))."
-pause
-open_url "$SUPA/settings/api-keys"
-step "Supabase API Keys: delete every secret key except github-$(date +%Y%m%d)."
-pause
-open_url "$SUPA/settings/jwt"
-step "Supabase JWT Keys: if a Legacy HS256 secret sits under Previously used, anyone holding it can mint a service_role"
-step "token. Revoke it ONLY once the extension is rebuilt with the publishable key and the installed copies updated."
-pause
-api_checks || warn "a check failed after revocation: something still used an old value"
-record "Old credentials revoked" "stage 9 checks still green"
+s_extension_key() {
+  stage "The extension's Supabase key"
+  say "Before stage 13 can revoke the legacy JWT secret, every client must send a publishable key (sb_publishable_…)."
+  open_url "$RW_SPA"
+  if ! eyeball "Does the SPA service's VITE_SUPABASE_ANON_KEY start sb_publishable_ and end in $(tail4 "$PUBLISHABLE_KEY")?"; then
+    warn "the SPA sends another key: stage 13 stays closed"; return 0
+  fi
+  if confirm "Set the GitHub secret EXT_SUPABASE_ANON_KEY (the extension build's key) to that publishable key?"; then
+    set_secret EXT_SUPABASE_ANON_KEY "$PUBLISHABLE_KEY"
+    if confirm "Build the extension now (Actions → build-extension)?"; then
+      if gh workflow run build-extension.yml >/dev/null 2>&1; then note "build started: gh run list --workflow build-extension.yml"
+      else warn "could not start build-extension.yml"; fi
+    fi
+    step "Install the new build on every trusted operator's Chrome before stage 13."
+    done_mark EXT_KEY "$STAMP"
+  fi
+}
 
 # ── 11 ────────────────────────────────────────────────────────────────────
-stage "Database (1/3): prepare the new password and connection strings"
-warn "Supabase keeps ONE postgres password: from the reset until both services redeploy, new connections fail."
-say "So the new strings are staged on Railway first, then the password is reset, then both services deploy at once."
-confirm "Quiet hour, and sreality-e9 has braked the dedup lane?" || { SKIPPED+=("stages 11-13: the database"); finish; exit 0; }
-DB_PASSWORD=$(newpass)
-TENANT_PASSWORD=$(newpass)
-open_url "$RW_API"
-step "Railway API → Variables → SUPABASE_DB_URL → the eye icon: note its HOST and PORT (that is the kind to copy)."
-open_url "$SUPA"
-step "Supabase → Connect (top bar) → Connection string. Copy, with [YOUR-PASSWORD] still in it:"
-step "  1. the string with the same host and port as today's SUPABASE_DB_URL;"
-step "  2. the Session pooler string (port 5432);"
-step "  3. the Shared pooler's Transaction string (host aws-…pooler.supabase.com, port 6543, user postgres.$REF)."
-ask TX_TEMPLATE "1. SUPABASE_DB_URL kind:"
-ask SESSION_TEMPLATE "2. Session pooler:"
-if [[ "$TX_TEMPLATE" == *"postgres.$REF:"*"pooler.supabase.com:6543"* ]]; then SHARED_TEMPLATE=$TX_TEMPLATE
-else ask SHARED_TEMPLATE "3. Shared pooler, transaction mode:"; fi
-for t in "$TX_TEMPLATE" "$SESSION_TEMPLATE" "$SHARED_TEMPLATE"; do
-  [[ "$t" == *"[YOUR-PASSWORD]"* ]] || { warn "every string must carry [YOUR-PASSWORD]: $t"; exit 1; }
-done
-[[ "$SHARED_TEMPLATE" == *"postgres.$REF:"* ]] || { warn "the shared pooler string's user must be postgres.$REF"; exit 1; }
-NEW_DB_URL=${TX_TEMPLATE/\[YOUR-PASSWORD\]/$DB_PASSWORD}
-NEW_DB_SESSION_URL=${SESSION_TEMPLATE/\[YOUR-PASSWORD\]/$DB_PASSWORD}
-TENANT_TEMPLATE=${SHARED_TEMPLATE/postgres.$REF:/tenant_pool.$REF:}
-NEW_TENANT_URL=${TENANT_TEMPLATE/\[YOUR-PASSWORD\]/$TENANT_PASSWORD}
-stage_on_railway "$RW_API" API SUPABASE_DB_URL "$NEW_DB_URL"
-stage_on_railway "$RW_API" API SUPABASE_DB_SESSION_URL "$NEW_DB_SESSION_URL"
-stage_on_railway "$RW_API" API TENANT_POOL_DB_URL "$NEW_TENANT_URL"
-stage_on_railway "$RW_WORKER" worker SUPABASE_DB_URL "$NEW_DB_URL"
-stage_on_railway "$RW_WORKER" worker SUPABASE_DB_SESSION_URL "$NEW_DB_SESSION_URL"
-note "Nothing is deployed yet; the services still run on the old password."
+s_deploy() {
+  stage "Deploy the staged changes, then check each copy"
+  deploy_on_railway "$RW_API" API || { warn "nothing is live until the API deploys: --from 11"; return 0; }
+  deploy_on_railway "$RW_WORKER" worker || true
+  local tok id tail
+  check "API /health" "$(http_status GET "$API/health" "")" 200 || true
+  tok=$(member_token)
+  if [[ -n "$tok" ]]; then
+    check "GET /estimations (database)" "$(http_status GET "$API/estimations?limit=1" "" "$(bearer "$tok")")" 200 || true
+    check "GET /pipeline/stages (tenant pool)" "$(http_status GET "$API/pipeline/stages" "" "$(bearer "$tok")")" 200 || true
+  else warn "no smoke-test sign-in: the signed-in checks are skipped"; fi
+  id=$(done_value R2_KEY_ID)
+  if [[ -n "$id" ]]; then
+    if check "the API signs photo URLs with the new R2 key" "$(presigned_key_id)" "$id" \
+      && eyeball "Railway worker: does R2_ACCESS_KEY_ID read $id?"; then
+      record "R2 access key pair" "API presigns with the new key id; worker variable checked; boto3 head_bucket"
+    fi
+  fi
+  tail=$(done_value MAPY_CZ_API_KEY_TAIL)
+  if [[ -n "$tail" && -n "$tok" ]]; then
+    if check "GET /maps/suggest" "$(http_status GET "$API/maps/suggest?query=Praha&limit=1" "" "$(bearer "$tok")")" 200 \
+      && eyeball "Railway API: does MAPY_CZ_API_KEY end in $tail? (/maps/suggest also passes on the backup key)"; then
+      record "Mapy keys" "geocode 200 per key; /maps/suggest 200; API variable checked"
+    fi
+  fi
+  tail=$(done_value VALUO_API_TOKEN_TAIL)$(done_value VALUO_SANDBOX_API_TOKEN_TAIL)
+  if [[ -n "$tail" ]] && eyeball "Railway API: do the Valuo tokens end in $(done_value VALUO_API_TOKEN_TAIL) / $(done_value VALUO_SANDBOX_API_TOKEN_TAIL)?"; then
+    record "Valuo tokens" "advert/detail for no adverts: no 401/403; API variables checked"
+  fi
+  tail=$(done_value GH_DISPATCH_TOKEN_TAIL)
+  if [[ -n "$tail" ]] && eyeball "Railway API: does GH_DISPATCH_TOKEN end in $tail?"; then
+    record "GitHub tokens" "Actions write probe 204 per token; API variable checked"
+  fi
+  if [[ -n "$(done_value STRIPE)" ]]; then
+    open_url "https://dashboard.stripe.com/webhooks"
+    step "The endpoint → Send test event: the response must be 2xx."
+    if eyeball "2xx?"; then record "Stripe" "webhook rolled; Stripe test event 2xx"; fi
+  fi
+  open_url "https://app.propscout.cz/health"
+  step "Health: the worker heartbeat is fresh; no lane shows an auth, S3 or connection error."
+  pause "All green? Press Enter (fix anything red before stage 12)"
+}
 
 # ── 12 ────────────────────────────────────────────────────────────────────
-stage "Database (2/3): reset the postgres password, then the tenant pool's"
-confirm "Reset the database password now? (new connections fail until stage 13's deploys)" || { SKIPPED+=("stages 12-13"); finish; exit 0; }
-open_url "$SUPA/database/settings"
-clip "$DB_PASSWORD"
-step "Database settings → Database password → Reset database password → paste (Ctrl-V) → Reset."
-pause "Reset done? Press Enter"
-# From here on nothing exits: the services are down until stage 13 deploys, so a failed check offers a retry.
-db_ok=""
-until DSN="$NEW_DB_SESSION_URL" python3 -c 'import os, psycopg; psycopg.connect(os.environ["DSN"]).execute("select 1")' 2>/dev/null && db_ok=yes; do
-  check "new password connects (session pooler)" failed ok || true
-  clip "$DB_PASSWORD"
-  step "Reset the password again and paste exactly the clipboard (it holds the new one again)."
-  confirm "Retry the check?" || break
-done
-[[ -n "$db_ok" ]] && check "new password connects (session pooler)" ok ok
-[[ -n "$db_ok" ]] || warn "carrying on unverified: stage 13 deploys the staged strings either way"
-# A SCRAM verifier, not the password: the ALTER statement is safe in any log.
-if DSN="$NEW_DB_SESSION_URL" PW="$TENANT_PASSWORD" python3 - <<'PY'
+s_revoke() {
+  stage "Revoke the old credentials"
+  warn "From here the old values stop working; stage 11's checks must all have been green."
+  confirm "Revoke now?" || { SKIPPED+=("revoke the old credentials: --from 12"); return 0; }
+  open_url "https://dash.cloudflare.com/?to=/:account/r2/api-tokens"
+  step "R2 API tokens: delete every token except ${BOLD}$(done_value R2_TOKEN)${RESET}."
+  pause
+  open_url "https://developer.mapy.com/"
+  step "Mapy: in each project, delete every key except the ones ending $(done_value MAPY_CZ_API_KEY_TAIL) $(done_value MAPY2_CZ_API_KEY_TAIL)."
+  pause
+  step "Valuo: ask Valuo to revoke the production and sandbox tokens these replaced."
+  pause
+  open_url "https://github.com/settings/personal-access-tokens"
+  step "GitHub: delete the tokens these replaced; keep ${BOLD}$(done_value GH_TOKENS)${RESET} (and look under Tokens (classic))."
+  pause
+  open_url "$SUPA/settings/api-keys"
+  step "Supabase API Keys → Secret keys: delete every one except ${BOLD}$(done_value SB_KEY)${RESET}."
+  pause
+  local tok id ok=1
+  id=$(done_value R2_KEY_ID)
+  if [[ -n "$id" ]]; then check "the API still signs with the new R2 key" "$(presigned_key_id)" "$id" || ok=0; fi
+  tok=$(member_token)
+  [[ -n "$tok" ]] && { check "GET /maps/suggest" "$(http_status GET "$API/maps/suggest?query=Praha&limit=1" "" "$(bearer "$tok")")" 200 || ok=0; }
+  open_url "https://app.propscout.cz/health"
+  eyeball "Health: still green (images lane storing, no auth errors)?" || ok=0
+  if (( ok )); then record "Old credentials revoked" "API presign + /maps/suggest + Health after the revocation"
+  else warn "something still used an old value: stage its new one and deploy"; fi
+}
+
+# ── 13 ────────────────────────────────────────────────────────────────────
+s_legacy_jwt() {
+  stage "Supabase: the legacy JWT secret"
+  say "If a Legacy HS256 secret sits under JWT Keys → Previously used, whoever holds it can mint a service_role"
+  say "token PostgREST accepts. Revoking it also ends the legacy anon key, so every client must send sb_publishable_."
+  [[ -n "$(done_value EXT_KEY)" ]] || { warn "stage 10 has not moved the extension to the publishable key: skipped"; return 0; }
+  open_url "$SUPA/settings/jwt"
+  if ! confirm "Is a legacy HS256 secret listed, and is the new extension build installed everywhere?"; then
+    note "nothing to revoke, or not yet"; return 0
+  fi
+  step "Its ⋮ menu → Revoke."
+  pause "Revoked? Press Enter"
+  local tok; tok=$(member_token)
+  if [[ -n "$tok" ]] && check "a signed-in API read still works" "$(http_status GET "$API/pipeline/stages" "" "$(bearer "$tok")")" 200 \
+    && eyeball "The extension, signed in on a portal page, still shows its panel?"; then
+    record "Supabase legacy JWT secret" "revoked; the SPA's sign-in and the extension still work"
+  fi
+}
+
+# ── 14-17 ─────────────────────────────────────────────────────────────────
+s_db() {
+  stage "Database (1/4): the new password and connection strings"
+  warn "Supabase keeps ONE postgres password: from the reset until both services redeploy, new connections fail."
+  say "The new strings are staged on Railway first, GitHub's set just before the reset, then both services deploy."
+  say "Interrupted? Run --from 14 again: it makes a fresh password and you reset once more."
+  confirm "Quiet hour, and sreality-e9 has braked the dedup lane?" || { SKIPPED+=("the database: --from 14"); return 0; }
+  local db_pw tenant_pw tx session shared t
+  db_pw=$(newpass); tenant_pw=$(newpass)
+  open_url "$RW_API"
+  step "Railway API → SUPABASE_DB_URL → the eye icon: note its HOST and PORT."
+  open_url "$SUPA"
+  step "Supabase → Connect (top bar) → Connection string. Copy each with [YOUR-PASSWORD] still in it:"
+  step "  1. the one with today's SUPABASE_DB_URL host and port   2. Session pooler (port 5432)"
+  step "  3. Shared pooler, Transaction mode (aws-…pooler.supabase.com:6543, user postgres.$REF)"
+  ask tx "1. Same kind as SUPABASE_DB_URL:"
+  ask session "2. Session pooler:"
+  if [[ "$tx" == *"postgres.$REF:"*"pooler.supabase.com:6543"* ]]; then shared=$tx; else ask shared "3. Shared pooler, transaction mode:"; fi
+  for t in "$tx" "$session" "$shared"; do
+    [[ "$t" == *"[YOUR-PASSWORD]"* ]] || { warn "every string must still read [YOUR-PASSWORD]; nothing is changed yet: --from 14"; exit 1; }
+  done
+  [[ "$shared" == *"postgres.$REF:"* ]] || { warn "string 3's user must be postgres.$REF; nothing is changed yet: --from 14"; exit 1; }
+  local new_db="${tx/\[YOUR-PASSWORD\]/$db_pw}" new_session="${session/\[YOUR-PASSWORD\]/$db_pw}"
+  # GitHub's runners reach Supabase over IPv4 only, so GitHub gets the shared pooler whatever Railway uses.
+  local gh_db="${shared/\[YOUR-PASSWORD\]/$db_pw}" tenant="${shared/postgres.$REF:/tenant_pool.$REF:}"
+  local new_tenant="${tenant/\[YOUR-PASSWORD\]/$tenant_pw}"
+
+  stage "Database (2/4): stage the strings on Railway"
+  stage_on_railway "$RW_API" API SUPABASE_DB_URL "$new_db"
+  stage_on_railway "$RW_API" API SUPABASE_DB_SESSION_URL "$new_session"
+  stage_on_railway "$RW_API" API TENANT_POOL_DB_URL "$new_tenant"
+  stage_on_railway "$RW_WORKER" worker SUPABASE_DB_URL "$new_db"
+  stage_on_railway "$RW_WORKER" worker SUPABASE_DB_SESSION_URL "$new_session"
+  note "Nothing is deployed: the services still run on the old password."
+
+  stage "Database (3/4): reset the postgres password, then the tenant pool's"
+  if ! confirm "Reset the database password now? (new connections fail until stage 17's deploys)"; then
+    warn "Discard the staged database edits on both Railway projects (banner → Discard), or a later deploy applies them."
+    SKIPPED+=("the database: --from 14"); return 0
+  fi
+  # From here nothing exits: the services are down until stage 17, so every check warns or retries.
+  set_secret SUPABASE_DB_URL "$gh_db"
+  set_secret SUPABASE_DB_SESSION_URL "$new_session"
+  open_url "$SUPA/database/settings"
+  clip "$db_pw"
+  step "Database settings → Database password → Reset database password → paste (Ctrl-V) → Reset."
+  pause "Reset done? Press Enter"
+  local tries=0 db_ok_now=""
+  while true; do
+    if db_ok "$new_session"; then db_ok_now=yes; break; fi
+    tries=$((tries + 1))
+    if (( tries < 6 )); then note "not yet (the pooler takes a moment); retrying in 10 s ($tries/6)"; sleep 10; continue; fi
+    check "the new password connects (session pooler)" no yes || true
+    clip "$db_pw"
+    step "Reset the password again and paste exactly the clipboard (it holds the new one again)."
+    confirm "Retry?" || break
+    tries=0
+  done
+  if [[ -n "$db_ok_now" ]]; then check "the new password connects (session pooler)" yes yes; fi
+  if db_ok "$gh_db"; then check "GitHub's string connects (shared pooler)" yes yes; else check "GitHub's string connects" no yes || true; fi
+  # A SCRAM verifier, not the password: the ALTER is safe in any log.
+  until DSN="$new_session" PW="$tenant_pw" python3 - <<'PY' 2>/dev/null
 import base64, hashlib, hmac, os, psycopg
 salt, n = os.urandom(16), 4096
 salted = hashlib.pbkdf2_hmac("sha256", os.environ["PW"].encode(), salt, n)
 stored = hashlib.sha256(hmac.new(salted, b"Client Key", "sha256").digest()).digest()
 server = hmac.new(salted, b"Server Key", "sha256").digest()
 b64 = lambda b: base64.b64encode(b).decode()
-verifier = f"SCRAM-SHA-256${n}:{b64(salt)}${b64(stored)}:{b64(server)}"
-with psycopg.connect(os.environ["DSN"], autocommit=True) as conn:
-    conn.execute(f"alter role tenant_pool with password '{verifier}'")
+with psycopg.connect(os.environ["DSN"], autocommit=True, connect_timeout=15) as conn:
+    conn.execute(f"alter role tenant_pool with password 'SCRAM-SHA-256${n}:{b64(salt)}${b64(stored)}:{b64(server)}'")
 PY
-then check "tenant_pool password set" ok ok
-else check "tenant_pool password set" failed ok || warn "set it before stage 13, or the API's tenant routes fail: re-run this stage's ALTER by hand"
-fi
-if DSN="$NEW_TENANT_URL" python3 -c 'import os, psycopg; c = psycopg.connect(os.environ["DSN"], prepare_threshold=None); assert c.execute("select current_user").fetchone()[0] == "tenant_pool"' 2>/dev/null
-then check "tenant pool connects as tenant_pool" ok ok
-else check "tenant pool connects" failed ok || warn "the API's tenant routes will fail until this connects"
-fi
+  do
+    check "tenant_pool password set" no yes || true
+    confirm "Retry setting it? (No leaves the API's tenant routes failing)" || break
+  done
+  local tenant_ok=""
+  if db_ok "$new_tenant" tenant_pool; then tenant_ok=yes; check "the tenant pool connects as tenant_pool" yes yes
+  else check "the tenant pool connects as tenant_pool" no yes || true; fi
 
-# ── 13 ────────────────────────────────────────────────────────────────────
-stage "Database (3/3): publish everywhere, deploy, check"
-set_secret SUPABASE_DB_URL "$NEW_DB_URL"
-set_secret SUPABASE_DB_SESSION_URL "$NEW_DB_SESSION_URL"
-deploy_on_railway "$RW_API" API
-deploy_on_railway "$RW_WORKER" worker
-api_checks || warn "a check failed: read the API's deploy logs"
-latest=$(ls migrations/*.sql | sort | tail -n1 | xargs basename)
-if gh workflow run apply_migration.yml -f file="$latest" -f dry_run=true >/dev/null 2>&1; then
-  sleep 5
-  run=$(gh run list --workflow apply_migration.yml --limit 1 --json databaseId -q '.[0].databaseId')
-  note "GitHub's copy: a dry-run connectivity check (run $run), no migration applied"
-  if gh run watch "$run" --exit-status >/dev/null 2>&1; then check "GitHub Actions connects with the new DSN" ok ok
-  else check "GitHub Actions connects" failed ok || warn "read: gh run view $run --log-failed"; fi
-fi
-open_url "https://app.propscout.cz/health"
-step "Health: the worker heartbeat is fresh again; tell sreality-e9 the window can close (lift the brake)."
-pause
-record "Database password and connection strings" "psycopg; API signed-in reads; apply_migration dry run"
-record "Tenant pool password" "psycopg as tenant_pool; GET /pipeline/stages 200"
+  stage "Database (4/4): deploy, then check"
+  deploy_on_railway "$RW_API" API must
+  deploy_on_railway "$RW_WORKER" worker must
+  local tok ok=1 before after
+  tok=$(member_token)
+  if [[ -n "$tok" ]]; then
+    check "GET /estimations (API's SUPABASE_DB_URL)" "$(http_status GET "$API/estimations?limit=1" "" "$(bearer "$tok")")" 200 || ok=0
+    check "GET /pipeline/stages (API's TENANT_POOL_DB_URL)" "$(http_status GET "$API/pipeline/stages" "" "$(bearer "$tok")")" 200 || ok=0
+  else warn "no smoke-test sign-in: the API checks are skipped"; ok=0; fi
+  before=$(gh run list --workflow apply_migration.yml --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || true)
+  if gh workflow run apply_migration.yml -f file="$(ls migrations/*.sql | sort | tail -n1 | xargs basename)" -f dry_run=true >/dev/null 2>&1; then
+    for _ in $(seq 1 12); do
+      sleep 5
+      after=$(gh run list --workflow apply_migration.yml --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || true)
+      [[ -n "$after" && "$after" != "$before" ]] && break
+    done
+    if [[ -n "$after" && "$after" != "$before" ]] && gh run watch "$after" --exit-status >/dev/null 2>&1; then
+      check "GitHub connects with SUPABASE_DB_SESSION_URL (dry run $after)" yes yes
+    else check "GitHub's dry-run connectivity check" "failed or not found" yes || ok=0; fi
+  else warn "could not start apply_migration.yml; run it by hand with dry_run=true"; ok=0; fi
+  open_url "https://app.propscout.cz/health"
+  eyeball "Health: the worker heartbeat is fresh again? (then tell sreality-e9 to lift the brake)" || ok=0
+  if (( ok )) && [[ -n "$db_ok_now" ]]; then
+    record "Database password and connection strings" "psycopg on both new strings; API reads; GitHub dry run; worker heartbeat"
+  fi
+  if (( ok )) && [[ -n "$tenant_ok" ]]; then
+    record "Tenant pool password" "psycopg as tenant_pool; GET /pipeline/stages 200"
+  fi
+}
 
+banner "Rotate the credentials stored on Railway and GitHub (M0, #2061)"
+STAGES=(s_start s_smoke s_r2 s_mapy s_valuo s_github s_stripe s_supabase_key s_dead_copies s_extension_key s_deploy s_revoke s_legacy_jwt s_db)
+s_start
+_STAGE_INDEX=$(( FROM > 1 ? FROM - 1 : 1 ))
+for fn in "${STAGES[@]:$(( FROM > 1 ? FROM - 1 : 1 ))}"; do "$fn"; done
 finish
 say "Commit the dated rows of $MVP § 9 (or hand them to Claude), and clear your clipboard."
