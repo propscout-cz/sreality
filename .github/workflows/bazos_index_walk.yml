@@ -66,8 +66,8 @@ concurrency:
 jobs:
   index-walk:
     runs-on: ubuntu-latest
-    # The full 22-scope walk is ~2400 pages at the portal's 0.5 req/s index rate
-    # (~85-90 min since migration 488 added pozemek/zahrada/garaz/ostatni). The
+    # The full 22-scope walk is ~2600 pages inside bazos's ONE 0.7 req/s budget, which the
+    # worker's drain shares (migration 676; ~80 min with the drain's usual share). The
     # --max-seconds 6600 (110 min) budget is what actually ends the run: it stops
     # cleanly and FINALIZES the scrape_run, where a GitHub kill leaves ended_at
     # NULL and the tail scopes unwalked (which is what the 75-min timeout did).

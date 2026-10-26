@@ -81,7 +81,7 @@ class BazosPortal(portal_runner.PortalDefaults):
 
     source = SOURCE
     price_change_min_pct = 0.0
-    index_rate = 0.5
+    index_rate = 0.7
 
     def __init__(
         self,

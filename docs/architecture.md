@@ -131,8 +131,8 @@ search and short-term lodging classifieds, not the sale or rental of a property)
 sreality/idnes (rule #19) — it is **cadence-split**: `bazos_index_walk.yml` (every 6h, full
 walk + presence nomination + enqueue) feeds the realtime worker's drain lane (bazos's only
 drain since Actions-exit W0, #2010). A combined run can't do both inside one job (the full 22-scope walk is
-~2400 index pages ≈ 85-90 min at the portal's 0.5 req/s index rate since migration 488 added
-pozemek/zahrada/garaz/ostatni — a 130-minute job timeout with a 110-minute budget — which eats
+~2600 index pages ≈ 80 min inside bazos's one 0.7 req/s budget, which the drain shares (migration 676;
+before #1852's fix the walk and drain each paced themselves at 0.5 and 0.6) — a 130-minute job timeout with a 110-minute budget — which eats
 the window, starving the drain); narrow ad-hoc runs go through the split
 workflows' dispatch inputs (`-f sale_type=… -f category=…`, or locality + radius) or
 `scraper.bazos_main` locally. **A REMOVED ad answers HTTP 200 with the CATEGORY INDEX page** —
