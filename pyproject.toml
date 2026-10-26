@@ -36,6 +36,8 @@ dependencies = [
 dev = [
   "pytest>=8.0",
   "httpx>=0.27",
+  # CI's lint step (test.yml): the stdlib has no linter; one binary, no dependencies, pinned exactly.
+  "ruff==0.17.2",
 ]
 api = [
   "fastapi>=0.115",
@@ -121,3 +123,16 @@ api = ["fonts/*.ttf", "fonts/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+extend-exclude = ["frontend", "chrome-extension"]
+
+[tool.ruff.lint]
+select = ["E9", "F", "ANN"]
+ignore = ["ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN"]
+# A byte edit to an autodedup decision module moves the live engine digest (incremental.DECISION_MODULES);
+# annotate worded_gap with the next real engine change and drop this line.
+"autodedup/indistinguishable.py" = ["ANN001"]

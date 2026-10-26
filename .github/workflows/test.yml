@@ -1,8 +1,8 @@
 name: "CI: tests"
 
 # CI test suite, runs on every pull request and on every push to main. Two parallel jobs:
-# a Python job (verifies the filter-registry and workflow-docs codegen are
-# fresh, then runs pytest) and a frontend job (TypeScript type-check + vitest
+# a Python job (lints with ruff, verifies the filter-registry and workflow-docs codegen
+# are fresh, then runs pytest) and a frontend job (TypeScript type-check + vitest
 # pure-function tests). This is the build gate for every branch.
 #
 # A branch push without a PR runs nothing: a push-triggered twin of the pull_request run
@@ -33,6 +33,9 @@ jobs:
 
       - name: Install
         run: pip install -e ".[dev,api,geo]"
+
+      - name: Lint (ruff)
+        run: ruff check --output-format=github .
 
       # -m, not a script path: invoking by path puts scripts/ on sys.path[0] and
       # leaves the repo root off it, so the generator's `from toolkit import ...`

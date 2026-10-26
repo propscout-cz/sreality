@@ -254,13 +254,13 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     2026-09, ulice_id 2026-10, street_name 2026-10 as a sort key) or after a measured slowdown, only to `browse_list`. § Location data in `docs/architecture.md`.
 ## Coding conventions
 
-- Type hints on every signature. `requests` for HTTP, `psycopg` for DB — don't add `httpx` / `aiohttp` / `sqlalchemy` / `supabase-py` lightly (rule #7).
+- Type hints on every signature (CI's ruff ANN check enforces it outside tests). `requests` for HTTP, `psycopg` for DB — don't add `httpx` / `aiohttp` / `sqlalchemy` / `supabase-py` lightly (rule #7).
 - No comments unless the WHY is non-obvious; no multi-paragraph docstrings (one-liners fine).
 - Small single-purpose files: `<portal>_client.py` = HTTP only, `parser.py` / `<portal>_parser.py` = payload→row only;
   `db.py` is for DB I/O — put new policy beside its caller (the policy + dead sweep it still holds are owed, scraper track).
 ## How to test changes
 
-- **Locally:** one-time `pip install -e ".[dev,api,geo]"`, then `pytest -q` (or `pytest tests/path -q`).
+- **Locally:** one-time `pip install -e ".[dev,api,geo]"`, then `ruff check .` and `pytest -q` (or `pytest tests/path -q`).
   Interpreter is `python3`. `scripts/test-summary.sh` runs quiet pytest + prints only failures. Mirrors CI.
 - **CI:** every PR (and push to `main`) runs `.github/workflows/test.yml` — open the draft PR early so it runs (`gh run watch`, or `scripts/logs.sh <run-id> [pattern]`).
 - Scraper smoke: `python -m scraper.sreality_main --index-only --dry-run --max-seconds 60` writes nothing; `--drain-only --max-detail 10` is a small live run (other `scraper.<portal>_main`s alike).
