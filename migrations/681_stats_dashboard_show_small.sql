@@ -1,4 +1,4 @@
--- 680_stats_dashboard_show_small.sql -- a dashboard saves its "Malé vzorky" switch.
+-- 681_stats_dashboard_show_small.sql -- a dashboard saves its "Malé vzorky" switch.
 --
 -- WHY. Operator ask 2026-10-26: Browse › Stats' "Malé vzorky" switch (URL `small=1`) shows a cell under the n ≥ 5
 -- floor as its small-sample summary (min / mean / median / max, migration 678). The switch is saved WITH a
@@ -26,7 +26,7 @@ alter table public.stats_dashboards
 
 comment on column public.stats_dashboards.show_small is
   'True when the dashboard shows a Stats cell under the minimum sample as its min/mean/median/max summary '
-  '(the Stats tab''s "Malé vzorky" switch, migration 678), saved with the dashboard (migration 680). The property '
+  '(the Stats tab''s "Malé vzorky" switch, migration 678), saved with the dashboard (migration 681). The property '
   'page''s "Okolí dashboard" tab reads it. The working board (name IS NULL) may carry it; nothing reads it there.';
 
 do $post$
@@ -35,7 +35,7 @@ begin
                   where table_schema = 'public' and table_name = 'stats_dashboards'
                     and column_name = 'show_small' and data_type = 'boolean'
                     and is_nullable = 'NO' and column_default = 'false') then
-    raise exception '680 did not land: stats_dashboards.show_small is not boolean NOT NULL DEFAULT false';
+    raise exception '681 did not land: stats_dashboards.show_small is not boolean NOT NULL DEFAULT false';
   end if;
 end
 $post$;

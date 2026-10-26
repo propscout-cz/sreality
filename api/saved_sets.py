@@ -26,7 +26,7 @@ class SavedSetKind:
     blob_columns: tuple[str, ...]        # jsonb columns, each validated by its type on the body models
     create_in: type[BaseModel]
     update_in: type[BaseModel]
-    # Plain-typed columns (no jsonb cast), selected, inserted, updated and returned like the blobs (migration 680).
+    # Plain-typed columns (no jsonb cast), selected, inserted, updated and returned like the blobs (migration 681).
     scalar_columns: tuple[str, ...] = ()
     # A PUT's explicit null clears these; on every other field a null keeps the stored value.
     nullable: frozenset[str] = frozenset({"color"})

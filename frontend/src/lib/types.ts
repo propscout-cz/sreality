@@ -1132,7 +1132,7 @@ export interface SavedDashboard {
    * 664); always false on a dashboard shared with the caller. Optional while an API without
    * it may answer (a deploy skew reads as "none"). */
   property_card?: boolean;
-  /* The "Malé vzorky" switch saved with the dashboard (migration 680): cells under the
+  /* The "Malé vzorky" switch saved with the dashboard (migration 681): cells under the
    * minimum show min, průměr, medián, max. Optional while an API without it may answer. */
   show_small?: boolean;
 }

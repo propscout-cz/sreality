@@ -30,7 +30,7 @@ filter" — the WORKING board is one per account; named dashboards are many, and
 | name | `name` 1..200 | `name` 1..200, or NULL = the working board (one per account, partial unique) |
 | order / colour | `position`, `color` (8-colour palette) | `position`, `color` (same CHECK text) |
 | blob | `filter_spec {filters, sort}` | `charts` (validate_board) + `filter_spec {filters, sort}` NULL = no filter |
-| scalar | none | `show_small` (680, default false): the saved "Malé vzorky"; the Okolí dashboard tab reads it |
+| scalar | none | `show_small` (681, default false): the saved "Malé vzorky"; the Okolí dashboard tab reads it |
 | listed by | `GET /filter-presets` | `GET /stats/dashboards` (named own + shared; the working row never) |
 | working state | the Browse URL | the working board, the unnamed row: `GET`/`PUT /stats/dashboard` |
 | shared | no | `stats_dashboard_shares`, read-only |
@@ -90,7 +90,7 @@ rewritten for the new upsert (`ON CONFLICT (account_id) WHERE name IS NULL`).
   empty_on_read, projection_extra, row_scope, order_by, own_rows, refusals, groups)` descriptor. `blob_columns` names
   the jsonb columns (`filter_spec` for presets; `charts`, `filter_spec` for dashboards); each is validated by its type
   on the body models in `api/schemas.py`: `PresetSpec` (`_coded_chips`) and `Charts`
-  (`toolkit.stats_registry.validate_board`, its refusal a plain-string 422). `scalar_columns` (migration 680) names
+  (`toolkit.stats_registry.validate_board`, its refusal a plain-string 422). `scalar_columns` (migration 681) names
   plain-typed columns, selected, inserted, partially updated and returned exactly like the blobs minus the jsonb cast
   (presets: none; dashboards: `show_small`). `nullable` is the set a PUT's explicit `null` clears (`color`; a
   dashboard's `filter_spec` too); every other null keeps the stored value, so the API never writes `name = NULL`.
@@ -125,7 +125,7 @@ Dashboards (`api/routes/stats_dashboards.py`, mounted like the presets router):
 - `PUT /stats/dashboards/reorder {ids}`; `GET/PUT/DELETE /stats/dashboards/{id}` (PUT: partial `name`, `charts`,
   `filter_spec` where an explicit `null` clears the filter, `show_small` where a `null` keeps it, `color`). A
   recipient's PUT/DELETE matches 0 rows → 404.
-- Every dashboard row carries `show_small` (migration 680, a scalar column): the Stats tab's "Malé vzorky" switch
+- Every dashboard row carries `show_small` (migration 681, a scalar column): the Stats tab's "Malé vzorky" switch
   (URL `small=1`, cells under the floor shown as their small-sample summary, migration 678), saved with the dashboard
   and read by the property page's Okolí dashboard tab, which draws that dashboard with its own setting. A recipient
   reads the owner's (it is part of what was shared). The working board's `GET`/`PUT /stats/dashboard` stay `{charts}`.

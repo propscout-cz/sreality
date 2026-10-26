@@ -1,4 +1,4 @@
-"""Migration 680: a dashboard saves its "Malé vzorky" switch (`stats_dashboards.show_small`). Offline, text only.
+"""Migration 681: a dashboard saves its "Malé vzorky" switch (`stats_dashboards.show_small`). Offline, text only.
 
 One additive column, boolean NOT NULL DEFAULT false (every existing dashboard reads off), described by a column
 comment and proven by a post-condition; no data, no grant, no policy. What the API does with it is
@@ -11,7 +11,7 @@ import re
 
 from tests.migration_defs import MIGRATIONS
 
-NAME = "680_stats_dashboard_show_small.sql"
+NAME = "681_stats_dashboard_show_small.sql"
 SQL = (MIGRATIONS / NAME).read_text(encoding="utf-8")
 CODE = " ".join(re.sub(r"--[^\n]*", "", SQL).split())
 
@@ -45,7 +45,7 @@ def test_it_is_additive_only() -> None:
 def test_the_comment_says_what_it_means_and_who_reads_it() -> None:
     comment = CODE[CODE.index("comment on column public.stats_dashboards.show_small is"): CODE.index("do $post$")]
     flat = comment.replace("' '", "")
-    for phrase in ("min/mean/median/max", "\"Malé vzorky\"", "migration 678", "migration 680",
+    for phrase in ("min/mean/median/max", "\"Malé vzorky\"", "migration 678", "migration 681",
                    "\"Okolí dashboard\"", "The working board (name IS NULL) may carry it; nothing reads it there."):
         assert phrase in flat, phrase
 
@@ -54,7 +54,7 @@ def test_the_post_condition_names_the_column_type_nullability_and_default() -> N
     post = _block("post")
     assert ("where table_schema = 'public' and table_name = 'stats_dashboards' and column_name = 'show_small' "
             "and data_type = 'boolean' and is_nullable = 'NO' and column_default = 'false'") in post
-    assert ("raise exception '680 did not land: stats_dashboards.show_small is not boolean NOT NULL "
+    assert ("raise exception '681 did not land: stats_dashboards.show_small is not boolean NOT NULL "
             "DEFAULT false'") in post
 
 

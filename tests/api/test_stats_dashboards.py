@@ -96,7 +96,7 @@ def test_save_as_dashboard_inserts_one_named_row_for_the_callers_account(client,
     name, charts, spec, show_small, color, owner = params
     # The charts are the registry's normalised board; the filter is the preset blob, verbatim.
     assert (name, json.loads(charts), json.loads(spec), color) == ("Praha byty", [_NORMAL], _SPEC, "sage")
-    # Unsent, the "Malé vzorky" switch is saved off (migration 680), a plain boolean, no jsonb.
+    # Unsent, the "Malé vzorky" switch is saved off (migration 681), a plain boolean, no jsonb.
     assert show_small is False
     assert owner == _ACCT
 
@@ -119,7 +119,7 @@ def test_a_dashboard_without_a_filter_stores_sql_null_not_json_null(client, conn
     assert params[3] is False
 
 
-# --- the "Malé vzorky" switch, saved with the dashboard (migration 680) ------------
+# --- the "Malé vzorky" switch, saved with the dashboard (migration 681) ------------
 
 
 def test_a_dashboard_saved_with_small_samples_on_stores_true_and_returns_it(client, conn) -> None:
@@ -222,7 +222,7 @@ def test_the_list_is_named_dashboards_own_and_shared_in_the_saved_order(client, 
     body = res.json()
     assert body["total"] == 2 and body["data"][0] == _OWN_PAYLOAD
     assert body["data"][1]["owner_email"] == "owner@x.cz" and body["data"][1]["filter_spec"] is None
-    # A recipient reads the owner's "Malé vzorky": it is part of what was shared (migration 680).
+    # A recipient reads the owner's "Malé vzorky": it is part of what was shared (migration 681).
     assert body["data"][1]["show_small"] is True
     [(sql, params)] = conn.executed
     # Own dashboards first, then the shared ones, each group in its saved order (the SPA splits the same way).

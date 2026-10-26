@@ -703,7 +703,7 @@ class CreateStatsDashboardIn(BaseModel):
     charts: Charts
     # The preset blob, embedded (ruling 2, never a linked preset); None = the dashboard carries no filter.
     filter_spec: PresetSpec | None = None
-    # The Stats tab's "Malé vzorky": cells under the floor show their small-sample summary (migration 680).
+    # The Stats tab's "Malé vzorky": cells under the floor show their small-sample summary (migration 681).
     show_small: bool = False
     color: TagColor | None = None
 

@@ -323,7 +323,7 @@ def test_an_unshared_dashboard_stays_the_owners_and_own_dashboards_list_first(
 def test_a_dashboard_saves_its_small_samples_switch_and_only_its_owner_changes_it(
     svc: Any, tenants: dict[str, _Tenant], world: _World,
 ) -> None:
-    """Migration 680: created through the API's body model, the switch reads back as saved and defaults off; a PUT
+    """Migration 681: created through the API's body model, the switch reads back as saved and defaults off; a PUT
     turns it either way and a PUT without it keeps it; a recipient reads the owner's and cannot change it; the
     working board carries the column at its default."""
     from api import saved_sets
