@@ -265,10 +265,12 @@ def test_a_ticket_held_by_another_session_is_refused_without_a_write(gh: FakeGit
     assert tc.main(["status", "5", "--as", "sreality-0f"]) == tc.OK
 
 
-def test_a_ticket_an_open_pr_closes_is_refused(gh: FakeGitHub) -> None:
+def test_a_ticket_an_open_pr_closes_is_refused(gh: FakeGitHub, capsys: pytest.CaptureFixture[str]) -> None:
     gh.closing = [{"number": 2052, "state": "OPEN", "isDraft": True}]
     assert tc.main(["claim", "5", "--as", "sreality-82"]) == tc.TAKEN
     assert gh.posts == []
+    assert tc.main(["status", "5"]) == tc.TAKEN
+    assert "#5 unclaimed; draft PR #2052 closes it" in capsys.readouterr().out
 
 
 def test_a_rerun_withdraws_our_claim_that_lost(gh: FakeGitHub) -> None:

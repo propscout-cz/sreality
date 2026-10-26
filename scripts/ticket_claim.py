@@ -251,7 +251,7 @@ def describe(t: Ticket, me: str | None) -> str:
         until = f"held while PR #{prs[0]} is open" if prs else f"expires {_hm(h.last + TTL)}"
         line = f"#{t.number} held by {h.session}{you} since {_hm(h.since)}, last activity {_hm(h.last)}, {until}"
     else:
-        line = f"#{t.number} free"
+        line = f"#{t.number} {'unclaimed' if prs else 'free'}"
     for p in t.closing:
         if p.state == "OPEN":
             line += f"; {'draft ' if p.draft else ''}PR #{p.number} closes it"
