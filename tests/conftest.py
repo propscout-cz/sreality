@@ -38,3 +38,18 @@ def _no_vapid_key(monkeypatch):
     """No test can push to Apple: the VAPID key is removed before every test (the push lane's brake), and a
     test that sends sets a throwaway key over a faked `requests.post` (tests/api/test_push.py)."""
     monkeypatch.delenv("VAPID_PRIVATE_KEY", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _stop_signal_untouched():
+    """`portal_runner.run_phase` installs the stop handlers (scraper.stop): every test leaves the process's SIGTERM and
+    SIGINT handlers, and the shared stop event, as it found them, so a stop in one test never cuts the next."""
+    import signal
+
+    from scraper import stop
+
+    handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    yield
+    stop.reset()
+    for sig, handler in handlers.items():
+        signal.signal(sig, handler)

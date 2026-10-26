@@ -111,4 +111,5 @@ jobs:
           if [ -n "$RADIUS_KM" ]; then ARGS="$ARGS --radius-km $RADIUS_KM"; fi
           if [ -n "$MAX_PAGES" ]; then ARGS="$ARGS --max-pages $MAX_PAGES"; fi
           echo "python -m scraper.bazos_main $ARGS"
-          eval "python -m scraper.bazos_main $ARGS"
+          # exec: a cancel's SIGINT must reach Python, which finalizes the run (#2019), not the shell around it.
+          eval "exec python -m scraper.bazos_main $ARGS"

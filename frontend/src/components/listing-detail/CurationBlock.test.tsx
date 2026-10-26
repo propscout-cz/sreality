@@ -55,7 +55,7 @@ import {
   fetchPropertyTagMemberSet,
 } from '@/lib/queries';
 import { ActingAs, actingKey } from '@/lib/acting';
-import { viewingWhen } from '@/lib/viewings';
+import { slotInstant, viewingSlot, viewingWhen } from '@/lib/viewings';
 import CurationBlock, { PhoneTagsAndNotes } from './CurationBlock';
 
 const TAG: Tag = {
@@ -745,7 +745,11 @@ describe('<CurationBlock> delegated stamp', () => {
  * the heading (desktop) or its own toolbar (phone), the text optional; the
  * section leads with the property's upcoming viewings under a calendar leaf. */
 describe('<CurationBlock> viewings', () => {
-  const inDays = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString();
+  // Anchored at PRAGUE noon: the formatter counts Prague calendar days, so now ± 24 h
+  // lands on the wrong day just after midnight or across a DST change (main went red
+  // at 00:11 local on the clocks-back night, 2026-10-25), and the CI clock is UTC.
+  const noon = Date.parse(slotInstant({ day: viewingSlot(new Date().toISOString()).day, time: '12:00' }));
+  const inDays = (n: number) => new Date(noon + n * 86_400_000).toISOString();
 
   it('books a viewing with no text from the heading, on the Prague clock', async () => {
     const user = userEvent.setup();

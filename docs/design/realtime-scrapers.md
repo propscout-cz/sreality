@@ -54,8 +54,8 @@ the API's loop), so the API's one loop is the health teller*). It runs, as conti
    `docs/design/portal-order-fidelity.md`). **Update (2026-08-04, portal-order-fidelity
    Phase 4):** sreality also joined `REALTIME_SOURCES` with its own bespoke
    `probe_category` (the ceskereality pattern — per-page early-stop diff, UNSPLIT since
-   the 422 is offset- not size-triggered), complementing rather than replacing the
-   count-probe lane. **mmreality** — proxied, low-frequency only (cost).
+   the 422 is offset- not size-triggered); it once complemented the count-probe lane,
+   deleted in Actions-exit W0 (#2015). **mmreality** — proxied, low-frequency only (cost).
    Probes reuse the safe partial-walk primitive: diff + enqueue, `complete=False`, so a
    probe can never falsely delist (rule #3 machinery unchanged).
 2. **Continuous detail drain** off the existing SKIP LOCKED queue (multi-runtime-safe by
@@ -84,20 +84,21 @@ the API's loop), so the API's one loop is the health teller*). It runs, as conti
    not a per-batch wake; the API runs none.*
 
 **Cold lane — GitHub Actions keeps** the delay-tolerant heavy work it does well and for
-free: full reconcile index walks (completeness + delisting evidence), image/CLIP backfills,
+free: full reconcile index walks (completeness + delisting evidence), CLIP backfills,
 dedup full scans + batch lanes, monitors, CI. What self-chaining remains is bounded and on each job's
 own token: price stats re-dispatches once per run that made progress (#2013), claims intake while a
 cursor moved — do not extend it to new lanes. — *Since Actions-exit W0 (#2010,
-2026-10) this worker is the ONLY runtime of the detail drain, fresh-image downloads and the
-incremental property and broker maintenance: the five portal drains, `images_fresh.yml`,
+2026-10) this worker is the ONLY runtime of the detail drain, image downloads (#2011 added the
+inactive residue) and the incremental property and broker maintenance: the five portal drains, `images_fresh.yml`,
 `property_maintenance.yml` and `broker_resolution.yml` that ran beside it as backstops are
 deleted (in their last week the GitHub drains wrote 1–5 % of each portal's completions, bazos
 about 5 %; the PR's pre-checks hold the measurement).
 Still on GitHub for now: the walks and the daily property and broker sweeps (until the job runner
-takes them), the four combined scrapers' own drain phase (walk-only in W1, #2021) and
-`images.yml`'s deep backlog (to be folded into the images lane, #2011).
+takes them); the four combined scrapers only walk since W1 (#2021). Since #2011 the images lane also
+drains the inactive-image residue `images.yml` owned (each tier walks the pending index newest-first,
+the residue filling what the active tier leaves), so no image download runs on GitHub.
 `realtime_drain_disabled_sources` therefore freezes a portal's queue: no other scheduled drain
-takes it over (a combined scraper's own phase aside).*
+takes it over.*
 
 **Prerequisite: shared politeness.** `RateLimiter` is per-process; a Railway lane beside
 Actions walks would double-hit portals with two independent limiters. Before the probe lane
@@ -155,7 +156,7 @@ publication rule, migrations 668/669).
   now-abandoned "batch-warmer revival" this doc once listed.)
 - **W3** (#696, migration 270) — sreality count-probe lane: sreality's sort-blind v1 API gets
   `pagination.total` count-delta probes that (opt-in, token+setting gated) trigger a targeted
-  `index_walk`.
+  `index_walk`. Deleted in Actions-exit W0 (#2015): the worker triggers no GitHub workflow.
 - **W4** — idnes/bazos street coverage: the RÚIAN resolver lever is **exhausted** at the 15 m
   tolerance (idnes coords are >15 m from address points → 0 net resolutions; bazos coords are
   the page-wide-link shared pins the resolver correctly rejects — it's excluded from the
@@ -169,8 +170,8 @@ drain now also runs from this worker, not only from `location_resolve.yml`. The 
 round trips, not work — ~11 registry round trips per listing at ~120 ms from a US GitHub runner
 measured **0.7 listings/s**, and GitHub fires the schedule ~7x/day against a >100k queue. The
 worker sits beside the database in the EU (~1–2 ms) and runs continuously. It **reuses**
-`location_data.resolver.drain.run()` and `lease.held()` — no copy of the drain, the CAS or the
-resolver — and takes the SAME `location_jobs` lease row (`drain.JOB_NAME`, imported never
+`location_data.resolver.drain.run()` and `scraper.job_lease.held()` — no copy of the drain, the CAS
+or the resolver — and takes the SAME `scheduled_jobs` lease row (`drain.JOB_NAME`, imported never
 re-spelled) on the drain's own session-pooler connection, so the worker lane and the
 Actions lane can never drain at once; a busy lease is a cheap no-op (`{"acquired": false}` in
 the heartbeat, logged on the transition only). The GH lane stays the backstop and keeps

@@ -15,7 +15,7 @@ name: Compute image pHash (multi-portal dedup)
 # a conservative 7 img/s ≈ 48 min + ~2 min setup fits the 55-min timeout with
 # margin. Portal-agnostic — hashes any stored image regardless of source.
 #
-# Required GitHub secrets: SUPABASE_DB_URL + the R2_* set (same as images.yml).
+# Required GitHub secrets: SUPABASE_DB_URL + the R2_* set.
 
 on:
   schedule:

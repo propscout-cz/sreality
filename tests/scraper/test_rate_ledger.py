@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 import scraper.rate_limit as rl
-from scraper import portal_runner
+from scraper import portal_runner, stop
 from scraper.rate_ledger import (
     DEFAULT_LEASE_N,
     LedgerRateLimiter,
@@ -533,3 +533,39 @@ def test_runner_builds_limiter_through_the_factory(monkeypatch):
 
 def test_default_lease_n_amortizes_the_round_trip():
     assert DEFAULT_LEASE_N == 20
+
+
+def test_a_stop_refuses_the_run_before_any_lease(monkeypatch):
+    """#2019: a stopping run takes no more shared slots, so the next runtime's frontier is not pushed out."""
+    clock = _Clock()
+    _patch_time(monkeypatch, clock)
+    ledger = _Ledger(clock)
+    lim = LedgerRateLimiter("x", 1.0, lease_n=4, connect=ledger.connect)
+    stop.EVENT.set()
+    with pytest.raises(stop.StopRequested):
+        lim.acquire()
+    assert ledger.executed == []
+    assert (lim.refused, lim.refused_reason) == (True, "stop")
+
+
+def test_a_stop_ends_a_wait_for_a_leased_window(monkeypatch):
+    """Another runtime holds the frontier 5 s out: the leased wait is the stop event's, so a stop ends it at once."""
+    import threading
+    import time as real_time
+
+    clock = _Clock()
+    _patch_time(monkeypatch, clock)
+    ledger = _Ledger(clock)
+    LedgerRateLimiter("x", 0.2, lease_n=1, connect=ledger.connect).acquire()  # the other runtime: next slot in 5 s
+    lim = LedgerRateLimiter("x", 0.2, lease_n=1, connect=ledger.connect)
+    stop.install()
+    timer = threading.Timer(0.05, stop.EVENT.set)
+    timer.start()
+    try:
+        started = real_time.monotonic()
+        with pytest.raises(stop.StopRequested):
+            lim.acquire()
+        assert real_time.monotonic() - started < 1.0
+    finally:
+        timer.cancel()
+    assert (lim.refused, lim.refused_reason) == (True, "stop")
