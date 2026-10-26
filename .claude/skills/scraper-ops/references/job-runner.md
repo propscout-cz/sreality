@@ -78,6 +78,19 @@ select job_name, outcome, exit_code, peak_rss_mb, started_at, ended_at - started
   from job_runs order by id desc limit 20;
 ```
 
+## Runner-only operations outside e9's windows (#2025-R2, ruled by e9 2026-10-26)
+
+Once W-1 has shown `sreality`'s deployment id unchanged by the job-runner apply, three kinds may run outside e9's
+windows: (a) an apply whose every change targets `service.job-runner`; (b) a Redeploy or Deploy Latest Commit of
+job-runner; (c) the gate-week drills below. Merges still wait for e9's light. Four conditions:
+1. The wizard's target check stays on. A change to shared or project-level variables, to the worker service or to the
+   API service books a window.
+2. Before drills C and D, e9 gets a one-line FYI with the time. No brake is needed.
+3. A job that writes autodedup tables, takes `rt_lease` or runs anything in `autodedup/` needs e9's window, as merges
+   do.
+4. If a runner operation ever moves `sreality`'s deployment id or restarts the worker, runner-only work stops and e9
+   is told.
+
 ## W2-gate drills (PROGRAM W2; the gate ticket after #2025's move PR has the exact lines)
 
 A deploy cut is a new deployment only: job-runner → Deployments → the ACTIVE deployment → ⋯ → Redeploy. Never Restart
@@ -86,11 +99,14 @@ A deploy cut is a new deployment only: job-runner → Deployments → the ACTIVE
   with `requested_by` set, `peak_rss_mb` under its declaration (1024, 512), and `due_at` unchanged.
 - **B. Pause with expiry:** `runner-pause stale_images <a :20 slot + 10 min> drill`; no claim while paused; that slot
   is claimed once the pause lapses (`stale_images`, not `rent_map`, whose grid is 30 days).
-- **C. Deploy cut of a request:** Redeploy during a `map_overlays --dry-run` request; the run closes `interrupted`
-  (exit 143 or −15) within 250 s of the SIGTERM and is not filed again. It also measures click-to-SIGTERM.
-- **D. Re-claim:** a Redeploy timed so its SIGTERM lands inside a due-slot `stale_images` run; the next run's
-  `started_at` is ≤ 60 s after the cut run's `ended_at`. Retry at a later slot if the cut misses.
-- **E. Self-fence** (in W2 as the gate reads, unless #2025-R1 moves it to W3's gate): during a `map_overlays --dry-run`
-  request longer than 60 s, with the operator's OK the agent sets that row's `lease_expires_at` to the past; expect
-  `RUN kill … why=fence` at the holder's next refused renewal (≤ 60 s), the run closed `lost`, and no second holder
-  while its child lived. Restore the row's `due_at`, then one clean `--dry-run` request.
+- **C. Deploy cut of a request** (e9 gets a one-line FYI with the time first, #2025-R2): Redeploy during a
+  `map_overlays --dry-run` request; the run closes `interrupted` (exit 143 or −15) within 250 s of the SIGTERM and is
+  not filed again. It also measures click-to-SIGTERM.
+- **D. Re-claim** (the same FYI to e9 first): a Redeploy timed so its SIGTERM lands inside a due-slot `stale_images`
+  run; the next run's `started_at` is ≤ 60 s after the cut run's `ended_at`. Retry at a later slot if the cut misses.
+- **E. Self-fence** (in W2's gate, ruled #2025-R1: it moves to W3's gate only if drill A's `map_overlays --dry-run`
+  runs under 60 s, since a renewal must then fall inside the run): during a `map_overlays --dry-run` request longer
+  than 60 s, with the operator's explicit OK at drill time for its two production UPDATEs, the agent sets that row's
+  `lease_expires_at` to the past; expect `RUN kill … why=fence` at the holder's next refused renewal (≤ 60 s), the run
+  closed `lost`, and no second holder while its child lived. Restore the row's `due_at`, then one clean `--dry-run`
+  request.
