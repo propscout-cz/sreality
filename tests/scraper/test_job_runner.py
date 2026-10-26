@@ -137,7 +137,7 @@ class FakeLedger:
     """Scripted answers; every call recorded as (event, args, fake t, leader alive)."""
 
     clock: Clock
-    standin: StandIn
+    alive: Callable[[str], bool | None]  # by label "<job>#<run>": is the run's leader still alive?
     due_names: list[str] = field(default_factory=list)
     requests: dict[str, tuple[list[str], str]] = field(default_factory=dict)
     renew_result: bool | None = True
@@ -151,8 +151,7 @@ class FakeLedger:
     def _record(self, event: str, args: object, label: str | None = None) -> None:
         if event in self.on:
             self.on[event]()
-        child = self.standin.by_label.get(label) if label else None
-        self.events.append((event, args, self.clock(), child.alive() if child else None))
+        self.events.append((event, args, self.clock(), self.alive(label) if label else None))
 
     def named(self, event: str) -> list[tuple[str, object, float, bool | None]]:
         return [e for e in self.events if e[0] == event]
@@ -227,7 +226,8 @@ def _rig(registry: Sequence[Job], scripts: Mapping[str, Script] | None = None, *
          **runner: object) -> Rig:
     clock = Clock()
     standin = StandIn(clock, scripts)
-    ledger = FakeLedger(clock, standin, due_names=list(due))
+    ledger = FakeLedger(clock, lambda label: standin.by_label[label].alive() if label in standin.by_label else None,
+                        due_names=list(due))
     stop = [False]
     guard = Guard(clock=clock, stopping=lambda: stop[0], sample=standin.sample, term=standin.term,
                   kill=standin.kill)
@@ -559,3 +559,170 @@ def _kill_quietly(pgid: int) -> None:
 
     with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(pgid, signal.SIGKILL)
+
+
+def _state(pid: int) -> str | None:
+    """The /proc state letter of `pid`, None once it is gone."""
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as handle:
+            stat = handle.read().decode("ascii", "replace")
+    except OSError:
+        return None
+    return stat[stat.rfind(")") + 2:].split()[0]
+
+
+def _wait_for(condition: Callable[[], bool], *, within_s: float = 5.0, tick: Callable[[], object] | None = None) -> None:
+    import time
+
+    deadline = time.monotonic() + within_s
+    while not condition():
+        assert time.monotonic() < deadline, "timed out waiting"
+        if tick is not None:
+            tick()
+        time.sleep(0.02)
+
+
+def _real_rig(registry: Sequence[Job], *, grace_s: float = 1.0, stopping: Callable[[], bool] | None = None) -> Rig:
+    import os
+
+    clock = Clock()
+    pids: dict[str, int] = {}
+
+    def spawn(command: Sequence[str], env: Mapping[str, str], label: str,
+              adopt: Callable[[Child], None]) -> Child:
+        def remember(child: Child) -> None:
+            pids[label] = child.pid
+            adopt(child)
+        return job_process.spawn_process(command, env, label, remember)
+
+    def alive(label: str) -> bool | None:
+        return _state(pids[label]) not in (None, "Z") if label in pids else None
+
+    stop = [False]
+    guard = Guard(clock=clock, grace_s=grace_s, stopping=stopping or (lambda: stop[0]))
+    ledger = FakeLedger(clock, alive, due_names=[j.name for j in registry])
+    runner = Runner(registry, ledger=ledger, spawner=spawn, guard=guard, clock=clock, env=dict(os.environ),
+                    straggler_wait_s=5.0)
+    return Rig(clock, StandIn(clock), ledger, guard, runner, stop)
+
+
+def _children(rig: Rig) -> dict[str, job_process.ProcessChild]:
+    found = {run.job.name: run.child for run in rig.runner.running.values()}
+    assert all(isinstance(c, job_process.ProcessChild) for c in found.values())
+    return found  # type: ignore[return-value]
+
+
+def test_a_real_child_that_ignores_sigterm_is_killed_after_the_grace_and_recorded_whole() -> None:
+    """N14 (AC2): the parent holds 256 MB, so a peak read from ru_maxrss (which inherits it at exec) would show."""
+    import os
+    import time
+
+    ballast = b"\x01" * (256 << 20)
+    argv = (CHILD, "--ignore-term", "--hold-mb", "64", "--lines", "100", "--grandchild")
+    rig = _real_rig([_job("stubborn", argv=argv, timeout_s=1, cpus=2)])
+    pgid = None
+    try:
+        rig.runner.tick()
+        child = _children(rig)["stubborn"]
+        pgid = child.pid
+        _wait_for(lambda: "ready" in child.tail())
+        with open("/proc/self/oom_score_adj") as mine, open(f"/proc/{pgid}/oom_score_adj") as its:
+            assert int(its.read()) == min(1000, int(mine.read()) + 500), "the shim raised the job's OOM score"
+        with open(f"/proc/{pgid}/environ", "rb") as environ:
+            assert b"JOB_CPUS=2" in environ.read().split(b"\0")
+        [grandchild] = [pid for pid, _, _ in job_process._group(pgid) if pid != pgid]
+
+        rig.clock.advance(1.5)
+        rig.guard.run_once(rig.clock())
+        time.sleep(0.2)
+        assert _state(pgid) not in (None, "Z"), "it ignores SIGTERM"
+        assert _state(grandchild) not in (None, "Z"), "SIGTERM went to the leader only, not the group"
+
+        rig.clock.advance(1.5)
+        rig.guard.run_once(rig.clock())
+        _wait_for(lambda: bool(rig.releases()), tick=rig.runner.tick)
+        [done] = rig.releases()
+        assert (done.outcome, done.due, done.exit_code) == ("timeout", "retry", -9)
+        assert done.peak_rss_mb is not None and 64 <= done.peak_rss_mb < 200, done.peak_rss_mb
+        assert done.log_tail.splitlines() == [f"line {i}" for i in range(37, 100)] + ["ready"]
+        assert job_process.stragglers(pgid) == 0 and _state(grandchild) in (None, "Z")
+        [event] = rig.ledger.named("release")
+        assert event[3] is False, "released only after the leader exited"
+        assert len(ballast) == 256 << 20
+    finally:
+        if pgid is not None:
+            _kill_quietly(pgid)
+
+
+def test_a_real_deploy_stop_forwards_sigterm_to_each_leader_and_waits_for_the_pool(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """N15 (AC3): a real SIGTERM to this process. The cooperative child's pool finishes its item (SIGTERM reached the
+    leader only, so the pool worker lived), the stubborn one dies at stop_at + the grace, and both are interrupted."""
+    import os
+    import signal
+
+    from scraper import stop
+
+    registry = [_job("coop", argv=(CHILD, "--cooperative", "--pool")), _job("stubborn", argv=(CHILD, "--ignore-term")),
+                _job("late", argv=(CHILD, "--exit", "0"))]
+    rig = _real_rig(registry, stopping=stop.requested)
+    rig.ledger.due_names = ["coop", "stubborn"]
+    pgids: list[int] = []
+    try:
+        rig.runner.tick()
+        children = _children(rig)
+        pgids = [c.pid for c in children.values()]
+        for child in children.values():
+            _wait_for(lambda child=child: "ready" in child.tail())
+        stop.install()
+        os.kill(os.getpid(), signal.SIGTERM)
+        assert stop.requested()
+        rig.guard.run_once(rig.clock())
+        assert rig.guard.stop_at == rig.clock()
+        rig.ledger.due_names = ["late"]
+        _wait_for(lambda: any(d.lease.job_name == "coop" for d in rig.releases()), within_s=10, tick=rig.runner.tick)
+        rig.clock.advance(1.0)
+        rig.guard.run_once(rig.clock())
+        _wait_for(lambda: len(rig.releases()) == 2, tick=rig.runner.tick)
+        done = {d.lease.job_name: d for d in rig.releases()}
+        assert (done["coop"].outcome, done["coop"].exit_code) == ("interrupted", 143)
+        assert "pool ok" in done["coop"].log_tail and "BrokenProcessPool" not in done["coop"].log_tail
+        assert (done["stubborn"].outcome, done["stubborn"].due, done["stubborn"].exit_code) == (
+            "interrupted", "now", -9)
+        rig.clock.advance(job_runner.CLAIM_EVERY_S)
+        assert rig.runner.tick() is True, "nothing left running or settling: the loop ends"
+        assert [e[1] for e in rig.ledger.named("claim")] == ["coop", "stubborn"], "no claim after the stop"
+    finally:
+        for pgid in pgids:
+            _kill_quietly(pgid)
+
+
+def test_the_orphan_reaper_never_takes_a_tracked_child_s_status() -> None:
+    """N16: run in its own interpreter, since reaping pytest's own children would be a test bug of its own."""
+    import subprocess
+
+    script = """
+import os, subprocess, sys, time
+from scraper import job_process
+tracked = subprocess.Popen([sys.executable, "-c", "raise SystemExit(3)"])
+untracked = subprocess.Popen([sys.executable, "-c", "pass"])
+def zombie(pid):
+    with open(f"/proc/{pid}/stat") as f:
+        s = f.read()
+    return s[s.rfind(")") + 2:].split()[0] == "Z"
+deadline = time.monotonic() + 5
+while not (zombie(tracked.pid) and zombie(untracked.pid)) and time.monotonic() < deadline:
+    time.sleep(0.02)
+reaped = job_process.reap_orphans({tracked.pid})
+code = os.waitstatus_to_exitcode(os.waitpid(tracked.pid, 0)[1])
+try:
+    os.waitpid(untracked.pid, os.WNOHANG)
+    gone = False
+except ChildProcessError:
+    gone = True
+tracked.returncode = untracked.returncode = 0
+print(reaped, code, gone)
+"""
+    result = subprocess.run([sys.executable, "-c", script], cwd=ROOT, capture_output=True, text=True, timeout=30,
+                            check=False)
+    assert result.stdout.split() == ["1", "3", "True"], result.stderr
