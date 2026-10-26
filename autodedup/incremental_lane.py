@@ -137,6 +137,7 @@ from autodedup.incremental_sql import (
     RT_CUT_SCOPE_IDS_SQL,
     RT_FLIPPED_LISTINGS_SQL,
     RT_EVIDENCE_CANDIDATES_SQL,
+    RT_EVIDENCE_ACTIVE_SQL,
     RT_EVIDENCE_HELD_COUNT_SQL,
     RT_EVIDENCE_PROBE_SQL,
     RT_EVIDENCE_RELEASE_SQL,
@@ -351,6 +352,16 @@ PAGE_STALL_PAGES: int = 16
 # buffers, 14 MB) and the day costs ~259,000 buffers, 2.0 GB — the same order as the entrant
 # feed's 1.6 GB after W9e cut it 7.8x.
 EVIDENCE_SLICE: int = 400
+# E980: how many ACTIVE rows still marked incomplete the evidence sweep probes on every pass,
+# newest first decision first, ahead of its round-robin. 1,916 qualified on 2026-10-26; at 12
+# buffers a listing 1,000 is ~12,000 buffers (~94 MB) a pass, and the oldest beyond it are
+# still the round-robin's.
+EVIDENCE_ACTIVE_SLICE: int = 1000
+# E980: how long a row the lane just wrote stays out of that arm. It bounds a row whose probe
+# disagrees with its decision for ever (an undecodable image stamped by the CLIP job) to one
+# re-decision an hour; an arrival's vectors land hours after its first decision, so the gate
+# does not delay the case the arm is for.
+EVIDENCE_ACTIVE_RECHECK_MINUTES: int = 60
 # How long after its FIRST decision a listing's photographs are still expected. The producers
 # are hourly (dHash at :20, CLIP at :40) and measured p90 4.51 h to a first tag, so 48 h is
 # ~10x the observed tail rather than a guess at it — and it is the bound on how long a merge
@@ -1337,6 +1348,7 @@ class SqlWork:
                  max_enter_scans_per_day: int = MAX_ENTER_SCANS_PER_DAY,
                  evidence_slice: int = EVIDENCE_SLICE,
                  evidence_horizon_hours: float = EVIDENCE_HORIZON_HOURS,
+                 evidence_active_slice: int = EVIDENCE_ACTIVE_SLICE,
                  bootstrap: bool = False,
                  pass_budget_s: float = PASS_BUDGET_S,
                  rate_per_s: float = PASS_RATE_PER_S,
@@ -1359,6 +1371,7 @@ class SqlWork:
         self.max_enter_scans_per_day = int(max_enter_scans_per_day)
         self.evidence_slice = int(evidence_slice)
         self.evidence_horizon_hours = float(evidence_horizon_hours)
+        self.evidence_active_slice = int(evidence_active_slice)
         self.bootstrap = bool(bootstrap)
         self.pass_budget_s = float(pass_budget_s)
         self.rate_per_s = float(rate_per_s)
@@ -1610,17 +1623,25 @@ class SqlWork:
         `image_clip_tags` on every row (72,171 each, 0 disagreements), at a fourteenth of the
         buffers the two joins cost."""
         horizon = {"horizon_hours": int(round(self.evidence_horizon_hours))}
+        # E980: the active arm first, so the share below takes its moved rows before the
+        # round-robin's; the cursor still follows the round-robin's rows alone.
+        active = self._query(RT_EVIDENCE_ACTIVE_SQL, {
+            "generation": self.generation, "limit": self.evidence_active_slice,
+            "recheck_minutes": EVIDENCE_ACTIVE_RECHECK_MINUTES,
+        }) if self.evidence_active_slice > 0 else []
         rows = self._query(RT_EVIDENCE_CANDIDATES_SQL, {
             "generation": self.generation, "after_id": int(after_id),
             "limit": self.evidence_slice, **horizon})
-        recorded = {int(row[0]): (row[1], row[2], row[3], row[4]) for row in rows}
+        recorded: dict[int, tuple[Any, Any, Any, Any]] = {}
+        for row in [*active, *rows]:
+            recorded.setdefault(int(row[0]), (row[1], row[2], row[3], row[4]))
         probed: dict[int, tuple[int, int, int]] = {}
         if recorded:
             probed = {int(row[0]): (int(row[1]), int(row[2]), int(row[3]))
                       for row in self._query(RT_EVIDENCE_PROBE_SQL,
                                              {"ids": sorted(recorded)})}
         moved: list[int] = []
-        for listing_id, (images, phash, clip, tags) in sorted(recorded.items()):
+        for listing_id, (images, phash, clip, tags) in recorded.items():
             live = probed.get(listing_id, (0, 0, 0))
             # A NULL count is a row written before migration 540 — unmeasured, not zero, so
             # it is re-decided once and then carries real counts.
@@ -1637,13 +1658,10 @@ class SqlWork:
             released.extend((int(row[0]), int(row[1])))
         held_total = int(self._query(RT_EVIDENCE_HELD_COUNT_SQL, {
             "generation": self.generation, "reason": EVIDENCE_HOLD_REASON})[0][0] or 0)
-        # A short slice is the end of the sweep, so the cursor wraps — the same round-robin
-        # the drift sweep uses, and the reason a candidate cut by `share` is re-offered.
-        self._pending[CURSOR_EVIDENCE] = (
-            0 if len(rows) < self.evidence_slice else max(recorded, default=int(after_id)))
         self.windows["evidence"] = len(rows)
         self.evidence = {
-            "candidates": len(rows), "listings_probed": len(recorded),
+            "candidates": len(rows), "active_candidates": len(active),
+            "listings_probed": len(recorded),
             "images_probed": sum(row[0] for row in probed.values()),
             "moved": len(moved), "release_candidates": len(set(released)),
             "held_pairs": held_total,
@@ -1654,6 +1672,24 @@ class SqlWork:
         for listing_id in moved[:share] + sorted(set(released)):
             if listing_id not in wanted and listing_id not in gone:
                 wanted.append(listing_id)
+        # A short slice is the end of the sweep, so the cursor wraps — the same round-robin
+        # the drift sweep uses. E980: once the active arm takes the share first, a round-robin
+        # row that moved can be CUT; the cursor then stops just before the first one cut (as
+        # E970's revive feed does), so the round-robin slows while the arm is busy instead of
+        # stepping past it for a whole cycle. A row the arm itself holds is re-offered by it.
+        arm_ids = {int(row[0]) for row in active}
+        taken = set(wanted)
+        robin = {int(row[0]) for row in rows}
+        cut = [listing_id for listing_id in moved
+               if listing_id in robin and listing_id not in taken
+               and listing_id not in gone and listing_id not in arm_ids]
+        if cut:
+            self._pending[CURSOR_EVIDENCE] = min(cut) - 1
+        else:
+            self._pending[CURSOR_EVIDENCE] = (
+                0 if len(rows) < self.evidence_slice
+                else max((int(row[0]) for row in rows), default=int(after_id)))
+        self.evidence["cut"] = len(cut)
         return [WorkItem(listing_id, "evidence", None, None, redecide=True)
                 for listing_id in wanted]
 
