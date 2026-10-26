@@ -10,6 +10,7 @@ docstring that merely mentions the name does not count.
 from __future__ import annotations
 
 import ast
+import functools
 from pathlib import Path
 
 import yaml
@@ -44,23 +45,26 @@ def _imports(path: Path, tree: ast.Module) -> set[str]:
     return names
 
 
-def _needs_database() -> set[str]:
-    trees = {p: ast.parse(p.read_text(encoding="utf-8")) for p in (ROOT / "tests").rglob("*.py")}
-    imports = {p: _imports(p, t) for p, t in trees.items()}
-    helpers = {_module(p) for p, t in trees.items() if not p.name.startswith("test_") and _reads_url(t)}
-    grown = True
-    while grown:
-        more = {
-            _module(p) for p in trees
-            if not p.name.startswith("test_") and imports[p] & helpers
-        } - helpers
+@functools.cache
+def _needs_database() -> frozenset[str]:
+    # Parsing all of tests/ costs ~5 s; a file can hold the literal or import a helper only if its
+    # text names the literal or the helper's last dotted part, so only those files are parsed.
+    texts = {p: p.read_text(encoding="utf-8") for p in (ROOT / "tests").rglob("*.py")}
+    trees: dict[Path, ast.Module] = {}
+    helpers: set[str] = set()
+    marks = {_URL}
+    while True:
+        trees.update(
+            (p, ast.parse(text)) for p, text in texts.items()
+            if p not in trees and any(m in text for m in marks)
+        )
+        needs = {p for p, t in trees.items() if _reads_url(t) or _imports(p, t) & helpers}
+        more = {_module(p) for p in needs if not p.name.startswith("test_")} - helpers
+        if not more:
+            break
         helpers |= more
-        grown = bool(more)
-    return {
-        p.relative_to(ROOT).as_posix()
-        for p, t in trees.items()
-        if p.name.startswith("test_") and p != SELF and (_reads_url(t) or imports[p] & helpers)
-    }
+        marks |= {m.rsplit(".", 1)[-1] for m in more}
+    return frozenset(p.relative_to(ROOT).as_posix() for p in needs if p.name.startswith("test_") and p != SELF)
 
 
 def _laned() -> set[str]:
