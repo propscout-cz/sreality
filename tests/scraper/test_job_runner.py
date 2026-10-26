@@ -143,6 +143,7 @@ class FakeLedger:
     renew_result: bool | None = True
     release_result: bool | None = True
     up: bool = True
+    down: bool = False  # the database is unreachable: every tick's latch drops at begin()
     events: list[tuple[str, object, float, bool | None]] = field(default_factory=list)
     on: dict[str, Callable[[], None]] = field(default_factory=dict)  # event -> run inside the call (a blocking DB)
     _run_id: int = 0
@@ -157,6 +158,7 @@ class FakeLedger:
         return [e for e in self.events if e[0] == event]
 
     def begin(self, *, stopping: bool) -> None:
+        self.up = not self.down
         self._record("begin", stopping)
 
     def register(self, entries: Sequence[Job]) -> job_lease.Registered | None:
@@ -409,3 +411,151 @@ def test_the_cap_counts_every_child_until_its_group_is_empty() -> None:
     assert [e[1] for e in rig.ledger.named("claim")] == ["d1", "d2", "d3", "d4"]
     [done] = rig.releases()
     assert done.lease.job_name == "d1" and done.outcome == "ok"
+
+
+def test_a_finished_run_waits_in_memory_through_a_database_outage() -> None:
+    """N10: a release that could not be asked keeps its run for the next tick; a down tick claims nothing."""
+    rig = _rig([_job("a"), _job("b")], {"a": Script(code=0, at=1001.0)}, due=["a"])
+    rig.runner.tick()
+    rig.ledger.release_result = None
+    rig.clock.advance(2)
+    rig.runner.tick()
+    assert len(rig.releases()) == 1 and len(rig.runner.finished) == 1, "asked, not answered: kept"
+    rig.ledger.down = True
+    rig.ledger.due_names = ["b"]
+    rig.clock.advance(10)
+    rig.runner.tick()
+    assert len(rig.releases()) == 1 and rig.ledger.named("claim")[-1][1] == "a", "a down tick asks nothing"
+    rig.ledger.down, rig.ledger.release_result = False, True
+    rig.clock.advance(10)
+    rig.runner.tick()
+    assert [d.lease.job_name for d in rig.releases()] == ["a", "a"] and rig.runner.finished == []
+    assert [e[1] for e in rig.ledger.named("claim")] == ["a", "b"]
+
+
+class FakeConn:
+    def __init__(self) -> None:
+        self.closed = False
+        self.broken = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_the_pg_ledger_latches_on_a_lost_connection_and_retries_next_tick(monkeypatch: pytest.MonkeyPatch) -> None:
+    import psycopg
+
+    opened: list[FakeConn] = []
+
+    def connect() -> FakeConn:
+        if len(opened) == 1:
+            opened.append(FakeConn())
+            raise psycopg.OperationalError("connection refused")
+        opened.append(FakeConn())
+        return opened[-1]
+
+    calls: list[str] = []
+
+    def due(conn: FakeConn, names: Sequence[str]) -> list[str]:
+        calls.append("due")
+        if len(calls) == 1:
+            conn.broken = True
+            raise psycopg.OperationalError("server closed the connection unexpectedly")
+        return list(names)
+
+    monkeypatch.setattr(job_lease, "due", due)
+    ledger = job_runner.PgLedger(connect, holder="H")  # type: ignore[arg-type]
+    ledger.begin(stopping=False)
+    assert ledger.due(["x"]) is None and not ledger.up and opened[0].closed, "dropped, and the tick latched"
+    assert ledger.due(["x"]) is None and calls == ["due"], "nothing more is asked this tick"
+    ledger.begin(stopping=False)
+    assert ledger.due(["x"]) is None and len(opened) == 2, "the reconnect failed: still down"
+    ledger.begin(stopping=False)
+    assert ledger.due(["x"]) == ["x"] and len(opened) == 3
+
+
+def test_the_pg_ledger_keeps_a_statement_error_to_its_call_unless_stopping(monkeypatch: pytest.MonkeyPatch) -> None:
+    import psycopg
+
+    def due(conn: FakeConn, names: Sequence[str]) -> list[str]:
+        raise psycopg.errors.QueryCanceled("canceling statement due to statement timeout")
+
+    monkeypatch.setattr(job_lease, "due", due)
+    ledger = job_runner.PgLedger(FakeConn, holder="H")  # type: ignore[arg-type]
+    ledger.begin(stopping=False)
+    assert ledger.due(["x"]) is None and ledger.up, "one slow statement does not end the tick"
+    ledger.begin(stopping=True)
+    assert ledger.due(["x"]) is None and not ledger.up, "while stopping, any error latches"
+
+
+def test_a_release_the_database_refuses_on_content_is_sent_again_bare(monkeypatch: pytest.MonkeyPatch) -> None:
+    """N10: a DataError never drops the run; its outcome and exit code land without the error and the tail."""
+    import psycopg
+
+    sent: list[dict[str, object]] = []
+
+    def release(conn: FakeConn, lease: job_lease.Lease, outcome: str, **kwargs: object) -> bool:
+        sent.append({"outcome": outcome, **kwargs})
+        if len(sent) == 1:
+            raise psycopg.DataError("invalid byte sequence")
+        return True
+
+    monkeypatch.setattr(job_lease, "release", release)
+    ledger = job_runner.PgLedger(FakeConn, holder="H")  # type: ignore[arg-type]
+    lease = job_lease.Lease("a", "H", 7, 180, None, None, 0.0)
+    done = Finished(lease, "failed", "backoff", "exit 3", 3, 80, "tail \udcff text")
+    ledger.begin(stopping=False)
+    assert ledger.release(done) is None and done.bare and ledger.up
+    assert ledger.release(done) is True
+    assert sent[1] == {"outcome": "failed", "due": "backoff", "error": None, "exit_code": 3, "peak_rss_mb": 80,
+                       "log_tail": None}
+
+
+def test_a_job_that_cannot_start_is_a_failed_run_with_no_exit_code() -> None:
+    """N9: a spawn OSError is the run's failure, never the runner's."""
+    rig = _rig([_job()], due=["test_job"])
+    rig.standin.fail = FileNotFoundError(2, "No such file or directory")
+    rig.runner.tick()
+    rig.runner.tick()
+    [done] = rig.releases()
+    assert (done.outcome, done.due, done.exit_code, done.error) == (
+        "failed", "backoff", None, "spawn: FileNotFoundError 2")
+    heavy = _rig([_job(db_heavy=True)], due=["test_job"])
+    heavy.standin.fail = OSError(12, "Cannot allocate memory")
+    heavy.runner.tick()
+    heavy.runner.tick()
+    assert [d.due for d in heavy.releases()] == ["own_hour"]
+
+
+def test_a_spawn_that_raises_before_the_watch_leaves_no_process_behind() -> None:
+    """N9: atomic spawn. Without it a dropped Popen would leave the job running untracked, or poll its status away."""
+    import os
+
+    seen: list[job_process.ProcessChild] = []
+
+    def adopt(child: Child) -> None:
+        assert isinstance(child, job_process.ProcessChild)
+        seen.append(child)
+        raise RuntimeError("the watch failed")
+
+    try:
+        with pytest.raises(RuntimeError, match="the watch failed"):
+            job_process.spawn_process([sys.executable, "-c", "import time; time.sleep(30)"], dict(os.environ),
+                                      "sleeper#1", adopt)
+        [child] = seen
+        assert child._popen.returncode == -9
+        assert job_process.stragglers(child.pid) == 0
+        with pytest.raises(ChildProcessError):
+            os.waitpid(child.pid, os.WNOHANG)
+    finally:
+        for child in seen:
+            _kill_quietly(child.pid)
+
+
+def _kill_quietly(pgid: int) -> None:
+    import contextlib
+    import os
+    import signal
+
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(pgid, signal.SIGKILL)

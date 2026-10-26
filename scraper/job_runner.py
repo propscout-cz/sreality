@@ -23,6 +23,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol
@@ -390,3 +391,125 @@ class Runner:
                              "reason": watch.reason if watch else None})
         return {**self.identity, "children": children, "stopping": self.stopping,
                 "skipped": sorted(self.skipped), "last_error": self.last_error}
+
+
+class PgLedger:
+    """The `Ledger` over `scraper.job_lease`, on one kept connection that is reopened only after a drop. No SQL."""
+
+    def __init__(self, connect: Callable[[], psycopg.Connection], *, holder: str, version: str | None = None,
+                 heartbeat: str | None = None, deployment: str | None = None,
+                 started_at: datetime | None = None) -> None:
+        self._connect = connect
+        self._conn: psycopg.Connection | None = None
+        self.holder = holder
+        self.version = version
+        self.heartbeat = heartbeat
+        self.deployment = deployment
+        self.started_at = started_at or datetime.now(UTC)
+        self.up = True
+        self._stopping = False
+
+    def begin(self, *, stopping: bool) -> None:
+        self.up, self._stopping = True, stopping
+
+    def _call(self, what: str, call: Callable[[psycopg.Connection], object]) -> object:
+        if not self.up:
+            return None
+        try:
+            if self._conn is None or self._conn.closed:
+                self._conn = self._connect()
+            return call(self._conn)
+        except psycopg.Error as exc:
+            broken = self._conn is None or self._conn.broken or self._conn.closed
+            LOG.warning("LEDGER %s failed%s: %s: %s", what, " (connection lost)" if broken else "",
+                        type(exc).__name__, str(exc).splitlines()[0][:200] if str(exc) else "")
+            if broken:
+                self._drop()
+            if broken or self._stopping:
+                self.up = False
+            raise _Failed(exc) from exc
+
+    def _ask(self, what: str, call: Callable[[psycopg.Connection], object]) -> object:
+        try:
+            return self._call(what, call)
+        except _Failed:
+            return None
+
+    def _drop(self) -> None:
+        conn, self._conn = self._conn, None
+        if conn is not None:
+            with suppress(Exception):
+                conn.close()
+
+    def close(self) -> None:
+        self._drop()
+
+    def register(self, entries: Sequence[Job]) -> job_lease.Registered | None:
+        result = self._ask("register", lambda c: job_lease.register(c, entries))
+        return result if isinstance(result, job_lease.Registered) else None
+
+    def retire(self, names: Sequence[str]) -> list[str] | None:
+        return self._list(self._ask("retire", lambda c: job_lease.retire(c, names)))
+
+    def reap_lost(self, names: Sequence[str], on_hour: Sequence[str]) -> list[str] | None:
+        return self._list(self._ask("reap_lost", lambda c: job_lease.reap_lost(c, names=names, on_hour=on_hour)))
+
+    def due(self, names: Sequence[str]) -> list[str] | None:
+        return self._list(self._ask("due", lambda c: job_lease.due(c, names)))
+
+    def claim(self, name: str) -> job_lease.Lease | None:
+        lease = self._ask("claim", lambda c: job_lease.claim(c, name, holder=self.holder, version=self.version))
+        return lease if isinstance(lease, job_lease.Lease) else None
+
+    def renew(self, lease: job_lease.Lease) -> bool | None:
+        result = self._ask("renew", lambda c: job_lease.renew(c, lease))
+        return None if result is None else bool(result)
+
+    def release(self, done: Finished) -> bool | None:
+        def call(conn: psycopg.Connection) -> bool:
+            return job_lease.release(conn, done.lease, done.outcome, due=done.due,
+                                     error=None if done.bare else done.error, exit_code=done.exit_code,
+                                     peak_rss_mb=done.peak_rss_mb, log_tail=None if done.bare else done.log_tail)
+
+        try:
+            return bool(self._call("release", call))
+        except _Failed as failed:
+            if isinstance(failed.exc, (psycopg.DataError, psycopg.IntegrityError)) and not done.bare:
+                LOG.error("RUN release refused its content job=%s run=%d: sending outcome and exit only",
+                          done.lease.job_name, done.lease.run_id)
+                done.bare = True
+            return None
+
+    def beat(self, details: Mapping[str, object]) -> None:
+        heartbeat = self.heartbeat
+        if heartbeat is not None:
+            self._ask("beat", lambda c: job_lease.beat(c, heartbeat, self.started_at,
+                                                       {**details, "deployment": self.deployment}))
+
+    def forget_replaced(self) -> None:
+        heartbeat = self.heartbeat
+        if heartbeat is not None:
+            self._ask("forget_replaced", lambda c: job_lease.forget_replaced(
+                c, prefix=HEARTBEAT_PREFIX, keep=heartbeat, deployment=self.deployment,
+                older_than_s=FORGET_AFTER_S))
+
+    def forget(self) -> None:
+        heartbeat = self.heartbeat
+        if heartbeat is not None:
+            self.up = True
+            self._ask("forget", lambda c: job_lease.forget(c, heartbeat))
+
+    def prune(self) -> None:
+        pruned = self._ask("prune", lambda c: job_lease.prune_runs(c))
+        if pruned:
+            LOG.info("RUNS pruned %s closed runs older than 90 days", pruned)
+
+    @staticmethod
+    def _list(result: object) -> list[str] | None:
+        return list(result) if isinstance(result, list) else None
+
+
+class _Failed(Exception):
+    def __init__(self, exc: psycopg.Error) -> None:
+        super().__init__(str(exc))
+        self.exc = exc
