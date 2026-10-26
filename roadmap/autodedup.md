@@ -220,6 +220,8 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   vector waited out the cycle: 1,014 such at 13:00Z, one Hradec Králové flat four properties for 16 h. A row
   written in the last hour waits; the round-robin's cursor stops before a mover the share cut. Order only;
   no decision module, digest unchanged.
+  Reverted the same day (#2096): its 57–80 re-decides a pass overran the build's pass deadline twice.
+  **E980b** brings it back OFF in a build and at most 15 re-decides a pass outside one (constants).
 - **E977 (2026-10-22, built; ships only on the operator's yes):** during a build, a block whose walk is
   complete holds back only the groups whose own adverts (members, carried riders) have no fingerprint, not
   every group in the block; a block never walked or mid-walk, an advert the snapshot does not place and the

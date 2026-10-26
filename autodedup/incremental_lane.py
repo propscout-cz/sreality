@@ -363,6 +363,13 @@ EVIDENCE_ACTIVE_SLICE: int = 1000
 # re-decision an hour; an arrival's vectors land hours after its first decision, so the gate
 # does not delay the case the arm is for.
 EVIDENCE_ACTIVE_RECHECK_MINUTES: int = 60
+# E980b: how many of the arm's moved rows one pass re-decides, and the arm is OFF in a build.
+# A re-decided active advert drags its whole built neighbourhood through retrieval and
+# re-scoring: on 2026-10-26 a build pass that took 28 of them claimed 275 in 1,022 s against
+# ~750 without, and two passes that took 57-80 overran PASS_DEADLINE_S and rolled back (#2091,
+# reverted by #2096). A build pass already runs at 89-97 % of the deadline, so there the feed is
+# E92's round-robin alone; outside a build the passes are short and 15 fit.
+EVIDENCE_ACTIVE_REDECIDE_MAX: int = 15
 # How long after its FIRST decision a listing's photographs are still expected. The producers
 # are hourly (dHash at :20, CLIP at :40) and measured p90 4.51 h to a first tag, so 48 h is
 # ~10x the observed tail rather than a guess at it — and it is the bound on how long a merge
@@ -1630,7 +1637,7 @@ class SqlWork:
         active = self._query(RT_EVIDENCE_ACTIVE_SQL, {
             "generation": self.generation, "limit": self.evidence_active_slice,
             "recheck_minutes": EVIDENCE_ACTIVE_RECHECK_MINUTES,
-        }) if self.evidence_active_slice > 0 else []
+        }) if self.evidence_active_slice > 0 and not self.bootstrap else []
         rows = self._query(RT_EVIDENCE_CANDIDATES_SQL, {
             "generation": self.generation, "after_id": int(after_id),
             "limit": self.evidence_slice, **horizon})
@@ -1670,8 +1677,15 @@ class SqlWork:
             "horizon_hours": self.evidence_horizon_hours, "slice": self.evidence_slice,
         }
         gone = set(retiring or ())
+        arm_ids = {int(row[0]) for row in active}
+        # E980b: the arm's re-decides are bounded by a count of their own, the round-robin's
+        # by the share as before.
+        arm_moved = [listing_id for listing_id in moved if listing_id in arm_ids]
+        robin_moved = [listing_id for listing_id in moved if listing_id not in arm_ids]
+        taken_moved = (arm_moved[:min(share, EVIDENCE_ACTIVE_REDECIDE_MAX)]
+                       + robin_moved)[:share]
         wanted: list[int] = []
-        for listing_id in moved[:share] + sorted(set(released)):
+        for listing_id in taken_moved + sorted(set(released)):
             if listing_id not in wanted and listing_id not in gone:
                 wanted.append(listing_id)
         # A short slice is the end of the sweep, so the cursor wraps — the same round-robin
@@ -1679,7 +1693,6 @@ class SqlWork:
         # row that moved can be CUT; the cursor then stops just before the first one cut (as
         # E970's revive feed does), so the round-robin slows while the arm is busy instead of
         # stepping past it for a whole cycle. A row the arm itself holds is re-offered by it.
-        arm_ids = {int(row[0]) for row in active}
         taken = set(wanted)
         robin = {int(row[0]) for row in rows}
         cut = [listing_id for listing_id in moved

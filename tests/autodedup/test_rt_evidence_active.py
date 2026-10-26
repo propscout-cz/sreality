@@ -10,6 +10,7 @@ from typing import Any
 
 from autodedup.incremental_lane import (
     EVIDENCE_ACTIVE_RECHECK_MINUTES,
+    EVIDENCE_ACTIVE_REDECIDE_MAX,
     EVIDENCE_ACTIVE_SLICE,
     SqlWork,
 )
@@ -158,6 +159,36 @@ def test_a_row_the_lane_just_wrote_waits_out_the_recheck_gate() -> None:
 
     db.rt_fp[("rt", 1000)]["updated_at"] = db.now - timedelta(minutes=90)
     assert _active_ids(db, 10) == [1000]
+
+
+def test_the_arm_re_decides_at_most_its_own_count_a_pass() -> None:
+    """E980b: a share of 100 would take 40 moved arrivals; the arm hands on 15 of them, the
+    newest first decisions first, and the rest wait for the next pass."""
+    db = FakePg()
+    for n in range(40):
+        _row(db, 1000 + n, active=True, complete=False, hours_ago=2 + n)
+        _gallery(db, 1000 + n, tagged=True)
+
+    items = _work(db, evidence_slice=1, rate_per_s=100.0).claim(500)
+
+    taken = [item.listing_id for item in items if item.feed == "evidence"]
+    assert len(taken) == EVIDENCE_ACTIVE_REDECIDE_MAX == 15
+    assert taken == list(range(1000, 1015))
+
+
+def test_the_arm_is_off_in_a_build() -> None:
+    """E980b: a build pass already runs near its deadline, so there the feed is E92's
+    round-robin alone and an arrival beyond its slice waits, as before E980."""
+    db = FakePg()
+    _young_and_settled(db, range(1, 11))
+    _row(db, 1000, active=True, complete=False, hours_ago=16)
+    _gallery(db, 1000, tagged=True)
+    work = _work(db, evidence_slice=3, bootstrap=True)
+
+    items = work.claim(50)
+
+    assert [item.listing_id for item in items if item.feed == "evidence"] == []
+    assert work.evidence["active_candidates"] == 0
 
 
 def test_evidence_slice_zero_still_turns_the_whole_feed_off() -> None:
