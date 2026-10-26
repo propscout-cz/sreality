@@ -143,6 +143,28 @@ def test_a_removal_is_read_off_the_pinned_plan(fixture: str, code: int) -> None:
     assert run.returncode == code, run.stdout + run.stderr
 
 
+@pytest.mark.parametrize(("description", "code"), [
+    ("No deployment needed - watched paths not modified", 1), ("Deployment succeeded", 0), (None, 0)])
+def test_a_merge_that_redeployed_vite_gets_the_spa_check(tmp_path: Path, description: str | None, code: int) -> None:
+    """vite watches /frontend/**, so a regenerated frontend/public/workflow-docs.json redeploys it on a worker window's
+    merge: the window reads that off vite's status and runs the SPA's read-only check (a missing status counts)."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("no node")
+    status = tmp_path / "status.json"
+    statuses = [] if description is None else [{"context": "vite - sreality", "state": "success",
+                                                "description": description}]
+    status.write_text(json.dumps({"statuses": statuses}))
+    run = subprocess.run([node, "-e", _wizard_node_script("railway_redeployed"), str(status), "vite - sreality"],
+                         capture_output=True, text=True, timeout=60, check=False)
+    assert run.returncode == code, run.stdout + run.stderr
+    window = WIZARD.read_text(encoding="utf-8").split("\nmode_window() {\n", 1)[1].split("\n}\n", 1)[0]
+    after = window.split('stop "a Railway status on ${merge_sha:0:9} is not success (above)"', 1)[1]
+    loop = after.split("\n  done\n", 1)[0]
+    assert "for l in API vite; do" in loop and 'railway_redeployed "$OUT/merge-status.json"' in loop
+    assert 'check_health "$l"' in loop and "check_spa" in loop
+
+
 def test_only_the_worker_and_the_runner_declare_a_start_command() -> None:
     """Ruling R5: the API and vite run their image's own command. Railway runs a start command in exec form, so a
     copied `uvicorn ... --port $PORT` never expands $PORT and fails every health check (8a362a0ea); the runner's is

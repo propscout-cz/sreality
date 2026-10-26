@@ -1146,8 +1146,10 @@ on 2026-12-01, and until then a file of that name would override the applied set
   - `window <label> <adds> <destroys> <service>`, one e9 window, the autodedup brake on for `worker`: the gate (e9's
     light, status.railway.com, the PR head, still a draft, its checks green, `CI: runner image` among them when the PR
     changes an image input), the scoped pinned plan, the interactive apply, the checks before the merge, the merge at
-    once, Railway's commit statuses on the merge SHA (one per declared service), then drift = 0 on all three from
-    main's file. The apply precedes the merge, so main declares nothing Railway lacks for longer than the merge takes.
+    once, Railway's commit statuses on the merge SHA (one per declared service), the read-only check of each public
+    service the merge redeployed (the API on every merge; vite on a `frontend/` change, `workflow-docs.json`
+    included), then drift = 0 on all three from main's file. The apply precedes the merge, so main declares nothing
+    Railway lacks for longer than the merge takes.
   - `drift`, read-only: it refuses a checkout whose `.railway/` differs from `origin/main`'s (run it from
     `git checkout --detach origin/main`), then plans all three.
   - `runner-list` and `runner-pause <job> <until> <note>`: `python -m scraper.job_runner list|pause` on job-runner

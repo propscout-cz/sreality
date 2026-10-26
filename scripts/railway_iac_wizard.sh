@@ -493,6 +493,16 @@ process.exit(ours.every((s) => s.state === "success") ? 0 : 1);
 ' "$@"
 }
 
+# railway_redeployed <combined-status JSON> <context>: true unless that status says the merge was watch-skipped
+# ("No deployment needed - watched paths not modified"); a missing status counts as a redeploy.
+railway_redeployed() {
+  node -e '
+const [file, context] = process.argv.slice(1);
+const s = (JSON.parse(require("fs").readFileSync(file, "utf8")).statuses || []).find((x) => x.context === context);
+process.exit(String(s?.description || "").startsWith("No deployment needed") ? 1 : 0);
+' "$1" "$2"
+}
+
 # ── modes ─────────────────────────────────────────────────────────────────
 
 mode_preflight() {
@@ -655,6 +665,13 @@ request body's pre-merge checks; the deployment ids of $project's other services
   cat "$OUT/merge-status.txt" 2>/dev/null || true
   (( rc != 3 )) || stop "Railway's statuses on ${merge_sha:0:9} are not final after 20 minutes"
   (( rc == 0 )) || stop "a Railway status on ${merge_sha:0:9} is not success (above)"
+  # The merge redeploys more than $service: the API on every merge (no watch patterns, #1857), vite on any frontend/
+  # change (a regenerated workflow-docs.json too). Each public service it redeployed gets its read-only check.
+  for l in API vite; do
+    railway_redeployed "$OUT/merge-status.json" "${PROJECT_NAME[$l]} - sreality" || continue
+    check_health "$l"
+    if [[ "$l" == vite ]]; then check_spa; fi
+  done
   if (( removes )); then
     agent_reports "list-services on $project: $service is still gone after the merge"
   else
