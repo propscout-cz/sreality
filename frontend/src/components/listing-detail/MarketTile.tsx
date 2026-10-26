@@ -108,7 +108,7 @@ export default function MarketTile({
     body = (
       <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
         {charts.map((c) => (
-          <StatsChart key={c.id} chart={c} filters={sample} />
+          <StatsChart key={c.id} chart={c} filters={sample} showSmall={template.show_small ?? false} />
         ))}
       </div>
     );
