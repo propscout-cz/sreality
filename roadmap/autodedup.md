@@ -214,12 +214,6 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   `autodedup.settings` `rt_build_priority:<generation>` first, in that row's category order (Liberec
   `obec:563889`: flats for rent, houses for sale, flats for sale, the rest), then E978's order. Data, not
   code: changing it needs no deploy; no row or a malformed one is E978's order exactly. Order only.
-- **E980 (2026-10-26, active arrivals re-checked first):** every pass the evidence sweep probes the
-  newest 1,000 active adverts still marked incomplete before its round-robin. The kraj build had filled the
-  round-robin to 90,984 rows, ~50 h a cycle at 400 a pass, so an active arrival decided before its CLIP
-  vector waited out the cycle: 1,014 such at 13:00Z, one Hradec Králové flat four properties for 16 h. A row
-  written in the last hour waits; the round-robin's cursor stops before a mover the share cut. Order only;
-  no decision module, digest unchanged.
 - **E977 (2026-10-22, built; ships only on the operator's yes):** during a build, a block whose walk is
   complete holds back only the groups whose own adverts (members, carried riders) have no fingerprint, not
   every group in the block; a block never walked or mid-walk, an advert the snapshot does not place and the
