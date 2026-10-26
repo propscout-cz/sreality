@@ -26,6 +26,25 @@ def test_each_railway_project_id_plans_only_its_own_definition() -> None:
     ]
 
 
+def test_the_wizard_plans_every_project_the_iac_file_declares() -> None:
+    """The wizard keeps its own project tables: a project missing there is never planned or drift-checked, and its
+    drift mode still exits 0."""
+    wizard = (ROOT / "scripts" / "railway_iac_wizard.sh").read_text(encoding="utf-8")
+
+    def table(name: str) -> dict[str, str]:
+        match = re.search(rf"^declare -A {name}=\((.*?)\)$", wizard, re.M | re.S)
+        assert match, name
+        return dict(re.findall(r"\[(\w+)\]=(\S+)", match.group(1)))
+
+    labels_line = re.search(r"^LABELS=\((.*?)\)$", wizard, re.M)
+    assert labels_line
+    labels = labels_line.group(1).split()
+    ids, names = table("PROJECT_ID"), table("PROJECT_NAME")
+    assert sorted(ids) == sorted(names) == sorted(labels)
+    declared = re.findall(r'"([0-9a-f-]{36})": \{ name: "([^"]+)"', iac_text())
+    assert sorted((ids[label], names[label]) for label in labels) == sorted(declared)
+
+
 def test_only_the_worker_declares_a_start_command() -> None:
     """Ruling R5: the API and vite run their image's own command. Railway runs a start command in exec form, so a
     copied `uvicorn ... --port $PORT` never expands $PORT and fails every health check (8a362a0ea). #2075 scopes this

@@ -1146,8 +1146,9 @@ on 2026-12-01, and until then a file of that name would override the applied set
 - **Never change a service setting or a variable name in the dashboard or with Railway MCP write tools**, except as
   the emergency undo U-2, and fold any such change back into the file: the next plan shows it as drift.
 - **Adding a service** is one more `service(...)` in its project's definition (#2075's agent-worker in `API`); a new
-  Railway project (where #2025's runner lives is its own ruling) also needs a `PROJECTS` entry and a row in the
-  project-map test. Removing a service deletes it.
+  Railway project (where #2025's runner lives is its own ruling) also needs a `PROJECTS` entry, a row in the
+  project-map test, and a row in the wizard's `PROJECT_ID`, `PROJECT_NAME` and `LABELS` (a guard test ties those to
+  `PROJECTS`). Removing a service deletes it.
 
 Undo paths (U-1 and U-2 rehearsed on vite in #2060's window 1; evidence on #2060):
 - **U-1, the lasting path, for any IaC change:** `git revert` it in a PR, merge in a window, then plan (it shows the
