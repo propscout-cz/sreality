@@ -10,6 +10,9 @@ stalled database or a wedged main loop delays no stop:
   has exited;
 * with no clean tick for `LIVENESS_BOUND_S` it kills every group and exits the process (the watchdog).
 
+The guard never writes a log line itself: it queues each one, and a forwarder thread writes them, so a stalled log
+reader (a full stderr pipe) delays no signal, no lock and no watchdog exit.
+
 Exit statuses are read with a pid-targeted `waitid(WNOWAIT)` peek and a `waitpid` reap, never through `Popen`'s own
 methods (they reap with no status left to read, and `send_signal` polls first). Peak memory is the leader's `VmHWM`
 or the group's summed `VmRSS`, whichever is higher, over the guard's samples; never `ru_maxrss`, which inherits the
@@ -21,6 +24,7 @@ from __future__ import annotations
 import faulthandler
 import logging
 import os
+import queue
 import signal
 import subprocess
 import sys
@@ -31,6 +35,7 @@ from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
+from types import TracebackType
 from typing import IO, Literal, Protocol
 
 from scraper import stop
@@ -63,6 +68,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PROC = "/proc"
 
 _OUTPUT_LOCK = threading.Lock()
+
+_ExcInfo = tuple[type[BaseException], BaseException, TracebackType | None]
+_Note = tuple[int, str, tuple[object, ...], _ExcInfo | None]  # one queued log line: level, message, args, exc_info
 
 
 @dataclass(frozen=True)
@@ -240,9 +248,11 @@ def reap_orphans(tracked: Collection[int], proc: str = PROC) -> int:
     return reaped
 
 
-def _die(code: int) -> None:
-    # A blocked stderr must not hold the exit: the faulthandler thread exits on its own 10 s later.
-    faulthandler.dump_traceback_later(10, exit=True)
+def _die(code: int, why: str, *, backstop_s: float = 10.0) -> None:
+    # The backstop first, dumping to /dev/null: faulthandler's timer writes before it exits, and its default file is
+    # the stderr that may be blocked. Then the line and the dump, which may block until the backstop fires.
+    faulthandler.dump_traceback_later(backstop_s, exit=True, file=os.open(os.devnull, os.O_WRONLY))
+    LOG.critical("%s", why)
     faulthandler.dump_traceback(all_threads=True)
     os._exit(code)
 
@@ -266,6 +276,30 @@ class Guard:
         self._watches: dict[int, Watch] = {}
         self._clean_at = clock()
         self.stop_at: float | None = None
+        self._notes: queue.SimpleQueue[_Note | None] = queue.SimpleQueue()
+        self._forwarding = False
+
+    def _note(self, level: int, msg: str, *args: object, exc_info: _ExcInfo | None = None) -> None:
+        """Queued, never written here (under the lock, or on the guard's thread)."""
+        self._notes.put((level, msg, args, exc_info))
+
+    def _flush(self) -> None:
+        """Off `serve` (a test driving `run_once`), the caller writes the queued lines, after the lock."""
+        if self._forwarding:
+            return
+        while True:
+            try:
+                note = self._notes.get_nowait()
+            except queue.Empty:
+                return
+            if note is None:
+                self._notes.put(None)  # the forwarder's end mark stays for the forwarder
+                return
+            _write(note)
+
+    def _forward(self) -> None:
+        while (note := self._notes.get()) is not None:
+            _write(note)
 
     def watch(self, pid: int, *, term_at: float, fence_at: float, label: str = "") -> None:
         watch = Watch(term_at, fence_at, label)
@@ -285,6 +319,7 @@ class Guard:
             if watch is not None and not watch.killed:
                 watch.reason = watch.reason or "fence"
                 self._kill_locked(pid, watch, "renewal refused")
+        self._flush()
 
     def forget(self, pid: int) -> Watch:
         """The leader exited and is about to be reaped: kill its group's stragglers and never signal the pid again."""
@@ -305,14 +340,18 @@ class Guard:
     def _kill_locked(self, pid: int, watch: Watch, why: str) -> None:
         self._kill(pid)
         watch.killed = True
-        LOG.warning("RUN kill job=%s pid=%d why=%s (%s)", watch.label, pid, watch.reason, why)
+        self._note(logging.WARNING, "RUN kill job=%s pid=%d why=%s (%s)", watch.label, pid, watch.reason, why)
 
     def run_once(self, now: float) -> None:
+        self._pass(now)
+        self._flush()
+
+    def _pass(self, now: float) -> None:
         with self._lock:
             if self.stop_at is None and self._stopping():
                 self.stop_at = now
-                LOG.warning("STOP seen: forwarding SIGTERM to %d children, SIGKILL in %.0f s",
-                            len(self._watches), self._grace_s)
+                self._note(logging.WARNING, "STOP seen: forwarding SIGTERM to %d children, SIGKILL in %.0f s",
+                           len(self._watches), self._grace_s)
             for pid, watch in self._watches.items():
                 if not watch.killed:
                     mb = self._sample(pid)
@@ -325,37 +364,48 @@ class Guard:
                 if watch.reason is None and self.stop_at is not None:
                     watch.reason, watch.kill_at = "deploy", self.stop_at + self._grace_s
                     self._term(pid)
-                    LOG.warning("RUN term job=%s pid=%d why=deploy", watch.label, pid)
+                    self._note(logging.WARNING, "RUN term job=%s pid=%d why=deploy", watch.label, pid)
                 elif watch.reason is None and now >= watch.term_at:
                     watch.reason, watch.kill_at = "timeout", now + self._grace_s
                     self._term(pid)
-                    LOG.warning("RUN term job=%s pid=%d why=timeout", watch.label, pid)
+                    self._note(logging.WARNING, "RUN term job=%s pid=%d why=timeout", watch.label, pid)
                 if not watch.killed and watch.kill_at is not None and now >= watch.kill_at:
                     self._kill_locked(pid, watch, f"{self._grace_s:.0f} s after the SIGTERM")
 
-    def _trip(self, now: float, exit_: Callable[[int], None]) -> None:
+    def _trip(self, now: float, exit_: Callable[[int, str], None]) -> None:
         with self._lock:
             for pid in self._watches:
                 self._kill(pid)
-            LOG.critical("WATCHDOG no clean tick for %.0f s: killed %d children, exiting",
-                         now - self._clean_at, len(self._watches))
-        exit_(1)
+            killed = len(self._watches)
+        exit_(1, f"WATCHDOG no clean tick for {now - self._clean_at:.0f} s: killed {killed} children, exiting")
 
-    def serve(self, *, wait: Callable[[float], object] | None = None, exit_: Callable[[int], None] = _die,
+    def serve(self, *, wait: Callable[[float], object] | None = None, exit_: Callable[[int, str], None] = _die,
               watchdog: bool = True) -> None:
-        """The guard thread's loop. It waits on the stop event until it has seen the stop, then sleeps."""
-        while True:
-            now = self._clock()
-            try:
-                self.run_once(now)
-            except Exception:  # noqa: BLE001 - the guard outlives any one bad pass
-                LOG.exception("GUARD pass failed")
-            if watchdog and now - self._clean_at > self._liveness_s:
-                self._trip(now, exit_)
-                return
-            if wait is not None:
-                wait(GUARD_POLL_S)
-            elif self.stop_at is None:
-                stop.EVENT.wait(GUARD_POLL_S)
-            else:
-                time.sleep(GUARD_POLL_S)
+        """The guard thread's loop. It waits on the stop event until it has seen the stop, then sleeps; a forwarder
+        thread writes its log lines."""
+        self._forwarding = True
+        threading.Thread(target=self._forward, name="job-guard-log", daemon=True).start()
+        try:
+            while True:
+                now = self._clock()
+                try:
+                    self._pass(now)
+                except Exception as exc:  # noqa: BLE001 - the guard outlives any one bad pass
+                    self._note(logging.ERROR, "GUARD pass failed", exc_info=(type(exc), exc, exc.__traceback__))
+                if watchdog and now - self._clean_at > self._liveness_s:
+                    self._trip(now, exit_)
+                    return
+                if wait is not None:
+                    wait(GUARD_POLL_S)
+                elif self.stop_at is None:
+                    stop.EVENT.wait(GUARD_POLL_S)
+                else:
+                    time.sleep(GUARD_POLL_S)
+        finally:
+            self._forwarding = False
+            self._notes.put(None)
+
+
+def _write(note: _Note) -> None:
+    level, msg, args, exc_info = note
+    LOG.log(level, msg, *args, exc_info=exc_info)

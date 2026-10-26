@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import itertools
 import logging
 import os
 import signal
@@ -58,6 +59,7 @@ DRAINING_S = 180.0  # Railway's drainingSeconds (#2025 pins it to .railway/railw
 CONNECT_TIMEOUT_S = 5
 CONNECT_BUDGET_S = 10  # two pooler addresses at CONNECT_TIMEOUT_S each (libpq counts it per address)
 STOP_PHASE_BUDGET_S = 10.0  # a stopping ledger phase asks nothing new after this
+ONCE_ANSWER_S = 60.0  # `once` gives up when no claim pass has completed by then (a few connect budgets)
 CALL_MAX_S = CONNECT_BUDGET_S + 3 * job_lease.STATEMENT_TIMEOUT_S  # a release: the bound, the row, the run
 MORE_REMAINS_EXIT = os.EX_TEMPFAIL
 MAX_CHILDREN = jobs.RUNNER_MAX_CONCURRENT
@@ -86,22 +88,27 @@ def settle(reason: Stop | None, code: int | None, *, stopping: bool, db_heavy: b
 
 
 def cause(job: Job, reason: Stop | None, code: int | None, *, peak_mb: int | None, stragglers: int) -> str | None:
-    """`last_error`'s text. Never log text: the tail stays in job_runs.log_tail, which can hold a connection string."""
+    """`last_error`'s text, in `settle`'s order (an ok run has none). Never log text: the tail stays in
+    job_runs.log_tail, which can hold a connection string."""
     if code is None:
         text: str | None = "spawn failed"
     elif reason == "timeout":
         text = f"stopped at timeout_s={job.timeout_s}; exit {code}"
+    elif code in (0, MORE_REMAINS_EXIT):
+        text = None
     elif reason == "deploy":
         text = f"deploy stop; exit {code}"
     elif reason == "fence":
         text = f"lease fenced; exit {code}"
-    elif code in (0, MORE_REMAINS_EXIT):
-        text = None
     elif code == -signal.SIGKILL:
         text = (f"SIGKILL not sent by the runner (likely the OOM killer); peak {peak_mb} MB of memory_mb "
                 f"{job.memory_mb}")
     elif code < 0:
-        text = f"killed by {signal.Signals(-code).name}"
+        try:
+            name = signal.Signals(-code).name
+        except ValueError:  # a real-time signal has no name, and a raise here would strand the run
+            name = f"signal {-code}"
+        text = f"killed by {name}"
     else:
         text = f"exit {code}"
     if stragglers:
@@ -197,7 +204,9 @@ class Runner:
     skipped: dict[str, str] = field(default_factory=dict)
     claims: int = 0
     claim_passes: int = 0
+    answer_by: float | None = None  # `once` gives up when no claim pass has completed by then
     last_error: str | None = None
+    _passes_at_beat: int = 0
     _next_claim_at: float = float("-inf")
     _next_beat_at: float = float("-inf")
     _next_prune_at: float = float("-inf")
@@ -229,7 +238,9 @@ class Runner:
             return False
         if self.stopping:
             return True
-        return not self.service and self.claim_passes > 0
+        if self.service:
+            return False
+        return self.claim_passes > 0 or (self.answer_by is not None and self.clock() >= self.answer_by)
 
     # The process phase: no database, no signal.
 
@@ -284,12 +295,15 @@ class Runner:
             self._register()
         self._release()
         self._renew(now)
-        if stopping:
+        if stopping or self.stopping:  # read live: the guard may have seen the stop during the calls above
             return
         if (self.registered or not self.service) and now >= self._next_claim_at and self.ledger.up:
             self._claim_pass(now)
-        if self.service and self.beats and now >= self._next_beat_at and self.ledger.up:
-            self._next_beat_at = now + BEAT_EVERY_S
+        # A beat says the schedule works end to end: none until a claim pass completes since the last one, so a
+        # registration or due list that fails every tick turns the liveness subject red.
+        if self.service and self.beats and now >= self._next_beat_at and self.ledger.up \
+                and self.claim_passes > self._passes_at_beat and not self.stopping:
+            self._next_beat_at, self._passes_at_beat = now + BEAT_EVERY_S, self.claim_passes
             self._ask(self.ledger.beat, self._details(now))
             self._ask(self.ledger.forget_replaced)
         if self.service and now >= self._next_prune_at and self.ledger.up:
@@ -353,7 +367,7 @@ class Runner:
             return
         self.claim_passes += 1
         for name in due if isinstance(due, list) else ():
-            if len(self.running) >= self.max_children:
+            if len(self.running) >= self.max_children or self.stopping:
                 break
             if self.claim_limit is not None and self.claims >= self.claim_limit:
                 break
@@ -361,6 +375,9 @@ class Runner:
             if not isinstance(lease, job_lease.Lease):
                 continue
             self.claims += 1
+            if self.stopping:  # it came during the claim: a child started now would die mid-startup
+                self.finished.append(Finished(lease, "interrupted", "now", "deploy stop; not started", None, None, ""))
+                break
             self._spawn(self._by_name[name], lease, now)
 
     def _spawn(self, job: Job, lease: job_lease.Lease, now: float) -> None:
@@ -407,6 +424,7 @@ class PgLedger:
         self.started_at = started_at or datetime.now(UTC)
         self.up = True
         self._stopping = False
+        self._claims = itertools.count(1)
 
     def begin(self, *, stopping: bool) -> None:
         self.up, self._stopping = True, stopping
@@ -457,7 +475,10 @@ class PgLedger:
         return self._list(self._ask("due", lambda c: job_lease.due(c, names)))
 
     def claim(self, name: str) -> job_lease.Lease | None:
-        lease = self._ask("claim", lambda c: job_lease.claim(c, name, holder=self.holder, version=self.version))
+        # Each claim is its own holder: renewals and releases match on it, so a late release of an earlier run of
+        # the same job (lapsed, reaped and re-claimed by this replica) can never free or extend the later run's lease.
+        holder = f"{self.holder}/{next(self._claims)}"
+        lease = self._ask("claim", lambda c: job_lease.claim(c, name, holder=holder, version=self.version))
         return lease if isinstance(lease, job_lease.Lease) else None
 
     def renew(self, lease: job_lease.Lease) -> bool | None:
@@ -550,13 +571,13 @@ def _guard(*, watchdog: bool) -> Guard:
 
 def serve(registry: Sequence[Job] | None = None) -> int:
     """`run`: the service. It alone registers, retires, beats, prunes and arms the watchdog's exit."""
+    stop.install()  # first: PID 1 discards a SIGTERM that comes before its handler (the imports, the DNS lookup)
     entries = tuple(jobs.runner_jobs() if registry is None else registry)
     heartbeat = heartbeat_name(os.environ)
     ledger = _ledger(heartbeat)
     LOG.info("BOOT pid1=%s version=%s holder=%s deployment=%s heartbeat=%s pooler_addresses=%s jobs=%d",
              os.getpid() == 1, ledger.version, ledger.holder, ledger.deployment, heartbeat,
              _pooler_addresses(db.database_url()), len(entries))
-    stop.install()
     guard = _guard(watchdog=True)
     runner = Runner(entries, ledger=ledger, spawner=spawn_process, guard=guard, clock=job_lease.clock,
                     pid1=os.getpid() == 1, beats=heartbeat is not None,
@@ -568,16 +589,23 @@ def serve(registry: Sequence[Job] | None = None) -> int:
 
 def once(job: Job, *, ledger: Ledger | None = None, spawner: Spawner = spawn_process, guard: Guard | None = None,
          clock: Callable[[], float] = job_lease.clock, sleep: Callable[[float], object] = time.sleep) -> int:
-    """One foreground claim, run and release of a runner entry: no upsert, no heartbeat. 0 ok, 143 interrupted,
-    1 anything else (a timeout included)."""
-    stop.install()
+    """One foreground claim, run and release of a runner entry: no upsert, no heartbeat. 0 ok or not due, 143
+    interrupted, 1 anything else (a timeout, or a database that never answered, included)."""
+    stop.install(hangup=True)  # the child has its own session: a closed terminal must stop it, not orphan it
     pg = None if ledger is not None else _ledger()
     runner = Runner([job], ledger=ledger or pg, spawner=spawner, guard=guard or _guard(watchdog=False),  # type: ignore[arg-type]
-                    clock=clock, service=False, claim_limit=1)
+                    clock=clock, service=False, claim_limit=1, answer_by=clock() + ONCE_ANSWER_S)
     loop(runner, sleep=sleep)
     if pg is not None:
         pg.close()
     if runner.claims == 0:
+        if runner.stopping:
+            print(f"{job.name}: stopped before it was claimed", file=sys.stderr)
+            return stop.EXIT_CODE
+        if runner.claim_passes == 0:
+            print(f"{job.name}: the database did not answer within {ONCE_ANSWER_S:.0f} s; nothing ran",
+                  file=sys.stderr)
+            return 1
         print(f"{job.name}: not due (and no request waiting), or held elsewhere")
         return 0
     done, released = runner.last_released or (None, False)

@@ -162,6 +162,7 @@ class FakeLedger:
 
     skipped: dict[str, str] = field(default_factory=dict)
     register_fails: bool = False  # a statement timeout, say: this call fails, the tick goes on
+    due_fails: bool = False
 
     def register(self, entries: Sequence[Job]) -> job_lease.Registered | None:
         self._record("register", [j.name for j in entries])
@@ -177,7 +178,7 @@ class FakeLedger:
 
     def due(self, names: Sequence[str]) -> list[str] | None:
         self._record("due", list(names))
-        return [n for n in self.due_names if n in names]
+        return None if self.due_fails else [n for n in self.due_names if n in names]
 
     def claim(self, name: str) -> job_lease.Lease | None:
         self._record("claim", name)
@@ -320,13 +321,27 @@ def test_the_error_text_names_the_cause_and_never_the_log() -> None:
     assert job_runner.cause(job, None, -9, peak_mb=80, stragglers=0) == (
         "SIGKILL not sent by the runner (likely the OOM killer); peak 80 MB of memory_mb 256")
     assert job_runner.cause(job, None, -11, peak_mb=None, stragglers=0) == "killed by SIGSEGV"
+    assert job_runner.cause(job, None, -40, peak_mb=None, stragglers=0) == "killed by signal 40", (
+        "a real-time signal has no enum name: a raise here would strand the run and trip the watchdog")
     assert job_runner.cause(job, None, 3, peak_mb=None, stragglers=0) == "exit 3"
     assert job_runner.cause(job, "deploy", 143, peak_mb=None, stragglers=0) == "deploy stop; exit 143"
     assert job_runner.cause(job, "fence", -9, peak_mb=None, stragglers=0) == "lease fenced; exit -9"
     assert job_runner.cause(job, None, 0, peak_mb=None, stragglers=0) is None
     assert job_runner.cause(job, None, 75, peak_mb=None, stragglers=0) is None
+    assert job_runner.cause(job, "deploy", 0, peak_mb=None, stragglers=0) is None, "ok: the text follows the outcome"
+    assert job_runner.cause(job, "fence", 75, peak_mb=None, stragglers=0) is None
     assert job_runner.cause(job, None, 1, peak_mb=None, stragglers=2) == (
         "exit 1; 2 processes outlived the leader by 10 s")
+
+
+def test_a_run_killed_by_a_signal_with_no_name_still_settles_and_frees_its_slot() -> None:
+    rig = _rig([_job()], {"test_job": Script(code=-40, at=1001.0)}, due=["test_job"])
+    rig.runner.tick()
+    rig.clock.advance(2)
+    assert rig.runner.tick() is False
+    [done] = rig.releases()
+    assert (done.outcome, done.exit_code, done.error) == ("failed", -40, "killed by signal 40")
+    assert rig.runner.running == {}
 
 
 def test_a_request_s_args_follow_the_registry_argv_and_the_child_learns_its_run() -> None:
@@ -517,6 +532,22 @@ def test_a_release_the_database_refuses_on_content_is_sent_again_bare(monkeypatc
                        "log_tail": None}
 
 
+def test_each_claim_is_its_own_holder_so_a_stale_release_never_reaches_a_later_run(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """One holder per replica would let run 1's late release or renewal match run 2's lease on the same job."""
+    holders: list[str] = []
+
+    def claim(conn: FakeConn, name: str, *, holder: str, version: str | None) -> None:
+        holders.append(holder)
+
+    monkeypatch.setattr(job_lease, "claim", claim)
+    ledger = job_runner.PgLedger(FakeConn, holder="H")  # type: ignore[arg-type]
+    ledger.begin(stopping=False)
+    ledger.claim("x")
+    ledger.claim("x")
+    assert len(set(holders)) == 2 and all(h.startswith("H/") for h in holders), holders
+
+
 def test_a_job_that_cannot_start_is_a_failed_run_with_no_exit_code() -> None:
     """N9: a spawn OSError is the run's failure, never the runner's."""
     rig = _rig([_job()], due=["test_job"])
@@ -620,7 +651,6 @@ def _children(rig: Rig) -> dict[str, job_process.ProcessChild]:
 
 def test_a_real_child_that_ignores_sigterm_is_killed_after_the_grace_and_recorded_whole() -> None:
     """N14 (AC2): the parent holds 256 MB, so a peak read from ru_maxrss (which inherits it at exec) would show."""
-    import os
     import time
 
     ballast = b"\x01" * (256 << 20)
@@ -782,6 +812,32 @@ def test_a_deploy_during_a_timeout_grace_stays_a_timeout_and_a_clean_exit_in_the
     assert (done["quick"].outcome, done["quick"].exit_code) == ("ok", 0)
 
 
+def test_a_stop_that_lands_inside_a_ledger_phase_stops_its_claims_at_once() -> None:
+    """The stop is read live: one seen during the due list claims nothing, and a lease claimed just before it is
+    released interrupted with nothing spawned (a child started now would die mid-startup)."""
+    def stop_now(rig: Rig) -> Callable[[], None]:
+        def go() -> None:
+            rig.stop[0] = True
+            rig.guard.run_once(rig.clock())
+        return go
+
+    listed = _rig([_job("a"), _job("b")], due=["a", "b"])
+    listed.ledger.on["due"] = stop_now(listed)
+    listed.runner.tick()
+    assert listed.ledger.named("claim") == [] and listed.standin.spawned == []
+    assert listed.runner.tick() is True
+
+    claimed = _rig([_job("a"), _job("b")], due=["a", "b"])
+    claimed.ledger.on["claim"] = stop_now(claimed)
+    claimed.runner.tick()
+    assert [e[1] for e in claimed.ledger.named("claim")] == ["a"] and claimed.standin.spawned == []
+    claimed.runner.tick()
+    [done] = claimed.releases()
+    assert (done.lease.job_name, done.outcome, done.due, done.exit_code, done.error) == (
+        "a", "interrupted", "now", None, "deploy stop; not started")
+    assert claimed.runner.tick() is True
+
+
 def test_the_drain_s_signals_never_wait_on_a_blocked_database() -> None:
     """N20: a release blocks for 100 s of fake time; the guard still SIGKILLs at stop_at + GRACE_S inside it."""
     rig = _rig([_job("polite"), _job("stubborn")], {"stubborn": Script(ignores_term=True)},
@@ -839,8 +895,12 @@ def _serve_guard(rig: Rig, *, steps: int, between: Callable[[], object] | None =
         if between is not None:
             between()
 
+    def exit_(code: int, why: str) -> None:
+        exits.append(code)
+        raise _Exited(why)
+
     with pytest.raises(_Exited):
-        rig.guard.serve(wait=wait, exit_=lambda code: exits.append(code) or (_ for _ in ()).throw(_Exited()))
+        rig.guard.serve(wait=wait, exit_=exit_)
     return exits
 
 
@@ -871,6 +931,73 @@ def test_the_watchdog_stays_quiet_while_ticks_finish_and_forgives_one_bad_tick()
     assert raised[0] and rig.runner.last_error == "RuntimeError: one bad tick"
 
 
+def test_a_log_write_that_never_returns_holds_none_of_the_guard_s_signals_nor_its_watchdog() -> None:
+    """A stalled log reader (a full stderr pipe): the guard thread only queues its lines, so the timeout's SIGTERM,
+    the grace's SIGKILL and the watchdog's exit all still happen."""
+    import logging
+    import threading
+
+    rig = _rig([_job(timeout_s=5)], {"test_job": Script(ignores_term=True)}, due=["test_job"])
+    rig.runner.tick()
+    rig.guard.move(rig.standin.pid_of("test_job"), 1e9)
+    gate = threading.Event()
+    written: list[str] = []
+
+    class Stalled(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            gate.wait(30)
+            written.append(record.getMessage())
+
+    stalled = Stalled()
+    logger = logging.getLogger("scraper.job_process")
+    logger.addHandler(stalled)
+    result: list[list[int]] = []
+    served = threading.Thread(target=lambda: result.append(_serve_guard(rig, steps=400)), daemon=True)
+    try:
+        served.start()
+        served.join(timeout=10)
+        assert not served.is_alive(), "the guard thread waited on a log write"
+        assert result == [[1]], "the watchdog exited"
+        sent = _signals(rig)
+        assert (5.0, "TERM", "leader") in sent and (5.0 + job_process.GRACE_S, "KILL", "group") in sent
+        gate.set()
+        _wait_for(lambda: any(line.startswith("RUN kill") for line in written))
+        assert written[0].startswith("RUN term job=test_job#1"), "the lines are written once the reader drains"
+    finally:
+        gate.set()
+        logger.removeHandler(stalled)
+        served.join(timeout=10)
+
+
+def test_the_watchdog_s_exit_never_waits_on_a_full_stderr() -> None:
+    """`_die` arms a backstop that writes nowhere before it writes anything, so a stderr nobody reads cannot hold the
+    exit (faulthandler's own timer writes its dump before it exits)."""
+    import subprocess
+
+    script = """
+import os
+from scraper import job_process
+os.set_blocking(2, False)
+try:
+    while True:
+        os.write(2, b"x" * 65536)
+except BlockingIOError:
+    pass
+os.set_blocking(2, True)
+job_process._die(1, "WATCHDOG drill", backstop_s=0.5)
+"""
+    proc = subprocess.Popen([sys.executable, "-c", script], cwd=ROOT, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    try:
+        assert proc.wait(timeout=10) == 1
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=10)
+        assert proc.stderr is not None
+        proc.stderr.close()
+
+
 def test_only_a_railway_replica_beats_and_a_clean_stop_forgets_it() -> None:
     """N18: one liveness subject per replica, named from one constant; none off Railway."""
     assert job_runner.heartbeat_name({}) is None
@@ -892,6 +1019,30 @@ def test_only_a_railway_replica_beats_and_a_clean_stop_forgets_it() -> None:
     quiet = _rig([_job()], due=[])
     job_runner.loop(quiet.runner, sleep=lambda _: quiet.stop.__setitem__(0, True) or quiet.guard.run_once(0))
     assert quiet.ledger.named("beat") == [] and quiet.ledger.named("forget") == []
+
+
+def test_a_replica_beats_only_while_its_claim_passes_complete() -> None:
+    """A registration or due list that fails on every tick (a schema drift, say) leaves the database up and the
+    ticks clean; withholding the beat is what turns its liveness subject red (675's c_worker_dead)."""
+    rig = _rig([_job()], due=[], beats=True)
+    rig.ledger.register_fails = True
+    for _ in range(3):
+        rig.clock.advance(job_runner.BEAT_EVERY_S + 1)
+        rig.runner.tick()
+    assert rig.ledger.named("beat") == [], "never registered: no beat"
+    rig.ledger.register_fails = False
+    rig.clock.advance(job_runner.BEAT_EVERY_S + 1)
+    rig.runner.tick()
+    assert len(rig.ledger.named("beat")) == 1
+    rig.ledger.due_fails = True
+    for _ in range(3):
+        rig.clock.advance(job_runner.BEAT_EVERY_S + 1)
+        rig.runner.tick()
+    assert len(rig.ledger.named("beat")) == 1, "no claim pass completed since: no beat"
+    rig.ledger.due_fails = False
+    rig.clock.advance(job_runner.BEAT_EVERY_S + 1)
+    rig.runner.tick()
+    assert len(rig.ledger.named("beat")) == 2
 
 
 def test_the_pg_ledger_stamps_its_deployment_on_every_beat(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1015,6 +1166,80 @@ def test_once_says_not_due_and_an_interrupted_once_exits_143(capsys: pytest.Capt
 
     assert job_runner.once(_job(), ledger=rig.ledger, spawner=rig.standin, guard=rig.guard, clock=rig.clock,
                            sleep=sleep) == 143
+
+
+def test_once_gives_up_on_a_database_that_never_answers_and_never_calls_it_not_due(
+        capsys: pytest.CaptureFixture[str]) -> None:
+    down = _rig([_job()], due=["test_job"])
+    down.ledger.down = True
+
+    def sleep(_: float) -> None:
+        assert down.clock() < 1000.0 + 10 * job_runner.ONCE_ANSWER_S, "once never gave up"
+        down.clock.advance(job_runner.TICK_S)
+
+    assert job_runner.once(_job(), ledger=down.ledger, spawner=down.standin, guard=down.guard, clock=down.clock,
+                           sleep=sleep) == 1
+    out = capsys.readouterr()
+    assert "the database did not answer" in out.err and "not due" not in out.out
+    assert down.clock() <= 1000.0 + job_runner.ONCE_ANSWER_S + job_runner.TICK_S
+    stopped = _rig([_job()], due=["test_job"])
+    stopped.ledger.down = True
+
+    def interrupt(_: float) -> None:
+        stopped.clock.advance(1.0)
+        stopped.stop[0] = True
+        stopped.guard.run_once(stopped.clock())
+
+    assert job_runner.once(_job(), ledger=stopped.ledger, spawner=stopped.standin, guard=stopped.guard,
+                           clock=stopped.clock, sleep=interrupt) == 143
+    assert "not due" not in capsys.readouterr().out
+
+
+def test_a_closed_terminal_stops_once_s_child_instead_of_orphaning_it() -> None:
+    """The child runs in its own session, so a hangup reaches only the runner: it must become the stop."""
+    import os
+    import signal
+
+    from scraper import stop
+
+    rig = _rig([_job()], {"test_job": Script()}, due=["test_job"])
+    rig.guard = Guard(clock=rig.clock, stopping=stop.requested, sample=rig.standin.sample, term=rig.standin.term,
+                      kill=rig.standin.kill)
+    sent: list[bool] = []
+
+    def sleep(_: float) -> None:
+        assert rig.clock() < 1000.0 + 300, "the hangup never became the stop"
+        rig.clock.advance(1.0)
+        if not sent:
+            sent.append(True)
+            assert signal.getsignal(signal.SIGHUP) is not signal.SIG_DFL, "a hangup would kill the runner"
+            os.kill(os.getpid(), signal.SIGHUP)
+        rig.guard.run_once(rig.clock())
+
+    assert job_runner.once(_job(), ledger=rig.ledger, spawner=rig.standin, guard=rig.guard, clock=rig.clock,
+                           sleep=sleep) == 143
+    assert [s[1] for s in _signals(rig)][:1] == ["TERM"], "the guard forwarded the stop to the leader"
+
+
+def test_serve_routes_the_stop_before_it_reads_the_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """As PID 1, a SIGTERM that arrives before a handler exists is discarded by the kernel: install comes first."""
+    import signal
+
+    from scraper import stop
+
+    seen: list[object] = []
+
+    class Booted(Exception):
+        pass
+
+    def runner_jobs() -> tuple[Job, ...]:
+        seen.append(signal.getsignal(signal.SIGTERM))
+        raise Booted
+
+    monkeypatch.setattr(jobs, "runner_jobs", runner_jobs)
+    with pytest.raises(Booted):
+        job_runner.serve()
+    assert seen == [stop._on_signal]
 
 
 def test_registration_is_retried_every_tick_and_nothing_is_claimed_before_it_lands() -> None:
