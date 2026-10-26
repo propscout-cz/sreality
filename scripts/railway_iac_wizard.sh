@@ -448,8 +448,8 @@ window_gate() {
   checks_green "$OUT/pr-checks.json" \
     || stop "a pull request check is unfinished or not green (above): wait for CI, then re-run"
   agent_reports "latest deployment SUCCESS on all three projects (list-deployments); environment-status pendingWork \
-empty in all three (an entry with no changes counts too: it needs the operator's ruling first); main's three Railway \
-commit statuses green; the post-#2008 gate passed; no credential rotation running"
+empty in all three, except vite's patch 32a07219-6594-4414-abbf-aab88301156d while its changes list is still \
+empty (ruling R14, 2026-10-26); main's three Railway commit statuses green; the post-#2008 gate passed; no credential rotation running"
 }
 
 # checks_green <statusCheckRollup JSON>: list every check; fail unless there is at least one and each finished green.
@@ -548,8 +548,8 @@ mode_preflight() {
   step "the x to its right. Never click Deploy here."
   ask STAGED_BANNER_vite "Did a staged-changes banner show (yes/no), and did you discard it?"
   write_env STAGED_BANNER_vite "$STAGED_BANNER_vite"
-  note "The agent then reads vite's environment-status pendingWork. An entry left there (on 2026-10-26: patch 32a07219,"
-  note "staged, no changes, no banner) blocks window 1's gate until the operator rules on it: before asking e9 for a window."
+  note "The agent then reads vite's environment-status pendingWork. Ruling R14 (2026-10-26) lets exactly one entry stay:"
+  note "patch 32a07219-6594-4414-abbf-aab88301156d while it holds no changes. Any other entry, or changes in it, is a stop."
   pause
 
   finish
