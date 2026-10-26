@@ -14,7 +14,7 @@
 	@retired_host host sreality-production-1bb6.up.railway.app
 	redir @retired_host https://app.propscout.cz{uri} 301
 
-	# Liveness endpoint Railway hits per railway.json healthcheckPath.
+	# Liveness endpoint Railway hits per the `/healthz` healthcheck in .railway/railway.ts.
 	# Exclusive handle block — no fall-through to try_files/file_server.
 	handle /healthz {
 		respond "ok" 200
