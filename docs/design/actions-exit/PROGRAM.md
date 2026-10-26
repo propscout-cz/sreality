@@ -249,7 +249,8 @@ GitHub run-rate under 50,000 min/month.**
 
 ### W6 — Consolidate CI, prove the private paths, flip
 `test.yml` absorbs `frontend-build` and `docs-budget` as one `frontend` job (vitest `--maxWorkers=2`, timeout
-sized for 2-vCPU runners); PR-only `cancel-in-progress` on test + migrations; `build-extension` job renamed
+sized for 2-vCPU runners; the budget step keeps `fetch-depth: 0`, its `HEAD^1` base argument and a PR-only
+`if:`); PR-only `cancel-in-progress` on test + migrations; `build-extension` job renamed
 `extension`; required contexts → pytest, schema-and-sql, frontend; gitleaks: one history scan, a PR job over
 the PR's commit range, a commit/push hook; the two fixture map keys replaced by placeholders; LICENSE notice
 (all rights reserved); Dependabot alerts on; docs lose "PUBLIC" (CLAUDE.md, issue-tracker, scraper-ops);
