@@ -211,6 +211,8 @@ API="https://api.propscout.cz"
 RW_API="https://railway.com/project/78652c43-bb7f-401b-a3de-5f532f76f72c/service/79e65a88-1629-439e-a961-a815f83539de/variables"
 RW_WORKER="https://railway.com/project/6f6ac731-10a5-4a28-b831-350ead8a4a97/service/59c41eb8-f84f-4f9d-b0af-747fe04f04ce/variables"
 RW_SPA="https://railway.com/project/cc62432a-5cd0-4c1a-8e3f-ba5d0bf79140/service/99dc269d-a82d-44a6-a32e-8829b0887baf/variables"
+# The canvas: job-runner's service id exists only after #2025's apply.
+RW_WORKER_PROJECT="https://railway.com/project/6f6ac731-10a5-4a28-b831-350ead8a4a97"
 MVP="docs/design/agent-platform/MVP.md"
 STAMP=$(date +%Y%m%d)
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "waiff/sreality")
@@ -377,6 +379,16 @@ deploy_on_railway() {
   fi
   step "Click Deploy; wait until the new deployment reads Active (the old one serves until then)."
   pause "Active? Press Enter"
+}
+
+# runner_follows_worker: job-runner reads the worker's SUPABASE_DB_URL by reference (#2025-R3), so applying the
+# worker's staged change redeploys it after sreality (Railway docs: Deployment dependencies).
+runner_follows_worker() {
+  say "${BOLD}Railway realtime-worker → job-runner${RESET} (no job-runner service there yet? skip this)"
+  open_url "$RW_WORKER_PROJECT"
+  step "job-runner reads sreality's SUPABASE_DB_URL by reference: Railway redeploys it after sreality."
+  step "If no new job-runner deployment started with the worker's: job-runner → Ctrl+K → Deploy Latest Commit."
+  pause "job-runner's new deployment Active? Press Enter"
 }
 
 # eyeball "question": the operator confirms what only the dashboard shows.
@@ -729,6 +741,8 @@ s_db() {
   warn "Supabase keeps ONE postgres password: from the reset until both services redeploy, new connections fail."
   say "The new strings are staged on Railway first, GitHub's set just before the reset, then both services deploy."
   say "Interrupted? Run --from 14 again: it makes a fresh password and you reset once more."
+  note "job-runner redeploys with the worker: prefer no open run (scripts/railway_iac_wizard.sh runner-list)."
+  note "A cut run is closed interrupted and re-claimed at once, so this is a courtesy, not a gate."
   confirm "Quiet hour, and sreality-e9 has braked the dedup lane?" || { SKIPPED+=("the database: --from 14"); return 0; }
   local db_pw tenant_pw tx session shared t
   db_pw=$(newpass); tenant_pw=$(newpass)
@@ -806,6 +820,7 @@ PY
   stage "Database (4/4): deploy, then check"
   deploy_on_railway "$RW_API" API must
   deploy_on_railway "$RW_WORKER" worker must
+  runner_follows_worker
   done_mark PENDING_DEPLOY ""
   local tok ok=1 before after
   tok=$(member_token)
@@ -832,6 +847,7 @@ PY
   done
   open_url "https://app.propscout.cz/health"
   eyeball "Health: the worker heartbeat is fresh again? (then tell sreality-e9 to lift the brake)" || ok=0
+  eyeball "Health: both worker/job-runner/… cells fresh again (the agent confirms; yes if no job-runner yet)?" || ok=0
   if (( ok )) && [[ -n "$db_ok_now" ]]; then
     record "Database password and connection strings" "psycopg on both new strings; API reads; GitHub dry run; worker heartbeat"
   fi

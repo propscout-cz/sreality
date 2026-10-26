@@ -82,3 +82,19 @@ def test_the_inventory_names_every_secret_the_script_touches() -> None:
     assert {"VALUO_API_TOKEN", "TENANT_POOL_DB_URL", "API_TOKEN", "GH_DISPATCH_TOKEN"} <= touched, touched
     absent = sorted(n for n in touched if f"`{n}`" not in inventory)
     assert absent == [], f"secrets-inventory.md does not name: {absent}"
+
+
+def test_the_database_rotation_follows_the_runner_that_references_the_worker() -> None:
+    """job-runner reads the worker's SUPABASE_DB_URL by reference (#2025-R3): Railway redeploys it after the worker,
+    and the rotation is dated only once both runner heartbeats are fresh again. Its service id exists only after the
+    apply, so the step opens the project canvas."""
+    stages = _stages()
+    db = stages.split("\ns_db() {", 1)[1].split("\n}\n", 1)[0]
+    before, after = db.split('deploy_on_railway "$RW_WORKER" worker must', 1)
+    assert "runner_follows_worker" in after, "the worker's deploy redeploys job-runner: the step follows it"
+    assert "runner-list" in before, "the quiet-moment courtesy comes before the deploy"
+    assert re.search(r'eyeball "Health: [^"]*job-runner[^"]*" \|\| ok=0', db)
+    helper = stages.split("\nrunner_follows_worker() {", 1)[1].split("\n}\n", 1)[0]
+    assert 'open_url "$RW_WORKER_PROJECT"' in helper and "Deploy Latest Commit" in helper
+    canvas = re.search(r'^RW_WORKER_PROJECT="([^"]+)"$', SCRIPT.read_text(encoding="utf-8"), re.M)
+    assert canvas and canvas.group(1) == "https://railway.com/project/6f6ac731-10a5-4a28-b831-350ead8a4a97"
