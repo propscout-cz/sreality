@@ -56,7 +56,7 @@ def test_the_gauges_flow_counts_arrivals_not_the_predicates_survivors() -> None:
     given up at this version is its own count; p95 to the first reading."""
     sql = tx.EXTRACTION_LATENCY_SQL
     assert tx._eligible_where(OPEN_GATES) not in sql
-    assert f"ARRAY({tx._LLM_TEXT_SOURCES} UNION ALL SELECT 'bazos')" in sql
+    assert tx._scope(OPEN_GATES) in sql
     flat = " ".join(sql.split())
     assert ("AND l.is_active AND l.description IS NOT NULL AND l.description <> '' AND "
             "l.first_seen_at >= now() - make_interval(hours => %(window_h)s::int) AND "
