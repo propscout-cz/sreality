@@ -15,7 +15,7 @@ from datetime import timedelta
 from typing import Any, AsyncIterator, Literal
 
 import psycopg
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -131,10 +131,8 @@ async def _lifespan(_app: FastAPI) -> "AsyncIterator[None]":
     It is disabled when the env var `HEALTH_TELLER_DISABLED` is set —
     useful for tests / one-off CLI invocations that import api.main but
     don't want a background task chattering.
-
-    First of all it refuses to start with API_AUTH_OPTIONAL=1 on Railway: uvicorn
-    exits on a failed startup, so the deploy crashes instead of serving an open API.
     """
+    # First: uvicorn exits on a failed startup, so the deploy crashes instead of serving an open API.
     deps.refuse_auth_optional_on_railway()
     if not os.environ.get("STUCK_ROW_SWEEP_DISABLED"):
         try:
@@ -667,10 +665,9 @@ def post_summarize_listing(
     body: s.SummarizeListingIn,
     conn: Any = Depends(deps.get_db_conn),
     llm_client: Any = Depends(deps.get_llm_client),
-    _: None = Depends(deps.require_token),
-    authorization: str | None = Header(default=None),
+    claims: dict | None = Depends(deps.token_claims),
 ) -> dict[str, Any]:
-    deps.require_admin_to_force(body.force_refresh, authorization)
+    deps.require_admin_to_force(body.force_refresh, claims)
     try:
         return summarize_listing(
             conn, llm_client,
@@ -732,10 +729,9 @@ def post_compare_listing_images(
     body: s.CompareListingImagesIn,
     conn: Any = Depends(deps.get_db_conn),
     llm_client: Any = Depends(deps.get_llm_client),
-    _: None = Depends(deps.require_token),
-    authorization: str | None = Header(default=None),
+    claims: dict | None = Depends(deps.token_claims),
 ) -> dict[str, Any]:
-    deps.require_admin_to_force(body.force_refresh, authorization)
+    deps.require_admin_to_force(body.force_refresh, claims)
     try:
         return compare_listing_images(
             conn, llm_client,

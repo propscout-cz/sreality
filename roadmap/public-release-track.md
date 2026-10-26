@@ -659,11 +659,14 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
     290's policy scopes the reads, the reorder and UPDATE/DELETE by id; `POST` stamps the
     account from `require_account_id`; migration 595 backfills ownerless rows to the operator's
     account and sets `account_id` NOT NULL; the SPA's preset calls send `jwt: true`. Behaviour:
-    `tests/api/test_filter_presets.py`. **DONE 2026-10-26 — `/buildings*`** (agent platform M0, #2059): every
-    building route takes `require_admin`, so the account-blind reads and the paid extraction are the
-    operator's alone (the SPA's building page sits behind `RequireAdmin`); `/buildings` joined the admin
-    prefixes of `tests/api/test_admin_route_coverage.py`. Account-scoping it is moot until a non-admin
-    may open one. `POST /notifications/dispatches/{id}/estimate` was deleted 2026-10-21 (notifications
+    `tests/api/test_filter_presets.py`. **DONE 2026-10-26 — the `/buildings*` ROUTES** (agent platform M0, #2059):
+    every building route takes `require_admin`, so the API's account-blind reads and the paid extraction are the
+    operator's alone (the SPA's building page sits behind `RequireAdmin`); `/buildings` joined the admin prefixes
+    of `tests/api/test_admin_route_coverage.py`. **Still owed — the same data through the database:** a building
+    run is written on the service role, so it lands on the SYSTEM account, and 291's SYSTEM read arm serves every
+    `building_runs` row (and 292's `building_run_attachments`) to any signed-in caller through PostgREST; its child
+    estimation runs are SYSTEM too, listed by `GET /estimations` (`account_scope` adds SYSTEM) with each unit's
+    `input_spec`. `POST /notifications/dispatches/{id}/estimate` was deleted 2026-10-21 (notifications
     push W1a), as was `POST /notifications/matcher/run` (any user ran the platform-wide producers). Also owed (audit F17): the share routes' 422 "No account
     uses this email" reveals which emails hold accounts. The AUTHENTICATION half of the remaining sweep closed 2026-10-13:
     `require_token` accepts a verified JWT (`api/dependencies.py` `_bearer`, the one reader of

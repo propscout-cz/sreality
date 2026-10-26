@@ -77,7 +77,7 @@ def _bucket(route: APIRoute) -> str:
         return "admin"
     if tenant_pool.tenant_conn in calls or deps.verify_jwt in calls:
         return "tenant"
-    if deps.require_token in calls:
+    if deps.require_token in calls or deps.token_claims in calls:
         return "token"
     # account_scope is require_token's reader (`_bearer`: a verified JWT) plus a
     # read scope, so it buckets with it.
@@ -138,6 +138,21 @@ def test_admin_surfaces_require_admin() -> None:
         "Depends(deps.require_admin) — SPA route-gating is a client affordance, not a "
         "security boundary:\n" + "\n".join(offenders)
     )
+
+
+def _takes_force_refresh(route: APIRoute) -> bool:
+    body = route.body_field.field_info.annotation if route.body_field is not None else None
+    return "force_refresh" in getattr(body, "model_fields", {})
+
+
+def test_a_forced_refresh_is_admin_gated_wherever_it_is_accepted() -> None:
+    """A body field `force_refresh` re-buys a cached LLM answer: every route accepting it calls
+    `deps.require_admin_to_force` (M0, #2059). The gate reads the body, so no dependency can carry it."""
+    accepting = [(m, p, r) for m, p, r in _api_routes() if _takes_force_refresh(r)]
+    assert len(accepting) >= 2, "the census found no route taking force_refresh: check how it reads the body"
+    ungated = sorted(f"  {m} {p}" for m, p, r in accepting
+                     if "require_admin_to_force(" not in inspect.getsource(r.endpoint))
+    assert not ungated, "route(s) accept force_refresh without the admin gate:\n" + "\n".join(ungated)
 
 
 def test_no_route_is_unauthenticated_by_accident() -> None:

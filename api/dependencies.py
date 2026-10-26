@@ -166,13 +166,18 @@ def _bearer(authorization: str | None) -> dict | None:
     return verify_jwt(authorization)
 
 
+# Any one marks a Railway deployment: its documented system variables, plus the legacy name the spec cites.
+_RAILWAY_MARKERS = ("RAILWAY_ENVIRONMENT", "RAILWAY_ENVIRONMENT_NAME", "RAILWAY_ENVIRONMENT_ID",
+                    "RAILWAY_PROJECT_ID", "RAILWAY_SERVICE_ID")
+
+
 def refuse_auth_optional_on_railway() -> None:
-    """Boot guard: Railway sets RAILWAY_ENVIRONMENT on every service, so the local-dev opt-out there
-    would open every require_token route to anyone; the API refuses to start instead (M0, #2059)."""
-    if os.environ.get("API_AUTH_OPTIONAL") == "1" and os.environ.get("RAILWAY_ENVIRONMENT"):
+    """Boot guard: on Railway the local-dev opt-out would open every require_token route to anyone (M0, #2059)."""
+    marker = next((m for m in _RAILWAY_MARKERS if os.environ.get(m)), None)
+    if os.environ.get("API_AUTH_OPTIONAL") == "1" and marker:
         raise RuntimeError(
-            "API_AUTH_OPTIONAL=1 is a local-dev switch and is refused on Railway "
-            f"(RAILWAY_ENVIRONMENT={os.environ['RAILWAY_ENVIRONMENT']!r}): unset it on this service"
+            f"API_AUTH_OPTIONAL=1 is a local-dev switch and is refused on Railway ({marker} is set): "
+            "unset it on this service"
         )
 
 
@@ -180,6 +185,12 @@ def require_token(authorization: str | None = Header(default=None)) -> None:
     """Any signed-in caller — a verified Supabase JWT — with no identity returned.
     A route that needs one takes verify_jwt / tenant_conn."""
     _bearer(authorization)
+
+
+def token_claims(authorization: str | None = Header(default=None)) -> dict | None:
+    """require_token's gate, returning the claims (None under the local-dev opt-out) for a flag gated on
+    admin, as a forced refresh is; never a scope: identity routes take verify_jwt / tenant_conn."""
+    return _bearer(authorization)
 
 
 # Fixed system account id (mirrors migrations/286_accounts_foundation.sql). The
@@ -220,11 +231,6 @@ def verify_jwt(authorization: str | None = Header(default=None)) -> dict:
     (the HS256 `SUPABASE_JWT_SECRET` fallback was deleted 2026-10-13; production has
     signed ES256 since the JWKS cutover). Fails closed (503) with SUPABASE_URL unset:
     an unconfigured auth backend must never authenticate anyone.
-
-    A token is a user's session only as Supabase Auth issues one (M0, #2059): issued by
-    this project (`<SUPABASE_URL>/auth/v1`), audience and role `authenticated`, with a
-    subject and an expiry; one carrying `client_id` was issued to an OAuth client for
-    another audience and is refused.
     """
     # The verifier check comes FIRST: a deployment that cannot verify anyone answers
     # 503 to every request, header or not — a server fault must never read as a
@@ -238,6 +244,9 @@ def verify_jwt(authorization: str | None = Header(default=None)) -> dict:
 
     import jwt  # PyJWT (api extra); imported lazily to keep boot light
 
+    # A user's session only as Supabase Auth issues one (M0, #2059): this project's issuer (GoTrue stamps
+    # `<API_EXTERNAL_URL>/auth/v1`), audience and role `authenticated`, a subject and an expiry. A token
+    # carrying `client_id` went to an OAuth client, for another audience.
     issuer = base.rstrip("/") + "/auth/v1"
     try:
         signing_key = _jwks_client(issuer + "/.well-known/jwks.json").get_signing_key_from_jwt(token)
@@ -301,8 +310,8 @@ def require_admin(claims: dict = Depends(verify_jwt)) -> dict:
     return claims
 
 
-def require_admin_to_force(force_refresh: bool, authorization: str | None) -> None:
-    """A forced refresh re-buys a cached LLM answer, so it takes an admin (403) whatever the route's own
-    gate; a plain read of the cached answer stays open to the route's callers (M0, #2059)."""
-    if force_refresh:
-        require_admin(verify_jwt(authorization))
+def require_admin_to_force(force_refresh: bool, claims: dict | None) -> None:
+    """A forced refresh re-buys a cached LLM answer: an admin's alone (403, the opt-out's anonymous caller
+    included); a plain read of the cached answer stays open to the route's callers (M0, #2059)."""
+    if force_refresh and (claims is None or not is_admin(claims)):
+        raise HTTPException(status_code=403, detail="Admin only: force_refresh")

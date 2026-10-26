@@ -8,6 +8,7 @@ a minted token, so the 403 is the gate production runs, not an override.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -25,7 +26,9 @@ _ADMIN = {"Authorization": f"Bearer {mint({'sub': 'operator', 'app_metadata': {'
 
 
 @pytest.fixture()
-def client() -> Any:
+def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    # The suite runs under the local-dev opt-out (tests/conftest.py); these gates are production's.
+    monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
     api_main.app.dependency_overrides[deps.get_db_conn] = lambda: object()
     api_main.app.dependency_overrides[deps.get_sreality_client] = lambda: object()
     api_main.app.dependency_overrides[deps.get_llm_client] = lambda: object()
@@ -71,3 +74,13 @@ def test_a_forced_refresh_is_admin_only(
     assert client.post(path, headers=_MEMBER, json={**body, "force_refresh": False}).status_code == 200
     assert client.post(path, headers=_ADMIN, json=body).status_code == 200
     assert calls == [False, True]
+
+
+def test_a_forced_refresh_under_the_local_dev_opt_out_is_still_refused(
+    client: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """API_AUTH_OPTIONAL=1 makes every caller anonymous, and an anonymous caller is no admin."""
+    monkeypatch.setenv("API_AUTH_OPTIONAL", "1")
+    monkeypatch.setattr(api_main, "summarize_listing", lambda *_a, **_kw: {})
+    assert client.post("/tools/summarize_listing", json={"sreality_id": 1, "force_refresh": True}).status_code == 403
+    assert client.post("/tools/summarize_listing", json={"sreality_id": 1}).status_code == 200

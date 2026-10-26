@@ -685,7 +685,8 @@ rules. Identify which one a task belongs to before you start.
   (see "One credential" below); a `require_token` route still returns no identity, admin or
   account-scoped data — those sit behind `verify_jwt` / `require_admin` / `tenant_conn`.
   `/buildings*` ran service-role behind `require_token` alone with no account predicate
-  until agent platform M0 (2026-10-26) made every building route `require_admin`; the other,
+  until agent platform M0 (2026-10-26) made every building route `require_admin` (its rows, SYSTEM-stamped,
+  stay readable through PostgREST's SYSTEM read arm: owed, item 11); the other,
   `POST /notifications/dispatches/{id}/estimate`, was deleted 2026-10-21 in notifications W1
   (`roadmap/public-release-track.md` item 11, an open list). The estimation trace payload and both `/feedback` routes moved onto the tenant
   pool 2026-10-02; the feedback POST's refiner is admin-only (the `database` skill's
