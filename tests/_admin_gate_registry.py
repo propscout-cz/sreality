@@ -3,9 +3,9 @@
 A view or function that reads a relation in ADMIN_ONLY_RELATIONS embeds a sound is_platform_admin() gate, or it is
 registered in UNGATED. tests/test_migration_rls_grants.py exempts a migration's CREATE only when UNGATED sanctions that
 (file, name) pair; tests/test_tenant_isolation_live.py waives live_allowlist() in its sweep of the replayed schema and
-asserts every live 'acl' entry stays dark to both browser roles. A new admin relation or ungated object is added HERE,
-and nowhere else: the in-migration `-- ci-allow-ungated:` comment is retired from ANNOTATION_CUTOVER on, and the older
-ones must each be registered.
+asserts every live 'acl' entry stays dark to both browser roles. A new admin relation or ungated object is added HERE
+(one that changes live_allowlist() also updates its pin, test_live_allowlist_is_pinned): the in-migration
+`-- ci-allow-ungated:` comment is retired from ANNOTATION_CUTOVER on, and the older ones must each be registered.
 """
 
 from __future__ import annotations

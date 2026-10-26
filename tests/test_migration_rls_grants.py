@@ -426,15 +426,11 @@ def test_every_registry_entry_names_a_real_create():
     assert not problems, "tests/_admin_gate_registry.py UNGATED is stale:\n" + "\n".join(problems)
 
 
-def test_live_allowlist_shape():
-    """The live sweep's function arm skips what `authenticated` cannot EXECUTE, so it waives
-    only views and reachable functions: waiving an 'acl' function (account_email reads
-    emails) would let a later grant on it pass unseen."""
-    wrong = sorted(
-        n for n in live_allowlist()
-        if UNGATED[n].kind != "view" and UNGATED[n].guard != "reachable"
-    )
-    assert live_allowlist() and not wrong, f"live_allowlist() may waive only views and reachable functions: {wrong}"
+def test_live_allowlist_is_pinned():
+    """What the live sweep waives, pinned offline: a registry edit that changes it updates this list on purpose.
+    An 'acl' function (account_email reads emails) never belongs here: the sweep's function arm skips what
+    `authenticated` cannot EXECUTE, so waiving it would let a later grant on it pass unseen."""
+    assert sorted(live_allowlist()) == ["images_public", "llm_cost_hour_union", "location_jobs", "sold_coverage"]
 
 
 def test_no_write_grants_to_browser_roles():
