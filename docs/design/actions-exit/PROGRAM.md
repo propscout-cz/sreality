@@ -1,7 +1,7 @@
 # Actions exit: make the repo private, run recurring work where it is billed by use
 
 Status: APPROVED 2026-10-25 (rulings R1–R27 below); building: W0 and W1 PRs landing, W2's schema (#2042) and
-registry (#2023) landed, the runner (#2024) landed, its service (#2025) next. Audit: 84 workflow files, 14 days of run data, two review panels (42 agents on the audit and first design; 20 agents on the from-scratch
+registry (#2023) landed, the runner (#2024) landed, its service (#2025) in review, dark until its move PR. Audit: 84 workflow files, 14 days of run data, two review panels (42 agents on the audit and first design; 20 agents on the from-scratch
 design: four architects, three judges, twelve refuters). Per-file verdicts: [dispositions.md](dispositions.md).
 Decision record: [ADR 0001](../../adr/0001-scheduled-jobs-on-a-railway-job-runner.md).
 
@@ -109,10 +109,15 @@ production.
   exactly one host.
 - **One service** (`python -m scraper.job_runner run`, exec form: a shell as PID 1 forwards no SIGTERM), **two
   identical replicas**, 8 GB / 4 vCPU each,
-  `restartPolicy ALWAYS`, `drainingSeconds` 180, built from the same Dockerfile, whose `ARG EXTRAS` shipped with
+  `restartPolicy ALWAYS`, built from the same Dockerfile, whose `ARG EXTRAS` shipped with
   #2060 (no default; unset installs `api`): the runner sets `EXTRAS: "api,clip,geo"` in its `.railway/railway.ts`
   env, so CPU torch, the pinned CLIP weights (revision 3d74acf9) and the geo wheels live in this image only.
-  `watchPatterns` cover the trees jobs import. Variables are references to shared project variables.
+  `watchPatterns` cover the trees jobs import. **As built (#2025):** service `job-runner` in the realtime-worker
+  project (no new project); `drainingSeconds` 250, outlasting the runner's own 180 s drain by its last tick and
+  forget (243 s); 8 GB is 8e9 B = 7,629 MiB (`jobs.REPLICA_MEMORY_MB`); the watch patterns are every tree the
+  Dockerfile copies (a census); the torch and CLIP layer is keyed on the checkpoint pin alone and proven offline in
+  the build and in `CI: runner image`. Its one secret is a reference to the worker service's `SUPABASE_DB_URL`
+  (ruling #2025-R3's default, not a shared variable): one value to rotate, and a worker rotation redeploys it.
 - **Scheduling**: anchored, staggered slots on the database clock (`due_at` from `every_s` + `offset_s`);
   missed slots are skipped, never replayed; a new row's first slot is no earlier than `now() + timeout_s`
   so it never overlaps a GitHub run still in flight at cutover. Claim-if-due is one compare-and-set, tried
@@ -170,13 +175,14 @@ production.
   cycle over all of the portal's scopes with `last_seen_at >= anchor` as "seen" (rule 3 intact). Source of
   truth: the existing `portal_index_slices` ledger lifted into `portal_runner`; idnes's own `_slice_order`
   is deleted.
-- **Secrets**: Railway shared variables are the store of record for runtime; GitHub keeps what CI, the
-  canary and the attended forms read; the duplicated set is listed once in the toolkit-api skill. Deleted:
+- **Secrets**: Railway's service variables are the store of record for runtime (the runner references the
+  worker's, ruling #2025-R3; a shared variable would be per project, `ctx.shared.NAME`, a second place to rotate);
+  GitHub keeps what CI, the canary and the attended forms read; the duplicated set is listed once in the
+  toolkit-api skill. Deleted:
   `SCRAPE_CHAIN_TOKEN` (both hosts), `WORKER_DISPATCH_TOKEN`, `GEMINI_API_KEY`. Added: a new fine-grained
   token under the organisation for price-stats "Run now". No `RAILWAY_TOKEN`: M0 (#2060) applies
-  `.railway/railway.ts` by hand in merge windows (operator ruling R2, 2026-10-26); plan/apply in CI would need
-  one project token per Railway project, and is #2025's to decide. Shared variables are per project (the
-  three services are three projects), and IaC only references them (`ctx.shared.NAME`).
+  `.railway/railway.ts` by hand in merge windows (operator ruling R2, 2026-10-26), and #2025 keeps it so, now and
+  after W6: plan/apply in CI would need one project token per Railway project and an apply restarts services.
 
 ### 4.3 Honest limits (from the refuters)
 
@@ -243,6 +249,12 @@ is paused (`job_runner pause --until`) past that run's timeout, since a queued r
 can start after the merge. A new row's first slot comes after `now() + timeout_s`; rollback is a revert.
 The PR that moves the last waiting job (#2031, #2032 or #2033) also deletes the `github-actions-until-moved`
 host, its ratchet and the gone leavers in the registry test.
+**As built (#2025), three PRs, each merged on the merge light:** (1) the `job-runner` service, dark, applied at its
+head inside one window (`scripts/railway_iac_wizard.sh window worker 1 0 job-runner`), then merged at once, with the
+runner image, migration 683 (`rent_map_cells` names its scripts, not a workflow) and the wizard's general modes;
+(2) the move of stale_images, rent_map and map_overlays, after #2026 deploys, with no `.railway/` change and no
+migration, so `git revert -m 1` undoes it (pause first); fetch_rent_map.yml's companion re-render is folded into
+`scripts/fetch_rent_map.py`; (3) migration-only, `map_overlay_tiles` re-hosted to `job-runner` once (2) deploys.
 **Gate (7 days):** every job cell green; ≥ 3 deploys survived with interrupted runs re-claimed within 1 min;
 one request run, one pause with expiry and one self-fence drill exercised; 0 unique-index violations, 0
 double holders; resolver and intake lanes green 48 h after the rename; `railway config plan` = 0 changes.
@@ -319,7 +331,8 @@ up to 9 more files (R6a) and the dead lease columns, alias view and index (R6b).
 Never built (dropped from the first design): the shared `lanes.py` move, 17 interval knobs, the due-gated
 GitHub matrix, the overdue-only fallback rule, the disarm wave, runtime memory admission.
 
-Added: the job-runner service (two replicas) and ~5 Dockerfile lines (one ARG); columns on the reused
+Added: the job-runner service (two replicas) and the Dockerfile's runner lines (#2025: the `clip-ref` stage, the
+model layer and the offline proof, with no ARG default); columns on the reused
 `scheduled_jobs`; `job_runs`; `scraper/jobs.py` (~100), `scraper/job_runner.py` (~220), `scraper/job_lease.py`
 (moved, ~+60); the `job/<name>` SQL arm (~60); the W1 seams (~60); `run_job.yml` (~30, request-only);
 its service in `.railway/railway.ts` (~15: M0, #2060, ships the file and the one ARG, `EXTRAS`, which the runner sets);
