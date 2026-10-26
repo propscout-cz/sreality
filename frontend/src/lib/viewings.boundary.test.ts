@@ -38,9 +38,7 @@ function readingsOf({ day, time }: ViewingSlot): number[] {
   return [wall - 2 * HOUR, wall - HOUR].filter((t) => dayOf(t) === day && clockOf(t) === time);
 }
 
-const RELATIVE: Record<number, string> = {
-  [-3]: 'před 3 dny', [-2]: 'před 2 dny', [-1]: 'včera', 0: 'dnes', 1: 'zítra', 2: 'za 2 dny', 3: 'za 3 dny',
-};
+const RELATIVE: Record<number, string> = { [-2]: 'před 2 dny', [-1]: 'včera', 0: 'dnes', 1: 'zítra', 2: 'za 2 dny' };
 const TITLE: Record<number, string> = { [-1]: 'Včera', 0: 'Dnes', 1: 'Zítra' };
 
 function mismatchesAt(now: number): string[] {
@@ -54,13 +52,15 @@ function mismatchesAt(now: number): string[] {
 
   // "The next full hour today, or tomorrow at 10:00 once that would be past 20:00."
   const nextHour = (Math.floor(now / HOUR) + 1) * HOUR;
+  const guess = defaultSlot(at);
   check(
     'defaultSlot(now)',
-    defaultSlot(at),
+    guess,
     dayOf(nextHour) === today && clockOf(nextHour) <= '20:00'
       ? { day: today, time: clockOf(nextHour) }
       : { day: keyOf(ordinal(today) + 1), time: '10:00' },
   );
+  check('slotInstant(defaultSlot(now)) is ahead of now', Date.parse(slotInstant(guess)) > now, true);
 
   for (const shift of [-2, -1, 0, 1, 2]) {
     for (const time of ['00:15', '02:30', '12:00', '23:45']) {
