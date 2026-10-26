@@ -1682,22 +1682,20 @@ class SqlWork:
         # by the share as before.
         arm_moved = [listing_id for listing_id in moved if listing_id in arm_ids]
         robin_moved = [listing_id for listing_id in moved if listing_id not in arm_ids]
-        taken_moved = (arm_moved[:min(share, EVIDENCE_ACTIVE_REDECIDE_MAX)]
-                       + robin_moved)[:share]
+        arm_taken = min(len(arm_moved), share, EVIDENCE_ACTIVE_REDECIDE_MAX)
+        taken_moved = (arm_moved[:arm_taken] + robin_moved)[:share]
         wanted: list[int] = []
         for listing_id in taken_moved + sorted(set(released)):
             if listing_id not in wanted and listing_id not in gone:
                 wanted.append(listing_id)
         # A short slice is the end of the sweep, so the cursor wraps — the same round-robin
-        # the drift sweep uses. E980: once the active arm takes the share first, a round-robin
-        # row that moved can be CUT; the cursor then stops just before the first one cut (as
-        # E970's revive feed does), so the round-robin slows while the arm is busy instead of
-        # stepping past it for a whole cycle. A row the arm itself holds is re-offered by it.
-        taken = set(wanted)
-        robin = {int(row[0]) for row in rows}
-        cut = [listing_id for listing_id in moved
-               if listing_id in robin and listing_id not in taken
-               and listing_id not in gone and listing_id not in arm_ids]
+        # the drift sweep uses. E980b: the cursor stops just before a round-robin mover only
+        # when the ARM's slots displaced it (one E92 would have taken), as E970's revive feed
+        # does; a mover E92 itself cut beyond the share is stepped past as before. In a build
+        # the arm takes nothing, so the cursor is E92's exactly and the round-robin never hands
+        # on more than one share a slice (review of #2101).
+        cut = [listing_id for listing_id in robin_moved[max(0, share - arm_taken):share]
+               if listing_id not in gone]
         if cut:
             self._pending[CURSOR_EVIDENCE] = min(cut) - 1
         else:

@@ -191,6 +191,38 @@ def test_the_arm_is_off_in_a_build() -> None:
     assert work.evidence["active_candidates"] == 0
 
 
+def _dense_slice(db: FakePg, ids: range) -> None:
+    """A full round-robin slice of inactive movers: their vectors landed after the decision."""
+    for listing_id in ids:
+        _row(db, listing_id, active=False, complete=False, hours_ago=3)
+        _gallery(db, listing_id, tagged=True)
+
+
+def test_in_a_build_the_cursor_is_e92_s_and_steps_past_the_dense_slice() -> None:
+    """Review of #2101: in a build the arm is off, so a slice with more movers than the share
+    hands on one share and the cursor moves to the slice's end, as E92 did. Holding it there
+    would re-decide a full share every pass through the dense tail (#2091's overrun)."""
+    db = FakePg()
+    _dense_slice(db, range(1, 11))
+    work = _work(db, evidence_slice=10, bootstrap=True)
+
+    items = work.claim(5)
+
+    assert len([item for item in items if item.feed == "evidence"]) == 1
+    assert work._pending["rt_evidence"] == 10 and work.evidence["cut"] == 0
+
+
+def test_outside_a_build_only_a_mover_the_arm_displaced_holds_the_cursor() -> None:
+    """With no arm row the round-robin is E92's: the movers beyond the share are stepped past."""
+    db = FakePg()
+    _dense_slice(db, range(1, 11))
+    work = _work(db, evidence_slice=10)
+
+    work.claim(5)
+
+    assert work._pending["rt_evidence"] == 10 and work.evidence["cut"] == 0
+
+
 def test_evidence_slice_zero_still_turns_the_whole_feed_off() -> None:
     db = FakePg()
     _row(db, 1000, active=True, complete=False, hours_ago=2)
