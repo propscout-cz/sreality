@@ -24,22 +24,24 @@ each on the service's Variables page before editing it.
 | `MAPY2_CZ_API_KEY` (backup) | yes (`seed_curated_cities.yml`) | yes | no | | `scraper/geocoding.with_mapy_key_failover` | as above | as above |
 | `VALUO_API_TOKEN`, `VALUO_SANDBOX_API_TOKEN` | no | yes | no | never local | `api/valuo_client.py` | from Valuo (their portal or account contact); ask them to revoke the old ones | `POST /v1/advert/detail` with no ids (prices nothing): 401/403 refused, 000/5xx inconclusive; the API's variables by eye |
 | `GH_DISPATCH_TOKEN` (fine-grained PAT, Actions read+write) | no | yes | no | | `api/price_stats.py` | github.com → Settings → Fine-grained tokens; recreate after the repo transfer (#2008) | `PUT …/workflows/scrape_price_stats.yml/enable` on the active workflow → 204 (a no-op write; the repo is public, so a read proves nothing); the API's variable by eye |
-| `SCRAPE_CHAIN_TOKEN` (fine-grained PAT, Actions read+write) | yes | no | no | | `scrape_price_stats.yml` (chain step) | as above | the same write probe |
 | `STRIPE_WEBHOOK_SECRET` | no | **absent** (audit 2026-10-25: the billing webhook fails closed) | no | | `api/routes/billing.py` | Stripe → Developers → Webhooks → endpoint → Roll secret, only if stored | Stripe's "Send test event" → 2xx |
 | `STRIPE_SECRET_KEY` | no | absent | no | | nothing | Stripe → Developers → API keys → Roll, only if it was ever stored | n/a |
 | `SMOKE_TEST_ADMIN_PASSWORD`, `SMOKE_TEST_NONADMIN_PASSWORD` | no | no | no | local `.env` only | the production smoke checks | the wizard signs in and sets a new password (`PUT /auth/v1/user`) | sign-in with the new password |
 
 ## Deleted by the wizard (no reader; each behind a confirmation)
 
-`RUNPOD_API_KEY` on the Railway API (no `api/` code reads it, audit F7) is deleted at #2059's deploy with sreality-e9;
-the worker's copy stays, since the autodedup judge lane launches pods.
+`RUNPOD_API_KEY` has no reader on Railway: pods are rented only inside workflows (the judge lane runs in `autodedup.yml`;
+the worker's autodedup lane calls no provider). The API's copy goes at #2059's deploy with sreality-e9, the worker's in
+the wizard's stage 9.
 
 
 | Secret | Where | Why it is dead |
 |---|---|---|
 | `API_TOKEN` | Railway API | the static key was deleted 2026-10-13; the API accepts only a Supabase JWT |
 | `SUPABASE_JWT_SECRET` | Railway API | read by nothing since 2026-10-13 (`verify_jwt` uses the project JWKS) |
-| `EXT_API_TOKEN` | GH | the extension stopped sending a static key 2026-10-13 |
+| `EXT_API_TOKEN` | GH | the extension stopped sending a static key 2026-07-21 (Wave 1, #888); the build no longer reads it |
+| `SCRAPE_CHAIN_TOKEN` | GH | no workflow reads it since #2043 (price stats chains on its job's own `GITHUB_TOKEN`) |
+| `RUNPOD_API_KEY` | Railway worker | no worker code reads it (above) |
 
 Also in the wizard: the Supabase **legacy JWT secret**. If it sits under JWT Keys → Previously used, anyone who
 holds it can mint a `service_role` token that PostgREST accepts. Revoke it only once every client sends a

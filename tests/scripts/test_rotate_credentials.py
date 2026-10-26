@@ -37,7 +37,7 @@ def _loop_names(call: str) -> set[str]:
 
 
 def _github_secrets_set() -> set[str]:
-    return set(re.findall(r"\bset_secret ([A-Z][A-Z0-9_]+) ", _stages())) | _loop_names("set_secret")
+    return set(re.findall(r"\b(?:set_secret|publish) ([A-Z][A-Z0-9_]+) ", _stages())) | _loop_names("publish")
 
 
 def _railway_names() -> set[str]:
