@@ -91,9 +91,10 @@ def test_the_ts_module_declares_the_same_levels_and_columns() -> None:
 # (tests/test_644_condition_unknown_filter.py); 648 appended the energy-rating parameter
 # (tests/test_648_browse_energy_rating_filter.py); 657 took the Stats status lens back
 # (tests/test_657_status_is_the_propertys.py); 662 took the status as one parameter
-# (tests/test_661_662_status_filter.py). Re-read the chip arms when this moves again.
+# (tests/test_661_662_status_filter.py); 678 gave the Stats cells under the floor their small-sample
+# summary (tests/test_678_stats_small_samples.py). Re-read the chip arms when this moves again.
 _LATEST_RPC_DEFINITION = {
-    "browse_stats_properties": "662_status_filter_contract.sql",
+    "browse_stats_properties": "678_stats_small_samples.sql",
     "browse_map_cells": "662_status_filter_contract.sql",
 }
 
