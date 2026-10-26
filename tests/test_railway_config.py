@@ -130,6 +130,25 @@ def test_the_api_and_the_worker_pass_their_extras_to_the_root_dockerfile_build()
     assert 'EXTRAS: "api"' not in iac_entry("jobRunner")
 
 
+def test_the_runner_image_is_cpu_torch_baked_and_offline() -> None:
+    """EXTRAS naming clip adds CPU torch (PyPI's wheel pulls CUDA) and the pinned CLIP checkpoint in a layer keyed on
+    the pin alone (a prompt edit reuses it), before the source so a code-only build reuses it too; the build then
+    loads the model with the hub offline, so a missing file fails the build, never a runtime download."""
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert re.findall(r"^FROM .*$", dockerfile, re.M) == ["FROM python:3.12-slim AS clip-ref", "FROM python:3.12-slim"]
+    final = dockerfile.rsplit("\nFROM ", 1)[1]
+    model = final.index("scripts/bake_clip_weights.py data/clip_checkpoint.json")
+    assert final.index("ARG EXTRAS\n") < model < final.index("COPY pyproject.toml ./")
+    early = re.findall(r"^COPY .*$", final[:final.index("COPY pyproject.toml ./")], re.M)
+    assert [c for c in early if "data/" in c] == ["COPY --from=clip-ref /ref/clip_checkpoint.json ./data/"], early
+    assert final.count('case ",${EXTRAS}," in *,clip,*)') == 2
+    assert "--index-url https://download.pytorch.org/whl/cpu" in final and '"torch==' in final
+    assert "HF_HUB_OFFLINE=1 python" in final and "assert torch.version.cuda is None" in final
+    assert not (ROOT / "data" / "clip_checkpoint.json").exists(), "the repo's data/ would overwrite the staged pin"
+    assert "MALLOC_ARENA_MAX" not in dockerfile
+    assert "COPY scripts/ ./scripts/" in final and "COPY autodedup/ ./autodedup/" in final
+
+
 def test_the_wizard_has_the_general_modes_and_checks_with_its_own_copy() -> None:
     """M0's one-shot windows are gone (evidence on #2060). drift compares Railway with main's file, so it refuses
     another checkout. A pull during a window never changes the checker mid-window: the wizard runs its copy."""

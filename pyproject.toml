@@ -79,9 +79,11 @@ pricestats = [
 # CLIP visual tagging (scraper/clip_tagger.py; clip_tag.yml, which also re-tags)
 # AND the DINOv3 embedding lanes (scraper/dinov3_tagger.py;
 # docs/design/new-dedup/ENCODER-DECISION.md). Heavy (torch + transformers) — kept out
-# of the default install; ONLY the GPU workflows install it, and they install the
-# CPU/CUDA torch wheel separately first, so this extra is NOT a runtime dep of the
-# scraper/API images.
+# of the default install and out of the API and worker images. Whoever installs it puts
+# torch in first: the GPU workflows their CPU/CUDA wheel, and the job-runner image
+# (EXTRAS=api,clip,geo, for #2032's CLIP move) CPU torch from PyTorch's CPU index, in the
+# root Dockerfile's model layer, which pins its runtime companions (torch, huggingface_hub)
+# and bakes the pinned checkpoint (scripts/bake_clip_weights.py).
 clip = [
   # Upper bound, not an exact pin: what determines a vector's VALUE is the
   # checkpoint (pinned by sha in data/clip_taxonomy.json / the DINOv3 config), not

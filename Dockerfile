@@ -1,3 +1,9 @@
+# The CLIP checkpoint pin, alone: the job runner's model layer below is keyed on model + revision only, so a prompt
+# edit to data/clip_taxonomy.json neither re-downloads the weights nor invalidates the pip layers.
+FROM python:3.12-slim AS clip-ref
+COPY data/clip_taxonomy.json scripts/bake_clip_weights.py /ref/
+RUN python /ref/bake_clip_weights.py --pin /ref/clip_taxonomy.json /ref/clip_checkpoint.json
+
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -9,6 +15,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
+
+# EXTRAS: the pyproject extras this image installs. A Railway service variable of the same name reaches this ARG at
+# build time (.railway/railway.ts: the API and the worker set `api`, the job runner `api,clip,geo`); unset, it is
+# `api`. The echo shows in the build log.
+ARG EXTRAS
+
+# The job runner's model layer (EXTRAS names clip; a no-op for the API and the worker), before the source so a
+# code-only build reuses it: CPU torch from PyTorch's CPU index (PyPI's wheel pulls CUDA), then the pinned CLIP
+# checkpoint. These two pins are the clip extra's runtime companions (pyproject.toml); the offline load below proves
+# them. The Xet chunk cache would only duplicate the weights.
+COPY --from=clip-ref /ref/clip_checkpoint.json ./data/
+COPY scripts/bake_clip_weights.py ./scripts/
+RUN case ",${EXTRAS}," in *,clip,*) \
+      pip install --upgrade pip \
+      && pip install "torch==2.14.1" --index-url https://download.pytorch.org/whl/cpu \
+      && pip install "huggingface_hub>=0.34,<1.0" \
+      && HF_HUB_DOWNLOAD_TIMEOUT=60 python scripts/bake_clip_weights.py data/clip_checkpoint.json \
+      && rm -rf /root/.cache/huggingface/xet ;; \
+    esac
 
 COPY pyproject.toml ./
 COPY scraper/ ./scraper/
@@ -38,10 +63,15 @@ COPY data/ ./data/
 # time, so the miss only shows as a crash-loop at runtime).
 COPY autodedup/ ./autodedup/
 
-# EXTRAS: the pyproject extras this image installs. A Railway service variable of the same name reaches this ARG at
-# build time (.railway/railway.ts; the API and the worker set `api`); unset, it is `api`. The echo shows in the build log.
-ARG EXTRAS
 RUN echo "EXTRAS=${EXTRAS:-unset}" && pip install --upgrade pip && pip install ".[${EXTRAS:-api}]"
+# The job runner's proof, offline: CPU torch, and Tagger.load reads only the baked checkpoint (a missing file fails
+# the build after Tagger.load's retries, and the old deployment stays live).
+RUN case ",${EXTRAS}," in *,clip,*) \
+      HF_HUB_OFFLINE=1 python -c 'import torch; assert torch.version.cuda is None, torch.version.cuda; \
+        from scraper.clip_tagger import Tagger; t = Tagger.load(); \
+        print("CLIP baked", t.model_id, t.revision, "torch", torch.__version__)' \
+      && du -sh /root/.cache/huggingface ;; \
+    esac
 
 EXPOSE 8000
 
