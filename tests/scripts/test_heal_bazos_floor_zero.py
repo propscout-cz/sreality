@@ -28,6 +28,9 @@ def test_the_measurement_reads_an_above_ground_storey(text: str) -> None:
     "v prvním podlaží",
     "ve zvýšeném přízemí cihlového domu",
     "hezký byt 3+1 po rekonstrukci",
+    # A layout or an area glued to the digit is no storey.
+    "Prodám byt 2+1. Patro: přízemí.",
+    "Byt 45 m2. Podlaží: přízemí",
 ])
 def test_ground_or_silent_texts_are_left_alone(text: str | None) -> None:
     assert not heal.names_above_ground_storey(text)
@@ -41,6 +44,10 @@ def test_decide_writes_the_fixed_parsers_reading() -> None:
 def test_decide_nulls_what_the_parser_cannot_read() -> None:
     # 'v 6 podlaží' (no dot) names a storey the parser does not convert: NULL, not 0.
     assert heal.decide(None, "byt na 6 podlaží, sklep v přízemí") == (True, None)
+
+
+def test_decide_nulls_a_flat_on_ground_that_names_another_storey() -> None:
+    assert heal.decide(None, "byt v přízemí, ve druhém patře bydlí majitel") == (True, None)
 
 
 def test_decide_skips_a_true_ground_floor() -> None:

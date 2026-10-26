@@ -223,12 +223,27 @@ def test_a_cellar_in_the_ground_storey_is_not_the_flats_storey():
     # 'bytový dům' is the building, not the unit.
     assert floor_from_text("Pěkný bytový dům, v přízemí je prodejna.") == (None, None)
     assert floor_from_text("V bytovém domě v přízemí") == (None, None)
+    assert floor_from_text("K bytu náleží parkovací stání v přízemí domu.") == (None, None)
+    assert floor_from_text("K bytu patří i terasa v přízemí.") == (None, None)
+    # 'nachází se' names the unit only in a sentence that names the unit.
+    assert floor_from_text("Byt 2+kk. Recepce se nachází v přízemí.") == (None, None)
 
 
 def test_a_bare_podlazi_counts_from_ground_one():
     assert floor_from_text("Byt se nachází v 6. podlaží.") == (5, None)
     assert floor_from_text("Byt ve 3. podlaží, sklep v 1. PP") == (2, None)
     assert floor_from_text("1. podlaží, cihla") == (0, None)
+    # '0. podlaží' counts from ground 0, a scale the reader cannot tell apart: the
+    # přízemí beside it decides, and it never reads as suterén (-1).
+    assert floor_from_text("Byt je umístěn v přízemí (0. podlaží z celkem 3 podlaží)",
+                           category_main="byt") == (0, None)
+    assert floor_from_text("0. podlaží", category_main="byt") == (None, None)
+
+
+def test_a_layout_digit_is_not_a_storey():
+    assert floor_from_text("Byt 3+1. Podlaží 4.", category_main="byt") == (None, None)
+    assert floor_from_text("Prodám byt 2+1. Patro: přízemí.") == (0, None)
+    assert floor_from_text("Prodám byt 2+1. Patro: přízemí.", category_main="dum") == (0, None)
 
 
 def test_the_pardubice_train_reads_its_sixth_storey_not_the_cellar():
@@ -243,6 +258,8 @@ def test_spelled_out_ordinals_follow_the_noun_convention():
     assert floor_from_text("ve druhém nadzemním podlaží") == (1, None)
     assert floor_from_text("v prvním podzemním podlaží") == (-1, None)
     assert floor_from_text("v desátém patře") == (10, None)
+    # Only a locative adjective may sit between: 'na druhé straně patra' is no storey.
+    assert floor_from_text("byt 2+kk, na druhé straně patra je výtah") == (None, None)
     # The building total is not an ordinal: 'o deseti patrech' still reads nothing.
     assert floor_from_text("panelový dům o deseti patrech, sklep v přízemí") == (None, None)
 
@@ -259,6 +276,15 @@ def test_prizemi_never_beats_a_storey_the_text_names():
     # A storey cue the readers cannot convert still forbids the ground-storey guess.
     assert floor_from_text("byt v 6 podlaží, sklep v přízemí") == (None, None)
     assert floor_from_text("byt ve 3. poschodí, kočárkárna v přízemí") == (None, None)
+
+
+def test_a_storey_cue_binds_the_unit_word_before_a_later_prizemi():
+    assert floor_from_text("byt v 6. podlaží, v přízemí domu je prádelna") == (5, None)
+
+
+def test_a_flat_on_ground_that_names_another_storey_reads_none():
+    assert floor_from_text("byt v přízemí, ve druhém patře bydlí majitel") == (None, None)
+    assert floor_from_text("Prodám přízemní byt 2+1, sklep v 1. PP") == (None, None)
 
 
 def test_a_flat_text_with_no_storey_reads_none():

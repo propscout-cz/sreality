@@ -218,8 +218,10 @@ _TOTAL_CUES: tuple[tuple[re.Pattern[str], int], ...] = (
 # The capture stops at a comma/semicolon: it routinely runs past the value into the next
 # clause, and a 'přízemí' three words later would otherwise beat the label's own '3. NP'.
 _FLOOR_LABEL_RE = re.compile(r"\bpodlazi\s*[:\-]\s*([^\n,;]{1,30})")
-# A numeric unit-floor expression, optionally bound by a leading preposition.
-_FLOOR_EXPR = rf"\d{{1,2}}\.\s*(?:np|nadzemni\w*\s+podlazi|pp|podzemni\w*\s+podlazi|{_PATRO_NOUN})"
+# A numeric unit-floor expression, optionally bound by a leading preposition. The digit
+# may not close a layout: in 'byt 2+1. Patro: přízemí' the '1.' is the layout's.
+_NO_LAYOUT = r"(?<![+\d])"
+_FLOOR_EXPR = rf"{_NO_LAYOUT}\d{{1,2}}\.\s*(?:np|nadzemni\w*\s+podlazi|pp|podzemni\w*\s+podlazi|{_PATRO_NOUN})"
 _FLOOR_PREP_RE = re.compile(rf"\b(?:v|ve|na)\s+({_FLOOR_EXPR})")
 _FLOOR_BARE_RE = re.compile(rf"\b({_FLOOR_EXPR})")
 _PRIZEMI_TEXT_RE = re.compile(r"\bprizem")
@@ -232,8 +234,11 @@ _PRIZEMI_TEXT_RE = re.compile(r"\bprizem")
 _FLAT_CATEGORIES: frozenset[str | None] = frozenset({None, "byt"})
 
 # A bare 'N. podlaží' is a storey ORDINAL (ground = 1), the scale of every podlaží key.
-_PODLAZI_RE = re.compile(r"(\d{1,2})\.\s*podlazi(?:m)?\b")
-_FLAT_EXPR = rf"\d{{1,2}}\.\s*(?:podlazi(?:m)?\b|np|nadzemni\w*\s+podlazi|pp|podzemni\w*\s+podlazi|{_PATRO_NOUN})"
+# '0. podlaží' is a seller counting from ground 0, a scale this reader cannot tell from
+# the other; it is left to the přízemí step ('v přízemí (0. podlaží z celkem 3)').
+_PODLAZI = r"[1-9]\d?\.\s*podlazi(?:m)?\b"
+_PODLAZI_RE = re.compile(r"([1-9]\d?)\.\s*podlazi(?:m)?\b")
+_FLAT_EXPR = rf"(?:{_NO_LAYOUT}{_PODLAZI}|{_FLOOR_EXPR})"
 _FLAT_PREP_RE = re.compile(rf"\b(?:v|ve|na)\s+({_FLAT_EXPR})")
 _FLAT_BARE_RE = re.compile(rf"\b({_FLAT_EXPR})")
 
@@ -244,9 +249,10 @@ _ORDINAL_STEMS: dict[str, int] = {
 }
 _ORDINAL = rf"({'|'.join(_ORDINAL_STEMS)})(?:i|y|e|a|im|em|ym|iho|eho|ou)"
 _STOREY_NOUN = rf"({_PATRO_NOUN}|podlazi(?:m)?\b)"
-# 'v šestém (nadzemním) podlaží' takes one word between, as the measurement read it; the
-# nominative 'čtvrté patro' takes none, so a stray ordinal three words off never binds.
-_ORDINAL_PREP_RE = re.compile(rf"\b(?:v|ve|na)\s+{_ORDINAL}\s+(?:(\w+)\s+)?{_STOREY_NOUN}")
+# 'v šestém (nadzemním) podlaží' takes one locative adjective between; the nominative
+# 'čtvrté patro' takes none, so 'na druhé straně patra' or a stray ordinal never binds.
+_ORDINAL_PREP_RE = re.compile(
+    rf"\b(?:v|ve|na)\s+{_ORDINAL}\s+(?:(\w+(?:im|em|ym))\s+)?{_STOREY_NOUN}")
 _ORDINAL_BARE_RE = re.compile(rf"\b{_ORDINAL}\s+{_STOREY_NOUN}")
 
 # A storey cue the readers above do not convert ('v 6 podlaží', 've 3. poschodí', 'patro:
@@ -256,22 +262,32 @@ _UNREAD_STOREY_RE = re.compile(
     rf"\b(?:v|ve|na)\s+\d{{1,2}}\s+(?:{_PATRO_NOUN}|podlazi|poschodi)"
     rf"|\d{{1,2}}\.\s*poschodi|\b{_ORDINAL}\s+(?:\w+\s+)?poschodi|\bpatro\s*:?\s*\d")
 
+# Any storey cue at all, read or not. Inside the words before a 'v přízemí' it binds the
+# unit word that precedes it: 'byt v 6. podlaží, v přízemí domu je prádelna'.
+_STOREY_CUE_RE = re.compile(
+    rf"{_FLAT_EXPR}|\b{_ORDINAL}\s+(?:\w+\s+)?(?:{_PATRO_NOUN}|podlazi|poschodi)"
+    rf"|{_UNREAD_STOREY_RE.pattern}")
+
 # přízemí tied to the flat: 'přízemní byt', 'Patro: přízemí', or 'v (zvýšeném) přízemí'
-# whose own sentence names the unit ('byt', '2+kk', 'jednotka', 'nachází se') and no room
-# or shared space of the house ('sklep', 'kočárkárna', 'vchod') right before it.
-# 'umístěn' is no unit word: 'garáž i stání jsou umístěny v přízemí'.
+# whose own sentence names the unit ('byt', '2+kk', 'jednotka'; 'nachází se' only beside
+# one of those) and no room or shared space of the house ('sklep', 'kočárkárna', 'vchod',
+# 'stání', 'terasa') right before it. 'umístěn' is no unit word: 'garáž i stání jsou
+# umístěny v přízemí'.
 _PRIZEMNI_UNIT_RE = re.compile(
     r"\bprizemn\w*[,\s]+(?:\S+\s+){0,2}?(?:byt|bytov\w*\s+jednotk|jednotk|garsonier|garsonk)")
 _PATRO_LABEL_PRIZEMI_RE = re.compile(r"\bpatro\s*[:\-]\s*(?:zvysen\w*\s+|snizen\w*\s+)?prizem")
 _V_PRIZEMI_RE = re.compile(r"\b(?:v|ve)\s+(?:zvysen\w*\s+|snizen\w*\s+)?prizem", re.I)
 _UNIT_WORD_RE = re.compile(
-    r"(?:byt(?:u|em|y|ech)?|jednotk\w*|garsonier\w*|garsonk\w*|nachazi|nachazejic\w*"
-    r"|situovan\w*|\d\+(?:kk|\d))")
+    r"(?:byt(?:u|em|y|ech)?|jednotk\w*|garsonier\w*|garsonk\w*|\d\+(?:kk|\d))")
+# 'Recepce se nachází v přízemí': a placement verb names the unit only in a sentence that
+# names the unit itself.
+_PLACEMENT_WORD_RE = re.compile(r"(?:nachazi|nachazejic\w*|situovan\w*)")
 # 'Byt není v přízemí' is a selling point, not a storey.
 _NEGATION_RE = re.compile(r"(?:neni|nejsou|nebude)")
 _AMENITY_WORD_RE = re.compile(
-    r"(?:sklep|kolarn|kocarkarn|garaz|susarn|pradeln|spolecn|vchod|parkovan|kotel|dilen|dilna"
-    r"|komor|sklad|obchod|kancelar|provozovn|restaurac|ordinac|prodejn|lekarn|schrank)")
+    r"(?:sklep|kolarn|kocarkarn|garaz|susarn|pradeln|spolecn|vchod|parkovan|parkovac|stani"
+    r"|kotel|dilen|dilna|komor|sklad|obchod|kancelar|provozovn|restaurac|ordinac|prodejn"
+    r"|lekarn|schrank|teras|zahrad|recepc|posilovn|vytah)")
 # A sentence ends at a stop before a capital, so 'o už. ploše' or 'ul. Družby' runs on; the
 # unit may sit a dozen words back ('byt 2+1 o už. ploše 62 m² ve zvýšeném přízemí'), the
 # room that owns the přízemí sits right before it ('sklep se nachází v přízemí').
@@ -321,18 +337,38 @@ def _flat_on_ground(folded: str, cased: str) -> bool:
     for m in _V_PRIZEMI_RE.finditer(cased):
         # The slice keeps the match's own first letter so a capital 'V přízemí' ends the
         # sentence before it; that letter is then dropped.
-        sentence = _SENTENCE_BREAK_RE.split(cased[max(0, m.start() - 200):m.start() + 1])[-1][:-1]
-        words = [w.strip(",.:;()").lower() for w in sentence.split()]
+        sentence = _SENTENCE_BREAK_RE.split(
+            cased[max(0, m.start() - 200):m.start() + 1])[-1][:-1].lower()
+        sentence_unit = any(_UNIT_WORD_RE.fullmatch(w.strip(",.:;()")) for w in sentence.split())
+        cues = list(_STOREY_CUE_RE.finditer(sentence))
+        if cues:
+            sentence = sentence[cues[-1].end():]
+        words = [w.strip(",.:;()") for w in sentence.split()]
         if any(_AMENITY_WORD_RE.match(w) for w in words[-_AMENITY_WINDOW:]):
             continue
         if any(_NEGATION_RE.fullmatch(w) for w in words[-2:]):
             continue
-        if any(_UNIT_WORD_RE.fullmatch(w) for w in words[-_UNIT_WINDOW:]):
+        window = words[-_UNIT_WINDOW:]
+        if any(_UNIT_WORD_RE.fullmatch(w) for w in window):
+            return True
+        if sentence_unit and any(_PLACEMENT_WORD_RE.fullmatch(w) for w in window):
             return True
     return False
 
 
 def _flat_floor(folded: str, cased: str) -> int | None:
+    """The flat's storey; a text that puts the flat itself on the ground storey AND names
+    another storey contradicts itself ('byt v přízemí, ve druhém patře bydlí majitel') and
+    reads None, for the text lane to settle."""
+    floor = _read_storey(folded)
+    if not _flat_on_ground(folded, cased):
+        return floor
+    if floor is None and not _UNREAD_STOREY_RE.search(folded):
+        return 0
+    return None
+
+
+def _read_storey(folded: str) -> int | None:
     m = _FLOOR_LABEL_RE.search(folded)           # 1) 'Podlaží: 4. NP' label
     floor = _unit_storey(m.group(1)) if m else None
     if floor is None:                             # 2) 've 3. patře' / 'v 6. podlaží'
@@ -345,9 +381,6 @@ def _flat_floor(folded: str, cased: str) -> int | None:
             floor = _unit_storey(m.group(1))
     if floor is None:                             # 4) 'v šestém podlaží' / 'čtvrté patro'
         floor = _spelled_storey(folded)
-    if (floor is None and not _UNREAD_STOREY_RE.search(folded)
-            and _flat_on_ground(folded, cased)):  # 5) 'byt v přízemí' -> 0
-        floor = 0
     return floor
 
 

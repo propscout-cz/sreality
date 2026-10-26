@@ -2,14 +2,16 @@
 
 Until the parser fix that ships with this script, `scraper.floor.floor_from_text` ended
 with "any 'přízemí' anywhere -> 0", so a flat whose advert says "v šestém podlaží" and
-"sklep v přízemí domu" was filed on the ground storey. Measured 2026-10-25
-(`bazos_floor_zero.md`): 373 bazos flats, 116 active, carry floor 0 while their text names
-an above-ground storey; 95 % of them contain 'přízemí'.
+"sklep v přízemí domu" was filed on the ground storey. A read-only measurement on
+2026-10-25 (ad-hoc SQL, not kept; `names_above_ground_storey` below is its instrument, now
+with a left boundary on the digit) found 373 bazos flats, 116 active, at floor 0 while
+their text names an above-ground storey; 95 % of them contain 'přízemí'.
 
 WHY NOT `scripts/reparse.py`. The seam never blanks a stored value: a row whose new parse
-reads no storey keeps its wrong 0. This heal selects by the measurement's own storey
-regexes (`names_above_ground_storey`, a port of `bazos_floor_zero.sql`) and then writes the
-fixed parser's reading when it reads a storey above ground, else NULL. NULL is the safe
+reads no storey keeps its wrong 0. This heal selects by the measurement's storey regexes
+(`names_above_ground_storey`) and then writes the fixed parser's reading when it reads a
+storey above ground, else NULL (a text that puts the flat itself on the ground storey AND
+names another storey reads None in the parser, so such a row is NULLed, never moved up). NULL is the safe
 default — the dedup floor limb abstains on an unstated floor, and podlaží against patro is
 exactly where portals disagree by one.
 
@@ -50,12 +52,13 @@ _BATCH = 500
 
 # The measurement's three readings, first match wins (A, then C, then B), plus the
 # nominative add-on on ads none of them read. patro/poschodí count from ground 0,
-# podlaží/NP from ground 1; "above ground" = patro N >= 1 or podlaží/NP N >= 2.
+# podlaží/NP from ground 1; "above ground" = patro N >= 1 or podlaží/NP N >= 2. A digit
+# glued to a letter, '+' or digit is a layout, area or year ('2+1. Patro', '45 m2. Podlaží').
 _ORD = r"(?:prvn|druh|tret|ctvrt|pat|sest|sedm|osm|devat|desat|jedenact|dvanact)"
 _NOUN = r"(patr(?:o|a|e|u|em)\b|podlazi|np\b|poschodi)"
 _PREP_RE = re.compile(
     rf"\b(?:v|ve|na)\s+(\d{{1,2}}\.\s*|\d{{1,2}}\s+|{_ORD}(?:i|y|e|em|im|eho|iho|ym)\s+)(?:\w+\s+)?{_NOUN}")
-_DIGIT_RE = re.compile(rf"(\d{{1,2}})\.\s*{_NOUN}")
+_DIGIT_RE = re.compile(rf"(?<![\w+])(\d{{1,2}})\.\s*{_NOUN}")
 _LABEL_RE = re.compile(r"patro\s*:?\s*(\d{1,2})\b")
 _NOMINATIVE_RE = re.compile(
     rf"\b((?:prvn|druh|tret|ctvrt|pat|sest|sedm|osm|devat|desat)(?:i|e|y|em|im|eho|ym))\s+{_NOUN}")

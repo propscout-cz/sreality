@@ -8,9 +8,10 @@ Independent of the analytical, UI, and map tracks.
 ### bazos / web floor 0 from a stray 'přízemí' — flat grammar in `floor_from_text` (2026-10-26, PR open)
 - **Found:** `floor_from_text` ended with "any 'přízemí' → 0", so "v šestém podlaží … sklep v přízemí domu"
   read 0; 373 bazos flats (116 active) carried floor 0 while their text names a higher storey
-  (`bazos_floor_zero.md`, 2026-10-25).
+  (read-only SQL, 2026-10-25; re-counted 2026-10-26: 374 / 117, query in the PR body).
 - **Done (in the PR):** a flat (or unknown category) reads bare `N. podlaží` (N−1) and spelled-out
-  ordinals up to the tenth; 'přízemí' is 0 only when tied to the flat and no other storey is named.
+  ordinals up to the tenth; 'přízemí' is 0 only when tied to the flat and no other storey is named
+  (both said → None, for the text lane).
   Every other category keeps the legacy miner. `scripts/heal_bazos_floor_zero.py` (dry run default,
   `--apply --backup`) re-reads or NULLs the measured rows.
 - **Next:** run the heal after merge (dry run first); then `reparse` `--fields floor` on bazos to fill
