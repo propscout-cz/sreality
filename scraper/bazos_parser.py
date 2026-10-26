@@ -22,7 +22,14 @@ from typing import Any
 from selectolax.parser import HTMLParser, Node
 
 from scraper import vocabulary
-from scraper.area import PortalAreas, derive_headline_area, parse_area_text
+from scraper.area import (
+    AREA_NUMBER_SRC,
+    LAND_CATEGORIES,
+    PortalAreas,
+    area_token_to_float,
+    derive_headline_area,
+    parse_area_text,
+)
 from scraper.floor import floor_from_text
 from scraper.portal_identity import native_id
 from scraper.price_text import is_per_area_price
@@ -356,21 +363,80 @@ def ad_haystack(title: str | None, description: str | None) -> str:
     return f"{title or ''}\n{description or ''}"
 
 
+# A labelled area in the prose (Q12/Q14, portal_columns 3.3, 2026-10-26): 1,030 of 18,375 rt
+# bazos flats state a celková figure beside a užitná / podlahová / obytná one, and taking
+# the FIRST figure stored the celková in 119 of them (101 over 8 % off the usable one).
+# "celková užitná / obytná" is still the usable measure; "celková podlahová" is the
+# building-law measure with the accessories in (realitymix's 'floor', section 3.2), so it
+# reads as total. A label is the measure's only when nothing in its clause names an
+# accessory or the parcel ("pozemek o celkové výměře 1.139 m²", "užitná plocha sklepa").
+_AREA_LABEL_RE = re.compile(
+    r"(?<!\w)(?:(celkov)\w*\s+)?(u[žz]itn|podlahov|obytn)\w*|(?<!\w)(celkov)\w*",
+    re.IGNORECASE)
+_LABELLED_FIGURE_RE = re.compile(
+    rf"(?<![\d+.,])({AREA_NUMBER_SRC})\s*(?:m(?:2|²|\s2)(?!\d)|㎡|metr)", re.IGNORECASE)
+_LABEL_REACH = 40
+_CLAUSE_BACK = 30
+_SENTENCE_END_RE = re.compile(r"[.!?](?=\s+[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ])|[;\n]")
+_CLAUSE_START_RE = re.compile(r"[,;:.!?()\n]")
+_NOT_THE_UNIT_RE = re.compile(
+    r"balk|lod[žz]i|teras|sklep|komor|gar[áa][žz]|p[ůu]d|zahrad|pozem|parcel|dvor",
+    re.IGNORECASE)
+
+
+def _label_kind(label: re.Match[str]) -> str:
+    """'usable' or 'total' for one `_AREA_LABEL_RE` match."""
+    if label[2] and not (label[1] and label[2].lower().startswith("podlahov")):
+        return "usable"
+    return "total"
+
+
+def labelled_areas(haystack: str | None) -> tuple[float | None, float | None]:
+    """(usable, total): the first figure the text labels each measure, or None for one it
+    does not label. A label's figure is the first m² within `_LABEL_REACH` characters after
+    it, in its own sentence and before the next label."""
+    found: dict[str, float] = {}
+    labels = list(_AREA_LABEL_RE.finditer(haystack or ""))
+    for i, label in enumerate(labels):
+        kind = _label_kind(label)
+        if kind in found:
+            continue
+        text = label.string
+        end = min(label.end() + _LABEL_REACH,
+                  labels[i + 1].start() if i + 1 < len(labels) else len(text))
+        reach = text[label.end():end]
+        stop = _SENTENCE_END_RE.search(reach)
+        figure = _LABELLED_FIGURE_RE.search(reach[:stop.start()] if stop else reach)
+        if figure is None:
+            continue
+        before = text[max(0, label.start() - _CLAUSE_BACK):label.start()]
+        clause = _CLAUSE_START_RE.split(before)[-1] + reach[:figure.start()]
+        if _NOT_THE_UNIT_RE.search(clause):
+            continue
+        found[kind] = area_token_to_float(figure[1])
+    return found.get("usable"), found.get("total")
+
+
 def areas_from_text(haystack: str | None, *, category_main: str | None,
                     category_type: str | None, disposition: str | None) -> PortalAreas:
     """bazos's area, such as it is — spelled here once and nowhere else.
 
     bazos has no structured area field at all: no interior measure and no
-    "plocha pozemku", so `plot` is genuinely absent rather than unread, and the
-    resolver's `prose` arm is the whole story here (on land it stamps that free-text
-    number 'plot', which is what it is on a parcel ad). It is the one arm the per-room
+    "plocha pozemku", so `plot` is genuinely absent rather than unread. A figure the
+    text LABELS usable (`labelled_areas`) leads, with the celková one behind it as
+    `total`; a celková figure alone is passed nowhere, because the first figure it would
+    then outrank is often the title's usable one. Otherwise the resolver's `prose` arm
+    is the whole story, and always on land (it stamps that free-text number 'plot',
+    which is what it is on a parcel ad). It is the one arm the per-room
     floor reads, on a sale only, because the first m² in a sale's prose may be its cellar
     while a rental's may be the room it lets. Free prose is also the one substrate where a
     parcel is always written "1 500 m2", which is why the naive grammar cost ~12,400 of
     these rows their thousands digit.
     """
+    usable, total = (None, None) if category_main in LAND_CATEGORIES else labelled_areas(haystack)
     area_m2, area_basis = derive_headline_area(
-        category_main=category_main, plot=None, prose=parse_area_text(haystack),
+        category_main=category_main, plot=None, usable=usable,
+        total=total if usable else None, prose=parse_area_text(haystack),
         disposition=disposition, category_type=category_type,
     )
     return PortalAreas(area_m2=area_m2, area_basis=area_basis)

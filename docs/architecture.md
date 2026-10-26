@@ -116,7 +116,10 @@ that both suites run through their own normaliser, so a drift in the logic reds 
 **Data source (bazos.cz).** A separate HTML crawler (`scraper/bazos_client.py`,
 `bazos_parser.py`, `bazos_main.py`) lands bazos listings into the same
 `listings`/`listing_snapshots` contract, tagged `source='bazos'`. bazos has no spec table: its
-`area_m2` is the FIRST m² figure in title + description, so the room-scaled dwelling band (above)
+`area_m2` is a figure the text LABELS usable (užitná / podlahová / obytná, `bazos_parser.labelled_areas`;
+basis `usable`), else the FIRST m² figure in title + description (since 2026-10-26: 119 of 1,030 rt flats
+stating both a celková and a usable figure had stored the celková one). A celková figure alone never
+outranks the first figure, and land keeps the first figure. The room-scaled dwelling band (above)
 is what keeps a cellar's "2 m²" from becoming a 3+1's area. It walks 22 nationwide
 scopes (byt/dum/chata/restaurace/kancelar/prostory/sklad/pozemek/zahrada/garaz/ostatni ×
 prodam/pronajmu). The last four closed a **silent** four-year coverage gap: migration 160
