@@ -1,8 +1,8 @@
 name: "CI: tests"
 
 # CI test suite, runs on every pull request and on every push to main. Two parallel jobs:
-# a Python job (lints with ruff, verifies the filter-registry and workflow-docs codegen
-# are fresh, then runs pytest) and a frontend job (TypeScript type-check + vitest
+# a Python job (verifies the filter-registry and workflow-docs codegen are fresh, runs
+# pytest, then lints with ruff) and a frontend job (TypeScript type-check + vitest
 # pure-function tests). This is the build gate for every branch.
 #
 # A branch push without a PR runs nothing: a push-triggered twin of the pull_request run
@@ -32,10 +32,8 @@ jobs:
         run: pip install -e . && python -c "import scripts.verify_pipeline, scripts.record_workflow_failures, scripts.health_canary"
 
       - name: Install
+        id: install
         run: pip install -e ".[dev,api,geo]"
-
-      - name: Lint (ruff)
-        run: ruff check --output-format=github .
 
       # -m, not a script path: invoking by path puts scripts/ on sys.path[0] and
       # leaves the repo root off it, so the generator's `from toolkit import ...`
@@ -61,6 +59,11 @@ jobs:
 
       - name: Run pytest
         run: pytest -q
+
+      # Last, and run even after a failed check above: one run reports lint and tests together.
+      - name: Lint (ruff)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: ruff check --output-format=github .
 
   vitest:
     # Frontend tests (vitest, jsdom — see frontend/vite.config.ts).
