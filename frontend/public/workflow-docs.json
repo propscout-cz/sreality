@@ -1405,6 +1405,43 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/frontend-build.yml"
     },
     {
+      "filename": "heal_bazos_floor_zero.yml",
+      "name": "Ops: heal bazos/web flats whose floor is 0 but whose text names a storey",
+      "description": "The one-off heal that rides PR #2054 (scraper/floor.py: a stray \"přízemí\" anywhere in the text used to set floor 0). `scripts/heal_bazos_floor_zero.py` selects source in ('bazos','web'), category_main='byt', floor = 0 whose description names an above-ground storey, and writes the fixed parser's reading when it is above 0, otherwise NULL — a column-only compare-and-set on floor = 0 that enqueues `dirty_properties` in the same statement, never snapshots and never touches `last_seen_at` (rules 2 and 20; ledgered in tests/scraper/test_listing_write_census.py).",
+      "manual": true,
+      "schedules": [],
+      "onPush": false,
+      "onPullRequest": false,
+      "paths": null,
+      "inputs": [
+        {
+          "name": "dry_run",
+          "description": "true = report what would change only. false = write (needs confirm=APPLY).",
+          "required": false,
+          "type": "boolean",
+          "default": "true",
+          "options": null
+        },
+        {
+          "name": "confirm",
+          "description": "Type APPLY to arm the real write. Ignored when dry_run=true.",
+          "required": false,
+          "type": "string",
+          "default": "",
+          "options": null
+        }
+      ],
+      "secrets": [
+        "SUPABASE_DB_URL"
+      ],
+      "concurrencyGroup": "heal-bazos-floor-zero",
+      "cancelInProgress": false,
+      "timeoutMinutes": 60,
+      "permissions": "contents: read",
+      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/heal_bazos_floor_zero.yml",
+      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/heal_bazos_floor_zero.yml"
+    },
+    {
       "filename": "idnes_index_walk.yml",
       "name": "Scraping: iDNES Reality index walk",
       "description": "The fast half of the iDNES cadence split (architectural rule #19, like sreality). Walks the ENTIRE index of every configured category (no --max-pages), touch_listings bumps last_seen on still-listed ids, unseen ids are nominated for a page check (rule #3) once the walk reached the portal's end (source-scoped; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='idnes'). No detail fetch — the realtime worker's drain lane consumes the queue. Records run_type='index'.",
