@@ -12,6 +12,8 @@ name: Dedup — CLIP image tagging (sharded)
 # (transformers); the production CLIP could move to int8-ONNX later as an
 # optimization.
 #
+# Each shard then re-tags from stored embeddings when a taxonomy campaign is open.
+#
 # Required secrets: SUPABASE_DB_URL + the R2_* set (same as compute_image_phash.yml).
 
 on:
@@ -70,6 +72,10 @@ jobs:
       R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
       HF_HUB_DOWNLOAD_TIMEOUT: "60"
     steps:
+      # The retag step's budget is what is left of this clock after tagging.
+      - name: Start the job clock
+        run: echo "JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v6
 
       - uses: actions/setup-python@v6
@@ -88,6 +94,7 @@ jobs:
           key: hf-clip-vit-base-patch32-v1
 
       - name: Install (CPU torch + clip extra)
+        id: install
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -e ".[clip]"
@@ -103,3 +110,18 @@ jobs:
           fi
           if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
           python -m scripts.clip_tag_backfill $ARGS
+
+      # Runs even when tagging failed: it reads stored embeddings, never R2. With no taxonomy
+      # campaign open it exits in 3-5 s. Its budget is what is left of 50 min since the job
+      # started (about 43 min after a typical tag step, 32 after the slowest of the last 48),
+      # so a campaign drains near the old retag job's 50 min a shard an hour, inside the 55-min
+      # timeout.
+      - name: Re-tag from stored embeddings
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && inputs.dry_run != 'true' }}
+        run: |
+          BUDGET=$(( 3000 - ($(date +%s) - JOB_STARTED) ))
+          if [ "$BUDGET" -lt 120 ]; then
+            echo "retag: ${BUDGET}s of the job's clock left; the next run continues the campaign"
+            exit 0
+          fi
+          python -m scripts.retag_from_embeddings --shards 4 --shard ${{ matrix.shard }} --max-seconds "$BUDGET"

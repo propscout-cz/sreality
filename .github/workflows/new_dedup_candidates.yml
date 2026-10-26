@@ -142,3 +142,4 @@ jobs:
           name: candidates-${{ inputs.mode }}-${{ github.run_id }}
           path: report.json
           if-no-files-found: ignore
+          retention-days: 14

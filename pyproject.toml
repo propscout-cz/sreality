@@ -76,7 +76,7 @@ geo = [
 pricestats = [
   "playwright>=1.40",
 ]
-# CLIP visual tagging (scraper/clip_tagger.py; clip_tag.yml / clip_retag.yml)
+# CLIP visual tagging (scraper/clip_tagger.py; clip_tag.yml, which also re-tags)
 # AND the DINOv3 embedding lanes (scraper/dinov3_tagger.py;
 # docs/design/new-dedup/ENCODER-DECISION.md). Heavy (torch + transformers) — kept out
 # of the default install; ONLY the GPU workflows install it, and they install the
