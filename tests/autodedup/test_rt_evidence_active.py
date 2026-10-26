@@ -8,7 +8,11 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any
 
-from autodedup.incremental_lane import EVIDENCE_ACTIVE_SLICE, SqlWork
+from autodedup.incremental_lane import (
+    EVIDENCE_ACTIVE_RECHECK_MINUTES,
+    EVIDENCE_ACTIVE_SLICE,
+    SqlWork,
+)
 from autodedup.incremental_scope import Scope, ScopeBlock
 from autodedup.incremental_sql import RT_EVIDENCE_ACTIVE_SQL
 from tests.autodedup.fake_pg import FakePg
@@ -17,13 +21,15 @@ TOWN = Scope((ScopeBlock("obec", 569810),))
 
 
 def _row(db: FakePg, listing_id: int, *, active: bool, complete: bool, hours_ago: float,
-         images: int = 3, clip: int = 0) -> None:
+         images: int = 3, clip: int = 0, written_minutes_ago: float | None = None) -> None:
     db.rt_fp[("rt", listing_id)] = {
         "category_main": None, "category_type": None, "area_m2": None, "disposition": None,
         "floor": None, "fp_digest": "d", "cell_key": "o1", "cell_group": "byt",
         "is_active": active, "ev_images": images, "ev_phash": images, "ev_clip": clip,
         "ev_tags": clip, "ev_complete": complete,
         "first_decided_at": db.now - timedelta(hours=hours_ago),
+        "updated_at": db.now - (timedelta(hours=hours_ago) if written_minutes_ago is None
+                                else timedelta(minutes=written_minutes_ago)),
     }
 
 
@@ -37,7 +43,8 @@ def _gallery(db: FakePg, listing_id: int, *, images: int = 3, tagged: bool) -> N
 
 def _active_ids(db: FakePg, limit: int) -> list[int]:
     cur = db.cursor()
-    cur.execute(RT_EVIDENCE_ACTIVE_SQL, {"generation": "rt", "limit": limit})
+    cur.execute(RT_EVIDENCE_ACTIVE_SQL, {"generation": "rt", "limit": limit,
+                                         "recheck_minutes": EVIDENCE_ACTIVE_RECHECK_MINUTES})
     return [int(row[0]) for row in cur.fetchall()]
 
 
@@ -74,10 +81,10 @@ def test_an_active_arrival_beyond_the_round_robin_is_re_claimed_in_the_next_pass
 
 def test_the_arm_takes_only_active_rows_still_marked_incomplete() -> None:
     db = FakePg()
-    _row(db, 1, active=False, complete=False, hours_ago=1)
-    _row(db, 2, active=True, complete=True, hours_ago=1, clip=3)
-    _row(db, 3, active=True, complete=False, hours_ago=1)
-    _row(db, 4, active=True, complete=None, hours_ago=1)  # type: ignore[arg-type]
+    _row(db, 1, active=False, complete=False, hours_ago=2)
+    _row(db, 2, active=True, complete=True, hours_ago=2, clip=3)
+    _row(db, 3, active=True, complete=False, hours_ago=2)
+    _row(db, 4, active=True, complete=None, hours_ago=2)  # type: ignore[arg-type]
 
     assert _active_ids(db, 10) == [3]
 
@@ -85,7 +92,7 @@ def test_the_arm_takes_only_active_rows_still_marked_incomplete() -> None:
 def test_the_newest_first_decision_comes_first_and_the_slice_bounds_it() -> None:
     db = FakePg()
     _row(db, 5, active=True, complete=False, hours_ago=30)
-    _row(db, 6, active=True, complete=False, hours_ago=1)
+    _row(db, 6, active=True, complete=False, hours_ago=2)
     _row(db, 7, active=True, complete=False, hours_ago=10)
 
     assert _active_ids(db, 2) == [6, 7]
@@ -95,9 +102,9 @@ def test_the_arm_s_moved_rows_take_the_share_before_the_round_robin_s() -> None:
     """`share` is a fifth of the claim: with room for one evidence item, the active arrival
     wins over a moved inactive row the round-robin found."""
     db = FakePg()
-    _row(db, 2, active=False, complete=False, hours_ago=1)
+    _row(db, 2, active=False, complete=False, hours_ago=2)
     _gallery(db, 2, tagged=True)
-    _row(db, 1000, active=True, complete=False, hours_ago=1)
+    _row(db, 1000, active=True, complete=False, hours_ago=2)
     _gallery(db, 1000, tagged=True)
 
     items = _work(db).claim(5)
@@ -110,7 +117,7 @@ def test_the_cursor_follows_the_round_robin_rows_alone() -> None:
     higher one — else every id in between would be skipped for a whole cycle."""
     db = FakePg()
     _young_and_settled(db, range(1, 6))
-    _row(db, 1000, active=True, complete=False, hours_ago=1)
+    _row(db, 1000, active=True, complete=False, hours_ago=2)
     _gallery(db, 1000, tagged=False)
     work = _work(db, evidence_slice=3)
 
@@ -119,9 +126,43 @@ def test_the_cursor_follows_the_round_robin_rows_alone() -> None:
     assert work._pending["rt_evidence"] == 3
 
 
+def test_the_cursor_stops_before_a_round_robin_mover_the_share_cut() -> None:
+    """With room for one evidence item the arm's arrival takes it; the round-robin's moved row
+    2 is cut, so the cursor stops at 1 and offers it again, never stepping past it."""
+    db = FakePg()
+    _row(db, 1, active=False, complete=True, hours_ago=2, clip=3)
+    _gallery(db, 1, tagged=True)
+    _row(db, 2, active=False, complete=False, hours_ago=2)
+    _gallery(db, 2, tagged=True)
+    _row(db, 3, active=False, complete=True, hours_ago=2, clip=3)
+    _gallery(db, 3, tagged=True)
+    _row(db, 4, active=False, complete=True, hours_ago=2, clip=3)
+    _row(db, 1000, active=True, complete=False, hours_ago=2)
+    _gallery(db, 1000, tagged=True)
+    work = _work(db, evidence_slice=3)
+
+    items = work.claim(5)
+
+    assert [item.listing_id for item in items if item.feed == "evidence"] == [1000]
+    assert work._pending["rt_evidence"] == 1 and work.evidence["cut"] == 1
+
+
+def test_a_row_the_lane_just_wrote_waits_out_the_recheck_gate() -> None:
+    """An undecodable image is stamped `clip_tagged_at` with no vector: the probe says 3, the
+    decision 2, for ever. The arm re-decides such a row at most once an hour, not every pass."""
+    db = FakePg()
+    _row(db, 1000, active=True, complete=False, hours_ago=5, clip=2, written_minutes_ago=10)
+    _gallery(db, 1000, tagged=True)
+
+    assert _active_ids(db, 10) == []
+
+    db.rt_fp[("rt", 1000)]["updated_at"] = db.now - timedelta(minutes=90)
+    assert _active_ids(db, 10) == [1000]
+
+
 def test_evidence_slice_zero_still_turns_the_whole_feed_off() -> None:
     db = FakePg()
-    _row(db, 1000, active=True, complete=False, hours_ago=1)
+    _row(db, 1000, active=True, complete=False, hours_ago=2)
     _gallery(db, 1000, tagged=True)
 
     assert _work(db, evidence_slice=0).claim(50) == []
@@ -131,5 +172,9 @@ def test_the_statement_reads_the_partial_index_and_the_default_slice_is_bounded(
     """`ev_complete = false` is `autodedup_rt_fp_evidence_idx`'s predicate (an `is not true`
     would also take the NULL rows and the table with them)."""
     assert "f.ev_complete = false" in RT_EVIDENCE_ACTIVE_SQL
+    assert "and f.is_active" in RT_EVIDENCE_ACTIVE_SQL
+    assert "order by f.first_decided_at desc nulls last, f.listing_id" in RT_EVIDENCE_ACTIVE_SQL
+    assert "f.updated_at < now() - make_interval(mins => %(recheck_minutes)s::int)" in (
+        RT_EVIDENCE_ACTIVE_SQL)
     assert "limit %(limit)s" in RT_EVIDENCE_ACTIVE_SQL
     assert 0 < EVIDENCE_ACTIVE_SLICE <= 2000

@@ -357,6 +357,11 @@ EVIDENCE_SLICE: int = 400
 # buffers a listing 1,000 is ~12,000 buffers (~94 MB) a pass, and the oldest beyond it are
 # still the round-robin's.
 EVIDENCE_ACTIVE_SLICE: int = 1000
+# E980: how long a row the lane just wrote stays out of that arm. It bounds a row whose probe
+# disagrees with its decision for ever (an undecodable image stamped by the CLIP job) to one
+# re-decision an hour; an arrival's vectors land hours after its first decision, so the gate
+# does not delay the case the arm is for.
+EVIDENCE_ACTIVE_RECHECK_MINUTES: int = 60
 # How long after its FIRST decision a listing's photographs are still expected. The producers
 # are hourly (dHash at :20, CLIP at :40) and measured p90 4.51 h to a first tag, so 48 h is
 # ~10x the observed tail rather than a guess at it — and it is the bound on how long a merge
@@ -1621,8 +1626,9 @@ class SqlWork:
         # E980: the active arm first, so the share below takes its moved rows before the
         # round-robin's; the cursor still follows the round-robin's rows alone.
         active = self._query(RT_EVIDENCE_ACTIVE_SQL, {
-            "generation": self.generation,
-            "limit": self.evidence_active_slice}) if self.evidence_active_slice > 0 else []
+            "generation": self.generation, "limit": self.evidence_active_slice,
+            "recheck_minutes": EVIDENCE_ACTIVE_RECHECK_MINUTES,
+        }) if self.evidence_active_slice > 0 else []
         rows = self._query(RT_EVIDENCE_CANDIDATES_SQL, {
             "generation": self.generation, "after_id": int(after_id),
             "limit": self.evidence_slice, **horizon})
@@ -1652,11 +1658,6 @@ class SqlWork:
             released.extend((int(row[0]), int(row[1])))
         held_total = int(self._query(RT_EVIDENCE_HELD_COUNT_SQL, {
             "generation": self.generation, "reason": EVIDENCE_HOLD_REASON})[0][0] or 0)
-        # A short slice is the end of the sweep, so the cursor wraps — the same round-robin
-        # the drift sweep uses, and the reason a candidate cut by `share` is re-offered.
-        self._pending[CURSOR_EVIDENCE] = (
-            0 if len(rows) < self.evidence_slice
-            else max((int(row[0]) for row in rows), default=int(after_id)))
         self.windows["evidence"] = len(rows)
         self.evidence = {
             "candidates": len(rows), "active_candidates": len(active),
@@ -1671,6 +1672,24 @@ class SqlWork:
         for listing_id in moved[:share] + sorted(set(released)):
             if listing_id not in wanted and listing_id not in gone:
                 wanted.append(listing_id)
+        # A short slice is the end of the sweep, so the cursor wraps — the same round-robin
+        # the drift sweep uses. E980: once the active arm takes the share first, a round-robin
+        # row that moved can be CUT; the cursor then stops just before the first one cut (as
+        # E970's revive feed does), so the round-robin slows while the arm is busy instead of
+        # stepping past it for a whole cycle. A row the arm itself holds is re-offered by it.
+        arm_ids = {int(row[0]) for row in active}
+        taken = set(wanted)
+        robin = {int(row[0]) for row in rows}
+        cut = [listing_id for listing_id in moved
+               if listing_id in robin and listing_id not in taken
+               and listing_id not in gone and listing_id not in arm_ids]
+        if cut:
+            self._pending[CURSOR_EVIDENCE] = min(cut) - 1
+        else:
+            self._pending[CURSOR_EVIDENCE] = (
+                0 if len(rows) < self.evidence_slice
+                else max((int(row[0]) for row in rows), default=int(after_id)))
+        self.evidence["cut"] = len(cut)
         return [WorkItem(listing_id, "evidence", None, None, redecide=True)
                 for listing_id in wanted]
 
