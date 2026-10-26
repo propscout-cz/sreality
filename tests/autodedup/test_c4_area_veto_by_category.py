@@ -41,11 +41,12 @@ def pair(settings: Settings, cat_a: str, area_a: float, cat_b: str | None = None
     return pair_veto(a, b, settings)
 
 
-def test_w34_is_w31_plus_its_two_dials() -> None:
+def test_w34_is_w31_plus_its_three_dials() -> None:
     w31 = json.loads((SETTINGS / "w31.json").read_text(encoding="utf-8"))
     row = json.loads((SETTINGS / "w34.json").read_text(encoding="utf-8"))
     assert row.pop("area_reject_pct_by_category") == {"byt": 0.2, "dum": 0.2, "pozemek": 0.2}
     assert row.pop("area_veto_basis_floor_exempt") == {"realitymix": 0.15}
+    assert row.pop("content_key_town_grain") is True
     assert row == w31
     assert W31.area_reject_pct_by_category == {}
     assert C4.area_reject_pct == W31.area_reject_pct == 0.08

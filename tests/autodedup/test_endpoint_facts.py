@@ -252,10 +252,11 @@ def _worlds() -> list[tuple[Dataset, Settings]]:
         edges.listings[listing_id].price = (None if step % 4 == 0
                                             else 1_000_000.0 * (1 + step) ** 3)
     return [(_mixed_dataset(), _settings()), (quarter_grain_dataset(), QUARTER_GRAIN),
-            (edges, _settings()), (_dataset(), replace(_settings(), anchor_images=1))]
+            (edges, _settings()), (_dataset(), replace(_settings(), anchor_images=1)),
+            (_mixed_dataset(), replace(_settings(), content_key_town_grain=True))]
 
 
-@pytest.mark.parametrize("index", range(4))
+@pytest.mark.parametrize("index", range(5))
 def test_a_listing_s_posted_keys_give_back_its_probe_keys(index: int) -> None:
     """Every probe in `probe_keys`' own order, `phash` too when one anchor posted it; over two
     anchors or more the same bands, in another order."""
@@ -269,7 +270,7 @@ def test_a_listing_s_posted_keys_give_back_its_probe_keys(index: int) -> None:
         for probe in keyer.index.probes:
             want = list(dict.fromkeys(token for name, token in truth if name == probe))
             have = [token for name, token in got if name == probe]
-            bands = {token.partition("\x1f")[0] for token in have}
+            bands = {incremental.band_of(token) for token in have} if probe == "phash" else ()
             if probe != "phash" or len(bands) == len(have):
                 assert have == want, (fp.listing_id, probe)
             else:

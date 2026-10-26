@@ -18,6 +18,7 @@
     "certificate_kr_enabled": true,
     "cluster_disposition": false,
     "cluster_floor_spread": false,
+    "content_key_town_grain": true,
     "context_rule_enabled": true,
     "corroboration": "unit",
     "corroboration_body_containment": 0.8,

@@ -1066,6 +1066,14 @@ class Settings:
     # cities, which does not probe the town key, gets the same key at its quarter (`quarter`,
     # added last), so it still has an attribute path when both its home keys explode.
     attr_probe_town_grain: bool = False
+    # B (research experiments/absent_attribution.md section 4, V4): the text and phash posting
+    # keys carry the ad's town (`blocking.content_town`). Calibrated over the live scope, 2,548
+    # keys held over `max_block_size` postings on 2026-10-25, 79 % of them location-free text or
+    # phash keys, and an exploded key retrieves nothing: 95 of the 119 operator-SAME pairs in
+    # reach were lost that way. Town-scoped, 30 of them fall back under the limit, against at
+    # most 3-7 DIFFERENT pairs. A cross-town content match is lost (worth 0 in-scope SAME pairs).
+    # Moves the posting keys: switching it is a fresh `rt_seed`.
+    content_key_town_grain: bool = False
     # E301: floor and total_floors both stated on both sides and shifted by the SAME offset of
     # one are one storey-counting camp, not two facts. E301b (prepared, awaiting a ruling): the
     # opposite-sign shape too (floor +1, total -1: the ground floor counted in one number on

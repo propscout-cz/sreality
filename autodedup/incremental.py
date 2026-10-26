@@ -129,12 +129,18 @@ def stream_live(control: Mapping[str, Any], generation: str = GENERATION) -> boo
 _SEP: str = "\x1f"
 # E960: the dirty listings whose posted keys a pass holds at once while it retrieves them.
 KEY_CHUNK: int = 5000
-# The probes whose tokens lead with a band number (`simhash_bands`): text, and phash per anchor.
+# The probes whose tokens carry a band number (`simhash_bands`): text, and phash per anchor.
 _BANDED: frozenset[str] = frozenset({"text", "phash"})
 
 
 def key_token(key: Sequence[Any]) -> str:
     return _SEP.join("" if part is None else str(part) for part in key)
+
+
+def band_of(token: str) -> int:
+    """The band number of a text or phash token: its second-last part, whether or not
+    `content_key_town_grain` put the town before it."""
+    return int(token.rsplit(_SEP, 2)[-2])
 
 
 def _cut_key(cat_group: str | None, category_type: str | None) -> str:
@@ -484,7 +490,7 @@ class Keyer:
         `phash` over two anchor images or more, whose bands follow the images, which no posting
         keeps (`retrieve_posted` reads that probe loose)."""
         posted = sorted(set(posted), key=lambda key: (
-            key[0], int(key[1].partition(_SEP)[0]) if key[0] in _BANDED else 0, key[1]))
+            key[0], band_of(key[1]) if key[0] in _BANDED else 0, key[1]))
         quarter = any(probe == QUARTER_PROBE for probe, _token in posted)
         out: list[tuple[str, str]] = []
         for probe, token in posted:
@@ -683,7 +689,7 @@ def retrieve_posted(
     rule floor would have let in — the one case the lost order of its bands can reach — and the
     caller then reads its facts and `retrieve`s."""
     keys = keyer.probe_keys_of(posted)
-    bands = [token.partition(_SEP)[0] for probe, token in keys if probe == "phash"]
+    bands = [band_of(token) for probe, token in keys if probe == "phash"]
     return _fill(side.listing_id, side, keys, keyer, store, guards, settings, vetoed,
                  loose="phash" if len(bands) != len(set(bands)) else None)
 
