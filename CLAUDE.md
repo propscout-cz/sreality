@@ -168,36 +168,32 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     the condition filter; the derived `listings.{building,apartment}_condition_level` (1..5, NULL unscored) + the `listing_condition_scores`
     cache (keyed `(sreality_id, snapshot_id)`) are written together by `score_listing_condition` in one latest-wins transaction. **Ruling 2026-10-25 (ADR-0007): agents may call a NEW structured photo assessment (facets, cached per photo set, ≤10 properties per run; `docs/design/agent-platform/MVP.md`); the parked levels stay unread and Browse shows no facet until ruled.**
 15. **Multi-portal listings sit behind a thin `properties` parent (migration 091); grouping is out-of-band, never inline at insert (new rows land
-    `property_id` NULL; straggler-attach births a singleton — the worker lane every 30 s, and inside the daily sweep's loop).** Every merge, operator or engine, goes through the **link mechanics**: `toolkit/property_identity.py` is the single merge chokepoint,
-    two public writers (`merge_property_set` → a private `_merge_pair` per retired property; `detach_listings`, set-shaped) — it re-points `listings.property_id`,
-    soft-retires the loser, logs `property_merge_events` (read by `detach_listings`: each advert back to its origin or a refusal, e.g. `moved_since`; a split by letters sends one that cannot go
-    home to a new property (`new=`) and itself rules only `different`, across letters — a letter's join is a merge; a split is ONE call, and so is a group undo (`merge_group_id=`) — no replay; an operator merge rules `same` every negative pair it joins). A property shows ONE **canonical ad**, rank 1 of `property_canonical_listings` (migration 588): active first,
-    then with a map point, then the earliest first seen (active ads) / latest last seen (inactive ads), then portal trust, then id; a property's LOCATION is its **location ad** (`properties.location_listing_ref_id`: a map point first, then determined foreign, then the finest RÚIAN rung, ties by the canonical order — migration 635; every property surface reads it since 636);
-    its six amenities are a union (yes if any ad says yes). The chokepoint enforces **category compatibility** over the set's ads, a contentless record never counting (`CategoryClash`: sale≠rent, flat≠house — except the sanctioned cross-type PAIRS: any two of **dům, komerční, pozemek**, and **byt↔komerční**; pairs, never classes, so byt↔dům stays refused).
-    `db.presence_candidates` / `active_count` are source-scoped. **Merges are ordered by the operator, or by the AUTODEDUP engine (source `autodedup`, through `merge_property_set`, only inside `app_settings.autodedup_apply_scope`, never a split):
-    the worker's autodedup lane reconciles its `rt` groups (`autodedup/reconcile.py`); batch `mode=apply`/`unapply` stay until C2 (undo after C2: an open
-    operator decision, `roadmap/autodedup.md`); until then the brake is interval 0, then `mode=unapply` — its only detach besides `retire_legacy=1` (W8, E953:
-    undoes the removed engine's `source='auto'` merges per area under the live generation, `generation=rt,blocks=<area>`, dry run first; the only code that selects that output by source).** **The old automatic decision
-    engine was REMOVED wholesale (2026-08 "NEW DEDUP" cutoff)** — nothing else auto-merges; signal producers (pHash, CLIP, `/labeling`) stay live; the rebuild
-    is **simulation-first** (`docs/design/new-dedup/PROGRAM.md` + `CUTOFF.md`). **Never resurrect or consult the removed engine's code or design docs**; the
-    operator owns the apply scope (the one rollout control) and every no-merge ruling. Full detail: `docs/architecture.md` § rule 15.
-16. **Watchdog + Browse share one definition of "matches"**, rendered per relation: the Watchdog + every cohort compile
-    the registry in `toolkit/filter_compiler.compile_filter_where`; Browse's TS + RPCs are pinned per shared predicate only
-    (`sql_kind`, place plan, rule-23 measures, served predicate, portal rule). **Portal + broker filters select ADS, rows stay properties (MS19):**
-    the status is the PROPERTY's (the one every row is drawn with, mig 657); P asks for an ad on P in that status (`active_sources` under active, else `all_sources`); a broker likewise, both = one ad; estimation cohorts stay per-ad. `notification_dispatches` = the event table, append-only for its producers' events since W3 (653: a merge marks, never deletes); rows deleted on record: 204's orphan repair, the pre-W3 twin collapse, R2b's system rows (mig 656, after the backup labelled notifications-w6); account and collection deletion still cascade;
-    **three producers**: `watchdog` + `collection_monitor` (property-grain; 'new' once-ever, a price step per snapshot
-    (`event_ref`); a `monitor_since` anchor so a pre-membership change never fires) + `share` (not property-grain; recipient-stamped by `api/shares.py`;
-    collection mig 610 + pipeline mig 641 + dashboard mig 647; in-app and pushed, one push per sharer a day). Producers write facts, never routing (no channel, status or target stamping). **System alerts are no producer** (ruling R2b 2026-10-21): the health ladder's per-cell `ops_incidents` (mig 619) is told on Health + the canary e-mail only. **Delivery is separate from detection**: in-app = the row; external = `notification_deliveries` (push, one row per event × device, leased claims), `docs/design/notifications-push/PROGRAM.md`; mig 656 dropped `channel_sends`, the suppression/webhook tables, the matcher lease, the nine notification settings, `dedupe_key`, `message` and every routing column. **One identity index** `notification_dispatches_identity_uq` over `EVENT_IDENTITY` (mig 653), NULLS NOT DISTINCT, partial on `duplicate_of IS NULL`, decides "same event?" for producers (`ON CONFLICT`) and merges; a merge re-points and marks a duplicate, never deletes; a deleted watchdog is retired; `REACHABLE_SQL` hides both from every read, and `VISIBLE_SQL` (feed, badge, push) = `REACHABLE_SQL` minus a 'new' a merge withdrew. **A property is SERVED (Browse, map, stats, the watchdog) only when PUBLISHED:** SETTLED (`properties.settled_at`, stamped by the maintenance pass: first photo stored or none, and the engine done with its ads) or 6 h old (`toolkit/publication.py`, migs 668/669; detail by id stays ungated, as rule 25); a 'new' hides once a merge re-points it to a property first seen more than 24 h before the alert.
+    `property_id` NULL; straggler-attach births a singleton).** Every merge and split goes through ONE chokepoint, `toolkit/property_identity.py`
+    (`merge_property_set`; `detach_listings`, one call per split or group undo, never a replay), which refuses a `CategoryClash` (sanctioned PAIRS,
+    never classes). A property shows its **canonical ad** (`property_canonical_listings`) and stands at its **location ad** (`properties.location_listing_ref_id`);
+    `db.presence_candidates` / `active_count` are source-scoped. Only the operator or AUTODEDUP orders a merge (source `autodedup`, only inside
+    `app_settings.autodedup_apply_scope`, never a split; it detaches only to undo: `mode=unapply`, `retire_legacy=1`). **Never resurrect or consult the
+    removed 2026-08 decision engine's code or design docs** (only `retire_legacy=1` selects its `source='auto'` merges, to undo them); the signal
+    producers (pHash, CLIP, `/labeling`) stay live. The operator owns the apply scope (the one rollout control) and every no-merge ruling
+    (§ rule 15 in `docs/architecture.md`).
+16. **Watchdog + Browse share one definition of "matches"**, rendered per relation: the Watchdog + every cohort compile the registry in
+    `toolkit/filter_compiler.compile_filter_where`; Browse's TS + RPCs are pinned per shared predicate. Portal + broker filters select ADS, rows stay
+    properties, under the PROPERTY's status (estimation cohorts stay per-ad). **A property is SERVED (Browse, map, stats, the watchdog) only once PUBLISHED**
+    (`toolkit/publication.py`: `properties.settled_at`, or 6 h old); detail by id stays ungated. `notification_dispatches` is the event table, append-only
+    for its producers' events: three producers (`watchdog`; `collection_monitor`, anchored on `monitor_since` so a pre-membership change never fires;
+    `share`) write facts, never routing; system alerts are no producer. ONE identity index (`notification_dispatches_identity_uq` over `EVENT_IDENTITY`)
+    decides "same event?"; a merge re-points and marks a duplicate, never deletes; a deleted watchdog is retired; every read goes through `REACHABLE_SQL` /
+    `VISIBLE_SQL`. Delivery is separate from detection: in-app is the row, push is `notification_deliveries` (§ rule 16 in `docs/architecture.md`).
 17. **City-quality indexes are a normalized, operator-curated time series** (`curated_cities` + `city_index_*`
     + `city_population`) — a new index needs no migration; latest revision wins; agenda-gated to **Browse +
     Watchdog, and since 2026-10-25 to agents that RANK (ADR-0002) — never inside a price estimate** (the estimator never sees them, preserving deterministic estimates).
-18. **Operator curation is PROPERTY-grain and dedup-stable** (`collections`, `tags`, `property_notes`, all keyed on `property_id`; migration 202). Every
-    property-anchored operator-state row follows a merge through ONE ordered list, `PROPERTY_CARRIERS` (`toolkit/property_carriers.py`: curation
-    tables, `notification_dispatches` (one UPDATE: re-point, mark the survivor's twin `duplicate_of`, delete nothing), pipeline (rule #22), **dismissals** (mig 536: lift, never delete; a LIVE deal wins)), run inside the merge
-    transaction, so no such row orphans onto `merged_away`; every other column naming a property sits in `NOT_CARRIED` with its reason, and a census (offline
-    over migrations, live over the replayed schema) fails on a column in neither. A SET/APPEND table = one `CurationTable(...)` line; any other shape = one
-    adapter. Each merge writes one `property_merge_carries` row per curation row it moved or folded (alerts none); a detach routes it back (`route_curation`: a note with its ad, the rest by its carry rows, folds re-created; a split's user picks per item, copies allowed).
-    Collections carry monitoring (`monitoring_enabled`; no channel pick: mig 656); a collection may be SHARED read-only (`collection_shares` + notes the author marks `shared`, mig 610: reads widen, writes never); a PIPELINE share lets its recipient ACT AS the owner on the eleven curation tables (a read share: the board only; `X-Act-As` → `acting_account_ids()`, mig 641: the identity is replaced, never unioned; every delegated write stamped in `delegated_edits`). Writes go through the API.
+18. **Operator curation is PROPERTY-grain and dedup-stable** (`collections`, `tags`, `property_notes`, all keyed on `property_id`). Every
+    property-anchored operator-state row follows a merge through ONE ordered list, `PROPERTY_CARRIERS` (`toolkit/property_carriers.py`), inside the merge
+    transaction, so none orphans onto `merged_away`; every other column naming a property sits in `NOT_CARRIED` with its reason (a census fails on a column
+    in neither). A SET/APPEND table = one `CurationTable(...)` line, any other shape one adapter; dismissals lift, never delete (a LIVE deal wins). Every
+    move is recorded in `property_merge_carries`, which a detach routes back (`route_curation`). Sharing widens reads, never writes; a pipeline share lets
+    its recipient ACT AS the owner on the eleven curation tables (`X-Act-As` → `acting_account_ids()`: the identity is replaced, never unioned), every
+    delegated write stamped in `delegated_edits`. Writes go through the API (§ rule 18 in `docs/architecture.md`).
 19. **The scrape is cadence-split: a fast index-walk feeds an async batched detail-drain via `listing_detail_queue`** (migration 105).
     Index-walk (`--index-only`) walks the full index, `portal_runner.reconcile_sightings` (touch + enqueue) + end-gated nomination (rule #3); detail-drain
     (`--drain-only`) claims a bounded slice (`FOR UPDATE SKIP LOCKED`) and writes each flush in ONE `listing_write.write_listings` call.
@@ -214,20 +210,14 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     (touch every sighted known row, enqueue new + repriced; CI rail). The parser emits `source_url` (stored, never rebuilt;
     sreality: `scraper/sreality_url.py`). An unproven walk nominates nothing; its listings close only via gone fetches (rule #3);
     `supports_complete_walk` is posture. A per-portal need is a `Portal` seam, never an `if source ==`; seams + owed: `docs/architecture.md` § rule 21.
-22. **The deal pipeline is single-valued, property-grain operator state** (migration 205): `property_pipeline` holds ≤1 card per property per account at one
-    `pipeline_stages` stage (a TABLE, not an enum); "bookmark" == presence of a row at the entry stage. It has its OWN carrier in `PROPERTY_CARRIERS` (over
-    `toolkit/pipeline_identity.py`; TERMINAL-AWARE — a live stage always beats a closed one); the losing card is folded into the carry record (rule #18).
-    Writes go through the JWT-gated API (`tenant_conn`); every SPA card write (Browse cards, listing header, kanban drag + trash) is ONE hook,
-    `lib/usePipelineCard` (id per call), over ONE write policy, `lib/useOptimisticWrite` (`lib/pipelineCache`: patches + re-read list). `<PipelineMark>` +
-    `<PipelineStageMenu>` serve Browse + the listing header; the kanban (no mark; drag, own trash and confirm) and the extension (glyph, stage `<select>`) keep
-    their own shapes; owed: the board's grey `stageColor`, the extension's copied `stageBadge`/`stageAccent` (`roadmap/operator-workflow-track.md`). All MEAN
-    one thing: out → a click adds at the entry stage; in → move, or remove behind a two-step confirm. **Never a remove toggle** — close deals into a terminal
-    stage. Stages are per account: signup seeds the default board (migration 612), the account curates it via the API; a board is shared by account (`pipeline_shares`, mig 641: read or edit, an edit delegate manages cards AND stages as the owner, `require_acting_account_id`; sharing itself never delegates). The badge is
-    `pipeline_stages.code` (migration 377), never derived from `position` or the label. Browse's pipeline scope (`?pipeline[_excluded]=any|<stage ids>`) is a
-    curated-set scope judged in the database under the caller's RLS (migration 629, rule #18); a preset stores it like every filter, a shareable dashboard never (2026-10-22); the chip LOADS
-    A VIEW, the sidebar's Curation → Pipeline control modifies. That needs `category_type` nullable
-    (`?deal=any`, the "Vše" pill, `FilterDef.nullable`) — NULL has always meant "no constraint" to comparables,
-    the watchdog matcher and browse_stats; never an `any` enum member (it would reach the estimation agent).
+22. **The deal pipeline is single-valued, property-grain operator state**: `property_pipeline` holds ≤1 card per property per account at one
+    `pipeline_stages` stage (a per-account TABLE, not an enum); "bookmark" == a row at the entry stage. Its carrier (`toolkit/pipeline_identity.py`) is
+    TERMINAL-AWARE: a live stage always beats a closed one. Writes go through the JWT-gated API (`tenant_conn`); every SPA card write is ONE hook,
+    `lib/usePipelineCard`, over ONE write policy, `lib/useOptimisticWrite`. Every surface MEANS one thing (`<PipelineMark>` + `<PipelineStageMenu>`): out → a
+    click adds at the entry stage; in → move, or remove behind a two-step confirm. **Never a remove toggle** — close deals into a terminal stage. A board is
+    shared by account (`pipeline_shares`); sharing itself never delegates. The badge is `pipeline_stages.code`, never derived from `position` or the label.
+    Browse's pipeline scope is a lens a shareable dashboard never stores; its view runs over a neutral cohort, so `category_type` is nullable
+    (`FilterDef.nullable`, NULL = no constraint), never an `any` enum member, which would reach the estimation agent (§ rule 22 in `docs/architecture.md`).
 23. **One measure, one definition, one label — every per-m² figure resolves from
     `public.measure_price_per_m2` / `measure_price_per_m2_basis`** (migration 425; `toolkit/measures.py` +
     `frontend/src/lib/measure.ts` are its Python and SPA faces). No consumer re-derives `price / area` in SQL,
@@ -240,18 +230,14 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     a green run) and `FilterDef.basis`. Full rationale: `docs/architecture.md` § rule 23.
 24. **Folded into 25** (kept so the citations don't break — rules are never renumbered).
 25. **Location: one store, one claim shape, one label, one code predicate; a location PR that adds more than it
-    deletes says why in its body and needs the operator's ruling.** `listing_location` (27 columns, migs 501/566) is the ONLY place a listing's
-    location is stored — `listings`/`properties` carry no location VALUE (mig 508); properties carry one pointer (rule 15), and there is no serving flag and no
-    granularity floor — so a place read joins `ll on ll.listing_id = l.id`, casting `ll.geom::geography` for metres
-    (uncast = DEGREES). TWO producers write `location_claims`, both fingerprinted in SQL: the `claims_intake` lane
-    (payload, page body, the text lane's reading) and `operator_corrections`; ONE four-step resolver writes the
-    answer table; TWELVE claim types, ≤ 1 contract entry each, the `obec_name` entry mandatory and live; every
-    display is `location_display_label`, every place filter `<level>_id = any(codes)` at five levels. CONSUMERS
-    (browse/map/watchdog/dedup) serve a listing only when its location is resolved or determined foreign — ONE
-    predicate (`claims_common.SERVED_LOCATION_PREDICATE`, mig 514); detail-by-id surfaces stay reachable. Invariant:
-    **every served listing has a row, every active Czech listing has a town** (`location_town_coverage` red until
-    zero; foreign is a determination, never a default); a field is added only by operator ruling (katastr_kod
-    2026-09, ulice_id 2026-10, street_name 2026-10 as a sort key) or after a measured slowdown, only to `browse_list`. § Location data in `docs/architecture.md`.
+    deletes says why in its body and needs the operator's ruling.** `listing_location` is the ONLY place a listing's location is stored (`listings` /
+    `properties` carry no location value, a property one pointer, rule 15; no serving flag, no granularity floor): a place read joins `ll on ll.listing_id =
+    l.id`, casting `ll.geom::geography` for metres (uncast = DEGREES). Only `claims_intake` and `operator_corrections` write `location_claims`; ONE resolver
+    writes the answer; ≤ 1 contract entry per claim type, the `obec_name` entry mandatory; every display is `location_display_label`, every place filter
+    `<level>_id = any(codes)`. Consumers (browse/map/watchdog/dedup) serve a listing only when resolved or determined foreign
+    (`claims_common.SERVED_LOCATION_PREDICATE`); detail by id stays reachable. Invariant: **every served listing has a row, every active Czech listing has a
+    town** (`location_town_coverage`; foreign is a determination, never a default); a field is added only by operator ruling or after a measured slowdown,
+    only to `browse_list` (§ rule 25 and § Location data in `docs/architecture.md`).
 ## Coding conventions
 
 - Type hints on every signature. `requests` for HTTP, `psycopg` for DB — don't add `httpx` / `aiohttp` / `sqlalchemy` / `supabase-py` lightly (rule #7).
