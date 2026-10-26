@@ -1053,6 +1053,24 @@ select f.listing_id, f.ev_images, f.ev_phash, f.ev_clip, f.ev_tags
  limit %(limit)s
 """
 
+# E980: the round-robin above is fair to every candidate and fast to none. A widening fills it
+# with every listing it read in the last 48 h (90,984 candidates on 2026-10-26, 87,481 of them
+# only young), so one cycle of 400 a pass took ~50 h, longer than the horizon, and an ACTIVE
+# arrival decided before its CLIP vector waited it out (1,014 such on 2026-10-26). This arm
+# hands the newest active rows still marked incomplete to the probe on EVERY pass, ahead of
+# the round-robin. `ev_complete = false` is `autodedup_rt_fp_evidence_idx`'s own predicate, so
+# the arm reads the partial index (6,183 rows), not the table; a NULL row (before migration
+# 540) is left to the round-robin, which re-decides it once.
+RT_EVIDENCE_ACTIVE_SQL = """
+select f.listing_id, f.ev_images, f.ev_phash, f.ev_clip, f.ev_tags
+  from autodedup.rt_fp f
+ where f.generation = %(generation)s::text
+   and f.ev_complete = false
+   and f.is_active
+ order by f.first_decided_at desc nulls last, f.listing_id
+ limit %(limit)s
+"""
+
 # The probe itself: `public.images` by listing id, through `images_listing_id_idx`, and NOTHING
 # else. `clip_tagged_at` is the CLIP job's own stamp on the image row, so the vector and the
 # tags are read without joining `image_clip_embeddings` or `image_clip_tags` — measured on the
