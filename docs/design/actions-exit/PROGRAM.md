@@ -1,7 +1,7 @@
 # Actions exit: make the repo private, run recurring work where it is billed by use
 
-Status: APPROVED 2026-10-25 (rulings R1–R27 below), build starts with W0. Audit: 84 workflow files, 14 days
-of run data, two review panels (42 agents on the audit and first design; 20 agents on the from-scratch
+Status: APPROVED 2026-10-25 (rulings R1–R27 below); building: W0 and W1 PRs landing, W2's schema (#2042) and
+registry (#2023) landed, the runner (#2024) next. Audit: 84 workflow files, 14 days of run data, two review panels (42 agents on the audit and first design; 20 agents on the from-scratch
 design: four architects, three judges, twelve refuters). Per-file verdicts: [dispositions.md](dispositions.md).
 Decision record: [ADR 0001](../../adr/0001-scheduled-jobs-on-a-railway-job-runner.md).
 
@@ -102,7 +102,8 @@ production.
   DB-heavy jobs in one hour (a wait for a shared resource and the kill grace counted); the API's stuck-run
   cutoff (`STUCK_RUN_CUTOFF_MINUTES`) exceeds the longest walk timeout (the walks are the `scrape_runs`
   writers) plus `STUCK_RUN_GRACE_S`; the GitHub schedule set is exactly {verify_pipeline,
-  scrape_price_stats}; and, computed from the workflow files with no hand-kept ledger, every job runs on
+  scrape_price_stats} once the files still running a waiting job are set aside, so it tightens by itself
+  when the last one moves; and, computed from the workflow files with no hand-kept ledger, every job runs on
   exactly one host.
 - **One service** (`python -m scraper.job_runner`), **two identical replicas**, 8 GB / 4 vCPU each,
   `restartPolicy ALWAYS`, `drainingSeconds` 180, built from the same Dockerfile with `ARG EXTRAS=api,clip,geo`
@@ -115,8 +116,12 @@ production.
   renewed every 60 s, with self-fencing before expiry.
 - **Execution**: each job is a subprocess with its exact argv and `JOB_CPUS` exported (CLIP threads and the
   intake pool read it instead of `os.cpu_count()`); at `timeout_s` SIGTERM (a walk reads it as its
-  deadline), SIGKILL after a grace; the lease is released only after the child exits; exit code and peak
-  RSS are stamped; children carry `oom_score_adj +500` so an OOM kills the job, not the runner.
+  deadline), SIGKILL after a grace under `jobs.STUCK_RUN_GRACE_S` (600 s; the stuck-run cutoff and DB-heavy
+  hour censuses count it); a run the runner stopped at `timeout_s` is recorded `timeout`, never
+  `interrupted`, though the child exits 143 as on a deploy (an interrupted run is due again at once, so a
+  walk cut by its own timeout would restart at once); the lease is released only after the child exits;
+  exit code and peak RSS are stamped; children carry `oom_score_adj +500` so an OOM kills the job, not the
+  runner.
 - **Retries**: an interrupted run (deploy, kill) is due again at once and is claimed by the new deployment
   within seconds; exit 75 ("more remains") re-dues after 60 s and replaces every self-chain and PAT; failed
   runs back off exponentially, capped at the cadence; a lost run (lease expired) is re-run once, then backs off.
@@ -206,6 +211,8 @@ drift ~5 days a year earlier), else the PR re-phases `offset_s`. After merge, `g
 --json status,databaseId` shows any queued or running run of the deleted file; if one exists, the new row
 is paused (`job_runner pause --until`) past that run's timeout, since a queued run in a non-cancelling group
 can start after the merge. A new row's first slot comes after `now() + timeout_s`; rollback is a revert.
+The PR that moves the last waiting job (#2031, #2032 or #2033) also deletes the `github-actions-until-moved`
+host, its ratchet and the gone leavers in the registry test.
 **Gate (7 days):** every job cell green; ≥ 3 deploys survived with interrupted runs re-claimed within 1 min;
 one request run, one pause with expiry and one self-fence drill exercised; 0 unique-index violations, 0
 double holders; resolver and intake lanes green 48 h after the rename; `railway config plan` = 0 changes.
@@ -221,7 +228,9 @@ sibling` during a registry load instead of red.
 ### W4 — The walks
 In ascending duration, 2–3 per PR: web, maxima, bezrealitky, remax, mmreality, sreality (hourly, R24),
 realitymix, ceskereality, bazos, idnes last. Walk argv drops `--max-seconds`; the runner's SIGTERM at the
-walk timeout is the one budget.
+walk timeout is the one budget (this is #2029's "budget derived from the timeout"; the registry's argv census
+refuses a walk `--max-seconds`). A batch flips its walks' host without a portal name in `jobs.py`; a
+per-portal host attribute would be a third code-only per-portal value and needs a ruling.
 **Gate per walk (7 days):** pages, reached-end and nominations per cycle ± 10 %; 403/429 share from
 Railway ≤ the GitHub baseline; 0 `ended_at NULL` after ≥ 5 mid-walk deploys; proxy GB/day within its band;
 delisting and coverage cells unchanged; aggregate peak ≤ 70 % of a replica.
@@ -230,7 +239,10 @@ delisting and coverage cells unchanged; aggregate peak ≤ 70 % of a replica.
 `clip` every 15 min in the runner image (one unsharded run, exit 75 for backlogs; `clip_tag.yml`, the shard
 plumbing and the weights cache deleted); `ruian_load` moves to the runner (geo wheels in the build);
 price_stats ticks daily through `job_runner once` on GitHub so it has a row and a cell; `location_refetch`
-reads its due time from its row (`first_delay_seconds` deleted); a test pins the GitHub schedule set.
+reads its due time from its row (`first_delay_seconds` deleted). The test pinning the GitHub schedule set
+exists from W2 (#2023) and tightens by itself when the last waiting job moves; W5 adds its one workflow-reader
+rule, `scraper.job_runner once <job>` read as running `<job>`, without which the pairing census reads
+`scrape_price_stats.yml` as running no registry job and the timeout floor stops checking price_stats.
 **Gate:** CLIP lag p90 ≤ 45 min; a 100-image re-embed identical within fp32 tolerance; both GitHub-hosted
 jobs show cells; `location_refetch` runs once a day across ≥ 3 deploys; **the flip gate: 7 days of billed
 GitHub run-rate under 50,000 min/month.**
