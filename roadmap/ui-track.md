@@ -238,7 +238,9 @@ toolkit work.
 - **Done: small samples on request (2026-10-26, migration 678):** a cell under the n ≥ 5 floor carries `small`
   {min, max, mean, median}; the Stats tab's "Malé vzorky" switch (`small=1`, on every Stats tab) shows it in the
   table and box views on a tinted row (a column-dimension table tints only that cell), each number with its own
-  label; percentiles never under the floor; line and bar keep their gaps.
+  label; percentiles never under the floor; line and bar keep their gaps. Since migration 680 a dashboard
+  saves the switch (`show_small`): loading one sets it, changing it marks the dashboard edited, and the
+  property page's Okolí dashboard tab draws with its dashboard's setting.
 - **Done: dashboard duplicate + the sold-market lens (2026-10-22):** an own dashboard's menu offers "Duplikovat"
   (a new row as stored, "<name> (kopie)"); the Stats tab's "Vzorek" switch counts every chart over the Browse
   filter or over the sold market (inactive, seen from birth, dismissed included, 2–60 days on market) — a URL
