@@ -38,7 +38,7 @@ from pathlib import Path
 # statement and a `/*` inside a string literal does not swallow the file. Re-deriving
 # them is how this rail first went wrong — a naive scan matched the prose "ALTER POLICY
 # cannot lose TO authenticated" inside the migration's own header comment.
-from tests.test_migration_rls_grants import _statements, _strip_comments
+from tests.test_migration_rls_grants import _statements
 
 _ROOT = Path(__file__).resolve().parent.parent
 _MIGRATIONS = _ROOT / "migrations"

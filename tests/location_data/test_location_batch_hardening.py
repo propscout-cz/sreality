@@ -49,7 +49,7 @@ import psycopg
 import pytest
 import yaml
 
-from location_data import claims_intake, loader_db, ruian_boundaries as rb, ruian_load
+from location_data import claims_intake, loader_db, ruian_boundaries as rb
 from location_data.resolver import drain, resolve_db
 
 _ROOT = Path(__file__).resolve().parents[2]

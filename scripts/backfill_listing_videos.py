@@ -28,7 +28,7 @@ _VIDEO_PREDICATE = (
     r"'\.(mp4|mov|webm|avi|m4v|mkv|m3u8)$'"
 )
 
-_MOVE_SQL = f"""
+_MOVE_SQL = """
     WITH moved AS (
         INSERT INTO listing_videos (
             sreality_id, listing_id, source_url, sequence, storage_path,

@@ -485,6 +485,8 @@ def test_post_with_parent_run_id_populates_fk(client, monkeypatch):
     body = res.json()
     assert body["parent_run_id"] == 7
     assert body["rerun_reason"] == "force refetch"
+    inserted = state.inserts[1]
+    assert (inserted["parent_run_id"], inserted["rerun_reason"]) == (7, "force refetch")
 
 
 def test_post_with_mode_agent_does_not_500(client, monkeypatch):

@@ -17,7 +17,7 @@ account via `tenant_pool.require_account_id`. Doctrine:
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -25,9 +25,6 @@ from pydantic import BaseModel, Field
 from api import notifications as nf
 from api import tenant_pool
 from api.notifications import WatchdogFilterSpec
-
-if TYPE_CHECKING:
-    import psycopg
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 

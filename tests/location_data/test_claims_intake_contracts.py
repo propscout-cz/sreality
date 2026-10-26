@@ -9,7 +9,6 @@ not at INSERT time, and never at resolution time.
 from __future__ import annotations
 
 import ast
-from collections import Counter
 from pathlib import Path
 
 import pytest

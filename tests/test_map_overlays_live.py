@@ -20,7 +20,7 @@ import pytest
 
 from api.rent_map import insert_revision
 from scripts import ingest_map_overlays as overlays
-from tests._live_property import REQUIRED_DB, cur  # noqa: F401 -- `cur` is the fixture
+from tests._live_property import REQUIRED_DB
 from toolkit.rent_map import ParsedRentMap, RentValue
 
 pytestmark = REQUIRED_DB

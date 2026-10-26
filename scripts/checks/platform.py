@@ -27,7 +27,6 @@ from autodedup.incremental_lane import LEASE_LOST as _LEASE_LOST, STOPPING as _S
 from scripts.checks.clock import fetchall, fetchone
 from scripts.checks.common import (
     BEAT_FRESH_S as _BEAT_FRESH_S,
-    CLOCK_SQL as _CLOCK_SQL,
     WORKER as _WORKER,
     ago as _ago,
     as_utc as _as_utc,

@@ -1731,7 +1731,6 @@ def _location_intake_fast_sync() -> dict[str, Any]:
     Lazy import keeps location_data (selectolax, boto3) off the worker's startup path;
     module-attribute calls keep claims_intake.run patchable in tests. No try/except around
     run(): a raise is the signal, and _lane_loop records the failed pass."""
-    from location_data import claims_intake
 
     global _INTAKE_FAST_LAST_IDLE
 

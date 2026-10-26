@@ -331,7 +331,7 @@ def test_no_target_area_uses_price_czk_directly(monkeypatch):
 
 
 def test_route_wired_via_app(monkeypatch):
-    fastapi = pytest.importorskip("fastapi")
+    pytest.importorskip("fastapi")
     TestClient = pytest.importorskip("fastapi.testclient").TestClient
 
     from api import dependencies as deps

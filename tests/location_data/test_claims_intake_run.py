@@ -37,11 +37,8 @@ from location_data.claims_intake import (
     DEFAULT_MAX_SECONDS,
     MAX_BATCH_SIZE,
     MIN_BATCH_SIZE,
-    IntakeRefused,
     _row_from_record,
     extract_listing,
-    main,
-    stamp_mined_bodies,
     write_result,
 )
 from tests.location_data.claim_intake_fixtures import (

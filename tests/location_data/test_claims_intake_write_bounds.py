@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
 
 from location_data.claims_intake import (
     DEFAULT_MAX_CLAIM_VALUE_BYTES,

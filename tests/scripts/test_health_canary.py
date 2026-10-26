@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
-import pytest
 import yaml
 
 import scripts.health_canary as hc
