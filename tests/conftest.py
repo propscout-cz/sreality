@@ -60,7 +60,7 @@ def _stop_signal_untouched():
 
 @pytest.fixture()
 def cur() -> Iterator[Any]:
-    """A rollback-always cursor on TEST_DATABASE_URL; a module that defines its own `cur` overrides it."""
+    """A rollback-always cursor on `db_url()`; a module that defines its own `cur` overrides it."""
     import psycopg
 
     conn = psycopg.connect(

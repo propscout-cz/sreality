@@ -69,6 +69,7 @@ def client(monkeypatch):
 class _State:
     def __init__(self) -> None:
         self.inserts: dict[int, dict[str, Any]] = {}
+        self.insert_args: dict[int, dict[str, Any]] = {}
         self.next_id = 1
 
 
@@ -79,6 +80,7 @@ def _patch_persistence(monkeypatch) -> _State:
         rid = state.next_id
         state.next_id += 1
         state.inserts[rid] = dict(fields)
+        state.insert_args[rid] = dict(fields)
         return rid
 
     def fake_update(conn, run_id: int, **fields: Any) -> None:
@@ -485,7 +487,8 @@ def test_post_with_parent_run_id_populates_fk(client, monkeypatch):
     body = res.json()
     assert body["parent_run_id"] == 7
     assert body["rerun_reason"] == "force refetch"
-    inserted = state.inserts[1]
+    # The INSERT itself carries the FK (rule #12), not a later UPDATE of the row.
+    inserted = state.insert_args[1]
     assert (inserted["parent_run_id"], inserted["rerun_reason"]) == (7, "force refetch")
 
 

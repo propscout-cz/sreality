@@ -34,9 +34,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-# Reused rather than re-derived: both are dollar-quote aware, so a DO block stays one
-# statement and a `/*` inside a string literal does not swallow the file. Re-deriving
-# them is how this rail first went wrong — a naive scan matched the prose "ALTER POLICY
+# Reused rather than re-derived: `_statements` (which strips comments first) is dollar-quote
+# aware, so a DO block stays one statement and a `/*` inside a string literal does not swallow
+# the file. Re-deriving it is how this rail first went wrong — a naive scan matched the prose "ALTER POLICY
 # cannot lose TO authenticated" inside the migration's own header comment.
 from tests.test_migration_rls_grants import _statements
 
