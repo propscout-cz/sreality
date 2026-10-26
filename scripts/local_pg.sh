@@ -6,9 +6,13 @@
 #
 #   scripts/local_pg.sh install        # one-time: Postgres 17 + PostGIS + pgvector (~550 MB on Linux)
 #   scripts/local_pg.sh replay         # start the server, replay every migration into the template
-#   scripts/local_pg.sh test <args>    # fresh copy + pytest <args> with TEST_DATABASE_URL set
-#   scripts/local_pg.sh lanes          # fresh copy + every pytest lane of the CI job, in CI's order
-#   scripts/local_pg.sh start|stop|status|url
+#   scripts/local_pg.sh test <args>    # a private copy (ci_<pid>, dropped on exit) + pytest <args>
+#   scripts/local_pg.sh lanes          # a private copy + every pytest lane of the CI job, in CI's order
+#   scripts/local_pg.sh db <name>      # a long-lived copy named <name>; prints its TEST_DATABASE_URL
+#   scripts/local_pg.sh drop <name>    # drop such a copy
+#   scripts/local_pg.sh start|stop|status
+# Several sessions share one cluster: every run gets its own database, and replay (which rebuilds the
+# cluster, as roles are cluster-wide) refuses while any other copy exists; pass --force to override.
 set -euo pipefail
 
 OPT="$HOME/.local/opt"
@@ -27,7 +31,7 @@ else
 fi
 export PATH="$PG_BIN:$PATH"
 export PGHOST=127.0.0.1 PGPORT=$PORT PGUSER=postgres PGPASSWORD=postgres
-URL="postgresql://postgres:postgres@127.0.0.1:$PORT/ci"
+url_for() { echo "postgresql://postgres:postgres@127.0.0.1:$PORT/$1"; }
 
 die() { echo "local_pg: $*" >&2; exit 1; }
 
@@ -78,8 +82,25 @@ CONF
 
 psql_q() { psql -X -v ON_ERROR_STOP=1 -q "$@"; }
 
+copies() {
+  psql_q -At -d postgres -c "select datname from pg_database where not datistemplate and datname <> 'postgres'"
+}
+
+drop_stale_runs() {
+  local db
+  for db in $(copies | grep -E '^ci_[0-9]+$' || true); do
+    kill -0 "${db#ci_}" 2>/dev/null || psql_q -d postgres -c "drop database if exists $db with (force)"
+  done
+}
+
 replay() {
   # A fresh cluster, as CI's fresh container: roles are cluster-wide, so the bootstrap cannot re-run on an old one.
+  if [[ "${1:-}" != --force ]] && pg_ctl -D "$DATA/data" status >/dev/null 2>&1; then
+    drop_stale_runs
+    local others
+    others=$(copies | tr '\n' ' ')
+    [[ -z "$others" ]] || die "other copies live on this cluster (${others% }); a replay deletes them. Ask their owners, or: replay --force"
+  fi
   if [[ -f "$DATA/data/PG_VERSION" ]]; then
     pg_ctl -D "$DATA/data" status >/dev/null 2>&1 && pg_ctl -D "$DATA/data" -m fast stop >/dev/null
     rm -rf "$DATA/data"
@@ -107,16 +128,24 @@ replay() {
   echo "replayed $(ls migrations/*.sql | wc -l) migrations in $((SECONDS - started)) s (last: $(ls migrations/*.sql | LC_ALL=C sort | tail -1))"
 }
 
-fresh() {
+copy_of_template() {
   ensure_server
-  psql_q -d postgres -c "select 1 from pg_database where datname = 'replay' and datistemplate" | grep -q 1 \
+  psql_q -At -d postgres -c "select 1 from pg_database where datname = 'replay' and datistemplate" | grep -q 1 \
     || die "no replayed template; run: scripts/local_pg.sh replay"
-  psql_q -d postgres -c "drop database if exists ci with (force)" -c "create database ci template replay"
+  psql_q -d postgres -c "set client_min_messages = warning" -c "drop database if exists $1 with (force)" -c "create database $1 template replay"
+}
+
+# This run's private copy, dropped when the script exits (a crashed run's copy is dropped by the next replay).
+RUN_DB="ci_$$"
+fresh() {
+  drop_stale_runs
+  copy_of_template "$RUN_DB"
+  trap 'psql_q -d postgres -c "drop database if exists $RUN_DB with (force)" >/dev/null 2>&1 || true' EXIT
 }
 
 run_pytest() {
   cd "$REPO"
-  TEST_DATABASE_URL="$URL" DB_RAILS_REQUIRED=1 python3 -m pytest "$@"
+  TEST_DATABASE_URL="$(url_for "$RUN_DB")" DB_RAILS_REQUIRED=1 python3 -m pytest "$@"
 }
 
 lanes() {
@@ -126,7 +155,7 @@ lanes() {
   while IFS= read -r lane; do
     echo ">>> $lane"
     # bash -c keeps the workflow's own quoting (e.g. -k "not migration_633").
-    TEST_DATABASE_URL="$URL" DB_RAILS_REQUIRED=1 bash -c "python3 -m $lane" </dev/null || failed+=("$lane")
+    TEST_DATABASE_URL="$(url_for "$RUN_DB")" DB_RAILS_REQUIRED=1 bash -c "python3 -m $lane" </dev/null || failed+=("$lane")
   done < <(python3 - <<'PY'
 import yaml
 steps = yaml.safe_load(open(".github/workflows/migrations.yml"))["jobs"]["schema-and-sql"]["steps"]
@@ -142,12 +171,15 @@ PY
 
 case "${1:-}" in
   install) install ;;
-  replay) replay ;;
+  replay) replay "${2:-}" ;;
   test) shift; fresh; run_pytest "$@" ;;
   lanes) lanes ;;
   start) ensure_server; echo "running on port $PORT" ;;
   stop) pg_ctl -D "$DATA/data" -m fast stop ;;
   status) pg_ctl -D "$DATA/data" status ;;
-  url) echo "$URL" ;;
-  *) sed -n '2,11p' "$0"; exit 2 ;;
+  db) [[ "${2:-}" =~ ^[a-z][a-z0-9_]*$ && "$2" != replay && "$2" != postgres ]] || die "usage: db <name> (lowercase, not replay/postgres)"
+      copy_of_template "$2"; url_for "$2" ;;
+  drop) [[ "${2:-}" =~ ^[a-z][a-z0-9_]*$ && "$2" != replay && "$2" != postgres ]] || die "usage: drop <name>"
+        ensure_server; psql_q -d postgres -c "drop database if exists $2 with (force)" ;;
+  *) sed -n '2,/^set -euo/p' "$0" | sed '$d'; exit 2 ;;
 esac
