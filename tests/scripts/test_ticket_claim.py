@@ -26,28 +26,37 @@ def at(seconds: float) -> datetime:
     return T0 + timedelta(seconds=seconds)
 
 
-def marker(action: str, session: str, claim: int | None = None) -> str:
-    tail = f" claim={claim}" if claim is not None else ""
+def marker(action: str, session: str, claim: int | None = None, sid: str | None = None) -> str:
+    tail = (f" sid={sid}" if sid else "") + (f" claim={claim}" if claim is not None else "")
     return f"<!-- ticket-claim:v1 action={action} session={session}{tail} -->\nhuman text"
 
 
-def said(cid: int, session: str, action: str = "claim", t: float = 0, assoc: str = "OWNER") -> tc.Event:
-    return tc.Event("commented", at(t), cid, marker(action, session), assoc)
+def said(
+    cid: int, session: str, action: str = "claim", t: float = 0, assoc: str = "OWNER", sid: str | None = None
+) -> tc.Event:
+    return tc.Event("commented", at(t), cid, marker(action, session, sid=sid), assoc)
 
 
 def pr(number: int, state: str = "OPEN") -> tc.ClosingPr:
     return tc.ClosingPr(number, state, draft=True)
 
 
+def xref(source: int, t: float) -> tc.Event:
+    return tc.Event("cross-referenced", at(t), source=source)
+
+
 def holder(events: list[tc.Event], now: float, closing: list[tc.ClosingPr] | None = None) -> str | None:
     h = tc.fold(events, at(now), closing or []).holder
-    return h.session if h else None
+    return h.who.name if h else None
 
 
 def test_marker_is_the_first_line_only() -> None:
-    assert tc.parse_marker(marker("claim", "sreality-82")) == ("claim", "sreality-82")
-    assert tc.parse_marker(marker("renew", "sreality-82", 7).replace("\n", "\r\n")) == ("renew", "sreality-82")
-    assert tc.parse_marker("<!-- ticket-claim:v1 action=release session=s1 claim=9 -->") == ("release", "s1")
+    s82 = tc.Session("sreality-82")
+    assert tc.parse_marker(marker("claim", "sreality-82")) == ("claim", s82)
+    assert tc.parse_marker(marker("renew", "sreality-82", 7).replace("\n", "\r\n")) == ("renew", s82)
+    assert tc.parse_marker(marker("renew", "sreality-82", 7, "81a8cddd")) == ("renew", tc.Session("sreality-82", "81a8cddd"))
+    assert tc.parse_marker("<!-- ticket-claim:v1 action=release session=s1 claim=9 -->") == ("release", tc.Session("s1"))
+    assert tc.parse_marker(marker("claim", "sreality-82", sid="81A8CDDD")) is None
     assert tc.parse_marker("hello\n" + marker("claim", "sreality-82")) is None
     assert tc.parse_marker(marker("claim", "Sreality-82")) is None
     assert tc.parse_marker(marker("steal", "sreality-82")) is None
@@ -57,14 +66,14 @@ def test_marker_is_the_first_line_only() -> None:
 
 def test_a_same_second_race_is_decided_by_the_lower_comment_id() -> None:
     v = tc.fold([said(101, "sreality-0f"), said(100, "sreality-82")], at(20), [])
-    assert v.holder is not None and (v.holder.session, v.holder.claim_id) == ("sreality-82", 100)
-    assert v.losses == [tc.Loss("sreality-0f", 101, "sreality-82", 100)]
+    assert v.holder is not None and (v.holder.who.name, v.holder.claim_id) == ("sreality-82", 100)
+    assert v.losses == [tc.Loss(tc.Session("sreality-0f"), 101, "sreality-82", 100)]
 
 
 def test_a_lapsed_claim_is_taken_over_and_its_late_renew_ignored() -> None:
     events = [said(100, "a"), said(200, "b", t=5 * HOUR), said(201, "a", "renew", t=5 * HOUR + 1)]
     v = tc.fold(events, at(5 * HOUR + 60), [])
-    assert v.holder is not None and v.holder.session == "b" and v.losses == []
+    assert v.holder is not None and v.holder.who.name == "b" and v.losses == []
 
 
 def test_a_claim_lapses_after_ttl_without_activity() -> None:
@@ -81,7 +90,7 @@ def test_only_trusted_associations_count() -> None:
 def test_release_frees_the_ticket_and_the_loser_does_not_inherit() -> None:
     events = [said(100, "a"), said(101, "b"), said(102, "a", "release", t=60)]
     v = tc.fold(events, at(120), [])
-    assert v.holder is None and [loss.session for loss in v.losses] == ["b"]
+    assert v.holder is None and [loss.who.name for loss in v.losses] == ["b"]
     assert holder([*events, said(103, "b", t=90)], 120) == "b"
 
 
@@ -111,17 +120,44 @@ def test_only_a_closing_pr_cross_reference_extends_the_claim() -> None:
 
 
 def test_an_open_closing_pr_holds_past_the_ttl() -> None:
-    xref = tc.Event("cross-referenced", at(HOUR), source=2044)
-    assert holder([said(100, "a"), xref], 9 * HOUR, [pr(2044)]) == "a"
-    assert holder([said(100, "a"), xref], 9 * HOUR, [pr(2044, "CLOSED")]) is None
+    assert holder([said(100, "a"), xref(2044, HOUR)], 9 * HOUR, [pr(2044)]) == "a"
+    assert holder([said(100, "a"), xref(2044, HOUR)], 9 * HOUR, [pr(2044, "CLOSED")]) is None
 
 
 def test_an_open_closing_pr_holds_against_a_later_claim() -> None:
-    events = [said(100, "a"), tc.Event("cross-referenced", at(HOUR), source=2044), said(300, "b", t=6 * HOUR)]
+    events = [said(100, "a"), xref(2044, HOUR), said(300, "b", t=6 * HOUR)]
     v = tc.fold(events, at(6 * HOUR + 60), [pr(2044)])
-    assert v.holder is not None and v.holder.session == "a"
-    assert [loss.session for loss in v.losses] == ["b"]
+    assert v.holder is not None and v.holder.who.name == "a"
+    assert [loss.who.name for loss in v.losses] == ["b"]
     assert holder(events, 6 * HOUR + 60, [pr(2044, "CLOSED")]) == "b"
+
+
+def test_an_open_pr_holds_only_a_claim_it_referenced_in_time_and_a_later_event_agrees() -> None:
+    assert holder([said(100, "a")], 9 * HOUR, [pr(7)]) is None
+    assert holder([said(100, "a"), tc.Event("labeled", at(5 * HOUR))], 9 * HOUR, [pr(7)]) is None
+    assert holder([said(100, "a"), xref(7, 5 * HOUR)], 9 * HOUR, [pr(7)]) is None
+    assert holder([said(100, "a"), said(200, "b", t=6 * HOUR)], 9 * HOUR, [pr(7)]) == "b"
+
+
+def test_a_claim_made_after_an_open_pr_referenced_the_ticket_is_held_by_it() -> None:
+    assert holder([xref(7, 0), said(100, "a", t=60)], 9 * HOUR, [pr(7)]) == "a"
+    assert holder([xref(7, 0), said(100, "a", t=60)], 9 * HOUR, [pr(7, "MERGED")]) is None
+
+
+def test_a_resumed_session_keeps_its_claim_under_a_new_name_and_a_reused_name_does_not() -> None:
+    events = [said(100, "sreality-0f", sid="e6b78d33"), said(101, "sreality-0f", sid="2429f40d", t=60)]
+    v = tc.fold([*events, said(102, "sreality-e9", "renew", t=3 * HOUR, sid="e6b78d33")], at(6 * HOUR), [])
+    assert v.holder is not None and v.holder.who == tc.Session("sreality-0f", "e6b78d33")
+    assert v.losses == [tc.Loss(tc.Session("sreality-0f", "2429f40d"), 101, "sreality-0f", 100)]
+    assert holder([*events, said(102, "sreality-e9", "release", t=60, sid="e6b78d33")], 120) is None
+    assert holder([*events, said(102, "sreality-0f", "release", t=60)], 120) is None
+
+
+def test_two_sessions_are_one_by_id_when_both_carry_one_else_by_name() -> None:
+    assert tc.Session("a", "11111111").same(tc.Session("b", "11111111"))
+    assert not tc.Session("a", "11111111").same(tc.Session("a", "22222222"))
+    assert tc.Session("a", "11111111").same(tc.Session("a"))
+    assert not tc.Session("a").same(tc.Session("b", "11111111"))
 
 
 def test_a_withdrawn_claim_does_not_count() -> None:
@@ -136,16 +172,19 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path / ".claude" / "sessions" / "4242.json"
 
 
-def test_session_name_comes_from_as_then_the_sessions_file(home: Path) -> None:
-    assert tc.session_name(None) is None
-    home.write_text(json.dumps({"name": "sreality-82", "nameSource": "derived"}))
-    assert tc.session_name(None) == "sreality-82"
-    assert tc.session_name("sreality-0f") == "sreality-0f"
-    assert tc.session_name("Not A Name") is None
-    home.write_text(json.dumps({"name": "Bad Name"}))
-    assert tc.session_name(None) is None
-    home.write_text("not json")
-    assert tc.session_name(None) is None
+def test_the_session_comes_from_as_then_the_sessions_file(home: Path) -> None:
+    assert tc.session(None) is None
+    home.write_text(json.dumps({"name": "sreality-82", "sessionId": "81a8cddd-f73f-4868-bd34-8958ac350b5d"}))
+    assert tc.session(None) == tc.Session("sreality-82", "81a8cddd")
+    assert tc.session("sreality-0f") == tc.Session("sreality-0f")
+    assert tc.session("Not A Name") is None
+    home.write_text(json.dumps({"name": "sreality-82"}))
+    assert tc.session(None) == tc.Session("sreality-82")
+    home.write_text(json.dumps({"name": "Bad Name", "sessionId": "81a8cddd"}))
+    assert tc.session(None) is None
+    for text in ("not json", "[]"):
+        home.write_text(text)
+        assert tc.session(None) is None
 
 
 def test_an_unknown_session_exits_2_before_any_github_call(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -168,6 +207,7 @@ class FakeGitHub:
         self.kind = kind
         self.timeline: list[dict] = []
         self.closing: list[dict] = []
+        self.listing: list[dict] = []
         self.next_id = 1000
         self.posts: list[str] = []
         self.patches: dict[int, str] = {}
@@ -202,9 +242,10 @@ class FakeGitHub:
         if args[1] == "graphql":
             nodes = {"nodes": self.closing}
             return 0, json.dumps({"data": {"repository": {"issue": {"closedByPullRequestsReferences": nodes}}}}), ""
-        if "/timeline?" in args[1]:
+        if "/timeline?" in args[1] or "/issues?" in args[1]:
             page = int(parse_qs(urlsplit(args[1]).query)["page"][0])
-            return 0, json.dumps(self.timeline[(page - 1) * 100: page * 100]), ""
+            rows = self.timeline if "/timeline?" in args[1] else self.listing
+            return 0, json.dumps(rows[(page - 1) * 100: page * 100]), ""
         if args[1:3] == ["-X", "POST"]:
             body = json.loads(stdin or "")["body"]
             self.posts.append(body)
@@ -224,13 +265,18 @@ def gh(monkeypatch: pytest.MonkeyPatch) -> FakeGitHub:
     fake = FakeGitHub()
     monkeypatch.setattr(tc, "_run", fake)
     monkeypatch.setattr(tc.time, "sleep", fake.sleep)
+    monkeypatch.setattr(tc, "current_branch", lambda: "feature/mine")
     return fake
+
+
+def open_pr(branch: str) -> dict:
+    return {"number": 2052, "state": "OPEN", "isDraft": True, "headRefName": branch}
 
 
 def test_claiming_a_free_ticket_posts_settles_and_wins(gh: FakeGitHub) -> None:
     assert tc.main(["claim", "#5", "--as", "sreality-82"]) == tc.OK
     assert gh.sleeps == [tc.SETTLE_SECONDS]
-    assert len(gh.posts) == 1 and tc.parse_marker(gh.posts[0]) == ("claim", "sreality-82")
+    assert len(gh.posts) == 1 and tc.parse_marker(gh.posts[0]) == ("claim", tc.Session("sreality-82"))
     assert gh.patches == {}
 
 
@@ -239,21 +285,31 @@ def test_a_rival_with_a_lower_id_wins_the_settle_and_we_withdraw(gh: FakeGitHub)
     gh.on_sleep = lambda: gh.comment(marker("claim", "sreality-0f"), t=T0, cid=499)
     assert tc.main(["claim", "5", "--as", "sreality-82"]) == tc.TAKEN
     assert list(gh.patches) == [500]
-    assert tc.parse_marker(gh.patches[500]) == ("withdrawn", "sreality-82")
+    assert tc.parse_marker(gh.patches[500]) == ("withdrawn", tc.Session("sreality-82"))
     assert "**sreality-0f** claimed first (comment 499)" in gh.patches[500]
 
 
-def test_a_second_claim_by_the_same_session_name_withdraws(gh: FakeGitHub) -> None:
+def test_an_earlier_claim_under_a_reused_name_wins_the_settle(gh: FakeGitHub, home: Path) -> None:
+    home.write_text(json.dumps({"name": "sreality-0f", "sessionId": "f311fba6-0000"}))
     gh.next_id = 500
-    gh.on_sleep = lambda: gh.comment(marker("claim", "sreality-82"), t=T0, cid=499)
-    assert tc.main(["claim", "5", "--as", "sreality-82"]) == tc.TAKEN
+    gh.on_sleep = lambda: gh.comment(marker("claim", "sreality-0f", sid="e6b78d33"), t=T0, cid=499)
+    assert tc.main(["claim", "5"]) == tc.TAKEN
     assert list(gh.patches) == [500]
+    assert tc.parse_marker(gh.posts[0]) == ("claim", tc.Session("sreality-0f", "f311fba6"))
 
 
-def test_a_claim_that_never_shows_up_asks_for_a_rerun(gh: FakeGitHub) -> None:
-    gh.on_sleep = lambda: gh.timeline.clear()
+def test_a_claim_that_never_shows_up_asks_for_a_rerun_which_keeps_the_first_claim(gh: FakeGitHub) -> None:
+    hidden: list[dict] = []
+
+    def hide() -> None:
+        hidden.extend(gh.timeline)
+        gh.timeline.clear()
+
+    gh.on_sleep = hide
     assert tc.main(["claim", "5", "--as", "sreality-82"]) == tc.GH_ERROR
-    assert gh.patches == {}
+    gh.on_sleep = lambda: gh.timeline.extend(hidden)
+    assert tc.main(["claim", "5", "--as", "sreality-82"]) == tc.OK
+    assert len(gh.posts) == 2 and gh.patches == {}
 
 
 def test_a_ticket_held_by_another_session_is_refused_without_a_write(gh: FakeGitHub) -> None:
@@ -265,12 +321,30 @@ def test_a_ticket_held_by_another_session_is_refused_without_a_write(gh: FakeGit
     assert tc.main(["status", "5", "--as", "sreality-0f"]) == tc.OK
 
 
-def test_a_ticket_an_open_pr_closes_is_refused(gh: FakeGitHub, capsys: pytest.CaptureFixture[str]) -> None:
-    gh.closing = [{"number": 2052, "state": "OPEN", "isDraft": True}]
+def test_a_ticket_an_open_pr_from_another_branch_closes_is_refused(
+    gh: FakeGitHub, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gh.closing = [open_pr("feature/other")]
     assert tc.main(["claim", "5", "--as", "sreality-82"]) == tc.TAKEN
     assert gh.posts == []
     assert tc.main(["status", "5"]) == tc.TAKEN
-    assert "#5 unclaimed; draft PR #2052 closes it" in capsys.readouterr().out
+    assert "#5 unclaimed; draft PR #2052 closes it  " in capsys.readouterr().out
+
+
+def test_claim_on_the_branch_of_the_open_pr_adopts_the_ticket_and_the_pr_holds_it(
+    gh: FakeGitHub, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gh.closing = [open_pr("feature/mine")]
+    gh.timeline.append(
+        {"event": "cross-referenced", "created_at": "2026-10-26T09:00:00Z", "source": {"issue": {"number": 2052}}}
+    )
+    assert tc.main(["status", "5"]) == tc.OK
+    assert "#5 unclaimed; draft PR #2052 closes it (your branch)" in capsys.readouterr().out
+    assert tc.main(["claim", "5", "--as", "sreality-82"]) == tc.OK
+    assert len(gh.posts) == 1 and gh.patches == {}
+    gh.now += timedelta(hours=9)
+    assert tc.main(["status", "5", "--as", "sreality-0f"]) == tc.TAKEN
+    assert "held by sreality-82 since 2026-10-26 10:00Z" in capsys.readouterr().out
 
 
 def test_a_rerun_withdraws_our_claim_that_lost(gh: FakeGitHub) -> None:
@@ -304,7 +378,7 @@ def test_release_posts_only_for_the_holder(gh: FakeGitHub) -> None:
     assert tc.main(["release", "5", "--as", "sreality-82"]) == tc.OK
     assert gh.posts == []
     assert tc.main(["release", "5", "--as", "sreality-0f", "--reason", "blocked on a ruling"]) == tc.OK
-    assert tc.parse_marker(gh.posts[0]) == ("release", "sreality-0f") and "blocked on a ruling" in gh.posts[0]
+    assert tc.parse_marker(gh.posts[0]) == ("release", tc.Session("sreality-0f")) and "blocked on a ruling" in gh.posts[0]
     assert tc.main(["status", "5", "--as", "sreality-82"]) == tc.OK
 
 
@@ -315,6 +389,32 @@ def test_the_timeline_is_read_past_its_first_page(gh: FakeGitHub) -> None:
     assert tc.main(["status", "5"]) == tc.TAKEN
 
 
-def test_a_github_failure_exits_4(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_github_failure_or_a_crash_exits_4_never_1(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tc, "_run", lambda args, stdin=None: (1, "", "gh: Bad Gateway (HTTP 502)"))
     assert tc.main(["status", "5"]) == tc.GH_ERROR
+
+    def no_gh(args: list[str], stdin: str | None = None) -> tuple[int, str, str]:
+        raise FileNotFoundError("gh")
+
+    monkeypatch.setattr(tc, "_run", no_gh)
+    assert tc.main(["status", "5"]) == tc.GH_ERROR
+
+
+def listed(number: int, blocked: int = 0, children: int = 0, labels: tuple[str, ...] = ("ready-for-agent",)) -> dict:
+    return {
+        "number": number, "labels": [{"name": name} for name in labels],
+        "issue_dependencies_summary": {"blocked_by": blocked}, "sub_issues_summary": {"total": children},
+    }
+
+
+def test_the_frontier_lists_free_unblocked_leaf_tickets_only(gh: FakeGitHub, capsys: pytest.CaptureFixture[str]) -> None:
+    gh.listing = [listed(2007, children=29), listed(8, blocked=1), listed(9, labels=("gate",)), listed(5)]
+    assert tc.main(["status", "--frontier"]) == tc.OK
+    assert capsys.readouterr().out.splitlines() == ["#5 free  W9: a ticket"]
+
+
+def test_the_frontier_fails_closed_without_the_blocker_count(gh: FakeGitHub) -> None:
+    row = listed(5)
+    del row["issue_dependencies_summary"]
+    gh.listing = [row]
+    assert tc.main(["status", "--frontier"]) == tc.GH_ERROR

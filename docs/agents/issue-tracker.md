@@ -49,13 +49,13 @@ Run `gh issue view <number> --json number,title,body,state,labels,comments`.
 
 Every session posts as the same GitHub account, so an assignee cannot tell sessions apart. A **ticket claim** does: a marker comment naming the session, which `scripts/ticket_claim.py` writes and judges (the first claim made while none is live wins). It is not a lease; in `GLOSSARY.md` a Lease is the engine's lock.
 
-- **Claim before any work on a ticket**, whether you picked it, the user named it or `/implement` / `/implement-spec` reached it: `python3 -m scripts.ticket_claim claim <n>`. Exit 0 makes it yours; on any other exit, do what the script prints.
+- **Claim before any work on a ticket**, whether you picked it, the user named it or `/implement` / `/implement-spec` reached it: `python3 -m scripts.ticket_claim claim <n>` from the repo root. Exit 0 makes it yours; on any other exit, do what the script prints. A checkout without the script exits 1 with `No module named`: run `python3 <a checkout of main>/scripts/ticket_claim.py` instead.
 - **Claim again before your first push and before you open the PR.** This confirms you still hold the ticket and renews an old claim. If it now exits 1, stop and tell the user.
-- **A claim lapses 4 hours after the ticket's last activity**: a claim or renewal, a commit naming `#<n>`, a PR that closes `#<n>`. An open PR that closes the ticket holds it, so open the draft PR early.
+- **A claim lapses 4 hours after the ticket's last activity**: a claim or renewal, a commit naming `#<n>`, a PR that closes `#<n>`. An open PR that closes the ticket holds it, so open the draft PR early. On that PR's branch, `claim` makes a ticket nobody holds yours.
+- **A PR says `Closes #<n>` only for tickets you hold.** Before opening one that closes several (the `/implement-spec` integration PR), claim each of them.
 - **Release when you stop without finishing**: `python3 -m scripts.ticket_claim release <n> --reason "<why>"`. Closing a ticket ends its claim; a reopened ticket is claimed afresh.
-- **Subagents share their session's name**, so the orchestrating session claims each ticket before handing it over.
+- **A claim belongs to the session id**: subagents share it, so the orchestrating session claims each ticket before handing it over, and a resumed session keeps it under its new name. `--as <name>` acts by name alone, for a session the script cannot identify (exit 2) or to take over a ticket at the user's word.
 - The script alone writes claim comments; leave them as written and the assignee empty.
-- After a restart that renamed your session: `release <n> --as <old name>`, then claim.
 - `status` shows who holds what (`--help`).
 
 ## Post-merge gates are their own tickets
@@ -98,7 +98,7 @@ This is what `/implement-spec` means by "the way the issue tracker closes work",
 
 - **Build ticket**: its PR body says `Closes #<n>`.
 - **Gate ticket**: a measurement comment, then `gh issue close`; a PR touching it says `Refs #<gate>`.
-- **Spec**: closes after its last child, gates included. While a gate ticket under it is open, a PR says `Refs #<spec>`, and whoever closes the last gate closes the spec.
+- **Spec**: its tickets, gates included, are its sub-issues, which keeps it off `status --frontier`. It closes after its last child. While a gate ticket under it is open, a PR says `Refs #<spec>`, and whoever closes the last gate closes the spec.
 
 ## Wayfinding operations
 

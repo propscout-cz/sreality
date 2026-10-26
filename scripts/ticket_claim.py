@@ -20,24 +20,39 @@ RENEW_AFTER = timedelta(hours=2)
 SETTLE_SECONDS = 15
 TRUSTED = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 SESSION_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
+SID_RE = re.compile(r"[0-9a-f]{8}")
 MARKER_RE = re.compile(
     r"<!-- ticket-claim:v1 action=(claim|renew|release|withdrawn) "
-    r"session=([a-z0-9][a-z0-9-]{0,39})(?: claim=\d+)? -->(?:\r?\n|$)"
+    r"session=([a-z0-9][a-z0-9-]{0,39})(?: sid=([0-9a-f]{8}))?(?: claim=\d+)? -->(?:\r?\n|$)"
 )
 REPO = "repos/{owner}/{repo}"
 CLOSING_QUERY = (
     "query($owner:String!,$name:String!,$n:Int!){repository(owner:$owner,name:$name){issue(number:$n)"
-    "{closedByPullRequestsReferences(first:20,includeClosedPrs:true){nodes{number state isDraft}}}}}"
+    "{closedByPullRequestsReferences(first:20,includeClosedPrs:true){nodes{number state isDraft headRefName}}}}}"
 )
 OK, TAKEN, USAGE, NOT_OPEN, GH_ERROR = 0, 1, 2, 3, 4
 EXIT_HELP = (
-    "exit codes: 0 yours or free, 1 another session holds it / claimed first / an open PR closes it, "
-    "2 usage or unknown session name, 3 closed / a PR / not found, 4 GitHub error"
+    "exit codes: 0 yours or free, 1 another session holds it / claimed first / an open PR from another branch "
+    "closes it, 2 usage or unknown session name, 3 closed / a PR / not found, 4 GitHub or other error"
 )
 
 
 class GhError(Exception):
     """A gh call failed."""
+
+
+@dataclass(frozen=True)
+class Session:
+    name: str
+    sid: str | None = None
+
+    def same(self, other: Session) -> bool:
+        """One session: the same id when both carry one (a resumed session gets a new name), else the same name."""
+        return self.sid == other.sid if self.sid and other.sid else self.name == other.name
+
+    def mark(self) -> str:
+        """The marker's session fields."""
+        return f"session={self.name}" + (f" sid={self.sid}" if self.sid else "")
 
 
 @dataclass(frozen=True)
@@ -55,11 +70,12 @@ class ClosingPr:
     number: int
     state: str
     draft: bool
+    branch: str = ""
 
 
 @dataclass
 class Holder:
-    session: str
+    who: Session
     claim_id: int
     since: datetime
     last: datetime
@@ -68,7 +84,7 @@ class Holder:
 
 @dataclass(frozen=True)
 class Loss:
-    session: str
+    who: Session
     comment_id: int
     winner: str
     winner_claim: int
@@ -90,28 +106,32 @@ class Ticket:
     verdict: Verdict = field(default_factory=Verdict)
     closing: list[ClosingPr] = field(default_factory=list)
 
-    def open_prs(self) -> list[int]:
+    def open_prs(self) -> list[ClosingPr]:
         """Open PRs whose closing keyword names this ticket."""
-        return [p.number for p in self.closing if p.state == "OPEN"]
+        return [p for p in self.closing if p.state == "OPEN"]
 
-    def taken(self, me: str | None) -> bool:
-        """`claim` would refuse: another session holds it, or nobody does and an open PR closes it."""
+    def taken(self, me: Session | None, branch: str = "") -> bool:
+        """`claim` would refuse: another session holds it, or nobody does and another branch's open PR closes it."""
         h = self.verdict.holder
         if self.kind != "issue" or self.state != "open":
             return False
-        return h.session != me if h else bool(self.open_prs())
+        if h:
+            return me is None or not h.who.same(me)
+        return any(not branch or p.branch != branch for p in self.open_prs())
 
 
-def parse_marker(body: str) -> tuple[str, str] | None:
+def parse_marker(body: str) -> tuple[str, Session] | None:
     """(action, session) from a claim comment's first line, else None."""
     m = MARKER_RE.match(body)
-    return (m.group(1), m.group(2)) if m else None
+    return (m.group(1), Session(m.group(2), m.group(3))) if m else None
 
 
 def fold(events: list[Event], now: datetime, closing: list[ClosingPr]) -> Verdict:
-    """Replay the timeline: the first claim made while none is live wins; it lapses TTL after its last activity."""
+    """Replay the timeline: the first claim made while none is live wins, lapsing TTL after its last activity
+    unless an open closing PR referenced the ticket before then."""
     closing_numbers = {p.number for p in closing}
     open_numbers = {p.number for p in closing if p.state == "OPEN"}
+    pr_holds = False
     v = Verdict()
     for e in sorted(events, key=lambda e: (e.at, e.id)):
         h = v.holder
@@ -121,37 +141,53 @@ def fold(events: list[Event], now: datetime, closing: list[ClosingPr]) -> Verdic
             v.holder = None
         elif e.kind == "referenced" and h:
             h.last = e.at
-        elif e.kind == "cross-referenced" and h and e.source in closing_numbers:
-            h.last = e.at
-            h.pinned = h.pinned or e.source in open_numbers
+        elif e.kind == "cross-referenced" and e.source in closing_numbers:
+            pr_holds = pr_holds or e.source in open_numbers
+            if h:
+                h.last = e.at
+                h.pinned = pr_holds
         elif e.kind == "commented" and e.association in TRUSTED:
             marker = parse_marker(e.body)
             if marker is None:
                 continue
-            action, session = marker
+            action, who = marker
             if action == "claim" and h is None:
-                v.holder = Holder(session, e.id, e.at, e.at)
-            elif action == "claim" and h and h.session != session:
-                v.losses.append(Loss(session, e.id, h.session, h.claim_id))
-            elif action in ("claim", "renew") and h and h.session == session:
+                v.holder = Holder(who, e.id, e.at, e.at, pinned=pr_holds)
+            elif action == "claim" and h and not h.who.same(who):
+                v.losses.append(Loss(who, e.id, h.who.name, h.claim_id))
+            elif action in ("claim", "renew") and h and h.who.same(who):
                 h.last = e.at
-            elif action == "release" and h and h.session == session:
+            elif action == "release" and h and h.who.same(who):
                 v.holder = None
-    if v.holder and now - v.holder.last > TTL and not open_numbers:
+    if v.holder and not v.holder.pinned and now - v.holder.last > TTL:
         v.holder = None
     return v
 
 
-def session_name(explicit: str | None) -> str | None:
-    """--as, else the name Claude Code gave this session; None unless that is a valid name."""
-    name = explicit
+def session(explicit: str | None) -> Session | None:
+    """--as NAME (matched by name alone), else this Claude Code session's name and id; None unless the name is valid."""
+    if explicit is not None:
+        return Session(explicit) if SESSION_RE.fullmatch(explicit) else None
     pid = os.environ.get("CLAUDE_PID", "")
-    if name is None and pid.isdigit():
-        try:
-            name = json.loads((Path.home() / ".claude" / "sessions" / f"{pid}.json").read_text()).get("name")
-        except (OSError, ValueError, AttributeError):
-            name = None
-    return name if isinstance(name, str) and SESSION_RE.fullmatch(name) else None
+    if not pid.isdigit():
+        return None
+    try:
+        data = json.loads((Path.home() / ".claude" / "sessions" / f"{pid}.json").read_text())
+        name, sid = data.get("name"), str(data.get("sessionId") or "")[:8]
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(name, str) or not SESSION_RE.fullmatch(name):
+        return None
+    return Session(name, sid if SID_RE.fullmatch(sid) else None)
+
+
+def current_branch() -> str:
+    """The branch checked out here, '' when none: an open PR from it is the caller's own."""
+    try:
+        r = subprocess.run(["git", "branch", "--show-current"], capture_output=True, text=True)
+    except OSError:
+        return ""
+    return r.stdout.strip() if r.returncode == 0 else ""
 
 
 def _run(args: list[str], stdin: str | None = None) -> tuple[int, str, str]:
@@ -218,7 +254,7 @@ def read_closing_prs(n: int) -> list[ClosingPr]:
     """Every PR, open or not, whose closing keyword names the issue."""
     data = _gh(["graphql", "-F", "owner={owner}", "-F", "name={repo}", "-F", f"n={n}", "-f", f"query={CLOSING_QUERY}"])
     nodes = data["data"]["repository"]["issue"]["closedByPullRequestsReferences"]["nodes"]
-    return [ClosingPr(p["number"], p["state"], bool(p["isDraft"])) for p in nodes]
+    return [ClosingPr(p["number"], p["state"], bool(p["isDraft"]), p.get("headRefName") or "") for p in nodes]
 
 
 def read_ticket(n: int) -> Ticket:
@@ -237,7 +273,7 @@ def _hm(at: datetime) -> str:
     return at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%MZ")
 
 
-def describe(t: Ticket, me: str | None) -> str:
+def describe(t: Ticket, me: Session | None, branch: str = "") -> str:
     """One status line for a ticket."""
     if t.kind == "missing":
         return f"#{t.number} not found"
@@ -247,16 +283,16 @@ def describe(t: Ticket, me: str | None) -> str:
         return f"#{t.number} closed  {t.title}"
     h, prs = t.verdict.holder, t.open_prs()
     if h:
-        you = " (you)" if h.session == me else ""
-        until = f"held while PR #{prs[0]} is open" if prs else f"expires {_hm(h.last + TTL)}"
-        line = f"#{t.number} held by {h.session}{you} since {_hm(h.since)}, last activity {_hm(h.last)}, {until}"
+        you = " (you)" if me and h.who.same(me) else ""
+        until = f"held while PR #{prs[0].number} is open" if h.pinned else f"expires {_hm(h.last + TTL)}"
+        line = f"#{t.number} held by {h.who.name}{you} since {_hm(h.since)}, last activity {_hm(h.last)}, {until}"
     else:
         line = f"#{t.number} {'unclaimed' if prs else 'free'}"
-    for p in t.closing:
-        if p.state == "OPEN":
-            line += f"; {'draft ' if p.draft else ''}PR #{p.number} closes it"
+    for p in prs:
+        yours = " (your branch)" if branch and p.branch == branch else ""
+        line += f"; {'draft ' if p.draft else ''}PR #{p.number} closes it{yours}"
     for loss in t.verdict.losses:
-        line += f"; {loss.session} lost to {loss.winner} (comment {loss.comment_id})"
+        line += f"; {loss.who.name} lost to {loss.winner} (comment {loss.comment_id})"
     return f"{line}  {t.title}"
 
 
@@ -265,39 +301,39 @@ def _post(n: int, body: str) -> int:
     return int(_gh(["-X", "POST", f"{REPO}/issues/{n}/comments", "--input", "-"], json.dumps({"body": body}))["id"])
 
 
-def _withdraw(comment_id: int, me: str, winner: str, winner_claim: int) -> None:
+def _withdraw(comment_id: int, me: Session, winner: str, winner_claim: int) -> None:
     """Rewrite our own losing claim comment so it no longer reads as a claim."""
     body = (
-        f"<!-- ticket-claim:v1 action=withdrawn session={me} -->\n"
-        f"Claim by session **{me}** withdrawn: **{winner}** claimed first (comment {winner_claim})."
+        f"<!-- ticket-claim:v1 action=withdrawn {me.mark()} -->\n"
+        f"Claim by session **{me.name}** withdrawn: **{winner}** claimed first (comment {winner_claim})."
     )
     _gh(["-X", "PATCH", f"{REPO}/issues/comments/{comment_id}", "--input", "-"], json.dumps({"body": body}))
 
 
-def claim(n: int, me: str) -> int:
+def claim(n: int, me: Session, branch: str) -> int:
     """Claim the ticket, renew our live claim, or report who holds it."""
     t = read_ticket(n)
     if t.kind != "issue" or t.state != "open":
-        print(describe(t, me))
+        print(describe(t, me, branch))
         return NOT_OPEN
     h = t.verdict.holder
-    if h and h.session == me:
+    if h and h.who.same(me):
         if t.now - h.last >= RENEW_AFTER:
-            _post(n, f"<!-- ticket-claim:v1 action=renew session={me} claim={h.claim_id} -->\n"
-                     f"Session **{me}** is still working this ticket.")
-            print(f"#{n} renewed by {me}")
-        print(describe(t, me))
+            _post(n, f"<!-- ticket-claim:v1 action=renew {me.mark()} claim={h.claim_id} -->\n"
+                     f"Session **{me.name}** is still working this ticket.")
+            print(f"#{n} renewed by {me.name}")
+        print(describe(t, me, branch))
         return OK
-    if t.taken(me):
+    if t.taken(me, branch):
         for loss in t.verdict.losses:
-            if loss.session == me:
+            if loss.who.same(me):
                 _withdraw(loss.comment_id, me, loss.winner, loss.winner_claim)
-        print(describe(t, me))
+        print(describe(t, me, branch))
         print("another session holds it: pick another ticket" if h else "an open PR closes it: ask the user")
         return TAKEN
     cid = _post(n, (
-        f"<!-- ticket-claim:v1 action=claim session={me} -->\n"
-        f"Claimed by session **{me}**. Other sessions leave this ticket while the claim is live: it lapses "
+        f"<!-- ticket-claim:v1 action=claim {me.mark()} -->\n"
+        f"Claimed by session **{me.name}**. Other sessions leave this ticket while the claim is live: it lapses "
         f"{TTL.total_seconds() / 3600:g} hours after the last activity here, "
         f"and an open PR that closes the ticket holds it. "
         f"Check: `python3 -m scripts.ticket_claim status {n}`."
@@ -305,64 +341,67 @@ def claim(n: int, me: str) -> int:
     time.sleep(SETTLE_SECONDS)
     t = read_ticket(n)
     h = t.verdict.holder
-    if h and h.session == me and h.claim_id == cid:
-        print(f"#{n} claimed by {me}")
+    if h and h.who.same(me):
+        print(f"#{n} claimed by {me.name}" + ("" if h.claim_id == cid else f" (its claim comment {h.claim_id})"))
         return OK
     if h:
-        _withdraw(cid, me, h.session, h.claim_id)
-        who = "an earlier claim by this session name" if h.session == me else h.session
-        print(f"#{n} lost the race to {who} (comment {h.claim_id}); claim withdrawn: pick another ticket")
+        _withdraw(cid, me, h.who.name, h.claim_id)
+        print(f"#{n} lost the race to {h.who.name} (comment {h.claim_id}); claim withdrawn: pick another ticket")
         return TAKEN
-    print(describe(t, me))
+    print(describe(t, me, branch))
     if t.kind == "issue" and t.state == "open":
         print(f"claim comment {cid} did not count after {SETTLE_SECONDS} s: run claim again")
         return GH_ERROR
     return NOT_OPEN
 
 
-def release(n: int, me: str, reason: str) -> int:
+def release(n: int, me: Session, reason: str) -> int:
     """Release our live claim on the ticket, if we hold one."""
     t = read_ticket(n)
     if t.kind != "issue":
         print(describe(t, me))
         return NOT_OPEN
     h = t.verdict.holder
-    if h and h.session == me:
-        _post(n, f"<!-- ticket-claim:v1 action=release session={me} claim={h.claim_id} -->\n"
-                 f"Released by session **{me}**: {reason}. The ticket is free to claim.")
-        print(f"#{n} released by {me}")
+    if h and h.who.same(me):
+        _post(n, f"<!-- ticket-claim:v1 action=release {me.mark()} claim={h.claim_id} -->\n"
+                 f"Released by session **{me.name}**: {reason}. The ticket is free to claim.")
+        print(f"#{n} released by {me.name}")
     else:
         print(f"nothing to release: {describe(t, me)}")
     return OK
 
 
-def status(numbers: list[int], me: str | None, mine: bool, frontier: bool) -> int:
+def status(numbers: list[int], me: Session | None, mine: bool, frontier: bool, branch: str) -> int:
     """Print who holds each ticket; exit 1 when any named ticket is taken, 3 when one is not an open issue."""
     code = OK
     for n in numbers:
         t = read_ticket(n)
-        print(describe(t, me))
-        if t.taken(me):
+        print(describe(t, me, branch))
+        if t.taken(me, branch):
             code = TAKEN
         elif code == OK and (t.kind != "issue" or t.state != "open"):
             code = NOT_OPEN
-    if mine:
+    if mine and me:
         # The local clock only narrows the listing; every verdict below still runs on GitHub's.
         since = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
         for r in _paged(f"{REPO}/issues?state=open&since={since}"):
             if "pull_request" not in r and r.get("comments"):
                 t = read_ticket(r["number"])
-                if t.verdict.holder and t.verdict.holder.session == me:
-                    print(describe(t, me))
+                if t.verdict.holder and t.verdict.holder.who.same(me):
+                    print(describe(t, me, branch))
     if frontier:
         for r in _paged(f"{REPO}/issues?state=open&labels=ready-for-agent&sort=created&direction=asc"):
-            labels = {lb["name"] for lb in r.get("labels") or []}
-            blocked = (r.get("issue_dependencies_summary") or {}).get("blocked_by", 0)
-            if "pull_request" in r or "gate" in labels or blocked:
+            if "pull_request" in r or "gate" in {lb["name"] for lb in r.get("labels") or []}:
+                continue
+            try:
+                blocked, children = r["issue_dependencies_summary"]["blocked_by"], r["sub_issues_summary"]["total"]
+            except (KeyError, TypeError) as exc:
+                raise GhError(f"#{r.get('number')}: the issue listing has no blocker or sub-issue count") from exc
+            if blocked or children:
                 continue
             t = read_ticket(r["number"])
             if t.verdict.holder is None and not t.open_prs():
-                print(describe(t, me))
+                print(describe(t, me, branch))
     return code
 
 
@@ -382,12 +421,16 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("numbers", type=_number, nargs="*")
     s.add_argument("--mine", action="store_true", help="open tickets this session holds")
     s.add_argument(
-        "--frontier", action="store_true", help="open ready-for-agent tickets, no gate label, no open blocker, claimable"
+        "--frontier", action="store_true",
+        help="open ready-for-agent tickets with no gate label, no sub-issues and no open blocker, claimable",
     )
     for sp in (c, r, s):
-        sp.add_argument("--as", dest="session", help="session name (default: this Claude Code session's name)")
+        sp.add_argument(
+            "--as", dest="session", help="act as this session name, matched by name alone "
+            "(default: this Claude Code session's name and id)",
+        )
     args = p.parse_args(argv)
-    me = session_name(args.session)
+    me = session(args.session)
     if me is None and (args.cmd != "status" or args.mine or args.session is not None):
         print("unknown session name: pass --as <name> (ListAgents prints it)", file=sys.stderr)
         return USAGE
@@ -395,12 +438,15 @@ def main(argv: list[str] | None = None) -> int:
         p.error("status needs ticket numbers, --mine or --frontier")
     try:
         if args.cmd == "claim":
-            return claim(args.number, me)
+            return claim(args.number, me, current_branch())
         if args.cmd == "release":
             return release(args.number, me, args.reason)
-        return status(args.numbers, me, args.mine, args.frontier)
+        return status(args.numbers, me, args.mine, args.frontier, current_branch())
     except GhError as exc:
         print(f"GitHub error: {exc}", file=sys.stderr)
+        return GH_ERROR
+    except Exception as exc:  # exit 1 means "taken", so a crash must not exit 1 as Python's default would
+        print(f"error: {exc!r}", file=sys.stderr)
         return GH_ERROR
 
 
