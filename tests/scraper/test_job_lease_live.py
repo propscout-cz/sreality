@@ -305,8 +305,8 @@ def test_the_deployment_before_the_rename_keeps_its_lease_through_the_alias(cur:
 
 
 def test_no_browser_role_reaches_the_lease_tables(cur: Any) -> None:
-    """The alias view is ungated on purpose (tests/test_tenant_isolation_live.py::_ADMIN_GATE_ALLOWLIST): its ACL is
-    the guard, so the ACL is asserted here."""
+    """The alias view is ungated on purpose (tests/_admin_gate_registry.py UNGATED, guard 'acl'): its ACL is the
+    guard, so the ACL is asserted here."""
     for relation in ("scheduled_jobs", "job_runs", "location_jobs"):
         for role in ("anon", "authenticated"):
             cur.execute("SELECT has_table_privilege(%s, %s, 'SELECT')", (role, f"public.{relation}"))
