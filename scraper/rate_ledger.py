@@ -72,6 +72,8 @@ _ENSURE_SQL = """
 # starting more than max_wait_s away (NULL: no bound) is NOT leased and the row
 # is left as it was, so a refused caller pushes nobody else back. interval_ms is
 # refreshed to the caller's config so an operator limits edit propagates.
+# n and interval_ms are cast: psycopg binds a small int as smallint, and 20 slots
+# x 2000 ms overflowed it, so every full bazos lease raised and paced locally (#1852).
 _LEASE_SQL = """
     WITH cur AS (
         SELECT source,
@@ -83,8 +85,8 @@ _LEASE_SQL = """
     ), leased AS (
         UPDATE portal_rate_state p
            SET next_slot_at   = cur.window_start + make_interval(
-                   secs => %(n)s * %(interval_ms)s * cur.penalty_factor / 1000.0),
-               interval_ms    = %(interval_ms)s,
+                   secs => %(n)s::int * %(interval_ms)s::int * cur.penalty_factor / 1000.0),
+               interval_ms    = %(interval_ms)s::int,
                penalty_factor = greatest(1.0, cur.penalty_factor * %(decay)s),
                updated_at     = now()
           FROM cur
@@ -94,7 +96,7 @@ _LEASE_SQL = """
      RETURNING p.source
     )
     SELECT greatest(extract(epoch FROM (cur.window_start - now())), 0.0)::float8,
-           (%(interval_ms)s * cur.penalty_factor / 1000.0)::float8,
+           (%(interval_ms)s::int * cur.penalty_factor / 1000.0)::float8,
            EXISTS (SELECT 1 FROM leased)
       FROM cur
 """

@@ -55,8 +55,9 @@ Independent of the analytical, UI, and map tracks.
   `db.enqueue_presence_checks` and read by nothing since `delist_flip_refused` went (a drop
   removes the writer first).
 - **Filed by the Health investigation (2026-10-18), owed to this track:** #1851 a sreality ad that
-  answers HTTP 409 (615387212) is given up and re-armed forever by the walk's re-arm; #1852 the
-  bazos rate-ledger lease overflows `smallint`, so every GitHub bazos walk falls back to per-process
+  answers HTTP 409 (615387212) is given up and re-armed forever by the walk's re-arm; #1852 (DONE 2026-10-26,
+  PR #2052: the lease casts its integers and bazos shares ONE 0.7 req/s budget, migration 676) the
+  bazos rate-ledger lease overflowed `smallint`, so every GitHub bazos walk fell back to per-process
   pacing (the cause of the NEW-queue bursts of 10-12, 10-13 and 10-16); #1853 422 active ads with a
   NULL category (ceskereality 124, realitymix 298) sit outside every nomination scope and can never
   become inactive — the `coverage` gauge's `unnominated` cells read them until it lands: Problem on
