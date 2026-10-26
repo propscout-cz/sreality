@@ -659,8 +659,8 @@ mode_window2() {
   git -C "$WT" log --oneline "$FINAL_PREFLIGHT_SHA..HEAD" -- .railway
   git -C "$WT" diff --stat "$FINAL_PREFLIGHT_SHA" HEAD -- .railway
   gate "Are these only the rehearsal commits E and R and the folds the agent listed?"
-  BRAKE_ASKED=1
   gate "Has e9 now set realtime_autodedup_interval_seconds to 0 (the brake)?"
+  BRAKE_ASKED=1
   agent_reports "autodedup.rt_lease is empty (one SQL read)"
   pause
 
