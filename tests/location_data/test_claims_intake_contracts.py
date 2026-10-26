@@ -351,7 +351,10 @@ def test_the_reader_contracts_state_exactly_what_the_reader_bodies_do():
         assert spec.consults_transforms == ("apply_transforms" in calls), name
         assert spec.consults_guards == ("guard_admits" in calls), name
         assert spec.locator_keys == _indexed_locator_keys(fn), name
-        assert spec.appetite - {"reader"} == _appetite_of(fn, _INTAKE_AST), name
+        # `fallback` is read by `claims_common.locator_reads`, outside this module, so the
+        # closure cannot see it: a payload reader walks paths iff its body calls the walker.
+        assert spec.walks_paths == ("locator_reads" in calls), name
+        assert spec.appetite - {"reader", "fallback"} == _appetite_of(fn, _INTAKE_AST), name
     # The scan reads each reader's OWN body, so a helper that applied transforms or
     # evaluated guards on a reader's behalf would let the table lie about it. There is no
     # such helper: the two entry points are called from reader bodies and nowhere else.
@@ -393,8 +396,9 @@ def test_the_archive_reader_contracts_state_exactly_what_those_bodies_do():
         # the refusal helpers, so the WHOLE locator appetite is derived from the bodies here
         # too. `locator_keys` alone still cannot be, because these readers address their
         # required keys through those helpers rather than by unguarded indexing.
-        assert spec.appetite - {"reader"} == _appetite_of(fn, _ARCHIVE_AST), name
-        assert spec.reads_stored_body is True, name
+        # `fallback` is walked ABOVE the reader, by `read_entry`, for every page reader alike.
+        assert spec.appetite - {"reader", "fallback"} == _appetite_of(fn, _ARCHIVE_AST), name
+        assert spec.reads_stored_body is True and spec.walks_paths, name
     for name, spec in READER_CONTRACTS.items():
         assert spec.reads_stored_body == (name in PAGE_READERS), name
     # The same no-helper rule as the W1 scan, for the same reason: a helper evaluating
@@ -404,6 +408,11 @@ def test_the_archive_reader_contracts_state_exactly_what_those_bodies_do():
     for node in _ARCHIVE_AST.body:
         if isinstance(node, ast.FunctionDef) and node.name not in reader_names:
             assert not ({"apply_transforms", "guard_admits"} & _called_names(node)), node.name
+    # ... and the lane runs every page entry through the path walker, never a reader directly.
+    functions = _module_functions(_ARCHIVE_AST)
+    assert "read_entry" in _called_names(functions["extract_page"])
+    assert "entry_paths" in _called_names(functions["read_entry"])
+    assert "locator_reads" in _called_names(functions["entry_paths"])
 
 
 def test_the_transform_and_guard_vocabularies_stay_in_sync_with_the_runtime():
@@ -542,15 +551,79 @@ def test_a_fallback_path_is_held_to_every_rail_the_primary_locator_is():
 
 
 def test_only_the_readers_that_walk_fallback_paths_may_declare_one():
-    """`fallback` is `optional_keys` on the three payload readers that call `locator_reads`
-    and on the reading reader, which walks its slots (W3) — a declaration on any other reader
-    is the inert rail this gate exists to refuse."""
-    walkers = {name for name, spec in READER_CONTRACTS.items()
-               if "fallback" in spec.optional_keys}
-    assert walkers == {"scalar", "point_pair", "declared_quality", "text_reading"}
+    """`fallback` is read on the three payload readers that call `locator_reads`, on the
+    reading reader, which walks its slots (W3), and on every page reader, whose paths
+    `page_readers.read_entry` walks — a declaration on any other reader is the inert rail
+    this gate exists to refuse."""
+    walkers = {name for name, spec in READER_CONTRACTS.items() if spec.walks_paths}
+    assert walkers == {"scalar", "point_pair", "declared_quality", "text_reading"} | {
+        name for name, spec in READER_CONTRACTS.items() if spec.reads_stored_body}
     with pytest.raises(ContractError, match="never reads locator.fallback"):
         _entry(locator={"reader": "conflict_signal", "json_pointer": "/a",
                         "fallback": [{"json_pointer": "/b"}]})
+
+
+# A page entry over idnes' map config whose second path is the address line: the shape
+# idnes@6's street takes, two documents no one reader reads.
+MAP_STREET = {
+    "id": "id.det.thing", "locator_kind": "map_config", "extraction_method": "regex_text",
+    "page_kind": "detail", "claim_type": "street_name",
+}
+MAP_TITLE = {"reader": "json_regex", "css": "script[data-maptiler-json]",
+             "then": "/geojson/features", "json_pointer": "/properties/title",
+             "pattern": "^Zvýrazněná ulice (?P<street>.+)$", "group": "street"}
+LINE_PATH = {"reader": "html_regex", "css": ".b-detail__info", "pattern": "(?P<line>.+)",
+             "group": "line", "transform": ["address_part_street:loose"]}
+
+
+def _page_entry(*paths: dict, **overrides):
+    raw = dict(MAP_STREET, locator=dict(MAP_TITLE, fallback=list(paths)))
+    raw.update(overrides)
+    return parse_entry(raw, source="idnes", index=0)
+
+
+def test_a_page_path_may_hand_over_to_another_page_reader_of_the_same_provenance():
+    entry = _page_entry(LINE_PATH)
+    assert entry.locator["fallback"][0]["reader"] == "html_regex"
+
+
+def test_a_page_path_must_stamp_the_entrys_own_surface_and_method():
+    """Every path writes the entry's `surface` and `extraction_method` onto the claim, so a
+    path whose reader performs neither would record a provenance the value never had."""
+    with pytest.raises(ContractError, match="does not read 'map_config' by 'regex_text'"):
+        _page_entry({"reader": "html_text", "css": ".b-detail__info"})
+
+
+def test_a_payload_path_stays_on_its_entrys_reader():
+    """The payload readers walk their own paths and read only the required keys off each, so
+    a `reader:` there would be a declaration nothing executes."""
+    with pytest.raises(ContractError, match="walks its own paths"):
+        _entry(locator={"reader": "scalar", "json_pointer": "/a",
+                        "fallback": [{"reader": "declared_quality", "json_pointer": "/b"}]})
+
+
+def test_a_page_path_may_not_hand_over_to_a_payload_reader():
+    with pytest.raises(ContractError, match="does not read the stored page"):
+        _page_entry({"reader": "scalar", "json_pointer": "/street"})
+
+
+def test_a_handed_over_path_is_held_to_its_own_readers_keys_and_transforms():
+    with pytest.raises(ContractError, match="does not name locator.pattern"):
+        _page_entry({"reader": "html_regex", "css": ".b-detail__info", "group": "line"})
+    with pytest.raises(ContractError, match="never reads on a fallback path"):
+        _page_entry(dict(LINE_PATH, attr="data-address"))
+    # A path that names no transform inherits the entry's, so its reader must apply it:
+    # `json_bool` shares `json_scalar`'s provenance and applies none.
+    with pytest.raises(ContractError, match="never applies transforms"):
+        parse_entry(dict(MAP_STREET, extraction_method="portal_declared_quality",
+                         claim_type="precision_declaration",
+                         transform=["sentinel_drop"],
+                         locator={"reader": "json_scalar", "css": "script",
+                                  "json_pointer": "/street",
+                                  "fallback": [{"reader": "json_bool", "css": "script",
+                                                "json_pointer": "/x",
+                                                "labels": {"true": "a", "false": "b"}}]}),
+                    source="idnes", index=0)
 
 
 def test_a_wrong_prefix_is_rejected():

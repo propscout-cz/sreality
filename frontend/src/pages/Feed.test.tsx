@@ -86,6 +86,7 @@ const PRESET: FilterPreset = {
   updated_at: '2026-10-01T00:00:00Z',
   position: 0,
   color: 'sage',
+  group_id: null,
 };
 
 beforeEach(() => {
@@ -95,7 +96,7 @@ beforeEach(() => {
   vi.setSystemTime(new Date('2026-10-12T12:32:00Z'));
   localStorage.clear();
   window.scrollTo = vi.fn() as unknown as typeof window.scrollTo;
-  vi.mocked(api.listFilterPresets).mockResolvedValue({ data: [PRESET], total: 1 });
+  vi.mocked(api.listFilterPresets).mockResolvedValue({ data: [PRESET], total: 1, groups: [] });
   vi.mocked(queries.fetchListingsForCards).mockResolvedValue({
     rows: [
       row(1, '2026-10-12T09:00:00Z'),

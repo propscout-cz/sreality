@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from scraper import db, delist_policy, listing_write, portal_factory, vocabulary
+from scraper import db, delist_policy, listing_write, portal_factory, stop, vocabulary
 from scraper.portal import (
     PortalConfig,
     classify_index_sighting,
@@ -49,7 +49,7 @@ from scraper.portal import (
 )
 from scraper.portal_identity import Resolved
 from scraper.rate_ledger import DEFAULT_LEASE_N, build_rate_limiter
-from scraper.rate_limit import RateLimiter
+from scraper.rate_limit import OUR_REFUSALS, RateLimiter
 
 LOG = logging.getLogger("scraper.portal_runner")
 
@@ -513,9 +513,9 @@ def run_index_walk(
         for category, scope in zip(categories, scopes):
             if deadline_reached(deadline):
                 LOG.info(
-                    "INDEX time budget %.0fs reached; stopping cleanly before the "
-                    "next category (%d walked so far)",
-                    max_seconds, len(category_aggregates),
+                    "INDEX %s; stopping cleanly before the next category (%d walked so far)",
+                    "stop signal" if stop.requested() else f"time budget {max_seconds:.0f}s reached",
+                    len(category_aggregates),
                 )
                 break
             cm_text, ct_text = portal.category_labels(category)
@@ -525,17 +525,20 @@ def run_index_walk(
                     portal.walk_category(category, conn, dry_run, limiter, deadline)
                 )
             except Exception as exc:
-                LOG.exception(
-                    "CATEGORY walk failed cm=%s ct=%s: %s — skipping sweep",
-                    cm_text, ct_text, exc,
-                )
-                failed_categories += 1
+                if stop.requested():
+                    # Cut, not failed: a stop of OURS, so the category nominates nothing.
+                    LOG.warning("CATEGORY cut by the stop signal cm=%s ct=%s: %s",
+                                cm_text, ct_text, exc)
+                else:
+                    LOG.exception(
+                        "CATEGORY walk failed cm=%s ct=%s: %s — skipping sweep",
+                        cm_text, ct_text, exc,
+                    )
+                    failed_categories += 1
                 seen_ids, cat_counts, cat_result_size, cat_pages, reached_end = (
                     set(), {}, None, 0, False,
                 )
             total_pages += cat_pages
-            if conn is not None and run_id is not None:
-                db.bump_index_pages(conn, run_id, cat_pages)
             total_index += len(seen_ids)
             total_enqueued += cat_counts.get("enqueued", 0)
 
@@ -602,6 +605,8 @@ def run_index_walk(
                 cm_text, ct_text, declared=cat_result_size, collected=len(seen_ids),
                 reached=bool(reached_end), total_is_count=total_is_count,
                 upper_bound=upper_bound, counts=cat_counts, verified=(to_verify, deferred)))
+            if conn is not None and run_id is not None:
+                db.bump_index_progress(conn, run_id, cat_pages, category_aggregates[-1])
 
         # Only a walk of the portal's WHOLE agenda knows an ad is in no unit: a dispatch that
         # narrowed it (bazos --sale-type/--category) leaves the rest of the portal unwalked.
@@ -621,6 +626,8 @@ def run_index_walk(
                 orphans = _entry(None, None, declared=None, collected=0, reached=False,
                                  total_is_count=total_is_count, upper_bound=upper_bound)
             category_aggregates.append(orphans)
+            if run_id is not None:
+                db.bump_index_progress(conn, run_id, 0, orphans)
 
         LOG.info(
             "INDEX total=%d pages=%d enqueued=%d",
@@ -996,7 +1003,7 @@ def run_detail_drain(
     # Persist the counts delta since the last bump onto the scrape_runs row, so a
     # crash/SIGKILL keeps what committed. Single accumulator (counts) + delta means
     # no double-count and the straddling residual buffer is caught by the final
-    # bump. O(chunks), like bump_index_pages — never per-row.
+    # bump. O(chunks), like bump_index_progress — never per-row.
     last_bumped = dict.fromkeys(counts, 0)
 
     def _persist_counts() -> None:
@@ -1037,8 +1044,9 @@ def run_detail_drain(
         while max_claims is None or total_claimed < max_claims:
             if deadline_reached(deadline):
                 LOG.info(
-                    "DRAIN time budget %ss reached at claimed=%d; finalizing cleanly",
-                    max_seconds, total_claimed,
+                    "DRAIN %s at claimed=%d; finalizing cleanly",
+                    "stop signal" if stop.requested() else f"time budget {max_seconds}s reached",
+                    total_claimed,
                 )
                 break
             chunk = claim_chunk
@@ -1121,10 +1129,11 @@ def run_detail_drain(
                     conn, lambda c: db.release_claims(c, portal.source, deferred),
                     reconnect=portal.connect_drain, label="drain.release",
                 )
-                if limiter.refused_reason == "deadline":
+                if limiter.refused_reason in OUR_REFUSALS:
                     LOG.info(
-                        "DRAIN time budget reached mid-chunk; %d claims handed back "
-                        "source=%s", len(deferred), portal.source)
+                        "DRAIN %s mid-chunk; %d claims handed back source=%s",
+                        "stop signal" if limiter.refused_reason == "stop" else "time budget reached",
+                        len(deferred), portal.source)
                 else:
                     LOG.warning(
                         "DRAIN stopped source=%s: the shared rate budget refused the run; "
@@ -1173,8 +1182,8 @@ def run_detail_drain(
         "listings_inactive":    counts["gone"],
         "images_discovered":    counts["images_discovered"],
         "errors":               counts["errors"],
-        "budget_refused":       int(limiter.refused and limiter.refused_reason != "deadline"),
-        "deadline_stopped":     int(limiter.refused_reason == "deadline"),
+        "budget_refused":       int(limiter.refused and limiter.refused_reason not in OUR_REFUSALS),
+        "deadline_stopped":     int(limiter.refused_reason in OUR_REFUSALS),
         "by_category":          [],
     }
     return (0, scrape_agg)
@@ -1197,7 +1206,7 @@ def _finalize_run(
                 listings_updated=agg.get("listings_updated", 0),
                 listings_inactive=agg.get("listings_inactive", 0),
                 images_discovered=agg.get("images_discovered", 0),
-                images_stored=0,  # bytes are uploaded async by images.yml, not here
+                images_stored=0,  # bytes are uploaded async by the worker's images lane, not here
                 errors=agg.get("errors", 0),
                 by_category=agg.get("by_category", []),
                 # The drain persists its counters per chunk (crash-survivable);
@@ -1247,9 +1256,16 @@ def run_phase(
     The contract is now explicit: **`ended_at` means the phase completed.** A
     crash bumps `errors` and deliberately leaves `ended_at` NULL before
     re-raising, so a crashed index walk never reads as a finished walk to the
-    `scraping` or `delisting` check (its walk cells keep aging). No check reads
-    `errors`.
+    `scraping` or `delisting` check. Once the stuck sweep stamps it, only the
+    categories it finished (each written as it ended, `db.bump_index_progress`)
+    count; the cells of the rest keep aging. No check reads `errors`.
+
+    A stop signal (SIGTERM / SIGINT, `scraper.stop`) is the deadline arriving early:
+    the phase ends after the request in hand, is finalized like any deadline stop
+    (`ended_at` set, no error), and returns `stop.EXIT_CODE`, so a main's next phase
+    never starts and the process exits with the code a stopped job reports.
     """
+    stop.install()
     run_id: int | None = None
     if not dry_run:
         try:
@@ -1271,4 +1287,8 @@ def run_phase(
     else:
         if not dry_run:
             _finalize_run(run_id, agg, drain=runner is run_detail_drain)
+    if stop.requested():
+        LOG.warning("PHASE %s stopped by a signal (source=%s); finalized, exiting %d",
+                    run_type, portal.source, stop.EXIT_CODE)
+        return stop.EXIT_CODE
     return rc

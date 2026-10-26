@@ -27,6 +27,7 @@ const preset = (filter_spec: FilterPreset['filter_spec']): FilterPreset => ({
   updated_at: '2026-10-01T00:00:00Z',
   position: 0,
   color: null,
+  group_id: null,
 });
 
 describe('scope → filters', () => {

@@ -7,6 +7,16 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Preset groups: boxes on the Browse preset row (2026-10-25, migration 672)
+- **Done** (operator ask 2026-10-25: "group my presets, a boundary box per group, move them into the boxes
+  or outside of them"). A group is a named box with an optional colour (`filter_preset_groups`, a saved set
+  with no filter). Boxes follow the loose presets. A preset drags into a box, between boxes and back out (a
+  "Drop here to ungroup" target appears while a boxed preset is dragged). A box drags by its own grip. The
+  preset menu moves a preset without dragging. Deleting a group keeps its presets, loose. One write per drop
+  (`PUT /filter-presets/layout`). The phone's scope row keeps the desktop order and shows no boxes.
+  Detail: `docs/design/saved-dashboards.md` § Groups.
+- **Next (not built):** fold one box; boxes on the phone; "save into this group" in the save dialog.
+
 ### Viewings: "datum prohlídky" on a property, the phone's Prohlídky tab (2026-10-23, migration 666)
 - **Done** (operator ask 2026-10-23): a viewing is a note with a date (`property_notes.viewing_at`; the
   text optional on a viewing), so it is written, shared, carried and split as a note — no table, carrier

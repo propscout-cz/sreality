@@ -682,6 +682,17 @@ class UpdatePresetIn(BaseModel):
     color: TagColor | None = None
 
 
+class CreatePresetGroupIn(BaseModel):
+    """A box of presets (migration 672): a saved set with no blob."""
+    name: str = Field(..., min_length=1, max_length=200)
+    color: TagColor | None = None
+
+
+class UpdatePresetGroupIn(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    color: TagColor | None = None
+
+
 class StatsDashboardIn(BaseModel):
     """The account's working board, stored whole (PUT /stats/dashboard)."""
     charts: Charts

@@ -32,7 +32,7 @@ import { Segmented } from '@/components/controls';
 import { LocationTypeahead, MultiselectChips } from '@/components/filter-controls';
 import { PortalFilterControl } from '@/components/filter-controls/PortalFilterControl';
 import BrokerFilterControl from '@/components/filter-controls/BrokerFilterControl';
-import { ApiError, createFilterPreset, updateFilterPreset } from '@/lib/api';
+import { ApiError, createFilterPreset, updateFilterPreset, type FilterPresetList } from '@/lib/api';
 import { browseKeys } from '@/lib/browseKeys';
 import { isNewestFirst, sortLabel, type FeedView } from '@/lib/feed';
 import { subtypeOptions } from '@/lib/filterLayout';
@@ -79,7 +79,7 @@ const COUNT_DEBOUNCE_MS = 350;
 
 const SORT_OPTIONS = CARD_SORTS.map((o) => ({ value: sortToParam(o.spec), label: o.label }));
 
-type PresetsResponse = { data: FilterPreset[]; total: number };
+type PresetsResponse = FilterPresetList;
 
 function useDebounced<T>(value: T, ms: number): T {
   const [settled, setSettled] = useState(value);
@@ -410,7 +410,7 @@ function PresetSheet({
       const data = prev.data.some((p) => p.id === row.id)
         ? prev.data.map((p) => (p.id === row.id ? row : p))
         : [...prev.data, row];
-      return { data, total: data.length };
+      return { ...prev, data, total: data.length };
     });
     void qc.invalidateQueries({ queryKey: filterPresetKeys.all });
     onSaved(row.id);

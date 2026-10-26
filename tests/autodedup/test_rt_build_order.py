@@ -5,17 +5,33 @@ the whole of Praha left 37,910 adverts unread, 11,864 of them live, and the buil
 in listing-id order after a cursor: the live ones (median id 18.7M against 0.5M overall) came
 last, ~3 days in. During a build the feed now orders live before inactive, ids ascending within
 each, under no id cursor (the `rt_fp` anti-join advances it); outside a build nothing changes.
+
+E979, the operator 2026-10-25: a newly widened block first, in a category order they choose —
+Liberec, flats for rent, houses for sale, flats for sale, the rest — read out of
+`rt_build_priority:<generation>`, so the order changes without a deploy; no row is E978's order.
 """
 
 from __future__ import annotations
 
+import json
+import logging
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from autodedup import incremental_lane
 from autodedup import incremental_sql as S
 from autodedup.incremental import WorkItem, bootstrap_key
-from autodedup.incremental_lane import CURSOR_ENTER, SqlWork, pass_rate_key, run_incremental
+from autodedup.incremental_lane import (
+    CURSOR_ENTER,
+    SqlWork,
+    build_priority_key,
+    parse_build_priority,
+    pass_rate_key,
+    run_incremental,
+)
 from autodedup.incremental_scope import Scope, ScopeBlock
 from tests.autodedup.fake_pg import FakePg
 from tests.autodedup.test_rt_widening import NEW_IDS, OTHER_TOWN, TOWN, _built_town, _seed
@@ -124,7 +140,13 @@ def test_outside_a_build_the_feed_is_the_id_cursor_it_always_was() -> None:
 def test_the_build_statement_reads_is_active_by_primary_key_and_takes_no_cursor() -> None:
     flat = " ".join(S.RT_SCOPE_BUILD_ENTRANTS_SQL.split())
     assert "%(after_id)s" not in flat
-    assert "order by (select l.is_active or exists (select 1 from public.listings o where " in flat
+    # E979's two keys lead; E978's visibility key follows them unchanged.
+    assert ("order by (s.block_key = any(%(priority_blocks)s::text[])) desc, case when "
+            "s.block_key = any(%(priority_blocks)s::text[]) then coalesce((select "
+            "array_position(%(priority_cats)s::text[], l.category_main || '/' || "
+            "l.category_type) from public.listings l where l.id = s.listing_id), "
+            "cardinality(%(priority_cats)s::text[]) + 1) else 0 end, "
+            "(select l.is_active or exists (select 1 from public.listings o where ") in flat
     assert ("(select l.is_active from public.listings l where l.id = s.listing_id) "
             "desc nulls last, s.listing_id limit %(limit)s") in flat
     assert ("not exists (select 1 from autodedup.rt_fp f where f.generation = "
@@ -174,3 +196,176 @@ def test_e978_an_inactive_advert_on_a_live_property_or_a_live_group_comes_before
     db.cluster_members.update({(GEN, 9001, 16), (GEN, 9001, 15)})
     assert _entered(_work(db, bootstrap=True), limit=50) == [14, 15, 11, 12, 10, 13]
     assert _entered(_work(db, bootstrap=True), limit=3) == [14, 15, 11]
+
+
+# --- E979: the operator's blocks first, in their category order ---------------------------------
+
+LIBEREC_LIKE = OTHER_TOWN
+PRIORITY = {"blocks": [f"obec:{LIBEREC_LIKE}"],
+            "categories": [["byt", "pronajem"], ["dum", "prodej"], ["byt", "prodej"]]}
+TWO_BLOCKS = Scope((ScopeBlock("obec", TOWN), ScopeBlock("obec", LIBEREC_LIKE)))
+# id -> (obec, is_active, category, property); is_active None = no `listings` row at all.
+TWO_WORLD: dict[int, tuple[int, bool | None, tuple[str, str] | None, int | None]] = {
+    1: (TOWN, False, ("byt", "prodej"), None),
+    2: (TOWN, True, ("dum", "prodej"), None),
+    3: (TOWN, True, ("byt", "pronajem"), None),            # a listed category, outside the block
+    10: (LIBEREC_LIKE, True, ("byt", "prodej"), None),
+    11: (LIBEREC_LIKE, False, ("dum", "prodej"), None),
+    12: (LIBEREC_LIKE, False, ("byt", "pronajem"), None),
+    13: (LIBEREC_LIKE, True, ("byt", "pronajem"), 800),
+    14: (LIBEREC_LIKE, True, ("komercni", "prodej"), None),  # unlisted: after the listed ones
+    15: (LIBEREC_LIKE, True, ("dum", "prodej"), None),
+    16: (LIBEREC_LIKE, False, ("byt", "prodej"), None),
+    17: (LIBEREC_LIKE, None, None, None),                   # no listings row: last of the block
+    18: (LIBEREC_LIKE, False, ("byt", "pronajem"), 800),     # inactive, beside live 13: visible
+}
+
+
+def _two_blocks() -> FakePg:
+    db = FakePg()
+    for listing_id, (obec, live, category, prop) in TWO_WORLD.items():
+        db.locations[listing_id] = {"obec_kod": obec, "cast_obce_kod": None,
+                                    "resolved_at": db.now - timedelta(days=1)}
+        if live is not None:
+            main, kind = category or (None, None)
+            db.listings[listing_id] = {"id": listing_id, "is_active": live, "property_id": prop,
+                                       "category_main": main, "category_type": kind,
+                                       "first_seen_at": db.now - timedelta(days=30)}
+    db.cursors["rt_new"] = {"last_listing_id": max(TWO_WORLD), "last_snapshot_id": None,
+                            "watermark": None}
+    return db
+
+
+def _two_work(db: FakePg, priority: Any = None, **kw: Any) -> SqlWork:
+    params: dict[str, Any] = {"straggler_window": 0, "revive_slice": 0, "drift_slice": 0,
+                              "evidence_slice": 0, "lag": 0, "enter_slice": 1000,
+                              "bootstrap": True}
+    if priority is not None:
+        params["build_priority"] = parse_build_priority(priority)
+    params.update(kw)
+    return SqlWork(db, TWO_BLOCKS, GEN, **params)
+
+
+def test_e979_the_priority_block_is_read_first_in_the_operators_category_order() -> None:
+    """Inside the named block: flats for rent, houses for sale, flats for sale, then the rest;
+    within a category E978's order (visible, then live, then id). Then every other block in
+    E978's order, its listed categories promoting nothing."""
+    db = _two_blocks()
+    assert _entered(_two_work(db, PRIORITY)) == [
+        13, 18, 12,            # byt/pronajem: live, visible inactive, inactive
+        15, 11,                # dum/prodej
+        10, 16,                # byt/prodej
+        14, 17,                # an unlisted category, then no listings row
+        2, 3, 1,               # the other block: live first, ids ascending
+    ]
+    assert _entered(_two_work(db, PRIORITY), limit=4) == [13, 18, 12, 15]
+
+
+def test_e979_no_priority_is_exactly_e978s_order() -> None:
+    db = _two_blocks()
+    e978 = [2, 3, 10, 13, 14, 15, 18, 1, 11, 12, 16, 17]
+    assert _entered(_two_work(db)) == e978
+    assert _entered(_two_work(db, {"garbage": True})) == e978
+    assert _entered(_two_work(db, {"blocks": [], "categories": PRIORITY["categories"]})) == e978
+
+
+def test_e979_a_priority_block_without_categories_comes_first_in_e978s_order() -> None:
+    db = _two_blocks()
+    assert _entered(_two_work(db, {"blocks": PRIORITY["blocks"]})) == [
+        10, 13, 14, 15, 18, 11, 12, 16, 17, 2, 3, 1]
+
+
+def test_e979_the_priority_rides_only_the_build_feed() -> None:
+    """Outside a build the id cursor's statement runs, priority or not."""
+    db = _two_blocks()
+    assert _entered(_two_work(db, PRIORITY, bootstrap=False), limit=10) == [1, 2]
+    assert S.RT_SCOPE_BUILD_ENTRANTS_SQL not in db.statements
+
+
+def test_e979_parse_build_priority_reads_the_operators_row() -> None:
+    want = ([f"obec:{LIBEREC_LIKE}"], ["byt/pronajem", "dum/prodej", "byt/prodej"])
+    assert parse_build_priority(PRIORITY) == want
+    assert parse_build_priority(json.dumps(PRIORITY)) == want, "a row stored as a JSON string"
+    assert parse_build_priority({"blocks": ["obec:563889", "cast_obce:490245", "okres:3202"]}) \
+        == (["obec:563889", "cast_obce:490245", "okres:3202"], [])
+    assert parse_build_priority({"blocks": ["obec:0563889"]}) == (["obec:563889"], [])
+    assert parse_build_priority({"blocks": ["obec:1", "obec:1"],
+                                 "categories": [["byt", "prodej"], ["byt", "prodej"]]}) \
+        == (["obec:1"], ["byt/prodej"]), "repeats collapse to their first place"
+
+
+@pytest.mark.parametrize("value", [
+    None, "", "not json", "[]", 42, True, [], ["obec:563889"], {},
+    {"categories": [["byt", "prodej"]]},
+    {"blocks": "obec:563889"},
+    {"blocks": []},
+    {"blocks": [563889]},
+    {"blocks": ["563889"]},
+    {"blocks": ["Liberec"]},
+    {"blocks": ["obec:563889"], "categories": "byt/prodej"},
+    {"blocks": ["obec:563889"], "categories": [["byt"]]},
+    {"blocks": ["obec:563889"], "categories": [["byt", "prodej", "x"]]},
+    {"blocks": ["obec:563889"], "categories": ["byt/prodej"]},
+    {"blocks": ["obec:563889"], "categories": [["byt", None]]},
+    {"blocks": ["obec:563889"], "categories": [["byt/x", "prodej"]]},
+])
+def test_e979_a_malformed_priority_is_no_priority(value: Any,
+                                                  caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=incremental_lane.LOG.name):
+        assert parse_build_priority(value) == ([], [])
+    if value is not None:
+        assert "rt_build_priority ignored" in caplog.text
+
+
+def _spy_build_claims(monkeypatch: pytest.MonkeyPatch) -> list[tuple[dict[str, Any], list[tuple]]]:
+    """Every build-feed claim's parameters and the rows it returned."""
+    seen: list[tuple[dict[str, Any], list[tuple]]] = []
+    rows = incremental_lane._rows
+
+    def spy(conn: Any, sql: str, params: Any = None) -> list[tuple]:
+        out = rows(conn, sql, params)
+        if sql == S.RT_SCOPE_BUILD_ENTRANTS_SQL:
+            seen.append((dict(params), list(out)))
+        return out
+
+    monkeypatch.setattr(incremental_lane, "_rows", spy)
+    return seen
+
+
+def test_e979_the_setting_reaches_the_build_claim_end_to_end(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The live path: the row in `autodedup.settings` is read by the pass, handed to the claim's
+    statement, and the pass reads the named category of the widened block before lower ids."""
+    conn = _built_town(tmp_path)
+    for listing_id in list(NEW_IDS)[3:]:
+        conn.listings[listing_id]["category_main"] = "dum"
+    _seed(conn, tmp_path, f"obec:{TOWN} obec:{OTHER_TOWN}")
+    assert conn.settings[bootstrap_key(GEN)] is True
+    conn.settings[pass_rate_key(GEN)] = 3.5 / 787.5          # three adverts a build pass
+    conn.settings[build_priority_key(GEN)] = {"blocks": [f"obec:{OTHER_TOWN}"],
+                                              "categories": [["dum", "prodej"]]}
+    seen = _spy_build_claims(monkeypatch)
+
+    out = run_incremental(lambda: conn)
+
+    assert not out["aborted"] and out["feeds"].get("entered") == 3
+    assert len(seen) == 1
+    params, claimed = seen[0]
+    assert params["priority_blocks"] == [f"obec:{OTHER_TOWN}"]
+    assert params["priority_cats"] == ["dum/prodej"]
+    assert [int(row[0]) for row in claimed] == list(NEW_IDS)[3:], (
+        "the houses, although the flats' ids are lower")
+
+
+def test_e979_without_the_row_the_claim_gets_empty_arrays(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = _built_town(tmp_path)
+    _seed(conn, tmp_path, f"obec:{TOWN} obec:{OTHER_TOWN}")
+    conn.settings[pass_rate_key(GEN)] = 3.5 / 787.5
+    seen = _spy_build_claims(monkeypatch)
+
+    out = run_incremental(lambda: conn)
+
+    assert not out["aborted"] and seen
+    assert all(p["priority_blocks"] == [] and p["priority_cats"] == [] for p, _rows in seen)
+    assert [int(row[0]) for row in seen[0][1]] == list(NEW_IDS)[:3], "E976's id order"

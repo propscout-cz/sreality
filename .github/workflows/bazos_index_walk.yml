@@ -6,7 +6,7 @@ name: "Scraping: Bazos index walk"
 # nominates unseen ones for a page check once the walk reached the portal's end
 # (source-scoped and throttled; the page, not the count, decides), and
 # new/price-changed ids are enqueued into listing_detail_queue
-# (source='bazos'). No detail fetch — the drain (bazos_detail_drain.yml) consumes
+# (source='bazos'). No detail fetch — the realtime worker's drain lane consumes
 # the queue. Records run_type='index'.
 #
 # WHY split: bazos now walks 22 nationwide scopes (byt/dum/chata/restaurace/
@@ -111,4 +111,5 @@ jobs:
           if [ -n "$RADIUS_KM" ]; then ARGS="$ARGS --radius-km $RADIUS_KM"; fi
           if [ -n "$MAX_PAGES" ]; then ARGS="$ARGS --max-pages $MAX_PAGES"; fi
           echo "python -m scraper.bazos_main $ARGS"
-          eval "python -m scraper.bazos_main $ARGS"
+          # exec: a cancel's SIGINT must reach Python, which finalizes the run (#2019), not the shell around it.
+          eval "exec python -m scraper.bazos_main $ARGS"

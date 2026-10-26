@@ -1095,6 +1095,19 @@ export interface FilterPreset {
   position: number;
   /* Optional chip colour from the shared tag palette; null = neutral default. */
   color: TagColor | null;
+  /* The box it sits in (FilterPresetGroup, migration 672); null = loose. */
+  group_id: string | null;
+}
+
+/* A named box the account sorts its presets into (filter_preset_groups,
+ * migration 672): a saved set with no blob. Deleting one leaves its presets loose. */
+export interface FilterPresetGroup {
+  id: string;
+  name: string;
+  color: TagColor | null;
+  position: number;
+  created_at: string;
+  updated_at: string;
 }
 
 /* A named Browse › Stats dashboard (stats_dashboards, migration 647): the

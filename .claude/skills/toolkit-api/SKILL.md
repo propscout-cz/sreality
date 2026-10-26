@@ -108,7 +108,7 @@ it (`api/`). They do not apply to the scraper.
    that check's open cell incidents on the service role, which stops their reminders), `/properties/merge*`, `/labeling/*`,
    `/outreach/*`, `/broker-review/*`, `/autodedup/*`, `/new-dedup/*`,
    `/skill-refinements/*`, `/location/*` and dataset-write/dispatch routes on price-stats use `require_admin` (JWT-gated, see below) instead of plain `require_token`;
-   `/pipeline/*` (+ `GET`/`POST /pipeline/shares`, `DELETE /pipeline/shares/{account_id}?side=shared_with|shared_with_me`, mig 641), `/collections` (+ `POST`/`DELETE /collections/{id}/shares`, mig 610: the tenant UPDATE (own accounts, `require_account_id`) gates, then the service role writes the share + its notification, which carries no text (the bell names the sharer from `actor_account_id` and the thing by its live name, mig 656); all three kinds (collections, pipelines, dashboards) are ONE module, `api/shares.py`), `/tags`, `/filter-presets` (per account, mig 595), `PUT`/`DELETE /push/subscription` + `POST /push/opened` (mig 654: `require_account_id`, never acts, then the service role in the handler; `GET /push/key` is `require_token`, no connection), `GET`/`PUT /stats/dashboard` (per account, migs 626 + 647: the account's working board, a whole-document upsert validated by `toolkit/stats_registry.py`) + `/stats/dashboards` (named dashboards, mig 647: the same saved-set CRUD as `/filter-presets`, one module `api/saved_sets.py`, plus read-only shares through `api/shares.py`), `/estimations` create/detail/scenario/trace payload/feedback (its refiner admin-only), notes, a property's files (`/properties/{id}/attachments[/{aid}]`, mig 660),
+   `/pipeline/*` (+ `GET`/`POST /pipeline/shares`, `DELETE /pipeline/shares/{account_id}?side=shared_with|shared_with_me`, mig 641), `/collections` (+ `POST`/`DELETE /collections/{id}/shares`, mig 610: the tenant UPDATE (own accounts, `require_account_id`) gates, then the service role writes the share + its notification, which carries no text (the bell names the sharer from `actor_account_id` and the thing by its live name, mig 656); all three kinds (collections, pipelines, dashboards) are ONE module, `api/shares.py`), `/tags`, `/filter-presets` (per account, mig 595; groups mig 672: `/filter-preset-groups` + `PUT /filter-presets/layout`), `PUT`/`DELETE /push/subscription` + `POST /push/opened` (mig 654: `require_account_id`, never acts, then the service role in the handler; `GET /push/key` is `require_token`, no connection), `GET`/`PUT /stats/dashboard` (per account, migs 626 + 647: the account's working board, a whole-document upsert validated by `toolkit/stats_registry.py`) + `/stats/dashboards` (named dashboards, mig 647: the same saved-set CRUD as `/filter-presets`, one module `api/saved_sets.py`, plus read-only shares through `api/shares.py`), `/estimations` create/detail/scenario/trace payload/feedback (its refiner admin-only), notes, a property's files (`/properties/{id}/attachments[/{aid}]`, mig 660),
    `/listings/lookup` (**RLS-ONLY**: it takes no account argument and its SQL carries no account predicate — `current_account_ids()` must stay the ONE membership definition, the same one the SPA reads; a second, explicitly-bound one is what broke the extension 2026-07-23→09-11), `/brokers/*` and `/properties/{id}/valuo` (tenancy shape 3) use `verify_jwt`/`tenant_conn` for per-account
    identity without the admin claim (`GET /estimations{,/latest-by-listing}` take `account_scope`);
    most other routes are `require_token` (any signed-in caller, no identity — buildings,
@@ -193,7 +193,7 @@ it (`api/`). They do not apply to the scraper.
     provider argument. Adding a provider is a new file implementing the same Protocol,
     registered in `api/dependencies.py:_build_providers` — AND, separately, in every hand-built provider map (`scraper/main.py`,
     the condition scripts, `scripts/bakeoff_text_extraction.py`, `autodedup/judge_lane.py`, `toolkit/vision_batch.py`,
-    `toolkit/description_extraction.py`; the API, the worker and `smoke_agent.py` use `get_providers()`), and a model whose
+    `toolkit/description_extraction.py`; the API and the worker use `get_providers()`), and a model whose
     provider is unregistered raises in `LLMClient.call` BEFORE the try/except that writes the failure row, so a misroute leaves ZERO `llm_calls` evidence and is
     invisible to the `llm` health check. `LLMClient` is the audit orchestrator — every call
     writes one row to `llm_calls` with provider, model, tokens, USD cost, and a `called_for`
@@ -351,9 +351,9 @@ Database:
   Connection string → Session pooler, port 5432; same host/user as `SUPABASE_DB_URL`, just
   port 5432 not 6543). **Optional**; used only by the scraper's hot detail-write loop
   (`connect_session()`, i.e. the Phase-2 detail-drain's batched writes) so its repeated SQL
-  gets prepared statements. Unset → falls back to `SUPABASE_DB_URL`. Set it as an Actions
-  secret on `detail_drain.yml` (and the Railway env var only if the API ever calls
-  `connect_session()`).
+  gets prepared statements. Unset → falls back to `SUPABASE_DB_URL`. Set it on the realtime
+  worker's Railway service, the drain's only runtime since W0 (#2010), and on the API only if it
+  ever calls `connect_session()`.
 - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` — set as Actions secrets for forward
   compatibility; the v1 scraper connects to Postgres directly and does not need them.
   (`SUPABASE_SERVICE_ROLE_KEY` is the 2025 `sb_secret_...` token, **not** a JWT.) **On the
@@ -458,20 +458,22 @@ the Resend email + Telegram transports, the outbox, `ChannelClient`, `POST /webh
 
 Scraper orchestration:
 - `SREALITY_COUNTRY_ID` (optional, default `112` = Czech Republic).
-- `SCRAPE_CHAIN_TOKEN` (optional fine-grained PAT: this repo, Actions read+write) — lets the
-  scrape workflow re-dispatch itself for tighter-than-cron cadence; no-op without it.
+- `SCRAPE_CHAIN_TOKEN` (optional fine-grained PAT: this repo, Actions read+write) — lets a
+  workflow re-dispatch itself for tighter-than-cron cadence (the scrape drains that did are deleted); no-op without it.
 - `GITHUB_ACTOR` — CI context, used for curated-cities upload attribution.
 
 NEW DEDUP (docs/design/new-dedup/PROGRAM.md, Wave 1):
 - `RUNPOD_API_KEY` — Actions secret only (no Railway/frontend use). Auths `scripts/runpod_client.py`'s REST
   (`rest.runpod.io/v1`) + GraphQL (`api.runpod.io/graphql`) calls to launch/poll/terminate on-demand GPU pods.
-  Two `workflow_dispatch` lanes: `new_dedup_runpod_smoke_test.yml` (infra proof) and `dinov3_embed_backfill.yml`
-  (the DINOv3 corpus embedding pass, never yet run on real data). Every job goes through `RunPodClient.run_job`,
+  Its workflow consumers: `autodedup.yml`, `dinov3_bakeoff_manifest.yml`, `dinov3_embed_backfill.yml`, `runpod_reap.yml`, `tagging_bakeoff.yml`, `text_extraction_bakeoff.yml`
+  (`dinov3_embed_backfill` is the DINOv3 corpus embedding pass, never yet run on real data). Every job goes through `RunPodClient.run_job`,
   which terminates the pod in a `finally` however the job ends — the actual cost-safety guarantee (the pod API has no "run
   once and stop" flag). Credentials reach a pod ONLY via the optional `env: dict[str, str]` on
   `launch_pod`/`run_job`/`run_job_with_fallback` — the REST body's `env` **object** (`{"K": "v"}`, not GraphQL's
   `[{key, value}]` list; omitted when empty), never `start_cmd`, which is argv in the pod record. Never logged.
 - `HF_TOKEN` — Actions secret only. HuggingFace token for **gated** weights (`facebook/dinov3-*` is `gated: manual`; even `config.json` 401s), read by `scraper/dinov3_tagger.py` and forwarded into the pod.
+- `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ZONE_ID` — repo-root `.env` only, read by no code: lets a session edit `propscout.cz` DNS
+  (token scope: Zone Read, DNS Edit, Single Redirect Edit). `app.`/`api.` stay DNS-only — brand-domain `PROGRAM.md` W1.
 
 Frontend / extension (build-time only, inlined into the browser bundle — *not* backend
 runtime): `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` (the publishable anon key, safe in

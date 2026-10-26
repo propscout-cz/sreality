@@ -613,9 +613,9 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
       input (`CreateEstimationIn` takes only `url`/`spec`/`sreality_id`, the same gap that keeps
       Browse estimates sreality-only, `docs/architecture.md` § rule 12) — then delete
       `_insert_pending_run` / `_insert_failed_run` / `run_pending_estimation`. Deterministic runs
-      are unmetered, so the fold changes no quota. The second fork, `scripts/smoke_agent.py`'s
-      hand INSERT (`source='api'`, `mode='agent'`, one production row per manual
-      `smoke_agent.yml` run), is owed the same fold or an explicit manual-smoke sanction.
+      are unmetered, so the fold changes no quota. The second fork, the manual smoke agent's hand INSERT
+      (one production row per run), was deleted with its workflow on 2026-10-25 (Actions exit
+      W0): no path forks the ledger.
     - **Remaining Wave 3 — operator / product / legal-gated (NOT started, surfaced as decisions):**
       *Superseded 2026-10-21 by the notifications push program: (a) is moot (Resend deleted, R5); (b) becomes
       routing by the event's account to its registered iPhones (W4), with no settings table; (c) and (e) stay

@@ -129,8 +129,8 @@ them; `tests/scraper/test_portal_category_coverage.py` now fails CI whenever a p
 in the fleet carries such a category) and the rent-only `podnajem`/`ubytovani` (roommate
 search and short-term lodging classifieds, not the sale or rental of a property). So — like
 sreality/idnes (rule #19) — it is **cadence-split**: `bazos_index_walk.yml` (every 6h, full
-walk + presence nomination + enqueue) feeds the bounded `bazos_detail_drain.yml` (hourly,
-`--max-seconds` budget). A combined run can't do both inside one job (the full 22-scope walk is
+walk + presence nomination + enqueue) feeds the realtime worker's drain lane (bazos's only
+drain since Actions-exit W0, #2010). A combined run can't do both inside one job (the full 22-scope walk is
 ~2400 index pages ≈ 85-90 min at the portal's 0.5 req/s index rate since migration 488 added
 pozemek/zahrada/garaz/ostatni — a 130-minute job timeout with a 110-minute budget — which eats
 the window, starving the drain); narrow ad-hoc runs go through the split
@@ -232,7 +232,7 @@ a page check (rule #3, source-scoped) and the page decides.
 
 **Data source (reality.idnes.cz).** A scheduled scraper (`scraper/idnes_client.py`,
 `idnes_parser.py`, `idnes_main.py` — **cadence-split** like sreality/bazos:
-`idnes_index_walk.yml` every 6h feeds the hourly bounded `idnes_detail_drain.yml`) tagged
+`idnes_index_walk.yml` every 6h feeds the realtime worker's drain lane) tagged
 `source='idnes'`. iDNES is an HTML portal (like bazos, not a JSON API) but a STRUCTURED one:
 `idnes_parser` reads the `<dl>` spec table, a clean price element, and **precise per-listing
 coordinates from the page's embedded map config** (`"center":[lon,lat]`), so there is no
@@ -320,8 +320,8 @@ keeps writing and reading its own slices for its stalest-first order.
 The detail URL carries the category
 (`/detail/{sale}/{cat}/…`), so the drain derives each listing's category from its own URL —
 one config (the `portals` row, migrations 110/111) walks many categories (byty + domy ×
-prodej + pronájem today). Image-URL rows are recorded by the drain; the shared `images.yml`
-job downloads the bytes to R2 (source-agnostic).
+prodej + pronájem today). Image-URL rows are recorded by the drain; the realtime worker's
+`images` lane downloads the bytes to R2 (source-agnostic).
 
 **Data source (mmreality.cz).** A crawler (`scraper/mmreality_client.py`,
 `mmreality_parser.py`, `mmreality_main.py`, workflow `scrape_mmreality.yml` — pilot,
@@ -397,8 +397,8 @@ ruling 3): a pasted link of any portal becomes an ad through `POST /listings/ing
 **Data source (ceskereality.cz).** A scheduled scraper (`scraper/ceskereality_client.py`,
 `ceskereality_parser.py`, `ceskereality_main.py`) tagged `source='ceskereality'`. It is large
 (~49k listings), so — like sreality/idnes — it is **cadence-split**: `ceskereality_index_walk.yml`
-(every 6h, full walk + presence nomination + enqueue) feeds the hourly bounded
-`ceskereality_detail_drain.yml` (`--max-seconds` budget). The index walk partitions each
+(every 6h, full walk + presence nomination + enqueue) feeds the realtime worker's drain
+lane. The index walk partitions each
 category on the **14 declared kraj slugs** (`KRAJ_SLUGS`, a proven row-level partition —
 never the rendered facet block, which is a top-10-by-popularity list), pages each slice to
 its own declared tail (a *filtered* search URL caps at 99 pages / 1,980 rows; the famous
@@ -1402,7 +1402,7 @@ renumber.** Navigate by area:
    phone-size copies shipped (2026-10-12), whose copy may hold the other photo; applied after deploy).
    Nothing recomputes a stored row's key, so the two legacy shapes stay serveable forever:
    `image_storage.LISTING_PHOTO_KEY_RE` enumerates all
-   three and is the ONE whitelist of the public `GET /images/{key}` and of the re-master lane. It stays
+   three and is the ONE whitelist of the public `GET /images/{key}`. It stays
    anchored and enumerated, never a prefix, or it starts presigning the private `custom-attachments/`
    uploads that share the bucket. **A throttle is the portal's answer about our rate, never the image's
    failure** (2026-10-06): a 429, or the 403 a WAF follows a burst with, burns no `download_attempts`
@@ -1427,29 +1427,26 @@ renumber.** Navigate by area:
    native file; `sreality-1800-fit` the uncropped master; `sreality-749-crop` assessed/source
    gone/crop retained, TERMINAL; `native` a non-sreality file), plus `stored_width`/`stored_height`
    measured at upload. A job that REPLACES an object's bytes under its existing `storage_path`
-   must go through `db.invalidate_derived_signals` — the one chokepoint that re-arms the phash +
-   CLIP lanes by nulling their own predicates (`phash`, `clip_tagged_at`) and deletes no label,
-   review or CLIP-cache row. **Outside the download path itself, the ONLY job that replaces stored
-   bytes is the re-master lane** (`scripts/remaster_sreality_images.py` / `sreality_image_remaster.yml`):
-   it overwrites the object under the row's existing `storage_path` and stamps `rendition` +
-   dimensions through `db.mark_image_remastered`, which runs that invalidation in the same
-   transaction — so no other job may rewrite an object without going through the same pair.
-   Two properties of that lane matter outside it. *Every* outcome stamps `last_download_attempt_at`
-   (the pending set's only anti-thrash rail), and RETIREMENT — claiming `sreality-749-crop`, which
-   is irreversible for the lane — always takes two sightings 20h apart. And because a stored URL that
-   404s is re-resolved from the live detail **by image `order`**, the lane inherits the platform's
-   image identity: a row is `(listing_id, sequence)`, a POSITION, so a reordered gallery re-points it
-   onto whatever photo now sits at that order — exactly as the `(listing_id, sequence)` images upsert,
-   the detail drain and `refresh_stale_images` already do. Labels keyed on `images.id` follow the
-   position, not the photograph; that is a property of the upsert key, not of this lane.
-   **Two consequences of the template switch, both live until the re-master lane finishes.**
+   must, in the same transaction as its `rendition` + dimensions stamp, null `phash` and
+   `clip_tagged_at` — the pHash and CLIP lanes' own selection predicates, so both recompute on
+   their own — and delete no label, review or CLIP-cache row. **No job replaces stored bytes
+   today** (the chokepoint that did this, `invalidate_derived_signals`, went with its only
+   caller): the sreality re-master lane, the only one that ever did, ran
+   2026-09-11 → 2026-10-25 (all six shards stamped `app_settings.sreality_remaster_last_complete`,
+   zero stored sreality rows left with `rendition IS NULL`) and was deleted with its workflow
+   (Actions exit W0). What it left behind: a `sreality-749-crop` row is one whose source was gone
+   before it could be re-fetched (TERMINAL), and image identity is a POSITION — a row is
+   `(listing_id, sequence)`, so a reordered gallery re-points it onto whatever photo now sits at
+   that order, exactly as the `(listing_id, sequence)` images upsert, the detail drain and
+   `refresh_stale_images` do. Labels keyed on `images.id` follow the position, not the photograph;
+   that is a property of the upsert key.
+   **Two consequences of the template switch: (a) permanent, (b) until a thumbnail rendition exists.**
    (a) *The visual-signal corpus is MIXED-RENDITION.* dHash and CLIP are framing-sensitive, so the
    same photo stored as the old 4:3 crop and as the whole frame yields materially different signals:
    **phash/CLIP are comparable only WITHIN a rendition**, and any cross-row query (the duplicate
-   census, the new-dedup rebuild, a Hamming join) must group or filter on `images.rendition` — NULL
-   and `sreality-749-crop` are the crop cohort, `sreality-1800-fit` the master cohort. Newly
-   downloaded rows widen the split without passing through `invalidate_derived_signals`, which only
-   covers rows a re-master rewrites. `scripts/tagging_bakeoff_arms.py` calibrated its resolutions
+   census, the new-dedup rebuild, a Hamming join) must group or filter on `images.rendition` —
+   `sreality-749-crop` is the crop cohort, `sreality-1800-fit` the master cohort (no stored sreality
+   row is NULL since the re-master finished). `scripts/tagging_bakeoff_arms.py` calibrated its resolutions
    against the old 749px stored width — re-read that comment against the rendition mix before
    trusting a cross-era comparison. (b) *Stored objects get several times larger and there is no
    thumbnail rendition yet*, so every surface (Browse cards, lightbox, comparables, the extension)
@@ -1459,12 +1456,12 @@ renumber.** Navigate by area:
    `thumb/w1080/<key without .jpg>.webp` (WebP q75, EXIF rotation applied, ≤ 1080 px wide), which the route
    builds from the master on its first request (≤ 4 at once, `api/routes/images.py`) and, on any
    failure, swaps for a 5-minute redirect to the master; only the pipeline board's thumbnails and the
-   property page's grid tiles ask for it. **A re-master deletes the copy** right after it overwrites
-   the master (best-effort, `image_storage.copy_key`), so the next request makes it from the new
-   bytes. Writing copies at download (two widths) waits on the operator's cost hold. Downstream, the
+   property page's grid tiles ask for it. A job that replaced the master would have to delete the
+   copy (`image_storage.copy_key`) so the next request makes it from the new bytes; none does
+   today. Writing copies at download (two widths) waits on the operator's cost hold. Downstream, the
    image phase's bound is wall-clock (`--image-max-seconds`), not the count cap — per-image cost
-   moved, and a count cap calibrated against the old rate overruns the CI job timeout into a SIGKILL
-   that skips finalize.
+   moved, and a count cap calibrated against the old rate overran the CI image jobs' timeout into a
+   SIGKILL that skipped finalize (the worker's images lane bounds itself by its slice instead).
 7. **No new dependencies without justification.** Each entry in `pyproject.toml` should
    have a clear reason. Prefer the stdlib.
 8. **Latest-wins data model with snapshot history.** The `listings` table always reflects
@@ -1519,13 +1516,11 @@ renumber.** Navigate by area:
     and re-adding the CHECK (two ALTERs), in lockstep with the `CreateEstimationIn.source`
     `Literal`, `api/schemas.py`).
 
-    One path still forks the ledger and is owed a fix (the other, the Watchdog feed's "Run
-    estimation", `POST /notifications/dispatches/{id}/estimate`, with its own executor and no
-    trace, was deleted 2026-10-21 in W1 of `docs/design/notifications-push/PROGRAM.md`, ruling R10):
-    `scripts/smoke_agent.py` (the manual `smoke_agent.yml` workflow) hand-INSERTs a production
-    row (`source='api'`, `mode='agent'`, `status='running'`) per invocation and drives the agent
-    itself — either route it through `create_estimation_run` or sanction it here as the one
-    manual-smoke exception.
+    No path forks the ledger any more: the Watchdog feed's "Run estimation"
+    (`POST /notifications/dispatches/{id}/estimate`, its own executor and no trace) was deleted
+    2026-10-21 in W1 of `docs/design/notifications-push/PROGRAM.md` (ruling R10), and the manual
+    smoke agent that hand-INSERTed a production row per run went with its workflow on 2026-10-25
+    (Actions exit W0).
 
     **What immutability covers.** The RESULT: the estimate, the trace, the cost, the
     comparables frozen at run time. One thing on the row is deliberately mutable: the
@@ -3113,7 +3108,7 @@ renumber.** Navigate by area:
     does not carry. Enqueues
     ids into one of two service classes — ACQUISITION (`QUEUE_PRIORITY_NEW`, never fetched) or
     REFRESH (everything else, ranked failure-retry > price-changed > refetch-cohort).
-    `detail_drain.yml` (`--drain-only`, `run_type='detail'`) claims a bounded slice
+    The drain (the realtime worker's drain lane; by hand `--drain-only`, `run_type='detail'`) claims a bounded slice
     (`FOR UPDATE SKIP LOCKED`) **composed from both classes**: `claim_detail_batch` reserves
     `QUEUE_ACQUISITION_RESERVE` (half) of each batch for acquisition and gives refresh the rest,
     with unused reserve backfilling to refresh inside the SQL. This is load-bearing, not a tuning
@@ -3125,7 +3120,11 @@ renumber.** Navigate by area:
     MUST report `complete=False`.** `run_index_walk` builds the deadline from `--max-seconds`
     and passes it into `walk_category` (the Portal protocol declares it); portals check it with
     the one shared `portal.deadline_reached` — never an inline comparison, which is trivially
-    invertible into a walk that runs to the job timeout while looking correct. Checking only
+    invertible into a walk that runs to the job timeout while looking correct. Since #2019 it
+    also reads the process's stop event (`scraper/stop.py`; SIGTERM/SIGINT, installed by
+    `run_phase`), so a deploy or a cancel is a deadline arriving early: the request in hand is
+    cut short, the run is finalized with no error, the process exits 143, and the cut category
+    nominates nothing. Checking only
     BETWEEN categories is not enough and was the idnes failure: one idnes category is ~1,050
     pages, so the outer check never came round and GitHub SIGKILLed the job at page 599 in 9 of
     12 runs, each recording zero categories. Equally load-bearing is that the budget is actually
@@ -3211,12 +3210,13 @@ renumber.** Navigate by area:
     change, or a revival, or a write under an inactive property), `mark_listing_inactive`
     (delisting: the drain and freshness), `touch_listings_by_id` (re-sighting reactivation, via `reconcile_sightings`) — enqueue the affected `property_id` into `dirty_properties`
     (migration 106) with a cheap set-based `INSERT ... ON CONFLICT DO UPDATE SET marked_at`.
-    `property_maintenance.yml` (`recompute_property_stats --incremental`, cron `*/5`) attaches
+    The realtime worker's maintenance lane (`recompute_property_stats.run_incremental_pass`, every
+    30 s; its only runtime since Actions-exit W0, #2010, deleted `property_maintenance.yml`) attaches
     new stragglers (singletons only — the old geo Tier-1 matcher was removed; grouping is
     out-of-band, rule #15) and recomputes **only the queued properties** (the full
     recompute SQL scoped to
-    `id = ANY(...)`), so a new/edited/delisted listing reaches `properties` within ~5 min (~30 s
-    on the worker's maintenance lane) and the job is **O(changes)**, not O(all properties). Reaching
+    `id = ANY(...)`), so a new/edited/delisted listing reaches `properties` within ~30 s
+    and the pass is **O(changes)**, not O(all properties). Reaching
     **Browse** is a second step, because `browse_projection` reads `properties` and Browse reads
     the `browse_list` snapshot: since field-capture W6 the drain patches `browse_list` for exactly
     the ids it recomputed — each slice runs `properties_changed` (recompute, `sync_browse_list`,
@@ -3262,9 +3262,10 @@ renumber.** Navigate by area:
     The maintenance lease is one 15-minute TTL
     heartbeat-renewed every batch/slice, so a killed job freezes maintenance for minutes, not
     hours. (There is no scheduled dedup job any more — the automatic decision
-    layer was removed in the 2026-08 cutoff, rule #15.) Both
-    maintenance jobs share the `sreality-property-maintenance` concurrency group so they never
-    mutate `properties` concurrently. Inline merge/detach run `properties_changed` (the drain's
+    layer was removed in the 2026-08 cutoff, rule #15.) The
+    worker's lane and the daily sweep never mutate `properties` concurrently because both take
+    that lease; the sweep's `sreality-property-maintenance` concurrency group only queues a
+    second sweep behind the first. Inline merge/detach run `properties_changed` (the drain's
     own after-step: scoped recompute, Browse patch, broker queue) directly, and never enqueue
     `dirty_properties`.
     A residual of removing the
@@ -3372,8 +3373,7 @@ renumber.** Navigate by area:
     `CASE WHEN %(source)s = 'sreality'` legacy `sreality_id` fills in `db.enqueue_detail` and
     `db.enqueue_location_refetch`, `portal_factory.build_portal`'s bazos and sreality
     constructor special-cases (both predate the config-taking constructor), and
-    `realtime_worker._PORTAL_CLASSES`'s `k != "bazos"` (the worker's sreality count-probe is a
-    documented sreality-only lane, not this); (c) `scraper/main.py` is sreality's module yet owns
+    `realtime_worker._PORTAL_CLASSES`'s `k != "bazos"`; (c) `scraper/main.py` is sreality's module yet owns
     the cross-portal image pipeline (`_run_image_downloads`) the real-time worker imports.
     The needs-detail queue is **source-generic** (`listing_detail_queue` keyed on
     `(source, native_id)` + `detail_ref`, migration 108) so every portal shares the one queue and
@@ -4450,7 +4450,7 @@ writes is not evidence a portal published.
   with the active contract-version set it was taken under (`bazos@5,bezrealitky@2,…`) and honoured
   only while that set holds, because a bump is the one event that makes rows BELOW it eligible again;
   an unstampable body is re-fetched once per version set instead of once per pass.
-  Bodies are extracted **across PROCESSES** (`page_readers.extract_pages`, `os.cpu_count()` wide) —
+  Bodies are extracted **across PROCESSES** (`page_readers.extract_pages`, `scraper.cpus.job_cpus()` wide: the runner's `JOB_CPUS`, else the container's quota, never the host's core count) —
   the parse is pure CPU and threads cannot share it, one core held a 1 500-body batch at 143–313 s
   against ~48 s to fetch it — with `forkserver`, never `fork`, because the lane holds an open psycopg
   connection inside the batch transaction and a forked child finalizing its copy of that socket would
@@ -4631,7 +4631,14 @@ pointer its contract reads. The predicates and remedies replace the harness's
 shape needs, and the reader takes the first that answers — that, not a second entry, is how a portal
 whose payload changed shape keeps reading the older one (sreality@3: 30,265 delisted rows were frozen
 on the pre-cutover JSON, whose whole address is one line in `/locality/value` with the pin in `/map`,
-and every rail the primary locator has applies to each alternative). Two further rails: `ReaderContract`
+and every rail the primary locator has applies to each alternative). A PAGE entry's alternative may
+name another page reader (`reader:`), held to the entry's own surface and extraction method so a
+claim's provenance is true whichever path answered; `page_readers.read_entry` walks the paths above
+the reader, and the payload readers keep walking their own through `claims_common.locator_reads`.
+That is how idnes@6 reads an unpinned ad's street off its map highlight ("Zvýrazněná ulice <name>",
+the one feature with no id, picked by its title) and off the address line when the page has no
+highlight, and how realitymix@7 reads its heading before the map's `data-address` (operator ruling
+2026-10-25). Two further rails: `ReaderContract`
 records each reader's whole `locator` appetite (the keys it requires plus the ones it merely reads),
 derived back out of the reader bodies by an AST scan over each reader and the helpers it delegates
 its locator to, and a locator key outside that union is refused — a declared key no reader consults
@@ -5020,7 +5027,7 @@ the one member that is latency-bound rather than instance-bound — a handful of
 and one answer-row write per listing, no COPY, no corpus scan, no detoast — and it READS the claim
 spine the intake WRITES, so it never carried a must-never-overlap constraint, while at 0.7 listings/s
 and a queue above 100k a self-chaining group member starved it to zero ticks in three hours. Its
-guards are the job-level `location-resolve` group plus the `location_jobs` lease CAS, which is also
+guards are the job-level `location-resolve` group plus the `scheduled_jobs` lease CAS, which is also
 what keeps it exclusive against the always-on Railway worker's resolve lane. **No batch statement
 runs without a ceiling**: `statement_timeout = 0` is for genuine bulk phases (COPY, index build,
 whole-table rebuild) and nothing else; per-unit and per-batch work arms `SET LOCAL statement_timeout`

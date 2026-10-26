@@ -33,10 +33,6 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 
 R2_VARS = ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME")
 
-# `scraper.main` is the sreality Phase-2 fallback lane; it reaches the same
-# `upsert_portal_raw_page` chokepoint as the split lanes, so it is in scope too.
-EXTRA_ENTRYPOINTS = frozenset({"scraper.main"})
-
 # `scraper.price_stats_main` scrapes aggregate price statistics, never a listing page,
 # and reaches no archive call site — asserted below rather than trusted.
 NON_ARCHIVING = frozenset({"scraper.price_stats_main"})
@@ -45,10 +41,9 @@ NON_ARCHIVING = frozenset({"scraper.price_stats_main"})
 def _portal_entrypoints() -> frozenset[str]:
     sources = sorted(p.stem for p in (ROOT / "contracts" / "portals").glob("*.yaml"))
     assert sources, "no portal contracts found — the derivation is broken, not the fleet"
-    found = {
+    return frozenset(
         f"scraper.{s}_main" for s in sources if (ROOT / "scraper" / f"{s}_main.py").exists()
-    }
-    return frozenset(found) | EXTRA_ENTRYPOINTS
+    )
 
 
 def _steps_running(module: str) -> list[tuple[pathlib.Path, dict, dict]]:

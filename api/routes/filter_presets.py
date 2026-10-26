@@ -3,13 +3,23 @@
 Mounted under `/filter-presets/*`, per account (ticket #1761, migration 290's policy is the boundary). A preset
 is a named filter set restored client-side, so there is no matcher and no background work, and the blob is
 stored verbatim once its place chips are coded. Deliberately decoupled from the Watchdog (`/notifications/*`)
-so a preset can never fire a notification (migration 151).
+so a preset can never fire a notification (migration 151). Presets sit loose or in GROUPS (migration 672), a
+second instance with no blob at `/filter-preset-groups/*`; `PUT /filter-presets/layout` arranges both.
 """
 
 from __future__ import annotations
 
 from api import saved_sets
 from api import schemas as s
+
+GROUPS = saved_sets.SavedSetKind(
+    table="filter_preset_groups",
+    noun="group",
+    id_param="group_id",
+    blob_columns=(),
+    create_in=s.CreatePresetGroupIn,
+    update_in=s.UpdatePresetGroupIn,
+)
 
 PRESETS = saved_sets.SavedSetKind(
     table="filter_presets",
@@ -21,8 +31,11 @@ PRESETS = saved_sets.SavedSetKind(
     # PostgREST can write a JSON null or other non-object here (the column is only NOT NULL), and the SPA reads
     # `spec.filters`: such a blob reads as `{}`, as the old reader answered.
     empty_on_read=frozenset({"filter_spec"}),
+    groups=GROUPS,
 )
-# Every statement the kind runs, for the CI PREPARE sweep (tests/sql_corpus import-resolves `*_SQL`).
+# Every statement the kinds run, for the CI PREPARE sweep (tests/sql_corpus import-resolves `*_SQL`).
 PRESET_SQL = saved_sets.statements(PRESETS)
+PRESET_GROUP_SQL = saved_sets.statements(GROUPS)
 
 router = saved_sets.saved_set_router(PRESETS, "/filter-presets")
+group_router = saved_sets.saved_set_router(GROUPS, "/filter-preset-groups")

@@ -24,6 +24,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
+from scraper import stop
+
 LOG = logging.getLogger(__name__)
 
 
@@ -337,9 +339,10 @@ def deadline_reached(deadline: float | None) -> bool:
 
     A page loop that returns True here MUST report reached_end=False — a deadline
     is a stop of OURS (`OUR_STOPS`), and rule #3 lets only a walk that reached the
-    portal's end nominate the rows it did not see.
+    portal's end nominate the rows it did not see. A stop signal (`scraper.stop`) is
+    the deadline arriving early: every page loop stops on it without a branch of its own.
     """
-    return deadline is not None and time.monotonic() >= deadline
+    return stop.requested() or (deadline is not None and time.monotonic() >= deadline)
 
 
 IndexVerdict = Literal["new", "changed", "unchanged"]

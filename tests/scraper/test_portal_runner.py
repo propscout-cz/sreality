@@ -15,7 +15,8 @@ import psycopg
 import pytest
 from datetime import datetime, timedelta, timezone
 
-from scraper import delist_policy, portal_factory, portal_runner
+from scraper import delist_policy, portal_factory, portal_runner, stop
+from scraper.portal import deadline_reached
 from scraper.portal_runner import DrainItem
 
 
@@ -481,18 +482,20 @@ def test_index_walk_dry_run_uses_no_connection(monkeypatch):
     assert cap["queued"] == []
 
 
-def test_index_walk_bumps_index_pages_per_committed_category(monkeypatch):
+def test_index_walk_persists_each_category_with_its_pages(monkeypatch):
+    """With a run_id, each category's pages AND its by_category entry are committed in one statement as it ends, so
+    Health liveness and the walk's per-category progress survive a SIGKILL before finalize; what accumulated is
+    exactly the list finalize writes."""
     _nominations(monkeypatch)
-    # With a run_id, each category's pages are committed immediately so Health
-    # liveness survives a SIGKILL before finalize.
     p = _FakePortal(reached_end=True)
-    bumps: list[tuple[int, int]] = []
+    bumps: list[tuple[int, int, dict[str, Any]]] = []
     monkeypatch.setattr(
-        portal_runner.db, "bump_index_pages",
-        lambda conn, run_id, n: bumps.append((run_id, n)),
+        portal_runner.db, "bump_index_progress",
+        lambda conn, run_id, pages, entry: bumps.append((run_id, pages, entry)),
     )
-    portal_runner.run_index_walk(p, dry_run=False, run_id=42)
-    assert bumps == [(42, 1), (42, 1)]  # one bump per category (cat_pages=1)
+    _rc, agg = portal_runner.run_index_walk(p, dry_run=False, run_id=42)
+    assert [(rid, pages) for rid, pages, _ in bumps] == [(42, 1), (42, 1), (42, 0)]  # A, B, then the orphans
+    assert [entry for *_, entry in bumps] == agg["by_category"]
 
 
 def test_index_walk_does_not_bump_without_run_id(monkeypatch):
@@ -500,7 +503,7 @@ def test_index_walk_does_not_bump_without_run_id(monkeypatch):
     p = _FakePortal()
     bumps: list = []
     monkeypatch.setattr(
-        portal_runner.db, "bump_index_pages",
+        portal_runner.db, "bump_index_progress",
         lambda *a: bumps.append(a),
     )
     portal_runner.run_index_walk(p, dry_run=False)  # no run_id
@@ -747,6 +750,8 @@ def test_detail_drain_time_budget_finalizes_cleanly(monkeypatch):
                   "2 claims handed back untouched"),
     ("deadline", 0, 1, "DRAIN time budget reached mid-chunk; 2 claims handed back "
                        "source=fake"),
+    # #2019: a stop signal is the deadline arriving early, never a blocked portal.
+    ("stop", 0, 1, "DRAIN stop signal mid-chunk; 2 claims handed back source=fake"),
 ])
 def test_detail_drain_hands_back_what_the_ledger_refused_and_stops(
     monkeypatch, caplog, reason, refused, stopped, line,
@@ -1377,3 +1382,53 @@ def test_drain_breaker_exempts_presence_checks(monkeypatch):
     assert len(cap["flip"]) == 25
     assert p.calls["failure"] == []
     assert agg["listings_inactive"] == 25 and agg["errors"] == 0
+
+
+class _StoppingPortal(_FakePortal):
+    """Category B is cut by a stop signal, seen as a real page loop sees it (`deadline_reached` turns true, the
+    category returns cut) or as a refused request (`StopRequested` out of the client)."""
+
+    def __init__(self, how: str) -> None:
+        super().__init__(categories=["A", "B", "C"])
+        self._how = how
+
+    def walk_category(self, c, conn, dry_run, limiter, deadline=None):
+        if c != "B":
+            return super().walk_category(c, conn, dry_run, limiter, deadline)
+        self.calls["walk"].append(c)
+        stop.EVENT.set()
+        if self._how == "refused request":
+            raise stop.StopRequested("a stop signal arrived")
+        assert deadline_reached(deadline), "a page loop's own deadline check sees the stop"
+        return ({1}, {"found_new": 1, "enqueued": 1}, self._result_size, 1, False)
+
+
+@pytest.mark.parametrize("how", ["page loop", "refused request"])
+def test_a_stop_mid_category_finalizes_the_walk_with_the_stop_code(monkeypatch, how):
+    """#2019: the run is closed (no error), the process exits the stop code, the cut scope group and the orphans
+    nominate nothing (rule #3), no later category starts, and the progress persisted so far is the final list."""
+    rec = _PhaseRecorder(monkeypatch)
+    cap = _nominations(monkeypatch)
+    progress: list[dict[str, Any]] = []
+    monkeypatch.setattr(portal_runner.db, "bump_index_progress",
+                        lambda _c, _rid, _pages, entry: progress.append(entry))
+    p = _StoppingPortal(how)
+
+    rc = portal_runner.run_phase(p, "index", portal_runner.run_index_walk, False)
+
+    assert rc == stop.EXIT_CODE
+    assert p.calls["walk"] == ["A", "B"]
+    [(_rid, final)] = rec.finals
+    assert final["errors"] == 0
+    assert [(e["category_main"], e["walk_reached_end"]) for e in final["by_category"]] == [
+        ("A", True), ("B", False)]
+    assert [cm for cm, *_ in cap["queued"]] == ["A"]
+    assert cap["orphans"] == []
+    assert progress == final["by_category"]
+    assert rec.bumps == []
+
+
+def test_a_clean_phase_keeps_its_own_return_code(monkeypatch):
+    _PhaseRecorder(monkeypatch)
+    assert portal_runner.run_phase(_FakePortal(), "index", lambda portal, dry_run, **kw: (1, {}), False) == 1
+

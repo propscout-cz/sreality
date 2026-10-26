@@ -6,7 +6,7 @@ Selects images not yet CLIP-tagged via the in-table marker images.clip_tagged_at
 or a one-off --region-id), then a global newest-first sweep — downloads bytes from R2 on
 a worker pool, tags + embeds them, upserts one row per image, and stamps the marker so
 the image drops out of the needs-clip partial index. Idempotent + resumable + shardable
-(image_id % shards), so it parallelises like images.yml. A FREE replacement for the paid
+(image_id % shards), so it parallelises across jobs. A FREE replacement for the paid
 room classifier on the coarse dedup-relevant tags, and the first tagger for
 dum/pozemek/komercni. No-op (exit 0) if R2 env vars are missing.
 

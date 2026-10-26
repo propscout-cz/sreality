@@ -377,9 +377,9 @@ def main(argv: list[str] | None = None) -> int:
             portal, dry_run=args.dry_run, probe_pages=args.probe_pages)
         return rc
 
-    # Omitting both flags runs the index walk then the detail drain in one job,
-    # bounded by --max-pages / --max-detail (+ --max-seconds). The split flags
-    # exist so a large backfill can be cadence-split like sreality/idnes.
+    # The schedule walks only (--index-only) and the realtime worker drains; omitting
+    # both flags runs both phases, an ad-hoc combined run bounded by --max-pages /
+    # --max-detail (+ --max-seconds).
     rc = 0
     if not args.drain_only:
         rc = portal_runner.run_phase(
