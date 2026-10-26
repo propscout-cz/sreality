@@ -469,6 +469,7 @@ COMPANIONS = {
 GITHUB_ENTRIES = frozenset({"verify_pipeline", "price_stats"})
 GITHUB_SCHEDULES = frozenset({"verify_pipeline.yml", "scrape_price_stats.yml"})
 # The waiting set only shrinks: a new job or portal is born on the runner, never as one more GitHub schedule.
+# Until the walks move (#2029) that blocks onboarding a portal: a name added here needs an operator ruling.
 ORIGINAL_UNTIL_MOVED = frozenset({
     "stale_images", "rent_map", "map_overlays", "location_full_resolve", "property_sweep", "broker_sweep",
     "location_intake", "clip", "ruian_load",
