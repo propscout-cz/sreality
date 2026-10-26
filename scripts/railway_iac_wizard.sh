@@ -244,8 +244,10 @@ dashboard() { printf 'https://railway.com/project/%s' "${PROJECT_ID[$1]}"; }
 stop() {
   printf '\n  %s✗ STOP: %s%s\n' "$RED" "$1" "$RESET"
   note "Nothing else runs. Send the agent this message; the outputs are in $OUT."
-  if [[ "$MODE" == window2 ]]; then
+  if [[ "$MODE" == window2 && "${BRAKE_ASKED:-0}" == 1 ]]; then
     warn "Tell e9 the window stopped here. The autodedup brake stays on until the agent reports the worker healthy."
+  elif [[ "$MODE" == window1 || "$MODE" == window2 ]]; then
+    warn "Tell e9 the window stopped here."
   fi
   exit 1
 }
@@ -420,6 +422,8 @@ pr_state() {   # sets PR_NUMBER PR_HEAD PR_DRAFT PR_URL for this branch's pull r
   IFS=$'\t' read -r PR_NUMBER PR_HEAD PR_DRAFT PR_URL <<< "$row"
 }
 
+# The checkout follows the pull request by fast-forward only: after the final preflight the branch takes main with
+# `git merge origin/main`, never a rebase or a force-push (window 2 also checks the final-preflight SHA is an ancestor).
 checkout_is_pr_head() {
   git -C "$WT" fetch --quiet origin || stop "git fetch failed"
   pr_state
@@ -647,13 +651,17 @@ mode_window2() {
   stage "Gate"
   ensure_cli
   ensure_login
-  gate "Has e9 set realtime_autodedup_interval_seconds to 0 (the brake)?"
-  agent_reports "autodedup.rt_lease is empty (one SQL read)"
+  # Everything that can fail on our side runs before e9 is asked for the brake, so a stop here wastes no brake.
   window_gate
   ask FINAL_PREFLIGHT_SHA "The final-preflight SHA the agent gave you:"
-  git -C "$WT" log --oneline "$FINAL_PREFLIGHT_SHA..HEAD" -- .railway || stop "unknown SHA $FINAL_PREFLIGHT_SHA"
+  git -C "$WT" merge-base --is-ancestor "$FINAL_PREFLIGHT_SHA" HEAD 2>/dev/null \
+    || stop "$FINAL_PREFLIGHT_SHA is not in the pull request's history (unknown, or the branch was rebased or force-pushed)"
+  git -C "$WT" log --oneline "$FINAL_PREFLIGHT_SHA..HEAD" -- .railway
   git -C "$WT" diff --stat "$FINAL_PREFLIGHT_SHA" HEAD -- .railway
   gate "Are these only the rehearsal commits E and R and the folds the agent listed?"
+  BRAKE_ASKED=1
+  gate "Has e9 now set realtime_autodedup_interval_seconds to 0 (the brake)?"
+  agent_reports "autodedup.rt_lease is empty (one SQL read)"
   pause
 
   stage "Worker: plan and apply (worker restart 1)"
