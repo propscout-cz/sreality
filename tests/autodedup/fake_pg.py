@@ -466,6 +466,7 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
             "ev_images": p["ev_images"], "ev_phash": p["ev_phash"],
             "ev_clip": p["ev_clip"], "ev_tags": p["ev_tags"],
             "ev_complete": p["ev_complete"], "dd": p["dd"],
+            "source": p["source"], "area_basis": p["area_basis"],
             "first_decided_at": held.get("first_decided_at") or db.now,
             "updated_at": db.now,
         }
@@ -508,7 +509,7 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
                         row.get("ev_images"), row.get("ev_phash"), row.get("ev_clip"),
                         row.get("ev_tags"),
                         stamp.timestamp() if hasattr(stamp, "timestamp") else stamp,
-                        row.get("dd")))
+                        row.get("dd"), row.get("source"), row.get("area_basis")))
         return out
     if sql == S.RT_KNOWN_SQL:
         return [(int(i),) for i in p["ids"] if (gen, int(i)) in db.rt_fp]

@@ -38,6 +38,11 @@ class GuardSide(Protocol):
     area_m2: float | None
     disposition: str | None
     floor: int | None
+    source: str | None
+    area_basis: str | None
+
+
+FLOOR_AREA_BASIS: str = "floor"
 
 
 def area_rel_diff(a: float | None, b: float | None) -> float | None:
@@ -68,6 +73,16 @@ def area_veto_pct(a: GuardSide, b: GuardSide, cfg: Settings) -> float:
     return cfg.area_reject_pct
 
 
+def area_basis_exempt(a: GuardSide, b: GuardSide, gap: float, cfg: Settings) -> bool:
+    """Whether a side's portal prints its area as the total floor area (`area_basis='floor'`)
+    and the gap is within that portal's `area_veto_basis_floor_exempt` cap."""
+    for side in (a, b):
+        cap = cfg.area_veto_basis_floor_exempt.get(side.source or "")
+        if cap is not None and side.area_basis == FLOOR_AREA_BASIS and gap <= cap:
+            return True
+    return False
+
+
 def pair_veto(a: GuardSide, b: GuardSide, settings: Settings | None = None) -> str | None:
     """The name of the first hard guard the pair breaks (E2-E5), or None when it passes.
 
@@ -80,7 +95,7 @@ def pair_veto(a: GuardSide, b: GuardSide, settings: Settings | None = None) -> s
         return "category_main"
     area_tol = area_veto_pct(a, b, cfg)
     gap = area_rel_diff(a.area_m2, b.area_m2)
-    if gap is not None and gap > area_tol:
+    if gap is not None and gap > area_tol and not area_basis_exempt(a, b, gap, cfg):
         return "area"
     is_land = LAND_CATEGORY in (a.category_main, b.category_main)
     if (not is_land and a.disposition is not None and b.disposition is not None

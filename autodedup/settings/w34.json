@@ -4,6 +4,9 @@
         "dum": 0.2,
         "pozemek": 0.2
     },
+    "area_veto_basis_floor_exempt": {
+        "realitymix": 0.15
+    },
     "attr_cross_type_subtype_skip": true,
     "attr_probe_town_grain": true,
     "bridge_apply": true,

@@ -143,7 +143,7 @@ def _cut_key(cat_group: str | None, category_type: str | None) -> str:
 
 @dataclass(slots=True, frozen=True)
 class GuardRow:
-    """The five columns `pair_veto` reads, served from `listing_fp` without a gallery fetch.
+    """The columns `pair_veto` reads, served from `rt_fp` without a gallery fetch.
 
     Satisfies `guards.GuardSide` structurally, which is why the rule floor can refuse a
     candidate before the fan-out cap spends a slot on it (E17) without building its
@@ -155,11 +155,14 @@ class GuardRow:
     area_m2: float | None
     disposition: str | None
     floor: int | None
+    # NULL on a row written before migration 677: the basis exemption does not fire for it.
+    source: str | None = None
+    area_basis: str | None = None
 
 
 def guard_row(fp: Fingerprint) -> GuardRow:
     return GuardRow(fp.listing_id, fp.category_main, fp.category_type, fp.area_m2,
-                    fp.disposition, fp.floor)
+                    fp.disposition, fp.floor, fp.source, fp.area_basis)
 
 
 @dataclass(slots=True, frozen=True)

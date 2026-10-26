@@ -700,6 +700,8 @@ class SqlStore:
                 "ev_tags": pending[listing_id][0].evidence.n_tags,
                 "ev_complete": pending[listing_id][0].evidence.complete,
                 "dd": pending[listing_id][0].dd or None,
+                "source": pending[listing_id][0].guard.source,
+                "area_basis": pending[listing_id][0].guard.area_basis,
             }
             for listing_id in ids
         ])
@@ -768,7 +770,7 @@ class SqlStore:
             found = {int(row[0]): FpRow(
                 GuardRow(int(row[0]), row[1], row[2],
                          float(row[3]) if row[3] is not None else None, row[4],
-                         int(row[5]) if row[5] is not None else None),
+                         int(row[5]) if row[5] is not None else None, row[16], row[17]),
                 str(row[6] or ""), str(row[7] or ""), str(row[8] or ""), bool(row[9]),
                 Evidence(int(row[10] or 0), int(row[11] or 0), int(row[12] or 0),
                          int(row[13] or 0)),
@@ -3311,8 +3313,8 @@ def run_incremental(conn_factory: Callable[[], Any], *,
     try:
         present = _rows(conn, RT_STORE_PRESENT_SQL)
         if not present or not present[0][0]:
-            raise SystemExit("autodedup realtime store absent — migration 539, 596, 604 or "
-                             "616 not applied")
+            raise SystemExit("autodedup realtime store absent — migration 539, 596, 604, 616 or "
+                             "677 not applied")
         if not _rows(conn, RT_CALIBRATION_PRESENT_SQL, {"generation": generation}):
             return {"skipped": "unseeded",
                     "reason": (f"generation {generation!r} has no calibration — seed it with "
@@ -3924,8 +3926,8 @@ def run_rt_seed(
     try:
         present = _rows(conn, RT_STORE_PRESENT_SQL)
         if not present or not present[0][0]:
-            raise SystemExit("autodedup realtime store absent — migration 539, 596, 604 or "
-                             "616 not applied")
+            raise SystemExit("autodedup realtime store absent — migration 539, 596, 604, 616 or "
+                             "677 not applied")
         existing = _rows(conn, RT_CALIBRATION_PRESENT_SQL, {"generation": generation})
         control = lane_settings(conn, [scope_setting_key(generation),
                                        seed_version_key(generation)])

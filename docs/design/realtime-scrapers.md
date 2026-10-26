@@ -510,7 +510,7 @@ nothing else.
   and `skipped: daily cap` + `unfinished` (every due block the pass never reached and every block
   inside a cycle) when the cap stopped the pass; null when the pass walked
   nothing and no block is mid-cycle)}`; an
-  absent store (migrations 539/540/596/604) = `skipped: store_absent` + one warning. A change of the reconcile state is logged once, and the
+  absent store (migrations 539/540/596/604/616/677) = `skipped: store_absent` + one warning. A change of the reconcile state is logged once, and the
   engine logs each release of a dead predecessor's lease.
 - **Latency floor.** The engine ignores rows younger than its settle lag (`SETTLE_LAG_S`, 300 s,
   E73), and a photo-dependent merge waits until every photograph carries its pHash, CLIP vector

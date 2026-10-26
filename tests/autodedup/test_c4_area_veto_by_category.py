@@ -1,4 +1,4 @@
-"""C4: the pair veto's area bar per category, behind a dial that is empty by default.
+"""C4: the pair veto's area bar per category, behind a dial that is empty by default (row w34).
 
 The census of every pair the 8 % -> 20 % lift newly merges (reading2/RESULT.md: 322 of 326
 same) put its only wrong merges on komerční suites of one office building. So the lift is read
@@ -24,8 +24,8 @@ from autodedup.settings import Settings
 
 SETTINGS = Path(__file__).resolve().parents[2] / "autodedup/settings"
 W31 = Settings.from_json(SETTINGS / "w31.json")
-C4 = Settings.from_json(SETTINGS / "c4.json")
-C4_FLATS = Settings.from_json(SETTINGS / "c4_flats.json")
+C4 = Settings.from_json(SETTINGS / "w34.json")
+C4_FLATS = Settings.from_dict({**W31.to_dict(), "area_reject_pct_by_category": {"byt": 0.2}})
 
 
 def fp(listing_id: int, settings: Settings, **kwargs: Any) -> Fingerprint:
@@ -41,13 +41,12 @@ def pair(settings: Settings, cat_a: str, area_a: float, cat_b: str | None = None
     return pair_veto(a, b, settings)
 
 
-def test_c4_rows_are_w31_plus_the_dial() -> None:
+def test_w34_is_w31_plus_its_two_dials() -> None:
     w31 = json.loads((SETTINGS / "w31.json").read_text(encoding="utf-8"))
-    for name, dial in (("c4", {"byt": 0.2, "dum": 0.2, "pozemek": 0.2}),
-                       ("c4_flats", {"byt": 0.2})):
-        row = json.loads((SETTINGS / f"{name}.json").read_text(encoding="utf-8"))
-        assert row.pop("area_reject_pct_by_category") == dial
-        assert row == w31
+    row = json.loads((SETTINGS / "w34.json").read_text(encoding="utf-8"))
+    assert row.pop("area_reject_pct_by_category") == {"byt": 0.2, "dum": 0.2, "pozemek": 0.2}
+    assert row.pop("area_veto_basis_floor_exempt") == {"realitymix": 0.15}
+    assert row == w31
     assert W31.area_reject_pct_by_category == {}
     assert C4.area_reject_pct == W31.area_reject_pct == 0.08
 

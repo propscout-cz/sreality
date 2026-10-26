@@ -47,6 +47,9 @@ select to_regclass('autodedup.fp_key')         is not null
                 where attrelid = to_regclass('autodedup.rt_fp')
                   and attname = 'dd' and not attisdropped)
    and exists (select 1 from pg_attribute
+                where attrelid = to_regclass('autodedup.rt_fp')
+                  and attname = 'area_basis' and not attisdropped)
+   and exists (select 1 from pg_attribute
                 where attrelid = to_regclass('autodedup.rt_calibration')
                   and attname = 'payload_zlib' and not attisdropped) as present
 """
@@ -933,7 +936,7 @@ on conflict (generation, probe, key_token, listing_id) do nothing
 # `autodedup.rt_fp`, NOT migration 528's `listing_fp`: that table is keyed on `listing_id`
 # alone so it cannot hold two generations, and nothing has ever written it. This one is
 # generation-scoped like every other row of this lane and carries exactly what the lane reads
-# without a fact fetch — the five guard columns (E17's rule floor), the re-score digest, the
+# without a fact fetch — the guard columns (E17's rule floor), the re-score digest, the
 # census cell the listing is counted in (so a MOVE unbumps the cell it left, not the one it
 # arrived in) and the activity flag the revive sweep anti-joins.
 # `first_decided_at` is COALESCED, never overwritten (E92, migration 540): the evidence
@@ -945,14 +948,14 @@ RT_FP_UPSERT_SQL = """
 insert into autodedup.rt_fp (
     generation, listing_id, category_main, category_type, area_m2, disposition, floor,
     fp_digest, cell_key, cell_group, is_active, ev_images, ev_phash, ev_clip, ev_tags,
-    ev_complete, dd, first_decided_at, updated_at
+    ev_complete, dd, source, area_basis, first_decided_at, updated_at
 ) values (
     %(generation)s::text, %(listing_id)s::bigint, %(category_main)s::text,
     %(category_type)s::text, %(area_m2)s::double precision, %(disposition)s::text,
     %(floor)s::integer, %(fp_digest)s::text, %(cell_key)s::text, %(cell_group)s::text,
     %(is_active)s::boolean, %(ev_images)s::integer, %(ev_phash)s::integer,
     %(ev_clip)s::integer, %(ev_tags)s::integer, %(ev_complete)s::boolean, %(dd)s::text,
-    now(), now()
+    %(source)s::text, %(area_basis)s::text, now(), now()
 )
 on conflict (generation, listing_id) do update set
     category_main    = excluded.category_main,
@@ -970,6 +973,8 @@ on conflict (generation, listing_id) do update set
     ev_tags          = excluded.ev_tags,
     ev_complete      = excluded.ev_complete,
     dd               = excluded.dd,
+    source           = excluded.source,
+    area_basis       = excluded.area_basis,
     first_decided_at = coalesce(autodedup.rt_fp.first_decided_at,
                                 excluded.first_decided_at),
     updated_at       = now()
@@ -1021,7 +1026,7 @@ select f.listing_id, f.category_main, f.category_type, f.area_m2, f.disposition,
        f.fp_digest, f.cell_key, f.cell_group, f.is_active,
        f.ev_images, f.ev_phash, f.ev_clip, f.ev_tags,
        extract(epoch from f.first_decided_at)::double precision as first_decided_epoch,
-       f.dd
+       f.dd, f.source, f.area_basis
   from autodedup.rt_fp f
  where f.generation = %(generation)s::text
    and f.listing_id = any(%(ids)s::bigint[])

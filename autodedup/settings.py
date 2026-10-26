@@ -24,6 +24,12 @@ CONTEXT_RULE_MIN_IMAGES_FLOOR: float = 4.0
 # C4: the category_main vocabulary `area_reject_pct_by_category` is keyed by: the census's own
 # `CATEGORY_MAIN`, restated because importing the census would widen the decision closure.
 CATEGORY_MAIN: tuple[str, ...] = ("byt", "dum", "pozemek", "komercni", "ostatni")
+# The portals `area_veto_basis_floor_exempt` is keyed by: the census's `SOURCES`, restated for
+# the same reason.
+SOURCES: tuple[str, ...] = (
+    "sreality", "bazos", "bezrealitky", "idnes", "mmreality", "remax", "ceskereality",
+    "realitymix", "maxima",
+)
 
 # E84: one minute, the floor under K-B's window separation. No scrape cadence in this program
 # re-lists an advert within a minute of its last sighting, so the bar can only catch two adverts
@@ -41,6 +47,11 @@ class Settings:
     # `area_reject_pct`. Only the veto reads it: `area_relation`, D43's area limbs and the
     # cluster spread keep their own bars. Empty = w31.
     area_reject_pct_by_category: dict[str, float] = field(default_factory=dict)
+    # The pair veto's area clause yields, up to the mapped gap, when a side of that portal states
+    # `area_basis = 'floor'` (`guards.area_basis_exempt`): realitymix prints "celková podlahová
+    # plocha", which may hold the cellar, balcony or terrace a partner leaves out. The area stays
+    # a scoring feature. Empty = w31.
+    area_veto_basis_floor_exempt: dict[str, float] = field(default_factory=dict)
     catalog_df: int = 8
     # E83 (W10): E9's population test cannot tell a marketing catalogue from a broker re-posting
     # ONE advert nine times, so a frame is stock only when its carriers are several PARTIES.
@@ -1088,6 +1099,9 @@ class Settings:
         self.area_reject_pct_by_category = {
             str(key): float(value)
             for key, value in dict(self.area_reject_pct_by_category).items()}
+        self.area_veto_basis_floor_exempt = {
+            str(key): float(value)
+            for key, value in dict(self.area_veto_basis_floor_exempt).items()}
         self.merge_policy = {str(key): str(value)
                              for key, value in dict(self.merge_policy).items()}
         self.d43_rental_colive_cross_portal_limbs = tuple(
@@ -1111,6 +1125,15 @@ class Settings:
             if not self.area_band_pct <= value < 1.0:
                 raise ValueError(
                     f"area_reject_pct_by_category[{key}] must be in [area_band_pct, 1): {value}")
+        for key, value in self.area_veto_basis_floor_exempt.items():
+            if key not in SOURCES:
+                raise ValueError(
+                    f"area_veto_basis_floor_exempt key must be a portal "
+                    f"({', '.join(SOURCES)}): {key}")
+            if not self.area_reject_pct < value < 1.0:
+                raise ValueError(
+                    f"area_veto_basis_floor_exempt[{key}] must be in (area_reject_pct, 1): "
+                    f"{value}")
         if not 0.0 <= self.t_lo <= self.t_hi <= 1.0:
             raise ValueError(f"thresholds must satisfy 0 <= t_lo <= t_hi <= 1: "
                              f"t_lo={self.t_lo} t_hi={self.t_hi}")

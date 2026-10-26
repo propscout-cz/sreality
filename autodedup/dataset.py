@@ -200,6 +200,11 @@ class Listing:
     location: Location = field(default_factory=Location)
     price_history: list[tuple[str, float | None]] = field(default_factory=list)
 
+    @property
+    def area_basis(self) -> str | None:
+        """Which area `area_m2` holds (`listings.area_basis`), read from `attrs`."""
+        return _str((self.attrs or {}).get("area_basis"))
+
     @classmethod
     def from_json(cls, raw: dict[str, Any]) -> "Listing":
         history: list[tuple[str, float | None]] = []
