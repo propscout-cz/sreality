@@ -44,6 +44,9 @@ _ADMIN_PREFIXES: tuple[str, ...] = (
     "/admin", "/properties/merge", "/labeling",
     "/outreach", "/broker-review", "/skill-refinements", "/location",
     "/autodedup",
+    # Paste-a-building (rule 13) spends an extraction plus one estimation per unit and holds no
+    # account of its own: operator-only since agent platform M0 (#2059).
+    "/buildings",
 )
 
 # Sentinels proving those routers actually mounted. Without this, a mis-mounted router

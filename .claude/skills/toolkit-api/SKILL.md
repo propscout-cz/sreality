@@ -272,11 +272,18 @@ Six auth primitives coexist — four in `api/dependencies.py` over ONE header re
 - `verify_jwt` — verifies a Supabase user JWT and returns its claims over ONE path: asymmetric JWKS
   (`SUPABASE_URL` → `/auth/v1/.well-known/jwks.json`, ES256/RS256, cached via `PyJWKClient`); no shared
   secret anywhere (the HS256 `SUPABASE_JWT_SECRET` fallback was deleted 2026-10-13); `503` with `SUPABASE_URL`
-  unset (an unconfigured auth backend must never authenticate anyone). History of the static key it once
+  unset (an unconfigured auth backend must never authenticate anyone). Since agent platform M0 (#2059) it
+  accepts only a token shaped as Supabase Auth issues a session: issuer pinned to `<SUPABASE_URL>/auth/v1`,
+  `exp`/`iss`/`aud`/`sub`/`role` required, `role = authenticated`, and no `client_id` (an OAuth client's
+  token, for another audience); each refusal is a 401 with a fixed reason (`wrong issuer`, `missing claim`,
+  `wrong role`, `client token`). `mint` fills those claims, so a test names only what it is about. History of the static key it once
   also accepted (the 2026-08-04 god-credential removal, the 2026-10-13 deletion):
   `docs/design/api-token-rotation-and-spa-jwt-migration.md`.
 - `require_admin` (`Depends(verify_jwt)`) — gates on `claims["is_admin"]` or
-  `claims["app_metadata"]["is_admin"]`; `403` otherwise. Only reachable via a real Supabase JWT
+  `claims["app_metadata"]["is_admin"]`; `403` otherwise. Every `/buildings*` route takes it since M0 (paste-a-building
+  spends an extraction plus one estimation per unit), and so does a forced refresh: `deps.require_admin_to_force`
+  403s a non-admin's `force_refresh: true` on `/tools/summarize_listing` and `/tools/compare_listing_images`
+  while the cached read stays open. Only reachable via a real Supabase JWT
   whose `app_metadata.is_admin` was stamped `true` (the `admins` table is the provisioning
   allowlist, but the live claim is a plain `auth.users.raw_app_meta_data` attribute — Supabase
   includes `app_metadata` in every issued JWT by default, no Custom Access Token Hook needed).
@@ -433,7 +440,9 @@ LLM + maps (FastAPI service + scoring jobs):
   crosses it. Each provider's own console spend cap is the hard guard.
 
 API service:
-- `API_AUTH_OPTIONAL=1` — LOCAL DEV ONLY: opens every `require_token` route to anonymous callers. Never on Railway (rule #8).
+- `API_AUTH_OPTIONAL=1` — LOCAL DEV ONLY: opens every `require_token` route to anonymous callers. Never on Railway (rule #8):
+  since M0 the API refuses to boot with it when `RAILWAY_ENVIRONMENT` is set (`deps.refuse_auth_optional_on_railway`, the
+  lifespan's first step; uvicorn exits, so the deploy crashes instead of serving an open API).
 - `CORS_ALLOW_ORIGINS` — CSV of allowed origins; must include the Chrome extension's
   `chrome-extension://<id>` origin and the SPA origin.
 - `STUCK_ROW_SWEEP_DISABLED`, `HEALTH_TELLER_DISABLED` (optional flags) — disable the startup sweep
@@ -465,7 +474,8 @@ Scraper orchestration:
 - `GITHUB_ACTOR` — CI context, used for curated-cities upload attribution.
 
 NEW DEDUP (docs/design/new-dedup/PROGRAM.md, Wave 1):
-- `RUNPOD_API_KEY` — Actions secret only (no Railway/frontend use). Auths `scripts/runpod_client.py`'s REST
+- `RUNPOD_API_KEY` — Actions secret only: no Railway service and no frontend reads it (the API service carried an
+  unused copy until agent platform M0, #2059, deleted it). Auths `scripts/runpod_client.py`'s REST
   (`rest.runpod.io/v1`) + GraphQL (`api.runpod.io/graphql`) calls to launch/poll/terminate on-demand GPU pods.
   Its workflow consumers: `autodedup.yml`, `dinov3_bakeoff_manifest.yml`, `dinov3_embed_backfill.yml`, `runpod_reap.yml`, `tagging_bakeoff.yml`, `text_extraction_bakeoff.yml`
   (`dinov3_embed_backfill` is the DINOv3 corpus embedding pass, never yet run on real data). Every job goes through `RunPodClient.run_job`,

@@ -147,6 +147,8 @@ def _jwt_reason(exc: Exception) -> str:
         (jwt.ExpiredSignatureError, "expired"),
         (jwt.InvalidSignatureError, "bad signature"),
         (jwt.InvalidAudienceError, "wrong audience"),
+        (jwt.InvalidIssuerError, "wrong issuer"),
+        (jwt.MissingRequiredClaimError, "missing claim"),
         (jwt.PyJWKClientError, "unknown signing key"),
     ):
         if isinstance(exc, cls):
@@ -162,6 +164,16 @@ def _bearer(authorization: str | None) -> dict | None:
     if os.environ.get("API_AUTH_OPTIONAL") == "1":
         return None
     return verify_jwt(authorization)
+
+
+def refuse_auth_optional_on_railway() -> None:
+    """Boot guard: Railway sets RAILWAY_ENVIRONMENT on every service, so the local-dev opt-out there
+    would open every require_token route to anyone; the API refuses to start instead (M0, #2059)."""
+    if os.environ.get("API_AUTH_OPTIONAL") == "1" and os.environ.get("RAILWAY_ENVIRONMENT"):
+        raise RuntimeError(
+            "API_AUTH_OPTIONAL=1 is a local-dev switch and is refused on Railway "
+            f"(RAILWAY_ENVIRONMENT={os.environ['RAILWAY_ENVIRONMENT']!r}): unset it on this service"
+        )
 
 
 def require_token(authorization: str | None = Header(default=None)) -> None:
@@ -208,6 +220,11 @@ def verify_jwt(authorization: str | None = Header(default=None)) -> dict:
     (the HS256 `SUPABASE_JWT_SECRET` fallback was deleted 2026-10-13; production has
     signed ES256 since the JWKS cutover). Fails closed (503) with SUPABASE_URL unset:
     an unconfigured auth backend must never authenticate anyone.
+
+    A token is a user's session only as Supabase Auth issues one (M0, #2059): issued by
+    this project (`<SUPABASE_URL>/auth/v1`), audience and role `authenticated`, with a
+    subject and an expiry; one carrying `client_id` was issued to an OAuth client for
+    another audience and is refused.
     """
     # The verifier check comes FIRST: a deployment that cannot verify anyone answers
     # 503 to every request, header or not — a server fault must never read as a
@@ -221,15 +238,21 @@ def verify_jwt(authorization: str | None = Header(default=None)) -> dict:
 
     import jwt  # PyJWT (api extra); imported lazily to keep boot light
 
-    jwks_url = base.rstrip("/") + "/auth/v1/.well-known/jwks.json"
+    issuer = base.rstrip("/") + "/auth/v1"
     try:
-        signing_key = _jwks_client(jwks_url).get_signing_key_from_jwt(token)
-        return jwt.decode(
+        signing_key = _jwks_client(issuer + "/.well-known/jwks.json").get_signing_key_from_jwt(token)
+        claims = jwt.decode(
             token, signing_key.key,
-            algorithms=["ES256", "RS256"], audience="authenticated",
+            algorithms=["ES256", "RS256"], audience="authenticated", issuer=issuer,
+            options={"require": ["exp", "iss", "aud", "sub", "role"]},
         )
     except jwt.PyJWTError as exc:
         raise _unauthorized("Invalid token", reason=_jwt_reason(exc)) from exc
+    if claims["role"] != "authenticated":
+        raise _unauthorized("Invalid token", reason="wrong role")
+    if "client_id" in claims:
+        raise _unauthorized("Invalid token", reason="client token")
+    return claims
 
 
 def account_scope(
@@ -276,3 +299,10 @@ def require_admin(claims: dict = Depends(verify_jwt)) -> dict:
     if not is_admin(claims):
         raise HTTPException(status_code=403, detail="Admin only")
     return claims
+
+
+def require_admin_to_force(force_refresh: bool, authorization: str | None) -> None:
+    """A forced refresh re-buys a cached LLM answer, so it takes an admin (403) whatever the route's own
+    gate; a plain read of the cached answer stays open to the route's callers (M0, #2059)."""
+    if force_refresh:
+        require_admin(verify_jwt(authorization))

@@ -684,11 +684,10 @@ rules. Identify which one a task belongs to before you start.
   sign-in, so whatever it held proved only "loaded the SPA"). Every API call sends the session JWT
   (see "One credential" below); a `require_token` route still returns no identity, admin or
   account-scoped data — those sit behind `verify_jwt` / `require_admin` / `tenant_conn`.
-  At least these still break it, running service-role behind `require_token`
-  alone with no account predicate: `/buildings*` (`building_runs` has tenant RLS since
-  migration 291; the other, `POST /notifications/dispatches/{id}/estimate`, was deleted
-  2026-10-21 in notifications W1) — owed as `roadmap/public-release-track.md` item 11, an
-  open list. The estimation trace payload and both `/feedback` routes moved onto the tenant
+  `/buildings*` ran service-role behind `require_token` alone with no account predicate
+  until agent platform M0 (2026-10-26) made every building route `require_admin`; the other,
+  `POST /notifications/dispatches/{id}/estimate`, was deleted 2026-10-21 in notifications W1
+  (`roadmap/public-release-track.md` item 11, an open list). The estimation trace payload and both `/feedback` routes moved onto the tenant
   pool 2026-10-02; the feedback POST's refiner is admin-only (the `database` skill's
   `references/tenancy.md`, named exception); `/filter-presets*` followed 2026-10-12 (per
   account, migration 595); `PUT /stats/dashboard` was born there (migration 626).
