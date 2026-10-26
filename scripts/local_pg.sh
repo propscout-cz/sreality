@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # A local Postgres that matches CI's schema-and-sql job (.github/workflows/migrations.yml):
-# PostgreSQL 17 + PostGIS + pgvector from conda-forge via micromamba — no sudo, no Docker.
+# PostgreSQL 17 + PostGIS + pgvector — no sudo, no Docker. Linux: conda-forge via micromamba under
+# ~/.local/opt. macOS: Homebrew (conda-forge has no PostGIS for PG17 on macOS; Homebrew's builds for postgresql@17).
 # The replayed schema is kept as a template database; every test run gets a fresh copy.
 #
-#   scripts/local_pg.sh install        # one-time: micromamba + the Postgres env (~550 MB)
+#   scripts/local_pg.sh install        # one-time: Postgres 17 + PostGIS + pgvector (~550 MB on Linux)
 #   scripts/local_pg.sh replay         # start the server, replay every migration into the template
 #   scripts/local_pg.sh test <args>    # fresh copy + pytest <args> with TEST_DATABASE_URL set
 #   scripts/local_pg.sh lanes          # fresh copy + every pytest lane of the CI job, in CI's order
@@ -16,39 +17,50 @@ ENV_DIR="$OPT/sreality-pg17"
 DATA="$HOME/.local/share/sreality-pg17"
 PORT=54329
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export PATH="$ENV_DIR/bin:$PATH" PROJ_DATA="$ENV_DIR/share/proj"
+if [[ "$(uname -s)" == Darwin ]]; then
+  PG_BIN="$(brew --prefix 2>/dev/null || echo /opt/homebrew)/opt/postgresql@17/bin"
+  LIBC_LOCALE=en_US.UTF-8
+else
+  PG_BIN="$ENV_DIR/bin"
+  LIBC_LOCALE=C.UTF-8
+  export PROJ_DATA="$ENV_DIR/share/proj"
+fi
+export PATH="$PG_BIN:$PATH"
 export PGHOST=127.0.0.1 PGPORT=$PORT PGUSER=postgres PGPASSWORD=postgres
 URL="postgresql://postgres:postgres@127.0.0.1:$PORT/ci"
 
 die() { echo "local_pg: $*" >&2; exit 1; }
 
-platform() {
+install() {
   case "$(uname -s)-$(uname -m)" in
-    Linux-x86_64) echo linux-64 ;;
-    Linux-aarch64) echo linux-aarch64 ;;
-    Darwin-arm64) echo osx-arm64 ;;
-    Darwin-x86_64) echo osx-64 ;;
+    Darwin-*)
+      command -v brew >/dev/null || die "macOS needs Homebrew first: https://brew.sh"
+      brew install postgresql@17 postgis pgvector ;;
+    Linux-x86_64 | Linux-aarch64)
+      if [[ ! -x "$MM" ]]; then
+        mkdir -p "$OPT/micromamba"
+        local arch=64; [[ "$(uname -m)" == aarch64 ]] && arch=aarch64
+        curl -Ls "https://micro.mamba.pm/api/micromamba/linux-$arch/latest" | tar -xj -C "$OPT/micromamba" bin/micromamba
+      fi
+      # CI runs 17.11; conda-forge's PG17 PostGIS lacks protobuf-c, so ST_AsMVT tile tests skip here (CI runs them).
+      [[ -x "$ENV_DIR/bin/postgres" ]] || MAMBA_ROOT_PREFIX="$OPT/micromamba/root" "$MM" create -q -y -p "$ENV_DIR" \
+        -c conda-forge --override-channels postgresql=17.11 postgis=3.6.0 pgvector=0.8.1 ;;
     *) die "unsupported platform $(uname -sm)" ;;
   esac
-}
-
-install() {
-  if [[ ! -x "$MM" ]]; then
-    mkdir -p "$OPT/micromamba"
-    curl -Ls "https://micro.mamba.pm/api/micromamba/$(platform)/latest" | tar -xj -C "$OPT/micromamba" bin/micromamba
-  fi
-  # CI runs 17.11; conda-forge's PG17 PostGIS builds lack protobuf-c, so ST_AsMVT tile tests pass only in CI.
-  [[ -x "$ENV_DIR/bin/postgres" ]] || MAMBA_ROOT_PREFIX="$OPT/micromamba/root" "$MM" create -q -y -p "$ENV_DIR" \
-    -c conda-forge --override-channels postgresql=17.11 postgis=3.6.0 pgvector=0.8.1
-  echo "installed: $(postgres --version)"
+  [[ "$(postgres --version)" == *" 17."* ]] || die "expected PostgreSQL 17 (CI's major), got: $(postgres --version)"
+  local ext
+  for ext in postgis vector pg_trgm; do
+    [[ -f "$(pg_config --sharedir)/extension/$ext.control" ]] || die "extension $ext is not visible to $(command -v postgres)"
+  done
+  echo "installed: $(postgres --version), PostGIS + pgvector visible"
 }
 
 ensure_server() {
-  [[ -x "$ENV_DIR/bin/postgres" ]] || die "not installed; run: scripts/local_pg.sh install"
+  [[ -x "$PG_BIN/postgres" ]] || die "not installed; run: scripts/local_pg.sh install"
   if [[ ! -f "$DATA/data/PG_VERSION" ]]; then
     mkdir -p "$DATA"
     initdb -D "$DATA/data" -U postgres --auth=trust --encoding=UTF8 \
-      --locale-provider=icu --icu-locale=en-US --locale=C.UTF-8 >/dev/null
+      --locale-provider=icu --icu-locale=en-US --locale="$LIBC_LOCALE" >/dev/null
     # CI's container runs UTC with default memory settings; durability is irrelevant for a scratch replay.
     cat >> "$DATA/data/postgresql.conf" <<CONF
 listen_addresses = '127.0.0.1'
@@ -81,7 +93,8 @@ replay() {
              create extension if not exists fuzzystrmatch; create extension if not exists postgis_tiger_geocoder;"
   psql_q -f scripts/ci_db_bootstrap.sql
   local started=$SECONDS
-  for f in $(ls migrations/*.sql | sort); do
+  # CI's runner sorts in C.UTF-8, i.e. byte order; pin it so a machine's locale cannot reorder the replay.
+  for f in $(ls migrations/*.sql | LC_ALL=C sort); do
     case "$(basename "$f")" in
       295_*) psql_q -c "insert into auth.users (email) values ('ci-operator@replay.local');" ;;
       510_*) continue ;;  # retired by 513; see migrations.yml
@@ -91,7 +104,7 @@ replay() {
   psql_q -c "select 'listings'::regclass, 'properties_public'::regclass, 'image_clip_embeddings'::regclass" >/dev/null
   psql_q -f migrations/656_notifications_w6_prune.sql >/dev/null
   psql_q -d postgres -c "alter database replay is_template true"
-  echo "replayed $(ls migrations/*.sql | wc -l) migrations in $((SECONDS - started)) s (last: $(ls migrations/*.sql | sort | tail -1))"
+  echo "replayed $(ls migrations/*.sql | wc -l) migrations in $((SECONDS - started)) s (last: $(ls migrations/*.sql | LC_ALL=C sort | tail -1))"
 }
 
 fresh() {
