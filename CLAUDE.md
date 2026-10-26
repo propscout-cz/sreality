@@ -100,7 +100,7 @@ Dynamic state lives outside Git — don't ask, fetch it:
   question. Both recipes + the reserved-for-migrations MCP policy: the `database` skill.
 ## Roadmap maintenance
 
-`ROADMAP.md` is a **<120-line index**; phase content lives in `roadmap/<track>.md` and completed
+`ROADMAP.md` is a **byte-capped index**; phase content lives in `roadmap/<track>.md` and completed
 work in `roadmap/archive.md`. **Read the index only; open a track file only to edit it.** After
 shipping meaningful work, in the SAME PR update **only** the relevant `roadmap/<track>.md` (move a
 bullet to done, add new "next" items) + the index's status cell if the track's status changed.
