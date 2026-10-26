@@ -50,10 +50,11 @@ _FIXED: tuple[Job, ...] = (
     Job("location_full_resolve",
         ("location_data.resolver.drain", "--full-sweep", "--max-seconds", "1800", "--batch-size", "250"),
         DAY, 1 * HOUR, 1 * HOUR, 1024, 1, UNTIL_MOVED, LOCATION_HEAVY, db_heavy=True),
+    # 03:00, not 02:00: full_resolve may wait on intake's run for location-heavy, and holds through the kill grace.
     Job("property_sweep", ("scripts.recompute_property_stats", "--batch-size", "2000", "--max-seconds", "6000"),
-        DAY, 2 * HOUR, 130 * 60, 1024, 1, UNTIL_MOVED, db_heavy=True),
+        DAY, 3 * HOUR, 130 * 60, 1024, 1, UNTIL_MOVED, db_heavy=True),
     Job("broker_sweep", ("scripts.resolve_brokers", "--max-seconds", "1500"),
-        DAY, 5 * HOUR, 3 * HOUR, 1024, 1, UNTIL_MOVED, db_heavy=True),
+        DAY, 6 * HOUR, 3 * HOUR, 1024, 1, UNTIL_MOVED, db_heavy=True),
     # Not DB-heavy: hourly, it runs beside the daily sweeps today; its one exclusion is location-heavy.
     Job("location_intake",
         ("location_data.claims_intake", "--mode", "incremental", "--max-seconds", "2400", "--batch-size", "10000"),

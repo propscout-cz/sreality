@@ -242,24 +242,57 @@ def test_the_co_tenancy_census_fires() -> None:
     assert co_tenancy_problems(entries, cap=4)
 
 
-def _occupied_hours(job: Job) -> set[int]:
-    """The UTC hours of the day a run of `job` can hold, at its declared timeout."""
+def _slots(job: Job) -> list[int] | None:
+    """The seconds into the UTC day at which `job` falls due; None when its cadence does not divide a day."""
     if job.every_s % jobs.DAY == 0:
-        starts: range | list[int] = [job.offset_s % jobs.DAY]
-    elif jobs.DAY % job.every_s == 0:
-        starts = range(job.offset_s % job.every_s, jobs.DAY, job.every_s)
-    else:
+        return [job.offset_s % jobs.DAY]
+    if jobs.DAY % job.every_s == 0:
+        return list(range(job.offset_s % job.every_s, jobs.DAY, job.every_s))
+    return None
+
+
+def _hold_s(job: Job) -> int:
+    return job.timeout_s + jobs.STUCK_RUN_GRACE_S  # the lease is released only after the killed child exits
+
+
+def _resource_wait_s(slot: int, siblings: Sequence[Job]) -> int:
+    """How long a job due at `slot` can wait for its resource: the runner claims the oldest due job first, so at
+    most until a sibling's run that fell due at or before the slot lets go (siblings taken at their own slots)."""
+    wait = 0
+    for sibling in siblings:
+        hold, slots = _hold_s(sibling), _slots(sibling)
+        if slots is None:
+            wait = max(wait, hold)
+            continue
+        for start in (s - days * jobs.DAY for s in slots for days in range(-(-hold // jobs.DAY) + 1)):
+            if start <= slot < start + hold:
+                wait = max(wait, start + hold - slot)
+    return wait
+
+
+def _occupied_hours(job: Job, siblings: Sequence[Job] = ()) -> set[int]:
+    """The UTC hours of the day a run of `job` can hold: from its slot, through a wait for its resource, to its
+    timeout plus the kill grace."""
+    slots = _slots(job)
+    if slots is None:
         return set(range(24))
-    return {h % 24 for start in starts for h in range(start // jobs.HOUR, -(-(start + job.timeout_s) // jobs.HOUR))}
+    hours: set[int] = set()
+    for slot in slots:
+        end = slot + _resource_wait_s(slot, siblings) + _hold_s(job)
+        hours |= {h % 24 for h in range(slot // jobs.HOUR, -(-end // jobs.HOUR))}
+    return hours
 
 
 def db_heavy_problems(entries: Sequence[Job]) -> list[str]:
     """No two DB-heavy jobs can hold the database in one hour, unless one resource already keeps them apart."""
+    heavy = [j for j in entries if j.db_heavy]
+    hours = {j.name: _occupied_hours(j, [s for s in entries if j.resource is not None and s.resource == j.resource
+                                         and s.name != j.name]) for j in heavy}
     problems: list[str] = []
-    for a, b in itertools.combinations([j for j in entries if j.db_heavy], 2):
+    for a, b in itertools.combinations(heavy, 2):
         if a.resource is not None and a.resource == b.resource:
             continue
-        if shared := _occupied_hours(a) & _occupied_hours(b):
+        if shared := hours[a.name] & hours[b.name]:
             problems.append(f"{a.name} and {b.name} are both DB-heavy in UTC hours {sorted(shared)}")
     return problems
 
@@ -277,6 +310,13 @@ def test_the_db_heavy_census_fires() -> None:
     assert db_heavy_problems([*[j for j in jobs.declared() if j.name != "location_intake"], heavy_intake])
     overlapping = replace(_entry("property_sweep"), name="property_twin", resource="elsewhere")
     assert db_heavy_problems([*jobs.declared(), overlapping])
+    # property_sweep at 02:00: full_resolve's 01:00 run, killed at its timeout, holds through the kill grace.
+    at_two = [replace(j, offset_s=2 * jobs.HOUR) if j.name == "property_sweep" else j for j in jobs.declared()]
+    assert db_heavy_problems(at_two)
+    # A 40-minute full_resolve is done by 02:00 on its slot, not after waiting on intake's 00:35 run.
+    short = [replace(j, timeout_s=40 * 60) if j.name == "location_full_resolve" else j for j in at_two]
+    assert db_heavy_problems(short)
+    assert db_heavy_problems([j for j in short if j.name != "location_intake"]) == []
 
 
 def _module_constant(source: str, name: str) -> object:

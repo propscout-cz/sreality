@@ -99,18 +99,20 @@ production.
   are phased so a slot falls at, or up to 3 days after, the calendar run it replaces. CI pins
   (`tests/scraper/test_job_registry.py`): every argv parses; walk set = `PORTAL_CLASSES`; static co-tenancy
   (the largest `RUNNER_MAX_CONCURRENT` memory declarations, one per resource, ≤ 70 % of a replica); no two
-  DB-heavy jobs in one hour; the API's stuck-run cutoff (`STUCK_RUN_CUTOFF_MINUTES`) exceeds the longest
-  walk timeout (the walks are the `scrape_runs` writers) plus `STUCK_RUN_GRACE_S`; the GitHub schedule set
-  is exactly {verify_pipeline, scrape_price_stats}; and, computed from the workflow files with no
-  hand-kept ledger, every job runs on exactly one host.
+  DB-heavy jobs in one hour (a wait for a shared resource and the kill grace counted); the API's stuck-run
+  cutoff (`STUCK_RUN_CUTOFF_MINUTES`) exceeds the longest walk timeout (the walks are the `scrape_runs`
+  writers) plus `STUCK_RUN_GRACE_S`; the GitHub schedule set is exactly {verify_pipeline,
+  scrape_price_stats}; and, computed from the workflow files with no hand-kept ledger, every job runs on
+  exactly one host.
 - **One service** (`python -m scraper.job_runner`), **two identical replicas**, 8 GB / 4 vCPU each,
   `restartPolicy ALWAYS`, `drainingSeconds` 180, built from the same Dockerfile with `ARG EXTRAS=api,clip,geo`
   so CPU torch, the pinned CLIP weights (revision 3d74acf9) and the geo wheels live in this image only.
   `watchPatterns` cover the trees jobs import. Variables are references to shared project variables.
 - **Scheduling**: anchored, staggered slots on the database clock (`due_at` from `every_s` + `offset_s`);
   missed slots are skipped, never replayed; a new row's first slot is no earlier than `now() + timeout_s`
-  so it never overlaps a GitHub run still in flight at cutover. Claim-if-due is one compare-and-set; the
-  lease TTL is 180 s, renewed every 60 s, with self-fencing before expiry.
+  so it never overlaps a GitHub run still in flight at cutover. Claim-if-due is one compare-and-set, tried
+  oldest `due_at` first so a job waits at most one sibling's run for its resource; the lease TTL is 180 s,
+  renewed every 60 s, with self-fencing before expiry.
 - **Execution**: each job is a subprocess with its exact argv and `JOB_CPUS` exported (CLIP threads and the
   intake pool read it instead of `os.cpu_count()`); at `timeout_s` SIGTERM (a walk reads it as its
   deadline), SIGKILL after a grace; the lease is released only after the child exits; exit code and peak
