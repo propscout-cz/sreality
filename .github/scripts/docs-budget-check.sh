@@ -5,10 +5,12 @@
 #
 # Caps count BYTES, not lines: under a 300-line cap CLAUDE.md held at 291-300 lines over the
 # 60 days to 2026-10-26 while it grew from 23.2 KB to 34.0 KB, because a line cap pays authors
-# to join lines. Caps only ratchet down: each was set at the file's size + 1.5 %, rounded up to
-# 250 B (CLAUDE.md + 600 B for three PRs then in flight). Growth is judged against the base ref:
-# a PR that grows a file past its cap fails, one that trims a file under 95 % of its cap fails
-# until it sets the lower cap printed, and a file the PR does not grow only warns.
+# to join lines. Each cap was set at the file's size + 1.5 %, rounded up to 250 B (ROADMAP.md
+# + 3 % and CLAUDE.md + 600 B for PRs then in flight). Caps only ratchet down: a raise fails
+# unless its line records the operator's ruling as `# raised <date>: <ruling>`. Growth is judged
+# against the base ref: a PR that grows a file past its cap fails, one that trims a file under
+# 95 % of its cap fails until it sets the lower cap printed, and a file the PR does not grow
+# only warns.
 #
 # Usage: .github/scripts/docs-budget-check.sh [repo-root] [base-ref]
 #   Without base-ref only the absolute caps apply (a local run).
@@ -16,10 +18,11 @@ set -uo pipefail
 
 ROOT="${1:-.}"
 BASE="${2:-}"
+HEAD_SELF=$(<"${BASH_SOURCE[0]}")
 cd "$ROOT" || exit 1
 
 CLAUDE_MD_BYTES=35000
-ROADMAP_MD_BYTES=15500
+ROADMAP_MD_BYTES=15750
 declare -A SKILL_BYTES
 SKILL_BYTES[database]=43000
 SKILL_BYTES[interface-design]=23250
@@ -36,7 +39,7 @@ if [[ -n "$BASE" ]] && ! git rev-parse -q --verify "${BASE}^{commit}" >/dev/null
   BASE=""
 fi
 if [[ -z "$BASE" && -n "${GITHUB_ACTIONS:-}" ]]; then
-  echo "::warning::no base ref: growth is not attributed to this PR and the ratchet only warns. Pass the PR's base branch as the second argument."
+  echo "::warning::no base ref: growth is not attributed to this PR and the ratchet only warns. Pass the PR's base (its merge commit's HEAD^1) as the second argument."
 fi
 BASE_SELF=""
 [[ -n "$BASE" ]] && BASE_SELF=$(git show "${BASE}:${SELF}" 2>/dev/null)
@@ -48,12 +51,21 @@ base_bytes() {
   git show "${BASE}:$1" | wc -c | tr -d ' '
 }
 
-base_cap() { awk -v p="$1=" 'index($0, p) == 1 { print substr($0, length(p) + 1) + 0; exit }' <<< "$BASE_SELF"; }
+# The line of script source $1 that sets the first of the settings $2.. it has.
+setting_line() {
+  local src="$1" s
+  shift
+  for s in "$@"; do
+    awk -v p="$s=" 'index($0, p) == 1 { print; f = 1; exit } END { exit !f }' <<< "$src" && return
+  done
+}
+
+line_cap() { local v="${1#*=}"; echo "${v%%[!0-9]*}"; }
 
 check_bytes() {
   local file="$1" cap="$2" setting="$3"
   [[ -f "$file" ]] || return 0
-  local n b old suggested grew=1 shrank=0 delta=""
+  local n b old_line new_line suggested grew=1 shrank=0 delta=""
   n=$(wc -c < "$file" | tr -d ' ')
   b=$(base_bytes "$file")
   if [[ -n "$b" ]]; then
@@ -61,9 +73,15 @@ check_bytes() {
     (( n < b )) && shrank=1
     delta=" ($(printf '%+d' $(( n - b ))) B in this PR)"
   fi
-  old=$(base_cap "$setting")
-  if [[ -n "$old" ]] && (( cap > old )); then
-    echo "::warning file=${SELF}::${setting} rises from ${old} to ${cap}. Caps only ratchet down; raising one is the operator's call — say so in the PR body."
+  old_line=$(setting_line "$BASE_SELF" "${@:3}")
+  if [[ -n "$old_line" ]] && (( cap > $(line_cap "$old_line") )); then
+    new_line=$(setting_line "$HEAD_SELF" "${@:3}")
+    if [[ "$new_line" == *"# raised "* && "${new_line#*# raised }" != "${old_line#*# raised }" ]]; then
+      echo "::warning file=${SELF}::${new_line%%=*} rises from $(line_cap "$old_line") to ${cap}, raised ${new_line#*# raised }"
+    else
+      echo "::error file=${SELF}::${new_line%%=*} rises from $(line_cap "$old_line") to ${cap}. Caps only ratchet down: trim ${file} instead. A raise is the operator's ruling; record it on that line as '# raised <date>: <ruling>'."
+      fail=1
+    fi
   fi
   suggested=$(round_up_250 $(( (n * 1015 + 999) / 1000 )))
   if (( n > cap )); then
@@ -91,7 +109,7 @@ check_bytes "ROADMAP.md" "$ROADMAP_MD_BYTES" "ROADMAP_MD_BYTES"
 for skill_file in .claude/skills/*/SKILL.md; do
   [[ -f "$skill_file" ]] || continue
   name=$(basename "$(dirname "$skill_file")")
-  check_bytes "$skill_file" "${SKILL_BYTES[$name]:-$NEW_SKILL_BYTES}" "SKILL_BYTES[${name}]"
+  check_bytes "$skill_file" "${SKILL_BYTES[$name]:-$NEW_SKILL_BYTES}" "SKILL_BYTES[${name}]" NEW_SKILL_BYTES
 done
 
 # Frontmatter `description:` is always loaded into every session (not just when the

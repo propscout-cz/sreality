@@ -48,9 +48,13 @@ def _run(repo: Path, base: str | None, script: Path = SCRIPT) -> tuple[int, str]
     return done.returncode, done.stdout
 
 
-def test_growth_past_the_cap_fails_with_the_bytes_to_remove(tmp_path: Path) -> None:
+@pytest.mark.parametrize("merged", [False, True], ids=["base-sha", "merge-parent"])
+def test_growth_past_the_cap_fails_with_the_bytes_to_remove(tmp_path: Path, merged: bool) -> None:
     repo, base = _repo(tmp_path, CAP - 10)
     _write(repo / "CLAUDE.md", CAP + 10)
+    if merged:
+        base = "HEAD^1"
+        _commit(repo)
     code, out = _run(repo, base)
     assert code == 1
     assert f"::error file=CLAUDE.md::CLAUDE.md is {CAP + 10}/{CAP} bytes (+20 B in this PR)" in out
@@ -125,12 +129,37 @@ def test_a_new_skill_gets_the_default_cap(tmp_path: Path) -> None:
     assert "remove at least 1 bytes from .claude/skills/fresh/SKILL.md" in out
 
 
-def test_raising_a_cap_warns(tmp_path: Path) -> None:
+RULING = "  # raised 2026-10-27: operator ruling"
+
+
+@pytest.mark.parametrize(
+    ("base_mark", "head_mark", "code"),
+    [("", "", 1), ("", RULING, 0), (RULING, RULING, 1)],
+    ids=["unmarked", "marked", "stale-mark"],
+)
+def test_a_cap_raise_needs_a_fresh_operator_ruling_on_its_line(
+    tmp_path: Path, base_mark: str, head_mark: str, code: int
+) -> None:
     repo, _ = _repo(tmp_path, CAP - 50)
     old = repo / ".github" / "scripts" / "docs-budget-check.sh"
     old.parent.mkdir(parents=True)
-    old.write_text(f"CLAUDE_MD_BYTES={CAP - 250}\n")
+    old.write_text(f"CLAUDE_MD_BYTES={CAP - 250}{base_mark}\n")
     base = _commit(repo)
-    code, out = _run(repo, base)
-    assert code == 0
+    raised = tmp_path / "raised.sh"
+    raised.write_text(SOURCE.replace(f"\nCLAUDE_MD_BYTES={CAP}\n", f"\nCLAUDE_MD_BYTES={CAP}{head_mark}\n"))
+    got, out = _run(repo, base, raised)
+    assert got == code, out
     assert f"CLAUDE_MD_BYTES rises from {CAP - 250} to {CAP}" in out
+    assert ("::error file=.github/scripts/docs-budget-check.sh::" in out) == bool(code)
+
+
+def test_a_new_skill_cannot_take_a_raised_default(tmp_path: Path) -> None:
+    repo, _ = _repo(tmp_path, CAP - 1000)
+    _write(repo / "CLAUDE.md", CAP - 1000, "| x | `.claude/skills/fresh` |\n")
+    _write(repo / ".claude" / "skills" / "fresh" / "SKILL.md", 1000, "---\ndescription: fresh\n---\n")
+    old = repo / ".github" / "scripts" / "docs-budget-check.sh"
+    old.parent.mkdir(parents=True)
+    old.write_text(f"NEW_SKILL_BYTES={NEW_SKILL - 1000}\n")
+    code, out = _run(repo, _commit(repo))
+    assert code == 1
+    assert f"NEW_SKILL_BYTES rises from {NEW_SKILL - 1000} to {NEW_SKILL}" in out
