@@ -144,3 +144,4 @@ jobs:
           name: text-extraction-bakeoff
           path: bakeoff/
           if-no-files-found: warn
+          retention-days: 14

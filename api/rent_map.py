@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 import requests
 
+from scraper import contact
 from scraper import db as scraper_db
 from scripts.ingest_map_overlays import Refused as OverlayRefused, render_sql_section
 from toolkit.rent_map import (
@@ -36,7 +37,8 @@ LOG = logging.getLogger("rent_map")
 
 OVERLAY_SECTION = "rent_map"
 _MF_BASE = "https://mf.gov.cz"
-_UA = "Mozilla/5.0 (compatible; sreality-rentmap/1.0)"
+# Mozilla-compatible, as mf.gov.cz has always been sent, naming us like any honest crawler.
+_UA = f"Mozilla/5.0 (compatible; {contact.USER_AGENT})"
 
 
 def find_latest_xlsx_url(page_html: str) -> str | None:
