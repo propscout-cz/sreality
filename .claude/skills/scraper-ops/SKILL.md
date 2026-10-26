@@ -296,7 +296,7 @@ The detail-drain writes `scrape_runs` rows too (`run_type='detail'`), but only t
 ## Onboarding a portal — and the tenth, `web` (2026-10-21)
 
 A portal is one row per registry, never a branch (the registry list: `docs/architecture.md` § rule 21 and
-`docs/design/new-property-from-link.md` §3.4). Dispatch a new portal's first index walk at deploy: `scraping` judges every portal in `SOURCES` from that moment, so `<portal>/walks` reads Problem until its cron first fires (web, 2026-10-22).
+`docs/design/new-property-from-link.md` §3.4; its Portal class declares `walk_every_s`/`walk_timeout_s` (`scraper/jobs.py`)). Dispatch a new portal's first index walk at deploy: `scraping` judges every portal in `SOURCES` from that moment, so `<portal>/walks` reads Problem until its cron first fires (web, 2026-10-22).
 `web` (`scraper/web_main.py`) is `indexless`: its 6-hourly walk sees
 nothing, reaches the end and nominates every active row as an orphan (its unit has no scope); the worker drains it FIRST;
 its pages go through `scraper/egress.py` (private ranges refused per hop, a wall-clock deadline, a decoded cap). A pasted

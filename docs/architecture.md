@@ -3331,7 +3331,9 @@ renumber.** Navigate by area:
     the `browse_projection` line plus one static index line (and its rename) per portal in
     `rebuild_browse_list()`; a tenth portal is offered only with all three, and the same test
     fails until it has them. **The seams.** Attributes: `source`,
-    `index_rate`, `price_change_min_pct` (+ optional `shared_rate_limiter`). Required:
+    `index_rate`, `price_change_min_pct` (+ optional `shared_rate_limiter`), and `walk_every_s` +
+    `walk_timeout_s` (the code-only walk schedule `scraper/jobs.py` generates the portal's walk
+    from; never a `PortalLimits` key). Required:
     `categories`, `category_labels`, `walk_category`, `fetch_detail`. Defaulted on
     `PortalDefaults`, overridden only where the portal differs: `connect_index` (idnes: staleness
     preload), `connect_drain` (sreality: session pooler), `make_client` (sreality: category-bound
