@@ -112,5 +112,7 @@ the real cause of the "values jumping 50%" the old scraper hit.
   (sale CAGR / rent CAGR / gross yield), and a MapLibre map with two obec
   choropleth layers (rent-growth p.a., sale-growth p.a.) reusing the existing
   `admin_boundaries_public` + city-overlay paint pattern.
-- Ingestion → `.github/workflows/scrape_price_stats.yml` (manual + scheduled),
-  iterating active datasets × resolved obce × {prodej, pronájem}.
+- Ingestion → `.github/workflows/scrape_price_stats.yml` (manual + weekly),
+  walking ONE queue of (dataset, obec) stalest first across the active datasets
+  (never-scraped first) × {prodej, pronájem} until its time budget; a run that
+  shrank the never-scraped set chains once more on the job's own token (#2013).
