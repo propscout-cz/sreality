@@ -351,7 +351,7 @@ the request-long `tenant_conn`: its service-role work is two fast INSERTs, not a
 
 **Third instance — the push device routes (`api/routes/push.py`, migration 654): the caller's own account, then the
 service role.** `push_subscriptions` and `notification_deliveries` are RLS-on with NO policy and no browser grant, registered in
-both `_ADMIN_ONLY_RELATIONS` lists (not tenant tables: no browser DML). `PUT`/`DELETE /push/subscription` and `POST
+`tests/_admin_gate_registry.py` `ADMIN_ONLY_RELATIONS` (not tenant tables: no browser DML). `PUT`/`DELETE /push/subscription` and `POST
 /push/opened` declare `require_account_id` (in `_NEVER_ACTS`: a device belongs to the signed-in user, so a delegate's phone gets
 only the delegate's alerts and nobody registers a device for an account they act for), then `deps.open_background_conn` in the
 handler (pinned beside the share routes by `test_the_share_routes_open_the_service_role_only_after_their_gate`); every
