@@ -270,6 +270,11 @@ def test_the_wizard_has_the_general_modes_and_checks_with_its_own_copy() -> None
     drift = wizard.split("\nmode_drift() {\n", 1)[1].split("\n}\n", 1)[0]
     assert 'git -C "$WT" diff --quiet HEAD origin/main -- .railway' in drift
     copy_step = wizard.split('if [[ "${RAILWAY_M0_RUNNING_COPY:-}" != 1 ]]; then', 1)[1].split("\nfi\n", 1)[0]
-    assert 'cp "$WT/.railway/plan_check.mjs" "$OUT/plan_check-running.mjs"' in copy_step
+    # A copy per run: a second run (runner-list beside a window) never rewrites a running window's files in place.
+    assert 'RUN_DIR=$(mktemp -d "$OUT/run.XXXXXX")' in copy_step
+    assert re.findall(r'^\s*cp (.*)$', copy_step, re.M) == ['"${BASH_SOURCE[0]}" "$RUN_DIR/wizard.sh"',
+                                                           '"$WT/.railway/plan_check.mjs" "$RUN_DIR/plan_check.mjs"']
+    assert 'exec bash "$RUN_DIR/wizard.sh"' in copy_step and 'RAILWAY_M0_RUN_DIR="$RUN_DIR"' in copy_step
     calls = re.findall(r"^.*\bnode\b.*plan_check.*$", wizard, re.M)
-    assert calls and all('node "$OUT/plan_check-running.mjs"' in c for c in calls), calls
+    assert calls and all('node "$RUN_DIR/plan_check.mjs"' in c for c in calls), calls
+    assert "-running." not in wizard

@@ -224,15 +224,18 @@ OUT="${RAILWAY_M0_OUT:-$HOME/.railway-m0}"
 umask 077
 mkdir -p "$OUT"; chmod 700 "$OUT"
 
-# Run from a copy, so a checkout or pull during a window (a fold, the move to the PR head) never edits the running
-# script or the plan check it runs.
+# Run from a copy in this run's own directory, so a checkout or pull during a window (a fold, the move to the PR head)
+# never edits the running script or the plan check it runs, and neither does a second run (runner-list beside a window).
 if [[ "${RAILWAY_M0_RUNNING_COPY:-}" != 1 ]]; then
   WT=$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)
-  cp "${BASH_SOURCE[0]}" "$OUT/wizard-running.sh"
-  cp "$WT/.railway/plan_check.mjs" "$OUT/plan_check-running.mjs"
-  RAILWAY_M0_RUNNING_COPY=1 RAILWAY_M0_WT="$WT" exec bash "$OUT/wizard-running.sh" "$@"
+  RUN_DIR=$(mktemp -d "$OUT/run.XXXXXX")
+  cp "${BASH_SOURCE[0]}" "$RUN_DIR/wizard.sh"
+  cp "$WT/.railway/plan_check.mjs" "$RUN_DIR/plan_check.mjs"
+  RAILWAY_M0_RUNNING_COPY=1 RAILWAY_M0_WT="$WT" RAILWAY_M0_RUN_DIR="$RUN_DIR" exec bash "$RUN_DIR/wizard.sh" "$@"
 fi
 WT="$RAILWAY_M0_WT"
+RUN_DIR="$RAILWAY_M0_RUN_DIR"
+trap 'rm -rf "$RUN_DIR"' EXIT
 cd "$WT"   # the CLI pins `git rev-parse HEAD:.railway` and finds .railway/railway.ts from the working directory
 ENV_FILE="$OUT/answers.env"   # what the operator reads off the dashboard (never a secret)
 
@@ -305,7 +308,7 @@ process.exit(ok ? 0 : 1);
 
 # plan_check <plan JSON> <adds> <destroys> [<service>]: print the change list; fail unless it is safe. Always the copy
 # taken at start (.railway/plan_check.mjs, which CI tests): a pull mid-window never changes the checker.
-plan_check() { node "$OUT/plan_check-running.mjs" "$@"; }
+plan_check() { node "$RUN_DIR/plan_check.mjs" "$@"; }
 
 # plan_pinned <label> <adds> <destroys> [<service>]: one evaluation, pinned to the .railway/ tree and the environment
 # etag, written to a fresh file; apply_pinned then applies exactly that file.
@@ -424,8 +427,8 @@ checkout_is_pr_head() {
     git -C "$WT" pull --ff-only || stop "git pull --ff-only failed"
     [[ "$(git -C "$WT" rev-parse HEAD)" == "$PR_HEAD" ]] || stop "the checkout is still not the pull request head"
     # This run is the copy taken before the pull: it must be the pull request's own wizard and plan check.
-    cmp -s "$WT/scripts/railway_iac_wizard.sh" "$OUT/wizard-running.sh" \
-      && cmp -s "$WT/.railway/plan_check.mjs" "$OUT/plan_check-running.mjs" \
+    cmp -s "$WT/scripts/railway_iac_wizard.sh" "$RUN_DIR/wizard.sh" \
+      && cmp -s "$WT/.railway/plan_check.mjs" "$RUN_DIR/plan_check.mjs" \
       || stop "the pull changed the wizard or its plan check: run the same command again"
   fi
   [[ -z "$(git -C "$WT" status --porcelain -- .railway)" ]] || stop ".railway/ has uncommitted changes"

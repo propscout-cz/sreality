@@ -1154,8 +1154,9 @@ on 2026-12-01, and until then a file of that name would override the applied set
     over `railway ssh -p <worker project> -e production -s job-runner`; the first use registers an SSH key. If ssh
     cannot reach the service, the agent runs the one-row SQL with the operator's OK. A request is #2026's "Jobs: run
     now" form, never the wizard.
-  The wizard runs from copies of itself and of the plan check in `~/.railway-m0`, so a pull mid-window changes
-  neither; a pull to the PR head that would change one stops the run, to be started again.
+  The wizard runs from copies of itself and of the plan check in its own `~/.railway-m0/run.*` directory (removed at
+  exit), so neither a pull mid-window nor a second run beside it changes them; a pull to the PR head that would change
+  one stops the run, to be started again.
 - **The plan check is structural.** `.railway/plan_check.mjs <plan.json> <adds> <destroys> [<service>]` reads the
   pinned `--out` file and refuses: counts other than the expected ones (counted as the CLI's summary line counts
   them); a destructive change when 0 destroys are expected; any domain change; a kind the CLI never writes; an update
