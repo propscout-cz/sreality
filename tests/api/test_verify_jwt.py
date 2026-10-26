@@ -154,3 +154,15 @@ def test_a_token_carrying_a_client_id_is_401() -> None:
     meant for another audience than this API and must not pass as a user's session."""
     assert _refused(mint({"sub": "abc", "client_id": "some-oauth-app"})).detail == (
         "Invalid token: client token")
+
+
+def test_a_header_naming_another_algorithm_is_401_not_500() -> None:
+    """The served key is ES256; a header claiming RS256 for it is a malformed token, never a server error."""
+    import base64
+    import json
+
+    def b64(obj: dict) -> str:
+        return base64.urlsafe_b64encode(json.dumps(obj).encode()).rstrip(b"=").decode()
+
+    forged = f"{b64({'alg': 'RS256', 'typ': 'JWT', 'kid': 'served-key'})}.{b64({'sub': 'abc'})}.AAAA"
+    assert _refused(forged).detail.startswith("Invalid token")

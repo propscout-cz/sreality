@@ -20,15 +20,11 @@ PROJECT_URL = "https://example.supabase.co"
 ISSUER = PROJECT_URL + "/auth/v1"
 
 
-class SigningKey:
-    key = KEY.public_key()
-
-
 class JwksClient:
-    """Stands in for `deps._jwks_client`: every lookup answers with the test key."""
+    """Stands in for `deps._jwks_client`: every lookup answers with the test key, as the PyJWK the real client returns."""
 
-    def get_signing_key_from_jwt(self, _token: str) -> SigningKey:
-        return SigningKey()
+    def get_signing_key_from_jwt(self, _token: str) -> jwt.PyJWK:
+        return jwt.PyJWK({**jwt.algorithms.ECAlgorithm.to_jwk(KEY.public_key(), as_dict=True), "alg": "ES256"})
 
 
 def mint(claims: dict | None = None, *, drop: tuple[str, ...] = ()) -> str:

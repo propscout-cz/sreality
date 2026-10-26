@@ -247,4 +247,4 @@ start runs, what agent search means, and model-written SQL.
 
 | Ticket | What landed | Owed after merge |
 |---|---|---|
-| #2059 M0 route and sign-in hardening | `/buildings*` and `force_refresh` admin-only; `verify_jwt` pins the issuer, requires `exp`/`sub`/`role`, refuses `client_id`; boot refuses `API_AUTH_OPTIONAL` under `RAILWAY_ENVIRONMENT` | delete `RUNPOD_API_KEY` from the Railway API service (unused), after sreality-e9's signed-in check; still owed: building runs readable through PostgREST's SYSTEM arm (`roadmap/public-release-track.md` item 11) |
+| #2059 M0 route and sign-in hardening | `/buildings*` and `force_refresh` admin-only; `verify_jwt` pins the issuer, requires `exp`/`sub`/`role`, refuses `client_id`; boot refuses `API_AUTH_OPTIONAL` under `RAILWAY_ENVIRONMENT` | delete `RUNPOD_API_KEY` from the Railway API service (no reader), after sreality-e9's signed-in check; still owed: building runs readable through PostgREST's SYSTEM arm (`roadmap/public-release-track.md` item 11) |

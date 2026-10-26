@@ -473,8 +473,8 @@ Scraper orchestration:
 - `GITHUB_ACTOR` — CI context, used for curated-cities upload attribution.
 
 NEW DEDUP (docs/design/new-dedup/PROGRAM.md, Wave 1):
-- `RUNPOD_API_KEY` — an Actions secret, and the realtime worker's (the autodedup judge lane launches pods); no
-  `api/` code and no frontend reads it, so the API service's copy is deleted at #2059's deploy (M0). Auths `scripts/runpod_client.py`'s REST
+- `RUNPOD_API_KEY` — an Actions secret (pods are rented only inside workflows, the judge lane's `autodedup.yml` among them);
+  no Railway service reads it, so the API's copy goes at #2059's deploy and the worker's with the rotation wizard (M0). Auths `scripts/runpod_client.py`'s REST
   (`rest.runpod.io/v1`) + GraphQL (`api.runpod.io/graphql`) calls to launch/poll/terminate on-demand GPU pods.
   Its workflow consumers: `autodedup.yml`, `dinov3_bakeoff_manifest.yml`, `dinov3_embed_backfill.yml`, `runpod_reap.yml`, `tagging_bakeoff.yml`, `text_extraction_bakeoff.yml`
   (`dinov3_embed_backfill` is the DINOv3 corpus embedding pass, never yet run on real data). Every job goes through `RunPodClient.run_job`,

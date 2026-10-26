@@ -250,8 +250,10 @@ def verify_jwt(authorization: str | None = Header(default=None)) -> dict:
     issuer = base.rstrip("/") + "/auth/v1"
     try:
         signing_key = _jwks_client(issuer + "/.well-known/jwks.json").get_signing_key_from_jwt(token)
+        # The PyJWK, not its raw key: PyJWT then verifies with the key's own algorithm, so a header naming
+        # another one fails as a token error (401) instead of a TypeError (500).
         claims = jwt.decode(
-            token, signing_key.key,
+            token, signing_key,
             algorithms=["ES256", "RS256"], audience="authenticated", issuer=issuer,
             options={"require": ["exp", "iss", "aud", "sub", "role"]},
         )
