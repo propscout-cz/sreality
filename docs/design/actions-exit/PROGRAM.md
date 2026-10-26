@@ -41,7 +41,7 @@ flag, a settings knob that means "stop", or a portal name in shared scheduler co
 | Price-stats self-chain: 138 dispatches in 14 days (~14,700 min/month) on a weekly cron | `scrape_price_stats.yml` |
 | GitHub fires sub-hourly crons about 6×/day; the worker drains 96–99 % of every portal's queue | run counts; `detail_queue_completions` |
 | Worker memory: avg 7.4 GB, peak 21.5 of 22.9 GB (an autodedup pass is 11.4 GB) | Railway metrics, heartbeat |
-| Merges redeploy the image ~8–11×/day; `drainingSeconds` 30; a cut walk leaves `ended_at NULL` and does not resume | `railway.worker.json`, `portal_runner.py` |
+| Merges redeploy the image ~8–11×/day; `drainingSeconds` 30; a cut walk leaves `ended_at NULL` and does not resume | `.railway/railway.ts` (`WORKER_DRAINING_SECONDS`), `portal_runner.py` |
 | No SIGTERM handler in `portal_runner`, `portal` or any `*_main.py`; the worker cannot kill a pass (a thread) | code read |
 | `location_jobs` (mig 384) is already a CAS lease table: holder, expiry, last start/success, outcome, failures | `location_data/resolver/lease.py` |
 | Required checks: pytest, schema-and-sql, vitest, build, docs-budget; `strict=false` | branch protection API |
@@ -127,9 +127,11 @@ production.
   is deleted.
 - **Secrets**: Railway shared variables are the store of record for runtime; GitHub keeps what CI, the
   canary and the attended forms read; the duplicated set is listed once in the toolkit-api skill. Deleted:
-  `SCRAPE_CHAIN_TOKEN` (both hosts), `WORKER_DISPATCH_TOKEN`, `GEMINI_API_KEY`. Added: `RAILWAY_TOKEN` for
-  Railway's config plan/apply recipe; a new fine-grained token under the organisation for price-stats
-  "Run now".
+  `SCRAPE_CHAIN_TOKEN` (both hosts), `WORKER_DISPATCH_TOKEN`, `GEMINI_API_KEY`. Added: a new fine-grained
+  token under the organisation for price-stats "Run now". No `RAILWAY_TOKEN`: M0 (#2060) applies
+  `.railway/railway.ts` by hand in merge windows (operator ruling R2, 2026-10-26); plan/apply in CI would need
+  one project token per Railway project, and is #2025's to decide. Shared variables are per project (the
+  three services are three projects), and IaC only references them (`ctx.shared.NAME`).
 
 ### 4.3 Honest limits (from the refuters)
 
@@ -183,10 +185,11 @@ One migration (rename + alias view, the new columns, `resource`, `job_runs` with
 per-worker liveness subjects); `scraper/job_lease.py` (moved + claim/renew/fence/release), `scraper/jobs.py`,
 `scraper/job_runner.py`, the `job/<name>` SQL arm, the request-only `run_job.yml`; the `job-runner` service
 added to `.railway/railway.ts`. **Scope change 2026-10-25 (operator ruling Q24, agent-platform grill):** the
-move of the three existing services to that file with Railway's plan-on-PR/apply-on-merge recipe, and the
-deletion of the three `railway*.json`, is the agent-platform programme's M0 (PR #2004, `MVP.md` § M0, due
-within the week, hard cutoff 2026-12-01); #2025 reuses the file and lands it for all four only if M0 has not
-landed by then. First jobs: stale_images, rent_map, map_overlays. Each later PR adds registry lines and deletes the matching
+move of the three existing services to that file, and the deletion of the three `railway*.json`, is the
+agent-platform programme's M0 (PR #2004, `MVP.md` § M0, due within the week, hard cutoff 2026-12-01); #2025
+reuses the file and lands it for all four only if M0 has not landed by then. M0 (#2060) ships the file
+operator-applied with `scripts/railway_iac_wizard.sh` and no CI recipe (operator ruling R2, 2026-10-26): the
+services are three Railway projects, so a change is one plan per project, and #2025 decides plan/apply in CI. First jobs: stale_images, rent_map, map_overlays. Each later PR adds registry lines and deletes the matching
 YAMLs; a new row's first slot comes after `now() + timeout_s`; rollback is a revert.
 **Gate (7 days):** every job cell green; ≥ 3 deploys survived with interrupted runs re-claimed within 1 min;
 one request run, one pause with expiry and one self-fence drill exercised; 0 unique-index violations, 0
@@ -262,7 +265,7 @@ Added: the job-runner service (two replicas) and ~5 Dockerfile lines (one ARG); 
 `scheduled_jobs`; `job_runs`; `scraper/jobs.py` (~60), `scraper/job_runner.py` (~220), `scraper/job_lease.py`
 (moved, ~+60); the `job/<name>` SQL arm (~60); the W1 seams (~60); `run_job.yml` (~30, request-only);
 `.railway/railway.ts` (~80); two code-only per-portal walk values; ~250 lines of tests; one `job-runner`
-heartbeat row per replica; one pg_cron history cleanup; `RAILWAY_TOKEN`; a LICENSE notice.
+heartbeat row per replica; one pg_cron history cleanup; a LICENSE notice.
 
 Net: workflow files 84 → ~38 (31 if R6a passes in full); live GitHub schedules 34 → 2; production schedulers
 2 → 1; Railway services 3 → 4; Railway config files 3 → 1; worker lanes 17 → 16; roughly −8,500 to −9,000 lines.

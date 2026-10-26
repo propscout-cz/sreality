@@ -660,14 +660,14 @@ rules. Identify which one a task belongs to before you start.
 `.github/workflows/`):
 - Python 3.12, stdlib-first, `psycopg` direct to Postgres.
 - Service-role database access. Reads and writes anything.
-- Runs in GitHub Actions (scrapers + scheduled jobs) or Railway (FastAPI).
+- Runs in GitHub Actions (scrapers + scheduled jobs) or Railway (the API and the realtime worker).
 - All rules below apply: append-only migrations, snapshot-on-change, no deletes, no
   `supabase-py`, etc.
 
 **Frontend territory** (`frontend/`):
 - Browser code. Vite + React 18 + TypeScript + Tailwind v4 SPA, served by Caddy from a
-  two-stage Docker build (see `frontend/Dockerfile`). Deployed to Railway as a separate
-  service alongside the API.
+  two-stage Docker build (see `frontend/Dockerfile`). Deployed to Railway as its own project
+  (`vite`).
 - The current page set lives in `frontend/src/routes.tsx` (consult it rather than
   trusting a list here, which rots). Today it spans **Browse** (filters → Map /
   Stats), **Listing Detail** (with the snapshot-timeline strip — the product's
@@ -1113,6 +1113,51 @@ rules. Identify which one a task belongs to before you start.
 
 When in doubt about which territory a task belongs to, ask. Don't import frontend deps
 into the Python tree or vice versa.
+
+**`.railway/` belongs to no territory.** It is operator-applied deploy configuration: `.railway/railway.ts` plus a
+Node manifest (`package.json` + lockfile) that serves only the pinned Railway CLI and SDK. Python never imports it, no
+image copies it (the root Dockerfile COPYs named trees; `.dockerignore` lists it too), and CI never builds it; only the
+text guards in `tests/test_railway_config.py` read it. Edits follow the subsection below.
+
+### Railway service configuration
+
+Three Railway projects, `API`, `realtime-worker` and `vite`, each hold one service `sreality` and one `production`
+environment (commit statuses read `<project> - sreality`). Since #2060 every setting they run with lives in
+`.railway/railway.ts`, Railway's infrastructure-as-code file. Config as Code (the old `railway*.json`) stops being read
+on 2026-12-01, and until then a file of that name would override the applied settings, so a guard test fails on one.
+- **One file, three plans.** An IaC file describes one project/environment and omitting a resource deletes it, so the
+  file returns the linked project's own definition, keyed by project id AND name: a wrong `railway link` throws.
+- **Deploys never read it.** A change ships as a PR, then the operator applies it with `scripts/railway_iac_wizard.sh`
+  (a pinned plan, an interactive apply) inside a merge window, the worker's in an e9 window with the autodedup brake on,
+  then `railway config plan --detailed-exit-code` must exit 0 (the wizard's drift mode). A `.railway/`-only merge still
+  redeploys the API and the worker, which have no watch patterns (#1857).
+- **Every variable NAME is declared,** each `preserve()` (values stay in Railway): add a name in the same PR as the
+  secret; removing one is a destructive delete the apply asks to confirm. `EXTRAS` (API and worker: `api`) is the root
+  Dockerfile's build argument: a service variable reaches the ARG of its name, and the build log echoes it.
+- **Custom domains stay dashboard-owned** (IaC cannot register one; the file names the two that exist), and `REPO`
+  must equal the services' GitHub source, or the plan shows a source change.
+- **What a plan cannot see:** with one replica in one region, a region change; and a custom domain's port. Both are
+  read with describe-service after every apply.
+- **Start commands:** only the worker declares one (E949's arena cap; its 30 s `drainingSeconds` is E941's). The API
+  and vite run their image's own command (ruling R5, 2026-10-26): Railway runs a start command in exec form, so an
+  unwrapped `$PORT` never expands (8a362a0ea).
+- **Never change a service setting or a variable name in the dashboard or with Railway MCP write tools**, except as
+  the emergency undo U-2, and fold any such change back into the file: the next plan shows it as drift.
+- **Adding a service** is one more `service(...)` in its project's definition (#2075's agent-worker in `API`; #2025's
+  runner's project is its own ruling) and one more row in the project-map test; removing one deletes it.
+
+Undo paths (U-1 and U-2 rehearsed on vite in #2060's window 1; evidence on #2060):
+- **U-1, the lasting path, for any IaC change:** `git revert` it in a PR, merge in a window, then plan (it shows the
+  reverse diff), apply, and plan again until it exits 0.
+- **U-2, emergency:** edit the one field in the dashboard and Deploy, then fold it into the file in a PR (until then
+  the plan exits 2 with exactly that line); applying the unchanged file puts the declared value back. A dashboard
+  Rollback restores only the image and the variables, never settings; a Redeploy reuses the old deployment's frozen
+  configuration, so a proof deploy is Ctrl+K → Deploy Latest Commit.
+- **U-3, undoing #2060 itself (valid only until 2026-12-01; written, not rehearsed, ruling R7):** revert its PR, so
+  the three json files return and Config as Code overrides again on the next deploy, and before that revert merges
+  re-enter `/railway.worker.json` as the worker's config-file path without a redeploy (hold Alt while clicking
+  Deploy). The dashboard values equal the files', so the effect is neutral. `railway config migrate undo` cannot help:
+  it restores only paths a `migrate cutover` saved, and it accepts only `railway.json`/`railway.toml` names.
 
 ## Architectural rules — full rationale
 

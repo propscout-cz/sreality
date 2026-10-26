@@ -344,6 +344,9 @@ closed), `agent_estimation_concurrency_cap` (3). Deferred: extension `mode:'agen
 All secrets are GitHub Actions secrets and/or Railway env vars in production. Backend code
 references them by name; never write a value into a committed file (`.env` is gitignored).
 API keys are **backend-only** — never `VITE_*`-prefix one; `frontend/` must not see them.
+Railway variable NAMES live in `.railway/railway.ts` (each `preserve()`; values stay in Railway): add a name there in
+the same PR as the secret, remove it there to delete one (an operator apply, `scripts/railway_iac_wizard.sh`).
+`EXTRAS` (API and worker: `api`) is the root Dockerfile's build argument.
 
 Database:
 - `SUPABASE_DB_URL` — Postgres connection string (Supabase → Database → Connection string →

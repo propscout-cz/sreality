@@ -5,8 +5,10 @@ storing full history in Supabase Postgres (PostGIS) for downstream
 rental-yield analysis. A read-only browser UI sits over the same database
 for QA and ad-hoc research.
 
-The scraper runs as a scheduled GitHub Action; the API and the UI run as
-two Railway services. There is no local development requirement. See
+The scraper runs as a scheduled GitHub Action; the API, the realtime worker
+and the UI run as three Railway services, each its own project, with their
+settings in `.railway/railway.ts`, applied with `scripts/railway_iac_wizard.sh`.
+There is no local development requirement. See
 [`CLAUDE.md`](./CLAUDE.md) for architectural rules and operational notes.
 
 ## Layout
@@ -16,8 +18,9 @@ migrations/         numbered SQL migrations (applied via Supabase MCP after appr
 scraper/            Python package: HTTP client, parser, DB writer, entrypoint
 toolkit/            pure-function analytical tools over the schema
 api/                FastAPI service exposing the toolkit (deployed to Railway)
-frontend/           Vite + React + TS database-browser UI (deployed to Railway as a second service; see frontend/README.md)
+frontend/           Vite + React + TS database-browser UI (deployed to Railway as its own project; see frontend/README.md)
 tests/              pytest suite
+.railway/           Railway settings for the three projects (TypeScript IaC, operator-applied; Node only for the pinned CLI/SDK, never in an image)
 .github/workflows/  test.yml (per-push), index_walk.yml (the sreality walk; the realtime worker drains), frontend-build.yml (typecheck + bundle-size guardrail)
 ```
 
