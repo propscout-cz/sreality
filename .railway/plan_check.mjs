@@ -5,7 +5,8 @@
 // - nothing is destructive when 0 destroys are expected, and no change touches a domain;
 // - no change touches an existing service's source or networking; a create sets both, so only a create of <service>
 //   is allowed, and an unscoped check refuses every create;
-// - with <service>, every change TARGETS exactly that service, whatever its text names.
+// - with <service>, every change TARGETS exactly that service, whatever its text names;
+// - every change is one of the CLI's kinds, and an update's field can be read.
 // Imports only node:fs, so CI runs it without `npm ci` (tests/test_railway_plan_check.py).
 import { readFileSync } from "node:fs";
 
@@ -23,15 +24,26 @@ try {
   process.exit(1);
 }
 
-// The pinned file's changes are the backend preview's echo (engine.rs), not proven to keep `field` or `path`, so an
-// update's field falls back to its path, then its first detail line ("source.repo (a → b)"), then its summary's last
-// word ("Update sreality networking").
-const fieldOf = (c) => {
-  if (c.field) return String(c.field);
-  if (c.kind !== "resource.update") return "";
-  if (c.path) return String(c.path).split(".").pop();
-  const detail = String((c.details || [])[0] || "");
-  return detail ? detail.split(/[.\s]/)[0] : String(c.summary || "").split(" ").pop();
+// The kinds the CLI writes (change_set.rs:182, :330, :807, :833, :1871); domain.* is refused below, any other kind
+// as unknown.
+const KINDS = ["resource.create", "resource.update", "resource.delete", "variable.set", "variable.delete"];
+
+// The pinned file's changes are the backend preview's echo (engine.rs), not proven to keep `field` or `path`, so a
+// change's fields are every one it can be read from: `field`, the path's segment after the address
+// (`resources.service.sreality.source.repo`), and for an update each detail line's first segment ("source.repo (a →
+// b)") and the summary's first leaf path ("Update sreality source.repo, … and 2 more", change_set.rs:1755-1767).
+const fieldsOf = (c) => {
+  const found = new Set();
+  if (c.field) found.add(String(c.field));
+  const segment = typeof c.path === "string" ? c.path.replace(/^resources\./, "").split(".")[2] : "";
+  if (segment) found.add(segment);
+  if (c.kind === "resource.update") {
+    for (const detail of c.details || []) found.add(/^[^.\s(]*/.exec(String(detail))[0]);
+    const summary = /^Update \S+ ([^.\s,]+)/.exec(String(c.summary || ""));
+    if (summary) found.add(summary[1]);
+  }
+  found.delete("");
+  return found;
 };
 
 // The CLI writes `address` and a `path` under `resources.<address>` on every change, and a create embeds the new
@@ -39,7 +51,9 @@ const fieldOf = (c) => {
 // runner's reference variable names service.sreality inside its own create. With none of the three, the summary's
 // service token decides (the CLI's summary shapes, change_set.rs:334, :812, :838, :1767). Fields that disagree, or no
 // target at all, refuse the change: the check fails closed.
-const SUMMARY_TARGETS = [/^(?:Create|Delete) service (\S+)/, /^(?:Set|Update|Delete) variable ([^.\s]+)\./, /^Update (\S+) /];
+const SUMMARY_TARGETS = [
+  /^(?:Create|Delete) service (\S+)/, /^(?:Set|Update|Delete) variable ([^.\s]+)\./, /^Update (\S+) /,
+];
 const targetOf = (c) => {
   const found = new Set();
   if (typeof c.address === "string") found.add(c.address);
@@ -62,7 +76,7 @@ let add = 0;
 let destroy = 0;
 for (const c of changes) {
   const kind = String(c.kind || "");
-  const field = fieldOf(c);
+  const fields = fieldsOf(c);
   const what = c.summary || c.path || kind;
   const target = targetOf(c);
   if (kind === "resource.create" || kind === "domain.create") add += 1;
@@ -70,9 +84,11 @@ for (const c of changes) {
   if (scope && target.problem) problems.push(`${target.problem}: ${what}`);
   else if (scope && target.address !== scope) problems.push(`outside ${service}: ${what}`);
   if (kind.startsWith("domain.")) problems.push(`touches ${kind}: ${what}`);
+  else if (!KINDS.includes(kind)) problems.push(`unknown change kind ${kind || "(none)"}: ${what}`);
   else if (kind === "resource.create" && !scope) problems.push(`a create needs its service named: ${what}`);
-  else if (kind !== "resource.create" && (field === "source" || field === "networking")) {
-    problems.push(`touches ${field}: ${what}`);
+  else if (kind === "resource.update" && fields.size === 0) problems.push(`no readable field: ${what}`);
+  else if (kind !== "resource.create") {
+    for (const field of ["source", "networking"]) if (fields.has(field)) problems.push(`touches ${field}: ${what}`);
   }
   if (c.severity === "destructive" && Number(destroys) === 0) problems.push(`destructive: ${what}`);
 }

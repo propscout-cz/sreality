@@ -48,6 +48,13 @@ CASES = [
     # U-1 for the service add: one destructive delete, expected.
     ("delete_job_runner.json", ("0", "1", "job-runner"), 0, None),
     ("delete_job_runner.json", ("0", "0", "job-runner"), 1, "destructive: Delete service job-runner"),
+    # Fails closed: a kind the CLI never writes, a field deeper than its path's own segment, an echo whose field is
+    # read from the summary (the CLI's `Update <name> <leaf paths>`), and an update whose field cannot be read.
+    ("unknown_kind_source.json", ("0", "0", "sreality"), 1, "unknown change kind service.update"),
+    ("sreality_deep_path_source.json", ("0", "0", "sreality"), 1, "touches source: change"),
+    ("echo_summary_only_source.json", ("0", "0", "sreality"), 1, "touches source: Update sreality source.repo"),
+    ("echo_summary_only_networking.json", ("0", "0", "sreality"), 1, "touches networking"),
+    ("unreadable_field.json", ("0", "0", "sreality"), 1, "no readable field: change"),
 ]
 
 

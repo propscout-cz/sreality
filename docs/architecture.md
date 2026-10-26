@@ -1158,11 +1158,13 @@ on 2026-12-01, and until then a file of that name would override the applied set
   neither; a pull to the PR head that would change one stops the run, to be started again.
 - **The plan check is structural.** `.railway/plan_check.mjs <plan.json> <adds> <destroys> [<service>]` reads the
   pinned `--out` file and refuses: counts other than the expected ones (counted as the CLI's summary line counts
-  them); a destructive change when 0 destroys are expected; any domain change; a source or networking change of an
-  existing service (a create sets both, so only a create of the named service passes). With `<service>`, every
-  change must TARGET `service.<service>`: its `address`, the created resource's own address or its `path` under
-  `resources.<address>`, else the summary's service token. Values and details never decide (the runner's reference
-  names `service.sreality` inside its own create), and a change whose targets are missing or disagree is refused.
+  them); a destructive change when 0 destroys are expected; any domain change; a kind the CLI never writes; an update
+  whose field cannot be read; a source or networking change of an existing service, read from every place a field
+  shows (`field`, the path, the details, the summary; a create sets both, so only a create of the named service
+  passes). With `<service>`, every change must TARGET `service.<service>`: its `address`, the created resource's own
+  address or its `path` under `resources.<address>`, else the summary's service token. Values and details never decide
+  a target (the runner's reference names `service.sreality` inside its own create), and a change whose targets are
+  missing or disagree is refused.
   `tests/fixtures/railway_plans/` is synthetic until #2025 pins it to a real plan's change list (names only).
 - **Every variable NAME is declared,** a secret as `preserve()` (values stay in Railway) or as a reference to another
   service's (the runner's `SUPABASE_DB_URL`), a plain value written out: add a name in the same PR as the secret;
