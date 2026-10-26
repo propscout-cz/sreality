@@ -321,9 +321,9 @@ Added: the job-runner service (two replicas) and ~5 Dockerfile lines (one ARG); 
 (moved, ~+60); the `job/<name>` SQL arm (~60); the W1 seams (~60); `run_job.yml` (~30, request-only);
 `.railway/railway.ts` (~80); two code-only per-portal walk values; ~250 lines of tests; one `job-runner`
 heartbeat row per replica; the runner's daily `job_runs` prune; `RAILWAY_TOKEN`; a LICENSE notice. **As built
-(#2024):** `scraper/job_runner.py` ~700 lines (~570 of code), `scraper/job_process.py` ~360 (~260), `job_lease.py`
-+~370 (the runner's statements), ~1,900 test lines; the guard thread, the mixed kill mode, the straggler wait,
-atomic spawn and the per-call stopping budget are the growth over the estimate.
+(#2024):** `scraper/job_runner.py` ~725 lines (~595 of code), `scraper/job_process.py` ~410 (~300), `job_lease.py`
++~375 (the runner's statements), `stop.py` +4/−3 (an opt-in hangup), ~2,200 test lines; the guard thread, the mixed
+kill mode, the straggler wait, atomic spawn and the per-call stopping budget are the growth over the estimate.
 
 Net: workflow files 84 → ~38 (31 if R6a passes in full); live GitHub schedules 34 → 2; production schedulers
 2 → 1; Railway services 3 → 4; Railway config files 3 → 1; worker lanes 17 → 16; roughly −8,500 to −9,000 lines.
