@@ -94,8 +94,9 @@ production.
   start hour; the API's stuck-run cutoff exceeds the largest timeout; the GitHub schedule set is exactly
   {verify_pipeline, scrape_price_stats}.
 - **One service** (`python -m scraper.job_runner`), **two identical replicas**, 8 GB / 4 vCPU each,
-  `restartPolicy ALWAYS`, `drainingSeconds` 180, built from the same Dockerfile with `ARG EXTRAS=api,clip,geo`
-  so CPU torch, the pinned CLIP weights (revision 3d74acf9) and the geo wheels live in this image only.
+  `restartPolicy ALWAYS`, `drainingSeconds` 180, built from the same Dockerfile, whose `ARG EXTRAS` shipped with
+  #2060 (no default; unset installs `api`): the runner sets `EXTRAS: "api,clip,geo"` in its `.railway/railway.ts`
+  env, so CPU torch, the pinned CLIP weights (revision 3d74acf9) and the geo wheels live in this image only.
   `watchPatterns` cover the trees jobs import. Variables are references to shared project variables.
 - **Scheduling**: anchored, staggered slots on the database clock (`due_at` from `every_s` + `offset_s`);
   missed slots are skipped, never replayed; a new row's first slot is no earlier than `now() + timeout_s`
@@ -263,8 +264,9 @@ GitHub matrix, the overdue-only fallback rule, the disarm wave, runtime memory a
 Added: the job-runner service (two replicas) and ~5 Dockerfile lines (one ARG); columns on the reused
 `scheduled_jobs`; `job_runs`; `scraper/jobs.py` (~60), `scraper/job_runner.py` (~220), `scraper/job_lease.py`
 (moved, ~+60); the `job/<name>` SQL arm (~60); the W1 seams (~60); `run_job.yml` (~30, request-only);
-`.railway/railway.ts` (~80); two code-only per-portal walk values; ~250 lines of tests; one `job-runner`
-heartbeat row per replica; one pg_cron history cleanup; a LICENSE notice (no `RAILWAY_TOKEN` in M0; CI tokens are #2025's call).
+its service in `.railway/railway.ts` (~15: M0, #2060, ships the file and the one ARG, `EXTRAS`, which the runner sets);
+two code-only per-portal walk values; ~250 lines of tests; one `job-runner` heartbeat row per replica; one pg_cron
+history cleanup; a LICENSE notice (no `RAILWAY_TOKEN` in M0; CI tokens are #2025's call).
 
 Net: workflow files 84 → ~38 (31 if R6a passes in full); live GitHub schedules 34 → 2; production schedulers
 2 → 1; Railway services 3 → 4; Railway config files 3 → 1; worker lanes 17 → 16; roughly −8,500 to −9,000 lines.

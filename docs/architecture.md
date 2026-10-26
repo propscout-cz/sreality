@@ -1136,15 +1136,18 @@ on 2026-12-01, and until then a file of that name would override the applied set
 - **Every variable NAME is declared,** each `preserve()` (values stay in Railway): add a name in the same PR as the
   secret; removing one is a destructive delete the apply asks to confirm. `EXTRAS` (API and worker: `api`) is the root
   Dockerfile's build argument: a service variable reaches the ARG of its name, and the build log echoes it.
-- **Custom domains stay dashboard-owned** (IaC cannot register one; the file names the two that exist), and `REPO`
-  must equal the services' GitHub source, or the plan shows a source change.
+- **Domains stay dashboard-owned, custom and generated (`*.up.railway.app`)**: no plan diffs either, and IaC cannot
+  register one. The file names the two custom domains that exist, so removing one of those also takes it out of the
+  file (a plan errors on a declared domain Railway lacks). `REPO` must equal the services' GitHub source, or the plan
+  shows a source change.
 - **What a plan cannot see:** with one replica in one region, a region change; and a custom domain's port. Both are
   read with describe-service after every apply.
 - **Start commands:** only the worker declares one (E949's arena cap; its 30 s `drainingSeconds` is E941's). The API
   and vite run their image's own command (ruling R5, 2026-10-26): Railway runs a start command in exec form, so an
   unwrapped `$PORT` never expands (8a362a0ea).
-- **Never change a service setting or a variable name in the dashboard or with Railway MCP write tools**, except as
-  the emergency undo U-2, and fold any such change back into the file: the next plan shows it as drift.
+- **Never change a service setting or a variable name in the dashboard or with Railway MCP write tools** (domains
+  are outside this rule, above), except as the emergency undo U-2, and fold any such change back into the file: the
+  next plan shows it as drift.
 - **Adding a service** is one more `service(...)` in its project's definition (#2075's agent-worker in `API`); a new
   Railway project (where #2025's runner lives is its own ruling) also needs a `PROJECTS` entry, a row in the
   project-map test, and a row in the wizard's `PROJECT_ID`, `PROJECT_NAME` and `LABELS` (a guard test ties those to
