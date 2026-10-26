@@ -161,10 +161,11 @@ class FakeLedger:
         self._record("begin", stopping)
 
     skipped: dict[str, str] = field(default_factory=dict)
+    register_fails: bool = False  # a statement timeout, say: this call fails, the tick goes on
 
     def register(self, entries: Sequence[Job]) -> job_lease.Registered | None:
         self._record("register", [j.name for j in entries])
-        return job_lease.Registered((), (), (), dict(self.skipped)) if self.up else None
+        return None if self.register_fails else job_lease.Registered((), (), (), dict(self.skipped))
 
     def retire(self, names: Sequence[str]) -> list[str] | None:
         self._record("retire", list(names))
@@ -1019,12 +1020,13 @@ def test_once_says_not_due_and_an_interrupted_once_exits_143(capsys: pytest.Capt
 def test_registration_is_retried_every_tick_and_nothing_is_claimed_before_it_lands() -> None:
     """A database outage at boot never crash-loops the runner, and never lets it claim on an unreconciled row."""
     rig = _rig([_job("a"), _job("b")], due=["a", "b"])
-    rig.ledger.down = True
+    rig.ledger.register_fails = True
     for _ in range(3):
         rig.clock.advance(10)
         assert rig.runner.tick() is False
+    assert len(rig.ledger.named("register")) == 3, "retried every tick"
     assert not rig.runner.registered and rig.ledger.named("claim") == [] and rig.ledger.named("due") == []
-    rig.ledger.down, rig.ledger.skipped = False, {"b": "CheckViolation: declarations_positive"}
+    rig.ledger.register_fails, rig.ledger.skipped = False, {"b": "CheckViolation: declarations_positive"}
     rig.clock.advance(10)
     rig.runner.tick()
     assert rig.runner.registered and rig.runner.skipped == {"b": "CheckViolation: declarations_positive"}
