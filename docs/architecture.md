@@ -2518,7 +2518,9 @@ renumber.** Navigate by area:
     on every scrape and a merge alone sent false alerts. Each row carries provenance
     (`trigger_price_czk` / `prev_price_czk`; the snapshot is its `event_ref`); since W1 (2026-10-21) producers
     write facts only, never routing (migration 656 dropped `channel`, `status`, `error_message`,
-    `target_channels`, `sreality_id`, `estimation_run_id`, `message` and the key: 24 columns -> 15; the routing
+    `target_channels`, `sreality_id`, `estimation_run_id`, `message` and the key: 24 columns -> 15; with them the
+    two channel picks that fed `target_channels`, the watchdog's `notification_subscriptions.channels`
+    (migration 208) and the collection's `notify_channels`, so no routing column is left; the routing
     contract of `docs/design/notifications-unified.md` is superseded by `docs/design/notifications-push/PROGRAM.md`).
     Rows are carried onto the survivor by `PROPERTY_CARRIERS`' `notification_dispatches` entry
     (rule #18, `toolkit/property_carriers.Dispatches`), so they never orphan onto a `merged_away`
@@ -2552,7 +2554,8 @@ renumber.** Navigate by area:
     which is why delivery gets its own ledger.) The first ledger, `channel_sends` (Sprint N: email and
     Telegram through an outbox draining `target_channels`), never sent a row and lost every writer in
     W1 (2026-10-21); migration 656 dropped it with `notification_suppression` and
-    `resend_webhook_events` (0 rows each, ever) and, beside the matcher's six, the three delivery-target
+    `resend_webhook_events` (0 rows each, ever) and, beside six cadence rows (five the matcher read,
+    `notifications_outbox_interval_seconds` the outbox), the three delivery-target
     settings rows (`notification_email_to`, `notification_telegram_chat_id`, `system_health_channels`):
     nine notification settings, each copied to `app_settings_history` first. **External delivery is `notification_deliveries`**
     (migration 654,
@@ -3588,8 +3591,9 @@ renumber.** Navigate by area:
     leading "Vše" pill; any future nullable enum gets the control for free. Deliberately NOT an
     extra `any` enum member: `category_type` is on EVERY agenda, so an `any` token would be a
     legal input to the estimation agent, where "any deal type" silently mixes rent and sale
-    comparables into one valuation. URL: `?deal=any`; an ABSENT `deal` still means the
-    `pronajem` default, so bare `/browse` links are unchanged. Before this, clicking the
+    comparables into one valuation. URL: `?deal=any`; an ABSENT `deal` means the SPA default
+    (`DEFAULT_FILTERS.categoryType`, `prodej` since 2026-10-20), so a bare `/browse` link never
+    lands on the no-constraint state. Before this, clicking the
     selected deal-type pill (which `PillRow` has always offered) wrote `deal=null`, which
     `enumOr` silently snapped back to `pronajem` — the control lied about what it could do.
     The extension bookmarks AND changes stage property-grain like every other surface: it reads
