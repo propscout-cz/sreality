@@ -190,34 +190,46 @@ finish() {
 # Replace the example below. Set TOTAL_STAGES to match the stages you write.
 # ──────────────────────────────────────────────────────────────────────────
 
-# The Railway IaC wizard (#2060): the operator applies .railway/railway.ts with it. Its modes are M0's; the first
-# follow-up IaC PR (#1857, #2059, #2025 or #2075) replaces window1/window2 with a general apply mode built from
-# plan_pinned/apply_pinned, which take the expected add/destroy counts (a variable delete is 1 destroy).
+# The Railway IaC wizard (#2060, #2025): the operator applies .railway/railway.ts with it. M0's one-shot windows are
+# gone (their evidence is on #2060); every IaC change (#1857, #2075, …) runs these modes.
 #
-#   scripts/railway_iac_wizard.sh preflight   read-only: install the pinned CLI, log in, plan all three projects
-#   scripts/railway_iac_wizard.sh window1     e9 window: apply vite (+ the undo rehearsal), then the API
-#   scripts/railway_iac_wizard.sh window2     e9 window, autodedup brake on: apply the worker, merge, clear its path
-#   scripts/railway_iac_wizard.sh drift       read-only: does Railway still match .railway/railway.ts?
+#   scripts/railway_iac_wizard.sh preflight [<label>=<adds>:<destroys>[:<service>]]…
+#       read-only, no window: install the pinned CLI, log in, plan all three projects and check each plan against
+#       its expected counts (0:0 unless named), scoped to <service> when one is named
+#   scripts/railway_iac_wizard.sh window <label> <adds> <destroys> <service>
+#       one e9 window: apply that project's pinned plan at the pull request head, merge at once, drift = 0 on main
+#   scripts/railway_iac_wizard.sh drift
+#       read-only, from a main checkout: does Railway still match main's .railway/railway.ts?
+#   scripts/railway_iac_wizard.sh runner-list
+#       read-only: the job runner's jobs and their latest runs (railway ssh into job-runner)
+#   scripts/railway_iac_wizard.sh runner-pause <job> <until> <note>
+#       pause one runner job's schedule until a UTC time (`now` lifts it); a request still runs
 #
 # Every apply is pinned (`config plan --out`, then `config apply --plan`) and interactive: the wizard never passes
-# --yes, --confirm-destructive, --show-values or --decrypt-variables, never pipes an apply, and refuses a plan whose
-# add/destroy counts differ from the ones its caller expects (M0: none) or that touches a source or a domain.
+# --yes, --confirm-destructive, --show-values or --decrypt-variables, never pipes an apply, and refuses a plan that
+# .railway/plan_check.mjs refuses: add/destroy counts other than the caller's (a variable delete is 1 destroy), a
+# source, networking or domain change, or, with a service named, a change whose TARGET is anything else.
 # Outputs go to ~/.railway-m0 (mode 700); no secret is captured or written anywhere.
 
 MODE="${1:-}"
 case "$MODE" in
-  preflight|window1|window2|drift) ;;
-  *) printf 'usage: %s preflight|window1|window2|drift\n' "$0" >&2; exit 2 ;;
+  preflight|window|drift|runner-list|runner-pause) ;;
+  *) printf 'usage: %s preflight [<label>=<adds>:<destroys>[:<service>]]…\n' "$0" >&2
+     printf '       | window <label> <adds> <destroys> <service> | drift | runner-list\n' >&2
+     printf '       | runner-pause <job> <until> <note>\n' >&2
+     exit 2 ;;
 esac
 
 OUT="${RAILWAY_M0_OUT:-$HOME/.railway-m0}"
 umask 077
 mkdir -p "$OUT"; chmod 700 "$OUT"
 
-# Run from a copy, so a checkout or pull during the window (the undo rehearsal, a fold) never edits the running script.
+# Run from a copy, so a checkout or pull during a window (a fold, the move to the PR head) never edits the running
+# script or the plan check it runs.
 if [[ "${RAILWAY_M0_RUNNING_COPY:-}" != 1 ]]; then
   WT=$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)
   cp "${BASH_SOURCE[0]}" "$OUT/wizard-running.sh"
+  cp "$WT/.railway/plan_check.mjs" "$OUT/plan_check-running.mjs"
   RAILWAY_M0_RUNNING_COPY=1 RAILWAY_M0_WT="$WT" exec bash "$OUT/wizard-running.sh" "$@"
 fi
 WT="$RAILWAY_M0_WT"
@@ -238,15 +250,19 @@ declare -A PLAN_FILE=()
 PLAN_SEQ=0
 LABELS=(vite API worker)
 dashboard() { printf 'https://railway.com/project/%s' "${PROJECT_ID[$1]}"; }
+RUNNER=job-runner   # the job runner's service, in the worker's project (#2025)
+# The runner image's build inputs (.github/workflows/runner_image.yml): a pull request that changes one owes that check.
+IMAGE_INPUTS=(Dockerfile .dockerignore pyproject.toml scripts/bake_clip_weights.py data/clip_taxonomy.json)
+IMAGE_CHECK="CI: runner image"
 
 # ── helpers ───────────────────────────────────────────────────────────────
 
 stop() {
   printf '\n  %s✗ STOP: %s%s\n' "$RED" "$1" "$RESET"
   note "Nothing else runs. Send the agent this message; the outputs are in $OUT."
-  if [[ "$MODE" == window2 && "${BRAKE_ASKED:-0}" == 1 ]]; then
+  if [[ "$MODE" == window && "${BRAKE_ASKED:-0}" == 1 ]]; then
     warn "Tell e9 the window stopped here. The autodedup brake stays on until the agent reports the worker healthy."
-  elif [[ "$MODE" == window1 || "$MODE" == window2 ]]; then
+  elif [[ "$MODE" == window ]]; then
     warn "Tell e9 the window stopped here."
   fi
   exit 1
@@ -284,59 +300,14 @@ process.exit(ok ? 0 : 1);
     || stop "the link is not project ${PROJECT_NAME[$label]} (${PROJECT_ID[$label]}) / production"
 }
 
-# plan_check <plan JSON> <adds> <destroys> [<only field> <detail>]: print the change list; fail unless it is safe.
-# The counts follow the CLI's own summary line (runner.rs plan_summary_line). M0 expects 0 and 0; a PR that adds a
-# service (#2025, #2075) passes 1 add. Read a pinned `--out` file: `config plan --json` re-serialises each change
-# without `field` or `path` (runner.rs struct Change), and the backend's preview echo may drop them too, so an
-# update's field falls back to its path, then its first detail line ("source.repo (a → b)"), then its summary's last
-# word ("Update sreality networking").
-plan_check() {
-  node -e '
-const [file, adds, destroys, onlyField, onlyDetail] = process.argv.slice(1);
-const plan = JSON.parse(require("fs").readFileSync(file, "utf8"));
-const changes = (plan.changeSet && plan.changeSet.changes) || [];
-const problems = [];
-const fieldOf = (c) => {
-  if (c.field) return String(c.field);
-  if (c.kind !== "resource.update") return "";
-  if (c.path) return String(c.path).split(".").pop();
-  const detail = String((c.details || [])[0] || "");
-  return detail ? detail.split(/[.\s]/)[0] : String(c.summary || "").split(" ").pop();
-};
-let add = 0;
-let destroy = 0;
-for (const c of changes) {
-  const kind = String(c.kind || "");
-  const field = fieldOf(c);
-  if (kind === "resource.create" || kind === "domain.create") add += 1;
-  if (kind === "resource.delete" || kind === "variable.delete") destroy += 1;
-  if (field === "source" || field === "networking" || kind.startsWith("domain.")) {
-    problems.push(`touches ${field || kind}: ${c.summary || c.path}`);
-  }
-  if (c.severity === "destructive" && Number(destroys) === 0) problems.push(`destructive: ${c.summary || c.path}`);
-}
-console.log(`  Plan: ${add} to add, ${changes.length - add - destroy} to change, ${destroy} to destroy`);
-for (const c of changes) {
-  console.log(`    ${c.severity === "destructive" ? "-" : "~"} ${c.summary || c.path}`);
-  for (const d of c.details || []) console.log(`        ${d}`);
-}
-if (add !== Number(adds)) problems.push(`${add} to add, expected ${adds}`);
-if (destroy !== Number(destroys)) problems.push(`${destroy} to destroy, expected ${destroys}`);
-if (onlyField) {
-  const text = JSON.stringify(changes.map((c) => [c.summary, c.details]));
-  if (changes.length !== 1 || fieldOf(changes[0]) !== onlyField || !text.includes(onlyDetail)) {
-    problems.push(`expected exactly one ${onlyField} change naming ${onlyDetail}`);
-  }
-}
-for (const p of problems) console.log(`  REFUSED: ${p}`);
-process.exit(problems.length ? 1 : 0);
-' "$@"
-}
+# plan_check <plan JSON> <adds> <destroys> [<service>]: print the change list; fail unless it is safe. Always the copy
+# taken at start (.railway/plan_check.mjs, which CI tests): a pull mid-window never changes the checker.
+plan_check() { node "$OUT/plan_check-running.mjs" "$@"; }
 
-# plan_pinned <label> [adds=0] [destroys=0] [<only field> <detail>]: one evaluation, pinned to the .railway/ tree and
-# the environment etag, written to a fresh file; apply_pinned then applies exactly that file.
+# plan_pinned <label> <adds> <destroys> [<service>]: one evaluation, pinned to the .railway/ tree and the environment
+# etag, written to a fresh file; apply_pinned then applies exactly that file.
 plan_pinned() {
-  local label="$1" adds="${2:-0}" destroys="${3:-0}" rc=0 base
+  local label="$1" adds="$2" destroys="$3" rc=0 base
   [[ -z "$(git -C "$WT" status --porcelain -- .railway)" ]] || stop ".railway/ has uncommitted changes"
   base="$OUT/$label.$(date -u +%Y%m%dT%H%M%SZ).$((++PLAN_SEQ))"
   PLAN_FILE[$label]="$base.plan.json"
@@ -351,7 +322,7 @@ plan_pinned() {
 apply_pinned() {
   local label="$1"
   [[ -n "${PLAN_FILE[$label]:-}" ]] || stop "no pinned $label plan in this run"
-  confirm "Apply the pinned $label plan now? It redeploys that service." || stop "the $label apply was declined"
+  confirm "Apply the pinned $label plan now? It deploys what it changes." || stop "the $label apply was declined"
   if ! rw config apply --plan "${PLAN_FILE[$label]}" --environment production; then
     stop "Railway refused or failed the $label apply (copy its message to the agent)"
   fi
@@ -390,11 +361,14 @@ expect_no_drift() {
   esac
 }
 
+# wait_success <label> [service]: the operator watches that service's newest deployment.
 wait_success() {
-  local label="$1"
+  local label="$1" service="${2:-sreality}"
   open_url "$(dashboard "$label")"
-  step "Wait until the newest ${PROJECT_NAME[$label]} deployment shows SUCCESS (Active). A failed one leaves the old one live."
-  confirm "Did the new ${PROJECT_NAME[$label]} deployment reach SUCCESS?" || stop "the $label deployment did not succeed"
+  step "Wait until the newest ${PROJECT_NAME[$label]} → $service deployment shows SUCCESS (Active)."
+  step "A failed one leaves the old one live. None within 2 minutes: $service → Ctrl+K → Deploy Latest Commit."
+  confirm "Did the new ${PROJECT_NAME[$label]} → $service deployment reach SUCCESS?" \
+    || stop "the $label $service deployment did not succeed"
 }
 
 check_health() {
@@ -415,6 +389,11 @@ agent_reports() {
   gate "Did the agent report every item as expected?"
 }
 
+require_branch() {
+  BRANCH=$(git -C "$WT" symbolic-ref --quiet --short HEAD) \
+    || stop "the checkout is on a detached HEAD: run git -C \"$WT\" checkout <the pull request's branch> first"
+}
+
 pr_state() {   # sets PR_NUMBER PR_HEAD PR_DRAFT PR_URL for this branch's pull request
   local row
   row=$(gh pr view "$BRANCH" --json number,headRefOid,isDraft,url -q '[.number, .headRefOid, .isDraft, .url] | @tsv') \
@@ -422,8 +401,8 @@ pr_state() {   # sets PR_NUMBER PR_HEAD PR_DRAFT PR_URL for this branch's pull r
   IFS=$'\t' read -r PR_NUMBER PR_HEAD PR_DRAFT PR_URL <<< "$row"
 }
 
-# The checkout follows the pull request by fast-forward only: after the final preflight the branch takes main with
-# `git merge origin/main`, never a rebase or a force-push (window 2 also checks the final-preflight SHA is an ancestor).
+# The checkout follows the pull request by fast-forward only: once preflight has run, the branch takes main with
+# `git merge origin/main`, never a rebase or a force-push.
 checkout_is_pr_head() {
   git -C "$WT" fetch --quiet origin || stop "git fetch failed"
   pr_state
@@ -432,53 +411,87 @@ checkout_is_pr_head() {
     confirm "Run git pull --ff-only to move to the pull request head?" || stop "the checkout is not the pull request head"
     git -C "$WT" pull --ff-only || stop "git pull --ff-only failed"
     [[ "$(git -C "$WT" rev-parse HEAD)" == "$PR_HEAD" ]] || stop "the checkout is still not the pull request head"
+    # This run is the copy taken before the pull: it must be the pull request's own wizard and plan check.
+    cmp -s "$WT/scripts/railway_iac_wizard.sh" "$OUT/wizard-running.sh" \
+      && cmp -s "$WT/.railway/plan_check.mjs" "$OUT/plan_check-running.mjs" \
+      || stop "the pull changed the wizard or its plan check: run the same command again"
   fi
   [[ -z "$(git -C "$WT" status --porcelain -- .railway)" ]] || stop ".railway/ has uncommitted changes"
   say "✓ checkout = pull request #$PR_NUMBER head ${PR_HEAD:0:9} ($PR_URL)"
 }
 
 window_gate() {
+  local required=""
   gate "Did e9 give its green light for THIS window? (a heads-up alone is not enough)"
   open_url "https://status.railway.com"
   gate "Does status.railway.com show no incident?"
   checkout_is_pr_head
-  [[ "$PR_DRAFT" == true ]] || stop "the pull request is not a draft: it must stay one until window 2 merges it"
+  [[ "$PR_DRAFT" == true ]] || stop "the pull request is not a draft: it stays one until its window merges it"
   gh pr view "$PR_NUMBER" --json statusCheckRollup > "$OUT/pr-checks.json" \
     || stop "gh could not read the pull request's checks"
-  checks_green "$OUT/pr-checks.json" \
-    || stop "a pull request check is unfinished or not green (above): wait for CI, then re-run"
-  agent_reports "latest deployment SUCCESS on all three projects (list-deployments); environment-status pendingWork \
-empty in all three, except vite's patch 32a07219-6594-4414-abbf-aab88301156d while its changes list is still \
-empty (ruling R14, 2026-10-26); main's three Railway commit statuses green; the post-#2008 gate passed; no credential rotation running"
+  git -C "$WT" diff --quiet origin/main...HEAD -- "${IMAGE_INPUTS[@]}" || required="$IMAGE_CHECK"
+  checks_green "$OUT/pr-checks.json" "$required" \
+    || stop "a pull request check is unfinished, missing or not green (above): wait for CI, then re-run"
+  agent_reports "the pull request body's pre-window list: drift 0 on all three projects; every project's latest \
+deployment SUCCESS, each service's deployment id recorded; environment-status pendingWork empty in all three; \
+main's Railway commit statuses green; no credential rotation running"
 }
 
-# checks_green <statusCheckRollup JSON>: list every check; fail unless there is at least one and each finished green.
-# An unfinished check run has conclusion "" and a status (QUEUED, IN_PROGRESS); a commit status has only a state.
+# checks_green <statusCheckRollup JSON> [<required workflow>]: list every check; fail unless there is at least one,
+# each finished green, and the required workflow (if named) reported. An unfinished check run has conclusion "" and a
+# status (QUEUED, IN_PROGRESS); a commit status has only a state.
 checks_green() {
   node -e '
-const rollup = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).statusCheckRollup || [];
+const [file, required] = process.argv.slice(1);
+const rollup = JSON.parse(require("fs").readFileSync(file, "utf8")).statusCheckRollup || [];
 let ok = rollup.length > 0;
 if (!ok) console.log("    no checks reported yet");
 for (const c of rollup) {
   const state = c.conclusion || c.status || c.state || "UNKNOWN";
   const green = ["SUCCESS", "SKIPPED", "NEUTRAL"].includes(state);
   ok = ok && green;
-  console.log(`    ${green ? "✓" : "✗"} ${c.name || c.context}: ${state}`);
+  const name = c.workflowName ? `${c.workflowName} / ${c.name}` : c.name || c.context;
+  console.log(`    ${green ? "✓" : "✗"} ${name}: ${state}`);
+}
+if (required && !rollup.some((c) => c.workflowName === required || c.name === required)) {
+  console.log(`    ✗ ${required}: not reported (the pull request changes an image input)`);
+  ok = false;
 }
 process.exit(ok ? 0 : 1);
-' "$1"
+' "$1" "${2:-}"
+}
+
+# railway_statuses <combined-status JSON> <min>: print the Railway commit statuses (context `<project> - <service>`);
+# exit 0 when at least <min> posted and each is success, 1 when one finished otherwise, 3 while any is pending.
+railway_statuses() {
+  node -e '
+const [file, min, ...projects] = process.argv.slice(1);
+const all = JSON.parse(require("fs").readFileSync(file, "utf8")).statuses || [];
+const ours = all.filter((s) => projects.some((p) => String(s.context).startsWith(`${p} - `)));
+for (const s of ours) console.log(`    ${s.context}: ${s.state} (${s.description || ""})`);
+if (ours.length < Number(min) || ours.some((s) => s.state === "pending")) process.exit(3);
+process.exit(ours.every((s) => s.state === "success") ? 0 : 1);
+' "$1" "$2" "${PROJECT_NAME[@]}"
 }
 
 # ── modes ─────────────────────────────────────────────────────────────────
 
-BRANCH=$(git -C "$WT" symbolic-ref --quiet --short HEAD) \
-  || stop "the checkout is on a detached HEAD: run git -C \"$WT\" checkout feature/m0-railway-iac first"
-
 mode_preflight() {
-  TOTAL_STAGES=8
+  declare -A EXPECT=()
+  local arg label adds destroys service
+  for label in "${LABELS[@]}"; do EXPECT[$label]="0 0"; done
+  for arg in "$@"; do
+    if ! [[ "$arg" =~ ^([A-Za-z]+)=([0-9]+):([0-9]+)(:([a-z0-9-]+))?$ ]] \
+        || [[ -z "${PROJECT_ID[${BASH_REMATCH[1]}]:-}" ]]; then
+      printf 'not <label>=<adds>:<destroys>[:<service>] with a label of %s: %s\n' "${LABELS[*]}" "$arg" >&2; exit 2
+    fi
+    EXPECT[${BASH_REMATCH[1]}]="${BASH_REMATCH[2]} ${BASH_REMATCH[3]} ${BASH_REMATCH[5]}"
+  done
+  TOTAL_STAGES=$((3 + ${#LABELS[@]}))
   banner "Railway IaC preflight (read-only, no window needed)"
 
-  stage "Tools: Node and the pinned Railway CLI"
+  stage "Tools: Node, the pinned Railway CLI, ssh"
+  require_branch
   node -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 22 || (a === 22 && b >= 6) ? 0 : 1)' \
     || stop "Node $(node --version 2>/dev/null) is older than 22.6"
   say "Installing @railway/cli $CLI_VERSION and railway (SDK) from .railway/package-lock.json (it downloads the CLI binary)."
@@ -491,7 +504,12 @@ mode_preflight() {
   help=$(rw link --help)
   [[ "$help" == *--project* && "$help" == *--environment* && "$help" == *--service* && "$help" == *--json* ]] \
     || { printf '%s\n' "$help"; stop "link --help lacks --project, --environment, --service or --json"; }
-  say "✓ railway $CLI_VERSION with every flag the windows use"
+  # The runner verbs: `railway ssh -p <project> -e <environment> -s <service>` runs through the system ssh client.
+  help=$(rw ssh --help)
+  [[ "$help" == *"-p, --project"* && "$help" == *"-s, --service"* && "$help" == *"-e, --environment"* ]] \
+    || { printf '%s\n' "$help"; stop "ssh --help lacks -p, -s or -e"; }
+  command -v ssh >/dev/null 2>&1 || warn "no ssh client, which runner-list and runner-pause need (openssh-client)"
+  say "✓ railway $CLI_VERSION with every flag the modes use"
   pause
 
   stage "Checkout: the pull request head, .railway/ clean"
@@ -502,247 +520,148 @@ mode_preflight() {
   ensure_login
   pause
 
-  local label rc
+  declare -A RESULT=()
+  local rc
   for label in "${LABELS[@]}"; do
-    stage "Plan ${PROJECT_NAME[$label]} (read-only)"
+    read -r adds destroys service <<< "${EXPECT[$label]}"
+    stage "Plan ${PROJECT_NAME[$label]} (read-only): $adds to add, $destroys to destroy${service:+, on $service}"
     link_to "$label"
     rc=0
-    # The same pinned artifact the windows check (a local file; nothing is applied); it also rehearses --out.
+    # The same pinned artifact a window checks (a local file; nothing is applied).
     NO_COLOR=1 rw config plan --out "$OUT/$label-preflight.plan.json" > "$OUT/$label-preflight.txt" 2>&1 || rc=$?
     cat "$OUT/$label-preflight.txt"
-    if (( rc == 0 )); then
-      plan_check "$OUT/$label-preflight.plan.json" 0 0 || warn "not the expected plan: the agent decides"
+    if (( rc != 0 )); then
+      RESULT[$label]="the plan exited $rc"; warn "the plan exited $rc: the agent reads $OUT/$label-preflight.txt"
+    elif plan_check "$OUT/$label-preflight.plan.json" "$adds" "$destroys" ${service:+"$service"}; then
+      RESULT[$label]="as expected"
     else
-      warn "the plan exited $rc: the agent reads $OUT/$label-preflight.txt"
+      RESULT[$label]="NOT the expected plan"; warn "not the expected plan: the agent decides"
     fi
-    case "$label" in
-      vite) note "expected: ~ build (builder DOCKERFILE), ~ deploy (healthcheck /healthz 30 s, ON_FAILURE x3, draining 0,
-  limitOverride 24 vCPU / 24e9 B); no variable, source or domain line" ;;
-      API) note "expected: ~ build (builder DOCKERFILE), ~ deploy (healthcheck /health 30 s, ON_FAILURE x3, draining 0,
-  limitOverride); Set variable sreality.EXTRAS; no source or domain line" ;;
-      worker) note "expected: ~ build (builder DOCKERFILE), ~ deploy (startCommand env MALLOC_ARENA_MAX=2 ..., ALWAYS,
-  draining 30, limitOverride); Set variable sreality.EXTRAS; no source or domain line" ;;
-    esac
-    note "No plan shows the region (one region, one replica): the agent reads it with describe-service."
+    note "One region, one replica is invisible to a plan: the agent reads the region with describe-service."
     pause
   done
 
-  stage "Dashboard read: resource limits and the config-file path"
-  local key
-  for label in "${LABELS[@]}"; do
-    open_url "$(dashboard "$label")"
-    step "${PROJECT_NAME[$label]}: click the sreality service, then Settings. Read Resource Limits and the Railway Config File path."
-    key="LIMITS_$label"
-    ask "$key" "${PROJECT_NAME[$label]}: what do Resource Limits show (vCPU, memory)?"
-    write_env "$key" "${!key}"
-    key="CONFIG_FILE_$label"
-    ask "$key" "${PROJECT_NAME[$label]}: the config-file path (type none if empty)?"
-    write_env "$key" "${!key}"
-  done
-  note "expected: 24 vCPU / 24 GB on all three; /railway.worker.json on the worker; none on vite and the API"
-  pause
-
-  stage "vite: a leftover staged change"
-  open_url "$(dashboard vite)"
-  step "Look at the vite project canvas. If a banner shows staged changes, click Details and discard each change with"
-  step "the x to its right. Never click Deploy here."
-  ask STAGED_BANNER_vite "Did a staged-changes banner show (yes/no), and did you discard it?"
-  write_env STAGED_BANNER_vite "$STAGED_BANNER_vite"
-  note "The agent then reads vite's environment-status pendingWork. Ruling R14 (2026-10-26) lets exactly one entry stay:"
-  note "patch 32a07219-6594-4414-abbf-aab88301156d while it holds no changes. Any other entry, or changes in it, is a stop."
-  pause
-
   finish
-  say "Preflight done. Tell the agent; its outputs are in $OUT."
+  for label in "${LABELS[@]}"; do say "${PROJECT_NAME[$label]} (${EXPECT[$label]}): ${RESULT[$label]}"; done
+  say "Preflight done. Tell the agent; its outputs are in $OUT (the plans: <label>-preflight.plan.json)."
 }
 
-mode_window1() {
-  TOTAL_STAGES=7
-  banner "Railway IaC window 1: vite, its undo rehearsal, then the API (an e9 window; the worker is untouched)"
+# window <label> <adds> <destroys> <service>: the plan is applied at the pull request head and the pull request
+# merges at once, so main declares nothing Railway lacks for longer than the merge takes.
+mode_window() {
+  local label="${1:-}" adds="${2:-}" destroys="${3:-}" service="${4:-}"
+  if [[ -z "$label" || -z "${PROJECT_ID[$label]:-}" || ! "$adds" =~ ^[0-9]+$ || ! "$destroys" =~ ^[0-9]+$ \
+        || ! "$service" =~ ^[a-z0-9-]+$ ]]; then
+    printf 'usage: scripts/railway_iac_wizard.sh window <label: %s> <adds> <destroys> <service>\n' "${LABELS[*]}" >&2
+    exit 2
+  fi
+  local project="${PROJECT_NAME[$label]}"
+  TOTAL_STAGES=9
+  banner "Railway IaC window: $project → $service ($adds to add, $destroys to destroy), then the merge"
 
   stage "Gate"
   ensure_cli
   ensure_login
-  window_gate
-  pause
-
-  stage "vite: plan and apply"
-  link_to vite
-  plan_pinned vite
-  apply_pinned vite
-  pause
-
-  stage "vite: check"
-  wait_success vite
-  check_health vite
-  check_spa
-  open_url "$(dashboard vite)"
-  step "vite → sreality → Settings → Resource Limits."
-  gate "Do Resource Limits read 24 vCPU / 24 GB? (anything else: the memory unit is not decimal bytes, stop)"
-  agent_reports "vite describe-service: region europe-west4-drams3a, 1 replica, app.propscout.cz → 8080, drainingSeconds 0"
-  expect_no_drift vite
-  pause
-
-  stage "vite: undo rehearsal U-2 (the dashboard path)"
-  open_url "$(dashboard vite)"
-  step "vite → sreality → Settings → the Draining time field: 0 → 10. Then click Deploy in the staged-changes banner."
-  say "Started at $(date -u +%H:%M:%SZ)."
-  wait_success vite
-  local r
-  r=$(drift_rc vite)
-  cat "$OUT/vite-drift.txt"
-  [[ "$r" == 2 ]] || stop "the plan does not see the dashboard edit (drift $r)"
-  plan_pinned vite 0 0 deploy drainingSeconds
-  apply_pinned vite
-  wait_success vite
-  [[ "$(drift_rc vite)" == 0 ]] || { cat "$OUT/vite-drift.txt"; stop "vite does not match the file after U-2"; }
-  say "✓ U-2 done at $(date -u +%H:%M:%SZ)"
-  pause
-
-  stage "vite: undo rehearsal U-1 (a file edit and its git revert)"
-  say "The agent now pushes two commits on the pull request: E (VITE_DRAINING_SECONDS = 10) and R (its git revert)."
-  pause "Press Enter once the agent has pushed E and R and posted both SHAs."
-  git -C "$WT" pull --ff-only || stop "git pull --ff-only failed"
-  [[ "$(git -C "$WT" diff --name-only HEAD~2 HEAD~1)" == ".railway/railway.ts" ]] || stop "E changes more than .railway/railway.ts"
-  [[ "$(git -C "$WT" diff --numstat HEAD~2 HEAD~1)" == $'1\t1\t.railway/railway.ts' ]] || stop "E is not a one-line change"
-  git -C "$WT" diff --quiet HEAD~2 HEAD -- .railway || stop "R does not revert E"
-  [[ "$(git -C "$WT" log -1 --format=%s HEAD~1)" == *"U-1 rehearsal"* ]] || stop "HEAD~1 is not the rehearsal edit E"
-  git -C "$WT" checkout --quiet --detach HEAD~1
-  say "At E: $(git -C "$WT" log -1 --oneline)"
-  plan_pinned vite 0 0 deploy drainingSeconds
-  apply_pinned vite
-  wait_success vite
-  [[ "$(drift_rc vite)" == 0 ]] || { cat "$OUT/vite-drift.txt"; stop "vite does not match E"; }
-  git -C "$WT" checkout --quiet "$BRANCH"
-  say "At R: $(git -C "$WT" log -1 --oneline)"
-  plan_pinned vite 0 0 deploy drainingSeconds
-  apply_pinned vite
-  wait_success vite
-  [[ "$(drift_rc vite)" == 0 ]] || { cat "$OUT/vite-drift.txt"; stop "vite does not match R"; }
-  check_spa
-  say "✓ U-1 done at $(date -u +%H:%M:%SZ). Tell e9: vite rollout done."
-  pause
-
-  stage "API: plan, apply, check"
-  link_to API
-  plan_pinned API
-  apply_pinned API
-  wait_success API
-  check_health API
-  agent_reports "API describe-service: region europe-west4-drams3a, 1 replica, api.propscout.cz → 8080, drainingSeconds 0"
-  expect_no_drift API
-  pause
-
-  stage "Fold forward"
-  say "If any key was folded back on vite or the API, the agent copies it into the worker definition (one commit)."
-  pause "Press Enter once the agent says the folds are done (or that there were none)."
-  git -C "$WT" pull --ff-only || stop "git pull --ff-only failed"
-  say "Tell e9: API rollout done, window 1 done. The pull request stays a draft."
-  pause
-
-  finish
-  say "Window 1 done. Tell the agent; its outputs are in $OUT."
-}
-
-mode_window2() {
-  TOTAL_STAGES=7
-  banner "Railway IaC window 2: the worker, the merge, the path clear (an e9 window, autodedup brake ON)"
-
-  stage "Gate"
-  ensure_cli
-  ensure_login
+  require_branch
   # Everything that can fail on our side runs before e9 is asked for the brake, so a stop here wastes no brake.
   window_gate
-  ask FINAL_PREFLIGHT_SHA "The final-preflight SHA the agent gave you:"
-  git -C "$WT" merge-base --is-ancestor "$FINAL_PREFLIGHT_SHA" HEAD 2>/dev/null \
-    || stop "$FINAL_PREFLIGHT_SHA is not in the pull request's history (unknown, or the branch was rebased or force-pushed)"
-  git -C "$WT" log --oneline "$FINAL_PREFLIGHT_SHA..HEAD" -- .railway
-  git -C "$WT" diff --stat "$FINAL_PREFLIGHT_SHA" HEAD -- .railway
-  gate "Are these only the rehearsal commits E and R and the folds the agent listed?"
-  gate "Has e9 now set realtime_autodedup_interval_seconds to 0 (the brake)?"
-  BRAKE_ASKED=1
-  agent_reports "autodedup.rt_lease is empty (one SQL read)"
   pause
 
-  stage "Worker: plan and apply (worker restart 1)"
-  link_to worker
-  plan_pinned worker
-  apply_pinned worker
-  wait_success worker
-  agent_reports "a fresh worker_heartbeats boot, memory_limit_mb 22,888, every lane cell beating; describe-service:
-region europe-west4-drams3a, 1 replica"
-  expect_no_drift worker
+  stage "Brake"
+  if [[ "$label" == worker ]]; then
+    gate "Has e9 now set realtime_autodedup_interval_seconds to 0 (the brake)?"
+    BRAKE_ASKED=1
+    agent_reports "autodedup.rt_lease is empty (one SQL read)"
+  else
+    say "Not needed: the apply does not touch the worker's project."
+  fi
+  pause
+
+  stage "Plan $project, scoped to $service"
+  link_to "$label"
+  plan_pinned "$label" "$adds" "$destroys" "$service"
+  pause
+
+  stage "Apply"
+  apply_pinned "$label"
+  pause
+
+  stage "Check before the merge"
+  wait_success "$label" "$service"
+  if [[ "$service" == sreality && -n "${HEALTH_URL[$label]:-}" ]]; then check_health "$label"; fi
+  if [[ "$label" == vite ]]; then check_spa; fi
+  open_url "$(dashboard "$label")"
+  step "$project → $service → Settings → Resource Limits."
+  local key="LIMITS_${label}_${service//-/_}"
+  ask "$key" "$service: what do Resource Limits show (vCPU, memory)?"
+  write_env "$key" "${!key}"
+  agent_reports "describe-service on $service (every setting the file declares, its variable NAMES) and the pull \
+request body's pre-merge checks; the deployment ids of $project's other services unchanged"
+  expect_no_drift "$label"
   pause
 
   stage "Ready and merge, as one step"
   say "The agent marks pull request #$PR_NUMBER ready; then merge it at once (or e9 does, on its light)."
   open_url "$PR_URL"
   pause "Press Enter once the pull request is MERGED."
-  local merge_sha slug statuses="" i
+  local merge_sha slug i rc=3
   merge_sha=$(gh pr view "$PR_NUMBER" --json mergeCommit -q '.mergeCommit.oid') || stop "gh could not read the merge commit"
   [[ -n "$merge_sha" ]] || stop "pull request #$PR_NUMBER is not merged"
   slug=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-  say "Merge commit ${merge_sha:0:9}; waiting for Railway's three commit statuses (up to 20 minutes)."
+  say "Merge commit ${merge_sha:0:9}."
+  pause
+
+  stage "Railway's commit statuses on the merge"
+  say "Waiting until every Railway status on ${merge_sha:0:9} is final (up to 20 minutes)."
   for i in $(seq 1 40); do
-    statuses=$(gh api "repos/$slug/commits/$merge_sha/status" -q '.statuses[] | "\(.context)=\(.state)"' 2>/dev/null || true)
-    if (( $(grep -c -E '^(API|vite|realtime-worker) - sreality=(success|failure|error)$' <<< "$statuses" || true) >= 3 )); then
-      break
+    if gh api "repos/$slug/commits/$merge_sha/status" > "$OUT/merge-status.json" 2>/dev/null; then
+      rc=0; railway_statuses "$OUT/merge-status.json" "${#LABELS[@]}" > "$OUT/merge-status.txt" || rc=$?
+      (( rc != 3 )) && break
     fi
     note "still waiting ($i/40)"
     sleep 30
   done
-  printf '%s\n' "$statuses"
-  note "The worker's status may read failure: its config path names a deleted file, so that deploy fails and the old worker"
-  note "stays live. Expected. A success means it ran on the dashboard values, which are the file's (worker restart 2)."
+  cat "$OUT/merge-status.txt" 2>/dev/null || true
+  (( rc != 3 )) || stop "Railway's statuses on ${merge_sha:0:9} are not final after 20 minutes"
+  (( rc == 0 )) || stop "a Railway status on ${merge_sha:0:9} is not success (above)"
+  note "A watch-skipped deploy also posts success, so the status alone does not prove $service deployed."
+  agent_reports "list-deployments on $service: the deployment for ${merge_sha:0:9} is SUCCESS, not SKIPPED"
   pause
 
-  stage "Worker: clear the config-file path (worker restart 2 or 3)"
-  open_url "$(dashboard worker)"
-  step "realtime-worker → sreality → Settings → the Railway Config File path (/railway.worker.json): clear it."
-  step "Then click Deploy in the staged-changes banner."
-  step "If no new deployment starts within 2 minutes: Ctrl+K → Deploy Latest Commit."
-  wait_success worker
-  agent_reports "get-service-config shows no configFile; a heartbeat boot on the merge SHA; the lanes beating; no
-missing-lane cell"
+  stage "Proof on the merge build"
+  agent_reports "the pull request body's post-merge checks on $service's merge build (its build log, boot lines and \
+heartbeats)"
   pause
 
-  stage "API and vite: fresh deploys of the merge"
-  local label
-  for label in API vite; do
-    open_url "$(dashboard "$label")"
-    step "${PROJECT_NAME[$label]}: Ctrl+K → Deploy Latest Commit (not Redeploy: that reuses the old configuration)."
-    wait_success "$label"
-    check_health "$label"
-    if [[ "$label" == vite ]]; then check_spa; fi
-    say "Tell e9: ${PROJECT_NAME[$label]} rollout done."
-  done
-  pause
-
-  stage "Build-argument proof"
-  agent_reports "the API's build log for the merge commit contains EXTRAS=api (EXTRAS=unset means Railway did not
-deliver it: the agent stops before closing #2060)"
-  pause
-
-  stage "Drift proof: plan = 0 in all three projects"
+  stage "Drift proof: plan = 0 in all three projects, from main's file"
   git -C "$WT" fetch --quiet origin main || stop "git fetch failed"
   git -C "$WT" diff --quiet HEAD origin/main -- .railway || stop "this checkout's .railway/ differs from main's"
-  local r
-  for label in "${LABELS[@]}"; do
-    link_to "$label"
-    r=$(drift_rc "$label" "$OUT/final-$label.txt")
-    say "$label: $r"
-    [[ "$r" == 0 ]] || { cat "$OUT/final-$label.txt"; stop "$label does not match the file after the merge"; }
+  local r l
+  for l in "${LABELS[@]}"; do
+    link_to "$l"
+    r=$(drift_rc "$l" "$OUT/final-$l.txt")
+    say "${PROJECT_NAME[$l]}: $r"
+    [[ "$r" == 0 ]] || { cat "$OUT/final-$l.txt"; stop "$l does not match the file after the merge"; }
   done
   pause
 
   finish
-  say "Window 2 done. Tell the agent to post the evidence (outputs in $OUT)."
-  say "Tell e9: rollout done; e9 restores realtime_autodedup_interval_seconds."
-  note "Once the agent has read them, you may delete the outputs folder ~/.railway-m0 yourself."
+  say "Window done. Tell the agent to post the evidence (outputs in $OUT)."
+  if [[ "$label" == worker ]]; then
+    say "Tell e9: rollout done; e9 restores realtime_autodedup_interval_seconds."
+  else
+    say "Tell e9: rollout done."
+  fi
 }
 
 mode_drift() {
   TOTAL_STAGES=2
+  # drift compares Railway with main: from any other tree a clean plan would prove nothing about main (U-4, a merge).
+  git -C "$WT" fetch --quiet origin main || stop "git fetch failed"
+  if ! git -C "$WT" diff --quiet HEAD origin/main -- .railway \
+      || [[ -n "$(git -C "$WT" status --porcelain -- .railway)" ]]; then
+    stop "drift compares Railway with main: run git -C \"$WT\" checkout --detach origin/main, then drift again"
+  fi
   banner "Railway drift check (read-only)"
 
   stage "Railway login"
@@ -759,7 +678,7 @@ mode_drift() {
     [[ "$r" == 0 ]] || failed=1
   done
   note "0 = Railway matches .railway/railway.ts; 2 = changes pending (a dashboard edit or an unapplied merge)."
-  note "No plan can see the region (one region, one replica) or a custom domain's port: the agent checks both"
+  note "No plan can see a one-region, one-replica region or a custom domain's port: the agent checks both"
   note "with describe-service."
   pause
 
@@ -767,4 +686,52 @@ mode_drift() {
   if (( failed )); then warn "at least one project does not match: send the agent the drift files"; exit 1; fi
 }
 
-"mode_$MODE"
+# runner_ssh <job_runner arguments>…: one job_runner command on a running job-runner replica. The CLI quotes each
+# argument for the remote shell; the first use registers an SSH key (the CLI prompts). If ssh cannot reach the
+# service, the agent runs the equivalent one-row SQL instead, with the operator's explicit OK.
+runner_ssh() {
+  rw ssh -p "${PROJECT_ID[worker]}" -e production -s "$RUNNER" -- python -m scraper.job_runner "$@"
+}
+
+mode_runner_list() {
+  TOTAL_STAGES=2
+  banner "The job runner's jobs (read-only)"
+
+  stage "Railway login"
+  ensure_cli
+  ensure_login
+  pause
+
+  stage "job_runner list on $RUNNER"
+  runner_ssh list || stop "railway ssh could not run job_runner list on $RUNNER"
+  pause
+
+  finish
+}
+
+mode_runner_pause() {
+  local job="${1:-}" until="${2:-}" why="${3:-}"
+  if [[ ! "$job" =~ ^[a-z0-9_]+$ || -z "$until" || -z "$why" ]]; then
+    printf 'usage: scripts/railway_iac_wizard.sh runner-pause <job> <until: ISO, UTC unless given, or now> <note>\n' >&2
+    exit 2
+  fi
+  TOTAL_STAGES=2
+  banner "Pause the job runner's $job until $until"
+
+  stage "Railway login"
+  ensure_cli
+  ensure_login
+  pause
+
+  stage "Pause $job"
+  say "This runs, on $RUNNER (a request still runs while paused; --until now lifts the pause):"
+  say "  python -m scraper.job_runner pause $job --until $until --note \"$why\" --by operator"
+  confirm "Run exactly this?" || stop "the pause was declined"
+  runner_ssh pause "$job" --until "$until" --note "$why" --by operator || stop "railway ssh could not pause $job"
+  say "✓ The agent confirms the pause with runner-list (or one SQL read)."
+  pause
+
+  finish
+}
+
+"mode_${MODE//-/_}" "${@:2}"

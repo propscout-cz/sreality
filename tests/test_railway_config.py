@@ -129,3 +129,16 @@ def test_the_api_and_the_worker_pass_their_extras_to_the_root_dockerfile_build()
     assert 'EXTRAS: "api,clip,geo"' in iac_entry("jobRunner")
     assert 'EXTRAS: "api"' not in iac_entry("jobRunner")
 
+
+def test_the_wizard_has_the_general_modes_and_checks_with_its_own_copy() -> None:
+    """M0's one-shot windows are gone (evidence on #2060). drift compares Railway with main's file, so it refuses
+    another checkout. A pull during a window never changes the checker mid-window: the wizard runs its copy."""
+    wizard = WIZARD.read_text(encoding="utf-8")
+    modes = re.search(r'^case "\$MODE" in\n  ([\w|-]+)\) ;;$', wizard, re.M)
+    assert modes and modes.group(1).split("|") == ["preflight", "window", "drift", "runner-list", "runner-pause"]
+    drift = wizard.split("\nmode_drift() {\n", 1)[1].split("\n}\n", 1)[0]
+    assert 'git -C "$WT" diff --quiet HEAD origin/main -- .railway' in drift
+    copy_step = wizard.split('if [[ "${RAILWAY_M0_RUNNING_COPY:-}" != 1 ]]; then', 1)[1].split("\nfi\n", 1)[0]
+    assert 'cp "$WT/.railway/plan_check.mjs" "$OUT/plan_check-running.mjs"' in copy_step
+    calls = re.findall(r"^.*\bnode\b.*plan_check.*$", wizard, re.M)
+    assert calls and all('node "$OUT/plan_check-running.mjs"' in c for c in calls), calls
