@@ -702,6 +702,7 @@ class SqlStore:
                 "dd": pending[listing_id][0].dd or None,
                 "source": pending[listing_id][0].guard.source,
                 "area_basis": pending[listing_id][0].guard.area_basis,
+                "block_key": pending[listing_id][0].block_key,
             }
             for listing_id in ids
         ])
@@ -776,6 +777,7 @@ class SqlStore:
                          int(row[13] or 0)),
                 float(row[14]) if row[14] is not None else None,
                 str(row[15] or ""),
+                row[18],
             ) for row in self._query(RT_FP_READ_SQL,
                                      {"generation": self.generation, "ids": missing})}
             for listing_id in missing:
@@ -1508,20 +1510,30 @@ class SqlWork:
             for listing_id in revived[:taken]:
                 items.append(WorkItem(int(listing_id), "revived", None, None))
 
-        # The fifth feed (E79): the rows of this generation the scope has stopped holding.
+        # The fifth feed (E79): the rows of this generation the scope has stopped holding, and
+        # (A) the rows it still holds whose stored block key is not today's location's. Both
+        # ride ONE share, retirements first; a relocation cut by it stops the cursor at the
+        # last one taken (E970's rule), so the next pass starts with the rest.
         if self.drift_slice:
             after_scope = cursors[CURSOR_SCOPE][0]
             rows = self._query(RT_SCOPE_DRIFT_SQL, {
                 "generation": self.generation, "after_id": after_scope,
                 "limit": self.drift_slice, **scope})
-            slice_max, slice_size, departed = (
-                (int(rows[0][0]), int(rows[0][1]), list(rows[0][2] or ()))
-                if rows else (after_scope, 0, []))
+            slice_max, slice_size, departed, relocated = (
+                (int(rows[0][0]), int(rows[0][1]), list(rows[0][2] or ()),
+                 list(rows[0][3] or ()))
+                if rows else (after_scope, 0, [], []))
             retiring = [int(value) for value in departed[:share]]
             self._guard_retirement(departed, len(retiring))
-            self._pending[CURSOR_SCOPE] = 0 if slice_size < self.drift_slice else slice_max
+            moving = [int(value) for value in relocated[:share - len(retiring)]]
+            self.windows["relocated"] = len(relocated)
+            self._pending[CURSOR_SCOPE] = (
+                (moving[-1] if moving else after_scope) if len(moving) < len(relocated)
+                else 0 if slice_size < self.drift_slice else slice_max)
             for listing_id in retiring:
                 items.append(WorkItem(listing_id, "drifted", None, None, retire=True))
+            for listing_id in moving:
+                items.append(WorkItem(listing_id, "relocated", None, None))
 
         # The sixth feed (W9d-3), at W9e's cost (R3): the rows the scope has started holding
         # and no cursor has ever seen, because `listing_location` is written after the listing
@@ -1957,7 +1969,8 @@ class SqlWork:
         decided = {item.listing_id for item in done}
         for feed, name in (("new", CURSOR_NEW), ("changed", CURSOR_CHANGED),
                            ("flipped", CURSOR_FLIPPED), ("revived", CURSOR_REVIVE),
-                           ("drifted", CURSOR_SCOPE), ("entered", CURSOR_ENTER),
+                           ("drifted", CURSOR_SCOPE), ("relocated", CURSOR_SCOPE),
+                           ("entered", CURSOR_ENTER),
                            ("evidence", CURSOR_EVIDENCE)):
             if not claimed.get(feed, set()) <= decided:
                 pending.pop(name, None)

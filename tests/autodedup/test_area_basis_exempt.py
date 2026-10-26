@@ -139,11 +139,12 @@ def _migration_code() -> str:
     return re.sub(r"\s+", " ", body)
 
 
-def test_migration_677_adds_two_nullable_columns_without_a_rewrite() -> None:
+def test_migration_677_adds_three_nullable_columns_without_a_rewrite() -> None:
     code = _migration_code()
     assert re.findall(r"alter table (\S+)", code) == ["autodedup.rt_fp"]
     assert "add column if not exists source text," in code
-    assert "add column if not exists area_basis text;" in code
+    assert "add column if not exists area_basis text," in code
+    assert "add column if not exists block_key text;" in code
     assert "default" not in code and "not null" not in code
     for verb in ("drop ", "delete from", "truncate", "update ", "create "):
         assert verb not in code, verb
@@ -155,5 +156,6 @@ def test_the_lane_writes_reads_and_checks_the_columns_it_adds() -> None:
     assert "area_basis       = excluded.area_basis" in S.RT_FP_UPSERT_SQL
     assert "%(source)s::text, %(area_basis)s::text" in S.RT_FP_UPSERT_SQL
     assert S.RT_FP_READ_SQL.split("from autodedup.rt_fp")[0].rstrip().endswith(
-        "f.dd, f.source, f.area_basis")
+        "f.dd, f.source, f.area_basis, f.block_key")
     assert "attname = 'area_basis'" in S.RT_STORE_PRESENT_SQL
+    assert "attname = 'block_key'" in S.RT_STORE_PRESENT_SQL

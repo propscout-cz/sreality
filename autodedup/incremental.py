@@ -276,6 +276,9 @@ class FpRow:
     # The listing's `decision_digest` as the lane last read its facts (E960): the reject ledger's
     # key for a side the pass does not read. Empty on a row written before migration 604.
     dd: str = ""
+    # The `block_key` its postings were keyed under: the lane's drift sweep re-claims the row
+    # when today's location gives another (A). None on a row written before migration 677.
+    block_key: str | None = None
 
     @property
     def cell(self) -> tuple[str, str]:
@@ -1385,7 +1388,8 @@ def run_pass(
                   # The FIRST decision's stamp is carried, never restamped: the evidence
                   # horizon is measured from it, and a refresh that reset it would hold a
                   # merge for ever (E92). The store coalesces it on the way down too.
-                  first_decided_at=old.first_decided_at if old is not None else None, dd=dd),
+                  first_decided_at=old.first_decided_at if old is not None else None, dd=dd,
+                  block_key=fp.block_key),
             new_keys, old_keys,
         )
         view.bump_cell(listing)
