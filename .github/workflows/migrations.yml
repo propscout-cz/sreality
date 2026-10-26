@@ -19,7 +19,10 @@ name: "CI: schema replay + SQL correctness"
 #    connections in the unit tests structurally cannot catch, and that has shipped
 #    to prod. See tests/test_sql_schema_prepare.py.
 #
-# Advisory until added to branch protection as a required check.
+# A test module that needs a database runs only where a step below names it with TEST_DATABASE_URL;
+# tests/test_live_lanes_census.py fails a PR that adds one no step names.
+#
+# Required check (`schema-and-sql`) under branch protection.
 
 on:
   # push only on main: a branch push beside its pull_request run made a same-named twin
@@ -215,6 +218,16 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_collection_shares_live.py -q
 
+      # Pipeline sharing (migration 641) lets a recipient ACT AS the owner through one identity
+      # function: a read share reaches the board's three tables on GET only, an edit share all eleven
+      # curation tables with each write stamped once in delegated_edits, and a header naming an owner
+      # who shared nothing reads nothing. Only the replayed policies under `authenticated` can show it.
+      - name: A pipeline share acts as the owner on curation, and only as far as its mode (migration 641)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_pipeline_shares_live.py -q
+
       # Dashboard sharing (migration 647) is the same shape over a third table: a FOR SELECT arm, a
       # party policy that hides while acting, and a trigger that stamps the owner and refuses the
       # unnamed working board. The test drives the API's own SQL under each tenant's RLS.
@@ -304,6 +317,16 @@ jobs:
           pytest tests/test_broker_leaderboard_plan_shape.py \
                  tests/test_broker_leaderboard_live.py \
                  tests/test_broker_leaderboard_chip_parity.py -q
+
+      # The leaderboard's fast arm is an index-only scan on broker_region_type_stats' covering index,
+      # which migration 508's DROP+CREATE silently lost (56 ms became 3-5 s, nothing went red). The
+      # same catalog read holds migration 578's precondition: REFRESH ... CONCURRENTLY needs one
+      # unique index with no predicate and no expression on every matview.
+      - name: Every matview refreshes concurrently and the broker matview keeps its indexes (migration 578)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_matview_indexes.py -q
 
       # The map RPC makes two claims a real schema is the only thing that can check.
       #

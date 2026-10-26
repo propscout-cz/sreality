@@ -582,7 +582,7 @@ contract; migration 109 is the anti-pattern — never an optional filter paramet
 `price_per_m2` + `price_per_m2_basis`. The fetch LEDGER gets no view at all: a cell is fetched only
 where some account holds a live deal-pipeline card, so the set of fetched cells is a projection of
 tenant state, not market data — `sold_transaction_fetches` is registered in
-`tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS`. Its one reader is
+`tests/_admin_gate_registry.py::ADMIN_ONLY_RELATIONS`. Its one reader is
 `sold_coverage(p_lat, p_lng)`, SECURITY DEFINER and scoped to the MUNICIPALITY containing the point,
 resolved through the same `admin_boundaries` obec polygon W2 builds the cell from: the cell is that
 polygon's envelope expanded by 5 km, so overlapping boxes would otherwise answer with whichever town
@@ -711,8 +711,8 @@ rules. Identify which one a task belongs to before you start.
   `is_platform_admin()`; the admin-gated Health/ops RPCs (`health_summary`,
   `scraper_health_checks`, `recent_scrape_runs`, …; migrations 318/332/340) went in migration
   643. A new RPC is INVOKER by default; a DEFINER one that reads admin-only
-  data embeds the admin gate or carries a `-- ci-allow-ungated:` reason
-  (`tests/test_migration_rls_grants.py`, rule 5). Anything else private goes through the
+  data embeds the admin gate or is registered ungated, with its guard and reason, in
+  `tests/_admin_gate_registry.py` (read by both admin-gate lanes). Anything else private goes through the
   FastAPI service.
 - **Every PostgREST read is one of three shapes** (the 2026-08 cap-drift audit): a
   *keyed* read (`.eq` on a key, cardinality bounded by the domain — snapshots per
@@ -3336,7 +3336,9 @@ renumber.** Navigate by area:
     the `browse_projection` line plus one static index line (and its rename) per portal in
     `rebuild_browse_list()`; a tenth portal is offered only with all three, and the same test
     fails until it has them. **The seams.** Attributes: `source`,
-    `index_rate`, `price_change_min_pct` (+ optional `shared_rate_limiter`). Required:
+    `index_rate`, `price_change_min_pct` (+ optional `shared_rate_limiter`), and `walk_every_s` +
+    `walk_timeout_s` (the code-only walk schedule `scraper/jobs.py` generates the portal's walk
+    from; never a `PortalLimits` key). Required:
     `categories`, `category_labels`, `walk_category`, `fetch_detail`. Defaulted on
     `PortalDefaults`, overridden only where the portal differs: `connect_index` (idnes: staleness
     preload), `connect_drain` (sreality: session pooler), `make_client` (sreality: category-bound

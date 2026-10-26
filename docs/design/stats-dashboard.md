@@ -29,7 +29,9 @@ The operator chose to replace them with charts the user builds, which deletes th
 6. Statistics n, mean, median, p10, p25, p75, p90; a cell under **5** properties shows n and no statistics
    (amended 2026-10-19 by the operator, migration 632: it was 10; at n = 5 a box rests on the 2nd–4th order
    statistics, so the n stays beside every figure)
-   (server-enforced); a box draws p10–p90 whiskers, the p25–p75 box and the median.
+   (server-enforced); a box draws p10–p90 whiskers, the p25–p75 box and the median. Since 2026-10-26 a cell under
+   the floor also carries `small` {min, max, mean, median}, shown only behind the Stats tab's 'Malé vzorky'
+   checkbox, highlighted and labelled per row; percentiles never under the floor (migration 678).
 7. Table = rows × columns; line / bar = one row dimension on x, the column dimension as series; box = rows only.
    Nesting up to **six** row levels (table, box).
 8. A NULL on any chosen dimension (or the measure) excludes the property and is counted as "excluded for
@@ -88,12 +90,14 @@ fragment still holds; `tests/test_browse_map_read_contract.py` learns that `spec
   min_n: 5,
   refused: null | 'empty' | 'mixed_category' | 'mixed_status' | 'too_many_cells' | 'bad_spec', reason?,
   places: [ { dim, key, name | null } ],       -- every place key among the cells, named by the register
-  cells: [ { keys: [k1 … kL], col: kc | null, n, mean, median, p10, p25, p75, p90 } ] }
+  cells: [ { keys: [k1 … kL], col: kc | null, n, mean, median, p10, p25, p75, p90,
+             small: { min, max, mean, median } | null } ] }   -- small: under min_n only (migration 678)
 ```
 
 One pass: `group by kc, rollup(k1 … k6)` over the sample, six fixed row slots and one column slot keyed by
 `public.stats_dim_key(dim, …)` (SQL-language, IMMUTABLE, inlined). A cell with `keys.length = L` is the rollup
-at level L (L = 0 is the whole sample, per column value). Statistics are `null` below `min_n`. Measured live
+at level L (L = 0 is the whole sample, per column value). Statistics are `null` below `min_n`, where `small` alone
+carries the cell's min, max, mean and median (null at or above it). Measured live
 2026-10-19: five dimensions + a column over 60k properties 381 ms; two dimensions over 139k rows 493 ms. A refused
 payload still carries the counts and the cohort facts; `cells` and `places` are empty. (`bad_spec` alone answers before the
 cohort is read: `{refused, reason, cells: []}`.) `places` is read from the view on the ≤ 2,000 result cells only; `name` is
@@ -186,7 +190,9 @@ deleted files are replaced by rows for the files that now carry the unit strings
   names no listing location; the register view's text and grants, and the `places` block that joins it;
   `--check` of the generated TS passes.
 - `tests/test_stats_pivot_live.py` (CI DB job, a `migrations.yml` step): seeds two dispositions × three stavs
-  (one NULL) with prices and areas; asserts filtered / sample / excluded, the rollup levels, `min_n` nulling,
+  (one NULL) with prices and areas; asserts filtered / sample / excluded, the rollup levels, `min_n` nulling
+  and the `small` summary under it (migration 678; `tests/test_678_stats_small_samples.py` pins the statement as
+  662's with exactly its two edits),
   `mixed_category`, `mixed_status`, `too_many_cells` (rows on a high-cardinality key), `bad_spec`, the band
   keys for rent vs sale, and the place keys: codes as text, two same-named towns as two cells, `places` named
   from seeded register rows (null for a retired unit), every place level read as `authenticated` through the

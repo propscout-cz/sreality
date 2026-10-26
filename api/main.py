@@ -110,6 +110,10 @@ from toolkit.measures import MeasureBasisError
 from toolkit.rent_map import compute_reference_rent
 from toolkit.summaries import SummarizeError
 
+# Past every walk's timeout plus the kill grace, so the boot sweep never finalizes a running walk (job registry census).
+STUCK_RUN_CUTOFF_MINUTES = 300
+
+
 @contextlib.asynccontextmanager
 async def _lifespan(_app: FastAPI) -> "AsyncIterator[None]":
     """Spawn the system-alerts loop (the health teller) alongside the request handler.
@@ -137,13 +141,7 @@ async def _lifespan(_app: FastAPI) -> "AsyncIterator[None]":
             with deps.open_background_conn() as conn:
                 est = sweep_stuck_runs(conn)
                 bld = sweep_stuck_buildings(conn)
-                # Above every scrape job's timeout-minutes (idnes's index walk, at
-                # 240, is the binding one): the API boots on every deploy, and
-                # stamping ended_at on a RUNNING walk would break run_phase's
-                # contract (ended_at = the phase completed) if that walk later
-                # crashed. Healing a genuinely dead row late costs nothing —
-                # finalize re-stamps ended_at anyway.
-                scr = sweep_stuck_scrape_runs(conn, older_than_minutes=300)
+                scr = sweep_stuck_scrape_runs(conn, older_than_minutes=STUCK_RUN_CUTOFF_MINUTES)
             if est or bld or scr:
                 logging.info(
                     "stuck-row sweep on startup: %s estimation_runs, "

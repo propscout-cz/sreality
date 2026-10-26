@@ -1,7 +1,7 @@
 # Actions exit: make the repo private, run recurring work where it is billed by use
 
-Status: APPROVED 2026-10-25 (rulings R1–R27 below), build starts with W0. Audit: 84 workflow files, 14 days
-of run data, two review panels (42 agents on the audit and first design; 20 agents on the from-scratch
+Status: APPROVED 2026-10-25 (rulings R1–R27 below); building: W0 and W1 PRs landing, W2's schema (#2042) and
+registry (#2023) landed, the runner (#2024) next. Audit: 84 workflow files, 14 days of run data, two review panels (42 agents on the audit and first design; 20 agents on the from-scratch
 design: four architects, three judges, twelve refuters). Per-file verdicts: [dispositions.md](dispositions.md).
 Decision record: [ADR 0001](../../adr/0001-scheduled-jobs-on-a-railway-job-runner.md).
 
@@ -85,26 +85,43 @@ production.
 - **One history table**: `job_runs` (append-only, 90-day prune): holder, version (`RAILWAY_GIT_COMMIT_SHA`),
   args, requester, started/ended, outcome, exit code, peak RSS, a 64-line log tail, and
   `UNIQUE (job_name) WHERE ended_at IS NULL`: one open run per job, guaranteed by the database.
-- **One registry in code** (`scraper/jobs.py`, ~60 lines): `Job(name, argv, every_s, offset_s, timeout_s,
-  memory_mb, cpus, host)`. Walk entries are generated from `portal_factory.PORTAL_CLASSES` with two
-  code-only per-portal values, walk interval and walk timeout (never in the DB-overridable limits layer), so
-  shared scheduler code names no portal (rule 21). The runner upserts definitions at boot and retires rows
-  its registry no longer names. CI pins: every argv parses; walk set = `PORTAL_CLASSES`; static co-tenancy
-  (the largest `RUNNER_MAX_CONCURRENT` memory declarations ≤ 70 % of a replica); no two DB-heavy jobs in one
-  start hour; the API's stuck-run cutoff exceeds the largest timeout; the GitHub schedule set is exactly
-  {verify_pipeline, scrape_price_stats}.
+- **One registry in code** (`scraper/jobs.py`, ~100 lines, W2 #2023): `Job(name, argv, every_s, offset_s,
+  timeout_s, memory_mb, cpus, host, resource, db_heavy)`; `every_s` is upserted as 384's `cadence`. Walk
+  entries are generated from `portal_factory.PORTAL_CLASSES` with two code-only per-portal values, the
+  Portal class attributes `walk_every_s` and `walk_timeout_s` (never in the DB-overridable limits layer), so
+  shared scheduler code names no portal (rule 21). Every job's entry exists from W2 with a `host`:
+  `job-runner`, `github-actions` (the canary and price stats), or `github-actions-until-moved` (a workflow
+  still schedules it; its values are the move's targets). **A scheduler reads `runner_jobs()` only**
+  (`host == job-runner`; `declared()` is the censuses'); it upserts, schedules, claims and accepts a request
+  only for those names, adopts a `registry_at IS NULL` row one of them names (lease state and history kept),
+  logs and skips a row it cannot reconcile instead of aborting at boot, and retires only rows with
+  `registry_at IS NOT NULL AND runner = 'job-runner'` that its registry no longer names. Whole-day grids
+  are phased so a slot falls at, or up to 3 days after, the calendar run it replaces. CI pins
+  (`tests/scraper/test_job_registry.py`): every argv parses; walk set = `PORTAL_CLASSES`; static co-tenancy
+  (the largest `RUNNER_MAX_CONCURRENT` memory declarations, one per resource, ≤ 70 % of a replica); no two
+  DB-heavy jobs in one hour (a wait for a shared resource and the kill grace counted); the API's stuck-run
+  cutoff (`STUCK_RUN_CUTOFF_MINUTES`) exceeds the longest walk timeout (the walks are the `scrape_runs`
+  writers) plus `STUCK_RUN_GRACE_S`; the GitHub schedule set is exactly {verify_pipeline,
+  scrape_price_stats} once the files still running a waiting job are set aside, so it tightens by itself
+  when the last one moves; and, computed from the workflow files with no hand-kept ledger, every job runs on
+  exactly one host.
 - **One service** (`python -m scraper.job_runner`), **two identical replicas**, 8 GB / 4 vCPU each,
   `restartPolicy ALWAYS`, `drainingSeconds` 180, built from the same Dockerfile with `ARG EXTRAS=api,clip,geo`
   so CPU torch, the pinned CLIP weights (revision 3d74acf9) and the geo wheels live in this image only.
   `watchPatterns` cover the trees jobs import. Variables are references to shared project variables.
 - **Scheduling**: anchored, staggered slots on the database clock (`due_at` from `every_s` + `offset_s`);
   missed slots are skipped, never replayed; a new row's first slot is no earlier than `now() + timeout_s`
-  so it never overlaps a GitHub run still in flight at cutover. Claim-if-due is one compare-and-set; the
-  lease TTL is 180 s, renewed every 60 s, with self-fencing before expiry.
+  so it never overlaps a GitHub run still in flight at cutover. Claim-if-due is one compare-and-set, tried
+  oldest `due_at` first so a job waits at most one sibling's run for its resource; the lease TTL is 180 s,
+  renewed every 60 s, with self-fencing before expiry.
 - **Execution**: each job is a subprocess with its exact argv and `JOB_CPUS` exported (CLIP threads and the
   intake pool read it instead of `os.cpu_count()`); at `timeout_s` SIGTERM (a walk reads it as its
-  deadline), SIGKILL after a grace; the lease is released only after the child exits; exit code and peak
-  RSS are stamped; children carry `oom_score_adj +500` so an OOM kills the job, not the runner.
+  deadline), SIGKILL after a grace under `jobs.STUCK_RUN_GRACE_S` (600 s; the stuck-run cutoff and DB-heavy
+  hour censuses count it); a run the runner stopped at `timeout_s` is recorded `timeout`, never
+  `interrupted`, though the child exits 143 as on a deploy (an interrupted run is due again at once, so a
+  walk cut by its own timeout would restart at once); the lease is released only after the child exits;
+  exit code and peak RSS are stamped; children carry `oom_score_adj +500` so an OOM kills the job, not the
+  runner.
 - **Retries**: an interrupted run (deploy, kill) is due again at once and is claimed by the new deployment
   within seconds; exit 75 ("more remains") re-dues after 60 s and replaces every self-chain and PAT; failed
   runs back off exponentially, capped at the cadence; a lost run (lease expired) is re-run once, then backs off.
@@ -186,8 +203,16 @@ added to `.railway/railway.ts`. **Scope change 2026-10-25 (operator ruling Q24, 
 move of the three existing services to that file with Railway's plan-on-PR/apply-on-merge recipe, and the
 deletion of the three `railway*.json`, is the agent-platform programme's M0 (PR #2004, `MVP.md` § M0, due
 within the week, hard cutoff 2026-12-01); #2025 reuses the file and lands it for all four only if M0 has not
-landed by then. First jobs: stale_images, rent_map, map_overlays. Each later PR adds registry lines and deletes the matching
-YAMLs; a new row's first slot comes after `now() + timeout_s`; rollback is a revert.
+landed by then. First jobs: stale_images, rent_map, map_overlays. Each later PR flips its entries' host to
+`job-runner` and deletes the matching YAMLs; the pairing census fails either half alone. A move PR folds or
+drops each other step of the file it deletes, and says which in its body. A move never lowers `timeout_s`. A
+long-cadence entry's slot falls at, or up to 3 days after, the calendar run it replaces (the 30-day grids
+drift ~5 days a year earlier), else the PR re-phases `offset_s`. After merge, `gh run list --workflow=<file>
+--json status,databaseId` shows any queued or running run of the deleted file; if one exists, the new row
+is paused (`job_runner pause --until`) past that run's timeout, since a queued run in a non-cancelling group
+can start after the merge. A new row's first slot comes after `now() + timeout_s`; rollback is a revert.
+The PR that moves the last waiting job (#2031, #2032 or #2033) also deletes the `github-actions-until-moved`
+host, its ratchet and the gone leavers in the registry test.
 **Gate (7 days):** every job cell green; ≥ 3 deploys survived with interrupted runs re-claimed within 1 min;
 one request run, one pause with expiry and one self-fence drill exercised; 0 unique-index violations, 0
 double holders; resolver and intake lanes green 48 h after the rename; `railway config plan` = 0 changes.
@@ -203,7 +228,9 @@ sibling` during a registry load instead of red.
 ### W4 — The walks
 In ascending duration, 2–3 per PR: web, maxima, bezrealitky, remax, mmreality, sreality (hourly, R24),
 realitymix, ceskereality, bazos, idnes last. Walk argv drops `--max-seconds`; the runner's SIGTERM at the
-walk timeout is the one budget.
+walk timeout is the one budget (this is #2029's "budget derived from the timeout"; the registry's argv census
+refuses a walk `--max-seconds`). A batch flips its walks' host without a portal name in `jobs.py`; a
+per-portal host attribute would be a third code-only per-portal value and needs a ruling.
 **Gate per walk (7 days):** pages, reached-end and nominations per cycle ± 10 %; 403/429 share from
 Railway ≤ the GitHub baseline; 0 `ended_at NULL` after ≥ 5 mid-walk deploys; proxy GB/day within its band;
 delisting and coverage cells unchanged; aggregate peak ≤ 70 % of a replica.
@@ -212,14 +239,18 @@ delisting and coverage cells unchanged; aggregate peak ≤ 70 % of a replica.
 `clip` every 15 min in the runner image (one unsharded run, exit 75 for backlogs; `clip_tag.yml`, the shard
 plumbing and the weights cache deleted); `ruian_load` moves to the runner (geo wheels in the build);
 price_stats ticks daily through `job_runner once` on GitHub so it has a row and a cell; `location_refetch`
-reads its due time from its row (`first_delay_seconds` deleted); a test pins the GitHub schedule set.
+reads its due time from its row (`first_delay_seconds` deleted). The test pinning the GitHub schedule set
+exists from W2 (#2023) and tightens by itself when the last waiting job moves; W5 adds its one workflow-reader
+rule, `scraper.job_runner once <job>` read as running `<job>`, without which the pairing census reads
+`scrape_price_stats.yml` as running no registry job and the timeout floor stops checking price_stats.
 **Gate:** CLIP lag p90 ≤ 45 min; a 100-image re-embed identical within fp32 tolerance; both GitHub-hosted
 jobs show cells; `location_refetch` runs once a day across ≥ 3 deploys; **the flip gate: 7 days of billed
 GitHub run-rate under 50,000 min/month.**
 
 ### W6 — Consolidate CI, prove the private paths, flip
 `test.yml` absorbs `frontend-build` and `docs-budget` as one `frontend` job (vitest `--maxWorkers=2`, timeout
-sized for 2-vCPU runners); PR-only `cancel-in-progress` on test + migrations; `build-extension` job renamed
+sized for 2-vCPU runners; the budget step keeps `fetch-depth: 0`, its `HEAD^1` base argument and a PR-only
+`if:`); PR-only `cancel-in-progress` on test + migrations; `build-extension` job renamed
 `extension`; required contexts → pytest, schema-and-sql, frontend; gitleaks: one history scan, a PR job over
 the PR's commit range, a commit/push hook; the two fixture map keys replaced by placeholders; LICENSE notice
 (all rights reserved); Dependabot alerts on; docs lose "PUBLIC" (CLAUDE.md, issue-tracker, scraper-ops);
@@ -259,7 +290,7 @@ Never built (dropped from the first design): the shared `lanes.py` move, 17 inte
 GitHub matrix, the overdue-only fallback rule, the disarm wave, runtime memory admission.
 
 Added: the job-runner service (two replicas) and ~5 Dockerfile lines (one ARG); columns on the reused
-`scheduled_jobs`; `job_runs`; `scraper/jobs.py` (~60), `scraper/job_runner.py` (~220), `scraper/job_lease.py`
+`scheduled_jobs`; `job_runs`; `scraper/jobs.py` (~100), `scraper/job_runner.py` (~220), `scraper/job_lease.py`
 (moved, ~+60); the `job/<name>` SQL arm (~60); the W1 seams (~60); `run_job.yml` (~30, request-only);
 `.railway/railway.ts` (~80); two code-only per-portal walk values; ~250 lines of tests; one `job-runner`
 heartbeat row per replica; one pg_cron history cleanup; `RAILWAY_TOKEN`; a LICENSE notice.
