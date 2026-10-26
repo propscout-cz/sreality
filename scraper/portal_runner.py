@@ -104,6 +104,9 @@ class Portal(Protocol):
     index_rate: float
     # PortalLimits.price_change_min_pct: the walk hands it to reconcile_sightings.
     price_change_min_pct: float
+    # The code-only walk schedule scraper/jobs.py generates this portal's walk from; never a PortalLimits key.
+    walk_every_s: int
+    walk_timeout_s: int
     # Optional (read via getattr, default False): when on, the runner paces via
     # the cross-runtime portal_rate_state ledger instead of a process-local
     # limiter. Resolved from PortalLimits.shared_rate_limiter by each portal.
