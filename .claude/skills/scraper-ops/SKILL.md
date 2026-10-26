@@ -153,9 +153,9 @@ swept and saves `app_settings.property_sweep_cursor`, where the next run resumes
 a resumed run that stops again exits RED; only a whole cycle stamps the `property_sweep` artifact, judged by `jobs`). The visual-signal producers run alongside:
 `compute_image_phash.yml` (hourly pHash BACKSTOP only — the image drain hashes the bytes in hand and writes `phash` in the
 `storage_path` UPDATE, so this job takes just `phash IS NULL` rows: `IMAGES done phash_missed`), `clip_tag.yml`
-(`scripts/clip_tag_backfill.py` — zero-shot CLIP room/plot tags into `image_clip_tags` + a 512-d vector into `image_clip_embeddings`),
-`clip_retag.yml` (re-runs the zero-shot over each image's STORED embedding when the taxonomy changes, per
-`app_settings.clip_taxonomy_retag_after`; no R2 download, no re-inference). Newest and
+(`scripts/clip_tag_backfill.py` — zero-shot CLIP room/plot tags into `image_clip_tags` + a 512-d vector into `image_clip_embeddings`;
+then, in each shard, `scripts/retag_from_embeddings.py` re-runs the zero-shot over each image's STORED embedding when the
+taxonomy changes, per `app_settings.clip_taxonomy_retag_after`; no R2 download, no re-inference). Newest and
 **dispatch-only**: `dinov3_embed_backfill.yml` (GPU, inert until the encoder config is complete),
 `tagging_bakeoff.yml` (GPU, the encoder EXPERIMENT, `dedup_sim` only), `tag_model.yml` (CPU, ONE
 versioned tag model, mig 490 — the tag is the argmax head) and `new_dedup_candidates.yml` (CPU, Level 0
