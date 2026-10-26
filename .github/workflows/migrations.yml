@@ -22,7 +22,7 @@ name: "CI: schema replay + SQL correctness"
 # A test module that needs a database runs only where a step below names it with TEST_DATABASE_URL;
 # tests/test_live_lanes_census.py fails a PR that adds one no step names.
 #
-# Advisory until added to branch protection as a required check.
+# Required check (`schema-and-sql`) under branch protection.
 
 on:
   # push only on main: a branch push beside its pull_request run made a same-named twin
