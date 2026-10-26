@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from collections.abc import Iterator
 
 from scraper import db
 
@@ -50,7 +51,7 @@ _MOVE_SQL = """
 _CHUNK = 2000
 
 
-def _chunks(seq: list[int], n: int):
+def _chunks(seq: list[int], n: int) -> Iterator[list[int]]:
     for i in range(0, len(seq), n):
         yield seq[i : i + n]
 

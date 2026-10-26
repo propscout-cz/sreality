@@ -71,7 +71,7 @@ from scripts.pod_watchdog import (
     PodWatchdog,
     Progress,
 )
-from scripts.runpod_client import NoCapacityError, RunPodClient, RunPodError
+from scripts.runpod_client import GpuOption, NoCapacityError, RunPodClient, RunPodError
 from scripts.tagging_bakeoff_arms import STORED_CLIP_ARM
 
 LOG = logging.getLogger("tagging_bakeoff_dispatch")
@@ -608,7 +608,7 @@ def _spend(result: Any) -> str:
     return f" spent≈${float(result.cost_per_hr) * result.elapsed_s / 3600.0:.2f}"
 
 
-def select_gpus(client: RunPodClient, allowlist: tuple[str, ...]):
+def select_gpus(client: RunPodClient, allowlist: tuple[str, ...]) -> list[GpuOption]:
     """Cheapest-first, restricted to the CPU-adequate boxes when any are available."""
     gpus = client.eligible_gpus(max_price_per_hr=MAX_PRICE_PER_HR)
     if not allowlist:
