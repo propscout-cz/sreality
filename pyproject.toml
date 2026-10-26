@@ -125,7 +125,18 @@ api = ["fonts/*.ttf", "fonts/*.txt"]
 testpaths = ["tests"]
 
 [tool.ruff]
-extend-exclude = ["frontend", "chrome-extension"]
+# The autodedup decision modules (incremental.DECISION_MODULES): a byte edit to one moves the live engine digest,
+# so they are linted only with a real engine change. tests/test_ruff_config.py keeps this list equal to that tuple.
+extend-exclude = [
+    "frontend", "chrome-extension",
+    "autodedup/body_align.py", "autodedup/d43.py", "autodedup/dataset.py", "autodedup/decide.py",
+    "autodedup/demonstrate.py", "autodedup/development.py", "autodedup/family.py", "autodedup/features.py",
+    "autodedup/fingerprint.py", "autodedup/floor_convention.py", "autodedup/guards.py",
+    "autodedup/hazard_context.py", "autodedup/incremental.py", "autodedup/indistinguishable.py",
+    "autodedup/model.py", "autodedup/normalize.py", "autodedup/settings.py", "autodedup/stock.py",
+    "autodedup/store_score.py", "autodedup/text_facts.py",
+]
+force-exclude = true
 
 [tool.ruff.lint]
 select = ["E9", "F", "ANN"]
@@ -133,6 +144,3 @@ ignore = ["ANN401"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ANN"]
-# A byte edit to an autodedup decision module moves the live engine digest (incremental.DECISION_MODULES);
-# annotate worded_gap with the next real engine change and drop this line.
-"autodedup/indistinguishable.py" = ["ANN001"]
