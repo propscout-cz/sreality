@@ -160,9 +160,11 @@ class FakeLedger:
         self.up = not self.down
         self._record("begin", stopping)
 
+    skipped: dict[str, str] = field(default_factory=dict)
+
     def register(self, entries: Sequence[Job]) -> job_lease.Registered | None:
         self._record("register", [j.name for j in entries])
-        return job_lease.Registered((), (), (), {})
+        return job_lease.Registered((), (), (), dict(self.skipped)) if self.up else None
 
     def retire(self, names: Sequence[str]) -> list[str] | None:
         self._record("retire", list(names))
@@ -1012,3 +1014,57 @@ def test_once_says_not_due_and_an_interrupted_once_exits_143(capsys: pytest.Capt
 
     assert job_runner.once(_job(), ledger=rig.ledger, spawner=rig.standin, guard=rig.guard, clock=rig.clock,
                            sleep=sleep) == 143
+
+
+def test_registration_is_retried_every_tick_and_nothing_is_claimed_before_it_lands() -> None:
+    """A database outage at boot never crash-loops the runner, and never lets it claim on an unreconciled row."""
+    rig = _rig([_job("a"), _job("b")], due=["a", "b"])
+    rig.ledger.down = True
+    for _ in range(3):
+        rig.clock.advance(10)
+        assert rig.runner.tick() is False
+    assert not rig.runner.registered and rig.ledger.named("claim") == [] and rig.ledger.named("due") == []
+    rig.ledger.down, rig.ledger.skipped = False, {"b": "CheckViolation: declarations_positive"}
+    rig.clock.advance(10)
+    rig.runner.tick()
+    assert rig.runner.registered and rig.runner.skipped == {"b": "CheckViolation: declarations_positive"}
+    assert rig.ledger.named("due")[0][1] == ["a"], "a row the boot skipped is never claimed"
+    assert [e[1] for e in rig.ledger.named("claim")] == ["a"]
+    assert rig.ledger.named("retire")[0][1] == ["a", "b"], "a skipped name is still the registry's: never retired"
+
+
+def test_only_pid_1_reaps_orphans_and_never_a_tracked_child(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[list[int]] = []
+    monkeypatch.setattr(job_runner, "reap_orphans", lambda tracked: seen.append(sorted(tracked)) or 0)
+    rig = _rig([_job()], {"test_job": Script()}, due=["test_job"])
+    rig.runner.tick()
+    rig.runner.tick()
+    assert seen == []
+    pid1 = _rig([_job()], {"test_job": Script()}, due=["test_job"], pid1=True)
+    pid1.runner.tick()
+    pid1.runner.tick()
+    assert seen == [[], [pid1.standin.pid_of("test_job")]]
+
+
+def test_list_prints_every_row_with_its_state_and_latest_run(monkeypatch: pytest.MonkeyPatch,
+                                                            capsys: pytest.CaptureFixture[str]) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    rows: list[dict[str, object]] = [
+        {"job_name": "rent_map", "runner": "job-runner", "registered": True, "retired_at": None,
+         "due_at": now + timedelta(days=3), "paused_until": now + timedelta(hours=1), "pause_note": "drill",
+         "requested_at": None, "requested_by": None, "lease_holder": None, "lease_expires_at": None,
+         "last_outcome": "ok", "consecutive_failures": 0, "last_success_at": now, "last_error": None,
+         "started_at": now, "ended_at": now, "outcome": "ok", "exit_code": 0, "peak_rss_mb": 80},
+        {"job_name": "location_resolve_incremental", "runner": "github_actions", "registered": False,
+         "retired_at": None, "due_at": None, "paused_until": None, "pause_note": None, "requested_at": None,
+         "requested_by": None, "lease_holder": "w:1", "lease_expires_at": now, "last_outcome": "running",
+         "consecutive_failures": 0, "last_success_at": now, "last_error": None, "started_at": None,
+         "ended_at": None, "outcome": None, "exit_code": None, "peak_rss_mb": None},
+    ]
+    monkeypatch.setattr(job_lease, "rows", lambda conn: rows)
+    assert job_runner.main(["list"], registry=[], connect=FakeConn) == 0  # type: ignore[arg-type]
+    first, second = capsys.readouterr().out.splitlines()
+    assert first.split()[:3] == ["rent_map", "job-runner", "paused"] and "exit=0 peak=80MB" in first
+    assert second.split()[:4] == ["location_resolve_incremental", "github_actions", "held", "lane"]
