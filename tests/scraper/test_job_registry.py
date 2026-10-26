@@ -390,7 +390,8 @@ def _invocations(run: str, root: Path) -> list[Invocation]:
 
 
 def read_workflows(root: Path) -> dict[str, Workflow]:
-    """Every workflow file: whether it runs unattended, its timeout, and each `python -m <repo module>` it runs."""
+    """Every workflow file: whether it runs unattended, its timeout, and each `python -m <repo module>` it runs.
+    #2033 adds one rule here: `scraper.job_runner once <job>` runs <job> (the CLI is #2024's)."""
     workflows: dict[str, Workflow] = {}
     for path in sorted(p for p in (root / ".github" / "workflows").iterdir() if p.suffix in (".yml", ".yaml")):
         data = yaml.safe_load(path.read_text()) or {}
@@ -455,14 +456,14 @@ def test_the_workflow_reader(tmp_path: Path) -> None:
 
 # Scheduled files leaving by another PR, tolerated present or gone so the merge order does not matter.
 LEAVERS = {
-    "compute_image_phash.yml": "#2018 (R6a): pHash moves off the hourly schedule",
+    "compute_image_phash.yml": "#2018 (PROGRAM R6a): pHash moves off the hourly schedule",
     "recompute_city_proximity.yml": "#2012 / PR #2040: city proximity moves onto pg_cron",
 }
 # A RUNNER entry's module may still run from these attended (dispatch-only) files.
 ATTENDED = {
     ("ingest_boundaries.yml", "scripts.ingest_map_overlays"): "re-renders kraje after a human-run boundary ingest",
 }
-# A step that runs an entry's module for another job of its file, so it never hosts that entry.
+# A step that runs an entry's module for another job of its file, so it never hosts that entry (#2025 deletes it).
 COMPANIONS = {
     ("fetch_rent_map.yml", "scripts.ingest_map_overlays"): "#2025: re-renders the rent_map section after an ingest",
 }
@@ -470,6 +471,7 @@ GITHUB_ENTRIES = frozenset({"verify_pipeline", "price_stats"})
 GITHUB_SCHEDULES = frozenset({"verify_pipeline.yml", "scrape_price_stats.yml"})
 # The waiting set only shrinks: a new job or portal is born on the runner, never as one more GitHub schedule.
 # Until the walks move (#2029) that blocks onboarding a portal: a name added here needs an operator ruling.
+# The PR moving the last waiting job deletes this set, jobs.UNTIL_MOVED and the LEAVERS lines whose file is gone.
 ORIGINAL_UNTIL_MOVED = frozenset({
     "stale_images", "rent_map", "map_overlays", "location_full_resolve", "property_sweep", "broker_sweep",
     "location_intake", "clip", "ruian_load",
@@ -547,6 +549,11 @@ def test_the_pairing_census_fires() -> None:
     assert pairing_problems(jobs.declared(), {**workflows, "phash2.yml": stray})
     # fetch_rent_map.yml still runs the overlay module, but only to re-render rent_map: no host for map_overlays.
     assert pairing_problems(jobs.declared(), _without(workflows, "ingest_map_overlays.yml"))
+    # #2033's tick hosts price_stats only once read_workflows reads the `once` form; until then B3 is red.
+    once = (Invocation("scripts.price_stats_probe", frozenset()), Invocation("scraper.job_runner", frozenset()))
+    ticked = replace(workflows["scrape_price_stats.yml"], invocations=once)
+    assert pairing_problems(jobs.declared(), {**workflows, "scrape_price_stats.yml": ticked}) == [
+        "scrape_price_stats.yml: scheduled, and runs no registry job"]
 
 
 def github_set_problems(entries: Sequence[Job], workflows: dict[str, Workflow], *,
