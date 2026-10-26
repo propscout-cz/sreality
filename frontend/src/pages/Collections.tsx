@@ -181,7 +181,7 @@ function NewCollectionForm({
         <button
           type="submit"
           disabled={disabled}
-          className="shrink-0 px-4 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          className="shrink-0 px-4 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           {mut.isPending ? 'Creating…' : 'Create'}
         </button>

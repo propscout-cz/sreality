@@ -49,7 +49,7 @@ export default function FreshnessBlock({
           type="button"
           onClick={() => verify.mutate()}
           disabled={verify.isPending}
-          className="px-3 py-1 text-[0.78rem] rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          className="px-3 py-1 text-[0.78rem] rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           {verify.isPending ? 'Ověřuji…' : 'Ověřit aktuálnost'}
         </button>

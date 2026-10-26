@@ -673,7 +673,7 @@ function OperatorInputsSection({
                 'shrink-0 px-3 py-1.5 text-[0.78rem] rounded-[var(--radius-sm)] border',
                 !dirty || mut.isPending
                   ? 'bg-[var(--color-rule-strong)] text-[var(--color-ink-4)] border-[var(--color-rule-strong)] cursor-not-allowed'
-                  : 'bg-[var(--color-copper)] text-white border-[var(--color-copper)] hover:bg-[var(--color-copper-2)]',
+                  : 'bg-[var(--color-copper)] text-[var(--color-on-copper)] border-[var(--color-copper)] hover:bg-[var(--color-copper-2)]',
               ].join(' ')}
             >
               {mut.isPending ? 'Saving…' : 'Save'}

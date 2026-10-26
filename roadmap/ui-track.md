@@ -7,6 +7,17 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### PropScout.cz and three colour schemes (2026-10-26, no migration)
+- **Done** (operator ask 2026-10-26: "rename the app to PropScout.cz", "build Měď, Kobalt and Grafit as
+  themes the user can pick from"). The brand is `PropScout.cz` (`lib/brand.ts`; tab prefix "PS:", a "PS"
+  home-screen icon). Every user picks a colour scheme (Měď, Kobalt, Grafit) and light / dark / system
+  in the account menu, the phone's account sheet and Settings → Appearance; the choice stays on the
+  device (`lib/theme.ts`). A scheme only changes token VALUES (`globals.css`); new tokens `--color-chrome*`
+  (the top bar: a dark band in Měď), `--color-on-copper` / `--color-on-brick` (text on an accent or danger
+  fill, which `text-white` failed in dark). Proposal and previews: the PropScout.cz design system artifact.
+- **Next (not built):** the design system's hierarchy proposals (Browse header, card, notifications…),
+  each only after the operator rules on it.
+
 ### Preset groups: boxes on the Browse preset row (2026-10-25, migration 672)
 - **Done** (operator ask 2026-10-25: "group my presets, a boundary box per group, move them into the boxes
   or outside of them"). A group is a named box with an optional colour (`filter_preset_groups`, a saved set

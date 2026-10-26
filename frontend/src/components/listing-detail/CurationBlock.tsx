@@ -179,7 +179,7 @@ const NO_NOTES: Note[] = [];
 const BODY_MAX = 4000;
 
 const PRIMARY =
-  'inline-flex items-center px-3.5 py-1.5 text-[0.8rem] font-medium rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors';
+  'inline-flex items-center px-3.5 py-1.5 text-[0.8rem] font-medium rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors';
 const QUIET =
   'inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[0.8rem] rounded-[var(--radius-sm)] text-[var(--color-ink-3)] hover:text-[var(--color-ink)] hover:bg-[var(--color-paper-2)] disabled:opacity-50 transition-colors';
 
@@ -767,7 +767,7 @@ function OwnNoteRow({
                   });
                 }}
                 disabled={busy}
-                className="px-2.5 py-1 text-[0.8rem] font-medium rounded-[var(--radius-sm)] bg-[var(--color-brick)] text-white hover:opacity-90 disabled:opacity-50"
+                className="px-2.5 py-1 text-[0.8rem] font-medium rounded-[var(--radius-sm)] bg-[var(--color-brick)] text-[var(--color-on-brick)] hover:opacity-90 disabled:opacity-50"
               >
                 {busy ? 'Mažu…' : 'Smazat'}
               </button>

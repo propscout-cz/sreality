@@ -69,7 +69,7 @@ const SIZES = {
     create: 'mt-1.5 border-t border-[var(--color-rule-soft)] px-1.5 pt-2',
     createLabel: 'text-[0.65rem] tracking-[0.18em] uppercase text-[var(--color-ink-4)]',
     createButton:
-      'ml-auto rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-3 py-1 text-[0.75rem] text-white hover:bg-[var(--color-copper-2)] disabled:opacity-50',
+      'ml-auto rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-3 py-1 text-[0.75rem] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] disabled:opacity-50',
   },
   sheet: {
     search:
@@ -82,7 +82,7 @@ const SIZES = {
     create: 'border-t border-[var(--color-rule-soft)] px-4 pb-2 pt-3',
     createLabel: 'text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--color-ink-3)]',
     createButton:
-      'ml-auto inline-flex h-9 items-center rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-3 text-[13px] text-white active:bg-[var(--color-copper-2)] disabled:opacity-50',
+      'ml-auto inline-flex h-9 items-center rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-3 text-[13px] text-[var(--color-on-copper)] active:bg-[var(--color-copper-2)] disabled:opacity-50',
   },
   block: {
     search:
@@ -95,7 +95,7 @@ const SIZES = {
     create: 'mt-2 max-w-sm border-t border-[var(--color-rule-soft)] pt-2',
     createLabel: 'text-[0.65rem] tracking-[0.18em] uppercase text-[var(--color-ink-4)]',
     createButton:
-      'ml-auto rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-3 py-1 text-[0.75rem] text-white hover:bg-[var(--color-copper-2)] disabled:opacity-50',
+      'ml-auto rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-3 py-1 text-[0.75rem] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] disabled:opacity-50',
   },
 } as const;
 
@@ -204,7 +204,7 @@ export function TagAssignList({
                     className={[
                       cls.box,
                       member
-                        ? 'bg-[var(--color-copper)] border-[var(--color-copper)] text-white'
+                        ? 'bg-[var(--color-copper)] border-[var(--color-copper)] text-[var(--color-on-copper)]'
                         : 'border-[var(--color-rule-strong)] text-transparent',
                     ].join(' ')}
                   >

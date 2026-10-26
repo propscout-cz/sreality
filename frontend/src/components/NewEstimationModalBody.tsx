@@ -140,7 +140,7 @@ export default function NewEstimationModal({
               'shrink-0 px-4 py-2 text-sm rounded-[var(--radius-sm)] border transition-colors',
               pending
                 ? 'bg-[var(--color-rule-strong)] text-[var(--color-ink-4)] border-[var(--color-rule-strong)] cursor-not-allowed'
-                : 'bg-[var(--color-copper)] text-white border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
+                : 'bg-[var(--color-copper)] text-[var(--color-on-copper)] border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
             ].join(' ')}
           >
             {pending ? (

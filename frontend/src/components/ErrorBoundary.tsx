@@ -73,7 +73,7 @@ function DefaultFallback({ error }: { error: Error }) {
       <button
         type="button"
         onClick={() => window.location.reload()}
-        className="mt-4 inline-flex items-center px-3 py-1.5 text-[0.78rem] rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
+        className="mt-4 inline-flex items-center px-3 py-1.5 text-[0.78rem] rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] transition-colors"
       >
         Reload
       </button>

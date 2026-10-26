@@ -543,7 +543,7 @@ function BoardPage({ active, shares }: { active: ActiveBoard; shares: PipelineSh
 const HEADER_BUTTON =
   'inline-flex items-center h-8 px-3 whitespace-nowrap rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] text-[0.8rem] text-[var(--color-ink-2)] hover:border-[var(--color-rule-strong)] hover:text-[var(--color-ink)] aria-pressed:border-[var(--color-copper)] aria-pressed:text-[var(--color-copper)]';
 const PRIMARY_BUTTON =
-  'inline-flex items-center gap-1.5 h-8 px-3.5 whitespace-nowrap rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[0.8rem] font-medium text-white hover:bg-[var(--color-copper-2)] transition-colors';
+  'inline-flex items-center gap-1.5 h-8 px-3.5 whitespace-nowrap rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[0.8rem] font-medium text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] transition-colors';
 
 /* How many choices a curated-set scope holds, for its menu's label. */
 const scopeCount = (s: SetScope | null | undefined): number =>

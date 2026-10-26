@@ -130,7 +130,7 @@ export default function CreateWatchdogModal({ filters, onClose }: CreateWatchdog
             className={[
               'flex h-4 w-4 shrink-0 items-center justify-center rounded-[3px] border text-[0.6rem]',
               withMapArea
-                ? 'border-[var(--color-copper)] bg-[var(--color-copper)] text-white'
+                ? 'border-[var(--color-copper)] bg-[var(--color-copper)] text-[var(--color-on-copper)]'
                 : 'border-[var(--color-rule-strong)] text-transparent',
             ].join(' ')}
             aria-hidden
@@ -170,7 +170,7 @@ export default function CreateWatchdogModal({ filters, onClose }: CreateWatchdog
           type="button"
           onClick={submit}
           disabled={trimmed.length === 0 || createMut.isPending}
-          className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors disabled:opacity-50"
+          className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] transition-colors disabled:opacity-50"
         >
           {createMut.isPending ? 'Creating…' : 'Create watchdog'}
         </button>

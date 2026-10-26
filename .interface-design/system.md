@@ -1,4 +1,4 @@
-# Interface design system — Limen Reality SPA
+# Interface design system — PropScout.cz SPA
 
 Saved 2026-10-19 after the Browse › Stats dashboard build (`docs/design/stats-dashboard.md`). The tokens are
 `frontend/src/styles/globals.css` `@theme`; nothing here adds one (operator OK is needed for a new token, CLAUDE.md).
@@ -9,6 +9,27 @@ A civic-archive ledger for a property analyst: dense, quiet, numbers first. Pape
 series. **Brick** means a destructive action, an error, or a dimension that does not apply to the cohort.
 The ink tints (`--color-ink-2/3/4`) carry secondary series and the ledger bar; `--color-ink-4` is for
 disabled / placeholder text only, never for data (contrast).
+
+## Colour schemes (2026-10-26, operator ask)
+Three schemes, each with a light and a dark side; the user picks both (account menu, phone account sheet,
+Settings → Appearance; stored per device in `lib/theme.ts`). A scheme changes token VALUES only: every token
+keeps its name, so `--color-copper` means "the accent" in all three, and component code never asks which
+scheme is on.
+- **Měď** (default, in `@theme`): laid-paper canvas, verdigris accent `#1f6b5c`, and a dark ink top bar.
+- **Kobalt** (`data-scheme="kobalt"`): cool porcelain canvas, cobalt accent `#1f45b5`, light top bar.
+- **Grafit** (`data-scheme="grafit"`): monochrome — the accent is ink (`#18181b`), so colour on screen only
+  ever means something (a live price, a drop, an error, a tag, a pin); light top bar.
+- **Contrast**: `ink`, `ink-2` and `ink-3` hold 4.5:1 on paper, paper-2, paper-3 and inset in all six themes
+  (`ink-3` darkened from `#7a7d86` for that); the accent holds 4.5:1 as text on paper and on its own soft wash;
+  `--color-on-copper` / `--color-on-brick` are the text on an accent or danger FILL (never `text-white`: a
+  dark scheme's accent is light). The soft washes are solid now, not alpha.
+- **Top bar**: `--color-chrome`, `-chrome-ink`, `-chrome-ink-2` (idle nav, 4.5:1), `-chrome-active`,
+  `-chrome-accent` (the active underline, the ".cz" of the wordmark, the account button when open). Only the
+  Shell header and its account button draw in them; popovers below it stay on paper.
+- **Tags and stages** are the user's colours: the same in every scheme, light/dark only, each 4.5:1 on its wash.
+  `tag-copper/sage/brick/ochre` are literal now (they aliased the accent and status tokens).
+- The full proposal (four schemes compared, previews of every agenda) is the PropScout.cz design system
+  artifact; Terakota was proposed and not built.
 
 ## Depth
 Borders only. `--color-rule` for structure, `--color-rule-soft` for row separation, `--color-rule-strong`
