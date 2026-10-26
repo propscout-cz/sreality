@@ -304,10 +304,11 @@ def test_a_seed_whose_cut_would_pass_the_runners_memory_refuses_before_the_cut(
     ~3.7 GiB where they would have peaked at ~17.3 GiB — an OOM kill that strands the lease for
     five hours. A scope past the bound is refused right after the walk, inside the
     transaction: nothing written, the cut never started."""
-    assert int(lane.SEED_MEMORY_MB * 1_048_576 // lane.CUT_PEAK_BYTES_PER_LISTING) == 699_050
-    assert lane.seed_memory(323_128)["cut_peak_mb"] == 3786.7
-    with pytest.raises(SystemExit, match="SEED_MEMORY_MB 8,192"):
-        lane.seed_memory(699_051)
+    public_runner_half = 8192.0  # a public runner's 16 GiB, halved
+    assert int(public_runner_half * 1_048_576 // lane.CUT_PEAK_BYTES_PER_LISTING) == 699_050
+    assert lane.seed_memory(323_128, public_runner_half)["cut_peak_mb"] == 3786.7
+    with pytest.raises(SystemExit, match=r"SEED_MEMORY_MB 8,192 \(half the container's memory limit\)"):
+        lane.seed_memory(699_051, public_runner_half)
     monkeypatch.setattr(lane, "CUT_PEAK_BYTES_PER_LISTING", 1 << 30)
     db = lane_world.world()
     with pytest.raises(SystemExit, match=r"\(streamed, E962\).* the 9 adverts the walk listed"):
@@ -362,3 +363,9 @@ def test_the_equivalence_fallback_pages_a_block_as_the_sweep_does(
     ids, _resolved, source = rt_equivalence.scope_listings(db, GEN, SCOPE)
     assert (ids, source) == ({1, 2, 3, 4, 5}, "listing_location")
     assert db.statements.count(S.RT_SCOPE_BLOCK_SQL) == 3, "three pages, one statement each"
+
+def test_the_seed_ceiling_is_half_of_what_the_container_may_use() -> None:
+    """Measured at import, not a constant sized for a public runner's 16 GiB: a private runner has 7."""
+    from scraper.cgroup import memory_ceiling_mb
+
+    assert lane.SEED_MEMORY_MB == memory_ceiling_mb() / 2

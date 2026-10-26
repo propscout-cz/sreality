@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 
+from tests._admin_gate_registry import ADMIN_ONLY_RELATIONS, UNGATED, live_allowlist
 from tests._admin_gate_shape import gate_is_sound
 from tests._tenant_registry import TENANT_TABLES
 from tests._tenant_scope import scoped
@@ -72,196 +73,10 @@ _TENANT_VIEWS: list[str] = [
 # (test_estimates_view_scopes_per_account).
 _MARKET_VIEWS: list[str] = ["property_estimates_public"]
 
-# Base relations + matviews that hold admin-only operational data. Any view (or
-# function an authenticated caller can EXECUTE) that reads one of these must embed
-# is_platform_admin() — enforced generically by
-# test_no_ungated_relation_reads_admin_only_data, so a NEW admin surface is caught
-# without anyone remembering to enumerate it.
-#
-# Deliberately EXCLUDED: listings / properties / images. Those are shared-market
-# data read by many legitimately open views (listings_public, properties_public,
-# browse_*, price_stat_*), so listing them would force a large, churny allowlist
-# and train people to add entries reflexively. The residual blind spot — an
-# admin-only aggregate over ONLY those tables (data_quality_by_source was one,
-# until migration 643 dropped it) — is covered only by the enumerated lists below.
-# Tenant tables are excluded too: they are scoped by RLS + security_invoker, a
-# different mechanism with its own tests.
-#
-# Migration 475 (NEW DEDUP Wave 0) dropped dedup_engine_runs, dedup_scan_state and
-# property_identity_candidates with the legacy decision engine. dedup_vision_bakeoff_results
-# and dedup_decision_feedback stay: FROZEN, not dead — a paid verdict cache and the manual
-# decision notes, still admin-only.
-_ADMIN_ONLY_RELATIONS: list[str] = [
-    "dedup_vision_bakeoff_results",
-    "dedup_decision_feedback", "property_merge_events",
-    # The carry record (migration 589), backend-only like the merge ledger beside it.
-    "property_merge_carries",
-    "listing_detail_queue", "listing_fetch_failures", "detail_queue_completions",
-    "llm_calls", "parsed_url_cache", "pipeline_check_results",
-    # tag_taxonomy + image_tag_labels (migration 442) replace image_training_examples:
-    # the tag ground truth now, and — like dedup_sim.taxonomy_labels / label_proposals
-    # before them, unlike migration 309 — backend-only, with NO `_public` view, so they
-    # are registered here and NOT in _ADMIN_GATED_VIEWS / _SEEDED_ADMIN_VIEWS below.
-    # image_tag_annotations / phash_pair_notes came out alongside
-    # image_training_examples: no app code touches any of the three since the
-    # tag-annotation-matrix cutover (docs/design/tag-annotation-matrix.md), and that
-    # design's Wave C drops the tables. Their still-live `_public` views keep their
-    # structural + behavioural gate assertions below until then.
-    "image_border_cases", "tag_taxonomy", "image_tag_labels",
-    # image_tag_label_events (migration 446): the append-only decision history
-    # behind image_tag_labels, same backend-only posture, no `_public` view.
-    "image_tag_label_events",
-    # tag_candidates (450) + the sealed exam roster (458) — backend-only, no
-    # `_public` view. See the note in test_migration_rls_grants.py.
-    "tag_candidates",
-    "tag_exam_cohorts",
-    # tag_exam_screens (459) + tag_exam_suggestions (461): the screener's guesses
-    # and the sitting pre-answers — machine output about the answer key, backend-
-    # only, no `_public` view.
-    "tag_exam_screens",
-    "tag_exam_suggestions",
-    "tag_exam_members",
-    "tag_exam_sets",
-    "workflow_failures", "workflow_run_health",
-    # Added by migration 340: the audit found scrape_runs_public/recent_scrape_runs()
-    # ungated and browser-readable because this list was seeded from migration 318's
-    # objects rather than a first-principles table inventory.
-    "scrape_runs", "worker_heartbeats",
-    "dedup_funnel_resolutions_archive",
-    # The tagging bake-off store (migration 489, schema dedup_sim): experiment
-    # evidence — runs, encoder arms, their vectors, per-image scores and the
-    # per-head metrics. Backend-only, NO `_public` view; the bake-off page reads
-    # them through the admin-gated API (/new-dedup/tagging-bakeoff/*).
-    "dedup_sim.tag_head_bakeoff_runs",
-    "dedup_sim.tag_head_bakeoff_arms",
-    "dedup_sim.tag_head_bakeoff_vectors",
-    "dedup_sim.tag_head_bakeoff_scores",
-    "dedup_sim.tag_head_bakeoff_metrics",
-    # The versioned tag model (migration 490, PUBLIC schema — it must survive
-    # Wave 8's drop of dedup_sim): the model registry, its per-tag artifacts, and
-    # the per-image winner store. Locked to the service role; the admin pages
-    # read them through the admin-gated API (/new-dedup/tags/*). One deliberate
-    # exception: images_public.tag_head_scores (migration 591, ci-allow-ungated)
-    # publishes the ACTIVE model's per-photo scores for the Browse card cover.
-    "tag_head_models", "tag_head_model_heads", "image_tag_scores",
-    # The Level-0 candidate store (migration 492, schema dedup_sim): parameter
-    # sets, generation runs and the listing-pair evidence rows. Backend-only, NO
-    # `_public` view; the Candidate audit page reads them through the admin-gated
-    # API (/new-dedup/candidates/*).
-    "dedup_sim.candidate_inputs",
-    "dedup_sim.candidate_generations",
-    "dedup_sim.candidate_pairs",
-    # The autonomous dedup engine's own store (migration 528, schema autodedup):
-    # fingerprints, the blocking substrate, pair/cluster grain, the judge queue, the
-    # operator verdicts, the learning tables and the operator-facing iteration log.
-    # Backend-only, NO `_public` view — the browser client is pinned to schema `public`
-    # — so the progress page and the validation UI read them through the admin-gated
-    # API. `autodedup.merges` is the reserved, EMPTY write ledger (the trial is shadow
-    # mode). MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
-    "autodedup.settings",
-    "autodedup.runs",
-    "autodedup.iterations",
-    "autodedup.listing_fp",
-    "autodedup.image_band",
-    "autodedup.phash_pop",
-    "autodedup.exploded_blocks",
-    "autodedup.pairs",
-    "autodedup.judgements",
-    "autodedup.must_not_link",
-    "autodedup.clusters",
-    "autodedup.cluster_members",
-    "autodedup.cluster_conflicts",
-    "autodedup.merges",
-    "autodedup.verdicts",
-    "autodedup.labels",
-    "autodedup.models",
-    "autodedup.eval_samples",
-    "autodedup.resolve_queue",
-    "autodedup.scan_cursor",
-    "autodedup.judge_queue",
-    # A1's apply ledger (migration 558): what the engine merged in production, dry runs and
-    # refusals included. MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
-    "autodedup.applied_merges",
-    # The operator's own Browse merges as engine data (migration 564, E299).
-    # MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
-    "autodedup.operator_merges",
-    # The sold-transaction fetch ledger (migration 542): fetched only where some account
-    # holds a live deal-pipeline card, so its obec set is a projection of tenant state,
-    # not market data. NO `_public` view; the ONE reader is `sold_coverage` below.
-    # MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
-    "sold_transaction_fetches",
-    # Auth identities (migration 610). The one reader, account_email(), is not executable
-    # by `authenticated`, so this arm never lists it; share_party_emails() reaches it by
-    # call, not by name. MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
-    "auth.users",
-    # The health check registry and the incident table (migrations 619 / 462): the browser
-    # reads both only through the admin-gated pipeline_checks_public.
-    # MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
-    "health_checks",
-    "ops_incidents",
-    # The push device registry and its delivery ledger (migration 654): service role only,
-    # no `_public` view. MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
-    "push_subscriptions",
-    "notification_deliveries",
-    # The scheduled-jobs lease and its run history (migration 675): service role only, no `_public` view.
-    # MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
-    "scheduled_jobs",
-    "job_runs",
-]
-
-# Relations that read the above but are legitimately reachable without the gate.
-# EVERY entry needs a comment justifying it — an unexplained name here is how this
-# class of bug comes back.
-_ADMIN_GATE_ALLOWLIST: list[str] = [
-    # location_jobs (migration 675): the TEMPORARY alias of scheduled_jobs that keeps the deployment predating the
-    # rename on its lease until the merge; it drops with the dead lease columns. Safe by its ACL, like
-    # llm_cost_hour_union below: security invoker over an RLS table, every privilege revoked from public, anon and
-    # authenticated, asserted by tests/scraper/test_job_lease_live.py::test_no_browser_role_reaches_the_lease_tables.
-    "location_jobs",
-    # The internal union source behind llm_cost_{daily,hourly}_public (migration 437).
-    # Verified live at merge: relacl is {postgres,service_role} only -- no anon, no
-    # authenticated, no PUBLIC -- and has_table_privilege is false for BOTH browser
-    # roles, so it is unreachable over supabase-js. It is ungated ON PURPOSE: the gate
-    # belongs in the OUTERMOST scope of each public wrapper, where is_platform_admin()
-    # (STABLE, zero-arg) renders as a One-Time Filter on a Result node above the Append
-    # and short-circuits the whole plan. Pushed into the union's branches it would be
-    # evaluated per branch and would stop hoisting; it would also silently couple
-    # llm_cost_today_usd() -- SECURITY INVOKER, and the API's spend guard -- to the
-    # admin gate, which is exactly the kind of invisible dependency that makes a guard
-    # go deaf without raising.
-    #
-    # NOTE the asymmetry that put it here: this test's FUNCTION arm filters candidates
-    # by has_function_privilege('authenticated', ...), but its VIEW arm does not filter
-    # by has_table_privilege -- so a zero-grant view is still flagged. That is defensible
-    # conservatism rather than a bug (pg_default_acl grants `authenticated=r` on objects
-    # postgres creates in public, so a recreated view can silently acquire a grant), and
-    # it is deliberately NOT "fixed" here: loosening a security rail to make new code
-    # pass is how a real exposure ships. The reason this entry is safe is the ACL, not
-    # the annotation -- so the ACL is asserted by a rail rather than left to review:
-    # tests/test_llm_cost_rollup_indexable.py::test_rollups_are_admin_only_not_anon_readable
-    # fails the moment either browser role gains SELECT on it. Do not delete that rail
-    # without deleting this entry.
-    "llm_cost_hour_union",
-    # sold_coverage (migration 545) reads sold_transaction_fetches and IS executable by
-    # `authenticated`, deliberately and without the admin gate: the operator's own
-    # listing page has to be able to say when we last looked here. It is narrow by
-    # construction — SECURITY DEFINER, a point in, four facts about the ONE municipality
-    # containing that point out. It never returns a cell list, a bbox, our `error` text
-    # or `pages`, so it cannot be walked to enumerate which towns are being worked.
-    "sold_coverage",
-    # images_public (migration 591) reads image_tag_scores + tag_head_models and IS
-    # readable by `authenticated`, deliberately and without the admin gate: every
-    # signed-in Browse user's card cover is chosen by the active tag model's scores
-    # (operator ruling 2026-10-07). It publishes only a photo's per-head scores and,
-    # implicitly, which model is active — market facts about a photo, the same class
-    # as the CLIP tag columns this view has carried since migration 236. It never
-    # exposes a label, a labeller, model artifacts or metrics.
-    "images_public",
-]
-
-# The user-state tables, from the one registry both tenancy gates read. A list, because
-# psycopg binds a list (not a tuple) as the array `= ANY(%s)` takes.
+# The user-state tables and the admin-only relations, each from the one registry both
+# gates read. Lists, because psycopg binds a list (not a tuple) as the array `= ANY(%s)` takes.
 _TENANT_TABLES: list[str] = list(TENANT_TABLES)
+_ADMIN_ONLY_RELATIONS: list[str] = list(ADMIN_ONLY_RELATIONS)
 
 # Amendment A6 (Phase 0): the broker-directory PII surfaces stay dark to BOTH
 # browser roles; the SPA reads them only through the identity-gated, PII-masking
@@ -801,7 +616,7 @@ def test_llm_calls_scoped_through_owning_run(
     through the owning run's account (mirroring estimation_trace_payloads/
     estimation_feedback, migration 292) rather than granting a blanket read --
     llm_calls itself stays account_id-less by design. It also stays listed in
-    _ADMIN_ONLY_RELATIONS above: llm_cost_daily_public/llm_cost_hourly_public
+    ADMIN_ONLY_RELATIONS (tests/_admin_gate_registry.py): llm_cost_daily_public/llm_cost_hourly_public
     are aggregate admin views over this table and must keep their own gate;
     this policy only opens a per-owning-run read, not a blanket one."""
     ca, cb = seeded_llm_calls_rows["a"], seeded_llm_calls_rows["b"]
@@ -1112,13 +927,14 @@ def test_admin_ops_views_embed_is_platform_admin(svc: Any) -> None:
 def test_no_ungated_relation_reads_admin_only_data(svc: Any) -> None:
     """The standing gate: any view, or any function an authenticated caller can
     EXECUTE, that reads an admin-only relation must carry a SOUND is_platform_admin()
-    gate or be explicitly allowlisted. Unlike the enumerated lists above this
-    generalises -- admin surface #27 is caught without anyone remembering to register
-    it, which is exactly how scrape_runs_public slipped through (migration 340).
+    gate or be registered in tests/_admin_gate_registry.py. Unlike the enumerated lists
+    above this generalises -- admin surface #27 is caught without anyone remembering to
+    register it, which is exactly how scrape_runs_public slipped through (migration 340).
     Soundness is judged in Python by gate_is_sound rather than by a SQL substring
     match: `where x = y or is_platform_admin()` contains the call but gates nothing.
-    listings/properties/images are deliberately absent from _ADMIN_ONLY_RELATIONS --
+    listings/properties/images are deliberately absent from ADMIN_ONLY_RELATIONS --
     shared-market data behind many legitimately open views; see that list's comment."""
+    waived = live_allowlist()
     with svc.cursor() as cur:
         cur.execute(
             "SELECT c.relname, 'view', pg_get_viewdef(c.oid, true) FROM pg_class c "
@@ -1140,13 +956,49 @@ def test_no_ungated_relation_reads_admin_only_data(svc: Any) -> None:
     ungated = [
         f"{kind} {name}"
         for name, kind, definition in candidates
-        if name not in _ADMIN_GATE_ALLOWLIST and not gate_is_sound(definition, kind)
+        if name not in waived and not gate_is_sound(definition, kind)
     ]
     assert ungated == [], (
         f"relation(s) read admin-only data without a sound is_platform_admin() gate, "
         f"so any signed-in non-admin can read them over supabase-js (SPA route-gating "
-        f"is not a security boundary). Add the gate, or add an entry to "
-        f"_ADMIN_GATE_ALLOWLIST with a comment justifying why it is safe: {ungated}"
+        f"is not a security boundary). Add the gate, or register the object in "
+        f"tests/_admin_gate_registry.py UNGATED with its guard and why: {ungated}"
+    )
+
+
+def test_acl_guarded_ungated_objects_stay_dark(svc: Any) -> None:
+    """Each live UNGATED entry whose guard is its ACL exists and neither browser role can
+    SELECT or EXECUTE it: the sweep above waives such a view by name, so the ACL is all
+    that keeps it from the browser."""
+    problems: list[str] = []
+    with svc.cursor() as cur:
+        for name, entry in sorted(UNGATED.items()):
+            if entry.guard != "acl" or entry.dropped_in:
+                continue
+            if entry.kind == "function":
+                cur.execute(
+                    "SELECT has_function_privilege('anon', p.oid, 'EXECUTE'), "
+                    "       has_function_privilege('authenticated', p.oid, 'EXECUTE') "
+                    "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+                    "WHERE n.nspname = 'public' AND p.proname = %s",
+                    (name,),
+                )
+            else:
+                cur.execute(
+                    "SELECT has_table_privilege('anon', c.oid, 'SELECT'), "
+                    "       has_table_privilege('authenticated', c.oid, 'SELECT') "
+                    "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE n.nspname = 'public' AND c.relname = %s",
+                    (name,),
+                )
+            rows = cur.fetchall()
+            if not rows:
+                problems.append(f"{entry.kind} {name} is missing: record its drop as dropped_in")
+            for role, reaches in (("anon", any(r[0] for r in rows)), ("authenticated", any(r[1] for r in rows))):
+                if reaches:
+                    problems.append(f"{role} reaches {entry.kind} {name}")
+    assert problems == [], (
+        f"tests/_admin_gate_registry.py UNGATED says these objects are guarded by their ACL: {problems}"
     )
 
 

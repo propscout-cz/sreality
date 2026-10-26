@@ -437,8 +437,9 @@ API service:
 - `CORS_ALLOW_ORIGINS` — CSV of allowed origins; must include the Chrome extension's
   `chrome-extension://<id>` origin and the SPA origin.
 - `STUCK_ROW_SWEEP_DISABLED`, `HEALTH_TELLER_DISABLED` (optional flags) — disable the startup sweep
-  of stuck estimation/building runs, and the system-alerts loop (the health teller, the API's only
-  background loop), respectively. Default: both enabled. `HEALTH_TELLER_DISABLED` replaced
+  of stuck estimation/building/scrape runs (the scrape_runs cutoff, `api.main.STUCK_RUN_CUTOFF_MINUTES`, is
+  held past the longest walk by `tests/scraper/test_job_registry.py`), and the system-alerts loop (the
+  health teller, the API's only background loop), respectively. Default: both enabled. `HEALTH_TELLER_DISABLED` replaced
   `NOTIFICATIONS_MATCHER_DISABLED` in W2b, with no alias (the old name, if still set anywhere, does
   nothing); the watchdog producers run on the realtime worker's `notifications` lane alone.
 
@@ -460,8 +461,8 @@ the Resend email + Telegram transports, the outbox, `ChannelClient`, `POST /webh
 
 Scraper orchestration:
 - `SREALITY_COUNTRY_ID` (optional, default `112` = Czech Republic).
-- `SCRAPE_CHAIN_TOKEN` (optional fine-grained PAT: this repo, Actions read+write) — lets a
-  workflow re-dispatch itself for tighter-than-cron cadence (the scrape drains that did are deleted); no-op without it.
+- `SCRAPE_CHAIN_TOKEN` (fine-grained PAT) — no workflow reads it since #2013 (price stats chains on its job's own
+  `GITHUB_TOKEN`); only the worker's count-probe dispatch falls back to it, until #2015 deletes that lane and the secret.
 - `GITHUB_ACTOR` — CI context, used for curated-cities upload attribution.
 
 NEW DEDUP (docs/design/new-dedup/PROGRAM.md, Wave 1):

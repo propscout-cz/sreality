@@ -19,7 +19,8 @@ from types import FrameType
 LOG = logging.getLogger(__name__)
 
 EVENT = threading.Event()
-# 128 + SIGTERM: what a shell reports for a process the stop signal ended, and what the job runner reads as interrupted.
+# 128 + SIGTERM: what a shell reports for a process the stop signal ended. The job runner reads it as interrupted, or as
+# timeout when the stop was its own at the job's timeout_s (an interrupted run is due again at once).
 EXIT_CODE = 143
 _installed = False
 _main_thread_in_request = False

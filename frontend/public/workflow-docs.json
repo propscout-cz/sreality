@@ -1106,7 +1106,7 @@
     {
       "filename": "docs-budget.yml",
       "name": "Docs budget",
-      "description": "Enforces the always-loaded context budgets from CLAUDE.md's Context-discipline rule (line caps on CLAUDE.md/ROADMAP.md/skill bodies, a word cap on skill frontmatter descriptions, and routing completeness — every .claude/skills/ dir must appear in CLAUDE.md's \"Where the detail lives\" table) on any PR touching those paths, and warns (non-blocking) when a PR changes code a skill documents without touching that skill or when a doc line it adds names a code symbol that exists nowhere in the code trees.",
+      "description": "Enforces the always-loaded context budgets from CLAUDE.md's Context-discipline rule (byte caps on CLAUDE.md/ROADMAP.md/skill bodies that only ratchet down, judged against the PR's base; a word cap on skill frontmatter descriptions; routing completeness — every .claude/skills/ dir must appear in CLAUDE.md's \"Where the detail lives\" table) on every PR, and warns (non-blocking) when a PR changes code a skill documents without touching that skill or when a doc line it adds names a code symbol that exists nowhere in the code trees.",
       "manual": false,
       "schedules": [],
       "onPush": false,
@@ -1931,6 +1931,10 @@
         }
       ],
       "secrets": [
+        "R2_ACCESS_KEY_ID",
+        "R2_ACCOUNT_ID",
+        "R2_BUCKET_NAME",
+        "R2_SECRET_ACCESS_KEY",
         "SUPABASE_DB_SESSION_URL",
         "SUPABASE_DB_URL"
       ],
@@ -2819,7 +2823,6 @@
         }
       ],
       "secrets": [
-        "SCRAPE_CHAIN_TOKEN",
         "SREALITY_LOGIN_EMAIL",
         "SREALITY_LOGIN_PASSWORD",
         "SREALITY_SESSION_COOKIE",
@@ -2828,7 +2831,7 @@
       "concurrencyGroup": "price-stats",
       "cancelInProgress": false,
       "timeoutMinutes": 60,
-      "permissions": "contents: read",
+      "permissions": "contents: read, actions: write",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/scrape_price_stats.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/scrape_price_stats.yml"
     },
