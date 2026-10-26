@@ -466,6 +466,7 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
             "ev_images": p["ev_images"], "ev_phash": p["ev_phash"],
             "ev_clip": p["ev_clip"], "ev_tags": p["ev_tags"],
             "ev_complete": p["ev_complete"], "dd": p["dd"],
+            "source": p["source"], "area_basis": p["area_basis"], "block_key": p["block_key"],
             "first_decided_at": held.get("first_decided_at") or db.now,
             "updated_at": db.now,
         }
@@ -508,7 +509,8 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
                         row.get("ev_images"), row.get("ev_phash"), row.get("ev_clip"),
                         row.get("ev_tags"),
                         stamp.timestamp() if hasattr(stamp, "timestamp") else stamp,
-                        row.get("dd")))
+                        row.get("dd"), row.get("source"), row.get("area_basis"),
+                        row.get("block_key")))
         return out
     if sql == S.RT_KNOWN_SQL:
         return [(int(i),) for i in p["ids"] if (gen, int(i)) in db.rt_fp]
@@ -1025,8 +1027,18 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
         slice_ids = sorted(i for g, i in db.rt_fp
                            if g == gen and i > int(p["after_id"]))[:int(p["limit"])]
         departed = [i for i in slice_ids if not _in_scope(db, i, p)]
+        # A: an in-scope row with a location row whose stored key is not today's block key.
+        relocated = []
+        for i in slice_ids:
+            stored, place = db.rt_fp[(gen, i)].get("block_key"), db.locations.get(i)
+            if stored is None or place is None or not _in_scope(db, i, p):
+                continue
+            today = (f"c{place['cast_obce_kod']}" if place.get("cast_obce_kod") is not None
+                     else f"o{place['obec_kod']}" if place.get("obec_kod") is not None else "")
+            if stored != today:
+                relocated.append(i)
         return [(max(slice_ids) if slice_ids else int(p["after_id"]),
-                 len(slice_ids), departed)]
+                 len(slice_ids), departed, relocated)]
     # The sixth feed (W9d-3), as W9e pays for it (R3): the wide block walk on `public` is a
     # cadence-driven REFRESH of the snapshot, and an ordinary pass claims out of the snapshot.
     # E940: one PAGE, the keyset after the block's cursor.

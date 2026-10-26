@@ -121,6 +121,7 @@ def _same(whole: Calibration, streamed: Calibration) -> None:
 SETTINGS = {
     "defaults": replace(Settings(), max_block_size=3),
     "w31": replace(named_settings("w31"), max_block_size=4),
+    "w34": replace(named_settings("w34"), max_block_size=4),
 }
 
 

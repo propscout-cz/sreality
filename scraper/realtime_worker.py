@@ -2295,8 +2295,9 @@ def _autodedup_run(started: float) -> dict[str, Any]:
             if not _AUTODEDUP_STORE_WARNED:
                 _AUTODEDUP_STORE_WARNED = True
                 LOG.warning(
-                    "AUTODEDUP: the autodedup real-time store (migrations 539/540/596/604/616) is "
-                    "absent on this database; the lane skips every tick")
+                    "AUTODEDUP: the autodedup real-time store (migrations "
+                    "539/540/596/604/616/677) is absent on this database; the lane skips every "
+                    "tick")
             return _autodedup_outcome(started, skipped="store_absent")
         _AUTODEDUP_STORE_WARNED = False
         # Read every pass (E948b): a resize that reaches a running process is seen by its

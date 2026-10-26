@@ -129,12 +129,18 @@ def stream_live(control: Mapping[str, Any], generation: str = GENERATION) -> boo
 _SEP: str = "\x1f"
 # E960: the dirty listings whose posted keys a pass holds at once while it retrieves them.
 KEY_CHUNK: int = 5000
-# The probes whose tokens lead with a band number (`simhash_bands`): text, and phash per anchor.
+# The probes whose tokens carry a band number (`simhash_bands`): text, and phash per anchor.
 _BANDED: frozenset[str] = frozenset({"text", "phash"})
 
 
 def key_token(key: Sequence[Any]) -> str:
     return _SEP.join("" if part is None else str(part) for part in key)
+
+
+def band_of(token: str) -> int:
+    """The band number of a text or phash token: its second-last part, whether or not
+    `content_key_town_grain` put the town before it."""
+    return int(token.rsplit(_SEP, 2)[-2])
 
 
 def _cut_key(cat_group: str | None, category_type: str | None) -> str:
@@ -143,7 +149,7 @@ def _cut_key(cat_group: str | None, category_type: str | None) -> str:
 
 @dataclass(slots=True, frozen=True)
 class GuardRow:
-    """The five columns `pair_veto` reads, served from `listing_fp` without a gallery fetch.
+    """The columns `pair_veto` reads, served from `rt_fp` without a gallery fetch.
 
     Satisfies `guards.GuardSide` structurally, which is why the rule floor can refuse a
     candidate before the fan-out cap spends a slot on it (E17) without building its
@@ -155,11 +161,14 @@ class GuardRow:
     area_m2: float | None
     disposition: str | None
     floor: int | None
+    # NULL on a row written before migration 677: the basis exemption does not fire for it.
+    source: str | None = None
+    area_basis: str | None = None
 
 
 def guard_row(fp: Fingerprint) -> GuardRow:
     return GuardRow(fp.listing_id, fp.category_main, fp.category_type, fp.area_m2,
-                    fp.disposition, fp.floor)
+                    fp.disposition, fp.floor, fp.source, fp.area_basis)
 
 
 @dataclass(slots=True, frozen=True)
@@ -267,6 +276,9 @@ class FpRow:
     # The listing's `decision_digest` as the lane last read its facts (E960): the reject ledger's
     # key for a side the pass does not read. Empty on a row written before migration 604.
     dd: str = ""
+    # The `block_key` its postings were keyed under: the lane's drift sweep re-claims the row
+    # when today's location gives another (A). None on a row written before migration 677.
+    block_key: str | None = None
 
     @property
     def cell(self) -> tuple[str, str]:
@@ -481,7 +493,7 @@ class Keyer:
         `phash` over two anchor images or more, whose bands follow the images, which no posting
         keeps (`retrieve_posted` reads that probe loose)."""
         posted = sorted(set(posted), key=lambda key: (
-            key[0], int(key[1].partition(_SEP)[0]) if key[0] in _BANDED else 0, key[1]))
+            key[0], band_of(key[1]) if key[0] in _BANDED else 0, key[1]))
         quarter = any(probe == QUARTER_PROBE for probe, _token in posted)
         out: list[tuple[str, str]] = []
         for probe, token in posted:
@@ -680,7 +692,7 @@ def retrieve_posted(
     rule floor would have let in — the one case the lost order of its bands can reach — and the
     caller then reads its facts and `retrieve`s."""
     keys = keyer.probe_keys_of(posted)
-    bands = [token.partition(_SEP)[0] for probe, token in keys if probe == "phash"]
+    bands = [band_of(token) for probe, token in keys if probe == "phash"]
     return _fill(side.listing_id, side, keys, keyer, store, guards, settings, vetoed,
                  loose="phash" if len(bands) != len(set(bands)) else None)
 
@@ -1376,7 +1388,8 @@ def run_pass(
                   # The FIRST decision's stamp is carried, never restamped: the evidence
                   # horizon is measured from it, and a refresh that reset it would hold a
                   # merge for ever (E92). The store coalesces it on the way down too.
-                  first_decided_at=old.first_decided_at if old is not None else None, dd=dd),
+                  first_decided_at=old.first_decided_at if old is not None else None, dd=dd,
+                  block_key=fp.block_key),
             new_keys, old_keys,
         )
         view.bump_cell(listing)

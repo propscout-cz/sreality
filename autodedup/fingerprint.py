@@ -184,6 +184,7 @@ class Fingerprint:
     inactive_at: str | None = None
     is_active: bool = True
     has_text: bool = False
+    area_basis: str | None = None
 
 
 def _anchor_sort_key(image: Image) -> tuple[float, int, int]:
@@ -280,6 +281,7 @@ def build_fingerprint(
         inactive_at=listing.inactive_at,
         is_active=listing.is_active,
         has_text=has_text,
+        area_basis=listing.area_basis,
     )
 
 

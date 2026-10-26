@@ -47,6 +47,12 @@ select to_regclass('autodedup.fp_key')         is not null
                 where attrelid = to_regclass('autodedup.rt_fp')
                   and attname = 'dd' and not attisdropped)
    and exists (select 1 from pg_attribute
+                where attrelid = to_regclass('autodedup.rt_fp')
+                  and attname = 'area_basis' and not attisdropped)
+   and exists (select 1 from pg_attribute
+                where attrelid = to_regclass('autodedup.rt_fp')
+                  and attname = 'block_key' and not attisdropped)
+   and exists (select 1 from pg_attribute
                 where attrelid = to_regclass('autodedup.rt_calibration')
                   and attname = 'payload_zlib' and not attisdropped) as present
 """
@@ -334,13 +340,31 @@ select coalesce(max(f.listing_id), %(after_id)s::bigint) as slice_max,
 # half-indexed — a listing whose postings are stale is a listing every neighbour retrieves
 # wrongly. Under a scope the store is small enough that one slice covers it whole; the cursor
 # wraps when the slice runs short, exactly as the revive sweep's does.
+#
+# A (research experiments/absent_attribution.md M3, V3): a geocoder move INSIDE the scope is the
+# same stale posting, and no other feed sees it — an inactive advert appends no snapshot, so it
+# kept the block keys of its first claim (3,105 rows on 2026-10-25). The same slice returns the
+# in-scope rows whose stored `block_key` is not today's (`fingerprint.block_key_of` over
+# `listing_location`), for a re-claim. The KEY is compared, never `resolved_at`: a re-resolution
+# that lands on the same block moves nothing, and a row written before migration 677 (no key)
+# is never returned. Under `all` the scope arm of the join holds every location, which leaves
+# `departed` empty as before.
 RT_SCOPE_DRIFT_SQL = """
 select coalesce(max(f.listing_id), %(after_id)s::bigint) as slice_max,
        count(*)                                          as slice_size,
        coalesce(array_agg(f.listing_id order by f.listing_id)
                 filter (where not %(all_scope)s::boolean and ll.listing_id is null),
-                '{}'::bigint[])                          as departed
-  from (select listing_id
+                '{}'::bigint[])                          as departed,
+       coalesce(array_agg(f.listing_id order by f.listing_id)
+                filter (where ll.listing_id is not null
+                          and f.block_key is not null
+                          and f.block_key <> case
+                                when ll.cast_obce_kod is not null
+                                  then 'c' || ll.cast_obce_kod::text
+                                when ll.obec_kod is not null then 'o' || ll.obec_kod::text
+                                else '' end),
+                '{}'::bigint[])                          as relocated
+  from (select listing_id, block_key
           from autodedup.rt_fp
          where generation = %(generation)s::text
            and listing_id > %(after_id)s::bigint
@@ -348,7 +372,8 @@ select coalesce(max(f.listing_id), %(after_id)s::bigint) as slice_max,
          limit %(limit)s) f
   left join public.listing_location ll
          on ll.listing_id = f.listing_id
-        and (ll.obec_kod = any(%(obec)s::bigint[])
+        and (%(all_scope)s::boolean
+             or ll.obec_kod = any(%(obec)s::bigint[])
              or ll.cast_obce_kod = any(%(cast_obce)s::bigint[])
              or ll.okres_kod = any(%(okres)s::bigint[]))
 """
@@ -933,7 +958,7 @@ on conflict (generation, probe, key_token, listing_id) do nothing
 # `autodedup.rt_fp`, NOT migration 528's `listing_fp`: that table is keyed on `listing_id`
 # alone so it cannot hold two generations, and nothing has ever written it. This one is
 # generation-scoped like every other row of this lane and carries exactly what the lane reads
-# without a fact fetch — the five guard columns (E17's rule floor), the re-score digest, the
+# without a fact fetch — the guard columns (E17's rule floor), the re-score digest, the
 # census cell the listing is counted in (so a MOVE unbumps the cell it left, not the one it
 # arrived in) and the activity flag the revive sweep anti-joins.
 # `first_decided_at` is COALESCED, never overwritten (E92, migration 540): the evidence
@@ -945,14 +970,14 @@ RT_FP_UPSERT_SQL = """
 insert into autodedup.rt_fp (
     generation, listing_id, category_main, category_type, area_m2, disposition, floor,
     fp_digest, cell_key, cell_group, is_active, ev_images, ev_phash, ev_clip, ev_tags,
-    ev_complete, dd, first_decided_at, updated_at
+    ev_complete, dd, source, area_basis, block_key, first_decided_at, updated_at
 ) values (
     %(generation)s::text, %(listing_id)s::bigint, %(category_main)s::text,
     %(category_type)s::text, %(area_m2)s::double precision, %(disposition)s::text,
     %(floor)s::integer, %(fp_digest)s::text, %(cell_key)s::text, %(cell_group)s::text,
     %(is_active)s::boolean, %(ev_images)s::integer, %(ev_phash)s::integer,
     %(ev_clip)s::integer, %(ev_tags)s::integer, %(ev_complete)s::boolean, %(dd)s::text,
-    now(), now()
+    %(source)s::text, %(area_basis)s::text, %(block_key)s::text, now(), now()
 )
 on conflict (generation, listing_id) do update set
     category_main    = excluded.category_main,
@@ -970,6 +995,9 @@ on conflict (generation, listing_id) do update set
     ev_tags          = excluded.ev_tags,
     ev_complete      = excluded.ev_complete,
     dd               = excluded.dd,
+    source           = excluded.source,
+    area_basis       = excluded.area_basis,
+    block_key        = excluded.block_key,
     first_decided_at = coalesce(autodedup.rt_fp.first_decided_at,
                                 excluded.first_decided_at),
     updated_at       = now()
@@ -1021,7 +1049,7 @@ select f.listing_id, f.category_main, f.category_type, f.area_m2, f.disposition,
        f.fp_digest, f.cell_key, f.cell_group, f.is_active,
        f.ev_images, f.ev_phash, f.ev_clip, f.ev_tags,
        extract(epoch from f.first_decided_at)::double precision as first_decided_epoch,
-       f.dd
+       f.dd, f.source, f.area_basis, f.block_key
   from autodedup.rt_fp f
  where f.generation = %(generation)s::text
    and f.listing_id = any(%(ids)s::bigint[])

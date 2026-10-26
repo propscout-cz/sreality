@@ -7,7 +7,8 @@ Two asymmetries are deliberate. A listing is INDEXED under its exact area band a
 decile but PROBES the ±1 neighbourhood, so a ±1 tolerance costs three lookups instead of
 widening every bucket (indexing all three would silently pair bands two apart). And K4/K5
 carry no location at all (E15): the engine's reach must not be capped by the location
-program's 10% geo-blockable share.
+program's 10% geo-blockable share. `content_key_town_grain` is the exception: over a scope of
+344k ads a location-free content key explodes, so the dial keys it per town (`content_town`).
 
 Hard guards (E2-E5) are applied INSIDE retrieval, before the fan-out cap spends a slot: a
 candidate the rule floor will veto anyway must not displace the one true duplicate (E17 says
@@ -65,6 +66,17 @@ def probes_town_key(fp: Fingerprint) -> bool:
     return not (fp.obec_kod in SPLIT_CITY_OBEC_KODS and fp.cast_obce_kod is not None)
 
 
+def content_town(fp: Fingerprint, settings: Settings) -> tuple[int, ...]:
+    """The prefix of the text and phash keys: the ad's town under `content_key_town_grain`, so a
+    content key holds one town's ads and not the whole scope's (2,548 keys over 200 postings
+    on 2026-10-25, 79 % of them text or phash, all exploded). The town, never the quarter: an
+    unknown-quarter Praha ad still meets every quarter, as on the town probe. An ad with no
+    town keeps the bare key and so meets only other town-less ads on it."""
+    if settings.content_key_town_grain and fp.obec_kod is not None:
+        return (fp.obec_kod,)
+    return ()
+
+
 def decile_cuts(prices: list[float]) -> list[float]:
     """K3's nine decile cuts over one (cat_group, category_type) cohort's prices, which it
     sorts in place."""
@@ -92,11 +104,12 @@ def posting_keys(fp: Fingerprint, settings: Settings, decile: Any) -> list[tuple
     out: list[tuple[str, Any]] = []
     if fp.obec_kod is not None and fp.street_key and fp.house_number:
         out.append(("addr", (fp.obec_kod, fp.street_key, fp.house_number)))
+    town = content_town(fp, settings)
     for band_no, band_val, _phash in fp.anchor_bands:
-        out.append(("phash", (band_no, band_val)))
+        out.append(("phash", (*town, band_no, band_val)))
     if fp.has_text:
         for band_no, band_val in fp.desc_bands:
-            out.append(("text", (band_no, band_val)))
+            out.append(("text", (*town, band_no, band_val)))
     if fp.broker_key:
         out.append(("broker", (fp.broker_key, fp.cat_group, fp.category_type, decile)))
     if fp.block_key and fp.disposition:
