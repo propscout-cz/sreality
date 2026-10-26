@@ -18,7 +18,7 @@ HOUR, DAY = 3600, 86400
 RUNNER_MAX_CONCURRENT = 3
 REPLICA_MEMORY_MB, CO_TENANCY_SHARE = 8192, 0.70
 # The runner's SIGKILL grace after its SIGTERM stays under this; the API's stuck-run cutoff exceeds the longest
-# walk by it (tests/scraper/test_job_registry.py).
+# walk by it, and the DB-heavy hour census counts it (tests/scraper/test_job_registry.py).
 STUCK_RUN_GRACE_S = 600
 LOCATION_HEAVY = "location-heavy"
 WALK_PREFIX = "walk_"
