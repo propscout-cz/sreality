@@ -1117,7 +1117,8 @@ into the Python tree or vice versa.
 **`.railway/` belongs to no territory.** It is operator-applied deploy configuration: `.railway/railway.ts` plus a
 Node manifest (`package.json` + lockfile) that serves only the pinned Railway CLI and SDK. Python never imports it, no
 image copies it (the root Dockerfile COPYs named trees; `.dockerignore` lists it too), and CI never builds it; only the
-text guards in `tests/test_railway_config.py` read it. Edits follow the subsection below.
+text guards that import `tests/_railway_iac.py` read it (`tests/test_railway_config.py`, and the worker's E941/E949 tests
+in `tests/scraper/test_realtime_worker_autodedup.py`). Edits follow the subsection below.
 
 ### Railway service configuration
 
@@ -1130,7 +1131,8 @@ on 2026-12-01, and until then a file of that name would override the applied set
 - **Deploys never read it.** A change ships as a PR, then the operator applies it with `scripts/railway_iac_wizard.sh`
   (a pinned plan, an interactive apply) inside a merge window, the worker's in an e9 window with the autodedup brake on,
   then `railway config plan --detailed-exit-code` must exit 0 (the wizard's drift mode). A `.railway/`-only merge still
-  redeploys the API and the worker, which have no watch patterns (#1857).
+  redeploys the API and the worker, which have no watch patterns (#1857). The wizard's modes are M0's (preflight,
+  window1, window2, drift): the first follow-up IaC PR adds a general apply mode from its pinned-plan helpers.
 - **Every variable NAME is declared,** each `preserve()` (values stay in Railway): add a name in the same PR as the
   secret; removing one is a destructive delete the apply asks to confirm. `EXTRAS` (API and worker: `api`) is the root
   Dockerfile's build argument: a service variable reaches the ARG of its name, and the build log echoes it.
@@ -1143,8 +1145,9 @@ on 2026-12-01, and until then a file of that name would override the applied set
   unwrapped `$PORT` never expands (8a362a0ea).
 - **Never change a service setting or a variable name in the dashboard or with Railway MCP write tools**, except as
   the emergency undo U-2, and fold any such change back into the file: the next plan shows it as drift.
-- **Adding a service** is one more `service(...)` in its project's definition (#2075's agent-worker in `API`; #2025's
-  runner's project is its own ruling) and one more row in the project-map test; removing one deletes it.
+- **Adding a service** is one more `service(...)` in its project's definition (#2075's agent-worker in `API`); a new
+  Railway project (where #2025's runner lives is its own ruling) also needs a `PROJECTS` entry and a row in the
+  project-map test. Removing a service deletes it.
 
 Undo paths (U-1 and U-2 rehearsed on vite in #2060's window 1; evidence on #2060):
 - **U-1, the lasting path, for any IaC change:** `git revert` it in a PR, merge in a window, then plan (it shows the

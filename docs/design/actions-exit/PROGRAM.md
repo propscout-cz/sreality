@@ -185,11 +185,10 @@ One migration (rename + alias view, the new columns, `resource`, `job_runs` with
 per-worker liveness subjects); `scraper/job_lease.py` (moved + claim/renew/fence/release), `scraper/jobs.py`,
 `scraper/job_runner.py`, the `job/<name>` SQL arm, the request-only `run_job.yml`; the `job-runner` service
 added to `.railway/railway.ts`. **Scope change 2026-10-25 (operator ruling Q24, agent-platform grill):** the
-move of the three existing services to that file, and the deletion of the three `railway*.json`, is the
-agent-platform programme's M0 (PR #2004, `MVP.md` § M0, due within the week, hard cutoff 2026-12-01); #2025
-reuses the file and lands it for all four only if M0 has not landed by then. M0 (#2060) ships the file
-operator-applied with `scripts/railway_iac_wizard.sh` and no CI recipe (operator ruling R2, 2026-10-26): the
-services are three Railway projects, so a change is one plan per project, and #2025 decides plan/apply in CI. First jobs: stale_images, rent_map, map_overlays. Each later PR adds registry lines and deletes the matching
+move of the three existing services to that file (operator-applied in windows, no CI recipe: ruling R2, #2060), and the
+deletion of the three `railway*.json`, is the agent-platform programme's M0 (PR #2004, `MVP.md` § M0, due
+within the week, hard cutoff 2026-12-01); #2025 reuses the file and lands it for all four only if M0 has not
+landed by then. First jobs: stale_images, rent_map, map_overlays. Each later PR adds registry lines and deletes the matching
 YAMLs; a new row's first slot comes after `now() + timeout_s`; rollback is a revert.
 **Gate (7 days):** every job cell green; ≥ 3 deploys survived with interrupted runs re-claimed within 1 min;
 one request run, one pause with expiry and one self-fence drill exercised; 0 unique-index violations, 0
@@ -265,7 +264,7 @@ Added: the job-runner service (two replicas) and ~5 Dockerfile lines (one ARG); 
 `scheduled_jobs`; `job_runs`; `scraper/jobs.py` (~60), `scraper/job_runner.py` (~220), `scraper/job_lease.py`
 (moved, ~+60); the `job/<name>` SQL arm (~60); the W1 seams (~60); `run_job.yml` (~30, request-only);
 `.railway/railway.ts` (~80); two code-only per-portal walk values; ~250 lines of tests; one `job-runner`
-heartbeat row per replica; one pg_cron history cleanup; a LICENSE notice.
+heartbeat row per replica; one pg_cron history cleanup; a LICENSE notice (no `RAILWAY_TOKEN` in M0; CI tokens are #2025's call).
 
 Net: workflow files 84 → ~38 (31 if R6a passes in full); live GitHub schedules 34 → 2; production schedulers
 2 → 1; Railway services 3 → 4; Railway config files 3 → 1; worker lanes 17 → 16; roughly −8,500 to −9,000 lines.
