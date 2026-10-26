@@ -1209,7 +1209,7 @@ on 2026-12-01, and until then a file of that name would override the applied set
   reuses torch and the weights. The build then loads the model with the hub offline and asserts CPU torch, so a
   missing file fails the build and the old deployment stays live. `CI: runner image`
   (`.github/workflows/runner_image.yml`) builds it on every PR that changes an image input (the wizard's
-  `IMAGE_INPUTS`, the same list).
+  `IMAGE_INPUTS`, the same list, which includes the scraper files the proof imports, held to its imports by a test).
 - **The runner is cut only by a new deployment:** a Redeploy of the ACTIVE deployment (same image and configuration)
   or Deploy Latest Commit. Restart restarts the process inside its container, and no doc says it honours
   `drainingSeconds`, so it is never a runner procedure. **Never boot an older runner image:** no dashboard Rollback,

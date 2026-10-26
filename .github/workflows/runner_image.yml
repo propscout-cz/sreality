@@ -3,8 +3,9 @@ name: "CI: runner image"
 # Builds the job-runner image, the root Dockerfile with EXTRAS=api,clip,geo (CPU torch, the baked CLIP checkpoint,
 # the geo wheels), on every pull request that changes an image input, before Railway first builds it after the merge
 # (#2025): a failure there would leave main unable to build the runner until a fix lands. The build's own offline
-# RUN is the proof (CPU torch, and the checkpoint loads with the hub offline); the log then shows the image size. No
-# secrets; it pushes and deploys nothing. About 10 minutes a run, billed once the repository is private.
+# RUN is the proof (CPU torch, and the checkpoint loads with the hub offline), so the scraper files it imports are
+# inputs too; the log then shows the image size. No secrets; it pushes and deploys nothing. About 10 minutes a run,
+# billed once the repository is private.
 
 on:
   pull_request:
@@ -14,6 +15,9 @@ on:
       - "pyproject.toml"
       - "scripts/bake_clip_weights.py"
       - "data/clip_taxonomy.json"
+      - "scraper/__init__.py"
+      - "scraper/clip_tagger.py"
+      - "scraper/cpus.py"
       - ".github/workflows/runner_image.yml"
 
 jobs:

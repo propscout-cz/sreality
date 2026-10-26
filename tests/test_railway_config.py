@@ -1,5 +1,6 @@
 """Railway settings live only in .railway/railway.ts (#2060)."""
 
+import ast
 import json
 import re
 import shutil
@@ -275,12 +276,47 @@ def test_the_runner_image_workflow_builds_on_every_image_input() -> None:
     triggers = workflow[True]  # PyYAML reads the `on:` key as the boolean True
     assert set(triggers) == {"pull_request"}, "no schedule: nothing for the registry's pairing census"
     paths = triggers["pull_request"]["paths"]
-    inputs = re.search(r"^IMAGE_INPUTS=\((.*?)\)$", WIZARD.read_text(encoding="utf-8"), re.M)
+    inputs = re.search(r"^IMAGE_INPUTS=\((.*?)\)$", WIZARD.read_text(encoding="utf-8"), re.M | re.S)
     assert inputs and set(paths) - {".github/workflows/runner_image.yml"} == set(inputs.group(1).split())
     assert {"Dockerfile", ".dockerignore", "pyproject.toml", "scripts/bake_clip_weights.py",
             "data/clip_taxonomy.json"} <= set(paths)
     runs = [s.get("run", "") for job in workflow["jobs"].values() for s in job["steps"]]
     assert any(r.startswith("docker build ") and "--build-arg EXTRAS=api,clip,geo" in r for r in runs), runs
+
+
+def _scraper_import_closure(modules: list[str]) -> set[str]:
+    """The repo files importing these modules runs: each one, its packages' __init__.py, and every scraper module
+    they import, at any depth (function-level imports included)."""
+    seen: set[str] = set()
+    todo = list(modules)
+    while todo:
+        name = todo.pop()
+        path = ROOT / f"{name.replace('.', '/')}.py"
+        if name in seen or not path.exists():
+            continue
+        seen.add(name)
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module == "scraper":
+                todo += [f"scraper.{a.name}" for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and (node.module or "").startswith("scraper."):
+                todo.append(node.module)
+            elif isinstance(node, ast.Import):
+                todo += [a.name for a in node.names if a.name.startswith("scraper.")]
+    files = {f"{m.replace('.', '/')}.py" for m in seen}
+    return files | {f"{'/'.join(m.split('.')[:i])}/__init__.py" for m in seen for i in range(1, m.count(".") + 1)}
+
+
+def test_the_runner_image_check_runs_when_its_offline_proof_s_code_changes() -> None:
+    """The build's proof RUN imports scraper code (Tagger.load) after the source COPY, so a change there can fail
+    Railway's runner build after the merge exactly as a Dockerfile change can: those files are image inputs too."""
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    proof = dockerfile.split("HF_HUB_OFFLINE=1 python -c", 1)[1].split("esac", 1)[0]
+    modules = re.findall(r"\bfrom (scraper\.\w+) import", proof)
+    assert modules == ["scraper.clip_tagger"]
+    closure = _scraper_import_closure(modules)
+    assert {"scraper/__init__.py", "scraper/clip_tagger.py", "scraper/cpus.py"} <= closure
+    inputs = re.search(r"^IMAGE_INPUTS=\((.*?)\)$", WIZARD.read_text(encoding="utf-8"), re.M | re.S)
+    assert inputs and sorted(closure - set(inputs.group(1).split())) == []
 
 
 def test_the_wizard_has_the_general_modes_and_checks_with_its_own_copy() -> None:
