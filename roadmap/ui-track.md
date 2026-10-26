@@ -26,6 +26,9 @@ toolkit work.
   Prohlídky (`/viewings`, `GET /viewings`): the account's own viewings one day at a time in time order,
   Nadcházející / Vše, arrows + swipe + a date wheel + "Dnes", jumps to the nearest day with a viewing, a
   "now" rule on today; a row opens its property.
+- **Done** (2026-10-26): the day maths is swept across Prague midnight (CET, CEST) and both DST nights
+  under three runner zones (`lib/viewings.boundary.test.ts`); the composer's first guess counts the next
+  full hour on the instant, so the spring DST night no longer pre-fills 02:00, a time its clock skips.
 - **Next (offered, not built):** a push reminder before a viewing; "Přidat do kalendáře" (an .ics file
   for the iPhone calendar).
 
