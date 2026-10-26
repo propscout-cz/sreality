@@ -102,7 +102,8 @@ Python runs on the **transaction-mode** pooler (`SUPABASE_DB_URL`, port 6543), w
 different backends, so a session `pg_advisory_lock` strands on the backend that took it (PR #716's maintenance lock
 did within minutes, hence migration 279).
 - **Singleton lease** (one holder; a crashed one's lease expires): every new one goes through `scraper/job_lease.py`, one
-  `scheduled_jobs` row per lease — `held` for a lane (yields a bool and never renews: its TTL must outlast the pass),
+  `scheduled_jobs` row per lease — `held` for a lane (yields a bool and never renews: its TTL must outlast the pass;
+  a retired row refuses it for good, so the job registry (#2024) retires only rows it registered, `registry_at` set),
   `claim` / `renew` / `Lease.fenced` / `release` for a scheduled job, `job_runs`' unique open-run indexes (per job,
   per resource) refusing a lost race. `tests/test_lease_census.py` fails CI on lease CAS text anywhere else and
   ledgers the three older copies (`property_maintenance_lease`, `broker_resolution_lock`, `autodedup.rt_lease`).

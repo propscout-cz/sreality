@@ -1,8 +1,9 @@
 """One singleton-lease module: lease compare-and-set text lives in scraper/job_lease.py and in no new file.
 Three hand-written leases (LEGACY's S1-S3) each re-solve take, renew, fence and release their own way; this census
-fails CI on a fourth. A work-queue claim (`FOR UPDATE SKIP LOCKED`) and a transaction advisory lock are no lease and
-do not match. Blind spot: it reads the repo's lease words (lease_holder, holder, expires_at, heartbeat_at, a session
-advisory lock in Python), so a lease spelled otherwise passes.
+fails CI on a fourth. It matches write shapes: SQL that sets or compares a holder, the bare `expires_at` /
+`heartbeat_at` staleness tests, a session advisory lock in Python. A work-queue claim (`FOR UPDATE SKIP LOCKED`), a
+transaction advisory lock, and a reader, view, COMMENT or log line naming job_lease's columns do not match.
+Blind spot: a lease spelled otherwise passes.
 """
 
 from __future__ import annotations
@@ -21,10 +22,10 @@ SOURCE_TREES = ("scraper", "toolkit", "api", "location_data", "autodedup", "scri
 THE_MODULE = "scraper/job_lease.py"
 
 _LEASE_TEXT = (
-    re.compile(r"\blease_holder\b", re.IGNORECASE),
-    re.compile(r"\bholder\s*=\s*(%|\$\d)", re.IGNORECASE),
-    re.compile(r"expires_at\s*<=?\s*(now|clock_timestamp)\s*\(\s*\)", re.IGNORECASE),
-    re.compile(r"heartbeat_at\s*<", re.IGNORECASE),
+    re.compile(r"\b(set|where|and|or)\s+(\w+\.)?(lease_)?holder\s*=(?!=)", re.IGNORECASE),
+    re.compile(r"\b(lease_)?holder\s*=\s*(%\(|\$\d)", re.IGNORECASE),
+    re.compile(r"\bexpires_at\s*<=?\s*(now|clock_timestamp)\s*\(\s*\)", re.IGNORECASE),
+    re.compile(r"\bheartbeat_at\s*<", re.IGNORECASE),
 )
 # Python only: there a session lock strands on the transaction pooler; a migration's top-level one waits out a rebuild.
 _SESSION_ADVISORY_LOCK = re.compile(r"\bpg_(try_)?advisory_(un)?lock(_shared|_all)?\s*\(", re.IGNORECASE)
@@ -45,12 +46,6 @@ LEGACY: dict[str, Ledgered] = {
     "autodedup/incremental_sql.py": Ledgered(
         "S3 autodedup.rt_lease (mig 539): the SQL behind autodedup/rt_lease.py (lane pass, rt_seed, live apply)",
         "sreality-e9 (autodedup); it moves only on e9's and the operator's go"),
-    "migrations/384_location_w1_serving.sql": Ledgered(
-        "creates location_jobs (now scheduled_jobs) with the lease columns job_lease claims",
-        "#2022 scheduled_jobs, job_lease's own table"),
-    "migrations/675_scheduled_jobs_expand.sql": Ledgered(
-        "renames location_jobs to scheduled_jobs; its table comment and compat view name the lease columns",
-        "#2022 scheduled_jobs, job_lease's own table"),
 }
 
 
@@ -88,8 +83,8 @@ def test_no_singleton_lease_outside_job_lease():
         "singleton-lease text outside scraper/job_lease.py. A one-holder-at-a-time lease goes through "
         "job_lease (`held` for a lane, `claim`/`renew`/`release` for a scheduled job); a work queue claims "
         "rows with FOR UPDATE SKIP LOCKED and a one-transaction guard takes pg_advisory_xact_lock, and neither "
-        "matches here. LEGACY holds the older copies and text that is no lease (a reader, say), each with a "
-        "reason and an owner: "
+        "matches here. LEGACY holds the three older copies and only shrinks; a match that is no lease narrows "
+        "_LEASE_TEXT instead: "
         f"{found}"
     )
 
@@ -115,16 +110,21 @@ def test_census_passes_job_lease_and_fails_a_copy_of_it(tmp_path: Path):
 
 
 @pytest.mark.parametrize("rel, text", [
-    ("scraper/new_lane.py", 'SQL = "UPDATE x_lease SET holder = %(h)s WHERE id = 1"\n'),
-    ("toolkit/new_lane.py", 'SQL = "UPDATE x_lease SET holder=$1 WHERE expires_at < now()"\n'),
-    ("api/new_lane.py", 'SQL = "UPDATE scheduled_jobs SET lease_holder = NULL"\n'),
-    ("scripts/new_lane.py", 'SQL = "UPDATE x_lock SET holder = NULL WHERE heartbeat_at < %(stale)s"\n'),
-    ("location_data/new_lane.py", 'SQL = "SELECT pg_try_advisory_lock(hashtext(\'x\'))"\n'),
-    ("autodedup/new_lane.py", 'SQL = "select pg_advisory_lock(42)"\n'),
-    ("migrations/999_new_lease.sql", "update x_lease set holder = p_holder where expires_at < clock_timestamp();\n"),
+    ("scraper/set_holder.py", 'SQL = "UPDATE x_lease SET holder = NULL"\n'),
+    ("api/set_lease_holder.py", 'SQL = "UPDATE scheduled_jobs SET lease_holder = NULL"\n'),
+    ("toolkit/and_alias.py", 'SQL = "UPDATE x_lease SET owner = 1 WHERE id = 1 AND j.holder = :h"\n'),
+    ("toolkit/or_holder.py", 'SQL = "UPDATE x_lease SET owner = 1 WHERE id = 1 OR holder = :h"\n'),
+    ("scraper/named_bind.py", 'SQL = "UPDATE x_lease SET owner = 1, holder = %(h)s"\n'),
+    ("scraper/dollar_bind.py", 'SQL = "UPDATE x_lease SET owner = 1, lease_holder = $1"\n'),
+    ("toolkit/now.py", 'SQL = "UPDATE x_lease SET owner = 1 WHERE expires_at < now()"\n'),
+    ("scripts/heartbeat.py", 'SQL = "UPDATE x_lock SET owner = 1 WHERE heartbeat_at < %(stale)s"\n'),
+    ("location_data/try_lock.py", 'SQL = "SELECT pg_try_advisory_lock(hashtext(\'x\'))"\n'),
+    ("autodedup/lock.py", 'SQL = "select pg_advisory_lock(42)"\n'),
+    ("migrations/998_clock.sql", "update x_lease set owner = p_owner where expires_at < clock_timestamp();\n"),
+    ("migrations/999_where.sql", "update x_lease set owner = null where lease_holder = p_holder;\n"),
 ])
 def test_a_synthetic_lease_fails_the_census(tmp_path: Path, rel: str, text: str):
-    """RED by: a pattern that no longer bites one of the lease shapes."""
+    """RED by: a pattern arm that no longer bites; each case matches through one arm alone."""
     (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
     (tmp_path / rel).write_text(text, encoding="utf-8")
     hits = lease_hits(tmp_path)
@@ -132,20 +132,26 @@ def test_a_synthetic_lease_fails_the_census(tmp_path: Path, rel: str, text: str)
     assert rel not in violations(hits, {rel: Ledgered("reason", "owner")})
 
 
-def test_queue_claims_xact_locks_and_comments_are_not_leases(tmp_path: Path):
-    """RED by: a pattern widened onto work-queue claims, transaction advisory locks or prose."""
+def test_queue_claims_xact_locks_readers_and_logs_are_not_leases(tmp_path: Path):
+    """RED by: a pattern widened onto work-queue claims, transaction advisory locks, readers, logs or prose."""
     (tmp_path / "scraper").mkdir()
     (tmp_path / "scraper" / "queue.py").write_text(
         "# a lease would say holder = %(h)s and expires_at < now(); never pg_advisory_lock(\n"
         'CLAIM = "SELECT id FROM q WHERE claimed_at IS NULL ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 10"\n'
         'GUARD = "SELECT pg_try_advisory_xact_lock(hashtext(\'x\'))"\n'
         'SHARED = "SELECT pg_advisory_xact_lock_shared(hashtext(\'x\'))"\n'
-        'CACHE = "SELECT body FROM parsed_url_cache WHERE expires_at > now()"\n',
+        'CACHE = "SELECT body FROM parsed_url_cache WHERE expires_at > now()"\n'
+        'STALE = "SELECT job_name FROM scheduled_jobs WHERE lease_holder IS NOT NULL AND lease_expires_at < now()"\n'
+        'LOG.info("JOB start job=%s holder=%s", lease.job_name, lease.holder)\n'
+        'MINE = lease is not None and holder == "x"\n',
         encoding="utf-8")
     (tmp_path / "migrations").mkdir()
     (tmp_path / "migrations" / "999_rebuild.sql").write_text(
         "-- the old lease said holder = %(h)s where expires_at < now()\n"
         "select pg_advisory_lock(hashtext('rebuild_browse_list'));\n"
-        "perform pg_advisory_xact_lock(hashtext('rebuild_browse_list'));\n",
+        "perform pg_advisory_xact_lock(hashtext('rebuild_browse_list'));\n"
+        "create table x_jobs (lease_holder text, lease_expires_at timestamptz);\n"
+        "comment on table x_jobs is '(lease_holder, lease_expires_at) claimed by scraper/job_lease.py';\n"
+        "create view x_jobs_v as select job_name, lease_holder, lease_expires_at from x_jobs;\n",
         encoding="utf-8")
     assert lease_hits(tmp_path) == {}
