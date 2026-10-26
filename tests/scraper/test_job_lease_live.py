@@ -11,7 +11,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import psycopg
@@ -248,15 +248,100 @@ def test_the_release_closes_the_run_and_only_a_failure_counts(
     assert _runs(cur, name) == [("A", outcome, False, None, None, 1, 512, "last line")]
 
 
-def test_the_runner_may_set_the_next_due_time_and_never_a_live_outcome(cur: Any) -> None:
-    conn = cur.connection
-    name = _job(cur)
-    lease = job_lease.claim(conn, name, holder="A")
-    later = datetime(2030, 1, 1, tzinfo=UTC)
-    assert job_lease.release(conn, lease, "failed", due_at=later)
-    assert _row(cur, name)["due_at"] == later
+def _now(cur: Any) -> datetime:
+    """The test transaction's frozen now(); also opens it, so no job_lease call commits (psycopg's outermost
+    `transaction()` on an idle non-autocommit connection would BEGIN and COMMIT)."""
+    cur.execute("SELECT now()")
+    return cur.fetchone()[0]
+
+
+def _release_due(cur: Any, *, cadence: str = "1 hour", offset_s: int = 600, timeout_s: int = 600,
+                 failures: int = 0, outcome: str = "failed", due: str | None = None,
+                 request: bool = False, due_now: bool = True) -> tuple[datetime, datetime | None]:
+    """(now, the released row's due_at) for one claim and release; a request may ride a due or a not-due row."""
+    now = _now(cur)
+    name = _job(cur, due="-1 second" if due_now else "1 day", cadence=cadence, offset_s=offset_s)
+    cur.execute("UPDATE scheduled_jobs SET consecutive_failures = %s, timeout_s = %s WHERE job_name = %s",
+                (failures, timeout_s, name))
+    if request:
+        cur.execute("UPDATE scheduled_jobs SET requested_at = now(), requested_by = 'operator' WHERE job_name = %s",
+                    (name,))
+    lease = job_lease.claim(cur.connection, name, holder="A")
+    assert lease is not None
+    assert job_lease.release(cur.connection, lease, outcome, due=due)
+    return now, _row(cur, name)["due_at"]
+
+
+def test_a_more_remains_exit_re_dues_in_a_minute_and_a_backoff_doubles(cur: Any) -> None:
+    now, due_at = _release_due(cur, outcome="ok", due="more")
+    assert due_at == now + timedelta(seconds=job_lease.MORE_REMAINS_S)
+    for failures, wait_s in ((0, 60), (1, 120), (2, 240)):
+        now, due_at = _release_due(cur, failures=failures, due="backoff")
+        assert due_at == now + timedelta(seconds=wait_s), failures
+
+
+def test_a_backoff_never_passes_the_cadence_or_the_next_slot(cur: Any) -> None:
+    now, due_at = _release_due(cur, cadence="15 minutes", offset_s=0, failures=12, due="backoff")
+    assert now < due_at <= now + timedelta(minutes=15)
+    assert (due_at.minute % 15, due_at.second) == (0, 0), "capped at the next slot"
+
+
+def test_a_timeout_retries_no_sooner_than_its_own_timeout(cur: Any) -> None:
+    """A walk cut by its own timeout never restarts at once; a 30-day job does not wait a month (R-c)."""
+    now, due_at = _release_due(cur, cadence="30 days", offset_s=356400, timeout_s=900, outcome="timeout",
+                               due="retry")
+    assert due_at == now + timedelta(minutes=15)
+    now, due_at = _release_due(cur, cadence="30 days", offset_s=356400, timeout_s=900, failures=3,
+                               outcome="timeout", due="retry")
+    assert due_at == now + timedelta(minutes=15), "60 * 2^3 = 480 s is under the floor"
+    now, due_at = _release_due(cur, cadence="30 days", offset_s=356400, timeout_s=900, failures=4,
+                               outcome="timeout", due="retry")
+    assert due_at == now + timedelta(seconds=960), "past the floor, the backoff grows"
+
+
+def test_a_db_heavy_retry_waits_for_its_own_hour_of_the_next_day_at_most(cur: Any) -> None:
+    now, due_at = _release_due(cur, cadence="91 days", offset_s=6300000, timeout_s=7200, outcome="timeout",
+                               due="own_hour")
+    assert (due_at.hour, due_at.minute, due_at.second) == (22, 0, 0), "map_overlays' hour"
+    assert now < due_at <= now + timedelta(days=1)
+    now, due_at = _release_due(cur, cadence="1 day", offset_s=3 * 3600, outcome="failed", due="own_hour")
+    assert (due_at.hour, due_at.minute) == (3, 0) and now < due_at <= now + timedelta(days=1)
+
+
+def test_a_pure_request_run_never_moves_the_schedule(cur: Any) -> None:
+    cur.execute("SELECT now() + interval '1 day'")
+    tomorrow = cur.fetchone()[0]
+    now, due_at = _release_due(cur, outcome="ok", request=True, due_now=False)
+    assert due_at == tomorrow
+    _, due_at = _release_due(cur, outcome="failed", due="backoff", request=True, due_now=False)
+    assert due_at == tomorrow, "not even a failure's backoff"
+    _, due_at = _release_due(cur, outcome="ok", due="more", request=True, due_now=False)
+    assert due_at == now + timedelta(seconds=job_lease.MORE_REMAINS_S), "an exit 75 only pulls it nearer"
+
+
+def test_a_request_that_took_a_due_slot_advances_it_like_a_scheduled_run(cur: Any) -> None:
+    now, due_at = _release_due(cur, outcome="ok", request=True, due_now=True)
+    assert now < due_at <= now + timedelta(hours=1) and due_at.minute == 10, "the past slot is not left behind"
+
+
+def test_a_claim_says_whether_it_took_a_due_slot(cur: Any) -> None:
+    _now(cur)
+    due, later, paused = _job(cur), _job(cur, due="1 day"), _job(cur)
+    cur.execute("UPDATE scheduled_jobs SET requested_at = now(), requested_by = 'operator'"
+                " WHERE job_name = ANY(%s)", ([later, paused],))
+    cur.execute("UPDATE scheduled_jobs SET paused_until = now() + interval '1 day', pause_note = 'drill',"
+                " paused_by = 'operator' WHERE job_name = %s", (paused,))
+    assert [job_lease.claim(cur.connection, n, holder="A").due_slot for n in (due, later, paused)] == [
+        True, False, False]
+
+
+def test_a_release_refuses_an_unknown_outcome_or_due_kind(cur: Any) -> None:
+    _now(cur)
+    lease = job_lease.claim(cur.connection, _job(cur), holder="A")
     with pytest.raises(ValueError, match="not a release outcome"):
-        job_lease.release(conn, lease, "lost")
+        job_lease.release(cur.connection, lease, "lost")
+    with pytest.raises(ValueError, match="not a due kind"):
+        job_lease.release(cur.connection, lease, "failed", due="tomorrow")
 
 
 def test_the_lease_only_lane_takes_no_run_and_honours_a_pause(cur: Any) -> None:
