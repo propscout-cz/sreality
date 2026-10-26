@@ -6,21 +6,26 @@ lock: a claim is a conditional UPDATE, a crashed holder's lease simply expires.
 
 Two shapes over one row:
 
-* `claim` / `renew` / `release` — a scheduled job. A claim takes a DUE row (its `due_at`
-  passed and it is not paused, or a request is waiting: a request is a person asking, a
-  pause only stops the schedule), never a retired one, never while a sibling sharing its
-  `resource` holds a live lease, and opens one `job_runs` row; the database's unique
-  indexes allow one open run per job and per resource, so a lost race is a refused claim.
-  A run whose lease lapsed is closed as `lost` (a failure) by the next claim on its job or
-  resource. The holder renews and fences itself (`Lease.fenced`) before the lease can
-  expire under it; the release closes the run and moves `due_at` to the next slot of the
-  epoch-anchored `cadence` grid. A cancelled, interrupted or skipped run is not a failure,
-  and an interrupted one is due again at once.
+* `claim` / `renew` / `release` — a scheduled job, driven by the job runner (`scraper.job_runner`).
+  A claim takes a DUE row (its `due_at` passed and it is not paused, or a request is waiting: a
+  request is a person asking, a pause only stops the schedule), never a retired one, never while a
+  sibling sharing its `resource` holds a live lease, and opens one `job_runs` row; the database's
+  unique indexes allow one open run per job and per resource, so a lost race is a refused claim.
+  The holder renews and fences itself (`Lease.fenced`, on the shared `clock`) before the lease can
+  expire under it. The release closes the run and moves `due_at` by a due kind (`DUE_KINDS`): the
+  next slot of the epoch-anchored `cadence` grid, now (an interrupted run), a minute (exit 75), a
+  backoff doubling from a minute and capped at the cadence and the next slot, a retry floored at the
+  job's own `timeout_s` (a timeout), or the job's own hour (a DB-heavy job's retries); a pure request
+  run never moves the schedule. A cancelled, interrupted or skipped run is not a failure.
+  The runner's boot `register`s its registry (adopting a lane-era row, skipping one the database
+  refuses) and `retire`s only rows it registered; `due` lists free rows with no open run, oldest
+  first; `reap_lost` closes a run whose lease lapsed as `lost` (a failure), re-run at once, then
+  backed off on a second loss in a row. Every runner-facing call is one transaction under
+  `STATEMENT_TIMEOUT_S` (`_bounded`).
 * `held` — a leased lane with no schedule (the location resolver drain, run every few
   seconds by the realtime worker and by `location_resolve.yml`): no due time and no run
   history, just mutual exclusion and the last outcome.
 """
-
 from __future__ import annotations
 
 import logging

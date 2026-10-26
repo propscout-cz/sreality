@@ -33,8 +33,6 @@ import psycopg
 
 from scraper import cpus, db, job_lease, jobs, stop
 from scraper.job_process import (
-    GRACE_S,
-    GUARD_POLL_S,
     OOM_SHIM,
     STRAGGLER_WAIT_S,
     Child,
@@ -194,7 +192,7 @@ class Runner:
     stop_phase_budget_s: float = STOP_PHASE_BUDGET_S
     running: dict[int, Running] = field(default_factory=dict)
     finished: list[Finished] = field(default_factory=list)
-    released: list[tuple[Finished, bool]] = field(default_factory=list)
+    last_released: tuple[Finished, bool] | None = None  # for `once`'s exit code; kept alone, so nothing grows
     registered: bool = False
     skipped: dict[str, str] = field(default_factory=dict)
     claims: int = 0
@@ -318,7 +316,7 @@ class Runner:
             if result is None:
                 continue
             self.finished.remove(done)
-            self.released.append((done, bool(result)))
+            self.last_released = (done, bool(result))
             lease = done.lease
             if result:
                 LOG.info("RUN end job=%s run=%d outcome=%s due=%s exit=%s peak_mb=%s", lease.job_name,
@@ -582,10 +580,11 @@ def once(job: Job, *, ledger: Ledger | None = None, spawner: Spawner = spawn_pro
     if runner.claims == 0:
         print(f"{job.name}: not due (and no request waiting), or held elsewhere")
         return 0
-    outcomes = [done.outcome for done, released in runner.released if released]
-    if outcomes == ["ok"]:
+    done, released = runner.last_released or (None, False)
+    outcome = done.outcome if done is not None and released else None
+    if outcome == "ok":
         return 0
-    return stop.EXIT_CODE if outcomes == ["interrupted"] else 1
+    return stop.EXIT_CODE if outcome == "interrupted" else 1
 
 
 def _by() -> str:
