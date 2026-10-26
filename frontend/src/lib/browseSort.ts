@@ -8,6 +8,7 @@
 export type SortField =
   | 'first_seen_at' | 'last_seen_at'
   | 'price_czk' | 'price_per_m2'
+  | 'total_price_change_pct'
   | 'area_m2' | 'plot_area_m2'
   | 'street_name'
   | 'mf_gross_yield_pct'
@@ -33,6 +34,7 @@ export const DEFAULT_SORT: SortSpec = { field: 'first_seen_at', direction: 'desc
 const SORTABLE_FIELDS: ReadonlyArray<SortField> = [
   'first_seen_at', 'last_seen_at',
   'price_czk', 'price_per_m2',
+  'total_price_change_pct',
   'area_m2', 'plot_area_m2',
   'street_name',
   'mf_gross_yield_pct',
@@ -53,14 +55,18 @@ export const sortToParam = (s: SortSpec): string =>
 /* The cards lane's sort menu — Browse's card view and the phone feed's Řazení
  * row offer exactly these. Two bookend the file by date (first_seen_at — when
  * the listing entered our archive), one by when a portal last showed it, two by
- * price, two by price/m², two by area (area_m2: floor area, or the PLOT for
- * pozemek — rule 23), two by lot (plot_area_m2: THE plot measure the Lot area
+ * price, two by price/m², two by price change (total_price_change_pct: the
+ * signed percent from the first observed price of the shown price's lineage to
+ * the shown price -- the card's price-move badge and the Price change filter
+ * read the same column, NULL below two price points), two by area (area_m2:
+ * floor area, or the PLOT for pozemek — rule 23), two by lot (plot_area_m2: THE plot measure the Lot area
  * filter reads, never the bare estate_area, which four portals leave empty on
  * land), two by street name (street_name: the location ad's street under the
  * Czech collation, migration 665 -- Č after C, Ch after H), two by MF gross
- * yield. The areas, the street and the yield are nullable (a flat has no lot, a
- * village house often no street, the yield only for sale apartments); the query
- * orders nullsFirst:false so a row without one sorts to the end either way. */
+ * yield. The price change, the areas, the street and the yield are nullable (an
+ * ad seen at one price has no change, a flat has no lot, a village house often no
+ * street, the yield only for sale apartments); the query orders nullsFirst:false
+ * so a row without one sorts to the end either way. */
 export const CARD_SORTS: ReadonlyArray<{ label: string; spec: SortSpec }> = [
   { label: 'Newest first',      spec: { field: 'first_seen_at', direction: 'desc' } },
   { label: 'Oldest first',      spec: { field: 'first_seen_at', direction: 'asc'  } },
@@ -70,6 +76,8 @@ export const CARD_SORTS: ReadonlyArray<{ label: string; spec: SortSpec }> = [
   { label: 'Price: high → low', spec: { field: 'price_czk',     direction: 'desc' } },
   { label: 'Price/m²: low → high', spec: { field: 'price_per_m2', direction: 'asc'  } },
   { label: 'Price/m²: high → low', spec: { field: 'price_per_m2', direction: 'desc' } },
+  { label: 'Změna ceny: největší pokles', spec: { field: 'total_price_change_pct', direction: 'asc'  } },
+  { label: 'Změna ceny: největší nárůst', spec: { field: 'total_price_change_pct', direction: 'desc' } },
   { label: 'Plocha: od nejmenší', spec: { field: 'area_m2',     direction: 'asc'  } },
   { label: 'Plocha: od největší', spec: { field: 'area_m2',     direction: 'desc' } },
   { label: 'Pozemek: od nejmenšího', spec: { field: 'plot_area_m2', direction: 'asc'  } },
