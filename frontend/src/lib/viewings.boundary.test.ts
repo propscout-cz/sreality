@@ -1,10 +1,11 @@
 /* lib/viewings at every day boundary: "now" swept every 15 minutes across Prague
  * midnight in winter and in summer, both DST changes and the night #2048's test went
  * red, each against slots two days either side. The oracle reads Prague calendar days
- * and clocks straight from Intl, never from the code under test, and no answer may
- * move with the runner's own zone (run it under TZ=UTC, Europe/Prague, America/New_York). */
+ * and clocks straight from Intl, never from the code under test. No answer may move
+ * with the runner's own zone, so the file sets that zone itself (UTC, Europe/Prague,
+ * America/New_York): CI runs as UTC, the one zone where local time and UTC agree. */
 
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { pragueDayKey } from './feed';
 import type { ViewingSlot } from './viewings';
@@ -101,16 +102,36 @@ const nowsBetween = (from: string, to: string): string[] => {
   return out;
 };
 
+const RUNNER_ZONE = process.env.TZ;
+
+// Node re-reads its zone when TZ is assigned; julyOffset proves the switch took.
 describe.each([
-  ['Prague midnight in CET, into a new year', '2026-12-31T21:00:00Z', '2027-01-01T01:00:00Z'],
-  ['Prague midnight in CEST, into a new month', '2026-07-31T20:00:00Z', '2026-08-01T00:00:00Z'],
-  ['the CEST→CET change (03:00 → 02:00)', '2026-10-25T00:00:00Z', '2026-10-25T04:00:00Z'],
-  ['the first CET midnight, where #2048 went red', '2026-10-25T21:00:00Z', '2026-10-26T01:00:00Z'],
-  ['the CET→CEST change (02:00 → 03:00)', '2027-03-28T00:00:00Z', '2027-03-28T03:00:00Z'],
-  ['the first CEST midnight', '2027-03-28T20:00:00Z', '2027-03-29T00:00:00Z'],
-])('%s', (_name, from, to) => {
-  it.each(nowsBetween(from, to))('agrees with the Prague calendar at %s', (now) => {
-    const mismatches = mismatchesAt(Date.parse(now));
-    expect(mismatches, mismatches.join('; ')).toEqual([]);
+  { zone: 'UTC', julyOffset: 0 },
+  { zone: 'Europe/Prague', julyOffset: -120 },
+  { zone: 'America/New_York', julyOffset: 240 },
+])('with the runner in $zone', ({ zone, julyOffset }) => {
+  beforeAll(() => {
+    vi.stubEnv('TZ', zone);
+  });
+  afterAll(() => {
+    vi.stubEnv('TZ', RUNNER_ZONE);
+  });
+
+  it('runs on that zone', () => {
+    expect(new Date('2026-07-01T00:00:00Z').getTimezoneOffset()).toBe(julyOffset);
+  });
+
+  describe.each([
+    ['Prague midnight in CET, into a new year', '2026-12-31T21:00:00Z', '2027-01-01T01:00:00Z'],
+    ['Prague midnight in CEST, into a new month', '2026-07-31T20:00:00Z', '2026-08-01T00:00:00Z'],
+    ['the CEST→CET change (03:00 → 02:00)', '2026-10-25T00:00:00Z', '2026-10-25T04:00:00Z'],
+    ['the first CET midnight, where #2048 went red', '2026-10-25T21:00:00Z', '2026-10-26T01:00:00Z'],
+    ['the CET→CEST change (02:00 → 03:00)', '2027-03-28T00:00:00Z', '2027-03-28T03:00:00Z'],
+    ['the first CEST midnight', '2027-03-28T20:00:00Z', '2027-03-29T00:00:00Z'],
+  ])('%s', (_name, from, to) => {
+    it.each(nowsBetween(from, to))('agrees with the Prague calendar at %s', (now) => {
+      const mismatches = mismatchesAt(Date.parse(now));
+      expect(mismatches, mismatches.join('; ')).toEqual([]);
+    });
   });
 });
