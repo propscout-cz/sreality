@@ -14,6 +14,12 @@ GITHUB: Host = "github-actions"
 UNTIL_MOVED: Host = "github-actions-until-moved"
 
 HOUR, DAY = 3600, 86400
+# Children per replica (#2024 enforces it); the largest that many declarations fit this share of one replica.
+RUNNER_MAX_CONCURRENT = 3
+REPLICA_MEMORY_MB, CO_TENANCY_SHARE = 8192, 0.70
+# The runner's SIGKILL grace after its SIGTERM stays under this; the API's stuck-run cutoff exceeds the longest
+# walk by it (tests/scraper/test_job_registry.py).
+STUCK_RUN_GRACE_S = 600
 LOCATION_HEAVY = "location-heavy"
 WALK_PREFIX = "walk_"
 WALK_MEMORY_MB, WALK_CPUS = 512, 1

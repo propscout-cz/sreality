@@ -7,14 +7,17 @@ The helpers live here, not in `scraper/jobs.py`: a test may name portals and wor
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
 import importlib
 import inspect
 import io
+import itertools
 import re
 import sys
 from collections.abc import Sequence
 from dataclasses import fields, replace
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -26,6 +29,8 @@ from scraper.portal import _LIMIT_COERCERS, PortalConfig, PortalLimits
 from scraper.portal_factory import PORTAL_CLASSES
 
 FIXED = 11
+ROOT = Path(__file__).resolve().parents[2]
+API_MAIN = ROOT / "api" / "main.py"
 
 
 class _Parsed(BaseException):
@@ -211,3 +216,102 @@ def test_the_walk_schedule_is_no_limits_key() -> None:
 def test_the_limits_key_census_fires() -> None:
     assert limits_key_problems({"coercers": {"index_rate", "walk_every_s"}})
     assert limits_key_problems({"route": {"walk_budget_s"}})
+
+
+def co_tenancy_problems(entries: Sequence[Job], cap: int = jobs.RUNNER_MAX_CONCURRENT) -> list[str]:
+    """The `cap` largest memory declarations that can run together fit the share of one replica."""
+    largest: dict[str, int] = {}
+    for j in entries:
+        if j.host != jobs.GITHUB:
+            key = j.resource or j.name  # siblings on one resource never run together
+            largest[key] = max(largest.get(key, 0), j.memory_mb)
+    top = sorted(largest.values(), reverse=True)[:cap]
+    budget = jobs.CO_TENANCY_SHARE * jobs.REPLICA_MEMORY_MB
+    return [] if sum(top) <= budget else [f"the {cap} largest declarations {top} exceed {budget:.0f} MB"]
+
+
+def test_the_largest_concurrent_declarations_fit_a_replica() -> None:
+    assert co_tenancy_problems(jobs.declared()) == []
+
+
+def test_the_co_tenancy_census_fires() -> None:
+    entries = jobs.declared()
+    assert co_tenancy_problems([*entries, replace(_entry("clip"), name="clip_twin")])
+    assert co_tenancy_problems(entries, cap=4)
+
+
+def _occupied_hours(job: Job) -> set[int]:
+    """The UTC hours of the day a run of `job` can hold, at its declared timeout."""
+    if job.every_s % jobs.DAY == 0:
+        starts: range | list[int] = [job.offset_s % jobs.DAY]
+    elif jobs.DAY % job.every_s == 0:
+        starts = range(job.offset_s % job.every_s, jobs.DAY, job.every_s)
+    else:
+        return set(range(24))
+    return {h % 24 for start in starts for h in range(start // jobs.HOUR, -(-(start + job.timeout_s) // jobs.HOUR))}
+
+
+def db_heavy_problems(entries: Sequence[Job]) -> list[str]:
+    """No two DB-heavy jobs can hold the database in one hour, unless one resource already keeps them apart."""
+    problems = []
+    for a, b in itertools.combinations([j for j in entries if j.db_heavy], 2):
+        if a.resource is not None and a.resource == b.resource:
+            continue
+        if shared := _occupied_hours(a) & _occupied_hours(b):
+            problems.append(f"{a.name} and {b.name} are both DB-heavy in UTC hours {sorted(shared)}")
+    return problems
+
+
+def test_no_two_db_heavy_jobs_share_an_hour() -> None:
+    assert db_heavy_problems(jobs.declared()) == []
+
+
+def test_the_db_heavy_census_fires() -> None:
+    entries = [j for j in jobs.declared() if j.name not in ("property_sweep", "broker_sweep")]
+    today = [replace(_entry("property_sweep"), offset_s=4 * 3600 + 15 * 60),
+             replace(_entry("broker_sweep"), offset_s=4 * 3600 + 35 * 60)]
+    assert db_heavy_problems([*entries, *today])
+    heavy_intake = replace(_entry("location_intake"), db_heavy=True)
+    assert db_heavy_problems([*[j for j in jobs.declared() if j.name != "location_intake"], heavy_intake])
+    overlapping = replace(_entry("property_sweep"), name="property_twin", resource="elsewhere")
+    assert db_heavy_problems([*jobs.declared(), overlapping])
+
+
+def _module_constant(source: str, name: str) -> object:
+    """A module-level `NAME = <literal>`, read from the source so the test needs no API import."""
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.Assign) and [getattr(t, "id", None) for t in node.targets] == [name]:
+            return ast.literal_eval(node.value)
+    return None
+
+
+def cutoff_problems(cutoff_min: object, walk_timeouts: Sequence[int], api_source: str) -> list[str]:
+    """The API's boot sweep never finalizes a running walk: its cutoff outlasts the longest walk and the kill grace.
+
+    The walks are the only scrape_runs writers. Tests disable the boot sweep, so its call is read from the source.
+    """
+    floor_s = max(walk_timeouts) + jobs.STUCK_RUN_GRACE_S
+    problems = []
+    if not isinstance(cutoff_min, int) or cutoff_min * 60 <= floor_s:
+        problems.append(f"STUCK_RUN_CUTOFF_MINUTES={cutoff_min!r} must exceed {floor_s} s")
+    if "older_than_minutes=STUCK_RUN_CUTOFF_MINUTES" not in api_source:
+        problems.append("the boot sweep does not pass STUCK_RUN_CUTOFF_MINUTES")
+    if re.search(r"older_than_minutes=\s*\d", api_source):
+        problems.append("the boot sweep passes an inline cutoff")
+    return problems
+
+
+def _walk_timeouts() -> list[int]:
+    return [j.timeout_s for j in jobs.declared() if j.name.startswith(jobs.WALK_PREFIX)]
+
+
+def test_the_api_stuck_run_cutoff_outlasts_every_walk() -> None:
+    source = API_MAIN.read_text()
+    assert cutoff_problems(_module_constant(source, "STUCK_RUN_CUTOFF_MINUTES"), _walk_timeouts(), source) == []
+
+
+def test_the_cutoff_census_fires() -> None:
+    call = "sweep_stuck_scrape_runs(conn, older_than_minutes=STUCK_RUN_CUTOFF_MINUTES)"
+    assert cutoff_problems(240, [14400], call)
+    assert cutoff_problems(300, [14400], "sweep_stuck_scrape_runs(conn, older_than_minutes=300)")
+    assert cutoff_problems(None, [14400], call)
