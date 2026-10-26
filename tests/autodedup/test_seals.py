@@ -129,7 +129,6 @@ def test_a_fit_whose_seal_is_not_committed_says_how_to_commit_it(tmp_path: Path)
 
 
 def test_fit_takes_a_committed_seal_where_it_takes_a_path(tmp_path: Path) -> None:
-
     first_text, first = _fit(tmp_path, "fit")
     # Commit the map the way the hint says to, into a stand-in splits directory.
     seal = first["split"]["seal"]["sha256"]
