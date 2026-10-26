@@ -175,6 +175,12 @@ toolkit work.
   Řazení) gains "Ulice: A → Z / Z → A" on `browse_list.street_name`, the location ad's street under the
   Czech collation (Č after C, Ch after H); a property with no street (62% of active) sorts last both
   ways. A sort key only: the card still prints `display_label`, the street filter stays `ulice_id`.
+- **Done: Price change sort 2026-10-26** (operator request; no migration). The cards menu (desktop +
+  phone Řazení) gains "Změna ceny: největší pokles / největší nárůst" on `total_price_change_pct`, the
+  column the card's price-move badge and the Price change filter read (first observed price of the
+  shown price's lineage → the shown price); an ad seen at one price (66% of active sales) sorts last
+  both ways. ~84 ms, flats for sale. Owed (operator ruling): junk at the rise end (+6.5 billion %,
+  a 1 Kč placeholder then a real price; 347 active sales at +200 % or more).
 - **Shipped (2026-10-22): Advanced → Energy rating (PENB A–G)**, Browse + Watchdog (migration 648:
   `energy_rating_filter` on the Stats and map-tile RPCs; `browse_list` already carried the column). A
   property's rating is the first non-null across its ads; G is also the legal "no certificate"
