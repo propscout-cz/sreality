@@ -1801,9 +1801,10 @@ def seeded_runs(svc: Any, tenants: dict[str, uuid.UUID]) -> "Iterator[dict[str, 
 
 
 def _refused(conn: Any, sql: str, params: tuple[Any, ...]) -> None:
+    """Refused by the GRANT: an RLS default-deny raises the same SQLSTATE with another message."""
     import psycopg
 
-    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+    with pytest.raises(psycopg.errors.InsufficientPrivilege, match="permission denied for table"):
         with conn.transaction():  # a SAVEPOINT, so the refusal cannot poison the txn
             with conn.cursor() as cur:
                 cur.execute(sql, params)

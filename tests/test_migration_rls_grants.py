@@ -192,8 +192,9 @@ def _enforced_migrations() -> list[Path]:
 def _parse_grant(stmt: str) -> tuple[set[str], list[str], set[str]] | None:
     """(-> privs, objects, roles) for a `grant <privs> on <objs> to <roles>`
     statement, else None. Object names are lowercased + stripped of the leading
-    `table`/`public.`/quotes; a `sequence`/`function`/`all …` object is returned
-    verbatim so callers can ignore it."""
+    `table`/`public.`/quotes (roles unquoted too: the Supabase CLI writes `"public"."t" TO
+    "authenticated"`); a `sequence`/`function`/`all …` object is returned verbatim so callers
+    can ignore it."""
     low = re.sub(r"\s+", " ", stmt.lower()).strip()
     m = re.match(r"grant (.+?) on (.+?) to (.+)$", low)
     if not m:
@@ -202,13 +203,13 @@ def _parse_grant(stmt: str) -> tuple[set[str], list[str], set[str]] | None:
     # the two non-privileges `update (a` and `b)`, so a column-level write grant passed.
     bare = re.sub(r"\s*\([^)]*\)", "", m.group(1))
     privs = {p.strip() for p in bare.split(",") if p.strip()}
-    roles = {r.strip() for r in re.split(r"[,\s]+", m.group(3)) if r.strip()}
+    roles = {r.strip().strip('"') for r in re.split(r"[,\s]+", m.group(3)) if r.strip()}
     raw_objs = m.group(2).strip()
     objs: list[str] = []
     for obj in raw_objs.split(","):
-        obj = obj.strip()
+        obj = obj.replace('"', "").strip()
         obj = re.sub(r'^(table|sequence|function)\s+', "", obj)
-        obj = obj.replace("public.", "").strip().strip('"')
+        obj = obj.replace("public.", "").strip()
         objs.append(obj)
     return privs, objs, roles
 
@@ -582,8 +583,11 @@ def test_a_write_limited_grant_is_read_column_by_column():
         "grant select, update (status) on table public.building_runs to authenticated;",
         "grant all privileges on building_runs to authenticated;",
         "grant update (scenario) on estimation_runs, building_runs to authenticated;",
+        'GRANT ALL ON TABLE "public"."estimation_runs" TO "authenticated";',
+        'grant insert on public.building_runs to "authenticated";',
     ):
         assert _write_limited_grants(sql), sql
+    assert _offending_write_grants('GRANT INSERT ON TABLE "public"."listings" TO "authenticated";')
 
 
 def test_new_base_tables_enable_rls():
