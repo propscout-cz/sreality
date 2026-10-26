@@ -455,6 +455,10 @@ LEAVERS = {
 ATTENDED = {
     ("ingest_boundaries.yml", "scripts.ingest_map_overlays"): "re-renders kraje after a human-run boundary ingest",
 }
+# A step that runs an entry's module for another job of its file, so it never hosts that entry.
+COMPANIONS = {
+    ("fetch_rent_map.yml", "scripts.ingest_map_overlays"): "#2025: re-renders the rent_map section after an ingest",
+}
 GITHUB_ENTRIES = frozenset({"verify_pipeline", "price_stats"})
 GITHUB_SCHEDULES = frozenset({"verify_pipeline.yml", "scrape_price_stats.yml"})
 # The waiting set only shrinks: a new job or portal is born on the runner, never as one more GitHub schedule.
@@ -487,9 +491,10 @@ def _switches(argv: tuple[str, ...]) -> set[str]:
 
 def _invokes(job: Job, workflow: Workflow) -> bool:
     """The file runs this entry's job: its module, carrying the entry's switches unless the command builds every
-    flag in a shell variable (location_resolve.yml runs the drain twice; only the --full-sweep call is the job)."""
-    return any(c.module == job.argv[0] and (not c.flags or _switches(job.argv) <= c.flags)
-               for c in workflow.invocations)
+    flag in a shell variable (location_resolve.yml runs the drain twice; only the --full-sweep call is the job),
+    and never as a companion step."""
+    return any(c.module == job.argv[0] and (workflow.file, c.module) not in COMPANIONS
+               and (not c.flags or _switches(job.argv) <= c.flags) for c in workflow.invocations)
 
 
 def pairing_problems(entries: Sequence[Job], workflows: dict[str, Workflow], *,
@@ -532,6 +537,8 @@ def test_the_pairing_census_fires() -> None:
     assert pairing_problems(jobs.declared(), {**workflows, "location_resolve.yml": tick_only})
     stray = Workflow("phash2.yml", True, 600, (Invocation("scripts.compute_image_phash2", frozenset()),))
     assert pairing_problems(jobs.declared(), {**workflows, "phash2.yml": stray})
+    # fetch_rent_map.yml still runs the overlay module, but only to re-render rent_map: no host for map_overlays.
+    assert pairing_problems(jobs.declared(), _without(workflows, "ingest_map_overlays.yml"))
 
 
 def github_set_problems(entries: Sequence[Job], workflows: dict[str, Workflow], *,
