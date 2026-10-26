@@ -190,7 +190,9 @@ finish() {
 # Replace the example below. Set TOTAL_STAGES to match the stages you write.
 # ──────────────────────────────────────────────────────────────────────────
 
-# The Railway IaC wizard (#2060): the operator's only path to change Railway settings.
+# The Railway IaC wizard (#2060): the operator applies .railway/railway.ts with it. Its modes are M0's; the first
+# follow-up IaC PR (#1857, #2059, #2025 or #2075) replaces window1/window2 with a general apply mode built from
+# plan_pinned/apply_pinned, which take the expected add/destroy counts (a variable delete is 1 destroy).
 #
 #   scripts/railway_iac_wizard.sh preflight   read-only: install the pinned CLI, log in, plan all three projects
 #   scripts/railway_iac_wizard.sh window1     e9 window: apply vite (+ the undo rehearsal), then the API
@@ -282,21 +284,32 @@ process.exit(ok ? 0 : 1);
 
 # plan_check <plan JSON> <adds> <destroys> [<only field> <detail>]: print the change list; fail unless it is safe.
 # The counts follow the CLI's own summary line (runner.rs plan_summary_line). M0 expects 0 and 0; a PR that adds a
-# service (#2025, #2075) passes 1 add.
+# service (#2025, #2075) passes 1 add. Read a pinned `--out` file: `config plan --json` re-serialises each change
+# without `field` or `path` (runner.rs struct Change), and the backend's preview echo may drop them too, so an
+# update's field falls back to its path, then its first detail line ("source.repo (a → b)"), then its summary's last
+# word ("Update sreality networking").
 plan_check() {
   node -e '
 const [file, adds, destroys, onlyField, onlyDetail] = process.argv.slice(1);
 const plan = JSON.parse(require("fs").readFileSync(file, "utf8"));
 const changes = (plan.changeSet && plan.changeSet.changes) || [];
 const problems = [];
+const fieldOf = (c) => {
+  if (c.field) return String(c.field);
+  if (c.kind !== "resource.update") return "";
+  if (c.path) return String(c.path).split(".").pop();
+  const detail = String((c.details || [])[0] || "");
+  return detail ? detail.split(/[.\s]/)[0] : String(c.summary || "").split(" ").pop();
+};
 let add = 0;
 let destroy = 0;
 for (const c of changes) {
   const kind = String(c.kind || "");
+  const field = fieldOf(c);
   if (kind === "resource.create" || kind === "domain.create") add += 1;
   if (kind === "resource.delete" || kind === "variable.delete") destroy += 1;
-  if (c.field === "source" || c.field === "networking" || kind.startsWith("domain.")) {
-    problems.push(`touches ${c.field || kind}: ${c.summary || c.path}`);
+  if (field === "source" || field === "networking" || kind.startsWith("domain.")) {
+    problems.push(`touches ${field || kind}: ${c.summary || c.path}`);
   }
   if (c.severity === "destructive" && Number(destroys) === 0) problems.push(`destructive: ${c.summary || c.path}`);
 }
@@ -309,7 +322,7 @@ if (add !== Number(adds)) problems.push(`${add} to add, expected ${adds}`);
 if (destroy !== Number(destroys)) problems.push(`${destroy} to destroy, expected ${destroys}`);
 if (onlyField) {
   const text = JSON.stringify(changes.map((c) => [c.summary, c.details]));
-  if (changes.length !== 1 || changes[0].field !== onlyField || !text.includes(onlyDetail)) {
+  if (changes.length !== 1 || fieldOf(changes[0]) !== onlyField || !text.includes(onlyDetail)) {
     problems.push(`expected exactly one ${onlyField} change naming ${onlyDetail}`);
   }
 }
@@ -426,12 +439,30 @@ window_gate() {
   gate "Does status.railway.com show no incident?"
   checkout_is_pr_head
   [[ "$PR_DRAFT" == true ]] || stop "the pull request is not a draft: it must stay one until window 2 merges it"
-  gh pr view "$PR_NUMBER" --json statusCheckRollup \
-    -q '[.statusCheckRollup[] | (.conclusion // .state)] | group_by(.) | map("\(.[0]): \(length)") | join(", ")' \
-    || true
-  gate "Are the pull request's required checks green (above)?"
+  gh pr view "$PR_NUMBER" --json statusCheckRollup > "$OUT/pr-checks.json" \
+    || stop "gh could not read the pull request's checks"
+  checks_green "$OUT/pr-checks.json" \
+    || stop "a pull request check is unfinished or not green (above): wait for CI, then re-run"
   agent_reports "latest deployment SUCCESS on all three projects (list-deployments); environment-status pendingWork \
-empty in all three; main's three Railway commit statuses green; the post-#2008 gate passed; no credential rotation running"
+empty in all three (an entry with no changes counts too: it needs the operator's ruling first); main's three Railway \
+commit statuses green; the post-#2008 gate passed; no credential rotation running"
+}
+
+# checks_green <statusCheckRollup JSON>: list every check; fail unless there is at least one and each finished green.
+# An unfinished check run has conclusion "" and a status (QUEUED, IN_PROGRESS); a commit status has only a state.
+checks_green() {
+  node -e '
+const rollup = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).statusCheckRollup || [];
+let ok = rollup.length > 0;
+if (!ok) console.log("    no checks reported yet");
+for (const c of rollup) {
+  const state = c.conclusion || c.status || c.state || "UNKNOWN";
+  const green = ["SUCCESS", "SKIPPED", "NEUTRAL"].includes(state);
+  ok = ok && green;
+  console.log(`    ${green ? "✓" : "✗"} ${c.name || c.context}: ${state}`);
+}
+process.exit(ok ? 0 : 1);
+' "$1"
 }
 
 # ── modes ─────────────────────────────────────────────────────────────────
@@ -472,13 +503,13 @@ mode_preflight() {
     stage "Plan ${PROJECT_NAME[$label]} (read-only)"
     link_to "$label"
     rc=0
-    NO_COLOR=1 rw config plan > "$OUT/$label-preflight.txt" 2>&1 || rc=$?
+    # The same pinned artifact the windows check (a local file; nothing is applied); it also rehearses --out.
+    NO_COLOR=1 rw config plan --out "$OUT/$label-preflight.plan.json" > "$OUT/$label-preflight.txt" 2>&1 || rc=$?
     cat "$OUT/$label-preflight.txt"
-    NO_COLOR=1 rw config plan --json > "$OUT/$label-preflight.json" 2> "$OUT/$label-preflight.err" || rc=$?
     if (( rc == 0 )); then
-      plan_check "$OUT/$label-preflight.json" 0 0 || warn "not the expected plan: the agent decides"
+      plan_check "$OUT/$label-preflight.plan.json" 0 0 || warn "not the expected plan: the agent decides"
     else
-      warn "the plan exited $rc: the agent reads $OUT/$label-preflight.*"
+      warn "the plan exited $rc: the agent reads $OUT/$label-preflight.txt"
     fi
     case "$label" in
       vite) note "expected: ~ build (builder DOCKERFILE), ~ deploy (healthcheck /healthz 30 s, ON_FAILURE x3, draining 0,
@@ -513,6 +544,8 @@ mode_preflight() {
   step "the x to its right. Never click Deploy here."
   ask STAGED_BANNER_vite "Did a staged-changes banner show (yes/no), and did you discard it?"
   write_env STAGED_BANNER_vite "$STAGED_BANNER_vite"
+  note "The agent then reads vite's environment-status pendingWork. An entry left there (on 2026-10-26: patch 32a07219,"
+  note "staged, no changes, no banner) blocks window 1's gate until the operator rules on it: before asking e9 for a window."
   pause
 
   finish
