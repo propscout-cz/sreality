@@ -3,9 +3,11 @@
 import re
 from pathlib import Path
 
-from tests._railway_iac import iac_entry, iac_text
+from scraper import job_process, job_runner, jobs
+from tests._railway_iac import iac_constant, iac_entry, iac_text
 
 ROOT = Path(__file__).resolve().parents[1]
+WIZARD = ROOT / "scripts" / "railway_iac_wizard.sh"
 
 
 def test_no_config_as_code_file_is_left_to_override_the_iac_file() -> None:
@@ -29,7 +31,7 @@ def test_each_railway_project_id_plans_only_its_own_definition() -> None:
 def test_the_wizard_plans_every_project_the_iac_file_declares() -> None:
     """The wizard keeps its own project tables: a project missing there is never planned or drift-checked, and its
     drift mode still exits 0."""
-    wizard = (ROOT / "scripts" / "railway_iac_wizard.sh").read_text(encoding="utf-8")
+    wizard = WIZARD.read_text(encoding="utf-8")
 
     def table(name: str) -> dict[str, str]:
         match = re.search(rf"^declare -A {name}=\((.*?)\)$", wizard, re.M | re.S)
@@ -45,12 +47,74 @@ def test_the_wizard_plans_every_project_the_iac_file_declares() -> None:
     assert sorted((ids[label], names[label]) for label in labels) == sorted(declared)
 
 
-def test_only_the_worker_declares_a_start_command() -> None:
+def test_only_the_worker_and_the_runner_declare_a_start_command() -> None:
     """Ruling R5: the API and vite run their image's own command. Railway runs a start command in exec form, so a
-    copied `uvicorn ... --port $PORT` never expands $PORT and fails every health check (8a362a0ea). #2075 scopes this
-    to the `sreality` service when it adds agent-worker to `api`."""
+    copied `uvicorn ... --port $PORT` never expands $PORT and fails every health check (8a362a0ea); the runner's is
+    bare python for the same reason, and so that python is PID 1 and gets the SIGTERM. #2075 scopes this to the
+    `sreality` service when it adds agent-worker to `api`."""
     for name in ("api", "vite"):
         assert not re.search(r"\bstart(Command)?\s*:", iac_entry(name)), name
+    runner, worker = iac_entry("jobRunner"), iac_entry("worker")
+    assert re.findall(r"\bstart(?:Command)?\s*:\s*(\w+)", runner) == ["RUNNER_START"]
+    assert re.findall(r"\bstart(?:Command)?\s*:\s*(\w+)", worker) == ["WORKER_START"]
+    command = iac_constant("RUNNER_START")
+    assert command == "python -m scraper.job_runner run"
+    assert "$" not in command and not set(command.split()) & {"sh", "bash", "-c"}, "no shell before python"
+    assert iac_constant("RUNNER_REPLICAS") == 2
+    assert "replicas: { [REGION]: RUNNER_REPLICAS }" in runner
+    assert 'restartPolicyType: "ALWAYS"' in runner
+    assert "jobRunner(sreality)" in worker, "the runner is a resource of the worker's project"
+
+
+def test_the_runner_drain_outlasts_its_own_fallback() -> None:
+    """The runner checks its own drain only between ticks, then forgets its heartbeat: Railway's SIGKILL comes after
+    a guard poll, that drain, a tick, one stopping tick and the forget, and not much later (a deploy waits on it)."""
+    bound = (job_process.GUARD_POLL_S + job_runner.DRAINING_S + job_runner.TICK_S + job_runner.STOP_PHASE_BUDGET_S
+             + 2 * job_runner.CALL_MAX_S)
+    draining = iac_constant("RUNNER_DRAINING_SECONDS")
+    assert bound <= draining <= bound + 30, f"drainingSeconds {draining}: the bound is {bound:.0f} s, +30 at most"
+    assert "drainingSeconds: RUNNER_DRAINING_SECONDS" in iac_entry("jobRunner")
+
+
+def test_the_runner_replica_is_the_registrys_replica() -> None:
+    """The co-tenancy census sizes jobs against jobs.REPLICA_MEMORY_MB, which must be the limit Railway sets: it
+    counts decimal bytes, so 8 GB is 8e9 B, 7,629 MiB in the cgroup. No job asks for more CPUs than a replica has."""
+    memory, cpus = iac_constant("RUNNER_MEMORY_BYTES"), iac_constant("RUNNER_CPUS")
+    assert memory // 2**20 == jobs.REPLICA_MEMORY_MB, f"{memory} B is {memory // 2**20} MiB"
+    assert [j.name for j in jobs.declared() if j.cpus > cpus] == []
+    runner = iac_entry("jobRunner")
+    assert "cpu: RUNNER_CPUS" in runner and "memoryBytes: RUNNER_MEMORY_BYTES" in runner
+
+
+def test_the_runner_watches_every_tree_the_dockerfile_copies() -> None:
+    """A watch-skipped deploy keeps the old image, so a runner that misses a tree its image copies runs stale code.
+    `COPY --from=<stage>` copies from a build stage, not the repo; .railway/ stays out (applies are by hand)."""
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    copied: set[str] = set()
+    for line in re.findall(r"^COPY (?:\S+ )*\S+$", dockerfile, re.M):
+        if "--from=" in line:
+            continue
+        for source in [w for w in line.split()[1:-1] if not w.startswith("--")]:
+            first = Path(source).parts[0]
+            copied.add(f"/{first}/**" if (ROOT / first).is_dir() else f"/{first}")
+    watch = iac_constant("BACKEND_WATCH")
+    assert len(watch) == len(set(watch))
+    assert sorted(copied - set(watch)) == [], "the runner would not redeploy on these"
+    assert set(watch) - copied == {"/Dockerfile", "/.dockerignore"}
+    assert "watchPatterns: BACKEND_WATCH" in iac_entry("jobRunner")
+
+
+def test_the_runner_reads_its_one_secret_from_the_worker_service() -> None:
+    """#2025-R3: the runner stores no secret of its own; it references the worker's SUPABASE_DB_URL, so a rotation
+    changes one place (and redeploys the runner after the worker)."""
+    runner = iac_entry("jobRunner")
+    env = re.search(r"\benv: \{ (.*?) \},", runner, re.S)
+    assert env, "the runner declares its variables inline"
+    assert set(re.findall(r"(\w+): ", env.group(1))) == {"EXTRAS", "HF_HUB_OFFLINE", "SUPABASE_DB_URL"}
+    assert "SUPABASE_DB_URL: sreality.env.SUPABASE_DB_URL" in env.group(1)
+    assert not re.search(r"preserve\(|kept\(|ctx\.shared", runner)
+    worker_kept = re.search(r"\bkept\((.*?)\)", iac_entry("worker"), re.S)
+    assert worker_kept and "SUPABASE_DB_URL" in re.findall(r'"(\w+)"', worker_kept.group(1))
 
 
 def test_the_api_and_the_worker_pass_their_extras_to_the_root_dockerfile_build() -> None:
@@ -62,3 +126,6 @@ def test_the_api_and_the_worker_pass_their_extras_to_the_root_dockerfile_build()
     assert 'pip install ".[${EXTRAS:-api}]"' in dockerfile
     for name in ("api", "worker"):
         assert 'EXTRAS: "api"' in iac_entry(name), name
+    assert 'EXTRAS: "api,clip,geo"' in iac_entry("jobRunner")
+    assert 'EXTRAS: "api"' not in iac_entry("jobRunner")
+

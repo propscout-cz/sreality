@@ -17,7 +17,8 @@ HOUR, DAY = 3600, 86400
 # Children per replica (job_runner.MAX_CHILDREN enforces it); the largest that many declarations fit this share of
 # one replica.
 RUNNER_MAX_CONCURRENT = 3
-REPLICA_MEMORY_MB, CO_TENANCY_SHARE = 8192, 0.70
+# Railway's 8 GB = 8e9 B (.railway/railway.ts RUNNER_MEMORY_BYTES), in MiB.
+REPLICA_MEMORY_MB, CO_TENANCY_SHARE = 7629, 0.70
 # The runner's SIGKILL grace after its SIGTERM stays under this; the API's stuck-run cutoff exceeds the longest
 # walk by it, and the DB-heavy hour census counts it (tests/scraper/test_job_registry.py).
 STUCK_RUN_GRACE_S = 600
