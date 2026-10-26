@@ -1,0 +1,138 @@
+{
+ "_provenance": "synthetic: shaped by railway CLI v5.71.0 (src/iac/change_set.rs change objects, saved_plan.rs SavedPlan) and the SDK's job-runner node; #2025 B4 replaces it with the trimmed real --out change list (names only)",
+ "kind": "railway.config.plan",
+ "version": 1,
+ "cliVersion": "5.71.0",
+ "sourceTree": "0000000000000000000000000000000000000000",
+ "environmentId": "00000000-0000-0000-0000-000000000000",
+ "configEtag": "synthetic",
+ "changeSetHash": "sha256:synthetic",
+ "changeSet": {
+  "version": 1,
+  "changes": [
+   {
+    "kind": "resource.create",
+    "address": "service.job-runner",
+    "resource": {
+     "address": "service.job-runner",
+     "type": "service",
+     "kind": "github",
+     "name": "job-runner",
+     "source": {
+      "type": "github",
+      "repo": "waiff/sreality",
+      "branch": "main",
+      "checkSuites": false
+     },
+     "build": {
+      "builder": "DOCKERFILE",
+      "dockerfilePath": "Dockerfile",
+      "watchPatterns": [
+       "/Dockerfile",
+       "/.dockerignore",
+       "/pyproject.toml",
+       "/scraper/**",
+       "/toolkit/**",
+       "/api/**",
+       "/scripts/**",
+       "/location_data/**",
+       "/contracts/**",
+       "/data/**",
+       "/autodedup/**"
+      ]
+     },
+     "deploy": {
+      "restartPolicyType": "ALWAYS",
+      "drainingSeconds": 250,
+      "limitOverride": {
+       "containers": {
+        "cpu": 4,
+        "memoryBytes": 8000000000
+       }
+      },
+      "startCommand": "python -m scraper.job_runner run",
+      "multiRegionConfig": {
+       "europe-west4-drams3a": {
+        "numReplicas": 2
+       }
+      }
+     },
+     "variables": {
+      "EXTRAS": {
+       "type": "literal",
+       "value": "api,clip,geo"
+      },
+      "HF_HUB_OFFLINE": {
+       "type": "literal",
+       "value": "1"
+      },
+      "SUPABASE_DB_URL": {
+       "type": "reference",
+       "resource": "service.sreality",
+       "output": "SUPABASE_DB_URL"
+      }
+     }
+    },
+    "path": "resources.service.job-runner",
+    "summary": "Create service job-runner",
+    "severity": "safe",
+    "deployEffect": "deploy"
+   },
+   {
+    "kind": "variable.set",
+    "address": "service.job-runner",
+    "variable": "EXTRAS",
+    "after": {
+     "type": "literal",
+     "value": "api,clip,geo"
+    },
+    "path": "resources.service.job-runner.variables.EXTRAS",
+    "summary": "Set variable job-runner.EXTRAS",
+    "details": [
+     "job-runner.EXTRAS (unset → «hidden»)"
+    ],
+    "severity": "safe",
+    "deployEffect": "deploy"
+   },
+   {
+    "kind": "variable.set",
+    "address": "service.job-runner",
+    "variable": "HF_HUB_OFFLINE",
+    "after": {
+     "type": "literal",
+     "value": "1"
+    },
+    "path": "resources.service.job-runner.variables.HF_HUB_OFFLINE",
+    "summary": "Set variable job-runner.HF_HUB_OFFLINE",
+    "details": [
+     "job-runner.HF_HUB_OFFLINE (unset → «hidden»)"
+    ],
+    "severity": "safe",
+    "deployEffect": "deploy"
+   },
+   {
+    "kind": "variable.set",
+    "address": "service.job-runner",
+    "variable": "SUPABASE_DB_URL",
+    "after": {
+     "type": "reference",
+     "resource": "service.sreality",
+     "output": "SUPABASE_DB_URL"
+    },
+    "path": "resources.service.job-runner.variables.SUPABASE_DB_URL",
+    "summary": "Set variable job-runner.SUPABASE_DB_URL",
+    "details": [
+     "job-runner.SUPABASE_DB_URL (unset → sreality.SUPABASE_DB_URL)"
+    ],
+    "severity": "safe",
+    "deployEffect": "deploy"
+   }
+  ],
+  "diagnostics": [],
+  "declared": [
+   "service.sreality",
+   "service.job-runner"
+  ]
+ },
+ "destructive": false
+}
