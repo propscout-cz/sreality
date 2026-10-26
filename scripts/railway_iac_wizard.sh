@@ -245,6 +245,9 @@ CLI_VERSION="5.71.0"
 declare -A PROJECT_ID=([vite]=cc62432a-5cd0-4c1a-8e3f-ba5d0bf79140 [API]=78652c43-bb7f-401b-a3de-5f532f76f72c
                        [worker]=6f6ac731-10a5-4a28-b831-350ead8a4a97)
 declare -A PROJECT_NAME=([vite]=vite [API]=API [worker]=realtime-worker)
+# Each project's services as .railway/railway.ts declares them (a test ties the two): Railway posts one commit status
+# per service, `<project> - <service>`.
+declare -A SERVICES=([vite]="sreality" [API]="sreality" [worker]="sreality job-runner")
 declare -A HEALTH_URL=([vite]=https://app.propscout.cz/healthz [API]=https://api.propscout.cz/health)
 declare -A PLAN_FILE=()
 PLAN_SEQ=0
@@ -461,17 +464,21 @@ process.exit(ok ? 0 : 1);
 ' "$1" "${2:-}"
 }
 
-# railway_statuses <combined-status JSON> <min>: print the Railway commit statuses (context `<project> - <service>`);
-# exit 0 when at least <min> posted and each is success, 1 when one finished otherwise, 3 while any is pending.
+# railway_statuses <combined-status JSON> <context>…: print the Railway commit statuses of the contexts' projects;
+# exit 0 when at least one per context posted and each is success, 1 when one finished otherwise, 3 while one is
+# missing or pending. It counts by project rather than matching names: job-runner's context name is inferred, so an
+# absent name is printed for the agent, not waited on.
 railway_statuses() {
   node -e '
-const [file, min, ...projects] = process.argv.slice(1);
+const [file, ...contexts] = process.argv.slice(1);
 const all = JSON.parse(require("fs").readFileSync(file, "utf8")).statuses || [];
+const projects = [...new Set(contexts.map((c) => c.split(" - ")[0]))];
 const ours = all.filter((s) => projects.some((p) => String(s.context).startsWith(`${p} - `)));
 for (const s of ours) console.log(`    ${s.context}: ${s.state} (${s.description || ""})`);
-if (ours.length < Number(min) || ours.some((s) => s.state === "pending")) process.exit(3);
+for (const c of contexts.filter((c) => !ours.some((s) => s.context === c))) console.log(`    ${c}: not posted`);
+if (ours.length < contexts.length || ours.some((s) => s.state === "pending")) process.exit(3);
 process.exit(ours.every((s) => s.state === "success") ? 0 : 1);
-' "$1" "$2" "${PROJECT_NAME[@]}"
+' "$@"
 }
 
 # ── modes ─────────────────────────────────────────────────────────────────
@@ -604,7 +611,7 @@ request body's pre-merge checks; the deployment ids of $project's other services
   say "The agent marks pull request #$PR_NUMBER ready; then merge it at once (or e9 does, on its light)."
   open_url "$PR_URL"
   pause "Press Enter once the pull request is MERGED."
-  local merge_sha slug i rc=3
+  local merge_sha slug i l s rc=3 contexts=()
   merge_sha=$(gh pr view "$PR_NUMBER" --json mergeCommit -q '.mergeCommit.oid') || stop "gh could not read the merge commit"
   [[ -n "$merge_sha" ]] || stop "pull request #$PR_NUMBER is not merged"
   slug=$(gh repo view --json nameWithOwner -q .nameWithOwner)
@@ -612,10 +619,11 @@ request body's pre-merge checks; the deployment ids of $project's other services
   pause
 
   stage "Railway's commit statuses on the merge"
-  say "Waiting until every Railway status on ${merge_sha:0:9} is final (up to 20 minutes)."
+  for l in "${LABELS[@]}"; do for s in ${SERVICES[$l]}; do contexts+=("${PROJECT_NAME[$l]} - $s"); done; done
+  say "Waiting until all ${#contexts[@]} Railway statuses on ${merge_sha:0:9} are final (up to 20 minutes)."
   for i in $(seq 1 40); do
     if gh api "repos/$slug/commits/$merge_sha/status" > "$OUT/merge-status.json" 2>/dev/null; then
-      rc=0; railway_statuses "$OUT/merge-status.json" "${#LABELS[@]}" > "$OUT/merge-status.txt" || rc=$?
+      rc=0; railway_statuses "$OUT/merge-status.json" "${contexts[@]}" > "$OUT/merge-status.txt" || rc=$?
       (( rc != 3 )) && break
     fi
     note "still waiting ($i/40)"
@@ -636,7 +644,7 @@ heartbeats)"
   stage "Drift proof: plan = 0 in all three projects, from main's file"
   git -C "$WT" fetch --quiet origin main || stop "git fetch failed"
   git -C "$WT" diff --quiet HEAD origin/main -- .railway || stop "this checkout's .railway/ differs from main's"
-  local r l
+  local r
   for l in "${LABELS[@]}"; do
     link_to "$l"
     r=$(drift_rc "$l" "$OUT/final-$l.txt")

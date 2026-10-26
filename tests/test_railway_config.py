@@ -1,8 +1,12 @@
 """Railway settings live only in .railway/railway.ts (#2060)."""
 
+import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from scraper import job_process, job_runner, jobs
@@ -47,6 +51,63 @@ def test_the_wizard_plans_every_project_the_iac_file_declares() -> None:
     assert sorted(ids) == sorted(names) == sorted(labels)
     declared = re.findall(r'"([0-9a-f-]{36})": \{ name: "([^"]+)"', iac_text())
     assert sorted((ids[label], names[label]) for label in labels) == sorted(declared)
+
+
+def _declared_services(define: str) -> list[str]:
+    """The services one project's definition creates: its own `service("…")` calls and those of the top-level
+    service consts it calls (`jobRunner(sreality)`)."""
+    text = iac_entry(define)
+    found = re.findall(r'\bservice\("([^"]+)"', text)
+    for const in re.findall(r"^const (\w+) = ", iac_text(), re.M):
+        if const != define and re.search(rf"\b{const}\(", text):
+            found += re.findall(r'\bservice\("([^"]+)"', iac_entry(const))
+    return found
+
+
+def test_the_window_waits_for_a_status_from_every_service_the_iac_file_declares() -> None:
+    """Railway posts one commit status per service (`<project> - <service>`): a window that waited for one per
+    project would read the merge as final with job-runner's (or #2075's agent-worker's) still unposted."""
+    wizard = WIZARD.read_text(encoding="utf-8")
+    table = re.search(r"^declare -A SERVICES=\((.*?)\)$", wizard, re.M | re.S)
+    assert table, "SERVICES"
+    services = {label: names.split() for label, names in re.findall(r'\[(\w+)\]="([^"]*)"', table.group(1))}
+    names = dict(re.findall(r"\[(\w+)\]=(\S+)", re.search(r"^declare -A PROJECT_NAME=\((.*?)\)$", wizard,
+                                                         re.M | re.S).group(1)))
+    defines = dict(re.findall(r'\{ name: "([^"]+)", define: (\w+) \}', iac_text()))
+    assert {label: _declared_services(defines[names[label]]) for label in names} == services
+    assert services["worker"] == ["sreality", "job-runner"]
+    window = wizard.split("\nmode_window() {\n", 1)[1].split("\n}\n", 1)[0]
+    calls = re.findall(r"railway_statuses (.*?)(?: >|$)", window, re.M)
+    assert calls == ['"$OUT/merge-status.json" "${contexts[@]}"'], calls
+    assert 'contexts+=("${PROJECT_NAME[$l]} - $s")' in window and "${SERVICES[$l]}" in window
+
+
+def _wizard_node_script(function: str) -> str:
+    """The `node -e '…'` program inside one wizard function."""
+    body = WIZARD.read_text(encoding="utf-8").split(f"\n{function}() {{\n", 1)[1].split("\n}\n", 1)[0]
+    return body.split("node -e '", 1)[1].rsplit("' ", 1)[0]
+
+
+@pytest.mark.parametrize(("posted", "code"), [
+    ({"API - sreality": "success", "vite - sreality": "success", "realtime-worker - sreality": "success"}, 3),
+    ({"API - sreality": "success", "vite - sreality": "success", "realtime-worker - sreality": "success",
+      "realtime-worker - job-runner": "pending"}, 3),
+    ({"API - sreality": "success", "vite - sreality": "success", "realtime-worker - sreality": "success",
+      "realtime-worker - job-runner": "failure"}, 1),
+    ({"API - sreality": "success", "vite - sreality": "success", "realtime-worker - sreality": "success",
+      "realtime-worker - job-runner": "success", "CI": "failure"}, 0),
+])
+def test_the_merge_statuses_are_final_only_once_every_service_posted(tmp_path: Path, posted: dict[str, str],
+                                                                       code: int) -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("no node")
+    status = tmp_path / "status.json"
+    status.write_text(json.dumps({"statuses": [{"context": c, "state": v} for c, v in posted.items()]}))
+    contexts = ["vite - sreality", "API - sreality", "realtime-worker - sreality", "realtime-worker - job-runner"]
+    run = subprocess.run([node, "-e", _wizard_node_script("railway_statuses"), str(status), *contexts],
+                         capture_output=True, text=True, timeout=60, check=False)
+    assert run.returncode == code, run.stdout + run.stderr
 
 
 def test_only_the_worker_and_the_runner_declare_a_start_command() -> None:

@@ -1146,8 +1146,8 @@ on 2026-12-01, and until then a file of that name would override the applied set
   - `window <label> <adds> <destroys> <service>`, one e9 window, the autodedup brake on for `worker`: the gate (e9's
     light, status.railway.com, the PR head, still a draft, its checks green, `CI: runner image` among them when the PR
     changes an image input), the scoped pinned plan, the interactive apply, the checks before the merge, the merge at
-    once, Railway's commit statuses on the merge SHA, then drift = 0 on all three from main's file. The apply precedes
-    the merge, so main declares nothing Railway lacks for longer than the merge takes.
+    once, Railway's commit statuses on the merge SHA (one per declared service), then drift = 0 on all three from
+    main's file. The apply precedes the merge, so main declares nothing Railway lacks for longer than the merge takes.
   - `drift`, read-only: it refuses a checkout whose `.railway/` differs from `origin/main`'s (run it from
     `git checkout --detach origin/main`), then plans all three.
   - `runner-list` and `runner-pause <job> <until> <note>`: `python -m scraper.job_runner list|pause` on job-runner
@@ -1217,7 +1217,8 @@ on 2026-12-01, and until then a file of that name would override the applied set
   are outside this rule, above), except as the emergency undo U-2 or U-4, and fold any such change back into the
   file: the next plan shows it as drift.
 - **Adding a service** is one more `service(...)` in its project's definition, as its own top-level const so the
-  text guards can scope it (#2025's `jobRunner` in realtime-worker; #2075's agent-worker in `API`); a new
+  text guards can scope it (#2025's `jobRunner` in realtime-worker; #2075's agent-worker in `API`), and its name in
+  the wizard's `SERVICES` (a test ties it to the file: a window waits for one commit status per service); a new
   Railway project (#2025 added none) also needs a `PROJECTS` entry, a row in the
   project-map test, and a row in the wizard's `PROJECT_ID`, `PROJECT_NAME` and `LABELS` (a guard test ties those to
   `PROJECTS`). Removing a service deletes it.
