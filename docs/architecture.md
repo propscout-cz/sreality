@@ -1150,8 +1150,9 @@ on 2026-12-01, and until then a file of that name would override the applied set
     service the merge redeployed (the API on every merge; vite on a `frontend/` change, `workflow-docs.json`
     included), then drift = 0 on all three from main's file. The apply precedes the merge, so main declares nothing
     Railway lacks for longer than the merge takes.
-  - `drift`, read-only: it refuses a checkout whose `.railway/` differs from `origin/main`'s (run it from
-    `git checkout --detach origin/main`), then plans all three.
+  - `drift`, read-only: it refuses a checkout whose `.railway/` differs from `origin/main`'s (run it from the `main`
+    branch after `git pull --ff-only`, never a detached HEAD, which main's wizard refuses until #2025 merges), then
+    plans all three.
   - `runner-list` and `runner-pause <job> <until> <note>`: `python -m scraper.job_runner list|pause` on job-runner
     over `railway ssh -p <worker project> -e production -s job-runner`; the first use registers an SSH key. If ssh
     cannot reach the service, the agent runs the one-row SQL with the operator's OK. A request is #2026's "Jobs: run
@@ -1245,7 +1246,8 @@ Undo paths (U-1 and U-2 rehearsed on vite in #2060's window 1; evidence on #2060
   it restores only paths a `migrate cutover` saved, and it accepts only `railway.json`/`railway.toml` names.
 - **U-4, emergency, before the adding PR merges:** the dashboard → the service → Settings → Delete service, only for
   a service main's file never declared (job-runner before #2025's PR-1 merges: its window applies before the merge).
-  Then `drift` from a main checkout reads 0.
+  Then `drift` from the `main` branch (`git checkout main`, `git pull --ff-only`; main's wizard is then still the one
+  before #2025, which refuses a detached HEAD) reads 0.
 
 ## Architectural rules — full rationale
 

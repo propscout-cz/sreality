@@ -291,6 +291,8 @@ def test_the_wizard_has_the_general_modes_and_checks_with_its_own_copy() -> None
     assert modes and modes.group(1).split("|") == ["preflight", "window", "drift", "runner-list", "runner-pause"]
     drift = wizard.split("\nmode_drift() {\n", 1)[1].split("\n}\n", 1)[0]
     assert 'git -C "$WT" diff --quiet HEAD origin/main -- .railway' in drift
+    # Its way back is the main branch: until #2025 merges, main's wizard (#2060's) refuses a detached HEAD (U-4).
+    assert 'checkout main, then git -C \\"$WT\\" pull --ff-only' in drift and "--detach" not in drift
     copy_step = wizard.split('if [[ "${RAILWAY_M0_RUNNING_COPY:-}" != 1 ]]; then', 1)[1].split("\nfi\n", 1)[0]
     # A copy per run: a second run (runner-list beside a window) never rewrites a running window's files in place.
     assert 'RUN_DIR=$(mktemp -d "$OUT/run.XXXXXX")' in copy_step

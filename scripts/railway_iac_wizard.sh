@@ -713,10 +713,12 @@ and heartbeats)"
 mode_drift() {
   TOTAL_STAGES=2
   # drift compares Railway with main: from any other tree a clean plan would prove nothing about main (U-4, a merge).
+  # The way back is the main branch, not a detached origin/main: main's wizard before #2025 refuses a detached HEAD.
   git -C "$WT" fetch --quiet origin main || stop "git fetch failed"
   if ! git -C "$WT" diff --quiet HEAD origin/main -- .railway \
       || [[ -n "$(git -C "$WT" status --porcelain -- .railway)" ]]; then
-    stop "drift compares Railway with main: run git -C \"$WT\" checkout --detach origin/main, then drift again"
+    stop "drift compares Railway with main: run git -C \"$WT\" checkout main, then git -C \"$WT\" pull --ff-only, \
+then drift again"
   fi
   banner "Railway drift check (read-only)"
 
