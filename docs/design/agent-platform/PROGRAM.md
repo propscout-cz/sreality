@@ -906,8 +906,10 @@ W0 -> W1 -> scout spike -> W2 (proof of concept) -> usage gate -> W3 (estimation
 operator's time).** *Entry:* AR1. *Items:* the ten in § 2.1. *Brake:* none needed; each change is a closure.
 *Deletes:* the browser write path on the run tables; account-blind building access; `RUNPOD_API_KEY` on the API.
 *Exit, IaC first, by 2026-11-15:* `railway config plan` shows no diff for all three services; after a forced
-redeploy, describe-service shows the Dockerfile builder, the start command, the healthcheck, the restart policy and
-drainingSeconds; `railway config migrate undo` has been rehearsed on one service. *Then:* with a trial account's JWT,
+redeploy, describe-service shows the Dockerfile builder, the restart policy and drainingSeconds on all three, the
+start command where a service defines one (the worker) and the health check where it serves HTTP (ruling R5, #2060);
+the undo path has been rehearsed on one service (2026-10-26: `migrate undo` cannot cover these
+services, as it accepts only `railway.json`/`railway.toml` paths; the paths are in docs/architecture.md). *Then:* with a trial account's JWT,
 a PostgREST INSERT into `estimation_runs` is denied while the scenario PATCH still works from the SPA and the
 extension; `/buildings` answers 403 to a non-admin; a token with a foreign issuer gets 401; boot refuses
 `API_AUTH_OPTIONAL` when RAILWAY_ENVIRONMENT is set; a message from a foreign sender is ignored by the extension; a

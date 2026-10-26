@@ -112,11 +112,13 @@ aligns to the rightmost digit.
 
 ## Deploy
 
-Railway, as a second service in the same project as the API.  The
-service builds from this `frontend/` directory using the local
-`Dockerfile` (Node build stage → Caddy serve stage) and exposes a
-public domain that Railway terminates TLS at.  See the root `README.md`
-for the click-by-click setup.
+Railway, as its own project `vite`.  The service builds from this
+`frontend/` directory (root directory `/frontend`) using the local
+`Dockerfile` (Node build stage → Caddy serve stage), with the `/healthz`
+health check and the `/frontend/**` watch pattern, and exposes a public
+domain that Railway terminates TLS at.  Those settings live in
+`/.railway/railway.ts`, applied by the operator with
+`scripts/railway_iac_wizard.sh` (a merge alone changes none of them).
 
 `Caddyfile` handles SPA routing (`try_files {path} /index.html`),
 gzip + zstd compression, immutable caching for hashed `assets/*`

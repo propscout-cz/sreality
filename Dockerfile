@@ -38,7 +38,10 @@ COPY data/ ./data/
 # time, so the miss only shows as a crash-loop at runtime).
 COPY autodedup/ ./autodedup/
 
-RUN pip install --upgrade pip && pip install ".[api]"
+# EXTRAS: the pyproject extras this image installs. A Railway service variable of the same name reaches this ARG at
+# build time (.railway/railway.ts; the API and the worker set `api`); unset, it is `api`. The echo shows in the build log.
+ARG EXTRAS
+RUN echo "EXTRAS=${EXTRAS:-unset}" && pip install --upgrade pip && pip install ".[${EXTRAS:-api}]"
 
 EXPOSE 8000
 

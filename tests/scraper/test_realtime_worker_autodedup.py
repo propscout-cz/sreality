@@ -17,7 +17,6 @@ import asyncio
 import gc
 import inspect
 import io
-import json
 import logging
 import os
 import re
@@ -44,6 +43,7 @@ from autodedup.incremental_lane import (
 )
 from autodedup.incremental_sql import RT_STORE_PRESENT_SQL
 from scraper import realtime_worker as rw
+from tests._railway_iac import RAILWAY_IAC, iac_constant, iac_entry
 from tests.autodedup.fake_pg import FakePg
 from tests.autodedup.lane_world import seed_lane
 from tests.autodedup.lane_world import world as lane_world
@@ -943,7 +943,6 @@ def test_the_heartbeat_counts_the_same_rulings_the_engine_cannot_honour(
 # ------------------------------------------------- E941: a deploy releases the lease at once
 
 
-RAILWAY_WORKER = Path(__file__).resolve().parents[2] / "railway.worker.json"
 # E949: `env` sets the arena cap and execs python, which stays the container's PID 1.
 WORKER_START_COMMAND = "env MALLOC_ARENA_MAX=2 python -m scraper.realtime_worker"
 
@@ -963,8 +962,7 @@ def test_the_drain_window_fits_the_release_and_ends_before_the_watchdog() -> Non
     window holds the release's one bounded connect and statement, and stays under the
     watchdog's liveness bound, which a drain must never reach: the heartbeat lane stops at
     the signal like every lane."""
-    deploy = json.loads(RAILWAY_WORKER.read_text(encoding="utf-8"))["deploy"]
-    draining = deploy["drainingSeconds"]
+    draining = iac_constant("WORKER_DRAINING_SECONDS")
     attempts = rw.AUTODEDUP_RELEASE_CONNECT_ATTEMPTS
     worst = (rw.AUTODEDUP_CANCEL_TIMEOUT_SECONDS
              + attempts * rw.AUTODEDUP_RESCUE_CONNECT_TIMEOUT_SECONDS
@@ -972,7 +970,9 @@ def test_the_drain_window_fits_the_release_and_ends_before_the_watchdog() -> Non
     assert attempts >= 2, "one dropped handshake must not cost the release"
     assert worst < draining, "the cancel and both attempts fit the drain (one address)"
     assert draining < rw.LIVENESS_BOUND_SECONDS
-    assert deploy["startCommand"] == WORKER_START_COMMAND
+    assert iac_constant("WORKER_START") == WORKER_START_COMMAND
+    assert "start: WORKER_START" in iac_entry("worker")
+    assert "drainingSeconds: WORKER_DRAINING_SECONDS" in iac_entry("worker")
 
 
 def test_a_shutdown_releases_the_lease_of_the_pass_in_flight_on_a_fresh_connection(
@@ -1466,12 +1466,13 @@ def test_the_worker_starts_with_two_malloc_arenas_and_python_as_its_pid_1() -> N
     ...` would be taken for the program and the worker would never start: `env` sets the
     variable and execs python, which stays PID 1 for E941's SIGTERM handler. The API's image
     and its start are untouched."""
-    command = json.loads(RAILWAY_WORKER.read_text(encoding="utf-8"))["deploy"]["startCommand"]
+    command = iac_constant("WORKER_START")
     assert command == WORKER_START_COMMAND
     words = command.split()
     assert words[0] == "env" and words[1] == "MALLOC_ARENA_MAX=2"
     assert words[2:] == ["python", "-m", "scraper.realtime_worker"], "env execs python itself"
     assert not set(words) & {"sh", "bash", "-c", "&&", ";", "|"}, "no shell before python"
-    for name in ("railway.json", "Dockerfile"):
-        assert "MALLOC_ARENA_MAX" not in (RAILWAY_WORKER.parent / name).read_text(
-            encoding="utf-8"), name
+    dockerfile = (RAILWAY_IAC.parents[1] / "Dockerfile").read_text(encoding="utf-8")
+    assert "MALLOC_ARENA_MAX" not in dockerfile
+    assert "MALLOC_ARENA_MAX" not in iac_entry("api")
+    assert "WORKER_START" not in iac_entry("api"), "the TS file can name the constant without its text"

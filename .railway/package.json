@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.6" },
+  "devDependencies": {
+    "@railway/cli": "5.71.0",
+    "railway": "3.16.0"
+  }
+}

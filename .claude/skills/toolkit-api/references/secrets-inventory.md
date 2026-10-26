@@ -10,6 +10,9 @@ The Railway services are three separate projects, one service each: **API** (`ap
 public `VITE_*` build values). "GH" is a GitHub Actions repository secret. Railway's variable names per
 service come from the 2026-10-25 audit (API 20, worker 14, SPA 3); the wizard has the operator confirm
 each on the service's Variables page before editing it.
+Railway variable NAMES live in `.railway/railway.ts` (each `preserve()`; values stay in Railway): add a name there in
+the same PR as the secret, remove it there to delete one (an operator apply, `scripts/railway_iac_wizard.sh`).
+`EXTRAS` (API and worker: `api`) is the root Dockerfile's build argument.
 
 ## Rotated by the wizard (ruling Q13, MVP.md § 4)
 

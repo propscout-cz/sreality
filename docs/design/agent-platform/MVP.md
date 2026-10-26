@@ -111,6 +111,9 @@ the user sees the draft with an "open in my mail" link and sends it; no thread t
   limits, drainingSeconds and a Dockerfile build argument per service, so #2025 can add its runner (2 replicas, 8 GB /
   4 vCPU, 180 s drain) to the same file; the three railway*.json files are deleted in the same change; the M0 issue
   number is posted on #2025 so its blocking edge becomes real. agent-worker cannot be created before this is done.
+  As built (#2060, 2026-10-26): the services are three Railway projects, so the one `.railway/railway.ts` returns the
+  linked project's definition (keyed by project id and name) and every change is three plans; the operator applies it
+  with `scripts/railway_iac_wizard.sh` inside merge windows, with no apply-on-merge in M0 (ruling R2).
 - The remaining credential rotation through a guided script (`/wizard`): the database password and the two DSNs, the
   Supabase service key, the R2 access key pair, Stripe, the GitHub token, Mapy, Valuo, the smoke-test accounts; database last.
   Already rotated: the AI provider keys, RunPod, the Cloudflare API token. VAPID is new and stays.
