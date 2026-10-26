@@ -97,24 +97,21 @@ tenant-scoped:
   `tenant_transaction(claims, act_as=, method=)` is the same block as a context manager, for one named
   exception (`references/tenancy.md`): it commits before slow service-role work.
 
-**Pooler-safe mutual exclusion: lease-row CAS, not session advisory locks (migration
-279, PR #717).** `pg_advisory_lock`/`unlock` are **session-scoped** — sound only on a
-direct or session-pooled connection. Every service-role Python path uses the
-**transaction-mode** pooler (`SUPABASE_DB_URL`, port 6543); under autocommit each
-statement is its own transaction and can land on a *different* physical backend, so a
-lock taken on backend X and released on backend Y silently fails to release — the lock
-strands (caught live: PR #716's property-maintenance serialization stranded within
-minutes, the "holder" pid was mid-way through an unrelated statement on another backend).
-The pooler-proof primitive is a **single-row lease** claimed by one atomic
-`UPDATE ... RETURNING` compare-and-set — atomic on whatever backend it lands on, no
-session state, with an expiry that self-heals a crashed holder
-(`property_maintenance_lease`, `scripts/recompute_property_stats.py`). Scheduled jobs share ONE such row
-table, `scheduled_jobs` (mig 675, ex-`location_jobs`), through `scraper/job_lease.py`: `claim` (due, live, no
-sibling holding its `resource`) / `renew` / `Lease.fenced` / `release`, and `job_runs`' unique open-run indexes
-(per job, per resource) refuse a lost race in the database; `held` is the schedule-free lane form. pg_cron functions
-(migration 277's Browse-rebuild included) are the one exception: each pg_cron call is a
-single local session, so a session advisory lock there is sound — don't generalize the
-lease-row fix to code that never sees the pooler.
+**Mutual exclusion over the pooler: three shapes, never a session advisory lock from Python.** Service-role
+Python runs on the **transaction-mode** pooler (`SUPABASE_DB_URL`, port 6543), where autocommit statements land on
+different backends, so a session `pg_advisory_lock` strands on the backend that took it (PR #716's maintenance lock
+did within minutes, hence migration 279).
+- **Singleton lease** (one holder; a crashed one's lease expires): every new one goes through `scraper/job_lease.py`, one
+  `scheduled_jobs` row per lease — `held` for a lane (yields a bool and never renews: its TTL must outlast the pass),
+  `claim` / `renew` / `Lease.fenced` / `release` for a scheduled job, `job_runs`' unique open-run indexes (per job,
+  per resource) refusing a lost race. `tests/test_lease_census.py` fails CI on lease CAS text anywhere else and
+  ledgers the three older copies (`property_maintenance_lease`, `broker_resolution_lock`, `autodedup.rt_lease`).
+  Under READ COMMITTED each later statement in the CAS's transaction sees rows committed after it: re-check what
+  the CAS proved, or let a unique index decide (job_lease's lost-run close, #2022).
+- **Work-queue claim** (many rows, many workers): `FOR UPDATE SKIP LOCKED` (`listing_detail_queue`,
+  `dirty_locations`, `notification_deliveries`, …) — not a lease.
+- **One-transaction guard**: `pg_(try_)advisory_xact_lock`, released on commit, rollback and cancel. SQL functions
+  take it, pg_cron's rebuilds since migration 522 (their session lock's unlock handler never ran on a cancel).
 **A pg_cron command emits no NOTICE before its last statement**: a flushed NOTICE blocks pg_cron's single launcher until the command ends, freezing every job start (migration 658: a dead `drop table if exists`, ~68 s four times an hour).
 
 **Supabase MCP.** Claude Code has direct read/write access to the production Supabase
