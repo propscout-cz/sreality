@@ -1,7 +1,7 @@
 # Actions exit: make the repo private, run recurring work where it is billed by use
 
 Status: APPROVED 2026-10-25 (rulings R1–R27 below); building: W0 and W1 PRs landing, W2's schema (#2042) and
-registry (#2023) landed, the runner (#2024) in review, its service (#2025) next. Audit: 84 workflow files, 14 days of run data, two review panels (42 agents on the audit and first design; 20 agents on the from-scratch
+registry (#2023) landed, the runner (#2024) landed, its service (#2025) next. Audit: 84 workflow files, 14 days of run data, two review panels (42 agents on the audit and first design; 20 agents on the from-scratch
 design: four architects, three judges, twelve refuters). Per-file verdicts: [dispositions.md](dispositions.md).
 Decision record: [ADR 0001](../../adr/0001-scheduled-jobs-on-a-railway-job-runner.md).
 
@@ -116,13 +116,15 @@ production.
   missed slots are skipped, never replayed; a new row's first slot is no earlier than `now() + timeout_s`
   so it never overlaps a GitHub run still in flight at cutover. Claim-if-due is one compare-and-set, tried
   oldest `due_at` first so a job waits at most one sibling's run for its resource; the lease TTL is 180 s,
-  renewed every 60 s, with self-fencing before expiry. The due list holds free, registered rows with no open run on
+  renewed every 60 s, with self-fencing before expiry, and each claim is its own holder (a late release of a
+  lapsed run never touches the job's next run). The due list holds free, registered rows with no open run on
   the job or its resource (a lapsed run is the reaper's: it closes it `lost`, never waiting on a claim's locks).
   Every runner call is one transaction under a 5 s statement timeout. The boot upserts the registry, retrying each
   tick until it lands; the runner execs argv from its in-memory entry, never from the row.
 - **Execution**: each job is a subprocess in its own session with its exact argv and `JOB_CPUS` exported (CLIP
   threads and the intake pool read it instead of `os.cpu_count()`); a guard thread sends every signal, with no
-  database call, so a stalled database delays no stop: at `timeout_s` SIGTERM to the leader only (a walk reads it
+  database call and no log write of its own (a forwarder thread writes its lines), so neither a stalled database
+  nor a stalled log reader delays a stop: at `timeout_s` SIGTERM to the leader only (a walk reads it
   as its deadline; a pool finishes the item in hand), SIGKILL to the whole group `GRACE_S` (90 s) later, under
   `jobs.STUCK_RUN_GRACE_S` (600 s; the stuck-run cutoff and DB-heavy hour censuses count it); at the lease's fence,
   or a refused renewal, the group is SIGKILLed at once. A run the runner stopped at `timeout_s` is recorded
@@ -147,13 +149,15 @@ production.
   row the runner executes on the same host (args appended to the registry's; a second waits for the first); one
   request-only GitHub form "Jobs: run now" does the same for the operator; `pause <job> --until <date|now>
   --note` sets `paused_until` on any live row, a lane's included (`--until now` lifts it); `once <job>` runs a due
-  or requested runner entry in the foreground (GitHub entries from #2033); `list` shows every row. Nothing is a
+  or requested runner entry in the foreground (GitHub entries from #2033; a closed terminal stops it like Ctrl-C,
+  and it exits 1 when the database does not answer within 60 s); `list` shows every row. Nothing is a
   flag; a pause always ends.
 - **Health**: a `job/<name>` cell per row, computed in SQL by the pg_cron watcher (so it survives a Railway
   outage), judged from `last_success_at` against the row's own cadence and `timeout_s` (warn at 2/3,
   problem at 1×), showing the cause (exit code or signal) from `job_runs`; a `held by sibling` state for the
   `location-heavy` resource; one heartbeat row per replica for liveness (`job-runner/<RAILWAY_REPLICA_ID[:8]>`,
-  carrying its deployment), each worker with its own liveness subject (migration 675); a clean stop deletes its
+  carrying its deployment; it beats only after a claim pass completes, so a replica that cannot register or list
+  due jobs goes red), each worker with its own liveness subject (migration 675); a clean stop deletes its
   row, and each beat forgets another deployment's rows and its own deployment's after an hour of silence. The two
   global in-flight thresholds are deleted.
 - **Deploys**: `portal_runner.run_phase` installs a SIGTERM/SIGINT handler that sets one shared stop event;

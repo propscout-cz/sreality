@@ -11,8 +11,8 @@ A bare call prints help and exits 2: on a box with production credentials it nev
 
 | Verb | What it does |
 |---|---|
-| `run` | The service (Railway's start command, exec form). Registers the registry at boot, retires only rows it registered, claims due jobs, beats, prunes `job_runs` after 90 days. |
-| `once <job>` | One foreground claim, run and release of a runner entry if it is due or requested. No upsert, no heartbeat. Exit 0 ok (75 included), 143 interrupted, 1 otherwise (a timeout too). GitHub entries need #2033. |
+| `run` | The service (Railway's start command, exec form). Registers the registry at boot, retires only rows it registered, claims due jobs, beats (only after a claim pass completes, so a replica that cannot register or list due jobs goes red), prunes `job_runs` after 90 days. |
+| `once <job>` | One foreground claim, run and release of a runner entry if it is due or requested. No upsert, no heartbeat. Exit 0 ok (75 included) or not due, 143 interrupted (a closed terminal and `Ctrl+\` are the stop too: the child has its own session and would outlive the runner), 1 otherwise (a timeout, or a database that did not answer within 60 s: "the database did not answer"). GitHub entries need #2033. |
 | `request <job> [--by WHO] [-- ARGS]` | Files a request row; the runner runs it within seconds, even while the schedule is paused. ARGS are appended to the registry argv (argparse keeps a repeated flag's last value). A second request is refused while one waits. |
 | `pause <job> --until <ISO\|now> --note TEXT [--by WHO]` | Pauses the schedule (a request still runs) on any live row, a `held()` lane's included. `--until now` lifts it and records who did. A past time is refused. |
 | `list` | Every `scheduled_jobs` row with its state and latest run. |
@@ -34,11 +34,11 @@ Recipes:
 | `RUN term job=<job>#<run> pid=… why=timeout\|deploy` | The guard sent SIGTERM to the leader. |
 | `RUN kill job=… pid=… why=timeout\|deploy\|fence (…)` | The guard SIGKILLed the group: the grace ran out, or the lease's fence passed / a renewal was refused. |
 | `RUN end job=… run=… outcome=… due=… exit=… peak_mb=…` | Released. |
-| `LEASE lost job=…: …` | A renewal or a release was refused, or the reaper closed a lapsed run as `lost`. |
+| `LEASE lost job=…: …` | A renewal or a release was refused, or the reaper closed a lapsed run as `lost`. Each claim is its own holder (`<BOOT holder>/<n>`), so a late release never touches a later run of the job. |
 | `LEDGER <call> failed (connection lost): …` | A database call failed; the tick asks nothing more after a lost connection. A finished run waits in memory and is released when the database answers. |
-| `STOP seen: forwarding SIGTERM to N children, SIGKILL in 90 s` | A deploy's SIGTERM. Claims stop; renewals and releases go on until nothing runs. |
+| `STOP seen: forwarding SIGTERM to N children, SIGKILL in 90 s` | A deploy's SIGTERM. Claims stop, mid-phase too (a lease claimed as it lands is released `interrupted`, "deploy stop; not started"); renewals and releases go on until nothing runs. |
 | `STOP drain spent …` (ERROR) | Railway's 180 s ran out first; those leases lapse and the reaper closes them `lost`. |
-| `TICK failed` / `WATCHDOG no clean tick for N s: killed N children, exiting` | A tick raised; after 300 s with no clean tick the guard kills every child and exits, and Railway restarts it. |
+| `TICK failed` / `WATCHDOG no clean tick for N s: killed N children, exiting` | A tick raised; after 300 s with no clean tick the guard kills every child and exits, and Railway restarts it. The guard only queues its lines (`STOP`, `RUN term`, `RUN kill`) for a forwarder thread, and the exit's backstop writes nowhere, so a stalled log reader holds no signal and no exit (≤ 10 s). |
 
 ## Outcomes and next due time
 
@@ -61,7 +61,8 @@ moves `due_at` (its exit 75 pulls it to 60 s at most); a request that also took 
 
 `exit_code` is signed: −9 / −15 = killed by that signal; 143 = the child exited after its own SIGTERM handling.
 `peak_rss_mb` is the larger of the leader's `VmHWM` and the group's summed `VmRSS` (pool workers included; shared
-pages count twice). `last_error` on `scheduled_jobs` names the cause and never carries log text. **Never paste
+pages count twice). `last_error` on `scheduled_jobs` names the cause in `settle`'s order (none for an `ok` run, a
+deploy or fence it outlived included; `killed by signal N` for a signal with no name) and never carries log text. **Never paste
 `log_tail` anywhere public: it can hold a connection string.**
 
 ```sql

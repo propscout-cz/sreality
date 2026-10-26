@@ -218,9 +218,9 @@ from the slow "download each ad" write:
   request in hand on the main thread short, the run is finalized with no error, and the
   process exits 143 (the walk workflows `exec` Python so a cancel's SIGINT reaches it); each
   category's pages and `by_category` entry are written together as it ends
-  (`db.bump_index_progress`), so a SIGKILL keeps them. **The job runner** (`python -m scraper.job_runner run|once|request|pause|list`, #2024: SIGTERM at `timeout_s`, SIGKILL 90 s later, a timeout recorded `timeout` whatever the exit): verbs, log lines, outcomes and drills in `references/job-runner.md`.
+  (`db.bump_index_progress`), so a SIGKILL keeps them.
   Never hand-roll it, and never add a portal without wiring the flag through —
-  `tests/scraper/test_walk_deadline_wiring.py` fails the build if you do. Ids are classified by the
+  `tests/scraper/test_walk_deadline_wiring.py` fails the build if you do. **The job runner** (`python -m scraper.job_runner run|once|request|pause|list`, #2024: SIGTERM at `timeout_s`, SIGKILL 90 s later, a timeout recorded `timeout` whatever the exit): verbs, log lines, outcomes and drills in `references/job-runner.md`. Ids are classified by the
   one shared `portal.classify_index_sighting` (**an index card with no price reads `unchanged`,
   never `changed`**) — and are **enqueued** into
   `listing_detail_queue` in one of two service classes — ACQUISITION (never fetched) or REFRESH
