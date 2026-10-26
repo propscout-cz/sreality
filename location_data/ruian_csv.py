@@ -27,6 +27,7 @@ from pathlib import Path
 import requests
 
 from location_data.krovak import KrovakPositive, KrovakSignError
+from scraper import contact
 
 LOG = logging.getLogger("location_data.ruian_csv")
 
@@ -35,7 +36,7 @@ OB_ADR_URL = CSV_BASE + "/{vintage}_OB_ADR_csv.zip"
 STRUKT_URL = CSV_BASE + "/{vintage}_strukt_ADR.csv.zip"
 OBEC_ADR_URL = CSV_BASE + "/{vintage}_OB_{obec}_ADR.csv.zip"
 
-USER_AGENT = "sreality-location-data/1 (+ruian registry mirror)"
+USER_AGENT = contact.USER_AGENT
 _TIMEOUT = (30, 600)
 _CHUNK = 1 << 20
 
