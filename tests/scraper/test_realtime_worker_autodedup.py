@@ -1475,3 +1475,4 @@ def test_the_worker_starts_with_two_malloc_arenas_and_python_as_its_pid_1() -> N
     dockerfile = (RAILWAY_IAC.parents[1] / "Dockerfile").read_text(encoding="utf-8")
     assert "MALLOC_ARENA_MAX" not in dockerfile
     assert "MALLOC_ARENA_MAX" not in iac_entry("api")
+    assert "WORKER_START" not in iac_entry("api"), "the TS file can name the constant without its text"

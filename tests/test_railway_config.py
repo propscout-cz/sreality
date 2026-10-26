@@ -26,6 +26,14 @@ def test_each_railway_project_id_plans_only_its_own_definition() -> None:
     ]
 
 
+def test_only_the_worker_declares_a_start_command() -> None:
+    """Ruling R5: the API and vite run their image's own command. Railway runs a start command in exec form, so a
+    copied `uvicorn ... --port $PORT` never expands $PORT and fails every health check (8a362a0ea). #2075 scopes this
+    to the `sreality` service when it adds agent-worker to `api`."""
+    for name in ("api", "vite"):
+        assert not re.search(r"\bstart(Command)?\s*:", iac_entry(name)), name
+
+
 def test_the_api_and_the_worker_pass_their_extras_to_the_root_dockerfile_build() -> None:
     """Railway has no build-args field: a service variable reaches the Dockerfile ARG of the same name. Unset,
     the image installs `api` as before, and the build log's echo tells a delivered value from the fallback."""
