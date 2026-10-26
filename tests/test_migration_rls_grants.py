@@ -21,6 +21,8 @@ architecture rule #1, so older migrations are never rewritten):
   5. No migration creates a view/function that reads admin-only operational data
      without embedding `is_platform_admin()` (migrations 318/332). Enforced from
      MIN_VIEW_GATE. Escape hatch: `-- ci-allow-ungated: <name> <reason>`.
+  6. From migration 679 on, no browser write grant on a run table beyond its column UPDATEs in
+     BROWSER_WRITE_COLUMNS (rule 12: the API writes every run on the service role).
 
 Live cross-tenant / effective-grant verification lands in the TEST_DATABASE_URL
 lane (tests/test_tenant_isolation_live.py), which this composes with.
@@ -541,10 +543,11 @@ def _write_limited_grants(sql: str) -> list[str]:
     out: list[str] = []
     for stmt in _statements(sql):
         parsed = _parse_grant(stmt)
-        if not parsed or not parsed[2] & {"authenticated", "anon", "public"}:
+        if not parsed:
             continue
-        limited = [o for o in parsed[1] if o in BROWSER_WRITE_COLUMNS]
-        if not limited:
+        _privs, objs, roles = parsed
+        limited = [o for o in objs if o in BROWSER_WRITE_COLUMNS]
+        if not limited or not roles & set(_ROLES):
             continue
         collapsed = re.sub(r"\s+", " ", stmt.strip())
         privs = re.match(r"grant (.+?) on ", collapsed.lower()).group(1)

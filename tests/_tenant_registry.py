@@ -3,7 +3,7 @@
 Each table here holds per-account rows scoped by RLS. tests/test_migration_rls_grants.py
 allows `authenticated` DML only on these; tests/test_tenant_isolation_live.py checks each has
 `account_id`, a policy and no anon privilege on the replayed schema. A new tenant table is
-added HERE, and nowhere else.
+added HERE, and nowhere else; so is a tenant table whose browser writes a grant limits (BROWSER_WRITE_COLUMNS).
 """
 
 from __future__ import annotations

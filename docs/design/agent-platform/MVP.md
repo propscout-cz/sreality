@@ -247,4 +247,4 @@ start runs, what agent search means, and model-written SQL.
 
 | Ticket | What landed | Owed after merge |
 |---|---|---|
-| #2058 M0 run-table grants | migration 679: the browser INSERTs no run and UPDATEs only `estimation_runs.scenario`; censuses in `tests/_tenant_registry.py` `BROWSER_WRITE_COLUMNS` | nothing (applied before merge) |
+| #2058 M0 run-table grants | migration 679: the browser INSERTs no run and UPDATEs only `estimation_runs.scenario`; censuses in `tests/_tenant_registry.py` `BROWSER_WRITE_COLUMNS` | nothing: applied 2026-10-26 14:05Z; production PostgREST as a member: INSERT 403, `status` UPDATE 403, `scenario` UPDATE 204 |
