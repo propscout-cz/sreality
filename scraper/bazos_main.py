@@ -80,6 +80,8 @@ class BazosPortal(portal_runner.PortalDefaults):
     section never suppresses another's nomination."""
 
     source = SOURCE
+    walk_every_s = 6 * 3600
+    walk_timeout_s = 130 * 60
     price_change_min_pct = 0.0
     index_rate = 0.7
 

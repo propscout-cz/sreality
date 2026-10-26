@@ -117,6 +117,8 @@ class IdnesPortal(portal_runner.PortalDefaults):
     `portals` registry config."""
 
     source = SOURCE
+    walk_every_s = 6 * 3600
+    walk_timeout_s = 240 * 60
     # idnes is a large portal walked page-by-page (≈26 listings/page, tens of
     # thousands per category), so the index needs a faster ceiling than the
     # classifieds pilots. The detail-fetch rate is the (slower) drain CLI arg.
