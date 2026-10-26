@@ -738,7 +738,9 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
         # Newest first decision first, NULLS LAST, then id — the statement's order.
         active = [(row.get("first_decided_at"), int(listing_id), row)
                   for (g, listing_id), row in db.rt_fp.items()
-                  if g == gen and row.get("ev_complete") is False and row.get("is_active")]
+                  if g == gen and row.get("ev_complete") is False and row.get("is_active")
+                  and (row.get("updated_at") is None or row["updated_at"]
+                       < db.now - timedelta(minutes=int(p["recheck_minutes"])))]
         active.sort(key=lambda r: (r[0] is None, -(r[0].timestamp() if r[0] else 0.0), r[1]))
         return [(listing_id, row.get("ev_images"), row.get("ev_phash"), row.get("ev_clip"),
                  row.get("ev_tags")) for _stamp, listing_id, row in active][:int(p["limit"])]
