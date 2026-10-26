@@ -179,8 +179,14 @@ toolkit work.
   phone Řazení) gains "Změna ceny: největší pokles / největší nárůst" on `total_price_change_pct`, the
   column the card's price-move badge and the Price change filter read (first observed price of the
   shown price's lineage → the shown price); an ad seen at one price (66% of active sales) sorts last
-  both ways. ~84 ms, flats for sale. Owed (operator ruling): junk at the rise end (+6.5 billion %,
-  a 1 Kč placeholder then a real price; 347 active sales at +200 % or more).
+  both ways. ~84 ms, flats for sale.
+- **Done: implausible lots and placeholder prices 2026-10-26** (operator ruling; migration 680). Both new
+  sorts opened on junk: a 48 194 054 m² lot and runs of "1 m²" at the lot sort's two ends, and at the
+  price-change sort's ends a 1 Kč first price (+2 869 456 %) or a drop to 0 / 11 Kč (−100 %). The plot
+  measure now reads a lot outside 10 .. 1 000 000 m² as no lot (800 of 158 728 active properties with a
+  lot), and the rollup's `total_price_change_pct` skips prices under 10 000 Kč (sale, auction, share) /
+  500 Kč (rent) — `toolkit.measures`. Sort, filter and card move together; nothing stored changes.
+  Not in scope: the step counts and price-drop alerts (`listing_price_steps`) still count a placeholder.
 - **Shipped (2026-10-22): Advanced → Energy rating (PENB A–G)**, Browse + Watchdog (migration 648:
   `energy_rating_filter` on the Stats and map-tile RPCs; `browse_list` already carried the column). A
   property's rating is the first non-null across its ads; G is also the legal "no certificate"
