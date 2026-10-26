@@ -367,8 +367,11 @@ class Invocation:
 class Workflow:
     file: str
     scheduled: bool  # a timer or another workflow starts it, not only a person
-    timeout_s: int | None  # the largest job-level timeout-minutes
+    timeout_s: int | None  # the largest job-level timeout-minutes (GitHub's 360 where unset; None if not literal)
     invocations: tuple[Invocation, ...]
+
+
+GITHUB_DEFAULT_TIMEOUT_MIN = 360
 
 
 _PYTHON_M = re.compile(r"\bpython3?\s+(?:-[A-Za-z]+\s+)*?-m\s+([A-Za-z_][\w.]*)([^;|&]*)")
@@ -389,16 +392,17 @@ def _invocations(run: str, root: Path) -> list[Invocation]:
 def read_workflows(root: Path) -> dict[str, Workflow]:
     """Every workflow file: whether it runs unattended, its timeout, and each `python -m <repo module>` it runs."""
     workflows: dict[str, Workflow] = {}
-    for path in sorted((root / ".github" / "workflows").glob("*.yml")):
+    for path in sorted(p for p in (root / ".github" / "workflows").iterdir() if p.suffix in (".yml", ".yaml")):
         data = yaml.safe_load(path.read_text()) or {}
         on = data.get(True, data.get("on"))  # PyYAML reads the bare `on:` key as True
         triggers = on if isinstance(on, dict) else dict.fromkeys([on] if isinstance(on, str) else on or [])
         scheduled = bool(triggers.get("schedule")) or bool({"workflow_run", "repository_dispatch"} & set(triggers))
         job_defs = (data.get("jobs") or {}).values()
-        timeouts = [j["timeout-minutes"] * 60 for j in job_defs if isinstance(j.get("timeout-minutes"), int)]
+        minutes = [j.get("timeout-minutes", GITHUB_DEFAULT_TIMEOUT_MIN) for j in job_defs]
+        timeout_s = max(minutes) * 60 if minutes and all(type(m) is int for m in minutes) else None
         calls = [c for j in job_defs for step in j.get("steps") or [] if step.get("run")
                  for c in _invocations(step["run"], root)]
-        workflows[path.name] = Workflow(path.name, scheduled, max(timeouts, default=None), tuple(calls))
+        workflows[path.name] = Workflow(path.name, scheduled, timeout_s, tuple(calls))
     return workflows
 
 
@@ -431,17 +435,20 @@ def test_the_workflow_reader(tmp_path: Path) -> None:
     for tree in ("scripts", "scraper", "location_data"):
         (tmp_path / tree).mkdir()
     (tmp_path / ".github" / "workflows" / "synthetic.yml").write_text(_SYNTHETIC_WORKFLOW)
-    (tmp_path / ".github" / "workflows" / "chained.yml").write_text(
+    (tmp_path / ".github" / "workflows" / "chained.yaml").write_text(
         "on:\n  workflow_run:\n    workflows: [x]\njobs:\n  a:\n    steps:\n      - run: python -m scripts.x\n")
     (tmp_path / ".github" / "workflows" / "by_hand.yml").write_text(
-        "on: workflow_dispatch\njobs:\n  a:\n    steps:\n      - run: python -m scripts.y --z\n")
+        "on: workflow_dispatch\njobs:\n  a:\n    timeout-minutes: ${{ inputs.t }}\n    steps:\n"
+        "      - run: python -m scripts.y --z\n")
     workflows = read_workflows(tmp_path)
     assert workflows["synthetic.yml"] == Workflow("synthetic.yml", True, 12 * 60, (
         Invocation("scripts.refresh_stale_image_urls", frozenset({"--limit", "--min-age"})),
         Invocation("location_data.resolver.drain", frozenset({"--full-sweep"})),
         Invocation("scraper.web_main", frozenset({"--index-only"})),
     ))
-    assert workflows["chained.yml"] == Workflow("chained.yml", True, None, (Invocation("scripts.x", frozenset()),))
+    # GitHub runs .yaml files too, and a job without timeout-minutes for its default 360.
+    assert workflows["chained.yaml"] == Workflow("chained.yaml", True, 360 * 60,
+                                                 (Invocation("scripts.x", frozenset()),))
     assert workflows["by_hand.yml"] == Workflow("by_hand.yml", False, None,
                                                 (Invocation("scripts.y", frozenset({"--z"})),))
 
@@ -561,9 +568,16 @@ def github_set_problems(entries: Sequence[Job], workflows: dict[str, Workflow], 
 def timeout_floor_problems(entries: Sequence[Job], workflows: dict[str, Workflow]) -> list[str]:
     """A job not on the runner declares at least its workflow's timeout, so a move's first slot (now() + timeout_s)
     comes after any GitHub run still in flight at the cutover."""
-    return [f"{j.name}: timeout_s {j.timeout_s} is under {w.file}'s {w.timeout_s}"
-            for j in entries if j.host != jobs.RUNNER
-            for w in workflows.values() if w.scheduled and _invokes(j, w) and j.timeout_s < (w.timeout_s or 0)]
+    problems: list[str] = []
+    for j in entries:
+        for w in workflows.values():
+            if j.host == jobs.RUNNER or not (w.scheduled and _invokes(j, w)):
+                continue
+            if w.timeout_s is None:
+                problems.append(f"{j.name}: {w.file}'s timeout-minutes is no literal, so nothing bounds its run")
+            elif j.timeout_s < w.timeout_s:
+                problems.append(f"{j.name}: timeout_s {j.timeout_s} is under {w.file}'s {w.timeout_s}")
+    return problems
 
 
 def test_github_keeps_only_the_canary_and_price_stats() -> None:
@@ -592,8 +606,11 @@ def test_a_waiting_job_outlasts_its_github_run() -> None:
 
 
 def test_the_timeout_floor_census_fires() -> None:
-    entries = [replace(j, timeout_s=3600) if j.name == "walk_idnes" else j for j in jobs.declared()]
-    assert timeout_floor_problems(entries, _repo_workflows())
+    entries, workflows = jobs.declared(), _repo_workflows()
+    assert timeout_floor_problems([replace(j, timeout_s=3600) if j.name == "walk_idnes" else j for j in entries],
+                                  workflows)
+    unknown = replace(workflows["idnes_index_walk.yml"], timeout_s=None)  # an expression: no bound to check
+    assert timeout_floor_problems(entries, {**workflows, "idnes_index_walk.yml": unknown})
 
 
 def _production_sources() -> dict[str, str]:
