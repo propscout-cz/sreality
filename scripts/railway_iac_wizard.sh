@@ -332,6 +332,15 @@ apply_pinned() {
   PLAN_FILE[$label]=""
 }
 
+# plan_removes <plan JSON>: true when the plan deletes a service. Read after plan_check passed with a service named, so
+# the delete is that service's own (U-1 for a service add).
+plan_removes() {
+  node -e '
+const changes = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).changeSet?.changes ?? [];
+process.exit(changes.some((c) => c.kind === "resource.delete") ? 0 : 1);
+' "$1"
+}
+
 # drift_rc <label> [file]: prints 0 (Railway matches the file), 2 (changes pending) or error. Never aborts on 2.
 drift_rc() {
   local label="$1" file="${2:-$OUT/$1-drift.txt}" rc=0
@@ -562,7 +571,7 @@ mode_window() {
     printf 'usage: scripts/railway_iac_wizard.sh window <label: %s> <adds> <destroys> <service>\n' "${LABELS[*]}" >&2
     exit 2
   fi
-  local project="${PROJECT_NAME[$label]}"
+  local project="${PROJECT_NAME[$label]}" removes=0
   TOTAL_STAGES=9
   banner "Railway IaC window: $project → $service ($adds to add, $destroys to destroy), then the merge"
 
@@ -587,6 +596,11 @@ mode_window() {
   stage "Plan $project, scoped to $service"
   link_to "$label"
   plan_pinned "$label" "$adds" "$destroys" "$service"
+  # A removal leaves no deployment to wait for: the checks below then read that the service is gone.
+  if plan_removes "${PLAN_FILE[$label]}"; then
+    removes=1
+    warn "This plan deletes $service: the apply asks its destructive question (answer y)."
+  fi
   pause
 
   stage "Apply"
@@ -594,16 +608,22 @@ mode_window() {
   pause
 
   stage "Check before the merge"
-  wait_success "$label" "$service"
-  if [[ "$service" == sreality && -n "${HEALTH_URL[$label]:-}" ]]; then check_health "$label"; fi
-  if [[ "$label" == vite ]]; then check_spa; fi
-  open_url "$(dashboard "$label")"
-  step "$project → $service → Settings → Resource Limits."
-  local key="LIMITS_${label}_${service//-/_}"
-  ask "$key" "$service: what do Resource Limits show (vCPU, memory)?"
-  write_env "$key" "${!key}"
-  agent_reports "describe-service on $service (every setting the file declares, its variable NAMES) and the pull \
+  if (( removes )); then
+    open_url "$(dashboard "$label")"
+    gate "Is $service gone from the $project canvas?"
+    agent_reports "list-services on $project: $service gone; the deployment ids of $project's other services unchanged"
+  else
+    wait_success "$label" "$service"
+    if [[ "$service" == sreality && -n "${HEALTH_URL[$label]:-}" ]]; then check_health "$label"; fi
+    if [[ "$label" == vite ]]; then check_spa; fi
+    open_url "$(dashboard "$label")"
+    step "$project → $service → Settings → Resource Limits."
+    local key="LIMITS_${label}_${service//-/_}"
+    ask "$key" "$service: what do Resource Limits show (vCPU, memory)?"
+    write_env "$key" "${!key}"
+    agent_reports "describe-service on $service (every setting the file declares, its variable NAMES) and the pull \
 request body's pre-merge checks; the deployment ids of $project's other services unchanged"
+  fi
   expect_no_drift "$label"
   pause
 
@@ -632,13 +652,21 @@ request body's pre-merge checks; the deployment ids of $project's other services
   cat "$OUT/merge-status.txt" 2>/dev/null || true
   (( rc != 3 )) || stop "Railway's statuses on ${merge_sha:0:9} are not final after 20 minutes"
   (( rc == 0 )) || stop "a Railway status on ${merge_sha:0:9} is not success (above)"
-  note "A watch-skipped deploy also posts success, so the status alone does not prove $service deployed."
-  agent_reports "list-deployments on $service: the deployment for ${merge_sha:0:9} is SUCCESS, not SKIPPED"
+  if (( removes )); then
+    agent_reports "list-services on $project: $service is still gone after the merge"
+  else
+    note "A watch-skipped deploy also posts success, so the status alone does not prove $service deployed."
+    agent_reports "list-deployments on $service: the deployment for ${merge_sha:0:9} is SUCCESS, not SKIPPED"
+  fi
   pause
 
   stage "Proof on the merge build"
-  agent_reports "the pull request body's post-merge checks on $service's merge build (its build log, boot lines and \
-heartbeats)"
+  if (( removes )); then
+    say "No merge build of $service to prove: the apply deleted it and the merge took it out of the file."
+  else
+    agent_reports "the pull request body's post-merge checks on $service's merge build (its build log, boot lines \
+and heartbeats)"
+  fi
   pause
 
   stage "Drift proof: plan = 0 in all three projects, from main's file"

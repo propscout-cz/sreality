@@ -110,6 +110,39 @@ def test_the_merge_statuses_are_final_only_once_every_service_posted(tmp_path: P
     assert run.returncode == code, run.stdout + run.stderr
 
 
+def test_a_window_that_deletes_its_service_never_waits_for_its_deployment() -> None:
+    """U-1 for a service add runs `window <label> 0 <n> <service>`: once the apply deleted the service, no deployment of
+    it reaches SUCCESS, so every read of one sits in the branch a removal skips, decided before the apply (which
+    clears the pinned plan)."""
+    window = WIZARD.read_text(encoding="utf-8").split("\nmode_window() {\n", 1)[1].split("\n}\n", 1)[0]
+    assert window.index('if plan_removes "${PLAN_FILE[$label]}"; then') < window.index('apply_pinned "$label"')
+    stack: list[list[str]] = []
+    reads = 0
+    for line in window.splitlines():
+        if re.match(r"\s*if .*; then$", line):
+            stack.append([line.strip(), "then"])
+        elif re.match(r"\s*else$", line) and stack:
+            stack[-1][1] = "else"
+        elif re.match(r"\s*fi$", line) and stack:
+            stack.pop()
+        elif re.search(r"\bwait_success |Resource Limits|list-deployments on|merge build \(", line):
+            reads += 1
+            assert ["if (( removes )); then", "else"] in stack, line
+    assert reads == 5
+
+
+@pytest.mark.parametrize(("fixture", "code"), [("delete_job_runner.json", 0), ("create_job_runner.json", 1),
+                                               ("no_changes.json", 1)])
+def test_a_removal_is_read_off_the_pinned_plan(fixture: str, code: int) -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("no node")
+    plan = ROOT / "tests" / "fixtures" / "railway_plans" / fixture
+    run = subprocess.run([node, "-e", _wizard_node_script("plan_removes"), str(plan)], capture_output=True,
+                         text=True, timeout=60, check=False)
+    assert run.returncode == code, run.stdout + run.stderr
+
+
 def test_only_the_worker_and_the_runner_declare_a_start_command() -> None:
     """Ruling R5: the API and vite run their image's own command. Railway runs a start command in exec form, so a
     copied `uvicorn ... --port $PORT` never expands $PORT and fails every health check (8a362a0ea); the runner's is

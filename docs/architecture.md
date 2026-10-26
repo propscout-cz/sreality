@@ -1229,7 +1229,8 @@ Undo paths (U-1 and U-2 rehearsed on vite in #2060's window 1; evidence on #2060
   reverting the adding PR also reverts the wizard modes and the plan check the removal needs: it deletes only the
   service from its project's `resources` (and the tests that pin it); `preflight <label>=0:<n>:<service>` reads `n`
   (one `resource.delete` plus each `variable.delete` the plan counts); then `window <label> 0 <n> <service>`, answering
-  the CLI's destructive confirmation.
+  the CLI's destructive confirmation. The window reads the delete off the pinned plan, so it asks that the service is
+  gone and the project's other deployment ids unchanged, never for a deployment of it.
 - **U-2, emergency:** edit the one field in the dashboard and Deploy, then fold it into the file in a PR (until then
   the plan exits 2 with exactly that line); applying the unchanged file puts the declared value back. A dashboard
   Rollback restores only the image and the variables, never settings; a Redeploy reuses the old deployment's frozen
