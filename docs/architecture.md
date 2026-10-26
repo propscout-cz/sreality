@@ -1529,7 +1529,12 @@ renumber.** Navigate by area:
     **What immutability covers.** The RESULT: the estimate, the trace, the cost, the
     comparables frozen at run time. One thing on the row is deliberately mutable: the
     operator's yield `scenario` (`PATCH /estimations/{id}/scenario`) — a what-if overlay, not a
-    computed output. Subject IDENTITY (`input_listing_id`) is stamped at submit and never
+    computed output. The database holds this by grant, not by convention (migration 679): the
+    browser role (`authenticated`) may INSERT into neither `estimation_runs` nor `building_runs`
+    and may UPDATE only `estimation_runs.scenario`, the one column that route writes on the tenant
+    connection; every other run write is the API's, on the service role. Until 679, migration 291's
+    table-wide INSERT/UPDATE let a signed-in browser create its own runs through PostgREST (past the
+    metering gate) and rewrite a result. Subject IDENTITY (`input_listing_id`) is stamped at submit and never
     changes (2026-10-20; until then a binder could late-bind it, see below). Since the surrogate
     cutover (migration 411, PR #1095, completed for `property_estimates_public` by migration
     412) every read path that answers "what estimates exist for this listing" FILTERS on

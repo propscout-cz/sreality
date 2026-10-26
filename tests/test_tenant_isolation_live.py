@@ -1771,3 +1771,130 @@ def test_write_then_read_back_one_transaction(
     finally:
         with svc.cursor() as cur:
             cur.execute("DELETE FROM collections WHERE name = %s", (name,))
+
+
+@pytest.fixture(scope="module")
+def seeded_runs(svc: Any, tenants: dict[str, uuid.UUID]) -> "Iterator[dict[str, int]]":
+    """One estimation run and one building run per tenant, written as svc, the API's service role."""
+    est: dict[str, int] = {}
+    bld: dict[str, int] = {}
+    with svc.cursor() as cur:
+        for side in ("a", "b"):
+            cur.execute(
+                "INSERT INTO estimation_runs (account_id, source, mode, status, input_spec, "
+                "estimated_monthly_rent_czk) VALUES (%s, 'ui', 'deterministic', 'success', '{}'::jsonb, 20000) "
+                "RETURNING id",
+                (tenants[f"{side}_acc"],),
+            )
+            est[side] = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO building_runs (account_id, source, status) VALUES (%s, 'ui', 'pending') RETURNING id",
+                (tenants[f"{side}_acc"],),
+            )
+            bld[side] = cur.fetchone()[0]
+    try:
+        yield {"est_a": est["a"], "est_b": est["b"], "bld_a": bld["a"], "bld_b": bld["b"]}
+    finally:
+        with svc.cursor() as cur:
+            cur.execute("DELETE FROM estimation_runs WHERE id = ANY(%s)", (list(est.values()),))
+            cur.execute("DELETE FROM building_runs WHERE id = ANY(%s)", (list(bld.values()),))
+
+
+def _refused(conn: Any, sql: str, params: tuple[Any, ...]) -> None:
+    import psycopg
+
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        with conn.transaction():  # a SAVEPOINT, so the refusal cannot poison the txn
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+
+
+def test_a_tenant_creates_no_run_through_the_database(tenants: dict[str, uuid.UUID]) -> None:
+    """Migration 679 (rule 12): a run is born only through create_estimation_run on the service role, so a
+    browser INSERT under the caller's own account is refused, not policy-filtered.
+    RED by: restoring 291's INSERT grant on either run table."""
+    with scoped(tenants["a_user"], method="POST") as conn:
+        _refused(conn, "INSERT INTO estimation_runs (account_id, source, mode, status, input_spec) "
+                       "VALUES (%s, 'ui', 'deterministic', 'success', '{}'::jsonb)", (tenants["a_acc"],))
+        _refused(conn, "INSERT INTO building_runs (account_id, source, status) VALUES (%s, 'ui', 'pending')",
+                 (tenants["a_acc"],))
+
+
+def test_a_tenant_changes_only_the_scenario_of_its_own_run(
+    svc: Any, tenants: dict[str, uuid.UUID], seeded_runs: dict[str, int],
+) -> None:
+    """Migration 679: a run's result is immutable to the browser; its yield scenario is the one column the
+    PATCH route writes, and only on the caller's own run.
+    RED by: a table-wide UPDATE grant, a column grant beyond scenario, or an UPDATE policy reaching B."""
+    own, other = seeded_runs["est_a"], seeded_runs["est_b"]
+    with scoped(tenants["a_user"], method="PATCH") as conn:
+        for sql in (
+            "UPDATE estimation_runs SET status = 'failed' WHERE id = %s",
+            "UPDATE estimation_runs SET estimated_monthly_rent_czk = 1 WHERE id = %s",
+            "UPDATE estimation_runs SET account_id = account_id WHERE id = %s",
+        ):
+            _refused(conn, sql, (own,))
+        _refused(conn, "UPDATE building_runs SET status = 'failed' WHERE id = %s", (seeded_runs["bld_a"],))
+        with conn.cursor() as cur:
+            cur.execute("UPDATE estimation_runs SET scenario = '{\"rent_czk\": 1}'::jsonb WHERE id = %s", (own,))
+            assert cur.rowcount == 1, "a tenant can no longer tune its own run's scenario"
+            cur.execute("UPDATE estimation_runs SET scenario = '{\"rent_czk\": 1}'::jsonb WHERE id = %s", (other,))
+            assert cur.rowcount == 0, "a tenant reached another account's run"
+    with svc.cursor() as cur:
+        cur.execute("SELECT status, estimated_monthly_rent_czk, scenario FROM estimation_runs "
+                    "WHERE id = ANY(%s) ORDER BY id", ([own, other],))
+        assert cur.fetchall() == [("success", 20000, {"rent_czk": 1}), ("success", 20000, None)]
+
+
+def test_the_run_tables_grant_the_browser_exactly_their_columns(svc: Any) -> None:
+    """The replayed schema's effective grants, from the registry both tenancy gates read: no INSERT, no
+    table-wide UPDATE, and a column UPDATE exactly on BROWSER_WRITE_COLUMNS; anon nothing at all."""
+    from tests._tenant_registry import BROWSER_WRITE_COLUMNS
+
+    drift: list[str] = []
+    with svc.cursor() as cur:
+        for table, allowed in BROWSER_WRITE_COLUMNS.items():
+            rel = f"public.{table}"
+            for role, priv in (("authenticated", "INSERT"), ("authenticated", "UPDATE"), ("anon", "UPDATE")):
+                cur.execute("SELECT has_table_privilege(%s, %s, %s)", (role, rel, priv))
+                if cur.fetchone()[0]:
+                    drift.append(f"{role} holds table-wide {priv} on {table}")
+            cur.execute(
+                "SELECT attname FROM pg_attribute WHERE attrelid = %s::regclass AND attnum > 0 "
+                "AND NOT attisdropped AND has_column_privilege('authenticated', attrelid, attnum, 'UPDATE')",
+                (rel,),
+            )
+            updatable = {r[0] for r in cur.fetchall()}
+            if updatable != allowed:
+                drift.append(f"authenticated may UPDATE {sorted(updatable)} on {table}, expected {sorted(allowed)}")
+    assert drift == [], drift
+
+
+def test_the_scenario_patch_route_writes_through_the_tenant_pool(
+    svc: Any, tenants: dict[str, uuid.UUID], seeded_runs: dict[str, int], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one browser-role write the run tables keep: PATCH /estimations/{id}/scenario through the real
+    tenant transaction (SET LOCAL ROLE authenticated + the caller's claims) on the replayed schema; another
+    account's run is a 404."""
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from api import dependencies as deps
+    from api import main as api_main
+
+    monkeypatch.setenv("TENANT_POOL_DB_URL", _DB_URL)
+    api_main.app.dependency_overrides[deps.verify_jwt] = lambda: {
+        "sub": str(tenants["b_user"]), "role": "authenticated"}
+    try:
+        client = TestClient(api_main.app)
+        res = client.patch(f"/estimations/{seeded_runs['est_b']}/scenario", json={"rent_czk": 31000})
+        assert res.status_code == 200, res.text
+        assert res.json()["scenario"]["rent_czk"] == 31000
+        assert client.patch(f"/estimations/{seeded_runs['est_a']}/scenario",
+                            json={"rent_czk": 1}).status_code == 404
+    finally:
+        api_main.app.dependency_overrides.pop(deps.verify_jwt, None)
+    with svc.cursor() as cur:
+        cur.execute("SELECT (scenario ->> 'rent_czk')::numeric FROM estimation_runs WHERE id = %s",
+                    (seeded_runs["est_b"],))
+        assert cur.fetchone()[0] == 31000

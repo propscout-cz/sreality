@@ -46,6 +46,15 @@ TENANT_TABLES: tuple[str, ...] = (
     "stats_dashboard_shares",
 )
 
+# Tenant tables the browser reads but writes only by these column grants (migration 679, rule 12): the API
+# creates and finishes every run on the service role, so `authenticated` may UPDATE the listed columns and
+# INSERT nothing. Both tenancy gates hold every migration from 679 on, and the replayed schema, to this.
+BROWSER_WRITE_COLUMNS: dict[str, frozenset[str]] = {
+    "estimation_runs": frozenset({"scenario"}),
+    "building_runs": frozenset(),
+}
+BROWSER_WRITE_COLUMNS_SINCE = 679
+
 # A tenant table's earlier name, which older migrations still grant on (592) and which may survive as
 # a compatibility view (660's, until its drop). Not a table: the live checks read TENANT_TABLES alone.
 RENAMED_TENANT_TABLES: dict[str, str] = {

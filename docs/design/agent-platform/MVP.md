@@ -242,3 +242,9 @@ start runs, what agent search means, and model-written SQL.
 3. The remaining credential rotation (operator, with the wizard, M0).
 4. The monthly Valuo cap per account (operator; a number).
 5. Post the M0 issue or PR number on Actions-exit #2025 once `/to-tickets` creates it.
+
+## 8. Build log
+
+| Ticket | What landed | Owed after merge |
+|---|---|---|
+| #2058 M0 run-table grants | migration 679: the browser INSERTs no run and UPDATEs only `estimation_runs.scenario`; censuses in `tests/_tenant_registry.py` `BROWSER_WRITE_COLUMNS` | nothing (applied before merge) |

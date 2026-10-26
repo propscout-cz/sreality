@@ -46,7 +46,13 @@ about the split preview's bare-note case (PR #1829 attributes its one pre-tenanc
 
 **Migration 291 — estimation/building tables**: `estimation_runs`, `building_runs`.
 `account_id` is **NULLABLE**, `DEFAULT` the SYSTEM account — these can be written by
-service-role paths (the estimation agent, ClickUp) that don't carry a tenant JWT.
+service-role paths (the estimation agent, ClickUp) that don't carry a tenant JWT. **Writes-by-grant
+since migration 679** (rule 12): `authenticated` holds SELECT and `UPDATE (scenario)` on
+`estimation_runs` (the scenario PATCH, the one tenant-connection write) and SELECT alone on
+`building_runs`; 679 dropped both INSERT policies and `building_runs_tenant_update`. Every run is
+created and finished by the API on the service role. The column list is `BROWSER_WRITE_COLUMNS` in
+`tests/_tenant_registry.py`, held by both tenancy gates (offline over every migration from 679 on,
+live over the replayed schema's effective grants).
 
 **Migration 292 — child-grain tables**, `account_id` **derived by a `BEFORE INSERT OR
 UPDATE` trigger** from the owning parent row (a plain `DEFAULT` can't see a sibling
