@@ -92,7 +92,8 @@ def test_one_transaction_gated_before_and_checked_after() -> None:
 def test_these_are_the_latest_definitions() -> None:
     # 648 restated both with the energy-rating parameter appended (tests/test_648_browse_energy_rating_filter.py),
     # 657 the Stats pivot without the status lens (tests/test_657_status_is_the_propertys.py).
-    later = dict.fromkeys(FNS, "662_status_filter_contract.sql")  # 657 the lens, 661/662 the status parameter
+    later = {"browse_stats_properties": "678_stats_small_samples.sql",  # 678 the small-sample summary
+             "browse_map_cells": "662_status_filter_contract.sql"}  # 657 the lens, 661/662 the status parameter
     for fn in FNS:
         assert latest_definition(fn).name == later.get(fn, "648_browse_energy_rating_filter.sql"), fn
 

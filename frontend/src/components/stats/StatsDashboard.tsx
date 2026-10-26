@@ -6,7 +6,8 @@ import { pushToast } from '@/lib/toast';
 import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import ErrorBanner from '@/components/ErrorBanner';
 import Skeleton from '@/components/Skeleton';
-import { Segmented } from '@/components/controls';
+import { Segmented, Switch } from '@/components/controls';
+import { STATS_REGISTRY } from '@/lib/statsRegistry.generated';
 import {
   MARKET_CAPTION,
   MAX_CHARTS,
@@ -34,12 +35,15 @@ export default function StatsDashboard({
   filters,
   view,
   market,
+  small,
   onIncludeDismissed,
 }: {
   filters: ListingFilters;
   view?: DashboardView;
   /* The sample lens; optional only so the chart list renders on its own in tests. */
   market?: { value: StatsMarket; set: (m: StatsMarket) => void };
+  /* "Malé vzorky": cells under the minimum show min, max, průměr, medián (highlighted). */
+  small?: { value: boolean; set: (on: boolean) => void };
   /* Flips the sidebar to Show dismissed, from the skew warning. */
   onIncludeDismissed?: () => void;
 }) {
@@ -131,17 +135,33 @@ export default function StatsDashboard({
   return (
     <div className="space-y-4">
       {view ? <DashboardBar view={view} working={charts} onLoadCharts={(next) => save.mutateAsync(next)} /> : null}
-      {market ? (
-        <Segmented
-          label="Vzorek"
-          options={[
-            { value: 'filter' as const, label: 'Jako ve filtru' },
-            { value: 'sold' as const, label: 'Prodáno (trh)' },
-            { value: 'all' as const, label: 'Vše' },
-          ]}
-          value={market.value}
-          onChange={market.set}
-        />
+      {market || small ? (
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+          {market ? (
+            <Segmented
+              label="Vzorek"
+              options={[
+                { value: 'filter' as const, label: 'Jako ve filtru' },
+                { value: 'sold' as const, label: 'Prodáno (trh)' },
+                { value: 'all' as const, label: 'Vše' },
+              ]}
+              value={market.value}
+              onChange={market.set}
+            />
+          ) : null}
+          {small ? (
+            <label className="inline-flex items-center gap-2 text-[0.75rem] text-[var(--color-ink-2)]">
+              <Switch
+                on={small.value}
+                onChange={small.set}
+                ariaLabel={`Malé vzorky (pod ${STATS_REGISTRY.min_n}): min, max, průměr, medián`}
+              />
+              <span>
+                Malé vzorky <span className="text-[var(--color-ink-3)]">— pod {STATS_REGISTRY.min_n}: min, max, průměr, medián</span>
+              </span>
+            </label>
+          ) : null}
+        </div>
       ) : null}
       <DismissedSkewNotice filters={sample} onInclude={onIncludeDismissed} />
       <p className="text-[0.75rem] text-[var(--color-ink-3)]">{MARKET_CAPTION[lens]}</p>
@@ -151,6 +171,7 @@ export default function StatsDashboard({
             key={c.id}
             chart={c}
             filters={sample}
+            showSmall={small?.value ?? false}
             saving={save.isPending}
             focus={focus?.id === c.id ? focus.req : null}
             onSave={(next) => save.mutateAsync(charts.map((x) => (x.id === c.id ? next : x)))}
@@ -166,6 +187,7 @@ export default function StatsDashboard({
             key={pending.id}
             chart={pending}
             filters={sample}
+            showSmall={small?.value ?? false}
             startEditing
             saving={save.isPending}
             onSave={async (next) => {
