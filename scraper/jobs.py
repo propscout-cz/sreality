@@ -36,7 +36,7 @@ class Job:
     cpus: int  # exported to the child as JOB_CPUS
     host: Host
     resource: str | None = None  # jobs sharing one never overlap
-    db_heavy: bool = False
+    db_heavy: bool = False  # read by the hour census only: no two hold the database in one hour
 
 
 _FIXED: tuple[Job, ...] = (
@@ -69,8 +69,7 @@ _FIXED: tuple[Job, ...] = (
 )
 
 
-def walk_job(source: str, portal: type, offset_s: int) -> Job:
-    """One portal's index walk; public so a census can hand it a stand-in class."""
+def _walk(source: str, portal: type, offset_s: int) -> Job:
     return Job(f"{WALK_PREFIX}{source}", (f"scraper.{source}_main", "--index-only"), portal.walk_every_s,
                offset_s, portal.walk_timeout_s, WALK_MEMORY_MB, WALK_CPUS, UNTIL_MOVED)
 
@@ -84,7 +83,7 @@ def _walks() -> tuple[Job, ...]:
     for every_s in sorted({p.walk_every_s for p in portals.values()}):
         group = sorted(s for s, p in portals.items() if p.walk_every_s == every_s)
         # Evenly spread over the cadence, on whole minutes, so walks of one cadence never start together.
-        walks += [walk_job(s, portals[s], i * every_s // len(group) // 60 * 60) for i, s in enumerate(group)]
+        walks += [_walk(s, portals[s], i * every_s // len(group) // 60 * 60) for i, s in enumerate(group)]
     return tuple(walks)
 
 
