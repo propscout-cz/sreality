@@ -451,10 +451,8 @@ def renew(conn: psycopg.Connection, lease: Lease) -> bool:
 def release(conn: psycopg.Connection, lease: Lease, outcome: str, *, due: str | None = None,
             error: str | None = None, exit_code: int | None = None, peak_rss_mb: int | None = None,
             log_tail: str | None = None) -> bool:
-    """Closes the run and frees the row. Call it only once the work has stopped. False: the lease was already lost.
-
-    `due` is where the next due time goes (DUE_KINDS); by default an interrupted run is due at once and any other
-    run at its next slot."""
+    """Closes the run and frees the row once the work has stopped; `due` (DUE_KINDS) defaults to now for interrupted,
+    else slot. False: the lease was already lost."""
     if outcome not in RELEASE_OUTCOMES:
         raise ValueError(f"{outcome!r} is not a release outcome")
     due = due or ("now" if outcome == "interrupted" else "slot")
