@@ -989,6 +989,7 @@ def test_once_exits_by_the_run_s_outcome(script: Script, code: int) -> None:
     rig = _rig([_job(timeout_s=10)], {"test_job": script}, due=["test_job"])
 
     def sleep(_: float) -> None:
+        assert rig.clock() < 1000.0 + 300, "once never finished"
         rig.clock.advance(1.0)
         rig.guard.run_once(rig.clock())
 
