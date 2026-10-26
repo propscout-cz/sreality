@@ -330,8 +330,6 @@ class Guard:
                     watch.reason, watch.kill_at = "timeout", now + self._grace_s
                     self._term(pid)
                     LOG.warning("RUN term job=%s pid=%d why=timeout", watch.label, pid)
-                if watch.reason == "timeout" and self.stop_at is not None and watch.kill_at is not None:
-                    watch.kill_at = min(watch.kill_at, self.stop_at + self._grace_s)
                 if not watch.killed and watch.kill_at is not None and now >= watch.kill_at:
                     self._kill_locked(pid, watch, f"{self._grace_s:.0f} s after the SIGTERM")
 

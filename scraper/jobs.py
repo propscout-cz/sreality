@@ -96,3 +96,8 @@ def declared() -> tuple[Job, ...]:
 def runner_jobs() -> tuple[Job, ...]:
     """The only entries a scheduler may upsert, schedule, claim or request."""
     return tuple(j for j in declared() if j.host == RUNNER)
+
+
+def host_of(name: str) -> Host | None:
+    """The declared host of a name, for a refusal's message; never an entry: a scheduler reads runner_jobs()."""
+    return next((j.host for j in declared() if j.name == name), None)

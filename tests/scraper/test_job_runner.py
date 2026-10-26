@@ -200,6 +200,9 @@ class FakeLedger:
     def forget_replaced(self) -> None:
         self._record("forget_replaced", None)
 
+    def forget(self) -> None:
+        self._record("forget", None)
+
     def prune(self) -> None:
         self._record("prune", None)
 
@@ -726,3 +729,285 @@ print(reaped, code, gone)
     result = subprocess.run([sys.executable, "-c", script], cwd=ROOT, capture_output=True, text=True, timeout=30,
                             check=False)
     assert result.stdout.split() == ["1", "3", "True"], result.stderr
+
+
+def test_a_deploy_stop_forwards_sigterm_at_once_keeps_renewing_and_releases_interrupted() -> None:
+    """N11 (AC3) on the stand-in: the guard, not a tick, forwards the stop; the loop stops claiming, renews the
+    child still in its grace, and ends only when both are released."""
+    rig = _rig([_job("polite"), _job("stubborn"), _job("late")], {"stubborn": Script(ignores_term=True)},
+               due=["polite", "stubborn"])
+    rig.runner.tick()
+    rig.clock.advance(10)
+    rig.stop[0] = True
+    rig.ledger.due_names = ["late"]
+    rig.guard.run_once(rig.clock())
+    assert _signals(rig) == [(10.0, "TERM", "leader"), (10.0, "TERM", "leader")], "both, with no tick"
+    rig.runner.tick()
+    assert [d.lease.job_name for d in rig.releases()] == ["polite"]
+    assert rig.releases()[0].outcome == "interrupted" and rig.releases()[0].due == "now"
+    _drive(rig, 1000 + 10 + job_process.GRACE_S - 1)
+    assert [s for s in _signals(rig) if s[1] == "KILL" and s[0] > 10] == [], "the grace is waited out"
+    assert len(rig.ledger.named("renew")) >= 1, "the child in its grace keeps its lease"
+    _drive(rig, 1000 + 10 + job_process.GRACE_S)
+    assert (10 + job_process.GRACE_S, "KILL", "group") in _signals(rig)
+    assert rig.runner.tick() is True
+    assert [(d.lease.job_name, d.outcome, d.exit_code) for d in rig.releases()] == [
+        ("polite", "interrupted", 143), ("stubborn", "interrupted", -9)]
+    assert [e[1] for e in rig.ledger.named("claim")] == ["polite", "stubborn"], "no claim after the stop"
+    assert all(stopping for _, stopping, _, _ in rig.ledger.named("begin")[-3:])
+
+
+def test_a_deploy_during_a_timeout_grace_stays_a_timeout_and_a_clean_exit_in_the_drain_is_ok() -> None:
+    """N12: the first cause wins, and the kill comes at the earlier of the two deadlines."""
+    rig = _rig([_job("slow", timeout_s=100), _job("quick")],
+               {"slow": Script(ignores_term=True), "quick": Script(ignores_term=True, code=0, at=1150.0)},
+               due=["slow", "quick"])
+    rig.runner.tick()
+    _drive(rig, 1100)
+    assert _signals(rig)[0] == (100.0, "TERM", "leader")
+    _drive(rig, 1140)
+    rig.stop[0] = True
+    _drive(rig, 1160)
+    assert (140.0, "KILL", "group") not in _signals(rig)
+    _drive(rig, 1100 + job_process.GRACE_S)
+    slow = rig.standin.pid_of("slow")
+    kills = [t - 1000.0 for t, sig, _, pid in rig.standin.signals if sig == "KILL" and pid == slow]
+    assert kills[0] == 100 + job_process.GRACE_S, "the timeout's own kill: one grace, so it always comes first"
+    _drive(rig, 1100 + job_process.GRACE_S + 2)
+    done = {d.lease.job_name: d for d in rig.releases()}
+    assert (done["slow"].outcome, done["slow"].due) == ("timeout", "retry")
+    assert (done["quick"].outcome, done["quick"].exit_code) == ("ok", 0)
+
+
+def test_the_drain_s_signals_never_wait_on_a_blocked_database() -> None:
+    """N20: a release blocks for 100 s of fake time; the guard still SIGKILLs at stop_at + GRACE_S inside it."""
+    rig = _rig([_job("polite"), _job("stubborn")], {"stubborn": Script(ignores_term=True)},
+               due=["polite", "stubborn"])
+    rig.runner.tick()
+    rig.stop[0] = True
+    rig.guard.run_once(rig.clock())
+    stop_at = rig.clock()
+    blocked = [True]
+
+    def block() -> None:
+        if blocked[0]:
+            blocked[0] = False
+            for _ in range(100):
+                rig.clock.advance(1.0)
+                rig.guard.run_once(rig.clock())
+
+    rig.ledger.on["release"] = block
+    rig.runner.tick()
+    assert (stop_at - 1000.0 + job_process.GRACE_S, "KILL", "group") in _signals(rig), "killed inside the call"
+    [done] = rig.releases()
+    assert (done.lease.job_name, done.outcome) == ("polite", "interrupted")
+    rig.runner.tick()
+    assert [d.outcome for d in rig.releases()] == ["interrupted", "interrupted"]
+
+
+def test_a_stopping_ledger_phase_asks_nothing_new_past_its_budget() -> None:
+    """N20: three runs to release at 8 s a call: two are asked in the 10 s phase, the third next tick."""
+    names = ["r1", "r2", "r3"]
+    rig = _rig([_job(n) for n in names], due=names)
+    rig.runner.tick()
+    rig.stop[0] = True
+    rig.guard.run_once(rig.clock())
+    rig.ledger.on["release"] = lambda: rig.clock.advance(8.0)
+    rig.runner.tick()
+    assert len(rig.ledger.named("release")) == 2
+    rig.runner.tick()
+    assert len(rig.ledger.named("release")) == 3
+
+
+class _Exited(Exception):
+    pass
+
+
+def _serve_guard(rig: Rig, *, steps: int, between: Callable[[], object] | None = None) -> list[int]:
+    """Runs Guard.serve on this thread with a fake wait: each step advances the clock a second."""
+    exits: list[int] = []
+    count = [0]
+
+    def wait(seconds: float) -> None:
+        count[0] += 1
+        if count[0] > steps:
+            raise _Exited
+        rig.clock.advance(seconds)
+        if between is not None:
+            between()
+
+    with pytest.raises(_Exited):
+        rig.guard.serve(wait=wait, exit_=lambda code: exits.append(code) or (_ for _ in ()).throw(_Exited()))
+    return exits
+
+
+def test_the_watchdog_kills_every_child_then_exits_when_no_tick_finishes_cleanly() -> None:
+    """N17: a tick that raises every time never feeds the watchdog; at LIVENESS_BOUND_S the guard kills and exits."""
+    rig = _rig([_job()], {"test_job": Script()}, due=["test_job"])
+    rig.runner.tick()
+    rig.guard.move(rig.standin.pid_of("test_job"), 1e9)  # no fence in this window: only the watchdog may kill
+    rig.ledger.on["begin"] = lambda: (_ for _ in ()).throw(RuntimeError("bug"))
+    exits = _serve_guard(rig, steps=400, between=rig.runner.tick)
+    assert exits == [1]
+    assert rig.clock() - 1000.0 == pytest.approx(job_process.LIVENESS_BOUND_S + 1, abs=1)
+    assert _signals(rig) == [(pytest.approx(job_process.LIVENESS_BOUND_S + 1, abs=1), "KILL", "group")], (
+        "its children die before it exits, and only the watchdog killed them")
+
+
+def test_the_watchdog_stays_quiet_while_ticks_finish_and_forgives_one_bad_tick() -> None:
+    rig = _rig([_job()], due=[])
+    raised = [False]
+
+    def flaky() -> None:
+        if not raised[0] and rig.clock() > 1100:
+            raised[0] = True
+            raise RuntimeError("one bad tick")
+
+    rig.ledger.on["begin"] = flaky
+    assert _serve_guard(rig, steps=700, between=rig.runner.tick) == []
+    assert raised[0] and rig.runner.last_error == "RuntimeError: one bad tick"
+
+
+def test_only_a_railway_replica_beats_and_a_clean_stop_forgets_it() -> None:
+    """N18: one liveness subject per replica, named from one constant; none off Railway."""
+    assert job_runner.heartbeat_name({}) is None
+    assert job_runner.heartbeat_name({"RAILWAY_REPLICA_ID": "0f3c9a1e-77aa-4d1e"}) == "job-runner/0f3c9a1e"
+    rig = _rig([_job()], {"test_job": Script(ignores_term=True)}, due=["test_job"], beats=True,
+               identity={"version": "abc123"})
+    rig.runner.tick()
+    [beat] = rig.ledger.named("beat")
+    details = beat[1]
+    assert isinstance(details, dict) and details["version"] == "abc123" and details["stopping"] is False
+    assert [c["job"] for c in details["children"]] == ["test_job"]
+    assert len(rig.ledger.named("forget_replaced")) == 1
+    rig.stop[0] = True
+    rig.guard.run_once(rig.clock())
+    _drive(rig, rig.clock() + job_process.GRACE_S + 2)
+    assert len(rig.ledger.named("beat")) == 1, "no beat while stopping"
+    job_runner.loop(rig.runner, sleep=lambda _: None)
+    assert len(rig.ledger.named("forget")) == 1
+    quiet = _rig([_job()], due=[])
+    job_runner.loop(quiet.runner, sleep=lambda _: quiet.stop.__setitem__(0, True) or quiet.guard.run_once(0))
+    assert quiet.ledger.named("beat") == [] and quiet.ledger.named("forget") == []
+
+
+def test_the_pg_ledger_stamps_its_deployment_on_every_beat(monkeypatch: pytest.MonkeyPatch) -> None:
+    beats: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(job_lease, "beat", lambda conn, worker, started_at, details: beats.append((worker, details)))
+    ledger = job_runner.PgLedger(FakeConn, holder="H", heartbeat="job-runner/0f3c9a1e",  # type: ignore[arg-type]
+                                 deployment="dep-7")
+    ledger.begin(stopping=False)
+    ledger.beat({"children": []})
+    assert beats == [("job-runner/0f3c9a1e", {"children": [], "deployment": "dep-7"})]
+
+
+RUNNER_FILES = ("scraper/job_runner.py", "scraper/job_process.py", "scraper/jobs.py", "scraper/job_lease.py")
+
+
+def _code_only(source: str) -> str:
+    """The source with its comments and docstrings gone (ast.unparse drops comments)."""
+    import ast
+
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and node.body:
+            first = node.body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) \
+                    and isinstance(first.value.value, str):
+                node.body = node.body[1:] or [ast.Pass()]
+    return ast.unparse(tree)
+
+
+def portal_name_problems(sources: Mapping[str, str]) -> list[str]:
+    """A portal's name on letter boundaries (`walk_idnes` and `_web` match, `webhook` does not), code only."""
+    from scraper.portal_factory import PORTAL_CLASSES
+
+    problems = []
+    for path, text in sources.items():
+        code = _code_only(text)
+        for source in sorted(PORTAL_CLASSES):
+            if re.search(rf"(?<![a-z]){re.escape(source)}(?![a-z])", code, re.IGNORECASE):
+                problems.append(f"{path} names the portal {source!r} (rule 21)")
+    return problems
+
+
+def test_no_portal_name_in_the_runner_or_registry_code() -> None:
+    """N19 (AC4)."""
+    sources = {path: (ROOT / path).read_text() for path in RUNNER_FILES}
+    assert portal_name_problems(sources) == []
+
+
+def test_the_portal_name_census_fires() -> None:
+    from scraper.portal_factory import PORTAL_CLASSES
+
+    assert {"web", "idnes", "bazos"} <= set(PORTAL_CLASSES)
+    assert portal_name_problems({"x.py": "NAME = 'walk_idnes'\n"})
+    assert portal_name_problems({"x.py": "def f():\n    return 'bazos'\n"})
+    assert portal_name_problems({"x.py": "SUFFIX = '_web'\n"})
+    assert portal_name_problems({"x.py": 'MOD = f"scraper.{source}_main"\nHOOK = "webhook"\n'}) == []
+    assert portal_name_problems({"x.py": '"""About bazos."""\n# idnes\nX = 1\n'}) == []
+
+
+def test_the_cli_prints_help_with_no_verb_and_refuses_what_is_not_a_runner_job(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """N13."""
+    assert job_runner.main([], registry=[]) == 2
+    assert "{run,once,request,pause,list}" in capsys.readouterr().out
+    elsewhere = Job("canary_like", ("scripts.x",), 3600, 0, 60, 256, 1, jobs.GITHUB)
+    monkeypatch.setattr(jobs, "host_of", lambda name: elsewhere.host if name == elsewhere.name else None)
+    for verb in ("once", "request"):
+        assert job_runner.main([verb, "canary_like"], registry=[_job()]) == 2
+        assert "canary_like runs on github-actions" in capsys.readouterr().err
+    assert job_runner.main(["request", "no_such_job"], registry=[_job()]) == 2
+    assert "no job named no_such_job" in capsys.readouterr().err
+    assert job_runner.main(["pause", "test_job", "--until", "2001-01-01", "--note", "x"], registry=[_job()]) == 2
+    assert "in the past" in capsys.readouterr().err
+
+
+def test_request_and_pause_reach_job_lease_with_their_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, object, object, object]] = []
+    monkeypatch.setattr(job_lease, "request",
+                        lambda conn, name, args, *, by: calls.append(("request", name, list(args), by)))
+    monkeypatch.setattr(job_lease, "pause",
+                        lambda conn, name, *, until, note, by: calls.append(("pause", name, until, (note, by))))
+    connect = FakeConn
+    assert job_runner.main(["request", "test_job", "--by", "github:op", "--", "--limit", "7"], registry=[_job()],
+                           connect=connect) == 0  # type: ignore[arg-type]
+    assert job_runner.main(["pause", "location_resolve_incremental", "--until", "now", "--note", "lifted",
+                            "--by", "op"], registry=[_job()], connect=connect) == 0  # type: ignore[arg-type]
+    assert calls == [("request", "test_job", ["--limit", "7"], "github:op"),
+                     ("pause", "location_resolve_incremental", None, ("lifted", "op"))]
+
+
+@pytest.mark.parametrize("script,code", [
+    (Script(code=0, at=1001.0), 0),
+    (Script(code=75, at=1001.0), 0),
+    (Script(code=3, at=1001.0), 1),
+    (Script(ignores_term=True), 1),  # a timeout is not ok
+])
+def test_once_exits_by_the_run_s_outcome(script: Script, code: int) -> None:
+    rig = _rig([_job(timeout_s=10)], {"test_job": script}, due=["test_job"])
+
+    def sleep(_: float) -> None:
+        rig.clock.advance(1.0)
+        rig.guard.run_once(rig.clock())
+
+    assert job_runner.once(_job(timeout_s=10), ledger=rig.ledger, spawner=rig.standin, guard=rig.guard,
+                           clock=rig.clock, sleep=sleep) == code
+    assert rig.ledger.named("register") == [], "once never upserts"
+
+
+def test_once_says_not_due_and_an_interrupted_once_exits_143(capsys: pytest.CaptureFixture[str]) -> None:
+    idle = _rig([_job()], due=[])
+    assert job_runner.once(_job(), ledger=idle.ledger, spawner=idle.standin, guard=idle.guard, clock=idle.clock,
+                           sleep=lambda _: None) == 0
+    assert "not due" in capsys.readouterr().out
+    rig = _rig([_job()], {"test_job": Script()}, due=["test_job"])
+
+    def sleep(_: float) -> None:
+        rig.clock.advance(1.0)
+        rig.stop[0] = True
+        rig.guard.run_once(rig.clock())
+
+    assert job_runner.once(_job(), ledger=rig.ledger, spawner=rig.standin, guard=rig.guard, clock=rig.clock,
+                           sleep=sleep) == 143

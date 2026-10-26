@@ -171,6 +171,7 @@ class Ledger(Protocol):
     def release(self, done: Finished) -> bool | None: ...
     def beat(self, details: Mapping[str, object]) -> None: ...
     def forget_replaced(self) -> None: ...
+    def forget(self) -> None: ...
     def prune(self) -> None: ...
 
 
@@ -513,3 +514,185 @@ class _Failed(Exception):
     def __init__(self, exc: psycopg.Error) -> None:
         super().__init__(str(exc))
         self.exc = exc
+
+
+def loop(runner: Runner, *, sleep: Callable[[float], object] = time.sleep, draining_s: float = DRAINING_S) -> None:
+    """Ticks until nothing is left (or, stopping, until Railway's drain is spent), then forgets the heartbeat."""
+    while not runner.tick():
+        stop_at = runner.guard.stop_at
+        if stop_at is not None and runner.clock() >= stop_at + draining_s:
+            LOG.error("STOP drain spent with %d running, %d unreleased: their leases lapse and the reaper closes "
+                      "them as lost", len(runner.running), len(runner.finished))
+            break
+        sleep(TICK_S)
+    if runner.beats:
+        runner.ledger.forget()
+
+
+def _pooler_addresses(url: str) -> int | None:
+    """How many addresses the database host resolves to (CONNECT_BUDGET_S assumes two); the host is never logged."""
+    try:
+        parts = urlsplit(url)
+        return len({info[4][0] for info in socket.getaddrinfo(parts.hostname or "", parts.port or 5432)})
+    except (OSError, ValueError):
+        return None
+
+
+def _ledger(heartbeat: str | None = None) -> PgLedger:
+    return PgLedger(lambda: db.connect(attempts=1, connect_timeout=CONNECT_TIMEOUT_S), holder=job_lease.holder_id(),
+                    version=os.environ.get("RAILWAY_GIT_COMMIT_SHA"), heartbeat=heartbeat,
+                    deployment=os.environ.get("RAILWAY_DEPLOYMENT_ID"))
+
+
+def _guard(*, watchdog: bool) -> Guard:
+    guard = Guard(clock=job_lease.clock)
+    threading.Thread(target=guard.serve, kwargs={"watchdog": watchdog}, name="job-guard", daemon=True).start()
+    return guard
+
+
+def serve(registry: Sequence[Job] | None = None) -> int:
+    """`run`: the service. It alone registers, retires, beats, prunes and arms the watchdog's exit."""
+    entries = tuple(jobs.runner_jobs() if registry is None else registry)
+    heartbeat = heartbeat_name(os.environ)
+    ledger = _ledger(heartbeat)
+    LOG.info("BOOT pid1=%s version=%s holder=%s deployment=%s heartbeat=%s pooler_addresses=%s jobs=%d",
+             os.getpid() == 1, ledger.version, ledger.holder, ledger.deployment, heartbeat,
+             _pooler_addresses(db.database_url()), len(entries))
+    stop.install()
+    guard = _guard(watchdog=True)
+    runner = Runner(entries, ledger=ledger, spawner=spawn_process, guard=guard, clock=job_lease.clock,
+                    pid1=os.getpid() == 1, beats=heartbeat is not None,
+                    identity={"version": ledger.version, "holder": ledger.holder})
+    loop(runner)
+    ledger.close()
+    return 0
+
+
+def once(job: Job, *, ledger: Ledger | None = None, spawner: Spawner = spawn_process, guard: Guard | None = None,
+         clock: Callable[[], float] = job_lease.clock, sleep: Callable[[float], object] = time.sleep) -> int:
+    """One foreground claim, run and release of a runner entry: no upsert, no heartbeat. 0 ok, 143 interrupted,
+    1 anything else (a timeout included)."""
+    stop.install()
+    pg = None if ledger is not None else _ledger()
+    runner = Runner([job], ledger=ledger or pg, spawner=spawner, guard=guard or _guard(watchdog=False),  # type: ignore[arg-type]
+                    clock=clock, service=False, claim_limit=1)
+    loop(runner, sleep=sleep)
+    if pg is not None:
+        pg.close()
+    if runner.claims == 0:
+        print(f"{job.name}: not due (and no request waiting), or held elsewhere")
+        return 0
+    outcomes = [done.outcome for done, released in runner.released if released]
+    if outcomes == ["ok"]:
+        return 0
+    return stop.EXIT_CODE if outcomes == ["interrupted"] else 1
+
+
+def _by() -> str:
+    try:
+        return f"cli:{getpass.getuser()}"
+    except (KeyError, OSError):
+        return "cli:unknown"
+
+
+def _until(text: str) -> datetime | None:
+    if text == "now":
+        return None
+    at = datetime.fromisoformat(text)
+    return at if at.tzinfo else at.replace(tzinfo=UTC)
+
+
+def _state(row: Mapping[str, object], now: datetime) -> str:
+    paused_until = row["paused_until"]
+    if row["retired_at"]:
+        return "retired"
+    if isinstance(paused_until, datetime) and paused_until > now:
+        return "paused"
+    if row["requested_at"]:
+        return "requested"
+    return "held" if row["lease_holder"] else "-"
+
+
+def _list(conn: psycopg.Connection) -> None:
+    now = datetime.now(UTC)
+    for row in job_lease.rows(conn):
+        due_at = row["due_at"]
+        due = f"due={due_at:%Y-%m-%d %H:%M}Z" if isinstance(due_at, datetime) else "lane"
+        last = (f"run={row['outcome'] or 'open'} exit={row['exit_code']} peak={row['peak_rss_mb']}MB"
+                if row["started_at"] else "no run")
+        print(f"{row['job_name']:32} {row['runner']:16} {_state(row, now):9} {due:22} last={row['last_outcome']} "
+              f"failures={row['consecutive_failures']} {last}")
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="python -m scraper.job_runner",
+                                     description="The job runner: run it as a service, or act on one job's row.")
+    verbs = parser.add_subparsers(dest="verb", metavar="{run,once,request,pause,list}")
+    verbs.add_parser("run", help="the service (Railway's start command)")
+    once_ = verbs.add_parser("once", help="claim, run and release one runner job here, if it is due or requested")
+    once_.add_argument("job")
+    request_ = verbs.add_parser("request", help="ask the runner to run a job now: request <job> [--by WHO] [-- ARGS]")
+    request_.add_argument("job")
+    request_.add_argument("--by", default=None)
+    pause_ = verbs.add_parser("pause", help="pause a job's schedule (a request still runs); --until now lifts it")
+    pause_.add_argument("job")
+    pause_.add_argument("--until", required=True, help="an ISO time (UTC unless given), or now to lift the pause")
+    pause_.add_argument("--note", required=True)
+    pause_.add_argument("--by", default=None)
+    verbs.add_parser("list", help="every scheduled_jobs row with its latest run")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None, *, registry: Sequence[Job] | None = None,
+         connect: Callable[[], psycopg.Connection] | None = None) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    args = list(sys.argv[1:] if argv is None else argv)
+    extra: list[str] = []
+    if "--" in args:
+        at = args.index("--")
+        args, extra = args[:at], args[at + 1:]
+    parser = _parser()
+    ns = parser.parse_args(args)
+    if ns.verb is None:
+        parser.print_help()
+        return 2
+    if extra and ns.verb != "request":
+        parser.error("only request takes -- ARGS")
+    if ns.verb == "run":
+        return serve(registry)
+    entries = {j.name: j for j in (jobs.runner_jobs() if registry is None else registry)}
+    if ns.verb in ("once", "request") and ns.job not in entries:
+        host = jobs.host_of(ns.job)
+        print(f"{ns.job} runs on {host}" if host else f"no job named {ns.job} in the registry", file=sys.stderr)
+        return 2
+    if ns.verb == "once":
+        return once(entries[ns.job])
+    until = None
+    if ns.verb == "pause":
+        try:
+            until = _until(ns.until)
+        except ValueError:
+            parser.error(f"--until {ns.until!r} is not an ISO time or now")
+        if until is not None and until <= datetime.now(UTC):
+            print(f"--until {ns.until} is in the past: use --until now to lift a pause", file=sys.stderr)
+            return 2
+    conn = (connect or (lambda: db.connect(attempts=1, connect_timeout=CONNECT_TIMEOUT_S)))()
+    try:
+        if ns.verb == "list":
+            _list(conn)
+            return 0
+        if ns.verb == "request":
+            refusal = job_lease.request(conn, ns.job, extra, by=ns.by or _by())
+        else:
+            refusal = job_lease.pause(conn, ns.job, until=until, note=ns.note, by=ns.by or _by())
+    finally:
+        conn.close()
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 1
+    print(f"{ns.verb} filed for {ns.job}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
