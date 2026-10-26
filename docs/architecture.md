@@ -1923,7 +1923,12 @@ renumber.** Navigate by area:
     to its ORIGIN (the `prev_property_id` of its oldest live ledger row), reactivating that
     property if merged away INTO that merge's survivor (else the advert stays:
     `origin_moved_on`, read under the lock), and stamping its ledger rows
-    `undone_at`/`undone_by` (never deleted). No carrier runs on a detach; it ROUTES the curation
+    `undone_at`/`undone_by` (never deleted). An advert that does not move is a refusal, not an
+    error: its `outcome` names why (`detach_outcomes` reads the same answers for a dry run) —
+    `moved_since` (it no longer sits where its newest live ledger row, or the call's own plan,
+    found it), `moved_on` (a group-scoped detach whose merge is no longer the newest to move it),
+    `on_origin`, `origin_moved_on`, `not_merged`, `last_native`; `detached`, `split_native` and
+    `split_new` are the moves (`property_identity.MOVED`). No carrier runs on a detach; it ROUTES the curation
     its adverts take (MS17, MS18): `property_carriers.curation_plan` reads every account's items
     on the property left BEFORE any advert moves (the carry rows it reads are the ones the steps
     then stamp; a live test pins the order) and `route_curation` writes them after. A note goes
@@ -2547,7 +2552,9 @@ renumber.** Navigate by area:
     which is why delivery gets its own ledger.) The first ledger, `channel_sends` (Sprint N: email and
     Telegram through an outbox draining `target_channels`), never sent a row and lost every writer in
     W1 (2026-10-21); migration 656 dropped it with `notification_suppression` and
-    `resend_webhook_events` (0 rows each, ever). **External delivery is `notification_deliveries`**
+    `resend_webhook_events` (0 rows each, ever) and, beside the matcher's six, the three delivery-target
+    settings rows (`notification_email_to`, `notification_telegram_chat_id`, `system_health_channels`):
+    nine notification settings, each copied to `app_settings_history` first. **External delivery is `notification_deliveries`**
     (migration 654,
     notifications push W4; `docs/design/notifications-push/PROGRAM.md` § 3.2–3.5): ONE row per (event,
     device), `UNIQUE (notification_id, push_subscription_id)`, ending `sent | skipped | gone | failed` with
@@ -3385,19 +3392,6 @@ renumber.** Navigate by area:
     category walk nominates its unseen rows, the drain's page fetch decides; a portal whose
     walk cannot be proven complete (no declared total → `unknown`) simply nominates nothing and
     relies on gone detail fetches. `supports_complete_walk` is a posture signal, not a gate.
-21b. **`category_type` is NULLABLE on Browse — NULL means "no deal-type constraint"** (the
-    "Vše" pill). This is not new semantics: `toolkit/comparables.py`, the watchdog matcher in
-    `api/notifications.py` and `browse_stats_properties` have always guarded the clause with an
-    `is not null` check, and `applyRegistryFilters` skips null values — the only thing missing
-    was a frontend type and a control that could reach the state. It is declared once, as
-    `FilterDef.nullable` in the registry, which is what makes the shared `PillRow` render a
-    leading "Vše" pill; any future nullable enum gets the control for free. Deliberately NOT an
-    extra `any` enum member: `category_type` is on EVERY agenda, so an `any` token would be a
-    legal input to the estimation agent, where "any deal type" silently mixes rent and sale
-    comparables into one valuation. URL: `?deal=any`; an ABSENT `deal` still means the
-    `pronajem` default, so bare `/browse` links are unchanged. Before this, clicking the
-    selected deal-type pill (which `PillRow` has always offered) wrote `deal=null`, which
-    `enumOr` silently snapped back to `pronajem` — the control lied about what it could do.
 
     **Amendment 2026-10-25 (ADR-0007, operator grill):** agents may call a NEW structured photo assessment (facets with a
     score and an evidence note each, cached per photo set and prompt version, at most 10 properties per run, defined in
@@ -3584,8 +3578,21 @@ renumber.** Navigate by area:
     the active preset. A preset stores the pipeline scope like every filter, so a change to it
     offers "Update preset" and loading the preset applies it (ruling 2026-10-22, reversing
     2026-10-19); a Stats dashboard leaves it out (`DASHBOARD_EXCLUDED_KEYS`). A
-    watchdog can't use it (`UNSUPPORTED_LABELS`) — the operator's own state can't be a trigger. The
-    extension bookmarks AND changes stage property-grain like every other surface: it reads
+    watchdog can't use it (`UNSUPPORTED_LABELS`) — the operator's own state can't be a trigger.
+    **The pipeline view's neutral cohort needs `category_type` NULLABLE on Browse — NULL means "no deal-type constraint"** (the
+    "Vše" pill). This is not new semantics: `toolkit/comparables.py`, the watchdog matcher in
+    `api/notifications.py` and `browse_stats_properties` have always guarded the clause with an
+    `is not null` check, and `applyRegistryFilters` skips null values — the only thing missing
+    was a frontend type and a control that could reach the state. It is declared once, as
+    `FilterDef.nullable` in the registry, which is what makes the shared `PillRow` render a
+    leading "Vše" pill; any future nullable enum gets the control for free. Deliberately NOT an
+    extra `any` enum member: `category_type` is on EVERY agenda, so an `any` token would be a
+    legal input to the estimation agent, where "any deal type" silently mixes rent and sale
+    comparables into one valuation. URL: `?deal=any`; an ABSENT `deal` still means the
+    `pronajem` default, so bare `/browse` links are unchanged. Before this, clicking the
+    selected deal-type pill (which `PillRow` has always offered) wrote `deal=null`, which
+    `enumOr` silently snapped back to `pronajem` — the control lied about what it could do.
+    The extension bookmarks AND changes stage property-grain like every other surface: it reads
     `property_id` + membership (incl. `stage_id`) off the batched `POST /listings/lookup` (and
     `GET /pipeline/stages` for the select options) and writes through these same
     `POST/DELETE /pipeline/cards` (bookmark/remove) + `PATCH /pipeline/cards/{id}` (move) routes —
@@ -4932,7 +4939,7 @@ and the reason the red line gates everything downstream. Browse and the map read
 COPIES those fields at rebuild, so no consumer query joins the store; a field is added only by operator
 ruling or after a measured slowdown, and only there.
 
-**THE CONSUMER RULE** (operator ruling 2026-09-13, W5). A listing is SERVED to consumers only when
+**THE CONSUMER RULE** (operator ruling 2026-09-13, W5, migration 514). A listing is SERVED to consumers only when
 `listing_location` has an ANSWER for it — a point, or the determination `country_status = 'foreign'`;
 everything else stays invisible until the lane resolves it. It is not a flag and not a column but a
 predicate over the store itself — `location_data.claims_common.SERVED_LOCATION_PREDICATE`, ONE text

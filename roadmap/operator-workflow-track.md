@@ -704,7 +704,7 @@ from Browse, not just from the board.
   operator with 45 deals saw 1. It now loads a VIEW: neutral cohort + scope,
   active preset deselected, one atomic write, Back as the undo. That required
   `category_type` to become nullable ("Vše"), which every backend consumer
-  already supported — see architecture rule 21b — and which incidentally fixes
+  already supported — see architecture rule 22 — and which incidentally fixes
   a control that lied: clicking the selected deal-type pill wrote `deal=null`
   and silently snapped back to `pronajem`.
 - Next: nothing queued here; a "days in stage" signal is the obvious follow-up if
