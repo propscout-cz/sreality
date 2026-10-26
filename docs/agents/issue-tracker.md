@@ -45,14 +45,69 @@ Create a GitHub issue.
 
 Run `gh issue view <number> --json number,title,body,state,labels,comments`.
 
+## Claiming a ticket
+
+Every session posts as the same GitHub account, so an assignee cannot tell sessions apart. A **ticket claim** does: a marker comment naming the session, which `scripts/ticket_claim.py` writes and judges (the first claim made while none is live wins). It is not a lease; in `GLOSSARY.md` a Lease is the engine's lock.
+
+- **Claim before any work on a ticket**, whether you picked it, the user named it or `/implement` / `/implement-spec` reached it: `python3 -m scripts.ticket_claim claim <n>`. Exit 0 makes it yours; on any other exit, do what the script prints.
+- **Claim again before your first push and before you open the PR.** This confirms you still hold the ticket and renews an old claim. If it now exits 1, stop and tell the user.
+- **A claim lapses 4 hours after the ticket's last activity**: a claim or renewal, a commit naming `#<n>`, a PR that closes `#<n>`. An open PR that closes the ticket holds it, so open the draft PR early.
+- **Release when you stop without finishing**: `python3 -m scripts.ticket_claim release <n> --reason "<why>"`. Closing a ticket ends its claim; a reopened ticket is claimed afresh.
+- **Subagents share their session's name**, so the orchestrating session claims each ticket before handing it over.
+- The script alone writes claim comments; leave them as written and the assignee empty.
+- After a restart that renamed your session: `release <n> --as <old name>`, then claim.
+- `status` shows who holds what (`--help`).
+
+## Post-merge gates are their own tickets
+
+A **gate** is a check that can pass only some time after a deploy: a lane green for 48 hours, a p95 within 10 % over seven days. Each gate is its own ticket, so the build PR's `Closes #<n>` is always right and the owed gates are one query.
+
+**Drafting tickets** (`/to-tickets`, `/to-spec`, `/wayfinder`): put each gate ticket right after its build ticket, one per build and window.
+
+- **Title:** `Gate: <what must hold> after #<build> (due <N> after deploy)`; when its clock starts, `(due YYYY-MM-DD)`.
+- **Label:** `gate` alone, which keeps it off the `ready-for-agent` frontier.
+- **Links:** a sub-issue of the spec; natively blocked by the build ticket; natively blocking only the tickets that need the gate passed (a later wave's cutover, a contract step), never those that need only the build's code.
+- **Body:**
+
+```markdown
+## Gate for
+#<build>: <build title>. Closed by a measurement comment.
+## Clock
+Starts when #<build>'s PR deploys. Window: <48 hours | 72 hours | 7 days>. Due: not started.
+## Baseline
+<the numbers to compare against, or where the build PR records them>
+## Pass when
+- [ ] <read-only check>
+## How to measure
+<the Health cell, SELECT or gh command; read-only>
+## If it fails
+Comment the numbers, leave this open and open a fix ticket that blocks this one; the clock restarts when the fix deploys.
+## Blocked by
+- #<build>
+```
+
+**Merging a build PR**: once the deploy is confirmed (CLAUDE.md, "A merge is not a deploy"), start the clock on each gate ticket the build ticket blocks, listed by `gh api repos/{owner}/{repo}/issues/<build>/dependencies/blocking -q '.[] | select(any(.labels[]; .name == "gate")) | .number'`: comment `Clock started: deployed <UTC>; due <UTC>. Baseline: <numbers>`, then date the title with `gh api -X PATCH repos/{owner}/{repo}/issues/<gate> -f title="…(due YYYY-MM-DD)"`.
+
+**Owed gates**, soonest first: `gh issue list --label gate --state open --json number,title -q '.[] | "\((.title | capture("due (?<d>[0-9]{4}-[0-9]{2}-[0-9]{2})")).d // "not started")  #\(.number)  \(.title)"' | sort`
+
+**A due gate** is measured by any session, unclaimed (measuring twice is harmless). Pass: comment the numbers and `gh issue close <gate>`. Fail: follow its "If it fails".
+
+## How work closes
+
+This is what `/implement-spec` means by "the way the issue tracker closes work", and every PR follows it.
+
+- **Build ticket**: its PR body says `Closes #<n>`.
+- **Gate ticket**: a measurement comment, then `gh issue close`; a PR touching it says `Refs #<gate>`.
+- **Spec**: closes after its last child, gates included. While a gate ticket under it is open, a PR says `Refs #<spec>`, and whoever closes the last gate closes the spec.
+
 ## Wayfinding operations
 
 Used by `/wayfinder`. The **map** is a single issue with **child** issues as tickets.
 
 - **Map**: a single issue labelled `wayfinder:map`, holding the Notes / Decisions-so-far / Fog body. `gh issue create --label wayfinder:map`.
-- **Child ticket**: an issue linked to the map as a GitHub sub-issue (`gh api` on the sub-issues endpoint). Where sub-issues aren't enabled, add the child to a task list in the map body and put `Part of #<map>` at the top of the child body. Labels: `wayfinder:<type>` (`research`/`prototype`/`grilling`/`task`). Once claimed, the ticket is assigned to the driving dev.
-- **Blocking**: GitHub's **native issue dependencies**, the canonical, UI-visible representation. Add an edge with `gh api --method POST repos/<owner>/<repo>/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`, where `<blocker-db-id>` is the blocker's numeric **database id** (`gh api repos/<owner>/<repo>/issues/<n> --jq .id`, _not_ the `#number` or `node_id`). GitHub reports `issue_dependencies_summary.blocked_by` (open blockers only, the live gate). Where dependencies aren't available, fall back to a `Blocked by: #<n>, #<n>` line at the top of the child body. A ticket is unblocked when every blocker is closed.
-- **Frontier query**: list the map's open children (`gh issue list --state open`, scoped to the map's sub-issues / task list), drop any with an open blocker (`issue_dependencies_summary.blocked_by > 0`, or an open issue in the `Blocked by` line) or an assignee; first in map order wins.
-- **Claim**: `gh issue edit <n> --add-assignee @me`, the session's first write.
+- **Child ticket**: an issue linked to the map as a GitHub sub-issue (`gh api` on the sub-issues endpoint). Where sub-issues aren't enabled, add the child to a task list in the map body and put `Part of #<map>` at the top of the child body. Labels: `wayfinder:<type>` (`research`/`prototype`/`grilling`/`task`).
+- **Blocking**: GitHub's **native issue dependencies**, the canonical, UI-visible representation. Add an edge with `gh api --method POST repos/<owner>/<repo>/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`, where `<blocker-db-id>` is the blocker's numeric **database id** (`gh api repos/<owner>/<repo>/issues/<n> --jq .id`, _not_ the `#number` or `node_id`). GitHub reports `issue_dependencies_summary.blocked_by` (open blockers only). Where dependencies aren't available, fall back to a `Blocked by: #<n>, #<n>` line at the top of the child body. A ticket is unblocked when every blocker is closed.
+- **Frontier query**: list the map's open children (`gh issue list --state open`, scoped to the map's sub-issues / task list), drop any with an open blocker (`issue_dependencies_summary.blocked_by > 0`, or an open issue in the `Blocked by` line) or a live claim (`python3 -m scripts.ticket_claim status <n>` exits 1); first in map order wins.
+- **Claim**: `python3 -m scripts.ticket_claim claim <n>`, the session's first write (§ Claiming a ticket).
 - **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`, then append a context pointer (gist + link) to the map's Decisions-so-far.
-- **A map may live in another repo.** The AI-CRM program's map and its tickets live in a private planning repo (the owner's ruling of 2026-10-04), because its tickets weigh legal and security questions that do not belong in a public tracker. The owner gives the map's URL when invoking `/wayfinder`. Take `<owner>/<repo>` from that URL, pass `-R <owner>/<repo>` to every `gh` call for that map, and keep its research files there, never in this repo.
+- **A map may live in another repo.** The AI-CRM program's map and its tickets live in a private planning repo (the owner's ruling of 2026-10-04), because its tickets weigh legal and security questions that do not belong in a public tracker. The owner gives the map's URL when invoking `/wayfinder`. Take `<owner>/<repo>` from that URL, pass `-R <owner>/<repo>` to every `gh` call for that map (prefix `GH_REPO=<owner>/<repo>` to a ticket-claim command), and keep its research files there, never in this repo.

@@ -270,7 +270,7 @@ Never commit secrets (`.env` is gitignored). API keys are **backend-only** — n
 secret (the frontend build must not see it). **Full env-var / secrets reference:** the `toolkit-api` skill.
 ## Agent skills
 
-- **Issue tracker:** GitHub Issues on this PUBLIC repo, via `gh` — always with `--json` (plain `gh issue view` / `gh pr view` exit 1 here). See `docs/agents/issue-tracker.md`.
+- **Issue tracker:** GitHub Issues on this PUBLIC repo, via `gh` — always with `--json` (plain `gh issue view` / `gh pr view` exit 1 here). Before you work on, create or close a ticket, read `docs/agents/issue-tracker.md`: a ticket is yours once `python3 -m scripts.ticket_claim claim <n>` exits 0; each post-merge gate is its own `gate` ticket.
 - **Triage labels:** the five default role names (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
 - **Domain docs:** single-context — root `GLOSSARY.md` + `docs/adr/`; the numbered rules above bind as ADRs do. See `docs/agents/domain.md`.
 ## What is explicitly out of scope right now
