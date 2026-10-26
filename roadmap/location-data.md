@@ -1187,13 +1187,11 @@ component is slimmed twice — each wave rewrites one component and slims its st
   reader of the same surface and method (`page_readers.read_entry`). Also: realitymix's 'estimated'
   marker fires on an EMPTY `data-gps-*` (`html_marker.blank_attrs`; v6 declared it on no active ad),
   and its Prague quarter is read one crumb higher (`json_breadcrumb.levels_by_anchor`; 713 Prague
-  ads claimed none). Recovery measured once the bumps' re-mine drains. Unrecoverable here: the
-  ~15.6k idnes fallback ads whose line names only a town (idnes highlights the whole obec) — they
-  wait on the next item.
-- **Next (ruled 2026-10-25): the fallback point.** A část obce has no RÚIAN polygon, so FILL climbs
-  to its obec's point; place it at the centroid of its own address points as W18 places a street,
-  with a radius that is the set's extent (12,810 idnes + 10,875 realitymix quarter-level rows stood
-  on a town point; errors to 12.7 km against a declared 750 m). A `RESOLVER_VERSION` bump.
+  ads claimed none). Measured 2026-10-26 with the bumps' re-mine ~80 % through: active ads on a
+  town point idnes 18,931, realitymix 7,120, remax 475; street-grain ads +7,838 / +9,579 / +71
+  (19437599 stands on Mahulenina, 16 m from the portal's highlight). Unrecoverable here: the idnes
+  fallback ads whose line names only a town (idnes highlights the whole obec) — they wait on
+  v5.8's fallback point below.
 - **Owed (ONE PIN W3 hand-off): centroid radii drawn too small** — town 60.4 %, quarter 86.1 %
   containment of the exact point (measured 2026-10-19; street level 98.5 %). The ads agree where
   both are exact (p90 0 m); the misses are the radius, not the evidence. Calibrating a radius is a
