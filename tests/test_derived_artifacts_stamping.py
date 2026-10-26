@@ -339,8 +339,8 @@ def test_every_registry_row_s_producer_exists(conn, registry):
     have refreshed it, so a producer naming something that no longer exists turns the
     panel's most actionable column into a dead end. Two spellings are legal and both are
     live today: a function in `pg_proc`, and a repo path on disk — including the one
-    composite, `api/rent_map.py + fetch_rent_map.yml`, which is honest about an artifact
-    refreshed inside a request handler with a monthly workflow as its floor.
+    composite, `api/rent_map.py + scripts/fetch_rent_map.py`, which is honest about an
+    artifact refreshed inside a request handler with a monthly job as its floor.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -354,9 +354,7 @@ def test_every_registry_row_s_producer_exists(conn, registry):
         for token in (t.strip() for t in producer.split("+")):
             if not token:
                 continue
-            if token.endswith((".yml", ".yaml")) and "/" not in token:
-                ok = (_REPO / ".github" / "workflows" / token).is_file()
-            elif "/" in token or token.endswith(".py"):
+            if "/" in token or token.endswith(".py"):
                 ok = (_REPO / token).is_file()
             else:
                 ok = token in functions
@@ -366,6 +364,23 @@ def test_every_registry_row_s_producer_exists(conn, registry):
         "derived_artifacts.producer names something that does not exist:\n  "
         + "\n  ".join(broken)
     )
+
+
+def test_no_registry_producer_names_a_workflow_file(registry):
+    """RED by: a `derived_artifacts.producer` token that is a workflow file (migration 565's
+    `fetch_rent_map.yml`, until 683).
+
+    A workflow is a host, and the Actions exit (#2007) moves hosts: a producer naming one
+    becomes a dead pointer the day its job moves, and the move's revert would have to edit
+    the row back. The producer names the code that refreshes the artifact; `host` says where.
+    """
+    named = sorted(
+        f"{name}: {token}"
+        for name, producer in registry.items()
+        for token in (t.strip() for t in producer.split("+"))
+        if token.endswith((".yml", ".yaml"))
+    )
+    assert not named, f"derived_artifacts.producer names a workflow file: {named}"
 
 
 def test_the_stamp_helper_is_unreachable_from_every_browser_role(conn):
