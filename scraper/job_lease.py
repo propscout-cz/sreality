@@ -28,7 +28,7 @@ import os
 import socket
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -37,12 +37,23 @@ import psycopg
 
 LOG = logging.getLogger("scraper.job_lease")
 
+# The job runner's spelling of `scheduled_jobs.runner` (== jobs.RUNNER, pinned by a test).
+RUNNER = "job-runner"
+# The holder's fence and the runner's guard read this at call time, so a test patches one clock.
+clock: Callable[[], float] = time.monotonic
+
 TTL_S = 180
 # The holder stops its work this long before the database's expiry, so nothing runs on a lapsed lease.
 FENCE_MARGIN_S = 30
 
 RELEASE_OUTCOMES = frozenset({"ok", "failed", "cancelled", "skipped", "timeout", "interrupted"})
 NOT_FAILURES = frozenset({"cancelled", "skipped", "interrupted"})
+# Where a released run's next due time goes (`_RELEASE_RUN_SQL`).
+DUE_KINDS = frozenset({"slot", "now", "more", "backoff", "retry", "own_hour"})
+MORE_REMAINS_S = 60
+BACKOFF_BASE_S = 60
+# Every runner-facing statement runs under it; it also bounds lock waits, so there is no lock timeout.
+STATEMENT_TIMEOUT_S = 5
 
 _FREE = "(j.lease_holder IS NULL OR j.lease_expires_at IS NULL OR j.lease_expires_at < now())"
 _UNPAUSED = "(j.paused_until IS NULL OR j.paused_until <= now())"
@@ -173,10 +184,21 @@ class Lease:
     args: list[str] | None
     requested_by: str | None
     fence_at: float
+    due_slot: bool = False  # the row was due and unpaused when claimed: the run also took its scheduled slot
 
     def fenced(self, at: float | None = None) -> bool:
         """True once the holder must stop: its lease may lapse before another renewal lands."""
-        return (time.monotonic() if at is None else at) >= self.fence_at
+        return (clock() if at is None else at) >= self.fence_at
+
+
+@dataclass(frozen=True)
+class Registered:
+    """What a boot's `register` did: rows born, adopted from a lane-era NULL registry_at, un-retired, and skipped."""
+
+    inserted: tuple[str, ...]
+    adopted: tuple[str, ...]
+    unretired: tuple[str, ...]
+    skipped: dict[str, str]
 
 
 def _fence_at(sent_at: float, ttl_s: int) -> float:
