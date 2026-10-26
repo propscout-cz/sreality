@@ -31,7 +31,8 @@ The operator chose to replace them with charts the user builds, which deletes th
    statistics, so the n stays beside every figure)
    (server-enforced); a box draws p10–p90 whiskers, the p25–p75 box and the median. Since 2026-10-26 a cell under
    the floor also carries `small` {min, max, mean, median}, shown only behind the Stats tab's 'Malé vzorky'
-   checkbox, highlighted and labelled per row; percentiles never under the floor (migration 678).
+   switch, which a dashboard saves (`show_small`, migration 680), highlighted and labelled per row; percentiles never
+   under the floor (migration 678).
 7. Table = rows × columns; line / bar = one row dimension on x, the column dimension as series; box = rows only.
    Nesting up to **six** row levels (table, box).
 8. A NULL on any chosen dimension (or the measure) excludes the property and is counted as "excluded for

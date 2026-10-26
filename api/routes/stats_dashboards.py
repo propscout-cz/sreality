@@ -24,6 +24,8 @@ DASHBOARDS = saved_sets.SavedSetKind(
     noun="dashboard",
     id_param="dashboard_id",
     blob_columns=("charts", "filter_spec"),
+    # The Stats tab's "Malé vzorky" switch, saved with the dashboard (migration 680).
+    scalar_columns=("show_small",),
     create_in=s.CreateStatsDashboardIn,
     update_in=s.UpdateStatsDashboardIn,
     nullable=frozenset({"filter_spec", "color"}),

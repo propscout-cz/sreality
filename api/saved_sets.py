@@ -26,6 +26,8 @@ class SavedSetKind:
     blob_columns: tuple[str, ...]        # jsonb columns, each validated by its type on the body models
     create_in: type[BaseModel]
     update_in: type[BaseModel]
+    # Plain-typed columns (no jsonb cast), selected, inserted, updated and returned like the blobs (migration 680).
+    scalar_columns: tuple[str, ...] = ()
     # A PUT's explicit null clears these; on every other field a null keeps the stored value.
     nullable: frozenset[str] = frozenset({"color"})
     # Blob columns a falsy stored value reads as `{}` from (a preset's filter, as its old reader did).
@@ -44,7 +46,7 @@ class SavedSetKind:
 
 
 def _projection(kind: SavedSetKind) -> str:
-    cols = ["t.id", "t.name", *(f"t.{c}" for c in kind.blob_columns),
+    cols = ["t.id", "t.name", *(f"t.{c}" for c in (*kind.blob_columns, *kind.scalar_columns)),
             "t.created_at", "t.updated_at", "t.position", "t.color", *(["t.group_id"] if kind.groups else [])]
     return ", ".join([*cols, *(f"{sql} AS {field}" for field, sql in kind.projection_extra)])
 
@@ -70,8 +72,8 @@ def _get_for_update_sql(kind: SavedSetKind) -> str:
 
 def _insert_sql(kind: SavedSetKind) -> str:
     # A new row goes last among the caller's OWN rows (RLS scopes MAX; own_rows drops the ones shared with them).
-    cols = ", ".join(["name", *kind.blob_columns, "color", "position", "account_id"])
-    blobs = "".join(", %s::jsonb" for _ in kind.blob_columns)
+    cols = ", ".join(["name", *kind.blob_columns, *kind.scalar_columns, "color", "position", "account_id"])
+    blobs = "".join([*(", %s::jsonb" for _ in kind.blob_columns), *(", %s" for _ in kind.scalar_columns)])
     own = (kind.own_rows,) if kind.own_rows else ()
     return (f"INSERT INTO {kind.table} AS t ({cols}) VALUES (%s{blobs}, %s, "
             f"(SELECT COALESCE(MAX(t.position), -1) + 1 FROM {kind.table} t{_where(kind, *own)}), %s) "
@@ -104,7 +106,7 @@ def _layout_sql(kind: SavedSetKind) -> str:
 
 
 def _fields(kind: SavedSetKind) -> tuple[str, ...]:
-    return ("name", *kind.blob_columns, "color")
+    return ("name", *kind.blob_columns, *kind.scalar_columns, "color")
 
 
 def statements(kind: SavedSetKind) -> tuple[str, ...]:
@@ -119,7 +121,7 @@ def _jsonb(value: Any) -> str | None:
 
 
 def _row(kind: SavedSetKind, row: tuple[Any, ...]) -> dict[str, Any]:
-    fields = ("id", "name", *kind.blob_columns, "created_at", "updated_at", "position", "color",
+    fields = ("id", "name", *kind.blob_columns, *kind.scalar_columns, "created_at", "updated_at", "position", "color",
               *(("group_id",) if kind.groups else ()), *(field for field, _sql in kind.projection_extra))
     out = dict(zip(fields, row))
     out["id"] = str(out["id"])
@@ -153,7 +155,8 @@ def create(
     conn: psycopg.Connection, kind: SavedSetKind, values: dict[str, Any], *, account_id: uuid.UUID | str,
 ) -> dict[str, Any]:
     """Insert one row at the end of the list; `account_id` is REQUIRED (a dropped one is a TypeError, never NULL)."""
-    params = [values["name"], *(_jsonb(values[c]) for c in kind.blob_columns), values.get("color"), account_id]
+    params = [values["name"], *(_jsonb(values[c]) for c in kind.blob_columns),
+              *(values[c] for c in kind.scalar_columns), values.get("color"), account_id]
     row = _one(conn, kind, _insert_sql(kind), params)
     assert row is not None
     return row
