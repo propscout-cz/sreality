@@ -239,6 +239,32 @@ start runs, what agent search means, and model-written SQL.
 
 1. The customer-group context page (operator, later).
 2. The facet list v1 for the photo assessment (Claude drafts in M1a; operator edits).
-3. The remaining credential rotation (operator, with the wizard, M0).
+3. The remaining credential rotation (operator, with `scripts/rotate_credentials.sh`, M0; the log is § 9).
 4. The monthly Valuo cap per account (operator; a number).
 5. Post the M0 issue or PR number on Actions-exit #2025 once `/to-tickets` creates it.
+
+## 8. Build log
+
+| Ticket | What landed | Owed after merge |
+|---|---|---|
+| #2061 M0 credential rotation wizard | `scripts/rotate_credentials.sh` (13 stages, database last) and the per-secret inventory `.claude/skills/toolkit-api/references/secrets-inventory.md` | the operator runs the wizard in a window from sreality-e9; § 9 fills in as it goes |
+
+## 9. Credential rotation log
+
+Railway asked customers to replace every credential stored there before 2026-10-21. Rotated earlier, on
+2026-10-22: the four AI provider keys, RunPod, the Cloudflare API token; VAPID is newer and stays. The rest
+are rotated with `scripts/rotate_credentials.sh`, which writes the date and the check into each row below.
+Inventory: `.claude/skills/toolkit-api/references/secrets-inventory.md`.
+
+| Secret | Rotated | Verified by |
+|---|---|---|
+| Smoke-test accounts | pending | |
+| R2 access key pair | pending | |
+| Mapy keys | pending | |
+| Valuo tokens | pending | |
+| GitHub tokens | pending | |
+| Stripe | pending | |
+| Supabase secret key | pending | |
+| Old credentials revoked | pending | |
+| Database password and connection strings | pending | |
+| Tenant pool password | pending | |

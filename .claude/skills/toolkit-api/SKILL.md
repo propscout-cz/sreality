@@ -341,9 +341,9 @@ closed), `agent_estimation_concurrency_cap` (3). Deferred: extension `mode:'agen
 
 ## Auth and secrets
 
-All secrets are GitHub Actions secrets and/or Railway env vars in production. Backend code
-references them by name; never write a value into a committed file (`.env` is gitignored).
-API keys are **backend-only** — never `VITE_*`-prefix one; `frontend/` must not see them.
+All secrets are GitHub Actions secrets and/or Railway env vars in production, referenced by name; never write a value into a
+committed file (`.env` is gitignored). API keys are **backend-only**: never `VITE_*`-prefix one. Where each secret lives, who reads
+it, how to rotate and verify it: `references/secrets-inventory.md`; rotate with `scripts/rotate_credentials.sh` (M0, #2061).
 
 Database:
 - `SUPABASE_DB_URL` — Postgres connection string (Supabase → Database → Connection string →
