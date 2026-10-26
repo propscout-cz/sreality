@@ -639,10 +639,75 @@ def test_a_usable_label_alone_is_the_usable_area() -> None:
 def test_the_labelled_figure_reads_every_unit_spelling() -> None:
     from scraper.bazos_parser import labelled_areas
 
-    for unit in ("m²", "m2", "m 2", "M2", "㎡", "metrů čtverečních", "metrů"):
+    for unit in ("m²", "m2", "m 2", "M2", "㎡", "metrů čtverečních", "metru ctverecnich"):
         assert labelled_areas(f"celková plocha 70 {unit}, užitná plocha 61 {unit}") == (61.0, 70.0), unit
-    listing = _flat("Byt o celkové ploše 70 metrů, užitná plocha 61 metrů.")
+    listing = _flat("Byt o celkové ploše 70 metrů čtverečních, užitná plocha 61 metrů čtverečních.")
     assert (listing.area_m2, listing.area_basis) == (61.0, "usable")
+
+
+def test_a_bare_metr_is_a_distance_not_an_area() -> None:
+    from scraper.bazos_parser import labelled_areas
+
+    assert labelled_areas("Obytný soubor 300 metrů od metra") == (None, None)
+    assert labelled_areas("užitná plocha 61 metrů, metráž dle katastru") == (None, None)
+    listing = _flat("Byt 2+kk 45 m2. Obytný soubor 300 metrů od metra.")
+    assert (listing.area_m2, listing.area_basis) == (45.0, "unknown")
+
+
+def test_an_adjective_without_its_area_noun_is_no_label() -> None:
+    """Review of #2053: "obytná kuchyně", "obytný pokoj", "podlahové topení" opened a label on
+    the bare stem and took a room's figure as the unit's usable area. The first figure stays."""
+    for title, body, first in (
+        ("Prodej bytu 3+kk", "Byt 3+kk o výměře 75 m2, obytná kuchyně 30 m2.", 75.0),
+        ("Prodej bytu 2+kk", "Byt 2+kk 50 m2, obytný pokoj 18 m2.", 50.0),
+        ("Prodej bytu 2+1", "Byt 2+1, 58 m2, podlahové topení v koupelně 6 m2.", 58.0),
+        ("Prodej bytu 3+kk", "Byt 3+kk 80 m2, obytné podkroví 25 m2.", 80.0),
+    ):
+        listing = _flat(body, title=title)
+        assert (listing.area_m2, listing.area_basis) == (first, "unknown"), body
+    house = parse_detail(
+        _bazos_page("Prodej rodinného domu", "Rodinný dům 140 m2, obytná plocha přízemí 70 m2."),
+        source_url=_FLAT_URL, category_main="dum", category_type="prodej")
+    assert (house.area_m2, house.area_basis) == (140.0, "unknown")
+
+
+def test_celkova_without_an_area_noun_is_no_total() -> None:
+    from scraper.bazos_parser import labelled_areas
+
+    body = "Po celkové rekonstrukci, byt 2+1 o výměře 55 m2. Užitná plocha 52 m2."
+    assert labelled_areas(body) == (52.0, None)
+    assert labelled_areas("Celkový stav dobrý, 60 m2, celkově 3 pokoje 12 m2") == (None, None)
+
+
+def test_a_label_after_its_figure_does_not_reach_the_next_one() -> None:
+    """Review of #2053: "72 m2 užitné plochy, kuchyň 12 m2" read the kitchen's 12 as usable.
+    A label a figure ends right before is skipped, and a comma ends a label's reach."""
+    listing = _flat("Byt 3+1 o 72 m2 užitné plochy, kuchyň 12 m2, ložnice 15 m2.",
+                    title="Prodej bytu 3+1")
+    assert (listing.area_m2, listing.area_basis) == (72.0, "unknown")
+    from scraper.bazos_parser import labelled_areas
+
+    assert labelled_areas("Užitná plocha bytu, kuchyň 12 m2") == (None, None)
+    assert labelled_areas("Užitná plocha 52,5 m2") == (52.5, None)
+
+
+def test_a_labelled_usable_figure_is_held_to_the_prose_band() -> None:
+    """A free-text label is weaker than a structured field: a house's labelled figure of
+    1,000 m² or more is the parcel, and a sale's under 8 m² a room is a part of the unit."""
+    house = parse_detail(
+        _bazos_page("Prodej rodinného domu 4+1", "Dům 4+1, užitná plocha 2.500 m2."),
+        source_url=_FLAT_URL, category_main="dum", category_type="prodej")
+    assert (house.area_m2, house.area_basis) == (None, None)
+    small = _flat("Byt 3+1 o výměře 70 m2, užitná plocha 12 m2.", title="Prodej bytu 3+1")
+    assert (small.area_m2, small.area_basis) == (70.0, "unknown")
+
+
+def test_the_accessory_veto_reads_whole_words() -> None:
+    from scraper.bazos_parser import labelled_areas
+
+    assert labelled_areas("Viz půdorys užitná plocha 61 m2") == (61.0, None)
+    assert labelled_areas("Dvorní trakt užitná plocha 61 m2") == (61.0, None)
+    assert labelled_areas("Vstup z půdy užitná plocha 9 m2") == (None, None)
 
 
 def test_a_label_of_an_accessory_or_the_parcel_is_not_the_units() -> None:
@@ -679,3 +744,21 @@ def test_land_and_unlabelled_house_texts_are_unchanged() -> None:
                     "Pozemek o celkové výměře 1.139m², užitná plocha domu 150 m2."),
         source_url=_FLAT_URL, category_main="dum", category_type="prodej")
     assert (labelled_house.area_m2, labelled_house.area_basis) == (150.0, "usable")
+
+
+def test_the_replay_cases_of_the_review() -> None:
+    """Read on a replay of 2,000 stored bazos texts (review of #2053): the agency export puts
+    its figures back to back, an obytná figure can leave the kitchen out, and an "including"
+    or "a further" figure is not the unit's own."""
+    from scraper.bazos_parser import labelled_areas
+
+    export = "Plocha pozemku: 271 m2 Zastavěná plocha: 69 m2 Užitná plocha: 163 m2 Obytná plocha: 111 m2"
+    assert labelled_areas(export) == (163.0, None)
+    assert labelled_areas("Pozemek: 2 532 m² Užitná plocha cca 250 m² Více informací") == (250.0, None)
+    assert labelled_areas("velikost bytu 3+1, obytná plocha 57 m2, užitná plocha 72 m2") == (72.0, None)
+    assert labelled_areas("Obytná plocha 45 m2, zahrada 385 m2") == (45.0, None)
+    for text in ("nabízí celkovou užitnou plochu 46 m² včetně terasy",
+                 "užitná plocha vč. příslušenství 123,6 m2",
+                 "užitná plocha domu vzroste o dalších cca 70 m2",
+                 "z toho 95,3 m² činí podlahová plocha a 104,7 m² představuje terasa"):
+        assert labelled_areas(text)[0] is None, text

@@ -368,33 +368,62 @@ def ad_haystack(title: str | None, description: str | None) -> str:
 # the FIRST figure stored the celková in 119 of them (101 over 8 % off the usable one).
 # "celková užitná / obytná" is still the usable measure; "celková podlahová" is the
 # building-law measure with the accessories in (realitymix's 'floor', section 3.2), so it
-# reads as total. A label is the measure's only when nothing in its clause names an
-# accessory or the parcel ("pozemek o celkové výměře 1.139 m²", "užitná plocha sklepa").
+# reads as total. A label is the adjective WITH its area noun ("užitná plocha", "celková
+# výměra"): the bare stem also opens "obytná kuchyně 30 m2", "podlahové topení" and "celková
+# rekonstrukce" (432 + 9 stored flats put a room's figure right after one, review of #2053),
+# so a bare adjective is read only directly before its figure ("užitná 40 m2"). A label is
+# the measure's only when nothing in its clause names an accessory or the parcel ("pozemek o
+# celkové výměře 1.139 m²", "užitná plocha sklepa") and nothing between it and its figure
+# names a part of the unit ("obytná plocha přízemí 70 m2", "vzroste o dalších 70 m2") or
+# folds the accessories in ("vč. příslušenství", "46 m² včetně terasy"); a label a figure
+# ends right before ("72 m2 užitné plochy kuchyň 12 m2", "95,3 m² činí podlahová plocha a
+# 104,7 m² ...") is that figure's own,
+# so it is read only when its figure follows at once ("Zastavěná plocha: 69 m2 Užitná
+# plocha: 163 m2", the agency export; "Pozemek: 2 532 m² Užitná plocha cca 250 m²"), and a
+# comma ends every label's reach.
+_AREA_NOUN_SRC = r"(?:ploch|plo[šs]|v[ýy]m[ěe]r)\w*"
 _AREA_LABEL_RE = re.compile(
-    r"(?<!\w)(?:(celkov)\w*\s+)?(u[žz]itn|podlahov|obytn)\w*|(?<!\w)(celkov)\w*",
+    rf"(?<!\w)(?:(celkov)\w*\s+)?(u[žz]itn|podlahov|obytn)\w*(\s+{_AREA_NOUN_SRC})?"
+    rf"|(?<!\w)(celkov)\w*\s+{_AREA_NOUN_SRC}",
     re.IGNORECASE)
+_AREA_UNIT_SRC = r"(?:m(?:2|²|\s2)(?!\d)|㎡|metr\w*\s+[čc]tvere[čc]n\w*)"
 _LABELLED_FIGURE_RE = re.compile(
-    rf"(?<![\d+.,])({AREA_NUMBER_SRC})\s*(?:m(?:2|²|\s2)(?!\d)|㎡|metr)", re.IGNORECASE)
+    rf"(?<![\d+.,])({AREA_NUMBER_SRC})\s*{_AREA_UNIT_SRC}", re.IGNORECASE)
+_FIGURE_RIGHT_BEFORE_RE = re.compile(
+    rf"(?<![\d+.,])(?:{AREA_NUMBER_SRC})\s*{_AREA_UNIT_SRC}"
+    r"(?:[ \t]+(?:[čc]in[íi]|je|tvo[řr][íi]|p[řr]edstavuje))?[ \t]*\Z", re.IGNORECASE)
 _LABEL_REACH = 40
 _CLAUSE_BACK = 30
-_SENTENCE_END_RE = re.compile(r"[.!?](?=\s+[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ])|[;\n]")
+_REACH_END_RE = re.compile(r"[.!?](?=\s+[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ])|[;\n]|,(?!\d)")
 _CLAUSE_START_RE = re.compile(r"[,;:.!?()\n]")
 _NOT_THE_UNIT_RE = re.compile(
-    r"balk|lod[žz]i|teras|sklep|komor|gar[áa][žz]|p[ůu]d|zahrad|pozem|parcel|dvor",
+    r"balk|lod[žz]i|teras|sklep|komor|gar[áa][žz]|p[ůu]d(?:a|y|u|ou|ě)\b|zahrad|pozem|parcel"
+    r"|dv[ůo]r(?:ek|ku|u|a|em)?\b",
     re.IGNORECASE)
+_A_PART_OF_THE_UNIT_RE = re.compile(
+    r"p[řr][íi]zem|patr|podkrov|podla[žz]|\bNP\b|kuchy|pokoj|lo[žz]nic|m[íi]stnost|dal[šs][íi]"
+    r"|\ba\b|v[čc]etn|v[čc]\.",
+    re.IGNORECASE)
+_DIRECT_GAP_RE = re.compile(
+    r"[\s:]*(?:(?:cca|ca|asi|p[řr][íi]bli[žz]n[ěe]|zhruba|je|[čc]in[íi])\.?[\s:]*)*",
+    re.IGNORECASE)
+_WITH_ACCESSORIES_RE = re.compile(r"\s*\(?\s*(?:v[čc]etn|v[čc]\.)", re.IGNORECASE)
 
 
 def _label_kind(label: re.Match[str]) -> str:
-    """'usable' or 'total' for one `_AREA_LABEL_RE` match."""
-    if label[2] and not (label[1] and label[2].lower().startswith("podlahov")):
-        return "usable"
-    return "total"
+    """'usable', 'living' (obytná) or 'total' for one `_AREA_LABEL_RE` match."""
+    adjective = (label[2] or "").lower()
+    if not adjective or (label[1] and adjective.startswith("podlahov")):
+        return "total"
+    return "living" if adjective.startswith("obytn") else "usable"
 
 
 def labelled_areas(haystack: str | None) -> tuple[float | None, float | None]:
     """(usable, total): the first figure the text labels each measure, or None for one it
-    does not label. A label's figure is the first m² within `_LABEL_REACH` characters after
-    it, in its own sentence and before the next label."""
+    does not label; an obytná figure is the usable one only when no užitná / podlahová figure
+    is stated, since it can leave the kitchen and the hall out. A label's figure is the
+    first m² within `_LABEL_REACH` characters after it, in its own clause and before the
+    next label."""
     found: dict[str, float] = {}
     labels = list(_AREA_LABEL_RE.finditer(haystack or ""))
     for i, label in enumerate(labels):
@@ -405,16 +434,23 @@ def labelled_areas(haystack: str | None) -> tuple[float | None, float | None]:
         end = min(label.end() + _LABEL_REACH,
                   labels[i + 1].start() if i + 1 < len(labels) else len(text))
         reach = text[label.end():end]
-        stop = _SENTENCE_END_RE.search(reach)
+        stop = _REACH_END_RE.search(reach)
         figure = _LABELLED_FIGURE_RE.search(reach[:stop.start()] if stop else reach)
         if figure is None:
             continue
+        direct = _DIRECT_GAP_RE.fullmatch(reach, 0, figure.start()) is not None
+        if label[2] and not label[3] and not direct:
+            continue
         before = text[max(0, label.start() - _CLAUSE_BACK):label.start()]
+        if not direct and _FIGURE_RIGHT_BEFORE_RE.search(before):
+            continue
         clause = _CLAUSE_START_RE.split(before)[-1] + reach[:figure.start()]
-        if _NOT_THE_UNIT_RE.search(clause):
+        if _NOT_THE_UNIT_RE.search(clause) or _A_PART_OF_THE_UNIT_RE.search(reach[:figure.start()]):
+            continue
+        if _WITH_ACCESSORIES_RE.match(reach, figure.end()):
             continue
         found[kind] = area_token_to_float(figure[1])
-    return found.get("usable"), found.get("total")
+    return found.get("usable", found.get("living")), found.get("total")
 
 
 def areas_from_text(haystack: str | None, *, category_main: str | None,
@@ -423,22 +459,24 @@ def areas_from_text(haystack: str | None, *, category_main: str | None,
 
     bazos has no structured area field at all: no interior measure and no
     "plocha pozemku", so `plot` is genuinely absent rather than unread. A figure the
-    text LABELS usable (`labelled_areas`) leads, with the celková one behind it as
-    `total`; a celková figure alone is passed nowhere, because the first figure it would
-    then outrank is often the title's usable one. Otherwise the resolver's `prose` arm
-    is the whole story, and always on land (it stamps that free-text number 'plot',
-    which is what it is on a parcel ad). It is the one arm the per-room
-    floor reads, on a sale only, because the first m² in a sale's prose may be its cellar
-    while a rental's may be the room it lets. Free prose is also the one substrate where a
-    parcel is always written "1 500 m2", which is why the naive grammar cost ~12,400 of
-    these rows their thousands digit.
+    text LABELS usable (`labelled_areas`) leads, held to the same band as the prose
+    figure (free text is a weaker label than a structured field: a house's "užitná
+    plocha 2.500 m2" is still its parcel); a celková figure is passed nowhere, because
+    the first figure it would outrank is often the title's usable one. Otherwise the
+    resolver's `prose` arm is the whole story, and always on land (it stamps that
+    free-text number 'plot', which is what it is on a parcel ad). It is the one arm the
+    per-room floor reads, on a sale only, because the first m² in a sale's prose may be
+    its cellar while a rental's may be the room it lets. Free prose is also the one
+    substrate where a parcel is always written "1 500 m2", which is why the naive
+    grammar cost ~12,400 of these rows their thousands digit.
     """
-    usable, total = (None, None) if category_main in LAND_CATEGORIES else labelled_areas(haystack)
+    band = {"category_main": category_main, "disposition": disposition,
+            "category_type": category_type}
+    usable = None if category_main in LAND_CATEGORIES else labelled_areas(haystack)[0]
+    if usable is not None and derive_headline_area(prose=usable, **band)[0] is None:
+        usable = None
     area_m2, area_basis = derive_headline_area(
-        category_main=category_main, plot=None, usable=usable,
-        total=total if usable else None, prose=parse_area_text(haystack),
-        disposition=disposition, category_type=category_type,
-    )
+        plot=None, usable=usable, prose=parse_area_text(haystack), **band)
     return PortalAreas(area_m2=area_m2, area_basis=area_basis)
 
 
