@@ -11,14 +11,18 @@ import contextlib
 import importlib
 import inspect
 import io
+import re
 import sys
-from dataclasses import replace
+from collections.abc import Sequence
+from dataclasses import fields, replace
 from unittest import mock
 
 import pytest
 
+from location_data.resolver import drain
 from scraper import jobs
 from scraper.jobs import Job
+from scraper.portal import _LIMIT_COERCERS, PortalConfig, PortalLimits
 from scraper.portal_factory import PORTAL_CLASSES
 
 FIXED = 11
@@ -106,3 +110,104 @@ def test_the_argv_census_fires() -> None:
     assert argv_problems(replace(walk, argv=("scraper.bazos_main", "--index")))
     assert argv_problems(replace(walk, argv=("scraper.bazos_main", "--index-only", "--drain-only")))
     assert argv_problems(replace(walk, argv=("scraper.bazos_main", "--index-only", "--max-seconds", "60")))
+
+
+WALK_ATTRS = ("walk_every_s", "walk_timeout_s")
+
+
+def _portal_classes() -> dict[str, type]:
+    return {s: getattr(importlib.import_module(m), c) for s, (m, c) in PORTAL_CLASSES.items()}
+
+
+def walk_problems(entries: Sequence[Job], portals: dict[str, type]) -> list[str]:
+    """One walk per portal, each through `scraper.<source>_main` on its class's own walk schedule."""
+    problems = []
+    entrypoints = {f"scraper.{s}_main" for s in portals} | {cls.__module__ for cls in portals.values()}
+    walks = {j.name: j for j in entries if j.argv[0] in entrypoints}
+    wanted = {f"{jobs.WALK_PREFIX}{s}" for s in portals}
+    if set(walks) != wanted:
+        problems.append(f"walk entries and the portal list differ by {sorted(set(walks) ^ wanted)}")
+    problems += [f"{j.name}: the walk prefix on a job that runs no portal entrypoint" for j in entries
+                 if j.name.startswith(jobs.WALK_PREFIX) and j.argv[0] not in entrypoints]
+    for source, cls in portals.items():
+        schedule = tuple(getattr(cls, a, None) for a in WALK_ATTRS)
+        if not all(type(v) is int and v > 0 for v in schedule):
+            problems.append(f"{cls.__name__}: {WALK_ATTRS} must be positive ints, not {schedule}")
+        walk = walks.get(f"{jobs.WALK_PREFIX}{source}")
+        if walk and (walk.argv[0], walk.every_s, walk.timeout_s) != (f"scraper.{source}_main", *schedule):
+            problems.append(f"{walk.name}: not scraper.{source}_main on {cls.__name__}'s {WALK_ATTRS}")
+    return problems
+
+
+def test_the_walk_set_is_the_portal_list() -> None:
+    assert walk_problems(jobs.declared(), _portal_classes()) == []
+
+
+def test_the_walk_census_fires() -> None:
+    entries, portals = jobs.declared(), _portal_classes()
+    assert walk_problems([j for j in entries if j.name != "walk_web"], portals)
+    stray = Job("walk_x", ("scraper.main", "--index-only"), 3600, 0, 600, 512, 1, jobs.UNTIL_MOVED)
+    assert walk_problems([*entries, stray], portals)
+    assert walk_problems([*entries, replace(_entry("clip"), name="walk_clip")], portals)
+
+    class NoTimeout:
+        walk_every_s = 3600
+
+    assert walk_problems(entries, {**portals, "web": NoTimeout})
+
+
+# The runner adopts an existing scheduled_jobs row a registry entry names, so the registry never names a lane's
+# row (held() would block its own child), a row migration 675 retired, or a lane name migration 384 reserved.
+RESERVED = frozenset({
+    drain.JOB_NAME,
+    "location_claims_llm", "location_claims_remine", "location_claims_remine_archive", "location_payload_backfill",
+    "location_refetch_cohort", "payload_archive_prune", "pin_collision_recompute",
+    "location_resolve_sweep", "resolution_campaign_runner", "registry_verification_advance", "llm_claims_lane",
+})
+
+
+def name_problems(entries: Sequence[Job]) -> list[str]:
+    """Names are unique, snake_case, and never a row the runner must not adopt."""
+    names = [j.name for j in entries]
+    problems = [f"{n}: declared {names.count(n)} times" for n in sorted(set(names)) if names.count(n) > 1]
+    problems += [f"{n!r}: not snake_case" for n in names if not re.fullmatch(r"[a-z][a-z0-9_]*", n)]
+    problems += [f"{n}: a reserved scheduled_jobs row" for n in names if n in RESERVED]
+    return problems
+
+
+def test_every_name_is_unique_snake_case_and_unreserved() -> None:
+    assert name_problems(jobs.declared()) == []
+
+
+def test_the_name_census_fires() -> None:
+    entries, stale = jobs.declared(), _entry("stale_images")
+    assert name_problems([*entries, stale])
+    assert name_problems([*entries, replace(stale, name="location_resolve_incremental")])
+    assert name_problems([*entries, replace(stale, name="location_claims_remine")])
+    assert name_problems([*entries, replace(stale, name="Bad-Name")])
+
+
+def limits_key_problems(keysets: dict[str, set[str]]) -> list[str]:
+    """No layer an operator or the database can override holds a walk's schedule (AC3)."""
+    return [f"{where}: {k} is a walk schedule key" for where, keys in keysets.items() for k in sorted(keys)
+            if k in WALK_ATTRS or k.startswith(jobs.WALK_PREFIX)]
+
+
+def _limits_keysets() -> dict[str, set[str]]:
+    from api.routes.admin import UpdatePortalLimitsIn
+
+    return {
+        "scraper.portal._LIMIT_COERCERS": set(_LIMIT_COERCERS),
+        "PortalLimits": {f.name for f in fields(PortalLimits)},
+        "PortalConfig": {f.name for f in fields(PortalConfig)},
+        "the admin limits route": set(UpdatePortalLimitsIn.model_fields),
+    }
+
+
+def test_the_walk_schedule_is_no_limits_key() -> None:
+    assert limits_key_problems(_limits_keysets()) == []
+
+
+def test_the_limits_key_census_fires() -> None:
+    assert limits_key_problems({"coercers": {"index_rate", "walk_every_s"}})
+    assert limits_key_problems({"route": {"walk_budget_s"}})
