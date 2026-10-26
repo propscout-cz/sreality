@@ -32,7 +32,7 @@ from urllib.parse import urlsplit
 
 import psycopg
 
-from scraper import cpus, db, job_lease, jobs, stop
+from scraper import cgroup, cpus, db, job_lease, jobs, stop
 from scraper.job_process import (
     OOM_SHIM,
     STRAGGLER_WAIT_S,
@@ -55,7 +55,8 @@ RENEW_EVERY_S = 60.0
 BEAT_EVERY_S = 30.0
 FORGET_AFTER_S = 3600  # a silent heartbeat of this deployment is forgotten after this; another deployment's at once
 PRUNE_EVERY_S = 86400.0
-DRAINING_S = 180.0  # Railway's drainingSeconds (#2025 pins it to .railway/railway.ts)
+# The runner's own drain; Railway's drainingSeconds (RUNNER_DRAINING_SECONDS) outlasts it by the last tick and forget.
+DRAINING_S = 180.0
 CONNECT_TIMEOUT_S = 5
 CONNECT_BUDGET_S = 10  # two pooler addresses at CONNECT_TIMEOUT_S each (libpq counts it per address)
 STOP_PHASE_BUDGET_S = 10.0  # a stopping ledger phase asks nothing new after this
@@ -575,13 +576,14 @@ def serve(registry: Sequence[Job] | None = None) -> int:
     entries = tuple(jobs.runner_jobs() if registry is None else registry)
     heartbeat = heartbeat_name(os.environ)
     ledger = _ledger(heartbeat)
-    LOG.info("BOOT pid1=%s version=%s holder=%s deployment=%s heartbeat=%s pooler_addresses=%s jobs=%d",
-             os.getpid() == 1, ledger.version, ledger.holder, ledger.deployment, heartbeat,
-             _pooler_addresses(db.database_url()), len(entries))
+    limits = {"memory_limit_mb": cgroup.memory_limit_mb(), "cpus": cpus.job_cpus()}  # the replica's, by its cgroup
+    LOG.info("BOOT pid1=%s version=%s holder=%s deployment=%s heartbeat=%s pooler_addresses=%s jobs=%d "
+             "memory_limit_mb=%s cpus=%s", os.getpid() == 1, ledger.version, ledger.holder, ledger.deployment,
+             heartbeat, _pooler_addresses(db.database_url()), len(entries), limits["memory_limit_mb"], limits["cpus"])
     guard = _guard(watchdog=True)
     runner = Runner(entries, ledger=ledger, spawner=spawn_process, guard=guard, clock=job_lease.clock,
                     pid1=os.getpid() == 1, beats=heartbeat is not None,
-                    identity={"version": ledger.version, "holder": ledger.holder})
+                    identity={"version": ledger.version, "holder": ledger.holder, **limits})
     loop(runner)
     ledger.close()
     return 0
