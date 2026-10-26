@@ -845,6 +845,7 @@ export default function BrowseExperience({
                 filters={filters}
                 view={view}
                 market={{ value: view.statsMarket, set: view.setStatsMarket }}
+                small={{ value: view.statsSmall, set: view.setStatsSmall }}
                 onIncludeDismissed={() => view.setFilters({ ...filters, showDismissed: true })}
               />
             </Suspense>

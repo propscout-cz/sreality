@@ -57,8 +57,22 @@ export interface ChartSpec extends StatsSpec {
   stats: ChartStat[];
 }
 
+/* A cell under `min_n` (migration 678): the four numbers it may show behind the
+ * Stats tab's "Malé vzorky" switch. Never percentiles. */
+export interface SmallSample {
+  min: number;
+  max: number;
+  mean: number;
+  median: number;
+}
+export const SMALL_STATS = ['min', 'mean', 'median', 'max'] as const;
+export const SMALL_LABEL: Record<(typeof SMALL_STATS)[number], string> = {
+  min: 'min', mean: 'průměr', median: 'medián', max: 'max',
+};
+
 /* A rollup cell: `keys.length` is its level (0 = the whole sample, per column
- * value). Statistics are null below `min_n` — server-enforced, all six together. */
+ * value). Statistics are null below `min_n` — server-enforced, all six together;
+ * such a cell carries `small` instead (absent before migration 678). */
 export interface StatsCell {
   keys: string[];
   col: string | null;
@@ -69,6 +83,7 @@ export interface StatsCell {
   p25: number | null;
   p75: number | null;
   p90: number | null;
+  small?: SmallSample | null;
 }
 
 /* A pivot's place names, (dimension, RÚIAN code) → name (placeKey); null when
