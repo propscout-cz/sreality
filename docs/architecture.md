@@ -1818,7 +1818,8 @@ renumber.** Navigate by area:
     median — each from the SAME query and rule as the tab it opens, so the two never disagree. The
     "Okolí dashboard" tab (`MarketTile`, 2026-10-23) draws the account's ONE dashboard marked for it
     (`stats_dashboards.property_card`, migration 664, any name, never a filter; set up in Browse ›
-    Statistiky) over ONE neighbourhood definition,
+    Statistiky), with that dashboard's own "Malé vzorky" setting (`show_small`, migration 681), over ONE
+    neighbourhood definition,
     `lib/neighbourhood` — the property's type, deal, disposition and ownership (one it does not state is
     left unset and named), Browse's centre + radius around it (250 m – 2 km, 500 m default, the square
     every Browse reader filters on), the user's building material and condition, under the Stats lens

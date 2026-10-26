@@ -223,7 +223,7 @@ describe('<DashboardBar> the list', () => {
     vi.mocked(setPropertyCardDashboard).mockResolvedValue(card);
     renderBar();
     fireEvent.click(await chip('+ Okolí dashboard'));
-    await waitFor(() => expect(createStatsDashboard).toHaveBeenCalledWith({ name: 'Okolí dashboard', charts: [A] }));
+    await waitFor(() => expect(createStatsDashboard).toHaveBeenCalledWith({ name: 'Okolí dashboard', charts: [A], show_small: false }));
     await waitFor(() => expect(setPropertyCardDashboard).toHaveBeenCalledWith('d-card'));
     // Marked, it is a chip that names its role — read without "sdílí" — and the offer is gone.
     expect(await chip('Okolí dashboard — okolí dashboard')).toBeInTheDocument();
@@ -295,7 +295,7 @@ describe('<DashboardBar> the list', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Duplikovat' }));
     await waitFor(() => expect(createStatsDashboard).toHaveBeenCalledTimes(1));
     expect(createStatsDashboard).toHaveBeenCalledWith({
-      name: 'Pozemky (kopie)', charts: [B], filter_spec: SHARED_FILTER, color: 'sage',
+      name: 'Pozemky (kopie)', charts: [B], filter_spec: SHARED_FILTER, color: 'sage', show_small: false,
     });
     expect(await screen.findByTitle('Načíst dashboard: Pozemky (kopie)')).toBeInTheDocument();
     expect(url().get('dashboard')).toBeNull();
@@ -338,6 +338,18 @@ describe('<DashboardBar> loading', () => {
     await waitFor(() => expect(url().get('dashboard')).toBe('d-own'));
     expect(url().get('cat')).toBe('pozemek');
     expect(log).toEqual(['url:d-own']);
+  });
+
+  it('sets the "Malé vzorky" switch to the dashboard\'s saved value in the same URL write', async () => {
+    const small = row({ id: 'd-small', name: 'Malé', charts: [A], show_small: true });
+    vi.mocked(listStatsDashboards).mockResolvedValue({ data: [OWN, small], total: 2 });
+    renderBar('/browse?tab=stats');
+    fireEvent.click(await chip('Malé'));
+    await waitFor(() => expect(url().get('dashboard')).toBe('d-small'));
+    expect(url().get('small')).toBe('1');
+    fireEvent.click(await chip('Ceny'));
+    await waitFor(() => expect(url().get('dashboard')).toBe('d-own'));
+    expect(url().has('small')).toBe(false);
   });
 
   it('loads a shared dashboard from its menu like a click', async () => {
@@ -433,7 +445,9 @@ describe('<DashboardBar> saving', () => {
     expect(box(dialog)).toHaveAttribute('aria-pressed', 'false');
     expect(within(dialog).getByText(/Okolí dashboard filtr nenese/)).toBeInTheDocument();
     submit(dialog);
-    await waitFor(() => expect(updateStatsDashboard).toHaveBeenCalledWith('d-own', { name: 'Ceny', color: null, charts: [A, B] }));
+    await waitFor(() =>
+      expect(updateStatsDashboard).toHaveBeenCalledWith('d-own', { name: 'Ceny', color: null, charts: [A, B], show_small: false }),
+    );
   });
 
   it('marks a drifted board dirty and saves the working charts back, the filter untouched', async () => {
@@ -445,9 +459,20 @@ describe('<DashboardBar> saving', () => {
     expect(box(dialog)).toHaveAttribute('aria-pressed', 'false');
     submit(dialog);
     await waitFor(() => expect(updateStatsDashboard).toHaveBeenCalledTimes(1));
-    expect(updateStatsDashboard).toHaveBeenCalledWith('d-own', { name: 'Ceny', color: null, charts: [A, B] });
+    expect(updateStatsDashboard).toHaveBeenCalledWith('d-own', { name: 'Ceny', color: null, charts: [A, B], show_small: false });
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Uložit změny' })).toBeNull());
     expect(screen.getByRole('button', { name: 'Ceny' })).not.toHaveAccessibleDescription(EDITED);
+  });
+
+  it('marks the dashboard dirty when the "Malé vzorky" switch differs from the saved one, and saves the switch', async () => {
+    loadedBefore('d-own');
+    vi.mocked(updateStatsDashboard).mockResolvedValue({ ...OWN, show_small: true });
+    renderBar('/browse?tab=stats&dashboard=d-own&small=1', [A]);
+    expect(await chip('Ceny')).toHaveAccessibleDescription(EDITED);
+    submit(await openUpdate());
+    await waitFor(() => expect(updateStatsDashboard).toHaveBeenCalledTimes(1));
+    expect(updateStatsDashboard).toHaveBeenCalledWith('d-own', { name: 'Ceny', color: null, charts: [A], show_small: true });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Ceny' })).not.toHaveAccessibleDescription(EDITED));
   });
 
   it('marks a drifted filter dirty and saves the current filter into a dashboard that carries one, without the lenses', async () => {
@@ -482,6 +507,7 @@ describe('<DashboardBar> saving', () => {
       name: 'Domy',
       color: null,
       charts: [B],
+      show_small: false,
       filter_spec: null,
     });
   });
@@ -536,10 +562,22 @@ describe('<DashboardBar> saving', () => {
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Název dashboardu' }), { target: { value: 'Nový' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Uložit dashboard' }));
     await waitFor(() => expect(createStatsDashboard).toHaveBeenCalledTimes(1));
-    expect(createStatsDashboard).toHaveBeenCalledWith({ name: 'Nový', charts: [A, B], color: null });
+    expect(createStatsDashboard).toHaveBeenCalledWith({ name: 'Nový', charts: [A, B], color: null, show_small: false });
     await waitFor(() => expect(url().get('dashboard')).toBe('d-new'));
     expect(await chip('Nový')).not.toHaveAccessibleDescription(EDITED);
     expect(log).toEqual([]);
+  });
+
+  it('saves the switch with a new dashboard when it is on', async () => {
+    vi.mocked(createStatsDashboard).mockResolvedValue(row({ id: 'd-new', name: 'Nový', charts: [A], show_small: true }));
+    renderBar('/browse?tab=stats&small=1', [A]);
+    await chip('Ceny');
+    fireEvent.click(screen.getByRole('button', { name: '+ Uložit jako dashboard' }));
+    const dialog = screen.getByRole('dialog', { name: 'Uložit grafy jako dashboard' });
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Název dashboardu' }), { target: { value: 'Nový' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Uložit dashboard' }));
+    await waitFor(() => expect(createStatsDashboard).toHaveBeenCalledTimes(1));
+    expect(createStatsDashboard).toHaveBeenCalledWith({ name: 'Nový', charts: [A], color: null, show_small: true });
   });
 
   it('saves the current filter with a new dashboard when the box is ticked', async () => {
@@ -587,6 +625,7 @@ describe('<DashboardBar> saving', () => {
         charts: [B],
         filter_spec: SHARED_FILTER,
         color: null,
+        show_small: false,
       }),
     );
     await tick();
