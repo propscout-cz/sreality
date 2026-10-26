@@ -2,7 +2,7 @@
 
 One row per secret: where a copy is stored, which code reads it, how to rotate it, and how to prove the
 new value works. Rotate with `scripts/rotate_credentials.sh` (agent platform M0, #2061); it records each
-rotation's date in `docs/design/agent-platform/MVP.md` § 9. Update this file in the same PR as any change
+rotation's date in `docs/design/agent-platform/MVP.md` (§ 3, the M0 credential rotation log). Update this file in the same PR as any change
 to where a secret lives or who reads it.
 
 The Railway services are three separate projects, one service each: **API** (`api/`, uvicorn),

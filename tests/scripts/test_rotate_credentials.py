@@ -1,4 +1,4 @@
-"""Static rails for the credential rotation wizard (scripts/rotate_credentials.sh, M0 #2061), which cannot run in CI (it opens browsers and waits on a person): it parses, its library is the /wizard template's, every GitHub secret it sets is one a workflow reads (or a named exception), every row it records exists in MVP.md § 9, and the inventory names every secret it touches."""
+"""Static rails for the credential rotation wizard (scripts/rotate_credentials.sh, M0 #2061), which cannot run in CI (it opens browsers and waits on a person): it parses, its library is the /wizard template's, every GitHub secret it sets is one a workflow reads (or a named exception), every row it records exists in MVP.md's M0 rotation log, and the inventory names every secret it touches."""
 
 from __future__ import annotations
 
@@ -69,11 +69,11 @@ def test_every_github_secret_it_sets_is_read_by_a_workflow() -> None:
 
 
 def test_every_recorded_row_exists_in_the_rotation_log() -> None:
-    log = MVP.read_text(encoding="utf-8").split("## 9. Credential rotation log", 1)[1]
+    log = MVP.read_text(encoding="utf-8").split("### M0 credential rotation log", 1)[1].split("\n**M1", 1)[0]
     labels = set(re.findall(r'\brecord "([^"]+)" "', _stages()))
     assert len(labels) >= 11, labels
     missing = sorted(lab for lab in labels if not re.search(rf"^\| {re.escape(lab)} \| ", log, re.M))
-    assert missing == [], f"MVP.md § 9 has no row for: {missing}"
+    assert missing == [], f"MVP.md's M0 rotation log has no row for: {missing}"
 
 
 def test_the_inventory_names_every_secret_the_script_touches() -> None:

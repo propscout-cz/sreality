@@ -194,7 +194,7 @@ finish() {
 # Inventory: .claude/skills/toolkit-api/references/secrets-inventory.md. Railway's "dual-key overlap": make each NEW
 # credential while the old one still works, stage it on Railway without deploying, deploy each service once, check,
 # and only then revoke the old ones. Supabase keeps ONE postgres password, so the database goes last, in a quiet
-# window. A row of MVP.md § 9 is dated only once its check passed; .env remembers what a run rotated (ROTATED_*).
+# window. A row of MVP.md's M0 rotation log is dated only once its check passed; .env remembers what a run rotated (ROTATED_*).
 # ──────────────────────────────────────────────────────────────────────────
 
 TOTAL_STAGES=17
@@ -263,7 +263,7 @@ verify() {
   else printf '  %s✗ %s%s\n' "$RED" "$label" "$RESET"; return 1; fi
 }
 
-# record "Row" "verified by": date that row of MVP.md § 9 (an already dated row is left as it is).
+# record "Row" "verified by": date that row of MVP.md's M0 rotation log (an already dated row is left as it is).
 record() {
   local out
   out=$(python3 - "$MVP" "$1" "$2" <<'PY'
@@ -272,12 +272,12 @@ path, label, how = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 text = path.read_text()
 row = re.search(rf"^\| {re.escape(label)} \| ([^|]*) \|", text, re.M)
 if not row:
-    print(f"MVP.md § 9 has no row {label!r}: add it, then date it by hand")
+    print(f"MVP.md's M0 rotation log has no row {label!r}: add it, then date it by hand")
 elif row.group(1).strip() != "pending":
     print(f"{label}: already recorded ({row.group(1).strip()})")
 else:
     path.write_text(text.replace(f"| {label} | pending | |", f"| {label} | {datetime.date.today():%Y-%m-%d} | {how} |", 1))
-    print(f"recorded {label} in MVP.md § 9")
+    print(f"recorded {label} in MVP.md's M0 rotation log")
 PY
 ) || out="MVP.md could not be updated; date the row $1 by hand"
   note "$out"
@@ -386,7 +386,7 @@ eyeball() { confirm "$1"; }
 s_start() {
   stage "Before you start"
   say "Railway advised replacing every credential stored there before 2026-10-21. This replaces the ones the"
-  say "2026-10-25 grill listed (MVP.md § 4, Q13), each with a check, and dates each in MVP.md § 9."
+  say "2026-10-25 grill listed (MVP.md § 4, Q13), each with a check, and dates each in MVP.md's M0 rotation log."
   step "Ask sreality-e9 for a window: each Railway deploy restarts that service (the worker carries the dedup lease)."
   step "Keep Railway and the Supabase dashboard (project $REF) signed in, in one browser."
   step "The database (stages 14-17) briefly refuses new connections: a quiet hour. Stop any time; resume with --from N."
@@ -846,4 +846,4 @@ s_start
 _STAGE_INDEX=$(( FROM > 1 ? FROM - 1 : 1 ))
 for fn in "${STAGES[@]:$(( FROM > 1 ? FROM - 1 : 1 ))}"; do "$fn"; done
 finish
-say "Commit the dated rows of $MVP § 9 (or hand them to Claude), and clear your clipboard."
+say "Commit the dated rows of $MVP (§ 3, the M0 rotation log) (or hand them to Claude), and clear your clipboard."
