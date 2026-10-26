@@ -398,8 +398,9 @@ def parse_detail(
     haystack = ad_haystack(title, description)
     # Deterministic floor (ground=0, like idnes + the LLM rubric) from the same
     # haystack area/disposition come from; the LLM enrichment fills only what this
-    # high-precision pass leaves NULL (ambiguous/word-ordinal/mezonet cases).
-    floor, total_floors = floor_from_text(haystack)
+    # high-precision pass leaves NULL (ambiguous/mezonet cases). The category picks the
+    # grammar: a flat's přízemí must be the flat's own, a house keeps the legacy miner.
+    floor, total_floors = floor_from_text(haystack, category_main=category_main)
 
     table = _detail_table(tree)
     price_cell = table.get("cena")

@@ -81,8 +81,9 @@ def test_floor_from_text_building_total_trap():
 
 
 def test_floor_from_text_defers_ambiguous_tail():
-    # Spelled-out ordinals -> LLM, not regex.
-    assert floor_from_text("v devátém patře udržovaného domu") == (None, None)
+    # Spelled-out ordinals: read for a flat, still deferred on the legacy (non-flat) miner.
+    assert floor_from_text("v devátém patře udržovaného domu") == (9, None)
+    assert floor_from_text("v devátém patře udržovaného domu", category_main="dum") == (None, None)
     # 'pater' (building total, no unit cue) yields only the total.
     assert floor_from_text("panelový dům o deseti patrech") == (None, None)
     # mezonet / no floor info.
@@ -210,3 +211,63 @@ def test_a_building_count_outside_the_band_is_absence():
     assert total_floors_from_portal(731463379) is None
     assert total_floors_from_portal(32) == 32
     assert total_floors_from_portal(None) is None
+
+
+# --- přízemí said of the flat, and the storeys a flat text names (bazos_floor_zero) ----
+
+
+def test_a_cellar_in_the_ground_storey_is_not_the_flats_storey():
+    assert floor_from_text("K bytu náleží sklep v přízemí domu.") == (None, None)
+    assert floor_from_text("byt se sklepem v přízemí") == (None, None)
+    assert floor_from_text("Byt 2+kk po rekonstrukci. V přízemí je kočárkárna.") == (None, None)
+    # 'bytový dům' is the building, not the unit.
+    assert floor_from_text("Pěkný bytový dům, v přízemí je prodejna.") == (None, None)
+    assert floor_from_text("V bytovém domě v přízemí") == (None, None)
+
+
+def test_a_bare_podlazi_counts_from_ground_one():
+    assert floor_from_text("Byt se nachází v 6. podlaží.") == (5, None)
+    assert floor_from_text("Byt ve 3. podlaží, sklep v 1. PP") == (2, None)
+    assert floor_from_text("1. podlaží, cihla") == (0, None)
+
+
+def test_the_pardubice_train_reads_its_sixth_storey_not_the_cellar():
+    text = ("Nabízíme byt 3+kk, který se nachází v šestém podlaží bytového domu. "
+            "K bytu náleží balkon a sklep v přízemí domu.")
+    assert floor_from_text(text, category_main="byt") == (5, None)
+
+
+def test_spelled_out_ordinals_follow_the_noun_convention():
+    assert floor_from_text("čtvrté patro, výtah") == (4, None)
+    assert floor_from_text("ve druhém patře, sklep v přízemí") == (2, None)
+    assert floor_from_text("ve druhém nadzemním podlaží") == (1, None)
+    assert floor_from_text("v prvním podzemním podlaží") == (-1, None)
+    assert floor_from_text("v desátém patře") == (10, None)
+    # The building total is not an ordinal: 'o deseti patrech' still reads nothing.
+    assert floor_from_text("panelový dům o deseti patrech, sklep v přízemí") == (None, None)
+
+
+def test_prizemi_tied_to_the_flat_is_ground():
+    assert floor_from_text("Prodám přízemní byt 2+1") == (0, None)
+    assert floor_from_text("Prodám byt v přízemí cihlového domu") == (0, None)
+    assert floor_from_text("byt ve zvýšeném přízemí") == (0, None)
+    assert floor_from_text("Nabízím 2+1, který se nachází v přízemí") == (0, None)
+    assert floor_from_text("Patro: přízemí") == (0, None)
+
+
+def test_prizemi_never_beats_a_storey_the_text_names():
+    # A storey cue the readers cannot convert still forbids the ground-storey guess.
+    assert floor_from_text("byt v 6 podlaží, sklep v přízemí") == (None, None)
+    assert floor_from_text("byt ve 3. poschodí, kočárkárna v přízemí") == (None, None)
+
+
+def test_a_flat_text_with_no_storey_reads_none():
+    assert floor_from_text("Prodej bytu 2+kk, Pardubice, po rekonstrukci.",
+                           category_main="byt") == (None, None)
+
+
+def test_a_house_keeps_the_legacy_miner():
+    text = "Rodinný dům 5+1, v přízemí kuchyň a obývák, ve druhém patře tři ložnice."
+    assert floor_from_text(text, category_main="dum") == (0, None)
+    assert floor_from_text("Dům ve 2. patře má terasu", category_main="dum") == (2, None)
+    assert floor_from_text("v 6. podlaží", category_main="dum") == (None, None)
