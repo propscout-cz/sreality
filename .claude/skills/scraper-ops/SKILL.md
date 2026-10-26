@@ -1,6 +1,6 @@
 ---
 name: scraper-ops
-description: Use when running, debugging, or extending the scrapers — triggering the per-portal index-walk workflows, adding a new scraper field without breaking data, refreshing portal HTML fixtures, reading the pipeline logs (INDEX/ENQUEUE/VERIFY/DRAIN/IMAGES line shapes), the always-on real-time worker (probe/drain/images/property-maintenance/broker-maintenance/estimation/location-resolve/location-intake-fast/location-refetch/sold-comps/text-extract/health/autodedup/notifications/push/heartbeat lanes), the visual-signal producer jobs (image pHash, CLIP tagging/retag, DINOv3 corpus embedding on RunPod), or the pipeline verification/alerting harness. Also covers condition-scoring (parked) and image-download workflow cadence. Triggers on: index_walk, detail_drain, gh workflow run, delist_policy, presence check, scrape_runs, fixtures, RUN done, a new listings column, onboarding a portal, reading a scrape log, realtime_worker, sold_comps, clip_tag, dinov3_embed_backfill, compute_image_phash, verify_pipeline, health_canary, health_liveness, health lane, job cell, missing lane, match_once, reason line.
+description: Use when running, debugging, or extending the scrapers — triggering the per-portal index-walk workflows, adding a new scraper field without breaking data, refreshing portal HTML fixtures, reading the pipeline logs (INDEX/ENQUEUE/VERIFY/DRAIN/IMAGES line shapes), the always-on real-time worker (probe/drain/images/property-maintenance/broker-maintenance/estimation/location-resolve/location-intake-fast/location-refetch/sold-comps/text-extract/health/autodedup/notifications/push/heartbeat lanes), the visual-signal producer jobs (image pHash, CLIP tagging/retag, DINOv3 corpus embedding on RunPod), or the pipeline verification/alerting harness. Also covers condition-scoring (parked) and image-download workflow cadence. Triggers on: index_walk, detail_drain, gh workflow run, delist_policy, presence check, scrape_runs, fixtures, RUN done, a new listings column, onboarding a portal, reading a scrape log, realtime_worker, sold_comps, clip_tag, dinov3_embed_backfill, compute_image_phash, verify_pipeline, health_canary, health_liveness, health lane, job cell, missing lane, match_once, reason line, job_runner, scheduled_jobs, job_runs.
 ---
 
 # Scraper operations
@@ -218,7 +218,7 @@ from the slow "download each ad" write:
   request in hand on the main thread short, the run is finalized with no error, and the
   process exits 143 (the walk workflows `exec` Python so a cancel's SIGINT reaches it); each
   category's pages and `by_category` entry are written together as it ends
-  (`db.bump_index_progress`), so a SIGKILL keeps them.
+  (`db.bump_index_progress`), so a SIGKILL keeps them. **The job runner** (`python -m scraper.job_runner run|once|request|pause|list`, #2024: SIGTERM at `timeout_s`, SIGKILL 90 s later, a timeout recorded `timeout` whatever the exit): verbs, log lines, outcomes and drills in `references/job-runner.md`.
   Never hand-roll it, and never add a portal without wiring the flag through —
   `tests/scraper/test_walk_deadline_wiring.py` fails the build if you do. Ids are classified by the
   one shared `portal.classify_index_sighting` (**an index card with no price reads `unchanged`,
