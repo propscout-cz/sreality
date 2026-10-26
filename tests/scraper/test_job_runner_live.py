@@ -22,7 +22,7 @@ import pytest
 
 from scraper import job_lease, job_process, jobs
 from scraper.job_process import Child, Guard
-from scraper.job_runner import PgLedger, Runner
+from scraper.job_runner import Finished, PgLedger, Runner
 from scraper.jobs import Job
 from tests._live_property import REQUIRED_DB, cur, db_url  # noqa: F401 -- `cur` is the fixture
 from tests.scraper.test_job_runner import CHILD, Clock, Script, StandIn, _kill_quietly, _wait_for
@@ -34,6 +34,13 @@ def _entry(*args: str, every_s: int = 3600, offset_s: int = 600, timeout_s: int 
            resource: str | None = None) -> Job:
     return Job(f"test-job-{uuid.uuid4().hex[:12]}", (CHILD, *args), every_s, offset_s, timeout_s, 256, 1,
                jobs.RUNNER, resource, db_heavy)
+
+
+def _offset_away(cur: Any, every_s: int = 3600) -> int:
+    """An offset whose next slot is half a cadence after the frozen now() (it opens the test transaction): no wait a
+    test asserts is then capped by the next slot, whatever the time of day."""
+    cur.execute("SELECT extract(epoch from now())::bigint")
+    return (cur.fetchone()[0] + every_s // 2) % every_s
 
 
 @dataclass
@@ -171,7 +178,7 @@ def test_a_more_remains_exit_is_ok_and_due_again_in_a_minute(cur: Any, monkeypat
 def test_failures_back_off_and_a_db_heavy_job_waits_for_its_own_hour(
         cur: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """L5."""
-    plain = _entry()
+    plain = _entry(offset_s=_offset_away(cur))
     heavy = _entry(every_s=86400, offset_s=3 * 3600, db_heavy=True)
     live = _live(cur, monkeypatch, [plain, heavy], {plain.name: Script(code=1, at=0.0),
                                                      heavy.name: Script(code=1, at=0.0)})
@@ -192,14 +199,15 @@ def test_failures_back_off_and_a_db_heavy_job_waits_for_its_own_hour(
 
 
 @pytest.mark.parametrize("every_s,offset_s,timeout_s,db_heavy,expected", [
-    (3600, 600, 900, False, "15 min"),
-    (30 * 86400, 356400, 900, False, "15 min"),  # rent_map: retries, never waits a month
+    (3600, None, 900, False, "15 min"),  # None: the next slot half a cadence away
+    (30 * 86400, None, 900, False, "15 min"),  # rent_map's cadence: retries, never waits a month
     (91 * 86400, 6300000, 7200, True, "22:00"),  # map_overlays: the next day at its hour
 ])
 def test_a_timeout_is_a_failure_that_retries_no_sooner_than_its_timeout(
-        cur: Any, monkeypatch: pytest.MonkeyPatch, every_s: int, offset_s: int, timeout_s: int, db_heavy: bool,
-        expected: str) -> None:
+        cur: Any, monkeypatch: pytest.MonkeyPatch, every_s: int, offset_s: int | None, timeout_s: int,
+        db_heavy: bool, expected: str) -> None:
     """L5: the runner stopped it at timeout_s, so it is recorded `timeout` whatever it exited."""
+    offset_s = _offset_away(cur, every_s) if offset_s is None else offset_s
     entry = _entry(every_s=every_s, offset_s=offset_s, timeout_s=timeout_s, db_heavy=db_heavy)
     live = _live(cur, monkeypatch, [entry], {entry.name: Script(code_on_term=0)}, grace_s=5.0)
     live.runner.tick()
@@ -217,7 +225,7 @@ def test_a_timeout_is_a_failure_that_retries_no_sooner_than_its_timeout(
 
 def test_a_lost_run_is_re_run_once_in_the_same_tick_then_backs_off(cur: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """L6: a dead holder's lapsed run is closed and re-claimed at once; a second loss in a row waits."""
-    entry = _entry()
+    entry = _entry(offset_s=_offset_away(cur))
     live = _live(cur, monkeypatch, [entry], {entry.name: Script()})
     live.runner.tick()
     cur.execute("INSERT INTO job_runs (job_name, holder) VALUES (%s, 'dead')", (entry.name,))
@@ -233,6 +241,29 @@ def test_a_lost_run_is_re_run_once_in_the_same_tick_then_backs_off(cur: Any, mon
     assert [r[:2] for r in restarted.runs(entry.name)] == [("lost", False), ("lost", False)]
     assert restarted.standin.spawned == [], "a second loss in a row is not re-run at once"
     assert restarted.row(entry.name)["wait"] == timedelta(seconds=120)
+
+
+def test_a_stale_release_or_renewal_never_touches_a_later_run_of_the_same_job(
+        cur: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """One replica re-claims a job whose release it could not land: run 1's late renewal and release are refused,
+    and run 2's lease stands (each claim is its own holder)."""
+    entry = _entry()
+    live = _live(cur, monkeypatch, [entry])
+    live.runner.tick()
+    ledger = live.runner.ledger
+    live.due_now(entry.name)
+    first = ledger.claim(entry.name)
+    assert first is not None
+    cur.execute("UPDATE scheduled_jobs SET lease_expires_at = now() - interval '1 second' WHERE job_name = %s",
+                (entry.name,))
+    assert ledger.reap_lost([entry.name], []) == [entry.name]
+    second = ledger.claim(entry.name)
+    assert second is not None
+    assert ledger.renew(first) is False
+    assert ledger.release(Finished(first, "ok", "slot", None, 0, None, "")) is False
+    assert live.row(entry.name)["lease_holder"] == second.holder
+    assert ledger.renew(second) is True
+    assert [r[:2] for r in live.runs(entry.name)] == [("lost", False), (None, True)]
 
 
 def test_the_oldest_due_row_is_claimed_first(cur: Any, monkeypatch: pytest.MonkeyPatch) -> None:

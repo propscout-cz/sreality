@@ -256,6 +256,12 @@ def _now(cur: Any) -> datetime:
     return cur.fetchone()[0]
 
 
+def _offset_away(now: datetime, every_s: int = 3600) -> int:
+    """An offset whose next slot is half a cadence after `now`: no wait a test asserts is then capped by the next
+    slot, whatever the time of day."""
+    return (int(now.timestamp()) + every_s // 2) % every_s
+
+
 def _release_due(cur: Any, *, cadence: str = "1 hour", offset_s: int = 600, timeout_s: int = 600,
                  failures: int = 0, outcome: str = "failed", due: str | None = None,
                  request: bool = False, due_now: bool = True) -> tuple[datetime, datetime | None]:
@@ -277,7 +283,7 @@ def test_a_more_remains_exit_re_dues_in_a_minute_and_a_backoff_doubles(cur: Any)
     now, due_at = _release_due(cur, outcome="ok", due="more")
     assert due_at == now + timedelta(seconds=job_lease.MORE_REMAINS_S)
     for failures, wait_s in ((0, 60), (1, 120), (2, 240)):
-        now, due_at = _release_due(cur, failures=failures, due="backoff")
+        now, due_at = _release_due(cur, failures=failures, due="backoff", offset_s=_offset_away(_now(cur)))
         assert due_at == now + timedelta(seconds=wait_s), failures
 
 
@@ -289,13 +295,14 @@ def test_a_backoff_never_passes_the_cadence_or_the_next_slot(cur: Any) -> None:
 
 def test_a_timeout_retries_no_sooner_than_its_own_timeout(cur: Any) -> None:
     """A walk cut by its own timeout never restarts at once; a 30-day job does not wait a month (R-c)."""
-    now, due_at = _release_due(cur, cadence="30 days", offset_s=356400, timeout_s=900, outcome="timeout",
+    away = _offset_away(_now(cur), 30 * 86400)
+    now, due_at = _release_due(cur, cadence="30 days", offset_s=away, timeout_s=900, outcome="timeout",
                                due="retry")
     assert due_at == now + timedelta(minutes=15)
-    now, due_at = _release_due(cur, cadence="30 days", offset_s=356400, timeout_s=900, failures=3,
+    now, due_at = _release_due(cur, cadence="30 days", offset_s=away, timeout_s=900, failures=3,
                                outcome="timeout", due="retry")
     assert due_at == now + timedelta(minutes=15), "60 * 2^3 = 480 s is under the floor"
-    now, due_at = _release_due(cur, cadence="30 days", offset_s=356400, timeout_s=900, failures=4,
+    now, due_at = _release_due(cur, cadence="30 days", offset_s=away, timeout_s=900, failures=4,
                                outcome="timeout", due="retry")
     assert due_at == now + timedelta(seconds=960), "past the floor, the backoff grows"
 
@@ -452,7 +459,7 @@ def _registered_job(cur: Any, **entry: Any) -> str:
 
 def test_a_lost_run_is_re_run_once_then_backs_off(cur: Any) -> None:
     now = _now(cur)
-    name = _registered_job(cur)
+    name = _registered_job(cur, offset_s=_offset_away(now))
     _open_lapsed(cur, name)
     assert job_lease.reap_lost(cur.connection, names=[name], on_hour=[]) == [name]
     row = _row(cur, name)
