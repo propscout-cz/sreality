@@ -3,6 +3,8 @@
 import re
 from pathlib import Path
 
+import yaml
+
 from scraper import job_process, job_runner, jobs
 from tests._railway_iac import iac_constant, iac_entry, iac_text
 
@@ -147,6 +149,22 @@ def test_the_runner_image_is_cpu_torch_baked_and_offline() -> None:
     assert not (ROOT / "data" / "clip_checkpoint.json").exists(), "the repo's data/ would overwrite the staged pin"
     assert "MALLOC_ARENA_MAX" not in dockerfile
     assert "COPY scripts/ ./scripts/" in final and "COPY autodedup/ ./autodedup/" in final
+
+
+def test_the_runner_image_workflow_builds_on_every_image_input() -> None:
+    """Decision 17: the torch image is built in CI before Railway builds it. The window requires the check by its
+    name when a PR changes an image input, so the wizard's list and the workflow's paths are one list."""
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "runner_image.yml").read_text(encoding="utf-8"))
+    assert workflow["name"] == "CI: runner image"
+    triggers = workflow[True]  # PyYAML reads the `on:` key as the boolean True
+    assert set(triggers) == {"pull_request"}, "no schedule: nothing for the registry's pairing census"
+    paths = triggers["pull_request"]["paths"]
+    inputs = re.search(r"^IMAGE_INPUTS=\((.*?)\)$", WIZARD.read_text(encoding="utf-8"), re.M)
+    assert inputs and set(paths) - {".github/workflows/runner_image.yml"} == set(inputs.group(1).split())
+    assert {"Dockerfile", ".dockerignore", "pyproject.toml", "scripts/bake_clip_weights.py",
+            "data/clip_taxonomy.json"} <= set(paths)
+    runs = [s.get("run", "") for job in workflow["jobs"].values() for s in job["steps"]]
+    assert any(r.startswith("docker build ") and "--build-arg EXTRAS=api,clip,geo" in r for r in runs), runs
 
 
 def test_the_wizard_has_the_general_modes_and_checks_with_its_own_copy() -> None:
