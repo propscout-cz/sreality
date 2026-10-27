@@ -242,8 +242,11 @@ LINE layer (ST_Boundary of the dissolved active-zone polygons, subdivided), draw
 CLI: `python -m scripts.ingest_map_overlays [--sections metro,flood] [--dry-run] [--accept-shrink]`.
 Job (since #2025; before it, the quarterly workflow `ingest_map_overlays.yml`): the runner's `map_overlays`
 entry in `scraper/jobs.py`, a 91-day grid at 22:00Z with a 2 h timeout; by hand, a request through "Jobs: run now"
-with `--sections`, `--dry-run` or `--accept-shrink` as its args. `ingest_boundaries.yml` gains a final step
-`python -m scripts.ingest_map_overlays --sections kraje`.
+with `--sections`, `--dry-run` or `--accept-shrink` as its args. A request's ok run is the job's ok run (its cell
+turns green), so `--sections rent_map --accept-shrink` is for a refused rent-map render only; after it, file a
+`rent_map` request too, or `job/rent_map` stays red until its own backed-off retry. A failed run retries daily at
+22:00Z (a DB-heavy job retries in its own hour), re-fetching every publisher, until it succeeds or is paused.
+`ingest_boundaries.yml` gains a final step `python -m scripts.ingest_map_overlays --sections kraje`.
 
 Registry values:
 

@@ -281,7 +281,7 @@ runner image, migration 683 (`rent_map_cells` names its scripts, not a workflow)
 (2) the move of stale_images, rent_map and map_overlays, after #2026 deploys, with no `.railway/` change and no
 migration, so `git revert -m 1` undoes it (pause first); fetch_rent_map.yml's companion re-render is folded into
 `scripts/fetch_rent_map.py` (a refused render exits 1; the override is a `map_overlays` request `--sections rent_map
---accept-shrink`); (3) migration-only, `map_overlay_tiles` re-hosted to `job-runner` once (2) deploys.
+--accept-shrink`, then a `rent_map` request clears that job's cell); (3) migration-only, `map_overlay_tiles` re-hosted to `job-runner` once (2) deploys.
 **Gate (7 days):** every job cell green; ≥ 3 deploys survived with interrupted runs re-claimed within 1 min;
 one request run, one pause with expiry and one self-fence drill exercised; 0 unique-index violations, 0
 double holders; resolver and intake lanes green 48 h after the rename; `railway config plan` = 0 changes.
