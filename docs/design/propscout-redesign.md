@@ -7,20 +7,22 @@ operator ruled, and what is next. Read it top to bottom before touching any of t
 
 | What | Where | Binding? |
 | --- | --- | --- |
-| Rename + three colour schemes (built) | PR waiff/sreality#2115, branch `claude/happy-ride-1kpq6a` | Yes, once merged |
+| Rename + three colour schemes (built) | PR waiff/sreality#2115, merged and live 2026-10-27 | Yes |
 | Design rules for every build | `.interface-design/system.md` (§ Colour schemes, § Hierarchy rulings) | **Yes** |
 | Design system artifact: previews of every agenda, as ruled | https://claude.ai/artifact/NstEVRTDXyQ8ZNJhEpxv7m | Direction only |
 | Removal review: 35 before/after pictures and the operator's answers | https://claude.ai/artifact/WoFQVG1RwmaqXAfBBQoqbV | The rulings below are copied from it |
+| Stats review: 10 proposals for Browse › Stats (S01–S10), pictures and answers | https://claude.ai/artifact/RRDNo2TfAa7iWuMUoUBMfg | **Yes** (§ Stats review below) |
 | Sequencing | `roadmap/ui-track.md` § PropScout.cz and three colour schemes | Yes |
 
 Reading the artifacts from a session: use the Artifact tool, `action: "read"` with the URL (add `path` for
 one file, e.g. `project/README.md` or `project/components/ListingCard/preview.html`). The review page's answers
 are in its database, collection `proposals` (documents `p01`–`p35`, fields `decision`, `note`), readable with
-the ArtifactData tool (`action: "list"`). Never fetch these links with curl or WebFetch.
+the ArtifactData tool (`action: "list"`); the Stats review works the same way (documents `s01`–`s10`). Never
+fetch these links with curl or WebFetch.
 
 ## What is done
 
-1. **PR #2115** (green and mergeable on 2026-10-27; the operator merges it):
+1. **PR #2115** (merged 2026-10-27; Railway deployed API, vite and realtime-worker):
    - the app is **PropScout.cz** (`lib/brand.ts`; tab titles "PS: …"; a "PS" home-screen icon; extension name);
    - three colour schemes, **Měď** (default), **Kobalt**, **Grafit**, each light and dark, picked per device in the
      account menu, the phone account sheet and Settings → Appearance (`lib/theme.ts`, `globals.css`
@@ -91,6 +93,38 @@ Where an operator note goes further than the proposal, the note wins; the table 
 The declined items stay exactly as they are; don't propose them again. P06's note allows restyling the
 storey chip (the design system draws it as a quiet inset label without a border).
 
+## Stats review (S01–S10, opened 2026-10-27)
+
+The operator asked for more hierarchy in the Stats tab, above all its header (the tabs, the dashboard chips,
+the Jako ve filtru / Prodáno (trh) / Vše switch, the Malé vzorky switch and the sample sentence). Ten
+proposals, each with a before/after picture, are on https://claude.ai/artifact/RRDNo2TfAa7iWuMUoUBMfg and the
+operator ruled them there. Before building the Stats tab, list its `proposals` collection with ArtifactData
+and build exactly what it says (the rulings are also copied below).
+
+- `decision: "confirm"` → build it, in the agenda-2 PR (Browse page, map and stats), alongside P14.
+- `decision: "decline"` → leave that part as it is; don't propose it again.
+- `decision: null` → not ruled yet: ask the operator before building it, and build the rest.
+- A `note` goes further than the proposal where they differ, as in the removal review.
+
+**Ruled 2026-10-27** (copied from the review page; the page stays the source if they ever differ):
+
+| # | Proposal | Ruling | Build |
+| --- | --- | --- | --- |
+| S01 | One panel for the board's settings | **Confirmed** | The dashboard row and the sample row sit together in one panel above the charts. |
+| S02 | Label the rows | **Confirmed** | A label column: "Dashboard" (which charts), "Vzorek" (which properties are counted). |
+| S03 | Sample sentence under its switch | **Confirmed** | `MARKET_CAPTION` sits directly under the Jako ve filtru / Prodáno (trh) / Vše switch, the chosen option's name in bold. |
+| S04 | Malé vzorky at the row's end | **Confirmed** | "Malé vzorky (pod 5)" at the right end of the Vzorek row; "min, max, průměr, medián" in its tooltip (an overlay). |
+| S05 | Sample stated once for the board | Declined | Keep the chips on every chart as today. |
+| S06 | Okolí badge | **Confirmed** | The okolí dashboard's chip shows its name, then a small "Okolí" badge with a pin; tooltip: the property page shows this dashboard. |
+| S07 | Czech tab labels | **Confirmed** | "Nemovitosti" / "Statistiky" (these two labels only; other English stays until ruled). |
+| S08 | Title: measure first | Declined | Keep "Cena · Plocha po 10 m² › Stav" as one title. |
+| S09 | Every cell under 5: say so once | **Confirmed** | One line above the table, "Všechny buňky mají méně než 5 nemovitostí, takže statistiky jsou skryté.", with a "Zobrazit malé vzorky" button that turns the switch on; rows and counts stay. |
+| S10 | Box legend only when a box is drawn | Declined | Keep the legend line on every chart. |
+
+The page's overview picture shows all ten applied; build only the confirmed seven. Code pointers are in each
+proposal's `where` field (`components/stats/StatsDashboard.tsx`, `DashboardBar.tsx`, `StatsChart.tsx`,
+`lib/stats.ts` `MARKET_CAPTION`, `lib/neighbourhood` `PROPERTY_CARD_LABEL`, the tabs in `BrowseExperience.tsx`).
+
 ## What to build next
 
 Build the confirmed items **one PR per agenda**, in this order (small and visible first). Each PR follows
@@ -109,7 +143,7 @@ File pointers are where the element lives today (2026-10-27); search for the quo
    price-label button from `components/MapRail.tsx`; keep the checkbox in `ListingMap.tsx`), P13 (the popup's
    `lp-precision` and `lp-seen` "last seen …" lines become one, the precision detail in its tooltip; the popup
    HTML in `ListingMap.tsx`), P14 (chart card shows Upravit + a ⋯ menu with move up / move down / remove
-   chart; `components/stats/StatsChart.tsx`).
+   chart; `components/stats/StatsChart.tsx`), and the confirmed Stats review items (§ Stats review, read live).
 3. **Pipeline** — P19 (remove `CityIndexStrip` from `components/pipeline/BoardCard.tsx`), P20 (the
    `mf_gross_yield_pct` span beside the dims row shows on Velké cards only, `BoardCard.tsx`), P22 (terminal
    stages, `is_terminal`, fold into one "Uzavřené" lane of drop rows; `pages/Pipeline.tsx`). Rule #22 holds:
