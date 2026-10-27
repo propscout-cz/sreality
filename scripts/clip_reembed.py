@@ -164,6 +164,8 @@ def _read(conn: psycopg.Connection, model: str) -> dict[int, tuple[Any, ...]]:
 
 
 def _check_sample(rows: dict[int, tuple[Any, ...]], failures: _Failures) -> None:
+    if _md5(sorted(rows)) != IDS_MD5:
+        failures.add("sample", f"ids_md5={_md5(sorted(rows))} not {IDS_MD5}")
     for image_id in SAMPLE_IDS:
         row = rows.get(image_id)
         if row is None:
@@ -253,7 +255,9 @@ def verify(conn: psycopg.Connection, args: argparse.Namespace, *, r2_factory: Ca
     _check_sample(rows, failures)
 
     started = clock()
-    got, missing = _download(r2_factory(), {i: r[2] for i, r in rows.items() if r[2]}, args.workers)
+    # A row with no stored vector already failed P0 and has nothing to be compared with.
+    keys = {i: r[2] for i, r in rows.items() if r[2] and r[5] is not None}
+    got, missing = _download(r2_factory(), keys, args.workers)
     secs_download = clock() - started
     for image_id in missing:
         failures.add("download", f"image={image_id} rounds={ROUNDS}")

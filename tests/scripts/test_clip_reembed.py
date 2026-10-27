@@ -410,8 +410,32 @@ def test_a_sample_row_out_of_its_window_fails_the_sample(caplog: pytest.LogCaptu
     line = _summary(caplog)
     assert code == 1 and _field(line, "why") == "sample" and _field(line, "n") == "99"
     assert _field(line, "ids_md5") != cr.IDS_MD5
-    assert {f.split()[2] for f in _failures(caplog) if f.split()[1] == "sample"} == {
-        f"image={cr.SAMPLE_IDS[9]}", f"image={cr.SAMPLE_IDS[50]}"}
+    assert {f.split()[2].split("=")[0] if "ids_md5" in f else f.split()[2]
+            for f in _failures(caplog) if f.split()[1] == "sample"} == {
+        "ids_md5", f"image={cr.SAMPLE_IDS[9]}", f"image={cr.SAMPLE_IDS[50]}"}
+
+
+def test_a_sample_row_without_its_vector_fails_the_sample_and_is_not_compared(
+        caplog: pytest.LogCaptureFixture) -> None:
+    sample = _Sample()
+    rows = sample.rows()
+    rows[30] = (*rows[30][:5], None, *rows[30][6:])
+    args = ctb._parser().parse_args(["--verify-reembed"])
+    with caplog.at_level(logging.INFO):
+        code = cr.verify(_Conn(rows), args, r2_factory=lambda: sample.r2,
+                         tagger_factory=lambda threads: _Tagger(sample.fresh))
+    line = _summary(caplog)
+    assert code == 1 and _field(line, "why") == "sample" and _field(line, "exact_rows") == "99"
+    assert cr.SAMPLE_IDS[30] not in sample.r2.calls, "nothing to compare it with: not downloaded"
+
+
+def test_the_ids_read_must_hash_to_the_frozen_fingerprint(caplog: pytest.LogCaptureFixture,
+                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cr, "IDS_MD5", "0" * 32)
+    with caplog.at_level(logging.INFO):
+        code, _conn, _tagger = _Sample().verify()
+    assert code == 1 and _field(_summary(caplog), "why") == "sample"
+    assert any(f.split()[1] == "sample" and "ids_md5=" in f for f in _failures(caplog))
 
 
 def test_missing_r2_fails_the_check(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
