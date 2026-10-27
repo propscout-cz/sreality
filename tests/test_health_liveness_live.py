@@ -445,16 +445,16 @@ def _job(cur: Any, name: str, *, every: str = "6 hours", timeout_s: int = 1200, 
          due: str = "5 hours", last_ok: str | None = None, failures: int = 0, last_outcome: str | None = None,
          last_error: str | None = None, paused: str | None = None, requested: str | None = None,
          requested_by: str = "github:op", runner: str = "job-runner", registered: bool = True,
-         retired: bool = False, joined: str = "365 days") -> None:
+         retired: str | None = None, joined: str = "365 days") -> None:
     """A scheduled_jobs row as the runner's registration leaves it: `due` from now (a minus sign: past), `last_ok`,
-    `requested` and `joined` (registry_at: when it joined the runner) ago, `paused` until that far ahead (a minus sign:
-    a pause that lapsed), signed 'test' with note 'drill'."""
+    `requested`, `joined` (registry_at: when it joined the runner) and `retired` ago, `paused` until that far ahead (a
+    minus sign: a pause that lapsed), signed 'test' with note 'drill'."""
     cur.execute(
         "insert into scheduled_jobs (job_name, cadence, runner, registry_at, retired_at, offset_s, timeout_s, "
         "  memory_mb, cpus, resource, due_at, last_success_at, consecutive_failures, last_outcome, last_error, "
         "  paused_until, pause_note, paused_by, requested_at, requested_by) "
         "values (%(name)s, %(every)s::interval, %(runner)s, "
-        "  case when %(registered)s then now() - %(joined)s::interval end, case when %(retired)s then now() end, 0, "
+        "  case when %(registered)s then now() - %(joined)s::interval end, now() - %(retired)s::interval, 0, "
         "  %(timeout_s)s, 256, 1, %(resource)s, now() + %(due)s::interval, "
         "  now() - %(last_ok)s::interval, %(failures)s, %(last_outcome)s, %(last_error)s, "
         "  now() + %(paused)s::interval, case when %(paused)s::interval is not null then 'drill' end, "
@@ -527,7 +527,7 @@ def test_production_shape_has_no_job_cell(cur: Any) -> None:
     cur.execute("insert into scheduled_jobs (job_name, cadence, runner) "
                 "values ('location_resolve_incremental', interval '1 hour', 'github_actions')")
     for i in range(7):
-        _job(cur, f"retired_{i}", retired=True)
+        _job(cur, f"retired_{i}", retired="1 day")
     _job(cur, "never_registered", registered=False)
     _job(cur, "on_github", runner="github_actions")
 
@@ -689,12 +689,12 @@ def test_a_job_re_landed_within_a_cadence_of_its_failures_waits_for_its_first_sl
 
     _runner_beat(cur, "r1", "0 minutes")
     _job(cur, "rent", every="30 days", timeout_s=900, due="27 days", failures=4, last_outcome="failed",
-         last_error="exit 1", paused="-2 days", joined="40 days", retired=True)
+         last_error="exit 1", paused="-2 days", joined="40 days", retired="3 days")
     for started, ended in (("3 days", "4319 minutes"), ("4319 minutes", "4318 minutes"),
                            ("4317 minutes", "4316 minutes"), ("4250 minutes", "4249 minutes")):
         _run(cur, "rent", started=started, ended=ended, outcome="failed", exit_code=1)
     _job(cur, "overlays", every="91 days", timeout_s=7200, due="60 days", last_ok="31 days", failures=1,
-         last_outcome="timeout", last_error="stopped at timeout_s=7200; exit -15", joined="100 days", retired=True)
+         last_outcome="timeout", last_error="stopped at timeout_s=7200; exit -15", joined="100 days", retired="3 days")
     _run(cur, "overlays", started="31 days 30 minutes", ended="31 days", outcome="ok", exit_code=0)
     _run(cur, "overlays", started="3 days 2 hours", ended="3 days", outcome="timeout", exit_code=-15,
          requested_by="github:op")
@@ -752,6 +752,34 @@ def test_a_boot_that_re_stamps_registry_at_keeps_a_failing_rows_streak(cur: Any)
         "fail", "outage: 6 failed runs in a row, the first 30.0 h ago; the last: exit 1")
     [job] = cells["job/outage"]
     assert job["facts"]["streak"] == 6
+
+
+def test_an_older_images_boot_that_retires_a_failing_row_for_minutes_keeps_its_join(cur: Any) -> None:
+    """C3 (refutation round): an older image booted (a Rollback, or a Redeploy of a non-latest deployment) and retired a
+    row failing for 30 h; the latest image booted 3 min later and un-retired it. A retirement under an hour is a blink,
+    never a re-land (a PR cycle), so the row keeps its join and reads Problem, late included, as before the blink."""
+    from scraper import job_lease
+    from scraper.jobs import RUNNER, Job
+
+    _runner_beat(cur, "r1", "0 minutes")
+    _job(cur, "blink", due="20 minutes", last_ok="47 hours", failures=5, last_outcome="failed", last_error="exit 1",
+         joined="200 days")
+    _run(cur, "blink", started="47 hours 10 minutes", ended="47 hours", outcome="ok", exit_code=0)
+    for started, ended in (("30 hours", "1795 minutes"), ("24 hours", "1435 minutes"), ("18 hours", "1075 minutes"),
+                           ("12 hours", "715 minutes"), ("45 minutes", "40 minutes")):
+        _run(cur, "blink", started=started, ended=ended, outcome="failed", exit_code=1)
+    cur.execute("update scheduled_jobs set retired_at = now() - interval '3 minutes' where job_name = 'blink'")
+    assert job_lease.register(cur.connection, [Job("blink", ("scripts.x",), 6 * 3600, 1200, 1200, 256, 1, RUNNER)]
+                              ).unretired == ("blink",)
+
+    cells = _liveness(cur)[3]
+
+    assert _said(cells, "job/blink") == (
+        "fail", "blink: 5 failed runs in a row, the first 30.0 h ago; the last: exit 1")
+    assert _conditions(cells, "job/blink")[1] == (
+        "fail: late: no ok run for 47.0 h (Watch past 6.3 h, Problem past 12.3 h)")
+    cur.execute("select now() - registry_at from scheduled_jobs where job_name = 'blink'")
+    assert cur.fetchone() == (_dt.timedelta(days=200),)
 
 
 def test_a_quarterly_job_whose_ok_run_was_pruned_is_not_read_as_registered_again(cur: Any) -> None:
@@ -1025,7 +1053,7 @@ def test_a_paused_job_reads_ok_unless_the_pause_outlasts_a_cycle(cur: Any) -> No
 def test_an_open_job_incident_recovers_once_its_row_retires(cur: Any) -> None:
     """C10 (guard on 675's recovery arm): a job/<name> incident whose row is gone reads 'no longer failing'."""
     _runner_beat(cur, "r1", "0 minutes")
-    _job(cur, "x", retired=True)
+    _job(cur, "x", retired="1 day")
     _incident(cur, "cell:liveness:job/x")
 
     cells = _liveness(cur)[3]

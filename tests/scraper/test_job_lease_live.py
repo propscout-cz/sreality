@@ -428,22 +428,27 @@ def _joined(cur: Any, registry: str | None, *, retired: str | None = None) -> st
 
 def test_registry_at_is_when_the_row_joined_the_runner_and_a_later_boot_keeps_it(cur: Any) -> None:
     """Health (migration 682) judges a row on its runs since registry_at: a boot re-registering a live row must not
-    move that moment, and an un-retire or an adoption must."""
+    move that moment, nor an un-retire within REJOIN_AFTER_S of the retire (an older image's blink); an un-retire
+    after it, or an adoption, must."""
     _now(cur)
     live, retired, lane_era = _joined(cur, "3 days"), _joined(cur, "3 days", retired="1 day"), _joined(cur, None)
-    job_lease.register(cur.connection, [_entry(live), _entry(retired), _entry(lane_era)])
+    blink = _joined(cur, "3 days", retired="3 minutes")
+    job_lease.register(cur.connection, [_entry(live), _entry(retired), _entry(lane_era), _entry(blink)])
     cur.execute("SELECT job_name, now() - registry_at FROM scheduled_jobs WHERE job_name = ANY(%s)",
-                ([live, retired, lane_era],))
-    assert dict(cur.fetchall()) == {live: timedelta(days=3), retired: timedelta(0), lane_era: timedelta(0)}
+                ([live, retired, lane_era, blink],))
+    assert dict(cur.fetchall()) == {live: timedelta(days=3), retired: timedelta(0), lane_era: timedelta(0),
+                                    blink: timedelta(days=3)}
+    assert job_lease.REJOIN_AFTER_S == 3600
 
 
 def test_the_database_keeps_a_live_rows_registry_at_whatever_the_image_writes(cur: Any) -> None:
-    """Migration 682's trigger: registry_at moves only for a row adopted (NULL) or un-retired, so an image that
-    re-stamps it on every boot (main's job_lease before #2026, or a revert of it) never moves a live row's join, and
-    the rest of the UPDATE applies untouched."""
+    """Migration 682's trigger: registry_at moves only for a row adopted (NULL) or retired an hour or more, so an image
+    that re-stamps it on every boot (main's job_lease before #2026, or a revert of it) never moves a live row's join,
+    nor does an older image's blink (retired minutes ago), and the rest of the UPDATE applies untouched."""
     _now(cur)
     live, retired, lane_era = _joined(cur, "3 days"), _joined(cur, "3 days", retired="1 day"), _joined(cur, None)
-    names = [live, retired, lane_era]
+    blink, hour = _joined(cur, "3 days", retired="1 minute"), _joined(cur, "3 days", retired="1 hour")
+    names = [live, retired, lane_era, blink, hour]
 
     def rest() -> dict[str, Any]:
         cur.execute("SELECT job_name, to_jsonb(s) - 'registry_at' - 'last_error' FROM scheduled_jobs s"
@@ -459,12 +464,14 @@ def test_the_database_keeps_a_live_rows_registry_at_whatever_the_image_writes(cu
     cur.execute("UPDATE scheduled_jobs SET registry_at = now() - interval '1 hour', last_error = 'applied'"
                 " WHERE job_name = ANY(%s)", (names,))
     assert joined_ago() == {live: (timedelta(days=3), "applied"), retired: (timedelta(hours=1), "applied"),
-                            lane_era: (timedelta(hours=1), "applied")}
+                            lane_era: (timedelta(hours=1), "applied"), blink: (timedelta(days=3), "applied"),
+                            hour: (timedelta(hours=1), "applied")}
     assert rest() == before
-    # main's _REGISTER_SQL re-stamps through its upsert
-    cur.execute("INSERT INTO scheduled_jobs (job_name, cadence, runner) VALUES (%s, '1 hour', 'job-runner')"
-                " ON CONFLICT (job_name) DO UPDATE SET registry_at = now()", (live,))
-    assert joined_ago()[live] == (timedelta(days=3), "applied")
+    # main's _REGISTER_SQL re-stamps through its upsert, un-retiring as it goes
+    for name in (live, blink):
+        cur.execute("INSERT INTO scheduled_jobs (job_name, cadence, runner) VALUES (%s, '1 hour', 'job-runner')"
+                    " ON CONFLICT (job_name) DO UPDATE SET registry_at = now(), retired_at = NULL", (name,))
+        assert joined_ago()[name] == (timedelta(days=3), "applied"), name
 
 
 def test_a_row_the_database_refuses_is_skipped_and_its_siblings_still_land(cur: Any) -> None:

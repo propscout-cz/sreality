@@ -10,9 +10,10 @@
 -- view or grant.
 --   * public.scheduled_jobs_keep_registry_at() and its BEFORE UPDATE OF registry_at trigger on scheduled_jobs:
 --     registry_at is when a row joined the runner, stamped when it is new, adopted (NULL: a lane's held() row) or
---     un-retired and kept by every later boot (job_lease._REGISTER_SQL), and the database keeps it too, so an image
---     that re-stamps it on every boot (main's job_lease before #2026, or a revert) cannot move it. To move a live
---     row's registry_at on purpose, retire it first.
+--     un-retired an hour or more after its retirement (job_lease.REJOIN_AFTER_S; a shorter one is an older image's
+--     blink) and kept by every later boot (job_lease._REGISTER_SQL), and the database keeps it too, so an image that
+--     re-stamps it on every boot (main's job_lease before #2026, or a revert) cannot move it. To move a live row's
+--     registry_at on purpose, set its retired_at an hour back first.
 --   * public.health_span(double precision): a duration as Health reads it. Reads nothing.
 --   * public.health_job_cells(interval): one job/<name> cell per registered live job-runner row (_DUE_SQL's predicate:
 --     runner 'job-runner', registry_at set, retired_at null), judged on its runs since registry_at and ok until the
@@ -51,14 +52,17 @@ begin
 end
 $pre$;
 
--- registry_at is when the row joined the runner: a later write moves it only on a row adopted (NULL) or un-retired.
+-- registry_at is when the row joined the runner: a later write moves it only on a row adopted (NULL) or retired an
+-- hour or more (job_lease.REJOIN_AFTER_S). A shorter retirement is a blink, an older image's boot until the latest
+-- one boots again, never a re-land, which takes a PR cycle: the row is judged whole through it.
 create or replace function public.scheduled_jobs_keep_registry_at()
 returns trigger
 language plpgsql
 set search_path = public
 as $keep$
 begin
-  if old.registry_at is not null and old.retired_at is null then
+  if old.registry_at is not null
+     and (old.retired_at is null or old.retired_at > now() - make_interval(secs => 3600)) then
     new.registry_at := old.registry_at;
   end if;
   return new;

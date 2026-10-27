@@ -26,7 +26,7 @@ import pytest
 import yaml
 
 from location_data.resolver import drain
-from scraper import job_runner, jobs
+from scraper import job_lease, job_runner, jobs
 from scraper.jobs import Job
 from scraper.portal import _LIMIT_COERCERS, PortalConfig, PortalLimits
 from scraper.portal_factory import PORTAL_CLASSES
@@ -685,6 +685,15 @@ def test_the_job_cell_literal_census_fires() -> None:
     assert job_cell_literal_problems(sql.replace("j.runner = 'job-runner'", "j.runner = 'job_runner'"))
     assert job_cell_literal_problems(sql.replace("'job-runner/'", "'job-runner-'"))
     assert job_cell_literal_problems(sql.replace("j.timeout_s + 600", "j.timeout_s + 300"))
+
+
+def test_the_registry_at_trigger_and_the_register_share_one_rejoin_line() -> None:
+    """A retirement shorter than job_lease.REJOIN_AFTER_S is a blink: 682's trigger and _REGISTER_SQL keep the join."""
+    sql = (MIGRATIONS / "682_health_job_cells.sql").read_text(encoding="utf-8")
+    trigger = _dollar_body(sql, "create or replace function public.scheduled_jobs_keep_registry_at()", "$keep$")
+    line = f"make_interval(secs => {job_lease.REJOIN_AFTER_S})"
+    assert f"old.retired_at > now() - {line}" in trigger
+    assert f"s.retired_at <= now() - {line}" in job_lease._REGISTER_SQL
 
 
 def test_the_watcher_precondition_pins_675s_body_and_its_own() -> None:
