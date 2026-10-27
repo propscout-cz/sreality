@@ -39,6 +39,8 @@ scheme is on.
   [review page](https://claude.ai/artifact/WoFQVG1RwmaqXAfBBQoqbV) (P01–P35, each with a before/after picture),
   one PR per agenda. The 11 declined (P04, P06–P08, P11, P15–P18, P21, P23) stay as they are; don't re-propose.
 - Render scoring is to be removed end to end, front end and backend (operator note on P03): its own scoped PR.
+- Handoff with every ruling, the build queue with file pointers, and the open questions:
+  `docs/design/propscout-redesign.md`.
 
 ## Depth
 Borders only. `--color-rule` for structure, `--color-rule-soft` for row separation, `--color-rule-strong`
