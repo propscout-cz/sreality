@@ -273,7 +273,7 @@ function CorrectionForm({ listingId, onDone }: { listingId: number; onDone: () =
         </Field>
         <button
           type="submit" disabled={mut.isPending || !value.trim()}
-          className="rounded-[var(--radius-xs)] bg-[var(--color-copper)] px-3 py-1.5 text-sm text-white hover:bg-[var(--color-copper-2)] disabled:opacity-50"
+          className="rounded-[var(--radius-xs)] bg-[var(--color-copper)] px-3 py-1.5 text-sm text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] disabled:opacity-50"
         >
           {mut.isPending ? 'Applying…' : 'Correct'}
         </button>

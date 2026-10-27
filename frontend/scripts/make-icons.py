@@ -1,9 +1,9 @@
 """Draw the home-screen and tab icons into frontend/public/ (run: python3 frontend/scripts/make-icons.py).
 
 The mark is the header's wordmark (BrandMark in src/components/Shell.tsx) reduced to its
-two initials: "L" for the display word in ink, "R" for the descriptor in the copper accent,
-set in the self-hosted Fraunces at weight 600 on the paper canvas. Colours are the light
-@theme tokens in src/styles/globals.css. Needs Pillow (FreeType reads the woff2 directly).
+two initials: "P" in ink and "S" in the copper accent, set in the self-hosted Fraunces at
+weight 600 on the paper canvas. Colours are the light @theme tokens (the Měď scheme) in
+src/styles/globals.css. Needs Pillow (FreeType reads the woff2 directly).
 """
 from __future__ import annotations
 
@@ -15,9 +15,10 @@ FRONTEND = Path(__file__).resolve().parent.parent
 FONT = FRONTEND / "src/assets/fonts/fraunces-latin.woff2"
 PUBLIC = FRONTEND / "public"
 
-PAPER = (0xF6, 0xF3, 0xEC)
-INK = (0x1A, 0x1C, 0x22)
-COPPER = (0x3C, 0x6E, 0x63)
+PAPER = (0xF2, 0xEF, 0xE7)
+INK = (0x16, 0x18, 0x1D)
+COPPER = (0x1F, 0x6B, 0x5C)
+FIRST, SECOND = "P", "S"
 
 WEIGHT = 600
 SUPERSAMPLE = 4
@@ -36,7 +37,7 @@ def _font(px: float, opsz: float) -> ImageFont.FreeTypeFont:
 
 def _cap_ratio() -> float:
     probe = _font(1000, 72)
-    top = ImageDraw.Draw(Image.new("RGB", (1, 1))).textbbox((0, 0), "L", font=probe, anchor="ls")[1]
+    top = ImageDraw.Draw(Image.new("RGB", (1, 1))).textbbox((0, 0), FIRST, font=probe, anchor="ls")[1]
     return -top / 1000
 
 
@@ -48,13 +49,13 @@ def draw(size: int, cap: float) -> Image.Image:
     # Optical size follows the rendered size, as CSS font-optical-sizing: auto does, so the
     # small favicons get Fraunces' sturdier small-size hairlines.
     font = _font(px * SUPERSAMPLE, opsz=px)
-    left, top, _, _ = pen.textbbox((0, 0), "L", font=font, anchor="ls")
-    advance = font.getlength("L")
-    right = advance + pen.textbbox((0, 0), "R", font=font, anchor="ls")[2]
+    left, top, _, _ = pen.textbbox((0, 0), FIRST, font=font, anchor="ls")
+    advance = font.getlength(FIRST)
+    right = advance + pen.textbbox((0, 0), SECOND, font=font, anchor="ls")[2]
     x = (canvas - (right - left)) / 2 - left
     y = (canvas - top) / 2
-    pen.text((x, y), "L", font=font, fill=INK, anchor="ls")
-    pen.text((x + advance, y), "R", font=font, fill=COPPER, anchor="ls")
+    pen.text((x, y), FIRST, font=font, fill=INK, anchor="ls")
+    pen.text((x + advance, y), SECOND, font=font, fill=COPPER, anchor="ls")
     return image.resize((size, size), Image.LANCZOS)
 
 

@@ -675,7 +675,7 @@ function NewEstimationButton({ prefill }: { prefill?: NewEstimationPrefill }) {
     <button
       type="button"
       onClick={() => open(prefill)}
-      className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
+      className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] transition-colors"
     >
       <span className="text-[0.95em] leading-none">+</span>
       <span>New estimation</span>

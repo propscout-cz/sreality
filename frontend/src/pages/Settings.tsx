@@ -52,7 +52,8 @@ import {
 } from '@/lib/api';
 import { fmtAbsolute } from '@/lib/format';
 import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
-import { useTheme, type ThemeMode } from '@/lib/theme';
+import { COLOR_SCHEMES, useScheme, useTheme, type ThemeMode } from '@/lib/theme';
+import SchemeSwatch from '@/components/SchemeSwatch';
 import { PickButton, Switch, Field } from '@/components/controls';
 import ErrorBanner from '@/components/ErrorBanner';
 import TiersSection from '@/components/TiersSection';
@@ -203,8 +204,22 @@ const THEME_OPTS: ReadonlyArray<{
 
 function ThemeToggle() {
   const [mode, setMode] = useTheme();
+  const [scheme, setScheme] = useScheme();
   return (
     <div>
+      <div className="inline-flex gap-1.5 mb-2.5">
+        {COLOR_SCHEMES.map((opt) => (
+          <PickButton
+            key={opt.value}
+            on={scheme === opt.value}
+            onClick={() => setScheme(opt.value)}
+            className="inline-flex items-center gap-2 px-3"
+          >
+            <SchemeSwatch colors={opt.swatch} />
+            <span>{opt.label}</span>
+          </PickButton>
+        ))}
+      </div>
       <div className="inline-flex gap-1.5">
         {THEME_OPTS.map((opt) => (
           <PickButton
@@ -219,7 +234,8 @@ function ThemeToggle() {
         ))}
       </div>
       <p className="text-xs text-[var(--color-ink-3)] mt-2.5">
-        Light is the default. System follows your OS preference.
+        Měď and Light are the default. System follows your OS preference. Every user
+        picks both in the account menu too; the choice stays on this device.
       </p>
     </div>
   );

@@ -1,7 +1,7 @@
 /* The "Sign in" affordance is a destination, and the component's own comment
  * always called it a link — it was a <button> calling navigate('/login'). */
-import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 import AccountMenu from './AccountMenu';
@@ -38,5 +38,31 @@ describe('<AccountMenu>', () => {
   it('does not render Sign in as a button', () => {
     renderAs(null);
     expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
+  });
+});
+
+describe('<AccountMenu> appearance', () => {
+  afterEach(() => {
+    document.documentElement.removeAttribute('data-scheme');
+    document.documentElement.removeAttribute('data-theme');
+    localStorage.clear();
+  });
+
+  it('picks a colour scheme for this device', () => {
+    renderAs({ email: 'a@example.cz' });
+    fireEvent.click(screen.getByRole('button', { name: 'a@example.cz' }));
+    expect(screen.getByRole('menuitemradio', { name: 'Měď' })).toHaveAttribute('aria-checked', 'true');
+
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Grafit' }));
+    expect(document.documentElement).toHaveAttribute('data-scheme', 'grafit');
+    expect(localStorage.getItem('sreality.scheme')).toBe('grafit');
+    expect(screen.getByRole('menuitemradio', { name: 'Grafit' })).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('sets light or dark beside the scheme', () => {
+    renderAs({ email: 'a@example.cz' });
+    fireEvent.click(screen.getByRole('button', { name: 'a@example.cz' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Dark' }));
+    expect(document.documentElement).toHaveAttribute('data-theme', 'dark');
   });
 });
