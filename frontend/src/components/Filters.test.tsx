@@ -57,6 +57,7 @@ describe('<FilterSidebar> status line', () => {
       const [filters, setFilters] = useState<ListingFilters>(DEFAULT_FILTERS);
       return (
         <FilterSidebar
+          onReset={() => {}}
           filters={filters}
           onChange={(next) => {
             latest = next;
@@ -100,6 +101,7 @@ describe('<FilterSidebar> broker', () => {
       const [filters, setFilters] = useState<ListingFilters>(DEFAULT_FILTERS);
       return (
         <FilterSidebar
+          onReset={() => {}}
           filters={filters}
           onChange={(next) => {
             latest = next;
@@ -135,6 +137,7 @@ describe('<FilterSidebar> location pick', () => {
       const [filters, setFilters] = useState<ListingFilters>(DEFAULT_FILTERS);
       return (
         <FilterSidebar
+          onReset={() => {}}
           filters={filters}
           onChange={(next) => {
             latest = next;
@@ -179,7 +182,7 @@ describe('<FilterSidebar> collapse', () => {
     vi.mocked(api.listTags).mockImplementation(never);
     return renderPicker(
       <MemoryRouter>
-        <FilterSidebar filters={DEFAULT_FILTERS} onChange={() => {}} onCollapse={onCollapse} />
+        <FilterSidebar filters={DEFAULT_FILTERS} onChange={() => {}} onReset={() => {}} onCollapse={onCollapse} />
       </MemoryRouter>,
     );
   };
@@ -193,6 +196,23 @@ describe('<FilterSidebar> collapse', () => {
 
     renderSidebar();
     expect(screen.queryByRole('button', { name: 'Hide filters' })).toBeNull();
+  });
+});
+
+describe('<FilterSidebar> reset', () => {
+  it('hands Reset to its own callback, never to onChange', () => {
+    vi.mocked(api.listCollections).mockImplementation(never);
+    vi.mocked(api.listTags).mockImplementation(never);
+    const onChange = vi.fn();
+    const onReset = vi.fn();
+    renderPicker(
+      <MemoryRouter>
+        <FilterSidebar filters={{ ...DEFAULT_FILTERS, priceMax: 5_000_000 }} onChange={onChange} onReset={onReset} />
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
+    expect(onReset).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
   });
 });
 

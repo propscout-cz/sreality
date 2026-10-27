@@ -49,7 +49,6 @@ import {
   browseTitleSummary,
   toSearchParams,
   savedMapArea,
-  DEFAULT_FILTERS,
   type ListingFilters,
 } from '@/lib/filters';
 import { usePageTitle } from '@/lib/pageTitle';
@@ -622,6 +621,7 @@ export default function BrowseExperience({
             <FilterSidebar
               filters={filters}
               onChange={view.setFilters}
+              onReset={view.resetFilters}
               onLocationPick={handleLocationPick}
               width={sidebar.value}
               layout={layout}
@@ -755,7 +755,7 @@ export default function BrowseExperience({
                 hoverOrigin={hoverState.origin}
                 onHover={setHoveredFromCards}
                 onSort={view.setSort}
-                onClearFilters={() => view.setFilters(DEFAULT_FILTERS)}
+                onClearFilters={view.resetFilters}
                 onClearBounds={() => view.setBounds(null)}
                 merge={mergeMode.active ? mergeMode : null}
                 estimates={estimates}
