@@ -16,8 +16,9 @@ Exit codes, in the runner's terms: 0 done, nothing pending, downloads failing wi
 marked or under a chunk of them, --dry-run; 75 more remains (the budget cut a run that was
 making progress, or a campaign is still open); 143 a stop signal, after the chunk in hand; 2
 SUPABASE_DB_URL or R2_* missing (R2 is required: a run that cannot download tags nothing); 1 a
-whole chunk's downloads failed and nothing was marked, a decode or embed failure that is not one
-image's, a crash. `--verify-reembed` runs only the re-embed proof (scripts/clip_reembed.py),
+whole chunk's downloads failed and nothing was marked, an embed failure that is not one image's,
+a decode failure that is not one image's in two chunks in a row (one alone is skipped: its photos
+that decode are tagged, the rest wait for the next run), a crash. `--verify-reembed` runs only the re-embed proof (scripts/clip_reembed.py),
 which writes nothing: 0 on a pass, else 1.
 
 Usage:  python -m scripts.clip_tag_backfill --max-seconds 1500 --limit 5000 --workers 16
@@ -230,6 +231,7 @@ class _Tally:
     attempts: int = 0  # GETs started (one cancelled before it started is none)
     errors: int = 0    # of those, failed or past the download deadline
     terminal: int = 0  # stamped with no tag: undecodable bytes, or one image's embed failure
+    undecoded: int = 0  # undecodable and left unmarked: a chunk past a cap, skipped once
     decode_terminal: int = 0
     embed_terminal: int = 0
     selects: int = 0
@@ -405,6 +407,7 @@ def _tag(conn: psycopg.Connection, r2: image_storage.R2Client, tagger: Tagger, r
     pool = ThreadPoolExecutor(max_workers=max(1, args.workers))
     decode_pool = ThreadPoolExecutor(max_workers=max(1, decoders))
     failed_ids: set[int] = set()
+    skipped = False  # the chunk before this one was past a decode cap
     try:
         fetch = _submit(pool, r2, _take(snapshot, size), clock)
         while True:
@@ -422,10 +425,19 @@ def _tag(conn: psycopg.Connection, r2: image_storage.R2Client, tagger: Tagger, r
                 lines.warn("CLIP_TAG decode failed chunk n=%d: MemoryError", len(got))
                 return "decode"
             del got
-            if undecodable and not _undecodable_alone(decoded, undecodable, tally):
+            past_cap = bool(undecodable) and not _undecodable_alone(decoded, undecodable, tally)
+            if past_cap:
                 lines.warn("CLIP_TAG decode failed chunk n=%d undecodable=%d: not one image's",
                            len(decoded) + len(undecodable), len(undecodable))
-                return "decode"
+                if skipped:
+                    return "decode"
+                # One chunk is not yet the environment: a listing's photos sit side by side, and newest first every
+                # run would end here, so its corrupt files would stall the queue. Its photos that decode are tagged,
+                # the rest wait for the next run; a second such chunk in a row ends the run.
+                failed_ids.update(image_id for image_id, _ in undecodable)
+                tally.undecoded += len(undecodable)
+                undecodable = []
+            skipped = past_cap
             for image_id, name in undecodable:
                 lines.warn("CLIP_TAG undecodable image=%d: %s", image_id, name)
             nxt: _Fetch | None = None
@@ -452,7 +464,8 @@ def _tag(conn: psycopg.Connection, r2: image_storage.R2Client, tagger: Tagger, r
                 terminal += failed
                 tally.embed_terminal += len(failed)
             del decoded
-            _write(conn, model, tagger.revision, encoded, [image_id for image_id, _, _ in encoded] + terminal)
+            if encoded or terminal:
+                _write(conn, model, tagger.revision, encoded, [image_id for image_id, _, _ in encoded] + terminal)
             tally.written += len(encoded)
             tally.embedded += len(encoded)
             tally.marked += len(encoded) + len(terminal)
@@ -522,9 +535,9 @@ def run(conn: psycopg.Connection, args: argparse.Namespace, *, r2_factory: Calla
         retag_secs = clock() - retag_started
         if not drained:
             why = "stop" if stop.requested() else "retag"
-    LOG.info("CLIP_TAG done written=%d embedded=%d errors=%d attempts=%d terminal=%d selects=%d secs=%.1f rate=%.2f",
-             tally.written, tally.embedded, tally.errors, tally.attempts, tally.terminal, tally.selects, tag_secs,
-             tally.written / tag_secs if tag_secs > 0 else 0.0)
+    LOG.info("CLIP_TAG done written=%d embedded=%d errors=%d attempts=%d terminal=%d undecoded=%d selects=%d secs=%.1f "
+             "rate=%.2f", tally.written, tally.embedded, tally.errors, tally.attempts, tally.terminal, tally.undecoded,
+             tally.selects, tag_secs, tally.written / tag_secs if tag_secs > 0 else 0.0)
     LOG.info("RETAG done written=%d drained=%s secs=%.1f", retagged, drained, retag_secs)
     return _exit(why)
 

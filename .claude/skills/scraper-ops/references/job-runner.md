@@ -39,7 +39,9 @@ Recipes:
   backlog chains); 0 when a re-select finds under one chunk, or when downloads failed but something was marked or
   under a whole chunk of them failed (`why=errors`); 1 when its downloads failed and it marked nothing, a whole chunk's
   worth (`why=r2`), or a decode or embed failure was not one image's (`why=decode`, `why=embed`: a MemoryError, nothing
-  of the chunk decoding or embedding alone, or past 2 terminal a chunk / 5 a run); 2 when `SUPABASE_DB_URL` or an
+  of the chunk decoding or embedding alone, or past 2 terminal a chunk / 5 a run; a decode one only on a second chunk
+  in a row: one alone is skipped, its photos that decode tagged, the rest unmarked, `undecoded=` in the done line, so
+  one listing's corrupt photos never stall the queue); 2 when `SUPABASE_DB_URL` or an
   `R2_*` is missing. A GET that failed is retried by the next run, never again in the same one. A
   `clip_taxonomy_retag_after` later than the database's now() is no campaign until it passes (one `RETAG` warning a
   run). The last line is `CLIP_JOB exit=<code> why=…`.

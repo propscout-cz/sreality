@@ -714,8 +714,9 @@ def test_an_embed_failure_that_is_not_one_images_marks_nothing_and_exits_1(
 
 @pytest.mark.parametrize("kind", ["embed", "decode"])
 def test_the_run_stamps_at_most_five_photos_terminal(caplog: pytest.LogCaptureFixture, kind: str) -> None:
-    """Two failing photos in each of four chunks: chunks 1 and 2 mark theirs; chunk 3 would make six, so the run exits
-    1 there and marks nothing of it (an environmental regression never stamps a whole run's photos)."""
+    """Two failing photos in each of four chunks: chunks 1 and 2 mark theirs; chunk 3 would make six, so it stamps
+    none of its own (an environmental regression never stamps a whole run's photos): an embed failure exits 1 there, a
+    decode failure on the next chunk that fails too."""
     clock = _Clock()
     bad = {500, 499, 372, 371, 244, 243, 116, 115}
     store = _Store(range(1, 513))
@@ -727,7 +728,11 @@ def test_the_run_stamps_at_most_five_photos_terminal(caplog: pytest.LogCaptureFi
     with caplog.at_level(logging.INFO):
         assert job.run() == 1
     assert _lines(caplog)[-1] == f"CLIP_JOB exit=1 why={kind}"
-    assert bad & set(store.marked) == {500, 499, 372, 371} and len(store.marked) == 256, "chunk 3 marks nothing"
+    assert bad & set(store.marked) == {500, 499, 372, 371}
+    if kind == "embed":
+        assert len(store.marked) == 256, "chunk 3 marks nothing"
+    else:  # one chunk past a cap is skipped, so its photos that decode are tagged; the second in a row ends the run
+        assert len(store.marked) == 256 + 126, "chunk 3 stamps neither bad photo, chunk 4 marks nothing"
 
 
 def test_an_undecodable_photo_beside_siblings_that_decode_is_marked_terminal(
@@ -747,20 +752,45 @@ def _oom(data: bytes) -> Any:
     raise MemoryError
 
 
-@pytest.mark.parametrize(("junk", "oom"), [(range(1, 51), ()), ((5, 7, 9), ()), ((), (7,))],
-                         ids=["nothing-decodes", "over-the-cap", "memory-error"])
+@pytest.mark.parametrize(("ids", "junk", "oom", "tagged"), [
+    (range(1, 257), range(1, 257), (), set()),
+    (range(1, 257), (250, 249, 248, 120, 119, 118), (), set(range(129, 257)) - {250, 249, 248}),
+    (range(1, 51), (), (7,), set())], ids=["nothing-decodes", "over-the-cap", "memory-error"])
 def test_a_decode_failure_that_is_not_one_photos_marks_nothing_and_exits_1(
-        caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch, junk: Iterable[int],
-        oom: tuple[int, ...]) -> None:
-    """A Pillow regression or memory pressure, not a corrupt file: stamping would lose the photos' CLIP evidence."""
+        caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch, ids: Iterable[int], junk: Iterable[int],
+        oom: tuple[int, ...], tagged: set[int]) -> None:
+    """A Pillow regression or memory pressure, not a corrupt file: stamping would lose the photos' CLIP evidence. One
+    chunk past a cap is not yet the environment (a listing's photos sit side by side): its photos that decode are
+    tagged and the rest wait; a second in a row is, and the run ends there with that chunk unmarked. A MemoryError ends
+    it at once."""
     fake = ctb._decode
     monkeypatch.setattr(ctb, "_decode", lambda data: _oom(data) if data.isdigit() and int(data) in oom else fake(data))
     clock = _Clock()
-    store = _Store(range(1, 51))
+    store = _Store(ids)
     with caplog.at_level(logging.INFO):
         assert _Job(store, clock=clock, r2=_R2(clock, junk=junk)).run() == 1
-    assert store.marked == [] and store.writes == []
+    assert set(store.marked) == set(store.tagged) == tagged, "no undecodable photo is stamped, chunk 2 marks nothing"
     assert _lines(caplog)[-1] == "CLIP_JOB exit=1 why=decode"
+
+
+def test_one_listings_undecodable_photos_past_the_chunk_cap_never_wedge_the_queue(
+        caplog: pytest.LogCaptureFixture) -> None:
+    """Three corrupt photos of one listing land in one chunk, past its cap of 2. Every run reaches them newest first,
+    so ending the run there would stall every photo behind them and keep job/clip a Problem for ever: the chunk's
+    other photos are tagged, the three wait unmarked (offered again by the next run), and the run goes on."""
+    clock = _Clock()
+    store = _Store(range(1, 513))
+    r2 = _R2(clock, junk=(500, 499, 498))
+    with caplog.at_level(logging.INFO):
+        assert _Job(store, clock=clock, r2=r2).run() == 0
+    assert sorted(store.marked) == sorted(store.tagged) == sorted(set(range(1, 513)) - {500, 499, 498})
+    lines = _lines(caplog)
+    assert "CLIP_TAG decode failed chunk n=128 undecodable=3: not one image's" in lines
+    assert " terminal=0 undecoded=3 " in next(line for line in lines if line.startswith("CLIP_TAG done "))
+    assert lines[-1] == "CLIP_JOB exit=0 why=done"
+    r2.calls.clear()
+    assert _Job(store, clock=clock, r2=r2).run() == 0
+    assert sorted(r2.calls) == [498, 499, 500] and not {498, 499, 500} & set(store.marked)
 
 
 def test_a_stop_during_a_reselect_submits_no_more_gets() -> None:

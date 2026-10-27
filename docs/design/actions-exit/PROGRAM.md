@@ -323,7 +323,8 @@ no resource. The order is the last 45 min first, then the priority kraje, then n
 GETs download while this one encodes, each chunk waits at most 45 s for them, and the job's R2 client gives up
 a stalled GET after 2 × (5 + 20) s; a GET that failed is retried by the next run, not the same one. A batch that
 fails to embed falls back to one image at a time, and an image that fails to decode, or to embed alone, while a
-sibling does is marked terminal (at most 2 a chunk, 5 a run, each). It tags, then re-tags for at most 300 s with
+sibling does is marked terminal (at most 2 a chunk, 5 a run, each; one chunk past a decode cap is skipped, its
+photos that decode tagged, and a second in a row exits 1). It tags, then re-tags for at most 300 s with
 the same model load (`retag_from_embeddings` is a library now). The runner image pins transformers,
 Pillow and numpy in `data/requirements-clip-runner.txt`, asserted by the offline proof, and `CI: runner image`'s
 `api-image` job proves the API image clip-free. Health's `fleet/photo_tags` judges the 45-min line (tagged =
