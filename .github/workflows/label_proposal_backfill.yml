@@ -7,11 +7,12 @@ name: NEW DEDUP — Labeling secondary-CLIP proposals (sharded, dispatch-only)
 # image into dedup_sim.label_proposals for review on the Labeling page.
 # Dispatch-only, not cron — the sample grows in bursts as the operator works
 # through the program, not continuously. No-op if R2 is unconfigured or the
-# taxonomy is still empty. Horizontally sharded (image_id %% 2), like the
-# production clip_tag.yml but smaller (this is a curated sample, not the
-# full corpus).
+# taxonomy is still empty. Horizontally sharded (image_id %% 2), unlike the
+# runner's clip job (scripts/clip_tag_backfill.py), which runs unsharded over the
+# full corpus; this is a curated sample.
 #
-# Required secrets: SUPABASE_DB_URL + the R2_* set (same as clip_tag.yml).
+# Required secrets: SUPABASE_DB_URL + the R2_* set (the same set the runner's clip job
+# reads).
 
 on:
   workflow_dispatch:

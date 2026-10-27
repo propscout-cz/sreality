@@ -78,20 +78,23 @@ geo = [
 pricestats = [
   "playwright>=1.40",
 ]
-# CLIP visual tagging (scraper/clip_tagger.py; clip_tag.yml, which also re-tags)
-# AND the DINOv3 embedding lanes (scraper/dinov3_tagger.py;
+# CLIP visual tagging (scraper/clip_tagger.py; the job runner's `clip` job, which also
+# re-tags) AND the DINOv3 embedding lanes (scraper/dinov3_tagger.py;
 # docs/design/new-dedup/ENCODER-DECISION.md). Heavy (torch + transformers) — kept out
 # of the default install and out of the API and worker images. Whoever installs it puts
 # torch in first: the GPU workflows their CPU/CUDA wheel, and the job-runner image
-# (EXTRAS=api,clip,geo, for #2032's CLIP move) CPU torch from PyTorch's CPU index, in the
-# root Dockerfile's model layer, which pins its runtime companions (torch, huggingface_hub)
-# and bakes the pinned checkpoint (scripts/bake_clip_weights.py).
+# (EXTRAS=api,clip,geo) CPU torch from PyTorch's CPU index, in the root Dockerfile's model
+# layer, which pins torch and huggingface_hub, bakes the pinned checkpoint
+# (scripts/bake_clip_weights.py), and installs transformers, Pillow and numpy at exact
+# versions from data/requirements-clip-runner.txt: the vector's runtime companions,
+# which the re-embed proof (scripts/clip_reembed.py) holds to (#2032).
 clip = [
-  # Upper bound, not an exact pin: what determines a vector's VALUE is the
-  # checkpoint (pinned by sha in data/clip_taxonomy.json / the DINOv3 config), not
-  # the library version — the same weights give the same numbers across 4.x. The <5
-  # guard is against a major release changing the from_pretrained/*Model API under
-  # the tagging workflows, which is a breakage risk, not a drift risk. Floor raised
+  # Upper bound, not an exact pin: the checkpoint (pinned by sha in
+  # data/clip_taxonomy.json / the DINOv3 config) decides a vector's VALUE, and the one
+  # production CLIP tagger, the job runner, pins its exact stack in its own file above
+  # (Pillow and the image processor shape the pixels), so RunPod's path keeps this
+  # range. The <5 guard is against a major release changing the from_pretrained/*Model
+  # API under the tagging lanes, which is a breakage risk, not a drift risk. Floor raised
   # 4.40 -> 4.56 for `Dinov3Model` support (ENCODER-DECISION.md §4.4) — strictly
   # narrower than the range already floated (4.40-4.99), so no new drift risk for
   # the existing CLIP lanes.

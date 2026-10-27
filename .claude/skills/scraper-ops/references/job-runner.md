@@ -3,7 +3,8 @@
 The Railway job runner (`scraper/job_runner.py`, `scraper/job_process.py`; SQL in `scraper/job_lease.py`) runs every
 `scraper/jobs.py` entry whose host is `job-runner` (`jobs.runner_jobs()`), each as its own subprocess. Design and
 rulings: `docs/design/actions-exit/PROGRAM.md` § 4.2. Since #2025's move PR it runs `stale_images`, `rent_map` and
-`map_overlays`, whose workflows that PR deleted; each later move PR (#2027–#2033) flips more entries' host. On
+`map_overlays`, and since #2032 `clip`, whose workflows those PRs deleted; each later move PR (#2027–#2031,
+#2033) flips more entries' host. On
 Railway it is the service `job-runner` in the realtime-worker project, two replicas of 4 vCPU and 8 GB
 (`.railway/railway.ts` `jobRunner`; settings, drain and image: `docs/architecture.md` § Railway service
 configuration). Its Health cells and the "Jobs: run now" form are #2026's (below).
@@ -28,10 +29,22 @@ SQL with the operator's OK.
 Recipes:
 - Run a job now with a smaller batch: `python -m scraper.job_runner request clip --by cli:me -- --limit 500`.
 - Hold a job for a maintenance window: `pause property_sweep --until 2026-11-01T06:00 --note "migration 690"`.
+- **clip's re-embed proof** (AC2 of #2032; the procedure for every torch, transformers, Pillow or numpy bump):
+  with `clip`'s schedule paused (`runner-pause clip <until> "AC2 pending"`), `request clip --by <who> --
+  --verify-reembed`. It runs under the pause, writes nothing, and prints one `CLIP_VERIFY … pass=… why=…` line;
+  `why=download` is inconclusive (re-request), any other failure keeps the pause. Lift the pause on a pass.
+- **clip's exits:** 75 when its 1500 s budget cut a run that was making progress, or a re-tag campaign is still
+  open (due again in 60 s, so a backlog chains); 0 when a re-select finds under one chunk, or when downloads failed
+  but something was marked (`why=errors`); 1 when it downloaded and marked nothing (`why=r2`) or an embed failure
+  was not one image's (`why=embed`); 2 when `SUPABASE_DB_URL` or an `R2_*` is missing. The last line is
+  `CLIP_JOB exit=<code> why=…`.
 - **After a move PR merges**, `gh run list --workflow=<deleted file> --json status,databaseId`; if a run is queued or
   running, pause the new row past that run's timeout (`runner-pause`), since a queued run in a non-cancelling group
   can still start. A re-land within an hour of its revert's deploy keeps the row's `due_at`, and its boot claims a
   slot GitHub ran in between: pause the retired row before that deploy (the slot then runs once the pause ends).
+- **clip's move (#2032) held nothing for a GitHub run in flight:** both writers upsert idempotently and stamp last,
+  so an overlap corrupts nothing (a rewritten vector moves about 1e-6 per value); the "AC2 pending" pause is what
+  held its first slot.
 
 ## Log lines (Railway logs)
 
@@ -146,7 +159,8 @@ of a sibling on its resource seen since its clock started. The worst condition w
   and property_sweep `--max-seconds 6000` against 7800 (⅔ = 5200). Each move PR sets `timeout_s` ≥ 1.5× the job's own
   budget, lowers the budget, or asks the operator. A walk stopped at its own timeout records `timeout`, a Problem: W4
   keeps `walk_timeout_s` above each walk's p95. W2's three jobs are clear (stale_images runs 21-30 s of 1200;
-  rent_map and map_overlays carry no self-budget).
+  rent_map and map_overlays carry no self-budget), and so is W5's clip (`--max-seconds 1500` against 3300: a full
+  run, with its last chunk and its exit, ends by about 1600 s, under the 2200 s line).
 - One job's cell off: `pause <job> --until <t> --note <why>`. The whole arm, forward only: a migration replacing
   `health_job_cells(interval)` with `select '[]'::jsonb`.
 

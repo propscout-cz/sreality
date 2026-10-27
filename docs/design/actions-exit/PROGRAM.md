@@ -313,6 +313,23 @@ reads its due time from its row (`first_delay_seconds` deleted). The test pinnin
 exists from W2 (#2023) and tightens by itself when the last waiting job moves; W5 adds its one workflow-reader
 rule, `scraper.job_runner once <job>` read as running `<job>`, without which the pairing census reads
 `scrape_price_stats.yml` as running no registry job and the timeout floor stops checking price_stats.
+**As built (#2032), one PR on the merge light**, its first commit (the worker's four `R2_*` on job-runner, by
+reference) applied at its head in one runner-only window (no autodedup brake: #2025-R2), then merged at once:
+`clip` every 900 s at offset 300 s, `timeout_s` kept at 3300 with its own `--max-seconds 1500` budget, a
+re-select every 300 s and whenever the snapshot drains, the tag phase ending on a re-select under one chunk
+(128); exit 75 only when the budget cut a run that was making progress or a re-tag campaign stays open, exit 1
+when it downloaded and marked nothing, exit 2 without R2; cpus 4 (torch threads from `JOB_CPUS`), memory 2048 MB,
+no resource. The order is the last 45 min first, then the priority kraje, then newest first. The next chunk's
+GETs download while this one encodes, each chunk waits at most 45 s for them, and the job's R2 client gives up
+a stalled GET after 2 × (5 + 20) s; a batch that fails to embed falls back to one image at a time, and an image
+that fails alone while a sibling embeds is marked terminal (at most 2 a chunk, 5 a run). It tags, then re-tags
+with the same model load (`retag_from_embeddings` is a library now). The runner image pins transformers,
+Pillow and numpy in `data/requirements-clip-runner.txt`, asserted by the offline proof, and `CI: runner image`'s
+`api-image` job proves the API image clip-free. Health's `fleet/photo_tags` judges the 45-min line (tagged =
+stamped and vectored; Watch at most while `clip` is paused). `--verify-reembed` (`scripts/clip_reembed.py`)
+re-embeds a frozen 100-image sample read-only; it runs while `clip` is paused "AC2 pending" from its
+registration, and the pause lifts on a pass. No hold for a GitHub run in flight (both writers are idempotent and
+stamp last), and no migration.
 **Gate:** CLIP lag p90 ≤ 45 min; a 100-image re-embed identical within fp32 tolerance; both GitHub-hosted
 jobs show cells; `location_refetch` runs once a day across ≥ 3 deploys; **the flip gate: 7 days of billed
 GitHub run-rate under 50,000 min/month.**
@@ -373,6 +390,11 @@ kill mode, the straggler wait, atomic spawn and the per-call stopping budget are
 **As built (#2026):** the `job/<name>` arm is migration 682's `health_job_cells()` (~220 SQL lines; the watcher
 re-created around one ~20-line block), the `job-runner/registry` census ~50 lines, `run_job.yml` ~60 lines; the
 fleet cell, the (re)registered first slot, the refused entries and the arm-raised placeholders are the growth.
+**As built (#2032):** deleted `clip_tag.yml` (127 lines: its 4-shard matrix, its weights cache step and its job
+clock), the `--shard/--shards` flags and their SQL in both CLIP scripts, the ignored `--categories`, the retag
+CLI (`retag_from_embeddings.main`) and, after the merge, GitHub's two weights cache entries
+(`hf-clip-vit-base-patch32-v1`, the orphan `hf-clip-vit-b32`); added `scripts/clip_reembed.py` (the re-embed
+proof), `data/requirements-clip-runner.txt`, the `fleet/photo_tags` cell and the `api-image` CI job.
 
 Net: workflow files 84 → ~38 (31 if R6a passes in full); live GitHub schedules 34 → 2; production schedulers
 2 → 1; Railway services 3 → 4; Railway config files 3 → 1; worker lanes 17 → 16; roughly −8,500 to −9,000 lines.
