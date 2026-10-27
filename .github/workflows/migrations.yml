@@ -445,7 +445,9 @@ jobs:
       # alarm past its budget and a measured Problem with no incident (a failing explicit cell, since 633) each
       # become one failing cell the ladder reads unchanged; a dead worker folds its keys into its own cell; since
       # 655 no API lease is judged (the API runs no matcher), and 655's post-condition runs here, refusing a body
-      # that still reads the lease. The replay has no pg_cron, so this lane runs the function itself, in a
+      # that still reads the lease. Since 682 each registered job-runner job and the fleet get a cell (a raising
+      # arm keeps its incidents open through the teller), and 682's post-condition and fail-closed precondition
+      # run here too. The replay has no pg_cron, so this lane runs the function itself, in a
       # transaction that always rolls back. Migration 633's own statements run in their step, below.
       - name: The pg_cron watcher judges the watchers (migration 620)
         env:
@@ -666,8 +668,9 @@ jobs:
       # Migration 675, EXECUTED: scraper/job_lease.py on the replayed scheduled_jobs + job_runs. A claim takes
       # only a due, live row with no sibling holding its resource and opens one run; renewal never resurrects a
       # lapsed lease and the holder fences itself before expiry; the unique indexes allow one open run per job and
-      # per resource (two real sessions race for one); a cancelled or interrupted release is not a failure; and
-      # 384's own acquire/upsert/release text still works through the temporary location_jobs alias view.
+      # per resource (two real sessions race for one); a cancelled or interrupted release is not a failure; 682's
+      # trigger keeps a live row's registry_at whatever writes it; and 384's own acquire/upsert/release text still
+      # works through the temporary location_jobs alias view.
       - name: The scheduled-jobs lease claims, fences and releases (migration 675)
         timeout-minutes: 5
         env:

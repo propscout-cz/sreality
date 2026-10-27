@@ -598,6 +598,13 @@ def test_wave6_deleted_the_legacy_bodies_their_thresholds_and_shared_state() -> 
     assert not [k for k in THRESHOLDS if k.startswith(retired)]
 
 
+def test_a_lane_in_flight_is_judged_on_the_workers_pass_budget_not_a_threshold() -> None:
+    """#2026 (AC3): the two global in-flight keys are replaced by platform.LANE_PASS_BUDGET_S, a test-pinned mirror of
+    the worker's one pass budget; a job is judged on its own timeout_s (migration 682)."""
+    assert not [k for k in THRESHOLDS if k.startswith("jobs_lane_inflight_")]
+    assert (platform_checks.LANE_PASS_BUDGET_S, platform_checks.LANE_INFLIGHT_WARN_S) == (1800, 1200)
+
+
 def test_the_worker_heartbeat_is_the_watchers_to_judge_not_a_checks() -> None:
     """Wave 2: the pg_cron watcher's `worker` cell (migration 620) reads the heartbeat every
     5 min; the GitHub-hosted check sampled it every ~4.9 h, so it caught an outage of length

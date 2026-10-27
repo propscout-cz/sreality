@@ -2658,9 +2658,11 @@ renumber.** Navigate by area:
     `public.health_liveness()` (SECURITY DEFINER, execute revoked from the browser roles; pg_cron
     job `health-liveness`, every 5 min, under a 60 s statement timeout), runs outside the worker
     and the API and writes ONE `liveness` result per call (host `pg_cron`; no incident, no notice —
-    the teller tells it like any check): a `worker` cell per worker (heartbeat over 10 min old), a
+    the teller tells it like any check): a `worker/<name>` cell per heartbeat row (heartbeat over 10 min
+    old; migration 675), a `job/<name>` cell per job-runner job and a `job-runner` fleet cell (migration 682,
+    `health_job_cells()`; the `jobs` check's `job-runner/registry` census covers a job with no row), a
     `health_lane` cell (the worker's health lane, silent for 10 min), a `stale:<key>` cell per alarm
-    past its staleness budget (worker keys fold into a failing `worker` cell) and an `unalerted` cell
+    past its staleness budget (worker keys fold into a failing `worker/<name>` cell) and an `unalerted` cell
     (an alarm cell measured failing now and two cadences ago with no open incident; the `api` cell,
     which judged the watchdog matcher's lease, went with the matcher in W2b, migration 655); a
     subject that stops failing reads `ok` while its incident is open, so it recovers on a measured OK. It replaced the `worker_liveness` check and migration 274's 24 h

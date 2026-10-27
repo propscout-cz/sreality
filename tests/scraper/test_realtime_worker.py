@@ -734,7 +734,7 @@ class _Harness:
     """scripts.verify_pipeline as the health lane uses it."""
 
     def __init__(self, due: list[str]) -> None:
-        self.THRESHOLDS = {"jobs_lane_inflight_warn_s": 1200}
+        self.THRESHOLDS: dict[str, Any] = {}
         self.due = due
         self.projected: list[tuple[str, Any]] = []
         self.ran: list[dict[str, Any]] = []
@@ -1412,12 +1412,12 @@ def test_location_resolve_max_seconds_is_clamped_below_the_lane_pass_timeout(
     # A HEALTHY pass must never read as a stall (the jobs check's in-flight Watch) and
     # must never be abandoned by the lane loop. The lease is NOT bounded by this — see
     # test_location_resolve_lease_ttl_covers_the_budget_plus_one_batch.
-    from scripts import verify_pipeline
+    from scripts.checks import platform as plat
 
     monkeypatch.setattr(rw, "_read_int", lambda key, default: 99999)
     clamped = rw._read_location_resolve_max_seconds()
     assert clamped == rw.LOCATION_RESOLVE_MAX_SECONDS_CEILING
-    assert clamped < verify_pipeline.THRESHOLDS["jobs_lane_inflight_warn_s"], (
+    assert clamped < plat.LANE_INFLIGHT_WARN_S, (
         "a healthy pass would read as in flight too long")
     assert clamped < rw.LANE_PASS_TIMEOUT_SECONDS
     monkeypatch.setattr(rw, "_read_int", lambda key, default: 60)
@@ -1762,10 +1762,9 @@ def test_location_intake_fast_knobs_are_env_vars_and_clamped(
     monkeypatch.setenv(rw.LOCATION_INTAKE_FAST_BUDGET_ENV, "99999")
     assert rw._read_location_intake_fast_budget() == rw.LOCATION_INTAKE_FAST_BUDGET_CEILING
     # A healthy pass must never read as a stall, nor be abandoned by the lane loop.
-    from scripts import verify_pipeline
+    from scripts.checks import platform as plat
 
-    assert (rw.LOCATION_INTAKE_FAST_BUDGET_CEILING
-            < verify_pipeline.THRESHOLDS["jobs_lane_inflight_warn_s"])
+    assert rw.LOCATION_INTAKE_FAST_BUDGET_CEILING < plat.LANE_INFLIGHT_WARN_S
     assert rw.LOCATION_INTAKE_FAST_BUDGET_CEILING < rw.LANE_PASS_TIMEOUT_SECONDS
     # A typo must not stop a lane that ships live.
     monkeypatch.setenv(rw.LOCATION_INTAKE_FAST_BUDGET_ENV, "forty-five")
