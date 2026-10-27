@@ -682,7 +682,8 @@ def test_a_row_whose_runs_go_on_through_a_boot_is_judged_whole(cur: Any) -> None
 def test_a_job_re_landed_within_a_cadence_of_its_failures_waits_for_its_first_slot(cur: Any) -> None:
     """C3 (review, defect 1): rent failed its slot and three retries and overlays timed out a drill request; #2025's
     lasting rollback retired both and the fix re-lands 3 days later. Un-retiring keeps the counter, the timeout and
-    the last ok, but each row is judged from the re-land: ok until its first run closes, then on that run alone."""
+    the last ok, but each row is judged from the re-land: ok until its first run closes, then on that run alone. Its
+    text says it ran before (refutation round: rent's said "not run yet")."""
     from scraper import job_lease
     from scraper.jobs import RUNNER, Job
 
@@ -704,8 +705,9 @@ def test_a_job_re_landed_within_a_cadence_of_its_failures_waits_for_its_first_sl
 
     cells = _liveness(cur)[3]
 
-    st, msg = _said(cells, "job/rent")
-    assert st == "ok" and msg.startswith("rent: not run yet; first slot in "), msg
+    st, msg = _said(cells, "job/rent")  # it ran four times before the revert: never "not run yet"
+    assert st == "ok" and msg.startswith("rent: registered again; not run here since; first slot in "), msg
+    assert msg.endswith(" UTC); never ran ok"), msg
     st, msg = _said(cells, "job/overlays")
     assert st == "ok" and msg.startswith("overlays: registered again; not run here since; first slot in "), msg
     assert msg.endswith(" UTC); last ok 31 d ago"), msg

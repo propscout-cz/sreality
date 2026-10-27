@@ -257,14 +257,17 @@ select coalesce(jsonb_agg(cell order by subject), '[]'::jsonb) from (
                       j.paused_by, j.pause_note)
                || case when j.streak > 0
                        then '; its last run failed: ' || coalesce(j.cause, j.last_outcome) else '' end
-             when j.fresh_slot and j.due_at > now() and j.last_success_at is null then
+             -- Not yet only with no run on record: a re-land's runs from before the revert are not judged, yet it ran.
+             when j.fresh_slot and j.due_at > now() and j.last_success_at is null
+                  and not exists (select 1 from job_runs r where r.job_name = j.job_name) then
                format('not run yet; first slot in %s (%s UTC)', health_span(extract(epoch from j.due_at - now())),
                       to_char(j.due_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI'))
              when j.fresh_slot and j.due_at > now() then
-               format('registered again; not run here since; first slot in %s (%s UTC); last ok %s ago',
+               format('registered again; not run here since; first slot in %s (%s UTC); %s',
                       health_span(extract(epoch from j.due_at - now())),
                       to_char(j.due_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI'),
-                      health_span(extract(epoch from now() - j.last_success_at)))
+                      coalesce('last ok ' || health_span(extract(epoch from now() - j.last_success_at)) || ' ago',
+                               'never ran ok'))
              else
                coalesce('last ok ' || health_span(extract(epoch from now() - j.last_success_at)) || ' ago',
                         'never ran ok')
