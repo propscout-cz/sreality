@@ -100,8 +100,10 @@ export default function AccountMenu() {
               ))}
             </div>
           </div>
+          {/* SegmentedBar's fill look, drawn here because a menu needs menuitemradio
+            * segments and the bar's are aria-pressed buttons. */}
           <div role="group" aria-label="Light or dark" className="px-3 pb-2">
-            <div className="grid grid-cols-3 gap-0.5 rounded-[var(--radius-sm)] bg-[var(--color-inset)] p-0.5">
+            <div className="grid grid-cols-3 gap-0.5 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-0.5">
               {MODES.map((m) => (
                 <button
                   key={m.value}
@@ -110,10 +112,10 @@ export default function AccountMenu() {
                   aria-checked={mode === m.value}
                   onClick={() => setMode(m.value)}
                   className={[
-                    'h-6 rounded-[var(--radius-xs)] text-[0.75rem]',
+                    'px-2 py-1 text-xs whitespace-nowrap rounded-[var(--radius-xs)] transition-colors',
                     mode === m.value
-                      ? 'bg-[var(--color-paper-3)] text-[var(--color-ink)] font-medium shadow-sm'
-                      : 'text-[var(--color-ink-2)] hover:text-[var(--color-ink)]',
+                      ? 'bg-[var(--color-copper)] text-[var(--color-on-copper)]'
+                      : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
                   ].join(' ')}
                 >
                   {m.label}

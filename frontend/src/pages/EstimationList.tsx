@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -26,7 +27,7 @@ import type {
 import { ApiError } from '@/lib/api';
 import { runSurfaceUrl } from '@/lib/runLinks';
 import { buildRerunPayload, canRerun } from '@/lib/rerun';
-import { ControlGroup } from '@/components/controls';
+import { ControlGroup, SegmentedBar } from '@/components/controls';
 import { RunStatusChip } from '@/components/estimation/RunPanel';
 import { advertPath } from '@/lib/listingUrl';
 import { ROUTES } from '@/lib/routes';
@@ -162,67 +163,30 @@ function FilterBar({
   onSource: (v: string | null) => void;
   onStatus: (v: string | null) => void;
 }) {
+  const id = useId();
+  const bars = [
+    { label: 'Source', value: source, options: SOURCES, onChange: onSource },
+    { label: 'Status', value: status, options: STATUSES, onChange: onStatus },
+  ];
   return (
     <ControlGroup title="Filter runs">
       <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
-        <SegmentedFilter label="Source" value={source} options={SOURCES} onChange={onSource} />
-        <SegmentedFilter label="Status" value={status} options={STATUSES} onChange={onStatus} />
-      </div>
-    </ControlGroup>
-  );
-}
-
-function SegmentedFilter<T extends string>({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: T | null;
-  options: ReadonlyArray<T>;
-  onChange: (v: T | null) => void;
-}) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)]">
-        {label}
-      </span>
-      <div className="inline-flex items-center gap-0.5 p-0.5 rounded-[var(--radius-sm)] bg-[var(--color-paper-2)] border border-[var(--color-rule)]">
-        <Pill active={value == null} onClick={() => onChange(null)}>all</Pill>
-        {options.map((opt) => (
-          <Pill key={opt} active={value === opt} onClick={() => onChange(opt)}>
-            {opt}
-          </Pill>
+        {bars.map((bar) => (
+          <div key={bar.label} className="flex items-center gap-2">
+            <span id={`${id}-${bar.label}`} className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)]">
+              {bar.label}
+            </span>
+            <SegmentedBar<string | null>
+              hug
+              aria={{ 'aria-labelledby': `${id}-${bar.label}` }}
+              options={[{ value: null, label: 'all' }, ...bar.options.map((o) => ({ value: o, label: o }))]}
+              value={bar.value}
+              onChange={bar.onChange}
+            />
+          </div>
         ))}
       </div>
-    </div>
-  );
-}
-
-function Pill({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={[
-        'px-2.5 py-0.5 text-[0.7rem] tracking-wide rounded-[var(--radius-xs)] transition-colors',
-        active
-          ? 'bg-[var(--color-copper)] text-[var(--color-on-copper)]'
-          : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
-      ].join(' ')}
-    >
-      {children}
-    </button>
+    </ControlGroup>
   );
 }
 
