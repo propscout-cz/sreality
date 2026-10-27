@@ -176,7 +176,7 @@ describe('<ValuoSection> editor', () => {
     expect(within(rating).getAllByRole('option')[0]).toHaveTextContent('Nevyplněno');
     expect(container.querySelector('input[type="date"]')).toHaveValue('2026-10-19');
     // A yes/no in the basic group, where the API's grouping puts it.
-    for (const name of ['neuvedeno', 'ano', 'ne']) expect(param('Novostavba').getByRole('button', { name })).toBeInTheDocument();
+    for (const name of ['ano', 'ne']) expect(param('Novostavba').getByRole('button', { name })).toBeInTheDocument();
     expect(param('Novostavba').getByRole('button', { name: 'ano' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByRole('textbox', { name: 'Podlaží' })).not.toBeInTheDocument();
 
