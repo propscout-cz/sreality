@@ -7,8 +7,8 @@
 --   liveness cell, so a job's Problem opens an incident and e-mails through the existing canary (ruling R-1).
 --
 -- WHAT CHANGES. Additive only: three new functions, one trigger and one function replace. No table, column, view or
--- grant. Rows written: the first apply's heal below (none in the planned order), and on every apply the post-condition's
--- one liveness row, kept as 620's to 675's were.
+-- grant. Rows written: the first apply's heal below (none in the planned order), and on every apply the
+-- post-condition's one liveness row, kept as 620's to 675's were.
 --   * public.scheduled_jobs_keep_registry_at() and its BEFORE UPDATE OF registry_at trigger on scheduled_jobs:
 --     registry_at is when a row joined the runner, stamped when it is new, adopted (NULL: a lane's held() row) or
 --     un-retired an hour or more after its retirement (job_lease.REJOIN_AFTER_S; a shorter one is an older image's
@@ -283,13 +283,14 @@ select coalesce(jsonb_agg(cell order by subject), '[]'::jsonb) from (
                       j.paused_by, j.pause_note)
                || case when j.streak > 0
                        then '; its last run failed: ' || coalesce(j.cause, j.last_outcome) else '' end
-             -- Not yet only with no run on record: a re-land's runs from before the revert are not judged, yet it ran.
+             -- Not yet only with no run on record: a re-land's runs from before the revert, and an adopted lane row's,
+             -- are not judged, yet it ran. One text for both: their rows look alike once registered.
              when j.fresh_slot and j.due_at > now() and j.last_success_at is null
                   and not exists (select 1 from job_runs r where r.job_name = j.job_name) then
                format('not run yet; first slot in %s (%s UTC)', health_span(extract(epoch from j.due_at - now())),
                       to_char(j.due_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI'))
              when j.fresh_slot and j.due_at > now() then
-               format('registered again; not run here since; first slot in %s (%s UTC); %s',
+               format('not run since it joined the runner; first slot in %s (%s UTC); before it joined: %s',
                       health_span(extract(epoch from j.due_at - now())),
                       to_char(j.due_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI'),
                       coalesce('last ok ' || health_span(extract(epoch from now() - j.last_success_at)) || ' ago',

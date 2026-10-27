@@ -611,8 +611,8 @@ def test_a_re_registered_job_is_judged_from_its_new_first_slot(cur: Any) -> None
     cells = _liveness(cur)[3]
 
     st, msg = _said(cells, "job/reland")
-    assert st == "ok" and msg.startswith("reland: registered again; not run here since; first slot in 5.0 h ("), msg
-    assert msg.endswith(" UTC); last ok 3 d ago"), msg
+    assert st == "ok" and msg.startswith("reland: not run since it joined the runner; first slot in 5.0 h ("), msg
+    assert msg.endswith(" UTC); before it joined: last ok 3 d ago"), msg
     assert _conditions(cells, "job/reland") == []
     assert _conditions(cells, "job/reland_late") == [
         "warn: due 25 min ago and not started",
@@ -706,11 +706,11 @@ def test_a_job_re_landed_within_a_cadence_of_its_failures_waits_for_its_first_sl
     cells = _liveness(cur)[3]
 
     st, msg = _said(cells, "job/rent")  # it ran four times before the revert: never "not run yet"
-    assert st == "ok" and msg.startswith("rent: registered again; not run here since; first slot in "), msg
-    assert msg.endswith(" UTC); never ran ok"), msg
+    assert st == "ok" and msg.startswith("rent: not run since it joined the runner; first slot in "), msg
+    assert msg.endswith(" UTC); before it joined: never ran ok"), msg
     st, msg = _said(cells, "job/overlays")
-    assert st == "ok" and msg.startswith("overlays: registered again; not run here since; first slot in "), msg
-    assert msg.endswith(" UTC); last ok 31 d ago"), msg
+    assert st == "ok" and msg.startswith("overlays: not run since it joined the runner; first slot in "), msg
+    assert msg.endswith(" UTC); before it joined: last ok 31 d ago"), msg
     assert _conditions(cells, "job/rent") == [] and _conditions(cells, "job/overlays") == []
 
     _run(cur, "rent", started="0 minutes", holder="h/2")  # its first slot, claimed at the re-land
@@ -823,7 +823,23 @@ def test_a_cut_run_is_said_to_be_due_again_only_while_it_is(cur: Any) -> None:
         "ok", "re_slotted: last ok 6.0 h ago; next slot in 2.5 h; its last run was cut by a deploy")
 
 
-def test_a_quarterly_job_whose_ok_run_was_pruned_is_not_read_as_registered_again(cur: Any) -> None:
+def test_an_adopted_lane_row_waiting_for_its_first_slot_is_never_said_to_be_registered_again(cur: Any) -> None:
+    """C3 (review, round 4): register adopts a held() lane row (registry_at NULL) carrying the lane's last ok. It was
+    never the runner's, so while it waits for its first slot its text says only what is true of a re-land too."""
+    from scraper import job_lease
+    from scraper.jobs import RUNNER, Job
+
+    _runner_beat(cur, "r1", "0 minutes")
+    _job(cur, "lane", runner="github_actions", registered=False, last_ok="2 hours", last_outcome="ok")
+    assert job_lease.register(cur.connection, [Job("lane", ("scripts.x",), 6 * 3600, 0, 1200, 256, 1, RUNNER)]
+                              ).adopted == ("lane",)
+
+    st, msg = _said(_liveness(cur)[3], "job/lane")
+    assert st == "ok" and msg.startswith("lane: not run since it joined the runner; first slot in "), msg
+    assert msg.endswith(" UTC); before it joined: last ok 2.0 h ago"), msg
+
+
+def test_a_quarterly_job_whose_ok_run_was_pruned_is_not_read_as_waiting_for_its_first_slot(cur: Any) -> None:
     """C3: the runner prunes job_runs after 90 days and map_overlays runs every 91, so a day before its next slot its
     ok run is gone; last_success_at, written by that run's release, still says it ran here."""
     _runner_beat(cur, "r1", "0 minutes")
@@ -1214,7 +1230,7 @@ def _apply_682(cur: Any) -> None:
 
 def test_migration_682_first_apply_takes_a_re_stamped_join_back_to_the_rows_first_run(cur: Any) -> None:
     """2025-plan decision 13's fallback, PR-2 before 682: main's register re-stamped registry_at on every boot, so a
-    row failing for 30 h read as joined at the deploy 30 min before the apply ("registered again", ok). The first
+    row failing for 30 h read as joined at the deploy 30 min before the apply ("not run since it joined", ok). The first
     apply takes each such join back to the row's first run; a re-run keeps a re-land's join (the trigger)."""
     _runner_beat(cur, "r1", "0 minutes")
     cur.execute("drop trigger scheduled_jobs_keep_registry_at on scheduled_jobs")  # as before the first apply
@@ -1254,7 +1270,7 @@ def test_migration_682_first_apply_heals_a_row_an_older_images_blink_has_retired
     """PR-2 before 682 (review, round 4): an older image booted 20 min before the apply and retired a row failing for
     30 h that main's register had re-stamped at the latest boot, 50 min ago. The heal takes the trigger's own keep line,
     so it joins that row at its first run too, and the latest image's next boot (main's register: it re-stamps)
-    un-retires it with that join: a Problem, never "registered again", ok, until a run closes 30 or 91 d on."""
+    un-retires it with that join: a Problem, never "not run since it joined", ok, until a run closes 30 or 91 d on."""
     _runner_beat(cur, "r1", "0 minutes")
     cur.execute("drop trigger scheduled_jobs_keep_registry_at on scheduled_jobs")  # as before the first apply
     for name, retired in (("blink", "20 minutes"), ("live", None)):
