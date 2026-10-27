@@ -137,6 +137,7 @@ Inventory: `.claude/skills/toolkit-api/references/secrets-inventory.md`.
 | Supabase legacy JWT secret | 2026-10-27 | legacy JWT-based API keys disabled first (Supabase requires it), then revoked; sign-in, signed-in API and PostgREST reads still 200; extension panel checked |
 | Old credentials revoked | 2026-10-27 | API presign accepted by R2 + /maps/suggest + Health, after the revocation |
 | Database password and connection strings | 2026-10-27 | psycopg on the new transaction + session strings; new API GET /estimations 200; worker heartbeat; pg_cron 0 failed |
+| Residential proxy (`SCRAPER_PROXY_URL`, DataImpulse; operator ruling 2026-10-27) | 2026-10-27 | new password tested through gw.dataimpulse.com:823 (CONNECT 200); worker PROBE ceskereality + idnes errors=0, mmreality fetching, proxied photos stored |
 | Tenant pool password | 2026-10-27 | psycopg as tenant_pool; new API GET /pipeline/stages 200 |
 
 **M1, about 3.5 weeks: the spine, agent-worker, parity, code and files, the scout in production.**
