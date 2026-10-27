@@ -237,10 +237,10 @@ def test_the_engines_deadline_sits_inside_every_bound_around_it() -> None:
     statement_timeout must end before the jobs check's lane cell warns of a pass in flight,
     before the lane abandons the pass, and before the lease expires — or a seed could take
     the lease mid-write."""
-    from scripts import verify_pipeline
+    from scripts.checks import platform as plat
 
     worst = PASS_DEADLINE_S + STATEMENT_TIMEOUT_MS / 1000.0
-    assert worst < verify_pipeline.THRESHOLDS["jobs_lane_inflight_warn_s"]
+    assert worst < plat.LANE_INFLIGHT_WARN_S
     assert worst < rw.LANE_PASS_TIMEOUT_SECONDS
     assert worst < LEASE_TTL_S
     assert PASS_BUDGET_S * 2 <= PASS_DEADLINE_S, "claims are sized well inside the deadline"

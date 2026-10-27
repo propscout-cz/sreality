@@ -35,7 +35,7 @@ export interface RouteTitleHandle {
   title?: string;
 }
 
-/** "LR: <segment>", or the bare app name when there is no segment. */
+/** "PS: <segment>", or the bare app name when there is no segment. */
 export function formatTitle(segment: string | null | undefined): string {
   const trimmed = segment?.trim();
   return trimmed ? `${APP_SHORT}: ${trimmed}` : APP_NAME;

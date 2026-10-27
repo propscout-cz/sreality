@@ -151,7 +151,7 @@ export default function BrowseExperience({
   const newProperty = useNewPropertyDialog();
   const { filters, sort, tab, overlay, activePresetId } = view;
 
-  // Browser-tab title reflects the active filters ("LR: 2+kk · 60–90 m² · Praha")
+  // Browser-tab title reflects the active filters ("PS: 2+kk · 60–90 m² · Praha")
   // so multiple Browse tabs are distinguishable. Skipped in the Explore-area
   // modal, which reuses this component but must not own the page title.
   usePageTitle(isModal ? null : browseTitleSummary(filters));
@@ -845,6 +845,7 @@ export default function BrowseExperience({
                 filters={filters}
                 view={view}
                 market={{ value: view.statsMarket, set: view.setStatsMarket }}
+                small={{ value: view.statsSmall, set: view.setStatsSmall }}
                 onIncludeDismissed={() => view.setFilters({ ...filters, showDismissed: true })}
               />
             </Suspense>
@@ -1002,7 +1003,7 @@ function FilterSummary({
           <button
             type="button"
             onClick={onCreateWatchdog}
-            className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
+            className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] transition-colors"
             title="Save the current filters as a watchdog — get notified when a new listing matches"
           >
             + Create watchdog
@@ -1037,7 +1038,7 @@ function MapViewToggle({
     [
       'inline-flex items-center gap-1.5 px-2.5 py-1 text-[0.7rem] rounded-[var(--radius-xs)] transition-colors',
       active
-        ? 'bg-[var(--color-copper)] text-white'
+        ? 'bg-[var(--color-copper)] text-[var(--color-on-copper)]'
         : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
     ].join(' ');
   return (

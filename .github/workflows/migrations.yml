@@ -19,7 +19,10 @@ name: "CI: schema replay + SQL correctness"
 #    connections in the unit tests structurally cannot catch, and that has shipped
 #    to prod. See tests/test_sql_schema_prepare.py.
 #
-# Advisory until added to branch protection as a required check.
+# A test module that needs a database runs only where a step below names it with TEST_DATABASE_URL;
+# tests/test_live_lanes_census.py fails a PR that adds one no step names.
+#
+# Required check (`schema-and-sql`) under branch protection.
 
 on:
   # push only on main: a branch push beside its pull_request run made a same-named twin
@@ -215,6 +218,16 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_collection_shares_live.py -q
 
+      # Pipeline sharing (migration 641) lets a recipient ACT AS the owner through one identity
+      # function: a read share reaches the board's three tables on GET only, an edit share all eleven
+      # curation tables with each write stamped once in delegated_edits, and a header naming an owner
+      # who shared nothing reads nothing. Only the replayed policies under `authenticated` can show it.
+      - name: A pipeline share acts as the owner on curation, and only as far as its mode (migration 641)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_pipeline_shares_live.py -q
+
       # Dashboard sharing (migration 647) is the same shape over a third table: a FOR SELECT arm, a
       # party policy that hides while acting, and a trigger that stamps the owner and refuses the
       # unnamed working board. The test drives the API's own SQL under each tenant's RLS.
@@ -304,6 +317,16 @@ jobs:
           pytest tests/test_broker_leaderboard_plan_shape.py \
                  tests/test_broker_leaderboard_live.py \
                  tests/test_broker_leaderboard_chip_parity.py -q
+
+      # The leaderboard's fast arm is an index-only scan on broker_region_type_stats' covering index,
+      # which migration 508's DROP+CREATE silently lost (56 ms became 3-5 s, nothing went red). The
+      # same catalog read holds migration 578's precondition: REFRESH ... CONCURRENTLY needs one
+      # unique index with no predicate and no expression on every matview.
+      - name: Every matview refreshes concurrently and the broker matview keeps its indexes (migration 578)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_matview_indexes.py -q
 
       # The map RPC makes two claims a real schema is the only thing that can check.
       #
@@ -422,7 +445,9 @@ jobs:
       # alarm past its budget and a measured Problem with no incident (a failing explicit cell, since 633) each
       # become one failing cell the ladder reads unchanged; a dead worker folds its keys into its own cell; since
       # 655 no API lease is judged (the API runs no matcher), and 655's post-condition runs here, refusing a body
-      # that still reads the lease. The replay has no pg_cron, so this lane runs the function itself, in a
+      # that still reads the lease. Since 682 each registered job-runner job and the fleet get a cell (a raising
+      # arm keeps its incidents open through the teller), and 682's post-condition and fail-closed precondition
+      # run here too. The replay has no pg_cron, so this lane runs the function itself, in a
       # transaction that always rolls back. Migration 633's own statements run in their step, below.
       - name: The pg_cron watcher judges the watchers (migration 620)
         env:
@@ -565,6 +590,13 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_merge_safety_live.py -q
 
+      - name: The headline price change skips a placeholder price (ruling 2026-10-26)
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_price_change_placeholder_live.py -q
+
       # The ONE listing write (rule 2), executed: every per-source upsert text runs, the
       # latest-snapshot tiebreak and statement_timestamp() stamp are observed, not asserted.
       - name: The one listing write appends exactly on content change (executed)
@@ -636,14 +668,27 @@ jobs:
       # Migration 675, EXECUTED: scraper/job_lease.py on the replayed scheduled_jobs + job_runs. A claim takes
       # only a due, live row with no sibling holding its resource and opens one run; renewal never resurrects a
       # lapsed lease and the holder fences itself before expiry; the unique indexes allow one open run per job and
-      # per resource (two real sessions race for one); a cancelled or interrupted release is not a failure; and
-      # 384's own acquire/upsert/release text still works through the temporary location_jobs alias view.
+      # per resource (two real sessions race for one); a cancelled or interrupted release is not a failure; 682's
+      # trigger keeps a live row's registry_at whatever writes it; and 384's own acquire/upsert/release text still
+      # works through the temporary location_jobs alias view.
       - name: The scheduled-jobs lease claims, fences and releases (migration 675)
         timeout-minutes: 5
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/scraper/test_job_lease_live.py -q
+
+      # #2024, EXECUTED: scraper/job_runner.py's tick over the real PgLedger with a stand-in spawner. The SQL decides
+      # each case: a due row is claimed oldest first, a pause holds, a request runs with its args and never moves
+      # the schedule, exit 75 re-dues in a minute, failures back off (a DB-heavy job's in its own hour), a lost run is
+      # re-run once, the boot upserts its registry and retires only what it registered; one real child's run record
+      # is complete, and a deploy stop releases interrupted, due at once, claimable by the next holder.
+      - name: The job runner ticks on the replayed schema (#2024)
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/scraper/test_job_runner_live.py -q
 
       # E926, EXECUTED: a dissolved must-link closure is filed when it differs from the NEWEST
       # record sharing an advert (filed again when it changes back), the rulings page reads it by
@@ -764,6 +809,16 @@ jobs:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_location_ad_readers_live.py tests/test_property_location_ad_rail.py tests/test_publication_settle_live.py -q
+
+      # City proximity runs on pg_cron (migration 674): the function raises no NOTICE (one inside a pg_cron
+      # command blocks the launcher, 658), holds its advisory lock to the end of its transaction, is closed to
+      # browser roles, and the script's batched full rebuild recomputes every placeable property.
+      - name: City proximity is pg_cron-safe (migration 674)
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_674_city_proximity_pg_cron.py -q
 
       # MF reference rent is ONE read-time measure (migration 565), read by the two serving
       # views (browse_projection, properties_public) with the stored KU (566/567, replayed

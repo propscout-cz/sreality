@@ -85,8 +85,9 @@ the API's loop), so the API's one loop is the health teller*). It runs, as conti
 
 **Cold lane — GitHub Actions keeps** the delay-tolerant heavy work it does well and for
 free: full reconcile index walks (completeness + delisting evidence), CLIP backfills,
-dedup full scans + batch lanes, monitors, CI. Self-chaining (`SCRAPE_CHAIN_TOKEN`) is
-legacy backlog acceleration — do not extend it to new lanes. — *Since Actions-exit W0 (#2010,
+dedup full scans + batch lanes, monitors, CI. What self-chaining remains is bounded and on each job's
+own token: price stats re-dispatches once per run that made progress (#2013), claims intake while a
+cursor moved — do not extend it to new lanes. — *Since Actions-exit W0 (#2010,
 2026-10) this worker is the ONLY runtime of the detail drain, image downloads (#2011 added the
 inactive residue) and the incremental property and broker maintenance: the five portal drains, `images_fresh.yml`,
 `property_maintenance.yml` and `broker_resolution.yml` that ran beside it as backstops are
@@ -196,7 +197,7 @@ Budget shape, and the two rails that make the shared lease actually exclusive:
   unchanged: every loop tests the budget between batches and they run concurrently, so N workers
   still overrun by at most ONE batch.
 - `max_seconds` is clamped to ≤ 900 and `batch_size` to ≤ 1000, so a HEALTHY pass stays far below
-  the jobs check's 1,200 s in-flight Watch (`jobs_lane_inflight_warn_s`) and below
+  the jobs check's 1,200 s in-flight Watch (`platform.LANE_INFLIGHT_WARN_S`) and below
   `LANE_PASS_TIMEOUT_SECONDS`.
   Throughput does not need a long pass — the queue IS the cursor.
 - **The lease TTL is `max_seconds + batch_size × 2 s` (floor 120 s), not a flat constant.**

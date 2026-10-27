@@ -33,7 +33,7 @@ import { PROPERTY_CARD_LABEL, isPropertyCard } from '@/lib/neighbourhood';
 
 export type DashboardView = Pick<
   BrowseViewState,
-  'filters' | 'sort' | 'activeDashboardId' | 'setActiveDashboardId' | 'loadDashboard'
+  'filters' | 'sort' | 'activeDashboardId' | 'setActiveDashboardId' | 'loadDashboard' | 'statsSmall'
 >;
 
 type DashboardPatch = Parameters<typeof updateStatsDashboard>[1];
@@ -130,18 +130,19 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
   const [loadingBoard, setLoadingBoard] = useState(false);
   const shareTitleId = useId();
 
-  const { filters, sort, activeDashboardId } = view;
+  const { filters, sort, activeDashboardId, statsSmall } = view;
   const sortParam = sortToParam(sort);
   const active = items.find((d) => d.id === activeDashboardId);
-  /* Dirty as a preset is: the charts drift, or — for a dashboard that carries a
-   * filter — its filters or its sort do. */
+  /* Dirty as a preset is: the charts or the "Malé vzorky" switch drift, or — for a
+   * dashboard that carries a filter — its filters or its sort do. */
   const dirty = useMemo(() => {
     if (active == null || loadingBoard) return false;
     if (!chartsEqual(working, sanitizeCharts(active.charts))) return true;
+    if ((active.show_small ?? false) !== statsSmall) return true;
     if (active.filter_spec == null) return false;
     const spec = readPresetSpec(active.filter_spec);
     return !filtersEqualForDashboard(filters, spec.filters) || (spec.sort ?? sortToParam(DEFAULT_SORT)) !== sortParam;
-  }, [active, loadingBoard, working, filters, sortParam]);
+  }, [active, loadingBoard, working, statsSmall, filters, sortParam]);
 
   /* A dashboard's filter is the preset blob, captured without the map viewport
    * and without the lenses (it can be shared; filters.DASHBOARD_EXCLUDED_KEYS). */
@@ -254,8 +255,9 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
     const shown = d.id === activeDashboardId && !loadingBoard;
     const charts = shown ? working : sanitizeCharts(d.charts);
     const filter = d.filter_spec == null ? undefined : shown ? currentSpec() : d.filter_spec;
+    const showSmall = shown ? statsSmall : (d.show_small ?? false);
     return create
-      .mutateAsync({ name: d.name, charts, filter_spec: filter, color: d.color })
+      .mutateAsync({ name: d.name, charts, filter_spec: filter, color: d.color, show_small: showSmall })
       .then((created) => {
         if (d.id === activeDashboardId) activate(created.id);
       });
@@ -270,6 +272,7 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
       charts: sanitizeCharts(d.charts),
       filter_spec: d.filter_spec ?? undefined,
       color: d.color,
+      show_small: d.show_small ?? false,
     });
 
   const chipMenu = (d: SavedDashboard): SavedSetMenuItem[] => {
@@ -305,7 +308,7 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
         type="button"
         onClick={() =>
           void create
-            .mutateAsync({ name: PROPERTY_CARD_LABEL, charts: working })
+            .mutateAsync({ name: PROPERTY_CARD_LABEL, charts: working, show_small: statsSmall })
             .then((created) => makeCard.mutateAsync(created.id).then(() => activate(created.id)))
         }
         disabled={create.isPending || makeCard.isPending}
@@ -329,13 +332,19 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
         onLoad={load}
         onSaveNew={(name, withFilter, color) =>
           create
-            .mutateAsync({ name, charts: working, filter_spec: withFilter ? currentSpec() : undefined, color })
+            .mutateAsync({
+              name,
+              charts: working,
+              filter_spec: withFilter ? currentSpec() : undefined,
+              color,
+              show_small: statsSmall,
+            })
             .then((created) => activate(created.id))
         }
         onUpdate={(d, name, withFilter, color) => {
           // Unticking the box drops a stored filter; an untouched box keeps it current.
           const filter = withFilter ? { filter_spec: currentSpec() } : d.filter_spec != null ? { filter_spec: null } : {};
-          return update.mutateAsync({ id: d.id, patch: { name, color, charts: working, ...filter } });
+          return update.mutateAsync({ id: d.id, patch: { name, color, charts: working, show_small: statsSmall, ...filter } });
         }}
         onRename={(d, name, color) => update.mutateAsync({ id: d.id, patch: { name, color } })}
         onDelete={(d) => drop.mutateAsync(d)}

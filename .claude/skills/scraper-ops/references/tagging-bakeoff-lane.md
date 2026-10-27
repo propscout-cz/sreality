@@ -258,8 +258,9 @@ with no fresh `pod booted` line means the bootstrap never reached the payload �
   — that teardown *is* the cost guarantee. Judge the run by the arms table.
 - **The pod bootstraps its own Python; never `git clone --branch <sha>`.** Both halves of
   the 2026-09-08 incident (run 1: 8,115 s on a 3090, ~$0.50, zero vectors). `--branch`
-  takes a branch or a tag, so cloning at `GITHUB_SHA` fails outright — the bootstrap now
-  does `git init` + `git fetch --depth 1 origin <sha>` + `git checkout FETCH_HEAD`. And the
+  takes a branch or a tag, so cloning at `GITHUB_SHA` fails outright. Since #2016 the pod does
+  not touch git at all (the repository is private): the dispatcher publishes `git archive` of
+  the sha to R2 and the pod downloads it by a signed URL in its env (`publish_archive_env`). And the
   image ships **Python 3.10** while `pyproject.toml` requires `>=3.12`, so the pod installs
   `uv`, builds a 3.12 venv and takes torch from the **cu118** index (widest cp312 coverage,
   and the image is CUDA 11.8-era). One module, `scripts/pod_bootstrap.py`, shared with the

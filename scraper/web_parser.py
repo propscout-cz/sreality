@@ -158,7 +158,7 @@ def parse_detail(html: str, *, source_url: str, final_url: str | None = None) ->
         category_main=category_main, floor=floor_size, fallback=parse_area_text(title),
         prose=parse_area_text(description), disposition=disposition, category_type=category_type,
     )
-    floor, total_floors = floor_from_text(haystack)
+    floor, total_floors = floor_from_text(haystack, category_main=category_main)
     lat, lon = _geo(main, items)
     image_urls = _images(main, og, block, base)
     broker = _broker(main, links, (description, _block_text(block)))

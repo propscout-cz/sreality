@@ -44,8 +44,10 @@ def _types(text: str, fn: str) -> str:
 
 
 def test_the_latest_definitions_are_the_contract() -> None:
+    # 678 restated the Stats pivot with its small-sample summary (tests/test_678_stats_small_samples.py).
+    later = {"browse_stats_properties": "678_stats_small_samples.sql"}
     for fn in FNS:
-        assert latest_definition(fn).name == "662_status_filter_contract.sql", fn
+        assert latest_definition(fn).name == later.get(fn, "662_status_filter_contract.sql"), fn
     assert {fn: _md5(_body(_statement(SOURCE[fn], fn))) for fn in FNS} == LIVE
 
 

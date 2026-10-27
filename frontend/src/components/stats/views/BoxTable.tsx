@@ -10,7 +10,7 @@ import {
   type StatsCell,
   type StatsPivot,
 } from '@/lib/stats';
-import { NUM_TD, NUM_TH, PivotRow, ROW_DIM_TH, TooFew, rowDimsLabel, statTd } from './cells';
+import { NUM_TD, NUM_TH, PivotRow, ROW_DIM_TH, SmallStats, TooFew, rowDimsLabel, statTd } from './cells';
 
 type Drawn = StatsCell & { p10: number; p25: number; median: number; p75: number; p90: number };
 
@@ -46,7 +46,7 @@ interface Tick {
  * numbers it draws as columns of the same table — no tooltip, the numbers are
  * right there. A row under the minimum shows its n and the dashed mark, never
  * a box. */
-function BoxTable({ pivot }: { pivot: StatsPivot }) {
+function BoxTable({ pivot, showSmall = false }: { pivot: StatsPivot; showSmall?: boolean }) {
   const { spec, basis } = pivot;
   const rows = useMemo(() => pivotRows(pivot), [pivot]);
   /* The shared scale, its ticks placed once for the header and every row. */
@@ -98,8 +98,9 @@ function BoxTable({ pivot }: { pivot: StatsPivot }) {
         <tbody>
           {rows.map((row) => {
             const cell = row.cells.get('');
+            const small = showSmall && !isDrawn(cell) ? cell?.small ?? null : null;
             return (
-              <PivotRow key={row.key} row={row}>
+              <PivotRow key={row.key} row={row} small={small != null}>
                 <td className={`${NUM_TD} text-[var(--color-ink-3)]`}>{fmtCount(cell?.n ?? 0)}</td>
                 {isDrawn(cell) && scale ? (
                   <>
@@ -112,6 +113,10 @@ function BoxTable({ pivot }: { pivot: StatsPivot }) {
                       </td>
                     ))}
                   </>
+                ) : small ? (
+                  <td colSpan={1 + COLUMNS.length} className="px-3 py-1.5 text-right">
+                    <SmallStats small={small} fmt={fmt} />
+                  </td>
                 ) : (
                   <td colSpan={1 + COLUMNS.length} className="px-3 py-1.5">
                     <TooFew minN={pivot.min_n} />

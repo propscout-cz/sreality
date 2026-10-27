@@ -1094,3 +1094,12 @@ section, Jobs and Capacity list no `cron/refresh-health-dashboard` cell, Jobs no
 Migration drift reads 643 and 663 Not measured (a drop declares nothing it can probe).
 
 **Next:** the green sprint's remaining waves (W3 producers, W4 location producers, W5 rulings).
+
+## 2026-10-26 — a Python lint gate in CI (shipped with this PR)
+
+- **`ruff check .`** is a step of the `pytest` job (no new required check), at zero findings: syntax errors,
+  every pyflakes rule, and missing annotations outside `tests/`; the rules live in `pyproject.toml` `[tool.ruff]`.
+- **The shared `cur` fixture** lives in `tests/conftest.py`; a module that defines its own `cur` still overrides it.
+- **Excluded:** the 20 autodedup decision modules (`incremental.DECISION_MODULES`; a byte edit moves the live engine
+  digest), held equal to that tuple by `tests/test_ruff_config.py`. **Next:** lint them with the next real engine
+  change; a second rule tier (B023, B904, PLE) is a ruling.

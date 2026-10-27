@@ -163,6 +163,8 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
     from the `portals` registry config."""
 
     source = SOURCE
+    walk_every_s = 6 * 3600
+    walk_timeout_s = 180 * 60
     index_rate = 0.7
     # The denominator this portal reports to the runner is the NATIONAL total, and
     # the kraj union cannot reach it by construction: listings filed under no kraj

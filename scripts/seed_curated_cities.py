@@ -31,7 +31,6 @@ import json
 import logging
 import os
 import sys
-import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -202,7 +201,7 @@ def geocode_one(name: str, kraj: str) -> dict[str, Any]:
     else the first item ranked by the source's relevance. Raises if no
     items returned.
     """
-    from scraper.geocoding import geocode, GeocodingError, _TYPE_SPECIFICITY  # noqa: E501
+    from scraper.geocoding import geocode, GeocodingError
 
     query = f"{name}, {kraj}, Česká republika"
     try:

@@ -44,7 +44,7 @@ export default function AdvertNotFound({
           <button
             type="button"
             onClick={() => newProperty.open(pastedUrl ? { url: pastedUrl } : {})}
-            className="inline-flex h-11 items-center rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-4 text-[14px] font-medium text-white hover:bg-[var(--color-copper-2)] active:bg-[var(--color-copper-2)] transition-colors"
+            className="inline-flex h-11 items-center rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-4 text-[14px] font-medium text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] active:bg-[var(--color-copper-2)] transition-colors"
           >
             Přidat do databáze
           </button>

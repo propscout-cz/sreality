@@ -640,7 +640,7 @@ function LocationModeSection({
               className={[
                 'px-2.5 py-1 text-[0.7rem] rounded-[var(--radius-xs)] transition-colors',
                 on
-                  ? 'bg-[var(--color-copper)] text-white'
+                  ? 'bg-[var(--color-copper)] text-[var(--color-on-copper)]'
                   : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
               ].join(' ')}
             >

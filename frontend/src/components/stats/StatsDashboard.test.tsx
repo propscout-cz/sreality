@@ -33,10 +33,13 @@ vi.mock('@/lib/toast', async (importOriginal) => ({
   pushToast: vi.fn(),
 }));
 
-const renderBoard = (market?: { value: stats.StatsMarket; set: (m: stats.StatsMarket) => void }) =>
+const renderBoard = (
+  market?: { value: stats.StatsMarket; set: (m: stats.StatsMarket) => void },
+  small?: { value: boolean; set: (on: boolean) => void },
+) =>
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <StatsDashboard filters={DEFAULT_FILTERS} market={market} />
+      <StatsDashboard filters={DEFAULT_FILTERS} market={market} small={small} />
     </QueryClientProvider>,
   );
 
@@ -170,5 +173,21 @@ describe('<StatsDashboard>', () => {
     expect(screen.queryByRole('group', { name: 'Vzorek' })).toBeNull();
     await waitFor(() => expect(vi.mocked(stats.fetchStatsPivot)).toHaveBeenCalled());
     for (const [f] of vi.mocked(stats.fetchStatsPivot).mock.calls) expect(f).toEqual(DEFAULT_FILTERS);
+  });
+
+  it('offers the small-samples switch beside the lens and hands its state to the switch owner', async () => {
+    const set = vi.fn();
+    renderBoard(undefined, { value: false, set });
+    await screen.findAllByRole('heading', { level: 3 });
+    const toggle = screen.getByRole('button', { name: 'Malé vzorky (pod 5): min, max, průměr, medián' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(toggle);
+    expect(set).toHaveBeenCalledWith(true);
+  });
+
+  it('shows no small-samples switch where none is handed over', async () => {
+    renderBoard();
+    await screen.findAllByRole('heading', { level: 3 });
+    expect(screen.queryByRole('button', { name: /^Malé vzorky/ })).toBeNull();
   });
 });

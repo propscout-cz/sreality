@@ -24,7 +24,7 @@ import time
 import xml.etree.ElementTree as ET
 import zipfile
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any, Literal
 
@@ -33,12 +33,13 @@ import requests
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
+from scraper import contact
 from scraper.db import connect, stamp_derived_artifact
 from toolkit.rent_map import MF_INFOGRAPHIC_URL
 
 LOG = logging.getLogger("ingest_map_overlays")
 
-USER_AGENT = "sreality-tracker/1.0 (+https://github.com/waiff/sreality)"
+USER_AGENT = contact.USER_AGENT
 PAUSE_S = 0.5
 ATTEMPTS = 5
 RETRY_STATUS = frozenset({429, 500, 502, 503, 504})

@@ -111,6 +111,8 @@ class BezrealitkyPortal(portal_runner.PortalDefaults):
     comes from the `portals` registry config."""
 
     source = SOURCE
+    walk_every_s = 6 * 3600
+    walk_timeout_s = 30 * 60
     index_rate = 1.0  # baked floor; the instance reads it from config.limits
 
     def __init__(self, config: PortalConfig, *, max_pages: int | None = None) -> None:

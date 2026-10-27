@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from collections.abc import Iterator
 
 from scraper import db
 
@@ -28,7 +29,7 @@ _VIDEO_PREDICATE = (
     r"'\.(mp4|mov|webm|avi|m4v|mkv|m3u8)$'"
 )
 
-_MOVE_SQL = f"""
+_MOVE_SQL = """
     WITH moved AS (
         INSERT INTO listing_videos (
             sreality_id, listing_id, source_url, sequence, storage_path,
@@ -50,7 +51,7 @@ _MOVE_SQL = f"""
 _CHUNK = 2000
 
 
-def _chunks(seq: list[int], n: int):
+def _chunks(seq: list[int], n: int) -> Iterator[list[int]]:
     for i in range(0, len(seq), n):
         yield seq[i : i + n]
 

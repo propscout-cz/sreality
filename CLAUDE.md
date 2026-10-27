@@ -48,8 +48,9 @@ in before starting. Deep per-territory rationale: `docs/architecture.md` § Terr
   `require_token` route still returns no identity, admin or per-account data (those take `verify_jwt`/`tenant_conn`; routes still breaking
   this: `roadmap/public-release-track.md` item 11).
   Reads run as `authenticated` (`anon` gets nothing): `*_public` views, RLS'd tables, read models granted with no RLS (`browse_list`,
-  `location_pin_audit_mv`, `ingest_bulk_days`), INVOKER RPCs, DEFINER RPCs only if admin-gated or `ci-allow-ungated`. Writes go via the API by
-  convention, not grant (`database` skill). Design tokens (`globals.css` `@theme`) need operator OK. Backend rules don't apply.
+  `location_pin_audit_mv`, `ingest_bulk_days`), INVOKER RPCs, DEFINER RPCs only if admin-gated or registered ungated in `tests/_admin_gate_registry.py`.
+  Writes go via the API by convention, not grant (`database` skill), except the run tables, which are writes-by-grant (mig 679: the browser INSERTs
+  no run and UPDATEs only `estimation_runs.scenario`). Design tokens (`globals.css` `@theme`) need operator OK. Backend rules don't apply.
 - **Chrome extension** (`chrome-extension/`) — Manifest v3, **vanilla TS only** (no React /
   Tailwind), closed shadow-root panel. Every network call goes through the background worker
   (`chrome.runtime.sendMessage`), never a direct `fetch`. Build-time `VITE_API_*` inlined
@@ -100,7 +101,7 @@ Dynamic state lives outside Git — don't ask, fetch it:
   question. Both recipes + the reserved-for-migrations MCP policy: the `database` skill.
 ## Roadmap maintenance
 
-`ROADMAP.md` is a **<120-line index**; phase content lives in `roadmap/<track>.md` and completed
+`ROADMAP.md` is a **byte-capped index**; phase content lives in `roadmap/<track>.md` and completed
 work in `roadmap/archive.md`. **Read the index only; open a track file only to edit it.** After
 shipping meaningful work, in the SAME PR update **only** the relevant `roadmap/<track>.md` (move a
 bullet to done, add new "next" items) + the index's status cell if the track's status changed.
@@ -254,15 +255,15 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     2026-09, ulice_id 2026-10, street_name 2026-10 as a sort key) or after a measured slowdown, only to `browse_list`. § Location data in `docs/architecture.md`.
 ## Coding conventions
 
-- Type hints on every signature. `requests` for HTTP, `psycopg` for DB — don't add `httpx` / `aiohttp` / `sqlalchemy` / `supabase-py` lightly (rule #7).
+- Type hints on every signature (CI's ruff ANN check enforces it outside tests). `requests` for HTTP, `psycopg` for DB — don't add `httpx` / `aiohttp` / `sqlalchemy` / `supabase-py` lightly (rule #7).
 - No comments unless the WHY is non-obvious; no multi-paragraph docstrings (one-liners fine).
 - Small single-purpose files: `<portal>_client.py` = HTTP only, `parser.py` / `<portal>_parser.py` = payload→row only;
   `db.py` is for DB I/O — put new policy beside its caller (the policy + dead sweep it still holds are owed, scraper track).
 ## How to test changes
 
-- **Locally:** one-time `pip install -e ".[dev,api,geo]"`, then `pytest -q` (or `pytest tests/path -q`).
+- **Locally:** one-time `pip install -e ".[dev,api,geo]"`, then `ruff check .` and `pytest -q` (or `pytest tests/path -q`).
   Interpreter is `python3`. `scripts/test-summary.sh` runs quiet pytest + prints only failures. Mirrors CI.
-- **CI:** every PR (and push to `main`) runs `.github/workflows/test.yml` — open the draft PR early so it runs (`gh run watch`, or `scripts/logs.sh <run-id> [pattern]`).
+- **CI:** every PR (and push to `main`) runs `.github/workflows/test.yml` — open the draft PR early so it runs (`gh run watch`, or `scripts/logs.sh <run-id> [pattern]`). Its DB lanes run locally too: `scripts/local_pg.sh`.
 - Scraper smoke: `python -m scraper.sreality_main --index-only --dry-run --max-seconds 60` writes nothing; `--drain-only --max-detail 10` is a small live run (other `scraper.<portal>_main`s alike).
 ## Secrets
 
@@ -270,7 +271,7 @@ Never commit secrets (`.env` is gitignored). API keys are **backend-only** — n
 secret (the frontend build must not see it). **Full env-var / secrets reference:** the `toolkit-api` skill.
 ## Agent skills
 
-- **Issue tracker:** GitHub Issues on this PUBLIC repo, via `gh` — always with `--json` (plain `gh issue view` / `gh pr view` exit 1 here). See `docs/agents/issue-tracker.md`.
+- **Issue tracker:** GitHub Issues on this PUBLIC repo, via `gh` — always with `--json` (plain `gh issue view` / `gh pr view` exit 1 here). Before you work on, create or close a ticket, read `docs/agents/issue-tracker.md`: a ticket is yours once `python3 -m scripts.ticket_claim claim <n>` exits 0; each post-merge gate is its own `gate` ticket.
 - **Triage labels:** the five default role names (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
 - **Domain docs:** single-context — root `GLOSSARY.md` + `docs/adr/`; the numbered rules above bind as ADRs do. See `docs/agents/domain.md`.
 ## What is explicitly out of scope right now
@@ -292,7 +293,7 @@ nor is email as a future second push-ledger channel (inactive; rule #16) — Tel
 | Toolkit tools, FastAPI, auth, versioned trace, env-vars & secrets | `.claude/skills/toolkit-api` |
 | Cached vision/text tools, the text lane, vision tiers, MF rent map | `.claude/skills/llm-pipelines` |
 | Running / debugging scrapers, adding a field, fixtures, reading logs | `.claude/skills/scraper-ops` |
-| Dashboards, admin panels, apps, tools — interface/UI design craft | `.claude/skills/interface-design` |
+| Dashboards, admin panels, apps, tools — interface/UI design craft; the binding design system (schemes, hierarchy rulings) | `.claude/skills/interface-design` · `.interface-design/system.md` |
 | Full rule rationale, per-portal data sources, territory deep-dives | `docs/architecture.md` |
 | Sequencing / what's next | `ROADMAP.md` → `roadmap/<track>.md` |
 | Vocabulary: property, ad, canonical ad, merge, split, survivor, curation | `GLOSSARY.md` |

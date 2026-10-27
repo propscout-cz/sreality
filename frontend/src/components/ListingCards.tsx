@@ -502,7 +502,7 @@ function Card({
               'pointer-events-none absolute top-1 left-1 z-[2] flex h-6 w-6 items-center justify-center',
               'rounded-[var(--radius-xs)] border font-mono text-[0.78rem] font-medium',
               letter != null
-                ? 'bg-[var(--color-copper)] border-[var(--color-copper)] text-white'
+                ? 'bg-[var(--color-copper)] border-[var(--color-copper)] text-[var(--color-on-copper)]'
                 : 'bg-[var(--color-paper)]/90 border-[var(--color-rule)]',
             ].join(' ')}
           >

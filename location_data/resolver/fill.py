@@ -45,7 +45,7 @@ guess. Nothing else is NULL-masked specially: a foreign row loses it with every 
 
 from __future__ import annotations
 
-from location_data.resolver.bind import Constraints, operator_fields
+from location_data.resolver.bind import Constraints
 from location_data.resolver.normalize import TYP_CP
 from location_data.resolver.types import (
     AddressPoint,

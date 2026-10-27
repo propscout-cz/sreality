@@ -179,6 +179,7 @@ from psycopg.types.json import Jsonb
 from scraper import (
     db, image_storage, portal_factory, portal_runner, sold_db, sold_fetch,
 )
+from scraper.cgroup import memory_limit_mb as _memory_limit_mb
 from scraper.portal import PortalConfig
 from scraper.rate_ledger import RateBudgetUnavailable
 
@@ -1731,7 +1732,6 @@ def _location_intake_fast_sync() -> dict[str, Any]:
     Lazy import keeps location_data (selectolax, boto3) off the worker's startup path;
     module-attribute calls keep claims_intake.run patchable in tests. No try/except around
     run(): a raise is the signal, and _lane_loop records the failed pass."""
-    from location_data import claims_intake
 
     global _INTAKE_FAST_LAST_IDLE
 
@@ -2065,25 +2065,6 @@ def _autodedup_store_present(conn: Any) -> bool:
         cur.execute(RT_STORE_PRESENT_SQL)
         rows = cur.fetchall()
     return bool(rows and rows[0][0])
-
-
-_CGROUP_ROOT = "/sys/fs/cgroup"
-# cgroup v1 spells "no limit" as its page counter's maximum (~8 EiB), never as "max".
-_CGROUP_V1_UNLIMITED_BYTES = 1 << 62
-
-
-def _memory_limit_mb(root: str = _CGROUP_ROOT) -> float | None:
-    """The container's memory limit in MiB (cgroup v2, else v1); None when unlimited or unread."""
-    for name in ("memory.max", os.path.join("memory", "memory.limit_in_bytes")):
-        try:
-            with open(os.path.join(root, name), encoding="ascii") as handle:
-                limit = int(handle.read().strip())
-        except FileNotFoundError:
-            continue
-        except Exception:  # noqa: BLE001 — "max", or unreadable: no limit to report
-            return None
-        return round(limit / 1_048_576.0, 1) if limit < _CGROUP_V1_UNLIMITED_BYTES else None
-    return None
 
 
 def _autodedup_outcome(

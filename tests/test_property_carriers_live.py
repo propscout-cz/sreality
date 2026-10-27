@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from tests._live_property import (  # `cur` is the fixture
+from tests._live_property import (
     OP,
     REQUIRED_DB,
     _account,
@@ -29,7 +29,6 @@ from tests._live_property import (  # `cur` is the fixture
     _snapshot,
     _stage,
     _tag,
-    cur,
 )
 from toolkit.property_carriers import NOT_CARRIED, carried_columns, curation_preview
 from toolkit.property_identity import detach_listings, merge_property_set
@@ -728,7 +727,7 @@ def test_the_brake_onto_an_origin_active_again_leaves_what_its_accounts_hold_the
     r1, r2 = _advert(cur, r, source="idnes"), _advert(cur, r, source="remax")
     for pid in (s, r):
         _recompute(cur, pid)
-    note = _note_on(cur, a, r, r1)
+    _note_on(cur, a, r, r1)
     coll, tag = _collection(cur, a), _tag(cur, a)
     closed = _stage(cur, a, position=5, terminal=True)
 

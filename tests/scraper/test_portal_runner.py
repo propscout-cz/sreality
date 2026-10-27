@@ -699,7 +699,7 @@ def test_detail_drain_bumps_counts_per_chunk_without_double_count(monkeypatch):
     # the SUM of bumps must equal the final agg, NOT 2x (finalize won't re-write
     # them). A small batch size forces both in-loop and post-loop flushes.
     monkeypatch.setattr(portal_runner, "DETAIL_BATCH_SIZE", 2)
-    cap = _patch_queue(monkeypatch, [
+    _patch_queue(monkeypatch, [
         [("1", None, None, None), ("2", None, None, None), ("3", None, None, None)],
         [("4", None, None, None), ("5", None, None, None)],
     ])

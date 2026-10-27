@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from tests._live_property import REQUIRED_DB, _advert, _property, _recompute, cur  # noqa: F401 -- `cur` is the fixture
+from tests._live_property import REQUIRED_DB, _advert, _property, _recompute
 from toolkit.publication import CAP_SQL
 
 pytestmark = REQUIRED_DB

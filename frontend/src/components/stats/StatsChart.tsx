@@ -66,6 +66,7 @@ export default function StatsChart({
   onCancelNew,
   saving = false,
   focus = null,
+  showSmall = false,
 }: {
   chart: ChartSpec;
   filters: ListingFilters;
@@ -80,6 +81,8 @@ export default function StatsChart({
   onCancelNew?: () => void;
   saving?: boolean;
   focus?: CardFocus | null;
+  /* Cells under the minimum show their small-sample summary (the Stats tab's switch). */
+  showSmall?: boolean;
 }) {
   const client = useQueryClient();
   const headingId = useId();
@@ -249,7 +252,7 @@ export default function StatsChart({
         className={`px-5 pt-4 pb-5 transition-opacity ${pivot.isPlaceholderData ? 'opacity-60' : ''}`}
         aria-busy={pivot.isFetching}
       >
-        <Body chart={shown} pivot={data} error={pivot.error} onRetry={() => void pivot.refetch()} />
+        <Body chart={shown} pivot={data} error={pivot.error} onRetry={() => void pivot.refetch()} showSmall={showSmall} />
       </div>
 
       {editing && (
@@ -267,7 +270,7 @@ export default function StatsChart({
             type="button"
             onClick={() => void save()}
             disabled={problem != null || saving}
-            className="rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-2.5 py-1 text-[0.8rem] text-white hover:bg-[var(--color-copper-2)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-2.5 py-1 text-[0.8rem] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             aria-label="Uložit graf"
           >
             Uložit
@@ -283,11 +286,13 @@ function Body({
   pivot,
   error,
   onRetry,
+  showSmall,
 }: {
   chart: ChartSpec;
   pivot: StatsPivot | null;
   error: Error | null;
   onRetry: () => void;
+  showSmall: boolean;
 }) {
   if (error && !pivot) {
     return (
@@ -321,9 +326,9 @@ function Body({
   if (pivot.spec.rows.length < minRowsFor(chart.view)) return <Refusal>{LINE_NEEDS_ROW}</Refusal>;
   switch (chart.view) {
     case 'table':
-      return <PivotTable pivot={pivot} stats={chart.stats} />;
+      return <PivotTable pivot={pivot} stats={chart.stats} showSmall={showSmall} />;
     case 'box':
-      return <BoxTable pivot={pivot} />;
+      return <BoxTable pivot={pivot} showSmall={showSmall} />;
     case 'line':
     case 'bar':
       return <Series pivot={pivot} stats={chart.stats} kind={chart.view} />;
