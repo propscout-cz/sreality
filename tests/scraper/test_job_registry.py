@@ -10,6 +10,7 @@ import argparse
 import ast
 import contextlib
 import functools
+import hashlib
 import importlib
 import inspect
 import io
@@ -25,10 +26,11 @@ import pytest
 import yaml
 
 from location_data.resolver import drain
-from scraper import jobs
+from scraper import job_runner, jobs
 from scraper.jobs import Job
 from scraper.portal import _LIMIT_COERCERS, PortalConfig, PortalLimits
 from scraper.portal_factory import PORTAL_CLASSES
+from tests.migration_defs import MIGRATIONS, latest_definition
 
 FIXED = 11
 ROOT = Path(__file__).resolve().parents[2]
@@ -646,3 +648,61 @@ def test_the_accessor_census_fires() -> None:
     assert accessor_problems({"scraper/job_runner.py": "from scraper.jobs import Job, declared\n"})
     assert accessor_problems({"scraper/job_runner.py": "from scraper.jobs import (\n    Job,\n    declared,\n)\n"})
     assert accessor_problems({"scraper/jobs.py": "def declared():\n    return jobs.declared()\n"}) == []
+
+
+# --- the Health job cells (migration 682, #2026): the SQL spells the runner's own literals ------------------------
+
+WATCHER = "create or replace function public.health_liveness()"
+JOBS_BLOCK = "  -- Scheduled jobs (Actions exit W2, #2026, migration 682)"
+
+
+def _dollar_body(text: str, start: str, tag: str) -> str:
+    """pg_proc.prosrc of the statement opened by `start`: the whole `tag`-quoted string, first and last newline
+    included."""
+    at = text.index(start)
+    return text[at: text.index(f"{tag};", at)].split(tag)[1]
+
+
+def _watcher(text: str) -> str:
+    at = text.index(WATCHER)
+    return text[at: text.index("$fn$;", at) + len("$fn$;")]
+
+
+def job_cell_literal_problems(sql: str) -> list[str]:
+    """The helper's body (comments stripped) names jobs.RUNNER, the heartbeat prefix and the stuck-run grace."""
+    body = re.sub(r"--[^\n]*", "", _dollar_body(sql, "create or replace function public.health_job_cells(", "$cells$"))
+    wanted = (f"runner = '{jobs.RUNNER}'", f"'{job_runner.HEARTBEAT_PREFIX}'", f"+ {jobs.STUCK_RUN_GRACE_S}")
+    return [f"health_job_cells() does not spell {w}" for w in wanted if w not in body]
+
+
+def test_the_job_cells_spell_the_runners_literals() -> None:
+    sql = latest_definition("health_job_cells").read_text(encoding="utf-8")
+    assert job_cell_literal_problems(sql) == []
+
+
+def test_the_job_cell_literal_census_fires() -> None:
+    sql = latest_definition("health_job_cells").read_text(encoding="utf-8")
+    assert job_cell_literal_problems(sql.replace("j.runner = 'job-runner'", "j.runner = 'job_runner'"))
+    assert job_cell_literal_problems(sql.replace("'job-runner/'", "'job-runner-'"))
+    assert job_cell_literal_problems(sql.replace("j.timeout_s + 600", "j.timeout_s + 300"))
+
+
+def test_the_watcher_precondition_pins_675s_body_and_its_own() -> None:
+    """682's `$pre$` refuses any live watcher but 675's body or its own (a re-run); both hashes come from the files."""
+    sql = (MIGRATIONS / "682_health_job_cells.sql").read_text(encoding="utf-8")
+    s675 = (MIGRATIONS / "675_scheduled_jobs_expand.sql").read_text(encoding="utf-8")
+    pre = sql[sql.index("do $pre$"): sql.index("$pre$;")]
+    for text in (s675, sql):
+        digest = hashlib.md5(_dollar_body(text, WATCHER, "$fn$").encode()).hexdigest()
+        assert f"'{digest}'" in pre, digest
+
+
+def test_the_watcher_is_675s_with_only_the_jobs_block_inserted() -> None:
+    sql = (MIGRATIONS / "682_health_job_cells.sql").read_text(encoding="utf-8")
+    s675 = (MIGRATIONS / "675_scheduled_jobs_expand.sql").read_text(encoding="utf-8")
+    new = _watcher(sql)
+    start = new.index(JOBS_BLOCK)
+    end = new.index("  end;\n\n", start) + len("  end;\n\n")
+    assert new[:start] + new[end:] == _watcher(s675)
+    assert new[start:end].count("public.health_job_cells(c_worker_dead)") == 1
+    assert sql.count(WATCHER) == 1
