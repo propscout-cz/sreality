@@ -18,10 +18,10 @@
 --   * The first apply's heal: a live runner row, or one retired under an hour (a blink), whose runs began before its
 --     registry_at (re-stamped by main's register, #2025 PR-2 deployed first) joins at its first run.
 --   * public.health_span(double precision): a duration as Health reads it. Reads nothing.
---   * public.health_job_cells(interval): one job/<name> cell per registered live job-runner row (_DUE_SQL's predicate:
---     runner 'job-runner', registry_at set, retired_at null), judged on its runs since registry_at and ok until the
---     first of them closes, one per entry a fresh replica's boot refused that has no such row, and the job-runner
---     fleet cell while live rows exist. Never 'unknown'. Security invoker: the definer watcher calls it. The one seam
+--   * public.health_job_cells(interval): one job/<name> cell per registered job-runner row, live or retired under an
+--     hour (a blink, as the trigger keeps its join), judged on its runs since registry_at and ok until the first of
+--     them closes, one per entry a fresh replica's boot refused that has no such row, and the job-runner fleet cell
+--     while such rows exist (it counts the live ones). Never 'unknown'. Security invoker: the definer watcher calls it. The one seam
 --     later waves replace (#2028, #2029, #2033), alone.
 --   * public.health_liveness() is re-created from the live body, 675's byte for byte (the precondition refuses any
 --     other), with one block after the health-lane arm: the helper's cells, inside a subtransaction. When the helper
@@ -76,7 +76,7 @@ update public.scheduled_jobs j
 
 -- registry_at is when the row joined the runner: a later write moves it only on a row adopted (NULL) or retired an
 -- hour or more (job_lease.REJOIN_AFTER_S). A shorter retirement is a blink, an older image's boot until the latest
--- one boots again, never a re-land, which takes a PR cycle: the row is judged whole through it.
+-- one boots again, or a revert re-landed within the hour: the row is judged whole through it.
 create or replace function public.scheduled_jobs_keep_registry_at()
 returns trigger
 language plpgsql
@@ -123,9 +123,11 @@ stable
 set search_path = public
 as $cells$
 with live as (
+  -- A row an older image retired under an hour ago (a blink: the trigger keeps its join) is judged whole through it.
   select j.*, extract(epoch from j.cadence)::float8 as every_s, coalesce(j.paused_until > now(), false) as paused
     from scheduled_jobs j
-   where j.runner = 'job-runner' and j.registry_at is not null and j.retired_at is null
+   where j.runner = 'job-runner' and j.registry_at is not null
+     and (j.retired_at is null or j.retired_at > now() - make_interval(secs => 3600))
 ), fresh as (
   -- The replicas beating inside p_dead, each with its holder (a claim's holder is '<holder>/<n>') and the entries its
   -- boot refused.
@@ -342,13 +344,14 @@ select coalesce(jsonb_agg(cell order by subject), '[]'::jsonb) from (
            'value', (select count(*) from fresh), 'unit', 'replicas',
            'message', case when exists (select 1 from fresh)
                            then format('job-runner: %s replicas beating; %s jobs registered',
-                                       (select count(*) from fresh), (select count(*) from live))
+                                       (select count(*) from fresh),
+                                       (select count(*) from live where retired_at is null))
                            else 'job-runner: no replica has beaten for 10 min (see the worker/job-runner/<id> '
                                 'cells and Railway''s job-runner service); a registered job turns Problem 10 min '
                                 'after its slot, a request 10 min after it was filed' end,
            'facts', jsonb_build_object('replicas', (select coalesce(jsonb_agg(f.worker order by f.worker), '[]'::jsonb)
                                                       from fresh f),
-                                       'registered', (select count(*) from live)))
+                                       'registered', (select count(*) from live where retired_at is null)))
    where exists (select 1 from live)
 ) cells(subject, cell);
 $cells$;

@@ -782,6 +782,30 @@ def test_an_older_images_boot_that_retires_a_failing_row_for_minutes_keeps_its_j
     assert cur.fetchone() == (_dt.timedelta(days=200),)
 
 
+def test_a_failing_row_retired_by_an_older_image_minutes_ago_keeps_its_cell_and_its_incident(cur: Any) -> None:
+    """C3 (review, round 5): a Rollback to an image without the job retired a failing row 40 min ago, and the latest
+    has not booted again. A blink is judged whole, so the row keeps its Problem and its incident: never the recovery
+    arm's 'no longer failing', which closes the incident only for the next boot to open a new one. A row retired an
+    hour or more has left the runner: its incident recovers, and the fleet counts only live rows."""
+    _runner_beat(cur, "r1", "0 minutes")
+    _job(cur, "blink", due="-50 minutes", last_ok="47 hours", failures=7, last_outcome="failed", last_error="exit 1",
+         joined="200 days", retired="40 minutes")
+    _run(cur, "blink", started="47 hours 10 minutes", ended="47 hours", outcome="ok", exit_code=0)
+    for m in (130, 120, 110, 100, 90, 80, 70):
+        _run(cur, "blink", started=f"{m} minutes", ended=f"{m - 2} minutes", outcome="failed", exit_code=1)
+    _job(cur, "gone", retired="61 minutes")
+    _incident(cur, "cell:liveness:job/blink")
+    _incident(cur, "cell:liveness:job/gone")
+
+    status, _value, _details, cells = _liveness(cur)
+
+    assert _said(cells, "job/blink") == (
+        "fail", "blink: 7 failed runs in a row, the first 2.2 h ago; the last: exit 1")
+    assert _said(cells, "job/gone") == ("ok", "no longer failing")
+    assert _said(cells, "job-runner") == ("ok", "job-runner: 1 replicas beating; 0 jobs registered")
+    assert status == "fail"
+
+
 def test_a_blink_keeps_the_schedule_so_a_cut_run_stays_due_and_a_missed_slot_stays_late(cur: Any) -> None:
     """C3 (review, round 4): a Rollback to an image without the job retired both rows for minutes; the latest booted
     again. `cut`'s run was cut by the rollback's SIGTERM (due 'now'); `never` joined 3 d ago and its first slot was

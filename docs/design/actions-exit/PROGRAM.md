@@ -154,8 +154,8 @@ production.
   or requested runner entry in the foreground (GitHub entries from #2033; a closed terminal stops it like Ctrl-C,
   and it exits 1 when the database does not answer within 60 s); `list` shows every row. Nothing is a
   flag; a pause always ends.
-- **Health** (as built, #2026, migration 682): a `job/<name>` cell per live registered job-runner row (the due
-  list's predicate), computed in SQL by the pg_cron watcher (so it survives a Railway outage) through
+- **Health** (as built, #2026, migration 682): a `job/<name>` cell per registered job-runner row, live or retired
+  under an hour (a blink, judged whole), computed in SQL by the pg_cron watcher (so it survives a Railway outage) through
   `public.health_job_cells()`, a seam a later wave replaces alone. A job cell is never `unknown`: not run yet,
   paused or held reads ok and says why. Against the row's own cadence C and `timeout_s` T: in flight is Watch past
   ⅔·T and "being stopped" past T; a run the runner recorded `timeout` is a Problem until a later run closes (warn

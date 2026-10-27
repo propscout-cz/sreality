@@ -74,8 +74,8 @@ select job_name, outcome, exit_code, peak_rss_mb, started_at, ended_at - started
 
 ## Health: the `job/<name>` cell (migration 682, #2026)
 
-The pg_cron watcher writes one `job/<name>` cell per live registered job-runner row (`runner = 'job-runner'`,
-`registry_at` set, not retired: the due list's predicate), from `public.health_job_cells()`, every 5 min, so it
+The pg_cron watcher writes one `job/<name>` cell per registered job-runner row (`runner = 'job-runner'`,
+`registry_at` set), live or retired under an hour (a blink, judged whole), from `public.health_job_cells()`, every 5 min, so it
 survives a Railway outage. A job cell is never `unknown`. C is the row's cadence, T its `timeout_s`, W the longest run
 of a sibling on its resource seen since its clock started. The worst condition wins; every condition is in
 `facts.conditions`.
