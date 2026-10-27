@@ -277,8 +277,8 @@ R2 key = `img/{listing_id}/{images.id}.jpg`, unique per ROW (rule #6); a stored 
 - the worker's `images` lane (every 60 s, `realtime_images_slice`) — THE image drain across ALL portals: newest ACTIVE
   listings' photos first, so a fresh card renders an image in minutes, then the inactive residue in what the slice
   leaves (each tier walks the pending index newest-first; no sort). Since W0 the only runtime (#2010, #2011).
-- `refresh_stale_images.yml` (every 6h) — re-enqueues active listings whose un-downloaded image URLs
-  rotated/went stale into `listing_detail_queue` (low priority) so the detail drain repoints them.
+- `stale_images` (job runner, every 6h) — re-enqueues active listings whose un-downloaded image URLs
+  rotated/went stale into `listing_detail_queue` (NEW priority) so the detail drain repoints them.
 
 **Cadence:** the sreality walk runs `*/15` (frequent index walks surface delistings fast) and the worker's
 drain lane every 30 s keeps a steady, polite fetch volume. GitHub throttles scheduled workflows, so a walk's effective

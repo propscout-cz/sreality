@@ -625,7 +625,7 @@ the API serves the registry (`GET /map-overlays`) and the tile bytes (`GET
 `require_token`; the SPA's `lib/mapOverlayDraw` (lazy, map chunks only) registers one `overlay://` MapLibre protocol over
 `apiGetBlob` and one hook that builds the style layers from the registry's legend — no per-layer
 frontend code. The four tables are a MIRROR (rules 10/11's class): service-role only, rebuilt by the
-quarterly `ingest_map_overlays.yml` (dispatch `--sections kraje` after a boundaries ingest).
+quarterly `map_overlays` job on the job runner (`ingest_boundaries.yml`'s last step re-renders `--sections kraje`).
 Sources: IPR Praha's Metropolitní plán hosted services (A/B/C existing, Metro D proposals, territorial
 reserves — the "tangenciální kolejové spojení" the press calls metro E is labelled as the plan labels
 it — and named stations, in service and planned; CC BY), the VÚV TGM / MŽP national flood-zone register
@@ -644,9 +644,9 @@ sorted `key[:variant]` list, `lib/mapOverlays`) remembered per browser (`map.lay
 same hook and chip control. The MF rent choropleth is the `rent_map` section (one layer, the four VK
 size categories as variants; an SQL source over `admin_boundaries` × the latest `rent_map_values`
 revision), re-rendered inside every rent-map ingest (`api/rent_map.py`, a savepoint of its
-transaction; a refused guard keeps the revision and the previous tiles) and by `fetch_rent_map.yml`'s
-last step; migration 601 drops `rent_map_choropleth_public`, `rent_map_kraje_public` and the
-`rent_map_choropleth` matview it replaced.
+transaction; a refused guard keeps the revision and the previous tiles) and by the monthly `rent_map`
+job's last step (`scripts/fetch_rent_map.py`); migration 601 drops `rent_map_choropleth_public`,
+`rent_map_kraje_public` and the `rent_map_choropleth` matview it replaced.
 
 ## Territories — deep rationale
 
@@ -1185,8 +1185,8 @@ on 2026-12-01, and until then a file of that name would override the applied set
   `env MALLOC_ARENA_MAX=2 python …` (E949's arena cap; its 30 s `drainingSeconds` is E941's) and the runner's bare
   `python -m scraper.job_runner run`. The API and vite run their image's own command (ruling R5, 2026-10-26): Railway
   runs a start command in exec form, so an unwrapped `$PORT` never expands (8a362a0ea).
-- **The job runner** (`jobRunner` in the worker's project; `docs/design/actions-exit/PROGRAM.md` § 4.2), dark until
-  #2025's move PR flips its first jobs' host:
+- **The job runner** (`jobRunner` in the worker's project; `docs/design/actions-exit/PROGRAM.md` § 4.2), the host of
+  `stale_images`, `rent_map` and `map_overlays` since #2025's move PR:
   - two replicas in the worker's region, each 4 vCPU and 8 GB, restart policy ALWAYS, `checkSuites: false`. Railway
     counts decimal bytes, so 8e9 B is 7,629 MiB in the cgroup, `jobs.REPLICA_MEMORY_MB` (a test ties them); the BOOT
     line and every beat carry `memory_limit_mb` and `cpus` as the replica's cgroup reads them;
@@ -1577,7 +1577,7 @@ renumber.** Navigate by area:
    before it could be re-fetched (TERMINAL), and image identity is a POSITION — a row is
    `(listing_id, sequence)`, so a reordered gallery re-points it onto whatever photo now sits at
    that order, exactly as the `(listing_id, sequence)` images upsert, the detail drain and
-   `refresh_stale_images` do. Labels keyed on `images.id` follow the position, not the photograph;
+   the `stale_images` job do. Labels keyed on `images.id` follow the position, not the photograph;
    that is a property of the upsert key.
    **Two consequences of the template switch: (a) permanent, (b) until a thumbnail rendition exists.**
    (a) *The visual-signal corpus is MIXED-RENDITION.* dHash and CLIP are framing-sensitive, so the
