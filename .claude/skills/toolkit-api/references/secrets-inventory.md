@@ -65,9 +65,11 @@ cache, not a bad password: do not reset twice.
 
 - Rotated 2026-10-22, before the M0 rotation: `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `QWEN_API_KEY`,
   `RUNPOD_API_KEY`, the Cloudflare API token. `VAPID_PRIVATE_KEY` was created after the incident and stays.
-- **On Railway before 2026-10-21 but not on the ruled list (operator ruling owed):** `SCRAPER_PROXY_URL` (GH +
-  worker; the residential proxy's credential, read through `scraper/portal_base.py` `PROXY_ENV` by the proxied
-  portals' clients: idnes, mmreality, ceskereality).
+- `SCRAPER_PROXY_URL` (GH + worker; the DataImpulse residential proxy, `http://<login>:<password>@gw.dataimpulse.com:823`,
+  read through `scraper/portal_base.py` `PROXY_ENV` by idnes, mmreality, ceskereality): rotated 2026-10-27 by operator
+  ruling. The plan page's ↻ regenerates the password with no overlap, so take sreality-e9's brake first, then
+  regenerate, test (`curl -K -` with the proxy on stdin → CONNECT 200), stage + deploy the worker, `gh secret set`.
+  A rejected proxy login is a `ProxyError`, retried, never a gone signal.
 - GitHub-only, so outside Railway's incident: `HF_TOKEN`, `SREALITY_LOGIN_EMAIL` / `SREALITY_LOGIN_PASSWORD` /
   `SREALITY_SESSION_COOKIE`. The `GEMINI_API_KEY` Actions secret has no consumer.
 - Public values: `SUPABASE_URL`, `R2_ACCOUNT_ID`, `R2_BUCKET_NAME`, `EXT_SUPABASE_URL`, `EXT_API_BASE_URL`,
