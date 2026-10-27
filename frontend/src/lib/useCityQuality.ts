@@ -1,5 +1,6 @@
 /* Resolve a property to its curated city's quality indexes — the read path
- * behind the card index strip.
+ * behind the card index strip (CityIndexStrip). Since ruling P19 (2026-10-27)
+ * took it off the pipeline card, no surface mounts the strip: both stay on disk.
  *
  * THE JOIN, AND WHY IT IS THIS ONE
  * There is no `properties.curated_city_id`. The SQL predicates resolve a

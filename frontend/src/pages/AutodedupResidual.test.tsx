@@ -704,4 +704,18 @@ describe('<AutodedupResidual>', () => {
       note: 'stejny byt!',
     });
   });
+
+  /* A pick-one is the ONE joined bar (operator ruling 2026-10-27), drawn via Segmented:
+   * the view switch keeps its order, groups first. */
+  it('draws the view switch as a joined bar, the chosen view filled copper', async () => {
+    renderPage();
+    await screen.findByText(/Proč to engine nesloučil/);
+    const bar = screen.getByRole('group', { name: 'Zobrazení' });
+    expect(bar.firstElementChild).toHaveClass('inline-flex', 'border', 'bg-[var(--color-paper-2)]');
+    expect(within(bar).getAllByRole('button').map((b) => b.textContent)).toEqual(['po skupinách', 'po dvojicích']);
+    expect(within(bar).getByRole('button', { name: 'po dvojicích' })).toHaveClass(
+      'bg-[var(--color-copper)]',
+      'text-[var(--color-on-copper)]',
+    );
+  });
 });

@@ -143,11 +143,41 @@ describe('phone frame', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Účet' }));
     const sheet = await screen.findByRole('dialog', { name: 'Účet' });
     expect(within(sheet).getByText('operator@example.cz')).toBeInTheDocument();
-    expect(within(sheet).getByRole('radio', { name: 'Světlý' })).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: 'Světlý' })).toBeInTheDocument();
     /* jsdom is no iPhone: the switch is drawn, disabled (PushSwitch.test has the states). */
     expect(await within(sheet).findByRole('switch', { name: 'Oznámení na tomto iPhonu' })).toBeDisabled();
     expect(within(sheet).getByRole('button', { name: /Desktopová verze/ })).toBeInTheDocument();
     expect(within(sheet).getByRole('button', { name: 'Odhlásit' })).toBeInTheDocument();
+  });
+
+  /* Operator ruling 2026-10-27 (system.md § Option groups): Vzhled is the one
+   * joined bar in its phone tone (chosen = ink on the inset well, never copper),
+   * across the sheet; the colour-scheme tiles stay tiles (a bar loses the swatch). */
+  it('picks the theme on the phone-tone joined bar, the scheme tiles staying tiles', async () => {
+    setNarrow(true);
+    renderAt('/feed');
+    await userEvent.click(screen.getByRole('button', { name: 'Účet' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Účet' });
+    const group = within(sheet).getByRole('group', { name: 'Vzhled' });
+    const buttons = within(group).getAllByRole('button');
+    expect(buttons.map((b) => b.textContent)).toEqual(['Světlý', 'Tmavý', 'Systém']);
+    expect(Array.from(group.children)).toEqual(buttons);
+    expect(group).toHaveClass('w-full', 'border', 'border-[var(--color-rule-strong)]');
+    for (const b of buttons) {
+      expect(b).not.toHaveClass('border-l');
+      expect(b.className).not.toMatch(/copper/);
+    }
+    expect(buttons[0]).toHaveAttribute('aria-pressed', 'true');
+    expect(buttons[0]).toHaveClass('bg-[var(--color-inset)]', 'text-[var(--color-ink)]');
+
+    await userEvent.click(buttons[1]);
+    expect(buttons[1]).toHaveAttribute('aria-pressed', 'true');
+    expect(buttons[0]).toHaveAttribute('aria-pressed', 'false');
+    expect(localStorage.getItem('sreality.theme')).toBe('dark');
+
+    expect(within(sheet).getAllByRole('radio').map((r) => r.textContent)).toEqual(['Měď', 'Kobalt', 'Grafit']);
+    expect(within(sheet).getByRole('radiogroup', { name: 'Barevné schéma' })).toBeInTheDocument();
+    document.documentElement.removeAttribute('data-theme');
   });
 
   /* The phone has no Admin menu, and system alerts never reach the bell (ruling

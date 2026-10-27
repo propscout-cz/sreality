@@ -6,7 +6,7 @@
  * collapsed (tests never render a live map). */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -143,6 +143,80 @@ describe('<BrowseExperience> one portal\'s "Newest first"', () => {
   });
 });
 
+/* Ruling P09 (2026-10-27): the header keeps the count and what is counted; every
+ * filter beyond the defaults is a removable pill under it, × resetting that one. */
+describe('<BrowseExperience> the header', () => {
+  const headline = () =>
+    screen.getByText((_, el) => el?.tagName === 'P' && /apartments for sale$/.test(el.textContent ?? ''));
+  const pills = () => screen.queryByRole('list', { name: 'Applied filters' });
+  afterEach(() => vi.mocked(queries.fetchBrowseCount).mockResolvedValue(1));
+
+  it('says the count and what is counted, and the filters as pills under it', async () => {
+    vi.mocked(queries.fetchBrowseCount).mockResolvedValue(12_345);
+    renderBrowse(['idnes']);
+    const count = (12_345).toLocaleString('cs-CZ');
+    await waitFor(() => expect(headline().textContent).toBe(`${count} apartments for sale`));
+    expect(within(headline()).getByText(/^12\s345$/).className).toContain('tabular-nums');
+    expect(screen.queryByText(/^Showing/)).toBeNull();
+
+    fireEvent.click(within(pills()!).getByRole('button', { name: 'Source portal: on iDNES' }));
+    await waitFor(() => expect(pills()).toBeNull());
+    expect(queries.fetchBrowseCount).toHaveBeenLastCalledWith(
+      expect.objectContaining({ portals: [] }),
+      expect.anything(),
+    );
+  });
+
+  /* The map sets its area on the first pan: the line the pill lands on is kept
+   * on the defaults too, so the tabs, cards and map do not jump down under it. */
+  it('keeps the pills\' line when no filter is set', async () => {
+    renderBrowse([]);
+    await waitFor(() => expect(headline().textContent).toBe('1 apartments for sale'));
+    expect(pills()).toBeNull();
+    expect(screen.getByTestId('applied-filters-row').className).toMatch(/min-h-/);
+  });
+});
+
+/* Ruling P10 (2026-10-27): "Sloučit…" beside Cover and Sort above the cards opens
+ * the merge bar in its row under the tabs; Cancel brings the button back. */
+describe('<BrowseExperience> merge mode', () => {
+  function MergeHost() {
+    const view = useMemoryBrowseState({ filters: DEFAULT_FILTERS, sort: DEFAULT_SORT, tab: 'map' });
+    return (
+      <BrowseExperience
+        view={view}
+        layout="modal"
+        features={{ presetBar: false, watchdog: false, mergeMode: true, title: false, sidebar: false }}
+      />
+    );
+  }
+
+  it('is entered from the cards header, not the tab row', async () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <MergeHost />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const enter = await screen.findByRole('button', { name: 'Sloučit…' });
+    const sort = screen.getByRole('combobox', { name: /Sort/ });
+    expect(enter.parentElement).toBe(sort.closest('label')!.parentElement);
+    expect(screen.queryByRole('button', { name: 'Merge mode' })).toBeNull();
+
+    fireEvent.click(enter);
+    const letters = screen.getByRole('group', { name: 'Písmeno, které zapíše kliknutí' });
+    expect(letters).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sloučit…' })).toBeNull();
+    // Its own row under the tab strip's rule, never on the strip.
+    expect(screen.getByRole('tablist', { name: 'Zobrazení výsledků' }).parentElement).not.toContainElement(letters);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('button', { name: 'Sloučit…' })).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Písmeno, které zapíše kliknutí' })).toBeNull();
+  });
+});
+
 /* The badge reads the property's ad count off the cards read (`source_count`,
  * migration 590): the page wires no second read for it. */
 describe('<BrowseExperience> the cards\' ad counts', () => {
@@ -258,6 +332,83 @@ describe('<BrowseExperience> Stats tab', () => {
     /* The modal layout (no preset bar) still hands over the view and the lens: one Stats tab everywhere. */
     expect(board).toHaveAttribute('data-view', 'yes');
     expect(board).toHaveAttribute('data-market', 'filter');
+  });
+
+  /* Ruling S07 (2026-10-27): these two labels only; every other English word stays. */
+  it('names its tabs Nemovitosti and Statistiky', async () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <StatsHost filters={DEFAULT_FILTERS} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByRole('tab', { name: 'Statistiky' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: /^Nemovitosti/ })).toHaveAttribute('aria-selected', 'false');
+    expect(screen.queryByRole('tab', { name: /^(Stats|Properties)/ })).toBeNull();
+  });
+});
+
+/* The tab-strip ruling (2026-10-27, option A): one strip whose rule runs under the
+ * whole row, the toggles at its right end above the rule, one count pill, arrow keys. */
+describe('<BrowseExperience> tab strip', () => {
+  it('puts Split | Cards and the image size on the tab strip, above its rule', async () => {
+    renderBrowse([]);
+    const list = await screen.findByRole('tablist', { name: 'Zobrazení výsledků' });
+    const strip = list.parentElement!;
+    expect(strip.className.split(' ')).toEqual(expect.arrayContaining(['border-b', 'border-[var(--color-rule)]']));
+    for (const name of ['Properties layout', 'Card image size']) {
+      const group = screen.getByRole('group', { name });
+      expect(strip).toContainElement(group);
+      expect(list).not.toContainElement(group);
+    }
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Statistiky' }));
+    expect(screen.queryByRole('group', { name: 'Properties layout' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Card image size' })).toBeNull();
+  });
+
+  /* Split | Cards is the one joined bar (ruling 2026-10-27), drawn as its
+   * neighbour the image size is: hugging, at the reading size. */
+  it('draws Split | Cards as the hugging joined bar beside the image size', async () => {
+    renderBrowse([]);
+    const layout = await screen.findByRole('group', { name: 'Properties layout' });
+    const size = screen.getByRole('group', { name: 'Card image size' });
+    expect(layout.className).toBe(size.className);
+    expect((layout.firstElementChild as HTMLElement).className).toBe((size.firstElementChild as HTMLElement).className);
+    const split = within(layout).getByRole('button', { name: 'Split' });
+    const cards = within(layout).getByRole('button', { name: 'Cards' });
+    expect(split.parentElement).toBe(layout.firstElementChild);
+    expect(split).toHaveAttribute('title', 'Show the map beside the cards');
+    expect(split.querySelector('svg')).not.toBeNull();
+    expect(split).toHaveClass('shrink-0', 'px-2', 'py-1', 'text-xs');
+    /* The suite starts with the map folded away (no map engine in jsdom). */
+    expect(split).toHaveAttribute('aria-pressed', 'false');
+    expect(cards).toHaveAttribute('aria-pressed', 'true');
+    expect(cards).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+    expect(cards).toHaveAttribute('title', 'Hide the map — full-width cards');
+  });
+
+  it('shows the cohort total in the tab’s count pill', async () => {
+    vi.mocked(queries.fetchBrowseCount).mockResolvedValueOnce(12_345);
+    renderBrowse([]);
+    const tab = await screen.findByRole('tab', { name: /^Nemovitosti/ });
+    const pill = await within(tab).findByText(/^12\s345$/);
+    expect(pill.className.split(' ')).toEqual(expect.arrayContaining(['rounded-full', 'bg-[var(--color-inset)]']));
+  });
+
+  it('switches to Statistiky with ArrowRight, focus following, each tab naming its panel', async () => {
+    renderBrowse([]);
+    const cards = await screen.findByRole('tab', { name: /^Nemovitosti/ });
+    expect(document.getElementById(cards.getAttribute('aria-controls')!)).toHaveAttribute('role', 'tabpanel');
+
+    fireEvent.keyDown(cards, { key: 'ArrowRight' });
+    const stats = screen.getByRole('tab', { name: 'Statistiky' });
+    expect(stats).toHaveAttribute('aria-selected', 'true');
+    expect(document.activeElement).toBe(stats);
+    const panel = document.getElementById(stats.getAttribute('aria-controls')!);
+    expect(panel).toHaveAttribute('role', 'tabpanel');
+    expect(panel).toHaveAttribute('aria-labelledby', stats.id);
   });
 });
 

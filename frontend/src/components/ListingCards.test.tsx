@@ -22,16 +22,18 @@
  * keyboard or a screen reader reaches the card, and nothing else.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 
-import { useEffect } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import ListingCards from './ListingCards';
+import type { CohortKind } from '@/lib/filters';
 import { CardHydrationProvider } from '@/lib/hydration';
 import { useMergeMode, type MergeMode } from '@/lib/useMergeMode';
+import { PHONE_SHELL_QUERY } from '@/lib/phoneShell';
 import { expectNoNestedInteractive } from '@/test/a11y';
 import * as api from '@/lib/api';
 import * as brokers from '@/lib/brokers';
@@ -164,10 +166,15 @@ function renderGrid(
     rows?: CardRow[];
     onHover?: (targets: ReadonlyArray<HoverTarget> | null) => void;
     orderPortal?: string | null;
+    cohortKind?: CohortKind | null;
     coverTag?: CoverTag;
     onCoverTag?: (next: CoverTag) => void;
+    onEnterMerge?: () => void;
     /* Browse opts the storey in; the grid tests that predate it do not. */
     floors?: boolean;
+    hasNextPage?: boolean;
+    scroll?: 'column' | 'page';
+    empty?: ReactNode;
   } = {},
 ) {
   const qc = new QueryClient({
@@ -184,13 +191,16 @@ function renderGrid(
             total={1}
             sort={{ field: 'last_seen_at', dir: 'desc' } as never}
             orderPortal={opts.orderPortal}
+            cohortKind={opts.cohortKind}
             imageLarge={false}
             coverTag={opts.coverTag ?? 'default'}
             onCoverTag={opts.onCoverTag ?? (() => {})}
             isLoading={false}
             isFetchingNextPage={false}
-            hasNextPage={false}
+            hasNextPage={opts.hasNextPage ?? false}
             onReachEnd={() => {}}
+            scroll={opts.scroll}
+            empty={opts.empty}
             restorationKey="test"
             hasFilters={false}
             hasBounds={false}
@@ -200,6 +210,7 @@ function renderGrid(
             onClearFilters={() => {}}
             onClearBounds={() => {}}
             merge={merge}
+            onEnterMerge={opts.onEnterMerge}
             estimates={opts.estimates}
             estimatingIds={new Set()}
             onEstimate={() => {}}
@@ -474,6 +485,32 @@ describe('<ListingCards> the cover photo', () => {
   });
 });
 
+/* Ruling P10 (2026-10-27): merge mode is entered from a quiet "Sloučit…" beside
+ * Cover and Sort above the cards; the bar it opens says the rest. */
+describe('<ListingCards> the way into merge mode', () => {
+  const enterButton = () => screen.queryByRole('button', { name: 'Sloučit…' });
+
+  it('sits after the Sort select in the header and enters the mode', async () => {
+    const onEnterMerge = vi.fn();
+    renderGrid({ onEnterMerge });
+    const sort = await screen.findByRole('combobox', { name: /Sort/ });
+    const button = enterButton()!;
+    expect(sort.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(button.parentElement).toBe(sort.closest('label')!.parentElement);
+    expect(button.className).not.toContain('copper');
+    fireEvent.click(button);
+    expect(onEnterMerge).toHaveBeenCalledTimes(1);
+  });
+
+  it('is absent where the surface has no merge mode, and while the mode is on', async () => {
+    renderGrid();
+    await screen.findByRole('combobox', { name: /Sort/ });
+    expect(enterButton()).toBeNull();
+    renderGrid({ onEnterMerge: vi.fn(), merge: {} });
+    expect(enterButton()).toBeNull();
+  });
+});
+
 describe('<ListingCards> hover-sync', () => {
   /* The card hands the map its own point, so the locator halo lands on the
    * property even while the map shows it only inside a count mark. */
@@ -574,14 +611,47 @@ describe('<ListingCards> the card is not a link — its TITLE is', () => {
     expect(locationNow()).toBe('/');
   });
 
-  it('navigates to the property page on a plain click of the title link', async () => {
+  /* Browse is a list worked through card by card, so on the desktop a card
+     opens its property in a NEW TAB and Browse stays where it was. The router
+     leaves a target="_blank" click to the browser, so this tab never moves. */
+  it('opens the property page in a new tab, leaving Browse in place', async () => {
     renderGrid();
 
-    fireEvent.click(await screen.findByRole('link', { name: /^Byt na prodej/ }));
-
+    const link = await screen.findByRole('link', { name: /^Byt na prodej/ });
     // The card's own advert rides along; the page ignores it when it is the
     // canonical one and opens its row when the card is one portal's advert.
-    expect(locationNow()).toBe('/property/42?advert=111');
+    expect(link).toHaveAttribute('href', '/property/42?advert=111');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener');
+
+    fireEvent.click(link);
+    expect(locationNow()).toBe('/');
+  });
+
+  describe('in the phone shell', () => {
+    const originalMatchMedia = window.matchMedia;
+    beforeEach(() => {
+      window.matchMedia = ((query: string) => ({
+        matches: query === PHONE_SHELL_QUERY,
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      })) as unknown as typeof window.matchMedia;
+    });
+    afterEach(() => {
+      window.matchMedia = originalMatchMedia;
+    });
+
+    /* There a new tab would leave the installed app for the browser. */
+    it('navigates in place on a plain click of the title link', async () => {
+      renderGrid();
+
+      const link = await screen.findByRole('link', { name: /^Byt na prodej/ });
+      expect(link).not.toHaveAttribute('target');
+
+      fireEvent.click(link);
+      expect(locationNow()).toBe('/property/42?advert=111');
+    });
   });
 
   /* Same rule lib/linkGestures encodes for the surfaces the router does not
@@ -620,9 +690,11 @@ describe('<ListingCards> the card is not a link — its TITLE is', () => {
 
     const link = await screen.findByRole('link', { name: /Výnos/ });
     expect(link).toHaveAttribute('href', '/listing/sreality/900?run=77#estimations');
+    // A new tab, like the card itself: one card never opens two ways.
+    expect(link).toHaveAttribute('target', '_blank');
 
     fireEvent.click(link);
-    expect(locationNow()).toBe('/listing/sreality/900?run=77#estimations');
+    expect(locationNow()).toBe('/');
   });
 });
 
@@ -991,11 +1063,22 @@ describe('<ListingCards> the portal badge and the order date', () => {
 
   it('truncates a long list at its end, never its start, inside the card', () => {
     renderGrid({ row: { ...ROW, is_active: false, all_sources: ['ceskereality', 'idnes', 'realitymix', 'sreality'], active_sources: [] } });
-    expect(badge().firstElementChild).toHaveClass('truncate', 'min-w-0');
-    expect(badge()).toHaveClass('max-w-full');
-    expect(badge().parentElement).toHaveClass('max-w-[calc(100%-0.5rem)]');
+    expect(badge()).toHaveClass('truncate', 'min-w-0');
     /* Only the portal list truncates: the lifespan run keeps its whole text. */
-    expect(screen.getByTitle(/^Neaktivní/)).not.toHaveClass('max-w-full');
+    expect(screen.getByTitle(/^Neaktivní/)).not.toHaveClass('truncate');
+  });
+
+  /* Ruling P01 (2026-10-27): the portals left the photo for the card's foot, on
+     the line above the MF yield; the photo keeps the lifespan and the ad count. */
+  it('names the portals in the foot, above the MF yield, not on the photo', () => {
+    renderGrid({ row: { ...ROW, mf_gross_yield_pct: 4.1, source_count: 2 } as CardRow });
+    const portals = badge();
+    const yieldLine = screen.getByTitle(/^Hrubý výnos/);
+    expect(portals.compareDocumentPosition(yieldLine) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const photo = screen.getByTitle(/^Aktivní/).closest('.aspect-\\[5\\/4\\]');
+    expect(photo).not.toBeNull();
+    expect(photo).not.toContainElement(portals);
+    expect(photo).toContainElement(screen.getByTitle(/^Nemovitost spojuje/));
   });
 
   const lifespan = () => screen.getByTitle(/^Aktivní/).textContent;
@@ -1019,5 +1102,155 @@ describe('<ListingCards> the portal badge and the order date', () => {
   it('shows no portal date without the one-portal order', () => {
     renderGrid({ row: { ...ROW, newest_ad_at_idnes: '2026-03-05T10:00:00Z' } as CardRow });
     expect(lifespan()).not.toContain('iDNES');
+  });
+});
+
+/* Ruling P05 (2026-10-27): a card of the one type and deal the filter pins drops
+   "Byt na prodej ·" from its title; any other card keeps it. */
+describe('<ListingCards> the title drops what the filter says', () => {
+  const SALE_FLATS: CohortKind = { categoryMain: 'byt', categoryType: 'prodej' };
+  const link = () => screen.getByRole('link', { name: /m²/ });
+
+  it('reads "2+kk · 62 m²" under a filter of flats for sale', () => {
+    renderGrid({ cohortKind: SALE_FLATS });
+    expect(link()).toHaveAccessibleName(/^2\+kk · 62\sm²$/);
+  });
+
+  it('keeps the prefix when the filter spans several types or both deals', () => {
+    renderGrid({ cohortKind: null });
+    expect(link()).toHaveAccessibleName(TITLE_RE);
+  });
+
+  it('keeps the prefix on a card whose own type or deal is not the filter\'s', () => {
+    renderGrid({ cohortKind: SALE_FLATS, row: { ...ROW, category_type: 'pronajem' } as CardRow });
+    expect(link()).toHaveAccessibleName(/^Byt k pronájmu · 2\+kk · 62\sm²$/);
+  });
+
+  it('keeps the prefix on a card of another type under the same deal', () => {
+    renderGrid({
+      cohortKind: SALE_FLATS,
+      row: { ...ROW, category_main: 'dum', subtype: null, disposition: '5+1', area_m2: 180 } as CardRow,
+    });
+    expect(link()).toHaveAccessibleName(/^Dům na prodej · 5\+1 · 180\sm²$/);
+  });
+
+  it('keeps a house\'s subtype, which the filter does not name', () => {
+    renderGrid({
+      cohortKind: { categoryMain: 'dum', categoryType: 'prodej' },
+      row: { ...ROW, category_main: 'dum', subtype: 'rodinny_dum', disposition: null, area_m2: 140 } as CardRow,
+    });
+    expect(link()).toHaveAccessibleName(/^Rodinný dům · 140\sm²$/);
+  });
+
+  it('keeps the full title when nothing would be left', () => {
+    renderGrid({
+      cohortKind: { categoryMain: 'pozemek', categoryType: 'prodej' },
+      row: { ...ROW, category_main: 'pozemek', disposition: null, area_m2: null, plot_area_m2: null } as CardRow,
+    });
+    expect(screen.getByRole('link', { name: /^Pozemek na prodej$/ })).toBeInTheDocument();
+  });
+});
+
+/* Rulings P02 and P03 (2026-10-27): the photo shows just the counter; the room
+   tag is an overlay that appears with the pointer or focus on the card. */
+describe('<ListingCards> the photo overlays', () => {
+  const tagged = (renderScore: number) =>
+    vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(
+      new Map([[111, [1, 2].map((id) => ({
+        ...photo(id), clip_fine_tag: 'kitchen', clip_confidence: 0.9, clip_render_score: renderScore,
+      }) as unknown as ImagePublic)]]),
+    );
+
+  it('shows the room tag only while the card is hovered or focused, without moving anything', async () => {
+    tagged(0.1);
+    renderGrid();
+    const tag = await screen.findByText('kuchyně');
+    /* Keyboard focus only: a mouse click on a chevron leaves focus behind, and
+       the tag must not stay shown once the pointer has moved to another card. */
+    expect(tag).toHaveClass('absolute', 'opacity-0', 'group-hover:opacity-100', 'group-has-[:focus-visible]:opacity-100');
+    expect(tag).not.toHaveClass('group-focus-within:opacity-100');
+    expect(tag.closest('.group')).not.toBeNull();
+  });
+
+  it('draws no render verdict, whatever the score', async () => {
+    tagged(0.9);
+    renderGrid();
+    await screen.findByText(counterIs('1 / 2'));
+    expect(screen.queryByText(/^Render \d+$|^Foto \d+$/)).toBeNull();
+  });
+});
+
+/* P06 was declined, with leave to restyle: the storey stays its own label after
+   the place, drawn as a quiet inset label without a border. */
+describe('<ListingCards> the storey label', () => {
+  const floors = () =>
+    vi.mocked(queries.fetchListingFloors).mockResolvedValue(new Map([[111, { floor: 2, total_floors: 5 }]]));
+
+  it('is an inset label with no border', async () => {
+    floors();
+    renderGrid({ floors: true });
+    const tag = await screen.findByText('2. patro z 5');
+    expect(tag).toHaveClass('bg-[var(--color-inset)]');
+    expect(tag.className).not.toMatch(/\bborder\b/);
+  });
+
+  it('sits one step up on a delisted card, whose surface is the inset', async () => {
+    floors();
+    renderGrid({ floors: true, row: { ...ROW, is_active: false, active_sources: [] } as CardRow });
+    expect(await screen.findByText('2. patro z 5')).toHaveClass('bg-[var(--color-paper)]');
+  });
+});
+
+/* Ruling P32: the collection page shows this grid on a page that scrolls itself,
+ * so the column must not be a scroll box there, and the end sentinel must watch
+ * the viewport (on a box that never scrolls it would load every page at once). */
+describe('<ListingCards> on a page that scrolls', () => {
+  const roots: Array<Element | Document | null | undefined> = [];
+  beforeEach(() => {
+    roots.length = 0;
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(_cb: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+          roots.push(options?.root);
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+        takeRecords() {
+          return [];
+        }
+      },
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('by default the end sentinel watches the card column, which scrolls', async () => {
+    renderGrid({ hasNextPage: true });
+    await screen.findByRole('combobox', { name: /Sort/ });
+    const root = roots[roots.length - 1];
+    expect(root).toBeInstanceOf(HTMLElement);
+    expect(root as HTMLElement).toHaveClass('overflow-y-auto');
+  });
+
+  it('scroll="page": the column does not scroll, and the sentinel watches the viewport', async () => {
+    const { container } = renderGrid({ hasNextPage: true, scroll: 'page' });
+    await screen.findByRole('combobox', { name: /Sort/ });
+    expect(roots.length).toBeGreaterThan(0);
+    expect(roots[roots.length - 1]).toBeNull();
+    expect(container.querySelector('.overflow-y-auto')).toBeNull();
+  });
+});
+
+describe('<ListingCards> the empty slot', () => {
+  it("a surface's own empty node replaces the filter empty state", async () => {
+    renderGrid({ rows: [], empty: <p>Nothing here has a card yet.</p> });
+    expect(await screen.findByText('Nothing here has a card yet.')).toBeInTheDocument();
+    expect(screen.queryByText('No listings match these filters.')).toBeNull();
+  });
+
+  it('without one, the filter empty state stays', async () => {
+    renderGrid({ rows: [] });
+    expect(await screen.findByText('No listings match these filters.')).toBeInTheDocument();
   });
 });

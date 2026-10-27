@@ -260,10 +260,23 @@ export const allMarketFilters = (f: ListingFilters): ListingFilters => ({
 /* The sample a lens counts. */
 export const marketSample = (f: ListingFilters, market: StatsMarket): ListingFilters =>
   market === 'sold' ? soldMarketFilters(f) : market === 'all' ? allMarketFilters(f) : f;
+/* The lens's name, as its switch says it; every caption leads with it. */
+export const MARKET_LABEL: Record<StatsMarket, string> = {
+  filter: 'Jako ve filtru',
+  sold: 'Prodáno (trh)',
+  all: 'Vše',
+};
 export const MARKET_CAPTION: Record<StatsMarket, string> = {
-  filter: 'Každý graf počítá nemovitosti z filtru; sestava grafů je uložená k vašemu účtu.',
+  filter: 'Jako ve filtru: každý graf počítá nemovitosti z filtru; sestava grafů je uložená k vašemu účtu.',
   sold: 'Prodáno (trh): jen neaktivní nemovitosti sledované od vzniku, 2–60 dní na trhu, včetně skrytých; ostatní filtry platí.',
   all: 'Vše: aktivní i neaktivní nemovitosti, včetně skrytých, bez omezení doby na trhu; ostatní filtry platí.',
+};
+/* A caption split for the Stats tab, which sets the lens's name in bold (ruling S03). */
+export const marketCaption = (m: StatsMarket): { name: string; text: string } => {
+  const name = MARKET_LABEL[m];
+  const lead = `${name}: `;
+  const caption = MARKET_CAPTION[m];
+  return { name, text: caption.startsWith(lead) ? caption.slice(lead.length) : caption };
 };
 
 
@@ -828,6 +841,11 @@ export function ledgerCounts(pivot: StatsPivot): LedgerCounts | null {
   }
   return { filtered, sample, excluded, split: leaves.length > 0 ? { withStats, underMin } : null };
 }
+
+/* Every cell the payload sent (each level, the Celkem rollup, every column value)
+ * is under its floor: the chart counts, but shows no statistic (ruling S09). */
+export const everyCellUnderMin = (pivot: StatsPivot): boolean =>
+  pivot.cells.length > 0 && pivot.cells.every((c) => c.n < pivot.min_n);
 
 const optionLabel = (filterId: string, value: string): string | null => {
   const o = filterById(filterId)?.enum_values?.find((e) => String(e.value) === value);

@@ -146,12 +146,6 @@ export const LayersIcon = () => (
     <path d="M2 11.1 8 14.3 14 11.1" />
   </Icon>
 );
-export const LabelIcon = () => (
-  <Icon>
-    <path d="M2.5 2.5h5.2l5.8 5.8-5.2 5.2-5.8-5.8Z" />
-    <circle cx="5.6" cy="5.6" r="1" />
-  </Icon>
-);
 export const SlidersIcon = () => (
   <Icon>
     <path d="M2.5 4.5h6.5M12.5 4.5h1M2.5 11.5h1.5M7 11.5h6.5" />
