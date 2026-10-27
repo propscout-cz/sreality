@@ -398,3 +398,16 @@ def test_the_wizard_has_the_general_modes_and_checks_with_its_own_copy() -> None
     calls = re.findall(r"^.*\bnode\b.*plan_check.*$", wizard, re.M)
     assert calls and all('node "$RUN_DIR/plan_check.mjs"' in c for c in calls), calls
     assert "-running." not in wizard
+
+
+def test_a_runner_only_window_asks_no_brake() -> None:
+    """#2025-R2 (a), ruled by e9 on 2026-10-26: a change that targets only job-runner needs no autodedup brake, so
+    its window asks none (#2032's R2 references, W3's and W4's variables). The merge stays on e9's light."""
+    wizard = WIZARD.read_text(encoding="utf-8")
+    assert re.search(r"^RUNNER=job-runner\b", wizard, re.M)
+    window = wizard.split("\nmode_window() {\n", 1)[1].split("\n}\n", 1)[0]
+    brake = window.split('  stage "Brake"\n', 1)[1].split("\n  pause\n", 1)[0]
+    assert brake.startswith('  if [[ "$label" == worker && "$service" != "$RUNNER" ]]; then\n'), brake
+    asked, otherwise = brake.split("\n  else\n", 1)
+    assert "realtime_autodedup_interval_seconds" in asked and "BRAKE_ASKED=1" in asked
+    assert "#2025-R2" in otherwise and "BRAKE_ASKED" not in otherwise
