@@ -9,8 +9,8 @@ waiting at most --download-deadline for its GETs), tags and embeds them, and per
 the tags, then the vectors, then the stamp. Inside --max-seconds it selects again every
 --reselect-seconds and whenever its snapshot drains (never offering again a GET that failed in
 this run: the next slot retries it), and its tag phase ends on a select under one chunk; an
-open campaign is then re-tagged from the stored vectors (scripts/retag_from_embeddings.py)
-under the same deadline.
+open campaign is then re-tagged from the stored vectors (scripts/retag_from_embeddings.py) for
+at most --reselect-seconds, so photos stored meanwhile wait for one run only.
 
 Exit codes, in the runner's terms: 0 done, nothing pending, downloads failing with something
 marked or under a chunk of them, --dry-run; 75 more remains (the budget cut a run that was
@@ -549,7 +549,10 @@ def run(conn: psycopg.Connection, args: argparse.Namespace, *, r2_factory: Calla
     retagged, drained, retag_secs = 0, cutoff is None, 0.0
     if cutoff is not None and why == "done":
         retag_started = clock()
-        retagged, drained = retag_from_embeddings.retag(conn, tagger, cutoff, deadline=deadline, clock=clock)
+        # A slice, not the rest of the budget: photos stored while it runs wait for the next run (75, 60 s later).
+        retagged, drained = retag_from_embeddings.retag(conn, tagger, cutoff,
+                                                        deadline=min(deadline, retag_started + args.reselect_seconds),
+                                                        clock=clock)
         retag_secs = clock() - retag_started
         if not drained:
             why = "stop" if stop.requested() else "retag"

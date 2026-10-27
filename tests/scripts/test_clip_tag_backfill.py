@@ -678,14 +678,25 @@ def test_tag_runs_before_retag_with_one_model_load_and_one_deadline(monkeypatch:
     assert job.run("--max-seconds", "1500") == 0
     assert len(job.loads) == 1
     assert max(i for i, w in enumerate(store.writes) if w == "stamp") < store.writes.index("retag_select")
-    assert deadlines == [1500.0] and not store.campaign_left()
+    assert deadlines == [300.0] and not store.campaign_left(), "a --reselect-seconds slice inside the run's deadline"
+
+
+def test_a_retag_slice_ends_at_the_reselect_interval_so_new_photos_go_first(caplog: pytest.LogCaptureFixture) -> None:
+    """Photos stored while a campaign re-tags wait for the next run: 300 s of retag a run, never the whole budget."""
+    store = _Store(campaign=20 * 512)
+    store.retag_secs = 100.0
+    job = _Job(store)
+    with caplog.at_level(logging.INFO):
+        assert job.run("--max-seconds", "1500") == 75
+    assert store.retagged == 3 * 512
+    assert _lines(caplog)[-1] == "CLIP_JOB exit=75 why=retag"
 
 
 @pytest.mark.parametrize(("campaign", "code", "why"), [(2000, 75, "retag"), (100, 0, "done")])
 def test_a_retag_cut_by_the_budget_exits_75_and_a_drained_one_exits_0(
         caplog: pytest.LogCaptureFixture, campaign: int, code: int, why: str) -> None:
     store = _Store(campaign=campaign)
-    store.retag_secs = 1000.0
+    store.retag_secs = 100.0
     job = _Job(store)
     with caplog.at_level(logging.INFO):
         assert job.run("--max-seconds", "1500") == code
