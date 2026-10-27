@@ -28,8 +28,17 @@ scheme is on.
   Shell header and its account button draw in them; popovers below it stay on paper.
 - **Tags and stages** are the user's colours: the same in every scheme, light/dark only, each 4.5:1 on its wash.
   `tag-copper/sage/brick/ochre` are literal now (they aliased the accent and status tokens).
-- The full proposal (four schemes compared, previews of every agenda) is the PropScout.cz design system
-  artifact; Terakota was proposed and not built.
+- The [PropScout.cz design system artifact](https://claude.ai/artifact/NstEVRTDXyQ8ZNJhEpxv7m) previews every
+  agenda in these schemes with the operator's rulings applied. It is direction, not code: what binds a build
+  is written in this file. Terakota was proposed and dropped (ruling P35).
+
+## Hierarchy rulings (2026-10-27, operator, removal review)
+- **Nothing revealed on hover may move anything.** A hover or focus reveal is an overlay on what is already
+  there (a tag over a card photo, the carousel chevrons), never a line that grows a card or pushes content.
+- 24 changes are confirmed but NOT built yet. Build them from the
+  [review page](https://claude.ai/artifact/WoFQVG1RwmaqXAfBBQoqbV) (P01–P35, each with a before/after picture),
+  one PR per agenda. The 11 declined (P04, P06–P08, P11, P15–P18, P21, P23) stay as they are; don't re-propose.
+- Render scoring is to be removed end to end, front end and backend (operator note on P03): its own scoped PR.
 
 ## Depth
 Borders only. `--color-rule` for structure, `--color-rule-soft` for row separation, `--color-rule-strong`

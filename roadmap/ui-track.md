@@ -15,8 +15,11 @@ toolkit work.
   device (`lib/theme.ts`). A scheme only changes token VALUES (`globals.css`); new tokens `--color-chrome*`
   (the top bar: a dark band in Měď), `--color-on-copper` / `--color-on-brick` (text on an accent or danger
   fill, which `text-white` failed in dark). Proposal and previews: the PropScout.cz design system artifact.
-- **Next (not built):** the design system's hierarchy proposals (Browse header, card, notifications…),
-  each only after the operator rules on it.
+- **Ruled 2026-10-27:** all 35 removal proposals (24 confirmed, 11 declined) and the rule that nothing
+  revealed on hover may shift layout, recorded in `.interface-design/system.md` § Hierarchy rulings.
+- **Next (not built):** the 24 confirmed hierarchy changes, one PR per agenda (Browse card, Browse page and
+  map, Stats, Pipeline, Watchdogs, Notifications, Brokers, Collections, Shell); removing render scoring
+  end to end (operator note on P03), scoped first.
 
 ### Preset groups: boxes on the Browse preset row (2026-10-25, migration 672)
 - **Done** (operator ask 2026-10-25: "group my presets, a boundary box per group, move them into the boxes
