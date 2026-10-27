@@ -130,8 +130,11 @@ with live as (
                        else coalesce(x.last_success_at, coalesce(x.first_at, x.due_at) - x.cadence) end,
                   case when x.paused_until <= now() then x.paused_until end) as since,
          extract(epoch from now() - x.run_at) as flight_s,
+         -- Due since its slot, or since a pause that lapsed after it; requested since the request.
          case when x.run_at is null
-              then least(case when not x.paused and x.due_at <= now() then x.due_at end, x.requested_at) end
+              then least(case when not x.paused and x.due_at <= now()
+                              then greatest(x.due_at, case when x.paused_until <= now() then x.paused_until end) end,
+                         x.requested_at) end
            as waiting_since
     from x
 ), j as (
