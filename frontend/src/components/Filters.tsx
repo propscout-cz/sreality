@@ -47,6 +47,8 @@ const LocationControl = lazyChunk(() =>
 interface SidebarProps {
   filters: ListingFilters;
   onChange: (next: ListingFilters) => void;
+  /* Reset: the default filters, and Browse deselects its preset in the same write. */
+  onReset: () => void;
   /* Browse passes this so picking a place in the District typeahead
    * also re-centres the main map. The widget still updates the chip
    * filter via the normal onChange path; this is a side channel for
@@ -284,7 +286,9 @@ function ChevronGlyph({ direction }: { direction: 'left' | 'right' }) {
   );
 }
 
-export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, layout = 'page', onCollapse }: SidebarProps) {
+export function FilterSidebar({
+  filters, onChange, onReset, onLocationPick, width = 320, layout = 'page', onCollapse,
+}: SidebarProps) {
   // <FilterForm> reads snake_case registry ids; Browse keeps the
   // camelCase `ListingFilters` shape its queries / URL serialisation
   // already use. The adapter in lib/filters bridges both directions
@@ -405,7 +409,7 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
           {!isDefault(filters) && (
             <button
               type="button"
-              onClick={() => onChange(DEFAULT_FILTERS)}
+              onClick={onReset}
               className="text-[0.7rem] tracking-wide uppercase text-[var(--color-ink-3)] hover:text-[var(--color-copper)] transition-colors"
             >
               Reset
