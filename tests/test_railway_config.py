@@ -408,6 +408,9 @@ def test_a_runner_only_window_asks_no_brake() -> None:
     window = wizard.split("\nmode_window() {\n", 1)[1].split("\n}\n", 1)[0]
     brake = window.split('  stage "Brake"\n', 1)[1].split("\n  pause\n", 1)[0]
     assert brake.startswith('  if [[ "$label" == worker && "$service" != "$RUNNER" ]]; then\n'), brake
-    asked, otherwise = brake.split("\n  else\n", 1)
+    asked, rest = brake.split('\n  elif [[ "$label" == worker ]]; then\n', 1)
+    runner_only, otherwise = rest.split("\n  else\n", 1)
     assert "realtime_autodedup_interval_seconds" in asked and "BRAKE_ASKED=1" in asked
-    assert "#2025-R2" in otherwise and "BRAKE_ASKED" not in otherwise
+    assert "#2025-R2" in runner_only and "$RUNNER" in runner_only and "BRAKE_ASKED" not in runner_only
+    # A vite or API window skips the brake for its own reason, never the runner ruling's.
+    assert "the worker's project" in otherwise and "#2025-R2" not in otherwise and "BRAKE_ASKED" not in otherwise

@@ -603,8 +603,10 @@ mode_window() {
     gate "Has e9 now set realtime_autodedup_interval_seconds to 0 (the brake)?"
     BRAKE_ASKED=1
     agent_reports "autodedup.rt_lease is empty (one SQL read)"
+  elif [[ "$label" == worker ]]; then
+    say "Not needed: every change targets $RUNNER (#2025-R2 (a): $RUNNER alone needs no brake)."
   else
-    say "Not needed: the apply does not touch the worker's service (#2025-R2 (a): $RUNNER alone needs no brake)."
+    say "Not needed: the apply does not touch the worker's project."
   fi
   pause
 
