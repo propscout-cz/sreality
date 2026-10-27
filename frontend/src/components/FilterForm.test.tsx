@@ -4,7 +4,7 @@
  *   - filters declared for the requested agenda render; others don't
  *   - includeOnly narrows the set, with min/max pair auto-inclusion
  *   - tri-state filters render as TriRow (any/yes/no)
- *   - pill_group filters render as a button grid
+ *   - pill_group filters and on/off filters render as the one joined bar
  *   - paired ranges with full bounds render the slider; without
  *     bounds, they render paired inputs
  *   - customWidgets overrides the dispatcher
@@ -17,9 +17,22 @@
 
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 
 import { FilterForm } from './FilterForm';
+
+const CHOSEN = ['bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]'];
+
+/* The one joined bar (SegmentedBar): every segment in one track, none of them a
+ * bordered chip of its own. */
+function expectJoined(buttons: HTMLElement[]) {
+  const track = buttons[0].parentElement!;
+  for (const b of buttons) {
+    expect(b.parentElement).toBe(track);
+    expect(b).not.toHaveClass('border');
+  }
+  expect(track).toHaveClass('border', 'border-[var(--color-rule)]', 'bg-[var(--color-paper-2)]');
+}
 
 describe('<FilterForm>', () => {
   it('renders filters declared for the scope', () => {
@@ -109,6 +122,122 @@ describe('<FilterForm>', () => {
     expect(onChange).toHaveBeenCalledWith([
       { id: 'category_type', value: 'prodej' },
     ]);
+  });
+
+  /* "Listing for" has no Vše (ruling 2026-10-20) and is the one joined bar
+   * (ruling 2026-10-27): no deal lights nothing, and the lit deal releases. */
+  it('draws a nullable pill_group as the joined bar that lights nothing and releases', () => {
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <FilterForm
+        scope="browse"
+        state={{ category_type: null }}
+        onChange={onChange}
+        includeOnly={['category_type']}
+        labels={{ category_type: 'Listing for' }}
+        flat
+      />,
+    );
+    const bar = screen.getByRole('group', { name: 'Listing for' });
+    const deals = within(bar).getAllByRole('button');
+    expect(deals.map((b) => b.textContent)).toEqual(['Pronájem', 'Prodej', 'Dražba', 'Podíl']);
+    expectJoined(deals);
+    for (const b of deals) expect(b).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(screen.getByRole('button', { name: 'Prodej' }));
+    expect(onChange).toHaveBeenLastCalledWith([{ id: 'category_type', value: 'prodej' }]);
+
+    rerender(
+      <FilterForm
+        scope="browse"
+        state={{ category_type: 'prodej' }}
+        onChange={onChange}
+        includeOnly={['category_type']}
+        labels={{ category_type: 'Listing for' }}
+        flat
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Prodej' })).toHaveClass(...CHOSEN);
+    fireEvent.click(screen.getByRole('button', { name: 'Prodej' }));
+    expect(onChange).toHaveBeenLastCalledWith([{ id: 'category_type', value: null }]);
+  });
+
+  /* The phone Filtry sheet drew Status through this form: a tap on the lit chip
+   * stored status null, and the live count showed inactive properties only. */
+  it('never empties a pick-one that is not nullable: a click on the lit segment sets it again', () => {
+    const onChange = vi.fn();
+    render(
+      <FilterForm
+        scope="browse"
+        state={{ status: 'active' }}
+        onChange={onChange}
+        includeOnly={['status']}
+        labels={{ status: 'Status' }}
+        flat
+      />,
+    );
+    const statuses = within(screen.getByRole('group', { name: 'Status' })).getAllByRole('button');
+    expect(statuses.map((b) => b.textContent)).toEqual(['Vše', 'Aktivní', 'Neaktivní']);
+    expectJoined(statuses);
+    expect(screen.getByRole('button', { name: 'Aktivní' })).toHaveClass(...CHOSEN);
+    fireEvent.click(screen.getByRole('button', { name: 'Aktivní' }));
+    expect(onChange).toHaveBeenLastCalledWith([{ id: 'status', value: 'active' }]);
+  });
+
+  /* A lone on/off is the two-segment bar "<off> | <label>", as the sidebar's
+   * "All ads | Seen at birth" always was (ruling 2026-10-27). */
+  it('draws an on/off filter as the two-segment bar, off first, named by its label', () => {
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <FilterForm
+        scope="browse"
+        state={{ with_estimates: false }}
+        onChange={onChange}
+        includeOnly={['with_estimates']}
+        labels={{ with_estimates: 'With estimates' }}
+        flat
+      />,
+    );
+    const bar = screen.getByRole('group', { name: 'With estimates' });
+    const segs = within(bar).getAllByRole('button');
+    expect(segs.map((b) => b.textContent)).toEqual(['All properties', 'With estimates']);
+    expectJoined(segs);
+    expect(segs[0]).toHaveAttribute('aria-pressed', 'true');
+    expect(segs[0]).toHaveClass(...CHOSEN);
+    fireEvent.click(segs[1]);
+    expect(onChange).toHaveBeenLastCalledWith([{ id: 'with_estimates', value: true }]);
+
+    rerender(
+      <FilterForm
+        scope="browse"
+        state={{ with_estimates: true }}
+        onChange={onChange}
+        includeOnly={['with_estimates']}
+        labels={{ with_estimates: 'With estimates' }}
+        flat
+      />,
+    );
+    expect(within(bar).getByRole('button', { name: 'With estimates' })).toHaveClass(...CHOSEN);
+    fireEvent.click(within(bar).getByRole('button', { name: 'All properties' }));
+    expect(onChange).toHaveBeenLastCalledWith([{ id: 'with_estimates', value: false }]);
+  });
+
+  /* The Watchdog editor and the phone sheet draw these through the form; each
+   * names its off side in the sidebar's words. */
+  it('names each on/off filter\'s off side', () => {
+    render(
+      <FilterForm
+        scope="browse"
+        state={{}}
+        onChange={vi.fn()}
+        includeOnly={['tom_observed_only', 'include_no_price']}
+        labels={{ tom_observed_only: 'Seen at birth', include_no_price: 'Include unpriced' }}
+        flat
+      />,
+    );
+    const born = screen.getByRole('group', { name: 'Seen at birth' });
+    expect(within(born).getAllByRole('button').map((b) => b.textContent)).toEqual(['All ads', 'Seen at birth']);
+    const unpriced = screen.getByRole('group', { name: 'Include unpriced' });
+    expect(within(unpriced).getAllByRole('button').map((b) => b.textContent)).toEqual(['Priced only', 'Include unpriced']);
   });
 
   it('renders tristate filters as the TriRow control', () => {

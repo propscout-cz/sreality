@@ -34,6 +34,7 @@ import {
   type HoverData,
 } from '@/lib/growthChoropleth';
 import HoverChart from '@/components/HoverChart';
+import { SegmentedBar, type SegmentOption } from '@/components/controls';
 import MapOverlayControls, { MapOverlayLegends } from '@/components/MapOverlayControls';
 import { MapLegendCard, OverlayChip, OverlayPanel } from '@/components/OverlayChip';
 import {
@@ -1853,59 +1854,44 @@ function CityIndexLegend({ index }: { index: CityIndexDefinition }) {
   );
 }
 
-/* The "Ceny" segmented control — the pin label switches between the total price
- * and the per-m² measure. Two buttons rather than a dropdown because there are
- * exactly two states and the current one has to be readable at a glance while
- * the operator is reading pins. It does NOT recolour anything: per-basis colour
- * ramps are a separate problem (a sale ramp and a rent ramp cannot share a
- * domain) and are deliberately not in this wave. The rail's "za m²" button is
- * the same switch. */
-function PriceMetricControls({
+/* The "Ceny" pick-one — the pin label switches between the total price and the
+ * per-m² measure: the one joined bar (operator ruling 2026-10-27), its chosen
+ * segment copper like every pick-one's. Two segments rather than a dropdown
+ * because there are exactly two states and the current one has to be readable
+ * at a glance while the operator is reading pins. It does NOT recolour
+ * anything: per-basis colour ramps are a separate problem (a sale ramp and a
+ * rent ramp cannot share a domain) and are deliberately not in this wave. The
+ * rail's "za m²" button is the same switch. */
+export function PriceMetricControls({
   priceMetric,
   onPriceMetricChange,
 }: {
   priceMetric: PriceMetric;
   onPriceMetricChange?: (next: PriceMetric) => void;
 }) {
-  const opts: ReadonlyArray<{ value: PriceMetric; label: string }> = [
-    { value: 'total', label: 'Celkem' },
-    /* A basis-FREE word, deliberately not PPM2_UNIT.sale. This control picks a
-       metric, not a basis: the default Browse cohort is `pronajem`, so borrowing
-       the sale unit would print "Kč/m²" on a button whose every pin reads
-       "Kč/m²/měs". It would also couple the button to the sale unit string, so
-       editing that string later would silently rewrite this label. */
-    { value: 'per_m2', label: 'Za m²' },
-  ];
-  const hint = 'Popisky pinů: celková cena nebo cena za m²';
   return (
     <div className="flex items-center gap-2 text-[0.75rem]">
       <span className="text-[var(--color-ink-2)]">Ceny na pinech</span>
-      <div
-        role="group"
-        aria-label="Popisky pinů"
-        className="inline-flex gap-0.5 p-0.5 rounded-[var(--radius-sm)] border border-[var(--color-rule)]"
-      >
-        {opts.map((o) => (
-          <button
-            key={o.value}
-            type="button"
-            aria-pressed={priceMetric === o.value}
-            title={hint}
-            onClick={() => onPriceMetricChange?.(o.value)}
-            className={[
-              'px-2 py-0.5 text-[0.72rem] rounded-[var(--radius-xs)] transition-colors',
-              priceMetric === o.value
-                ? 'bg-[var(--color-ink)] text-[var(--color-paper)]'
-                : 'bg-[var(--color-paper-2)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)]',
-            ].join(' ')}
-          >
-            {o.label}
-          </button>
-        ))}
-      </div>
+      <SegmentedBar
+        label="Popisky pinů"
+        options={PRICE_METRIC_OPTS}
+        value={priceMetric}
+        onChange={(v) => onPriceMetricChange?.(v)}
+      />
     </div>
   );
 }
+
+const PRICE_METRIC_HINT = 'Popisky pinů: celková cena nebo cena za m²';
+const PRICE_METRIC_OPTS: ReadonlyArray<SegmentOption<PriceMetric>> = [
+  { value: 'total', label: 'Celkem', title: PRICE_METRIC_HINT },
+  /* A basis-FREE word, deliberately not PPM2_UNIT.sale. This control picks a
+     metric, not a basis: the default Browse cohort is `pronajem`, so borrowing
+     the sale unit would print "Kč/m²" on a button whose every pin reads
+     "Kč/m²/měs". It would also couple the button to the sale unit string, so
+     editing that string later would silently rewrite this label. */
+  { value: 'per_m2', label: 'Za m²', title: PRICE_METRIC_HINT },
+];
 
 /* The two view knobs: how many properties in view are drawn pin by pin before
  * the map counts them by tile (it IS the server's point budget, so changing it

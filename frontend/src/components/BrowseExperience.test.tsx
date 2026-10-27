@@ -205,7 +205,7 @@ describe('<BrowseExperience> merge mode', () => {
     expect(screen.queryByRole('button', { name: 'Merge mode' })).toBeNull();
 
     fireEvent.click(enter);
-    const letters = screen.getByRole('radiogroup', { name: 'Písmeno, které zapíše kliknutí' });
+    const letters = screen.getByRole('group', { name: 'Písmeno, které zapíše kliknutí' });
     expect(letters).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Sloučit…' })).toBeNull();
     // Its own row under the tab strip's rule, never on the strip.
@@ -213,7 +213,7 @@ describe('<BrowseExperience> merge mode', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.getByRole('button', { name: 'Sloučit…' })).toBeInTheDocument();
-    expect(screen.queryByRole('radiogroup', { name: 'Písmeno, které zapíše kliknutí' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Písmeno, které zapíše kliknutí' })).toBeNull();
   });
 });
 
@@ -366,6 +366,27 @@ describe('<BrowseExperience> tab strip', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Statistiky' }));
     expect(screen.queryByRole('group', { name: 'Properties layout' })).toBeNull();
     expect(screen.queryByRole('group', { name: 'Card image size' })).toBeNull();
+  });
+
+  /* Split | Cards is the one joined bar (ruling 2026-10-27), drawn as its
+   * neighbour the image size is: hugging, at the reading size. */
+  it('draws Split | Cards as the hugging joined bar beside the image size', async () => {
+    renderBrowse([]);
+    const layout = await screen.findByRole('group', { name: 'Properties layout' });
+    const size = screen.getByRole('group', { name: 'Card image size' });
+    expect(layout.className).toBe(size.className);
+    expect((layout.firstElementChild as HTMLElement).className).toBe((size.firstElementChild as HTMLElement).className);
+    const split = within(layout).getByRole('button', { name: 'Split' });
+    const cards = within(layout).getByRole('button', { name: 'Cards' });
+    expect(split.parentElement).toBe(layout.firstElementChild);
+    expect(split).toHaveAttribute('title', 'Show the map beside the cards');
+    expect(split.querySelector('svg')).not.toBeNull();
+    expect(split).toHaveClass('shrink-0', 'px-2', 'py-1', 'text-xs');
+    /* The suite starts with the map folded away (no map engine in jsdom). */
+    expect(split).toHaveAttribute('aria-pressed', 'false');
+    expect(cards).toHaveAttribute('aria-pressed', 'true');
+    expect(cards).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+    expect(cards).toHaveAttribute('title', 'Hide the map — full-width cards');
   });
 
   it('shows the cohort total in the tab’s count pill', async () => {

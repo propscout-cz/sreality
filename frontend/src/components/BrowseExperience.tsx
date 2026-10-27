@@ -34,6 +34,7 @@ import {
   useCardCoverTag,
 } from '@/lib/browseLayout';
 import ImageSizeToggle from '@/components/ImageSizeToggle';
+import { SegmentedBar } from '@/components/controls';
 import { FilterSidebar, FilterSidebarRail } from '@/components/Filters';
 import ListingCards, { CARD_PHOTOS_PER_CARD } from '@/components/ListingCards';
 /* The Stats tab (the chart builder, dnd-kit, recharts) is its own chunk: it is a
@@ -915,9 +916,9 @@ function MapSkeleton() {
 
 /* Properties-tab layout switch: fold the map panel away to give the cards the
  * full width (they reflow to more columns automatically), or bring it back.
- * Reuses the app's segmented-control idiom (LocationModeSection): paper-2
- * track, copper-fill active, borders-only — civic-archive consistent. The
- * choice persists per-browser (useMapCollapsed), not in the shareable URL. */
+ * The one joined bar (operator ruling 2026-10-27), hugging like the image-size
+ * switch beside it. The choice persists per-browser (useMapCollapsed), not in
+ * the shareable URL. */
 function MapViewToggle({
   collapsed,
   onChange,
@@ -925,40 +926,17 @@ function MapViewToggle({
   collapsed: boolean;
   onChange: (collapsed: boolean) => void;
 }) {
-  const seg = (active: boolean) =>
-    [
-      'inline-flex items-center gap-1.5 px-2.5 py-1 text-[0.7rem] rounded-[var(--radius-xs)] transition-colors',
-      active
-        ? 'bg-[var(--color-copper)] text-[var(--color-on-copper)]'
-        : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
-    ].join(' ');
   return (
-    <div
-      role="group"
-      aria-label="Properties layout"
-      className="inline-flex items-center gap-0.5 p-0.5 rounded-[var(--radius-sm)] bg-[var(--color-paper-2)] border border-[var(--color-rule)]"
-    >
-      <button
-        type="button"
-        onClick={() => onChange(false)}
-        aria-pressed={!collapsed}
-        title="Show the map beside the cards"
-        className={seg(!collapsed)}
-      >
-        <SplitGlyph />
-        Split
-      </button>
-      <button
-        type="button"
-        onClick={() => onChange(true)}
-        aria-pressed={collapsed}
-        title="Hide the map — full-width cards"
-        className={seg(collapsed)}
-      >
-        <CardsGlyph />
-        Cards
-      </button>
-    </div>
+    <SegmentedBar
+      hug
+      label="Properties layout"
+      options={[
+        { value: false, label: 'Split', title: 'Show the map beside the cards', glyph: <SplitGlyph /> },
+        { value: true, label: 'Cards', title: 'Hide the map — full-width cards', glyph: <CardsGlyph /> },
+      ]}
+      value={collapsed}
+      onChange={onChange}
+    />
   );
 }
 
