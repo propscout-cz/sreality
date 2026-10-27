@@ -15,6 +15,7 @@ from tests._railway_iac import iac_constant, iac_entry, iac_text
 
 ROOT = Path(__file__).resolve().parents[1]
 WIZARD = ROOT / "scripts" / "railway_iac_wizard.sh"
+PINS = ROOT / "data" / "requirements-clip-runner.txt"
 
 
 def test_no_config_as_code_file_is_left_to_override_the_iac_file() -> None:
@@ -265,13 +266,66 @@ def test_the_runner_image_is_cpu_torch_baked_and_offline() -> None:
     model = final.index("scripts/bake_clip_weights.py data/clip_checkpoint.json")
     assert final.index("ARG EXTRAS\n") < model < final.index("COPY pyproject.toml ./")
     early = re.findall(r"^COPY .*$", final[:final.index("COPY pyproject.toml ./")], re.M)
-    assert [c for c in early if "data/" in c] == ["COPY --from=clip-ref /ref/clip_checkpoint.json ./data/"], early
-    assert final.count('case ",${EXTRAS}," in *,clip,*)') == 2
+    assert [c for c in early if "data/" in c] == ["COPY --from=clip-ref /ref/clip_checkpoint.json ./data/",
+                                                  f"COPY {PINS.relative_to(ROOT)} ./data/"], early
+    assert final.count('case ",${EXTRAS}," in *,clip,*)') == 3
     assert "--index-url https://download.pytorch.org/whl/cpu" in final and '"torch==' in final
     assert "HF_HUB_OFFLINE=1 python" in final and "assert torch.version.cuda is None" in final
     assert not (ROOT / "data" / "clip_checkpoint.json").exists(), "the repo's data/ would overwrite the staged pin"
     assert "MALLOC_ARENA_MAX" not in dockerfile
     assert "COPY scripts/ ./scripts/" in final and "COPY autodedup/ ./autodedup/" in final
+
+
+def _pins() -> dict[str, str]:
+    pins: dict[str, str] = {}
+    for line in PINS.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            name, sep, version = line.partition("==")
+            assert sep and re.fullmatch(r"\d+(\.\d+)*", version), f"not an exact pin: {line}"
+            pins[name] = version
+    return pins
+
+
+def test_the_runner_vector_stack_is_pinned_and_proven() -> None:
+    """Pillow decodes and resizes the pixels CLIP reads, so the re-embed proof (#2032 AC2) holds only while the stack
+    under it stays put: one manifest pins it, a layer after the weights installs it (a bump rebuilds neither torch
+    nor the checkpoint), and the offline proof asserts the installed versions against the same file."""
+    pins = _pins()
+    assert set(pins) == {"transformers", "Pillow", "numpy"}, pins
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    final = dockerfile.rsplit("\nFROM ", 1)[1]
+    rel = PINS.relative_to(ROOT).as_posix()
+    model = final.index("scripts/bake_clip_weights.py data/clip_checkpoint.json")
+    copy = final.index(f"COPY {rel} ./data/")
+    install = final.index(f"pip install -r {rel}")
+    assert model < copy < install < final.index("COPY pyproject.toml ./")
+    guard = final.rindex('case ",${EXTRAS}," in *,clip,*)', 0, install)
+    assert copy < guard and "esac" not in final[guard:install], "the install runs inside a clip guard"
+    for name in pins:
+        assert not re.search(rf"{name}\s*==", dockerfile, re.I), f"{name} is pinned in the Dockerfile, not the file"
+    proof = final.split("HF_HUB_OFFLINE=1 python -c", 1)[1].split("esac", 1)[0]
+    torch_pin = re.search(r'pip install "torch==([\d.]+)"', final)
+    assert torch_pin and torch_pin.group(1) == "2.14.1"
+    assert rel in proof and f'"{torch_pin.group(1)}"' in proof, "the proof asserts the file's versions and torch"
+
+
+def test_the_api_image_is_proven_free_of_clip() -> None:
+    """AC3b (#2032): the API and the worker are one build (EXTRAS=api). CI builds it at the base and at the pull
+    request, fails if it can import torch or transformers or holds the hub cache, and prints both sizes."""
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "runner_image.yml").read_text(encoding="utf-8"))
+    api = [job for job in workflow["jobs"].values()
+           if any("--build-arg EXTRAS=api " in s.get("run", "") for s in job["steps"])]
+    assert len(api) == 1, "one job builds the API image"
+    runs = "\n".join(s.get("run", "") for s in api[0]["steps"])
+    assert "github.event.pull_request.base.sha" in str(api[0]) and "fetch-depth: 0" not in runs
+    assert any(s.get("with", {}).get("fetch-depth") == 0 for s in api[0]["steps"])
+    assert runs.count("docker build ") == 2
+    checks = [s for s in api[0]["steps"] if "find_spec" in s.get("run", "")]
+    assert len(checks) == 1, "one step asserts the head image is clip-free"
+    check = checks[0]["run"]
+    assert all(m in check for m in ('"torch"', '"transformers"', "/root/.cache/huggingface"))
+    assert "docker image inspect -f '{{.Size}}'" in runs and "pip freeze" in runs
 
 
 def test_the_runner_image_workflow_builds_on_every_image_input() -> None:

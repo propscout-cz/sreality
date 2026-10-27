@@ -1,0 +1,7 @@
+# The job runner's CLIP vector stack beside torch (#2032). The root Dockerfile installs this file in its own layer
+# after the baked weights, and its offline proof asserts every version here. Pillow decodes and resizes the pixels
+# CLIP reads, so a bump is followed by a re-embed proof (`request clip -- --verify-reembed`, scripts/clip_reembed.py).
+# torch is pinned in the Dockerfile's model layer (PyTorch's CPU index).
+transformers==4.57.6
+Pillow==13.0.0
+numpy==2.5.4

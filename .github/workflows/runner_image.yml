@@ -4,8 +4,10 @@ name: "CI: runner image"
 # the geo wheels), on every pull request that changes an image input, before Railway first builds it after the merge
 # (#2025): a failure there would leave main unable to build the runner until a fix lands. The build's own offline
 # RUN is the proof (CPU torch, and the checkpoint loads with the hub offline), so the scraper files it imports are
-# inputs too; the log then shows the image size. No secrets; it pushes and deploys nothing. About 10 minutes a run,
-# billed once the repository is private.
+# inputs too; the log then shows the image size. A second job builds the API image (EXTRAS=api, the API's and the
+# worker's one build) at the base and with this pull request, fails if it can import torch or transformers or holds
+# the hub cache, and prints both sizes and the package diff (#2032). No secrets; it pushes and deploys nothing. About
+# 10 minutes a run, billed once the repository is private.
 
 on:
   pull_request:
@@ -15,6 +17,7 @@ on:
       - "pyproject.toml"
       - "scripts/bake_clip_weights.py"
       - "data/clip_taxonomy.json"
+      - "data/requirements-clip-runner.txt"
       - "scraper/__init__.py"
       - "scraper/clip_tagger.py"
       - "scraper/cpus.py"
@@ -35,3 +38,37 @@ jobs:
 
       - name: Image size
         run: docker image ls runner-image
+
+  api-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      # The default checkout is the pull request merged into its base, so against the base it differs by this PR
+      # alone; the history holds the base commit.
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Build the API image at the base and with this pull request
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/base" "$BASE_SHA"
+          docker build --progress=plain --build-arg EXTRAS=api -t api-base "$RUNNER_TEMP/base"
+          docker build --progress=plain --build-arg EXTRAS=api -t api-head .
+
+      # The verdict: every CLIP line of the Dockerfile sits inside its clip guard.
+      - name: The API image holds no torch, transformers or CLIP weights
+        run: |
+          docker run --rm api-head python -c 'import importlib.util as u; found = [m for m in ("torch", "transformers") if u.find_spec(m)]; assert not found, found'
+          docker run --rm api-head sh -c 'test ! -e /root/.cache/huggingface'
+
+      # Information, not a verdict: a legitimate API dependency or data file must not fail it.
+      - name: Sizes and the package diff, base against this pull request
+        run: |
+          for tag in api-base api-head; do echo "$tag $(docker image inspect -f '{{.Size}}' "$tag") bytes"; done
+          docker run --rm api-base pip freeze > "$RUNNER_TEMP/base.txt"
+          docker run --rm api-head pip freeze > "$RUNNER_TEMP/head.txt"
+          diff "$RUNNER_TEMP/base.txt" "$RUNNER_TEMP/head.txt" && echo "the same packages" || true

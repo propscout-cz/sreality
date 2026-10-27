@@ -260,7 +260,7 @@ RUNNER=job-runner   # the job runner's service, in the worker's project (#2025)
 # The runner image's build inputs (.github/workflows/runner_image.yml): a pull request that changes one owes that check.
 # The scraper files are what the build's offline proof imports (Tagger.load).
 IMAGE_INPUTS=(Dockerfile .dockerignore pyproject.toml scripts/bake_clip_weights.py data/clip_taxonomy.json
-              scraper/__init__.py scraper/clip_tagger.py scraper/cpus.py)
+              data/requirements-clip-runner.txt scraper/__init__.py scraper/clip_tagger.py scraper/cpus.py)
 IMAGE_CHECK="CI: runner image"
 
 # ── helpers ───────────────────────────────────────────────────────────────
