@@ -139,6 +139,21 @@ def test_region_and_global_overlap_is_deduped() -> None:
     assert [r[0] for r in rows] == [1, 2, 3]  # image 2 appears once
 
 
+def test_the_runners_clip_chunk_decodes_inside_its_memory_declaration() -> None:
+    """A chunk stays decoded until it is written, and Pillow holds RGB at 4 B a pixel (12.3.0: 4.01 MB a megapixel).
+    Prod's stored photos above id 308.2M (2026-10-27): sreality 1.68 MP on average, p90 2.43 MP. At the p90, a chunk
+    beside the fp32 weights (605,247,071 B), one encode batch's full-size uint8 arrays (the slow processor's, 32 at
+    3 B a pixel), the prefetched chunk's bytes (~0.4 MB a photo) and the interpreter with torch (~512 MiB) fits
+    memory_mb, the figure the co-tenancy census counts: 128 a chunk does not (~2.5 GiB), 64 does."""
+    from scraper import jobs
+
+    (clip,) = [j for j in jobs.runner_jobs() if j.name == "clip"]
+    args = ctb._parser().parse_args(list(clip.argv[1:]))
+    p90_px, mib = 2.43e6, 2**20
+    peak = (args.chunk * p90_px * 4 + 605_247_071 + args.batch_size * p90_px * 3 + args.chunk * 0.4e6) / mib + 512
+    assert peak <= clip.memory_mb, f"a p90 chunk of {args.chunk} peaks near {peak:.0f} MiB, past {clip.memory_mb}"
+
+
 def test_fresh_photos_come_before_the_priority_kraje() -> None:
     conn = _Conn(
         fresh_rows=[(50, "f", True), (40, "x", True)],

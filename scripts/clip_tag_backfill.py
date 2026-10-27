@@ -21,7 +21,7 @@ a decode failure that is not one image's in two chunks in a row (one alone is sk
 that decode are tagged, the rest wait for the next run), a crash. `--verify-reembed` runs only the re-embed proof (scripts/clip_reembed.py),
 which writes nothing: 0 on a pass, else 1.
 
-Usage:  python -m scripts.clip_tag_backfill --max-seconds 1500 --limit 5000 --workers 16
+Usage:  python -m scripts.clip_tag_backfill --max-seconds 1500 --limit 5000 --workers 16 --chunk 64
 Required: SUPABASE_DB_URL, R2_*, and the `clip` extra.
 """
 

@@ -1183,7 +1183,7 @@ on 2026-12-01, and until then a file of that name would override the applied set
   read with describe-service after every apply.
 - **Start commands:** the worker and the runner declare one, each python as PID 1 so it gets the SIGTERM: the worker's
   `env MALLOC_ARENA_MAX=2 python …` (E949's arena cap; its 30 s `drainingSeconds` is E941's) and the runner's bare
-  `python -m scraper.job_runner run`. The API and vite run their image's own command (ruling R5, 2026-10-26): Railway
+  `python -m scraper.job_runner run`, whose children get the same cap by default (`child_env`, #2032). The API and vite run their image's own command (ruling R5, 2026-10-26): Railway
   runs a start command in exec form, so an unwrapped `$PORT` never expands (8a362a0ea).
 - **The job runner** (`jobRunner` in the worker's project; `docs/design/actions-exit/PROGRAM.md` § 4.2), the host of
   `stale_images`, `rent_map` and `map_overlays` since #2025's move PR, and of `clip` since #2032 (CLIP tags, vectors

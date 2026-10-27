@@ -317,7 +317,8 @@ rule, `scraper.job_runner once <job>` read as running `<job>`, without which the
 reference) applied at its head in one runner-only window (no autodedup brake: #2025-R2), then merged at once:
 `clip` every 900 s at offset 300 s, `timeout_s` kept at 3300 with its own `--max-seconds 1500` budget, a
 re-select every 300 s and whenever the snapshot drains, the tag phase ending on a re-select under one chunk
-(128); exit 75 only when the budget cut a run that was making progress or a re-tag campaign stays open, exit 1
+(64 a chunk: Pillow holds RGB at 4 B a pixel, so 128 at the p90 would decode past 2048 MB; children run with
+`MALLOC_ARENA_MAX=2`); exit 75 only when the budget cut a run that was making progress or a re-tag campaign stays open, exit 1
 when its downloads failed and it marked nothing (a whole chunk's worth), exit 2 without R2; cpus 4 (torch threads from `JOB_CPUS`), memory 2048 MB,
 no resource. The order is the last 45 min first, then the priority kraje, then newest first. The next chunk's
 GETs download while this one encodes, each chunk waits at most 45 s for them, and the job's R2 client gives up
