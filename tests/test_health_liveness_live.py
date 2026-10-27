@@ -791,6 +791,29 @@ def test_a_run_in_flight_is_watch_at_two_thirds_and_a_recorded_timeout_is_a_prob
         "ok", "f_lapsed: running for 100 s of its 15 min budget; its lease lapsed: the replica holding it is gone")
 
 
+def test_a_request_that_hits_its_budget_is_a_problem_that_says_what_clears_it(cur: Any) -> None:
+    """C5 (ruling R-3): a request is a run, so its recorded timeout is a Problem; a pure request is never retried, so
+    on a quarterly job only a new request or the next slot closes a later run, and the text says so."""
+    _runner_beat(cur, "r1", "0 minutes")
+    for name in ("q_timeout", "q_timeout_then_ok"):
+        _job(cur, name, every="91 days", timeout_s=7200, due="60 days", last_ok="31 days", failures=1,
+             last_outcome="timeout", last_error="stopped at timeout_s=7200; exit -15")
+        _run(cur, name, started="31 days 30 minutes", ended="31 days", outcome="ok", exit_code=0)
+        _run(cur, name, started="2 hours 10 minutes", ended="5 minutes", outcome="timeout", exit_code=-15,
+             requested_by="github:op", args=["--limit", "10000000"])
+    _run(cur, "q_timeout_then_ok", started="2 minutes", ended="1 minute", outcome="ok", exit_code=0,
+         requested_by="github:op")
+    cur.execute("update scheduled_jobs set consecutive_failures = 0, last_outcome = 'ok', last_error = null, "
+                "last_success_at = now() - interval '1 minute' where job_name = 'q_timeout_then_ok'")
+
+    cells = _liveness(cur)[3]
+
+    assert _said(cells, "job/q_timeout") == (
+        "fail", "q_timeout: its last run hit its 2.0 h budget and was stopped (timeout) (a request by github:op): a "
+                "request is never retried; a new request or its next slot (in 60 d) clears it")
+    assert _said(cells, "job/q_timeout_then_ok") == ("ok", "q_timeout_then_ok: last ok 60 s ago; next slot in 60 d")
+
+
 def _held(cur: Any) -> None:
     """A (hourly, T 55 min) and B (6 h, T 6 h) share location-heavy, as intake and the RÚIAN load do."""
     _runner_beat(cur, "r1", "0 minutes")

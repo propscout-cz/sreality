@@ -82,7 +82,7 @@ of a sibling on its resource seen since its clock started. The worst condition w
 |---|---|---|
 | Running, under ⅔·T | ok | `running for N of its T budget on job-runner/ab12cd34` (+ `; a request by X waits for it`) |
 | Running past ⅔·T / past T / past T + 10 min | Watch / Watch / **Problem** | `running for …`; past T `; past it: the runner is stopping it`; past T + `STUCK_RUN_GRACE_S` `; past the runner's 10 min stopping grace: nothing is stopping it` |
-| The latest closed run is `timeout` (ruling R-3) | **Problem** until a later run closes | `its last run hit its T budget and was stopped (timeout)` |
+| The latest closed run is `timeout` (ruling R-3) | **Problem** until a later run closes | `its last run hit its T budget and was stopped (timeout)`; a request's adds ` (a request by X): a request is never retried; a new request or its next slot (in N) clears it` |
 | Failures in a row (`consecutive_failures`; a row that joined after a gap: its failed runs since) | Watch at 1; **Problem** at 3 once the streak's first failure is min(C, 1 h) old | `its last run failed: <cause>` / `3 failed runs in a row, the first N ago; the last: <cause>` |
 | Late since its clock | Watch past C + T + W; **Problem** past that + min(C, 1 d) | `late: no ok run for N (Watch past …, Problem past …)` or `never ran ok` |
 | Due or requested, not started for 10 min | Watch while a replica beats; **Problem** when none has for 10 min | `due N ago and not started` / `requested by X N ago and not started` (+ `; no job-runner replica has beaten for 10 min`) |
@@ -105,7 +105,10 @@ of a sibling on its resource seen since its clock started. The worst condition w
   lease`; `scheduled_jobs.last_error` when that failure is the latest closed run; else `<outcome>, exit <code>`; a
   request's cause adds `(a request by github:x, args …)`. `log_tail` is never read.
 - **Requests count as the job's runs** (#2024's release): a `--dry-run` request makes the job look freshly done and
-  resets the streak; a mistyped argument is a failed run (Watch until the next ok one; re-request it corrected).
+  resets the streak; a mistyped argument is a failed run (Watch until the next ok one; re-request it corrected). One
+  that makes the run outrun `timeout_s` is a recorded timeout, a **Problem** until a later run closes, and a request is
+  never retried: on rent_map or map_overlays that is the next slot, up to 30 or 91 d away, unless you re-request it
+  with arguments that fit the budget.
 - **`job-runner`** (the fleet, present while any live row exists): ok `N replicas beating; M jobs registered`, or Watch
   when no replica has beaten for 10 min; never a Problem (a cleanly stopped or deleted runner deletes its beats; it
   stays Watch until a job comes due + 10 min). Each replica keeps its own `worker/job-runner/<id>` cell (migration 675).

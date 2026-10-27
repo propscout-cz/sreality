@@ -187,10 +187,16 @@ with live as (
                 then '; past the runner''s 10 min stopping grace: nothing is stopping it'
                 when j.flight_s > j.timeout_s then '; past it: the runner is stopping it' else '' end
         || case when j.run_lapsed then '; its lease lapsed: the replica holding it is gone' else '' end),
-    -- Ruling R-3, "problem at the budget": the runner's own record of the stop, never a sample of the kill window.
+    -- Ruling R-3, "problem at the budget": the runner's own record of the stop, never a sample of the kill window. A
+    -- pure request never moves due_at (job_lease._RELEASE_RUN_SQL), so nothing retries it: the text says what clears it.
     (3, case when j.paused or j.fresh_slot or j.last_run is distinct from 'timeout' then null else 'fail' end,
         format('its last run hit its %s budget and was stopped (timeout)', health_span(j.timeout_s))
-        || case when j.last_by is not null then ' (a request by ' || j.last_by || ')' else '' end),
+        || case when j.last_by is not null
+                then ' (a request by ' || j.last_by || '): a request is never retried; a new request or its next slot'
+                     || case when j.due_at > now() then ' (in ' || health_span(extract(epoch from j.due_at - now()))
+                                                         || ')' else '' end
+                     || ' clears it'
+                else '' end),
     (4, case when j.waiting_s is null or j.held_by is not null or j.waiting_s <= extract(epoch from p_dead) then null
              when exists (select 1 from fresh) then 'warn' else 'fail' end,
         case when j.requested_at is not null and j.requested_at = j.waiting_since

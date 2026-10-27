@@ -19,7 +19,7 @@ on:
         required: true
         type: string
       args:
-        description: "Optional extra arguments appended to the job's own, e.g. --dry-run (quote a value with spaces). They override the job's own flags, memory and worker counts unchecked. A mistyped one is a failed run."
+        description: "Optional extra arguments appended to the job's own, e.g. --dry-run (quote a value with spaces). They override the job's own flags, memory and worker counts unchecked. A mistyped one is a failed run; one that makes it outrun its time budget is a Problem until a later run (a request is never retried)."
         required: false
         default: ""
         type: string
