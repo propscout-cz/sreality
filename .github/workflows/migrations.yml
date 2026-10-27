@@ -675,6 +675,18 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/scraper/test_job_lease_live.py -q
 
+      # #2024, EXECUTED: scraper/job_runner.py's tick over the real PgLedger with a stand-in spawner. The SQL decides
+      # each case: a due row is claimed oldest first, a pause holds, a request runs with its args and never moves
+      # the schedule, exit 75 re-dues in a minute, failures back off (a DB-heavy job's in its own hour), a lost run is
+      # re-run once, the boot upserts its registry and retires only what it registered; one real child's run record
+      # is complete, and a deploy stop releases interrupted, due at once, claimable by the next holder.
+      - name: The job runner ticks on the replayed schema (#2024)
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/scraper/test_job_runner_live.py -q
+
       # E926, EXECUTED: a dissolved must-link closure is filed when it differs from the NEWEST
       # record sharing an advert (filed again when it changes back), the rulings page reads it by
       # any member and generation, and the group dialog does not read it. The fakes re-implement

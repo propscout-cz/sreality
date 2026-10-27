@@ -283,8 +283,10 @@ def _occupied_hours(job: Job, siblings: Sequence[Job] = ()) -> set[int]:
     return hours
 
 
+# The census holds for scheduled runs and their retries (the runner keeps a DB-heavy job's backoff, timeout and lost
+# retries in its own hour); an interrupted run is due again at once (#2024 R-a (b)), so a deploy can overlap two.
 def db_heavy_problems(entries: Sequence[Job]) -> list[str]:
-    """No two DB-heavy jobs can hold the database in one hour, unless one resource already keeps them apart."""
+    """No two DB-heavy jobs' scheduled runs hold the database in one hour, unless one resource keeps them apart."""
     heavy = [j for j in entries if j.db_heavy]
     hours = {j.name: _occupied_hours(j, [s for s in entries if j.resource is not None and s.resource == j.resource
                                          and s.name != j.name]) for j in heavy}
