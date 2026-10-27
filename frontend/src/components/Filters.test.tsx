@@ -108,6 +108,7 @@ describe('<FilterSidebar> pick-one bars', () => {
     return (
       <FilterSidebar
         filters={filters}
+        onReset={() => {}}
         onChange={(next) => {
           onChange(next);
           setFilters(next);
@@ -159,7 +160,7 @@ describe('<FilterSidebar> pick-one bars', () => {
     vi.mocked(api.listTags).mockImplementation(never);
     renderPicker(
       <MemoryRouter>
-        <FilterSidebar filters={DEFAULT_FILTERS} onChange={onChange} />
+        <FilterSidebar filters={DEFAULT_FILTERS} onChange={onChange} onReset={() => {}} />
       </MemoryRouter>,
     );
     const user = userEvent.setup();
