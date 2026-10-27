@@ -141,7 +141,7 @@ export default function StatsDashboard({
 
   return (
     <div className="space-y-4">
-      <section className="rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-5">
+      <section className="@container rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-5">
         <div className="divide-y divide-[var(--color-rule-soft)]">
           {/* DashboardBar draws nothing without the API: no row, no orphan label. */}
           {view && isApiConfigured() ? (
@@ -246,11 +246,14 @@ export default function StatsDashboard({
 
 /* One row of the settings panel: a tracked small-caps label naming what the row
  * sets ("Dashboard": which charts; "Vzorek": which properties count), stacked over
- * its controls on a phone. A plain label, not a heading or a group: the chart
- * titles are the board's headings, and the lens is the group named "Vzorek". */
+ * its controls while the PANEL is narrow. The panel's own width decides, not the
+ * screen's: the filter sidebar stays open below lg, and a dashboard chip (up to
+ * ~20rem: a 16rem name plus grip and ⋯) never shrinks, so the column waits for a
+ * cell that holds one. A plain label, not a heading or a group: the chart titles
+ * are the board's headings, and the lens is the group named "Vzorek". */
 function SettingsRow({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="grid grid-cols-1 gap-y-1.5 py-3 sm:grid-cols-[6.5rem_minmax(0,1fr)] sm:items-baseline sm:gap-x-4">
+    <div className="grid grid-cols-1 gap-y-1.5 py-3 @min-[30rem]:grid-cols-[6.5rem_minmax(0,1fr)] @min-[30rem]:items-baseline @min-[30rem]:gap-x-4">
       <span className="text-[0.7rem] font-medium uppercase tracking-[0.18em] text-[var(--color-ink-3)]">{label}</span>
       <div className="min-w-0">{children}</div>
     </div>

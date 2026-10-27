@@ -132,7 +132,9 @@ proposal's `where` field (`components/stats/StatsDashboard.tsx`, `DashboardBar.t
 **Built** (2026-10-27, the agenda-2 Stats commit on `feature/redesign-rulings`; the seven confirmed only). As built:
 - S01/S02: one bordered paper-2 panel (`StatsDashboard` `SettingsRow`), a rule-soft line between its two rows, each
   led by a tracked small-caps label ("Dashboard", "Vzorek"; a plain label, so the chart titles stay the board's only
-  headings and the lens stays the one group named "Vzorek"); below 640 px the label stacks over its row. The
+  headings and the lens stays the one group named "Vzorek"); the label stacks over its row until the panel itself
+  is 30rem wide inside its padding (a container query: the filter sidebar, open below lg, sets the column's width,
+  and a dashboard chip, up to ~20rem, never shrinks), not at a screen breakpoint. The
   Dashboard row shows only where the bar does (a Browse view and the API). The skew notice follows the panel.
 - S03: `lib/stats` `MARKET_LABEL` names the three options; `marketCaption` splits each caption into that name (bold,
   ink-2) and the rest. The "Jako ve filtru" caption gained its name lead; the sold and Vše captions, which the

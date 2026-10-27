@@ -787,6 +787,20 @@ describe('<StatsDashboard> with the bar', () => {
     expect(panel.compareDocumentPosition(firstChart) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  /* The filter sidebar stays open below lg, so a screen breakpoint put the label column
+   * beside a ~240px Dashboard cell at 768px, and a long chip ran out of the panel. */
+  it('sets the label column by the panel\'s own width, never by the screen\'s', async () => {
+    renderPage();
+    const panel = (await chip('Domy')).closest('section')!;
+    expect(panel.classList).toContain('@container');
+    for (const label of ['Dashboard', 'Vzorek']) {
+      const row = within(panel).getByText(label).parentElement!;
+      expect(row.classList).toContain('grid-cols-1');
+      expect(row.classList).toContain('@min-[30rem]:grid-cols-[6.5rem_minmax(0,1fr)]');
+      expect(row.className).not.toMatch(/(^|\s)(sm|md|lg|xl|2xl):/);
+    }
+  });
+
   it('loads a dashboard through the board\'s one write (PUT /stats/dashboard)', async () => {
     renderPage();
     fireEvent.click(await chip('Domy'));
