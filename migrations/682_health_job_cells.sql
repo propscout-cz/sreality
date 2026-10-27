@@ -299,9 +299,13 @@ select coalesce(jsonb_agg(cell order by subject), '[]'::jsonb) from (
                         'never ran ok')
                || case when j.due_at > now() then '; next slot in ' || health_span(extract(epoch from j.due_at - now()))
                        else '; due now' end
-               -- A pure request never moves due_at (job_lease._RELEASE_RUN_SQL), so a cut request is not re-filed.
-               || case when j.last_run = 'interrupted' and j.last_by is null
+               -- A pure request never moves due_at (job_lease._RELEASE_RUN_SQL), so a cut request is not re-filed. A
+               -- cut run is due at once, unless an image whose register re-slots an un-retired row (main's, a revert)
+               -- moved it through a blink: the text reads due_at.
+               || case when j.last_run = 'interrupted' and j.last_by is null and j.due_at <= now()
                        then '; its last run was cut by a deploy and is due again at once'
+                       when j.last_run = 'interrupted' and j.last_by is null
+                       then '; its last run was cut by a deploy'
                        when j.last_run = 'interrupted'
                        then '; a request by ' || j.last_by || ' was cut by a deploy; it is not re-filed'
                        else '' end

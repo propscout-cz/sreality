@@ -810,6 +810,19 @@ def test_a_blink_keeps_the_schedule_so_a_cut_run_stays_due_and_a_missed_slot_sta
     assert _conditions(cells, "job/never")[0] == "warn: due 3 d ago and not started"
 
 
+def test_a_cut_run_is_said_to_be_due_again_only_while_it_is(cur: Any) -> None:
+    """C3 (review, round 4): an image whose register re-slots due_at on any un-retire (main's job_lease before #2026,
+    or a revert of it) moved a cut row to its next slot through a blink; the text reads due_at, never assumes it."""
+    _runner_beat(cur, "r1", "0 minutes")
+    _job(cur, "re_slotted", due="150 minutes", last_ok="6 hours", last_outcome="interrupted",
+         last_error="deploy stop; exit 143", joined="30 days")
+    _run(cur, "re_slotted", started="6 hours 5 minutes", ended="6 hours", outcome="ok", exit_code=0)
+    _run(cur, "re_slotted", started="11 minutes", ended="5 minutes", outcome="interrupted", exit_code=143)
+
+    assert _said(_liveness(cur)[3], "job/re_slotted") == (
+        "ok", "re_slotted: last ok 6.0 h ago; next slot in 2.5 h; its last run was cut by a deploy")
+
+
 def test_a_quarterly_job_whose_ok_run_was_pruned_is_not_read_as_registered_again(cur: Any) -> None:
     """C3: the runner prunes job_runs after 90 days and map_overlays runs every 91, so a day before its next slot its
     ok run is gone; last_success_at, written by that run's release, still says it ran here."""

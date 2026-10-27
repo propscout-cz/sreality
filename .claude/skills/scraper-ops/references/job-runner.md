@@ -91,7 +91,7 @@ of a sibling on its resource seen since its clock started. The worst condition w
 | Waiting for a sibling on its resource | ok | `waiting for B, which holds location-heavy (running N of its M budget)` (only while it waits) |
 | Requested, under 10 min | ok | `requested by X N ago; starting` |
 | New, adopted or un-retired, before its first slot | ok (history not judged until a run since closes) | `not run yet; first slot in N (… UTC)` (no run on record) / `registered again; not run here since; first slot in N (…); last ok M ago` (or `never ran ok`) |
-| Otherwise | ok | `last ok N ago; next slot in M` or `; due now`; a deploy-cut run adds `; its last run was cut by a deploy and is due again at once` (a cut request: `; a request by X was cut by a deploy; it is not re-filed`) |
+| Otherwise | ok | `last ok N ago; next slot in M` or `; due now`; a deploy-cut run adds `; its last run was cut by a deploy and is due again at once`, or only `; its last run was cut by a deploy` once its `due_at` is ahead (an image that re-slots an un-retired row, main's or a revert, moved it through a blink) (a cut request: `; a request by X was cut by a deploy; it is not re-filed`) |
 
 - **A row is judged on its runs since `registry_at`**, when it joined the runner: stamped when the row is new,
   adopted or un-retired `REJOIN_AFTER_S` (1 h) or more after its retirement (a revert's re-land), and kept by every
