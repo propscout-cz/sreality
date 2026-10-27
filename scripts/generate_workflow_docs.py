@@ -195,7 +195,7 @@ def _trigger_paths(on: dict[str, Any]) -> list[str] | None:
     return seen or None
 
 
-def _parse_workflow(path: Path, slug: str) -> dict[str, Any]:
+def _parse_workflow(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
     data = yaml.safe_load(text) or {}
     on = _on_block(data)
@@ -234,9 +234,9 @@ def _parse_workflow(path: Path, slug: str) -> dict[str, Any]:
         "cancelInProgress": bool(cancel) if isinstance(cancel, bool) else None,
         "timeoutMinutes": timeout,
         "permissions": permissions,
-        "runsUrl": f"https://github.com/{slug}/actions/workflows/{path.name}",
+        "runsUrl": f"https://github.com/{REPO_SLUG}/actions/workflows/{path.name}",
         "sourceUrl": (
-            f"https://github.com/{slug}/blob/{DEFAULT_BRANCH}/.github/workflows/{path.name}"
+            f"https://github.com/{REPO_SLUG}/blob/{DEFAULT_BRANCH}/.github/workflows/{path.name}"
         ),
     }
 
@@ -245,7 +245,7 @@ def generate() -> str:
     root = Path(__file__).resolve().parent.parent
     workflows_dir = root / ".github" / "workflows"
     files = sorted(workflows_dir.glob("*.yml"))
-    docs = [_parse_workflow(p, REPO_SLUG) for p in files]
+    docs = [_parse_workflow(p) for p in files]
     return json.dumps(
         {"_generated": GENERATED_NOTICE, "workflows": docs},
         indent=2,
