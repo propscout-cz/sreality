@@ -100,9 +100,10 @@ File pointers are where the element lives today (2026-10-27); search for the quo
 
 1. **Browse card** — **built** (branch `feature/browse-card-hierarchy`). As built: P05 drops the prefix only
    on a card whose own type and deal are the ones the filter pins (`cohortKind` from `BrowseExperience`); a
-   subtype ("Rodinný dům") stays, since the filter doesn't name it. P03 hides the verdict on the Browse card
+   subtype ("Rodinný dům") stays, since the filter doesn't name it (`lib/filters` `cohortKindOf`). P03 hides the verdict on the Browse card
    only (`ImageCarousel` `renderBadge={false}`); the gallery, lightbox and the other carousels keep it until
-   the render-scoring removal. P02 is `fadeTag` (opacity, pointer or focus on the card).
+   the render-scoring removal. P02 is `fadeTag` (opacity; the pointer on the card, or keyboard focus in it: `:focus-visible`, so a
+   clicked photo arrow doesn't keep the tag shown).
 2. **Browse page, map and stats** — P09 (the header keeps the count and what is counted, without the rest of the
    scope sentence: `components/BrowseExperience.tsx` `FilterSummary`, text built by `lib/filters.ts` `summarise`,
    "Showing …"). **P09's proposal is conditional on the applied-filter pills, which are an unruled addition**:
