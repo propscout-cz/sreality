@@ -905,6 +905,22 @@ const CATEGORY_TYPE_LABEL: Record<CategoryType, string> = {
 export const categoryTypeLabel = (t: CategoryType | null): string =>
   t == null ? '' : CATEGORY_TYPE_LABEL[t];
 
+/* The one property type and deal a filter pins, or null when it spans several
+ * types or both deals: a Browse card of exactly that kind drops "Byt na prodej ·"
+ * from its title (ruling P05, 2026-10-27). */
+export interface CohortKind {
+  categoryMain: CategoryMain;
+  categoryType: CategoryType;
+}
+
+export function cohortKindOf(
+  f: Pick<ListingFilters, 'categoryMain' | 'categoryType'>,
+): CohortKind | null {
+  return f.categoryMain.length === 1 && f.categoryType != null
+    ? { categoryMain: f.categoryMain[0], categoryType: f.categoryType }
+    : null;
+}
+
 const fmtDaysRange = (lo: number | null, hi: number | null): string => {
   if (lo == null && hi == null) return '';
   if (lo != null && hi != null) return `${lo}–${hi} d`;

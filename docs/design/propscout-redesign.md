@@ -35,7 +35,8 @@ fetch these links with curl or WebFetch.
 3. **The removal review**: 35 proposals, each with a picture of today and of the change; the operator ruled
    all of them on 2026-10-27 (24 confirmed, 11 declined).
 
-Nothing from the rulings is built in the app yet. Merging #2115 ships the name and the schemes only.
+4. **Agenda 1, Browse card** (P01, P02, P03, P05 and the P06 chip restyle): built on branch
+   `feature/browse-card-hierarchy`. Nothing else from the rulings is built yet.
 
 ## How this operator wants design work done
 
@@ -134,10 +135,12 @@ Build the confirmed items **one PR per agenda**, in this order (small and visibl
 `.interface-design/system.md`, updates `roadmap/ui-track.md`, and keeps every element the rulings don't touch.
 File pointers are where the element lives today (2026-10-27); search for the quoted text if a file moved.
 
-1. **Browse card** — P01, P02, P03, P05 (and the P06 chip restyle): `frontend/src/components/ListingCards.tsx`
-   (the photo's badge stack, the room tag, the verdict badge from `components/ImageRenderBadge.tsx`, the title,
-   `storeyTagOf`, the card foot). P05: keep the "Byt na prodej ·" prefix only when the filter spans several
-   property types or both sale and rent. P02 must be an overlay (opacity), never a layout change.
+1. **Browse card** — **built** (branch `feature/browse-card-hierarchy`). As built: P05 drops the prefix only
+   on a card whose own type and deal are the ones the filter pins (`cohortKind` from `BrowseExperience`); a
+   subtype ("Rodinný dům") stays, since the filter doesn't name it (`lib/filters` `cohortKindOf`). P03 hides the verdict on the Browse card
+   only (`ImageCarousel` `renderBadge={false}`); the gallery, lightbox and the other carousels keep it until
+   the render-scoring removal. P02 is `fadeTag` (opacity; the pointer on the card, or keyboard focus in it: `:focus-visible`, so a
+   clicked photo arrow doesn't keep the tag shown).
 2. **Browse page, map and stats** — P09 (the header keeps the count and what is counted, without the rest of the
    scope sentence: `components/BrowseExperience.tsx` `FilterSummary`, text built by `lib/filters.ts` `summarise`,
    "Showing …"). **P09's proposal is conditional on the applied-filter pills, which are an unruled addition**:

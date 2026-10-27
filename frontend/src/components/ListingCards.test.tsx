@@ -30,6 +30,7 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 
 import { useEffect } from 'react';
 import ListingCards from './ListingCards';
+import type { CohortKind } from '@/lib/filters';
 import { CardHydrationProvider } from '@/lib/hydration';
 import { useMergeMode, type MergeMode } from '@/lib/useMergeMode';
 import { PHONE_SHELL_QUERY } from '@/lib/phoneShell';
@@ -165,6 +166,7 @@ function renderGrid(
     rows?: CardRow[];
     onHover?: (targets: ReadonlyArray<HoverTarget> | null) => void;
     orderPortal?: string | null;
+    cohortKind?: CohortKind | null;
     coverTag?: CoverTag;
     onCoverTag?: (next: CoverTag) => void;
     /* Browse opts the storey in; the grid tests that predate it do not. */
@@ -185,6 +187,7 @@ function renderGrid(
             total={1}
             sort={{ field: 'last_seen_at', dir: 'desc' } as never}
             orderPortal={opts.orderPortal}
+            cohortKind={opts.cohortKind}
             imageLarge={false}
             coverTag={opts.coverTag ?? 'default'}
             onCoverTag={opts.onCoverTag ?? (() => {})}
@@ -1027,11 +1030,22 @@ describe('<ListingCards> the portal badge and the order date', () => {
 
   it('truncates a long list at its end, never its start, inside the card', () => {
     renderGrid({ row: { ...ROW, is_active: false, all_sources: ['ceskereality', 'idnes', 'realitymix', 'sreality'], active_sources: [] } });
-    expect(badge().firstElementChild).toHaveClass('truncate', 'min-w-0');
-    expect(badge()).toHaveClass('max-w-full');
-    expect(badge().parentElement).toHaveClass('max-w-[calc(100%-0.5rem)]');
+    expect(badge()).toHaveClass('truncate', 'min-w-0');
     /* Only the portal list truncates: the lifespan run keeps its whole text. */
-    expect(screen.getByTitle(/^Neaktivní/)).not.toHaveClass('max-w-full');
+    expect(screen.getByTitle(/^Neaktivní/)).not.toHaveClass('truncate');
+  });
+
+  /* Ruling P01 (2026-10-27): the portals left the photo for the card's foot, on
+     the line above the MF yield; the photo keeps the lifespan and the ad count. */
+  it('names the portals in the foot, above the MF yield, not on the photo', () => {
+    renderGrid({ row: { ...ROW, mf_gross_yield_pct: 4.1, source_count: 2 } as CardRow });
+    const portals = badge();
+    const yieldLine = screen.getByTitle(/^Hrubý výnos/);
+    expect(portals.compareDocumentPosition(yieldLine) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const photo = screen.getByTitle(/^Aktivní/).closest('.aspect-\\[5\\/4\\]');
+    expect(photo).not.toBeNull();
+    expect(photo).not.toContainElement(portals);
+    expect(photo).toContainElement(screen.getByTitle(/^Nemovitost spojuje/));
   });
 
   const lifespan = () => screen.getByTitle(/^Aktivní/).textContent;
@@ -1055,5 +1069,101 @@ describe('<ListingCards> the portal badge and the order date', () => {
   it('shows no portal date without the one-portal order', () => {
     renderGrid({ row: { ...ROW, newest_ad_at_idnes: '2026-03-05T10:00:00Z' } as CardRow });
     expect(lifespan()).not.toContain('iDNES');
+  });
+});
+
+/* Ruling P05 (2026-10-27): a card of the one type and deal the filter pins drops
+   "Byt na prodej ·" from its title; any other card keeps it. */
+describe('<ListingCards> the title drops what the filter says', () => {
+  const SALE_FLATS: CohortKind = { categoryMain: 'byt', categoryType: 'prodej' };
+  const link = () => screen.getByRole('link', { name: /m²/ });
+
+  it('reads "2+kk · 62 m²" under a filter of flats for sale', () => {
+    renderGrid({ cohortKind: SALE_FLATS });
+    expect(link()).toHaveAccessibleName(/^2\+kk · 62\sm²$/);
+  });
+
+  it('keeps the prefix when the filter spans several types or both deals', () => {
+    renderGrid({ cohortKind: null });
+    expect(link()).toHaveAccessibleName(TITLE_RE);
+  });
+
+  it('keeps the prefix on a card whose own type or deal is not the filter\'s', () => {
+    renderGrid({ cohortKind: SALE_FLATS, row: { ...ROW, category_type: 'pronajem' } as CardRow });
+    expect(link()).toHaveAccessibleName(/^Byt k pronájmu · 2\+kk · 62\sm²$/);
+  });
+
+  it('keeps the prefix on a card of another type under the same deal', () => {
+    renderGrid({
+      cohortKind: SALE_FLATS,
+      row: { ...ROW, category_main: 'dum', subtype: null, disposition: '5+1', area_m2: 180 } as CardRow,
+    });
+    expect(link()).toHaveAccessibleName(/^Dům na prodej · 5\+1 · 180\sm²$/);
+  });
+
+  it('keeps a house\'s subtype, which the filter does not name', () => {
+    renderGrid({
+      cohortKind: { categoryMain: 'dum', categoryType: 'prodej' },
+      row: { ...ROW, category_main: 'dum', subtype: 'rodinny_dum', disposition: null, area_m2: 140 } as CardRow,
+    });
+    expect(link()).toHaveAccessibleName(/^Rodinný dům · 140\sm²$/);
+  });
+
+  it('keeps the full title when nothing would be left', () => {
+    renderGrid({
+      cohortKind: { categoryMain: 'pozemek', categoryType: 'prodej' },
+      row: { ...ROW, category_main: 'pozemek', disposition: null, area_m2: null, plot_area_m2: null } as CardRow,
+    });
+    expect(screen.getByRole('link', { name: /^Pozemek na prodej$/ })).toBeInTheDocument();
+  });
+});
+
+/* Rulings P02 and P03 (2026-10-27): the photo shows just the counter; the room
+   tag is an overlay that appears with the pointer or focus on the card. */
+describe('<ListingCards> the photo overlays', () => {
+  const tagged = (renderScore: number) =>
+    vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(
+      new Map([[111, [1, 2].map((id) => ({
+        ...photo(id), clip_fine_tag: 'kitchen', clip_confidence: 0.9, clip_render_score: renderScore,
+      }) as unknown as ImagePublic)]]),
+    );
+
+  it('shows the room tag only while the card is hovered or focused, without moving anything', async () => {
+    tagged(0.1);
+    renderGrid();
+    const tag = await screen.findByText('kuchyně');
+    /* Keyboard focus only: a mouse click on a chevron leaves focus behind, and
+       the tag must not stay shown once the pointer has moved to another card. */
+    expect(tag).toHaveClass('absolute', 'opacity-0', 'group-hover:opacity-100', 'group-has-[:focus-visible]:opacity-100');
+    expect(tag).not.toHaveClass('group-focus-within:opacity-100');
+    expect(tag.closest('.group')).not.toBeNull();
+  });
+
+  it('draws no render verdict, whatever the score', async () => {
+    tagged(0.9);
+    renderGrid();
+    await screen.findByText(counterIs('1 / 2'));
+    expect(screen.queryByText(/^Render \d+$|^Foto \d+$/)).toBeNull();
+  });
+});
+
+/* P06 was declined, with leave to restyle: the storey stays its own label after
+   the place, drawn as a quiet inset label without a border. */
+describe('<ListingCards> the storey label', () => {
+  const floors = () =>
+    vi.mocked(queries.fetchListingFloors).mockResolvedValue(new Map([[111, { floor: 2, total_floors: 5 }]]));
+
+  it('is an inset label with no border', async () => {
+    floors();
+    renderGrid({ floors: true });
+    const tag = await screen.findByText('2. patro z 5');
+    expect(tag).toHaveClass('bg-[var(--color-inset)]');
+    expect(tag.className).not.toMatch(/\bborder\b/);
+  });
+
+  it('sits one step up on a delisted card, whose surface is the inset', async () => {
+    floors();
+    renderGrid({ floors: true, row: { ...ROW, is_active: false, active_sources: [] } as CardRow });
+    expect(await screen.findByText('2. patro z 5')).toHaveClass('bg-[var(--color-paper)]');
   });
 });

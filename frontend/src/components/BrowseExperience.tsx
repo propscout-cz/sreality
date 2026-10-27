@@ -49,6 +49,7 @@ import {
   browseTitleSummary,
   toSearchParams,
   savedMapArea,
+  cohortKindOf,
   type ListingFilters,
 } from '@/lib/filters';
 import { usePageTitle } from '@/lib/pageTitle';
@@ -223,6 +224,7 @@ export default function BrowseExperience({
   const cardImageLarge = useCardImageLarge();
   const cardCoverTag = useCardCoverTag();
   const sortOrderPortal = orderPortal(filters, sort);
+  const cohortKind = cohortKindOf(filters);
   /* The map is only present on the Properties tab AND only when not collapsed —
    * the single source of truth the data-fetch gates and the layout both read,
    * so they can never disagree. */
@@ -740,6 +742,7 @@ export default function BrowseExperience({
                 total={cohortTotal}
                 sort={sort}
                 orderPortal={sortOrderPortal}
+                cohortKind={cohortKind}
                 isLoading={cards.isLoading}
                 isError={cards.isError}
                 isFetchingNextPage={cards.isFetchingNextPage}

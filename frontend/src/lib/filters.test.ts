@@ -18,6 +18,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DEFAULT_FILTERS,
+  cohortKindOf,
   pipelineViewFilters,
   applyRegistryUpdate,
   applyRegistryUpdates,
@@ -382,6 +383,23 @@ describe('nullable deal type', () => {
     expect(summarise({
       ...DEFAULT_FILTERS, portalsExcluded: ['sreality'], portalsExcludedActiveOnly: true,
     }, 1)).toMatch(/−Sreality \(active ads\)$/);
+  });
+});
+
+/* Ruling P05 (2026-10-27): the card title drops "Byt na prodej ·" only when the
+   filter pins one type AND one deal; any wider filter keeps it on every card. */
+describe('cohortKindOf', () => {
+  it('names the one type and deal of the default filter', () => {
+    expect(cohortKindOf(DEFAULT_FILTERS)).toEqual({ categoryMain: 'byt', categoryType: 'prodej' });
+  });
+
+  it('is null when the filter spans both deals ("Vše")', () => {
+    expect(cohortKindOf({ ...DEFAULT_FILTERS, categoryType: null })).toBeNull();
+  });
+
+  it('is null when the filter spans several types, or none', () => {
+    expect(cohortKindOf({ ...DEFAULT_FILTERS, categoryMain: ['byt', 'dum'] })).toBeNull();
+    expect(cohortKindOf({ ...DEFAULT_FILTERS, categoryMain: [] })).toBeNull();
   });
 });
 

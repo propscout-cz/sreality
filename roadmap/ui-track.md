@@ -44,9 +44,14 @@ toolkit work.
   fill, which `text-white` failed in dark). Proposal and previews: the PropScout.cz design system artifact.
 - **Ruled 2026-10-27:** all 35 removal proposals (24 confirmed, 11 declined) and the rule that nothing
   revealed on hover may shift layout, recorded in `.interface-design/system.md` § Hierarchy rulings.
-- **Next (not built):** the 24 confirmed hierarchy changes, one PR per agenda (Browse card, Browse page and
-  map, Stats, Pipeline, Watchdogs, Notifications, Brokers, Collections, Shell); removing render scoring
-  end to end (operator note on P03), scoped first. Handoff: `docs/design/propscout-redesign.md`.
+- **Done, agenda 1 Browse card** (2026-10-27): the portals left the photo for a quiet line at the top of
+  the card's foot, above the MF yield (P01); the room tag shows only with the pointer on the card or keyboard
+  focus in it, as an opacity overlay (P02); the photo draws no render verdict, just the counter (P03, the card only); a
+  card of the one type and deal the filter pins reads "2+kk · 54 m²", any other keeps "Byt na prodej ·"
+  (P05); the storey chip is a quiet inset label without a border (P06 note).
+- **Next (not built):** the other confirmed hierarchy changes, one PR per agenda (Browse page and map,
+  Stats, Pipeline, Watchdogs, Notifications, Brokers, Collections, Shell); removing render scoring end to
+  end (operator note on P03), scoped first. Handoff: `docs/design/propscout-redesign.md`.
 - **Ruled 2026-10-27:** ten Stats-tab proposals (S01–S10, mostly the header): S01–S04, S06, S07, S09 confirmed,
   S05, S08, S10 declined; the Stats PR builds the confirmed ones (handoff § Stats review).
 
