@@ -47,12 +47,12 @@ _NORMAL = {"id": "c1", "view": "box", "stats": ["median"], "rows": ["disposition
 _SPEC = {"filters": {"categoryMain": "byt", "districts": [
     {"name": "Brno", "context": None, "level": "obec", "id": 582786}]}, "sort": "-price_czk"}
 
-# (id, name, charts, filter_spec, created_at, updated_at, position, color, owner_email, shared_with,
+# (id, name, charts, filter_spec, show_small, created_at, updated_at, position, color, owner_email, shared_with,
 #  property_card)
-_OWN = (_ID, "Praha byty", [_NORMAL], _SPEC, _AT, _AT, 0, "sage", None,
+_OWN = (_ID, "Praha byty", [_NORMAL], _SPEC, False, _AT, _AT, 0, "sage", None,
         [{"account_id": str(_RECIPIENT), "email": "b@x.cz"}], False)
 _OWN_PAYLOAD = {
-    "id": str(_ID), "name": "Praha byty", "charts": [_NORMAL], "filter_spec": _SPEC,
+    "id": str(_ID), "name": "Praha byty", "charts": [_NORMAL], "filter_spec": _SPEC, "show_small": False,
     "created_at": _AT.isoformat(), "updated_at": _AT.isoformat(), "position": 0, "color": "sage",
     "owner_email": None, "shared_with": [{"account_id": str(_RECIPIENT), "email": "b@x.cz"}],
     "property_card": False,
@@ -88,14 +88,16 @@ def test_save_as_dashboard_inserts_one_named_row_for_the_callers_account(client,
     assert res.json() == _OWN_PAYLOAD
     [(sql, params)] = conn.executed
     assert sql.startswith(
-        "INSERT INTO stats_dashboards AS t (name, charts, filter_spec, color, position, account_id) "
-        "VALUES (%s, %s::jsonb, %s::jsonb, %s, "
+        "INSERT INTO stats_dashboards AS t (name, charts, filter_spec, show_small, color, position, account_id) "
+        "VALUES (%s, %s::jsonb, %s::jsonb, %s, %s, "
         "(SELECT COALESCE(MAX(t.position), -1) + 1 FROM stats_dashboards t "
         "WHERE t.account_id IN (SELECT current_account_ids()) AND name IS NOT NULL), %s) "
-        "RETURNING t.id, t.name, t.charts, t.filter_spec,")
-    name, charts, spec, color, owner = params
+        "RETURNING t.id, t.name, t.charts, t.filter_spec, t.show_small, t.created_at,")
+    name, charts, spec, show_small, color, owner = params
     # The charts are the registry's normalised board; the filter is the preset blob, verbatim.
     assert (name, json.loads(charts), json.loads(spec), color) == ("Praha byty", [_NORMAL], _SPEC, "sage")
+    # Unsent, the "Malé vzorky" switch is saved off (migration 681), a plain boolean, no jsonb.
+    assert show_small is False
     assert owner == _ACCT
 
 
@@ -113,7 +115,74 @@ def test_a_dashboard_without_a_filter_stores_sql_null_not_json_null(client, conn
     conn.script = [(_starts("INSERT INTO stats_dashboards"), [_OWN])]
     assert client.post("/stats/dashboards", json={"name": "n", "charts": []}).status_code == 200
     [(_sql, params)] = conn.executed
-    assert params[2] is None and params[3] is None
+    assert params[2] is None and params[4] is None
+    assert params[3] is False
+
+
+# --- the "Malé vzorky" switch, saved with the dashboard (migration 681) ------------
+
+
+def test_a_dashboard_saved_with_small_samples_on_stores_true_and_returns_it(client, conn) -> None:
+    conn.script = [(_starts("INSERT INTO stats_dashboards"), [(*_OWN[:4], True, *_OWN[5:])])]
+    res = client.post("/stats/dashboards", json={"name": "Okolí", "charts": [], "show_small": True})
+    assert res.status_code == 200, res.text
+    assert res.json() == {**_OWN_PAYLOAD, "show_small": True}
+    [(_sql, params)] = conn.executed
+    assert params[3] is True
+
+
+def test_the_switch_is_a_plain_column_in_every_statement_never_jsonb() -> None:
+    assert DASHBOARDS.scalar_columns == ("show_small",)
+    assert "t.filter_spec, t.show_small, t.created_at" in ss._projection(DASHBOARDS)
+    update = ss._update_sql(DASHBOARDS, ss._fields(DASHBOARDS))
+    assert "show_small = %s, color = %s, updated_at = now()" in update
+    assert "show_small = %s::jsonb" not in update
+    # A preset has no scalar column: its statements are what they were.
+    assert PRESETS.scalar_columns == ()
+    assert not any("show_small" in sql for sql in ss.statements(PRESETS))
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_a_put_turns_the_switch_on_or_off(client, conn, value) -> None:
+    """False is a value to write, not a null that keeps: switching it off reaches the SET."""
+    conn.script = [(_starts("UPDATE stats_dashboards t SET"), [(*_OWN[:4], value, *_OWN[5:])])]
+    res = client.put(f"/stats/dashboards/{_ID}", json={"show_small": value})
+    assert res.status_code == 200, res.text
+    assert res.json()["show_small"] is value
+    [(sql, params)] = conn.executed
+    assert sql.startswith("UPDATE stats_dashboards t SET show_small = %s, updated_at = now() "
+                          "WHERE t.id = %s AND name IS NOT NULL RETURNING")
+    assert params == [value, str(_ID)]
+
+
+def test_a_put_without_the_switch_or_with_a_null_keeps_it(client, conn) -> None:
+    conn.script = [(_starts("UPDATE stats_dashboards t SET"), [_OWN])]
+    assert client.put(f"/stats/dashboards/{_ID}", json={"name": "Nové"}).status_code == 200
+    [(sql, _params)] = conn.executed
+    assert "show_small" not in sql.split(" RETURNING ")[0]
+    body = DASHBOARDS.update_in.model_validate({"show_small": None, "name": "Nové"})
+    assert ss.changes(DASHBOARDS, body) == {"name": "Nové"}
+    assert "show_small" not in DASHBOARDS.nullable
+
+
+def test_a_get_carries_the_switch(client, conn) -> None:
+    conn.script = [(_starts("SELECT t.id"), [(*_OWN[:4], True, *_OWN[5:])])]
+    res = client.get(f"/stats/dashboards/{_ID}")
+    assert res.status_code == 200 and res.json()["show_small"] is True
+
+
+def test_a_recipients_put_of_the_switch_is_a_404(client, conn) -> None:
+    res = client.put(f"/stats/dashboards/{_ID}", json={"show_small": True})
+    assert res.status_code == 404 and res.json()["detail"] == "dashboard not found"
+    [(sql, params)] = conn.executed
+    assert sql.startswith("UPDATE stats_dashboards t SET show_small = %s") and params == [True, str(_ID)]
+
+
+def test_the_switch_is_a_boolean_or_the_write_is_a_422(client, conn) -> None:
+    assert client.post("/stats/dashboards", json={"name": "n", "charts": [], "show_small": "maybe"}
+                       ).status_code == 422
+    assert client.put(f"/stats/dashboards/{_ID}", json={"show_small": [1]}).status_code == 422
+    assert conn.executed == []
 
 
 @pytest.mark.parametrize(("body", "detail"), [
@@ -145,7 +214,7 @@ def test_a_bad_body_is_a_422_and_writes_nothing(client, conn, body) -> None:
 
 
 def test_the_list_is_named_dashboards_own_and_shared_in_the_saved_order(client, conn) -> None:
-    shared = (uuid.uuid4(), "Jejich", [], None, _AT, _AT, 3, None, "owner@x.cz",
+    shared = (uuid.uuid4(), "Jejich", [], None, True, _AT, _AT, 3, None, "owner@x.cz",
               [{"account_id": str(_ACCT), "email": None}], False)
     conn.script = [(_starts("SELECT t.id"), [_OWN, shared])]
     res = client.get("/stats/dashboards")
@@ -153,6 +222,8 @@ def test_the_list_is_named_dashboards_own_and_shared_in_the_saved_order(client, 
     body = res.json()
     assert body["total"] == 2 and body["data"][0] == _OWN_PAYLOAD
     assert body["data"][1]["owner_email"] == "owner@x.cz" and body["data"][1]["filter_spec"] is None
+    # A recipient reads the owner's "Malé vzorky": it is part of what was shared (migration 681).
+    assert body["data"][1]["show_small"] is True
     [(sql, params)] = conn.executed
     # Own dashboards first, then the shared ones, each group in its saved order (the SPA splits the same way).
     assert sql.endswith("FROM stats_dashboards t WHERE name IS NOT NULL "
@@ -197,7 +268,7 @@ def test_an_update_changes_what_was_sent_and_an_explicit_null_clears_the_filter(
 # --- the property page's "Okolí dashboard" (migration 664) ------------------------
 
 def test_the_property_card_moves_in_one_transaction_and_drops_the_filter(client, conn) -> None:
-    card = (*_OWN[:3], None, *_OWN[4:10], True)
+    card = (*_OWN[:3], None, *_OWN[4:11], True)
     conn.script = [
         (_starts("UPDATE stats_dashboards SET property_card = true"), [(_ID,)]),
         (_starts("SELECT t.id"), [card]),

@@ -41,6 +41,9 @@ describe('the Prague wall clock', () => {
   it('guesses the next full hour, or tomorrow morning once the evening is late', () => {
     expect(defaultSlot(new Date('2026-10-23T10:20:00Z'))).toEqual({ day: '2026-10-23', time: '13:00' });
     expect(defaultSlot(new Date('2026-10-23T19:30:00Z'))).toEqual({ day: '2026-10-24', time: '10:00' });
+    // The DST nights: 01:30 CET is followed by 03:00 CEST; 02:30 CEST by 02:00 CET.
+    expect(defaultSlot(new Date('2027-03-28T00:30:00Z'))).toEqual({ day: '2027-03-28', time: '03:00' });
+    expect(defaultSlot(new Date('2026-10-25T00:30:00Z'))).toEqual({ day: '2026-10-25', time: '02:00' });
   });
 
   it('knows an unfinished slot from a whole one', () => {

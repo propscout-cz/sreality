@@ -189,9 +189,10 @@ def test_every_recreated_function_restates_its_acl_and_nothing_cascades() -> Non
 # 632 restated the Stats pivot with its floor at five, 634 with its status fact on the cohort's own portal
 # rule (each pinned as 'nothing else moved'); 640 dropped the id denylist and 644 swapped the condition
 # conjunct of both RPCs (tests/test_644_condition_unknown_filter.py), 648 appended the energy-rating
-# parameter (tests/test_648_browse_energy_rating_filter.py); the rest is 629's.
+# parameter (tests/test_648_browse_energy_rating_filter.py), 661/662 took the status as one parameter,
+# 678 gave the Stats cells under the floor their small-sample summary; the rest is 629's.
 _LATER = {
-    "browse_stats_properties": "662_status_filter_contract.sql",
+    "browse_stats_properties": "678_stats_small_samples.sql",
     "browse_map_cells": "662_status_filter_contract.sql",
 }
 

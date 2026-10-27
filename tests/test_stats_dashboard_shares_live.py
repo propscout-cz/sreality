@@ -101,7 +101,7 @@ def world(svc: Any, tenants: dict[str, _Tenant]) -> Iterator[_World]:
         working = uuid.UUID(working_board(conn)["id"])
         named = saved_sets.create(conn, DASHBOARDS, {
             "name": "Praha byty", "charts": [{"id": "c1"}],
-            "filter_spec": {"filters": {"categoryMain": "byt"}}, "color": "sage",
+            "filter_spec": {"filters": {"categoryMain": "byt"}}, "show_small": False, "color": "sage",
         }, account_id=a.acc)
     _share(svc, uuid.UUID(named["id"]), tenants["b"])
     try:
@@ -306,7 +306,7 @@ def test_an_unshared_dashboard_stays_the_owners_and_own_dashboards_list_first(
     from api.routes.stats_dashboards import DASHBOARDS
 
     a, b = tenants["a"], tenants["b"]
-    blank = {"charts": [], "filter_spec": None, "color": None}
+    blank = {"charts": [], "filter_spec": None, "show_small": False, "color": None}
     with scoped(a.user, method="POST") as conn:
         private = saved_sets.create(conn, DASHBOARDS, {"name": "Soukromá", **blank}, account_id=a.acc)
     with scoped(b.user, method="POST") as conn:
@@ -318,6 +318,38 @@ def test_an_unshared_dashboard_stays_the_owners_and_own_dashboards_list_first(
     assert (first["position"], second["position"]) == (0, 1)
     # B's own dashboards come first although the shared one sits at an earlier position than the second.
     assert list(_listed(b)) == [first["id"], second["id"], str(world.named)]
+
+
+def test_a_dashboard_saves_its_small_samples_switch_and_only_its_owner_changes_it(
+    svc: Any, tenants: dict[str, _Tenant], world: _World,
+) -> None:
+    """Migration 681: created through the API's body model, the switch reads back as saved and defaults off; a PUT
+    turns it either way and a PUT without it keeps it; a recipient reads the owner's and cannot change it; the
+    working board carries the column at its default."""
+    from api import saved_sets
+    from api import schemas as s
+    from api.routes.stats_dashboards import DASHBOARDS
+
+    a, b = tenants["a"], tenants["b"]
+    with scoped(a.user, method="POST") as conn:
+        on = saved_sets.create(conn, DASHBOARDS, s.CreateStatsDashboardIn(
+            name="Okolí", charts=[], show_small=True).model_dump(), account_id=a.acc)
+        off = saved_sets.create(conn, DASHBOARDS, s.CreateStatsDashboardIn(
+            name="Bez", charts=[]).model_dump(), account_id=a.acc)
+    assert (on["show_small"], off["show_small"]) == (True, False)
+    listed = _listed(a)
+    assert (listed[on["id"]]["show_small"], listed[off["id"]]["show_small"]) == (True, False)
+    with scoped(a.user, method="PUT") as conn:
+        assert saved_sets.update(conn, DASHBOARDS, on["id"], {"show_small": False})["show_small"] is False
+        assert saved_sets.update(conn, DASHBOARDS, off["id"], {"show_small": True})["show_small"] is True
+        assert saved_sets.update(conn, DASHBOARDS, off["id"], {"name": "Přejmenovaná"})["show_small"] is True
+        assert saved_sets.update(conn, DASHBOARDS, str(world.named), {"show_small": True})["show_small"] is True
+    assert _listed(b)[str(world.named)]["show_small"] is True
+    with scoped(b.user, method="PUT") as conn:
+        assert saved_sets.update(conn, DASHBOARDS, str(world.named), {"show_small": False}) is None
+    with svc.cursor() as cur:
+        cur.execute("SELECT id, show_small FROM stats_dashboards WHERE id = ANY(%s)", ([world.named, world.working],))
+        assert dict(cur.fetchall()) == {world.named: True, world.working: False}
 
 
 def test_co_recipients_never_learn_each_other(

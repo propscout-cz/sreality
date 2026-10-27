@@ -121,3 +121,48 @@ def test_require_admin_accepts_real_admin_jwt():
     tok = mint({"sub": "u", "app_metadata": {"is_admin": True}})
     claims = deps.require_admin(deps.verify_jwt(authorization=f"Bearer {tok}"))
     assert claims["sub"] == "u"
+
+
+def _refused(token: str) -> HTTPException:
+    with pytest.raises(HTTPException) as ei:
+        deps.verify_jwt(authorization=f"Bearer {token}")
+    assert ei.value.status_code == 401
+    return ei.value
+
+
+def test_a_token_from_another_issuer_is_401() -> None:
+    """The issuer is pinned to this project's Auth (`<SUPABASE_URL>/auth/v1`, what Supabase stamps),
+    so a token another issuer signed with a key our JWKS happens to serve cannot pass (M0, #2059)."""
+    assert _refused(mint({"sub": "abc", "iss": "https://other.supabase.co/auth/v1"})).detail == (
+        "Invalid token: wrong issuer")
+
+
+@pytest.mark.parametrize("claim", ["sub", "exp", "role", "iss"])
+def test_a_token_missing_a_required_claim_is_401(claim: str) -> None:
+    """A Supabase session token always carries subject, expiry, role and issuer; one without is not ours.
+    Without `exp` a token never expires; without `sub` it names nobody."""
+    assert _refused(mint({"sub": "abc"}, drop=(claim,))).detail == "Invalid token: missing claim"
+
+
+def test_a_token_whose_role_is_not_authenticated_is_401() -> None:
+    """The tenant transaction assumes the browser role; any other role in an audience-valid token is refused."""
+    assert _refused(mint({"sub": "abc", "role": "service_role"})).detail == "Invalid token: wrong role"
+
+
+def test_a_token_carrying_a_client_id_is_401() -> None:
+    """Supabase's OAuth server stamps `client_id` on tokens it issues to third-party clients; those are
+    meant for another audience than this API and must not pass as a user's session."""
+    assert _refused(mint({"sub": "abc", "client_id": "some-oauth-app"})).detail == (
+        "Invalid token: client token")
+
+
+def test_a_header_naming_another_algorithm_is_401_not_500() -> None:
+    """The served key is ES256; a header claiming RS256 for it is a malformed token, never a server error."""
+    import base64
+    import json
+
+    def b64(obj: dict) -> str:
+        return base64.urlsafe_b64encode(json.dumps(obj).encode()).rstrip(b"=").decode()
+
+    forged = f"{b64({'alg': 'RS256', 'typ': 'JWT', 'kid': 'served-key'})}.{b64({'sub': 'abc'})}.AAAA"
+    assert _refused(forged).detail.startswith("Invalid token")

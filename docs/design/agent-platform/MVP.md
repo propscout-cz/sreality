@@ -121,6 +121,27 @@ the user sees the draft with an "open in my mail" link and sends it; no thread t
 *Exit:* a trial JWT gets 403 on `/buildings` and `force_refresh`; a PostgREST INSERT into `estimation_runs` is denied
 while the scenario PATCH works; boot refuses `API_AUTH_OPTIONAL`; a foreign-issuer token gets 401; the Railway IaC plan shows no diff for all three services after a forced redeploy; every rotated secret has one verification.
 
+### M0 credential rotation log
+
+Railway asked customers to replace every credential stored there before 2026-10-21. Rotated earlier, on
+2026-10-22: the four AI provider keys, RunPod, the Cloudflare API token; VAPID is newer and stays. The rest
+are rotated with `scripts/rotate_credentials.sh`, which writes the date and the check into each row below.
+Inventory: `.claude/skills/toolkit-api/references/secrets-inventory.md`.
+
+| Secret | Rotated | Verified by |
+|---|---|---|
+| Smoke-test accounts | pending | |
+| R2 access key pair | pending | |
+| Mapy keys | pending | |
+| Valuo tokens | pending | |
+| GitHub tokens | pending | |
+| Stripe | pending | |
+| Supabase secret key | pending | |
+| Supabase legacy JWT secret | pending | |
+| Old credentials revoked | pending | |
+| Database password and connection strings | pending | |
+| Tenant pool password | pending | |
+
 **M1, about 3.5 weeks: the spine, agent-worker, parity, code and files, the scout in production.**
 - *M1a (days 6–12):* `api/capabilities/` with the entries of § 2 (the Search agenda in `filter_registry`, the stats
   mapper with a census that every dashboard parameter is mapped, market_evidence, the dossier and context reads,
@@ -242,6 +263,14 @@ start runs, what agent search means, and model-written SQL.
 
 1. The customer-group context page (operator, later).
 2. The facet list v1 for the photo assessment (Claude drafts in M1a; operator edits).
-3. The remaining credential rotation (operator, with the wizard, M0).
+3. The remaining credential rotation (operator, with `scripts/rotate_credentials.sh`, M0; the log is under § 3, M0).
 4. The monthly Valuo cap per account (operator; a number).
 5. Post the M0 issue or PR number on Actions-exit #2025 once `/to-tickets` creates it.
+
+## 8. Build log
+
+| Ticket | What landed | Owed after merge |
+|---|---|---|
+| #2058 M0 run-table grants | migration 679: the browser INSERTs no run and UPDATEs only `estimation_runs.scenario`; censuses in `tests/_tenant_registry.py` `BROWSER_WRITE_COLUMNS` | nothing: applied 2026-10-26 14:05Z; production PostgREST as a member: INSERT 403, `status` UPDATE 403, `scenario` UPDATE 204 |
+| #2059 M0 route and sign-in hardening | `/buildings*` and `force_refresh` admin-only; `verify_jwt` pins the issuer, requires `exp`/`sub`/`role`, refuses `client_id`; the API refuses to boot with `API_AUTH_OPTIONAL` on Railway | delete `RUNPOD_API_KEY` from the Railway API service (no reader), after sreality-e9's signed-in check; still owed: building runs readable through PostgREST's SYSTEM arm (`roadmap/public-release-track.md` item 11) |
+| #2061 M0 credential rotation wizard | `scripts/rotate_credentials.sh` (17 stages, resumable with `--from N`, database last) and the per-secret inventory `.claude/skills/toolkit-api/references/secrets-inventory.md` | the operator runs the wizard in a window from sreality-e9; the M0 credential rotation log (§ 3) fills in as it goes |
