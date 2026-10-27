@@ -349,7 +349,7 @@ closed), `agent_estimation_concurrency_cap` (3). Deferred: extension `mode:'agen
 
 All secrets are GitHub Actions secrets and/or Railway env vars in production, referenced by name; never write a value into a
 committed file (`.env` is gitignored). API keys are **backend-only**: never `VITE_*`-prefix one. Where each secret lives, who reads
-it, how to rotate and verify it: `references/secrets-inventory.md`; rotate with `scripts/rotate_credentials.sh` (M0, #2061).
+it, how to rotate and verify it: `references/secrets-inventory.md`.
 
 Database:
 - `SUPABASE_DB_URL` — Postgres connection string (Supabase → Database → Connection string →
@@ -475,7 +475,7 @@ Scraper orchestration:
 
 NEW DEDUP (docs/design/new-dedup/PROGRAM.md, Wave 1):
 - `RUNPOD_API_KEY` — an Actions secret (pods are rented only inside workflows, the judge lane's `autodedup.yml` among them);
-  no Railway service reads it, so the API's copy goes at #2059's deploy and the worker's with the rotation wizard (M0). Auths `scripts/runpod_client.py`'s REST
+  no Railway service reads it, so a Railway copy is dead and is deleted (M0, #2061). Auths `scripts/runpod_client.py`'s REST
   (`rest.runpod.io/v1`) + GraphQL (`api.runpod.io/graphql`) calls to launch/poll/terminate on-demand GPU pods.
   Its workflow consumers: `autodedup.yml`, `dinov3_bakeoff_manifest.yml`, `dinov3_embed_backfill.yml`, `runpod_reap.yml`, `tagging_bakeoff.yml`, `text_extraction_bakeoff.yml`
   (`dinov3_embed_backfill` is the DINOv3 corpus embedding pass, never yet run on real data). Every job goes through `RunPodClient.run_job`,
