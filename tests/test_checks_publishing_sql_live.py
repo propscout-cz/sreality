@@ -19,6 +19,8 @@ the check sends, then the cells it feeds. The rules pinned:
   narrow is a stored width under 600 px (no width is unmeasured), and the top reason drops the URL.
 - ingest: the oldest NEW row not given up, claimed or not, whose ad this portal does not hold; changes: the oldest
   CHANGED or FAILURE row; a presence check counts in neither.
+- photo tags: a photo stored since the later of a day ago and the clip row's runner join, and over 45 min ago, is late
+  when CLIP tagged it over 45 min after storage or not yet; tagged means stamped AND vectored by the taxonomy's model.
 
 Runs in CI's migrations lane (`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED=1`); skipped locally.
 """
@@ -366,3 +368,74 @@ def test_ingest_ages_the_oldest_ad_this_portal_never_wrote_and_changes_the_oldes
         "waiting": 2, "claimed": 1, "oldest_enqueued_at": iso(now - 7 * _H), "known_ads_at_new_priority": 1})
     assert (cells["idnes/changes"]["value"], cells["idnes/changes"]["facts"]) == (4.0, {
         "waiting": 2, "claimed": 0, "oldest_enqueued_at": iso(now - 4 * _H)})
+
+
+def _clip_joined(conn: Any, joined: _dt.timedelta) -> None:
+    """The clip row as the runner registers it, joined `joined` ago."""
+    inserted = conn.execute(
+        "insert into scheduled_jobs (job_name, cadence, runner, registry_at, offset_s, timeout_s, memory_mb, cpus) "
+        "values (%(job)s, interval '15 minutes', %(runner)s, now() - make_interval(secs => %(joined)s), 300, 3300, "
+        "2048, 4) on conflict (job_name) do nothing",
+        {"job": pub._TAG_JOB, "runner": pub._TAG_RUNNER, "joined": joined.total_seconds()})
+    assert inserted.rowcount == 1, "the replay already holds a clip row: these tests seed their own"
+
+
+def _stored(conn: Any, listing_id: int, sequence: int, stored: _dt.timedelta, *,
+            tagged: _dt.timedelta | None = None, vector: str | None = None) -> int:
+    """One photo stored `stored` ago, CLIP-stamped `tagged` after that (None: not yet), vectored by `vector`."""
+    image = conn.execute(
+        "insert into images (listing_id, sreality_url, sequence, storage_path, last_download_attempt_at, "
+        "clip_tagged_at) values (%s, %s, %s, %s, now() - make_interval(secs => %s), "
+        "now() - make_interval(secs => %s) + make_interval(secs => %s)) returning id",
+        (listing_id, _url(listing_id, sequence), sequence, f"img/{listing_id}/{sequence}.jpg", stored.total_seconds(),
+         stored.total_seconds(), None if tagged is None else tagged.total_seconds())).fetchone()[0]
+    if vector:
+        conn.execute("insert into image_clip_embeddings (image_id, model, revision, embedding) "
+                     "values (%s, %s, 'test', array_fill(0.04::real, array[512])::vector)", (image, vector))
+    return image
+
+
+def test_a_photo_is_tagged_only_once_stamped_and_vectored_and_only_since_clip_joined_the_runner(conn: Any) -> None:
+    """The cohort is stored since the later of a day ago and the clip row's join, and over 45 min ago; an untagged
+    photo ages to now(); a stamp with no vector of the model (none, or another model's) is late and counted apart."""
+    _clip_joined(conn, 3 * _H)
+    ad = _ad(conn, "bazos")
+    model = pub._CLIP_MODEL
+    _stored(conn, ad, 0, 2 * _H, tagged=10 * _MIN, vector=model)        # on time
+    _stored(conn, ad, 1, 2 * _H, tagged=60 * _MIN, vector=model)        # tagged past the line
+    _stored(conn, ad, 2, 2 * _H)                                         # waiting
+    _stored(conn, ad, 3, 2 * _H, tagged=5 * _MIN)                        # stamped, no vector
+    _stored(conn, ad, 4, 2 * _H, tagged=5 * _MIN, vector="other/model")  # stamped, another model's vector
+    _stored(conn, ad, 5, 5 * _H, tagged=90 * _MIN, vector=model)        # before clip joined the runner
+    _stored(conn, ad, 6, 30 * _H)                                        # past the day
+    _stored(conn, ad, 7, 30 * _MIN)                                      # inside the line
+    conn.execute("insert into images (listing_id, sreality_url, sequence, last_download_attempt_at) "
+                 "values (%s, %s, 8, now() - interval '2 hours')", (ad, _url(ad, 8)))   # not stored
+
+    params = {"job": pub._TAG_JOB, "runner": pub._TAG_RUNNER, "model": model, "id_window": pub._TAG_ID_WINDOW,
+              "window_h": pub._TAG_WINDOW_H, "late_min": int(THRESHOLDS["publishing_tag_late_min"])}
+    row = conn.execute(pub._TAGS_SQL, params).fetchone()
+    assert row[4:8] == (5, 4, 1, 2), "photos, late, waiting, stamped_no_vector"
+    assert [round(float(v), 1) for v in row[8:11]] == [120.0, 120.0, 120.0]
+
+    now = db_now(conn)
+    c = pub._photo_tags_cell(conn, {**THRESHOLDS, "publishing_tag_min_n": 5}, now)
+    assert c["status"] == "fail" and c["facts"]["registry_at"] == iso(now - 3 * _H)
+    assert {k: c["facts"][k] for k in ("photos", "late", "waiting", "stamped_no_vector", "oldest_waiting_stored_at",
+                                       "window_from")} == {
+        "photos": 5, "late": 4, "waiting": 1, "stamped_no_vector": 2, "oldest_waiting_stored_at": iso(now - 2 * _H),
+        "window_from": iso(now - 3 * _H)}
+
+
+def test_the_tag_line_reads_no_clip_row_retired_or_off_the_runner(conn: Any) -> None:
+    """Not measured until a live runner row names clip: never judged on GitHub's era."""
+    _clip_joined(conn, 3 * _H)
+    _stored(conn, _ad(conn, "bazos"), 0, 2 * _H)
+    params = {"job": pub._TAG_JOB, "runner": pub._TAG_RUNNER, "model": pub._CLIP_MODEL,
+              "id_window": pub._TAG_ID_WINDOW, "window_h": pub._TAG_WINDOW_H, "late_min": 45}
+    for off in ("update scheduled_jobs set retired_at = now() where job_name = 'clip'",
+                "update scheduled_jobs set retired_at = null, runner = 'github-actions' where job_name = 'clip'"):
+        conn.execute(off)
+        assert conn.execute(pub._TAGS_SQL, params).fetchone()[:5] == (None, None, None, None, 0)
+    cell = pub._photo_tags_cell(conn, THRESHOLDS, db_now(conn))
+    assert (cell["status"], cell["message"]) == ("unknown", "Not measured: clip is not on the job runner")
