@@ -15,7 +15,6 @@ TestClient = pytest.importorskip("fastapi.testclient").TestClient
 
 from api import dependencies as deps
 from api import main as api_main
-from api.routes import location_quality as routes
 from location_data import operator_corrections as oc
 from location_data.claims_common import SOURCES
 from toolkit import location_quality

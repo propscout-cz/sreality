@@ -52,7 +52,7 @@ from scripts.pod_watchdog import (
     PodWatchdog,
     Progress,
 )
-from scripts.runpod_client import NoCapacityError, RunPodClient, RunPodError
+from scripts.runpod_client import GpuOption, NoCapacityError, RunPodClient, RunPodError
 
 LOG = logging.getLogger("dinov3_embed_dispatch")
 
@@ -193,7 +193,7 @@ def make_watchdog(args: argparse.Namespace, identity: dict[str, Any]) -> PodWatc
                        poll_interval_s=DEFAULT_POLL_INTERVAL_S)
 
 
-def select_gpus(client: RunPodClient, allowlist: tuple[str, ...]):
+def select_gpus(client: RunPodClient, allowlist: tuple[str, ...]) -> list[GpuOption]:
     """Cheapest-first, restricted to §5.3's CPU-adequate boxes when any are available."""
     gpus = client.eligible_gpus(max_price_per_hr=MAX_PRICE_PER_HR)
     if not allowlist:

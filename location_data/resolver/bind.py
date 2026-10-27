@@ -956,7 +956,7 @@ def _rank(candidates: Sequence[_Candidate], rank: GranularityRank) -> list[_Cand
 
 
 def _point_candidate(
-    point, *, rung: str, agreed: tuple[str, ...], claim_ids: tuple[int, ...],
+    point: AddressPoint, *, rung: str, agreed: tuple[str, ...], claim_ids: tuple[int, ...],
     relaxations: tuple[str, ...] = (),
 ) -> _Candidate:
     return _Candidate(
