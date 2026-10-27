@@ -127,17 +127,17 @@ Inventory: `.claude/skills/toolkit-api/references/secrets-inventory.md`.
 
 | Secret | Rotated | Verified by |
 |---|---|---|
-| Smoke-test accounts | pending | |
-| R2 access key pair | pending | |
-| Mapy keys | pending | |
+| Smoke-test accounts | 2026-10-27 | sign-in with the new password |
+| R2 access key pair | 2026-10-27 | boto3 head/put/delete; the API signs with the new pair (R2 404, not 403); worker variable checked |
+| Mapy keys | 2026-10-27 | geocode 200 per key; /maps/suggest 200; API variable checked |
 | Valuo tokens | pending | |
 | GitHub tokens | pending | |
-| Stripe | pending | |
-| Supabase secret key | pending | |
-| Supabase legacy JWT secret | pending | |
-| Old credentials revoked | pending | |
-| Database password and connection strings | pending | |
-| Tenant pool password | pending | |
+| Stripe | 2026-10-27 | nothing stored: none on the Railway API (looked), no STRIPE* GitHub secret |
+| Supabase secret key | 2026-10-27 | Auth admin API 200 (its one copy is the GitHub secret; no code reads it) |
+| Supabase legacy JWT secret | 2026-10-27 | legacy JWT-based API keys disabled first (Supabase requires it), then revoked; sign-in, signed-in API and PostgREST reads still 200; extension panel checked |
+| Old credentials revoked | 2026-10-27 | API presign accepted by R2 + /maps/suggest + Health, after the revocation |
+| Database password and connection strings | 2026-10-27 | psycopg on the new transaction + session strings; new API GET /estimations 200; worker heartbeat; pg_cron 0 failed |
+| Tenant pool password | 2026-10-27 | psycopg as tenant_pool; new API GET /pipeline/stages 200 |
 
 **M1, about 3.5 weeks: the spine, agent-worker, parity, code and files, the scout in production.**
 - *M1a (days 6–12):* `api/capabilities/` with the entries of § 2 (the Search agenda in `filter_registry`, the stats
