@@ -233,11 +233,12 @@ describe('<ValuoSection> editor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Pronájem' }));
     fireEvent.click(screen.getByRole('button', { name: 'Prodej' }));
     fireEvent.change(container.querySelector('input[type="date"]')!, { target: { value: '' } }); // never cleared
-    fireEvent.click(param('Novostavba').getByRole('button', { name: 'neuvedeno' }));
+    openMore();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Podlaží' }), { target: { value: '' } });
     fireEvent.click(cta());
 
     await waitFor(() => expect(apiPost).toHaveBeenCalledTimes(1));
-    expect(apiPost).toHaveBeenCalledWith('/properties/5/valuo', { overrides: { rating: 'good', new_building: null } });
+    expect(apiPost).toHaveBeenCalledWith('/properties/5/valuo', { overrides: { rating: 'good', floor: null } });
     // The answer replaces the editor in place.
     expect(await screen.findByText(t(fmtCzk(6_120_000)))).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Ocenit přes Valuo' })).not.toBeInTheDocument();
@@ -310,6 +311,7 @@ describe('<ValuoSection> editor', () => {
     renderSection(page({ blocking: [], defaults: { ...DEFAULTS, rating: 'good' } }));
     fireEvent.click(await screen.findByRole('button', { name: 'Ocenit přes Valuo →' }));
     const nb = param('Novostavba');
+    expect(nb.getAllByRole('button').map((b) => b.textContent)).toEqual(['ano', 'ne']); // never 'neuvedeno'
     expect(nb.getByRole('button', { name: 'ano' })).toHaveAttribute('aria-pressed', 'true');
     expect(nb.getByText('odvozeno')).toBeInTheDocument();
     expect(nb.getByRole('img', { name: 'Ve výstavbě → Novostavba' })).toBeInTheDocument();
