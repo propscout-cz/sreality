@@ -62,6 +62,8 @@ NOT_FAILURES = frozenset({"cancelled", "skipped", "interrupted"})
 DUE_KINDS = frozenset({"slot", "now", "more", "backoff", "retry", "own_hour"})
 MORE_REMAINS_S = 60
 BACKOFF_BASE_S = 60
+# An un-retire this long or more after the retirement is a re-join (`_REGISTER_SQL`, migration 682's trigger).
+REJOIN_AFTER_S = 3600
 # Every runner-facing statement runs under it; it also bounds lock waits, so there is no lock timeout.
 STATEMENT_TIMEOUT_S = 5
 
@@ -229,10 +231,15 @@ _REGISTERED_STATE_SQL = """
 SELECT registry_at IS NULL, retired_at IS NOT NULL FROM scheduled_jobs WHERE job_name = %(job)s FOR UPDATE
 """
 
-# The registry's columns only: never the lease, the history or `enabled` (dead since 675). `due_at` is set only for a
-# new, adopted, un-retired or never-scheduled row, at the first slot no earlier than now() + timeout_s, so a move's
-# first run comes after any GitHub run still in flight; a changed grid is never re-slotted.
-_REGISTER_SQL = """
+# The registry's columns only: never the lease, the history or `enabled` (dead since 675). `registry_at` is when the
+# row joined the runner (new, adopted, or un-retired REJOIN_AFTER_S or more after its retirement), kept by every later
+# boot and by migration 682's trigger: Health judges a row on its runs since, as un-retiring keeps the streak and last
+# success of before the revert. `due_at` is set only for a row that joins, or was never scheduled, at the first slot
+# no earlier than now() + timeout_s, so a move's first run comes after any GitHub run still in flight; a changed grid
+# is never re-slotted. A shorter retirement keeps both, so a cut run, a retry or a missed slot stays due: an older
+# image's blink, or a revert re-landed within the hour, whose boot claims a slot GitHub may have run unless the move
+# recipe paused the retired row first (_PAUSE_SQL).
+_REGISTER_SQL = f"""
 INSERT INTO scheduled_jobs AS s (job_name, argv, cadence, offset_s, timeout_s, memory_mb, cpus, resource, runner,
                                  registry_at, retired_at, due_at)
 VALUES (%(job)s, %(argv)s::text[], make_interval(secs => %(every_s)s::integer), %(offset_s)s::integer,
@@ -243,9 +250,13 @@ VALUES (%(job)s, %(argv)s::text[], make_interval(secs => %(every_s)s::integer), 
 ON CONFLICT (job_name) DO UPDATE
    SET argv = EXCLUDED.argv, cadence = EXCLUDED.cadence, offset_s = EXCLUDED.offset_s,
        timeout_s = EXCLUDED.timeout_s, memory_mb = EXCLUDED.memory_mb, cpus = EXCLUDED.cpus,
-       resource = EXCLUDED.resource, runner = EXCLUDED.runner, registry_at = now(), retired_at = NULL,
-       due_at = CASE WHEN s.retired_at IS NOT NULL OR s.registry_at IS NULL OR s.due_at IS NULL
-                     THEN EXCLUDED.due_at ELSE s.due_at END
+       resource = EXCLUDED.resource, runner = EXCLUDED.runner, retired_at = NULL,
+       registry_at = CASE WHEN s.registry_at IS NULL
+                            OR s.retired_at <= now() - make_interval(secs => {REJOIN_AFTER_S}) THEN now()
+                          ELSE s.registry_at END,
+       due_at = CASE WHEN s.registry_at IS NULL OR s.due_at IS NULL
+                            OR s.retired_at <= now() - make_interval(secs => {REJOIN_AFTER_S}) THEN EXCLUDED.due_at
+                     ELSE s.due_at END
 """
 
 # Only rows a runner registered: a lane `held()` created has registry_at NULL and is never retired.
@@ -326,11 +337,12 @@ SELECT runner, registry_at IS NOT NULL, retired_at IS NOT NULL, requested_at, re
   FROM scheduled_jobs WHERE job_name = %(job)s
 """
 
-# Any live row, a lane's included. 675's CHECK demands the note and the author; `until` NULL lifts the pause now.
+# Any row, a lane's and a retired one's included: register keeps it through an un-retire (a re-land's move recipe).
+# 675's CHECK demands the note and the author; `until` NULL lifts the pause now.
 _PAUSE_SQL = """
 UPDATE scheduled_jobs
    SET paused_until = coalesce(%(until)s::timestamptz, now()), pause_note = %(note)s, paused_by = %(by)s
- WHERE job_name = %(job)s AND retired_at IS NULL
+ WHERE job_name = %(job)s
 RETURNING 1
 """
 
@@ -547,11 +559,7 @@ def pause(conn: psycopg.Connection, name: str, *, until: datetime | None, note: 
     """Pauses the schedule until `until` (a request still runs), or lifts the pause now (`until` None)."""
     with _bounded(conn) as cur:
         cur.execute(_PAUSE_SQL, {"job": name, "until": until, "note": note, "by": by})
-        if cur.fetchone() is not None:
-            return None
-        cur.execute(_ROW_STATE_SQL, {"job": name})
-        row = cur.fetchone()
-    return f"{name} has no row" if row is None else f"{name} is retired"
+        return None if cur.fetchone() is not None else f"{name} has no row"
 
 
 def rows(conn: psycopg.Connection) -> list[dict[str, object]]:

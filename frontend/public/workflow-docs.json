@@ -266,7 +266,7 @@
     {
       "filename": "backup_before_drop.yml",
       "name": "Ops: back up what a destructive migration drops",
-      "description": "Dumps what a DROP TABLE / DROP COLUMN migration is about to destroy, BEFORE it is applied (CLAUDE.md rule 1 / the `database` skill: back up first, then the operator's explicit OK). Each target is `table` (pg_dump of the whole relation) or `table:key,col[,col...]` (a CSV of the key plus those columns, rows where one of them is set), uploaded to R2 under backups/<label>/<UTC date>/ and read back. Never a workflow artifact: the repository is public. workflow_dispatch only; safe to re-run (a same-day re-run overwrites).",
+      "description": "Dumps what a DROP TABLE / DROP COLUMN migration is about to destroy, BEFORE it is applied (CLAUDE.md rule 1 / the `database` skill: back up first, then the operator's explicit OK). Each target is `table` (pg_dump of the whole relation) or `table:key,col[,col...]` (a CSV of the key plus those columns, rows where one of them is set), uploaded to R2 under backups/<label>/<UTC date>/ and read back. Never a workflow artifact: an artifact is not private storage and it expires. workflow_dispatch only; safe to re-run (a same-day re-run overwrites).",
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -283,8 +283,16 @@
         },
         {
           "name": "targets",
-          "description": "Space-separated: `table` or `table:key,col[,col...]`",
-          "required": true,
+          "description": "Space-separated: `table` or `table:key,col[,col...]` (or leave empty and name artifacts)",
+          "required": false,
+          "type": "string",
+          "default": null,
+          "options": null
+        },
+        {
+          "name": "artifacts",
+          "description": "Space-separated `<run-id>:<artifact-name>`: Actions artifacts to archive in R2 as their zip",
+          "required": false,
           "type": "string",
           "default": null,
           "options": null
@@ -301,7 +309,7 @@
       "concurrencyGroup": "backup-before-drop",
       "cancelInProgress": false,
       "timeoutMinutes": 30,
-      "permissions": "contents: read",
+      "permissions": "contents: read, actions: read",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/backup_before_drop.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/backup_before_drop.yml"
     },
@@ -2564,6 +2572,43 @@
       "permissions": "contents: read",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/resolve_brokers_full.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/resolve_brokers_full.yml"
+    },
+    {
+      "filename": "run_job.yml",
+      "name": "Jobs: run now",
+      "description": "Asks the Railway job runner to run one of its jobs now. It only FILES a request (one row on scheduled_jobs, written by the runner's own `request` verb) and runs nothing here. The runner starts it within seconds once the job and its shared resource are free, even while its schedule is paused; a second request is refused while one waits; a job its own workflow still schedules is refused until its move PR lands. A green run means \"asked\", not \"done\": follow the run on Health (job/<name>). Required secret: SUPABASE_DB_URL.",
+      "manual": true,
+      "schedules": [],
+      "onPush": false,
+      "onPullRequest": false,
+      "paths": null,
+      "inputs": [
+        {
+          "name": "job",
+          "description": "The job's name, as Health shows it after job/ (e.g. map_overlays)",
+          "required": true,
+          "type": "string",
+          "default": null,
+          "options": null
+        },
+        {
+          "name": "args",
+          "description": "Optional extra arguments appended to the job's own, e.g. --dry-run (quote a value with spaces; an unmatched quote is refused). They override the job's own flags, memory and worker counts unchecked. A mistyped one is a failed run; one that makes it outrun its time budget is a Problem until a later run (a request is never retried).",
+          "required": false,
+          "type": "string",
+          "default": "",
+          "options": null
+        }
+      ],
+      "secrets": [
+        "SUPABASE_DB_URL"
+      ],
+      "concurrencyGroup": null,
+      "cancelInProgress": null,
+      "timeoutMinutes": 10,
+      "permissions": "contents: read",
+      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/run_job.yml",
+      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/run_job.yml"
     },
     {
       "filename": "runner_image.yml",

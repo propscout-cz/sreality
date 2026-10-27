@@ -436,7 +436,7 @@ missing), `publishing` (queue age, Browse visibility of new ads and of the stock
 **Quality checks (Health dashboard sprint wave 6, `scripts/checks/quality.py`, on the worker):** the `parsing` alarm (fill and vocabulary against the blessed baseline, new ads' per-m² measures, stock
 medians, location payload shape via `claims_common.PAYLOAD_SHAPE_PREDICATES`, re-snapshot churn) and the gauges `data_quality` (basis floor, area vs usable, no portal link), `location_town_coverage` (active ads only) and `text_extraction` (flow, backlog ETA), each gauge cell with a 30-day `trend` and `worse_7d`.
 **Watchers (migration 620):** pg_cron's `health_liveness()` (job `health-liveness`, every 5 min) writes one `liveness` row
-(host `pg_cron`) whose cells judge what must not judge itself: `worker` (heartbeat over 10 min old), `health_lane` (no completed pass, a pass in flight or failing for 10 min), `stale:<key>` (an alarm past its staleness budget) and `unalerted` (a
+(host `pg_cron`) whose cells judge what must not judge itself: `worker/<name>` (each heartbeat over 10 min old), `job/<name>` + `job-runner` (each runner job and the fleet: `health_job_cells`, `references/job-runner.md`), `health_lane` (no completed pass, a pass in flight or failing for 10 min), `stale:<key>` (an alarm past its staleness budget) and `unalerted` (a
 measured Problem with no incident; the matcher-lease `api` cell went in W2b, mig 655); the ladder tells them, and they replace `worker_liveness` and the 24 h dead-man job.
 The canary's last step, `scripts/health_canary.py`, exits 2 when the DB does not answer and 1 on any `CANARY FAIL`: the
 newest `liveness` row is 30 min old, a failing liveness cell has no incident after 15 min, or an open, unacknowledged alarm-class

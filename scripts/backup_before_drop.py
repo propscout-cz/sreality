@@ -5,7 +5,7 @@ then the operator's OK to apply). R2 and never a workflow artifact: an artifact 
 private storage (any reader of the repository can download it) and expires. A target is a whole relation (`table`: pg_dump, schema + data) or a column set
 (`table:key,col[,col...]`: a CSV of the key and the columns, only rows where one of them is
 set, so an absent row restores as the NULL it was), or a backup already made on disk (`--file`,
-the retired-claims CSV), streamed as it is. Uses SUPABASE_DB_SESSION_URL when set:
+the retired-claims CSV, an Actions artifact's zip), streamed as it is. Uses SUPABASE_DB_SESSION_URL when set:
 pg_dump and COPY want a stable session, which the transaction pooler does not give.
 """
 
@@ -152,7 +152,8 @@ def main(argv: list[str] | None = None) -> int:
     for path in args.file:
         # Streamed from disk (multipart): the retired-claims CSV runs to gigabytes.
         key, size = f"{prefix}/{os.path.basename(path)}", os.path.getsize(path)
-        r2.upload_file(key, path, content_type="application/gzip")
+        kind = "application/zip" if path.endswith(".zip") else "application/gzip"
+        r2.upload_file(key, path, content_type=kind)
         if not _landed(r2, key, size, path):
             failures.append(path)
             continue

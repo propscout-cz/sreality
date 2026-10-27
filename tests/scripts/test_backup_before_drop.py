@@ -58,6 +58,7 @@ class _R2:
 
     def upload_file(self, key: str, path: str, content_type: str = "application/zip") -> None:
         self.files[key] = path
+        self.types = {**getattr(self, "types", {}), key: content_type}
 
     def object_size(self, key: str) -> int | None:
         return self._size_back if self._size_back is not None else Path(self.files[key]).stat().st_size
@@ -89,3 +90,14 @@ def test_a_file_that_does_not_read_back_whole_fails_the_run(
 def test_neither_a_target_nor_a_file_is_refused() -> None:
     with pytest.raises(SystemExit):
         bbd.main(["retired-claims"])
+
+
+def test_an_archived_artifact_zip_keeps_its_zip_type(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # An Actions artifact is archived as the zip GitHub serves, structure and all.
+    artifact = tmp_path / "autodedup-judge_123_456.zip"
+    artifact.write_bytes(b"PK" + b"x" * 50)
+    r2 = _R2()
+    monkeypatch.setattr(bbd.R2Client, "from_env", classmethod(lambda cls: r2))
+    assert bbd.main(["actions-artifacts", "--file", str(artifact)]) == 0
+    ((key, kind),) = r2.types.items()
+    assert key.endswith("/autodedup-judge_123_456.zip") and kind == "application/zip"
