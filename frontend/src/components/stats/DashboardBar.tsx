@@ -3,11 +3,12 @@
  * named chart set, optionally with the Browse filter it was saved over (the
  * preset blob). Loading one COPIES it into the working board — StatsDashboard's
  * one board write, `onLoadCharts` — then writes the URL (browseState.
- * loadDashboard); it changes only on "Uložit změny". An own dashboard can be
+ * loadDashboard); it changes only on its menu's "Uložit změny". An own dashboard can be
  * duplicated as stored ("Duplikovat": a new row, "<name> (kopie)"). A dashboard
  * shared WITH the account is read-only: Načíst, Uložit jako vlastní, Přestat sledovat.
  * ONE own dashboard, under any name, is the property page's "Okolí dashboard"
- * (migration 664, lib/neighbourhood): its chip says so, it carries no filter (the
+ * (migration 664, lib/neighbourhood): its chip says so with an "Okolí" badge and a
+ * pin (ruling S06), it carries no filter (the
  * save dialog greys the box out), any other own dashboard's menu can make it so
  * ("Použít jako okolí dashboard"), and while the account has none the bar offers to
  * create it from the working board. */
@@ -27,8 +28,11 @@ import type { SavedDashboard } from '@/lib/types';
 import { pushToast } from '@/lib/toast';
 import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import Dialog, { DialogClose } from '@/components/Dialog';
-import SavedSetBar, { useSavedSet, type SavedSetCopy, type SavedSetMenuItem } from '@/components/SavedSetBar';
+import SavedSetBar, {
+  useSavedSet, type SavedSetBadge, type SavedSetCopy, type SavedSetMenuItem,
+} from '@/components/SavedSetBar';
 import ShareBlock from '@/components/ShareBlock';
+import { PinIcon } from '@/components/phone/phoneIcons';
 import { PROPERTY_CARD_LABEL, isPropertyCard } from '@/lib/neighbourhood';
 
 export type DashboardView = Pick<
@@ -43,9 +47,10 @@ const COPY: SavedSetCopy = {
   empty: 'Zatím žádné uložené dashboardy.',
   save: '+ Uložit jako dashboard',
   saveHint: 'Uložit současné grafy jako nový dashboard',
-  updateHint: 'Uložit současné grafy (a filtr, nese-li ho) zpět do tohoto dashboardu',
-  dialog: { save: 'Uložit grafy jako dashboard', update: 'Uložit změny dashboardu', edit: 'Přejmenovat dashboard' },
-  submit: { save: 'Uložit dashboard', update: 'Uložit změny', edit: 'Uložit' },
+  saveChanges: 'Uložit změny',
+  revert: 'Zahodit změny',
+  dialog: { save: 'Uložit grafy jako dashboard', edit: 'Přejmenovat dashboard' },
+  submit: { save: 'Uložit dashboard', edit: 'Uložit' },
   nameLabel: 'Název dashboardu',
   namePlaceholder: 'např. Praha 2+kk — ceny',
   color: 'Barva',
@@ -58,9 +63,16 @@ const COPY: SavedSetCopy = {
   dragHint: 'Přetažením změníte pořadí',
   options: 'Možnosti dashboardu',
   edited: 'Upraveno od načtení',
-  editedHint: 'Upraveno od načtení — změny uložíte tlačítkem Uložit změny',
+  editedHint: 'Upraveno od načtení — uložíte nebo zahodíte přes ⋯',
   shared: { by: 'sdílí', editedHint: 'Upraveno od načtení — změny uložíte přes Uložit jako vlastní' },
   failed: 'Něco se nepovedlo.',
+};
+
+/* The property page's dashboard, marked on its chip after the name. */
+const OKOLI_BADGE: SavedSetBadge = {
+  label: 'Okolí',
+  title: `Tento dashboard se ukáže na kartě ${PROPERTY_CARD_LABEL} u každé nemovitosti`,
+  icon: <PinIcon className="h-2.5 w-2.5" />,
 };
 
 const listKey = statsDashboardKeys.all;
@@ -327,6 +339,7 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
         dirty={dirty}
         copy={COPY}
         suffix={(d) => d.owner_email ?? (isPropertyCard(d) ? 'okolí dashboard' : null)}
+        badge={(d) => (isPropertyCard(d) ? OKOLI_BADGE : null)}
         chipMenu={chipMenu}
         leading={createCard}
         onLoad={load}
@@ -342,8 +355,8 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
             .then((created) => activate(created.id))
         }
         onUpdate={(d, name, withFilter, color) => {
-          // Unticking the box drops a stored filter; an untouched box keeps it current.
-          const filter = withFilter ? { filter_spec: currentSpec() } : d.filter_spec != null ? { filter_spec: null } : {};
+          // Save changes keeps the dashboard's own answer: a stored filter is kept current.
+          const filter = withFilter ? { filter_spec: currentSpec() } : {};
           return update.mutateAsync({ id: d.id, patch: { name, color, charts: working, show_small: statsSmall, ...filter } });
         }}
         onRename={(d, name, color) => update.mutateAsync({ id: d.id, patch: { name, color } })}

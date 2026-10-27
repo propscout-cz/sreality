@@ -126,7 +126,9 @@ Dashboards (`api/routes/stats_dashboards.py`, mounted like the presets router):
   `filter_spec` where an explicit `null` clears the filter, `show_small` where a `null` keeps it, `color`). A
   recipient's PUT/DELETE matches 0 rows → 404.
 - Every dashboard row carries `show_small` (migration 681, a scalar column): the Stats tab's "Malé vzorky" switch
-  (URL `small=1`, cells under the floor shown as their small-sample summary, migration 678), saved with the dashboard
+  (URL `small=1`, cells under the floor shown as their small-sample summary, migration 678; a table or box chart whose
+  every cell is under the floor offers "Zobrazit malé vzorky", which turns the same switch on and so marks a loaded
+  dashboard "Upraveno od načtení" as the switch does, ruling S09), saved with the dashboard
   and read by the property page's Okolí dashboard tab, which draws that dashboard with its own setting. A recipient
   reads the owner's (it is part of what was shared). The working board's `GET`/`PUT /stats/dashboard` stay `{charts}`.
 - `POST /stats/dashboards/{id}/shares {email}` → the ownership gate (`UPDATE stats_dashboards SET updated_at = now()
@@ -158,6 +160,10 @@ Dashboards (`api/routes/stats_dashboards.py`, mounted like the presets router):
   (queries, mutations, `loadPreset`, the Pipeline chip in `leading`). `PresetSaveModal.tsx` becomes
   `SavedSetSaveModal.tsx` with `checkbox` in place of `includeMapArea` (presets: "Include map area"; dashboards:
   "Uložit i nastavení filtru"). Behaviour of the preset bar is unchanged, pixel for pixel; its tests move with it.
+- **No update button (2026-10-27, operator, both instances):** the copper "update" button and the update dialog are
+  gone. A dirty chip's ⋯ menu leads with Save changes / Uložit změny (one click, no dialog: the set keeps its own
+  name, colour and checkbox answer, so a preset keeps or lacks its map area and a dashboard its filter as saved) and
+  Revert to saved / Zahodit změny (a reload of the stored set); a shared chip gets the revert only.
 - **`collapse` (2026-10-22, presets only):** `{label, storageKey, show, fold}` folds the chips behind a
   "Presety 11" toggle; folded, only the active chip shows (eleven presets wrapped to three rows above the
   map). The fold is remembered per browser; the dashboards bar can take it with one prop.
@@ -181,8 +187,9 @@ Dashboards (`api/routes/stats_dashboards.py`, mounted like the presets router):
   filter would replace it when the explore window loads the dashboard). The API projects the flag as the
   caller's own only and moves it with `PUT /stats/dashboards/{id}/property-card` (one transaction: the previous
   one lets go, this one takes it and drops its filter; a shared or unknown id is a 404); a generic PUT that
-  tries to give it a filter is a 422 (`SavedSetKind.refusals`). In the bar: its chip's suffix says
-  "okolí dashboard"; the save dialog greys "Uložit i nastavení filtru" out for it, saying why; any other own
+  tries to give it a filter is a 422 (`SavedSetKind.refusals`). In the bar: its chip carries an "Okolí" badge
+  with a pin after its name (ruling S06, `SavedSetBar` `badge`), its tooltip naming the property page's Okolí
+  dashboard tab, and a screen reader still hears "okolí dashboard" (the suffix, kept for it only); the save dialog greys "Uložit i nastavení filtru" out for it, saying why; any other own
   dashboard's menu offers "Použít jako okolí dashboard" (asking first when it carries a filter); while the
   account has none, the bar leads with "+ Okolí dashboard", which saves the working board and marks it. It is
   edited like any dashboard (load, edit, "Uložit změny"), renamed freely, and deleting it leaves none.

@@ -97,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--base", required=True, help="ref this PR's diff is taken against")
     ap.add_argument("--pr", type=int, default=int(os.environ.get("PR_NUMBER") or 0))
-    ap.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", "waiff/sreality"))
+    ap.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", "propscout-cz/sreality"))
     args = ap.parse_args(argv)
 
     own = own_migrations(args.base)

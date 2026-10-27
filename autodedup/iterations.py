@@ -28,7 +28,7 @@ from typing import Any, Sequence
 
 MAX_STATS_BYTES = 20_000
 
-ACTIONS_RUN_URL = "https://github.com/waiff/sreality/actions/runs/"
+ACTIONS_RUN_URL = "https://github.com/propscout-cz/sreality/actions/runs/"
 
 STATUSES: tuple[str, ...] = ("running", "done", "failed", "skipped")
 

@@ -4,6 +4,7 @@ import type { ListingFilters } from '@/lib/filters';
 import { browseKeys } from '@/lib/browseKeys';
 import { lazyChunk } from '@/lib/lazyChunk';
 import Skeleton from '@/components/Skeleton';
+import OverflowMenu, { type OverflowMenuItem } from '@/components/OverflowMenu';
 import type { ChartStat } from '@/lib/statsRegistry.generated';
 import {
   LINE_NEEDS_ROW,
@@ -11,6 +12,7 @@ import {
   categoryBlockNote,
   chartProblem,
   chartTitle,
+  everyCellUnderMin,
   fetchStatsPivot,
   minRowsFor,
   refusalText,
@@ -34,9 +36,9 @@ const PivotSeries = lazyChunk(() => import('./views/PivotSeries'));
 const ACTION =
   'rounded-[var(--radius-xs)] px-1.5 py-1 text-[0.75rem] text-[var(--color-ink-3)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)] disabled:opacity-35 disabled:hover:bg-transparent disabled:cursor-not-allowed aria-disabled:opacity-35 aria-disabled:hover:bg-transparent aria-disabled:cursor-not-allowed transition-colors';
 
-type FocusTarget = 'heading' | 'edit' | 'remove' | 'keep' | 'earlier' | 'later' | 'builder';
+type FocusTarget = 'heading' | 'edit' | 'menu' | 'keep' | 'builder';
 
-/* The card's two move buttons, one definition. */
+/* The ⋯ menu's two moves, one definition. */
 const MOVES = [
   { dir: 'earlier', glyph: '↑', where: 'dopředu' },
   { dir: 'later', glyph: '↓', where: 'dozadu' },
@@ -46,16 +48,17 @@ const MOVES = [
  * neighbour (the pressed control was re-inserted or is gone). `seq` re-fires an
  * identical request. */
 export interface CardFocus {
-  target: Extract<FocusTarget, 'heading' | 'edit' | 'earlier' | 'later'>;
+  target: Extract<FocusTarget, 'heading' | 'edit' | 'menu'>;
   seq: number;
 }
 
 /* One card of the board: the derived title, the sample ledger, the view. Upravit
  * flips THIS card (same box, same width) into the builder over a live preview;
  * Uložit hands the chart back and the card leaves edit mode once the board has
- * saved it (a failed save keeps the draft); Zrušit drops the draft. Odebrat asks
- * once. Every flip moves keyboard focus to where the next action is, because
- * the control just pressed is gone. */
+ * saved it (a failed save keeps the draft); Zrušit drops the draft. The moves and
+ * Odebrat sit in a ⋯ menu beside Upravit (ruling P14); Odebrat asks once. Every
+ * flip moves keyboard focus to where the next action is, because the control
+ * just pressed is gone. */
 export default function StatsChart({
   chart,
   filters,
@@ -67,6 +70,7 @@ export default function StatsChart({
   saving = false,
   focus = null,
   showSmall = false,
+  onShowSmall,
 }: {
   chart: ChartSpec;
   filters: ListingFilters;
@@ -83,6 +87,9 @@ export default function StatsChart({
   focus?: CardFocus | null;
   /* Cells under the minimum show their small-sample summary (the Stats tab's switch). */
   showSmall?: boolean;
+  /* Turns that switch on, from the note a chart with every cell under the minimum
+   * shows (ruling S09); absent where there is no switch (the property page). */
+  onShowSmall?: () => void;
 }) {
   const client = useQueryClient();
   const headingId = useId();
@@ -109,7 +116,9 @@ export default function StatsChart({
     refs.current[t] = el;
   };
   const focusTo = (t: FocusTarget) => {
-    const el = refs.current[t];
+    const at = refs.current[t];
+    /* OverflowMenu has no ref of its own: its trigger is the wrapper's button. */
+    const el = t === 'menu' ? at?.querySelector('button') : at;
     if (el && !(el instanceof HTMLButtonElement && el.disabled)) el.focus();
     else refs.current.heading?.focus();
   };
@@ -157,8 +166,18 @@ export default function StatsChart({
   };
   const keep = () => {
     setConfirming(false);
-    focusNext.current = 'remove';
+    focusNext.current = 'menu';
   };
+  const menu: OverflowMenuItem[] = [
+    ...(onMove
+      ? MOVES.map((m) => ({
+          label: `${m.glyph} Posunout ${m.where}`,
+          onSelect: () => onMove[m.dir]?.(),
+          disabled: !onMove[m.dir] || saving,
+        }))
+      : []),
+    { label: 'Odebrat', onSelect: askRemove, danger: true, disabled: saving },
+  ];
 
   return (
     <article
@@ -189,34 +208,12 @@ export default function StatsChart({
               </>
             ) : (
               <>
-                {onMove &&
-                  MOVES.map((m) => (
-                    <button
-                      key={m.dir}
-                      ref={refTo(m.dir)}
-                      type="button"
-                      className={ACTION}
-                      onClick={saving ? undefined : onMove[m.dir]}
-                      disabled={!onMove[m.dir]}
-                      aria-disabled={saving || undefined}
-                      aria-label={`Posunout graf ${title} ${m.where}`}
-                    >
-                      {m.glyph}
-                    </button>
-                  ))}
                 <button ref={refTo('edit')} type="button" className={ACTION} onClick={begin} aria-label={`Upravit graf ${title}`}>
                   Upravit
                 </button>
-                <button
-                  ref={refTo('remove')}
-                  type="button"
-                  className={ACTION}
-                  onClick={askRemove}
-                  aria-disabled={saving || undefined}
-                  aria-label={`Odebrat graf ${title}`}
-                >
-                  Odebrat
-                </button>
+                <span ref={refTo('menu')} className="contents">
+                  <OverflowMenu label={`Další akce grafu ${title}`} items={menu} />
+                </span>
               </>
             )}
           </div>
@@ -252,7 +249,22 @@ export default function StatsChart({
         className={`px-5 pt-4 pb-5 transition-opacity ${pivot.isPlaceholderData ? 'opacity-60' : ''}`}
         aria-busy={pivot.isFetching}
       >
-        <Body chart={shown} pivot={data} error={pivot.error} onRetry={() => void pivot.refetch()} showSmall={showSmall} />
+        <Body
+          chart={shown}
+          pivot={data}
+          error={pivot.error}
+          onRetry={() => void pivot.refetch()}
+          showSmall={showSmall}
+          onShowSmall={
+            onShowSmall
+              ? () => {
+                  /* The pressed button goes with the note: focus waits on the heading. */
+                  refs.current.heading?.focus();
+                  onShowSmall();
+                }
+              : undefined
+          }
+        />
       </div>
 
       {editing && (
@@ -287,12 +299,14 @@ function Body({
   error,
   onRetry,
   showSmall,
+  onShowSmall,
 }: {
   chart: ChartSpec;
   pivot: StatsPivot | null;
   error: Error | null;
   onRetry: () => void;
   showSmall: boolean;
+  onShowSmall?: () => void;
 }) {
   if (error && !pivot) {
     return (
@@ -324,11 +338,21 @@ function Body({
     );
   }
   if (pivot.spec.rows.length < minRowsFor(chart.view)) return <Refusal>{LINE_NEEDS_ROW}</Refusal>;
+  /* Only the table and the box change with the switch, so only they offer it. */
+  const note =
+    onShowSmall && !showSmall && everyCellUnderMin(pivot) ? (
+      <SmallSamplesNote minN={pivot.min_n} onShow={onShowSmall} />
+    ) : null;
   switch (chart.view) {
     case 'table':
-      return <PivotTable pivot={pivot} stats={chart.stats} showSmall={showSmall} />;
+      return (
+        <>
+          {note}
+          <PivotTable pivot={pivot} stats={chart.stats} showSmall={showSmall} />
+        </>
+      );
     case 'box':
-      return <BoxTable pivot={pivot} showSmall={showSmall} />;
+      return <BoxTable pivot={pivot} showSmall={showSmall} notice={note} />;
     case 'line':
     case 'bar':
       return <Series pivot={pivot} stats={chart.stats} kind={chart.view} />;
@@ -344,6 +368,26 @@ function Series({ pivot, stats, kind }: { pivot: StatsPivot; stats: readonly Cha
     <Suspense fallback={<Skeleton height={240} />}>
       <PivotSeries pivot={pivot} model={model} stats={stats} kind={kind} />
     </Suspense>
+  );
+}
+
+/* Every cell under the minimum, said once above the table instead of only by each
+ * row's dashed mark, with the switch's "on" beside it (ruling S09). */
+function SmallSamplesNote({ minN, onShow }: { minN: number; onShow: () => void }) {
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-[var(--radius-sm)] bg-[var(--color-paper)] px-3 py-2 text-[0.8rem] text-[var(--color-ink-2)]">
+      <p className="min-w-0">
+        Všechny buňky mají méně než <span className="font-mono tabular-nums">{minN}</span> nemovitostí, takže
+        statistiky jsou skryté.
+      </p>
+      <button
+        type="button"
+        onClick={onShow}
+        className="ml-auto shrink-0 rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)] bg-[var(--color-paper-2)] px-2.5 py-1 text-[0.75rem] text-[var(--color-ink)] hover:border-[var(--color-copper)] transition-colors"
+      >
+        Zobrazit malé vzorky
+      </button>
+    </div>
   );
 }
 

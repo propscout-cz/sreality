@@ -14,7 +14,10 @@
          is the paper token, light and dark. Status bar stays "default": never
          black-translucent (deprecated; nothing draws under the status bar). -->
     <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="icon" href="/favicon.ico" sizes="32x32 48x48" />
+    <!-- ?v= is a cache-buster: browsers keep a tab icon per URL for days and a reload
+         does not refresh it, so the LR to PS swap needed a new URL. Bump it on the next
+         icon change. -->
+    <link rel="icon" href="/favicon.ico?v=ps" sizes="32x32 48x48" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="theme-color" content="#f2efe7" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#121417" media="(prefers-color-scheme: dark)" />

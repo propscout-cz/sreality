@@ -102,6 +102,20 @@ describe('<MarketTile>', () => {
     expect(JSON.parse(localStorage.getItem('sreality.marketTile') ?? '{}')).toEqual({ radiusM: 1000, market: 'all' });
   });
 
+  /* A pick-one is the ONE joined bar (operator ruling 2026-10-27); Budova and Stav pick several, so they stay chips. */
+  it('draws Okruh and Vzorek as joined bars, the chosen segment filled copper', async () => {
+    renderTile();
+    await screen.findByRole('heading', { level: 3 });
+    for (const [name, lit] of [['Okruh', '500 m'], ['Vzorek', 'Prodáno (trh)']]) {
+      const group = screen.getByRole('group', { name });
+      expect(group.firstElementChild).toHaveClass('inline-flex', 'border', 'bg-[var(--color-paper-2)]');
+      expect(within(group).getByRole('button', { name: lit })).toHaveAttribute('aria-pressed', 'true');
+      expect(within(group).getByRole('button', { name: lit })).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+      for (const b of within(group).getAllByRole('button')) expect(b).not.toHaveClass('border');
+    }
+    expect(screen.getByRole('button', { name: 'Panel' })).toHaveClass('border');
+  });
+
   it('names an attribute the property does not state, and leaves it unset', async () => {
     renderTile({ ...PROPERTY, ownership: null } as PropertyPublic);
     expect(await screen.findByText(/vlastnictví neuvedeno, bez filtru/)).toBeInTheDocument();

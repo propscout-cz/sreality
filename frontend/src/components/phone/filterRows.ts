@@ -1,7 +1,8 @@
 /* The Filtry sheet's rows: Browse's sidebar layout (lib/filterLayout) unrolled
  * into one row per filter, a min/max pair as one, in the sidebar's order. The
- * sheet draws them (FilterSheet.tsx) and the feed counts them (the Filtry
- * chip's "filters beyond the scope"), so both read one list. */
+ * sheet draws them (FilterSheet.tsx), the feed counts them (the Filtry chip's
+ * "filters beyond the scope") and Browse says them as its applied-filter pills
+ * (AppliedFilterPills, ruling P09), so all three read one list. */
 
 import { formRows, type FormRow } from '@/components/FilterForm';
 import { BROWSE_FILTER_BANDS, type CustomBlock, type CustomBlockKey, type FilterRow } from '@/lib/filterLayout';
@@ -101,18 +102,59 @@ const canon = (v: unknown): string =>
 const differs = (a: ListingFilters, b: ListingFilters, k: keyof ListingFilters): boolean =>
   canon(a[k]) !== canon(b[k]);
 
-/* How many filters `f` sets beyond its scope's own — a row counts once however
- * many fields it edits, and a field no row draws (a map viewport, a broker from
- * a desktop link) counts on its own, since it narrows the roll all the same. */
-export function filtersBeyond(f: ListingFilters, base: ListingFilters): number {
-  const covered = new Set<keyof ListingFilters>();
-  let n = 0;
-  for (const row of ALL_ROWS) {
-    row.fields.forEach((k) => covered.add(k));
-    if (row.fields.some((k) => differs(f, base, k))) n += 1;
-  }
+/* One filter `f` sets beyond its base: the sidebar row that draws it, or null
+ * for a field no row draws, and every field it spans. */
+export interface AppliedFilter {
+  key: string;
+  label: string;
+  row: SheetRow | null;
+  fields: Array<keyof ListingFilters>;
+}
+
+/* The names of the fields no row draws, which narrow the cohort all the same:
+ * a map viewport, URL-only bounds. A field in neither a row nor here fails the
+ * census (filterRows.test.ts) before a pill could name it by its key. */
+const UNROWED_LABELS: Readonly<Record<string, string>> = {
+  bounds: 'Map area',
+  categorySubCb: 'Sub-category',
+  gardenArea: 'Garden area',
+};
+
+const ROWED = new Set(ALL_ROWS.flatMap((r) => r.fields));
+
+/* The fields no row draws, in DEFAULT_FILTERS order, a `…Min` / `…Max` pair as one. */
+export const UNROWED_FILTERS: ReadonlyArray<Omit<AppliedFilter, 'row'>> = (() => {
+  const groups = new Map<string, Array<keyof ListingFilters>>();
   for (const k of Object.keys(DEFAULT_FILTERS) as Array<keyof ListingFilters>) {
-    if (!covered.has(k) && differs(f, base, k)) n += 1;
+    if (ROWED.has(k)) continue;
+    const key = k.replace(/(Min|Max)$/, '');
+    groups.set(key, [...(groups.get(key) ?? []), k]);
   }
-  return n;
+  return [...groups].map(([key, fields]) => ({ key, label: UNROWED_LABELS[key] ?? key, fields }));
+})();
+
+/* What `f` sets beyond its scope's own, in the sidebar's order: a row once
+ * however many fields it edits, then each field no row draws. */
+export function appliedFilters(f: ListingFilters, base: ListingFilters): AppliedFilter[] {
+  const out: AppliedFilter[] = [];
+  for (const row of ALL_ROWS) {
+    if (row.fields.some((k) => differs(f, base, k))) {
+      out.push({ key: row.key, label: row.label, row, fields: row.fields });
+    }
+  }
+  for (const g of UNROWED_FILTERS) {
+    if (g.fields.some((k) => differs(f, base, k))) out.push({ ...g, row: null });
+  }
+  return out;
+}
+
+/* How many filters `f` sets beyond its scope's own: the Filtry chip's count. */
+export const filtersBeyond = (f: ListingFilters, base: ListingFilters): number =>
+  appliedFilters(f, base).length;
+
+/* `f` with one applied filter set back to the base, every other one kept. */
+export function withoutApplied(f: ListingFilters, base: ListingFilters, a: AppliedFilter): ListingFilters {
+  const reset: Partial<Record<keyof ListingFilters, unknown>> = {};
+  for (const k of a.fields) reset[k] = base[k];
+  return { ...f, ...reset } as ListingFilters;
 }

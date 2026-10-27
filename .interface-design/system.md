@@ -35,9 +35,10 @@ scheme is on.
 ## Hierarchy rulings (2026-10-27, operator, removal review)
 - **Nothing revealed on hover may move anything.** A hover or focus reveal is an overlay on what is already
   there (a tag over a card photo, the carousel chevrons), never a line that grows a card or pushes content.
-- 24 changes are confirmed but NOT built yet. Build them from the
-  [review page](https://claude.ai/artifact/WoFQVG1RwmaqXAfBBQoqbV) (P01–P35, each with a before/after picture),
-  one PR per agenda. The 11 declined (P04, P06–P08, P11, P15–P18, P21, P23) stay as they are; don't re-propose.
+- 24 changes are confirmed, and all are built: the Browse card's (P01, P02, P03, P05, P06 restyle) as
+  agenda 1 alone (#2127), the rest as agendas 2–8 in one PR (operator, 2026-10-27; branch
+  `feature/redesign-rulings`), from the
+  [review page](https://claude.ai/artifact/WoFQVG1RwmaqXAfBBQoqbV) (P01–P35, each with a before/after picture). The 11 declined (P04, P06–P08, P11, P15–P18, P21, P23) stay as they are; don't re-propose.
 - Render scoring is to be removed end to end, front end and backend (operator note on P03): its own scoped PR.
 - Handoff with every ruling, the build queue with file pointers, and the open questions:
   `docs/design/propscout-redesign.md`.
@@ -85,6 +86,69 @@ section and shelf names, JetBrains Mono (`font-mono`) with `tabular-nums` on EVE
   recalculation is offered (`lib/valuo.ts` `recalcBase`) a tick sits before each photo and the copper "Náš přepočet" card
   above the table keeps ONE height in every state (a sentence, a figure, a figure with its band), so the rows never
   jump under the cursor.
+- **Tab strip** (`components/Tabs.tsx`; binding, operator ruling 2026-10-27, option A "a rule across the column"): ONE
+  component draws every page tab strip: Browse and its Explore windows, the property page (`PropertyTabs` keeps its
+  tab list, address and panels), a collection's members, NEW DEDUP Labeling's statuses.
+  - The 1px `--color-rule` rule belongs to the strip and runs its container's whole content column. A trailing slot
+    (Browse's Split | Cards and Small | Large) sits at the strip's right end above the rule; on a row too narrow for
+    both it wraps to a line ABOVE the tabs, never below them, so the tabs never leave the rule.
+  - The first label sits on the title's edge: tab buttons have no horizontal padding, tabs are `gap-6` apart.
+  - Open = `ink` plus a 2px copper line exactly as wide as the label and its count, laid ON the rule (covering it);
+    idle = `ink-3`, hover `ink-2`. Colour only, never weight, so no label shifts. One size: `h-11 text-sm`, no tracking.
+  - One count style, the inset pill (`rounded-full`, `--color-inset`, `px-1.5 py-0.5`, mono `0.68rem` tabular, `ink-2`);
+    each caller decides WHEN (Browse its cohort total, 0 included; the property page above zero only).
+  - Full WAI-ARIA tabs: a named `tablist`, `type="button"` tabs, `aria-selected`, a roving tabindex, ←/→ wrapping,
+    Home/End, focus following the selection; `idPrefix` adds the ids and `aria-controls` where the caller has panels.
+  - Too many tabs scroll sideways with no scrollbar. The scroller keeps 4px round every tab so the global focus ring
+    is never clipped by it (no opt-out, no inner ring) and gives the room back with negative margins. That room hangs
+    past the strip, below the rule too, so the scroller takes no pointer: one row inside it (the tabs and their gaps,
+    exactly the strip's height) takes the clicks and the sideways swipes, and content under a pinned strip stays
+    clickable up to the rule.
+  - `sticky` pins the strip under the Shell bar (`top-14`, `z-20`: above the cards' z-10 controls, below the bar's
+    z-30); a scroll target under it uses `scroll-mt-28` (bar 57px + strip 44px + air).
+  - Out of scope: the phone pipeline's stage strip, and the view switches (`MapViewToggle`, `SizeToggle`,
+    Notifications' pills), which are pick-one bars (§ Option groups).
+
+## Option groups (binding, operator rulings 2026-10-27: "filter buttons reuse the same elements across the app")
+- **A pick-one is ONE joined bar, `SegmentedBar`** (`components/controls.tsx`): any group where one option is chosen,
+  an explicit Vše / All / any included. One track (`--color-paper-2`, rule border, `p-0.5`, `gap-0.5`) of adjoining
+  segments; the chosen one is filled `--color-copper` with `--color-on-copper` text, idle `ink-3` (hover `ink-2`),
+  colour only, never weight. An ink fill, a raised tile with a shadow, white + bold or a copper-soft chosen segment
+  is not a variant: each converges on this one. `Segmented` (a Field's pick-one), `SizeToggle` / `ImageSizeToggle`,
+  `TriRow` and the account menu's Light / Dark / System row draw it; a local copy that becomes the bar is deleted,
+  never left beside it.
+  - Width: `fill` = equal segments across the container (the filter sidebar's Status line), 4px of side padding
+    (the label is centred, so padding only says when it runs out of room) and a label with no room left ends in an
+    ellipsis inside its own segment, its name whole (the sidebar at its 240px floor); `hug` = each segment its
+    label's width at the same reading size, the bar scrolling sideways with no scrollbar inside the tab strip's 4px
+    focus-ring room (`Segmented`, toolbars, long labels with counts); neither = the compact amenity rows (equal
+    segments, small type).
+  - `deselectable` serves a pick-one-or-none group with no Vše (Listing for, by the 2026-10-20 ruling): nothing lit
+    when none is set, a click on the lit segment releases it. Otherwise a click on the lit segment sets it again.
+  - Per option a `glyph`, a `title`, `disabled` and an `ariaLabel` (the segment's own name where its label leans on
+    the caption: ChartBuilder's "Hodnota: Cena"); `disabled` for the whole control; `box` + `aria` make it the form
+    box (the Valuo editor: the track is the 34px box, dashed while absent, brick while `aria-invalid`).
+  - `tone="phone"` on the phone's own screens (Makléři Řadit and Typ / Nabídka, Prohlídky, the account sheet's
+    Vzhled, Notifications inside the phone frame): a `rule-strong` track hairline, 32px, 13px type; chosen = ink on
+    `--color-inset` wearing the phone chip's pressed `ink-2` hairline as an inset ring (`chipState`; the well alone
+    is ~1.05:1 on paper; a ring, so no width moves, and no weight); colour there only ever means a stage. The
+    Filtry sheet hosts desktop controls and keeps the copper bar.
+  - A lone on/off in the filter sidebar or `FilterForm` is a two-segment bar "<off> | <label>", never one chip whose
+    word flips. The off words are ONE list, `BOOLEAN_OFF` (`components/FilterForm.tsx`: "All ads | Seen at birth"),
+    and `RegistryBar` there draws every registry pick-one and on/off bar; a new on/off adds its off word there.
+  - The root is always the named `role="group"`; each segment is a button with `aria-pressed`, except inside a
+    `role="menu"` (the account menu), where `segmentRole="menuitemradio"` makes each one a `menuitemradio` with
+    `aria-checked`.
+- **Pick-several and include / exclude stay chips** (`PickButton`, `MultiselectChips`; the one-chip-one-polarity rule
+  in the interface-design skill § Controls).
+- **Stay as they are**, by ruling: a group of more than six options (the phone Filtry sheet's 17 sort orders, the
+  Estimation Adjust disposition grid) keeps chips; navigation-like pick-ones (the Pipeline board switcher, Makléři ·
+  Review's reason queues, NEW DEDUP Exam's cohort and set links; page tabs are `Tabs`); lone on/off buttons outside
+  the filter sidebar (Watchdog Active / Paused and its list toggle, the phone Feed's "jen aktivní", the bake-off's
+  "show retired" / "widen"); colour swatch pickers (a text bar loses the preview); the coloured labelling tools
+  (tri-state squares, subject state, training-set marks, head review state: a colour per state, hotkeys); map
+  flyout radio lists; the phone Nové scope row (each chip loads a saved view). Every option keeps its order and
+  wording: Vše is not moved.
 
 ## Health page (2026-10-19)
 Added after the Health page rebuild (`docs/design/health-dashboard.md` § 5, wave 8). It extends the ledger
