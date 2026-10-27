@@ -503,6 +503,28 @@ describe('<PropertyDetail> tabs', () => {
   it('counts the photos and the adverts on their tabs', async () => {
     renderAt('/property/774');
     expect(await screen.findByRole('tab', { name: 'Inzeráty 2' })).toBeInTheDocument();
+    // No photos, no pill: the page counts only above zero.
+    expect(screen.getByRole('tab', { name: 'Fotky' })).toBeInTheDocument();
+  });
+
+  /* The tab-strip ruling (2026-10-27, option A): the shared strip, pinned under the
+     header (top-14) rather than behind it, and above the cards' z-10 controls. */
+  it('draws its tabs through the shared strip, pinned under the header', async () => {
+    renderAt('/property/774');
+    const list = await screen.findByRole('tablist', { name: 'Části stránky' });
+    const strip = list.parentElement!;
+    expect(strip.className.split(' ')).toEqual(expect.arrayContaining(['sticky', 'top-14', 'z-20']));
+    expect(list.className).not.toMatch(/\bsticky\b/);
+    // A sibling of the panels: a sticky box sticks only within its parent.
+    expect(strip.parentElement).toContainElement(screen.getByRole('tabpanel'));
+    expect(selected().className).not.toMatch(/font-medium/);
+    const value = screen.getByRole('tab', { name: 'Cena a hodnota' });
+    expect(value).toHaveAttribute('id', 'ptab-hodnota');
+    expect(value).toHaveAttribute('aria-controls', 'ppanel-hodnota');
+
+    fireEvent.keyDown(selected(), { key: 'ArrowRight' });
+    expect(selected()).toHaveTextContent('Fotky');
+    expect(document.activeElement).toBe(selected());
   });
 });
 
@@ -578,7 +600,10 @@ describe('<AdvertRedirect> old advert addresses', () => {
     const url = 'https://reality.bazos.cz/inzerat/196123456/byt.php';
     renderAtState('/listing/bazos/196123456', { pastedUrl: url });
     expect(await screen.findByRole('heading', { name: 'Tento inzerát v databázi nemáme.' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Otevřít na portálu Bazoš/ })).toHaveAttribute('href', url);
+    const portal = screen.getByRole('link', { name: /Otevřít na portálu Bazoš/ });
+    expect(portal).toHaveAttribute('href', url);
+    expect(portal).toHaveAttribute('target', '_blank');
+    expect(portal).toHaveAttribute('rel', 'noopener noreferrer');
     fireEvent.click(screen.getByRole('button', { name: 'Přidat do databáze' }));
     expect(openNewProperty).toHaveBeenCalledWith({ url });
   });

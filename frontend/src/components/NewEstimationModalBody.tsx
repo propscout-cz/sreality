@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import Dialog, { DialogClose } from '@/components/Dialog';
 import Spinner from '@/components/Spinner';
+import { SegmentedBar, type SegmentOption } from '@/components/controls';
 import type { ApiError } from '@/lib/api';
 import { estimationKeys, submitEstimation } from '@/lib/queries';
 import { runSurfaceUrl } from '@/lib/runLinks';
@@ -21,6 +22,14 @@ const CATEGORY_LABELS: Record<CategoryMain, string> = {
   dum: 'House',
   komercni: 'Commercial',
 };
+const CATEGORY_OPTIONS: ReadonlyArray<SegmentOption<CategoryMain>> = (['byt', 'dum', 'komercni'] as const).map(
+  (c) => ({ value: c, label: CATEGORY_LABELS[c] }),
+);
+const KIND_OPTIONS: ReadonlyArray<SegmentOption<EstimateKind>> = [
+  { value: 'rent', label: 'Rent' },
+  { value: 'sale', label: 'Sale' },
+];
+const CAPTION = 'block text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]';
 
 /* Czech words the platform stores in listings.category_type, derived from
  * the rent/sale toggle. Sent explicitly so the estimation request never
@@ -118,16 +127,28 @@ export default function NewEstimationModal({
 
       <div className="px-6 pb-6">
         <div className="flex flex-wrap items-start gap-x-8 gap-y-2">
-          <CategoryMainToggle
-            categoryMain={categoryMain}
-            setCategoryMain={setCategoryMain}
-            disabled={pending}
-          />
-          <EstimateKindToggle
-            estimateKind={estimateKind}
-            setEstimateKind={setEstimateKind}
-            disabled={pending}
-          />
+          <div className="mt-3 space-y-2">
+            <span className={CAPTION}>Property type</span>
+            <SegmentedBar
+              hug
+              label="Property category"
+              options={CATEGORY_OPTIONS}
+              value={categoryMain}
+              onChange={setCategoryMain}
+              disabled={pending}
+            />
+          </div>
+          <div className="mt-3 space-y-2">
+            <span className={CAPTION}>Estimate</span>
+            <SegmentedBar
+              hug
+              label="Estimate rent or sale price"
+              options={KIND_OPTIONS}
+              value={estimateKind}
+              onChange={setEstimateKind}
+              disabled={pending}
+            />
+          </div>
         </div>
 
         <div className="mt-4 flex items-stretch justify-end gap-2">
@@ -206,7 +227,7 @@ function OperatorInputs({
         <div>
           <label
             htmlFor={instructionsId}
-            className="block text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]"
+            className={CAPTION}
           >
             Special instructions
           </label>
@@ -227,7 +248,7 @@ function OperatorInputs({
         <div>
           <label
             htmlFor={contextId}
-            className="block text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]"
+            className={CAPTION}
           >
             Property context
           </label>
@@ -244,103 +265,6 @@ function OperatorInputs({
         </div>
       </div>
     </details>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* Selectors                                                                  */
-/* -------------------------------------------------------------------------- */
-
-function CategoryMainToggle({
-  categoryMain, setCategoryMain, disabled,
-}: {
-  categoryMain: CategoryMain;
-  setCategoryMain: (c: CategoryMain) => void;
-  disabled: boolean;
-}) {
-  return (
-    <div className="mt-3">
-      <span className="block text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-        Property type
-      </span>
-      <div
-        role="radiogroup"
-        aria-label="Property category"
-        className="mt-2 inline-flex items-stretch gap-0 rounded-[var(--radius-sm)] border border-[var(--color-rule)] overflow-hidden bg-[var(--color-inset)]"
-      >
-        {(['byt', 'dum', 'komercni'] as const).map((c) => (
-          <EstimateKindButton
-            key={c}
-            active={categoryMain === c}
-            onClick={() => setCategoryMain(c)}
-            disabled={disabled}
-            label={CATEGORY_LABELS[c]}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function EstimateKindToggle({
-  estimateKind, setEstimateKind, disabled,
-}: {
-  estimateKind: EstimateKind;
-  setEstimateKind: (k: EstimateKind) => void;
-  disabled: boolean;
-}) {
-  return (
-    <div className="mt-3">
-      <span className="block text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-        Estimate
-      </span>
-      <div
-        role="radiogroup"
-        aria-label="Estimate rent or sale price"
-        className="mt-2 inline-flex items-stretch gap-0 rounded-[var(--radius-sm)] border border-[var(--color-rule)] overflow-hidden bg-[var(--color-inset)]"
-      >
-        <EstimateKindButton
-          active={estimateKind === 'rent'}
-          onClick={() => setEstimateKind('rent')}
-          disabled={disabled}
-          label="Rent"
-        />
-        <EstimateKindButton
-          active={estimateKind === 'sale'}
-          onClick={() => setEstimateKind('sale')}
-          disabled={disabled}
-          label="Sale"
-        />
-      </div>
-    </div>
-  );
-}
-
-function EstimateKindButton({
-  active, onClick, disabled, label,
-}: {
-  active: boolean;
-  onClick: () => void;
-  disabled: boolean;
-  label: string;
-}) {
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={active}
-      onClick={onClick}
-      disabled={disabled}
-      className={[
-        'px-4 py-1.5 text-[0.8rem] transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
-        active
-          ? 'bg-[var(--color-paper)] text-[var(--color-ink)]'
-          : 'bg-transparent text-[var(--color-ink-3)] hover:text-[var(--color-ink)]',
-      ].join(' ')}
-      style={{ fontWeight: active ? 600 : 500 }}
-    >
-      {label}
-    </button>
   );
 }
 

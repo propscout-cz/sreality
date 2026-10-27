@@ -22,6 +22,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
 import { readFailed } from '@/components/ReadFailedMark';
+import { SegmentedBar } from '@/components/controls';
 import { PHOTO_DARK } from '@/components/phone/CardPhotoStrip';
 import { feedLayout, feedPrice } from '@/components/phone/FeedCard';
 import { usePipelineLook } from '@/components/phone/MarginMarks';
@@ -164,30 +165,13 @@ export default function PhoneViewings() {
     <div>
       <div className="sticky top-14 z-20 border-b border-[var(--color-rule)] bg-[var(--color-paper)]">
         <div className="flex items-center gap-2 px-4 pt-3">
-          <div
-            role="radiogroup"
-            aria-label="Které prohlídky"
-            className="grid grid-cols-2 overflow-hidden rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)]"
-          >
-            {SCOPES.map((s, i) => (
-              <button
-                key={s.value}
-                type="button"
-                role="radio"
-                aria-checked={scope === s.value}
-                onClick={() => go({ scope: s.value })}
-                className={[
-                  'h-8 px-3.5 text-center text-[13px]',
-                  i > 0 ? 'border-l border-[var(--color-rule)]' : '',
-                  scope === s.value
-                    ? 'bg-[var(--color-copper-soft)] font-medium text-[var(--color-copper)]'
-                    : 'text-[var(--color-ink-2)]',
-                ].join(' ')}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
+          <SegmentedBar
+            tone="phone"
+            label="Které prohlídky"
+            options={SCOPES}
+            value={scope}
+            onChange={(v) => go({ scope: v })}
+          />
           {day !== todayKey && (
             <button
               type="button"

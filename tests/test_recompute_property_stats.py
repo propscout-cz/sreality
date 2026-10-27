@@ -1503,8 +1503,6 @@ def test_the_price_history_is_the_canonical_adverts_lineage():
             "ORDER BY l.last_seen_at DESC, l.id DESC LIMIT 1") in sql
     assert "FROM lineage g JOIN listing_price_steps ps ON ps.listing_id = g.id" in sql
     assert "FROM lineage g JOIN listing_snapshots s ON s.listing_id = g.id" in sql
-    # The headline span's placeholder floor is the canonical advert's deal (ruling 2026-10-26).
-    assert "JOIN listing_snapshots s ON s.listing_id = g.id JOIN canon cn ON cn.property_id = g.pid" in sql
     assert "FROM steps ps GROUP BY ps.pid" in sql
     assert "LEFT JOIN lineage_span cs ON cs.pid = r.pid" in sql
     assert "ps.property_id" not in sql

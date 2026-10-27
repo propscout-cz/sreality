@@ -458,6 +458,17 @@ describe('<SoldCompsBlock> query plumbing', () => {
     );
   });
 
+  /* A pick-one is the ONE joined bar (operator ruling 2026-10-27), never separate chips. */
+  it('draws the radius as one joined bar, the chosen segment filled copper', async () => {
+    renderBlock();
+    const lit = await screen.findByRole('button', { name: '1 km' });
+    const bar = lit.closest('[role="group"]')!;
+    expect(bar.firstElementChild).toHaveClass('inline-flex', 'border', 'bg-[var(--color-paper-2)]');
+    expect(lit).toHaveAttribute('aria-pressed', 'true');
+    expect(lit).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+    for (const name of ['1 km', '3 km', '5 km']) expect(screen.getByRole('button', { name })).not.toHaveClass('border');
+  });
+
   /* The fetcher asks for one row past the cap, so a full page PROVES there is
      more. The extra row is never part of the cohort, and neither the count nor
      the median may present a page as the whole. */

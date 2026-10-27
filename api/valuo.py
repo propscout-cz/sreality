@@ -171,7 +171,8 @@ MAPS: dict[str, tuple[str | dict[str, str], dict[str, tuple[Any, str]]]] = {
         "G": (None, ASSUMED),  # operator ruling 2026-10-19: an ad without a PENB certificate must say G too
     }),
 }
-# The condition also answers Valuo's `new_building`, with this class; every other condition sends nothing.
+# The condition answers Valuo's `new_building` for every flat and house, never left empty (operator ruling 2026-10-27):
+# these say yes, with this class; any other condition says no, and an ad without one no by assumption.
 NEW_BUILDING: dict[str, str] = {"novostavba": AD, "projekt": INFERRED, "ve_vystavbe": INFERRED}
 _SOURCE: dict[str, str] = {
     "category_main": AD, "category_type": AD, "condition": AD, "subtype": AD, "disposition": AD,
@@ -283,6 +284,10 @@ def build_request(
         cls = NEW_BUILDING[condition]
         put("new_building", True, cls, _source("condition", condition),
             None if cls == AD else f"{_word('condition', condition)} → {_BY_NAME['new_building'].label}")
+    elif condition is not None:
+        put("new_building", False, INFERRED, _source("condition", condition), f"{_word('condition', condition)} → ne")
+    else:
+        put("new_building", False, ASSUMED, None, "Inzerát stav neuvádí → ne")
 
     if ptype == LAND and values.get("rating") is None:
         put("rating", "good", ASSUMED, None, LAND_RATING_NOTE)

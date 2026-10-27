@@ -1557,7 +1557,7 @@ export interface CityIndexValue {
 
 /* Query keys for the three operator-static city-quality datasets. They were
  * inline string literals in BrowseExperience; anything else wanting the same
- * cached rows (the pipeline board's index strip) has to spell them identically
+ * cached rows (Datasets, the index-rule picker) has to spell them identically
  * or it silently refetches into a parallel cache entry. */
 export const cityQualityKeys = {
   cities: ['curated_cities'] as const,

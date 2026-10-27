@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -35,12 +35,6 @@ function CollectionsDesktop() {
     <div className="px-6 py-8 max-w-4xl mx-auto">
       {/* Mine only: the shared ones are counted by their own section. */}
       <Header total={listQ.data ? mine.length : null} />
-      <div className="mt-7">
-        <NewCollectionForm
-          existing={mine.map((c) => c.name.toLowerCase())}
-          onCreated={() => revalidateCollections(qc)}
-        />
-      </div>
       <div className="mt-9">
         {listQ.isLoading && !listQ.data ? (
           <div className="text-sm text-[var(--color-ink-3)]">Loading…</div>
@@ -50,22 +44,26 @@ function CollectionsDesktop() {
             message={listQ.error.message}
             onRetry={() => void listQ.refetch()}
           />
+        ) : mine.length === 0 ? (
+          <EmptyState sharedOnly={shared.length > 0} />
         ) : (
-          <>
-            {mine.length === 0 ? (
-              <EmptyState sharedOnly={shared.length > 0} />
-            ) : (
-              <CollectionList items={mine} />
-            )}
-            {shared.length > 0 && (
-              <section className="mt-10">
-                <SectionLabel>Shared with me</SectionLabel>
-                <div className="mt-3">
-                  <CollectionList items={shared} />
-                </div>
-              </section>
-            )}
-          </>
+          <CollectionList items={mine} />
+        )}
+        {/* Ruling P30: the form opens from the end of my list, in every state of
+            the read (it was reachable in all of them above the list). */}
+        <div className="mt-3">
+          <AddCollectionCard
+            existing={mine.map((c) => c.name.toLowerCase())}
+            onCreated={() => revalidateCollections(qc)}
+          />
+        </div>
+        {!listQ.error && shared.length > 0 && (
+          <section className="mt-10">
+            <SectionLabel>Shared with me</SectionLabel>
+            <div className="mt-3">
+              <CollectionList items={shared} />
+            </div>
+          </section>
         )}
       </div>
     </div>
@@ -79,11 +77,8 @@ function CollectionsDesktop() {
 function Header({ total }: { total: number | null }) {
   return (
     <header>
-      <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-        Collections
-      </p>
       <h1
-        className="mt-1.5 text-[2.1rem] leading-tight"
+        className="text-[2.1rem] leading-tight"
         style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
       >
         Curated lists
@@ -105,13 +100,68 @@ function Header({ total }: { total: number | null }) {
 /* New-collection form                                                        */
 /* -------------------------------------------------------------------------- */
 
-function NewCollectionForm({
+/* Dashed = a place to fill (system.md); it flips into the form at the same
+ * width, and back on Cancel, Escape or a created collection. */
+function AddCollectionCard({
   existing,
   onCreated,
 }: {
   existing: string[];
   onCreated: () => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const cardRef = useRef<HTMLButtonElement>(null);
+  /* Only a close hands focus back: the first render leaves it where it is. */
+  const refocus = useRef(false);
+
+  useEffect(() => {
+    if (!open && refocus.current) {
+      refocus.current = false;
+      cardRef.current?.focus();
+    }
+  }, [open]);
+
+  const close = () => {
+    refocus.current = true;
+    setOpen(false);
+  };
+
+  if (open) {
+    return (
+      <NewCollectionForm
+        existing={existing}
+        onCreated={() => {
+          onCreated();
+          close();
+        }}
+        onCancel={close}
+      />
+    );
+  }
+  return (
+    <button
+      ref={cardRef}
+      type="button"
+      onClick={() => setOpen(true)}
+      className="flex w-full items-center justify-center gap-2 px-4 py-4 text-sm rounded-[var(--radius-md)] border border-dashed border-[var(--color-rule-strong)] bg-[var(--color-paper)] text-[var(--color-ink-2)] hover:border-[var(--color-copper)] hover:text-[var(--color-copper)] transition-colors"
+    >
+      <span aria-hidden>+</span>
+      Nová kolekce
+    </button>
+  );
+}
+
+function NewCollectionForm({
+  existing,
+  onCreated,
+  onCancel,
+}: {
+  existing: string[];
+  onCreated: () => void;
+  onCancel: () => void;
+}) {
+  const nameRef = useRef<HTMLInputElement>(null);
+  useEffect(() => nameRef.current?.focus(), []);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [monitor, setMonitor] = useState(false);
@@ -150,6 +200,12 @@ function NewCollectionForm({
           monitoring_enabled: monitor,
         });
       }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          onCancel();
+        }
+      }}
       className="rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-4 py-4"
     >
       <p className="text-[0.65rem] tracking-[0.22em] uppercase text-[var(--color-ink-2)] font-medium">
@@ -158,6 +214,7 @@ function NewCollectionForm({
       <div className="mt-3 flex flex-col sm:flex-row sm:items-end gap-3">
         <Field label="Name" as="control" className="flex-1 min-w-0">
           <input
+            ref={nameRef}
             type="text"
             value={name}
             onChange={(e) => {
@@ -184,6 +241,13 @@ function NewCollectionForm({
           className="shrink-0 px-4 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           {mut.isPending ? 'Creating…' : 'Create'}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="shrink-0 px-2.5 py-1.5 text-sm tracking-wide text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)] transition-colors"
+        >
+          Cancel
         </button>
       </div>
       <label className="mt-3 flex items-center gap-2 w-fit text-[0.78rem] text-[var(--color-ink-2)] cursor-pointer select-none">
@@ -333,8 +397,8 @@ function EmptyState({ sharedOnly }: { sharedOnly: boolean }) {
         {sharedOnly ? 'No collections of your own yet' : 'No collections yet'}
       </p>
       <p className="mt-2 text-sm text-[var(--color-ink-2)]">
-        Use the form above to start one. Then add listings from any listing's
-        detail page.
+        Use "+ Nová kolekce" below to start one. Then add listings from any
+        listing's detail page.
       </p>
     </div>
   );

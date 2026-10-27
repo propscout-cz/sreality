@@ -52,13 +52,7 @@ _STATEMENT = {
 }
 
 # case name -> why it cannot select a strict, non-empty subset. Empty on purpose.
-_EXEMPT_NON_VACUITY: dict[str, str] = {
-    # Migration 680 (ruling 2026-10-26): a lot outside 10 .. 1 000 000 m2 is no lot, so
-    # "at most 0 m2" can match no row on either grain; the zero edge rows stay seeded
-    # to prove exactly that (they fall out of every lot bound).
-    "listings:max_estate_area=0": "a lot under 10 m2 is no lot since migration 680",
-    "watchdog:max_estate_area=0": "a lot under 10 m2 is no lot since migration 680",
-}
+_EXEMPT_NON_VACUITY: dict[str, str] = {}
 
 _CASES = [
     c for c in (gold.golden() if gold.GOLDEN_PATH.exists() else [])

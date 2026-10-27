@@ -6,6 +6,7 @@ import {
   formatUncertaintyRadius,
   isPinExact,
   pinPrecisionLabel,
+  pinPrecisionShort,
   uncertaintyCircleRadiusM,
   uncertaintyPixelsAtZoom0,
   type PinPrecision,
@@ -200,5 +201,19 @@ describe('pinPrecisionLabel', () => {
       .toBe('Přibližná poloha: ulice');
     expect(pinPrecisionLabel({ granularity_rank: null, uncertainty_radius_m: null }))
       .toBe('Přesnost polohy neznámá');
+  });
+});
+
+/* The popup's one line leads with these words; pinPrecisionLabel is its tooltip (P13). */
+describe('pinPrecisionShort', () => {
+  it('says exact or approximate, without the rung or the radius', () => {
+    expect(pinPrecisionShort({ granularity_rank: RANK.address_point, uncertainty_radius_m: 10 })).toBe('Přesná poloha');
+    expect(pinPrecisionShort({ granularity_rank: RANK.building, uncertainty_radius_m: 15 })).toBe('Přesná poloha');
+    expect(pinPrecisionShort({ granularity_rank: RANK.street, uncertainty_radius_m: 300 })).toBe('Přibližná poloha');
+    expect(pinPrecisionShort({ granularity_rank: RANK.obec, uncertainty_radius_m: 1000 })).toBe('Přibližná poloha');
+  });
+
+  it('says so when there is no rung', () => {
+    expect(pinPrecisionShort({ granularity_rank: null, uncertainty_radius_m: null })).toBe('Přesnost polohy neznámá');
   });
 });

@@ -191,6 +191,11 @@ function renderPage(entry = '/new-dedup/tagging-bakeoff') {
   );
 }
 
+/* The pick-one rows are SegmentedBars (operator ruling 2026-10-27): a segment is the
+ * button its label names, inside the bar's named group. */
+const segment = (group: string, name: string | RegExp) =>
+  within(screen.getByRole('group', { name: group })).getByRole('button', { name });
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.listBakeoffRuns).mockResolvedValue({ data: RUNS });
@@ -277,7 +282,7 @@ describe('<NewDedupTaggingBakeoff> — the metrics overview', () => {
   it('the split switch swaps which half of the row is read', async () => {
     renderPage('/new-dedup/tagging-bakeoff?mode=pos_neg');
     expect(await screen.findByTestId('cell-19-8-pos_neg')).toHaveTextContent('0.80');
-    await userEvent.click(screen.getByTestId('split-exam'));
+    await userEvent.click(segment('Which numbers', 'Exam'));
     await waitFor(() =>
       expect(screen.getByTestId('cell-19-8-pos_neg')).toHaveTextContent('0.44'));
     expect(screen.getByTestId('cell-19-8-pos_neg')).toHaveTextContent('n 41');
@@ -313,7 +318,7 @@ describe('<NewDedupTaggingBakeoff> — view A, photos across arms', () => {
     renderPage('/new-dedup/tagging-bakeoff?mode=pos_neg&tag=all');
     expect(await screen.findByTestId('outcome-needs-tag')).toBeInTheDocument();
     for (const o of ['tp', 'fp', 'fn', 'tn']) {
-      expect(screen.getByTestId(`outcome-${o}`)).toBeDisabled();
+      expect(segment('Outcome', new RegExp(` ${o}$`))).toBeDisabled();
     }
     // And it never reaches the API as a filter without its head.
     await waitFor(() => expect(api.getBakeoffImages).toHaveBeenCalled());
@@ -322,7 +327,8 @@ describe('<NewDedupTaggingBakeoff> — view A, photos across arms', () => {
 
   it('with a head picked the outcome filter is live and travels to the API', async () => {
     renderPage('/new-dedup/tagging-bakeoff?mode=pos_neg&tag=19');
-    const fp = await screen.findByTestId('outcome-fp');
+    await screen.findByRole('group', { name: 'Outcome' });
+    const fp = segment('Outcome', 'Wrongly caught fp');
     expect(fp).toBeEnabled();
     expect(fp).toHaveTextContent('Wrongly caught');
     await userEvent.click(fp);
@@ -386,7 +392,7 @@ describe('<NewDedupTaggingBakeoff> — view B, one head’s buckets', () => {
     renderPage(entry);
     expect(await screen.findByTestId('histogram')).toBeInTheDocument();
     expect(screen.queryByTestId('abstained-count')).not.toBeInTheDocument();
-    await userEvent.click(screen.getByTestId('split-exam'));
+    await userEvent.click(segment('Which numbers', 'Exam'));
     expect(await screen.findByTestId('abstained-count')).toHaveTextContent('12 abstained');
   });
 
@@ -430,14 +436,14 @@ describe('<NewDedupTaggingBakeoff> — URL state', () => {
     expect(screen.getByTestId('arm-8')).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByTestId('arm-7')).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByTestId('mode-pos_only_free_neg')).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByTestId('split-exam')).toHaveAttribute('aria-pressed', 'true');
+    expect(segment('Which numbers', 'Exam')).toHaveAttribute('aria-pressed', 'true');
     expect((screen.getByTestId('tag-picker') as HTMLSelectElement).value).toBe('19');
   });
 
   it('switching view keeps the arms, mode, head and split that were chosen', async () => {
     renderPage('/new-dedup/tagging-bakeoff?arms=8&mode=pos_neg&tag=19&split=exam');
     await screen.findByTestId('photo-grid');
-    await userEvent.click(screen.getByTestId('view-buckets'));
+    await userEvent.click(segment('View', 'By head: right and wrong'));
     await waitFor(() => expect(api.getBakeoffBuckets).toHaveBeenLastCalledWith(
       3, expect.objectContaining({ arm_id: 8, mode: 'pos_neg', tag_id: 19, split: 'exam' }),
     ));
@@ -473,7 +479,7 @@ describe('<NewDedupTaggingBakeoff> — the narrowed defaults', () => {
     ));
     // The heads are ordered by label, so "interier - koupelna" leads.
     expect((screen.getByTestId('tag-picker') as HTMLSelectElement).value).toBe('22');
-    expect(screen.getByTestId('split-cv')).toHaveAttribute('aria-pressed', 'true');
+    expect(segment('Which numbers', 'Cross-validation')).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('the toggle reveals the retired arms and modes, and hides them again', async () => {
@@ -571,13 +577,13 @@ describe('<NewDedupTaggingBakeoff> — view C, all photos by score', () => {
     // The same five choices as the training-set page, to the number.
     expect(within(group).getAllByRole('button').map((b) => b.textContent))
       .toEqual(['50', '100', '500', '2000', '10000']);
-    expect(screen.getByTestId('score-per-page-50')).toHaveAttribute('aria-pressed', 'true');
-    await userEvent.click(screen.getByTestId('score-per-page-500'));
+    expect(segment('per page', '50')).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.click(segment('per page', '500'));
     // An offset is a position in pages of ONE size, so it does not carry over.
     await waitFor(() => expect(api.getBakeoffScores).toHaveBeenLastCalledWith(
       3, expect.objectContaining({ limit: 500, offset: 0 }),
     ));
-    expect(screen.getByTestId('score-per-page-500')).toHaveAttribute('aria-pressed', 'true');
+    expect(segment('per page', '500')).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('shows "x–y of N" and jumps to the last page from the total', async () => {
@@ -622,7 +628,7 @@ describe('<NewDedupTaggingBakeoff> — view C, all photos by score', () => {
     await waitFor(() => expect(api.getBakeoffBuckets).toHaveBeenLastCalledWith(
       3, expect.objectContaining({ arm_id: 8 }),
     ));
-    await userEvent.click(screen.getByTestId('view-scores'));
+    await userEvent.click(segment('View', 'All photos by score'));
     await waitFor(() => expect(api.getBakeoffScores).toHaveBeenLastCalledWith(
       3, expect.objectContaining({ arm_id: 8, mode: 'pos_neg', tag_id: 19 }),
     ));
@@ -634,9 +640,9 @@ describe('<NewDedupTaggingBakeoff> — view C, all photos by score', () => {
     await waitFor(() => expect(api.getBakeoffScores).toHaveBeenLastCalledWith(3, {
       arm_id: 7, mode: 'pos_neg', tag_id: 19, split: 'exam', limit: 500, offset: 1000,
     }));
-    expect(screen.getByTestId('view-scores')).toHaveAttribute('aria-pressed', 'true');
+    expect(segment('View', 'All photos by score')).toHaveAttribute('aria-pressed', 'true');
     await screen.findByTestId('score-grid');
-    expect(screen.getByTestId('score-per-page-500')).toHaveAttribute('aria-pressed', 'true');
+    expect(segment('per page', '500')).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('numbers the ranks from the top of the whole cell, on every page', async () => {
@@ -766,8 +772,8 @@ describe('<NewDedupTaggingBakeoff> — the cell pickers follow the top selection
     const picker = await screen.findByTestId('bucket-arm-picker');
     expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual([ARM_A.arm]);
     // Modes likewise: pos_neg alone is on, so the cell is offered pos_neg alone.
-    expect(screen.getByTestId('bmode-pos_neg')).toBeInTheDocument();
-    expect(screen.queryByTestId('bmode-pos_only_free_neg')).not.toBeInTheDocument();
+    const cellMode = screen.getByRole('group', { name: 'Training mode to inspect' });
+    expect(within(cellMode).getAllByRole('button').map((b) => b.textContent)).toEqual(['Yes + no']);
 
     // Turn arm 8 on at the top and the picker gains it.
     await userEvent.click(screen.getByTestId('arm-8'));
@@ -829,5 +835,65 @@ describe('<NewDedupTaggingBakeoff> — the modal’s top head per model', () => 
     const tops = await screen.findByTestId('top-heads');
     expect(within(tops).getByTestId('top-head-7-pos_neg-cv')).toBeInTheDocument();
     expect(within(tops).queryByTestId('top-head-8-pos_neg-cv')).not.toBeInTheDocument();
+  });
+});
+
+/* A pick-one is the ONE joined bar (operator ruling 2026-10-27, system.md § Option
+ * groups): the named group's first child is the track, no segment a bordered chip of
+ * its own, the chosen one filled copper. The arm and mode rows pick several, and the
+ * retired / widen switches are lone toggles: those stay chips. */
+describe('<NewDedupTaggingBakeoff> — the pick-one rows are joined bars', () => {
+  const expectBar = (name: string, lit: string) => {
+    const bar = screen.getByRole('group', { name });
+    expect(bar.firstElementChild).toHaveClass('inline-flex', 'border', 'bg-[var(--color-paper-2)]');
+    for (const b of within(bar).getAllByRole('button')) expect(b).not.toHaveClass('border');
+    const on = within(bar).getByRole('button', { name: lit });
+    expect(on).toHaveAttribute('aria-pressed', 'true');
+    expect(on).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+    return bar;
+  };
+
+  it('draws numbers-from, view and outcome as bars, the order and wording kept', async () => {
+    renderPage('/new-dedup/tagging-bakeoff?mode=pos_neg&tag=19&split=exam');
+    await screen.findByRole('group', { name: 'Outcome' });
+    expect(within(expectBar('Which numbers', 'Exam')).getAllByRole('button').map((b) => b.textContent))
+      .toEqual(['Cross-validation', 'Exam']);
+    expect(within(expectBar('View', 'Photos, across arms')).getAllByRole('button').map((b) => b.textContent))
+      .toEqual(['Photos, across arms', 'By head: right and wrong', 'All photos by score']);
+    const outcome = expectBar('Outcome', 'any');
+    expect(within(outcome).getAllByRole('button').map((b) => b.textContent))
+      .toEqual(['any', 'Caught tp', 'Wrongly caught fp', 'Missed fn', 'Correctly rejected tn']);
+    expect(segment('Outcome', 'Missed fn')).toHaveAttribute('title', expect.stringMatching(/quietly lose/));
+    expect(segment('Which numbers', 'Exam')).toHaveAttribute('title', expect.stringMatching(/sealed/));
+    expect(screen.getByTestId('arm-7')).toHaveClass('border');
+    expect(screen.getByTestId('toggle-retired')).toHaveClass('border');
+  });
+
+  it('a lit outcome goes back to any through the bar, never a stale filter', async () => {
+    renderPage('/new-dedup/tagging-bakeoff?mode=pos_neg&tag=19&outcome=fn');
+    await screen.findByRole('group', { name: 'Outcome' });
+    expectBar('Outcome', 'Missed fn');
+    await userEvent.click(segment('Outcome', 'any'));
+    await waitFor(() => expect(api.getBakeoffImages).toHaveBeenLastCalledWith(
+      3, expect.objectContaining({ outcome: undefined, tag_id: 19 }),
+    ));
+    expectBar('Outcome', 'any');
+  });
+
+  it('greys the whole outcome bar until one head is picked, saying why on each outcome', async () => {
+    renderPage('/new-dedup/tagging-bakeoff?mode=pos_neg&tag=all');
+    await screen.findByTestId('outcome-needs-tag');
+    for (const b of within(screen.getByRole('group', { name: 'Outcome' })).getAllByRole('button')) {
+      expect(b).toBeDisabled();
+    }
+    expect(segment('Outcome', 'Caught tp')).toHaveAttribute('title', expect.stringMatching(/^Pick one head first/));
+  });
+
+  it('draws the cell\'s trained-on mode and the ranking\'s page size as bars', async () => {
+    renderPage('/new-dedup/tagging-bakeoff?view=scores&mode=pos_neg&arms=7&tag=19');
+    await screen.findByTestId('score-grid');
+    expectBar('Training mode to inspect', 'Yes + no');
+    expectBar('View', 'All photos by score');
+    expectBar('per page', '50');
   });
 });

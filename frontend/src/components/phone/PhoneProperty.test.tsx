@@ -374,6 +374,7 @@ describe('the phone property page', () => {
     expect(await screen.findByText('Tento inzerát v databázi nemáme.', {}, LOADED)).toBeInTheDocument();
     expect(screen.getByText('196123456')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Otevřít na portálu Bazoš/ })).toHaveAttribute('href', url);
+    expect(screen.getByRole('link', { name: /Otevřít na portálu Bazoš/ })).not.toHaveAttribute('target');
   });
 
   it('leaves the desktop page as it was on a wide screen', async () => {
