@@ -283,9 +283,11 @@ select coalesce(jsonb_agg(cell order by subject), '[]'::jsonb) from (
                       j.paused_by, j.pause_note)
                || case when j.streak > 0
                        then '; its last run failed: ' || coalesce(j.cause, j.last_outcome) else '' end
-             -- Not yet only with no run on record: a re-land's runs from before the revert, and an adopted lane row's,
-             -- are not judged, yet it ran. One text for both: their rows look alike once registered.
-             when j.fresh_slot and j.due_at > now() and j.last_success_at is null
+             -- Not yet only with no trace of a run, on record or on the row (the prune keeps neither the counter nor
+             -- the last outcome from saying it ran): a re-land's runs from before the revert, and an adopted lane
+             -- row's, are not judged, yet it ran. One text for both: their rows look alike once registered.
+             when j.fresh_slot and j.due_at > now() and j.last_success_at is null and j.last_outcome is null
+                  and j.consecutive_failures = 0
                   and not exists (select 1 from job_runs r where r.job_name = j.job_name) then
                format('not run yet; first slot in %s (%s UTC)', health_span(extract(epoch from j.due_at - now())),
                       to_char(j.due_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI'))

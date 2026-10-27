@@ -839,6 +839,34 @@ def test_an_adopted_lane_row_waiting_for_its_first_slot_is_never_said_to_be_regi
     assert msg.endswith(" UTC); before it joined: last ok 2.0 h ago"), msg
 
 
+def test_a_row_whose_runs_were_pruned_is_never_said_not_to_have_run(cur: Any) -> None:
+    """C3 (review, round 4): rent failed four runs, a revert retired it, and 100 d later the fix re-lands, its runs
+    gone to the 90-day prune; a failing lane row is adopted. Neither has a job_runs row or a last ok, yet each row's
+    counter and last outcome say it ran: "not run yet" is for a row with no trace of a run."""
+    from scraper import job_lease
+    from scraper.jobs import RUNNER, Job
+
+    _runner_beat(cur, "r1", "0 minutes")
+    _job(cur, "rent", every="30 days", timeout_s=900, due="-100 days", failures=4, last_outcome="failed",
+         last_error="exit 1", joined="200 days", retired="100 days")
+    _job(cur, "lane", runner="github_actions", registered=False, failures=4, last_outcome="failed", last_error="boom")
+    _job(cur, "new", registered=False, runner="github_actions")  # a held() row that never ran: no trace
+    assert job_lease.register(cur.connection, [
+        Job("rent", ("scripts.fetch_rent_map",), 30 * 86400, 356400, 900, 512, 1, RUNNER),
+        Job("lane", ("scripts.x",), 6 * 3600, 0, 1200, 256, 1, RUNNER),
+        Job("new", ("scripts.x",), 6 * 3600, 0, 1200, 256, 1, RUNNER),
+    ]) == job_lease.Registered((), ("lane", "new"), ("rent",), {})
+
+    cells = _liveness(cur)[3]
+
+    for name in ("rent", "lane"):
+        st, msg = _said(cells, f"job/{name}")
+        assert st == "ok" and msg.startswith(f"{name}: not run since it joined the runner; first slot in "), msg
+        assert msg.endswith(" UTC); before it joined: never ran ok"), msg
+    st, msg = _said(cells, "job/new")
+    assert st == "ok" and msg.startswith("new: not run yet; first slot in "), msg
+
+
 def test_a_quarterly_job_whose_ok_run_was_pruned_is_not_read_as_waiting_for_its_first_slot(cur: Any) -> None:
     """C3: the runner prunes job_runs after 90 days and map_overlays runs every 91, so a day before its next slot its
     ok run is gone; last_success_at, written by that run's release, still says it ran here."""
