@@ -231,12 +231,13 @@ _REGISTERED_STATE_SQL = """
 SELECT registry_at IS NULL, retired_at IS NOT NULL FROM scheduled_jobs WHERE job_name = %(job)s FOR UPDATE
 """
 
-# The registry's columns only: never the lease, the history or `enabled` (dead since 675). `due_at` is set only for a
-# new, adopted, un-retired or never-scheduled row, at the first slot no earlier than now() + timeout_s, so a move's
-# first run comes after any GitHub run still in flight; a changed grid is never re-slotted. `registry_at` is when the
+# The registry's columns only: never the lease, the history or `enabled` (dead since 675). `registry_at` is when the
 # row joined the runner (new, adopted, or un-retired REJOIN_AFTER_S or more after its retirement), kept by every later
 # boot and by migration 682's trigger: Health judges a row on its runs since, as un-retiring keeps the streak and last
-# success of before the revert. A shorter retirement is an older image's blink, never a re-land (a PR cycle).
+# success of before the revert. `due_at` is set only for a row that joins, or was never scheduled, at the first slot
+# no earlier than now() + timeout_s, so a move's first run comes after any GitHub run still in flight; a changed grid
+# is never re-slotted. A shorter retirement is an older image's blink, never a re-land (a PR cycle) nor a move (GitHub
+# reads main, which a Rollback leaves alone): it keeps both, so a cut run, a retry or a missed slot stays due.
 _REGISTER_SQL = f"""
 INSERT INTO scheduled_jobs AS s (job_name, argv, cadence, offset_s, timeout_s, memory_mb, cpus, resource, runner,
                                  registry_at, retired_at, due_at)
@@ -252,8 +253,9 @@ ON CONFLICT (job_name) DO UPDATE
        registry_at = CASE WHEN s.registry_at IS NULL
                             OR s.retired_at <= now() - make_interval(secs => {REJOIN_AFTER_S}) THEN now()
                           ELSE s.registry_at END,
-       due_at = CASE WHEN s.retired_at IS NOT NULL OR s.registry_at IS NULL OR s.due_at IS NULL
-                     THEN EXCLUDED.due_at ELSE s.due_at END
+       due_at = CASE WHEN s.registry_at IS NULL OR s.due_at IS NULL
+                            OR s.retired_at <= now() - make_interval(secs => {REJOIN_AFTER_S}) THEN EXCLUDED.due_at
+                     ELSE s.due_at END
 """
 
 # Only rows a runner registered: a lane `held()` created has registry_at NULL and is never retired.

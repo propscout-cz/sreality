@@ -11,7 +11,7 @@ A bare call prints help and exits 2: on a box with production credentials it nev
 
 | Verb | What it does |
 |---|---|
-| `run` | The service (Railway's start command, exec form). Registers the registry at boot (`registry_at` is when a row joined: new, adopted or un-retired an hour or more after its retirement; a later boot keeps it, and so does migration 682's trigger whatever image boots), retires only rows it registered, claims due jobs, beats (only after a claim pass completes, so a replica that cannot register or list due jobs goes red), prunes `job_runs` after 90 days. |
+| `run` | The service (Railway's start command, exec form). Registers the registry at boot (`registry_at` is when a row joined: new, adopted or un-retired an hour or more after its retirement; a later boot keeps it, and so does migration 682's trigger whatever image boots; an un-retire under the hour, an older image's blink, keeps `due_at` too, so a cut run or a missed slot stays due), retires only rows it registered, claims due jobs, beats (only after a claim pass completes, so a replica that cannot register or list due jobs goes red), prunes `job_runs` after 90 days. |
 | `once <job>` | One foreground claim, run and release of a runner entry if it is due or requested. No upsert, no heartbeat. Exit 0 ok (75 included) or not due, 143 interrupted (a closed terminal and `Ctrl+\` are the stop too: the child has its own session and would outlive the runner), 1 otherwise (a timeout, or a database that did not answer within 60 s: "the database did not answer"). GitHub entries need #2033. |
 | `request <job> [--by WHO] [-- ARGS]` | Files a request row; the runner runs it within seconds, even while the schedule is paused. ARGS are appended to the registry argv (argparse keeps a repeated flag's last value), so they override the job's own flags unchecked: `clip --workers 64` or `stale_images --limit 10000000` bypass the co-tenancy census, which counts declared memory only. A second request is refused while one waits. The operator's form is "Jobs: run now" (below). |
 | `pause <job> --until <ISO\|now> --note TEXT [--by WHO]` | Pauses the schedule (a request still runs) on any live row, a `held()` lane's included. `--until now` lifts it and records who did. A past time is refused. |
@@ -97,9 +97,10 @@ of a sibling on its resource seen since its clock started. The worst condition w
   adopted or un-retired `REJOIN_AFTER_S` (1 h) or more after its retirement (a revert's re-land), and kept by every
   later boot (`_REGISTER_SQL`) and by migration 682's trigger, so a boot that re-stamps it (an older image with the
   job, a revert) moves nothing, nor does a blink: an older image without the job retires the row, and the latest
-  booting again within the hour un-retires it with its streak, timeout and clock judged whole. Its streak, last
-  run, cause and clock read only those runs, and it waits for its first slot (ok, history not judged) until one of
-  them closes, so the counter, timeout and last ok un-retiring carries from before a revert never read Problem,
+  booting again within the hour un-retires it with its streak, timeout and clock judged whole and its `due_at`
+  kept (a cut run, a retry or a missed slot stays due; GitHub reads main, which a Rollback leaves alone). Its
+  streak, last run, cause and clock read only those runs, and it waits for its first slot (ok, history not judged)
+  until one of them closes, so the counter, timeout and last ok un-retiring carries from before a revert never read Problem,
   however soon its first slot (a deploy-cut first run reads ok, one failure Watch). A steady row whose only ok run
   was pruned (map_overlays: 91 d cadence, 90 d prune) is not waiting: its `last_success_at` falls after
   `registry_at`. Applied after #2025 PR-2 deployed, 682 first joins each live row, and each one an older image

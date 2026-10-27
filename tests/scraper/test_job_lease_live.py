@@ -400,8 +400,8 @@ def test_register_un_retires_and_adopts_a_lane_era_row_keeping_its_lease_and_his
     now = _now(cur)
     retired = _entry()
     job_lease.register(cur.connection, [retired])
-    cur.execute("UPDATE scheduled_jobs SET retired_at = now(), due_at = '2000-01-01' WHERE job_name = %s",
-                (retired.name,))
+    cur.execute("UPDATE scheduled_jobs SET retired_at = now() - interval '1 hour', due_at = '2000-01-01'"
+                " WHERE job_name = %s", (retired.name,))
     lane_era = _job(cur, due=None)  # registry_at NULL: a row a registry entry now names
     cur.execute("UPDATE scheduled_jobs SET lease_holder = 'old', lease_expires_at = now() + interval '1 minute'"
                 " WHERE job_name = %s", (lane_era,))
@@ -439,6 +439,20 @@ def test_registry_at_is_when_the_row_joined_the_runner_and_a_later_boot_keeps_it
     assert dict(cur.fetchall()) == {live: timedelta(days=3), retired: timedelta(0), lane_era: timedelta(0),
                                     blink: timedelta(days=3)}
     assert job_lease.REJOIN_AFTER_S == 3600
+
+
+def test_an_un_retire_within_the_hour_keeps_the_schedule_and_a_later_one_re_slots_it(cur: Any) -> None:
+    """A blink (an older image without the job retired it, the latest booted again within REJOIN_AFTER_S) is no move
+    from GitHub, which reads main: a deploy-cut run's 'now', a retry or a missed slot stays due and is claimed at once,
+    as after any outage. An un-retire an hour or more on (a re-land) takes the first slot after now() + timeout_s."""
+    now = _now(cur)
+    blink, hour = _joined(cur, "3 days", retired="59 minutes"), _joined(cur, "3 days", retired="1 hour")
+    cur.execute("UPDATE scheduled_jobs SET due_at = now() - interval '35 minutes' WHERE job_name = ANY(%s)",
+                ([blink, hour],))
+    assert job_lease.register(cur.connection, [_entry(blink), _entry(hour)]).unretired == (blink, hour)
+    assert _registry_row(cur, blink)["due_at"] == now - timedelta(minutes=35)
+    assert job_lease.claim(cur.connection, blink, holder="A") is not None, "the blink's due run is claimed at once"
+    assert _registry_row(cur, hour)["due_at"] >= now + timedelta(seconds=900)
 
 
 def test_the_database_keeps_a_live_rows_registry_at_whatever_the_image_writes(cur: Any) -> None:

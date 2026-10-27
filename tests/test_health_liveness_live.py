@@ -782,6 +782,34 @@ def test_an_older_images_boot_that_retires_a_failing_row_for_minutes_keeps_its_j
     assert cur.fetchone() == (_dt.timedelta(days=200),)
 
 
+def test_a_blink_keeps_the_schedule_so_a_cut_run_stays_due_and_a_missed_slot_stays_late(cur: Any) -> None:
+    """C3 (review, round 4): a Rollback to an image without the job retired both rows for minutes; the latest booted
+    again. `cut`'s run was cut by the rollback's SIGTERM (due 'now'); `never` joined 3 d ago and its first slot was
+    never claimed. A blink keeps due_at as it keeps the join, so the cut run is due at once, as the cell says, and the
+    missed slot stays a Problem: never a cadence's wait, nor 'not run yet' with nothing fixed."""
+    from scraper import job_lease
+    from scraper.jobs import RUNNER, Job
+
+    _runner_beat(cur, "r1", "0 minutes")
+    _job(cur, "cut", due="-5 minutes", last_ok="6 hours", last_outcome="interrupted",
+         last_error="deploy stop; exit 143", joined="30 days", retired="4 minutes")
+    _run(cur, "cut", started="6 hours 5 minutes", ended="6 hours", outcome="ok", exit_code=0)
+    _run(cur, "cut", started="11 minutes", ended="5 minutes", outcome="interrupted", exit_code=143)
+    _job(cur, "never", every="1 day", timeout_s=1800, due="-70 hours", joined="3 days", retired="30 minutes")
+    assert job_lease.register(cur.connection, [
+        Job("cut", ("scripts.x",), 6 * 3600, 0, 1200, 256, 1, RUNNER),
+        Job("never", ("scripts.x",), 86400, 0, 1800, 256, 1, RUNNER),
+    ]).unretired == ("cut", "never")
+
+    cells = _liveness(cur)[3]
+
+    assert _said(cells, "job/cut") == (
+        "ok", "cut: last ok 6.0 h ago; due now; its last run was cut by a deploy and is due again at once")
+    assert _said(cells, "job/never") == (
+        "fail", "never: late: never ran ok for 4 d (Watch past 24.5 h, Problem past 2 d)")
+    assert _conditions(cells, "job/never")[0] == "warn: due 3 d ago and not started"
+
+
 def test_a_quarterly_job_whose_ok_run_was_pruned_is_not_read_as_registered_again(cur: Any) -> None:
     """C3: the runner prunes job_runs after 90 days and map_overlays runs every 91, so a day before its next slot its
     ok run is gone; last_success_at, written by that run's release, still says it ran here."""

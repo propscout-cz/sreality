@@ -165,7 +165,8 @@ production.
   C + T + W and a Problem a further min(C, 1 d) on, W the longest sibling run seen on its resource, anchored on the
   last ok run, else the first scheduled run, else the first slot, and on a lapsed pause; every row is judged on
   its runs since it joined the runner (`registry_at`, which `register` stamps for a new or adopted row, or one
-  un-retired an hour or more after its retirement, and later boots and 682's trigger keep), from the first slot of
+  un-retired an hour or more after its retirement, and later boots and 682's trigger keep; a shorter retirement,
+  an older image's blink, keeps its `due_at` too), from the first slot of
   that registration, the streak and success it carried from before a revert unjudged. `held by sibling` is
   ok, shown only while the job waits; a due job or a request unstarted for 10 min is Watch while a replica beats
   and a Problem when none has for 10 min; a refused registry entry is a Problem; a pause longer than
