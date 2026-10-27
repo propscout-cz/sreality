@@ -301,12 +301,16 @@ def test_suspicious_stop_taken_down_does_not_count():
 
 
 class _ScriptedCursor:
-    def __init__(self, rows: list[tuple[Any, ...]]) -> None:
+    """Each execute() serves the next scripted row list (empty once exhausted)."""
+
+    def __init__(self, *results: list[tuple[Any, ...]]) -> None:
         self.executed: list[tuple[str, Any]] = []
-        self._rows = rows
+        self._results = list(results)
+        self._rows: list[tuple[Any, ...]] = []
 
     def execute(self, sql: str, params: Any = None) -> None:
         self.executed.append((sql, params))
+        self._rows = self._results.pop(0) if self._results else []
 
     def fetchall(self) -> list[tuple[Any, ...]]:
         return self._rows
@@ -319,15 +323,19 @@ class _ScriptedCursor:
 
 
 class _ScriptedConn:
-    def __init__(self, rows: list[tuple[Any, ...]]) -> None:
-        self.cursor_obj = _ScriptedCursor(rows)
+    def __init__(self, *results: list[tuple[Any, ...]]) -> None:
+        self.cursor_obj = _ScriptedCursor(*results)
 
     def cursor(self) -> _ScriptedCursor:
         return self.cursor_obj
 
 
+def _pending_row(image_id: int) -> tuple[Any, ...]:
+    return (image_id, image_id * 10, 0, f"https://cdn/{image_id}.jpg", "byty", "prodej", None)
+
+
 def test_pending_image_downloads_excludes_unavailable_and_given_up():
-    conn = _ScriptedConn([])
+    conn = _ScriptedConn()
     scraper_db.pending_image_downloads(conn, limit=500)
     sql, params = conn.cursor_obj.executed[0]
     assert "storage_path IS NULL" in sql
@@ -336,51 +344,49 @@ def test_pending_image_downloads_excludes_unavailable_and_given_up():
     assert params == (5, 500)
 
 
-def test_pending_image_downloads_active_only_filters_and_orders():
-    conn = _ScriptedConn([])
-    scraper_db.pending_image_downloads(conn, limit=500, active_only=True)
+def test_pending_image_downloads_reads_active_newest_first_without_a_sort_key():
+    # The active tier walks the pending index newest-first: no computed sort key,
+    # so the plan never sorts the whole pending set.
+    full = [_pending_row(i) for i in (9, 8, 7)]
+    conn = _ScriptedConn(full)
+    out = scraper_db.pending_image_downloads(conn, limit=3)
+    assert out == full
+    assert len(conn.cursor_obj.executed) == 1  # a full active tier never reads the residue
     sql, _params = conn.cursor_obj.executed[0]
     assert "l.is_active = true" in sql
-    # active_only path: pure newest-first within the active slice.
     assert "ORDER BY i.id DESC" in sql
+    assert "IS TRUE) DESC" not in sql
 
 
-def test_pending_image_downloads_default_orders_active_first():
-    conn = _ScriptedConn([])
-    scraper_db.pending_image_downloads(conn, limit=500)
-    sql, _params = conn.cursor_obj.executed[0]
-    # Default path tier-orders active before inactive, newest first.
-    assert "(l.is_active IS TRUE) DESC NULLS LAST, i.id DESC" in sql
+def test_pending_image_downloads_fills_the_rest_from_the_inactive_residue():
+    active = [_pending_row(9), _pending_row(8)]
+    residue = [_pending_row(3), _pending_row(1)]
+    conn = _ScriptedConn(active, residue)
+    out = scraper_db.pending_image_downloads(conn, limit=5)
+    assert out == active + residue
+    (sql_a, params_a), (sql_r, params_r) = conn.cursor_obj.executed
+    assert "l.is_active = true" in sql_a and params_a == (5, 5)
+    # The residue: inactive ads AND images whose listing row is missing.
+    assert "l.is_active IS NOT TRUE" in sql_r
+    assert "ORDER BY i.id DESC" in sql_r
+    assert params_r == (5, 3)
 
 
-def test_pending_image_downloads_shard_appends_modulo():
-    conn = _ScriptedConn([])
-    scraper_db.pending_image_downloads(conn, limit=500, shard=(2, 4))
-    sql, params = conn.cursor_obj.executed[0]
-    assert "(hashint8(i.listing_id) & 2147483647) %% %s = %s" in sql
-    # max_attempts, then shard (n, k), then limit — modulus N before remainder K.
-    assert params == (5, 4, 2, 500)
+def test_pending_image_downloads_returns_an_image_once_when_its_ad_flips_between_tiers():
+    # The tiers are two statements: an ad that goes inactive between them would
+    # otherwise put its image in both, and one batch would fetch it twice.
+    conn = _ScriptedConn([_pending_row(9)], [_pending_row(9), _pending_row(3)])
+    out = scraper_db.pending_image_downloads(conn, limit=5)
+    assert [r[0] for r in out] == [9, 3]
 
 
-def test_pending_image_downloads_sources_filter():
-    conn = _ScriptedConn([])
+def test_pending_image_downloads_sources_filter_scopes_both_tiers():
+    conn = _ScriptedConn()
     scraper_db.pending_image_downloads(conn, limit=500, sources=("idnes", "bazos"))
-    sql, params = conn.cursor_obj.executed[0]
-    assert "l.source = ANY(%s)" in sql
-    assert params == (5, ["idnes", "bazos"], 500)
-
-
-def test_pending_image_downloads_shard_and_sources_and_active():
-    conn = _ScriptedConn([])
-    scraper_db.pending_image_downloads(
-        conn, limit=500, active_only=True, shard=(0, 3), sources=("idnes",)
-    )
-    sql, params = conn.cursor_obj.executed[0]
-    assert "l.is_active = true" in sql
-    assert "l.source = ANY(%s)" in sql
-    assert "(hashint8(i.listing_id) & 2147483647) %% %s = %s" in sql
-    # Order of bound params: max_attempts, sources, shard(n, k), limit.
-    assert params == (5, ["idnes"], 3, 0, 500)
+    assert len(conn.cursor_obj.executed) == 2
+    for sql, params in conn.cursor_obj.executed:
+        assert "l.source = ANY(%s)" in sql
+        assert params == (5, ["idnes", "bazos"], 500)
 
 
 # ---- _run_image_downloads gates --------------------------------------------
@@ -502,10 +508,12 @@ def test_fetch_one_image_success_with_semaphore(monkeypatch):
             return None
 
     key, phash, rendition, dims, err = scraper_main._fetch_one_image(
-        7, 0, "https://h/x.jpg", _R2(), sem
+        7, 51, "https://h/x.jpg", _R2(), sem
     )
     assert err is None
-    assert key == scraper_main.image_storage.image_key(7, 0)
+    # A literal with distinct ids, so a swapped-argument regression shows: the image id is
+    # what makes the key unique per row.
+    assert key == "img/7/51.jpg"
     assert phash == 42
     assert (rendition, dims) == ("native", None)  # non-sreality host, unmeasurable bytes
     assert sem.acquire(blocking=False)  # slot was released
@@ -618,11 +626,11 @@ def test_phash_failure_never_fails_the_store(monkeypatch):
             return None
 
     key, phash, rendition, dims, err = scraper_main._fetch_one_image(
-        7, 0, "https://h/x.jpg", _R2(), None
+        7, 51, "https://h/x.jpg", _R2(), None
     )
     assert err is None
     assert phash is None
-    assert key == scraper_main.image_storage.image_key(7, 0)
+    assert key == scraper_main.image_storage.image_key(7, 51)
 
 
 class _RecordingConn:
@@ -726,13 +734,13 @@ def _drive_image_loop(
         scraper_main.db, "mark_image_listing_taken_down", lambda conn, sid: 0
     )
 
-    def _fake_fetch(sid, seq, url, r2, semaphore=None, proxies=None):
+    def _fake_fetch(lid, image_id, url, r2, semaphore=None, proxies=None):
         if fetch_delay:
             time.sleep(fetch_delay)
         err = fetch_result(url)
         phash = None if err is not None else 777
         return (
-            scraper_main.image_storage.image_key(sid, seq), phash,
+            scraper_main.image_storage.image_key(lid, image_id), phash,
             scraper_main.image_storage.rendition_for(url),
             None if err is not None else (1800, 1200),
             err,
@@ -878,7 +886,7 @@ def _drive_real_fetch_loop(monkeypatch, url, *, dimensions):
 
 def test_stored_sreality_image_carries_master_rendition_and_measured_size(monkeypatch):
     """Bytes fetched through the 1800 template are stamped with WHAT they are —
-    the re-master lane's pending predicate keys on exactly this."""
+    the rendition cohorts (architecture rule 6) key on exactly this."""
     call = _drive_real_fetch_loop(
         monkeypatch, "https://d18-a.sdn.cz/d_18/x/y.jpeg", dimensions=(1800, 1200)
     )
@@ -893,6 +901,15 @@ def test_stored_non_sreality_image_is_stamped_native(monkeypatch):
     )
     assert call["rendition"] == scraper_main.image_storage.RENDITION_NATIVE
     assert (call["width"], call["height"]) == (640, 480)
+
+
+def test_the_loop_stores_each_row_under_its_own_row_unique_key(monkeypatch):
+    """image 1, listing 500, sequence 0: the key names the listing and the ROW, never the
+    position, so neither a reused number nor a repeated sequence can share an object."""
+    call = _drive_real_fetch_loop(
+        monkeypatch, "https://www.bazos.cz/img/1/1/1.jpg", dimensions=(640, 480)
+    )
+    assert (call["image_id"], call["key"]) == (1, "img/500/1.jpg")
 
 
 def test_unmeasurable_bytes_store_with_size_left_untouched(monkeypatch):

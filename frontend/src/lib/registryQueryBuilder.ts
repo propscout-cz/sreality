@@ -12,7 +12,7 @@
  * right PostgREST call based on its `type` and id suffix:
  *
  *   - `tristate` (`has_balcony`, `terrace`, …)           → `.eq(col, true|false)` when not 'any'
- *   - `string_list` (`condition_match`, `dispositions`)  → `.in(col, values)` when non-empty
+ *   - `string_list` (`dispositions`, `subtype`)          → `.in(col, values)` when non-empty
  *   - id starts with `min_` OR ends with `_min`          → `.gte(col, value)`
  *   - id starts with `max_` OR ends with `_max`          → `.lte(col, value)`
  *   - plain `string` / `int` / `float` / `bool`          → `.eq(col, value)`
@@ -43,8 +43,9 @@ import { REGISTRY_KEY_MAP, type ListingFilters } from './filters';
 /* Registry IDs whose shape is too irregular for the auto-dispatcher.
  * `queries.ts:applyFilters` handles these directly. */
 export const HAND_CODED_BROWSE_FILTERS: ReadonlySet<string> = new Set([
-  // The portal rule (MS19): status and portals are judged together on the
-  // property's ads (all_sources / active_sources), queries.ts:applyPortalRule.
+  // The portal rule (MS19, 657): the status is the property's, the portals ask
+  // for an ad there in that status (all_sources / active_sources),
+  // queries.ts:applyPortalRule.
   'status',
   'portals',
   'portals_excluded',
@@ -69,6 +70,7 @@ export const HAND_CODED_BROWSE_FILTERS: ReadonlySet<string> = new Set([
   // predicate the plain `.in` auto-path can't express.
   'furnished',
   'ownership',
+  'condition_match',
   // The curated sets (tags, collections, pipeline) are judged by the SOURCE's
   // own arguments, not a predicate: queries.ts:readSource passes
   // lib/setScope.scopeArgs to the *_visible() SRF (migration 629).

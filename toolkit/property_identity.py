@@ -16,6 +16,7 @@ and a split writes its own "different" across letters (`toolkit.property_split`)
 
 from __future__ import annotations
 
+import string
 import uuid
 from datetime import datetime, timezone
 from collections import Counter
@@ -28,6 +29,7 @@ from autodedup import ui_sql as usql
 from scraper.db import create_singleton_properties
 from scripts.recompute_property_stats import properties_changed
 from toolkit import property_carriers as carriers
+from toolkit.publication import CAP_SQL
 from toolkit.property_carriers import MergeSource, Route  # re-exported: callers read them here
 from toolkit.room_taxonomy import category_main_compatible
 
@@ -53,6 +55,18 @@ class CategoryClash(MergeError):
         super().__init__(f"{field} mismatch ({a} vs {b}); refusing to merge")
         self.field, self.a, self.b = field, a, b
         self.properties, self.ads = properties, ads
+
+
+# The letters of a statement (the split's over adverts, the merge's over properties).
+LETTERS = string.ascii_uppercase
+
+
+class BadLetters(MergeError):
+    """A letters statement the codec or the shape rule refused; `ids` names the offender."""
+
+    def __init__(self, message: str, ids: Iterable[int] = ()) -> None:
+        super().__init__(message)
+        self.ids = list(ids)
 
 
 class Hop(NamedTuple):
@@ -132,6 +146,17 @@ INSERT INTO property_merge_carries (merge_group_id, table_name, row_key, row_at,
 VALUES (%(group)s, %(table)s, %(row_key)s, %(row_at)s, %(account_id)s, %(from_property)s,
         %(survivor)s, %(kind)s, %(snapshot)s)
 """
+
+# Publication never regresses on a merge, and never moves later (migration 668): a settled retired
+# property's stamp passes to a survivor not yet settled, only when that publishes the survivor
+# before its own cap would (the survivor is the oldest record, so the cap may have published it long
+# ago; a stamp younger than that would move its visibility forward, and tell a watchdog a property
+# it could already see).
+_CARRY_SETTLED_SQL = (
+    "UPDATE properties s SET settled_at = r.settled_at FROM properties r "
+    "WHERE s.id = %s AND r.id = %s AND s.settled_at IS NULL AND r.settled_at IS NOT NULL "
+    f"AND r.settled_at < s.first_seen_at + {CAP_SQL}"
+)
 
 # One statement touching `status` and `is_active` together: a retired property is never left
 # active between two writes; the last write of a pair.
@@ -257,8 +282,10 @@ def resolve_active_property_id(
 
 def lock_properties(conn: psycopg.Connection, ids: list[int]) -> dict[int, tuple[str, int | None]]:
     """Row-lock these properties in id order, the order every writer locks in; (status,
-    merged_into) per id."""
+    merged_into) per id. The notification-events lock comes first (property_carriers): a merge or a
+    split's join may follow in this transaction, and it must never be taken after a row lock."""
     with conn.cursor() as cur:
+        cur.execute(carriers.NOTIFICATION_EVENTS_LOCK_SQL)
         cur.execute(_STATUS_SQL + " FOR UPDATE", {"ids": sorted({int(i) for i in ids})})
         return {int(r[0]): (r[1], r[2]) for r in cur.fetchall()}
 
@@ -416,11 +443,39 @@ def merge_rulings(
     return _canonical_pairs(conn, ids) | pairs, sets, len(pairs) + len(sets)
 
 
-def merge_preview(conn: psycopg.Connection, ids: list[int]) -> dict[str, Any]:
-    """The count an operator merge of `ids` would take back, before the click (MS12); reads only."""
-    property_ids = sorted({int(p) for p in ids})
-    return {"property_ids": property_ids,
-            "rulings_taken_back": merge_rulings(conn, property_ids)[2]}
+def letter_tokens(raw: str) -> dict[int, str]:
+    """`94020:A,140903:A,94492:B` (a preview's query, a page's link) as id → letter: the ONE
+    codec of a letters statement on the wire, for adverts (the split) and properties (the merge)."""
+    out: dict[int, str] = {}
+    for token in (t.strip() for t in raw.split(",")):
+        key, _, letter = token.partition(":")
+        if not (key.isascii() and key.isdigit()):
+            raise BadLetters("letters are id:LETTER tokens, for example 94020:A")
+        if int(key) in out:
+            raise BadLetters("an id is named twice", [int(key)])
+        out[int(key)] = letter
+    return out
+
+
+def letter_sets(letters: Mapping[Any, Any]) -> list[tuple[str, list[int]]]:
+    """A statement's letters as (letter, ids ascending), ordered by each letter's lowest id — a
+    stable merge order; the lock order is `merge_letters`' one up-front lock over every id. A
+    letter outside A–Z is refused."""
+    by: dict[str, list[int]] = {}
+    for key, letter in letters.items():
+        if not isinstance(letter, str) or len(letter) != 1 or letter not in LETTERS:
+            raise BadLetters("a letter must be A–Z", [int(key)])
+        by.setdefault(letter, []).append(int(key))
+    return sorted(((letter, sorted(ids)) for letter, ids in by.items()), key=lambda s: s[1][0])
+
+
+def merge_preview(conn: psycopg.Connection, letters: Mapping[Any, Any]) -> dict[str, Any]:
+    """What an operator's statement would take back, per letter, before the click (MS12): the
+    "different" rulings between the properties each letter joins; a letter on one property joins
+    nothing and is left out; reads only."""
+    return {"letters": {
+        letter: {"property_ids": ids, "rulings_taken_back": merge_rulings(conn, ids)[2]}
+        for letter, ids in letter_sets(letters) if len(ids) >= 2}}
 
 
 def _gate_set(rows: Mapping[int, tuple], ids: list[int]) -> None:
@@ -460,8 +515,8 @@ def _gate_ads(conn: psycopg.Connection, ids: list[int]) -> None:
 def _merge_pair(cur: psycopg.Cursor, step: carriers.MergeStep, *, reason: str,
                 confidence: float | None, markers: dict[str, Any] | None) -> int:
     """One retired property into the survivor under the set's lock and gate: the ledger, the
-    re-point, every carrier in order, the carry record of what they moved or folded, the retire.
-    Returns the ledger rows written."""
+    re-point, every carrier in order, the carry record of what they moved or folded, the
+    publication stamp, the retire. Returns the ledger rows written."""
     cur.execute(_LEDGER_SQL, {
         "group": step.group, "survivor": step.survivor, "retired": step.retired,
         "reason": reason, "confidence": confidence,
@@ -477,6 +532,7 @@ def _merge_pair(cur: psycopg.Cursor, step: carriers.MergeStep, *, reason: str,
             {**row._asdict(), "group": step.group, "survivor": step.survivor,
              "snapshot": None if row.snapshot is None else Jsonb(row.snapshot)}
             for row in carried])
+    cur.execute(_CARRY_SETTLED_SQL, (step.survivor, step.retired))
     cur.execute(_RETIRE_SQL, (step.survivor, step.retired))
     return moved
 
@@ -507,6 +563,8 @@ def merge_property_set(
 
     with conn.transaction():
         with conn.cursor() as cur:
+            # Before any row lock: the notification-events protocol (property_carriers).
+            cur.execute(carriers.NOTIFICATION_EVENTS_LOCK_SQL)
             cur.execute(_LOCK_SET_SQL, {"ids": ids})
             rows = {int(r[0]): r for r in cur.fetchall()}
         _gate_set(rows, ids)
@@ -550,6 +608,34 @@ def merge_property_set(
             "queried_at": _now_iso(),
         },
     }
+
+
+def merge_letters(
+    conn: psycopg.Connection,
+    letters: Mapping[Any, Any],
+    *,
+    decided_by: str,
+    reason: str = "manual_subset",
+) -> dict[str, dict[str, Any]]:
+    """The operator's statement over properties — a letter per property, properties with the
+    same letter one property afterwards — made true in ONE transaction under ONE lock: every
+    property of the statement row-locked up front in id order (`lock_properties`, the order
+    every writer locks in, so a statement never meets another merge in the opposite order), then
+    each letter held by two or more properties through `merge_property_set` as an operator merge
+    under its own group (the split, MS17's one reversal, stays per property), letters in
+    `letter_sets` order, each re-locking rows the transaction already holds; a letter on one
+    property is already true and merges nothing; a refusal anywhere writes nothing. A letter
+    says nothing about the properties it does not hold: no ruling crosses letters. Answers each
+    merged letter's data (`merge_property_set`'s)."""
+    sets = [(letter, ids) for letter, ids in letter_sets(letters) if len(ids) >= 2]
+    merged: dict[str, dict[str, Any]] = {}
+    with conn.transaction():
+        lock_properties(conn, [pid for _letter, ids in sets for pid in ids])
+        for letter, ids in sets:
+            merged[letter] = merge_property_set(
+                conn, ids, source="operator", reason=reason, decided_by=decided_by,
+            )["data"]
+    return merged
 
 
 def listing_origins(

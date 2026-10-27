@@ -52,8 +52,9 @@ import {
 } from '@/lib/api';
 import { fmtAbsolute } from '@/lib/format';
 import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
-import { useTheme, type ThemeMode } from '@/lib/theme';
-import { PickButton, Switch, Field } from '@/components/controls';
+import { COLOR_SCHEMES, useScheme, useTheme, type ThemeMode } from '@/lib/theme';
+import SchemeSwatch from '@/components/SchemeSwatch';
+import { PickButton, SegmentedBar, Switch, Field, type SegmentOption } from '@/components/controls';
 import ErrorBanner from '@/components/ErrorBanner';
 import TiersSection from '@/components/TiersSection';
 import { useWorkflowDocs, type WorkflowDoc } from '@/lib/workflowDocs';
@@ -96,49 +97,30 @@ export default function Settings() {
       </CollapsibleSection>
 
       <CollapsibleSection
-        id="delivery"
-        index={3}
-        eyebrow="Alerts"
-        title="Delivery"
-        infoExpanded={infoExpanded}
-        hint="Where watchdog & collection-monitoring alerts reach you, beyond the in-app feed. Pick the channels per watchdog / collection; set the destination address here. (Each channel also needs its transport key on the API service.)"
-        description={
-          <>
-            Where watchdog &amp; collection-monitoring alerts reach you, beyond
-            the in-app feed. Pick the channels per watchdog / collection; set the
-            destination address here. (Each channel also needs its transport key
-            on the API service.)
-          </>
-        }
-      >
-        <DeliverySection infoExpanded={infoExpanded} />
-      </CollapsibleSection>
-
-      <CollapsibleSection
         id="app-settings"
-        index={4}
+        index={3}
         eyebrow="Tuning"
         title="App settings"
         infoExpanded={infoExpanded}
-        description="Operator-tunable prompts and model names used outside the agent (URL parser, listing summary, image comparison)."
+        description="Operator-tunable prompts and model names used outside the agent (listing summary, image comparison)."
       >
         <AppSettingsSection infoExpanded={infoExpanded} />
       </CollapsibleSection>
 
       <CollapsibleSection
         id="condition-regions"
-        index={5}
+        index={4}
         eyebrow="Scoring"
         title="Hodnocení stavu — kraje"
         infoExpanded={infoExpanded}
-        description="Condition scoring runs kraj by kraj. Enabling a kraj means the scheduled batch job (every 3 h) starts draining that kraj automatically; the count is how many active listings there still await a condition score."
+        description="Condition scoring is PARKED: no job is scheduled, so enabling a kraj runs nothing by itself — it only scopes a manually dispatched scoring run, and no filter or estimate reads the scores. The count is how many active listings there still lack a condition score."
       >
         <ConditionRegionsSection />
       </CollapsibleSection>
 
       <CollapsibleSection
         id="clip-regions"
-        index={6}
+        index={5}
         eyebrow="Tagging"
         title="CLIP tagging — priority kraje"
         infoExpanded={infoExpanded}
@@ -149,7 +131,7 @@ export default function Settings() {
 
       <CollapsibleSection
         id="rent-map"
-        index={7}
+        index={6}
         eyebrow="Rent map"
         title="Cenová mapa nájemného (MF)"
         infoExpanded={infoExpanded}
@@ -169,7 +151,7 @@ export default function Settings() {
 
       <CollapsibleSection
         id="filter-availability"
-        index={8}
+        index={7}
         eyebrow="Filters"
         title="Filter availability"
         infoExpanded={infoExpanded}
@@ -180,7 +162,7 @@ export default function Settings() {
 
       <CollapsibleSection
         id="workflows"
-        index={9}
+        index={8}
         eyebrow="Workflows"
         title="GitHub Actions"
         infoExpanded={infoExpanded}
@@ -199,7 +181,7 @@ export default function Settings() {
         <WorkflowsSection infoExpanded={infoExpanded} />
       </CollapsibleSection>
 
-      <CollapsibleSection id="appearance" index={10} eyebrow="Theme" title="Appearance" infoExpanded={infoExpanded}>
+      <CollapsibleSection id="appearance" index={9} eyebrow="Theme" title="Appearance" infoExpanded={infoExpanded}>
         <ThemeToggle />
       </CollapsibleSection>
     </div>
@@ -210,35 +192,34 @@ export default function Settings() {
 /* Appearance                                                            */
 /* -------------------------------------------------------------------- */
 
-const THEME_OPTS: ReadonlyArray<{
-  value: ThemeMode;
-  label: string;
-  icon: 'sun' | 'moon' | 'system';
-}> = [
-  { value: 'light',  label: 'Light',  icon: 'sun'    },
-  { value: 'dark',   label: 'Dark',   icon: 'moon'   },
-  { value: 'system', label: 'System', icon: 'system' },
+const THEME_OPTS: ReadonlyArray<SegmentOption<ThemeMode>> = [
+  { value: 'light',  label: 'Light',  glyph: <ThemeGlyph kind="sun" />    },
+  { value: 'dark',   label: 'Dark',   glyph: <ThemeGlyph kind="moon" />   },
+  { value: 'system', label: 'System', glyph: <ThemeGlyph kind="system" /> },
 ];
 
-function ThemeToggle() {
+export function ThemeToggle() {
   const [mode, setMode] = useTheme();
+  const [scheme, setScheme] = useScheme();
   return (
     <div>
-      <div className="inline-flex gap-1.5">
-        {THEME_OPTS.map((opt) => (
+      <div className="inline-flex gap-1.5 mb-2.5">
+        {COLOR_SCHEMES.map((opt) => (
           <PickButton
             key={opt.value}
-            on={mode === opt.value}
-            onClick={() => setMode(opt.value)}
-            className="inline-flex items-center gap-1.5 px-3"
+            on={scheme === opt.value}
+            onClick={() => setScheme(opt.value)}
+            className="inline-flex items-center gap-2 px-3"
           >
-            <ThemeGlyph kind={opt.icon} />
+            <SchemeSwatch colors={opt.swatch} />
             <span>{opt.label}</span>
           </PickButton>
         ))}
       </div>
+      <SegmentedBar hug label="Light or dark" options={THEME_OPTS} value={mode} onChange={setMode} />
       <p className="text-xs text-[var(--color-ink-3)] mt-2.5">
-        Light is the default. System follows your OS preference.
+        Měď and Light are the default. System follows your OS preference. Every user
+        picks both in the account menu too; the choice stays on this device.
       </p>
     </div>
   );
@@ -538,126 +519,6 @@ function LimitInput({
         onChange={(e) => onChange(Number(e.target.value))}
       />
     </label>
-  );
-}
-
-/* -------------------------------------------------------------------- */
-/* Delivery (notification channels)                                      */
-/* -------------------------------------------------------------------- */
-
-function DeliverySection({ infoExpanded }: { infoExpanded: boolean }) {
-  const q = useQuery({ queryKey: ['admin', 'app_settings'], queryFn: listAppSettings });
-  if (q.error) return <ErrorBanner message={q.error.message} flush />;
-  if (!q.data)
-    return <p className="text-sm text-[var(--color-ink-3)]">Loading…</p>;
-  const val = (key: string) => {
-    const s = q.data.data.find((x) => x.key === key);
-    return typeof s?.value === 'string' ? s.value : '';
-  };
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      <RecipientField
-        settingKey="notification_email_to"
-        label="Email recipient"
-        placeholder="you@example.com"
-        hint="Where watchdog / collection email alerts are sent. Also needs RESEND_API_KEY + EMAIL_FROM on the API service."
-        initial={val('notification_email_to')}
-        infoExpanded={infoExpanded}
-      />
-      <RecipientField
-        settingKey="notification_telegram_chat_id"
-        label="Telegram chat ID"
-        placeholder="e.g. 123456789"
-        hint="DM your bot once, then paste the numeric chat_id. Also needs TELEGRAM_BOT_TOKEN on the API service."
-        initial={val('notification_telegram_chat_id')}
-        infoExpanded={infoExpanded}
-      />
-    </div>
-  );
-}
-
-function RecipientField({
-  settingKey,
-  label,
-  placeholder,
-  hint,
-  initial,
-  infoExpanded,
-}: {
-  settingKey: string;
-  label: string;
-  placeholder: string;
-  hint: string;
-  initial: string;
-  infoExpanded: boolean;
-}) {
-  const queryClient = useQueryClient();
-  const [text, setText] = useState(initial);
-  const [toast, setToast] = useState<{ kind: 'ok' | 'err'; message: string } | null>(
-    null,
-  );
-
-  const mutation = useMutation({
-    mutationFn: () => updateAppSetting(settingKey, text.trim()),
-    onSuccess: () => {
-      setToast({ kind: 'ok', message: 'Saved.' });
-      queryClient.invalidateQueries({ queryKey: ['admin', 'app_settings'] });
-    },
-    onError: (err: Error) => setToast({ kind: 'err', message: err.message }),
-  });
-
-  useEffect(() => {
-    if (!toast) return;
-    const t = setTimeout(() => setToast(null), 4000);
-    return () => clearTimeout(t);
-  }, [toast]);
-
-  const dirty = text.trim() !== initial.trim();
-
-  return (
-    <div>
-      {/* The <label> wraps ONLY the caption and the input. The Save button used
-        * to sit inside it too, so "Save" joined the input's accessible name and
-        * a click on the button also fired label activation. */}
-      <div className="mt-1 flex items-end gap-2">
-        <label className="block flex-1 min-w-0">
-          <span className="flex items-center gap-1.5">
-            <span className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)]">
-              {label}
-            </span>
-            {!infoExpanded && <InfoHint text={hint} />}
-          </span>
-          <input
-            type="text"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder={placeholder}
-            className="mt-1 w-full px-3 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]"
-          />
-        </label>
-        <button
-          type="button"
-          onClick={() => mutation.mutate()}
-          disabled={!dirty || mutation.isPending}
-          className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors disabled:opacity-50"
-        >
-          {mutation.isPending ? 'Saving…' : 'Save'}
-        </button>
-      </div>
-      {infoExpanded && <p className="mt-1 text-[0.72rem] text-[var(--color-ink-4)]">{hint}</p>}
-      {toast && (
-        <p
-          className={[
-            'mt-1 text-[0.72rem]',
-            toast.kind === 'ok'
-              ? 'text-[var(--color-sage)]'
-              : 'text-[var(--color-brick)]',
-          ].join(' ')}
-        >
-          {toast.message}
-        </p>
-      )}
-    </div>
   );
 }
 

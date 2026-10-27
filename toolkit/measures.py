@@ -444,20 +444,6 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         "This is the one division in the repo that is allowed to be a "
         "definition; every other consumer calls this function.",
     ),
-    RegisteredSite(
-        path="migrations/354_health_image_matviews_on_listing_id.sql"
-        "::materialized view:scraper_health_checks_mv",
-        arm="division",
-        hits=1,
-        measure=None,
-        kind=KIND_PROSE,
-        why="Not arithmetic: the health tile's `detail` string enumerates the "
-        "five fields the completeness-drift check watches — 'across price_czk "
-        "/ area_m2 / geom / locality / disposition'. Slashes separating a list "
-        "of column names. Unfixable in place anyway (migrations are "
-        "append-only, rule #1) and not worth a DDL replay of a 300-line "
-        "pg_cron matview to reword.",
-    ),
     # -- Python: the measure and its vocabulary ------------------------------
     RegisteredSite(
         path="toolkit/measures.py",
@@ -570,6 +556,17 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         "serves a NULL fond default for land: a fond is levied per m² of a "
         "DWELLING, and offering the rate on a 905 m² parcel would subtract "
         "~9 050 CZK/month from a yield numerator.",
+    ),
+    RegisteredSite(
+        path="api/valuo.py",
+        arm="unit",
+        hits=2,
+        measure="ppm2",
+        kind=KIND_LABELS,
+        why="Rule 23's named outside exception: Valuo's own per-m² figures "
+        "(avg/range/std_price_m2, each comparable's price_m2 and adjusted_price_m2) "
+        "over its calc_area, forwarded verbatim; `result_basis` labels them with "
+        "the REQUEST's basis and its docstring names both units. Nothing divides.",
     ),
     # -- Frontend + extension: the label half --------------------------------
     RegisteredSite(
@@ -931,5 +928,15 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         kind=KIND_GUARDS,
         why="Pins that the choropleth legend still reads the shared value "
         "labels rather than a local copy of them.",
+    ),
+    RegisteredSite(
+        path="frontend/src/lib/listingPopupHtml.test.ts",
+        arm="vocab",
+        hits=1,
+        measure="ppm2",
+        kind=KIND_GUARDS,
+        why="The map popup test's fixture row carries the server's published "
+        "basis token, so the popup's per-m² line is pinned to that basis, never "
+        "a client ratio or a bare 'sale' literal.",
     ),
 )

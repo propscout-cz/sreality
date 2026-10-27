@@ -1,11 +1,11 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { getNotificationUnreadCount } from '@/lib/api';
-import { notificationKeys } from '@/lib/queries';
 import { useAuth } from '@/lib/auth';
+import { UnreadCountProvider, useUnreadCount } from '@/lib/unreadCount';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { NewEstimationProvider } from './NewEstimationModal';
+import { NewPropertyProvider } from './NewPropertyProvider';
 import { ExploreAreaProvider } from './ExploreAreaModal';
 import { ExploreBrokerProvider } from './ExploreBrokerModal';
 import ToastViewport from './ToastViewport';
@@ -16,23 +16,17 @@ import { useBuildSkew } from '@/lib/useBuildSkew';
 import { MAIN_ID, useRouteFocus } from '@/lib/useRouteFocus';
 import SkipLink from './SkipLink';
 import { ROUTES } from '@/lib/routes';
+import { lastBrowsePath } from '@/lib/lastBrowseView';
 import { PIN_AUDIT_TOTAL_KEY, fetchPinAuditTotal } from '@/lib/pinAudit';
 import { fmtCount } from '@/lib/format';
 import { usePhoneShell } from '@/lib/phoneShell';
 import PhoneFrame from './phone/PhoneShell';
 
-type NavItem = { to: string; label: string; disabled?: boolean; title?: string; admin?: boolean; agenda?: string };
+type NavItem = { to: string; label: string; disabled?: boolean; title?: string; agenda?: string };
 
-// `admin: true` entries only render for admin sessions; `agenda` keys tie a
-// link to the session plan's agenda-visibility map (Settings › Tiers). Both
-// are UX — the routes themselves carry the security gates.
+// `agenda` keys tie a link to the session plan's agenda-visibility map
+// (Settings › Tiers). That is UX — the routes themselves carry the security gates.
 const navItems: ReadonlyArray<NavItem> = [
-  /* FIRST on purpose, and shouting on purpose. These are the listings W5 hides
-   * from customers until their location is resolved (migration 514), so the
-   * badge is a WORK QUEUE, not a one-off review: it counts down as the resolver
-   * lane works and the entry is quiet at zero. It no longer leaves this list
-   * when a ruling lands — the ruling IS what put it here. */
-  { to: ROUTES.newDedupPinAudit.build(), label: '!AUDIT POLOH', admin: true },
   { to: ROUTES.browse.build(),      label: 'Browse', agenda: 'browse' },
   { to: ROUTES.pipeline.build(),    label: 'Pipeline', agenda: 'pipeline' },
   { to: ROUTES.estimations.build(), label: 'Estimations', agenda: 'estimations' },
@@ -53,8 +47,8 @@ type MenuGroup = { label: string; items: ReadonlyArray<MenuItem> };
 // was to stop spending the row on surfaces the operator does not use hourly:
 // the three admin dropdowns collapse into ONE "Admin" trigger with a section
 // per program, and the three admin-only links (Broker Review, Datasets, the
-// paused Outreach) move inside it. The top row is now the daily surfaces plus
-// the audit queue, which fits with room to spare at 1280.
+// paused Outreach) move inside it. The top row is now the daily surfaces only
+// (the audit queue joined the menu by ruling P33), with room to spare at 1280.
 //
 // Grouped under the "Settings" section of that menu — all admin-only, so the
 // whole group renders (or not) with the trigger.
@@ -107,8 +101,14 @@ const autodedupItems: ReadonlyArray<MenuItem> = [
 // than vanishing — a surface that exists and is switched off is a different
 // fact from one that was removed.
 const adminItems: ReadonlyArray<MenuItem> = [
-  // First: where the operator starts when something is wrong, and where the
-  // bell's system alerts open.
+  /* First, and shouting on purpose. These are the listings W5 hides from
+   * customers until their location is resolved (migration 514), so it is a WORK
+   * QUEUE, not a one-off review: its count, on the Admin trigger, counts down as
+   * the resolver lane works. It led the top row until ruling P33 (2026-10-27)
+   * put it here. */
+  { to: ROUTES.newDedupPinAudit.build(), label: '!AUDIT POLOH' },
+  // Next: where the operator starts when something is wrong, and the one place
+  // system alerts are told (the bell shows none since ruling R2b, 2026-10-21).
   { to: ROUTES.health.build(), label: 'Health' },
   // The merge-review queue is a real admin surface (routes.tsx wraps it in
   // AdminPage) that was only reachable from a conditional chip on /brokers —
@@ -161,53 +161,43 @@ export default function Shell() {
       <Outlet />
     </ErrorBoundary>
   );
+  /* The unread count's one observer sits above both frames, so the desktop
+   * badge, the phone bell and the Notifications page read one poll. */
   return (
-    <NewEstimationProvider>
-      <ExploreAreaProvider>
-        <ExploreBrokerProvider>
-          {phone ? (
-            <PhoneFrame>{body}</PhoneFrame>
-          ) : (
-            <div className="min-h-dvh flex flex-col bg-[var(--color-paper)] text-[var(--color-ink)]">
-              <SkipLink />
-              <TopBar />
-              {/* id + tabIndex=-1: the skip link's target and where useRouteFocus
-                * lands keyboard focus after every navigation. -1 keeps it out of
-                * the tab order while letting it be focused programmatically. */}
-              <main id={MAIN_ID} tabIndex={-1} className="flex-1 outline-none">
-                {body}
-              </main>
-              <Footer />
-            </div>
-          )}
-          <ToastViewport placement={phone ? 'phone' : 'corner'} />
-        </ExploreBrokerProvider>
-      </ExploreAreaProvider>
-    </NewEstimationProvider>
+    <UnreadCountProvider>
+      <NewEstimationProvider>
+        <NewPropertyProvider>
+          <ExploreAreaProvider>
+            <ExploreBrokerProvider>
+              {phone ? (
+                <PhoneFrame>{body}</PhoneFrame>
+              ) : (
+                <div className="min-h-dvh flex flex-col bg-[var(--color-paper)] text-[var(--color-ink)]">
+                  <SkipLink />
+                  <TopBar />
+                  {/* id + tabIndex=-1: the skip link's target and where useRouteFocus
+                    * lands keyboard focus after every navigation. -1 keeps it out of
+                    * the tab order while letting it be focused programmatically. */}
+                  <main id={MAIN_ID} tabIndex={-1} className="flex-1 outline-none">
+                    {body}
+                  </main>
+                  <Footer />
+                </div>
+              )}
+              <ToastViewport placement={phone ? 'phone' : 'corner'} />
+            </ExploreBrokerProvider>
+          </ExploreAreaProvider>
+        </NewPropertyProvider>
+      </NewEstimationProvider>
+    </UnreadCountProvider>
   );
 }
 
 function TopBar() {
   const { isAdmin, agendas } = useAuth();
   const location = useLocation();
-  /* The badge polls a Railway route that costs ~300 ms of unpooled connection
-   * setup for ~15 ms of server work, on every page load and then every 30 s.
-   * Two changes: it only runs when the Notifications nav item is actually
-   * visible to this session (the agenda gate below already decides that, and
-   * polling a count for a hidden entry is pure cost), and the cadence backs off
-   * to 60 s — an unread badge is not a real-time surface, and the matcher that
-   * feeds it does not run faster than that either. */
-  const notificationsVisible =
-    isAdmin || !isSupabaseConfigured() || agendas === null ||
-    agendas['notifications'] === true;
-  const unreadQ = useQuery({
-    queryKey: notificationKeys.unreadCount,
-    queryFn: () => getNotificationUnreadCount(),
-    enabled: notificationsVisible,
-    staleTime: 60_000,
-    refetchInterval: 60_000,
-  });
-  const unread = unreadQ.data?.unread_count ?? 0;
+  /* Shell's one unread observer (lib/unreadCount), gated as the nav item is. */
+  const { count: unread } = useUnreadCount();
   /* The !AUDIT POLOH count — the UNRESOLVED rows only (W7-b): the listings the
    * system finished and could not place. The ones it simply has not reached yet
    * are normal traffic, and a badge that counted them would climb every time the
@@ -216,7 +206,7 @@ function TopBar() {
    * hourly; the audit page invalidates this key on open, which is the one
    * moment a fresh number is worth a round trip. `retry: false` + reading
    * `data` (never `isError`) is what keeps a failed count from touching
-   * navigation — the entry renders with no badge and still works. */
+   * navigation — the Admin trigger renders with no badge and the entry still works. */
   const pinAuditQ = useQuery({
     queryKey: PIN_AUDIT_TOTAL_KEY,
     queryFn: fetchPinAuditTotal,
@@ -229,7 +219,6 @@ function TopBar() {
   // full nav there, mirroring the guards' allow-through posture.
   const showAdmin = isAdmin || !isSupabaseConfigured();
   const items = navItems.filter((item) => {
-    if (item.admin && !showAdmin) return false;
     // Plan agenda gating (non-admins only). agendas === null means the
     // billing read hasn't resolved / failed — show everything rather than
     // blank the nav over a read hiccup; admins always bypass.
@@ -239,29 +228,38 @@ function TopBar() {
     return true;
   });
   const ownerTo = activeNavTo(location.pathname, items.map((i) => i.to));
-  /* `end` is honoured here, not just on the NavLink: Dashboard's `to` is
-   * `/new-dedup`, which prefix-matches every page in the program — including
-   * /new-dedup/pin-audit, a top-level entry of its own. Without this the
-   * dropdown and !AUDIT POLOH would both light up on that path. */
+  /* From any other page, "Browse" is the way back to the view that was left, with
+   * its filters; ON Browse the same click is the reset, the bare page. */
+  const browseTo = ownerTo === ROUTES.browse.build() ? ROUTES.browse.build() : lastBrowsePath();
+  /* `end` is honoured here, not just on the NavLink, so the trigger lights
+   * exactly when one of its rows does: Dashboard's `to` is `/new-dedup`, which
+   * would otherwise prefix-match every page in the program. */
   const adminActive = adminGroups.some((group) =>
     group.items.some((s) =>
       s.end ? location.pathname === s.to : isPathActive(location.pathname, s.to),
     ),
   );
   return (
-    <header className="border-b border-[var(--color-rule)] bg-[var(--color-paper)] sticky top-0 z-30">
-      {/* THE BAR IS EXACTLY 3.5rem TALL AND STAYS THAT WAY. Three Browse panes
-        * and the pipeline board's stage headers pin themselves against that
-        * number in CSS (`top-14`, `calc(100dvh-3.5rem)` in Filters.tsx,
-        * BrowseExperience.tsx and Pipeline.tsx), so a header that grows a
-        * second row slides the sidebar heading and the stage labels under it
-        * and overflows the map pane. Room for the nav is bought by TIGHTENING and,
+    /* The bar draws in the `chrome` tokens: a dark band in the Měď scheme, the
+     * page's own paper in Kobalt and Grafit (globals.css). */
+    <header className="border-b border-[var(--color-rule)] bg-[var(--color-chrome)] sticky top-0 z-30">
+      {/* THE BAR IS EXACTLY 3.5rem TALL AND STAYS THAT WAY. Three Browse panes,
+        * the pipeline board's stage headers and the property page's tab strip
+        * pin themselves against that number in CSS (`top-14`,
+        * `calc(100dvh-3.5rem)` in Filters.tsx, BrowseExperience.tsx, Pipeline.tsx
+        * and Tabs.tsx `sticky`), so a header that grows a second row slides the
+        * sidebar heading, the stage labels and the tabs under it and overflows
+        * the map pane. The property page's in-tab scroll targets (`scroll-mt-28`
+        * in EstimationsBlock, MergedAdvertsSection and ValuoSection) clear this
+        * bar plus the 44px strip, so they move with either height. Room for the
+        * nav is bought by TIGHTENING and,
         * once tightening ran out (the bar measured 1555px inside 1440 and
         * clipped Settings and the account button), by CARRYING LESS: the three
         * admin dropdowns are one "Admin" trigger and the admin-only links live
         * inside it. Never by changing the height. Making the bar
         * variable-height needs `--header-h` published here and consumed at
-        * those four sites; that is a Browse + Pipeline change, not a nav change.
+        * those five sites; that is a Browse + Pipeline + property-page change,
+        * not a nav change.
         *
         * Horizontal scrolling was considered and rejected: `overflow-x: auto`
         * forces `overflow-y` to auto as well, which clips the dropdown panels
@@ -278,7 +276,7 @@ function TopBar() {
                   key={item.to}
                   title={item.title}
                   aria-disabled="true"
-                  className="relative px-2 xl:px-2.5 py-1.5 text-sm tracking-wide text-[var(--color-ink-4)] opacity-50 cursor-not-allowed select-none"
+                  className="relative px-2 xl:px-2.5 py-1.5 text-sm tracking-wide text-[var(--color-chrome-ink-2)] opacity-50 cursor-not-allowed select-none"
                 >
                   {item.label}
                 </span>
@@ -287,7 +285,7 @@ function TopBar() {
             return (
               <NavLink
                 key={item.to}
-                to={item.to}
+                to={item.to === ROUTES.browse.build() ? browseTo : item.to}
                 /* Exact matching for every entry that is NOT the current path's
                    owner, so a parent (/brokers) can't stay lit on a nested
                    sibling (/brokers/review). aria-current follows the same rule. */
@@ -296,36 +294,21 @@ function TopBar() {
                   [
                     'relative px-2 xl:px-2.5 py-1.5 text-sm tracking-wide rounded-[var(--radius-xs)] transition-colors',
                     isActive
-                      ? 'text-[var(--color-ink)]'
-                      : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
+                      ? 'text-[var(--color-chrome-ink)]'
+                      : 'text-[var(--color-chrome-ink-2)] hover:text-[var(--color-chrome-ink)]',
                   ].join(' ')
                 }
               >
                 {({ isActive }) => (
                   <NavLabel active={isActive}>
                     {item.label}
-                    {item.to === ROUTES.newDedupPinAudit.build() &&
-                      pinAuditTotal !== null && (
-                        <>
-                          <span
-                            className="ml-1.5 inline-flex items-center justify-center h-[1.05rem] px-1.5 rounded-full bg-[var(--color-brick)] text-white text-[0.6rem] font-medium tabular-nums"
-                            aria-hidden="true"
-                          >
-                            {fmtCount(pinAuditTotal)}
-                          </span>
-                          <span className="sr-only">
-                            {' '}
-                            {pinAuditTotal} inzerátů s nevyřešenou polohou
-                          </span>
-                        </>
-                      )}
                     {item.to === '/notifications' && unread > 0 && (
                       <>
                         {/* The badge is a glyph; the count reaches the link's
                             accessible name through the hidden suffix, so an
                             aria-label can't overwrite "Notifications". */}
                         <span
-                          className="ml-1.5 inline-flex items-center justify-center min-w-[1.05rem] h-[1.05rem] px-1 rounded-full bg-[var(--color-brick)] text-white text-[0.6rem] font-medium tabular-nums"
+                          className="ml-1.5 inline-flex items-center justify-center min-w-[1.05rem] h-[1.05rem] px-1 rounded-full bg-[var(--color-brick)] text-[var(--color-on-brick)] text-[0.6rem] font-medium tabular-nums"
                           aria-hidden="true"
                         >
                           {unread > 99 ? '99+' : unread}
@@ -340,8 +323,13 @@ function TopBar() {
           })}
           {showAdmin && (
             <>
-              <span className="mx-2 h-4 w-px bg-[var(--color-rule)]" aria-hidden />
-              <NavMenu label="Admin" groups={adminGroups} active={adminActive} />
+              <span className="mx-2 h-4 w-px bg-[var(--color-chrome-ink-2)] opacity-40" aria-hidden />
+              <NavMenu
+                label="Admin"
+                groups={adminGroups}
+                active={adminActive}
+                badge={pinAuditTotal !== null ? <AuditCountBadge total={pinAuditTotal} /> : null}
+              />
             </>
           )}
         </nav>
@@ -353,10 +341,30 @@ function TopBar() {
   );
 }
 
+/* The !AUDIT POLOH count as a glyph; the number reaches the trigger's accessible
+ * name through the hidden suffix, as the Notifications badge does. */
+function AuditCountBadge({ total }: { total: number }) {
+  return (
+    <>
+      <span
+        className="ml-1.5 inline-flex items-center justify-center h-[1.05rem] px-1.5 rounded-full bg-[var(--color-brick)] text-[var(--color-on-brick)] text-[0.6rem] font-medium tabular-nums"
+        aria-hidden="true"
+      >
+        {fmtCount(total)}
+      </span>
+      <span className="sr-only">
+        {' '}
+        {total} inzerátů s nevyřešenou polohou
+      </span>
+    </>
+  );
+}
+
 function NavMenu({
   label,
   groups,
   active,
+  badge,
 }: {
   label: string;
   /* Sections, not one flat list: four programs under one trigger stay legible
@@ -364,6 +372,7 @@ function NavMenu({
    * heading at all. */
   groups: ReadonlyArray<MenuGroup>;
   active: boolean;
+  badge?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -386,11 +395,12 @@ function NavMenu({
         aria-expanded={open}
         className={[
           'relative px-2 xl:px-2.5 py-1.5 text-sm tracking-wide rounded-[var(--radius-xs)] transition-colors',
-          active ? 'text-[var(--color-ink)]' : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
+          active ? 'text-[var(--color-chrome-ink)]' : 'text-[var(--color-chrome-ink-2)] hover:text-[var(--color-chrome-ink)]',
         ].join(' ')}
       >
         <NavLabel active={active}>
           {label}
+          {badge}
           <CaretIcon spin={open} />
         </NavLabel>
       </button>
@@ -473,9 +483,9 @@ function NavLabel({ active, children }: { active: boolean; children: ReactNode }
     <span className="relative inline-flex items-center">
       {children}
       <span
-        className="absolute -bottom-[15px] left-0 right-0 h-px transition-colors"
+        className="absolute -bottom-[15px] left-0 right-0 h-[2px] transition-colors"
         style={{
-          background: active ? 'var(--color-copper)' : 'transparent',
+          background: active ? 'var(--color-chrome-accent)' : 'transparent',
         }}
       />
     </span>
@@ -483,23 +493,23 @@ function NavLabel({ active, children }: { active: boolean; children: ReactNode }
 }
 
 function BrandMark() {
-  // Two-part wordmark derived from the shared brand name: first word as the
-  // display wordmark, the rest as the spaced uppercase descriptor.
-  const [wordmark, ...rest] = APP_NAME.split(' ');
-  const descriptor = rest.join(' ');
+  // The shared brand name as the wordmark: the name in the display face and
+  // its domain suffix (".cz") in the bar's accent.
+  const [, name, suffix] = /^(.*?)(\.[a-z]{2,})?$/i.exec(APP_NAME) ?? [APP_NAME, APP_NAME, ''];
   return (
-    <div className="flex items-baseline gap-2 select-none" title={APP_NAME}>
+    <div className="flex items-baseline select-none" title={APP_NAME}>
       <span
-        className="font-display text-[1.05rem] leading-none"
+        className="font-display text-[1.1rem] leading-none text-[var(--color-chrome-ink)]"
         style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
       >
-        {wordmark}
+        {name}
       </span>
-      {descriptor && (
-        /* Hidden below xl: it is decoration, and the narrow row needs its
-          * ~70px more than the wordmark needs its second half. */
-        <span className="hidden xl:inline text-[0.65rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-          {descriptor}
+      {suffix && (
+        <span
+          className="font-display text-[1.1rem] leading-none text-[var(--color-chrome-accent)]"
+          style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
+        >
+          {suffix}
         </span>
       )}
     </div>
@@ -508,8 +518,7 @@ function BrandMark() {
 
 function Footer() {
   return (
-    <footer className="border-t border-[var(--color-rule-soft)] px-6 py-3 text-[0.7rem] text-[var(--color-ink-4)] tracking-wide flex items-center justify-between">
-      <span>U1a · read-only · scrape data via Supabase</span>
+    <footer className="border-t border-[var(--color-rule-soft)] px-6 py-3 text-[0.7rem] text-[var(--color-ink-4)] tracking-wide flex items-center justify-end">
       <span>
         map tiles ©{' '}
         <a

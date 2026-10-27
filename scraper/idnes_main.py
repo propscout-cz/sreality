@@ -83,6 +83,12 @@ _DESCENT_DEPTH = 2
 _RESAMPLE_PASSES = 2
 _RESAMPLE_MIN_GAIN = 5
 
+# Pages of one place idnes may refuse (an exception after the client's full
+# retry) before the place ends `error`. One page can 500 server-side while its
+# neighbours serve (prodej/domy/jihocesky-kraj, 10-23/24); skipping it costs ~26 ads,
+# which the shortfall sends to the descent and resample. A second refusal is ours.
+_MAX_REFUSED_PAGES = 1
+
 
 @dataclass(frozen=True)
 class SliceWalk:
@@ -111,6 +117,8 @@ class IdnesPortal(portal_runner.PortalDefaults):
     `portals` registry config."""
 
     source = SOURCE
+    walk_every_s = 6 * 3600
+    walk_timeout_s = 240 * 60
     # idnes is a large portal walked page-by-page (≈26 listings/page, tens of
     # thousands per category), so the index needs a faster ceiling than the
     # classifieds pilots. The detail-fetch rate is the (slower) drain CLI arg.
@@ -122,20 +130,12 @@ class IdnesPortal(portal_runner.PortalDefaults):
         config: PortalConfig,
         *,
         max_pages: int | None = None,
-        price_change_min_pct: float | None = None,
     ) -> None:
         self._categories = config.categories
         self._max_pages = max_pages
         self.index_rate = config.limits.index_rate
         self.shared_rate_limiter = config.limits.shared_rate_limiter
-        # CLI override > per-portal config (the standard limits chain). Absorbs
-        # the daily FX re-display drift of idnes's foreign inventory so the
-        # walk doesn't enqueue phantom "price changed" refetches (see
-        # PortalLimits.price_change_min_pct).
-        self.price_change_min_pct = (
-            price_change_min_pct if price_change_min_pct is not None
-            else config.limits.price_change_min_pct
-        )
+        self.price_change_min_pct = config.limits.price_change_min_pct
         # Read once in connect_index, before the runner asks for categories.
         # Empty = every slice sorts as never-walked, which is the safe default:
         # it walks everything rather than skipping on stale bookkeeping.
@@ -215,14 +215,15 @@ class IdnesPortal(portal_runner.PortalDefaults):
 
         Returns (rows, declared_total, pages, outcome, stop, first_page_html) —
         the numeric verdict and the structural one side by side (see SliceWalk).
-        The HTML is kept because it advertises the places one level down, which
-        is the descent path when this one cannot be enumerated.
+        The HTML (the first page that answered) is kept: it advertises the places
+        one level down, the descent path when this one cannot be enumerated.
         """
         rows: list[tuple[str, str, int | None]] = []
         ref: set[str] = set()
         declared: int | None = None
         first_html: str | None = None
         pages = 0
+        refused = 0
         page: int | None = None
         stop: StopReason
         while True:
@@ -234,9 +235,13 @@ class IdnesPortal(portal_runner.PortalDefaults):
                 html, _ = client.fetch_index(
                     sale_type, cat, page, locality=locality, sl=sl)
             except Exception as exc:  # noqa: BLE001 - one place must not kill the walk
-                LOG.warning("SLICE error cm=%s ct=%s place=%s page=%s: %s",
-                            cat, sale_type, label, page, exc)
-                return rows, declared, pages, "error", "error", first_html
+                refused += 1
+                LOG.warning("SLICE error cm=%s ct=%s place=%s page=%s refused=%d: %s",
+                            cat, sale_type, label, page, refused, exc)
+                if refused > _MAX_REFUSED_PAGES:
+                    return rows, declared, pages, "error", "error", first_html
+                page = (page or 0) + 1      # offset-style: bare URL, ?page=1, ?page=2 …
+                continue
             parsed = parse_index(html)
             pages += 1
             if first_html is None:
@@ -696,11 +701,7 @@ def main(argv: list[str] | None = None) -> int:
     portal_runner.configure_logging(args.verbose)
 
     config = portal_runner.load_config(SOURCE, args.dry_run)
-    portal = IdnesPortal(
-        config,
-        max_pages=args.max_pages,
-        price_change_min_pct=args.price_change_min_pct,
-    )
+    portal = IdnesPortal(config, max_pages=args.max_pages)
 
     # Resolve operational limits: CLI override > per-portal DB config > default.
     workers = args.workers if args.workers is not None else config.limits.detail_workers
@@ -756,12 +757,6 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument(
         "--rate", type=float, default=None,
         help="detail-fetch requests/second ceiling (default: per-portal config)",
-    )
-    p.add_argument(
-        "--price-change-min-pct", type=float, default=None,
-        help="relative index-price move below which a listing reads as "
-             "unchanged in the walk diff (default: per-portal config; "
-             "0 = exact compare)",
     )
     p.add_argument(
         "--max-seconds", type=float, default=None,

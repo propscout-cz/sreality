@@ -1,13 +1,13 @@
-"""Shared setup for the live property-identity tests: a rollback-always connection, the
-`REQUIRED_DB` guard, and seed helpers for properties, adverts, accounts and the operator's
-property-anchored state. Every seed lands inside the test's transaction and rolls back."""
+"""Shared setup for the live property-identity tests: the `REQUIRED_DB` guard, `db_url()`, and seed
+helpers for properties, adverts, accounts and the operator's property-anchored state. Every seed lands
+inside the test's transaction (the rollback-always `cur` fixture in tests/conftest.py) and rolls back."""
 
 from __future__ import annotations
 
 import itertools
 import os
 import uuid
-from typing import Any, Iterator
+from typing import Any
 
 import pytest
 
@@ -34,25 +34,9 @@ def db_url() -> str:
     return DB_URL
 
 
-@pytest.fixture()
-def cur() -> Iterator[Any]:
-    import psycopg
-
-    conn = psycopg.connect(
-        db_url(),
-        options="-c statement_timeout=20000 -c lock_timeout=5000"
-        " -c idle_in_transaction_session_timeout=30000",
-    )
-    try:
-        with conn.cursor() as c:
-            yield c
-    finally:
-        conn.rollback()
-        conn.close()
-
-
 def _property(cur: Any) -> int:
-    cur.execute("INSERT INTO properties DEFAULT VALUES RETURNING id")
+    """Settled at birth: a seed is a published property, so browse_projection serves it (migration 669)."""
+    cur.execute("INSERT INTO properties (settled_at) VALUES (now()) RETURNING id")
     return int(cur.fetchone()[0])
 
 
@@ -79,9 +63,9 @@ def _snapshot(cur: Any, listing_id: int, price: int | None, hours_ago: float) ->
 
 
 def _recompute(cur: Any, pid: int) -> None:
-    from scripts.recompute_property_stats import _RECOMPUTE_ONE_SQL
+    from scripts.recompute_property_stats import _RECOMPUTE_SCOPED_SQL
 
-    cur.execute(_RECOMPUTE_ONE_SQL, {"pid": pid})
+    cur.execute(_RECOMPUTE_SCOPED_SQL, {"ids": [pid]})
 
 
 def _account(cur: Any) -> uuid.UUID:

@@ -1,5 +1,6 @@
 import { useId, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useNewTabProps } from '@/lib/linkGestures';
 import {
   fmtArea,
   fmtCzk,
@@ -13,7 +14,7 @@ import type { ImagePublic, ListingPublic, ListingSummaryBody } from '@/lib/types
 import { listingKindLabel, priceUnitLabel } from '@/lib/enums';
 import { imageSrc } from '@/lib/imageUrl';
 import ImageTagBadge from '@/components/ImageTagBadge';
-import { portalShort } from '@/lib/portals';
+import { portalBadge } from '@/lib/portals';
 import { listingPath } from '@/lib/listingUrl';
 import Dialog, { DialogClose } from '@/components/Dialog';
 import { Hairline, SectionLabel } from '@/components/section';
@@ -341,6 +342,8 @@ function Footer({ listing }: { listing: ListingPublic }) {
   // The origin-portal link is the row's stored `source_url` (migration 494) for
   // every portal; null → only the in-app "View in full" link shows.
   const external = listing.source_url;
+  /* "View in full" opens a new tab: the run and this modal stay open behind it. */
+  const newTab = useNewTabProps();
   return (
     <div className="flex items-center justify-between">
       {/* listingPath needs a real sreality_id (never route the surrogate
@@ -350,6 +353,7 @@ function Footer({ listing }: { listing: ListingPublic }) {
       {listing.sreality_id != null ? (
         <Link
           to={listingPath(listing.sreality_id)}
+          {...newTab}
           className="inline-flex items-center gap-1.5 px-4 py-2 text-sm rounded-[var(--radius-sm)] border border-[var(--color-copper)]/40 bg-[var(--color-copper-soft)] text-[var(--color-copper)] hover:text-[var(--color-copper-2)] hover:border-[var(--color-copper)] transition-colors"
         >
           View in full
@@ -365,7 +369,7 @@ function Footer({ listing }: { listing: ListingPublic }) {
           rel="noopener noreferrer"
           className="text-[0.78rem] text-[var(--color-ink-3)] hover:text-[var(--color-copper)]"
         >
-          {`Open on ${portalShort(listing.source)}`}
+          {`Open on ${portalBadge(listing.source, external)}`}
         </a>
       )}
     </div>

@@ -45,6 +45,7 @@ from scraper.area import (
 )
 from scraper.attribute_contract import floor_convention, source_value, source_values
 from scraper.floor import floor_from_portal, total_floors_from_portal
+from scraper.portal_identity import native_id
 from scraper.price_text import is_per_area_price
 from scraper.scraped_listing import ScrapedListing
 from scraper.street import street_from_locality
@@ -147,6 +148,9 @@ CATEGORY_BY_TITLE: tuple[tuple[str, str], ...] = (
     ("garaz", "ostatni"),
     ("stani", "ostatni"),
     ("objektu", "ostatni"),
+    # Last, so it labels only a title nothing above names: the "Komerční prostory" group's
+    # warehouses and "jiné prostory" (an "apartmán" filed there stays byt, by its title).
+    ("prostor", "komercni"),
 )
 
 # Construction labels -> the canonical codes the sreality parser emits.
@@ -156,7 +160,6 @@ CATEGORY_BY_TITLE: tuple[tuple[str, str], ...] = (
 _CZ_LAT_MIN, _CZ_LAT_MAX = 48.0, 51.5
 _CZ_LON_MIN, _CZ_LON_MAX = 12.0, 19.0
 
-_ID_RE = re.compile(r"/reality/detail/(\d+)")
 _INT_RE = re.compile(r"(-?\d+)")
 _PRICE_MAX = 2_147_483_647  # listings.price_czk is a Postgres integer
 # data-gps DMS pair: "50°05'26.1"N,14°29'33.4"E" (entities already unescaped).
@@ -216,13 +219,6 @@ def _text(node: Node | None) -> str | None:
 
 def _in_cz_bbox(lat: float, lon: float) -> bool:
     return _CZ_LAT_MIN <= lat <= _CZ_LAT_MAX and _CZ_LON_MIN <= lon <= _CZ_LON_MAX
-
-
-def _id_from_href(href: str | None) -> str | None:
-    if not href:
-        return None
-    m = _ID_RE.search(href)
-    return m.group(1) if m else None
 
 
 def category_from_typ(typ: str | None) -> str | None:
@@ -403,7 +399,7 @@ def parse_index(html: str) -> IndexPage:
     for card in tree.css("div.pl-items__item"):
         attrs = card.attributes
         url = attrs.get("data-url") or ""
-        source_id = _id_from_href(url)
+        source_id = native_id(SOURCE, url)
         if not source_id or source_id in seen:
             continue
         seen.add(source_id)
@@ -582,7 +578,7 @@ def parse_detail(
     category_type: str | None = None,
 ) -> ScrapedListing:
     tree = HTMLParser(html)
-    source_id = _id_from_href(source_url) or ""
+    source_id = native_id(SOURCE, source_url) or ""
 
     h1 = tree.css_first("h1")
     title = _text(h1) or _text(tree.css_first("title")) or ""
@@ -683,7 +679,6 @@ def parse_detail(
         # so no re-mine can mistake it for the subject's again.
         "display_address": header_addr,
         "carousel_address": carousel_address,
-        "remax_ref": params.get("cislo zakazky"),
         "broker": _broker(tree),
         "image_urls": image_urls,
         "params": params,
@@ -694,6 +689,7 @@ def parse_detail(
         source=SOURCE,
         source_id_native=source_id,
         source_url=source_url,
+        ad_reference=vocabulary.reference(read("ad_reference")),
         category_main=category_main,
         category_type=category_type,
         subtype=subtype_of(read("subtype"), source_url),

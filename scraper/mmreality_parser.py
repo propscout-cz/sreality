@@ -35,6 +35,7 @@ from scraper import vocabulary
 from scraper.area import PortalAreas, derive_headline_area
 from scraper.attribute_contract import floor_convention, source_label, source_value, source_values
 from scraper.floor import floor_from_portal, total_floors_from_portal
+from scraper.portal_identity import native_id
 from scraper.scraped_listing import ScrapedListing
 from scraper.street import clean_street, street_from_locality
 
@@ -62,7 +63,6 @@ CATEGORY_MAIN: dict[str, str] = {
 _CZ_LAT_MIN, _CZ_LAT_MAX = 48.0, 51.5
 _CZ_LON_MIN, _CZ_LON_MAX = 12.0, 19.0
 
-_ID_RE = re.compile(r"/nemovitosti/(\d+)/?")
 _PAGE_RE = re.compile(r"[?&]page=(\d+)")
 # The Vue prop is HTML-entity-encoded (&quot;), so the only literal double quotes
 # in the attribute are its delimiters — `[^"]*` captures the whole blob cleanly.
@@ -113,13 +113,6 @@ def _to_float(v: Any) -> float | None:
 
 def _in_cz_bbox(lat: float, lon: float) -> bool:
     return _CZ_LAT_MIN <= lat <= _CZ_LAT_MAX and _CZ_LON_MIN <= lon <= _CZ_LON_MAX
-
-
-def _id_from_url(url: str | None) -> str | None:
-    if not url:
-        return None
-    m = _ID_RE.search(url)
-    return m.group(1) if m else None
 
 
 
@@ -305,8 +298,8 @@ def parse_index(html: str) -> IndexPage:
     items: list[IndexItem] = []
     seen: set[str] = set()
     for anchor in tree.css("a[data-card-id]"):
-        source_id = anchor.attributes.get("data-card-id") or _id_from_url(
-            anchor.attributes.get("href")
+        source_id = anchor.attributes.get("data-card-id") or native_id(
+            SOURCE, anchor.attributes.get("href")
         )
         href = anchor.attributes.get("href")
         if not source_id or not href or source_id in seen:
@@ -451,7 +444,7 @@ def parse_detail(html: str, *, source_url: str) -> ScrapedListing:
 
     Category is derived from the embedded estate object (mixed-category index),
     so — unlike idnes — nothing is passed in from the index/URL."""
-    listing_id = _id_from_url(source_url)
+    listing_id = native_id(SOURCE, source_url)
     obj = extract_property(html, listing_id)
     source_id = str(obj.get("id") or listing_id or "")
 
@@ -505,6 +498,7 @@ def parse_detail(html: str, *, source_url: str) -> ScrapedListing:
         source=SOURCE,
         source_id_native=source_id,
         source_url=source_url,
+        ad_reference=vocabulary.reference(read("ad_reference")),
         category_main=category_main,
         category_type=category_type,
         price_czk=price_czk,

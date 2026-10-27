@@ -10,6 +10,8 @@ import datetime
 import io
 import logging
 import os
+import posixpath
+import re
 import time
 from typing import Any, Mapping
 from urllib.parse import quote, urljoin
@@ -18,7 +20,7 @@ import threading
 
 import requests
 
-from scraper import media
+from scraper import egress, media
 
 LOG = logging.getLogger(__name__)
 
@@ -94,29 +96,36 @@ def is_configured() -> bool:
     return all(os.environ.get(v) for v in R2_ENV_VARS)
 
 
-def image_key(listing_id: int, sequence: int | None) -> str:
-    """Bucket key for one image. Sequence padded to 4 digits for stable sort.
-
-    Keyed on the SURROGATE listings.id (R2). Post-Gate-2 a non-sreality listing
-    has sreality_id NULL, and the old key would render the literal string
-    "None/0001.jpg" — every such image colliding on ONE prefix and overwriting
-    the previous one. Only NEWLY stored images take this scheme; already-stored
-    images keep whatever `images.storage_path` recorded (nothing recomputes a
-    key for an existing image), so the bucket simply holds both schemes.
-    """
-    seq = sequence if sequence is not None else 0
-    return f"{listing_id}/{seq:04d}.jpg"
+# Unique per ROW. Both earlier shapes drew the prefix from ONE numeric range, `{sreality_id}/
+# {seq:04d}` before Gate 2 and `{listings.id}/{seq:04d}` after it, so a new listing whose id
+# equalled an older listing's sreality_id minted the older listing's keys and its upload silently
+# overwrote those photos (152 keys by 2026-10-25, migration 670). `img/` cannot collide with a
+# bare number and `images.id` is the primary key.
+def image_key(listing_id: int, image_id: int) -> str:
+    """Bucket key for a newly stored image; a stored row's key is never recomputed."""
+    return f"img/{listing_id}/{image_id}.jpg"
 
 
-# The phone-size copies `GET /images/{key}?w=` makes on first request (#1765), kept here
-# because the API and the re-master lane (which must delete a copy when it overwrites the
-# photo it was made from) both need the key, and the scraper runtime carries no fastapi.
+# Every listing-photo key the bucket holds: today's `img/{listing_id}/{image_id}` and the two
+# legacy `{id}/{seq:04d}` shapes (negative id = a pre-Gate-2 non-sreality listing). It is the
+# whitelist of the unauthenticated `GET /images/{key}`, so it stays anchored and enumerated,
+# never a prefix: anything else in the bucket (`custom-attachments/`, `thumb/`, `backups/`,
+# `models/`) must never presign. `[0-9]` because `\d` admits non-ASCII digits; `\Z` because `$`
+# also matches before a trailing newline.
+LISTING_PHOTO_KEY_RE = re.compile(r"^(?:img/[0-9]+/[0-9]+|-?[0-9]+/[0-9]{4})\.jpg\Z")
+
+
+# The phone-size copies `GET /images/{key}?w=` (#1765) and an attachment's `?w=` make on
+# first request, kept beside the key shape they derive from (`api/routes/images.py` and
+# `api/attachments.py` read them; the scraper runtime carries no fastapi).
 COPY_WIDTHS: tuple[int, ...] = (1080,)
 
 
 def copy_key(key: str, width: int) -> str:
-    """`thumb/w<width>/<id>/<seq>.webp` for a validated `<id>/<seq>.jpg` photo key."""
-    return f"thumb/w{width}/{key.removesuffix('.jpg')}.webp"
+    """`thumb/w<width>/<key without its extension>.webp`: `img/<listing>/<image>` or a legacy
+    `<id>/<seq>` for a validated listing photo, `custom-attachments/...` for an attachment
+    (served only through its JWT proxy)."""
+    return f"thumb/w{width}/{posixpath.splitext(key)[0]}.webp"
 
 
 # sreality's v1 rebuild serves bare image URLs; the CDN 401s a bare URL and
@@ -210,11 +219,16 @@ def image_dimensions(data: bytes) -> tuple[int, int] | None:
 # (`reality.idnes.cz/file/thumbnail/{id}`, a redirector to the static CDN), whose WAF
 # rate-limits and then blocks a bare client (429 → 403 from 2026-10-05). One session
 # per process keeps the connection pool; the Accept header is what a browser sends
-# for an <img>.
+# for an <img>. The session is scraper.egress's: an image URL is page-supplied (the
+# tenth portal's pages are any site's), so every connection is resolved, checked and
+# pinned to a public address, and every redirect hop is checked again.
 _IMAGE_HEADERS: dict[str, str] = {
     "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
     "Accept-Language": "cs,en;q=0.9",
 }
+# The whole download, redirect hops included: a slow CDN's large original fits, a server
+# drip-feeding bytes does not hold an image worker.
+_IMAGE_DEADLINE_S = 60.0
 _SESSION: requests.Session | None = None
 _SESSION_LOCK = threading.Lock()
 
@@ -224,20 +238,12 @@ def _session() -> requests.Session:
     if _SESSION is None:
         with _SESSION_LOCK:
             if _SESSION is None:
-                from scraper.portal_base import _BASE_HEADERS, client_hints
-
-                session = requests.Session()
-                session.headers.update({
-                    **_BASE_HEADERS, **_IMAGE_HEADERS,
-                    **client_hints(_BASE_HEADERS["User-Agent"]),
-                })
-                _SESSION = session
+                _SESSION = egress.safe_session(_IMAGE_HEADERS)
     return _SESSION
 
 
 def download_image(
-    url: str, timeout: float = 15.0, *, transform_ops: str = IMAGE_TRANSFORM_OPS,
-    proxies: Mapping[str, str] | None = None,
+    url: str, timeout: float = 15.0, *, proxies: Mapping[str, str] | None = None,
 ) -> bytes:
     """Download one image, capped at media.MAX_IMAGE_BYTES.
 
@@ -252,8 +258,9 @@ def download_image(
     redirect's 157 bytes travel through the proxy; the bytes come straight from
     the CDN. A proxied site that serves the bytes itself is read through the proxy.
     """
-    target = with_transform(url, transform_ops)
+    target = with_transform(url)
     if proxies:
+        egress.check_url(target)
         hop = _session().get(
             target, timeout=timeout, allow_redirects=False, proxies=dict(proxies))
         hop.raise_for_status()
@@ -266,21 +273,14 @@ def download_image(
                     f"body exceeds {media.MAX_IMAGE_BYTES} bytes"
                 )
             return bytes(hop.content)
-    with _session().get(target, timeout=timeout, stream=True) as response:
-        response.raise_for_status()
-        declared = response.headers.get("Content-Length")
-        if declared and declared.isdigit() and int(declared) > media.MAX_IMAGE_BYTES:
-            raise NotAnImageError(
-                f"declared size {declared} exceeds {media.MAX_IMAGE_BYTES} bytes"
-            )
-        buf = bytearray()
-        for chunk in response.iter_content(chunk_size=65536):
-            buf += chunk
-            if len(buf) > media.MAX_IMAGE_BYTES:
-                raise NotAnImageError(
-                    f"body exceeds {media.MAX_IMAGE_BYTES} bytes"
-                )
-        return bytes(buf)
+    try:
+        result = egress.fetch(
+            target, session=_session(), max_bytes=media.MAX_IMAGE_BYTES,
+            deadline_s=_IMAGE_DEADLINE_S, read_timeout_s=timeout)
+    except egress.ResponseTooLarge as exc:
+        raise NotAnImageError(str(exc)) from exc
+    egress.raise_for_status(result)
+    return result.body
 
 
 class R2Client:

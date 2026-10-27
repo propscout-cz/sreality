@@ -33,9 +33,9 @@ export interface PinPrecision {
   uncertainty_radius_m: number | null;
 }
 
-/* Whether the pin is drawn SOLID — the claim "exactly here". Only the building
- * rungs make it. An unresolved pin is deliberately NOT solid: a solid dot with no
- * verdict behind it would be the one claim nobody made. */
+/* Whether the pin gets the black outer contour — the claim "exactly here". Only
+ * the building rungs make it. An unresolved pin deliberately does NOT: a contour
+ * with no verdict behind it would be the one claim nobody made. */
 export const isPinExact = (p: PinPrecision): boolean =>
   p.granularity_rank != null && p.granularity_rank >= BUILDING_GRANULARITY_RANK;
 
@@ -114,7 +114,12 @@ export const formatUncertaintyRadius = (m: number): string => {
   return tens < 1_000 ? `±${tens} m` : `±${czDecimal.format(m / 1_000)} km`;
 };
 
-/* The popup's precision line: the words for what the pin's shape and the circle
+/* The lead words of the popup's precision line (ruling P13); pinPrecisionLabel
+ * below is the detail in its tooltip. */
+export const pinPrecisionShort = (p: PinPrecision): string =>
+  p.granularity_rank == null ? 'Přesnost polohy neznámá' : isPinExact(p) ? 'Přesná poloha' : 'Přibližná poloha';
+
+/* The popup's precision detail: the words for what the pin's shape and the circle
  * show. The radius it prints is the TRUE one, never the drawn cap. */
 export const pinPrecisionLabel = (p: PinPrecision): string => {
   const rank = p.granularity_rank;

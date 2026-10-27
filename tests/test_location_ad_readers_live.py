@@ -1,6 +1,7 @@
 """Migration 636, executed (ONE PIN W4): a property is placed at its location ad in browse_projection, properties_public
-and city proximity, and the rollup clears the proximity stamp exactly when the location ad changes. Runs in CI's
-migrations job (`TEST_DATABASE_URL`); every test rolls back.
+and city proximity, and the rollup clears the proximity stamp exactly when the location ad changes; and migration 669:
+browse_projection serves it only once published, properties_public always. Runs in CI's migrations job
+(`TEST_DATABASE_URL`); every test rolls back.
 """
 
 from __future__ import annotations
@@ -9,7 +10,8 @@ from typing import Any
 
 import pytest
 
-from tests._live_property import REQUIRED_DB, _advert, _property, _recompute, cur  # noqa: F401 -- `cur` is the fixture
+from tests._live_property import REQUIRED_DB, _advert, _property, _recompute
+from toolkit.publication import CAP_SQL
 
 pytestmark = REQUIRED_DB
 
@@ -99,6 +101,23 @@ def test_a_property_is_served_by_its_location_ad_when_its_canonical_ad_has_no_pl
     assert _pointers(cur, pid)[:2] == (unplaced, placed)
     cur.execute("SELECT listing_id, display_label FROM browse_projection WHERE property_id = %s", (pid,))
     assert cur.fetchone() == (unplaced, LABEL)
+
+
+def test_browse_serves_a_property_once_settled_or_past_the_cap_and_its_page_always(cur: Any) -> None:
+    """Rule 16 (operator ruling 2026-10-23): the stamp publishes at once, the cap without one; the property page, by
+    id, never waits. now() is the transaction's, so `first_seen_at = now()` is a property first seen this instant."""
+    pid, _, _ = _ring_and_point(cur)
+
+    def served(settled_at: str, first_seen_at: str) -> tuple[bool, bool]:
+        cur.execute(f"UPDATE properties SET settled_at = {settled_at}, first_seen_at = {first_seen_at} WHERE id = %s",
+                    (pid,))
+        cur.execute("SELECT EXISTS (SELECT 1 FROM browse_projection WHERE property_id = %(p)s), "
+                    "EXISTS (SELECT 1 FROM properties_public WHERE property_id = %(p)s)", {"p": pid})
+        return cur.fetchone()
+
+    assert served("NULL", "now()") == (False, True), "a fresh unsettled property is in Browse, or its page is gone"
+    assert served("now()", "now()") == (True, True), "a settled property waits for the cap"
+    assert served("NULL", f"now() - {CAP_SQL} - interval '1 hour'") == (True, True), "the cap did not publish it"
 
 
 def test_city_proximity_is_computed_at_the_location_ads_point(cur: Any) -> None:

@@ -9,15 +9,18 @@
 
 import type { QueryClient } from '@tanstack/react-query';
 
-import type {
-  MergeCarried,
-  MergeResult,
-  SplitChoice,
-  SplitItemKind,
-  SplitLetters,
-  SplitResult,
+import {
+  LETTERS,
+  lettersParam,
+  type MergeCarried,
+  type MergeLettersResult,
+  type MergeResult,
+  type SplitChoice,
+  type SplitItemKind,
+  type Letters,
+  type SplitResult,
 } from '@/lib/api';
-import { UNIT_LETTERS, distinctUnits, unitOf, type UnitMap } from '@/components/autodedup/UnitSplit';
+import { distinctUnits, unitOf, type UnitMap } from '@/components/autodedup/UnitSplit';
 
 import { invalidateBrowseQueries } from '@/lib/browseInvalidation';
 import { ROUTES, withQuery, type RoutePath } from '@/lib/routes';
@@ -35,8 +38,8 @@ export const mergedAdvertsKeys = {
    * user's picks (`choicesParam`). */
   plan: (propertyId: number, letters: string, choices: string) =>
     ['merged-adverts', 'plan', propertyId, letters, choices] as const,
-  /* MS12's count before a merge, over the ticked ids ascending. */
-  mergePreview: (ids: readonly number[]) => ['merged-adverts', 'merge-preview', ids] as const,
+  /* MS12's counts before a merge, over the statement (`lettersParam`). */
+  mergePreview: (statement: string) => ['merged-adverts', 'merge-preview', statement] as const,
 };
 
 /* The property page's own reads, keyed on the property id. */
@@ -80,9 +83,13 @@ let receiptToast: number | null = null;
 
 /* ONE slot for the receipt of a merge or a split: a new one replaces the last,
  * so several in a row never stack; it stays until dismissed or opened. */
-function pushReceipt(text: string, propertyId: number, open: (propertyId: number) => void): void {
+function pushReceipt(
+  text: string,
+  propertyId: number | null,
+  open: (propertyId: number) => void,
+): void {
   if (receiptToast != null) dismissToast(receiptToast);
-  const id = pushToast('ok', text, 0, {
+  const id = pushToast('ok', text, 0, propertyId == null ? undefined : {
     label: `Otevřít #${propertyId}`,
     onClick: () => {
       dismissToast(id);
@@ -92,9 +99,16 @@ function pushReceipt(text: string, propertyId: number, open: (propertyId: number
   receiptToast = id;
 }
 
-/* The merge's receipt with "Otevřít #S". */
-export function pushMergeReceipt(r: MergeResult, open: (propertyId: number) => void): void {
-  pushReceipt(mergeReceiptText(r), r.survivor_id, open);
+/* The statement's receipt: one letter reads as the merge's own, with
+ * "Otevřít #S"; several read one line per letter, each with its survivor, and
+ * no one page to open — the Browse list the operator is on shows them. */
+export function pushMergeReceipt(r: MergeLettersResult, open: (propertyId: number) => void): void {
+  const letters = Object.entries(r.letters).sort(([a], [b]) => a.localeCompare(b));
+  if (letters.length === 1) {
+    pushReceipt(mergeReceiptText(letters[0][1]), letters[0][1].survivor_id, open);
+    return;
+  }
+  pushReceipt(letters.map(([letter, m]) => `${letter}: ${mergeReceiptText(m)}`).join(' '), null, open);
 }
 
 /* An item the way the split's lines and its toast name it. */
@@ -109,6 +123,8 @@ export function splitItemWords(kind: SplitItemKind, label: string | null): strin
       return `kolekce ${named}`.trim();
     case 'tag':
       return `štítek ${named}`.trim();
+    case 'file':
+      return `soubor ${named}`.trim();
     default:
       return 'skrytí z vašeho Browse';
   }
@@ -169,14 +185,9 @@ export function pushSplitReceipt(r: SplitResult, open: (propertyId: number) => v
   pushReceipt(splitReceiptText(r), first?.property_id ?? r.property_id, open);
 }
 
-/* The letters as the preview's query and a page's link, `94020:A,94492:B`. */
-export function lettersParam(letters: SplitLetters): string {
-  return Object.entries(letters)
-    .map(([id, letter]) => [Number(id), letter] as const)
-    .sort((a, b) => a[0] - b[0])
-    .map(([id, letter]) => `${id}:${letter}`)
-    .join(',');
-}
+/* The letters as the preview's query and a page's link: the API client's one
+ * codec (`lettersParam`), re-exported for the split's pages. */
+export { lettersParam };
 
 /* The user's picks as the preview's query and the click's own shape, keys in
  * order ('' with none). */
@@ -187,16 +198,16 @@ export function choicesParam(choices: Record<string, SplitChoice>): string {
 
 /* The property page's split dialog opened on these letters: the one place the
  * review pages send a split (an advert the link leaves out starts at A). */
-export function splitPath(propertyId: number, letters: SplitLetters): RoutePath {
+export function splitPath(propertyId: number, letters: Letters): RoutePath {
   return withQuery(ROUTES.property.build({ propertyId }), { letters: lettersParam(letters) });
 }
 
 /* A link's `?letters=` back as letters; a part that is not `id:A–Z` is dropped. */
-export function parseLetters(raw: string | null): SplitLetters {
-  const out: SplitLetters = {};
+export function parseLetters(raw: string | null): Letters {
+  const out: Letters = {};
   for (const part of (raw ?? '').split(',')) {
     const m = /^(\d{1,15}):([A-Z])$/.exec(part.trim());
-    if (m && UNIT_LETTERS.includes(m[2])) out[Number(m[1])] = m[2];
+    if (m && LETTERS.includes(m[2])) out[Number(m[1])] = m[2];
   }
   return out;
 }
@@ -224,7 +235,7 @@ export interface PlanGroup {
 
 export interface SplitPlan {
   /* Every advert shown with its letter: the statement's `letters`. */
-  letters: SplitLetters;
+  letters: Letters;
   kept: PlanGroup;
   /* Letter order. */
   leaving: PlanGroup[];

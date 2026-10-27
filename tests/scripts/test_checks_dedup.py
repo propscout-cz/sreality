@@ -777,7 +777,7 @@ def _lags(results: list[tuple[_dt.datetime, dict[str, Any]]]) -> list[dict[str, 
 
 def _kinds(ladder: Any) -> list[str]:
     """What the ladder told, in order: onset, reminder or recovery."""
-    return [key.split(":")[2] for _, key, _ in ladder.dispatches]
+    return [t.kind for t in ladder.told]
 
 
 def _committing(k: int, **overrides: Any) -> dict[str, Any]:
@@ -839,7 +839,7 @@ def test_a_watch_opens_nothing_so_the_backlog_a_brake_leaves_reads_not_measured(
     assert lags[-1]["message"].startswith("Not measured: a brake lifted 23 min ago, inside")
     assert [_memory(lag) for lag in lags] == [{}] * 28
     ladder = _told("dedup", 600, results)
-    assert _incidents(ladder, "dedup") == [] and ladder.dispatches == []
+    assert _incidents(ladder, "dedup") == [] and ladder.told == []
 
 
 @pytest.mark.parametrize("last_ok", [4, 5])
@@ -1300,7 +1300,7 @@ def test_the_first_decision_is_read_from_its_own_column_of_the_stores_read() -> 
 
 def test_the_lane_scope_blocks_are_spelled_as_its_walks_key_them() -> None:
     scope = parse_scope(_LANE_SCOPE)
-    walked = {block.key for block in incremental_lane._enter_blocks(scope, {490245: 563510})}
+    walked = {block.key for block in incremental_lane.walk_blocks(scope, {490245: 563510})}
     assert set(scope.label().split()) == walked
 
 

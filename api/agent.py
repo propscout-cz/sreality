@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from api.providers import (
     Message,
-    ProviderError,
     TextBlock,
     ToolResultBlock,
     ToolSchema,
@@ -880,10 +879,6 @@ _FCR_OVERRIDE_FIELDS: tuple[tuple[str, Callable[[Any], Any]], ...] = (
     ("min_usable_area", float),
     ("max_usable_area", float),
     ("min_parking_lots", int),
-    ("building_condition_level_min", int),
-    ("building_condition_level_max", int),
-    ("apartment_condition_level_min", int),
-    ("apartment_condition_level_max", int),
 )
 
 
@@ -938,10 +933,6 @@ def _filters_snapshot(
         "min_usable_area": filters.min_usable_area,
         "max_usable_area": filters.max_usable_area,
         "min_parking_lots": filters.min_parking_lots,
-        "building_condition_level_min": filters.building_condition_level_min,
-        "building_condition_level_max": filters.building_condition_level_max,
-        "apartment_condition_level_min": filters.apartment_condition_level_min,
-        "apartment_condition_level_max": filters.apartment_condition_level_max,
     }
 
 
@@ -1283,8 +1274,8 @@ def _handle_read_floor_plan(
             "estimation has no building_run_id set"
         )
     attachment_id = int(args["attachment_id"])
-    from api.attachments import fetch_attachment
-    row = fetch_attachment(state.conn, attachment_id)
+    from api.attachments import fetch_building_attachment
+    row = fetch_building_attachment(state.conn, attachment_id)
     if row is None:
         raise ValueError(f"attachment_id={attachment_id} not found")
     if row["building_run_id"] != state.building_run_id:
@@ -1766,8 +1757,6 @@ def _initial_user_message(
             "disposition": target.disposition,
             "floor": target.floor,
             "condition": cond.get("condition"),
-            "apartment_condition_level": cond.get("apartment_condition_level"),
-            "building_condition_level": cond.get("building_condition_level"),
         },
         "filters": {
             "radius_m": filters.radius_m,

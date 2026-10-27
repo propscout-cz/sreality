@@ -372,66 +372,16 @@ def test_category_labels():
     assert portal.category_labels({"sale_type": "prodej", "category": "chaty"}) == ("dum", "prodej")
 
 
-# --- cross-slice nomination ('domy' + 'chaty' -> dum) --------------------------
+# --- nomination ('domy' + 'chaty' -> dum) ---------------------------------------
 #
 # Rule #3 since 2026-09-07: a complete walk nominates its unseen rows for a page
-# check, it does not delist. Sibling slices that collapse onto one canonical
-# category still have to be buffered, because the runner calls the seam per
-# slice and one slice's seen set would nominate the sibling's whole population.
+# check, it does not delist. Both dum slices label (dum, prodej), so the runner
+# nominates that one scope once, on its last slice, with their union
+# (tests/scraper/test_portal_runner.py); this adapter keeps no buffer of its own.
 
-def _nominating_portal(monkeypatch):
-    calls: list[dict] = []
-    monkeypatch.setattr(
-        realitymix_main.db, "presence_candidates",
-        lambda _c, src, cm, ct, seen, **kw: calls.append(
-            {"src": src, "cm": cm, "ct": ct, "seen": set(seen), **kw}) or ([], len(seen)),
-    )
-    return RealitymixPortal(default_config("realitymix")), calls
-
-
-def test_nomination_buffers_the_collapsing_group_and_nominates_once_with_union(monkeypatch):
-    portal, calls = _nominating_portal(monkeypatch)
-    # First dum slice buffers only: nominating here would send every chaty row
-    # (same (dum, prodej), never in the domy slice's seen set) to the drain.
-    assert portal.presence_candidates(
-        object(), {"sale_type": "prodej", "category": "domy"}, {"r1", "r2"}) is None
-    assert calls == []
-    # The group's last complete slice nominates with the UNION.
-    out = portal.presence_candidates(
-        object(), {"sale_type": "prodej", "category": "chaty"}, {"c1"})
-    assert out == ([], 3)
-    assert calls == [{"src": "realitymix", "cm": "dum", "ct": "prodej", "seen": {"r1", "r2", "c1"}}]
-
-
-def test_nomination_missing_sibling_slice_nominates_nothing(monkeypatch):
-    # The runner only reaches this seam for COMPLETE slices; if domy walked
-    # incomplete or failed, chaty alone must not nominate (dum, prodej).
-    portal, calls = _nominating_portal(monkeypatch)
-    assert portal.presence_candidates(
-        object(), {"sale_type": "prodej", "category": "chaty"}, {"c1"}) is None
-    assert calls == []
-
-
-def test_an_empty_sibling_slice_still_counts_toward_the_group(monkeypatch):
-    """The runner refuses to nominate from a walk that saw NOTHING (an empty seen set
-    would nominate the whole scope), so an empty slice never reaches
-    presence_candidates. Without note_empty_slice the group's counter would stay one
-    short for ever and NO row of (dum, prodej) would be nominated again — the silent
-    stall rule #3 exists to remove."""
-    portal, calls = _nominating_portal(monkeypatch)
-    portal.note_empty_slice({"sale_type": "prodej", "category": "chaty"})
-    out = portal.presence_candidates(
-        object(), {"sale_type": "prodej", "category": "domy"}, {"r1", "r2"})
-    assert out == ([], 2)
-    assert calls == [{"src": "realitymix", "cm": "dum", "ct": "prodej",
-                      "seen": {"r1", "r2"}}]
-
-
-def test_nomination_single_slice_group_nominates_immediately(monkeypatch):
-    portal, calls = _nominating_portal(monkeypatch)
-    assert portal.presence_candidates(
-        object(), {"sale_type": "prodej", "category": "byty"}, {"b1"}) == ([], 1)
-    assert calls == [{"src": "realitymix", "cm": "byt", "ct": "prodej", "seen": {"b1"}}]
+def test_the_runner_groups_the_slices_not_the_adapter():
+    assert not hasattr(RealitymixPortal, "presence_candidates")
+    assert not hasattr(RealitymixPortal, "note_empty_slice")
 
 
 def test_the_old_sweep_seam_is_gone():
@@ -439,16 +389,3 @@ def test_the_old_sweep_seam_is_gone():
     calls mark_inactive and the seam must not linger to tempt anyone."""
     assert not hasattr(RealitymixPortal, "mark_inactive")
     assert not hasattr(RealitymixPortal, "mark_gone")
-
-
-
-
-def test_nomination_groups_are_sale_type_scoped(monkeypatch):
-    # domy/prodej + chaty/pronajem are DIFFERENT (cm, ct) groups; neither
-    # completes its own group, so neither nominates.
-    portal, calls = _nominating_portal(monkeypatch)
-    assert portal.presence_candidates(
-        object(), {"sale_type": "prodej", "category": "domy"}, {"d1"}) is None
-    assert portal.presence_candidates(
-        object(), {"sale_type": "pronajem", "category": "chaty"}, {"c1"}) is None
-    assert calls == []

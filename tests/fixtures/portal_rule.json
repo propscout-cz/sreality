@@ -1,17 +1,17 @@
 {
  "_why": [
-  "THE portal rule (MS19, migration 590; two-sided since migration 597), one table read by both",
-  "languages. A property matches portal set P when any of its ads is on P (all_sources), active",
-  "or not; the status switch is judged on those ads: active = an active ad on P (active_sources),",
-  "inactive = ads on P and none of them active; several portals = any of them; no portal = the",
-  "property's own is_active. AND it has no ad on any EXCLUDED portal: any ad, live or ended",
-  "(all_sources), or only live ones when excluded_active_only (active_sources); independent of",
-  "the status switch and of a broker. tests/test_portal_rule.py runs `cases` through",
+  "THE portal rule (MS19, migration 590; two-sided since 597; status since 657), one table read by",
+  "both languages. The status switch (any / active / inactive) is the PROPERTY's own is_active, the",
+  "status every surface draws. A portal set P asks for an ad on P in that same status: active = an",
+  "active ad on P (active_sources), otherwise any ad on P (all_sources: an ended property has only",
+  "ended ads); several portals = any of them. AND it has no ad on any EXCLUDED portal: any ad, live",
+  "or ended (all_sources), or only live ones when excluded_active_only (active_sources); independent",
+  "of the status switch and of a broker. tests/test_portal_rule.py runs `cases` through",
   "public.portal_status_matches, both aggregate RPCs and, for the `any` rows, the Watchdog's",
-  "compiled clauses; queries.test.ts runs them through applyPortalRule. `broker_cases` are the",
-  "include side over ONE broker's ads only (portal and broker together = one ad): the DB lane",
-  "seeds the ads and calls the broker lookup, the SPA aggregates the broker's ads and runs the",
-  "same rendering. An exclusion stays on the property under a broker, so it has no broker case."
+  "compiled clauses; queries.test.ts runs them through applyPortalRule. `broker_cases` put the",
+  "portal side on ONE broker's ads (portal and broker together = one ad) while the status stays the",
+  "property's: the DB lane seeds the ads, runs the broker lookup and the property's status. An",
+  "exclusion stays on the property under a broker, so it has no broker case."
  ],
  "cases": [
   {"name": "no portal, any: an ended property matches", "is_active": false, "all_sources": ["idnes"], "active_sources": [], "portals": [], "status": "any", "excluded": [], "excluded_active_only": false, "expected": true},
@@ -23,7 +23,8 @@
   {"name": "one portal, any: no ad there", "is_active": true, "all_sources": ["sreality"], "active_sources": ["sreality"], "portals": ["idnes"], "status": "any", "excluded": [], "excluded_active_only": false, "expected": false},
   {"name": "one portal, active: its ad there ended, though the property is live elsewhere", "is_active": true, "all_sources": ["idnes", "sreality"], "active_sources": ["sreality"], "portals": ["idnes"], "status": "active", "excluded": [], "excluded_active_only": false, "expected": false},
   {"name": "one portal, active: an active ad there", "is_active": true, "all_sources": ["bazos", "idnes"], "active_sources": ["bazos", "idnes"], "portals": ["idnes"], "status": "active", "excluded": [], "excluded_active_only": false, "expected": true},
-  {"name": "one portal, inactive: ads there, none active, the property live elsewhere", "is_active": true, "all_sources": ["idnes", "sreality"], "active_sources": ["sreality"], "portals": ["idnes"], "status": "inactive", "excluded": [], "excluded_active_only": false, "expected": true},
+  {"name": "one portal, inactive: its ad there ended, but the property is live elsewhere", "is_active": true, "all_sources": ["idnes", "sreality"], "active_sources": ["sreality"], "portals": ["idnes"], "status": "inactive", "excluded": [], "excluded_active_only": false, "expected": false},
+  {"name": "one portal, inactive: an ended property that was there", "is_active": false, "all_sources": ["idnes", "sreality"], "active_sources": [], "portals": ["idnes"], "status": "inactive", "excluded": [], "excluded_active_only": false, "expected": true},
   {"name": "one portal, inactive: an active ad there", "is_active": true, "all_sources": ["bazos", "idnes"], "active_sources": ["bazos", "idnes"], "portals": ["idnes"], "status": "inactive", "excluded": [], "excluded_active_only": false, "expected": false},
   {"name": "one portal, inactive: no ad there at all", "is_active": false, "all_sources": ["sreality"], "active_sources": [], "portals": ["idnes"], "status": "inactive", "excluded": [], "excluded_active_only": false, "expected": false},
   {"name": "several portals, any: an ad on either", "is_active": true, "all_sources": ["remax"], "active_sources": ["remax"], "portals": ["idnes", "remax"], "status": "any", "excluded": [], "excluded_active_only": false, "expected": true},
@@ -50,7 +51,7 @@
   {"name": "one portal + exclude, any: on idnes and on sreality", "is_active": true, "all_sources": ["idnes", "sreality"], "active_sources": ["idnes", "sreality"], "portals": ["idnes"], "status": "any", "excluded": ["sreality"], "excluded_active_only": false, "expected": false},
   {"name": "one portal + exclude, active: live on idnes, ended on sreality, any ad counts", "is_active": true, "all_sources": ["idnes", "sreality"], "active_sources": ["idnes"], "portals": ["idnes"], "status": "active", "excluded": ["sreality"], "excluded_active_only": false, "expected": false},
   {"name": "one portal + exclude, active, live ads only: live on idnes, ended on sreality", "is_active": true, "all_sources": ["idnes", "sreality"], "active_sources": ["idnes"], "portals": ["idnes"], "status": "active", "excluded": ["sreality"], "excluded_active_only": true, "expected": true},
-  {"name": "one portal + exclude, inactive: ended on idnes, never on sreality", "is_active": true, "all_sources": ["bazos", "idnes"], "active_sources": ["bazos"], "portals": ["idnes"], "status": "inactive", "excluded": ["sreality"], "excluded_active_only": false, "expected": true},
+  {"name": "one portal + exclude, inactive: ended on idnes, never on sreality", "is_active": false, "all_sources": ["bazos", "idnes"], "active_sources": [], "portals": ["idnes"], "status": "inactive", "excluded": ["sreality"], "excluded_active_only": false, "expected": true},
   {"name": "one portal + exclude, inactive: ended on idnes, live on sreality", "is_active": true, "all_sources": ["idnes", "sreality"], "active_sources": ["sreality"], "portals": ["idnes"], "status": "inactive", "excluded": ["sreality"], "excluded_active_only": false, "expected": false},
   {"name": "a portal both included and excluded matches nothing", "is_active": true, "all_sources": ["idnes"], "active_sources": ["idnes"], "portals": ["idnes"], "status": "any", "excluded": ["idnes"], "excluded_active_only": false, "expected": false},
   {"name": "several portals + exclude, any: on remax, never on sreality", "is_active": true, "all_sources": ["remax"], "active_sources": ["remax"], "portals": ["idnes", "remax"], "status": "any", "excluded": ["sreality"], "excluded_active_only": false, "expected": true},
@@ -64,10 +65,13 @@
   {"name": "B on sreality, C on idnes: B + idnes is no ad of B's", "ads": [{"broker": "B", "source": "sreality", "is_active": true}, {"broker": "C", "source": "idnes", "is_active": true}], "broker": "B", "portals": ["idnes"], "status": "any", "expected": false},
   {"name": "B on sreality, C on idnes: C + idnes is C's own ad", "ads": [{"broker": "B", "source": "sreality", "is_active": true}, {"broker": "C", "source": "idnes", "is_active": true}], "broker": "C", "portals": ["idnes"], "status": "any", "expected": true},
   {"name": "B's idnes ad ended, its sreality ad live: B + idnes + active is out", "ads": [{"broker": "B", "source": "sreality", "is_active": true}, {"broker": "B", "source": "idnes", "is_active": false}], "broker": "B", "portals": ["idnes"], "status": "active", "expected": false},
-  {"name": "B's idnes ad ended, its sreality ad live: B + idnes + inactive matches", "ads": [{"broker": "B", "source": "sreality", "is_active": true}, {"broker": "B", "source": "idnes", "is_active": false}], "broker": "B", "portals": ["idnes"], "status": "inactive", "expected": true},
+  {"name": "B's idnes ad ended, its sreality ad live: B + idnes + inactive is out, the property is live", "ads": [{"broker": "B", "source": "sreality", "is_active": true}, {"broker": "B", "source": "idnes", "is_active": false}], "broker": "B", "portals": ["idnes"], "status": "inactive", "expected": false},
   {"name": "B's idnes ad ended, its sreality ad live: B + active matches", "ads": [{"broker": "B", "source": "sreality", "is_active": true}, {"broker": "B", "source": "idnes", "is_active": false}], "broker": "B", "portals": [], "status": "active", "expected": true},
   {"name": "C's live idnes ad does not make B's ended one active", "ads": [{"broker": "B", "source": "idnes", "is_active": false}, {"broker": "C", "source": "idnes", "is_active": true}], "broker": "B", "portals": ["idnes"], "status": "active", "expected": false},
-  {"name": "C's live idnes ad: B + idnes + inactive still matches B's ended ad", "ads": [{"broker": "B", "source": "idnes", "is_active": false}, {"broker": "C", "source": "idnes", "is_active": true}], "broker": "B", "portals": ["idnes"], "status": "inactive", "expected": true},
-  {"name": "only C's ad is live: B + inactive (no portal) matches", "ads": [{"broker": "B", "source": "idnes", "is_active": false}, {"broker": "C", "source": "idnes", "is_active": true}], "broker": "B", "portals": [], "status": "inactive", "expected": true}
+  {"name": "C's live idnes ad keeps the property live: B + idnes + inactive is out", "ads": [{"broker": "B", "source": "idnes", "is_active": false}, {"broker": "C", "source": "idnes", "is_active": true}], "broker": "B", "portals": ["idnes"], "status": "inactive", "expected": false},
+  {"name": "only C's ad is live: B + inactive (no portal) is out, the property is live", "ads": [{"broker": "B", "source": "idnes", "is_active": false}, {"broker": "C", "source": "idnes", "is_active": true}], "broker": "B", "portals": [], "status": "inactive", "expected": false},
+  {"name": "every ad ended: B + idnes + inactive matches B's ended ad", "ads": [{"broker": "B", "source": "idnes", "is_active": false}, {"broker": "C", "source": "sreality", "is_active": false}], "broker": "B", "portals": ["idnes"], "status": "inactive", "expected": true},
+  {"name": "every ad ended: C + idnes + inactive is out, C has no ad there", "ads": [{"broker": "B", "source": "idnes", "is_active": false}, {"broker": "C", "source": "sreality", "is_active": false}], "broker": "C", "portals": ["idnes"], "status": "inactive", "expected": false},
+  {"name": "B's live idnes ad: B + idnes + active matches", "ads": [{"broker": "B", "source": "idnes", "is_active": true}, {"broker": "C", "source": "sreality", "is_active": false}], "broker": "B", "portals": ["idnes"], "status": "active", "expected": true}
  ]
 }

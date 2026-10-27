@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -26,10 +27,10 @@ import type {
 import { ApiError } from '@/lib/api';
 import { runSurfaceUrl } from '@/lib/runLinks';
 import { buildRerunPayload, canRerun } from '@/lib/rerun';
-import { ControlGroup } from '@/components/controls';
+import { ControlGroup, SegmentedBar } from '@/components/controls';
 import { RunStatusChip } from '@/components/estimation/RunPanel';
-import { useNewEstimationModal } from '@/components/NewEstimationModal';
-import { listingPath } from '@/lib/listingUrl';
+import { advertPath } from '@/lib/listingUrl';
+import { ROUTES } from '@/lib/routes';
 import { Th } from '@/components/table';
 
 interface EstimationPage {
@@ -129,30 +130,20 @@ export default function EstimationList() {
 /* -------------------------------------------------------------------------- */
 
 function Header() {
-  const { open } = useNewEstimationModal();
   return (
     <header className="flex items-end justify-between gap-6">
       <div>
-        <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-          Estimations
-        </p>
         <h1
-          className="mt-1.5 text-[2.1rem] leading-tight"
+          className="text-[2.1rem] leading-tight"
           style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
         >
           Past runs
         </h1>
         <p className="mt-2 text-sm text-[var(--color-ink-2)]">
-          Every estimation — from this UI, the API, or ClickUp — lands here.
+          Every estimation — from this UI, the API, or ClickUp — lands here. A new
+          one starts from its property&rsquo;s page.
         </p>
       </div>
-      <button
-        type="button"
-        onClick={() => open()}
-        className="shrink-0 inline-flex items-center gap-2 px-4 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
-      >
-        <span>+ New estimation</span>
-      </button>
     </header>
   );
 }
@@ -172,67 +163,30 @@ function FilterBar({
   onSource: (v: string | null) => void;
   onStatus: (v: string | null) => void;
 }) {
+  const id = useId();
+  const bars = [
+    { label: 'Source', value: source, options: SOURCES, onChange: onSource },
+    { label: 'Status', value: status, options: STATUSES, onChange: onStatus },
+  ];
   return (
     <ControlGroup title="Filter runs">
       <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
-        <SegmentedFilter label="Source" value={source} options={SOURCES} onChange={onSource} />
-        <SegmentedFilter label="Status" value={status} options={STATUSES} onChange={onStatus} />
-      </div>
-    </ControlGroup>
-  );
-}
-
-function SegmentedFilter<T extends string>({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: T | null;
-  options: ReadonlyArray<T>;
-  onChange: (v: T | null) => void;
-}) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)]">
-        {label}
-      </span>
-      <div className="inline-flex items-center gap-0.5 p-0.5 rounded-[var(--radius-sm)] bg-[var(--color-paper-2)] border border-[var(--color-rule)]">
-        <Pill active={value == null} onClick={() => onChange(null)}>all</Pill>
-        {options.map((opt) => (
-          <Pill key={opt} active={value === opt} onClick={() => onChange(opt)}>
-            {opt}
-          </Pill>
+        {bars.map((bar) => (
+          <div key={bar.label} className="flex items-center gap-2">
+            <span id={`${id}-${bar.label}`} className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)]">
+              {bar.label}
+            </span>
+            <SegmentedBar<string | null>
+              hug
+              aria={{ 'aria-labelledby': `${id}-${bar.label}` }}
+              options={[{ value: null, label: 'all' }, ...bar.options.map((o) => ({ value: o, label: o }))]}
+              value={bar.value}
+              onChange={bar.onChange}
+            />
+          </div>
         ))}
       </div>
-    </div>
-  );
-}
-
-function Pill({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={[
-        'px-2.5 py-0.5 text-[0.7rem] tracking-wide rounded-[var(--radius-xs)] transition-colors',
-        active
-          ? 'bg-[var(--color-copper)] text-white'
-          : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
-      ].join(' ')}
-    >
-      {children}
-    </button>
+    </ControlGroup>
   );
 }
 
@@ -396,7 +350,7 @@ function FeedbackCell({ run }: { run: EstimationRun }) {
   return (
     <Link
       to={runSurfaceUrl(run, '#feedback')}
-      className="inline-flex items-center px-2 py-0.5 text-[0.7rem] tracking-wide rounded-[var(--radius-xs)] border border-[var(--color-copper)]/30 bg-[var(--color-copper-soft)] text-[var(--color-copper)] hover:bg-[var(--color-copper)] hover:text-white transition-colors"
+      className="inline-flex items-center px-2 py-0.5 text-[0.7rem] tracking-wide rounded-[var(--radius-xs)] border border-[var(--color-copper)]/30 bg-[var(--color-copper-soft)] text-[var(--color-copper)] hover:bg-[var(--color-copper)] hover:text-[var(--color-on-copper)] transition-colors"
     >
       view
     </Link>
@@ -406,11 +360,12 @@ function FeedbackCell({ run }: { run: EstimationRun }) {
 function ListingLinkCell({ run }: { run: EstimationRun }) {
   // In-app listing page first — it's the primary surface for the run.
   // The external portal URL stays reachable as a secondary ↗.
-  if (run.input_sreality_id != null) {
+  const listing = advertPath({ source: run.subject_source, source_id_native: run.subject_source_id_native });
+  if (listing != null) {
     return (
       <span className="inline-flex items-center gap-1.5">
         <Link
-          to={listingPath(run.input_sreality_id)}
+          to={listing}
           className="text-[var(--color-copper)] hover:underline underline-offset-2"
         >
           Listing
@@ -526,7 +481,6 @@ function RerunInlineButton({ run }: { run: EstimationRun }) {
 /* -------------------------------------------------------------------------- */
 
 function EmptyState({ filtered }: { filtered: boolean }) {
-  const { open } = useNewEstimationModal();
   return (
     <div className="px-6 py-16 text-center border border-dashed border-[var(--color-rule)] rounded-[var(--radius-md)]">
       <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
@@ -537,13 +491,12 @@ function EmptyState({ filtered }: { filtered: boolean }) {
           ? 'No runs match these filters.'
           : 'Past runs will appear here once any user, the API, or ClickUp triggers one.'}
       </p>
-      <button
-        type="button"
-        onClick={() => open()}
+      <Link
+        to={ROUTES.browse.build()}
         className="mt-4 inline-block text-sm text-[var(--color-copper)] hover:underline underline-offset-2"
       >
-        Start an estimation →
-      </button>
+        Find a property to estimate →
+      </Link>
     </div>
   );
 }

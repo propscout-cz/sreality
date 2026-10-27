@@ -6,7 +6,7 @@ import { listingKindLabel } from '@/lib/enums';
 import { imageSrc, type ImageRef } from '@/lib/imageUrl';
 import { useMapOverlays } from '@/lib/mapOverlayDraw';
 import { useMapOverlayRegistry, useRememberedLayers } from '@/lib/mapOverlays';
-import { useMapFeatureHover } from '@/lib/useMapFeatureHover';
+import { haloFeatures, useMapFeatureHover } from '@/lib/useMapFeatureHover';
 import MapImagePreview from '../MapImagePreview';
 import MapOverlayControls from '../MapOverlayControls';
 
@@ -282,12 +282,7 @@ export default function ComparablesMap({
     const tableId =
       hoveredId != null && hoveredId !== pinHover?.listing_id ? hoveredId : null;
     const c = tableId != null ? comparables.find((x) => x.listing_id === tableId) : undefined;
-    src.setData({
-      type: 'FeatureCollection',
-      features: c
-        ? [{ type: 'Feature', geometry: { type: 'Point', coordinates: [c.lng, c.lat] }, properties: {} }]
-        : [],
-    });
+    src.setData(haloFeatures(c ? [{ lat: c.lat, lng: c.lng }] : []));
   }, [hoveredId, pinHover, comparables, ready]);
 
   /* Glue the preview card to the pin: project lng/lat → screen pixels, and keep

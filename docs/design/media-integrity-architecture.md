@@ -256,7 +256,11 @@ non-fix — set it in the cron command or at role level.
 "zero image rows AND past a short floor ⇒ genuinely photo-less, release". Falsified: listing
 1050654's photos landed **67 seconds** after our fetch and it still holds zero rows six days later.
 The 5-minute floor is exactly the window the race lives in. The one component that notices zero
-image rows treats it as expected and bypasses.
+image rows treats it as expected and bypasses. *(The gate is superseded 2026-10-23 by the
+publication rule, migrations 668/669, and deleted — but the finding is not closed: the rule's photo
+arm keeps the zero-rows release, now with no floor at all (a property whose ads have no image rows
+counts as having no photos), so the race is bounded only by the rule's engine-read condition (the
+engine must have read every ad before the property settles) and the 6 h cap.)*
 
 **I. `scripts/refresh_stale_image_urls.py`** — two doc errors: (i) *"Lowest priority so the refresh
 never delays genuine new-listing detail fetches"* — repairs are enqueued at the **same**
@@ -546,7 +550,9 @@ row → the SPA nav bell, plus per-source detail on `/health`. **Note:**
 in-app-bell-only — no email, no Telegram. That is an operator decision (§6 Q3), not a gap.
 Re-affirmed 2026-10-18 by the Health dashboard sprint's ruling Q1 (bell only for now), with email and
 Telegram made ready to switch on in its wave 7 (2026-10-19; the steps: the scraper-ops skill's
-`references/pipeline-verification.md` § Delivery readiness).
+`references/pipeline-verification.md` § Delivery readiness). *Superseded 2026-10-21 by ruling R2b
+([notifications-push/PROGRAM.md](./notifications-push/PROGRAM.md)): system alerts write no dispatch and
+reach no bell; they live on Health, the canary e-mail is the external alarm, and the readiness is deleted.*
 
 ### 3.3 Repair — one generic re-extraction path, not an image script
 
@@ -801,7 +807,8 @@ The FP-prone ones (`media_complete`, `media_photoless`) still start at `warn`.
 *Re-affirmed 2026-10-18, not superseded: the Health dashboard sprint's ruling Q1 keeps the bell only
 for now (`docs/design/health-dashboard.md` § 11), and its wave 7 (2026-10-19) made email and Telegram
 ready to switch on in three steps (the scraper-ops skill's `references/pipeline-verification.md` §
-Delivery readiness).*
+Delivery readiness).* *Superseded 2026-10-21 by ruling R2b: no bell for system alerts; Health + the
+canary e-mail only ([notifications-push/PROGRAM.md](./notifications-push/PROGRAM.md) § 6).*
 
 **Q4 — foreign inventory** → **segment metrics AND flag in the UI.** Split every media/quality
 metric by `obec_id IS NULL`, and surface a visible marker + Browse filter so foreign stock can be
@@ -812,3 +819,11 @@ scope correction in the PR 2 entry above.
 
 **Q6 — R2 key namespace** → **fold into PR 3.** Namespace new keys `l/{listing_id}/{seq}.jpg`;
 forward-only, no backfill.
+
+> **SHIPPED 2026-10-25 as `img/{listing_id}/{images.id}.jpg`** (closed #959 rebuilt on the operator's
+> ruling 1a). It is forward-only and has no backfill, as decided, but the second segment is the row id, not
+> `{seq}`. A key on `{seq}` stays POSITIONAL: every NULL-sequence row of a listing maps to one
+> `.../0000.jpg`, and `sequence` is not a stable identity for a photo (§ 3.3). Migration 670 re-queues the
+> rows whose object another row overwrote (152 keys by 2026-10-25), plus the owners on active listings
+> uploaded after the phone-size copies shipped (2026-10-12), whose copy may hold the other photo; rationale
+> in `docs/architecture.md` rule 6.

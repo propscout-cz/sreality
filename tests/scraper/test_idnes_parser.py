@@ -220,7 +220,8 @@ def test_parse_detail_full():
     assert listing.garage is False
     assert listing.parking_lots is None
     assert listing.description.startswith("Nabízíme")
-    assert listing.raw["idnes_ref"] == "IDNES-943453"
+    assert listing.ad_reference == "IDNES-943453"
+    assert "idnes_ref" not in listing.raw
     assert len(listing.raw["image_urls"]) == 2
     assert listing.raw["image_urls"][0].endswith("img1.jpg")  # ?gt=r stripped
     assert listing.raw["coords"]["source"] == "page"
@@ -626,6 +627,27 @@ def test_the_top_of_the_floor_select_is_absence_and_the_page_keeps_saying_it():
     assert listing.raw["params"]["podlaží"] == "20. patro a vyšší"
 
 
+def test_a_foreign_price_note_is_the_stated_price_and_a_kc_page_states_none() -> None:
+    """idnes_c1 (Malinska, Krk) states "Cena v EUR 298 000 €" in its price note and the
+    headline in Kč at the day's rate (7 229 480 Kč); the EUR figure is what the ad asks. The
+    archived Kč page's note ("vč. provize a právního servisu") is no price at all."""
+    from pathlib import Path
+
+    fixtures = Path(__file__).parent.parent / "fixtures"
+    foreign = parse_detail(
+        (fixtures / "location_w2a_refetch" / "idnes_c1.html").read_text(encoding="utf-8"),
+        source_url="https://reality.idnes.cz/detail/prodej/byt/malinska/c1/",
+        category_main="byt", category_type="prodej")
+    assert (foreign.price_native, foreign.price_czk) == ("298000 EUR", 7_229_480)
+    assert foreign.raw["price_native"] == "298000 EUR"
+
+    czech = parse_detail(
+        (fixtures / "portal_html" / "idnes_detail.html").read_text(encoding="utf-8"),
+        source_url="https://reality.idnes.cz/detail/prodej/dum/x/6a71888887e5da33ca081ad8/",
+        category_main="dum", category_type="prodej")
+    assert (czech.price_native, czech.price_czk) == (None, 7_900_000)
+
+
 def test_a_room_rental_under_a_five_room_disposition_keeps_the_room_s_size() -> None:
     """idnes 18749058 / 19004720 (production, 2026-09-27): the ceskereality Praha rooms,
     listed here as 5+kk at 11-12 m². The Užitná plocha cell is the room's real size and
@@ -642,3 +664,48 @@ def test_a_room_rental_under_a_five_room_disposition_keeps_the_room_s_size() -> 
         html.replace("<dt>Užitná plocha</dt><dd>12 m<sup>2</sup></dd>", ""),
         source_url=url, category_main="byt", category_type="pronajem")
     assert (title_only.area_m2, title_only.area_basis) == (12.0, "unknown")
+
+
+def test_a_commercial_plot_that_repeats_the_uzitna_row_is_not_a_plot() -> None:
+    """General ruling 3, on two live pages read 2026-09-30 (scrubbed): idnes 19082281, a
+    cellar in a Plzeň block of flats whose `<dl>` prints "Plocha pozemku 10 m²" beside
+    "Užitná plocha 10 m²" (its prose says 18,1 m²), and 19087892, a Halenkov tenement
+    with 980 / 980 and a 348 m² built-up area. Three unrelated agencies on the four live
+    komerční pages, so it is the idnes form, not one feed. The page's statement stays in
+    raw_json; the column reads absence."""
+    from pathlib import Path
+
+    from scraper.area import parse_area_text
+
+    fixtures = Path(__file__).resolve().parents[1] / "fixtures" / "portal_html"
+    for name, url, figure in (
+        ("idnes_komercni_echo_cellar.html",
+         "https://reality.idnes.cz/detail/prodej/komercni-nemovitost/plzen-jablonskeho/"
+         "6abbb9dbb5589f1c7e09c5e2/", 10.0),
+        ("idnes_komercni_echo_tenement.html",
+         "https://reality.idnes.cz/detail/prodej/komercni-nemovitost/halenkov/"
+         "6abc9e6e5372f99c050b9547/", 980.0),
+    ):
+        listing = parse_detail((fixtures / name).read_text(encoding="utf-8"),
+                               source_url=url, category_main="komercni",
+                               category_type="prodej")
+        assert (listing.usable_area, listing.area_m2, listing.area_basis) == (
+            figure, figure, "usable"), name
+        assert parse_area_text(listing.raw["params"]["plocha pozemku"]) == figure, name
+        assert listing.estate_area is None, name
+
+
+def test_a_house_whose_plot_is_its_footprint_keeps_it() -> None:
+    """The control: `portal_html/idnes_detail.html`, a Tanvald terraced house — Užitná
+    210, Zastavěná 80, Plocha pozemku 80. A house's rule is unchanged (the operator's
+    2026-10-01 answer), and an 80 m² parcel under a 210 m² house is real."""
+    from pathlib import Path
+
+    html = (Path(__file__).resolve().parents[1] / "fixtures" / "portal_html"
+            / "idnes_detail.html").read_text(encoding="utf-8")
+    listing = parse_detail(
+        html, source_url="https://reality.idnes.cz/detail/prodej/dum/tanvald/6ab1deadbeefdeadbeef0001/",
+        category_main="dum", category_type="prodej",
+    )
+    assert (listing.usable_area, listing.area_m2, listing.area_basis) == (210.0, 210.0, "usable")
+    assert listing.estate_area == 80.0

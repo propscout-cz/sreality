@@ -526,6 +526,10 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
     scale/correctness, the route-layer tenancy move, and the public-product delivery envelope
     (per-account recipients, opt-in, suppression, unsubscribe, bounce webhook, quotas) — all
     buildable-dark; the hard gates are operator Resend-provisioning + GDPR/product sign-off.
+    *Superseded 2026-10-21 by the notifications push program (`docs/design/notifications-push/PROGRAM.md`):
+    its W1 deleted the outbox, every `channel_sends` writer, both transports, the bounce webhook and
+    unsubscribe (R5); delivery is rebuilt as push to the event account's own iPhones (W4), email later
+    to each account's own sign-in address; Telegram is out.*
     - **Detection scale + correctness — SHIPPED, migration 365** (authored 363, renumbered
       after a same-day collision with `363_browse_projection_source_id_native.sql`)**.** (1) `properties_published_at_idx`
       — a plain btree over the published rows the matcher's new-listing cursor actually scans
@@ -572,7 +576,8 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
       (sticky renewal), skips the passes when another replica holds it, releases on graceful
       shutdown, and **fails open** (runs unguarded) if the lease can't be evaluated. Co-hosted
       in the API (Phase 1 A8), not moved to the dark worker. Test `test_matcher_lease_cas_acquires_and_yields`.
-    - **Delivery safety envelope (suppression + bounce webhook) — SHIPPED DARK, migration 367.**
+    - **Delivery safety envelope (suppression + bounce webhook) — SHIPPED DARK, migration 367; DELETED
+      2026-10-21 (notifications push W1, R5; the tables drop in W6).**
       The delivery mechanism (outbox + `channel_sends` + Resend/Telegram transports) was built
       Sprint N but had no public-safety envelope. Added: (1) `notification_suppression(channel,
       address)` — GLOBAL, deletion-surviving address suppression (mirrors `broker_outreach_suppression`);
@@ -585,15 +590,16 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
       All internal objects RLS-on + default-ACL revoked. Tests: `test_resend_webhook` (Svix HMAC
       accept/tamper/stale/wrong-secret/missing), `test_send_skips_suppressed_recipient`. **Go-live is
       operator-gated**: a Resend account + verified sending domain + `RESEND_WEBHOOK_SECRET`.
-    - **One-click unsubscribe (RFC 8058) — SHIPPED DARK.** `api/unsubscribe.py` HMAC-signs
+    - **One-click unsubscribe (RFC 8058) — SHIPPED DARK; DELETED 2026-10-21 (notifications push W1, R5).** `api/unsubscribe.py` HMAC-signs
       `channel:address` with `NOTIFICATION_UNSUB_SECRET` (stdlib, no dependency); the Resend
       transport adds `List-Unsubscribe` + `List-Unsubscribe-Post` headers pointing at
       `{API_PUBLIC_URL}/u/{token}`; the unauthenticated `GET`/`POST /u/{token}` route (the HMAC
       token IS the auth, renders for logged-out recipients) inserts a `source='unsubscribe'`
       suppression on the one-click POST. Both env vars optional → the header is omitted and no
       token verifies when unconfigured (dark-safe). Tests `test_unsubscribe`.
-    - **Owed (found 2026-10-01) — the Watchdog "Run estimation" kickoff forks the estimation
-      ledger (rule #12).** `POST /notifications/dispatches/{id}/estimate`
+    - **~~Owed~~ DONE by deletion 2026-10-21 (notifications push W1a, ruling R10) — the Watchdog "Run
+      estimation" kickoff forked the estimation ledger (rule #12).** The route, its executor and the
+      feed column are gone; the property page owns estimations. As found: `POST /notifications/dispatches/{id}/estimate`
       (`api/routes/notifications.py` `post_kickoff_estimate`) never calls `create_estimation_run`: it
       hand-INSERTs the row (`api/notifications.py` `_insert_pending_run`, `_insert_failed_run`) and
       runs its own executor (`run_pending_estimation`). Compared with the shared path, it skips the
@@ -607,10 +613,14 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
       input (`CreateEstimationIn` takes only `url`/`spec`/`sreality_id`, the same gap that keeps
       Browse estimates sreality-only, `docs/architecture.md` § rule 12) — then delete
       `_insert_pending_run` / `_insert_failed_run` / `run_pending_estimation`. Deterministic runs
-      are unmetered, so the fold changes no quota. The second fork, `scripts/smoke_agent.py`'s
-      hand INSERT (`source='api'`, `mode='agent'`, one production row per manual
-      `smoke_agent.yml` run), is owed the same fold or an explicit manual-smoke sanction.
+      are unmetered, so the fold changes no quota. The second fork, the manual smoke agent's hand INSERT
+      (one production row per run), was deleted with its workflow on 2026-10-25 (Actions exit
+      W0): no path forks the ledger.
     - **Remaining Wave 3 — operator / product / legal-gated (NOT started, surfaced as decisions):**
+      *Superseded 2026-10-21 by the notifications push program: (a) is moot (Resend deleted, R5); (b) becomes
+      routing by the event's account to its registered iPhones (W4), with no settings table; (c) and (e) stay
+      open for push (W4's one-share-a-day cap, R11, is the first quota); (d) is not planned (no cadence
+      settings, program § 7).*
       (a) **Resend go-live** — operator provisions a Resend account + verified sending domain +
       DNS (SPF/DKIM/DMARC) + `RESEND_WEBHOOK_SECRET`/`NOTIFICATION_UNSUB_SECRET`/`API_PUBLIC_URL`,
       then registers the webhook. (b) **Per-account recipients + double-opt-in**
@@ -649,16 +659,20 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
     290's policy scopes the reads, the reorder and UPDATE/DELETE by id; `POST` stamps the
     account from `require_account_id`; migration 595 backfills ownerless rows to the operator's
     account and sets `account_id` NOT NULL; the SPA's preset calls send `jwt: true`. Behaviour:
-    `tests/api/test_filter_presets.py`. **Still owed, same shape:**
-    `/buildings*` (`api/main.py` `get_buildings` → `list_building_runs`, no account filter;
-    `building_runs` tenant RLS since migration 291) and `POST /notifications/dispatches/{id}/estimate`
-    (`api/routes/notifications.py` `post_kickoff_estimate` returns any account's dispatch row and
-    starts a run for it). The AUTHENTICATION half of the remaining sweep closed 2026-10-13:
+    `tests/api/test_filter_presets.py`. **DONE 2026-10-26 — the `/buildings*` ROUTES** (agent platform M0, #2059):
+    every building route takes `require_admin`, so the API's account-blind reads and the paid extraction are the
+    operator's alone (the SPA's building page sits behind `RequireAdmin`); `/buildings` joined the admin prefixes
+    of `tests/api/test_admin_route_coverage.py`. **Still owed — the same data through the database:** a building
+    run is written on the service role, so it lands on the SYSTEM account, and 291's SYSTEM read arm serves every
+    `building_runs` row (and 292's `building_run_attachments`) to any signed-in caller through PostgREST; its child
+    estimation runs are SYSTEM too, listed by `GET /estimations` (`account_scope` adds SYSTEM) with each unit's
+    `input_spec`. `POST /notifications/dispatches/{id}/estimate` was deleted 2026-10-21 (notifications
+    push W1a), as was `POST /notifications/matcher/run` (any user ran the platform-wide producers). Also owed (audit F17): the share routes' 422 "No account
+    uses this email" reveals which emails hold accounts. The AUTHENTICATION half of the remaining sweep closed 2026-10-13:
     `require_token` accepts a verified JWT (`api/dependencies.py` `_bearer`, the one reader of
     `Authorization`), so the SPA sends its session JWT everywhere and `VITE_API_TOKEN` is deleted
     from the bundle (same day); W4 (same day) deleted the static key itself — the API accepts only a
-    Supabase JWT, a machine signs in as its own Supabase user. The account-SCOPING of the two routes
-    above stays owed.
+    Supabase JWT, a machine signs in as its own Supabase user.
 
 **Housekeeping done 2026-07-20:** operator enabled Supabase Auth's leaked-password-protection
 toggle (Authentication → Sign In / Providers → Email → "Prevent use of leaked passwords").

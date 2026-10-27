@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import string
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, NamedTuple, Sequence
@@ -33,6 +32,8 @@ from autodedup import ui_sql as usql
 from toolkit import property_carriers as carriers
 from toolkit.property_carriers import Route
 from toolkit.property_identity import (
+    LETTERS,
+    BadLetters,
     CategoryClash,
     Landings,
     MergeError,
@@ -41,9 +42,10 @@ from toolkit.property_identity import (
     detach_listings,
     first_clash,
     letter_landings,
+    letter_tokens,
     listing_places,
     lock_properties,
-    merge_property_set,
+    merge_letters,
     negative_sets,
     record_rulings,
     resolve_active_property_id,
@@ -52,7 +54,6 @@ from toolkit.property_identity import (
 Pair = tuple[int, int]
 Slot = tuple[str, int]  # where an ad lands before the joins: ('kept' | 'origin' | 'new', id)
 
-UNIT_LETTERS = string.ascii_uppercase
 MAX_ADVERTS = 100
 REASON_MAX = 500
 # The lane's per-group bounds (E911): a split never waits long behind the reconcile.
@@ -62,7 +63,7 @@ _BUSY = (pg_errors.LockNotAvailable, pg_errors.DeadlockDetected, pg_errors.Query
 STALE = "Nemovitost se mezitím změnila; nic se nezapsalo."
 _KINDS = {"property_notes": "note", "property_pipeline": "pipeline",
           "collection_properties": "collection", "property_tags": "tag",
-          "property_dismissals": "dismissal"}
+          "property_attachments": "file", "property_dismissals": "dismissal"}
 _EARLIEST = datetime.min.replace(tzinfo=timezone.utc)
 
 
@@ -135,7 +136,7 @@ def _statement_letters(letters: Mapping[Any, Any]) -> dict[int, str]:
         lid = int(ad)
         if lid in named:
             raise _invalid("Inzerát je uveden dvakrát.", [lid])
-        if not isinstance(letter, str) or len(letter) != 1 or letter not in UNIT_LETTERS:
+        if not isinstance(letter, str) or len(letter) != 1 or letter not in LETTERS:
             raise _invalid("Písmeno musí být A–Z.", [lid])
         named[lid] = letter
     if len(set(named.values())) < 2:
@@ -154,15 +155,13 @@ def parse_choices(raw: str) -> dict[str, tuple[str, tuple[str, ...]]]:
 
 
 def parse_letters(raw: str) -> dict[int, str]:
-    """`94020:A,140903:A,94492:B` (the preview's query and the pages' links) as letters."""
-    out: dict[int, str] = {}
-    for token in (t.strip() for t in raw.split(",")):
-        ad, _, letter = token.partition(":")
-        if not (ad.isascii() and ad.isdigit()):
-            raise _invalid("Písmena se zadávají jako inzerát:písmeno, například 94020:A.")
-        if int(ad) in out:
-            raise _invalid("Inzerát je uveden dvakrát.", [int(ad)])
-        out[int(ad)] = letter
+    """The preview's query and the pages' links (`letter_tokens`) as the split's statement."""
+    try:
+        out = letter_tokens(raw)
+    except BadLetters as exc:
+        raise _invalid("Inzerát je uveden dvakrát." if exc.ids
+                       else "Písmena se zadávají jako inzerát:písmeno, například 94020:A.",
+                       exc.ids) from exc
     return _statement_letters(out)
 
 
@@ -425,24 +424,21 @@ def _chosen(conn: psycopg.Connection, plan: _Plan,
 
 
 def _join(conn: psycopg.Connection, plan: _Plan, decided_by: str) -> dict[str, dict[str, Any]]:
-    """Each letter that landed on two or more properties becomes one, by the one merge (MS12
-    takes back the "different" rulings between them); rule 15's refusal propagates."""
+    """Each letter that landed on two or more properties becomes one: the landings as a
+    statement over properties, through the one `merge_letters` (MS12 takes back the "different"
+    rulings between them); rule 15's refusal propagates."""
     places = listing_places(conn, sorted(plan.movers))
-    joined: dict[str, dict[str, Any]] = {}
-    for letter in sorted(plan.joins):
-        props = sorted({int(places[ad]) for ad, x in plan.letters.items()
-                        if x == letter and places.get(ad) is not None})
-        if len(props) < 2:
-            continue
-        try:
-            joined[letter] = merge_property_set(
-                conn, props, source="operator", reason="operator_split", decided_by=decided_by,
-            )["data"]
-        except CategoryClash:
-            raise
-        except MergeError as exc:
-            raise SplitRefused(409, "stale", STALE, props) from exc
-    return joined
+    statement: dict[int, str] = {}
+    for ad, letter in plan.letters.items():
+        if letter in plan.joins and places.get(ad) is not None:
+            if statement.setdefault(int(places[ad]), letter) != letter:
+                raise SplitRefused(409, "stale", STALE, [int(places[ad])])
+    try:
+        return merge_letters(conn, statement, decided_by=decided_by, reason="operator_split")
+    except CategoryClash:
+        raise
+    except MergeError as exc:
+        raise SplitRefused(409, "stale", STALE, sorted(statement)) from exc
 
 
 def split_property(

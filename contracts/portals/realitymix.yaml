@@ -1,9 +1,20 @@
 # realitymix — the slim location contract (rule 25 / W1-c): one entry per claim type.
 # Read from the stored detail body: the canonical URL's obec slug (the town), `#print-map` /
 # `#map`'s GPS pin and `data-address` line, the ld+json breadcrumb chain, and `og:title`.
+#
+# v7 (operator ruling 2026-10-25): the STREET is read off the visible heading
+# (`p.advert-detail-heading__address`, on every page since mid-August), the map's
+# `data-address` only where a page has no heading. The map block is absent on most pages
+# that carry no pin (20 of 22 sampled), so v6 read no street for 12,900 active ads and the
+# resolver placed 12,806 of them on their town's centre point. Both paths drop the
+# word-ending test (`address_part_street:loose`): since W18 a street is kept only when it
+# binds in RÚIAN in the ad's town, and a part of the town named in that slot binds as the
+# part (resolver v5.7) — which is what the test stood guard against ('Stráň' on 8662169).
+# The 'estimated' marker now fires on an EMPTY `data-gps-*` too, the map script's own test,
+# and Prague's quarter is read one crumb higher, where its chain puts it.
 
 portal: realitymix
-contract_version: 6
+contract_version: 7
 
 persistence:
   # What this portal's body carries that changes without the listing changing —
@@ -102,10 +113,8 @@ extractions:
     locator_kind: html_selector
     extraction_method: portal_declared_quality
     page_kind: detail
-    locator: {reader: html_marker,
-              css: "div#print-map:not([data-gps-lat]):not([data-gps-lon]),
-                    div#map:not([data-gps-lat]):not([data-gps-lon])",
-              value_label: estimated}
+    locator: {reader: html_marker, css: "div#print-map, div#map",
+              blank_attrs: [data-gps-lat, data-gps-lon], value_label: estimated}
     claim_type: precision_declaration
     blur_evidence: declared
     licence_class: portal
@@ -113,8 +122,9 @@ extractions:
       granularity_max: obec
       position_source_max: derived_geocode
       blurred_labels: [estimated]
-    notes: "The map JS's own predicate: no `data-gps-*` means the browser geocodes the
-      address, so the page declares a blurred position."
+    notes: "The map JS's own predicate (`if (lat && lon)`) on the node `rm.det.gps` reads:
+      an absent or EMPTY `data-gps-*` means the browser geocodes the address, so the page
+      declares a blurred position. A page with no map block declares nothing."
 
   - id: rm.det.breadcrumb_kraj
     locator_kind: jsonld
@@ -149,22 +159,29 @@ extractions:
               type: BreadcrumbList, level: quarter,
               anchor_slugs: [praha, hlavni-mesto-praha, stredocesky, jihocesky, plzensky,
                              karlovarsky, ustecky, liberecky, kralovehradecky, pardubicky,
-                             vysocina, jihomoravsky, olomoucky, zlinsky, moravskoslezsky]}
+                             vysocina, jihomoravsky, olomoucky, zlinsky, moravskoslezsky],
+              levels_by_anchor: {praha: {quarter: 2}, hlavni-mesto-praha: {quarter: 2}}}
     claim_type: cast_obce_name
     licence_class: portal
-    notes: "Three levels under the kraj anchor ('Stráň' on 8662169); a chain that stops at
-      the obec claims nothing, which is what `data-form-address` could not do."
+    notes: "Three levels under the kraj anchor ('Stráň' on 8662169); two in Prague, whose
+      one crumb is kraj and obec ('Praha -> Praha 5 -> Smíchov'). A chain that stops at the
+      obec claims nothing, which is what `data-form-address` could not do."
 
   - id: rm.det.map_street
     locator_kind: html_selector
     extraction_method: html_selector_parse
     page_kind: detail
-    locator: {reader: html_attr, css: "div#print-map, div#map", attr: "data-address"}
-    transform: ["address_part_street"]
+    locator:
+      reader: html_text
+      css: "p.advert-detail-heading__address"
+      fallback:
+        - {reader: html_attr, css: "div#print-map, div#map", attr: "data-address"}
+    transform: ["address_part_street:loose"]
     claim_type: street_name
     licence_class: portal
-    notes: "Segment 0, only when it survives the shared don't-fabricate trio — 8662169's
-      'Stráň' is a část obce and a one-segment line claims nothing."
+    notes: "Segment 0 of the heading ('Na Korunce, Praha-Běchovice, Běchovice'), else of the
+      map's `data-address`; only when an obec segment follows it and it is not the town
+      itself. A one-segment or town-only line claims nothing."
 
   - id: rm.det.og_house_number_cp
     locator_kind: html_selector

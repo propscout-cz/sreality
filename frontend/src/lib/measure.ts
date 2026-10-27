@@ -166,3 +166,11 @@ export type AreaKind = 'usable' | 'plot';
 
 export const areaKindOf = (categoryMain: string | null | undefined): AreaKind =>
   categoryMain === 'pozemek' ? 'plot' : 'usable';
+
+/* The lot a card names after the headline area: THE plot measure (`plot_area_m2`,
+ * migration 534, server-resolved), except on a pozemek, whose headline area
+ * already IS the plot — saying it twice would read as two parcels. */
+export const plotBesideArea = (r: {
+  category_main: string | null;
+  plot_area_m2?: number | null;
+}): number | null => (areaKindOf(r.category_main) === 'plot' ? null : (r.plot_area_m2 ?? null));

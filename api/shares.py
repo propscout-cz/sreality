@@ -1,6 +1,6 @@
-"""Sharing, both kinds (migrations 610 + 641; docs/design/pipeline-sharing.md §3.4): grant, notify, revoke, label."""
+"""Sharing, all three kinds (migrations 610, 641, 647; docs/design/pipeline-sharing.md §3.4): grant, notify, revoke, label."""
 
-# A grant is written on the SERVICE ROLE (browser roles hold no INSERT on either share table, nor on
+# A grant is written on the SERVICE ROLE (browser roles hold no INSERT on any share table, nor on
 # notification_dispatches), only after the route's own-account tenant gate passed (sharing never
 # delegates). A revoke or a leave is a tenant DELETE that the party policy scopes.
 
@@ -14,19 +14,24 @@ import psycopg
 from fastapi import HTTPException
 
 from api import tenant_pool
+from api.notifications import ON_EVENT_CONFLICT
 from api.schemas import ShareMode, ShareSide
 
 
 @dataclass(frozen=True)
 class CollectionShare:
     collection_id: int
-    name: str
 
 
 @dataclass(frozen=True)
 class PipelineShare:
     owner: uuid.UUID
     mode: ShareMode
+
+
+@dataclass(frozen=True)
+class DashboardShare:
+    dashboard_id: uuid.UUID
 
 
 def party_label(col: str) -> str:
@@ -43,9 +48,13 @@ def delegated_stamp(relation: str, row_key: str, changed_at: str) -> str:
     )
 
 
-# account_id is the OWNER, stamped by trigger from the collection; RETURNING it names the sender.
+# account_id is the OWNER, stamped by trigger from the collection or dashboard; RETURNING it names the sender.
 _INSERT_COLLECTION_SHARE_SQL = (
     "INSERT INTO collection_shares (collection_id, recipient_account_id) VALUES (%s, %s) "
+    "ON CONFLICT DO NOTHING RETURNING account_id"
+)
+_INSERT_DASHBOARD_SHARE_SQL = (
+    "INSERT INTO stats_dashboard_shares (dashboard_id, recipient_account_id) VALUES (%s, %s) "
     "ON CONFLICT DO NOTHING RETURNING account_id"
 )
 
@@ -57,17 +66,28 @@ _UPSERT_PIPELINE_SHARE_SQL = (
     "RETURNING (s.xmax = 0) AS inserted"
 )
 
-# ONE notification per dedupe key ever: no time in it, so a revoke + re-share loop cannot refill
-# the recipient's inbox with text the sender chose (a collection name).
+# ONE notification per identity ever (EVENT_IDENTITY, migration 653): no time in it, so a revoke +
+# re-share loop cannot refill the recipient's inbox. No text either (F17, R11): the bell names the
+# sharer from the actor through share_party_emails() and the shared thing by its live name, so the
+# address drops out once no share joins the two, unless the sharer stands in the recipient's own
+# delegated-edit ledger (that arm keeps an actor's address for the owner after a revoke, migration
+# 641; api/notifications._DISPATCH_SELECT). The kind names
+# what opens (migration 652), the actor is the sharer (the owner: sharing never delegates) and
+# event_ref tells two shares of one kind apart (the dashboard id, the pipeline mode; NULL for a
+# collection, whose id is its own column).
 _INSERT_SHARE_DISPATCH_SQL = (
     "INSERT INTO notification_dispatches "
-    "  (source_kind, collection_id, change_kind, message, account_id, dedupe_key) "
-    "VALUES ('share', %s::bigint, 'shared', account_email(%s::uuid) || %s::text, %s::uuid, %s::text) "
-    "ON CONFLICT DO NOTHING"
+    "  (source_kind, collection_id, change_kind, account_id, actor_account_id, event_ref) "
+    "VALUES ('share', %(collection_id)s::bigint, %(change_kind)s::text, %(recipient)s::uuid, "
+    "        %(actor)s::uuid, %(event_ref)s::text) "
+    f"{ON_EVENT_CONFLICT}"
 )
 
 _DELETE_COLLECTION_SHARE_SQL = (
     "DELETE FROM collection_shares WHERE collection_id = %s AND recipient_account_id = %s"
+)
+_DELETE_DASHBOARD_SHARE_SQL = (
+    "DELETE FROM stats_dashboard_shares WHERE dashboard_id = %s AND recipient_account_id = %s"
 )
 
 # The path names the counterparty; the side says which of the caller's two lists it sits in, so a
@@ -93,9 +113,6 @@ _LIST_PIPELINE_SHARES_SQL = (
     "ORDER BY q.created_at, q.party"
 )
 
-_PIPELINE_MODE_LABEL: dict[str, str] = {"read": "view only", "edit": "edit"}
-
-
 def resolve_recipient(identity_conn: "psycopg.Connection", email: str) -> uuid.UUID:
     """The confirmed account behind an email, or 422 (the same answer for unknown and unconfirmed)."""
     recipient = tenant_pool.account_for_email(identity_conn, email)
@@ -104,10 +121,19 @@ def resolve_recipient(identity_conn: "psycopg.Connection", email: str) -> uuid.U
     return recipient
 
 
+def owner_gate(conn: "psycopg.Connection", gate_sql: str, key: Any, noun: str) -> None:
+    """The owner's tenant gate (an UPDATE): a row back, or a 404 before the service role opens."""
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(gate_sql, (key,))
+        gate = cur.fetchone()
+    if gate is None:
+        raise HTTPException(404, f"{noun} not found")
+
+
 def grant(
     open_identity_conn: Callable[[], ContextManager["psycopg.Connection"]],
     email: str,
-    share: CollectionShare | PipelineShare,
+    share: CollectionShare | PipelineShare | DashboardShare,
 ) -> None:
     """Write the grant and, when new (or widened to edit), its one notification; one service-role transaction."""
     with open_identity_conn() as identity_conn:
@@ -118,6 +144,8 @@ def grant(
             try:
                 if isinstance(share, CollectionShare):
                     cur.execute(_INSERT_COLLECTION_SHARE_SQL, (share.collection_id, recipient))
+                elif isinstance(share, DashboardShare):
+                    cur.execute(_INSERT_DASHBOARD_SHARE_SQL, (share.dashboard_id, recipient))
                 else:
                     cur.execute(_UPSERT_PIPELINE_SHARE_SQL, (share.owner, recipient, share.mode))
             except psycopg.errors.CheckViolation:
@@ -126,16 +154,23 @@ def grant(
             if row is None:
                 return
             if isinstance(share, CollectionShare):
-                cur.execute(_INSERT_SHARE_DISPATCH_SQL, (
-                    share.collection_id, row[0], f' shared the collection "{share.name}" with you',
-                    recipient, f"share:collection:{share.collection_id}:{recipient}",
-                ))
+                cur.execute(_INSERT_SHARE_DISPATCH_SQL, _share_dispatch(
+                    "shared_collection", share.collection_id, row[0], recipient, None))
+            elif isinstance(share, DashboardShare):
+                cur.execute(_INSERT_SHARE_DISPATCH_SQL, _share_dispatch(
+                    "shared_dashboard", None, row[0], recipient, str(share.dashboard_id)))
             elif row[0] or share.mode == "edit":
-                cur.execute(_INSERT_SHARE_DISPATCH_SQL, (
-                    None, share.owner,
-                    f" shared their pipeline with you ({_PIPELINE_MODE_LABEL[share.mode]})",
-                    recipient, f"share:pipeline:{share.owner}:{recipient}:{share.mode}",
-                ))
+                cur.execute(_INSERT_SHARE_DISPATCH_SQL, _share_dispatch(
+                    "shared_pipeline", None, share.owner, recipient, share.mode))
+
+
+def _share_dispatch(
+    change_kind: str, collection_id: int | None, actor: uuid.UUID, recipient: uuid.UUID,
+    event_ref: str | None,
+) -> dict[str, Any]:
+    """The share notification's row: `actor` (the sharer) is stored, never a word of text."""
+    return {"change_kind": change_kind, "collection_id": collection_id, "actor": actor,
+            "recipient": recipient, "event_ref": event_ref}
 
 
 def revoke_collection(
@@ -143,6 +178,13 @@ def revoke_collection(
 ) -> dict[str, Any]:
     """Revoke (owner) or leave (recipient): the party policy's USING decides which; 0 rows -> 404."""
     return _delete(conn, _DELETE_COLLECTION_SHARE_SQL, (collection_id, recipient))
+
+
+def revoke_dashboard(
+    conn: "psycopg.Connection", dashboard_id: str, recipient: str,
+) -> dict[str, Any]:
+    """Revoke (owner) or leave (recipient): the party policy's USING decides which; 0 rows -> 404."""
+    return _delete(conn, _DELETE_DASHBOARD_SHARE_SQL, (dashboard_id, recipient))
 
 
 def revoke_pipeline(

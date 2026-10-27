@@ -97,7 +97,6 @@ def from_body(path: Path, native: str) -> dict:
     scraper selects it before it writes `raw_json` (`extract_property`, id-matched)."""
     blob = dict(extract_property(path.read_text(encoding="utf-8", errors="replace"),
                                  native))
-    point = blob.get("point") or {}
     return claims(blob, native)
 
 

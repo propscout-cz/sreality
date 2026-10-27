@@ -22,21 +22,25 @@
  * keyboard or a screen reader reaches the card, and nothing else.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 
+import { useEffect, type ReactNode } from 'react';
 import ListingCards from './ListingCards';
-import ListingTable from './ListingTable';
+import type { CohortKind } from '@/lib/filters';
 import { CardHydrationProvider } from '@/lib/hydration';
+import { useMergeMode, type MergeMode } from '@/lib/useMergeMode';
+import { PHONE_SHELL_QUERY } from '@/lib/phoneShell';
 import { expectNoNestedInteractive } from '@/test/a11y';
 import * as api from '@/lib/api';
 import * as brokers from '@/lib/brokers';
 import * as queries from '@/lib/queries';
 import { fmtShortDate } from '@/lib/format';
-import type { CardRow, TableRow } from '@/lib/queries';
+import type { CardRow } from '@/lib/queries';
+import type { HoverTarget } from '@/lib/hoverSync';
 import type { ImagePublic, ListingEstimate } from '@/lib/types';
 import type { CoverTag } from '@/lib/imageTags';
 
@@ -46,6 +50,7 @@ vi.mock('@/lib/queries', async (importOriginal) => {
     ...actual,
     fetchImagesForListingIds: vi.fn(async () => new Map()),
     fetchListingCovers: vi.fn(async () => new Map()),
+    fetchListingFloors: vi.fn(async () => new Map()),
     fetchPropertyCollectionMemberSet: vi.fn(async () => new Map()),
     /* The card's pipeline funnel reads these two shared queries. Unmocked they
        reach the network, so every role assertion below would depend on it. */
@@ -97,7 +102,7 @@ const ROW = {
    with a non-breaking space, and the anchors make this an equality test rather
    than a substring one. */
 const TITLE_RE = /^Byt na prodej · 2\+kk · 62\sm²$/;
-const SELECT_RE = /^Vybrat ke sloučení: Byt na prodej · 2\+kk · 62\sm²$/;
+const NO_LETTER_RE = /^Bez písmene: Byt na prodej · 2\+kk · 62\sm²$/;
 
 const ESTIMATE: ListingEstimate = {
   sreality_id: 900,
@@ -134,48 +139,78 @@ function LocationProbe() {
 }
 const locationNow = () => screen.getByTestId('loc').textContent;
 
+/* Merge mode as the grid reads it: the card's letter and the verbs a test
+   watches; the hook's own keys are proved through `renderMergeGrid` below. */
+function mergeMode(opts: { letter?: string | null; stamp?: (propertyId: number) => void }): MergeMode {
+  return {
+    active: true,
+    letters: opts.letter ? { 42: opts.letter } : {},
+    activeLetter: 'A',
+    groups: [],
+    complete: false,
+    enter: () => {},
+    exit: () => {},
+    stamp: opts.stamp ?? (() => {}),
+    mark: () => {},
+    clear: () => {},
+    setActiveLetter: () => {},
+    onKeyDown: () => {},
+  };
+}
+
 function renderGrid(
   opts: {
-    merge?: { selected: boolean };
-    onToggleSelect?: (propertyId: number) => void;
+    merge?: { letter?: string | null; stamp?: (propertyId: number) => void } | MergeMode;
     estimates?: Record<number, ListingEstimate>;
     row?: CardRow;
+    rows?: CardRow[];
+    onHover?: (targets: ReadonlyArray<HoverTarget> | null) => void;
     orderPortal?: string | null;
+    cohortKind?: CohortKind | null;
     coverTag?: CoverTag;
     onCoverTag?: (next: CoverTag) => void;
+    onEnterMerge?: () => void;
+    /* Browse opts the storey in; the grid tests that predate it do not. */
+    floors?: boolean;
+    hasNextPage?: boolean;
+    scroll?: 'column' | 'page';
+    empty?: ReactNode;
   } = {},
 ) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
+  const merge = opts.merge == null ? null : 'active' in opts.merge ? opts.merge : mergeMode(opts.merge);
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
         <LocationProbe />
-        <CardHydrationProvider listingIds={[111]} renders={{ photos: 50 }}>
+        <CardHydrationProvider listingIds={[111]} renders={{ photos: 50, floors: opts.floors }}>
           <ListingCards
-            rows={[opts.row ?? ROW]}
+            rows={opts.rows ?? [opts.row ?? ROW]}
             total={1}
             sort={{ field: 'last_seen_at', dir: 'desc' } as never}
             orderPortal={opts.orderPortal}
+            cohortKind={opts.cohortKind}
             imageLarge={false}
             coverTag={opts.coverTag ?? 'default'}
             onCoverTag={opts.onCoverTag ?? (() => {})}
             isLoading={false}
             isFetchingNextPage={false}
-            hasNextPage={false}
+            hasNextPage={opts.hasNextPage ?? false}
             onReachEnd={() => {}}
+            scroll={opts.scroll}
+            empty={opts.empty}
             restorationKey="test"
             hasFilters={false}
             hasBounds={false}
             hoveredIds={new Set()}
-            onHover={() => {}}
+            onHover={opts.onHover ?? (() => {})}
             onSort={() => {}}
             onClearFilters={() => {}}
             onClearBounds={() => {}}
-            mergeMode={opts.merge != null}
-            selectedPropertyIds={new Set(opts.merge?.selected ? [42] : [])}
-            onToggleSelect={opts.onToggleSelect ?? (() => {})}
+            merge={merge}
+            onEnterMerge={opts.onEnterMerge}
             estimates={opts.estimates}
             estimatingIds={new Set()}
             onEstimate={() => {}}
@@ -195,6 +230,8 @@ const withPhotos = () =>
 beforeEach(() => {
   vi.mocked(queries.fetchImagesForListingIds).mockReset();
   vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map());
+  vi.mocked(queries.fetchListingFloors).mockReset();
+  vi.mocked(queries.fetchListingFloors).mockResolvedValue(new Map());
   vi.mocked(queries.fetchPipelineMembers).mockResolvedValue(new Map());
   vi.mocked(queries.fetchPipelineStages).mockResolvedValue([]);
   vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map());
@@ -284,6 +321,121 @@ describe('<ListingCards> photo hydration', () => {
     expect(await screen.findByText(/Sadová/)).toBeInTheDocument();
     expect(queries.fetchListingCovers).not.toHaveBeenCalled();
     expect(brokers.fetchListingBrokersByIds).not.toHaveBeenCalled();
+    expect(queries.fetchListingFloors).not.toHaveBeenCalled();
+  });
+});
+
+/* The storey is a small tag beside the place, never part of the headline. The
+   floor is not on browse_list, so it arrives through the hydration layer like the
+   photos: the card paints without it and the tag appears when its read lands. */
+describe('<ListingCards> the storey tag', () => {
+  const storeyOf = (floor: number | null, total_floors: number | null) =>
+    vi.mocked(queries.fetchListingFloors).mockResolvedValue(
+      new Map([[111, { floor, total_floors }]]),
+    );
+
+  it('tags an apartment with its floor and the building\'s podlaží, the title untouched', async () => {
+    storeyOf(2, 5);
+
+    renderGrid({ floors: true });
+
+    const tag = await screen.findByText('2. patro z 5');
+    expect(tag).toHaveAttribute('title', '2. patro z 5 podlaží');
+    expect(screen.getByRole('link', { name: TITLE_RE })).toBeInTheDocument();
+  });
+
+  it('paints the card without the tag while the floor read is still in flight', async () => {
+    vi.mocked(queries.fetchListingFloors).mockReturnValue(
+      new Promise(() => {}) as ReturnType<typeof queries.fetchListingFloors>,
+    );
+
+    renderGrid({ floors: true });
+
+    expect(await screen.findByRole('link', { name: TITLE_RE })).toBeInTheDocument();
+    expect(screen.queryByText(/patro|přízemí/)).toBeNull();
+  });
+
+  it('reads the cohort once, keyed on the surrogate listing id', async () => {
+    storeyOf(2, 5);
+
+    renderGrid({ floors: true });
+
+    await screen.findByText('2. patro z 5');
+    expect(queries.fetchListingFloors).toHaveBeenCalledTimes(1);
+    expect(queries.fetchListingFloors).toHaveBeenCalledWith([111], expect.anything());
+  });
+
+  it('keeps the tag in the place row, still showing when the ad has no place', async () => {
+    storeyOf(2, 5);
+
+    renderGrid({ floors: true, row: { ...ROW, display_label: null } as CardRow });
+
+    expect(await screen.findByText('2. patro z 5')).toBeInTheDocument();
+  });
+
+  it('drops the count when the building\'s podlaží is unknown', async () => {
+    storeyOf(3, null);
+
+    renderGrid({ floors: true });
+
+    const tag = await screen.findByText('3. patro');
+    expect(tag).toHaveAttribute('title', '3. patro');
+  });
+
+  it('says nothing for an ad with no floor, rather than a gap or a zero', async () => {
+    storeyOf(null, 5);
+
+    renderGrid({ floors: true });
+
+    await waitFor(() => expect(queries.fetchListingFloors).toHaveBeenCalled());
+    expect(await screen.findByRole('link', { name: TITLE_RE })).toBeInTheDocument();
+    expect(screen.queryByText(/patro|přízemí|\bz 5\b/)).toBeNull();
+  });
+
+  it('keeps a house\'s ground floor off the card — "přízemí" on a house is noise', async () => {
+    storeyOf(0, 2);
+
+    renderGrid({ floors: true, row: { ...ROW, category_main: 'dum' } as CardRow });
+
+    await waitFor(() => expect(queries.fetchListingFloors).toHaveBeenCalled());
+    expect(await screen.findByRole('link', { name: /^Dům na prodej/ })).toBeInTheDocument();
+    expect(screen.queryByText(/přízemí/)).toBeNull();
+  });
+
+  it('tags a commercial unit\'s ground floor', async () => {
+    storeyOf(0, 3);
+
+    renderGrid({ floors: true, row: { ...ROW, category_main: 'komercni', disposition: null } as CardRow });
+
+    expect(await screen.findByText('přízemí z 3')).toBeInTheDocument();
+  });
+});
+
+/* The ask is the card's headline figure: sage semibold while the ad is live (the
+   operator's 2026-10-21 ruling), ink-2 medium once delisted so a dead ask never
+   reads as live. jsdom resolves no theme, so the token classes are the contract. */
+describe('<ListingCards> the price', () => {
+  const priceEl = () => screen.getByText(/5\s*400\s*000/).closest('p') as HTMLElement;
+
+  it('sets a live ask in sage semibold', async () => {
+    renderGrid();
+
+    expect(await screen.findByText(/Sadová/)).toBeInTheDocument();
+    expect(priceEl()).toHaveClass('text-[var(--color-sage)]', 'font-semibold');
+  });
+
+  it('keeps a delisted ask ink-2 and medium, never green', async () => {
+    renderGrid({ row: { ...ROW, is_active: false } as CardRow });
+
+    expect(await screen.findByText(/Sadová/)).toBeInTheDocument();
+    expect(priceEl()).toHaveClass('text-[var(--color-ink-2)]', 'font-medium');
+    expect(priceEl()).not.toHaveClass('text-[var(--color-sage)]', 'font-semibold');
+  });
+
+  it('leaves "Cena na vyžádání" in its own muted ink, not green', async () => {
+    renderGrid({ row: { ...ROW, price_czk: null } as CardRow });
+
+    expect(await screen.findByText('Cena na vyžádání')).toHaveClass('text-[var(--color-ink-3)]');
   });
 });
 
@@ -330,6 +482,47 @@ describe('<ListingCards> the cover photo', () => {
     });
     expect(onCoverTag).toHaveBeenCalledWith('garage');
     expect(screen.getByRole('option', { name: 'Fasáda' })).toBeInTheDocument();
+  });
+});
+
+/* Ruling P10 (2026-10-27): merge mode is entered from a quiet "Sloučit…" beside
+ * Cover and Sort above the cards; the bar it opens says the rest. */
+describe('<ListingCards> the way into merge mode', () => {
+  const enterButton = () => screen.queryByRole('button', { name: 'Sloučit…' });
+
+  it('sits after the Sort select in the header and enters the mode', async () => {
+    const onEnterMerge = vi.fn();
+    renderGrid({ onEnterMerge });
+    const sort = await screen.findByRole('combobox', { name: /Sort/ });
+    const button = enterButton()!;
+    expect(sort.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(button.parentElement).toBe(sort.closest('label')!.parentElement);
+    expect(button.className).not.toContain('copper');
+    fireEvent.click(button);
+    expect(onEnterMerge).toHaveBeenCalledTimes(1);
+  });
+
+  it('is absent where the surface has no merge mode, and while the mode is on', async () => {
+    renderGrid();
+    await screen.findByRole('combobox', { name: /Sort/ });
+    expect(enterButton()).toBeNull();
+    renderGrid({ onEnterMerge: vi.fn(), merge: {} });
+    expect(enterButton()).toBeNull();
+  });
+});
+
+describe('<ListingCards> hover-sync', () => {
+  /* The card hands the map its own point, so the locator halo lands on the
+   * property even while the map shows it only inside a count mark. */
+  it('reports the hovered card with its point, and nothing on leave', async () => {
+    const onHover = vi.fn();
+    renderGrid({ row: { ...ROW, lat: 50.08, lng: 14.43 } as CardRow, onHover });
+    const price = await screen.findByText(/5.400.000/);
+    fireEvent.mouseEnter(price);
+    /* The row itself is the target: its key and its point. */
+    expect(onHover).toHaveBeenLastCalledWith([expect.objectContaining({ listing_id: 111, lat: 50.08, lng: 14.43 })]);
+    fireEvent.mouseLeave(price);
+    expect(onHover).toHaveBeenLastCalledWith(null);
   });
 });
 
@@ -418,14 +611,47 @@ describe('<ListingCards> the card is not a link — its TITLE is', () => {
     expect(locationNow()).toBe('/');
   });
 
-  it('navigates to the property page on a plain click of the title link', async () => {
+  /* Browse is a list worked through card by card, so on the desktop a card
+     opens its property in a NEW TAB and Browse stays where it was. The router
+     leaves a target="_blank" click to the browser, so this tab never moves. */
+  it('opens the property page in a new tab, leaving Browse in place', async () => {
     renderGrid();
 
-    fireEvent.click(await screen.findByRole('link', { name: /^Byt na prodej/ }));
-
+    const link = await screen.findByRole('link', { name: /^Byt na prodej/ });
     // The card's own advert rides along; the page ignores it when it is the
     // canonical one and opens its row when the card is one portal's advert.
-    expect(locationNow()).toBe('/property/42?advert=111');
+    expect(link).toHaveAttribute('href', '/property/42?advert=111');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener');
+
+    fireEvent.click(link);
+    expect(locationNow()).toBe('/');
+  });
+
+  describe('in the phone shell', () => {
+    const originalMatchMedia = window.matchMedia;
+    beforeEach(() => {
+      window.matchMedia = ((query: string) => ({
+        matches: query === PHONE_SHELL_QUERY,
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      })) as unknown as typeof window.matchMedia;
+    });
+    afterEach(() => {
+      window.matchMedia = originalMatchMedia;
+    });
+
+    /* There a new tab would leave the installed app for the browser. */
+    it('navigates in place on a plain click of the title link', async () => {
+      renderGrid();
+
+      const link = await screen.findByRole('link', { name: /^Byt na prodej/ });
+      expect(link).not.toHaveAttribute('target');
+
+      fireEvent.click(link);
+      expect(locationNow()).toBe('/property/42?advert=111');
+    });
   });
 
   /* Same rule lib/linkGestures encodes for the surfaces the router does not
@@ -463,55 +689,185 @@ describe('<ListingCards> the card is not a link — its TITLE is', () => {
     renderGrid({ estimates: { 900: ESTIMATE } });
 
     const link = await screen.findByRole('link', { name: /Výnos/ });
-    expect(link).toHaveAttribute('href', '/listing/900?run=77#estimations');
+    expect(link).toHaveAttribute('href', '/listing/sreality/900?run=77#estimations');
+    // A new tab, like the card itself: one card never opens two ways.
+    expect(link).toHaveAttribute('target', '_blank');
 
     fireEvent.click(link);
-    expect(locationNow()).toBe('/listing/900?run=77#estimations');
+    expect(locationNow()).toBe('/');
   });
 });
 
 /* Merge mode used to swap the card's <Link> for a role="button" div carrying
  * aria-pressed, while DRAWING a checkbox that was pure decoration. The drawn
  * thing is now the real thing. */
-describe('<ListingCards> merge mode selects with a real checkbox', () => {
-  it('exposes a checkbox named by the listing it selects', () => {
-    renderGrid({ merge: { selected: false } });
+/* The grid under the REAL merge mode (lib/useMergeMode): the letters it holds
+   are rendered beside it, so a test reads the statement a key produced. */
+function MergeHarness({ rows }: { rows: CardRow[] }) {
+  const merge = useMergeMode();
+  const { enter } = merge;
+  useEffect(() => enter(), [enter]);
+  return (
+    <>
+      <span data-testid="letters">{JSON.stringify(merge.letters)}</span>
+      <span data-testid="active">{merge.activeLetter}</span>
+      {/* A field beside the grid, the way the filter sidebar sits beside it. */}
+      <input data-testid="field" aria-label="Cena od" />
+      <ListingCards
+        rows={rows}
+        total={rows.length}
+        sort={{ field: 'last_seen_at', dir: 'desc' } as never}
+        imageLarge={false}
+        coverTag="default"
+        onCoverTag={() => {}}
+        isLoading={false}
+        isFetchingNextPage={false}
+        hasNextPage={false}
+        onReachEnd={() => {}}
+        restorationKey="test"
+        hasFilters={false}
+        hasBounds={false}
+        hoveredIds={new Set()}
+        onHover={() => {}}
+        onSort={() => {}}
+        onClearFilters={() => {}}
+        onClearBounds={() => {}}
+        merge={merge.active ? merge : null}
+        estimates={undefined}
+        estimatingIds={new Set()}
+        onEstimate={() => {}}
+      />
+    </>
+  );
+}
+const ROW_2 = { ...ROW, property_id: 43, listing_id: 112, sreality_id: 901 } as CardRow;
+function renderMergeGrid(rows: CardRow[] = [ROW, ROW_2]) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter>
+        <CardHydrationProvider listingIds={rows.map((r) => r.listing_id)} renders={{ photos: 50 }}>
+          <MergeHarness rows={rows} />
+        </CardHydrationProvider>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  return {
+    letters: () => JSON.parse(screen.getByTestId('letters').textContent ?? '{}') as Record<string, string>,
+    active: () => screen.getByTestId('active').textContent,
+    cardButtons: () => screen.getAllByRole('button', { name: /^(Bez písmene|Písmeno [A-Z]):/ }),
+  };
+}
 
-    const box = screen.getByRole('checkbox', { name: /^Vybrat ke sloučení/ });
-    expect(box).toHaveAccessibleName(SELECT_RE);
-    expect(box).not.toBeChecked();
+describe('<ListingCards> merge mode marks cards with letters', () => {
+  it('exposes one button per card, named by the listing and its letter', () => {
+    renderGrid({ merge: { letter: null } });
+    expect(screen.getByRole('button', { name: /^Bez písmene/ })).toHaveAccessibleName(NO_LETTER_RE);
+    renderGrid({ merge: { letter: 'B' } });
+    expect(screen.getByRole('button', { name: /^Písmeno B: Byt na prodej/ })).toBeInTheDocument();
   });
 
-  it('carries the selection as real checked state', () => {
-    renderGrid({ merge: { selected: true } });
-
-    expect(screen.getByRole('checkbox', { name: /^Vybrat ke sloučení/ })).toBeChecked();
-  });
-
-  it('toggles on Space', async () => {
-    const onToggleSelect = vi.fn();
+  it('a click, Space or Enter writes the active letter', async () => {
+    const stamp = vi.fn();
     const user = userEvent.setup();
-    renderGrid({ merge: { selected: false }, onToggleSelect });
-
-    const box = screen.getByRole('checkbox', { name: /^Vybrat ke sloučení/ });
-    box.focus();
+    renderGrid({ merge: { letter: null, stamp } });
+    const card = screen.getByRole('button', { name: /^Bez písmene/ });
+    fireEvent.click(card);
+    card.focus();
     await user.keyboard(' ');
+    await user.keyboard('{Enter}');
+    expect(stamp.mock.calls).toEqual([[42], [42], [42]]);
+  });
 
-    expect(onToggleSelect).toHaveBeenCalledWith(42);
+  it('a letter key marks the focused card and becomes the active letter; the same letter again, Backspace and Delete clear it', async () => {
+    const user = userEvent.setup();
+    const grid = renderMergeGrid();
+    const [first, second] = grid.cardButtons();
+    first.focus();
+    await user.keyboard('b');
+    expect(grid.letters()).toEqual({ 42: 'B' });
+    expect(grid.active()).toBe('B');
+    expect(first).toHaveAccessibleName(/^Písmeno B:/);
+    second.focus();
+    await user.keyboard('b');
+    expect(grid.letters()).toEqual({ 42: 'B', 43: 'B' });
+    await user.keyboard('b');
+    expect(grid.letters()).toEqual({ 42: 'B' });
+    await user.keyboard('c');
+    expect(grid.letters()).toEqual({ 42: 'B', 43: 'C' });
+    await user.keyboard('{Backspace}');
+    expect(grid.letters()).toEqual({ 42: 'B' });
+    first.focus();
+    await user.keyboard('{Delete}');
+    expect(grid.letters()).toEqual({});
+  });
+
+  it('a click writes the letter the last key made active, and the same letter again clears', async () => {
+    const user = userEvent.setup();
+    const grid = renderMergeGrid();
+    const [first, second] = grid.cardButtons();
+    first.focus();
+    await user.keyboard('c');
+    fireEvent.click(second);
+    expect(grid.letters()).toEqual({ 42: 'C', 43: 'C' });
+    fireEvent.click(second);
+    expect(grid.letters()).toEqual({ 42: 'C' });
+  });
+
+  it('the pointer focuses the card it moves over, so keys and Tab share one target', () => {
+    const grid = renderMergeGrid();
+    const [first, second] = grid.cardButtons();
+    fireEvent.mouseMove(second.parentElement!);
+    expect(second).toHaveFocus();
+    fireEvent.mouseMove(first.parentElement!);
+    expect(first).toHaveFocus();
+    /* An enter without movement is what a scroll synthesizes under a still
+       pointer: it must not rob the card Tab just reached. */
+    fireEvent.mouseEnter(second.parentElement!);
+    expect(first).toHaveFocus();
+  });
+
+  it('never takes focus from a field the operator is typing in', () => {
+    const grid = renderMergeGrid();
+    const [first] = grid.cardButtons();
+    const field = screen.getByTestId('field');
+    field.focus();
+    fireEvent.mouseMove(first.parentElement!);
+    expect(field).toHaveFocus();
+  });
+
+  it('Tab moves card to card past the chevrons, and ← → page the focused card’s photos', async () => {
+    withPhotos();
+    const user = userEvent.setup();
+    const grid = renderMergeGrid();
+    const [first, second] = grid.cardButtons();
+    const next = await screen.findByRole('button', { name: 'Next photo' });
+    expect(next).toHaveAttribute('tabindex', '-1');
+    first.focus();
+    await user.tab();
+    expect(second).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(first).toHaveFocus();
+    expect(screen.getByText(counterIs('1 / 2'))).toBeInTheDocument();
+    await user.keyboard('{ArrowRight}');
+    expect(screen.getByText(counterIs('2 / 2'))).toBeInTheDocument();
+    await user.keyboard('{ArrowLeft}');
+    expect(screen.getByText(counterIs('1 / 2'))).toBeInTheDocument();
+    expect(grid.letters()).toEqual({});
   });
 
   /* One meaning per click at any moment (TagContentsGallery's rule): in merge
-     mode a click selects, so there is no listing link and no estimate control
+     mode a click marks, so there is no listing link and no estimate control
      competing for the same gesture. */
-  it('offers no link and no estimate corner while selecting', () => {
-    renderGrid({ merge: { selected: false } });
+  it('offers no link and no estimate corner while marking', () => {
+    renderGrid({ merge: { letter: null } });
 
     expect(screen.queryByRole('link')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Odhad' })).toBeNull();
   });
 
   it('has no interactive element nested inside another', () => {
-    const { container } = renderGrid({ merge: { selected: true } });
+    const { container } = renderGrid({ merge: { letter: 'A' } });
 
     expectNoNestedInteractive(container);
   });
@@ -628,7 +984,7 @@ describe('<ListingCards> merge mode keeps the marks, read-only', () => {
   });
 
   it('shows the stage, collection, dismissal and note marks and none of the verbs', async () => {
-    const { container } = renderGrid({ merge: { selected: false } });
+    const { container } = renderGrid({ merge: { letter: null } });
     for (const mark of ['V pipeline: Prověřit', 'V kolekci', 'Skryto', 'Poznámky: 3']) {
       expect(await screen.findByText(mark)).toBeInTheDocument();
     }
@@ -649,66 +1005,80 @@ describe('<ListingCards> merge mode keeps the marks, read-only', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Kolekce se nepodařilo načíst/ }));
     expect(await screen.findByRole('button', { name: 'Uložit do kolekce' })).toBeInTheDocument();
   });
-
-  it('puts the note mark on every table row too', async () => {
-    render(
-      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <MemoryRouter>
-          <ListingTable
-            rows={[ROW as unknown as TableRow]}
-            total={1}
-            sort={{ field: 'last_seen_at', dir: 'desc' } as never}
-            isLoading={false}
-            isFetchingNextPage={false}
-            hasNextPage={false}
-            onReachEnd={() => {}}
-            hasFilters={false}
-            hoveredIds={new Set()}
-            onHover={() => {}}
-            onSort={() => {}}
-            onClearFilters={() => {}}
-          />
-        </MemoryRouter>
-      </QueryClientProvider>,
-    );
-    expect(await screen.findByTitle('Poznámky: 3')).toHaveTextContent('3');
-  });
 });
 
 describe('<ListingCards> merge mode with a multi-photo card', () => {
-  it('keeps the checkbox named and lets a chevron page without selecting', async () => {
+  it('keeps the card button named and lets a chevron page without marking', async () => {
     withPhotos();
-    const onToggleSelect = vi.fn();
-    renderGrid({ merge: { selected: false }, onToggleSelect });
-    const box = await screen.findByRole('checkbox');
-    expect(box).toHaveAccessibleName(/Vybrat ke sloučení/);
-    const next = screen.queryByRole('button', { name: /Další|Next|další/i });
-    if (next) {
-      fireEvent.click(next);
-      expect(onToggleSelect).not.toHaveBeenCalled();
-    }
+    const stamp = vi.fn();
+    renderGrid({ merge: { letter: null, stamp } });
+    expect(screen.getByRole('button', { name: /^Bez písmene/ })).toHaveAccessibleName(NO_LETTER_RE);
+    fireEvent.click(await screen.findByRole('button', { name: 'Next photo' }));
+    expect(screen.getByText(counterIs('2 / 2'))).toBeInTheDocument();
+    expect(stamp).not.toHaveBeenCalled();
   });
 });
 
 /* MS19: a card is a property. Its badge names the portals where it has an active ad
- * (or, with none active, every portal it had, marked inactive), and under one
+ * (or, with none active, every portal it had; the card itself carries the status), and under one
  * portal's "Newest first" a card whose date there is not its own first seen says so. */
+describe('<ListingCards> the title names the lot', () => {
+  const title = () => screen.findByRole('link', { name: /na prodej/ });
+
+  it('adds a house lot after its floor area', async () => {
+    renderGrid({ row: { ...ROW, category_main: 'dum', disposition: '5+1', area_m2: 180, plot_area_m2: 850 } as CardRow });
+    expect(await title()).toHaveAccessibleName(/ na prodej · 5\+1 · 180\sm² · 850\sm²\spozemku$/);
+  });
+
+  it('names a pozemek area once', async () => {
+    renderGrid({ row: { ...ROW, category_main: 'pozemek', disposition: null, area_m2: 1200, plot_area_m2: 1200 } as CardRow });
+    expect(await title()).toHaveAccessibleName(/ na prodej · 1\s200\sm²$/);
+  });
+
+  it('leaves a flat without a lot as it was', async () => {
+    renderGrid({ row: { ...ROW, plot_area_m2: null } as CardRow });
+    expect(await title()).toHaveAccessibleName(TITLE_RE);
+  });
+});
+
 describe('<ListingCards> the portal badge and the order date', () => {
   const badge = () => screen.getByTitle(/^Portály/);
 
   it('lists every portal with an active ad', () => {
     renderGrid({ row: { ...ROW, all_sources: ['idnes', 'sreality'], active_sources: ['idnes', 'sreality'] } });
-    expect(badge().textContent).toBe('portáliDNES Reality · Sreality');
+    expect(badge().textContent).toBe('iDNES Reality · Sreality');
   });
 
   it('lists only the live portals while one is live', () => {
     renderGrid({ row: { ...ROW, all_sources: ['bazos', 'idnes'], active_sources: ['idnes'] } });
-    expect(badge().textContent).toBe('portáliDNES Reality');
+    expect(badge().textContent).toBe('iDNES Reality');
   });
 
-  it('marks every portal inactive when no ad is live', () => {
+  it('lists every portal when no ad is live, with no status word (the card carries the status)', () => {
     renderGrid({ row: { ...ROW, is_active: false, all_sources: ['bazos', 'idnes'], active_sources: [] } });
-    expect(badge().textContent).toBe('neaktivníBazoš · iDNES Reality');
+    expect(badge().textContent).toBe('Bazoš · iDNES Reality');
+    expect(badge()).toHaveAttribute(
+      'title', 'Portály, kde nemovitost inzerovala; žádný inzerát není aktivní: Bazoš · iDNES Reality');
+  });
+
+  it('truncates a long list at its end, never its start, inside the card', () => {
+    renderGrid({ row: { ...ROW, is_active: false, all_sources: ['ceskereality', 'idnes', 'realitymix', 'sreality'], active_sources: [] } });
+    expect(badge()).toHaveClass('truncate', 'min-w-0');
+    /* Only the portal list truncates: the lifespan run keeps its whole text. */
+    expect(screen.getByTitle(/^Neaktivní/)).not.toHaveClass('truncate');
+  });
+
+  /* Ruling P01 (2026-10-27): the portals left the photo for the card's foot, on
+     the line above the MF yield; the photo keeps the lifespan and the ad count. */
+  it('names the portals in the foot, above the MF yield, not on the photo', () => {
+    renderGrid({ row: { ...ROW, mf_gross_yield_pct: 4.1, source_count: 2 } as CardRow });
+    const portals = badge();
+    const yieldLine = screen.getByTitle(/^Hrubý výnos/);
+    expect(portals.compareDocumentPosition(yieldLine) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const photo = screen.getByTitle(/^Aktivní/).closest('.aspect-\\[5\\/4\\]');
+    expect(photo).not.toBeNull();
+    expect(photo).not.toContainElement(portals);
+    expect(photo).toContainElement(screen.getByTitle(/^Nemovitost spojuje/));
   });
 
   const lifespan = () => screen.getByTitle(/^Aktivní/).textContent;
@@ -732,5 +1102,155 @@ describe('<ListingCards> the portal badge and the order date', () => {
   it('shows no portal date without the one-portal order', () => {
     renderGrid({ row: { ...ROW, newest_ad_at_idnes: '2026-03-05T10:00:00Z' } as CardRow });
     expect(lifespan()).not.toContain('iDNES');
+  });
+});
+
+/* Ruling P05 (2026-10-27): a card of the one type and deal the filter pins drops
+   "Byt na prodej ·" from its title; any other card keeps it. */
+describe('<ListingCards> the title drops what the filter says', () => {
+  const SALE_FLATS: CohortKind = { categoryMain: 'byt', categoryType: 'prodej' };
+  const link = () => screen.getByRole('link', { name: /m²/ });
+
+  it('reads "2+kk · 62 m²" under a filter of flats for sale', () => {
+    renderGrid({ cohortKind: SALE_FLATS });
+    expect(link()).toHaveAccessibleName(/^2\+kk · 62\sm²$/);
+  });
+
+  it('keeps the prefix when the filter spans several types or both deals', () => {
+    renderGrid({ cohortKind: null });
+    expect(link()).toHaveAccessibleName(TITLE_RE);
+  });
+
+  it('keeps the prefix on a card whose own type or deal is not the filter\'s', () => {
+    renderGrid({ cohortKind: SALE_FLATS, row: { ...ROW, category_type: 'pronajem' } as CardRow });
+    expect(link()).toHaveAccessibleName(/^Byt k pronájmu · 2\+kk · 62\sm²$/);
+  });
+
+  it('keeps the prefix on a card of another type under the same deal', () => {
+    renderGrid({
+      cohortKind: SALE_FLATS,
+      row: { ...ROW, category_main: 'dum', subtype: null, disposition: '5+1', area_m2: 180 } as CardRow,
+    });
+    expect(link()).toHaveAccessibleName(/^Dům na prodej · 5\+1 · 180\sm²$/);
+  });
+
+  it('keeps a house\'s subtype, which the filter does not name', () => {
+    renderGrid({
+      cohortKind: { categoryMain: 'dum', categoryType: 'prodej' },
+      row: { ...ROW, category_main: 'dum', subtype: 'rodinny_dum', disposition: null, area_m2: 140 } as CardRow,
+    });
+    expect(link()).toHaveAccessibleName(/^Rodinný dům · 140\sm²$/);
+  });
+
+  it('keeps the full title when nothing would be left', () => {
+    renderGrid({
+      cohortKind: { categoryMain: 'pozemek', categoryType: 'prodej' },
+      row: { ...ROW, category_main: 'pozemek', disposition: null, area_m2: null, plot_area_m2: null } as CardRow,
+    });
+    expect(screen.getByRole('link', { name: /^Pozemek na prodej$/ })).toBeInTheDocument();
+  });
+});
+
+/* Rulings P02 and P03 (2026-10-27): the photo shows just the counter; the room
+   tag is an overlay that appears with the pointer or focus on the card. */
+describe('<ListingCards> the photo overlays', () => {
+  const tagged = (renderScore: number) =>
+    vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(
+      new Map([[111, [1, 2].map((id) => ({
+        ...photo(id), clip_fine_tag: 'kitchen', clip_confidence: 0.9, clip_render_score: renderScore,
+      }) as unknown as ImagePublic)]]),
+    );
+
+  it('shows the room tag only while the card is hovered or focused, without moving anything', async () => {
+    tagged(0.1);
+    renderGrid();
+    const tag = await screen.findByText('kuchyně');
+    /* Keyboard focus only: a mouse click on a chevron leaves focus behind, and
+       the tag must not stay shown once the pointer has moved to another card. */
+    expect(tag).toHaveClass('absolute', 'opacity-0', 'group-hover:opacity-100', 'group-has-[:focus-visible]:opacity-100');
+    expect(tag).not.toHaveClass('group-focus-within:opacity-100');
+    expect(tag.closest('.group')).not.toBeNull();
+  });
+
+  it('draws no render verdict, whatever the score', async () => {
+    tagged(0.9);
+    renderGrid();
+    await screen.findByText(counterIs('1 / 2'));
+    expect(screen.queryByText(/^Render \d+$|^Foto \d+$/)).toBeNull();
+  });
+});
+
+/* P06 was declined, with leave to restyle: the storey stays its own label after
+   the place, drawn as a quiet inset label without a border. */
+describe('<ListingCards> the storey label', () => {
+  const floors = () =>
+    vi.mocked(queries.fetchListingFloors).mockResolvedValue(new Map([[111, { floor: 2, total_floors: 5 }]]));
+
+  it('is an inset label with no border', async () => {
+    floors();
+    renderGrid({ floors: true });
+    const tag = await screen.findByText('2. patro z 5');
+    expect(tag).toHaveClass('bg-[var(--color-inset)]');
+    expect(tag.className).not.toMatch(/\bborder\b/);
+  });
+
+  it('sits one step up on a delisted card, whose surface is the inset', async () => {
+    floors();
+    renderGrid({ floors: true, row: { ...ROW, is_active: false, active_sources: [] } as CardRow });
+    expect(await screen.findByText('2. patro z 5')).toHaveClass('bg-[var(--color-paper)]');
+  });
+});
+
+/* Ruling P32: the collection page shows this grid on a page that scrolls itself,
+ * so the column must not be a scroll box there, and the end sentinel must watch
+ * the viewport (on a box that never scrolls it would load every page at once). */
+describe('<ListingCards> on a page that scrolls', () => {
+  const roots: Array<Element | Document | null | undefined> = [];
+  beforeEach(() => {
+    roots.length = 0;
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(_cb: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+          roots.push(options?.root);
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+        takeRecords() {
+          return [];
+        }
+      },
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('by default the end sentinel watches the card column, which scrolls', async () => {
+    renderGrid({ hasNextPage: true });
+    await screen.findByRole('combobox', { name: /Sort/ });
+    const root = roots[roots.length - 1];
+    expect(root).toBeInstanceOf(HTMLElement);
+    expect(root as HTMLElement).toHaveClass('overflow-y-auto');
+  });
+
+  it('scroll="page": the column does not scroll, and the sentinel watches the viewport', async () => {
+    const { container } = renderGrid({ hasNextPage: true, scroll: 'page' });
+    await screen.findByRole('combobox', { name: /Sort/ });
+    expect(roots.length).toBeGreaterThan(0);
+    expect(roots[roots.length - 1]).toBeNull();
+    expect(container.querySelector('.overflow-y-auto')).toBeNull();
+  });
+});
+
+describe('<ListingCards> the empty slot', () => {
+  it("a surface's own empty node replaces the filter empty state", async () => {
+    renderGrid({ rows: [], empty: <p>Nothing here has a card yet.</p> });
+    expect(await screen.findByText('Nothing here has a card yet.')).toBeInTheDocument();
+    expect(screen.queryByText('No listings match these filters.')).toBeNull();
+  });
+
+  it('without one, the filter empty state stays', async () => {
+    renderGrid({ rows: [] });
+    expect(await screen.findByText('No listings match these filters.')).toBeInTheDocument();
   });
 });

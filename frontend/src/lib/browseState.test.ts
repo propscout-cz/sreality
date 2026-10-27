@@ -1,34 +1,27 @@
 import { createElement, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, useLocation, useNavigationType } from 'react-router-dom';
 import { bboxAround, fromSearchParams, DEFAULT_FILTERS } from './filters';
 import {
   DEFAULT_OVERLAY,
   PIN_LIMIT_DEFAULT,
+  applySavedFilter,
   PIN_LIMIT_MAX,
   PIN_LIMIT_MIN,
-  browseFiltersForArea,
   browseFiltersForBroker,
   browseUrlFromState,
   parsePinLimit,
+  parseTab,
   useMemoryBrowseState,
   useUrlBrowseState,
-  type ExploreAreaSeed,
-  type ExploreOrigin,
 } from './browseState';
+import { DEFAULT_SCOPE, neighbourhoodFilters } from './neighbourhood';
 import { layersFromSearchParams } from './mapOverlays';
-import { DEFAULT_SORT } from './queries';
-import type { ListingPublic } from './types';
+import { DEFAULT_SORT, parseSort } from './queries';
+import type { SavedDashboard } from './types';
 
-const TREBIC: Pick<ExploreAreaSeed, 'lat' | 'lng'> = { lat: 49.2147, lng: 15.8816 };
-
-/* A throwaway origin — the decoupling tests only care that it is IGNORED by the
- * cohort builders, so its contents are irrelevant. */
-const SOME_ORIGIN: ExploreOrigin = {
-  listing: { sreality_id: 42, is_active: true } as ListingPublic,
-  images: [],
-};
+const TREBIC = { lat: 49.2147, lng: 15.8816 };
 
 describe('bboxAround', () => {
   it('produces a well-ordered box ~km across centred on the point', () => {
@@ -43,69 +36,7 @@ describe('bboxAround', () => {
   });
 });
 
-describe('browseFiltersForArea', () => {
-  it('seeds category + disposition + viewport bounds from a byt listing', () => {
-    const f = browseFiltersForArea({
-      ...TREBIC,
-      categoryMain: 'byt',
-      categoryType: 'prodej',
-      disposition: '2+1',
-    });
-    expect(f.categoryMain).toEqual(['byt']);
-    expect(f.categoryType).toBe('prodej');
-    expect(f.dispositions).toEqual(['2+1']);
-    expect(f.locationMode).toBe('viewport');
-    expect(f.bounds).not.toBeNull();
-    expect(f.bounds!.west).toBeLessThan(f.bounds!.east);
-  });
-
-  it('drops the disposition filter when the listing has no disposition', () => {
-    const f = browseFiltersForArea({
-      ...TREBIC,
-      categoryMain: 'dum',
-      categoryType: 'prodej',
-      disposition: null,
-    });
-    expect(f.categoryMain).toEqual(['dum']);
-    expect(f.dispositions).toEqual([]);
-  });
-
-  it('seeds pozemek now that Browse supports all five categories', () => {
-    const f = browseFiltersForArea({
-      ...TREBIC,
-      categoryMain: 'pozemek',
-      categoryType: 'prodej',
-      disposition: null,
-    });
-    expect(f.categoryMain).toEqual(['pozemek']);
-  });
-
-  it('falls back to the default category for an unknown category', () => {
-    const f = browseFiltersForArea({
-      ...TREBIC,
-      categoryMain: 'spaceship',
-      categoryType: 'prodej',
-      disposition: null,
-    });
-    expect(f.categoryMain).toEqual(DEFAULT_FILTERS.categoryMain);
-  });
-
-  it('IGNORES origin — the anchor never leaks into the cohort filters', () => {
-    const seed: ExploreAreaSeed = {
-      ...TREBIC,
-      categoryMain: 'byt',
-      categoryType: 'prodej',
-      disposition: '2+1',
-    };
-    const withoutOrigin = browseFiltersForArea(seed);
-    const withOrigin = browseFiltersForArea({ ...seed, origin: SOME_ORIGIN });
-    // The cohort is computed purely from the seed fields; origin is display-only
-    // (anchor pin + top panel), so the two filter sets must be identical.
-    expect(withOrigin).toEqual(withoutOrigin);
-  });
-});
-
-/* Unlike browseFiltersForArea, an unset ("Vše") category must resolve to NO
+/* An unset ("Vše") category must resolve to NO
  * constraint — not Browse's narrow default (['byt'] / 'pronajem'). A broker who
  * mostly sells houses would otherwise open to an empty or wrong map. */
 describe('browseFiltersForBroker', () => {
@@ -132,27 +63,28 @@ describe('browseFiltersForBroker', () => {
 });
 
 describe('browseUrlFromState ↔ fromSearchParams round-trip', () => {
-  it('carries category + disposition + bounds to the Browse URL', () => {
-    const filters = browseFiltersForArea({
-      ...TREBIC,
-      categoryMain: 'byt',
-      categoryType: 'prodej',
-      disposition: '3+kk',
-    });
+  it('carries a property neighbourhood (type, deal, disposition, ownership, centre + radius) and its lens to the Browse URL', () => {
+    const { filters } = neighbourhoodFilters(
+      { ...TREBIC, category_main: 'byt', category_type: 'prodej', disposition: '3+kk', ownership: 'osobni' },
+      DEFAULT_SCOPE,
+    )!;
     const url = browseUrlFromState({
       filters,
       sort: DEFAULT_SORT,
-      tab: 'map',
+      tab: 'stats',
       overlay: DEFAULT_OVERLAY,
+      statsMarket: 'all',
     });
-    const parsed = fromSearchParams(new URLSearchParams(url.split('?')[1]));
+    const sp = new URLSearchParams(url.split('?')[1]);
+    expect(sp.get('market')).toBe('all');
+    const parsed = fromSearchParams(sp);
     expect(parsed.categoryMain).toEqual(['byt']);
     expect(parsed.categoryType).toBe('prodej');
     expect(parsed.dispositions).toEqual(['3+kk']);
-    // bbox serialises at 5-decimal precision
-    expect(parsed.bounds).not.toBeNull();
-    expect(parsed.bounds!.west).toBeCloseTo(filters.bounds!.west, 4);
-    expect(parsed.bounds!.north).toBeCloseTo(filters.bounds!.north, 4);
+    expect(parsed.ownership).toEqual(['osobni']);
+    expect(parsed.locationMode).toBe('center_radius');
+    expect(parsed.centerRadius?.radius_m).toBe(500);
+    expect(parsed.centerRadius?.lat).toBeCloseTo(TREBIC.lat, 4);
   });
 
   /* The rent map is a registry layer now, its size category the variant: the
@@ -245,6 +177,27 @@ describe('pin limit and price labels on the map overlay', () => {
     const withKnobs = fromSearchParams(new URLSearchParams('pins=500&labels=0'));
     const without = fromSearchParams(new URLSearchParams(''));
     expect(withKnobs).toEqual(without);
+  });
+});
+
+/* `?tab=` names the stats tab or nothing: an old `?tab=table` link opens the Properties tab, not a blank page. */
+describe('the tab in the URL', () => {
+  const tabOf = (initial: string) =>
+    renderHook(() => useUrlBrowseState(), {
+      wrapper: ({ children }: { children: ReactNode }) =>
+        createElement(MemoryRouter, { initialEntries: [initial] }, children),
+    }).result.current.tab;
+
+  it('reads stats as stats, and anything else as the map', () => {
+    expect(parseTab('stats')).toBe('stats');
+    expect(parseTab(null)).toBe('map');
+    expect(parseTab('table')).toBe('map');
+    expect(parseTab('nonsense')).toBe('map');
+  });
+
+  it('opens an old table link on the map', () => {
+    expect(tabOf('/browse?tab=table')).toBe('map');
+    expect(tabOf('/browse?tab=stats')).toBe('stats');
   });
 });
 
@@ -351,4 +304,185 @@ describe('layers on the map overlay', () => {
     act(() => result.current.setOverlay({ priceMetric: 'per_m2' }));
     expect(localStorage.getItem(REMEMBERED)).toBe('flood_q5');
   });
+});
+
+describe('the dashboard on the URL', () => {
+  const urlState = (initial: string) =>
+    renderHook(
+      () => ({ view: useUrlBrowseState(), search: useLocation().search, nav: useNavigationType() }),
+      {
+        wrapper: ({ children }: { children: ReactNode }) =>
+          createElement(MemoryRouter, { initialEntries: [initial] }, children),
+      },
+    );
+  const params = (search: string) => new URLSearchParams(search);
+  const dashboard = (over: Partial<SavedDashboard> = {}): SavedDashboard => ({
+    id: 'd1',
+    name: 'Ceny',
+    charts: [],
+    filter_spec: null,
+    position: 0,
+    color: null,
+    created_at: '2026-10-20T10:00:00+00:00',
+    updated_at: '2026-10-20T10:00:00+00:00',
+    owner_email: null,
+    shared_with: [],
+    ...over,
+  });
+  const SPEC = { filters: { ...DEFAULT_FILTERS, priceMax: 5_000_000 }, sort: '-price_czk' };
+
+  it('reads `dashboard` and carries it through a filter change and a tab switch', () => {
+    const { result } = urlState('/browse?tab=stats&dashboard=d1');
+    expect(result.current.view.activeDashboardId).toBe('d1');
+    act(() => result.current.view.setFilters({ ...DEFAULT_FILTERS, priceMax: 4_000_000 }));
+    expect(params(result.current.search).get('dashboard')).toBe('d1');
+    act(() => result.current.view.setTab('map'));
+    expect(result.current.view.activeDashboardId).toBe('d1');
+  });
+
+  it('reads, sets and clears the Stats lens `market=sold` alone, replacing the entry and keeping the filter', () => {
+    const { result } = urlState('/browse?tab=stats&cat=byt');
+    expect(result.current.view.statsMarket).toBe('filter');
+    act(() => result.current.view.setStatsMarket('sold'));
+    expect(params(result.current.search).get('market')).toBe('sold');
+    expect(result.current.view.statsMarket).toBe('sold');
+    expect(result.current.nav).toBe('REPLACE');
+    expect(params(result.current.search).get('cat')).toBe('byt');
+    expect(result.current.view.filters.status).toBe('any');
+    act(() => result.current.view.setFilters({ ...DEFAULT_FILTERS, priceMax: 4_000_000 }));
+    expect(params(result.current.search).get('market')).toBe('sold');
+    act(() => result.current.view.setStatsMarket('filter'));
+    expect(params(result.current.search).has('market')).toBe(false);
+  });
+
+  it('a dashboard loads its saved switch: on sets `small=1`, off clears it; the modal state follows too', () => {
+    const { result } = urlState('/browse?tab=stats&small=1');
+    act(() => result.current.view.loadDashboard(dashboard({ id: 'd-off', show_small: false })));
+    expect(params(result.current.search).has('small')).toBe(false);
+    expect(params(result.current.search).get('dashboard')).toBe('d-off');
+    expect(result.current.nav).toBe('REPLACE');
+    act(() => result.current.view.loadDashboard(dashboard({ id: 'd-on', show_small: true, filter_spec: SPEC })));
+    expect(params(result.current.search).get('small')).toBe('1');
+    expect(result.current.nav).toBe('PUSH');
+    const memory = renderHook(() => useMemoryBrowseState({ filters: DEFAULT_FILTERS }));
+    act(() => memory.result.current.loadDashboard(dashboard({ id: 'd-on', show_small: true })));
+    expect(memory.result.current.statsSmall).toBe(true);
+  });
+
+  it('reads, sets and clears the small-samples switch `small=1` alone, replacing the entry', () => {
+    const { result } = urlState('/browse?tab=stats&cat=byt');
+    expect(result.current.view.statsSmall).toBe(false);
+    act(() => result.current.view.setStatsSmall(true));
+    expect(params(result.current.search).get('small')).toBe('1');
+    expect(result.current.view.statsSmall).toBe(true);
+    expect(result.current.nav).toBe('REPLACE');
+    act(() => result.current.view.setFilters({ ...DEFAULT_FILTERS, priceMax: 4_000_000 }));
+    expect(params(result.current.search).get('small')).toBe('1');
+    act(() => result.current.view.setStatsSmall(false));
+    expect(params(result.current.search).has('small')).toBe(false);
+  });
+
+  it('the explore modals hold the switch in memory and Go to Browse carries it', () => {
+    const { result } = renderHook(() => useMemoryBrowseState({ filters: DEFAULT_FILTERS }));
+    expect(result.current.statsSmall).toBe(false);
+    act(() => result.current.setStatsSmall(true));
+    expect(result.current.statsSmall).toBe(true);
+    const href = browseUrlFromState({
+      filters: result.current.filters, sort: result.current.sort, tab: 'stats', overlay: result.current.overlay,
+      statsSmall: result.current.statsSmall,
+    });
+    expect(new URLSearchParams(href.split('?')[1]).get('small')).toBe('1');
+  });
+
+  it('the explore modals hold the same dashboard and lens in memory, and Go to Browse carries both', () => {
+    const { result } = renderHook(() => useMemoryBrowseState({ filters: { ...DEFAULT_FILTERS, priceMax: 9_000_000 } }));
+    expect(result.current.activeDashboardId).toBeNull();
+    expect(result.current.statsMarket).toBe('filter');
+    act(() => result.current.loadDashboard(dashboard({ id: 'd-plain' })));
+    expect(result.current.activeDashboardId).toBe('d-plain');
+    expect(result.current.filters.priceMax).toBe(9_000_000);
+    act(() => result.current.loadDashboard(dashboard({ id: 'd-spec', filter_spec: SPEC })));
+    expect(result.current.activeDashboardId).toBe('d-spec');
+    expect(result.current.filters.priceMax).toBe(5_000_000);
+    expect(result.current.sort).toEqual(parseSort('-price_czk'));
+    act(() => result.current.setStatsMarket('sold'));
+    expect(result.current.statsMarket).toBe('sold');
+    const href = browseUrlFromState({
+      filters: result.current.filters, sort: result.current.sort, tab: 'stats', overlay: result.current.overlay,
+      activeDashboardId: result.current.activeDashboardId, statsMarket: result.current.statsMarket,
+    });
+    const sp = new URLSearchParams(href.split('?')[1]);
+    expect(sp.get('dashboard')).toBe('d-spec');
+    expect(sp.get('market')).toBe('sold');
+    expect(sp.get('tab')).toBe('stats');
+  });
+
+  it('sets and clears the id alone, replacing the entry', () => {
+    const { result } = urlState('/browse?tab=stats&cat=byt');
+    act(() => result.current.view.setActiveDashboardId('d2'));
+    expect(params(result.current.search).get('dashboard')).toBe('d2');
+    expect(result.current.nav).toBe('REPLACE');
+    act(() => result.current.view.setActiveDashboardId(null));
+    expect(params(result.current.search).has('dashboard')).toBe(false);
+    expect(params(result.current.search).get('cat')).toBe('byt');
+  });
+
+  it('loads a dashboard without a filter as its id alone: the filters and the preset stay', () => {
+    const { result } = urlState('/browse?tab=stats&preset=p1&cat=dum');
+    const before = result.current.view.filters;
+    expect(before.categoryMain).toEqual(['dum']);
+    act(() => result.current.view.loadDashboard(dashboard()));
+    const sp = params(result.current.search);
+    expect(sp.get('dashboard')).toBe('d1');
+    expect(sp.get('preset')).toBe('p1');
+    expect(sp.get('cat')).toBe('dum');
+    expect(result.current.view.filters).toEqual(before);
+    expect(result.current.nav).toBe('REPLACE');
+  });
+
+  it('loads a dashboard with a filter as a preset load would, deselecting the preset, pushed', () => {
+    const { result } = urlState('/browse?tab=stats&preset=p1&pm=per_m2');
+    act(() => result.current.view.loadDashboard(dashboard({ filter_spec: SPEC })));
+    const sp = params(result.current.search);
+    expect(sp.get('dashboard')).toBe('d1');
+    expect(sp.has('preset')).toBe(false);
+    expect(sp.get('sort')).toBe('-price_czk');
+    expect(sp.get('tab')).toBe('stats');
+    expect(sp.get('pm')).toBe('per_m2');
+    expect(result.current.view.filters.priceMax).toBe(5_000_000);
+    expect(result.current.nav).toBe('PUSH');
+  });
+
+  it('replaces the entry instead when asked (an arrival from a link)', () => {
+    const { result } = urlState('/browse?tab=stats&dashboard=d1');
+    act(() => result.current.view.loadDashboard(dashboard({ filter_spec: SPEC }), { replace: true }));
+    expect(params(result.current.search).get('dashboard')).toBe('d1');
+    expect(result.current.view.filters.priceMax).toBe(5_000_000);
+    expect(result.current.nav).toBe('REPLACE');
+  });
+
+  it('writes a preset and a dashboard filter through ONE body (applySavedFilter)', () => {
+    const current = new URLSearchParams('tab=stats&sort=-price_czk&layers=metro');
+    const viaHelper = applySavedFilter({ filters: SPEC.filters, sort: null }, current);
+    expect(viaHelper.has('sort')).toBe(false);
+    expect(viaHelper.get('layers')).toBe('metro');
+    const { result } = urlState(`/browse?${current.toString()}`);
+    act(() =>
+      result.current.view.loadPreset({
+        id: 'p9',
+        name: 'x',
+        filter_spec: { filters: SPEC.filters, sort: null },
+        created_at: '',
+        updated_at: '',
+        position: 0,
+        color: null,
+        group_id: null,
+      }),
+    );
+    const sp = params(result.current.search);
+    expect(sp.get('preset')).toBe('p9');
+    sp.delete('preset');
+    expect(sp.toString()).toBe(viaHelper.toString());
+  });
+
 });

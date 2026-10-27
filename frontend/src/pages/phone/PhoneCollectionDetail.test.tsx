@@ -9,13 +9,13 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as api from '@/lib/api';
+import { collectionCardFilters } from '@/lib/collectionCards';
 import * as queries from '@/lib/queries';
 import type { PipelineMembers } from '@/lib/queries';
 import type { Collection, CollectionPropertyRow } from '@/lib/types';
 import { cardRow } from '@/test/cardRow';
 
 import CollectionDetail from '../CollectionDetail';
-import { collectionCardFilters } from './PhoneCollectionDetail';
 import { DESKTOP_ONLY_NOTE, VIEWER_NOTE } from './PhoneCollections';
 
 vi.mock('@/lib/phoneShell', async (importOriginal) => ({
@@ -49,7 +49,6 @@ const COLLECTION: Collection = {
   updated_at: '2026-10-11T09:00:00Z',
   listing_count: 3,
   monitoring_enabled: true,
-  notify_channels: [],
   is_system: false,
   owner_email: null,
   shared_with: [],

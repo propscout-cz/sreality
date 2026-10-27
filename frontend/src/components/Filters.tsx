@@ -18,18 +18,14 @@ import {
 } from '@/lib/filterLayout';
 import { FILTER_REGISTRY, type FilterDef } from '@/lib/filterRegistry.generated';
 import type { MapySuggestion } from '@/lib/maps';
-import { CollapsibleGroup, PickButton, Section } from '@/components/controls';
+import { CollapsibleGroup, SegmentedBar, Section } from '@/components/controls';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { pgRead } from '@/lib/pgRead';
-import {
-  dismissalKeys,
-  fetchBrowseCount,
-  fetchDismissedCount,
-  fetchNoPriceCount,
-} from '@/lib/queries';
+import { fetchNoPriceCount } from '@/lib/queries';
 import { browseKeys } from '@/lib/browseKeys';
-import { FilterForm, type CustomFilterWidget } from '@/components/FilterForm';
+import { useHiddenDismissed } from '@/lib/useHiddenDismissed';
+import { BOOLEAN_OFF, FilterForm, RegistryBar, type CustomFilterWidget } from '@/components/FilterForm';
 import { PortalFilterControl } from '@/components/filter-controls/PortalFilterControl';
 import { PPM2_UNIT, ppm2BasisOfCohort } from '@/lib/measure';
 import CityIndexRulesPicker from '@/components/CityIndexRulesPicker';
@@ -40,6 +36,8 @@ import type { CuratedSet, SetScope } from '@/lib/setScope';
 /* Lazy: this is the only control here that draws a map, it renders only in
  * `center_radius` mode, and it carries maplibre-gl (~800 kB). Loading it with the
  * sidebar made every Browse first-visit pay for a map engine most sessions never open. */
+/* Lazy: it only mounts once the folded Advanced band opens. */
+const BrokerFilterControl = lazyChunk(() => import('@/components/filter-controls/BrokerFilterControl'));
 const LocationControl = lazyChunk(() =>
   import('@/components/filter-controls/LocationControl').then((m) => ({
     default: m.LocationControl,
@@ -49,6 +47,8 @@ const LocationControl = lazyChunk(() =>
 interface SidebarProps {
   filters: ListingFilters;
   onChange: (next: ListingFilters) => void;
+  /* Reset: the default filters, and Browse deselects its preset in the same write. */
+  onReset: () => void;
   /* Browse passes this so picking a place in the District typeahead
    * also re-centres the main map. The widget still updates the chip
    * filter via the normal onChange path; this is a side channel for
@@ -89,12 +89,14 @@ const bandActive = (
     return value !== def;
   });
 
-/* Price-section "include listings without a price" toggle. No-price listings
- * (price_czk IS NULL — RK / dohodou placeholders the scraper normalises to NULL)
- * are silently dropped by SQL the moment a min/max price bound is set; this
- * re-includes them. Disabled (greyed) until a bound is set, because with no
- * bound they're already shown — the toggle would be a no-op. The count of
- * affected listings is fetched lazily and degrades to nothing on error. */
+/* Price-section "include listings without a price" switch, the two-segment bar
+ * (operator ruling 2026-10-27). No-price listings (price_czk IS NULL — RK /
+ * dohodou placeholders the scraper normalises to NULL) are silently dropped by
+ * SQL the moment a min/max price bound is set; this re-includes them. Disabled,
+ * nothing lit, until a bound is set, because with no bound they're already
+ * shown — the choice would be a no-op. The on side is short: the caption over it
+ * says the rest, and a half-width segment cannot. The count of affected
+ * listings is fetched lazily and degrades to nothing on error. */
 export function IncludeNoPriceToggle({
   filters,
   onChange,
@@ -123,21 +125,19 @@ export function IncludeNoPriceToggle({
   const fmt = (n: number) => n.toLocaleString('cs-CZ');
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex items-center justify-between gap-2">
-        <span
-          className={`text-sm ${hasBound ? 'text-[var(--color-ink-2)]' : 'text-[var(--color-ink-3)]'}`}
-        >
-          Include listings without a price
-        </span>
-        <PickButton
-          on={hasBound && on}
-          disabled={!hasBound}
-          ariaLabel="Include listings without a price"
-          onClick={() => onChange({ ...filters, includeNoPrice: !on })}
-        >
-          {hasBound && on ? 'on' : 'off'}
-        </PickButton>
-      </div>
+      <span
+        className={`text-sm ${hasBound ? 'text-[var(--color-ink-2)]' : 'text-[var(--color-ink-3)]'}`}
+      >
+        Include listings without a price
+      </span>
+      <SegmentedBar
+        fill
+        label="Include listings without a price"
+        options={NO_PRICE_OPTS}
+        value={hasBound ? on : null}
+        disabled={!hasBound}
+        onChange={(v) => onChange({ ...filters, includeNoPrice: v === true })}
+      />
       <p className="text-[11px] leading-snug text-[var(--color-ink-3)]">
         {!hasBound
           ? 'Shown by default — set a price range to choose whether to keep them.'
@@ -151,11 +151,9 @@ export function IncludeNoPriceToggle({
   );
 }
 
-/* Curation "show dismissed" toggle (migration 537). Dismissed properties are
- * hidden by default; the hint says how many the CURRENT cohort is hiding — the
- * difference of the two cohort totals, one of which is the header's own cached
- * count. Nothing extra is fetched until the caller has dismissed something, and
- * an approximate total yields no number rather than a wrong one. */
+/* The dismissed switch (migration 537): Show dismissed | Hide dismissed, hidden
+ * by default. The hint says how many the CURRENT cohort is hiding
+ * (lib/useHiddenDismissed, shared with the Stats warning). */
 export function ShowDismissedToggle({
   filters,
   onChange,
@@ -164,38 +162,17 @@ export function ShowDismissedToggle({
   onChange: (next: ListingFilters) => void;
 }) {
   const on = filters.showDismissed;
-  const anyQ = useQuery({
-    queryKey: dismissalKeys.count,
-    queryFn: fetchDismissedCount,
-    staleTime: 60_000,
-  });
-  const hasAny = (anyQ.data ?? 0) > 0;
-  const totalWith = (showDismissed: boolean) => {
-    const f = { ...filters, showDismissed };
-    return {
-      queryKey: browseKeys.count(f),
-      queryFn: ({ signal }: { signal: AbortSignal }) => fetchBrowseCount(f, { signal }),
-      enabled: hasAny,
-      placeholderData: <T,>(prev: T) => prev,
-      staleTime: 60_000,
-    };
-  };
-  const hiddenQ = useQuery(totalWith(false));
-  const shownQ = useQuery(totalWith(true));
-  const count = hiddenQ.data != null && shownQ.data != null ? shownQ.data - hiddenQ.data : null;
+  const { hasAny, count } = useHiddenDismissed(filters);
   const fmt = (n: number) => n.toLocaleString('cs-CZ');
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-sm text-[var(--color-ink-2)]">Show dismissed properties</span>
-        <PickButton
-          on={on}
-          ariaLabel="Show dismissed properties"
-          onClick={() => onChange({ ...filters, showDismissed: !on })}
-        >
-          {on ? 'on' : 'off'}
-        </PickButton>
-      </div>
+      <SegmentedBar
+        fill
+        label="Dismissed properties"
+        options={DISMISSED_OPTS}
+        value={on}
+        onChange={(v) => onChange({ ...filters, showDismissed: v })}
+      />
       <p className="text-[11px] leading-snug text-[var(--color-ink-3)]">
         {!hasAny
           ? 'Nothing dismissed yet.'
@@ -208,6 +185,16 @@ export function ShowDismissedToggle({
     </div>
   );
 }
+
+const NO_PRICE_OPTS = [
+  { value: false, label: BOOLEAN_OFF.include_no_price },
+  { value: true, label: 'Include unpriced' },
+] as const;
+
+const DISMISSED_OPTS = [
+  { value: true, label: 'Show dismissed' },
+  { value: false, label: 'Hide dismissed' },
+] as const;
 
 /* The unit a Kč/m² bound is authored IN, resolved from the cohort the filters
  * pin (rule 23). The registry declares "CZK/m²" — right on a sale cohort, wrong
@@ -304,7 +291,9 @@ function ChevronGlyph({ direction }: { direction: 'left' | 'right' }) {
   );
 }
 
-export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, layout = 'page', onCollapse }: SidebarProps) {
+export function FilterSidebar({
+  filters, onChange, onReset, onLocationPick, width = 320, layout = 'page', onCollapse,
+}: SidebarProps) {
   // <FilterForm> reads snake_case registry ids; Browse keeps the
   // camelCase `ListingFilters` shape its queries / URL serialisation
   // already use. The adapter in lib/filters bridges both directions
@@ -364,6 +353,15 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
         return (
           <PortalFilterControl value={filters} onChange={(next) => onChange({ ...filters, ...next })} />
         );
+      case 'broker':
+        return (
+          <Suspense fallback={null}>
+            <BrokerFilterControl
+              value={filters.brokerId}
+              onChange={(next) => onChange({ ...filters, brokerId: next })}
+            />
+          </Suspense>
+        );
       case 'location_mode':
         return (
           <LocationModeSection
@@ -416,7 +414,7 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
           {!isDefault(filters) && (
             <button
               type="button"
-              onClick={() => onChange(DEFAULT_FILTERS)}
+              onClick={onReset}
               className="text-[0.7rem] tracking-wide uppercase text-[var(--color-ink-3)] hover:text-[var(--color-copper)] transition-colors"
             >
               Reset
@@ -452,7 +450,13 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
               .filter((r) => !r.when || r.when(filters))
               .map((r, i) =>
                 r.layout === 'line' ? (
-                  <PillLine key={i} blocks={r.blocks} state={registryView} onChange={handleRegistryChange} />
+                  <SegmentedLine
+                    key={i}
+                    blocks={r.blocks}
+                    state={registryView}
+                    onChange={handleRegistryChange}
+                    renderCustom={renderCustom}
+                  />
                 ) : (
                   <div key={i} className={rowClass(r)}>
                     {r.blocks.map(renderBlock)}
@@ -530,11 +534,12 @@ export function CityPopulationHint() {
 /* -------------------------------------------------------------------------- */
 /* Location mode: viewport vs centre+radius                                   */
 /*                                                                            */
-/* The pill toggles which spatial predicate drives the cohort. In `viewport`  */
-/* mode (default) the main map's pan/zoom emits the bbox; in `center_radius`  */
-/* mode an in-sidebar small map widget lets the operator drop a dot and       */
-/* dial a radius — the cohort filters to that circle (approximated as a       */
-/* bbox client-side; the main map still draws the precise circle overlay).    */
+/* The joined bar picks which spatial predicate drives the cohort. In         */
+/* `viewport` mode (default) the main map's pan/zoom emits the bbox; in       */
+/* `center_radius` mode an in-sidebar small map widget lets the operator      */
+/* drop a dot and dial a radius — the cohort filters to that circle           */
+/* (approximated as a bbox client-side; the main map still draws the precise  */
+/* circle overlay).                                                           */
 /* -------------------------------------------------------------------------- */
 
 const rowClass = (r: FilterRow): string => {
@@ -549,61 +554,63 @@ const rowClass = (r: FilterRow): string => {
 
 const REGISTRY_DEF = new Map(FILTER_REGISTRY.filters.map((d) => [d.id, d]));
 
-/* What an on/off button in a line means, when its label alone cannot say it. */
+/* The tip says what an on/off's "on" hides when its label cannot. */
 const LINE_TIPS: Readonly<Record<string, string>> = {
-  tom_observed_only: 'Only ads we saw appear: hides ads that were already live when we first scraped them.',
+  tom_observed_only: 'Seen at birth: only ads we saw appear. Hides ads that were already live when we first scraped them.',
 };
 
-/* A 'line' row: its pill groups and on/off toggles as ONE strip of buttons
- * (Status: Vše · Aktivní · Neaktivní, then Seen at birth), captioned with the
- * first filter's label; a toggle carries its own. */
-function PillLine({
+/* A 'line' row: each of its filters as one segmented bar (Status: Vše ·
+ * Aktivní · Neaktivní; All ads · Seen at birth; the dismissed switch), side by
+ * side when the sidebar is wide enough and stacked when not, captioned with the
+ * first filter's label. A custom block draws its own control. */
+function SegmentedLine({
   blocks,
   state,
   onChange,
+  renderCustom,
 }: {
   blocks: readonly FilterBlock[];
   state: Readonly<Record<string, unknown>>;
   onChange: (updates: ReadonlyArray<{ id: string; value: unknown }>) => void;
+  renderCustom: (b: CustomBlock) => ReactNode;
 }) {
-  const items = blocks.flatMap((b) =>
+  /* The first bar is named by the line's caption; the others name themselves. */
+  const formBar = (def: FilterDef, label: string, named: boolean): ReactNode => (
+    <RegistryBar
+      def={def}
+      label={label}
+      named={named}
+      value={state[def.id]}
+      onChange={(v) => onChange([{ id: def.id, value: v }])}
+    />
+  );
+  const cells = blocks.flatMap((b, i): Array<{ key: string; label: string; tip?: string; node: ReactNode }> =>
     b.kind === 'form'
       ? b.ids.flatMap((id) => {
           const def = REGISTRY_DEF.get(id);
-          return def ? [{ def, label: b.labels[id] ?? id }] : [];
+          const label = b.labels[id] ?? id;
+          return def ? [{ key: id, label, tip: LINE_TIPS[id], node: formBar(def, label, i > 0 || id !== b.ids[0]) }] : [];
         })
-      : [],
+      : [{ key: `${b.key}-${i}`, label: b.label, node: renderCustom(b) }],
   );
-  if (items.length === 0) return null;
-  const button = ({ def, label }: { def: FilterDef; label: string }): ReactNode =>
-    def.ui_control === 'boolean' ? (
-      <span key={def.id} className="ml-1.5" title={LINE_TIPS[def.id]}>
-        <PickButton
-          on={state[def.id] === true}
-          onClick={() => onChange([{ id: def.id, value: state[def.id] !== true }])}
-          variant="solid"
-        >
-          {label}
-        </PickButton>
-      </span>
-    ) : (
-      (def.enum_values ?? []).map((o) => (
-        <PickButton
-          key={`${def.id}:${String(o.value)}`}
-          on={state[def.id] === o.value}
-          onClick={() => onChange([{ id: def.id, value: o.value }])}
-          variant="solid"
-        >
-          {o.label_cs}
-        </PickButton>
-      ))
-    );
+  if (cells.length === 0) return null;
   return (
-    <Section label={items[0].label}>
-      <div className="flex flex-wrap items-center gap-1">{items.map(button)}</div>
+    <Section label={cells[0].label}>
+      <div className="flex flex-wrap gap-2">
+        {cells.map((c) => (
+          <div key={c.key} className="min-w-0 grow basis-[13rem]" title={c.tip}>
+            {c.node}
+          </div>
+        ))}
+      </div>
     </Section>
   );
 }
+
+const LOCATION_MODES: ReadonlyArray<{ value: LocationMode; label: string }> = [
+  { value: 'viewport', label: 'Map viewport' },
+  { value: 'center_radius', label: 'Centre + radius' },
+];
 
 function LocationModeSection({
   label,
@@ -620,27 +627,7 @@ function LocationModeSection({
 }) {
   return (
     <Section label={label}>
-      <div className="inline-flex items-center gap-0.5 p-0.5 rounded-[var(--radius-sm)] bg-[var(--color-paper-2)] border border-[var(--color-rule)]">
-        {(['viewport', 'center_radius'] as const).map((m) => {
-          const on = mode === m;
-          return (
-            <button
-              key={m}
-              type="button"
-              onClick={() => onModeChange(m)}
-              aria-pressed={on}
-              className={[
-                'px-2.5 py-1 text-[0.7rem] rounded-[var(--radius-xs)] transition-colors',
-                on
-                  ? 'bg-[var(--color-copper)] text-white'
-                  : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
-              ].join(' ')}
-            >
-              {m === 'viewport' ? 'Map viewport' : 'Centre + radius'}
-            </button>
-          );
-        })}
-      </div>
+      <SegmentedBar fill options={LOCATION_MODES} value={mode} onChange={onModeChange} />
       {mode === 'center_radius' ? (
         <div className="mt-3">
           {/* Reserve the control's own height so switching to centre+radius doesn't

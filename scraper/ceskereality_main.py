@@ -45,7 +45,6 @@ from scraper.ceskereality_client import (
 from scraper.ceskereality_parser import (
     CATEGORY_MAIN,
     SALE_TYPE,
-    category_from_url,
     extract_subtype_slugs,
     heading_names_kraj,
     index_price,
@@ -164,6 +163,8 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
     from the `portals` registry config."""
 
     source = SOURCE
+    walk_every_s = 6 * 3600
+    walk_timeout_s = 180 * 60
     index_rate = 0.7
     # The denominator this portal reports to the runner is the NATIONAL total, and
     # the kraj union cannot reach it by construction: listings filed under no kraj
@@ -189,10 +190,6 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
         self.index_rate = config.limits.index_rate
         self.shared_rate_limiter = config.limits.shared_rate_limiter
         self.price_change_min_pct = config.limits.price_change_min_pct
-        # per-(cm, ct) union of complete slices' seen ids + completed-slice
-        # counts — the cross-slice nomination buffer (see presence_candidates).
-        self._sweep_seen: dict[tuple[str, str], set[str]] = {}
-        self._sweep_done: dict[tuple[str, str], int] = {}
 
     # --- index-walk seams ---
     def categories(self) -> list[dict[str, Any]]:
@@ -722,49 +719,6 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
                 break
         return seen, {"found_new": found_new, "enqueued": enqueued}, total, pages, False
 
-    def note_empty_slice(self, category: dict[str, Any]) -> None:
-        """A slice the runner refused to nominate from (it saw nothing) still counts
-        as one of the group's slices — otherwise a nationwide-empty sibling slug
-        would hold its whole (category_main, category_type) group below `expected`
-        for ever and the group would never nominate again. It contributes no ids."""
-        cm, ct = self.category_labels(category)
-        if cm is None or ct is None:
-            return
-        key = (cm, ct)
-        self._sweep_seen.setdefault(key, set())
-        self._sweep_done[key] = self._sweep_done.get(key, 0) + 1
-
-    def presence_candidates(
-        self, conn: Any, category: dict[str, Any], seen: set[str],
-    ) -> tuple[list[tuple[str, str | None, int | None]], int] | None:
-        """Nominate this category's unseen rows for a page check (rule #3,
-        2026-09-07) -- once per (category_main, category_type), with the UNION
-        of its slices' seen ids.
-
-        Several index slices collapse onto one canonical category ('rodinne-domy'
-        and 'chaty-chalupy' both -> dum), and the runner calls this per slice, so
-        nominating from ONE slice's seen set would nominate the sibling slice's
-        whole population every walk. Buffer each complete slice's ids and
-        nominate on the group's LAST complete slice. An incomplete or failed
-        sibling never reaches this call, so its group stays below the expected
-        slice count and nothing is nominated this walk (the next walk retries).
-
-        Region-less listings (foreign, or a Czech flat filed under no kraj) are
-        in no slice, so they are nominated every walk; the page check then keeps
-        the live ones and closes the dead ones -- the only way to know.
-        """
-        cm, ct = self.category_labels(category)
-        if cm is None or ct is None:
-            return None
-        key = (cm, ct)
-        group = self._sweep_seen.setdefault(key, set())
-        group.update(seen)
-        self._sweep_done[key] = self._sweep_done.get(key, 0) + 1
-        expected = sum(1 for c in self._categories if self.category_labels(c) == key)
-        if self._sweep_done[key] < expected:
-            return None
-        return db.presence_candidates(conn, SOURCE, cm, ct, group)
-
     # --- detail-drain seams ---
     def fetch_detail(
         self, client: CeskerealityClient, native_id: str, detail_ref: str | None,
@@ -776,11 +730,8 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
             return DrainItem(native_id=native_id, kind="gone")
         except Exception as exc:  # noqa: BLE001 - one listing must not kill the run
             return DrainItem(native_id=native_id, kind="error", error=str(exc))
-        cm, ct = category_from_url(url)
         try:
-            listing = parse_detail(
-                html, source_url=url, category_main=cm, category_type=ct,
-            )
+            listing = parse_detail(html, source_url=url)
         except Exception as exc:  # noqa: BLE001
             return DrainItem(native_id=native_id, kind="error", error=str(exc))
         return DrainItem(

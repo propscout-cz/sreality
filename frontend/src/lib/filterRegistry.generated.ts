@@ -122,7 +122,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "location",
       "pg_column": null,
       "default": null,
-      "description": "Where the listing must be. Composite filter with three complementary sub-fields: a location chip list (see the `districts` filter — RÚIAN code equality per level), a map bounding box (west/south/east/north on the resolved point), and a center+radius pair (ST_DWithin around (lat,lng) within radius_m). Districts is an independent AND-clause; the map vs center+radius pair are mutually exclusive — when both are set, center+radius wins. Leave everything null for no spatial restriction.",
+      "description": "Where the listing must be. Composite filter with two complementary sub-fields: a location chip list (see the `districts` filter — RÚIAN code equality per level) and a map box (`bounds`: west/south/east/north, WGS84, a band on the property's lat/lng). The box is what Browse filters on — its viewport, or the square around a centre+radius pick — so a watchdog saved from Browse watches the rows Browse showed. Both are independent AND-clauses. Leave everything null for no spatial restriction.",
       "category": "Spatial",
       "ui_control": "location",
       "agendas": [
@@ -374,7 +374,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "string",
       "pg_column": null,
       "default": "any",
-      "description": "Status filter for Browse. `any` shows both live and delisted properties; `active` = a property with an active ad on the selected portals (any active ad when none is selected); `inactive` = ads there and none of them active. The Watchdog matcher ignores this (it fires on new properties only) — use `lifecycle` for the analytical surfaces.",
+      "description": "Status filter for Browse, always the property's own: `any` shows both live and delisted properties; `active` = a live property (with a portal filter: with an active ad there); `inactive` = a delisted property, every ad ended. The Watchdog matcher ignores this (it fires on new properties only) — use `lifecycle` for the analytical surfaces.",
       "category": "Status",
       "ui_control": "pill_group",
       "agendas": [
@@ -1115,7 +1115,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "string_list",
       "pg_column": "source",
       "default": null,
-      "description": "Restrict the cohort to one or more source portals: sreality, bazos, idnes, maxima, ceskereality, bezrealitky, mmreality, remax, realitymix. A property matches when any of its ads is on a listed portal, active or not; several = any of them; with a status filter the status is judged on those ads; estimation cohorts read the canonical ad's own portal. Empty list / null = all portals.",
+      "description": "Restrict the cohort to one or more source portals: sreality, bazos, idnes, maxima, ceskereality, bezrealitky, mmreality, remax, realitymix. A property matches when any of its ads is on a listed portal, active or not; several = any of them; with the `active` status that ad must be active; estimation cohorts read the canonical ad's own portal. Empty list / null = all portals.",
       "category": "Property",
       "ui_control": "multiselect",
       "agendas": [
@@ -1175,6 +1175,11 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
           "value": "realitymix",
           "label_cs": "RealityMix",
           "label_en": "RealityMix"
+        },
+        {
+          "value": "web",
+          "label_cs": "Web",
+          "label_en": "Web"
         }
       ],
       "aliases": [],
@@ -1241,6 +1246,11 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
           "value": "realitymix",
           "label_cs": "RealityMix",
           "label_en": "RealityMix"
+        },
+        {
+          "value": "web",
+          "label_cs": "Web",
+          "label_en": "Web"
         }
       ],
       "aliases": [],
@@ -1272,7 +1282,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "string_list",
       "pg_column": "condition",
       "default": null,
-      "description": "Restrict cohort to listings whose `condition` is in this list. Czech values without diacritics, best to worst: projekt, ve_vystavbe, novostavba, po_rekonstrukci, velmi_dobry, dobry, udrzovany, v_rekonstrukci, pred_rekonstrukci, spatny, k_demolici.",
+      "description": "Restrict cohort to listings whose `condition` is in this list. Czech values without diacritics, best to worst: projekt, ve_vystavbe, novostavba, po_rekonstrukci, velmi_dobry, dobry, udrzovany, v_rekonstrukci, pred_rekonstrukci, spatny, k_demolici. The special `__unknown__` value matches listings whose condition is not specified (NULL) or stored under a non-canonical label. Empty list / null = no constraint.",
       "category": "Property",
       "ui_control": "multiselect",
       "agendas": [
@@ -1342,11 +1352,16 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
           "value": "k_demolici",
           "label_cs": "K demolici",
           "label_en": "For demolition"
+        },
+        {
+          "value": "__unknown__",
+          "label_cs": "Neuvedeno",
+          "label_en": "Unknown / not specified"
         }
       ],
       "aliases": [],
       "nullable": false,
-      "sql_kind": "any"
+      "sql_kind": "enum_or_unknown"
     },
     {
       "id": "building_type_match",
@@ -1476,13 +1491,15 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "string_list",
       "pg_column": "energy_rating",
       "default": null,
-      "description": "Restrict to energy ratings in this list (single capital letters A through G). New constructions trend A/B; pre-renovation panel buildings often G.",
+      "description": "Restrict to energy ratings in this list (single capital letters A through G). New constructions trend A/B; pre-renovation panel buildings often G. G is also the legal placeholder for 'no certificate', which no portal marks apart. A property's rating is the first non-null one across its ads in canonical order; an unrated property never matches.",
       "category": "Property",
       "ui_control": "multiselect",
       "agendas": [
+        "browse",
         "comparables",
         "estimation",
-        "velocity"
+        "velocity",
+        "watchdog"
       ],
       "constraints": null,
       "unit": null,
@@ -1527,126 +1544,6 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "aliases": [],
       "nullable": false,
       "sql_kind": "any"
-    },
-    {
-      "id": "building_condition_level_min",
-      "type": "int",
-      "pg_column": "building_condition_level",
-      "default": null,
-      "description": "Minimum building condition score (`building_condition_level >= N`, 1..5). Set by toolkit.condition_scoring.score_listing_condition off the curated Czech marker dictionary + 5-level rubric. NULL rows (not yet scored) are excluded from the result. 5 = výborný stav (excellent), 4 = velmi dobrý stav, 3 = průměrný / udržovaný, 2 = vyžaduje rekonstrukci, 1 = kritický stav.",
-      "category": "Property",
-      "ui_control": "number_input",
-      "agendas": [
-        "browse",
-        "comparables",
-        "defaults",
-        "estimation",
-        "neighborhood",
-        "velocity",
-        "watchdog"
-      ],
-      "constraints": {
-        "min": 1,
-        "max": 5
-      },
-      "unit": null,
-      "basis": null,
-      "enum_values": null,
-      "aliases": [
-        "buildingConditionLevelMin"
-      ],
-      "nullable": false,
-      "sql_kind": "gte"
-    },
-    {
-      "id": "apartment_condition_level_min",
-      "type": "int",
-      "pg_column": "apartment_condition_level",
-      "default": null,
-      "description": "Minimum apartment condition score (`apartment_condition_level >= N`, 1..5). Same scorer as building_condition_level_min but scoped to the unit itself rather than the building shell. NULL rows (not yet scored) are excluded from the result. 5 = výborný stav (novostavba / po kompletní rekonstrukci), 4 = velmi dobrý stav (po rekonstrukci, new jádro / koupelna), 3 = průměrný, 2 = v původním stavu / před rekonstrukcí, 1 = umakartové jádro.",
-      "category": "Property",
-      "ui_control": "number_input",
-      "agendas": [
-        "browse",
-        "comparables",
-        "defaults",
-        "estimation",
-        "neighborhood",
-        "velocity",
-        "watchdog"
-      ],
-      "constraints": {
-        "min": 1,
-        "max": 5
-      },
-      "unit": null,
-      "basis": null,
-      "enum_values": null,
-      "aliases": [
-        "apartmentConditionLevelMin"
-      ],
-      "nullable": false,
-      "sql_kind": "gte"
-    },
-    {
-      "id": "building_condition_level_max",
-      "type": "int",
-      "pg_column": "building_condition_level",
-      "default": null,
-      "description": "Maximum building condition score (`building_condition_level <= N`, 1..5). Companion upper bound to building_condition_level_min; same scorer and rubric. NULL rows (not yet scored) are excluded from the result.",
-      "category": "Property",
-      "ui_control": "number_input",
-      "agendas": [
-        "browse",
-        "comparables",
-        "defaults",
-        "estimation",
-        "neighborhood",
-        "velocity",
-        "watchdog"
-      ],
-      "constraints": {
-        "min": 1,
-        "max": 5
-      },
-      "unit": null,
-      "basis": null,
-      "enum_values": null,
-      "aliases": [
-        "buildingConditionLevelMax"
-      ],
-      "nullable": false,
-      "sql_kind": "lte"
-    },
-    {
-      "id": "apartment_condition_level_max",
-      "type": "int",
-      "pg_column": "apartment_condition_level",
-      "default": null,
-      "description": "Maximum apartment condition score (`apartment_condition_level <= N`, 1..5). Companion upper bound to apartment_condition_level_min; same scorer and rubric. NULL rows (not yet scored) are excluded from the result.",
-      "category": "Property",
-      "ui_control": "number_input",
-      "agendas": [
-        "browse",
-        "comparables",
-        "defaults",
-        "estimation",
-        "neighborhood",
-        "velocity",
-        "watchdog"
-      ],
-      "constraints": {
-        "min": 1,
-        "max": 5
-      },
-      "unit": null,
-      "basis": null,
-      "enum_values": null,
-      "aliases": [
-        "apartmentConditionLevelMax"
-      ],
-      "nullable": false,
-      "sql_kind": "lte"
     },
     {
       "id": "furnished",
@@ -2885,6 +2782,7 @@ export const UI_CONTROLS = FILTER_REGISTRY.ui_controls;
  * Generated from toolkit.filter_registry; do not hand-edit. */
 export const FURNISHED_CANONICAL = ["ano", "ne", "castecne"] as const;
 export const OWNERSHIP_CANONICAL = ["osobni", "druzstevni", "statni", "jine"] as const;
+export const CONDITION_CANONICAL = ["projekt", "ve_vystavbe", "novostavba", "po_rekonstrukci", "velmi_dobry", "dobry", "udrzovany", "v_rekonstrukci", "pred_rekonstrukci", "spatny", "k_demolici"] as const;
 
 /* `listings.price_unit` constrains no filter, so it is not in the payload
  * above — but every listing surface renders it after the price, and the

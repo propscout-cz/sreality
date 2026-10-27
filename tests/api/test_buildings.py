@@ -23,6 +23,7 @@ from api import main as api_main
 def client(monkeypatch):
     api_main.app.dependency_overrides[deps.get_db_conn] = lambda: object()
     api_main.app.dependency_overrides[deps.require_token] = lambda: None
+    api_main.app.dependency_overrides[deps.require_admin] = lambda: {"sub": "operator", "is_admin": True}
     yield TestClient(api_main.app)
     api_main.app.dependency_overrides.clear()
 
@@ -55,8 +56,6 @@ def _patch_persistence(monkeypatch) -> _State:
                 for k in (
                     "source", "status",
                     "input_url", "input_sreality_id", "input_spec",
-                    "source_kind", "parse_confidence",
-                    "parse_confidence_per_field", "source_html",
                     "subject_summary",
                     "units_proposal", "units",
                     "total_rent_p25_czk", "total_rent_p50_czk",

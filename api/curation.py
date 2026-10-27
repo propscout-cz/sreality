@@ -23,7 +23,7 @@ from typing import Any, Callable, ContextManager
 import psycopg
 from fastapi import HTTPException
 
-from api import note_attachments
+from api import attachments
 from api import schemas as s
 from api import shares
 from toolkit.property_identity import (
@@ -52,8 +52,6 @@ _COLLECTION_PROJECTION = (
     " WHERE cp.collection_id = c.id) AS listing_count, "
     f"CASE WHEN {_COLLECTION_IS_MINE} THEN c.monitoring_enabled ELSE false END "
     "  AS monitoring_enabled, "
-    f"CASE WHEN {_COLLECTION_IS_MINE} THEN c.notify_channels ELSE '{{}}'::text[] END "
-    "  AS notify_channels, "
     "c.is_system, "
     f"CASE WHEN {_COLLECTION_IS_MINE} THEN NULL ELSE {shares.party_label('c.account_id')} END "
     "  AS owner_email, "
@@ -66,8 +64,8 @@ _COLLECTION_PROJECTION = (
 
 _CREATE_COLLECTION_SQL = (
     "INSERT INTO collections AS c "
-    "  (name, description, monitoring_enabled, notify_channels, account_id) "
-    "VALUES (%s, %s, %s, %s, %s) "
+    "  (name, description, monitoring_enabled, account_id) "
+    "VALUES (%s, %s, %s, %s) "
     f"RETURNING {_COLLECTION_PROJECTION}"
 )
 
@@ -78,7 +76,6 @@ _UPDATE_COLLECTION_SQL = (
     "  name = CASE WHEN c.is_system THEN c.name ELSE coalesce(%s, c.name) END, "
     "  description = coalesce(%s, c.description), "
     "  monitoring_enabled = coalesce(%s, c.monitoring_enabled), "
-    "  notify_channels = coalesce(%s, c.notify_channels), "
     "  updated_at = now() "
     f"WHERE c.id = %s RETURNING {_COLLECTION_PROJECTION}"
 )
@@ -97,8 +94,7 @@ def create_collection(
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(
                 _CREATE_COLLECTION_SQL,
-                (body.name, body.description,
-                 body.monitoring_enabled, body.notify_channels, account_id),
+                (body.name, body.description, body.monitoring_enabled, account_id),
             )
             row = cur.fetchone()
     except psycopg.errors.UniqueViolation:
@@ -181,7 +177,7 @@ def update_collection(
     collection_id: int,
     body: s.UpdateCollectionIn,
 ) -> dict[str, Any]:
-    fields = (body.name, body.description, body.monitoring_enabled, body.notify_channels)
+    fields = (body.name, body.description, body.monitoring_enabled)
     if all(f is None for f in fields):
         raise HTTPException(422, "nothing to update")
     try:
@@ -290,9 +286,9 @@ def remove_property_from_collection(
 # --- shares (migration 610) -------------------------------------------------
 
 
-def refuse_monitoring_while_acting(act_as: uuid.UUID | None, *monitoring_set: object) -> None:
+def refuse_monitoring_while_acting(act_as: uuid.UUID | None, monitoring_set: bool) -> None:
     """403 when a delegate sets the owner's collection monitoring: its alerts are the owner's (spec §3.8)."""
-    if act_as is not None and any(monitoring_set):
+    if act_as is not None and monitoring_set:
         raise HTTPException(403, "collection monitoring is the owner's own setting")
 
 
@@ -310,15 +306,9 @@ def create_share(
     collection_id: int,
     body: s.ShareCollectionIn,
 ) -> dict[str, Any]:
-    """Share one collection read-only with the account behind a confirmed email (owner only).
-
-    The service-role connection opens only after the tenant gate passed (tenancy.md)."""
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute(_SHARE_GATE_SQL, (collection_id,))
-        gate = cur.fetchone()
-    if gate is None:
-        raise HTTPException(404, "collection not found")
-    shares.grant(open_identity_conn, body.email, shares.CollectionShare(collection_id, gate[0]))
+    """Share one collection read-only with the account behind a confirmed email (owner only)."""
+    shares.owner_gate(conn, _SHARE_GATE_SQL, collection_id, "collection")
+    shares.grant(open_identity_conn, body.email, shares.CollectionShare(collection_id))
     coll = _fetch_collection(conn, collection_id)
     if coll is None:
         raise HTTPException(404, "collection not found")
@@ -336,20 +326,23 @@ def delete_share(
 
 
 # owner_email: null iff the acting identity wrote it; a foreign note is readable only when marked
-# shared. edited_by_email / edited_at: the note's delegated stamp (owner-only; cleared by a later body edit).
+# shared. edited_by_email / edited_at: the note's delegated stamp (owner-only; cleared by a later edit).
+# viewing_at: a viewing is a note with a date (migration 666).
 _NOTE_PROJECTION = (
-    "n.id, n.property_id, n.body, n.shared, n.created_at, n.updated_at, "
+    "n.id, n.property_id, n.body, n.shared, n.created_at, n.updated_at, n.viewing_at, "
     f"CASE WHEN {_is_mine('n.account_id')} THEN NULL ELSE {shares.party_label('n.account_id')} END "
     "  AS owner_email, "
     f"{shares.delegated_stamp('property_notes', 'n.id::text', 'greatest(n.updated_at, n.created_at)')}"
 )
 
-# Marking shared is not an edit: updated_at moves only with the body.
+# Marking shared is not an edit: updated_at moves only with the body or the viewing date.
 _UPDATE_NOTE_SQL = (
-    "UPDATE property_notes n SET body = coalesce(%s::text, n.body), "
-    "  shared = coalesce(%s::boolean, n.shared), "
-    "  updated_at = CASE WHEN %s::text IS NOT NULL THEN now() ELSE n.updated_at END "
-    "WHERE n.id = %s AND n.property_id = %s "
+    "UPDATE property_notes n SET body = coalesce(%(body)s::text, n.body), "
+    "  shared = coalesce(%(shared)s::boolean, n.shared), "
+    "  viewing_at = CASE WHEN %(set_viewing)s::boolean THEN %(viewing_at)s::timestamptz ELSE n.viewing_at END, "
+    "  updated_at = CASE WHEN %(body)s::text IS NOT NULL OR %(set_viewing)s::boolean THEN now() "
+    "    ELSE n.updated_at END "
+    "WHERE n.id = %(id)s AND n.property_id = %(property_id)s "
     f"RETURNING {_NOTE_PROJECTION}"
 )
 
@@ -360,12 +353,22 @@ _LIST_NOTES_SQL = (
 
 _CREATE_NOTE_SQL = (
     "INSERT INTO property_notes AS n "
-    "  (property_id, body, shared, origin_listing_id, origin_listing_ref_id, account_id) "
+    "  (property_id, body, shared, origin_listing_id, origin_listing_ref_id, viewing_at, account_id) "
     "VALUES (%s, %s, %s, "
     "  (SELECT sreality_id FROM listing_natural_key_public WHERE id = %s), "
-    "  %s, %s) "
+    "  %s, %s, %s) "
     f"RETURNING {_NOTE_PROJECTION}"
 )
+
+# The acting identity's own viewings, in date order: the Prohlídky tab's one read. A shared note
+# from another author stays on its property page; this is the caller's calendar.
+_LIST_VIEWINGS_SQL = (
+    f"SELECT {_NOTE_PROJECTION} FROM property_notes n "
+    f"WHERE n.viewing_at IS NOT NULL AND {_is_mine('n.account_id')} "
+    "ORDER BY n.viewing_at, n.id"
+)
+
+_TEXT_OR_VIEWING = "a note needs text or a viewing date"
 
 
 def list_notes(
@@ -378,7 +381,7 @@ def list_notes(
         cur.execute(_LIST_NOTES_SQL, (pid,))
         rows = cur.fetchall()
     notes = [_to_note(r) for r in rows]
-    files = note_attachments.attachments_by_note(conn, [n["id"] for n in notes])
+    files = attachments.attachments_by_note(conn, [n["id"] for n in notes])
     return {"data": [{**n, "attachments": files[n["id"]]} for n in notes]}
 
 
@@ -411,7 +414,7 @@ def create_note(
             cur.execute(_CREATE_NOTE_SQL, (
                 pid, body.body, body.shared,
                 body.origin_listing_ref_id, body.origin_listing_ref_id,
-                account_id,
+                body.viewing_at, account_id,
             ))
             row = cur.fetchone()
     except psycopg.errors.ForeignKeyViolation:
@@ -426,20 +429,33 @@ def update_note(
     note_id: int,
     body: s.UpdateNoteIn,
 ) -> dict[str, Any]:
-    """Edit or (un)mark a note in place; the UPDATE is the ownership gate, scoped by (id, property_id)."""
-    if body.body is None and body.shared is None:
+    """Edit, (un)mark or (re)date a note in place; the UPDATE is the ownership gate, scoped by
+    (id, property_id). An empty body without a viewing date is the table's check: a 422."""
+    set_viewing = "viewing_at" in body.model_fields_set
+    if body.body is None and body.shared is None and not set_viewing:
         raise HTTPException(422, "nothing to update")
     # The note itself was re-pointed onto the survivor at merge, so a stale
     # property_id makes that pair unsatisfiable and a live note reads as 404.
     property_id = resolve_active_property_id(conn, property_id) or property_id
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute(
-            _UPDATE_NOTE_SQL, (body.body, body.shared, body.body, note_id, property_id),
-        )
-        row = cur.fetchone()
+    params = {"body": body.body, "shared": body.shared, "set_viewing": set_viewing,
+              "viewing_at": body.viewing_at, "id": note_id, "property_id": property_id}
+    try:
+        with conn.transaction(), conn.cursor() as cur:
+            cur.execute(_UPDATE_NOTE_SQL, params)
+            row = cur.fetchone()
+    except psycopg.errors.CheckViolation:
+        raise HTTPException(422, _TEXT_OR_VIEWING)
     if row is None:
         raise HTTPException(404, "note not found")
     return _to_note(row)
+
+
+def list_viewings(conn: "psycopg.Connection") -> dict[str, Any]:
+    """The caller's viewings across every property, earliest first (migration 666)."""
+    with conn.cursor() as cur:
+        cur.execute(_LIST_VIEWINGS_SQL)
+        rows = cur.fetchall()
+    return {"data": [_to_note(r) for r in rows]}
 
 
 def delete_note(
@@ -664,10 +680,9 @@ def _to_collection(row: tuple[Any, ...]) -> dict[str, Any]:
         "updated_at":         _iso(row[4]),
         "listing_count":      int(row[5]),
         "monitoring_enabled": bool(row[6]),
-        "notify_channels":    list(row[7]) if row[7] is not None else [],
-        "is_system":          bool(row[8]),
-        "owner_email":        row[9],
-        "shared_with":        list(row[10]),
+        "is_system":          bool(row[7]),
+        "owner_email":        row[8],
+        "shared_with":        list(row[9]),
     }
 
 
@@ -679,9 +694,10 @@ def _to_note(row: tuple[Any, ...]) -> dict[str, Any]:
         "shared":      bool(row[3]),
         "created_at":  _iso(row[4]),
         "updated_at":  _iso(row[5]),
-        "owner_email": row[6],
-        "edited_by_email": row[7],
-        "edited_at":   _iso(row[8]),
+        "viewing_at":  _iso(row[6]),
+        "owner_email": row[7],
+        "edited_by_email": row[8],
+        "edited_at":   _iso(row[9]),
     }
 
 

@@ -1,6 +1,6 @@
 ---
 name: toolkit-api
-description: Use when writing or changing analytical toolkit functions (toolkit/) or the FastAPI service (api/) — the facts-not-opinions rule, the standard tool return envelope, the read-only-with-write-exceptions rule, the auth gates (one credential, a Supabase JWT: require_token = any signed-in caller, require_admin/verify_jwt = identity / admin gating / login), the billing/entitlements skeleton (Stripe webhook, plans, agenda gating), the versioned estimation trace, provider pluggability (Anthropic, Gemini, OpenAI, Qwen, OSS), or the full env-var/secrets reference (Postgres, tenant pool, R2 images, LLM+maps keys, API service, notification delivery, scraper orchestration, frontend/extension build-time). Triggers on: new toolkit tool, /admin route, API_AUTH_OPTIONAL, login, admin gating, identity, account menu, billing, Stripe, entitlement, plan, agenda gating, write exception, estimation_runs.trace, llm_calls, provider, env var, secret, R2/ANTHROPIC/GEMINI/MAPY/RESEND/TELEGRAM/STRIPE keys, CORS.
+description: Use when writing or changing analytical toolkit functions (toolkit/) or the FastAPI service (api/) — the facts-not-opinions rule, the standard tool return envelope, the read-only-with-write-exceptions rule, the auth gates (one credential, a Supabase JWT: require_token = any signed-in caller, require_admin/verify_jwt = identity / admin gating / login), the billing/entitlements skeleton (Stripe webhook, plans, agenda gating), the versioned estimation trace, provider pluggability (Anthropic, Gemini, OpenAI, Qwen, OSS), or the full env-var/secrets reference (Postgres, tenant pool, R2 images, LLM+maps keys, API service, scraper orchestration, frontend/extension build-time). Triggers on: new toolkit tool, /admin route, API_AUTH_OPTIONAL, login, admin gating, identity, account menu, billing, Stripe, entitlement, plan, agenda gating, write exception, estimation_runs.trace, llm_calls, provider, env var, secret, R2/ANTHROPIC/GEMINI/MAPY/STRIPE keys, CORS.
 ---
 
 # Toolkit & API
@@ -59,7 +59,7 @@ it (`api/`). They do not apply to the scraper.
    - `discover_condition_markers`, which writes a structured list of Czech "condition
      markers" to `listing_marker_extractions` (keyed on `(sreality_id, snapshot_id)`) on
      cache miss — feeds the condition-scoring marker dictionary.
-   - `score_listing_condition`, which writes per-listing building/apartment condition levels
+   - `score_listing_condition` (PARKED, rule #14: dispatch-only; nothing reads its levels), which writes per-listing building/apartment condition levels
      (1..5) + matched marker_ids + per-axis confidence to `listing_condition_scores` (keyed
      on `(sreality_id, snapshot_id)`) AND updates the two derived columns on `listings`
      (`building_condition_level`, `apartment_condition_level`) in one transaction, guarded by
@@ -88,7 +88,7 @@ it (`api/`). They do not apply to the scraper.
    override. Every mutating `/broker-review/*` route binds `require_admin`'s claims and threads
    `claims.get("email") or claims.get("sub")` into `undone_by` / `resolved_by` / `created_by` /
    `lifted_by`.
-   **The AUTODEDUP ruling store is written** (mig 528, same `decided_by` idiom) by `POST /autodedup/verdict` (+ `/split`, `/candidate-split`) and, via `toolkit.property_identity.record_rulings`, by `POST /properties/merge` (`merge_property_set`: the oldest record survives, every property-anchored operator-state row follows through `PROPERTY_CARRIERS` (a collapsed dispatch's `channel_sends` move to its kept twin first) and each curation row moved or folded is written to the carry record (`property_merge_carries`), `CategoryClash` refuses rule 15 over the set's ads (a Czech 409), ONE `properties_changed` (rollup, Browse row, broker queue) ends it; "same" on the ticked cards' canonical adverts and every negative pair or set across its members (MS12; `GET /properties/merge` counts it before the click); the route answers the acting account's moved items and `hidden_for_you`) and `POST /properties/{id}/split` (MS18, by letters, `expect` = its `GET` preview's `plan`, a preview the click's `choices` can be read into: ONE `detach_listings` (births in `new`, the acting account's routed items in `curation`) + `merge_property_set` per joined letter, which rules as the merge it is; the split's own rulings "different", across letters only). An engine merge / `unapply` (ONE `detach_listings` per group, routing curation by its carry rows) rules nothing. Each appends
+   **The AUTODEDUP ruling store is written** (mig 528, same `decided_by` idiom) by `POST /autodedup/verdict` (+ `/split`, `/candidate-split`) and, via `toolkit.property_identity.record_rulings`, by `POST /properties/merge` (a statement of letters over properties, `{letters: {id: "A"}}`, `merge_letters` → one `merge_property_set` per letter in ONE transaction: the oldest record survives, every property-anchored operator-state row follows through `PROPERTY_CARRIERS` (an alert the survivor already holds is marked `duplicate_of`, never deleted, mig 653) and each curation row moved or folded is written to the carry record (`property_merge_carries`), `CategoryClash` refuses rule 15 over the set's ads (a Czech 409), ONE `properties_changed` (rollup, Browse row, broker queue) ends it; "same" on the ticked cards' canonical adverts and every negative pair or set across its members (MS12; `GET /properties/merge` counts it before the click); the route answers the acting account's moved items and `hidden_for_you`) and `POST /properties/{id}/split` (MS18, by letters, `expect` = its `GET` preview's `plan`, a preview the click's `choices` can be read into: ONE `detach_listings` (births in `new`, the acting account's routed items in `curation`) + `merge_property_set` per joined letter, which rules as the merge it is; the split's own rulings "different", across letters only). An engine merge / `unapply` (ONE `detach_listings` per group, routing curation by its carry rows) rules nothing. Each appends
    on change (migration 574); a negative PAIR verdict upserts `autodedup.must_not_link` and reversing it DELETEs that row; cluster verdicts add none; only `/autodedup/*` answers an un-migrated store with a 503. Engine SPLITS are propose-only (decision 9): `GET /autodedup/proposed-splits` (`generation`, keyset `after`/`limit`) and `/proposed-splits/{property_id}` read `autodedup/proposed_splits.py` → `{property_id, canonical_listing_id, proposed, groups: [{cluster_key, adverts: [{listing_id, source, is_active, origin_property_id}]}], unseen, splits: [{listing_lo, listing_hi, reason_source, reason, ruling}], ruled}`; each card links to the property page's split dialog (`?letters=`), no write route of its own.
 6. **Spatial queries measure in metres, so they cast.** A listing's point is
    `listing_location.geom`, a `geometry(Point,4326)`: always
@@ -108,11 +108,11 @@ it (`api/`). They do not apply to the scraper.
    that check's open cell incidents on the service role, which stops their reminders), `/properties/merge*`, `/labeling/*`,
    `/outreach/*`, `/broker-review/*`, `/autodedup/*`, `/new-dedup/*`,
    `/skill-refinements/*`, `/location/*` and dataset-write/dispatch routes on price-stats use `require_admin` (JWT-gated, see below) instead of plain `require_token`;
-   `/pipeline/*` (+ `GET`/`POST /pipeline/shares`, `DELETE /pipeline/shares/{account_id}?side=shared_with|shared_with_me`, mig 641), `/collections` (+ `POST`/`DELETE /collections/{id}/shares`, mig 610: the tenant UPDATE (own accounts, `require_account_id`) gates, then the service role writes the share + its notification; both kinds are ONE module, `api/shares.py`), `/tags`, `/filter-presets` (per account, mig 595), `PUT /stats/dashboard` (per account, mig 626: the Browse › Stats board, a whole-document upsert validated by `toolkit/stats_registry.py`; the SPA reads it through RLS), `/estimations` create/detail/scenario/trace payload/feedback (its refiner admin-only), notes,
-   `/listings/lookup` (**RLS-ONLY**: it takes no account argument and its SQL carries no account predicate — `current_account_ids()` must stay the ONE membership definition, the same one the SPA reads; a second, explicitly-bound one is what broke the extension 2026-07-23→09-11), `/brokers/*` and `/properties/{id}/valuo` (account resolved by hand: no tenant transaction across the paid call) use `verify_jwt`/`tenant_conn` for per-account
+   `/pipeline/*` (+ `GET`/`POST /pipeline/shares`, `DELETE /pipeline/shares/{account_id}?side=shared_with|shared_with_me`, mig 641), `/collections` (+ `POST`/`DELETE /collections/{id}/shares`, mig 610: the tenant UPDATE (own accounts, `require_account_id`) gates, then the service role writes the share + its notification, which carries no text (the bell names the sharer from `actor_account_id` and the thing by its live name, mig 656); all three kinds (collections, pipelines, dashboards) are ONE module, `api/shares.py`), `/tags`, `/filter-presets` (per account, mig 595; groups mig 672: `/filter-preset-groups` + `PUT /filter-presets/layout`), `PUT`/`DELETE /push/subscription` + `POST /push/opened` (mig 654: `require_account_id`, never acts, then the service role in the handler; `GET /push/key` is `require_token`, no connection), `GET`/`PUT /stats/dashboard` (per account, migs 626 + 647: the account's working board, a whole-document upsert validated by `toolkit/stats_registry.py`) + `/stats/dashboards` (named dashboards, mig 647: the same saved-set CRUD as `/filter-presets`, one module `api/saved_sets.py`, plus read-only shares through `api/shares.py`), `/estimations` create/detail/scenario/trace payload/feedback (its refiner admin-only), notes, a property's files (`/properties/{id}/attachments[/{aid}]`, mig 660),
+   `/listings/lookup` (**RLS-ONLY**: it takes no account argument and its SQL carries no account predicate — `current_account_ids()` must stay the ONE membership definition, the same one the SPA reads; a second, explicitly-bound one is what broke the extension 2026-07-23→09-11), `/brokers/*` and `/properties/{id}/valuo` (tenancy shape 3) use `verify_jwt`/`tenant_conn` for per-account
    identity without the admin claim (`GET /estimations{,/latest-by-listing}` take `account_scope`);
    most other routes are `require_token` (any signed-in caller, no identity — buildings,
-   estimation preview, the phone's `GET /properties/{id}/location` + `/static-map.png`, the map-overlay registry + tiles `GET /map-overlays*`). `/brokers/*` moved off `require_token` on 2026-08-12 (D1/D2 of the
+   the phone's `GET /properties/{id}/location` + `/static-map.png`, the map-overlay registry + tiles `GET /map-overlays*`). `/brokers/*` moved off `require_token` on 2026-08-12 (D1/D2 of the
    broker E2E review): the leaderboard returned up to 2000 brokers' unmasked email +
    phone behind the bundle-extractable token. Every `/brokers/*` envelope now runs
    through `toolkit.brokers.apply_pii_policy`, which swaps any contact column for
@@ -193,7 +193,7 @@ it (`api/`). They do not apply to the scraper.
     provider argument. Adding a provider is a new file implementing the same Protocol,
     registered in `api/dependencies.py:_build_providers` — AND, separately, in every hand-built provider map (`scraper/main.py`,
     the condition scripts, `scripts/bakeoff_text_extraction.py`, `autodedup/judge_lane.py`, `toolkit/vision_batch.py`,
-    `toolkit/description_extraction.py`; the API, the worker and `smoke_agent.py` use `get_providers()`), and a model whose
+    `toolkit/description_extraction.py`; the API and the worker use `get_providers()`), and a model whose
     provider is unregistered raises in `LLMClient.call` BEFORE the try/except that writes the failure row, so a misroute leaves ZERO `llm_calls` evidence and is
     invisible to the `llm` health check. `LLMClient` is the audit orchestrator — every call
     writes one row to `llm_calls` with provider, model, tokens, USD cost, and a `called_for`
@@ -236,6 +236,8 @@ it (`api/`). They do not apply to the scraper.
     A `*_SQL` constant is therefore NOT evidence of coverage — one unquoted `{slot}` and the
     sweep walks past. `tests/test_measure_sql_prepare.py` is the gate for all six and must
     gain a line when a seventh appears.
+- **Agents (ruling Q29, 2026-10-25, ADR-0002):** an agent run sees broker contacts as its user sees them, at most 20 contacts
+  per call, every read recorded on the run; assistants over MCP stay masked.
 
 ## Error contract and the transport deadline (Broker Unify W2)
 
@@ -253,38 +255,44 @@ the deadline by value; its overlay keeps `LOOKUP_TIMEOUT_MS` for MV3 port loss n
 
 ## Identity, login, and admin gating (Phase 1, `api/dependencies.py`)
 
-Six auth primitives coexist — four in `api/dependencies.py` over ONE header reader, two in
+Seven auth primitives coexist — five in `api/dependencies.py` over ONE header reader, two in
 `api/tenant_pool.py` (`tenant_conn` after this list). `_bearer` (2026-10-13): `API_AUTH_OPTIONAL=1` → anonymous
 (local dev only), else `verify_jwt` — a verified JWT's claims or a 401/503. Tests mint a caller with
 `tests/api/_jwt.py` `mint` (an autouse fixture serves its key).
-- `require_token` — any signed-in caller, nothing returned (rule #8's baseline). Every client sends its
+- `require_token` — any signed-in caller, nothing returned (rule #8's baseline). Its twin `token_claims` (M0) is
+  the same gate returning the claims (None under the opt-out) for a FLAG gated on admin, never a scope. Every client sends its
   session JWT to every route, so a route moves between gates without a client change (the deploy-skew
   class behind the 2026-10-13 "Invalid token" preset incident: #1775's stale bundle).
 - `account_scope` — `_bearer` plus a READ SCOPE (the tenancy doctrine's FOURTH shape): the local-dev
   opt-out or a JWT with no resolvable account → `[SYSTEM]`, a verified JWT → `[that account, SYSTEM]` — mirroring
   `estimation_runs_tenant_read` (291), never a second tenancy definition. Used by `GET
-  /estimations{,/latest-by-listing}`, deliberately SERVICE-ROLE: their LEFT JOIN onto `listings` +
-  `parsed_url_cache` (RLS-on, zero policies) would silently NULL `locality_display` on a tenant conn.
+  /estimations{,/latest-by-listing}`, deliberately SERVICE-ROLE: their LEFT JOIN onto `listings`
+  (RLS-on, zero policies) would silently NULL `locality_display` on a tenant conn.
   `account_ids` is a REQUIRED kwarg on those read helpers — omitting it is a `TypeError`, never a silent
   unscoped read.
 - `verify_jwt` — verifies a Supabase user JWT and returns its claims over ONE path: asymmetric JWKS
   (`SUPABASE_URL` → `/auth/v1/.well-known/jwks.json`, ES256/RS256, cached via `PyJWKClient`); no shared
   secret anywhere (the HS256 `SUPABASE_JWT_SECRET` fallback was deleted 2026-10-13); `503` with `SUPABASE_URL`
-  unset (an unconfigured auth backend must never authenticate anyone). History of the static key it once
-  also accepted (the 2026-08-04 god-credential removal, the 2026-10-13 deletion):
+  unset (an unconfigured auth backend must never authenticate anyone). Since M0 (#2059) only a session as Supabase Auth
+  issues one passes: issuer `<SUPABASE_URL>/auth/v1`, `exp`/`iss`/`aud`/`sub`/`role` required, `role = authenticated`, no
+  `client_id` (an OAuth client's token); a refusal's 401 names `wrong issuer` / `missing claim` / `wrong role` / `client token`,
+  and `mint` fills those claims. History of the static key it once also accepted (2026-08-04 removal, 2026-10-13 deletion):
   `docs/design/api-token-rotation-and-spa-jwt-migration.md`.
 - `require_admin` (`Depends(verify_jwt)`) — gates on `claims["is_admin"]` or
-  `claims["app_metadata"]["is_admin"]`; `403` otherwise. Only reachable via a real Supabase JWT
+  `claims["app_metadata"]["is_admin"]`; `403` otherwise. Every `/buildings*` route takes it since M0 (an extraction plus
+  one estimation per unit), and so does a forced refresh: `deps.require_admin_to_force` (over `token_claims`) 403s a
+  non-admin's `force_refresh: true` on `/tools/summarize_listing` + `/tools/compare_listing_images` (the opt-out's caller
+  too; the cached read stays open), and the route census reds on a body taking it without that call. Only reachable via a real Supabase JWT
   whose `app_metadata.is_admin` was stamped `true` (the `admins` table is the provisioning
   allowlist, but the live claim is a plain `auth.users.raw_app_meta_data` attribute — Supabase
   includes `app_metadata` in every issued JWT by default, no Custom Access Token Hook needed).
 - `require_account_id` — in `api/tenant_pool.py`, NOT `dependencies.py` (tenant_pool imports it, so
   `Depends(tenant_conn)` there is circular). The ONE no-account posture: resolved once at the route edge,
   else `400 "no account for caller"`; `403` under `X-Act-As` (watchdog, presets, `PUT /stats/dashboard`,
-  both share-create routes never act; a delegate's collection-monitoring field is a 403). Its twin `require_acting_account_id` (migration 641) is the caller's own
+  every share-create route never acts; a delegate's collection-monitoring field is a 403). Its twin `require_acting_account_id` (migration 641) is the caller's own
   account without the header, else the owner `acting_account_ids()` grants (`403 "no edit share from that
   account"`): EVERY curation write declares it (`/pipeline/*` writes incl. stages, `POST /collections` `/tags`
-  `/properties/{id}/notes` `/dismissals`, `PUT .../artifact-link`), and `tests/api/test_acting_routes_census.py`
+  `/properties/{id}/notes` `/attachments` `/dismissals`, `PUT .../artifact-link`), and `tests/api/test_acting_routes_census.py`
   pins that it writes only the eleven curation tables. `tenant_conn` reads `X-Act-As` (400 unless a uuid) and
   sets it + the method as PostgREST's GUCs (an acting GET/HEAD runs READ ONLY, as PostgREST does). Reads take neither dependency, and an UPDATE/DELETE *by id*
   none either (its policy's USING clause is the scope). It replaced three
@@ -321,8 +329,8 @@ enforcement is inline in `create_estimation_run` (below).
 
 **Agent-estimation metering** (Wave 1, migration 355) is the first metered path. The paid
 `mode:'agent'` submit is gated **inside `api/estimation_runs.py:create_estimation_run`**, at the
-single choke point *before the URL parse* (`_prepare_metered_submit`) so a rejected submit spends
-zero LLM cost. Meter = **per successful agent run, monthly** (operator decision, not USD): free
+single choke point after the subject is resolved (an unknown or unlocated ad is a 422 before any gate)
+and before the INSERT (`_prepare_metered_submit`), so a rejected submit spends zero LLM cost. Meter = **per successful agent run, monthly** (operator decision, not USD): free
 plan `plans.agent_estimations_monthly_quota` = 3, `trial_*` = 10 (while
 `entitlements.status='trialing'` + unexpired: a signup's first 7 days). Only a real, non-admin tenant sending `mode:'agent'`
 is metered — admin/SYSTEM and all deterministic runs bypass, mirroring `require_entitlement`.
@@ -339,9 +347,9 @@ closed), `agent_estimation_concurrency_cap` (3). Deferred: extension `mode:'agen
 
 ## Auth and secrets
 
-All secrets are GitHub Actions secrets and/or Railway env vars in production. Backend code
-references them by name; never write a value into a committed file (`.env` is gitignored).
-API keys are **backend-only** — never `VITE_*`-prefix one; `frontend/` must not see them.
+All secrets are GitHub Actions secrets and/or Railway env vars in production, referenced by name; never write a value into a
+committed file (`.env` is gitignored). API keys are **backend-only**: never `VITE_*`-prefix one. Where each secret lives, who reads
+it, how to rotate and verify it: `references/secrets-inventory.md`.
 
 Database:
 - `SUPABASE_DB_URL` — Postgres connection string (Supabase → Database → Connection string →
@@ -351,9 +359,9 @@ Database:
   Connection string → Session pooler, port 5432; same host/user as `SUPABASE_DB_URL`, just
   port 5432 not 6543). **Optional**; used only by the scraper's hot detail-write loop
   (`connect_session()`, i.e. the Phase-2 detail-drain's batched writes) so its repeated SQL
-  gets prepared statements. Unset → falls back to `SUPABASE_DB_URL`. Set it as an Actions
-  secret on `detail_drain.yml` (and the Railway env var only if the API ever calls
-  `connect_session()`).
+  gets prepared statements. Unset → falls back to `SUPABASE_DB_URL`. Set it on the realtime
+  worker's Railway service, the drain's only runtime since W0 (#2010), and on the API only if it
+  ever calls `connect_session()`.
 - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` — set as Actions secrets for forward
   compatibility; the v1 scraper connects to Postgres directly and does not need them.
   (`SUPABASE_SERVICE_ROLE_KEY` is the 2025 `sb_secret_...` token, **not** a JWT.) **On the
@@ -383,7 +391,8 @@ Image storage (Cloudflare R2, S3-compatible):
   to *download* image bytes — optional there, a missing var just logs a skip and exits zero;
   (2) the **FastAPI service** (Railway env vars) to *serve* them, since `GET /images/{key}`
   presigns R2 (the frontend's image path since PR #255) and `GET /properties/{id}/download.zip`
-  (JWT) zips them with a PDF of the ad — the bucket sends no CORS header. If the **API** lacks them,
+  (JWT) zips them with a PDF of the ad and, under `moje-fotky/`, the acting identity's own photo
+  originals (read on its tenant connection) — the bucket sends no CORS header. If the **API** lacks them,
   every listing photo 503s and the UI looks imageless though the DB reports the bytes "stored"
   — the API logs a boot WARNING and `GET /health` reports `image_storage: "unconfigured"`.
 - `IMAGE_PRESIGN_ANCHOR_SECONDS` (optional, API service, default `86400`) — the width of the bucket
@@ -393,11 +402,13 @@ Image storage (Cloudflare R2, S3-compatible):
   if R2 rejects a backdated signature). Capped at half the 7-day presign TTL, or the last URL minted
   in a bucket would already be expired.
 - **Phone copy** (#1765): `GET /images/{key}?v=2&w=1080` (any other `w` → 404) redirects to
-  `thumb/w1080/{id}/{seq}.webp` (WebP q75), made from the master on first request (≤ 4 at once);
-  any failure → a 5-min redirect to the master. SPA: `imageSrc(img, { w: 1080 })`.
+  `thumb/w1080/<key without .jpg>.webp` (WebP q75), made from the master on first request (≤ 4 at once);
+  any failure → a 5-min redirect to the master. SPA: `imageSrc(img, { w: 1080 })`. An attachment's copy
+  (`GET /properties/{id}/attachments/{aid}?w=1080`, `api/attachments.py`) is made the same way under
+  `thumb/w1080/custom-attachments/…` but streamed through that JWT route, never presigned.
 
 LLM + maps (FastAPI service + scoring jobs):
-- `ANTHROPIC_API_KEY` — required for the URL parser, summarize/vision tools, condition
+- `ANTHROPIC_API_KEY` — required for the estimation agent, summarize/vision tools, condition
   scoring, and the agent under `provider='anthropic'`.
 - `GEMINI_API_KEY` — Google AI Studio key; required for the agent under `provider='gemini'`.
   A request selecting an unconfigured provider returns 502; missing at boot is not fatal.
@@ -409,8 +420,8 @@ LLM + maps (FastAPI service + scoring jobs):
   an EPHEMERAL RunPod proxy root the autodedup judge lane exports per pass, re-read per call and never stored; the key defaults to `none` (vLLM serves unauthenticated).
 - `MAPY_GEOCODE_ENABLED` — **the Mapy kill switch, default OFF.** Mapy.com's terms prohibit
   storing/caching API results, so `scraper.geocoding.geocode()` raises unless this is
-  explicitly `1`/`true`/`yes`. No caller stores a result any more: what is left is the
-  on-demand URL parse and `scripts/seed_curated_cities.py`. Display-only Mapy use
+  explicitly `1`/`true`/`yes`. No caller stores a result any more: what is left is
+  `scripts/seed_curated_cities.py`. Display-only Mapy use
   (`/maps/suggest`, tiles, the phone's static map) is NOT gated — the prohibition is on persistence, not display.
   Do not enable without an operator decision recorded against the Mapy remediation plan.
 - `MAPY_CZ_API_KEY` — Mapy.cz REST key; geocodes locality strings, powers `/maps/*` (not `/maps/sreality-price-map`: key-free sreality suggest proxy, no CORS upstream) and the static map.
@@ -420,68 +431,61 @@ LLM + maps (FastAPI service + scoring jobs):
 - `MAPY_STATIC_MAPS_ENABLED` (Railway API, default on; `0` → 404 `disabled`, read per request) — the phone's Poloha:
   `GET /properties/{id}/static-map.png?w=1080` streams Mapy's static map (540×405 @2x, **4 credits** a fetch, one
   `STATIC_MAP` line each to count them) on EVERY view, `private, max-age=3600`; Mapy's terms forbid storing it — never R2/disk.
-- `VALUO_SANDBOX_API_TOKEN` / `VALUO_API_TOKEN` (Railway API only, never local, never `VITE_*`) — Valuo's paid calculation API
-  (`api/valuo_client.py`); the NAME is the environment: production wins, neither = `GET /properties/{id}/valuo` says "Valuo zatím
-  není nastaveno." and the POST 503s. Each row stamps `environment` + `token_sha`; tests delete both (`tests/conftest.py`).
+- `VALUO_SANDBOX_API_TOKEN` / `VALUO_API_TOKEN` (Railway API only, never local, never `VITE_*`) — Valuo's paid API v3 at `https://api.valuo.com/v1`
+  (`api/valuo_client.py`: `market-value/{type}` + one `advert/detail` for the comparables' photos); production wins, neither = `GET /properties/{id}/valuo` says
+  "Valuo zatím není nastaveno." and the POST 503s. A row stamps `token_sha` + the environment that ANSWERED (`ver` `-sandbox` = sandbox); tests delete both (`tests/conftest.py`).
 - `LLM_DAILY_COST_WARN_USD` (optional, default `5.0`) — soft cross-provider warning
   threshold; `LLMClient` logs one WARNING per day when the `llm_calls.cost_usd` sum first
   crosses it. Each provider's own console spend cap is the hard guard.
 
 API service:
-- `API_AUTH_OPTIONAL=1` — LOCAL DEV ONLY: opens every `require_token` route to anonymous callers. Never on Railway (rule #8).
+- `API_AUTH_OPTIONAL=1` — LOCAL DEV ONLY: opens every `require_token` route to anonymous callers. Never on Railway (rule #8):
+  since M0 the API refuses to boot with it when any Railway system variable is set (`deps._RAILWAY_MARKERS`: `RAILWAY_ENVIRONMENT`,
+  `_ENVIRONMENT_NAME`, `_ENVIRONMENT_ID`, `_PROJECT_ID`, `_SERVICE_ID`); the lifespan's first step, so uvicorn exits.
 - `CORS_ALLOW_ORIGINS` — CSV of allowed origins; must include the Chrome extension's
   `chrome-extension://<id>` origin and the SPA origin.
-- `STUCK_ROW_SWEEP_DISABLED`, `NOTIFICATIONS_MATCHER_DISABLED` (optional flags) — disable the
-  startup sweep of stuck estimation/building runs, and the background watchdog matcher loop (with
-  the system-alerts loop beside it), respectively. Default: both enabled.
+- `STUCK_ROW_SWEEP_DISABLED`, `HEALTH_TELLER_DISABLED` (optional flags) — disable the startup sweep
+  of stuck estimation/building/scrape runs (the scrape_runs cutoff, `api.main.STUCK_RUN_CUTOFF_MINUTES`, is
+  held past the longest walk by `tests/scraper/test_job_registry.py`), and the system-alerts loop (the
+  health teller, the API's only background loop), respectively. Default: both enabled. `HEALTH_TELLER_DISABLED` replaced
+  `NOTIFICATIONS_MATCHER_DISABLED` in W2b, with no alias (the old name, if still set anywhere, does
+  nothing); the watchdog producers run on the realtime worker's `notifications` lane alone.
 
-Notification delivery (Sprint N — `channel_sends` ledger + `api/transports/` + the outbox loop,
-rule #16; all OPTIONAL, dark until set):
-- `RESEND_API_KEY` + `EMAIL_FROM` — the Resend email transport (`api/transports/email_resend.py`).
-  Both required for `is_configured()`; transactional/self-notification scope only (Resend AUP
-  forbids cold outreach — outreach gets a separate EU vendor). Railway API env.
-- `TELEGRAM_BOT_TOKEN` — the Telegram Bot API transport (`api/transports/telegram.py`). Railway
-  API env. The recipient `chat_id` lives in `app_settings.notification_telegram_chat_id`.
-- `SPA_BASE_URL` — SPA origin for notification deep links (`{SPA_BASE_URL}/listing/{id}`; a `system_health` send links `/health#<key>`, the key read off its `sys:<key>:` dedupe key, else `/health`, and carries no link while it is unset).
-- `RESEND_WEBHOOK_SECRET` (Wave 3, migration 367) — Svix signing secret for `POST /webhooks/resend`.
-  Railway API env. Unset = the webhook 503s (fail closed); the handler verifies the Svix HMAC over
-  the raw body with the stdlib (no dependency, same auth class as the Stripe webhook), dedups by
-  `svix-id` (`resend_webhook_events`), advances `channel_sends.status`
-  (`delivered`/`bounced`/`complained`), and inserts a GLOBAL, address-level `notification_suppression`
-  row (survives tenant deletion) on bounce/complaint — the outbox hard-skips suppressed addresses.
-- `NOTIFICATION_UNSUB_SECRET` + `API_PUBLIC_URL` (Wave 3) — one-click unsubscribe (RFC 8058).
-  `make_unsub_token`/`verify_unsub_token` (`api/unsubscribe.py`) HMAC-sign `channel:address` with
-  the secret; the Resend transport adds `List-Unsubscribe`/`List-Unsubscribe-Post` headers pointing
-  at `{API_PUBLIC_URL}/u/{token}` (the unauthenticated `GET`/`POST /u/{token}` route, HMAC = auth,
-  renders for logged-out users, POST inserts a `source='unsubscribe'` suppression). BOTH env vars
-  optional: unset → the header is omitted (email still sends) and the token can authenticate no one.
+Notification delivery (rule #16; `docs/design/notifications-push/PROGRAM.md` § 3.4): iPhone push only. W1 (2026-10-21) deleted
+the Resend email + Telegram transports, the outbox, `ChannelClient`, `POST /webhooks/resend` and `/u/{token}`, so `RESEND_API_KEY`,
+`EMAIL_FROM`, `RESEND_WEBHOOK_SECRET`, `NOTIFICATION_UNSUB_SECRET`, `API_PUBLIC_URL`, `TELEGRAM_BOT_TOKEN`, `SPA_BASE_URL` and
+`OUTBOX_DRAIN_DISABLED` are read by nothing (safe to remove from Railway). Push links absolutely from each device's own origin.
+- `VAPID_PRIVATE_KEY` (W4) — the P-256 scalar, 32 bytes base64url (no PEM), the SAME value set on EACH service (the API and the worker are separate Railway projects, so no Shared Variable spans them): the API
+  (`GET /push/key` derives the public key; unset/unreadable → 503) and the realtime-worker (the `push` lane signs with it; unset =
+  the lane's brake, `unconfigured`). Never `VITE_`; never log it; rotating it ends every subscription (`VapidPkHashMismatch` →
+  gone), so rotate only on a leak. Generate it with no output, into a file only you can read, then paste it into Railway and delete
+  the file: `python3 -c "import os,base64;from cryptography.hazmat.primitives.asymmetric import ec;os.umask(0o077);k=ec.generate_private_key(ec.SECP256R1()).private_numbers().private_value.to_bytes(32,'big');open(os.path.expanduser('~/vapid_private_key.txt'),'x').write(base64.urlsafe_b64encode(k).rstrip(b'=').decode())"`.
+  Transport `api/push.py` (RFC 8291 aes128gcm + RFC 8292 VAPID ES256 on `cryptography` + PyJWT, `*.push.apple.com` only, no
+  redirects, a transport error = its class name); devices `api/push_devices.py`; the ledger pass `api/push_delivery.py`.
+- The system-alerts loop (`api/system_alerts_loop.py`, the API's only background loop, off under `HEALTH_TELLER_DISABLED`) runs the health ladder `toolkit.system_alerts.reconcile` every 60 s (a constant, no setting): it keeps the `ops_incidents` ladder (onset, reminders by rung, recovery, acknowledgement on Health) and writes no `notification_dispatches` row (ruling R2b, 2026-10-21, superseding Q1's "bell only"); the external alarm is the health canary's GitHub e-mail (scraper-ops skill).
 - `STRIPE_WEBHOOK_SECRET` — Stripe webhook signing secret (Dashboard → Developers →
   Webhooks). Railway API env. Unset = `POST /billing/webhook` 503s (fail closed); the
   handler verifies the `Stripe-Signature` HMAC with the stdlib (no stripe SDK).
-- `OUTBOX_DRAIN_DISABLED` (flag) — force-off the delivery outbox loop. The loop ALSO only starts
-  when ≥1 transport `is_configured()`, so it's a true no-op until a key above is set + redeploy.
-- The system-alerts loop (`api/system_alerts_loop.py`, beside the matcher, off under `NOTIFICATIONS_MATCHER_DISABLED`) runs the health ladder `toolkit.system_alerts.reconcile` every 60 s (a constant, no setting); its `system_health` dispatches carry `system_health_channels` and reach the outbox like any other, which sends each with the message as body and as subject its text before the first ` — ` (else its first 120 characters; "System alert" when empty). As of Health wave 7 (2026-10-19) the list is `[]`, bell only by ruling Q1 (2026-10-18), and both transports are ready: switching on is three steps (a key on the API service and a deploy, the recipient in Settings › Delivery, a migration with a test system alert), click by click in the scraper-ops skill's `references/pipeline-verification.md` § Delivery readiness.
-- Operator destinations are `app_settings` rows (operator-editable, history-tracked):
-  `notification_email_to`, `notification_telegram_chat_id` (empty = that channel skipped);
-  `notifications_outbox_interval_seconds` paces the loop. A watchdog opts in via
-  `notification_subscriptions.channels`, a collection via `collections.notify_channels`.
 
 Scraper orchestration:
 - `SREALITY_COUNTRY_ID` (optional, default `112` = Czech Republic).
-- `SCRAPE_CHAIN_TOKEN` (optional fine-grained PAT: this repo, Actions read+write) — lets the
-  scrape workflow re-dispatch itself for tighter-than-cron cadence; no-op without it.
+- `SCRAPE_CHAIN_TOKEN` (fine-grained PAT) — no workflow reads it since #2013 (price stats chains on its job's own
+  `GITHUB_TOKEN`); only the worker's count-probe dispatch falls back to it, until #2015 deletes that lane and the secret.
 - `GITHUB_ACTOR` — CI context, used for curated-cities upload attribution.
 
 NEW DEDUP (docs/design/new-dedup/PROGRAM.md, Wave 1):
-- `RUNPOD_API_KEY` — Actions secret only (no Railway/frontend use). Auths `scripts/runpod_client.py`'s REST
+- `RUNPOD_API_KEY` — an Actions secret (pods are rented only inside workflows, the judge lane's `autodedup.yml` among them);
+  no Railway service reads it, so a Railway copy is dead and is deleted (M0, #2061). Auths `scripts/runpod_client.py`'s REST
   (`rest.runpod.io/v1`) + GraphQL (`api.runpod.io/graphql`) calls to launch/poll/terminate on-demand GPU pods.
-  Two `workflow_dispatch` lanes: `new_dedup_runpod_smoke_test.yml` (infra proof) and `dinov3_embed_backfill.yml`
-  (the DINOv3 corpus embedding pass, never yet run on real data). Every job goes through `RunPodClient.run_job`,
+  Its workflow consumers: `autodedup.yml`, `dinov3_bakeoff_manifest.yml`, `dinov3_embed_backfill.yml`, `runpod_reap.yml`, `tagging_bakeoff.yml`, `text_extraction_bakeoff.yml`
+  (`dinov3_embed_backfill` is the DINOv3 corpus embedding pass, never yet run on real data). Every job goes through `RunPodClient.run_job`,
   which terminates the pod in a `finally` however the job ends — the actual cost-safety guarantee (the pod API has no "run
   once and stop" flag). Credentials reach a pod ONLY via the optional `env: dict[str, str]` on
   `launch_pod`/`run_job`/`run_job_with_fallback` — the REST body's `env` **object** (`{"K": "v"}`, not GraphQL's
   `[{key, value}]` list; omitted when empty), never `start_cmd`, which is argv in the pod record. Never logged.
 - `HF_TOKEN` — Actions secret only. HuggingFace token for **gated** weights (`facebook/dinov3-*` is `gated: manual`; even `config.json` 401s), read by `scraper/dinov3_tagger.py` and forwarded into the pod.
+- `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ZONE_ID` — repo-root `.env` only, read by no code: lets a session edit `propscout.cz` DNS
+  (token scope: Zone Read, DNS Edit, Single Redirect Edit). `app.`/`api.` stay DNS-only — brand-domain `PROGRAM.md` W1.
 
 Frontend / extension (build-time only, inlined into the browser bundle — *not* backend
 runtime): `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` (the publishable anon key, safe in

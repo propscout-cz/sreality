@@ -546,7 +546,7 @@ No single response mixes the two.
 - **How the count is taken: read-only SQL after the apply, before the merge.** After 636 `properties_public` already reads the location ad, so for each active subscription:
   - render its WHERE with this branch's `_build_match_clauses` (Python, no connection);
   - run it as one read-only SELECT over `properties_public`, restricted to properties whose location ad ≠ canonical ad;
-  - keep only rows the matcher can still fire on: `first_seen_at` past the subscription's cursor or inside the lookback re-scan (`max(60, 2 × notifications_new_requires_image_timeout_minutes)` min, 60 by default);
+  - keep only rows the matcher can still fire on: `first_seen_at` past the subscription's cursor or inside the lookback re-scan (`max(60, 2 × notifications_new_requires_image_timeout_minutes)` min, 60 by default; that image-gate setting is superseded 2026-10-23 by the publication rule, migs 668/669);
   - drop rows that already hold a `wd:{sub}:new:{property_id}` dispatch.
   - The same SELECT counts the `:price_drop:` alerts the swap could add: a cut inside `notifications_price_drop_window_days` (2 days by default) on a property that only now matches.
 - **Why it is small by construction.** `:new:` is keyed on arrival (`first_seen_at`), so a place change on an older property never fires it; only properties first seen inside that window can.

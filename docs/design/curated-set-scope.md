@@ -30,6 +30,9 @@ caller's own RLS**, never as property ids on the wire. Every wave deletes more t
    stored in preset gets applied" — the three sets stay outside preset identity, and a preset click
    (and the phone Feed's scope chip) resets them like the broker scope and the dismissed reveal;
    `withPresetLenses` is deleted.
+   **Replaced again 2026-10-22 (operator):** a preset keeps EVERY filter — the three sets, the
+   broker and the dismissed reveal are stored, dirty it and apply on a click. Only a Stats
+   dashboard (shareable) leaves them out: `PRESET_EXCLUDED_KEYS` became `DASHBOARD_EXCLUDED_KEYS`.
 7. **Look:** the checkbox becomes the chip; stage chips are visible without ticking anything;
    a picked stage chip fills copper (in) or brick (out) with its badge kept.
 8. **Czech** chip and summary words: "v pipeline / mimo pipeline", "v kolekci / v žádné kolekci",
@@ -145,7 +148,7 @@ branch are deleted. The member maps stay for glyphs and the board.
 every curation write (pipeline add/move/remove, collection add/remove, tag attach/detach,
 dismiss): it walks the Browse query cache (filters sit at `browseKeys` slot 1), re-evaluates
 `matchesScope` for that property under each query's scopes with the patched member maps, drops
-the row in place from cards/table pages when it no longer matches, decrements the exact count,
+the row in place from the cards pages when it no longer matches, decrements the exact count,
 and invalidates map/stats keys. This replaces the 52 `pipelineScoped` / `collectionScoped` /
 `cohortScoped` prop sites and closes the tag-write and phone-Feed staleness gaps.
 
@@ -207,7 +210,8 @@ migration 629 + its two tests.
 - `FilterType.INT_LIST` lost its last user with the retype and was deleted (with FilterForm's
   `int_list` branch) — pure dead-path subtraction, outside the ledger.
 - Grouped elements (Mine / Shared with me / No longer available): the whole-set chips get a trailing
-  row of their own, so the not-in chip is still the control's last chip. Vanished `#id` chips
+  row of their own, so the not-in chip is still the control's last chip; a rule above that row keeps
+  it from reading as a member of the last group (2026-10-27, it did under "Shared with me"). Vanished `#id` chips
   CLEAR on click (tags used to cycle them). A whole-set include a link carries for a set that
   does not offer the chip (`?tags=any`, `?collections=any`) is drawn as a pressed "Se štítkem" /
   "V kolekci" chip so it can be switched off. The operator ruled **keep** (2026-10-19): the codec

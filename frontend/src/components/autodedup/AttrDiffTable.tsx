@@ -11,7 +11,7 @@
 import type { AutodedupMember } from '@/lib/api';
 import { categoryMainLabel, categoryTypeLabel } from '@/lib/enums';
 import { fmtArea, fmtCzk, fmtFloor, fmtShortDate } from '@/lib/format';
-import { portalLabel } from '@/lib/portals';
+import { portalBadge } from '@/lib/portals';
 
 export interface DiffRow {
   label: string;
@@ -30,8 +30,8 @@ export function memberDiffRows(a: AutodedupMember, b: AutodedupMember): DiffRow[
   return [
     {
       label: 'Portál',
-      a: a.source ? portalLabel(a.source) : null,
-      b: b.source ? portalLabel(b.source) : null,
+      a: a.source ? portalBadge(a.source, a.source_url, 'long') : null,
+      b: b.source ? portalBadge(b.source, b.source_url, 'long') : null,
     },
     /* NULL-CHECK BEFORE FORMATTING, always. Every one of these formatters has a
      * non-null answer for null — `categoryMainLabel(null)` is "Nemovitost",

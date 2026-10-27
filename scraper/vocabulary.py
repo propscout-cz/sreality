@@ -31,7 +31,7 @@ other half: turning what a portal WROTE into one of those values.
 value a live row carries is either a canonical member (`ve_vystavbe`, `projekt`,
 `udrzovany`, building_type `jina`, ownership `jine`, a 6+kk disposition — all real facts
 the filters had no slot for) or a spelling of one, collapsed here. So `CANON` is exactly
-what this module may emit, and the LLM tool schema generated from it offers exactly that.
+what this module may emit.
 """
 
 from __future__ import annotations
@@ -283,6 +283,16 @@ def energy_rating(*texts: str | None) -> str | None:
 # --- the three boolean readings -------------------------------------------
 
 _NEGATION = ("ne", "bez", "zadn", "none", "false", "0")
+
+
+def reference(value: object) -> str | None:
+    """The advertiser's own number for the offer, exactly as the ad prints it (sreality's
+    `advert_code`, idnes's `IDNES-…`, remax's `ID 096-…`): whitespace collapsed, a blank or a
+    boolean is None. Never re-cased, never stripped of a portal prefix, never bounded — the
+    stored value is what a caller reads off the page, and a derived form stays derivable."""
+    if value is None or isinstance(value, bool):
+        return None
+    return " ".join(str(value).split()) or None
 
 
 def yes_no(value: object) -> bool | None:

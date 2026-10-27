@@ -14,8 +14,9 @@ import {
   feedSearch,
   feedViewOf,
   isNewestFirst,
+  sortLabel,
 } from './feed';
-import { DEFAULT_SORT, type CardRow } from './queries';
+import { CARD_SORTS, DEFAULT_SORT, parseSort, type CardRow } from './queries';
 import type { FilterPreset } from './types';
 
 const preset = (filter_spec: FilterPreset['filter_spec']): FilterPreset => ({
@@ -26,6 +27,7 @@ const preset = (filter_spec: FilterPreset['filter_spec']): FilterPreset => ({
   updated_at: '2026-10-01T00:00:00Z',
   position: 0,
   color: null,
+  group_id: null,
 });
 
 describe('scope → filters', () => {
@@ -37,7 +39,7 @@ describe('scope → filters', () => {
     expect(FEED_ALL_FILTERS.showDismissed).toBe(false);
   });
 
-  it("applies a preset's criteria and drops the lenses that ride outside it", () => {
+  it("applies every filter a preset stores, the lenses included", () => {
     const saved: ListingFilters = {
       ...DEFAULT_FILTERS,
       categoryMain: ['byt'],
@@ -53,10 +55,10 @@ describe('scope → filters', () => {
     expect(f.categoryType).toBe('prodej');
     expect(f.dispositions).toEqual(['2+kk']);
     expect(f.priceMax).toBe(8_000_000);
-    expect(f.showDismissed).toBe(false);
-    expect(f.pipeline).toBeNull();
-    expect(f.collections).toBeNull();
-    expect(f.tags).toBeNull();
+    expect(f.showDismissed).toBe(true);
+    expect(f.pipeline).toEqual({ set: 'in', in: [], out: [] });
+    expect(f.collections).toEqual({ set: null, in: [4], out: [] });
+    expect(f.tags).toEqual({ set: 'out', in: [], out: [] });
   });
 
   it('keeps a map area the operator saved with the preset', () => {
@@ -113,6 +115,16 @@ describe("the view in the URL — Browse's contract", () => {
     expect(isNewestFirst(DEFAULT_SORT)).toBe(true);
     expect(isNewestFirst({ field: 'first_seen_at', direction: 'asc' })).toBe(false);
     expect(isNewestFirst({ field: 'price_czk', direction: 'desc' })).toBe(false);
+  });
+
+  it('names every order a URL can reach by its menu label, never a raw token', () => {
+    const labels = CARD_SORTS.map((o) => o.label);
+    for (const field of ['first_seen_at', 'last_seen_at', 'price_czk', 'price_per_m2',
+                         'area_m2', 'mf_gross_yield_pct', 'estate_area']) {
+      expect(labels).toContain(sortLabel(parseSort(field)));
+      expect(labels).toContain(sortLabel(parseSort(`-${field}`)));
+    }
+    expect(sortLabel(parseSort('last_seen_at'))).toBe('Naposledy viděno');
   });
 });
 

@@ -1,9 +1,10 @@
 /* The estimation-run body — extracted from the Estimation Detail page so the
  * SAME components render a run wherever it surfaces: embedded in the Listing
  * Detail estimations section (the primary surface) and on the standalone
- * /estimation/:id fallback page for orphan runs (pasted URLs we don't have in
- * the DB). RunBody dispatches on run status (in-flight / failed / success);
- * the deep analytics live in RunDetailModal behind "Show estimation detail".
+ * /estimation/:id fallback page for runs that never had an ad (historic
+ * pasted-URL runs and raw-spec runs). RunBody dispatches on run status
+ * (in-flight / failed / success); the deep analytics live in RunDetailModal
+ * behind "Show estimation detail".
  *
  * `embedded` drops the big headline + the run-level MF reference card —
  * the estimations section renders both itself, side by side.
@@ -18,6 +19,7 @@ import { createPortal } from 'react-dom';
 import { lazyChunk } from '@/lib/lazyChunk';
 import { Link, useLocation } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
+import { useNewTabProps } from '@/lib/linkGestures';
 import { usePhoneShell } from '@/lib/phoneShell';
 import {
   keepPreviousData,
@@ -62,9 +64,9 @@ import RangeStrip from '@/components/estimation/RangeStrip';
 import Timeline from '@/components/estimation/Timeline';
 import { MfReferenceCard } from '@/components/estimation/MfReferenceCard';
 import { mfShape } from '@/lib/mfReference';
-import { DecimalField, PickButton } from '@/components/controls';
+import { DecimalField, PickButton, SegmentedBar } from '@/components/controls';
 import { canRerun, type RerunOverrides } from '@/lib/rerun';
-import { listingPath } from '@/lib/listingUrl';
+import { advertPath, listingPath } from '@/lib/listingUrl';
 import { filterById } from '@/lib/filterRegistry.generated';
 import type {
   ComparableExcluded,
@@ -641,7 +643,6 @@ function YieldBlock({
         <NumField
           label="Monthly rent"
           value={rent}
-          step="100"
           suffix="Kč"
           onChange={setRentTouching}
           hint={defaultRent != null ? 'Default: median estimate' : 'No estimate — set manually'}
@@ -649,7 +650,6 @@ function YieldBlock({
         <NumField
           label="Fond oprav + SVJ"
           value={costPerM2}
-          step="1"
           /* A fond is levied per m² per MONTH — the yield formula one card up
              subtracts it from the monthly rent before annualising. The bare
              capital `Kč/m²` this carried misnamed it by a factor of twelve, and
@@ -669,7 +669,6 @@ function YieldBlock({
         <NumField
           label="Area"
           value={areaM2}
-          step="0.1"
           suffix="m²"
           onChange={() => undefined}
           readOnly
@@ -678,7 +677,6 @@ function YieldBlock({
         <NumField
           label="Listing price"
           value={price}
-          step="100000"
           suffix="Kč"
           onChange={setPrice}
           hint={priceHint}
@@ -686,7 +684,6 @@ function YieldBlock({
         <NumField
           label="Renovation"
           value={renovation}
-          step="50000"
           suffix="Kč"
           onChange={setRenovation}
           hint={
@@ -768,6 +765,7 @@ function Warnings({ warnings }: { warnings: string[] }) {
 
 function InputRecap({ run }: { run: EstimationRun }) {
   const spec = run.input_spec;
+  const ad = advertPath({ source: run.subject_source, source_id_native: run.subject_source_id_native });
   const facts: Array<[string, string | null]> = [];
 
   if (spec) {
@@ -813,14 +811,14 @@ function InputRecap({ run }: { run: EstimationRun }) {
           </a>
         </p>
       )}
-      {run.input_sreality_id != null && (
+      {ad != null && (
         <p className="mt-1.5 text-sm">
           <span className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)] mr-2">Listing</span>
           <Link
-            to={listingPath(run.input_sreality_id)}
+            to={ad}
             className="font-mono tabular-nums text-[var(--color-copper)] hover:text-[var(--color-copper-2)] underline-offset-2 hover:underline"
           >
-            id {run.input_sreality_id}
+            {run.subject_source} {run.subject_source_id_native}
           </Link>
         </p>
       )}
@@ -1301,6 +1299,8 @@ function ExcludedComparables({
 }: {
   excluded: ComparableExcluded[] | null;
 }) {
+  /* A comparable opens in a new tab, so the run stays where it was read. */
+  const newTab = useNewTabProps();
   if (!excluded || excluded.length === 0) return null;
   return (
     <div className="mt-6">
@@ -1320,6 +1320,7 @@ function ExcludedComparables({
           >
             <Link
               to={listingPath(row.sreality_id)}
+              {...newTab}
               className="shrink-0 font-mono tabular-nums text-[var(--color-copper)] hover:underline underline-offset-2"
             >
               {row.sreality_id}
@@ -1389,7 +1390,7 @@ function ShowDetailButton({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="px-4 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
+      className="px-4 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] transition-colors"
     >
       Show estimation detail
     </button>
@@ -1529,7 +1530,6 @@ function AdjustPanel({
           label="Latitude"
           required
           value={state.lat}
-          step="0.000001"
           placeholder="50,0875"
           onChange={(v) => set('lat', v)}
         />
@@ -1537,7 +1537,6 @@ function AdjustPanel({
           label="Longitude"
           required
           value={state.lng}
-          step="0.000001"
           placeholder="14,4205"
           onChange={(v) => set('lng', v)}
         />
@@ -1548,7 +1547,6 @@ function AdjustPanel({
           label="Area"
           required
           value={state.area_m2}
-          step="0.1"
           placeholder="50"
           suffix="m²"
           onChange={(v) => set('area_m2', v)}
@@ -1556,7 +1554,6 @@ function AdjustPanel({
         <NumField
           label="Floor"
           value={state.floor}
-          step="1"
           placeholder="—"
           hint="Přízemí = 0, 1. patro = 1, suterén = −1 — the same scale listings.floor is on."
           onChange={(v) => set('floor', v != null ? Math.round(v) : null)}
@@ -1582,9 +1579,11 @@ function AdjustPanel({
         </div>
       </div>
 
-      <div>
+      <div className="space-y-1.5">
         <FieldLabel>Estimate kind</FieldLabel>
-        <SegRow
+        <SegmentedBar
+          fill
+          label="Estimate kind"
           options={[
             { value: 'rent', label: 'Rent (monthly)' },
             { value: 'sale', label: 'Sale price' },
@@ -1596,9 +1595,11 @@ function AdjustPanel({
 
       {state.estimate_kind === 'rent' && (
         <>
-          <div>
+          <div className="space-y-1.5">
             <FieldLabel>Model provider</FieldLabel>
-            <SegRow
+            <SegmentedBar
+              fill
+              label="Model provider"
               options={[
                 { value: 'anthropic', label: 'Claude' },
                 { value: 'gemini', label: 'Gemini' },
@@ -1607,9 +1608,11 @@ function AdjustPanel({
               onChange={(v) => set('provider', v)}
             />
           </div>
-          <div>
+          <div className="space-y-1.5">
             <FieldLabel>Comparable lifecycle</FieldLabel>
-            <SegRow
+            <SegmentedBar
+              fill
+              label="Comparable lifecycle"
               options={[
                 { value: 'active', label: 'Active' },
                 { value: 'delisted', label: 'Delisted' },
@@ -1626,7 +1629,6 @@ function AdjustPanel({
         <NumField
           label="Purchase price"
           value={state.purchase_price_czk}
-          step="100000"
           placeholder="—"
           suffix="Kč"
           onChange={(v) =>
@@ -1638,7 +1640,6 @@ function AdjustPanel({
         <NumField
           label="Expected monthly rent"
           value={state.expected_monthly_rent_czk}
-          step="500"
           placeholder="—"
           suffix="Kč/mo"
           onChange={(v) =>
@@ -1656,7 +1657,7 @@ function AdjustPanel({
             'px-4 py-2 text-sm rounded-[var(--radius-sm)] border transition-colors',
             !valid || pending
               ? 'bg-[var(--color-rule-strong)] text-[var(--color-ink-4)] border-[var(--color-rule-strong)] cursor-not-allowed'
-              : 'bg-[var(--color-copper)] text-white border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
+              : 'bg-[var(--color-copper)] text-[var(--color-on-copper)] border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
           ].join(' ')}
         >
           {pending ? 'Re-running…' : 'Re-run with edits'}
@@ -1708,33 +1709,6 @@ function FieldLabel({
       <span id={id}>{children}</span>
       {required && <span className="ml-1 text-[var(--color-ink-4)]">·</span>}
     </p>
-  );
-}
-
-function SegRow<T extends string>({
-  options,
-  value,
-  onChange,
-}: {
-  options: ReadonlyArray<{ value: T; label: string }>;
-  value: T;
-  onChange: (v: T) => void;
-}) {
-  return (
-    <div
-      className="mt-1.5 grid gap-1"
-      style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
-    >
-      {options.map((opt) => (
-        <PickButton
-          key={opt.value}
-          on={value === opt.value}
-          onClick={() => onChange(opt.value)}
-        >
-          {opt.label}
-        </PickButton>
-      ))}
-    </div>
   );
 }
 
@@ -2051,7 +2025,7 @@ function FloatingFeedbackPanel({
                 'px-4 py-2 text-sm rounded-[var(--radius-sm)] border transition-colors',
                 !submitValid || submitMut.isPending
                   ? 'bg-[var(--color-rule-strong)] text-[var(--color-ink-4)] border-[var(--color-rule-strong)] cursor-not-allowed'
-                  : 'bg-[var(--color-copper)] text-white border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
+                  : 'bg-[var(--color-copper)] text-[var(--color-on-copper)] border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
               ].join(' ')}
             >
               {submitMut.isPending
@@ -2342,7 +2316,7 @@ function RefinementProposal({
               'px-4 py-2 text-sm rounded-[var(--radius-sm)] border transition-colors',
               decidePending
                 ? 'bg-[var(--color-rule-strong)] text-[var(--color-ink-4)] border-[var(--color-rule-strong)] cursor-not-allowed'
-                : 'bg-[var(--color-copper)] text-white border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
+                : 'bg-[var(--color-copper)] text-[var(--color-on-copper)] border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
             ].join(' ')}
           >
             {decidePending ? 'Working…' : 'Apply to skill'}

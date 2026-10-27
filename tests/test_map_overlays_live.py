@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import uuid
 from datetime import date
 from typing import Any, Iterator
@@ -20,7 +21,7 @@ import pytest
 
 from api.rent_map import insert_revision
 from scripts import ingest_map_overlays as overlays
-from tests._live_property import REQUIRED_DB, cur  # noqa: F401 -- `cur` is the fixture
+from tests._live_property import REQUIRED_DB
 from toolkit.rent_map import ParsedRentMap, RentValue
 
 pytestmark = REQUIRED_DB
@@ -32,6 +33,14 @@ LINE = "ST_MakeLine(ST_Translate(p, -1500, -300), ST_Translate(p, 1500, 300))"
 POINT = "p"
 TABLES = ("map_overlay_sections", "map_overlay_layers", "map_overlay_features", "map_overlay_tiles")
 RENDER = "public.map_overlay_render_section(text)"
+
+
+@pytest.fixture()
+def mvt(cur: Any) -> None:
+    """ST_AsMVT needs PostGIS built with protobuf-c, which conda-forge's PG17 build (scripts/local_pg.sh) lacks; CI never skips."""
+    cur.execute("SELECT postgis_full_version() LIKE '%PROTOBUF%'")
+    if not cur.fetchone()[0] and not os.environ.get("CI"):
+        pytest.skip("this PostGIS has no protobuf-c, so ST_AsMVT cannot run; CI runs these tests")
 
 
 def _varint(buf: bytes, i: int) -> tuple[int, int]:
@@ -154,6 +163,7 @@ def test_the_datum_control_point_lands_within_a_metre(cur: Any) -> None:
     assert cur.fetchone()[0] < 1.0
 
 
+@pytest.mark.usefixtures("mvt")
 def test_the_render_writes_one_layer_per_key_into_every_covering_tile(cur: Any) -> None:
     section, square_layer, line_layer = _section(cur)
     square = _feature(cur, square_layer, {"class": "A", "name": "Florenc"}, SQUARE)
@@ -175,6 +185,7 @@ def test_the_render_writes_one_layer_per_key_into_every_covering_tile(cur: Any) 
         }, key
 
 
+@pytest.mark.usefixtures("mvt")
 def test_a_re_render_replaces_the_tiles_and_an_emptied_section_keeps_none(cur: Any) -> None:
     section, square_layer, line_layer = _section(cur)
     _feature(cur, square_layer, {"class": "A"}, SQUARE)
@@ -257,6 +268,7 @@ def _rent_overlay(cur: Any) -> tuple[Any, ...] | None:
     return cur.fetchone()
 
 
+@pytest.mark.usefixtures("mvt")
 def test_the_rent_map_draws_the_latest_revision_per_priced_territory(cur: Any) -> None:
     """One feature per territory the latest revision prices AND admin_boundaries can draw, at
     the level the MF priced it, its VK rents as flat numeric props (an unpriced VK and a NULL
@@ -303,6 +315,7 @@ def test_the_rent_map_draws_the_latest_revision_per_priced_territory(cur: Any) -
         assert drawn[ids[str(OBEC)]] == obec_props, key
 
 
+@pytest.mark.usefixtures("mvt")
 def test_a_rent_map_ingest_re_renders_the_overlay_from_its_own_revision(cur: Any) -> None:
     """api/rent_map.py renders the overlay where it refreshed rent_map_choropleth, inside the
     ingest's transaction: the tiles carry the revision being written, before any commit, and

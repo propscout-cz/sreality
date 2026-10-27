@@ -320,8 +320,13 @@ LLM_TEXT_SOURCES_SQL = f"SELECT DISTINCT source FROM ({_LLM_TEXT_SOURCES}) s ORD
 
 
 def _scope(open_sources: Iterable[str]) -> str:
+    """Each portal in scope ONCE. The contract query yields one row per `llm_text` ENTRY
+    (five for bazos) and the open gate adds the portal again; `SELECT_INFLOW_SQL` unnests
+    this array and picks `limit` listings PER ELEMENT, so a six-fold bazos picked the same
+    newest listings six times a pass — 500 paid calls for ~83 readings, 4.5 calls per
+    reading since 2026-09-30."""
     listed = "".join(f" UNION ALL SELECT '{p}'" for p in sorted(open_sources))
-    return f"ARRAY({_LLM_TEXT_SOURCES}{listed})"
+    return f"ARRAY(SELECT DISTINCT src FROM ({_LLM_TEXT_SOURCES}{listed}) scoped(src))"
 
 
 def _eligible_where(open_sources: Iterable[str]) -> str:

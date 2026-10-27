@@ -2,8 +2,8 @@
 
 A SECOND Railway service from the same Docker image (start command
 `env MALLOC_ARENA_MAX=2 python -m scraper.realtime_worker`, E949) that replaces cron
-quantization for the latency-critical path. Settings-paced asyncio lanes (the proven
-matcher/outbox pattern from api/notifications + api/notification_outbox):
+quantization for the latency-critical path. Settings-paced asyncio lanes, each one
+`_lane_loop` (interval re-read every wake, <= 0 idles, a failed pass recorded, never fatal):
 
 - probe:     every `realtime_probe_interval_seconds` (default 180), run the
              newest-first delta probe (portal_runner.run_index_probe, Wave C-2)
@@ -11,51 +11,42 @@ matcher/outbox pattern from api/notifications + api/notification_outbox):
              never nominates.
 - drain:     every `realtime_drain_interval_seconds` (default 30), claim a
              bounded slice of the shared listing_detail_queue per source that
-             has claimable rows. SKIP LOCKED makes this safe beside the GitHub
-             Actions drains by construction. Sources listed in
+             has claimable rows; the only drain of the walk-only portals
+             (SKIP LOCKED keeps it safe beside a combined scraper's own drain
+             phase and a hand --drain-only run). Sources listed in
              `realtime_drain_disabled_sources` are skipped — a per-source
-             kill-switch (e.g. to freeze a portal's queue at low attempts
+             kill-switch that freezes a portal's queue (e.g. at low attempts
              during a proxy outage instead of burning them to given_up).
 - images:    every `realtime_images_interval_seconds` (default 60), drain a
              `realtime_images_slice`-capped slice (default 500) of pending
              image downloads via the one existing machinery
              (scraper.main._run_image_downloads: per-host semaphore + breaker,
-             active-only newest-first) — the latency lever that feeds the
-             images-first publication gate in api/notifications. Coexists with
-             images_fresh.yml (idempotent storage_path-IS-NULL selection);
+             active ads newest-first) — the latency lever that feeds the
+             publication rule (a first stored photo, migrations 668/669). The
+             inactive residue fills what the active tier leaves of a slice, so
+             the lane is the only image drain (images.yml folded in, #2011);
              without R2 env vars the lane logs once and idles (the proxy-skip
              posture).
-- count_probe: every `realtime_sreality_count_interval_seconds` (default 600),
-             poll pagination.total per sreality (cm, ct) pair (one cheap request
-             each — SrealityClient.probe_result_size). sreality's v1 API ignores
-             sort params, so a newest-first probe is impossible; a count change
-             beyond +-1 jitter is the cheap "something appeared/left" signal, and
-             (when dispatch is opted in — a token env AND the
-             realtime_sreality_count_dispatch_enabled setting) it triggers a
-             targeted index_walk sooner than the */15 cron. Always records
-             per-pair totals to sreality_count_probe_state (migration 270).
-- maintenance: every `realtime_maintenance_interval_seconds` (default 120), one
+- maintenance: every `realtime_maintenance_interval_seconds` (default 30), one
              incremental property-maintenance pass — straggler attach + dirty-set
-             recompute, via scripts.recompute_property_stats.
-             run_incremental_pass (THE same implementation the GH cron runs;
-             never forked). Exists because GH throttles property_maintenance.yml
-             (nominal */5) to a measured 2h median / 4.1h worst — this lane is
-             what actually delivers "a new/changed listing reaches properties
-             (and the Browse read model) within minutes". Safe beside the GH
-             cron + daily sweep: all callers serialize on the maintenance
+             recompute + settle (`settled_at` on fresh properties the pipeline is
+             done with, migration 668), via scripts.recompute_property_stats.
+             run_incremental_pass — the pass's only scheduled runtime: it is
+             what delivers "a new/changed listing reaches properties (and the
+             Browse read model) within minutes". Safe beside the daily sweep
+             and a hand run: all callers serialize on the maintenance
              lease row (migration 279 — pooler-proof CAS; a session advisory
-             lock strands over the transaction pooler) — a concurrent caller
-             skips.
+             lock strands over the transaction pooler) — an incremental caller
+             skips while it is held, the sweep waits for it.
 - broker_maintenance: every `realtime_maintenance_interval_seconds` (shared
              with the maintenance lane — same cadence class, no new setting),
              one drain-until-empty broker pass via scripts.resolve_brokers.
-             run_incremental_pass (THE same implementation broker_resolution.yml
-             runs; never forked). Attributes dirty listings to brokers,
-             recomputes only the affected brokers' rollups, and republishes the
-             leaderboard matview when its derived_artifacts stamp is older than
-             ~an hour — so broker numbers stop being a once-daily artifact of
-             the GH-throttled full sweep (Broker Unify W3). Safe beside the GH
-             cron + daily sweep: all callers serialize on broker_resolution_lock;
+             run_incremental_pass, the pass's only scheduled runtime. Attributes
+             dirty listings to brokers, recomputes only the affected brokers'
+             rollups, and republishes the leaderboard matview when its
+             derived_artifacts stamp is older than ~an hour — so broker numbers
+             stop being a once-daily artifact of the full sweep (Broker Unify
+             W3). Safe beside the daily sweep and a hand run: all callers serialize on broker_resolution_lock;
              a concurrent caller skips. Its own pass lock keeps an abandoned pass,
              whose lease row goes stale, from running beside the next one.
 - location_resolve: every `realtime_location_resolve_interval_seconds`
@@ -68,7 +59,7 @@ matcher/outbox pattern from api/notifications + api/notification_outbox):
              default 4, clamped — a throughput knob, not a flag; see the
              constant block below). DARK until
              `realtime_location_resolve_enabled` is set. Safe beside
-             location_resolve.yml: both take the SAME location_jobs lease row.
+             location_resolve.yml: both take the SAME scheduled_jobs lease row.
 - location_intake_fast: every `LOCATION_INTAKE_FAST_INTERVAL_S` (default 60),
              ONE bounded pass of THE claim lane's incremental listing scan
              (location_data.claims_intake.run, the same code
@@ -79,8 +70,8 @@ matcher/outbox pattern from api/notifications + api/notification_outbox):
              (`LOCATION_INTAKE_FAST_ENABLED=0` idles it). One lane, two
              schedules: see the constant block below.
 - location_refetch: every `LOCATION_REFETCH_INTERVAL_S` (default 86400, first
-             tick a few minutes after start), queue the audit page's active
-             "no data" listings for ONE more detail fetch, at
+             tick a few minutes after start), queue the active ads with no town
+             (rule 25, `location_steps.town_missing_sql`) for ONE more detail fetch, at
              db.QUEUE_PRIORITY_VERIFY and capped at
              `LOCATION_REFETCH_CAP_PER_SOURCE` (default 500) rows per portal per
              tick. ceskereality and realitymix geocode an ad AFTER publishing it,
@@ -121,6 +112,25 @@ matcher/outbox pattern from api/notifications + api/notification_outbox):
              token memos whatever ends a pass, and the worker hands freed heap back
              to the kernel (gc + glibc malloc_trim) as a pass ends and again before
              the next begins, which is when a raised pass's memory goes (E949).
+- notifications: every NOTIFICATIONS_TICK_SECONDS (300, a constant), the three
+             notification producers of api/notifications (notifications push program
+             W2a): watchdog_new (a live watchdog's matches first seen in the last 24 h,
+             once published: migrations 668/669), price (the canonical advert's price
+             steps of the last 7 days, for watchdogs and monitored collections) and
+             monitor (a monitored property gone for a day, back, or on a new portal).
+             Each step its own connection and transaction; a failing step is its own
+             `portal_errors` cell.
+             The producers' one clock: the API runs none since W2b.
+- push:      every PUSH_TICK_SECONDS (15, a constant), one pass of the push ledger
+             (api/push_delivery.deliver_once, notifications push W4): fan out every
+             VISIBLE unseen event of the last 24 h to the live devices its account
+             registered before it (a share past the one-a-day cap is skipped `capped`),
+             claim the due rows of at most 10 devices (a 2-minute lease, SKIP LOCKED),
+             re-check them, send ONE push per device (api/push.send) and finalize it
+             before the next. The brake is VAPID_PRIVATE_KEY: unset, the pass records
+             `unconfigured` and touches nothing. Steps fan_out / claim / send are its
+             `portal_errors` cells, recorded by exception class only: an endpoint is a
+             secret and never reaches the heartbeat or the log.
 - heartbeat: every 30s, upsert this worker's beat + per-lane fields into
              worker_heartbeats (migration 269) — the Health-page liveness hook — and
              record its own pass like every lane. Every lane in LANES has an entry from
@@ -169,6 +179,7 @@ from psycopg.types.json import Jsonb
 from scraper import (
     db, image_storage, portal_factory, portal_runner, sold_db, sold_fetch,
 )
+from scraper.cgroup import memory_limit_mb as _memory_limit_mb
 from scraper.portal import PortalConfig
 from scraper.rate_ledger import RateBudgetUnavailable
 
@@ -192,8 +203,7 @@ DRAIN_MAX_SECONDS = 120.0
 LEDGER_MAX_WAIT_SECONDS = DRAIN_MAX_SECONDS
 IMAGES_INTERVAL_DEFAULT = 60
 IMAGES_SLICE_DEFAULT = 500
-# Modest beside the Actions lanes' 32: the worker slice is small and the lane
-# shares the CDNs with images_fresh.yml.
+# Modest: the worker slice is small (500 by default).
 IMAGES_WORKERS = 8
 HEARTBEAT_INTERVAL_SECONDS = 30.0
 # Ten missed beats. When no heartbeat pass has FINISHED for this long the watchdog exits
@@ -210,16 +220,18 @@ WATCHDOG_LAST_WORDS_SECONDS = 10.0
 # connects (db.connect's default is three attempts at psycopg's 130 s each).
 HEARTBEAT_CONNECT_TIMEOUT_SECONDS = 10
 # Every lane _amain registers, in its order. Each has a heartbeat entry from boot, so a
-# lane that never woke reads as such instead of being absent.
+# lane that never woke reads as such instead of being absent, and the jobs check
+# (scripts/checks/platform.WORKER_LANES, a pinned mirror) reads a lane absent from the
+# beat as a worker older than its code.
 LANES: tuple[str, ...] = (
-    "probe", "drain", "images", "count_probe", "maintenance", "broker_maintenance",
+    "probe", "drain", "images", "maintenance", "broker_maintenance",
     "estimation", "location_resolve", "location_intake_fast", "location_refetch",
-    "sold_comps", "text_extract", "health", "autodedup", "heartbeat",
+    "sold_comps", "text_extract", "health", "autodedup", "notifications", "push", "heartbeat",
 )
 # Every lane's blocking work, the heartbeat's included, runs on asyncio's default
 # executor, which makes the heartbeat its canary: if leaked threads fill it, beats stop
 # and the watchdog restarts the worker. Pinned rather than min(32, cpu+4), so the
-# headroom does not depend on what the container reports: the fifteen LANES hold at most
+# headroom does not depend on what the container reports: the sixteen LANES hold at most
 # one thread each in normal running.
 LANE_EXECUTOR_THREADS = 32
 IDLE_WAIT_SECONDS = 60.0
@@ -273,15 +285,14 @@ class _PassLock:
 
 # maintenance lane: the incremental property-maintenance pass (straggler attach
 # + dirty-set recompute — scripts.recompute_property_stats.
-# run_incremental_pass, THE same implementation the GH cron runs), every
-# MAINTENANCE_INTERVAL_DEFAULT seconds. Exists because GH Actions throttles this
-# repo's schedules to ~hourly at best — property_maintenance.yml (nominal */5)
-# measured a 2h MEDIAN / 4.1h worst gap (2026-07-07 audit), so "a new listing
-# reaches properties/Browse within ~5 min" was off by ~24x. Ships LIVE (the
-# fix is the point); interval <= 0 idles it. Safe beside the GH cron + daily
-# sweep by construction: all three serialize on the maintenance lease row
-# (migration 279) inside run_incremental_pass (a concurrent caller skips).
-MAINTENANCE_INTERVAL_DEFAULT = 120
+# run_incremental_pass), every MAINTENANCE_INTERVAL_DEFAULT seconds — the pass's
+# only scheduled runtime. Ships LIVE (the fix is the point); interval <= 0 idles
+# it. Safe beside the daily sweep and a hand run by construction: all serialize
+# on the maintenance lease row (migration 279) inside run_incremental_pass (this
+# lane skips while another writer holds it).
+# 30 s, not 120: the attach is the only birth, so this bounds how long a new ad
+# (a pasted one too) waits for its property; an idle pass costs ~6 ms (2026-10-20).
+MAINTENANCE_INTERVAL_DEFAULT = 30
 MAINTENANCE_BATCH_SIZE_DEFAULT = 2000
 
 # estimation lane (Wave 1 W1-3 / Amendment A10): drain `pending` estimation_runs
@@ -306,7 +317,7 @@ ESTIMATION_STUCK_MINUTES_DEFAULT = 15
 # dirty_locations queue. This worker sits next to the database in the EU, so the
 # same code costs ~1-2 ms per trip and runs continuously. The GH lane STAYS as
 # the backstop (and owns --full-sweep / --dry-run / --listing-id); the two can
-# never drain at once because both take the SAME location_jobs lease row.
+# never drain at once because both take the SAME scheduled_jobs lease row.
 # Named location_resolve, never "resolve"/"drain": this worker already has a
 # lane called `drain` (the portal detail drain) whose heartbeat key and
 # jobs cell (`lane/drain`) would become unreadable.
@@ -468,8 +479,6 @@ LOCATION_REFETCH_CAP_DEFAULT = 500
 # reason to compete for that minute; and a deploy loop must not fire a queue-writing pass
 # every time the container restarts.
 LOCATION_REFETCH_FIRST_DELAY_SECONDS = 300.0
-# log-once-per-process guard: the audit matview is absent (a branch database).
-_LOCATION_REFETCH_VIEW_WARNED = False
 
 # sold_comps lane (sold-comps W2): REGISTERED SALES FOR THE TOWNS THE OPERATOR IS
 # ACTUALLY WORKING IN. A sale is an external fact with no account and no listing, so
@@ -540,6 +549,39 @@ _HEALTH_PASS_LOCK = _PassLock("health")
 _HEALTH_REGISTRY_PROJECTED = False
 # time.monotonic() of this process's last prune attempt; None until its first.
 _HEALTH_PRUNED_AT: float | None = None
+
+# notifications lane (notifications push program W2a, PROGRAM.md § 3.3): the three notification
+# producers of api/notifications on ONE clock, the text_extract/health shape — a CONSTANT tick, no
+# app_settings row, no flag; the brake is a deploy. Each step runs on its own connection and commits
+# per statement (one watchdog's INSERT, one monitor detector: api/notifications._commit_one, under a
+# 120 s SET LOCAL bound), so the locks an INSERT takes never outlive it and a step that raises stops
+# only itself; its error is a `portal_errors` entry, which the jobs check renders as the cell
+# `lane/notifications/<step>`, and the step's next clean pass clears it. Their only caller since W2b
+# deleted the API's matcher_loop; a deploy overlap's two workers conflict on the one identity index,
+# so the overlap is a union, never a duplicate.
+NOTIFICATIONS_TICK_SECONDS = 300.0
+# step -> the api.notifications producer it runs (looked up at pass time: the module is lazy-imported).
+NOTIFICATIONS_STEPS: dict[str, str] = {
+    "watchdog_new": "match_once",
+    "price": "match_changes_once",
+    "monitor": "match_monitored_collections_once",
+}
+# A step's producers share one pass, so an abandoned pass must never overlap the next.
+_NOTIFICATIONS_PASS_LOCK = _PassLock("notifications")
+
+# push lane (notifications push W4, PROGRAM.md § 3.3-3.4): the push ledger's one pass, the notifications lane's
+# shape — a CONSTANT tick, no app_settings row, no flag. Its ONE brake is the secret it signs with: no
+# VAPID_PRIVATE_KEY (one Railway variable shared with the API), and the pass records `unconfigured` and opens no
+# connection; the Health check's `push/unconfigured` cell shows it while a live device waits. No lock but the
+# claim's lease (migration 654's next_attempt_at): a second worker in a deploy overlap claims other rows, and a
+# pass killed mid-send leaves its rows due again after two minutes.
+PUSH_TICK_SECONDS = 15.0
+# The pass's `portal_errors` subjects: `lane/push/<step>` in the jobs check.
+PUSH_STEPS: tuple[str, ...] = ("key", "fan_out", "claim", "send")
+# One connect attempt bound: the next tick is 15 s away.
+PUSH_CONNECT_TIMEOUT_SECONDS = 10
+# A pass abandoned at the lane timeout must never overlap the next one in this process.
+_PUSH_PASS_LOCK = _PassLock("push")
 
 # autodedup lane (E914): THE one production path of the dedup engine
 # (autodedup.incremental_lane.run_incremental, imported and never copied). One pass decides,
@@ -615,23 +657,14 @@ _AUTODEDUP_LAST_OUTCOME: str | None = None
 # logs it, unless the claim cap is at its floor.
 _BOOTED_EPOCH: int = int(time.time())
 
-# sreality count-probe lane (W3): sreality's v1 search API ignores every sort
-# param, so its own probe (added Phase 4 of portal-order-fidelity) can only
-# diff ids seen on a shallow unsplit page walk, not request a true newest-first
-# ordering — this lane is a CHEAP, COMPLEMENTARY total-count signal, not made
-# redundant by that probe. It polls pagination.total per (cm, ct) every
-# COUNT_PROBE_INTERVAL_DEFAULT seconds; a change beyond +-COUNT_PROBE_JITTER can
-# trigger a targeted index_walk sooner than the */15 cron. Interval <= 0 idles it.
-COUNT_PROBE_INTERVAL_DEFAULT = 600
-COUNT_PROBE_JITTER = 1  # |new-old| within this band is API noise, not a real change
-COUNT_PROBE_RATE_PER_S = 2.0  # ~20 total-only requests in ~10s, politely paced
-
 # The probe-capable portals (design doc: newest-first index order, or a bespoke
 # probe_category). Stable order = polite, predictable per-pass sequencing. Also
 # the set the drain lane serves — the worker only drains portals it knows how
-# to build.
+# to build. `web` (pasted sites) goes FIRST: the drain lane takes sources one after
+# another with a budget each, so a paste waits only for the drain interval, never for
+# nine other portals' budgets (docs/design/new-property-from-link.md §3.2).
 REALTIME_SOURCES: tuple[str, ...] = (
-    "bazos", "bezrealitky", "ceskereality", "idnes",
+    "web", "bazos", "bezrealitky", "ceskereality", "idnes",
     "maxima", "mmreality", "realitymix", "remax", "sreality",
 )
 
@@ -666,17 +699,6 @@ _DRAIN_PASS_LOCK = _PassLock("drain")
 # broker_resolution_lock row goes stale after _LOCK_STALE_MIN, so without this the next
 # tick would take the lease and run a second pass beside it, a thread per abandoned pass.
 _BROKER_MAINTENANCE_PASS_LOCK = _PassLock("broker_maintenance")
-
-# Count-probe walk DISPATCH is double-gated — a token env var AND the
-# realtime_sreality_count_dispatch_enabled setting (default off) — so the lane
-# ships dark for triggering (it still RECORDS per-pair totals for observability).
-# index_walk.yml has no per-category inputs, so a trigger is a FULL walk.
-DISPATCH_TOKEN_ENVS = ("WORKER_DISPATCH_TOKEN", "SCRAPE_CHAIN_TOKEN")
-DISPATCH_REPO = os.environ.get("WORKER_GH_REPO", "waiff/sreality")
-DISPATCH_WORKFLOW = "index_walk.yml"
-DISPATCH_REF = os.environ.get("WORKER_GH_REF", "main")
-# log-once-per-process guard when dispatch is enabled but no token is configured.
-_DISPATCH_WARNED: set[str] = set()
 
 # log-once-per-process guard: the resolve lane running on the TRANSACTION pooler.
 _RESOLVE_SESSION_WARNED = False
@@ -752,11 +774,6 @@ def _read_disabled_sources() -> set[str]:
 
 def _read_drain_disabled_sources() -> set[str]:
     return _read_source_set("realtime_drain_disabled_sources")
-
-
-def _read_count_probe_interval() -> int:
-    return _read_int(
-        "realtime_sreality_count_interval_seconds", COUNT_PROBE_INTERVAL_DEFAULT)
 
 
 def _read_maintenance_interval() -> int:
@@ -929,10 +946,6 @@ def _read_flag(key: str) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in ("true", "1", "yes", "on")
     return bool(value)
-
-
-def _read_count_dispatch_enabled() -> bool:
-    return _read_flag("realtime_sreality_count_dispatch_enabled")
 
 
 # --- portal construction ----------------------------------------------------
@@ -1259,12 +1272,12 @@ async def _drain_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None:
 
 
 def _run_images_sync(max_downloads: int) -> dict[str, Any]:
-    # Reuse THE image machinery (per-host semaphore, breaker, active-only +
-    # newest-first via db.pending_image_downloads) — never fork it. Lazy import
-    # keeps scraper.main off the worker's startup path.
+    # Reuse THE image machinery (per-host semaphore, breaker, active ads
+    # newest-first then the inactive residue via db.pending_image_downloads) —
+    # never fork it. Lazy import keeps scraper.main off the worker's startup path.
     from scraper.main import _run_image_downloads
 
-    return _run_image_downloads(max_downloads, IMAGES_WORKERS, active_only=True)
+    return _run_image_downloads(max_downloads, IMAGES_WORKERS)
 
 
 async def _images_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None:
@@ -1303,169 +1316,6 @@ async def _images_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None
     _record_pass(state, "images", totals)
 
 
-# --- count-probe lane (sreality) ---------------------------------------------
-
-
-def _dispatch_token() -> str | None:
-    for env in DISPATCH_TOKEN_ENVS:
-        tok = os.environ.get(env)
-        if tok:
-            return tok
-    return None
-
-
-def _count_probe_sync() -> dict[str, Any]:
-    """One cheap pagination.total request per sreality (cm, ct) pair; diff against
-    sreality_count_probe_state and upsert. Returns the pairs whose total moved beyond
-    +-COUNT_PROBE_JITTER. A FIRST sighting (no prior total) is recorded but never flagged,
-    so first-populating the table can't trigger a walk. No detail/enqueue: the count is the
-    only cheap signal sreality's sort-blind v1 API gives."""
-    from scraper.main import CATEGORIES, _build_client
-    from scraper.rate_limit import RateLimiter
-
-    limiter = RateLimiter(COUNT_PROBE_RATE_PER_S)
-    prior: dict[tuple[int, int], int | None] = {}
-    conn = db.connect()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT category_main_cb, category_type_cb, last_total "
-                "FROM sreality_count_probe_state")
-            for cm, ct, total in cur.fetchall():
-                prior[(int(cm), int(ct))] = None if total is None else int(total)
-    finally:
-        with contextlib.suppress(Exception):
-            conn.close()
-
-    changed: list[dict[str, Any]] = []
-    errors = 0
-    rows: list[tuple[int, int, int, bool]] = []  # cm, ct, new_total, is_changed
-    for cm, ct in CATEGORIES:
-        try:
-            total = _build_client(cm, ct, limiter=limiter).probe_result_size()
-        except Exception as exc:  # noqa: BLE001 - one category must not end the pass
-            LOG.warning("COUNT-PROBE cm=%s ct=%s failed: %s", cm, ct, exc)
-            errors += 1
-            continue
-        if total is None:
-            errors += 1
-            continue
-        old = prior.get((cm, ct))
-        is_changed = old is not None and abs(total - old) > COUNT_PROBE_JITTER
-        rows.append((cm, ct, total, is_changed))
-        if is_changed:
-            changed.append({"cm": cm, "ct": ct, "old": old, "new": total})
-    _upsert_count_state(rows)
-    return {"pairs": len(rows), "changed": changed, "errors": errors}
-
-
-def _upsert_count_state(rows: list[tuple[int, int, int, bool]]) -> None:
-    if not rows:
-        return
-    conn = db.connect()  # autocommit
-    try:
-        with conn.cursor() as cur:
-            for cm, ct, total, is_changed in rows:
-                cur.execute(
-                    """
-                    INSERT INTO sreality_count_probe_state
-                        (category_main_cb, category_type_cb, last_total,
-                         last_checked_at, last_changed_at)
-                    VALUES (%s, %s, %s, now(), CASE WHEN %s THEN now() ELSE NULL END)
-                    ON CONFLICT (category_main_cb, category_type_cb) DO UPDATE SET
-                        last_total      = EXCLUDED.last_total,
-                        last_checked_at = now(),
-                        last_changed_at = CASE WHEN %s THEN now()
-                            ELSE sreality_count_probe_state.last_changed_at END
-                    """,
-                    (cm, ct, total, is_changed, is_changed),
-                )
-    finally:
-        with contextlib.suppress(Exception):
-            conn.close()
-
-
-def _seconds_since_last_sreality_index_walk() -> float | None:
-    conn = db.connect()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT extract(epoch FROM (now() - max(started_at))) "
-                "FROM scrape_runs WHERE source = 'sreality' AND index_pages > 0")
-            row = cur.fetchone()
-        return float(row[0]) if row and row[0] is not None else None
-    finally:
-        with contextlib.suppress(Exception):
-            conn.close()
-
-
-def _post_workflow_dispatch(token: str) -> bool:
-    from scraper.github_dispatch import post_workflow_dispatch
-
-    try:
-        resp = post_workflow_dispatch(
-            DISPATCH_REPO, DISPATCH_WORKFLOW, token, {"ref": DISPATCH_REF}, timeout=30)
-    except Exception as exc:  # noqa: BLE001 - a dispatch hiccup must not kill the lane
-        LOG.warning("count-probe: dispatch POST failed: %s", exc)
-        return False
-    if resp.status_code == 204:
-        LOG.info("count-probe: dispatched %s (ref=%s)", DISPATCH_WORKFLOW, DISPATCH_REF)
-        return True
-    LOG.warning("count-probe: dispatch returned %s: %s",
-                resp.status_code, resp.text[:200])
-    return False
-
-
-def _maybe_dispatch_index_walk(
-    changed: list[dict[str, Any]], cooldown_seconds: float,
-) -> dict[str, Any]:
-    """Trigger ONE targeted index_walk when a count changed, IF dispatch is enabled
-    (the setting AND a token env) and no sreality index walk is fresher than
-    cooldown_seconds — a debounce against the */15 cron AND prior triggers (both land in
-    scrape_runs as index rows). index_walk.yml has no per-category inputs, so this is a
-    full walk. Returns {dispatched, reason}."""
-    if not changed:
-        return {"dispatched": False, "reason": "no_change"}
-    if not _read_count_dispatch_enabled():
-        return {"dispatched": False, "reason": "disabled"}
-    token = _dispatch_token()
-    if not token:
-        if "token" not in _DISPATCH_WARNED:
-            _DISPATCH_WARNED.add("token")
-            LOG.warning(
-                "count-probe: dispatch enabled but no token env (%s) set; recording only",
-                "/".join(DISPATCH_TOKEN_ENVS))
-        return {"dispatched": False, "reason": "no_token"}
-    age = _seconds_since_last_sreality_index_walk()
-    if age is not None and age < cooldown_seconds:
-        return {"dispatched": False, "reason": "fresh_walk", "age": int(age)}
-    ok = _post_workflow_dispatch(token)
-    return {"dispatched": ok, "reason": "triggered" if ok else "dispatch_failed"}
-
-
-async def _count_probe_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None:
-    if stop_event.is_set():
-        return
-    agg = await asyncio.to_thread(_count_probe_sync)
-    dispatched = False
-    if agg["changed"]:
-        cooldown = float(await asyncio.to_thread(_read_count_probe_interval))
-        try:
-            disp = await asyncio.to_thread(
-                _maybe_dispatch_index_walk, agg["changed"], cooldown)
-            dispatched = bool(disp.get("dispatched"))
-        except Exception:  # noqa: BLE001 - a dispatch decision must not end the pass
-            LOG.exception("COUNT-PROBE dispatch decision failed")
-    LOG.info(
-        "COUNT-PROBE pairs=%d changed=%d errors=%d dispatched=%s",
-        agg["pairs"], len(agg["changed"]), agg["errors"], dispatched,
-    )
-    _record_pass(state, "count_probe", {
-        "pairs": agg["pairs"], "changed": len(agg["changed"]),
-        "errors": agg["errors"], "dispatched": dispatched,
-    })
-
-
 _HEARTBEAT_SQL = """
     INSERT INTO worker_heartbeats (worker, beat_at, started_at, details)
     VALUES (%(worker)s, now(), %(started_at)s, %(details)s)
@@ -1479,8 +1329,8 @@ _HEARTBEAT_SQL = """
 def _maintenance_sync() -> dict[str, Any]:
     """One incremental property-maintenance pass on the worker's own
     connection. Reuses THE script implementation (never forks it); the lease
-    row inside run_incremental_pass makes this safe beside the GH cron and the
-    daily full sweep — a concurrent caller returns skipped. Lazy import keeps
+    row inside run_incremental_pass makes this safe beside the daily full
+    sweep and a hand run — a concurrent caller returns skipped. Lazy import keeps
     scripts.recompute_property_stats off the worker's startup path."""
     from scripts.recompute_property_stats import run_incremental_pass
 
@@ -1501,13 +1351,14 @@ async def _maintenance_pass(stop_event: asyncio.Event, state: dict[str, Any]) ->
         "skipped": bool(stats.get("skipped")),
         "attached": stats.get("attached", 0),
         "recomputed": stats.get("recomputed", 0),
+        "settled": stats.get("settled", 0),
     }
     if last["skipped"]:
-        LOG.info("MAINTENANCE lane skipped (lease held by cron or daily sweep)")
+        LOG.info("MAINTENANCE lane skipped (lease held by the daily sweep or a hand run)")
     else:
         LOG.info(
-            "MAINTENANCE lane attached=%d recomputed=%d",
-            last["attached"], last["recomputed"],
+            "MAINTENANCE lane attached=%d recomputed=%d settled=%d",
+            last["attached"], last["recomputed"], last["settled"],
         )
     _record_pass(state, "maintenance", last)
 
@@ -1515,8 +1366,8 @@ async def _maintenance_pass(stop_event: asyncio.Event, state: dict[str, Any]) ->
 def _broker_maintenance_sync() -> dict[str, Any]:
     """One drain-until-empty broker pass on the worker's own connection. Reuses
     THE script implementation (never forks it); broker_resolution_lock inside
-    run_incremental_pass makes this safe beside the GH cron and the daily full
-    sweep — a concurrent caller returns skipped. In ONE thread holding the lane's pass
+    run_incremental_pass makes this safe beside the daily full sweep and a
+    hand run — a concurrent caller returns skipped. In ONE thread holding the lane's pass
     lock (see _probe_sync). Lazy import keeps scripts.resolve_brokers off the worker's
     startup path."""
     if not _BROKER_MAINTENANCE_PASS_LOCK.try_enter():
@@ -1671,14 +1522,15 @@ def _tune_resolver_log_level(*, idle: bool) -> None:
 
 def _location_resolve_sync() -> dict[str, Any]:
     """One bounded pass of THE resolver drain (location_data.resolver.drain.run)
-    under THE shared location_jobs lease, so this lane and location_resolve.yml
+    under THE shared scheduled_jobs lease, so this lane and location_resolve.yml
     can never drain at once — plus an in-process lock, because an abandoned pass
     outlives its lease. Lazy import keeps location_data off the worker's startup
-    path; module-attribute calls (drain.run / lease.held) keep both patchable in
-    tests. No try/except around run(): a raise is the signal — lease.held stamps
-    last_outcome='failed' and re-raises, and _lane_loop records the failed
-    pass."""
-    from location_data.resolver import drain, lease
+    path; module-attribute calls (drain.run / job_lease.held) keep both patchable
+    in tests. No try/except around run(): a raise is the signal — job_lease.held
+    stamps last_outcome='failed' and re-raises, and _lane_loop records the
+    failed pass."""
+    from location_data.resolver import drain
+    from scraper import job_lease
 
     global _RESOLVE_SESSION_WARNED, _RESOLVE_LEASE_BUSY_LOGGED, _RESOLVE_LAST_IDLE
 
@@ -1713,28 +1565,26 @@ def _location_resolve_sync() -> dict[str, Any]:
         conn = db.connect_session()
         try:
             # The lease MUST be taken on the drain's own connection (drain.main
-            # does the same); JOB_NAME/CONCURRENCY_GROUP are imported, never
-            # re-spelled — a typo'd literal is a SILENT loss of mutual
-            # exclusion. cadence/runner only ever land on a fresh DB
-            # (_UPSERT_JOB_SQL is ON CONFLICT DO NOTHING); runtime attribution
-            # comes from lease_holder, so never "fix" location_jobs.runner by
-            # writing to it.
-            with lease.held(
+            # does the same); JOB_NAME is imported, never re-spelled — a typo'd
+            # literal is a SILENT loss of mutual exclusion. cadence/runner only
+            # ever land on a fresh DB (_UPSERT_LANE_SQL is ON CONFLICT DO
+            # NOTHING); runtime attribution comes from lease_holder, so never
+            # "fix" scheduled_jobs.runner by writing to it.
+            with job_lease.held(
                 conn,
                 drain.JOB_NAME,
                 cadence="15 minutes",
-                concurrency_group=drain.CONCURRENCY_GROUP,
                 runner="railway-realtime-worker",
-                ttl_seconds=_location_resolve_lease_ttl(max_seconds, batch_size),
+                ttl_s=_location_resolve_lease_ttl(max_seconds, batch_size),
             ) as acquired:
                 if not acquired:
                     if not _RESOLVE_LEASE_BUSY_LOGGED:
                         _RESOLVE_LEASE_BUSY_LOGGED = True
-                        # Never says WHY: _ACQUIRE_SQL carries `AND enabled`, so
-                        # a lease held by location_resolve.yml and an operator's
-                        # `location_jobs.enabled = false` are the same answer
-                        # here, and guessing between them misdirects whoever is
-                        # asking why the queue is not draining.
+                        # Never says WHY: a lease held by location_resolve.yml
+                        # and an operator's pause (scheduled_jobs.paused_until)
+                        # are the same answer here, and guessing between them
+                        # misdirects whoever is asking why the queue is not
+                        # draining.
                         LOG.info(
                             "LOCATION_RESOLVE lane skipped: the %s lease was not "
                             "acquired", drain.JOB_NAME,
@@ -1882,7 +1732,6 @@ def _location_intake_fast_sync() -> dict[str, Any]:
     Lazy import keeps location_data (selectolax, boto3) off the worker's startup path;
     module-attribute calls keep claims_intake.run patchable in tests. No try/except around
     run(): a raise is the signal, and _lane_loop records the failed pass."""
-    from location_data import claims_intake
 
     global _INTAKE_FAST_LAST_IDLE
 
@@ -1990,14 +1839,12 @@ async def _location_intake_fast_pass(
 
 
 def _location_refetch_sync() -> dict[str, Any]:
-    """One daily tick: read the audit set's active no-data rows whose page is old
-    enough, and queue them for one more detail fetch at VERIFY priority.
+    """One daily tick: read the active ads with no town whose page is old enough, and
+    queue them for one more detail fetch at VERIFY priority.
 
     No lease and no in-process lock: the pass is one SELECT plus one INSERT per portal,
     the enqueue is idempotent on (source, native_id), and a second caller would at worst
     re-write rows it already wrote."""
-    global _LOCATION_REFETCH_VIEW_WARNED
-
     started = time.monotonic()
     min_age = _read_location_refetch_min_age()
     cap = _read_location_refetch_cap()
@@ -2005,14 +1852,6 @@ def _location_refetch_sync() -> dict[str, Any]:
     try:
         rows = db.location_refetch_candidates(
             conn, min_age_seconds=min_age, cap_per_source=cap)
-        if rows is None:
-            if not _LOCATION_REFETCH_VIEW_WARNED:
-                _LOCATION_REFETCH_VIEW_WARNED = True
-                LOG.warning(
-                    "LOCATION_REFETCH: location_pin_audit_mv is absent on this database; "
-                    "the lane has nothing to read and skips every tick")
-            return {"ran": False, "reason": "audit_view_missing",
-                    "seconds": round(time.monotonic() - started, 1)}
         by_source: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
             by_source.setdefault(row["source"], []).append(row)
@@ -2228,25 +2067,6 @@ def _autodedup_store_present(conn: Any) -> bool:
     return bool(rows and rows[0][0])
 
 
-_CGROUP_ROOT = "/sys/fs/cgroup"
-# cgroup v1 spells "no limit" as its page counter's maximum (~8 EiB), never as "max".
-_CGROUP_V1_UNLIMITED_BYTES = 1 << 62
-
-
-def _memory_limit_mb(root: str = _CGROUP_ROOT) -> float | None:
-    """The container's memory limit in MiB (cgroup v2, else v1); None when unlimited or unread."""
-    for name in ("memory.max", os.path.join("memory", "memory.limit_in_bytes")):
-        try:
-            with open(os.path.join(root, name), encoding="ascii") as handle:
-                limit = int(handle.read().strip())
-        except FileNotFoundError:
-            continue
-        except Exception:  # noqa: BLE001 — "max", or unreadable: no limit to report
-            return None
-        return round(limit / 1_048_576.0, 1) if limit < _CGROUP_V1_UNLIMITED_BYTES else None
-    return None
-
-
 def _autodedup_outcome(
     started: float,
     *,
@@ -2372,6 +2192,9 @@ def _autodedup_outcome(
             reads=counts.get("reads"),
             # E960: the waiting groups' adverts the committed attempt re-claimed.
             stale_claimed=(summary.get("evidence") or {}).get("stale_claimed"),
+            # E940: the entrant sweep's walks of `public` — a full page is a page, never a
+            # silent truncation.
+            enter_scan=_autodedup_enter_scan(summary.get("enter_scan")),
         )
 
     if summary is not None:
@@ -2389,6 +2212,24 @@ def _autodedup_outcome(
             last.setdefault(key, summary.get(key))
         last.setdefault("memory_limit_mb", memory_limit_mb)
     return last
+
+
+def _autodedup_enter_scan(raw: Any) -> dict[str, Any] | None:
+    """The pass's scope-block walks for the heartbeat (E940): `walks` this pass, `pages` (the
+    walks that came back a full page, so the block goes on past them), `page_of` (each block
+    inside a cycle of pages: `[page, of]`, `of` None until its first cycle ends), `stalled` (a
+    cursor that has paged `PAGE_STALL_PAGES` without an end) and, when the daily cap stopped the
+    pass, `skipped` and the blocks it left `unfinished`. None: the pass walked nothing and no
+    block is mid-cycle."""
+    if not isinstance(raw, dict) or not raw:
+        return None
+    out: dict[str, Any] = {
+        "walks": len(raw.get("blocks") or ()), "pages": int(raw.get("pages") or 0),
+        "page_of": dict(raw.get("page_of") or {}), "stalled": list(raw.get("stalled") or ())}
+    for key in ("scans_24h", "cap", "skipped", "unfinished", "seconds"):
+        if raw.get(key) is not None:
+            out[key] = raw[key]
+    return out
 
 
 def _autodedup_sync() -> dict[str, Any]:
@@ -2435,7 +2276,7 @@ def _autodedup_run(started: float) -> dict[str, Any]:
             if not _AUTODEDUP_STORE_WARNED:
                 _AUTODEDUP_STORE_WARNED = True
                 LOG.warning(
-                    "AUTODEDUP: the autodedup real-time store (migrations 539/540/596/604) is "
+                    "AUTODEDUP: the autodedup real-time store (migrations 539/540/596/604/616) is "
                     "absent on this database; the lane skips every tick")
             return _autodedup_outcome(started, skipped="store_absent")
         _AUTODEDUP_STORE_WARNED = False
@@ -2747,6 +2588,108 @@ async def _health_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None
     _record_pass(state, "health", last)
 
 
+def _notifications_step(producer: Callable[[Any], dict[str, int]]) -> dict[str, int]:
+    """One step: its producer on a fresh connection, which commits per statement itself."""
+    conn = db.connect()
+    try:
+        return producer(conn)
+    finally:
+        with contextlib.suppress(Exception):
+            conn.close()
+
+
+def _notifications_step_error(stats: dict[str, int]) -> str | None:
+    """The step's cell text, or None while it is healthy: red iff a statement raised. A stored spec
+    the matcher refuses never reddens it, even when every watchdog is refused: it is the user's row
+    (the write routes 422 it, and a compiler regression would 422 every new watchdog, which users
+    see first), counted in `last` as `subscriptions_invalid`, never an ops fact."""
+    failed = stats.get("subscriptions_failed", 0)
+    if failed:
+        return f"{failed} of {stats.get('subscriptions_evaluated', 0)} watchdogs failed"
+    return None
+
+
+def _notifications_sync(stop_event: asyncio.Event) -> dict[str, Any]:
+    """One pass of the three producers, in ONE thread holding the lane's pass lock. A step that
+    raises, or whose statements failed, is named in `raised` (its cell); the next step still runs."""
+    # Lazy, so the api package stays off every other lane's startup path (the estimation lane's idiom).
+    from api import notifications
+
+    if not _NOTIFICATIONS_PASS_LOCK.try_enter():
+        return {"previous_pass_running": True}
+    try:
+        last: dict[str, Any] = {}
+        attempted: list[str] = []
+        raised: dict[str, str] = {}
+        for step, name in NOTIFICATIONS_STEPS.items():
+            if stop_event.is_set():
+                break
+            attempted.append(step)
+            try:
+                stats = _notifications_step(getattr(notifications, name))
+            except Exception as exc:  # noqa: BLE001 - one step must not end the pass
+                LOG.exception("NOTIFICATIONS step=%s failed", step)
+                raised[step] = f"{type(exc).__name__}: {exc}"
+                continue
+            last[step] = stats
+            error = _notifications_step_error(stats)
+            if error:
+                # The producer logged each watchdog's reason; the cell says how many.
+                raised[step] = error
+        wrote = any(value for stats in last.values()
+                    for key, value in stats.items() if key.endswith("_inserted"))
+        # Only when the pass wrote or failed: an unconditional line is 288 a day.
+        if wrote or raised:
+            LOG.info("NOTIFICATIONS %s failed=%s", last, sorted(raised))
+        return {**last, "attempted": attempted, "raised": raised}
+    finally:
+        _NOTIFICATIONS_PASS_LOCK.release()
+
+
+async def _notifications_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None:
+    if stop_event.is_set():
+        return
+    last = await asyncio.to_thread(_notifications_sync, stop_event)
+    _record_portal_errors(state, "notifications", last.pop("attempted", []),
+                          last.pop("raised", {}), set())
+    _record_pass(state, "notifications", last)
+
+
+def _push_sync(stop_event: asyncio.Event) -> dict[str, Any]:
+    """One push pass in ONE thread holding the lane's pass lock. The key is read first: unset is the brake
+    (nothing opened), unreadable is the `key` step's cell (nothing claimed, so no row spends an attempt)."""
+    # Lazy, as the notifications lane's: the api package stays off every other lane's startup path.
+    from api import push, push_delivery
+
+    if not _PUSH_PASS_LOCK.try_enter():
+        return {"previous_pass_running": True}
+    try:
+        raw = os.environ.get(push.VAPID_ENV, "").strip()
+        # Without a usable key no step can fail, so every step's cell clears; only `key` may be red.
+        if not raw:
+            return {"unconfigured": True, "attempted": list(PUSH_STEPS), "raised": {}}
+        try:
+            push.private_key(raw)
+        except ValueError as exc:
+            return {"attempted": list(PUSH_STEPS), "raised": {"key": str(exc)}}
+        conn = db.connect(connect_timeout=PUSH_CONNECT_TIMEOUT_SECONDS)
+        try:
+            return push_delivery.deliver_once(conn, stop=stop_event.is_set)
+        finally:
+            with contextlib.suppress(Exception):
+                conn.close()
+    finally:
+        _PUSH_PASS_LOCK.release()
+
+
+async def _push_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None:
+    if stop_event.is_set():
+        return
+    last = await asyncio.to_thread(_push_sync, stop_event)
+    _record_portal_errors(state, "push", last.pop("attempted", []), last.pop("raised", {}), set())
+    _record_pass(state, "push", last)
+
+
 def _arm_exit_backstop(seconds: float) -> None:
     # faulthandler's timer thread takes no GIL and calls _exit(1) itself: it ends a
     # process whose Python threads are all stopped, and as PID 1, where the kernel drops
@@ -2830,7 +2773,7 @@ async def _lane_loop(
 ) -> None:
     """One forever-lane: re-read the interval each pass (live app_settings
     edits apply on the next wake), interval<=0 = idle-not-dead, per-pass
-    try/except, clean stop_event exit. Mirrors notifications.matcher_loop."""
+    try/except, clean stop_event exit."""
     LOG.info("%s lane starting", name)
     if first_delay_seconds > 0:
         # A lane that ticks once a day (location_refetch) does not run its pass in the
@@ -2872,7 +2815,7 @@ async def _lane_loop(
             #
             # Honest limit: a pass that is blocked inside asyncio.to_thread keeps
             # running after the cancellation -- Python cannot kill a thread. This
-            # frees the LANE, not the thread: the nine lanes with a _PassLock leak at
+            # frees the LANE, not the thread: the eleven lanes with a _PassLock leak at
             # most one each and stay in flight in the heartbeat while it lives; a lane
             # without one leaks a thread per abandoned pass, and if those fill the
             # executor the heartbeat stops and the watchdog restarts the process.
@@ -2977,11 +2920,6 @@ async def _amain() -> int:
             lambda: _images_pass(stop_event, state),
             state,
             default_interval=IMAGES_INTERVAL_DEFAULT)),
-        ("count_probe", lambda: _lane_loop(
-            "count_probe", stop_event, _read_count_probe_interval,
-            lambda: _count_probe_pass(stop_event, state),
-            state,
-            default_interval=COUNT_PROBE_INTERVAL_DEFAULT)),
         ("maintenance", lambda: _lane_loop(
             "maintenance", stop_event, _read_maintenance_interval,
             lambda: _maintenance_pass(stop_event, state),
@@ -3056,6 +2994,18 @@ async def _amain() -> int:
             lambda: _autodedup_pass(stop_event, state),
             state,
             default_interval=0)),
+        # The health lane's constant interval again: nothing to read, nothing to fail.
+        ("notifications", lambda: _lane_loop(
+            "notifications", stop_event, lambda: NOTIFICATIONS_TICK_SECONDS,
+            lambda: _notifications_pass(stop_event, state),
+            state,
+            default_interval=NOTIFICATIONS_TICK_SECONDS)),
+        # The notifications lane's constant interval again; its brake is the VAPID key, read in the pass.
+        ("push", lambda: _lane_loop(
+            "push", stop_event, lambda: PUSH_TICK_SECONDS,
+            lambda: _push_pass(stop_event, state),
+            state,
+            default_interval=PUSH_TICK_SECONDS)),
         ("heartbeat", lambda: _lane_loop(
             "heartbeat", stop_event, lambda: HEARTBEAT_INTERVAL_SECONDS,
             lambda: _heartbeat_pass(state),

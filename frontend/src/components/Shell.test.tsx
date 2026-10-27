@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -17,6 +17,7 @@ import Shell from './Shell';
 import * as auth from '@/lib/auth';
 import * as api from '@/lib/api';
 import * as pinAudit from '@/lib/pinAudit';
+import { writeLastBrowseSearch } from '@/lib/lastBrowseView';
 
 vi.mock('@/lib/auth', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/auth')>()),
@@ -41,7 +42,7 @@ function Boom(): never {
 
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
-  vi.mocked(api.getNotificationUnreadCount).mockResolvedValue(0);
+  vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({ unread_count: 0 });
   vi.mocked(pinAudit.fetchPinAuditTotal).mockResolvedValue(0);
   vi.mocked(auth.useAuth).mockReturnValue({
     isAdmin: true,
@@ -56,19 +57,22 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function renderShellWith(element: React.ReactNode) {
+function renderShellWith(element: React.ReactNode, at = '/browse') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const view = render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={['/browse']}>
+      <MemoryRouter initialEntries={[at]}>
         <Routes>
           <Route element={<Shell />}>
             <Route path="/browse" element={element} />
+            <Route path="/property/:propertyId" element={element} />
+            <Route path="/new-dedup/pin-audit" element={element} />
           </Route>
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { ...view, qc };
 }
 
 describe('<Shell> error containment', () => {
@@ -91,9 +95,7 @@ describe('<Shell> error containment', () => {
  * the operator reads. */
 describe('<Shell> notifications badge', () => {
   it('keeps the nav item named "Notifications" and adds the count to it', async () => {
-    vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({
-      unread_count: 5,
-    } as unknown as Awaited<ReturnType<typeof api.getNotificationUnreadCount>>);
+    vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({ unread_count: 5 });
     renderShellWith(<p>page content</p>);
     const link = await screen.findByRole('link', { name: /^Notifications/ });
     await waitFor(() =>
@@ -102,31 +104,101 @@ describe('<Shell> notifications badge', () => {
   });
 });
 
-/* The hidden set leads the nav, and the count of rows in it rides on the entry
- * — but navigation can never depend on that number arriving. The number is the
- * ISSUE count (W7-b): `fetchPinAuditTotal` asks for `state=unresolved` only,
- * which `lib/pinAudit.test.ts` pins on the read itself. */
+/* The nav's Browse entry is a way BACK to the view that was left: from another
+ * page it carries that view's filters; on Browse itself the same click stays the
+ * reset. */
+describe('<Shell> Browse entry', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('leads back to the remembered view from another page', () => {
+    writeLastBrowseSearch('?price=3000000-6000000&sort=price_asc');
+    renderShellWith(<p>page content</p>, '/property/7');
+    expect(screen.getByRole('link', { name: 'Browse' })).toHaveAttribute(
+      'href',
+      '/browse?price=3000000-6000000&sort=price_asc',
+    );
+  });
+
+  it('is the bare page on Browse itself, whatever is remembered', () => {
+    writeLastBrowseSearch('?price=3000000-6000000');
+    renderShellWith(<p>page content</p>, '/browse?price=3000000-6000000');
+    expect(screen.getByRole('link', { name: 'Browse' })).toHaveAttribute('href', '/browse');
+  });
+
+  it('is the bare page when nothing is remembered', () => {
+    renderShellWith(<p>page content</p>, '/property/7');
+    expect(screen.getByRole('link', { name: 'Browse' })).toHaveAttribute('href', '/browse');
+  });
+});
+
+/* The hidden set is the Admin menu's first item, and the count of rows in it
+ * rides on the Admin trigger (ruling P33, 2026-10-27) — but navigation can never
+ * depend on that number arriving. The number is the ISSUE count (W7-b):
+ * `fetchPinAuditTotal` asks for `state=unresolved` only, which
+ * `lib/pinAudit.test.ts` pins on the read itself. */
 describe('<Shell> !AUDIT POLOH', () => {
-  it('is the first nav entry and carries the audit count', async () => {
+  const COUNTED = 'Admin 37052 inzerátů s nevyřešenou polohou';
+
+  it('the Admin trigger carries the audit count', async () => {
     vi.mocked(pinAudit.fetchPinAuditTotal).mockResolvedValue(37052);
     renderShellWith(<p>page content</p>);
-    const link = await screen.findByRole('link', { name: /^!AUDIT POLOH/ });
-    expect(link).toHaveAttribute('href', '/new-dedup/pin-audit');
-    await waitFor(() =>
-      expect(link).toHaveAccessibleName(
-        '!AUDIT POLOH 37052 inzerátů s nevyřešenou polohou',
-      ),
-    );
+    const trigger = within(screen.getByRole('navigation')).getByRole('button', { name: /^Admin/ });
+    await waitFor(() => expect(trigger).toHaveAccessibleName(COUNTED));
+  });
+
+  it('lives in the Admin menu, not the row, and the row does not repeat the count', async () => {
+    vi.mocked(pinAudit.fetchPinAuditTotal).mockResolvedValue(37052);
+    const user = userEvent.setup();
+    renderShellWith(<p>page content</p>);
     const nav = screen.getByRole('navigation');
-    expect(nav.querySelectorAll('a')[0]).toBe(link);
+    const trigger = within(nav).getByRole('button', { name: /^Admin/ });
+    /* The count has landed before anything is read off the row. */
+    await waitFor(() => expect(trigger).toHaveAccessibleName(COUNTED));
+    expect(within(nav).queryByRole('link', { name: /AUDIT POLOH/ })).toBeNull();
+    await user.click(trigger);
+    const first = within(within(nav).getByRole('menu')).getAllByRole('menuitem')[0];
+    expect(first).toHaveAccessibleName('!AUDIT POLOH');
+    expect(first).toHaveAttribute('href', '/new-dedup/pin-audit');
   });
 
   it('still navigates when the count read fails', async () => {
     vi.mocked(pinAudit.fetchPinAuditTotal).mockRejectedValue(new Error('nope'));
-    renderShellWith(<p>page content</p>);
-    const link = await screen.findByRole('link', { name: '!AUDIT POLOH' });
-    await waitFor(() => expect(link).toHaveAccessibleName('!AUDIT POLOH'));
-    expect(link).toHaveAttribute('href', '/new-dedup/pin-audit');
+    const user = userEvent.setup();
+    const { qc } = renderShellWith(<p>page content</p>);
+    /* Wait for the failure itself to settle and render, so a badge drawn on a
+     * FAILED read would be on screen by the time the name is read. */
+    await waitFor(() => expect(qc.getQueryState(pinAudit.PIN_AUDIT_TOTAL_KEY)?.status).toBe('error'));
+    await act(() => new Promise((r) => setTimeout(r, 0)));
+    const nav = screen.getByRole('navigation');
+    const trigger = within(nav).getByRole('button', { name: /^Admin/ });
+    expect(trigger).toHaveAccessibleName('Admin');
+    await user.click(trigger);
+    expect(within(nav).getByRole('menuitem', { name: '!AUDIT POLOH' })).toHaveAttribute(
+      'href',
+      '/new-dedup/pin-audit',
+    );
+  });
+
+  /* Before the move the row entry lit on its own page and the trigger did not
+   * (Dashboard's `end` keeps /new-dedup from prefix-matching). Now the page is
+   * inside the menu, so the trigger lights there and only the audit row is
+   * current. */
+  it('lights the Admin trigger and only its own row on the audit page', async () => {
+    const user = userEvent.setup();
+    renderShellWith(<p>page content</p>, '/new-dedup/pin-audit');
+    const nav = screen.getByRole('navigation');
+    const trigger = within(nav).getByRole('button', { name: /^Admin/ });
+    const classes = trigger.className.split(/\s+/);
+    expect(classes).toContain('text-[var(--color-chrome-ink)]');
+    expect(classes).not.toContain('text-[var(--color-chrome-ink-2)]');
+    await user.click(trigger);
+    expect(within(nav).getByRole('menuitem', { name: '!AUDIT POLOH' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    expect(within(nav).getByRole('menuitem', { name: 'Dashboard' })).not.toHaveAttribute(
+      'aria-current',
+    );
   });
 });
 
@@ -151,7 +223,7 @@ describe('<Shell> admin menu', () => {
     await user.click(trigger);
     /* Every section that used to be its own trigger, still reachable — and the
      * three admin-only links that used to spend a slot in the row. */
-    for (const label of ['Broker Review', 'Datasets', 'Groups', 'Residual', 'Soudce', 'Health']) {
+    for (const label of ['!AUDIT POLOH', 'Broker Review', 'Datasets', 'Groups', 'Residual', 'Soudce', 'Health']) {
       expect(within(nav).getByRole('menuitem', { name: label })).toBeInTheDocument();
     }
     /* Paused, not removed: a surface switched off is a different fact from one
@@ -177,16 +249,18 @@ describe('<Shell> admin menu', () => {
     }
   });
 
-  /* Health leads the menu: it is where the operator starts when something is
-   * wrong, and where the bell's system alerts open. */
-  it('opens with Health as its first entry', async () => {
+  /* The audit queue leads the menu (ruling P33), then Health: where the operator
+   * starts when something is wrong, and where the bell's system alerts open. */
+  it('opens with the audit queue, then Health', async () => {
     const user = userEvent.setup();
     renderShellWith(<p>page content</p>);
     const nav = screen.getByRole('navigation');
     await user.click(within(nav).getByRole('button', { name: /^Admin/ }));
-    const first = within(within(nav).getByRole('menu')).getAllByRole('menuitem')[0];
-    expect(first).toHaveAccessibleName('Health');
-    expect(first).toHaveAttribute('href', '/health');
+    const [first, second] = within(within(nav).getByRole('menu')).getAllByRole('menuitem');
+    expect(first).toHaveAccessibleName('!AUDIT POLOH');
+    expect(first).toHaveAttribute('href', '/new-dedup/pin-audit');
+    expect(second).toHaveAccessibleName('Health');
+    expect(second).toHaveAttribute('href', '/health');
   });
 
   it('keeps the daily surfaces in the row itself', () => {
@@ -195,5 +269,25 @@ describe('<Shell> admin menu', () => {
     for (const label of ['Browse', 'Pipeline', 'Estimations', 'Collections']) {
       expect(within(nav).getByRole('link', { name: label })).toBeInTheDocument();
     }
+  });
+});
+
+/* Ruling P34 (2026-10-27): the build line goes; the map tiles' attribution is a
+ * licence condition, so it stays. */
+describe('<Shell> footer', () => {
+  it('keeps only the map-tile attribution', () => {
+    renderShellWith(<p>page content</p>);
+    const footer = screen.getByRole('contentinfo');
+    for (const gone of ['read-only', 'U1a', 'Supabase']) {
+      expect(footer).not.toHaveTextContent(gone);
+    }
+    expect(within(footer).getByRole('link', { name: 'OpenFreeMap' })).toHaveAttribute(
+      'href',
+      'https://openfreemap.org',
+    );
+    expect(within(footer).getByRole('link', { name: 'OpenStreetMap' })).toHaveAttribute(
+      'href',
+      'https://www.openstreetmap.org/copyright',
+    );
   });
 });

@@ -173,31 +173,39 @@ export const fmtMeasuredPricePerM2 = (
 
 const SEC = 1, MIN = 60, HOUR = 3600, DAY = 86400;
 
-export const fmtRelative = (iso: string | null | undefined): string => {
-  if (!iso) return '—';
+/* How long ago, in the one unit each surface rounds to — shared by the English and
+ * the Czech wording so the two never round differently. Null for no time. */
+function relativeBucket(iso: string | null | undefined): [number, Intl.RelativeTimeFormatUnit] | null {
+  if (!iso) return null;
   const t = new Date(iso).getTime();
-  if (isNaN(t)) return '—';
+  if (isNaN(t)) return null;
   const diff = Math.max(0, (Date.now() - t) / 1000);
-  if (diff < MIN)  return `${Math.round(diff / SEC)}${THIN_SPACE}s ago`;
-  if (diff < HOUR) return `${Math.round(diff / MIN)}${THIN_SPACE}min ago`;
-  if (diff < DAY)  return `${Math.round(diff / HOUR)}${THIN_SPACE}h ago`;
+  if (diff < MIN)  return [Math.round(diff / SEC), 'second'];
+  if (diff < HOUR) return [Math.round(diff / MIN), 'minute'];
+  if (diff < DAY)  return [Math.round(diff / HOUR), 'hour'];
   const days = Math.round(diff / DAY);
-  if (days < 14) return `${days}${THIN_SPACE}days ago`;
-  if (days < 60) return `${Math.round(days / 7)}${THIN_SPACE}weeks ago`;
-  if (days < 365) return `${Math.round(days / 30)}${THIN_SPACE}months ago`;
-  return `${Math.round(days / 365)}${THIN_SPACE}yr ago`;
+  if (days < 14) return [days, 'day'];
+  if (days < 60) return [Math.round(days / 7), 'week'];
+  if (days < 365) return [Math.round(days / 30), 'month'];
+  return [Math.round(days / 365), 'year'];
+}
+
+const AGO_EN: Partial<Record<Intl.RelativeTimeFormatUnit, string>> = {
+  second: 's', minute: 'min', hour: 'h', day: 'days', week: 'weeks', month: 'months', year: 'yr',
 };
 
-/* Migration 022 fields: the registry's Czech label, '—' for nulls. */
+export const fmtRelative = (iso: string | null | undefined): string => {
+  const b = relativeBucket(iso);
+  return b ? `${b[0]}${THIN_SPACE}${AGO_EN[b[1]]} ago` : '—';
+};
 
-import { enumLabel } from './enums';
-import type { Furnished, Ownership } from './types';
+const CS_RELATIVE = new Intl.RelativeTimeFormat('cs', { style: 'short', numeric: 'always' });
 
-export const fmtFurnished = (f: Furnished | null | undefined): string =>
-  enumLabel('furnished', f) ?? '—';
-
-export const fmtOwnership = (o: Ownership | null | undefined): string =>
-  enumLabel('ownership', o) ?? '—';
+/* fmtRelative in Czech, for a Czech surface (the map popup): "před 2 h", "před 3 dny". */
+export const fmtRelativeCs = (iso: string | null | undefined): string => {
+  const b = relativeBucket(iso);
+  return b ? CS_RELATIVE.format(-b[0], b[1]) : '—';
+};
 
 export const fmtParkingLots = (n: number | null | undefined): string =>
   n == null ? '—' : `${czNumber.format(n)}${NBSP}${n === 1 ? 'místo' : 'místa'}`;

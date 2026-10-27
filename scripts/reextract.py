@@ -45,7 +45,7 @@ import logging
 import os
 import sys
 import time
-from typing import Callable
+from typing import Any, Callable
 
 from selectolax.parser import HTMLParser
 

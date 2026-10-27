@@ -455,8 +455,8 @@ def post_rent_map_fetch(
 _CONDITION_REGIONS_SETTING = "condition_scoring_enabled_region_ids"
 
 # Mirrors the toolkit's "functionally active" definition (rule #4) plus the
-# not-yet-scored condition, so the counts here equal what the batch submit
-# job would pick up for that kraj.
+# not-yet-scored condition, so the counts here equal what a dispatched batch
+# submit run would pick up for that kraj.
 _UNSCORED_ACTIVE_PREDICATE = (
     "l.is_active AND l.last_seen_at > now() - interval '30 days' "
     "AND l.building_condition_level IS NULL "
@@ -476,8 +476,8 @@ def get_condition_scoring_regions(
 ) -> dict[str, Any]:
     """Per-kraj condition-scoring switchboard: every kraj with its enabled
     flag + the count of active listings still awaiting a condition score.
-    The batch submit job reads the same app_settings key, so toggling a
-    kraj on here is all it takes for the next scheduled run to drain it."""
+    Condition scoring is parked (rule 14): its workflows are dispatch-only, so
+    a toggle alone runs nothing; it scopes the next manually dispatched run."""
     return {"data": _condition_regions_payload(conn)}
 
 
@@ -509,8 +509,8 @@ def put_condition_scoring_regions(
             (
                 _CONDITION_REGIONS_SETTING,
                 json.dumps(enabled),
-                "admin_boundaries ids (level=kraj) the scheduled "
-                "condition-scoring batch job drains automatically",
+                "admin_boundaries ids (level=kraj) a manually dispatched "
+                "condition-scoring run drains (parked: no schedule)",
                 "settings_ui",
             ),
         )

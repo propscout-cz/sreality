@@ -7,12 +7,10 @@ CI's database job; here the fake answers each read with the rows that SQL would 
 from __future__ import annotations
 
 import datetime as _dt
-import re
 from pathlib import Path
 from typing import Any
 
 import psycopg
-import pytest
 import yaml
 
 import scripts.health_canary as hc
@@ -33,28 +31,19 @@ def _row(minutes: float, *failing: str, incidents: tuple[str, ...] = ()) -> tupl
     return (_ago(minutes), "fail" if failing else "ok", cells, list(incidents))
 
 
-def _notice(minutes: float, *, kind: str = "onset", key: str = "llm_errors",
-            cls: str | None = "alarm", seen: bool = False, delivered: bool = False,
-            open_unacked: bool = True) -> tuple[Any, ...]:
-    """One system alert as _NOTICES_SQL returns it."""
-    return (f"sys:{key}:{kind}:2026-10-18T10:00:00Z", _ago(minutes), seen, delivered, cls,
-            open_unacked)
-
-
-def _counted(status: str) -> bool:
-    """Whether _NOTICES_SQL counts a channel_sends row in this status as the notice delivered."""
-    statuses = re.search(r"s\.status in \(([^)]*)\)", hc._NOTICES_SQL)
-    assert statuses, "_NOTICES_SQL no longer reads `s.status in (...)`: re-pin the delivery tests"
-    return status in {s.strip(" '") for s in statuses[1].split(",")}
+def _rung(minutes: float, *, key: str = "llm_errors", subject: str = "openai",
+          at: _dt.datetime | None = None) -> tuple[Any, ...]:
+    """One open, unacknowledged alarm incident told `minutes` ago, as _RUNGS_SQL returns it."""
+    return (key, f"cell:{key}:{subject}", at or _ago(minutes))
 
 
 class _Conn:
     """Answers the canary's reads from canned rows and records every statement it is sent."""
 
-    def __init__(self, *, newest: Any, declared: Any, rows: list[Any], notices: list[Any],
+    def __init__(self, *, newest: Any, declared: Any, rows: list[Any], rungs: list[Any],
                  broken: Exception | None = None) -> None:
         self._answers = {"select 1": [(1,)], hc._LIVENESS_SQL: [(newest, declared)],
-                         hc._CELLS_SQL: rows, hc._NOTICES_SQL: notices}
+                         hc._CELLS_SQL: rows, hc._RUNGS_SQL: rungs}
         self._broken = broken
         self.executed: list[str] = []
 
@@ -82,7 +71,7 @@ class _Conn:
 def _conn(**answers: Any) -> _Conn:
     """A database where everything is alive, unless a test says otherwise."""
     state: dict[str, Any] = {"newest": _ago(3), "declared": _ago(2 * 24 * 60),
-                             "rows": [_row(3)], "notices": []}
+                             "rows": [_row(3)], "rungs": []}
     return _Conn(**{**state, **answers})
 
 
@@ -117,7 +106,7 @@ def test_no_database_url_exits_2_without_connecting(monkeypatch: Any, capsys: An
 
 
 def test_everything_alive_exits_0_and_says_so(monkeypatch: Any, capsys: Any) -> None:
-    assert _main(monkeypatch, _conn(notices=[_notice(30, seen=True)])) == 0
+    assert _main(monkeypatch, _conn()) == 0
     out = capsys.readouterr().out
     assert "CANARY OK" in out and "CANARY FAIL" not in out
 
@@ -127,7 +116,7 @@ def test_every_read_runs_under_its_own_statement_timeout(monkeypatch: Any) -> No
     assert _main(monkeypatch, conn) == 0
     timeouts, reads = conn.executed[0::2], conn.executed[1::2]
     assert timeouts == ["SET LOCAL statement_timeout = '10s'"] * 4
-    assert reads == ["select 1", hc._LIVENESS_SQL, hc._CELLS_SQL, hc._NOTICES_SQL]
+    assert reads == ["select 1", hc._LIVENESS_SQL, hc._CELLS_SQL, hc._RUNGS_SQL]
 
 
 # --- liveness_fresh ------------------------------------------------------------
@@ -188,53 +177,47 @@ def test_each_failing_cell_is_judged_by_its_own_incident(monkeypatch: Any, capsy
     assert "liveness cell stale:llm_errors" in out and "liveness cell worker" not in out
 
 
-# --- alarm_notices_handled -----------------------------------------------------
+# --- alarms_acknowledged ---------------------------------------------------------
 
 
-def test_an_unseen_undelivered_alarm_onset_with_an_open_incident_exits_1(
-    monkeypatch: Any, capsys: Any,
-) -> None:
-    assert _main(monkeypatch, _conn(notices=[_notice(20)])) == 1
+def test_an_unacknowledged_alarm_rung_exits_1(monkeypatch: Any, capsys: Any) -> None:
+    assert _main(monkeypatch, _conn(rungs=[_rung(20)])) == 1
+    assert ("CANARY FAIL alarms_acknowledged: the llm_errors alarm told 20 min ago (openai) is "
+            "open and unacknowledged") in capsys.readouterr().out
+
+
+def test_a_rung_inside_its_grace_is_not_asserted_yet(monkeypatch: Any) -> None:
+    assert _main(monkeypatch, _conn(rungs=[_rung(10)])) == 0
+
+
+def test_a_rung_older_than_the_window_is_not_asserted(monkeypatch: Any) -> None:
+    """The next reminder (6 h, 24 h, 72 h, then weekly) stamps a new rung and re-arms it."""
+    assert _main(monkeypatch, _conn(rungs=[_rung(13 * 60)])) == 0
+
+
+def test_one_reason_per_check_and_rung(monkeypatch: Any, capsys: Any) -> None:
+    """A rung stamps every cell it tells at once, so its cells share one annotation."""
+    told = _ago(30)
+    rungs = [_rung(0, subject="openai", at=told), _rung(0, subject="gemini", at=told),
+             _rung(90, key="capacity", subject="connections")]
+    assert _main(monkeypatch, _conn(rungs=rungs)) == 1
     out = capsys.readouterr().out
-    assert ("CANARY FAIL alarm_notices_handled: the llm_errors onset system alert sent 20 min "
-            "ago") in out
+    assert out.count("CANARY FAIL alarms_acknowledged") == 2
+    assert "the llm_errors alarm told 30 min ago (gemini, openai)" in out
+    assert "the capacity alarm told 90 min ago (connections)" in out
 
 
-def test_an_unseen_reminder_is_asserted_like_an_onset(monkeypatch: Any) -> None:
-    assert _main(monkeypatch, _conn(notices=[_notice(20, kind="reminder")])) == 1
-
-
-@pytest.mark.parametrize("handled", [{"seen": True}, {"open_unacked": False}],
-                         ids=["seen", "acknowledged"])
-def test_a_handled_alarm_notice_exits_0(monkeypatch: Any, handled: dict[str, bool]) -> None:
-    assert _main(monkeypatch, _conn(notices=[_notice(20, **handled)])) == 0
-
-
-@pytest.mark.parametrize("status, code", [("delivered", 0), ("sent", 0), ("queued", 1),
-                                          ("failed", 1), ("bounced", 1), ("suppressed", 1)])
-def test_a_channel_send_handles_the_notice_once_sent(monkeypatch: Any, status: str,
-                                                     code: int) -> None:
-    """Resend's webhook turns `sent` into `delivered` later; Telegram has no webhook, so a
-    sent-only row must count. A send queued, failed, bounced or suppressed reached no one."""
-    assert _main(monkeypatch, _conn(notices=[_notice(20, delivered=_counted(status))])) == code
-
-
-def test_a_notice_inside_its_grace_is_not_asserted_yet(monkeypatch: Any) -> None:
-    assert _main(monkeypatch, _conn(notices=[_notice(10)])) == 0
-
-
-def test_gauge_notices_are_never_asserted(monkeypatch: Any) -> None:
-    """The operator's ruling: gauges ring daily in the bell; the email path is the alarms'."""
-    assert _main(monkeypatch, _conn(notices=[_notice(20, cls="gauge")])) == 0
-
-
-def test_a_notice_older_than_the_window_is_not_asserted(monkeypatch: Any) -> None:
-    assert _main(monkeypatch, _conn(notices=[_notice(13 * 60)])) == 0
-
-
-def test_recovery_and_unregistered_notices_are_ignored(monkeypatch: Any) -> None:
-    notices = [_notice(20, kind="recovery"), _notice(20, key="ops_incident", cls=None)]
-    assert _main(monkeypatch, _conn(notices=notices)) == 0
+def test_the_rule_reads_only_open_unacknowledged_alarm_incidents() -> None:
+    """The fake cannot run the SQL, so pin what it selects: acknowledged, recovered, gauge and
+    unregistered incidents never reach the rule, and no bell state can answer for an alarm."""
+    sql = " ".join(hc._RUNGS_SQL.split())
+    assert ("from ops_incidents i join health_checks hc "
+            "on starts_with(i.signature, 'cell:' || hc.key || ':')") in sql
+    for clause in ("i.resolved_at is null", "i.acknowledged_at is null", "hc.class = 'alarm'",
+                   "i.alerted_at > %(since)s"):
+        assert clause in sql
+    for bell in ("notification_dispatches", "channel_sends", "seen_at", "dedupe_key"):
+        assert bell not in sql
 
 
 # --- the workflow -----------------------------------------------------------------

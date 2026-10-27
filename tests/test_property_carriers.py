@@ -218,9 +218,10 @@ def test_every_carrier_meets_the_protocol():
 
 def test_no_carrier_deletes_history():
     """The sanctioned deletes are a SET table's collision collapse and the losing pipeline card,
-    each folded into the carry record with its snapshot; never a ledger or log row."""
+    each folded into the carry record with its snapshot; never a ledger or log row, nor an alert
+    (a merge marks a duplicate instead, migration 653)."""
     history = ("property_dismissals", "property_pipeline_events", "property_merge_carries",
-               "property_merge_events", "properties")
+               "property_merge_events", "properties", "notification_dispatches")
     for statement in CARRIER_SQL:
         deleted = re.findall(r"\bDELETE\s+FROM\s+(\w+)", statement, re.I)
         assert not set(deleted) & set(history), f"a carrier deletes history: {_n(statement)[:120]}"
@@ -270,32 +271,39 @@ def test_every_carrier_runs_only_its_declared_sql_with_its_params_supplied(carri
         f"{carrier.name} declares SQL it never runs")
 
 
-def test_the_dispatch_collapse_hands_its_sends_to_the_kept_twin_first():
-    """A send on a collapsed row would be nulled (ON DELETE SET NULL), which channel_sends_check
-    refuses: the resend runs before the DELETE and pairs each retired row with exactly the twin
-    the DELETE collapses it onto (the same keys, NULL-safe), so the two cannot drift apart."""
-    dispatches = next(c for c in PROPERTY_CARRIERS if c.name == "notification_dispatches")
+def test_the_dispatch_carrier_is_one_update_that_marks_and_deletes_nothing():
+    """F6, F13, F21: one UPDATE re-points every alert of the retired property and marks the one
+    the survivor already holds its duplicate; nothing is deleted. Its match is the ONE identity:
+    migration 653's index, i.e. EVENT_IDENTITY, without the property a merge changes, NULL-safe,
+    against the survivor's unmarked rows only (a repeat is outside the index)."""
+    from api.notifications import EVENT_IDENTITY
+
+    dispatches = _carrier("notification_dispatches")
     assert isinstance(dispatches, carriers.Dispatches)
-    lock, resend, collapse, move = (_n(s) for s in dispatches.sql)
-    assert [s for s, _p in _walk(dispatches).ran] == [
-        _n(carriers.Dispatches.LOCK_SQL), _n(carriers.Dispatches.RESEND_SQL), collapse, move]
-    assert collapse.startswith("DELETE FROM notification_dispatches")
-    assert move.startswith("UPDATE notification_dispatches SET property_id")
+    lock, repoint = (_n(s) for s in dispatches.sql)
+    assert lock == carriers.NOTIFICATION_EVENTS_LOCK_SQL, "the protocol's exclusive half first"
+    assert [s for s, _p in _walk(dispatches).ran] == [lock, repoint]
+    assert repoint.startswith("UPDATE notification_dispatches r SET property_id = %(survivor)s, "
+                              "duplicate_of = coalesce((SELECT s.id FROM notification_dispatches s ")
+    assert repoint.endswith("ORDER BY s.dispatched_at, s.id LIMIT 1), r.duplicate_of) "
+                            "WHERE r.property_id = %(retired)s")
+    assert "s.property_id = %(survivor)s AND s.duplicate_of IS NULL" in repoint
     twin = re.compile(r"s\.(\w+) IS NOT DISTINCT FROM r\.\1\b")
-    assert twin.findall(resend) == twin.findall(collapse) == list(dispatches.keys)
-    assert "s.property_id = %(survivor)s" in resend and "r.property_id = %(retired)s" in resend
-    assert {"subscription_id", "collection_id"} <= set(dispatches.keys), (
-        "the pairing is account-partitioned only through account-owned keys")
+    assert tuple(twin.findall(repoint)) == carriers.Dispatches.IDENTITY == tuple(
+        c for c in EVENT_IDENTITY if c != "property_id")
+    assert "account_id" in carriers.Dispatches.IDENTITY, "the match must never cross an account"
+    assert "DELETE" not in repoint.upper()
 
 
-def test_the_retired_dispatches_are_locked_in_their_own_statement_before_the_resend():
-    """An outbox claim's foreign key check holds FOR KEY SHARE on the dispatch; FOR UPDATE waits
-    it out and holds off the next one. A separate statement, not a CTE of the resend, so the
-    resend's fresh READ COMMITTED snapshot sees a send that claim committed."""
-    lock = _n(carriers.Dispatches.LOCK_SQL)
-    assert lock.startswith("SELECT ") and lock.endswith(" FOR UPDATE")
-    assert "FROM notification_dispatches WHERE property_id = %(retired)s" in lock
-    assert "FOR UPDATE" not in _n(carriers.Dispatches.RESEND_SQL)
+def test_producers_and_merges_share_one_transaction_scoped_lock():
+    """The notification-events protocol: the merge's half EXCLUSIVE, the producer's SHARED, one key,
+    both transaction-scoped (released at commit, never a session lock a pooler would strand)."""
+    from api import notifications as nf
+
+    key = "hashtext('notification_events')"
+    assert carriers.NOTIFICATION_EVENTS_LOCK_SQL == f"SELECT pg_advisory_xact_lock({key})"
+    assert carriers.NOTIFICATION_EVENTS_SHARED_LOCK_SQL == f"SELECT pg_advisory_xact_lock_shared({key})"
+    assert nf.NOTIFICATION_EVENTS_SHARED_LOCK_SQL is carriers.NOTIFICATION_EVENTS_SHARED_LOCK_SQL
 
 
 # --- what each carrier hands the carry record (migration 589) ----------------------------
@@ -307,13 +315,14 @@ def _carrier(name: str) -> Any:
     return next(c for c in PROPERTY_CARRIERS if c.name == name)
 
 
-@pytest.mark.parametrize("name", ["collection_properties", "property_tags", "property_notes"])
+@pytest.mark.parametrize(
+    "name", ["collection_properties", "property_tags", "property_attachments", "property_notes"])
 def test_a_curation_table_folds_what_it_collapses_and_moves_the_rest(name):
-    """Each from the retired property, keyed on `keys[0]` (else `id`) and dated by `at`; a row
-    with no account moves as it is."""
+    """Each from the retired property, keyed on its `row_key` and dated by `at`; a row with no
+    account moves as it is."""
     table = _carrier(name)
     *collapse, move = table.sql
-    key = (table.keys or ("id",))[0]
+    key = table.row_key
     assert _n(move).endswith(f"RETURNING {key}, {table.at}, account_id")
     snap = {key: 5}
     cur = _walk(table, {**{s: [(5, T1, A, snap)] for s in collapse}, move: [(6, T2, None)]})
@@ -336,13 +345,25 @@ def test_the_artifact_link_collapses_within_an_account_and_leaves_no_carry_row()
     assert cur.carried == [] and len(cur.ran) == 2
 
 
-def test_alert_events_get_no_carry_rows_and_five_tables_get_them():
-    """MS14's default: the dispatch carrier runs its four statements and hands back nothing. The
-    carry record's five tables (no CHECK pins them): the three above, the card, the dismissal."""
+def test_alert_events_get_no_carry_rows_and_six_tables_get_them():
+    """MS14's default: the dispatch carrier runs its lock and its one UPDATE and hands back
+    nothing. The carry record's six tables (no CHECK pins them): the four above, the card, the
+    dismissal."""
     cur = _walk(_carrier("notification_dispatches"))
-    assert len(cur.ran) == 4 and cur.carried == []
+    assert len(cur.ran) == 2 and cur.carried == []
     assert {c.name for c in PROPERTY_CARRIERS if getattr(c, "at", None)} == {
-        "collection_properties", "property_tags", "property_notes"}
+        "collection_properties", "property_tags", "property_attachments", "property_notes"}
+
+
+def test_files_fold_per_account_and_bytes_and_move_before_their_notes():
+    """Migration 660: the same bytes once per account and property, so a twin folds (keyed on its
+    own id, never the account or the hash); the files move before the notes, whose trigger would
+    otherwise take them along without a carry row."""
+    files = _carrier("property_attachments")
+    collapse, _move = files.sql
+    assert files.row_key == "id" and files.keys == ("account_id", "sha256_hex")
+    assert "s.account_id IS NOT DISTINCT FROM r.account_id" in _n(collapse)
+    assert _names().index("property_attachments") < _names().index("property_notes")
 
 
 def test_the_pipeline_folds_each_losing_card_from_where_it_came_and_moves_the_winner():
@@ -416,9 +437,6 @@ class _RouteCur:
 
     def fetchall(self) -> list[tuple]:
         return self.rows
-
-    def fetchone(self) -> tuple:
-        return (900 + len(self.ran),)
 
 
 def _plan(rows: list[tuple], movers: dict[int, int | None], **kw: Any) -> list[carriers.Route]:
@@ -512,7 +530,8 @@ def test_the_conflict_pass_never_lands_a_copy_or_a_fold_on_a_twin_and_no_dismiss
 
 
 def test_the_writes_run_in_order_and_spend_only_what_moved():
-    """Moves, copies (a note's with its attachments), re-creations, the carry stamp, then the lift
+    """Moves, copies (a note's without its files: they stay with the note), re-creations, the carry
+    stamp, then the lift
     on `left` and every landing; a route whose anchor did not move routes and spends nothing;
     counts as the dry run's. A move
     that changes no row (its account holds the item where it would land: an origin active again)
@@ -532,18 +551,16 @@ def test_the_writes_run_in_order_and_spend_only_what_moved():
     ran = [(f"{s.split()[0]} {s.split()[1 if s.startswith('UPDATE') else 2]}", p.get("to"))
            for s, p in cur.ran]
     assert ran == [("UPDATE property_notes", R1), ("UPDATE property_pipeline", R1),
-                   ("INSERT property_notes", L), ("INSERT property_note_attachments", None),
-                   ("INSERT collection_properties", R1),
+                   ("INSERT property_notes", L), ("INSERT collection_properties", R1),
                    ("UPDATE property_merge_carries", None), ("UPDATE property_dismissals", None),
                    ("UPDATE property_dismissals", None)]
-    assert cur.ran[3][1] == {"copy": 903, "key": 1}, "the note copy takes its attachments"
-    assert cur.ran[5][1] == {"ids": [5, 7, 11, 12]}, "what rides an ad that did not move: nothing"
-    assert [p for _s, p in cur.ran[6:]] == [{"s": L}, {"s": R1}]
+    assert cur.ran[4][1] == {"ids": [5, 7, 11, 12]}, "what rides an ad that did not move: nothing"
+    assert [p for _s, p in cur.ran[5:]] == [{"s": L}, {"s": R1}]
     assert counts == {"note_moves": 1, "carry_rows": 2}
     held = _RouteCur(held={("property_pipeline", None, ME)})
     assert carriers.route_curation(held, routes, left=L, landed={2: R1}) == {
         "note_moves": 1, "carry_rows": 1}
-    assert held.ran[5][1] == {"ids": [7, 11, 12]}, "the card that did not move keeps its row"
+    assert held.ran[4][1] == {"ids": [7, 11, 12]}, "the card that did not move keeps its row"
 
 
 @pytest.mark.usefixtures("ledger_carriers")
@@ -574,7 +591,26 @@ def test_every_routing_statement_is_in_the_prepare_corpus_and_none_deletes():
     assert not [s for s in carriers.ROUTE_SQL if re.search(r"\bDELETE\b", s, re.I)]
     assert set(carriers._MOVE_SQL) == set(carriers._INSERT_SQL) == {
         "property_notes", "property_pipeline", "collection_properties", "property_tags",
-        "property_dismissals"}
+        "property_attachments", "property_dismissals"}
+
+
+def test_a_file_outside_a_note_routes_like_a_tag_and_its_copy_shares_the_stored_bytes():
+    """Photos W2: a noteless file is an item (a note's files follow the note through migration
+    660's trigger, so only noteless ones are listed). It goes back where its carry row says; the
+    acting account may move or copy it, a copy onto where the file itself lands being 'held'; a
+    copy is a new row over the same R2 object, never a note's."""
+    rows = [_row("move", "property_attachments", 80, ME, "file:80", origin=R1, ids=(15,)),
+            _row("move", "property_attachments", 81, ME, "file:81")]
+    assert _where(_plan(rows, {2: R1})) == {
+        "file:80": ("move", 2, (15,), None), "file:81": ("move", None, (), None)}
+    plan = _plan(rows, {2: R1, 3: None}, account=ME, choices={"file:81": (3, (2, 3))})
+    assert [(r.item, r.action, r.anchor, r.skipped) for r in plan if r.item == "file:81"] == [
+        ("file:81", "move", 3, None), ("file:81", "copy", 2, None),
+        ("file:81", "copy", 3, "held")]
+    assert "a.note_id IS NULL" in carriers._ROUTES_SQL
+    assert "note_id IS NULL" in carriers._MOVE_SQL["property_attachments"]
+    copy = carriers._INSERT_SQL["property_attachments"]
+    assert "storage_key" in copy and "note_id" not in copy
 
 
 def test_a_split_note_copy_keeps_the_shared_mark():
@@ -582,3 +618,11 @@ def test_a_split_note_copy_keeps_the_shared_mark():
     # hide the note from a share.
     columns, select = carriers._INSERT_SQL["property_notes"].split("SELECT", 1)
     assert re.search(r"\bshared\b", columns) and re.search(r"\bshared\b", select)
+
+
+def test_a_split_note_copy_keeps_its_viewing_date():
+    # Migration 666: a viewing is a note with a date; a copy without it would turn the viewing
+    # into a note that is empty when it carried no text, which the table's check refuses.
+    columns, select = carriers._INSERT_SQL["property_notes"].split("SELECT", 1)
+    assert re.search(r"\bviewing_at\b", columns) and re.search(r"\bviewing_at\b", select)
+    assert "'Prohlídka ' || to_char(n.viewing_at" in carriers._ROUTES_SQL

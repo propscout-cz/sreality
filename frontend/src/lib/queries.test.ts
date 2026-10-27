@@ -1,12 +1,6 @@
-/* Tests for the spatial-predicate helpers in queries.ts.
- *
- * The interesting logic is `effectiveBbox`: when the operator picks
- * centre+radius mode, the cohort filter sends the bbox of the
- * circumscribing square of the radius circle (haversine math, no
- * dependency on PostGIS). Viewport mode falls through to whatever
- * the map's panning has set as `bounds`. These are pure functions
- * we want pinned against accidental edits.
- */
+/* Tests for the Browse query builders in queries.ts: the sort, the portal rule, the
+ * district chips and the prefilters. The box helpers (effectiveBbox) live in
+ * lib/filters.ts with their tests. */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
@@ -17,12 +11,13 @@ vi.mock('./brokers', async (importOriginal) => ({
   fetchBrokerPropertyIds: vi.fn(async () => [1]),
 }));
 
-import { DEFAULT_FILTERS } from './filters';
+import { CONDITION_CANONICAL, DEFAULT_FILTERS, FURNISHED_CANONICAL } from './filters';
 import { ApiError } from './api';
 import { supabase } from './supabase';
 import {
   BROWSE_SELECT_COLUMNS,
-  adScope,
+  CARD_SORTS,
+  adPortals,
   applyPortalRule,
   applyPrefilters,
   buildBrowseStatsArgs,
@@ -32,14 +27,13 @@ import {
   fetchPropertySourcesByPropertyIds,
   fetchListingsForCards,
   fetchListingsForMap,
-  fetchListingsForTable,
   districtsFilterClause,
-  effectiveBbox,
   effectiveSort,
   matchesDistricts,
   orderPortal,
   parseSort,
   priceNullTolerantOr,
+  sortToParam,
   DEFAULT_SORT,
   type BrowsePrefilters,
   type DistrictMatchRow,
@@ -119,7 +113,7 @@ describe('priceNullTolerantOr', () => {
 /* Gate-2: the city-quality allowlist must be AND'd onto the cohort via the
  * surrogate `listing_id`, NOT `sreality_id`. A post-Gate-2 non-sreality repr has
  * a NULL sreality_id (IN never matches NULL → the listing silently vanishes from
- * Map/Table/Cards/Count while browse_stats still counts it), and — worse — the
+ * Map/Cards/Count while browse_stats still counts it), and — worse — the
  * id-spaces overlap by ~435, so a sreality_id passed into an `IN listing_id`
  * predicate would match a DIFFERENT listing. Pin the filter column here. */
 describe('applyPrefilters (prefilter id-spaces)', () => {
@@ -167,90 +161,6 @@ describe('applyPrefilters (prefilter id-spaces)', () => {
 
 });
 
-describe('effectiveBbox', () => {
-  it('returns null when both modes are empty', () => {
-    expect(effectiveBbox(DEFAULT_FILTERS)).toBeNull();
-  });
-
-  it('returns the literal viewport bounds in viewport mode', () => {
-    const bounds = { west: 14.3, south: 50.0, east: 14.5, north: 50.2 };
-    const got = effectiveBbox({
-      ...DEFAULT_FILTERS,
-      bounds,
-    });
-    expect(got).toEqual(bounds);
-  });
-
-  it('ignores viewport bounds in centre+radius mode', () => {
-    // Even with a viewport bbox set on the side, centre+radius wins.
-    const got = effectiveBbox({
-      ...DEFAULT_FILTERS,
-      locationMode: 'center_radius',
-      centerRadius: { lat: 50, lng: 14, radius_m: 1000 },
-      bounds: { west: 14.3, south: 50.0, east: 14.5, north: 50.2 },
-    });
-    expect(got).not.toBeNull();
-    // The viewport bbox would have been (14.3, 50.0, 14.5, 50.2); the
-    // 1km centre+radius around (50, 14) sits a hair north + south of
-    // lat 50 and is nowhere near the viewport rectangle.
-    expect(got!.north).toBeLessThan(50.2);
-    expect(got!.west).toBeLessThan(14.3);
-  });
-
-  it('returns null in centre+radius mode when no centre is set', () => {
-    const got = effectiveBbox({
-      ...DEFAULT_FILTERS,
-      locationMode: 'center_radius',
-      centerRadius: null,
-    });
-    expect(got).toBeNull();
-  });
-
-  it('produces a centre-symmetric bbox around the point', () => {
-    const lat = 50;
-    const lng = 14;
-    const got = effectiveBbox({
-      ...DEFAULT_FILTERS,
-      locationMode: 'center_radius',
-      centerRadius: { lat, lng, radius_m: 1000 },
-    });
-    expect(got).not.toBeNull();
-    expect(got!.north - lat).toBeCloseTo(lat - got!.south, 6);
-    expect(got!.east - lng).toBeCloseTo(lng - got!.west, 6);
-  });
-
-  it('produces a wider bbox at higher latitudes for the same radius', () => {
-    // Longitude degrees shrink as |lat| → 90°; the bbox must compensate
-    // so the circle still fits at the poles. Compare two centres with
-    // the same radius and check the longitude span widens with lat.
-    const near_equator = effectiveBbox({
-      ...DEFAULT_FILTERS,
-      locationMode: 'center_radius',
-      centerRadius: { lat: 10, lng: 14, radius_m: 1000 },
-    });
-    const near_pole = effectiveBbox({
-      ...DEFAULT_FILTERS,
-      locationMode: 'center_radius',
-      centerRadius: { lat: 70, lng: 14, radius_m: 1000 },
-    });
-    const equator_span = (near_equator!.east - near_equator!.west);
-    const pole_span = (near_pole!.east - near_pole!.west);
-    expect(pole_span).toBeGreaterThan(equator_span);
-  });
-
-  it('approximates roughly 1km ↔ 0.009 deg at typical Prague latitude', () => {
-    // 1 deg latitude ≈ 111.32 km. A 1km radius circle around lat 50
-    // should produce a bbox with dLat ≈ 1/111.32 ≈ 0.00899 deg
-    // either side of the centre.
-    const got = effectiveBbox({
-      ...DEFAULT_FILTERS,
-      locationMode: 'center_radius',
-      centerRadius: { lat: 50, lng: 14, radius_m: 1000 },
-    });
-    expect(got).not.toBeNull();
-    expect(got!.north - 50).toBeCloseTo(0.00899, 4);
-  });
-});
 
 /* The chip predicate itself moved to `lib/districtCodes.ts` and is pinned
  * against the CROSS-LANGUAGE table in `districtCodes.test.ts` (the same
@@ -293,6 +203,12 @@ describe('districtsFilterClause, re-exported by queries.ts', () => {
     expect(args.districts_levels).toEqual(['ulice', 'cast_obce']);
     expect(args.districts_ids).toEqual([666742, 490067]);
     expect(args.districts_excluded_filter).toEqual([false, true]);
+  });
+
+  it('ships the energy rating letters to the Stats/map RPCs, and no constraint when none is picked', () => {
+    expect(buildBrowseStatsArgs({ ...DEFAULT_FILTERS, energyRatingMatch: ['A', 'B'] }, NO_PREFILTERS)
+      .energy_rating_filter).toEqual(['A', 'B']);
+    expect(buildBrowseStatsArgs(DEFAULT_FILTERS, NO_PREFILTERS).energy_rating_filter).toBeNull();
   });
 });
 
@@ -342,19 +258,10 @@ interface RuleCase {
   excluded_active_only: boolean;
   expected: boolean;
 }
-interface BrokerCase {
-  name: string;
-  ads: Array<{ broker: string; source: string; is_active: boolean }>;
-  broker: string;
-  portals: string[];
-  status: 'any' | 'active' | 'inactive';
-  expected: boolean;
-}
-
 /* Records what applyPortalRule asks PostgREST for, as predicates over a row. */
 const PORTAL_RULE = JSON.parse(
   readFileSync(join(process.cwd(), '..', 'tests', 'fixtures', 'portal_rule.json'), 'utf-8'),
-) as { cases: RuleCase[]; broker_cases: BrokerCase[] };
+) as { cases: RuleCase[] };
 const PORTALS = (filterById('portals')?.enum_values ?? []).map((o) => String(o.value));
 
 class RuleRecorder {
@@ -396,7 +303,7 @@ const ruleRow = (c: Pick<RuleCase, 'is_active' | 'all_sources' | 'active_sources
 const ruleMatches = (f: ListingFilters, row: RuleRow): boolean =>
   applyPortalRule(new RuleRecorder(), f).preds.every((p) => p(row));
 
-describe('the portal rule (MS19)', () => {
+describe('the portal rule (MS19; the status is the property\'s since 657)', () => {
   const filtersFor = (c: Partial<RuleCase> & Pick<RuleCase, 'portals' | 'status'>): ListingFilters => ({
     ...DEFAULT_FILTERS, portals: c.portals, status: c.status,
     portalsExcluded: c.excluded ?? [], portalsExcludedActiveOnly: c.excluded_active_only ?? false,
@@ -408,25 +315,12 @@ describe('the portal rule (MS19)', () => {
     });
   }
 
-  /* The broker lookup answers the same rule over ONE broker's ads (portal and broker =
-   * one ad): the same rendering over the aggregate of the broker's ads agrees with it. */
-  for (const c of PORTAL_RULE.broker_cases) {
-    it(`broker: ${c.name}`, () => {
-      const own = c.ads.filter((ad) => ad.broker === c.broker);
-      const sources = (ads: typeof own) => [...new Set(ads.map((ad) => ad.source))].sort();
-      const row = ruleRow({
-        is_active: own.some((ad) => ad.is_active),
-        all_sources: sources(own),
-        active_sources: sources(own.filter((ad) => ad.is_active)),
-      });
-      expect(ruleMatches(filtersFor(c), row)).toBe(c.expected);
-    });
-  }
-
-  it('steps aside under a broker: the server judged portal and status on its ads', () => {
+  /* The broker cases (the portal side on one broker's ads) run in the DB lane,
+   * tests/test_portal_rule.py: here the portal side steps aside and the status stays. */
+  it('under a broker the portal side steps aside and the status stays the property\'s', () => {
     const f = { ...DEFAULT_FILTERS, brokerId: 527, portals: ['idnes', 'remax'], status: 'inactive' as const };
-    expect(adScope(f)).toEqual({ portals: [], status: 'any' });
-    expect(applyPortalRule(new RuleRecorder(), f).ops).toEqual([]);
+    expect(adPortals(f)).toEqual([]);
+    expect(applyPortalRule(new RuleRecorder(), f).ops).toEqual(['is_active.eq']);
   });
 
   it('keeps the exclusion under a broker: it is a statement about the property', () => {
@@ -445,7 +339,7 @@ describe('the portal rule (MS19)', () => {
 
   it('keeps the one-portal conjunct under a broker, so the order stays indexable', () => {
     const f = { ...DEFAULT_FILTERS, brokerId: 527, portals: ['idnes'], status: 'active' as const };
-    expect(applyPortalRule(new RuleRecorder(), f).ops).toEqual(['newest_ad_at_idnes.not.is']);
+    expect(applyPortalRule(new RuleRecorder(), f).ops).toEqual(['is_active.eq', 'newest_ad_at_idnes.not.is']);
   });
 
   it('adds the conjunct for exactly one portal, and it narrows nothing', () => {
@@ -477,8 +371,8 @@ describe('the one-portal order', () => {
   });
 
   it('passes every other sort straight through', () => {
-    for (const field of ['price_czk', 'price_per_m2', 'area_m2', 'last_seen_at',
-                         'display_label', 'mf_gross_yield_pct'] as const) {
+    for (const field of ['price_czk', 'price_per_m2', 'total_price_change_pct', 'area_m2',
+                         'plot_area_m2', 'street_name', 'last_seen_at', 'mf_gross_yield_pct'] as const) {
       expect(orderPortal(withPortals(['idnes']), { field, direction: 'desc' })).toBeNull();
       expect(effectiveSort(withPortals(['idnes']), { field, direction: 'desc' }))
         .toEqual({ field, direction: 'desc' });
@@ -515,7 +409,132 @@ describe('the one-portal order', () => {
     await fetchBrowseCount({ ...withPortals(['idnes']), status: 'active' });
     expect(s.calls).toContainEqual(['overlaps', ['active_sources', ['idnes']]]);
     expect(s.calls).toContainEqual(['not', ['newest_ad_at_idnes', 'is', null]]);
-    expect(s.calls.some(([m, a]) => m === 'eq' && a[0] === 'is_active')).toBe(false);
+    expect(s.calls).toContainEqual(['eq', ['is_active', true]]);
+    vi.restoreAllMocks();
+  });
+});
+
+/* The cards' sort menu is Browse's only sort control (operator ruling, Plocha
+ * both ways and Naposledy viděno); a sort field without a control reads as the default. */
+describe('the cards sort menu', () => {
+  it('offers area both ways and last seen, most recent first', () => {
+    const byLabel = new Map(CARD_SORTS.map((o) => [o.label, o.spec]));
+    expect(byLabel.get('Plocha: od nejmenší')).toEqual({ field: 'area_m2', direction: 'asc' });
+    expect(byLabel.get('Plocha: od největší')).toEqual({ field: 'area_m2', direction: 'desc' });
+    expect(byLabel.get('Naposledy viděno')).toEqual({ field: 'last_seen_at', direction: 'desc' });
+  });
+
+  it('reads last seen either way round as the one last-seen order the menu offers', () => {
+    expect(parseSort('last_seen_at')).toEqual({ field: 'last_seen_at', direction: 'desc' });
+    expect(parseSort('-last_seen_at')).toEqual({ field: 'last_seen_at', direction: 'desc' });
+  });
+
+  it('round-trips every entry through the URL, one entry per order', () => {
+    for (const { spec } of CARD_SORTS) expect(parseSort(sortToParam(spec))).toEqual(spec);
+    const params = CARD_SORTS.map((o) => sortToParam(o.spec));
+    expect(new Set(params).size).toBe(params.length);
+  });
+
+  it('reads a saved estate_area sort as the default, either way round', () => {
+    expect(parseSort('estate_area')).toEqual(DEFAULT_SORT);
+    expect(parseSort('-estate_area')).toEqual(DEFAULT_SORT);
+    expect(CARD_SORTS.map((o) => o.spec.field)).not.toContain('estate_area');
+  });
+
+  it('reads every sort field without a control as the default', () => {
+    for (const field of ['display_label', 'disposition', 'is_active', 'usable_area',
+                         'parking_lots']) {
+      expect(parseSort(field)).toEqual(DEFAULT_SORT);
+      expect(parseSort(`-${field}`)).toEqual(DEFAULT_SORT);
+    }
+  });
+
+  it('pages the cards by area with the rows that have none last', async () => {
+    const s = stubReads();
+    await fetchListingsForCards(DEFAULT_FILTERS, { field: 'area_m2', direction: 'desc' }, null);
+    expect(s.calls.filter(([m]) => m === 'order').map(([, a]) => a)).toEqual([
+      ['area_m2', { ascending: false, nullsFirst: false }],
+      ['property_id', { ascending: false }],
+    ]);
+    vi.restoreAllMocks();
+  });
+  /* Lot area is THE plot measure (the Lot area filter's column), never the bare
+   * estate_area, which four portals leave empty on land. */
+  it('offers lot area both ways, on the plot measure', () => {
+    const byLabel = new Map(CARD_SORTS.map((o) => [o.label, o.spec]));
+    expect(byLabel.get('Pozemek: od nejmenšího')).toEqual({ field: 'plot_area_m2', direction: 'asc' });
+    expect(byLabel.get('Pozemek: od největšího')).toEqual({ field: 'plot_area_m2', direction: 'desc' });
+    expect(parseSort('-plot_area_m2')).toEqual({ field: 'plot_area_m2', direction: 'desc' });
+  });
+
+  it('pages the cards by lot area with the rows that have no lot last, and shows the lot', async () => {
+    const s = stubReads();
+    await fetchListingsForCards(
+      DEFAULT_FILTERS,
+      { field: 'plot_area_m2', direction: 'asc' },
+      { value: 850, id: 7 },
+    );
+    expect(s.calls.filter(([m]) => m === 'order').map(([, a]) => a)).toEqual([
+      ['plot_area_m2', { ascending: true, nullsFirst: false }],
+      ['property_id', { ascending: true }],
+    ]);
+    expect(s.calls).toContainEqual(
+      ['or', ['plot_area_m2.gt.850,and(plot_area_m2.eq.850,property_id.gt.7),plot_area_m2.is.null']]);
+    vi.restoreAllMocks();
+    expect(BROWSE_SELECT_COLUMNS.cards.split(',')).toContain('plot_area_m2');
+  });
+
+  it('offers street name both ways', () => {
+    const byLabel = new Map(CARD_SORTS.map((o) => [o.label, o.spec]));
+    expect(byLabel.get('Ulice: A → Z')).toEqual({ field: 'street_name', direction: 'asc' });
+    expect(byLabel.get('Ulice: Z → A')).toEqual({ field: 'street_name', direction: 'desc' });
+    expect(parseSort('-street_name')).toEqual({ field: 'street_name', direction: 'desc' });
+  });
+
+  /* A street name carries the reserved chars of PostgREST's or=() (nám. Míru), so the
+   * cursor quotes it; rows without a street come last both ways. */
+  it('pages the cards by street with a quoted cursor and the rows without a street last', async () => {
+    const s = stubReads();
+    await fetchListingsForCards(
+      DEFAULT_FILTERS,
+      { field: 'street_name', direction: 'desc' },
+      { value: 'nám. Míru', id: 7 },
+    );
+    expect(s.calls.filter(([m]) => m === 'order').map(([, a]) => a)).toEqual([
+      ['street_name', { ascending: false, nullsFirst: false }],
+      ['property_id', { ascending: false }],
+    ]);
+    expect(s.calls).toContainEqual(
+      ['or', ['street_name.lt."nám. Míru",and(street_name.eq."nám. Míru",property_id.lt.7),street_name.is.null']]);
+    expect(String(s.calls.find(([m]) => m === 'select')?.[1][0])).toContain('street_name');
+    vi.restoreAllMocks();
+  });
+  /* Price change is the card's price-move badge column: the biggest drop is the most
+   * negative percent, so it sorts ascending; an ad seen at one price has none and
+   * comes last both ways. */
+  it('offers price change both ways, the biggest drop ascending', () => {
+    const byLabel = new Map(CARD_SORTS.map((o) => [o.label, o.spec]));
+    expect(byLabel.get('Změna ceny: největší pokles'))
+      .toEqual({ field: 'total_price_change_pct', direction: 'asc' });
+    expect(byLabel.get('Změna ceny: největší nárůst'))
+      .toEqual({ field: 'total_price_change_pct', direction: 'desc' });
+    expect(parseSort('total_price_change_pct')).toEqual({ field: 'total_price_change_pct', direction: 'asc' });
+  });
+
+  it('pages the cards by price change past a negative cursor, the rows without a change last', async () => {
+    const s = stubReads();
+    await fetchListingsForCards(
+      DEFAULT_FILTERS,
+      { field: 'total_price_change_pct', direction: 'asc' },
+      { value: -12.5, id: 7 },
+    );
+    expect(s.calls.filter(([m]) => m === 'order').map(([, a]) => a)).toEqual([
+      ['total_price_change_pct', { ascending: true, nullsFirst: false }],
+      ['property_id', { ascending: true }],
+    ]);
+    expect(s.calls).toContainEqual(['or', [
+      'total_price_change_pct.gt.-12.5,and(total_price_change_pct.eq.-12.5,property_id.gt.7),total_price_change_pct.is.null',
+    ]]);
     vi.restoreAllMocks();
   });
 });
@@ -672,16 +691,15 @@ describe('dismissed properties and curated sets are judged at the source', () =>
   const revealed = { ...DEFAULT_FILTERS, showDismissed: true };
   const onePortal = { ...DEFAULT_FILTERS, portals: ['bazos'] };
 
-  it('reads the source function by default, for cards, table and count', async () => {
+  it('reads the source function by default, for cards and count', async () => {
     const s = stubReads();
     await fetchListingsForCards(DEFAULT_FILTERS, DEFAULT_SORT, null);
-    await fetchListingsForTable(DEFAULT_FILTERS, DEFAULT_SORT, null);
     await fetchBrowseCount(DEFAULT_FILTERS);
     expect(s.rpc.mock.calls.map((c) => c[0])).toEqual([
-      'browse_list_visible', 'browse_list_visible', 'browse_list_visible',
+      'browse_list_visible', 'browse_list_visible',
     ]);
     expect(s.rpc.mock.calls[0].slice(1)).toEqual([{ hide_dismissed: true }, { get: true }]);
-    expect(s.rpc.mock.calls[2].slice(1)).toEqual([
+    expect(s.rpc.mock.calls[1].slice(1)).toEqual([
       { hide_dismissed: true }, { get: true, count: 'exact', head: true },
     ]);
     expect(s.from).not.toHaveBeenCalled();
@@ -912,7 +930,7 @@ describe('Browse Stats resolves through the one prefilter path', () => {
     }
   });
 
-  it('carries the broker in property_ids_filter; the server judged its portal and status', async () => {
+  it('carries the broker in property_ids_filter; the server found its ads, the status stays the property\'s', async () => {
     const { rpcArgs } = stubReads();
     await fetchStatsPivot({
       ...DEFAULT_FILTERS, brokerId: 527, portals: ['idnes'], status: 'active',
@@ -921,7 +939,7 @@ describe('Browse Stats resolves through the one prefilter path', () => {
     expect(fetchBrokerPropertyIds).toHaveBeenCalledWith(527, 'active', ['idnes']);
     expect(rpcArgs[0].property_ids_filter).toEqual([1]);
     expect(rpcArgs[0].portal_filter).toBeNull();
-    expect(rpcArgs[0].active_only_filter).toBe(false);
+    expect(rpcArgs[0].status_filter).toBe('active');
     /* The exclusion is about the property, so it reaches the RPC under a broker too. */
     expect(rpcArgs[0].portal_excluded_filter).toEqual(['sreality']);
     expect(rpcArgs[0].portal_excluded_active_only).toBe(true);
@@ -933,7 +951,9 @@ describe('Browse Stats resolves through the one prefilter path', () => {
       NO_PREFILTERS,
     );
     expect(args.portal_filter).toEqual(['idnes']);
-    expect([args.active_only_filter, args.inactive_only_filter]).toEqual([false, true]);
+    expect(args.status_filter).toBe('inactive');
+    expect(args).not.toHaveProperty('active_only_filter');
+    expect(args).not.toHaveProperty('inactive_only_filter');
   });
 
   it('never names the retired listing_ids_filter on the map, and carries the broker', async () => {
@@ -985,7 +1005,6 @@ describe('the map pins read the list\'s relation through the list\'s chain', () 
       };
       await fetchListingsForMap(f, 200);
       await fetchListingsForCards(f, DEFAULT_SORT, null);
-      await fetchListingsForTable(f, DEFAULT_SORT, null);
       const [pins, ...lists] = urls.filter((u) => !u.pathname.endsWith('/browse_map_cells'));
       if (!showDismissed) expect(pins.pathname).toBe('/rest/v1/rpc/browse_list_visible');
       expect(filters(pins)).toEqual(expect.arrayContaining([
@@ -993,12 +1012,62 @@ describe('the map pins read the list\'s relation through the list\'s chain', () 
         'lat=gte.49.94', 'lat=lte.50.18', 'lng=gte.14.22', 'lng=lte.14.71',
       ]));
       expect(pins.searchParams.has('order') || pins.searchParams.has('limit')).toBe(false);
-      expect(lists).toHaveLength(2);
+      expect(lists).toHaveLength(1);
       for (const list of lists) {
         expect(list.pathname, `showDismissed=${showDismissed}`).toBe(pins.pathname);
         expect(filters(pins)).toEqual([...filters(list), 'lat=not.is.null', 'lng=not.is.null'].sort());
         expect(list.searchParams.has('order') && list.searchParams.has('limit')).toBe(true);
       }
     }
+  });
+});
+
+/* The '__unknown__' chip ("Neuvedeno") on furnished, ownership and condition: NULL or a
+ * value outside the canon (toolkit.filter_compiler._enum_or_unknown_clause, the RPCs'
+ * own arrays). Without it a selection keeps the auto path's shape: one value is `eq`. */
+describe('the Neuvedeno chip reaches the list as NULL or off-canon', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const sent = async (patch: Partial<ListingFilters>): Promise<URLSearchParams> => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers({ 'Content-Range': '*/1' }),
+      text: async () => '',
+    }) as unknown as Response);
+    vi.stubGlobal('fetch', fetch);
+    await fetchBrowseCount({ ...DEFAULT_FILTERS, ...patch });
+    return new URL(String(fetch.mock.calls.at(-1)![0])).searchParams;
+  };
+  const conditionCanon = CONDITION_CANONICAL.join(',');
+
+  it('keeps one stated condition an equality and several an IN', async () => {
+    expect((await sent({ conditionMatch: ['novostavba'] })).get('condition')).toBe('eq.novostavba');
+    expect((await sent({ conditionMatch: ['novostavba', 'dobry'] })).get('condition'))
+      .toBe('in.(novostavba,dobry)');
+  });
+
+  it('sends Neuvedeno alone in the shape furnished sends it', async () => {
+    const condition = await sent({ conditionMatch: ['__unknown__'] });
+    expect(condition.get('condition')).toBeNull();
+    expect(condition.getAll('or')).toContain(`(condition.is.null,condition.not.in.(${conditionCanon}))`);
+    const furnished = await sent({ furnished: ['__unknown__'] });
+    expect(furnished.getAll('or'))
+      .toContain(`(furnished.is.null,furnished.not.in.(${FURNISHED_CANONICAL.join(',')}))`);
+  });
+
+  it('ORs stated conditions with Neuvedeno', async () => {
+    const q = await sent({ conditionMatch: ['novostavba', '__unknown__'] });
+    expect(q.getAll('or'))
+      .toContain(`(condition.in.(novostavba),condition.is.null,condition.not.in.(${conditionCanon}))`);
+  });
+
+  it('sends the selection to the aggregates as it stands, the sentinel included', () => {
+    const args = buildBrowseStatsArgs({ ...DEFAULT_FILTERS, conditionMatch: ['__unknown__'] }, NO_PREFILTERS);
+    expect(args.condition_match_filter).toEqual(['__unknown__']);
   });
 });

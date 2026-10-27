@@ -341,27 +341,25 @@ def broker_listings(conn: Any, broker_id: int, *, limit: int = 500) -> dict[str,
                      len(rows), _iso(fresh))
 
 
-# MS19 over the broker's own ads only, so "broker + portal" means ONE ad satisfies both: a
-# property matches when one of THIS broker's ads is on a selected portal, and the status is
-# judged on those ads. No listing_location join: browse_list serves a property only when its
+# The portal side of the portal rule (MS19, 657) over the broker's own ads, so "broker + portal"
+# means ONE ad satisfies both: one of THIS broker's ads on a selected portal (any, with none) in
+# the status switch's status. The status itself is the property's, applied by the caller beside
+# this allowlist. No listing_location join: browse_list serves a property only when its
 # canonical ad is placed (rule 25), and that is the read this allowlist narrows.
 _BROKER_PROPERTY_IDS_SQL = """
-    SELECT l.property_id FROM listings l
+    SELECT DISTINCT l.property_id FROM listings l
     JOIN broker_identities bi ON bi.id = l.broker_identity_id
     WHERE bi.broker_id = %(broker_id)s AND l.property_id IS NOT NULL
-    GROUP BY l.property_id
-    HAVING public.portal_status_matches(
-        bool_or(l.is_active), array_agg(DISTINCT l.source),
-        coalesce(array_agg(DISTINCT l.source) FILTER (WHERE l.is_active), '{}'::text[]),
-        %(portals)s::text[], %(status)s)
+      AND (cardinality(%(portals)s::text[]) = 0 OR l.source = ANY(%(portals)s::text[]))
+      AND (%(status)s = 'any' OR l.is_active = (%(status)s = 'active'))
     ORDER BY l.property_id LIMIT %(limit)s
 """
 
 
 def broker_property_ids(conn: Any, broker_id: int, *, status: str = "any",
                         portals: Sequence[str] = (), limit: int = 50_000) -> dict[str, Any]:
-    """The properties a broker's ads stand on, under the portal rule (MS19): Browse's `brokerId`
-    allowlist (frontend/src/lib/queries.ts `resolveBrokerPrefilter`), complete up to `limit`,
+    """The properties where the broker has an ad on `portals` in `status` (the portal rule's portal
+    side, MS19): Browse's `brokerId` allowlist (frontend/src/lib/queries.ts `resolveBrokerPrefilter`), complete up to `limit`,
     because a silently truncated allowlist under-plots the map; `limit + 1` detects an overflow."""
     limit = max(1, min(int(limit), 50_000))
     with conn.cursor(row_factory=dict_row) as cur:

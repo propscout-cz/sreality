@@ -12,7 +12,8 @@ and the import-time assertion that the registry still agrees with `_HASH_FIELDS`
 the split is measured, not assumed:
 
   * `portal_raw_pages.html` (page_kind='detail') for the seven HTML portals — bazos,
-    ceskereality, idnes, maxima, mmreality, realitymix, remax. UNIQUE(source,
+    ceskereality, idnes, maxima, mmreality, realitymix, remax — and `web`, the tenth
+    portal (any pasted site, since 2026-10-21), staged the same way. UNIQUE(source,
     source_id_native, page_kind), upserted latest-wins in the SAME `write_details`
     transaction that writes the listings row, so it cannot lag the row it produced: the
     stored page IS the page the current columns were parsed from, which is why replaying it
@@ -38,7 +39,7 @@ the split is measured, not assumed:
     `parse_errors`, the report WARNs on them, and no heal can reach them.
 
 `portal_raw_payloads` is NOT this seam's substrate and the two are easy to confuse: that one
-is the append-on-change R2-backed archive with a 7-day per-listing floor, whose staleness
+is the append-on-change R2-backed archive, whose 7-day per-listing floor (removed 2026-10-22)
 made an earlier heal skip 89 % of its population (examined=3000, body_stale=2672).
 
 **raw_json is INSUFFICIENT on the HTML portals, and idnes proves it.** Its amenity booleans
@@ -141,11 +142,11 @@ class PortalSubstrate:
     """Where a portal's stored state lives, and the entry point that reads it.
 
     `takes_category` says the entry point accepts the row's stored category as an
-    argument. It is not a style choice: bazos, ceskereality and idnes declare those
-    parameters without defaults. bazos and ceskereality treat them as a fallback behind
-    the page's own breadcrumb; idnes passes them STRAIGHT THROUGH, so its two category
-    columns come from the index walk and this seam cannot re-derive them. remax and maxima
-    default them to None and read the page instead, so nothing is passed and their
+    argument. It is not a style choice: bazos and idnes declare those parameters without
+    defaults. bazos treats them as a fallback behind the page's own breadcrumb; idnes passes
+    them STRAIGHT THROUGH, so its two category columns come from the index walk and this seam
+    cannot re-derive them. remax and maxima default them to None and read the page, and
+    ceskereality takes none (the page's canonical URL names it), so nothing is passed and their
     categories DO re-derive.
     """
 
@@ -157,7 +158,7 @@ class PortalSubstrate:
 
 SUBSTRATE: dict[str, PortalSubstrate] = {
     "bazos": PortalSubstrate(PAGE, "scraper.bazos_parser", "parse_detail", True),
-    "ceskereality": PortalSubstrate(PAGE, "scraper.ceskereality_parser", "parse_detail", True),
+    "ceskereality": PortalSubstrate(PAGE, "scraper.ceskereality_parser", "parse_detail", False),
     "idnes": PortalSubstrate(PAGE, "scraper.idnes_parser", "parse_detail", True),
     "maxima": PortalSubstrate(PAGE, "scraper.maxima_parser", "parse_detail", False),
     "mmreality": PortalSubstrate(PAGE, "scraper.mmreality_parser", "parse_detail", False),
@@ -165,15 +166,19 @@ SUBSTRATE: dict[str, PortalSubstrate] = {
     "remax": PortalSubstrate(PAGE, "scraper.remax_parser", "parse_detail", False),
     "bezrealitky": PortalSubstrate(RAW_JSON, "scraper.bezrealitky_parser", "parse_advert", False),
     "sreality": PortalSubstrate(RAW_JSON, "scraper.parser", "parse_listing", False),
+    # The tenth portal: its drain stages every page it parses, and the parse is
+    # deterministic over that page, so a re-derive is idempotent.
+    "web": PortalSubstrate(PAGE, "scraper.web_parser", "parse_detail", False),
 }
 
 # Derived from the two definitions that already exist, never restated (rule 21): a column
 # preserve-if-null at the ingest boundary is not a heal's to clear (an absent value there
 # means "the parser could not read it", never "the portal withdrew it"), and a column in the
 # content hash defers a snapshot to the row's next detail fetch, which
-# `--allow-snapshot-deferral` makes explicit. `area_basis` is the one healable column
-# outside the hash (a provenance stamp, migration 423), so healing it churns nothing. A
-# column joining either definition extends the gate here on its own.
+# `--allow-snapshot-deferral` makes explicit. Two healable columns sit outside the hash —
+# `area_basis` (a provenance stamp, migration 423) and `ad_reference` (the advertiser's own
+# number, migration 667: identity-adjacent like source_url) — so healing either churns
+# nothing. A column joining either definition extends the gate here on its own.
 HEALABLE: tuple[str, ...] = tuple(
     c for c in LISTING_COLUMNS if c not in _PRESERVE_IF_NULL_COLUMNS)
 

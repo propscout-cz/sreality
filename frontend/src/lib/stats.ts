@@ -15,15 +15,17 @@ import type { QueryClient } from '@tanstack/react-query';
 import { arrayMove } from '@dnd-kit/sortable';
 import { supabase } from './supabase';
 import { pgRead, type PgReadOptions } from './pgRead';
-import { apiPut } from './api';
+import { apiDelete, apiGet, apiPost, apiPut } from './api';
 import { browseKeys } from './browseKeys';
 import { buildBrowseStatsArgs, resolveBrowsePrefilters, type BrowsePrefilters } from './queries';
-import type { ListingFilters } from './filters';
+import type { ListingFilters, PresetSpec } from './filters';
 import { PPM2_UNIT, PRICE_PERIOD_UNIT, ppm2BasisFromToken } from './measure';
 import { categoryMainLabelPlural, categoryTypeLabel } from './enums';
 import { filterById } from './filterRegistry.generated';
 import { fmtCount } from './format';
 import { csCollator } from './collator';
+import type { StatsMarket } from './statsMarket';
+import type { SavedDashboard, TagColor } from './types';
 import {
   STATS_REGISTRY,
   type ChartStat,
@@ -55,8 +57,22 @@ export interface ChartSpec extends StatsSpec {
   stats: ChartStat[];
 }
 
+/* A cell under `min_n` (migration 678): the four numbers it may show behind the
+ * Stats tab's "Malé vzorky" switch. Never percentiles. */
+export interface SmallSample {
+  min: number;
+  max: number;
+  mean: number;
+  median: number;
+}
+export const SMALL_STATS = ['min', 'mean', 'median', 'max'] as const;
+export const SMALL_LABEL: Record<(typeof SMALL_STATS)[number], string> = {
+  min: 'min', mean: 'průměr', median: 'medián', max: 'max',
+};
+
 /* A rollup cell: `keys.length` is its level (0 = the whole sample, per column
- * value). Statistics are null below `min_n` — server-enforced, all six together. */
+ * value). Statistics are null below `min_n` — server-enforced, all six together;
+ * such a cell carries `small` instead (absent before migration 678). */
 export interface StatsCell {
   keys: string[];
   col: string | null;
@@ -67,6 +83,7 @@ export interface StatsCell {
   p25: number | null;
   p75: number | null;
   p90: number | null;
+  small?: SmallSample | null;
 }
 
 /* A pivot's place names, (dimension, RÚIAN code) → name (placeKey); null when
@@ -178,19 +195,17 @@ export async function fetchStatsPivot(
  * it lives outside the browse sweep. */
 export const statsDashboardKey = ['stats-dashboard'] as const;
 
-/* RLS returns the caller's row; no row ⇒ the default board, and the first save
- * persists the whole list. A saved EMPTY list is the user's choice and stays empty.
- * Single-membership assumption: RLS reads every account the user belongs to
- * (current_account_ids) while PUT writes the first one (require_account_id). One
- * user has one membership today; a second one (out of scope) needs a
- * GET /stats/dashboard on the write's account resolution instead of this read. */
+/* GET /stats/dashboard: the account's WORKING board (the unnamed row, migration
+ * 647), resolved like the PUT's. No row ⇒ the default board, and the first save
+ * persists the whole list. A saved EMPTY list is the user's choice and stays empty. */
 export async function fetchDashboard({ signal }: PgReadOptions = {}): Promise<ChartSpec[]> {
-  const { data } = await pgRead<{ charts: unknown } | null>(
-    supabase.from('stats_dashboards').select('charts').limit(1).maybeSingle(),
-    { signal },
+  const row = await apiGet<{ id: string; charts: unknown; updated_at: string } | null>(
+    '/stats/dashboard',
+    undefined,
+    signal,
   );
-  if (data == null) return DEFAULT_CHARTS;
-  return sanitizeCharts(data.charts);
+  if (row == null) return DEFAULT_CHARTS;
+  return sanitizeCharts(row.charts);
 }
 
 /* PUT /stats/dashboard {charts}: the whole document, validated server-side by
@@ -199,6 +214,109 @@ export async function saveDashboard(charts: ChartSpec[]): Promise<ChartSpec[]> {
   const res = await apiPut<{ charts: unknown }>('/stats/dashboard', { charts });
   return sanitizeCharts(res.charts);
 }
+
+/* The NAMED dashboards (migration 647): the filter presets' twin in the one
+ * saved-set primitive (docs/design/saved-dashboards.md) — the same six routes
+ * under /stats/dashboards, plus read-only sharing. The list holds the caller's
+ * own and those shared with it (`owner_email` set); a write to a shared one is
+ * the owner's alone (404 for a recipient). On a PUT an explicit
+ * `filter_spec: null` clears the filter, an absent one keeps it. They live here,
+ * in the Stats chunk, not in lib/api: the first-visit bundle never pays for them. */
+export const statsDashboardKeys = {
+  all: ['stats-dashboards'] as const,
+};
+
+export type DashboardList = { data: SavedDashboard[]; total: number };
+const dashboardPath = (id: string, tail = ''): string =>
+  `/stats/dashboards/${encodeURIComponent(id)}${tail}`;
+
+export const listStatsDashboards = (): Promise<DashboardList> =>
+  apiGet<DashboardList>('/stats/dashboards');
+
+/* The Stats tab's sample lens (operator 2026-10-22; "all" 2026-10-23). "filter" = the
+ * Browse filter as set; "sold" = the sold market over it: inactive only, seen from birth,
+ * dismissed included, 2–60 days on market; "all" = every listing it covers, active and
+ * inactive, dismissed included, with no time-on-market bound. Every other filter holds;
+ * Browse's own filter never changes. The property page's "Trh v okolí" tile offers the
+ * same "sold" and "all" (lib/neighbourhood). */
+export { isStatsMarket, type StatsMarket } from './statsMarket';
+export const SOLD_MARKET_DAYS = { min: 2, max: 60 } as const;
+export const soldMarketFilters = (f: ListingFilters): ListingFilters => ({
+  ...f,
+  status: 'inactive',
+  tomObservedOnly: true,
+  showDismissed: true,
+  tomDaysMin: SOLD_MARKET_DAYS.min,
+  tomDaysMax: SOLD_MARKET_DAYS.max,
+});
+export const allMarketFilters = (f: ListingFilters): ListingFilters => ({
+  ...f,
+  status: 'any',
+  tomObservedOnly: false,
+  showDismissed: true,
+  tomDaysMin: null,
+  tomDaysMax: null,
+});
+/* The sample a lens counts. */
+export const marketSample = (f: ListingFilters, market: StatsMarket): ListingFilters =>
+  market === 'sold' ? soldMarketFilters(f) : market === 'all' ? allMarketFilters(f) : f;
+/* The lens's name, as its switch says it; every caption leads with it. */
+export const MARKET_LABEL: Record<StatsMarket, string> = {
+  filter: 'Jako ve filtru',
+  sold: 'Prodáno (trh)',
+  all: 'Vše',
+};
+export const MARKET_CAPTION: Record<StatsMarket, string> = {
+  filter: 'Jako ve filtru: každý graf počítá nemovitosti z filtru; sestava grafů je uložená k vašemu účtu.',
+  sold: 'Prodáno (trh): jen neaktivní nemovitosti sledované od vzniku, 2–60 dní na trhu, včetně skrytých; ostatní filtry platí.',
+  all: 'Vše: aktivní i neaktivní nemovitosti, včetně skrytých, bez omezení doby na trhu; ostatní filtry platí.',
+};
+/* A caption split for the Stats tab, which sets the lens's name in bold (ruling S03). */
+export const marketCaption = (m: StatsMarket): { name: string; text: string } => {
+  const name = MARKET_LABEL[m];
+  const lead = `${name}: `;
+  const caption = MARKET_CAPTION[m];
+  return { name, text: caption.startsWith(lead) ? caption.slice(lead.length) : caption };
+};
+
+
+export const createStatsDashboard = (input: {
+  name: string;
+  charts: ChartSpec[];
+  filter_spec?: PresetSpec;
+  color?: TagColor | null;
+  show_small?: boolean;
+}): Promise<SavedDashboard> => apiPost<SavedDashboard>('/stats/dashboards', input);
+
+export const updateStatsDashboard = (
+  id: string,
+  patch: {
+    name?: string;
+    charts?: ChartSpec[];
+    filter_spec?: PresetSpec | null;
+    color?: TagColor | null;
+    show_small?: boolean;
+  },
+): Promise<SavedDashboard> => apiPut<SavedDashboard>(dashboardPath(id), patch);
+
+export const deleteStatsDashboard = (id: string): Promise<unknown> => apiDelete(dashboardPath(id));
+
+/* Make one own dashboard the property page's "Okolí dashboard" (migration 664): the
+ * account's previous one lets go, and this one drops its filter. Answers the row. */
+export const setPropertyCardDashboard = (id: string): Promise<SavedDashboard> =>
+  apiPut<SavedDashboard>(dashboardPath(id, '/property-card'), {});
+
+/* The caller's own dashboards in their new order; answers the canonical list. */
+export const reorderStatsDashboards = (ids: string[]): Promise<DashboardList> =>
+  apiPut<DashboardList>('/stats/dashboards/reorder', { ids });
+
+/* Answers the dashboard with its `shared_with`. */
+export const shareStatsDashboard = (id: string, email: string): Promise<SavedDashboard> =>
+  apiPost<SavedDashboard>(dashboardPath(id, '/shares'), { email });
+
+/* The owner revokes a recipient, or a recipient leaves (its own grant's account_id). */
+export const unshareStatsDashboard = (id: string, account_id: string): Promise<unknown> =>
+  apiDelete(dashboardPath(id, `/shares/${encodeURIComponent(account_id)}`));
 
 /* -------------------------------------------------------------------------- */
 /* The registry by id, and the names the UI gives it                           */
@@ -317,8 +435,13 @@ export function sanitizeChart(raw: unknown): ChartSpec | null {
   return chartProblem(chart) == null ? chart : null;
 }
 
-const sanitizeCharts = (raw: unknown): ChartSpec[] =>
+export const sanitizeCharts = (raw: unknown): ChartSpec[] =>
   Array.isArray(raw) ? raw.map(sanitizeChart).filter((c): c is ChartSpec => c != null) : [];
+
+/* Two boards hold the same charts in the same order. sanitizeChart builds every
+ * chart with one key order, so the JSON of two sanitized lists is a stable compare. */
+export const chartsEqual = (a: readonly ChartSpec[], b: readonly ChartSpec[]): boolean =>
+  JSON.stringify(a.map(sanitizeChart)) === JSON.stringify(b.map(sanitizeChart));
 
 type Shelf = 'rows' | 'cols';
 
@@ -718,6 +841,11 @@ export function ledgerCounts(pivot: StatsPivot): LedgerCounts | null {
   }
   return { filtered, sample, excluded, split: leaves.length > 0 ? { withStats, underMin } : null };
 }
+
+/* Every cell the payload sent (each level, the Celkem rollup, every column value)
+ * is under its floor: the chart counts, but shows no statistic (ruling S09). */
+export const everyCellUnderMin = (pivot: StatsPivot): boolean =>
+  pivot.cells.length > 0 && pivot.cells.every((c) => c.n < pivot.min_n);
 
 const optionLabel = (filterId: string, value: string): string | null => {
   const o = filterById(filterId)?.enum_values?.find((e) => String(e.value) === value);

@@ -24,6 +24,7 @@ import pytest
 from location_data import page_readers
 from location_data.claims_common import Entry, IntakeRefused, IntakeResult, ListingRow
 from location_data.html_scope import ScopeRegister
+from scraper import cpus
 from tests.location_data.claim_intake_fixtures import entries_for
 
 FETCHED_AT = datetime(2026, 9, 12, 4, 30, tzinfo=UTC)
@@ -66,10 +67,10 @@ ENTRIES = {"remax": [_entry("remax")], "idnes": [_entry("idnes")]}
 def pooled(monkeypatch: pytest.MonkeyPatch) -> None:
     """Two workers and a floor of one body, so the pooled path is the one under test.
 
-    `LOCATION_INTAKE_WORKERS` rather than a patched `extraction_workers`: a CI runner that
+    `JOB_CPUS` rather than a patched `job_cpus`: a CI runner that
     reports a single CPU would otherwise take the main-thread path and every assertion
     below would pass without a process ever starting."""
-    monkeypatch.setenv(page_readers.EXTRACTION_WORKERS_ENV, "2")
+    monkeypatch.setenv(cpus.JOB_CPUS_ENV, "2")
     monkeypatch.setattr(page_readers, "PARALLEL_MIN_BODIES", 1)
 
 
@@ -160,7 +161,7 @@ def test_a_batch_below_the_floor_never_starts_a_pool(monkeypatch: pytest.MonkeyP
     """A --limit run, a drain's last batch, and every test that monkeypatches a reader: the
     handful of bodies they carry is extracted here, where an in-process patch still holds
     and a fresh interpreter per worker would cost more than the parse it parallelises."""
-    monkeypatch.setenv(page_readers.EXTRACTION_WORKERS_ENV, "4")
+    monkeypatch.setenv(cpus.JOB_CPUS_ENV, "4")
 
     def _never(*_a: Any, **_k: Any) -> None:
         raise AssertionError("a pool was started for a batch below the floor")
@@ -173,7 +174,7 @@ def test_a_batch_below_the_floor_never_starts_a_pool(monkeypatch: pytest.MonkeyP
 
 def test_one_worker_is_the_main_thread(monkeypatch: pytest.MonkeyPatch) -> None:
     """A runner that reports one CPU pays no IPC to use it."""
-    monkeypatch.setenv(page_readers.EXTRACTION_WORKERS_ENV, "1")
+    monkeypatch.setenv(cpus.JOB_CPUS_ENV, "1")
     monkeypatch.setattr(page_readers, "PARALLEL_MIN_BODIES", 1)
 
     def _never(*_a: Any, **_k: Any) -> None:
@@ -324,13 +325,13 @@ def test_pool_width_is_what_extract_pages_will_actually_use(
 ) -> None:
     """The lane logs this beside its bodies/s. A batch under the floor ran on the main
     thread, and a rate labelled with workers it never had is worse than no label."""
-    monkeypatch.setenv(page_readers.EXTRACTION_WORKERS_ENV, "4")
+    monkeypatch.setenv(cpus.JOB_CPUS_ENV, "4")
 
     assert page_readers.pool_width(page_readers.PARALLEL_MIN_BODIES) == 4
     assert page_readers.pool_width(page_readers.PARALLEL_MIN_BODIES - 1) == 1
     assert page_readers.pool_width(0) == 1
 
-    monkeypatch.setenv(page_readers.EXTRACTION_WORKERS_ENV, "1")
+    monkeypatch.setenv(cpus.JOB_CPUS_ENV, "1")
     assert page_readers.pool_width(10_000) == 1
 
 

@@ -11,6 +11,12 @@ export function prettyPhone(p: string): string {
   return p;
 }
 
+/* The dialable form of a stored number: `tel:+420…` for the 12-digit Czech form the
+ * store normalises to, the raw digits otherwise. */
+export function telHref(p: string): string {
+  return p.startsWith('420') && p.length === 12 ? `tel:+${p}` : `tel:${p}`;
+}
+
 /* Broker intelligence read layer — every read goes through the FastAPI service
  * (`/brokers/*`) on the caller's real Supabase session JWT, never PostgREST.
  *
@@ -345,20 +351,24 @@ export async function fetchListingBrokersByIds(
 }
 
 /* MS7: a property's brokers are a list, and nothing stores it. The brokers of
- * its active ads, one entry per person, the canonical ad's first, then the
- * ads in the order given; with no active ad, the brokers of all its ads, marked
- * `fromInactive`. An unattributed ad adds nothing. The property page and the
- * pipeline board both read a property's brokers through this, and nothing else. */
-export interface PropertyBrokers {
-  brokers: ListingBroker[];
+ * its active ads, one entry per person carrying the ads that person advertises
+ * (the canonical ad's first, then the ads in the order given); with no active
+ * ad, the brokers of all its ads, marked `fromInactive`. An unattributed ad adds
+ * nothing. The property page (both shells) and the pipeline board read a
+ * property's brokers through this, and nothing else; the card quotes each ad's
+ * reference off the ad rows kept here, so no second read exists. */
+export type BrokerAd = { id: number; is_active: boolean };
+export type BrokerWithAds<A extends BrokerAd = BrokerAd> = ListingBroker & { ads: A[] };
+export interface PropertyBrokers<A extends BrokerAd = BrokerAd> {
+  brokers: BrokerWithAds<A>[];
   fromInactive: boolean;
 }
 
-export function propertyBrokers(
-  ads: ReadonlyArray<{ id: number; is_active: boolean }>,
+export function propertyBrokers<A extends BrokerAd>(
+  ads: ReadonlyArray<A>,
   byListing: ReadonlyMap<number, ListingBroker>,
   canonicalId: number | null,
-): PropertyBrokers {
+): PropertyBrokers<A> {
   const active = ads.filter((a) => a.is_active);
   const fromInactive = active.length === 0;
   const pool = fromInactive ? ads : active;
@@ -366,13 +376,19 @@ export function propertyBrokers(
     ...pool.filter((a) => a.id === canonicalId),
     ...pool.filter((a) => a.id !== canonicalId),
   ];
-  const seen = new Set<number>();
-  const brokers: ListingBroker[] = [];
+  const seen = new Map<number, BrokerWithAds<A>>();
+  const brokers: BrokerWithAds<A>[] = [];
   for (const ad of ordered) {
     const b = byListing.get(ad.id);
-    if (b == null || seen.has(b.broker_id)) continue;
-    seen.add(b.broker_id);
-    brokers.push(b);
+    if (b == null) continue;
+    const row = seen.get(b.broker_id);
+    if (row) {
+      row.ads.push(ad);
+      continue;
+    }
+    const fresh = { ...b, ads: [ad] };
+    seen.set(b.broker_id, fresh);
+    brokers.push(fresh);
   }
   return { brokers, fromInactive };
 }
@@ -420,9 +436,9 @@ export async function fetchBrokerListings(
 
 /* A broker's properties under the portal rule (MS19): the allowlist behind
  * Browse's brokerId prefilter (lib/queries.ts resolveBrokerPrefilter). The
- * server judges portal and status over the broker's OWN ads
- * (toolkit.brokers.broker_property_ids), so "broker + portal" means one ad
- * satisfies both. Complete up to a large server-side cap, because a truncated
+ * server finds the broker's OWN ads on the portals in the status switch's
+ * status (toolkit.brokers.broker_property_ids), so "broker + portal" means one
+ * ad satisfies both; the property's own status is applied beside it. Complete up to a large server-side cap, because a truncated
  * allowlist would silently under-plot the map; `capped` is logged, since it
  * essentially never happens.
  *

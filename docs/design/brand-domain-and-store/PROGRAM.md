@@ -1,6 +1,7 @@
 # Brand domain, Chrome Web Store, MCP server — program plan
 
-**Status: PLAN, awaiting operator approval. Nothing here is built.**
+**Status: approved 2026-10-06. W1 (domain cutover) is LIVE on `propscout.cz` since 2026-10-25 (#2005) —
+see "W1 as run" below; its old hosts go after 7 quiet days. W0 and W2–W6 are not started.**
 Investigated 2026-09-26. Spot-checked against `main` (`03b72cda`) and production on 2026-10-03
 (§ 11 lists what moved in between).
 
@@ -130,8 +131,9 @@ opened by the coding session.
 1. Railway custom domains `api.<brand>` and `app.<brand>`, each with **two** DNS records (CNAME
    and a TXT verification record), DNS-only. `api` stays DNS-only permanently: Cloudflare's proxy
    cuts responses at 125 s and agent estimations run about four minutes.
-2. API variables: `CORS_ALLOW_ORIGINS` gains the new app origin (old one stays);
-   `SPA_BASE_URL`, `API_PUBLIC_URL` → Deploy. A preflight from both app origins confirms it.
+2. API variable `CORS_ALLOW_ORIGINS` gains the new app origin (old one stays) → Deploy. A
+   preflight from both app origins confirms it. (`SPA_BASE_URL` and `API_PUBLIC_URL` were deleted
+   by notifications push W1, 2026-10-21; nothing reads them.)
 3. Supabase URL configuration: read the current values; add the **old** Railway origin to the
    redirect allowlist explicitly; then switch the Site URL to the new app origin. The old origin
    is probably allowed only because it is today's Site URL.
@@ -141,6 +143,32 @@ opened by the coding session.
 7. PRs: domain (smoke-check default host, dead example hosts); cleanup (dead build argument,
    dead env lines); safeguard (delete the static-token routes nothing calls — after the operator
    confirms no ClickUp automation or personal script uses the token).
+
+#### W1 as run (operator rulings 2026-10-25; W1 alone, the rest of this program not started)
+
+- **Hosts:** `app.propscout.cz` (SPA) and `api.propscout.cz` (API), DNS-only on Cloudflare. The bare
+  domain and `www` reach the app by a Cloudflare **302** redirect rule — temporary on purpose: the
+  bare domain is kept for a future homepage, and browsers cache a 301 indefinitely.
+- **Old hosts:** the old SPA host answers **301** to the same path and query on `app.` (a `host`
+  matcher in `frontend/Caddyfile`); the old API host keeps serving. Both Railway domains are removed
+  **together**, once **both** have had no traffic for 7 days. Then the old origin leaves
+  `CORS_ALLOW_ORIGINS` and the Supabase redirect allowlist, and a follow-up PR deletes the redirect.
+- **Extension:** rebuilt in the cutover against the new hosts (`EXT_API_BASE_URL`,
+  `EXT_APP_BASE_URL`); still installed unpacked, so each user re-downloads it.
+- **Email:** the bare domain's mail is Google Workspace (MX + SPF + site verification, added
+  2026-10-25 17:27Z; they replaced a null MX + `v=spf1 -all` added earlier that day). The `_dmarc`
+  policy and the Resend records on `r.propscout.cz` are not part of this cutover.
+- **Dropped:** the Stripe step (no `STRIPE_WEBHOOK_SECRET` is set on the API; Stripe never sent an
+  event) and push re-subscription (no subscription existed).
+- **Out of this cutover:** the brand rename (`frontend/src/lib/brand.ts` still says Limen Reality),
+  the Supabase custom domain, the cleanup and safeguard PRs of step 7.
+- **Certificates:** Railway's first request to Let's Encrypt raced the new DNS records and came
+  back "rate limit reached", marked not retryable. It never retried on its own, and the dashboard
+  offers no retry button. **Removing and re-adding the domain once fixed it within minutes.** That
+  is safe while no certificate has been issued: Let's Encrypt's five-per-week duplicate limit
+  counts only issued certificates. A re-add keeps the `_railway-verify` TXT token but **changes
+  the CNAME target** (now `app` → `m6ov874e.up.railway.app`, `api` → `vdeask3z.up.railway.app`), and
+  a record re-created by hand in Cloudflare comes back **proxied**: set it to DNS-only again.
 
 ### W2 — Public pages on the brand domain
 
@@ -211,7 +239,7 @@ Release-job PR, merged only after the store credentials exist (W5):
 
 ### W6 — Decommission
 
-Re-point any Stripe or Resend webhook registered on the old API host. Remove the old app origin
+Re-point the Stripe webhook registered on the old API host (the Resend webhook was deleted 2026-10-21, notifications push W1). Remove the old app origin
 from CORS and Supabase, the old extension ID from Supabase and CORS, the unused redirect entry
 from the Google client, and finally the two `*.up.railway.app` domains (irreversible).
 
@@ -327,7 +355,7 @@ with no hostname in it.
 | Sign-in from the store build never returns | The new redirect address is missing from Supabase's allowlist. Hard checklist item in W5. |
 | Empty host permissions break API calls | Only if CORS lacks the extension origin. Verified by preflight and a full sign-in plus lookup before publishing. |
 | Railway reuses an old image after a variable change | Check the build log; Redeploy if "Skipped Builds" is on |
-| Certificate lockout | Never delete and re-add a domain to retry |
+| Certificate lockout | Re-add a domain at most once, and only while it has no issued certificate (W1 as run) |
 | CI publishes at the wrong moment | State handling in § 4 W4 |
 | A release breaks installed copies | Additive-API rule; permission ratchet test |
 | CI refresh token expires weekly | Separate project with audience Internal, never Testing |

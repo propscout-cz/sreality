@@ -35,7 +35,7 @@ import SplitPanel from '@/components/autodedup/SplitPanel';
 import { priceLabel } from '@/components/autodedup/SplitPlanLines';
 import { UnitSelect, type UnitMap } from '@/components/autodedup/UnitSplit';
 import { SectionLabel } from '@/components/section';
-import { fetchPropertyOrigins, type AdvertOrigin, type SplitLetters } from '@/lib/api';
+import { fetchPropertyOrigins, type AdvertOrigin, type Letters } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import type { ListingBroker } from '@/lib/brokers';
 import { fmtArea, fmtCount, fmtDateSlash, fmtFloor } from '@/lib/format';
@@ -47,7 +47,7 @@ import {
 import { imageSrc } from '@/lib/imageUrl';
 import { areaKindOf } from '@/lib/measure';
 import { inzeratu, mergeOriginLabel, mergedAdvertsKeys, splitPlan } from '@/lib/mergedAdverts';
-import { portalLabel } from '@/lib/portals';
+import { portalBadge } from '@/lib/portals';
 import { fetchListingsForListingIds } from '@/lib/queries';
 import { ROUTES, withQuery } from '@/lib/routes';
 import type { ImagePublic, ListingPublic, PropertySource } from '@/lib/types';
@@ -88,7 +88,7 @@ interface SectionProps {
   /* The advert an old advert address asked for: its row opens. */
   openAdvertId?: number | null;
   /* Letters a link brought (`?letters=`, the review pages'): the dialog opens on them. */
-  initialLetters?: SplitLetters;
+  initialLetters?: Letters;
 }
 
 export default function MergedAdvertsSection({
@@ -124,7 +124,7 @@ export default function MergedAdvertsSection({
   const portals = new Set(sources.map((s) => s.source)).size;
   const portalOf = (listingId: number): string => {
     const s = sources.find((x) => x.id === listingId);
-    return s ? (portalLabel(s.source) ?? s.source) : '';
+    return s ? portalBadge(s.source, s.source_url, 'long') : '';
   };
   /* The plan names an advert the way its row does (portal and price): the
    * operator reads the rows, and a listing id appears on none of them. */
@@ -280,7 +280,7 @@ function MergedAdvertRow({
     if (opened) rowRef.current?.scrollIntoView?.({ block: 'start' });
   }, [opened]);
   const panelId = `merged-advert-${source.id}`;
-  const portal = portalLabel(source.source) ?? source.source;
+  const portal = portalBadge(source.source, source.source_url, 'long');
   const facts = [
     detail?.area_m2 != null ? fmtArea(detail.area_m2, areaKindOf(detail.category_main)) : null,
     detail?.disposition ?? null,
@@ -290,7 +290,7 @@ function MergedAdvertRow({
     <li
       ref={rowRef}
       className={[
-        'scroll-mt-6 rounded-[var(--radius-sm)] border bg-[var(--color-paper-2)]',
+        'scroll-mt-28 rounded-[var(--radius-sm)] border bg-[var(--color-paper-2)]',
         isCanonical ? 'border-[var(--color-rule-strong)]' : 'border-[var(--color-rule-soft)]',
       ].join(' ')}
     >

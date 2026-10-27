@@ -72,10 +72,23 @@ def _snapshot(cur: Any, listing_id: int, price: int | None, hours_ago: float) ->
     return int(cur.fetchone()[0])
 
 
-def _recompute(cur: Any, pid: int) -> None:
-    from scripts.recompute_property_stats import _RECOMPUTE_ONE_SQL
+def _drops(cur: Any, days: int) -> list[tuple[int, int, int, int]]:
+    """The drop steps both notification producers alert on: api/notifications' one canonical-ad
+    fragment (`_CANONICAL_PRICE_STEPS`, notifications W2a) over a `days` window."""
+    from api.notifications import _CANONICAL_PRICE_STEPS
 
-    cur.execute(_RECOMPUTE_ONE_SQL, {"pid": pid})
+    cur.execute(
+        f"WITH {_CANONICAL_PRICE_STEPS} "
+        "SELECT property_id, snapshot_id, price_czk, prev_price_czk FROM canonical_steps "
+        "WHERE price_czk < prev_price_czk ORDER BY property_id, snapshot_id",
+        {"price_window": f"{days} days"})
+    return [(int(a), int(b), int(c), int(d)) for a, b, c, d in cur.fetchall()]
+
+
+def _recompute(cur: Any, pid: int) -> None:
+    from scripts.recompute_property_stats import _RECOMPUTE_SCOPED_SQL
+
+    cur.execute(_RECOMPUTE_SCOPED_SQL, {"ids": [pid]})
 
 
 def _seen(cur: Any, listing_id: int, first_days_ago: float, last_days_ago: float = 0) -> None:
@@ -100,8 +113,6 @@ def test_a_step_never_spans_two_adverts(cur):
     """Two portals quoting 5.0M and 5.2M, read alternately, are not a drop and a rise on
     every scrape: only the one advert's own cut from 5.0M to 4.9M is a step — in the
     view, in the rollup's counts and in the watchdog's drop reader alike."""
-    from api.notifications import _recent_price_drops
-
     pid = _property(cur)
     a = _advert(cur, pid, source="sreality", price=4_900_000)
     b = _advert(cur, pid, source="idnes", price=5_200_000)
@@ -124,7 +135,7 @@ def test_a_step_never_spans_two_adverts(cur):
         "FROM properties WHERE id = %s", (pid,))
     assert cur.fetchone() == (1, 0, 1, 2.00, -2.00)
 
-    drops = [d for d in _recent_price_drops(cur.connection, window_days=2) if d[0] == pid]
+    drops = [d for d in _drops(cur, 2) if d[0] == pid]
     assert drops == [(pid, cut, 4_900_000, 5_000_000)]
 
 
@@ -334,8 +345,8 @@ def test_an_operator_merge_takes_back_every_different_between_what_it_joins(cur)
     _set_ruling(cur, 9_000_003, [s1, r1], "same")         # its newest word: nothing to take back
     outside = _advert(cur, _property(cur), source="bazos")
     _set_ruling(cur, 9_000_004, [s1, r1, outside], "different")   # not wholly in the merge
-    assert merge_preview(cur.connection, [absorbed, survivor]) == {
-        "property_ids": sorted([survivor, absorbed]), "rulings_taken_back": 2}
+    assert merge_preview(cur.connection, {absorbed: "A", survivor: "A"}) == {"letters": {"A": {
+        "property_ids": sorted([survivor, absorbed]), "rulings_taken_back": 2}}}
 
     merged = _merge(cur, [survivor, absorbed])
     note = f"operator merge {merged['merge_group_id']}"
@@ -440,8 +451,6 @@ def test_condition_and_both_levels_come_from_the_one_canonical_advert(cur):
 
 
 def test_the_price_history_and_the_alerts_are_the_canonical_adverts_own(cur):
-    from api.notifications import _recent_price_drops
-
     pid = _property(cur)
     canon = _advert(cur, pid, source="sreality", price=4_900_000)
     other = _advert(cur, pid, source="idnes", price=4_000_000)
@@ -453,7 +462,7 @@ def test_the_price_history_and_the_alerts_are_the_canonical_adverts_own(cur):
     cur.execute("SELECT current_price_czk, price_drop_count, price_change_count "
                 "FROM properties WHERE id = %s", (pid,))
     assert cur.fetchone() == (4_900_000, 1, 1)
-    drops = [d for d in _recent_price_drops(cur.connection, window_days=2) if d[0] == pid]
+    drops = [d for d in _drops(cur, 2) if d[0] == pid]
     assert drops == [(pid, cut, 4_900_000, 5_000_000)]
 
 
@@ -461,8 +470,6 @@ def test_a_merge_that_changes_the_canonical_advert_replays_no_older_step(cur):
     """The absorbed sreality advert outranks the survivor's bazos one, so it becomes canonical;
     its cut from yesterday was never the price the property showed, so neither producer fires
     it. A cut after the handover does fire."""
-    from api.notifications import _recent_price_drops
-
     survivor, absorbed = _property(cur), _property(cur)
     _advert(cur, survivor, source="bazos", price=5_200_000)
     moved = _advert(cur, absorbed, source="sreality", price=5_000_000)
@@ -474,10 +481,10 @@ def test_a_merge_that_changes_the_canonical_advert_replays_no_older_step(cur):
     cur.execute("SELECT repr_listing_ref_id, repr_since > '-infinity' FROM properties "
                 "WHERE id = %s", (survivor,))
     assert cur.fetchone() == (moved, True)
-    assert [d for d in _recent_price_drops(cur.connection, window_days=2) if d[0] == survivor] == []
+    assert [d for d in _drops(cur, 2) if d[0] == survivor] == []
 
     after = _snapshot(cur, moved, 4_900_000, -0.01)
-    drops = [d for d in _recent_price_drops(cur.connection, window_days=2) if d[0] == survivor]
+    drops = [d for d in _drops(cur, 2) if d[0] == survivor]
     assert drops == [(survivor, after, 4_900_000, 5_000_000)]
 
 
@@ -616,8 +623,6 @@ def test_the_portal_lists_and_newest_ad_dates_follow_every_advert(cur):
 
 def test_a_same_portal_relist_counts_its_predecessors_steps_and_one_handover(cur):
     """MS10: a predecessor's own cut plus one handover step count; alerts quote the canonical's own."""
-    from api.notifications import _recent_price_drops
-
     pid = _property(cur)
     before = _advert(cur, pid, source="sreality", price=5_200_000, active=False)
     relist = _advert(cur, pid, source="sreality", price=4_900_000)
@@ -633,7 +638,7 @@ def test_a_same_portal_relist_counts_its_predecessors_steps_and_one_handover(cur
         "       round(max_price_drop_pct, 2), round(total_price_change_pct, 2) "
         "FROM properties WHERE id = %s", (pid,))
     assert cur.fetchone() == (3, 0, 3, 3, Decimal("3.85"), Decimal("-7.55"))
-    drops = [d for d in _recent_price_drops(cur.connection, window_days=40) if d[0] == pid]
+    drops = [d for d in _drops(cur, 40) if d[0] == pid]
     assert drops == [(pid, cut, 4_900_000, 5_000_000)]
 
 

@@ -1,6 +1,8 @@
 /* The property's "Artifact link" (migration 599): ONE operator-typed URL to a page kept about the
  * property, shown beside the notes. Property-grain like the rest of the curation block (rule 18),
- * so it follows a merge. A failed read is said out loud, never drawn as an empty field. */
+ * so it follows a merge. A failed read is said out loud, never drawn as an empty field. With no
+ * link it is one "+ Odkaz na artefakt" button that opens the field; `bare` drops the heading and
+ * draws it on one line (the desktop notes section's header). */
 
 import { useId, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -17,14 +19,17 @@ import { PencilIcon, TrashIcon } from '@/components/icons';
 import { SectionLabel } from '@/components/section';
 
 const URL_MAX = 2000;
-const NOT_A_URL = 'Enter a full web address starting with http:// or https://';
+const NOT_A_URL = 'Zadejte celou adresu začínající http:// nebo https://';
+const LABEL = 'Odkaz na artefakt';
 
 export default function ArtifactLinkRow({
   property_id,
-  label = 'Artifact link',
+  label = LABEL,
+  bare = false,
 }: {
   property_id: number;
   label?: string;
+  bare?: boolean;
 }) {
   const qc = useQueryClient();
   const labelId = useId();
@@ -54,7 +59,7 @@ export default function ArtifactLinkRow({
       setEditing(false);
       setError(null);
     },
-    onError: (err: ApiError | Error) => setError(err.message || 'Failed to save the link'),
+    onError: (err: ApiError | Error) => setError(err.message || 'Odkaz se nepodařilo uložit'),
   });
 
   const remove = useMutation({
@@ -66,13 +71,13 @@ export default function ArtifactLinkRow({
       setError(null);
     },
     onError: (err: ApiError | Error) => {
-      setError(err.message || 'Failed to remove the link');
+      setError(err.message || 'Odkaz se nepodařilo odebrat');
       setConfirmingRemove(false);
     },
   });
 
   const trimmed = draft.trim();
-  const showForm = !failed && !linkQ.isLoading && (editing || link === null);
+  const showForm = !failed && !linkQ.isLoading && editing;
   const submit = () => {
     if (!safeHttpUrl(trimmed)) {
       setError(NOT_A_URL);
@@ -87,129 +92,138 @@ export default function ArtifactLinkRow({
     save.mutate(trimmed);
   };
 
-  return (
-    <section>
-      <SectionLabel>
-        <span id={labelId}>{label}</span>
-      </SectionLabel>
+  const iconBtn =
+    'inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-ink-3)] hover:bg-[var(--color-paper-3)] transition-colors';
+  const quiet = 'px-2.5 py-1.5 text-[0.8rem] text-[var(--color-ink-3)] hover:text-[var(--color-ink)] disabled:opacity-50';
+  const primary =
+    'px-3 py-1.5 text-[0.8rem] rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors';
 
-      {failed ? (
-        <ErrorBanner
-          title="Odkaz na artefakt"
-          message="se nepodařilo načíst."
-          onRetry={() => void linkQ.refetch()}
+  let body: React.ReactNode = null;
+  if (failed) {
+    body = <ErrorBanner title={label} message="se nepodařilo načíst." onRetry={() => void linkQ.refetch()} />;
+  } else if (linkQ.isLoading) {
+    body = <p className="text-sm text-[var(--color-ink-3)]">Načítám…</p>;
+  } else if (showForm) {
+    body = (
+      <form
+        noValidate
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit();
+        }}
+        className="flex w-full flex-wrap items-center gap-2"
+      >
+        <input
+          type="url"
+          inputMode="url"
+          aria-labelledby={bare ? undefined : labelId}
+          aria-label={bare ? label : undefined}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="https://…"
+          maxLength={URL_MAX}
+          autoFocus
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          className="min-w-[14rem] flex-1 px-3 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-paper-3)] border border-[var(--color-rule-strong)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-3)] focus:border-[var(--color-copper)]"
         />
-      ) : linkQ.isLoading ? (
-        <p className="mt-3 text-sm text-[var(--color-ink-3)]">Loading…</p>
-      ) : showForm ? (
-        <form
-          noValidate
-          onSubmit={(e) => {
-            e.preventDefault();
-            submit();
+        <button
+          type="button"
+          onClick={() => {
+            setEditing(false);
+            setError(null);
           }}
-          className="mt-3"
+          disabled={save.isPending}
+          className={quiet}
         >
-          <input
-            type="url"
-            inputMode="url"
-            aria-labelledby={labelId}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder="https://…"
-            maxLength={URL_MAX}
-            autoFocus={editing}
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck={false}
-            className="w-full px-3 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]"
-          />
-          <div className="mt-2 flex items-center justify-end gap-1.5">
-            {editing && (
-              <button
-                type="button"
-                onClick={() => {
-                  setEditing(false);
-                  setError(null);
-                }}
-                disabled={save.isPending}
-                className="px-2 py-1 text-[0.75rem] text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)] disabled:opacity-50"
-              >
-                Cancel
-              </button>
-            )}
+          Zrušit
+        </button>
+        <button type="submit" disabled={trimmed.length === 0 || save.isPending} className={primary}>
+          {save.isPending ? 'Ukládám…' : 'Uložit odkaz'}
+        </button>
+      </form>
+    );
+  } else if (link) {
+    body = (
+      <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-1">
+          <span
+            className="min-w-0 truncate"
+            title={
+              link.updated_at !== link.created_at
+                ? `Upraveno ${fmtAbsolute(link.updated_at)}`
+                : `Uloženo ${fmtAbsolute(link.created_at)}`
+            }
+          >
+            <ArtifactAnchor url={link.url} />
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              setDraft(link.url);
+              setError(null);
+              setEditing(true);
+            }}
+            aria-label="Upravit odkaz na artefakt"
+            title="Upravit odkaz"
+            className={`${iconBtn} hover:text-[var(--color-ink)]`}
+          >
+            <PencilIcon className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirmingRemove(true)}
+            aria-label="Odebrat odkaz na artefakt"
+            title="Odebrat odkaz"
+            className={`${iconBtn} hover:text-[var(--color-brick)]`}
+          >
+            <TrashIcon className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        {confirmingRemove && (
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <span className="text-[0.8rem] text-[var(--color-brick)]">Odebrat odkaz?</span>
             <button
-              type="submit"
-              disabled={trimmed.length === 0 || save.isPending}
-              className="px-3 py-1 text-[0.78rem] rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              type="button"
+              onClick={() => remove.mutate()}
+              disabled={remove.isPending}
+              className="px-2.5 py-1 text-[0.8rem] rounded-[var(--radius-sm)] bg-[var(--color-brick-soft)] text-[var(--color-brick)] hover:bg-[var(--color-brick)]/15 disabled:opacity-50 transition-colors"
             >
-              {save.isPending ? 'Saving…' : 'Save link'}
+              {remove.isPending ? 'Odebírám…' : 'Odebrat'}
+            </button>
+            <button type="button" onClick={() => setConfirmingRemove(false)} disabled={remove.isPending} className={quiet}>
+              Zrušit
             </button>
           </div>
-        </form>
-      ) : link ? (
-        <div className="mt-3">
-          <div className="flex items-start justify-between gap-3">
-            <ArtifactAnchor url={link.url} />
-            <div className="flex items-center gap-0.5 shrink-0">
-              <button
-                type="button"
-                onClick={() => {
-                  setDraft(link.url);
-                  setError(null);
-                  setEditing(true);
-                }}
-                aria-label="Edit artifact link"
-                title="Edit artifact link"
-                className="inline-flex items-center justify-center w-6 h-6 rounded-[var(--radius-xs)] text-[var(--color-ink-4)] hover:text-[var(--color-ink-2)] hover:bg-[var(--color-paper-2)] transition-colors"
-              >
-                <PencilIcon className="h-[11px] w-[11px]" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmingRemove(true)}
-                aria-label="Remove artifact link"
-                title="Remove artifact link"
-                className="inline-flex items-center justify-center w-6 h-6 rounded-[var(--radius-xs)] text-[var(--color-ink-4)] hover:text-[var(--color-brick)] hover:bg-[var(--color-paper-2)] transition-colors"
-              >
-                <TrashIcon className="h-[11px] w-[11px]" />
-              </button>
-            </div>
-          </div>
-          {confirmingRemove ? (
-            <div className="mt-1.5 flex items-center gap-2">
-              <span className="text-[0.7rem] text-[var(--color-brick)]">Remove this link?</span>
-              <button
-                type="button"
-                onClick={() => remove.mutate()}
-                disabled={remove.isPending}
-                className="px-2 py-0.5 text-[0.7rem] tracking-wide rounded-[var(--radius-sm)] bg-[var(--color-brick-soft)] text-[var(--color-brick)] hover:bg-[var(--color-brick)]/15 disabled:opacity-50 transition-colors"
-              >
-                {remove.isPending ? 'Removing…' : 'Remove'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmingRemove(false)}
-                disabled={remove.isPending}
-                className="text-[0.7rem] tracking-wide text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)] disabled:opacity-50"
-              >
-                Cancel
-              </button>
-            </div>
-          ) : (
-            <p
-              className="mt-1 text-[0.7rem] tracking-wide text-[var(--color-ink-4)] cursor-help"
-              title={`Saved ${fmtAbsolute(link.created_at)}`}
-            >
-              {link.updated_at !== link.created_at
-                ? `Updated ${fmtAbsolute(link.updated_at)}`
-                : `Saved ${fmtAbsolute(link.created_at)}`}
-            </p>
-          )}
-        </div>
-      ) : null}
+        )}
+      </div>
+    );
+  } else {
+    body = (
+      <button
+        type="button"
+        onClick={() => {
+          setDraft('');
+          setError(null);
+          setEditing(true);
+        }}
+        className="inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-dashed border-[var(--color-rule-strong)] px-3 py-1.5 text-[0.8rem] text-[var(--color-ink-2)] hover:border-[var(--color-copper)] hover:text-[var(--color-copper)] transition-colors"
+      >
+        <span aria-hidden>+</span> {label}
+      </button>
+    );
+  }
 
-      {error && <p className="mt-1.5 text-[0.7rem] text-[var(--color-brick)]">{error}</p>}
+  return (
+    <section aria-label={bare ? label : undefined} className={bare ? 'min-w-0' : undefined}>
+      {!bare && (
+        <SectionLabel>
+          <span id={labelId}>{label}</span>
+        </SectionLabel>
+      )}
+      <div className={bare ? '' : 'mt-3'}>{body}</div>
+      {error && <p className="mt-1.5 text-[0.75rem] text-[var(--color-brick)]">{error}</p>}
     </section>
   );
 }

@@ -24,7 +24,7 @@ from scraper import street
 
 SOURCES = (
     "sreality", "bezrealitky", "bazos", "idnes", "mmreality", "remax", "ceskereality",
-    "realitymix", "maxima",
+    "realitymix", "maxima", "web",
 )
 
 # THE CONSUMER RULE (operator ruling 2026-09-13, rule 25). A listing is SERVED to
@@ -131,6 +131,9 @@ COORDINATE_RULES: dict[str, CoordinateRule] = {
     # rows drained before that carry no stamp and stay refused
     # (`coordinate_provenance_unestablished`) until their next 6 h drain rewrites raw_json.
     "remax": CoordinateRule("geom_column", frozenset({"page"})),
+    # Any other site: contracts/portals/web.yaml is text-only, and a JSON-LD `geo` point on a
+    # page nobody has reviewed is not licensed until a contract_version bump argues for it.
+    "web": CoordinateRule("none"),
 }
 
 # The two substrates the ladder can be asked about. `COORDINATE_RULES` above describes the
@@ -252,6 +255,39 @@ class Entry:
     @property
     def extractor_version(self) -> str:
         return f"contract:{self.source}@{self.contract_version}"
+
+
+@dataclass(frozen=True, slots=True)
+class LocatorRead:
+    """One path an entry may answer through, with the normalisers THAT path needs."""
+    locator: dict[str, Any]
+    transform: tuple[str, ...]
+
+
+def locator_reads(entry: Entry) -> list[LocatorRead]:
+    """The entry's reads in order: the primary locator, then each `locator.fallback`.
+
+    One entry, one claim type — a portal whose payload changed shape does not
+    get a second entry to read the old one (that would make the contract a vote the
+    survivorship policy never asked for, `contracts._check_shape`). It gets alternative
+    PATHS inside the entry it already has, and the reader takes the first that answers.
+
+    Each fallback carries its own `transform` because the shapes differ in more than where
+    the value sits: sreality states the street as a bare `/locality/street` today and as the
+    leading segment of one address line in the frozen older shape, so the same entry needs
+    no normaliser on the first path and `address_part_street` on the second. A fallback that
+    names no transform inherits the entry's. A payload reader walks these itself; a page entry's
+    paths are walked by `page_readers.read_entry`, and one may name another page reader.
+    """
+    reads = [LocatorRead(entry.locator, entry.transform)]
+    for raw in entry.locator.get("fallback") or ():
+        if not isinstance(raw, dict):
+            continue
+        declared = raw.get("transform")
+        reads.append(LocatorRead(
+            dict(raw),
+            tuple(str(t) for t in declared) if declared is not None else entry.transform))
+    return reads
 
 
 @dataclass(frozen=True, slots=True)

@@ -102,6 +102,15 @@ def _cell(producer: Producer, *keys: str, absence: Absence = "unknown",
 # one place, and so flipping one is visibly a per-field edit, never a sweep.
 _UNGATED = Gate(passed=False, note="awaiting the W7 bake-off panel (R7: >= 95 %)")
 
+# General ruling 3 (2026-09-30) + the operator's flat answers (2026-10-01): every plot
+# cell is still read verbatim, but what it holds passes `scraper.area.stated_plot` at the
+# contract boundary. The producer stays `structured` ON PURPOSE: `none` / `text` would
+# make the column preserve-if-null (`db._preserved_columns`), so a stored echo would
+# never clear and a real house plot would freeze.
+_PLOT_NOTE = ("ruling 3: never a plot on a byt; on komerční declined when it equals the "
+              "usable / labelled headline figure and the description does not state it as "
+              "the parcel (scraper.area.stated_plot)")
+
 
 # sreality paints the sale STATUS over the condition / building-type NAME on a reserved or
 # sold advert, and spells "not specified" as a leading dash. Both are absence, not value.
@@ -142,7 +151,7 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "condition": _cell("structured", "building_condition", sentinels=_SREALITY_UNSET),
         "energy_rating": _cell("structured", "energy_efficiency_rating_cb",
                                sentinels=_SREALITY_UNSET),
-        "estate_area": _cell("structured", "estate_area"),
+        "estate_area": _cell("structured", "estate_area", note=_PLOT_NOTE),
         "usable_area": _cell("structured", "usable_area"),
         "garden_area": _cell("structured", "garden_area"),
         "category_sub_cb": _cell("structured", "category_sub_cb"),
@@ -153,6 +162,8 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "garage": _cell("structured", "garage"),
         "parking_lots": _cell("structured", "parking"),
         "ownership": _cell("structured", "ownership", sentinels=_SREALITY_UNSET),
+        "ad_reference": _cell("structured", "advert_code",
+                                note="the page's ID zakázky; blank on a private seller's ad"),
     },
     # --- bezrealitky: the GraphQL advert -----------------------------------
     "bezrealitky": {
@@ -176,7 +187,7 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "building_type": _cell("structured", "construction", sentinels=("UNDEFINED",)),
         "condition": _cell("structured", "condition", sentinels=("UNDEFINED",)),
         "energy_rating": _cell("structured", "penb"),
-        "estate_area": _cell("structured", "surfaceLand"),
+        "estate_area": _cell("structured", "surfaceLand", note=_PLOT_NOTE),
         "usable_area": _cell("structured", "surface"),
         "garden_area": _cell("structured", "frontGarden",
                              note="a front yard, not a parcel"),
@@ -189,6 +200,8 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "parking_lots": _cell("none", gap=None),
         "ownership": _cell("structured", "ownership",
                            sentinels=("UNDEFINED", "OSTATNI")),
+        "ad_reference": _cell("none", gap=None,
+                                note="an owners' portal: the ad prints only its portal id (Číslo inzerátu)"),
     },
     # --- mmreality: the Vue `:property` estate object ----------------------
     "mmreality": {
@@ -217,7 +230,7 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "building_type": _cell("structured", "construction", sentinels=("neuvedeno",)),
         "condition": _cell("structured", "condition", sentinels=("neuvedeno",)),
         "energy_rating": _cell("structured", "energyClassification"),
-        "estate_area": _cell("structured", "parcelArea"),
+        "estate_area": _cell("structured", "parcelArea", note=_PLOT_NOTE),
         "usable_area": _cell("structured", "usableArea"),
         "garden_area": _cell("structured", "gardenArea"),
         "category_sub_cb": _cell("none", gap=None),
@@ -236,6 +249,8 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "garage": _cell("structured", "garage", "accessoryGroups"),
         "parking_lots": _cell("structured", "parkingPlaces"),
         "ownership": _cell("structured", "ownership", sentinels=("neuvedeno",)),
+        "ad_reference": _cell("structured", "id",
+                                note="the page's Číslo nabídky is M&M's own offer number: the estate object's id"),
     },
     # --- ceskereality: the `i-info` spec list ------------------------------
     "ceskereality": {
@@ -268,7 +283,7 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "building_type": _cell("structured", "konstrukce"),
         "condition": _cell("structured", "stav nemovitosti"),
         "energy_rating": _cell("structured", "energetická náročnost"),
-        "estate_area": _cell("structured", "plocha pozemku"),
+        "estate_area": _cell("structured", "plocha pozemku", note=_PLOT_NOTE),
         "usable_area": _cell("structured", "plocha užitná"),
         "garden_area": _cell("none", gap=None),
         "category_sub_cb": _cell("none", gap=None),
@@ -285,6 +300,8 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         # carries one, so there is nothing for W4 or any later wave to wire.
         "parking_lots": _cell("none", gap=None),
         "ownership": _cell("structured", "vlastnictví"),
+        "ad_reference": _cell("structured", "id nemovitosti",
+                                note="the broker's own code (often with a -1 suffix), not the portal id"),
     },
     # --- idnes: the `<dl>` spec rows ---------------------------------------
     "idnes": {
@@ -317,7 +334,7 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "building_type": _cell("structured", "konstrukce budovy"),
         "condition": _cell("structured", "stav bytu", "stav budovy"),
         "energy_rating": _cell("structured", "penb"),
-        "estate_area": _cell("structured", "plocha pozemku"),
+        "estate_area": _cell("structured", "plocha pozemku", note=_PLOT_NOTE),
         "usable_area": _cell("structured", "užitná plocha"),
         "garden_area": _cell("structured", "plocha zahrady"),
         "category_sub_cb": _cell("none", gap=None),
@@ -328,6 +345,8 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "garage": _cell("structured", "dvojgaráž", "parkování"),
         "parking_lots": _cell("structured", "počet parkovacích míst"),
         "ownership": _cell("structured", "vlastnictví"),
+        "ad_reference": _cell("structured", "číslo zakázky",
+                                note="printed with the portal's IDNES- prefix, kept verbatim"),
     },
     # --- maxima: the `slider_label` spec table -----------------------------
     "maxima": {
@@ -352,7 +371,7 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "condition": _cell("structured", "stav objektu"),
         "energy_rating": _cell("structured", "penb",
                                note="a whole-page `PENB: X` scan is the last resort"),
-        "estate_area": _cell("structured", "plocha pozemku"),
+        "estate_area": _cell("structured", "plocha pozemku", note=_PLOT_NOTE),
         "usable_area": _cell("structured", "plocha užitná"),
         "garden_area": _cell("none", gap=None),
         "category_sub_cb": _cell("none", gap=None),
@@ -364,6 +383,8 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "garage": _cell("structured", "garáž"),
         "parking_lots": _cell("none", gap=None),
         "ownership": _cell("structured", "vlastnictví"),
+        "ad_reference": _cell("structured", "id zakázky",
+                                note="the agency's own number IS the portal id, printed upper-case"),
     },
     # --- realitymix: the `detail-information__data-item` spec list ---------
     "realitymix": {
@@ -392,7 +413,7 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "building_type": _cell("structured", "druh objektu"),
         "condition": _cell("structured", "stav objektu"),
         "energy_rating": _cell("structured", "energetická náročnost budovy"),
-        "estate_area": _cell("structured", "plocha parcely"),
+        "estate_area": _cell("structured", "plocha parcely", note=_PLOT_NOTE),
         "usable_area": _cell("structured", "užitná plocha"),
         # The live key is `zahrada`; `areas_from_params` used to read `plocha zahrady`,
         # which realitymix emits on no row, so the column was 0-filled on all 48,763. The
@@ -407,6 +428,9 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "garage": _cell("structured", "ostatní"),
         "parking_lots": _cell("structured", "počet míst k parkování"),
         "ownership": _cell("structured", "vlastnictví"),
+        "ad_reference": _cell("derived",
+                                note="the short-props 'Číslo zakázky:' row beside the price row "
+                                     "(_detail_reference), never a spec-list key"),
     },
     # --- remax: the `pd-detail-info__row` spec rows ------------------------
     "remax": {
@@ -432,7 +456,7 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "building_type": _cell("structured", "druh objektu"),
         "condition": _cell("structured", "stav objektu"),
         "energy_rating": _cell("structured", "energeticka narocnost budovy"),
-        "estate_area": _cell("structured", "plocha parcely"),
+        "estate_area": _cell("structured", "plocha parcely", note=_PLOT_NOTE),
         "usable_area": _cell("structured", "uzitna plocha"),
         "garden_area": _cell("structured", "plocha zahrady"),
         "category_sub_cb": _cell("none", gap=None),
@@ -443,6 +467,8 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "garage": _cell("structured", "garaz"),
         "parking_lots": _cell("structured", "pocet parkovacich mist"),
         "ownership": _cell("structured", "vlastnictvi"),
+        "ad_reference": _cell("structured", "cislo zakazky",
+                                note="printed as 'ID <office>-<number>', kept verbatim"),
     },
     # --- bazos: no spec table at all; the ad's own words -------------------
     "bazos": {
@@ -488,6 +514,50 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "garage": _cell("none", gap=None),
         "parking_lots": _cell("none", gap=None),
         "ownership": _cell("none", gap=None),
+        "ad_reference": _cell("none", gap=None, note="private ads: the page prints only its portal id"),
+    },
+    # --- web: any other site, one pasted advert at a time --------------------
+    # No portal payload exists, so the deterministic parse (JSON-LD, OpenGraph, the shared
+    # grammars over title + description) writes its verdicts at the TOP LEVEL of raw_json and
+    # the five `structured` cells read those keys: the census reads the same top level
+    # (`coalesce(raw->'params', raw)`), so A1 checks them from the first bless. Every fact
+    # only prose states is a `text` cell with a closed gate, which is also what keeps it across
+    # a refetch (R4); the rest the page never states in a form anyone reads.
+    "web": {
+        "category_main": _cell("structured", "category_main",
+                               note="the title's byt/dům/pozemek/komerční/garáž word (the first "
+                                    "of JSON-LD name, og:title, h1, <title> that says)"),
+        "category_type": _cell("structured", "category_type",
+                               note="the title's prodej/pronájem word (the first of JSON-LD name, "
+                                    "og:title, h1, <title> that says)"),
+        "price_czk": _cell("structured", "price_czk",
+                           note="JSON-LD offer price, else scraper.price_text"),
+        "price_unit": _cell("derived"),
+        "area_m2": _cell("structured", "area_m2",
+                         note="JSON-LD floorSize, else scraper.area over the title + description"),
+        "area_basis": _cell("derived"),
+        "disposition": _cell("structured", "disposition", note="scraper.vocabulary.disposition"),
+        "floor": _cell("text", note="scraper.floor over the title + description",
+                       convention="word", gate=_UNGATED),
+        "total_floors": _cell("text", gate=_UNGATED),
+        "has_balcony": _cell("text", gate=_UNGATED),
+        "has_parking": _cell("text", gate=_UNGATED),
+        "has_lift": _cell("text", gate=_UNGATED),
+        "building_type": _cell("text", gate=_UNGATED),
+        "condition": _cell("text", gate=_UNGATED),
+        "energy_rating": _cell("text", gate=_UNGATED),
+        "estate_area": _cell("none", gap=None),
+        "usable_area": _cell("none", gap=None),
+        "garden_area": _cell("none", gap=None),
+        "category_sub_cb": _cell("none", gap=None),
+        "subtype": _cell("none", gap=None),
+        "furnished": _cell("none", gap=None),
+        "terrace": _cell("none", gap=None),
+        "cellar": _cell("none", gap=None),
+        "garage": _cell("none", gap=None),
+        "parking_lots": _cell("none", gap=None),
+        "ownership": _cell("none", gap=None),
+        "ad_reference": _cell("none", gap=None),
     },
 }
 
@@ -497,7 +567,7 @@ CONTRACT: dict[str, dict[str, Cell]] = {
 IGNORED: dict[str, dict[str, str]] = {
     "sreality": {
         "hash_id": "identity", "seo": "identity, not an attribute",
-        "advert_code": "the portal's own reference number", "edited": "published_at",
+        "edited": "published_at",
         "locality": "location contract territory (contracts/portals/sreality.yaml)",
         "object_location": "location", "premise": "broker intelligence",
         "user": "broker intelligence",
@@ -567,7 +637,7 @@ IGNORED: dict[str, dict[str, str]] = {
         "image_urls": "images phase", "description": "the text lane's substrate",
     },
     "mmreality": {
-        "id": "identity", "slug": "identity", "source_url": "identity",
+        "slug": "identity", "source_url": "identity",
         "shortTitle": "identity", "originalTitle": "identity",
         "active": "lifecycle", "accurate": "location", "country": "location",
         "countryCode": "location", "countryId": "location", "district": "location",
@@ -589,7 +659,6 @@ IGNORED: dict[str, dict[str, str]] = {
         "balconyArea": "no column", "loggiaArea": "no column",
     },
     "ceskereality": {
-        "id nemovitosti": "the portal's own reference number",
         "datum vložení": "published_at",
         "příjezdy": "no column", "dopravní spojení": "no column",
         "elektřina": "no column", "kanalizace": "no column", "zdroje vody": "no column",
@@ -605,7 +674,6 @@ IGNORED: dict[str, dict[str, str]] = {
     },
     "idnes": {
         "celková plocha": "total area beside the usable area the parser reads: a second area field needs a ruling (filed, Health dashboard sprint wave 6)",
-        "číslo zakázky": "the portal's own reference number",
         "spočítej stěhování": "a CTA, always json null",
         "spočítej vyklizení": "a CTA, always json null",
         "datum nastěhování": "no column", "topení": "no column",
@@ -627,7 +695,7 @@ IGNORED: dict[str, dict[str, str]] = {
         "zastavěná plocha": "no column (a built-up area, not a headline measure)",
     },
     "maxima": {
-        "id zakázky": "the portal's own reference number", "topení": "no column",
+        "topení": "no column",
         "voda": "no column", "odpad": "no column", "plyn": "no column",
         "elektřina": "no column", "doprava": "no column", "typ domu": "no column",
         "poloha domu": "no column", "bazén": "no column",
@@ -653,7 +721,6 @@ IGNORED: dict[str, dict[str, str]] = {
         "celková plocha": "no column (a whole-building total, not the užitná measure)",
     },
     "remax": {
-        "cislo zakazky": "the portal's own reference number",
         "k nastehovani": "no column", "doprava": "no column", "voda": "no column",
         "odpad": "no column", "plyn": "no column", "elektrina": "no column",
         "telekomunikace": "no column", "ostatni rozvody": "no column",
@@ -673,6 +740,18 @@ IGNORED: dict[str, dict[str, str]] = {
         "coords": "location contract territory", "psc": "location",
         "locality_text": "location", "posted_date": "published_at",
         "views": "no column", "image_urls": "images phase",
+    },
+    "web": {
+        "title": "the text lane's substrate", "description": "listings.description",
+        "image_urls": "images phase", "broker": "broker attribution (toolkit.broker_sources)",
+        "jsonld": "the page's own structured blocks, kept as evidence; read by the parse",
+        "og": "the page's OpenGraph tags, kept as evidence; read by the parse",
+        "floor": "the parse's scraper.floor reading, written to listings.floor; the text cell "
+                 "owns the column",
+        "total_floors": "the parse's scraper.floor reading, written to listings.total_floors; "
+                        "the text cell owns the column",
+        "final_url": "where the fetch's redirects ended; evidence, no column (identity is the "
+                     "canonical URL)",
     },
 }
 

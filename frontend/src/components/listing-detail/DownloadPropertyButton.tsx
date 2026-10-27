@@ -1,8 +1,11 @@
 /* "Stáhnout" in the property page's header: one zip from the API holding a PDF of
- * the ad and the canonical ad's stored photos. The API builds it because R2 sends no
- * CORS header, so the browser can't read the photo bytes itself. */
+ * the ad, the canonical ad's stored photos and, in moje-fotky/, the originals of the
+ * acting identity's own photos. The API builds it because R2 sends no CORS header, so
+ * the browser can't read the photo bytes itself. */
 import { useState } from 'react';
+import { actOpts, useActAs } from '@/lib/acting';
 import { fetchPropertyDownload } from '@/lib/api';
+import { saveBlob } from '@/lib/shareFiles';
 import type { ImagePublic } from '@/lib/types';
 
 export default function DownloadPropertyButton({
@@ -18,6 +21,7 @@ export default function DownloadPropertyButton({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const actAs = useActAs();
   // Only photos with an R2 copy can be zipped; the rest live on the portal's CDN alone.
   const stored = images.filter((img) => img.storage_path != null).length;
 
@@ -25,16 +29,7 @@ export default function DownloadPropertyButton({
     setBusy(true);
     setError(null);
     try {
-      const blob = await fetchPropertyDownload(propertyId);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `property-${propertyId}.zip`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      // Firefox starts the save asynchronously; revoking at once can cancel it.
-      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      saveBlob(await fetchPropertyDownload(propertyId, ...actOpts(actAs)), `property-${propertyId}.zip`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Stažení selhalo');
     } finally {
@@ -44,8 +39,8 @@ export default function DownloadPropertyButton({
 
   const title =
     stored < images.length
-      ? `PDF inzerátu a ${stored} z ${images.length} fotek v jednom .zip — ostatní fotky zatím nejsou uložené`
-      : 'PDF inzerátu a jeho fotky v jednom .zip';
+      ? `PDF inzerátu, ${stored} z ${images.length} jeho fotek a vaše vlastní fotky v jednom .zip — ostatní fotky inzerátu zatím nejsou uložené`
+      : 'PDF inzerátu, jeho fotky a vaše vlastní fotky v jednom .zip';
 
   if (variant === 'phone') {
     return (

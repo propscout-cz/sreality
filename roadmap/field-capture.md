@@ -117,8 +117,8 @@ estimate ≈ −7,260 / +2,860 LOC, −30 files, −2 tables, −8 workflows, 0 
       attempt count and is given up on after 5, so a permanent refusal is never re-billed for ever.
       `false` needs an explicit negation in the evidence quote; every value needs a quote verbatim
       in the description; floor comes back as the advert's own words for `scraper/floor.py`.
-      `LLM_DAILY_COST_WARN_USD` → $15 (R11). `scripts/clear_unmeasured_enrichment_fills.py` is
-      destructive step (iii), dry-run first: 21,459 values (floor 6,340; false has_balcony 7,103,
+      `LLM_DAILY_COST_WARN_USD` → $15 (R11). `scripts/clear_unmeasured_enrichment_fills.py` (deleted
+      2026-10-25, Actions exit W0) was destructive step (iii), dry-run first: 21,459 values (floor 6,340; false has_balcony 7,103,
       has_lift 6,655, has_parking 1,361) — all bazos, and all but SIXTEEN on inactive rows.
 - [x] **W8 — floor: ground = 0 everywhere.** The convention is contract DATA
       (`ground0` | `ground1` | `word` per portal) and `scraper.floor.floor_from_portal`
@@ -151,7 +151,7 @@ estimate ≈ −7,260 / +2,860 LOC, −30 files, −2 tables, −8 workflows, 0 
       needs one dispatched `location_claims_intake.yml` at `mode=full source=bezrealitky`
       (the bodies-half hash gate re-arms page entries only, and this portal has none).
      
-      Still owed: branch protection on `main` (operator action, last, announced first).
+      Branch protection on `main` enabled 2026-09-22 (PR + the CI checks required, no review). Program DELIVERED.
 - [x] **Value bands at ingest + their backfill (PR #1630, 2026-09-26; autodedup A4/B3).**
       idnes `"20. patro a vyšší"` is a floor sentinel; a bare storey outside -3..40 and a
       building count outside 1..40 are absence on every portal (`scraper/floor.py`); the
@@ -167,6 +167,26 @@ estimate ≈ −7,260 / +2,860 LOC, −30 files, −2 tables, −8 workflows, 0 
       after #1638 is merged + deployed, re-run its count query, get the operator's OK, apply it
       from THAT branch, then merge it; then `reparse.yml fields=area_m2` per portal, then the
       autodedup lane re-seed (it reads snapshots only).
+- [ ] **`web` joins the census after its first week of pastes (the tenth portal, new-property-
+      from-link W3).** `scraper/attribute_contract.py` declares its 26 cells — five
+      `structured` over the parse's top-level `raw_json` keys, eight prose cells as `text`
+      behind closed gates (kept across a refetch, R4), the rest `none` — and the census
+      gates skip a portal no bless has measured (no census, no fill cell). Owed, operator:
+      `python -m scraper.field_census --bless` a week after the first paste writes
+      `census/web.json` + its baseline cells; A1/A2 then read it (every top-level `raw_json` key
+      the parse writes is already read or in `IGNORED['web']`).
+
+- [x] **Ad reference (PR #1984, 2026-10-23; migration 667) — the advertiser's own offer number, one typed
+      column.** sreality `advert_code`, idnes/remax "Číslo zakázky", ceskereality "ID nemovitosti", maxima "ID
+      zakázky", mmreality's object id (its "Číslo nabídky") and realitymix's short-props row (a `derived` reader,
+      `_detail_reference`, never a params key) all fill `listings.ad_reference`, declared on all ten portals and
+      normalised by `vocabulary.reference` (verbatim, whitespace collapsed, blank → NULL). Out of the hash; the
+      six IGNORED reference entries and the three `*_ref` shadow keys went; selected into no autodedup artifact
+      (`export_sql.UNEXPORTED_COLUMNS`). The program's second ruled column exception (PROGRAM.md §3, operator
+      ruling 2026-10-23). Healed the same day over every row (`reparse.yml fields=ad_reference`, portal by portal,
+      the queue drained between them): 750k of 830k rows carry a reference; active fill 100 % on the five HTML
+      broker portals, 99.6 % idnes, 87.9 % sreality (private sellers print none). The card (W3) and the PDF sheet
+      (W4) are on the operator-workflow track (phase U-AD-REFERENCE).
 
 ## Hand-overs owed to the autodedup program (R12 — this program never edits theirs)
 

@@ -140,7 +140,7 @@ export function matchesScope(
 export const scopeActive = (s: SetScope | null | undefined): boolean =>
   normalizeScope(s) != null;
 
-/* The in side only — "show me what is in it" (PresetBar's Pipeline chip). */
+/* The in side only — "show me what is in it" (FilterPresetBar's Pipeline chip). */
 export const scopeIncludes = (s: SetScope | null | undefined): boolean =>
   s != null && s.set !== 'out' && (s.set === 'in' || s.in.length > 0);
 

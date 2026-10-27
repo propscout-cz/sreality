@@ -12,8 +12,8 @@
     "version": 7
   },
   "idnes": {
-    "sha256": "7a77ca6b6688c8c5fa11ee0d02b9207c044e8efc590162b98ee5602c6078b0a4",
-    "version": 5
+    "sha256": "ddd4b354b461c2fe07e0de413331b02b15688ae65b3b2a9837ee1298628fa380",
+    "version": 6
   },
   "maxima": {
     "sha256": "9d4c8196194dc92576b7ee0461202b3aeab65ce84bc401005e4f13e1320f7e89",
@@ -24,15 +24,19 @@
     "version": 3
   },
   "realitymix": {
-    "sha256": "52ee73cc57f4efe5c61ea0b77038cbc86f30a9177ee4444661d29957ae0538b6",
-    "version": 6
+    "sha256": "e7791226581822d514ce4ee9f1b262f95b670266681b7fc4ac374ecedea53102",
+    "version": 7
   },
   "remax": {
-    "sha256": "7a52e896621a5e3d4129df98c6b2f446b8e2d80aec6d1f2ee98b162ebe4adb60",
-    "version": 5
+    "sha256": "d843f5d940e0e2a7ca084c8820959370ab0cf2799b51a31be309c686de0bc188",
+    "version": 6
   },
   "sreality": {
     "sha256": "c3674b82bff66f7d3b5c6a0772a17f2359694c983493734eb4d8a3d037add9b8",
     "version": 4
+  },
+  "web": {
+    "sha256": "83ff01aa9545aeccbfcfc87f19f4e1bf2bbd6b3f0da92a2ca7e5a8d659562ee2",
+    "version": 1
   }
 }

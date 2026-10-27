@@ -22,6 +22,7 @@ question and not about the portal:
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -406,6 +407,30 @@ def test_html_marker_reads_an_attribute_PAIR_as_one_presence_signal():
     assert read("html_marker", scoped("realitymix", body), marker) == []
 
 
+def test_html_marker_marks_a_map_whose_pin_attributes_are_absent_or_empty():
+    """`blank_attrs`: realitymix writes `data-gps-lat=""` on a map with no pin, and its map
+    script places none unless BOTH carry a value — `:not([attr])` never sees an empty
+    attribute, so v6's marker fired on no active ad at all (2026-10-25)."""
+    marker = _marker_entry(
+        "realitymix", {"css": "div#print-map, div#map",
+                       "blank_attrs": ["data-gps-lat", "data-gps-lon"],
+                       "value_label": "estimated"}, ["estimated"])
+
+    def marks(markup: str) -> list[archive.PageRead]:
+        return read("html_marker", scoped("realitymix", f"<html><body>{markup}</body></html>"),
+                    marker)
+
+    claim = one(marks('<div id="map" data-gps-lat="" data-gps-lon=""></div>'))
+    assert claim.value_text == "estimated" and claim.blur_evidence == "declared"
+    assert one(marks('<div id="map"></div>')).value_text == "estimated"
+    assert one(marks('<div id="map" data-gps-lat="50.1" data-gps-lon=""></div>'))
+    assert marks('<div id="map" data-gps-lat="50.1" data-gps-lon="14.4"></div>') == []
+    # The node `rm.det.gps` reads — the FIRST map on the page — decides, never a later one.
+    assert marks('<div id="print-map" data-gps-lat="50.1" data-gps-lon="14.4"></div>'
+                 '<div id="map" data-gps-lat="" data-gps-lon=""></div>') == []
+    assert marks("<p>no map block at all</p>") == []
+
+
 def test_html_marker_refuses_an_entry_with_no_value_label():
     with pytest.raises(IntakeRefused) as excinfo:
         read("html_marker", pinned("bazos"),
@@ -513,6 +538,95 @@ def test_json_regex_claims_the_capture_of_the_decoded_member():
                            extraction_method="regex_text", surface="embedded_json",
                            subject_scope=ID_SCOPE)))
     assert claim.value_text == "Křižíkova"
+
+
+# idnes draws an unpinned ad's street as ONE unlabelled feature beside the neighbours'
+# pins — this one is copied from 19437599's page (2026-10-25), double space and all.
+_HIGHLIGHT = {"type": "Feature",
+              "geometry": {"type": "LineString",
+                           "coordinates": [[14.340318, 50.085486], [14.343006, 50.086268]]},
+              "properties": {"title": "Zvýrazněná ulice  Mahulenina ", "stroke": "#FF0000",
+                             "stroke-width": 4}}
+_HIGHLIGHT_PATTERN = "^\\s*Zvýrazněná ulice\\s+(?P<street>\\S(?:.*\\S)?)\\s*$"
+_LINE_PATH = {"reader": "html_regex", "css": ".b-detail__info",
+              "pattern": "(?P<line>\\S(?:.*\\S)?)", "group": "line",
+              "transform": ["address_part_street:loose"]}
+
+
+def _neighbour(title: str, *, similar: bool = True) -> dict[str, Any]:
+    return {"type": "Feature", "geometry": {"type": "Point", "coordinates": [14.37, 50.06]},
+            "properties": {"id": "68badb8de7b021a4470fb87d", "title": title,
+                           "address": "Na Balkáně 1, Tanvald", "isSimilar": similar}}
+
+
+def _map_page(*features: dict[str, Any], line: str | None = None) -> ScopedDocument:
+    document = {"geojson": {"type": "FeatureCollection", "features": list(features)}}
+    return scoped("idnes", "<html><body>"
+                  + (f'<p class="b-detail__info">\n\t{line}\n</p>' if line else "")
+                  + '<script type="application/json" data-maptiler-json>'
+                  + json.dumps(document, ensure_ascii=False) + "</script></body></html>")
+
+
+def _highlight_entry(**locator: Any) -> Entry:
+    return entry("idnes", {"reader": "json_regex", "css": "script[data-maptiler-json]",
+                           "then": "/geojson/features", "exclude_where": NOT_SIMILAR,
+                           "json_pointer": "/properties/title",
+                           "pattern": _HIGHLIGHT_PATTERN, "group": "street", **locator},
+                 extraction_method="regex_text", surface="map_config",
+                 subject_scope={"subject_scoped": True})
+
+
+def test_json_regex_lets_the_pattern_pick_the_object_out_of_a_list():
+    """No id and no position names the highlight — the 20 neighbours carry full addresses —
+    so what the feature SAYS picks it, as the pattern picks the node in `html_attr_regex`."""
+    document = _map_page(_neighbour("Prodej domu 269 m²"), _HIGHLIGHT,
+                         _neighbour("Prodej domu 216 m²"))
+    assert one(read("json_regex", document, _highlight_entry())).value_text == "Mahulenina"
+
+
+def test_json_regex_over_a_list_claims_nothing_unless_exactly_one_object_matches():
+    town = dict(_HIGHLIGHT, properties={"title": "Zvýrazněná obec  Pelhřimov "})
+    assert read("json_regex", _map_page(town, _neighbour("Prodej domu")),
+                _highlight_entry()) == []
+    other = dict(_HIGHLIGHT, properties={"title": "Zvýrazněná ulice  Hlavní "})
+    assert read("json_regex", _map_page(_HIGHLIGHT, other), _highlight_entry()) == []
+
+
+def test_json_regex_over_a_list_never_reads_an_excluded_object():
+    decoy = _neighbour("Zvýrazněná ulice  Cizí ")
+    document = _map_page(decoy, _HIGHLIGHT)
+    assert one(read("json_regex", document, _highlight_entry())).value_text == "Mahulenina"
+    assert read("json_regex", _map_page(decoy), _highlight_entry()) == []
+
+
+# ------------------------------------------------------------------ paths across readers
+
+def test_a_page_entry_reads_the_map_highlight_first_and_the_address_line_after():
+    """idnes@6's street: the highlight when the page draws one, else the address line's
+    leading segment, with no word-ending test on either."""
+    street = _highlight_entry(fallback=[_LINE_PATH])
+
+    def street_of(document: ScopedDocument) -> list[archive.PageRead]:
+        return archive.read_entry(street, listing_row("idnes", "x"), payload(), document)
+
+    both = _map_page(_neighbour("Prodej domu"), _HIGHLIGHT, line="Nad Stadionem, Praha 6")
+    assert one(street_of(both)).value_text == "Mahulenina"
+    no_highlight = _map_page(_neighbour("Prodej domu"),
+                             line="Boženy Němcové, Rosice, okres Brno-venkov")
+    assert one(street_of(no_highlight)).value_text == "Boženy Němcové"
+    town = dict(_HIGHLIGHT, properties={"title": "Zvýrazněná obec  Pelhřimov "})
+    assert street_of(_map_page(town, line="Pelhřimov")) == []
+
+
+def test_a_subject_miss_hands_over_to_the_next_path_and_counts_only_when_none_answers():
+    item = _highlight_entry(match=ID_MATCH, fallback=[_LINE_PATH])
+    item = entry(item.source, item.locator, extraction_method="regex_text",
+                 surface="map_config", subject_scope=ID_SCOPE)
+    row = listing_row("idnes", IDNES_NATIVE)
+    with_line = _map_page(_HIGHLIGHT, line="Křimická, Plzeň")
+    assert one(archive.read_entry(item, row, payload(), with_line)).value_text == "Křimická"
+    with pytest.raises(SubjectNotFound):
+        archive.read_entry(item, row, payload(), _map_page(_HIGHLIGHT, line="Plzeň"))
 
 
 # ------------------------------------------------------------------ json_bool
@@ -876,6 +990,44 @@ def test_json_breadcrumb_stops_short_rather_than_claiming_a_level_the_chain_lack
     assert one(read("json_breadcrumb", document,
                     _breadcrumb_entry("kraj", "kraj_name"))).value_text == "Karlovarský kraj"
     assert read("json_breadcrumb", document, _breadcrumb_entry("obec", "obec_name")) == []
+
+
+def _chain(*crumbs: tuple[str, str]) -> ScopedDocument:
+    elements = ",".join(
+        json.dumps({"@type": "ListItem", "position": index,
+                    "item": {"@id": f"https://realitymix.cz/reality/byty/{slug}",
+                             "name": name}}, ensure_ascii=False)
+        for index, (name, slug) in enumerate(crumbs, start=1))
+    return scoped("realitymix", '<html><head><script type="application/ld+json">'
+                  '{"@type":"BreadcrumbList","itemListElement":[' + elements
+                  + "]}</script></head><body></body></html>")
+
+
+def test_json_breadcrumb_moves_a_level_only_for_the_anchor_the_contract_names():
+    """Prague is a kraj and an obec in ONE crumb, so its quarter is one level higher than
+    everywhere else; 713 active Prague ads claimed no quarter at the default depth."""
+    prague = _chain(("Byty", "byty"), ("Praha", "praha"), ("Praha 5", "praha-5"),
+                    ("Smíchov", "smichov"))
+    plzen = _chain(("Byty", "byty"), ("Plzeňský kraj", "plzensky"),
+                   ("Plzeň-město", "plzen-mesto"), ("Plzeň", "plzen"),
+                   ("Jižní Předměstí", "jizni-predmesti"))
+    moved = _breadcrumb_entry("quarter", "cast_obce_name",
+                              locator={"levels_by_anchor": {"praha": {"quarter": 2}}})
+    assert read("json_breadcrumb", prague, _breadcrumb_entry("quarter", "cast_obce_name")) == []
+    assert one(read("json_breadcrumb", prague, moved)).value_text == "Smíchov"
+    assert one(read("json_breadcrumb", plzen, moved)).value_text == "Jižní Předměstí"
+    stops = _chain(("Byty", "byty"), ("Praha", "praha"), ("Praha 10", "praha-10"))
+    assert read("json_breadcrumb", stops, moved) == []
+
+
+def test_json_breadcrumb_refuses_a_level_move_it_cannot_execute():
+    document = archived("realitymix")
+    for moved in ({"neverland": {"quarter": 2}}, {"praha": {"mestsky_obvod": 2}},
+                  {"praha": {"quarter": -1}}, ["praha"]):
+        with pytest.raises(IntakeRefused):
+            read("json_breadcrumb", document,
+                 _breadcrumb_entry("quarter", "cast_obce_name",
+                                   locator={"levels_by_anchor": moved}))
 
 
 def test_json_breadcrumb_refuses_a_level_or_an_anchor_set_it_cannot_execute():

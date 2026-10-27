@@ -18,10 +18,11 @@ import {
 } from '@/lib/api';
 import { imageSrc, type ImageRef } from '@/lib/imageUrl';
 import ImageLightbox from '@/components/ImageLightbox';
-import type { ImagePublic } from '@/lib/types';
+import { bareImage } from '@/lib/types';
 import Spinner from '@/components/Spinner';
 import ErrorBanner from '@/components/ErrorBanner';
 import ImageSizeToggle from '@/components/ImageSizeToggle';
+import { SegmentedBar } from '@/components/controls';
 import { pushToast } from '@/lib/toast';
 import { trainingSetKeys } from '@/lib/newDedupKeys';
 import { cachePatch, useOptimisticWrite, type CachePatch } from '@/lib/useOptimisticWrite';
@@ -130,6 +131,7 @@ const REVIEW_MARK: Record<ReviewState, string> = {
 
 const PAGE_SIZES = [50, 100, 500, 2000, 10000] as const;
 type PageSize = (typeof PAGE_SIZES)[number];
+const PAGE_OPTIONS = PAGE_SIZES.map((n) => ({ value: n, label: String(n) }));
 const DEFAULT_PAGE: PageSize = 50;
 const BULK_CAP = 200;
 
@@ -339,21 +341,7 @@ export default function NewDedupTrainingSet() {
     el.scrollIntoView?.({ block: 'center', behavior: still ? 'auto' : 'smooth' });
   };
 
-  const galleryImages: ImagePublic[] = useMemo(
-    () => rows.map((r) => ({
-      id: r.image_id,
-      sreality_id: 0,
-      sequence: null,
-      sreality_url: '',
-      storage_path: r.storage_path,
-      clip_fine_tag: null,
-      clip_logical_tag: null,
-      clip_confidence: null,
-      clip_render_score: null,
-      phash: null,
-    })),
-    [rows],
-  );
+  const galleryImages = useMemo(() => rows.map((r) => bareImage(r.image_id, r.storage_path)), [rows]);
 
   /* THE DRAW. A head trains on a thousand negatives picked at random, not on
    * every negative it has; the rest wait in the negative reserve. Drawing again
@@ -681,26 +669,21 @@ export default function NewDedupTrainingSet() {
             </span>
           )}
 
-          <span className="flex gap-1" role="group" aria-label="tray">
-            {TRAYS.map((t) => (
-              <button key={t} type="button" title={TRAY_TITLE[t]} aria-pressed={tray === t}
-                onClick={() => patch({ set: t, offset: null })}
-                className={`px-2.5 py-1 text-xs rounded-[var(--radius-sm)] border ${
-                  tray === t ? 'border-[var(--color-sage)] text-[var(--color-ink)]'
-                    : 'border-[var(--color-rule)] text-[var(--color-ink-3)] hover:text-[var(--color-ink)]'}`}>
-                {TRAY_LABEL[t]}
-                {/* EVERY chip is a count of what is in that tray. The sample chip
-                  * showed `decided/drawn`, and 35/1000 read as "35 drawn" — the
-                  * operator reported exactly that. Progress belongs in the line
-                  * below, which has room to name which number is which. */}
-                {activeHead && (
-                  <span data-testid={`tray-count-${t}`} className="ml-1 text-[var(--color-ink-4)] tabular-nums">
-                    {activeHead[t]}
-                  </span>
-                )}
-              </button>
-            ))}
-          </span>
+          {/* EVERY segment is a count of what is in that tray. The sample chip
+            * showed `decided/drawn`, and 35/1000 read as "35 drawn" — the operator
+            * reported exactly that. Progress belongs in the line below, which has
+            * room to name which number is which. */}
+          <SegmentedBar
+            hug
+            label="tray"
+            options={TRAYS.map((t) => ({
+              value: t,
+              label: activeHead ? `${TRAY_LABEL[t]} ${activeHead[t]}` : TRAY_LABEL[t],
+              title: TRAY_TITLE[t],
+            }))}
+            value={tray}
+            onChange={(t) => patch({ set: t, offset: null })}
+          />
         </div>
 
         {activeHead && (
@@ -858,14 +841,15 @@ export default function NewDedupTrainingSet() {
             </div>
           )}
           <div className="mt-4 flex items-center justify-center gap-3 text-xs flex-wrap">
-            <span className="flex items-center gap-1" role="group" aria-label="per page">
+            <span className="flex items-center gap-1">
               <span className="text-[0.65rem] tracking-[0.1em] uppercase text-[var(--color-ink-4)] mr-0.5">per page</span>
-              {PAGE_SIZES.map((n) => (
-                <button key={n} type="button" aria-pressed={pageSize === n} onClick={() => patch({ n: String(n), offset: null })}
-                  className={`px-2 py-1 rounded-[var(--radius-sm)] border ${pageSize === n ? 'border-[var(--color-ink-2)] text-[var(--color-ink)]' : 'border-[var(--color-rule)] text-[var(--color-ink-3)] hover:text-[var(--color-ink)]'}`}>
-                  {n}
-                </button>
-              ))}
+              <SegmentedBar
+                hug
+                label="per page"
+                options={PAGE_OPTIONS}
+                value={pageSize}
+                onChange={(n) => patch({ n: String(n), offset: null })}
+              />
             </span>
             <button type="button" disabled={offset === 0} onClick={() => patch({ offset: String(Math.max(0, offset - pageSize)) })}
               className="px-3 py-1 rounded-[var(--radius-sm)] border border-[var(--color-rule)] text-[var(--color-ink-3)] disabled:opacity-40">

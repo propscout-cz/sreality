@@ -237,10 +237,10 @@ def test_the_engines_deadline_sits_inside_every_bound_around_it() -> None:
     statement_timeout must end before the jobs check's lane cell warns of a pass in flight,
     before the lane abandons the pass, and before the lease expires — or a seed could take
     the lease mid-write."""
-    from scripts import verify_pipeline
+    from scripts.checks import platform as plat
 
     worst = PASS_DEADLINE_S + STATEMENT_TIMEOUT_MS / 1000.0
-    assert worst < verify_pipeline.THRESHOLDS["jobs_lane_inflight_warn_s"]
+    assert worst < plat.LANE_INFLIGHT_WARN_S
     assert worst < rw.LANE_PASS_TIMEOUT_SECONDS
     assert worst < LEASE_TTL_S
     assert PASS_BUDGET_S * 2 <= PASS_DEADLINE_S, "claims are sized well inside the deadline"
@@ -323,6 +323,8 @@ def test_the_lane_hands_the_engine_its_connection_and_nothing_else(
         "ledger_skipped": 31, "ledger_written": 6,
         # E960: the neighbourhood re-retrieved from the store, and the adverts read, by why
         "dirty": 30, "reads": {"claim": 12, "decided": 9},
+        # E940: the pass walked no scope block and none is mid-cycle
+        "enter_scan": None,
     }
     for gone in ("AUTODEDUP_PASS_DEADLINE_SECONDS", "AUTODEDUP_PASS_BUDGET_SECONDS",
                  "_AUTODEDUP_BACKOFF", "_DeadlineConnection", "_AutodedupDeadline"):
@@ -348,7 +350,7 @@ def test_an_absent_store_skips_every_tick_with_one_warning(
     assert first["errors"] == 0 and first["ran"] is False
     assert second["reason"] == "store_absent"
     assert conn.closed
-    assert sum("store (migrations 539/540/596/604) is absent" in r.message
+    assert sum("store (migrations 539/540/596/604/616) is absent" in r.message
                for r in caplog.records) == 1
 
 
@@ -500,6 +502,35 @@ def test_the_heartbeat_carries_the_pass_s_attempts(monkeypatch: pytest.MonkeyPat
             last["errors"]) == expected
 
 
+def test_the_heartbeat_says_how_the_scope_walk_paged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """E940: a walk that came back a full page is a PAGE on the heartbeat — how many this pass,
+    each block inside a cycle as [page, of], a cursor that does not advance, and the blocks the
+    daily cap left unfinished — never a silent truncation; a pass that walked nothing and holds
+    no block mid-cycle carries none."""
+    monkeypatch.setattr(rw.db, "connect", lambda *a, **k: _Conn())
+    _settings(monkeypatch)
+    walk = {"block": "obec:554782", "rows": 20000, "after_id": 256097, "page": 3, "of": 9,
+            "end": False, "elapsed_ms": 98.1}
+    _stub_engine(monkeypatch, _summary(enter_scan={
+        **walk, "scans_24h": 41, "cap": 60, "blocks": [walk], "pages": 1,
+        "page_of": {"obec:554782": [3, 9], "okres:3209": [1, None]}, "stalled": [],
+        "seconds": 1.4}))
+    assert rw._autodedup_sync()["enter_scan"] == {
+        "walks": 1, "pages": 1, "page_of": {"obec:554782": [3, 9], "okres:3209": [1, None]},
+        "stalled": [], "scans_24h": 41, "cap": 60, "seconds": 1.4}
+
+    _stub_engine(monkeypatch, _summary(enter_scan={
+        "scans_24h": 60, "cap": 60, "blocks": [], "pages": 0,
+        "page_of": {"okres:3209": [1, None]}, "stalled": [], "seconds": 0.01,
+        "skipped": "daily cap", "unfinished": ["okres:3209"]}))
+    capped = rw._autodedup_sync()["enter_scan"]
+    assert (capped["walks"], capped["skipped"], capped["unfinished"]) \
+        == (0, "daily cap", ["okres:3209"])
+
+    _stub_engine(monkeypatch, _summary(enter_scan={}))
+    assert rw._autodedup_sync()["enter_scan"] is None
+
+
 def test_any_other_failure_is_the_lanes_failed_pass_and_closes_the_connection(
         monkeypatch: pytest.MonkeyPatch) -> None:
     conn = _Conn()
@@ -576,10 +607,12 @@ def _write_targets(statements: list[str]) -> set[str]:
 def test_one_worker_pass_is_the_engines_pass(world, tmp_path, monkeypatch) -> None:
     """The worker's interval alone opens a pass, and the pass is the engine's: it claims,
     decides, moves its cursors under the lease, frees the lease, and — during the build and
-    with the scope row closed — every row it writes is in schema autodedup."""
+    with the scope row closed — every row it writes is in schema autodedup. The reconcile runs
+    in the build too (E964: it waits block by block, never for the whole build), so both passes
+    stop at the closed scope row."""
     seed_lane(world, tmp_path)
     _worker_on(monkeypatch, world)
-    for expected in ("bootstrap", "scope_closed"):
+    for expected in ("scope_closed", "scope_closed"):
         before = len(world.statements)
 
         last = rw._autodedup_sync()
@@ -1416,7 +1449,8 @@ def test_a_real_pass_leaves_no_body_behind_and_reads_its_rss_after_the_trim(
     last = rw._autodedup_sync()
 
     assert last["ran"] is True and last["errors"] == 0, last
-    assert set(last["memo_entries"]) == {"text_facts", "body_align", "shingles", "tokens"}
+    assert set(last["memo_entries"]) == {
+        "text_facts", "body_align", "shingles", "tokens", "folds"}
     assert last["memo_entries"]["text_facts"] >= 1 and last["memo_entries"]["body_align"] >= 1
     assert last["memo_entries"]["tokens"] >= 1
     assert incremental_lane.memo_entries() == dict.fromkeys(last["memo_entries"], 0)

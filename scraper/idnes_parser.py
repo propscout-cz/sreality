@@ -31,6 +31,7 @@ from scraper.area import PortalAreas, derive_headline_area, parse_area_text
 from scraper.attribute_contract import floor_convention, source_value, source_values
 from scraper.floor import floor_from_portal, total_floors_from_portal
 from scraper.broker_idnes import parse_idnes_broker
+from scraper.portal_identity import native_id
 from scraper.price_text import is_per_area_price
 from scraper.scraped_listing import ScrapedListing
 from scraper.street import street_from_locality
@@ -116,8 +117,6 @@ def subtype_from_title(text: str | None, category_main: str | None) -> str | Non
 _CZ_LAT_MIN, _CZ_LAT_MAX = 48.0, 51.5
 _CZ_LON_MIN, _CZ_LON_MAX = 12.0, 19.0
 
-# The detail-URL hash is the source_id_native (24 hex chars today; >=16 to be safe).
-_ID_RE = re.compile(r"/detail/[^?#]*?/([0-9a-f]{16,})/?(?:[?#]|$)")
 _INT_RE = re.compile(r"(\d+)")
 _PAGE_RE = re.compile(r"[?&]page=(\d+)")
 _DETAIL_PATH_RE = re.compile(r"/detail/([^/?#]+)/([^/?#]+)/")
@@ -126,6 +125,9 @@ _DETAIL_PATH_RE = re.compile(r"/detail/([^/?#]+)/([^/?#]+)/")
 # &nbsp;/&zwj; between groups). Stops at the first non-space, non-digit char.
 _PRICE_RUN_RE = re.compile(r"\d[\d\s\u00a0\u200b\u200c\u200d\u2060]*")
 _PRICE_MAX = 2_147_483_647  # listings.price_czk is a Postgres integer
+# A foreign-priced ad's price note, "Cena v EUR 298 000 €": the price the ad asks, which the
+# headline only shows converted to Kč at the day's rate.
+_NATIVE_PRICE_RE = re.compile(rf"cena v ([a-z]{{3}})\s*({_PRICE_RUN_RE.pattern})", re.IGNORECASE)
 # Map config: "center":[lon, lat]. CZ lat/lon ranges don't overlap, so a swap is
 # caught by the bbox guard rather than producing a bogus point.
 _CENTER_RE = re.compile(r'"center"\s*:\s*\[\s*(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)\s*\]')
@@ -248,13 +250,6 @@ def _in_cz_bbox(lat: float, lon: float) -> bool:
     return _CZ_LAT_MIN <= lat <= _CZ_LAT_MAX and _CZ_LON_MIN <= lon <= _CZ_LON_MAX
 
 
-def _id_from_href(href: str | None) -> str | None:
-    if not href:
-        return None
-    m = _ID_RE.search(href)
-    return m.group(1) if m else None
-
-
 def category_from_url(url: str) -> tuple[str | None, str | None]:
     """Derive (category_main, category_type) from a detail URL's path,
     /detail/{sale}/{cat}/... — the detail-drain recovers a listing's category
@@ -304,6 +299,14 @@ def _parse_price(text: str | None, category_type: str | None) -> tuple[int | Non
         return None, unit
     value = int(digits)
     return (value if value <= _PRICE_MAX else None), unit
+
+
+def _native_price(tree: HTMLParser) -> str | None:
+    """The price the page states in a foreign currency ("298000 EUR"), else None."""
+    m = _NATIVE_PRICE_RE.search(_text(tree.css_first(".wrapper-price-notes")) or "")
+    if m is None or m.group(1).upper() == "CZK":
+        return None
+    return f"{re.sub(r'\D', '', m.group(2))} {m.group(1).upper()}"
 
 
 def _parse_int(text: str | None) -> int | None:
@@ -369,7 +372,7 @@ def parse_index(html: str) -> IndexPage:
             continue
         link = block.css_first("a.c-products__link")
         href = link.attributes.get("href") if link else None
-        source_id = _id_from_href(href)
+        source_id = native_id(SOURCE, href)
         if not source_id or not href or source_id in seen:
             continue
         seen.add(source_id)
@@ -515,7 +518,7 @@ def parse_detail(
     category_type: str | None,
 ) -> ScrapedListing:
     tree = HTMLParser(html)
-    source_id = _id_from_href(source_url) or ""
+    source_id = native_id(SOURCE, source_url) or ""
 
     title = _text(tree.css_first("h1")) or ""
     # The H1 is generic ("Prodej domu …"); the property type lives in the SEO
@@ -537,6 +540,7 @@ def parse_detail(
                 struck.decompose()
     price_text = _strip_mortgage_cta(_text(price_node) or _text(params.get("cena")))
     price_czk, price_unit = _parse_price(price_text, category_type)
+    price_native = _native_price(tree)
 
     locality = _text(tree.css_first(".b-detail__info"))
     lat, lon, coord_provenance = _resolve_coords(html)
@@ -571,8 +575,8 @@ def parse_detail(
         "id": source_id,
         "title": title,
         "price_text": price_text,
+        "price_native": price_native,
         "locality_text": locality,
-        "idnes_ref": _text(params.get("číslo zakázky")),
         "image_urls": image_urls,
         "coords": coord_provenance,
         "params": params_text,
@@ -586,11 +590,13 @@ def parse_detail(
         source=SOURCE,
         source_id_native=source_id,
         source_url=source_url,
+        ad_reference=vocabulary.reference(read("ad_reference")),
         category_main=category_main,
         category_type=category_type,
         subtype=subtype_from_title(f"{og_title} {title}", category_main),
         price_czk=price_czk,
         price_unit=price_unit,
+        price_native=price_native,
         area_m2=areas.area_m2,
         area_basis=areas.area_basis,
         usable_area=areas.usable_area,

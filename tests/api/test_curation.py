@@ -12,7 +12,7 @@ test path against a real Postgres (out of scope for this file).
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import psycopg
@@ -26,6 +26,7 @@ from api import dependencies as deps
 from api import main as api_main
 from api import schemas as _s
 from api import tenant_pool
+from api.notifications import ON_EVENT_CONFLICT
 from tests.api._script_conn import ScriptConn
 
 _SUB = "11111111-1111-1111-1111-111111111111"
@@ -399,7 +400,8 @@ def test_create_note_passes_the_surrogate_origin_only(client, store):
     )
     assert res.status_code == 200
     assert store["note_origins"][res.json()["id"]] is None
-    assert set(_s.CreateNoteIn.model_fields) == {"body", "shared", "origin_listing_ref_id"}
+    assert set(_s.CreateNoteIn.model_fields) == {
+        "body", "shared", "origin_listing_ref_id", "viewing_at"}
 
 
 def test_create_note_blank_body_422(client, store):
@@ -540,13 +542,13 @@ def test_patch_tag_invalid_color_422(client, store):
 
 _T0 = datetime(2026, 5, 10)
 # _COLLECTION_PROJECTION: id, name, description, created_at, updated_at, listing_count,
-# monitoring_enabled, notify_channels, is_system, owner_email, shared_with.
-_COLL = (1, "x", None, _T0, _T0, 0, False, [], False, None, [])
-_SYSTEM = (6, "monitoring", None, _T0, _T0, 3, True, ["in_app"], True, None, [])
+# monitoring_enabled, is_system, owner_email, shared_with.
+_COLL = (1, "x", None, _T0, _T0, 0, False, False, None, [])
+_SYSTEM = (6, "monitoring", None, _T0, _T0, 3, True, True, None, [])
 _COLL_PAYLOAD = {
     "id": 1, "name": "x", "description": None,
     "created_at": "2026-05-10T00:00:00", "updated_at": "2026-05-10T00:00:00",
-    "listing_count": 0, "monitoring_enabled": False, "notify_channels": [], "is_system": False,
+    "listing_count": 0, "monitoring_enabled": False, "is_system": False,
     "owner_email": None, "shared_with": [],
 }
 
@@ -617,7 +619,7 @@ def test_update_collection_is_one_update_returning_the_collection():
     [(sql, params)] = conn.executed
     assert "name = CASE WHEN c.is_system THEN c.name ELSE coalesce(%s, c.name) END" in sql
     assert "RETURNING c.id, c.name" in sql
-    assert params == ("x", "d", None, None, 1)
+    assert params == ("x", "d", None, 1)
     assert conn.tx == ["commit"]
 
 
@@ -717,12 +719,12 @@ def test_update_note_is_one_update_and_no_probe():
     conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(42, 42)]),
         (lambda q: q.startswith("UPDATE property_notes"),
-         [(5, 42, "edited", False, _T0, _T0, None, None, None)]),
+         [(5, 42, "edited", False, _T0, _T0, None, None, None, None)]),
     ])
     out = curation.update_note(conn, 42, 5, _s.UpdateNoteIn(body="edited"))
     assert out["body"] == "edited"
     ups = [q for q, _ in conn.executed if q.startswith("UPDATE property_notes")]
-    assert len(ups) == 1 and "WHERE n.id = %s AND n.property_id = %s RETURNING" in ups[0]
+    assert len(ups) == 1 and "WHERE n.id = %(id)s AND n.property_id = %(property_id)s RETURNING" in ups[0]
     assert _probes(conn) == []
 
 
@@ -739,8 +741,8 @@ def test_list_notes_helper_orders_newest_first():
     conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(42, 42)]),
         (lambda q: "FROM property_notes" in q, [
-            (2, 42, "second", False, "2026-05-10T00:00:02+00:00", None, None, None, None),
-            (1, 42, "first",  False, "2026-05-10T00:00:01+00:00", None, None, None, None),
+            (2, 42, "second", False, "2026-05-10T00:00:02+00:00", None, None, None, None, None),
+            (1, 42, "first",  False, "2026-05-10T00:00:01+00:00", None, None, None, None, None),
         ]),
     ])
     out = curation.list_notes(conn, property_id=42)
@@ -752,7 +754,7 @@ def test_create_note_derives_the_legacy_origin_from_the_surrogate_only():
     conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(42, 42)]),
         (lambda q: q.startswith("INSERT INTO property_notes"),
-         [(5, 42, "hi", False, _T0, None, None, None, None)]),
+         [(5, 42, "hi", False, _T0, None, None, None, None, None)]),
     ])
     note = curation.create_note(
         conn, 42, _s.CreateNoteIn(body="hi", origin_listing_ref_id=777), "acct",
@@ -760,15 +762,15 @@ def test_create_note_derives_the_legacy_origin_from_the_surrogate_only():
     sql, params = conn.executed[-1]
     assert "COALESCE" not in sql.upper()
     assert "(SELECT sreality_id FROM listing_natural_key_public WHERE id = %s)" in sql
-    assert params == (42, "hi", False, 777, 777, "acct")
+    assert params == (42, "hi", False, 777, 777, None, "acct")
     # The one Note shape, in this key order (the SPA and extension read it).
     assert list(note) == [
-        "id", "property_id", "body", "shared", "created_at", "updated_at", "owner_email",
-        "edited_by_email", "edited_at"]
+        "id", "property_id", "body", "shared", "created_at", "updated_at", "viewing_at",
+        "owner_email", "edited_by_email", "edited_at"]
     assert note == {
         "id": 5, "property_id": 42, "body": "hi", "shared": False,
-        "created_at": "2026-05-10T00:00:00", "updated_at": None, "owner_email": None,
-        "edited_by_email": None, "edited_at": None,
+        "created_at": "2026-05-10T00:00:00", "updated_at": None, "viewing_at": None,
+        "owner_email": None, "edited_by_email": None, "edited_at": None,
     }
 
 
@@ -780,7 +782,7 @@ def test_create_note_redirects_merged_away_to_survivor():
     conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(99, 42)]),  # 99 merged into active 42
         (lambda q: "INSERT INTO property_notes" in q,
-         [(1, 42, "hi", False, datetime(2026, 1, 1), None, None, None, None)]),
+         [(1, 42, "hi", False, datetime(2026, 1, 1), None, None, None, None, None)]),
     ])
     out = curation.create_note(conn, 99, _s.CreateNoteIn(body="hi"), account_id=_ACCT)
     assert out["property_id"] == 42
@@ -859,12 +861,14 @@ def test_update_note_redirects_merged_away_to_survivor():
     conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(99, 42)]),
         (lambda q: "UPDATE property_notes" in q,
-         [(5, 42, "edited", False, datetime(2026, 1, 1), datetime(2026, 1, 2), None, None, None)]),
+         [(5, 42, "edited", False, datetime(2026, 1, 1), datetime(2026, 1, 2), None, None, None,
+           None)]),
     ])
     out = curation.update_note(conn, 99, 5, _s.UpdateNoteIn(body="edited"))
     assert out["property_id"] == 42
     ups = [p for q, p in conn.executed if "UPDATE property_notes" in q]
-    assert ups and ups[0] == ("edited", None, "edited", 5, 42)
+    assert ups and ups[0] == {"body": "edited", "shared": None, "set_viewing": False,
+                              "viewing_at": None, "id": 5, "property_id": 42}
 
 
 def test_list_notes_follows_a_merged_away_id_to_the_survivor():
@@ -873,7 +877,7 @@ def test_list_notes_follows_a_merged_away_id_to_the_survivor():
     conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(99, 42)]),
         (lambda q: "FROM property_notes" in q,
-         [(5, 42, "on the survivor", False, datetime(2026, 1, 1), None, None, None, None)]),
+         [(5, 42, "on the survivor", False, datetime(2026, 1, 1), None, None, None, None, None)]),
     ])
     out = curation.list_notes(conn, 99)
     assert [n["property_id"] for n in out["data"]] == [42]
@@ -955,7 +959,7 @@ def test_curation_writes_without_an_account_are_400(client, store, monkeypatch):
 
 _RECIPIENT = "33333333-3333-3333-3333-333333333333"
 _OWNER = "44444444-4444-4444-4444-444444444444"
-_SHARED = (7, "theirs", None, _T0, _T0, 2, False, [], False, "owner@x.cz",
+_SHARED = (7, "theirs", None, _T0, _T0, 2, False, False, "owner@x.cz",
            [{"account_id": _RECIPIENT, "email": None}])
 
 
@@ -979,7 +983,7 @@ class _Opener:
 def test_the_collection_shape_keeps_its_order_and_appends_the_share_fields():
     assert list(curation._to_collection(_COLL)) == [
         "id", "name", "description", "created_at", "updated_at", "listing_count",
-        "monitoring_enabled", "notify_channels", "is_system", "owner_email", "shared_with"]
+        "monitoring_enabled", "is_system", "owner_email", "shared_with"]
 
 
 def test_a_shared_collection_names_its_owner_and_reads_monitoring_as_the_callers():
@@ -989,7 +993,6 @@ def test_a_shared_collection_names_its_owner_and_reads_monitoring_as_the_callers
     proj = " ".join(curation._COLLECTION_PROJECTION.split())
     mine = "c.account_id IN (SELECT acting_account_ids())"
     assert f"CASE WHEN {mine} THEN c.monitoring_enabled ELSE false END" in proj
-    assert f"CASE WHEN {mine} THEN c.notify_channels ELSE '{{}}'::text[] END" in proj
     assert f"CASE WHEN {mine} THEN NULL ELSE" in proj
     # Labels come only through the counterparty function; account_id never leaves the row.
     assert "share_party_emails()" in proj and "c.account_id," not in proj
@@ -1069,16 +1072,19 @@ def test_a_new_share_writes_one_recipient_stamped_notification_and_returns_the_c
     assert share[1] == (1, _RECIPIENT) and "ON CONFLICT DO NOTHING RETURNING account_id" in share[0]
     assert len([q for q, _ in identity.executed if "notification_dispatches" in q]) == 1
     sql, params = dispatch
-    # One kind for both shares (migration 641): 'share', collection_id set for a collection.
-    assert "VALUES ('share', %s::bigint, 'shared', account_email(%s::uuid) || %s::text," in sql
-    # One notification per (collection, recipient) ever: no time in the key, so a revoke +
+    # One source for every share (migration 641): 'share', collection_id set for a collection.
+    assert "VALUES ('share', %(collection_id)s::bigint, %(change_kind)s::text," in sql
+    # One notification per (collection, recipient) ever: no time in the identity, so a revoke +
     # re-share loop cannot refill the recipient's inbox.
-    assert "ON CONFLICT DO NOTHING" in sql and "epoch" not in sql
-    # (collection, owner for the label, the text after it, recipient = the stamped account, key)
-    assert params == (
-        1, _OWNER, ' shared the collection "Byty" with you', _RECIPIENT,
-        f"share:collection:1:{_RECIPIENT}",
-    )
+    assert sql.endswith(ON_EVENT_CONFLICT) and "epoch" not in sql and "dedupe_key" not in sql
+    # The kind names what opens and the owner is the actor (migration 652); a collection share
+    # needs no event_ref.
+    # No text (F17, R11): the bell labels a share from its actor and the collection's live name.
+    assert "message" not in sql
+    assert params == {
+        "change_kind": "shared_collection", "collection_id": 1, "actor": _OWNER,
+        "recipient": _RECIPIENT, "event_ref": None,
+    }
     assert identity.tx == ["commit"]
     # The gate ran first, and the response is re-read on the tenant connection.
     assert _gate(conn.executed[0][0]) and "FROM collections c" in conn.executed[-1][0]
@@ -1131,25 +1137,27 @@ def test_create_note_passes_the_shared_mark():
     conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(42, 42)]),
         (lambda q: q.startswith("INSERT INTO property_notes"),
-         [(5, 42, "hi", True, _T0, None, None, None, None)]),
+         [(5, 42, "hi", True, _T0, None, None, None, None, None)]),
     ])
     note = curation.create_note(conn, 42, _s.CreateNoteIn(body="hi", shared=True), "acct")
     assert note["shared"] is True
-    assert conn.executed[-1][1] == (42, "hi", True, None, None, "acct")
+    assert conn.executed[-1][1] == (42, "hi", True, None, None, None, "acct")
 
 
 def test_marking_a_note_shared_is_one_update_that_leaves_updated_at_alone():
     conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(42, 42)]),
         (lambda q: q.startswith("UPDATE property_notes"),
-         [(5, 42, "body", True, _T0, _T0, None, None, None)]),
+         [(5, 42, "body", True, _T0, _T0, None, None, None, None)]),
     ])
     out = curation.update_note(conn, 42, 5, _s.UpdateNoteIn(shared=True))
     assert out["shared"] is True
     [(sql, params)] = [(q, p) for q, p in conn.executed if q.startswith("UPDATE property_notes")]
-    assert "shared = coalesce(%s::boolean, n.shared)" in sql
-    assert "updated_at = CASE WHEN %s::text IS NOT NULL THEN now() ELSE n.updated_at END" in sql
-    assert params == (None, True, None, 5, 42)
+    assert "shared = coalesce(%(shared)s::boolean, n.shared)" in sql
+    assert ("updated_at = CASE WHEN %(body)s::text IS NOT NULL OR %(set_viewing)s::boolean THEN now() "
+            "ELSE n.updated_at END") in sql
+    assert params == {"body": None, "shared": True, "set_viewing": False, "viewing_at": None,
+                      "id": 5, "property_id": 42}
     assert _probes(conn) == []
 
 
@@ -1158,7 +1166,7 @@ def test_a_foreign_note_carries_its_authors_label():
     # Mine = the identity the caller acts as (migration 641): the owner, under X-Act-As.
     assert "CASE WHEN n.account_id IN (SELECT acting_account_ids()) THEN NULL ELSE" in proj
     assert "share_party_emails()" in proj
-    note = curation._to_note((9, 42, "theirs", True, _T0, None, "b@x.cz", None, None))
+    note = curation._to_note((9, 42, "theirs", True, _T0, None, None, "b@x.cz", None, None))
     assert note["owner_email"] == "b@x.cz" and note["shared"] is True
 
 
@@ -1169,5 +1177,84 @@ def test_a_note_carries_its_latest_delegated_edit_labelled_through_the_party_doo
     assert f"(SELECT e.email FROM share_party_emails() e WHERE e.account_id = (SELECT l.actor_account_id FROM {latest} l)) AS edited_by_email" in proj
     assert proj.endswith(f"(SELECT l.at FROM {latest} l) AS edited_at")
     assert "FROM delegated_edits" not in proj
-    note = curation._to_note((9, 42, "x", False, _T0, None, None, "c@x.cz", _T0))
+    note = curation._to_note((9, 42, "x", False, _T0, None, None, None, "c@x.cz", _T0))
     assert note["edited_by_email"] == "c@x.cz" and note["edited_at"] == "2026-05-10T00:00:00"
+
+
+# --- viewings (migration 666: a viewing is a note with a date) --------------
+
+_VIEWING_AT = datetime(2026, 10, 24, 12, 0, tzinfo=timezone.utc)
+
+
+def test_a_viewing_may_carry_no_text_but_a_plain_note_must():
+    assert _s.CreateNoteIn(viewing_at=_VIEWING_AT).body == ""
+    with pytest.raises(ValueError, match="text or a viewing date"):
+        _s.CreateNoteIn(body="")
+    # A naive time names no instant: refused, never read as UTC or as the server's zone.
+    with pytest.raises(ValueError):
+        _s.CreateNoteIn(viewing_at=datetime(2026, 10, 24, 14, 0))
+    with pytest.raises(ValueError, match="text or a viewing date"):
+        _s.UpdateNoteIn(body="", viewing_at=None)
+
+
+def test_create_viewing_passes_its_date():
+    conn = ScriptConn([
+        (lambda q: "RECURSIVE chain" in q, [(42, 42)]),
+        (lambda q: q.startswith("INSERT INTO property_notes"),
+         [(5, 42, "", False, _T0, None, _VIEWING_AT, None, None, None)]),
+    ])
+    note = curation.create_note(conn, 42, _s.CreateNoteIn(viewing_at=_VIEWING_AT), "acct")
+    assert note["viewing_at"] == "2026-10-24T12:00:00+00:00" and note["body"] == ""
+    assert conn.executed[-1][1] == (42, "", False, None, None, _VIEWING_AT, "acct")
+
+
+def test_update_note_dates_clears_or_keeps_the_viewing_by_presence():
+    row = [(5, 42, "x", False, _T0, _T0, None, None, None, None)]
+
+    def params(patch: _s.UpdateNoteIn) -> dict[str, Any]:
+        conn = ScriptConn([
+            (lambda q: "RECURSIVE chain" in q, [(42, 42)]),
+            (lambda q: q.startswith("UPDATE property_notes"), row),
+        ])
+        curation.update_note(conn, 42, 5, patch)
+        [p] = [p for q, p in conn.executed if q.startswith("UPDATE property_notes")]
+        return p
+
+    dated = params(_s.UpdateNoteIn(viewing_at=_VIEWING_AT))
+    assert (dated["set_viewing"], dated["viewing_at"]) == (True, _VIEWING_AT)
+    cleared = params(_s.UpdateNoteIn.model_validate({"viewing_at": None}))
+    assert (cleared["set_viewing"], cleared["viewing_at"]) == (True, None)
+    kept = params(_s.UpdateNoteIn(body="y"))
+    assert kept["set_viewing"] is False
+    sql = " ".join(curation._UPDATE_NOTE_SQL.split())
+    assert ("viewing_at = CASE WHEN %(set_viewing)s::boolean THEN %(viewing_at)s::timestamptz "
+            "ELSE n.viewing_at END") in sql
+
+
+def test_an_update_leaving_a_note_with_neither_text_nor_date_is_422():
+    conn = ScriptConn([
+        (lambda q: "RECURSIVE chain" in q, [(42, 42)]),
+        (lambda q: q.startswith("UPDATE property_notes"),
+         psycopg.errors.CheckViolation("property_notes_body_check")),
+    ])
+    with pytest.raises(fastapi.HTTPException) as exc:
+        curation.update_note(conn, 42, 5, _s.UpdateNoteIn.model_validate({"viewing_at": None}))
+    assert exc.value.status_code == 422
+
+
+def test_list_viewings_reads_the_callers_own_in_date_order():
+    conn = ScriptConn([
+        (lambda q: "FROM property_notes" in q,
+         [(5, 42, "", False, _T0, None, _VIEWING_AT, None, None, None)]),
+    ])
+    out = curation.list_viewings(conn)
+    assert [n["viewing_at"] for n in out["data"]] == ["2026-10-24T12:00:00+00:00"]
+    sql = " ".join(conn.executed[0][0].split())
+    assert "WHERE n.viewing_at IS NOT NULL AND n.account_id IN (SELECT acting_account_ids())" in sql
+    assert sql.endswith("ORDER BY n.viewing_at, n.id")
+
+
+def test_viewings_route_is_the_tenant_read(client, monkeypatch):
+    monkeypatch.setattr(curation, "list_viewings", lambda conn: {"data": [{"id": 1}]})
+    res = client.get("/viewings")
+    assert res.status_code == 200 and res.json() == {"data": [{"id": 1}]}

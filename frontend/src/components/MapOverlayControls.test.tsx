@@ -1,13 +1,14 @@
-/* The reference-overlay chips: one per registry section, tri-state over the
- * section's layers, the panel under a chip that is on (per-layer toggles,
- * variant radios, legend, zoom hint, note, provenance), and the compact chips
- * the small maps use. The registry is fixed here; the selection grammar itself
- * is lib/mapOverlays.test.ts's. */
+/* The reference-overlay toggles: one per registry section, tri-state over the
+ * section's layers, the settings under one that is on (per-layer toggles,
+ * variant radios, zoom hint, note, provenance), the legend cards Browse's map
+ * draws for the sections that are on, and the compact chips the small maps use.
+ * The registry is fixed here; the selection grammar itself is
+ * lib/mapOverlays.test.ts's. */
 
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 
-import MapOverlayControls from './MapOverlayControls';
+import MapOverlayControls, { MapOverlayLegends } from './MapOverlayControls';
 import type { MapOverlayRegistry, OverlaySection } from '@/lib/mapOverlays';
 import { PPM2_UNIT } from '@/lib/measure';
 
@@ -124,6 +125,9 @@ function renderControls(
   return onChange;
 }
 
+const renderLegends = (selection: string, registry: MapOverlayRegistry = REGISTRY) =>
+  render(<MapOverlayLegends registry={registry} selection={selection} />);
+
 const chip = (name: string) => screen.getByRole('checkbox', { name });
 
 describe('<MapOverlayControls> chips', () => {
@@ -206,9 +210,10 @@ describe('<MapOverlayControls> variants and legend', () => {
     expect(onChange).toHaveBeenCalledWith('rent_map');
   });
 
-  /* The legend the rent map has always had: what is measured, the ramp, its ends. */
+  /* The legend the rent map has always had: what is measured, the ramp, its ends —
+   * on the map now, so it reads with the Vrstvy panel closed. */
   it('keys the rent scale by its caption and range, as the rent map always has', () => {
-    renderControls('rent_map');
+    renderLegends('rent_map');
     expect(screen.getByText(`Nájemné (${PPM2_UNIT.rent})`)).toBeInTheDocument();
     expect(screen.getByText('150')).toBeInTheDocument();
     expect(screen.getByText('600')).toBeInTheDocument();
@@ -220,18 +225,29 @@ describe('<MapOverlayControls> variants and legend', () => {
       ...RENT,
       layers: [{ ...RENT.layers[0], scale: { ...RENT.layers[0].scale!, unit: 'dB' } }],
     };
-    renderControls('rent_map', { registry: { sections: [plain] } });
+    renderLegends('rent_map', { sections: [plain] });
     expect(screen.getByText('dB')).toBeInTheDocument();
   });
 
   it('lists every class of a one-layer section in its legend', () => {
-    renderControls('metro');
+    renderLegends('metro');
     const legend = screen.getByRole('list', { name: 'Legenda' });
     expect(within(legend).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
       'Linka A',
       'Metro D – návrh',
       'Plánovaná stanice',
     ]);
+  });
+
+  it('keys only the sections that are on, naming the variant shown', () => {
+    renderLegends('rent_map:vk2');
+    expect(screen.getByText(`${RENT.label} · 2+kk, 2+1`)).toBeInTheDocument();
+    expect(screen.queryByText(METRO.label)).toBeNull();
+  });
+
+  it('keeps the legend out of the panel, which carries the settings', () => {
+    renderControls('metro');
+    expect(screen.queryByRole('list', { name: 'Legenda' })).toBeNull();
   });
 });
 

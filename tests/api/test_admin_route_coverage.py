@@ -35,12 +35,6 @@ _PUBLIC_ALLOWLIST: frozenset[tuple[str, str]] = frozenset({
     ("GET", "/images/{key:path}"),    # R2 image proxy, opaque keys
     # Authenticates in-handler by verifying a Stripe HMAC over the raw request body.
     ("POST", "/billing/webhook"),
-    # Authenticates in-handler by verifying a Svix (Resend) HMAC over the raw body.
-    ("POST", "/webhooks/resend"),
-    # RFC 8058 one-click unsubscribe — the HMAC token in the path IS the auth, and it
-    # must render for a logged-out recipient (no session).
-    ("GET", "/u/{token}"),
-    ("POST", "/u/{token}"),
 })
 
 # Every route under these must resolve to require_admin. `/properties` as a whole is
@@ -50,6 +44,9 @@ _ADMIN_PREFIXES: tuple[str, ...] = (
     "/admin", "/properties/merge", "/labeling",
     "/outreach", "/broker-review", "/skill-refinements", "/location",
     "/autodedup",
+    # Paste-a-building (rule 13) spends an extraction plus one estimation per unit and holds no
+    # account of its own: operator-only since agent platform M0 (#2059).
+    "/buildings",
 )
 
 # Sentinels proving those routers actually mounted. Without this, a mis-mounted router
@@ -80,7 +77,7 @@ def _bucket(route: APIRoute) -> str:
         return "admin"
     if tenant_pool.tenant_conn in calls or deps.verify_jwt in calls:
         return "tenant"
-    if deps.require_token in calls:
+    if deps.require_token in calls or deps.token_claims in calls:
         return "token"
     # account_scope is require_token's reader (`_bearer`: a verified JWT) plus a
     # read scope, so it buckets with it.
@@ -141,6 +138,21 @@ def test_admin_surfaces_require_admin() -> None:
         "Depends(deps.require_admin) — SPA route-gating is a client affordance, not a "
         "security boundary:\n" + "\n".join(offenders)
     )
+
+
+def _takes_force_refresh(route: APIRoute) -> bool:
+    body = route.body_field.field_info.annotation if route.body_field is not None else None
+    return "force_refresh" in getattr(body, "model_fields", {})
+
+
+def test_a_forced_refresh_is_admin_gated_wherever_it_is_accepted() -> None:
+    """A body field `force_refresh` re-buys a cached LLM answer: every route accepting it calls
+    `deps.require_admin_to_force` (M0, #2059). The gate reads the body, so no dependency can carry it."""
+    accepting = [(m, p, r) for m, p, r in _api_routes() if _takes_force_refresh(r)]
+    assert len(accepting) >= 2, "the census found no route taking force_refresh: check how it reads the body"
+    ungated = sorted(f"  {m} {p}" for m, p, r in accepting
+                     if "require_admin_to_force(" not in inspect.getsource(r.endpoint))
+    assert not ungated, "route(s) accept force_refresh without the admin gate:\n" + "\n".join(ungated)
 
 
 def test_no_route_is_unauthenticated_by_accident() -> None:
@@ -205,9 +217,6 @@ _RLS_ONLY_ALLOWLIST: dict[str, str] = {
     "POST /properties/{property_id}/tags": (
         "account trigger-derived from the parent `tags` row (migration 292)"
     ),
-    "POST /properties/{property_id}/notes/{note_id}/attachments": (
-        "account trigger-derived from the parent `property_notes` row (migration 592)"
-    ),
     # Curation + notifications: reads, and UPDATE/DELETE of a row that already exists.
     # An INSERT must NAME its owner (WITH CHECK can validate the account a row claims,
     # never choose one); an UPDATE/DELETE by id is scoped by the SAME policy's USING
@@ -225,17 +234,23 @@ _RLS_ONLY_ALLOWLIST: dict[str, str] = {
         "DELETE by key — migration 610's party policy USING (owner revokes, recipient leaves)"
     ),
     "GET /properties/{property_id}/notes": "RLS-only read (migration 290 on `property_notes`)",
+    "GET /viewings": "RLS-only read (migration 290 on `property_notes`), the caller's own rows",
     "GET /artifact-links": "RLS-only read (migration 599 on `property_artifact_links`)",
     "DELETE /properties/{property_id}/artifact-link": (
         "DELETE of the caller's own row by property — migration 599 USING clause"
     ),
     "PATCH /properties/{property_id}/notes/{note_id}": "UPDATE by id — migration 290 USING clause",
     "DELETE /properties/{property_id}/notes/{note_id}": "DELETE by id — migration 290 USING clause",
-    "GET /properties/{property_id}/notes/{note_id}/attachments/{attachment_id}": (
-        "RLS-only read (migration 592 on `property_note_attachments`)"
+    "GET /properties/{property_id}/attachments": "RLS-only read (migration 660 on `property_attachments`)",
+    "GET /properties/{property_id}/attachments/{attachment_id}": (
+        "RLS-only read (migration 660 on `property_attachments`)"
     ),
-    "DELETE /properties/{property_id}/notes/{note_id}/attachments/{attachment_id}": (
-        "DELETE by id on a child-grain table — migration 592 USING clause"
+    "DELETE /properties/{property_id}/attachments/{attachment_id}": (
+        "DELETE by id — migration 660 USING clause"
+    ),
+    "GET /properties/{property_id}/download.zip": (
+        "RLS-only read of the acting identity's own photos (migration 660 on "
+        "`property_attachments`, `acting_account_ids()`); the ad's data on the service role"
     ),
     "GET /tags": "RLS-only read (migration 290 policy on `tags`)",
     "PATCH /tags/{tag_id}": "UPDATE by id — migration 290 USING clause",
@@ -250,6 +265,42 @@ _RLS_ONLY_ALLOWLIST: dict[str, str] = {
     "PUT /filter-presets/reorder": (
         "UPDATE by a list of ids — migration 290's USING clause is the row set, so another "
         "account's id matches nothing"
+    ),
+    "PUT /filter-presets/layout": (
+        "UPDATE by a list of ids on both tables — the 290 and 672 USING clauses are the row sets, and "
+        "672's (group_id, account_id) key refuses another account's group"
+    ),
+    "GET /filter-preset-groups": "RLS-only read (migration 672 policy on `filter_preset_groups`)",
+    "GET /filter-preset-groups/{group_id}": "RLS-only read (migration 672)",
+    "PUT /filter-preset-groups/{group_id}": "UPDATE by id — migration 672 USING clause",
+    "DELETE /filter-preset-groups/{group_id}": "DELETE by id — migration 672 USING clause",
+    "PUT /filter-preset-groups/reorder": (
+        "UPDATE by a list of ids — migration 672's USING clause is the row set"
+    ),
+    "GET /stats/dashboards": (
+        "RLS-only read — migration 626's tenant policy (own) plus 647's shared-read arm "
+        "(dashboards shared with the caller); labels through share_party_emails()"
+    ),
+    "GET /stats/dashboard": (
+        "RLS-only read of the working board — migration 626's tenant policy (current_account_ids(), "
+        "the caller's own even under X-Act-As); 647's shared arm reads named rows only, so `name IS NULL` "
+        "is the caller's one unnamed row"
+    ),
+    "GET /stats/dashboards/{dashboard_id}": "RLS-only read (migrations 626 + 647, as above)",
+    "PUT /stats/dashboards/{dashboard_id}": (
+        "UPDATE by id — migration 626's USING clause; a shared row is visible, never updatable (404)"
+    ),
+    "DELETE /stats/dashboards/{dashboard_id}": "DELETE by id — migration 626 USING clause",
+    "PUT /stats/dashboards/{dashboard_id}/property-card": (
+        "UPDATE by id under migration 626's USING clause, both statements also naming "
+        "current_account_ids(): another account's or a shared dashboard matches nothing (404)"
+    ),
+    "PUT /stats/dashboards/reorder": (
+        "UPDATE by a list of ids — migration 626's USING clause is the row set, so another "
+        "account's (or a shared) dashboard matches nothing"
+    ),
+    "DELETE /stats/dashboards/{dashboard_id}/shares/{account_id}": (
+        "DELETE by key — migration 647's party policy USING (owner revokes, recipient leaves)"
     ),
     "GET /notifications/subscriptions": (
         "RLS-only read (migration 290 on `notification_subscriptions`)"
@@ -417,6 +468,11 @@ def test_estimation_child_routes_ride_the_tenant_connection() -> None:
 @pytest.mark.parametrize("key", [
     ("POST", "/collections/{collection_id}/shares"),
     ("POST", "/pipeline/shares"),
+    # The push device routes (migration 654) have the same shape: the caller's own account at the edge,
+    # then the service role, since browser roles hold nothing on either push table.
+    ("PUT", "/push/subscription"),
+    ("DELETE", "/push/subscription"),
+    ("POST", "/push/opened"),
 ])
 def test_the_share_routes_open_the_service_role_only_after_their_gate(key: tuple[str, str]) -> None:
     # tenancy.md's second "tenant gate, then a service-role write": a recipient's or a

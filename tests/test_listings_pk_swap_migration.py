@@ -1,7 +1,7 @@
 """Offline guard: the migrations chain must reach the Gate 1 PK swap.
 
 R2 Gate 1 moved listings' PRIMARY KEY from sreality_id onto the surrogate id, but
-it ran live out-of-band (scripts/apply_listings_pk_swap.py) and was never written
+it ran live out-of-band (a dispatch-only script, deleted 2026-10-25) and was never written
 as a numbered file. migrations/ and prod diverged silently: the CI schema replay
 (.github/workflows/migrations.yml) rebuilt a schema whose PK was still on
 sreality_id, so the Gate 2 migration — which needs sreality_id nullable — would

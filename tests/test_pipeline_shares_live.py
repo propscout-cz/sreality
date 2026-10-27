@@ -18,14 +18,14 @@ from typing import Any, NamedTuple
 
 import pytest
 
-from tests._live_property import REQUIRED_DB, _property, cur  # noqa: F401
+from tests._live_property import REQUIRED_DB, _property
 from tests._tenant_scope import scoped
 
 pytestmark = REQUIRED_DB
 
 CURATION = (
     "collections", "tags", "property_notes", "collection_properties", "property_tags",
-    "property_note_attachments", "property_artifact_links", "property_dismissals",
+    "property_attachments", "property_artifact_links", "property_dismissals",
     "property_pipeline", "pipeline_stages", "property_pipeline_events",
 )
 BOARD = ("property_pipeline", "pipeline_stages", "property_pipeline_events")
@@ -71,7 +71,7 @@ def _one(cur: Any, sql: str, params: tuple[Any, ...] = ()) -> Any:
 
 
 @pytest.fixture
-def world(cur: Any) -> _World:  # noqa: F811
+def world(cur: Any) -> _World:
     a, b, c, d = (_signup(cur, k) for k in "abcd")
     card, spare, loose, dismissed = (_property(cur) for _ in range(4))
     entry = _one(cur, "SELECT id FROM pipeline_stages WHERE account_id = %s AND is_entry", (a.acc,))
@@ -110,9 +110,10 @@ def world(cur: Any) -> _World:  # noqa: F811
         (a.acc, card),
     )
     cur.execute(
-        "INSERT INTO property_note_attachments (note_id, account_id, storage_key, filename, "
-        "mime_type, byte_size, sha256_hex) VALUES (%s, %s, 'k', 'a.pdf', 'application/pdf', 1, %s)",
-        (note, a.acc, "0" * 64),
+        "INSERT INTO property_attachments (note_id, account_id, property_id, storage_key, "
+        "filename, mime_type, byte_size, sha256_hex) "
+        "VALUES (%s, %s, %s, 'k', 'a.pdf', 'application/pdf', 1, %s)",
+        (note, a.acc, card, "0" * 64),
     )
     cur.execute(
         "INSERT INTO property_artifact_links (account_id, property_id, url) "
@@ -169,7 +170,7 @@ def _owned(cur: Any, table: str, acc: uuid.UUID) -> int:
     return _one(cur, f"SELECT count(*) FROM {table} WHERE account_id = %s", (acc,))
 
 
-def test_without_the_header_acting_is_identity(cur: Any, world: _World) -> None:  # noqa: F811
+def test_without_the_header_acting_is_identity(cur: Any, world: _World) -> None:
     both = (
         "SELECT (SELECT array_agg(a.account_id ORDER BY a.account_id) FROM acting_account_ids() a), "
         "       (SELECT array_agg(c.id ORDER BY c.id) FROM current_account_ids() c(id)), acting()"
@@ -194,7 +195,7 @@ def test_without_the_header_acting_is_identity(cur: Any, world: _World) -> None:
 
 
 def test_a_read_recipient_reads_the_owners_board_only_and_nothing_of_its_own(
-    cur: Any, world: _World,  # noqa: F811
+    cur: Any, world: _World,
 ) -> None:
     a, b = world.a, world.b
     for table in CURATION:
@@ -223,7 +224,7 @@ def test_a_read_recipient_reads_the_owners_board_only_and_nothing_of_its_own(
     ]
 
 
-def test_a_read_recipient_writes_nothing(cur: Any, world: _World) -> None:  # noqa: F811
+def test_a_read_recipient_writes_nothing(cur: Any, world: _World) -> None:
     a, b = world.a, world.b
     for method in WRITES:
         assert _touched(cur, b, "UPDATE property_pipeline SET stage_id = %s WHERE property_id = %s",
@@ -243,7 +244,7 @@ def test_a_read_recipient_writes_nothing(cur: Any, world: _World) -> None:  # no
 
 
 def test_an_edit_recipient_writes_as_the_owner_and_every_write_is_stamped(
-    cur: Any, world: _World,  # noqa: F811
+    cur: Any, world: _World,
 ) -> None:
     a, c = world.a, world.c
     acting = {"act_as": a.acc, "method": "POST"}
@@ -350,7 +351,7 @@ def test_an_edit_recipient_writes_as_the_owner_and_every_write_is_stamped(
 
 
 def test_acting_never_reaches_the_owners_identity_scoped_rows(
-    cur: Any, world: _World,  # noqa: F811
+    cur: Any, world: _World,
 ) -> None:
     a, c, d = world.a, world.c, world.d
     d_coll = _one(
@@ -367,9 +368,9 @@ def test_acting_never_reaches_the_owners_identity_scoped_rows(
                 "VALUES (%s, 's', '{}')", (a.acc,))
     cur.execute(
         "INSERT INTO notification_dispatches (source_kind, collection_id, change_kind, account_id, "
-        "dedupe_key) VALUES ('share', %s, 'shared', %s, %s), ('share', NULL, 'shared', %s, %s)",
-        (d_coll, a.acc, f"share:collection:{d_coll}:{a.acc}", a.acc,
-         f"share:pipeline:{c.acc}:{a.acc}:edit"),
+        "actor_account_id, event_ref) VALUES ('share', %s, 'shared_collection', %s, %s, NULL), "
+        "('share', NULL, 'shared_pipeline', %s, %s, 'edit')",
+        (d_coll, a.acc, d.acc, a.acc, c.acc),
     )
     cur.execute(
         "INSERT INTO estimation_runs (account_id, source, mode, status, input_spec) "
@@ -398,9 +399,10 @@ def test_acting_never_reaches_the_owners_identity_scoped_rows(
     d_note = _one(cur, "INSERT INTO property_notes (account_id, property_id, body, shared) "
                   "VALUES (%s, %s, 'd-shared', true) RETURNING id", (d.acc, world.spare))
     cur.execute(
-        "INSERT INTO property_note_attachments (note_id, account_id, storage_key, filename, "
-        "mime_type, byte_size, sha256_hex) VALUES (%s, %s, 'k', 'd.pdf', 'application/pdf', 1, %s)",
-        (d_note, d.acc, "1" * 64),
+        "INSERT INTO property_attachments (note_id, account_id, property_id, storage_key, "
+        "filename, mime_type, byte_size, sha256_hex) "
+        "VALUES (%s, %s, %s, 'k', 'd.pdf', 'application/pdf', 1, %s)",
+        (d_note, d.acc, world.spare, "1" * 64),
     )
     cur.execute("INSERT INTO collection_shares (collection_id, recipient_account_id) VALUES (%s, %s)",
                 (dc_coll, c.acc))
@@ -408,7 +410,7 @@ def test_acting_never_reaches_the_owners_identity_scoped_rows(
         ("SELECT count(*) FROM collections WHERE id = %s", (dc_coll,)),
         ("SELECT count(*) FROM collection_properties WHERE collection_id = %s", (dc_coll,)),
         ("SELECT count(*) FROM property_notes WHERE id = %s", (d_note,)),
-        ("SELECT count(*) FROM property_note_attachments WHERE note_id = %s", (d_note,)),
+        ("SELECT count(*) FROM property_attachments WHERE note_id = %s", (d_note,)),
     )
     for sql, params in d_rows:
         assert _rows(cur, c, sql, params) == [(1,)], f"the D->C share seed is not visible: {sql}"
@@ -419,7 +421,7 @@ def test_acting_never_reaches_the_owners_identity_scoped_rows(
 
 
 def test_a_header_without_a_share_reads_nothing_not_the_callers_own(
-    cur: Any, world: _World,  # noqa: F811
+    cur: Any, world: _World,
 ) -> None:
     a, d = world.a, world.d
     assert _rows(cur, d, "SELECT count(*) FROM pipeline_stages")[0][0] > 0
@@ -431,7 +433,7 @@ def test_a_header_without_a_share_reads_nothing_not_the_callers_own(
         assert _rows(cur, d, "SELECT count(*) FROM acting_account_ids()", act_as=act_as) == [(0,)]
 
 
-def test_a_revoke_denies_on_the_next_statement(cur: Any, world: _World) -> None:  # noqa: F811
+def test_a_revoke_denies_on_the_next_statement(cur: Any, world: _World) -> None:
     a, c = world.a, world.c
     assert _rows(cur, c, "SELECT count(*) FROM pipeline_stages", act_as=a.acc) == [
         (_owned(cur, "pipeline_stages", a.acc),)
@@ -444,7 +446,7 @@ def test_a_revoke_denies_on_the_next_statement(cur: Any, world: _World) -> None:
                     (world.second, world.card), act_as=a.acc, method="PATCH") == 0
 
 
-def test_the_label_door_names_both_kinds_counterparties(cur: Any, world: _World) -> None:  # noqa: F811
+def test_the_label_door_names_both_kinds_counterparties(cur: Any, world: _World) -> None:
     a, b, c, d = world.a, world.b, world.c, world.d
     labels = "SELECT account_id, email FROM share_party_emails()"
     assert set(_rows(cur, a, labels)) == {(b.acc, b.email), (c.acc, c.email)}
@@ -463,7 +465,7 @@ def test_the_label_door_names_both_kinds_counterparties(cur: Any, world: _World)
 
 
 def test_the_board_views_read_under_every_tenant_with_and_without_the_header(
-    cur: Any, world: _World,  # noqa: F811
+    cur: Any, world: _World,
 ) -> None:
     for t in (world.a, world.b, world.c, world.d):
         for act_as in (None, world.a.acc):
@@ -476,7 +478,7 @@ def test_the_board_views_read_under_every_tenant_with_and_without_the_header(
 
 
 def test_only_the_api_creates_a_share_and_either_party_ends_it(
-    cur: Any, world: _World,  # noqa: F811
+    cur: Any, world: _World,
 ) -> None:
     a, b, c, d = world.a, world.b, world.c, world.d
     for t, owner, recipient in ((a, a, d), (b, a, b), (c, c, a), (d, a, d)):

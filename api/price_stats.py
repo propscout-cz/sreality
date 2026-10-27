@@ -19,7 +19,6 @@ from fastapi import HTTPException
 from psycopg.rows import dict_row
 
 from api import schemas as s
-from scraper.github_dispatch import post_workflow_dispatch
 from toolkit import price_stats as analysis
 
 if TYPE_CHECKING:
@@ -133,11 +132,13 @@ def run_dataset_now(conn: "psycopg.Connection", dataset_id: int) -> dict[str, An
             "(repo Actions: read+write) as GH_DISPATCH_TOKEN; the dataset will "
             "otherwise scrape on the next scheduled run.",
         )
-    repo = os.environ.get("GH_REPO", "waiff/sreality")
+    repo = os.environ.get("GH_REPO", "propscout-cz/sreality")
     try:
-        resp = post_workflow_dispatch(
-            repo, _DISPATCH_WORKFLOW, token,
-            {"ref": "main", "inputs": {"mode": "full", "dataset_id": str(dataset_id)}}, timeout=15,
+        resp = requests.post(
+            f"https://api.github.com/repos/{repo}/actions/workflows/{_DISPATCH_WORKFLOW}/dispatches",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+                     "X-GitHub-Api-Version": "2022-11-28"},
+            json={"ref": "main", "inputs": {"mode": "full", "dataset_id": str(dataset_id)}}, timeout=15,
         )
     except requests.RequestException as exc:
         raise HTTPException(502, f"GitHub dispatch request failed: {exc}")

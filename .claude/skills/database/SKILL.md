@@ -97,21 +97,23 @@ tenant-scoped:
   `tenant_transaction(claims, act_as=, method=)` is the same block as a context manager, for one named
   exception (`references/tenancy.md`): it commits before slow service-role work.
 
-**Pooler-safe mutual exclusion: lease-row CAS, not session advisory locks (migration
-279, PR #717).** `pg_advisory_lock`/`unlock` are **session-scoped** — sound only on a
-direct or session-pooled connection. Every service-role Python path uses the
-**transaction-mode** pooler (`SUPABASE_DB_URL`, port 6543); under autocommit each
-statement is its own transaction and can land on a *different* physical backend, so a
-lock taken on backend X and released on backend Y silently fails to release — the lock
-strands (caught live: PR #716's property-maintenance serialization stranded within
-minutes, the "holder" pid was mid-way through an unrelated statement on another backend).
-The pooler-proof primitive is a **single-row lease** claimed by one atomic
-`UPDATE ... RETURNING` compare-and-set — atomic on whatever backend it lands on, no
-session state, with an expiry that self-heals a crashed holder
-(`property_maintenance_lease`, `scripts/recompute_property_stats.py`). pg_cron functions
-(migration 277's Browse-rebuild included) are the one exception: each pg_cron call is a
-single local session, so a session advisory lock there is sound — don't generalize the
-lease-row fix to code that never sees the pooler.
+**Mutual exclusion over the pooler: three shapes, never a session advisory lock from Python.** Service-role
+Python runs on the **transaction-mode** pooler (`SUPABASE_DB_URL`, port 6543), where autocommit statements land on
+different backends, so a session `pg_advisory_lock` strands on the backend that took it (PR #716's maintenance lock
+did within minutes, hence migration 279).
+- **Singleton lease** (one holder; a crashed one's lease expires): every new one goes through `scraper/job_lease.py`, one
+  `scheduled_jobs` row per lease — `held` for a lane (yields a bool and never renews: its TTL must outlast the pass;
+  a retired row refuses it for good, so the job registry (#2024) retires only rows it registered, `registry_at` set),
+  `claim` / `renew` / `Lease.fenced` / `release` for a scheduled job, `job_runs`' unique open-run indexes (per job,
+  per resource) refusing a lost race. `tests/test_lease_census.py` fails CI on lease CAS text anywhere else and
+  ledgers the three older copies (`property_maintenance_lease`, `broker_resolution_lock`, `autodedup.rt_lease`).
+  Under READ COMMITTED each later statement in the CAS's transaction sees rows committed after it: re-check what
+  the CAS proved, or let a unique index decide (job_lease's lost-run close, #2022).
+- **Work-queue claim** (many rows, many workers): `FOR UPDATE SKIP LOCKED` (`listing_detail_queue`,
+  `dirty_locations`, `notification_deliveries`, …) — not a lease.
+- **One-transaction guard**: `pg_(try_)advisory_xact_lock`, released on commit, rollback and cancel. SQL functions
+  take it, pg_cron's rebuilds since migration 522 (their session lock's unlock handler never ran on a cancel).
+**A pg_cron command emits no NOTICE before its last statement**: a flushed NOTICE blocks pg_cron's single launcher until the command ends, freezing every job start (migration 658: a dead `drop table if exists`, ~68 s four times an hour).
 
 **Supabase MCP.** Claude Code has direct read/write access to the production Supabase
 project via the MCP integration. Use it for: inspecting the live schema, running SELECT
@@ -149,7 +151,7 @@ where a caller needs it.
 - **Open with `set local lock_timeout = '5s';` when a migration GRANT/REVOKEs or
   CREATE-OR-REPLACEs a hot or cron-refreshed relation** (any matview, `browse_list`, `listings`).
   Those take ACCESS EXCLUSIVE and a whole-transaction loop holds every lock it already took —
-  without a timeout it queues behind, or blocks, the `*/10` health refresh or the `*/15` list rebuild.
+  without a timeout it queues behind, or blocks, the `*/15` list rebuild or an hourly matview refresh.
 - **Destructive migrations** (`DROP TABLE`/`COLUMN`, type-changing `ALTER`, `DELETE`
   without `WHERE`, `TRUNCATE`) — **pause for explicit operator OK** ("yes, apply it") and
   back up the affected data *first* (`backup_before_drop.yml`, to R2). There's no staging
@@ -205,13 +207,13 @@ sanctioned second, `acting_account_ids()`, read only by the eleven curation poli
 
 Per-table RLS pattern, repeated across migrations 290 (5 live curation tables: `collections`, `tags`,
 `property_notes`, `filter_presets`, `notification_subscriptions`; its sixth was dropped by 639),
-291 (`estimation_runs`/`building_runs`, `account_id` NULLABLE, defaults to SYSTEM), 292 (6
+291 (`estimation_runs`/`building_runs`, `account_id` NULLABLE, defaults to SYSTEM; since 679 the browser writes only `estimation_runs.scenario`), 292 (6
 child-grain tables incl. `notification_dispatches`, `account_id` **trigger-derived** from the
 parent row, not caller-supplied), and 294 (pipeline tables): `revoke all ... from anon,
 authenticated` → `grant select/insert/update/delete ... to authenticated` → a `for all
 using/with check (account_id in (select current_account_ids()))` policy. **An integer surrogate id is
 `bigint generated always as identity`** (611), never `bigserial`: a browser-chosen id pre-claims the sequence
-and breaks every account's inserts; a uuid id (`gen_random_uuid()`) cannot be pre-claimed and stays as is. **Sharing (610)** widens READS only: `collection_shares` (owner-stamped, no browser INSERT) + four `FOR SELECT` `*_shared_read` policies; writes stay owner-only; a share is never membership (`references/tenancy.md`). **Delegation (641)**: a pipeline share lets its recipient ACT AS the owner (`x-act-as` header → `acting_account_ids()`, fail-closed, read mode on GET only, every write stamped in `delegated_edits`) on the eleven curation tables (a read share: the three pipeline tables only); every other policy keeps `current_account_ids()` (`references/tenancy.md` § Delegation).
+and breaks every account's inserts; a uuid id (`gen_random_uuid()`) cannot be pre-claimed and stays as is. **Sharing (610; Stats dashboards 647, same shape)** widens READS only: `collection_shares` (owner-stamped, no browser INSERT) + four `FOR SELECT` `*_shared_read` policies; writes stay owner-only; a share is never membership (`references/tenancy.md`). **Delegation (641)**: a pipeline share lets its recipient ACT AS the owner (`x-act-as` header → `acting_account_ids()`, fail-closed, read mode on GET only, every write stamped in `delegated_edits`) on the eleven curation tables (a read share: the three pipeline tables only); every other policy keeps `current_account_ids()` (`references/tenancy.md` § Delegation).
 
 `property_pipeline` gets a **composite PK swap**, `(property_id)` → `(account_id,
 property_id)`, migration 295 — the one table where the PK itself changed. **Explicitly
@@ -260,10 +262,10 @@ defined once) into `browse_list` — an **UNLOGGED
 table**, blue-green rebuilt every 15 minutes by a `SECURITY DEFINER` pg_cron function
 (`rebuild_browse_list()`, `pg_try_advisory_xact_lock` guards overlapping runs, `ANALYZE`
 *before* the swap is mandatory or the planner uses stale stats on the fresh table). Since 630 it lays the table out by category, lat, lng, builds `browse_list_map_idx` (the map index is only cheap on a heap in its own order) and, once its DROP holds the lock, re-patches every property a `property_merge_events` row created or undid since the previous run (less 15 min).
-The map reads `browse_list` too: 631 dropped the 30-min `properties_map_mv` matview and its rebuild. (The publication-gate predicate is **gone** from the projection as of migration
-475 — flipped inert in August, then removed with the rest of the legacy dedup engine, rule
-#15. `properties.published_at` survives as a frozen historical column that constrains
-nothing.) Moving the rebuilds to pg_cron retired the old `scripts/refresh_map_mv.py` GH Actions cron entirely —
+The map reads `browse_list` too: 631 dropped the 30-min `properties_map_mv` matview and its rebuild. (The legacy publication-gate predicate went in migration
+475 with the removed engine, rule #15; `properties.published_at` survives as a frozen historical column that
+constrains nothing. Since 669 `browse_projection`'s WHERE carries rule 16's publication rule, an inline column expression
+(no function, so no per-row call): the live fact is `properties.settled_at` (668), spelled once in `toolkit/publication.py`.) Moving the rebuilds to pg_cron retired the old `scripts/refresh_map_mv.py` GH Actions cron entirely —
 pg_cron runs on-the-minute where GH Actions cron was measured ~2× jittered (see
 `gh-actions-cron-throttle-fleet` if you need the numbers).
 
@@ -342,18 +344,15 @@ completed by 440) — one row per artifact carrying `producer` / `host` / `caden
 `last_rows`. It **replaced** the singleton `browse_read_model_state`, which migration 440
 dropped along with its `_public` view, 437's temporary UNION adapter, and the SPA reader —
 every artifact is an ordinary row now. Same posture as 276: RLS on with zero policies,
-everything revoked, published through `derived_artifacts_public` (enumerated columns,
-`authenticated` only, not `security_invoker` — owner rights are what read through the RLS
-wall). **A new derived artifact needs a registry row**, and
+everything revoked, read by the backend only (the `jobs` check's `artifact/<name>` cells among
+them; migration 643 dropped its browser view `derived_artifacts_public`). **A new derived artifact needs a registry row**, and
 `tests/test_derived_artifacts_registry.py` goes RED without one — its `_W7_BACKLOG` exemption
-set is now empty and **nothing may be added to it**. Three budgets are deliberately NOT their
-cadence: the six health matviews get 45 min (not 10 — the 30d p95 gap is 15.8 min and a 10-min
-budget reads red on the healthy case) and `broker_region_type_stats` 30 h (not 24 — its daily
-sweep itself runs up to 2h01m, so 24 h alarms on every healthy run), both measured in 440's
-header; `property_sweep` (migration 622, the daily full sweep's completed cycle, stamped by
-`recompute_property_stats` in place of `app_settings.property_sweep_last_complete`) gets 38 h,
-because the `jobs` check adds GitHub's 18 h delivery slack to a `github-actions` row: Problem
-at 56 h, as ruled for the two-run cycle. `rent_map_cells`'s `host` is honestly `api-request`:
+set is now empty and **nothing may be added to it**. Two budgets are deliberately NOT their
+cadence: `broker_region_type_stats` 30 h (not 24 — its daily sweep itself runs up to 2h01m, so
+24 h alarms on every healthy run; measured in 440's header) and `property_sweep` (migration 622,
+the daily full sweep's completed cycle, stamped by `recompute_property_stats`) 38 h, because the
+`jobs` check adds GitHub's 18 h delivery slack to a `github-actions` row: Problem at 56 h, as
+ruled for the two-run cycle. `rent_map_cells`'s `host` is honestly `api-request`:
 it is refreshed inside a FastAPI request handler — don't launder it into a cron string.
 `llm_cost_rollup_state` is a watermark FOR an artifact, not an artifact, and is deliberately
 unregistered.
@@ -371,10 +370,8 @@ revoked from `public` *and* `anon`/`authenticated` (PostgreSQL's built-in defaul
 EXECUTE to PUBLIC, so revoking only the named roles leaves it callable). **Its UPDATE is
 deliberately a silent no-op on an unregistered name** — a producer must never fail because a
 metadata row is missing — a hole closed offline by `tests/test_derived_artifacts_stamping.py`,
-which extracts every name literal from both the repo tree and `pg_proc.prosrc`, checks every
-`producer` resolves to a real function or file, and pins the health fan-out to **six
-individual stamps, each right after its own REFRESH** (six real per-matview
-`last_duration_ms` values, since `clock_timestamp()` advances inside a transaction).
+which extracts every name literal from both the repo tree and `pg_proc.prosrc` and checks every
+`producer` resolves to a real function or file.
 `llm_cost_hour_rollup` keeps its own inline UPDATE because it must pass its own watermark as
 `complete_through`; don't unify it onto the helper without a fourth parameter.
 
@@ -394,7 +391,7 @@ claimed otherwise and drove the blocking design — never re-derive that claim f
 Every matview therefore needs one plain unique index (`tests/test_matview_indexes.py` pins
 this for all matviews, plus the exact broker index set — migration 508's DROP+CREATE
 silently lost 414's covering index and no test noticed). Pre-578 SQL producers
-(`refresh_health_matviews`, `refresh_location_pin_audit_mv`, the blue-green `rebuild_browse_list()`) keep
+(`refresh_location_pin_audit_mv`, the blue-green `rebuild_browse_list()`) keep
 their pinned inline shapes; new SQL producers call the chokepoint.
 
 **A `SECURITY DEFINER` gate in a view's WHERE is per-row ONLY when it is combined with a
@@ -483,12 +480,12 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   reading in `claims_intake`, a retraction, a retirement). The resolver reads only
   ACTIVE-contract + operator claims, so a wrong contract is RETRACTED (DELETE + re-resolve enqueue,
   `contracts.py --retract`) and a merely SUPERSEDED version's claims are deleted with NO enqueue by
-  `location_claims_retire.yml` (backup artifact, then keyset batches) — run it after a retirement. The live set is `location_claims`,
-  `listing_location`, `location_granularity_rank`, `dirty_locations`, `location_jobs`,
+  `location_claims_retire.yml` (backup to R2 `backups/retired-claims/`, then keyset batches) — run it after a retirement. The live set is `location_claims`,
+  `listing_location`, `location_granularity_rank`, `dirty_locations`, `scheduled_jobs`,
   `portal_contracts`/`_entries` + RÚIAN. Every heavy batch lane shares the ONE `location-batch`
   Actions group + arms `SET LOCAL statement_timeout` — **except the resolve DRAIN**: latency-bound
   not instance-bound, it runs outside the group and from the Railway worker too, serialized ONLY by
-  the `location_jobs` lease + pass lock — **idle it before a heavy batch**; `full-resolve` DOES stay
+  the `scheduled_jobs` lease + pass lock (pause the row, `paused_until`) — **idle it before a heavy batch**; `full-resolve` DOES stay
   in the group. RÚIAN loaders + drain run on **`connect_session()`** (the loader refuses the fallback
   — a 3 M-row COPY needs session GUCs). Rationale: `docs/architecture.md` § Location data.
 

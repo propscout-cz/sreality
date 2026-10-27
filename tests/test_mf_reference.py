@@ -399,7 +399,7 @@ def _property(cur: Any, *, obec: int, katastr: int | None = None, disposition: s
         "UPDATE properties SET category_main = 'byt', category_type = 'prodej', "
         "  current_price_czk = %s, area_m2 = %s, disposition = %s, condition = 'dobry', "
         "  has_balcony = true, garage = true, has_lift = false, building_type = 'cihla', "
-        "  status = 'active', is_active = true, published_at = now(), repr_listing_ref_id = %s, "
+        "  status = 'active', is_active = true, settled_at = now(), repr_listing_ref_id = %s, "
         "  location_listing_ref_id = %s "
         " WHERE id = %s",
         (price, area, disposition, lid, lid, pid),

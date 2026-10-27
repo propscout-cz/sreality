@@ -1,9 +1,10 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { useSpaLinkDelegation } from '@/lib/linkGestures';
+import { useNewTabProps, useSpaLinkDelegation } from '@/lib/linkGestures';
 import { YmPicker, YM_SELECT_CLS } from '@/components/YmPicker';
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import { createMap } from '@/lib/basemap';
-import { useMapFeatureHover } from '@/lib/useMapFeatureHover';
+import type { HaloPoint } from '@/lib/hoverSync';
+import { haloFeatures, useMapFeatureHover } from '@/lib/useMapFeatureHover';
 import {
   COUNTS,
   COUNT_INK,
@@ -18,10 +19,9 @@ import type { CityIndexDefinition, CuratedCity, MapCounts, MapRow } from '@/lib/
 import type { CenterRadius, MapBounds } from '@/lib/filters';
 import { groupForPicker, indexLabel, pinnedFirst } from '@/lib/cityIndexes';
 import { legendGradient, mapRampStops, normalizeIndexValue } from '@/lib/cityIndexScale';
-import { fmtCzk, fmtArea, fmtMeasuredPricePerM2, fmtRelative, fmtAbsolute } from '@/lib/format';
-import { PPM2_UNIT, areaKindOf, ppm2BasisFromToken } from '@/lib/measure';
+import { czPlural } from '@/lib/format';
+import { PPM2_UNIT, ppm2BasisFromToken } from '@/lib/measure';
 import { PIN_LIMIT_MAX, PIN_LIMIT_MIN, parsePinLimit, type PriceMetric } from '@/lib/browseState';
-import { listingKindLabel } from '@/lib/enums';
 import type { PriceStatDataset, PriceStatGrowthRow, PriceStatGrowthShape } from '@/lib/priceStats';
 import {
   GROWTH_METRICS,
@@ -34,11 +34,16 @@ import {
   type HoverData,
 } from '@/lib/growthChoropleth';
 import HoverChart from '@/components/HoverChart';
-import MapOverlayControls from '@/components/MapOverlayControls';
-import { OverlayChip, OverlayPanel } from '@/components/OverlayChip';
+import { SegmentedBar, type SegmentOption } from '@/components/controls';
+import MapOverlayControls, { MapOverlayLegends } from '@/components/MapOverlayControls';
+import { MapLegendCard, OverlayChip, OverlayPanel } from '@/components/OverlayChip';
+import {
+  LayersIcon, MinusIcon, PlusIcon, RailButton, RailFlyout, RailGroup, ShowAllIcon, SlidersIcon, useRailPanel,
+} from '@/components/MapRail';
 import { escapeHtml } from '@/lib/escapeHtml';
+import { usePersistedFlag } from '@/lib/persistedFlag';
 import { circleRing } from '@/lib/geoRing';
-import { propertyPath } from '@/lib/listingUrl';
+import { listingPopupHtml } from '@/lib/listingPopupHtml';
 import {
   overlayFillIds,
   overlayClickOwner,
@@ -50,11 +55,13 @@ import { parseLayers, type MapOverlayRegistry } from '@/lib/mapOverlays';
 import {
   drawnUncertaintyRadiusM,
   isPinExact,
-  pinPrecisionLabel,
   uncertaintyPixelsAtZoom0,
 } from '@/lib/uncertaintyCircle';
 
 const psgLayerId = (m: GrowthMetric) => `psg-${m}`;
+
+/* Whether the map's layer keys are folded to their button (per browser). */
+const LEGENDS_FOLDED_KEY = 'sreality.browse.mapLegendsFolded';
 
 /* The reference overlays sit under the growth choropleth's first layer — so
  * under the city polygons and the listings too — where the MF rent map and the
@@ -73,6 +80,11 @@ const emptyCenterCircle: GeoJSON.Feature<GeoJSON.Polygon> = {
   type: 'Feature',
   properties: {},
   geometry: { type: 'Polygon', coordinates: [[]] },
+};
+
+const viewBounds = (map: maplibregl.Map): MapBounds => {
+  const b = map.getBounds();
+  return { west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() };
 };
 
 /* Fallback shape for a curated city that has no municipality boundary
@@ -120,17 +132,30 @@ const formatPriceLabel = (r: MapRow, metric: PriceMetric): string => {
   return `${czPriceCompact.format(r.price_per_m2)}\u00a0${PPM2_UNIT[basis]}`;
 };
 
-/* `pin_exact` picks the pin's face (lib/uncertaintyCircle.isPinExact): a solid
- * dot for a pin placed on a building, an open ring for anything coarser. Baked
- * per feature so the rule stays in TypeScript, where it is tested, and the paint
- * expression only reads a boolean. */
+/* `pin_exact` picks the pin's black outer contour (lib/uncertaintyCircle.isPinExact):
+ * present for a pin placed on a building, absent for anything coarser. Baked per
+ * feature so the rule stays in TypeScript, where it is tested, and the paint
+ * expression only reads a boolean. `is_active` picks the fill: the pin colour, or white and
+ * transparent. */
 type MapFeatureProps = MapRow & { price_label: string; pin_exact: boolean };
 type FC = GeoJSON.FeatureCollection<GeoJSON.Point, MapFeatureProps>;
 
 /* The pin's paint, shared with the legend swatches so the two cannot drift. The
- * basemap is not themed, so these are the map's literals, not theme tokens. */
-const PIN_COLOR = '#3c6e63';
-const PIN_RING_FILL = '#ffffff';
+ * basemap is not themed, so these are the map's literals, not theme tokens.
+ * PIN_COLOR is magenta because it is the one hue nothing else on this map wears: the
+ * liberty basemap (cream, green, blue, yellow roads), every overlay colour (reds,
+ * orange, yellow, greens, blues, purples) and the ochre hover ring are all >= 46 CIE76
+ * away. 3.7:1 on the worst basemap fill, 3.2:1 against the black contour. */
+const PIN_COLOR = '#b2067e';
+const PIN_WHITE = '#ffffff';
+const PIN_CONTOUR = '#000000';
+/* An inactive pin keeps its shape and fades: white transparent fill, dimmed contours. */
+const PIN_INACTIVE_OPACITY = 0.55;
+const PIN_RADIUS = 5;
+const PIN_RADIUS_HOVER = 8;
+const PIN_STROKE = 1.5;
+const PIN_STROKE_HOVER = 3;
+const PIN_CONTOUR_WIDTH = 1;
 
 const toFeatureCollection = (rows: MapRow[], metric: PriceMetric): FC => ({
   type: 'FeatureCollection',
@@ -138,7 +163,7 @@ const toFeatureCollection = (rows: MapRow[], metric: PriceMetric): FC => ({
     type: 'Feature' as const,
     /* Stable feature id lets maplibre's setFeatureState target this
      * point even after the source data is replaced — that's what
-     * powers the cross-source hover highlight (cards / table → map).
+     * powers the cross-source hover highlight (cards → map).
      * The surrogate listing_id (never null), NOT sreality_id — a null
      * feature id would make setFeatureState a no-op post-Gate-2. */
     id: r.listing_id,
@@ -180,6 +205,14 @@ export interface MapFlyToCommand {
   lat: number;
   lng: number;
   zoom?: number;
+  ts: number;
+}
+
+/* Imperative "put this box in the frame" command — a loaded preset's saved
+ * area. `ts` stamps it like MapFlyToCommand's, so loading the same preset
+ * again re-frames its area after a pan. */
+export interface MapFrameCommand {
+  bounds: MapBounds;
   ts: number;
 }
 
@@ -264,7 +297,8 @@ interface Props {
   isLoading: boolean;
   /* Bounds the URL says the map should be showing. The map applies it
    * once on mount and then ignores future updates — it's the source
-   * of truth for its own viewport. */
+   * of truth for its own viewport; only a `frame` command moves it to
+   * a box from outside. */
   bounds: MapBounds | null;
   /* Fires on user-driven pan/zoom (we ignore programmatic moves).
    * `null` means "the operator cleared the map area" (Reset-view).
@@ -277,16 +311,14 @@ interface Props {
    * mouseenter/mouseleave events outward through onHover. */
   hoveredIds: ReadonlySet<number>;
   onHover: (ids: ReadonlyArray<number> | null) => void;
-  /* Which pane originated the current hover. The locator halo renders
-   * only for 'list' hovers — echoing a map-origin hover back onto the
-   * map would just redraw under the cursor (and a count-mark hover would
-   * drop dozens of halos at once). */
-  hoverOrigin?: 'map' | 'list' | null;
+  /* The locator halo's points: the hovered cards' own rows (HoverTarget), so the
+   * halo lands even when the map holds no row for the property. */
+  haloPoints: ReadonlyArray<HaloPoint>;
   /* When set (i.e. the operator chose centre+radius mode in the
    * sidebar) the map renders a dashed copper circle around the
    * point so the cohort's geographic scope is visible. The circle
    * is purely visual — the cohort filtering happens client-side
-   * via an approximate bbox in queries.effectiveBbox. */
+   * via the circumscribed square in filters.effectiveBbox. */
   centerCircle: CenterRadius | null;
   /* Latest "fly to this place" command from outside (e.g. a District
    * typeahead pick). The map watches the prop's identity and animates
@@ -294,6 +326,10 @@ interface Props {
    * write back to the URL bbox — the existing chip-based district
    * filter handles cohort narrowing. */
   flyTo?: MapFlyToCommand | null;
+  /* Latest "frame this box" command (a preset load). The map fits the box
+   * when the prop's identity changes; a command older than this map is not
+   * replayed — its mount already fitted the URL's box. */
+  frame?: MapFrameCommand | null;
   /* The "Explore area" origin property, rendered as a persistent highlighted
    * pin independent of the filter cohort (see AnchorPoint). null/undefined on
    * the Browse page — the anchor source then stays empty and Browse is
@@ -379,9 +415,10 @@ export default function ListingMap({
   onBoundsChange,
   hoveredIds,
   onHover,
-  hoverOrigin = null,
+  haloPoints,
   centerCircle,
   flyTo,
+  frame,
   anchor = null,
   cities,
   cityPolygons,
@@ -445,8 +482,9 @@ export default function ListingMap({
   useEffect(() => {
     setColorByMin(null);
   }, [colorByIndex?.index_name]);
-  /* The map fits to results exactly once — the first time a non-empty
-   * row set arrives after the map is ready. Subsequent filter changes
+  /* The map fits to results at most once — the first time a non-empty
+   * row set arrives after the map is ready, unless the operator has
+   * already moved it (the moveend handler). Subsequent filter changes
    * never re-zoom, so the operator stays anchored on whatever area
    * they're examining. The Reset-view control offers an explicit
    * opt-in if they want to widen back to the full cohort. */
@@ -471,14 +509,23 @@ export default function ListingMap({
    * placed" for the whole view at once. */
   const pinFaces = useMemo(() => {
     let exact = 0;
-    for (const r of rows) if (isPinExact(r)) exact += 1;
-    return { exact, approx: rows.length - exact };
+    let inactive = 0;
+    for (const r of rows) {
+      if (isPinExact(r)) exact += 1;
+      if (!r.is_active) inactive += 1;
+    }
+    return { exact, approx: rows.length - exact, inactive };
   }, [rows]);
   /* Same ref trick for the hover emitter — the maplibre listeners
    * are registered once at mount and must keep reading the latest
    * callback without rebinding. */
   const onHoverRef = useRef(onHover);
   onHoverRef.current = onHover;
+  /* And for the popup's "View details →": a new tab on the desktop, like the
+   * Browse card beside the map (lib/linkGestures `useNewTabProps`). */
+  const newTab = useNewTabProps();
+  const newTabRef = useRef(newTab);
+  newTabRef.current = newTab;
   /* When centre+radius mode is active the `moveend` handler must
    * skip emitting bounds — the cohort filters by the dashed circle,
    * not the viewport. Suppression flag rather than removing the
@@ -495,11 +542,12 @@ export default function ListingMap({
   useEffect(() => {
     if (!containerRef.current) return;
     /* Scale sits bottom-LEFT (createMap default) so it never collides with the
-     * OpenFreeMap attribution; the bottom-left city controls are lifted clear
-     * of it below. */
+     * OpenFreeMap attribution; the layer keys are lifted clear of it below.
+     * The zoom buttons are the rail's, so createMap adds none. */
     const map = createMap(containerRef.current, {
       center: [PRAGUE.lng, PRAGUE.lat],
       zoom: PRAGUE.zoom,
+      navigationControl: false,
     });
     mapRef.current = map;
 
@@ -727,6 +775,32 @@ export default function ListingMap({
         },
       });
 
+      /* The black outer contour of an exact pin (building / address). A layer of
+       * its own because a circle has ONE stroke, and the white (active) or pin-coloured
+       * (inactive) one is taken. A stroke is drawn OUTSIDE the radius, so this
+       * circle's radius is the pin's radius plus that stroke's width. Added before
+       * `point` so the pin sits on top; never a hit target. */
+      map.addLayer({
+        id: 'point-contour',
+        type: 'circle',
+        source: 'listings',
+        filter: ['==', ['get', 'pin_exact'], true],
+        paint: {
+          'circle-radius': [
+            'case',
+            ['boolean', ['feature-state', 'hovered'], false], PIN_RADIUS_HOVER + PIN_STROKE_HOVER,
+            PIN_RADIUS + PIN_STROKE,
+          ],
+          'circle-opacity': 0,
+          'circle-stroke-color': PIN_CONTOUR,
+          'circle-stroke-width': PIN_CONTOUR_WIDTH,
+          'circle-stroke-opacity': [
+            'case',
+            ['get', 'is_active'], 1, PIN_INACTIVE_OPACITY,
+          ],
+        },
+      });
+
       map.addLayer({
         id: 'point',
         type: 'circle',
@@ -734,40 +808,38 @@ export default function ListingMap({
         paint: {
           /* feature-state.hovered drives the bumped radius / ochre
            * stroke — the highlight reads as "selected", not "different
-           * kind of pin". The kind is `pin_exact`: a solid dot for a pin
-           * placed on a building, an open ring (same size, green edge)
-           * for one placed only to a street, a quarter or a town. */
+           * kind of pin". The kind is `is_active`: a pin-coloured dot with a white
+           * contour, or a white transparent one with a pin-coloured contour. */
           'circle-radius': [
             'case',
-            ['boolean', ['feature-state', 'hovered'], false], 8,
-            5,
+            ['boolean', ['feature-state', 'hovered'], false], PIN_RADIUS_HOVER,
+            PIN_RADIUS,
           ],
           'circle-color': [
             'case',
-            ['boolean', ['get', 'pin_exact'], false], PIN_COLOR,
-            PIN_RING_FILL,
+            ['get', 'is_active'], PIN_COLOR,
+            PIN_WHITE,
           ],
           'circle-stroke-color': [
             'case',
             ['boolean', ['feature-state', 'hovered'], false], '#b58438',
-            ['boolean', ['get', 'pin_exact'], false], '#ffffff',
+            ['get', 'is_active'], PIN_WHITE,
             PIN_COLOR,
           ],
           'circle-stroke-width': [
             'case',
-            ['boolean', ['feature-state', 'hovered'], false], 3,
-            ['boolean', ['get', 'pin_exact'], false], 1.5,
-            2,
+            ['boolean', ['feature-state', 'hovered'], false], PIN_STROKE_HOVER,
+            PIN_STROKE,
           ],
-          /* Stroke fades with the fill: a ring IS its stroke, so dimming only
-             the fill would leave an inactive ring looking active. */
+          /* Stroke fades with the fill: the inactive pin IS its contours, so
+             dimming only the fill would leave an inactive pin looking active. */
           'circle-opacity': [
             'case',
-            ['get', 'is_active'], 1, 0.55,
+            ['get', 'is_active'], 1, PIN_INACTIVE_OPACITY,
           ],
           'circle-stroke-opacity': [
             'case',
-            ['get', 'is_active'], 1, 0.55,
+            ['get', 'is_active'], 1, PIN_INACTIVE_OPACITY,
           ],
         },
       });
@@ -854,7 +926,7 @@ export default function ListingMap({
           className: 'listing-popup',
         })
           .setLngLat(at)
-          .setHTML(popupHtml(props));
+          .setHTML(listingPopupHtml(props, newTabRef.current));
         /* The circle lives exactly as long as the popup that explains it: its
          * ×, a click elsewhere on the map, or the next popup replacing it all
          * end in `close`. */
@@ -1002,7 +1074,7 @@ export default function ListingMap({
        * dedup, no id-matching needed). Reuses the estimation ComparablesMap
        * subject recipe (#b6612d copper, halo + white-stroked pin) so the
        * "highlighted landmark" idiom is one vocabulary app-wide; slightly
-       * larger so it reads as "the one you came from" against the green
+       * larger so it reads as "the one you came from" against the pin-coloured
        * cohort. The pin dims for an inactive origin, the listings convention.
        * Style-only: no hover-sync, no click handler (a deliberate non-entry
        * into the map's interaction surface — it's a fixed "you are here"). */
@@ -1052,19 +1124,15 @@ export default function ListingMap({
      * undefined`, which we skip — otherwise the initial-fit refit and
      * the Reset-view animation would both write to the URL.
      * Also skip when centre+radius mode is on; the dashed circle owns
-     * the spatial predicate in that mode. */
+     * the spatial predicate in that mode.
+     * Any user move, in either mode, voids a still-pending fit to results:
+     * an empty first cohort (a small circle) leaves it pending, and the next
+     * non-empty one (the switch back to the viewport) zoomed out over them. */
     map.on('moveend', (e) => {
       if (e.originalEvent == null) return;
+      didInitialFitRef.current = true;
       if (suppressBoundsRef.current) return;
-      const cb = onBoundsChangeRef.current;
-      if (!cb) return;
-      const b = map.getBounds();
-      cb({
-        west:  b.getWest(),
-        south: b.getSouth(),
-        east:  b.getEast(),
-        north: b.getNorth(),
-      });
+      onBoundsChangeRef.current?.(viewBounds(map));
     });
 
     return () => {
@@ -1214,6 +1282,18 @@ export default function ListingMap({
     );
   }, [centerCircle, ready]);
 
+  /* Leaving the circle hands the spatial predicate back to the viewport: emit
+   * the view on screen, so the cohort is what the map shows without a pan (the
+   * URL's bbox is otherwise stale or absent — no move writes it under a circle). */
+  const prevCenterCircleRef = useRef(centerCircle);
+  useEffect(() => {
+    const had = prevCenterCircleRef.current != null;
+    prevCenterCircleRef.current = centerCircle;
+    const map = mapRef.current;
+    if (!ready || !map || !had || centerCircle != null) return;
+    onBoundsChangeRef.current?.(viewBounds(map));
+  }, [centerCircle, ready]);
+
   /* ONE data effect for both lanes. The cohort arrives as points (`rows`, up to
    * the pin limit, every one a pin at any zoom) or as the server's tile cells
    * (above it), never both. Cells arrive at the finest level the server could
@@ -1233,9 +1313,7 @@ export default function ListingMap({
 
     /* The view the cohort was fetched for (the viewport is a filter), so an edge
      * tile's mark lands on the part of the tile that is on screen. */
-    const b = map.getBounds();
-    const view = { west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() };
-    const { pins, marks } = marksFor(rows, counts, level, view);
+    const { pins, marks } = marksFor(rows, counts, level, viewBounds(map));
     pinSource.setData(toFeatureCollection(pins, priceMetric));
     countSource.setData(toCountFeatureCollection(marks));
 
@@ -1276,6 +1354,20 @@ export default function ListingMap({
     didInitialFitRef.current = true;
   }, [flyTo, ready]);
 
+  /* Imperative fit on each new frame command. Padding 0, as the mount's URL
+   * fit: the frame shows the box the cohort is filtered on. Programmatic, so
+   * the moveend guard leaves the URL bbox as the preset wrote it. */
+  const lastFrameTsRef = useRef<number | null>(frame?.ts ?? null);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map || !frame) return;
+    if (lastFrameTsRef.current === frame.ts) return;
+    lastFrameTsRef.current = frame.ts;
+    const { west, south, east, north } = frame.bounds;
+    map.fitBounds([[west, south], [east, north]], { padding: 0, duration: 700 });
+    didInitialFitRef.current = true;
+  }, [frame, ready]);
+
   /* Defensive resize once the map is ready. MapLibre observes its container,
    * but a map mounted into a container that settles its size after first paint
    * (e.g. the "Explore area" modal panel) can initialise mis-sized; a single
@@ -1287,7 +1379,7 @@ export default function ListingMap({
   }, [ready]);
 
   /* The listing popup's "View details →" is a raw <a> in a MapLibre-owned HTML
-   * string (see popupHtml below), so <Link> cannot reach it and a plain click
+   * string (lib/listingPopupHtml), so <Link> cannot reach it and a plain click
    * used to do a FULL DOCUMENT LOAD — discarding the bundle, the react-query
    * cache, the viewport and the active filter cohort, with Back re-downloading
    * all of it. Delegated on the CONTAINER (MapLibre parents every popup to
@@ -1328,26 +1420,14 @@ export default function ListingMap({
     };
   }, [ready, overlayRegistry]);
 
-  /* Locator halo data: list-origin hovers project the hovered rows'
-   * coordinates into the halo source; everything else clears it (a
-   * map-origin hover means the cursor is already on the spot). */
+  /* Locator halo data: the hovered rows' own points, whatever the map holds. */
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map) return;
     const src = map.getSource('hover-halo') as GeoJSONSource | undefined;
     if (!src) return;
-    const features: GeoJSON.Feature<GeoJSON.Point>[] =
-      hoverOrigin === 'list' && hoveredIds.size > 0
-        ? rows
-            .filter((r) => hoveredIds.has(r.listing_id))
-            .map((r) => ({
-              type: 'Feature',
-              geometry: { type: 'Point', coordinates: [r.lng, r.lat] },
-              properties: {},
-            }))
-        : [];
-    src.setData({ type: 'FeatureCollection', features });
-  }, [hoveredIds, hoverOrigin, rows, ready]);
+    src.setData(haloFeatures(haloPoints));
+  }, [haloPoints, ready]);
 
   /* Origin anchor data. Writes ONLY the `anchor` source — never `listings` —
    * so no filter change can reach it (the structural decoupling). `anchor` is
@@ -1386,8 +1466,27 @@ export default function ListingMap({
     didInitialFitRef.current = false;
   };
 
+  const rail = useRailPanel<'layers' | 'pins'>();
+  /* The rail's badge: every layer group that is drawn. */
+  const overlaySectionsOn = useMemo(() => {
+    const sel = parseLayers(overlayLayers);
+    return (overlayRegistry?.sections ?? []).filter((s) => s.layers.some((l) => sel.has(l.key))).length;
+  }, [overlayRegistry, overlayLayers]);
+  const layersOn = (cities && cities.length > 0 && showCities ? 1 : 0) + (showGrowth ? 1 : 0) + overlaySectionsOn;
+  const cityKey = cities && cities.length > 0 && showCities ? colorByIndex ?? null : null;
+  const legendsFolded = usePersistedFlag(LEGENDS_FOLDED_KEY, false);
+  const countText = isLoading
+    ? 'Načítání…'
+    : total == null
+      ? '—'
+      : cohortTotal != null && cohortTotal > total
+        ? `${total.toLocaleString('cs-CZ')} z ${cohortTotal.toLocaleString('cs-CZ')} na mapě`
+        : `${total.toLocaleString('cs-CZ')} ${czPlural(total, 'nemovitost', 'nemovitosti', 'nemovitostí')}`;
+
   return (
-    <div className="relative h-full min-h-[480px] rounded-[var(--radius-md)] overflow-hidden border border-[var(--color-rule)]">
+    /* `@container`: the rail's panel turns into a bottom sheet, and the pin key
+     * drops its words, by the MAP's width — the map is narrow on wide screens too. */
+    <div className="@container relative h-full min-h-[480px] rounded-[var(--radius-md)] overflow-hidden border border-[var(--color-rule)]">
       <div
         ref={containerRef}
         className="absolute inset-0"
@@ -1415,114 +1514,173 @@ export default function ListingMap({
           />
         </div>
       )}
-      {/* `right-12`, not `right-3`: createMap's zoom buttons own the top-right
-          corner, and at right-3 they sat on top of "Show all". The legend rides
-          in the count's row and wraps under it only when the map is too narrow,
-          so it does not add a second band of chrome over the pins. */}
-      <div className="pointer-events-none absolute top-3 left-3 right-12 flex items-start justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <Pill>
-            {isLoading
-              ? 'Loading…'
-              : total == null
-                ? '—'
-                : cohortTotal != null && cohortTotal > total
-                  ? `${total.toLocaleString('cs-CZ')} of ${cohortTotal.toLocaleString('cs-CZ')} mapped`
-                  : `${total.toLocaleString('cs-CZ')} ${total === 1 ? 'property' : 'properties'}`}
-            {counts != null && (
-              /* Corollary F (a surface says what it shows in the cohort's own
-               * terms): nothing is missing here, and the operator must not read
-               * count marks as the old truncation. Every property in the cohort
-               * is in exactly one count, so this says what changed (grain) rather
-               * than apologising for a loss that did not happen. */
-              <span
-                className="ml-2 text-[var(--color-ink-2)]"
-                title={
-                  `More than ${pinLimit.toLocaleString('cs-CZ')} properties are in view, so they are counted `
-                  + 'by map tile: every matching property is in exactly one count — nothing is cut. '
-                  + 'Zoom in (the viewport is part of the filter), or raise the pin limit, and '
-                  + 'individual pins return.'
-                }
-              >
-                · over {pinLimit.toLocaleString('cs-CZ')} in view, counted by tile
-              </span>
-            )}
-          </Pill>
-          {rows.length > 0 && <PinPrecisionLegend exact={pinFaces.exact} approx={pinFaces.approx} />}
-          <MapViewControls
-            pinLimit={pinLimit}
-            onPinLimitChange={onPinLimitChange}
-            priceLabels={priceLabels}
-            onPriceLabelsChange={onPriceLabelsChange}
-          />
+      {/* Top-left: what the map shows, the count and the key to the pins. The
+          controls are on the rail at the right edge; the corner stacks they
+          replaced covered a quarter of a 450 px map. Every overlay sits over
+          MapLibre's control corners (z-2): until the first pan the attribution
+          is spelled out and, on a narrow map, wraps up into them. */}
+      <div className="pointer-events-none absolute z-[3] top-2 left-2 right-14 flex">
+        <Pill>
+          <span>{countText}</span>
+          {counts != null && (
+            /* Corollary F (a surface says what it shows in the cohort's own
+             * terms): nothing is missing here, and the operator must not read
+             * count marks as the old truncation. Every property in the cohort
+             * is in exactly one count, so this says what changed (grain) rather
+             * than apologising for a loss that did not happen. */
+            <span
+              className="font-normal text-[var(--color-ink-2)]"
+              title={
+                `V záběru je víc než ${pinLimit.toLocaleString('cs-CZ')} nemovitostí, mapa je proto počítá `
+                + 'po dlaždicích: každá odpovídající nemovitost je právě v jednom čísle, nic se neusekne. '
+                + 'Přibližte mapu (výřez je součást filtru) nebo zvyšte limit pinů a piny se vrátí.'
+              }
+            >
+              · po dlaždicích
+            </span>
+          )}
+          {rows.length > 0 && <PinPrecisionLegend exact={pinFaces.exact} approx={pinFaces.approx} inactive={pinFaces.inactive} />}
+        </Pill>
+      </div>
+      {/* Right edge: the control rail and the panel it opens. */}
+      {/* z-4: the panel it opens (a bottom sheet on a narrow map) covers the keys. */}
+      <div ref={rail.rootRef} className="pointer-events-none absolute z-[4] inset-0">
+        <div className="absolute top-2 right-2 flex flex-col gap-2">
+          <RailGroup>
+            <RailButton
+              label="Vrstvy"
+              expanded={rail.open === 'layers'}
+              badge={layersOn}
+              onClick={() => rail.toggle('layers')}
+            >
+              <LayersIcon />
+            </RailButton>
+            <RailButton
+              label={priceMetric === 'per_m2' ? 'Ceny na pinech za m² (kliknutím celkem)' : 'Ceny na pinech celkem (kliknutím za m²)'}
+              pressed={priceMetric === 'per_m2'}
+              onClick={() => onPriceMetricChange?.(priceMetric === 'per_m2' ? 'total' : 'per_m2')}
+            >
+              {/* A basis-free word, as on the Ceny control: the default cohort is
+                  a rental one, whose pins read Kč/m²/měs. */}
+              <span className="text-[0.62rem] font-semibold leading-none">za m²</span>
+            </RailButton>
+            <RailButton
+              label="Piny a ceny"
+              expanded={rail.open === 'pins'}
+              onClick={() => rail.toggle('pins')}
+            >
+              <SlidersIcon />
+            </RailButton>
+          </RailGroup>
+          <RailGroup>
+            <RailButton label="Přiblížit" onClick={() => mapRef.current?.zoomIn()}>
+              <PlusIcon />
+            </RailButton>
+            <RailButton label="Oddálit" onClick={() => mapRef.current?.zoomOut()}>
+              <MinusIcon />
+            </RailButton>
+          </RailGroup>
+          {bounds && (
+            <RailGroup>
+              <RailButton label="Zobrazit vše (zrušit výřez mapy)" onClick={resetView}>
+                <ShowAllIcon />
+              </RailButton>
+            </RailGroup>
+          )}
         </div>
-        {bounds && (
+        {rail.open === 'layers' && (
+          <RailFlyout title="Vrstvy" onClose={rail.close}>
+            <div className="flex flex-col divide-y divide-[var(--color-rule)]">
+              {cities && cities.length > 0 && (
+                <div className="py-1">
+                  <CityMapControls
+                    showCities={showCities}
+                    onToggleShowCities={onToggleShowCities}
+                    colorByIndex={colorByIndex ?? null}
+                    cityIndexDefinitions={cityIndexDefinitions ?? []}
+                    onColorByIndexChange={onColorByIndexChange}
+                    colorByMin={colorByMin}
+                    onColorByMinChange={setColorByMin}
+                    cityCount={cities.length}
+                  />
+                </div>
+              )}
+              <div className="py-1">
+                <GrowthMapControls
+                  showGrowth={showGrowth}
+                  datasets={growthDatasets ?? []}
+                  datasetId={growthDatasetId}
+                  metric={growthMetric}
+                  from={growthFrom}
+                  to={growthTo}
+                  onToggle={onToggleShowGrowth}
+                  onDatasetChange={onGrowthDatasetChange}
+                  onMetricChange={onGrowthMetricChange}
+                  onFromChange={onGrowthFromChange}
+                  onToChange={onGrowthToChange}
+                  chartOnHover={growthChartOnHover}
+                  onToggleChartOnHover={onToggleGrowthChartOnHover}
+                />
+              </div>
+              {onOverlayLayersChange && (
+                <div className="py-1">
+                  <MapOverlayControls
+                    registry={overlayRegistry}
+                    selection={overlayLayers}
+                    onChange={onOverlayLayersChange}
+                    zoom={zoomLevel}
+                  />
+                </div>
+              )}
+            </div>
+          </RailFlyout>
+        )}
+        {rail.open === 'pins' && (
+          <RailFlyout title="Piny a ceny" onClose={rail.close}>
+            <div className="flex flex-col gap-3">
+              <PriceMetricControls priceMetric={priceMetric} onPriceMetricChange={onPriceMetricChange} />
+              <MapViewControls
+                pinLimit={pinLimit}
+                onPinLimitChange={onPinLimitChange}
+                priceLabels={priceLabels}
+                onPriceLabelsChange={onPriceLabelsChange}
+              />
+              <PinPrecisionKey exact={pinFaces.exact} approx={pinFaces.approx} inactive={pinFaces.inactive} />
+            </div>
+          </RailFlyout>
+        )}
+      </div>
+      {/* Bottom-left, over the scale: the key to every layer that is on, so a
+          choropleth reads with the panel closed. It folds to one button (and
+          stays folded in this browser) when the map is too narrow to spare it. */}
+      {(showGrowth || cityKey || overlaySectionsOn > 0) && (
+        <div className="pointer-events-none absolute z-[3] bottom-9 left-2 flex flex-col gap-1.5 items-start max-h-[45%] max-w-[calc(100%-4rem)]">
+          {!legendsFolded.value && (
+            <div className="pointer-events-auto flex flex-col gap-1.5 items-start min-h-0 overflow-y-auto">
+              {showGrowth && <GrowthLegend metric={growthMetric} rowCount={growthRows?.length ?? 0} />}
+              {cityKey && <CityIndexLegend index={cityKey} />}
+              <MapOverlayLegends registry={overlayRegistry} selection={overlayLayers} />
+            </div>
+          )}
           <button
             type="button"
-            onClick={resetView}
-            className="pointer-events-auto shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-2 py-1 text-[0.7rem] tracking-wide rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] hover:border-[var(--color-rule-strong)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] transition-colors"
-            title="Clear the map area filter"
+            onClick={legendsFolded.toggle}
+            aria-expanded={!legendsFolded.value}
+            className="pointer-events-auto shrink-0 inline-flex items-center gap-1 px-2 py-0.5 text-[0.7rem] rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] shadow-[0_2px_6px_rgba(0,0,0,0.04)]"
           >
-            Show all
+            {legendsFolded.value ? 'Ukázat legendu' : 'Skrýt legendu'}
           </button>
-        )}
-      </div>
-      {/* Bottom-left overlay stack. The wrapper moved OUT of CityMapControls so
-          the price-metric control shares it: the Ceny toggle must not vanish
-          with the city pins, which is what gating it on `cities` would do. */}
-      <div className="pointer-events-none absolute bottom-9 left-3 flex flex-col gap-2 items-start">
-        <PriceMetricControls
-          priceMetric={priceMetric}
-          onPriceMetricChange={onPriceMetricChange}
-        />
-        {cities && cities.length > 0 && (
-          <CityMapControls
-            showCities={showCities}
-            onToggleShowCities={onToggleShowCities}
-            colorByIndex={colorByIndex ?? null}
-            cityIndexDefinitions={cityIndexDefinitions ?? []}
-            onColorByIndexChange={onColorByIndexChange}
-            colorByMin={colorByMin}
-            onColorByMinChange={setColorByMin}
-            cityCount={cities.length}
-          />
-        )}
-      </div>
-      {/* Bottom-right overlay stack: growth control above the reference
-          overlays (the rent map among them). Flex children, so they never overlap. */}
-      <div className="pointer-events-none absolute bottom-10 right-3 flex flex-col gap-2 items-end">
-        <GrowthMapControls
-          showGrowth={showGrowth}
-          datasets={growthDatasets ?? []}
-          datasetId={growthDatasetId}
-          metric={growthMetric}
-          from={growthFrom}
-          to={growthTo}
-          rowCount={growthRows?.length ?? 0}
-          onToggle={onToggleShowGrowth}
-          onDatasetChange={onGrowthDatasetChange}
-          onMetricChange={onGrowthMetricChange}
-          onFromChange={onGrowthFromChange}
-          onToChange={onGrowthToChange}
-          chartOnHover={growthChartOnHover}
-          onToggleChartOnHover={onToggleGrowthChartOnHover}
-        />
-        {onOverlayLayersChange && (
-          <MapOverlayControls
-            registry={overlayRegistry}
-            selection={overlayLayers}
-            onChange={onOverlayLayersChange}
-            zoom={zoomLevel}
-          />
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
 
 
+/* The settings of the "Růst cen a nájmů" layer in the Vrstvy panel; its key is
+ * GrowthLegend, on the map. */
 function GrowthMapControls({
-  showGrowth, datasets, datasetId, metric, from, to, rowCount,
+  showGrowth, datasets, datasetId, metric, from, to,
   onToggle, onDatasetChange, onMetricChange, onFromChange, onToChange,
   chartOnHover, onToggleChartOnHover,
 }: {
@@ -1532,7 +1690,6 @@ function GrowthMapControls({
   metric: GrowthMetric;
   from: string;
   to: string;
-  rowCount: number;
   onToggle?: (next: boolean) => void;
   onDatasetChange?: (id: number) => void;
   onMetricChange?: (m: GrowthMetric) => void;
@@ -1543,23 +1700,21 @@ function GrowthMapControls({
 }) {
   // A literal radio `name` is a page-global token; two mounts would share one group.
   const metricName = useId();
-  const cfg = GROWTH_METRICS[metric];
-  const gradient = `linear-gradient(to right, ${cfg.ramp.map(([, c]) => c).join(', ')})`;
   return (
-    <div className="flex flex-col gap-2 items-end">
+    <div className="flex flex-col">
       <OverlayChip
         label="Růst cen a nájmů"
         checked={showGrowth}
         onChange={(next) => onToggle?.(next)}
       />
       {showGrowth && (
-        <OverlayPanel className="min-w-[210px]">
+        <OverlayPanel>
           {datasets.length === 0 ? (
             <span className="text-[0.7rem] text-[var(--color-ink-3)]">Žádné datasety</span>
           ) : (
             <select
               aria-label="Dataset"
-              className={YM_SELECT_CLS + ' max-w-[200px]'}
+              className={YM_SELECT_CLS + ' max-w-[220px]'}
               value={datasetId ?? ''}
               onChange={(e) => onDatasetChange?.(Number(e.target.value))}
             >
@@ -1574,36 +1729,45 @@ function GrowthMapControls({
               </label>
             ))}
           </div>
-          <div className="flex items-center gap-1 border-t border-[var(--color-rule)] pt-1.5 text-[0.7rem] text-[var(--color-ink-2)]">
+          <div className="flex items-center gap-1 text-[0.7rem] text-[var(--color-ink-2)]">
             <YmPicker label="Od" value={from} onChange={onFromChange} />
             <span className="text-[var(--color-ink-3)]">→</span>
             <YmPicker label="Do" value={to} onChange={onToChange} />
           </div>
-          <label className="inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-ink-2)] cursor-pointer border-t border-[var(--color-rule)] pt-1.5">
+          <label className="inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-ink-2)] cursor-pointer">
             <input type="checkbox" checked={!!chartOnHover} onChange={(e) => onToggleChartOnHover?.(e.target.checked)} />
-            <span>Chart on hover</span>
+            <span>Graf při najetí myší</span>
           </label>
-          <div className="flex flex-col gap-1 border-t border-[var(--color-rule)] pt-1.5">
-            <div className="h-1.5 rounded-sm" style={{ background: gradient }} />
-            <div className="flex justify-between text-[0.65rem] text-[var(--color-ink-3)] tabular-nums">
-              <span>{cfg.ramp[0][0].toFixed(cfg.digits)}{cfg.suffix}</span>
-              <span>+{cfg.ramp[cfg.ramp.length - 1][0].toFixed(cfg.digits)}{cfg.suffix}</span>
-            </div>
-            <div className="flex items-center gap-2 text-[0.62rem] text-[var(--color-ink-3)]">
-              <span className="flex items-center gap-1">
-                <span className="inline-block h-2 w-2 rounded-[2px]" style={{ background: 'rgba(94,122,74,0.3)' }} />
-                málo dat
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block h-2 w-2 rounded-[2px]" style={{ background: GROWTH_NO_DATA }} />
-                bez dat
-              </span>
-            </div>
-            {rowCount === 0 && <span className="text-[0.65rem] text-[var(--color-ink-3)]">Načítání…</span>}
-          </div>
         </OverlayPanel>
       )}
     </div>
+  );
+}
+
+/* The growth choropleth's key: its ramp from the metric's own stops, and the
+ * two tints that are not a value. */
+function GrowthLegend({ metric, rowCount }: { metric: GrowthMetric; rowCount: number }) {
+  const cfg = GROWTH_METRICS[metric];
+  const gradient = `linear-gradient(to right, ${cfg.ramp.map(([, c]) => c).join(', ')})`;
+  return (
+    <MapLegendCard title={cfg.label}>
+      <div className="h-1.5 rounded-sm" style={{ background: gradient }} />
+      <div className="flex justify-between text-[0.65rem] text-[var(--color-ink-3)] tabular-nums">
+        <span>{cfg.ramp[0][0].toFixed(cfg.digits)}{cfg.suffix}</span>
+        <span>+{cfg.ramp[cfg.ramp.length - 1][0].toFixed(cfg.digits)}{cfg.suffix}</span>
+      </div>
+      <div className="flex items-center gap-2 text-[0.62rem] text-[var(--color-ink-3)]">
+        <span className="flex items-center gap-1">
+          <span className="inline-block h-2 w-2 rounded-[2px]" style={{ background: 'rgba(94,122,74,0.3)' }} />
+          málo dat
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block h-2 w-2 rounded-[2px]" style={{ background: GROWTH_NO_DATA }} />
+          bez dat
+        </span>
+      </div>
+      {rowCount === 0 && <span className="text-[0.65rem] text-[var(--color-ink-3)]">Načítání…</span>}
+    </MapLegendCard>
   );
 }
 
@@ -1630,151 +1794,127 @@ function CityMapControls({
   const colorById = useId();
   const minById = useId();
   return (
-    <>
+    <div className="flex flex-col">
       <OverlayChip
-        label="Show cities"
+        label="Města"
         count={cityCount}
         checked={showCities}
         onChange={(next) => onToggleShowCities?.(next)}
       />
       {showCities && (
-        <div className="pointer-events-auto flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] text-[0.75rem]">
-          <span id={colorById} className="text-[var(--color-ink-2)] font-medium">Color by:</span>
-          <select
-            aria-labelledby={colorById}
-            className="text-[0.75rem] bg-[var(--color-paper-2)] border border-[var(--color-rule)] rounded px-1.5 py-0.5 max-w-[200px]"
-            value={colorByIndex?.index_name ?? ''}
-            onChange={(e) => onColorByIndexChange?.(e.target.value || null)}
-          >
-            <option value="">Žádné</option>
-            {groupForPicker(cityIndexDefinitions).map((g) => (
-              <optgroup key={g.label} label={g.label}>
-                {g.defs.map((d) => (
-                  <option key={d.index_name} value={d.index_name}>
-                    {g.prefix}{indexLabel(d)}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-        </div>
-      )}
-      {showCities && colorByIndex && (
-        <div className="pointer-events-auto flex flex-col gap-1 px-2.5 py-1.5 rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] min-w-[160px]">
-          {/* Same stops as the choropleth, from the one shared scale — the
-              gradient used to be a hand-written copy of the ramp and could
-              drift from it silently. The end labels are the definition's real
-              bounds, which the paint now normalizes against, so the two
-              genuinely describe the same domain. */}
-          <div
-            className="h-1.5 rounded-sm"
-            style={{ background: legendGradient() }}
-          />
-          {/* The gradient always runs worst → best. For a lower-is-better index
-              the normalizer inverts, so the bound labels must swap with it or
-              the legend would read backwards against its own colours. Every
-              seeded index is higher_is_better today, so this is prevention. */}
-          <div className="flex justify-between text-[0.65rem] text-[var(--color-ink-3)] tabular-nums">
-            <span>
-              {colorByIndex.higher_is_better === false
-                ? colorByIndex.scale_max
-                : colorByIndex.scale_min}
-            </span>
-            <span className="text-[var(--color-ink-2)]">{indexLabel(colorByIndex)}</span>
-            <span>
-              {colorByIndex.higher_is_better === false
-                ? colorByIndex.scale_min
-                : colorByIndex.scale_max}
-            </span>
+        <OverlayPanel>
+          <div className="flex flex-wrap items-center gap-2 text-[0.75rem]">
+            <span id={colorById} className="text-[var(--color-ink-2)]">Obarvit podle</span>
+            <select
+              aria-labelledby={colorById}
+              className="text-[0.75rem] bg-[var(--color-paper-2)] border border-[var(--color-rule)] rounded px-1.5 py-0.5 max-w-[200px]"
+              value={colorByIndex?.index_name ?? ''}
+              onChange={(e) => onColorByIndexChange?.(e.target.value || null)}
+            >
+              <option value="">Žádné</option>
+              {groupForPicker(cityIndexDefinitions).map((g) => (
+                <optgroup key={g.label} label={g.label}>
+                  {g.defs.map((d) => (
+                    <option key={d.index_name} value={d.index_name}>
+                      {g.prefix}{indexLabel(d)}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
           </div>
-          <div className="flex items-center gap-1.5 pt-0.5">
-            <span id={minById} className="text-[0.65rem] text-[var(--color-ink-2)]">Min:</span>
-            <input
-              aria-labelledby={minById}
-              type="number"
-              inputMode="decimal"
-              step="any"
-              placeholder="—"
-              value={colorByMin ?? ''}
-              onChange={(e) => {
-                const raw = e.target.value.trim();
-                const n = Number(raw);
-                onColorByMinChange?.(
-                  raw === '' || Number.isNaN(n) ? null : n,
-                );
-              }}
-              className="w-16 text-[0.7rem] bg-[var(--color-paper-2)] border border-[var(--color-rule)] rounded px-1 py-0.5 tabular-nums"
-            />
-            <span className="text-[0.6rem] text-[var(--color-ink-3)]">
-              below → grey
-            </span>
-          </div>
-        </div>
+          {colorByIndex && (
+            <div className="flex items-center gap-1.5">
+              <span id={minById} className="text-[0.7rem] text-[var(--color-ink-2)]">Min.</span>
+              <input
+                aria-labelledby={minById}
+                type="number"
+                inputMode="decimal"
+                step="any"
+                placeholder="—"
+                value={colorByMin ?? ''}
+                onChange={(e) => {
+                  const raw = e.target.value.trim();
+                  const n = Number(raw);
+                  onColorByMinChange?.(
+                    raw === '' || Number.isNaN(n) ? null : n,
+                  );
+                }}
+                className="w-16 text-[0.7rem] bg-[var(--color-paper-2)] border border-[var(--color-rule)] rounded px-1 py-0.5 tabular-nums"
+              />
+              <span className="text-[0.65rem] text-[var(--color-ink-3)]">pod ním šedě</span>
+            </div>
+          )}
+        </OverlayPanel>
       )}
-    </>
+    </div>
   );
 }
 
-/* The "Ceny" segmented control — the pin label switches between the total price
- * and the per-m² measure. Two buttons rather than a dropdown because there are
- * exactly two states and the current one has to be readable at a glance while
- * the operator is reading pins. It does NOT recolour anything: per-basis colour
- * ramps are a separate problem (a sale ramp and a rent ramp cannot share a
- * domain) and are deliberately not in this wave. */
-function PriceMetricControls({
+/* The city colouring's key. Same stops as the choropleth, from the one shared
+ * scale — the gradient used to be a hand-written copy of the ramp and could
+ * drift from it silently. The end labels are the definition's real bounds,
+ * which the paint normalizes against, so the two describe the same domain. */
+function CityIndexLegend({ index }: { index: CityIndexDefinition }) {
+  /* The gradient always runs worst → best. For a lower-is-better index the
+   * normalizer inverts, so the bound labels must swap with it or the legend
+   * would read backwards against its own colours. */
+  const flip = index.higher_is_better === false;
+  return (
+    <MapLegendCard title={`Města · ${indexLabel(index)}`}>
+      <div className="h-1.5 rounded-sm" style={{ background: legendGradient() }} />
+      <div className="flex justify-between text-[0.65rem] text-[var(--color-ink-3)] tabular-nums">
+        <span>{flip ? index.scale_max : index.scale_min}</span>
+        <span>{flip ? index.scale_min : index.scale_max}</span>
+      </div>
+    </MapLegendCard>
+  );
+}
+
+/* The "Ceny" pick-one — the pin label switches between the total price and the
+ * per-m² measure: the one joined bar (operator ruling 2026-10-27), its chosen
+ * segment copper like every pick-one's. Two segments rather than a dropdown
+ * because there are exactly two states and the current one has to be readable
+ * at a glance while the operator is reading pins. It does NOT recolour
+ * anything: per-basis colour ramps are a separate problem (a sale ramp and a
+ * rent ramp cannot share a domain) and are deliberately not in this wave. The
+ * rail's "za m²" button is the same switch. */
+export function PriceMetricControls({
   priceMetric,
   onPriceMetricChange,
 }: {
   priceMetric: PriceMetric;
   onPriceMetricChange?: (next: PriceMetric) => void;
 }) {
-  const opts: ReadonlyArray<{ value: PriceMetric; label: string }> = [
-    { value: 'total', label: 'Celkem' },
-    /* A basis-FREE word, deliberately not PPM2_UNIT.sale. This control picks a
-       metric, not a basis: the default Browse cohort is `pronajem`, so borrowing
-       the sale unit would print "Kč/m²" on a button whose every pin reads
-       "Kč/m²/měs". It would also couple the button to the sale unit string, so
-       editing that string later would silently rewrite this label. */
-    { value: 'per_m2', label: 'Za m²' },
-  ];
-  const hint = 'Popisky pinů: celková cena nebo cena za m²';
   return (
-    <div className="pointer-events-auto flex flex-col gap-1 px-2.5 py-1.5 rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] text-[0.75rem]">
-      <div className="flex items-center gap-2">
-        <span className="text-[var(--color-ink-2)] font-medium">Ceny:</span>
-        <div
-          role="group"
-          aria-label="Popisky pinů"
-          className="inline-flex gap-0.5 p-0.5 rounded-[var(--radius-sm)] border border-[var(--color-rule)]"
-        >
-          {opts.map((o) => (
-            <button
-              key={o.value}
-              type="button"
-              aria-pressed={priceMetric === o.value}
-              title={hint}
-              onClick={() => onPriceMetricChange?.(o.value)}
-              className={[
-                'px-2 py-0.5 text-[0.72rem] rounded-[var(--radius-xs)] transition-colors',
-                priceMetric === o.value
-                  ? 'bg-[var(--color-ink)] text-[var(--color-paper)]'
-                  : 'bg-[var(--color-paper-2)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)]',
-              ].join(' ')}
-            >
-              {o.label}
-            </button>
-          ))}
-        </div>
-      </div>
+    <div className="flex items-center gap-2 text-[0.75rem]">
+      <span className="text-[var(--color-ink-2)]">Ceny na pinech</span>
+      <SegmentedBar
+        label="Popisky pinů"
+        options={PRICE_METRIC_OPTS}
+        value={priceMetric}
+        onChange={(v) => onPriceMetricChange?.(v)}
+      />
     </div>
   );
 }
 
-/* The two view knobs above the map: how many properties in view are drawn pin
- * by pin before the map counts them by tile (it IS the server's point budget, so
- * changing it refetches), and whether pins print their price label. Both are URL
- * state (`pins`, `labels`). The number commits on blur or Enter so a half-typed
- * value never fires a fetch; the state's parser clamps it into range. */
+const PRICE_METRIC_HINT = 'Popisky pinů: celková cena nebo cena za m²';
+const PRICE_METRIC_OPTS: ReadonlyArray<SegmentOption<PriceMetric>> = [
+  { value: 'total', label: 'Celkem', title: PRICE_METRIC_HINT },
+  /* A basis-FREE word, deliberately not PPM2_UNIT.sale. This control picks a
+     metric, not a basis: the default Browse cohort is `pronajem`, so borrowing
+     the sale unit would print "Kč/m²" on a button whose every pin reads
+     "Kč/m²/měs". It would also couple the button to the sale unit string, so
+     editing that string later would silently rewrite this label. */
+  { value: 'per_m2', label: 'Za m²', title: PRICE_METRIC_HINT },
+];
+
+/* The two view knobs: how many properties in view are drawn pin by pin before
+ * the map counts them by tile (it IS the server's point budget, so changing it
+ * refetches), and whether pins print their price label. Both are URL state
+ * (`pins`, `labels`). The number commits on blur or Enter so a half-typed value
+ * never fires a fetch; the state's parser clamps it into range. */
 function MapViewControls({
   pinLimit,
   onPinLimitChange,
@@ -1795,124 +1935,120 @@ function MapViewControls({
   };
   const inputId = useId();
   return (
-    <span className="pointer-events-auto inline-flex items-center gap-2 px-2.5 py-1 text-[0.72rem] rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] text-[var(--color-ink-2)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] tabular-nums">
-      <label htmlFor={inputId} className="inline-flex items-center gap-1" title={`Do tohoto počtu nemovitostí v záběru se kreslí každá zvlášť; nad ním mapa počítá po dlaždicích (${PIN_LIMIT_MIN} až ${PIN_LIMIT_MAX}).`}>
-        <span>Piny do</span>
-        <input
-          id={inputId}
-          type="number"
-          inputMode="numeric"
-          min={PIN_LIMIT_MIN}
-          max={PIN_LIMIT_MAX}
-          step={10}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-          className="w-14 px-1 py-0 text-right bg-[var(--color-paper)] border border-[var(--color-rule)] rounded-[var(--radius-xs)] text-[var(--color-ink)]"
-        />
-      </label>
-      <label className="inline-flex items-center gap-1 cursor-pointer" title="Vypsat u pinů cenu">
+    <div className="flex flex-col gap-2 text-[0.75rem] text-[var(--color-ink-2)] tabular-nums">
+      <div className="flex flex-col gap-0.5">
+        <label htmlFor={inputId} className="inline-flex items-center gap-1.5">
+          <span>Piny do</span>
+          <input
+            id={inputId}
+            type="number"
+            inputMode="numeric"
+            min={PIN_LIMIT_MIN}
+            max={PIN_LIMIT_MAX}
+            step={10}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+            className="w-16 px-1 py-0 text-right bg-[var(--color-paper)] border border-[var(--color-rule)] rounded-[var(--radius-xs)] text-[var(--color-ink)]"
+          />
+        </label>
+        <span className="text-[0.65rem] text-[var(--color-ink-3)]">
+          Do tohoto počtu nemovitostí v záběru se kreslí každá zvlášť; nad ním mapa počítá po dlaždicích ({PIN_LIMIT_MIN} až {PIN_LIMIT_MAX}).
+        </span>
+      </div>
+      <label className="inline-flex items-center gap-1.5 cursor-pointer">
         <input
           type="checkbox"
           checked={priceLabels}
           onChange={(e) => onPriceLabelsChange?.(e.target.checked)}
           className="accent-[var(--color-ink)]"
         />
-        <span>Popisky</span>
+        <span>Popisky cen u pinů</span>
       </label>
-    </span>
+    </div>
   );
 }
 
 function Pill({ children }: { children: React.ReactNode }) {
   return (
-    <span className="pointer-events-auto inline-flex items-center gap-1.5 px-2.5 py-1 text-[0.75rem] font-medium tracking-wide rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] text-[var(--color-ink-2)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] tabular-nums">
+    <span className="pointer-events-auto inline-flex flex-wrap items-center gap-x-1.5 gap-y-0.5 max-w-full px-2.5 py-1 text-[0.75rem] font-medium tracking-wide rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] text-[var(--color-ink-2)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] tabular-nums">
       {children}
     </span>
   );
 }
 
-/* The key to the pin's two faces. Without it the ring is a code nobody was told;
- * the tooltip also says where the circle went — onto the pin you click. */
-function PinPrecisionLegend({ exact, approx }: { exact: number; approx: number }) {
+const PIN_FACES_HINT =
+  'Černý obrys: poloha ověřená na budovu nebo adresu. Bez něj je poloha jen přibližná '
+  + '(ulice, část obce, obec…). Purpurový bod je aktivní nabídka, průhledný bílý s purpurovým '
+  + 'obrysem neaktivní. Klikněte na pin: mapa ukáže okruh, ve kterém '
+  + 'nemovitost leží, a popisek řekne, jak je velký.';
+
+/* The key to the pin's faces, inside the count pill: the swatches and their
+ * counts, the words only on a map wide enough to hold them (the full key is in
+ * the Piny a ceny panel). Without it the contour is a code nobody was told. */
+function PinPrecisionLegend({ exact, approx, inactive }: { exact: number; approx: number; inactive: number }) {
+  const faces = [
+    { exact: true, active: true, word: 'přesná', n: exact },
+    { exact: false, active: true, word: 'přibližná', n: approx },
+    { exact: false, active: false, word: 'neaktivní', n: inactive },
+  ];
   return (
     <span
-      className="pointer-events-auto inline-flex flex-wrap items-center gap-x-3 gap-y-0.5 px-2.5 py-1 text-[0.7rem] rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] text-[var(--color-ink-3)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] tabular-nums cursor-help"
-      title={
-        'Plný bod: poloha ověřená na budovu nebo adresu. Kroužek: poloha jen přibližná '
-        + '(ulice, část obce, obec…). Klikněte na pin: mapa ukáže okruh, ve kterém '
-        + 'nemovitost leží, a popisek řekne, jak je velký.'
-      }
+      className="inline-flex items-center gap-x-2.5 pl-2 ml-0.5 border-l border-[var(--color-rule-strong)] font-normal text-[0.7rem] text-[var(--color-ink-3)] cursor-help"
+      title={PIN_FACES_HINT}
     >
-      <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-        <PinSwatch exact />
-        Přesná poloha <span className="text-[var(--color-ink-2)]">{exact.toLocaleString('cs-CZ')}</span>
-      </span>
-      <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-        <PinSwatch exact={false} />
-        Přibližná <span className="text-[var(--color-ink-2)]">{approx.toLocaleString('cs-CZ')}</span>
-      </span>
+      {faces.map((f) => (
+        <span key={f.word} className="inline-flex items-center gap-1 whitespace-nowrap">
+          <PinSwatch exact={f.exact} active={f.active} />
+          <span className="text-[var(--color-ink-2)]">{f.n.toLocaleString('cs-CZ')}</span>
+          <span className="hidden @min-[900px]:inline">{f.word}</span>
+        </span>
+      ))}
     </span>
   );
 }
 
-/* The pin in miniature, from the same paint constants as the `point` layer. */
-function PinSwatch({ exact }: { exact: boolean }) {
+/* The same key in full, for the Piny a ceny panel. */
+function PinPrecisionKey({ exact, approx, inactive }: { exact: number; approx: number; inactive: number }) {
+  const faces = [
+    { exact: true, active: true, label: 'Přesná poloha', n: exact },
+    { exact: false, active: true, label: 'Přibližná poloha', n: approx },
+    { exact: false, active: false, label: 'Neaktivní', n: inactive },
+  ];
   return (
-    <span
-      aria-hidden="true"
-      className="inline-block w-2.5 h-2.5 rounded-full shrink-0"
-      style={
-        exact
-          ? { background: PIN_COLOR, boxShadow: `0 0 0 1.5px ${PIN_RING_FILL}` }
-          : { background: PIN_RING_FILL, border: `2px solid ${PIN_COLOR}` }
-      }
-    />
+    <div className="flex flex-col gap-1.5 border-t border-[var(--color-rule)] pt-2">
+      <ul aria-label="Legenda pinů" className="flex flex-col gap-1">
+        {faces.map((f) => (
+          <li key={f.label} className="flex items-center gap-2 text-[0.75rem] text-[var(--color-ink-2)]">
+            <PinSwatch exact={f.exact} active={f.active} />
+            <span>{f.label}</span>
+            <span className="ml-auto tabular-nums text-[var(--color-ink)]">{f.n.toLocaleString('cs-CZ')}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="text-[0.65rem] leading-snug text-[var(--color-ink-3)]">{PIN_FACES_HINT}</p>
+    </div>
   );
 }
 
-function popupHtml(r: MapRow): string {
-  const price = fmtCzk(r.price_czk);
-  /* The popup has room, so it says what the m² MEASURES: a pozemek's area_m2 is
-   * its plot, not a floor plan (the Option-A fork keeps the column polymorphic). */
-  const area = fmtArea(r.area_m2, areaKindOf(r.category_main));
-  /* The server measure with its own basis suffix — the popup is where a pin's
-   * label can be read next to the figure it was derived from. */
-  const ppm = fmtMeasuredPricePerM2(
-    r.price_per_m2,
-    ppm2BasisFromToken(r.price_per_m2_basis),
+/* The pin in miniature, from the same paint constants as the `point` layers. The
+ * rings are box-shadows, which draw outside the box exactly as a circle stroke
+ * does, so the margin keeps them off the label. */
+function PinSwatch({ exact, active }: { exact: boolean; active: boolean }) {
+  const rings = [`0 0 0 ${PIN_STROKE}px ${active ? PIN_WHITE : PIN_COLOR}`];
+  if (exact) rings.push(`0 0 0 ${PIN_STROKE + PIN_CONTOUR_WIDTH}px ${PIN_CONTOUR}`);
+  return (
+    <span
+      aria-hidden="true"
+      className="inline-block w-2.5 h-2.5 rounded-full shrink-0 mx-[3px]"
+      style={{
+        background: active ? PIN_COLOR : PIN_WHITE,
+        boxShadow: rings.join(', '),
+        opacity: active ? 1 : PIN_INACTIVE_OPACITY,
+      }}
+    />
   );
-  const disposition = listingKindLabel(r) ?? '—';
-  /* The ONE label (migration 503). `lp-district` stays the style hook -- it is a
-   * class name in globals.css, not a claim about what the string is. */
-  const place = r.display_label ?? '';
-  /* Directly under the place it qualifies: "Nádražní 12, Hradec Králové" and
-   * "Přibližná poloha: obec, ±1 km" are one statement. It names the radius the
-   * circle drawn behind this popup shows, and the TRUE one where that circle is
-   * capped. */
-  const precision = pinPrecisionLabel(r);
-  const seen = fmtRelative(r.last_seen_at);
-  const seenAbs = fmtAbsolute(r.last_seen_at);
-  const inactive = !r.is_active;
-  return `
-    <div class="lp">
-      <div class="lp-row">
-        <p class="lp-price">${escapeHtml(price)}</p>
-        ${inactive ? '<span class="lp-inactive">Inactive</span>' : ''}
-      </div>
-      <p class="lp-meta">
-        <span class="lp-mono">${escapeHtml(disposition)}</span>
-        <span class="lp-sep">·</span>
-        <span class="lp-mono">${escapeHtml(area)}</span>
-        ${ppm === '—' ? '' : `<span class="lp-sep">·</span><span class="lp-mono">${escapeHtml(ppm)}</span>`}
-      </p>
-      ${place ? `<p class="lp-district">${escapeHtml(place)}</p>` : ''}
-      <p class="lp-precision">${escapeHtml(precision)}</p>
-      <p class="lp-seen" title="${escapeHtml(seenAbs)}">last seen ${escapeHtml(seen)}</p>
-      <a href="${propertyPath(r.property_id, r.listing_id)}" class="lp-link">View details →</a>
-    </div>
-  `;
 }
 
 function cityPopupHtml(

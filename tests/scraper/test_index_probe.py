@@ -86,6 +86,10 @@ def test_probe_never_nominates(monkeypatch):
         lambda *a, **k: pytest.fail("a probe must not nominate"),
     )
     monkeypatch.setattr(
+        portal_runner.db, "orphan_candidates",
+        lambda *a, **k: pytest.fail("a probe must not nominate orphans"),
+    )
+    monkeypatch.setattr(
         portal_runner.db, "enqueue_presence_checks",
         lambda *a, **k: pytest.fail("a probe must not queue page checks"),
     )
@@ -103,7 +107,7 @@ def test_probe_writes_no_scrape_run_bookkeeping(monkeypatch):
     # keys liveness + reconciliation on index_pages > 0 rows).
     touched: list = []
     monkeypatch.setattr(db, "scrape_run_start", lambda *a, **k: touched.append("start") or 1)
-    monkeypatch.setattr(db, "bump_index_pages", lambda *a, **k: touched.append("bump"))
+    monkeypatch.setattr(db, "bump_index_progress", lambda *a, **k: touched.append("bump"))
     monkeypatch.setattr(db, "scrape_run_finalize", lambda *a, **k: touched.append("final"))
     p = _ProbePortal()
     rc, _ = portal_runner.run_index_probe(p, dry_run=False)
@@ -226,8 +230,7 @@ def test_probe_reads_a_refusal_the_walk_swallowed():
 
 
 def test_probe_requires_a_probe_seam():
-    # sreality's portal implements neither seam (its count-probe lane is a
-    # separate design) -> a loud error, not a silent full walk.
+    # sreality's portal implements neither seam -> a loud error, not a silent full walk.
     bare = SimpleNamespace(source="sreality", index_rate=1.0)
     with pytest.raises(TypeError):
         portal_runner.run_index_probe(bare, dry_run=True)

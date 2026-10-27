@@ -53,9 +53,67 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   S0 rails (#1692, E940 the paged walk, E941) → S1 Nusle + Libeň scanned with #1709's re-seed
   (~15.2k ads, shadow) → S2 they merge under E942's brakes → S3 facts only for scored pairs, the
   re-cut out of the pass, street keys for the 36k no-quarter ads (E943–E945) → S4 one Prague block
-  (the 157 quarters as blocks beside the eight towns, 6,000 MB, E946; the ~36k no-quarter ads a week later, E940 + E945), a 3–6-day build with merging paused everywhere → S5 the apply
+  (the 157 quarters as blocks beside the eight towns, 6,000 MB, E946; the no-quarter ads reach a
+  scope only as `obec:554782` itself, now one PAGED town block — 167,548 rows, 36,628 with no
+  quarter, 9 pages, E940 done 2026-10-17 — their keys E945), a 3–6-day build with merging paused everywhere (since E964 only in the blocks it builds) → S5 the apply
   scope widens a batch of quarters at a time, `town:554782` last. Brake: interval 0, the area out
   of the apply scope, then `unapply blocks=`. Open: D905–D910 (the operator's).
+- **S6 — Středočeský kraj by okres (operator, 2026-10-17; E961):** after Prague merges, the whole
+  kraj 27 (130,207 located ads, 1,133 towns) is seeded as its 12 `okres:` blocks, not 1,133 towns
+  (the cap is 60 walks a day); the apply scope and W8 take it a `district:` at a time. The grain is
+  built (6 h walks through each okres's obce; no town or quarter beside its okres, so Beroun's
+  `obec:531057` leaves for `okres:3202`). **Unblocked by E940 (done 2026-10-17, superseding draft
+  #1728):** a block over the 20,000-row page is read whole a page a walk (Praha-východ, 19,812 on
+  10-17 and over in ~2 days, needs nothing more), the seed walks EVERY block to its end whatever
+  the 60-walk cap (the 10-16 seed stopped at 60 of 120 blocks and cut its calibration over them),
+  and `MAX_SCHEMA_MB` is 10,000: 7 towns + Praha whole (paged) + the 12 okresy = 323,128 ads,
+  ~7,030 MB projected (the number is the operator's, D907). That seed no longer has to be
+  `fresh=true` (which stops every live area's merging until the build ends): since E964 it is a
+  WIDENING of today's `rt`
+  (the seven towns kept, the 112 quarters replaced by `obec:554782`, Beroun by `okres:3202`) if
+  the scorer and `SEED_VERSION` stand: the seven towns keep merging through the build; the three
+  live Prague quarters and Beroun wait for their wider blocks. Open (E940): the cap binds that scope's cadence 4× (240
+  walks a day asked, 60 allowed), so Praha is read whole every ~3 days. **E962 (done 2026-10-17):**
+  the calibration cut streams (a chunk folded and dropped, the calibration byte-identical on the
+  trial and c18), ~4-10 kB an advert at its peak by block size (bounded at 12 kB) against ~58 kB,
+  so the 323,128-ad seed projects ~1.9-2.3 GiB on the 16 GiB runner (it would have been
+  OOM-killed at ~18 GiB) and the memory bound admits 699,050 ads (`MAX_SCHEMA_MB` binds first,
+  above ~470k). Its payload is no longer jsonb (E963, below). Owed: `Calibration.build` is now only the tests' oracle — fold it
+  into the stream with the next change that moves the engine digest.
+- **S7 — every other region (operator, 2026-10-17: after Prague and Středočeský kraj, "expand
+  beyond to all other regions when possible"), ~872k located ads.** Prerequisites, measured:
+  **E963 (done 2026-10-17):** the calibration payload is zlib over its canonical JSON in a bytea
+  (migration 616), not one jsonb value — jsonb stops at 268,435,455 B of BINARY, ~1.57× the text,
+  so ~252k ads in small blocks (E962's "~400k" read the text) and the nation's ~591 MB of text
+  (~929 MB binary) could not be written; stored it is ~164 MB (the binding bytea limit is the hex
+  READ, ~537 MB compressed, ~2.87M ads), the digest unchanged (trial and c18 proven). Ships with a
+  re-seed: 616 applied under the brake, merge, `rt_seed fresh=true` (or E964's widening seed)
+  before the brake comes off — a row cut before 616 is refused, not read. **After the first E963
+  seed commits, never a bare revert: brake, revert, re-seed** (the retired `payload` still holds
+  the 10-16 calibration). Owed, scheduled right after that sitting is verified: the DROP of
+  `payload` / `artifact_url` (destructive: the operator's OK + a backup; the old reader then
+  fails loudly). Still binding at the nation's size: `MAX_SCHEMA_MB` 10,000 (~470k ads,
+  E940/E962), the cut's memory bound 699,050 ads at 12 kB (E962); the worker's calibration is
+  ~2.9 GB through every pass (resident ~1.6 + `context_for`'s copy ~1.2) and ~4.5–5 GB at a
+  digest change — under its 22.9 GB (one row a block of `block_token_df` would let the read
+  parse a block at a time; not built).
+  **E964 (built 2026-10-17): the country by widening**, one okres batch at a time (a kraj's
+  okresy, or fewer), each a WIDENING seed — `rt_seed settings=<the generation's>,model=<its
+  model>,rt_scope=<the scope + the batch>`, no `fresh`: every row stays, only the batch is walked
+  and built, the calibration is re-cut over the whole scope (re-keying the reject ledger: 2–4
+  full-price passes; the worker re-reads the moved payload once), the forward cursors are kept,
+  and every area already read keeps merging while the batch builds (the reconcile now runs through
+  a build and waits block by block, A9 amended; a member property's other ads and a not-yet-walked
+  ad count). Then the batch's sample (the S2 reading), and only then the apply scope widens by its
+  `district:` blocks — the operator's, per batch. The adversarial review of #1847 (F2–F8 fixed in
+  it; F1, the vouched-rider rule, is E965 on main) recommends the Prague + kraj step itself be a
+  widening once F1–F3 are deployed. Per batch: `MAX_SCHEMA_MB` raised to its projection (~21 KiB
+  a new ad; the first +130k batch past 323k projects ~9,740 MB against 10,000, the second needs
+  more — D907's disk); past 699,050 ads a cut the 16 GiB runner can hold (owed; the whole-scope
+  cut is ~2.2 h there, ~2.8 h at 872k, inside the 5 h job and lease); a live town replaced by its
+  okres in a batch of its own (its groups wait for the okres's build). A build with a listed
+  backlog ran 5–16k ads an hour (~8–26 h a 130k kraj). `recut=true` re-cuts the same scope
+  (today's `rt` is cut over 39 % of its 155.8k ads).
 - **E941 (2026-10-09, S0 rails for the widened S1, ~38k ads):** the seed re-checks storage after its
   walk and cut (+18 KiB an ad), `MAX_SCHEMA_MB` 1,500, no quarter beside its town, the rate halved
   before each pass, `peak_rss_mb` in the heartbeat, SIGTERM stops the pass and frees the lease at
@@ -134,6 +192,43 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   that leaves `clip_tagged_at` alone must empty the ledger; a sighting (`last_seen_at`) re-scores an
   advert's rejects as it does its stored pairs. Next (E943's other half, before Prague): facts only
   for the claim and the scored endpoints, the decision digest stored on `rt_fp`.
+- **E974 (2026-10-21, the operator's region order):** the waiting groups are re-claimed Praha first, then
+  the eight towns the apply scope names with a `town:` block, then the rest (the Středočeský kraj okresy
+  to come); within each, flats for sale, flats for rent, houses and commercial for sale, the rest.
+  Active and inactive groups together: the operator's ruling of 2026-10-21 ("aktivní i neaktivní
+  dohromady") retired E973's active-first level. An order only: no decision module, digest unchanged.
+- **E975 (2026-10-21, the sweep slice):** the reconcile sweeps 2,000 groups a pass past its cursor (was
+  200): with Prague's 34k clusters the hand-on ran dry at 12:00Z and the merges fell to a third; a cycle
+  is ~2 h now and the discovery matches the re-claim. One constant, no decision module, digest unchanged.
+  Owed: the three `applied_merges` overlap scans of the reconcile's planning read id arrays that grow with
+  the list (DIAGNOSIS recommendation 3: an index they can use) before they near the 2-min statement timeout.
+- **E976 (2026-10-22, the build reads live adverts first):** during a build the entrant feed orders the
+  snapshot's unread adverts live first, then inactive, ids ascending within each, under no id cursor (the
+  `rt_fp` anti-join advances it); outside a build nothing changes. Praha's 11,864 live unread adverts are
+  read in ~22 h instead of last, ~3 days in. Cost: one `listings_pkey` probe an unread advert, 337 ms a
+  build pass measured. No decision module, digest unchanged. Alone it merges nothing earlier (E977).
+- **E978 (2026-10-22, visible first):** during a build the feed reads, after the live adverts, the inactive
+  ones a visible merge waits for (on a property with a live advert, or whose read adverts sit in a group
+  with one): 1,264 of Praha's 25,434 unread at 21:40Z, ~2.5 passes instead of ~15 h. Order only.
+- **E979 (2026-10-25, the operator's build order):** a build reads the blocks named in
+  `autodedup.settings` `rt_build_priority:<generation>` first, in that row's category order (Liberec
+  `obec:563889`: flats for rent, houses for sale, flats for sale, the rest), then E978's order. Data, not
+  code: changing it needs no deploy; no row or a malformed one is E978's order exactly. Order only.
+- **E980 (2026-10-26, active arrivals re-checked first):** every pass the evidence sweep probes the
+  newest 1,000 active adverts still marked incomplete before its round-robin. The kraj build had filled the
+  round-robin to 90,984 rows, ~50 h a cycle at 400 a pass, so an active arrival decided before its CLIP
+  vector waited out the cycle: 1,014 such at 13:00Z, one Hradec Králové flat four properties for 16 h. A row
+  written in the last hour waits; the round-robin's cursor stops before a mover the share cut. Order only;
+  no decision module, digest unchanged.
+  Reverted the same day (#2096): its 57–80 re-decides a pass overran the build's pass deadline twice.
+  **E980b** brings it back OFF in a build and at most 15 re-decides a pass outside one (constants).
+- **E977 (2026-10-22, built; ships only on the operator's yes):** during a build, a block whose walk is
+  complete holds back only the groups whose own adverts (members, carried riders) have no fingerprint, not
+  every group in the block; a block never walked or mid-walk, an advert the snapshot does not place and the
+  steady state keep the block rule. Measured: of Praha's 1,719 groups on 2+ properties, 433 (203 with an
+  active advert) reach the plan at once instead of after the whole 37,910-advert build. Risk: a group merged
+  early may be one the complete graph groups differently (a split proposal; the engine never splits); every
+  merge still passes the cluster invariants. No decision module, digest unchanged.
 - **Next:** three live days and checkpoint C2, then the last commit deletes the batch
   `apply`/`unapply` modes; `legacy_retire` runs per area under the live generation since W8 (E953, 2026-10-14). Widening the scope is the operator's call.
 - **Open (operator decision, before the C2 deletion):** the undo path once `mode=unapply` is gone.
@@ -146,6 +241,11 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   sit in two towns may be a wrong merge, and since migration 636 its pin stands at the finer ad's
   point, which can be the other building's. Census SQL in the ONE PIN W0/W1 receipts
   (`~/one-pin-artifacts/` on the operator machine; `docs/design/one-pin/PROGRAM.md` W3).
+- **Owed: the share-sale merge (E932; the operator's rulings N5–N10, 2026-10-01):** an advert selling a
+  share of a property (`podil`) merges with the same property's sale advert at the same price, and the
+  merged property reads "Prodej". Built and measured on the pre-Prague engine in PR #1655, never shipped;
+  closed 2026-10-25 on the operator's ruling 4b, its code kept at tag `archive/feature-autodedup-share-sale`.
+  Rebuild it on the current engine once the Prague work is quiet.
 - **Next (W8, E953):** per area, before it enters the apply scope: brake, the area into the scope
   row, `mode=apply` `generation=rt,retire_legacy=1,blocks=town:<code>` dry run, then live, then
   the interval back. Beroun (`town:531057`) first, once the lane has read it after the 10-14

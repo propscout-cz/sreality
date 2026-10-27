@@ -6,9 +6,13 @@ real wall-clock time passes and the scheduling math is deterministic.
 
 from __future__ import annotations
 
+import threading
+import time
+
 import pytest
 
 import scraper.rate_limit as rl
+from scraper import stop
 from scraper.rate_limit import RateLimiter
 
 
@@ -109,3 +113,43 @@ def test_reschedule_never_moves_next_slot_earlier(monkeypatch):
     lim.reschedule(1.0, clock.now + 0.2)  # earlier not_before must not win
     lim.acquire()
     assert sleeps == [1.0]
+
+
+def test_a_local_limiter_has_no_deadline_and_a_client_can_refuse_the_run() -> None:
+    """`refuse` is how a client that knows its next fetch cannot start in time (the `web`
+    client's host pacing) hands the rest of the run back; the runner reads `refused`."""
+    from scraper.rate_ledger import LedgerRateLimiter
+
+    local = RateLimiter(1.0)
+    assert local.deadline is None and not local.refused
+    local.refuse("deadline")
+    assert (local.refused, local.refused_reason) == (True, "deadline")
+    ledger = LedgerRateLimiter("web", 1.0, deadline=123.0, connect=lambda: None)
+    assert ledger.deadline == 123.0
+
+
+def test_a_stop_ends_the_wait_for_a_slot_and_refuses_the_run() -> None:
+    """#2019: the limiter waits on the stop event, not a sleep; the run is refused so the drain hands claims back."""
+    stop.install()
+    lim = RateLimiter(0.2)  # five seconds between slots
+    lim.acquire()
+    timer = threading.Timer(0.05, stop.EVENT.set)
+    timer.start()
+    try:
+        started = time.monotonic()
+        with pytest.raises(stop.StopRequested):
+            lim.acquire()
+        assert time.monotonic() - started < 1.0
+    finally:
+        timer.cancel()
+    assert (lim.refused, lim.refused_reason) == (True, "stop")
+
+
+def test_a_stop_never_rewrites_a_blocked_portals_refusal() -> None:
+    lim = RateLimiter(1.0)
+    lim.refuse("cap")
+    stop.EVENT.set()
+    with pytest.raises(stop.StopRequested):
+        lim.acquire()
+    assert lim.refused_reason == "cap"
+

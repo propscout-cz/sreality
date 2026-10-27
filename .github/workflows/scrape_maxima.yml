@@ -9,8 +9,10 @@ name: "Scraping: Maxima Reality scraper (pilot)"
 # listing_write.write_listings (the one listing write; new rows land property_id
 # NULL and the straggler-attach births the singleton).
 #
-# The catalogue is small, so one job runs BOTH phases (index walk + full drain)
-# comfortably inside the timeout. The per-listing category comes from the parser
+# WALK ONLY (--index-only, Actions exit W1, #2021): the realtime worker's drain lane fetches what
+# the walk enqueues, as it already did for nearly every row (2026-10-23..25: all of this
+# portal's completions landed outside these runs), so this job no longer drains.
+# The per-listing category comes from the parser
 # (native-id prefix + title verb), so there is one mixed-catalogue "category" in
 # the `portals` registry row (migration 116), not a per-category list.
 #
@@ -19,7 +21,7 @@ name: "Scraping: Maxima Reality scraper (pilot)"
 # still flips that one listing inactive. Promotion to a complete-walk delisting
 # sweep is a deliberate later migration once proven.
 #
-# Writes 'index' + 'detail' scrape_runs rows under source='maxima' (its own
+# Writes an 'index' scrape_runs row under source='maxima' (its own
 # Health-page lane; does not touch sreality liveness / reconciliation).
 #
 # Required secret: SUPABASE_DB_URL. (Coordinates come from the page's embedded map
@@ -34,21 +36,6 @@ on:
         description: cap catalogue pages walked (ad-hoc partial). Blank = full walk.
         required: false
         default: ""
-        type: string
-      max_detail:
-        description: cap detail-drain claims this run (blank = drain the queue)
-        required: false
-        default: ""
-        type: string
-      rate:
-        description: detail-fetch requests/second ceiling
-        required: false
-        default: "1.0"
-        type: string
-      workers:
-        description: detail-fetch workers (concurrency; raise for a one-time backfill)
-        required: false
-        default: "2"
         type: string
 
 concurrency:
@@ -82,12 +69,9 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
           MAX_PAGES: ${{ inputs.max_pages }}
-          MAX_DETAIL: ${{ inputs.max_detail }}
-          RATE: ${{ inputs.rate || '1.0' }}
-          WORKERS: ${{ inputs.workers || '2' }}
         run: |
-          ARGS="--rate $RATE --workers $WORKERS"
+          ARGS="--index-only"
           if [ -n "$MAX_PAGES" ]; then ARGS="$ARGS --max-pages $MAX_PAGES"; fi
-          if [ -n "$MAX_DETAIL" ]; then ARGS="$ARGS --max-detail $MAX_DETAIL"; fi
           echo "python -m scraper.maxima_main $ARGS"
-          eval "python -m scraper.maxima_main $ARGS"
+          # exec: a cancel's SIGINT must reach Python, which finalizes the run (#2019), not the shell around it.
+          eval "exec python -m scraper.maxima_main $ARGS"

@@ -56,8 +56,9 @@ def test_raw_json_is_declared_for_exactly_the_two_portals_that_stage_no_body() -
 
 
 def test_the_category_argument_is_declared_only_where_the_parser_demands_it() -> None:
-    """remax and maxima default it to None and read the page, so the seam passes nothing and
-    their categories DO re-derive. bazos/ceskereality/idnes declare it without a default."""
+    """remax and maxima default it to None and read the page, ceskereality takes none (its
+    page's canonical URL names it), so the seam passes nothing and their categories DO
+    re-derive. bazos/idnes declare it without a default."""
     import inspect
     import importlib
 
@@ -84,7 +85,7 @@ def test_the_two_registries_still_describe_the_live_contract() -> None:
     outside the content hash — the only one whose heal churns no snapshot anywhere."""
     assert _PRESERVE_IF_NULL_COLUMNS == {"published_at", "source_url"}
     assert set(mod.HEALABLE) == set(LISTING_COLUMNS) - _PRESERVE_IF_NULL_COLUMNS
-    assert set(mod.HEALABLE) - set(_HASH_FIELDS) == {"area_basis"}
+    assert set(mod.HEALABLE) - set(_HASH_FIELDS) == {"area_basis", "ad_reference"}
 
 
 def test_fields_is_validated_against_the_registry() -> None:

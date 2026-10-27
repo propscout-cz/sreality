@@ -7,6 +7,150 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
+### Phase U-AD-REFERENCE: the number a broker advertises under, on the broker card (2026-10-23)
+
+Operator ask: in the property page's Makléř section, show the ad id the broker advertises under, so it
+can be quoted on a call; make sure it is scraped correctly. Rulings 2026-10-23: one card on both shells;
+an ad without a number reads "<portál> —", never the portal's own id; the number is kept verbatim
+(portal prefixes included); the PDF sheet's broker block gets the same lines; the broker page and the
+Inzeráty lists stay without it; history is healed now.
+
+- [x] **W1 — the column (PR #1984, migration 667).** `listings.ad_reference`, one contract cell per portal
+      (field-capture track).
+- [x] **W2 — the heal (2026-10-23 10:45–18:05Z, `reparse.yml fields=ad_reference`, one portal at a time, the
+      property queue drained between them; the autodedup session gated idnes + sreality behind its W8 run).** Active
+      ads filled: maxima 283/283, remax 9,653/9,654, mmreality 10,700/10,701, realitymix 50,124/50,142, ceskereality
+      50,371/50,371, idnes 109,855/110,248, sreality 96,453/109,694 (87.9 %: 13,190 active ads print no code —
+      private sellers — and 51 are the oldest wrapped payloads). History: 750k of 830k rows; the rest are pages
+      that print no number or the ~32k wrapped sreality payloads no heal can read. Witness: on the 98,880
+      properties carrying both an idnes and a sreality ad, 67.7 % of codes agree verbatim once `IDNES-` is
+      stripped; the rest differ on the portals themselves (re-listed order numbers, leading zeros).
+- [x] **W3 — the card (PR #1985, live 11:28Z; checked read-only in production on desktop + phone).** `propertyBrokers` keeps each broker's ads; ONE `BrokerContactCard`
+      (desktop + phone, `ads` optional so /brokers/:id is unchanged) quotes `<portál> · <číslo>` per ad with
+      the same copy button; ONE copy behaviour in `lib/clipboard` (the phone's strip, its copy helper and
+      the phone broker page's duplicate went); `PropertySource` loses the never-read `sreality_id` and the
+      false `source_id_native: null`; the select list is pinned to `property_sources_public`.
+- [x] **W4 — the PDF sheet (PR #1986, live 11:31Z).** `api/routes/property_download.py` selects the column; its
+      `property_brokers` twin returns each broker's ads; `_broker_block` prints one `<portál>  <číslo|—>` line per ad.
+      Aftermath: the day's merges put the first-visit bundle 16 B over its budget (main's `build` red); PR #1987 moved
+      the paste-a-building page behind `lazyChunk` (−5.5 kB gzip), live 12:29Z.
+
+### Phase U-NOTIFY-PUSH: Notifications push program (approved 2026-10-21)
+
+Program `docs/design/notifications-push/PROGRAM.md` (audit `AUDIT.md`, F1–F28; eleven rulings taken 2026-10-21). North
+star: one real-world change becomes one immutable row, owned by one account, shown in one feed and pushed to that
+account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, email (kept, inactive); Telegram is out.
+- [x] **W1 (merged #1944 + live 2026-10-22; migration 651)** — subtract the dead and the dangerous: Estimate rent and "Run matcher
+      now" (R10); the Email/Telegram picker, Settings › Delivery, Telegram, the outbox, ChannelClient, the Resend
+      transport, webhook and unsubscribe (R1, R5); the duplicate /watchdog feed and the System tab (R3); system alerts
+      leave the bell for Health + the canary e-mail (R2b, R9a; migration 651).
+- [x] **W2a (merged #1946 + live 2026-10-22 08:46Z; migration 652; the 48 h overlap gate runs until 2026-10-24)** — the worker's `notifications` lane
+      (300 s; steps watchdog_new / price / monitor, each its own transaction and `lane/notifications/<step>` cell) runs
+      the producers beside the API's matcher: the cursor and lookback go (24 h from `active_since`), one canonical-ad
+      price fragment (7 days), 'inactive' after 24 h gone (R6 a); keys byte-identical (render test), `event_ref` +
+      `actor_account_id` written; shares become `shared_collection | shared_dashboard | shared_pipeline` (migration 652:
+      the five columns, the `active_since` trigger, the wider CHECK, backfills). Gate: cells green, the 9-preset replay,
+      EXPLAIN < 2 s, the false-new baseline.
+- [x] **W3 (merged #1949 + live 2026-10-22; migration 653)** — one event identity:
+      `notification_dispatches_identity_uq` over `EVENT_IDENTITY` (NULLS NOT DISTINCT, partial on `duplicate_of IS
+      NULL`; migration 653 = Migration C: 652's fills since A, system history keyed on its old key, exact repeats
+      marked, `dedupe_key` nullable, the feed index, the index CONCURRENTLY); every producer and the share grant
+      conflict on it and write no `dedupe_key` / `trigger_snapshot_id`; ONE `VISIBLE_SQL` (repeat, own-account
+      dismissal, retired watchdog) on every read, count and update (mark-seen of a hidden row: 404); deleting a
+      watchdog retires it (F21); the carrier is one UPDATE that re-points and marks `duplicate_of`, deleting nothing
+      (F6, F13); `share_ref` reads columns, no `split_part`. Gate: CI green; a merged 'new' row is marked and never
+      re-fires, 0 deleted; a retired watchdog's alerts hidden, rows kept; 0 identity violations.
+- [x] **W4 backend (merged #1950 + live 2026-10-22; migration 654; dark until the VAPID key)** — push plumbing,
+      dark: migration 654 = Migration D (`push_subscriptions`, `notification_deliveries`, service role only);
+      `api/push.py` (RFC 8291 aes128gcm + RFC 8292 VAPID, the RFC vector byte for byte); `GET /push/key`, `PUT`/`DELETE
+      /push/subscription`, `POST /push/opened` (never act); the Czech renderer; the worker's `push` lane (15 s; fan-out
+      with the one-share-a-day cap R11, a 2-min leased claim, one push per device, a 429 holds the device); the
+      `notifications` Health check (stall, recall, failures, unconfigured). **Operator:** generate `VAPID_PRIVATE_KEY`
+      with the toolkit-api one-liner, paste the same value into each service's Variables (the API and the realtime-worker are separate Railway
+      projects), delete the file — done 2026-10-25. Gate: CI-Postgres lease/claim/429 tests green; lane `unconfigured`, then `live_devices` 0; `/push/key` 503
+      then 200. The SPA half (sw.js, the switch, `/n/:dispatchId`) is #1948.
+- [x] **W5a (merged #1947 + live 2026-10-22)** — the phone surfaces that need no push plumbing
+      (R4, F9): one unread observer in Shell for both frames and the page (`lib/unreadCount`), the app-icon badge
+      from it, the phone header's bell beside Účet, and /notifications at phone width (one page, `max-md:`).
+- [x] **W4-fe + W5b (merged #1948 + live 2026-10-22 10:51Z)** — sw.js `push`
+      (always one notification, then the badge) and `notificationclick` (focus + navigate, else open) with a vitest
+      harness over every payload shape; the landing `/n/:dispatchId` (mark-seen → `dispatchTarget`, `?d=` → `/push/opened`);
+      `lib/push` + `usePush` and the sheet's switch "Oznámení na tomto iPhonu"; re-sync on sign-in and the hourly
+      resume; binding follows identity (F18). Owed: the on-device proof (W5 gate, the operator's iPhone).
+- [x] **The publication gate (this PR; migrations 668 + 669; operator rulings 2026-10-23 Q1–Q6; closes F13)** — a
+      property is shown (Browse, the map, Stats) and told (the watchdog) only once published: `properties.settled_at`,
+      stamped by the maintenance pass when its first photo is stored (or it has none) and the engine is done with its
+      ads, or 6 h after it was first seen (`toolkit/publication.py`, one cap, no flags). The image gate went (its two
+      settings rows never existed in production); a merge passes a settled property's stamp to the survivor only when
+      that publishes it earlier (publication never regresses, and never moves later); the 'new' window is keyed on
+      visibility; a 'new' a merge re-points to a property first seen more than 24 h before the alert leaves the feed,
+      badge and push (a tap still lands); the publishing check's `unpublished` stage ("not yet published", never a
+      blocker). Apply: 668 before the merge, 669 promptly after the worker's rollout (it stamps `settled_at =
+      first_seen_at` on the properties first seen in the 24 h before it, which were served ungated).
+- [ ] **Next after the publication gate:** (a) the phone feed's day buckets and "Newest first" on the visible-since
+      moment, not `first_seen_at` — needs a ruling; (b) drop `properties.published_at` + `publish_reason` + their three
+      indexes (the autodedup session's owed drop, now moot for serving too); (c) a worker CLIP lane, so settlement
+      ends in minutes rather than at the cap; (d) let the settled rule ignore the engine's standing refusals
+      (`autodedup/apply.py` `SKIP_SPANS_GROUPS`, `SKIP_CARRIES_UNGROUPED`) once measured; (e) done in #1951: `api/notifications._read_int_setting` deleted (no caller left once the matcher went).
+- [ ] **W2b (built 2026-10-21, stacked on W4; held until W2a has had 48 h of overlap in production; migration 655 applied
+      first)** — one clock in the worker: `matcher_loop` goes with its lease, three interval readers, three thread
+      wrappers and two daily gates; the API's lifespan starts the health teller alone, under `HEALTH_TELLER_DISABLED`
+      (was `NOTIFICATIONS_MATCHER_DISABLED`, no alias); migration 655 = Migration B (`health_liveness()` without its
+      `api` lease cell, an open `api` incident recovers); the jobs check reads a registered lane missing from the
+      heartbeat as Watch, then Problem. Gate: Railway API + worker success, no matcher log lines; over 7 days inactive
+      and reactivated ~60% down, new ≥ the replay. The lease table and six settings rows are read by nothing (W6 drops them).
+- [ ] **W6 (built 2026-10-21, stacked on W2b; the program is delivered once migration 656 is applied)** — the one
+      destructive prune (R8), migration 656 = Migration E: a `$pre$` that refuses while W2a/W2b are not deployed (no
+      `notifications` lane in the heartbeat, the lease renewed in 20 min), 653/654 are missing, or any function body or
+      catalog dependent names a dropped object; R2 (b)'s system_health rows deleted (~906 on 2026-10-21); the account
+      trigger's SYSTEM branch and the CHECKs narrowed (three producers, nine kinds); `notification_dispatches` 24 -> 15
+      columns (`dedupe_key` + UNIQUE, `trigger_snapshot_id`, `channel`, `status`, `error_message`, `target_channels`,
+      `sreality_id`, `estimation_run_id`, `message`), the plain `dispatched_at` and `source_kind` indexes (the keyset and unread ones stay: the RLS readers state no account); `channels` and the cursor on
+      watchdogs, `notify_channels` on collections; `channel_sends`, `notification_suppression`,
+      `resend_webhook_events`, `notification_matcher_lease`, `emit_verification_stale_alert()`, the nine settings rows
+      (copied to `app_settings_history` first). Code: the bell's share sentence from `actor_email` / `share_name` /
+      `share_mode` (it still read `message`), shares write no text, `R2_CARRIERS` loses the dispatch carrier.
+      **Operator:** after W2b AND this PR are merged and deployed (656 applies after its merge: the old API still reads
+      `message`), run `backup_before_drop.yml` (PR body), read the counts back, say "yes, apply it", then
+      `apply_migration.yml` with `656_notifications_w6_prune.sql`. Gate: `$post$` green, drift check green,
+      feed and bell load, gauge review recorded.
+- [ ] **Next:** W2b merges after the 48 h overlap (migration 655 first) · W6 after W2b (backup, then your
+      "yes, apply it") · the on-device proof of W5 (your iPhone, a second account; after the VAPID key).
+
+### Phase U-NEW-PROPERTY: a property from a pasted ad link (in progress, 2026-10-20)
+
+Spec `docs/design/new-property-from-link.md` (PR #1913, approved 2026-10-20, six rulings in). North star: a
+pasted link is an ordinary ad — one identity rule, one fetch path (the drain), one write, one birth; the sites
+we do not crawl are the tenth portal `web`.
+- [x] **W1 `feature/link-ingest`** (PR #1923, merged 2026-10-21) — `scraper/portal_identity.py` (the one URL→(source, native id) canon; the
+      seven parsers import it; `tests/fixtures/portal_url_probes.json` pins Python and `portalIds.ts` alike),
+      `POST/GET /listings/ingest` (admin; enqueue, never fetch), the maintenance lane at 30 s + births inside the
+      daily sweep, `NewPropertyDialog` on Pipeline, Browse and the Odkaz tab, the extension's "Přidat do databáze".
+- [x] **W2 `cleanup/estimation-four`** (PR #1924, merged 2026-10-21) — estimation = add the ad, then estimate it (`listing_id` in, `url` out);
+      the LLM URL parser, both previews, `url_parser`, the orphan machinery and the sreality-only late-binder go.
+- [ ] **W3 `feature/web-portal`** (PR #1936, migration 649) — the tenth portal (deterministic parser, text-lane reading, `indexless`
+      presence seam, daily walk, contract, broker row, chip "Web"); after #1910.
+- [ ] **W4 `cleanup/estimation-four-schema`** (PR #1939) — migration 650 drops `parsed_url_cache`, nine parse columns, two
+      settings, the `idnes_reality` portals row (destructive, OK given 2026-10-20). Written, not applied; applies
+      after 643 + backup (`backup_before_drop.yml`, recipe in the file header); merges after #1910.
+- [ ] **Next (subtraction, after W4):** no `portals` row has kind `'parser'` once 650 drops `idnes_reality` (it was
+      the only one), yet four places still model it — the CHECK (migration 100), the SPA `PortalKind` type and the
+      `'on_demand'` arm of `portalPosture.ts`, the `# parser-only portal` arm in `api/routes/admin.py`, and the fake
+      `'parser'` remax row in `tests/api/test_admin_portals.py`. Drop the kind (`portals.kind` itself stays, design
+      §6), or keep the admin arm and rename its test case to "a portal with no baked default".
+### Phase U-MERGE-LETTERS: merge mode as one statement of letters (live 2026-10-21 06:10Z, PR #1926 = 3e6a904d)
+- **Done (PR #1926, no migration):** Browse's merge mode marks cards with letters — a letter key marks the focused
+  card (the pointer focuses the card it is over; Tab / Shift+Tab move card to card; ← → page the photos),
+  a click writes the active letter (A at first, so click-click-merge still makes one group), the same
+  letter again clears, Backspace / Delete clear — and ONE click merges every letter in ONE transaction:
+  `POST /properties/merge {letters: {property_id: "A"}}`, the split's statement shape and codec, over
+  `toolkit.property_identity.merge_letters` (shared with the split's join; every property locked up front
+  in id order, each letter its own group; a refusal names the letter and writes nothing); one receipt per
+  letter; no ruling crosses letters; the Rulings page merges a pair as a one-letter statement. Rulings
+  D1–D6 and the as-built record: `docs/design/merge-letters/PROGRAM.md`.
+- **Owed:** the first real multi-letter merge by the operator (the read-only production check of the keys
+  passed 2026-10-21: 19 steps over 24 live cards, 0 console errors, nothing merged).
+
 ### Phase U-MERGE-FEEDBACK: what Browse shows after a big merge (reported 2026-10-19, investigated 2026-10-20)
 
 The operator merged 26 inactive ads of one flat (Lužická 1681/17, Praha; byt 2+1, 50 m², 10.87 M Kč;
@@ -29,9 +173,37 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   `VALUO_SANDBOX_API_TOKEN`), `api/http_json.py` folding the two `_http_get_json` copies (the Mapy key no longer reaches
   logs), the admin-claim copies folded into `deps.is_admin`, the server label dicts into `filter_registry.label_cs`,
   and the phone Poloha no longer calls a district point a town. Rationale: `docs/architecture.md` § rule 12.
-- **Next:** W3, the section (desktop editor + phone read-only card); the sandbox probe through the live API after the
-  deploy (flat sale and lease, a house with `lot_area`, land, a negative floor) decides the lease basis and whether a
-  house's plot is sent; a per-plan monthly quota counted from the rows before the production token.
+- **Done (W3, the section, on Valuo v3):** `<section id="valuo">` after Odhady on the property page for every signed-in
+  user (`components/listing-detail/ValuoSection.tsx` over `lib/valuo.ts`): the editor flips in place and is drawn from
+  the API's `fields` alone — exactly each type's v3 request schema (`api.valuo.com/v1/market-value/{type}`, commercial
+  included), the place editable — each value tagged with its provenance (`z inzerátu` / `odvozeno` / `předpoklad` /
+  `chybí` / `upraveno`), Valuo's refused parameters under their fields; the result card reads Valuo's confidence band
+  (`range_price`) on the ruler against the asking price, our latest run and MF, a reliability line (comparables, reach,
+  match; no grade) and the comparables with their photos (one `advert/detail` call, migration 646); a sandbox answer
+  is stored `sandbox` whatever the token's name; the history is the estimations' `RunHistory`, generalised; the phone
+  shows the latest answer only. The estimate card frame is one `EstimateCard`. Patterns: `.interface-design/system.md`.
+- **Settled (production call 2026-10-21, property 1012847):** Valuo's lease figures are MONTHLY (≈50 m² flats at
+  17 500–20 000 Kč, avg 18 850 Kč, 377 Kč/m²), so a lease shows `/měs` and the rent basis.
+- **Done (review fixes):** Valuo is a named shape-3 site in `tenancy.md` on the one no-account 400; its per-m² figures
+  are rule 23's named outside exception (`REGISTERED_SITES`); one error shape (`code`, one `unconfigured`), the location
+  reader out of the route module (`api/property_location.py`); a house's `garage_area` / `other_area` are user-set. SPA:
+  the editor's controls are `controls.tsx`'s form box (`box=`: one 34 px height, dashed absent, brick refused, the unit
+  inside), no local patches; one `useEstimationRuns` query for Odhady and the Valuo mark; both ledgers are `table.tsx`
+  `Column`s under `SectionLabel`/`Th`, their data ink-3; Valuo's failures in Czech.
+- **Done (W5, 2026-10-21):** "Náš přepočet" — a tick box per comparable (all ticked), a card under Valuo's own with the
+  total, the per-m² and its distance from Valuo, "orientační" from 3 kept and a band from 5, "Vrátit výchozí"; browser
+  only (`lib/valuo.ts` `recalc`: Valuo's weighted geometric mean, 0.11 % from its own on five real answers), nothing
+  stored, desktop only, offered only while the recipe lands within 1 % of Valuo's average. The subject's own ad (matched
+  by the portal id over ALL the property's ads, delisted too) is tagged "tento inzerát" and stays ticked; adding
+  comparables is not part of it. The unread record/summary names left the API payload (Valuo's answer is stored whole).
+- **Next:** one production call confirms whether a house's plot is sent; a per-plan monthly
+  quota counted from the rows before the production token; Valuo's own field messages still show as bare English under
+  a Czech caption (quote them as the failure card does: `Valuo: „…“`); ONE app-wide Czech translation pass (operator
+  ruling): the run ledger's `SUCCESS`/`FAILED` chips, the estimation block's English copy (`ESTIMATES`, the runs ledger's
+  `When` / `viewing` / `/mo` — `RunHistory`'s `when`/`viewing` and `PerMonth`'s `unit` go with it) stay English until
+  it. **Ruled 2026-10-21 (operator OK):** the Valuo routes answer a caller without an account with the one shared 400,
+  English `no account for caller` (it was „Přihlášený uživatel nemá účet, ocenění nelze uložit.“; no one reaches it:
+  signup seeds an account, 0 of 5 users lack one), and the sentence joins the app-wide translation pass above.
 
 ### Phase U-CURATED-SCOPE: curated-set scope (done, 2026-10-19)
 - **Done:** tags, collections and pipeline stages became ONE kind of filter (brief + rulings:
@@ -96,7 +268,8 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
     `tests/test_curation_account_stamping.py`, then `tests/api/test_auth.py` gives 15 × 503 "Auth is
     not configured"; each file passes alone and CI's path order (tests/api first) never hits it —
     find the fixture that leaks the auth state.
-  - Share notifications are in-app only: no per-recipient email delivery is built (ruling 5e).
+  - ~~Share notifications are in-app only: no per-recipient email delivery is built (ruling 5e).~~ Superseded
+    2026-10-21: shares are pushed to the recipient's iPhone from W4 (Phase U-NOTIFY-PUSH; ruling 5(e) superseded).
 
 ### Phase U-PIPE-SIGNUP: Every account starts on the default board (done, 2026-10-16)
 - **Done:** migration 612 — one signup path (account, owner membership, the 10-stage default board with codes from
@@ -104,8 +277,9 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   account-qualified. Own PRs, same sprint (merge separately): #1828 the SPA draws an empty board's columns, #1830
   migration 611 (tenant serial ids → identity; apply it BEFORE 612), #1831 the extension resets its caches on an
   identity change; migration 613 drops `legacy_backfill_claim` (operator ruling 2026-10-17).
-- **Next (unscheduled):** `notification_dispatches` needs a column-level UPDATE grant (its global `dedupe_key` is
-  browser-writable); the 60 pre-299 public sequences still grant `authenticated` setval (one revoke migration + a
+- **Next (unscheduled):** ~~`notification_dispatches` needs a column-level UPDATE grant (its global `dedupe_key` is
+  browser-writable)~~ stale: 619 narrowed the browser's UPDATE to columns and 651 to `seen_at` alone; the global
+  `dedupe_key` itself is replaced in W3 (Phase U-NOTIFY-PUSH: nothing writes it since migration 653; migration 656 drops it). The 60 pre-299 public sequences still grant `authenticated` setval (one revoke migration + a
   census arm).
 
 ### Phase U-LINK: Artifact link on the property (done, 2026-10-14)
@@ -142,10 +316,29 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   note through merges and a split's note copy takes them. The bytes live in R2 under
   `custom-attachments/note/` and are served by the API, with an extension allowlist that
   admits no active types.
+- **Done (photos sprint W1, 2026-10-23, [#1974](https://github.com/waiff/sreality/pull/1974)):**
+  the files are the PROPERTY's, a note optional (`property_attachments`, migration 660): their
+  own merge carrier (the same bytes once per account and property), a deleted note leaves them
+  on the property, a note's move takes them along, a split's note copy carries none.
+  `api/attachments.py` replaces `api/note_attachments.py` and the building run's duplicate
+  stack; `/properties/{id}/attachments` replaces the note-scoped routes; tiles draw a 1080 px
+  display copy (`?w=1080`, made once, JWT proxy only); no HEIC.
+- **Done (photos sprint W2, 2026-10-23, PR [#1975](https://github.com/waiff/sreality/pull/1975)):** "Moje fotky", one strip of the acting
+  identity's own photos per property (a note's are the same records, shown under the note too):
+  the phone page's section after Poloha (Vyfotit / Z knihovny) and the desktop's Fotky tab (Upload,
+  drag-and-drop); tiles from the 1080 px copies open the original in one viewer (a note's photo
+  too, no more new tab) with Share (the share sheet with the original files, else a download) and
+  Delete behind a second tap; Vybrat for Share (N) / Delete (N). A split lists a file with no note
+  as its own item (move or copy; a copy shares the stored bytes). The property's zip packs the
+  originals under `moje-fotky/`.
 - **Next (unscheduled):**
   - The Chrome-extension panel lists a note's text only, not its files.
   - Nothing deletes R2 objects; a sweep for objects no row names would have to spare the
-    ones a split's copy shares.
+    ones a pre-660 split's copy shares.
+  - Owed by 660: drop the `property_note_attachments` compatibility view, the fill trigger and
+    its function once #1974 is live; drop `backup_660` a week later.
+  - A photo with no note is never shared (no per-photo mark): only a marked note's files cross a
+    share.
 
 ### Rule #18: an executed no-orphan merge test (done, 2026-10-01)
 - **Done:** `tests/test_property_carriers_live.py` (PR 0 #1664, extended by the
@@ -487,7 +680,8 @@ from Browse, not just from the board.
   `stageAccent`/`stageBadge` replace the per-surface copies — the board fell back
   to grey for an uncoloured stage while the listing header fell back to copper.
   `PipelineFunnelButton` now serves the Browse cards AND the Table (which had no
-  pipeline affordance at all, quietly breaking rule #22's "every surface"), and
+  pipeline affordance at all, quietly breaking rule #22's "every surface"; the Table
+  tab itself was removed 2026-10-20), and
   `usePipelineCard` is the single add/remove/move hook + invalidation policy.
   The Chrome-extension panel mirrors the badge and tints its pill by stage, with
   the tag palette added to its by-value mirror of the SPA tokens.
@@ -501,7 +695,8 @@ from Browse, not just from the board.
 - **A scope, not a preset.** The chip leads the preset row, but `pipeline` sits in
   `PRESET_EXCLUDED_KEYS`: it is never stored in a preset and never counted in the
   dirty comparison, so toggling it shows no "Update preset" and it survives
-  loading one. Per-stage narrowing lives in the sidebar (Curation → Pipeline).
+  loading one. (Superseded 2026-10-22: a preset stores the pipeline scope like every
+  filter — `roadmap/ui-track.md`.) Per-stage narrowing lives in the sidebar (Curation → Pipeline).
   Watchdogs report it as unsupported — the operator's own state can't be a
   trigger for their own clicks.
 - **Follow-up, same day:** the chip shipped as a MODIFIER and that was wrong —
@@ -512,8 +707,9 @@ from Browse, not just from the board.
   already supported — see architecture rule 21b — and which incidentally fixes
   a control that lied: clicking the selected deal-type pill wrote `deal=null`
   and silently snapped back to `pronajem`.
-- Next: nothing queued here; per-stage columns on the Table and a "days in stage"
-  signal are the obvious follow-ups if the scope gets heavy use.
+- Next: nothing queued here; a "days in stage" signal is the obvious follow-up if
+  the scope gets heavy use. (Per-stage columns on the Table: moot, the Table tab was
+  removed 2026-10-20.)
 
 ### Phase U-PIPE Phase 3i: The funnel opens a stage menu (done)
 The funnel was a toggle: clicking it on a property already in the pipeline
@@ -529,8 +725,8 @@ to advance a deal without opening the listing page. It now opens a shared menu.
   `property_pipeline.note` is a separate column with no writer.)
 - **One menu, three surfaces.** `PipelineStageMenu` (stage list badged from
   `code`, current stage checked, terminal stages under their own divider, then
-  a two-step remove) is opened by the Browse cards, the Browse table rows AND
-  the listing header — which drops its own `<select>` + bare ✕. Adding stays
+  a two-step remove) is opened by the Browse cards, the Browse table rows (gone
+  with the Table tab, 2026-10-20) AND the listing header — which drops its own `<select>` + bare ✕. Adding stays
   one click into the entry stage: cheap and reversible. The kanban keeps
   drag-to-move (rule #22) and its existing trash confirm; the Chrome extension
   keeps its `<select>` and gains the same confirm on ✕ via a generic
@@ -795,7 +991,9 @@ surfaces the yield once it lands. Email / SMS / push remain deferred
 (see open questions below). Cron cadence is still nightly; the
 operator can call `POST /notifications/matcher/run` from the UI's
 "Run matcher now" button to trigger an immediate evaluation against
-any newly-scraped listings.
+any newly-scraped listings *(superseded 2026-10-21: that button, the
+route and the per-row estimation kickoff were deleted in W1 of
+Phase U-NOTIFY-PUSH, ruling R10)*.
 
 **What shipped**
 
@@ -829,13 +1027,21 @@ any newly-scraped listings.
   merge f2d7b359; `extra='ignore'`); `ComparableFilters` gains the garden pair; both models
   now EQUAL their agendas by test; Browse reads the generated `BUILDING_MATERIAL_BUCKETS`
   (fix/watchdog-dropped-filters, C4 PR 2).
+- ✅ M3 + watchdog map area (2026-10-21, feature/watchdog-map-area): the map box is the ONE
+  spatial shape — `WatchdogFilterSpec.bounds` (Browse's `MapBounds`) replaces `lat`/`lng`/
+  `radius_m` and the matcher's ST_DWithin circle; `api/location_filter.bounds_where` renders
+  the lat/lng band the list and both stats RPCs apply; `filtersToWatchdogSpec` reads the one
+  `effectiveBbox` (moved to `lib/filters.ts`, over the one `bboxAround` formula), so a
+  centre+radius pick saves as the square Browse filtered on and the viewport box rides along
+  through the create dialog's checkbox (ticked); `MapAreaControl` edits the box on
+  `/watchdog/:id/edit` ("Use current view"); the two map controls paint through
+  `lib/mapShape`. 0 stored specs carried a circle, so nothing was migrated.
 
 **Next (filter definition, tracked from C4)**
 
 - M2: the agent advertises 10 COMPARABLES ids that `_FCR_OVERRIDE_FIELDS` drops — changes
   agent cohorts, needs an operator ruling, own PR.
 - The agent's null `category_type` path (`api/agent.py`) — same posture as M2.
-- M3: center+radius is a circle in Python and a bounding square in Browse.
 - M4: `tom_days` reaches Stats but not the Browse list.
 - M7: integer area params in the browse RPCs. M11: canonical-advert row vs property rollup.
 - Browse's TS dispatch switches to `sql_kind` (drops `isMinId`/`isMaxId` + the duplicated
@@ -848,7 +1054,9 @@ any newly-scraped listings.
   CHECK-bounded to `'in_app'` only; a future migration adds the new
   enum values and the dispatch worker grows a fan-out branch
   *(superseded: email + Telegram deliver through the `channel_sends`
-  ledger, migration 207, not a widened `channel` — rule #16)*.
+  ledger, migration 207, not a widened `channel` — rule #16; superseded
+  again 2026-10-21: Telegram is out, email inactive, iPhone push from W4
+  of Phase U-NOTIFY-PUSH)*.
 - 5-minute scrape cadence (Shape A from the original proposal).
   Today's nightly cron still applies; the matcher loop honestly
   surfaces "no fresh listings" between scrapes. A new

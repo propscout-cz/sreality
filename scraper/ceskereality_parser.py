@@ -37,7 +37,9 @@ from selectolax.parser import HTMLParser, Node
 from scraper import street, vocabulary
 from scraper.area import PortalAreas, derive_headline_area, parse_area_text
 from scraper.attribute_contract import floor_convention, source_value, source_values
+from scraper.ceskereality_client import detail_url
 from scraper.floor import floor_from_portal
+from scraper.portal_identity import native_id
 from scraper.price_text import is_per_area_price
 from scraper.published import czech_date
 from scraper.scraped_listing import ScrapedListing
@@ -50,11 +52,11 @@ SOURCE = "ceskereality"
 SALE_TYPE: dict[str, str] = {
     "prodej": "prodej",
     "pronajem": "pronajem",
+    "drazby": "drazba",
 }
 CATEGORY_MAIN: dict[str, str] = {
     "byty": "byt",
     "rodinne-domy": "dum",
-    "chaty-chalupy": "dum",          # sreality lumps chata/chalupa under "dům"
     "pozemky": "pozemek",
     "komercni-prostory": "komercni",
     "ostatni": "ostatni",
@@ -65,8 +67,6 @@ CATEGORY_MAIN: dict[str, str] = {
 _CZ_LAT_MIN, _CZ_LAT_MAX = 48.0, 51.5
 _CZ_LON_MIN, _CZ_LON_MAX = 12.0, 19.0
 
-# The numeric listing id is the trailing "-1234567.html" of the detail URL.
-_ID_RE = re.compile(r"-(\d{4,})\.html\b")
 _STRANA_RE = re.compile(r"[?&]strana=(\d+)")
 _PATH_RE = re.compile(r"^/([a-z]+)/([a-z0-9-]+)/")
 # A Czech-format price run: digits split by ordinary / no-break / thin spaces.
@@ -129,22 +129,29 @@ def _in_cz_bbox(lat: float, lon: float) -> bool:
     return _CZ_LAT_MIN <= lat <= _CZ_LAT_MAX and _CZ_LON_MIN <= lon <= _CZ_LON_MAX
 
 
-def _id_from_href(href: str | None) -> str | None:
-    if not href:
-        return None
-    m = _ID_RE.search(href)
-    return m.group(1) if m else None
-
-
 def category_from_url(url: str) -> tuple[str | None, str | None]:
     """Derive (category_main, category_type) from a detail URL's path,
-    /{sale}/{category}/… — the detail-drain recovers a listing's category from
-    its own URL since the shared queue doesn't carry it."""
+    /{sale}/{category}/… — the shared queue doesn't carry a category, so
+    `parse_detail` reads it off the page's own URL (`_page_url`)."""
     path = re.sub(r"^https?://[^/]+", "", url or "")
     m = _PATH_RE.match(path)
     if not m:
         return None, None
     return CATEGORY_MAIN.get(m.group(2)), SALE_TYPE.get(m.group(1))
+
+
+def _page_url(tree: HTMLParser, requested: str) -> str:
+    """The ad's own URL: its canonical path on the www host, else the URL we requested."""
+    # A re-categorised ad keeps answering 200 at its old URL with the new page (3639104:
+    # /prodej/komercni-prostory/… serves /prodej/byty/…), so only the canonical names its
+    # category; the canonical's host is regional on every page and says nothing.
+    node = tree.css_first('link[rel="canonical"]')
+    path = re.sub(r"^https?://[^/]+", "", (node.attributes.get("href") if node else None) or "")
+    if not _PATH_RE.match(path):
+        return requested
+    url = detail_url(path)
+    own_id = native_id(SOURCE, requested)
+    return url if own_id is not None and native_id(SOURCE, url) == own_id else requested
 
 
 def index_price(text: str | None) -> int | None:
@@ -401,7 +408,7 @@ def parse_index(html: str) -> IndexPage:
             "a.i-estate__title-link"
         )
         href = link.attributes.get("href") if link else None
-        source_id = _id_from_href(href)
+        source_id = native_id(SOURCE, href)
         if not source_id or not href or source_id in seen:
             continue
         seen.add(source_id)
@@ -484,15 +491,12 @@ def areas_from_params(
     )
 
 
-def parse_detail(
-    html: str,
-    *,
-    source_url: str,
-    category_main: str | None,
-    category_type: str | None,
-) -> ScrapedListing:
+def parse_detail(html: str, *, source_url: str) -> ScrapedListing:
+    """The listing on a detail page; its category and `source_url` are the page's own URL's."""
     tree = HTMLParser(html)
-    source_id = _id_from_href(source_url) or ""
+    source_url = _page_url(tree, source_url)
+    category_main, category_type = category_from_url(source_url)
+    source_id = native_id(SOURCE, source_url) or ""
     ld = _jsonld_product(html)
     offers = ld.get("offers") if isinstance(ld.get("offers"), dict) else {}
     params = _detail_params(tree)
@@ -565,6 +569,7 @@ def parse_detail(
         source=SOURCE,
         source_id_native=source_id,
         source_url=source_url,
+        ad_reference=vocabulary.reference(read("ad_reference")),
         category_main=category_main,
         category_type=category_type,
         price_czk=price_czk,

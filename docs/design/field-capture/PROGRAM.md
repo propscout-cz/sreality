@@ -1,7 +1,7 @@
 # FIELD CAPTURE — every typed listing fact, captured properly, on all nine portals
 
 **Program document. This file is the program's source of truth.**
-Status: plan approved by the operator 2026-09-21; W0 in flight.
+Status: **DELIVERED 2026-09-22** — W0–W9 merged and live; the text lane extracts bazos `floor` + `has_lift` on gpt-5.6-luna (first pass: 250 adverts, 96 values, $0.054, 0 errors); branch protection on `main` enabled as the closing step.
 Rulings R1–R12 below are **binding** — they supersede any design text, code comment or docstring that differs.
 
 ---
@@ -160,7 +160,8 @@ mention "m²"). The investigation (26 agents, critic-checked) found what is actu
   Sb.)", a bare letter on maxima / remax / bezrealitky — the same shape it gives A–F. There is nothing to split on,
   so `energy_rating` stays A–G and the 67 % G share stays what W1 made it: a measure-validity fact the fill matrix
   reports.)* The on-demand URL parser is kept
-  and brought onto the generated vocabulary. `LLM_DAILY_COST_WARN_USD` moves to $15 with the lane.
+  and brought onto the generated vocabulary *(superseded 2026-10-20 by ruling 3 of
+  `docs/design/new-property-from-link.md` — the parser is deleted)*. `LLM_DAILY_COST_WARN_USD` moves to $15 with the lane.
   *(W5 correction: ownership `jine` is the last clause's first real customer. The brief called it "semantically
   absent → NULL"; it is the portals' own "other" bucket — idnes states it three ways ("jiné", "s.r.o.",
   "podílové"), mmreality as "Jiné", bezrealitky as "OSTATNI" — and four of the five used to drop it while realitymix
@@ -191,8 +192,10 @@ recovery row and is marked seen by hand — `notification_dispatches` is append-
 ## 3. What this program never does
 
 - Puts an LLM, a cache probe, or any per-row statement between a sighting and publication.
-- Adds a flag, an `app_settings` key, an env var, or a column — one ruled exception: the location reader's
-  claim-lane stamp `listing_description_enrichments.mined_contract_version` (W3, migration 581, ruling 2026-09-30).
+- Adds a flag, an `app_settings` key, an env var, or a column — two ruled exceptions: the location reader's
+  claim-lane stamp `listing_description_enrichments.mined_contract_version` (W3, migration 581, ruling 2026-09-30)
+  and `listings.ad_reference`, the advertiser's own offer number the broker card quotes (migration 667, operator
+  ruling 2026-10-23).
 - Blanks a stated value, writes history in bulk, or lets a heal bump `last_seen_at`.
 - Touches autodedup code/docs, or lets an attribute edit move a location contract's governed hash.
 
@@ -342,7 +345,7 @@ A heal through the W3 seam writes only the named `listings` columns and a `dirty
    `properties_public` where `first_seen_at > last_matched_first_seen_at` for that subscription, plus a re-scan of
    `first_seen_at <= cursor AND > now() - lookback`, where `lookback = max(60, 2 × notifications_new_requires_image_
    timeout_minutes)` — 60 minutes on today's settings (neither image-gate key is set in `app_settings`, so both
-   defaults apply). `properties.first_seen_at` is `min(child.first_seen_at)` (`scripts/recompute_property_stats.py`
+   defaults apply; the image gate is superseded 2026-10-23 by the publication rule, migs 668/669). `properties.first_seen_at` is `min(child.first_seen_at)` (`scripts/recompute_property_stats.py`
    :179) and no heal writes `listings.first_seen_at`, so a property older than the window cannot re-enter it however
    its columns move. 685 of 461k active properties were inside that 60-minute window at the time of measurement.
 2. **The dedupe key is once-ever per property.** `wd:{sub}:new:{property_id}`, UNIQUE, `ON CONFLICT DO NOTHING`
@@ -661,6 +664,24 @@ is now declined at the parse, BEFORE the content hash, in the one module that ow
   378126: usable_area 1,800 m², area_m2 NULL) — the guards read only `area_m2`, but the LLM judge's digest
   (`autodedup/judge.py` `DIGEST_ATTRS`) still shows it as "usable area".
 
+**A figure in the plot box is not always a plot (general ruling 3, 2026-09-30; operator answers 2026-10-01; rebuilt
+2026-10-25 from the superseded PRs #1668 / #1669, heal = migration 671 in its own PR).** Not our scraping: on 14 of 14
+live pages the portal itself prints one figure in the plot box and the floor-area box, and every `estate_area` key map
+was right (2026-10-25 census of active komerční plots equal to the floor figure: ceskereality 1,394 of its 3,090 active
+komerční plots, idnes 641, realitymix 256, mmreality 59, remax 5, maxima 1; plus 3,218 active flat "plots", 3,194 of
+them ceskereality's — the doubled floor figure, the placeholder 1 or the building's parcel). The missing rule is one
+function, `scraper.area.stated_plot`, at the contract boundary BEFORE the hash (`ScrapedListing.__post_init__`;
+sreality's `parse_listing`): a byt NEVER carries a plot; a komerční plot equal (0.1 m², half up) to the usable measure
+or a LABELLED headline (usable / floor / total) is absence; dum stays as it is (the operator's call), pozemek and
+ostatni untouched; a title fallback and zastavěná plocha are never compared. Contract cells stay `structured` (R4:
+`none` / `text` would preserve-if-null and freeze every stored echo). The heal is a 573-pattern migration (byt: every
+stored plot; komerční: the equality rule; active AND inactive; backup into `backup_671.listing_plots`, no snapshot,
+`dirty_properties`), because reparse never blanks (R9). **Residuals, named:** the reverse case — an areál, farm, camp
+or petrol station whose true parcel is typed into the usable box too keeps the wrong area and loses the true plot; the
+2026-10-25 hand-read found 93 active hits whose own text states that parcel and estimates ~170 (~7 % of the active
+komerční hits), so the original's campsite (idnes 19082282) is a class; a garage whose parcel truly equals its floor
+loses a figure that added nothing; idnes dum carries 1,668 active echoes and no rule (the house rule is unchanged).
+
 **W9.** Each item its own PR (status as of 2026-09-21, worked alongside W0):
 
 - ✅ **browse_list cadence docs.** It is `*/15` since migration 413; `toolkit/browse_read_model.py` and the Browse
@@ -730,8 +751,8 @@ is now declined at the parse, BEFORE the content hash, in the one module that ow
   existing type on its @3 claims until re-mined, and a type with no claim at any version contributes nothing.
   **The fill is not automatic** — the bodies-half hash gate re-arms PAGE entries and bezrealitky has none, so the
   corpus-wide mine needs one dispatched `location_claims_intake.yml` at `mode=full source=bezrealitky`.
-- ⏳ **Branch protection on `main`** (PR + CI check, no review requirement) — an operator action on a GitHub
-  settings page, not a code change. Last, announced first, because it changes how every parallel session merges.
+- ✅ **Branch protection on `main`** enabled 2026-09-22 (PR + the CI checks required, no review) — the closing
+  step, announced first because it changed how every parallel session merges.
 
 ## 6. Cut from scope (reported, not built)
 

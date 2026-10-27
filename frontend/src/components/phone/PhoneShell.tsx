@@ -1,7 +1,10 @@
 /* The phone frame around the routes (#1766, design #1762): a 3.5 rem header with
- * the page's title, a back affordance off the tab roots and the account button;
- * a bottom tab bar for the five areas (W1's four and Odkaz, W2 #1767). Shell.tsx picks this frame or the
- * desktop one by `usePhoneShell()`; the route body is the same either way.
+ * the page's title, a back affordance off the tab roots, the bell (the unread
+ * count, opening Notifications; notifications push W5a, ruling R4) and the
+ * account button, whose sheet holds the theme, this iPhone's push switch (W5b),
+ * the desktop view and sign-out; a bottom tab bar for the six areas (W1's four,
+ * Odkaz, W2 #1767, and Prohlídky). Shell.tsx picks this frame or the desktop one by
+ * `usePhoneShell()`; the route body is the same either way.
  *
  * THE HEADER IS EXACTLY `h-14`, as the desktop TopBar is (Shell.tsx explains
  * why): Filters, BrowseExperience and Pipeline pin panes at `top-14` /
@@ -13,9 +16,11 @@ import { Link, useLocation, useNavigate, useNavigationType } from 'react-router-
 
 import CollectionMark from '@/components/CollectionMark';
 import SkipLink from '@/components/SkipLink';
+import { SegmentedBar } from '@/components/controls';
 import { FunnelIcon } from '@/components/icons';
 import { useAuth } from '@/lib/auth';
 import { APP_SHORT } from '@/lib/brand';
+import { czPlural } from '@/lib/format';
 import { useTitleSegment } from '@/lib/pageTitle';
 import {
   PHONE_TABS,
@@ -28,11 +33,14 @@ import {
   type PhoneTabKey,
 } from '@/lib/phoneShell';
 import { ROUTES } from '@/lib/routes';
-import { useTheme, type ThemeMode } from '@/lib/theme';
+import { COLOR_SCHEMES, useScheme, useTheme, type ThemeMode } from '@/lib/theme';
+import SchemeSwatch from '@/components/SchemeSwatch';
+import { useUnreadCount } from '@/lib/unreadCount';
 import { MAIN_ID } from '@/lib/useRouteFocus';
 
 import BottomSheet, { SheetContext } from './BottomSheet';
-import { BackIcon, LinkIcon, PersonIcon, RollIcon } from './phoneIcons';
+import { BackIcon, BellIcon, CalendarIcon, LinkIcon, PersonIcon, RollIcon } from './phoneIcons';
+import PushSwitch from './PushSwitch';
 
 /* A short line a page may set beside the header's title (the feed's "5 nových
  * dnes"). Cleared when the page unmounts. A no-op outside the phone frame. */
@@ -125,6 +133,7 @@ function PhoneHeader({
 }) {
   const navigate = useNavigate();
   const segment = useTitleSegment();
+  const unread = useUnreadCount();
   const [accountOpen, setAccountOpen] = useState(false);
   const title = root && tab ? tab.label : (segment ?? APP_SHORT);
 
@@ -162,6 +171,7 @@ function PhoneHeader({
             {aside}
           </span>
         )}
+        {unread.visible && <NotificationBell count={unread.count} />}
         <button
           type="button"
           onClick={() => setAccountOpen(true)}
@@ -177,9 +187,46 @@ function PhoneHeader({
   );
 }
 
+/* The way to the notifications feed: Shell's one unread count (lib/unreadCount),
+ * the number the desktop badge and the app icon show, on a copper tally (copper
+ * = unread, as the feed's own dots) cut from the glyph by a paper rim. Hidden
+ * with the feed where the plan hides it. /notifications belongs to no tab, so
+ * the page opens with the header's back affordance, as a property does. */
+function NotificationBell({ count }: { count: number }) {
+  const { pathname } = useLocation();
+  const to = ROUTES.notifications.build();
+  const here = pathname === to;
+  return (
+    <Link
+      to={to}
+      aria-label={
+        count > 0
+          ? `Upozornění: ${count} ${czPlural(count, 'nepřečtené', 'nepřečtená', 'nepřečtených')}`
+          : 'Upozornění'
+      }
+      aria-current={here ? 'page' : undefined}
+      className={[
+        'relative flex h-11 w-11 shrink-0 items-center justify-center',
+        here ? 'text-[var(--color-ink)]' : 'text-[var(--color-ink-2)] active:text-[var(--color-ink)]',
+      ].join(' ')}
+    >
+      <BellIcon className="h-[22px] w-[22px]" />
+      {count > 0 && (
+        <span
+          aria-hidden
+          className="absolute left-[22px] top-[5px] flex h-[18px] min-w-[18px] items-center justify-center rounded-full border-[1.5px] border-[var(--color-paper)] bg-[var(--color-copper)] px-[3px] font-mono text-[10px] font-medium leading-none tabular-nums text-[var(--color-paper)]"
+        >
+          {count > 99 ? '99+' : count}
+        </span>
+      )}
+    </Link>
+  );
+}
+
 const TAB_ICON: Record<PhoneTabKey, ReactNode> = {
   feed: <RollIcon className="h-[22px] w-[22px]" />,
   pipeline: <FunnelIcon className="h-[22px] w-[22px]" />,
+  viewings: <CalendarIcon className="h-[22px] w-[22px]" />,
   collections: <CollectionMark className="h-[22px] w-[22px]" />,
   brokers: <PersonIcon className="h-[22px] w-[22px]" />,
   link: <LinkIcon className="h-[22px] w-[22px]" />,
@@ -193,7 +240,7 @@ function TabBar({ pathname, marked, hidden }: { pathname: string; marked: PhoneT
       className="fixed inset-x-0 bottom-0 z-30 border-t border-[var(--color-rule-strong)] bg-[var(--color-paper)]"
       style={{ paddingBottom: TAB_BAR_INSET }}
     >
-      <div className="grid h-14 grid-cols-5">
+      <div className="grid h-14 grid-cols-6">
         {PHONE_TABS.map((t) => {
           const owns = t.owns(pathname);
           const on = owns || t.key === marked.key;
@@ -233,6 +280,9 @@ const THEMES: ReadonlyArray<{ value: ThemeMode; label: string }> = [
 function AccountSheet({ onClose }: { onClose: () => void }) {
   const { user, signOut, isAdmin } = useAuth();
   const [mode, setMode] = useTheme();
+  const [scheme, setScheme] = useScheme();
+  /* Push is the bell's other half: where the plan hides the feed, no switch. */
+  const { visible: notifications } = useUnreadCount();
   return (
     <BottomSheet
       label="Účet"
@@ -241,36 +291,42 @@ function AccountSheet({ onClose }: { onClose: () => void }) {
     >
       <div className="px-4 pb-1 pt-3">
         <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--color-ink-3)]">
-          Vzhled
+          Barevné schéma
         </p>
-        <div
-          role="radiogroup"
-          aria-label="Vzhled"
-          className="mt-2 grid grid-cols-3 overflow-hidden rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)]"
-        >
-          {THEMES.map((t, i) => (
+        <div role="radiogroup" aria-label="Barevné schéma" className="mt-2 grid grid-cols-3 gap-2">
+          {COLOR_SCHEMES.map((sc) => (
             <button
-              key={t.value}
+              key={sc.value}
               type="button"
               role="radio"
-              aria-checked={mode === t.value}
-              onClick={() => setMode(t.value)}
+              aria-checked={scheme === sc.value}
+              onClick={() => setScheme(sc.value)}
               className={[
-                'h-9 text-center text-[13px]',
-                i > 0 ? 'border-l border-[var(--color-rule)]' : '',
-                mode === t.value
-                  ? 'bg-[var(--color-copper-soft)] font-medium text-[var(--color-copper)]'
-                  : 'text-[var(--color-ink-2)]',
+                'flex h-14 flex-col items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border text-[13px]',
+                scheme === sc.value
+                  ? 'border-[var(--color-copper)] bg-[var(--color-copper-soft)] font-medium text-[var(--color-copper)]'
+                  : 'border-[var(--color-rule-strong)] text-[var(--color-ink-2)]',
               ].join(' ')}
             >
-              {t.label}
+              <SchemeSwatch colors={sc.swatch} />
+              {sc.label}
             </button>
           ))}
         </div>
       </div>
+      <div className="px-4 pb-1 pt-3">
+        <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--color-ink-3)]">
+          Vzhled
+        </p>
+        <div className="mt-2">
+          <SegmentedBar tone="phone" fill label="Vzhled" options={THEMES} value={mode} onChange={setMode} />
+        </div>
+      </div>
       <div className="mt-3 border-t border-[var(--color-rule-soft)]">
-        {/* The phone has no Admin menu and no bell, so this row is its one way to
-          * Health; admin-only, as the page is. */}
+        {notifications && <PushSwitch />}
+        {/* The phone has no Admin menu, and system alerts never reach the bell
+          * (ruling R2b), so this row is its one way to Health; admin-only, as
+          * the page is. */}
         {isAdmin && (
           <Link
             to={ROUTES.health.build()}

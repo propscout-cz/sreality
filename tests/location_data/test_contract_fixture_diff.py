@@ -43,6 +43,7 @@ from location_data.page_readers import (
     PAGE_READERS,
     ArchivedPayload,
     _licensed_coordinate,
+    read_entry,
     stamp_page_claim,
 )
 from location_data.html_scope import ScopeRegister, scope_html
@@ -319,7 +320,7 @@ def score_archived(contract: contracts.PortalContract) -> list[dict[str, Any]]:
     row = fx.listing(contract.source, {}, native=native)
     out: list[dict[str, Any]] = []
     for entry in sorted(entries, key=lambda e: e.entry_id):
-        for read in PAGE_READERS[entry.reader](entry, row, payload, document):
+        for read in read_entry(entry, row, payload, document):
             stamped = stamp_page_claim(read.claim, payload)
             # The C6 licence ladder, applied exactly as the real lane applies it. Without
             # this the gate would show a green claim for a coordinate the lane REFUSES —
@@ -568,8 +569,8 @@ def test_the_regression_fixtures_still_produce_the_golden_claims(source: str) ->
 
 
 def test_every_portal_carries_a_golden_so_a_new_contract_cannot_arrive_ungated() -> None:
-    """A portal with no golden is a portal whose claims nobody reviews. Nine today; a
-    tenth contract file must bring its own."""
+    """A portal with no golden is a portal whose claims nobody reviews. Ten today; an
+    eleventh contract file must bring its own."""
     blessed = {p.stem.split("@")[0] for p in _GOLDEN_DIR.glob("*.json")}
     assert set(_SOURCES) <= blessed, (
         f"no golden claim set for {sorted(set(_SOURCES) - blessed)}; run {BLESS_COMMAND}")

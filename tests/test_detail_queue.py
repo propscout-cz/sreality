@@ -398,9 +398,9 @@ def test_active_count_is_source_scoped():
     conn = _FakeConn([
         (lambda s: "SELECT count(*) FROM listings" in s, [(42,)]),
     ])
-    assert db.active_count(conn, "byt", "prodej", source="sreality") == 42
+    assert db.active_count(conn, "sreality", {"category_main": "byt", "category_type": "prodej"}) == 42
     sql, params = conn.executed[0]
-    assert "AND source = %s" in sql
+    assert "AND l.source = %s" in sql
     assert params == ("sreality", "byt", "prodej")
 
 

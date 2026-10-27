@@ -1,10 +1,11 @@
 /* The phone frame (#1766): Shell draws it under 768 px unless this device asked
  * for the desktop view; the routes inside are unchanged. The header is exactly
- * h-14 (the desktop panes pin to 3.5 rem), the tab bar carries the five areas
- * (W1's four and Odkaz), a page outside the tab roots gets a back affordance,
- * and the account sheet holds the way to the desktop view and, for an admin,
- * the phone's one way to Health. */
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+ * h-14 (the desktop panes pin to 3.5 rem), the tab bar carries the six areas
+ * (W1's four, Odkaz and Prohlídky), a page outside the tab roots gets a back affordance,
+ * the header's bell carries the unread count to Notifications (W5a, ruling R4),
+ * and the account sheet holds this iPhone's push switch (W5b), the way to the
+ * desktop view and, for an admin, the phone's one way to Health. */
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -52,14 +53,7 @@ function setNarrow(narrow: boolean) {
 beforeEach(() => {
   localStorage.clear();
   window.scrollTo = vi.fn() as unknown as typeof window.scrollTo;
-  vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({
-    watchdog: 0,
-    collection_monitor: 0,
-    share: 0,
-    system_health: 0,
-    total: 0,
-    unread_count: 0,
-  });
+  vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({ unread_count: 0 });
   vi.mocked(pinAudit.fetchPinAuditTotal).mockResolvedValue(0);
   vi.mocked(auth.useAuth).mockReturnValue({
     isAdmin: true,
@@ -88,6 +82,7 @@ function renderAt(path: string) {
             <Route path="/browse" element={<p>browse body</p>} />
             <Route path="/pipeline" element={<p>pipeline body</p>} />
             <Route path="/health" element={<p>health body</p>} />
+            <Route path="/notifications" element={<p>notifications body</p>} />
             <Route path="/property/:propertyId" element={<p>property body</p>} />
           </Route>
         </Routes>
@@ -97,7 +92,7 @@ function renderAt(path: string) {
 }
 
 describe('phone frame', () => {
-  it('draws a 3.5 rem header and five tabs on a narrow screen', () => {
+  it('draws a 3.5 rem header and six tabs on a narrow screen', () => {
     setNarrow(true);
     renderAt('/feed');
     expect(screen.getByText('feed body')).toBeInTheDocument();
@@ -105,8 +100,9 @@ describe('phone frame', () => {
     expect(header.firstElementChild).toHaveClass('h-14');
     expect(within(header).getByRole('heading', { name: 'Nové' })).toBeInTheDocument();
     const tabs = within(screen.getByRole('navigation', { name: 'Hlavní navigace' })).getAllByRole('link');
-    expect(tabs.map((t) => t.textContent)).toEqual(['Nové', 'Pipeline', 'Sbírky', 'Makléři', 'Odkaz']);
-    expect(tabs[4]).toHaveAttribute('href', '/link');
+    expect(tabs.map((t) => t.textContent)).toEqual(['Nové', 'Pipeline', 'Prohlídky', 'Sbírky', 'Makléři', 'Odkaz']);
+    expect(tabs[2]).toHaveAttribute('href', '/viewings');
+    expect(tabs[5]).toHaveAttribute('href', '/link');
     expect(tabs[0]).toHaveAttribute('aria-current', 'page');
     /* No back affordance on a tab root; no desktop nav or footer. */
     expect(screen.queryByRole('button', { name: /Nové$/ })).toBeNull();
@@ -141,19 +137,52 @@ describe('phone frame', () => {
     input.remove();
   });
 
-  it('opens the account sheet with the theme, the desktop view and sign-out', async () => {
+  it('opens the account sheet with the theme, the push switch, the desktop view and sign-out', async () => {
     setNarrow(true);
     renderAt('/feed');
     await userEvent.click(screen.getByRole('button', { name: 'Účet' }));
     const sheet = await screen.findByRole('dialog', { name: 'Účet' });
     expect(within(sheet).getByText('operator@example.cz')).toBeInTheDocument();
-    expect(within(sheet).getByRole('radio', { name: 'Světlý' })).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: 'Světlý' })).toBeInTheDocument();
+    /* jsdom is no iPhone: the switch is drawn, disabled (PushSwitch.test has the states). */
+    expect(await within(sheet).findByRole('switch', { name: 'Oznámení na tomto iPhonu' })).toBeDisabled();
     expect(within(sheet).getByRole('button', { name: /Desktopová verze/ })).toBeInTheDocument();
     expect(within(sheet).getByRole('button', { name: 'Odhlásit' })).toBeInTheDocument();
   });
 
-  /* The phone has no Admin menu and no bell: the sheet's Health row is the one
-   * way to Health, and only an admin sees it (the page is admin-only). */
+  /* Operator ruling 2026-10-27 (system.md § Option groups): Vzhled is the one
+   * joined bar in its phone tone (chosen = ink on the inset well, never copper),
+   * across the sheet; the colour-scheme tiles stay tiles (a bar loses the swatch). */
+  it('picks the theme on the phone-tone joined bar, the scheme tiles staying tiles', async () => {
+    setNarrow(true);
+    renderAt('/feed');
+    await userEvent.click(screen.getByRole('button', { name: 'Účet' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Účet' });
+    const group = within(sheet).getByRole('group', { name: 'Vzhled' });
+    const buttons = within(group).getAllByRole('button');
+    expect(buttons.map((b) => b.textContent)).toEqual(['Světlý', 'Tmavý', 'Systém']);
+    expect(Array.from(group.children)).toEqual(buttons);
+    expect(group).toHaveClass('w-full', 'border', 'border-[var(--color-rule-strong)]');
+    for (const b of buttons) {
+      expect(b).not.toHaveClass('border-l');
+      expect(b.className).not.toMatch(/copper/);
+    }
+    expect(buttons[0]).toHaveAttribute('aria-pressed', 'true');
+    expect(buttons[0]).toHaveClass('bg-[var(--color-inset)]', 'text-[var(--color-ink)]');
+
+    await userEvent.click(buttons[1]);
+    expect(buttons[1]).toHaveAttribute('aria-pressed', 'true');
+    expect(buttons[0]).toHaveAttribute('aria-pressed', 'false');
+    expect(localStorage.getItem('sreality.theme')).toBe('dark');
+
+    expect(within(sheet).getAllByRole('radio').map((r) => r.textContent)).toEqual(['Měď', 'Kobalt', 'Grafit']);
+    expect(within(sheet).getByRole('radiogroup', { name: 'Barevné schéma' })).toBeInTheDocument();
+    document.documentElement.removeAttribute('data-theme');
+  });
+
+  /* The phone has no Admin menu, and system alerts never reach the bell (ruling
+   * R2b): the sheet's Health row is the one way to Health, and only an admin
+   * sees it (the page is admin-only). */
   it('gives an admin a Health row that closes the sheet and opens Health', async () => {
     setNarrow(true);
     renderAt('/feed');
@@ -191,6 +220,84 @@ describe('phone frame', () => {
     setNarrow(false);
     renderAt('/');
     expect(screen.getByText('browse body')).toBeInTheDocument();
+  });
+});
+
+/* The bell (W5a, ruling R4): Shell's one unread count beside Účet, opening
+ * the feed, hidden with the feed where the plan hides it. */
+describe('phone bell', () => {
+  const asUser = (agendas: Record<string, boolean> | null) =>
+    vi.mocked(auth.useAuth).mockReturnValue({
+      isAdmin: false,
+      session: null,
+      user: { email: 'operator@example.cz' },
+      loading: false,
+      agendas,
+      signOut: vi.fn(),
+    } as unknown as ReturnType<typeof auth.useAuth>);
+
+  it('sits beside the account button and names the unread count', async () => {
+    vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({ unread_count: 3 });
+    setNarrow(true);
+    renderAt('/feed');
+    const header = screen.getByRole('banner');
+    const bell = await within(header).findByRole('link', { name: 'Upozornění: 3 nepřečtená' });
+    expect(bell).toHaveAttribute('href', '/notifications');
+    expect(bell).toHaveTextContent('3');
+    expect(bell).toHaveClass('h-11', 'w-11');
+    expect(bell.nextElementSibling).toBe(within(header).getByRole('button', { name: 'Účet' }));
+  });
+
+  it('caps the tally at 99+ and keeps the whole number in its name', async () => {
+    vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({ unread_count: 140 });
+    setNarrow(true);
+    renderAt('/feed');
+    const bell = await screen.findByRole('link', { name: 'Upozornění: 140 nepřečtených' });
+    expect(bell).toHaveTextContent('99+');
+  });
+
+  it('draws no tally when nothing is unread', async () => {
+    setNarrow(true);
+    renderAt('/feed');
+    await waitFor(() => expect(api.getNotificationUnreadCount).toHaveBeenCalled());
+    const bell = screen.getByRole('link', { name: 'Upozornění' });
+    expect(bell.textContent).toBe('');
+  });
+
+  it('is not drawn, and polls nothing, where the plan hides notifications', () => {
+    vi.mocked(api.getNotificationUnreadCount).mockClear();
+    asUser({ notifications: false });
+    setNarrow(true);
+    renderAt('/feed');
+    expect(screen.queryByRole('link', { name: /^Upozornění/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Účet' })).toBeInTheDocument();
+    expect(api.getNotificationUnreadCount).not.toHaveBeenCalled();
+  });
+
+  it('opens Notifications under the back affordance, the tab it came from still marked', async () => {
+    vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({ unread_count: 2 });
+    asUser({ notifications: true });
+    setNarrow(true);
+    renderAt('/pipeline');
+    await userEvent.click(await screen.findByRole('link', { name: 'Upozornění: 2 nepřečtená' }));
+    expect(await screen.findByText('notifications body')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pipeline' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /^Upozornění/ })).toHaveAttribute('aria-current', 'page');
+    const pipelineTab = within(screen.getByRole('navigation', { name: 'Hlavní navigace' })).getByRole('link', {
+      name: 'Pipeline',
+    });
+    expect(pipelineTab).toHaveAttribute('aria-current', 'true');
+  });
+
+  /* One observer serves both frames: the desktop badge reads the same count. */
+  it('reads the count the desktop badge reads, from one request', async () => {
+    vi.mocked(api.getNotificationUnreadCount).mockClear();
+    vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({ unread_count: 5 });
+    setNarrow(false);
+    renderAt('/browse');
+    const link = await screen.findByRole('link', { name: /^Notifications/ });
+    await waitFor(() => expect(link).toHaveAccessibleName('Notifications 5 unread notifications'));
+    expect(api.getNotificationUnreadCount).toHaveBeenCalledTimes(1);
   });
 });
 

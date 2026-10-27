@@ -209,11 +209,12 @@ def test_every_html_portal_archives_one_body_per_detail_write(
     # One chokepoint edit, seven portals, zero per-portal branches (rule #21).
     import importlib
 
+    from scraper import portal_runner
     from scraper.portal_runner import DrainItem
 
     module = importlib.import_module(f"scraper.{module_name}_main")
     _stub_writer(monkeypatch)
-    monkeypatch.setattr(module.db, "mark_portal_page_parsed", lambda *a, **k: None)
+    monkeypatch.setattr(portal_runner.db, "mark_portal_page_parsed", lambda *a, **k: None)
 
     item = DrainItem("42", "ok", {
         "url": "https://x/y", "html": _PAGE, "status": 200,

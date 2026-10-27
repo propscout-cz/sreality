@@ -51,7 +51,7 @@ truth enforced only in production, and N identical emails for one cause.
 | W0.5 the second week's fires | (a) ceskereality contract v4 + contract-immutability lockfile rail in `test.yml` — un-wedges the intake lane, closes the merged≠enforced gap for portal contracts; (b) `llm_liveness` recalibrated 4h → 13h to the real (post-dedup) producer cadence | 🟡 in progress (2026-08-31, shipped as hotfix PRs ahead of wave order — the lane was down) |
 | W1 survivable write path | Non-transient errors at `_flush_drain_batch` become a bounded, loud quarantine (per-item replay → existing `_drain_record_failure` → `given_up` at 5) behind a circuit breaker; `write_rejects` counter + a `drain_write_rejects` check (`ingest_freshness` largely covered in parallel by the walk sprint's `acquisition_lag` + `walk_coverage` checks, rebuilt in the Health dashboard sprint's wave 4 as the `scraping` and `publishing` checks and the `coverage` gauge) | ⚪ proposed — needs operator sign-off |
 | W2 migration file as contract | `-- apply:` / `-- assert:` header tokens above a watermark (≥ 444), asserts executed inside `migrations.yml`'s existing per-file apply loop and *validated as able to fail*, plus schema-vocabulary parity and the hot-DDL doctrine rails. **W2.3's live-catalog drift check shipped in parallel as PR #1204 (`check_migration_drift`)** — remaining W2.3 scope is hardening it, not building it | ⚪ proposed — needs operator sign-off (part shipped in parallel) |
-| W3 one alert, one place, cause attached | Failure signatures produced in-process at the write chokepoint (`checkviolation\|listings_area_basis_check` on all six portals), an `ops_incidents` table that exits through the **existing** `system_health` spine (no parallel channel), and the re-escalation ladder placed in `toolkit/system_alerts` where all 19 checks inherit it | 🟢 shipped 2026-08-31 — W3.1–W3.3 (migs 462+463, PR #1247) + W3.4's ladder, flap cooldown and weekly heartbeat (PR #1246); one residue: external alert routing (`system_health_channels` / `notification_email_to`) stays off — bell only by ruling Q1 2026-10-18; readiness documented in Health dashboard sprint wave 7; enabling = the three steps. W3.4's ladder was replaced 2026-10-18 by the Health dashboard sprint's wave 1, and the signature engine retired 2026-10-19 in its wave 3 (migration 621) |
+| W3 one alert, one place, cause attached | Failure signatures produced in-process at the write chokepoint (`checkviolation\|listings_area_basis_check` on all six portals), an `ops_incidents` table that exits through the **existing** `system_health` spine (no parallel channel), and the re-escalation ladder placed in `toolkit/system_alerts` where all 19 checks inherit it | 🟢 shipped 2026-08-31 — W3.1–W3.3 (migs 462+463, PR #1247) + W3.4's ladder, flap cooldown and weekly heartbeat (PR #1246); one residue, closed 2026-10-21: external alert routing (`system_health_channels` / `notification_email_to`) is deleted, and system alerts live on Health with the canary e-mail as the external alarm (ruling R2b, notifications push W1). W3.4's ladder was replaced 2026-10-18 by the Health dashboard sprint's wave 1, and the signature engine retired 2026-10-19 in its wave 3 (migration 621) |
 | W4 apply becomes a job | Hot-table DDL applied out-of-band by a tested, extracted lock primitive (`attempts=1`, fail fast, escalate to a window — the retry-loop pattern is retired, not tuned); the existing PK-swap applier generalised into a dispatchable maintenance window | ⚪ proposed — needs operator sign-off + one human step (`REALTIME_WORKER_ENABLED`) |
 | W5 constraint-only catalog diff | Named successor: diff CI's replayed schema against the live catalog. Catches 438 exactly, plus the ~241 migrations with no ledger row and no assert, plus the reverse drift direction W2 structurally cannot see — with zero per-migration convention | ⚪ named only, not built (open question 8) |
 
@@ -123,17 +123,18 @@ onset was **2026-08-24 23:09 UTC**, ~45 h earlier than the doc states. Migration
 `consecutive_failures`/`is_chronic` are computed over GitHub workflow runs, not
 `pipeline_check_results`, so W3.4's ladder cannot consume them.
 
-**Not flipped, on purpose:** `system_health_channels` is still `[]`. Incidents ring the
-in-app bell only, by ruling Q1 2026-10-18; readiness documented in Health dashboard sprint wave 7;
-enabling = the three steps (the scraper-ops skill's `references/pipeline-verification.md` §
-Delivery readiness).
+**Not flipped, on purpose:** `system_health_channels` was still `[]`: incidents rang the
+in-app bell only, by ruling Q1 2026-10-18. *Superseded 2026-10-21 by ruling R2b (notifications
+push W1, `docs/design/notifications-push/PROGRAM.md`): system alerts leave the bell, the readiness
+is deleted, and Health + the canary e-mail are the only paths.*
 
 ## Open questions blocking W1–W4
 
 Eight in the design doc; question 1 (OpenAI top-up) is **resolved**. Still load-bearing
 for sequencing: **branch protection — `main` is currently not protected, so every CI
 rail W2 adds AND the new W0.5a contract lockfile rail are advisory until that changes**,
-alert routing + volume tolerance (W3), the two-human-step Railway procedure (W4), and
+volume tolerance (W3; alert routing was closed 2026-10-21 by ruling R2b: no routing, Health +
+the canary e-mail), the two-human-step Railway procedure (W4), and
 the disposition of migrations 433 and 434.
 
 ## W3.4 — shipped 2026-08-31
@@ -199,7 +200,7 @@ Next:
 - ~~`verify_pipeline`: a timed-out warn counts as "not failing", closes the incident and sends a false "Recovered" (`text_extraction_lag` did it 6 times since 10-02); a timeout must keep the incident open.~~ Done 2026-10-18 (Health dashboard sprint wave 1: a timeout is `unknown`).
 - ~~`llm_errors` rate arm: `currently_failing` still reads the newest call of ANY provider; for ~24 h after a top-up a stray error can turn the check red again. → Health dashboard sprint wave 3 (the llm check).~~ Done 2026-10-19 (wave 3: the `llm` check judges the error share per provider).
 - ~~`worker_lane_stall` reports `failed_passes` but never alarms on it. → wave 3 (the jobs check's lane cells).~~ Done 2026-10-19 (wave 3: a lane cell judges failing spells and flapping).
-- Delivery: `system_health_channels` is `[]` and no transport is configured, so no system alert has ever left the app (operator: email key + recipient + channel). → Q1 ruled 2026-10-18: bell only for now; readiness documented in Health dashboard sprint wave 7 (2026-10-19); enabling = the three steps, at the operator's word.
+- Delivery: `system_health_channels` is `[]` and no transport is configured, so no system alert has ever left the app (operator: email key + recipient + channel). → Q1 ruled 2026-10-18: bell only for now; readiness documented in Health dashboard sprint wave 7 (2026-10-19); enabling = the three steps, at the operator's word. *Superseded 2026-10-21 (R2b): Health + the canary e-mail only, the readiness deleted.*
 
 ## 2026-10-18 — Health dashboard sprint, wave 1 (shipped with this PR)
 
@@ -214,7 +215,7 @@ The ten waves: (1) one vocabulary, one registry, one ladder; (2) watchers — a 
 check and one hourly GitHub canary; (3) platform checks and the worker's health lane, retiring the
 signature engine; (4) portal checks: scraping, publishing, delisting and coverage; (5) the dedup
 check; (6) the parsing alarm and the quality gauges; (7) delivery, now readiness and docs only,
-because the bell stays the one channel for now (Q1); (8) the new Health page; (9) dropping the old
+because the bell stays the one channel for now (Q1; *since 2026-10-21, R2b: no bell, Health + the canary e-mail*); (8) the new Health page; (9) dropping the old
 health layer — destructive, after a backup and 48 h with no reads (Q5); (10) shared admin page
 parts.
 
@@ -259,7 +260,7 @@ Owed items this absorbs:
   "Recovered" is fixed (a timeout is `unknown`), and the ladder no longer re-derives incidents from
   30 days of results. The `llm_errors` any-provider rate arm and `worker_lane_stall`'s unalarmed
   `failed_passes` move to wave 3 (the llm and jobs checks); delivery follows Q1 (bell only by ruling
-  Q1 2026-10-18; readiness documented in Health dashboard sprint wave 7; enabling = the three steps).
+  Q1 2026-10-18; superseded 2026-10-21 by R2b: Health + the canary e-mail only).
 
 ~~**Next:** wave 2 — `health_liveness()` on pg_cron every 5 minutes and one hourly GitHub canary
 (migration 620).~~ Done 2026-10-18 (wave 2, below).
@@ -278,7 +279,7 @@ What wave 2 changed:
   budget, the API's background loops (the watchdog matcher's lease) and any measured Problem left
   without an incident. It replaces the `worker_liveness` check, a 5-minute limit GitHub sampled
   about every 4.9 hours, and the 24 h dead-man job `emit-verification-stale-alert`, which never
-  fired (unscheduled; migration 624 drops its function).
+  fired (unscheduled; migration 643 drops its function).
 - **The canary.** `verify_pipeline.yml` is the one monitoring workflow ("Monitoring: health canary
   (hourly)"): it records failed workflow runs (the poller, moved forward from wave 3, so
   `monitor_workflow_failures.yml` is deleted), measures the GitHub-hosted checks, and then
@@ -287,7 +288,7 @@ What wave 2 changed:
   15 min while its incident is open and unacknowledged. A failing check never reds the run; the assertions do (and a crash of the poller or the harness, or
   the harness step overrunning its 21 minutes), so with
   the bell the only channel (Q1) an unread alarm reaches the operator as GitHub's failure email at
-  the next canary run. `llm_health.yml` and the 6-hourly lane are gone, and with them
+  the next canary run (*since 2026-10-21, R2b: it asserts an open, unacknowledged alarm's latest rung instead*). `llm_health.yml` and the 6-hourly lane are gone, and with them
   `--exit-nonzero-on-fail`: a failing check no longer reds a run.
 - **A real time budget per check.** The harness's `run_due` measures a host's due checks, alarms
   first, and each statement's timeout is now the check's remaining budget, so a check of several
@@ -333,7 +334,7 @@ What wave 3 changed:
   provider and caller (`called_for`), and 24 h spend. One provider's success no longer hides another's outage. It
   replaces `llm_errors` and `llm_burn_rate`. `dual_write_parity` is deleted (Q6).
 - **One home for thresholds.** `THRESHOLDS` in code, each with its basis; the
-  `pipeline_check_thresholds` settings row is read by nothing (migration 624 deletes it).
+  `pipeline_check_thresholds` settings row is read by nothing (migration 643 deletes it).
 - **The heartbeat remembers.** Each lane reports its interval (so an off lane reads off), a
   failing spell with its last error, and, in the probe and drain lanes, each failing portal; at
   boot the worker carries its counters over from the previous heartbeat, so deploys reset nothing.
@@ -341,7 +342,7 @@ What wave 3 changed:
   reason line, and per workflow its state, whether its file is on `main` and its recent scheduled
   starts.
 - **System alerts are ready for delivery**: subject from the message, link to `/health#<check>`
-  (the bell stays the one channel, Q1).
+  (the bell stays the one channel, Q1). *Deleted 2026-10-21 (R2b, notifications push W1).*
 - **Migration 621** adds the poller's columns and closes the signature engine's open incidents;
   the engine's code (`toolkit/ops_incidents.py`, the crash-path and lane writers, the poller's
   incident pass) and its signature tiers are deleted.
@@ -378,7 +379,7 @@ Owed and stated (also in the design's "As built" note):
   not retried.
 - A pg_cron tick that skips itself counts as a run and pulls the median down; the sticky
   reference only makes the comparison stricter.
-- Read by nothing after this wave, for migration 624 to drop: `app_settings.broker_resolution_last_complete`
+- Read by nothing after this wave, for migration 643 to drop: `app_settings.broker_resolution_last_complete`
   (still written by `scripts/resolve_brokers.py`; brokers territory) and the `dual_write_watermark`
   table.
 - At merge the retired keys' open incidents close silently at the canary's first run from `main`,
@@ -465,16 +466,19 @@ Owed and stated (also in the design's "As built" note):
   of that hour it is about 210-240 %, under the 300 % line), and sreality's precision cell may read
   Problem on 10-20/21 (its 10-18 flip cohort, ~17.5 % active again): the blink tail #1858
   addresses, told, not suppressed.
-- On a day the full property sweep holds the maintenance lease longer than about 40 min,
-  `publishing`'s visible cell reads Problem for its duration (new ads wait for their property,
-  because the sweep attaches only at its start) and recovers when it lets go; attaching while the
-  sweep runs is owed to the scraper track.
+- Closed 2026-10-20 (`feature/link-ingest`): a full property sweep holding the maintenance lease
+  over about 40 min turned `publishing`'s visible cell Problem (new ads waited for their property,
+  the sweep attaching only at its start); it now attaches after every batch under that lease, and
+  the worker's maintenance lane runs every 30 s.
 - Left for wave 9: the 150 ceskereality and mmreality rows of `portal_index_slices` and
   `portal_coverage_gate` (read by nothing), `portals.supports_complete_walk` (no writer now; the
   old Health page's portal posture still reads it) and `delist_flip_refusals` (still written, read
-  by nothing); only `portal_coverage_gate` is on wave 9's list so far.
-- The old page's matview checks (`delisting_latency`, `delisting_spike` and the rest) keep
-  rendering until wave 9.
+  by nothing); only `portal_coverage_gate` is on wave 9's list so far. Wave 9 as built: only
+  `portal_coverage_gate` went (migration 643); the slice rows (unjudged), `supports_complete_walk`
+  (still read, by the Scrapers page, not the old Health page) and `delist_flip_refusals` (still
+  written) stay, and the scraper track owns them.
+- The old page's matview checks (`delisting_latency`, `delisting_spike` and the rest) kept
+  rendering until wave 8 retired the page; migration 643 (wave 9) dropped their matviews.
 - At merge the seven retired keys' open incidents close silently at the canary's first run from
   `main` (`false_delist_share`'s included), and the new checks open fresh onsets where they
   measure Problem.
@@ -599,7 +603,7 @@ What Health dashboard sprint wave 6 changed:
   job is 19 min and its harness step 6 min.
 - **The registry**: 14 keys, 12 on the worker and 2 on GitHub (165 s of budgets). Nine keys retire: the
   eight legacy checks and `floor_convention` (Q4). Migration 633 also unschedules `capture-data-quality`
-  (24 failures in 30 d), and `data_quality_snapshots` stays frozen for wave 9 (Q5).
+  (24 failures in 30 d), and `data_quality_snapshots` stays as frozen history (Q5; wave 9 kept it).
 
 Owed items this closes, and one correction:
 - The design's "every check emits explicit cells" and "no legacy key remains".
@@ -638,6 +642,9 @@ dashboard sprint wave 7, below).
 
 ## 2026-10-19 — Health dashboard sprint, wave 7 (shipped with this PR)
 
+*Superseded 2026-10-21 (ruling R2b, notifications push W1): this readiness was deleted; system alerts
+live on Health, and the canary e-mail is the external alarm.*
+
 Delivery readiness, docs only: by ruling Q1 (2026-10-18) the bell stays the one channel for now, and
 the system is kept ready for Telegram and email. Plan:
 [`docs/design/health-dashboard.md`](../docs/design/health-dashboard.md) § 6, wave 7, and its "As
@@ -666,7 +673,7 @@ What Health dashboard sprint wave 7 changed:
   canary's channel-status pins are added (sent and delivered count as handled; queued, failed, bounced
   and suppressed do not).
 
-Owed: the enabling migration, at your word (the three steps). GitHub's failure email stays either
+~~Owed: the enabling migration, at your word (the three steps).~~ Moot since 2026-10-21 (R2b). GitHub's failure email stays either
 way: it is the path that needs neither Supabase's scheduler nor Railway.
 
 To check after the merge: nothing changes in production; `system_health_channels` still reads `[]`
@@ -703,7 +710,7 @@ What Health dashboard sprint wave 8 changed:
   workflow catalogue).
 
 Owed and stated (also in the design's "As built" note):
-- "Alerts reach" and the delivery facts wait for delivery's enabling migration (wave 7's three steps):
+- ~~"Alerts reach" and the delivery facts wait for delivery's enabling migration (wave 7's three steps)~~ moot since 2026-10-21 (R2b):
   the watcher writes no delivery facts, so the strip has five tiles, not six.
 - The legacy `outbound_url_conformance` row has no cells until its next weekly run (~10-25).
 - The phone reflow is pinned by class strings only (jsdom cannot evaluate a media query); the browser
@@ -721,8 +728,10 @@ its first health pass after its deploy (the four portal checks then read domain 
 only, the page in both explicit themes at 1,280 px and on the phone, and a system alert's "Open Health"
 link landing on its check.
 
-**Next:** wave 9 — drop the old health layer: its 8 matviews, 11 functions and 12 views stop costing
-database time, after a backup and 48 h with no reads of them (destructive, Q5).
+~~**Next:** wave 9 — drop the old health layer: its 8 matviews, 11 functions and 12 views stop costing
+database time, after a backup and 48 h with no reads of them (destructive, Q5).~~ Done as Health green
+sprint wave 6 (below).
+
 
 ## 2026-10-20 — Health dashboard sprint, wave 10a (shipped with this PR)
 
@@ -820,3 +829,277 @@ the shorter Progress tiles and, while a page loads, the still placeholders; Sett
 Settings as before.
 
 **Next:** wave 9 at its gate (wave 8's Next, above); wave 10 is done.
+
+## 2026-10-22 — Health green sprint, wave 1 (shipped with this PR)
+
+The first wave of the Health green sprint: the Health page measures the truth. Plan:
+[`docs/design/health-dashboard.md`](../docs/design/health-dashboard.md) § 14 (north star: a red leaves
+the page only through a root fix that leaves less behind) and its "Wave 1 as built" note.
+
+What wave 1 changed:
+- **pg_cron stops freezing** (migration 658). The Browse list rebuild ran a dead `drop table if exists
+  browse_list_next`; its NOTICE froze pg_cron's one launcher for the whole ~68 s rebuild, four times an
+  hour, so every job started alongside recorded a ~67 s run (the capacity Problem on
+  `cron/health-liveness`, "112 % of statement_timeout", and a canary leg). The statement is gone and
+  nothing else in the function changed.
+- **ceskereality's houses are counted once** (migration 659, #1854). The `chaty-chalupy` scope re-listed
+  ads the `rodinne-domy` walk already sees, so dum/prodej's declared total held ~2,000 houses twice
+  (residual −13.6 %; truly +1.8 %).
+- **One definition of "an ad awaiting nomination"** (`db.nominable_predicate`), shared by the walks,
+  `web`'s walk and the coverage check: the sreality, bazos and idnes `unnominated` warns read 0.
+  ceskereality (95) and realitymix (159) stay red: their NULL-category ads, wave 2.
+- **A dropped or renamed cell closes at once** as `retired`: the ghost `location_town_coverage`
+  incident closes on the first pass. A cell the check lists as Not measured still waits a week.
+- **One verdict, one cell**: a unit whose declared total cannot be judged shows once (coverage's
+  residual), not twice: 48 fewer Not-measured cells.
+- Two skill lines: a pg_cron command emits no NOTICE before its last statement; dispatch a new
+  portal's first walk at deploy.
+
+To check: 658 and 659 applied through `apply_migration.yml` before the merge; then, at :00 and :15, no
+interim `SET` row for the rebuild and liveness under 1 s, and the capacity cell OK about 23 h later; the
+next ceskereality walk logs `RECONCILE cm=dum ct=prodej` declaring ~11.6 k and its residual reads OK;
+the three `unnominated` cells OK at the next coverage pass; the ghost incident resolved `retired`.
+
+**Next:** W2, rule 3 made total (the 430 NULL-label ads nominable, the parsers fixed, the stored rows
+healed); W3, producers (idnes's daily EUR churn, the per-m² masquerade); W4, location producers (14 of
+the 38 town gaps); W5, the rulings Q1–Q3 applied; W6, the legacy layer (migration 643, on or after
+2026-10-23 13:00Z).
+
+## 2026-10-22 — Health green sprint, wave 2 (shipped with this PR)
+
+Rule 3 made total (issue #1853). A sighting is label-blind (`reconcile_sightings` touches by id) but a
+unit's nomination was label-bound, so an active ad whose label no walked unit covers was never
+page-checked once it left the index: 703 NULL-label ads on 2026-10-22, 430 of them unclosable since June
+(ceskereality's 129 `/drazby/` auctions, realitymix's 301 ads whose breadcrumb is truncated, 277 of them
+"Prodej chaty/rekreačního objektu"). Health read them as `ceskereality/unnominated` 94 and
+`realitymix/unnominated` 157.
+
+What wave 2 changed:
+- **The parsers emit the canonical label.** ceskereality maps `/drazby/` to `drazba` (sreality's and
+  mmreality's word) and its parser reads the category off its own URL, so `scripts/reparse.py`
+  re-derives it; realitymix reads the family from the structured h1 before the broker-written slug
+  when the breadcrumb is truncated; remax labels a "prostor" title komercni when nothing above names it
+  (the 273 "Komerční prostory" warehouses: nominable already, invisible to every category filter).
+- **The runner owns nomination scopes.** A unit's scope is its two labels unless the portal declares
+  `presence_scope` (bazos: the section's subtype; remax, maxima: the agenda); units sharing a scope
+  nominate once, on the last of them, with their union, and a unit's active count is the same scope's.
+  Deleted: the two slice-buffer copies (ceskereality, realitymix) and `note_empty_slice`, bazos's
+  override and its `active_count`, `web`'s own query, remax's and maxima's agenda queries (an agenda's
+  union is its whole walk) and `db.active_count`'s own subtype clause.
+- **Orphans are nominated.** A walk whose every unit reached the end, over the portal's whole agenda,
+  also nominates the active ads in no walked scope (`db.orphan_candidates`, NULL labels included)
+  against every id it saw, under the same flip cap and dwell (`VERIFY orphans …`), recorded as one more
+  `by_category` entry with NULL labels (an indexless unit's shape): the checks count its deferrals, and
+  a failed orphan query is a run error and an entry short of the end. `web`'s whole agenda is that
+  scope. A bazos dispatch narrowed to one section is `narrowed` and proves no orphan; a registry that
+  maps no bazos section fails the run (rc 2) instead of walking a stand-in one.
+- **A rail:** `tests/test_nomination_scope_rail_live.py` (CI migrations lane) builds every portal from
+  its replayed `portals` row, seeds one active ad per label and requires each to come back from exactly
+  one nomination query.
+
+To check: the next ceskereality and realitymix walks whose units all reached the end log
+`VERIFY orphans candidates=N`, and each portal gains one cell, `walks/orphans` (hours since its last walk
+in which every unit reached the end; web's `walks/none-none` is renamed so); the orphans' entry declares no
+total, so it gets no residual; after the reparse heal (the PR body's runbook, after the Prague read) and
+two gone verdicts at least 24 h apart, `coverage ceskereality/unnominated` and `realitymix/unnominated`
+read 0 within ~2 days and their `no_walked_category` 0. Not here: the multi-ad properties the heal
+leaves holding prodej beside drazba (a clash checked only at merge) — the operator splits them.
+
+**Next:** W3, producers (idnes's daily EUR churn, the per-m² masquerade); W4, location producers; W5, the
+rulings Q1–Q3 applied; W6, the legacy layer (migration 643).
+## 2026-10-22 — Health green sprint, wave 5a (shipped with this PR)
+
+The `delisting` precision arm judges a flip at the age a false delist must show by. Plan:
+[`docs/design/health-dashboard.md`](../docs/design/health-dashboard.md) § 14 (Q2, settled by construction,
+no ruling).
+
+- **The defect.** The arm read the flips 48–72 h old, pooled over 2–7 d under 50. Rule 3 makes an
+  end-reached walk a census, so an ad still listed when we closed it is sighted again within 2 × the
+  portal's p90 walk gap + 1 h (the stuck limit less the dwell); one first sighted later was missing from a
+  walk that reached the end after its flip: a re-list. On 10-22 idnes read Problem at 106 of 407 (26 %):
+  104 were whole agency portfolios flipped one morning and back 2–3 days later under the same ids.
+- **The change.** Each portal's cohort is the day of flips from that age (`_sighted_s`, one bound shared with
+  the stuck limit; idnes 19–43 h, sreality 14–38 h at 10-22's gaps). The pooled fallback and the fixed
+  48–72 h constant are deleted: under 50 flips the cell is Not measured. mmreality's new-price re-lists stop
+  counting (Q2b).
+- **Live, 16:32Z, the final SQL:** idnes 11 of 1,270 (0.9 %), sreality 144 of 1,684 (8.6 %, lower bound
+  7.3 %), mmreality 6 of 127, remax 4 of 70, realitymix 6 of 463, bezrealitky 1 of 135, bazos 0 of 1,316,
+  ceskereality 0 of 751, all OK; maxima and web Not measured. 0.11 s, one index range per portal.
+
+To check: after the deploy, the idnes precision incident closes on a measured OK, verified on the page.- **Wave 5b (2026-10-23, shipped with the next PR):** `jobs lane/<name>` read "late" once after every brake
+  lift because `_lane`'s switch-on clock only applied when the lane had no pass at all; a pass from before
+  the pause won. The reference is now the later of the last pass and the previous measurement when the lane
+  read off then (autodedup, 15:54Z: a 5 h brake, incident 1005 opened on a healthy first pass of 117 merges).
+
+## 2026-10-22 — Health green sprint, wave 4 (shipped with this PR)
+
+Location producers: the claim lane sees the page the drain just fetched. Plan:
+[`docs/design/health-dashboard.md`](../docs/design/health-dashboard.md) § 14 and its "Wave 4 as built" note.
+
+What wave 4 changed:
+- **The payload archive appends every changed body.** Its 7-day per-listing floor (W2a-7) discarded a
+  refetched body inside the window, so the town the second fetch found never reached the claim lane
+  (≥ 1,133 refusals a day). Reversed W2a-7 decision; ~1.1k more R2 PUTs a day.
+- **The refetch lane selects rule 25's invariant** (`location_steps.town_missing_sql()`: active, not
+  foreign, no town), the set the `location_town_coverage` check judges, instead of the pin-audit
+  matview's `active_no_claims` bucket, which missed ads holding only a kraj or okres claim.
+
+To check: `PAYLOAD stats appended=` in the worker log; the next `LOCATION_REFETCH lane` line queues ~26;
+`ceskereality/town` 34 → ~23 within ~1 h of the refetch tick; `realitymix/town` 3 → 0 or a gone verdict.
+
+**Next:** W5 applies the rulings (Q3: the 24 towns the portal withholds; the text lane's scope).
+## 2026-10-22 — Health green sprint, wave 3a (shipped with this PR)
+
+idnes states a foreign ad's price in its own currency ("Cena v EUR 298 000 €") and shows it converted
+to Kč at the day's rate, and the crawlers' content hash read the Kč. Whenever the rate drifted past the
+0.5 % index tolerance (measured against the STORED Kč, so the drift accumulates), the whole foreign
+stock re-snapshotted at once: 8,468 re-snapshots in 24 h on 10-21/22, from 6,064 Spanish, 245 Croatian
+and 94 Italian ads (1,421 Czech), only `params.cena` and `price_text` differing; seven waves of 4–10k
+since 08-28 — a rule-2 violation feeding `listing_snapshots` and `dirty_properties`. Fixed here: the
+idnes parser reads the stated price into `price_native` (never a column; kept in `raw_json` as the
+evidence), and `ScrapedListing.hash_doc` reads it IN PLACE OF `price_czk` when present — one rule in
+the shared hash, no portal branch. A Kč-priced ad's hash input is byte-identical to before (a golden
+test pins the digest computed on the base commit); a foreign ad's hash changes once, by design.
+`price_czk` still updates latest-wins on every fetch, unhashed (rule 20's exception: the property
+rollup catches up at the daily sweep). Deleted: idnes's own `--price-change-min-pct` CLI override, which
+no workflow passed; the shared `operational_limits` row is the one override channel, as for every portal.
+- **Next:** the tolerance still re-enqueues the foreign stock on each crossing (a refetch wave of
+  ~6.4k detail fetches, now snapshot-free). Each foreign ad re-snapshots ONCE at its first detail fetch
+  after the deploy (the new hash), mostly inside the first crossing: about one ordinary wave, so
+  `parsing idnes/churn` may read red once more. The crossing after it must read ~0 foreign
+  re-snapshots, and the churn incident closes on that measured OK.
+
+## 2026-10-24 — Health green sprint, wave 7a (shipped with this PR)
+
+bazos's counter over-counts by a handful (ads removed between the count and the page render), so the
+page after the last served one is often blank while the count still says two or three ads remain. The
+barren rule re-reads that blank and then placed it ROW-exactly (`offset >= total`), while the 404 rule
+two methods up has placed a 404 at PAGE grain since 2026-09-09 for exactly this reason. A scope a page
+short of its count therefore read `barren` — a stop of ours — and nominated nothing: prodam/byt 9,040
+of 9,042 (10-24 03:56), 9,099 of 9,102 (10-23 21:11), 9,026 of 9,041 (10-22 11:26); byt-pronajem,
+pozemek-prodej and ostatni-pronajem the same shape on other days, a different unit cut almost every
+walk, and the Health page read `scraping bazos/walks/orphans` Watch (the orphan scope nominates only on
+a walk where every unit reached the end). Fixed here: the blank is placed by `_classify_gone` — ONE
+rule for "where the count puts the end", shared by the 404 and the empty page — and two byte-identical
+duplicate statements in the page loop (`page_size = 0`, `page_size = max(...)`) are gone. Expected:
+every bazos unit ends on a terminator unless the blank sits a whole page or more before the count's
+end; the orphans arm closes on the next end-reached walk.
+- **Next:** idnes's sibling (wave 7b: a page the portal refuses with a 500 costs one page, not the
+  slice) is built on `fix/idnes-refused-page` and waits for the operator's rule-3 ruling.
+
+## 2026-10-24 — Health green sprint, wave 8a (shipped with this PR)
+
+ceskereality keeps a re-categorised ad answering 200 at its OLD URL with the new page: 3639104 is stored
+as `/prodej/komercni-prostory/apartman/…`, its page's canonical is `/prodej/byty/byty-3-kk/…`, H1
+"Prodej bytu 3+kk". `parse_detail` read the category off the URL we requested and stored that same URL,
+so the label never followed the ad: the byt/prodej walk sighted it (sightings are label-blind) while the
+komercni/prodej scope nominated it at every walk (rule 3 is label-scoped) and the drain refetched it live,
+part of the ~818 wasted ceskereality verify fetches a day, with Browse filing it under the wrong category.
+Measured 10-24 over the stored pages: 113 ads (85 active) whose canonical names another category (25 a
+prodej↔pronájem flip), 1,004 (633 active) whose canonical path differs at all (most a slug edited after
+an area change), the canonical's id equal to the stored one on every row. Fixed here: `_page_url` reads
+`<link rel="canonical">` and, when its path is a detail path carrying the same id, the ad's category AND
+`source_url` come from that path on the www host (every page canonicalises to a regional one); the
+requested URL is the fallback. A page whose canonical is the path we asked for parses byte-identically (a
+golden test pins the hash computed on the base commit). Deleted: `parse_detail`'s `category_main` /
+`category_type` parameters and their precedence line, which no caller passed.
+- **Heal:** the live ones heal themselves at their next verify fetch (their old scope still nominates
+  them; one genuine snapshot each, `source_url` with it). A day after the deploy, `reparse.yml`
+  `source=ceskereality fields=category_main,category_type` (dry run, then `allow_snapshot_deferral=true`)
+  heals the rest: `<n>` rows, ~28 inactive expected. The reparse cannot write `source_url`
+  (preserve-if-null), so an inactive row keeps its old URL. A relabel can leave a multi-ad property mixed
+  (rule 15 gates merges only): ~10 newly, listed for the operator to split.
+- **Next:** the ~780 agency-gone ads the same investigation found stay live pages; closing them needs
+  the operator's rule-3 ruling (corroborated absence vs a recheck backoff).
+
+## 2026-10-24 — Health green sprint, wave 7b (shipped with this PR)
+
+A page idnes refuses costs one page, not the place. reality.idnes.cz answered HTTP 500 (its 26 kB
+"Chyba 500 … technická chyba" page, all four client attempts inside 8 s) for ONE page of
+`prodej/domy/jihocesky-kraj`: `?page=1` on 10-23 18:41 and 22:33 and 10-24 06:03, `?page=2` at 11:45Z,
+while the pages around it and plzensky-kraj's served — a server-side render failure of one ad, moving
+down the pager as newer ads arrive. `_walk_place` returned `error` on the first exception, so the ledger
+read `outcome=error declared=1574 collected=26 pages=1`, the dum/prodej unit (27.9k active ads) was not
+end-reached in 4 of the last 5 walks, the orphan scope nominated nothing, and Health read `scraping
+idnes/walks/dum-prodej` + `idnes/walks/orphans` Watch and `delisting idnes/stuck` 157 past 43 h (2,220
+waiting); ~1,550 South Bohemian houses had no index sighting since 10-23 11:40.
+
+- **The change** (`scraper/idnes_main.py`, one constant `_MAX_REFUSED_PAGES = 1`, nothing in shared
+  code): a page the client gives up on is logged (`SLICE error … refused=1`) and skipped, the loop going
+  on at the next offset (`(page or 0) + 1`: the bare URL is the first page, `?page=1` the second); the
+  second refusal in the same place ends it `error` exactly as before. The place's stop is the terminator
+  its loop actually ended on; its ~26 unseen ads leave it `incomplete`, so the existing descent (kraj →
+  okresy, the parent's rows kept) and resample recover them bar the broken page, and the unit's unseen
+  remainder is nominated at `QUEUE_PRIORITY_VERIFY` for its own page to decide (two gone verdicts ≥ 12 h
+  apart, the flip cap). The cost while the page stays broken: the ~61-page slice descends and resamples
+  once (an estimated ~120 more pages a walk). A blocked portal still fails each place on its second page: in the 10-23 04:51 outage
+  five slices were refused 06:29:32–06:30:56, ~10 s apart, so that walk still ends unproven.
+- **The ruling asked.** CLAUDE.md rule 3 lists `error` among OUR stops. The refined reading: an error is
+  ours when it ENDS a page loop; one refused page inside a loop that ran on to the portal's end is the
+  portal's refusal of one page — evidence in the count, never a veto, the posture rule 3 already takes
+  for a slice one row short of its declared count. Proposed rule-3 text: `… / slice subset / a
+  loop-ending error (idnes: one refused page per place is evidence) / uncorroborated empty page`.
+- **Deleted:** the overlapping-pages test, a twin of
+  `test_an_all_duplicates_page_no_longer_ends_the_walk` (same three pages, same asserts).
+
+To check: the next dum/prodej walk logs `SLICE error … place=jihocesky-kraj … refused=1` then `SLICE
+descend … place=jihocesky-kraj`, the slice's ledger row reads `incomplete` or `exhausted` (not `error`),
+and `CATEGORY cm=domy ct=prodej … complete=True`; `idnes/walks/dum-prodej` and `idnes/walks/orphans` go
+OK on that walk and `delisting idnes/stuck` drains as the nominated houses get their page checks.
+
+**Next:** on the operator's ruling, rule 3's line in CLAUDE.md (proposed above).
+
+## 2026-10-23 — Health green sprint, wave 6: the old health layer goes (shipped with this PR)
+
+Health dashboard sprint wave 9 (#1910), parked since 10-20, rebased onto main as the green sprint's wave 6: the
+second engine behind the old Health page, which nothing has read since wave 8 rebuilt the page on one view. Plan:
+[`docs/design/health-dashboard.md`](../docs/design/health-dashboard.md) § 6, wave 9, its "As built" note, and § 14's
+"Wave 6 as built".
+
+What it changes:
+- **Dropped from the database** (migration 643, destructive, one transaction): 8 matviews, 12 views, 11 functions,
+  4 tables (`ops_incident_runs` 611 rows, the retired check results 1,822, `portal_coverage_gate` 153,
+  `dual_write_watermark` 22), the 5 columns of `ops_incidents` only the retired signature engine used, the `*/10`
+  pg_cron job `refresh-health-dashboard`, 8 of the 18 rows of the derived-artifacts registry and 3 settings rows.
+  The refresh cost 14.8 h of database time over its last measured 7 days (to 10-20).
+- **`portals.scrape_cadence_minutes` goes in its own migration, 663**, applied right after 643: the web portal's
+  migration 649 (applied before 643, replayed after it) inserts a row naming that column, and #1939's 650 must replay
+  after 643, so no one number fits both.
+- **Their writers, deleted in the same PR**: the images workflow's `refresh-stats` job with
+  `scripts/refresh_image_stats.py`; the `active_db` and `walk_coverage` keys each walk wrote into
+  `scrape_runs.by_category`, for the units and the orphans' entry (no Health check reads either; the coverage verdict
+  is still logged as `COVERAGE`, and the RECONCILE and `VERIFY orphans` lines keep their `active=` counts); the
+  broker sweep's `broker_resolution_last_complete` stamp; the per-m² census entry for a dropped matview; and the test
+  rails that listed the old objects.
+- **Kept on purpose**: `ops_incidents_open_signature_uq`, the index every new cell incident needs;
+  `data_quality_snapshots`, frozen history (Q5); and `portals.supports_complete_walk` (the Scrapers page still reads
+  it), `delist_flip_refusals` (still written) and the 150 unread ceskereality and mmreality slice rows, which stay
+  with the scraper track.
+- **Delivered in the database skill's order, not 627's**: the code still on `main` survives the drop (the image
+  refresh catches the missing matview and skips; the by_category keys are JSON; only the broker stamp would return
+  one unread row), so after the backup (label `health-legacy-643`) and a second 24 h zero-reads check, 643 and then
+  663 are applied from this branch (on or after 2026-10-23 13:00Z, Q5), and the PR merges after, before the next
+  daily broker lap (04:35 UTC).
+
+Owed and stated (also in the design's notes):
+- The backup holds no function, grant or job: the 11 function bodies stay in git (six byte for byte, five equal to
+  their last migration once whitespace and comments are stripped; their live md5s, re-read 2026-10-23, are in 643's
+  header), and there is no revert script, as for 618 and 627.
+- `ops_incidents_open_recent_idx` (migration 462) was not on the list and stays; the 132 resolved signature-engine
+  incidents stay as history (the backup keeps their dropped columns).
+
+To check after the apply: the post-apply SELECTs in the PR (every dropped object gone, the cron job gone, the
+registry at 10, `ops_incidents_open_signature_uq` present, no open non-cell incident); then, on Health's Platform
+section, Jobs and Capacity list no `cron/refresh-health-dashboard` cell, Jobs no `artifact/` cell for the eight, and
+Migration drift reads 643 and 663 Not measured (a drop declares nothing it can probe).
+
+**Next:** the green sprint's remaining waves (W3 producers, W4 location producers, W5 rulings).
+
+## 2026-10-26 — a Python lint gate in CI (shipped with this PR)
+
+- **`ruff check .`** is a step of the `pytest` job (no new required check), at zero findings: syntax errors,
+  every pyflakes rule, and missing annotations outside `tests/`; the rules live in `pyproject.toml` `[tool.ruff]`.
+- **The shared `cur` fixture** lives in `tests/conftest.py`; a module that defines its own `cur` still overrides it.
+- **Excluded:** the 20 autodedup decision modules (`incremental.DECISION_MODULES`; a byte edit moves the live engine
+  digest), held equal to that tuple by `tests/test_ruff_config.py`. **Next:** lint them with the next real engine
+  change; a second rule tier (B023, B904, PLE) is a ruling.

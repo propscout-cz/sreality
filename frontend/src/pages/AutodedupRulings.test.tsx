@@ -24,7 +24,7 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   postAutodedupVerdict: vi.fn(),
   getMergePreview: vi.fn(),
   splitProperty: vi.fn(),
-  mergePropertySet: vi.fn(),
+  mergeProperties: vi.fn(),
 }));
 vi.mock('@/lib/queries', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/queries')>()),
@@ -213,6 +213,19 @@ describe('<AutodedupRulings> the list', () => {
     await waitFor(() => expect(lastQuery()).toMatchObject({ grain: 'group' }));
   });
 
+  /* A pick-one is the ONE joined bar (operator ruling 2026-10-27), drawn via Segmented. */
+  it('draws the grain and the engine agreement as joined bars', async () => {
+    setup();
+    for (const [name, lit] of [['Zrnitost', 'Páry'], ['Engine', 'Vše']]) {
+      const bar = await screen.findByRole('group', { name });
+      expect(bar.firstElementChild).toHaveClass('inline-flex', 'border', 'bg-[var(--color-paper-2)]');
+      expect(within(bar).getByRole('button', { name: lit })).toHaveClass(
+        'bg-[var(--color-copper)]',
+        'text-[var(--color-on-copper)]',
+      );
+    }
+  });
+
   it('reads a filter from the link another page built, and drops it on ✕', async () => {
     setup('/autodedup/rulings?property=100&verdict=bogus');
     await screen.findByTestId('ruling-11-12');
@@ -337,30 +350,25 @@ describe('<AutodedupRulings> corrections are new rulings', () => {
   });
 
   it('offers the merge a same on two properties needs, behind its confirm, and toasts the receipt', async () => {
-    vi.mocked(api.mergePropertySet).mockResolvedValue({
-      merge_group_id: 'g',
-      survivor_id: 100,
-      retired_ids: [200],
-      listings_moved: 1,
-      pairs_ruled_same: 1,
-      rulings_taken_back: 1,
-      carried: { notes: 1, pipeline: null, collections: [], tags: [] },
-      hidden_for_you: false,
-    });
-    vi.mocked(api.getMergePreview).mockResolvedValue({ property_ids: [100, 200], rulings_taken_back: 1 });
+    vi.mocked(api.mergeProperties).mockResolvedValue({ letters: { A: {
+      merge_group_id: 'g', survivor_id: 100, retired_ids: [200], listings_moved: 1,
+      pairs_ruled_same: 1, rulings_taken_back: 1,
+      carried: { notes: 1, pipeline: null, collections: [], tags: [] }, hidden_for_you: false,
+    } } });
+    vi.mocked(api.getMergePreview).mockResolvedValue({ letters: { A: { property_ids: [100, 200], rulings_taken_back: 1 } } });
     setup();
     render(<ToastViewport />);
     const card = await screen.findByTestId('ruling-11-12');
     fireEvent.click(within(card).getByRole('button', { name: 'Sloučit #100 a #200' }));
-    expect(api.mergePropertySet).not.toHaveBeenCalled();
+    expect(api.mergeProperties).not.toHaveBeenCalled();
     // the confirm says how many "Různé" rulings the merge takes back (MS12)
     const count = await within(card).findByText('Vezme zpět 1 rozhodnutí „Různé“.');
     expect(count.closest('p')).toHaveTextContent(
       'Sloučit nemovitosti #100 a #200 do starší z nich? Vezme zpět 1 rozhodnutí „Různé“.',
     );
-    expect(api.getMergePreview).toHaveBeenCalledWith([100, 200]);
+    expect(api.getMergePreview).toHaveBeenCalledWith({ 100: 'A', 200: 'A' });
     fireEvent.click(within(card).getByRole('button', { name: 'Ano, sloučit' }));
-    await waitFor(() => expect(api.mergePropertySet).toHaveBeenCalledWith([100, 200]));
+    await waitFor(() => expect(api.mergeProperties).toHaveBeenCalledWith({ 100: 'A', 200: 'A' }));
     const receipt =
       'Sloučeno do nemovitosti #100. Přesunuto: 1 poznámka. Zrušená rozhodnutí „Různé“: 1.';
     expect(await screen.findByText(receipt)).toBeInTheDocument();
@@ -371,10 +379,10 @@ describe('<AutodedupRulings> corrections are new rulings', () => {
   it('holds the merge until the count is read: Enter on the focused button waits', async () => {
     let answer: (p: api.MergePreview) => void = () => {};
     vi.mocked(api.getMergePreview).mockReturnValue(new Promise((resolve) => (answer = resolve)));
-    vi.mocked(api.mergePropertySet).mockResolvedValue({
+    vi.mocked(api.mergeProperties).mockResolvedValue({ letters: { A: {
       merge_group_id: 'g', survivor_id: 100, retired_ids: [200], listings_moved: 1,
       pairs_ruled_same: 1, rulings_taken_back: 2, carried: null, hidden_for_you: null,
-    });
+    } } });
     setup();
     const card = await screen.findByTestId('ruling-11-12');
     fireEvent.click(within(card).getByRole('button', { name: 'Sloučit #100 a #200' }));
@@ -385,18 +393,18 @@ describe('<AutodedupRulings> corrections are new rulings', () => {
     expect(yes).toHaveFocus();
     expect(yes).toHaveAttribute('aria-disabled', 'true');
     fireEvent.click(yes);
-    expect(api.mergePropertySet).not.toHaveBeenCalled();
-    await act(async () => answer({ property_ids: [100, 200], rulings_taken_back: 2 }));
+    expect(api.mergeProperties).not.toHaveBeenCalled();
+    await act(async () => answer({ letters: { A: { property_ids: [100, 200], rulings_taken_back: 2 } } }));
     expect(await within(card).findByText('Vezme zpět 2 rozhodnutí „Různé“.')).toBeInTheDocument();
     expect(yes).toHaveAttribute('aria-disabled', 'false');
     fireEvent.click(yes);
-    await waitFor(() => expect(api.mergePropertySet).toHaveBeenCalledWith([100, 200]));
+    await waitFor(() => expect(api.mergeProperties).toHaveBeenCalledWith({ 100: 'A', 200: 'A' }));
   });
 
   it('says when the count before a merge cannot be read, and offers a retry', async () => {
     vi.mocked(api.getMergePreview)
       .mockRejectedValueOnce(new Error('HTTP 500'))
-      .mockResolvedValue({ property_ids: [100, 200], rulings_taken_back: 0 });
+      .mockResolvedValue({ letters: { A: { property_ids: [100, 200], rulings_taken_back: 0 } } });
     setup();
     const card = await screen.findByTestId('ruling-11-12');
     fireEvent.click(within(card).getByRole('button', { name: 'Sloučit #100 a #200' }));

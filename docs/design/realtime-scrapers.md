@@ -37,7 +37,9 @@ watchdog price-drop detection on a DAILY gate.
 
 **Hot lane — one always-on worker** (second Railway service from the EXISTING Docker image;
 the scraper package is already importable there and the API already runs the same
-settings-paced asyncio-loop pattern — matcher/outbox). It runs, as continuous loops:
+settings-paced asyncio-loop pattern — matcher/outbox; *superseded: the outbox went 2026-10-21
+(notifications W1) and the matcher moved onto this worker (W2a's `notifications` lane; W2b deleted
+the API's loop), so the API's one loop is the health teller*). It runs, as continuous loops:
 
 1. **Newest-first delta probes, 2–5 min per portal** (live-verified capability):
    bazos/idnes/realitymix/remax — default index order IS newest-first (1–3 pages/probe);
@@ -52,8 +54,8 @@ settings-paced asyncio-loop pattern — matcher/outbox). It runs, as continuous 
    `docs/design/portal-order-fidelity.md`). **Update (2026-08-04, portal-order-fidelity
    Phase 4):** sreality also joined `REALTIME_SOURCES` with its own bespoke
    `probe_category` (the ceskereality pattern — per-page early-stop diff, UNSPLIT since
-   the 422 is offset- not size-triggered), complementing rather than replacing the
-   count-probe lane. **mmreality** — proxied, low-frequency only (cost).
+   the 422 is offset- not size-triggered); it once complemented the count-probe lane,
+   deleted in Actions-exit W0 (#2015). **mmreality** — proxied, low-frequency only (cost).
    Probes reuse the safe partial-walk primitive: diff + enqueue, `complete=False`, so a
    probe can never falsely delist (rule #3 machinery unchanged).
 2. **Continuous detail drain** off the existing SKIP LOCKED queue (multi-runtime-safe by
@@ -64,7 +66,11 @@ settings-paced asyncio-loop pattern — matcher/outbox). It runs, as continuous 
    re-download hop) → CLIP tag via a warm-model loop (~0.5 img/s steady inflow vs
    ~10 img/s/4 vCPU capacity) → dedup dirty enqueue → matcher wake. A listing is not
    surfaced as "new" (watchdog dispatch, new-listing feeds) until its first image is
-   stored, with a timeout fallback for listings that genuinely have no photos.
+   stored, with a timeout fallback for listings that genuinely have no photos. — *superseded
+   2026-10-23 by the publication rule (rule 16, migrations 668/669, `toolkit/publication.py`): the
+   maintenance lane's pass stamps `properties.settled_at` once a property's first photo is stored
+   (or it has none) and the engine is done with its ads, and Browse, the map, stats and the
+   watchdog serve a property once it is settled or 6 h old; the image gate is deleted.*
 4. **Targeted gone-probes** for watchdog/pipeline/collection properties (the per-listing
    `ListingGoneError` → immediate inactive flip already exists) — minutes-grade delisting
    for WATCHED properties; market-wide delisting stays completeness-gated on the walks.
@@ -73,11 +79,26 @@ settings-paced asyncio-loop pattern — matcher/outbox). It runs, as continuous 
    already computes the price diff), sreality singleton-property creation inlined into
    `write_detail_batch` (every other portal already creates it inline). — *superseded 2026-10:
    every portal lands NULL; the straggler-attach births + browse-syncs (`scraper/listing_write.py`).*
+   *Producers superseded 2026-10-21 (notifications push W2a/W2b): the three run on the worker's
+   `notifications` lane, a constant 300 s clock over fixed windows (no cursor, so no attach race),
+   not a per-batch wake; the API runs none.*
 
 **Cold lane — GitHub Actions keeps** the delay-tolerant heavy work it does well and for
-free: full reconcile index walks (completeness + delisting evidence), image/CLIP backfills,
-dedup full scans + batch lanes, monitors, CI. Self-chaining (`SCRAPE_CHAIN_TOKEN`) is
-legacy backlog acceleration — do not extend it to new lanes.
+free: full reconcile index walks (completeness + delisting evidence), CLIP backfills,
+dedup full scans + batch lanes, monitors, CI. What self-chaining remains is bounded and on each job's
+own token: price stats re-dispatches once per run that made progress (#2013), claims intake while a
+cursor moved — do not extend it to new lanes. — *Since Actions-exit W0 (#2010,
+2026-10) this worker is the ONLY runtime of the detail drain, image downloads (#2011 added the
+inactive residue) and the incremental property and broker maintenance: the five portal drains, `images_fresh.yml`,
+`property_maintenance.yml` and `broker_resolution.yml` that ran beside it as backstops are
+deleted (in their last week the GitHub drains wrote 1–5 % of each portal's completions, bazos
+about 5 %; the PR's pre-checks hold the measurement).
+Still on GitHub for now: the walks and the daily property and broker sweeps (until the job runner
+takes them); the four combined scrapers only walk since W1 (#2021). Since #2011 the images lane also
+drains the inactive-image residue `images.yml` owned (each tier walks the pending index newest-first,
+the residue filling what the active tier leaves), so no image download runs on GitHub.
+`realtime_drain_disabled_sources` therefore freezes a portal's queue: no other scheduled drain
+takes it over.*
 
 **Prerequisite: shared politeness.** `RateLimiter` is per-process; a Railway lane beside
 Actions walks would double-hit portals with two independent limiters. Before the probe lane
@@ -94,12 +115,15 @@ Postgres SKIP LOCKED is the industry-standard substrate and already proven here)
 ## SLOs (operator-accepted 2026-07-02)
 
 Google-SRE format, measured on stage watermarks (p95, warn at ~75% of target): new listing
-visible ≤ 15 min · images stored ≤ 20 min · **no publication without images** (gate above) ·
+visible ≤ 15 min (*superseded 2026-10-23 by the publication rule: a property is shown when
+published — settled, or 6 h old*) · images stored ≤ 20 min · **no publication without images** (gate above; *superseded 2026-10-23 by the publication rule*) ·
 photo-sharing cross-portal merge ≤ 60 min · delisting ≤ 6 h market-wide / ≤ 30 min watched ·
-notification ≤ 2 min after the property row exists. `published_at` (migration 266) and the
+notification ≤ 2 min after the property row exists (*superseded 2026-10-23 by the publication
+rule: a property is told when published — settled, or 6 h old*). `published_at` (migration 266) and the
 `detail_queue_completions` ledger (migration 265) are the measurement substrate; health
 checks move from fixed batch-era thresholds to cadence/SLO-scaled ones, with reds pushed
-through the existing notification outbox.
+through the existing notification outbox (*superseded: the outbox was deleted 2026-10-21; system
+alerts live on Health and the canary e-mail, ruling R2b*).
 
 ## Costs & constraints
 
@@ -117,7 +141,8 @@ Wave A+B (2026-07, shipped as PRs #678–#683 + published_at/pozemek follow-ups)
 fixes real-time would amplify (cross-slice delisting flap, remax rent starvation, idnes FX
 churn, sreality hash flaps, idnes area truncation) + the measurement substrate. Wave C
 (#688–#692, shipped): the always-on worker (`scraper/realtime_worker.py`, ships dark behind
-`REALTIME_WORKER_ENABLED`) + `LedgerRateLimiter` + probe lanes + images-first gate.
+`REALTIME_WORKER_ENABLED`) + `LedgerRateLimiter` + probe lanes + images-first gate (superseded 2026-10-23 by the
+publication rule, migrations 668/669).
 
 **Waves W1–W5 (shipped 2026-07-04):**
 - **W1** (#694) — per-source drain-disable knob (`realtime_drain_disabled_sources`), the
@@ -131,7 +156,7 @@ churn, sreality hash flaps, idnes area truncation) + the measurement substrate. 
   now-abandoned "batch-warmer revival" this doc once listed.)
 - **W3** (#696, migration 270) — sreality count-probe lane: sreality's sort-blind v1 API gets
   `pagination.total` count-delta probes that (opt-in, token+setting gated) trigger a targeted
-  `index_walk`.
+  `index_walk`. Deleted in Actions-exit W0 (#2015): the worker triggers no GitHub workflow.
 - **W4** — idnes/bazos street coverage: the RÚIAN resolver lever is **exhausted** at the 15 m
   tolerance (idnes coords are >15 m from address points → 0 net resolutions; bazos coords are
   the page-wide-link shared pins the resolver correctly rejects — it's excluded from the
@@ -145,8 +170,8 @@ drain now also runs from this worker, not only from `location_resolve.yml`. The 
 round trips, not work — ~11 registry round trips per listing at ~120 ms from a US GitHub runner
 measured **0.7 listings/s**, and GitHub fires the schedule ~7x/day against a >100k queue. The
 worker sits beside the database in the EU (~1–2 ms) and runs continuously. It **reuses**
-`location_data.resolver.drain.run()` and `lease.held()` — no copy of the drain, the CAS or the
-resolver — and takes the SAME `location_jobs` lease row (`drain.JOB_NAME`, imported never
+`location_data.resolver.drain.run()` and `scraper.job_lease.held()` — no copy of the drain, the CAS
+or the resolver — and takes the SAME `scheduled_jobs` lease row (`drain.JOB_NAME`, imported never
 re-spelled) on the drain's own session-pooler connection, so the worker lane and the
 Actions lane can never drain at once; a busy lease is a cheap no-op (`{"acquired": false}` in
 the heartbeat, logged on the transition only). The GH lane stays the backstop and keeps
@@ -172,7 +197,7 @@ Budget shape, and the two rails that make the shared lease actually exclusive:
   unchanged: every loop tests the budget between batches and they run concurrently, so N workers
   still overrun by at most ONE batch.
 - `max_seconds` is clamped to ≤ 900 and `batch_size` to ≤ 1000, so a HEALTHY pass stays far below
-  the jobs check's 1,200 s in-flight Watch (`jobs_lane_inflight_warn_s`) and below
+  the jobs check's 1,200 s in-flight Watch (`platform.LANE_INFLIGHT_WARN_S`) and below
   `LANE_PASS_TIMEOUT_SECONDS`.
   Throughput does not need a long pass — the queue IS the cursor.
 - **The lease TTL is `max_seconds + batch_size × 2 s` (floor 120 s), not a flat constant.**
@@ -262,18 +287,18 @@ lag, a 45 s budget and 2 000-row batches. Env knobs on the Railway service:
 **Location-refetch lane (location simplification W8, ships LIVE):** once a day
 (`LOCATION_REFETCH_INTERVAL_S`, default 86400, first tick after a
 `LOCATION_REFETCH_FIRST_DELAY_SECONDS` = 300 s delay so a redeploy loop cannot turn "daily" into
-"per restart"), queue the audit page's active "no data" listings for ONE more detail fetch.
+"per restart"), queue the active ads with no town (rule 25) for ONE more detail fetch.
 
 - **Why.** ceskereality and realitymix geocode an ad after publishing it; our detail fetch ran at
   discovery, read empty location fields, and the index card never changed, so no re-fetch was ever
   enqueued (measured 2026-09-14: 56 of 63 ceskereality and 56 of 112 realitymix rows in that bucket
   were fetched within two minutes of first sighting and never again).
-- **The audit relation IS the candidate list** — `location_pin_audit_mv` with
-  `state='unresolved'` + `quality='active_no_claims'`, joined to `listings` by PK for the live
-  `source_url` / `price_czk` / `is_active` (the matview is an hourly snapshot; a re-fetch must not
-  be aimed by a stale URL). Rows whose newest `portal_raw_pages` / `portal_raw_payloads` record is
-  younger than `LOCATION_REFETCH_MIN_AGE_S` (6 h) are skipped — re-reading a page fetched minutes
-  ago only re-reads the same empty moment.
+- **Rule 25's invariant IS the candidate list** — active `listings` LEFT JOIN `listing_location`
+  where `location_steps.town_missing_sql()` holds (not foreign, no town; no row counts), the set the
+  `location_town_coverage` check judges (until 2026-10-22: the pin-audit matview's
+  `active_no_claims` bucket, which missed kraj/okres-only ads). Rows whose newest `portal_raw_pages`
+  / `portal_raw_payloads` record is younger than `LOCATION_REFETCH_MIN_AGE_S` (6 h) are skipped —
+  re-reading a page fetched minutes ago only re-reads the same empty moment.
 - **Bounded per portal, oldest-fetched first.** `LOCATION_REFETCH_CAP_PER_SOURCE` (500) rows per
   portal per tick, so bazos's dead ads (their page answers with the category listing →
   `ListingGoneError` → delisted by the same fetch) drain over days instead of flooding one drain
@@ -283,10 +308,10 @@ lag, a 45 s budget and 2 000-row batches. Env knobs on the Railway service:
   most wants are the ones the drain gave up on; nothing else re-arms them). `claim_detail_batch`
   reserves a share of every claim for that class and never filters on `supports_complete_walk`, so
   every portal's drain — worker or Actions — serves them. Then the drain rewrites the page, the
-  `location_intake_fast` lane mines the new body within a minute, and the resolver answers.
+  archive appends it (no time floor since 2026-10-22), the `location_intake_fast` lane mines it
+  within a minute, and the resolver answers.
 - **No lease, no in-process lock.** One SELECT plus one INSERT per portal; the enqueue is idempotent
-  on `(source, native_id)` and never disturbs a claimed row. A missing `location_pin_audit_mv` (a
-  branch database) skips the tick with ONE warning per process.
+  on `(source, native_id)` and never disturbs a claimed row.
 - **A daily lane is not a dead lane.** The jobs check judges a lane late against the `interval_s`
   it wrote, only past `max(3 × interval, interval + 2 × last duration, 15 min)`, so a daily lane
   between ticks reads fine (each boot also runs one pass after the 300 s first delay); a failing
@@ -463,8 +488,8 @@ nothing else.
   instead predecessor_kept, the lease the cap's floor left to its TTL), peak_rss_mb (E941) +
   rss_mb + memory_limit_mb (the container's cgroup limit, read each pass; E948, E948b; on every
   path, a skip's included, since E944),
-  memo_entries (the body readers by module, the shingle sets and the tokens, before the pass's end
-  empties them) + rss_at_start_mb and rss_after_trim_mb (the RSS once freed memory went back,
+  memo_entries (the body readers by module, the shingle sets, the tokens and the folded texts, before
+  the pass's end empties them) + rss_at_start_mb and rss_after_trim_mb (the RSS once freed memory went back,
   before the pass and at its end; E949: on every path but `previous_pass_running`, and a raised
   pass writes no `last`, so the heartbeat keeps the previous pass's until the next pass's
   rss_at_start_mb shows what the raised one left), chunks + chunk_rss_mb + chunk_vectored (E950:
@@ -477,7 +502,15 @@ nothing else.
   attempt re-retrieved from the store's keys and guard rows, a neighbourhood and never a backlog:
   the build's backlog, rate and decision lag are the Health `dedup` check's, read from the stores;
   and the adverts whose facts the pass read, by why — claim, order, digest, decided, cluster,
-  rail — summed over its attempts)}`; an
+  rail — summed over its attempts),
+  enter_scan (E940: the scope-block walks of `public` — `walks` this pass, `pages` (the walks that
+  came back a full `ENTER_SLICE` page, so the block goes on past them: a page, never a silent
+  truncation), `page_of` (every block inside a cycle of pages, `[page, of]`, `of` null until its
+  first cycle has ended — such a block is unread to the reconcile and W8 until then), `stalled`
+  (a cycle 16 pages long without an end: the cursor is not advancing, logged), `scans_24h`/`cap`,
+  and `skipped: daily cap` + `unfinished` (every due block the pass never reached and every block
+  inside a cycle) when the cap stopped the pass; null when the pass walked
+  nothing and no block is mid-cycle)}`; an
   absent store (migrations 539/540/596/604) = `skipped: store_absent` + one warning. A change of the reconcile state is logged once, and the
   engine logs each release of a dead predecessor's lease.
 - **Latency floor.** The engine ignores rows younger than its settle lag (`SETTLE_LAG_S`, 300 s,
@@ -590,13 +623,13 @@ Four changes, each closing one link:
   `max_claims` at what is waiting) instead of 20 slots per pass whatever the work.
 - **Probe and drain hold pass locks** like the five lanes that already did, and so does the broker
   lane (Broker Unify W3; an abandoned pass's `broker_resolution_lock` row goes stale, so the lease
-  alone would let the next tick run beside it), all eight (the health lane's, wave 3, makes nine)
+  alone would let the next tick run beside it), all eight (the health lane's, wave 3, makes nine; the notifications lane's, notifications W2a, ten)
   through one `_PassLock`: each pass runs in ONE thread, so a lane leaks at most one; a skipped pass
   records `previous_pass_running`. While an abandoned pass still holds its lock, the lane's
   `in_flight_s` keeps counting from that pass's start (a skip otherwise reads like a quick pass),
   so the jobs check's lane cell reads Watch past 1,200 s in flight and Problem past 1,800 s.
 - **The heartbeat is the executor's canary.** It stays on the default executor every lane shares,
-  pinned at 32 threads (`LANE_EXECUTOR_THREADS`; the fifteen `LANES` hold at most one each in normal
+  pinned at 32 threads (`LANE_EXECUTOR_THREADS`; the sixteen `LANES` hold at most one each in normal
   running), so anything that fills it (leaked threads from the lanes without a pass lock, say)
   stops the beats. Those threads share two glibc malloc arenas (`MALLOC_ARENA_MAX=2`, E949). A
   beat connects once with a 10 s timeout, so a slow connect cannot outlast the watchdog's bound

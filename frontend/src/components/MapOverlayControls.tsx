@@ -1,6 +1,6 @@
 import { useId, type ReactNode } from 'react';
 
-import { OverlayChip, OverlayPanel } from '@/components/OverlayChip';
+import { MapLegendCard, OverlayChip, OverlayPanel } from '@/components/OverlayChip';
 import {
   OVERLAY_DASH,
   OVERLAY_FILL_OPACITY,
@@ -54,7 +54,7 @@ export default function MapOverlayControls({
     onChange(serializeLayers(layersOf(next, registry)));
   };
   return (
-    <div className={compact ? 'flex flex-wrap gap-1' : 'flex flex-col gap-2 items-end'}>
+    <div className={compact ? 'flex flex-wrap gap-1' : 'flex flex-col'}>
       {sections.map((section) => (
         <SectionControl
           key={section.key}
@@ -101,7 +101,7 @@ function SectionControl({
   );
   if (compact) return chip;
   return (
-    <div className="flex flex-col gap-2 items-end">
+    <div className="flex flex-col">
       {chip}
       {on > 0 && <SectionPanel section={section} sel={sel} zoom={zoom} edit={edit} />}
     </div>
@@ -163,25 +163,51 @@ function SectionPanel({
         ),
       });
     }
-    if (layer.scale) {
-      blocks.push({ key: `scale-${layer.key}`, node: <ScaleLegend scale={layer.scale} /> });
-    } else if (layer.legend.length > 0 && (!multi || layer.legend.length > 1)) {
-      /* A one-class layer of a multi-layer section wears its swatch on its toggle. */
-      blocks.push({ key: `legend-${layer.key}`, node: <ClassLegend legend={layer.legend} /> });
-    }
   }
   blocks.push({ key: 'about', node: <SectionAbout section={section} zoom={zoom} /> });
   return (
-    <OverlayPanel className="min-w-[210px] max-w-[260px]">
-      {blocks.map((block, i) => (
-        <div
-          key={block.key}
-          className={i > 0 ? 'border-t border-[var(--color-rule)] pt-1.5' : undefined}
-        >
-          {block.node}
-        </div>
+    <OverlayPanel>
+      {blocks.map((block) => (
+        <div key={block.key}>{block.node}</div>
       ))}
     </OverlayPanel>
+  );
+}
+
+/* The keys of the layers that are on, one card per section for the map's
+ * corner: a layer's scale, or its classes (a multi-layer section lists the
+ * class of each layer drawn). The card names the variant shown. */
+export function MapOverlayLegends({
+  registry,
+  selection,
+}: {
+  registry: MapOverlayRegistry | undefined;
+  selection: string;
+}) {
+  const sel = layersOf(parseLayers(selection), registry);
+  return (
+    <>
+      {(registry?.sections ?? []).map((section) => {
+        const on = section.layers.filter((layer) => sel.has(layer.key));
+        if (on.length === 0) return null;
+        const classes = on.filter((layer) => !layer.scale).flatMap((layer) => layer.legend);
+        const scales = on.filter((layer) => layer.scale);
+        if (classes.length === 0 && scales.length === 0) return null;
+        const variants = on
+          .filter((layer) => (layer.variants?.length ?? 0) > 1)
+          .map((layer) => activeVariant(layer, sel.get(layer.key))?.label)
+          .filter(Boolean);
+        return (
+          <MapLegendCard
+            key={section.key}
+            title={variants.length ? `${section.label} · ${variants.join(', ')}` : section.label}
+          >
+            {scales.map((layer) => <ScaleLegend key={layer.key} scale={layer.scale!} />)}
+            {classes.length > 0 && <ClassLegend legend={classes} />}
+          </MapLegendCard>
+        );
+      })}
+    </>
   );
 }
 
@@ -274,10 +300,10 @@ function VariantRadios({
 
 function ClassLegend({ legend }: { legend: readonly OverlayLegendEntry[] }) {
   return (
-    <ul aria-label="Legenda" className="flex flex-col gap-1">
-      {legend.map((entry) => (
+    <ul aria-label="Legenda" className="flex flex-wrap gap-x-3 gap-y-1">
+      {legend.map((entry, i) => (
         <li
-          key={entry.class}
+          key={`${i}:${entry.class}`}
           className="flex items-center gap-1.5 text-[0.7rem] text-[var(--color-ink-2)]"
         >
           <LegendSwatch entry={entry} />

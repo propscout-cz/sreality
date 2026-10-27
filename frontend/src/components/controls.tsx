@@ -1,4 +1,4 @@
-import type { ChangeEvent, ReactNode } from 'react';
+import type { AriaAttributes, ChangeEvent, InputHTMLAttributes, ReactNode } from 'react';
 import { useId, useState } from 'react';
 
 export type TriValue = 'any' | 'yes' | 'no';
@@ -187,12 +187,15 @@ export function ControlGroup({
 export function Field({
   label,
   help,
+  aside,
   as = 'group',
   className = '',
   children,
 }: {
   label: string;
   help?: string;
+  /* A tag after the caption (the group form only): beside it, never part of the name. */
+  aside?: ReactNode;
   as?: 'group' | 'control';
   className?: string;
   children: ReactNode;
@@ -227,7 +230,7 @@ export function Field({
       aria-describedby={help ? helpId : undefined}
       className={className}
     >
-      {caption}
+      {aside ? <div className="flex flex-wrap items-center gap-x-2">{caption}{aside}</div> : caption}
       {helpEl}
       <div className="mt-2">{children}</div>
     </div>
@@ -249,15 +252,17 @@ export function Label({ children, id }: { children: ReactNode; id?: string }) {
   );
 }
 
-/* Segmented — a row of PickButtons acting as a single-value choice. Lived as
- * two byte-for-byte copies in Brokers and Outreach; a Field caption is what
- * names it, so it belongs beside Field. */
+/* Segmented — a Field's pick-one: the joined bar (SegmentedBar `hug`), each
+ * segment its label's width. Every pick-one group is that one bar (operator
+ * ruling 2026-10-27), so `variant` is a no-op kept for its callers. A pick-one
+ * of more than six options is a PickButton row instead, never this. */
 export function Segmented<T extends string | number | null>({
   options,
   value,
   onChange,
-  variant = 'soft',
   label,
+  aria,
+  box,
 }: {
   options: ReadonlyArray<{ value: T; label: string }>;
   value: T;
@@ -265,29 +270,18 @@ export function Segmented<T extends string | number | null>({
   variant?: 'soft' | 'solid';
   /* Names the choice when no Field caption does. */
   label?: string;
+  aria?: AriaAttributes;
+  box?: FormBox;
 }) {
-  return (
-    <div className="flex flex-wrap gap-1" role={label ? 'group' : undefined} aria-label={label}>
-      {options.map((o) => (
-        <PickButton
-          key={String(o.value)}
-          on={o.value === value}
-          onClick={() => onChange(o.value)}
-          variant={variant}
-        >
-          {o.label}
-        </PickButton>
-      ))}
-    </div>
-  );
+  return <SegmentedBar hug options={options} value={value} onChange={onChange} label={label} aria={aria} box={box} />;
 }
 
 /* -------------------------------------------------------------------------- */
-/* PickButton — segmented-cell pill used for enum / status / seen-within /    */
-/* tri-state / disposition pickers. Two visual modes: 'soft' (tinted copper   */
-/* on selected) is the default and reads as "one of many tagged options";    */
-/* 'solid' (filled copper background, white text) is louder and reserved for  */
-/* the Disposition grid where each cell is a fixed property of the listing.   */
+/* PickButton — the chip: pick-several rows, include / exclude chips, and a   */
+/* pick-one of more than six options (a pick-one of six or fewer is the       */
+/* joined SegmentedBar, system.md § Option groups). Two visual modes: 'soft'  */
+/* (tinted copper on selected) is the default; 'solid' (filled copper, the    */
+/* on-copper text) is louder, for the Disposition grid and MultiselectChips.  */
 /* `negative` paints a pressed cell brick: an EXCLUDE pick, the same colour   */
 /* an excluded location chip carries.                                         */
 /* -------------------------------------------------------------------------- */
@@ -313,10 +307,10 @@ export function PickButton({
 }) {
   const onClasses = negative
     ? variant === 'solid'
-      ? 'bg-[var(--color-brick)] text-white border-[var(--color-brick)]'
+      ? 'bg-[var(--color-brick)] text-[var(--color-on-brick)] border-[var(--color-brick)]'
       : 'bg-[var(--color-brick-soft)] text-[var(--color-brick)] border-[var(--color-brick)]'
     : variant === 'solid'
-      ? 'bg-[var(--color-copper)] text-white border-[var(--color-copper)]'
+      ? 'bg-[var(--color-copper)] text-[var(--color-on-copper)] border-[var(--color-copper)]'
       : 'bg-[var(--color-copper-soft)] text-[var(--color-copper)] border-[var(--color-copper)]';
   // Resting label is ink-2, not ink-3: ink-3 on paper-2 is 3.9:1 (below the
   // 4.5:1 AA floor for 12px text); ink-2 is 7.6:1. Hover keeps the border cue.
@@ -387,11 +381,25 @@ export function Switch({
   );
 }
 
+/* The form box: a form grid's controls (the Valuo editor) as ONE box, the inset text box's 34 px (a select draws 1 px
+ * short of it, a pick 4 px), dashed while `absent` (nothing is sent: dashed = absent, system.md), brick while
+ * aria-invalid. A control without `box` keeps its own size and every class it had. */
+export type FormBox = 'present' | 'absent';
+export const formBox = (box?: FormBox) =>
+  box ? `h-[2.125rem] aria-[invalid=true]:border-[var(--color-brick)]${box === 'absent' ? ' border-dashed' : ''}` : '';
+
 /* -------------------------------------------------------------------------- */
 /* NumberCell — paired-input cell used inside RangeFilter and any standalone  */
 /* numeric input slot. Inset background + tabular monospace so values align   */
 /* vertically across rows.                                                    */
 /* -------------------------------------------------------------------------- */
+
+const INSET = 'w-full min-w-0 px-2 py-1.5 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]';
+
+/* A form box's text or date input: NumberCell's box; `label` is its accessible name. */
+export const TextBox = ({ label, box, ...input }: InputHTMLAttributes<HTMLInputElement> & { label: string; box: FormBox }) => (
+  <input aria-label={label} {...input} className={`${INSET} ${formBox(box)}`} />
+);
 
 export function NumberCell({
   value,
@@ -417,7 +425,7 @@ export function NumberCell({
       onChange={onChange}
       onBlur={onBlur}
       aria-label={ariaLabel}
-      className="w-full min-w-0 px-2 py-1.5 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]"
+      className={INSET}
     />
   );
 }
@@ -430,31 +438,35 @@ export function NumberCell({
  * change of `value` shows the value again, with a decimal comma. `cell` draws
  * it as the filter forms' NumberCell box and keeps their display as it was
  * (the value as String(v), no reset on blur). `label` is the input's
- * accessible name; the visible caption is the caller's. */
+ * accessible name; the visible caption is the caller's. A `box` draws the form
+ * box, its unit inside it. */
 const decimalText = (v: number | null) => (v == null ? '' : String(v).replace('.', ','));
 
 export function DecimalField({
   label,
   value,
   onChange,
-  step,
   placeholder,
   suffix,
   readOnly,
   integer,
   cell,
   className = '',
+  aria,
+  box,
 }: {
   label: string;
   value: number | null;
   onChange: (v: number | null) => void;
-  step?: string;
   placeholder?: string;
   suffix?: string;
   readOnly?: boolean;
   integer?: boolean;
   cell?: boolean;
   className?: string;
+  /* The boxed input only; `cell` has no use for it yet. */
+  aria?: AriaAttributes;
+  box?: FormBox;
 }) {
   const shown = (v: number | null) => (cell ? (v == null ? '' : String(v)) : decimalText(v));
   const [buf, setBuf] = useState({ text: shown(value), value });
@@ -476,26 +488,27 @@ export function DecimalField({
     );
   }
   return (
-    <div className={['flex items-stretch gap-2 min-w-0', className].join(' ')}>
+    <div className={['flex items-stretch gap-2 min-w-0', className].join(' ') + (box ? ' relative' : '')}>
       <input
         type="text"
         aria-label={label}
-        inputMode="decimal"
+        {...aria}
+        inputMode={integer ? 'numeric' : 'decimal'}
         readOnly={readOnly}
         value={buf.text}
         placeholder={placeholder}
-        step={step}
         onChange={onType}
         onBlur={() => setBuf({ text: decimalText(value), value })}
         className={[
-          'flex-1 min-w-0 px-3 py-2 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]',
+          `flex-1 min-w-0 ${box ? 'pl-2 pr-8 py-1.5' : 'px-3 py-2'} text-sm font-mono tabular-nums rounded-[var(--radius-sm)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]`,
           readOnly
             ? 'bg-[var(--color-paper-2)] text-[var(--color-ink-2)] cursor-default'
             : 'bg-[var(--color-inset)]',
-        ].join(' ')}
+          formBox(box),
+        ].join(' ').trim()}
       />
       {suffix && (
-        <span className="self-center text-[0.78rem] tracking-wide text-[var(--color-ink-3)]">
+        <span className={`${box ? 'absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none ' : ''}self-center text-[0.78rem] tracking-wide text-[var(--color-ink-3)]`}>
           {suffix}
         </span>
       )}
@@ -528,27 +541,148 @@ export function TriRow<T extends TriValue>({
   return (
     <div className="flex items-center justify-between gap-2">
       <span className="text-sm text-[var(--color-ink-2)]">{label}</span>
-      <div className="grid grid-cols-3 gap-0.5 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-0.5">
-        {TRI_OPTS.map((opt) => {
-          const on = value === opt.value;
-          return (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => onChange(opt.value as T)}
-              className={[
-                'px-2.5 py-0.5 text-[0.7rem] rounded-[var(--radius-xs)] transition-colors',
-                on
-                  ? 'bg-[var(--color-copper)] text-white'
-                  : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
-              ].join(' ')}
-              aria-pressed={on}
-            >
-              {opt.label}
-            </button>
-          );
-        })}
+      <SegmentedBar options={TRI_OPTS as ReadonlyArray<{ value: T; label: string }>} value={value} onChange={onChange} />
+    </div>
+  );
+}
+
+/* SegmentedBar — THE pick-one control (operator ruling 2026-10-27; system.md
+ * § Option groups): one track of adjoining segments, the chosen one filled
+ * copper. Width: `fill` stretches equal segments across the container at the
+ * reading size; `hug` gives each segment its label's width at that size and
+ * scrolls sideways when too long; neither is the compact amenity row (equal
+ * segments, small type). `tone="phone"` is the phone screens' bar: chosen = ink
+ * on the inset well inside the phone chip's ink-2 hairline, never colour.
+ * `deselectable` (only where null is a value) lights nothing for none and
+ * releases the lit segment to null; otherwise a click on the lit segment sets
+ * it again. The root is always the named group, which
+ * carries `aria`; `box` makes the track the form box. A `fill` segment too narrow
+ * for its label (the filter sidebar dragged to its 240px floor) ends it in an
+ * ellipsis inside its own box, its name kept whole. `segmentRole="menuitemradio"`
+ * serves a bar inside a role=menu (the account menu), aria-checked for pressed. */
+export interface SegmentOption<T> {
+  value: T;
+  label: string;
+  /* An icon before the label (the caller's aria-hidden svg). */
+  glyph?: ReactNode;
+  /* Native hover box: what this option does here, or why it is off. */
+  title?: string;
+  disabled?: boolean;
+  /* The segment's own name where its label leans on the caption ("Hodnota: Cena"). */
+  ariaLabel?: string;
+}
+
+const BAR_TRACK = {
+  desktop: 'gap-0.5 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-0.5',
+  phone: 'gap-0.5 rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)] p-0.5',
+};
+/* hug: the group is the tab strip's scroller (Tabs.tsx), 4px of room for the
+ * focus ring given back, so it takes no pointer; the track inside takes the
+ * clicks and the swipes, and wears the box (the group carries aria-invalid). */
+const BAR_SCROLLER =
+  'pointer-events-none -m-1 flex min-w-0 overflow-x-auto p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden';
+const hugBox = (box: FormBox) =>
+  `h-[2.125rem] [[aria-invalid=true]>&]:border-[var(--color-brick)]${box === 'absent' ? ' border-dashed' : ''}`;
+
+export function SegmentedBar<T extends string | number | boolean | null>({
+  options,
+  value,
+  onChange,
+  label,
+  fill = false,
+  hug = false,
+  tone = 'desktop',
+  deselectable,
+  disabled = false,
+  aria,
+  box,
+  segmentRole,
+}: {
+  options: ReadonlyArray<SegmentOption<T>>;
+  value: T;
+  onChange: (v: T) => void;
+  label?: string;
+  fill?: boolean;
+  hug?: boolean;
+  tone?: 'desktop' | 'phone';
+  deselectable?: null extends T ? boolean : never;
+  disabled?: boolean;
+  aria?: AriaAttributes;
+  box?: FormBox;
+  segmentRole?: 'menuitemradio';
+}) {
+  const phone = tone === 'phone';
+  /* A fill segment's padding only bounds its centred label (the columns are
+   * equal), so it is 4px: the label fits the sidebar's default width whole. */
+  const size = phone
+    ? 'px-3 text-[13px]'
+    : fill
+      ? 'px-1 py-1 text-xs'
+      : hug
+        ? 'px-2 py-1 text-xs'
+        : 'px-2.5 py-0.5 text-[0.7rem]';
+  const look = (on: boolean, off: boolean) => {
+    if (phone) {
+      /* The phone chip's pressed hairline (chips.ts), inset so no width moves:
+       * the inset well alone is ~1.05:1 on paper. */
+      if (on) return 'bg-[var(--color-inset)] text-[var(--color-ink)] ring-1 ring-inset ring-[var(--color-ink-2)]';
+      return off ? 'text-[var(--color-ink-2)]' : 'text-[var(--color-ink-2)] active:bg-[var(--color-inset)]';
+    }
+    if (on) return 'bg-[var(--color-copper)] text-[var(--color-on-copper)]';
+    return off ? 'text-[var(--color-ink-3)]' : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]';
+  };
+  const track = [
+    hug ? 'inline-flex pointer-events-auto' : fill ? 'grid w-full' : 'inline-grid',
+    BAR_TRACK[tone],
+    box ? (hug ? hugBox(box) : formBox(box)) : phone ? 'h-8' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const segments = options.map((opt) => {
+    const on = value === opt.value;
+    const off = disabled || !!opt.disabled;
+    return (
+      <button
+        key={String(opt.value)}
+        type="button"
+        disabled={off}
+        title={opt.title}
+        aria-label={opt.ariaLabel}
+        onClick={() => onChange(on && deselectable ? (null as T) : opt.value)}
+        className={[
+          size,
+          opt.glyph ? 'inline-flex items-center justify-center gap-1.5' : '',
+          hug ? 'shrink-0' : '',
+          fill ? 'min-w-0 overflow-hidden text-ellipsis' : '',
+          'whitespace-nowrap rounded-[var(--radius-xs)] transition-colors',
+          look(on, off),
+          off ? 'cursor-not-allowed opacity-50' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+        {...(segmentRole ? { role: segmentRole, 'aria-checked': on } : { 'aria-pressed': on })}
+      >
+        {opt.glyph}
+        {opt.label}
+      </button>
+    );
+  });
+  if (hug) {
+    return (
+      <div role="group" aria-label={label} {...aria} className={BAR_SCROLLER}>
+        <div className={track}>{segments}</div>
       </div>
+    );
+  }
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      {...aria}
+      className={track}
+      style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
+    >
+      {segments}
     </div>
   );
 }

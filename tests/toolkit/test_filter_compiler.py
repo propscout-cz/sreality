@@ -61,9 +61,8 @@ def test_each_kind_renders_its_template(grain: fc.FilterGrain) -> None:
         ({"has_lift": False}, "l.has_lift = %(has_lift)s", {"has_lift": False}),
         ({"min_usable_area": 10}, "l.usable_area >= %(min_usable_area)s",
          {"min_usable_area": 10}),
-        ({"building_condition_level_max": 0},
-         "l.building_condition_level <= %(building_condition_level_max)s",
-         {"building_condition_level_max": 0}),
+        ({"max_usable_area": 0}, "l.usable_area <= %(max_usable_area)s",
+         {"max_usable_area": 0}),
         ({"furnished": ["ano", fr.UNKNOWN_FILTER_VALUE]},
          "(l.furnished = ANY(%(furnished)s) OR "
          "(l.furnished IS NULL OR NOT (l.furnished = ANY(%(furnished_canon)s))))",
@@ -259,6 +258,19 @@ def test_a_retired_filter_raises_even_when_empty(value: dict[str, Any]) -> None:
     compile_filter_where({"near_city_proximity": None}, PROPERTIES_GRAIN)
 
 
+_PARKED_CONDITION_LEVELS = ("building_condition_level_min", "building_condition_level_max",
+                            "apartment_condition_level_min", "apartment_condition_level_max")
+
+
+@pytest.mark.parametrize("fid", _PARKED_CONDITION_LEVELS)
+def test_a_parked_condition_level_raises_on_both_grains_even_at_zero(fid: str) -> None:
+    """Condition scoring is parked (rule 14): a level bound never narrows a cohort or a watchdog."""
+    for grain in _GRAINS:
+        with pytest.raises(ValueError, match=f"{fid} is retired"):
+            compile_filter_where({fid: 0}, grain)
+        compile_filter_where({fid: None}, grain)
+
+
 def test_an_unregistered_key_is_a_programming_error() -> None:
     with pytest.raises(LookupError, match="not registered filters"):
         compile_filter_where({"no_such_filter": 1}, PROPERTIES_GRAIN)
@@ -307,9 +319,10 @@ def test_a_null_deal_type_is_no_constraint(grain: fc.FilterGrain) -> None:
 def test_compiled_param_keys_are_disjoint_from_every_caller_key() -> None:
     emitted = set(fr.REGISTRY) | {f"{fid}_canon" for fid in fr.REGISTRY}
     callers = {
-        "cursor", "upper", "window_size", "image_lookback_minutes", "subscription_id",
-        "target_channels", "drop_pids", "drop_sids", "drop_prices", "drop_prevs",
+        "subscription_id", "active_since", "new_window", "price_window", "image_timeout_minutes",
+        "image_zero_rows_floor_minutes",
         "transport_types", "anchor_radius_m", "corridor_m", "lat", "lng", "disposition",
+        "bbox_west", "bbox_south", "bbox_east", "bbox_north",
         "disposition_loose", "area_min", "area_max", "floor_min", "floor_max",
         "exclude_listing_ids",
     }

@@ -56,7 +56,7 @@ describe('DownloadPropertyButton', () => {
       />,
     );
     const button = screen.getByRole('button', { name: /stáhnout/i });
-    expect(button.getAttribute('title')).toBe('PDF inzerátu a jeho fotky v jednom .zip');
+    expect(button.getAttribute('title')).toBe('PDF inzerátu, jeho fotky a vaše vlastní fotky v jednom .zip');
     await userEvent.click(button);
     await waitFor(() => expect(clicked).toEqual(['property-7.zip|blob:zip']));
     expect(fetchZip).toHaveBeenCalledWith(7);
@@ -70,7 +70,7 @@ describe('DownloadPropertyButton', () => {
       />,
     );
     expect(screen.getByRole('button').getAttribute('title')).toMatch(
-      /2 z 3 fotek .* ostatní fotky zatím nejsou uložené/,
+      /2 z 3 jeho fotek .* ostatní fotky inzerátu zatím nejsou uložené/,
     );
   });
 

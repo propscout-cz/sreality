@@ -6,11 +6,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('./pgRead', () => ({ pgRead: vi.fn() }));
 vi.mock('./api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./api')>()),
+  apiDelete: vi.fn(),
+  apiGet: vi.fn(),
+  apiPost: vi.fn(),
   apiPut: vi.fn(),
 }));
 
-import { pgRead } from './pgRead';
-import { apiPut } from './api';
+import { apiDelete, apiGet, apiPost, apiPut } from './api';
 import { DEFAULT_FILTERS } from './filters';
 import { PPM2_UNIT, PRICE_PERIOD_UNIT } from './measure';
 import { STATS_REGISTRY, statsMeasure } from './statsRegistry.generated';
@@ -28,6 +30,8 @@ import {
   cohortChips,
   dimBlock,
   dropOutcome,
+  chartsEqual,
+  everyCellUnderMin,
   fetchDashboard,
   keyLabel,
   ledgerCounts,
@@ -41,13 +45,25 @@ import {
   refusalText,
   removeDim,
   sanitizeChart,
+  sanitizeCharts,
   saveDashboard,
+  createStatsDashboard,
+  deleteStatsDashboard,
+  reorderStatsDashboards,
+  shareStatsDashboard,
+  unshareStatsDashboard,
+  updateStatsDashboard,
   seriesModel,
   sortKeys,
   toggleStat,
   statUsed,
   viewBlock,
+  soldMarketFilters,
+  MARKET_CAPTION,
+  MARKET_LABEL,
+  marketCaption,
   type ChartSpec,
+  type StatsSpec,
 } from './stats';
 
 const RENT = 'rent_monthly_czk_m2';
@@ -310,6 +326,30 @@ describe('the ledger', () => {
 
   it('has nothing to count on a bad spec', () => {
     expect(ledgerCounts(normalizePivot({ refused: 'bad_spec', reason: 'x', cells: [] }, chart({})))).toBeNull();
+  });
+
+  /* Ruling S09: the note "every cell is under 5" reads the payload's own floor and every
+   * cell it sent — each level, the Celkem rollup, every column value. */
+  it('everyCellUnderMin: true only when every cell (the Celkem rollup, every level, every column) is under min_n', () => {
+    const spec: StatsSpec = { rows: ['disposition', 'condition'], cols: ['obec'], measure: 'ppm2' };
+    const small = [
+      cell([], 4, null), cell([], 3, null, '554481'),
+      cell(['1+kk'], 4, null), cell(['1+kk'], 2, null, '554481'),
+      cell(['1+kk', 'novostavba'], 1, null), cell(['1+kk', 'novostavba'], 1, null, '554481'),
+    ];
+    expect(everyCellUnderMin(pivotOf({ spec, cells: small }))).toBe(true);
+    // The Celkem rollup alone reaching the floor is enough to say nothing.
+    const rollupAtFloor = [cell([], 5, 100), ...small.slice(1)];
+    expect(everyCellUnderMin(pivotOf({ spec, cells: rollupAtFloor }))).toBe(false);
+    // So is one column value's leaf.
+    const leafAtFloor = [...small.slice(0, 5), cell(['1+kk', 'novostavba'], 5, 90, '554481')];
+    expect(everyCellUnderMin(pivotOf({ spec, cells: leafAtFloor }))).toBe(false);
+    // The floor is the payload's, not a constant.
+    expect(everyCellUnderMin(pivotOf({ cells: [cell([], 7, null)], min_n: 10 }))).toBe(true);
+    // Nothing to say on a refusal or with no cells.
+    expect(everyCellUnderMin(pivotOf({ refused: 'mixed_category', cells: [] }))).toBe(false);
+    expect(everyCellUnderMin(pivotOf({ cells: [] }))).toBe(false);
+    expect(everyCellUnderMin(normalizePivot({ refused: 'bad_spec', reason: 'x', cells: [] }, chart({})))).toBe(false);
   });
 
   it('names the cohort from the payload', () => {
@@ -591,18 +631,36 @@ describe('refusals and defaults', () => {
 });
 
 describe('the board', () => {
-  afterEach(() => vi.mocked(pgRead).mockReset());
+  afterEach(() => vi.mocked(apiGet).mockReset());
+  const row = (charts: unknown) => ({ id: 'w1', charts, updated_at: '2026-10-20T10:00:00+00:00' });
+
+  it('reads the working board through GET /stats/dashboard', async () => {
+    vi.mocked(apiGet).mockResolvedValueOnce(row([chart({ id: 'mine' })]));
+    const signal = new AbortController().signal;
+    await fetchDashboard({ signal });
+    expect(apiGet).toHaveBeenCalledWith('/stats/dashboard', undefined, signal);
+  });
 
   it('shows the defaults when the account has no row', async () => {
-    vi.mocked(pgRead).mockResolvedValueOnce({ data: null, count: null });
+    vi.mocked(apiGet).mockResolvedValueOnce(null);
     expect(await fetchDashboard()).toEqual(DEFAULT_CHARTS);
   });
 
   it('reads the saved list, an empty one included', async () => {
-    vi.mocked(pgRead).mockResolvedValueOnce({ data: { charts: [chart({ id: 'mine' })] }, count: null });
+    vi.mocked(apiGet).mockResolvedValueOnce(row([chart({ id: 'mine' })]));
     expect((await fetchDashboard()).map((c) => c.id)).toEqual(['mine']);
-    vi.mocked(pgRead).mockResolvedValueOnce({ data: { charts: [] }, count: null });
+    vi.mocked(apiGet).mockResolvedValueOnce(row([]));
     expect(await fetchDashboard()).toEqual([]);
+  });
+
+  it('compares two boards by their sanitized charts, in order', () => {
+    const a = chart({ id: 'a' });
+    const b = chart({ id: 'b', measure: 'price' });
+    const reordered = { measure: a.measure, cols: a.cols, rows: a.rows, stats: a.stats, view: a.view, id: a.id };
+    expect(chartsEqual([a, b], [reordered, b])).toBe(true);
+    expect(chartsEqual([a, b], [b, a])).toBe(false);
+    expect(chartsEqual([a], [{ ...a, rows: ['disposition'] }])).toBe(false);
+    expect(sanitizeCharts([a, { id: 'junk' }])).toEqual([a]);
   });
 
   it('saves the whole list through PUT /stats/dashboard', async () => {
@@ -610,5 +668,63 @@ describe('the board', () => {
     const out = await saveDashboard([chart({ id: 'a' })]);
     expect(apiPut).toHaveBeenCalledWith('/stats/dashboard', { charts: [chart({ id: 'a' })] });
     expect(out.map((c) => c.id)).toEqual(['a']);
+  });
+});
+
+describe('the named dashboards\' routes', () => {
+  it('creates, updates, reorders, shares, deletes and unshares on the contract\'s paths', async () => {
+    const charts = [chart({ id: 'a' })];
+    await createStatsDashboard({ name: 'Ceny', charts });
+    expect(apiPost).toHaveBeenCalledWith('/stats/dashboards', { name: 'Ceny', charts });
+    await updateStatsDashboard('d/1', { filter_spec: null });
+    expect(apiPut).toHaveBeenLastCalledWith('/stats/dashboards/d%2F1', { filter_spec: null });
+    await reorderStatsDashboards(['b', 'a']);
+    expect(apiPut).toHaveBeenLastCalledWith('/stats/dashboards/reorder', { ids: ['b', 'a'] });
+    await shareStatsDashboard('d1', 'b@example.com');
+    expect(apiPost).toHaveBeenLastCalledWith('/stats/dashboards/d1/shares', { email: 'b@example.com' });
+    await deleteStatsDashboard('d1');
+    expect(apiDelete).toHaveBeenLastCalledWith('/stats/dashboards/d1');
+    // A revoke (owner) and a leave (recipient, its own grant) are the one DELETE.
+    await unshareStatsDashboard('d1', 'acct-1');
+    expect(apiDelete).toHaveBeenLastCalledWith('/stats/dashboards/d1/shares/acct-1');
+  });
+});
+
+describe('soldMarketFilters — the "Prodáno (trh)" lens', () => {
+  it('overrides exactly status, seen-from-birth, dismissed and the 2–60 day window; every other filter holds', () => {
+    const set = { ...DEFAULT_FILTERS, priceMax: 5_000_000, status: 'active' as const, tomDaysMin: 10, showDismissed: false };
+    const sold = soldMarketFilters(set);
+    expect(sold).toEqual({
+      ...set, status: 'inactive', tomObservedOnly: true, showDismissed: true, tomDaysMin: 2, tomDaysMax: 60,
+    });
+    expect(set.status).toBe('active');
+  });
+});
+
+/* Ruling S03: the sample sentence sits under its switch, the chosen lens named first in bold. */
+describe('marketCaption — the lens name, then what it counts', () => {
+  it('splits each caption into the lens name and the rest', () => {
+    expect(MARKET_LABEL).toEqual({ filter: 'Jako ve filtru', sold: 'Prodáno (trh)', all: 'Vše' });
+    expect(marketCaption('filter')).toEqual({
+      name: 'Jako ve filtru',
+      text: 'každý graf počítá nemovitosti z filtru; sestava grafů je uložená k vašemu účtu.',
+    });
+    expect(marketCaption('all')).toEqual({
+      name: 'Vše',
+      text: 'aktivní i neaktivní nemovitosti, včetně skrytých, bez omezení doby na trhu; ostatní filtry platí.',
+    });
+    expect(marketCaption('sold')).toEqual({
+      name: 'Prodáno (trh)',
+      text: 'jen neaktivní nemovitosti sledované od vzniku, 2–60 dní na trhu, včetně skrytých; ostatní filtry platí.',
+    });
+  });
+
+  it('keeps the two captions the property page shows, word for word', () => {
+    expect(MARKET_CAPTION.sold).toBe(
+      'Prodáno (trh): jen neaktivní nemovitosti sledované od vzniku, 2–60 dní na trhu, včetně skrytých; ostatní filtry platí.',
+    );
+    expect(MARKET_CAPTION.all).toBe(
+      'Vše: aktivní i neaktivní nemovitosti, včetně skrytých, bez omezení doby na trhu; ostatní filtry platí.',
+    );
   });
 });

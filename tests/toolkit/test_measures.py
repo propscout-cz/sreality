@@ -62,9 +62,11 @@ def _sql_basis(category_main: str | None, category_type: str | None) -> str | No
     return None
 
 
-_PLOT_MIGRATION = (
-    pathlib.Path(__file__).resolve().parents[2]
-    / "migrations" / "534_plot_area_m2.sql"
+# The LATEST migration that (re)defines the function: 534 created it, 680 added a band,
+# 685 restored 534's body (operator ruling 2026-10-27).
+_PLOT_MIGRATION = max(
+    m for m in (pathlib.Path(__file__).resolve().parents[2] / "migrations").glob("*.sql")
+    if "create or replace function public.plot_area_m2(" in m.read_text(encoding="utf-8")
 )
 
 

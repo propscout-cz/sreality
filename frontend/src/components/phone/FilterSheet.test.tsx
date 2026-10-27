@@ -47,10 +47,6 @@ const NOT_ON_SHEET: Record<string, string> = {
   category_sub_cb: 'dropped from the sidebar in #300: the registry entry has no options',
   min_garden_area: 'not placed on the desktop sidebar either',
   max_garden_area: 'not placed on the desktop sidebar either',
-  building_condition_level_min: 'condition scoring discontinued (operator, 2026-10-20): off both surfaces',
-  building_condition_level_max: 'condition scoring discontinued (operator, 2026-10-20): off both surfaces',
-  apartment_condition_level_min: 'condition scoring discontinued (operator, 2026-10-20): off both surfaces',
-  apartment_condition_level_max: 'condition scoring discontinued (operator, 2026-10-20): off both surfaces',
 };
 
 /* Every cohort-conditional group open: a house cohort shows Subtype, Prodej shows Yield. */
@@ -64,6 +60,7 @@ const PRESET: FilterPreset = {
   updated_at: '2026-10-01T00:00:00Z',
   position: 0,
   color: null,
+  group_id: null,
 };
 
 beforeEach(() => {
@@ -121,19 +118,19 @@ describe('the registry walk', () => {
     const rows = sheetBands(HOUSES_FOR_SALE).map((b) => [b.title, b.groups.flatMap((g) => g.rows.map((r) => r.key))]);
     expect(rows).toEqual([
       ['Essentials', [
-        'category_type', 'status', 'tom_observed_only', 'category_main_in', 'subtype', 'districts',
+        'category_type', 'status', 'tom_observed_only', 'show_dismissed', 'category_main_in', 'subtype', 'districts',
         'min_price_czk', 'min_price_per_m2', 'recently_added_days', 'recently_changed_days', 'ownership',
         'include_no_price', 'dispositions', 'min_area_m2', 'min_estate_area', 'min_usable_area',
         'condition_match', 'building_material', 'furnished',
-        'has_balcony', 'has_lift', 'has_parking', 'terrace', 'cellar', 'garage', 'min_parking_lots',
+        'has_balcony', 'has_lift', 'has_parking', 'terrace', 'cellar', 'garage', 'min_parking_lots', 'portals',
       ]],
-      ['Curation', ['show_dismissed', 'pipeline', 'collections', 'tags', 'portals', 'with_estimates']],
+      ['Curation', ['pipeline', 'collections', 'tags', 'with_estimates']],
       ['Velocity & price activity', [
         'price_change_count_min', 'price_change_window_days', 'total_price_change_pct',
         'first_seen_min_days', 'last_seen_min_days', 'tom_days_min',
       ]],
       ['Advanced', [
-        'min_mf_gross_yield_pct', 'min_city_population',
+        'energy_rating_match', 'min_mf_gross_yield_pct', 'broker', 'min_city_population',
         'near_pop_5km_min', 'near_pop_15km_min', 'near_jobs_5km_min', 'near_jobs_15km_min',
         'near_youth_5km_min', 'near_youth_15km_min', 'near_overall_5km_min', 'near_overall_15km_min',
         'city_index_rules', 'market_growth',
@@ -174,12 +171,8 @@ const FILLED: ListingFilters = {
   estateAreaMax: 900,
   usableAreaMin: 40,
   usableAreaMax: 120,
-  conditionMatch: ['novostavba'],
+  conditionMatch: ['novostavba', '__unknown__'],
   buildingMaterial: ['cihla'],
-  buildingConditionLevelMin: 2,
-  buildingConditionLevelMax: 4,
-  apartmentConditionLevelMin: 1,
-  apartmentConditionLevelMax: 3,
   priceMin: 2_000_000,
   priceMax: 9_000_000,
   includeNoPrice: true,
@@ -226,6 +219,8 @@ const FILLED: ListingFilters = {
   tomDaysMin: 5,
   tomDaysMax: 60,
   tomObservedOnly: true,
+  energyRatingMatch: ['A', 'B'],
+  brokerId: 527,
 };
 
 describe('a filled sheet in the URL', () => {
@@ -278,6 +273,18 @@ describe('the footer', () => {
     expect(onApply.mock.calls[0][0].sort).toEqual({ field: 'price_czk', direction: 'asc' });
   });
 
+  /* One menu on every surface: the Řazení row is CARD_SORTS. */
+  it('offers area both ways and last seen, and applies the one picked', async () => {
+    const user = userEvent.setup();
+    const { onApply } = renderSheet();
+    await user.click(within(sheet()).getByRole('button', { name: /^Řazení/ }));
+    expect(within(sheet()).getByRole('button', { name: 'Plocha: od nejmenší' })).toBeInTheDocument();
+    expect(within(sheet()).getByRole('button', { name: 'Plocha: od největší' })).toBeInTheDocument();
+    await user.click(within(sheet()).getByRole('button', { name: 'Naposledy viděno' }));
+    await user.click(await within(sheet()).findByRole('button', { name: /^Zobrazit/ }));
+    expect(onApply.mock.calls[0][0].sort).toEqual({ field: 'last_seen_at', direction: 'desc' });
+  });
+
   it("Vymazat returns the draft to the scope's own filters", async () => {
     const user = userEvent.setup();
     const base = { ...FEED_ALL_FILTERS, dispositions: ['2+kk' as const] };
@@ -298,11 +305,44 @@ describe('the footer', () => {
   });
 });
 
+/* The sheet hosts the desktop controls, so a pick-one is the desktop's joined
+ * bar (operator ruling 2026-10-27): Status as the sidebar draws it, the lone
+ * on/off as its two-segment bar. */
+describe('pick-one rows', () => {
+  it('draws Status as the joined bar, and a tap on the lit status keeps it', async () => {
+    const user = userEvent.setup();
+    const { onApply } = renderSheet();
+    await user.click(within(sheet()).getByRole('button', { name: /^Status/ }));
+    const bar = within(sheet()).getByRole('group', { name: 'Status' });
+    const segs = within(bar).getAllByRole('button');
+    expect(segs.map((b) => b.textContent)).toEqual(['Vše', 'Aktivní', 'Neaktivní']);
+    const track = segs[0].parentElement!;
+    for (const b of segs) expect(b.parentElement).toBe(track);
+    expect(track).toHaveClass('grid', 'w-full', 'border', 'bg-[var(--color-paper-2)]');
+    const lit = within(bar).getByRole('button', { name: 'Aktivní' });
+    expect(lit).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+    await user.click(lit);
+    expect(lit).toHaveAttribute('aria-pressed', 'true');
+    await user.click(within(sheet()).getByRole('button', { name: /^Zobrazit/ }));
+    expect(onApply.mock.calls[0][0].filters.status).toBe(FEED_ALL_FILTERS.status);
+  });
+
+  it('draws Seen at birth as the sidebar\'s two-segment bar', async () => {
+    const user = userEvent.setup();
+    const { onApply } = renderSheet();
+    const bar = within(sheet()).getByRole('group', { name: 'Seen at birth' });
+    expect(within(bar).getAllByRole('button').map((b) => b.textContent)).toEqual(['All ads', 'Seen at birth']);
+    await user.click(within(bar).getByRole('button', { name: 'Seen at birth' }));
+    await user.click(within(sheet()).getByRole('button', { name: /^Zobrazit/ }));
+    expect(onApply.mock.calls[0][0].filters.tomObservedOnly).toBe(true);
+  });
+});
+
 describe('presets from the phone', () => {
   const presetBase = filtersForPreset({ ...DEFAULT_FILTERS, categoryType: 'prodej', dispositions: ['2+kk'] }, true);
   const draft: ListingFilters = { ...presetBase, priceMax: 6_000_000, pipeline: { set: 'in', in: [], out: [] } };
 
-  it('saves the draft as a new preset — filters (lenses dropped) and the order — and selects it', async () => {
+  it('saves the draft as a new preset — every filter, the lenses included, and the order — and selects it', async () => {
     const user = userEvent.setup();
     vi.mocked(api.createFilterPreset).mockResolvedValue({ ...PRESET, id: 'new', name: 'Do 6 M' });
     const { onApply } = renderSheet({ filters: draft, base: presetBase, preset: PRESET });
@@ -316,8 +356,8 @@ describe('presets from the phone', () => {
       filter_spec: { filters: filtersForPreset(draft, true), sort: '-first_seen_at' },
       color: null,
     });
-    /* The pipeline scope never rides into a preset (rule 22). */
-    expect(vi.mocked(api.createFilterPreset).mock.calls[0][0].filter_spec.filters.pipeline).toBeNull();
+    /* The pipeline scope rides into the preset like any filter (ruling 2026-10-22). */
+    expect(vi.mocked(api.createFilterPreset).mock.calls[0][0].filter_spec.filters.pipeline).toEqual({ set: 'in', in: [], out: [] });
     await waitFor(() => expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ presetId: 'new' })));
   });
 

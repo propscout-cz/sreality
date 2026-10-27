@@ -17,19 +17,22 @@ The operator chose to replace them with charts the user builds, which deletes th
 1. The builder REPLACES the Stats tab; the default dashboard is four seed charts; the fixed RPC body, both chart
    files and the LLM "annotations" feature are deleted.
 2. ONE dashboard per account, independent of the filter (the filter only picks the sample); several charts,
-   add / remove / reorder. Stored whole.
+   add / remove / reorder. Stored whole. **Amended 2026-10-20** (`saved-dashboards.md`): ONE *working board* per
+   account; named dashboards are many, may embed the filter, and may be shared read-only.
 3. A turnover chart requires ONE status in the sample (active or delisted) — the same refusal as mixed property
-   types. Plain percentiles over the picked sample; no survival estimator. (Migration 634: a row's status is
-   judged by the cohort's own portal rule, and a property delisted on the chosen portal but live elsewhere
-   has no measured run there — it leaves a turnover sample as excluded, never pooled; under a BROKER scope
-   the status fact stays the property's — a known gap, `roadmap/ui-track.md`.)
+   types. Plain percentiles over the picked sample; no survival estimator. (A row's status is its
+   property's, the one its card and pin draw — migration 657, which took back 634's per-portal lens, its
+   turnover set-aside and its broker gap.)
 4. "Mixed" = more than one `category_main` OR more than one `category_type` in the cohort.
 5. Bands: price per m² sale 5 000 / 10 000, rent 25 / 50; total price sale 250 000 / 500 000 / 1 000 000, rent
    1 000 / 2 500 / 5 000; floor area 5 / 10 m², byty only. Defined once (`toolkit/stats_registry.py`).
 6. Statistics n, mean, median, p10, p25, p75, p90; a cell under **5** properties shows n and no statistics
    (amended 2026-10-19 by the operator, migration 632: it was 10; at n = 5 a box rests on the 2nd–4th order
    statistics, so the n stays beside every figure)
-   (server-enforced); a box draws p10–p90 whiskers, the p25–p75 box and the median.
+   (server-enforced); a box draws p10–p90 whiskers, the p25–p75 box and the median. Since 2026-10-26 a cell under
+   the floor also carries `small` {min, max, mean, median}, shown only behind the Stats tab's 'Malé vzorky'
+   switch, which a dashboard saves (`show_small`, migration 681), highlighted and labelled per row; percentiles never
+   under the floor (migration 678).
 7. Table = rows × columns; line / bar = one row dimension on x, the column dimension as series; box = rows only.
    Nesting up to **six** row levels (table, box).
 8. A NULL on any chosen dimension (or the measure) excludes the property and is counted as "excluded for
@@ -83,35 +86,39 @@ fragment still holds; `tests/test_browse_map_read_contract.py` learns that `spec
 ```
 { spec, filtered, sample, excluded,            -- properties in the cohort / with every needed value / the rest
   category_main, category_type,                -- the cohort's single values, null when mixed
-  status: 'active' | 'inactive' | 'mixed' | null,   -- each row judged by the cohort's own portal rule (597; migration 634)
+  status: 'active' | 'inactive' | 'mixed' | null,   -- each row's status is its property's (migration 657)
   basis: <migration-425 token> | null,         -- rent_monthly_czk_m2 ⇒ rent steps and "Kč / měs"
   min_n: 5,
   refused: null | 'empty' | 'mixed_category' | 'mixed_status' | 'too_many_cells' | 'bad_spec', reason?,
   places: [ { dim, key, name | null } ],       -- every place key among the cells, named by the register
-  cells: [ { keys: [k1 … kL], col: kc | null, n, mean, median, p10, p25, p75, p90 } ] }
+  cells: [ { keys: [k1 … kL], col: kc | null, n, mean, median, p10, p25, p75, p90,
+             small: { min, max, mean, median } | null } ] }   -- small: under min_n only (migration 678)
 ```
 
 One pass: `group by kc, rollup(k1 … k6)` over the sample, six fixed row slots and one column slot keyed by
 `public.stats_dim_key(dim, …)` (SQL-language, IMMUTABLE, inlined). A cell with `keys.length = L` is the rollup
-at level L (L = 0 is the whole sample, per column value). Statistics are `null` below `min_n`. Measured live
+at level L (L = 0 is the whole sample, per column value). Statistics are `null` below `min_n`, where `small` alone
+carries the cell's min, max, mean and median (null at or above it). Measured live
 2026-10-19: five dimensions + a column over 60k properties 381 ms; two dimensions over 139k rows 493 ms. A refused
 payload still carries the counts and the cohort facts; `cells` and `places` are empty. (`bad_spec` alone answers before the
 cohort is read: `{refused, reason, cells: []}`.) `places` is read from the view on the ≤ 2,000 result cells only; `name` is
 null when the register has no live name for the code.
 
-### Saved board — `public.stats_dashboards(account_id pk, charts jsonb, updated_at)`
+### Working board and dashboards — `public.stats_dashboards` (626, re-keyed by 647)
 
-One row per account. Read by the SPA through RLS (`current_account_ids()`); written only by
-`PUT /stats/dashboard {charts: [...]}` (tenant connection, `require_account_id`, whole-document upsert). A chart
-is `{id, view, rows, cols, measure, stats}`; `stats` (one or more of the chart statistics, in the order the
-user picked them, the first leading; default `['median']`) is read by line, bar and a table with a column
-dimension; the title is derived, never stored. (Migration 628 rewrote the first shape's single `stat` into
-`stats: [stat]`; a chart with no usable `stats` reads as the default alone.) No row ⇒
-the SPA shows `DEFAULT_CHARTS` (four seeds that answer on the default filter: no turnover, which needs one
-status, and no byty-only dimension) and the first save persists the whole list. A board holds at most
-`MAX_CHARTS` charts (registry); the SPA offers no "Přidat graf" at the cap. Single-membership assumption: the
-RLS read spans every account the user belongs to while the write names the first one; a second membership (out
-of scope) needs a `GET /stats/dashboard` on `require_account_id` in place of the RLS read.
+Since migration 647 the table holds saved sets (`docs/design/saved-dashboards.md`): `id` is the key, every NAMED
+row is a dashboard the account lists, loads, reorders and may share read-only (`/stats/dashboards`), and the
+account's ONE unnamed row is its working board, the charts the Stats tab shows. `PUT /stats/dashboard {charts:
+[...]}` replaces it whole (`ON CONFLICT (account_id) WHERE name IS NULL`, the account `require_account_id`
+resolves); `GET /stats/dashboard` reads it (`{id, charts, updated_at}` or null) by RLS alone, a tenant read
+(one membership per user makes it the PUT's row; a second membership would need the write's account resolution
+there). A chart is `{id, view, rows, cols, measure, stats}`; `stats` (one or more of the chart statistics,
+in the order the user picked them, the first leading; default `['median']`) is read by line, bar and a table with
+a column dimension; the title is derived, never stored. (Migration 628 rewrote the first shape's single `stat`
+into `stats: [stat]`; a chart with no usable `stats` reads as the default alone.) No row ⇒ the SPA shows
+`DEFAULT_CHARTS` (four seeds that answer on the default filter: no turnover, which needs one status, and no
+byty-only dimension) and the first save persists the whole list. A board holds at most `MAX_CHARTS` charts
+(registry, validated as `Charts` in `api/schemas.py`); the SPA offers no "Přidat graf" at the cap.
 
 ### SPA — `frontend/src/lib/stats.ts` + `frontend/src/components/stats/`
 
@@ -132,14 +139,19 @@ of scope) needs a `GET /stats/dashboard` on `require_account_id` in place of the
   area ⇒ "m²", tom_days ⇒ "dní"); `chartTitle` (a band named by its step in the payload's unit, e.g. "Cena
   po 2 500 Kč / měs"; the two-step registry label only while the basis is unknown, and on the palette chip);
   `DEFAULT_CHARTS`; the refusal texts (Czech).
-- `components/stats/StatsDashboard.tsx`: the tab. Reads the board, renders one `StatsChart` per chart, "Přidat
-  graf" at the end, saves through `lib/useOptimisticWrite` (the ONE write policy, mutation key
+- `components/stats/StatsDashboard.tsx`: the tab. One settings panel leads it (rulings S01–S04, 2026-10-27): a
+  "Dashboard" row (the named dashboards' bar) and a "Vzorek" row (the lens, its sentence under it with the lens's
+  name in bold, "Malé vzorky (pod 5)" at the row's end, its detail in a tooltip). Reads the board, renders one
+  `StatsChart` per chart, "Přidat graf" at the end, saves through `lib/useOptimisticWrite` (the ONE write policy, mutation key
   `['write','stats','dashboard']`): the PUT's answer becomes the cache on success, a re-read only on failure.
-- `components/stats/StatsChart.tsx`: one card — derived title, `SampleLedger`, the view, Upravit / Odebrat; in
-  edit mode the card flips in place to `ChartBuilder` (same card, same width), Uložit / Zrušit.
+- `components/stats/StatsChart.tsx`: one card — derived title, `SampleLedger`, the view, Upravit + ⋯ (↑ / ↓ /
+  Odebrat, with its confirm; ruling P14); in edit mode the card flips in place to `ChartBuilder` (same card, same
+  width), Uložit / Zrušit. A table or box whose every cell is under the floor says so once above the table, with
+  "Zobrazit malé vzorky", which turns the tab's switch on (ruling S09; `lib/stats` `everyCellUnderMin`).
 - `components/stats/ChartBuilder.tsx`: a palette of dimension chips grouped (Vlastnost · Cena · Místo ·
-  Vybavení), the shelves Řádky (six slots, sortable) and Sloupce (one), the Hodnota well, the view picker and
-  the statistic picker (a multi-select: line, bar and a table with a column; the first pick leads, the last
+  Vybavení), the shelves Řádky (six slots, sortable) and Sloupce (one), the Hodnota well, the view picker (both
+  pick-ones, so each the joined `SegmentedBar`; a view the shelves rule out is a disabled segment, its reason
+  its hover box and the line under the bar) and the statistic picker (a multi-select of chips: line, bar and a table with a column; the first pick leads, the last
   one cannot be unpicked — `lib/stats.toggleStat`). Drag with dnd-kit (mouse; a long press on touch, so
   the palette still scrolls on a phone; the row grip also sorts from the keyboard); every drop also has a click
   path (a chip click appends to Řádky; a slot's × removes) so the keyboard works. Rules enforced in the UI exactly as in the registry: a
@@ -157,8 +169,8 @@ of scope) needs a `GET /stats/dashboard` on `require_account_id` in place of the
   a column's statistics together, named `column · statistic` when more than one is picked: copper first,
   ink tints after, at most `MAX_SERIES` (each colour solid, then dashed) or a one-sentence refusal; the SVG is
   hidden from assistive tech and a screen-reader table carries the same numbers), `views/BoxTable.tsx` (THE box primitive: one shared axis from every row's p10–p90, nested
-  rows indented, n per row, a dashed placeholder for a cell under `min_n`; no tooltips — the numbers are
-  columns of the same table).
+  rows indented, n per row, a dashed placeholder for a cell under `min_n`; no tooltips — the numbers, and the
+  mean ahead of them, are columns of the same table; the legend line above names the table).
 - Refusals render as one sentence in the card body; the ledger still shows the counts.
 - `BrowseExperience.tsx`: the stats tab renders `<StatsDashboard filters={filters} />`; `statsQuery`, the
   annotations query, `BrowseStatsView` and their props are gone.
@@ -184,13 +196,16 @@ deleted files are replaced by rows for the files that now carry the unit strings
   names no listing location; the register view's text and grants, and the `places` block that joins it;
   `--check` of the generated TS passes.
 - `tests/test_stats_pivot_live.py` (CI DB job, a `migrations.yml` step): seeds two dispositions × three stavs
-  (one NULL) with prices and areas; asserts filtered / sample / excluded, the rollup levels, `min_n` nulling,
+  (one NULL) with prices and areas; asserts filtered / sample / excluded, the rollup levels, `min_n` nulling
+  and the `small` summary under it (migration 678; `tests/test_678_stats_small_samples.py` pins the statement as
+  662's with exactly its two edits),
   `mixed_category`, `mixed_status`, `too_many_cells` (rows on a high-cardinality key), `bad_spec`, the band
   keys for rent vs sale, and the place keys: codes as text, two same-named towns as two cells, `places` named
   from seeded register rows (null for a retired unit), every place level read as `authenticated` through the
   view's grant.
 - `tests/api/test_stats_dashboard.py`: PUT validates through the registry's `validate_board` (422 on a bad
-  chart or an oversized / duplicate-id board, with the registry's reason), upserts, scopes to the caller's account.
+  chart or an oversized / duplicate-id board, with the registry's reason), upserts the working board, and GET
+  reads the same account's (647). Named dashboards and their shares: `tests/api/test_stats_dashboards.py`.
 - Updated: `test_browse_map_read_contract` (`_STATS_ONLY_PARAMS`), `test_one_place_predicate` (latest = 626,
   the parameter order), the two per-migration pins (602, 598 files), `test_measure_price_per_m2` (the stats arm
   reads the pivot or is dropped in favour of the one-measure census), `test_portal_rule` (live call shape),

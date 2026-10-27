@@ -26,7 +26,8 @@ export type CustomBlockKey =
   | 'city_population_hint'
   | 'market_growth'
   | 'portals'
-  | 'location_mode';
+  | 'location_mode'
+  | 'broker';
 
 export interface FormBlock {
   kind: 'form';
@@ -52,8 +53,9 @@ export type FilterBlock = FormBlock | CustomBlock;
 export interface FilterRow {
   /* 'stack' (default): one filter per line. 'grid': side by side, in `cols`
    * equal columns, or as many ~11rem columns as the sidebar's width allows.
-   * 'line': the pill groups and on/off toggles of its form blocks as ONE strip
-   * of buttons on the desktop; the phone keeps a row per filter. */
+   * 'line': each of its filters as one segmented control, side by side while
+   * the sidebar is wide enough, under the first filter's caption (desktop); the
+   * phone keeps a row per filter. */
   layout?: 'grid' | 'line';
   cols?: 2 | 3;
   /* Drawn only while the cohort gives the row a meaning. */
@@ -99,19 +101,24 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
     title: 'Essentials',
     defaultOpen: true,
     keys: [
-      'categoryType', 'status', 'tomObservedOnly', 'categoryMain', 'subtype', 'districts',
+      'categoryType', 'status', 'tomObservedOnly', 'showDismissed', 'categoryMain', 'subtype', 'districts',
       'priceMin', 'priceMax', 'pricePerM2Min', 'pricePerM2Max',
       'recentlyAddedDays', 'recentlyChangedDays', 'ownership', 'includeNoPrice', 'dispositions',
       'areaMin', 'areaMax', 'estateAreaMin', 'estateAreaMax', 'usableAreaMin', 'usableAreaMax',
       'conditionMatch', 'buildingMaterial', 'furnished',
       'hasBalcony', 'hasLift', 'hasParking', 'terrace', 'cellar', 'garage', 'parkingLotsMin',
+      'portals', 'portalsExcluded', 'portalsExcludedActiveOnly',
     ],
     rows: [
       { blocks: [form({ category_type: 'Listing for' })] },
-      /* "Which ads count" on one line: the status buttons, then the toggle. */
+      /* "Which properties count", together: status, seen at birth, dismissed. */
       {
         layout: 'line',
-        blocks: [form({ status: 'Status' }), form({ tom_observed_only: 'Seen at birth' })],
+        blocks: [
+          form({ status: 'Status' }),
+          form({ tom_observed_only: 'Seen at birth' }),
+          { kind: 'custom', key: 'show_dismissed', label: 'Show dismissed' },
+        ],
       },
       { blocks: [form({ category_main_in: 'Type' })] },
       /* Directly under Type: it refines the chosen category. Cleared with the
@@ -155,20 +162,19 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
         ],
       },
       { blocks: [form({ min_parking_lots: 'Min parking spaces' })] },
+      /* Last in Essentials (operator, 2026-10-22): which portals' ads count. */
+      { blocks: [{ kind: 'custom', key: 'portals', label: 'Source portal', caption: true }] },
     ],
   },
   {
     title: 'Curation',
     keys: [
-      'showDismissed', 'pipeline', 'collections', 'tags',
-      'portals', 'portalsExcluded', 'portalsExcludedActiveOnly', 'withEstimates',
+      'pipeline', 'collections', 'tags', 'withEstimates',
     ],
     rows: [
-      { blocks: [{ kind: 'custom', key: 'show_dismissed', label: 'Show dismissed' }] },
       { blocks: [form({ pipeline: 'Pipeline' })] },
       { blocks: [form({ collections: 'Collections' })] },
       { blocks: [form({ tags: 'Tags' })] },
-      { blocks: [{ kind: 'custom', key: 'portals', label: 'Source portal', caption: true }] },
       { blocks: [form({ with_estimates: 'With estimates' })] },
     ],
   },
@@ -200,19 +206,24 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
   {
     title: 'Advanced',
     keys: [
-      'mfGrossYieldPctMin', 'mfGrossYieldPctMax', 'locationMode', 'centerRadius',
+      'energyRatingMatch', 'mfGrossYieldPctMin', 'mfGrossYieldPctMax', 'brokerId', 'locationMode', 'centerRadius',
       'cityIndexRules', 'minCityPopulation', 'maxCityPopulation',
       'nearPop5kmMin', 'nearPop15kmMin', 'nearJobs5kmMin', 'nearJobs15kmMin',
       'nearYouth5kmMin', 'nearYouth15kmMin', 'nearOverall5kmMin', 'nearOverall15kmMin',
       'priceGrowthRules',
     ],
     rows: [
+      /* PENB A–G. G is also the legal "no certificate" placeholder (registry note). */
+      { blocks: [form({ energy_rating_match: 'Energy rating (PENB)' })] },
       /* MF reference rent ÷ asking price: sale flats only, so Prodej only;
        * cleared on leaving Prodej (applySidebarUpdates). */
       {
         when: (f) => f.categoryType === 'prodej',
         blocks: [form({ min_mf_gross_yield_pct: 'MF gross yield %' })],
       },
+      /* The broker scope (ListingFilters.brokerId) by name: narrows the current
+       * filters to properties one of this broker's ads is on. */
+      { blocks: [{ kind: 'custom', key: 'broker', label: 'Broker', caption: true }] },
       {
         mapOnly: true,
         blocks: [{ kind: 'custom', key: 'location_mode', label: 'Map filter' }],

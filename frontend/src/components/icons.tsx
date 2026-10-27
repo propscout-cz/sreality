@@ -107,8 +107,8 @@ export function TrashIcon({ className = 'h-4 w-4', strokeWidth = 1.6 }: IconProp
   );
 }
 
-/* Triangle-exclamation — a system/health alert (the Notifications feed's
- * system_health rows). Decorative; the surrounding row carries the label. */
+/* Triangle-exclamation — an alert, such as a read that failed. Decorative; the
+ * surrounding control carries the label. */
 export function AlertIcon({ className = 'h-4 w-4', strokeWidth = 1.75 }: IconProps) {
   return (
     <svg

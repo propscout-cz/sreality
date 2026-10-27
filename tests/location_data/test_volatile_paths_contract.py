@@ -51,7 +51,7 @@ from location_data.payload_norm import (
 
 _FLEET = frozenset({
     "sreality", "bezrealitky", "bazos", "idnes", "mmreality",
-    "remax", "ceskereality", "realitymix", "maxima",
+    "remax", "ceskereality", "realitymix", "maxima", "web",
 })
 
 
@@ -87,8 +87,8 @@ def test_the_contract_resolves_the_profile_the_python_table_used_to_hold(
 
 
 def test_every_portal_declares_exactly_the_detail_surface() -> None:
-    """Nine contracts, nine declarations, all of them `detail` — and none of them for a
-    surface nobody has diffed. Writing an index profile takes an index diff (a deferred
+    """Ten contracts, ten declarations, all of them `detail` — and none of them for a
+    surface nobody has diffed (web's is the bare HTML floor: no site of it was diffed). Writing an index profile takes an index diff (a deferred
     finding); guessing one here would be exactly the mis-application W2a-3d removed."""
     declared = contract_profiles().profiles
 

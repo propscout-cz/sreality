@@ -180,11 +180,19 @@ vi.mock('@/lib/brokers', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/brokers')>()),
   fetchListingBrokersByIds: vi.fn(async () => new Map()),
 }));
+const openEstimation = vi.hoisted(() => vi.fn());
 vi.mock('@/components/NewEstimationModal', () => ({
-  useNewEstimationModal: () => ({ open: vi.fn() }),
+  useNewEstimationModal: () => ({ open: openEstimation }),
+}));
+vi.mock('@/components/listing-detail/ValuoSection', () => ({
+  default: ({ adUrls }: { adUrls: (string | null)[] }) => <div data-testid="valuo-ads">{JSON.stringify(adUrls)}</div>,
 }));
 vi.mock('@/components/ExploreAreaModal', () => ({
   useExploreAreaModal: () => ({ open: vi.fn() }),
+}));
+const openNewProperty = vi.hoisted(() => vi.fn());
+vi.mock('@/components/NewPropertyProvider', () => ({
+  useNewPropertyDialog: () => ({ open: openNewProperty }),
 }));
 
 /* The property as properties_public answers it: its canonical advert is 105054
@@ -214,10 +222,10 @@ const SOURCES: PropertySource[] = [
   {
     property_id: 774,
     id: 105053,
-    sreality_id: -11876,
     source: 'idnes',
     source_url: 'https://reality.idnes.cz/detail/x/',
     source_id_native: '6a147cfde222cf687509e018',
+    ad_reference: 'IDNES-N8080',
     is_active: true,
     price_czk: 5_200_000,
     first_seen_at: '2025-11-01T00:00:00Z',
@@ -226,10 +234,10 @@ const SOURCES: PropertySource[] = [
   {
     property_id: 774,
     id: 105054,
-    sreality_id: 999,
     source: 'sreality',
     source_url: 'https://www.sreality.cz/detail/y',
     source_id_native: '999',
+    ad_reference: 'N8080',
     is_active: true,
     price_czk: 5_000_000,
     first_seen_at: '2025-12-01T00:00:00Z',
@@ -254,6 +262,19 @@ function renderAt(path: string) {
           <Route path="listing/:sreality_id" element={<AdvertRedirect />} />
         </Routes>
         <Where />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+function renderAtState(pathname: string, state: unknown) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={[{ pathname, state }]}>
+        <Routes>
+          <Route path="listing/:source/:nativeId" element={<AdvertRedirect />} />
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -287,12 +308,21 @@ describe('<PropertyDetail> one property, one voice', () => {
     await waitFor(() => expect(queries.fetchImagesByListing).toHaveBeenCalledWith(105054, expect.anything()));
     await waitFor(() =>
       expect(queries.fetchSnapshotsForListings).toHaveBeenCalledWith([105053, 105054], expect.anything()));
-    // The price moves are the property's, as Browse filters on them.
-    expect(screen.getByText('Price changes').nextSibling).toHaveTextContent('2');
-    expect(screen.getByText('Days on market').nextSibling).toHaveTextContent('62');
+    // The price moves are the property's, as Browse filters on them — on the overview's
+    // adverts card. The overview is its own chunk: the first test to open it waits for it.
+    expect(await screen.findByText(/na trhu 62 dní · 2 změny ceny · celkem -4,5 %/, {}, { timeout: 5000 }))
+      .toBeInTheDocument();
     // The curation controls read, so the header offers them, never a retry.
     expect(await screen.findByRole('button', { name: /Přidat do pipeline/ })).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: 'Uložit do kolekce' })).toBeInTheDocument();
+  });
+
+  it('hands the Valuo section the link of every advert, a delisted one too (its own-ad tag needs them)', async () => {
+    vi.mocked(queries.fetchPropertySources).mockResolvedValue([SOURCES[0], { ...SOURCES[1], is_active: false }]);
+    renderAt('/property/774?tab=hodnota');
+
+    const ads = await screen.findByTestId('valuo-ads');
+    expect(JSON.parse(ads.textContent ?? '[]')).toEqual(SOURCES.map((s) => s.source_url));
   });
 
   it('charts the canonical advert alone when the advert list cannot be read', async () => {
@@ -303,7 +333,7 @@ describe('<PropertyDetail> one property, one voice', () => {
   });
 
   it('lists the adverts once, in the merged-adverts section, with no duplicate lists', async () => {
-    renderAt('/property/774');
+    renderAt('/property/774?tab=inzeraty');
 
     expect(await screen.findByText('Sloučené inzeráty')).toBeInTheDocument();
     expect(within(screen.getByText('Sreality').closest('li') as HTMLElement).getByText('hlavní inzerát'))
@@ -350,7 +380,7 @@ describe('<PropertyDetail> one property, one voice', () => {
     vi.mocked(queries.fetchPropertySources).mockResolvedValue([SOURCES[0], { ...SOURCES[1], price_czk: 4_800_000 }]);
     const deal = (id: number) => [id, { id, category_type: 'prodej', disposition: '3+1' } as ListingPublic] as const;
     vi.mocked(queries.fetchListingsForListingIds).mockResolvedValue(new Map([deal(105053), deal(105054)]));
-    renderAt('/property/774');
+    renderAt('/property/774?tab=inzeraty');
     expect((await screen.findAllByText(/3\+1/)).length).toBeGreaterThan(0);
     expect(screen.queryByText(/Nejnižší aktivní cena/)).toBeNull();
   });
@@ -366,7 +396,7 @@ describe('<PropertyDetail> one property, one voice', () => {
       snap(3, 105054, '2025-12-01T08:00:00Z', 5_200_000),
       snap(4, 105054, '2026-01-01T08:00:00Z', 5_000_000),
     ]);
-    renderAt('/property/774');
+    renderAt('/property/774?tab=hodnota');
     const moves = await screen.findByRole('list', { name: 'Price moves' });
     expect(within(moves).getAllByRole('listitem').map((li) => li.firstChild?.textContent))
       .toEqual(['Sreality', 'iDNES Reality']);
@@ -388,6 +418,148 @@ describe('<PropertyDetail> one property, one voice', () => {
 
     await waitFor(() => expect(where()).toBe('/property/774?advert=105053'));
     expect(api.fetchPropertyOrigins).toHaveBeenCalledWith(500);
+  });
+});
+
+/* Design A (operator 2026-10-22): the sections sit in tabs under the header; the
+   open one is ?tab=, and the addresses handed out before the tabs still land on
+   their section. */
+describe('<PropertyDetail> tabs', () => {
+  const selected = () => screen.getByRole('tab', { selected: true });
+
+  it('opens the overview: the description above "is the price right", the brokers beside it', async () => {
+    vi.mocked(queries.fetchProperty).mockResolvedValue({ ...PROPERTY, description: 'Světlý byt po rekonstrukci.' });
+    renderAt('/property/774');
+
+    await screen.findByRole('heading', { level: 1 });
+    expect(selected()).toHaveTextContent('Přehled');
+    const popis = await screen.findByText('Popis');
+    const value = screen.getByText('Je cena v pořádku?');
+    expect(popis.compareDocumentPosition(value) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Every other section waits for its tab.
+    expect(screen.queryByText('Sloučené inzeráty')).toBeNull();
+    expect(screen.queryByTestId('valuo-ads')).toBeNull();
+  });
+
+  it('switches tab in place, into the address, and keeps a visited tab mounted', async () => {
+    renderAt('/property/774');
+    await screen.findByRole('heading', { level: 1 });
+
+    fireEvent.click(screen.getByRole('tab', { name: /Inzeráty/ }));
+    expect(await screen.findByText('Sloučené inzeráty')).toBeInTheDocument();
+    expect(where()).toBe('/property/774?tab=inzeraty');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Přehled' }));
+    expect(where()).toBe('/property/774?tab=prehled');
+    // Hidden, not unmounted: an open advert row or a draft survives the look away.
+    expect(screen.getByText('Sloučené inzeráty')).not.toBeVisible();
+  });
+
+  it('lands an estimation-run link on Cena a hodnota', async () => {
+    renderAt('/property/774?run=5#estimations');
+    await screen.findByRole('heading', { level: 1 });
+    expect(selected()).toHaveTextContent('Cena a hodnota');
+  });
+
+  it('lands the canonical advert’s own address on the overview, another advert’s on Inzeráty', async () => {
+    renderAt('/property/774?advert=105054');
+    await screen.findByRole('heading', { level: 1 });
+    expect(selected()).toHaveTextContent('Přehled');
+  });
+
+  it('opens the latest active advert from the status pill — the canonical one on a tie', async () => {
+    renderAt('/property/774');
+    expect(await screen.findByRole('link', { name: /Active/ })).toHaveAttribute('href', 'https://www.sreality.cz/detail/y');
+  });
+
+  it('opens the advert seen most recently when it is not the canonical one', async () => {
+    vi.mocked(queries.fetchPropertySources).mockResolvedValue([
+      { ...SOURCES[0], last_seen_at: '2026-01-05T00:00:00Z' },
+      SOURCES[1],
+    ]);
+    renderAt('/property/774');
+    await waitFor(() =>
+      expect(screen.getByRole('link', { name: /Active/ })).toHaveAttribute('href', 'https://reality.idnes.cz/detail/x/'));
+  });
+
+  it('offers the tags as a header button beside the collections', async () => {
+    renderAt('/property/774');
+    expect(await screen.findByRole('button', { name: 'Štítky' })).toBeInTheDocument();
+  });
+
+  it('gives the neighbourhood dashboard its own tab, Okolí dashboard', async () => {
+    renderAt('/property/774?tab=okoli');
+    await screen.findByRole('heading', { level: 1 });
+    expect(selected()).toHaveTextContent('Okolí dashboard');
+    expect(await screen.findByRole('region', { name: 'Okolí dashboard' }, { timeout: 5000 })).toBeInTheDocument();
+  });
+
+  it('sends the retired Trh v okolí address to Cena a hodnota', async () => {
+    renderAt('/property/774?tab=trh');
+    await screen.findByRole('heading', { level: 1 });
+    expect(selected()).toHaveTextContent('Cena a hodnota');
+  });
+
+  it('counts the photos and the adverts on their tabs', async () => {
+    renderAt('/property/774');
+    expect(await screen.findByRole('tab', { name: 'Inzeráty 2' })).toBeInTheDocument();
+    // No photos, no pill: the page counts only above zero.
+    expect(screen.getByRole('tab', { name: 'Fotky' })).toBeInTheDocument();
+  });
+
+  /* The tab-strip ruling (2026-10-27, option A): the shared strip, pinned under the
+     header (top-14) rather than behind it, and above the cards' z-10 controls. */
+  it('draws its tabs through the shared strip, pinned under the header', async () => {
+    renderAt('/property/774');
+    const list = await screen.findByRole('tablist', { name: 'Části stránky' });
+    const strip = list.parentElement!;
+    expect(strip.className.split(' ')).toEqual(expect.arrayContaining(['sticky', 'top-14', 'z-20']));
+    expect(list.className).not.toMatch(/\bsticky\b/);
+    // A sibling of the panels: a sticky box sticks only within its parent.
+    expect(strip.parentElement).toContainElement(screen.getByRole('tabpanel'));
+    expect(selected().className).not.toMatch(/font-medium/);
+    const value = screen.getByRole('tab', { name: 'Cena a hodnota' });
+    expect(value).toHaveAttribute('id', 'ptab-hodnota');
+    expect(value).toHaveAttribute('aria-controls', 'ppanel-hodnota');
+
+    fireEvent.keyDown(selected(), { key: 'ArrowRight' });
+    expect(selected()).toHaveTextContent('Fotky');
+    expect(document.activeElement).toBe(selected());
+  });
+});
+
+/* The identity track's ask: "New estimation" is the canonical advert's, by its
+   listings.id, on any portal. It used to be bound to a portal URL and its runs to
+   a sreality id, so a property with no sreality advert could not be estimated. */
+describe('<PropertyDetail> New estimation', () => {
+  it('offers the estimate on a property with no sreality advert, bound to its canonical ad', async () => {
+    vi.mocked(queries.fetchProperty).mockResolvedValue({
+      ...PROPERTY,
+      id: 105053,
+      sreality_id: null,
+      source: 'idnes',
+      source_id_native: '6a147cfde222cf687509e018',
+      category_type: 'pronajem',
+    } as unknown as queries.PropertyPublic);
+    vi.mocked(queries.fetchPropertySources).mockResolvedValue([SOURCES[0]]);
+    openEstimation.mockClear();
+    renderAt('/property/774');
+
+    fireEvent.click(await screen.findByRole('button', { name: /New estimation/ }));
+    expect(openEstimation).toHaveBeenCalledWith({
+      listingId: 105053,
+      categoryMain: 'byt',
+      estimateKind: 'rent',
+    });
+  });
+
+  it('binds it to the canonical ad before the advert list arrives', async () => {
+    vi.mocked(queries.fetchPropertySources).mockReturnValue(new Promise(() => {}));
+    openEstimation.mockClear();
+    renderAt('/property/774');
+
+    fireEvent.click(await screen.findByRole('button', { name: /New estimation/ }));
+    expect(openEstimation).toHaveBeenCalledWith(expect.objectContaining({ listingId: 105054 }));
   });
 });
 
@@ -422,10 +594,50 @@ describe('<AdvertRedirect> old advert addresses', () => {
     expect(queries.fetchAdvertProperty).not.toHaveBeenCalled();
   });
 
-  it('says not found for an advert nobody has', async () => {
+  it('says in Czech that we lack the advert, and offers to add it with the pasted URL', async () => {
     vi.mocked(queries.fetchAdvertProperty).mockResolvedValue(null);
+    openNewProperty.mockClear();
+    const url = 'https://reality.bazos.cz/inzerat/196123456/byt.php';
+    renderAtState('/listing/bazos/196123456', { pastedUrl: url });
+    expect(await screen.findByRole('heading', { name: 'Tento inzerát v databázi nemáme.' })).toBeInTheDocument();
+    const portal = screen.getByRole('link', { name: /Otevřít na portálu Bazoš/ });
+    expect(portal).toHaveAttribute('href', url);
+    expect(portal).toHaveAttribute('target', '_blank');
+    expect(portal).toHaveAttribute('rel', 'noopener noreferrer');
+    fireEvent.click(screen.getByRole('button', { name: 'Přidat do databáze' }));
+    expect(openNewProperty).toHaveBeenCalledWith({ url });
+  });
+
+  it('opens the dialog empty when the address carried no URL', async () => {
+    vi.mocked(queries.fetchAdvertProperty).mockResolvedValue(null);
+    openNewProperty.mockClear();
     renderAt('/listing/bazos/nope');
-    expect(await screen.findByText('Not found')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Přidat do databáze' }));
+    expect(openNewProperty).toHaveBeenCalledWith({});
+    expect(screen.queryByRole('link', { name: /Otevřít na portálu/ })).toBeNull();
+  });
+
+  it('waits for an advert we hold whose property is not born yet, then lands', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      vi.mocked(queries.fetchAdvertProperty)
+        .mockResolvedValueOnce({ id: 105053, property_id: null })
+        .mockResolvedValueOnce({ id: 105053, property_id: null })
+        .mockResolvedValue({ id: 105053, property_id: 774 });
+      renderAt('/listing/idnes/6a147cfde222cf687509e018');
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(screen.getByRole('status')).toHaveTextContent('Zakládám nemovitost…');
+      expect(screen.queryByText('Tento inzerát v databázi nemáme.')).toBeNull();
+      await act(() => vi.advanceTimersByTimeAsync(2_000));
+      expect(queries.fetchAdvertProperty).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole('status')).toHaveTextContent('Zakládám nemovitost…');
+      await act(() => vi.advanceTimersByTimeAsync(2_000));
+      await act(() => vi.advanceTimersByTimeAsync(10));
+      expect(queries.fetchAdvertProperty).toHaveBeenCalledTimes(3);
+      expect(where()).toBe('/property/774?advert=105053');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -555,6 +767,25 @@ describe('<BrokerList>', () => {
     ).toBeInTheDocument();
     expect(screen.queryByText(/telefon —/)).not.toBeInTheDocument();
     expect(screen.queryByText(/e-mail —/)).not.toBeInTheDocument();
+  });
+
+  it('quotes, under the contact, the number each of the broker’s ads prints for callers', async () => {
+    renderListing();
+    // Jan advertises the sreality ad: its reference, labelled by portal, with a copy button.
+    expect(await screen.findByText('N8080')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'kopírovat číslo zakázky (Sreality)' })).toBeInTheDocument();
+    // The idnes ad is nobody's here, so its number is quoted for no one.
+    expect(screen.queryByText('IDNES-N8080')).toBeNull();
+  });
+
+  it('reads "<portál> —" for an ad that prints no number, never the portal’s own id', async () => {
+    vi.mocked(queries.fetchPropertySources).mockResolvedValue([SOURCES[0], { ...SOURCES[1], ad_reference: null }]);
+    renderListing();
+    // Scoped to the section: the header's own "ID 999" line is the identity sprint's, not the card's.
+    const section = within(await screen.findByRole('region', { name: /^Makléř/ }));
+    expect(section.getByText('Sreality —')).toBeInTheDocument();
+    expect(section.queryByText('999')).toBeNull();
+    expect(section.queryByRole('button', { name: /číslo zakázky/ })).toBeNull();
   });
 
   it('lists each person once, the canonical advert’s broker first', async () => {

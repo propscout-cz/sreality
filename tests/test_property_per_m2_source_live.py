@@ -132,9 +132,9 @@ def _rollup(cur: Any, pid: int) -> tuple[Any, ...]:
 
 
 def _recompute(cur: Any, pid: int) -> None:
-    from scripts.recompute_property_stats import _RECOMPUTE_ONE_SQL
+    from scripts.recompute_property_stats import _RECOMPUTE_SCOPED_SQL
 
-    cur.execute(_RECOMPUTE_ONE_SQL, {"pid": pid})
+    cur.execute(_RECOMPUTE_SCOPED_SQL, {"ids": [pid]})
 
 
 def _divergent_pair(cur: Any) -> tuple[int, int, int]:

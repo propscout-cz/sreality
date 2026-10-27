@@ -1,5 +1,5 @@
 /* The one infinite-list hook, shared by every scrolled surface (Browse
- * cards + table on properties_public, and the Estimations + Watchdog API
+ * cards on properties_public, and the Estimations + Watchdog API
  * feeds). It wraps React Query v5's useInfiniteQuery and adds the two
  * things every caller needs identically: (1) flattening pages into one row
  * array, and (2) de-duplicating by a stable row id so a row that re-sorts
@@ -67,6 +67,8 @@ export interface InfiniteListResult<
   isFetchingNextPage: boolean;
   hasNextPage: boolean;
   isError: boolean;
+  /* The failure is the NEXT page's: the pages already loaded are intact. */
+  isFetchNextPageError: boolean;
   error: Error | null;
   fetchNextPage: () => void;
   refetch: () => void;
@@ -149,6 +151,7 @@ export function useInfiniteList<
     isFetchingNextPage: query.isFetchingNextPage,
     hasNextPage: query.hasNextPage,
     isError: query.isError,
+    isFetchNextPageError: query.isFetchNextPageError,
     error: (query.error as Error) ?? null,
     fetchNextPage,
     refetch: () => void query.refetch(),

@@ -10,7 +10,8 @@ latency-critical path: newest-first delta probes per portal (2-5 min; live-verif
 capability per portal, sreality via count-delta probes pending a BFF sort spike) →
 continuous detail drain → per-listing images-first processing (download + INLINE pHash +
 warm-CLIP tag; a listing is not published/notified before its first image is stored —
-operator decision) → dedup dirty enqueue → matcher wake. Prerequisite: a DB-backed shared
+operator decision; *superseded 2026-10-23 by the publication rule, rule 16: a property is shown
+and told once published, settled or 6 h old*) → dedup dirty enqueue → matcher wake. Prerequisite: a DB-backed shared
 politeness ledger (RateLimiter is per-process today; two runtimes must share one budget
 per portal). GH Actions keeps the free heavy lanes (full reconcile walks, backfills, batch
 scans, monitors).
@@ -25,7 +26,8 @@ scans, monitors).
   pay-at-decision-time (pHash → CLIP cosine → bounded live forensics), the floor-plan gate on its
   OWN budget; `dedup_batches.yml` is dispatch-only. (Supersedes the old "batch-warmer revival".)
 - **W3 (#696, migration 270)** — sreality count-probe lane (`pagination.total` deltas → opt-in
-  targeted `index_walk`; sreality's v1 API is sort-blind so it can't do a newest-first probe).
+  targeted `index_walk`; sreality's v1 API is sort-blind so it can't do a newest-first probe). Deleted in
+  Actions-exit W0 (#2015).
 - **W4** — idnes/bazos street-coverage measurement: the RÚIAN resolver lever is **exhausted** (coord
   precision ceiling — idnes coords >15 m from address points, bazos coords are shared page-link
   pins); the 61%/51% eligibility is not resolver-fixable without better coord extraction.
@@ -64,6 +66,10 @@ the sreality BFF sort HAR spike.
 
 ### Phase B1: Building decomposition — URL ingest + unit extractor + confirmation UI (active)
 
+**Entry retired 2026-10-20** (`docs/design/new-property-from-link.md` §3.5): the URL parser and
+`POST /buildings/from_url` are deleted, so the flow has no live entry — `POST /buildings` creates
+only a `pending` shell. Keep-or-retire ruling owed: `roadmap/building-decomposition-track.md`.
+
 Second slice of the building-paste flow. Builds on B0's persistence:
 operator pastes a `dum` (house) or `komercni` URL → backend parses
 via the existing dispatcher → an LLM-vision skill reads the
@@ -92,16 +98,23 @@ Headline scope:
   estimator skill — its job is structural extraction only.
 - `POST /buildings/from_url` replaces B0's minimal `POST /buildings`
   as the operator-facing entry. Rejects `category_main='byt'` (those
-  go through `/estimations`).
+  go through `/estimations`). (Retired 2026-10-20,
+  `docs/design/new-property-from-link.md` §3.5.)
 - `POST /buildings/{id}/confirm_units` accepts the operator-edited
   unit list, validates, writes to `units`, advances status to
   `estimating`. Idempotency via 409 on non-`awaiting_input` rows.
 - Frontend: new `kind` toggle on `NewEstimationModal` ("apartment" /
-  "building"), `BuildingUnitEditor` component for the review step,
+  "building") (retired 2026-10-20, `docs/design/new-property-from-link.md`
+  §3.5), `BuildingUnitEditor` component for the review step,
   new `/building/:id` page (initially read-only — full rollup view
   ships with B2).
 
 ### Phase 7 slice 2: Async + full toolkit + UI mode toggle
+> **Ruled 2026-10-25 (agent-platform grill, ADR-0005):** this slice and Phase 7d below are superseded by
+> `docs/design/agent-platform/MVP.md`: a generic run ledger on a dedicated agent-worker service, and agent Python on
+> Claude's hosted code execution (provider-hosted, which 7d excluded; the operator re-took that ruling, accepting
+> Claude-only code agents and US processing).
+
 Builds on slice 1.
 - Async execution: real `status='pending'/'running'` lifecycle with
   a background worker and a polling endpoint. Removes the
@@ -125,7 +138,7 @@ Scoped now, implemented later — sequenced after the manual
 rental estimates work (Phase U-ME) so the simpler, contained
 schema feature lands first.
 
-Operator-confirmed approach:
+**Superseded 2026-10-25 by ADR-0005 (see the note under slice 2).** Operator-confirmed approach (2026):
 - Self-hosted sandboxed subprocess on the Railway container.
   No third-party sandbox (rules out e2b), no provider-hosted
   code-exec beta (rules out Anthropic's `code_execution_20250522`
@@ -252,17 +265,12 @@ overlay that can be heatmap-color-coded by any chosen index.
   silently turned the geographic filter into a no-op on the first
   draft. `fetchBrowseStats` now passes the four params; Stats and
   Map/Table can never disagree on a city-quality cohort again.
-- **Population fetcher**: `scripts/fetch_population_wikidata.py`
-  queries Wikidata's public SPARQL endpoint for every Czech
-  municipality's `population (P1082) @ point in time (P585)`,
-  matches by `(name, kraj)` against the curated list, and writes
-  `data/csu_population_2024.csv` — the file the seed script
-  already loads on present. Wired through
-  `.github/workflows/refresh_population.yml` for operator-triggered
-  refresh; no DB access required (the workflow just regenerates
-  the committed CSV).
+- **Population fetcher** (deleted 2026-10-25, Actions exit W0, with its
+  `refresh_population.yml` workflow): a Wikidata SPARQL fallback that
+  wrote `data/csu_population_2024.csv`; both of its runs (2026-05-19)
+  failed and the ČSÚ file below superseded it.
 - **Population source switched to the official ČSÚ DataStat file.**
-  The Wikidata fetcher is now a fallback; the preferred source is the
+  The preferred source is the
   official export "Počet obyvatel v obcích k 1. 1." (download from
   https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02). The operator
   commits the downloaded JSON-stat file to `data/csu_population.json`;

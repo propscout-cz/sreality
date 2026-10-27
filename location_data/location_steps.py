@@ -75,12 +75,21 @@ def _located_foreign_sql(flags: str) -> str:
     return f"{flags}.located and coalesce({flags}.is_foreign, false)"
 
 
+def _no_town(is_foreign: str, has_town: str) -> str:
+    return f"not coalesce({is_foreign}, false) and not coalesce({has_town}, false)"
+
+
 def _located_no_town_sql(flags: str) -> str:
     """The plain complement, so the three splits close by construction."""
-    return (
-        f"{flags}.located and not coalesce({flags}.is_foreign, false)"
-        f" and not coalesce({flags}.has_town, false)"
-    )
+    return f"{flags}.located and {_no_town(f'{flags}.is_foreign', f'{flags}.has_town')}"
+
+
+def town_missing_sql(*, loc: str = "ll", rank: str = "gr") -> str:
+    """Rule 25's invariant, broken: not determined foreign and no town, off a LEFT JOIN of the
+    answer row — so a listing with no row counts (foreign is a determination, never a default).
+    The `location_town_coverage` check judges it; the `location_refetch` lane acts on it."""
+    flags = step_flags_sql(loc=loc, rank=rank)
+    return _no_town(flags["is_foreign"], flags["has_town"])
 
 
 def shared_count_filters(flags: str = "b") -> dict[str, str]:

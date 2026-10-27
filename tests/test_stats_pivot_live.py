@@ -6,7 +6,8 @@ property grain (docs/design/stats-dashboard.md). What only executing it shows:
   * THE LEDGER. `filtered` is the cohort, `sample` the properties with the measure and a value
     on every chosen dimension, `excluded` the rest (ruling 8: a NULL is never a bucket).
   * THE LEVELS. A cell with `keys` of length L is the rollup at level L, 0 .. len(rows), one
-    pass; statistics are NULL below `min_n` (ruling 6), the count never is.
+    pass; statistics are NULL below `min_n` (ruling 6), the count never is; a cell below it carries
+    only `small` = {min, max, mean, median} (migration 678), null at or above it.
   * THE REFUSALS. `empty`, `mixed_category` (ruling 4), `mixed_status` on turnover (ruling 3),
     `too_many_cells` (above MAX_CELLS) and `bad_spec` — refused for exactly the specs
     `toolkit.stats_registry.validate_spec` refuses.
@@ -36,7 +37,7 @@ from typing import Any
 
 import pytest
 
-from tests._live_property import REQUIRED_DB, cur  # noqa: F401 -- `cur` is the fixture
+from tests._live_property import REQUIRED_DB
 from toolkit import stats_registry as sr
 
 pytestmark = REQUIRED_DB
@@ -118,7 +119,7 @@ def _register(cur: Any) -> None:
 
 
 def _pivot(cur: Any, pids: list[int], spec: Any, **args: Any) -> dict[str, Any]:
-    """`args`: further cohort parameters by name (portal_filter, inactive_only_filter, ...)."""
+    """`args`: further cohort parameters by name (portal_filter, status_filter, ...)."""
     extra = "".join(f", {k} => %({k})s" for k in args)
     cur.execute(
         "select public.browse_stats_properties(property_ids_filter => %(pids)s::bigint[], "
@@ -192,6 +193,25 @@ def test_the_floor_is_inclusive_at_min_n_and_exclusive_just_below(cur) -> None:
     assert below["n"] == sr.MIN_N - 1 and all(below[st] is None for st in sr.CHART_STATS), below
 
 
+def test_a_cell_under_the_floor_carries_its_small_sample_summary(cur) -> None:
+    """Migration 678: under the floor a cell also ships `small` = {min, max, mean, median}, rounded like every
+    figure (the SPA shows it only behind the Stats tab's 'Malé vzorky' checkbox), never a percentile; every
+    floor-gated key stays null. At or above the floor `small` is null and the statistics are the usual ones."""
+    pids = [_add(cur, disposition="3+kk", price=p) for p in (8_000_000, 2_000_000, 3_000_000)]
+    pids += [_add(cur, disposition="2+kk", price=i * 1_000_000) for i in range(1, 6)]
+    out = _pivot(cur, pids, {"rows": ["disposition"], "cols": [], "measure": "price"})
+    assert out["min_n"] == sr.MIN_N == 5
+    cells = _cells(out)
+    under, at, whole = cells[(("3+kk",), None)], cells[(("2+kk",), None)], cells[((), None)]
+    assert under["n"] == 3
+    assert under["small"] == {"min": 2_000_000, "max": 8_000_000, "mean": 4_333_333.33, "median": 3_000_000}
+    assert all(under[st] is None for st in ("mean", "median", "p10", "p25", "p75", "p90")), under
+    assert at["n"] == 5 and at["small"] is None
+    assert (at["mean"], at["median"], at["p10"], at["p25"], at["p75"], at["p90"]) == (
+        3_000_000, 3_000_000, 1_400_000, 2_000_000, 4_000_000, 4_600_000)
+    assert whole["n"] == 8 and whole["small"] is None and whole["median"] == 3_000_000
+
+
 def test_a_column_dimension_rolls_up_per_column_value(cur) -> None:
     pids = [_add(cur, disposition="2+kk", balcony=True) for _ in range(4)]
     pids += [_add(cur, disposition="3+kk", balcony=False) for _ in range(2)]
@@ -228,26 +248,24 @@ def test_more_than_one_category_is_refused(cur, other: dict[str, Any]) -> None:
     assert None in (out["category_main"], out["category_type"])
 
 
-def test_the_status_fact_follows_the_cohorts_own_portal_rule(cur) -> None:
-    """Migration 631. 'Inactive on sreality' admits a property still live on bezrealitky (597: the portal
-    rule judges the selected portals' ads). The pivot judges that row the same way, so the cohort reads
-    inactive and turnover draws -- over the five closed runs: the row whose property still runs has no
-    measured run on sreality and is set aside as excluded (ruling 3), while a price chart keeps it.
-    Without a portal filter the same property is simply active."""
+def test_the_status_fact_is_the_propertys_under_a_portal_filter(cur) -> None:
+    """Migration 657: the status is the property's on every surface. A property whose sreality ad
+    ended but which is still live on bezrealitky is NOT in "Neaktivní on sreality" (it is live), so
+    that cohort reads inactive and turnover draws over the five closed runs with nothing set aside;
+    "any status on sreality" keeps it as the live row it is, and turnover refuses the mix."""
     gone = [_add(cur, active=False, tom=100 + i) for i in range(5)]
     elsewhere = _add(cur, active=True, tom=50, sources=["sreality", "bezrealitky"], active_sources=["bezrealitky"])
     cohort = gone + [elsewhere]
-    lens = _pivot(cur, cohort, {"rows": [], "cols": [], "measure": "tom_days"},
-                  portal_filter=["sreality"], inactive_only_filter=True)
-    assert (lens["filtered"], lens["sample"], lens["excluded"], lens["status"], lens["refused"]) == (6, 5, 1, "inactive", None)
-    assert lens["cells"][0]["n"] == 5 and lens["cells"][0]["median"] == 102
-    price = _pivot(cur, cohort, {"rows": [], "cols": [], "measure": "price"},
-                   portal_filter=["sreality"], inactive_only_filter=True)
-    assert (price["sample"], price["excluded"], price["status"]) == (6, 0, "inactive")
-    plain = _pivot(cur, cohort, {"rows": [], "cols": [], "measure": "tom_days"}, inactive_only_filter=True)
-    assert (plain["filtered"], plain["status"], plain["refused"]) == (5, "inactive", None)
-    both = _pivot(cur, cohort, {"rows": [], "cols": [], "measure": "tom_days"})
-    assert (both["filtered"], both["status"], both["refused"]) == (6, "mixed", "mixed_status")
+    inactive = _pivot(cur, cohort, {"rows": [], "cols": [], "measure": "tom_days"},
+                      portal_filter=["sreality"], status_filter="inactive")
+    assert (inactive["filtered"], inactive["sample"], inactive["excluded"], inactive["status"],
+            inactive["refused"]) == (5, 5, 0, "inactive", None)
+    assert inactive["cells"][0]["n"] == 5 and inactive["cells"][0]["median"] == 102
+    active = _pivot(cur, cohort, {"rows": [], "cols": [], "measure": "price"},
+                    portal_filter=["sreality"], status_filter="active")
+    assert (active["filtered"], active["refused"]) == (0, "empty")
+    any_status = _pivot(cur, cohort, {"rows": [], "cols": [], "measure": "tom_days"}, portal_filter=["sreality"])
+    assert (any_status["filtered"], any_status["status"], any_status["refused"]) == (6, "mixed", "mixed_status")
 
 
 def test_turnover_needs_one_status_and_price_does_not(cur) -> None:

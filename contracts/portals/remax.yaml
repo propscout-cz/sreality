@@ -1,9 +1,14 @@
 # remax — the slim location contract (rule 25).
 # v4: six entries, at most one per claim type, all read from the stored detail body.
 # Header -> town / část obce / okres; breadcrumb -> kraj; subject map -> pin + street.
+# v6 (operator ruling 2026-10-25): the street, still read off the subject map only (W2-6),
+# drops the word-ending test (`address_part_street:loose`) — it refused real streets
+# ("José Martiho", "Rudná", "Čsl. partyzánů", "Starý lis"). Since W18 a street is kept only
+# when it binds in RÚIAN in the ad's town, and a part of the town named in that slot binds
+# as the part (resolver v5.7).
 
 portal: remax
-contract_version: 5
+contract_version: 6
 
 persistence:
   # What this portal's body carries that changes without the listing changing —
@@ -118,7 +123,7 @@ extractions:
     page_kind: detail
     locator: {reader: html_attr, css: "#printMap[data-address], #listingMap[data-address]",
               attr: "data-address"}
-    transform: ["address_part_street"]
+    transform: ["address_part_street:loose"]
     claim_type: street_name
     subject_scope: {subject_scoped: true, kind: subject_map}
     prior: {match_confidence: medium}

@@ -6,6 +6,7 @@ run_index_probe / run_detail_drain / db.connect are monkeypatched.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import contextlib
 import inspect
@@ -24,6 +25,7 @@ from typing import Any
 import pytest
 from psycopg.types.json import Jsonb
 
+from scraper import portal_factory
 from scraper import realtime_worker as rw
 from scraper.portal import default_config
 
@@ -256,13 +258,13 @@ def test_probe_pass_filters_disabled_and_proxied(monkeypatch):
     asyncio.run(scenario())
     # ceskereality and mmreality are proxied (USE_PROXY, proxy REQUIRED) and
     # SCRAPER_PROXY_URL is unset. sreality (Phase 4 of portal-order-fidelity) is
-    # neither disabled nor proxied, so it runs too.
-    assert ran == ["bezrealitky", "idnes", "maxima", "realitymix", "sreality"]
+    # neither disabled nor proxied, so it runs too; so does `web`, first.
+    assert ran == ["web", "bezrealitky", "idnes", "maxima", "realitymix", "sreality"]
     probe = state["lanes"]["probe"]
     assert probe["passes"] == 1
-    assert probe["last"]["portals"] == 5
+    assert probe["last"]["portals"] == 6
     assert probe["last"]["skipped"] == 4      # bazos + remax disabled, ceskereality + mmreality proxied
-    assert probe["last"]["enqueued"] == 10
+    assert probe["last"]["enqueued"] == 12
 
 
 def test_probe_pass_includes_proxied_portal_when_env_set(monkeypatch):
@@ -514,22 +516,19 @@ def test_images_pass_without_r2_logs_once_and_idles(monkeypatch, caplog):
     assert len(warnings) == 1
 
 
-def test_run_images_sync_reuses_main_machinery_active_only(monkeypatch):
+def test_run_images_sync_reuses_main_machinery_over_the_whole_queue(monkeypatch):
+    # No scope argument: the lane drains active ads first, then the inactive residue.
     from scraper import main as scraper_main
 
     seen: dict[str, Any] = {}
 
-    def fake_run(max_downloads, workers, active_only=False, **kw):
-        seen.update(
-            max_downloads=max_downloads, workers=workers, active_only=active_only,
-        )
+    def fake_run(*args, **kw):
+        seen.update(args=args, kw=kw)
         return _images_agg()
 
     monkeypatch.setattr(scraper_main, "_run_image_downloads", fake_run)
     assert rw._run_images_sync(250)["images_stored"] == 4
-    assert seen == {
-        "max_downloads": 250, "workers": rw.IMAGES_WORKERS, "active_only": True,
-    }
+    assert seen == {"args": (250, rw.IMAGES_WORKERS), "kw": {}}
 
 
 # --- heartbeat -----------------------------------------------------------------
@@ -725,7 +724,7 @@ def test_the_worker_seeds_every_lane_before_any_lane_starts(monkeypatch):
     assert asyncio.run(rw._amain()) == 0
     assert events[0] == ("seed", {lane: {"interval_s": None} for lane in rw.LANES})
     assert events[1:] == [("lane", lane) for lane in rw.LANES]
-    assert len(set(rw.LANES)) == len(rw.LANES) == 15
+    assert len(set(rw.LANES)) == len(rw.LANES) == 16
 
 
 # --- health lane (Health dashboard W3) ----------------------------------------------------
@@ -735,7 +734,7 @@ class _Harness:
     """scripts.verify_pipeline as the health lane uses it."""
 
     def __init__(self, due: list[str]) -> None:
-        self.THRESHOLDS = {"jobs_lane_inflight_warn_s": 1200}
+        self.THRESHOLDS: dict[str, Any] = {}
         self.due = due
         self.projected: list[tuple[str, Any]] = []
         self.ran: list[dict[str, Any]] = []
@@ -807,7 +806,7 @@ def test_the_health_lane_ticks_on_a_constant_and_sits_before_autodedup() -> None
     assert (rw.HEALTH_TICK_SECONDS, rw.HEALTH_PASS_BUDGET_SECONDS) == (60.0, 500.0)
     from scripts import verify_pipeline
 
-    # Wave 6: the twelve worker budgets (675 s) outgrow one pass inside the watcher's 600 s
+    # Wave 6: the thirteen worker budgets (680 s) outgrow one pass inside the watcher's 600 s
     # in-flight line, so the pass is capped and run_due defers a gauge that no longer fits.
     hosted = [c for c in verify_pipeline.CHECKS if c.host == rw.WORKER_NAME]
     alarms = [c for c in hosted if c.cls == "alarm"]
@@ -912,12 +911,182 @@ def test_the_lanes_calls_bind_to_the_real_harness() -> None:
     inspect.signature(verify_pipeline.project_registry).bind(None, rw.WORKER_NAME, now)
 
 
+# --- notifications lane (notifications push program W2a) ----------------------------------
+
+
+@pytest.fixture
+def producers(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """The three api.notifications producers, faked; each records the connection it ran on."""
+    from api import notifications
+
+    ran: dict[str, Any] = {"conns": [], "steps": [], "fail": {}, "stats": {
+        "match_once": {"subscriptions_evaluated": 2, "subscriptions_invalid": 0,
+                       "subscriptions_failed": 0, "matches_inserted": 2},
+        "match_changes_once": {"subscriptions_evaluated": 2, "subscriptions_invalid": 0,
+                               "subscriptions_failed": 0, "changes_inserted": 0,
+                               "collection_changes_inserted": 0},
+        "match_monitored_collections_once": {"monitored_collections": 2, "events_inserted": 1},
+    }}
+
+    def fake(name: str) -> Any:
+        def producer(conn: _FakeConn) -> dict[str, int]:
+            assert conn is ran["conns"][-1] and not conn.closed, f"{name} runs on its own connection"
+            ran["steps"].append(name)
+            if name in ran["fail"]:
+                raise ran["fail"][name]
+            return dict(ran["stats"][name])
+        return producer
+
+    for name in rw.NOTIFICATIONS_STEPS.values():
+        monkeypatch.setattr(notifications, name, fake(name))
+
+    def connect() -> _FakeConn:
+        ran["conns"].append(_FakeConn())
+        return ran["conns"][-1]
+
+    monkeypatch.setattr(rw.db, "connect", connect)
+    monkeypatch.setattr(rw, "_NOTIFICATIONS_PASS_LOCK", rw._PassLock("notifications"))
+    return ran
+
+
+def test_the_notifications_lane_ticks_on_a_constant_between_autodedup_and_push() -> None:
+    """The health/text_extract shape: nothing read, so nothing to fail; the brake is a deploy."""
+    lane = inspect.getsource(rw._amain).split('("notifications"', 1)[1].split(")),", 1)[0]
+    assert "lambda: NOTIFICATIONS_TICK_SECONDS" in lane
+    assert "default_interval=NOTIFICATIONS_TICK_SECONDS" in lane
+    assert rw.NOTIFICATIONS_TICK_SECONDS == 300.0
+    at = rw.LANES.index("notifications")
+    assert rw.LANES[at - 1:at + 2] == ("autodedup", "notifications", "push")
+    for forbidden in ("app_settings", "os.environ"):
+        assert forbidden not in inspect.getsource(rw._notifications_sync)
+    assert "- notifications:" in rw.__doc__
+
+
+def test_the_lanes_steps_bind_to_the_real_producers() -> None:
+    """The steps name api.notifications' public producers, which nothing else calls since W2b;
+    binding them keeps a rename from leaving the lane calling nothing."""
+    from api import notifications
+
+    assert list(rw.NOTIFICATIONS_STEPS) == ["watchdog_new", "price", "monitor"]
+    for name in rw.NOTIFICATIONS_STEPS.values():
+        inspect.signature(getattr(notifications, name)).bind(None)
+
+
+def test_a_notifications_pass_runs_each_step_on_its_own_connection(
+        producers: dict[str, Any]) -> None:
+    """The lane opens no transaction: each producer commits per statement itself (one watchdog's
+    INSERT, one detector; api/notifications._commit_one), so no lock outlives its statement."""
+    state = rw._new_state()
+    rw._record_pass_start(state, "notifications")
+    asyncio.run(rw._notifications_pass(asyncio.Event(), state))
+
+    assert producers["steps"] == list(rw.NOTIFICATIONS_STEPS.values())
+    assert len(producers["conns"]) == 3 and all(c.closed for c in producers["conns"])
+    assert all(conn.calls == [] for conn in producers["conns"]), "the lane itself runs no SQL"
+    lane = state["lanes"]["notifications"]
+    assert (lane["passes"], lane["started_at"], lane["failing_since"]) == (1, None, None)
+    assert lane["portal_errors"] == {}
+    assert set(lane["last"]) == {"watchdog_new", "price", "monitor"}
+    assert lane["last"]["watchdog_new"]["matches_inserted"] == 2
+    Jsonb(rw._lane_snapshot(state["lanes"]))
+
+
+def test_a_failing_step_is_its_own_cell_and_the_other_steps_still_write(
+        producers: dict[str, Any]) -> None:
+    """A step that raises rolls back alone (its own transaction), names itself in portal_errors
+    — the jobs check's `lane/notifications/<step>` cell — and keeps its onset until a clean pass."""
+    from scripts.checks import platform
+
+    producers["fail"]["match_changes_once"] = RuntimeError("statement timeout")
+    producers["stats"]["match_once"]["subscriptions_failed"] = 1
+    state = rw._new_state()
+    asyncio.run(rw._notifications_pass(asyncio.Event(), state))
+
+    assert producers["steps"] == list(rw.NOTIFICATIONS_STEPS.values()), "every step ran"
+    assert producers["conns"][1].closed
+    lane = state["lanes"]["notifications"]
+    assert lane["passes"] == 1 and lane["failing_since"] is None, "the pass itself completed"
+    errors = lane["portal_errors"]
+    assert set(errors) == {"watchdog_new", "price"}
+    assert errors["price"]["last_error"] == "RuntimeError: statement timeout"
+    assert errors["watchdog_new"]["last_error"] == "1 of 2 watchdogs failed"
+    assert set(lane["last"]) == {"watchdog_new", "monitor"}
+
+    now = datetime.fromisoformat(errors["price"]["failing_since"])
+    cells = platform._portal_cells("notifications", lane, {}, 900.0, now)
+    assert [(c["subject"], c["status"]) for c in cells] == [
+        ("lane/notifications/price", "warn"), ("lane/notifications/watchdog_new", "warn")]
+
+    onset = errors["price"]["failing_since"]
+    producers["stats"]["match_once"]["subscriptions_failed"] = 0
+    asyncio.run(rw._notifications_pass(asyncio.Event(), state))
+    errors = state["lanes"]["notifications"]["portal_errors"]
+    assert set(errors) == {"price"} and errors["price"]["failing_since"] == onset
+
+    del producers["fail"]["match_changes_once"]
+    asyncio.run(rw._notifications_pass(asyncio.Event(), state))
+    assert state["lanes"]["notifications"]["portal_errors"] == {}
+
+
+@pytest.mark.parametrize(("invalid", "failed", "error"), [
+    (1, 0, None),
+    (2, 0, None),
+    (1, 1, "1 of 2 watchdogs failed"),
+    (0, 0, None),
+], ids=["one-refused", "all-refused", "a-statement-failed", "healthy"])
+def test_a_refused_spec_never_reddens_a_step(
+        producers: dict[str, Any], invalid: int, failed: int, error: str | None) -> None:
+    """A step is red iff a statement raised. A stored spec the matcher refuses is the user's row
+    (the write routes 422 it), counted in `last`, never a cell, even when every watchdog is refused."""
+    producers["stats"]["match_once"].update(subscriptions_invalid=invalid,
+                                            subscriptions_failed=failed)
+    state = rw._new_state()
+    asyncio.run(rw._notifications_pass(asyncio.Event(), state))
+    lane = state["lanes"]["notifications"]
+    assert lane["last"]["watchdog_new"]["subscriptions_invalid"] == invalid
+    if error is None:
+        assert "watchdog_new" not in lane["portal_errors"]
+    else:
+        assert lane["portal_errors"]["watchdog_new"]["last_error"] == error
+
+
+def test_an_abandoned_notifications_pass_is_never_overlapped(producers: dict[str, Any]) -> None:
+    assert rw._NOTIFICATIONS_PASS_LOCK.try_enter()
+    try:
+        assert rw._notifications_sync(asyncio.Event()) == {"previous_pass_running": True}
+    finally:
+        rw._NOTIFICATIONS_PASS_LOCK.release()
+    assert producers["conns"] == [] and producers["steps"] == []
+    state = rw._new_state()
+    state["lanes"]["notifications"] = {"portal_errors": {"price": dict(_STALE_PORTAL_ERROR)}}
+    assert rw._NOTIFICATIONS_PASS_LOCK.try_enter()
+    try:
+        asyncio.run(rw._notifications_pass(asyncio.Event(), state))
+    finally:
+        rw._NOTIFICATIONS_PASS_LOCK.release()
+    assert state["lanes"]["notifications"]["portal_errors"] == {"price": _STALE_PORTAL_ERROR}
+
+
+def test_a_stopping_worker_starts_no_further_step(producers: dict[str, Any]) -> None:
+    stop = asyncio.Event()
+    stop.set()
+    last = rw._notifications_sync(stop)
+    assert last == {"attempted": [], "raised": {}} and producers["steps"] == []
+
+
 # --- registry ------------------------------------------------------------------
 
 
 def test_registry_is_internally_consistent():
     assert set(rw.REALTIME_SOURCES) == set(rw._CLIENT_CLASSES)
     assert set(rw._PORTAL_CLASSES) == set(rw.REALTIME_SOURCES) - {"bazos"}
+
+
+def test_pasted_sites_drain_first():
+    """The drain lane takes sources one after another with a budget each: `web` first, so a
+    paste waits for the drain interval, never for nine other portals' budgets."""
+    assert rw.REALTIME_SOURCES[0] == "web"
+    assert set(rw.REALTIME_SOURCES) == set(portal_factory.PORTAL_CLASSES)
 
 
 @pytest.mark.parametrize("source", rw.REALTIME_SOURCES)
@@ -927,216 +1096,38 @@ def test_build_portal_from_baked_config(source):
     assert hasattr(portal, "shared_rate_limiter")
 
 
-# --- count-probe lane (sreality) -----------------------------------------------
+# --- no GitHub dispatch from the worker (#2015) ----------------------------------------
 
 
-class _CountCur:
-    def __init__(self, rows: list[Any]) -> None:
-        self._rows = rows
-
-    def __enter__(self) -> "_CountCur":
-        return self
-
-    def __exit__(self, *a: Any) -> None:
-        return None
-
-    def execute(self, sql: str, params: Any = None) -> None:
-        return None
-
-    def fetchall(self) -> list[Any]:
-        return self._rows
-
-
-class _CountConn:
-    def __init__(self, rows: list[Any]) -> None:
-        self._rows = rows
-
-    def cursor(self) -> _CountCur:
-        return _CountCur(self._rows)
-
-    def close(self) -> None:
-        return None
-
-
-def test_count_probe_sync_flags_changes_beyond_jitter(monkeypatch):
-    from scraper import main as scraper_main
-
-    monkeypatch.setattr(scraper_main, "CATEGORIES", ((1, 1), (2, 1), (3, 1)))
-    totals = {(1, 1): 105, (2, 1): 51, (3, 1): 200}
-
-    class _Client:
-        def __init__(self, cm: int, ct: int) -> None:
-            self.cm, self.ct = cm, ct
-
-        def probe_result_size(self) -> int:
-            return totals[(self.cm, self.ct)]
-
-    monkeypatch.setattr(
-        scraper_main, "_build_client", lambda cm, ct, limiter=None: _Client(cm, ct))
-    # prior: (1,1)=100 -> +5 beyond jitter=changed; (2,1)=50 -> +1 within jitter=NOT;
-    # (3,1) absent -> first sighting, recorded but never flagged.
-    monkeypatch.setattr(rw.db, "connect", lambda: _CountConn([(1, 1, 100), (2, 1, 50)]))
-    captured: list[Any] = []
-    monkeypatch.setattr(rw, "_upsert_count_state", lambda rows: captured.append(rows))
-
-    agg = rw._count_probe_sync()
-    assert agg["pairs"] == 3
-    assert agg["errors"] == 0
-    assert [(c["cm"], c["ct"], c["old"], c["new"]) for c in agg["changed"]] == [
-        (1, 1, 100, 105)]
-    assert captured == [[(1, 1, 105, True), (2, 1, 51, False), (3, 1, 200, False)]]
-
-
-def test_count_probe_sync_counts_errors_and_none_totals(monkeypatch):
-    from scraper import main as scraper_main
-
-    monkeypatch.setattr(scraper_main, "CATEGORIES", ((1, 1), (2, 1), (3, 1)))
-
-    class _Client:
-        def __init__(self, cm: int, ct: int) -> None:
-            self.cm = cm
-
-        def probe_result_size(self):
-            if self.cm == 2:
-                raise RuntimeError("http 500")
-            if self.cm == 3:
-                return None  # API withheld the total
-            return 100
-
-    monkeypatch.setattr(
-        scraper_main, "_build_client", lambda cm, ct, limiter=None: _Client(cm, ct))
-    monkeypatch.setattr(rw.db, "connect", lambda: _CountConn([]))
-    monkeypatch.setattr(rw, "_upsert_count_state", lambda rows: None)
-
-    agg = rw._count_probe_sync()
-    # (1,1) recorded (first sighting, not flagged); (2,1) raised; (3,1) None -> both errors
-    assert agg["pairs"] == 1
-    assert agg["errors"] == 2
-    assert agg["changed"] == []
-
-
-def test_maybe_dispatch_no_change_short_circuits(monkeypatch):
-    monkeypatch.setattr(rw, "_read_count_dispatch_enabled", lambda: pytest.fail(
-        "must short-circuit before reading the enabled flag on no change"))
-    assert rw._maybe_dispatch_index_walk([], 600) == {
-        "dispatched": False, "reason": "no_change"}
-
-
-def test_maybe_dispatch_disabled_records_only(monkeypatch):
-    monkeypatch.setattr(rw, "_read_count_dispatch_enabled", lambda: False)
-    monkeypatch.setattr(rw, "_post_workflow_dispatch", lambda t: pytest.fail(
-        "disabled must not POST"))
-    assert rw._maybe_dispatch_index_walk([{"cm": 1, "ct": 1}], 600) == {
-        "dispatched": False, "reason": "disabled"}
-
-
-def test_maybe_dispatch_no_token_warns_once(monkeypatch, caplog):
-    monkeypatch.setattr(rw, "_read_count_dispatch_enabled", lambda: True)
-    monkeypatch.setattr(rw, "_dispatch_token", lambda: None)
-    monkeypatch.setattr(rw, "_DISPATCH_WARNED", set())
-    with caplog.at_level("WARNING", logger="scraper.realtime_worker"):
-        rw._maybe_dispatch_index_walk([{"cm": 1, "ct": 1}], 600)
-        out = rw._maybe_dispatch_index_walk([{"cm": 1, "ct": 1}], 600)
-    assert out["reason"] == "no_token" and out["dispatched"] is False
-    assert len([r for r in caplog.records if "no token env" in r.message]) == 1
-
-
-def test_maybe_dispatch_skips_fresh_walk(monkeypatch):
-    monkeypatch.setattr(rw, "_read_count_dispatch_enabled", lambda: True)
-    monkeypatch.setattr(rw, "_dispatch_token", lambda: "tok")
-    monkeypatch.setattr(rw, "_seconds_since_last_sreality_index_walk", lambda: 120.0)
-    monkeypatch.setattr(rw, "_post_workflow_dispatch", lambda t: pytest.fail(
-        "a fresh walk must not re-dispatch"))
-    out = rw._maybe_dispatch_index_walk([{"cm": 1, "ct": 1}], 600)
-    assert out["dispatched"] is False and out["reason"] == "fresh_walk"
-
-
-def test_maybe_dispatch_triggers_when_stale_and_enabled(monkeypatch):
-    monkeypatch.setattr(rw, "_read_count_dispatch_enabled", lambda: True)
-    monkeypatch.setattr(rw, "_dispatch_token", lambda: "tok")
-    monkeypatch.setattr(rw, "_seconds_since_last_sreality_index_walk", lambda: 5000.0)
-    posted: list[str] = []
-    monkeypatch.setattr(rw, "_post_workflow_dispatch", lambda t: posted.append(t) or True)
-    out = rw._maybe_dispatch_index_walk([{"cm": 1, "ct": 1}], 600)
-    assert out == {"dispatched": True, "reason": "triggered"}
-    assert posted == ["tok"]
-
-
-def test_maybe_dispatch_triggers_when_no_prior_walk(monkeypatch):
-    # age None (no sreality index walk ever) -> not fresh -> dispatch
-    monkeypatch.setattr(rw, "_read_count_dispatch_enabled", lambda: True)
-    monkeypatch.setattr(rw, "_dispatch_token", lambda: "tok")
-    monkeypatch.setattr(rw, "_seconds_since_last_sreality_index_walk", lambda: None)
-    monkeypatch.setattr(rw, "_post_workflow_dispatch", lambda t: True)
-    assert rw._maybe_dispatch_index_walk([{"cm": 1, "ct": 1}], 600)["dispatched"] is True
-
-
-def test_post_workflow_dispatch_204_true_else_false(monkeypatch):
-    import requests
-
-    class _Resp:
-        def __init__(self, code: int) -> None:
-            self.status_code = code
-            self.text = "body"
-
-    calls: list[Any] = []
-    monkeypatch.setattr(
-        requests, "post", lambda url, **kw: calls.append((url, kw)) or _Resp(204))
-    assert rw._post_workflow_dispatch("tok") is True
-    assert f"{rw.DISPATCH_WORKFLOW}/dispatches" in calls[0][0]
-    assert calls[0][1]["json"] == {"ref": rw.DISPATCH_REF}
-    assert calls[0][1]["headers"]["Authorization"] == "Bearer tok"
-
-    monkeypatch.setattr(requests, "post", lambda url, **kw: _Resp(422))
-    assert rw._post_workflow_dispatch("tok") is False
-
-
-def test_count_probe_pass_records_and_reports_dispatch(monkeypatch):
-    monkeypatch.setattr(rw, "_count_probe_sync", lambda: {
-        "pairs": 3, "changed": [{"cm": 1, "ct": 1, "old": 100, "new": 110}], "errors": 0})
-    monkeypatch.setattr(rw, "_read_count_probe_interval", lambda: 600)
-    monkeypatch.setattr(rw, "_maybe_dispatch_index_walk", lambda changed, cooldown: {
-        "dispatched": True, "reason": "triggered"})
-    state = rw._new_state()
-    asyncio.run(rw._count_probe_pass(asyncio.Event(), state))
-    cp = state["lanes"]["count_probe"]
-    assert cp["passes"] == 1
-    assert cp["last"] == {"pairs": 3, "changed": 1, "errors": 0, "dispatched": True}
-
-
-def test_count_probe_pass_no_change_skips_dispatch(monkeypatch):
-    monkeypatch.setattr(rw, "_count_probe_sync", lambda: {
-        "pairs": 3, "changed": [], "errors": 0})
-    monkeypatch.setattr(rw, "_maybe_dispatch_index_walk", lambda *a, **k: pytest.fail(
-        "no change -> the dispatch decision must be skipped entirely"))
-    state = rw._new_state()
-    asyncio.run(rw._count_probe_pass(asyncio.Event(), state))
-    assert state["lanes"]["count_probe"]["last"] == {
-        "pairs": 3, "changed": 0, "errors": 0, "dispatched": False}
+def test_no_worker_code_path_posts_a_workflow_dispatch():
+    # The count-probe lane was the worker's only trigger of a GitHub workflow; its helper went with it.
+    tree = ast.parse(inspect.getsource(rw))
+    strings = [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+    assert not [s for s in strings if "/dispatches" in s or "api.github.com" in s]
+    assert not (Path(rw.__file__).parent / "github_dispatch.py").exists()
 
 
 # --- maintenance pass --------------------------------------------------------------
 
 
 def test_maintenance_lane_registered_and_live_by_default():
-    # Ships LIVE: the lane exists precisely because GH throttles
-    # property_maintenance.yml's */5 to a measured ~2h median, so merging must
-    # activate the fix. Interval <= 0 remains the kill-switch.
-    assert rw.MAINTENANCE_INTERVAL_DEFAULT == 120
+    # Ships LIVE: the lane is the incremental pass's only scheduled runtime, so
+    # merging must activate it. Interval <= 0 remains the kill-switch.
+    assert rw.MAINTENANCE_INTERVAL_DEFAULT == 30
     src = inspect.getsource(rw._amain)
     assert '("maintenance"' in src
 
 
 def test_maintenance_pass_records_counters(monkeypatch):
     def fake_sync() -> dict[str, Any]:
-        return {"skipped": False, "attached": 7, "recomputed": 12}
+        return {"skipped": False, "attached": 7, "recomputed": 12, "settled": 3}
 
     monkeypatch.setattr(rw, "_maintenance_sync", fake_sync)
     state = rw._new_state()
     asyncio.run(rw._maintenance_pass(asyncio.Event(), state))
     lane = state["lanes"]["maintenance"]
     assert lane["passes"] == 1
-    assert lane["last"] == {"skipped": False, "attached": 7, "recomputed": 12}
+    assert lane["last"] == {"skipped": False, "attached": 7, "recomputed": 12, "settled": 3}
 
 
 def test_maintenance_pass_records_lock_skip(monkeypatch):
@@ -1144,7 +1135,7 @@ def test_maintenance_pass_records_lock_skip(monkeypatch):
     # sweep holds the advisory lock — the lane records the skip and moves on.
     monkeypatch.setattr(
         rw, "_maintenance_sync",
-        lambda: {"skipped": True, "attached": 0, "recomputed": 0})
+        lambda: {"skipped": True, "attached": 0, "recomputed": 0, "settled": 0})
     state = rw._new_state()
     asyncio.run(rw._maintenance_pass(asyncio.Event(), state))
     assert state["lanes"]["maintenance"]["last"]["skipped"] is True
@@ -1339,7 +1330,7 @@ def test_a_hung_pass_is_abandoned_and_the_lane_keeps_going(monkeypatch):
 # two things a test must pin are therefore identity (the shared JOB_NAME lease on
 # the drain's own connection, so the GH lane and this one can never drain at
 # once) and boundedness (a budget that stays under the in-flight Watch and the lane
-# pass timeout). Hermetic: drain.run / lease.held / open_connection are stubbed.
+# pass timeout). Hermetic: drain.run / job_lease.held / open_connection are stubbed.
 
 
 class _ResolveConn:
@@ -1390,7 +1381,7 @@ def _patch_resolver(
         return _stub_stats(workers=workers)
 
     monkeypatch.setattr(rw.db, "connect_session", lambda *a, **k: conn)
-    monkeypatch.setattr("location_data.resolver.lease.held", fake_held)
+    monkeypatch.setattr("scraper.job_lease.held", fake_held)
     monkeypatch.setattr("location_data.resolver.drain.run", run or default_run)
     monkeypatch.setattr(rw, "_read_location_resolve_max_seconds", lambda: 240)
     monkeypatch.setattr(rw, "_read_location_resolve_batch_size", lambda: 250)
@@ -1421,12 +1412,12 @@ def test_location_resolve_max_seconds_is_clamped_below_the_lane_pass_timeout(
     # A HEALTHY pass must never read as a stall (the jobs check's in-flight Watch) and
     # must never be abandoned by the lane loop. The lease is NOT bounded by this — see
     # test_location_resolve_lease_ttl_covers_the_budget_plus_one_batch.
-    from scripts import verify_pipeline
+    from scripts.checks import platform as plat
 
     monkeypatch.setattr(rw, "_read_int", lambda key, default: 99999)
     clamped = rw._read_location_resolve_max_seconds()
     assert clamped == rw.LOCATION_RESOLVE_MAX_SECONDS_CEILING
-    assert clamped < verify_pipeline.THRESHOLDS["jobs_lane_inflight_warn_s"], (
+    assert clamped < plat.LANE_INFLIGHT_WARN_S, (
         "a healthy pass would read as in flight too long")
     assert clamped < rw.LANE_PASS_TIMEOUT_SECONDS
     monkeypatch.setattr(rw, "_read_int", lambda key, default: 60)
@@ -1508,8 +1499,7 @@ def test_location_resolve_sync_takes_the_shared_resolver_lease(monkeypatch):
     # THE shared lease row — a re-spelled literal here would be a silent loss of
     # mutual exclusion with location_resolve.yml.
     assert captured["job_name"] == drain.JOB_NAME
-    assert captured["concurrency_group"] == drain.CONCURRENCY_GROUP
-    assert captured["ttl_seconds"] == rw._location_resolve_lease_ttl(240, 250)
+    assert captured["ttl_s"] == rw._location_resolve_lease_ttl(240, 250)
     # ...and it must be held on the connection the drain actually uses.
     assert captured["conn"] is conn
     assert captured["run_conn"] is conn
@@ -1578,7 +1568,7 @@ def test_location_resolve_sync_reports_transaction_pooler_fallback(monkeypatch):
 
 def test_location_resolve_sync_closes_the_connection_and_reraises_when_the_drain_fails(
         monkeypatch):
-    # The raise IS the signal: lease.held stamps last_outcome='failed' and
+    # The raise IS the signal: job_lease.held stamps last_outcome='failed' and
     # re-raises, _lane_loop records the failed pass. Swallowing it would make a
     # broken drain look like a healthy idle lane.
     def boom(*a, **k):
@@ -1626,7 +1616,7 @@ def test_location_resolve_sync_refuses_to_run_beside_an_abandoned_pass(
 
     _patch_resolver(monkeypatch, run=never)
     monkeypatch.setattr(
-        "location_data.resolver.lease.held",
+        "scraper.job_lease.held",
         lambda *a, **k: (_ for _ in ()).throw(
             AssertionError("the lease must not be touched while a pass is live")))
     assert rw._RESOLVE_PASS_LOCK.try_enter()  # stands in for the still-running thread
@@ -1772,10 +1762,9 @@ def test_location_intake_fast_knobs_are_env_vars_and_clamped(
     monkeypatch.setenv(rw.LOCATION_INTAKE_FAST_BUDGET_ENV, "99999")
     assert rw._read_location_intake_fast_budget() == rw.LOCATION_INTAKE_FAST_BUDGET_CEILING
     # A healthy pass must never read as a stall, nor be abandoned by the lane loop.
-    from scripts import verify_pipeline
+    from scripts.checks import platform as plat
 
-    assert (rw.LOCATION_INTAKE_FAST_BUDGET_CEILING
-            < verify_pipeline.THRESHOLDS["jobs_lane_inflight_warn_s"])
+    assert rw.LOCATION_INTAKE_FAST_BUDGET_CEILING < plat.LANE_INFLIGHT_WARN_S
     assert rw.LOCATION_INTAKE_FAST_BUDGET_CEILING < rw.LANE_PASS_TIMEOUT_SECONDS
     # A typo must not stop a lane that ships live.
     monkeypatch.setenv(rw.LOCATION_INTAKE_FAST_BUDGET_ENV, "forty-five")
@@ -2025,7 +2014,7 @@ def _refetch_row(source: str, nid: str, total: int = 3, **over: Any) -> dict[str
 
 def _patch_refetch(
     monkeypatch: pytest.MonkeyPatch,
-    rows: list[dict[str, Any]] | None,
+    rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Stub the two db entry points the lane touches and capture their calls."""
     captured: dict[str, Any] = {"enqueued": [], "kwargs": {}}
@@ -2039,7 +2028,7 @@ def _patch_refetch(
 
     conn = _Conn()
 
-    def fake_candidates(c: Any, **kwargs: Any) -> list[dict[str, Any]] | None:
+    def fake_candidates(c: Any, **kwargs: Any) -> list[dict[str, Any]]:
         captured["conn"] = c
         captured["kwargs"] = kwargs
         return rows
@@ -2051,7 +2040,6 @@ def _patch_refetch(
     monkeypatch.setattr(rw.db, "connect", lambda *a, **k: conn)
     monkeypatch.setattr(rw.db, "location_refetch_candidates", fake_candidates)
     monkeypatch.setattr(rw.db, "enqueue_location_refetch", fake_enqueue)
-    monkeypatch.setattr(rw, "_LOCATION_REFETCH_VIEW_WARNED", False)
     captured["conn_obj"] = conn
     return captured
 
@@ -2112,21 +2100,6 @@ def test_location_refetch_tick_queues_every_portal_at_verify_priority(
         "candidates": 2, "queued": 2, "backlog": 63}
     assert out["sources"]["realitymix"]["backlog"] == 112
     assert captured["conn_obj"].closed is True
-
-
-def test_location_refetch_tick_skips_when_the_audit_view_is_missing(
-        monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    captured = _patch_refetch(monkeypatch, None)
-
-    with caplog.at_level(logging.WARNING, logger="scraper.realtime_worker"):
-        first = rw._location_refetch_sync()
-        second = rw._location_refetch_sync()
-
-    assert first["ran"] is False and first["reason"] == "audit_view_missing"
-    assert second["ran"] is False
-    assert captured["enqueued"] == [], "nothing is queued without the audit set"
-    # Once per process, not once a tick.
-    assert sum("location_pin_audit_mv is absent" in r.message for r in caplog.records) == 1
 
 
 def test_location_refetch_pass_records_the_heartbeat_shape(
@@ -2652,7 +2625,8 @@ def test_a_second_probe_pass_while_one_is_in_flight_is_skipped_and_counted(monke
         probe = state["lanes"]["probe"]
         assert probe["passes"] == 1
         assert probe["last"] == {"previous_pass_running": True}
-        assert ran == ["bazos", "bezrealitky", "ceskereality"]  # no second thread started
+        # no second thread started: the abandoned pass got as far as the blocked portal
+        assert ran == list(rw.REALTIME_SOURCES[: rw.REALTIME_SOURCES.index("ceskereality") + 1])
     finally:
         release.set()
         abandoned.join(5)

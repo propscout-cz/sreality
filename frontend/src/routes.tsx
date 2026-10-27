@@ -12,15 +12,12 @@ import ForgotPassword from './pages/ForgotPassword';
 import UpdatePassword from './pages/UpdatePassword';
 import Browse from './pages/Browse';
 import PropertyDetail, { AdvertRedirect } from './pages/PropertyDetail';
-import BuildingDetail from './pages/BuildingDetail';
 import EstimationDetail from './pages/EstimationDetail';
 import EstimationList from './pages/EstimationList';
 import Brokers from './pages/Brokers';
 import BrokerDetail from './pages/BrokerDetail';
 import Collections from './pages/Collections';
-import CollectionDetail from './pages/CollectionDetail';
 import Pipeline from './pages/Pipeline';
-import Watchdog from './pages/Watchdog';
 import WatchdogManage from './pages/WatchdogManage';
 import WatchdogEdit from './pages/WatchdogEdit';
 import Notifications from './pages/Notifications';
@@ -59,6 +56,18 @@ const AutodedupJudge = lazyChunk(() => import('./pages/AutodedupJudge'));
 // the feed's chunk after its first launch (`/assets/*` cache-first).
 const LinkPage = lazyChunk(() => import('./pages/Link'));
 const Feed = lazyChunk(() => import('./pages/Feed'));
+// Prohlídky, the sixth tab: phone-designed and its own chunk, as the other tabs.
+const PhoneViewings = lazyChunk(() => import('./pages/phone/PhoneViewings'));
+// Where a tapped push lands (notifications push § 3.5): opened from a
+// notification only, so outside the first visit.
+const NotificationOpen = lazyChunk(() => import('./pages/NotificationOpen'));
+// Paste-a-building (rule 13): an operator flow opened by its own link, never on a
+// first visit — its page and unit editor are their own chunk, like the admin pages.
+// Every /buildings route is admin-only (agent platform M0), so the page is too.
+const BuildingDetail = lazyChunk(() => import('./pages/BuildingDetail'));
+// A collection's page opens from the collections list or a shared link, not on a first
+// visit: its own chunk keeps the members' card grid off the first-visit budget.
+const CollectionDetail = lazyChunk(() => import('./pages/CollectionDetail'));
 
 function AdminPage({ children }: { children: ReactNode }) {
   return (
@@ -111,6 +120,15 @@ export const routes: RouteObject[] = [
         ),
         handle: { title: 'Odkaz' },
       },
+      {
+        path: ROUTES.viewings.childPath,
+        element: (
+          <PhoneSuspense>
+            <PhoneViewings />
+          </PhoneSuspense>
+        ),
+        handle: { title: 'Prohlídky' },
+      },
       { path: ROUTES.property.childPath, element: <PropertyDetail />, handle: { title: 'Property' } },
       // Advert addresses, kept forever (emails, the extension, bookmarks): the
       // natural key (migration 091), the legacy numeric id (negative for
@@ -129,15 +147,35 @@ export const routes: RouteObject[] = [
       { path: ROUTES.brokerDetail.childPath, element: <BrokerDetail />, handle: { title: 'Broker' } },
       { path: ROUTES.outreach.childPath, element: <AdminPage><Outreach /></AdminPage>, handle: { title: 'Outreach' } },
       { path: ROUTES.outreachDetail.childPath, element: <AdminPage><OutreachDetail /></AdminPage>, handle: { title: 'Campaign' } },
-      { path: ROUTES.buildingDetail.childPath, element: <BuildingDetail />, handle: { title: 'Building' } },
+      {
+        path: ROUTES.buildingDetail.childPath,
+        element: <AdminPage><BuildingDetail /></AdminPage>,
+        handle: { title: 'Building' },
+      },
       { path: ROUTES.collections.childPath, element: <Collections />, handle: { title: 'Collections' } },
-      { path: ROUTES.collectionDetail.childPath, element: <CollectionDetail />, handle: { title: 'Collection' } },
+      {
+        path: ROUTES.collectionDetail.childPath,
+        element: (
+          <Suspense fallback={<Skeleton height={320} className="mx-6 my-8" />}>
+            <CollectionDetail />
+          </Suspense>
+        ),
+        handle: { title: 'Collection' },
+      },
       { path: ROUTES.pipeline.childPath, element: <Pipeline />, handle: { title: 'Pipeline' } },
       { path: ROUTES.datasets.childPath, element: <AdminPage><Datasets /></AdminPage>, handle: { title: 'Datasets' } },
-      { path: ROUTES.watchdog.childPath, element: <Watchdog />, handle: { title: 'Watchdogs' } },
-      { path: ROUTES.watchdogManage.childPath, element: <WatchdogManage />, handle: { title: 'Watchdogs · Manage' } },
+      { path: ROUTES.watchdog.childPath, element: <WatchdogManage />, handle: { title: 'Watchdogs' } },
       { path: ROUTES.watchdogEdit.childPath, element: <WatchdogEdit />, handle: { title: 'Edit watchdog' } },
       { path: ROUTES.notifications.childPath, element: <Notifications />, handle: { title: 'Notifications' } },
+      {
+        path: ROUTES.notificationOpen.childPath,
+        element: (
+          <Suspense fallback={null}>
+            <NotificationOpen />
+          </Suspense>
+        ),
+        handle: { title: 'Upozornění' },
+      },
       { path: ROUTES.locationQuality.childPath, element: <AdminPage><LocationQuality /></AdminPage>, handle: { title: 'Location quality' } },
       { path: ROUTES.settings.childPath, element: <AdminPage><Settings /></AdminPage>, handle: { title: 'Settings' } },
       { path: ROUTES.newDedup.childPath, element: <AdminPage><NewDedupDashboard /></AdminPage>, handle: { title: 'NEW DEDUP' } },

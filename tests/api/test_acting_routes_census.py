@@ -16,7 +16,8 @@ live app and, for every route declaring either, reads the SQL its handler can re
 HOW THE SQL IS FOUND: the endpoint's AST, then every function it calls that lives under `api.`
 (module attribute or bare name, followed transitively), each contributing its string literals
 (f-string constant parts included, docstrings excluded) and every module-level string constant it
-names (`_FOO_SQL`). THE NAMED BLIND SPOTS: SQL built from a variable assembled elsewhere and
+names (`_FOO_SQL`); an endpoint whose SQL is BUILT (the saved-set factory, api/saved_sets.py) carries it as
+its `runs_sql` tag, read here too. THE NAMED BLIND SPOTS: SQL built from a variable assembled elsewhere and
 passed in, helpers outside `api/` (toolkit reads only, today), and dynamic dispatch. A rail that
 names its edges cannot manufacture confidence.
 """
@@ -41,7 +42,7 @@ from api.main import app  # noqa: E402
 
 CURATION = frozenset({
     "collections", "tags", "property_notes", "collection_properties", "property_tags",
-    "property_note_attachments", "property_artifact_links", "property_dismissals",
+    "property_attachments", "property_artifact_links", "property_dismissals",
     "property_pipeline", "pipeline_stages", "property_pipeline_events",
 })
 
@@ -57,13 +58,22 @@ _OWN_ACCOUNT_CURATION_WRITES: dict[str, str] = {
 _SERVICE_ROLE = frozenset({"open_background_conn", "get_db_conn"})
 
 # Routes that must never act: identity-scoped tables (docs/design/pipeline-sharing.md §3.7) and
-# sharing itself (only the owner shares their own board).
+# sharing itself (only the owner shares their own board). A READ of an identity-scoped table is no
+# member: under the header its policy answers the caller's own rows (`GET /stats/dashboard`).
 _NEVER_ACTS: frozenset[str] = frozenset({
     "POST /notifications/subscriptions",
     "POST /filter-presets",
+    "POST /filter-preset-groups",
     "PUT /stats/dashboard",
+    "POST /stats/dashboards",
     "POST /pipeline/shares",
     "POST /collections/{collection_id}/shares",
+    "POST /stats/dashboards/{dashboard_id}/shares",
+    # Push on this device (migration 654): a device belongs to the signed-in user, so a delegate's phone
+    # gets only the delegate's alerts. (GET /push/key names no account at all: it reads no row.)
+    "PUT /push/subscription",
+    "DELETE /push/subscription",
+    "POST /push/opened",
 })
 
 _WRITE = re.compile(r"\b(?:insert\s+into|update|delete\s+from)\s+([a-z_][a-z0-9_]*)", re.I)
@@ -144,7 +154,7 @@ def _reach(endpoint: Callable[..., Any]) -> tuple[set[str], bool]:
             continue
         seen.add(fn)
         tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
-        for text in _strings(fn, tree):
+        for text in [*_strings(fn, tree), *getattr(fn, "runs_sql", ())]:
             tables |= {m.group(1).lower() for m in _WRITE.finditer(text)} - _NOT_TABLES
         service_role |= any(
             (isinstance(n, ast.Attribute) and n.attr in _SERVICE_ROLE)
@@ -238,6 +248,12 @@ def test_the_census_is_not_vacuous() -> None:
     missing = sorted(_NEVER_ACTS - set(own))
     assert not missing, f"identity-scoped write route(s) no longer declare require_account_id: {missing}"
     assert not set(_OWN_ACCOUNT_CURATION_WRITES) - set(own), "stale _OWN_ACCOUNT_CURATION_WRITES entry"
+    # The saved-set factory builds its SQL from the kind; its `runs_sql` tag is what the census reads.
+    assert own["POST /filter-presets"] == {"filter_presets"}
+    assert own["POST /filter-preset-groups"] == {"filter_preset_groups"}
+    assert own["POST /stats/dashboards"] == {"stats_dashboards"}
+    assert {"stats_dashboards", "stats_dashboard_shares", "notification_dispatches"} <= own[
+        "POST /stats/dashboards/{dashboard_id}/shares"]
     rls_only = _rls_only()
     assert "collections" in rls_only["PATCH /collections/{collection_id}"][0]
     assert rls_only["DELETE /collections/{collection_id}/shares/{account_id}"][0] == {"collection_shares"}

@@ -59,9 +59,9 @@ def _advert(cur: Any, pid: int, *, source: str) -> int:
 
 
 def _recompute(cur: Any, pid: int) -> None:
-    from scripts.recompute_property_stats import _RECOMPUTE_ONE_SQL
+    from scripts.recompute_property_stats import _RECOMPUTE_SCOPED_SQL
 
-    cur.execute(_RECOMPUTE_ONE_SQL, {"pid": pid})
+    cur.execute(_RECOMPUTE_SCOPED_SQL, {"ids": [pid]})
 
 
 def _merge(cur: Any, ids: list[int], *, source: str) -> str:
@@ -107,13 +107,13 @@ def _backfill_564() -> str:
 def test_the_copy_records_560s_members_and_sides_and_links_the_rulings(cur):
     survivor, absorbed, brought, undone = (_property(cur) for _ in range(4))
     s1 = _advert(cur, survivor, source="sreality")
-    b1 = _advert(cur, brought, source="remax")
+    _advert(cur, brought, source="remax")
     a1 = _advert(cur, absorbed, source="idnes")
     u1 = _advert(cur, undone, source="bazos")
     for pid in (survivor, absorbed, brought, undone):
         _recompute(cur, pid)
-    # b1 arrives on the survivor through a merge that is not the operator's: its side is
-    # `brought`, so the operator's group never pairs it.
+    # The remax advert arrives on the survivor through a merge that is not the operator's: its
+    # side is `brought`, so the operator's group never pairs it.
     _merge(cur, [survivor, brought], source="autodedup")
     old = _merge(cur, [survivor, absorbed], source="autodedup")
     gone = _merge(cur, [survivor, undone], source="autodedup")

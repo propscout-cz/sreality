@@ -37,6 +37,7 @@ W4A = "507_location_w4a_readers.sql"
 W4C = "508_location_w4c_legacy_drops.sql"
 STREET = "584_serve_street_code.sql"
 W5 = "590_read_model_portal_rule.sql"
+STREET_SORT = "665_browse_street_sort.sql"
 
 # What S4 removes from each view it re-creates. `obec` SURVIVES on the two views
 # the pipeline board reads: the board's town sort orders by the TOWN, which is
@@ -175,7 +176,7 @@ _WIDENING_STEPS = [(W3, v) for v in _WIDENED] + [
     (W3_S3, "pipeline_board_public"),
 ] + [(STREET, v) for v in (
     "browse_projection", "listing_feed_public", "properties_public", "pipeline_board_public",
-)]
+)] + [(STREET_SORT, "browse_projection")]
 
 
 @pytest.mark.parametrize("after,view", _WIDENING_STEPS)
@@ -580,8 +581,9 @@ def test_w4c_carries_no_transaction_and_one_alter_per_hot_table() -> None:
 # re-creates, and what it appends LAST. browse_projection is a rename-aside (the matview
 # follows the old view by OID), properties_public a DROP + CREATE, the board re-created
 # verbatim because it reads properties_public.
+# 590 shipped the nine portals of its day; PORTAL_OPTIONS is append-only, so they are its first nine.
 _W5_PROJECTION_TAIL = ["all_sources", "active_sources", "source_count",
-                       *(f"newest_ad_at_{o.value}" for o in PORTAL_OPTIONS)]
+                       *(f"newest_ad_at_{o.value}" for o in PORTAL_OPTIONS[:9])]
 _W5_SHAPE: dict[str, tuple[set[str], list[str]]] = {
     "browse_projection": ({"asset_id"}, _W5_PROJECTION_TAIL),
     "properties_public": ({"asset_id", "distinct_site_count", "published_at"},

@@ -9,8 +9,9 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
-import { FilterSidebar, FilterSidebarRail } from './Filters';
+import { FilterSidebar, FilterSidebarRail, IncludeNoPriceToggle } from './Filters';
 import * as api from '@/lib/api';
+import * as brokers from '@/lib/brokers';
 import { DEFAULT_FILTERS, type ListingFilters } from '@/lib/filters';
 import type { LocationResolution } from '@/lib/maps';
 
@@ -21,6 +22,11 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   listCollections: vi.fn(),
   listTags: vi.fn(),
+}));
+vi.mock('@/lib/brokers', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/brokers')>()),
+  searchBrokersByName: vi.fn(),
+  fetchBrokerDossier: vi.fn(),
 }));
 vi.mock('@/lib/maps', async (importActual) => ({
   ...(await importActual<typeof import('@/lib/maps')>()),
@@ -42,6 +48,203 @@ const renderPicker = (ui: React.ReactElement) =>
     </QueryClientProvider>,
   );
 
+describe('<FilterSidebar> status line', () => {
+  it('draws status, seen at birth and dismissed as segmented controls that edit the filters', async () => {
+    vi.mocked(api.listCollections).mockImplementation(never);
+    vi.mocked(api.listTags).mockImplementation(never);
+    let latest: ListingFilters = DEFAULT_FILTERS;
+    function Host() {
+      const [filters, setFilters] = useState<ListingFilters>(DEFAULT_FILTERS);
+      return (
+        <FilterSidebar
+          onReset={() => {}}
+          filters={filters}
+          onChange={(next) => {
+            latest = next;
+            setFilters(next);
+          }}
+        />
+      );
+    }
+    renderPicker(
+      <MemoryRouter>
+        <Host />
+      </MemoryRouter>,
+    );
+    const user = userEvent.setup();
+    const status = screen.getByRole('group', { name: 'Status' });
+    expect(within(status).getByRole('button', { name: 'Vše' })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(within(status).getByRole('button', { name: 'Aktivní' }));
+    expect(latest.status).toBe('active');
+
+    const born = screen.getByRole('group', { name: 'Seen at birth' });
+    expect(within(born).getByRole('button', { name: 'All ads' })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(within(born).getByRole('button', { name: 'Seen at birth' }));
+    expect(latest.tomObservedOnly).toBe(true);
+
+    const dismissed = screen.getByRole('group', { name: 'Dismissed properties' });
+    expect(within(dismissed).getByRole('button', { name: 'Hide dismissed' })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(within(dismissed).getByRole('button', { name: 'Show dismissed' }));
+    expect(latest.showDismissed).toBe(true);
+  });
+});
+
+const CHOSEN = ['bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]'];
+
+/* Every segment in one track, none a bordered chip of its own (SegmentedBar). */
+function expectJoined(buttons: HTMLElement[]) {
+  const track = buttons[0].parentElement!;
+  for (const b of buttons) {
+    expect(b.parentElement).toBe(track);
+    expect(b).not.toHaveClass('border');
+  }
+  expect(track).toHaveClass('border', 'border-[var(--color-rule)]', 'bg-[var(--color-paper-2)]');
+}
+
+/* Every pick-one is the one joined bar (operator ruling 2026-10-27). */
+describe('<FilterSidebar> pick-one bars', () => {
+  function Host({ onChange, initial = DEFAULT_FILTERS }: { onChange: (f: ListingFilters) => void; initial?: ListingFilters }) {
+    const [filters, setFilters] = useState<ListingFilters>(initial);
+    return (
+      <FilterSidebar
+        filters={filters}
+        onReset={() => {}}
+        onChange={(next) => {
+          onChange(next);
+          setFilters(next);
+        }}
+      />
+    );
+  }
+  const renderHost = (onChange: (f: ListingFilters) => void, initial?: ListingFilters) => {
+    vi.mocked(api.listCollections).mockImplementation(never);
+    vi.mocked(api.listTags).mockImplementation(never);
+    return renderPicker(
+      <MemoryRouter>
+        <Host onChange={onChange} initial={initial} />
+      </MemoryRouter>,
+    );
+  };
+
+  /* No Vše (ruling 2026-10-20): the lit deal releases to "no deal", which lights nothing. */
+  it('draws Listing for as a joined bar whose lit deal releases', async () => {
+    let latest: ListingFilters = DEFAULT_FILTERS;
+    renderHost((f) => (latest = f));
+    const user = userEvent.setup();
+    const deal = screen.getByRole('group', { name: 'Listing for' });
+    const deals = within(deal).getAllByRole('button');
+    expectJoined(deals);
+    expect(within(deal).getByRole('button', { name: 'Prodej' })).toHaveClass(...CHOSEN);
+    await user.click(within(deal).getByRole('button', { name: 'Prodej' }));
+    expect(latest.categoryType).toBeNull();
+    for (const b of within(deal).getAllByRole('button')) expect(b).toHaveAttribute('aria-pressed', 'false');
+    await user.click(within(deal).getByRole('button', { name: 'Pronájem' }));
+    expect(latest.categoryType).toBe('pronajem');
+  });
+
+  it('draws With estimates as the two-segment bar', async () => {
+    let latest: ListingFilters = DEFAULT_FILTERS;
+    renderHost((f) => (latest = f));
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Curation' }));
+    const bar = screen.getByRole('group', { name: 'With estimates' });
+    expectJoined(within(bar).getAllByRole('button'));
+    expect(within(bar).getByRole('button', { name: 'All properties' })).toHaveClass(...CHOSEN);
+    await user.click(within(bar).getByRole('button', { name: 'With estimates' }));
+    expect(latest.withEstimates).toBe(true);
+  });
+
+  it('draws the map filter mode as a joined bar', async () => {
+    const onChange = vi.fn();
+    vi.mocked(api.listCollections).mockImplementation(never);
+    vi.mocked(api.listTags).mockImplementation(never);
+    renderPicker(
+      <MemoryRouter>
+        <FilterSidebar filters={DEFAULT_FILTERS} onChange={onChange} onReset={() => {}} />
+      </MemoryRouter>,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Advanced' }));
+    const mode = screen.getByRole('group', { name: 'Map filter' });
+    const segs = within(mode).getAllByRole('button');
+    expect(segs.map((b) => b.textContent)).toEqual(['Map viewport', 'Centre + radius']);
+    expectJoined(segs);
+    expect(segs[0]).toHaveClass(...CHOSEN);
+    expect(segs[0].parentElement).toHaveClass('grid', 'w-full');
+    await user.click(segs[1]);
+    expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_FILTERS, locationMode: 'center_radius' });
+  });
+});
+
+/* A lone on/off is the two-segment bar (ruling 2026-10-27); with no price bound
+ * the choice does not apply, so the bar is off and lights nothing. */
+describe('<IncludeNoPriceToggle>', () => {
+  it('is a two-segment bar, disabled with nothing lit until a price bound is set', async () => {
+    const onChange = vi.fn();
+    const { rerender } = renderPicker(<IncludeNoPriceToggle filters={DEFAULT_FILTERS} onChange={onChange} />);
+    const bar = screen.getByRole('group', { name: 'Include listings without a price' });
+    const segs = within(bar).getAllByRole('button');
+    expect(segs.map((b) => b.textContent)).toEqual(['Priced only', 'Include unpriced']);
+    expectJoined(segs);
+    for (const b of segs) {
+      expect(b).toBeDisabled();
+      expect(b).toHaveAttribute('aria-pressed', 'false');
+    }
+
+    const bounded = { ...DEFAULT_FILTERS, priceMax: 5_000_000 };
+    rerender(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <IncludeNoPriceToggle filters={bounded} onChange={onChange} />
+      </QueryClientProvider>,
+    );
+    const [priced, unpriced] = within(screen.getByRole('group', { name: 'Include listings without a price' }))
+      .getAllByRole('button');
+    expect(priced).toBeEnabled();
+    expect(priced).toHaveClass(...CHOSEN);
+    fireEvent.click(unpriced);
+    expect(onChange).toHaveBeenLastCalledWith({ ...bounded, includeNoPrice: true });
+  });
+});
+
+describe('<FilterSidebar> broker', () => {
+  it('finds a broker by name in Advanced, scopes the filters to them, and clears the scope', async () => {
+    vi.mocked(api.listCollections).mockImplementation(never);
+    vi.mocked(api.listTags).mockImplementation(never);
+    vi.mocked(brokers.searchBrokersByName).mockResolvedValue([
+      { broker_id: 527, display_name: 'Jana Nováková', firm_name: 'RE/MAX Alfa', firm_domain: 're-max.cz', cz_active_property_count: 41 } as brokers.BrokerPublic,
+    ]);
+    let latest: ListingFilters = DEFAULT_FILTERS;
+    function Host() {
+      const [filters, setFilters] = useState<ListingFilters>(DEFAULT_FILTERS);
+      return (
+        <FilterSidebar
+          onReset={() => {}}
+          filters={filters}
+          onChange={(next) => {
+            latest = next;
+            setFilters(next);
+          }}
+        />
+      );
+    }
+    renderPicker(
+      <MemoryRouter>
+        <Host />
+      </MemoryRouter>,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Advanced' }));
+    await user.type(await screen.findByRole('textbox', { name: 'Broker' }), 'Nová');
+    await user.click(await screen.findByRole('button', { name: /Jana Nováková/ }));
+    expect(latest.brokerId).toBe(527);
+    expect(latest.categoryType).toBe(DEFAULT_FILTERS.categoryType);
+
+    await user.click(await screen.findByRole('button', { name: 'Remove broker Jana Nováková' }));
+    expect(latest.brokerId).toBeNull();
+    expect(brokers.fetchBrokerDossier).not.toHaveBeenCalled();
+  });
+});
+
 describe('<FilterSidebar> location pick', () => {
   it('keeps a sidebar change made while the pick was resolving', async () => {
     vi.mocked(api.listCollections).mockImplementation(never);
@@ -51,6 +254,7 @@ describe('<FilterSidebar> location pick', () => {
       const [filters, setFilters] = useState<ListingFilters>(DEFAULT_FILTERS);
       return (
         <FilterSidebar
+          onReset={() => {}}
           filters={filters}
           onChange={(next) => {
             latest = next;
@@ -95,7 +299,7 @@ describe('<FilterSidebar> collapse', () => {
     vi.mocked(api.listTags).mockImplementation(never);
     return renderPicker(
       <MemoryRouter>
-        <FilterSidebar filters={DEFAULT_FILTERS} onChange={() => {}} onCollapse={onCollapse} />
+        <FilterSidebar filters={DEFAULT_FILTERS} onChange={() => {}} onReset={() => {}} onCollapse={onCollapse} />
       </MemoryRouter>,
     );
   };
@@ -109,6 +313,23 @@ describe('<FilterSidebar> collapse', () => {
 
     renderSidebar();
     expect(screen.queryByRole('button', { name: 'Hide filters' })).toBeNull();
+  });
+});
+
+describe('<FilterSidebar> reset', () => {
+  it('hands Reset to its own callback, never to onChange', () => {
+    vi.mocked(api.listCollections).mockImplementation(never);
+    vi.mocked(api.listTags).mockImplementation(never);
+    const onChange = vi.fn();
+    const onReset = vi.fn();
+    renderPicker(
+      <MemoryRouter>
+        <FilterSidebar filters={{ ...DEFAULT_FILTERS, priceMax: 5_000_000 }} onChange={onChange} onReset={onReset} />
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
+    expect(onReset).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
   });
 });
 

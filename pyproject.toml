@@ -5,6 +5,11 @@ description = "Daily scraper for Czech rental listings from sreality.cz"
 requires-python = ">=3.12"
 dependencies = [
   "requests>=2.32",
+  # Already installed with requests; pinned for scraper/egress.py, which reads a foreign
+  # page one socket read at a time (`HTTPResponse.read1`, urllib3 2.3+) and caps DECODED
+  # bytes, which holds only where the decoders honour `max_length` (2.6+, the
+  # CVE-2025-66471 decompression-bomb fix).
+  "urllib3>=2.6",
   "psycopg[binary]>=3.2",
   "boto3>=1.34",
   # Deterministic HTML parsing for the bazos crawler (scraper/bazos_parser.py).
@@ -31,6 +36,8 @@ dependencies = [
 dev = [
   "pytest>=8.0",
   "httpx>=0.27",
+  # CI's lint step (test.yml): the stdlib has no linter; one binary, no dependencies, pinned exactly.
+  "ruff==0.17.2",
 ]
 api = [
   "fastapi>=0.115",
@@ -46,7 +53,7 @@ api = [
   # no JWT primitive; PyJWT is the minimal, standard choice. The [crypto] extra
   # pulls `cryptography`, required to verify the project's asymmetric ES256
   # signing keys via JWKS (Phase 1 auth).
-  "pyjwt[crypto]>=2.8",
+  "pyjwt[crypto]>=2.9",
   # The property download's PDF sheet (api/property_sheet.py). The stdlib writes no
   # PDF; reportlab is BSD, pure Python, embeds subsetted TrueType fonts (the
   # base-14 PDF fonts have no Czech letters) and needs only Pillow + charset-normalizer,
@@ -71,8 +78,8 @@ geo = [
 pricestats = [
   "playwright>=1.40",
 ]
-# CLIP visual tagging (scraper/clip_tagger.py; clip_tag.yml / clip_retag.yml /
-# backfill_render_score.yml) AND the DINOv3 embedding lanes (scraper/dinov3_tagger.py;
+# CLIP visual tagging (scraper/clip_tagger.py; clip_tag.yml, which also re-tags)
+# AND the DINOv3 embedding lanes (scraper/dinov3_tagger.py;
 # docs/design/new-dedup/ENCODER-DECISION.md). Heavy (torch + transformers) — kept out
 # of the default install; ONLY the GPU workflows install it, and they install the
 # CPU/CUDA torch wheel separately first, so this extra is NOT a runtime dep of the
@@ -116,3 +123,24 @@ api = ["fonts/*.ttf", "fonts/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+# The autodedup decision modules (incremental.DECISION_MODULES): a byte edit to one moves the live engine digest,
+# so they are linted only with a real engine change. tests/test_ruff_config.py keeps this list equal to that tuple.
+extend-exclude = [
+    "frontend", "chrome-extension",
+    "autodedup/body_align.py", "autodedup/d43.py", "autodedup/dataset.py", "autodedup/decide.py",
+    "autodedup/demonstrate.py", "autodedup/development.py", "autodedup/family.py", "autodedup/features.py",
+    "autodedup/fingerprint.py", "autodedup/floor_convention.py", "autodedup/guards.py",
+    "autodedup/hazard_context.py", "autodedup/incremental.py", "autodedup/indistinguishable.py",
+    "autodedup/model.py", "autodedup/normalize.py", "autodedup/settings.py", "autodedup/stock.py",
+    "autodedup/store_score.py", "autodedup/text_facts.py",
+]
+force-exclude = true
+
+[tool.ruff.lint]
+select = ["E9", "F", "ANN"]
+ignore = ["ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN"]

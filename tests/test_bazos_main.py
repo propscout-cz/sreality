@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from scraper import bazos_main
 from scraper.bazos_main import BazosPortal
 from scraper.portal_base import ListingGoneError
@@ -90,6 +92,33 @@ def test_dry_run_records_no_scrape_run(monkeypatch):
     assert starts["n"] == 0
 
 
+@pytest.mark.parametrize("argv, narrowed", [
+    (["--dry-run"], False), (["--dry-run", "--sale-type", "prodam", "--category", "byt"], True)])
+def test_a_dispatch_narrowed_to_one_section_proves_no_orphan(monkeypatch, argv, narrowed):
+    """A one-section dispatch walks a subset of the portal: every other section's ads are in no
+    walked scope, and nominating them as orphans would page-check the whole portal."""
+    walked: list[Any] = []
+    monkeypatch.setattr(bazos_main.portal_runner, "run_index_walk",
+                        lambda portal, dry_run, **kw: walked.append(portal) or (0, {}))
+    monkeypatch.setattr(bazos_main.portal_runner, "run_detail_drain", lambda portal, dry_run, **kw: (0, {}))
+    assert bazos_main.main(argv) == 0
+    assert walked[0].narrowed is narrowed
+
+
+def test_a_registry_that_maps_no_section_fails_the_run(monkeypatch):
+    """No stand-in section: one walked section would read the rest of bazos as orphans."""
+    from dataclasses import replace
+
+    from scraper.portal import default_config
+
+    empty = replace(default_config("bazos"),
+                    categories=[{"sale_type": "prodam", "category": "projekty"}])
+    monkeypatch.setattr(bazos_main.portal_runner, "load_config", lambda *_a, **_k: empty)
+    monkeypatch.setattr(bazos_main.portal_runner, "run_index_walk",
+                        lambda *a, **k: pytest.fail("an unmapped registry must not walk"))
+    assert bazos_main.main(["--dry-run"]) == 2
+
+
 def test_main_rejects_unmapped_scope(monkeypatch):
     # argparse choices already constrain these, but the guard is belt-and-braces.
     assert bazos_main.SALE_TYPE.get("prodam") is not None
@@ -107,44 +136,26 @@ def test_portal_per_scope_labels():
     assert p.category_labels(_BYT_RENT) == ("byt", "pronajem")
 
 
-def test_nomination_is_subtype_scoped(monkeypatch):
+def test_nomination_is_subtype_scoped():
     """Rule #3: a walk that reached the portal's end nominates its unseen rows
     for a page check. bazos walks fine sections that collapse onto one category_main,
-    so the nomination is scoped to the section's subtype (NULL for byt) or one
-    section would nominate its siblings' rows every walk."""
-    nominated: dict[str, Any] = {}
-    monkeypatch.setattr(
-        bazos_main.db, "presence_candidates",
-        lambda _c, src, cm, ct, seen, *, subtype, scope_subtype:
-            nominated.update(src=src, cm=cm, ct=ct, seen=set(seen), subtype=subtype,
-                             scope_subtype=scope_subtype) or ([], 3),
-    )
-    assert _portal().presence_candidates(object(), _BYT_RENT, {"a", "b"}) == ([], 3, {"subtype": None})
-    assert nominated == {"src": "bazos", "cm": "byt", "ct": "pronajem",
-                         "seen": {"a", "b"}, "subtype": None, "scope_subtype": True}
-    nominated.clear()
-    _portal([_CHATA_SALE]).presence_candidates(object(), _CHATA_SALE, {"a"})
-    # chata collapses onto category_main=dum but is scoped to subtype=chata, so
-    # it never nominates the generic-dum (subtype NULL) section's rows.
-    assert nominated["cm"] == "dum" and nominated["subtype"] == "chata"
-    assert nominated["scope_subtype"] is True
-    # The scope travels with the candidates so the throttle, the operator
-    # override and the deferral record all name the section, not just (dum, prodej).
-    assert _portal([_CHATA_SALE]).presence_candidates(object(), _CHATA_SALE, {"a"})[2] == {"subtype": "chata"}
+    so each section's scope carries its subtype (NULL for byt) or one section would
+    nominate its siblings' rows every walk. The runner hands the scope to the query,
+    the throttle, the operator override and the deferral record alike."""
+    assert _portal().presence_scope(_BYT_RENT) == {
+        "category_main": "byt", "category_type": "pronajem", "subtype": None}
+    # chata collapses onto category_main=dum but keeps subtype=chata, so it never
+    # nominates the generic-dum (subtype NULL) section's rows.
+    assert _portal().presence_scope(_CHATA_SALE) == {
+        "category_main": "dum", "category_type": "prodej", "subtype": "chata"}
+    assert not hasattr(bazos_main.BazosPortal, "presence_candidates")
 
 
-def test_nomination_scopes_the_categories_migration_488_added(monkeypatch):
+def test_nomination_scopes_the_categories_migration_488_added():
     """The two collapsed groups migration 488 opened up: pozemek+zahrada share
     category_main=pozemek and garaz+ostatni share category_main=ostatni. The
     generic member of each is subtype NULL, the other carries its own slug — so
     neither section nominates the other's rows."""
-    nominated: dict[str, Any] = {}
-    monkeypatch.setattr(
-        bazos_main.db, "presence_candidates",
-        lambda _c, src, cm, ct, seen, *, subtype, scope_subtype:
-            nominated.update(cm=cm, subtype=subtype, scope_subtype=scope_subtype)
-            or ([], 0),
-    )
     expected = {
         _POZEMEK_SALE["category"]: ("pozemek", None),
         _ZAHRADA_SALE["category"]: ("pozemek", "zahrada"),
@@ -152,54 +163,28 @@ def test_nomination_scopes_the_categories_migration_488_added(monkeypatch):
         _GARAZ_SALE["category"]: ("ostatni", "garaz"),
     }
     for scope in (_POZEMEK_SALE, _ZAHRADA_SALE, _OSTATNI_SALE, _GARAZ_SALE):
-        section = scope["category"]
-        cm, sub = expected[section]
-        out = _portal([scope]).presence_candidates(object(), scope, {"a"})
-        assert out == ([], 0, {"subtype": sub}), section
-        assert (nominated["cm"], nominated["subtype"]) == (cm, sub), section
-        assert nominated["scope_subtype"] is True, section
+        got = _portal([scope]).presence_scope(scope)
+        assert (got["category_main"], got["subtype"]) == expected[scope["category"]], scope
 
 
-def test_active_count_scopes_the_categories_migration_488_added(monkeypatch):
+def test_active_count_counts_the_sections_own_scope(monkeypatch):
+    """The count a walk is reconciled against is its nomination scope's: one definition."""
     captured: dict[str, Any] = {}
     monkeypatch.setattr(
         bazos_main.db, "active_count",
-        lambda _c, cm, ct, *, source, subtype, scope_subtype: captured.update(
-            cm=cm, subtype=subtype) or 7,
+        lambda _c, source, scope: captured.update(source=source, **scope) or 7,
     )
     assert _portal().active_count(object(), _ZAHRADA_SALE) == 7
-    assert (captured["cm"], captured["subtype"]) == ("pozemek", "zahrada")
-    assert _portal().active_count(object(), _GARAZ_SALE) == 7
-    assert (captured["cm"], captured["subtype"]) == ("ostatni", "garaz")
+    assert captured == {"source": "bazos", "category_main": "pozemek",
+                        "category_type": "prodej", "subtype": "zahrada"}
+    assert _portal().active_count(object(), _BYT_RENT) == 7
+    assert (captured["category_main"], captured["subtype"]) == ("byt", None)
+    assert "active_count" not in bazos_main.BazosPortal.__dict__
 
 
-def test_nomination_happens_for_every_category_every_run(monkeypatch):
-    # No sweep-window throttle and no staleness rail any more: every category
-    # that reached the end nominates every run; the page check is the guard.
-    calls: list[str] = []
-    monkeypatch.setattr(
-        bazos_main.db, "presence_candidates",
-        lambda _c, src, cm, ct, seen, **kw: calls.append(ct) or ([], 1),
-    )
-    p = _portal([_BYT_SALE, _BYT_RENT])
-    assert p.presence_candidates(object(), _BYT_SALE, {"a"}) == ([], 1, {"subtype": None})
-    assert p.presence_candidates(object(), _BYT_RENT, {"b"}) == ([], 1, {"subtype": None})
-    assert calls == ["prodej", "pronajem"]
+def test_the_old_sweep_seam_is_gone():
     assert not hasattr(bazos_main.BazosPortal, "mark_inactive")
     assert not hasattr(bazos_main.BazosPortal, "mark_gone")
-
-
-def test_active_count_source_scoped(monkeypatch):
-    captured: dict[str, Any] = {}
-    monkeypatch.setattr(
-        bazos_main.db, "active_count",
-        lambda _c, cm, ct, *, source, subtype, scope_subtype: captured.update(
-            cm=cm, ct=ct, source=source, subtype=subtype,
-            scope_subtype=scope_subtype) or 42,
-    )
-    assert _portal().active_count(object(), _BYT_RENT) == 42
-    assert captured == {"cm": "byt", "ct": "pronajem", "source": "bazos",
-                        "subtype": None, "scope_subtype": True}
 
 
 class _IdxClient:
@@ -303,7 +288,7 @@ def _walk_with(monkeypatch, n_items: int, total: int | None):
 # The 5th tuple element answers "did the walk reach bazos's last page?", not
 # "did the count reconcile?". The declared total jitters while a ~50 min walk
 # runs, so a deficit is normal on a finished walk; the numeric verdict stays
-# (walk_coverage, logged + recorded in scrape_runs.by_category) as an alarm.
+# (walk_coverage, logged; scrape_runs.by_category keeps its two counts) as an alarm.
 
 
 def test_walk_category_one_row_short_still_reaches_end(monkeypatch):
@@ -504,6 +489,32 @@ def test_walk_category_barren_page_past_declared_total_is_an_end(monkeypatch):
     )
     assert client.offsets == [0, 20, 20]
     assert len(seen) == 19 and reached_end is True
+
+
+def test_walk_category_barren_page_on_the_last_page_the_count_implies_is_an_end(monkeypatch):
+    # bazos's counter over-counts by a handful (ads removed between the count and
+    # the render), so the blank sits where the count puts the LAST PAGE, not its
+    # last row: 20 served, 22 declared, offset 20 empty twice. Placed at page
+    # grain — the one rule that already places a 404 — it is bazos's end
+    # (2026-10-23/24 prodam/byt: 9,040 of 9,042, three walks held open).
+    blank = _page([], total=None, next_offset=None)
+    (seen, _c, _result_size, _pages, reached_end), client = _walk(
+        monkeypatch,
+        [_page([str(i) for i in range(20)], total=22, next_offset=20), blank, blank],
+    )
+    assert client.offsets == [0, 20, 20]
+    assert len(seen) == 20 and reached_end is True
+
+
+def test_walk_category_barren_page_pages_before_the_count_stays_ours(monkeypatch):
+    # A blank a whole page or more before the count's last page is still nobody's
+    # end: 20 served, 400 declared, the page at offset 20 empty twice.
+    blank = _page([], total=None, next_offset=None)
+    (seen, _c, _result_size, _pages, reached_end), _client = _walk(
+        monkeypatch,
+        [_page([str(i) for i in range(20)], total=400, next_offset=20), blank, blank],
+    )
+    assert len(seen) == 20 and reached_end is False
 
 
 def test_walk_category_barren_first_page_is_not_an_end(monkeypatch):

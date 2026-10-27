@@ -619,7 +619,7 @@ def test_the_pager_resolves_by_name_and_fetches_in_chunks(monkeypatch: pytest.Mo
     assert [len(p["objectIds"].split(",")) for p in pages] == [4, 4, 4, 3]
     assert all((p["outFields"], p["outSR"], p["f"]) == ("*", 3857, "geojson") for p in pages)
     assert all(headers["User-Agent"] == mod.USER_AGENT for _, _, headers in server.calls)
-    assert mod.USER_AGENT == "sreality-tracker/1.0 (+https://github.com/waiff/sreality)"
+    assert mod.USER_AGENT == "propscout/1.0 (+https://app.propscout.cz; info@propscout.cz)"
     assert sleeps == [mod.PAUSE_S] * (len(server.calls) - 1)
 
 

@@ -253,8 +253,8 @@ function Message({ text }: { text: string }) {
 
 /* One cell: its word and dot, subject, value, message, and the facts worth a glance. An OK cell
  * hides below 768 px unless the link targets it. Only the first line of a subject carries its
- * anchor (and takes focus when a link lands on it), so a repeated subject (one `worker` cell per
- * heartbeat) never duplicates an id. */
+ * anchor (and takes focus when a link lands on it), so a repeated subject never duplicates an id
+ * (each worker heartbeat is its own `worker/<name>` subject since migration 675). */
 function CellLine({
   checkKey,
   cell,
@@ -446,7 +446,7 @@ function IncidentLine({ checkKey, incidents }: { checkKey: string; incidents: He
             setSaid('');
             ack.mutate();
           }}
-          title={`Stops the reminders of this check's ${plural(waiting, 'open incident', 'open incidents')}; each still closes on a measured OK. Reading the alert among the notifications never acknowledges it.`}
+          title={`Stops the reminders and the canary e-mail for this check's ${plural(waiting, 'open incident', 'open incidents')}; each still closes on a measured OK.`}
           className="rounded-[var(--radius-xs)] border border-[var(--color-copper)] px-3 py-1 text-[0.8rem] text-[var(--color-copper)] hover:bg-[var(--color-copper-soft)] aria-disabled:cursor-wait max-md:h-11"
         >
           {ack.isPending ? 'Acknowledging…' : 'Acknowledge'}

@@ -18,7 +18,7 @@ toolkit/            pure-function analytical tools over the schema
 api/                FastAPI service exposing the toolkit (deployed to Railway)
 frontend/           Vite + React + TS database-browser UI (deployed to Railway as a second service; see frontend/README.md)
 tests/              pytest suite
-.github/workflows/  test.yml (per-push), index_walk.yml + detail_drain.yml (the sreality scrape), frontend-build.yml (typecheck + bundle-size guardrail)
+.github/workflows/  test.yml (per-push), index_walk.yml (the sreality walk; the realtime worker drains), frontend-build.yml (typecheck + bundle-size guardrail)
 ```
 
 ## Scope
@@ -34,8 +34,8 @@ tests/              pytest suite
   service with a composite `/estimate_yield` endpoint, gated by the
   caller's Supabase JWT (one credential; `API_AUTH_OPTIONAL=1` for local dev only).
 - Browser UI (`frontend/`) reads directly from the `*_public` views with
-  the Supabase anon key. Four pages: Browse (filters + map / table /
-  stats), Listing detail (with snapshot timeline), Region (Mapy.cz-powered
+  the Supabase anon key. Four pages: Browse (filters + map / stats),
+  Listing detail (with snapshot timeline), Region (Mapy.cz-powered
   location search at multiple scales — from kraj to street address — with
   per-disposition price-per-m² box plots), Health (scraper-health
   dashboard).
@@ -44,7 +44,7 @@ tests/              pytest suite
 
 - [x] Schema applied (migrations 001–014)
 - [x] Scraper code (index walk, detail fetch, parse, upsert, snapshot-on-change)
-- [x] CI workflows (`test.yml` per push, the sreality scrape — `index_walk.yml` + `detail_drain.yml` — every 15 min, frontend build)
+- [x] CI workflows (`test.yml` per push, the sreality walk — `index_walk.yml` — every 15 min, drained by the realtime worker, frontend build)
 - [x] Image mirroring to Cloudflare R2 with parallel uploads
 - [x] Failure tracking (`listing_fetch_failures`) with priority retry and give-up threshold
 - [x] Conservative/aggressive run modes
@@ -61,7 +61,7 @@ tests/              pytest suite
 - [x] UI foundation: `*_public` read views with `anon`-role grants
 - [x] **U1a database browser**: Browse / Listing / Region / Health pages; migrations 011–014 (`browse_stats`, `region_stats`, `health_summary`); deployed to Railway as a second service
 - [x] **browse-2 region search + box plots**: Mapy.cz suggest / resolve proxy, single search box at multiple scales (kraj → street), per-disposition price-per-m² box plots replacing the summary table (migration 021)
-- [x] **estimation-4 generic URL parser**: source-kind dispatcher routes any listing URL through either the deterministic sreality flow or LLM-driven per-source parsers (bezrealitky, reality.idnes, remax, best-effort generic). 7-day URL→spec cache, Mapy.cz geocoding, per-call cost audit in `llm_calls`, daily soft-warn at $5. New `/estimations/preview` endpoint returns the parsed spec without creating a run; `POST /estimations` populates `source_kind` / `parse_confidence` / `parse_confidence_per_field` / `source_html`.
+- [x] **estimation-4 generic URL parser**: source-kind dispatcher routes any listing URL through either the deterministic sreality flow or LLM-driven per-source parsers (bezrealitky, reality.idnes, remax, best-effort generic). 7-day URL→spec cache, Mapy.cz geocoding, per-call cost audit in `llm_calls`, daily soft-warn at $5. New `/estimations/preview` endpoint returns the parsed spec without creating a run; `POST /estimations` populates `source_kind` / `parse_confidence` / `parse_confidence_per_field` / `source_html`. *Retired 2026-10-20 (`docs/design/new-property-from-link.md`): a pasted link becomes an ad through `POST /listings/ingest`, and an estimation is always of an ad we hold.*
 
 See [`ROADMAP.md`](./ROADMAP.md) for the long-term plan.
 

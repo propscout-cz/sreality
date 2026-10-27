@@ -1,6 +1,6 @@
 /* The Browse "view state" contract + its two adapters.
  *
- * `<BrowseExperience>` (the filter sidebar + Map/Table/Stats + map overlays)
+ * `<BrowseExperience>` (the filter sidebar + Map/Stats + map overlays)
  * is driven by this contract instead of reading the URL directly, so the SAME
  * experience powers both the Browse page (URL-backed, shareable links) and the
  * "Explore area" modal (in-memory, seeded from a listing). The two adapters are
@@ -17,13 +17,13 @@ import { useCallback, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   DEFAULT_FILTERS,
-  bboxAround,
   fromSearchParams,
   pipelineViewFilters,
   readPresetSpec,
   toSearchParams,
   type ListingFilters,
   type MapBounds,
+  type PresetSpec,
 } from '@/lib/filters';
 import {
   DEFAULT_SORT,
@@ -39,9 +39,13 @@ import {
   useRememberedLayers,
   writeRememberedLayers,
 } from '@/lib/mapOverlays';
-import type { Disposition, FilterPreset, ListingPublic } from '@/lib/types';
+import type { FilterPreset, ListingPublic, SavedDashboard } from '@/lib/types';
+import { isStatsMarket, type StatsMarket } from '@/lib/statsMarket';
 
-export type TabKey = 'map' | 'table' | 'stats';
+export type TabKey = 'map' | 'stats';
+
+/* `?tab=` as a TabKey; anything else (an old `?tab=table` link) opens the map, never a blank page. */
+export const parseTab = (raw: string | null): TabKey => (raw === 'stats' ? 'stats' : 'map');
 
 /* Map-overlay UI knobs. NOT part of the cohort filter spec — they paint
  * layers (city pins, the price-growth choropleth, reference overlays).
@@ -61,8 +65,8 @@ export interface MapOverlayState {
    * interface guarantees: it is URL-serialised (so a Kč/m² map is a shareable
    * link), it is carried by preserveExtras (so filtering does not silently
    * reset it), and it sits OUTSIDE preset identity (so flipping it can never
-   * mark a saved preset dirty — the same reasoning rule 22 applies to the
-   * pipeline scope). The UNIT is still decided per pin, never per map. */
+   * mark a saved preset dirty: a view knob, not a filter). The UNIT is still
+   * decided per pin, never per map. */
   priceMetric: PriceMetric;
   /* Whether the pins print their price label at all (URL key `labels`, `0` hides). */
   priceLabels: boolean;
@@ -119,9 +123,30 @@ export interface BrowseViewState {
    * setFilters + setActivePresetId, because in the URL adapter those are two
    * writes against the same searchParams snapshot — the second would clobber
    * the first. Deselecting matters beyond tidiness: leaving a preset marked
-   * active after replacing its filters would render it dirty and pop the
-   * "Update preset" button, which this chip must never do. */
+   * active after replacing its filters would mark it edited, which this chip
+   * must never do. */
   loadPipelineView: () => void;
+  /* Reset: the default filters with any active preset deselected — one write, as
+   * loadPipelineView. A reset leaves the preset's view; it never edits it
+   * (operator 2026-10-27). The sort, the tab and the map knobs stay. */
+  resetFilters: () => void;
+  /* The Stats dashboard the board was loaded from (URL key `dashboard`), the
+   * preset's twin: a view knob, carried through filtering, outside preset
+   * identity. `loadDashboard` writes a dashboard's filter exactly as
+   * `loadPreset` writes a preset's (applySavedFilter) — the preset is deselected,
+   * you have left its view — or, for a dashboard without one, only the id.
+   * Pushed like a preset; `replace` when the URL already asked for it (an
+   * arrival from a link must not leave a second, filterless entry behind). */
+  activeDashboardId: string | null;
+  setActiveDashboardId: (id: string | null) => void;
+  /* The Stats tab's sample lens (`?market=sold`); Browse's filter is never touched by it. */
+  statsMarket: StatsMarket;
+  setStatsMarket: (m: StatsMarket) => void;
+  /* The Stats tab's "Malé vzorky" switch (`?small=1`): a cell under the minimum shows min, max,
+   * průměr and medián instead of the dashed mark. A view of the payload only — no refetch. */
+  statsSmall: boolean;
+  setStatsSmall: (on: boolean) => void;
+  loadDashboard: (d: SavedDashboard, opts?: { replace?: boolean }) => void;
 }
 
 /* The legacy spellings of a `layers` selection — `kraje` and the rent map's
@@ -130,7 +155,28 @@ export interface BrowseViewState {
 const LEGACY_LAYER_KEYS = ['kraje', 'rentmap', 'rentvk'];
 const OVERLAY_URL_KEYS = [
   'tab', 'sort', 'cities', 'colorby', 'layers', ...LEGACY_LAYER_KEYS, 'preset', 'pm', 'labels', 'pins',
+  'dashboard', 'market', 'small',
 ];
+
+/* A saved filter (a preset's, a dashboard's: the preset blob, lib/filters
+ * readPresetSpec) as the next Browse URL: its filters and its sort (the default
+ * deletes the key), the view knobs of `current` carried. ONE body for both
+ * loaders; each then names what it loaded. */
+export function applySavedFilter(
+  spec: PresetSpec | ListingFilters,
+  current: URLSearchParams,
+): URLSearchParams {
+  const { filters, sort } = readPresetSpec(spec);
+  const sp = toSearchParams(filters);
+  for (const key of OVERLAY_URL_KEYS) {
+    const v = current.get(key);
+    if (v != null) sp.set(key, v);
+  }
+  const saved = sort ?? sortToParam(DEFAULT_SORT);
+  if (saved === sortToParam(DEFAULT_SORT)) sp.delete('sort');
+  else sp.set('sort', saved);
+  return sp;
+}
 
 /* The Browse page adapter. Lifted verbatim from the page so its behaviour —
  * the dual serialization (filters via toSearchParams + overlay knobs carried by
@@ -139,7 +185,7 @@ export function useUrlBrowseState(): BrowseViewState {
   const [searchParams, setSearchParams] = useSearchParams();
   const filters = useMemo(() => fromSearchParams(searchParams), [searchParams]);
   const sort = useMemo(() => parseSort(searchParams.get('sort')), [searchParams]);
-  const tab = (searchParams.get('tab') ?? 'map') as TabKey;
+  const tab = parseTab(searchParams.get('tab'));
   /* The live remembered selection: a bare /browse shows what the operator last
    * chose on any map, and this page's own writes survive a navigation that drops
    * the `layers` key. */
@@ -155,6 +201,10 @@ export function useUrlBrowseState(): BrowseViewState {
     };
   }, [searchParams, rememberedLayers]);
   const activePresetId = searchParams.get('preset');
+  const activeDashboardId = searchParams.get('dashboard');
+  const marketParam = searchParams.get('market');
+  const statsMarket: StatsMarket = isStatsMarket(marketParam) ? marketParam : 'filter';
+  const statsSmall = searchParams.get('small') === '1';
 
   const preserveExtras = useCallback(
     (sp: URLSearchParams): URLSearchParams => {
@@ -240,15 +290,57 @@ export function useUrlBrowseState(): BrowseViewState {
 
   const loadPreset = useCallback(
     (p: FilterPreset) => {
-      const { filters: pf, sort: ps } = readPresetSpec(p.filter_spec);
-      const sp = preserveExtras(toSearchParams(pf));
-      const presetSort = ps ?? sortToParam(DEFAULT_SORT);
-      if (presetSort === sortToParam(DEFAULT_SORT)) sp.delete('sort');
-      else sp.set('sort', presetSort);
+      const sp = applySavedFilter(p.filter_spec, searchParams);
       sp.set('preset', p.id);
       setSearchParams(sp, { replace: false });
     },
-    [preserveExtras, setSearchParams],
+    [searchParams, setSearchParams],
+  );
+
+  const setActiveDashboardId = useCallback(
+    (id: string | null) => {
+      const sp = new URLSearchParams(searchParams);
+      if (id) sp.set('dashboard', id);
+      else sp.delete('dashboard');
+      setSearchParams(sp, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
+  const setStatsMarket = useCallback(
+    (next: StatsMarket) => {
+      const sp = new URLSearchParams(searchParams);
+      if (next !== 'filter') sp.set('market', next);
+      else sp.delete('market');
+      setSearchParams(sp, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
+  const setStatsSmall = useCallback(
+    (on: boolean) => {
+      const sp = new URLSearchParams(searchParams);
+      if (on) sp.set('small', '1');
+      else sp.delete('small');
+      setSearchParams(sp, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
+
+  /* With a filter: pushed, like a preset (Back undoes it), unless `replace`.
+   * Without one the filters stay and only the id moves, replaced like the
+   * preset id is. */
+  const loadDashboard = useCallback(
+    (d: SavedDashboard, { replace = false }: { replace?: boolean } = {}) => {
+      /* One write: the id, the dashboard's "Malé vzorky" switch and, if it carries one, its
+       * filter. Without a filter it is replaced, like the preset id. */
+      const withFilter = d.filter_spec != null;
+      const sp = withFilter ? applySavedFilter(d.filter_spec as PresetSpec, searchParams) : new URLSearchParams(searchParams);
+      if (withFilter) sp.delete('preset');
+      sp.set('dashboard', d.id);
+      if (d.show_small) sp.set('small', '1');
+      else sp.delete('small');
+      setSearchParams(sp, { replace: withFilter ? replace : true });
+    },
+    [searchParams, setSearchParams],
   );
 
   const loadPipelineView = useCallback(() => {
@@ -260,10 +352,17 @@ export function useUrlBrowseState(): BrowseViewState {
     setSearchParams(sp, { replace: false });
   }, [preserveExtras, setSearchParams]);
 
+  const resetFilters = useCallback(() => {
+    const sp = preserveExtras(toSearchParams(DEFAULT_FILTERS));
+    sp.delete('preset');
+    setSearchParams(sp, { replace: false });
+  }, [preserveExtras, setSearchParams]);
+
   return {
     filters, sort, tab, overlay, activePresetId,
     setFilters, setBounds, setSort, setTab, setOverlay, setActivePresetId, loadPreset,
-    loadPipelineView,
+    loadPipelineView, resetFilters,
+    activeDashboardId, setActiveDashboardId, loadDashboard, statsMarket, setStatsMarket, statsSmall, setStatsSmall,
   };
 }
 
@@ -275,6 +374,9 @@ export function useMemoryBrowseState(init: {
   sort?: SortSpec;
   tab?: TabKey;
   overlay?: MapOverlayState;
+  dashboard?: string | null;
+  market?: StatsMarket;
+  small?: boolean;
 }): BrowseViewState {
   const [filters, setFiltersState] = useState<ListingFilters>(init.filters);
   const [sort, setSortState] = useState<SortSpec>(init.sort ?? DEFAULT_SORT);
@@ -283,6 +385,9 @@ export function useMemoryBrowseState(init: {
     () => init.overlay ?? { ...DEFAULT_OVERLAY, layers: readRememberedLayers() },
   );
   const [activePresetId, setActivePresetId] = useState<string | null>(null);
+  const [activeDashboardId, setActiveDashboardId] = useState<string | null>(init.dashboard ?? null);
+  const [statsMarket, setStatsMarket] = useState<StatsMarket>(init.market ?? 'filter');
+  const [statsSmall, setStatsSmall] = useState<boolean>(init.small ?? false);
 
   return useMemo<BrowseViewState>(
     () => ({
@@ -300,23 +405,41 @@ export function useMemoryBrowseState(init: {
       loadPreset: (p) => {
         const { filters: pf, sort: ps } = readPresetSpec(p.filter_spec);
         setFiltersState(pf);
-        if (ps) setSortState(parseSort(ps));
+        setSortState(parseSort(ps));
       },
       loadPipelineView: () => {
         setFiltersState(pipelineViewFilters());
         setActivePresetId(null);
       },
+      resetFilters: () => {
+        setFiltersState(DEFAULT_FILTERS);
+        setActivePresetId(null);
+      },
+      /* A dashboard loads here exactly as on the page (useUrlBrowseState): its filter, if it carries one,
+       * replaces the view's (applySavedFilter's reading), and it becomes the active one. */
+      activeDashboardId,
+      setActiveDashboardId,
+      loadDashboard: (d) => {
+        if (d.filter_spec != null) {
+          const { filters: df, sort: ds } = readPresetSpec(d.filter_spec);
+          setFiltersState(df);
+          setSortState(parseSort(ds));
+          setActivePresetId(null);
+        }
+        setActiveDashboardId(d.id);
+        setStatsSmall(d.show_small ?? false);
+      },
+      statsMarket,
+      setStatsMarket,
+      statsSmall,
+      setStatsSmall,
     }),
-    [filters, sort, tab, overlay, activePresetId],
+    [filters, sort, tab, overlay, activePresetId, activeDashboardId, statsMarket, statsSmall],
   );
 }
 
 const CATEGORY_MAINS = ['byt', 'dum', 'komercni', 'pozemek', 'ostatni'] as const;
 const CATEGORY_TYPES = ['prodej', 'pronajem'] as const;
-
-/* Default viewport span when opening Browse focused on a property: the camera
- * frames ~5 km across and the cohort is "everything in that viewport". */
-export const EXPLORE_VIEWPORT_KM = 5;
 
 /* The property the operator opened "Explore area" FROM. Carried through the
  * payload from the trigger site (where it's already fully loaded), never
@@ -329,41 +452,6 @@ export interface ExploreOrigin {
   listing: ListingPublic;
   images: ImageRef[];
 }
-
-export interface ExploreAreaSeed {
-  lat: number;
-  lng: number;
-  categoryMain: string | null;
-  categoryType: string | null;
-  disposition: Disposition | null;
-  origin?: ExploreOrigin;
-}
-
-/* Build the modal's initial cohort filter from a listing: same category +
- * disposition, scoped to a ~5 km viewport around the property's coordinates.
- * Disposition is dropped when null (komerční / pozemek / unparsed). Category
- * falls back to the Browse default if the listing isn't one of the three the
- * UI supports (e.g. pozemek) — Browse can't render those anyway. */
-export const browseFiltersForArea = (
-  seed: ExploreAreaSeed,
-  km: number = EXPLORE_VIEWPORT_KM,
-): ListingFilters => {
-  const categoryMain: ListingFilters['categoryMain'] =
-    (CATEGORY_MAINS as readonly string[]).includes(seed.categoryMain ?? '')
-      ? [seed.categoryMain as ListingFilters['categoryMain'][number]]
-      : [...DEFAULT_FILTERS.categoryMain];
-  const categoryType = (CATEGORY_TYPES as readonly string[]).includes(seed.categoryType ?? '')
-    ? (seed.categoryType as ListingFilters['categoryType'])
-    : DEFAULT_FILTERS.categoryType;
-  return {
-    ...DEFAULT_FILTERS,
-    categoryMain,
-    categoryType,
-    dispositions: seed.disposition ? [seed.disposition] : [],
-    bounds: bboxAround(seed.lat, seed.lng, km),
-    locationMode: 'viewport',
-  };
-};
 
 /* The broker-explore modal's seed: the broker page's OWN Typ/Nabídka pill
  * selection (BrokerDetail.tsx), carried over so filtering the inventory table
@@ -406,6 +494,9 @@ export const browseUrlFromState = (s: {
   sort: SortSpec;
   tab: TabKey;
   overlay: MapOverlayState;
+  activeDashboardId?: string | null;
+  statsMarket?: StatsMarket;
+  statsSmall?: boolean;
 }): string => {
   const sp = toSearchParams(s.filters);
   if (sortToParam(s.sort) !== sortToParam(DEFAULT_SORT)) sp.set('sort', sortToParam(s.sort));
@@ -416,6 +507,9 @@ export const browseUrlFromState = (s: {
   if (s.overlay.priceMetric === 'per_m2') sp.set('pm', 'per_m2');
   if (!s.overlay.priceLabels) sp.set('labels', '0');
   if (s.overlay.pinLimit !== PIN_LIMIT_DEFAULT) sp.set('pins', String(s.overlay.pinLimit));
+  if (s.activeDashboardId) sp.set('dashboard', s.activeDashboardId);
+  if (s.statsMarket && s.statsMarket !== 'filter') sp.set('market', s.statsMarket);
+  if (s.statsSmall) sp.set('small', '1');
   const qs = sp.toString();
   // Concatenated rather than withQuery(): `sp` is built here key by key and may
   // one day carry a repeated key, which a Record round-trip would collapse.

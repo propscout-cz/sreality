@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
+import { useNewTabProps } from '@/lib/linkGestures';
 import { useQuery } from '@tanstack/react-query';
 import {
   fetchBrokerDossier,
@@ -10,8 +11,8 @@ import {
   type BrokerMembership,
 } from '../lib/brokers';
 import { fmtCount, fmtCzk, fmtArea, fmtRelative } from '../lib/format';
-import { portalShort } from '../lib/portals';
-import { PickButton } from '../components/controls';
+import { portalBadge } from '../lib/portals';
+import { SegmentedBar } from '../components/controls';
 import BrokerContactCard from '@/components/BrokerContactCard';
 import { useExploreBrokerModal } from '@/components/ExploreBrokerModal';
 import { advertPath, propertyPath } from '@/lib/listingUrl';
@@ -183,7 +184,9 @@ function BrokerDetailDesktop() {
  * a row can genuinely have nowhere to go. This used to pass `property_id ?? 0`,
  * which built `/listing?property=0` — a link that type-checked and 404'd. The
  * Portál column still carries `source_url`, so the operator is never stranded. */
+/* A broker's ads are a list worked through: each opens in a new tab. */
 function LocalityCell({ l }: { l: BrokerListing }) {
+  const newTab = useNewTabProps();
   const label = l.display_label ?? '—';
   const dot = !l.is_active && (
     <span
@@ -206,7 +209,7 @@ function LocalityCell({ l }: { l: BrokerListing }) {
   }
 
   return (
-    <Link to={path} className="flex items-center gap-2 hover:text-[var(--color-copper-2)]">
+    <Link to={path} {...newTab} className="flex items-center gap-2 hover:text-[var(--color-copper-2)]">
       {dot}
       <span className="truncate font-[family-name:var(--font-sans)]">{label}</span>
     </Link>
@@ -328,6 +331,7 @@ function Inventory({
   onCategoryMainChange: (v: string | null) => void;
   onCategoryTypeChange: (v: string | null) => void;
 }) {
+  const captionId = useId();
   const filtered = useMemo(
     () =>
       rows.filter(
@@ -358,8 +362,18 @@ function Inventory({
 
       {rows.length > 0 && (
         <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2">
-          <InvSegment label="Typ" options={CATEGORY_OPTIONS} value={categoryMain} onChange={onCategoryMainChange} />
-          <InvSegment label="Nabídka" options={OFFER_OPTIONS} value={categoryType} onChange={onCategoryTypeChange} />
+          {([
+            ['Typ', CATEGORY_OPTIONS, categoryMain, onCategoryMainChange],
+            ['Nabídka', OFFER_OPTIONS, categoryType, onCategoryTypeChange],
+          ] as const).map(([label, options, value, onChange]) => (
+            <div key={label} className="flex items-center gap-2">
+              <span id={`${captionId}-${label}`} className="text-[0.62rem] tracking-[0.12em] uppercase text-[var(--color-ink-4)]">
+                {label}
+              </span>
+              <SegmentedBar hug aria={{ 'aria-labelledby': `${captionId}-${label}` }} options={options} value={value}
+                onChange={onChange} />
+            </div>
+          ))}
         </div>
       )}
 
@@ -429,9 +443,9 @@ function Inventory({
                         rel="noopener noreferrer"
                         className="hover:text-[var(--color-copper)] transition-colors"
                       >
-                        {portalShort(l.source)}
+                        {portalBadge(l.source, l.source_url)}
                       </a>
-                    ) : portalShort(l.source)}
+                    ) : portalBadge(l.source)}
                   </td>
                   <td className="px-3 py-1.5 whitespace-nowrap text-[var(--color-ink-4)] font-[family-name:var(--font-sans)]">
                     {fmtRelative(l.last_seen_at)}
@@ -457,32 +471,5 @@ function MapPinGlyph() {
       />
       <circle cx="8" cy="6" r="1.6" stroke="currentColor" strokeWidth="1.2" />
     </svg>
-  );
-}
-
-function InvSegment({
-  label,
-  options,
-  value,
-  onChange,
-}: {
-  label: string;
-  options: ReadonlyArray<{ value: string | null; label: string }>;
-  value: string | null;
-  onChange: (v: string | null) => void;
-}) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-[0.62rem] tracking-[0.12em] uppercase text-[var(--color-ink-4)]">
-        {label}
-      </span>
-      <div className="flex flex-wrap gap-1">
-        {options.map((o) => (
-          <PickButton key={String(o.value)} on={o.value === value} onClick={() => onChange(o.value)}>
-            {o.label}
-          </PickButton>
-        ))}
-      </div>
-    </div>
   );
 }

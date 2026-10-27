@@ -403,7 +403,8 @@ word). Migration numbers: #1898 holds 638/639 and #1902 took 640 on main → 641
 6. Phone — **RULED: the phone may move cards on edit boards** through the stage sheet (2026-10-20); no
    "Upravit jako" on the phone property page.
 7. Notification on share — **RULED by default (operator: "proceed", 2026-10-20): one in-app row, like
-   collections** (one `share` kind).
+   collections** (one `share` kind). *Superseded 2026-10-21: the row is also pushed to the recipient's iPhone
+   from W4 ([notifications-push/PROGRAM.md](./notifications-push/PROGRAM.md) § 3.1).*
 8. `account_members.role` — **RULED: keep** (2026-10-20); no column drop in this sprint.
 9. **Co-recipients:** **do not see each other** (each sees only their own grant); the board shows no
    "who else" / list them.

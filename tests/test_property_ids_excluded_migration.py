@@ -102,9 +102,11 @@ def test_the_latest_definitions() -> None:
     verbatim (tests/test_602_browse_map_cells_world_tiles_migration.py); 605 restated both
     except the chip arms (tests/test_one_place_predicate.py). The Stats RPC's latest
     definition (626, the dashboard pivot, which keeps this file's denylist conjunct in 625's
-    WHERE) is pinned by tests/test_626_stats_dashboard.py; 630 re-pointed it at browse_list."""
-    assert latest_definition("browse_map_cells").name == "640_drop_property_ids_excluded.sql"
-    assert latest_definition("portal_status_matches").name == "597_portal_exclusion.sql"
+    WHERE) is pinned by tests/test_626_stats_dashboard.py; 630 re-pointed it at browse_list;
+    640 dropped this file's parameter, 644 swapped the condition conjunct, 648 appended the
+    energy-rating parameter."""
+    assert latest_definition("browse_map_cells").name == "662_status_filter_contract.sql"  # 661/662: the status as one parameter
+    assert latest_definition("portal_status_matches").name == "657_status_is_the_propertys.sql"
 
 
 def test_the_receipt_probes_the_two_functions() -> None:

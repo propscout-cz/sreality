@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from dataclasses import replace as dc_replace
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -22,9 +21,7 @@ from autodedup import cohort
 from autodedup.incremental import Limits, WorkItem, run_pass
 from autodedup.incremental_lane import (
     CURSOR_CHANGED,
-    CURSOR_ENTER,
     CURSOR_EVIDENCE,
-    CURSOR_FLIPPED,
     CURSOR_NEW,
     CURSOR_SCOPE,
     MAX_SCHEMA_MB,
@@ -57,7 +54,7 @@ from autodedup.incremental_store import MemoryStore
 from autodedup.model import hand_initialised
 from autodedup.incremental_store import CohortFacts
 from autodedup.store_score import storable
-from tests.autodedup.fake_pg import FakePg
+from tests.autodedup.fake_pg import EMPTY_DIGEST, EMPTY_PAYLOAD, FakePg
 from tests.autodedup.test_incremental import _calibration, _dataset, _drain, _settings, arrival_order
 
 GEN = "rt"
@@ -72,8 +69,8 @@ def _place(db: FakePg, listing_id: int, *, obec: int | None = None,
 def _calibrated(db: FakePg, generation: str = GEN) -> FakePg:
     """A SEEDED generation. A pass over an unseeded one is a green skip (W9e/R1), so every
     test about what a pass REFUSES has to seed it first."""
-    db.calibration[generation] = {"digest": "d", "n_listings": 3, "payload": {},
-                                  "artifact_url": None, "settings": {},
+    db.calibration[generation] = {"digest": EMPTY_DIGEST, "n_listings": 3,
+                                  "payload_zlib": EMPTY_PAYLOAD, "settings": {},
                                   "model_version": "hand_v1"}
     return db
 
@@ -115,7 +112,7 @@ def test_a_scope_reads_from_a_token_string_a_json_list_or_all() -> None:
     assert parse_scope("all").whole_corpus is True
     assert parse_scope("obec:1 obec:1").blocks == (ScopeBlock("obec", 1),)
     with pytest.raises(ScopeError):
-        parse_scope("okres:1234")
+        parse_scope("kraj:27")                       # E961 added `okres`; there is no kraj grain
     with pytest.raises(ScopeError):
         parse_scope("obec:not-a-number")
 
@@ -450,8 +447,8 @@ def test_a_pair_that_falls_below_the_floor_on_a_re_score_is_deleted() -> None:
 def test_the_pass_summary_carries_the_scope_the_budget_and_the_growth() -> None:
     conn = FakePg()
     conn.schema_bytes = 64 * 1_048_576
-    conn.calibration[GEN] = {"digest": "d", "n_listings": 3, "payload": {},
-                             "artifact_url": None, "settings": {},
+    conn.calibration[GEN] = {"digest": EMPTY_DIGEST, "n_listings": 3,
+                             "payload_zlib": EMPTY_PAYLOAD, "settings": {},
                              "model_version": "hand_v1"}
     conn.settings[scope_setting_key(GEN)] = [{"grain": "obec", "code": 563510}]
     out = run_incremental(lambda: conn)
@@ -529,8 +526,8 @@ def test_a_handful_of_departures_is_still_retired() -> None:
 
 def test_the_lane_stops_loudly_when_the_drift_sweep_refuses() -> None:
     conn = FakePg()
-    conn.calibration[GEN] = {"digest": "d", "n_listings": 3, "payload": {},
-                             "artifact_url": None, "settings": {},
+    conn.calibration[GEN] = {"digest": EMPTY_DIGEST, "n_listings": 3,
+                             "payload_zlib": EMPTY_PAYLOAD, "settings": {},
                              "model_version": "hand_v1"}
     conn.settings[scope_setting_key(GEN)] = [{"grain": "obec", "code": 563510}]
     for listing_id in range(1, 101):
@@ -547,8 +544,8 @@ def test_the_lane_stops_loudly_when_the_drift_sweep_refuses() -> None:
 
 def _seeded(scope_json: Any) -> FakePg:
     conn = FakePg()
-    conn.calibration[GEN] = {"digest": "d", "n_listings": 3, "payload": {},
-                             "artifact_url": None, "settings": {},
+    conn.calibration[GEN] = {"digest": EMPTY_DIGEST, "n_listings": 3,
+                             "payload_zlib": EMPTY_PAYLOAD, "settings": {},
                              "model_version": "hand_v1"}
     conn.settings[scope_setting_key(GEN)] = scope_json
     return conn
@@ -557,8 +554,8 @@ def _seeded(scope_json: Any) -> FakePg:
 def test_a_seeded_generation_with_no_scope_row_is_a_hard_error() -> None:
     """Never a silent fall back to the default: the row IS the generation's scope."""
     conn = FakePg()
-    conn.calibration[GEN] = {"digest": "d", "n_listings": 3, "payload": {},
-                             "artifact_url": None, "settings": {},
+    conn.calibration[GEN] = {"digest": EMPTY_DIGEST, "n_listings": 3,
+                             "payload_zlib": EMPTY_PAYLOAD, "settings": {},
                              "model_version": "hand_v1"}
     with pytest.raises(SystemExit) as raised:
         run_incremental(lambda: conn)

@@ -796,8 +796,8 @@ _DEGENERATE_KU_OBCE_SQL = """
        AND d.registry_version_id = (SELECT id FROM registry_versions WHERE is_current)"""
 
 # Rule 25's invariant over ACTIVE ads first written more than NEW_AD_H hours ago (publishing's
-# visible arm owns the younger ones): no answer row, or not foreign with no obec_kod (undetermined
-# and disputed count as Czech: foreign is a determination, never a default). `town_n` and
+# visible arm owns the younger ones): `town_missing_sql`, split into no answer row and a row that is
+# not foreign with no town (undetermined and disputed count as Czech). `town_n` and
 # `hidden_n` are the shared step flags; `hidden_n` (the consumer rule, negated) is a workload fact.
 # The KÚ count reads rows WITH a town only: a town-less row is the town arm's, and `NULL NOT IN`
 # would count it again whenever the degenerate set is empty. The inactive stock is not read:
@@ -807,8 +807,7 @@ _LOCATION_TOWN_COVERAGE_SQL = f"""
            count(*)                                                   AS ads_n,
            count(*) FILTER (WHERE ll.listing_id IS NULL)              AS no_row_n,
            count(*) FILTER (WHERE ll.listing_id IS NOT NULL
-                              AND ll.country_status <> 'foreign'
-                              AND ll.obec_kod IS NULL)                AS cz_no_town_n,
+                              AND {location_steps.town_missing_sql()}) AS cz_no_town_n,
            count(*) FILTER (WHERE {_LOCATION_FLAGS["has_town"]}) AS town_n,
            count(*) FILTER (WHERE NOT {_LOCATION_FLAGS["located"]})
                                                                       AS hidden_n,

@@ -39,8 +39,9 @@ from toolkit.room_taxonomy import category_main_compatible
 
 GEN = "g12"
 T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
-# Where an advert IS (listing_location's obec_kod, cast_obce_kod): Jablonec nad Nisou, the town
-# every fake advert sits in unless a test places it elsewhere (or nowhere: `where=None`).
+# Where an advert IS (listing_location's obec_kod, cast_obce_kod[, okres_kod]): Jablonec nad
+# Nisou, the town every fake advert sits in unless a test places it elsewhere (or nowhere:
+# `where=None`). A two-code place has no okres.
 JABLONEC = 563510
 IN_JABLONEC = (JABLONEC, None)
 
@@ -91,7 +92,7 @@ class FakeDb:
         self.clusters: dict[tuple[str, int], dict[str, Any]] = {}
         self.members: list[tuple[str, int, int]] = []
         self.listings: dict[int, dict[str, Any]] = {}
-        self.location: dict[int, tuple[int | None, int | None]] = {}
+        self.location: dict[int, tuple[int | None, ...]] = {}
         self.properties: dict[int, dict[str, Any]] = {}
         self.mnl: list[tuple[int, int, str]] = []
         self.verdicts: list[dict[str, Any]] = []
@@ -133,10 +134,15 @@ class FakeDb:
                                 "first_seen_at": first, "merged_into": None,
                                 "merged_at": None}
 
+    def where(self, lid: int) -> tuple[int | None, int | None, int | None]:
+        """The advert's (obec_kod, cast_obce_kod, okres_kod); all None without a row."""
+        return (*self.location.get(lid, ()), None, None, None)[:3]  # type: ignore[return-value]
+
     def listing(self, lid: int, pid: int | None, *, ct: str | None = "prodej",
                 cm: str | None = "byt",
-                where: tuple[int | None, int | None] | None = IN_JABLONEC) -> None:
-        """`where`: the advert's listing_location (obec_kod, cast_obce_kod); None = no row."""
+                where: tuple[int | None, ...] | None = IN_JABLONEC) -> None:
+        """`where`: the advert's listing_location (obec_kod, cast_obce_kod[, okres_kod]); None =
+        no row."""
         self.listings[lid] = {"property_id": pid, "category_type": ct, "category_main": cm}
         if where is None:
             self.location.pop(lid, None)
@@ -157,6 +163,8 @@ class FakeDb:
 
     # --- the statements
     def dispatch(self, sql: str, p: dict[str, Any]) -> list[tuple]:  # noqa: C901
+        if sql == property_carriers.NOTIFICATION_EVENTS_LOCK_SQL:
+            return []
         if sql == RT_LEASE_TAKE_SQL:
             held = self.lease.get(p["name"])
             if held and held["holder"] != p["holder"] and held["live"]:
@@ -183,7 +191,7 @@ class FakeDb:
                 if g != p["generation"]:
                     continue
                 row = self.listings.get(lid)
-                where = self.location.get(lid, (None, None)) if row else (None, None)
+                where = self.where(lid) if row else (None, None, None)
                 row = row or {}
                 out.append((k, lid, row.get("property_id"), row.get("category_type"),
                             row.get("category_main"), *where))
@@ -200,7 +208,7 @@ class FakeDb:
                     if lid in self.listings]
         if sql in (S.PROPERTY_LISTINGS_SQL, S.LOCK_PROPERTY_LISTINGS_SQL):
             return [(lid, r["property_id"], r["category_type"], r["category_main"],
-                     *self.location.get(lid, (None, None)))
+                     *self.where(lid))
                     for lid, r in sorted(self.listings.items())
                     if r["property_id"] in p["property_ids"]]
         if sql == S.MUST_NOT_LINK_SQL:
@@ -421,7 +429,7 @@ class FakeDb:
 
 
 def _pair_group(db: FakeDb, key: int, lids: list[int], pids: list[int], *,
-                ct: str = "prodej", where: tuple[int | None, int | None] | None = IN_JABLONEC,
+                ct: str = "prodej", where: tuple[int | None, ...] | None = IN_JABLONEC,
                 **kw: Any) -> None:
     for lid, pid in zip(lids, pids):
         if pid not in db.properties:
@@ -1129,10 +1137,12 @@ def test_the_apply_time_recheck_locks_and_re_reads_categories_and_scope() -> Non
     assert {row["cluster_key"]: row["reasons"] for row in result["skipped_at_apply"]} == {
         10: [A.SKIP_CATEGORY_TYPE, A.SKIP_CARRIES_OUT_OF_SCOPE],
         20: [A.SKIP_CARRIES_OUT_OF_SCOPE]}
-    # The properties are locked FOR UPDATE, then their listings FOR SHARE, before any check.
+    # The properties are locked FOR UPDATE, then their listings FOR SHARE, before any check; the
+    # notification-events lock comes before both (toolkit.property_carriers: never after a row lock).
     assert "for update" in S.LOCK_PROPERTIES_SQL and "for share" in S.LOCK_PROPERTY_LISTINGS_SQL
     first_lock = db.statements.index(S.LOCK_PROPERTIES_SQL)
     assert first_lock < db.statements.index(S.LOCK_PROPERTY_LISTINGS_SQL)
+    assert db.statements[first_lock - 1] == property_carriers.NOTIFICATION_EVENTS_LOCK_SQL
 
 
 @pytest.mark.parametrize("ruled", [False, True])

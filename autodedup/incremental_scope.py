@@ -10,21 +10,22 @@ AND fit the storage guard (`incremental_lane.storage_guard`). A PASS goes furthe
 scope is the one `rt_seed` PERSISTED and nothing else (`incremental_lane.pass_scope`, W9d-2);
 moving it is a re-seed.
 
-Two grains, and they are the two the cohort already uses: `obec` is
-`listing_location.obec_kod` (a town) and `cast_obce` is `cast_obce_kod` (a quarter). The
-DEFAULT is derived from `cohort.BLOCKS` rather than retyped, which is also why the assembled
-Praha negative control is absent from it: that block is a RULE evaluated at export time over
-address groups, it has no natural arrival feed, and nothing in the corpus marks a new listing
-as belonging to it.
+Three grains: the two the cohort already uses — `obec` is `listing_location.obec_kod` (a
+town) and `cast_obce` is `cast_obce_kod` (a quarter) — and `okres`, `okres_kod` (a district,
+E961), so a kraj is seeded as its dozen districts rather than its thousand towns. The DEFAULT is
+derived from `cohort.BLOCKS` rather than retyped, which is also why the assembled Praha negative
+control is absent from it: that block is a RULE evaluated at export time over address groups, it
+has no natural arrival feed, and nothing in the corpus marks a new listing as belonging to it.
 
-**Why the predicate is index-served without an index of its own.** `listing_location` carries
-a btree on `(obec_kod, granularity)` and none at all on `cast_obce_kod`, and ruling D8 forbids
-DDL on a shared table — so a feed that filtered the corpus BY the scope would seq-scan 872k
-rows every ten minutes. It doesn't: each feed reads a bounded WINDOW off its own cursor index
-and resolves the scope for that window's ids through `listing_location_pkey` (`EXPLAIN`: Index
-Scan, one probe per window row). The scope is never the driving side, so the plan cannot
-degrade as the scope list grows, and the cursor advances over the WINDOW rather than over the
-survivors — which is what keeps a feed moving through a corpus that is 99.4% out of scope.
+**Why the predicate is index-served without an index of its own.** `listing_location` carries a
+btree on `(obec_kod, granularity)` and none at all on `cast_obce_kod` or `okres_kod`, and
+ruling D8 forbids DDL on a shared table — so a feed that filtered the corpus BY the scope would
+seq-scan 872k rows every ten minutes. It doesn't: each feed reads a bounded WINDOW off its own
+cursor index and resolves the scope for that window's ids through `listing_location_pkey`
+(`EXPLAIN`: Index Scan, one probe per window row). The scope is never the driving side, so the
+plan cannot degrade as the scope list grows, and the cursor advances over the WINDOW rather
+than over the survivors — which is what keeps a feed moving through a corpus that is 99.4% out
+of scope.
 """
 
 from __future__ import annotations
@@ -34,12 +35,11 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from autodedup import cohort
 
-GRAINS: tuple[str, ...] = ("obec", "cast_obce")
+GRAINS: tuple[str, ...] = ("obec", "cast_obce", "okres")
 ALL: str = "all"
-
-# cohort (and apply scope) grain -> scope grain. `assembled` is deliberately unmapped (see the
-# module docstring).
-GRAIN_OF: dict[str, str] = {"town": "obec", "quarter": "cast_obce"}
+# cohort (and apply scope) grain -> scope grain: English there, RÚIAN here (E939). `assembled` is
+# deliberately unmapped (see the module docstring); `district` has no cohort block.
+GRAIN_OF: dict[str, str] = {"town": "obec", "quarter": "cast_obce", "district": "okres"}
 
 
 class ScopeError(ValueError):
@@ -50,6 +50,11 @@ class ScopeError(ValueError):
 class ScopeBlock:
     grain: str
     code: int
+
+    @property
+    def key(self) -> str:
+        """`grain:code`, the spelling the snapshot, the scan ledger and the walk key a block by."""
+        return f"{self.grain}:{self.code}"
 
     def as_json(self) -> dict[str, Any]:
         return {"grain": self.grain, "code": self.code}
@@ -83,12 +88,17 @@ class Scope:
     def cast_obce_codes(self) -> list[int]:
         return sorted({b.code for b in self.blocks if b.grain == "cast_obce"})
 
+    @property
+    def okres_codes(self) -> list[int]:
+        return sorted({b.code for b in self.blocks if b.grain == "okres"})
+
     def params(self) -> dict[str, Any]:
-        """The three parameters every scoped statement takes."""
+        """The four parameters every scoped statement takes."""
         return {
             "all_scope": bool(self.whole_corpus),
             "obec": self.obec_codes,
             "cast_obce": self.cast_obce_codes,
+            "okres": self.okres_codes,
         }
 
     def as_json(self) -> Any:
@@ -98,26 +108,6 @@ class Scope:
         if self.whole_corpus:
             return ALL
         return " ".join(f"{b.grain}:{b.code}" for b in self.blocks)
-
-    def contains(self, obec_kod: Any, cast_obce_kod: Any) -> bool:
-        """The same predicate the SQL spells, for the seed backfill and the replay."""
-        if self.whole_corpus:
-            return True
-        try:
-            obec = int(obec_kod) if obec_kod is not None else None
-        except (TypeError, ValueError):
-            obec = None
-        try:
-            cast_obce = int(cast_obce_kod) if cast_obce_kod is not None else None
-        except (TypeError, ValueError):
-            cast_obce = None
-        return ((obec is not None and obec in set(self.obec_codes))
-                or (cast_obce is not None and cast_obce in set(self.cast_obce_codes)))
-
-    def holds(self, listing: Any) -> bool:
-        location = getattr(listing, "location", None)
-        return self.contains(getattr(location, "obec_kod", None),
-                             getattr(location, "cast_obce_kod", None))
 
 
 # The three trial blocks, derived from the cohort rather than retyped.
@@ -142,7 +132,7 @@ CORPUS_PROJECTION_MB: int = 17000
 
 
 def parse_scope(raw: Any) -> Scope:
-    """`"obec:563510 cast_obce:490245"`, a JSON list of `{grain, code}`, or `"all"`.
+    """`"obec:563510 cast_obce:490245 okres:3209"`, a JSON list of `{grain, code}`, or `"all"`.
 
     Never a default: a caller that has nothing to pass calls `resolve_scope`, which is where
     the default and the hard error live."""
@@ -222,6 +212,65 @@ def resolve_scope(arg: Any = None, setting: Any = None) -> Scope:
     if setting is not None:
         return parse_scope(setting)
     return DEFAULT_SCOPE
+
+
+def contains(outer: ScopeBlock, inner: ScopeBlock, parents: Mapping[int, int],
+             districts: Mapping[int, Sequence[int]]) -> bool:
+    """Whether every advert `inner` lists is one `outer` lists (E964), read off the RÚIAN
+    register the walks ride: a block holds itself, an okres its obce (`districts`) and their
+    quarters, a town its quarters (`parents`: quarter -> its obec). Nothing else holds anything:
+    Praha is no okres, and there is no kraj grain."""
+    if (outer.grain, outer.code) == (inner.grain, inner.code):
+        return True
+    if outer.grain == "okres":
+        obce = {int(code) for code in districts.get(int(outer.code), ())}
+        if inner.grain == "obec":
+            return int(inner.code) in obce
+        if inner.grain == "cast_obce":
+            return parents.get(int(inner.code)) in obce
+        return False
+    return (outer.grain == "obec" and inner.grain == "cast_obce"
+            and parents.get(int(inner.code)) == int(outer.code))
+
+
+@dataclass(frozen=True, slots=True)
+class Widening:
+    """What a seed over a seeded generation would do to its scope (E964): the blocks it keeps,
+    the blocks it adds, each old block a wider one REPLACES (`replaced`: old key -> new key) and
+    the old blocks no new block holds (`dropped`). A widening drops nothing and adds something."""
+
+    kept: tuple[ScopeBlock, ...]
+    added: tuple[ScopeBlock, ...]
+    replaced: dict[str, str]
+    dropped: tuple[ScopeBlock, ...]
+
+
+def widening(old: Scope, new: Scope, parents: Mapping[int, int],
+             districts: Mapping[int, Sequence[int]]) -> Widening:
+    """`new` read against `old` (E964). `parents` holds the quarters of BOTH scopes, `districts`
+    the okresy of the new one. A block of `old` that `new` names again is kept; one a block of
+    `new` contains is replaced by it — its adverts are that block's now, so the walk lists the
+    rest of the wider block and the rows the store holds stay; one no block of `new` contains is
+    dropped, which a widening never does (a dropped block is a narrower scope: a rebuild)."""
+    if old.whole_corpus or new.whole_corpus:
+        raise ScopeError(f"{ALL!r} widens nothing: a whole-corpus generation is a rebuild "
+                         "(and a budget decision, CORPUS_PROJECTION_MB)")
+    old_keys = {block.key for block in old.blocks}
+    new_keys = {block.key for block in new.blocks}
+    kept = tuple(block for block in new.blocks if block.key in old_keys)
+    added = tuple(block for block in new.blocks if block.key not in old_keys)
+    replaced: dict[str, str] = {}
+    dropped: list[ScopeBlock] = []
+    for block in old.blocks:
+        if block.key in new_keys:
+            continue
+        holder = next((outer for outer in added
+                       if contains(outer, block, parents, districts)), None)
+        if holder is None:
+            dropped.append(block)
+        else:
+            replaced[block.key] = holder.key
+    return Widening(kept, added, replaced, tuple(dropped))
 
 
 def guard_agrees(scope: Scope, max_schema_mb: float) -> bool:

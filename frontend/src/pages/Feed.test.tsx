@@ -50,6 +50,8 @@ vi.mock('@/lib/queries', async (importOriginal) => {
 const row = (id: number, first_seen_at: string, extra: Partial<CardRow> = {}): CardRow => ({
   property_id: id,
   listing_id: id * 10,
+  lat: 50.08,
+  lng: 14.43,
   sreality_id: null,
   display_label: `Místo ${id}`,
   disposition: '2+kk',
@@ -67,6 +69,7 @@ const row = (id: number, first_seen_at: string, extra: Partial<CardRow> = {}): C
   source: 'sreality',
   source_id_native: String(id),
   mf_gross_yield_pct: null,
+  plot_area_m2: null,
   total_price_change_pct: null,
   price_change_count: 0,
   all_sources: ['sreality'],
@@ -83,6 +86,7 @@ const PRESET: FilterPreset = {
   updated_at: '2026-10-01T00:00:00Z',
   position: 0,
   color: 'sage',
+  group_id: null,
 };
 
 beforeEach(() => {
@@ -92,7 +96,7 @@ beforeEach(() => {
   vi.setSystemTime(new Date('2026-10-12T12:32:00Z'));
   localStorage.clear();
   window.scrollTo = vi.fn() as unknown as typeof window.scrollTo;
-  vi.mocked(api.listFilterPresets).mockResolvedValue({ data: [PRESET], total: 1 });
+  vi.mocked(api.listFilterPresets).mockResolvedValue({ data: [PRESET], total: 1, groups: [] });
   vi.mocked(queries.fetchListingsForCards).mockResolvedValue({
     rows: [
       row(1, '2026-10-12T09:00:00Z'),
@@ -241,10 +245,9 @@ describe('<Feed>', () => {
     expect(localStorage.getItem(FEED_QUERY_KEY)).toContain('price=');
   });
 
-  it('keeps the preset unmarked under a lens that rides outside it (rule 22)', async () => {
+  it('marks the preset left under a lens it does not store, like any filter (ruling 2026-10-22)', async () => {
     renderFeed(feedPath({ ...PRESET_FILTERS, pipeline: { set: 'in', in: [], out: [] } }));
-    expect(await screen.findByRole('button', { name: 'Vysočany byty' })).toHaveAttribute('aria-pressed', 'true');
-    /* …but it is still a filter beyond the scope. */
+    expect(await screen.findByRole('button', { name: 'Vysočany byty (upraveno)' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: 'Filtry (1 navíc)' })).toBeInTheDocument();
   });
 

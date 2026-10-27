@@ -456,7 +456,8 @@ def test_the_re_claim_has_its_own_floor_whatever_the_share(
     assert out["feeds"].get("stale") == len(ids) == out["evidence"]["stale_claimed"]
     assert out["claim_bound"]["stale"] == len(ids), "on top of the limit (E971)"
     assert reconcile.claims([[4007], [4005], [4006]], {
-        4005: (1, True), 4006: (2, True), 4007: (3, True)}, 2) == [4005, 4006], (
+        i: reconcile.Refresh(at, True, 0, 0) for i, at in ((4005, 1), (4006, 2), (4007, 3))
+    }, 2) == [4005, 4006], (
         "oldest wait first, whole groups, up to the budget")
 
 
@@ -465,19 +466,24 @@ def test_the_claim_cap_a_death_halves_bounds_the_re_claims_too(
     """The E971 review: the re-claims are most of a pass (200 beside the feeds' ~30), so the cap
     a death halves (E948) bounds them as it bounds the feeds' limit. Else every death walked
     only the feeds' share down to the floor while the 200 that grew the pass stayed, and the
-    lane died every third pass. Whole groups, oldest wait first; only those are stamped tried."""
+    lane died every third pass. Whole groups in `reconcile._rank`'s order; only those are
+    stamped tried."""
     from autodedup import incremental_lane, reconcile
 
     world = _seeded_reject_world_for_floor(tmp_path)
     _open_scope(monkeypatch)
     ids = _queued_one_advert_groups(world)
+    ages = reconcile.refreshed(world, GEN, ids, fresh_hours=reconcile.FRESH_DECISION_HOURS,
+                               engine_since=None, towns=())
+    first = reconcile.claims([[i] for i in ids], ages, 3)
+    assert len(first) == 3
     monkeypatch.setattr(incremental_lane, "CLAIM_CAP_FLOOR", 1)
     world.settings[incremental_lane.claim_cap_key(GEN)] = {"cap": 3, "reason": "test"}
     out = incremental_lane.run_incremental(lambda: world)
     assert not out["aborted"] and len(ids) > 3
     assert out["feeds"].get("stale") == 3 == out["evidence"]["stale_claimed"]
     assert out["evidence"]["stale_budget"] == 3 == out["claim_bound"]["cap"]
-    assert set(world.settings[reconcile.tried_key(GEN)]) == {str(i) for i in ids[-3:]}
+    assert set(world.settings[reconcile.tried_key(GEN)]) == {str(i) for i in first}
     assert world.settings[reconcile.budget_key(GEN)] == {"budget": reconcile.STALE_FLOOR}, (
         "the stored budget stays whole: the cap, not the record, holds the death's lesson")
 
@@ -504,7 +510,8 @@ def test_a_queued_backlog_that_cannot_fit_never_keeps_an_arrival_from_committing
     """The review of #1822's probe: nine adverts queued as two stale groups whose re-claim
     exceeds the pair budget an arrival alone fits. The re-claim rides the pass's FIRST attempt
     only, so the refused attempt's retry is the normal feeds alone and the arrival commits; both
-    groups were stamped tried ahead of the pass, so the next pass does not offer them again."""
+    groups are stamped tried as the pass ends (E973), so the next pass does not offer them
+    again."""
     from autodedup import incremental_lane, reconcile
 
     monkeypatch.setattr(incremental_lane.SqlWork, "_evidence_feed", lambda self, *a, **k: [])
@@ -574,6 +581,88 @@ def test_a_pass_that_dies_with_re_claims_pauses_them_once_and_halves_them(
         "committed with its re-claims: whole again")
     whole = incremental_lane.run_incremental(lambda: world)
     assert whole["feeds"].get("stale") == len(ids) - 6, "the rest, untried, at the full budget"
+
+
+class _Killed(BaseException):
+    """What the system does to a pass (a deploy's SIGKILL, the OOM killer): no handler runs."""
+
+
+@pytest.mark.parametrize("ending, stamped", [
+    ("committed", True), ("refused", True), ("deadline", True), ("raised", True),
+    ("shutdown", False), ("raised_in_shutdown", False), ("lease_lost", False),
+    ("killed", False)])
+def test_a_pass_stamps_its_re_claims_tried_only_once_it_ends_on_its_own_terms(
+        ending: str, stamped: bool, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """E973: the back-off stamps were written AHEAD of the pass, so the passes a train of eight
+    deploys rolled back on 2026-10-20 locked 134 groups (616 owed adverts, the head of the
+    queue) out for 6 h with none of their members refreshed. A pass now stamps the groups it
+    re-claimed once it ends on its own terms: committed, refused by the pair budget, cut by
+    its deadline or broken by a raise (E960: such a re-claim must not hold the head). A pass
+    the worker's shutdown stopped (at a checkpoint, or by cancelling its statement), whose
+    lease was lost or that the system killed stamps nothing; its count in flight still
+    pauses the next pass's re-claim and halves the one after (E941), whose head is then the
+    same groups, not an offer at once."""
+    from autodedup import incremental_lane, reconcile, rt_lease
+    from autodedup.incremental import PassDeadline, PassStopped
+
+    monkeypatch.setattr(incremental_lane.SqlWork, "_evidence_feed", lambda self, *a, **k: [])
+    _open_scope(monkeypatch)
+    world = _built_world(tmp_path)
+    ids = sorted(i for (_g, i) in world.rt_fp)
+    for row in world.rt_fp.values():
+        row["updated_at"] = world.now - timedelta(hours=reconcile.FRESH_DECISION_HOURS + 1)
+    world.settings[reconcile.redecide_key(GEN)] = [[i] for i in ids]
+    world.settings[reconcile.budget_key(GEN)] = {"budget": 4}
+    ages = reconcile.refreshed(world, GEN, ids, fresh_hours=reconcile.FRESH_DECISION_HOURS,
+                               engine_since=None, towns=())
+    taken = reconcile.claims([[i] for i in ids], ages, 4)
+    assert len(taken) == 4
+    real = incremental_lane.run_pass_bounded
+    stop = {"now": False}
+    seen: dict[str, Any] = {}
+    if ending == "refused":
+        monkeypatch.setattr(incremental_lane, "PASS_LIMITS",
+                            replace(incremental_lane.PASS_LIMITS, max_pairs=-1))
+
+    def ends(*args, **kwargs):
+        seen["tried"] = world.settings.get(reconcile.tried_key(GEN))
+        if ending in ("committed", "refused"):
+            return real(*args, **kwargs)
+        if ending in ("shutdown", "raised_in_shutdown"):
+            stop["now"] = True
+        raise {"deadline": PassDeadline("the pass ran past its deadline"),
+               "raised": RuntimeError("canceling statement due to statement timeout"),
+               "shutdown": PassStopped("the worker is shutting down"),
+               "raised_in_shutdown": RuntimeError("canceling statement due to user request"),
+               "lease_lost": rt_lease.LeaseLost("gone"),
+               "killed": _Killed()}[ending]
+
+    monkeypatch.setattr(incremental_lane, "run_pass_bounded", ends)
+    if ending in ("raised", "raised_in_shutdown", "killed"):
+        with pytest.raises((RuntimeError, _Killed)):
+            incremental_lane.run_incremental(lambda: world, stopping=lambda: stop["now"])
+    else:
+        incremental_lane.run_incremental(lambda: world, stopping=lambda: stop["now"])
+
+    assert seen["tried"] is None, "nothing is stamped before the pass"
+    if stamped:
+        assert set(world.settings[reconcile.tried_key(GEN)]) == {str(i) for i in taken}
+    else:
+        assert reconcile.tried_key(GEN) not in world.settings, "the same groups lead again"
+    budget = world.settings[reconcile.budget_key(GEN)]
+    assert budget == ({"budget": reconcile.STALE_FLOOR} if ending == "committed" else
+                      {"budget": 4} if ending == "refused" else {"budget": 4, "inflight": 4})
+    if stamped:
+        return
+    monkeypatch.setattr(incremental_lane, "run_pass_bounded", real)
+    world.lease.clear()  # a lost lease or a kill: its TTL has run out
+    paused = incremental_lane.run_incremental(lambda: world)
+    assert not paused["aborted"] and not paused["feeds"].get("stale"), "paused, not at once"
+    assert world.settings[reconcile.budget_key(GEN)] == {"budget": 2}
+    again = incremental_lane.run_incremental(lambda: world)
+    assert again["feeds"].get("stale") == 2
+    assert set(world.settings[reconcile.tried_key(GEN)]) == {str(i) for i in taken[:2]}, (
+        "the same groups lead, at half the budget")
 
 
 @pytest.mark.parametrize("why", ["scope_closed", "ledger_inert"])

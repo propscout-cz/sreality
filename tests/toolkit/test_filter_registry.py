@@ -203,13 +203,14 @@ def test_watchdog_filter_spec_fields_equal_the_watchdog_agenda() -> None:
     A declared filter missing from the spec is not an error anywhere else: pydantic's
     extra='ignore' drops the key on save, and the watchdog silently matches wider than
     the Browse view it was made from (merge f2d7b359 lost three filters that way).
-    lat/lng/radius_m are the sub-fields of the composite `location` filter.
+    `bounds` (the map box) is the sub-field of the composite `location` filter;
+    the chips are their own FilterDef.
     """
     from api.notifications import WatchdogFilterSpec
 
     declared = _agenda_ids(fr.Agenda.WATCHDOG)
     assert "location" in declared
-    spec = (set(WatchdogFilterSpec.model_fields) - {"lat", "lng", "radius_m"}
+    spec = (set(WatchdogFilterSpec.model_fields) - {"bounds"}
             - _RETIRED_BUT_DESERIALISABLE)
     declared -= {"location"}
     assert spec == declared, (
@@ -368,6 +369,45 @@ def test_agent_find_comparables_relaxed_descriptions_come_from_registry() -> Non
         assert schema["properties"][fid]["description"] == fr.description(fid)
 
 
+_PARKED_CONDITION_LEVELS = frozenset({
+    "building_condition_level_min", "building_condition_level_max",
+    "apartment_condition_level_min", "apartment_condition_level_max",
+})
+
+
+def test_the_parked_condition_levels_reach_no_surface() -> None:
+    """Condition scoring is parked (rule 14, operator ruling 2026-10-20): its frozen 1-5 levels
+    are no filter on any agenda, agent tool, cohort, request model or SPA surface. Only the
+    Watchdog spec keeps the four keys, so an old saved blob deserialises — and RETIRED_FILTERS
+    makes any value raise rather than widen."""
+    from dataclasses import fields as dataclass_fields
+
+    from api import schemas
+    from api.agent import _FCR_OVERRIDE_FIELDS, _build_tool_registry
+    from api.notifications import WatchdogFilterSpec
+    from toolkit.comparables import ComparableFilters
+
+    assert _PARKED_CONDITION_LEVELS <= set(filter_compiler.RETIRED_FILTERS)
+    assert _PARKED_CONDITION_LEVELS <= set(WatchdogFilterSpec.model_fields)
+    assert not _PARKED_CONDITION_LEVELS & set(fr.REGISTRY)
+    assert not _PARKED_CONDITION_LEVELS & fr.UNITLESS_NUMERIC_FILTERS
+    for agenda in fr.Agenda:
+        assert not _PARKED_CONDITION_LEVELS & _agenda_ids(agenda), agenda
+    for name, tool in _build_tool_registry().items():
+        assert not _PARKED_CONDITION_LEVELS & set(tool.input_schema.get("properties", {})), name
+    assert not _PARKED_CONDITION_LEVELS & {name for name, _ in _FCR_OVERRIDE_FIELDS}
+    assert not _PARKED_CONDITION_LEVELS & {f.name for f in dataclass_fields(ComparableFilters)}
+    for model in (schemas.FindComparablesIn, schemas.ComputeMarketVelocityIn,
+                  schemas.CreateEstimationIn, schemas.EstimateYieldIn):
+        assert not _PARKED_CONDITION_LEVELS & set(model.model_fields), model.__name__
+    spa = Path(__file__).resolve().parents[2] / "frontend" / "src"
+    for rel in ("lib/filterRegistry.generated.ts", "lib/filters.ts", "lib/queries.ts",
+                "lib/filterLayout.ts", "lib/types.ts", "pages/WatchdogEdit.tsx",
+                "pages/WatchdogManage.tsx"):
+        text = (spa / rel).read_text(encoding="utf-8")
+        assert "condition_level" not in text and "ConditionLevel" not in text, rel
+
+
 # --- codegen drift --------------------------------------------------------
 
 
@@ -497,7 +537,7 @@ def test_sql_kind_snapshot() -> None:
     from collections import Counter
 
     counts = Counter(fr.sql_kind(f) for f in fr.all_filters())
-    assert counts == {"gte": 19, "lte": 11, "eq": 9, "any": 7, "enum_or_unknown": 2, None: 32}
+    assert counts == {"gte": 17, "lte": 9, "eq": 9, "any": 6, "enum_or_unknown": 3, None: 32}
     numeric_eq = {
         f.id for f in fr.all_filters()
         if f.type in (fr.FilterType.INT, fr.FilterType.FLOAT) and fr.sql_kind(f) == "eq"
@@ -505,6 +545,19 @@ def test_sql_kind_snapshot() -> None:
     assert numeric_eq == {"category_sub_cb"}
     column_backed = {f.id for f in fr.all_filters() if f.pg_column is not None}
     assert fr.COMPILED_BY_HOOK <= column_backed
+
+
+def test_the_condition_chip_is_the_filters_and_never_the_canons() -> None:
+    """"Neuvedeno" is a chip on the condition_match filter, as on furnished and ownership.
+    RED by: the sentinel reaching the canon (a stored value, a Stats key, the scraper's
+    vocabulary) or the chip leaving the filter."""
+    canon = fr.COLUMN_CANONICAL_VALUES["condition"]
+    chips = [o.value for o in fr.REGISTRY["condition_match"].enum_values or ()]
+    assert chips == [*canon, fr.UNKNOWN_FILTER_VALUE]
+    assert fr.sql_kind(fr.REGISTRY["condition_match"]) == "enum_or_unknown"
+    assert fr.UNKNOWN_FILTER_VALUE not in canon
+    assert all(o.value != fr.UNKNOWN_FILTER_VALUE for o in fr.CONDITION_OPTIONS)
+    assert fr.label_cs("condition", fr.UNKNOWN_FILTER_VALUE) is None
 
 
 def test_filter_to_json_carries_sql_kind() -> None:

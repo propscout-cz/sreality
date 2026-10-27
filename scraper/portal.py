@@ -24,6 +24,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
+from scraper import stop
+
 LOG = logging.getLogger(__name__)
 
 
@@ -337,9 +339,10 @@ def deadline_reached(deadline: float | None) -> bool:
 
     A page loop that returns True here MUST report reached_end=False — a deadline
     is a stop of OURS (`OUR_STOPS`), and rule #3 lets only a walk that reached the
-    portal's end nominate the rows it did not see.
+    portal's end nominate the rows it did not see. A stop signal (`scraper.stop`) is
+    the deadline arriving early: every page loop stops on it without a branch of its own.
     """
-    return deadline is not None and time.monotonic() >= deadline
+    return stop.requested() or (deadline is not None and time.monotonic() >= deadline)
 
 
 IndexVerdict = Literal["new", "changed", "unchanged"]
@@ -397,8 +400,9 @@ class PortalConfig:
 
     - supports_complete_walk: can the portal prove a near-complete index walk?
       Posture only since 2026-09-07, with no writer since Health wave 4 (the coverage gate
-      retired; the column goes in wave 9) — it
-      gates no delisting; `walk_reached_end` gates nomination (rule #3).
+      retired; Health wave 9 kept the column, the Scrapers page still reads it, and the
+      scraper track owns it) — it gates no delisting; `walk_reached_end` gates nomination
+      (rule #3).
     - categories: the per-portal list of category descriptors the runner walks.
       Shape is portal-specific (the Portal object interprets it).
     - split_threshold: deep-pagination cap above which a category is walked
@@ -452,7 +456,7 @@ _DEFAULTS: dict[str, PortalConfig] = {
         # so ads filed there were never enqueued — silently, for months). The fine
         # sections collapse onto one category_main (chata+dum, the four commercial,
         # pozemek+zahrada, garaz+ostatni), so the presence nomination is
-        # subtype-scoped (BazosPortal.presence_candidates). Mirrors the DB registry.
+        # subtype-scoped (BazosPortal.presence_scope). Mirrors the DB registry.
         # Still out by choice: "projekty" (Nové projekty — developer marketing that
         # also appears under byt/dum; no other portal has such a category) and the
         # rent-only "podnajem"/"ubytovani" (roommate + short-term lodging ads, not
@@ -465,12 +469,12 @@ _DEFAULTS: dict[str, PortalConfig] = {
                         "pozemek", "zahrada", "garaz", "ostatni")
         ],
         split_threshold=None,
-        # detail_rate 0.6 is the politeness ceiling (req/s); 4 workers share that
-        # one limiter, so they only overlap per-listing DB latency, not
-        # raise the request rate. max_detail_per_run high so the drain's
+        # 0.7 req/s is bazos's ONE politeness budget, shared by its walk, drain and
+        # probe through the rate ledger (migration 676); 4 workers share it too, so
+        # they only overlap per-listing DB latency, not raise the request rate. max_detail_per_run high so the drain's
         # --max-seconds budget governs, not a tight claim cap (migration 168).
         limits=PortalLimits(
-            index_rate=0.5, detail_workers=4, detail_rate=0.6,
+            index_rate=0.7, detail_workers=4, detail_rate=0.7,
             max_detail_per_run=1500,
         ),
     ),
@@ -536,7 +540,7 @@ _DEFAULTS: dict[str, PortalConfig] = {
         # (cached) and keeps the id-prefix slice for its category. Complete-walk
         # via AGENDA-GRAIN delisting: maxima reports a per-AGENDA total, so the
         # walk nominates the whole agenda's (af ≡ category_type) unseen rows once it
-        # reaches the agenda's end (db.presence_candidates, category_main=None),
+        # reaches the agenda's end (its presence_scope names category_type alone),
         # not the per-(cm,ct) slice. See maxima_main.
         supports_complete_walk=True,
         categories=[
@@ -564,8 +568,8 @@ _DEFAULTS: dict[str, PortalConfig] = {
         # title-derived slice for its category. Complete-walk via AGENDA-GRAIN
         # delisting: remax reports a per-AGENDA total, so the walk nominates the whole
         # agenda's (sale ≡ category_type) unseen rows once it reaches the agenda's end
-        # (db.presence_candidates, category_main=None), not the title-derived per-(cm,ct) slice. See
-        # remax_main.
+        # (its presence_scope names category_type alone), not the title-derived
+        # per-(cm,ct) slice. See remax_main.
         supports_complete_walk=True,
         categories=[
             {"category_main": "byt",      "category_type": "prodej",   "sale": 1},
@@ -632,8 +636,6 @@ _DEFAULTS: dict[str, PortalConfig] = {
             {"sale_type": "pronajem", "category": "byty"},
             {"sale_type": "prodej",   "category": "rodinne-domy"},
             {"sale_type": "pronajem", "category": "rodinne-domy"},
-            {"sale_type": "prodej",   "category": "chaty-chalupy"},
-            {"sale_type": "pronajem", "category": "chaty-chalupy"},
             {"sale_type": "prodej",   "category": "pozemky"},
             {"sale_type": "pronajem", "category": "pozemky"},
             {"sale_type": "prodej",   "category": "komercni-prostory"},
@@ -678,6 +680,24 @@ _DEFAULTS: dict[str, PortalConfig] = {
         limits=PortalLimits(
             index_rate=1.0, detail_workers=4, detail_rate=1.5,
             max_detail_per_run=2000,
+        ),
+    ),
+    "web": PortalConfig(
+        source="web",
+        # The tenth portal: any site an operator pastes (scraper.web_main). It has no
+        # index, so ONE agenda-wide descriptor stands for the whole portal: the walk sees
+        # nothing by construction, reaches its end (declared total 0: coverage reads
+        # `complete`) and, its descriptor having no scope, nominates every active ad as
+        # an orphan (the `indexless` seam, rule 3).
+        supports_complete_walk=True,
+        categories=[{"agenda": "all"}],
+        split_threshold=None,
+        # shared_rate_limiter: the drain's deadline binds inside a chunk only through the
+        # ledger, and a foreign site must never hold the worker's drain lane past it. Two
+        # workers; the per-HOST pacing (one page load per 10 s) lives in web_client.
+        limits=PortalLimits(
+            index_rate=1.0, detail_workers=2, detail_rate=1.0,
+            shared_rate_limiter=True,
         ),
     ),
 }

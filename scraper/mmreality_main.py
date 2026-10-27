@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import re
 from typing import Any
 
 from scraper import db, portal_runner
@@ -48,6 +47,7 @@ from scraper.portal import (
     walk_reached_end,
 )
 from scraper.portal_base import ListingGoneError
+from scraper.portal_identity import native_id
 from scraper.portal_runner import DrainItem
 from scraper.rate_limit import RateLimiter
 
@@ -71,11 +71,8 @@ SALE_TYPE: dict[str, str] = {"prodej": "prodej", "pronajem": "pronajem"}
 # the rows it did not see for a page check and the drain's fetch decides, so a
 # single walk-miss costs one fetch, never a live listing.
 
-# The site's own <title> suffix, in both encodings a body can carry it.
-_REF_ID_RE = re.compile(r"/nemovitosti/(\d+)")
 
-
-def _trusted_detail_ref(native_id: str, detail_ref: str | None) -> str | None:
+def _trusted_detail_ref(listing_id: str, detail_ref: str | None) -> str | None:
     """Drop a detail_ref whose own id contradicts the row's.
 
     An mmreality detail URL carries the listing id, so a disagreement means the
@@ -90,11 +87,10 @@ def _trusted_detail_ref(native_id: str, detail_ref: str | None) -> str | None:
     """
     if not detail_ref:
         return None
-    match = _REF_ID_RE.search(detail_ref)
-    if match and match.group(1) != str(native_id):
+    ref_id = native_id(SOURCE, detail_ref)
+    if ref_id and ref_id != str(listing_id):
         LOG.warning(
-            "DETAIL id=%s ignoring detail_ref that points at %s",
-            native_id, match.group(1),
+            "DETAIL id=%s ignoring detail_ref that points at %s", listing_id, ref_id,
         )
         return None
     return detail_ref
@@ -164,6 +160,8 @@ class MmRealityPortal(portal_runner.PortalDefaults):
     registry config; one category per (sale type, property type) index."""
 
     source = SOURCE
+    walk_every_s = 6 * 3600
+    walk_timeout_s = 60 * 60
     index_rate = 1.0
 
     def __init__(self, config: PortalConfig, *, max_pages: int | None = None) -> None:
@@ -436,9 +434,9 @@ def main(argv: list[str] | None = None) -> int:
         else config.limits.max_detail_per_run
     )
 
-    # Omitting both flags runs the index walk then the detail drain in one job
-    # (the pilot's combined run, bounded by --max-pages / --max-detail). The
-    # split flags exist so a large backfill can be cadence-split like sreality.
+    # The schedule walks only (--index-only) and the realtime worker drains; omitting
+    # both flags runs both phases, an ad-hoc combined run bounded by --max-pages /
+    # --max-detail.
     rc = 0
     if not args.drain_only:
         rc = portal_runner.run_phase(

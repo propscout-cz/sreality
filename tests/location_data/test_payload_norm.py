@@ -214,7 +214,7 @@ def _detail_profiles() -> dict[str, VolatileProfile]:
 def test_every_portal_has_a_profile_and_the_version_is_stamped() -> None:
     sources = {
         "sreality", "bazos", "bezrealitky", "idnes", "mmreality",
-        "remax", "ceskereality", "realitymix", "maxima",
+        "remax", "ceskereality", "realitymix", "maxima", "web",
     }
 
     assert sources == set(contract_profiles().versions)

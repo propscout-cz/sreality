@@ -171,6 +171,8 @@ def test_attach_stragglers_births_and_recomputes_them_in_one_transaction() -> No
     assert order[birth] == " ".join(NEW_SINGLETONS_SQL.split())
     assert conn.executed[birth][1] == {"ids": [11, 12]}
     assert conn.executed[recompute][1] == {"ids": [101, 102]}
+    mirror = next(i for i, s in enumerate(order) if "INSERT INTO dirty_broker_listings" in s)
+    assert recompute < mirror and conn.executed[mirror][1] == {"ids": [101, 102]}
     assert not any("ST_DWithin" in s or "INSERT INTO dirty_properties" in s
                    or "source_id_native" in s or "lock_timeout" in s for s in order)
 
@@ -201,6 +203,32 @@ def test_attach_is_bounded_and_browse_syncs_its_births(monkeypatch: Any) -> None
     assert "ORDER BY" not in select[0]
     assert synced == [[101]]
     assert rps.STRAGGLER_BATCH == 2000
+
+
+def test_attach_brings_its_births_current_through_properties_changed(monkeypatch: Any) -> None:
+    """A birth's after-step is THE after-step of the drain and the identity writers (recompute,
+    Browse patch, broker queue), never a hand-rolled copy: it runs once over the born ids, inside
+    the birth's transaction and under the batch ceiling the attach has always had."""
+    import scripts.recompute_property_stats as rps
+
+    calls: list[list[int]] = []
+
+    def after_step(c: Any, ids: Any) -> None:
+        calls.append(list(ids))
+        c.executed.append(("AFTER-STEP", None))
+
+    monkeypatch.setattr(rps, "properties_changed", after_step)
+    conn = _TxnMarkingConn([_STRAGGLERS, _BORN])
+
+    assert _attach_stragglers(conn) == 2
+
+    order = _sqls(conn)
+    assert calls == [[101, 102]]
+    birth = next(i for i, s in enumerate(order) if "INSERT INTO properties" in s)
+    ceiling = order.index(f"SET LOCAL statement_timeout = '{rps._BATCH_STATEMENT_TIMEOUT}'")
+    assert order[0] == "BEGIN" and birth < ceiling < order.index("AFTER-STEP")
+    assert order[-1] == "COMMIT"
+    assert not any("WITH batch AS" in s or "browse_list" in s for s in order)
 
 
 class _DrainCur:
@@ -357,20 +385,22 @@ def _run_main(monkeypatch: Any, argv: list[str]) -> list[str]:
     monkeypatch.setattr(
         rps, "_drain_dirty",
         lambda c, bs, cutoff, renew=None: calls.append("drain") or 0)
+    monkeypatch.setattr(rps, "_settle_fresh", lambda c, *, renew: calls.append("settle") or 0)
     monkeypatch.setattr(rps, "_reconcile_childless", lambda c: 0)
     monkeypatch.setattr(rps, "_max_property_id", lambda c: 0)
     assert rps.main() == 0
     return calls
 
 
-def test_incremental_runs_attach_then_drain(monkeypatch: Any) -> None:
-    """--incremental (the */5 cron) runs attach -> dirty drain, in that order,
+def test_incremental_runs_attach_then_drain_then_settle(monkeypatch: Any) -> None:
+    """--incremental (the */5 cron) runs attach -> dirty drain -> settle, in that order,
     O(changes) each pass."""
-    assert _run_main(monkeypatch, ["--incremental"]) == ["attach", "drain"]
+    assert _run_main(monkeypatch, ["--incremental"]) == ["attach", "drain", "settle"]
 
 
 def test_full_mode_skips_the_dirty_drain(monkeypatch: Any) -> None:
-    """The daily full sweep recomputes every property instead of draining the queue."""
+    """The daily full sweep recomputes every property instead of draining the queue, and never
+    settles: the stamp is the incremental pass's alone."""
     calls = _run_main(monkeypatch, [])
     assert calls == ["attach"]
 
@@ -393,17 +423,17 @@ def test_every_resolved_sql_constant_has_valid_placeholders():
 
     The fakes above record SQL without parsing it (which is why a prose `~2%` in
     `_RECOMPUTE_BATCH_SQL` once shipped green and broke property maintenance +
-    every merge). This module is uniquely exposed: `_RECOMPUTE_ONE_SQL` and
-    `_RECOMPUTE_SCOPED_SQL` are derived from `_RECOMPUTE_BATCH_SQL` at import
-    time, so they can't be statically inspected — only validated after they
-    resolve. The repo-wide AST guard (tests/test_sql_placeholders.py) covers the
+    every merge). This module is uniquely exposed: `_RECOMPUTE_SCOPED_SQL` is
+    derived from `_RECOMPUTE_BATCH_SQL` at import time, so it can't be
+    statically inspected — only validated after it resolves. The repo-wide AST guard (tests/test_sql_placeholders.py) covers the
     base constants; this covers the derived family that actually executes.
     """
     import scripts.recompute_property_stats as rps
 
     split = pytest.importorskip("psycopg._queries")._split_query
     names = [n for n in dir(rps) if n.endswith("_SQL") and isinstance(getattr(rps, n), str)]
-    assert {"_RECOMPUTE_BATCH_SQL", "_RECOMPUTE_ONE_SQL", "_RECOMPUTE_SCOPED_SQL"} <= set(names)
+    assert {"_RECOMPUTE_BATCH_SQL", "_RECOMPUTE_SCOPED_SQL", "_SETTLE_SQL"} <= set(names)
+    assert not hasattr(rps, "_RECOMPUTE_ONE_SQL") and not hasattr(rps, "recompute_one")
     for name in names:
         split(getattr(rps, name).encode())  # raises ProgrammingError on a bad `%`
 
@@ -443,10 +473,7 @@ def test_run_incremental_pass_skips_when_lease_held():
 
     conn = _FakeConn(script=_lock_script(acquired=False))
     stats = run_incremental_pass(conn, batch_size=500)
-    assert stats == {
-        "skipped": True, "attached": 0,
-        "estimations_bound": 0, "recomputed": 0,
-    }
+    assert stats == {"skipped": True, "attached": 0, "recomputed": 0, "settled": 0}
     # NOTHING ran: no attach, no recompute — and no release either
     # (we never held the lease; clearing it would release someone else's).
     sqls = _sqls(conn)
@@ -474,6 +501,77 @@ def test_run_incremental_pass_unlocks_on_failure():
     with pytest.raises(RuntimeError):
         run_incremental_pass(conn, batch_size=500)
     assert _find(conn, "SET holder = NULL")
+
+
+_SETTLED = (lambda s: s.startswith("WITH settled AS"), [(41,), (42,)])
+
+
+def test_the_pass_settles_last_and_brings_each_stamped_property_into_browse_at_once():
+    """After the drain: the lease renewed first, then the stamp ALONE in its transaction under the
+    drain's lock-wait ceiling, bound to the engine's own generation and hold reason (it row-locks
+    what it stamps, and the engine's merges wait 5 s at most), then the Browse patch alone
+    (`sync_browse_list`: no recompute, no row lock) over exactly the stamped ids."""
+    from autodedup.incremental import EVIDENCE_HOLD_REASON, GENERATION
+    from scripts.recompute_property_stats import (_RECOMPUTE_SCOPED_SQL, _SETTLE_SQL,
+                                                  run_incremental_pass)
+
+    conn = _FakeConn(script=[*_lock_script(acquired=True), _SETTLED])
+    stats = run_incremental_pass(conn, batch_size=500)
+    assert stats == {"skipped": False, "attached": 2, "recomputed": 0, "settled": 2}
+    sqls = _sqls(conn)
+    at = sqls.index(" ".join(_SETTLE_SQL.split()))
+    assert max(i for i, s in enumerate(sqls) if "FROM dirty_properties" in s) < at
+    assert "property_maintenance_lease" in sqls[at - 3]
+    assert sqls[at - 2:at] == ["SET LOCAL statement_timeout = '10min'",
+                               "SET LOCAL lock_timeout = '5s'"]
+    assert conn.executed[at][1] == {"generation": GENERATION, "held": EVIDENCE_HOLD_REASON}
+    assert conn.executed[at + 1] == ("DELETE FROM browse_list WHERE property_id = ANY(%s)", ([41, 42],))
+    assert "INSERT INTO browse_list" in sqls[at + 2]
+    assert not any(" ".join(_RECOMPUTE_SCOPED_SQL.split()) == q for q in sqls[at:])
+
+
+def test_a_failed_settle_is_logged_and_the_pass_still_returns(caplog: Any) -> None:
+    import psycopg
+
+    from scripts.recompute_property_stats import run_incremental_pass
+
+    class _SettleFails(_FakeConn):
+        def cursor(self):
+            cur = super().cursor()
+            orig = cur.execute
+
+            def execute(sql, params=None):
+                if sql.lstrip().startswith("WITH settled AS"):
+                    raise psycopg.errors.LockNotAvailable("lock timeout")
+                return orig(sql, params)
+
+            cur.execute = execute  # type: ignore[method-assign]
+            return cur
+
+    conn = _SettleFails(script=_lock_script(acquired=True))
+    with caplog.at_level("WARNING", logger="recompute_property_stats"):
+        stats = run_incremental_pass(conn, batch_size=500)
+    assert stats == {"skipped": False, "attached": 2, "recomputed": 0, "settled": 0}
+    assert "MAINTENANCE settle failed" in caplog.text and "lock timeout" in caplog.text
+    assert _find(conn, "SET holder = NULL")
+
+
+def test_the_settle_statement_reads_the_engine_and_locks_only_fresh_properties():
+    """The cap bounds it (no LIMIT); ONE query judges and locks, so the row lock lands only on the
+    rows that settle; the engine's tables are read, never locked, and its generation and hold
+    reason are bound, never spelled."""
+    import scripts.recompute_property_stats as rps
+    from toolkit.publication import CAP_SQL
+
+    flat = " ".join(rps._SETTLE_SQL.split())
+    assert f"p.first_seen_at >= now() - {CAP_SQL}" in flat and "LIMIT" not in flat
+    assert flat.count("FOR ") == 1 and "FOR NO KEY UPDATE OF p SKIP LOCKED" in flat
+    assert flat.index("autodedup.cluster_members") < flat.index("FOR NO KEY UPDATE"), "judge first, lock last"
+    assert flat.count("WITH ") == 1 and "cand" not in flat
+    assert all(t in flat for t in ("autodedup.rt_fp", "autodedup.pairs",
+                                   "autodedup.cluster_members"))
+    assert "'rt'" not in flat and "evidence_pending" not in flat
+    assert flat.endswith("WHERE p.id = s.id AND p.settled_at IS NULL RETURNING p.id")
 
 
 # --- lease heartbeat + bounded wait (the 2026-08-06 strand incident) ----------
@@ -588,8 +686,8 @@ def test_full_sweep_renews_lease_every_batch(monkeypatch: Any) -> None:
     assert _run_sweep(monkeypatch, conn, []) == 0
     grants = [s for s, _ in conn.executed
               if "property_maintenance_lease" in s and "RETURNING" in s]
-    # initial acquisition + one renewal per batch
-    assert len(grants) == 1 + 2
+    # initial acquisition + one renewal per batch + one before each batch's straggler attach
+    assert len(grants) == 1 + 2 + 2
     # complete walk → the swept-range clear over its whole range
     assert _dirty_clears(conn) == [{"cutoff": "CUTOFF", "lo": 1, "hi": 4001}]
     # ...and the property_sweep artifact stamp the jobs check reads (O(1) liveness signal),
@@ -607,10 +705,86 @@ def test_full_sweep_renews_lease_every_batch(monkeypatch: Any) -> None:
 
 def test_the_full_sweep_patches_no_browse_row(monkeypatch: Any) -> None:
     """It recomputes every property, and the */15 wholesale rebuild is already that job's
-    read-model half: only the dirty drain and the identity writers patch Browse."""
+    read-model half: only births (the attach), the dirty drain, the settle step and the identity
+    writers patch Browse. Nor does it stamp `settled_at`: settling is the incremental pass's."""
     conn = _SweepConn(max_id=4000)
     assert _run_sweep(monkeypatch, conn, []) == 0
-    assert not any("browse_list" in s for s in _sqls(conn))
+    assert not any("browse_list" in s or "settled_at" in s for s in _sqls(conn))
+
+
+def test_the_full_sweep_births_stragglers_after_every_batch(monkeypatch: Any, caplog: Any) -> None:
+    """The sweep holds the maintenance lease for its whole run (13-59 min a day) and the worker's
+    lane skips meanwhile, so an ad written during it waited for its property until the sweep let
+    go (10 min median, 16 max, measured 2026-10-20). Each batch is now followed by one attach on
+    the lease the sweep already holds, renewed first; the run's births are counted in its log."""
+    import scripts.recompute_property_stats as rps
+
+    def attach(c: Any, **_: Any) -> int:
+        c.executed.append(("ATTACH", None))
+        return 1
+
+    monkeypatch.setattr(rps, "_attach_stragglers", attach)
+    conn = _SweepConn(max_id=6000)  # 3 batches at the default size
+    with caplog.at_level("INFO", logger="recompute_property_stats"):
+        assert _run_sweep(monkeypatch, conn, []) == 0
+
+    def kind(s: str) -> str | None:
+        if "property_maintenance_lease" in s and "RETURNING" in s:
+            return "lease"
+        if "WITH batch AS" in s:
+            return "batch"
+        return "attach" if s == "ATTACH" else None
+
+    steps = [k for k in (kind(s) for s in _sqls(conn)) if k]
+    assert steps == ["lease", "attach",
+                     "lease", "batch", "lease", "attach",
+                     "lease", "batch", "lease", "attach",
+                     "lease", "batch", "lease", "attach"]
+    assert "attached=4 " in caplog.text
+
+
+def test_a_failed_birth_never_stops_the_backstop_sweep(monkeypatch: Any, caplog: Any) -> None:
+    """A per-batch attach that fails (a lock or deadlock against the broker lane, say) only
+    delays births the worker's lane makes once the lease is free; the sweep logs it and goes on
+    to finish and stamp its cycle instead of dying mid-cycle without a cursor."""
+    import scripts.recompute_property_stats as rps
+
+    calls = {"n": 0}
+
+    def attach(c: Any, **_: Any) -> int:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise ValueError("deadlock detected")
+        return 0
+
+    monkeypatch.setattr(rps, "_attach_stragglers", attach)
+    conn = _SweepConn(max_id=6000)  # 3 batches at the default size
+    with caplog.at_level("WARNING", logger="recompute_property_stats"):
+        assert _run_sweep(monkeypatch, conn, []) == 0
+
+    assert len([s for s in _sqls(conn) if "WITH batch AS" in s]) == 3
+    assert calls["n"] == 4
+    assert "RECOMPUTE sweep.attach failed after batch=1-2001: deadlock detected" in caplog.text
+    assert [s[0] for s in _stamps(conn)] == ["property_sweep"]
+
+
+def test_a_lost_lease_during_a_birth_still_stops_the_sweep(monkeypatch: Any) -> None:
+    import scripts.recompute_property_stats as rps
+
+    calls = {"n": 0}
+
+    def attach(c: Any, **_: Any) -> int:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise rps._LeaseLost("maintenance lease lost mid-work")
+        return 0
+
+    monkeypatch.setattr(rps, "_attach_stragglers", attach)
+    conn = _SweepConn(max_id=6000)
+    with pytest.raises(rps._LeaseLost):
+        _run_sweep(monkeypatch, conn, [])
+    assert len([s for s in _sqls(conn) if "WITH batch AS" in s]) == 1
+    assert _stamps(conn) == []
 
 
 # monotonic: started_at, _wait_lease entry anchor, batch-1 deadline check, batch-1 per-batch
@@ -991,12 +1165,13 @@ def test_batch_retry_renews_the_lease_on_every_attempt(monkeypatch: Any) -> None
     grants = [i for i, s in enumerate(order)
               if "property_maintenance_lease" in s and "RETURNING" in s]
     recomputes = [i for i, s in enumerate(order) if "WITH batch AS" in s]
-    # acquisition + one renewal per ATTEMPT (2), not per loop iteration (1)
-    assert len(grants) == 3
+    # acquisition + one renewal per ATTEMPT (2), not per loop iteration (1), then
+    # the batch's straggler attach renews once after it
+    assert len(grants) == 4
     # the failed attempt never recorded its statement; the replay did, and its
     # own renewal came first
     assert len(recomputes) == 1
-    assert grants[-1] < recomputes[-1]
+    assert len([g for g in grants if g < recomputes[-1]]) == 3
     # the sweep still completed normally on the replay
     assert [s[0] for s in _stamps(conn)] == ["property_sweep"]
 
@@ -1161,45 +1336,6 @@ def test_workflow_timeout_covers_the_budget_ceiling() -> None:
     assert default_budget <= rps._MAX_BUDGET_SECONDS
 
 
-# --- late-binding estimation identity resolution ------------------------------
-
-
-def test_incremental_pass_binds_pending_estimation_listing_ids():
-    """The pass stamps input_listing_id on runs created before their subject
-    listing was scraped. Every estimation read path now keys solely on that
-    surrogate, so an unbound run belongs to no listing page until this runs."""
-    from scripts.recompute_property_stats import run_incremental_pass
-
-    conn = _FakeConn(script=_lock_script(acquired=True))
-    stats = run_incremental_pass(conn, batch_size=500)
-    assert stats["skipped"] is False
-    assert "estimations_bound" in stats
-    found = _find(conn, "UPDATE estimation_runs")
-    assert found is not None, "late-binding UPDATE did not run"
-    sql = found[0]
-    assert "SET input_listing_id = cand.listing_id" in sql
-    # One-way and idempotent: the IS NULL guard is repeated in the UPDATE's own
-    # WHERE, not only in the CTE, so a bound run can never be re-pointed.
-    assert sql.count("er.input_listing_id IS NULL") >= 2
-    # Never stamps a NULL over a NULL.
-    assert "cand.listing_id IS NOT NULL" in sql
-
-
-def test_late_binding_is_not_fuzzy():
-    """A wrong attribution silently credits a paid estimate to the wrong flat,
-    which is strictly worse than leaving it unattached. The resolver matches the
-    unique sreality_id only — no URL arm, no normalisation, no ILIKE, and no
-    ORDER BY ... LIMIT 1 'pick the best' tie-break."""
-    import scripts.recompute_property_stats as rps
-
-    conn = _FakeConn(script=_lock_script(acquired=True))
-    rps.run_incremental_pass(conn, batch_size=500)
-    sql = _find(conn, "UPDATE estimation_runs")[0]
-    assert "l.sreality_id = er.input_sreality_id" in sql
-    for banned in ("ILIKE", "input_url", "similarity(", "lower("):
-        assert banned not in sql, f"late binding must not use {banned}"
-
-
 # --- one property, one voice (migrations 561 + 588) --------------------------------------
 
 MIGRATIONS = Path(__file__).resolve().parent.parent / "migrations"
@@ -1320,10 +1456,9 @@ def test_one_newest_ad_date_per_offered_portal_and_the_two_portal_lists():
 
 def test_a_tenth_portal_is_offered_only_with_its_read_model_lines():
     """MS19 (migration 590): a PORTAL_OPTIONS code is a portal Browse can order by only when
-    the latest browse_projection projects its date (after the two lists and the ad count, in
-    PORTAL_OPTIONS order) and the latest rebuild_browse_list builds and renames its partial
-    index. With the properties column above, a tenth portal needs all three before it can be
-    offered."""
+    the latest browse_projection projects its date and the latest rebuild_browse_list builds
+    and renames its partial index. With the properties column above, a portal needs all three
+    before it can be offered — the tenth (`web`) got them from migration 649."""
     from tests.migration_defs import latest_definition
     from tests.test_browse_read_path_guardrail import _latest_migration_defining
     from tests.test_location_w3_projection import _columns, _sql
@@ -1332,12 +1467,21 @@ def test_a_tenth_portal_is_offered_only_with_its_read_model_lines():
     codes = [o.value for o in PORTAL_OPTIONS]
     view = _latest_migration_defining("browse_projection").name
     columns = _columns(_sql(view), "browse_projection")
-    # One contiguous block, in PORTAL_OPTIONS order; later columns may follow it (584's recipe
-    # appends every new projection column LAST, so the block cannot be pinned to the end).
+    # 590's nine are one contiguous block after the two lists and the ad count. Every portal
+    # since is appended LAST (584's recipe: browse_list can only grow at its end, and
+    # sync_browse_list's insert is positional), so each later date follows the block, in
+    # PORTAL_OPTIONS order, with other appended columns allowed between.
+    first, later = codes[:9], codes[9:]
     at = columns.index("all_sources")
-    assert columns[at:at + len(codes) + 3] == [
-        "all_sources", "active_sources", "source_count", *(f"newest_ad_at_{c}" for c in codes)]
-    rebuild = " ".join(latest_definition("rebuild_browse_list").read_text(encoding="utf-8").split())
+    assert columns[at:at + len(first) + 3] == [
+        "all_sources", "active_sources", "source_count", *(f"newest_ad_at_{c}" for c in first)]
+    after = columns[at + len(first) + 3:]
+    assert [c for c in after if c.startswith("newest_ad_at_")] == [
+        f"newest_ad_at_{c}" for c in later]
+    # The function's own body: a migration's gates may name the index too (649's do).
+    text = " ".join(latest_definition("rebuild_browse_list").read_text(encoding="utf-8").split())
+    at = text.lower().index("create or replace function public.rebuild_browse_list(")
+    rebuild = text[at:text.index("$function$;", at)]
     for c in codes:
         assert (f"create index browse_list_next_newest_ad_at_{c}_idx on browse_list_next "
                 f"(category_main, category_type, newest_ad_at_{c} desc, property_id desc) "
@@ -1371,8 +1515,6 @@ def test_the_canonical_handover_is_stamped_for_the_price_alerts():
     figures follow the LOCATION advert (ruling R7/R8, migration 636): their stamp clears when
     it changes, a reset property gaining one included (its pointer is NULL), and never on a
     canonical handover alone."""
-    import inspect
-
     from api import notifications as nf
     from scripts.recompute_property_stats import _RECOMPUTE_BATCH_SQL
 
@@ -1385,9 +1527,9 @@ def test_the_canonical_handover_is_stamped_for_the_price_alerts():
         "THEN NULL ELSE p.city_proximity_computed_at END")
     assert ("add column if not exists repr_since timestamptz not null default '-infinity'"
             in " ".join(MIGRATION_561.read_text().split()))
-    assert "ps.scraped_at > p.repr_since" in inspect.getsource(nf._recent_price_drops)
-    assert "st.scraped_at > m.repr_since" in inspect.getsource(nf.match_monitored_collections_once)
-    assert "p.repr_since" in nf._MONITORED_CTE
+    # Both notification producers read the one canonical-ad fragment (notifications W2a).
+    assert "ps.scraped_at > p.repr_since" in nf._CANONICAL_PRICE_STEPS
+    assert nf._MONITOR_PRICE_SQL.startswith(f"WITH {nf._CANONICAL_PRICE_STEPS}")
 
 
 def test_a_property_with_no_ads_is_reset_to_no_ads_once():
@@ -1441,12 +1583,11 @@ def test_the_reconcile_counts_the_properties_it_reset():
 
 
 def test_every_recompute_variant_carries_the_whole_statement():
-    """The one/scoped variants are derived from the batch SQL by narrowing the
-    batch CTE; if that ever becomes a copy, they must not lose a rule."""
+    """The scoped variant is derived from the batch SQL by narrowing the batch
+    CTE; if that ever becomes a copy, it must not lose a rule."""
     import scripts.recompute_property_stats as rps
 
-    for sql in (rps._RECOMPUTE_BATCH_SQL, rps._RECOMPUTE_ONE_SQL,
-                rps._RECOMPUTE_SCOPED_SQL):
+    for sql in (rps._RECOMPUTE_BATCH_SQL, rps._RECOMPUTE_SCOPED_SQL):
         for rule in ("property_canonical_listings", "lineage AS (", "city_proximity_computed_at",
                      "newest_ad_at_", "active_sources"):
             assert rule in sql

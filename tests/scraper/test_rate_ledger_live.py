@@ -23,7 +23,7 @@ import psycopg
 import pytest
 
 from scraper import db
-from scraper.rate_ledger import _ENSURE_SQL, _LEASE_SQL
+from scraper.rate_ledger import _ENSURE_SQL, _LEASE_SQL, DEFAULT_LEASE_N
 
 _DB_URL = os.environ.get("TEST_DATABASE_URL")
 
@@ -101,6 +101,25 @@ def test_an_unbounded_lease_is_granted_however_far_out_its_window_is(conn, sourc
         "FROM portal_rate_state WHERE source = %s", (source,),
     ).fetchone()[0]
     assert ahead == pytest.approx(3605.0, abs=5.0)
+
+
+@pytest.mark.parametrize("interval_ms", [1667, 2000])
+def test_a_full_batch_at_a_slow_portals_spacing_is_granted(conn, source, interval_ms):
+    """RED by: binding `n` and `interval_ms` uncast. psycopg sends 20 and 2000 as smallint, so
+    their product (40,000) overflowed it and every 20-slot bazos lease raised, falling back
+    to local pacing for the rest of the run (#1852)."""
+    delay_s, slot_s, granted = conn.execute(_LEASE_SQL, {
+        "source": source, "interval_ms": interval_ms, "n": DEFAULT_LEASE_N, "decay": 0.9,
+        "max_wait_s": None,
+    }).fetchone()
+    assert granted is True
+    assert delay_s == pytest.approx(0.0, abs=1.0)
+    assert slot_s == pytest.approx(interval_ms / 1000.0)
+    ahead = conn.execute(
+        "SELECT extract(epoch FROM next_slot_at - now())::float8 "
+        "FROM portal_rate_state WHERE source = %s", (source,),
+    ).fetchone()[0]
+    assert ahead == pytest.approx(DEFAULT_LEASE_N * interval_ms / 1000.0, abs=1.0)
 
 
 def test_released_claims_keep_their_attempts(conn, source):

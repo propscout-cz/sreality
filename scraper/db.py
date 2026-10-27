@@ -11,8 +11,7 @@ import math
 import os
 import random
 import time
-import uuid
-from collections.abc import Callable, Collection, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from functools import lru_cache
@@ -89,6 +88,10 @@ LISTING_COLUMNS: tuple[str, ...] = (
     # assembles it in scraper.sreality_url) — a stored fact read everywhere and
     # reconstructed nowhere. Out of every content hash (identity, not content).
     "source_url",
+    # The advertiser's own number for the offer, as the ad prints it (migration 667) —
+    # the attribute contract's `ad_reference` cell. Out of the content hash like the two
+    # identity columns above: a reference names the offer, it is not the offer's content.
+    "ad_reference",
 )
 
 # Postgres type for each LISTING_COLUMN: the jsonb_to_recordset column spec of
@@ -124,6 +127,7 @@ _LISTING_COLUMN_PGTYPE: dict[str, str] = {
     "description": "text",
     "published_at": "timestamptz",
     "source_url": "text",
+    "ad_reference": "text",
 }
 assert set(_LISTING_COLUMN_PGTYPE) == set(LISTING_COLUMNS), (
     "_LISTING_COLUMN_PGTYPE drifted from LISTING_COLUMNS"
@@ -893,100 +897,126 @@ def _touch_chunk_by_id(cur: Any, chunk: list[int]) -> int:
     return cur.rowcount or 0
 
 
+# Rule #3's one definition of an ad awaiting nomination, over a relation aliased `l` (source,
+# source_id_native): the drain does not hold it (a queue row: waiting, claimed or given up) and
+# finished nothing on it within delist_policy.RECHECK_THROTTLE before `at`. Without the two, a page
+# that errors keeps its old last_seen_at, sorts first forever and takes every verify slot. The walks
+# nominate by it at now(); the Health check's `unnominated` counts by it at the walk's start.
+_NOMINABLE_TEMPLATE = """NOT EXISTS (
+        SELECT 1 FROM listing_detail_queue q
+        WHERE q.source = l.source AND q.native_id = l.source_id_native)
+  AND NOT EXISTS (
+        SELECT 1 FROM detail_queue_completions c
+        WHERE c.source = l.source AND c.native_id = l.source_id_native
+          AND c.completed_at > {at} - interval '{hours} hours')"""
+
+
+def nominable_predicate(at: str = "now()") -> str:
+    """Rule #3's "awaiting nomination" judged at the SQL instant `at` (RECHECK_THROTTLE in hours)."""
+    hours = int(delist_policy.RECHECK_THROTTLE.total_seconds() // 3600)
+    return _NOMINABLE_TEMPLATE.format(at=at, hours=hours)
+
+
+NOMINABLE_PREDICATE = nominable_predicate()
+
+
+# A nomination scope: the columns a walked unit's rows hold, a column left out meaning any value
+# ({"category_main": "byt", "category_type": "prodej"}; bazos adds its subtype, the agenda portals
+# drop category_main). One spelling for the units (presence_candidates) and for their complement,
+# the orphans (orphan_candidates), so the two cannot disagree on a NULL label.
+SCOPE_COLUMNS = ("category_main", "category_type", "subtype")
+
+
+def scope_sql(scope: Mapping[str, Any]) -> tuple[str, list[Any]]:
+    """`scope` as a predicate over `l` (`=` or `IS NULL`, so it stays indexable) and its parameters."""
+    unknown = set(scope) - set(SCOPE_COLUMNS)
+    if unknown:
+        raise ValueError(f"not a scope column: {sorted(unknown)}")
+    terms = [f"l.{c} IS NULL" if scope[c] is None else f"l.{c} = %s" for c in SCOPE_COLUMNS if c in scope]
+    return " AND ".join(terms) or "true", [scope[c] for c in SCOPE_COLUMNS if scope.get(c) is not None]
+
+
+def orphan_sql(scopes: Sequence[Mapping[str, Any]]) -> tuple[str, list[Any]]:
+    """In no scope of `scopes`. A NULL label makes `=` NULL, not false, so the union is coalesced."""
+    parts = [scope_sql(s) for s in scopes]
+    covered = " OR ".join(f"({sql})" for sql, _ in parts) or "false"
+    return f"NOT coalesce({covered}, false)", [p for _, params in parts for p in params]
+
+
 def presence_candidates(
     conn: psycopg.Connection,
     source: str,
-    category_main: str | None,
-    category_type: str,
+    scope: Mapping[str, Any],
     seen: set[Any],
     *,
     seen_key: str = "native",
-    subtype: str | None = None,
-    scope_subtype: bool = False,
 ) -> tuple[list[tuple[str, str | None, int | None]], int]:
-    """The active rows of this (source, category) that a COMPLETE walk did not
-    see, oldest sighting first, plus the scope's active row count.
+    """The active rows of one walked scope that a walk which reached the portal's end did not
+    see, oldest sighting first, plus the scope's active row count (rule #3: absence NOMINATES,
+    the page decides, so the query carries no rail -- a wrong nomination costs one fetch).
 
-    Rule #3 since 2026-09-07: index absence NOMINATES, it no longer delists. A
-    row the walk did not see is a candidate; the detail drain then visits its
-    page, and the page decides -- a positive gone signal (404/410, a redirect
-    off the listing, the portal's own "no longer active" text) flips it once a
-    second verdict confirms it (`delist_policy.gone_confirmed`), a live
-    page refreshes it, an error leaves it for the next pass. That is why this
-    query carries none of the old sweep's rails (no min_unseen_hours, no refusal):
-    a wrong nomination costs one fetch, not a live listing.
-
-    `seen_key` names what the walk's seen set holds: portal-native string ids
-    (`source_id_native`, every crawler portal) or sreality's integer ids
-    (`sreality_id`). `scope_subtype` narrows to `subtype` for portals whose fine
-    index sections collapse onto one category_main (bazos: chata + dum -> dum),
-    so one section's walk cannot nominate its siblings' rows every run.
-
-    `category_main=None` scopes by category_type alone: the agenda portals
-    (remax, maxima) walk one mixed sale/rent index whose completeness is proved
-    per AGENDA, and a listing's title-derived category can differ from its
-    detail-derived one, so nominating per category would nominate rows the
-    agenda walk did see.
-
-    Returns (native_id, detail_ref, price) triples: detail_ref is the stored
-    source_url for crawler portals and None for sreality (its fetch derives the
-    URL from the id); price is carried so the re-enqueue does not blank the
-    queue's observed price.
+    `seen_key` names what the seen set holds: `source_id_native` strings (every crawler) or
+    sreality's integer `sreality_id`s. Returns (native_id, detail_ref, price) triples: the price
+    rides along so the re-enqueue does not blank the queue's observed price.
     """
-    key_col = "sreality_id" if seen_key == "sreality_id" else "source_id_native"
-    ids = [x for x in seen if x is not None]
-    if seen_key == "sreality_id":
-        ids = [int(x) for x in ids]
-    else:
-        ids = [str(x) for x in ids]
-    if not ids:
-        # An empty bound array makes `<> ALL('{}')` true for every row: the whole scope.
-        raise ValueError(f"presence_candidates {source}: empty seen set would nominate the whole scope")
-    sub_clause = "\n              AND subtype IS NOT DISTINCT FROM %s" if scope_subtype else ""
-    cm_clause = "\n              AND category_main = %s" if category_main is not None else ""
-    scope_params: list[Any] = [source]
-    if category_main is not None:
-        scope_params.append(category_main)
-    scope_params.append(category_type)
-    if scope_subtype:
-        scope_params.append(subtype)
-    recheck_h = int(delist_policy.RECHECK_THROTTLE.total_seconds() // 3600)
+    return _nominate(conn, source, *scope_sql(scope), seen, seen_key)
+
+
+def orphan_candidates(
+    conn: psycopg.Connection,
+    source: str,
+    scopes: Sequence[Mapping[str, Any]],
+    seen: set[Any] | None,
+    *,
+    seen_key: str = "native",
+) -> tuple[list[tuple[str, str | None, int | None]], int]:
+    """presence_candidates for the active rows in NO walked scope (a label no unit walks: a
+    NULL, an auction type the portal's walk does not ask for). `seen` is the whole walk's;
+    None nominates without an exclusion, for an indexless portal only (its walk sees nothing)."""
+    return _nominate(conn, source, *orphan_sql(scopes), seen, seen_key)
+
+
+def _count(conn: psycopg.Connection, source: str, where: str, params: list[Any]) -> int:
     with conn.cursor() as cur:
         cur.execute(
             f"""
             SELECT count(*)
-            FROM listings
-            WHERE is_active = true
-              AND source = %s{cm_clause}
-              AND category_type = %s{sub_clause}
-            """,
-            tuple(scope_params),
-        )
-        active_rows = int(cur.fetchone()[0])
-        # Two exclusions keep the oldest-unseen order from jamming. A row that
-        # already has a queue row (waiting, claimed, or given up after five
-        # failures) is in the drain's hands, and a row the drain finished
-        # within delist_policy.RECHECK_THROTTLE was just checked; without these,
-        # a page that errors keeps its old last_seen_at, sorts first forever and
-        # eats every throttle slot while the rows behind it are never nominated.
-        cur.execute(
-            f"""
-            SELECT {key_col}::text, source_url, price_czk
             FROM listings l
             WHERE l.is_active = true
-              AND l.source = %s{cm_clause}
-              AND l.category_type = %s{sub_clause}
-              AND l.{key_col} <> ALL(%s)
-              AND NOT EXISTS (
-                    SELECT 1 FROM listing_detail_queue q
-                    WHERE q.source = l.source AND q.native_id = l.{key_col}::text)
-              AND NOT EXISTS (
-                    SELECT 1 FROM detail_queue_completions c
-                    WHERE c.source = l.source AND c.native_id = l.{key_col}::text
-                      AND c.completed_at > now() - interval '{recheck_h} hours')
+              AND l.source = %s
+              AND {where}
+            """,
+            (source, *params),
+        )
+        row = cur.fetchone()
+    return int(row[0]) if row else 0
+
+
+def _nominate(
+    conn: psycopg.Connection, source: str, where: str, params: list[Any],
+    seen: set[Any] | None, seen_key: str,
+) -> tuple[list[tuple[str, str | None, int | None]], int]:
+    key_col = "sreality_id" if seen_key == "sreality_id" else "source_id_native"
+    unseen, ids = "", ()
+    if seen is not None:
+        bound = [int(x) if seen_key == "sreality_id" else str(x) for x in seen if x is not None]
+        if not bound:
+            # An empty bound array makes `<> ALL('{}')` true for every row: the whole scope.
+            raise ValueError(f"presence_candidates {source}: empty seen set would nominate the whole scope")
+        unseen, ids = f"\n              AND l.{key_col} <> ALL(%s)", (bound,)
+    active_rows = _count(conn, source, where, params)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT l.{key_col}::text, l.source_url, l.price_czk
+            FROM listings l
+            WHERE l.is_active = true
+              AND l.source = %s
+              AND {where}{unseen}
+              AND {NOMINABLE_PREDICATE}
             ORDER BY l.last_seen_at ASC NULLS FIRST, l.id
             """,
-            tuple(scope_params) + (ids,),
+            (source, *params, *ids),
         )
         rows = cur.fetchall()
     return (
@@ -1197,52 +1227,32 @@ def index_summary_native(
     return out
 
 
-def active_count(
-    conn: psycopg.Connection,
-    category_main: str,
-    category_type: str,
-    *,
-    source: str = "sreality",
-    subtype: str | None = None,
-    scope_subtype: bool = False,
-) -> int:
-    """Current active-listing count for one (source, category_main, category_type).
+def active_count(conn: psycopg.Connection, source: str, scope: Mapping[str, Any]) -> int:
+    """The active ads of one nomination scope: what its walk is reconciled against."""
+    return _count(conn, source, *scope_sql(scope))
 
-    `scope_subtype=True` narrows to `subtype` (NULL-safe) so the count matches a
-    subtype-scoped `presence_candidates` nomination (bazos fine sections)."""
-    sub_clause = "\n              AND subtype IS NOT DISTINCT FROM %s" if scope_subtype else ""
-    params: list[Any] = [source, category_main, category_type]
-    if scope_subtype:
-        params.append(subtype)
-    with conn.cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT count(*) FROM listings
-            WHERE is_active = true
-              AND source = %s
-              AND category_main = %s
-              AND category_type = %s{sub_clause}
-            """,
-            tuple(params),
-        )
-        row = cur.fetchone()
-        return int(row[0]) if row else 0
+
+# Active ads, then the inactive residue (an inactive ad, or an image whose listing
+# row is missing). Each tier walks images_pending_actionable_idx newest-first and
+# stops at its LIMIT; one ORDER BY over a computed tier key sorted the whole
+# pending set instead (#2011).
+_PENDING_IMAGE_TIERS = ("l.is_active = true", "l.is_active IS NOT TRUE")
+
+PendingImage = tuple[int, int, int | None, str, str | None, str | None, int | None]
 
 
 def pending_image_downloads(
     conn: psycopg.Connection,
     max_attempts: int = 5,
     limit: int = 1000,
-    active_only: bool = False,
     *,
-    shard: tuple[int, int] | None = None,
     sources: tuple[str, ...] | None = None,
-) -> list[tuple[int, int, int | None, str, str | None, str | None, int | None]]:
+) -> list[PendingImage]:
     """Return (image_id, listing_id, sequence, sreality_url, category_main,
     category_type, sreality_id) rows that still need download.
 
     BOTH ids are returned because the drain needs each for a different job:
-    `listing_id` keys the R2 object and the shard (it survives Gate 2), while
+    `listing_id` keys the R2 object (it survives Gate 2), while
     `sreality_id` is what the taken-down classification path needs — a
     freshness check is a sreality portal fetch, so it is inherently legacy-keyed
     and simply does not apply to a listing without one.
@@ -1252,69 +1262,45 @@ def pending_image_downloads(
     images terminally classified as unavailable (unavailable_reason IS
     NOT NULL — e.g. the parent listing was taken down).
 
-    With `active_only=True`, restrict to images whose parent listing is
-    `is_active = true` — the backfill workflow's prioritisation knob,
-    so the cap-bounded slice goes to listings users can still browse.
-
-    `shard=(k, n)` partitions the pending queue by the PARENT LISTING —
-    `hash(listing_id) mod n == k` — so N parallel drainer jobs each own a
-    disjoint slice (horizontal scale-out) AND a single listing's photos all
-    fall in ONE shard. Sharding on `image_id` instead would stripe a
-    listing's photos across shards that drain at slightly different rates,
-    so a recent listing renders half its photos until the slowest shard
-    catches up; keying on the listing makes a listing flip to complete in
-    one burst. The id is HASHED (not raw modulo) because sreality ids are
-    multiples of 4, so `sreality_id % n` would pile everything into one
-    shard. `sources` restricts to specific `listings.source` values
-    (per-CDN scoping). Both are pure selection predicates; the download
-    path stays source-agnostic.
-
-    Ordering puts active listings first (when both kinds are in scope)
-    and newest within each tier so freshly-discovered active images
-    drain before old inactive ones. The category columns come from the
-    parent listing so the image-download phase can attribute its
-    results per (category_main, category_type) on the scrape_runs row.
+    Active listings come first, newest first; the inactive residue fills
+    whatever of `limit` the active tier leaves, so it drains only when the
+    active queue is short. `sources` restricts to specific `listings.source`
+    values (per-CDN scoping) — a pure selection predicate; the download path
+    stays source-agnostic. The category columns come from the parent listing
+    so the image-download phase can attribute its results per
+    (category_main, category_type) on the scrape_runs row.
     """
-    where_active = "AND l.is_active = true" if active_only else ""
-    order_clause = (
-        "ORDER BY i.id DESC"
-        if active_only
-        else "ORDER BY (l.is_active IS TRUE) DESC NULLS LAST, i.id DESC"
-    )
-    # Append predicates conditionally so the default call's params stay
-    # exactly (max_attempts, limit) — tests assert that shape.
     extra = ""
     params: list[Any] = [max_attempts]
     if sources:
-        extra += " AND l.source = ANY(%s)"
+        extra = " AND l.source = ANY(%s)"
         params.append(list(sources))
-    if shard is not None:
-        k, n = shard
-        # Hash the listing id (not the image id) so a listing's photos all land
-        # in one shard, and hash it (not raw modulo) because sreality ids are
-        # multiples of 4 — raw `sreality_id % n` collapses everything into one
-        # shard. `& 2147483647` clears the sign bit (no abs() overflow risk).
-        # Shards on the SURROGATE (R2): post-Gate-2 images.sreality_id is NULL
-        # for a non-sreality listing, hashint8(NULL) is NULL, and `NULL % n = k`
-        # is NULL — so those images would match NO shard and never drain at all.
-        extra += " AND (hashint8(i.listing_id) & 2147483647) %% %s = %s"
-        params.extend([n, k])
-    params.append(limit)
-    sql = f"""
-        SELECT i.id, i.listing_id, i.sequence, i.sreality_url,
-               l.category_main, l.category_type, i.sreality_id
-        FROM images i
-        LEFT JOIN listings l ON l.id = i.listing_id
-        WHERE i.storage_path IS NULL
-          AND i.unavailable_reason IS NULL
-          AND i.download_attempts < %s
-          {where_active}{extra}
-        {order_clause}
-        LIMIT %s
-    """
+    rows: list[PendingImage] = []
     with conn.cursor() as cur:
-        cur.execute(sql, tuple(params))
-        return list(cur.fetchall())
+        for tier in _PENDING_IMAGE_TIERS:
+            remaining = limit - len(rows)
+            if remaining <= 0:
+                break
+            cur.execute(
+                f"""
+                SELECT i.id, i.listing_id, i.sequence, i.sreality_url,
+                       l.category_main, l.category_type, i.sreality_id
+                FROM images i
+                LEFT JOIN listings l ON l.id = i.listing_id
+                WHERE i.storage_path IS NULL
+                  AND i.unavailable_reason IS NULL
+                  AND i.download_attempts < %s
+                  AND {tier}{extra}
+                ORDER BY i.id DESC
+                LIMIT %s
+                """,
+                (*params, remaining),
+            )
+            # Two statements, two snapshots: an ad that flips between them would
+            # put its image in both tiers.
+            seen = {r[0] for r in rows}
+            rows.extend(r for r in cur.fetchall() if r[0] not in seen)
+    return rows
 
 
 # Provenance columns ride the SAME write as the bytes (migration 496), but only
@@ -1359,138 +1345,6 @@ def mark_image_stored(
     params.append(image_id)
     with conn.transaction(), conn.cursor() as cur:
         cur.execute(_MARK_IMAGE_STORED_SQL.format(extra=extra), tuple(params))
-
-
-_INVALIDATE_DERIVED_SIGNALS_SQL = """
-    UPDATE images
-    SET phash = NULL,
-        clip_tagged_at = NULL
-    WHERE id = ANY(%s::bigint[])
-    """
-
-# The DINOv3 table is created under a pg_available_extensions guard (migration
-# 480), so it can legitimately be absent; probe rather than assume.
-_DINOV3_TABLE_PROBE_SQL = "SELECT to_regclass('public.image_dinov3_embeddings') IS NOT NULL"
-
-_DROP_DINOV3_EMBEDDINGS_SQL = """
-    DELETE FROM image_dinov3_embeddings
-    WHERE image_id = ANY(%s::bigint[])
-    """
-
-
-def invalidate_derived_signals(
-    conn: psycopg.Connection,
-    image_ids: Sequence[int],
-    *,
-    drop_dinov3: bool = False,
-) -> int:
-    """The ONE chokepoint every byte-changing job calls after replacing an R2 object.
-
-    Nulling `images.phash` and `images.clip_tagged_at` is not a deletion of data
-    but a re-arming of two producers: both columns ARE the selection predicates of
-    `scripts/compute_image_phash.py` (`phash IS NULL`) and
-    `scripts/clip_tag_backfill.py` (`clip_tagged_at IS NULL`), so the hourly lanes
-    recompute the stale signals on their own with no separate backlog to manage.
-    `drop_dinov3` is opt-in and default OFF for the mirror-image reason: DINOv3's
-    refill lane (`scripts/dinov3_embed_backfill.py`) is an anti-join dispatched by
-    hand on a GPU, so deleting vectors creates a backlog nothing scheduled will
-    drain. NEVER touched, by anything, ever: `image_tag_labels` (and its
-    `in_training` flag), `tag_exam_*`, `tag_review_samples`, `tag_label_notes`,
-    `tag_candidates`, `image_tag_annotations`, `phash_pair_notes`,
-    `image_training_examples`, `image_border_cases`, `dedup_sim.*`,
-    `image_tag_scores`, `image_room_classifications`, `listing_image_comparisons`,
-    `image_clip_tags` and `image_clip_embeddings` — the last two are UPSERTED in
-    place by the CLIP lane (never deleted) and are joined by
-    `toolkit/tag_candidates.py` to build its centroids, so a delete here would
-    silently degrade recall instead of merely costing a recompute.
-    """
-    ids = list(image_ids)
-    if not ids:
-        return 0
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute(_INVALIDATE_DERIVED_SIGNALS_SQL, (ids,))
-        updated = cur.rowcount or 0
-        if drop_dinov3:
-            cur.execute(_DINOV3_TABLE_PROBE_SQL)
-            row = cur.fetchone()
-            if row and row[0]:
-                cur.execute(_DROP_DINOV3_EMBEDDINGS_SQL, (ids,))
-    return updated
-
-
-# `phash = %s` is a PLAIN assignment, never COALESCE: the old hash describes bytes
-# that no longer exist, so a failed inline hash must leave NULL for the phash lane
-# to pick up rather than resurrect a stale value. `storage_path` and
-# `download_attempts` are deliberately absent — the key is reused, not recomputed,
-# and a re-master is not a download attempt.
-_MARK_IMAGE_REMASTERED_SQL = """
-    UPDATE images
-    SET rendition = %s,
-        stored_width = %s,
-        stored_height = %s,
-        phash = %s,
-        last_download_attempt_at = now(),
-        sreality_url = COALESCE(%s, sreality_url)
-    WHERE id = %s
-    """
-
-
-def mark_image_remastered(
-    conn: psycopg.Connection,
-    image_id: int,
-    *,
-    rendition: str,
-    width: int | None,
-    height: int | None,
-    phash: int | None,
-    sreality_url: str | None = None,
-) -> None:
-    """Stamp provenance on a row whose R2 object was overwritten in place (mig 496).
-
-    Invalidation and the stamp commit TOGETHER: the outer `conn.transaction()`
-    demotes `invalidate_derived_signals`'s own block to a savepoint, so a crash
-    between them can't leave the row's signals nulled while `rendition` stays
-    NULL (which would keep it in the pending index and re-download it).
-    """
-    with conn.transaction():
-        invalidate_derived_signals(conn, [image_id])
-        with conn.cursor() as cur:
-            cur.execute(
-                _MARK_IMAGE_REMASTERED_SQL,
-                (rendition, width, height, phash, sreality_url, image_id),
-            )
-
-
-# The re-master lane's two non-success terminals. Both stamp ONLY the attempt
-# clock — `storage_path`, `download_attempts` and `phash` describe bytes that are
-# still in the bucket and still valid, and a re-master that fetched nothing has
-# not replaced them. The terminal one also claims the row's rendition: the stored
-# object IS the legacy crop, the source for anything better is gone, and saying so
-# retires the row from the pending set instead of re-fetching a dead URL forever.
-_MARK_IMAGE_REMASTER_TERMINAL_SQL = """
-    UPDATE images
-    SET rendition = 'sreality-749-crop',
-        last_download_attempt_at = now()
-    WHERE id = %s
-    """
-
-_MARK_IMAGE_REMASTER_DEFERRED_SQL = """
-    UPDATE images
-    SET last_download_attempt_at = now()
-    WHERE id = %s
-    """
-
-
-def mark_image_remaster_terminal(conn: psycopg.Connection, image_id: int) -> None:
-    """The stored crop is all there will ever be — retire the row from the queue."""
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute(_MARK_IMAGE_REMASTER_TERMINAL_SQL, (image_id,))
-
-
-def mark_image_remaster_deferred(conn: psycopg.Connection, image_id: int) -> None:
-    """A transient failure: leave `rendition` NULL so the next tick re-selects it."""
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute(_MARK_IMAGE_REMASTER_DEFERRED_SQL, (image_id,))
 
 
 def mark_image_attempt(
@@ -1627,20 +1481,21 @@ def sweep_stuck_scrape_runs(
     """Finalize scrape_runs hard-killed before scrape_run_finalize ran.
 
     A GitHub-Actions job killed at the job timeout (SIGKILL) can't write
-    ended_at, so the row stays orphaned and the Health 'runs finishing
-    cleanly' check counts it 'stuck'. Stamp ended_at so a hard-kill self-heals
-    on the next API boot. Counters are left as-is on purpose: the index walk
-    (bump_index_pages) and the detail-drain (bump_scrape_run_counts) persist their
+    ended_at; stamp it on the next API boot so no row stays open forever. The
+    row keeps the by_category entries its walk wrote as each category ended
+    (#2019), so the health checks count exactly the categories it finished and
+    no other. Counters are left as-is on purpose: the index walk
+    (bump_index_progress) and the detail-drain (bump_scrape_run_counts) persist their
     counts incrementally as they go, so a swept row already carries the real
     totals of whatever committed before the kill. The cutoff must stay above the
-    LONGEST scrape job timeout so a still-running walk is never finalized — the
-    binding one is idnes's index walk at 240 minutes, and bazos's is now 130 (its
-    22-scope walk is ~85-90 min), so this 90-minute default is only safe for the
-    lanes that finish inside it. The API's boot sweep passes an explicit cutoff
-    above them all (api/main.py): falsely stamping ended_at on an in-flight walk
-    makes verify_pipeline read it as a truncated run (by_category is NOT NULL
-    DEFAULT '[]', so it cannot be filtered out) and leaves a later crash invisible,
-    since _record_run_crash never clears an ended_at the sweep already wrote.
+    LONGEST walk timeout so a still-running walk is never finalized, so this
+    90-minute default is only safe for the lanes that finish inside it. The API's
+    boot sweep passes `api.main.STUCK_RUN_CUTOFF_MINUTES`, which the job registry
+    census holds above every walk's `timeout_s` (scraper/jobs.py): falsely
+    stamping ended_at on an in-flight walk breaks run_phase's contract (ended_at
+    means the phase completed), and the walk's own later crash cannot take the
+    stamp back, since _record_run_crash never clears an ended_at the sweep
+    already wrote.
     """
     with conn.transaction(), conn.cursor() as cur:
         cur.execute(
@@ -1824,26 +1679,25 @@ def slice_staleness(
     return out
 
 
-def bump_index_pages(conn: psycopg.Connection, run_id: int, n: int) -> None:
-    """Add n to a scrape_runs row's index_pages immediately, best-effort.
+def bump_index_progress(conn: psycopg.Connection, run_id: int, pages: int, entry: dict[str, Any]) -> None:
+    """Add one finished category to a scrape_runs row now: its pages and its by_category entry, one statement.
 
-    The index walk calls this after each category commits so Health liveness
-    (which keys off scrape_runs.index_pages > 0) reflects real progress even
-    when a long walk is SIGKILLed by its job timeout before it can finalize.
-    The walk connection is autocommit, so each bump persists on its own.
-    Finalize uses GREATEST(index_pages, ...), so the final reconcile never
-    clobbers an accumulated total. Audit bookkeeping must never break a walk.
+    The index walk calls this after each category so Health liveness (which keys off
+    scrape_runs.index_pages > 0) and the walk's per-category progress survive a SIGKILL
+    before finalize: one statement, so the page count and the entry never disagree. The
+    walk connection is autocommit. Finalize writes GREATEST(index_pages, ...) and the whole
+    by_category list, so the final reconcile never clobbers what accumulated. Audit
+    bookkeeping must never break a walk.
     """
-    if n <= 0:
-        return
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE scrape_runs SET index_pages = index_pages + %s WHERE id = %s",
-                (int(n), run_id),
+                "UPDATE scrape_runs SET index_pages = index_pages + %s,"
+                " by_category = by_category || jsonb_build_array(%s::jsonb) WHERE id = %s",
+                (max(0, int(pages)), Jsonb(entry), run_id),
             )
     except Exception:  # noqa: BLE001 - never let bookkeeping abort a walk
-        LOG.warning("bump_index_pages failed for run %s", run_id, exc_info=True)
+        LOG.warning("bump_index_progress failed for run %s", run_id, exc_info=True)
 
 
 def bump_scrape_run_counts(
@@ -1862,7 +1716,7 @@ def bump_scrape_run_counts(
     The detail-drain commits each batch in its own transaction, but its in-memory
     counts used to surface only via the runner's terminal return — so a mid-run
     crash (or a SIGKILL) left the scrape_runs row reading 0 despite committed
-    writes. Bumping per chunk (like bump_index_pages does for index_pages) keeps
+    writes. Bumping per chunk (like bump_index_progress does for index_pages) keeps
     the counts on the row regardless of how the run ends. The drain connection is
     autocommit, so each bump persists on its own; finalize for a drain run is told
     NOT to re-write these columns (bump_already_applied), so the happy path counts
@@ -2035,6 +1889,71 @@ def enqueue_detail(
     return total
 
 
+def rearm_given_up(conn: psycopg.Connection, source: str, native_ids: Sequence[str]) -> int:
+    """Give given-up queue rows five more tries at no less than acquisition priority: a
+    re-pasted link (POST /listings/ingest) is the operator asking again, so the row the
+    drain gave up on (rule #5) comes back instead of answering `failed` forever."""
+    ids = [str(n) for n in native_ids]
+    if not ids:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE listing_detail_queue SET given_up = false, attempts = 0, last_error = NULL, "
+            "priority = GREATEST(priority, %s) "
+            "WHERE source = %s AND native_id = ANY(%s::text[]) AND given_up",
+            (QUEUE_PRIORITY_NEW, source, ids),
+        )
+        return cur.rowcount or 0
+
+
+def raise_unclaimed_priority(
+    conn: psycopg.Connection, source: str, native_ids: Sequence[str], priority: int,
+) -> int:
+    """Lift live, unclaimed queue rows to at least `priority`, touching nothing else (unlike
+    enqueue_detail, which also overwrites detail_ref and index_price_czk): a re-pasted link is
+    served at acquisition priority even when a presence check queued it at VERIFY."""
+    ids = [str(n) for n in native_ids]
+    if not ids:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE listing_detail_queue SET priority = %s "
+            "WHERE source = %s AND native_id = ANY(%s::text[]) "
+            "AND claimed_at IS NULL AND NOT given_up AND priority < %s",
+            (priority, source, ids, priority),
+        )
+        return cur.rowcount or 0
+
+
+def queue_state(conn: psycopg.Connection, source: str, native_id: str) -> dict[str, Any] | None:
+    """One queue row's (attempts, claimed_at, given_up), or None when nothing is queued."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT attempts, claimed_at, given_up FROM listing_detail_queue "
+            "WHERE source = %s AND native_id = %s",
+            (source, str(native_id)),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return None
+    attempts, claimed_at, given_up = row
+    return {"attempts": int(attempts or 0), "claimed_at": claimed_at, "given_up": bool(given_up)}
+
+
+def latest_completion_outcome(conn: psycopg.Connection, source: str, native_id: str) -> str | None:
+    """What the drain last DID with this ad (a `complete_detail` / `fail_detail` outcome), or
+    None when the ledger (7-day retention) holds no completion for it."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT outcome FROM detail_queue_completions "
+            "WHERE source = %s AND native_id = %s "
+            "ORDER BY completed_at DESC, id DESC LIMIT 1",
+            (source, str(native_id)),
+        )
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
 # --- W8: a page that carried no location gets a second look -----------------
 #
 # ceskereality and realitymix GEOCODE AN AD AFTER IT IS PUBLISHED. Measured
@@ -2046,35 +1965,29 @@ def enqueue_detail(
 # carries "Zlín, ulice Mlýnská" and coordinates. The claim lane mines PAGES, so
 # the fix is a second fetch, not a contract change.
 #
-# The audit relation IS the list — `location_pin_audit_mv` state='unresolved' +
-# quality='active_no_claims' is exactly "live, the resolver has spoken, and no
-# admissible evidence was ever found" — so this asks it rather than
-# re-deriving the set. `listings` is joined by primary key for the row's LIVE
-# source_url / price / is_active, because the matview is an hourly snapshot and
-# a re-fetch must not be aimed by a stale URL.
-_LOCATION_REFETCH_AUDIT_MV = "location_pin_audit_mv"
-
+# The set is rule 25's invariant, broken: an active ad that is not determined
+# foreign and has no town. `location_steps.town_missing_sql()` is carried
+# VERBATIM: importing it here is a cycle (location_steps -> claims_common ->
+# loader_db -> scraper.db); the vocabulary rail
+# (tests/test_location_steps_vocabulary.py) pins the two. It is the set the
+# `location_town_coverage` check judges, so an ad holding only a kraj or okres
+# claim, or one no property represents, gets its second look too.
+#
 # "Old enough to be worth another look." A listing fetched minutes ago would
 # only be re-read at the same empty moment; six hours is well past the portals'
 # geocoding lag and it means a row discovered today gets its second look on
 # tomorrow's tick rather than in a fortnight.
 _LOCATION_REFETCH_CANDIDATES_SQL = """
-WITH audit AS (
-    SELECT a.listing_id
-    FROM location_pin_audit_mv a
-    WHERE a.state = 'unresolved'
-      AND a.is_active
-      AND a.quality = 'active_no_claims'
-),
-cand AS (
+WITH cand AS (
     SELECT l.source,
            l.source_id_native,
            l.source_url,
            l.price_czk,
            GREATEST(COALESCE(pg.fetched_at, '-infinity'::timestamptz),
                     COALESCE(pl.observed_at, '-infinity'::timestamptz)) AS last_fetch_at
-    FROM audit a
-    JOIN listings l ON l.id = a.listing_id
+    FROM listings l
+    LEFT JOIN listing_location ll ON ll.listing_id = l.id
+    LEFT JOIN location_granularity_rank gr ON gr.granularity = ll.granularity
     LEFT JOIN LATERAL (
         SELECT max(p.fetched_at) AS fetched_at
         FROM portal_raw_pages p
@@ -2087,6 +2000,9 @@ cand AS (
     ) pl ON true
     WHERE l.is_active
       AND l.source_id_native IS NOT NULL
+      AND not coalesce((ll.country_status = 'foreign'), false)
+      and not coalesce((ll.obec_kod is not null and gr.rank >= (SELECT r.rank
+          FROM location_granularity_rank r WHERE r.granularity = 'obec')), false)
 ),
 old AS (
     SELECT c.*,
@@ -2108,24 +2024,11 @@ def location_refetch_candidates(
     *,
     min_age_seconds: int,
     cap_per_source: int,
-) -> list[dict[str, Any]] | None:
-    """Listings whose page carried no location and whose page is old enough to
-    re-read, oldest-fetched first, at most `cap_per_source` per portal.
-
-    None (not an empty list) when the audit matview is absent: a caller must be
-    able to tell "nothing to do" from "this database cannot answer", and on a
-    branch database without the location relations the lane skips instead of
-    raising every tick. `source_total` carries the UNCAPPED per-portal backlog,
-    so a capped tick still says how much is left for tomorrow.
-    """
+) -> list[dict[str, Any]]:
+    """Active ads with no town whose page is old enough to re-read, oldest-fetched
+    first, at most `cap_per_source` per portal. `source_total` carries the UNCAPPED
+    per-portal backlog, so a capped tick still says how much is left for tomorrow."""
     with conn.cursor() as cur:
-        cur.execute(
-            "SELECT to_regclass(%s) IS NOT NULL",
-            (f"public.{_LOCATION_REFETCH_AUDIT_MV}",),
-        )
-        row = cur.fetchone()
-        if not row or not row[0]:
-            return None
         cur.execute(
             _LOCATION_REFETCH_CANDIDATES_SQL,
             {"min_age": float(min_age_seconds), "cap": int(cap_per_source)},

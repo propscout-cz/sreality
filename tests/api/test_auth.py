@@ -9,7 +9,6 @@ the tests below delenv it to exercise the gate.
 from __future__ import annotations
 
 import contextlib
-from typing import Any
 
 import pytest
 
@@ -24,9 +23,10 @@ from api import feedback as api_feedback
 from api import main as api_main
 from api import maps as api_maps
 from api import pipeline as api_pipeline
+from api import saved_sets as api_saved_sets
 from api import shares as api_shares
+from api.routes import stats_dashboards as api_stats_dashboards
 from api import tenant_pool
-from scraper import url_parser as scraper_url_parser
 
 
 @pytest.fixture()
@@ -100,16 +100,6 @@ def client(monkeypatch):
     def fake_update_scenario(conn, run_id, **_kw):
         return {"id": run_id, "status": "success"}
 
-    def fake_parse_url(url, *, client, conn, persist=False):
-        return {
-            "sreality_id": 2836292428,
-            "spec": {"sreality_id": 2836292428, "lat": 50.0, "lon": 14.0},
-            "images": [],
-            "fetched_at": "2026-05-04T10:00:00+00:00",
-            "source_url": url,
-            "in_database": False,
-        }
-
     monkeypatch.setattr(api_main, "find_comparables", fake_find)
     monkeypatch.setattr(api_main, "analyze_distribution", fake_dist)
     monkeypatch.setattr(api_main, "verify_listing_freshness", fake_verify)
@@ -144,7 +134,6 @@ def client(monkeypatch):
             "id": 1, "estimation_run_id": estimation_run_id, "status": initial_status,
         },
     )
-    monkeypatch.setattr(scraper_url_parser, "parse_sreality_url", fake_parse_url)
 
     # Curation endpoints — gated coverage only; functional tests live in
     # test_curation.py. Stub each handler to a constant successful dict.
@@ -255,6 +244,28 @@ def client(monkeypatch):
         api_shares, "revoke_pipeline", lambda conn, party, side: {"deleted": True},
     )
 
+    # Saved sets (presets + Stats dashboards) and the dashboard shares + working board, stubbed.
+    _dashboard = {"id": "d1", "name": "n", "owner_email": None, "shared_with": []}
+    monkeypatch.setattr(api_saved_sets, "list_rows", lambda conn, kind: [])
+    monkeypatch.setattr(api_saved_sets, "get", lambda conn, kind, set_id: _dashboard)
+    monkeypatch.setattr(api_saved_sets, "create", lambda conn, kind, values, *, account_id: _dashboard)
+    monkeypatch.setattr(api_saved_sets, "update", lambda conn, kind, set_id, fields: _dashboard)
+    monkeypatch.setattr(api_saved_sets, "delete", lambda conn, kind, set_id: True)
+    monkeypatch.setattr(api_saved_sets, "reorder", lambda conn, kind, ids: None)
+    monkeypatch.setattr(api_saved_sets, "layout", lambda conn, kind, groups, items: {"data": [], "total": 0})
+    monkeypatch.setattr(
+        api_stats_dashboards, "share_dashboard",
+        lambda conn, open_identity_conn, dashboard_id, body: _dashboard,
+    )
+    monkeypatch.setattr(
+        api_shares, "revoke_dashboard", lambda conn, dashboard_id, recipient: {"deleted": True},
+    )
+    monkeypatch.setattr(api_stats_dashboards, "working_board", lambda conn: None)
+    monkeypatch.setattr(
+        api_stats_dashboards, "save_working_board",
+        lambda conn, charts, *, account_id: {"charts": charts, "updated_at": "t"},
+    )
+
     monkeypatch.setattr(api_maps, "suggest", lambda *a, **kw: {"items": []})
     monkeypatch.setattr(
         api_maps,
@@ -288,6 +299,7 @@ _PATCH_TAG_BODY = {"name": "renamed", "color": "sage"}
 _ATTACH_TAG_BODY = {"tag_id": 1}
 _PIPELINE_CARD_BODY = {"property_id": 1}
 _FEEDBACK_BODY = {"feedback_text": "too broad", "kick_off_refinement": False}
+_DASHBOARD = "66666666-6666-6666-6666-666666666666"
 
 
 def _gated_calls(client) -> list:
@@ -305,7 +317,6 @@ def _gated_calls(client) -> list:
         ("GET", "/estimations", None),
         ("GET", "/maps/suggest?query=foo", None),
         ("POST", "/maps/resolve", _RESOLVE_BODY),
-        ("GET", "/estimations/preview?url=https://www.sreality.cz/detail/x/2836292428", None),
     ]
 
 
@@ -355,6 +366,22 @@ def _jwt_gated_calls() -> list:
         ("DELETE", "/tags/1", None),
         ("POST",   "/properties/1/tags", _ATTACH_TAG_BODY),
         ("DELETE", "/properties/1/tags/1", None),
+        # Saved sets + the Stats boards (migration 647): per account on the tenant pool.
+        ("GET",    "/filter-presets", None),
+        ("POST",   "/filter-presets", {"name": "p", "filter_spec": {}}),
+        ("PUT",    "/filter-presets/layout", {"items": []}),
+        ("POST",   "/filter-preset-groups", {"name": "g"}),
+        ("DELETE", f"/filter-preset-groups/{_DASHBOARD}", None),
+        ("GET",    "/stats/dashboards", None),
+        ("POST",   "/stats/dashboards", {"name": "n", "charts": []}),
+        ("PUT",    "/stats/dashboards/reorder", {"ids": [_DASHBOARD]}),
+        ("GET",    f"/stats/dashboards/{_DASHBOARD}", None),
+        ("PUT",    f"/stats/dashboards/{_DASHBOARD}", {"name": "m"}),
+        ("DELETE", f"/stats/dashboards/{_DASHBOARD}", None),
+        ("POST",   f"/stats/dashboards/{_DASHBOARD}/shares", {"email": "b@example.com"}),
+        ("DELETE", f"/stats/dashboards/{_DASHBOARD}/shares/33333333-3333-3333-3333-333333333333", None),
+        ("GET",    "/stats/dashboard", None),
+        ("PUT",    "/stats/dashboard", {"charts": []}),
     ]
 
 
@@ -363,6 +390,8 @@ def _call(client, method: str, path: str, body, headers=None):
         return client.post(path, json=body, headers=headers or {})
     if method == "PATCH":
         return client.patch(path, json=body, headers=headers or {})
+    if method == "PUT":
+        return client.put(path, json=body, headers=headers or {})
     if method == "DELETE":
         return client.delete(path, headers=headers or {})
     return client.get(path, headers=headers or {})

@@ -216,7 +216,7 @@ sort, legend, scale, variants, reader)])` where a reader is one of two kinds:
   resolves the layer by name from `{service}?f=json`, asserts `geometryType` and the required field
   names, pages by `returnIdsOnly` + chunks of ≤ 50 ids (`f=geojson`, `outSR`, `outFields=*`),
   0.5 s between requests, retries with backoff on 429/5xx/network, honest User-Agent
-  `sreality-tracker/1.0 (+https://github.com/waiff/sreality)` (an HTTP/1.1 session). The mapper
+  `propscout/1.0 (+https://app.propscout.cz; info@propscout.cz)` (`scraper.contact`, #2016) (an HTTP/1.1 session). The mapper
   returns the flat props dict or `None` to skip the feature. Geometry input SRID = `out_sr`.
 - `SqlSource(sql)` — a SELECT yielding `(source_id, props jsonb, geom geometry)` in 3857 (kraje,
   later rent_map).
@@ -327,10 +327,24 @@ label); checked = every layer of the section on (variant = the first); the expan
 chip (only when checked) holds per-layer checkboxes when the section has > 1 layer (the section
 checkbox is tri-state), variant radios when present, the legend (swatch per class: filled square,
 line, dashed line, dot), a hint "Přibližte mapu" when the map zoom < minzoom, the note, and a footer
-"Data k {source_revised_at ?? fetched_at} · {attribution}". `compact` (DetailMap, ComparablesMap):
-chips only, no panel. The chip markup is ONE component, `OverlayChip`, also adopted by
+"Data k {source_revised_at ?? fetched_at} · {attribution}". `compact` (ComparablesMap): chips only,
+no panel. (The property page's header minimap, `DetailMap`, carries no overlays since 2026-10-23 —
+operator: zoom is its only control.) The chip markup is ONE component, `OverlayChip`, also adopted by
 `RentMapControls`, `GrowthMapControls` and `CityMapControls` (four copies of the same class string
 today).
+
+**Browse since 2026-10-22 (the map rail, `components/MapRail.tsx`).** The four corner stacks covered a
+quarter of a 450 px map (the map gets 42 % of the width beside the filters, so it is that narrow on a
+1440 px screen). Browse's map now carries one column of icon buttons at its right edge: Vrstvy (badge =
+layer groups drawn), the per-m² pin labels, the price labels, Piny a ceny, zoom in / out (createMap's
+`navigationControl: false`), and "Zobrazit vše" while a map area is set. Vrstvy opens a panel beside the
+rail (a bottom sheet on a map under 520 px — a container query on the map, not the window) holding every
+toggle: Města + "Obarvit podle" + Min., Růst cen a nájmů + its settings, then each registry section as
+above, its toggle a plain row (`OverlayChip` without `compact`) and its settings indented under it
+(`OverlayPanel`). The legends left the panel: `MapOverlayLegends` (plus the growth and city-index keys)
+draws a card per layer group that is on in the map's bottom-left corner, so a choropleth reads with the
+panel closed; the stack folds to one button, remembered per browser. The count pill keeps the pin key
+(swatch + count; the words from a 900 px map up); the full key and the pin limit live in Piny a ceny.
 
 ### State
 
@@ -339,9 +353,9 @@ today).
   absent = the remembered selection. Every change writes `layers=` to the URL (Browse) and the
   remembered value. Add `layers` to `OVERLAY_URL_KEYS`, `setOverlay`, `browseUrlFromState`, the
   round-trip test. Memory adapter (Explore modal): initial = remembered.
-- `DetailMap` and `ComparablesMap`: local state initialised from the remembered selection, written
-  back on change; both mount the hook (`beforeId` 'pin' / 'comparables-point') and the compact
-  controls. `ListingMap`: under the first growth-choropleth layer (where the rent map and the
+- `ComparablesMap`: local state initialised from the remembered selection, written back on change;
+  it mounts the hook (`beforeId` 'comparables-point') and the compact controls. (`DetailMap` did too
+  until 2026-10-23.) `ListingMap`: under the first growth-choropleth layer (where the rent map and the
   kraj borders have always sat), so a choropleth on top still tints them as before.
 - Delete: `rent_map_kraje_public` fetch (`fetchRentMapKraje`, `RentMapKraj`), `rentKrajeQuery`,
   `toKrajFC`, the `rent-kraje` source/layer/effect, the nested Kraje checkbox, `showKraje`,
@@ -424,7 +438,7 @@ Backend, as built (2026-10-15):
 | schema | `migrations/600_map_overlays.sql`; `tests/test_map_overlays_live.py` (CI DB lane: control point, render function on a square + a line + a point, tile bytes contain the layer name); the pytest line in `.github/workflows/migrations.yml` |
 | ingest | `scripts/ingest_map_overlays.py`; `.github/workflows/ingest_map_overlays.yml`; `ingest_boundaries.yml` final step; `frontend/src/lib/workflowDocs.generated.ts`; `tests/scripts/test_ingest_map_overlays.py` + `tests/fixtures/map_overlays/*.json` (small real samples) |
 | api | `api/routes/map_overlays.py`; `api/main.py` registration; `tests/api/test_map_overlays.py` |
-| spa | `frontend/src/lib/mapOverlays.ts`, `geoRing.ts`, `persistedFlag.ts`, `basemap.ts`, `browseState.ts`, `queries.ts`; `components/MapOverlayControls.tsx`, `OverlayChip.tsx`, `ListingMap.tsx`, `BrowseExperience.tsx`, `listing-detail/DetailMap.tsx`, `estimation/ComparablesMap.tsx`, `filter-controls/LocationControl.tsx`; tests |
+| spa | `frontend/src/lib/mapOverlays.ts`, `geoRing.ts`, `persistedFlag.ts`, `basemap.ts`, `browseState.ts`, `queries.ts`; `components/MapOverlayControls.tsx`, `OverlayChip.tsx`, `ListingMap.tsx`, `BrowseExperience.tsx`, `estimation/ComparablesMap.tsx`, `filter-controls/LocationControl.tsx`; tests |
 | docs | this file; `docs/architecture.md` (new section + cross-reference map); `roadmap/map-track.md`; `GLOSSARY.md` ("Reference overlay"); `.claude/skills/toolkit-api/SKILL.md` (the two routes; trim a line first, the file is at its cap); `.claude/skills/database/SKILL.md` (one line: the overlay store is a mirror, rendered tiles, ingest workflow) |
 
 ## Deploy sequence

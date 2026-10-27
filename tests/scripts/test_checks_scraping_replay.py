@@ -118,6 +118,7 @@ import functools
 import importlib
 import statistics
 from typing import Any, NamedTuple
+from unittest import mock
 
 from location_data.claims_common import SOURCES
 from scraper.portal_factory import PORTAL_CLASSES
@@ -256,16 +257,21 @@ def _fetch_rows(at: _dt.datetime) -> list[tuple[Any, ...]]:
 
 @functools.cache
 def _scraping_replay() -> tuple[_Ladder, dict[_dt.datetime, dict[str, dict[str, Any]]]]:
+    # The window predates every portal onboarded since: replay the fleet its walks recorded,
+    # or a later portal reads as one that never walked.
+    fleet = tuple(sorted(_walks()))
+    assert set(fleet) <= set(SOURCES)
     first_ledger = min(hour for hour, *_ in _ledger())
     results, cells = [], {}
-    for at in _ticks(_START, _END, _HOUR):
-        conn = _Conn({sc._WALKS_SQL: _walk_rows(at),
-                      sc._INFLOW_SQL: _inflow_rows(at, sorted(SOURCES)),
-                      sc._FETCH_ERRORS_SQL: _fetch_rows(at) if at > first_ledger else []},
-                     now=at)
-        result = sc.check_scraping(conn, THRESHOLDS)
-        results.append((at, result))
-        cells[at] = {c["subject"]: c for c in result["details"]["cells"]}
+    with mock.patch.object(sc, "SOURCES", fleet):
+        for at in _ticks(_START, _END, _HOUR):
+            conn = _Conn({sc._WALKS_SQL: _walk_rows(at),
+                          sc._INFLOW_SQL: _inflow_rows(at, list(fleet)),
+                          sc._FETCH_ERRORS_SQL: _fetch_rows(at) if at > first_ledger else []},
+                         now=at)
+            result = sc.check_scraping(conn, THRESHOLDS)
+            results.append((at, result))
+            cells[at] = {c["subject"]: c for c in result["details"]["cells"]}
     return _told("scraping", 600, results), cells
 
 
@@ -293,9 +299,9 @@ def test_the_403_wall_is_told_in_one_grouped_notice() -> None:
     ladder, _ = _scraping_replay()
     wall = min(i["first_seen_at"] for i in _incidents(ladder, "scraping", "ceskereality/walks/")
                if i["subject"] != "ceskereality/walks/byt-prodej")
-    onsets = [m for m, key, _ in ladder.dispatches
-              if key == f"sys:scraping:onset:{wall:%Y-%m-%dT%H:%M:%SZ}"]
-    assert len(onsets) == 1 and onsets[0].count("ceskereality/walks/") == 9
+    onsets = [t for t in ladder.told if (t.kind, t.at) == ("onset", wall)]
+    assert len(onsets) == 1
+    assert sum(s.startswith("ceskereality/walks/") for s in onsets[0].subjects) == 9
 
 
 def test_every_walk_onset_stands_on_six_walk_gaps_or_two_weeks() -> None:

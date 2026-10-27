@@ -70,7 +70,8 @@ _RESOLVER_HOME = "api/tenant_pool.py"
 # HERE, when it is wrong everywhere else.
 _NULLABLE_DEFAULT_ALLOWLIST: dict[str, str] = {
     "api/estimation_runs.py::create_estimation_run": (
-        "service-role child-run path: `building_runs` spawns children with no caller "
+        "service-role child-run path: `building_runs` (an operator-only flow since M0, "
+        "`require_admin` on every /buildings route) spawns children with no caller "
         "JWT, and `estimation_runs.account_id` is NULLABLE with a SYSTEM default and a "
         "SYSTEM arm in its RLS policy (migration 291) — the one table where an absent "
         "account is a real, writable state rather than a dropped argument"
@@ -96,7 +97,7 @@ _HANDROLLED_RESOLVER_ALLOWLIST: dict[str, str] = {
         "same nullable-account-means-default-plan contract as get_billing_me, evaluated "
         "as a dependency instead of in a handler"
     ),
-    "api/property_merge.py::post_merge_property_set": (
+    "api/property_merge.py::post_merge_letters": (
         "the merge is an admin's service-role write and must succeed for an admin with no "
         "membership; the account scopes only the receipt read back after it (the acting "
         "account's own carry rows, tenancy shape 3), and no account is an empty receipt"
@@ -116,12 +117,6 @@ _HANDROLLED_RESOLVER_ALLOWLIST: dict[str, str] = {
         "divergence: it returns a READ SCOPE `[account_id, SYSTEM]` mirroring migration "
         "291's three-arm policy, so an unresolvable account narrows to `[SYSTEM]` rather "
         "than failing — it never widens, and it never returns empty"
-    ),
-    "api/routes/valuo.py::_account": (
-        "both Valuo routes run on the SERVICE-ROLE connection on purpose: the POST holds it across a "
-        "paid call of up to 25 s, and require_account_id's tenant transaction would stay open for all "
-        "of it. `valuo_valuations` is RLS-on with zero policies, so the account predicate is the sole "
-        "gate (tenancy shape 3) — and a None is never carried: this helper 400s on it"
     ),
 }
 

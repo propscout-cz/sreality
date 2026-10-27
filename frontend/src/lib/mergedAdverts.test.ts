@@ -86,8 +86,8 @@ describe('mergeReceiptText', () => {
 describe('pushMergeReceipt', () => {
   it('replaces the previous receipt, and its action opens the survivor', () => {
     const open = vi.fn();
-    pushMergeReceipt(merged({ survivor_id: 7 }), open);
-    pushMergeReceipt(merged({ survivor_id: 8 }), open);
+    pushMergeReceipt({ letters: { A: merged({ survivor_id: 7 }) } }, open);
+    pushMergeReceipt({ letters: { A: merged({ survivor_id: 8 }) } }, open);
     const [first, second] = vi.mocked(toast.pushToast).mock.results.map((r) => r.value);
     expect(toast.dismissToast).toHaveBeenCalledWith(first);
     const [kind, message, ttl, action] = vi.mocked(toast.pushToast).mock.calls[1];
@@ -233,6 +233,25 @@ describe('splitReceiptText / pushSplitReceipt', () => {
     );
   });
 
+  it('names a photo outside a note by its file, moved and copied (Photos W2)', () => {
+    const text = splitReceiptText(
+      split({
+        curation: [
+          {
+            item: 'file:12', kind: 'file', label: 'foto-2026-10-23-141205.jpg', letter: 'B',
+            property_id: 43, copies: [{ letter: 'A', property_id: 42 }],
+          },
+        ],
+        rulings: { different: 1, same: 0, taken_back: 0 },
+      }),
+    );
+    expect(text).toBe(
+      'Rozděleno: A zůstává v #42; B → #43; C → nová #90. ' +
+        'Do B: soubor „foto-2026-10-23-141205.jpg“. Kopie do A: soubor „foto-2026-10-23-141205.jpg“. ' +
+        '„Různé“ zapsáno u 1 dvojice.',
+    );
+  });
+
   it('writes the picks for the preview in one order, nothing for none', () => {
     expect(choicesParam({})).toBe('');
     expect(
@@ -242,7 +261,7 @@ describe('splitReceiptText / pushSplitReceipt', () => {
 
   it('shares the merge receipt’s one slot and opens the first letter that left', () => {
     const open = vi.fn();
-    pushMergeReceipt(merged({ survivor_id: 7 }), open);
+    pushMergeReceipt({ letters: { A: merged({ survivor_id: 7 }) } }, open);
     pushSplitReceipt(split(), open);
     const [merge, splitToast] = vi.mocked(toast.pushToast).mock.results.slice(-2).map((r) => r.value);
     expect(toast.dismissToast).toHaveBeenCalledWith(merge);
@@ -271,11 +290,21 @@ describe('refreshAfterSplit', () => {
       ['autodedup', 'category-splits'],
       ['cards'],
       ['map'],
-      ['table'],
       ['stats'],
       ['browse-count'],
     ]) {
       expect(invalidate).toHaveBeenCalledWith({ queryKey: key });
     }
+  });
+});
+
+describe('pushMergeReceipt over several letters', () => {
+  it('reads one line per letter, A first, with no page to open', () => {
+    const open = vi.fn();
+    pushMergeReceipt({ letters: { B: merged({ survivor_id: 9 }), A: merged({ survivor_id: 7 }) } }, open);
+    const [kind, message, ttl, action] = vi.mocked(toast.pushToast).mock.calls.at(-1)!;
+    expect([kind, message, ttl, action]).toEqual([
+      'ok', 'A: Sloučeno do nemovitosti #7. B: Sloučeno do nemovitosti #9.', 0, undefined,
+    ]);
   });
 });

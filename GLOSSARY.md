@@ -1,8 +1,8 @@
 # Property intelligence platform
 
-One market-wide view of Czech real estate built from the ads nine portals publish. Code and tables
-still carry some older names; the terms below are the ones to use in prose, UI text, documents and
-anything newly named.
+One market-wide view of Czech real estate built from the ads nine portals publish and the ads of any
+other site someone pastes a link to. Code and tables still carry some older names; the terms below
+are the ones to use in prose, UI text, documents and anything newly named.
 
 ## Language
 
@@ -57,8 +57,24 @@ are kept forever.
 _Avoid_: live, dead, delisted, deleted, removed, expired
 
 **Portal**:
-One of the advertising websites the platform collects from.
+One of the advertising websites the platform collects from. Nine are walked page by page; the tenth,
+Web, is every other site: its ads arrive only when someone pastes a link, and a Web ad is known by
+its link's canonical address (shown by its site's name), not by an id of the site's own.
 _Avoid_: site, source (in prose)
+
+**Portal id**:
+The id a portal gives an ad: the number in the ad's web address on most portals, iDNES's long code, a
+Web ad's canonical address. Unique within its portal; the key the scrapers track an ad by, and the
+platform's own row number for the ad is a different thing (an ad's `id`).
+_Avoid_: native id (in prose), hash id, listing id
+
+**Ad reference**:
+The number the advertiser prints on the ad for callers, kept exactly as printed: "ID zakázky" on
+Sreality, "Číslo zakázky" on iDNES, RE/MAX and Realitymix, "ID nemovitosti" on České reality. On a
+broker portal it is the broker's own order number; on an agency's own site (Maxima, M&M) it is the
+portal id. An ad may print none (a private seller). Shown beside the broker's contact so it can be
+quoted on a call; never replaced by another number when it is missing.
+_Avoid_: reference number, order number, advert code, zakázka (in English prose)
 
 **Snapshot**:
 One kept version of an ad's content. A new snapshot exists only when the content changed.
@@ -72,11 +88,31 @@ _Avoid_: backfill day, horizon, go-live day
 An ad first seen on an ordinary day, not in a sweep, so its time on market counts from the day it appeared. An ad first seen in a sweep was already on the market, and its time on market is a lower bound.
 _Avoid_: uncensored ad, fresh ad, left-censored (for the opposite)
 
+**Settled**:
+A property the pipeline is done with: its first photo is stored (or it has none), and the engine has
+read every one of its ads, holds no pending question about them and keeps none of them in a group
+that also holds an ad on another property, or on none yet. Stamped once, by property maintenance; a
+merge passes a settled property's stamp to the survivor only when that publishes the survivor
+earlier, so publication never regresses, and never moves later.
+_Avoid_: evaluated, checked, dedup-checked
+
+**Published**:
+A property Browse, the map, Stats and the watchdog serve: from the moment it is settled, or 6 hours
+after it was first seen, whichever comes first. The 6 hours are the cap, so a slow engine can delay
+a property but never hide it. Its page opens by its link either way.
+_Avoid_: gated-in, live (for this)
+
 **Valuo valuation**:
 A price for one property bought from Valuo, an outside valuation service: what was sent, where each
 value came from, which Valuo environment answered, and Valuo's answer in its own words. Shown beside
 our own estimates, never counted as one of them.
 _Avoid_: Valuo estimate, Valuo run, external estimate
+
+**Recalculation** (UI: "Náš přepočet"):
+Our figure over the comparables of a Valuo valuation that the user leaves ticked, worked out in the browser from
+Valuo's own per-m² prices the way Valuo works out its average. Never stored, never counted as one of our estimates
+(a run of ours) and never presented as Valuo's answer.
+_Avoid_: our estimate, Valuo recalculation, náš odhad
 
 ### Changing what belongs together
 
@@ -89,9 +125,12 @@ Taking one or more ads out of a property, into another property or into a new on
 _Avoid_: unmerge, detach, undo, separate
 
 **Letter**:
-In a split, the mark the user gives each ad; ads with the same letter are one property afterwards;
-one letter keeps the property's number and page.
-_Avoid_: unit, part, side, group
+The mark the user gives each item of a statement; items with the same letter are one property
+afterwards. In a split, every ad of one property gets a letter and one letter keeps the property's
+number and page. In Browse's merge mode, each card (a property) the user marks gets a letter and one
+click merges every letter into its oldest property; a letter says nothing about the cards it does not
+hold, and the letters are forgotten when the mode closes.
+_Avoid_: unit, part, side, group, selection, tick
 
 **Survivor**:
 The property that keeps its identity: after a merge, the one that remains; after a split, the one
@@ -164,8 +203,8 @@ ones, or in no collection at all ("V žádné kolekci"); own and shared-with-me 
 _Avoid_: list, folder, favourites, saved list
 
 **Share**:
-A read-only grant of one collection to one account. The owner revokes it, the recipient may leave
-it; the recipient can never change the collection.
+A read-only grant of one collection or one dashboard to one account. The owner revokes it, the
+recipient may leave it; the recipient can never change what was shared.
 _Avoid_: invite, membership, access (alone), collaborator
 
 **Pipeline share**:
@@ -173,6 +212,21 @@ A grant of one account's whole pipeline, and with it that account's curation, to
 to view the board only, or to edit the board and the curation. The owner revokes it or changes its mode, the recipient may leave it. Only
 the owner shares their own pipeline.
 _Avoid_: board share, team board, membership, delegation (alone)
+
+**Saved set**:
+A named row an account owns, lists, loads, updates and reorders. Its two kinds are the filter preset
+and the dashboard; only a dashboard may be shared, read-only.
+_Avoid_: saved item, saved view, favourite
+
+**Dashboard**:
+A named set of Stats charts an account saved, optionally with the Browse filter it was built on. Loading
+one copies it into the working board; it changes only when its owner saves changes. It may be shared
+read-only; a recipient loads a copy and may save it as their own.
+_Avoid_: report, view (alone), saved board
+
+**Working board**:
+The charts the Stats tab shows right now: one per account, never shared, never listed among dashboards.
+_Avoid_: default dashboard, scratch, draft
 
 **Acting as**:
 Working on another account's curation as that account, through a pipeline share: while acting, the
@@ -193,6 +247,12 @@ of any share the author is party to whose collection holds that property, includ
 after the note was marked. Unmarked notes stay private.
 _Avoid_: public note, team note
 
+**Viewing** (UI: "Prohlídka"):
+A note with a date: when its author sees, or saw, the property in person. Its text, which may be
+empty, is what to check there and later what they found. It is shared, carried and split like any
+note. The phone's Prohlídky tab lists the account's own viewings one day at a time.
+_Avoid_: appointment, visit, meeting, event
+
 **Tag**:
 A coloured label an account puts on a property; a property carries any number. A tag filter
 has two sides: must carry every chosen tag, must carry none of the excluded ones; or carry no
@@ -204,8 +264,9 @@ An account's decision to hide a property from its own Browse.
 _Avoid_: hide, mute, ignore, archive
 
 **Lens**:
-A filter over the account's own curation that sits outside a preset's identity: the three curated-set
-scopes, the broker scope and the dismissed reveal; it never dirties a preset, and a preset click resets it.
+A filter over the account's own curation: the three curated-set scopes, the broker scope and the
+dismissed reveal. A preset stores it like every filter (since 2026-10-22); a Stats dashboard, which can be
+shared, never does.
 _Avoid_: view, mode, preset filter, overlay
 
 **Fold**:
@@ -242,7 +303,19 @@ _Avoid_: job, automation, task
 **Skill**:
 The instructions an AI follows to carry out a workflow, whether it runs in a user's assistant or
 inside the platform.
-_Avoid_: prompt, agent profile, recipe
+_Avoid_: prompt, recipe
+
+**Agent**:
+A configured specialist that carries out workflows inside the platform: which model it uses, which
+skills it follows, which tools it may call, its limits, and, once mid-run questions exist, when it must ask a person. An agent is
+defined in a file, never in a settings screen.
+_Avoid_: agent profile, bot, assistant (that word means the user's own AI account)
+
+**Tool**:
+One named platform operation with a typed input and a factual output, such as "find comparables"
+or "add to a collection", that an agent, a screen or an assistant can call. A tool declares whether
+it reads market data, reads or writes the user's own data, spends money, runs code, or (later) leaves the platform.
+_Avoid_: function, endpoint, capability (in prose)
 
 **Run**:
 One execution of a workflow, with its inputs and its result. A run usually concerns one property.
@@ -274,6 +347,46 @@ How long an ad must stay gone from its portal, in practice, before the platform 
 24 hours today for an ad a walk nominates, because a walk re-checks no ad within 24 h of its last
 check, although the rule asks for 12.
 _Avoid_: dwell (alone), grace period, delisting delay
+
+### Running the platform
+
+**Scheduled job**:
+One piece of production work that repeats on its own timer, such as a portal walk or the daily
+property sweep, with one definition and one record of when it is due and who is running it.
+_Avoid_: workflow (alone), cron, task, automation
+
+**Lane**:
+One always-on loop inside a worker that does a small piece of work again and again, such as draining
+the detail queue or downloading images.
+_Avoid_: thread, loop, daemon
+
+**Realtime worker**:
+The always-on service that runs the lanes that keep the platform fresh within minutes: probes, the
+detail drain, images, property maintenance, notifications and the health lane.
+_Avoid_: the worker (where the job runner could be meant), hot lane, batch-worker
+
+**Job runner**:
+The always-on service, run as two identical copies, that takes each scheduled job when it is due, runs it
+as its own program, stops it when it overruns its budget, and records how it ended.
+_Avoid_: batch-worker, cron worker, scheduler service, jobs runner
+
+**Job run**:
+One execution of a scheduled job, with who ran it, when it started and ended, how it ended and what it used.
+_Avoid_: execution, pass (a pass belongs to a lane), run (alone, which is the AI term above)
+
+**Attended tool**:
+A piece of work a person starts with a click and watches, such as applying a migration, taking a
+backup or re-parsing stored pages. It never runs on a timer.
+_Avoid_: manual workflow, dispatch job, ops job
+
+**Backstop**:
+A scheduled job that repeats a lane's work so the work still happens while that lane is down.
+_Avoid_: fallback job, safety cron, shadow run
+
+**Actions workflow**:
+One file GitHub runs for us, always named with the qualifier: the tests on a pull request, the canary,
+an attended tool. Never "workflow" alone, which is the AI term above.
+_Avoid_: workflow (alone), pipeline, GitHub job
 
 ### Health
 
@@ -312,13 +425,15 @@ _Avoid_: outage, issue, ticket, problem (for the record)
 
 **System alert**:
 A notice about the platform's own health: an incident has started, is still open, or has recovered.
-It appears among the app's notifications; a watchdog's notice about properties is not one.
+Since 2026-10-21 it reaches no notification feed (its old feed rows were deleted after a backup): the
+Health page shows the incident, and the canary's failure email tells an unacknowledged alarm; a
+watchdog's notice about properties is not one.
 _Avoid_: alarm (that is the check), alert (alone), health notification
 
 **Acknowledge**:
 An admin's deliberate act, on the Health page, of marking a check's open incidents as known, which
-stops their reminders; each still closes only on a measured recovery. Reading a system alert among
-the notifications does not acknowledge it.
+stops their reminders and the canary's failure email about them; each still closes only on a measured
+recovery.
 _Avoid_: dismiss, mute, snooze, resolve, mark read
 
 **Not measured**:
@@ -338,8 +453,8 @@ _Avoid_: monitor, meta-check, dead-man switch, heartbeat check
 The one monitoring workflow on GitHub, an hourly cron that GitHub delivers about five times a day:
 it records the production runs of the other workflows (those run on schedule or by a push to the main branch, each failure
 with its reason line), measures the checks hosted on GitHub, then asserts that the database answers, that the watcher is running and its Problems have incidents, and
-that no alarm's system alert has gone unread and undelivered while its incident is open and
-unacknowledged. A failing check never fails its run; the assertions do (so does a crash of the
+that no alarm's incident has stood open and unacknowledged for 15 minutes to 12 hours since its onset or
+latest reminder. A failing check never fails its run; the assertions do (so does a crash of the
 poller or the harness, or the harness step overrunning its 6 minutes), so GitHub's failure email is the one path to
 the operator that needs neither the database's scheduler nor Railway.
 _Avoid_: monitoring lane, acute lane, health workflow, smoke test
@@ -378,6 +493,25 @@ _Avoid_: connector, extension, integration
 The platform's web app installed on a phone's home screen: the same app in a phone-sized shell.
 _Avoid_: PWA (in prose), mobile app, native app, companion app
 
+**Bell**:
+The way into a user's notifications, with the count of their unread ones: the Notifications entry
+in the desktop top bar, the bell in the phone app's header.
+_Avoid_: inbox, notification centre
+
+**App badge**:
+The number on the phone app's home-screen icon: the same unread count the bell shows.
+_Avoid_: icon badge, push badge
+
+**Push device**:
+One phone app that can receive a user's notifications as pushes: its push subscription, bound to
+the user signed in on it, ended when that user signs out or another signs in.
+_Avoid_: device token, subscriber, push subscription (in prose)
+
+**Switch**:
+"Oznámení na tomto iPhonu" in the phone app's account sheet: turns this phone into a push device
+for the signed-in user, or stops it being one. There is no other push setting.
+_Avoid_: push preference, channel picker, opt-in
+
 **Reference overlay**:
 A map layer drawn from an outside public dataset — metro routes, flood zones, kraj borders, the MF
 rent map, university sites — that a user switches on or off; it changes what the map shows around properties, never
@@ -394,7 +528,7 @@ _Avoid_: cluster, bubble, cell, bin, group
 **Chart (Stats)**:
 One saved view on the Browse Stats tab: up to six nested row dimensions, at most one column
 dimension and one measure, drawn as a table, lines, bars or boxes over the properties the filter
-picks. A user's charts together are their dashboard; the title is derived, never typed.
+picks. A user's charts together are their working board; the title is derived, never typed.
 _Avoid_: card, widget, report, graph (for the saved thing)
 
 **Sample ledger**:

@@ -44,7 +44,6 @@ const collection = (over: Partial<Collection>): Collection =>
     updated_at: '2026-01-01T00:00:00Z',
     listing_count: 0,
     monitoring_enabled: false,
-    notify_channels: [],
     is_system: false,
     ...over,
   }) as Collection;

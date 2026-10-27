@@ -18,14 +18,20 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DEFAULT_FILTERS,
+  cohortKindOf,
   pipelineViewFilters,
   applyRegistryUpdate,
   applyRegistryUpdates,
   buildingMaterialToValues,
+  filtersEqualForDashboard,
   filtersEqualForPreset,
+  filtersForDashboard,
   filtersForPreset,
   readPresetSpec,
+  savedMapArea,
   filtersToWatchdogSpec,
+  effectiveBbox,
+  mapAreaLabel,
   fromSearchParams,
   isDefault,
   type BuildingMaterial,
@@ -33,11 +39,12 @@ import {
   type MapBounds,
   type PresetSpec,
   listingFiltersToRegistryView,
-  summarise,
+  countedWords,
   toSearchParams,
   watchdogNameSuggestion,
 } from './filters';
 import { districtsFilterClause } from './districtCodes';
+import { DEFAULT_SORT, parseSort, sortToParam } from './browseSort';
 import { BUILDING_MATERIAL_BUCKETS, filterById } from './filterRegistry.generated';
 import type { Disposition } from './types';
 
@@ -108,6 +115,22 @@ describe('URL round-trip', () => {
     expect(fromSearchParams(dirty).conditionMatch).toEqual(['novostavba']);
   });
 
+  it("round-trips the condition filter's Neuvedeno chip to the URL and the Watchdog", () => {
+    const f: ListingFilters = { ...DEFAULT_FILTERS, conditionMatch: ['novostavba', '__unknown__'] };
+    expect(toSearchParams(f).get('condition')).toBe('novostavba,__unknown__');
+    expect(fromSearchParams(toSearchParams(f)).conditionMatch).toEqual(['novostavba', '__unknown__']);
+    expect(filtersToWatchdogSpec(f).spec.condition_match).toEqual(['novostavba', '__unknown__']);
+  });
+
+  it('round-trips the energy rating to the URL and the Watchdog, dropping a letter outside A–G', () => {
+    const f: ListingFilters = { ...DEFAULT_FILTERS, energyRatingMatch: ['A', 'B'] };
+    expect(toSearchParams(f).get('energy')).toBe('A,B');
+    expect(fromSearchParams(toSearchParams(f)).energyRatingMatch).toEqual(['A', 'B']);
+    expect(fromSearchParams(new URLSearchParams('energy=A,Z,g')).energyRatingMatch).toEqual(['A']);
+    expect(filtersToWatchdogSpec(f).spec.energy_rating_match).toEqual(['A', 'B']);
+    expect(toSearchParams(DEFAULT_FILTERS).has('energy')).toBe(false);
+  });
+
   it('round-trips the portals and drops a code that is not one of them', () => {
     const f: ListingFilters = { ...DEFAULT_FILTERS, portals: ['idnes', 'realitymix'] };
     expect(fromSearchParams(toSearchParams(f)).portals).toEqual(['idnes', 'realitymix']);
@@ -133,13 +156,9 @@ describe('URL round-trip', () => {
       .toEqual(['sreality']);
   });
 
-  it('round-trips the condition-level bounds and price-change filters', () => {
+  it('round-trips the price-change filters', () => {
     const f: ListingFilters = {
       ...DEFAULT_FILTERS,
-      buildingConditionLevelMin: 2,
-      buildingConditionLevelMax: 4,
-      apartmentConditionLevelMin: 3,
-      apartmentConditionLevelMax: 5,
       priceChangeCountMin: 2,
       priceChangeWindowDays: 90,
       totalPriceChangePct: -10,
@@ -157,6 +176,13 @@ describe('URL round-trip', () => {
     // the default state rather than throwing.
     const legacy = new URLSearchParams('drops_min=2&sites_min=2&drop_pct_min=10');
     expect(fromSearchParams(legacy)).toEqual(DEFAULT_FILTERS);
+  });
+
+  it('the retired condition-level bounds degrade silently (condition scoring parked)', () => {
+    const url = new URLSearchParams('bld_cond_min=3&bld_cond_max=5&apt_cond_min=2&apt_cond_max=4');
+    expect(fromSearchParams(url)).toEqual(DEFAULT_FILTERS);
+    const stored = { ...DEFAULT_FILTERS, buildingConditionLevelMin: 3, apartmentConditionLevelMax: 4 };
+    expect(readPresetSpec(stored as ListingFilters).filters).toEqual(DEFAULT_FILTERS);
   });
 
   it('round-trips the subtype multi-select', () => {
@@ -344,19 +370,38 @@ describe('nullable deal type', () => {
     expect(fromSearchParams(rent).categoryType).toBe('pronajem');
   });
 
-  it('drops the deal phrase from the headline instead of printing null', () => {
-    const line = summarise({ ...DEFAULT_FILTERS, categoryType: null }, 12);
-    expect(line).not.toMatch(/null|undefined/);
-    expect(line).toMatch(/12/);
+  /* Ruling P09 (2026-10-27): the header says what is counted; every filter is
+     a pill under it (AppliedFilterPills.test.tsx), so these words name none. */
+  it('says what the header counts: the type and the deal, nothing else', () => {
+    expect(countedWords(DEFAULT_FILTERS)).toBe('apartments for sale');
+    expect(countedWords({ ...DEFAULT_FILTERS, categoryType: null })).toBe('apartments');
+    expect(countedWords({ ...DEFAULT_FILTERS, categoryMain: [] })).toBe('properties for sale');
+    expect(countedWords({ ...DEFAULT_FILTERS, categoryMain: ['byt', 'dum'] })).toBe('apartments / houses for sale');
+    const narrowed: ListingFilters = {
+      ...DEFAULT_FILTERS,
+      districts: [{ name: 'Praha', context: null, level: 'obec', id: 554782 }],
+      portals: ['idnes'],
+      pipeline: { set: 'out', in: [], out: [] },
+      bounds: { west: 14.4, south: 50.06, east: 14.44, north: 50.1 },
+    };
+    expect(countedWords(narrowed)).toBe('apartments for sale');
+  });
+});
+
+/* Ruling P05 (2026-10-27): the card title drops "Byt na prodej ·" only when the
+   filter pins one type AND one deal; any wider filter keeps it on every card. */
+describe('cohortKindOf', () => {
+  it('names the one type and deal of the default filter', () => {
+    expect(cohortKindOf(DEFAULT_FILTERS)).toEqual({ categoryMain: 'byt', categoryType: 'prodej' });
   });
 
-  it('names both sides of the portal filter, so an exclusion is never invisible', () => {
-    expect(summarise(DEFAULT_FILTERS, 1)).not.toMatch(/Sreality|iDNES/);
-    expect(summarise({ ...DEFAULT_FILTERS, portals: ['idnes'], portalsExcluded: ['sreality'] }, 1))
-      .toMatch(/on iDNES −Sreality$/);
-    expect(summarise({
-      ...DEFAULT_FILTERS, portalsExcluded: ['sreality'], portalsExcludedActiveOnly: true,
-    }, 1)).toMatch(/−Sreality \(active ads\)$/);
+  it('is null when the filter spans both deals ("Vše")', () => {
+    expect(cohortKindOf({ ...DEFAULT_FILTERS, categoryType: null })).toBeNull();
+  });
+
+  it('is null when the filter spans several types, or none', () => {
+    expect(cohortKindOf({ ...DEFAULT_FILTERS, categoryMain: ['byt', 'dum'] })).toBeNull();
+    expect(cohortKindOf({ ...DEFAULT_FILTERS, categoryMain: [] })).toBeNull();
   });
 });
 
@@ -576,19 +621,6 @@ describe('applyRegistryUpdate', () => {
       .unsupported).toContain('tags');
   });
 
-  it('names every active curated set in the headline, in Czech', () => {
-    const line = summarise({
-      ...DEFAULT_FILTERS,
-      tags: { set: 'out', in: [], out: [] },
-      collections: { set: null, in: [4], out: [] },
-      pipeline: { set: 'out', in: [], out: [] },
-    }, 3);
-    expect(line).toContain('bez štítků');
-    expect(line).toContain('v kolekci (1 kolekce)');
-    expect(line).toContain('mimo pipeline');
-    expect(summarise(DEFAULT_FILTERS, 3)).not.toMatch(/pipeline|kolekc|štít/);
-  });
-
   it('accepts DistrictChip[] for districts; null clears the list', () => {
     let f = { ...DEFAULT_FILTERS };
     const chip = { name: 'Edvarda Beneše', context: 'Plzeň', level: 'ulice', id: 700101 };
@@ -728,24 +760,23 @@ describe('filtersToWatchdogSpec', () => {
     expect(spec.city_index_rules).toEqual([{ index_name: 'safety', op: '>=', value: 7 }]);
   });
 
-  it('center+radius location maps to lat/lng/radius_m; viewport does not', () => {
-    const cr = { lat: 50.08, lng: 14.42, radius_m: 1500 };
-    const viewport = filtersToWatchdogSpec({
-      ...DEFAULT_FILTERS,
-      locationMode: 'viewport',
-      centerRadius: cr,
-    });
-    expect(viewport.spec.lat).toBeNull();
-    expect(viewport.spec.radius_m).toBeNull();
+  it('the map box is the one spatial shape: the viewport box when kept, the centre+radius square always', () => {
+    const bounds = { west: 14.3, south: 50.0, east: 14.5, north: 50.2 };
+    const viewport = { ...DEFAULT_FILTERS, bounds };
+    expect(filtersToWatchdogSpec(viewport).spec.bounds).toEqual(bounds);
+    expect(filtersToWatchdogSpec(viewport, { includeMapArea: true }).spec.bounds).toEqual(bounds);
+    expect(filtersToWatchdogSpec(viewport, { includeMapArea: false }).spec.bounds).toBeNull();
+    expect(filtersToWatchdogSpec(viewport).unsupported).toEqual([]);
 
-    const centered = filtersToWatchdogSpec({
-      ...DEFAULT_FILTERS,
-      locationMode: 'center_radius',
-      centerRadius: cr,
-    });
-    expect(centered.spec.lat).toBe(50.08);
-    expect(centered.spec.lng).toBe(14.42);
-    expect(centered.spec.radius_m).toBe(1500);
+    const cr = { lat: 50.08, lng: 14.42, radius_m: 1500 };
+    const centered = { ...DEFAULT_FILTERS, locationMode: 'center_radius' as const, centerRadius: cr, bounds };
+    /* The square Browse filtered on (effectiveBbox), never the stale viewport, and
+     * whatever the checkbox says: a sidebar pick is not a viewport. */
+    const square = effectiveBbox(centered);
+    expect(square).not.toBeNull();
+    expect(filtersToWatchdogSpec(centered, { includeMapArea: false }).spec.bounds).toEqual(square);
+    expect(filtersToWatchdogSpec(centered).spec.bounds).toEqual(square);
+    expect(Object.keys(filtersToWatchdogSpec(centered).spec)).not.toContain('radius_m');
   });
 
   it('tri-state amenities pivot to bool | null', () => {
@@ -839,73 +870,51 @@ describe('filter presets', () => {
     expect(filtersForPreset(f, false).priceMax).toBe(6_000_000);
   });
 
-  it('filtersForPreset always strips the pipeline scope', () => {
-    const f: ListingFilters = {
-      ...DEFAULT_FILTERS,
-      priceMax: 6_000_000,
-      pipeline: { set: null, in: [12], out: [] },
-    };
-    // Both branches: the scope is a lens, not preset criteria.
-    expect(filtersForPreset(f, false).pipeline).toBeNull();
-    expect(filtersForPreset(f, true).pipeline).toBeNull();
-  });
+  /* Operator ruling 2026-10-22 (reversing 2026-10-19): a preset keeps EVERY
+   * filter, the lenses included; only a dashboard — shareable — drops them. */
+  const LENSES: Partial<ListingFilters>[] = [
+    { pipeline: { set: 'in', in: [], out: [] } },
+    { pipeline: { set: null, in: [3, 9], out: [] } },
+    { collections: { set: null, in: [4], out: [] } },
+    { tags: { set: 'out', in: [], out: [] } },
+    { brokerId: 527 },
+    { showDismissed: true },
+  ];
 
-  it('never marks a preset dirty because of the pipeline scope', () => {
-    const saved: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 5_000_000 };
-    // This is the operator-visible contract: toggling Pipeline (or picking
-    // stages inside it) must NOT surface the "Update preset" button.
-    expect(
-      filtersEqualForPreset({ ...saved, pipeline: { set: 'in', in: [], out: [] } }, saved),
-    ).toBe(true);
-    expect(
-      filtersEqualForPreset({ ...saved, pipeline: { set: null, in: [3, 9], out: [] } }, saved),
-    ).toBe(true);
-    expect(
-      filtersEqualForPreset({ ...saved, pipeline: { set: 'out', in: [], out: [] } }, saved),
-    ).toBe(true);
-    // …and a real criteria change still is dirty, scope on or not.
-    expect(
-      filtersEqualForPreset(
-        { ...saved, priceMax: 4_000_000, pipeline: { set: 'in', in: [], out: [] } },
-        saved,
-      ),
-    ).toBe(false);
-  });
-
-  it('treats the dismissed reveal as a lens: stripped from presets, never dirtying one', () => {
-    const f: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 6_000_000, showDismissed: true };
-    expect(filtersForPreset(f, false).showDismissed).toBe(false);
-    expect(filtersForPreset(f, true).showDismissed).toBe(false);
-    const saved: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 5_000_000 };
-    expect(filtersEqualForPreset({ ...saved, showDismissed: true }, saved)).toBe(true);
-    expect(
-      filtersEqualForPreset({ ...saved, priceMax: 4_000_000, showDismissed: true }, saved),
-    ).toBe(false);
-  });
-
-  it('treats the broker scope as a lens too: stripped from presets, never dirtying one', () => {
-    const f: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 6_000_000, brokerId: 527 };
-    expect(filtersForPreset(f, false).brokerId).toBeNull();
-    expect(filtersForPreset(f, true).brokerId).toBeNull();
-    const saved: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 5_000_000 };
-    expect(filtersEqualForPreset({ ...saved, brokerId: 527 }, saved)).toBe(true);
-    expect(
-      filtersEqualForPreset({ ...saved, priceMax: 4_000_000, brokerId: 527 }, saved),
-    ).toBe(false);
-  });
-
-  it('treats the collection and tag scopes as lenses too: stripped, never dirtying a preset', () => {
-    const four = { set: null, in: [4], out: [] };
-    for (const key of ['collections', 'tags'] as const) {
-      const f: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 6_000_000, [key]: four };
-      expect(filtersForPreset(f, false)[key]).toBeNull();
-      expect(filtersForPreset(f, true)[key]).toBeNull();
-      const saved: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 5_000_000 };
-      expect(filtersEqualForPreset({ ...saved, [key]: { set: 'out', in: [], out: [] } }, saved))
-        .toBe(true);
-      expect(filtersEqualForPreset({ ...saved, priceMax: 4_000_000, [key]: four }, saved))
-        .toBe(false);
+  it('filtersForPreset keeps every lens, filtersForDashboard drops them', () => {
+    for (const lens of LENSES) {
+      const f: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 6_000_000, ...lens };
+      expect(filtersForPreset(f, false)).toMatchObject(lens);
+      expect(filtersForPreset(f, true)).toMatchObject(lens);
+      const dash = filtersForDashboard({ ...f, bounds: BOUNDS });
+      for (const key of Object.keys(lens) as (keyof ListingFilters)[]) {
+        expect(dash[key]).toEqual(DEFAULT_FILTERS[key]);
+      }
+      expect(dash.priceMax).toBe(6_000_000);
+      expect(dash.bounds).toBeNull();
     }
+  });
+
+  it('marks a preset edited when a lens changes, a dashboard never', () => {
+    const saved: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 5_000_000 };
+    for (const lens of LENSES) {
+      expect(filtersEqualForPreset({ ...saved, ...lens }, saved)).toBe(false);
+      expect(filtersEqualForPreset({ ...saved, ...lens }, { ...saved, ...lens })).toBe(true);
+      expect(filtersEqualForDashboard({ ...saved, ...lens }, saved)).toBe(true);
+      expect(filtersEqualForDashboard({ ...saved, priceMax: 4_000_000, ...lens }, saved)).toBe(false);
+    }
+  });
+
+  /* Every preset saved before 2026-10-22 stored the lenses off: it loads them off
+   * and reads clean against the same. */
+  it('reads a preset saved without lenses as storing them off', () => {
+    const { filters } = readPresetSpec({ filters: { categoryMain: ['byt'], priceMax: 5_000_000 } as ListingFilters, sort: null });
+    expect(filters.pipeline).toBeNull();
+    expect(filters.collections).toBeNull();
+    expect(filters.tags).toBeNull();
+    expect(filters.brokerId).toBeNull();
+    expect(filters.showDismissed).toBe(false);
+    expect(filtersEqualForPreset({ ...DEFAULT_FILTERS, categoryMain: ['byt'], priceMax: 5_000_000 }, filters)).toBe(true);
   });
 
   /* 0 of 7 live presets held a tag (2026-10-19), but a blob saved before
@@ -994,11 +1003,11 @@ describe('filter presets', () => {
     expect(got.sort).toBe('-price_czk');
   });
 
-  it('readPresetSpec tolerates a legacy bare-ListingFilters preset (sort null)', () => {
+  it('readPresetSpec tolerates a legacy bare-ListingFilters preset (the default sort)', () => {
     const legacy: ListingFilters = { ...DEFAULT_FILTERS, areaMin: 50 };
     const got = readPresetSpec(legacy);
     expect(got.filters.areaMin).toBe(50);
-    expect(got.sort).toBeNull();
+    expect(got.sort).toBe(sortToParam(DEFAULT_SORT));
     // And it still round-trips through the URL serializer.
     expect(fromSearchParams(toSearchParams(got.filters)).areaMin).toBe(50);
   });
@@ -1010,7 +1019,20 @@ describe('filter presets', () => {
     // Missing fields fall back to defaults, so toSearchParams won't throw.
     expect(got.filters.categoryMain).toEqual(['byt']);
     expect(got.filters.priceMin).toBe(1000);
-    expect(got.sort).toBeNull();
+    expect(got.sort).toBe(sortToParam(DEFAULT_SORT));
+  });
+
+  /* A preset saved under a sort with no control would load the default order while
+   * holding the old token, and read dirty before the user touched anything. */
+  it('readPresetSpec reads a sort Browse no longer offers as the default, so the preset loads clean', () => {
+    const got = readPresetSpec({ filters: { ...DEFAULT_FILTERS, areaMin: 50 }, sort: '-estate_area' });
+    expect(got.sort).toBe(sortToParam(DEFAULT_SORT));
+    // What Browse holds once the preset is loaded: its filters through the URL,
+    // and the sort the URL parses to. Both halves of PresetBar's dirty check agree.
+    const loadedFilters = fromSearchParams(toSearchParams(got.filters));
+    const loadedSort = sortToParam(parseSort(got.sort));
+    expect(filtersEqualForPreset(loadedFilters, got.filters)).toBe(true);
+    expect(loadedSort).toBe(got.sort);
   });
 
   it('readPresetSpec coerces stale scalar fields that became arrays (the load crash)', () => {
@@ -1043,5 +1065,85 @@ describe('filter presets', () => {
     const got = readPresetSpec(stale);
     expect(got.filters.categoryMain).toEqual(['dum']);
     expect(() => toSearchParams(got.filters)).not.toThrow();
+  });
+});
+
+/* The ONE box rule: the list, both stats RPCs and a watchdog saved from Browse all
+ * read effectiveBbox, so these pin what "in this map area" means everywhere. */
+describe('effectiveBbox', () => {
+  it('returns null when both modes are empty', () => {
+    expect(effectiveBbox(DEFAULT_FILTERS)).toBeNull();
+  });
+
+  it('returns the literal viewport bounds in viewport mode', () => {
+    const bounds = { west: 14.3, south: 50.0, east: 14.5, north: 50.2 };
+    expect(effectiveBbox({ ...DEFAULT_FILTERS, bounds })).toEqual(bounds);
+  });
+
+  it('ignores viewport bounds in centre+radius mode, and is null there without a centre', () => {
+    const bounds = { west: 14.3, south: 50.0, east: 14.5, north: 50.2 };
+    const got = effectiveBbox({
+      ...DEFAULT_FILTERS,
+      locationMode: 'center_radius',
+      centerRadius: { lat: 50, lng: 14, radius_m: 1000 },
+      bounds,
+    });
+    expect(got!.north).toBeLessThan(50.2);
+    expect(got!.west).toBeLessThan(14.3);
+    expect(effectiveBbox({ ...DEFAULT_FILTERS, locationMode: 'center_radius', centerRadius: null, bounds })).toBeNull();
+  });
+
+  it('draws the square around the circle: centre-symmetric, 1 km ≈ 1/111.32 deg of latitude, wider near the pole', () => {
+    const got = effectiveBbox({
+      ...DEFAULT_FILTERS,
+      locationMode: 'center_radius',
+      centerRadius: { lat: 50, lng: 14, radius_m: 1000 },
+    })!;
+    expect(got.north - 50).toBeCloseTo(50 - got.south, 9);
+    expect(got.east - 14).toBeCloseTo(14 - got.west, 9);
+    expect(got.north - 50).toBeCloseTo(1 / 111.32, 6);
+    const span = (lat: number) => {
+      const b = effectiveBbox({
+        ...DEFAULT_FILTERS,
+        locationMode: 'center_radius',
+        centerRadius: { lat, lng: 14, radius_m: 1000 },
+      })!;
+      return b.east - b.west;
+    };
+    expect(span(70)).toBeGreaterThan(span(10));
+  });
+});
+
+/* A preset click puts the area it saved in the map frame (BrowseExperience →
+ * ListingMap `frame`); a preset without one leaves the camera where it is. */
+describe('savedMapArea', () => {
+  const bounds = { west: 14.3, south: 50.0, east: 14.5, north: 50.2 };
+
+  it('is the saved map area of a preset saved with it, null for one saved without', () => {
+    const f = { ...DEFAULT_FILTERS, dispositions: ['2+kk' as Disposition], bounds };
+    expect(savedMapArea({ filters: filtersForPreset(f, true), sort: null })).toEqual(bounds);
+    expect(savedMapArea({ filters: filtersForPreset(f, false), sort: null })).toBeNull();
+  });
+
+  it('frames the square around a saved centre+radius, as Browse filters on', () => {
+    const f: ListingFilters = {
+      ...DEFAULT_FILTERS,
+      locationMode: 'center_radius',
+      centerRadius: { lat: 50, lng: 14, radius_m: 1000 },
+      bounds,
+    };
+    expect(savedMapArea({ filters: f, sort: null })).toEqual(effectiveBbox(f));
+  });
+
+  it('reads the legacy bare-filters blob too', () => {
+    expect(savedMapArea({ ...DEFAULT_FILTERS, bounds })).toEqual(bounds);
+  });
+});
+
+describe('mapAreaLabel', () => {
+  it('names the box by its extent and centre', () => {
+    expect(mapAreaLabel({ west: 14.4, south: 50.06, east: 14.44, north: 50.1 })).toBe(
+      'map area ≈ 2.9 × 4.5 km around 50.0800, 14.4200',
+    );
   });
 });

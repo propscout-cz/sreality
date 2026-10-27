@@ -10,9 +10,10 @@ import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'reac
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
+import BrokerContactCard from '@/components/BrokerContactCard';
 import { SectionLabel } from '@/components/section';
 import { priceLabel } from '@/components/autodedup/SplitPlanLines';
-import { prettyPhone, propertyBrokers } from '@/lib/brokers';
+import { propertyBrokers } from '@/lib/brokers';
 import { listingKindParts } from '@/lib/enums';
 import {
   fmtArea,
@@ -25,7 +26,7 @@ import {
 import { useListingBrokers } from '@/lib/hydration';
 import { buildAmenities, buildFacts } from '@/lib/listingFacts';
 import { areaKindOf, ppm2BasisFromToken } from '@/lib/measure';
-import { portalShort } from '@/lib/portals';
+import { portalBadge } from '@/lib/portals';
 import {
   fetchSoldComparables,
   fetchSoldCoverage,
@@ -34,7 +35,6 @@ import {
 } from '@/lib/queries';
 import { ROUTES } from '@/lib/routes';
 import { COVERED_CATEGORIES, RADII_M, summarizeSold } from '@/lib/soldComps';
-import { pushToast } from '@/lib/toast';
 import type { ListingPublic, PropertySource, SoldComparable, SoldCoverage } from '@/lib/types';
 
 import LocationBody from './LocationBody';
@@ -232,7 +232,7 @@ export function AdsSection({
             className={`flex flex-col gap-0.5 pb-1 ${i > 0 ? 'border-t border-[var(--color-rule-soft)] pt-3' : ''}`}
           >
             <div className="flex items-center gap-2">
-              <span className={CHIP}>{portalShort(s.source)}</span>
+              <span className={CHIP}>{portalBadge(s.source, s.source_url)}</span>
               {s.id === canonicalId && (
                 <span className="text-[11px] text-[var(--color-ink-3)]">hlavní inzerát</span>
               )}
@@ -279,57 +279,9 @@ const initials = (name: string | null): string =>
     .map((w) => w[0]?.toUpperCase() ?? '')
     .join('') || '?';
 
-/* The clipboard where it is allowed; otherwise the number is selected for the
- * system's own Copy (an iOS web app without a user gesture, a non-secure host). */
-export async function copyText(text: string, node: HTMLElement | null, what: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text);
-    pushToast('ok', `${what} zkopírováno.`, 2500);
-  } catch {
-    if (node) {
-      const range = document.createRange();
-      range.selectNodeContents(node);
-      const sel = window.getSelection();
-      sel?.removeAllRanges();
-      sel?.addRange(range);
-    }
-    pushToast('info', `${what} je označené — zkopírujte ho.`, 4000);
-  }
-}
-
-function ContactLine({
-  kind,
-  value,
-}: {
-  kind: 'tel' | 'mailto';
-  value: string | null;
-}) {
-  const ref = useRef<HTMLAnchorElement>(null);
-  const word = kind === 'tel' ? 'telefon' : 'e-mail';
-  if (!value) return null;
-  const shown = kind === 'tel' ? prettyPhone(value) : value;
-  return (
-    <div className="mt-2 flex items-center justify-between gap-2 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-inset)] py-1 pl-3 pr-1">
-      <a
-        ref={ref}
-        href={`${kind}:${value}`}
-        className="min-w-0 truncate font-mono text-[14px] tabular-nums text-[var(--color-ink)] [-webkit-user-select:all] [user-select:all]"
-      >
-        {shown}
-      </a>
-      <button
-        type="button"
-        onClick={() => void copyText(shown, ref.current, kind === 'tel' ? 'Číslo' : 'E-mail')}
-        aria-label={`Kopírovat ${word}`}
-        className="h-8 shrink-0 rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)] bg-[var(--color-paper)] px-3 text-[13px] text-[var(--color-ink-2)] active:bg-[var(--color-inset)]"
-      >
-        Kopírovat
-      </button>
-    </div>
-  );
-}
-
-/* MS7 (lib/brokers.propertyBrokers) over the batched read the desktop list uses.
+/* MS7 (lib/brokers.propertyBrokers) over the batched read the desktop list uses,
+ * and the desktop's own contact card under each name — the same channels, the
+ * same ad references, the same copy behaviour (lib/clipboard) on both shells.
  * A failed read says so with a retry, never "no broker"; loading and a genuinely
  * unattributed property render nothing. */
 export function BrokersSection({
@@ -387,8 +339,7 @@ export function BrokersSection({
                 </p>
               </div>
             </div>
-            <ContactLine kind="tel" value={b.primary_phone} />
-            <ContactLine kind="mailto" value={b.primary_email} />
+            <BrokerContactCard broker={b} ads={b.ads} className="mt-3" />
           </li>
         ))}
       </ul>

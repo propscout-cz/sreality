@@ -2,20 +2,21 @@
 
 Three invariant families, all deterministic and offline (no database):
 
-1. NO GATE — the publication gate is GONE (migration 475, NEW DEDUP Wave 0:
-   its only stamper was the removed dedup engine). The EFFECTIVE
-   (latest-migration) definitions of `properties_public` (live view: detail
-   pages, watchdog matcher) and `browse_projection` (migration 276: the ONE
+1. NO PER-ROW SECURITY DEFINER GATE — the old gate function is GONE (migration
+   475, NEW DEDUP Wave 0: its only stamper was the removed dedup engine). The
+   EFFECTIVE (latest-migration) definitions of `properties_public` (live view:
+   detail pages, watchdog matcher) and `browse_projection` (migration 276: the ONE
    projection the Browse read model, `browse_list`, materializes from) must not call
-   `publication_gate_enabled()` at all.
+   `publication_gate_enabled()` at all. The publication rule that serves Browse now
+   (migration 669, toolkit/publication.py) is an inline column expression on
+   `properties`, which the planner folds into the scan; the rail below pins it.
 
    Why this is still worth a test rather than a deletion: the function was
    SECURITY DEFINER and the planner cannot inline it, so a bare call in a WHERE
    ran ONCE PER ROW — ~87k times for the byt+pronájem cohort, the PR-#707
    incident. It survived as a scalar subquery `(SELECT publication_gate_enabled())`
-   only because that made it an InitPlan. Anything re-introducing a per-row
-   SECURITY DEFINER call into these definitions repeats that outage, so
-   the guard now watches for the whole class returning, not for its wrapping.
+   only because that made it an InitPlan. Re-introducing that call into these
+   definitions repeats the outage, so the guard watches for it bare or wrapped.
 
 2. REBUILD INVARIANTS — the pg_cron rebuild function (migration 277) must
    ANALYZE the replacement relation BEFORE swapping it live (autovacuum never
@@ -43,6 +44,7 @@ from toolkit.filter_registry import REGISTRY, Agenda
 REPO = Path(__file__).resolve().parents[1]
 MIGRATIONS = REPO / "migrations"
 QUERIES_TS = REPO / "frontend" / "src" / "lib" / "queries.ts"
+BROWSE_SORT_TS = REPO / "frontend" / "src" / "lib" / "browseSort.ts"
 GATE_CALL = re.compile(r"publication_gate_enabled\s*\(\s*\)", re.IGNORECASE)
 # Strip line comments so a comment that merely *describes* the bad pattern
 # ("...a BARE call: publication_gate_enabled()...") isn't flagged. `--` covers
@@ -55,7 +57,7 @@ def _strip_comments(src: str) -> str:
 
 
 def _assert_no_gate(raw: str, where: str) -> None:
-    """Executable `raw` (comments stripped) must not call the publication gate.
+    """Executable `raw` (comments stripped) must not call the removed gate function.
 
     Scoped to ONE view definition by the callers below, not to a whole migration
     file — migration 475 legitimately names the function in its own
@@ -114,7 +116,7 @@ def _function_block(fn: str) -> tuple[str, str]:
     return sql[start:end], f"{src.name}:{fn}"
 
 
-# ------------------------------------------------------------------- no gate --
+# ------------------------------------------- no per-row SECURITY DEFINER gate --
 
 def _view_block(view: str) -> tuple[str, str]:
     """(sql, label) for just the effective CREATE VIEW statement of `view`."""
@@ -136,7 +138,7 @@ def _view_block(view: str) -> tuple[str, str]:
 
 
 @pytest.mark.parametrize("view", ["properties_public", "browse_projection"])
-def test_read_path_view_has_no_publication_gate(view: str) -> None:
+def test_read_path_view_calls_no_per_row_definer_gate(view: str) -> None:
     sql, label = _view_block(view)
     _assert_no_gate(sql, label)
 
@@ -209,7 +211,7 @@ def test_a_resolved_but_empty_allowlist_yields_zero_rows(fn: str) -> None:
         )
 
 
-# ------------------------------------------------------- the consumer rule --
+# ---------------------------------------- the consumer and publication rules --
 
 
 @pytest.mark.parametrize("view", ["browse_projection"])
@@ -261,6 +263,22 @@ def test_the_effective_list_definition_carries_the_consumer_rule(view: str) -> N
     )
 
 
+def test_the_effective_list_definition_carries_the_published_rule() -> None:
+    """Rule 16, operator ruling 2026-10-23 (migration 669): Browse, Stats and the map serve a property only once
+    it is PUBLISHED, settled or 6 h old. RED by: a later restatement from a pre-669 body dropping the arm. The
+    character pin on 669 itself is tests/test_668_publication_gate.py."""
+    from toolkit.publication import PUBLISHED_PREDICATE
+
+    src = _latest_migration_defining("browse_projection")
+    sql = _strip_comments(src.read_text())
+    body = sql[sql.lower().index("view browse_projection as"):]
+    body = " ".join(body[: body.index(";")].split())
+    assert f"and {PUBLISHED_PREDICATE}" in body, (
+        f"{src.name}: browse_projection dropped the publication rule — toolkit.publication.PUBLISHED_PREDICATE "
+        f"is not in its WHERE, verbatim."
+    )
+
+
 # ------------------------------------------------------------- read contract --
 
 def _projection_columns() -> set[str]:
@@ -306,9 +324,9 @@ def _ts_string_const(name: str) -> str:
 
 
 def _sortable_fields() -> set[str]:
-    src = QUERIES_TS.read_text()
+    src = BROWSE_SORT_TS.read_text()
     m = re.search(r"const SORTABLE_FIELDS[^;]+;", src)
-    assert m, "queries.ts: SORTABLE_FIELDS not found"
+    assert m, "browseSort.ts: SORTABLE_FIELDS not found"
     return set(re.findall(r"'(\w+)'", m.group(0)))
 
 
@@ -350,12 +368,10 @@ def test_frontend_read_contract_subset_of_projection() -> None:
         if d.pg_column and Agenda.BROWSE in d.agendas
     }
     card_cols = set(_ts_string_const("CARD_COLS").split(","))
-    table_cols = set(_ts_string_const("TABLE_COLS").split(","))
     map_cols = set(_ts_string_const("MAP_COLS").split(","))
     contract = (
         registry_cols
         | card_cols
-        | table_cols
         | map_cols
         | _sortable_fields()
         | HAND_CODED_FILTER_COLUMNS

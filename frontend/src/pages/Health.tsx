@@ -126,7 +126,7 @@ export default function Health() {
 }
 
 /* The watchers speak the page's first line: the liveness row's status and, when it is not OK,
- * its own cells' sentences (worker heartbeat, health lane, stale alarms, the API's loops), worst
+ * its own cells' sentences (worker heartbeat, health lane, stale alarms, unalerted cells), worst
  * first, as written. A stale or absent liveness row reads Not measured, never OK. */
 function Watchers({ row }: { row: HealthRow | null }) {
   if (!row) {
@@ -219,8 +219,8 @@ function ReadStamp({
 /* Five quiet counts; colour only in a dot, never in a number, and a dot only beside a count that
  * is not zero: a calm page draws no red. Problems and Watch count ALARM checks, Not measured every
  * check, Open incidents alarm incidents only (a standing gauge is not news); "worse than last week"
- * counts gauge cells, and is "not comparable" until a week of trend exists. The sixth tile of the
- * design (where alerts reach) waits for its data (delivery facts). */
+ * counts gauge cells, and is "not comparable" until a week of trend exists. The design's sixth tile
+ * (where alerts reach) was dropped by ruling R2b (2026-10-21): alerts reach Health and the canary e-mail. */
 function Strip({ strip }: { strip: ReturnType<typeof stripCounts> }) {
   const { openIncidents, gaugesWorse } = strip;
   return (

@@ -13,7 +13,7 @@ const pivot = pivotOf({
     cell([], 90, 200, null, 50),
     cell(['1+kk'], 40, 160, null, 20),
     cell(['2+kk'], 45, 260, null, 20),
-    cell(['3+kk'], 4, null),
+    { ...cell(['3+kk'], 4, null), small: { min: 150, max: 330, mean: 241.5, median: 243 } },
   ],
 });
 
@@ -39,14 +39,14 @@ describe('<BoxTable> — THE box primitive', () => {
     expect(parseFloat(whisker.style.width)).toBeCloseTo(pct(300) - pct(220));
   });
 
-  it('lists the five numbers it draws as columns, with n and the unit', () => {
+  it('lists the mean and the five numbers it draws as columns, with n and the unit', () => {
     render(<BoxTable pivot={pivot} />);
     expect(screen.getByText(/Doba na trhu · dní/)).toBeInTheDocument();
     const heads = screen.getAllByRole('columnheader').map((h) => h.textContent);
-    expect(heads.slice(3)).toEqual(['p10', 'p25', 'medián', 'p75', 'p90']);
+    expect(heads.slice(3)).toEqual(['průměr', 'p10', 'p25', 'medián', 'p75', 'p90']);
     const row = screen.getByRole('rowheader', { name: '1+kk' }).closest('tr')!;
     expect(within(row).getAllByRole('cell').map((c) => sp(c.textContent))).toEqual([
-      '40', '', '120', '140', '160', '180', '200',
+      '40', '', '160', '120', '140', '160', '180', '200',
     ]);
   });
 
@@ -57,6 +57,19 @@ describe('<BoxTable> — THE box primitive', () => {
     expect(within(row).getAllByRole('cell').map((c) => sp(c.textContent))).toEqual([
       '4', 'pod 5méně než 5 nemovitostí, bez statistik',
     ]);
+  });
+
+  it('shows a row under the minimum as min, průměr, medián, max on a tinted row when asked — no box, no percentiles', () => {
+    render(<BoxTable pivot={pivot} showSmall />);
+    const row = screen.getByRole('rowheader', { name: '3+kk' }).closest('tr')!;
+    expect(row).toHaveAttribute('data-small', 'true');
+    expect(row.querySelector('[data-box]')).toBeNull();
+    expect(within(row).getAllByRole('cell').map((c) => sp(c.textContent))).toEqual([
+      '4', 'malý vzorek min 150 průměr 242 medián 243 max 330',
+    ]);
+    /* The shared axis is the drawn rows' own: a small row never stretches it. */
+    const axis = boxAxis(pivotRows(pivot))!;
+    expect(axis.domain[1]).toBeLessThan(330);
   });
 
   it('labels the shared axis with distinct ticks', () => {

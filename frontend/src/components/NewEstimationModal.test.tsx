@@ -1,48 +1,54 @@
-/* NewEstimationModal — the "new estimation / new building" popup.
+/* NewEstimationModal — "New estimation" of one ad we hold.
  *
- * Four things pinned here. (1) The dialog and its fields are wired by useId(),
- * not by hard-coded DOM ids, so two mounted providers cannot cross-wire a
- * <label> to the other modal's control — the test renders two and asserts the
- * ids are distinct. (2) The building attachments file input is named by the
- * caption that sits above it; that caption was a sibling <label> with no
- * htmlFor, so it named nothing. (3) The shared modal-dialog contract
- * (src/test/a11y.ts, over lib/useDialog). (4) The two behaviours the migration
- * to <Dialog> had to carry across by hand: initial focus lands on the URL
- * field rather than on the header's close glyph — which is what the primitive
- * would pick, being the first focusable control — and NO dismissal gesture
- * fires while a submit is in flight.
+ * Pinned here. (1) The subject is the ad the opener names: the POST body
+ * carries its `listing_id` and nothing that could name another subject (no
+ * URL arm exists any more, docs/design/new-property-from-link.md §3.5). (2) The
+ * dialog and its fields are wired by useId(), not by hard-coded DOM ids, so two
+ * mounted providers cannot cross-wire a <label> to the other modal's control.
+ * (3) The shared modal-dialog contract (src/test/a11y.ts, over lib/useDialog).
+ * (4) Initial focus lands on the primary action rather than on the header's
+ * close glyph — which is what the primitive would pick, being the first
+ * focusable control — and NO dismissal gesture fires while a submit is in
+ * flight.
  */
 
-import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Link, MemoryRouter } from 'react-router-dom';
+import { Link, MemoryRouter, useLocation } from 'react-router-dom';
 
 import { expectDialogContract } from '@/test/a11y';
+import { ApiError } from '@/lib/api';
 import { ROUTES } from '@/lib/routes';
 import { NewEstimationProvider, useNewEstimationModal } from './NewEstimationModal';
 
-/* Only previewListingUrl is replaced, and only so the in-flight case has an
- * honest way to STAY in flight: the modal reads `pending` off the mutation, so
- * a promise that never settles is the state under test. */
-const previewListingUrl = vi.hoisted(() => vi.fn());
+/* Only the POST is replaced: a promise that never settles is the in-flight
+ * state under test, a resolved run is the navigation under test. */
+const createEstimation = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
-  previewListingUrl,
+  createEstimation,
 }));
+
+beforeEach(() => {
+  createEstimation.mockReset();
+});
 
 function Opener() {
   const { open } = useNewEstimationModal();
   return (
-    <>
-      <button type="button" onClick={() => open()}>
-        Open estimation
-      </button>
-      <button type="button" onClick={() => open({ url: 'https://www.sreality.cz/detail/prodej/byt/1' })}>
-        Open prefilled
-      </button>
-    </>
+    <button
+      type="button"
+      onClick={() => open({ listingId: 105053, categoryMain: 'dum', estimateKind: 'sale' })}
+    >
+      Open estimation
+    </button>
   );
+}
+
+function Where() {
+  const l = useLocation();
+  return <p data-testid="where">{l.pathname + l.search + l.hash}</p>;
 }
 
 function renderHost(count = 1) {
@@ -58,41 +64,94 @@ function renderHost(count = 1) {
   ));
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={['/estimations']}>{providers}</MemoryRouter>
+      <MemoryRouter initialEntries={['/property/774']}>
+        {providers}
+        <Where />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
 
-const renderModals = (count = 1) => {
+const renderModals = async (count = 1) => {
   const utils = renderHost(count);
   screen.getAllByRole('button', { name: 'Open estimation' }).forEach((b) => fireEvent.click(b));
+  /* The body is a lazy chunk (first-visit budget): wait for every dialog to mount. */
+  await screen.findAllByRole('dialog');
   return utils;
 };
 
 describe('<NewEstimationModal>', () => {
-  it('names the URL field and the dialog', () => {
-    renderModals();
-    expect(screen.getByRole('textbox', { name: 'Listing URL' })).toBeInTheDocument();
-    expect(screen.getByRole('dialog')).toHaveAccessibleName('Where is the listing?');
+  it('names the dialog and offers no URL field', async () => {
+    await renderModals();
+    expect(screen.getByRole('dialog')).toHaveAccessibleName('Estimate this property');
+    expect(screen.queryByRole('textbox', { name: 'Listing URL' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Building/ })).not.toBeInTheDocument();
   });
 
-  it('names the operator-context textareas', () => {
-    renderModals();
+  it('seeds the selectors from the ad', async () => {
+    await renderModals();
+    expect(screen.getByRole('button', { name: 'House' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Sale' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  /* A pick-one is the ONE joined bar (operator ruling 2026-10-27): the chosen segment
+   * filled copper, never the old paper tile whose bold label shifted the width. */
+  it('draws Property type and Estimate as joined bars, the chosen segment filled copper', async () => {
+    await renderModals();
+    for (const [name, lit, idle] of [
+      ['Property category', 'House', 'Apartment'],
+      ['Estimate rent or sale price', 'Sale', 'Rent'],
+    ]) {
+      const bar = screen.getByRole('group', { name });
+      expect(bar.firstElementChild).toHaveClass('inline-flex', 'border', 'bg-[var(--color-paper-2)]');
+      expect(within(bar).getByRole('button', { name: lit })).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+      expect(within(bar).getByRole('button', { name: lit })).not.toHaveStyle({ fontWeight: '600' });
+      expect(within(bar).getByRole('button', { name: idle })).toHaveAttribute('aria-pressed', 'false');
+    }
+    expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+  });
+
+  it('names the operator-context textareas', async () => {
+    await renderModals();
     expect(screen.getByRole('textbox', { name: 'Special instructions' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Property context' })).toBeInTheDocument();
   });
 
-  it('names the building attachments picker by its visible caption', () => {
-    renderModals();
-    fireEvent.click(screen.getByRole('radio', { name: /Building/ }));
-    expect(
-      screen.getByLabelText('Attachments — floor plans, photos, drawings'),
-    ).toHaveAttribute('type', 'file');
+  it('estimates the ad it was opened for, by its listing id, and lands on the run', async () => {
+    createEstimation.mockResolvedValue({
+      id: 88, status: 'pending', subject_source: 'idnes', subject_source_id_native: 'abc123',
+    });
+    await renderModals();
+    fireEvent.click(screen.getByRole('button', { name: 'Rent' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Estimate' }));
+
+    await waitFor(() => expect(createEstimation).toHaveBeenCalledTimes(1));
+    const body = createEstimation.mock.calls[0][0];
+    expect(body).toMatchObject({
+      listing_id: 105053,
+      estimate_kind: 'rent',
+      category_main: 'dum',
+      category_type: 'pronajem',
+      source: 'ui',
+    });
+    expect(body).not.toHaveProperty('url');
+    expect(body).not.toHaveProperty('sreality_id');
+    expect(body).not.toHaveProperty('spec');
+    await waitFor(() =>
+      expect(screen.getByTestId('where').textContent).toBe('/listing/idnes/abc123?run=88#estimations'));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('gives two mounted modals distinct ids, so neither steals the other label', () => {
-    renderModals(2);
-    const [a, b] = screen.getAllByRole('textbox', { name: 'Listing URL' });
+  it('says what the API refused, in its own words', async () => {
+    createEstimation.mockRejectedValue(new ApiError('This listing needs a location to be estimated.', 422, null));
+    await renderModals();
+    fireEvent.click(screen.getByRole('button', { name: 'Estimate' }));
+    expect(await screen.findByText('This listing needs a location to be estimated.')).toBeInTheDocument();
+  });
+
+  it('gives two mounted modals distinct ids, so neither steals the other label', async () => {
+    await renderModals(2);
+    const [a, b] = screen.getAllByRole('textbox', { name: 'Special instructions' });
     expect(a.id).not.toBe('');
     expect(a.id).not.toBe(b.id);
     const dialogs = screen.getAllByRole('dialog');
@@ -103,27 +162,18 @@ describe('<NewEstimationModal>', () => {
 });
 
 describe('<NewEstimationModal> dialog contract', () => {
-  it('names itself, traps focus, closes one layer on Escape and gives focus back', () => {
+  it('names itself, traps focus, closes one layer on Escape and gives focus back', async () => {
     renderHost();
     const trigger = screen.getByRole('button', { name: 'Open estimation' });
     expectDialogContract({ trigger, open: () => fireEvent.click(trigger) });
   });
 
-  it('puts initial focus on the URL field, not on the close glyph in front of it', () => {
-    renderModals();
-    expect(document.activeElement).toBe(
-      screen.getByRole('textbox', { name: 'Listing URL' }),
-    );
-  });
-
-  it('opens on the primary action when the URL is prefilled and its field is not rendered', () => {
-    renderHost();
-    fireEvent.click(screen.getByRole('button', { name: 'Open prefilled' }));
-    expect(screen.queryByRole('textbox', { name: 'Listing URL' })).not.toBeInTheDocument();
+  it('opens on the primary action, not on the close glyph in front of it', async () => {
+    await renderModals();
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Estimate' }));
   });
 
-  it('leaves no scroll lock behind when the page underneath navigates away', () => {
+  it('leaves no scroll lock behind when the page underneath navigates away', async () => {
     renderHost();
     const trigger = screen.getByRole('button', { name: 'Open estimation' });
     trigger.focus();
@@ -140,21 +190,16 @@ describe('<NewEstimationModal> dialog contract', () => {
 });
 
 describe('<NewEstimationModal> in-flight guard', () => {
-  /* The pre-migration modal gated each dismissal gesture separately (a
-   * `!pending` arm in its own Escape listener, another in the backdrop
-   * mousedown, `disabled` on the close button). The gating now lives in ONE
-   * guarded onClose, so all three are asserted against that one place. */
+  /* The gating lives in ONE guarded onClose, so every dismissal gesture is
+   * asserted against that one place. */
   async function submitAndHang() {
-    previewListingUrl.mockReturnValue(new Promise(() => {}));
-    renderModals();
-    fireEvent.change(screen.getByRole('textbox', { name: 'Listing URL' }), {
-      target: { value: 'https://www.sreality.cz/detail/pronajem/byt/1' },
-    });
+    createEstimation.mockReturnValue(new Promise(() => {}));
+    await renderModals();
     fireEvent.click(screen.getByRole('button', { name: 'Estimate' }));
     /* react-query settles `isPending` a microtask later, so waiting on the
      * button's in-flight label is what makes this test about the guard rather
      * than about a race it would otherwise win by accident. */
-    await screen.findByText('Scraping…');
+    await screen.findByText('Opening…');
     return screen.getByRole('dialog');
   }
 
@@ -163,6 +208,13 @@ describe('<NewEstimationModal> in-flight guard', () => {
     fireEvent.keyDown(document.activeElement ?? document, { key: 'Escape' });
     expect(dialog).toBeInTheDocument();
     expect(document.body.style.overflow).toBe('hidden');
+  });
+
+  it('locks both selectors while a submit is in flight', async () => {
+    await submitAndHang();
+    for (const name of ['Apartment', 'House', 'Commercial', 'Rent', 'Sale']) {
+      expect(screen.getByRole('button', { name })).toBeDisabled();
+    }
   });
 
   it('ignores the close glyph while a submit is in flight', async () => {

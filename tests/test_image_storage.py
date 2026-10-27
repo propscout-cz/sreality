@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import pytest
 
-from scraper.image_storage import R2_ENV_VARS, image_key, is_configured
+from scraper.image_storage import LISTING_PHOTO_KEY_RE, R2_ENV_VARS, image_key, is_configured
 
 
 class _StreamResp:
     """Minimal stand-in for a streamed requests.Response (context manager)."""
 
-    def __init__(self, content: bytes, headers: dict | None = None) -> None:
+    def __init__(self, content: bytes, headers: dict | None = None, status: int = 200) -> None:
         self._content = content
         self.headers = headers or {}
+        self.status_code = status
 
     def __enter__(self) -> "_StreamResp":
         return self
@@ -32,7 +33,9 @@ def _patch_get(monkeypatch, captured: list, resp: _StreamResp) -> None:
     import scraper.image_storage as image_storage
 
     class _Session:
-        def get(self, url, timeout=15.0, stream=False):
+        # scraper.egress sends every direct fetch as a non-following streamed request.
+        def request(self, method, url, *, headers, timeout, stream, allow_redirects):
+            assert (method, stream, allow_redirects) == ("GET", True, False)
             captured.append(url)
             return resp
 
@@ -56,14 +59,50 @@ def test_the_image_session_wears_the_crawlers_browser_identity():
     image_storage._SESSION = None
 
 
-def test_image_key_pads_sequence():
-    assert image_key(2836292428, 1) == "2836292428/0001.jpg"
-    assert image_key(2836292428, 19) == "2836292428/0019.jpg"
-    assert image_key(2836292428, 1234) == "2836292428/1234.jpg"
+def test_image_key_is_namespaced_and_row_unique():
+    assert image_key(2836292428, 17503887) == "img/2836292428/17503887.jpg"
+    assert image_key(123, 4) == "img/123/4.jpg"
 
 
-def test_image_key_handles_missing_sequence():
-    assert image_key(123, None) == "123/0000.jpg"
+def test_image_key_cannot_collide_with_either_legacy_shape():
+    # A new listing whose id equals an old listing's sreality_id minted the old listing's
+    # `{prefix}/{seq:04d}.jpg` keys. `img/` rules that out whatever the numbers are, and the
+    # image id keeps two rows of one listing apart (two NULL sequences both became 0000).
+    assert not image_key(13251404, 1).endswith("13251404/0001.jpg")
+    assert image_key(31419, 529986) != image_key(31419, 529987)
+
+
+@pytest.mark.parametrize(
+    "key", ["img/443628/226547358.jpg", "2872083276/0001.jpg", "-4671/0009.jpg"]
+)
+def test_listing_photo_whitelist_accepts_every_shape_the_bucket_holds(key):
+    assert LISTING_PHOTO_KEY_RE.match(key)
+
+
+def test_listing_photo_whitelist_accepts_what_the_writer_mints():
+    # A shape change that forgot the whitelist would 404 every newly stored photo.
+    assert LISTING_PHOTO_KEY_RE.match(image_key(443628, 226547358))
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "custom-attachments/building/1/a.jpg",    # the private uploads sharing the bucket
+        "thumb/w1080/img/1/2.webp",               # copies are reached through ?w=, never directly
+        "backups/x/2026-10-25/a.jpg",
+        "img/custom-attachments/1.jpg",           # the namespace is not a free prefix
+        "img/443628/226547358.pdf",
+        "img/443628.jpg",
+        "img/-1/2.jpg",
+        "x/img/443628/226547358.jpg",
+        "2872083276/001.jpg",
+        "2872083276/0001.jpg\n",                  # `\Z`, not `$`
+        "img/443628/226547358.jpg\n",
+        "img/\u0661/2.jpg",                       # `[0-9]`, not the unicode-aware `\d`
+    ],
+)
+def test_listing_photo_whitelist_rejects_everything_else(key):
+    assert not LISTING_PHOTO_KEY_RE.match(key)
 
 
 def test_is_configured_requires_all_vars(monkeypatch):
@@ -111,18 +150,6 @@ def test_download_image_normalises_a_legacy_chain(monkeypatch):
         "https://d18-a.sdn.cz/x/y.jpeg?fl=res,749,562,3|shr,,20|jpg,90"
     )
     assert captured == ["https://d18-a.sdn.cz/x/y.jpeg?fl=res,1800,1800,1|shr,,20|jpg,80"]
-
-
-def test_download_image_honours_an_explicit_transform_ops(monkeypatch):
-    """The re-master lane needs to request a template other than the default."""
-    import scraper.image_storage as image_storage
-
-    captured: list[str] = []
-    _patch_get(monkeypatch, captured, _StreamResp(b""))
-    image_storage.download_image(
-        "https://d18-a.sdn.cz/x/y.jpeg", transform_ops="res,400,400,1|jpg,70"
-    )
-    assert captured == ["https://d18-a.sdn.cz/x/y.jpeg?fl=res,400,400,1|jpg,70"]
 
 
 def test_download_image_rejects_oversize_content_length(monkeypatch):
@@ -302,7 +329,11 @@ def _patch_session(monkeypatch, calls: list, hop: _Hop, resp: _StreamResp):
     class _Session:
         def get(self, url, timeout=15.0, stream=False, allow_redirects=True, proxies=None):
             calls.append((url, allow_redirects, proxies))
-            return hop if proxies else resp
+            return hop
+
+        def request(self, method, url, *, headers, timeout, stream, allow_redirects):
+            calls.append((url, allow_redirects, None))
+            return resp
 
     monkeypatch.setattr(image_storage, "_session", lambda: _Session())
 
@@ -319,7 +350,7 @@ def test_a_proxied_redirector_is_resolved_through_the_proxy_and_the_file_fetched
     proxies = {"http": "http://proxy.example", "https": "http://proxy.example"}
     url = "https://reality.idnes.cz/file/thumbnail/6ac5?profile=front_detail_article_big_fit"
     assert image_storage.download_image(url, proxies=proxies) == b"jpegbytes"
-    assert calls == [(url, False, proxies), (static, True, None)]
+    assert calls == [(url, False, proxies), (static, False, None)]
 
 
 def test_a_proxied_site_that_serves_the_bytes_itself_is_read_through_the_proxy(monkeypatch):
@@ -341,3 +372,59 @@ def test_a_proxied_hop_raises_its_status_like_any_fetch(monkeypatch):
     _patch_session(monkeypatch, calls, _Hop(403), _StreamResp(b""))
     with pytest.raises(requests.HTTPError):
         image_storage.download_image("https://www.portal.cz/img/1.jpg", proxies={"https": "http://p"})
+
+
+def test_the_image_session_is_the_egress_one() -> None:
+    """Image URLs are page-supplied and their bytes reach the open /images proxy: every
+    direct connection is resolved, checked and pinned (scraper.egress)."""
+    import scraper.image_storage as image_storage
+    from scraper import egress
+
+    image_storage._SESSION = None
+    session = image_storage._session()
+    assert isinstance(session.get_adapter("https://cdn.example/x.jpg"), egress._PinnedAdapter)
+    assert session.trust_env is False
+    image_storage._SESSION = None
+
+
+def test_an_image_url_on_a_private_address_is_never_fetched(monkeypatch) -> None:
+    import scraper.image_storage as image_storage
+    from scraper import egress
+
+    calls: list = []
+    _patch_get(monkeypatch, calls, _StreamResp(b"secret"))
+    with pytest.raises(egress.EgressRefused):
+        image_storage.download_image("http://169.254.169.254/latest/meta-data/")
+    with pytest.raises(egress.EgressRefused):
+        image_storage.download_image("http://169.254.169.254/x.jpg", proxies={"http": "http://p"})
+    assert calls == []
+
+
+def test_a_redirect_to_a_private_address_is_refused_at_the_hop(monkeypatch) -> None:
+    import scraper.image_storage as image_storage
+    from scraper import egress
+
+    calls: list = []
+    _patch_get(monkeypatch, calls, _StreamResp(b"", headers={"Location": "http://10.0.0.7/x.jpg"}, status=302))
+    with pytest.raises(egress.EgressRefused):
+        image_storage.download_image("https://cdn.example/x.jpg")
+    assert calls == ["https://cdn.example/x.jpg"]
+
+
+@pytest.mark.parametrize("status, gone, dead", [(404, True, False), (410, True, False),
+                                               (400, False, True), (415, False, True),
+                                               (403, False, False), (503, False, False)])
+def test_an_error_status_raises_like_raise_for_status(monkeypatch, status, gone, dead) -> None:
+    """The HTTPError carries a response with the status: the image phase reads it to tell an
+    expired URL (gone) and a dead one (permanent) from a throttle or an outage (transient)."""
+    import requests
+
+    import scraper.image_storage as image_storage
+    from scraper.main import _is_dead_url_image_error, _is_gone_image_error
+
+    _patch_get(monkeypatch, [], _StreamResp(b"", status=status))
+    with pytest.raises(requests.HTTPError) as exc:
+        image_storage.download_image("https://cdn.example/x.jpg")
+    assert exc.value.response is not None and exc.value.response.status_code == status
+    assert _is_gone_image_error(exc.value) is gone
+    assert _is_dead_url_image_error(exc.value) is dead

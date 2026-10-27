@@ -16,6 +16,7 @@ import * as auth from '@/lib/auth';
 import { createMutationCache } from '@/lib/mutationCache';
 import { PHONE_PIPELINE_STAGE_KEY } from '@/lib/phonePipeline';
 import { reloadActingStore, resetActiveBoard, setActiveBoard } from '@/lib/acting';
+import { districtChipsToCsvParams } from '@/lib/filters';
 import { PHONE_SHELL_QUERY } from '@/lib/phoneShell';
 import * as pinAudit from '@/lib/pinAudit';
 import * as queries from '@/lib/queries';
@@ -114,6 +115,8 @@ const CARDS: PipelineBoardCard[] = [
     entered_stage_at: '2026-10-09T09:00:00Z',
     display_label: 'Lesní 3, Beroun',
     obec: 'Beroun',
+    obec_id: 531057,
+    region_id: 27,
   },
 ];
 
@@ -140,14 +143,7 @@ beforeEach(() => {
   setNarrow(true);
   vi.mocked(api.listPipelineShares).mockResolvedValue({ shared_with: [], shared_with_me: [] });
   window.scrollTo = vi.fn() as unknown as typeof window.scrollTo;
-  vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({
-    watchdog: 0,
-    collection_monitor: 0,
-    share: 0,
-    system_health: 0,
-    total: 0,
-    unread_count: 0,
-  });
+  vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({ unread_count: 0 });
   vi.mocked(pinAudit.fetchPinAuditTotal).mockResolvedValue(0);
   vi.mocked(auth.useAuth).mockReturnValue({
     isAdmin: true,
@@ -178,14 +174,14 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function renderPipeline() {
+function renderPipeline(entry = '/pipeline') {
   const qc = new QueryClient({
     mutationCache: createMutationCache(),
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={['/pipeline']}>
+      <MemoryRouter initialEntries={[entry]}>
         <Routes>
           <Route element={<Shell />}>
             <Route path="/pipeline" element={<Pipeline />} />
@@ -349,6 +345,53 @@ describe('phone pipeline', () => {
     const button = await screen.findByRole('link', { name: 'Artifact: claude.ai/artifact/abc123' });
     expect(button).toHaveAttribute('href', 'https://claude.ai/artifact/abc123');
     expect(button).toHaveAttribute('target', '_blank');
+  });
+});
+
+/* Lokalita (the desktop bar's place filter): the same `districts` params and
+ * the same matchesDistricts rule, so a desktop link opens the same cards. */
+describe('phone pipeline, Lokalita', () => {
+  const BEROUN = { name: 'Beroun', context: null, level: 'obec' as const, id: 531057 };
+  const placeUrl = (chips: Array<typeof BEROUN & { excluded?: boolean }>) =>
+    `/pipeline?${new URLSearchParams(districtChipsToCsvParams(chips))}`;
+
+  it('offers the place chip unset, and every card', async () => {
+    renderPipeline();
+    expect(await screen.findByRole('button', { name: 'Lokalita: všechny' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^Zájem, 2\skarty$/ })).toBeInTheDocument();
+  });
+
+  it('keeps every stage and counts only the cards in the place', async () => {
+    renderPipeline(placeUrl([BEROUN]));
+    expect(await screen.findByRole('button', { name: 'Lokalita: Beroun' })).toBeInTheDocument();
+    const tabs = within(screen.getByRole('tablist', { name: 'Fáze' })).getAllByRole('tab');
+    expect(tabs.map((t) => t.getAttribute('aria-label')?.replace(/\u00a0/g, ' '))).toEqual([
+      'Zájem, 0 karet',
+      'Prohlídka, 1 karta',
+      'Koupeno, 0 karet',
+      'Zamítnuto, 0 karet',
+    ]);
+    expect(within(panel(/^Prohlídka/)).getByRole('link', { name: /Lesní 3, Beroun/ })).toBeInTheDocument();
+    expect(within(panel(/^Zájem/)).getByText('V této fázi v té lokalitě nic není.')).toBeInTheDocument();
+    const header = screen.getByRole('banner');
+    expect(await within(header).findByText('1 z 3 karet')).toBeInTheDocument();
+  });
+
+  it('drops an excluded place, as the desktop board does', async () => {
+    renderPipeline(placeUrl([{ ...BEROUN, excluded: true }]));
+    expect(await screen.findByRole('button', { name: 'Lokalita: Celá ČR − Beroun' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^Zájem, 2\skarty$/ })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^Prohlídka, 0\skaret$/ })).toBeInTheDocument();
+  });
+
+  it('opens the place typeahead in a sheet, and clearing it shows every card again', async () => {
+    renderPipeline(placeUrl([BEROUN]));
+    fireEvent.click(await screen.findByRole('button', { name: 'Lokalita: Beroun' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Lokalita' });
+    expect(within(sheet).getByRole('textbox', { name: 'Lokalita' })).toBeInTheDocument();
+    fireEvent.click(within(sheet).getByRole('button', { name: /^Remove Beroun/ }));
+    await waitFor(() => expect(screen.getByRole('tab', { name: /^Zájem, 2\skarty$/ })).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Lokalita: všechny' })).toBeInTheDocument();
   });
 });
 

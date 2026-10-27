@@ -12,7 +12,6 @@ import time
 import pytest
 import requests
 
-from scraper import bazos_client, rate_limit
 from scraper.bazos_client import BazosClient, detail_url, index_url
 from scraper.bazos_parser import parse_detail
 from scraper.rate_limit import RateLimiter

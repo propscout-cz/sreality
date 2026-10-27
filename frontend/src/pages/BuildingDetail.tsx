@@ -25,6 +25,7 @@ import {
 } from '@/lib/api';
 import { fmtAbsolute, fmtArea, fmtCzk } from '@/lib/format';
 import { usePageTitle } from '@/lib/pageTitle';
+import { useBlobUrl } from '@/lib/useBlobUrl';
 import BuildingUnitEditor from '@/components/BuildingUnitEditor';
 import RangeStrip from '@/components/estimation/RangeStrip';
 import type {
@@ -35,6 +36,8 @@ import type {
   BuildingUnit,
 } from '@/lib/types';
 
+/* What the building flow's vision model reads, and its caps (api/attachments.py; kept here, not
+ * imported from lib/attachments, so this eagerly loaded page does not pull the note picker in). */
 const ATTACHMENT_MIME = ['image/png', 'image/jpeg', 'image/webp'];
 const ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
 const ATTACHMENT_MAX_FILES = 20;
@@ -484,9 +487,8 @@ function UnitEstimateBlock({
           </p>
         </div>
       )}
-      {/* Not runSurfaceUrl: BuildingChildRun carries no input_sreality_id, so
-        * there is no subject to resolve a listing surface from. Routing this
-        * through the run helper needs the wire type widened first. */}
+      {/* Not runSurfaceUrl: BuildingChildRun carries no subject ad, so the
+        * link is the run's own address, which redirects to its surface. */}
       <Link
         to={ROUTES.estimationDetail.build({ id: child.id })}
         className="mt-2 inline-block text-[0.75rem] text-[var(--color-copper)] hover:text-[var(--color-copper-2)]"
@@ -671,7 +673,7 @@ function OperatorInputsSection({
                 'shrink-0 px-3 py-1.5 text-[0.78rem] rounded-[var(--radius-sm)] border',
                 !dirty || mut.isPending
                   ? 'bg-[var(--color-rule-strong)] text-[var(--color-ink-4)] border-[var(--color-rule-strong)] cursor-not-allowed'
-                  : 'bg-[var(--color-copper)] text-white border-[var(--color-copper)] hover:bg-[var(--color-copper-2)]',
+                  : 'bg-[var(--color-copper)] text-[var(--color-on-copper)] border-[var(--color-copper)] hover:bg-[var(--color-copper-2)]',
               ].join(' ')}
             >
               {mut.isPending ? 'Saving…' : 'Save'}
@@ -818,25 +820,10 @@ function AttachmentCard({
   onDelete?: () => void;
   deleting: boolean;
 }) {
-  const [src, setSrc] = useState<string | null>(null);
-  useEffect(() => {
-    let revoked = false;
-    let objectUrl: string | null = null;
-    (async () => {
-      try {
-        const blob = await fetchBuildingAttachmentBlob(buildingId, attachment.id);
-        if (revoked) return;
-        objectUrl = URL.createObjectURL(blob);
-        setSrc(objectUrl);
-      } catch {
-        // Leave src=null; the card renders a filename-only fallback.
-      }
-    })();
-    return () => {
-      revoked = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [buildingId, attachment.id]);
+  const { url: src } = useBlobUrl(
+    () => fetchBuildingAttachmentBlob(buildingId, attachment.id),
+    `${buildingId}:${attachment.id}`,
+  );
 
   return (
     <li className="rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-inset)] overflow-hidden">

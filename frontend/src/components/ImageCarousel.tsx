@@ -1,4 +1,10 @@
-import { useState, type ImgHTMLAttributes, type ReactNode } from 'react';
+import {
+  forwardRef,
+  useImperativeHandle,
+  useState,
+  type ImgHTMLAttributes,
+  type ReactNode,
+} from 'react';
 import ImageTagBadge from './ImageTagBadge';
 import ImageRenderBadge from './ImageRenderBadge';
 import { type TaggedImageUrl } from '@/lib/imageTags';
@@ -36,6 +42,17 @@ interface Props {
   /* Chevrons fade in on parent `.group` hover (cards) rather than always
    * showing (a panel with no hover-group wrapper). */
   fadeChevrons?: boolean;
+  /* The room tag shows only while the pointer is on the parent `.group` or keyboard
+   * focus is inside it (a Browse card, ruling P02 2026-10-27): focus-visible, so a
+   * clicked chevron does not keep it shown. An opacity overlay, never a layout change. */
+  fadeTag?: boolean;
+  /* The CLIP render-vs-photo pill above the counter. A Browse card passes false:
+   * its photo shows just the counter (ruling P03 2026-10-27). */
+  renderBadge?: boolean;
+  /* Chevrons as tab stops (the default: in a panel they are the only way to
+   * page by keyboard). A Browse card passes false — the card is ONE tab stop
+   * and pages with ← → through the handle below — so Tab goes card to card. */
+  tabbableChevrons?: boolean;
   /* Decode the first frame immediately. The first screenful of a review queue is
    * the whole point of that page, so its photos are not lazy; everything below
    * the fold stays lazy, which is the default. */
@@ -55,7 +72,13 @@ interface Props {
   children?: ReactNode;
 }
 
-export default function ImageCarousel({
+/* What a caller can ask of a mounted carousel: page by `delta` frames; false when
+ * there is nothing to page, so the caller leaves the key to the browser. */
+export interface ImageCarouselHandle {
+  step: (delta: number) => boolean;
+}
+
+const ImageCarousel = forwardRef<ImageCarouselHandle, Props>(function ImageCarousel({
   images,
   startIndex = 0,
   aspect = 'aspect-[5/4]',
@@ -63,11 +86,14 @@ export default function ImageCarousel({
   imgClassName = '',
   hoverZoom = false,
   fadeChevrons = false,
+  fadeTag = false,
+  renderBadge = true,
+  tabbableChevrons = true,
   eager = false,
   referrerPolicy,
   fallback,
   children,
-}: Props) {
+}: Props, ref) {
   /* Where the operator paged to, remembered against the startIndex it paged
    * FROM — so a changed startIndex wins without an effect to reset it. */
   const [paged, setPaged] = useState<{ from: number; to: number } | null>(null);
@@ -82,10 +108,12 @@ export default function ImageCarousel({
   const hasMany = images.length > 1;
   const current = images[safeIndex];
 
-  const step = (delta: number) => () => {
-    if (images.length === 0) return;
+  const step = (delta: number) => (): boolean => {
+    if (!hasMany) return false;
     setPaged({ from: startIndex, to: (safeIndex + delta + images.length) % images.length });
+    return true;
   };
+  useImperativeHandle(ref, () => ({ step: (delta: number) => step(delta)() }));
 
   /* --z-card-action is the rung a Browse card reserves for its controls
    * (globals.css): the card's stretched link paints an ::after over the whole
@@ -129,7 +157,12 @@ export default function ImageCarousel({
       <ImageTagBadge
         tag={current?.tag}
         confidence={current?.confidence}
-        className="absolute bottom-1 left-1 z-[1] max-w-[calc(100%-3.5rem)] truncate"
+        className={
+          'absolute bottom-1 left-1 z-[1] max-w-[calc(100%-3.5rem)] truncate'
+          + (fadeTag
+            ? ' opacity-0 group-hover:opacity-100 group-has-[:focus-visible]:opacity-100 transition-opacity duration-150'
+            : '')
+        }
       />
 
       {/* Bottom-RIGHT metadata stack: the render-vs-photo pill above the photo
@@ -138,7 +171,7 @@ export default function ImageCarousel({
           overlay controls (the Browse card's bookmark + collection buttons,
           --z-card-action) own — the badge used to sit behind them. */}
       <div className="absolute bottom-1 right-1 z-[1] flex flex-col items-end gap-1">
-        <ImageRenderBadge renderScore={current?.renderScore} />
+        {renderBadge && <ImageRenderBadge renderScore={current?.renderScore} />}
         {hasMany && (
           <span className="px-1.5 py-0.5 text-[0.6rem] tracking-[0.08em] tabular-nums rounded-[var(--radius-xs)] bg-[var(--color-paper-3)]/85 border border-[var(--color-rule)] text-[var(--color-ink-2)] backdrop-blur-sm">
             {safeIndex + 1} / {images.length}
@@ -151,6 +184,7 @@ export default function ImageCarousel({
           <button
             type="button"
             onClick={step(-1)}
+            tabIndex={tabbableChevrons ? undefined : -1}
             aria-label="Previous photo"
             className={`${chevronBase} left-1`}
           >
@@ -159,6 +193,7 @@ export default function ImageCarousel({
           <button
             type="button"
             onClick={step(1)}
+            tabIndex={tabbableChevrons ? undefined : -1}
             aria-label="Next photo"
             className={`${chevronBase} right-1`}
           >
@@ -168,7 +203,9 @@ export default function ImageCarousel({
       )}
     </div>
   );
-}
+});
+
+export default ImageCarousel;
 
 function Chevron({ dir }: { dir: 'left' | 'right' }) {
   const d = dir === 'left' ? 'M7.5 3 L4 6 L7.5 9' : 'M4.5 3 L8 6 L4.5 9';

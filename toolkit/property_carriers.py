@@ -10,12 +10,13 @@ Carrier invariants:
     opens no transaction, commits nothing and raises nothing of its own, so any psycopg error
     aborts the whole merge.
   - Every cross-side predicate over an account's rows is partitioned by account (tenancy shape
-    3, `.claude/skills/database/references/tenancy.md`): the service role bypasses RLS. Pipeline
-    and Dismissals name `account_id`; a `CurationTable` is partitioned through its keys, ids one
-    account owns (collection_id, tag_id, subscription_id), so one whose keys are not
-    account-owned must add `account_id` to them.
+    3, `.claude/skills/database/references/tenancy.md`): the service role bypasses RLS. Pipeline,
+    Dismissals and Dispatches name `account_id`; a `CurationTable` is partitioned through its
+    keys, ids one account owns (collection_id, tag_id), so one whose keys are not account-owned
+    must add `account_id` to them.
   - It never deletes history. The sanctioned deletes are a SET table's collision collapse and
-    the losing pipeline card, each folded into the carry record with its snapshot.
+    the losing pipeline card, each folded into the carry record with its snapshot; an alert the
+    survivor already holds is marked a duplicate, never deleted (migration 653).
   - `on_merge` runs once per retired property, after the merge ledger row and the advert
     re-point, and returns a `Carried` per curation row it moved or folded (alert events none).
     A detach runs no carrier: it routes the curation its ads take with them (`curation_plan`,
@@ -85,22 +86,23 @@ class CurationTable:
     APPEND table (no keys: every row moves). The table name is code-controlled, never input.
     `keys` must include an account-owned id or `account_id`: the collapse joins on them alone.
     With `at` (the row's own timestamp column) its rows enter the carry record: the collapsed
-    ones folded, with their snapshot, the rest moved; the row key is `keys[0]`, else `id`."""
+    ones folded, with their snapshot, the rest moved; the row key is `row_key`, else `keys[0]`,
+    else `id`."""
 
-    def __init__(self, table: str, keys: tuple[str, ...] = (), *, at: str | None = None) -> None:
+    def __init__(self, table: str, keys: tuple[str, ...] = (), *, at: str | None = None,
+                 row_key: str | None = None) -> None:
         self.name = table
         self.keys = keys
         self.at = at
         self.columns: tuple[tuple[str, str], ...] = ((table, "property_id"),)
-        key = keys[0] if keys else "id"
+        self.row_key = key = row_key or (keys[0] if keys else "id")
         move = (f"UPDATE {table} SET property_id = %(survivor)s "
                 f"WHERE property_id = %(retired)s"
                 + (f" RETURNING {key}, {at}, account_id" if at else ""))
         if not keys:
             self.sql: tuple[str, ...] = (move,)
             return
-        # NULL-safe: notification_dispatches' keys are nullable, and a NULL must collapse
-        # against a NULL, which plain `=` never does.
+        # NULL-safe: a NULL key must collapse against a NULL, which plain `=` never does.
         join = " AND ".join(f"s.{c} IS NOT DISTINCT FROM r.{c}" for c in keys)
         collapse = (f"DELETE FROM {table} r "
                     f"WHERE r.property_id = %(retired)s AND EXISTS ("
@@ -122,42 +124,55 @@ class CurationTable:
         return out
 
 
-class Dispatches(CurationTable):
-    """The unified event table (migration 206) as a SET table, whose collapse would otherwise
-    strand a delivery: `channel_sends.notification_id` is ON DELETE SET NULL (migration 207),
-    and `channel_sends_check` (migration 274) refuses a NULL on a notification-backed send, so
-    one delivered alert aborted the whole merge. Before the collapse, `LOCK_SQL` stops the
-    outbox claiming new sends on the retired rows, then `RESEND_SQL` hands each such send to
-    the survivor's twin, the row the collapse keeps; `channel_sends` is unique only on its own
-    dedupe_key, so a move never collides."""
+# THE notification-events lock (notifications W3 review): producers and merges serialize on one
+# transaction-scoped advisory lock, because the event identity includes property_id, which a merge
+# changes. The protocol, two lines:
+#   - a merge takes it EXCLUSIVE before its first `properties` row lock, at every merge entry
+#     (`property_identity.merge_property_set` and `lock_properties`, autodedup's `recheck_group`;
+#     `Dispatches.on_merge` re-takes it, a no-op once held). Taken after its row locks it would
+#     deadlock: a producer holding it SHARED waits on those rows through its foreign key check.
+#   - a producer statement takes it SHARED as its own statement first, in the same transaction
+#     (`api.notifications._commit_one`), so its READ COMMITTED snapshot is taken after any merge
+#     holding it committed (the retired property merged_away, its ads on the survivor); a merge that
+#     comes second waits for the producer's commit, and its REPOINT sees that row and marks the twin.
+NOTIFICATION_EVENTS_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext('notification_events'))"
+NOTIFICATION_EVENTS_SHARED_LOCK_SQL = (
+    "SELECT pg_advisory_xact_lock_shared(hashtext('notification_events'))")
 
-    # Its own statement, never a CTE of the resend: FOR UPDATE waits out a claim whose foreign
-    # key check holds FOR KEY SHARE on a retired row, so the resend's fresh READ COMMITTED
-    # snapshot sees that send; a later claim waits for the merge to commit.
-    LOCK_SQL = ("SELECT id FROM notification_dispatches WHERE property_id = %(retired)s "
-                "ORDER BY id FOR UPDATE")
+class Dispatches:
+    """The unified event table (rule 16): an alert follows its property and is never deleted
+    (F6, F13, F21). ONE UPDATE re-points every alert of the retired property onto the survivor;
+    one whose event the survivor already holds (the same identity on the survivor, a row that is
+    not itself a repeat) is also marked `duplicate_of` that row, the earliest, so VISIBLE hides it
+    and a producer re-running over the survivor conflicts instead of telling it twice. A retired
+    row the survivor holds no twin of keeps whatever `duplicate_of` it had.
 
-    # The twin is the collapse's own join over the same keys; subscription_id and collection_id
-    # are account-owned ids, so the pairing never crosses an account.
-    RESEND_SQL = """
-UPDATE channel_sends cs SET notification_id = s.id
-FROM notification_dispatches r
-JOIN notification_dispatches s
-  ON s.property_id = %(survivor)s
- AND s.subscription_id IS NOT DISTINCT FROM r.subscription_id
- AND s.collection_id IS NOT DISTINCT FROM r.collection_id
- AND s.change_kind IS NOT DISTINCT FROM r.change_kind
- AND s.trigger_snapshot_id IS NOT DISTINCT FROM r.trigger_snapshot_id
-WHERE r.property_id = %(retired)s AND cs.notification_id = r.id
-"""
+    `IDENTITY` is migration 653's unique index without `property_id` (the column a merge
+    changes): `api.notifications.EVENT_IDENTITY`, which a test pins it to. `account_id` is in
+    it, so the match never crosses an account. Alerts write no carry rows (rule 18), so a detach
+    or a split leaves them where they are (program § 3.2)."""
 
-    def __init__(self) -> None:
-        # Identity spans both property-grain producers (subscription_id XOR collection_id) and
-        # the per-snapshot grain (trigger_snapshot_id, NULL for 'new').
-        super().__init__("notification_dispatches",
-                         ("subscription_id", "collection_id", "change_kind",
-                          "trigger_snapshot_id"))
-        self.sql = (self.LOCK_SQL, self.RESEND_SQL, *self.sql)
+    name = "notification_dispatches"
+    columns = (("notification_dispatches", "property_id"),)
+    IDENTITY: tuple[str, ...] = ("account_id", "source_kind", "subscription_id", "collection_id",
+                                 "change_kind", "event_ref", "actor_account_id")
+    # The subquery reads the statement's snapshot, in which no survivor row moves, so a retired
+    # row never pairs with another retired row.
+    REPOINT_SQL = (
+        "UPDATE notification_dispatches r SET property_id = %(survivor)s, "
+        "duplicate_of = coalesce((SELECT s.id FROM notification_dispatches s "
+        "WHERE s.property_id = %(survivor)s AND s.duplicate_of IS NULL AND "
+        + " AND ".join(f"s.{c} IS NOT DISTINCT FROM r.{c}" for c in IDENTITY)
+        + " ORDER BY s.dispatched_at, s.id LIMIT 1), r.duplicate_of) "
+        "WHERE r.property_id = %(retired)s"
+    )
+    sql = (NOTIFICATION_EVENTS_LOCK_SQL, REPOINT_SQL)
+
+    def on_merge(self, cur: psycopg.Cursor, step: MergeStep) -> list[Carried]:
+        # The merge entry already holds it (the protocol above); re-taking it is a no-op.
+        cur.execute(NOTIFICATION_EVENTS_LOCK_SQL)
+        cur.execute(self.REPOINT_SQL, {"retired": step.retired, "survivor": step.survivor})
+        return []
 
 
 class Pipeline:
@@ -240,6 +255,10 @@ class Dismissals:
 PROPERTY_CARRIERS: tuple[Carrier, ...] = (
     CurationTable("collection_properties", ("collection_id",), at="added_at"),
     CurationTable("property_tags", ("tag_id",), at="attached_at"),
+    # Before the notes: a note's move takes its files along (migration 660's trigger), so each
+    # file is moved or folded here first, with its carry row. The same bytes once per account.
+    CurationTable("property_attachments", ("account_id", "sha256_hex"), at="created_at",
+                  row_key="id"),
     CurationTable("property_notes", at="created_at"),
     # One link per (account, property), no `at`: no carry row, so a detach leaves it where it is,
     # and a collision keeps the survivor's link (migration 599).
@@ -317,7 +336,8 @@ class Route(NamedTuple):
     origin: int | None  # the property it came from, back there when this detach gives it ads
     stage_id: int | None  # a card's stage
     carry_ids: tuple[int, ...]  # standing carry rows it consumes (stamped undone)
-    item: str  # 'note:<id>' | 'pipeline' | 'collection:<id>' | 'tag:<id>' | 'dismissal' | 'fold:<id>'
+    item: str  # 'note:<id>' | 'pipeline' | 'collection:<id>' | 'tag:<id>' | 'file:<id>'
+    #            | 'dismissal' | 'fold:<id>'
     label: str | None
     skipped: str | None = None
 
@@ -326,7 +346,9 @@ class Route(NamedTuple):
 # dismissal only) with the ad a note was written on while that ad is on `left`, and the carry rows
 # it came by, oldest first; then each fold. A carry row counts only toward `left` through its
 # merged-away chain, only `group`'s when one is given, and only while it stands (a fold of the
-# survivor's own item, from = to, while its merge has a ledger row standing).
+# survivor's own item, from = to, while its merge has a ledger row standing). A file is an item only
+# outside a note (a note's go where the note goes, migration 660's trigger); a folded file is never
+# re-made: its twin, the same bytes, is still here.
 _ROUTES_SQL = (
     """
 WITH RECURSIVE tree(id) AS (
@@ -336,7 +358,11 @@ WITH RECURSIVE tree(id) AS (
     WHERE p.status = 'merged_away'
 ), item AS (
     SELECT 'property_notes'::text AS tbl, n.id AS row_key, n.account_id, n.created_at AS row_at,
-           'note:' || n.id::text AS item, left(n.body, 60) AS label, NULL::bigint AS stage_id,
+           'note:' || n.id::text AS item,
+           coalesce(nullif(left(n.body, 60), ''),
+                    'Prohlídka ' || to_char(n.viewing_at AT TIME ZONE 'Europe/Prague',
+                                            'FMDD. FMMM. YYYY HH24:MI')) AS label,
+           NULL::bigint AS stage_id,
            NULL::boolean AS live,
            CASE WHEN EXISTS (SELECT 1 FROM listings l WHERE l.id = n.origin_listing_ref_id
                                AND l.property_id = %(left)s)
@@ -361,6 +387,10 @@ WITH RECURSIVE tree(id) AS (
     SELECT 'property_dismissals', d.id, d.account_id, d.dismissed_at, 'dismissal', NULL, NULL,
            NULL, NULL
       FROM property_dismissals d WHERE d.property_id = %(left)s AND d.lifted_at IS NULL
+    UNION ALL
+    SELECT 'property_attachments', a.id, a.account_id, a.created_at, 'file:' || a.id::text,
+           a.filename, NULL, NULL, NULL
+      FROM property_attachments a WHERE a.property_id = %(left)s AND a.note_id IS NULL
 ), carry AS (
     SELECT c.* FROM property_merge_carries c
      WHERE c.to_property_id IN (SELECT id FROM tree)
@@ -404,7 +434,7 @@ SELECT 'fold', f.table_name, f.row_key, f.account_id, 'fold:' || f.id::text,
   LEFT JOIN tags tg ON f.table_name = 'property_tags' AND tg.id = f.row_key
   LEFT JOIN pipeline_stages st ON f.table_name = 'property_pipeline'
        AND st.id = (f.snapshot ->> 'stage_id')::bigint AND st.archived_at IS NULL
- WHERE f.kind = 'folded'
+ WHERE f.kind = 'folded' AND f.table_name <> 'property_attachments'
  ORDER BY 1, 5
 """
 )
@@ -435,17 +465,24 @@ _MOVE_SQL: dict[str, str] = {
         "WHERE d.id = %(key)s AND d.property_id = %(left)s "
         "AND NOT EXISTS (SELECT 1 FROM property_dismissals x "
         "  WHERE x.property_id = %(to)s AND x.account_id = d.account_id AND x.lifted_at IS NULL)"),
+    "property_attachments": (
+        "UPDATE property_attachments a SET property_id = %(to)s "
+        "WHERE a.id = %(key)s AND a.property_id = %(left)s AND a.note_id IS NULL "
+        "AND NOT EXISTS (SELECT 1 FROM property_attachments x "
+        "  WHERE x.property_id = %(to)s AND x.account_id = a.account_id "
+        "  AND x.sha256_hex = a.sha256_hex)"),
 }
 
-# A copy or a re-created fold (MS18): a note keeps its text, dates, origin ad and shared mark
-# (migration 610; read from its row, wherever it went); a card keeps its stage, last in its column, its dates now; the rest
+# A copy or a re-created fold (MS18): a note keeps its text, dates (its viewing's too), origin ad and shared mark
+# (migration 610; read from its row, wherever it went); a card keeps its stage, last in its column, its dates now; a file
+# its name, date and stored bytes (the same R2 object: originals are never deleted); the rest
 # dated now. Never over a row already there.
 _INSERT_SQL: dict[str, str] = {
     "property_notes": (
         "INSERT INTO property_notes (property_id, body, origin_listing_id, origin_listing_ref_id, "
-        "  created_at, updated_at, shared, account_id) "
+        "  created_at, updated_at, shared, account_id, viewing_at) "
         "SELECT %(to)s, body, origin_listing_id, origin_listing_ref_id, created_at, updated_at, "
-        "  shared, account_id FROM property_notes WHERE id = %(key)s RETURNING id"),
+        "  shared, account_id, viewing_at FROM property_notes WHERE id = %(key)s"),
     "property_pipeline": (
         "INSERT INTO property_pipeline (property_id, stage_id, board_position, account_id) "
         "SELECT %(to)s::bigint, %(stage)s::bigint, coalesce(max(board_position), 0) + 1, "
@@ -461,16 +498,12 @@ _INSERT_SQL: dict[str, str] = {
     "property_dismissals": (
         "INSERT INTO property_dismissals (account_id, property_id) VALUES (%(account)s, %(to)s) "
         "ON CONFLICT (property_id, account_id) WHERE lifted_at IS NULL DO NOTHING"),
-}
-
-# What a copy brings with it, keyed on the copy's new id: a note's attachments, pointing at the
-# same stored bytes (never deleted); each takes its account from the new note (migration 592).
-_AFTER_COPY_SQL: dict[str, str] = {
-    "property_notes": (
-        "INSERT INTO property_note_attachments (note_id, storage_key, filename, mime_type, "
-        "  byte_size, sha256_hex, created_at) "
-        "SELECT %(copy)s, storage_key, filename, mime_type, byte_size, sha256_hex, created_at "
-        "FROM property_note_attachments WHERE note_id = %(key)s ORDER BY id"),
+    "property_attachments": (
+        "INSERT INTO property_attachments (property_id, account_id, storage_key, filename, "
+        "  mime_type, byte_size, sha256_hex, created_at) "
+        "SELECT %(to)s, account_id, storage_key, filename, mime_type, byte_size, sha256_hex, "
+        "  created_at FROM property_attachments WHERE id = %(key)s "
+        "ON CONFLICT (account_id, property_id, sha256_hex) DO NOTHING"),
 }
 
 _STAMP_SQL = (
@@ -479,8 +512,7 @@ _STAMP_SQL = (
 )
 
 # Every routing statement (the PREPARE corpus reads the tuple); none deletes anything.
-ROUTE_SQL = (_ROUTES_SQL, *_MOVE_SQL.values(), *_INSERT_SQL.values(), *_AFTER_COPY_SQL.values(),
-             _STAMP_SQL)
+ROUTE_SQL = (_ROUTES_SQL, *_MOVE_SQL.values(), *_INSERT_SQL.values(), _STAMP_SQL)
 
 # Cards first, so a dismissal is settled against where each account's live card ends; within a
 # table the user's copies before the folds re-created by default.
@@ -488,10 +520,11 @@ _SETTLE_ORDER = {"property_pipeline": 0, "property_dismissals": 2}
 
 
 def _holding(r: Route) -> tuple[str, Any] | None:
-    """What a route puts where it lands, as a conflict knows it; a note never conflicts."""
+    """What a route puts where it lands, as a conflict knows it; a note never conflicts, a file
+    with itself (the same bytes held there otherwise: its write's own key skips it)."""
     if r.table == "property_notes":
         return None
-    if r.table in ("collection_properties", "property_tags"):
+    if r.table in ("collection_properties", "property_tags", "property_attachments"):
         return (r.table, r.key)
     return (r.table, r.account_id)
 
@@ -611,8 +644,8 @@ def route_curation(
     cur: psycopg.Cursor, routes: Sequence[Route], *, left: int, landed: Mapping[int, int],
 ) -> dict[str, int]:
     """Make `curation_plan`'s answer true once the ads moved (`landed`: each ad that moved -> where
-    it is now): the moves, the copies (a note copy reads its row wherever it went and takes its
-    attachments, and a copy to the property left lands once its source has gone), the re-created
+    it is now): the moves, the copies (a note copy reads its row wherever it went, and a copy to
+    the property left lands once its source has gone), the re-created
     folds, the carry stamp, then the live-deal lift on `left` and on every property an ad landed
     on (rule 22, the dismissal carrier's own statement). A route whose anchor did not move routes
     nothing; one is counted where its write changed a row: a move onto an item its account already
@@ -628,8 +661,6 @@ def route_curation(
                 "key": r.key, "account": r.account_id, "stage": r.stage_id})
             if cur.rowcount:
                 wrote.append(r)
-                if action == "copy" and (follow := _AFTER_COPY_SQL.get(r.table)):
-                    cur.execute(follow, {"copy": cur.fetchone()[0], "key": r.key})
 
     def spent(r: Route) -> bool:
         # a move consumes its carry rows where it moved (or was chosen to stay); a fold is

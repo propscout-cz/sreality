@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
 
+from scraper.area import stated_plot
+
 # Fields whose change should append a listing_snapshots row. Mirrors the
 # semantics of sreality's content hash: identity (source ids, url) is NOT
 # hashed; the displayed/analytical content is. lat/lon are deliberately NOT
@@ -28,6 +30,7 @@ from typing import Any
 # NOT hashed either: it is portal lifecycle metadata, not listing content — bazos
 # re-stamps it on every bump / TOP renewal, so hashing it would append a snapshot
 # per seller promotion, and backfills from already-stored raw must stay snapshot-free.
+# price_czk gives way to `price_native` when a page states a foreign price (hash_doc).
 _HASH_FIELDS: tuple[str, ...] = (
     "category_main", "category_type", "price_czk", "price_unit", "area_m2",
     "disposition", "locality", "district", "floor",
@@ -55,6 +58,9 @@ _LISTING_FIELDS: tuple[str, ...] = (
     # The listing's page on its portal — identity, not content (never hashed); rides
     # LISTING_COLUMNS like every other column (docs/design/portal-listing-url.md).
     "source_url",
+    # The advertiser's own number for the offer (migration 667) — identity-adjacent like
+    # source_url, so never hashed: a reference names the offer, it is not its content.
+    "ad_reference",
 )
 
 
@@ -67,6 +73,10 @@ class ScrapedListing:
     category_type: str | None = None
     price_czk: int | None = None
     price_unit: str | None = None
+    # The price as the page states it when that is not Kč ("298000 EUR"). Hash-only, never a
+    # column: the portal re-converts it to `price_czk` daily, so an unchanged ad would snapshot
+    # on every exchange-rate move (rule 2) — the hash reads this in place of price_czk.
+    price_native: str | None = None
     area_m2: float | None = None
     # Which physical area `area_m2` holds ('usable'|'floor'|'total'|'plot'|
     # 'unknown'), stamped by scraper.area.derive_headline_area. A PROVENANCE
@@ -117,6 +127,10 @@ class ScrapedListing:
     # UTC in the timestamptz column), a full datetime where the portal exposes
     # one (bezrealitky's timeActivated). Out of the content hash (see above).
     published_at: datetime | date | None = None
+    # The advertiser's own number for the offer, as the ad prints it ("Číslo zakázky",
+    # "ID zakázky", "ID nemovitosti"); the attribute contract's `ad_reference` cell, read
+    # through `vocabulary.reference`. None when the ad prints no such number.
+    ad_reference: str | None = None
     # The source's own payload, stored verbatim in listings.raw_json.
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -128,10 +142,23 @@ class ScrapedListing:
             raise ValueError(
                 f"{self.source}/{self.source_id_native}: source_url is required"
             )
+        # The ONE call site of the plot rule for every portal that crosses this contract
+        # (rule 21): the last point before the content hash, so a declined plot is hashed
+        # as absence (rules 2/8) rather than NULLed after the hash at the write boundary.
+        # The description is the rule's evidence; the title is not, because no stored
+        # column holds it and migration 671 must decide a stored row on the same text.
+        object.__setattr__(self, "estate_area", stated_plot(
+            self.category_main, self.estate_area, usable=self.usable_area,
+            headline=self.area_m2, headline_basis=self.area_basis,
+            text=self.description))
 
     def hash_doc(self) -> dict[str, Any]:
-        """The crawlers' hash document: the 28 _HASH_FIELDS, unhashed (hashing.digest hashes it)."""
-        return {k: getattr(self, k) for k in _HASH_FIELDS}
+        """The crawlers' hash document: the 28 _HASH_FIELDS, price_native in place of price_czk when stated."""
+        doc = {k: getattr(self, k) for k in _HASH_FIELDS}
+        if self.price_native is not None:
+            del doc["price_czk"]
+            doc["price_native"] = self.price_native
+        return doc
 
     def listing_columns(self) -> dict[str, Any]:
         """The `listings` column values this contract carries; the rest default to NULL."""

@@ -15,30 +15,30 @@
 
 import { isAuthRetryableFetchError } from '@supabase/supabase-js';
 import type {
+  Attachment,
   BuildingAttachment,
   BuildingRun,
   Collection,
   CollectionWithProperties,
   ConfirmBuildingUnitsIn,
-  CreateBuildingFromUrlIn,
   UpdateBuildingInputsIn,
   CreateEstimationIn,
   EstimationFeedback,
   EstimationListParams,
   EstimationListResponse,
   EstimationRun,
+  IngestState,
   ListingEstimate,
   ListingSummaryBatchRow,
   ArtifactLink,
   Note,
-  NoteAttachment,
-  ParseResult,
   PipelineShareMode,
   PipelineShares,
   PipelineStage,
   SkillRefinement,
   Tag,
   TagColor,
+  DispatchChangeKind,
   NotificationSourceKind,
   NotificationUnreadCount,
   WatchdogDispatch,
@@ -47,9 +47,11 @@ import type {
   WatchdogSeenFilter,
   WatchdogSubscription,
   FilterPreset,
+  FilterPresetGroup,
 } from './types';
 import type { DistrictChip, PresetSpec } from './filters';
 import type { WaterfallRow } from './locationWaterfall';
+import type { SavedSetLayout } from './savedSetLayout';
 import { supabase } from './supabase';
 
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
@@ -318,6 +320,9 @@ export const apiPut = <T>(
   signal?: AbortSignal,
 ): Promise<T> => request<T>(path, { method: 'PUT', json: body, signal });
 
+export const apiDelete = <T>(path: string, signal?: AbortSignal): Promise<T> =>
+  request<T>(path, { method: 'DELETE', signal });
+
 /* GET for bytes (an image an <img> cannot fetch itself, since it sends no JWT). */
 export const apiGetBlob = (
   path: string,
@@ -325,21 +330,30 @@ export const apiGetBlob = (
   signal?: AbortSignal,
 ): Promise<Blob> => requestBlob(path, { query: params, signal });
 
-/* ----- estimations ------------------------------------------------------- */
+/* ----- a pasted ad link (docs/design/new-property-from-link.md §3.2) ------ */
 
-/* POST /estimations/preview — generic URL parser (sreality fast path
- * + LLM-driven per-source parser for everything else, dispatched on
- * the backend). When force_refresh is true the 7-day URL cache is
- * bypassed and a fresh parse is performed (the cache row is also
- * upserted on success). */
-export const previewListingUrl = (
+/* POST /listings/ingest — the server resolves the pasted text (its first URL)
+ * to one ad and answers ONE state; a link we do not hold is queued for the
+ * worker's drain. Market data only: never acts (no X-Act-As). */
+export const ingestListing = (
   url: string,
-  options: { force_refresh?: boolean } = {},
-): Promise<ParseResult> =>
-  request<ParseResult>('/estimations/preview', {
-    method: 'POST',
-    json: { url, force_refresh: options.force_refresh ?? false },
-  });
+  { signal }: { signal?: AbortSignal } = {},
+): Promise<IngestState> =>
+  request<IngestState>('/listings/ingest', { method: 'POST', json: { url }, signal });
+
+/* GET /listings/ingest/{source}/{native_id} — the same state, re-read while the
+ * page is fetched and the ad's property is born. */
+export const ingestState = (
+  source: string,
+  nativeId: string,
+  { signal }: { signal?: AbortSignal } = {},
+): Promise<IngestState> =>
+  request<IngestState>(
+    `/listings/ingest/${encodeURIComponent(source)}/${encodeURIComponent(nativeId)}`,
+    { signal },
+  );
+
+/* ----- estimations ------------------------------------------------------- */
 
 export const createEstimation = (
   input: CreateEstimationIn,
@@ -503,14 +517,6 @@ export const verifyListingFreshness = (
 
 /* ----- buildings (Phase B1) ---------------------------------------------- */
 
-export const createBuildingFromUrl = (
-  input: CreateBuildingFromUrlIn,
-): Promise<BuildingRun> =>
-  request<BuildingRun>('/buildings/from_url', {
-    method: 'POST',
-    json: input,
-  });
-
 export const getBuilding = (id: number): Promise<BuildingRun> =>
   request<BuildingRun>(`/buildings/${id}`);
 
@@ -535,21 +541,27 @@ export const updateBuildingInputs = (
     json: input,
   });
 
-/* Multipart upload — bypasses the JSON helper. Each call uploads ONE
- * file; the caller fans out for multi-file pickers. The server replies
- * with the inserted BuildingAttachment row. */
+/* ONE file per multipart POST (the caller fans out for a multi-file pick); the server answers
+ * with the row it stored. Every attachment upload, a property's or a building run's. */
+const uploadFile = <T>(
+  path: string,
+  file: File,
+  fields: Record<string, string | number | null | undefined> = {},
+  opts: RequestOptions = {},
+): Promise<T> => {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  for (const [name, value] of Object.entries(fields)) {
+    if (value != null) form.append(name, String(value));
+  }
+  return request<T>(path, { ...opts, method: 'POST', form });
+};
+
 export const uploadBuildingAttachment = (
   buildingId: number,
   file: File,
-): Promise<BuildingAttachment> => {
-  const form = new FormData();
-  form.append('file', file, file.name);
-  return request<BuildingAttachment>(`/buildings/${buildingId}/attachments`, {
-    method: 'POST',
-    query: { source: 'ui' },
-    form,
-  });
-};
+): Promise<BuildingAttachment> =>
+  uploadFile(`/buildings/${buildingId}/attachments`, file, {}, { query: { source: 'ui' } });
 
 export const deleteBuildingAttachment = (
   buildingId: number,
@@ -566,11 +578,11 @@ export const fetchBuildingAttachmentBlob = (
 ): Promise<Blob> =>
   requestBlob(`/buildings/${buildingId}/attachments/${attachmentId}/raw`);
 
-/* The property page's download: a PDF of the ad plus the canonical ad's stored
- * photos, zipped by the API — R2 sends no CORS header, so the SPA cannot read the
- * bytes behind /images/{key} and zip them itself. */
-export const fetchPropertyDownload = (propertyId: number): Promise<Blob> =>
-  requestBlob(`/properties/${propertyId}/download.zip`);
+/* The property page's download: a PDF of the ad, the canonical ad's stored photos and the
+ * acting identity's own photos (moje-fotky/), zipped by the API — R2 sends no CORS header,
+ * so the SPA cannot read the bytes behind /images/{key} and zip them itself. */
+export const fetchPropertyDownload = (propertyId: number, { actAs }: Acting = {}): Promise<Blob> =>
+  requestBlob(`/properties/${propertyId}/download.zip`, { actAs });
 
 /* ----- admin / Settings page --------------------------------------------
  *
@@ -934,7 +946,6 @@ export const TAG_STATES: readonly TagState[] = ['positive', 'negative', 'exclude
  * excluded from the ambiguity rate's numerator AND denominator, so pruning can
  * never dilute the signal. */
 export type TagExcludedReason = 'ambiguous' | 'pruned';
-export const TAG_EXCLUDED_REASONS: readonly TagExcludedReason[] = ['ambiguous', 'pruned'];
 
 /* Who or what decided a cell. 'human_confirmed' (machine proposed, human
  * affirmed) is deliberately NOT the same evidence as 'machine' (nobody checked).
@@ -2279,7 +2290,8 @@ export function uploadRentMapFile(file: File): Promise<RentMapIngestResult> {
  * GET returns every kraj (admin_boundaries level='kraj') with its enabled
  * flag + count of unscored active listings; PUT replaces the full enabled
  * list (app_settings.condition_scoring_enabled_region_ids) and returns the
- * same payload. The scheduled batch job reads the same key. */
+ * same payload. Condition scoring is parked (rule 14): its workflows are
+ * dispatch-only, so the key only scopes a manually dispatched run. */
 
 export interface ConditionScoringRegion {
   id: number;
@@ -2414,7 +2426,6 @@ export const createCollection = (input: {
   name: string;
   description?: string | null;
   monitoring_enabled?: boolean;
-  notify_channels?: string[];
 }): Promise<Collection> =>
   request<Collection>('/collections', { method: 'POST', json: input });
 
@@ -2424,7 +2435,6 @@ export const updateCollection = (
     name?: string | null;
     description?: string | null;
     monitoring_enabled?: boolean;
-    notify_channels?: string[];
   },
 ): Promise<Collection> =>
   request<Collection>(`/collections/${id}`, {
@@ -2522,19 +2532,24 @@ export const listPropertyNotes = (
 
 export const createPropertyNote = (
   property_id: number,
-  body: string,
-  // The viewed listing's surrogate id — the note's provenance.
-  origin_listing_ref_id?: number,
-  // The author's share mark; private when omitted.
-  shared?: boolean,
+  note: {
+    body: string;
+    // The viewed listing's surrogate id — the note's provenance.
+    origin_listing_ref_id?: number;
+    // The author's share mark; private when omitted.
+    shared?: boolean;
+    // A viewing is a note with a date (migration 666); the body may then be empty.
+    viewing_at?: string | null;
+  },
   { actAs }: Acting = {},
 ): Promise<Note> =>
   request<Note>(`/properties/${property_id}/notes`, {
     method: 'POST',
     json: {
-      body,
-      ...(shared != null ? { shared } : {}),
-      ...(origin_listing_ref_id != null ? { origin_listing_ref_id } : {}),
+      body: note.body,
+      ...(note.shared != null ? { shared: note.shared } : {}),
+      ...(note.origin_listing_ref_id != null ? { origin_listing_ref_id: note.origin_listing_ref_id } : {}),
+      ...(note.viewing_at != null ? { viewing_at: note.viewing_at } : {}),
     },
     actAs,
   });
@@ -2543,7 +2558,8 @@ export const createPropertyNote = (
 export const updatePropertyNote = (
   property_id: number,
   note_id: number,
-  patch: { body?: string; shared?: boolean },
+  /* viewing_at: null clears the date, left out keeps it. */
+  patch: { body?: string; shared?: boolean; viewing_at?: string | null },
   { actAs }: Acting = {},
 ): Promise<Note> =>
   request<Note>(`/properties/${property_id}/notes/${note_id}`, {
@@ -2551,6 +2567,9 @@ export const updatePropertyNote = (
     json: patch,
     actAs,
   });
+
+/* The caller's own viewings across every property, earliest first (the Prohlídky tab). */
+export const listViewings = (): Promise<{ data: Note[] }> => request<{ data: Note[] }>('/viewings');
 
 export const deletePropertyNote = (
   property_id: number,
@@ -2594,43 +2613,41 @@ export const deletePropertyArtifactLink = (
     actAs,
   });
 
-/* A note's files (migration 592): one file per request; the bytes come back through the API
- * because the bucket is private and sends no CORS header. */
-export const uploadNoteAttachment = (
+/* A property's files (migration 660), each optionally a note's. The bytes come back through the
+ * API because the bucket is private and sends no CORS header; `w: 1080` asks for an image's
+ * display copy instead of the original. */
+export const listAttachments = (
   property_id: number,
-  note_id: number,
+  { note_id, actAs }: Acting & { note_id?: number } = {},
+): Promise<{ data: Attachment[] }> =>
+  request<{ data: Attachment[] }>(`/properties/${property_id}/attachments`, {
+    query: { note_id },
+    actAs,
+  });
+
+export const uploadAttachment = (
+  property_id: number,
   file: File,
-  { actAs }: Acting = {},
-): Promise<NoteAttachment> => {
-  const form = new FormData();
-  form.append('file', file, file.name);
-  return request<NoteAttachment>(`/properties/${property_id}/notes/${note_id}/attachments`, {
-    method: 'POST',
-    form,
-    actAs,
-  });
-};
+  { note_id, actAs }: Acting & { note_id?: number } = {},
+): Promise<Attachment> =>
+  uploadFile(`/properties/${property_id}/attachments`, file, { note_id }, { actAs });
 
-export const fetchNoteAttachmentBlob = (
+export const fetchAttachmentBlob = (
   property_id: number,
-  note_id: number,
   attachment_id: number,
-  { actAs }: Acting = {},
+  { w, actAs }: Acting & { w?: 1080 } = {},
 ): Promise<Blob> =>
-  requestBlob(`/properties/${property_id}/notes/${note_id}/attachments/${attachment_id}`, {
-    actAs,
-  });
+  requestBlob(`/properties/${property_id}/attachments/${attachment_id}`, { query: { w }, actAs });
 
-export const deleteNoteAttachment = (
+export const deleteAttachment = (
   property_id: number,
-  note_id: number,
   attachment_id: number,
   { actAs }: Acting = {},
 ): Promise<{ deleted: true }> =>
-  request<{ deleted: true }>(
-    `/properties/${property_id}/notes/${note_id}/attachments/${attachment_id}`,
-    { method: 'DELETE', actAs },
-  );
+  request<{ deleted: true }>(`/properties/${property_id}/attachments/${attachment_id}`, {
+    method: 'DELETE',
+    actAs,
+  });
 
 /* Dismissals (migration 536) — "never show me this property again", and its
  * undo. State is read via property_dismissals_public. */
@@ -2660,8 +2677,8 @@ export const undismissProperty = (
 export const addPipelineCard = (
   property_id: number,
   { actAs }: Acting = {},
-): Promise<{ property_id: number; stage_key: string; added: boolean }> =>
-  request<{ property_id: number; stage_key: string; added: boolean }>(
+): Promise<{ property_id: number; stage_key: string; stage_label?: string; added: boolean }> =>
+  request<{ property_id: number; stage_key: string; stage_label?: string; added: boolean }>(
     '/pipeline/cards',
     { method: 'POST', json: { property_id }, actAs },
   );
@@ -2765,18 +2782,6 @@ export const unsharePipeline = (
 
 /* ----- Watchdog notifications (Phase U2.7) ------------------------------- */
 
-export interface ListWatchdogDispatchesParams {
-  subscription_id?: string;
-  /* Scope to one producer. The Watchdog page passes 'watchdog' so the unified
-   * feed's collection_monitor rows (subscription_id NULL) don't leak onto it. */
-  source_kind?: NotificationSourceKind | 'all';
-  seen?: WatchdogSeenFilter;
-  limit?: number;
-  offset?: number;
-  /* Keyset cursor (the prior page's next_cursor). */
-  cursor?: string;
-}
-
 export const listWatchdogSubscriptions = (
   options: { includeInactive?: boolean } = {},
 ): Promise<{ data: WatchdogSubscription[]; total: number }> =>
@@ -2796,7 +2801,6 @@ export const createWatchdogSubscription = (input: {
   name: string;
   filter_spec: WatchdogFilterSpec;
   is_active?: boolean;
-  channels?: string[];
 }): Promise<WatchdogSubscription> =>
   request<WatchdogSubscription>('/notifications/subscriptions', {
     method: 'POST',
@@ -2809,7 +2813,6 @@ export const updateWatchdogSubscription = (
     name?: string;
     filter_spec?: WatchdogFilterSpec;
     is_active?: boolean;
-    channels?: string[];
   },
 ): Promise<WatchdogSubscription> =>
   request<WatchdogSubscription>(
@@ -2825,13 +2828,6 @@ export const deleteWatchdogSubscription = (
     { method: 'DELETE' },
   );
 
-export const listWatchdogDispatches = (
-  params: ListWatchdogDispatchesParams = {},
-): Promise<WatchdogDispatchesResponse> =>
-  request<WatchdogDispatchesResponse>('/notifications/dispatches', {
-    query: params as Record<string, QueryValue>,
-  });
-
 export const markWatchdogDispatchSeen = (
   dispatchId: string,
 ): Promise<WatchdogDispatch> =>
@@ -2840,43 +2836,20 @@ export const markWatchdogDispatchSeen = (
     { method: 'POST' },
   );
 
-export const kickoffWatchdogDispatchEstimate = (
-  dispatchId: string,
-): Promise<WatchdogDispatch> =>
-  request<WatchdogDispatch>(
-    `/notifications/dispatches/${encodeURIComponent(dispatchId)}/estimate`,
-    { method: 'POST' },
-  );
-
-export const runWatchdogMatcher = (): Promise<{
-  data: {
-    subscriptions_evaluated: number;
-    matches_inserted: number;
-    listings_in_window: number;
-  };
-}> =>
-  request<{
-    data: {
-      subscriptions_evaluated: number;
-      matches_inserted: number;
-      listings_in_window: number;
-    };
-  }>('/notifications/matcher/run', { method: 'POST' });
-
 /* ----- Unified notifications feed (Sprint C) ---------------------------- */
 
 export interface ListNotificationsParams {
   source_kind?: NotificationSourceKind | 'all';
-  change_kind?: string;
+  change_kind?: DispatchChangeKind;
   collection_id?: number;
   seen?: WatchdogSeenFilter;
   limit?: number;
+  /* Keyset cursor: the prior page's next_cursor. */
   cursor?: string;
 }
 
-/* The unified feed: watchdog matches AND collection-monitor change events.
- * Same endpoint + row shape as the watchdog dispatches, just unscoped by
- * source (the LEFT-join feed serves both). */
+/* The one feed: watchdog matches, collection-monitor change events and shares,
+ * newest first, keyset-paged on (dispatched_at, id). */
 export const listNotifications = (
   params: ListNotificationsParams = {},
 ): Promise<WatchdogDispatchesResponse> =>
@@ -2884,12 +2857,8 @@ export const listNotifications = (
     query: params as Record<string, QueryValue>,
   });
 
-export const getNotificationUnreadCount = (
-  source_kind: NotificationSourceKind | 'all' = 'all',
-): Promise<NotificationUnreadCount> =>
-  request<NotificationUnreadCount>('/notifications/unread-count', {
-    query: { source_kind },
-  });
+export const getNotificationUnreadCount = (): Promise<NotificationUnreadCount> =>
+  request<NotificationUnreadCount>('/notifications/unread-count');
 
 export const markAllNotificationsSeen = (
   source_kind: NotificationSourceKind | 'all' = 'all',
@@ -2899,15 +2868,53 @@ export const markAllNotificationsSeen = (
     query: { source_kind },
   });
 
+/* ----- Push (notifications push program W4/W5b) -------------------------
+ * One device = one push subscription, bound to the signed-in account (lib/push).
+ * The VAPID public key is read at runtime, never baked into the build. */
+
+/* `PushSubscription.toJSON()` plus the browser's user agent. */
+export interface PushSubscriptionBody {
+  endpoint: string;
+  expirationTime: number | null;
+  keys: { p256dh: string; auth: string };
+  user_agent: string;
+}
+
+export type PushEndReason = 'signed_out' | 'switched_off';
+
+/* The server's VAPID public key (base64url, a 65-byte P-256 point); a 503 while
+ * the server has none (push not configured). */
+export const getPushKey = (): Promise<{ public_key: string }> =>
+  request<{ public_key: string }>('/push/key');
+
+/* Registers (or re-sends) this device for the caller: idempotent, and an
+ * endpoint another account held moves to the caller. 422 when the endpoint is
+ * not Apple's push service or the keys are malformed. */
+export const putPushSubscription = (body: PushSubscriptionBody): Promise<void> =>
+  request<void>('/push/subscription', { method: 'PUT', json: body });
+
+/* Ends this device's row (an unknown endpoint is still 204). The endpoint rides
+ * in the body, never the URL. */
+export const deletePushSubscription = (
+  body: { endpoint: string; reason: PushEndReason },
+  opts: { signal?: AbortSignal } = {},
+): Promise<void> =>
+  request<void>('/push/subscription', { method: 'DELETE', json: body, signal: opts.signal });
+
+/* A tap on a push lands on `/n/{dispatch}?d={delivery}` (or the coalesced
+ * `/notifications?d=`): this stamps that the caller opened their own delivery.
+ * An unknown id is still 204. Best effort, never awaited by a navigation. */
+export const postPushOpened = (delivery: number): Promise<void> =>
+  request<void>('/push/opened', { method: 'POST', json: { delivery } });
+
 /* ----- Saved Browse filter presets (migration 151) ----------------------
  * Per account (migration 595, ticket #1761): every route rides the user's
  * JWT and RLS. */
 
-export const listFilterPresets = (): Promise<{
-  data: FilterPreset[];
-  total: number;
-}> =>
-  request<{ data: FilterPreset[]; total: number }>('/filter-presets');
+export type FilterPresetList = { data: FilterPreset[]; total: number; groups: FilterPresetGroup[] };
+
+/* The presets in their one order, and the boxes they sort into (migration 672). */
+export const listFilterPresets = (): Promise<FilterPresetList> => request<FilterPresetList>('/filter-presets');
 
 export const createFilterPreset = (input: {
   name: string;
@@ -2935,13 +2942,29 @@ export const deleteFilterPreset = (id: string): Promise<{ deleted: true }> =>
 
 /* Persist a new display order (full ordered id-list, 0 = first). Returns the
  * canonical list so the caller can adopt the server's view. */
-export const reorderFilterPresets = (
-  ids: string[],
-): Promise<{ data: FilterPreset[]; total: number }> =>
-  request<{ data: FilterPreset[]; total: number }>('/filter-presets/reorder', {
+export const reorderFilterPresets = (ids: string[]): Promise<FilterPresetList> =>
+  request<FilterPresetList>('/filter-presets/reorder', {
     method: 'PUT',
     json: { ids },
   });
+
+/* The whole arrangement after a drag (lib/savedSetLayout): the boxes in order,
+ * every preset in order with its box. Answers with the canonical list. */
+export const layoutFilterPresets = (layout: SavedSetLayout): Promise<FilterPresetList> =>
+  request<FilterPresetList>('/filter-presets/layout', { method: 'PUT', json: layout });
+
+export const createFilterPresetGroup = (input: { name: string; color?: TagColor | null }): Promise<FilterPresetGroup> =>
+  request<FilterPresetGroup>('/filter-preset-groups', { method: 'POST', json: input });
+
+export const updateFilterPresetGroup = (
+  id: string,
+  patch: { name?: string; color?: TagColor | null },
+): Promise<FilterPresetGroup> =>
+  request<FilterPresetGroup>(`/filter-preset-groups/${encodeURIComponent(id)}`, { method: 'PUT', json: patch });
+
+/* Its presets fall loose; none is deleted. */
+export const deleteFilterPresetGroup = (id: string): Promise<{ deleted: true }> =>
+  request<{ deleted: true }>(`/filter-preset-groups/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
 /* ----- Operator merge mechanics (multi-portal) ----------------------------
  * Mounted under `/properties/*` since the NEW DEDUP cutoff (docs/design/
@@ -2972,28 +2995,43 @@ export interface MergeResult {
   hidden_for_you: boolean | null;
 }
 
-/* Merge an operator-checked SET of properties (Browse mergeMode) into its oldest
- * record under one merge group; a split undoes it. A category clash over the
- * set's ads is a 409 whose message is the Czech sentence. */
-export const mergePropertySet = (
-  propertyIds: number[],
-): Promise<MergeResult> =>
-  request<MergeResult>('/properties/merge', {
-    method: 'POST',
-    json: { property_ids: propertyIds },
-  });
+/* A statement of letters: a letter A–Z per id, ids with the same letter one
+ * property afterwards — over properties in Browse's merge mode, over the adverts
+ * of one property in the split (MS18). `lettersParam` is its one wire form,
+ * `94020:A,94492:B`, ids ascending. */
+export type Letters = Record<number, string>;
+export const LETTERS: readonly string[] = Array.from({ length: 26 }, (_, i) =>
+  String.fromCharCode(65 + i),
+);
 
-/* How many "Různé" rulings a merge of these properties would take back (MS12),
- * read before the click; the merge itself answers the same count. */
-export interface MergePreview {
-  property_ids: number[];
-  rulings_taken_back: number;
+export function lettersParam(letters: Letters): string {
+  return Object.entries(letters)
+    .map(([id, letter]) => [Number(id), letter] as const)
+    .sort((a, b) => a[0] - b[0])
+    .map(([id, letter]) => `${id}:${letter}`)
+    .join(',');
 }
 
-export const getMergePreview = (propertyIds: readonly number[]): Promise<MergePreview> =>
-  request<MergePreview>('/properties/merge', {
-    query: { properties: propertyIds.join(',') },
-  });
+/* Make a statement over properties true: each letter merged into its oldest
+ * record under its own merge group, all in one transaction (a refusal writes
+ * nothing); one receipt per letter. A category clash over a letter's ads is a
+ * 409 whose message is the Czech sentence, naming the letter when there are
+ * several. A split undoes one letter's merge. */
+export interface MergeLettersResult {
+  letters: Record<string, MergeResult>;
+}
+
+export const mergeProperties = (letters: Letters): Promise<MergeLettersResult> =>
+  request<MergeLettersResult>('/properties/merge', { method: 'POST', json: { letters } });
+
+/* How many "Různé" rulings each letter would take back (MS12), read before the
+ * click; the merge itself answers the same counts. */
+export interface MergePreview {
+  letters: Record<string, { property_ids: number[]; rulings_taken_back: number }>;
+}
+
+export const getMergePreview = (letters: Letters): Promise<MergePreview> =>
+  request<MergePreview>('/properties/merge', { query: { letters: lettersParam(letters) } });
 
 /* The split by letters (MS18), `GET`/`POST /properties/{id}/split`: every ad of
  * the property with a letter, one letter = one property afterwards. The preview
@@ -3005,7 +3043,6 @@ export const getMergePreview = (propertyIds: readonly number[]): Promise<MergePr
 export const DETACH_REASON_MAX = 500;
 
 /* listings.id -> letter (A–Z). */
-export type SplitLetters = Record<number, string>;
 
 export interface SplitChoice {
   to: string;
@@ -3013,7 +3050,7 @@ export interface SplitChoice {
 }
 
 export interface SplitStatement {
-  letters: SplitLetters;
+  letters: Letters;
   /* Item key (`note:11`, `pipeline`, `collection:5`, `tag:7`, `dismissal`) ->
    * the letter that gets it and its copies; an absent key follows the preview. */
   choices?: Record<string, SplitChoice>;
@@ -3021,7 +3058,7 @@ export interface SplitStatement {
   expect: string;
 }
 
-export type SplitItemKind = 'note' | 'pipeline' | 'collection' | 'tag' | 'dismissal';
+export type SplitItemKind = 'note' | 'pipeline' | 'collection' | 'tag' | 'file' | 'dismissal';
 
 /* Why a fold is not re-created or a copy not made: you hold the item there
  * already (`held`), a hidden property where your live pipeline card lands
