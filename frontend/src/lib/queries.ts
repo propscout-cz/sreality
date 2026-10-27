@@ -104,7 +104,8 @@ const CARD_COLS =
   /* The lot the card names after the floor area and the Lot area sort orders by:
    * THE plot measure (migration 534) and never the bare estate_area column. */
   'plot_area_m2,' +
-  /* The portal badge (MS19, migration 590): the portals with an active ad, else every portal. */
+  /* The portals with an active ad, else every portal (MS19, migration 590): the phone feed's
+   * portal chips. The Browse card names no portal (ruling P01, 2026-10-27). */
   'all_sources,active_sources,' +
   /* The ad-count badge (migration 590): how many ads the property holds, active or not. */
   'source_count';
@@ -778,7 +779,7 @@ export interface CardRow {
   total_price_change_pct: number | null;
   price_change_count: number | null;
   /* Every portal with an ad, and those with an active ad (MS19; never NULL: the
-   * projection coalesces them). The portal badge reads them. */
+   * projection coalesces them). The phone feed's portal chips read them. */
   all_sources: string[];
   active_sources: string[];
   /* How many ads the property holds, active or not (migration 590, the

@@ -82,7 +82,7 @@ export function feedDelta(pct: number | null | undefined): string | null {
 }
 
 /* The portals the chips name: those with a live ad, else every portal the
- * property ever had an ad on (MS19, the Browse badge's rule). */
+ * property ever had an ad on (MS19's portal rule). */
 export function feedPortals(r: Pick<CardRow, 'active_sources' | 'all_sources'>): string[] {
   return r.active_sources.length ? r.active_sources : r.all_sources;
 }
