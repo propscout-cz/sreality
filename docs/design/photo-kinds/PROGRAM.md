@@ -1,6 +1,16 @@
-<!-- STATUS: PROPOSED 2026-10-20. Nothing built. Awaiting rulings R1–R8 (§8). On approval the sprint runs autonomously, one draft PR per wave (§5), one merge per operator green light. -->
+<!-- STATUS: PARKED by operator ruling 2026-10-27. Proposed 2026-10-20; nothing built. R6 answered 2026-10-25; R1–R5, R7, R8 open (§8). Resuming needs a new ruling. -->
 
-# PHOTO KINDS: one label per photo, decided once (proposal, 2026-10-20)
+# PHOTO KINDS: one label per photo, decided once (proposal, 2026-10-20; PARKED 2026-10-27)
+
+**PARKED by operator ruling 2026-10-27: kept as the design of record; no build, no GPU spend; resuming needs a new ruling.** The proposal below is kept as written on 2026-10-20, with its measurements. The notes that follow record what has changed on main since; each must be folded into the plan before it is unparked.
+
+## Since 2026-10-20 (read before unparking)
+
+- **2026-10-21 / 2026-10-25: most of W1 is done.** Actions-exit W0 commit `6a783da2a` (2026-10-25) deleted `mirror_model_weights.yml` with its script and test, and `backfill_render_score.yml` with its script, and regenerated the workflow docs. Its follow-up `06f98c5d9` (same day) removed the `drop_dinov3` flag with the callerless invalidation chokepoint it lived on, and `4f5491186` (2026-10-21) removed `FINE_TAG_KEYS`/`COLLAPSE_ONLY_TAGS`. Of W1 only `scripts/train_tag_head.py` is left. `26c54ee91` (2026-10-25) folded `clip_retag.yml` into `clip_tag.yml`, so its four no-op jobs an hour (§4.6, R7) are gone; the never-scanned render index is still there.
+- **2026-10-23 / 2026-10-25: R6 answered.** #1648 was closed on 2026-10-23; repo-cleanup ruling 3b (2026-10-25, recorded in PR #1999) keeps #1639 and #1643 open and keeps DINOv3. See §8.
+- **2026-10-25: the GPU lane's host is now ruled.** ADR-0001 (`docs/adr/0001-scheduled-jobs-on-a-railway-job-runner.md:9-15`) puts every recurring production job on the Railway job runner and has GPU work rent RunPod pods. The actions-exit placement table (`docs/design/actions-exit/PROGRAM.md:61`) runs GPU work, DINOv3 by name, as "RunPod pods, dispatched from attended GitHub forms" because "each run is a spending decision a human makes"; its placement rules (`:68-74`) send "needs a GPU → a RunPod pod" and keep a scheduled job on GitHub only for a browser or an operator ruling. The automatic GitHub-cron GPU lane of §4.3 (W3, R8) does not fit these rules and must be redesigned before unparking.
+- **Migration numbers.** 646 and 648 are taken on main (`646_valuo_valuation_adverts.sql`, `648_browse_energy_rating_filter.sql`); W2 and W5 renumber at build time.
+- **2026-10-27: render scoring is to be removed.** The redesign hand-off (`docs/design/propscout-redesign.md` § "Render scoring: remove end to end", operator note on P03) plans removing it end to end, scoped first; P03 already hides the render verdict on the Browse card. §4.6 records a reader that removal must check first: NEW DEDUP's Set-2 manifest (`scripts/dinov3_bakeoff_manifest.py`) reads `image_clip_tags.render_score`, and the partial index `image_clip_tags_render_null_idx` (migration 240, `where render_score is null`, built for the backfill W0 deleted) depends on that column. W4's render-pill retirement (R3) overlaps with it.
 
 **Written for:** the operator (the ruling is yours) and the sessions that will build it.
 
@@ -178,12 +188,14 @@ Not chosen: a 24/7 pod ($122–360/month); hourly on-demand pods ($25–65/month
 
 ## 8. Rulings needed before the autonomous build (recommendation first)
 
+Parked 2026-10-27: R6 is answered (below); R1–R5, R7 and R8 stay open until the sprint is unparked.
+
 - **R1. The decision and the gate.** One decision for badge and Cover: the top head, shown at or above a pre-registered floor of 0.80, only for heads admitted by the holdout gate (≥ 8 graded, per-head LB ≥ 0.60; version passes at pooled LB ≥ 0.80). v1 ships with five kinds now; the 2026-10-07 per-head Cover rule is retired. **Recommend yes.** Alternative: no user-visible change until v2 passes the gate (weeks; users keep the 58%-precision CLIP badge meanwhile).
 - **R2. Backfill scope and spend.** Active-listing photos plus the labelled pool and the holdout ($10–31), then the steady lane ($9–24/month). Inactive galleries get no kind unless relisted (UX item 7). **Recommend yes.** Alternative: every stored photo ($24–73, +6.3 GB).
 - **R3. The UX bundle** (items 1–6: coverage, no tooltip, render pill retired, Cover options from the model, first-in-portal-order Cover, 5–14 h lag). **Recommend yes to all.** The render pill is the one item with a cheap alternative: keeping it keeps one CLIP column and the per-photo CLIP join in `images_public`.
 - **R4. Names users see.** Fasáda, Kuchyně, Koupelna, Obývací pokoj, Půdorys. Later kinds get names only when admitted; dedup-internal head names (property list, letecký snímek s ohraničením subjektu, technické zařízení) never appear as written. **Confirm the five words.**
 - **R5. NEW DEDUP namespace deletions.** Delete the admin route `/new-dedup/tags/*` and `winners()` (zero callers; a third, floorless reading of the tag); remove the labeling page's "Original tag" mode. **Recommend both.** Alternative for the toggle: keep it, served from the labeling API (+15 lines).
-- **R6. Draft PRs #1639, #1643, #1648** (autodedup, read the active model's scores and label strings; R1c ruled NO-GO 2026-10-01). Close them, or have dedup pin model v1 by id. **Recommend close.** Any v2 activation waits on this ruling either way.
+- **R6. Draft PRs #1639, #1643, #1648** (autodedup, read the active model's scores and label strings; R1c ruled NO-GO 2026-10-01). Close them, or have dedup pin model v1 by id. **Recommend close.** Any v2 activation waits on this ruling either way. **Answered 2026-10-25 by repo-cleanup ruling 3b (PR #1999): #1639 and #1643 stay open and DINOv3 is kept; #1648 was closed on 2026-10-23.** The recommendation (close) was not taken, so the §4.6 coupling stands: if #1639/#1643 merge, a v2 activation changes dedup's input.
 - **R7. The destructive window (W5):** narrow `images_public` and `listing_cover_public`, drop `image_dinov3_embeddings` after a pg_dump, in a window you open, after W4 has been live ≥ 24 h with zero reads of the dropped columns. **Recommend yes.** Separately, for the dedup owner (not this sprint): `clip_retag.yml` (four no-op jobs an hour since June) and the never-scanned render index.
 - **R8. Cadence.** Labels within one GitHub-cron cycle (5–14 h) on on-demand pods. **Recommend yes.** Alternative: hourly via serverless ($17–18/month, container with gated weights).
 
@@ -215,3 +227,4 @@ Weighted on the pure-random frame (n = 100): CLIP 0.556 / 0.658; DINO ≥ 0.8 0.
 ## 12. Ledger (receipts land here as waves ship)
 
 - 2026-10-20 — proposal written; rulings R1–R8 open.
+- 2026-10-27 — PARKED by operator ruling: merged as the design of record (docs only); no build, no GPU spend. R6 answered by ruling 3b (2026-10-25); what changed since 2026-10-20 is listed at the top.
