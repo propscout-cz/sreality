@@ -61,10 +61,7 @@ export default function Outreach() {
   return (
     <div className="px-6 py-8 max-w-5xl mx-auto text-[var(--color-ink)]">
       <header>
-        <p className="text-xs tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-          broker intelligence
-        </p>
-        <h1 className="mt-1 text-2xl font-[family-name:var(--font-display)]">Oslovení</h1>
+        <h1 className="text-2xl font-[family-name:var(--font-display)]">Oslovení</h1>
         <p className="mt-1 text-sm text-[var(--color-ink-3)] max-w-2xl">
           Cílené oslovení makléřů k získání nemovitostí „pod rukou". Koncept napíše
           asistent, vy ho upravíte, schválíte a&nbsp;odešlete ručně. Žádné automatické

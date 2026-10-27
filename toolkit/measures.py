@@ -91,19 +91,6 @@ PPM2_PRICE_FLOOR_CZK: dict[str, float | None] = {
     LAND_CAPITAL_CZK_M2: None,
 }
 
-# The plot measure's plausible band (migration 680, operator ruling 2026-10-26): a lot
-# under 10 m2 or over 100 ha is a portal artefact (a "1 m2" placeholder, a 48 km2
-# typo), so the measure reads it as no lot rather than sorting it to a list's top.
-PLOT_AREA_MIN_M2 = 10.0
-PLOT_AREA_MAX_M2 = 1_000_000.0
-
-# A price below its deal's floor is a portal PLACEHOLDER (1 Kč, a zero standing for
-# "price on request"), never an asking price, and the price change ignores it (operator
-# ruling 2026-10-26). Lower than the per-m2 floors above on purpose: those guard a
-# ratio a cheap real price would distort; these only reject what is not a price.
-PLACEHOLDER_RENT_FLOOR_CZK = 500
-PLACEHOLDER_CAPITAL_FLOOR_CZK = 10_000
-
 # The unit string for each basis. Czech, because every surface that renders one
 # is Czech-facing. `mixed` and `unknown` deliberately have NO unit — that is the
 # whole point of naming them.
@@ -163,14 +150,6 @@ def plot_area_sql(alias: str) -> str:
     return (
         f"plot_area_m2({alias}.category_main, {alias}.area_m2::numeric, "
         f"{alias}.estate_area::numeric)"
-    )
-
-
-def placeholder_floor_sql(category_type: str) -> str:
-    """THE price floor under which a `category_type` expression's price is a placeholder."""
-    return (
-        f"(CASE WHEN {category_type} = '{RENT_CATEGORY_TYPE}' "
-        f"THEN {PLACEHOLDER_RENT_FLOOR_CZK} ELSE {PLACEHOLDER_CAPITAL_FLOOR_CZK} END)"
     )
 
 
@@ -259,10 +238,9 @@ def plot_area_m2(
     beyond whatever `estate_area` states. A filter SPEC's None means the opposite
     (unconstrained) and must never be handed here.
     """
-    plot = area_m2 if category_main == LAND_CATEGORY_MAIN else estate_area
-    if plot is None or not PLOT_AREA_MIN_M2 <= plot <= PLOT_AREA_MAX_M2:
-        return None
-    return plot
+    if category_main == LAND_CATEGORY_MAIN:
+        return area_m2
+    return estate_area
 
 
 def price_floor_czk(basis: str | None) -> float | None:
@@ -950,5 +928,15 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         kind=KIND_GUARDS,
         why="Pins that the choropleth legend still reads the shared value "
         "labels rather than a local copy of them.",
+    ),
+    RegisteredSite(
+        path="frontend/src/lib/listingPopupHtml.test.ts",
+        arm="vocab",
+        hits=1,
+        measure="ppm2",
+        kind=KIND_GUARDS,
+        why="The map popup test's fixture row carries the server's published "
+        "basis token, so the popup's per-m² line is pinned to that basis, never "
+        "a client ratio or a bare 'sale' literal.",
     ),
 )

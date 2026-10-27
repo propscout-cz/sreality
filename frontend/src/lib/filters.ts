@@ -21,7 +21,6 @@ import {
   normalizeScope,
   parseSetScope,
   scopeActive,
-  scopeWords,
   setScopeToParams,
   type CuratedSet,
   type SetScope,
@@ -901,54 +900,32 @@ const CATEGORY_TYPE_LABEL: Record<CategoryType, string> = {
 };
 
 /* "for sale" / "for rent" / … — empty when no deal type is constrained, so the
- * caller's sentence reads "12 apartments" rather than "12 apartments for null". */
+ * header reads "12 apartments" rather than "12 apartments for null". */
 export const categoryTypeLabel = (t: CategoryType | null): string =>
   t == null ? '' : CATEGORY_TYPE_LABEL[t];
 
-const fmtDaysRange = (lo: number | null, hi: number | null): string => {
-  if (lo == null && hi == null) return '';
-  if (lo != null && hi != null) return `${lo}–${hi} d`;
-  if (lo != null)               return `≥ ${lo} d`;
-  return `≤ ${hi} d`;
-};
+/* The one property type and deal a filter pins, or null when it spans several
+ * types or both deals: a Browse card of exactly that kind drops "Byt na prodej ·"
+ * from its title (ruling P05, 2026-10-27). */
+export interface CohortKind {
+  categoryMain: CategoryMain;
+  categoryType: CategoryType;
+}
 
-export const summarise = (f: ListingFilters, count: number | null): string => {
-  const bits: string[] = [];
-  bits.push(f.status === 'active' ? 'active' : f.status === 'inactive' ? 'inactive' : 'all');
-  const countStr = count == null ? '…' : count.toLocaleString('cs-CZ');
-  bits.push(`${countStr} ${categoryMainLabel(f.categoryMain)}`);
-  const dealLabel = categoryTypeLabel(f.categoryType);
-  if (dealLabel) bits.push(dealLabel);
-  if (f.districts.length) {
-    const shown = f.districts
-      .slice(0, 3)
-      .map((d) => {
-        const base = d.context ? `${d.name} · ${d.context}` : d.name;
-        return d.excluded ? `−${base}` : base;
-      })
-      .join(', ');
-    const extra = f.districts.length > 3 ? ` +${f.districts.length - 3}` : '';
-    bits.push(`in ${shown}${extra}`);
-  }
-  if (f.dispositions.length) {
-    bits.push(`(${f.dispositions.slice(0, 4).join(', ')}${f.dispositions.length > 4 ? '…' : ''})`);
-  }
-  const portalScope = portalScopeLabel(f.portals, f.portalsExcluded, f.portalsExcludedActiveOnly);
-  if (portalScope) bits.push(portalScope);
-  const seenLabel = fmtDaysRange(f.lastSeenMinDays, f.lastSeenMaxDays);
-  if (seenLabel) bits.push(`last seen ${seenLabel}`);
-  if (f.recentlyAddedDays != null) bits.push(`added ≤ ${f.recentlyAddedDays} d`);
-  if (f.recentlyChangedDays != null) bits.push(`changed ≤ ${f.recentlyChangedDays} d`);
-  const tomLabel = fmtDaysRange(f.tomDaysMin, f.tomDaysMax);
-  if (tomLabel) bits.push(`TOM ${tomLabel}`);
-  if (f.tomObservedOnly) bits.push('newly listed');
-  for (const name of CURATED_SET_NAMES) {
-    const words = scopeWords(name, f[name]);
-    if (words) bits.push(words);
-  }
-  if (f.brokerId != null) bits.push('for one broker');
-  if (f.bounds) bits.push('in this map area');
-  return `Showing ${bits.join(' ')}`;
+export function cohortKindOf(
+  f: Pick<ListingFilters, 'categoryMain' | 'categoryType'>,
+): CohortKind | null {
+  return f.categoryMain.length === 1 && f.categoryType != null
+    ? { categoryMain: f.categoryMain[0], categoryType: f.categoryType }
+    : null;
+}
+
+/* What Browse's header counts, after the number: "apartments for sale",
+ * "apartments / houses", "properties". Every filter is a pill under it
+ * (AppliedFilterPills, ruling P09), so nothing here names one. */
+export const countedWords = (f: Pick<ListingFilters, 'categoryMain' | 'categoryType'>): string => {
+  const deal = categoryTypeLabel(f.categoryType);
+  return deal ? `${categoryMainLabel(f.categoryMain)} ${deal}` : categoryMainLabel(f.categoryMain);
 };
 
 /* A short, human default name for a watchdog created from the current Browse

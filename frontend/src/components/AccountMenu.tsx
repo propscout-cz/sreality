@@ -5,6 +5,7 @@ import { ROUTES } from '@/lib/routes';
 import { readDesktopView, switchDesktopView } from '@/lib/phoneShell';
 import { COLOR_SCHEMES, useScheme, useTheme, type ThemeMode } from '@/lib/theme';
 import SchemeSwatch from './SchemeSwatch';
+import { SegmentedBar } from './controls';
 
 const MODES: ReadonlyArray<{ value: ThemeMode; label: string }> = [
   { value: 'light', label: 'Light' },
@@ -100,26 +101,16 @@ export default function AccountMenu() {
               ))}
             </div>
           </div>
-          <div role="group" aria-label="Light or dark" className="px-3 pb-2">
-            <div className="grid grid-cols-3 gap-0.5 rounded-[var(--radius-sm)] bg-[var(--color-inset)] p-0.5">
-              {MODES.map((m) => (
-                <button
-                  key={m.value}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={mode === m.value}
-                  onClick={() => setMode(m.value)}
-                  className={[
-                    'h-6 rounded-[var(--radius-xs)] text-[0.75rem]',
-                    mode === m.value
-                      ? 'bg-[var(--color-paper-3)] text-[var(--color-ink)] font-medium shadow-sm'
-                      : 'text-[var(--color-ink-2)] hover:text-[var(--color-ink)]',
-                  ].join(' ')}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
+          {/* The one pick-one bar; inside a menu its segments are menuitemradios. */}
+          <div className="px-3 pb-2">
+            <SegmentedBar
+              fill
+              segmentRole="menuitemradio"
+              label="Light or dark"
+              options={MODES}
+              value={mode}
+              onChange={setMode}
+            />
           </div>
           <div className="my-1 h-px bg-[var(--color-rule)]" aria-hidden />
           {desktopView && (

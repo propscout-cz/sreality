@@ -290,7 +290,7 @@ function MergedAdvertRow({
     <li
       ref={rowRef}
       className={[
-        'scroll-mt-6 rounded-[var(--radius-sm)] border bg-[var(--color-paper-2)]',
+        'scroll-mt-28 rounded-[var(--radius-sm)] border bg-[var(--color-paper-2)]',
         isCanonical ? 'border-[var(--color-rule-strong)]' : 'border-[var(--color-rule-soft)]',
       ].join(' ')}
     >

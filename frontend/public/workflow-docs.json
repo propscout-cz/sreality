@@ -43,8 +43,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": 15,
       "permissions": "contents: write",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/aggregate_condition_markers.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/aggregate_condition_markers.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/aggregate_condition_markers.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/aggregate_condition_markers.yml"
     },
     {
       "filename": "apply_migration.yml",
@@ -89,8 +89,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 60,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/apply_migration.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/apply_migration.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/apply_migration.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/apply_migration.yml"
     },
     {
       "filename": "autodedup.yml",
@@ -135,8 +135,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 300,
       "permissions": "contents: read, actions: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/autodedup.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/autodedup.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/autodedup.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/autodedup.yml"
     },
     {
       "filename": "backfill_idnes_brokers.yml",
@@ -175,8 +175,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 60,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/backfill_idnes_brokers.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/backfill_idnes_brokers.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/backfill_idnes_brokers.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/backfill_idnes_brokers.yml"
     },
     {
       "filename": "backfill_unit_price_masquerade.yml",
@@ -260,8 +260,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 350,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/backfill_unit_price_masquerade.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/backfill_unit_price_masquerade.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/backfill_unit_price_masquerade.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/backfill_unit_price_masquerade.yml"
     },
     {
       "filename": "backup_before_drop.yml",
@@ -310,8 +310,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 30,
       "permissions": "contents: read, actions: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/backup_before_drop.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/backup_before_drop.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/backup_before_drop.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/backup_before_drop.yml"
     },
     {
       "filename": "bazos_index_walk.yml",
@@ -405,8 +405,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 130,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/bazos_index_walk.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/bazos_index_walk.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/bazos_index_walk.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/bazos_index_walk.yml"
     },
     {
       "filename": "build-extension.yml",
@@ -433,8 +433,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": null,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/build-extension.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/build-extension.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/build-extension.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/build-extension.yml"
     },
     {
       "filename": "ceskereality_index_walk.yml",
@@ -488,8 +488,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 180,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/ceskereality_index_walk.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/ceskereality_index_walk.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/ceskereality_index_walk.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/ceskereality_index_walk.yml"
     },
     {
       "filename": "clip_tag.yml",
@@ -561,8 +561,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 55,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/clip_tag.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/clip_tag.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/clip_tag.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/clip_tag.yml"
     },
     {
       "filename": "compare_condition_models.yml",
@@ -635,8 +635,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": 20,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/compare_condition_models.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/compare_condition_models.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/compare_condition_models.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/compare_condition_models.yml"
     },
     {
       "filename": "compute_image_phash.yml",
@@ -692,8 +692,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 55,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/compute_image_phash.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/compute_image_phash.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/compute_image_phash.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/compute_image_phash.yml"
     },
     {
       "filename": "condition_score_batches.yml",
@@ -757,8 +757,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 60,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/condition_score_batches.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/condition_score_batches.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/condition_score_batches.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/condition_score_batches.yml"
     },
     {
       "filename": "condition_scores.yml",
@@ -834,8 +834,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 55,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/condition_scores.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/condition_scores.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/condition_scores.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/condition_scores.yml"
     },
     {
       "filename": "dinov3_bakeoff_manifest.yml",
@@ -929,8 +929,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 45,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/dinov3_bakeoff_manifest.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/dinov3_bakeoff_manifest.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/dinov3_bakeoff_manifest.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/dinov3_bakeoff_manifest.yml"
     },
     {
       "filename": "dinov3_embed_backfill.yml",
@@ -1039,8 +1039,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 90,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/dinov3_embed_backfill.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/dinov3_embed_backfill.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/dinov3_embed_backfill.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/dinov3_embed_backfill.yml"
     },
     {
       "filename": "discover_condition_markers.yml",
@@ -1108,8 +1108,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": 180,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/discover_condition_markers.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/discover_condition_markers.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/discover_condition_markers.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/discover_condition_markers.yml"
     },
     {
       "filename": "docs-budget.yml",
@@ -1126,8 +1126,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": null,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/docs-budget.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/docs-budget.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/docs-budget.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/docs-budget.yml"
     },
     {
       "filename": "draw_exam_cohort.yml",
@@ -1195,8 +1195,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 15,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/draw_exam_cohort.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/draw_exam_cohort.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/draw_exam_cohort.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/draw_exam_cohort.yml"
     },
     {
       "filename": "draw_tag_candidates.yml",
@@ -1259,8 +1259,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 30,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/draw_tag_candidates.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/draw_tag_candidates.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/draw_tag_candidates.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/draw_tag_candidates.yml"
     },
     {
       "filename": "export_raw_pages_archive.yml",
@@ -1301,8 +1301,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 350,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/export_raw_pages_archive.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/export_raw_pages_archive.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/export_raw_pages_archive.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/export_raw_pages_archive.yml"
     },
     {
       "filename": "frontend-build.yml",
@@ -1322,8 +1322,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": null,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/frontend-build.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/frontend-build.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/frontend-build.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/frontend-build.yml"
     },
     {
       "filename": "heal_bazos_floor_zero.yml",
@@ -1359,8 +1359,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 60,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/heal_bazos_floor_zero.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/heal_bazos_floor_zero.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/heal_bazos_floor_zero.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/heal_bazos_floor_zero.yml"
     },
     {
       "filename": "idnes_index_walk.yml",
@@ -1406,8 +1406,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 240,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/idnes_index_walk.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/idnes_index_walk.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/idnes_index_walk.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/idnes_index_walk.yml"
     },
     {
       "filename": "index_walk.yml",
@@ -1452,8 +1452,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 40,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/index_walk.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/index_walk.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/index_walk.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/index_walk.yml"
     },
     {
       "filename": "ingest_boundaries.yml",
@@ -1505,8 +1505,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": 30,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/ingest_boundaries.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/ingest_boundaries.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/ingest_boundaries.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/ingest_boundaries.yml"
     },
     {
       "filename": "label_images.yml",
@@ -1633,8 +1633,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 30,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/label_images.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/label_images.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/label_images.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/label_images.yml"
     },
     {
       "filename": "label_proposal_backfill.yml",
@@ -1685,8 +1685,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 55,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/label_proposal_backfill.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/label_proposal_backfill.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/label_proposal_backfill.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/label_proposal_backfill.yml"
     },
     {
       "filename": "load_obec_population.yml",
@@ -1705,8 +1705,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 90,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/load_obec_population.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/load_obec_population.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/load_obec_population.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/load_obec_population.yml"
     },
     {
       "filename": "location_claims_intake.yml",
@@ -1797,8 +1797,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 55,
       "permissions": "contents: read, actions: write",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/location_claims_intake.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/location_claims_intake.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/location_claims_intake.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/location_claims_intake.yml"
     },
     {
       "filename": "location_claims_retire.yml",
@@ -1855,8 +1855,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 340,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/location_claims_retire.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/location_claims_retire.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/location_claims_retire.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/location_claims_retire.yml"
     },
     {
       "filename": "location_registry_load.yml",
@@ -1903,8 +1903,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 360,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/location_registry_load.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/location_registry_load.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/location_registry_load.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/location_registry_load.yml"
     },
     {
       "filename": "location_resolve.yml",
@@ -1969,8 +1969,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 60,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/location_resolve.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/location_resolve.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/location_resolve.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/location_resolve.yml"
     },
     {
       "filename": "migrations.yml",
@@ -1996,8 +1996,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": 15,
       "permissions": "contents: read, pull-requests: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/migrations.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/migrations.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/migrations.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/migrations.yml"
     },
     {
       "filename": "new_dedup_candidates.yml",
@@ -2083,8 +2083,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 350,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/new_dedup_candidates.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/new_dedup_candidates.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/new_dedup_candidates.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/new_dedup_candidates.yml"
     },
     {
       "filename": "realitymix_index_walk.yml",
@@ -2129,8 +2129,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 180,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/realitymix_index_walk.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/realitymix_index_walk.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/realitymix_index_walk.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/realitymix_index_walk.yml"
     },
     {
       "filename": "recompute_property_stats.yml",
@@ -2182,8 +2182,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 130,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/recompute_property_stats.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/recompute_property_stats.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/recompute_property_stats.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/recompute_property_stats.yml"
     },
     {
       "filename": "reextract.yml",
@@ -2253,8 +2253,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 60,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/reextract.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/reextract.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/reextract.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/reextract.yml"
     },
     {
       "filename": "reparse.yml",
@@ -2372,8 +2372,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 180,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/reparse.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/reparse.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/reparse.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/reparse.yml"
     },
     {
       "filename": "resolve_brokers_full.yml",
@@ -2417,8 +2417,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 180,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/resolve_brokers_full.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/resolve_brokers_full.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/resolve_brokers_full.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/resolve_brokers_full.yml"
     },
     {
       "filename": "run_job.yml",
@@ -2454,8 +2454,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": 10,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/run_job.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/run_job.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/run_job.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/run_job.yml"
     },
     {
       "filename": "runner_image.yml",
@@ -2482,8 +2482,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": 40,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/runner_image.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/runner_image.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/runner_image.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/runner_image.yml"
     },
     {
       "filename": "runpod_reap.yml",
@@ -2511,8 +2511,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": 10,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/runpod_reap.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/runpod_reap.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/runpod_reap.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/runpod_reap.yml"
     },
     {
       "filename": "scrape_bezrealitky.yml",
@@ -2557,8 +2557,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 30,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/scrape_bezrealitky.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/scrape_bezrealitky.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/scrape_bezrealitky.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/scrape_bezrealitky.yml"
     },
     {
       "filename": "scrape_maxima.yml",
@@ -2595,8 +2595,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 30,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/scrape_maxima.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/scrape_maxima.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/scrape_maxima.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/scrape_maxima.yml"
     },
     {
       "filename": "scrape_mmreality.yml",
@@ -2642,8 +2642,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 60,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/scrape_mmreality.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/scrape_mmreality.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/scrape_mmreality.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/scrape_mmreality.yml"
     },
     {
       "filename": "scrape_price_stats.yml",
@@ -2718,8 +2718,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 60,
       "permissions": "contents: read, actions: write",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/scrape_price_stats.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/scrape_price_stats.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/scrape_price_stats.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/scrape_price_stats.yml"
     },
     {
       "filename": "scrape_remax.yml",
@@ -2764,8 +2764,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 60,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/scrape_remax.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/scrape_remax.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/scrape_remax.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/scrape_remax.yml"
     },
     {
       "filename": "screen_exam_cohort.yml",
@@ -2855,8 +2855,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 30,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/screen_exam_cohort.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/screen_exam_cohort.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/screen_exam_cohort.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/screen_exam_cohort.yml"
     },
     {
       "filename": "seed_condition_settings.yml",
@@ -2887,8 +2887,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": 5,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/seed_condition_settings.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/seed_condition_settings.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/seed_condition_settings.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/seed_condition_settings.yml"
     },
     {
       "filename": "seed_curated_cities.yml",
@@ -2932,8 +2932,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": 90,
       "permissions": "contents: write",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/seed_curated_cities.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/seed_curated_cities.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/seed_curated_cities.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/seed_curated_cities.yml"
     },
     {
       "filename": "tag_model.yml",
@@ -3072,8 +3072,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 120,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/tag_model.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/tag_model.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/tag_model.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/tag_model.yml"
     },
     {
       "filename": "tagging_bakeoff.yml",
@@ -3221,8 +3221,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 180,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/tagging_bakeoff.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/tagging_bakeoff.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/tagging_bakeoff.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/tagging_bakeoff.yml"
     },
     {
       "filename": "test.yml",
@@ -3239,8 +3239,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": 9,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/test.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/test.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/test.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/test.yml"
     },
     {
       "filename": "text_extraction_bakeoff.yml",
@@ -3325,8 +3325,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 240,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/text_extraction_bakeoff.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/text_extraction_bakeoff.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/text_extraction_bakeoff.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/text_extraction_bakeoff.yml"
     },
     {
       "filename": "verify_pipeline.yml",
@@ -3360,8 +3360,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 19,
       "permissions": "contents: read, actions: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/verify_pipeline.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/verify_pipeline.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/verify_pipeline.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/verify_pipeline.yml"
     },
     {
       "filename": "web_index_walk.yml",
@@ -3398,8 +3398,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 15,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/web_index_walk.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/web_index_walk.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/web_index_walk.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/web_index_walk.yml"
     }
   ]
 }

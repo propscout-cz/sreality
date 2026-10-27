@@ -516,16 +516,15 @@
     letter-spacing: 0.02em;
     color: var(--color-ink-3);
   }
-  /* How precisely the pin is placed — tight under the place line it qualifies. */
+  /* How precisely the pin is placed and when the ad was last seen, one line
+   * tight under the place it qualifies (ruling P13); each half's detail is its
+   * tooltip. */
   .lp-precision {
     margin: 2px 0 0;
     font-size: 0.68rem;
     color: var(--color-ink-3);
   }
-  .lp-seen {
-    margin: 6px 0 0;
-    font-size: 0.65rem;
-    color: var(--color-ink-4);
+  .lp-precision [title] {
     cursor: help;
   }
   .lp-link {
@@ -758,6 +757,9 @@
    *                               estimate corner
    *    2  .card-tip               a badge whose only job above the ::after is
    *                               to be hit-testable, so its title tooltip shows
+   *   20  the sticky tab strip    (Tabs.tsx `sticky`, the property page) — a
+   *                               photo's chevrons scroll UNDER it, not over
+   *   30  the Shell header        the strip pins just below it (top-14)
    *   50  every modal             (inline, z-50) — Explore modals render cards
    *   60  AnchoredPopover         the portalled panel — on <body>, above any
    *                               modal that opened it
