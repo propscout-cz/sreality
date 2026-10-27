@@ -8,7 +8,8 @@ no-ops. Every run then re-renders the map's `rent_map` overlay.
 
     python -m scripts.fetch_rent_map                     # fetch + ingest live
     python -m scripts.fetch_rent_map --source-path f.xlsx
-    python -m scripts.fetch_rent_map --dry-run           # parse only, no write
+    python -m scripts.fetch_rent_map --dry-run           # parse, then a dry render of the stored revision's
+                                                         # overlay (needs SUPABASE_DB_URL); no write
 """
 
 from __future__ import annotations
