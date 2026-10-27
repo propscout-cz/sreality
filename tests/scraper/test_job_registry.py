@@ -96,10 +96,10 @@ def _entry(name: str) -> Job:
     return next(j for j in jobs.declared() if j.name == name)
 
 
-def test_nothing_has_moved_yet() -> None:
+def test_the_registry_spans_every_portal() -> None:
     assert len(PORTAL_CLASSES) >= 10, "the portal list shrank: a census over its walks proves less"
     assert len(jobs.declared()) == FIXED + len(PORTAL_CLASSES)
-    assert jobs.runner_jobs() == ()  # #2025 deletes this line: its three jobs are the first to move
+    assert {"stale_images", "rent_map", "map_overlays"} <= {j.name for j in jobs.runner_jobs()}
 
 
 @pytest.mark.parametrize("job", jobs.declared(), ids=lambda j: j.name)
@@ -467,10 +467,6 @@ LEAVERS = {
 ATTENDED = {
     ("ingest_boundaries.yml", "scripts.ingest_map_overlays"): "re-renders kraje after a human-run boundary ingest",
 }
-# A step that runs an entry's module for another job of its file, so it never hosts that entry (#2025 deletes it).
-COMPANIONS = {
-    ("fetch_rent_map.yml", "scripts.ingest_map_overlays"): "#2025: re-renders the rent_map section after an ingest",
-}
 GITHUB_ENTRIES = frozenset({"verify_pipeline", "price_stats"})
 GITHUB_SCHEDULES = frozenset({"verify_pipeline.yml", "scrape_price_stats.yml"})
 # The waiting set only shrinks: a new job or portal is born on the runner, never as one more GitHub schedule.
@@ -493,10 +489,6 @@ def _moved(entries: Sequence[Job], names: set[str]) -> list[Job]:
     return [replace(j, host=jobs.RUNNER) if j.name in names else j for j in entries]
 
 
-def _without(workflows: dict[str, Workflow], *files: str) -> dict[str, Workflow]:
-    return {f: w for f, w in workflows.items() if f not in files}
-
-
 def _switches(argv: tuple[str, ...]) -> set[str]:
     """The entry's value-less flags, the ones that pick a mode (`--full-sweep`, `--index-only`)."""
     return {a for a, after in zip(argv[1:], (*argv[2:], "--")) if a.startswith("--") and "=" not in a
@@ -505,10 +497,9 @@ def _switches(argv: tuple[str, ...]) -> set[str]:
 
 def _invokes(job: Job, workflow: Workflow) -> bool:
     """The file runs this entry's job: its module, carrying the entry's switches unless the command builds every
-    flag in a shell variable (location_resolve.yml runs the drain twice; only the --full-sweep call is the job),
-    and never as a companion step."""
-    return any(c.module == job.argv[0] and (workflow.file, c.module) not in COMPANIONS
-               and (not c.flags or _switches(job.argv) <= c.flags) for c in workflow.invocations)
+    flag in a shell variable (location_resolve.yml runs the drain twice; only the --full-sweep call is the job)."""
+    return any(c.module == job.argv[0] and (not c.flags or _switches(job.argv) <= c.flags)
+               for c in workflow.invocations)
 
 
 def pairing_problems(entries: Sequence[Job], workflows: dict[str, Workflow], *,
@@ -536,12 +527,17 @@ def test_every_job_has_exactly_one_host() -> None:
 
 def test_a_move_is_a_host_flip_plus_its_workflows_deletion() -> None:
     first_wave = {"stale_images", "rent_map", "map_overlays"}
-    moved = _moved(jobs.declared(), first_wave)
-    deleted = _without(_repo_workflows(), "refresh_stale_images.yml", "fetch_rent_map.yml", "ingest_map_overlays.yml")
-    assert pairing_problems(moved, deleted) == []
-    assert pairing_problems(moved, deleted, attended={})  # ingest_boundaries.yml still runs the overlays
-    assert pairing_problems(moved, _repo_workflows())  # flipped, workflow kept: two hosts
-    assert pairing_problems(jobs.declared(), deleted)  # workflow deleted, not flipped: no host
+    workflows = _repo_workflows()
+    assert pairing_problems(jobs.declared(), workflows) == []
+    assert pairing_problems(jobs.declared(), workflows, attended={}) == [  # ingest_boundaries.yml still runs it
+        "map_overlays: on the runner, and ingest_boundaries.yml still runs scripts.ingest_map_overlays"]
+    kept = Workflow("refresh_stale_images.yml", True, 1200,
+                    (Invocation("scripts.refresh_stale_image_urls", frozenset()),))
+    assert pairing_problems(jobs.declared(), {**workflows, kept.file: kept}) == [  # flipped, workflow kept
+        "stale_images: on the runner, and refresh_stale_images.yml still runs scripts.refresh_stale_image_urls"]
+    unflipped = [replace(j, host=jobs.UNTIL_MOVED) if j.name in first_wave else j for j in jobs.declared()]
+    assert pairing_problems(unflipped, workflows) == [  # deleted, not flipped
+        f"{n}: waiting to move, and no scheduled workflow runs it" for n in ("stale_images", "rent_map", "map_overlays")]
 
 
 def test_the_pairing_census_fires() -> None:
@@ -551,8 +547,8 @@ def test_the_pairing_census_fires() -> None:
     assert pairing_problems(jobs.declared(), {**workflows, "location_resolve.yml": tick_only})
     stray = Workflow("phash2.yml", True, 600, (Invocation("scripts.compute_image_phash2", frozenset()),))
     assert pairing_problems(jobs.declared(), {**workflows, "phash2.yml": stray})
-    # fetch_rent_map.yml still runs the overlay module, but only to re-render rent_map: no host for map_overlays.
-    assert pairing_problems(jobs.declared(), _without(workflows, "ingest_map_overlays.yml"))
+    # ingest_boundaries.yml runs the overlay module by hand; only ATTENDED keeps it from being map_overlays' 2nd host.
+    assert pairing_problems(jobs.declared(), workflows, attended={})
     # #2033's tick hosts price_stats only once read_workflows reads the `once` form; until then B3 is red.
     once = (Invocation("scripts.price_stats_probe", frozenset()), Invocation("scraper.job_runner", frozenset()))
     ticked = replace(workflows["scrape_price_stats.yml"], invocations=once)
