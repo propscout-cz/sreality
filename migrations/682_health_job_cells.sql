@@ -69,7 +69,17 @@ stable
 set search_path = public
 as $cells$
 with live as (
-  select j.*, extract(epoch from j.cadence)::float8 as every_s, coalesce(j.paused_until > now(), false) as paused
+  select j.*, extract(epoch from j.cadence)::float8 as every_s, coalesce(j.paused_until > now(), false) as paused,
+         -- Joined after a gap: registry_at is when the row joined the runner (new, adopted or un-retired; a later boot
+         -- keeps it, job_lease._REGISTER_SQL), no ok run since, and no run of it overlapped the cadence and budget
+         -- before it. Its older history (a revert's, which un-retiring carries) is not judged: streak and clock count
+         -- from the join. A row whose history runs on through the join is judged whole, as before.
+         coalesce(j.last_success_at < j.registry_at - j.cadence - make_interval(secs => j.timeout_s), true)
+         and not exists (select 1 from job_runs r
+                          where r.job_name = j.job_name and r.started_at < j.registry_at
+                            and coalesce(r.ended_at, now()) >= j.registry_at - j.cadence
+                                                               - make_interval(secs => j.timeout_s))
+           as joined
     from scheduled_jobs j
    where j.runner = 'job-runner' and j.registry_at is not null and j.retired_at is null
 ), fresh as (
@@ -96,6 +106,7 @@ with live as (
          e.peak_rss_mb, e.requested_by as fail_by, e.args as fail_args,
          h.job_name as held_by, extract(epoch from now() - h.started_at) as held_for_s, hs.timeout_s as held_budget_s,
          fs.first_at, ss.streak_since, rf.replicas as refused_by,
+         case when l.joined then ss.failed else l.consecutive_failures end as streak,
          -- Not judged on its history yet: no run has closed since the cadence before its due_at. Only _REGISTER_SQL
          -- sets due_at with no run (a new, adopted or un-retired row, at the first slot >= now() + timeout_s); every
          -- release and reap ends a run at or after due_at - cadence. It lasts through the first run, so a re-landed
@@ -116,9 +127,12 @@ with live as (
                         where r.job_name = l.job_name and r.outcome in ('failed', 'timeout', 'lost')
                         order by r.started_at desc, r.id desc limit 1) e on true
     left join lateral (select min(r.started_at) as first_at from job_runs r     -- the first SCHEDULED run
-                        where r.job_name = l.job_name and r.requested_by is null) fs on true
-    left join lateral (select min(r.started_at) as streak_since from job_runs r -- the current streak's first failure
+                        where r.job_name = l.job_name and r.requested_by is null
+                          and (not l.joined or r.started_at >= l.registry_at)) fs on true
+    left join lateral (select min(r.started_at) as streak_since, count(*) as failed  -- the current streak's failures
+                         from job_runs r
                         where r.job_name = l.job_name and r.outcome in ('failed', 'timeout', 'lost')
+                          and (not l.joined or r.started_at >= l.registry_at)
                           and r.started_at > coalesce((select max(k.started_at) from job_runs k
                                                         where k.job_name = l.job_name and k.outcome = 'ok'),
                                                        '-infinity')) ss on true
@@ -128,10 +142,11 @@ with live as (
     left join refused rf on rf.name = l.job_name
 ), y as (
   select x.*,
-         -- Never registry_at (every boot re-stamps it) and never a request run (a failed drill must not make a
-         -- quarterly job late); a lapsed pause restarts the clock.
+         -- Never a request run (a failed drill must not make a quarterly job late); a row that joined after a gap
+         -- counts from its first scheduled run since, as a never-succeeded one; a lapsed pause restarts the clock.
          greatest(case when x.fresh_slot then greatest(x.last_success_at, x.due_at - x.cadence)
-                       else coalesce(x.last_success_at, coalesce(x.first_at, x.due_at) - x.cadence) end,
+                       else coalesce(case when not x.joined then x.last_success_at end,
+                                     coalesce(x.first_at, x.due_at) - x.cadence) end,
                   case when x.paused_until <= now() then x.paused_until end) as since,
          extract(epoch from now() - x.run_at) as flight_s,
          -- Due since its slot, or since a pause that lapsed after it; requested since the request.
@@ -183,12 +198,12 @@ with live as (
         || ' ' || health_span(j.waiting_s) || ' ago and not started'
         || case when not exists (select 1 from fresh) then '; no job-runner replica has beaten for 10 min' else '' end),
     -- Three in a row is a Problem only once they span min(cadence, 1 h): the backoff retries in 60 s, 120 s, 240 s.
-    (5, case when j.paused or j.fresh_slot or j.consecutive_failures = 0 then null
-             when j.consecutive_failures >= 3
+    (5, case when j.paused or j.fresh_slot or j.streak = 0 then null
+             when j.streak >= 3
               and coalesce(j.streak_since, '-infinity') <= now() - least(j.cadence, interval '1 hour') then 'fail'
              else 'warn' end,
-        case when j.consecutive_failures = 1 then 'its last run failed: ' || coalesce(j.cause, j.last_outcome)
-             else format('%s failed runs in a row%s; the last: %s', j.consecutive_failures,
+        case when j.streak = 1 then 'its last run failed: ' || coalesce(j.cause, j.last_outcome)
+             else format('%s failed runs in a row%s; the last: %s', j.streak,
                          coalesce(', the first ' || health_span(extract(epoch from now() - j.streak_since))
                                   || ' ago', ''),
                          coalesce(j.cause, j.last_outcome)) end),
@@ -222,7 +237,7 @@ select coalesce(jsonb_agg(cell order by subject), '[]'::jsonb) from (
              when j.paused then
                format('paused for %s more by %s: %s', health_span(extract(epoch from j.paused_until - now())),
                       j.paused_by, j.pause_note)
-               || case when j.consecutive_failures > 0
+               || case when j.streak > 0
                        then '; its last run failed: ' || coalesce(j.cause, j.last_outcome) else '' end
              when j.fresh_slot and j.due_at > now() and j.last_run is null and j.last_success_at is null then
                format('not run yet; first slot in %s (%s UTC)', health_span(extract(epoch from j.due_at - now())),
@@ -249,7 +264,8 @@ select coalesce(jsonb_agg(cell order by subject), '[]'::jsonb) from (
              'runner', j.runner, 'cadence_s', j.every_s, 'timeout_s', j.timeout_s, 'resource', j.resource,
              'due_at', j.due_at, 'paused_until', j.paused_until, 'paused_by', j.paused_by, 'pause_note', j.pause_note,
              'requested_at', j.requested_at, 'requested_by', j.requested_by, 'last_success_at', j.last_success_at,
-             'consecutive_failures', j.consecutive_failures, 'last_run', j.last_run, 'cause', j.cause,
+             'consecutive_failures', j.consecutive_failures, 'streak', j.streak,
+             'joined_at', case when j.joined then j.registry_at end, 'last_run', j.last_run, 'cause', j.cause,
              'exit_code', j.fail_exit, 'peak_rss_mb', j.peak_rss_mb, 'in_flight_s', round(j.flight_s),
              'run_replica', j.run_replica, 'held_by', j.held_by, 'sibling_wait_s', round(j.sibling_wait_s),
              'fresh_slot', j.fresh_slot, 'streak_since', j.streak_since,

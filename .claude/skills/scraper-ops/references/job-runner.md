@@ -83,7 +83,7 @@ of a sibling on its resource seen since its clock started. The worst condition w
 | Running, under ⅔·T | ok | `running for N of its T budget on job-runner/ab12cd34` (+ `; a request by X waits for it`) |
 | Running past ⅔·T / past T / past T + 10 min | Watch / Watch / **Problem** | `running for …`; past T `; past it: the runner is stopping it`; past T + `STUCK_RUN_GRACE_S` `; past the runner's 10 min stopping grace: nothing is stopping it` |
 | The latest closed run is `timeout` (ruling R-3) | **Problem** until a later run closes | `its last run hit its T budget and was stopped (timeout)` |
-| Failures in a row (`consecutive_failures`) | Watch at 1; **Problem** at 3 once the streak's first failure is min(C, 1 h) old | `its last run failed: <cause>` / `3 failed runs in a row, the first N ago; the last: <cause>` |
+| Failures in a row (`consecutive_failures`; a row that joined after a gap: its failed runs since) | Watch at 1; **Problem** at 3 once the streak's first failure is min(C, 1 h) old | `its last run failed: <cause>` / `3 failed runs in a row, the first N ago; the last: <cause>` |
 | Late since its clock | Watch past C + T + W; **Problem** past that + min(C, 1 d) | `late: no ok run for N (Watch past …, Problem past …)` or `never ran ok` |
 | Due or requested, not started for 10 min | Watch while a replica beats; **Problem** when none has for 10 min | `due N ago and not started` / `requested by X N ago and not started` (+ `; no job-runner replica has beaten for 10 min`) |
 | Refused at boot (a replica's `JOBS skip`) | **Problem** | `refused at boot by job-runner/ab12cd34 (JOBS skip in its log): no replica claims it`; with no row: `… it has no row and runs nowhere` |
@@ -94,8 +94,12 @@ of a sibling on its resource seen since its clock started. The worst condition w
 | Otherwise | ok | `last ok N ago; next slot in M` or `; due now`; a deploy-cut run adds `; its last run was cut by a deploy and is due again at once` (a cut request: `; a request by X was cut by a deploy; it is not re-filed`) |
 
 - **The clock** is the last ok run, else the first *scheduled* run (`requested_by IS NULL`) minus C, else the first
-  slot minus C, and a pause that lapsed restarts it. Never `registry_at` (every boot re-stamps it), never a request
-  run. Known edge: a run that served a request and took its due slot keeps `requested_by` (`job_runs` has no due
+  slot minus C, and a pause that lapsed restarts it. Never a request run. A row that **joined after a gap**
+  (`registry_at`, stamped when a row is new, adopted or un-retired and kept by later boots; no ok run since and no run
+  of it in the C + T before) is judged on its runs since the join: its clock is its first scheduled run since minus C,
+  else its first slot minus C, and its streak counts its failed runs since, so the success, streak and error
+  un-retiring carries from before a revert never read Problem (a deploy-cut first run reads ok, one failure Watch). A
+  row whose runs go on through `registry_at` is judged whole. Known edge: a run that served a request and took its due slot keeps `requested_by` (`job_runs` has no due
   slot), so a never-succeeded job whose first run was one reads late up to one cycle later, never earlier.
 - **The cause** is the latest `failed`/`timeout`/`lost` run's: `lost: the replica holding it stopped renewing its
   lease`; `scheduled_jobs.last_error` when that failure is the latest closed run; else `<outcome>, exit <code>`; a

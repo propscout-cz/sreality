@@ -445,16 +445,17 @@ def _job(cur: Any, name: str, *, every: str = "6 hours", timeout_s: int = 1200, 
          due: str = "5 hours", last_ok: str | None = None, failures: int = 0, last_outcome: str | None = None,
          last_error: str | None = None, paused: str | None = None, requested: str | None = None,
          requested_by: str = "github:op", runner: str = "job-runner", registered: bool = True,
-         retired: bool = False) -> None:
-    """A scheduled_jobs row as the runner's registration leaves it: `due` from now (a minus sign: past), `last_ok` and
-    `requested` ago, `paused` until that far ahead (a minus sign: a pause that lapsed), signed 'test' with note
-    'drill'."""
+         retired: bool = False, joined: str = "30 days") -> None:
+    """A scheduled_jobs row as the runner's registration leaves it: `due` from now (a minus sign: past), `last_ok`,
+    `requested` and `joined` (registry_at: when it joined the runner) ago, `paused` until that far ahead (a minus sign:
+    a pause that lapsed), signed 'test' with note 'drill'."""
     cur.execute(
         "insert into scheduled_jobs (job_name, cadence, runner, registry_at, retired_at, offset_s, timeout_s, "
         "  memory_mb, cpus, resource, due_at, last_success_at, consecutive_failures, last_outcome, last_error, "
         "  paused_until, pause_note, paused_by, requested_at, requested_by) "
-        "values (%(name)s, %(every)s::interval, %(runner)s, case when %(registered)s then now() end, "
-        "  case when %(retired)s then now() end, 0, %(timeout_s)s, 256, 1, %(resource)s, now() + %(due)s::interval, "
+        "values (%(name)s, %(every)s::interval, %(runner)s, "
+        "  case when %(registered)s then now() - %(joined)s::interval end, case when %(retired)s then now() end, 0, "
+        "  %(timeout_s)s, 256, 1, %(resource)s, now() + %(due)s::interval, "
         "  now() - %(last_ok)s::interval, %(failures)s, %(last_outcome)s, %(last_error)s, "
         "  now() + %(paused)s::interval, case when %(paused)s::interval is not null then 'drill' end, "
         "  case when %(paused)s::interval is not null then 'test' end, now() - %(requested)s::interval, "
@@ -462,7 +463,7 @@ def _job(cur: Any, name: str, *, every: str = "6 hours", timeout_s: int = 1200, 
         {"name": name, "every": every, "runner": runner, "registered": registered, "retired": retired,
          "timeout_s": timeout_s, "resource": resource, "due": due, "last_ok": last_ok, "failures": failures,
          "last_outcome": last_outcome, "last_error": last_error, "paused": paused, "requested": requested,
-         "requested_by": requested_by})
+         "requested_by": requested_by, "joined": joined})
 
 
 def _run(cur: Any, name: str, *, started: str, ended: str | None = None, outcome: str | None = None,
@@ -600,7 +601,8 @@ def test_a_re_registered_job_is_judged_from_its_new_first_slot(cur):
     until a run closes there, so neither its old streak nor its old success reads Problem, its first run included."""
     _runner_beat(cur, "r1", "0 minutes")
     for name, due in (("reland", "5 hours"), ("reland_late", "-25 minutes"), ("reland_running", "-2 minutes")):
-        _job(cur, name, due=due, last_ok="3 days", failures=3, last_outcome="failed", last_error="exit 1")
+        _job(cur, name, due=due, last_ok="3 days", failures=3, last_outcome="failed", last_error="exit 1",
+             joined="1 hour")
         _run(cur, name, started="3 days 10 minutes", ended="3 days", outcome="ok", exit_code=0)
         for ago in ("71 hours", "70 hours", "69 hours"):
             _run(cur, name, started=ago, ended=f"{ago} -1 minute", outcome="failed", exit_code=1)
@@ -617,6 +619,62 @@ def test_a_re_registered_job_is_judged_from_its_new_first_slot(cur):
         "warn: late: no ok run for 6.4 h (Watch past 6.3 h, Problem past 12.3 h)"]
     assert _said(cells, "job/reland_running") == (
         "ok", "reland_running: running for 60 s of its 20 min budget on job-runner/r1")
+
+
+def _relanded(cur: Any, name: str, **kw: Any) -> None:
+    """A row un-retired 2 h ago after #2025's lasting rollback: its pause lapsed 2 d ago and it carries the 3-run
+    streak and the last ok of 3 d ago, from before the revert."""
+    kw = {"last_ok": "3 days", "failures": 3, "last_outcome": "failed", "last_error": "exit 1", **kw}
+    _job(cur, name, paused="-2 days", joined="2 hours", **kw)
+    _run(cur, name, started="3 days 10 minutes", ended="3 days", outcome="ok", exit_code=0)
+    for ago in ("71 hours", "70 hours", "69 hours"):
+        _run(cur, name, started=ago, ended=f"{ago} -1 minute", outcome="failed", exit_code=1)
+
+
+def test_a_re_landed_job_is_judged_on_its_runs_since_it_rejoined(cur: Any) -> None:
+    """C3: once its first run closes the row is judged on its runs since registry_at (the join), never on the streak
+    and success it carried: a deploy-cut first run reads ok, re-run or not, and one failure is a Watch."""
+    _runner_beat(cur, "r1", "0 minutes")
+    _relanded(cur, "cut", due="-1 minute", last_outcome="interrupted", last_error="deploy stop; exit 143")
+    _run(cur, "cut", started="3 minutes", ended="1 minute", outcome="interrupted", exit_code=143)
+    _relanded(cur, "cut_rerun", due="-2 minutes", last_outcome="running", last_error="deploy stop; exit 143")
+    _run(cur, "cut_rerun", started="4 minutes", ended="2 minutes", outcome="interrupted", exit_code=143)
+    _run(cur, "cut_rerun", started="1 minute", holder="h/8")
+    _relanded(cur, "failed_once", due="6 minutes", failures=4)
+    _run(cur, "failed_once", started="3 minutes", ended="2 minutes", outcome="failed", exit_code=1)
+
+    cells = _liveness(cur)[3]
+
+    assert _said(cells, "job/cut") == (
+        "ok", "cut: last ok 3 d ago; due now; its last run was cut by a deploy and is due again at once")
+    assert _conditions(cells, "job/cut") == []
+    assert _said(cells, "job/cut_rerun") == (
+        "ok", "cut_rerun: running for 60 s of its 20 min budget on job-runner/r1")
+    assert _said(cells, "job/failed_once") == ("warn", "failed_once: its last run failed: exit 1")
+    assert _conditions(cells, "job/failed_once") == ["warn: its last run failed: exit 1"]
+    [cut] = cells["job/cut"]
+    assert (cut["facts"]["consecutive_failures"], cut["facts"]["streak"]) == (3, 0)
+    assert cut["facts"]["joined_at"] is not None and cut["facts"]["fresh_slot"] is False
+
+
+def test_a_row_whose_runs_go_on_through_its_registration_is_judged_whole(cur: Any) -> None:
+    """C3: registry_at alone says no gap; a run that ended within a cadence and budget before it carries the history on,
+    so a streak running through a registry_at (an older image's re-stamp, or a short revert) still reads Problem."""
+    _runner_beat(cur, "r1", "0 minutes")
+    _job(cur, "through", due="4 minutes", last_ok="7 hours", failures=6, last_outcome="failed", last_error="exit 1",
+         joined="5 minutes")
+    _run(cur, "through", started="7 hours 1 minute", ended="7 hours", outcome="ok", exit_code=0)
+    for ago in ("410 minutes", "5 hours", "3 hours", "61 minutes", "30 minutes", "4 minutes"):
+        _run(cur, "through", started=ago, ended=f"{ago} -30 seconds", outcome="failed", exit_code=1)
+
+    cells = _liveness(cur)[3]
+
+    assert _said(cells, "job/through") == (
+        "fail", "through: 6 failed runs in a row, the first 6.8 h ago; the last: exit 1")
+    assert _conditions(cells, "job/through")[1] == (
+        "warn: late: no ok run for 7.0 h (Watch past 6.3 h, Problem past 12.3 h)")
+    [job] = cells["job/through"]
+    assert job["facts"]["joined_at"] is None and job["facts"]["streak"] == 6
 
 
 def test_a_quarterly_job_whose_ok_run_was_pruned_is_not_read_as_registered_again(cur: Any) -> None:
