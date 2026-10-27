@@ -2,8 +2,8 @@
 
 `check_jobs` judges every scheduled machine once, one cell per job: each GitHub workflow on
 main by its production runs (a `schedule` run, or a `push` on main), the canary's poller that
-records them, each pg_cron job, each worker lane (from the heartbeat) and each derived
-artifact. `check_capacity` judges whether the database and the worker's memory keep up,
+records them, each pg_cron job, each worker lane (from the heartbeat), each derived
+artifact and the job runner's registry (the watcher judges each runner job). `check_capacity` judges whether the database and the worker's memory keep up,
 against references an incident cannot erode. `check_llm` judges whether each provider is
 serving, per provider and per job, and whether fleet spend is sane. `check_migration_drift`
 asks the live catalog whether the newest merged migrations exist; it reads a checkout, so it
@@ -18,12 +18,14 @@ from __future__ import annotations
 import datetime as _dt
 import re
 import statistics
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
 from psycopg import errors as _pg_errors
 
 from autodedup.incremental_lane import LEASE_LOST as _LEASE_LOST, STOPPING as _STOPPING
+from scraper.jobs import RUNNER as _RUNNER, runner_jobs as _runner_jobs
 from scripts.checks.clock import fetchall, fetchone
 from scripts.checks.common import (
     BEAT_FRESH_S as _BEAT_FRESH_S,
@@ -515,6 +517,58 @@ def _artifact_cells(conn: Any, thresholds: dict[str, Any],
     return cells
 
 
+# --- jobs: the job runner's registry -------------------------------------------------------------
+
+# scraper/job_lease._DUE_SQL's predicate: a job with no such row is claimed by no replica, and the watcher gives it no
+# job/<name> cell (migration 682), so this census is the one alarm for a runner that never registered it.
+_REGISTERED_SQL = """
+select job_name from scheduled_jobs
+ where runner = %(runner)s and registry_at is not null and retired_at is null
+ order by job_name
+"""
+_REGISTRY = "job-runner/registry"
+
+
+def _registry_cell(conn: Any, thresholds: dict[str, Any], now: _dt.datetime,
+                   declared: Iterable[str] | None = None) -> dict[str, Any]:
+    """Every job this code puts on the job runner has a live registered row, and no other row is live.
+
+    A merge restarts the worker at once and the runner after its image build, so a gap is judged only past the grace
+    from the worker's boot. A missing job is a Problem once the previous measurement read it missing too: in a deploy
+    overlap both workers beat one heartbeat row, so a read can see the predecessor's long-past boot.
+    """
+    names = sorted({j.name for j in _runner_jobs()} if declared is None else set(declared))
+    registered = [row[0] for row in fetchall(conn, _REGISTERED_SQL, {"runner": _RUNNER})]
+    beat = fetchone(conn, _HEARTBEAT_SQL, {"worker": _WORKER})
+    booted = _as_utc(beat[1]) if beat else None
+    up = None if booted is None else (now - booted).total_seconds()
+    missing = [n for n in names if n not in registered]
+    undeclared = [n for n in registered if n not in names]
+    facts = {"declared": names, "registered": registered, "missing": missing, "undeclared": undeclared,
+             "worker_up_s": _round(up)}
+    settled = up is None or up > float(thresholds["jobs_runner_register_grace_s"])
+    conditions: list[tuple[str, str]] = []
+    if missing and settled:
+        said = f"declared on the job runner in this code but not registered: {', '.join(missing)}"
+        held = ((_previous_result(conn, "jobs")[1].get(_REGISTRY) or {}).get("facts") or {}).get("missing") or []
+        if set(missing) & set(held):
+            conditions.append(("fail", f"{said}. The runner is not running this registry (its deploy failed or was "
+                                       "skipped, it refused the entry, or an older image booted and retired it); see "
+                                       "Railway's job-runner deployments"))
+        else:
+            conditions.append(("warn", f"{said}; a Problem if the next measurement reads it missing too (one read "
+                                       "can be a deploy overlap's, whose heartbeat is the predecessor's)"))
+    if undeclared and settled:
+        conditions.append(("warn", f"registered by a runner on other code than this worker's: {', '.join(undeclared)}"))
+    if not settled and (missing or undeclared):
+        ok = f"waiting for the runner's deploy (worker up {_ago(up)})"
+    elif names:
+        ok = f"{len(names)} jobs declared on the job runner, all registered"
+    else:
+        ok = "no job is declared on the job runner yet"
+    return _judged(_REGISTRY, conditions, ok, value=len(missing), unit="jobs", facts=facts)
+
+
 def check_jobs(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
     """Is every scheduled machine, on every runtime, running and succeeding? One cell per job."""
     now = _now(conn)
@@ -526,6 +580,7 @@ def check_jobs(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
         if why:
             not_measured[arm] = why
     cells += _artifact_cells(conn, thresholds, now)
+    cells.append(_registry_cell(conn, thresholds, now))
     return _result("jobs", cells, not_measured)
 
 

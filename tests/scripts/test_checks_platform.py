@@ -32,7 +32,7 @@ T: dict[str, Any] = {
     "jobs_gh_gap_min_starts": 10, "jobs_poller_stale_h": 18, "jobs_cron_fail_of_3": 2,
     "jobs_cron_gap_multiple": 3, "jobs_cron_gap_min_starts": 5, "jobs_lane_floor_s": 900,
     "jobs_lane_boot_grace_s": 900, "jobs_lane_daily_interval_s": 3600,
-    "jobs_lane_flap_share": 0.5, "jobs_lane_flap_min_passes": 3,
+    "jobs_lane_flap_share": 0.5, "jobs_lane_flap_min_passes": 3, "jobs_runner_register_grace_s": 3600,
     "capacity_p50_warn_multiple": 3, "capacity_p50_warn_floor_s": 30,
     "capacity_p50_fail_multiple": 4, "capacity_p50_fail_floor_s": 60,
     "capacity_p95_interval_warn": 0.5, "capacity_p95_interval_fail": 0.8,
@@ -172,6 +172,7 @@ def _jobs(*, workflows: list[Any] | None = None, cursor: Any = "fresh", cron: An
         PREVIOUS_CELLS_SQL: ([(previous_at or _ago(minutes=9), previous)]
                              if previous is not None else []),
         plat._ARTIFACTS_SQL: artifacts or [],
+        plat._REGISTERED_SQL: [],
     })
     return plat.check_jobs(conn, T), conn
 
@@ -181,10 +182,10 @@ def test_jobs_returns_the_wave_one_result_shape_with_one_cell_per_job() -> None:
     assert out["check_key"] == "jobs" and out["status"] == "ok" and out["value"] == 0
     lanes = {f"lane/{lane}" for lane in plat.WORKER_LANES if lane != "heartbeat"}
     assert set(_cells(out)) == {"gh/poller", "gh/property_maintenance", "cron/browse-list-rebuild",
-                                "artifact/browse_list"} | lanes
+                                "artifact/browse_list", "job-runner/registry"} | lanes
     for cell in out["details"]["cells"]:
         assert set(cell) == {"subject", "portal", "status", "value", "unit", "message", "facts"}
-    assert out["message"].endswith(f"{4 + len(lanes)} OK.")
+    assert out["message"].endswith(f"{5 + len(lanes)} OK.")
 
 
 def test_every_jobs_statement_runs_on_the_checks_own_clock() -> None:
@@ -660,6 +661,81 @@ def test_a_workflows_artifact_is_stale_only_past_its_budget_plus_githubs_deliver
     assert cells["artifact/browse_list"]["status"] == "fail", "pg_cron keeps the bare budget"
     sent = [params for sql, params, _ in conn.sent if sql == plat._ARTIFACTS_SQL]
     assert sent == [{"slack_s": 64_800.0}]
+
+
+# The job runner's registry (#2026, decision 21): a job this code puts on the runner with no live row has no
+# job/<name> cell in the watcher, so this census is its alarm.
+
+
+def _registry(declared: set[str], registered: list[str], *, up: _dt.timedelta | None = _dt.timedelta(hours=2),
+              previous: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any], _Conn]:
+    """_registry_cell on these rows: the worker booted `up` ago (None: no heartbeat row)."""
+    conn = _Conn({
+        plat._REGISTERED_SQL: [(name,) for name in registered],
+        plat._HEARTBEAT_SQL: [] if up is None else [(_ago(seconds=20), _NOW - up, {})],
+        PREVIOUS_CELLS_SQL: [(_ago(minutes=10), previous)] if previous is not None else [],
+    })
+    return plat._registry_cell(conn, T, _NOW, declared=declared), conn
+
+
+def _held_registry(*missing: str) -> list[dict[str, Any]]:
+    return [{"subject": "job-runner/registry", "status": "ok", "facts": {"missing": list(missing)}}]
+
+
+def test_a_declared_job_with_no_row_past_the_grace_is_a_problem_once_the_previous_measurement_read_it_too() -> None:
+    cell, conn = _registry({"x"}, [], previous=_held_registry("x"))
+    assert (cell["subject"], cell["status"], cell["value"], cell["unit"]) == ("job-runner/registry", "fail", 1, "jobs")
+    assert cell["message"] == (
+        "declared on the job runner in this code but not registered: x. The runner is not running this registry "
+        "(its deploy failed or was skipped, it refused the entry, or an older image booted and retired it); see "
+        "Railway's job-runner deployments")
+    assert cell["facts"] | {"conditions": None} == {
+        "declared": ["x"], "registered": [], "missing": ["x"], "undeclared": [], "worker_up_s": 7200.0,
+        "conditions": None}
+    assert [params for sql, params, _ in conn.sent if sql == plat._REGISTERED_SQL] == [{"runner": "job-runner"}]
+    # Read once, it is Watch: in a deploy overlap the one heartbeat row can be the predecessor's, booted long ago.
+    once, _ = _registry({"x"}, [], previous=_held_registry())
+    assert once["status"] == "warn" and once["message"] == (
+        "declared on the job runner in this code but not registered: x; a Problem if the next measurement reads it "
+        "missing too (one read can be a deploy overlap's, whose heartbeat is the predecessor's)")
+    assert _registry({"x"}, [], up=None, previous=_held_registry("x"))[0]["status"] == "fail", "no beat: past it"
+
+
+def test_inside_the_grace_a_declared_job_with_no_row_is_the_runners_deploy_in_progress() -> None:
+    cell, _ = _registry({"x"}, [], up=_dt.timedelta(minutes=10), previous=_held_registry("x"))
+    assert (cell["status"], cell["message"]) == ("ok", "waiting for the runner's deploy (worker up 10 min)")
+    assert cell["facts"]["missing"] == ["x"], "the next measurement past the grace reads it as held"
+
+
+def test_every_declared_job_registered_is_ok() -> None:
+    cell, _ = _registry({"x"}, ["x"])
+    assert (cell["status"], cell["message"], cell["value"]) == (
+        "ok", "1 jobs declared on the job runner, all registered", 0)
+
+
+def test_a_row_this_code_does_not_declare_is_watch_past_the_grace() -> None:
+    cell, _ = _registry(set(), ["x"])
+    assert (cell["status"], cell["message"]) == ("warn", "registered by a runner on other code than this worker's: x")
+    assert _registry(set(), ["x"], up=_dt.timedelta(minutes=10))[0]["status"] == "ok"
+
+
+def test_with_nothing_declared_or_registered_the_registry_cell_is_ok() -> None:
+    """Production until #2025 PR-2: runner_jobs() is empty."""
+    cell, _ = _registry(set(), [])
+    assert (cell["status"], cell["message"]) == ("ok", "no job is declared on the job runner yet")
+
+
+def test_the_registry_cell_is_always_in_the_jobs_check_and_reads_the_code_the_worker_runs(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _cells(_jobs()[0])["job-runner/registry"]["message"] == "no job is declared on the job runner yet"
+    monkeypatch.setattr(plat, "_runner_jobs", lambda: (_JobEntry("stale_images"),))
+    cell = _cells(_jobs()[0])["job-runner/registry"]
+    assert cell["facts"]["declared"] == ["stale_images"] and cell["status"] == "warn"
+
+
+class _JobEntry:
+    def __init__(self, name: str) -> None:
+        self.name = name
 
 
 def test_a_check_that_measured_no_cell_is_unknown_and_says_why() -> None:
