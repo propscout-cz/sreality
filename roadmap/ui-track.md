@@ -20,6 +20,8 @@ toolkit work.
 - **Next (not built):** the 24 confirmed hierarchy changes, one PR per agenda (Browse card, Browse page and
   map, Stats, Pipeline, Watchdogs, Notifications, Brokers, Collections, Shell); removing render scoring
   end to end (operator note on P03), scoped first. Handoff: `docs/design/propscout-redesign.md`.
+- **In review (2026-10-27):** ten Stats-tab proposals (S01–S10, mostly the header), ruled live on their
+  review page; the Stats PR builds the confirmed ones (handoff § Stats review).
 
 ### Preset groups: boxes on the Browse preset row (2026-10-25, migration 672)
 - **Done** (operator ask 2026-10-25: "group my presets, a boundary box per group, move them into the boxes
