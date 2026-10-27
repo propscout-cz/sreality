@@ -121,7 +121,7 @@ of a sibling on its resource seen since its clock started. The worst condition w
   that makes the run outrun `timeout_s` is a recorded timeout, a **Problem** until a later run closes, and a request is
   never retried: on rent_map or map_overlays that is the next slot, up to 30 or 91 d away, unless you re-request it
   with arguments that fit the budget.
-- **`job-runner`** (the fleet, present while any live row exists): ok `N replicas beating; M jobs registered`, or Watch
+- **`job-runner`** (the fleet, present while any live row exists, or one retired under an hour ago; M counts only the live ones, so a blink reads `0 jobs registered`): ok `N replicas beating; M jobs registered`, or Watch
   when no replica has beaten for 10 min; never a Problem (a cleanly stopped or deleted runner deletes its beats; it
   stays Watch until a job comes due + 10 min). Each replica keeps its own `worker/job-runner/<id>` cell (migration 675).
 - **`job-cells`**: a Problem if the helper raised (`the job cells could not be computed: …`), with an `unknown`

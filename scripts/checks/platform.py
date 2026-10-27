@@ -519,8 +519,9 @@ def _artifact_cells(conn: Any, thresholds: dict[str, Any],
 
 # --- jobs: the job runner's registry -------------------------------------------------------------
 
-# scraper/job_lease._DUE_SQL's predicate: a job with no such row is claimed by no replica, and the watcher gives it no
-# job/<name> cell (migration 682), so this census is the one alarm for a runner that never registered it.
+# scraper/job_lease._DUE_SQL's predicate: a job with no such row is claimed by no replica, and the watcher gives a
+# never-registered job no job/<name> cell (migration 682), so this census is the one alarm for a runner that never
+# registered it.
 _REGISTERED_SQL = """
 select job_name from scheduled_jobs
  where runner = %(runner)s and registry_at is not null and retired_at is null

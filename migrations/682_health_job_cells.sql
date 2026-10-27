@@ -112,10 +112,10 @@ as $span$
 $span$;
 revoke all on function public.health_span(double precision) from public, anon, authenticated;
 
--- One job/<name> cell per registered live job-runner row, one per entry a fresh replica refused with no such row, and
--- the job-runner fleet cell. Literals pinned by tests/scraper/test_job_registry.py: 'job-runner' = jobs.RUNNER,
--- 'job-runner/' = job_runner.HEARTBEAT_PREFIX, 600 = jobs.STUCK_RUN_GRACE_S. Never reads job_runs.log_tail: it can hold
--- a connection string.
+-- One job/<name> cell per registered job-runner row, live or retired under an hour (a blink), one per entry a fresh
+-- replica refused with no such row, and the job-runner fleet cell. Literals pinned by tests/scraper/test_job_registry.py:
+-- 'job-runner' = jobs.RUNNER, 'job-runner/' = job_runner.HEARTBEAT_PREFIX, 600 = jobs.STUCK_RUN_GRACE_S. Never reads
+-- job_runs.log_tail: it can hold a connection string.
 create or replace function public.health_job_cells(p_dead interval)
 returns jsonb
 language sql
