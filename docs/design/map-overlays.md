@@ -240,10 +240,9 @@ Draw order inside the flood section: the SPA draws layers in reverse `sort`, so 
 LINE layer (ST_Boundary of the dissolved active-zone polygons, subdivided), drawn on top.
 
 CLI: `python -m scripts.ingest_map_overlays [--sections metro,flood] [--dry-run] [--accept-shrink]`.
-Workflow: `workflow_dispatch` (sections, dry_run, accept_shrink) + quarterly cron
-`0 4 2 1,4,7,10 *`; `pip install -e .`; `SUPABASE_DB_URL` secret; a leading description comment
-under `name:`; regenerate `frontend/src/lib/workflowDocs.generated.ts`
-(`python -m scripts.generate_workflow_docs`). `ingest_boundaries.yml` gains a final step
+Job (since #2025; before it, the quarterly workflow `ingest_map_overlays.yml`): the runner's `map_overlays`
+entry in `scraper/jobs.py`, a 91-day grid at 22:00Z with a 2 h timeout; by hand, a request through "Jobs: run now"
+with `--sections`, `--dry-run` or `--accept-shrink` as its args. `ingest_boundaries.yml` gains a final step
 `python -m scripts.ingest_map_overlays --sections kraje`.
 
 Registry values:
