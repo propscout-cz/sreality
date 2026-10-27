@@ -192,9 +192,13 @@ UNGATED: dict[str, Ungated] = {
     "health_liveness": Ungated(
         "function", "acl",
         ("620_health_liveness.sql", "621_platform_checks.sql", "633_health_explicit_cells.sql",
-         "655_health_liveness_without_api_cell.sql", "675_scheduled_jobs_expand.sql"),
+         "655_health_liveness_without_api_cell.sql", "675_scheduled_jobs_expand.sql", "682_health_job_cells.sql"),
         "Reads the health ledgers and the worker heartbeat, writes one pipeline_check_results row; EXECUTE revoked "
         "from public, anon and authenticated."),
+    "health_job_cells": Ungated(
+        "function", "acl", ("682_health_job_cells.sql",),
+        "Reads scheduled_jobs, job_runs and worker_heartbeats for the pg_cron watcher (security invoker, called by "
+        "the definer watcher); EXECUTE revoked from public, anon and authenticated."),
     "rebuild_browse_list": Ungated(
         "function", "acl",
         ("630_one_browse_read_model.sql", "649_web_portal.sql", "658_rebuild_browse_list_without_notice.sql"),
