@@ -308,6 +308,9 @@ def test_the_runner_vector_stack_is_pinned_and_proven() -> None:
     torch_pin = re.search(r'pip install "torch==([\d.]+)"', final)
     assert torch_pin and torch_pin.group(1) == "2.14.1"
     assert rel in proof and f'"{torch_pin.group(1)}"' in proof, "the proof asserts the file's versions and torch"
+    # Asserts, not prints: a resolver that swapped Pillow or numpy must fail the build.
+    assert "got = {name: version(name) for name in pins}; assert got == pins," in proof
+    assert f'assert torch.__version__.split("+")[0] == "{torch_pin.group(1)}",' in proof
 
 
 def test_the_api_image_is_proven_free_of_clip() -> None:
@@ -325,6 +328,8 @@ def test_the_api_image_is_proven_free_of_clip() -> None:
     assert len(checks) == 1, "one step asserts the head image is clip-free"
     check = checks[0]["run"]
     assert all(m in check for m in ('"torch"', '"transformers"', "/root/.cache/huggingface"))
+    assert "assert not found, found" in check and "test ! -e /root/.cache/huggingface" in check, "a verdict, not a print"
+    assert "||" not in check, "nothing in the verdict step may swallow its exit status"
     assert "docker image inspect -f '{{.Size}}'" in runs and "pip freeze" in runs
 
 
