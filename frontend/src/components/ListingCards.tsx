@@ -38,6 +38,7 @@ import {
   fmtArea, fmtCzk, fmtFloor, fmtMeasuredPricePerM2,
   fmtShortDate, fmtTomDays,
 } from '@/lib/format';
+import type { CohortKind } from '@/lib/filters';
 import { plotBesideArea, ppm2BasisFromToken } from '@/lib/measure';
 import { listingKindParts, listingTypeLabel } from '@/lib/enums';
 import { portalLabel, portalShort } from '@/lib/portals';
@@ -72,11 +73,6 @@ const CARD_GRID_CLASS = 'grid gap-2 grid-cols-[repeat(auto-fill,minmax(min(var(-
  * text in the body does not change. */
 const CARD_IMAGE_MIN = { sm: '11.5rem', lg: '23rem' } as const;
 
-export interface CohortKind {
-  categoryMain: string;
-  categoryType: string;
-}
-
 interface Props {
   rows: CardRow[] | null;
   total: number | null;
@@ -84,9 +80,8 @@ interface Props {
   /* The portal whose newest ad orders the cards (queries.ts orderPortal), or
    * null: a card whose date there differs from its own first seen shows both. */
   orderPortal?: string | null;
-  /* The one property type and deal the filter pins, or null when it spans
-   * several: a card of exactly that kind drops "Byt na prodej ·" from its
-   * title, since the filter already says it (ruling P05 2026-10-27). */
+  /* The one property type and deal the filter pins (lib/filters cohortKindOf):
+   * a card of exactly that kind drops "Byt na prodej ·" from its title. */
   cohortKind?: CohortKind | null;
   /* Card image size: "large" doubles the grid's --card-min (and therefore
    * the photo + card width); everything else in the card body is fixed-size

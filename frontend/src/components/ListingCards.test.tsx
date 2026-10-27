@@ -29,7 +29,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 
 import { useEffect } from 'react';
-import ListingCards, { type CohortKind } from './ListingCards';
+import ListingCards from './ListingCards';
+import type { CohortKind } from '@/lib/filters';
 import { CardHydrationProvider } from '@/lib/hydration';
 import { useMergeMode, type MergeMode } from '@/lib/useMergeMode';
 import { expectNoNestedInteractive } from '@/test/a11y';
@@ -1056,6 +1057,14 @@ describe('<ListingCards> the title drops what the filter says', () => {
     expect(link()).toHaveAccessibleName(/^Byt k pronájmu · 2\+kk · 62\sm²$/);
   });
 
+  it('keeps the prefix on a card of another type under the same deal', () => {
+    renderGrid({
+      cohortKind: SALE_FLATS,
+      row: { ...ROW, category_main: 'dum', subtype: null, disposition: '5+1', area_m2: 180 } as CardRow,
+    });
+    expect(link()).toHaveAccessibleName(/^Dům na prodej · 5\+1 · 180\sm²$/);
+  });
+
   it('keeps a house\'s subtype, which the filter does not name', () => {
     renderGrid({
       cohortKind: { categoryMain: 'dum', categoryType: 'prodej' },
@@ -1087,7 +1096,10 @@ describe('<ListingCards> the photo overlays', () => {
     tagged(0.1);
     renderGrid();
     const tag = await screen.findByText('kuchyně');
-    expect(tag).toHaveClass('absolute', 'opacity-0', 'group-hover:opacity-100', 'group-focus-within:opacity-100');
+    /* Keyboard focus only: a mouse click on a chevron leaves focus behind, and
+       the tag must not stay shown once the pointer has moved to another card. */
+    expect(tag).toHaveClass('absolute', 'opacity-0', 'group-hover:opacity-100', 'group-has-[:focus-visible]:opacity-100');
+    expect(tag).not.toHaveClass('group-focus-within:opacity-100');
     expect(tag.closest('.group')).not.toBeNull();
   });
 

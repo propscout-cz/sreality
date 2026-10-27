@@ -34,7 +34,7 @@ import {
 } from '@/lib/browseLayout';
 import ImageSizeToggle from '@/components/ImageSizeToggle';
 import { FilterSidebar, FilterSidebarRail } from '@/components/Filters';
-import ListingCards, { type CohortKind } from '@/components/ListingCards';
+import ListingCards from '@/components/ListingCards';
 /* The Stats tab (the chart builder, dnd-kit, recharts) is its own chunk: it is a
  * secondary tab, and the first-visit bundle has a budget (scripts/bundle-budget.mjs). */
 const StatsDashboard = lazyChunk(() => import('@/components/stats/StatsDashboard'));
@@ -49,6 +49,7 @@ import {
   browseTitleSummary,
   toSearchParams,
   savedMapArea,
+  cohortKindOf,
   DEFAULT_FILTERS,
   type ListingFilters,
 } from '@/lib/filters';
@@ -224,10 +225,7 @@ export default function BrowseExperience({
   const cardImageLarge = useCardImageLarge();
   const cardCoverTag = useCardCoverTag();
   const sortOrderPortal = orderPortal(filters, sort);
-  const cohortKind: CohortKind | null =
-    filters.categoryMain.length === 1 && filters.categoryType != null
-      ? { categoryMain: filters.categoryMain[0], categoryType: filters.categoryType }
-      : null;
+  const cohortKind = cohortKindOf(filters);
   /* The map is only present on the Properties tab AND only when not collapsed —
    * the single source of truth the data-fetch gates and the layout both read,
    * so they can never disagree. */

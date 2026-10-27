@@ -42,8 +42,9 @@ interface Props {
   /* Chevrons fade in on parent `.group` hover (cards) rather than always
    * showing (a panel with no hover-group wrapper). */
   fadeChevrons?: boolean;
-  /* The room tag shows only while the pointer or focus is on the parent `.group`
-   * (a Browse card, ruling P02 2026-10-27). An opacity overlay, never a layout change. */
+  /* The room tag shows only while the pointer is on the parent `.group` or keyboard
+   * focus is inside it (a Browse card, ruling P02 2026-10-27): focus-visible, so a
+   * clicked chevron does not keep it shown. An opacity overlay, never a layout change. */
   fadeTag?: boolean;
   /* The CLIP render-vs-photo pill above the counter. A Browse card passes false:
    * its photo shows just the counter (ruling P03 2026-10-27). */
@@ -159,7 +160,7 @@ const ImageCarousel = forwardRef<ImageCarouselHandle, Props>(function ImageCarou
         className={
           'absolute bottom-1 left-1 z-[1] max-w-[calc(100%-3.5rem)] truncate'
           + (fadeTag
-            ? ' opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150'
+            ? ' opacity-0 group-hover:opacity-100 group-has-[:focus-visible]:opacity-100 transition-opacity duration-150'
             : '')
         }
       />
