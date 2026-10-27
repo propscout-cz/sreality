@@ -910,7 +910,9 @@ rules. Identify which one a task belongs to before you start.
   same switcher strip above the stage tabs: a read board has no stage sheet and no tag chips or
   artifact button; an edit board moves cards through the stage sheet as the owner (ruling 6). The
   remembered stage is per board (`sreality.phone.pipelineStage:<owner>`); sharing and leaving a
-  board, and "Upravit jako", stay desktop-only.
+  board, and "Upravit jako", stay desktop-only. Its one filter, **Lokalita**, is the desktop bar's:
+  the same `districts` URL params (`lib/pipelineState`), `LocationTypeahead` in a sheet and
+  `matchesDistricts` over the board's five codes — every stage page stays, counting the place's cards.
   The W4 screens (`pages/phone/`, #1769) add no read either: a collection's members and a
   broker's ads are the feed's card read under the `collections` / `brokerId` prefilter, the
   lists and the dossier are the desktop pages' own API calls, and each page component picks
@@ -1199,8 +1201,8 @@ on 2026-12-01, and until then a file of that name would override the applied set
     a reference to the worker's variable (`${{sreality.SUPABASE_DB_URL}}`, ruling #2025-R3): one stored value, so a
     rotation changes one place, and applying the worker's staged change redeploys job-runner after it (Railway's
     deployment dependencies), cutting any run in flight (closed `interrupted`, re-claimed at once).
-    `scripts/rotate_credentials.sh` says so and checks two fresh `job-runner/` heartbeats. Later moves add their
-    names in their own PRs.
+    The secrets inventory's rotation steps say so and check its Health cells. Later moves add their names in their
+    own PRs.
 - **The runner image's model layer** (EXTRAS names `clip`; a no-op for the API and the worker), before the source so a
   code-only build reuses it: CPU torch 2.14.1 from PyTorch's CPU index and `huggingface_hub>=0.34,<1.0`, pinned in the
   Dockerfile as the `clip` extra's runtime companions (rule 7: neither is a pyproject entry), then

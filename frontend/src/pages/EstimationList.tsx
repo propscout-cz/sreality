@@ -220,7 +220,7 @@ function Pill({
       className={[
         'px-2.5 py-0.5 text-[0.7rem] tracking-wide rounded-[var(--radius-xs)] transition-colors',
         active
-          ? 'bg-[var(--color-copper)] text-white'
+          ? 'bg-[var(--color-copper)] text-[var(--color-on-copper)]'
           : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
       ].join(' ')}
     >
@@ -389,7 +389,7 @@ function FeedbackCell({ run }: { run: EstimationRun }) {
   return (
     <Link
       to={runSurfaceUrl(run, '#feedback')}
-      className="inline-flex items-center px-2 py-0.5 text-[0.7rem] tracking-wide rounded-[var(--radius-xs)] border border-[var(--color-copper)]/30 bg-[var(--color-copper-soft)] text-[var(--color-copper)] hover:bg-[var(--color-copper)] hover:text-white transition-colors"
+      className="inline-flex items-center px-2 py-0.5 text-[0.7rem] tracking-wide rounded-[var(--radius-xs)] border border-[var(--color-copper)]/30 bg-[var(--color-copper-soft)] text-[var(--color-copper)] hover:bg-[var(--color-copper)] hover:text-[var(--color-on-copper)] transition-colors"
     >
       view
     </Link>

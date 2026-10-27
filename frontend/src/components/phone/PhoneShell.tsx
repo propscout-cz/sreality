@@ -32,7 +32,8 @@ import {
   type PhoneTabKey,
 } from '@/lib/phoneShell';
 import { ROUTES } from '@/lib/routes';
-import { useTheme, type ThemeMode } from '@/lib/theme';
+import { COLOR_SCHEMES, useScheme, useTheme, type ThemeMode } from '@/lib/theme';
+import SchemeSwatch from '@/components/SchemeSwatch';
 import { useUnreadCount } from '@/lib/unreadCount';
 import { MAIN_ID } from '@/lib/useRouteFocus';
 
@@ -278,6 +279,7 @@ const THEMES: ReadonlyArray<{ value: ThemeMode; label: string }> = [
 function AccountSheet({ onClose }: { onClose: () => void }) {
   const { user, signOut, isAdmin } = useAuth();
   const [mode, setMode] = useTheme();
+  const [scheme, setScheme] = useScheme();
   /* Push is the bell's other half: where the plan hides the feed, no switch. */
   const { visible: notifications } = useUnreadCount();
   return (
@@ -286,6 +288,31 @@ function AccountSheet({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       context={user?.email ? <SheetContext text={user.email} /> : undefined}
     >
+      <div className="px-4 pb-1 pt-3">
+        <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--color-ink-3)]">
+          Barevné schéma
+        </p>
+        <div role="radiogroup" aria-label="Barevné schéma" className="mt-2 grid grid-cols-3 gap-2">
+          {COLOR_SCHEMES.map((sc) => (
+            <button
+              key={sc.value}
+              type="button"
+              role="radio"
+              aria-checked={scheme === sc.value}
+              onClick={() => setScheme(sc.value)}
+              className={[
+                'flex h-14 flex-col items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border text-[13px]',
+                scheme === sc.value
+                  ? 'border-[var(--color-copper)] bg-[var(--color-copper-soft)] font-medium text-[var(--color-copper)]'
+                  : 'border-[var(--color-rule-strong)] text-[var(--color-ink-2)]',
+              ].join(' ')}
+            >
+              <SchemeSwatch colors={sc.swatch} />
+              {sc.label}
+            </button>
+          ))}
+        </div>
+      </div>
       <div className="px-4 pb-1 pt-3">
         <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--color-ink-3)]">
           Vzhled

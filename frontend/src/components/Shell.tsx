@@ -243,7 +243,9 @@ function TopBar() {
     ),
   );
   return (
-    <header className="border-b border-[var(--color-rule)] bg-[var(--color-paper)] sticky top-0 z-30">
+    /* The bar draws in the `chrome` tokens: a dark band in the Měď scheme, the
+     * page's own paper in Kobalt and Grafit (globals.css). */
+    <header className="border-b border-[var(--color-rule)] bg-[var(--color-chrome)] sticky top-0 z-30">
       {/* THE BAR IS EXACTLY 3.5rem TALL AND STAYS THAT WAY. Three Browse panes
         * and the pipeline board's stage headers pin themselves against that
         * number in CSS (`top-14`, `calc(100dvh-3.5rem)` in Filters.tsx,
@@ -272,7 +274,7 @@ function TopBar() {
                   key={item.to}
                   title={item.title}
                   aria-disabled="true"
-                  className="relative px-2 xl:px-2.5 py-1.5 text-sm tracking-wide text-[var(--color-ink-4)] opacity-50 cursor-not-allowed select-none"
+                  className="relative px-2 xl:px-2.5 py-1.5 text-sm tracking-wide text-[var(--color-chrome-ink-2)] opacity-50 cursor-not-allowed select-none"
                 >
                   {item.label}
                 </span>
@@ -290,8 +292,8 @@ function TopBar() {
                   [
                     'relative px-2 xl:px-2.5 py-1.5 text-sm tracking-wide rounded-[var(--radius-xs)] transition-colors',
                     isActive
-                      ? 'text-[var(--color-ink)]'
-                      : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
+                      ? 'text-[var(--color-chrome-ink)]'
+                      : 'text-[var(--color-chrome-ink-2)] hover:text-[var(--color-chrome-ink)]',
                   ].join(' ')
                 }
               >
@@ -302,7 +304,7 @@ function TopBar() {
                       pinAuditTotal !== null && (
                         <>
                           <span
-                            className="ml-1.5 inline-flex items-center justify-center h-[1.05rem] px-1.5 rounded-full bg-[var(--color-brick)] text-white text-[0.6rem] font-medium tabular-nums"
+                            className="ml-1.5 inline-flex items-center justify-center h-[1.05rem] px-1.5 rounded-full bg-[var(--color-brick)] text-[var(--color-on-brick)] text-[0.6rem] font-medium tabular-nums"
                             aria-hidden="true"
                           >
                             {fmtCount(pinAuditTotal)}
@@ -319,7 +321,7 @@ function TopBar() {
                             accessible name through the hidden suffix, so an
                             aria-label can't overwrite "Notifications". */}
                         <span
-                          className="ml-1.5 inline-flex items-center justify-center min-w-[1.05rem] h-[1.05rem] px-1 rounded-full bg-[var(--color-brick)] text-white text-[0.6rem] font-medium tabular-nums"
+                          className="ml-1.5 inline-flex items-center justify-center min-w-[1.05rem] h-[1.05rem] px-1 rounded-full bg-[var(--color-brick)] text-[var(--color-on-brick)] text-[0.6rem] font-medium tabular-nums"
                           aria-hidden="true"
                         >
                           {unread > 99 ? '99+' : unread}
@@ -334,7 +336,7 @@ function TopBar() {
           })}
           {showAdmin && (
             <>
-              <span className="mx-2 h-4 w-px bg-[var(--color-rule)]" aria-hidden />
+              <span className="mx-2 h-4 w-px bg-[var(--color-chrome-ink-2)] opacity-40" aria-hidden />
               <NavMenu label="Admin" groups={adminGroups} active={adminActive} />
             </>
           )}
@@ -380,7 +382,7 @@ function NavMenu({
         aria-expanded={open}
         className={[
           'relative px-2 xl:px-2.5 py-1.5 text-sm tracking-wide rounded-[var(--radius-xs)] transition-colors',
-          active ? 'text-[var(--color-ink)]' : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
+          active ? 'text-[var(--color-chrome-ink)]' : 'text-[var(--color-chrome-ink-2)] hover:text-[var(--color-chrome-ink)]',
         ].join(' ')}
       >
         <NavLabel active={active}>
@@ -467,9 +469,9 @@ function NavLabel({ active, children }: { active: boolean; children: ReactNode }
     <span className="relative inline-flex items-center">
       {children}
       <span
-        className="absolute -bottom-[15px] left-0 right-0 h-px transition-colors"
+        className="absolute -bottom-[15px] left-0 right-0 h-[2px] transition-colors"
         style={{
-          background: active ? 'var(--color-copper)' : 'transparent',
+          background: active ? 'var(--color-chrome-accent)' : 'transparent',
         }}
       />
     </span>
@@ -477,23 +479,23 @@ function NavLabel({ active, children }: { active: boolean; children: ReactNode }
 }
 
 function BrandMark() {
-  // Two-part wordmark derived from the shared brand name: first word as the
-  // display wordmark, the rest as the spaced uppercase descriptor.
-  const [wordmark, ...rest] = APP_NAME.split(' ');
-  const descriptor = rest.join(' ');
+  // The shared brand name as the wordmark: the name in the display face and
+  // its domain suffix (".cz") in the bar's accent.
+  const [, name, suffix] = /^(.*?)(\.[a-z]{2,})?$/i.exec(APP_NAME) ?? [APP_NAME, APP_NAME, ''];
   return (
-    <div className="flex items-baseline gap-2 select-none" title={APP_NAME}>
+    <div className="flex items-baseline select-none" title={APP_NAME}>
       <span
-        className="font-display text-[1.05rem] leading-none"
+        className="font-display text-[1.1rem] leading-none text-[var(--color-chrome-ink)]"
         style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
       >
-        {wordmark}
+        {name}
       </span>
-      {descriptor && (
-        /* Hidden below xl: it is decoration, and the narrow row needs its
-          * ~70px more than the wordmark needs its second half. */
-        <span className="hidden xl:inline text-[0.65rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-          {descriptor}
+      {suffix && (
+        <span
+          className="font-display text-[1.1rem] leading-none text-[var(--color-chrome-accent)]"
+          style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
+        >
+          {suffix}
         </span>
       )}
     </div>

@@ -85,7 +85,7 @@ export default function MergeBar({
           onClick={onMerge}
           disabled={merging || !merge.complete || preview.isPending}
           title={used.length ? `Merge ${used.join(', ')}` : undefined}
-          className={`${BTN} whitespace-nowrap bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)]`}
+          className={`${BTN} whitespace-nowrap bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)]`}
         >
           {merging ? 'Merging…' : mergeLabel(used)}
         </button>
