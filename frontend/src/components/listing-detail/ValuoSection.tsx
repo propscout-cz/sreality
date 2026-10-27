@@ -422,7 +422,7 @@ function ValuoEditor({ propertyId, page, refused, onCancel, onDone }: {
       </button>
       <button type="button" onClick={onCancel} disabled={busy} className={QUIET}>Zrušit</button>
       <button type="button" onClick={submit} disabled={busy || missing.length > 0}
-        className="rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-2.5 py-1 text-[0.8rem] text-white hover:bg-[var(--color-copper-2)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+        className="rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-2.5 py-1 text-[0.8rem] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
         Ocenit přes Valuo
       </button>
     </div>

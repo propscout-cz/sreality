@@ -222,7 +222,7 @@ export default function WatchdogEdit() {
           <button
             type="submit"
             disabled={!canSave}
-            className="px-4 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors disabled:opacity-50"
+            className="px-4 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] transition-colors disabled:opacity-50"
           >
             {saveMut.isPending ? 'Saving…' : 'Save changes'}
           </button>

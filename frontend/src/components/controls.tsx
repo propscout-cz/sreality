@@ -322,10 +322,10 @@ export function PickButton({
 }) {
   const onClasses = negative
     ? variant === 'solid'
-      ? 'bg-[var(--color-brick)] text-white border-[var(--color-brick)]'
+      ? 'bg-[var(--color-brick)] text-[var(--color-on-brick)] border-[var(--color-brick)]'
       : 'bg-[var(--color-brick-soft)] text-[var(--color-brick)] border-[var(--color-brick)]'
     : variant === 'solid'
-      ? 'bg-[var(--color-copper)] text-white border-[var(--color-copper)]'
+      ? 'bg-[var(--color-copper)] text-[var(--color-on-copper)] border-[var(--color-copper)]'
       : 'bg-[var(--color-copper-soft)] text-[var(--color-copper)] border-[var(--color-copper)]';
   // Resting label is ink-2, not ink-3: ink-3 on paper-2 is 3.9:1 (below the
   // 4.5:1 AA floor for 12px text); ink-2 is 7.6:1. Hover keeps the border cue.
@@ -600,7 +600,7 @@ export function SegmentedBar<T extends string | number | boolean>({
               fill ? 'px-2 py-1 text-xs' : 'px-2.5 py-0.5 text-[0.7rem]',
               'whitespace-nowrap rounded-[var(--radius-xs)] transition-colors',
               on
-                ? 'bg-[var(--color-copper)] text-white'
+                ? 'bg-[var(--color-copper)] text-[var(--color-on-copper)]'
                 : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
             ].join(' ')}
             aria-pressed={on}

@@ -212,7 +212,7 @@ export default function FilterSheet({ filters, sort, base, preset, onApply, onCl
         type="button"
         onClick={() => apply()}
         aria-busy={counting || undefined}
-        className="h-11 min-w-0 flex-1 truncate rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-3 text-[15px] font-medium text-white active:bg-[var(--color-copper-2)]"
+        className="h-11 min-w-0 flex-1 truncate rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-3 text-[15px] font-medium text-[var(--color-on-copper)] active:bg-[var(--color-copper-2)]"
       >
         {showLabel}
       </button>
@@ -457,7 +457,7 @@ function PresetSheet({
                     autoFocus
                     disabled={busy}
                     onClick={() => update.mutate(preset)}
-                    className={`${BUTTON} border-[var(--color-copper)] bg-[var(--color-copper)] text-white`}
+                    className={`${BUTTON} border-[var(--color-copper)] bg-[var(--color-copper)] text-[var(--color-on-copper)]`}
                   >
                     Přepsat
                   </button>
@@ -492,7 +492,7 @@ function PresetSheet({
           <button
             type="submit"
             disabled={busy || !name.trim()}
-            className={`${BUTTON} h-11 border-[var(--color-copper)] bg-[var(--color-copper)] text-white`}
+            className={`${BUTTON} h-11 border-[var(--color-copper)] bg-[var(--color-copper)] text-[var(--color-on-copper)]`}
           >
             Uložit
           </button>

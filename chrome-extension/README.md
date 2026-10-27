@@ -1,4 +1,4 @@
-# Limen Reality — Chrome extension (Realitní výnos / MF panel)
+# PropScout.cz — Chrome extension (Realitní výnos / MF panel)
 
 Overlays the property's **MF reference rent** (`mf_reference_rent`, rendered by
 its shape) and the **"Výnos MF"** gross yield (`mf_gross_yield_pct`) — the same
@@ -330,7 +330,7 @@ bare `vite build` with no `--mode` now errors rather than emitting half a bundle
 3. Click **Load unpacked**.
 4. Pick the `dist/` folder you downloaded (Option A) or built
    (Option B).
-5. Confirm the extension card shows "Limen Reality — výnos & pipeline" with
+5. Confirm the extension card shows "PropScout.cz — výnos & pipeline" with
    the copper "%" icon.
 
 **Unzip somewhere Windows won't decorate.** Chrome refuses to load a folder

@@ -1386,7 +1386,7 @@ function ShowDetailButton({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="px-4 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
+      className="px-4 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] transition-colors"
     >
       Show estimation detail
     </button>
@@ -1647,7 +1647,7 @@ function AdjustPanel({
             'px-4 py-2 text-sm rounded-[var(--radius-sm)] border transition-colors',
             !valid || pending
               ? 'bg-[var(--color-rule-strong)] text-[var(--color-ink-4)] border-[var(--color-rule-strong)] cursor-not-allowed'
-              : 'bg-[var(--color-copper)] text-white border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
+              : 'bg-[var(--color-copper)] text-[var(--color-on-copper)] border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
           ].join(' ')}
         >
           {pending ? 'Re-running…' : 'Re-run with edits'}
@@ -2042,7 +2042,7 @@ function FloatingFeedbackPanel({
                 'px-4 py-2 text-sm rounded-[var(--radius-sm)] border transition-colors',
                 !submitValid || submitMut.isPending
                   ? 'bg-[var(--color-rule-strong)] text-[var(--color-ink-4)] border-[var(--color-rule-strong)] cursor-not-allowed'
-                  : 'bg-[var(--color-copper)] text-white border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
+                  : 'bg-[var(--color-copper)] text-[var(--color-on-copper)] border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
               ].join(' ')}
             >
               {submitMut.isPending
@@ -2333,7 +2333,7 @@ function RefinementProposal({
               'px-4 py-2 text-sm rounded-[var(--radius-sm)] border transition-colors',
               decidePending
                 ? 'bg-[var(--color-rule-strong)] text-[var(--color-ink-4)] border-[var(--color-rule-strong)] cursor-not-allowed'
-                : 'bg-[var(--color-copper)] text-white border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
+                : 'bg-[var(--color-copper)] text-[var(--color-on-copper)] border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
             ].join(' ')}
           >
             {decidePending ? 'Working…' : 'Apply to skill'}
