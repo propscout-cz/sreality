@@ -854,7 +854,6 @@ def test_a_chain_wider_than_the_cap_is_skipped_whole_and_counted() -> None:
     fusion the cap was raised on the assumption it could not happen, and nothing in
     the pure layer bounds it: the layer that re-introduces it is the layer that has
     to refuse it, with a counter rather than a warning nobody reads."""
-    import logging
 
     import scripts.resolve_brokers as rb
 

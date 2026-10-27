@@ -18,6 +18,12 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from scraper.cpus import job_cpus
+
+if TYPE_CHECKING:
+    import torch
 
 _TAXONOMY_PATH = Path(__file__).resolve().parent.parent / "data" / "clip_taxonomy.json"
 
@@ -41,7 +47,7 @@ def load_taxonomy() -> dict:
     return json.loads(_TAXONOMY_PATH.read_text())
 
 
-def _project(out):
+def _project(out: Any) -> torch.Tensor:
     """get_text_features/get_image_features return a wrapper under some
     transformers versions; take pooler_output when so, else the tensor itself."""
     return out if hasattr(out, "shape") else out.pooler_output
@@ -50,8 +56,9 @@ def _project(out):
 class Tagger:
     """Loaded CLIP model + precomputed taxonomy text embeddings."""
 
-    def __init__(self, model, processor, labels, text_emb, collapse, model_id,
-                 render_emb=None, n_render=0, revision=None):
+    def __init__(self, model: Any, processor: Any, labels: list[str], text_emb: torch.Tensor,
+                 collapse: dict[str, str], model_id: str, render_emb: torch.Tensor | None = None,
+                 n_render: int = 0, revision: str | None = None) -> None:
         self._model = model
         self._processor = processor
         self._labels = labels
@@ -72,7 +79,7 @@ class Tagger:
         from transformers import CLIPModel, CLIPProcessor
 
         os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "60")
-        torch.set_num_threads(threads or (os.cpu_count() or 4))
+        torch.set_num_threads(threads or job_cpus())
         tax = load_taxonomy()
         model_id = tax["model"]
         # A bare model name resolves to whatever the hub's `main` holds at download
@@ -132,7 +139,7 @@ class Tagger:
                    model_id, render_emb=render_emb, n_render=n_render,
                    revision=revision)
 
-    def embed(self, images: list, batch_size: int = 32):
+    def embed(self, images: list, batch_size: int = 32) -> torch.Tensor | None:
         """L2-normalized image embeddings (for tagging AND the cosine tier)."""
         import torch
 
@@ -147,7 +154,7 @@ class Tagger:
             chunks.append(feats)
         return torch.cat(chunks) if chunks else None
 
-    def tags_from_emb(self, emb) -> list[TagResult]:
+    def tags_from_emb(self, emb: torch.Tensor) -> list[TagResult]:
         """Tag precomputed embeddings — proper CLIP zero-shot (logit_scale +
         softmax), so confidence is the winning anchor's probability. Also scores the
         orthogonal render-vs-photo axis (render_score = summed render-anchor prob)."""
@@ -167,7 +174,7 @@ class Tagger:
             out.append(TagResult(fine, logical, round(float(c), 4), rs))
         return out
 
-    def render_scores_from_emb(self, emb) -> list[float]:
+    def render_scores_from_emb(self, emb: torch.Tensor) -> list[float]:
         """render_score per row from precomputed (L2-normalized) image embeddings — the
         same orthogonal render-vs-photo axis tag() scores. Lets a backfill re-score the
         already-tagged images from their STORED embeddings without re-downloading or

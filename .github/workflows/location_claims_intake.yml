@@ -22,13 +22,11 @@ name: "Jobs: Location claim intake"
 #     to re-sight: the `last_seen_at` watermark it replaces opened ~180 000 listings an
 #     hour to re-mine claims that already existed.
 #
-# A batch's page bodies are EXTRACTED ACROSS PROCESSES, `os.cpu_count()` wide (W1-a3):
+# A batch's page bodies are EXTRACTED ACROSS PROCESSES, `scraper.cpus.job_cpus()` wide (W1-a3):
 # the parse is pure CPU, threads cannot share it, and on one core a 1 500-body batch took
 # 143-313 s against ~48 s to fetch the same bodies. The pool is an accelerator only — same
 # claims, same order, a body's failure still costs that one listing's page entries, and a
 # pool that dies is finished on the main thread. Each batch logs its own `N bodies/s`.
-# `LOCATION_INTAKE_WORKERS` overrides the width and exists for ONE case: a runner whose CPU
-# count is misreported. Nothing sets it here.
 #
 # THE LANE SELF-CHAINS WHILE IT HAS A BACKLOG (W1-a3). The hourly cron is not hourly:
 # GitHub fires it ~7 times a day on a busy repo (no tick at 02:35 or 03:35 on 2026-09-12),

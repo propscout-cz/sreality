@@ -48,7 +48,6 @@ from location_data.page_readers import (
     PageRead,
     assert_stampable,
     extract_page,
-    page_entries,
     stamp_page_claim,
 )
 

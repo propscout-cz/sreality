@@ -56,7 +56,7 @@ def test_the_gauges_flow_counts_arrivals_not_the_predicates_survivors() -> None:
     given up at this version is its own count; p95 to the first reading."""
     sql = tx.EXTRACTION_LATENCY_SQL
     assert tx._eligible_where(OPEN_GATES) not in sql
-    assert f"ARRAY({tx._LLM_TEXT_SOURCES} UNION ALL SELECT 'bazos')" in sql
+    assert tx._scope(OPEN_GATES) in sql
     flat = " ".join(sql.split())
     assert ("AND l.is_active AND l.description IS NOT NULL AND l.description <> '' AND "
             "l.first_seen_at >= now() - make_interval(hours => %(window_h)s::int) AND "
@@ -585,3 +585,15 @@ def test_a_fatal_provider_error_does_not_burn_a_listings_attempts() -> None:
     src = inspect.getsource(tx.run_pass)
     assert "vision_batch.is_fatal(error)" in src
     assert src.index("vision_batch.is_fatal(error)") < src.index("record_failure(")
+
+
+def test_scope_lists_each_portal_once():
+    # The contract query yields one row per llm_text ENTRY (bazos has five) and the open gate
+    # appends the portal again; the inflow selector picks `limit` listings PER ARRAY ELEMENT,
+    # so a duplicated portal re-reads the same listings that many times a pass (2026-10-26:
+    # 500 calls for ~83 readings, $260 of duplicates since 09-30). The array is a set.
+    sql = tx._scope(["bazos"])
+    assert sql.startswith("ARRAY(SELECT DISTINCT src FROM (")
+    assert sql.endswith(") scoped(src))")
+    assert "UNION ALL SELECT 'bazos'" in sql
+    assert tx._scope(["bazos"]) in tx.SELECT_INFLOW_SQL

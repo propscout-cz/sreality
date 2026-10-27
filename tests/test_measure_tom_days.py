@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from tests._live_property import REQUIRED_DB, cur  # noqa: F401 -- `cur` is the fixture
+from tests._live_property import REQUIRED_DB
 from toolkit.measures import tom_days_sql, tom_observed_sql
 
 _ROOT = Path(__file__).resolve().parents[1]

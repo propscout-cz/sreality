@@ -48,7 +48,7 @@ on:
 jobs:
   seed:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 90   # the full proximity rebuild: ~975k properties at ~3 ms each, in batches
     permissions:
       contents: write
     env:
@@ -68,6 +68,7 @@ jobs:
           pip install -e .
 
       - name: Run seed
+        id: seed
         run: |
           ARGS=""
           if [ "${{ inputs.dry_run }}" = "true" ]; then
@@ -87,3 +88,10 @@ jobs:
           git add data/curated_cities_geocoded.json
           git commit -m "data: refresh curated_cities geocode cache"
           git push
+
+      # A new index revision shifts the near_{jobs,youth,overall} maxes of every property; the hourly
+      # pg_cron run (migration 674) only fills properties not yet computed. Runs even when the geocode
+      # push failed: the seed's writes have already landed.
+      - name: Rebuild city proximity (full)
+        if: ${{ !cancelled() && steps.seed.outcome == 'success' && inputs.dry_run != 'true' }}
+        run: python -m scripts.recompute_city_proximity --full

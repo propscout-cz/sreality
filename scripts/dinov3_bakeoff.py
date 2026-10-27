@@ -63,7 +63,10 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
+
+if TYPE_CHECKING:
+    from PIL import Image
 
 LOG = logging.getLogger("dinov3_bakeoff")
 
@@ -201,14 +204,14 @@ def is_shared_photo(
 # P1b — the synthetic transforms, applied HERE (§5.2). Pure PIL functions.
 # ---------------------------------------------------------------------------
 
-def t_crop10(im):
+def t_crop10(im: Image.Image) -> Image.Image:
     """Centre crop to 90% of each side — breaks pHash, keeps human identity."""
     w, h = im.size
     dx, dy = int(round(w * 0.05)), int(round(h * 0.05))
     return im.crop((dx, dy, w - dx, h - dy))
 
 
-def t_resize_half(im):
+def t_resize_half(im: Image.Image) -> Image.Image:
     """Downscale to 50% and back up: resampling loss at the original dimensions."""
     from PIL import Image
 
@@ -217,7 +220,7 @@ def t_resize_half(im):
     return small.resize((w, h), Image.BICUBIC)
 
 
-def t_rejpeg_q60(im):
+def t_rejpeg_q60(im: Image.Image) -> Image.Image:
     """Re-encode as JPEG quality 60. Same dimensions, different bytes."""
     from PIL import Image
 
@@ -227,7 +230,7 @@ def t_rejpeg_q60(im):
     return Image.open(buf).convert("RGB")
 
 
-def t_watermark_band(im):
+def t_watermark_band(im: Image.Image) -> Image.Image:
     """Opaque bands over the LEFT and RIGHT thirds, never the centre.
 
     Placement is the whole point: a centred watermark is exactly what a
@@ -246,7 +249,7 @@ def t_watermark_band(im):
     return out
 
 
-def t_letterbox(im):
+def t_letterbox(im: Image.Image) -> Image.Image:
     """Pad to square with black bars. Aspect ratio preserved; nothing cropped."""
     from PIL import Image
 
@@ -257,7 +260,7 @@ def t_letterbox(im):
     return canvas
 
 
-def t_crop10_rejpeg_q60(im):
+def t_crop10_rejpeg_q60(im: Image.Image) -> Image.Image:
     """The composed case: geometry AND compression at once."""
     return t_rejpeg_q60(t_crop10(im))
 
@@ -276,14 +279,14 @@ TRANSFORMS: dict[str, Callable[[Any], Any]] = {
 # Preprocessing arms (§3.2: MEASURED, not locked)
 # ---------------------------------------------------------------------------
 
-def pp_square_squash(im, size: int):
+def pp_square_squash(im: Image.Image, size: int) -> Image.Image:
     """The HF processor default: resize to size x size, ignoring aspect ratio."""
     from PIL import Image
 
     return im.convert("RGB").resize((size, size), Image.BICUBIC)
 
 
-def pp_shortest_side_center_crop(im, size: int):
+def pp_shortest_side_center_crop(im: Image.Image, size: int) -> Image.Image:
     """Resize the shortest side to `size`, then centre-crop a square.
 
     Discards the left and right edges of a 4:3 portal photo — where the watermarks
@@ -301,7 +304,7 @@ def pp_shortest_side_center_crop(im, size: int):
     return im.crop((left, top, left + size, top + size))
 
 
-def pp_letterbox_pad(im, size: int):
+def pp_letterbox_pad(im: Image.Image, size: int) -> Image.Image:
     """Fit the whole image inside size x size and pad the remainder black. Nothing
     is discarded and the aspect ratio survives; the cost is wasted pixels."""
     from PIL import Image
@@ -544,7 +547,7 @@ def download_images(images: dict, cache_dir: str, workers: int) -> dict[int, str
     return out
 
 
-def _load_model(arm: Arm, revision: str, device: str):
+def _load_model(arm: Arm, revision: str, device: str) -> tuple[Any, Any]:
     """Model + processor, both pinned to the SAME resolved revision.
 
     `model.eval()` is mandatory for DINOv3: its config carries pos_embed_shift /
@@ -831,7 +834,7 @@ class ArmResult:
     readouts: dict[str, Any] = field(default_factory=dict)
 
 
-def _decode(path: str):
+def _decode(path: str) -> Image.Image | None:
     from PIL import Image
 
     try:
@@ -932,7 +935,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     LOG.info("arms: %s", [a.name for a in arms])
 
-    def _pair_lookup(table: dict[tuple[str, str], float]):
+    def _pair_lookup(
+        table: dict[tuple[str, str], float],
+    ) -> Callable[[int, int, dict], float | None]:
         def cos(a: int, b: int, _pair: dict) -> float | None:
             return table.get((str(a), str(b)), table.get((str(b), str(a))))
         return cos

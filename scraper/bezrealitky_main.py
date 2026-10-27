@@ -111,6 +111,8 @@ class BezrealitkyPortal(portal_runner.PortalDefaults):
     comes from the `portals` registry config."""
 
     source = SOURCE
+    walk_every_s = 6 * 3600
+    walk_timeout_s = 30 * 60
     index_rate = 1.0  # baked floor; the instance reads it from config.limits
 
     def __init__(self, config: PortalConfig, *, max_pages: int | None = None) -> None:
@@ -347,16 +349,20 @@ def main(argv: list[str] | None = None) -> int:
             portal, dry_run=args.dry_run, probe_pages=args.probe_pages)
         return rc
 
-    # Index-walk (enqueue) then detail-drain (fetch + ingest), through the one
-    # shared runner. Two scrape_runs rows ('index' + 'detail'), like sreality.
-    rc = portal_runner.run_phase(
-        portal, "index", portal_runner.run_index_walk, args.dry_run,
-        max_seconds=args.max_seconds,
-    )
-    if rc == 0:
+    # The schedule walks only (--index-only) and the realtime worker drains; omitting
+    # both flags runs both phases, an ad-hoc combined run (an 'index' and a 'detail'
+    # scrape_runs row).
+    rc = 0
+    if not args.drain_only:
+        rc = portal_runner.run_phase(
+            portal, "index", portal_runner.run_index_walk, args.dry_run,
+            max_seconds=args.max_seconds,
+        )
+    if rc == 0 and not args.index_only:
         rc = portal_runner.run_phase(
             portal, "detail", portal_runner.run_detail_drain, args.dry_run,
             max_claims=max_detail, detail_workers=workers, detail_rate=rate,
+            max_seconds=args.max_seconds,
         )
     return rc
 
@@ -404,6 +410,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
             "suppressed (rule #3) rather than the job being killed by the CI "
             "timeout with nothing recorded; the drain uses it the same way."
         ),
+    )
+    p.add_argument(
+        "--index-only", action="store_true",
+        help="walk the index + enqueue only (no detail drain)",
+    )
+    p.add_argument(
+        "--drain-only", action="store_true",
+        help="drain the detail queue only (no index walk)",
     )
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--verbose", action="store_true")

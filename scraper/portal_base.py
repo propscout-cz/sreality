@@ -19,9 +19,11 @@ import logging
 import os
 import re
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import requests
+
+from scraper import stop
 
 if TYPE_CHECKING:
     from scraper.rate_limit import RateLimiter
@@ -173,9 +175,8 @@ class BasePortalClient:
         if self._limiter is not None:
             self._limiter.acquire()
             return
-        elapsed = time.monotonic() - self._last_at
-        if elapsed < self.request_delay_s:
-            time.sleep(self.request_delay_s - elapsed)
+        if stop.wait(self.request_delay_s - (time.monotonic() - self._last_at)):
+            self._stopped()
 
     def _request(
         self,
@@ -204,21 +205,22 @@ class BasePortalClient:
         """
         error: Exception | None = None
         for attempt in range(self.max_retries + 1):
-            if attempt > 0:
-                time.sleep(2.0 ** (attempt - 1))
+            if (attempt > 0 and stop.wait(2.0 ** (attempt - 1))) or stop.requested():
+                self._stopped()
             if pace:
                 self._pace()
             try:
-                if json_body is not None or method == "POST":
-                    response = self._session.post(
-                        url, json=json_body, timeout=self.timeout_s
-                    )
-                elif params is None:
-                    response = self._session.get(url, timeout=self.timeout_s)
-                else:
-                    response = self._session.get(
-                        url, params=params, timeout=self.timeout_s
-                    )
+                with stop.interruptible():
+                    if json_body is not None or method == "POST":
+                        response = self._session.post(
+                            url, json=json_body, timeout=self.timeout_s
+                        )
+                    elif params is None:
+                        response = self._session.get(url, timeout=self.timeout_s)
+                    else:
+                        response = self._session.get(
+                            url, params=params, timeout=self.timeout_s
+                        )
                 self._last_at = time.monotonic()
                 status = response.status_code
                 if status in (429, 403) and self._limiter is not None:
@@ -235,6 +237,8 @@ class BasePortalClient:
                 return response
             except ListingGoneError:
                 raise
+            except stop.StopRequested:
+                self._stopped()
             except requests.RequestException as exc:
                 error = exc
                 LOG.warning(
@@ -243,3 +247,8 @@ class BasePortalClient:
                 )
         assert error is not None
         raise error
+
+    def _stopped(self) -> NoReturn:
+        if self._limiter is not None and not self._limiter.refused:
+            self._limiter.refuse("stop")
+        raise stop.StopRequested("a stop signal arrived")

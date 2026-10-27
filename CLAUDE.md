@@ -32,7 +32,7 @@ that overlays estimates on portal pages.
 
 A **dark-by-default always-on worker** (`scraper/realtime_worker.py`, a 2nd Railway service from the SAME image, gated by
 `REALTIME_WORKER_ENABLED`) runs every lane registered in `_amain`: newest-first probes over the GH walks, the ONLY
-runtime of the detail drain (bar the four combined scrapers' own phase), fresh images and incremental property/broker maintenance, plus estimation, location resolve/intake/refetch,
+runtime of the detail drain, fresh images and incremental property/broker maintenance, plus estimation, location resolve/intake/refetch,
 sold comps, text extraction, health checks, autodedup, notification producers (their one clock) and push, heartbeats (`docs/design/realtime-scrapers.md`).
 ## Territories
 
@@ -48,8 +48,9 @@ in before starting. Deep per-territory rationale: `docs/architecture.md` § Terr
   `require_token` route still returns no identity, admin or per-account data (those take `verify_jwt`/`tenant_conn`; routes still breaking
   this: `roadmap/public-release-track.md` item 11).
   Reads run as `authenticated` (`anon` gets nothing): `*_public` views, RLS'd tables, read models granted with no RLS (`browse_list`,
-  `location_pin_audit_mv`, `ingest_bulk_days`), INVOKER RPCs, DEFINER RPCs only if admin-gated or `ci-allow-ungated`. Writes go via the API by
-  convention, not grant (`database` skill). Design tokens (`globals.css` `@theme`) need operator OK. Backend rules don't apply.
+  `location_pin_audit_mv`, `ingest_bulk_days`), INVOKER RPCs, DEFINER RPCs only if admin-gated or registered ungated in `tests/_admin_gate_registry.py`.
+  Writes go via the API by convention, not grant (`database` skill), except the run tables, which are writes-by-grant (mig 679: the browser INSERTs
+  no run and UPDATEs only `estimation_runs.scenario`). Design tokens (`globals.css` `@theme`) need operator OK. Backend rules don't apply.
 - **Chrome extension** (`chrome-extension/`) — Manifest v3, **vanilla TS only** (no React /
   Tailwind), closed shadow-root panel. Every network call goes through the background worker
   (`chrome.runtime.sendMessage`), never a direct `fetch`. Build-time `VITE_API_*` inlined
@@ -100,7 +101,7 @@ Dynamic state lives outside Git — don't ask, fetch it:
   question. Both recipes + the reserved-for-migrations MCP policy: the `database` skill.
 ## Roadmap maintenance
 
-`ROADMAP.md` is a **<120-line index**; phase content lives in `roadmap/<track>.md` and completed
+`ROADMAP.md` is a **byte-capped index**; phase content lives in `roadmap/<track>.md` and completed
 work in `roadmap/archive.md`. **Read the index only; open a track file only to edit it.** After
 shipping meaningful work, in the SAME PR update **only** the relevant `roadmap/<track>.md` (move a
 bullet to done, add new "next" items) + the index's status cell if the track's status changed.
@@ -166,7 +167,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     tables, columns, data kept, workflows dispatch-only, and NO surface reads the levels — no filter, agent fact or estimate; resuming
     is a ruling, blockers on `roadmap/scraper-track.md`). Raw `listings.condition` (11-value canon) is the source and `condition_match`
     the condition filter; the derived `listings.{building,apartment}_condition_level` (1..5, NULL unscored) + the `listing_condition_scores`
-    cache (keyed `(sreality_id, snapshot_id)`) are written together by `score_listing_condition` in one latest-wins transaction.
+    cache (keyed `(sreality_id, snapshot_id)`) are written together by `score_listing_condition` in one latest-wins transaction. **Ruling 2026-10-25 (ADR-0007): agents may call a NEW structured photo assessment (facets, cached per photo set, ≤10 properties per run; `docs/design/agent-platform/MVP.md`); the parked levels stay unread and Browse shows no facet until ruled.**
 15. **Multi-portal listings sit behind a thin `properties` parent (migration 091); grouping is out-of-band, never inline at insert (new rows land
     `property_id` NULL; straggler-attach births a singleton — the worker lane every 30 s, and inside the daily sweep's loop).** Every merge, operator or engine, goes through the **link mechanics**: `toolkit/property_identity.py` is the single merge chokepoint,
     two public writers (`merge_property_set` → a private `_merge_pair` per retired property; `detach_listings`, set-shaped) — it re-points `listings.property_id`,
@@ -190,7 +191,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     collection mig 610 + pipeline mig 641 + dashboard mig 647; in-app and pushed, one push per sharer a day). Producers write facts, never routing (no channel, status or target stamping). **System alerts are no producer** (ruling R2b 2026-10-21): the health ladder's per-cell `ops_incidents` (mig 619) is told on Health + the canary e-mail only. **Delivery is separate from detection**: in-app = the row; external = `notification_deliveries` (push, one row per event × device, leased claims), `docs/design/notifications-push/PROGRAM.md`; mig 656 dropped `channel_sends`, the suppression/webhook tables, the matcher lease, the nine notification settings, `dedupe_key`, `message` and every routing column. **One identity index** `notification_dispatches_identity_uq` over `EVENT_IDENTITY` (mig 653), NULLS NOT DISTINCT, partial on `duplicate_of IS NULL`, decides "same event?" for producers (`ON CONFLICT`) and merges; a merge re-points and marks a duplicate, never deletes; a deleted watchdog is retired; `REACHABLE_SQL` hides both from every read, and `VISIBLE_SQL` (feed, badge, push) = `REACHABLE_SQL` minus a 'new' a merge withdrew. **A property is SERVED (Browse, map, stats, the watchdog) only when PUBLISHED:** SETTLED (`properties.settled_at`, stamped by the maintenance pass: first photo stored or none, and the engine done with its ads) or 6 h old (`toolkit/publication.py`, migs 668/669; detail by id stays ungated, as rule 25); a 'new' hides once a merge re-points it to a property first seen more than 24 h before the alert.
 17. **City-quality indexes are a normalized, operator-curated time series** (`curated_cities` + `city_index_*`
     + `city_population`) — a new index needs no migration; latest revision wins; agenda-gated to **Browse +
-    Watchdog only** (the estimation agent never sees them, preserving deterministic estimates).
+    Watchdog, and since 2026-10-25 to agents that RANK (ADR-0002) — never inside a price estimate** (the estimator never sees them, preserving deterministic estimates).
 18. **Operator curation is PROPERTY-grain and dedup-stable** (`collections`, `tags`, `property_notes`, all keyed on `property_id`; migration 202). Every
     property-anchored operator-state row follows a merge through ONE ordered list, `PROPERTY_CARRIERS` (`toolkit/property_carriers.py`: curation
     tables, `notification_dispatches` (one UPDATE: re-point, mark the survivor's twin `duplicate_of`, delete nothing), pipeline (rule #22), **dismissals** (mig 536: lift, never delete; a LIVE deal wins)), run inside the merge
@@ -254,15 +255,15 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     2026-09, ulice_id 2026-10, street_name 2026-10 as a sort key) or after a measured slowdown, only to `browse_list`. § Location data in `docs/architecture.md`.
 ## Coding conventions
 
-- Type hints on every signature. `requests` for HTTP, `psycopg` for DB — don't add `httpx` / `aiohttp` / `sqlalchemy` / `supabase-py` lightly (rule #7).
+- Type hints on every signature (CI's ruff ANN check enforces it outside tests). `requests` for HTTP, `psycopg` for DB — don't add `httpx` / `aiohttp` / `sqlalchemy` / `supabase-py` lightly (rule #7).
 - No comments unless the WHY is non-obvious; no multi-paragraph docstrings (one-liners fine).
 - Small single-purpose files: `<portal>_client.py` = HTTP only, `parser.py` / `<portal>_parser.py` = payload→row only;
   `db.py` is for DB I/O — put new policy beside its caller (the policy + dead sweep it still holds are owed, scraper track).
 ## How to test changes
 
-- **Locally:** one-time `pip install -e ".[dev,api,geo]"`, then `pytest -q` (or `pytest tests/path -q`).
+- **Locally:** one-time `pip install -e ".[dev,api,geo]"`, then `ruff check .` and `pytest -q` (or `pytest tests/path -q`).
   Interpreter is `python3`. `scripts/test-summary.sh` runs quiet pytest + prints only failures. Mirrors CI.
-- **CI:** every PR (and push to `main`) runs `.github/workflows/test.yml` — open the draft PR early so it runs (`gh run watch`, or `scripts/logs.sh <run-id> [pattern]`).
+- **CI:** every PR (and push to `main`) runs `.github/workflows/test.yml` — open the draft PR early so it runs (`gh run watch`, or `scripts/logs.sh <run-id> [pattern]`). Its DB lanes run locally too: `scripts/local_pg.sh`.
 - Scraper smoke: `python -m scraper.sreality_main --index-only --dry-run --max-seconds 60` writes nothing; `--drain-only --max-detail 10` is a small live run (other `scraper.<portal>_main`s alike).
 ## Secrets
 
@@ -270,7 +271,7 @@ Never commit secrets (`.env` is gitignored). API keys are **backend-only** — n
 secret (the frontend build must not see it). **Full env-var / secrets reference:** the `toolkit-api` skill.
 ## Agent skills
 
-- **Issue tracker:** GitHub Issues on this PUBLIC repo, via `gh` — always with `--json` (plain `gh issue view` / `gh pr view` exit 1 here). See `docs/agents/issue-tracker.md`.
+- **Issue tracker:** GitHub Issues on this PUBLIC repo, via `gh` — always with `--json` (plain `gh issue view` / `gh pr view` exit 1 here). Before you work on, create or close a ticket, read `docs/agents/issue-tracker.md`: a ticket is yours once `python3 -m scripts.ticket_claim claim <n>` exits 0; each post-merge gate is its own `gate` ticket.
 - **Triage labels:** the five default role names (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
 - **Domain docs:** single-context — root `GLOSSARY.md` + `docs/adr/`; the numbered rules above bind as ADRs do. See `docs/agents/domain.md`.
 ## What is explicitly out of scope right now

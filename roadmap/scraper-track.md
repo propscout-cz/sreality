@@ -5,6 +5,18 @@
 Scraper-specific evolution beyond Phase 1's nightly index walk.
 Independent of the analytical, UI, and map tracks.
 
+### bazos / web floor 0 from a stray 'přízemí' — flat grammar in `floor_from_text` (2026-10-26, PR open)
+- **Found:** `floor_from_text` ended with "any 'přízemí' → 0", so "v šestém podlaží … sklep v přízemí domu"
+  read 0; 373 bazos flats (116 active) carried floor 0 while their text names a higher storey
+  (read-only SQL, 2026-10-25; re-counted 2026-10-26: 374 / 117, query in the PR body).
+- **Done (in the PR):** a flat (or unknown category) reads bare `N. podlaží` (N−1) and spelled-out
+  ordinals up to the tenth; 'přízemí' is 0 only when tied to the flat and no other storey is named
+  (both said → None, for the text lane).
+  Every other category keeps the legacy miner. `scripts/heal_bazos_floor_zero.py` (dry run default,
+  `--apply --backup`) re-reads or NULLs the measured rows.
+- **Next:** run the heal after merge (dry run first); then `reparse` `--fields floor` on bazos to fill
+  the NULL flats that now read a `N. podlaží` (5,915 measured, 568 active).
+
 ### Condition scoring PARKED — no surface reads the frozen 1–5 levels (2026-10-20, done)
 - **Done:** operator ruling 2026-10-20 ("keep the scoring engine for now, but make sure it does
   not impact anything"; rule #14). The crons have been off since PR #730 (2026-07-09) and the last
@@ -55,8 +67,9 @@ Independent of the analytical, UI, and map tracks.
   `db.enqueue_presence_checks` and read by nothing since `delist_flip_refused` went (a drop
   removes the writer first).
 - **Filed by the Health investigation (2026-10-18), owed to this track:** #1851 a sreality ad that
-  answers HTTP 409 (615387212) is given up and re-armed forever by the walk's re-arm; #1852 the
-  bazos rate-ledger lease overflows `smallint`, so every GitHub bazos walk falls back to per-process
+  answers HTTP 409 (615387212) is given up and re-armed forever by the walk's re-arm; #1852 (DONE 2026-10-26,
+  PR #2052: the lease casts its integers and bazos shares ONE 0.7 req/s budget, migration 676) the
+  bazos rate-ledger lease overflowed `smallint`, so every GitHub bazos walk fell back to per-process
   pacing (the cause of the NEW-queue bursts of 10-12, 10-13 and 10-16); #1853 422 active ads with a
   NULL category (ceskereality 124, realitymix 298) sit outside every nomination scope and can never
   become inactive — the `coverage` gauge's `unnominated` cells read them until it lands: Problem on

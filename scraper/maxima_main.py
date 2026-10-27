@@ -100,6 +100,8 @@ class MaximaPortal(portal_runner.PortalDefaults):
     pages only once per run."""
 
     source = SOURCE
+    walk_every_s = 6 * 3600
+    walk_timeout_s = 30 * 60
     index_rate = 1.0
     total_is_count = True  # walk_category's total is len(seen): only agenda totals exist
 
@@ -399,9 +401,8 @@ def main(argv: list[str] | None = None) -> int:
             portal, dry_run=args.dry_run, probe_pages=args.probe_pages)
         return rc
 
-    # The catalogue is small, so a combined run (index walk + full drain) fits one
-    # job comfortably. --index-only / --drain-only keep the same cadence-split
-    # escape hatch as the other portals; omitting both runs both phases.
+    # The schedule walks only (--index-only) and the realtime worker drains; omitting
+    # both flags runs both phases, an ad-hoc combined run.
     rc = 0
     if not args.drain_only:
         rc = portal_runner.run_phase(

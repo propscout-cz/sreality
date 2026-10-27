@@ -16,7 +16,6 @@ import contextlib
 import json
 import logging
 import multiprocessing
-import os
 import re
 from collections.abc import Callable, Mapping
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
@@ -31,7 +30,6 @@ import psycopg
 
 from location_data import payloads
 from location_data.claims_common import (
-    ARCHIVED_COORDINATE_RULES,
     DEFAULT_MAX_CLAIM_VALUE_BYTES,
     EMITTABLE_LICENCE_CLASSES,
     GUARD_CZ_BBOX,
@@ -57,6 +55,7 @@ from location_data.claims_common import (
 from location_data.html_scope import (
     ScopeRegister, ScopedDocument, collapse_ws, scope_html,
 )
+from scraper.cpus import job_cpus
 from scraper.remax_parser import parse_dms_pair
 
 LOG = logging.getLogger("location_data.page_readers")
@@ -1475,8 +1474,7 @@ def extract_page(
 # body on the main thread: 1 500-body batches took 143-313 s against ~48 s for the R2 fetch
 # of the same bodies (run 34666292569), and the 249 000-body backlog is re-mined once more
 # on every contract bump. Threads cannot help (the GIL holds for the whole parse), so the
-# bodies go to PROCESSES.
-EXTRACTION_WORKERS_ENV = "LOCATION_INTAKE_WORKERS"
+# bodies go to PROCESSES, as many as the job's CPUs (`scraper.cpus.job_cpus`).
 
 # Below this a batch stays on the main thread. Spinning up a pool costs a fresh interpreter
 # per worker, which is worth it for a 1 500-body drain batch and never for the handful of
@@ -1496,23 +1494,11 @@ EXTRACTION_TIMEOUT_S = 120.0
 _WORKER: dict[str, Any] = {}
 
 
-def extraction_workers() -> int:
-    """How many extraction processes. `os.cpu_count()`, overridable.
-
-    The override exists for ONE case: a runner whose CPU count is misreported (a container
-    with a cgroup quota below the host's core count). It is not a tuning knob and nothing
-    sets it in the workflow."""
-    override = os.environ.get(EXTRACTION_WORKERS_ENV)
-    if override:
-        return env_positive_int(EXTRACTION_WORKERS_ENV, 1)
-    return os.cpu_count() or 1
-
-
 def pool_width(tasks: int) -> int:
     """The width `extract_pages` will actually use for a batch of this size — 1 is the main
     thread. ONE definition, because the lane logs this number beside its bodies/s and a log
     line that guessed it would be the only evidence anyone reads."""
-    workers = extraction_workers()
+    workers = job_cpus()
     return workers if workers >= 2 and tasks >= PARALLEL_MIN_BODIES else 1
 
 

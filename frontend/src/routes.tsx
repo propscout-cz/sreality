@@ -64,6 +64,7 @@ const PhoneViewings = lazyChunk(() => import('./pages/phone/PhoneViewings'));
 const NotificationOpen = lazyChunk(() => import('./pages/NotificationOpen'));
 // Paste-a-building (rule 13): an operator flow opened by its own link, never on a
 // first visit — its page and unit editor are their own chunk, like the admin pages.
+// Every /buildings route is admin-only (agent platform M0), so the page is too.
 const BuildingDetail = lazyChunk(() => import('./pages/BuildingDetail'));
 
 function AdminPage({ children }: { children: ReactNode }) {
@@ -146,11 +147,7 @@ export const routes: RouteObject[] = [
       { path: ROUTES.outreachDetail.childPath, element: <AdminPage><OutreachDetail /></AdminPage>, handle: { title: 'Campaign' } },
       {
         path: ROUTES.buildingDetail.childPath,
-        element: (
-          <Suspense fallback={<Skeleton height={240} className="mx-4 my-4" />}>
-            <BuildingDetail />
-          </Suspense>
-        ),
+        element: <AdminPage><BuildingDetail /></AdminPage>,
         handle: { title: 'Building' },
       },
       { path: ROUTES.collections.childPath, element: <Collections />, handle: { title: 'Collections' } },
