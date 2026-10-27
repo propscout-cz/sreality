@@ -21,8 +21,8 @@
 --   * public.health_job_cells(interval): one job/<name> cell per registered job-runner row, live or retired under an
 --     hour (a blink, as the trigger keeps its join), judged on its runs since registry_at and ok until the first of
 --     them closes, one per entry a fresh replica's boot refused that has no such row, and the job-runner fleet cell
---     while such rows exist (it counts the live ones). Never 'unknown'. Security invoker: the definer watcher calls it. The one seam
---     later waves replace (#2028, #2029, #2033), alone.
+--     while such rows exist (it counts the live ones). Never 'unknown'. Security invoker: the definer watcher calls
+--     it. The one seam later waves replace (#2028, #2029, #2033), alone.
 --   * public.health_liveness() is re-created from the live body, 675's byte for byte (the precondition refuses any
 --     other), with one block after the health-lane arm: the helper's cells, inside a subtransaction. When the helper
 --     raises, the watcher writes one 'job-cells' Problem plus a listed 'unknown' placeholder for each open job/* and
@@ -266,7 +266,7 @@ with live as (
 select coalesce(jsonb_agg(cell order by subject), '[]'::jsonb) from (
   select 'job/' || j.job_name as subject, jsonb_build_object(
            'subject', 'job/' || j.job_name, 'portal', null, 'status', coalesce(w.level, 'ok'),
-           'value', case when j.last_success_at is not null then round((j.age_s / 3600)::numeric, 1) end, 'unit', 'h',
+           'value', round((extract(epoch from now() - j.last_success_at) / 3600)::numeric, 1), 'unit', 'h',
            'message', j.job_name || ': ' || coalesce(w.text, case
              when j.run_at is not null then
                format('running for %s of its %s budget', health_span(j.flight_s), health_span(j.timeout_s))

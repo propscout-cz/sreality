@@ -588,12 +588,16 @@ def test_a_never_succeeded_job_is_late_from_its_first_scheduled_run_never_from_a
 
 
 def test_a_lapsed_pause_restarts_the_late_and_the_waiting_clock(cur: Any) -> None:
-    """C3: a pause that lifted a minute ago, three days after the last ok run, is neither late nor long waiting."""
+    """C3: a pause that lifted a minute ago, three days after the last ok run, is neither late nor long waiting; the
+    cell's value is still the hours since that run."""
     _runner_beat(cur, "r1", "0 minutes")
     _job(cur, "lifted", last_ok="3 days", due="-3960 minutes", paused="-1 minute")
     _run(cur, "lifted", started="3 days 1 minute", ended="3 days", outcome="ok", exit_code=0)
 
-    assert _said(_liveness(cur)[3], "job/lifted") == ("ok", "lifted: last ok 3 d ago; due now")
+    cells = _liveness(cur)[3]
+
+    assert _said(cells, "job/lifted") == ("ok", "lifted: last ok 3 d ago; due now")
+    assert cells["job/lifted"][0]["value"] == 72.0
 
 
 def test_a_re_registered_job_is_judged_from_its_new_first_slot(cur: Any) -> None:
