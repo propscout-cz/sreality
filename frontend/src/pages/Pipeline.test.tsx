@@ -376,15 +376,21 @@ describe('<Pipeline> board', () => {
   /* The board is a triage surface worked a column at a time, so following a
      card must not unload it — the property link opens in a NEW TAB. `rel` rides
      along so the opened document can't reach back through `window.opener`.
-     The link is the address, which leads the card; the price below it is a
-     figure, not a second way in. */
-  it('opens the property in a new tab from the address line', async () => {
+     The link is the address, which leads the card, and it is stretched over
+     the whole card (`.stretched-link`), so the card opens from anywhere; the
+     controls sit above it (`card-action`). The price is a figure inside the
+     card, never a second link. */
+  it('opens the property in a new tab from anywhere on the card', async () => {
     renderBoard();
     const place = await screen.findByText('Sadová');
     const link = place.closest('a');
     expect(link).toHaveAttribute('href', '/property/42');
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'));
+    expect(link).toHaveClass('stretched-link');
+    for (const name of ['Přetáhnout kartu do jiné fáze', 'Odebrat z pipeline']) {
+      expect(screen.getAllByRole('button', { name })[0]).toHaveClass('card-action');
+    }
 
     const price = screen.getByText(/5\s*000\s*000/);
     expect(price.closest('a')).toBeNull();

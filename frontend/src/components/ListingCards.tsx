@@ -44,6 +44,7 @@ import { portalLabel, portalShort } from '@/lib/portals';
 import type { ListingEstimate } from '@/lib/types';
 import { runSurfaceUrl } from '@/lib/runLinks';
 import { propertyPath } from '@/lib/listingUrl';
+import { useNewTabProps } from '@/lib/linkGestures';
 import { inzeratu } from '@/lib/mergedAdverts';
 import type { MergeMode } from '@/lib/useMergeMode';
 
@@ -371,6 +372,7 @@ function Card({
     }
   }, [hovered, scrollOnHover]);
   const hydration = useCardHydration();
+  const newTab = useNewTabProps();
   const title = formatTitle(r);
   const storeyTag = storeyTagOf(r, hydration.floorFor(r.listing_id));
   /* The card's letter in merge mode, the stretched button that holds it (the
@@ -590,8 +592,9 @@ function Card({
             /* THE card's link, and the only one: `.stretched-link` (globals.css)
                spreads its hit area over the whole card, so the card still opens
                end-to-end while the anchor's accessible name is the listing
-               itself rather than the card's every control and figure. */
-            <Link to={propertyPath(r.property_id, r.listing_id)} className="stretched-link">
+               itself rather than the card's every control and figure. A new
+               tab on the desktop: following a card never unloads Browse. */
+            <Link to={propertyPath(r.property_id, r.listing_id)} {...newTab} className="stretched-link">
               {title}
             </Link>
           )}
@@ -775,6 +778,7 @@ function EstimateCorner({
   refusal: string | undefined;
   onEstimate: (srealityId: number) => void;
 }) {
+  const newTab = useNewTabProps();
   const running =
     estimating ||
     estimate?.status === 'pending' ||
@@ -810,6 +814,7 @@ function EstimateCorner({
             subject_source: ad.source,
             subject_source_id_native: ad.source_id_native,
           })}
+          {...newTab}
           title="Náš odhad nájmu — otevřít detail odhadu"
           className="inline-flex items-center rounded-[var(--radius-xs)] border border-[var(--color-copper)] px-1.5 py-0.5 text-[0.62rem] font-medium tabular-nums text-[var(--color-copper)] hover:bg-[var(--color-copper)]/10 transition-colors"
         >

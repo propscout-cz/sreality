@@ -7,6 +7,16 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Lists open in a new tab (2026-10-27, no migration)
+- **Done** (operator ask 2026-10-27: "when I click on a notification, browse card or pipeline card, open it
+  in a new window"). A notification row (and a share row's "Open …" link), a Browse card (and its estimate
+  chip) and a pipeline card open their destination in a new tab on the desktop, so the list being worked
+  through is never unloaded. ONE rule, `lib/linkGestures` `useNewTabProps`: `target="_blank" rel="noopener"`
+  on the desktop, nothing in the phone shell (often the installed app, where a new tab leaves the app). The
+  pipeline card's address link is now stretched over the whole card (`.stretched-link`, as Browse and the
+  phone board), its controls lifted with `card-action`, its tooltips with `card-tip`; the town line's own
+  tooltip went (the link's title is the whole place). A middle-click on a notification marks it read too.
+
 ### PropScout.cz and three colour schemes (2026-10-26, no migration)
 - **Done** (operator ask 2026-10-26: "rename the app to PropScout.cz", "build Měď, Kobalt and Grafit as
   themes the user can pick from"). The brand is `PropScout.cz` (`lib/brand.ts`; tab prefix "PS:", a "PS"

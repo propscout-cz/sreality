@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { isPlainLeftClick, isSafeInternalPath, spaNavHrefForClick } from './linkGestures';
+import { afterEach, describe, expect, it } from 'vitest';
+import { renderHook } from '@testing-library/react';
+import { PHONE_SHELL_QUERY } from './phoneShell';
+import { isPlainLeftClick, isSafeInternalPath, spaNavHrefForClick, useNewTabProps } from './linkGestures';
 
 /* A minimal stand-in for the anchor ancestry the predicate walks. Structural
  * typing is the point: no DOM event constructor, no map, no mount. */
@@ -113,5 +115,30 @@ describe('isSafeInternalPath', () => {
     expect(isSafeInternalPath('javascript:alert(1)')).toBe(false);
     expect(isSafeInternalPath('browse')).toBe(false);
     expect(isSafeInternalPath('')).toBe(false);
+  });
+});
+
+describe('useNewTabProps', () => {
+  const originalMatchMedia = window.matchMedia;
+  const setNarrow = (narrow: boolean) => {
+    window.matchMedia = ((query: string) => ({
+      matches: query === PHONE_SHELL_QUERY ? narrow : false,
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    })) as unknown as typeof window.matchMedia;
+  };
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+  });
+
+  it('opens a new tab on the desktop, with no way back through window.opener', () => {
+    setNarrow(false);
+    expect(renderHook(() => useNewTabProps()).result.current).toEqual({ target: '_blank', rel: 'noopener' });
+  });
+
+  it('stays in the tab in the phone shell, where a new tab would leave the app', () => {
+    setNarrow(true);
+    expect(renderHook(() => useNewTabProps()).result.current).toEqual({});
   });
 });
