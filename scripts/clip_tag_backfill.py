@@ -165,40 +165,6 @@ def _decode(data: bytes) -> Image.Image:
     return Image.open(io.BytesIO(data)).convert("RGB")
 
 
-def _download_decode(
-    r2: image_storage.R2Client, rows: list, workers: int,
-) -> tuple[list[tuple[int, Image.Image]], list[int]]:
-    """Returns (decoded, terminal): decoded = [(image_id, RGB image)] that tagged
-    successfully; terminal = [image_id] whose STORED bytes won't ever decode (corrupt /
-    non-image — e.g. a video cover that slipped past the download reject-list). The
-    caller marks BOTH so a permanently-undecodable image leaves the needs-clip partial
-    index instead of being re-fetched + re-failed every run (the image-download pipeline
-    terminal-marks the same way). A DOWNLOAD exception is treated as TRANSIENT (R2 blip)
-    and left unmarked to retry — mirroring how the download pipeline distinguishes a gone
-    object from a transient miss."""
-
-    def _one(row: tuple[int, str, bool]) -> tuple[int, Image.Image | None, bool]:
-        image_id, key = row[0], row[1]
-        try:
-            data = r2.download_bytes(key)
-        except Exception:  # noqa: BLE001 - transient R2 error: retry on the next run
-            return image_id, None, False
-        try:
-            return image_id, _decode(data), False
-        except Exception:  # noqa: BLE001 - stored bytes won't decode: terminal, mark it
-            return image_id, None, True
-
-    decoded: list = []
-    terminal: list = []
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        for image_id, img, is_terminal in pool.map(_one, rows):
-            if img is not None:
-                decoded.append((image_id, img))
-            elif is_terminal:
-                terminal.append(image_id)
-    return decoded, terminal
-
-
 def _priority_region_ids(conn: psycopg.Connection, cli_region: int | None) -> list[int]:
     """Ordered kraj ids to drain before the global fallback. A CLI --region-id wins (ad-hoc
     dispatch); otherwise the operator's app_settings.clip_tagging_priority_region_ids list

@@ -139,35 +139,6 @@ def test_region_and_global_overlap_is_deduped() -> None:
     assert [r[0] for r in rows] == [1, 2, 3]  # image 2 appears once
 
 
-class _FakeR2:
-    def __init__(self, data: dict) -> None:
-        self._data = data
-
-    def download_bytes(self, key: str) -> bytes:
-        v = self._data[key]
-        if isinstance(v, Exception):
-            raise v
-        return v
-
-
-def test_download_decode_marks_terminal_keeps_transient_retryable() -> None:
-    import io
-
-    from PIL import Image
-
-    buf = io.BytesIO()
-    Image.new("RGB", (1, 1)).save(buf, format="PNG")
-    good = buf.getvalue()
-    r2 = _FakeR2({"good": good, "bad": b"not-an-image",
-                  "gone": RuntimeError("R2 blip")})
-    decoded, terminal = ctb._download_decode(
-        r2, [(1, "good"), (2, "bad"), (3, "gone")], workers=2)
-    assert {d[0] for d in decoded} == {1}      # decoded successfully
-    assert set(terminal) == {2}                # corrupt bytes -> terminal (gets marked)
-    # the download exception (3) is transient -> neither decoded nor terminal -> retries
-    assert 3 not in {d[0] for d in decoded} and 3 not in terminal
-
-
 def test_fresh_photos_come_before_the_priority_kraje() -> None:
     conn = _Conn(
         fresh_rows=[(50, "f", True), (40, "x", True)],
