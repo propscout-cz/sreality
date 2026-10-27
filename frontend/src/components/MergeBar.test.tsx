@@ -94,14 +94,23 @@ describe('<MergeBar>', () => {
     expect(within(list).queryByRole('button')).toBeNull();
   });
 
-  it('offers a chip per letter in use plus the next free one, the active one checked', () => {
+  /* The one joined bar (operator ruling 2026-10-27), hugging: it grows by a letter at a time. */
+  it('offers a segment per letter in use plus the next free one, the active one lit', () => {
     const setActiveLetter = vi.fn();
     renderWith(bar({ 42: 'A', 43: 'A', 44: 'B' }, { setActiveLetter }));
-    const chips = within(screen.getByRole('radiogroup', { name: 'Písmeno, které zapíše kliknutí' }))
-      .getAllByRole('radio');
-    expect(chips.map((c) => c.textContent)).toEqual(['A', 'B', 'C']);
-    expect(chips[0]).toBeChecked();
-    fireEvent.click(chips[2]);
+    const group = screen.getByRole('group', { name: 'Písmeno, které zapíše kliknutí' });
+    const letters = within(group).getAllByRole('button');
+    expect(letters.map((c) => c.textContent)).toEqual(['A', 'B', 'C']);
+    const track = group.firstElementChild as HTMLElement;
+    expect(track).toHaveClass('inline-flex', 'border', 'bg-[var(--color-paper-2)]');
+    for (const l of letters) {
+      expect(l.parentElement).toBe(track);
+      expect(l).not.toHaveClass('border');
+    }
+    expect(letters[0]).toHaveAttribute('aria-pressed', 'true');
+    expect(letters[0]).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+    expect(letters[1]).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(letters[2]);
     expect(setActiveLetter).toHaveBeenCalledWith('C');
   });
 
@@ -163,15 +172,18 @@ describe('<MergeBar>', () => {
     expect(await screen.findByText('Vezme zpět 2 rozhodnutí „Různé“.')).toBeInTheDocument();
   });
 
-  it('enters and leaves the mode from its one button', () => {
-    const enter = vi.fn();
+  /* The way in is the cards header's "Sloučit…" (ruling P10); the bar is the mode. */
+  it('leaves the mode from Cancel and draws no Merge mode button', () => {
     const exit = vi.fn();
-    renderWith(bar({}, { active: false, enter, exit }));
-    fireEvent.click(screen.getByRole('button', { name: 'Merge mode' }));
-    expect(enter).toHaveBeenCalledTimes(1);
-    renderWith(bar({}, { enter, exit }));
+    renderWith(bar({}, { exit }));
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(exit).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'Merge mode' })).toBeNull();
+  });
+
+  it('draws nothing while the mode is off', () => {
+    renderWith(bar({}, { active: false }));
+    expect(screen.queryByRole('button')).toBeNull();
   });
 });
 

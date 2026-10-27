@@ -124,7 +124,7 @@ export default function ValuoSection({ property, listingIds, adUrls = [], readOn
   return (
     <>
       {!bare && <Hairline />}
-      <section id="valuo" className="scroll-mt-6">
+      <section id="valuo" className="scroll-mt-28">
         <div className="flex items-baseline justify-between gap-3">
           <SectionLabel>Valuo</SectionLabel>
           {(open || !shown ? page?.environment : shown.environment) === 'sandbox' && (
@@ -472,7 +472,8 @@ const TAGS: Record<Provenance['class'], [string, string]> = {
   ad: ['z inzerátu', INK3], property: ['z inzerátu', INK3], inferred: ['odvozeno', INK3],
   assumed: ['předpoklad', 'text-[var(--color-ink-2)]'], missing: ['chybí', INK3], user: ['upraveno', 'text-[var(--color-copper)]'],
 };
-const BOOL = [{ value: null, label: 'neuvedeno' }, { value: 'ano', label: 'ano' }, { value: 'ne', label: 'ne' }] as const;
+// Never 'neuvedeno': the one yes/no (new_building) is always answered from the condition (operator ruling 2026-10-27).
+const BOOL = [{ value: 'ano', label: 'ano' }, { value: 'ne', label: 'ne' }] as const;
 
 function Param({ field: f, value, provenance, issues, onChange }: {
   field: ValuoField;
@@ -500,7 +501,7 @@ function Param({ field: f, value, provenance, issues, onChange }: {
       <SingleSelectDropdown label={f.label} value={text} options={f.options} onChange={onChange} placeholder={NONE} aria={invalid} box={box} />
     ) : f.type === 'boolean' ? (
       <Segmented label={f.label} options={BOOL} value={value == null ? null : value ? 'ano' : 'ne'} aria={invalid} box={box}
-        onChange={(v) => onChange(v == null ? null : v === 'ano')} />
+        onChange={(v) => onChange(v === 'ano')} />
     ) : f.type === 'date' ? (
       // Never cleared: a request without its date would meet another day's answer in the dedupe.
       <TextBox type="date" box={box} label={f.label} value={text ?? ''} {...invalid}

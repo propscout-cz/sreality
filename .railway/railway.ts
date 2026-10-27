@@ -5,7 +5,7 @@
 // Every live variable NAME is listed (values stay in Railway): a name missing here plans as a destructive delete.
 import { defineRailway, github, preserve, project, service } from "railway/iac";
 
-const REPO = "waiff/sreality";               // the services' GitHub source; "propscout/sreality" once #2008 re-links them
+const REPO = "propscout-cz/sreality";        // the services' GitHub source since #2008 re-linked them (2026-10-27)
 const REGION = "europe-west4-drams3a";       // a plan cannot see this (one region, one replica): describe-service does
 const DOCKERFILE = { builder: "DOCKERFILE", dockerfilePath: "Dockerfile" };
 // No override existed before #2060, so each replica had the Pro ceiling (the worker's cgroup reads 22,888 MiB = 24e9 B).

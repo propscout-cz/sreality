@@ -7,16 +7,11 @@
  * collection shared with me is read-only: the sheet lists only my own
  * collections, so it offers no removal here, and the header says whose it is.
  *
- * THE CARDS ARE BROWSE'S READ: `fetchListingsForCards` with the collection as
- * its collection scope (`collections: {in: [id]}`, judged server-side through
- * `collection_properties_public`, rule 18 + migration 629), every status and category, hidden
- * properties included — a property the operator hid stays in the list he filed
- * it in. A removal shows at once: the write's settle (lib/curationSettle) drops
- * the card from this roll in place. A member Browse
- * does not serve (no served location, rule 25) has no card; it stays reachable
- * as a plain line under the roll, from the collection's own read. */
+ * THE CARDS ARE BROWSE'S READ, shared with the desktop page (lib/collectionCards).
+ * A removal shows at once: the write's settle (lib/curationSettle) drops the
+ * card from this roll in place. A member Browse does not serve has no card; it
+ * stays reachable as a plain line under the roll, from the collection's own read. */
 
-import { useMemo } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
@@ -25,26 +20,15 @@ import { RollEmpty, RollSkeleton } from '@/components/phone/RollParts';
 import DayRule from '@/components/phone/DayRule';
 import { ChevronIcon } from '@/components/phone/phoneIcons';
 import { ApiError, getCollection } from '@/lib/api';
-import { browseKeys } from '@/lib/browseKeys';
-import { isMine, useCollectionMembers } from '@/lib/collectionCache';
+import { isMine } from '@/lib/collectionCache';
+import { useCollectionCards } from '@/lib/collectionCards';
 import { listingKindLabel } from '@/lib/enums';
-import { FEED_ALL_FILTERS } from '@/lib/feed';
-import type { ListingFilters } from '@/lib/filters';
 import { fmtArea, fmtCount, fmtCzk } from '@/lib/format';
-import type { KeysetCursor } from '@/lib/keyset';
 import { propertyPath } from '@/lib/listingUrl';
 import { usePageTitle } from '@/lib/pageTitle';
-import {
-  CARD_PAGE_SIZE,
-  DEFAULT_SORT,
-  curationKeys,
-  fetchListingsForCards,
-  type CardRow,
-} from '@/lib/queries';
+import { DEFAULT_SORT, curationKeys } from '@/lib/queries';
 import { ROUTES } from '@/lib/routes';
-import { CURATED_SETS, matchesScope } from '@/lib/setScope';
 import type { Collection, CollectionPropertyRow } from '@/lib/types';
-import { useInfiniteList } from '@/lib/useInfiniteList';
 
 import {
   DESKTOP_ONLY_NOTE,
@@ -54,17 +38,6 @@ import {
   propertiesWord,
   sharedByLabel,
 } from './PhoneCollections';
-
-/* The collection as a Browse cohort: no category, sale and rent, any status,
- * hidden included, scoped to this one collection. */
-export function collectionCardFilters(id: number): ListingFilters {
-  return {
-    ...FEED_ALL_FILTERS,
-    status: 'any',
-    showDismissed: true,
-    collections: { set: null, in: [id], out: [] },
-  };
-}
 
 export default function PhoneCollectionDetail() {
   const { id: idParam } = useParams();
@@ -158,30 +131,7 @@ function Header({ collection }: { collection: Collection }) {
 
 function Members({ collection, members }: { collection: Collection; members: CollectionPropertyRow[] }) {
   const navigate = useNavigate();
-  const filters = useMemo(() => collectionCardFilters(collection.id), [collection.id]);
-  const sort = DEFAULT_SORT;
-
-  const list = useInfiniteList<CardRow>({
-    queryKey: browseKeys.cards(filters, sort),
-    queryFn: (cursor, signal) => fetchListingsForCards(filters, sort, cursor as KeysetCursor | null, { signal }),
-    pageSize: CARD_PAGE_SIZE,
-    getRowId: (r) => r.property_id,
-  });
-
-  /* The member map every collection glyph paints from: a member line below the
-   * roll leaves with it before the collection's own read lands. A failed read
-   * hides nothing. */
-  const memberMap = useCollectionMembers().data;
-  const stillHere = (property_id: number): boolean =>
-    memberMap == null
-    || matchesScope(memberMap.get(property_id), filters.collections, CURATED_SETS.collections.inRule);
-
-  /* Members with no card: only once the whole roll is in, never mid-paging. */
-  const cardIds = new Set(list.rows.map((r) => r.property_id));
-  const complete = !list.isLoading && !list.isError && !list.hasNextPage;
-  const uncarded = complete
-    ? members.filter((m) => !cardIds.has(m.property_id) && stillHere(m.property_id))
-    : [];
+  const { list, uncarded } = useCollectionCards({ collectionId: collection.id, members, sort: DEFAULT_SORT });
 
   return (
     <div>

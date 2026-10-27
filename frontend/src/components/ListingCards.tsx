@@ -38,12 +38,14 @@ import {
   fmtArea, fmtCzk, fmtFloor, fmtMeasuredPricePerM2,
   fmtShortDate, fmtTomDays,
 } from '@/lib/format';
+import type { CohortKind } from '@/lib/filters';
 import { plotBesideArea, ppm2BasisFromToken } from '@/lib/measure';
-import { listingTypeLabel } from '@/lib/enums';
+import { listingKindParts, listingTypeLabel } from '@/lib/enums';
 import { portalLabel, portalShort } from '@/lib/portals';
 import type { ListingEstimate } from '@/lib/types';
 import { runSurfaceUrl } from '@/lib/runLinks';
 import { propertyPath } from '@/lib/listingUrl';
+import { useNewTabProps } from '@/lib/linkGestures';
 import { inzeratu } from '@/lib/mergedAdverts';
 import type { MergeMode } from '@/lib/useMergeMode';
 
@@ -72,6 +74,14 @@ const CARD_GRID_CLASS = 'grid gap-2 grid-cols-[repeat(auto-fill,minmax(min(var(-
  * text in the body does not change. */
 const CARD_IMAGE_MIN = { sm: '11.5rem', lg: '23rem' } as const;
 
+/* Client-side retention cap for a card's carousel — the same 50 the inline read
+ * used before W7a moved it into the shared hydration layer. images_public has no
+ * per-listing LIMIT, so this caps what is KEPT, not what is fetched; 50 sits
+ * comfortably above any real listing (typical max ~25) so no carousel is
+ * truncated. It is part of the cache key, so changing it is a new cohort; every
+ * surface that hydrates this grid passes it (Browse, the collection page). */
+export const CARD_PHOTOS_PER_CARD = 50;
+
 interface Props {
   rows: CardRow[] | null;
   total: number | null;
@@ -79,6 +89,9 @@ interface Props {
   /* The portal whose newest ad orders the cards (queries.ts orderPortal), or
    * null: a card whose date there differs from its own first seen shows both. */
   orderPortal?: string | null;
+  /* The one property type and deal the filter pins (lib/filters cohortKindOf):
+   * a card of exactly that kind drops "Byt na prodej ·" from its title. */
+  cohortKind?: CohortKind | null;
   /* Card image size: "large" doubles the grid's --card-min (and therefore
    * the photo + card width); everything else in the card body is fixed-size
    * and untouched. Shared identically by the Split and Cards (map-collapsed)
@@ -127,6 +140,9 @@ interface Props {
    * writes the active one instead of navigating; the marks stay, read-only
    * (MS16); the grid hands the mode's key handler the focused card. */
   merge: MergeMode | null;
+  /* The way into merge mode, beside Cover and Sort (ruling P10): a quiet
+   * "Sloučit…" while the mode is off, absent where the surface has none. */
+  onEnterMerge?: () => void;
   /* On-card estimate: latest rent estimate per listing id (keyed by
    * sreality_id), the set of ids whose run is being kicked off right now
    * (optimistic spinner), and the trigger. Estimate runs on apartment cards
@@ -136,6 +152,13 @@ interface Props {
   /* The API's refusal sentence per sreality_id, for a submit that made no run. */
   estimateRefusals?: Readonly<Record<number, string>>;
   onEstimate: (srealityId: number) => void;
+  /* Who scrolls the grid: its own fixed-height column (Browse, beside the map),
+   * or the page around it (the collection page, ruling P32): no scroll box, and
+   * the end sentinel watches the viewport. */
+  scroll?: 'column' | 'page';
+  /* What an empty grid says, where "no listings match these filters" would be
+   * wrong (a surface with no filters). */
+  empty?: ReactNode;
 }
 
 export default function ListingCards({
@@ -143,6 +166,7 @@ export default function ListingCards({
   total,
   sort,
   orderPortal = null,
+  cohortKind = null,
   imageLarge,
   coverTag,
   onCoverTag,
@@ -161,10 +185,13 @@ export default function ListingCards({
   onClearFilters,
   onClearBounds,
   merge,
+  onEnterMerge,
   estimates,
   estimatingIds,
   estimateRefusals,
   onEstimate,
+  scroll = 'column',
+  empty,
 }: Props) {
   const showSkeleton = isLoading && rows == null;
   const isEmpty = !showSkeleton && !isError && rows != null && rows.length === 0;
@@ -194,7 +221,7 @@ export default function ListingCards({
 
   return (
     <div
-      className="flex flex-col h-full min-h-0"
+      className={scroll === 'page' ? 'flex flex-col' : 'flex flex-col h-full min-h-0'}
       style={{ '--card-min': CARD_IMAGE_MIN[imageLarge ? 'lg' : 'sm'] } as CSSProperties}
     >
       <div className="flex items-center justify-between px-1 pb-3 text-[0.75rem] text-[var(--color-ink-3)] tabular-nums gap-3">
@@ -210,21 +237,34 @@ export default function ListingCards({
         <div className="flex items-center gap-2 shrink-0">
           <CoverDropdown coverTag={coverTag} onChange={onCoverTag} />
           <SortDropdown sort={sort} onChange={onSort} />
+          {onEnterMerge && merge == null && (
+            <button
+              type="button"
+              onClick={onEnterMerge}
+              className="px-2 py-1 text-[0.7rem] rounded-[var(--radius-sm)] bg-[var(--color-paper-2)] border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:border-[var(--color-rule-strong)] transition-colors"
+            >
+              Sloučit…
+            </button>
+          )}
         </div>
       </div>
 
       {/* Merge mode's keys arrive here from the focused card (never from the
           window, so a filter field keeps its letters). */}
-      <div ref={scrollRef} onKeyDown={merge?.onKeyDown} className="flex-1 min-h-0 overflow-y-auto pr-1">
+      <div
+        ref={scrollRef}
+        onKeyDown={merge?.onKeyDown}
+        className={scroll === 'page' ? undefined : 'flex-1 min-h-0 overflow-y-auto pr-1'}
+      >
         {showSkeleton && <SkeletonGrid />}
-        {isEmpty && (
+        {isEmpty && (empty ?? (
           <EmptyState
             hasFilters={hasFilters}
             hasBounds={hasBounds}
             onClearFilters={onClearFilters}
             onClearBounds={onClearBounds}
           />
-        )}
+        ))}
         {!showSkeleton && rows && rows.length > 0 && (
           <>
             <ul className={CARD_GRID_CLASS}>
@@ -246,6 +286,7 @@ export default function ListingCards({
                     refusal={r.sreality_id != null ? estimateRefusals?.[r.sreality_id] : undefined}
                     onEstimate={onEstimate}
                     orderPortal={orderPortal}
+                    cohortKind={cohortKind}
                   />
                 </li>
               ))}
@@ -256,7 +297,7 @@ export default function ListingCards({
               isFetchingNextPage={isFetchingNextPage}
               loadedCount={loaded}
               total={total}
-              rootRef={scrollRef}
+              rootRef={scroll === 'page' ? undefined : scrollRef}
             />
           </>
         )}
@@ -337,6 +378,7 @@ function Card({
   refusal,
   onEstimate,
   orderPortal,
+  cohortKind,
 }: {
   r: CardRow;
   coverTag: CoverTag;
@@ -354,6 +396,7 @@ function Card({
   refusal: string | undefined;
   onEstimate: (srealityId: number) => void;
   orderPortal: string | null;
+  cohortKind: CohortKind | null;
 }) {
   /* The card element itself, for the map-origin scrollIntoView below. Both
    * modes now render the SAME non-interactive wrapper, so this no longer has
@@ -371,7 +414,8 @@ function Card({
     }
   }, [hovered, scrollOnHover]);
   const hydration = useCardHydration();
-  const title = formatTitle(r);
+  const newTab = useNewTabProps();
+  const title = formatTitle(r, cohortKind);
   const storeyTag = storeyTagOf(r, hydration.floorFor(r.listing_id));
   /* The card's letter in merge mode, the stretched button that holds it (the
    * card's one focus stop there: the pointer focuses it, Tab moves on) and the
@@ -490,6 +534,8 @@ function Card({
         imgClassName={imageFilter}
         hoverZoom
         fadeChevrons
+        fadeTag
+        renderBadge={false}
         tabbableChevrons={false}
       >
         {merge && (
@@ -526,10 +572,10 @@ function Card({
           </div>
         )}
         {/* Metadata margin: file-tab badges down the right edge of the
-          * photo — the lifespan run, the portals, then the number of ads
-          * the property holds when it holds more than one. Status
-          * is carried by the card surface, not a pill. Borders-only,
-          * paper-3/85 + backdrop-blur over the photo. */}
+          * photo — the lifespan run, then the number of ads the property
+          * holds when it holds more than one (the portals sit in the card's
+          * foot, ruling P01). Status is carried by the card surface, not a
+          * pill. Borders-only, paper-3/85 + backdrop-blur over the photo. */}
         <div className="absolute top-1 right-1 max-w-[calc(100%-0.5rem)] flex flex-col items-end gap-1">
           <CardBadge title={lifespanTitle}>
             {inactive ? (
@@ -559,26 +605,11 @@ function Card({
               </>
             )}
           </CardBadge>
-          {badgePortals && (
-            <CardBadge
-              truncate
-              title={`${activePortals.length
-                ? 'Portály, kde má nemovitost aktivní inzerát'
-                : 'Portály, kde nemovitost inzerovala; žádný inzerát není aktivní'}: ${badgePortals}`}
-            >
-              {badgePortals}
-            </CardBadge>
-          )}
           {r.source_count >= 2 && (
-            /* Inset by the next-photo chevron (24px at right-1, z above the
-               badges): on a card narrower than ~215px its vertical band reaches
-               this third row and, on hover, would cover the badge's end. */
-            <span className="flex mr-7">
-              <CardBadge title={`Nemovitost spojuje ${r.source_count} ${inzeratu(r.source_count)} (počítají se i neaktivní)`}>
-                {r.source_count}
-                <span className="opacity-60 ml-1">{inzeratu(r.source_count)}</span>
-              </CardBadge>
-            </span>
+            <CardBadge title={`Nemovitost spojuje ${r.source_count} ${inzeratu(r.source_count)} (počítají se i neaktivní)`}>
+              {r.source_count}
+              <span className="opacity-60 ml-1">{inzeratu(r.source_count)}</span>
+            </CardBadge>
           )}
         </div>
       </ImageCarousel>
@@ -590,8 +621,9 @@ function Card({
             /* THE card's link, and the only one: `.stretched-link` (globals.css)
                spreads its hit area over the whole card, so the card still opens
                end-to-end while the anchor's accessible name is the listing
-               itself rather than the card's every control and figure. */
-            <Link to={propertyPath(r.property_id, r.listing_id)} className="stretched-link">
+               itself rather than the card's every control and figure. A new
+               tab on the desktop: following a card never unloads Browse. */
+            <Link to={propertyPath(r.property_id, r.listing_id)} {...newTab} className="stretched-link">
               {title}
             </Link>
           )}
@@ -604,10 +636,16 @@ function Card({
               </p>
             )}
             {storeyTag && (
-              /* `card-tip` keeps the tooltip hit-testable under the stretched link. */
+              /* `card-tip` keeps the tooltip hit-testable under the stretched link.
+                 A quiet inset label, no border (P06 note); on a delisted card,
+                 whose surface is already the inset, it sits one step up. */
               <span
                 title={storeyTag.full}
-                className="card-tip ml-auto shrink-0 px-1.5 py-px text-[0.6rem] tabular-nums whitespace-nowrap rounded-[var(--radius-xs)] border border-[var(--color-rule)] text-[var(--color-ink-3)]"
+                className={[
+                  'card-tip ml-auto shrink-0 px-1.5 py-px text-[0.6rem] tabular-nums whitespace-nowrap',
+                  'rounded-[var(--radius-xs)] text-[var(--color-ink-3)]',
+                  inactive ? 'bg-[var(--color-paper)]' : 'bg-[var(--color-inset)]',
+                ].join(' ')}
               >
                 {storeyTag.text}
               </span>
@@ -638,6 +676,21 @@ function Card({
             {fmtMeasuredPricePerM2(r.price_per_m2, ppm2BasisFromToken(r.price_per_m2_basis))}
           </p>
         </div>
+        {badgePortals && (
+          /* The foot's first line (ruling P01): quiet text that loses its END
+             when long. Only the text is hit-testable, so the rest of the line
+             still opens the card. */
+          <p className="mt-0.5 flex min-w-0 text-[0.62rem] text-[var(--color-ink-3)]">
+            <span
+              title={`${activePortals.length
+                ? 'Portály, kde má nemovitost aktivní inzerát'
+                : 'Portály, kde nemovitost inzerovala; žádný inzerát není aktivní'}: ${badgePortals}`}
+              className="card-tip min-w-0 truncate"
+            >
+              {badgePortals}
+            </span>
+          </p>
+        )}
         {r.mf_gross_yield_pct != null && (
           <p
             className="card-tip mt-0.5 text-[0.62rem] text-[var(--color-ink-3)] tabular-nums"
@@ -728,7 +781,21 @@ function storeyTagOf(
   };
 }
 
-function formatTitle(r: CardRow): string {
+function formatTitle(r: CardRow, cohortKind: CohortKind | null): string {
+  const measures: string[] = [];
+  if (r.area_m2 != null) measures.push(fmtArea(r.area_m2));
+  const plot = plotBesideArea(r);
+  if (plot != null) measures.push(fmtArea(plot, 'plot'));
+  /* Of the kind the filter pins: "2+kk · 54 m²". A subtype ("Vila") still names
+     what the filter does not; a card with nothing left keeps the full title. */
+  if (
+    cohortKind != null
+    && r.category_main === cohortKind.categoryMain
+    && r.category_type === cohortKind.categoryType
+  ) {
+    const short = [...listingKindParts(r), ...measures];
+    if (short.length > 0) return short.join(' · ');
+  }
   // The specific subtype is the noun for commercial/houses ("Ubytování",
   // "Činžovní dům"); apartments + subtype-less rows fall back to the generic
   // category word ("Byt", "Komerční prostor"). disposition still appends for
@@ -737,10 +804,7 @@ function formatTitle(r: CardRow): string {
   const deal = r.category_type === 'pronajem' ? 'k pronájmu' : 'na prodej';
   const parts = [`${kind} ${deal}`];
   if (r.disposition) parts.push(r.disposition);
-  if (r.area_m2 != null) parts.push(fmtArea(r.area_m2));
-  const plot = plotBesideArea(r);
-  if (plot != null) parts.push(fmtArea(plot, 'plot'));
-  return parts.join(' · ');
+  return [...parts, ...measures].join(' · ');
 }
 
 /* -------------------------------------------------------------------------- */
@@ -775,6 +839,7 @@ function EstimateCorner({
   refusal: string | undefined;
   onEstimate: (srealityId: number) => void;
 }) {
+  const newTab = useNewTabProps();
   const running =
     estimating ||
     estimate?.status === 'pending' ||
@@ -810,6 +875,7 @@ function EstimateCorner({
             subject_source: ad.source,
             subject_source_id_native: ad.source_id_native,
           })}
+          {...newTab}
           title="Náš odhad nájmu — otevřít detail odhadu"
           className="inline-flex items-center rounded-[var(--radius-xs)] border border-[var(--color-copper)] px-1.5 py-0.5 text-[0.62rem] font-medium tabular-nums text-[var(--color-copper)] hover:bg-[var(--color-copper)]/10 transition-colors"
         >
@@ -845,16 +911,12 @@ function EstimateCorner({
 /* file-tab silhouette consistent across cards.                                */
 /* -------------------------------------------------------------------------- */
 
-/* `truncate`: a text badge that fits the card by losing its END (the portal
- * list); the others keep their whole run and overflow as they always did. */
 function CardBadge({
   children,
   title,
-  truncate = false,
 }: {
   children: ReactNode;
   title?: string;
-  truncate?: boolean;
 }) {
   return (
     <span
@@ -864,13 +926,12 @@ function CardBadge({
         // stretched link's ::after (card-tip), below every control.
         title ? 'card-tip' : '',
         'inline-flex items-center px-1.5 py-0.5 text-[0.6rem] tracking-[0.12em]',
-        truncate ? 'max-w-full' : '',
         'uppercase rounded-[var(--radius-xs)] border backdrop-blur-sm font-medium',
         'tabular-nums whitespace-nowrap',
         'bg-[var(--color-paper-3)]/85 border-[var(--color-rule)] text-[var(--color-ink-2)]',
       ].join(' ')}
     >
-      {truncate ? <span className="truncate min-w-0">{children}</span> : children}
+      {children}
     </span>
   );
 }

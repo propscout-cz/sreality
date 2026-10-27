@@ -693,9 +693,7 @@ export interface PipelineBoardCard {
   price_change_count: number | null;
   /* The five RÚIAN codes the ONE place predicate tests (lib/districtCodes) —
    * the board filters its cards in the browser, so it carries the same codes
-   * the server-side predicate uses. `obec_id` doubles as the join key to the
-   * curated-city index strip (= curated_cities.admin_boundary_id; see
-   * lib/useCityQuality). */
+   * the server-side predicate uses. */
   obec_id: number | null;
   cast_obce_id: number | null;
   ulice_id: number | null;

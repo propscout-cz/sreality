@@ -13,6 +13,7 @@ import {
   PIPELINE_CARD_GEOMETRY,
   PIPELINE_CARD_SIZE_LABELS,
   PIPELINE_CARD_SIZES,
+  PIPELINE_CLOSED_LANE_WIDTH,
   usePipelineCardSize,
 } from './pipelineCardSize';
 
@@ -23,7 +24,7 @@ describe('pipeline card geometry', () => {
     for (const size of PIPELINE_CARD_SIZES) {
       const geo = PIPELINE_CARD_GEOMETRY[size];
       for (const [field, value] of Object.entries(geo)) {
-        if (field === 'stacked') continue;
+        if (typeof value === 'boolean') continue;
         expect(value, `${size}.${field}`).toMatch(/\S/);
       }
       expect(PIPELINE_CARD_SIZE_LABELS[size].label).toMatch(/\S/);
@@ -53,6 +54,22 @@ describe('pipeline card geometry', () => {
     expect(PIPELINE_CARD_GEOMETRY.sm.stacked).toBe(false);
     expect(PIPELINE_CARD_GEOMETRY.md.stacked).toBe(false);
     expect(PIPELINE_CARD_GEOMETRY.lg.stacked).toBe(true);
+  });
+
+  /* P20 (2026-10-27): the MF yield beside the dims line is a Velké-card detail. */
+  it('shows the MF yield at lg only', () => {
+    expect(PIPELINE_CARD_GEOMETRY.sm.showsYield).toBe(false);
+    expect(PIPELINE_CARD_GEOMETRY.md.showsYield).toBe(false);
+    expect(PIPELINE_CARD_GEOMETRY.lg.showsYield).toBe(true);
+  });
+
+  /* P22: the folded Uzavřené lane is one width at every size, and never a
+     column's — folded, it holds rows, not cards. */
+  it('folds the closed lane to a width of its own', () => {
+    expect(PIPELINE_CLOSED_LANE_WIDTH).toMatch(/^w-/);
+    for (const size of PIPELINE_CARD_SIZES) {
+      expect(PIPELINE_CARD_GEOMETRY[size].column).not.toBe(PIPELINE_CLOSED_LANE_WIDTH);
+    }
   });
 
   /* Whatever the size, the floor from #1399 stays a real target: a stage with

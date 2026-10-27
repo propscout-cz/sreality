@@ -399,3 +399,75 @@ describe('LocationPinAudit', () => {
     ).toBeInTheDocument();
   });
 });
+
+/* A pick-one is the ONE joined bar (operator ruling 2026-10-27, system.md § Option
+ * groups): the named group's first child is the track, no segment is a bordered chip
+ * of its own, the chosen one is filled copper. Pick-several rows stay chips. */
+function joinedBar(name: string | RegExp, lit: string | RegExp) {
+  const bar = screen.getByRole('group', { name });
+  expect(bar.firstElementChild).toHaveClass('inline-flex', 'border', 'bg-[var(--color-paper-2)]');
+  for (const b of within(bar).getAllByRole('button')) expect(b).not.toHaveClass('border');
+  const on = within(bar).getByRole('button', { name: lit });
+  expect(on).toHaveAttribute('aria-pressed', 'true');
+  expect(on).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+  return bar;
+}
+
+describe('LocationPinAudit pick-one rows', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(pinAudit.fetchPinAuditSummary).mockResolvedValue(SUMMARY);
+    vi.mocked(pinAudit.fetchPinAuditPage).mockResolvedValue({ rows: [ROW], nextCursor: null });
+    vi.mocked(waterfall.fetchLocationWaterfall).mockResolvedValue(WATERFALL);
+  });
+
+  it('draws the state, status and sibling choices as joined bars, Vše first', async () => {
+    renderPage();
+    await screen.findByTestId('pin-audit-matrix-sreality');
+    const state = joinedBar('Skupina inzerátů', /zpracováno, nerozhodnuto/);
+    expect(within(state).getByRole('button', { name: /čeká na zpracování \(45\)/ })).toHaveClass(
+      'text-[var(--color-ink-3)]',
+    );
+    const status = joinedBar('Stav inzerátu', 'Vše');
+    expect(within(status).getAllByRole('button').map((b) => b.textContent)).toEqual(['Vše', 'Běží', 'Stažené']);
+    const sibling = joinedBar('Jiný inzerát téže nemovitosti má polohu', 'Vše');
+    expect(within(sibling).getAllByRole('button').map((b) => b.textContent)).toEqual(['Vše', 'Má', 'Nemá']);
+    /* Pick-several stays chips: a portal is a bordered chip of its own. */
+    const portal = screen
+      .getAllByRole('button', { name: 'Sreality' })
+      .find((b) => b.hasAttribute('aria-pressed'));
+    expect(portal).toHaveClass('border');
+  });
+
+  it('sends the status picked on its bar to the server', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('pin-audit-matrix-sreality');
+    await user.click(
+      within(screen.getByRole('group', { name: 'Stav inzerátu' })).getByRole('button', { name: 'Stažené' }),
+    );
+    await waitFor(() => {
+      const calls = vi.mocked(pinAudit.fetchPinAuditPage).mock.calls;
+      expect(calls[calls.length - 1][0].status).toBe('delisted');
+    });
+    joinedBar('Stav inzerátu', 'Stažené');
+  });
+
+  it('sorts on a joined bar whose lit segment flips the direction', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('pin-audit-matrix-sreality');
+    joinedBar('Řadit podle', 'naposledy viděno ↓');
+    await user.click(screen.getByRole('button', { name: 'naposledy viděno ↓' }));
+    await waitFor(() => {
+      const calls = vi.mocked(pinAudit.fetchPinAuditPage).mock.calls;
+      expect(calls[calls.length - 1][1]).toEqual({ field: 'last_seen_at', direction: 'asc' });
+    });
+    joinedBar('Řadit podle', 'naposledy viděno ↑');
+    await user.click(screen.getByRole('button', { name: 'poprvé viděno' }));
+    await waitFor(() => {
+      const calls = vi.mocked(pinAudit.fetchPinAuditPage).mock.calls;
+      expect(calls[calls.length - 1][1]).toEqual({ field: 'first_seen_at', direction: 'desc' });
+    });
+  });
+});

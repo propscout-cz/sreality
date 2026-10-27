@@ -128,15 +128,42 @@ describe('<PhoneViewings>', () => {
   it('under Vše steps into the past and jumps to the previous viewing', async () => {
     renderAt();
     await screen.findByText('Seifertova, Praha 3 – Žižkov');
-    fireEvent.click(screen.getByRole('radio', { name: 'Vše' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Vše' }));
     expect(screen.getByRole('button', { name: 'Předchozí den' })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'Předchozí prohlídka: út 20. 10.' }));
     expect(await screen.findByText('Krátká, Brno')).toBeInTheDocument();
     expect(screen.getByTestId('search')).toHaveTextContent('?scope=all&day=2026-10-20');
     // Back to upcoming: a past day cannot stay open.
-    fireEvent.click(screen.getByRole('radio', { name: 'Nadcházející' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Nadcházející' }));
     expect(await screen.findByText('Seifertova, Praha 3 – Žižkov')).toBeInTheDocument();
     expect(screen.getByTestId('search')).toHaveTextContent(/^$/);
+  });
+
+  /* Operator ruling 2026-10-27 (system.md § Option groups): the scope is the one
+   * joined bar in its phone tone — chosen = ink on the inset well, never copper. */
+  it('picks the scope on the phone-tone joined bar', async () => {
+    renderAt();
+    await screen.findByText('Seifertova, Praha 3 – Žižkov');
+    const group = screen.getByRole('group', { name: 'Které prohlídky' });
+    const buttons = within(group).getAllByRole('button');
+    expect(buttons.map((b) => b.textContent)).toEqual(['Nadcházející', 'Vše']);
+    expect(Array.from(group.children)).toEqual(buttons);
+    expect(group).toHaveClass('border', 'border-[var(--color-rule-strong)]');
+    for (const b of buttons) {
+      expect(b).not.toHaveClass('border-l');
+      expect(b.className).not.toMatch(/copper/);
+    }
+    expect(buttons[0]).toHaveAttribute('aria-pressed', 'true');
+    expect(buttons[0]).toHaveClass('bg-[var(--color-inset)]', 'text-[var(--color-ink)]');
+    expect(buttons[1]).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(buttons[1]);
+    expect(screen.getByTestId('search')).toHaveTextContent('?scope=all');
+    expect(buttons[1]).toHaveAttribute('aria-pressed', 'true');
+    // A tap on the lit segment keeps it: the scope is never "none".
+    fireEvent.click(buttons[1]);
+    expect(screen.getByTestId('search')).toHaveTextContent('?scope=all');
+    expect(buttons[1]).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('flips the day on a sideways swipe, not on a scroll', async () => {

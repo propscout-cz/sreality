@@ -6,11 +6,11 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
-import type { OutreachCampaign, OutreachMessage } from '@/lib/api';
+import { updateOutreachCampaign, type OutreachCampaign, type OutreachMessage } from '@/lib/api';
 
 const campaign: OutreachCampaign = {
   id: 1,
@@ -52,6 +52,7 @@ vi.mock('@/lib/api', async (orig) => ({
   listOutreachMessages: vi.fn(),
   previewOutreachTargets: vi.fn(),
   listOutreachSuppressions: vi.fn().mockResolvedValue({ suppressions: [] }),
+  updateOutreachCampaign: vi.fn().mockResolvedValue({}),
 }));
 
 import OutreachDetail from './OutreachDetail';
@@ -80,5 +81,28 @@ describe('<OutreachDetail> letter fields', () => {
     const body = screen.getByRole('textbox', { name: 'Text zprávy' });
     expect(subject).toHaveValue('Spolupráce');
     expect(body).toHaveAccessibleName('Text zprávy');
+  });
+});
+
+/* The campaign's status setter is a pick-one, so it is the ONE joined bar (operator
+ * ruling 2026-10-27, system.md § Option groups), no longer outline-only chips with no
+ * pressed state; a click still writes the status at once. */
+describe('<OutreachDetail> status setter', () => {
+  it('draws koncept | aktivní | archiv as one joined bar, the campaign\'s status filled copper', () => {
+    renderPage();
+    const bar = screen.getByRole('group', { name: 'Stav kampaně' });
+    expect(bar.firstElementChild).toHaveClass('inline-flex', 'border', 'bg-[var(--color-paper-2)]');
+    expect(within(bar).getAllByRole('button').map((b) => b.textContent)).toEqual(['koncept', 'aktivní', 'archiv']);
+    const active = within(bar).getByRole('button', { name: 'aktivní' });
+    expect(active).toHaveAttribute('aria-pressed', 'true');
+    expect(active).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+    for (const b of within(bar).getAllByRole('button')) expect(b).not.toHaveClass('border');
+    expect(within(bar).getByRole('button', { name: 'archiv' })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('writes the status clicked', async () => {
+    renderPage();
+    fireEvent.click(within(screen.getByRole('group', { name: 'Stav kampaně' })).getByRole('button', { name: 'archiv' }));
+    await waitFor(() => expect(updateOutreachCampaign).toHaveBeenCalledWith(1, { status: 'archived' }));
   });
 });

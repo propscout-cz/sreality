@@ -47,6 +47,20 @@ function renderPage(entries = ['/new-dedup/training-set']) {
 
 const lastQuery = () => vi.mocked(api.listTrainingSet).mock.calls.at(-1)?.[0];
 
+/* The tray is one joined bar (operator ruling 2026-10-27): each segment reads its
+ * tray's name, then the count in it. */
+const TRAY_NAMES = {
+  positive: 'Training positive',
+  positive_reserve: 'Positive reserve',
+  negative: 'Training negative',
+  negative_reserve: 'Negative reserve',
+  excluded: 'Left out',
+} as const;
+type TrayName = keyof typeof TRAY_NAMES;
+const trayButton = (t: TrayName) =>
+  within(screen.getByRole('group', { name: 'tray' })).getByRole('button', { name: new RegExp(`^${TRAY_NAMES[t]}`) });
+const trayCount = (t: TrayName) => trayButton(t).textContent?.slice(TRAY_NAMES[t].length).trim();
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.listTrainingSetHeads).mockResolvedValue({ data: HEADS as never });
@@ -65,8 +79,8 @@ describe('<NewDedupTrainingSet> four trays over stored membership', () => {
     await waitFor(() => expect(api.listTrainingSet).toHaveBeenCalledWith(
       { tag_id: 42, state: 'positive', in_training: true, limit: 50, offset: 0 },
     ));
-    expect(screen.getByTestId('tray-count-positive')).toHaveTextContent('300');
-    expect(screen.getByTestId('tray-count-positive_reserve')).toHaveTextContent('536');
+    expect(trayCount('positive')).toBe('300');
+    expect(trayCount('positive_reserve')).toBe('536');
   });
 
   it('the reserve tray is the positives the operator has NOT admitted', async () => {
@@ -312,8 +326,8 @@ describe('<NewDedupTrainingSet> four trays over stored membership', () => {
     it('shows a tray count and nothing about who decided it', async () => {
       renderPage();
       await screen.findByTestId('training-tile-11');
-      expect(screen.getByTestId('tray-count-negative')).toHaveTextContent('1000');
-      expect(screen.getByTestId('tray-count-negative_reserve')).toHaveTextContent('9009');
+      expect(trayCount('negative')).toBe('1000');
+      expect(trayCount('negative_reserve')).toBe('9009');
       const tile = screen.getByTestId('training-tile-11');
       for (const word of ['machine', 'yours']) {
         expect(within(tile).queryByText(word)).toBeNull();
@@ -412,8 +426,8 @@ describe('<NewDedupTrainingSet> moving between reserve and the training set', ()
     expect(within(tile).getByTestId('move-301')).toHaveTextContent('move to training');
     await user.click(within(tile).getByTestId('move-301'));
     await waitFor(() => expect(api.setTrainingMembership).toHaveBeenCalledWith(42, [301], true));
-    await waitFor(() => expect(screen.getByTestId('tray-count-positive')).toHaveTextContent('301'));
-    expect(screen.getByTestId('tray-count-positive_reserve')).toHaveTextContent('535');
+    await waitFor(() => expect(trayCount('positive')).toBe('301'));
+    expect(trayCount('positive_reserve')).toBe('535');
   });
 
   it('returns an admitted photo to the reserve', async () => {
@@ -427,8 +441,8 @@ describe('<NewDedupTrainingSet> moving between reserve and the training set', ()
     expect(within(tile).getByTestId('move-11')).toHaveTextContent('return to reserve');
     await user.click(within(tile).getByTestId('move-11'));
     await waitFor(() => expect(api.setTrainingMembership).toHaveBeenCalledWith(42, [11], false));
-    await waitFor(() => expect(screen.getByTestId('tray-count-positive')).toHaveTextContent('299'));
-    expect(screen.getByTestId('tray-count-positive_reserve')).toHaveTextContent('537');
+    await waitFor(() => expect(trayCount('positive')).toBe('299'));
+    expect(trayCount('positive_reserve')).toBe('537');
   });
 
   it('moves a whole page, chunked, and previews exactly what it will take', async () => {
@@ -468,8 +482,8 @@ describe('<NewDedupTrainingSet> changing a mark', () => {
     const tile = await screen.findByTestId('training-tile-11');
     await user.click(within(tile).getByRole('button', { name: /^negative 11$/ }));
     // Still pending — the numbers have already moved.
-    expect(screen.getByTestId('tray-count-positive')).toHaveTextContent('299');
-    expect(screen.getByTestId('tray-count-negative')).toHaveTextContent('1001');
+    expect(trayCount('positive')).toBe('299');
+    expect(trayCount('negative')).toBe('1001');
     expect(tile).toHaveAttribute('data-state', 'negative');
     resolve({ data: {} });
     await waitFor(() => expect(api.setNewDedupTagAnnotation).toHaveBeenCalledWith(42, 11, 'negative', null));
@@ -510,13 +524,13 @@ describe('<NewDedupTrainingSet> changing a mark', () => {
     const { qc } = renderPage(['/new-dedup/training-set?set=excluded']);
     const tile = await screen.findByTestId('training-tile-11');
     await user.click(within(tile).getByRole('button', { name: /^positive 11$/ }));
-    expect(screen.getByTestId('tray-count-excluded')).toHaveTextContent('1');
-    expect(screen.getByTestId('tray-count-positive')).toHaveTextContent('301');
+    expect(trayCount('excluded')).toBe('1');
+    expect(trayCount('positive')).toBe('301');
 
     await act(async () => reject(new Error('boom')));
     await waitFor(() => expect(tile).toHaveAttribute('data-state', 'excluded'));
-    expect(screen.getByTestId('tray-count-excluded')).toHaveTextContent('2');
-    expect(screen.getByTestId('tray-count-positive')).toHaveTextContent('300');
+    expect(trayCount('excluded')).toBe('2');
+    expect(trayCount('positive')).toBe('300');
     const page = qc.getQueryData<{ data: { rows: Array<{ image_id: number; excluded_reason: string | null }> } }>(
       trainingSetKeys.rows(42, 'excluded', 0, 50));
     expect(page?.data.rows.find((r) => r.image_id === 11)?.excluded_reason).toBe('blurry');
@@ -629,5 +643,53 @@ describe('<NewDedupTrainingSet> notes', () => {
     await user.type(input, 'must be frontal');
     await user.click(within(screen.getByTestId('note-form-12')).getByRole('button', { name: 'save' }));
     await waitFor(() => expect(api.editTagLabelNote).toHaveBeenCalledWith(36, 'must be frontal'));
+  });
+});
+
+/* A pick-one is the ONE joined bar (operator ruling 2026-10-27, system.md § Option
+ * groups): the tray and the page size are bars, the chosen segment filled copper, no
+ * sage or ink outline of their own. The review state keeps its per-state colours: the
+ * head list reuses them as its progress view. */
+describe('<NewDedupTrainingSet> pick-one rows are joined bars', () => {
+  const expectBar = (name: string, lit: string | RegExp) => {
+    const bar = screen.getByRole('group', { name });
+    expect(bar.firstElementChild).toHaveClass('inline-flex', 'border', 'bg-[var(--color-paper-2)]');
+    for (const b of within(bar).getAllByRole('button')) expect(b).not.toHaveClass('border');
+    const on = within(bar).getByRole('button', { name: lit });
+    expect(on).toHaveAttribute('aria-pressed', 'true');
+    expect(on).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+    /* One class per assertion: jest-dom's not.toHaveClass(a, b) fails only when BOTH are present. */
+    for (const c of ['border-[var(--color-sage)]', 'border-[var(--color-ink-2)]']) expect(on).not.toHaveClass(c);
+    return bar;
+  };
+
+  it('draws the tray as a bar, each segment its tray and its count, the order kept', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('training-tile-11');
+    const tray = expectBar('tray', /^Training positive/);
+    expect(within(tray).getAllByRole('button').map((b) => b.textContent)).toEqual([
+      'Training positive 300', 'Positive reserve 536', 'Training negative 1000',
+      'Negative reserve 9009', expect.stringMatching(/^Left out \d+$/),
+    ]);
+    expect(trayButton('positive_reserve')).toHaveAttribute('title', expect.stringMatching(/not admitted/));
+    await user.click(trayButton('negative'));
+    await waitFor(() => expectBar('tray', /^Training negative/));
+  });
+
+  it('draws the page size as a bar', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('training-tile-11');
+    expectBar('per page', '50');
+    await user.click(within(screen.getByRole('group', { name: 'per page' })).getByRole('button', { name: '500' }));
+    await waitFor(() => expectBar('per page', '500'));
+  });
+
+  it('keeps the review state a radio group in its own colours', async () => {
+    renderPage();
+    const group = await screen.findByRole('radiogroup', { name: 'review state' });
+    expect(within(group).getAllByRole('radio')).toHaveLength(3);
+    expect(screen.getByTestId('review-not_ready')).toHaveClass('border', 'border-[var(--color-ink-2)]');
   });
 });
