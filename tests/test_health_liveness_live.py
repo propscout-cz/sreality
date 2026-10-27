@@ -677,6 +677,32 @@ def test_a_row_whose_runs_go_on_through_its_registration_is_judged_whole(cur: An
     assert job["facts"]["joined_at"] is None and job["facts"]["streak"] == 6
 
 
+def test_a_boot_that_re_stamps_registry_at_keeps_a_failing_rows_streak(cur: Any) -> None:
+    """C3 (review, defect 2): an image that re-stamps registry_at on every boot (main's job_lease, or a revert of
+    #2026's) cannot move a live row's join (682's trigger), so a boot after an outage longer than C + T keeps the
+    streak of a row failing for 30 h, and its re-run still reads Problem."""
+    _runner_beat(cur, "r1", "0 minutes")
+    _job(cur, "outage", due="-8 hours", last_ok="2 days", failures=5, last_outcome="failed", last_error="exit 1",
+         joined="10 days")
+    _run(cur, "outage", started="2 days 1 minute", ended="2 days", outcome="ok", exit_code=0)
+    for started, ended in (("30 hours", "1799 minutes"), ("24 hours", "1439 minutes"), ("18 hours", "1079 minutes"),
+                           ("12 hours", "719 minutes"), ("510 minutes", "509 minutes")):
+        _run(cur, "outage", started=started, ended=ended, outcome="failed", exit_code=1)
+    cur.execute("update scheduled_jobs set registry_at = now() where job_name = 'outage'")  # the boot, 8.5 h on
+    cur.execute("select now() - registry_at from scheduled_jobs where job_name = 'outage'")
+    assert cur.fetchone() == (_dt.timedelta(days=10),)
+    _run(cur, "outage", started="0 minutes", ended="0 minutes", outcome="failed", exit_code=1)  # the overdue re-run
+    cur.execute("update scheduled_jobs set consecutive_failures = 6, due_at = now() + interval '32 minutes' "
+                "where job_name = 'outage'")
+
+    cells = _liveness(cur)[3]
+
+    assert _said(cells, "job/outage") == (
+        "fail", "outage: 6 failed runs in a row, the first 30.0 h ago; the last: exit 1")
+    [job] = cells["job/outage"]
+    assert job["facts"]["streak"] == 6
+
+
 def test_a_quarterly_job_whose_ok_run_was_pruned_is_not_read_as_registered_again(cur: Any) -> None:
     """C3: the runner prunes job_runs after 90 days and map_overlays runs every 91, so a day before its next slot its
     ok run is gone; last_success_at, written by that run's release, still says it ran here."""

@@ -6,7 +6,13 @@
 --   a sibling on its resource, waiting with no runner beating. The canary's failing_cells_have_incidents reads every
 --   liveness cell, so a job's Problem opens an incident and e-mails through the existing canary (ruling R-1).
 --
--- WHAT CHANGES. Additive only: two new functions and one function replace. No table, column, row, view or grant.
+-- WHAT CHANGES. Additive only: three new functions, one trigger and one function replace. No table, column, row,
+-- view or grant.
+--   * public.scheduled_jobs_keep_registry_at() and its BEFORE UPDATE OF registry_at trigger on scheduled_jobs:
+--     registry_at is when a row joined the runner, stamped when it is new, adopted (NULL: a lane's held() row) or
+--     un-retired and kept by every later boot (job_lease._REGISTER_SQL), and the database keeps it too, so an image
+--     that re-stamps it on every boot (main's job_lease before #2026, or a revert) cannot move it. To move a live
+--     row's registry_at on purpose, retire it first.
 --   * public.health_span(double precision): a duration as Health reads it. Reads nothing.
 --   * public.health_job_cells(interval): one job/<name> cell per registered live job-runner row (_DUE_SQL's predicate:
 --     runner 'job-runner', registry_at set, retired_at null), one per entry a fresh replica's boot refused that has no
@@ -17,14 +23,14 @@
 --     raises, the watcher writes one 'job-cells' Problem plus a listed 'unknown' placeholder for each open job/* and
 --     job-runner incident, so the teller (toolkit/system_alerts) neither keeps, recovers nor retires them, and the
 --     row reads 'fail', never 'unknown'.
---   EXECUTE on all three is revoked from public, anon and authenticated; the two new functions are registered UNGATED
---   (acl) in tests/_admin_gate_registry.py (no in-file annotation since 676).
+--   EXECUTE on all four is revoked from public, anon and authenticated; the two helpers are registered UNGATED (acl)
+--   in tests/_admin_gate_registry.py (no in-file annotation since 676); the trigger function reads no table.
 --
 -- APPLY through apply_migration.yml (--ref the feature branch) before merging. Safe in either order: the deployed code
--- reads nothing this changes, and with no registered job-runner row the helper writes no cell. Until this PR's
--- job_lease deploys, register re-stamps registry_at on every boot: the join test then holds only for a row with no
--- run in the cadence and budget before that boot, so a running row's history is never dropped. The post-condition
--- runs the helper over a rolled-back probe row, so every per-row expression is evaluated at apply.
+-- reads nothing this changes, and with no registered job-runner row the helper writes no cell. Before this PR's
+-- job_lease deploys (or after a revert of it), register re-stamps registry_at on every boot: the trigger keeps it.
+-- The post-condition runs the helper over a rolled-back probe row, so every per-row expression is evaluated at
+-- apply, and re-stamps that row to prove the trigger keeps its registry_at.
 -- ROLLBACK: forward only (rule 1). Every statement is idempotent: a re-run passes the precondition (this file's own
 -- body), and a lock-timeout retry re-runs the whole file.
 
@@ -43,6 +49,25 @@ begin
   end if;
 end
 $pre$;
+
+-- registry_at is when the row joined the runner: a later write moves it only on a row adopted (NULL) or un-retired.
+create or replace function public.scheduled_jobs_keep_registry_at()
+returns trigger
+language plpgsql
+set search_path = public
+as $keep$
+begin
+  if old.registry_at is not null and old.retired_at is null then
+    new.registry_at := old.registry_at;
+  end if;
+  return new;
+end
+$keep$;
+revoke all on function public.scheduled_jobs_keep_registry_at() from public, anon, authenticated;
+
+create or replace trigger scheduled_jobs_keep_registry_at
+  before update of registry_at on public.scheduled_jobs
+  for each row execute function public.scheduled_jobs_keep_registry_at();
 
 -- A duration as Health reads it: s under 2 min, min under 2 h, h under 2 d, else d. Reads nothing.
 create or replace function public.health_span(p_s double precision)
@@ -557,8 +582,10 @@ begin
      or has_function_privilege('anon', 'public.health_job_cells(interval)', 'execute')
      or has_function_privilege('authenticated', 'public.health_job_cells(interval)', 'execute')
      or has_function_privilege('anon', 'public.health_span(double precision)', 'execute')
-     or has_function_privilege('authenticated', 'public.health_span(double precision)', 'execute') then
-    raise exception '682: a browser role can execute the watcher, health_job_cells() or health_span()';
+     or has_function_privilege('authenticated', 'public.health_span(double precision)', 'execute')
+     or has_function_privilege('anon', 'public.scheduled_jobs_keep_registry_at()', 'execute')
+     or has_function_privilege('authenticated', 'public.scheduled_jobs_keep_registry_at()', 'execute') then
+    raise exception '682: a browser role can execute the watcher, health_job_cells(), health_span() or the trigger';
   end if;
   v_cells := public.health_job_cells(interval '10 minutes');
   if jsonb_typeof(v_cells) <> 'array' or exists (
@@ -580,8 +607,8 @@ begin
       (select c ->> 'message' from jsonb_array_elements(v_cells) c where c ->> 'subject' = 'job-cells' limit 1);
   end if;
   -- A rolled-back probe evaluates every per-row expression (the laterals, the sibling wait, format(), the
-  -- health_span casts, the conditions), which no registered row would before the first job moves. Never committed,
-  -- so no runner sees it.
+  -- health_span casts, the conditions), which no registered row would before the first job moves, and the trigger.
+  -- Never committed, so no runner sees it.
   begin
     insert into scheduled_jobs (job_name, cadence, runner, registry_at, offset_s, timeout_s, memory_mb, cpus, due_at,
                                 resource, consecutive_failures, last_outcome, last_error)
@@ -592,13 +619,17 @@ begin
             now() - interval '50 minutes', 'failed', 1);
     insert into job_runs (job_name, holder, resource, started_at)
     values ('_682_probe', 'probe/b', '_682_probe', now() - interval '5 minutes');
+    update scheduled_jobs set registry_at = now() - interval '1 day' where job_name = '_682_probe';  -- a re-stamp
+    if not exists (select 1 from scheduled_jobs where job_name = '_682_probe' and registry_at = now()) then
+      raise exception '682: a write moved a live row''s registry_at';
+    end if;
     select e into v_probe from jsonb_array_elements(public.health_job_cells(interval '10 minutes')) e
      where e ->> 'subject' = 'job/_682_probe';
     if v_probe is null or v_probe ->> 'status' not in ('ok', 'warn', 'fail')
        or not starts_with(v_probe ->> 'message', '_682_probe: ') then
       raise exception '682: health_job_cells() does not judge a registered row: %', v_probe;
     end if;
-    raise exception '682 probe rolled back';  -- the sentinel: undoes the three inserts
+    raise exception '682 probe rolled back';  -- the sentinel: undoes the probe's writes
   exception when raise_exception then
     if sqlerrm <> '682 probe rolled back' then
       raise;

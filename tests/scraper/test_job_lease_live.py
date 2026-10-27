@@ -416,22 +416,55 @@ def test_register_un_retires_and_adopts_a_lane_era_row_keeping_its_lease_and_his
     assert [r[:2] for r in _runs(cur, lane_era)] == [("old", "ok")]
 
 
+def _joined(cur: Any, registry: str | None, *, retired: str | None = None) -> str:
+    """A job-runner row that joined `registry` ago (None: a lane's row, registry_at NULL), retired `retired` ago."""
+    name = f"test-job-{uuid.uuid4().hex[:12]}"
+    cur.execute("INSERT INTO scheduled_jobs (job_name, cadence, runner, due_at, offset_s, timeout_s, registry_at,"
+                " retired_at, consecutive_failures, last_outcome, last_error)"
+                " VALUES (%s, '1 hour', 'job-runner', now() + interval '1 hour', 0, 600, now() - %s::interval,"
+                " now() - %s::interval, 4, 'failed', 'exit 1')", (name, registry, retired))
+    return name
+
+
 def test_registry_at_is_when_the_row_joined_the_runner_and_a_later_boot_keeps_it(cur: Any) -> None:
-    """Health (migration 682) judges a row that joined after a gap on its runs since: a boot re-registering a live row
-    must not move that moment, and an un-retire or an adoption must."""
+    """Health (migration 682) judges a row on its runs since registry_at: a boot re-registering a live row must not
+    move that moment, and an un-retire or an adoption must."""
     _now(cur)
-    live, retired = _entry(), _entry()
-    job_lease.register(cur.connection, [live, retired])
-    lane_era = _job(cur, due=None)
-    cur.execute("UPDATE scheduled_jobs SET registry_at = now() - interval '3 days' WHERE job_name = ANY(%s)",
-                ([live.name, retired.name],))
-    cur.execute("UPDATE scheduled_jobs SET retired_at = now() - interval '1 day' WHERE job_name = %s",
-                (retired.name,))
-    job_lease.register(cur.connection, [live, retired, _entry(lane_era)])
+    live, retired, lane_era = _joined(cur, "3 days"), _joined(cur, "3 days", retired="1 day"), _joined(cur, None)
+    job_lease.register(cur.connection, [_entry(live), _entry(retired), _entry(lane_era)])
     cur.execute("SELECT job_name, now() - registry_at FROM scheduled_jobs WHERE job_name = ANY(%s)",
-                ([live.name, retired.name, lane_era],))
-    assert dict(cur.fetchall()) == {live.name: timedelta(days=3), retired.name: timedelta(0),
-                                    lane_era: timedelta(0)}
+                ([live, retired, lane_era],))
+    assert dict(cur.fetchall()) == {live: timedelta(days=3), retired: timedelta(0), lane_era: timedelta(0)}
+
+
+def test_the_database_keeps_a_live_rows_registry_at_whatever_the_image_writes(cur: Any) -> None:
+    """Migration 682's trigger: registry_at moves only for a row adopted (NULL) or un-retired, so an image that
+    re-stamps it on every boot (main's job_lease before #2026, or a revert of it) never moves a live row's join, and
+    the rest of the UPDATE applies untouched."""
+    _now(cur)
+    live, retired, lane_era = _joined(cur, "3 days"), _joined(cur, "3 days", retired="1 day"), _joined(cur, None)
+    names = [live, retired, lane_era]
+
+    def rest() -> dict[str, Any]:
+        cur.execute("SELECT job_name, to_jsonb(s) - 'registry_at' - 'last_error' FROM scheduled_jobs s"
+                    " WHERE job_name = ANY(%s)", (names,))
+        return dict(cur.fetchall())
+
+    def joined_ago() -> dict[str, Any]:
+        cur.execute("SELECT job_name, now() - registry_at, last_error FROM scheduled_jobs WHERE job_name = ANY(%s)",
+                    (names,))
+        return {r[0]: r[1:] for r in cur.fetchall()}
+
+    before = rest()
+    cur.execute("UPDATE scheduled_jobs SET registry_at = now() - interval '1 hour', last_error = 'applied'"
+                " WHERE job_name = ANY(%s)", (names,))
+    assert joined_ago() == {live: (timedelta(days=3), "applied"), retired: (timedelta(hours=1), "applied"),
+                            lane_era: (timedelta(hours=1), "applied")}
+    assert rest() == before
+    # main's _REGISTER_SQL re-stamps through its upsert
+    cur.execute("INSERT INTO scheduled_jobs (job_name, cadence, runner) VALUES (%s, '1 hour', 'job-runner')"
+                " ON CONFLICT (job_name) DO UPDATE SET registry_at = now()", (live,))
+    assert joined_ago()[live] == (timedelta(days=3), "applied")
 
 
 def test_a_row_the_database_refuses_is_skipped_and_its_siblings_still_land(cur: Any) -> None:
@@ -535,8 +568,9 @@ def test_a_live_run_is_never_reaped(cur: Any) -> None:
 
 def test_due_lists_free_reconciled_rows_oldest_first(cur: Any) -> None:
     _now(cur)
-    older, newer, requested, paused, open_run, sibling, unregistered = (
-        _registered_job(cur, resource="test-heavy" if i == 5 else None) for i in range(7))
+    older, newer, requested, paused, open_run, sibling = (
+        _registered_job(cur, resource="test-heavy" if i == 5 else None) for i in range(6))
+    unregistered = _job(cur)  # registry_at NULL: a lane's row
     for name, ago in ((older, "2 hours"), (newer, "1 hour"), (paused, "3 hours"), (open_run, "4 hours"),
                       (sibling, "5 hours"), (unregistered, "6 hours")):
         cur.execute("UPDATE scheduled_jobs SET due_at = now() - %s::interval WHERE job_name = %s", (ago, name))
@@ -548,7 +582,6 @@ def test_due_lists_free_reconciled_rows_oldest_first(cur: Any) -> None:
     _open_lapsed(cur, open_run)  # a lapsed run belongs to the reaper, not to the next claim
     holder = _registered_job(cur, resource="test-heavy")
     cur.execute("INSERT INTO job_runs (job_name, holder, resource) VALUES (%s, 'A', 'test-heavy')", (holder,))
-    cur.execute("UPDATE scheduled_jobs SET registry_at = NULL WHERE job_name = %s", (unregistered,))
     names = [older, newer, requested, paused, open_run, sibling, unregistered, holder]
     assert job_lease.due(cur.connection, names) == [older, requested, newer]
 
