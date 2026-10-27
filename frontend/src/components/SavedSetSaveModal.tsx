@@ -109,7 +109,7 @@ export default function SavedSetSaveModal({ words, mode, initial, checkbox, onSu
             className={[
               'flex h-4 w-4 shrink-0 items-center justify-center rounded-[3px] border text-[0.6rem]',
               checked
-                ? 'border-[var(--color-copper)] bg-[var(--color-copper)] text-white'
+                ? 'border-[var(--color-copper)] bg-[var(--color-copper)] text-[var(--color-on-copper)]'
                 : 'border-[var(--color-rule-strong)] text-transparent',
             ].join(' ')}
             aria-hidden
@@ -140,7 +140,7 @@ export default function SavedSetSaveModal({ words, mode, initial, checkbox, onSu
           type="button"
           onClick={() => void submit()}
           disabled={trimmed.length === 0 || busy}
-          className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors disabled:opacity-50"
+          className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] transition-colors disabled:opacity-50"
         >
           {busy ? words.saving : words.submit[mode]}
         </button>

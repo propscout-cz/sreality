@@ -445,7 +445,7 @@ function EmptyDay({
         <button
           type="button"
           onClick={() => onGo(next)}
-          className="mt-5 inline-flex h-11 items-center gap-1.5 rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-4 text-[14px] font-medium text-white active:bg-[var(--color-copper-2)]"
+          className="mt-5 inline-flex h-11 items-center gap-1.5 rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-4 text-[14px] font-medium text-[var(--color-on-copper)] active:bg-[var(--color-copper-2)]"
         >
           Další prohlídka · {shortDay(next, todayKey)}
           <ChevronIcon className="h-4 w-4" />

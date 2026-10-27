@@ -95,7 +95,7 @@ function Header() {
       <div className="flex items-center gap-3">
         <Link
           to={ROUTES.browse.build()}
-          className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
+          className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] transition-colors"
           title="Watchdogs are created by saving a filter on the Browse page."
         >
           + New in Browse

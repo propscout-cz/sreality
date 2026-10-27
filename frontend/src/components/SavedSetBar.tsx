@@ -602,7 +602,7 @@ export default function SavedSetBar<T extends SavedSetItem>({
         <button
           type="button"
           onClick={() => setModal({ mode: 'update', item: active })}
-          className="px-2.5 py-1 text-[0.8rem] rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
+          className="px-2.5 py-1 text-[0.8rem] rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] transition-colors"
           title={copy.updateHint}
         >
           {copy.submit.update}

@@ -22,10 +22,10 @@
  * which is fine since the extension is always built from the full repo.
  */
 
-export const APP_NAME = 'Limen Reality';
+export const APP_NAME = 'PropScout.cz';
 
-/** Abbreviation used as the browser-tab title prefix ("LR: …"). */
-export const APP_SHORT = 'LR';
+/** Abbreviation used as the browser-tab title prefix ("PS: …"). */
+export const APP_SHORT = 'PS';
 
 /** chrome://extensions display name — brand + what the panel does. */
 export const EXTENSION_NAME = `${APP_NAME} — výnos & pipeline`;
