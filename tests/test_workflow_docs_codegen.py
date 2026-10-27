@@ -60,6 +60,15 @@ def test_links_point_at_the_workflow() -> None:
         assert d["sourceUrl"].endswith(f"/.github/workflows/{d['filename']}")
 
 
+def test_links_name_the_repo_not_the_checkout_remote() -> None:
+    # CI checks the committed file against a regen; a regen that read the clone's remote
+    # drifted on every checkout still pointing at the repo's old owner after #2008.
+    assert not hasattr(MOD, "subprocess")
+    for d in _docs():
+        assert d["runsUrl"].startswith("https://github.com/propscout-cz/sreality/")
+        assert d["sourceUrl"].startswith("https://github.com/propscout-cz/sreality/")
+
+
 def test_generate_is_deterministic() -> None:
     assert MOD.generate() == MOD.generate()
 

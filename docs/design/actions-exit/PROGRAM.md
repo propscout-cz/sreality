@@ -11,7 +11,7 @@ The repo goes private, after the recurring jobs have left GitHub Actions.
 
 - Public repos get free Actions. A private one is billed per job-minute above the plan's pool. This repo
   runs about 112,000 billable minutes a month; private with nothing moved it would cost about $650/month.
-- The repo moves into a company organisation (`propscout`) on **GitHub Enterprise Cloud** ($21/month,
+- The repo moves into a company organisation (`propscout-cz`) on **GitHub Enterprise Cloud** ($21/month,
   50,000 included minutes). CI, the canary and the click-to-run tools stay on GitHub inside that pool.
 - Every scheduled production job moves to one Railway service, the **job runner**. The flip happens when
   GitHub's billed run-rate has stayed under 50,000 minutes a month for seven days, so the GitHub bill is
@@ -221,7 +221,7 @@ regenerates `frontend/public/workflow-docs.json`. PRs touching the realtime work
 merge-window light. The repo stays public until W6, so every run during the move is free.
 
 ### W0 — Organisation first, then prune while Actions are free
-Operator steps (guided by a wizard script): create the `propscout` organisation on Enterprise Cloud
+Operator steps (guided in chat, ruling 2026-10-27): create the `propscout-cz` organisation on Enterprise Cloud
 ("personal accounts" type, metered, no trial), transfer the repo, reinstall Railway's GitHub App on the
 organisation and re-link the three services, one merge posts green statuses; recreate the price-stats token
 under the organisation; every peer session is told before and after. Coordination: after the propscout.cz
@@ -360,7 +360,7 @@ Net: workflow files 84 → ~38 (31 if R6a passes in full); live GitHub schedules
 
 ## 8. Rulings (operator, 2026-10-25)
 
-R1 shape approved · R2 organisation `propscout` on Enterprise Cloud, transfer in W0 after the domain cutover ·
+R1 shape approved · R2 organisation `propscout-cz` on Enterprise Cloud (`propscout` is another firm's account; ruling 2026-10-27), transfer in W0 after the domain cutover ·
 R3 flip only after the move, gated on 7 days under 50,000 billed min/month · R4 CLIP moves (R23: torch only
 in the runner's build) · R5 operator UX of moved jobs: one request form, Railway logs, pause by row ·
 R6a six parked/one-off workflows + `compute_image_phash` (bounded refill in the images lane) +
