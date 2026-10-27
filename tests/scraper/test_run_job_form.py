@@ -100,14 +100,13 @@ def test_the_form_only_files_a_request() -> None:
      "          ARGS: ${{ inputs.args }}\n          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}\n"),
     ('[[ "$JOB" =~', '[[ "${{ inputs.job }}" =~'),
     ("      - name: Install\n        run: pip install -e .\n",
-     "      - name: Install\n        run: pip install -e . && python -m scripts.verify_pipeline --host github-actions\n"),
+     "      - name: Install\n        run: pip install -e . && python -m scripts.verify_pipeline\n"),
     ('request "$JOB"', 'once "$JOB"'),
     (' --by "github:$GITHUB_TRIGGERING_ACTOR"', ""),
     ("          JOB: ${{ inputs.job }}\n", "          JOB: ${{ inputs.args }}\n"),
     ("        shell: bash\n", ""),
     ("set -euo pipefail", "set -eu"),
-    ('          [[ "$JOB" =~ ^[a-z0-9_]+$ ]] || { echo "not a job name: $JOB" | tee -a "$GITHUB_STEP_SUMMARY"; exit 2; }\n',
-     ""),
+    (f"          {GUARD} || {{ echo \"not a job name: $JOB\" | tee -a \"$GITHUB_STEP_SUMMARY\"; exit 2; }}\n", ""),
 ])
 def test_the_form_census_fires(old: str, new: str) -> None:
     text = _text()

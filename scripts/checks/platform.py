@@ -3,8 +3,9 @@
 `check_jobs` judges every scheduled machine once, one cell per job: each GitHub workflow on
 main by its production runs (a `schedule` run, or a `push` on main), the canary's poller that
 records them, each pg_cron job, each worker lane (from the heartbeat), each derived
-artifact and the job runner's registry (the watcher judges each runner job). `check_capacity` judges whether the database and the worker's memory keep up,
-against references an incident cannot erode. `check_llm` judges whether each provider is
+artifact and the job runner's registry (the watcher judges each runner job). `check_capacity`
+judges whether the database and the worker's memory keep up, against references an incident
+cannot erode. `check_llm` judges whether each provider is
 serving, per provider and per job, and whether fleet spend is sane. `check_migration_drift`
 asks the live catalog whether the newest merged migrations exist; it reads a checkout, so it
 stays on GitHub. Each check takes the harness's `thresholds`, sends every statement through the
