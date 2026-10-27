@@ -24,7 +24,7 @@ import pytest
 
 from location_data.claims_common import served_location_predicate
 from tests import sql_corpus
-from tests._live_property import REQUIRED_DB, cur  # noqa: F401 -- `cur` is the fixture
+from tests._live_property import REQUIRED_DB
 from toolkit import publication
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -311,7 +311,7 @@ _REKEYED = ("browse_projection", "properties_public", "recompute_city_proximity(
 
 
 @REQUIRED_DB
-def test_no_view_or_function_body_places_a_property_at_its_canonical_ad(cur: Any) -> None:  # noqa: F811
+def test_no_view_or_function_body_places_a_property_at_its_canonical_ad(cur: Any) -> None:
     cur.execute(_BODIES_SQL)
     bodies = {name: body or "" for name, body in cur.fetchall()}
     for name in _REKEYED:

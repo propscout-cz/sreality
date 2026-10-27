@@ -30,7 +30,6 @@ from scraper.jobs import RUNNER as _RUNNER, runner_jobs as _runner_jobs
 from scripts.checks.clock import fetchall, fetchone
 from scripts.checks.common import (
     BEAT_FRESH_S as _BEAT_FRESH_S,
-    CLOCK_SQL as _CLOCK_SQL,
     WORKER as _WORKER,
     ago as _ago,
     as_utc as _as_utc,

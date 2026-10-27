@@ -20,7 +20,7 @@ from psycopg import errors as pg_errors
 from autodedup.incremental_lane import LEASE_LOST, STOPPING
 from scraper import jobs
 from scripts.checks import platform as plat
-from scripts.checks.common import PREVIOUS_CELLS_SQL
+from scripts.checks.common import CLOCK_SQL, PREVIOUS_CELLS_SQL
 from scripts.migration_objects import SAFE_IDENT, load_migrations
 
 _UTC = _dt.timezone.utc
@@ -60,7 +60,7 @@ class _Conn:
     """Answers by the SQL constant a statement carries; records each and whether it was armed."""
 
     def __init__(self, answers: dict[str, Any], now: _dt.datetime = _NOW) -> None:
-        self.answers = {plat._CLOCK_SQL: [(now,)], **answers}
+        self.answers = {CLOCK_SQL: [(now,)], **answers}
         self.sent: list[tuple[str, Any, bool]] = []
         self._in_transaction = self._armed = False
         self._rows: list[Any] = []

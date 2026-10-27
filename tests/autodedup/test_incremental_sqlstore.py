@@ -30,7 +30,6 @@ from autodedup.incremental_lane import (
     CURSOR_FLIPPED,
     CURSOR_NEW,
     CURSOR_REVIVE,
-    CURSOR_SCOPE,
     LEASE_TTL_S,
     SqlStore,
     SqlWork,
