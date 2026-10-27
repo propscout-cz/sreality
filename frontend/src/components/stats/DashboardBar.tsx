@@ -7,7 +7,8 @@
  * duplicated as stored ("Duplikovat": a new row, "<name> (kopie)"). A dashboard
  * shared WITH the account is read-only: Načíst, Uložit jako vlastní, Přestat sledovat.
  * ONE own dashboard, under any name, is the property page's "Okolí dashboard"
- * (migration 664, lib/neighbourhood): its chip says so, it carries no filter (the
+ * (migration 664, lib/neighbourhood): its chip says so with an "Okolí" badge and a
+ * pin (ruling S06), it carries no filter (the
  * save dialog greys the box out), any other own dashboard's menu can make it so
  * ("Použít jako okolí dashboard"), and while the account has none the bar offers to
  * create it from the working board. */
@@ -27,8 +28,11 @@ import type { SavedDashboard } from '@/lib/types';
 import { pushToast } from '@/lib/toast';
 import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import Dialog, { DialogClose } from '@/components/Dialog';
-import SavedSetBar, { useSavedSet, type SavedSetCopy, type SavedSetMenuItem } from '@/components/SavedSetBar';
+import SavedSetBar, {
+  useSavedSet, type SavedSetBadge, type SavedSetCopy, type SavedSetMenuItem,
+} from '@/components/SavedSetBar';
 import ShareBlock from '@/components/ShareBlock';
+import { PinIcon } from '@/components/phone/phoneIcons';
 import { PROPERTY_CARD_LABEL, isPropertyCard } from '@/lib/neighbourhood';
 
 export type DashboardView = Pick<
@@ -61,6 +65,13 @@ const COPY: SavedSetCopy = {
   editedHint: 'Upraveno od načtení — změny uložíte tlačítkem Uložit změny',
   shared: { by: 'sdílí', editedHint: 'Upraveno od načtení — změny uložíte přes Uložit jako vlastní' },
   failed: 'Něco se nepovedlo.',
+};
+
+/* The property page's dashboard, marked on its chip after the name. */
+const OKOLI_BADGE: SavedSetBadge = {
+  label: 'Okolí',
+  title: `Tento dashboard se ukáže na kartě ${PROPERTY_CARD_LABEL} u každé nemovitosti`,
+  icon: <PinIcon className="h-2.5 w-2.5" />,
 };
 
 const listKey = statsDashboardKeys.all;
@@ -327,6 +338,7 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
         dirty={dirty}
         copy={COPY}
         suffix={(d) => d.owner_email ?? (isPropertyCard(d) ? 'okolí dashboard' : null)}
+        badge={(d) => (isPropertyCard(d) ? OKOLI_BADGE : null)}
         chipMenu={chipMenu}
         leading={createCard}
         onLoad={load}

@@ -12,6 +12,7 @@ import {
   categoryBlockNote,
   chartProblem,
   chartTitle,
+  everyCellUnderMin,
   fetchStatsPivot,
   minRowsFor,
   refusalText,
@@ -69,6 +70,7 @@ export default function StatsChart({
   saving = false,
   focus = null,
   showSmall = false,
+  onShowSmall,
 }: {
   chart: ChartSpec;
   filters: ListingFilters;
@@ -85,6 +87,9 @@ export default function StatsChart({
   focus?: CardFocus | null;
   /* Cells under the minimum show their small-sample summary (the Stats tab's switch). */
   showSmall?: boolean;
+  /* Turns that switch on, from the note a chart with every cell under the minimum
+   * shows (ruling S09); absent where there is no switch (the property page). */
+  onShowSmall?: () => void;
 }) {
   const client = useQueryClient();
   const headingId = useId();
@@ -244,7 +249,22 @@ export default function StatsChart({
         className={`px-5 pt-4 pb-5 transition-opacity ${pivot.isPlaceholderData ? 'opacity-60' : ''}`}
         aria-busy={pivot.isFetching}
       >
-        <Body chart={shown} pivot={data} error={pivot.error} onRetry={() => void pivot.refetch()} showSmall={showSmall} />
+        <Body
+          chart={shown}
+          pivot={data}
+          error={pivot.error}
+          onRetry={() => void pivot.refetch()}
+          showSmall={showSmall}
+          onShowSmall={
+            onShowSmall
+              ? () => {
+                  /* The pressed button goes with the note: focus waits on the heading. */
+                  refs.current.heading?.focus();
+                  onShowSmall();
+                }
+              : undefined
+          }
+        />
       </div>
 
       {editing && (
@@ -279,12 +299,14 @@ function Body({
   error,
   onRetry,
   showSmall,
+  onShowSmall,
 }: {
   chart: ChartSpec;
   pivot: StatsPivot | null;
   error: Error | null;
   onRetry: () => void;
   showSmall: boolean;
+  onShowSmall?: () => void;
 }) {
   if (error && !pivot) {
     return (
@@ -316,11 +338,21 @@ function Body({
     );
   }
   if (pivot.spec.rows.length < minRowsFor(chart.view)) return <Refusal>{LINE_NEEDS_ROW}</Refusal>;
+  /* Only the table and the box change with the switch, so only they offer it. */
+  const note =
+    onShowSmall && !showSmall && everyCellUnderMin(pivot) ? (
+      <SmallSamplesNote minN={pivot.min_n} onShow={onShowSmall} />
+    ) : null;
   switch (chart.view) {
     case 'table':
-      return <PivotTable pivot={pivot} stats={chart.stats} showSmall={showSmall} />;
+      return (
+        <>
+          {note}
+          <PivotTable pivot={pivot} stats={chart.stats} showSmall={showSmall} />
+        </>
+      );
     case 'box':
-      return <BoxTable pivot={pivot} showSmall={showSmall} />;
+      return <BoxTable pivot={pivot} showSmall={showSmall} notice={note} />;
     case 'line':
     case 'bar':
       return <Series pivot={pivot} stats={chart.stats} kind={chart.view} />;
@@ -336,6 +368,26 @@ function Series({ pivot, stats, kind }: { pivot: StatsPivot; stats: readonly Cha
     <Suspense fallback={<Skeleton height={240} />}>
       <PivotSeries pivot={pivot} model={model} stats={stats} kind={kind} />
     </Suspense>
+  );
+}
+
+/* Every cell under the minimum, said once above the table instead of only by each
+ * row's dashed mark, with the switch's "on" beside it (ruling S09). */
+function SmallSamplesNote({ minN, onShow }: { minN: number; onShow: () => void }) {
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-[var(--radius-sm)] bg-[var(--color-paper)] px-3 py-2 text-[0.8rem] text-[var(--color-ink-2)]">
+      <p className="min-w-0">
+        Všechny buňky mají méně než <span className="font-mono tabular-nums">{minN}</span> nemovitostí, takže
+        statistiky jsou skryté.
+      </p>
+      <button
+        type="button"
+        onClick={onShow}
+        className="ml-auto shrink-0 rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)] bg-[var(--color-paper-2)] px-2.5 py-1 text-[0.75rem] text-[var(--color-ink)] hover:border-[var(--color-copper)] transition-colors"
+      >
+        Zobrazit malé vzorky
+      </button>
+    </div>
   );
 }
 

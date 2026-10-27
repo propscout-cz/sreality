@@ -330,6 +330,20 @@ describe('<BrowseExperience> Stats tab', () => {
     expect(board).toHaveAttribute('data-view', 'yes');
     expect(board).toHaveAttribute('data-market', 'filter');
   });
+
+  /* Ruling S07 (2026-10-27): these two labels only; every other English word stays. */
+  it('names its tabs Nemovitosti and Statistiky', async () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <StatsHost filters={DEFAULT_FILTERS} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByRole('tab', { name: 'Statistiky' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: /^Nemovitosti/ })).toHaveAttribute('aria-selected', 'false');
+    expect(screen.queryByRole('tab', { name: /^(Stats|Properties)/ })).toBeNull();
+  });
 });
 
 /* "Nová nemovitost" beside "+ Create watchdog" (docs/design/new-property-from-link.md

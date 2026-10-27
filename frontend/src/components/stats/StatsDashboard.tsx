@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { arrayMove } from '@dnd-kit/sortable';
 import type { ListingFilters } from '@/lib/filters';
+import { isApiConfigured } from '@/lib/api';
 import { pushToast } from '@/lib/toast';
 import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import ErrorBanner from '@/components/ErrorBanner';
@@ -9,9 +10,10 @@ import Skeleton from '@/components/Skeleton';
 import { Segmented, Switch } from '@/components/controls';
 import { STATS_REGISTRY } from '@/lib/statsRegistry.generated';
 import {
-  MARKET_CAPTION,
+  MARKET_LABEL,
   MAX_CHARTS,
   fetchDashboard,
+  marketCaption,
   marketSample,
   newChart,
   saveDashboard,
@@ -30,7 +32,8 @@ import DashboardBar, { type DashboardView } from './DashboardBar';
  * — the chart list's edits and the dashboard bar's loads alike. No saved row ⇒ the
  * four default charts, and the first save persists the whole list. The named
  * dashboards' bar and the sample lens lead the tab on every surface that shows it
- * (the Browse page and the explore modals alike). */
+ * (the Browse page and the explore modals alike), as two labelled rows of ONE
+ * settings panel above the charts (rulings S01–S04, 2026-10-27). */
 export default function StatsDashboard({
   filters,
   view,
@@ -131,40 +134,61 @@ export default function StatsDashboard({
     setPending(null);
     focusAdd.current = true;
   };
+  /* A chart with every cell under the minimum turns the switch on (ruling S09). */
+  const showSmallOn = small ? () => small.set(true) : undefined;
+
+  const caption = marketCaption(lens);
 
   return (
     <div className="space-y-4">
-      {view ? <DashboardBar view={view} working={charts} onLoadCharts={(next) => save.mutateAsync(next)} /> : null}
-      {market || small ? (
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-          {market ? (
-            <Segmented
-              label="Vzorek"
-              options={[
-                { value: 'filter' as const, label: 'Jako ve filtru' },
-                { value: 'sold' as const, label: 'Prodáno (trh)' },
-                { value: 'all' as const, label: 'Vše' },
-              ]}
-              value={market.value}
-              onChange={market.set}
-            />
+      <section className="rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-5">
+        <div className="divide-y divide-[var(--color-rule-soft)]">
+          {/* DashboardBar draws nothing without the API: no row, no orphan label. */}
+          {view && isApiConfigured() ? (
+            <SettingsRow label="Dashboard">
+              <DashboardBar view={view} working={charts} onLoadCharts={(next) => save.mutateAsync(next)} />
+            </SettingsRow>
           ) : null}
-          {small ? (
-            <label className="inline-flex items-center gap-2 text-[0.75rem] text-[var(--color-ink-2)]">
-              <Switch
-                on={small.value}
-                onChange={small.set}
-                ariaLabel={`Malé vzorky (pod ${STATS_REGISTRY.min_n}): min, max, průměr, medián`}
-              />
-              <span>
-                Malé vzorky <span className="text-[var(--color-ink-3)]">— pod {STATS_REGISTRY.min_n}: min, max, průměr, medián</span>
-              </span>
-            </label>
-          ) : null}
+          <SettingsRow label="Vzorek">
+            {/* The lens and its sentence keep a real width, so the switch drops to its
+             * own line before they are squeezed into a strip. */}
+            <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
+              <div className="min-w-0 flex-[1_1_18rem]">
+                {market ? (
+                  <Segmented
+                    label="Vzorek"
+                    options={(['filter', 'sold', 'all'] as const).map((m) => ({ value: m, label: MARKET_LABEL[m] }))}
+                    value={market.value}
+                    onChange={market.set}
+                  />
+                ) : null}
+                <p className={`${market ? 'mt-1.5 ' : ''}text-[0.75rem] text-[var(--color-ink-3)]`}>
+                  <strong className="font-semibold text-[var(--color-ink-2)]">{caption.name}:</strong> {caption.text}
+                </p>
+              </div>
+              {small ? (
+                <label
+                  className="ml-auto inline-flex min-h-[1.875rem] shrink-0 items-center gap-2 text-[0.75rem] text-[var(--color-ink-2)]"
+                  title={`Buňky pod ${STATS_REGISTRY.min_n} nemovitostí ukážou min, max, průměr a medián`}
+                >
+                  <Switch
+                    on={small.value}
+                    onChange={small.set}
+                    ariaLabel={`Malé vzorky (pod ${STATS_REGISTRY.min_n}): min, max, průměr, medián`}
+                  />
+                  <span>
+                    Malé vzorky{' '}
+                    <span className="text-[var(--color-ink-3)]">
+                      (pod <span className="font-mono tabular-nums">{STATS_REGISTRY.min_n}</span>)
+                    </span>
+                  </span>
+                </label>
+              ) : null}
+            </div>
+          </SettingsRow>
         </div>
-      ) : null}
+      </section>
       <DismissedSkewNotice filters={sample} onInclude={onIncludeDismissed} />
-      <p className="text-[0.75rem] text-[var(--color-ink-3)]">{MARKET_CAPTION[lens]}</p>
       <div className="grid grid-cols-1 items-start gap-5 2xl:grid-cols-2">
         {listed.map((c, i) => (
           <StatsChart
@@ -174,6 +198,7 @@ export default function StatsDashboard({
             showSmall={small?.value ?? false}
             saving={save.isPending}
             focus={focus?.id === c.id ? focus.req : null}
+            onShowSmall={showSmallOn}
             onSave={(next) => save.mutateAsync(charts.map((x) => (x.id === c.id ? next : x)))}
             onRemove={() => remove(c.id)}
             onMove={{
@@ -190,6 +215,7 @@ export default function StatsDashboard({
             showSmall={small?.value ?? false}
             startEditing
             saving={save.isPending}
+            onShowSmall={showSmallOn}
             onSave={async (next) => {
               await save.mutateAsync([...listed, next]);
               setPending(null);
@@ -214,6 +240,19 @@ export default function StatsDashboard({
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+/* One row of the settings panel: a tracked small-caps label naming what the row
+ * sets ("Dashboard": which charts; "Vzorek": which properties count), stacked over
+ * its controls on a phone. A plain label, not a heading or a group: the chart
+ * titles are the board's headings, and the lens is the group named "Vzorek". */
+function SettingsRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-1 gap-y-1.5 py-3 sm:grid-cols-[6.5rem_minmax(0,1fr)] sm:items-baseline sm:gap-x-4">
+      <span className="text-[0.7rem] font-medium uppercase tracking-[0.18em] text-[var(--color-ink-3)]">{label}</span>
+      <div className="min-w-0">{children}</div>
     </div>
   );
 }

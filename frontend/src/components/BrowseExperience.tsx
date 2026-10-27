@@ -475,8 +475,8 @@ export default function BrowseExperience({
   ]);
 
   const tabs: ReadonlyArray<Tab<TabKey>> = [
-    { key: 'map', label: 'Properties', badge: cohortTotal?.toLocaleString('cs-CZ') },
-    ...(f.stats ? [{ key: 'stats', label: 'Stats' } as Tab<TabKey>] : []),
+    { key: 'map', label: 'Nemovitosti', badge: cohortTotal?.toLocaleString('cs-CZ') },
+    ...(f.stats ? [{ key: 'stats', label: 'Statistiky' } as Tab<TabKey>] : []),
   ];
 
   /* The listings PANEL's error drives the page banner. On the map tab that's the

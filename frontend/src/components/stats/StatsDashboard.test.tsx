@@ -5,7 +5,7 @@ import { DEFAULT_FILTERS } from '@/lib/filters';
 import * as stats from '@/lib/stats';
 import { pushToast } from '@/lib/toast';
 import StatsDashboard from './StatsDashboard';
-import { pivotOf } from './testPivot';
+import { cell, pivotOf } from './testPivot';
 
 /* A stand-in for the account's row: no row until the first save, then the
  * saved list — what RLS would hand back after PUT /stats/dashboard. */
@@ -47,8 +47,13 @@ const titles = () => screen.getAllByRole('heading', { level: 3 }).map((h) => h.t
 const button = (name: string) => screen.getByRole('button', { name });
 const item = (name: string) => screen.getByRole('menuitem', { name });
 
+const FOLLOWS = Node.DOCUMENT_POSITION_FOLLOWING;
+/* The sentence under the lens (ruling S03). */
+const sentence = () => screen.getByRole('group', { name: 'Vzorek' }).nextElementSibling as HTMLElement;
+
 beforeEach(() => {
   stored = null;
+  vi.mocked(stats.fetchStatsPivot).mockImplementation(async (_f, spec) => pivotOf({ spec }));
   vi.mocked(stats.saveDashboard).mockClear();
   vi.mocked(pushToast).mockClear();
 });
@@ -154,7 +159,7 @@ describe('<StatsDashboard>', () => {
     for (const [f] of vi.mocked(stats.fetchStatsPivot).mock.calls) {
       expect(f).toEqual(stats.soldMarketFilters(DEFAULT_FILTERS));
     }
-    expect(screen.getByText(/^Prodáno \(trh\): jen neaktivní/)).toBeInTheDocument();
+    expect(sentence().textContent).toBe(stats.MARKET_CAPTION.sold);
     fireEvent.click(within(lens).getByRole('button', { name: 'Jako ve filtru' }));
     expect(set).toHaveBeenCalledWith('filter');
   });
@@ -167,7 +172,7 @@ describe('<StatsDashboard>', () => {
     for (const [f] of vi.mocked(stats.fetchStatsPivot).mock.calls) {
       expect(f).toEqual({ ...DEFAULT_FILTERS, status: 'any', showDismissed: true, tomObservedOnly: false, tomDaysMin: null, tomDaysMax: null });
     }
-    expect(screen.getByText(/^Vše: aktivní i neaktivní/)).toBeInTheDocument();
+    expect(sentence().textContent).toMatch(/^Vše: aktivní i neaktivní/);
   });
 
   it('shows no lens where Browse hands none over, and counts the filter as set', async () => {
@@ -179,14 +184,62 @@ describe('<StatsDashboard>', () => {
     for (const [f] of vi.mocked(stats.fetchStatsPivot).mock.calls) expect(f).toEqual(DEFAULT_FILTERS);
   });
 
-  it('offers the small-samples switch beside the lens and hands its state to the switch owner', async () => {
+  /* Rulings S01–S03 (2026-10-27): one panel above the charts; the row's label; the
+   * sample sentence right under its switch, the chosen lens named first, in bold. */
+  it('holds the sample row in one panel: its label, the lens, its sentence right under it, the chosen lens named in bold first', async () => {
+    const { unmount } = renderBoard({ value: 'all', set: vi.fn() });
+    await screen.findAllByRole('heading', { level: 3 });
+    const lens = screen.getByRole('group', { name: 'Vzorek' });
+    const panel = lens.closest('section')!;
+    expect(panel).not.toBeNull();
+    expect(within(panel).getByText('Vzorek')).toBeInTheDocument();
+    /* No dashboards' bar handed over: no Dashboard row, no orphan label. */
+    expect(within(panel).queryByText('Dashboard')).toBeNull();
+    expect(sentence().tagName).toBe('P');
+    expect(within(sentence()).getByText('Vše:').tagName).toBe('STRONG');
+    expect(sentence().textContent).toBe(stats.MARKET_CAPTION.all);
+    /* Above the charts, holding none of them. */
+    expect(within(panel).queryByRole('article')).toBeNull();
+    expect(panel.compareDocumentPosition(screen.getAllByRole('article')[0]) & FOLLOWS).toBeTruthy();
+    unmount();
+
+    renderBoard({ value: 'sold', set: vi.fn() });
+    await screen.findAllByRole('heading', { level: 3 });
+    expect(within(sentence()).getByText('Prodáno (trh):').tagName).toBe('STRONG');
+    expect(sentence().textContent).toBe(stats.MARKET_CAPTION.sold);
+  });
+
+  /* Ruling S04: "Malé vzorky (pod 5)" ends the row; what it shows is its tooltip. */
+  it('ends the Vzorek row with Malé vzorky (pod 5), its detail in a tooltip', async () => {
     const set = vi.fn();
-    renderBoard(undefined, { value: false, set });
+    renderBoard({ value: 'filter', set: vi.fn() }, { value: false, set });
     await screen.findAllByRole('heading', { level: 3 });
     const toggle = screen.getByRole('button', { name: 'Malé vzorky (pod 5): min, max, průměr, medián' });
     expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    const label = toggle.closest('label')!;
+    expect(label.textContent).toBe('Malé vzorky (pod 5)');
+    expect(label).toHaveAttribute('title', 'Buňky pod 5 nemovitostí ukážou min, max, průměr a medián');
+    expect(label.closest('section')).toBe(sentence().closest('section'));
+    expect(sentence().compareDocumentPosition(label) & FOLLOWS).toBeTruthy();
+    expect(screen.queryByText(/min, max, průměr, medián/)).toBeNull();
     fireEvent.click(toggle);
     expect(set).toHaveBeenCalledWith(true);
+  });
+
+  /* Ruling S09: a chart whose every cell is under the minimum offers the switch's "on". */
+  it('turns Malé vzorky on from a chart whose every cell is under the minimum', async () => {
+    vi.mocked(stats.fetchStatsPivot).mockImplementation(async (_f, spec) => pivotOf({ spec, cells: [cell([], 3, null)] }));
+    const set = vi.fn();
+    const { unmount } = renderBoard(undefined, { value: false, set });
+    const offers = () => screen.getAllByRole('button', { name: 'Zobrazit malé vzorky' });
+    await waitFor(() => expect(offers()).toHaveLength(4));
+    fireEvent.click(offers()[0]);
+    expect(set).toHaveBeenCalledWith(true);
+    unmount();
+
+    renderBoard(undefined, { value: true, set: vi.fn() });
+    await screen.findAllByText('pod 5');
+    expect(screen.queryByRole('button', { name: 'Zobrazit malé vzorky' })).toBeNull();
   });
 
   it('shows no small-samples switch where none is handed over', async () => {

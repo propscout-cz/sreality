@@ -129,6 +129,30 @@ The page's overview picture shows all ten applied; build only the confirmed seve
 proposal's `where` field (`components/stats/StatsDashboard.tsx`, `DashboardBar.tsx`, `StatsChart.tsx`,
 `lib/stats.ts` `MARKET_CAPTION`, `lib/neighbourhood` `PROPERTY_CARD_LABEL`, the tabs in `BrowseExperience.tsx`).
 
+**Built** (2026-10-27, the agenda-2 Stats commit on `feature/redesign-rulings`; the seven confirmed only). As built:
+- S01/S02: one bordered paper-2 panel (`StatsDashboard` `SettingsRow`), a rule-soft line between its two rows, each
+  led by a tracked small-caps label ("Dashboard", "Vzorek"; a plain label, so the chart titles stay the board's only
+  headings and the lens stays the one group named "Vzorek"); below 640 px the label stacks over its row. The
+  Dashboard row shows only where the bar does (a Browse view and the API). The skew notice follows the panel.
+- S03: `lib/stats` `MARKET_LABEL` names the three options; `marketCaption` splits each caption into that name (bold,
+  ink-2) and the rest. The "Jako ve filtru" caption gained its name lead; the sold and Vše captions, which the
+  property page's Trh v okolí tile shows, are unchanged.
+- S04: "Malé vzorky (pod 5)" ends the row and drops to its own line, right-aligned, before the lens and sentence
+  get narrower than 18rem; "Buňky pod 5 nemovitostí ukážou min, max, průměr a medián" is the label's native
+  tooltip. The switch's own name for a screen reader is unchanged.
+- S06: `SavedSetBar` takes an optional `badge` (only the dashboards pass one): "Okolí" in the provenance tag's
+  tracked caps with the pin glyph, in the chip's own colour, the tooltip "Tento dashboard se ukáže na kartě Okolí
+  dashboard u každé nemovitosti". The name truncates alone, so a long name never hides the badge; a screen
+  reader still hears "<name> — okolí dashboard".
+- S07: the tab labels only; the tab keys, the URL's `tab=stats` and every other English word stay.
+- S09: `lib/stats` `everyCellUnderMin` (every cell the payload sent, the Celkem rollup included, under its
+  `min_n`). Only the table and box views show the note (the switch changes nothing on a line or bar), only with the
+  switch off and only on the Stats tab (the property page has no switch). On a box chart it sits between the legend
+  and the column heads; the legend moved out of the table's `<caption>` into a line that names the table
+  (`aria-labelledby`), so the note and its button stay out of the table's name and its sideways scroll. The button
+  turns the same switch on (so a loaded dashboard reads "Upraveno od načtení", as the switch does) and leaves focus
+  on that chart's heading.
+
 ## What to build next
 
 Agenda 1 shipped as its own PR (#2127). **Operator ruling 2026-10-27: agendas 2–8 go in ONE PR**
@@ -151,8 +175,8 @@ File pointers are where the element lives today (2026-10-27); search for the quo
    price-label button from `components/MapRail.tsx`; keep the checkbox in `ListingMap.tsx`), P13 (the popup's
    `lp-precision` and `lp-seen` "last seen …" lines become one, the precision detail in its tooltip; the popup
    HTML in `ListingMap.tsx`), P14 (chart card shows Upravit + a ⋯ menu with move up / move down / remove
-   chart; `components/stats/StatsChart.tsx`), and the confirmed Stats review items (§ Stats review), in their own
-   commit on the same branch.
+   chart; `components/stats/StatsChart.tsx`), and the confirmed Stats review items (§ Stats review, **built**: as-built
+   notes there), in their own commit on the same branch.
    As built: the count line reads "12 345 apartments for sale" (Browse stays English, the count mono), and
    every filter beyond the defaults is a removable pill under it (`AppliedFilterPills`), from the one list the
    phone counts (`phone/filterRows` `appliedFilters`) in the words its sheet says (`phone/filterSummary`); the
