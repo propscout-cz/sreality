@@ -23,7 +23,7 @@ fetch these links with curl or WebFetch.
 ## What is done
 
 1. **PR #2115** (merged 2026-10-27; Railway deployed API, vite and realtime-worker):
-   - the app is **PropScout.cz** (`lib/brand.ts`; tab titles "PS: …"; a "PS" home-screen icon; extension name);
+   - the app is **PropScout.cz** (`lib/brand.ts`; tab titles are the page name alone (no prefix) under a "PS" favicon; a "PS" home-screen icon; extension name);
    - three colour schemes, **Měď** (default), **Kobalt**, **Grafit**, each light and dark, picked per device in the
      account menu, the phone account sheet and Settings → Appearance (`lib/theme.ts`, `globals.css`
      `data-scheme` blocks, `components/SchemeSwatch.tsx`);
