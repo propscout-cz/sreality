@@ -1,0 +1,59 @@
+name: "Jobs: run now"
+
+# Asks the Railway job runner to run one of its jobs now. It only FILES a request (one row on scheduled_jobs, written
+# by the runner's own `request` verb) and runs nothing here. The runner starts it within seconds once the job and its
+# shared resource are free, even while its schedule is paused; a second request is refused while one waits; a job its
+# own workflow still schedules is refused until its move PR lands. A green run means "asked", not "done": follow the
+# run on Health (job/<name>). Required secret: SUPABASE_DB_URL.
+#
+# The job box takes the name Health shows after job/ (operator ruling R-2, #2026: typed, never a drop-down, which would
+# be a second job list). Extra arguments are appended after the job's own and override them unchecked (memory, worker
+# counts and limits included); a request counts as the job's run, so a --dry-run looks freshly done and a mistyped
+# argument is a failed run. Click by click: .claude/skills/scraper-ops/references/job-runner.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "The job's name, as Health shows it after job/ (e.g. map_overlays)"
+        required: true
+        type: string
+      args:
+        description: "Optional extra arguments appended to the job's own, e.g. --dry-run (quote a value with spaces). They override the job's own flags, memory and worker counts unchecked. A mistyped one is a failed run."
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  request:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # The registry imports every portal's main (scraper/jobs.py), as the walks do.
+      - name: Install
+        run: pip install -e .
+
+      - name: File the request (nothing runs here)
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          JOB: ${{ inputs.job }}
+          ARGS: ${{ inputs.args }}
+        # A job name is a name: `--help` would print help and exit 0 having filed nothing. xargs splits ARGS as a shell
+        # quotes it but evaluates nothing ($(...) stays text); pipefail keeps a refusal red through tee, and the
+        # one-line answer lands on the run's summary page.
+        run: |
+          set -euo pipefail
+          [[ "$JOB" =~ ^[a-z0-9_]+$ ]] || { echo "not a job name: $JOB" | tee -a "$GITHUB_STEP_SUMMARY"; exit 2; }
+          printf '%s\n' "$ARGS" | xargs python -m scraper.job_runner request "$JOB" --by "github:$GITHUB_TRIGGERING_ACTOR" -- 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"

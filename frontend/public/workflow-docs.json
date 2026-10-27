@@ -2600,6 +2600,43 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/resolve_brokers_full.yml"
     },
     {
+      "filename": "run_job.yml",
+      "name": "Jobs: run now",
+      "description": "Asks the Railway job runner to run one of its jobs now. It only FILES a request (one row on scheduled_jobs, written by the runner's own `request` verb) and runs nothing here. The runner starts it within seconds once the job and its shared resource are free, even while its schedule is paused; a second request is refused while one waits; a job its own workflow still schedules is refused until its move PR lands. A green run means \"asked\", not \"done\": follow the run on Health (job/<name>). Required secret: SUPABASE_DB_URL.",
+      "manual": true,
+      "schedules": [],
+      "onPush": false,
+      "onPullRequest": false,
+      "paths": null,
+      "inputs": [
+        {
+          "name": "job",
+          "description": "The job's name, as Health shows it after job/ (e.g. map_overlays)",
+          "required": true,
+          "type": "string",
+          "default": null,
+          "options": null
+        },
+        {
+          "name": "args",
+          "description": "Optional extra arguments appended to the job's own, e.g. --dry-run (quote a value with spaces). They override the job's own flags, memory and worker counts unchecked. A mistyped one is a failed run.",
+          "required": false,
+          "type": "string",
+          "default": "",
+          "options": null
+        }
+      ],
+      "secrets": [
+        "SUPABASE_DB_URL"
+      ],
+      "concurrencyGroup": null,
+      "cancelInProgress": null,
+      "timeoutMinutes": 10,
+      "permissions": "contents: read",
+      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/run_job.yml",
+      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/run_job.yml"
+    },
+    {
       "filename": "runpod_reap.yml",
       "name": "Ops: terminate a RunPod pod by id",
       "description": "The bake-off tears its pod down in a `finally`, but a terminate call that times out on RunPod's side (run 35731041090: \"POD MAY STILL BE BILLING\") leaves a pod nobody can reach from a shell without the key. This is the one-input remedy: write the receipt `autodedup.oss_pod --reap` already understands and let it DELETE the pod. Idempotent — an already-gone pod counts as success.",
