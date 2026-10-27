@@ -65,19 +65,6 @@ _ALLOWLIST: list[tuple[str, str, str]] = [
         "not in migrations, so the replayed schema can't see it",
     ),
     (
-        "fetch_population_wikidata",
-        "wdt:",
-        "a SPARQL query to the Wikidata endpoint, not Postgres SQL",
-    ),
-    (
-        "apply_listings_pk_swap.py",
-        "cron.",
-        "pg_cron's `cron` schema is extension-managed and absent from migrations, "
-        "so the replayed schema can't see cron.job / cron.alter_job; both were "
-        "verified against production instead (the alter_job signature is "
-        "job_id bigint, ..., active boolean)",
-    ),
-    (
         "scripts/checks/platform.py",
         "cron.",
         "pg_cron's cron.job and cron.job_run_details live in the extension-managed "

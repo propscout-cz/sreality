@@ -6,7 +6,8 @@ name: "Jobs: load obec population (manual)"
 # https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02). Idempotent: only
 # changed rows are written. Dispatch this after committing a refreshed export.
 # This is the population source the "within X km of a municipality with
-# population > N" proximity filter reads.
+# population > N" proximity filter reads; the job ends with the full city-proximity
+# rebuild that turns it into the precomputed columns.
 #
 # Required GitHub secret:
 #   SUPABASE_DB_URL  -- same one used by every other workflow.
@@ -21,7 +22,7 @@ concurrency:
 jobs:
   load:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 90   # the full proximity rebuild: ~975k properties at ~3 ms each, in batches
     permissions:
       contents: read
     env:
@@ -40,3 +41,8 @@ jobs:
 
       - name: Load obec population
         run: python -m scripts.load_obec_population
+
+      # Population shifts home_obec_pop and the near_pop maxes of every property; the hourly pg_cron
+      # run (migration 674) only fills properties not yet computed.
+      - name: Rebuild city proximity (full)
+        run: python -m scripts.recompute_city_proximity --full

@@ -8,12 +8,16 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import os
+import signal
+import threading
 import time
 from pathlib import Path
 
 import pytest
 import requests
 
+from scraper import stop
 from scraper.portal_base import BasePortalClient, ListingGoneError, client_hints
 from scraper.rate_ledger import RateBudgetUnavailable
 from scraper.rate_limit import RateLimiter
@@ -107,9 +111,16 @@ def test_non_retryable_4xx_raises_for_status(monkeypatch):
 
 
 class _FakeLimiter:
+    deadline = None
+
     def __init__(self) -> None:
         self.acquired = 0
         self.penalized = 0
+        self.refused = False
+        self.refused_reason: str | None = None
+
+    def refuse(self, reason: str) -> None:
+        self.refused, self.refused_reason = True, reason
 
     def acquire(self) -> None:
         self.acquired += 1
@@ -269,3 +280,63 @@ def test_client_hints_never_contradict_a_non_chrome_ua_override():
     headers = HonestBot()._session.headers
     assert headers["User-Agent"] == "sreality-bot/1.0"
     assert not [k for k in headers if k.lower().startswith("sec-ch-ua")]
+
+
+# --- a stop signal (#2019) ---
+
+class _HangingSession(_Session):
+    """A request that never answers: only a stop signal (or its own timeout) ends it."""
+
+    def get(self, url, params=None, timeout=None):
+        self.calls.append((url, params))
+        time.sleep(30)
+        raise AssertionError("the hung request was not cut short")
+
+
+def _later(seconds: float, action) -> threading.Timer:
+    timer = threading.Timer(seconds, action)
+    timer.start()
+    return timer
+
+
+def test_a_stop_before_an_attempt_sends_nothing_and_refuses_the_run() -> None:
+    lim = _FakeLimiter()
+    c = _client([_Resp(200)], limiter=lim)
+    stop.EVENT.set()
+    with pytest.raises(stop.StopRequested):
+        c._request("http://x/")
+    assert c._session.calls == []
+    assert lim.refused_reason == "stop"
+
+
+def test_a_stop_ends_a_backoff_at_once() -> None:
+    stop.install()
+    c = _client([_Resp(503), _Resp(200)], max_retries=3)
+    timer = _later(0.05, stop.EVENT.set)
+    try:
+        started = time.monotonic()
+        with pytest.raises(stop.StopRequested):
+            c._request("http://x/")
+        assert time.monotonic() - started < 0.8, "the 1 s backoff ran to its end"
+    finally:
+        timer.cancel()
+    assert len(c._session.calls) == 1
+
+
+def test_a_stop_signal_cuts_a_hung_request_short_and_refuses_the_run() -> None:
+    """The signal handler raises inside the request in hand on the main thread, so a walk finalizes within the drain
+    window however slow the portal is (GitHub's cancel kills 10 s after its SIGINT)."""
+    stop.install()
+    lim = _FakeLimiter()
+    c = BasePortalClient(limiter=lim, timeout_s=30.0)
+    c._session = _HangingSession([])
+    timer = _later(0.1, lambda: os.kill(os.getpid(), signal.SIGTERM))
+    try:
+        started = time.monotonic()
+        with pytest.raises(stop.StopRequested):
+            c._request("http://x/")
+        assert time.monotonic() - started < 2.0
+    finally:
+        timer.cancel()
+    assert len(c._session.calls) == 1
+    assert lim.refused_reason == "stop"

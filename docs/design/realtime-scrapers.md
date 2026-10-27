@@ -37,7 +37,9 @@ watchdog price-drop detection on a DAILY gate.
 
 **Hot lane — one always-on worker** (second Railway service from the EXISTING Docker image;
 the scraper package is already importable there and the API already runs the same
-settings-paced asyncio-loop pattern — matcher/outbox). It runs, as continuous loops:
+settings-paced asyncio-loop pattern — matcher/outbox; *superseded: the outbox went 2026-10-21
+(notifications W1) and the matcher moved onto this worker (W2a's `notifications` lane; W2b deleted
+the API's loop), so the API's one loop is the health teller*). It runs, as continuous loops:
 
 1. **Newest-first delta probes, 2–5 min per portal** (live-verified capability):
    bazos/idnes/realitymix/remax — default index order IS newest-first (1–3 pages/probe);
@@ -52,8 +54,8 @@ settings-paced asyncio-loop pattern — matcher/outbox). It runs, as continuous 
    `docs/design/portal-order-fidelity.md`). **Update (2026-08-04, portal-order-fidelity
    Phase 4):** sreality also joined `REALTIME_SOURCES` with its own bespoke
    `probe_category` (the ceskereality pattern — per-page early-stop diff, UNSPLIT since
-   the 422 is offset- not size-triggered), complementing rather than replacing the
-   count-probe lane. **mmreality** — proxied, low-frequency only (cost).
+   the 422 is offset- not size-triggered); it once complemented the count-probe lane,
+   deleted in Actions-exit W0 (#2015). **mmreality** — proxied, low-frequency only (cost).
    Probes reuse the safe partial-walk primitive: diff + enqueue, `complete=False`, so a
    probe can never falsely delist (rule #3 machinery unchanged).
 2. **Continuous detail drain** off the existing SKIP LOCKED queue (multi-runtime-safe by
@@ -77,11 +79,26 @@ settings-paced asyncio-loop pattern — matcher/outbox). It runs, as continuous 
    already computes the price diff), sreality singleton-property creation inlined into
    `write_detail_batch` (every other portal already creates it inline). — *superseded 2026-10:
    every portal lands NULL; the straggler-attach births + browse-syncs (`scraper/listing_write.py`).*
+   *Producers superseded 2026-10-21 (notifications push W2a/W2b): the three run on the worker's
+   `notifications` lane, a constant 300 s clock over fixed windows (no cursor, so no attach race),
+   not a per-batch wake; the API runs none.*
 
 **Cold lane — GitHub Actions keeps** the delay-tolerant heavy work it does well and for
-free: full reconcile index walks (completeness + delisting evidence), image/CLIP backfills,
-dedup full scans + batch lanes, monitors, CI. Self-chaining (`SCRAPE_CHAIN_TOKEN`) is
-legacy backlog acceleration — do not extend it to new lanes.
+free: full reconcile index walks (completeness + delisting evidence), CLIP backfills,
+dedup full scans + batch lanes, monitors, CI. What self-chaining remains is bounded and on each job's
+own token: price stats re-dispatches once per run that made progress (#2013), claims intake while a
+cursor moved — do not extend it to new lanes. — *Since Actions-exit W0 (#2010,
+2026-10) this worker is the ONLY runtime of the detail drain, image downloads (#2011 added the
+inactive residue) and the incremental property and broker maintenance: the five portal drains, `images_fresh.yml`,
+`property_maintenance.yml` and `broker_resolution.yml` that ran beside it as backstops are
+deleted (in their last week the GitHub drains wrote 1–5 % of each portal's completions, bazos
+about 5 %; the PR's pre-checks hold the measurement).
+Still on GitHub for now: the walks and the daily property and broker sweeps (until the job runner
+takes them); the four combined scrapers only walk since W1 (#2021). Since #2011 the images lane also
+drains the inactive-image residue `images.yml` owned (each tier walks the pending index newest-first,
+the residue filling what the active tier leaves), so no image download runs on GitHub.
+`realtime_drain_disabled_sources` therefore freezes a portal's queue: no other scheduled drain
+takes it over.*
 
 **Prerequisite: shared politeness.** `RateLimiter` is per-process; a Railway lane beside
 Actions walks would double-hit portals with two independent limiters. Before the probe lane
@@ -139,7 +156,7 @@ publication rule, migrations 668/669).
   now-abandoned "batch-warmer revival" this doc once listed.)
 - **W3** (#696, migration 270) — sreality count-probe lane: sreality's sort-blind v1 API gets
   `pagination.total` count-delta probes that (opt-in, token+setting gated) trigger a targeted
-  `index_walk`.
+  `index_walk`. Deleted in Actions-exit W0 (#2015): the worker triggers no GitHub workflow.
 - **W4** — idnes/bazos street coverage: the RÚIAN resolver lever is **exhausted** at the 15 m
   tolerance (idnes coords are >15 m from address points → 0 net resolutions; bazos coords are
   the page-wide-link shared pins the resolver correctly rejects — it's excluded from the
@@ -153,8 +170,8 @@ drain now also runs from this worker, not only from `location_resolve.yml`. The 
 round trips, not work — ~11 registry round trips per listing at ~120 ms from a US GitHub runner
 measured **0.7 listings/s**, and GitHub fires the schedule ~7x/day against a >100k queue. The
 worker sits beside the database in the EU (~1–2 ms) and runs continuously. It **reuses**
-`location_data.resolver.drain.run()` and `lease.held()` — no copy of the drain, the CAS or the
-resolver — and takes the SAME `location_jobs` lease row (`drain.JOB_NAME`, imported never
+`location_data.resolver.drain.run()` and `scraper.job_lease.held()` — no copy of the drain, the CAS
+or the resolver — and takes the SAME `scheduled_jobs` lease row (`drain.JOB_NAME`, imported never
 re-spelled) on the drain's own session-pooler connection, so the worker lane and the
 Actions lane can never drain at once; a busy lease is a cheap no-op (`{"acquired": false}` in
 the heartbeat, logged on the transition only). The GH lane stays the backstop and keeps
@@ -180,7 +197,7 @@ Budget shape, and the two rails that make the shared lease actually exclusive:
   unchanged: every loop tests the budget between batches and they run concurrently, so N workers
   still overrun by at most ONE batch.
 - `max_seconds` is clamped to ≤ 900 and `batch_size` to ≤ 1000, so a HEALTHY pass stays far below
-  the jobs check's 1,200 s in-flight Watch (`jobs_lane_inflight_warn_s`) and below
+  the jobs check's 1,200 s in-flight Watch (`platform.LANE_INFLIGHT_WARN_S`) and below
   `LANE_PASS_TIMEOUT_SECONDS`.
   Throughput does not need a long pass — the queue IS the cursor.
 - **The lease TTL is `max_seconds + batch_size × 2 s` (floor 120 s), not a flat constant.**
@@ -471,8 +488,8 @@ nothing else.
   instead predecessor_kept, the lease the cap's floor left to its TTL), peak_rss_mb (E941) +
   rss_mb + memory_limit_mb (the container's cgroup limit, read each pass; E948, E948b; on every
   path, a skip's included, since E944),
-  memo_entries (the body readers by module, the shingle sets and the tokens, before the pass's end
-  empties them) + rss_at_start_mb and rss_after_trim_mb (the RSS once freed memory went back,
+  memo_entries (the body readers by module, the shingle sets, the tokens and the folded texts, before
+  the pass's end empties them) + rss_at_start_mb and rss_after_trim_mb (the RSS once freed memory went back,
   before the pass and at its end; E949: on every path but `previous_pass_running`, and a raised
   pass writes no `last`, so the heartbeat keeps the previous pass's until the next pass's
   rss_at_start_mb shows what the raised one left), chunks + chunk_rss_mb + chunk_vectored (E950:

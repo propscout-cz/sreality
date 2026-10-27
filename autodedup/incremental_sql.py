@@ -526,6 +526,14 @@ select s.listing_id, s.resolved_at
 # property alone), ~2.5 passes instead of ~15 h in id order; the two probes ride
 # `listings_property_id_idx` and `cluster_members`' key: 895 ms a limit-500 call measured live,
 # all buffer hits (25,434 unread).
+# E979, the operator's ruling 2026-10-25: a newly widened block is read FIRST, in a category order
+# the operator chooses — Liberec (`obec:563889`) first, flats for rent, then houses for sale, then
+# flats for sale, then the rest. The order is data, not code: `rt_build_priority:<generation>`
+# (`incremental_lane.parse_build_priority`). Two keys go in front of E978's: the advert's block is
+# a named one, then (inside one) its `category_main/category_type` position in the list, an
+# unlisted category after the listed ones, read by primary key as the others are; outside a named
+# block that key is 0. Empty arrays (no row, or a malformed one) make both keys constant, so the
+# order is exactly E978's.
 RT_SCOPE_BUILD_ENTRANTS_SQL = """
 select s.listing_id, s.resolved_at
   from autodedup.rt_scope_ids s
@@ -536,7 +544,15 @@ select s.listing_id, s.resolved_at
                      from autodedup.rt_fp f
                     where f.generation = %(generation)s::text
                       and f.listing_id = s.listing_id)
- order by (select l.is_active
+ order by (s.block_key = any(%(priority_blocks)s::text[])) desc,
+          case when s.block_key = any(%(priority_blocks)s::text[])
+               then coalesce((select array_position(%(priority_cats)s::text[],
+                                                    l.category_main || '/' || l.category_type)
+                                from public.listings l
+                               where l.id = s.listing_id),
+                             cardinality(%(priority_cats)s::text[]) + 1)
+               else 0 end,
+          (select l.is_active
                    or exists (select 1
                                 from public.listings o
                                where o.property_id = l.property_id
@@ -1034,6 +1050,29 @@ select f.listing_id, f.ev_images, f.ev_phash, f.ev_clip, f.ev_tags
         or f.first_decided_at is null
         or f.first_decided_at > now() - make_interval(hours => %(horizon_hours)s::int))
  order by f.listing_id
+ limit %(limit)s
+"""
+
+# E980: the round-robin above is fair to every candidate and fast to none. A widening fills it
+# with every listing it read in the last 48 h (90,984 candidates on 2026-10-26, 87,481 of them
+# only young), so one cycle of 400 a pass took ~50 h, longer than the horizon, and an ACTIVE
+# arrival decided before its CLIP vector waited it out (1,014 such on 2026-10-26). This arm
+# hands the newest active rows still marked incomplete to the probe on EVERY pass, ahead of
+# the round-robin. `ev_complete = false` is `autodedup_rt_fp_evidence_idx`'s own predicate, so
+# the arm reads the partial index (6,183 rows), not the table; a NULL row (before migration
+# 540) is left to the round-robin, which re-decides it once. A row written inside the last
+# `recheck_minutes` is skipped: the probe counts `clip_tagged_at` stamps and the decision counts
+# vectors, so an image the CLIP job stamped as undecodable (`clip_tag_backfill`'s terminal
+# rows) reads as moved for ever, and without the gate it would be re-decided on every pass,
+# ahead of every real arrival (0 such among the arm's 1,000 on 2026-10-26).
+RT_EVIDENCE_ACTIVE_SQL = """
+select f.listing_id, f.ev_images, f.ev_phash, f.ev_clip, f.ev_tags
+  from autodedup.rt_fp f
+ where f.generation = %(generation)s::text
+   and f.ev_complete = false
+   and f.is_active
+   and f.updated_at < now() - make_interval(mins => %(recheck_minutes)s::int)
+ order by f.first_decided_at desc nulls last, f.listing_id
  limit %(limit)s
 """
 

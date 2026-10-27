@@ -8,21 +8,23 @@ name: "Scraping: Bezrealitky scraper (pilot)"
 # listing_write.write_listings (the one listing write; new rows land property_id
 # NULL and the straggler-attach births the singleton).
 #
+# WALK ONLY (--index-only, Actions exit W1, #2021): the realtime worker's drain lane fetches what
+# the walk enqueues, as it already did for nearly every row (2026-10-23..25: 93% of this
+# portal's completions landed outside these runs), so this job no longer drains.
+#
 # Categories live in the `portals` registry row (migration 110), not here, so
 # coverage is tuned with a SQL update, no workflow edit. A scheduled run takes
 # no inputs and does a FULL per-category walk (no --max-pages) that ends on the
 # API's own last page, so the runner nominates unseen listings for a page check
 # (rule #3) — source-scoped to bezrealitky rows only, and the page decides.
 #
-# Writes 'index' + 'detail' scrape_runs rows under source='bezrealitky' (its own
+# Writes an 'index' scrape_runs row under source='bezrealitky' (its own
 # Health-page lane; does not touch sreality liveness / reconciliation).
 #
 # Required secret: SUPABASE_DB_URL. (Coordinates come from the API's gps field,
 # so no MAPY_CZ_API_KEY is needed.)
 #
-# Cadence: every 6h, offset off the other scrapers. The detail drain is bounded
-# per run (--max-detail) and the queue persists across runs, so a bounded run
-# never loses work; the first few runs drain the initial backlog.
+# Cadence: every 6h, offset off the other scrapers.
 
 on:
   schedule:
@@ -35,24 +37,9 @@ on:
         default: ""
         type: string
       max_seconds:
-        description: wall-clock budget for the run (default 1500s, under the 30-min job timeout)
+        description: wall-clock budget for the walk (default 1500s, under the 30-min job timeout)
         required: false
         default: ""
-        type: string
-      max_detail:
-        description: cap detail-drain claims this run
-        required: false
-        default: "2000"
-        type: string
-      rate:
-        description: detail-fetch requests/second ceiling
-        required: false
-        default: "2.0"
-        type: string
-      workers:
-        description: detail-fetch workers (concurrency; raise for a one-time backfill)
-        required: false
-        default: "8"
         type: string
 
 concurrency:
@@ -86,17 +73,14 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
           MAX_PAGES: ${{ inputs.max_pages }}
-          MAX_DETAIL: ${{ inputs.max_detail || '2000' }}
-          RATE: ${{ inputs.rate || '2.0' }}
-          WORKERS: ${{ inputs.workers || '8' }}
-          # Kept under the job's timeout-minutes above: the phases stop claiming
-          # and finalize cleanly on expiry (a recorded, incomplete run) instead of
+          # Kept under the job's timeout-minutes above: the walk stops and
+          # finalizes cleanly on expiry (a recorded, incomplete run) instead of
           # being SIGKILLed with no scrape_runs row. It is also the only
           # unconditional wall-clock rail the offset loop has.
           MAX_SECONDS: ${{ inputs.max_seconds || '1500' }}
         run: |
-          ARGS="--max-detail $MAX_DETAIL --rate $RATE --workers $WORKERS"
-          ARGS="$ARGS --max-seconds $MAX_SECONDS"
+          ARGS="--index-only --max-seconds $MAX_SECONDS"
           if [ -n "$MAX_PAGES" ]; then ARGS="$ARGS --max-pages $MAX_PAGES"; fi
           echo "python -m scraper.bezrealitky_main $ARGS"
-          eval "python -m scraper.bezrealitky_main $ARGS"
+          # exec: a cancel's SIGINT must reach Python, which finalizes the run (#2019), not the shell around it.
+          eval "exec python -m scraper.bezrealitky_main $ARGS"

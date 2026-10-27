@@ -3,21 +3,24 @@
 from __future__ import annotations
 
 import os
+from typing import Any, Iterator
 
 import pytest
+
+from tests._live_property import db_url
 
 
 def pytest_configure(config):  # noqa: ARG001 — pytest hook signature
     """Disable lifespan side-effects that touch the real database.
 
-    `api.main`'s lifespan spawns a background asyncio task (notifications
-    matcher) and also sweeps stuck estimation/building rows on startup —
+    `api.main`'s lifespan spawns a background asyncio task (the health
+    teller) and also sweeps stuck estimation/building rows on startup —
     both open their own DB connection. Tests that exercise the
     TestClient would otherwise see noisy never-exiting loops trying
     (and failing) to reach Postgres. Setting these env vars keeps the
     lifespan a no-op without touching production behaviour.
     """
-    os.environ.setdefault("NOTIFICATIONS_MATCHER_DISABLED", "1")
+    os.environ.setdefault("HEALTH_TELLER_DISABLED", "1")
     os.environ.setdefault("STUCK_ROW_SWEEP_DISABLED", "1")
     # The gate accepts only a Supabase JWT and the whole suite hits gated routes
     # without one, so opt into the local-dev exemption globally; the auth tests
@@ -38,3 +41,37 @@ def _no_vapid_key(monkeypatch):
     """No test can push to Apple: the VAPID key is removed before every test (the push lane's brake), and a
     test that sends sets a throwaway key over a faked `requests.post` (tests/api/test_push.py)."""
     monkeypatch.delenv("VAPID_PRIVATE_KEY", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _stop_signal_untouched():
+    """`portal_runner.run_phase` installs the stop handlers (scraper.stop): every test leaves the process's SIGTERM and
+    SIGINT handlers (and a foreground run's SIGHUP and SIGQUIT), and the shared stop event, as it found them, so a stop
+    in one test never cuts the next."""
+    import signal
+
+    from scraper import stop
+
+    handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT)}
+    yield
+    stop.reset()
+    for sig, handler in handlers.items():
+        signal.signal(sig, handler)
+
+
+@pytest.fixture()
+def cur() -> Iterator[Any]:
+    """A rollback-always cursor on `db_url()`; a module that defines its own `cur` overrides it."""
+    import psycopg
+
+    conn = psycopg.connect(
+        db_url(),
+        options="-c statement_timeout=20000 -c lock_timeout=5000"
+        " -c idle_in_transaction_session_timeout=30000",
+    )
+    try:
+        with conn.cursor() as c:
+            yield c
+    finally:
+        conn.rollback()
+        conn.close()

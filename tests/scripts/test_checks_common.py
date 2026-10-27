@@ -27,7 +27,7 @@ def test_platform_reads_the_moved_helpers_under_its_old_names() -> None:
     for private, public in (("_cell", "cell"), ("_judged", "judged"), ("_result", "result"),
                             ("_oneline", "oneline"), ("_ago", "ago"), ("_num", "num"),
                             ("_as_utc", "as_utc"), ("_iso", "iso"), ("_now", "now"),
-                            ("_graded", "graded"), ("_CLOCK_SQL", "CLOCK_SQL")):
+                            ("_graded", "graded")):
         assert getattr(plat, private) is getattr(common, public), private
 
 

@@ -4,8 +4,8 @@
  * Pure, so the page order, the closed-stage separator and the day count are
  * tested without a browser. The cards and stages are the board's own
  * (`pipeline_board_public`, `pipeline_stages_public`), ordered within a stage by
- * the board's default sort: the phone offers no sort and no filter, so it shows
- * what the desktop board shows before anyone touches its controls. */
+ * the board's default sort: the phone offers no sort, and of the board's
+ * filters only Lokalita (applied before the cards reach `stagePages`). */
 
 import { pragueDayKey } from './feed';
 import { czPlural, fmtTomDays } from './format';

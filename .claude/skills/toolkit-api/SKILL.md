@@ -108,7 +108,7 @@ it (`api/`). They do not apply to the scraper.
    that check's open cell incidents on the service role, which stops their reminders), `/properties/merge*`, `/labeling/*`,
    `/outreach/*`, `/broker-review/*`, `/autodedup/*`, `/new-dedup/*`,
    `/skill-refinements/*`, `/location/*` and dataset-write/dispatch routes on price-stats use `require_admin` (JWT-gated, see below) instead of plain `require_token`;
-   `/pipeline/*` (+ `GET`/`POST /pipeline/shares`, `DELETE /pipeline/shares/{account_id}?side=shared_with|shared_with_me`, mig 641), `/collections` (+ `POST`/`DELETE /collections/{id}/shares`, mig 610: the tenant UPDATE (own accounts, `require_account_id`) gates, then the service role writes the share + its notification; all three kinds (collections, pipelines, dashboards) are ONE module, `api/shares.py`), `/tags`, `/filter-presets` (per account, mig 595), `PUT`/`DELETE /push/subscription` + `POST /push/opened` (mig 654: `require_account_id`, never acts, then the service role in the handler; `GET /push/key` is `require_token`, no connection), `GET`/`PUT /stats/dashboard` (per account, migs 626 + 647: the account's working board, a whole-document upsert validated by `toolkit/stats_registry.py`) + `/stats/dashboards` (named dashboards, mig 647: the same saved-set CRUD as `/filter-presets`, one module `api/saved_sets.py`, plus read-only shares through `api/shares.py`), `/estimations` create/detail/scenario/trace payload/feedback (its refiner admin-only), notes, a property's files (`/properties/{id}/attachments[/{aid}]`, mig 660),
+   `/pipeline/*` (+ `GET`/`POST /pipeline/shares`, `DELETE /pipeline/shares/{account_id}?side=shared_with|shared_with_me`, mig 641), `/collections` (+ `POST`/`DELETE /collections/{id}/shares`, mig 610: the tenant UPDATE (own accounts, `require_account_id`) gates, then the service role writes the share + its notification, which carries no text (the bell names the sharer from `actor_account_id` and the thing by its live name, mig 656); all three kinds (collections, pipelines, dashboards) are ONE module, `api/shares.py`), `/tags`, `/filter-presets` (per account, mig 595; groups mig 672: `/filter-preset-groups` + `PUT /filter-presets/layout`), `PUT`/`DELETE /push/subscription` + `POST /push/opened` (mig 654: `require_account_id`, never acts, then the service role in the handler; `GET /push/key` is `require_token`, no connection), `GET`/`PUT /stats/dashboard` (per account, migs 626 + 647: the account's working board, a whole-document upsert validated by `toolkit/stats_registry.py`) + `/stats/dashboards` (named dashboards, mig 647: the same saved-set CRUD as `/filter-presets`, one module `api/saved_sets.py`, plus read-only shares through `api/shares.py`), `/estimations` create/detail/scenario/trace payload/feedback (its refiner admin-only), notes, a property's files (`/properties/{id}/attachments[/{aid}]`, mig 660),
    `/listings/lookup` (**RLS-ONLY**: it takes no account argument and its SQL carries no account predicate — `current_account_ids()` must stay the ONE membership definition, the same one the SPA reads; a second, explicitly-bound one is what broke the extension 2026-07-23→09-11), `/brokers/*` and `/properties/{id}/valuo` (tenancy shape 3) use `verify_jwt`/`tenant_conn` for per-account
    identity without the admin claim (`GET /estimations{,/latest-by-listing}` take `account_scope`);
    most other routes are `require_token` (any signed-in caller, no identity — buildings,
@@ -193,7 +193,7 @@ it (`api/`). They do not apply to the scraper.
     provider argument. Adding a provider is a new file implementing the same Protocol,
     registered in `api/dependencies.py:_build_providers` — AND, separately, in every hand-built provider map (`scraper/main.py`,
     the condition scripts, `scripts/bakeoff_text_extraction.py`, `autodedup/judge_lane.py`, `toolkit/vision_batch.py`,
-    `toolkit/description_extraction.py`; the API, the worker and `smoke_agent.py` use `get_providers()`), and a model whose
+    `toolkit/description_extraction.py`; the API and the worker use `get_providers()`), and a model whose
     provider is unregistered raises in `LLMClient.call` BEFORE the try/except that writes the failure row, so a misroute leaves ZERO `llm_calls` evidence and is
     invisible to the `llm` health check. `LLMClient` is the audit orchestrator — every call
     writes one row to `llm_calls` with provider, model, tokens, USD cost, and a `called_for`
@@ -236,6 +236,8 @@ it (`api/`). They do not apply to the scraper.
     A `*_SQL` constant is therefore NOT evidence of coverage — one unquoted `{slot}` and the
     sweep walks past. `tests/test_measure_sql_prepare.py` is the gate for all six and must
     gain a line when a seventh appears.
+- **Agents (ruling Q29, 2026-10-25, ADR-0002):** an agent run sees broker contacts as its user sees them, at most 20 contacts
+  per call, every read recorded on the run; assistants over MCP stay masked.
 
 ## Error contract and the transport deadline (Broker Unify W2)
 
@@ -253,11 +255,12 @@ the deadline by value; its overlay keeps `LOOKUP_TIMEOUT_MS` for MV3 port loss n
 
 ## Identity, login, and admin gating (Phase 1, `api/dependencies.py`)
 
-Six auth primitives coexist — four in `api/dependencies.py` over ONE header reader, two in
+Seven auth primitives coexist — five in `api/dependencies.py` over ONE header reader, two in
 `api/tenant_pool.py` (`tenant_conn` after this list). `_bearer` (2026-10-13): `API_AUTH_OPTIONAL=1` → anonymous
 (local dev only), else `verify_jwt` — a verified JWT's claims or a 401/503. Tests mint a caller with
 `tests/api/_jwt.py` `mint` (an autouse fixture serves its key).
-- `require_token` — any signed-in caller, nothing returned (rule #8's baseline). Every client sends its
+- `require_token` — any signed-in caller, nothing returned (rule #8's baseline). Its twin `token_claims` (M0) is
+  the same gate returning the claims (None under the opt-out) for a FLAG gated on admin, never a scope. Every client sends its
   session JWT to every route, so a route moves between gates without a client change (the deploy-skew
   class behind the 2026-10-13 "Invalid token" preset incident: #1775's stale bundle).
 - `account_scope` — `_bearer` plus a READ SCOPE (the tenancy doctrine's FOURTH shape): the local-dev
@@ -270,11 +273,16 @@ Six auth primitives coexist — four in `api/dependencies.py` over ONE header re
 - `verify_jwt` — verifies a Supabase user JWT and returns its claims over ONE path: asymmetric JWKS
   (`SUPABASE_URL` → `/auth/v1/.well-known/jwks.json`, ES256/RS256, cached via `PyJWKClient`); no shared
   secret anywhere (the HS256 `SUPABASE_JWT_SECRET` fallback was deleted 2026-10-13); `503` with `SUPABASE_URL`
-  unset (an unconfigured auth backend must never authenticate anyone). History of the static key it once
-  also accepted (the 2026-08-04 god-credential removal, the 2026-10-13 deletion):
+  unset (an unconfigured auth backend must never authenticate anyone). Since M0 (#2059) only a session as Supabase Auth
+  issues one passes: issuer `<SUPABASE_URL>/auth/v1`, `exp`/`iss`/`aud`/`sub`/`role` required, `role = authenticated`, no
+  `client_id` (an OAuth client's token); a refusal's 401 names `wrong issuer` / `missing claim` / `wrong role` / `client token`,
+  and `mint` fills those claims. History of the static key it once also accepted (2026-08-04 removal, 2026-10-13 deletion):
   `docs/design/api-token-rotation-and-spa-jwt-migration.md`.
 - `require_admin` (`Depends(verify_jwt)`) — gates on `claims["is_admin"]` or
-  `claims["app_metadata"]["is_admin"]`; `403` otherwise. Only reachable via a real Supabase JWT
+  `claims["app_metadata"]["is_admin"]`; `403` otherwise. Every `/buildings*` route takes it since M0 (an extraction plus
+  one estimation per unit), and so does a forced refresh: `deps.require_admin_to_force` (over `token_claims`) 403s a
+  non-admin's `force_refresh: true` on `/tools/summarize_listing` + `/tools/compare_listing_images` (the opt-out's caller
+  too; the cached read stays open), and the route census reds on a body taking it without that call. Only reachable via a real Supabase JWT
   whose `app_metadata.is_admin` was stamped `true` (the `admins` table is the provisioning
   allowlist, but the live claim is a plain `auth.users.raw_app_meta_data` attribute — Supabase
   includes `app_metadata` in every issued JWT by default, no Custom Access Token Hook needed).
@@ -339,9 +347,9 @@ closed), `agent_estimation_concurrency_cap` (3). Deferred: extension `mode:'agen
 
 ## Auth and secrets
 
-All secrets are GitHub Actions secrets and/or Railway env vars in production. Backend code
-references them by name; never write a value into a committed file (`.env` is gitignored).
-API keys are **backend-only** — never `VITE_*`-prefix one; `frontend/` must not see them.
+All secrets are GitHub Actions secrets and/or Railway env vars in production, referenced by name; never write a value into a
+committed file (`.env` is gitignored). API keys are **backend-only**: never `VITE_*`-prefix one. Where each secret lives, who reads
+it, how to rotate and verify it: `references/secrets-inventory.md`.
 
 Database:
 - `SUPABASE_DB_URL` — Postgres connection string (Supabase → Database → Connection string →
@@ -351,9 +359,9 @@ Database:
   Connection string → Session pooler, port 5432; same host/user as `SUPABASE_DB_URL`, just
   port 5432 not 6543). **Optional**; used only by the scraper's hot detail-write loop
   (`connect_session()`, i.e. the Phase-2 detail-drain's batched writes) so its repeated SQL
-  gets prepared statements. Unset → falls back to `SUPABASE_DB_URL`. Set it as an Actions
-  secret on `detail_drain.yml` (and the Railway env var only if the API ever calls
-  `connect_session()`).
+  gets prepared statements. Unset → falls back to `SUPABASE_DB_URL`. Set it on the realtime
+  worker's Railway service, the drain's only runtime since W0 (#2010), and on the API only if it
+  ever calls `connect_session()`.
 - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` — set as Actions secrets for forward
   compatibility; the v1 scraper connects to Postgres directly and does not need them.
   (`SUPABASE_SERVICE_ROLE_KEY` is the 2025 `sb_secret_...` token, **not** a JWT.) **On the
@@ -394,7 +402,7 @@ Image storage (Cloudflare R2, S3-compatible):
   if R2 rejects a backdated signature). Capped at half the 7-day presign TTL, or the last URL minted
   in a bucket would already be expired.
 - **Phone copy** (#1765): `GET /images/{key}?v=2&w=1080` (any other `w` → 404) redirects to
-  `thumb/w1080/{id}/{seq}.webp` (WebP q75), made from the master on first request (≤ 4 at once);
+  `thumb/w1080/<key without .jpg>.webp` (WebP q75), made from the master on first request (≤ 4 at once);
   any failure → a 5-min redirect to the master. SPA: `imageSrc(img, { w: 1080 })`. An attachment's copy
   (`GET /properties/{id}/attachments/{aid}?w=1080`, `api/attachments.py`) is made the same way under
   `thumb/w1080/custom-attachments/…` but streamed through that JWT route, never presigned.
@@ -431,45 +439,53 @@ LLM + maps (FastAPI service + scoring jobs):
   crosses it. Each provider's own console spend cap is the hard guard.
 
 API service:
-- `API_AUTH_OPTIONAL=1` — LOCAL DEV ONLY: opens every `require_token` route to anonymous callers. Never on Railway (rule #8).
+- `API_AUTH_OPTIONAL=1` — LOCAL DEV ONLY: opens every `require_token` route to anonymous callers. Never on Railway (rule #8):
+  since M0 the API refuses to boot with it when any Railway system variable is set (`deps._RAILWAY_MARKERS`: `RAILWAY_ENVIRONMENT`,
+  `_ENVIRONMENT_NAME`, `_ENVIRONMENT_ID`, `_PROJECT_ID`, `_SERVICE_ID`); the lifespan's first step, so uvicorn exits.
 - `CORS_ALLOW_ORIGINS` — CSV of allowed origins; must include the Chrome extension's
   `chrome-extension://<id>` origin and the SPA origin.
-- `STUCK_ROW_SWEEP_DISABLED`, `NOTIFICATIONS_MATCHER_DISABLED` (optional flags) — disable the
-  startup sweep of stuck estimation/building runs, and the background watchdog matcher loop (with
-  the system-alerts loop beside it), respectively. Default: both enabled.
+- `STUCK_ROW_SWEEP_DISABLED`, `HEALTH_TELLER_DISABLED` (optional flags) — disable the startup sweep
+  of stuck estimation/building/scrape runs (the scrape_runs cutoff, `api.main.STUCK_RUN_CUTOFF_MINUTES`, is
+  held past the longest walk by `tests/scraper/test_job_registry.py`), and the system-alerts loop (the
+  health teller, the API's only background loop), respectively. Default: both enabled. `HEALTH_TELLER_DISABLED` replaced
+  `NOTIFICATIONS_MATCHER_DISABLED` in W2b, with no alias (the old name, if still set anywhere, does
+  nothing); the watchdog producers run on the realtime worker's `notifications` lane alone.
 
 Notification delivery (rule #16; `docs/design/notifications-push/PROGRAM.md` § 3.4): iPhone push only. W1 (2026-10-21) deleted
 the Resend email + Telegram transports, the outbox, `ChannelClient`, `POST /webhooks/resend` and `/u/{token}`, so `RESEND_API_KEY`,
 `EMAIL_FROM`, `RESEND_WEBHOOK_SECRET`, `NOTIFICATION_UNSUB_SECRET`, `API_PUBLIC_URL`, `TELEGRAM_BOT_TOKEN`, `SPA_BASE_URL` and
 `OUTBOX_DRAIN_DISABLED` are read by nothing (safe to remove from Railway). Push links absolutely from each device's own origin.
-- `VAPID_PRIVATE_KEY` (W4) — the P-256 scalar, 32 bytes base64url (no PEM), ONE Railway Shared Variable attached to BOTH the API
+- `VAPID_PRIVATE_KEY` (W4) — the P-256 scalar, 32 bytes base64url (no PEM), the SAME value set on EACH service (the API and the worker are separate Railway projects, so no Shared Variable spans them): the API
   (`GET /push/key` derives the public key; unset/unreadable → 503) and the realtime-worker (the `push` lane signs with it; unset =
   the lane's brake, `unconfigured`). Never `VITE_`; never log it; rotating it ends every subscription (`VapidPkHashMismatch` →
   gone), so rotate only on a leak. Generate it with no output, into a file only you can read, then paste it into Railway and delete
   the file: `python3 -c "import os,base64;from cryptography.hazmat.primitives.asymmetric import ec;os.umask(0o077);k=ec.generate_private_key(ec.SECP256R1()).private_numbers().private_value.to_bytes(32,'big');open(os.path.expanduser('~/vapid_private_key.txt'),'x').write(base64.urlsafe_b64encode(k).rstrip(b'=').decode())"`.
   Transport `api/push.py` (RFC 8291 aes128gcm + RFC 8292 VAPID ES256 on `cryptography` + PyJWT, `*.push.apple.com` only, no
   redirects, a transport error = its class name); devices `api/push_devices.py`; the ledger pass `api/push_delivery.py`.
-- The system-alerts loop (`api/system_alerts_loop.py`, beside the matcher, off under `NOTIFICATIONS_MATCHER_DISABLED`) runs the health ladder `toolkit.system_alerts.reconcile` every 60 s (a constant, no setting): it keeps the `ops_incidents` ladder (onset, reminders by rung, recovery, acknowledgement on Health) and writes no `notification_dispatches` row (ruling R2b, 2026-10-21, superseding Q1's "bell only"); the external alarm is the health canary's GitHub e-mail (scraper-ops skill).
+- The system-alerts loop (`api/system_alerts_loop.py`, the API's only background loop, off under `HEALTH_TELLER_DISABLED`) runs the health ladder `toolkit.system_alerts.reconcile` every 60 s (a constant, no setting): it keeps the `ops_incidents` ladder (onset, reminders by rung, recovery, acknowledgement on Health) and writes no `notification_dispatches` row (ruling R2b, 2026-10-21, superseding Q1's "bell only"); the external alarm is the health canary's GitHub e-mail (scraper-ops skill).
 - `STRIPE_WEBHOOK_SECRET` — Stripe webhook signing secret (Dashboard → Developers →
   Webhooks). Railway API env. Unset = `POST /billing/webhook` 503s (fail closed); the
   handler verifies the `Stripe-Signature` HMAC with the stdlib (no stripe SDK).
 
 Scraper orchestration:
 - `SREALITY_COUNTRY_ID` (optional, default `112` = Czech Republic).
-- `SCRAPE_CHAIN_TOKEN` (optional fine-grained PAT: this repo, Actions read+write) — lets the
-  scrape workflow re-dispatch itself for tighter-than-cron cadence; no-op without it.
+- `SCRAPE_CHAIN_TOKEN` (fine-grained PAT) — no workflow reads it since #2013 (price stats chains on its job's own
+  `GITHUB_TOKEN`); only the worker's count-probe dispatch falls back to it, until #2015 deletes that lane and the secret.
 - `GITHUB_ACTOR` — CI context, used for curated-cities upload attribution.
 
 NEW DEDUP (docs/design/new-dedup/PROGRAM.md, Wave 1):
-- `RUNPOD_API_KEY` — Actions secret only (no Railway/frontend use). Auths `scripts/runpod_client.py`'s REST
+- `RUNPOD_API_KEY` — an Actions secret (pods are rented only inside workflows, the judge lane's `autodedup.yml` among them);
+  no Railway service reads it, so a Railway copy is dead and is deleted (M0, #2061). Auths `scripts/runpod_client.py`'s REST
   (`rest.runpod.io/v1`) + GraphQL (`api.runpod.io/graphql`) calls to launch/poll/terminate on-demand GPU pods.
-  Two `workflow_dispatch` lanes: `new_dedup_runpod_smoke_test.yml` (infra proof) and `dinov3_embed_backfill.yml`
-  (the DINOv3 corpus embedding pass, never yet run on real data). Every job goes through `RunPodClient.run_job`,
+  Its workflow consumers: `autodedup.yml`, `dinov3_bakeoff_manifest.yml`, `dinov3_embed_backfill.yml`, `runpod_reap.yml`, `tagging_bakeoff.yml`, `text_extraction_bakeoff.yml`
+  (`dinov3_embed_backfill` is the DINOv3 corpus embedding pass, never yet run on real data). Every job goes through `RunPodClient.run_job`,
   which terminates the pod in a `finally` however the job ends — the actual cost-safety guarantee (the pod API has no "run
   once and stop" flag). Credentials reach a pod ONLY via the optional `env: dict[str, str]` on
   `launch_pod`/`run_job`/`run_job_with_fallback` — the REST body's `env` **object** (`{"K": "v"}`, not GraphQL's
   `[{key, value}]` list; omitted when empty), never `start_cmd`, which is argv in the pod record. Never logged.
 - `HF_TOKEN` — Actions secret only. HuggingFace token for **gated** weights (`facebook/dinov3-*` is `gated: manual`; even `config.json` 401s), read by `scraper/dinov3_tagger.py` and forwarded into the pod.
+- `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ZONE_ID` — repo-root `.env` only, read by no code: lets a session edit `propscout.cz` DNS
+  (token scope: Zone Read, DNS Edit, Single Redirect Edit). `app.`/`api.` stay DNS-only — brand-domain `PROGRAM.md` W1.
 
 Frontend / extension (build-time only, inlined into the browser bundle — *not* backend
 runtime): `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` (the publishable anon key, safe in

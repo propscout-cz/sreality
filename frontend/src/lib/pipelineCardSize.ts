@@ -32,6 +32,8 @@ export interface PipelineCardGeometry {
   thumb: string;
   /* lg stacks the photo above the text; sm/md keep them side by side. */
   stacked: boolean;
+  /* P20: the MF yield beside the dims line is a Velké-card detail. */
+  showsYield: boolean;
   /* Floor for the stage's drop zone. Columns stretch to the tallest one
    * (#1399), so this only binds when the WHOLE board is short — but then it
    * must still be a target, not a sliver. Three card rows at sm and md; lg's
@@ -53,6 +55,7 @@ export const PIPELINE_CARD_GEOMETRY: Record<PipelineCardSize, PipelineCardGeomet
     column: 'w-72',
     thumb: 'h-12 w-12 shrink-0',
     stacked: false,
+    showsYield: false,
     dropZoneMin: 'min-h-[18rem]',
     overlay: 'w-64',
     skeletonRow: 'h-[4.5rem]',
@@ -60,13 +63,13 @@ export const PIPELINE_CARD_GEOMETRY: Record<PipelineCardSize, PipelineCardGeomet
   md: {
     /* 24rem, not the 21rem the doubled thumbnail alone needs: at 21-22rem every
      * gained pixel went to the photo and the text column stayed exactly as
-     * cramped as sm's. It still truncates a long per-m² beside the MF badge —
-     * that is sm's own layout, and md is the SAME design with a bigger photo;
-     * the step that gives the text a full line is lg, where the photo leaves
-     * the row entirely. */
+     * cramped as sm's. md is the SAME design with a bigger photo; the step that
+     * gives the text a full line is lg, where the photo leaves the row
+     * entirely. */
     column: 'w-[24rem]',
     thumb: 'h-24 w-24 shrink-0',
     stacked: false,
+    showsYield: false,
     dropZoneMin: 'min-h-[30rem]',
     overlay: 'w-[22rem]',
     skeletonRow: 'h-[9.5rem]',
@@ -75,11 +78,17 @@ export const PIPELINE_CARD_GEOMETRY: Record<PipelineCardSize, PipelineCardGeomet
     column: 'w-[26rem]',
     thumb: 'aspect-[16/10] w-full',
     stacked: true,
+    showsYield: true,
     dropZoneMin: 'min-h-[32rem]',
     overlay: 'w-[24rem]',
     skeletonRow: 'h-[22rem]',
   },
 };
+
+/* P22's folded Uzavřené lane: the same at every size, since it holds a row per
+ * closed stage rather than cards, and wide enough for a stage label plus its
+ * count. Opened, the lane takes the size's `column`. */
+export const PIPELINE_CLOSED_LANE_WIDTH = 'w-52';
 
 /* Czech, like the rest of this page's chrome (Stav / Typ / Lokalita / Řazení).
  * The titles say what the step does to the BOARD, not to the card — the cost of

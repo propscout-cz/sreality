@@ -4,8 +4,13 @@ name: "Ops: back up what a destructive migration drops"
 # (CLAUDE.md rule 1 / the `database` skill: back up first, then the operator's explicit OK).
 # Each target is `table` (pg_dump of the whole relation) or `table:key,col[,col...]` (a CSV of
 # the key plus those columns, rows where one of them is set), uploaded to R2 under
-# backups/<label>/<UTC date>/ and read back. Never a workflow artifact: the repository is
-# public. workflow_dispatch only; safe to re-run (a same-day re-run overwrites).
+# backups/<label>/<UTC date>/ and read back. Never a workflow artifact: an artifact is not
+# private storage and it expires. workflow_dispatch only; safe to re-run (a same-day re-run overwrites).
+#
+# `artifacts` instead archives Actions artifacts to R2 before they are purged (#2016): each
+# `<run-id>:<artifact-name>` is fetched as the zip GitHub serves, one at a time (a 10 GB set never
+# fills the runner), stored as <name>_<run>_<artifact-id>.zip and read back:
+#   gh workflow run backup_before_drop.yml -f label=retired-claims -f artifacts="34773464850:retired-claims-backup"
 #
 # Migration 575 (the MF legacy columns):
 #   gh workflow run backup_before_drop.yml -f label=mf-legacy-columns -f targets="listings:id,mf_reference_rent_czk,mf_gross_yield_pct,mf_reference_rent properties:id,mf_reference_rent_czk,mf_gross_yield_pct,mf_reference_rent ruian_admin_units:id,has_polygon"
@@ -18,8 +23,12 @@ on:
         required: true
         type: string
       targets:
-        description: "Space-separated: `table` or `table:key,col[,col...]`"
-        required: true
+        description: "Space-separated: `table` or `table:key,col[,col...]` (or leave empty and name artifacts)"
+        required: false
+        type: string
+      artifacts:
+        description: "Space-separated `<run-id>:<artifact-name>`: Actions artifacts to archive in R2 as their zip"
+        required: false
         type: string
 
 concurrency:
@@ -32,6 +41,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      actions: read   # the artifacts mode downloads artifacts of other runs
     env:
       SUPABASE_DB_SESSION_URL: ${{ secrets.SUPABASE_DB_SESSION_URL }}
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
@@ -49,6 +59,7 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install postgresql-client 17 (pg_dump)
+        if: ${{ inputs.targets != '' }}
         # The runner's default postgresql-client is v16; the Supabase server is v17.x and
         # pg_dump refuses to dump from a newer major version. Pull the matching client from
         # the official PGDG apt repo instead of the Ubuntu default.
@@ -70,6 +81,7 @@ jobs:
       # Free text reaches the shell only through the environment, charset-guarded and with
       # globbing off; the script then validates the shape of every target.
       - name: Back up the targets
+        if: ${{ inputs.targets != '' }}
         env:
           LABEL: ${{ inputs.label }}
           TARGETS: ${{ inputs.targets }}
@@ -81,3 +93,30 @@ jobs:
           esac
           # shellcheck disable=SC2086  # word-splitting TARGETS into one argument per target
           python -m scripts.backup_before_drop "$LABEL" $TARGETS
+
+      - name: Archive the artifacts
+        if: ${{ inputs.artifacts != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LABEL: ${{ inputs.label }}
+          ARTIFACTS: ${{ inputs.artifacts }}
+        run: |
+          set -euo pipefail
+          set -f
+          case "$LABEL$ARTIFACTS" in
+            *[!a-z0-9_:\ -]*) echo "::error::label/artifacts may only contain a-z 0-9 _ : - and spaces"; exit 1 ;;
+          esac
+          mkdir -p archive
+          for spec in $ARTIFACTS; do
+            run="${spec%%:*}"; name="${spec#*:}"
+            ids=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts" \
+              -q ".artifacts[] | select(.name == \"$name\" and .expired == false) | .id")
+            if [ -z "$ids" ]; then echo "::error::run $run has no live artifact named $name"; exit 1; fi
+            for id in $ids; do
+              file="archive/${name}_${run}_${id}.zip"
+              gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" > "$file"
+              echo "$file: $(stat -c%s "$file") bytes"
+              python -m scripts.backup_before_drop "$LABEL" --file "$file"
+              rm -f "$file"
+            done
+          done

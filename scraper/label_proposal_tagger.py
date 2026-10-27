@@ -17,6 +17,12 @@ module loads without them.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+from scraper.cpus import job_cpus
+
+if TYPE_CHECKING:
+    import torch
 
 
 @dataclass(frozen=True)
@@ -25,7 +31,7 @@ class ProposalResult:
     confidence: float  # softmax probability of the winning label, 0..1
 
 
-def _project(out):
+def _project(out: Any) -> torch.Tensor:
     """get_text_features/get_image_features return a wrapper under some
     transformers versions; take pooler_output when so, else the tensor itself."""
     return out if hasattr(out, "shape") else out.pooler_output
@@ -34,7 +40,8 @@ def _project(out):
 class ProposalTagger:
     """Loaded secondary CLIP model + precomputed taxonomy-label text embeddings."""
 
-    def __init__(self, model, processor, labels: list[str], text_emb, model_id: str) -> None:
+    def __init__(self, model: Any, processor: Any, labels: list[str], text_emb: torch.Tensor,
+                 model_id: str) -> None:
         self._model = model
         self._processor = processor
         self._labels = labels
@@ -52,7 +59,7 @@ class ProposalTagger:
         if not labels:
             raise ValueError("no active taxonomy labels to propose against")
         os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "60")
-        torch.set_num_threads(threads or (os.cpu_count() or 4))
+        torch.set_num_threads(threads or job_cpus())
         # Mirrors clip_tagger.Tagger.load's retry: concurrent sharded jobs
         # downloading the same weights occasionally 503 / time out.
         model = processor = None

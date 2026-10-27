@@ -74,6 +74,8 @@ class RealitymixPortal(portal_runner.PortalDefaults):
     the `portals` registry config."""
 
     source = SOURCE
+    walk_every_s = 6 * 3600
+    walk_timeout_s = 180 * 60
     index_rate = 1.0
 
     def __init__(self, config: PortalConfig, *, max_pages: int | None = None) -> None:

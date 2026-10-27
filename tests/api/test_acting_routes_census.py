@@ -63,6 +63,7 @@ _SERVICE_ROLE = frozenset({"open_background_conn", "get_db_conn"})
 _NEVER_ACTS: frozenset[str] = frozenset({
     "POST /notifications/subscriptions",
     "POST /filter-presets",
+    "POST /filter-preset-groups",
     "PUT /stats/dashboard",
     "POST /stats/dashboards",
     "POST /pipeline/shares",
@@ -249,6 +250,7 @@ def test_the_census_is_not_vacuous() -> None:
     assert not set(_OWN_ACCOUNT_CURATION_WRITES) - set(own), "stale _OWN_ACCOUNT_CURATION_WRITES entry"
     # The saved-set factory builds its SQL from the kind; its `runs_sql` tag is what the census reads.
     assert own["POST /filter-presets"] == {"filter_presets"}
+    assert own["POST /filter-preset-groups"] == {"filter_preset_groups"}
     assert own["POST /stats/dashboards"] == {"stats_dashboards"}
     assert {"stats_dashboards", "stats_dashboard_shares", "notification_dispatches"} <= own[
         "POST /stats/dashboards/{dashboard_id}/shares"]

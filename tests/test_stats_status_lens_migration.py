@@ -68,7 +68,7 @@ def _expected() -> str:
 
 
 def test_it_is_the_effective_definition_and_the_only_one_in_the_file() -> None:
-    assert latest_definition(FN).name == "662_status_filter_contract.sql"  # 640 dropped the denylist, 644 swapped the condition conjunct, 648 added energy rating, 657 took the lens back, 662 one status parameter
+    assert latest_definition(FN).name == "678_stats_small_samples.sql"  # 640 dropped the denylist, 644 swapped the condition conjunct, 648 added energy rating, 657 took the lens back, 662 one status parameter, 678 the small-sample summary
     assert SQL.count(f"create or replace function public.{FN}(") == 1
 
 

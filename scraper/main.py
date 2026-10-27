@@ -2,11 +2,11 @@
 
 `SrealityPortal` wraps this module's walk / fetch helpers for the shared
 portal_runner; the scheduled entrypoint is `scraper.sreality_main`
-(index_walk.yml / detail_drain.yml). The image phase reads pending image rows
+(index_walk.yml; the realtime worker drains). The image phase reads pending image rows
 and uploads their bytes to Cloudflare R2 (a no-op without the R2_* env vars).
 
 Run with exactly one mode:
-    python -m scraper.main --images-only           # image phase (images.yml, images_fresh.yml)
+    python -m scraper.main --images-only           # image phase by hand (the worker's images lane runs it)
     python -m scraper.main --index-only --dry-run  # sreality index walk, no DB writes
     python -m scraper.main --drain-only            # sreality detail drain
     python -m scraper.main --images-only --max-image-downloads 500 --image-workers 16
@@ -321,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # Open a scrape_runs row for any non-dry-run invocation that actually
-    # scrapes. The image-only backfill (images.yml) is NOT a scrape run —
+    # scrapes. The image-only phase (--images-only) is NOT a scrape run —
     # recording it here polluted "last scrape" / the liveness check /
     # reconciliation with index_pages=0 rows, so it's excluded.
     run_id: int | None = None
@@ -358,8 +358,6 @@ def main(argv: list[str] | None = None) -> int:
             _run_image_downloads(
                 max_downloads=max_image_downloads,
                 workers=image_workers,
-                active_only=args.images_active_only,
-                shard=_parse_shard(args.image_shard),
                 sources=_parse_sources(args.image_sources),
                 max_concurrency_per_host=image_max_concurrency_per_host,
                 max_seconds=args.image_max_seconds,
@@ -368,11 +366,9 @@ def main(argv: list[str] | None = None) -> int:
             # throttling us), NOT a run failure: the phase still stored every
             # image it could from the healthy hosts, and the per-host
             # concurrency cap + quarantine localize a struggling CDN without
-            # touching the others. So we exit 0 (green). The "IMAGES STOP
-            # suspicious" log marker — emitted only when the remaining queue is
-            # ALL quarantined — is what the fresh lane's self-chain greps to
-            # avoid immediately re-hammering the same CDN; cron restarts it on
-            # its own cadence regardless of exit code.
+            # touching the others. So we exit 0 (green); the "IMAGES STOP
+            # suspicious" log marker (emitted only when the remaining queue is
+            # ALL quarantined) is what tells the operator a CDN pushed back.
     finally:
         if run_id is not None:
             try:
@@ -431,8 +427,8 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--images-only",
         action="store_true",
         help=(
-            "run only the image-download phase. Used by images.yml / "
-            "images_fresh.yml to drain the R2 backlog without walking the index."
+            "run only the image-download phase (the realtime worker's images "
+            "lane runs the same phase on its own clock), without walking the index."
         ),
     )
     p.add_argument(
@@ -457,33 +453,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
-        "--images-active-only",
-        action="store_true",
-        help=(
-            "restrict the image-download phase to images attached to "
-            "currently-active listings, ordered newest-first. Used by "
-            "images_fresh.yml (and images.yml's active slice) to prioritise "
-            "the user-visible coverage gap; without it inactive listings' "
-            "photos keep filling in as bandwidth allows."
-        ),
-    )
-    p.add_argument(
         "--image-workers",
         type=int,
         default=None,
         help="concurrent download/upload workers (default: per-portal config)",
-    )
-    p.add_argument(
-        "--image-shard",
-        type=str,
-        default=None,
-        metavar="K/N",
-        help=(
-            "process only images whose parent listing has "
-            "(hash(sreality_id) mod N) == K — for matrix parallelism, each "
-            "job claims one shard. 0-indexed (e.g. 0/4). Keying on the "
-            "listing keeps a listing's photos in one shard (no striping)."
-        ),
     )
     p.add_argument(
         "--image-sources",
@@ -515,7 +488,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         metavar="SECONDS",
         help=(
             "Wall-clock budget for the image phase (checked between batches). "
-            "This — not the count cap — is what keeps a sharded run inside its "
+            "This — not the count cap — is what keeps a run inside its "
             "job timeout: per-image cost changes (the 1800px sreality master) "
             "move a count cap's runtime, and an overrun is SIGKILLed with no "
             "finalize. Unset = unbounded."
@@ -585,6 +558,8 @@ class SrealityPortal(portal_runner.PortalDefaults):
 
     source = "sreality"
     price_change_min_pct = 0.0  # instance reads from config (portal_factory)
+    walk_every_s = 3600  # PROGRAM R24: hourly once on the job runner
+    walk_timeout_s = 40 * 60
     index_rate = DEFAULT_DETAIL_RATE  # baked floor; instance reads from config
     shared_rate_limiter = False  # instance reads from config (portal_factory)
 
@@ -879,9 +854,9 @@ def _walk_category_split(
     # The gate: every district ended on a signal from sreality, and nothing of
     # ours stopped us anywhere in the category. The union-vs-probe arithmetic is
     # NOT part of it any more — it survives as the fallback trigger above and as
-    # the coverage number logged here (and by the runner, into
-    # scrape_runs.by_category), where a persistent gap is visible without
-    # silencing a whole category's delisting.
+    # the coverage number logged here (and by the runner, whose
+    # scrape_runs.by_category keeps both counts), where a persistent gap is
+    # visible without silencing a whole category's delisting.
     reasons = list(district_reasons.values()) + category_stops
     ended = {r: stop_is_portal_end(r) for r in set(reasons)}
     reached_end = walk_reached_end(
@@ -1093,20 +1068,6 @@ def _fetch_detail(client: SrealityClient, sid: int) -> FetchResult:
     return FetchResult(sid, "ok", row=row, raw=raw, images=images)
 
 
-def _parse_shard(spec: str | None) -> tuple[int, int] | None:
-    """Parse a 'K/N' image-shard spec into (k, n); validate 0 <= k < n."""
-    if not spec:
-        return None
-    try:
-        k_s, n_s = spec.split("/", 1)
-        k, n = int(k_s), int(n_s)
-    except ValueError:
-        raise SystemExit(f"--image-shard must be K/N integers, got {spec!r}")
-    if not (n >= 1 and 0 <= k < n):
-        raise SystemExit(f"--image-shard must satisfy 0 <= K < N, got {spec!r}")
-    return (k, n)
-
-
 def _parse_sources(spec: str | None) -> tuple[str, ...] | None:
     """Parse a comma-separated --image-sources list; None when unset."""
     if not spec:
@@ -1118,26 +1079,23 @@ def _parse_sources(spec: str | None) -> tuple[str, ...] | None:
 def _run_image_downloads(
     max_downloads: int,
     workers: int,
-    active_only: bool = False,
     *,
-    shard: tuple[int, int] | None = None,
     sources: tuple[str, ...] | None = None,
     max_concurrency_per_host: int = 8,
     max_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Drain pending image downloads. Returns aggregates for scrape_runs.
 
-    `shard=(k, n)` restricts this run to the `image_id mod n == k` slice so
-    N parallel matrix jobs each drain a disjoint partition (horizontal
-    scale-out). `sources` scopes to specific listing sources. Both are
-    pure selection predicates passed through to `pending_image_downloads`.
+    Active ads' images first, then the inactive residue
+    (`pending_image_downloads`). `sources` scopes to specific listing sources,
+    a pure selection predicate passed through to it.
 
     Loops in batches until either (a) the pending queue is empty,
     (b) the per-run cap is reached (if max_downloads > 0), (c) every
     CDN host still left in the queue has been quarantined, or (d) the
     wall-clock budget `max_seconds` is spent.
 
-    `max_seconds` is what actually keeps a CI shard inside its job timeout. The
+    `max_seconds` is what actually keeps a bounded run inside its timeout. The
     per-run COUNT cap can't: it is calibrated against a measured images/hour, and
     per-image cost moves under it (the sreality template went from a 749px crop to
     the ≤1800px master, multiplying bytes on both the download and the R2 upload
@@ -1242,14 +1200,11 @@ def _run_image_downloads(
 
     with db.connect() as conn:
         LOG.info(
-            "IMAGES start cap=%s budget=%s workers=%d per_host=%s active_only=%s "
-            "shard=%s sources=%s",
+            "IMAGES start cap=%s budget=%s workers=%d per_host=%s sources=%s",
             "unlimited" if max_downloads <= 0 else max_downloads,
             "unbounded" if deadline is None else f"{max_seconds:.0f}s",
             workers,
             "off" if max_concurrency_per_host <= 0 else max_concurrency_per_host,
-            active_only,
-            f"{shard[0]}/{shard[1]}" if shard else "none",
             ",".join(sources) if sources else "all",
         )
 
@@ -1270,8 +1225,7 @@ def _run_image_downloads(
                 break
             this_batch = min(batch_size, remaining or batch_size)
             pending = db.pending_image_downloads(
-                conn, limit=this_batch, active_only=active_only,
-                shard=shard, sources=sources,
+                conn, limit=this_batch, sources=sources,
             )
             if not pending:
                 break
@@ -1283,8 +1237,8 @@ def _run_image_downloads(
             # Skip images whose parent listing is already known gone (we'd just
             # re-mark them) AND images on a quarantined host (its transient rate
             # crossed the bar this run — leave them pending for the next run).
-            filtered_pending: list[tuple[Any, ...]] = []
-            for image_id, lid, seq, url, cm, ct, sid in pending:
+            filtered_pending: list[tuple[int, int, str]] = []
+            for image_id, lid, _seq, url, cm, ct, sid in pending:
                 if sid is not None and sid in gone_listings:
                     continue
                 host = _image_host(url)
@@ -1296,7 +1250,7 @@ def _run_image_downloads(
                 cat_lookup[image_id] = (cm, ct)
                 sid_by_image[image_id] = sid
                 host_by_image[image_id] = host
-                filtered_pending.append((image_id, lid, seq, url, cm, ct))
+                filtered_pending.append((image_id, lid, url))
 
             if not filtered_pending:
                 # Nothing fetchable in this slice: every row is a known-gone
@@ -1317,11 +1271,11 @@ def _run_image_downloads(
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 future_to_id = {
                     pool.submit(
-                        _fetch_one_image, lid, seq, url, r2,
+                        _fetch_one_image, lid, image_id, url, r2,
                         _semaphore_for(host_by_image[image_id]),
                         proxied_hosts.get(host_by_image[image_id]),
                     ): image_id
-                    for image_id, lid, seq, url, _cm, _ct in filtered_pending
+                    for image_id, lid, url in filtered_pending
                 }
                 for future in as_completed(future_to_id):
                     image_id = future_to_id[future]
@@ -1600,8 +1554,8 @@ def _phash_or_none(data: bytes) -> int | None:
 
 
 def _fetch_one_image(
-    sreality_id: int,
-    sequence: int | None,
+    listing_id: int,
+    image_id: int,
     url: str,
     r2: image_storage.R2Client,
     semaphore: "threading.BoundedSemaphore | None" = None,
@@ -1624,7 +1578,7 @@ def _fetch_one_image(
     wraps only the CDN download — the R2 upload (a different host) runs
     unbounded — so a small portal CDN isn't dogpiled by the full worker pool.
     """
-    key = image_storage.image_key(sreality_id, sequence)
+    key = image_storage.image_key(listing_id, image_id)
     rendition = image_storage.rendition_for(url)
     try:
         if semaphore is not None:

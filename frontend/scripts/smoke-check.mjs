@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Production smoke-check: logs into the live SPA as the dedicated admin test
-// account, confirms Browse renders, and opens+closes Merge mode without ever
+// account, confirms Browse renders, and opens+closes merge mode (the cards
+// header's "Sloučit…", ruling P10) without ever
 // touching a card checkbox — the mutating button (Merge) stays `disabled`
 // until >=2 cards are selected, so this script can
 // never trigger a production write. See CLAUDE.md "Autonomy and the safety
@@ -53,7 +54,7 @@ function loadRootEnv() {
 }
 loadRootEnv();
 
-const BASE_URL = process.env.SMOKE_CHECK_BASE_URL || 'https://sreality-production-1bb6.up.railway.app';
+const BASE_URL = process.env.SMOKE_CHECK_BASE_URL || 'https://app.propscout.cz';
 const SHOT_DIR = path.join(__dirname, '.smoke-shots');
 mkdirSync(SHOT_DIR, { recursive: true });
 
@@ -211,9 +212,9 @@ if (process.env.SMOKE_CHECK_CHROMIUM_PATH) {
     await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
     await page.screenshot({ path: path.join(SHOT_DIR, '02-browse.png') });
 
-    const mergeModeBtn = page.getByRole('button', { name: 'Merge mode', exact: true });
+    const mergeModeBtn = page.getByRole('button', { name: 'Sloučit…', exact: true });
     await mergeModeBtn.waitFor({ state: 'visible', timeout: 15000 });
-    step('Browse renders + "Merge mode" button visible', true);
+    step('Browse renders + "Sloučit…" (merge mode) button visible', true);
 
     /* --- Browse cards keep their carousels (W7a) ----------------------- *
      * Card photos moved OFF the cards read into the shared hydration layer,
@@ -273,7 +274,7 @@ if (process.env.SMOKE_CHECK_CHROMIUM_PATH) {
     );
 
     await mergeModeBtn.click();
-    step('clicked "Merge mode" (local state only, no network call)', true);
+    step('clicked "Sloučit…" (local state only, no network call)', true);
 
     const mergeBtn = page.getByRole('button', { name: /^Merge($| \d)/ });
     await mergeBtn.waitFor({ state: 'visible', timeout: 5000 });

@@ -598,6 +598,13 @@ def test_wave6_deleted_the_legacy_bodies_their_thresholds_and_shared_state() -> 
     assert not [k for k in THRESHOLDS if k.startswith(retired)]
 
 
+def test_a_lane_in_flight_is_judged_on_the_workers_pass_budget_not_a_threshold() -> None:
+    """#2026 (AC3): the two global in-flight keys are replaced by platform.LANE_PASS_BUDGET_S, a test-pinned mirror of
+    the worker's one pass budget; a job is judged on its own timeout_s (migration 682)."""
+    assert not [k for k in THRESHOLDS if k.startswith("jobs_lane_inflight_")]
+    assert (platform_checks.LANE_PASS_BUDGET_S, platform_checks.LANE_INFLIGHT_WARN_S) == (1800, 1200)
+
+
 def test_the_worker_heartbeat_is_the_watchers_to_judge_not_a_checks() -> None:
     """Wave 2: the pg_cron watcher's `worker` cell (migration 620) reads the heartbeat every
     5 min; the GitHub-hosted check sampled it every ~4.9 h, so it caught an outage of length
@@ -1485,7 +1492,7 @@ def test_migration_drift_only_warns_when_a_migration_is_half_present() -> None:
     file. Ambiguity warns; it must not page anyone at 3am."""
     migs = load_migrations(_MIGRATIONS_DIR, newest=T["migration_drift_window"])
     # The missing object must be declared by no other file in the window: a function that a later
-    # migration restates (health_liveness: 620, 621, 633) would make those files fully absent.
+    # migration restates (health_liveness: 620, 621, 633, 655) would make those files fully absent.
     declared = Counter((o.kind, o.ident) for m in migs for o in m.objects)
     multi, gone = next((m, o) for m in migs if len(m.objects) >= 2
                        for o in m.objects if declared[(o.kind, o.ident)] == 1)

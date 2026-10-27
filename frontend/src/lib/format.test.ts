@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   fmtArea,
   fmtDistanceM,
@@ -6,6 +6,8 @@ import {
   fmtMeasuredPricePerM2,
   fmtPct,
   fmtPP,
+  fmtRelative,
+  fmtRelativeCs,
 } from './format';
 
 const NBSP = ' ';
@@ -181,5 +183,37 @@ describe('fmtFloor', () => {
   it('returns null for an absent storey so each surface renders its own gap', () => {
     expect(fmtFloor(null, 5)).toBeNull();
     expect(fmtFloor(undefined)).toBeNull();
+  });
+});
+
+/* The map popup's "viděno před 2 h" (ruling P13): fmtRelative's buckets, in Czech. */
+describe('fmtRelativeCs', () => {
+  const NOW = new Date('2026-10-27T12:00:00Z');
+  const ago = (s: number) => new Date(NOW.getTime() - s * 1000).toISOString();
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('says how long ago in the same buckets as fmtRelative', () => {
+    expect(fmtRelativeCs(ago(30))).toBe('před 30 s');
+    expect(fmtRelativeCs(ago(5 * 60))).toBe('před 5 min');
+    expect(fmtRelativeCs(ago(2 * 3600))).toBe('před 2 h');
+    expect(fmtRelativeCs(ago(3 * 86400))).toBe('před 3 dny');
+    expect(fmtRelativeCs(ago(14 * 86400))).toBe('před 2 týd.');
+    expect(fmtRelativeCs(ago(90 * 86400))).toBe('před 3 měs.');
+    expect(fmtRelativeCs(ago(730 * 86400))).toBe('před 2 r.');
+    expect(fmtRelative(ago(2 * 3600))).toBe('2\u202fh ago');
+  });
+
+  it('never reads a clock skew as the future', () => {
+    expect(fmtRelativeCs(new Date(NOW.getTime() + 5000).toISOString())).toBe('před 0 s');
+  });
+
+  it('is a dash for a missing or unreadable time', () => {
+    expect(fmtRelativeCs(null)).toBe('—');
+    expect(fmtRelativeCs(undefined)).toBe('—');
+    expect(fmtRelativeCs('not a date')).toBe('—');
   });
 });

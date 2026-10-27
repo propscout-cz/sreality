@@ -3,7 +3,7 @@
 Mirrors scripts.recompute_property_stats: a pure-SQL, set-based, idempotent driver
 that runs OFF the scrape hot path. Three modes:
 
-  * --incremental (cron */10): drain the dirty_broker_listings queue (new +
+  * --incremental (the realtime worker's broker lane; by hand): drain the dirty_broker_listings queue (new +
     content-changed listings, enqueued at write time by the writer —
     listing_write.write_listings (all portals) —
     rule #20), re-attribute exactly those, then recompute only the affected
@@ -19,10 +19,7 @@ that runs OFF the scrape hot path. Three modes:
     The self-healing backstop. Attribution resumes from `broker_sweep_cursor` and
     rotates, so a run truncated by --max-seconds advances through the corpus instead
     of re-walking the same head; only a walk that covered EVERY id in one run clears
-    the whole queue, and closing a rotation LAP (cumulative coverage across however
-    many runs it took) stamps `broker_resolution_last_complete` — the stamp
-    nothing reads since the Health sprint's wave 3 retired broker_resolution_freshness
-    (migration 624 drops the row).
+    the whole queue.
   * --backfill: alias for full (the one-shot first population from existing
     raw_json). Run in Actions after merge — local has no psycopg, and a raw_json
     scan over the pooler times out, so it is keyset-batched here.
@@ -419,22 +416,12 @@ _CLEAR_DIRTY_SWEPT_WRAPPED_SQL = (
 # the tail above the break — the NEWEST listings — was never attributed by any
 # sweep, ever, while the job still exited 0.
 _SWEEP_CURSOR_KEY = "broker_sweep_cursor"
-# Stamped when the ROTATION closes a lap — cumulative ids swept since the lap
-# opened reach the corpus size — NOT when one run walks everything. Truncation is
-# the designed steady state here (the 2026-08-10 sweep attributed 480,000 of
-# 535,007 ids inside its 3000s budget), so a single-run condition would essentially
-# never hold: the stamp would never land and the freshness check would park forever
-# on the amber a missing stamp gives it, while the one light day that did fit would
-# then age past the fail threshold with the rotation working exactly as designed.
-# Read by nothing since the Health sprint's wave 3 retired `broker_resolution_freshness`;
-# migration 624 drops the row.
-_SWEEP_COMPLETE_KEY = "broker_resolution_last_complete"
 
 _READ_SETTING_SQL = "SELECT value FROM app_settings WHERE key = %s"
 
-# lap_started_at falls back to now() so the very first sweep opens a lap: the check
-# ages the sweep axis from it until a lap actually closes, which is what makes a
-# rotation that never closes one reachable as `fail` instead of a permanent warn.
+# lap_started_at records when the open lap began (it falls back to now() so the very
+# first sweep opens a lap). Nothing reads it since Health wave 3 retired the broker
+# check; dropping the lap accounting is the scraper track's.
 _WRITE_SWEEP_CURSOR_SQL = """
 INSERT INTO app_settings (key, value, updated_by)
 VALUES (%(key)s,
@@ -443,17 +430,6 @@ VALUES (%(key)s,
                            'lap_started_at',
                            coalesce(%(lap_started_at)s::timestamptz, now()),
                            'updated_at', now()),
-        'resolve_brokers')
-ON CONFLICT (key) DO UPDATE
-  SET value = excluded.value, updated_at = now(), updated_by = excluded.updated_by
-"""
-
-_STAMP_SWEEP_COMPLETE_SQL = """
-INSERT INTO app_settings (key, value, updated_by)
-VALUES (%(key)s,
-        jsonb_build_object('completed_at', now(),
-                           'listings_swept', %(swept)s::int,
-                           'elapsed_s', %(elapsed_s)s::numeric),
         'resolve_brokers')
 ON CONFLICT (key) DO UPDATE
   SET value = excluded.value, updated_at = now(), updated_by = excluded.updated_by
@@ -1151,11 +1127,11 @@ def _affected(conn: Any, listing_ids: list[int]) -> list[int]:
         return [int(r[0]) for r in cur.fetchall()]
 
 
-# The leaderboard matview republishes from the DRAIN path (worker lane every
-# ~2 min + broker_resolution.yml as the throttled backstop), not from the daily
+# The leaderboard matview republishes from the DRAIN path (the worker lane every
+# ~30 s), not from the daily
 # sweep — freshness stopped being coupled to a 1.5-3h job that GH cron drift
 # parks in working hours (Broker Unify W3). The derived_artifacts stamp is the
-# clock, so both hosts share one cadence with no new setting; the chokepoint
+# clock, so the cadence needs no new setting; the chokepoint
 # (migration 578) refreshes CONCURRENTLY (readers never block; measured 85 s),
 # stamps rows + duration in-DB, and skips (-1) when a refresh is in flight.
 _MATVIEW_REFRESH_AFTER = "55 minutes"
@@ -1489,15 +1465,14 @@ def _as_int(value: Any) -> int | None:
 
 
 def _record_sweep_progress(conn: Any, *, last_id: int, lap_swept: int,
-                           lap_started_at: str | None, lap_complete: bool,
-                           elapsed_s: float) -> None:
-    """Advance the rotation cursor and, when the lap closed, stamp completion.
+                           lap_started_at: str | None, lap_complete: bool) -> None:
+    """Advance the rotation cursor, reopening the lap from zero when it closed.
 
     Written right after attribution rather than in _finalize: the 17-25 min tail
     (auto-merge, rollups, matview, candidates) fails often enough that
     leaving the cursor behind it threw away a whole run's rotation advance and
     re-walked the same window the next day — the exact starvation the cursor
-    exists to remove. Both statements are idempotent upserts that depend on
+    exists to remove. The statement is an idempotent upsert that depends on
     nothing the tail does."""
     with conn.cursor() as cur:
         cur.execute(_WRITE_SWEEP_CURSOR_SQL, {
@@ -1505,11 +1480,6 @@ def _record_sweep_progress(conn: Any, *, last_id: int, lap_swept: int,
             "lap_swept": 0 if lap_complete else lap_swept,
             "lap_started_at": None if lap_complete else lap_started_at,
         })
-        if lap_complete:
-            cur.execute(_STAMP_SWEEP_COMPLETE_SQL, {
-                "key": _SWEEP_COMPLETE_KEY, "swept": lap_swept,
-                "elapsed_s": round(elapsed_s, 1),
-            })
 
 
 def _rotate_from_cursor(ids: list[int], last_id: int | None) -> list[int]:
@@ -1632,7 +1602,7 @@ def _run_full(conn: Any, free: list[str], franchise: list[str], auto_merge: bool
     if last_swept is not None:
         step(lambda c, last=last_swept: _record_sweep_progress(
             c, last_id=last, lap_swept=lap_swept, lap_started_at=lap_started_at,
-            lap_complete=lap_complete, elapsed_s=time.monotonic() - t0),
+            lap_complete=lap_complete),
             "resolve.sweep_progress")
 
     step(lambda c: _resolve_firms(c, free, franchise), "resolve.firms")
@@ -1800,8 +1770,7 @@ def _run_incremental(conn: Any, free: list[str], franchise: list[str],
     # after a pooler drop redoes exactly the same work rather than losing it. Note
     # what "claim" does NOT mean here: _CLAIM_DIRTY is a plain SELECT on an autocommit
     # connection — no row lock, no claim marker, nothing another run would respect.
-    # Exclusion comes from broker_resolution_lock (plus this workflow's own
-    # concurrency group); the scoped _DELETE_DIRTY is what keeps a concurrent
+    # Exclusion comes from broker_resolution_lock; the scoped _DELETE_DIRTY is what keeps a concurrent
     # enqueue safe. The 2026-08-10 23:10 red died on the rollup below with
     # 'SSL connection has been closed'.
     ids = sorted(claimed)
@@ -1831,8 +1800,8 @@ def _run_incremental(conn: Any, free: list[str], franchise: list[str],
 
 def run_incremental_pass(conn: Any, batch_size: int = 5000, *,
                          reconnect: Callable[[], Any] | None = None) -> dict[str, Any]:
-    """THE incremental broker-maintenance driver (Broker Unify W3), shared by
-    broker_resolution.yml and the realtime worker's broker lane — mirrors
+    """THE incremental broker-maintenance driver (Broker Unify W3), run by the
+    realtime worker's broker lane and `--incremental` by hand — mirrors
     scripts.recompute_property_stats.run_incremental_pass. Skips cleanly when
     another resolution run holds the lock, drains the dirty queue until empty
     (not one slice per invocation — the one-slice shape left 2,300-row, 5 h+
@@ -1913,7 +1882,7 @@ def main() -> int:
             # THE incremental driver (run_incremental_pass) owns the lock skip,
             # the drain-until-empty loop and the stale-matview republish — the
             # realtime worker's broker lane calls the same function, so this
-            # workflow entry is only its throttled GH backstop.
+            # entry is only the hand run.
             res = run_incremental_pass(conn, args.batch_size, reconnect=reconnect)
             if not res.get("skipped"):
                 LOG.info(

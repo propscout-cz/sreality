@@ -18,6 +18,7 @@ import {
 import { prettyPhone } from '../lib/brokers';
 import { fmtRelative } from '../lib/format';
 import { usePageTitle } from '@/lib/pageTitle';
+import { SegmentedBar } from '@/components/controls';
 import { StatusChip } from './Outreach';
 
 export default function OutreachDetail() {
@@ -284,6 +285,12 @@ function SuppressionPanel() {
   );
 }
 
+const CAMPAIGN_STATUSES = [
+  { value: 'draft', label: 'koncept' },
+  { value: 'active', label: 'aktivní' },
+  { value: 'archived', label: 'archiv' },
+];
+
 function StatusSelect({ campaignId, status, onChanged }: {
   campaignId: number; status: string; onChanged: () => void;
 }) {
@@ -291,23 +298,9 @@ function StatusSelect({ campaignId, status, onChanged }: {
     mutationFn: (next: string) => updateOutreachCampaign(campaignId, { status: next }),
     onSuccess: onChanged,
   });
-  const opts = [
-    { v: 'draft', l: 'koncept' },
-    { v: 'active', l: 'aktivní' },
-    { v: 'archived', l: 'archiv' },
-  ];
   return (
-    <div className="shrink-0 flex gap-1">
-      {opts.map((o) => (
-        <button key={o.v} type="button" onClick={() => m.mutate(o.v)}
-          className={`text-[0.7rem] tracking-[0.08em] uppercase rounded-[var(--radius-sm)] border px-2 py-1 transition-colors ${
-            o.v === status
-              ? 'border-[var(--color-copper)] text-[var(--color-copper)]'
-              : 'border-[var(--color-rule)] text-[var(--color-ink-3)] hover:border-[var(--color-copper)]'
-          }`}>
-          {o.l}
-        </button>
-      ))}
+    <div className="shrink-0">
+      <SegmentedBar hug label="Stav kampaně" options={CAMPAIGN_STATUSES} value={status} onChange={(v) => m.mutate(v)} />
     </div>
   );
 }

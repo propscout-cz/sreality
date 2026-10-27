@@ -120,8 +120,7 @@ def scoped(body: bytes | str) -> ScopedDocument:
 def run_entry(
     entry: Entry, document: ScopedDocument, *, row: ListingRow | None = None,
 ) -> list[page_readers.PageRead]:
-    return PAGE_READERS[str(entry.reader)](
-        entry, row or listing_row(), payload(), document)
+    return page_readers.read_entry(entry, row or listing_row(), payload(), document)
 
 
 def value_of(entry_id: str, document: ScopedDocument) -> str | None:
@@ -157,11 +156,11 @@ def body_with_header(header: str) -> ScopedDocument:
 
 # --------------------------------------------------------------- the contract's shape
 
-def test_the_contract_pins_version_five():
-    """@5 is W9: `address_part_obec` stopped folding a statutory-city obvod onto its city,
-    which changes what this contract's town entry claims. Entries are immutable per version,
-    so a changed transform is a bump, never an edit."""
-    assert CONTRACT.version == 5
+def test_the_contract_pins_version_six():
+    """@5 was W9: `address_part_obec` stopped folding a statutory-city obvod onto its city.
+    @6 (operator ruling 2026-10-25) drops the street's word-ending test. Entries are
+    immutable per version, so a changed transform is a bump, never an edit."""
+    assert CONTRACT.version == 6
     assert CONTRACT.source == "remax"
 
 
@@ -451,13 +450,21 @@ def test_the_subject_map_entry_reads_the_subject_the_day_the_portal_renders_it()
 
 
 @pytest.mark.parametrize("address, street", [
-    # The leading segment is a street only when it survives `clean_street` /
-    # `reject_as_town` / `looks_like_czech_street`; otherwise the entry claims nothing.
+    # The leading segment, when an obec segment follows it and it is not the town itself.
+    # @6 drops the word-ending test (`address_part_street:loose`): it refused the real
+    # streets below, and since W18 the resolver keeps a street only when it binds in RÚIAN
+    # in the ad's town — a part of the town in this slot ("Stráň") binds as the part (v5.7).
     ("Křimická 655/31, Plzeň 3, Plzeň", "Křimická"),
-    ("Stráň, Merklín, okres Plzeň-jih", None),
+    ("José Martiho, Praha 6 - Veleslavín, Praha", "José Martiho"),
+    ("Čsl. partyzánů, Děčín", "Čsl. partyzánů"),
+    ("Starý lis, Praha 4 - Točná, Praha", "Starý lis"),
+    ("Stráň, Merklín, okres Plzeň-jih", "Stráň"),
+    ("Merklín, Merklín", None),
     ("Úvaly", None),
 ])
-def test_the_street_transform_refuses_to_fabricate(address: str, street: str | None):
+def test_the_street_transform_claims_the_slot_and_refuses_the_town(
+    address: str, street: str | None,
+):
     body = f'<html><body><div id="printMap" data-address="{address}"></div></body></html>'
     assert value_of("rx.det.map_address", scoped(body)) == street
 

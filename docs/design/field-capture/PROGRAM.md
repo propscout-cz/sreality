@@ -1,7 +1,7 @@
 # FIELD CAPTURE — every typed listing fact, captured properly, on all nine portals
 
 **Program document. This file is the program's source of truth.**
-Status: plan approved by the operator 2026-09-21; W0 in flight.
+Status: **DELIVERED 2026-09-22** — W0–W9 merged and live; the text lane extracts bazos `floor` + `has_lift` on gpt-5.6-luna (first pass: 250 adverts, 96 values, $0.054, 0 errors); branch protection on `main` enabled as the closing step.
 Rulings R1–R12 below are **binding** — they supersede any design text, code comment or docstring that differs.
 
 ---
@@ -664,6 +664,24 @@ is now declined at the parse, BEFORE the content hash, in the one module that ow
   378126: usable_area 1,800 m², area_m2 NULL) — the guards read only `area_m2`, but the LLM judge's digest
   (`autodedup/judge.py` `DIGEST_ATTRS`) still shows it as "usable area".
 
+**A figure in the plot box is not always a plot (general ruling 3, 2026-09-30; operator answers 2026-10-01; rebuilt
+2026-10-25 from the superseded PRs #1668 / #1669, heal = migration 671 in its own PR).** Not our scraping: on 14 of 14
+live pages the portal itself prints one figure in the plot box and the floor-area box, and every `estate_area` key map
+was right (2026-10-25 census of active komerční plots equal to the floor figure: ceskereality 1,394 of its 3,090 active
+komerční plots, idnes 641, realitymix 256, mmreality 59, remax 5, maxima 1; plus 3,218 active flat "plots", 3,194 of
+them ceskereality's — the doubled floor figure, the placeholder 1 or the building's parcel). The missing rule is one
+function, `scraper.area.stated_plot`, at the contract boundary BEFORE the hash (`ScrapedListing.__post_init__`;
+sreality's `parse_listing`): a byt NEVER carries a plot; a komerční plot equal (0.1 m², half up) to the usable measure
+or a LABELLED headline (usable / floor / total) is absence; dum stays as it is (the operator's call), pozemek and
+ostatni untouched; a title fallback and zastavěná plocha are never compared. Contract cells stay `structured` (R4:
+`none` / `text` would preserve-if-null and freeze every stored echo). The heal is a 573-pattern migration (byt: every
+stored plot; komerční: the equality rule; active AND inactive; backup into `backup_671.listing_plots`, no snapshot,
+`dirty_properties`), because reparse never blanks (R9). **Residuals, named:** the reverse case — an areál, farm, camp
+or petrol station whose true parcel is typed into the usable box too keeps the wrong area and loses the true plot; the
+2026-10-25 hand-read found 93 active hits whose own text states that parcel and estimates ~170 (~7 % of the active
+komerční hits), so the original's campsite (idnes 19082282) is a class; a garage whose parcel truly equals its floor
+loses a figure that added nothing; idnes dum carries 1,668 active echoes and no rule (the house rule is unchanged).
+
 **W9.** Each item its own PR (status as of 2026-09-21, worked alongside W0):
 
 - ✅ **browse_list cadence docs.** It is `*/15` since migration 413; `toolkit/browse_read_model.py` and the Browse
@@ -733,8 +751,8 @@ is now declined at the parse, BEFORE the content hash, in the one module that ow
   existing type on its @3 claims until re-mined, and a type with no claim at any version contributes nothing.
   **The fill is not automatic** — the bodies-half hash gate re-arms PAGE entries and bezrealitky has none, so the
   corpus-wide mine needs one dispatched `location_claims_intake.yml` at `mode=full source=bezrealitky`.
-- ⏳ **Branch protection on `main`** (PR + CI check, no review requirement) — an operator action on a GitHub
-  settings page, not a code change. Last, announced first, because it changes how every parallel session merges.
+- ✅ **Branch protection on `main`** enabled 2026-09-22 (PR + the CI checks required, no review) — the closing
+  step, announced first because it changed how every parallel session merges.
 
 ## 6. Cut from scope (reported, not built)
 

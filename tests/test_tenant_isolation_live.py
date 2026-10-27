@@ -21,8 +21,9 @@ from typing import Any
 
 import pytest
 
+from tests._admin_gate_registry import ADMIN_ONLY_RELATIONS, UNGATED, live_allowlist
 from tests._admin_gate_shape import gate_is_sound
-from tests._tenant_registry import TENANT_TABLES
+from tests._tenant_registry import BROWSER_WRITE_COLUMNS, TENANT_TABLES
 from tests._tenant_scope import scoped
 
 _DB_URL = os.environ.get("TEST_DATABASE_URL")
@@ -72,193 +73,10 @@ _TENANT_VIEWS: list[str] = [
 # (test_estimates_view_scopes_per_account).
 _MARKET_VIEWS: list[str] = ["property_estimates_public"]
 
-# Base relations + matviews that hold admin-only operational data. Any view (or
-# function an authenticated caller can EXECUTE) that reads one of these must embed
-# is_platform_admin() — enforced generically by
-# test_no_ungated_relation_reads_admin_only_data, so a NEW admin surface is caught
-# without anyone remembering to enumerate it.
-#
-# Deliberately EXCLUDED: listings / properties / images. Those are shared-market
-# data read by many legitimately open views (listings_public, properties_public,
-# browse_*, price_stat_*), so listing them would force a large, churny allowlist
-# and train people to add entries reflexively. The residual blind spot — an
-# admin-only aggregate over ONLY those tables, e.g. data_quality_by_source —
-# stays covered by the enumerated lists below.
-# Tenant tables are excluded too: they are scoped by RLS + security_invoker, a
-# different mechanism with its own tests.
-#
-# Migration 475 (NEW DEDUP Wave 0) dropped dedup_engine_runs, dedup_scan_state and
-# property_identity_candidates with the legacy decision engine. dedup_vision_bakeoff_results
-# and dedup_decision_feedback stay: FROZEN, not dead — a paid verdict cache and the manual
-# decision notes, still admin-only.
-_ADMIN_ONLY_RELATIONS: list[str] = [
-    "dedup_vision_bakeoff_results",
-    "dedup_decision_feedback", "property_merge_events",
-    # The carry record (migration 589), backend-only like the merge ledger beside it.
-    "property_merge_carries",
-    "listing_detail_queue", "listing_fetch_failures", "detail_queue_completions",
-    "llm_calls", "parsed_url_cache", "pipeline_check_results",
-    # tag_taxonomy + image_tag_labels (migration 442) replace image_training_examples:
-    # the tag ground truth now, and — like dedup_sim.taxonomy_labels / label_proposals
-    # before them, unlike migration 309 — backend-only, with NO `_public` view, so they
-    # are registered here and NOT in _ADMIN_GATED_VIEWS / _SEEDED_ADMIN_VIEWS below.
-    # image_tag_annotations / phash_pair_notes came out alongside
-    # image_training_examples: no app code touches any of the three since the
-    # tag-annotation-matrix cutover (docs/design/tag-annotation-matrix.md), and that
-    # design's Wave C drops the tables. Their still-live `_public` views keep their
-    # structural + behavioural gate assertions below until then.
-    "image_border_cases", "tag_taxonomy", "image_tag_labels",
-    # image_tag_label_events (migration 446): the append-only decision history
-    # behind image_tag_labels, same backend-only posture, no `_public` view.
-    "image_tag_label_events",
-    # tag_candidates (450) + the sealed exam roster (458) — backend-only, no
-    # `_public` view. See the note in test_migration_rls_grants.py.
-    "tag_candidates",
-    "tag_exam_cohorts",
-    # tag_exam_screens (459) + tag_exam_suggestions (461): the screener's guesses
-    # and the sitting pre-answers — machine output about the answer key, backend-
-    # only, no `_public` view.
-    "tag_exam_screens",
-    "tag_exam_suggestions",
-    "tag_exam_members",
-    "tag_exam_sets",
-    "workflow_failures", "workflow_run_health",
-    # Added by migration 340: the audit found scrape_runs_public/recent_scrape_runs()
-    # ungated and browser-readable because this list was seeded from migration 318's
-    # objects rather than a first-principles table inventory.
-    "scrape_runs", "worker_heartbeats",
-    "health_summary_mv", "portal_health_mv", "scraper_health_checks_mv",
-    "category_trends_mv", "image_storage_overview_mv", "snapshot_churn_24h_mv",
-    "dedup_funnel_resolutions_archive",
-    "images_failure_overview_mv",
-    # The tagging bake-off store (migration 489, schema dedup_sim): experiment
-    # evidence — runs, encoder arms, their vectors, per-image scores and the
-    # per-head metrics. Backend-only, NO `_public` view; the bake-off page reads
-    # them through the admin-gated API (/new-dedup/tagging-bakeoff/*).
-    "dedup_sim.tag_head_bakeoff_runs",
-    "dedup_sim.tag_head_bakeoff_arms",
-    "dedup_sim.tag_head_bakeoff_vectors",
-    "dedup_sim.tag_head_bakeoff_scores",
-    "dedup_sim.tag_head_bakeoff_metrics",
-    # The versioned tag model (migration 490, PUBLIC schema — it must survive
-    # Wave 8's drop of dedup_sim): the model registry, its per-tag artifacts, and
-    # the per-image winner store. Locked to the service role; the admin pages
-    # read them through the admin-gated API (/new-dedup/tags/*). One deliberate
-    # exception: images_public.tag_head_scores (migration 591, ci-allow-ungated)
-    # publishes the ACTIVE model's per-photo scores for the Browse card cover.
-    "tag_head_models", "tag_head_model_heads", "image_tag_scores",
-    # The Level-0 candidate store (migration 492, schema dedup_sim): parameter
-    # sets, generation runs and the listing-pair evidence rows. Backend-only, NO
-    # `_public` view; the Candidate audit page reads them through the admin-gated
-    # API (/new-dedup/candidates/*).
-    "dedup_sim.candidate_inputs",
-    "dedup_sim.candidate_generations",
-    "dedup_sim.candidate_pairs",
-    # The autonomous dedup engine's own store (migration 528, schema autodedup):
-    # fingerprints, the blocking substrate, pair/cluster grain, the judge queue, the
-    # operator verdicts, the learning tables and the operator-facing iteration log.
-    # Backend-only, NO `_public` view — the browser client is pinned to schema `public`
-    # — so the progress page and the validation UI read them through the admin-gated
-    # API. `autodedup.merges` is the reserved, EMPTY write ledger (the trial is shadow
-    # mode). MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
-    "autodedup.settings",
-    "autodedup.runs",
-    "autodedup.iterations",
-    "autodedup.listing_fp",
-    "autodedup.image_band",
-    "autodedup.phash_pop",
-    "autodedup.exploded_blocks",
-    "autodedup.pairs",
-    "autodedup.judgements",
-    "autodedup.must_not_link",
-    "autodedup.clusters",
-    "autodedup.cluster_members",
-    "autodedup.cluster_conflicts",
-    "autodedup.merges",
-    "autodedup.verdicts",
-    "autodedup.labels",
-    "autodedup.models",
-    "autodedup.eval_samples",
-    "autodedup.resolve_queue",
-    "autodedup.scan_cursor",
-    "autodedup.judge_queue",
-    # A1's apply ledger (migration 558): what the engine merged in production, dry runs and
-    # refusals included. MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
-    "autodedup.applied_merges",
-    # The operator's own Browse merges as engine data (migration 564, E299).
-    # MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
-    "autodedup.operator_merges",
-    # The sold-transaction fetch ledger (migration 542): fetched only where some account
-    # holds a live deal-pipeline card, so its obec set is a projection of tenant state,
-    # not market data. NO `_public` view; the ONE reader is `sold_coverage` below.
-    # MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
-    "sold_transaction_fetches",
-    # Auth identities (migration 610). The one reader, account_email(), is not executable
-    # by `authenticated`, so this arm never lists it; share_party_emails() reaches it by
-    # call, not by name. MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
-    "auth.users",
-    # The health check registry and the incident table (migrations 619 / 462): the browser
-    # reads both only through the admin-gated pipeline_checks_public.
-    # MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
-    "health_checks",
-    "ops_incidents",
-    # The push device registry and its delivery ledger (migration 654): service role only,
-    # no `_public` view. MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
-    "push_subscriptions",
-    "notification_deliveries",
-]
-
-# Relations that read the above but are legitimately reachable without the gate.
-# EVERY entry needs a comment justifying it — an unexplained name here is how this
-# class of bug comes back.
-_ADMIN_GATE_ALLOWLIST: list[str] = [
-    # The pg_cron refresher itself: SECURITY DEFINER, not executable by a browser
-    # role, and it must run without a JWT context to rebuild the health matviews.
-    "refresh_health_matviews",
-    # The internal union source behind llm_cost_{daily,hourly}_public (migration 437).
-    # Verified live at merge: relacl is {postgres,service_role} only -- no anon, no
-    # authenticated, no PUBLIC -- and has_table_privilege is false for BOTH browser
-    # roles, so it is unreachable over supabase-js. It is ungated ON PURPOSE: the gate
-    # belongs in the OUTERMOST scope of each public wrapper, where is_platform_admin()
-    # (STABLE, zero-arg) renders as a One-Time Filter on a Result node above the Append
-    # and short-circuits the whole plan. Pushed into the union's branches it would be
-    # evaluated per branch and would stop hoisting; it would also silently couple
-    # llm_cost_today_usd() -- SECURITY INVOKER, and the API's spend guard -- to the
-    # admin gate, which is exactly the kind of invisible dependency that makes a guard
-    # go deaf without raising.
-    #
-    # NOTE the asymmetry that put it here: this test's FUNCTION arm filters candidates
-    # by has_function_privilege('authenticated', ...), but its VIEW arm does not filter
-    # by has_table_privilege -- so a zero-grant view is still flagged. That is defensible
-    # conservatism rather than a bug (pg_default_acl grants `authenticated=r` on objects
-    # postgres creates in public, so a recreated view can silently acquire a grant), and
-    # it is deliberately NOT "fixed" here: loosening a security rail to make new code
-    # pass is how a real exposure ships. The reason this entry is safe is the ACL, not
-    # the annotation -- so the ACL is asserted by a rail rather than left to review:
-    # tests/test_llm_cost_rollup_indexable.py::test_rollups_are_admin_only_not_anon_readable
-    # fails the moment either browser role gains SELECT on it. Do not delete that rail
-    # without deleting this entry.
-    "llm_cost_hour_union",
-    # sold_coverage (migration 545) reads sold_transaction_fetches and IS executable by
-    # `authenticated`, deliberately and without the admin gate: the operator's own
-    # listing page has to be able to say when we last looked here. It is narrow by
-    # construction — SECURITY DEFINER, a point in, four facts about the ONE municipality
-    # containing that point out. It never returns a cell list, a bbox, our `error` text
-    # or `pages`, so it cannot be walked to enumerate which towns are being worked.
-    "sold_coverage",
-    # images_public (migration 591) reads image_tag_scores + tag_head_models and IS
-    # readable by `authenticated`, deliberately and without the admin gate: every
-    # signed-in Browse user's card cover is chosen by the active tag model's scores
-    # (operator ruling 2026-10-07). It publishes only a photo's per-head scores and,
-    # implicitly, which model is active — market facts about a photo, the same class
-    # as the CLIP tag columns this view has carried since migration 236. It never
-    # exposes a label, a labeller, model artifacts or metrics.
-    "images_public",
-]
-
-# The user-state tables, from the one registry both tenancy gates read. A list, because
-# psycopg binds a list (not a tuple) as the array `= ANY(%s)` takes.
+# The user-state tables and the admin-only relations, each from the one registry both
+# gates read. Lists, because psycopg binds a list (not a tuple) as the array `= ANY(%s)` takes.
 _TENANT_TABLES: list[str] = list(TENANT_TABLES)
+_ADMIN_ONLY_RELATIONS: list[str] = list(ADMIN_ONLY_RELATIONS)
 
 # Amendment A6 (Phase 0): the broker-directory PII surfaces stay dark to BOTH
 # browser roles; the SPA reads them only through the identity-gated, PII-masking
@@ -798,7 +616,7 @@ def test_llm_calls_scoped_through_owning_run(
     through the owning run's account (mirroring estimation_trace_payloads/
     estimation_feedback, migration 292) rather than granting a blanket read --
     llm_calls itself stays account_id-less by design. It also stays listed in
-    _ADMIN_ONLY_RELATIONS above: llm_cost_daily_public/llm_cost_hourly_public
+    ADMIN_ONLY_RELATIONS (tests/_admin_gate_registry.py): llm_cost_daily_public/llm_cost_hourly_public
     are aggregate admin views over this table and must keep their own gate;
     this policy only opens a per-owning-run read, not a blanket one."""
     ca, cb = seeded_llm_calls_rows["a"], seeded_llm_calls_rows["b"]
@@ -826,10 +644,10 @@ def test_admin_gate_opens_for_service_but_not_role_switch(svc: Any) -> None:
     with svc.cursor() as cur:
         cur.execute("SELECT is_platform_admin()")
         assert cur.fetchone()[0] is True, (
-            "claims-less service connection is not admin — pg_cron's health "
-            "matview refresh and the golden-set freeze would read zero rows"
+            "claims-less service connection is not admin — every service-role read of "
+            "an admin-gated view would read zero rows"
         )
-        cur.execute("SELECT count(*) FROM listing_fetch_failures_public")
+        cur.execute("SELECT count(*) FROM pipeline_checks_public")
         assert cur.fetchone()[0] is not None
 
     import psycopg
@@ -1067,43 +885,24 @@ def test_pipeline_card_read_is_account_scoped_after_respelling(
         )
 
 
-# Migration 318: admin-only operational views/functions the SPA reads directly
-# (dedup engine internals, scraper health, LLM cost, image training/labeling
-# state, workflow health) that CANNOT use migration 316's security_invoker +
-# base-table RLS policy technique, because several of them read the shared
-# `listings`/`properties`/`images` tables (which must stay universally
-# readable to every authenticated user for Browse). Instead each one embeds
-# `is_platform_admin()` directly as a query filter -- evaluated per-request,
-# independent of RLS/security_invoker/ownership.
+# Migration 318: admin-only operational views (LLM cost, the Health checks, image
+# training/labeling state, the frozen dedup verdict cache), several no longer read by
+# the SPA, that CANNOT use migration 316's security_invoker + base-table RLS policy
+# technique, because several of them read the shared `listings`/`properties`/
+# `images` tables (which must stay universally readable to every authenticated
+# user for Browse). Instead each one embeds `is_platform_admin()` directly as a
+# query filter -- evaluated per-request, independent of RLS/security_invoker/ownership.
 # The six dedup engine views and publication_gate_health_public came out with
 # migration 475; dedup_vision_bakeoff_results_public stays (frozen verdict cache).
+# Migration 643 (Health W9) dropped the old Health layer's seven views here and
+# every admin-gated function this file listed (four set-returning, five scalar).
 _ADMIN_GATED_VIEWS: list[str] = [
-    "data_quality_by_source",
-    "dedup_vision_bakeoff_results_public", "detail_latency_recent",
+    "dedup_vision_bakeoff_results_public",
     "image_border_cases_public", "image_tag_annotations_public",
-    "image_training_examples_public", "listing_detail_queue_public",
-    "listing_fetch_failures_public", "llm_cost_daily_public", "llm_cost_hourly_public",
-    "parsed_url_activity", "phash_pair_notes_public", "pipeline_check_history_public",
+    "image_training_examples_public",
+    "llm_cost_daily_public", "llm_cost_hourly_public",
+    "phash_pair_notes_public",
     "pipeline_checks_public",
-    "scrape_runs_public",
-]
-_ADMIN_GATED_FUNCTIONS: list[str] = [
-    "images_failure_overview", "recent_workflow_failures", "workflow_failure_summary",
-    "recent_scrape_runs",
-]
-
-# Migration 332: the five health/ops RPCs the Health dashboard calls. Unlike the
-# set-returning functions above these return a scalar jsonb, so the gate shows up as
-# NULL rather than zero rows — `count(*) FROM fn()` is 1 either way and would not
-# catch a regression. Migration 318 missed them because its triage worked from the
-# `security_definer_view` advisor list and these were plain SECURITY INVOKER SQL
-# functions; SPA route-gating (<AdminPage>) is a client affordance, not a boundary.
-_ADMIN_GATED_SCALAR_RPCS: list[str] = [
-    "health_summary()",
-    "portal_health_summary()",
-    "scraper_health_checks('sreality')",
-    "category_trends('sreality')",
-    "image_storage_overview()",
 ]
 
 
@@ -1118,16 +917,8 @@ def test_admin_ops_views_embed_is_platform_admin(svc: Any) -> None:
             cur.execute("SELECT pg_get_viewdef(%s::regclass, true)", (f"public.{name}",))
             if not gate_is_sound(cur.fetchone()[0], "view"):
                 missing.append(name)
-        for name in _ADMIN_GATED_FUNCTIONS:
-            cur.execute(
-                "SELECT pg_get_functiondef(oid) FROM pg_proc "
-                "WHERE proname = %s AND pronamespace = 'public'::regnamespace",
-                (name,),
-            )
-            if not gate_is_sound(cur.fetchone()[0], "function"):
-                missing.append(name)
     assert not missing, (
-        f"admin-ops view/function(s) have no is_platform_admin() call in a WHERE "
+        f"admin-ops view(s) have no is_platform_admin() call in a WHERE "
         f"position -- any authenticated caller (not just the admin) may be able to "
         f"read them again: {missing}"
     )
@@ -1136,13 +927,14 @@ def test_admin_ops_views_embed_is_platform_admin(svc: Any) -> None:
 def test_no_ungated_relation_reads_admin_only_data(svc: Any) -> None:
     """The standing gate: any view, or any function an authenticated caller can
     EXECUTE, that reads an admin-only relation must carry a SOUND is_platform_admin()
-    gate or be explicitly allowlisted. Unlike the enumerated lists above this
-    generalises -- admin surface #27 is caught without anyone remembering to register
-    it, which is exactly how scrape_runs_public slipped through (migration 340).
+    gate or be registered in tests/_admin_gate_registry.py. Unlike the enumerated lists
+    above this generalises -- admin surface #27 is caught without anyone remembering to
+    register it, which is exactly how scrape_runs_public slipped through (migration 340).
     Soundness is judged in Python by gate_is_sound rather than by a SQL substring
     match: `where x = y or is_platform_admin()` contains the call but gates nothing.
-    listings/properties/images are deliberately absent from _ADMIN_ONLY_RELATIONS --
+    listings/properties/images are deliberately absent from ADMIN_ONLY_RELATIONS --
     shared-market data behind many legitimately open views; see that list's comment."""
+    waived = live_allowlist()
     with svc.cursor() as cur:
         cur.execute(
             "SELECT c.relname, 'view', pg_get_viewdef(c.oid, true) FROM pg_class c "
@@ -1164,30 +956,67 @@ def test_no_ungated_relation_reads_admin_only_data(svc: Any) -> None:
     ungated = [
         f"{kind} {name}"
         for name, kind, definition in candidates
-        if name not in _ADMIN_GATE_ALLOWLIST and not gate_is_sound(definition, kind)
+        if name not in waived and not gate_is_sound(definition, kind)
     ]
     assert ungated == [], (
         f"relation(s) read admin-only data without a sound is_platform_admin() gate, "
         f"so any signed-in non-admin can read them over supabase-js (SPA route-gating "
-        f"is not a security boundary). Add the gate, or add an entry to "
-        f"_ADMIN_GATE_ALLOWLIST with a comment justifying why it is safe: {ungated}"
+        f"is not a security boundary). Add the gate, or register the object in "
+        f"tests/_admin_gate_registry.py UNGATED with its guard and why: {ungated}"
+    )
+
+
+def test_acl_guarded_ungated_objects_stay_dark(svc: Any) -> None:
+    """Each live UNGATED entry whose guard is its ACL exists and neither browser role can
+    SELECT or EXECUTE it: the sweep above waives such a view by name, so the ACL is all
+    that keeps it from the browser."""
+    problems: list[str] = []
+    with svc.cursor() as cur:
+        for name, entry in sorted(UNGATED.items()):
+            if entry.guard != "acl" or entry.dropped_in:
+                continue
+            if entry.kind == "function":
+                cur.execute(
+                    "SELECT has_function_privilege('anon', p.oid, 'EXECUTE'), "
+                    "       has_function_privilege('authenticated', p.oid, 'EXECUTE') "
+                    "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+                    "WHERE n.nspname = 'public' AND p.proname = %s",
+                    (name,),
+                )
+            else:
+                cur.execute(
+                    "SELECT has_table_privilege('anon', c.oid, 'SELECT'), "
+                    "       has_table_privilege('authenticated', c.oid, 'SELECT') "
+                    "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE n.nspname = 'public' AND c.relname = %s",
+                    (name,),
+                )
+            rows = cur.fetchall()
+            if not rows:
+                problems.append(f"{entry.kind} {name} is missing: record its drop as dropped_in")
+            for role, reaches in (("anon", any(r[0] for r in rows)), ("authenticated", any(r[1] for r in rows))):
+                if reaches:
+                    problems.append(f"{role} reaches {entry.kind} {name}")
+    assert problems == [], (
+        f"tests/_admin_gate_registry.py UNGATED says these objects are guarded by their ACL: {problems}"
     )
 
 
 # Views whose gate the seed fixture below can prove BEHAVIOURALLY (a service-role
-# read returns >= 1 row, so a non-admin's 0 is the gate rather than an empty table).
-# Established by seeding production inside a rolled-back transaction and diffing each
-# view's count. Deliberately absent: detail_latency_recent (an aggregate whose row
-# count does not move for one extra base row), plus the two matview-backed views and
-# the set-returning functions, which need a refresh chain the replay never runs --
-# those keep a structural-only deny assertion.
+# read returns >= 1 row, so a non-admin's 0 is the gate rather than an empty table,
+# and an admin's 0 is a gate that stayed shut). Established by seeding production
+# inside a rolled-back transaction and diffing each view's count. Since migration 643
+# dropped the ones the seed could not reach (detail_latency_recent, an aggregate whose
+# row count does not move for one extra base row; the matview-backed views and the
+# functions, which need a refresh chain the replay never runs), every gated view
+# above is seeded; a new one that cannot be keeps a structural-only deny assertion.
 _SEEDED_ADMIN_VIEWS: frozenset[str] = frozenset({
     "dedup_vision_bakeoff_results_public",
     "image_border_cases_public", "image_tag_annotations_public",
-    "image_training_examples_public", "listing_detail_queue_public",
-    "listing_fetch_failures_public", "llm_cost_daily_public", "llm_cost_hourly_public",
-    "parsed_url_activity", "phash_pair_notes_public", "pipeline_check_history_public",
-    "pipeline_checks_public", "scrape_runs_public",
+    "image_training_examples_public",
+    "llm_cost_daily_public", "llm_cost_hourly_public",
+    "phash_pair_notes_public",
+    "pipeline_checks_public",
 })
 
 
@@ -1230,16 +1059,9 @@ def seeded_admin_rows(svc: Any) -> "Iterator[str]":
         ib = cur.fetchone()[0]
         ilo, ihi = min(ia, ib), max(ia, ib)  # CHECK image_id_a < image_id_b
 
-        cur.execute("INSERT INTO listing_detail_queue (source, native_id) VALUES ('sreality', %s)", (n,))
-        cur.execute("INSERT INTO listing_fetch_failures (sreality_id) VALUES (%s)", (rid2,))
         cur.execute(
             "INSERT INTO llm_calls (called_for, provider, model, input_tokens, "
             "output_tokens, cost_usd) VALUES ('parse_url', 'anthropic', %s, 1, 1, 0.000001)",
-            (n,),
-        )
-        cur.execute(
-            "INSERT INTO parsed_url_cache (url_hash, source_url, source_kind, parse_result) "
-            "VALUES (%s, 'https://iso.test/x', 'sreality', '{}'::jsonb)",
             (n,),
         )
         cur.execute(
@@ -1264,8 +1086,6 @@ def seeded_admin_rows(svc: Any) -> "Iterator[str]":
             "VALUES (%s, 'iso', 'review', 'compare', 'iso-model', %s, %s, 'different', 'different', false)",
             (n, rid, rid2),
         )
-        cur.execute("INSERT INTO scrape_runs (run_type, source) VALUES ('index', 'sreality') RETURNING id")
-        scrape_id = cur.fetchone()[0]
     try:
         yield n
     finally:
@@ -1278,11 +1098,7 @@ def seeded_admin_rows(svc: Any) -> "Iterator[str]":
             cur.execute("DELETE FROM dedup_vision_bakeoff_results WHERE run_label = %s", (n,))
             cur.execute("DELETE FROM pipeline_check_results WHERE check_key = %s", (n,))
             cur.execute("DELETE FROM health_checks WHERE key = %s", (n,))
-            cur.execute("DELETE FROM parsed_url_cache WHERE url_hash = %s", (n,))
             cur.execute("DELETE FROM llm_calls WHERE model = %s", (n,))
-            cur.execute("DELETE FROM listing_fetch_failures WHERE sreality_id = %s", (rid2,))
-            cur.execute("DELETE FROM listing_detail_queue WHERE native_id = %s", (n,))
-            cur.execute("DELETE FROM scrape_runs WHERE id = %s", (scrape_id,))
             cur.execute("DELETE FROM images WHERE id IN (%s, %s)", (ia, ib))
             cur.execute("DELETE FROM listings WHERE id = %s", (lid,))
             cur.execute("DELETE FROM properties WHERE id IN (%s, %s)", (pa, pb))
@@ -1292,16 +1108,12 @@ def test_admin_ops_views_deny_non_admin_allow_admin(
     svc: Any, tenants: dict[str, uuid.UUID], seeded_admin_rows: str,
 ) -> None:
     """Live proof the gate actually binds: tenant A (an ordinary account, not admin)
-   sees zero rows through every admin-gated view/function; promoting that same user
-   to `admins` makes them see through it (may still be zero rows if the table itself
-   is empty in this schema-replay DB -- the point is no permission/relation error,
-   not a specific count). One object (images_failure_overview()) wraps a materialized
-   view that a fresh schema-replay never refreshes (production refreshes it on a
-   cron) -- querying an unrefreshed matview errors regardless of caller, so refresh
-   it here to match production instead of asserting on that unrelated failure
-   mode."""
+   sees zero rows through every admin-gated view; promoting that same user to
+   `admins` makes them see through it, at least the row the fixture seeded behind
+   each seeded view. Both directions are judged against a row the service read
+   proves is there: a non-admin's zero is the gate, not an empty replay, and an
+   admin's zero is a gate that stayed shut."""
     with svc.cursor() as cur:
-        cur.execute("REFRESH MATERIALIZED VIEW images_failure_overview_mv")
         # Positive control: without a seeded row behind each view, the non-admin
         # `count(*) == 0` below passes on an empty schema replay whether or not the
         # gate works. Prove the row is reachable before asserting it is hidden.
@@ -1321,16 +1133,6 @@ def test_admin_ops_views_deny_non_admin_allow_admin(
                 assert cur.fetchone()[0] == 0, (
                     f"non-admin authenticated saw rows through {name}"
                 )
-            for name in _ADMIN_GATED_FUNCTIONS:
-                cur.execute(f"SELECT count(*) FROM {name}()")
-                assert cur.fetchone()[0] == 0, (
-                    f"non-admin authenticated saw rows through {name}()"
-                )
-            for call in _ADMIN_GATED_SCALAR_RPCS:
-                cur.execute(f"SELECT {call}")  # noqa: S608 - fixed list
-                assert cur.fetchone()[0] is None, (
-                    f"non-admin authenticated got data back from {call}"
-                )
     with svc.cursor() as cur:
         cur.execute(
             "INSERT INTO admins (user_id) VALUES (%s) ON CONFLICT DO NOTHING",
@@ -1340,23 +1142,13 @@ def test_admin_ops_views_deny_non_admin_allow_admin(
         with scoped(tenants["a_user"]) as conn:
             with conn.cursor() as cur:
                 for name in _ADMIN_GATED_VIEWS:
-                    cur.execute(f"SELECT count(*) FROM {name}")  # must not raise
-                for name in _ADMIN_GATED_FUNCTIONS:
-                    cur.execute(f"SELECT count(*) FROM {name}()")  # must not raise
-                for call in _ADMIN_GATED_SCALAR_RPCS:
-                    # Must not raise. Not asserted non-NULL for every call: three of
-                    # the five read a matview the replay never refreshes. The two that
-                    # are unconditional (below) ARE asserted, so the admin direction
-                    # is a real positive control rather than a smoke test.
-                    cur.execute(f"SELECT {call}")  # noqa: S608 - fixed list
-                for call in ("image_storage_overview()", "category_trends('sreality')"):
-                    # These build their payload from a bare aggregate / coalesce
-                    # default, so they are non-NULL even on empty data — meaning a
-                    # dropped gate would leak a real value here, and NULL means the
-                    # gate wrongly stayed shut for an admin.
-                    cur.execute(f"SELECT {call}")  # noqa: S608 - fixed list
-                    assert cur.fetchone()[0] is not None, (
-                        f"admin got NULL from {call} — the gate did not open"
+                    cur.execute(f"SELECT count(*) FROM {name}")  # noqa: S608 - fixed list
+                    # The admin direction's positive control: the service read above
+                    # proved a seeded row is behind each seeded view, so an admin who
+                    # sees none of them is a gate that stayed shut.
+                    seen = cur.fetchone()[0]
+                    assert name not in _SEEDED_ADMIN_VIEWS or seen > 0, (
+                        f"admin saw no rows through {name} — the gate did not open"
                     )
     finally:
         with svc.cursor() as cur:
@@ -1394,81 +1186,88 @@ def test_an_admin_reads_the_registry_view_as_the_caller(
                 assert cur.fetchone() == ("ok", "ok", True, [])
 
 
-# Migration 364 stamps every system_health dispatch to the SYSTEM account (account_id is NOT
-# NULL), and no tenant is a member of it, so no tenant arm reaches one; since migration 651 no
-# admin arm does either (system alerts left the bell, ruling R2).
-_SYSTEM_ACCOUNT = uuid.UUID("00000000-0000-0000-0000-000000000000")
-
-
+# System alerts are no producer since migration 656 deleted their history (ruling R2 (b)): the
+# account trigger raises for any source but the three, so every dispatch is an account's own and a
+# reader, a platform admin included, sees and marks its own account's rows only (migration 651).
 @pytest.fixture(scope="module")
 def seeded_dispatches(
     svc: Any, tenants: dict[str, uuid.UUID],
 ) -> "Iterator[dict[str, Any]]":
-    """One system alert and one of tenant B's own collection_monitor dispatches, each stamped
-    by the dispatch trigger. Seeded as svc; B's row goes with its collection."""
+    """One collection_monitor dispatch of tenant A's and one of tenant B's, each stamped by the
+    dispatch trigger. Seeded as svc; each row goes with its collection."""
     nonce = uuid.uuid4().hex[:12]
-    alert = {"message": f"iso alert {nonce}", "dedupe_key": f"sys:iso:{nonce}"}
+    rows: dict[str, Any] = {}
+    colls: list[int] = []
     with svc.cursor() as cur:
-        cur.execute(
-            "INSERT INTO notification_dispatches (source_kind, change_kind, message, dedupe_key) "
-            "VALUES ('system_health', 'system_alert', %s, %s) RETURNING id, account_id",
-            (alert["message"], alert["dedupe_key"]),
-        )
-        system_id, system_account = cur.fetchone()
-        cur.execute(
-            "INSERT INTO collections (account_id, name) VALUES (%s, %s) RETURNING id",
-            (tenants["b_acc"], f"iso-{nonce}"),
-        )
-        coll = cur.fetchone()[0]
-        cur.execute(
-            "INSERT INTO notification_dispatches (source_kind, collection_id, change_kind, dedupe_key) "
-            "VALUES ('collection_monitor', %s, 'new', %s) RETURNING id",
-            (coll, f"iso:{nonce}"),
-        )
-        own_id = cur.fetchone()[0]
+        for side in ("a", "b"):
+            cur.execute(
+                "INSERT INTO collections (account_id, name) VALUES (%s, %s) RETURNING id",
+                (tenants[f"{side}_acc"], f"iso-{side}-{nonce}"),
+            )
+            coll = cur.fetchone()[0]
+            colls.append(coll)
+            cur.execute(
+                "INSERT INTO notification_dispatches (source_kind, collection_id, change_kind, event_ref) "
+                "VALUES ('collection_monitor', %s, 'inactive', %s) RETURNING id, account_id",
+                (coll, nonce),
+            )
+            rows[side], account = cur.fetchone()
+            assert account == tenants[f"{side}_acc"], "the trigger stamps the collection's account"
     try:
-        assert system_account == _SYSTEM_ACCOUNT, "a system alert must be a SYSTEM-account row"
-        yield {"system": system_id, "own": own_id, **alert}
+        yield {**rows, "event_ref": nonce}
     finally:
         with svc.cursor() as cur:
-            cur.execute("DELETE FROM notification_dispatches WHERE id = %s", (system_id,))
-            cur.execute("DELETE FROM collections WHERE id = %s", (coll,))
+            cur.execute("DELETE FROM collections WHERE id = ANY(%s)", (colls,))
 
 
-def test_a_platform_admin_neither_reads_nor_marks_a_system_alert(
+def test_no_producer_writes_a_system_alert(svc: Any) -> None:
+    """Migration 656: the SYSTEM else-branch is gone (anything but the three producers raises) and the
+    CHECKs name three sources and nine kinds. RED by: restoring 641's SYSTEM stamp or 274's arm."""
+    import psycopg
+
+    with svc.transaction():
+        with pytest.raises(psycopg.errors.RaiseException, match="has no producer system_health"):
+            with svc.transaction():
+                with svc.cursor() as cur:
+                    cur.execute("INSERT INTO notification_dispatches (source_kind, change_kind) "
+                                "VALUES ('system_health', 'new')")
+        with pytest.raises(psycopg.errors.CheckViolation, match="notification_dispatches_change_kind_ck"):
+            with svc.transaction():
+                with svc.cursor() as cur:
+                    cur.execute("INSERT INTO notification_dispatches (source_kind, change_kind, account_id) "
+                                "VALUES ('share', 'system_alert', %s)",
+                                (uuid.UUID("00000000-0000-0000-0000-000000000000"),))
+
+
+def test_a_platform_admin_neither_reads_nor_marks_another_accounts_alert(
     svc: Any, tenants: dict[str, uuid.UUID], seeded_dispatches: dict[str, Any],
 ) -> None:
-    """Migration 651: system alerts live on Health, so the bell, the badge and the feed count an
-    account's own rows only, a platform admin's included. The blanket UPDATE reads no column, so
-    the UPDATE policies alone judge it. RED by: restoring tenant_read's SYSTEM arm or
-    notification_dispatches_admin_update."""
+    """Migration 651: the bell, the badge and the feed count an account's own rows only, a platform
+    admin's included. The blanket UPDATE reads no column, so the UPDATE policies alone judge it.
+    RED by: an admin arm on tenant_read or an admin UPDATE policy."""
+    seen_at = "SELECT seen_at FROM notification_dispatches WHERE id = %s"
     with svc.cursor() as cur:
-        cur.execute("SELECT seen_at FROM notification_dispatches WHERE id = %s",
-                    (seeded_dispatches["system"],))
+        cur.execute(seen_at, (seeded_dispatches["b"],))
         before = cur.fetchone()[0]
     with _platform_admin(svc, tenants["a_user"]):
         with scoped(tenants["a_user"]) as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT 1 FROM notification_dispatches WHERE id = %s",
-                            (seeded_dispatches["system"],))
-                assert cur.fetchone() is None, "the platform admin still reads a system alert"
+                cur.execute("SELECT 1 FROM notification_dispatches WHERE id = %s", (seeded_dispatches["b"],))
+                assert cur.fetchone() is None, "the platform admin reads another account's alert"
                 cur.execute("UPDATE notification_dispatches SET seen_at = now()")
-                cur.execute(
-                    "UPDATE notification_dispatches SET seen_at = now() WHERE id = %s",
-                    (seeded_dispatches["system"],),
-                )
-                assert cur.rowcount == 0, "the platform admin still marks a system alert read"
+                cur.execute("UPDATE notification_dispatches SET seen_at = now() WHERE id = %s",
+                            (seeded_dispatches["b"],))
+                assert cur.rowcount == 0, "the platform admin marks another account's alert read"
     with svc.cursor() as cur:
-        cur.execute("SELECT seen_at FROM notification_dispatches WHERE id = %s",
-                    (seeded_dispatches["system"],))
+        cur.execute(seen_at, (seeded_dispatches["b"],))
         assert cur.fetchone()[0] == before
 
 
-def test_a_platform_admin_cannot_rewrite_a_system_alert(
+def test_no_browser_caller_rewrites_a_column_but_seen_at(
     svc: Any, tenants: dict[str, uuid.UUID], seeded_dispatches: dict[str, Any],
 ) -> None:
-    """The column grant keeps every column but seen_at out of every browser caller's reach, an
-    admin's included, whichever row a policy would admit.
+    """The column grant keeps every column but seen_at out of every browser caller's reach, on the
+    caller's OWN row, which every policy admits, and for an admin too.
 
     RED by: restoring table-wide UPDATE on notification_dispatches to authenticated."""
     import psycopg
@@ -1476,61 +1275,59 @@ def test_a_platform_admin_cannot_rewrite_a_system_alert(
     with _platform_admin(svc, tenants["a_user"]):
         with scoped(tenants["a_user"]) as conn:
             for sql in (
-                "UPDATE notification_dispatches SET message = 'rewritten' WHERE id = %s",
-                "UPDATE notification_dispatches SET target_channels = '{email}' WHERE id = %s",
-                "UPDATE notification_dispatches SET dedupe_key = 'sys:forged' WHERE id = %s",
-                "UPDATE notification_dispatches SET estimation_run_id = NULL WHERE id = %s",
+                "UPDATE notification_dispatches SET change_kind = 'new' WHERE id = %s",
+                "UPDATE notification_dispatches SET event_ref = 'forged' WHERE id = %s",
+                "UPDATE notification_dispatches SET duplicate_of = id WHERE id = %s",
+                "UPDATE notification_dispatches SET actor_account_id = account_id WHERE id = %s",
             ):
                 with pytest.raises(psycopg.errors.InsufficientPrivilege):
                     with conn.transaction():  # a SAVEPOINT, so the refusal cannot poison the txn
                         with conn.cursor() as cur:
-                            cur.execute(sql, (seeded_dispatches["system"],))
+                            cur.execute(sql, (seeded_dispatches["a"],))
     with svc.cursor() as cur:
-        cur.execute(
-            "SELECT message, target_channels, dedupe_key FROM notification_dispatches WHERE id = %s",
-            (seeded_dispatches["system"],),
-        )
-        assert cur.fetchone() == (seeded_dispatches["message"], [], seeded_dispatches["dedupe_key"])
+        cur.execute("SELECT change_kind, event_ref, duplicate_of, actor_account_id "
+                    "FROM notification_dispatches WHERE id = %s", (seeded_dispatches["a"],))
+        assert cur.fetchone() == ("inactive", seeded_dispatches["event_ref"], None, None)
 
 
-def test_a_tenant_cannot_touch_a_system_alert_and_still_marks_its_own_read(
+def test_a_tenant_cannot_touch_another_accounts_alert_and_still_marks_its_own_read(
     svc: Any, tenants: dict[str, uuid.UUID], seeded_dispatches: dict[str, Any],
 ) -> None:
-    """An UPDATE that reads no column (no WHERE, no RETURNING) is judged by the UPDATE
-    policies alone; with a WHERE the read policy, which hides SYSTEM rows from tenants,
-    would mask an UPDATE arm that reaches them. So the blanket statement is the probe.
+    """An UPDATE that reads no column (no WHERE, no RETURNING) is judged by the UPDATE policies
+    alone; with a WHERE the read policy, which hides other accounts' rows, would mask an UPDATE arm
+    that reaches them. So the blanket statement is the probe.
 
-    RED by: an UPDATE arm that reaches SYSTEM rows, a column grant missing seen_at, or one that
-    still carries estimation_run_id (migration 651: its one writer, "Estimate rent", is deleted)."""
+    RED by: an UPDATE arm that reaches another account, or a column grant missing seen_at or
+    carrying any other column."""
     import psycopg
 
     seen_at = "SELECT seen_at FROM notification_dispatches WHERE id = %s"
     with svc.cursor() as cur:
-        cur.execute(seen_at, (seeded_dispatches["system"],))
+        cur.execute(seen_at, (seeded_dispatches["a"],))
         before = cur.fetchone()[0]
     with scoped(tenants["b_user"]) as conn:
         with conn.cursor() as cur:
             cur.execute("UPDATE notification_dispatches SET seen_at = now()")
             cur.execute(
                 "UPDATE notification_dispatches SET seen_at = now() WHERE id = %s",
-                (seeded_dispatches["system"],),
+                (seeded_dispatches["a"],),
             )
-            assert cur.rowcount == 0, "a tenant reached a SYSTEM-account system alert"
+            assert cur.rowcount == 0, "a tenant reached another account's alert"
             cur.execute(
                 "UPDATE notification_dispatches SET seen_at = now() WHERE id = %s",
-                (seeded_dispatches["own"],),
+                (seeded_dispatches["b"],),
             )
             assert cur.rowcount == 1, "a tenant can no longer mark its own notification read"
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             with conn.transaction():  # a SAVEPOINT, so the refusal cannot poison the txn
                 with conn.cursor() as cur:
                     cur.execute(
-                        "UPDATE notification_dispatches SET estimation_run_id = NULL WHERE id = %s",
-                        (seeded_dispatches["own"],),
+                        "UPDATE notification_dispatches SET event_ref = NULL WHERE id = %s",
+                        (seeded_dispatches["b"],),
                     )
     with svc.cursor() as cur:
-        cur.execute(seen_at, (seeded_dispatches["system"],))
-        assert cur.fetchone()[0] == before, "a tenant's blanket update reached a system alert"
+        cur.execute(seen_at, (seeded_dispatches["a"],))
+        assert cur.fetchone()[0] == before, "a tenant's blanket update reached another account's alert"
 
 
 def test_no_anon_write_grants(svc: Any) -> None:
@@ -1556,27 +1353,6 @@ def test_no_anon_write_grants(svc: Any) -> None:
     assert auth_extra == [], (
         f"authenticated must never hold TRUNCATE/REFERENCES/TRIGGER: {auth_extra}"
     )
-
-
-# A materialized view can carry neither RLS nor an embedded gate, so `authenticated`
-# holding SELECT on one reads exactly what its gated wrapper hides. The first three
-# back migration 318's gated views/function (closed by 331); the rest back the five
-# health/ops RPCs (closed by 332, which had to convert those RPCs to SECURITY
-# DEFINER first — while they were INVOKER they read these as the CALLER, so revoking
-# would have broken the operator's own Health dashboard).
-#
-# Deliberately absent: price_stat_choropleth — the SPA reads it directly as shared-market
-# data (properties_map_mv is gone: migration 631; rent_map_choropleth: migration 601).
-_ADMIN_GATED_MATVIEWS: list[str] = [
-    "images_failure_overview_mv",
-    "health_summary_mv",
-    "health_mv_refresh_stamp",
-    "portal_health_mv",
-    "scraper_health_checks_mv",
-    "snapshot_churn_24h_mv",
-    "category_trends_mv",
-    "image_storage_overview_mv",
-]
 
 
 def test_anon_holds_no_relation_grants(svc: Any) -> None:
@@ -1631,29 +1407,6 @@ def test_anon_executes_no_definer_function(svc: Any) -> None:
         f"so this is a write or read path open to anyone holding the anon key. "
         f"The revoke must name `public` as well as anon and authenticated: "
         f"{callable_by_anon}"
-    )
-
-
-def test_admin_gated_matviews_dark_to_authenticated(svc: Any) -> None:
-    """A matview cannot embed migration 318's is_platform_admin() filter, so raw
-    SELECT on it bypasses the gate its wrapper view enforces. Legitimate readers go
-    through the owner-rights view or the SECURITY DEFINER function, which keep
-    access via the owner — no non-admin surface needs these directly."""
-    with svc.cursor() as cur:
-        leaks: list[str] = []
-        for mv in _ADMIN_GATED_MATVIEWS:
-            cur.execute("SELECT to_regclass(%s)", (f"public.{mv}",))
-            if cur.fetchone()[0] is None:
-                continue
-            cur.execute(
-                "SELECT has_table_privilege('authenticated', %s, 'SELECT')",
-                (f"public.{mv}",),
-            )
-            if cur.fetchone()[0]:
-                leaks.append(mv)
-    assert leaks == [], (
-        f"authenticated can SELECT the raw matview(s) behind migration 318's admin "
-        f"gate, bypassing it entirely: {leaks}"
     )
 
 
@@ -1870,3 +1623,146 @@ def test_write_then_read_back_one_transaction(
     finally:
         with svc.cursor() as cur:
             cur.execute("DELETE FROM collections WHERE name = %s", (name,))
+
+
+@pytest.fixture(scope="module")
+def seeded_runs(svc: Any, tenants: dict[str, uuid.UUID]) -> "Iterator[dict[str, int]]":
+    """One estimation run and one building run per tenant, written as svc, the API's service role."""
+    est: dict[str, int] = {}
+    bld: dict[str, int] = {}
+    with svc.cursor() as cur:
+        for side in ("a", "b"):
+            cur.execute(
+                "INSERT INTO estimation_runs (account_id, source, mode, status, input_spec, "
+                "estimated_monthly_rent_czk) VALUES (%s, 'ui', 'deterministic', 'success', '{}'::jsonb, 20000) "
+                "RETURNING id",
+                (tenants[f"{side}_acc"],),
+            )
+            est[side] = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO building_runs (account_id, source, status) VALUES (%s, 'ui', 'pending') RETURNING id",
+                (tenants[f"{side}_acc"],),
+            )
+            bld[side] = cur.fetchone()[0]
+    try:
+        yield {"est_a": est["a"], "est_b": est["b"], "bld_a": bld["a"], "bld_b": bld["b"]}
+    finally:
+        with svc.cursor() as cur:
+            cur.execute("DELETE FROM estimation_runs WHERE id = ANY(%s)", (list(est.values()),))
+            cur.execute("DELETE FROM building_runs WHERE id = ANY(%s)", (list(bld.values()),))
+
+
+def _refused(conn: Any, sql: str, params: tuple[Any, ...]) -> None:
+    """Refused by the GRANT: an RLS default-deny raises the same SQLSTATE with another message."""
+    import psycopg
+
+    with pytest.raises(psycopg.errors.InsufficientPrivilege, match="permission denied for table"):
+        with conn.transaction():  # a SAVEPOINT, so the refusal cannot poison the txn
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+
+
+def test_a_tenant_creates_no_run_through_the_database(tenants: dict[str, uuid.UUID]) -> None:
+    """Migration 679 (rule 12): a run is born only through create_estimation_run on the service role, so a
+    browser INSERT under the caller's own account is refused, not policy-filtered.
+    RED by: restoring 291's INSERT grant on either run table."""
+    with scoped(tenants["a_user"], method="POST") as conn:
+        _refused(conn, "INSERT INTO estimation_runs (account_id, source, mode, status, input_spec) "
+                       "VALUES (%s, 'ui', 'deterministic', 'success', '{}'::jsonb)", (tenants["a_acc"],))
+        _refused(conn, "INSERT INTO building_runs (account_id, source, status) VALUES (%s, 'ui', 'pending')",
+                 (tenants["a_acc"],))
+
+
+def test_a_tenant_changes_only_the_scenario_of_its_own_run(
+    svc: Any, tenants: dict[str, uuid.UUID], seeded_runs: dict[str, int],
+) -> None:
+    """Migration 679: a run's result is immutable to the browser; its yield scenario is the one column the
+    PATCH route writes, and only on the caller's own run. The blanket UPDATE reads no column, so the UPDATE
+    policies alone judge it (a WHERE would let the read policy mask an arm reaching B).
+    RED by: a table-wide UPDATE grant, a column grant beyond scenario, or an UPDATE policy reaching B."""
+    own, other = seeded_runs["est_a"], seeded_runs["est_b"]
+    read = "SELECT id, status, estimated_monthly_rent_czk, scenario FROM estimation_runs WHERE id = %s"
+    with svc.cursor() as cur:
+        cur.execute(read, (other,))
+        before_other = cur.fetchone()
+    with scoped(tenants["a_user"], method="PATCH") as conn:
+        for sql in (
+            "UPDATE estimation_runs SET status = 'failed' WHERE id = %s",
+            "UPDATE estimation_runs SET estimated_monthly_rent_czk = 1 WHERE id = %s",
+            "UPDATE estimation_runs SET account_id = account_id WHERE id = %s",
+        ):
+            _refused(conn, sql, (own,))
+        _refused(conn, "UPDATE building_runs SET status = 'failed' WHERE id = %s", (seeded_runs["bld_a"],))
+        with conn.cursor() as cur:
+            cur.execute("UPDATE estimation_runs SET scenario = '{\"rent_czk\": 1}'::jsonb")
+            cur.execute("UPDATE estimation_runs SET scenario = '{\"rent_czk\": 1}'::jsonb WHERE id = %s", (own,))
+            assert cur.rowcount == 1, "a tenant can no longer tune its own run's scenario"
+    with svc.cursor() as cur:
+        cur.execute(read, (own,))
+        assert cur.fetchone()[1:] == ("success", 20000, {"rent_czk": 1})
+        cur.execute(read, (other,))
+        assert cur.fetchone() == before_other, "a tenant's blanket update reached another account's run"
+
+
+def test_the_run_table_policies_match_the_grants(svc: Any) -> None:
+    """Migration 679 dropped the policies of the writes it revoked; the scenario PATCH keeps its UPDATE policy.
+    RED by: a surviving INSERT policy, building_runs_tenant_update, or a lost estimation_runs_tenant_update."""
+    with svc.cursor() as cur:
+        cur.execute(
+            "SELECT tablename, cmd FROM pg_policies WHERE schemaname = 'public' "
+            "AND tablename IN ('estimation_runs', 'building_runs') ORDER BY 1, 2"
+        )
+        assert cur.fetchall() == [("building_runs", "SELECT"), ("estimation_runs", "SELECT"),
+                                  ("estimation_runs", "UPDATE")]
+
+
+def test_the_run_tables_grant_the_browser_exactly_their_columns(svc: Any) -> None:
+    """The replayed schema's effective grants, from the registry both tenancy gates read: no INSERT, no
+    table-wide UPDATE, and a column UPDATE exactly on BROWSER_WRITE_COLUMNS (anon: test_no_anon_write_grants)."""
+    drift: list[str] = []
+    with svc.cursor() as cur:
+        for table, allowed in BROWSER_WRITE_COLUMNS.items():
+            rel = f"public.{table}"
+            for priv in ("INSERT", "UPDATE"):
+                cur.execute("SELECT has_table_privilege('authenticated', %s, %s)", (rel, priv))
+                if cur.fetchone()[0]:
+                    drift.append(f"authenticated holds table-wide {priv} on {table}")
+            cur.execute(
+                "SELECT attname FROM pg_attribute WHERE attrelid = %s::regclass AND attnum > 0 "
+                "AND NOT attisdropped AND has_column_privilege('authenticated', attrelid, attnum, 'UPDATE')",
+                (rel,),
+            )
+            updatable = {r[0] for r in cur.fetchall()}
+            if updatable != allowed:
+                drift.append(f"authenticated may UPDATE {sorted(updatable)} on {table}, expected {sorted(allowed)}")
+    assert drift == [], drift
+
+
+def test_the_scenario_patch_route_writes_through_the_tenant_pool(
+    svc: Any, tenants: dict[str, uuid.UUID], seeded_runs: dict[str, int], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one browser-role write the run tables keep: PATCH /estimations/{id}/scenario through the real
+    tenant transaction (SET LOCAL ROLE authenticated + the caller's claims) on the replayed schema; another
+    account's run is a 404."""
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from api import dependencies as deps
+    from api import main as api_main
+
+    monkeypatch.setenv("TENANT_POOL_DB_URL", _DB_URL)
+    api_main.app.dependency_overrides[deps.verify_jwt] = lambda: {
+        "sub": str(tenants["b_user"]), "role": "authenticated"}
+    try:
+        client = TestClient(api_main.app)
+        res = client.patch(f"/estimations/{seeded_runs['est_b']}/scenario", json={"rent_czk": 31000})
+        assert res.status_code == 200, res.text
+        assert res.json()["scenario"]["rent_czk"] == 31000
+        assert client.patch(f"/estimations/{seeded_runs['est_a']}/scenario",
+                            json={"rent_czk": 1}).status_code == 404
+    finally:
+        api_main.app.dependency_overrides.pop(deps.verify_jwt, None)
+    with svc.cursor() as cur:
+        cur.execute("SELECT (scenario ->> 'rent_czk')::numeric FROM estimation_runs WHERE id = %s",
+                    (seeded_runs["est_b"],))
+        assert cur.fetchone()[0] == 31000

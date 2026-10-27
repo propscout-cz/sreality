@@ -118,3 +118,22 @@ describe('<Outreach> the campaign target', () => {
     );
   });
 });
+
+/* A pick-one is the ONE joined bar (operator ruling 2026-10-27), drawn via Segmented:
+ * Typ and Nabídka keep their order, Vše last. */
+describe('<Outreach> the campaign scope pickers', () => {
+  it('draws Typ and Nabídka as joined bars, the chosen segment filled copper', async () => {
+    renderPage();
+    for (const [name, lit, labels] of [
+      ['Typ', 'Byty', ['Byty', 'Domy', 'Pozemky', 'Komerční', 'Vše']],
+      ['Nabídka', 'Prodej', ['Prodej', 'Pronájem', 'Vše']],
+    ] as const) {
+      const field = await screen.findByRole('group', { name });
+      const on = within(field).getByRole('button', { name: lit });
+      expect(on).toHaveAttribute('aria-pressed', 'true');
+      expect(on).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+      expect(on.parentElement).toHaveClass('inline-flex', 'border', 'bg-[var(--color-paper-2)]');
+      expect(within(field).getAllByRole('button').map((b) => b.textContent)).toEqual(labels);
+    }
+  });
+});

@@ -25,8 +25,6 @@ import pytest
 from autodedup.incremental_lane import (
     BUILD_BYTES_PER_LISTING,
     CUT_BYTES_PER_LISTING,
-    CURSOR_ENTER,
-    CURSOR_NEW,
     LANE_NAME,
     MAX_SCHEMA_MB,
     PASS_BUDGET_S,
@@ -37,7 +35,6 @@ from autodedup.incremental_lane import (
     SEED_LEASE_TTL_S,
     SqlWork,
     bootstrap_setting_key,
-    pass_rate_key,
     reset_generation,
     run_rt_seed,
     scope_setting_key,

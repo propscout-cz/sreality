@@ -96,7 +96,7 @@ export function ViewingHead({ iso }: { iso: string }) {
         <span
           className={[
             'w-full py-px text-center text-[0.6rem] font-medium uppercase leading-[1.5] tracking-[0.08em]',
-            ahead ? 'bg-[var(--color-copper)] text-white' : 'bg-[var(--color-inset)] text-[var(--color-ink-3)]',
+            ahead ? 'bg-[var(--color-copper)] text-[var(--color-on-copper)]' : 'bg-[var(--color-inset)] text-[var(--color-ink-3)]',
           ].join(' ')}
         >
           {month}

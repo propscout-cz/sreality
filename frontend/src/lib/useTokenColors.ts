@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 
 /* Resolve civic-archive design tokens (CSS custom properties) to concrete colours for
  * recharts — SVG stroke/fill presentation attributes don't resolve `var()` — re-reading
- * on a light/dark switch (explicit `data-theme` or system `prefers-color-scheme`). Shared
- * by every chart so the chart palette stays unified with the tokens. */
+ * on a light/dark or colour-scheme switch (`data-theme`, `data-scheme`, or the system
+ * `prefers-color-scheme`). Shared by every chart so the chart palette stays unified
+ * with the tokens. */
 function readColors(keys: readonly string[]): Record<string, string> {
   if (typeof window === 'undefined') return {};
   const cs = getComputedStyle(document.documentElement);
@@ -21,7 +22,7 @@ export function useTokenColors(keys: readonly string[]): Record<string, string> 
     const obs = new MutationObserver(update);
     obs.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ['data-theme'],
+      attributeFilter: ['data-theme', 'data-scheme'],
     });
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
     mq.addEventListener('change', update);

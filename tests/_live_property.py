@@ -1,13 +1,13 @@
-"""Shared setup for the live property-identity tests: a rollback-always connection, the
-`REQUIRED_DB` guard, and seed helpers for properties, adverts, accounts and the operator's
-property-anchored state. Every seed lands inside the test's transaction and rolls back."""
+"""Shared setup for the live property-identity tests: the `REQUIRED_DB` guard, `db_url()`, and seed
+helpers for properties, adverts, accounts and the operator's property-anchored state. Every seed lands
+inside the test's transaction (the rollback-always `cur` fixture in tests/conftest.py) and rolls back."""
 
 from __future__ import annotations
 
 import itertools
 import os
 import uuid
-from typing import Any, Iterator
+from typing import Any
 
 import pytest
 
@@ -32,23 +32,6 @@ def db_url() -> str:
             "misconfigured and these tests would otherwise have skipped green."
         )
     return DB_URL
-
-
-@pytest.fixture()
-def cur() -> Iterator[Any]:
-    import psycopg
-
-    conn = psycopg.connect(
-        db_url(),
-        options="-c statement_timeout=20000 -c lock_timeout=5000"
-        " -c idle_in_transaction_session_timeout=30000",
-    )
-    try:
-        with conn.cursor() as c:
-            yield c
-    finally:
-        conn.rollback()
-        conn.close()
 
 
 def _property(cur: Any) -> int:

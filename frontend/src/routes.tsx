@@ -17,7 +17,6 @@ import EstimationList from './pages/EstimationList';
 import Brokers from './pages/Brokers';
 import BrokerDetail from './pages/BrokerDetail';
 import Collections from './pages/Collections';
-import CollectionDetail from './pages/CollectionDetail';
 import Pipeline from './pages/Pipeline';
 import WatchdogManage from './pages/WatchdogManage';
 import WatchdogEdit from './pages/WatchdogEdit';
@@ -64,7 +63,11 @@ const PhoneViewings = lazyChunk(() => import('./pages/phone/PhoneViewings'));
 const NotificationOpen = lazyChunk(() => import('./pages/NotificationOpen'));
 // Paste-a-building (rule 13): an operator flow opened by its own link, never on a
 // first visit — its page and unit editor are their own chunk, like the admin pages.
+// Every /buildings route is admin-only (agent platform M0), so the page is too.
 const BuildingDetail = lazyChunk(() => import('./pages/BuildingDetail'));
+// A collection's page opens from the collections list or a shared link, not on a first
+// visit: its own chunk keeps the members' card grid off the first-visit budget.
+const CollectionDetail = lazyChunk(() => import('./pages/CollectionDetail'));
 
 function AdminPage({ children }: { children: ReactNode }) {
   return (
@@ -146,15 +149,19 @@ export const routes: RouteObject[] = [
       { path: ROUTES.outreachDetail.childPath, element: <AdminPage><OutreachDetail /></AdminPage>, handle: { title: 'Campaign' } },
       {
         path: ROUTES.buildingDetail.childPath,
-        element: (
-          <Suspense fallback={<Skeleton height={240} className="mx-4 my-4" />}>
-            <BuildingDetail />
-          </Suspense>
-        ),
+        element: <AdminPage><BuildingDetail /></AdminPage>,
         handle: { title: 'Building' },
       },
       { path: ROUTES.collections.childPath, element: <Collections />, handle: { title: 'Collections' } },
-      { path: ROUTES.collectionDetail.childPath, element: <CollectionDetail />, handle: { title: 'Collection' } },
+      {
+        path: ROUTES.collectionDetail.childPath,
+        element: (
+          <Suspense fallback={<Skeleton height={320} className="mx-6 my-8" />}>
+            <CollectionDetail />
+          </Suspense>
+        ),
+        handle: { title: 'Collection' },
+      },
       { path: ROUTES.pipeline.childPath, element: <Pipeline />, handle: { title: 'Pipeline' } },
       { path: ROUTES.datasets.childPath, element: <AdminPage><Datasets /></AdminPage>, handle: { title: 'Datasets' } },
       { path: ROUTES.watchdog.childPath, element: <WatchdogManage />, handle: { title: 'Watchdogs' } },

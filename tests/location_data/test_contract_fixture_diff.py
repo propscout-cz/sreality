@@ -43,6 +43,7 @@ from location_data.page_readers import (
     PAGE_READERS,
     ArchivedPayload,
     _licensed_coordinate,
+    read_entry,
     stamp_page_claim,
 )
 from location_data.html_scope import ScopeRegister, scope_html
@@ -319,7 +320,7 @@ def score_archived(contract: contracts.PortalContract) -> list[dict[str, Any]]:
     row = fx.listing(contract.source, {}, native=native)
     out: list[dict[str, Any]] = []
     for entry in sorted(entries, key=lambda e: e.entry_id):
-        for read in PAGE_READERS[entry.reader](entry, row, payload, document):
+        for read in read_entry(entry, row, payload, document):
             stamped = stamp_page_claim(read.claim, payload)
             # The C6 licence ladder, applied exactly as the real lane applies it. Without
             # this the gate would show a green claim for a coordinate the lane REFUSES —

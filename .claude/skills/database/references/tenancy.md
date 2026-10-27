@@ -46,7 +46,13 @@ about the split preview's bare-note case (PR #1829 attributes its one pre-tenanc
 
 **Migration 291 — estimation/building tables**: `estimation_runs`, `building_runs`.
 `account_id` is **NULLABLE**, `DEFAULT` the SYSTEM account — these can be written by
-service-role paths (the estimation agent, ClickUp) that don't carry a tenant JWT.
+service-role paths (the estimation agent, ClickUp) that don't carry a tenant JWT. **Writes-by-grant
+since migration 679** (rule 12): `authenticated` holds SELECT and `UPDATE (scenario)` on
+`estimation_runs` (the scenario PATCH, the one tenant-connection write) and SELECT alone on
+`building_runs`; 679 dropped both INSERT policies and `building_runs_tenant_update`. Every run is
+created and finished by the API on the service role. The column list is `BROWSER_WRITE_COLUMNS` in
+`tests/_tenant_registry.py`, held by both tenancy gates (offline over every migration from 679 on,
+live over the replayed schema's effective grants).
 
 **Migration 292 — child-grain tables**, `account_id` **derived by a `BEFORE INSERT OR
 UPDATE` trigger** from the owning parent row (a plain `DEFAULT` can't see a sibling
@@ -63,8 +69,9 @@ the parent is merely shared with it (migration 610) — and `WITH CHECK` refuses
 insert **fails closed** — a `with check (true)` here would instead silently write invisible orphan rows.
 Service-role writers bypass RLS entirely but still get correctly-stamped rows because
 their parent lookups see every row. Since migration 651 (notifications W1), `authenticated` may UPDATE only `seen_at`
-on `notification_dispatches` (619 also granted `estimation_run_id`), and no account reads or updates SYSTEM-account
-rows: 651 dropped `notification_dispatches_tenant_read`'s platform-admin SYSTEM arm and `notification_dispatches_admin_update`.
+on `notification_dispatches`, and no admin arm reads or updates another account's rows (651 dropped 619's two). Since
+656 the dispatch trigger stamps no SYSTEM account: it raises for any source but `watchdog` / `collection_monitor` /
+`share` (656 deleted the system_health history, ruling R2 (b)), so every dispatch is one account's own.
 
 **Migration 294 — pipeline tables**: `property_pipeline`, `pipeline_stages`,
 `property_pipeline_events`, plus the signup trigger:
@@ -163,8 +170,11 @@ there (`docs/design/pipeline-sharing.md` §3.7; pinned offline by
 - **One notification kind.** `notification_dispatches.source_kind = 'share'` for every kind
   (`collection_id` set for a collection share, NULL for a pipeline or dashboard share; 641 renamed
   `collection_share`); `api/shares.py` writes all three with `change_kind` `shared_<collection|pipeline|dashboard>`
-  (652), the sharer as `actor_account_id` and the dashboard id or the mode as `event_ref`, conflicting on the
-  one event identity (`EVENT_IDENTITY`, migration 653; no `dedupe_key` since W3), so a share notifies once per
+  (652), the sharer as `actor_account_id` and the dashboard id or the mode as `event_ref` and NO text (656 dropped
+  `message`: the bell names the sharer through `share_party_emails()`, so the address drops out once no share joins the
+  two, unless the sharer is an actor in the recipient's own `delegated_edits` ledger, whose stamp outlives a revoke; and
+  the thing by its live name), conflicting on the
+  one event identity (`EVENT_IDENTITY`, migration 653; 656 dropped `dedupe_key`), so a share notifies once per
   identity: (recipient, collection or dashboard, actor), and for a pipeline (recipient, owner, mode) — a
   widening to edit is a second notification. In-app and pushed (W4; collection-sharing ruling 5(e) superseded
   2026-10-21): at most one push per (sharer, recipient) a day, the rest `skipped/capped` in the ledger, bell only (R11).
@@ -347,7 +357,7 @@ the request-long `tenant_conn`: its service-role work is two fast INSERTs, not a
 
 **Third instance — the push device routes (`api/routes/push.py`, migration 654): the caller's own account, then the
 service role.** `push_subscriptions` and `notification_deliveries` are RLS-on with NO policy and no browser grant, registered in
-both `_ADMIN_ONLY_RELATIONS` lists (not tenant tables: no browser DML). `PUT`/`DELETE /push/subscription` and `POST
+`tests/_admin_gate_registry.py` `ADMIN_ONLY_RELATIONS` (not tenant tables: no browser DML). `PUT`/`DELETE /push/subscription` and `POST
 /push/opened` declare `require_account_id` (in `_NEVER_ACTS`: a device belongs to the signed-in user, so a delegate's phone gets
 only the delegate's alerts and nobody registers a device for an account they act for), then `deps.open_background_conn` in the
 handler (pinned beside the share routes by `test_the_share_routes_open_the_service_role_only_after_their_gate`); every

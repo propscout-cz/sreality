@@ -6,7 +6,8 @@ property grain (docs/design/stats-dashboard.md). What only executing it shows:
   * THE LEDGER. `filtered` is the cohort, `sample` the properties with the measure and a value
     on every chosen dimension, `excluded` the rest (ruling 8: a NULL is never a bucket).
   * THE LEVELS. A cell with `keys` of length L is the rollup at level L, 0 .. len(rows), one
-    pass; statistics are NULL below `min_n` (ruling 6), the count never is.
+    pass; statistics are NULL below `min_n` (ruling 6), the count never is; a cell below it carries
+    only `small` = {min, max, mean, median} (migration 678), null at or above it.
   * THE REFUSALS. `empty`, `mixed_category` (ruling 4), `mixed_status` on turnover (ruling 3),
     `too_many_cells` (above MAX_CELLS) and `bad_spec` — refused for exactly the specs
     `toolkit.stats_registry.validate_spec` refuses.
@@ -36,7 +37,7 @@ from typing import Any
 
 import pytest
 
-from tests._live_property import REQUIRED_DB, cur  # noqa: F401 -- `cur` is the fixture
+from tests._live_property import REQUIRED_DB
 from toolkit import stats_registry as sr
 
 pytestmark = REQUIRED_DB
@@ -190,6 +191,25 @@ def test_the_floor_is_inclusive_at_min_n_and_exclusive_just_below(cur) -> None:
     assert out["min_n"] == sr.MIN_N
     assert at["n"] == sr.MIN_N and at["median"] == 5_000_000
     assert below["n"] == sr.MIN_N - 1 and all(below[st] is None for st in sr.CHART_STATS), below
+
+
+def test_a_cell_under_the_floor_carries_its_small_sample_summary(cur) -> None:
+    """Migration 678: under the floor a cell also ships `small` = {min, max, mean, median}, rounded like every
+    figure (the SPA shows it only behind the Stats tab's 'Malé vzorky' checkbox), never a percentile; every
+    floor-gated key stays null. At or above the floor `small` is null and the statistics are the usual ones."""
+    pids = [_add(cur, disposition="3+kk", price=p) for p in (8_000_000, 2_000_000, 3_000_000)]
+    pids += [_add(cur, disposition="2+kk", price=i * 1_000_000) for i in range(1, 6)]
+    out = _pivot(cur, pids, {"rows": ["disposition"], "cols": [], "measure": "price"})
+    assert out["min_n"] == sr.MIN_N == 5
+    cells = _cells(out)
+    under, at, whole = cells[(("3+kk",), None)], cells[(("2+kk",), None)], cells[((), None)]
+    assert under["n"] == 3
+    assert under["small"] == {"min": 2_000_000, "max": 8_000_000, "mean": 4_333_333.33, "median": 3_000_000}
+    assert all(under[st] is None for st in ("mean", "median", "p10", "p25", "p75", "p90")), under
+    assert at["n"] == 5 and at["small"] is None
+    assert (at["mean"], at["median"], at["p10"], at["p25"], at["p75"], at["p90"]) == (
+        3_000_000, 3_000_000, 1_400_000, 2_000_000, 4_000_000, 4_600_000)
+    assert whole["n"] == 8 and whole["small"] is None and whole["median"] == 3_000_000
 
 
 def test_a_column_dimension_rolls_up_per_column_value(cur) -> None:

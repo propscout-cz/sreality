@@ -40,18 +40,18 @@ Inzeráty lists stay without it; history is healed now.
 Program `docs/design/notifications-push/PROGRAM.md` (audit `AUDIT.md`, F1–F28; eleven rulings taken 2026-10-21). North
 star: one real-world change becomes one immutable row, owned by one account, shown in one feed and pushed to that
 account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, email (kept, inactive); Telegram is out.
-- [ ] **W1 (built 2026-10-21; done when merged)** — subtract the dead and the dangerous: Estimate rent and "Run matcher
+- [x] **W1 (merged #1944 + live 2026-10-22; migration 651)** — subtract the dead and the dangerous: Estimate rent and "Run matcher
       now" (R10); the Email/Telegram picker, Settings › Delivery, Telegram, the outbox, ChannelClient, the Resend
       transport, webhook and unsubscribe (R1, R5); the duplicate /watchdog feed and the System tab (R3); system alerts
       leave the bell for Health + the canary e-mail (R2b, R9a; migration 651).
-- [ ] **W2a (built 2026-10-21, stacked on W1; done when merged + 48 h overlap gate)** — the worker's `notifications` lane
+- [x] **W2a (merged #1946 + live 2026-10-22 08:46Z; migration 652; the 48 h overlap gate runs until 2026-10-24)** — the worker's `notifications` lane
       (300 s; steps watchdog_new / price / monitor, each its own transaction and `lane/notifications/<step>` cell) runs
       the producers beside the API's matcher: the cursor and lookback go (24 h from `active_since`), one canonical-ad
       price fragment (7 days), 'inactive' after 24 h gone (R6 a); keys byte-identical (render test), `event_ref` +
       `actor_account_id` written; shares become `shared_collection | shared_dashboard | shared_pipeline` (migration 652:
       the five columns, the `active_since` trigger, the wider CHECK, backfills). Gate: cells green, the 9-preset replay,
       EXPLAIN < 2 s, the false-new baseline.
-- [ ] **W3 (built 2026-10-21, stacked on W2a; done when merged, migration 653 applied first)** — one event identity:
+- [x] **W3 (merged #1949 + live 2026-10-22; migration 653)** — one event identity:
       `notification_dispatches_identity_uq` over `EVENT_IDENTITY` (NULLS NOT DISTINCT, partial on `duplicate_of IS
       NULL`; migration 653 = Migration C: 652's fills since A, system history keyed on its old key, exact repeats
       marked, `dedupe_key` nullable, the feed index, the index CONCURRENTLY); every producer and the share grant
@@ -60,22 +60,19 @@ account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, e
       watchdog retires it (F21); the carrier is one UPDATE that re-points and marks `duplicate_of`, deleting nothing
       (F6, F13); `share_ref` reads columns, no `split_part`. Gate: CI green; a merged 'new' row is marked and never
       re-fires, 0 deleted; a retired watchdog's alerts hidden, rows kept; 0 identity violations.
-- [ ] **W4 backend (built 2026-10-21, stacked on W3; done when merged, migration 654 applied first)** — push plumbing,
+- [x] **W4 backend (merged #1950 + live 2026-10-22; migration 654; dark until the VAPID key)** — push plumbing,
       dark: migration 654 = Migration D (`push_subscriptions`, `notification_deliveries`, service role only);
       `api/push.py` (RFC 8291 aes128gcm + RFC 8292 VAPID, the RFC vector byte for byte); `GET /push/key`, `PUT`/`DELETE
       /push/subscription`, `POST /push/opened` (never act); the Czech renderer; the worker's `push` lane (15 s; fan-out
       with the one-share-a-day cap R11, a 2-min leased claim, one push per device, a 429 holds the device); the
       `notifications` Health check (stall, recall, failures, unconfigured). **Operator:** generate `VAPID_PRIVATE_KEY`
-      with the toolkit-api one-liner, paste it as a Railway Shared Variable on the API AND the realtime-worker, delete the
-      file. Gate: CI-Postgres lease/claim/429 tests green; lane `unconfigured`, then `live_devices` 0; `/push/key` 503
+      with the toolkit-api one-liner, paste the same value into each service's Variables (the API and the realtime-worker are separate Railway
+      projects), delete the file — done 2026-10-25. Gate: CI-Postgres lease/claim/429 tests green; lane `unconfigured`, then `live_devices` 0; `/push/key` 503
       then 200. The SPA half (sw.js, the switch, `/n/:dispatchId`) is #1948.
-- [ ] **Next:** W2b the API matcher goes (lease, readers, gates; Migration B; after 48 h of overlap) · the on-device proof
-      of W5 (your iPhone, a second account; after the VAPID key) · W6 the one destructive prune, backup first (R8; drops
-      `dedupe_key`, its UNIQUE and `trigger_snapshot_id`).
-- [ ] **W5a (built 2026-10-21, stacked on W1; done when merged)** — the phone surfaces that need no push plumbing
+- [x] **W5a (merged #1947 + live 2026-10-22)** — the phone surfaces that need no push plumbing
       (R4, F9): one unread observer in Shell for both frames and the page (`lib/unreadCount`), the app-icon badge
       from it, the phone header's bell beside Účet, and /notifications at phone width (one page, `max-md:`).
-- [ ] **W4-fe + W5b (built 2026-10-21, stacked on W5a; done when merged after W4's backend)** — sw.js `push`
+- [x] **W4-fe + W5b (merged #1948 + live 2026-10-22 10:51Z)** — sw.js `push`
       (always one notification, then the badge) and `notificationclick` (focus + navigate, else open) with a vitest
       harness over every payload shape; the landing `/n/:dispatchId` (mark-seen → `dispatchTarget`, `?d=` → `/push/opened`);
       `lib/push` + `usePush` and the sheet's switch "Oznámení na tomto iPhonu"; re-sync on sign-in and the hourly
@@ -94,8 +91,31 @@ account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, e
       moment, not `first_seen_at` — needs a ruling; (b) drop `properties.published_at` + `publish_reason` + their three
       indexes (the autodedup session's owed drop, now moot for serving too); (c) a worker CLIP lane, so settlement
       ends in minutes rather than at the cap; (d) let the settled rule ignore the engine's standing refusals
-      (`autodedup/apply.py` `SKIP_SPANS_GROUPS`, `SKIP_CARRIES_UNGROUPED`) once measured; (e) delete
-      `api/notifications._read_int_setting` after #1951.
+      (`autodedup/apply.py` `SKIP_SPANS_GROUPS`, `SKIP_CARRIES_UNGROUPED`) once measured; (e) done in #1951: `api/notifications._read_int_setting` deleted (no caller left once the matcher went).
+- [ ] **W2b (built 2026-10-21, stacked on W4; held until W2a has had 48 h of overlap in production; migration 655 applied
+      first)** — one clock in the worker: `matcher_loop` goes with its lease, three interval readers, three thread
+      wrappers and two daily gates; the API's lifespan starts the health teller alone, under `HEALTH_TELLER_DISABLED`
+      (was `NOTIFICATIONS_MATCHER_DISABLED`, no alias); migration 655 = Migration B (`health_liveness()` without its
+      `api` lease cell, an open `api` incident recovers); the jobs check reads a registered lane missing from the
+      heartbeat as Watch, then Problem. Gate: Railway API + worker success, no matcher log lines; over 7 days inactive
+      and reactivated ~60% down, new ≥ the replay. The lease table and six settings rows are read by nothing (W6 drops them).
+- [ ] **W6 (built 2026-10-21, stacked on W2b; the program is delivered once migration 656 is applied)** — the one
+      destructive prune (R8), migration 656 = Migration E: a `$pre$` that refuses while W2a/W2b are not deployed (no
+      `notifications` lane in the heartbeat, the lease renewed in 20 min), 653/654 are missing, or any function body or
+      catalog dependent names a dropped object; R2 (b)'s system_health rows deleted (~906 on 2026-10-21); the account
+      trigger's SYSTEM branch and the CHECKs narrowed (three producers, nine kinds); `notification_dispatches` 24 -> 15
+      columns (`dedupe_key` + UNIQUE, `trigger_snapshot_id`, `channel`, `status`, `error_message`, `target_channels`,
+      `sreality_id`, `estimation_run_id`, `message`), the plain `dispatched_at` and `source_kind` indexes (the keyset and unread ones stay: the RLS readers state no account); `channels` and the cursor on
+      watchdogs, `notify_channels` on collections; `channel_sends`, `notification_suppression`,
+      `resend_webhook_events`, `notification_matcher_lease`, `emit_verification_stale_alert()`, the nine settings rows
+      (copied to `app_settings_history` first). Code: the bell's share sentence from `actor_email` / `share_name` /
+      `share_mode` (it still read `message`), shares write no text, `R2_CARRIERS` loses the dispatch carrier.
+      **Operator:** after W2b AND this PR are merged and deployed (656 applies after its merge: the old API still reads
+      `message`), run `backup_before_drop.yml` (PR body), read the counts back, say "yes, apply it", then
+      `apply_migration.yml` with `656_notifications_w6_prune.sql`. Gate: `$post$` green, drift check green,
+      feed and bell load, gauge review recorded.
+- [ ] **Next:** W2b merges after the 48 h overlap (migration 655 first) · W6 after W2b (backup, then your
+      "yes, apply it") · the on-device proof of W5 (your iPhone, a second account; after the VAPID key).
 
 ### Phase U-NEW-PROPERTY: a property from a pasted ad link (in progress, 2026-10-20)
 
@@ -259,7 +279,7 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   identity change; migration 613 drops `legacy_backfill_claim` (operator ruling 2026-10-17).
 - **Next (unscheduled):** ~~`notification_dispatches` needs a column-level UPDATE grant (its global `dedupe_key` is
   browser-writable)~~ stale: 619 narrowed the browser's UPDATE to columns and 651 to `seen_at` alone; the global
-  `dedupe_key` itself is replaced in W3 (Phase U-NOTIFY-PUSH: nothing writes it since migration 653; W6 drops it). The 60 pre-299 public sequences still grant `authenticated` setval (one revoke migration + a
+  `dedupe_key` itself is replaced in W3 (Phase U-NOTIFY-PUSH: nothing writes it since migration 653; migration 656 drops it). The 60 pre-299 public sequences still grant `authenticated` setval (one revoke migration + a
   census arm).
 
 ### Phase U-LINK: Artifact link on the property (done, 2026-10-14)

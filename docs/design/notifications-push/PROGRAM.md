@@ -84,7 +84,7 @@ Both tables: RLS on, no browser grant, in `_ADMIN_ONLY_RELATIONS`; neither names
 - **`push`, constant 15 s.** One brake: remove `VAPID_PRIVATE_KEY` from the worker; the lane reports "unconfigured" (a warn cell, §3.9).
 - **No lock:** producers are idempotent on the identity index; the claim is a compare-and-set.
 - **The API keeps** the health teller (a dead worker cannot silence its own alarms) and `shares.grant`; `NOTIFICATIONS_MATCHER_DISABLED` becomes `HEALTH_TELLER_DISABLED` (W2b).
-- **Deleted:** matcher_loop, the lease, 4 readers, 3 wrappers, 2 daily gates, the outbox loop and its 4 switches, 621's "api" cell. The lane check fails when a LANES entry is missing from the heartbeat, so a worker lagging a deploy shows red.
+- **Deleted:** matcher_loop, the lease, 4 readers, 3 wrappers, 2 daily gates, the outbox loop and its 4 switches, 621's "api" cell. The lane check reads a LANES entry missing from the heartbeat as Watch, then Problem, so an older process beating beside a new one (a deploy overlap) shows red; a lone worker on old code runs the old check too, so Railway's per-service commit status is its signal, which the W2b gate checks.
 
 ### 3.4 Push transport and delivery
 **`api/push.py`, ~85 lines:** RFC 8291 aes128gcm (matches the RFC vector) and RFC 8292 VAPID ES256 on the installed `cryptography` + PyJWT.
@@ -115,7 +115,7 @@ Both tables: RLS on, no browser grant, in `_ADMIN_ONLY_RELATIONS`; neither names
 **sw.js (+30), iOS 16.4–18.3:** `push` always calls `showNotification` ("Nové upozornění" → /notifications if unparsable) and `setAppBadge(app_badge)` in one `waitUntil`; `notificationclick` opens `data.navigate`. A vitest harness asserts both on every path (three silent pushes remove every subscription). It ships 24 h before W5; its header notes that unregistering ends push below 18.4.
 
 **Routes (four), all in `_NEVER_ACTS`:**
-- `GET /push/key`: `require_token`, no connection; the public key derived from `VAPID_PRIVATE_KEY` (one shared variable, API + worker; no `VITE_`), 503 when unset.
+- `GET /push/key`: `require_token`, no connection; the public key derived from `VAPID_PRIVATE_KEY` (the same value set on the API and on the worker, per service: they are separate Railway projects; no `VITE_`), 503 when unset.
 - `PUT`/`DELETE /push/subscription`, `POST /push/opened`: `require_account_id`, then `deps.open_background_conn` (the share routes' shape and rail, named in tenancy.md). PUT checks host, key lengths and Origin (non-Apple → 422), keeps 10 live devices (built: the least recently seen beyond 10 'replaced'; 5 in the plan), and in one transaction ends another account's live row for the endpoint, then upserts the caller's without touching `created_at`. DELETE ends it (signed_out | switched_off). opened stamps `opened_at` on the caller's tapped push.
 
 ### 3.5 Renderer and link
@@ -192,7 +192,7 @@ Migration numbers are claimed at merge (648 is #1938's). Additive ones run throu
 - **Scope:** push.py, lane, renderer, routes, share cap; sw.js + vitest; `/n/:dispatchId` pinned in the route contract with its emitter; the Health check; `_NEVER_ACTS`, share-route rail, `_ADMIN_ONLY_RELATIONS`, tenancy.md shape; rule 16 and ruling 5(e) for shares. **Migration D (additive):** the two tables, no seeds.
 - **Gate:** RFC vector, TTL floor, sanitised-error tests; CI-Postgres: concurrent claims never share a row, a killed claim returns after its lease, a 429 holds the device; lane "unconfigured", then "no devices"; `/push/key` 503 then 200; sw.js served ≥ 24 h before W5.
 - **Docs:** architecture.md § service worker; scraper-ops (lane, check); toolkit-api env table.
-- **You:** R7, R11. You run a one-line generator I give you that writes the key to a file only you can read and prints nothing, so it never enters this session; then Railway → Shared Variables → New → `VAPID_PRIVATE_KEY` → paste → attach to API and realtime-worker → delete the file.
+- **You:** R7, R11. You run a one-line generator I give you that writes the key to a file only you can read and prints nothing, so it never enters this session; then Railway → project API → service sreality → Variables → New Variable `VAPID_PRIVATE_KEY` → paste → Deploy, and the same in project realtime-worker (separate Railway projects, so a Shared Variable cannot span them) → delete the file. *(Corrected 2026-10-25; the key was set this way the same day.)*
 
 **W5: phone surfaces and on-device proof.**
 - **Scope:** bell, Shell observer, badge; switch, usePush, identity binding; phone-width feed; PhoneShell's "no bell" comment and test; GLOSSARY (Notification, Push device).
@@ -226,7 +226,7 @@ Decided by your brief: shares are pushed; push is for the iPhone, an app rule (t
 - **Three-strike rule:** always-show handler, harness, declarative payloads, a 24 h head start.
 - **The domain move orphans subscriptions:** the cutover runbook ends all devices; users re-add the app.
 - **Watchdog push is unexercised** (0 watchdogs): W2a's replay sizes it.
-- **The worker is the only alert host:** heartbeat restarts, stall, recall and missing-lane cells, and the API's teller cover it.
+- **The worker is the only alert host:** heartbeat restarts, stall, recall, the missing-lane cell (an older process beating beside a new one) and the API's teller cover it; a lone worker left on old code shows only in Railway's per-service commit status.
 - **W2b → W3:** until Migration C, an identity clash fails a step loudly, never tells twice.
 - **VAPID rotation kills every subscription:** rotate only on a leak. **Rebases:** W2 rebases onto draft #1937. **iOS bug 263687:** fallback taps may open the start page.
 

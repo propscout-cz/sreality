@@ -53,6 +53,7 @@ from location_data.page_readers import (
     SubjectNotFound,
     _licensed_coordinate,
     extract_page,
+    read_entry,
     stamp_page_claim,
 )
 from tests.location_data import claim_intake_fixtures as fx
@@ -65,7 +66,7 @@ _REFETCH = _ROOT / "tests" / "fixtures" / "location_w2a_refetch"
 CONTRACT = {c.source: c for c in contracts.load_all()}["idnes"]
 CLOCK = datetime(2026, 1, 1, tzinfo=UTC)
 
-VERSION = 5
+VERSION = 6
 NATIVE = "6a71888887e5da33ca081ad8"
 NEIGHBOUR = "68badb8de7b021a4470fb87d"
 DISCLAIMER = "Nemovitost nemá přesnou adresu, nachází se ve vyznačené oblasti."
@@ -147,7 +148,7 @@ def scoped(body: bytes | str) -> ScopedDocument:
 
 def read(entry_id: str, document: ScopedDocument, *, native: str = NATIVE) -> list[Any]:
     item = entry(entry_id)
-    return PAGE_READERS[str(item.reader)](item, row(native), payload(b""), document)
+    return read_entry(item, row(native), payload(b""), document)
 
 
 def one_claim(entry_id: str, document: ScopedDocument, *, native: str = NATIVE) -> Any:
@@ -190,7 +191,7 @@ def page(features: str = "[]", *, info: str = DISCLAIMER, disclaimer: bool = Tru
 
 # ------------------------------------------------------------------ the shape
 
-def test_the_contract_is_v5_with_one_entry_per_type_and_a_town_entry() -> None:
+def test_the_contract_is_v6_with_one_entry_per_type_and_a_town_entry() -> None:
     """The three rails W1-c's loader enforces, pinned here against THIS portal's file so a
     silent renumber, a reorder or a second carrier for one type is a test failure and not a
     review catch."""
@@ -724,6 +725,77 @@ def test_a_town_only_line_claims_no_street_and_no_number() -> None:
     document = scoped(page(address="Tanvald, okres Jablonec nad Nisou"))
     assert read("id.det.street", document) == []
     assert read("id.det.cp", document) == []
+
+
+def test_a_house_number_glued_to_any_street_the_line_names_is_claimed() -> None:
+    """v6: the number's gate is the street's, and the street's no longer asks for a
+    word ending — "Mahulenina 12" carries a number RÚIAN can address."""
+    document = scoped(page(address="Mahulenina 12, Praha 6 - Břevnov"))
+    assert one_claim("id.det.street", document).value_text == "Mahulenina"
+    assert one_claim("id.det.cp", document).value_text == "12"
+
+
+# ------------------------------------------------------------ the street off the map (v6)
+
+# 19437599's own highlight (2026-10-25), title spacing as served.
+HIGHLIGHT = {"type": "Feature",
+             "geometry": {"type": "LineString",
+                          "coordinates": [[14.340318, 50.085486], [14.343006, 50.086268]]},
+             "properties": {"title": "Zvýrazněná ulice  Mahulenina ", "stroke": "#FF0000",
+                            "stroke-width": 4}}
+
+
+def highlighted(*features: dict[str, Any]) -> str:
+    return json.dumps([feature(NEIGHBOUR, 15.3, 50.7, similar=True), *features],
+                      ensure_ascii=False)
+
+
+def test_an_unpinned_ad_takes_its_street_from_the_maps_highlight() -> None:
+    """19437599 sat on Prague's centre point in Vinohrady, 9 km off: idnes pins only
+    exact-address ads, so its page drew the street instead of a pin, nothing read that
+    drawing, and the word-ending test refused "Mahulenina" on the address line. The highlight
+    is picked by its own title — it carries no id, and a neighbour's position is no rule."""
+    document = scoped(page(highlighted(HIGHLIGHT), address="Mahulenina, Praha 6 - Břevnov"))
+    assert one_claim("id.det.street", document).value_text == "Mahulenina"
+
+
+def test_the_highlight_answers_before_the_address_line() -> None:
+    """The operator's ruling (2026-10-25): the map is the more robust source. On 25 of 25
+    sampled pages the two named the same street."""
+    document = scoped(page(highlighted(HIGHLIGHT), address="Nad Stadionem, Praha 6"))
+    assert one_claim("id.det.street", document).value_text == "Mahulenina"
+
+
+def test_a_town_highlight_names_no_street() -> None:
+    """A town-only ad is drawn as its whole obec ("Zvýrazněná obec  Pelhřimov ")."""
+    town = dict(HIGHLIGHT, properties={"title": "Zvýrazněná obec  Pelhřimov "})
+    assert read("id.det.street", scoped(page(highlighted(town), address="Pelhřimov"))) == []
+
+
+def test_a_neighbour_can_never_answer_for_the_street() -> None:
+    decoy = {"type": "Feature", "geometry": {"type": "Point", "coordinates": [15.3, 50.7]},
+             "properties": {"id": NEIGHBOUR, "title": "Zvýrazněná ulice  Cizí ",
+                            "isSimilar": True}}
+    document = scoped(page(json.dumps([decoy], ensure_ascii=False), address="Pelhřimov"))
+    assert read("id.det.street", document) == []
+
+
+@pytest.mark.parametrize("line,street", [
+    ("Boženy Němcové, Rosice, okres Brno-venkov", "Boženy Němcové"),
+    ("17. listopadu, Pardubice - Zelené Předměstí", "17. listopadu"),
+    ("Cejl, Brno - Zábrdovice", "Cejl"),
+    ("Na Balkáně, Tanvald - Šumburk nad Desnou, okres Jablonec nad Nisou", "Na Balkáně"),
+    ("Rosice, okres Brno-venkov", None),
+    ("Pelhřimov", None),
+])
+def test_without_a_highlight_the_line_answers_with_no_word_ending_test(
+    line: str, street: str | None,
+) -> None:
+    """An exact ad (its pin, no highlight) or a page with no map: the line's leading segment.
+    The word-ending test refused 2,527 of the 2,540 street-led lines among unpinned ads;
+    since W18 RÚIAN decides, keeping a street only where it binds in the ad's town."""
+    reads = read("id.det.street", scoped(page(address=line)))
+    assert (reads[0].claim.value_text if reads else None) == street
 
 
 def test_the_country_is_the_structured_code_and_never_the_domestic_default() -> None:

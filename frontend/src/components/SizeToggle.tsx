@@ -1,16 +1,13 @@
-/* The segmented photo-size switch, as N steps.
- *
- * The two-step small/large version (`ImageSizeToggle`, five grids) is a thin
- * wrapper over this — the pill chrome, the copper active state and the group
- * a11y live here once, so a page offering three steps (the deal-pipeline board:
- * small, medium, large) cannot drift into a second visual idiom for the same
- * gesture. Presentation only: the caller owns the persisted preference and what
- * each step does to its own grid.
- *
- * Same segmented-control idiom as Browse's MapViewToggle, which it sits beside
- * there. */
+/* The photo-size switch, as N steps: the app's one pick-one bar (SegmentedBar,
+ * `hug`) with a glyph per step, so a page offering three steps (the
+ * deal-pipeline board: small, medium, large) and the two-step small/large
+ * version (`ImageSizeToggle`, five grids) draw the same control as every other
+ * pick-one. Presentation only: the caller owns the persisted preference and
+ * what each step does to its own grid. */
 
 import type { ReactNode } from 'react';
+
+import { SegmentedBar } from '@/components/controls';
 
 export interface SizeStep<T extends string> {
   value: T;
@@ -36,34 +33,7 @@ export default function SizeToggle<T extends string>({
   steps,
   label,
 }: Props<T>) {
-  const seg = (active: boolean) =>
-    [
-      'inline-flex items-center gap-1.5 px-2.5 py-1 text-[0.7rem] rounded-[var(--radius-xs)] transition-colors',
-      active
-        ? 'bg-[var(--color-copper)] text-white'
-        : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
-    ].join(' ');
-  return (
-    <div
-      role="group"
-      aria-label={label}
-      className="inline-flex items-center gap-0.5 p-0.5 rounded-[var(--radius-sm)] bg-[var(--color-paper-2)] border border-[var(--color-rule)]"
-    >
-      {steps.map((s) => (
-        <button
-          key={s.value}
-          type="button"
-          onClick={() => onChange(s.value)}
-          aria-pressed={value === s.value}
-          title={s.title}
-          className={seg(value === s.value)}
-        >
-          {s.glyph}
-          {s.label}
-        </button>
-      ))}
-    </div>
-  );
+  return <SegmentedBar hug label={label} options={steps} value={value} onChange={onChange} />;
 }
 
 /* Many small photo frames — the smallest step. */

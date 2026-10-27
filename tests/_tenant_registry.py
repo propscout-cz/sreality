@@ -3,7 +3,7 @@
 Each table here holds per-account rows scoped by RLS. tests/test_migration_rls_grants.py
 allows `authenticated` DML only on these; tests/test_tenant_isolation_live.py checks each has
 `account_id`, a policy and no anon privilege on the replayed schema. A new tenant table is
-added HERE, and nowhere else.
+added HERE, and nowhere else; so is a tenant table whose browser writes a grant limits (BROWSER_WRITE_COLUMNS).
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ TENANT_TABLES: tuple[str, ...] = (
     "tags",
     "property_notes",
     "filter_presets",
+    # Migration 672: the boxes presets sit in.
+    "filter_preset_groups",
     "notification_subscriptions",
     "collection_properties",
     "property_tags",
@@ -43,6 +45,15 @@ TENANT_TABLES: tuple[str, ...] = (
     # Migration 647: account_id = the owner, stamped from the dashboard; browser roles SELECT + DELETE.
     "stats_dashboard_shares",
 )
+
+# Tenant tables the browser reads but writes only by these column grants (migration 679, rule 12): the API
+# creates and finishes every run on the service role, so `authenticated` may UPDATE the listed columns and
+# INSERT nothing. Both tenancy gates hold every migration from 679 on, and the replayed schema, to this.
+BROWSER_WRITE_COLUMNS: dict[str, frozenset[str]] = {
+    "estimation_runs": frozenset({"scenario"}),
+    "building_runs": frozenset(),
+}
+BROWSER_WRITE_COLUMNS_SINCE = 679
 
 # A tenant table's earlier name, which older migrations still grant on (592) and which may survive as
 # a compatibility view (660's, until its drop). Not a table: the live checks read TENANT_TABLES alone.

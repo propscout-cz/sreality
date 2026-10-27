@@ -8,7 +8,7 @@ Two responsibilities:
 
 2. The three producers (`match_once`, `match_changes_once`,
    `match_monitored_collections_once`), run every 300 s by the realtime worker's
-   `notifications` lane and, until W2b, by the API's `matcher_loop` beside it. They
+   `notifications` lane, their one caller and clock (the API runs none since W2b). They
    write one `notification_dispatches` row per event over fixed windows (a watchdog's
    'new' over properties first seen in the last 24 h); the one identity index
    (`EVENT_IDENTITY`, migration 653) makes every re-run idempotent. A watchdog tells a
@@ -30,11 +30,8 @@ and the canonical ad's own portal on the cohorts.
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import json
 import logging
-import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -45,7 +42,6 @@ from pydantic import BaseModel, field_validator, model_validator
 from api.cursor import decode_cursor, encode_cursor
 from api.location_filter import DistrictChip, MapBounds, bounds_where, district_where
 from location_data.claims_common import served_location_predicate
-from scraper import db as scraper_db
 from toolkit.filter_compiler import PROPERTIES_GRAIN, compile_filter_where
 from toolkit.property_carriers import NOTIFICATION_EVENTS_SHARED_LOCK_SQL
 from toolkit.publication import published_property_predicate, visible_since_sql
@@ -55,8 +51,8 @@ if TYPE_CHECKING:
 
 LOG = logging.getLogger(__name__)
 
-# The producers whose rows the feed shows (rule 16; CHECK notification_dispatches_source_ck).
-# system_health rows are history the app no longer shows (ruling R2, notifications W1).
+# The three producers (rule 16; CHECK notification_dispatches_source_ck, narrowed by migration 656,
+# which deleted the system_health history: ruling R2 (b)).
 SourceKind = Literal["watchdog", "collection_monitor", "share"]
 SourceKindFilter = Literal[SourceKind, "all"]
 
@@ -333,8 +329,8 @@ NEW_WINDOW = "24 hours"
 # feed, badge, push — never from a direct tap: the tap path (mark_dispatch_seen, _fetch_dispatch)
 # reads REACHABLE, so a push the user was already sent opens the property the alert now names (a
 # merge survives a tap). Detection still writes every row — the `reactivated` detector reads prior
-# ones — so an undo brings it back intact; a system_health row (property_id NULL) is never
-# dismissed nor retracted.
+# ones — so an undo brings it back intact; a share (property_id NULL) is never dismissed nor
+# retracted.
 REACHABLE_SQL = (
     "d.duplicate_of IS NULL "
     "AND NOT EXISTS (SELECT 1 FROM property_dismissals pd "
@@ -506,15 +502,28 @@ _LISTING_PROJECTION = (
 # `share_kind` says what a share opens, read off its change_kind (`shared_<collection|pipeline|
 # dashboard>`, migration 652); `share_ref` its id, off the share's own columns (api/shares.py),
 # never a key: the collection id, the pipeline owner (the actor), the dashboard id (event_ref).
+# A share stores no text (F17, R11; `message` dropped by migration 656): the bell's sentence is the
+# SPA's, from `actor_email` (the sharer, through share_party_emails() exactly as
+# api/shares.party_label spells it, so it is NULL once no share joins the two accounts, unless the
+# sharer stands in the reader's own delegated-edit ledger: that arm keeps an actor's address for the
+# owner after a revoke, migration 641; a detector's row has no actor and never calls it),
+# `share_name` (the collection's or dashboard's live name, NULL once the caller cannot read it) and
+# `share_mode` (a pipeline share's mode, its event_ref).
 _DISPATCH_SELECT = (
     "d.id, d.source_kind, "
     "d.subscription_id, s.name AS subscription_name, "
     "d.collection_id, c.name AS collection_name, "
-    "d.listing_id, d.property_id, d.change_kind, d.message, "
+    "d.listing_id, d.property_id, d.change_kind, "
     "CASE WHEN d.source_kind = 'share' THEN split_part(d.change_kind, '_', 2) END AS share_kind, "
     "CASE d.change_kind WHEN 'shared_collection' THEN d.collection_id::text "
     "  WHEN 'shared_pipeline' THEN d.actor_account_id::text "
     "  WHEN 'shared_dashboard' THEN d.event_ref END AS share_ref, "
+    "CASE WHEN d.actor_account_id IS NOT NULL THEN "
+    "  (SELECT e.email FROM share_party_emails() e WHERE e.account_id = d.actor_account_id) END AS actor_email, "
+    "CASE d.change_kind WHEN 'shared_collection' THEN c.name "
+    "  WHEN 'shared_dashboard' THEN (SELECT sd.name FROM stats_dashboards sd WHERE sd.id::text = d.event_ref) "
+    "  END AS share_name, "
+    "CASE WHEN d.change_kind = 'shared_pipeline' THEN d.event_ref END AS share_mode, "
     "d.dispatched_at, d.seen_at, "
     "d.trigger_price_czk, d.prev_price_czk, "
     f"{_LISTING_PROJECTION}"
@@ -524,10 +533,9 @@ _DISPATCH_FROM = (
     "FROM notification_dispatches d "
     "LEFT JOIN notification_subscriptions s ON s.id = d.subscription_id "
     "LEFT JOIN collections c ON c.id = d.collection_id "
-    # Surrogate join (R2): safe for the whole append-only ledger, not just new
-    # rows — Phase A4's backfill left zero (sreality_id NOT NULL, listing_id NULL)
-    # rows, so no historical dispatch loses its listing fields here. A plain
-    # equality keeps this an index lookup; a COALESCE/OR fallback would not.
+    # Surrogate join (R2): Phase A4's backfill gave every historical dispatch its
+    # listing_id before migration 656 dropped the legacy sreality_id, so no row loses
+    # its listing fields here. A plain equality keeps this an index lookup.
     # ONE join, to the VIEW: the bare `listings` join it replaced was invisible to
     # the tenant role (RLS, no policy) — see _LISTING_PROJECTION.
     "LEFT JOIN listings_public lp ON lp.id = d.listing_id "
@@ -728,10 +736,10 @@ def mark_all_seen(
 #
 # Three producers, one clock: the realtime worker's `notifications` lane runs `match_once`
 # (step watchdog_new), `match_changes_once` (price) and `match_monitored_collections_once`
-# (monitor) every 300 s, each step on its own connection. Until W2b the API's matcher_loop
-# below calls the same three beside it. Every INSERT ends in ON_EVENT_CONFLICT, the one identity
-# (EVENT_IDENTITY, migration 653), so a re-run or a second runner writes a union, never a
-# duplicate. `event_ref` (migration 652) is the discriminator within (source, kind, property);
+# (monitor) every 300 s, each step on its own connection; nothing else calls them (W2b deleted
+# the API's matcher_loop). Every INSERT ends in ON_EVENT_CONFLICT, the one identity
+# (EVENT_IDENTITY, migration 653), so a re-run or a deploy overlap's second worker writes a
+# union, never a duplicate. `event_ref` (migration 652) is the discriminator within (source, kind, property);
 # each producer's equals what 652 backfilled from the pre-W3 key on the rows written before it
 # (tests/api/test_notifications.py renders and pins both), so no event already told re-fires.
 # A watchdog's two producers tell a property only once it is PUBLISHED (`_build_match_clauses`;
@@ -777,20 +785,6 @@ def _commit_one(conn: "psycopg.Connection", sql: str, params: dict[str, Any]) ->
         cur.execute(NOTIFICATION_EVENTS_SHARED_LOCK_SQL)
         cur.execute(sql, params)
         return cur.rowcount or 0
-
-
-def _read_int_setting(
-    conn: "psycopg.Connection", key: str, *, default: int,
-) -> int:
-    with conn.cursor() as cur:
-        cur.execute("SELECT value FROM app_settings WHERE key = %s", (key,))
-        row = cur.fetchone()
-    if row is None or row[0] is None:
-        return default
-    try:
-        return int(row[0])
-    except (TypeError, ValueError):
-        return default
 
 
 # The watchdogs a producer serves: switched on and not retired (migration 652; deleting a
@@ -1128,8 +1122,8 @@ def match_monitored_collections_once(conn: "psycopg.Connection") -> dict[str, in
     detector is anchored on `monitored.monitor_since`, so a change that predates the
     operator starting to watch the property never notifies.
 
-    `broker_change` is intentionally NOT emitted: there is no property-level broker nor a
-    broker-change timestamp to key a stable event off (program § 3.2 drops the kind).
+    There is no broker change: no property-level broker nor a broker-change timestamp keys a
+    stable event (migration 656 dropped the never-emitted kind from the CHECK).
     """
     # Cheap early-out: nothing monitored, nothing to do.
     with conn.cursor() as cur:
@@ -1145,243 +1139,3 @@ def match_monitored_collections_once(conn: "psycopg.Connection") -> dict[str, in
         _MONITOR_INACTIVE_SQL, _MONITOR_REACTIVATED_SQL, _MONITOR_NEW_SOURCE_SQL))
     return {"monitored_collections": int(row[0]), "events_inserted": inserted}
 
-
-# --- the API's matcher loop (W2b deletes it; the worker lane runs the same three) -------
-
-
-def _read_monitor_interval_seconds() -> int:
-    conn = scraper_db.connect()
-    try:
-        return _read_int_setting(
-            conn, "notifications_monitor_interval_seconds", default=86400,
-        )
-    finally:
-        with contextlib.suppress(Exception):
-            conn.close()
-
-
-def _match_monitored_in_thread() -> dict[str, int]:
-    conn = scraper_db.connect()
-    try:
-        return match_monitored_collections_once(conn)
-    finally:
-        with contextlib.suppress(Exception):
-            conn.close()
-
-
-_MATCHER_LEASE_TTL = "15 minutes"
-
-_TRY_MATCHER_LEASE_SQL = """
-    UPDATE notification_matcher_lease
-       SET holder = %(holder)s, expires_at = now() + %(lease)s::interval
-     WHERE id = 1
-       AND (holder IS NULL OR expires_at < now() OR holder = %(holder)s)
-    RETURNING 1
-"""
-
-_RELEASE_MATCHER_LEASE_SQL = """
-    UPDATE notification_matcher_lease
-       SET holder = NULL, expires_at = NULL
-     WHERE id = 1 AND holder = %(holder)s
-"""
-
-
-def _new_matcher_holder() -> str:
-    return f"matcher:{uuid.uuid4()}"
-
-
-def _try_matcher_lease(conn: "psycopg.Connection", holder: str) -> bool:
-    with conn.cursor() as cur:
-        cur.execute(
-            _TRY_MATCHER_LEASE_SQL, {"holder": holder, "lease": _MATCHER_LEASE_TTL}
-        )
-        return cur.fetchone() is not None
-
-
-def _acquire_matcher_lease(holder: str) -> bool:
-    """Claim the single-runner lease (migration 366) so N API replicas don't fan
-    out N× market-wide scans. Fail-OPEN (return True → run the pass) on any error,
-    incl. the table not existing during a rollout window: the identity index (migration 653)
-    keeps a duplicated pass harmless (rule #16), and failing open preserves the
-    pre-lease single-replica behaviour."""
-    try:
-        conn = scraper_db.connect()
-    except Exception as exc:  # noqa: BLE001
-        LOG.warning("matcher lease: connect failed, running unguarded: %s", exc)
-        return True
-    try:
-        return _try_matcher_lease(conn, holder)
-    except Exception as exc:  # noqa: BLE001
-        LOG.warning("matcher lease: acquire failed, running unguarded: %s", exc)
-        return True
-    finally:
-        with contextlib.suppress(Exception):
-            conn.close()
-
-
-def _release_matcher_lease(holder: str) -> None:
-    """Best-effort release so a graceful shutdown hands the lease over at once (a
-    crash instead waits out the ~15-min expiry)."""
-    try:
-        conn = scraper_db.connect()
-    except Exception:  # noqa: BLE001
-        return
-    try:
-        with conn.cursor() as cur:
-            cur.execute(_RELEASE_MATCHER_LEASE_SQL, {"holder": holder})
-    except Exception:  # noqa: BLE001
-        pass
-    finally:
-        with contextlib.suppress(Exception):
-            conn.close()
-
-
-async def matcher_loop(stop_event: asyncio.Event) -> None:
-    """The forever-running async matcher. Reads its own DB connection
-    each pass; idle waits respect `notifications_matcher_interval_seconds`
-    so an operator who edits the row only needs to wait for the current
-    sleep to elapse.
-
-    Each pass runs the new-listing matcher (`match_once`). The property-change
-    matcher (`match_changes_once`) runs at most once per
-    `notifications_change_match_interval_seconds` (default 86400 = daily); the
-    gate is in-memory, so a process restart simply runs it once on the next
-    pass — harmless, the identity index dedups.
-    """
-    LOG.info("notification matcher loop starting")
-    # monotonic timestamp of the last property-change pass; 0 => run on the
-    # first pass after (re)start.
-    last_change_run = 0.0
-    # same for the collection-monitor producer.
-    last_monitor_run = 0.0
-    # per-process holder id for the single-runner lease (migration 366).
-    holder = _new_matcher_holder()
-    while not stop_event.is_set():
-        # Read interval each pass so live edits to app_settings take
-        # effect without a restart.
-        interval = 300
-        try:
-            interval = await asyncio.to_thread(_read_interval_seconds)
-        except Exception as exc:  # noqa: BLE001
-            LOG.warning("matcher: failed to read interval: %s", exc)
-
-        if interval <= 0:
-            LOG.info("notification matcher disabled (interval=0); idling")
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=60.0)
-            except asyncio.TimeoutError:
-                continue
-            else:
-                break
-
-        # Single-runner guard (migration 366): only the lease holder runs the
-        # producer passes this round, so N API replicas don't fan out N×
-        # market-wide scans. The holder re-acquires each pass (renewal) so it
-        # stays sticky; a crashed holder's lease expires (~15 min) and another
-        # replica takes over. Fail-open lives inside _acquire_matcher_lease.
-        if not await asyncio.to_thread(_acquire_matcher_lease, holder):
-            LOG.debug("notification matcher: lease held elsewhere; skipping pass")
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=float(interval))
-            except asyncio.TimeoutError:
-                continue
-            else:
-                break
-
-        try:
-            stats = await asyncio.to_thread(_match_once_in_thread)
-            if (stats.get("matches_inserted", 0) > 0
-                    or stats.get("subscriptions_failed", 0) > 0):
-                LOG.info("notification matcher: %s", stats)
-            else:
-                LOG.debug("notification matcher: %s", stats)
-        except Exception as exc:  # noqa: BLE001
-            LOG.exception("notification matcher pass failed: %s", exc)
-
-        # Property-change matcher, gated to ~daily. interval<=0 disables it.
-        change_interval = 86400
-        try:
-            change_interval = await asyncio.to_thread(_read_change_interval_seconds)
-        except Exception as exc:  # noqa: BLE001
-            LOG.warning("change matcher: failed to read interval: %s", exc)
-        if change_interval > 0 and (time.monotonic() - last_change_run) >= change_interval:
-            try:
-                cstats = await asyncio.to_thread(_match_changes_in_thread)
-                last_change_run = time.monotonic()
-                if (cstats.get("changes_inserted", 0) > 0
-                        or cstats.get("subscriptions_failed", 0) > 0):
-                    LOG.info("notification change matcher: %s", cstats)
-                else:
-                    LOG.debug("notification change matcher: %s", cstats)
-            except Exception as exc:  # noqa: BLE001
-                LOG.exception("notification change matcher pass failed: %s", exc)
-
-        # Collection-monitor producer (Sprint C), gated to its own cadence
-        # (`notifications_monitor_interval_seconds`, default daily). Same
-        # in-memory monotonic gate as the change matcher; a restart re-runs it
-        # once (the identity index absorbs the overlap).
-        monitor_interval = 86400
-        try:
-            monitor_interval = await asyncio.to_thread(_read_monitor_interval_seconds)
-        except Exception as exc:  # noqa: BLE001
-            LOG.warning("monitor matcher: failed to read interval: %s", exc)
-        if monitor_interval > 0 and (time.monotonic() - last_monitor_run) >= monitor_interval:
-            try:
-                mstats = await asyncio.to_thread(_match_monitored_in_thread)
-                last_monitor_run = time.monotonic()
-                if mstats.get("events_inserted", 0) > 0:
-                    LOG.info("collection monitor matcher: %s", mstats)
-                else:
-                    LOG.debug("collection monitor matcher: %s", mstats)
-            except Exception as exc:  # noqa: BLE001
-                LOG.exception("collection monitor matcher pass failed: %s", exc)
-
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=float(interval))
-        except asyncio.TimeoutError:
-            continue
-        else:
-            break
-    with contextlib.suppress(Exception):
-        await asyncio.to_thread(_release_matcher_lease, holder)
-    LOG.info("notification matcher loop stopped")
-
-
-def _read_interval_seconds() -> int:
-    conn = scraper_db.connect()
-    try:
-        return _read_int_setting(
-            conn, "notifications_matcher_interval_seconds", default=300,
-        )
-    finally:
-        with contextlib.suppress(Exception):
-            conn.close()
-
-
-def _read_change_interval_seconds() -> int:
-    conn = scraper_db.connect()
-    try:
-        return _read_int_setting(
-            conn, "notifications_change_match_interval_seconds", default=86400,
-        )
-    finally:
-        with contextlib.suppress(Exception):
-            conn.close()
-
-
-def _match_once_in_thread() -> dict[str, int]:
-    conn = scraper_db.connect()
-    try:
-        return match_once(conn)
-    finally:
-        with contextlib.suppress(Exception):
-            conn.close()
-
-
-def _match_changes_in_thread() -> dict[str, int]:
-    conn = scraper_db.connect()
-    try:
-        return match_changes_once(conn)
-    finally:
-        with contextlib.suppress(Exception):
-            conn.close()

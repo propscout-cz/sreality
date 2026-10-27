@@ -1,5 +1,5 @@
-/* Pure-function tests for the document-title rules: formatTitle (the "LR:"
- * prefix scheme) and browseTitleSummary (filters → "disposition · area · city").
+/* Pure-function tests for the document-title rules: formatTitle (the segment
+ * alone, no brand prefix) and browseTitleSummary (filters → "disposition · area · city").
  * No jsdom — both are pure transforms. */
 import { describe, expect, it } from 'vitest';
 
@@ -22,8 +22,8 @@ const withFilters = (over: Partial<ListingFilters>): ListingFilters => ({
 });
 
 describe('formatTitle', () => {
-  it('prefixes a segment with "LR: "', () => {
-    expect(formatTitle('Estimations')).toBe('LR: Estimations');
+  it('uses the segment alone, with no brand prefix', () => {
+    expect(formatTitle('Estimations')).toBe('Estimations');
   });
 
   it('falls back to the bare app name when there is no segment', () => {
@@ -33,7 +33,7 @@ describe('formatTitle', () => {
   });
 
   it('trims surrounding whitespace', () => {
-    expect(formatTitle('  Health  ')).toBe('LR: Health');
+    expect(formatTitle('  Health  ')).toBe('Health');
   });
 });
 

@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
 
+from scraper.area import stated_plot
+
 # Fields whose change should append a listing_snapshots row. Mirrors the
 # semantics of sreality's content hash: identity (source ids, url) is NOT
 # hashed; the displayed/analytical content is. lat/lon are deliberately NOT
@@ -140,6 +142,15 @@ class ScrapedListing:
             raise ValueError(
                 f"{self.source}/{self.source_id_native}: source_url is required"
             )
+        # The ONE call site of the plot rule for every portal that crosses this contract
+        # (rule 21): the last point before the content hash, so a declined plot is hashed
+        # as absence (rules 2/8) rather than NULLed after the hash at the write boundary.
+        # The description is the rule's evidence; the title is not, because no stored
+        # column holds it and migration 671 must decide a stored row on the same text.
+        object.__setattr__(self, "estate_area", stated_plot(
+            self.category_main, self.estate_area, usable=self.usable_area,
+            headline=self.area_m2, headline_basis=self.area_basis,
+            text=self.description))
 
     def hash_doc(self) -> dict[str, Any]:
         """The crawlers' hash document: the 28 _HASH_FIELDS, price_native in place of price_czk when stated."""

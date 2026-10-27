@@ -2,12 +2,14 @@
  * scrapers have not reached yet. ONE state for both shells (pages/PropertyDetail
  * frames it): it says so in Czech, offers "Přidat do databáze" (the new-property
  * dialog prefilled with the pasted URL; admins only, components/NewPropertyProvider)
- * and, when the paste carried the URL, the portal's own page (same window: an
- * installed iOS app opens it in its in-app Safari sheet). Its own chunk: a rare
+ * and, when the paste carried the URL, the portal's own page (a new tab on the
+ * desktop; the same window in the phone shell, where an installed iOS app opens
+ * it in its in-app Safari sheet). Its own chunk: a rare
  * page, kept out of the first visit. */
 
 import { useNewPropertyDialog } from '@/components/NewPropertyProvider';
 import { portalBadge } from '@/lib/portals';
+import { useNewTabProps } from '@/lib/linkGestures';
 
 export default function AdvertNotFound({
   source,
@@ -22,6 +24,7 @@ export default function AdvertNotFound({
 }) {
   const newProperty = useNewPropertyDialog();
   const portal = portalBadge(source, pastedUrl, 'long');
+  const portalTab = useNewTabProps({ external: true });
   return (
     <>
       <p className="text-[0.7rem] font-medium uppercase tracking-[0.18em] text-[var(--color-ink-3)]">
@@ -44,7 +47,7 @@ export default function AdvertNotFound({
           <button
             type="button"
             onClick={() => newProperty.open(pastedUrl ? { url: pastedUrl } : {})}
-            className="inline-flex h-11 items-center rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-4 text-[14px] font-medium text-white hover:bg-[var(--color-copper-2)] active:bg-[var(--color-copper-2)] transition-colors"
+            className="inline-flex h-11 items-center rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-4 text-[14px] font-medium text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] active:bg-[var(--color-copper-2)] transition-colors"
           >
             Přidat do databáze
           </button>
@@ -52,6 +55,7 @@ export default function AdvertNotFound({
         {pastedUrl && (
           <a
             href={pastedUrl}
+            {...portalTab}
             className="inline-flex h-11 items-center gap-1 text-[15px] font-medium text-[var(--color-copper)]"
           >
             Otevřít na portálu {portal}

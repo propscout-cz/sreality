@@ -23,6 +23,7 @@ from pathlib import Path
 from location_data import contracts, page_readers
 from location_data.claims_common import Entry, IntakeResult, ListingRow
 from location_data.html_scope import ScopeRegister
+from scraper import cpus
 
 ROOT = Path(__file__).resolve().parent.parent
 BODY_DIRS = ("tests/fixtures/portal_html", "tests/fixtures/location_w2",
@@ -75,8 +76,10 @@ def corpus(bodies: int) -> tuple[list[tuple[ListingRow, page_readers.ArchivedPay
     return tasks, entries, registers
 
 
-def measure(tasks, entries, registers, workers: int) -> tuple[float, int]:
-    os.environ[page_readers.EXTRACTION_WORKERS_ENV] = str(workers)
+def measure(tasks: list[tuple[ListingRow, page_readers.ArchivedPayload]],
+            entries: dict[str, list[Entry]], registers: dict[str, ScopeRegister],
+            workers: int) -> tuple[float, int]:
+    os.environ[cpus.JOB_CPUS_ENV] = str(workers)
     started = time.monotonic()
     outcomes = page_readers.extract_pages(
         tasks, entries_by_source=entries, registers=registers,
