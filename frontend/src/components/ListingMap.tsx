@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { useSpaLinkDelegation } from '@/lib/linkGestures';
+import { useNewTabProps, useSpaLinkDelegation, type NewTabProps } from '@/lib/linkGestures';
 import { YmPicker, YM_SELECT_CLS } from '@/components/YmPicker';
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import { createMap } from '@/lib/basemap';
@@ -516,6 +516,11 @@ export default function ListingMap({
    * callback without rebinding. */
   const onHoverRef = useRef(onHover);
   onHoverRef.current = onHover;
+  /* And for the popup's "View details →": a new tab on the desktop, like the
+   * Browse card beside the map (lib/linkGestures `useNewTabProps`). */
+  const newTab = useNewTabProps();
+  const newTabRef = useRef(newTab);
+  newTabRef.current = newTab;
   /* When centre+radius mode is active the `moveend` handler must
    * skip emitting bounds — the cohort filters by the dashed circle,
    * not the viewport. Suppression flag rather than removing the
@@ -916,7 +921,7 @@ export default function ListingMap({
           className: 'listing-popup',
         })
           .setLngLat(at)
-          .setHTML(popupHtml(props));
+          .setHTML(popupHtml(props, newTabRef.current));
         /* The circle lives exactly as long as the popup that explains it: its
          * ×, a click elsewhere on the map, or the next popup replacing it all
          * end in `close`. */
@@ -2057,7 +2062,7 @@ function PinSwatch({ exact, active }: { exact: boolean; active: boolean }) {
   );
 }
 
-function popupHtml(r: MapRow): string {
+function popupHtml(r: MapRow, newTab: NewTabProps): string {
   const price = fmtCzk(r.price_czk);
   /* The popup has room, so it says what the m² MEASURES: a pozemek's area_m2 is
    * its plot, not a floor plan (the Option-A fork keeps the column polymorphic). */
@@ -2095,7 +2100,9 @@ function popupHtml(r: MapRow): string {
       ${place ? `<p class="lp-district">${escapeHtml(place)}</p>` : ''}
       <p class="lp-precision">${escapeHtml(precision)}</p>
       <p class="lp-seen" title="${escapeHtml(seenAbs)}">last seen ${escapeHtml(seen)}</p>
-      <a href="${propertyPath(r.property_id, r.listing_id)}" class="lp-link">View details →</a>
+      <a href="${propertyPath(r.property_id, r.listing_id)}"${
+        newTab.target ? ` target="${newTab.target}" rel="${newTab.rel}"` : ''
+      } class="lp-link">View details →</a>
     </div>
   `;
 }
