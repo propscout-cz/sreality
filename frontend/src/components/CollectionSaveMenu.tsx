@@ -180,7 +180,7 @@ export function CollectionSaveList({
                     className={[
                       cls.box,
                       member
-                        ? 'bg-[var(--color-copper)] border-[var(--color-copper)] text-white'
+                        ? 'bg-[var(--color-copper)] border-[var(--color-copper)] text-[var(--color-on-copper)]'
                         : 'border-[var(--color-rule-strong)] text-transparent',
                     ].join(' ')}
                   >

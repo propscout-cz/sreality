@@ -292,7 +292,7 @@ function EditBlock({ collection }: { collection: Collection }) {
             type="button"
             disabled={!dirty || save.isPending || name.trim().length === 0}
             onClick={() => save.mutate()}
-            className="px-4 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="px-4 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             {save.isPending ? 'Saving…' : 'Save changes'}
           </button>

@@ -7,6 +7,22 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### PropScout.cz and three colour schemes (2026-10-26, no migration)
+- **Done** (operator ask 2026-10-26: "rename the app to PropScout.cz", "build Měď, Kobalt and Grafit as
+  themes the user can pick from"). The brand is `PropScout.cz` (`lib/brand.ts`; tab prefix "PS:", a "PS"
+  home-screen icon). Every user picks a colour scheme (Měď, Kobalt, Grafit) and light / dark / system
+  in the account menu, the phone's account sheet and Settings → Appearance; the choice stays on the
+  device (`lib/theme.ts`). A scheme only changes token VALUES (`globals.css`); new tokens `--color-chrome*`
+  (the top bar: a dark band in Měď), `--color-on-copper` / `--color-on-brick` (text on an accent or danger
+  fill, which `text-white` failed in dark). Proposal and previews: the PropScout.cz design system artifact.
+- **Ruled 2026-10-27:** all 35 removal proposals (24 confirmed, 11 declined) and the rule that nothing
+  revealed on hover may shift layout, recorded in `.interface-design/system.md` § Hierarchy rulings.
+- **Next (not built):** the 24 confirmed hierarchy changes, one PR per agenda (Browse card, Browse page and
+  map, Stats, Pipeline, Watchdogs, Notifications, Brokers, Collections, Shell); removing render scoring
+  end to end (operator note on P03), scoped first. Handoff: `docs/design/propscout-redesign.md`.
+- **Ruled 2026-10-27:** ten Stats-tab proposals (S01–S10, mostly the header): S01–S04, S06, S07, S09 confirmed,
+  S05, S08, S10 declined; the Stats PR builds the confirmed ones (handoff § Stats review).
+
 ### Preset groups: boxes on the Browse preset row (2026-10-25, migration 672)
 - **Done** (operator ask 2026-10-25: "group my presets, a boundary box per group, move them into the boxes
   or outside of them"). A group is a named box with an optional colour (`filter_preset_groups`, a saved set
@@ -322,6 +338,9 @@ toolkit work.
   stage, each scrolling on its own; cards are a stage-washed 104 px thumbnail, price, layout, place,
   days in the stage and MF; the stage badge opens the stage sheet (move, two-step remove through
   `usePipelineCard`). Same reads as the board (`lib/pipelineReads`); no drag, no stage management.
+- **Lokalita on the phone pipeline** (2026-10-26): a place chip over the stage tabs opens the
+  desktop bar's own place filter in a sheet — same `districts` params (one link, one view on either
+  device), same `LocationTypeahead`, same `matchesDistricts`; stage counts and the header follow it.
 - **W4: collections and brokers on the phone** (#1769): `/collections` is a hairline list with
   "Nová sbírka" (a name in a bottom sheet, `createCollection`, monitoring off) and `/collection/:id`
   the members as feed cards (`fetchListingsForCards`, the collection as prefilter; the card's

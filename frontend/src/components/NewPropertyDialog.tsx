@@ -117,7 +117,7 @@ function NewPropertyModal({ prefill, onClose }: { prefill: NewPropertyPrefill; o
             type="button"
             onClick={submit}
             disabled={!text.trim() || busy}
-            className="shrink-0 px-4 py-2 rounded-[var(--radius-sm)] border border-[var(--color-copper)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)] transition-colors disabled:bg-[var(--color-rule-strong)] disabled:border-[var(--color-rule-strong)] disabled:text-[var(--color-ink-4)] disabled:cursor-not-allowed"
+            className="shrink-0 px-4 py-2 rounded-[var(--radius-sm)] border border-[var(--color-copper)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)] transition-colors disabled:bg-[var(--color-rule-strong)] disabled:border-[var(--color-rule-strong)] disabled:text-[var(--color-ink-4)] disabled:cursor-not-allowed"
           >
             Přidat
           </button>

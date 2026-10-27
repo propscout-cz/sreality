@@ -270,7 +270,7 @@ export default function StatsChart({
             type="button"
             onClick={() => void save()}
             disabled={problem != null || saving}
-            className="rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-2.5 py-1 text-[0.8rem] text-white hover:bg-[var(--color-copper-2)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-2.5 py-1 text-[0.8rem] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             aria-label="Uložit graf"
           >
             Uložit
