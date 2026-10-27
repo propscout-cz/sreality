@@ -322,6 +322,9 @@ toolkit work.
   stage, each scrolling on its own; cards are a stage-washed 104 px thumbnail, price, layout, place,
   days in the stage and MF; the stage badge opens the stage sheet (move, two-step remove through
   `usePipelineCard`). Same reads as the board (`lib/pipelineReads`); no drag, no stage management.
+- **Lokalita on the phone pipeline** (2026-10-26): a place chip over the stage tabs opens the
+  desktop bar's own place filter in a sheet — same `districts` params (one link, one view on either
+  device), same `LocationTypeahead`, same `matchesDistricts`; stage counts and the header follow it.
 - **W4: collections and brokers on the phone** (#1769): `/collections` is a hairline list with
   "Nová sbírka" (a name in a bottom sheet, `createCollection`, monitoring off) and `/collection/:id`
   the members as feed cards (`fetchListingsForCards`, the collection as prefilter; the card's

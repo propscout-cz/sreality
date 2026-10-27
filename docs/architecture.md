@@ -910,7 +910,9 @@ rules. Identify which one a task belongs to before you start.
   same switcher strip above the stage tabs: a read board has no stage sheet and no tag chips or
   artifact button; an edit board moves cards through the stage sheet as the owner (ruling 6). The
   remembered stage is per board (`sreality.phone.pipelineStage:<owner>`); sharing and leaving a
-  board, and "Upravit jako", stay desktop-only.
+  board, and "Upravit jako", stay desktop-only. Its one filter, **Lokalita**, is the desktop bar's:
+  the same `districts` URL params (`lib/pipelineState`), `LocationTypeahead` in a sheet and
+  `matchesDistricts` over the board's five codes — every stage page stays, counting the place's cards.
   The W4 screens (`pages/phone/`, #1769) add no read either: a collection's members and a
   broker's ads are the feed's card read under the `collections` / `brokerId` prefilter, the
   lists and the dossier are the desktop pages' own API calls, and each page component picks
