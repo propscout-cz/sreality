@@ -1013,7 +1013,7 @@ export default function NewDedupLabeling() {
 
         {mode === 'proposals' && (
           <div className="mt-3">
-            <Tabs tabs={STATUS_TABS} active={tab} onChange={setTab} />
+            <Tabs tabs={STATUS_TABS} active={tab} onChange={setTab} ariaLabel="Review status" />
           </div>
         )}
 

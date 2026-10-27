@@ -205,8 +205,11 @@ describe('<BrowseExperience> merge mode', () => {
     expect(screen.queryByRole('button', { name: 'Merge mode' })).toBeNull();
 
     fireEvent.click(enter);
-    expect(screen.getByRole('radiogroup', { name: 'Písmeno, které zapíše kliknutí' })).toBeInTheDocument();
+    const letters = screen.getByRole('radiogroup', { name: 'Písmeno, které zapíše kliknutí' });
+    expect(letters).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Sloučit…' })).toBeNull();
+    // Its own row under the tab strip's rule, never on the strip.
+    expect(screen.getByRole('tablist', { name: 'Zobrazení výsledků' }).parentElement).not.toContainElement(letters);
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.getByRole('button', { name: 'Sloučit…' })).toBeInTheDocument();
@@ -343,6 +346,48 @@ describe('<BrowseExperience> Stats tab', () => {
     expect(await screen.findByRole('tab', { name: 'Statistiky' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('tab', { name: /^Nemovitosti/ })).toHaveAttribute('aria-selected', 'false');
     expect(screen.queryByRole('tab', { name: /^(Stats|Properties)/ })).toBeNull();
+  });
+});
+
+/* The tab-strip ruling (2026-10-27, option A): one strip whose rule runs under the
+ * whole row, the toggles at its right end above the rule, one count pill, arrow keys. */
+describe('<BrowseExperience> tab strip', () => {
+  it('puts Split | Cards and the image size on the tab strip, above its rule', async () => {
+    renderBrowse([]);
+    const list = await screen.findByRole('tablist', { name: 'Zobrazení výsledků' });
+    const strip = list.parentElement!;
+    expect(strip.className.split(' ')).toEqual(expect.arrayContaining(['border-b', 'border-[var(--color-rule)]']));
+    for (const name of ['Properties layout', 'Card image size']) {
+      const group = screen.getByRole('group', { name });
+      expect(strip).toContainElement(group);
+      expect(list).not.toContainElement(group);
+    }
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Statistiky' }));
+    expect(screen.queryByRole('group', { name: 'Properties layout' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Card image size' })).toBeNull();
+  });
+
+  it('shows the cohort total in the tab’s count pill', async () => {
+    vi.mocked(queries.fetchBrowseCount).mockResolvedValueOnce(12_345);
+    renderBrowse([]);
+    const tab = await screen.findByRole('tab', { name: /^Nemovitosti/ });
+    const pill = await within(tab).findByText(/^12\s345$/);
+    expect(pill.className.split(' ')).toEqual(expect.arrayContaining(['rounded-full', 'bg-[var(--color-inset)]']));
+  });
+
+  it('switches to Statistiky with ArrowRight, focus following, each tab naming its panel', async () => {
+    renderBrowse([]);
+    const cards = await screen.findByRole('tab', { name: /^Nemovitosti/ });
+    expect(document.getElementById(cards.getAttribute('aria-controls')!)).toHaveAttribute('role', 'tabpanel');
+
+    fireEvent.keyDown(cards, { key: 'ArrowRight' });
+    const stats = screen.getByRole('tab', { name: 'Statistiky' });
+    expect(stats).toHaveAttribute('aria-selected', 'true');
+    expect(document.activeElement).toBe(stats);
+    const panel = document.getElementById(stats.getAttribute('aria-controls')!);
+    expect(panel).toHaveAttribute('role', 'tabpanel');
+    expect(panel).toHaveAttribute('aria-labelledby', stats.id);
   });
 });
 

@@ -86,6 +86,25 @@ section and shelf names, JetBrains Mono (`font-mono`) with `tabular-nums` on EVE
   recalculation is offered (`lib/valuo.ts` `recalcBase`) a tick sits before each photo and the copper "Náš přepočet" card
   above the table keeps ONE height in every state (a sentence, a figure, a figure with its band), so the rows never
   jump under the cursor.
+- **Tab strip** (`components/Tabs.tsx`; binding, operator ruling 2026-10-27, option A "a rule across the column"): ONE
+  component draws every page tab strip: Browse and its Explore windows, the property page (`PropertyTabs` keeps its
+  tab list, address and panels), a collection's members, NEW DEDUP Labeling's statuses.
+  - The 1px `--color-rule` rule belongs to the strip and runs its container's whole content column. A trailing slot
+    (Browse's Split | Cards and Small | Large) sits at the strip's right end above the rule; on a row too narrow for
+    both it wraps to a line ABOVE the tabs, never below them, so the tabs never leave the rule.
+  - The first label sits on the title's edge: tab buttons have no horizontal padding, tabs are `gap-6` apart.
+  - Open = `ink` plus a 2px copper line exactly as wide as the label and its count, laid ON the rule (covering it);
+    idle = `ink-3`, hover `ink-2`. Colour only, never weight, so no label shifts. One size: `h-11 text-sm`, no tracking.
+  - One count style, the inset pill (`rounded-full`, `--color-inset`, `px-1.5 py-0.5`, mono `0.68rem` tabular, `ink-2`);
+    each caller decides WHEN (Browse its cohort total, 0 included; the property page above zero only).
+  - Full WAI-ARIA tabs: a named `tablist`, `type="button"` tabs, `aria-selected`, a roving tabindex, ←/→ wrapping,
+    Home/End, focus following the selection; `idPrefix` adds the ids and `aria-controls` where the caller has panels.
+  - Too many tabs scroll sideways with no scrollbar. The scroller keeps 4px round every tab so the global focus ring
+    is never clipped (no opt-out, no inner ring) and gives the room back with negative margins.
+  - `sticky` pins the strip under the Shell bar (`top-14`, `z-20`: above the cards' z-10 controls, below the bar's
+    z-30); a scroll target under it uses `scroll-mt-28` (bar 57px + strip 44px + air).
+  - Out of scope: the phone pipeline's stage strip and the pill view switches (`MapViewToggle`, `SizeToggle`,
+    Notifications' pills).
 
 ## Health page (2026-10-19)
 Added after the Health page rebuild (`docs/design/health-dashboard.md` § 5, wave 8). It extends the ledger

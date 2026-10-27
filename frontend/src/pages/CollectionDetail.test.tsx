@@ -458,6 +458,22 @@ describe('<CollectionDetail>', () => {
       });
     });
 
+    /* The tab-strip ruling (2026-10-27, option A): arrow keys on every strip. */
+    it('moves to Table with ArrowRight, focus following, the content its panel', async () => {
+      vi.mocked(api.getCollection).mockResolvedValue(WITH_MEMBER);
+      renderPage();
+      const cards = await screen.findByRole('tab', { name: 'Cards' });
+      expect(screen.getByRole('tablist', { name: 'Zobrazení nemovitostí' })).toContainElement(cards);
+      fireEvent.keyDown(cards, { key: 'ArrowRight' });
+      const table = screen.getByRole('tab', { name: 'Table' });
+      expect(table).toHaveAttribute('aria-selected', 'true');
+      expect(document.activeElement).toBe(table);
+      expect(await screen.findByRole('table')).toBeInTheDocument();
+      const panel = screen.getByRole('tabpanel');
+      expect(panel).toHaveAttribute('id', table.getAttribute('aria-controls'));
+      expect(panel).toHaveAttribute('aria-labelledby', table.id);
+    });
+
     it('opens on the table when the address says ?tab=table', async () => {
       vi.mocked(api.getCollection).mockResolvedValue(WITH_MEMBER);
       renderPage({ path: '/collections/1?tab=table' });

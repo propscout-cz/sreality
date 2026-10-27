@@ -243,18 +243,23 @@ function TopBar() {
     /* The bar draws in the `chrome` tokens: a dark band in the Měď scheme, the
      * page's own paper in Kobalt and Grafit (globals.css). */
     <header className="border-b border-[var(--color-rule)] bg-[var(--color-chrome)] sticky top-0 z-30">
-      {/* THE BAR IS EXACTLY 3.5rem TALL AND STAYS THAT WAY. Three Browse panes
-        * and the pipeline board's stage headers pin themselves against that
-        * number in CSS (`top-14`, `calc(100dvh-3.5rem)` in Filters.tsx,
-        * BrowseExperience.tsx and Pipeline.tsx), so a header that grows a
-        * second row slides the sidebar heading and the stage labels under it
-        * and overflows the map pane. Room for the nav is bought by TIGHTENING and,
+      {/* THE BAR IS EXACTLY 3.5rem TALL AND STAYS THAT WAY. Three Browse panes,
+        * the pipeline board's stage headers and the property page's tab strip
+        * pin themselves against that number in CSS (`top-14`,
+        * `calc(100dvh-3.5rem)` in Filters.tsx, BrowseExperience.tsx, Pipeline.tsx
+        * and Tabs.tsx `sticky`), so a header that grows a second row slides the
+        * sidebar heading, the stage labels and the tabs under it and overflows
+        * the map pane. The property page's in-tab scroll targets (`scroll-mt-28`
+        * in EstimationsBlock, MergedAdvertsSection and ValuoSection) clear this
+        * bar plus the 44px strip, so they move with either height. Room for the
+        * nav is bought by TIGHTENING and,
         * once tightening ran out (the bar measured 1555px inside 1440 and
         * clipped Settings and the account button), by CARRYING LESS: the three
         * admin dropdowns are one "Admin" trigger and the admin-only links live
         * inside it. Never by changing the height. Making the bar
         * variable-height needs `--header-h` published here and consumed at
-        * those four sites; that is a Browse + Pipeline change, not a nav change.
+        * those five sites; that is a Browse + Pipeline + property-page change,
+        * not a nav change.
         *
         * Horizontal scrolling was considered and rejected: `overflow-x: auto`
         * forces `overflow-y` to auto as well, which clips the dropdown panels

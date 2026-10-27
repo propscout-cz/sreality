@@ -124,7 +124,7 @@ export default function ValuoSection({ property, listingIds, adUrls = [], readOn
   return (
     <>
       {!bare && <Hairline />}
-      <section id="valuo" className="scroll-mt-6">
+      <section id="valuo" className="scroll-mt-28">
         <div className="flex items-baseline justify-between gap-3">
           <SectionLabel>Valuo</SectionLabel>
           {(open || !shown ? page?.environment : shown.environment) === 'sandbox' && (

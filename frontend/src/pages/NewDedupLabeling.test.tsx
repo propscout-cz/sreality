@@ -1055,6 +1055,18 @@ describe('<NewDedupLabeling>', () => {
     expect(screen.getByTitle('Setting the state of "garaz"')).toBeInTheDocument();
   });
 
+  /* The tab-strip ruling (2026-10-27, option A): arrow keys on every strip. */
+  it('moves between statuses with the arrow keys', async () => {
+    renderPage();
+    const pending = await screen.findByRole('tab', { name: 'Pending' });
+    expect(screen.getByRole('tablist', { name: 'Review status' })).toContainElement(pending);
+    expect(pending).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(pending, { key: 'ArrowLeft' });
+    const all = screen.getByRole('tab', { name: 'All' });
+    expect(all).toHaveAttribute('aria-selected', 'true');
+    expect(document.activeElement).toBe(all);
+  });
+
   it('marks the decided state as pressed once the row carries one', async () => {
     vi.mocked(api.listNewDedupProposals).mockResolvedValue({
       data: [{ ...PROPOSALS[0], status: 'confirmed', reviewed_by: 'operator',
