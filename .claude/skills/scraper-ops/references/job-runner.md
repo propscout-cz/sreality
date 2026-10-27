@@ -32,12 +32,17 @@ Recipes:
 - **clip's re-embed proof** (AC2 of #2032; the procedure for every torch, transformers, Pillow or numpy bump):
   with `clip`'s schedule paused (`runner-pause clip <until> "AC2 pending"`), `request clip --by <who> --
   --verify-reembed`. It runs under the pause, writes nothing, and prints one `CLIP_VERIFY … pass=… why=…` line;
-  `why=download` is inconclusive (re-request), any other failure keeps the pause. Lift the pause on a pass.
+  `why=download` is inconclusive (re-request; a sample object gone from R2 reads `why=sample`), any other failure keeps
+  the pause. Lift the pause on a pass.
 - **clip's exits:** 75 when its 1500 s budget cut a run that was making progress, or a re-tag campaign is still
-  open (due again in 60 s, so a backlog chains); 0 when a re-select finds under one chunk, or when downloads failed
-  but something was marked (`why=errors`); 1 when it downloaded and marked nothing (`why=r2`) or an embed failure
-  was not one image's (`why=embed`); 2 when `SUPABASE_DB_URL` or an `R2_*` is missing. The last line is
-  `CLIP_JOB exit=<code> why=…`.
+  open (a run re-tags for at most `--reselect-seconds`, 300 s, then is due again in 60 s, so new photos go first and a
+  backlog chains); 0 when a re-select finds under one chunk, or when downloads failed but something was marked or
+  under a whole chunk of them failed (`why=errors`); 1 when its downloads failed and it marked nothing, a whole chunk's
+  worth (`why=r2`), or a decode or embed failure was not one image's (`why=decode`, `why=embed`: a MemoryError, nothing
+  of the chunk decoding or embedding alone, or past 2 terminal a chunk / 5 a run); 2 when `SUPABASE_DB_URL` or an
+  `R2_*` is missing. A GET that failed is retried by the next run, never again in the same one. A
+  `clip_taxonomy_retag_after` later than the database's now() is no campaign until it passes (one `RETAG` warning a
+  run). The last line is `CLIP_JOB exit=<code> why=…`.
 - **After a move PR merges**, `gh run list --workflow=<deleted file> --json status,databaseId`; if a run is queued or
   running, pause the new row past that run's timeout (`runner-pause`), since a queued run in a non-cancelling group
   can still start. A re-land within an hour of its revert's deploy keeps the row's `due_at`, and its boot claims a

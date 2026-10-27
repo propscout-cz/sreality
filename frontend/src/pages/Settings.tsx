@@ -123,7 +123,7 @@ export default function Settings() {
         eyebrow="Tagging"
         title="CLIP tagging — priority kraje"
         infoExpanded={infoExpanded}
-        description="CLIP image tagging drains the marked kraje first — tags + embeddings — so their coverage lands before the global sweep. Unmarked = no priority (everything drains newest-first); the count is the kraj's active listings."
+        description="CLIP tagging takes the photos stored in the last 45 min first, then the marked kraje (tags + embeddings), then everything else newest-first; the kraje matter only in a backlog. Unmarked = no priority; the count is the kraj's active listings."
       >
         <ClipRegionsSection />
       </CollapsibleSection>

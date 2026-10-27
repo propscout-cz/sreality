@@ -84,10 +84,11 @@ pricestats = [
 # of the default install and out of the API and worker images. Whoever installs it puts
 # torch in first: the GPU workflows their CPU/CUDA wheel, and the job-runner image
 # (EXTRAS=api,clip,geo) CPU torch from PyTorch's CPU index, in the root Dockerfile's model
-# layer, which pins torch and huggingface_hub, bakes the pinned checkpoint
-# (scripts/bake_clip_weights.py), and installs transformers, Pillow and numpy at exact
-# versions from data/requirements-clip-runner.txt: the vector's runtime companions,
-# which the re-embed proof (scripts/clip_reembed.py) holds to (#2032).
+# layer, which pins torch (and bounds huggingface_hub) and bakes the pinned checkpoint
+# (scripts/bake_clip_weights.py); a separate layer after it installs transformers, Pillow
+# and numpy at exact versions from data/requirements-clip-runner.txt, so a bump rebuilds
+# neither: the vector's runtime companions, which the re-embed proof
+# (scripts/clip_reembed.py) holds to (#2032).
 clip = [
   # Upper bound, not an exact pin: the checkpoint (pinned by sha in
   # data/clip_taxonomy.json / the DINOv3 config) decides a vector's VALUE, and the one

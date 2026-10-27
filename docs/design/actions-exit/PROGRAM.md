@@ -318,12 +318,13 @@ reference) applied at its head in one runner-only window (no autodedup brake: #2
 `clip` every 900 s at offset 300 s, `timeout_s` kept at 3300 with its own `--max-seconds 1500` budget, a
 re-select every 300 s and whenever the snapshot drains, the tag phase ending on a re-select under one chunk
 (128); exit 75 only when the budget cut a run that was making progress or a re-tag campaign stays open, exit 1
-when it downloaded and marked nothing, exit 2 without R2; cpus 4 (torch threads from `JOB_CPUS`), memory 2048 MB,
+when its downloads failed and it marked nothing (a whole chunk's worth), exit 2 without R2; cpus 4 (torch threads from `JOB_CPUS`), memory 2048 MB,
 no resource. The order is the last 45 min first, then the priority kraje, then newest first. The next chunk's
 GETs download while this one encodes, each chunk waits at most 45 s for them, and the job's R2 client gives up
-a stalled GET after 2 × (5 + 20) s; a batch that fails to embed falls back to one image at a time, and an image
-that fails alone while a sibling embeds is marked terminal (at most 2 a chunk, 5 a run). It tags, then re-tags
-with the same model load (`retag_from_embeddings` is a library now). The runner image pins transformers,
+a stalled GET after 2 × (5 + 20) s; a GET that failed is retried by the next run, not the same one. A batch that
+fails to embed falls back to one image at a time, and an image that fails to decode, or to embed alone, while a
+sibling does is marked terminal (at most 2 a chunk, 5 a run, each). It tags, then re-tags for at most 300 s with
+the same model load (`retag_from_embeddings` is a library now). The runner image pins transformers,
 Pillow and numpy in `data/requirements-clip-runner.txt`, asserted by the offline proof, and `CI: runner image`'s
 `api-image` job proves the API image clip-free. Health's `fleet/photo_tags` judges the 45-min line (tagged =
 stamped and vectored; Watch at most while `clip` is paused, then judged on the photos stored since the pause ended). `--verify-reembed` (`scripts/clip_reembed.py`)
