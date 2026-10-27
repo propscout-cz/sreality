@@ -3587,7 +3587,7 @@ renumber.** Navigate by area:
     (`pipelineViewFilters`: no category, no deal type, no price/area/location), with any active
     preset deselected, in ONE atomic write (`browseState.loadPipelineView`; two writes against
     one searchParams snapshot clobber each other, and a preset left active over replaced filters
-    reads as dirty and pops "Update preset"). It shipped as a modifier that AND'd itself onto
+    reads as edited). It shipped as a modifier that AND'd itself onto
     whatever was set, which was wrong: Browse's default cohort is `byt` + `pronajem`, so "show me
     my pipeline" showed 1 of 45 deals — every sale flat, house and commercial unit hidden by a
     default the operator never chose for that purpose. `status` deliberately stays `any` so a
@@ -3597,7 +3597,7 @@ renumber.** Navigate by area:
     sidebar's Curation → Pipeline control (`CuratedSetFilter`: compose with current filters, pick
     or exclude stages). It is still **not a preset**: nothing is saved, and loading it deselects
     the active preset. A preset stores the pipeline scope like every filter, so a change to it
-    offers "Update preset" and loading the preset applies it (ruling 2026-10-22, reversing
+    marks the preset edited (Save changes in its ⋯ menu) and loading the preset applies it (ruling 2026-10-22, reversing
     2026-10-19); a Stats dashboard leaves it out (`DASHBOARD_EXCLUDED_KEYS`). A
     watchdog can't use it (`UNSUPPORTED_LABELS`) — the operator's own state can't be a trigger. The
     extension bookmarks AND changes stage property-grain like every other surface: it reads

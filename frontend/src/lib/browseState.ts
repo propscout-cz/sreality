@@ -123,9 +123,13 @@ export interface BrowseViewState {
    * setFilters + setActivePresetId, because in the URL adapter those are two
    * writes against the same searchParams snapshot — the second would clobber
    * the first. Deselecting matters beyond tidiness: leaving a preset marked
-   * active after replacing its filters would render it dirty and pop the
-   * "Update preset" button, which this chip must never do. */
+   * active after replacing its filters would mark it edited, which this chip
+   * must never do. */
   loadPipelineView: () => void;
+  /* Reset: the default filters with any active preset deselected — one write, as
+   * loadPipelineView. A reset leaves the preset's view; it never edits it
+   * (operator 2026-10-27). The sort, the tab and the map knobs stay. */
+  resetFilters: () => void;
   /* The Stats dashboard the board was loaded from (URL key `dashboard`), the
    * preset's twin: a view knob, carried through filtering, outside preset
    * identity. `loadDashboard` writes a dashboard's filter exactly as
@@ -348,10 +352,16 @@ export function useUrlBrowseState(): BrowseViewState {
     setSearchParams(sp, { replace: false });
   }, [preserveExtras, setSearchParams]);
 
+  const resetFilters = useCallback(() => {
+    const sp = preserveExtras(toSearchParams(DEFAULT_FILTERS));
+    sp.delete('preset');
+    setSearchParams(sp, { replace: false });
+  }, [preserveExtras, setSearchParams]);
+
   return {
     filters, sort, tab, overlay, activePresetId,
     setFilters, setBounds, setSort, setTab, setOverlay, setActivePresetId, loadPreset,
-    loadPipelineView,
+    loadPipelineView, resetFilters,
     activeDashboardId, setActiveDashboardId, loadDashboard, statsMarket, setStatsMarket, statsSmall, setStatsSmall,
   };
 }
@@ -399,6 +409,10 @@ export function useMemoryBrowseState(init: {
       },
       loadPipelineView: () => {
         setFiltersState(pipelineViewFilters());
+        setActivePresetId(null);
+      },
+      resetFilters: () => {
+        setFiltersState(DEFAULT_FILTERS);
         setActivePresetId(null);
       },
       /* A dashboard loads here exactly as on the page (useUrlBrowseState): its filter, if it carries one,

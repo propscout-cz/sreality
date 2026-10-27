@@ -7,6 +7,18 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Preset save moves into the chip menu; Reset leaves the preset (2026-10-27, no migration)
+- **Done** (operator ask 2026-10-27: "get rid of the update preset button", option B of the
+  proposal page). The copper Update button is gone from both saved-set bars (Browse presets, Stats
+  dashboards). An edited chip keeps its dot; its ⋯ menu leads with Save changes (one click, no dialog,
+  the set's own map-area / filter answer) and Revert to saved. The filter sidebar's Reset and the
+  empty-results "clear filters" now write the default filters AND deselect the preset in one write
+  (`browseState.resetFilters`), so a reset never shows the preset as edited.
+- **Ruled 2026-10-27:** Save changes is one click; adding or dropping a map area / dashboard filter
+  on an existing set went with the dialog (save it as a new set instead).
+- **Not built (offered, open):** an undo toast after a save (`lib/toast`: an action toast stays until
+  dismissed, louder than the button removed) and Ctrl/⌘+S.
+
 ### Lists open in a new tab (2026-10-27, no migration)
 - **Done** (operator ask 2026-10-27: "when I click on a notification, browse card or pipeline card, open it
   in a new window"). A notification row (and a share row's "Open …" link), a Browse card (and its estimate

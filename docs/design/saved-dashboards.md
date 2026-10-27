@@ -160,6 +160,10 @@ Dashboards (`api/routes/stats_dashboards.py`, mounted like the presets router):
   (queries, mutations, `loadPreset`, the Pipeline chip in `leading`). `PresetSaveModal.tsx` becomes
   `SavedSetSaveModal.tsx` with `checkbox` in place of `includeMapArea` (presets: "Include map area"; dashboards:
   "Uložit i nastavení filtru"). Behaviour of the preset bar is unchanged, pixel for pixel; its tests move with it.
+- **No update button (2026-10-27, operator, both instances):** the copper "update" button and the update dialog are
+  gone. A dirty chip's ⋯ menu leads with Save changes / Uložit změny (one click, no dialog: the set keeps its own
+  name, colour and checkbox answer, so a preset keeps or lacks its map area and a dashboard its filter as saved) and
+  Revert to saved / Zahodit změny (a reload of the stored set); a shared chip gets the revert only.
 - **`collapse` (2026-10-22, presets only):** `{label, storageKey, show, fold}` folds the chips behind a
   "Presety 11" toggle; folded, only the active chip shows (eleven presets wrapped to three rows above the
   map). The fold is remembered per browser; the dashboards bar can take it with one prop.
