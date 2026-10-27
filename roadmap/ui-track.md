@@ -42,9 +42,12 @@ toolkit work.
 - **Done, agenda 8 Shell** (2026-10-27): "!AUDIT POLOH" is the first Admin item, its count on the Admin
   trigger (P33); the footer keeps only the map-tile attribution (P34); no small-caps label above a page's h1
   (P26, on every agenda's pages; only the error and not-found states keep one).
-- **Next (not built):** removing render scoring end to end (operator note on P03), scoped first. Open for the
+- **Next (not built):** the confirmed Stats review items (S01–S04, S06, S07, S09; their own commit on the
+  same branch); removing render scoring end to end (operator note on P03), scoped first. Open for the
   operator: the phone header's P31 controls, and whether the property page should get the city-index strip
   (P19 assumed one there; it never had it). Handoff: `docs/design/propscout-redesign.md`.
+- **Ruled 2026-10-27:** ten Stats-tab proposals (S01–S10, mostly the header): S01–S04, S06, S07, S09 confirmed,
+  S05, S08, S10 declined; the Stats PR builds the confirmed ones (handoff § Stats review).
 
 ### Preset groups: boxes on the Browse preset row (2026-10-25, migration 672)
 - **Done** (operator ask 2026-10-25: "group my presets, a boundary box per group, move them into the boxes
