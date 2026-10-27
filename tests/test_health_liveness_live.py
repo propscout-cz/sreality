@@ -1,7 +1,7 @@
 """`health_liveness()`, the pg_cron watcher, writes one `liveness` row of cells (migration 620, its lane cell 621,
-its explicit cells 633, no API cell since 655, one subject per worker since 675). The `migration_633` tests run that
-file's own unschedule and post-condition, the `migration_655` and `migration_675` tests those files' post-conditions
-(not copies).
+its explicit cells 633, no API cell since 655, one subject per worker since 675, one per job-runner job and the fleet
+since 682). The `migration_633` tests run that file's own unschedule and post-condition, the `migration_655`,
+`migration_675` and `migration_682` tests those files' post-conditions and 682's precondition (not copies).
 
 Executed against the replayed schema inside a transaction that always rolls back. Runs in CI's migrations
 lane (`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED=1`): the watcher's step, and 633's step for the `migration_633`
@@ -10,6 +10,8 @@ tests; skipped locally.
 
 from __future__ import annotations
 
+import datetime as _dt
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,7 @@ _REQUIRED = os.environ.get("DB_RAILS_REQUIRED") == "1"
 _MIGRATION_629 = Path(__file__).resolve().parents[1] / "migrations" / "633_health_explicit_cells.sql"
 _MIGRATION_655 = Path(__file__).resolve().parents[1] / "migrations" / "655_health_liveness_without_api_cell.sql"
 _MIGRATION_675 = Path(__file__).resolve().parents[1] / "migrations" / "675_scheduled_jobs_expand.sql"
+_MIGRATION_682 = Path(__file__).resolve().parents[1] / "migrations" / "682_health_job_cells.sql"
 # pg_cron's job table and unschedule(bigint), as the file calls them: the replay has no pg_cron.
 _CRON_STUB = """
 create schema cron;
@@ -52,6 +55,8 @@ def cur():
             c.execute("delete from health_checks")
             c.execute("delete from ops_incidents where signature like 'cell:%'")
             c.execute("delete from worker_heartbeats")
+            c.execute("delete from job_runs")  # before its jobs: job_runs.job_name references them
+            c.execute("delete from scheduled_jobs")
             yield c
     finally:
         conn.rollback()
@@ -427,3 +432,532 @@ def test_migration_675_post_condition_refuses_one_subject_for_every_worker(cur):
                        match="675: health_liveness\\(\\) does not give each worker its own subject"):
         with cur.connection.transaction():
             cur.execute(_statement("do $post$", "$post$;", _MIGRATION_675))
+
+
+# --- the scheduled jobs (migration 682, #2026): a job/<name> cell per registered job-runner row, and the fleet ------
+#
+# Every time is relative to the transaction's frozen now(). A release moves due_at to a slot at most one cadence past
+# the run it closes, so each seed keeps due_at within a cadence of its newest closed run: a row with no run closed
+# since the cadence before its due_at reads as freshly (re)registered.
+
+
+def _job(cur: Any, name: str, *, every: str = "6 hours", timeout_s: int = 1200, resource: str | None = None,
+         due: str = "5 hours", last_ok: str | None = None, failures: int = 0, last_outcome: str | None = None,
+         last_error: str | None = None, paused: str | None = None, requested: str | None = None,
+         requested_by: str = "github:op", runner: str = "job-runner", registered: bool = True,
+         retired: bool = False) -> None:
+    """A scheduled_jobs row as the runner's registration leaves it: `due` from now (a minus sign: past), `last_ok` and
+    `requested` ago, `paused` until that far ahead (a minus sign: a pause that lapsed), signed 'test' with note
+    'drill'."""
+    cur.execute(
+        "insert into scheduled_jobs (job_name, cadence, runner, registry_at, retired_at, offset_s, timeout_s, "
+        "  memory_mb, cpus, resource, due_at, last_success_at, consecutive_failures, last_outcome, last_error, "
+        "  paused_until, pause_note, paused_by, requested_at, requested_by) "
+        "values (%(name)s, %(every)s::interval, %(runner)s, case when %(registered)s then now() end, "
+        "  case when %(retired)s then now() end, 0, %(timeout_s)s, 256, 1, %(resource)s, now() + %(due)s::interval, "
+        "  now() - %(last_ok)s::interval, %(failures)s, %(last_outcome)s, %(last_error)s, "
+        "  now() + %(paused)s::interval, case when %(paused)s::interval is not null then 'drill' end, "
+        "  case when %(paused)s::interval is not null then 'test' end, now() - %(requested)s::interval, "
+        "  case when %(requested)s::interval is not null then %(requested_by)s end)",
+        {"name": name, "every": every, "runner": runner, "registered": registered, "retired": retired,
+         "timeout_s": timeout_s, "resource": resource, "due": due, "last_ok": last_ok, "failures": failures,
+         "last_outcome": last_outcome, "last_error": last_error, "paused": paused, "requested": requested,
+         "requested_by": requested_by})
+
+
+def _run(cur: Any, name: str, *, started: str, ended: str | None = None, outcome: str | None = None,
+         exit_code: int | None = None, resource: str | None = None, requested_by: str | None = None,
+         args: list[str] | None = None, log_tail: str | None = None, peak_rss_mb: int | None = None,
+         holder: str = "h/1", lease: bool = True) -> None:
+    """A job_runs row started `started` ago and closed `ended` ago with `outcome` (None: still open). The job of an
+    open run holds a live lease on its holder, as a claim leaves it, unless `lease` is False (the reaper's case)."""
+    cur.execute("insert into job_runs (job_name, holder, resource, args, requested_by, started_at, ended_at, outcome, "
+                "  exit_code, peak_rss_mb, log_tail) "
+                "values (%s, %s, %s, %s, %s, now() - %s::interval, now() - %s::interval, %s, %s, %s, %s)",
+                (name, holder, resource, args, requested_by, started, ended, outcome, exit_code, peak_rss_mb,
+                 log_tail))
+    if ended is None and lease:
+        cur.execute("update scheduled_jobs set lease_holder = %s, lease_expires_at = now() + interval '3 minutes' "
+                    "where job_name = %s", (holder, name))
+
+
+def _runner_beat(cur: Any, replica: str, age: str, *, holder: str = "h", skipped: tuple[str, ...] = ()) -> None:
+    """A job-runner replica's heartbeat `age` old, as job_runner's tick writes it (its claims hold '<holder>/<n>')."""
+    from psycopg.types.json import Jsonb
+
+    cur.execute("insert into worker_heartbeats (worker, beat_at, started_at, details) "
+                "values (%s, now() - %s::interval, now() - interval '1 day', %s)",
+                (f"job-runner/{replica}", age, Jsonb({"holder": holder, "skipped": list(skipped)})))
+
+
+def _said(cells: dict[str, list[dict[str, Any]]], subject: str) -> tuple[str, str]:
+    """The one cell of `subject`, as (status, message)."""
+    [cell] = cells[subject]
+    return cell["status"], cell["message"]
+
+
+def _conditions(cells: dict[str, list[dict[str, Any]]], subject: str) -> list[str]:
+    [cell] = cells[subject]
+    return cell["facts"]["conditions"]
+
+
+def _job_subjects(cells: dict[str, list[dict[str, Any]]]) -> set[str]:
+    return {s for s in cells if s.startswith("job")}
+
+
+def test_a_registered_job_that_has_not_run_yet_reads_ok_and_the_fleet_counts_it(cur):
+    """C2: never 'unknown', or one never-run job would turn the whole row Not measured."""
+    _runner_beat(cur, "r1", "0 minutes")
+    _job(cur, "x", due="5 hours")
+
+    status, _value, details, cells = _liveness(cur)
+
+    st, msg = _said(cells, "job/x")
+    assert st == "ok" and msg.startswith("x: not run yet; first slot in 5.0 h (") and msg.endswith(" UTC)"), msg
+    assert _said(cells, "job-runner") == ("ok", "job-runner: 1 replicas beating; 1 jobs registered")
+    [job] = cells["job/x"]
+    assert job["facts"]["fresh_slot"] is True and job["facts"]["conditions"] == []
+    assert (status, details["message"]) == ("ok", "Watchers: all alive")
+
+
+def test_production_shape_has_no_job_cell(cur):
+    """C1 (guard): the lane row, retired registered rows and an unregistered runner row get no cell, nor a fleet."""
+    _runner_beat(cur, "r1", "0 minutes")
+    cur.execute("insert into scheduled_jobs (job_name, cadence, runner) "
+                "values ('location_resolve_incremental', interval '1 hour', 'github_actions')")
+    for i in range(7):
+        _job(cur, f"retired_{i}", retired=True)
+    _job(cur, "never_registered", registered=False)
+    _job(cur, "on_github", runner="github_actions")
+
+    assert _job_subjects(_liveness(cur)[3]) == set()
+
+
+def test_a_job_is_late_past_its_cadence_its_budget_and_a_cycle_more(cur):
+    """C3: Watch past C + T + W, Problem a min(C, 1 d) later; each of these was just claimed, late."""
+    _runner_beat(cur, "r1", "0 minutes")
+    for name, every, timeout_s, last_ok, due in (
+            ("ok_6h10", "6 hours", 1200, "370 minutes", "-10 minutes"),
+            ("warn_6h25", "6 hours", 1200, "385 minutes", "-25 minutes"),
+            ("fail_12h25", "6 hours", 1200, "745 minutes", "-385 minutes"),
+            ("warn_30d", "30 days", 900, "30 days 16 minutes", "-16 minutes"),
+            ("fail_31d", "30 days", 900, "31 days 1 hour", "-25 hours")):
+        _job(cur, name, every=every, timeout_s=timeout_s, last_ok=last_ok, due=due)
+        _run(cur, name, started=f"{last_ok} 60 seconds", ended=last_ok, outcome="ok", exit_code=0)
+        _run(cur, name, started="1 minute", holder="h/2")
+
+    cells = _liveness(cur)[3]
+
+    assert _said(cells, "job/ok_6h10") == ("ok", "ok_6h10: running for 60 s of its 20 min budget on job-runner/r1")
+    assert _said(cells, "job/warn_6h25") == (
+        "warn", "warn_6h25: late: no ok run for 6.4 h (Watch past 6.3 h, Problem past 12.3 h)")
+    assert _said(cells, "job/fail_12h25") == (
+        "fail", "fail_12h25: late: no ok run for 12.4 h (Watch past 6.3 h, Problem past 12.3 h)")
+    assert _said(cells, "job/warn_30d") == (
+        "warn", "warn_30d: late: no ok run for 30 d (Watch past 30 d, Problem past 31 d)")
+    assert _said(cells, "job/fail_31d") == (
+        "fail", "fail_31d: late: no ok run for 31 d (Watch past 30 d, Problem past 31 d)")
+
+
+def test_a_never_succeeded_job_is_late_from_its_first_scheduled_run_never_from_a_request(cur):
+    """C3: never anchored on due_at alone (every release moves it) nor on a request run (a failed drill on a quarterly
+    job is a failure, not lateness)."""
+    _runner_beat(cur, "r1", "0 minutes")
+    _job(cur, "never", due="-22 minutes")
+    _job(cur, "never_ok", due="-1 minute", failures=1, last_outcome="interrupted", last_error="deploy stop; exit 143")
+    _run(cur, "never_ok", started="60 minutes", ended="59 minutes", outcome="failed", exit_code=1)
+    _run(cur, "never_ok", started="50 minutes", ended="40 minutes", outcome="interrupted", exit_code=143)
+    _run(cur, "never_ok", started="10 minutes", ended="1 minute", outcome="interrupted", exit_code=143)
+    _job(cur, "quarterly", every="91 days", timeout_s=7200, due="60 days", failures=1, last_outcome="failed",
+         last_error="exit 2")
+    _run(cur, "quarterly", started="3 hours", ended="170 minutes", outcome="failed", exit_code=2,
+         requested_by="github:op")
+
+    cells = _liveness(cur)[3]
+
+    assert _conditions(cells, "job/never") == [
+        "warn: due 22 min ago and not started",
+        "warn: late: never ran ok for 6.4 h (Watch past 6.3 h, Problem past 12.3 h)"]
+    assert _said(cells, "job/never_ok")[0] == "warn"
+    assert _conditions(cells, "job/never_ok") == [
+        "warn: its last run failed: failed, exit 1",
+        "warn: late: never ran ok for 7.0 h (Watch past 6.3 h, Problem past 12.3 h)"]
+    assert _said(cells, "job/quarterly") == ("warn", "quarterly: its last run failed: exit 2 (a request by github:op)")
+    assert _conditions(cells, "job/quarterly") == ["warn: its last run failed: exit 2 (a request by github:op)"]
+
+
+def test_a_lapsed_pause_restarts_the_late_and_the_waiting_clock(cur):
+    """C3: a pause that lifted a minute ago, three days after the last ok run, is neither late nor long waiting."""
+    _runner_beat(cur, "r1", "0 minutes")
+    _job(cur, "lifted", last_ok="3 days", due="-3960 minutes", paused="-1 minute")
+    _run(cur, "lifted", started="3 days 1 minute", ended="3 days", outcome="ok", exit_code=0)
+
+    assert _said(_liveness(cur)[3], "job/lifted") == ("ok", "lifted: last ok 3 d ago; due now")
+
+
+def test_a_re_registered_job_is_judged_from_its_new_first_slot(cur):
+    """C3: un-retiring keeps last_success_at, the streak and last_error; a re-landed row reads from its new first slot
+    until a run closes there, so neither its old streak nor its old success reads Problem, its first run included."""
+    _runner_beat(cur, "r1", "0 minutes")
+    for name, due in (("reland", "5 hours"), ("reland_late", "-25 minutes"), ("reland_running", "-2 minutes")):
+        _job(cur, name, due=due, last_ok="3 days", failures=3, last_outcome="failed", last_error="exit 1")
+        _run(cur, name, started="3 days 10 minutes", ended="3 days", outcome="ok", exit_code=0)
+        for ago in ("71 hours", "70 hours", "69 hours"):
+            _run(cur, name, started=ago, ended=f"{ago} -1 minute", outcome="failed", exit_code=1)
+    _run(cur, "reland_running", started="1 minute", holder="h/7")
+
+    cells = _liveness(cur)[3]
+
+    st, msg = _said(cells, "job/reland")
+    assert st == "ok" and msg.startswith("reland: registered again; not run here since; first slot in 5.0 h ("), msg
+    assert msg.endswith(" UTC); last ok 3 d ago"), msg
+    assert _conditions(cells, "job/reland") == []
+    assert _conditions(cells, "job/reland_late") == [
+        "warn: due 25 min ago and not started",
+        "warn: late: no ok run for 6.4 h (Watch past 6.3 h, Problem past 12.3 h)"]
+    assert _said(cells, "job/reland_running") == (
+        "ok", "reland_running: running for 60 s of its 20 min budget on job-runner/r1")
+
+
+_OOM = "SIGKILL not sent by the runner (likely the OOM killer); peak 900 MB of memory_mb 256"
+
+
+def test_a_failing_job_names_its_cause_and_three_quick_failures_are_only_watch(cur):
+    """C4: the cause is the latest failure run's; three in a row are a Problem once they span min(cadence, 1 h)."""
+    _runner_beat(cur, "r1", "0 minutes")
+
+    def failing(name: str, failures: int, last_error: str | None, *runs: tuple[str, str, str, int | None],
+                due: str = "1 minute", every: str = "6 hours", timeout_s: int = 1200, ok: str = "1 hour",
+                last_outcome: str = "failed", **run_kw: Any) -> None:
+        _job(cur, name, every=every, timeout_s=timeout_s, due=due, last_ok=ok, failures=failures,
+             last_outcome=last_outcome, last_error=last_error)
+        _run(cur, name, started=f"{ok} 60 seconds", ended=ok, outcome="ok", exit_code=0)
+        for started, ended, outcome, code in runs:
+            _run(cur, name, started=started, ended=ended, outcome=outcome, exit_code=code, **run_kw)
+
+    failing("s_oom", 1, _OOM, ("10 minutes", "5 minutes", "failed", -9), peak_rss_mb=900)
+    failing("s_quick", 3, "exit 1", ("300 seconds", "280 seconds", "failed", 1),
+            ("220 seconds", "200 seconds", "failed", 1), ("100 seconds", "80 seconds", "failed", 1), due="4 minutes")
+    failing("s_hour", 3, "exit 1", ("61 minutes", "60 minutes", "failed", 1), ("30 minutes", "29 minutes", "failed", 1),
+            ("5 minutes", "4 minutes", "failed", 1), ok="2 hours")
+    failing("s_15", 3, "exit 1", ("16 minutes", "15 minutes", "failed", 1), ("10 minutes", "9 minutes", "failed", 1),
+            ("3 minutes", "2 minutes", "failed", 1), every="15 minutes", timeout_s=600, ok="17 minutes")
+    failing("s_lost", 2, "exit 1", ("20 minutes", "15 minutes", "failed", 1), ("10 minutes", "5 minutes", "lost", None),
+            last_outcome="lost")
+    failing("s_cut", 2, "deploy stop; exit 143", ("30 minutes", "29 minutes", "failed", 1),
+            ("20 minutes", "19 minutes", "failed", 1), ("10 minutes", "1 minute", "interrupted", 143),
+            due="-1 minute", last_outcome="interrupted")
+    failing("s_bare", 1, None, ("10 minutes", "5 minutes", "failed", -9))
+    failing("s_deploy", 0, "deploy stop; exit 143", ("10 minutes", "1 minute", "interrupted", 143), due="-1 minute",
+            last_outcome="interrupted")
+    failing("s_drill", 0, "deploy stop; exit 143", ("10 minutes", "1 minute", "interrupted", 143), every="91 days",
+            timeout_s=7200, due="60 days", ok="31 days", last_outcome="interrupted", requested_by="github:op")
+    failing("s_typo", 1, "exit 2", ("10 minutes", "9 minutes", "failed", 2), due="5 hours", requested_by="github:op",
+            args=["--limitt", "5"], log_tail="psycopg: connection to postgresql://u:secret@h/db failed")
+
+    _status, _value, details, cells = _liveness(cur)
+
+    assert _said(cells, "job/s_oom") == ("warn", f"s_oom: its last run failed: {_OOM}")
+    assert _said(cells, "job/s_quick") == (
+        "warn", "s_quick: 3 failed runs in a row, the first 5 min ago; the last: exit 1")
+    assert _said(cells, "job/s_hour") == (
+        "fail", "s_hour: 3 failed runs in a row, the first 61 min ago; the last: exit 1")
+    assert _said(cells, "job/s_15") == ("fail", "s_15: 3 failed runs in a row, the first 16 min ago; the last: exit 1")
+    assert _said(cells, "job/s_lost") == ("warn", "s_lost: 2 failed runs in a row, the first 20 min ago; the last: "
+                                                  "lost: the replica holding it stopped renewing its lease")
+    assert _said(cells, "job/s_cut") == (
+        "warn", "s_cut: 2 failed runs in a row, the first 30 min ago; the last: failed, exit 1")
+    assert _said(cells, "job/s_bare") == ("warn", "s_bare: its last run failed: failed, exit -9")
+    assert _said(cells, "job/s_deploy") == (
+        "ok", "s_deploy: last ok 60 min ago; due now; its last run was cut by a deploy and is due again at once")
+    assert _said(cells, "job/s_drill") == (
+        "ok", "s_drill: last ok 31 d ago; next slot in 60 d; a request by github:op was cut by a deploy; it is not "
+              "re-filed")
+    assert _said(cells, "job/s_typo") == (
+        "warn", "s_typo: its last run failed: exit 2 (a request by github:op, args --limitt 5)")
+    [oom] = cells["job/s_oom"]
+    assert (oom["facts"]["exit_code"], oom["facts"]["peak_rss_mb"]) == (-9, 900)
+    assert "secret" not in json.dumps(details), "job_runs.log_tail is never read: it can hold a connection string"
+
+
+def test_a_run_in_flight_is_watch_at_two_thirds_and_a_recorded_timeout_is_a_problem(cur):
+    """C5 (ruling R-3): Watch past 2/3 T and while the runner stops it past T; a Problem once the runner records the
+    stop, or past T + the stuck-run grace when no stop lands."""
+    _runner_beat(cur, "r1", "0 minutes")
+    for name, age in (("f_500", 500), ("f_700", 700), ("f_1000", 1000), ("f_1600", 1600)):
+        _job(cur, name, timeout_s=900, due="-30 minutes", last_ok="1 hour")
+        _run(cur, name, started="1 hour 1 minute", ended="1 hour", outcome="ok", exit_code=0)
+        _run(cur, name, started=f"{age} seconds", holder=f"h/{age}")
+    timeout = "stopped at timeout_s=900; exit -15"
+    for name, paused in (("f_timeout", None), ("f_timeout_ok", None), ("f_timeout_paused", "1 day")):
+        _job(cur, name, timeout_s=900, due="12 minutes", last_ok="1 hour", failures=1, last_outcome="timeout",
+             last_error=timeout, paused=paused)
+        _run(cur, name, started="1 hour 1 minute", ended="1 hour", outcome="ok", exit_code=0)
+        _run(cur, name, started="20 minutes", ended="3 minutes", outcome="timeout", exit_code=-15)
+    _run(cur, "f_timeout_ok", started="2 minutes", ended="1 minute", outcome="ok", exit_code=0)
+    cur.execute("update scheduled_jobs set consecutive_failures = 0, last_outcome = 'ok', last_error = null, "
+                "last_success_at = now() - interval '1 minute' where job_name = 'f_timeout_ok'")
+    _job(cur, "f_lapsed", timeout_s=900, due="-5 minutes", last_ok="1 hour")
+    _run(cur, "f_lapsed", started="1 hour 1 minute", ended="1 hour", outcome="ok", exit_code=0)
+    _run(cur, "f_lapsed", started="100 seconds", holder="gone/1", lease=False)
+
+    cells = _liveness(cur)[3]
+
+    assert _said(cells, "job/f_500") == ("ok", "f_500: running for 8 min of its 15 min budget on job-runner/r1")
+    assert _said(cells, "job/f_700") == ("warn", "f_700: running for 12 min of its 15 min budget")
+    assert _said(cells, "job/f_1000") == (
+        "warn", "f_1000: running for 17 min of its 15 min budget; past it: the runner is stopping it")
+    assert _said(cells, "job/f_1600") == (
+        "fail", "f_1600: running for 27 min of its 15 min budget; past the runner's 10 min stopping grace: nothing is "
+                "stopping it")
+    assert _said(cells, "job/f_timeout") == (
+        "fail", "f_timeout: its last run hit its 15 min budget and was stopped (timeout)")
+    assert _said(cells, "job/f_timeout_ok") == ("ok", "f_timeout_ok: last ok 60 s ago; next slot in 12 min")
+    assert _said(cells, "job/f_timeout_paused") == (
+        "ok", f"f_timeout_paused: paused for 24.0 h more by test: drill; its last run failed: {timeout}")
+    assert _said(cells, "job/f_lapsed") == (
+        "ok", "f_lapsed: running for 100 s of its 15 min budget; its lease lapsed: the replica holding it is gone")
+
+
+def _held(cur: Any) -> None:
+    """A (hourly, T 55 min) and B (6 h, T 6 h) share location-heavy, as intake and the RÚIAN load do."""
+    _runner_beat(cur, "r1", "0 minutes")
+    _job(cur, "b_load", every="6 hours", timeout_s=6 * 3600, resource="location-heavy", due="3 hours",
+         last_ok="3 hours")
+
+
+def test_a_job_waiting_out_a_siblings_run_is_held_not_late(cur):
+    """C6: W is the sibling's run inside the wait, measured, so a 6 h load holds intake in green."""
+    _held(cur)
+    _run(cur, "b_load", started="3 hours", resource="location-heavy", holder="h/b")
+    _job(cur, "a_intake", every="1 hour", timeout_s=55 * 60, resource="location-heavy", due="-3 hours",
+         last_ok="4 hours")
+    _run(cur, "a_intake", started="245 minutes", ended="4 hours", outcome="ok", exit_code=0,
+         resource="location-heavy")
+
+    cells = _liveness(cur)[3]
+
+    assert _said(cells, "job/a_intake") == (
+        "ok", "a_intake: waiting for b_load, which holds location-heavy (running 3.0 h of its 6.0 h budget)")
+    [a] = cells["job/a_intake"]
+    assert (a["facts"]["held_by"], a["facts"]["sibling_wait_s"], a["facts"]["conditions"]) == ("b_load", 10800, [])
+    assert _said(cells, "job/b_load") == ("ok", "b_load: running for 3.0 h of its 6.0 h budget on job-runner/r1")
+
+
+def test_a_siblings_closed_run_counts_only_its_own_length(cur):
+    """C6: B ran an hour and closed two hours ago, so A waited an hour of it and is late past C + T + 1 h."""
+    _held(cur)
+    _run(cur, "b_load", started="3 hours", ended="2 hours", outcome="ok", exit_code=0, resource="location-heavy",
+         holder="h/b")
+    _job(cur, "a_intake", every="1 hour", timeout_s=55 * 60, resource="location-heavy", due="-150 minutes",
+         last_ok="210 minutes")
+    _run(cur, "a_intake", started="211 minutes", ended="210 minutes", outcome="ok", exit_code=0,
+         resource="location-heavy")
+
+    cells = _liveness(cur)[3]
+
+    [a] = cells["job/a_intake"]
+    assert a["status"] == "warn" and a["facts"]["sibling_wait_s"] == 3600
+    assert "warn: late: no ok run for 3.5 h (Watch past 2.9 h, Problem past 3.9 h)" in a["facts"]["conditions"]
+
+
+def test_a_job_that_is_not_due_is_not_held_by_a_running_sibling(cur):
+    """C6: held only while waiting; a sibling's open run alone says nothing about a job not yet due."""
+    _held(cur)
+    _run(cur, "b_load", started="3 hours", resource="location-heavy", holder="h/b")
+    _job(cur, "a_intake", every="1 hour", timeout_s=55 * 60, resource="location-heavy", due="40 minutes",
+         last_ok="20 minutes")
+    _run(cur, "a_intake", started="21 minutes", ended="20 minutes", outcome="ok", exit_code=0,
+         resource="location-heavy")
+
+    assert _said(_liveness(cur)[3], "job/a_intake") == ("ok", "a_intake: last ok 20 min ago; next slot in 40 min")
+
+
+def test_a_due_job_with_no_runner_beating_is_a_problem_and_the_fleet_a_watch(cur):
+    """C7: the cells survive a missing heartbeat; waiting is Watch while a replica beats, a Problem when none does."""
+    _job(cur, "x", due="-15 minutes", last_ok="375 minutes")
+    _run(cur, "x", started="376 minutes", ended="375 minutes", outcome="ok", exit_code=0)
+    _job(cur, "later", due="5 hours", last_ok="1 hour")
+    _run(cur, "later", started="61 minutes", ended="1 hour", outcome="ok", exit_code=0)
+    _job(cur, "asked", due="1 day", last_ok="1 hour", paused="1 day", requested="15 minutes")
+    _run(cur, "asked", started="61 minutes", ended="1 hour", outcome="ok", exit_code=0)
+    _job(cur, "asked_now", due="1 day", last_ok="1 hour", paused="1 day", requested="9 minutes")
+    _run(cur, "asked_now", started="61 minutes", ended="1 hour", outcome="ok", exit_code=0)
+    no_beat = ("job-runner: no replica has beaten for 10 min (see the worker/job-runner/<id> cells and Railway's "
+               "job-runner service); a registered job turns Problem 10 min after its slot, a request 10 min after "
+               "it was filed")
+
+    cells = _liveness(cur)[3]  # (a) and (d): no job-runner heartbeat at all
+    assert _said(cells, "job/x") == (
+        "fail", "x: due 15 min ago and not started; no job-runner replica has beaten for 10 min")
+    assert _said(cells, "job/later") == ("ok", "later: last ok 60 min ago; next slot in 5.0 h")
+    assert _said(cells, "job-runner") == ("warn", no_beat)
+
+    _runner_beat(cur, "r1", "0 minutes")  # (b) and (e)
+    cells = _liveness(cur)[3]
+    assert _said(cells, "job/x") == ("warn", "x: due 15 min ago and not started")
+    assert _said(cells, "job/asked") == ("warn", "asked: requested by github:op 15 min ago and not started")
+    assert _said(cells, "job/asked_now") == ("ok", "asked_now: requested by github:op 9 min ago; starting")
+    assert _said(cells, "job-runner") == ("ok", "job-runner: 1 replicas beating; 4 jobs registered")
+
+    cur.execute("update worker_heartbeats set beat_at = now() - interval '20 minutes' "
+                "where worker = 'job-runner/r1'")  # (c) only a stale beat
+    cells = _liveness(cur)[3]
+    assert _said(cells, "job/x")[0] == "fail"
+    assert _said(cells, "worker/job-runner/r1")[0] == "fail"
+    assert _said(cells, "job-runner") == ("warn", no_beat)
+    # (f) no new subject under worker/: a filter on that prefix sees the replicas only
+    assert {s for s in cells if s.startswith("worker")} == {"worker/job-runner/r1"}
+
+
+def test_an_entry_a_replica_refused_at_boot_is_a_problem(cur):
+    """C8: a refused entry runs nowhere, so it gets its own cell even with no row."""
+    _runner_beat(cur, "r1", "0 minutes", skipped=("ghost", "x"))
+    _job(cur, "x", due="5 hours")
+
+    cells = _liveness(cur)[3]
+
+    assert _said(cells, "job/ghost") == (
+        "fail", "ghost: refused at boot by job-runner/r1 (JOBS skip in its log): it has no row and runs nowhere")
+    assert _said(cells, "job/x") == (
+        "fail", "x: refused at boot by job-runner/r1 (JOBS skip in its log): no replica claims it")
+
+
+def test_a_paused_job_reads_ok_unless_the_pause_outlasts_a_cycle(cur):
+    """C9: a pause suppresses late, failing and a recorded timeout; a request still runs and is judged in flight."""
+    _runner_beat(cur, "r1", "0 minutes")
+    _job(cur, "p_failing", due="-66 hours", last_ok="3 days", failures=3, last_outcome="failed", last_error="exit 1",
+         paused="2 days")
+    _run(cur, "p_failing", started="3 days 1 minute", ended="3 days", outcome="ok", exit_code=0)
+    for ago in ("71 hours", "70 hours", "69 hours"):
+        _run(cur, "p_failing", started=ago, ended=f"{ago} -1 minute", outcome="failed", exit_code=1)
+    _job(cur, "p_request", due="1 day", last_ok="1 hour", paused="1 day")
+    _run(cur, "p_request", started="61 minutes", ended="1 hour", outcome="ok", exit_code=0)
+    _run(cur, "p_request", started="840 seconds", requested_by="github:op", holder="h/9")
+    for name, paused in (("p_30d", "30 days"), ("p_6d", "6 days")):
+        _job(cur, name, due="5 hours", last_ok="1 hour", paused=paused)
+        _run(cur, name, started="61 minutes", ended="1 hour", outcome="ok", exit_code=0)
+
+    cells = _liveness(cur)[3]
+
+    assert _said(cells, "job/p_failing") == (
+        "ok", "p_failing: paused for 2 d more by test: drill; its last run failed: exit 1")
+    assert _said(cells, "job/p_request") == ("warn", "p_request: running for 14 min of its 20 min budget")
+    assert _said(cells, "job/p_30d") == (
+        "warn", "p_30d: paused for 30 d more by test, longer than a cycle: its slots are skipped until then (drill)")
+    assert _said(cells, "job/p_6d") == ("ok", "p_6d: paused for 6 d more by test: drill")
+
+
+def test_an_open_job_incident_recovers_once_its_row_retires(cur):
+    """C10 (guard on 675's recovery arm): a job/<name> incident whose row is gone reads 'no longer failing'."""
+    _runner_beat(cur, "r1", "0 minutes")
+    _job(cur, "x", retired=True)
+    _incident(cur, "cell:liveness:job/x")
+
+    cells = _liveness(cur)[3]
+
+    assert _said(cells, "job/x") == ("ok", "no longer failing")
+    assert "job-runner" not in cells
+
+
+def test_a_raising_job_arm_costs_only_its_cells_and_keeps_its_incidents_open(cur):
+    """C11: the arm's subtransaction keeps every other cell; each open job incident gets a listed 'unknown' cell, which
+    the teller neither keeps, recovers nor retires, and 'job-cells' keeps the row 'fail', never 'unknown'."""
+    from tests.toolkit.test_system_alerts import _FakeConn as _Ladder
+    from toolkit.system_alerts import reconcile
+
+    _beat(cur, "liveness-test-fresh", "0 minutes")
+    _health_beat(cur, passed="1 minute")
+    _job(cur, "x", due="5 hours")
+    _incident(cur, "cell:liveness:job/x")
+    _incident(cur, "cell:liveness:job-runner")
+    cur.execute("create or replace function public.health_job_cells(p_dead interval) returns jsonb "
+                "language plpgsql as $$ begin raise exception 'boom'; end $$")
+
+    status, _value, details, cells = _liveness(cur)
+
+    assert status == "fail"
+    assert {"worker/liveness-test-fresh", "worker/realtime-worker", "health_lane"} <= set(cells)
+    [arm] = cells["job-cells"]
+    assert (arm["status"], arm["message"], arm["facts"]) == (
+        "fail", "the job cells could not be computed: boom", {"sqlstate": "P0001"})
+    assert _said(cells, "job/x") == ("unknown", "job/x: not judged: the job cells could not be computed")
+    assert _said(cells, "job-runner") == ("unknown", "job-runner: not judged: the job cells could not be computed")
+
+    cur.execute("select run_at from pipeline_check_results where check_key = 'liveness' order by run_at desc, id desc "
+                "limit 1")
+    (run_at,) = cur.fetchone()
+    ladder = _Ladder()
+    ladder.register("liveness", cls="alarm", cadence_s=300, budget_s=900)
+    ladder.result("liveness", run_at, status, cells=details["cells"])
+    for subject in ("job/x", "job-runner"):
+        ladder.seed("liveness", subject, first=run_at - _dt.timedelta(hours=1))
+    counts = reconcile(ladder, now=run_at)
+    assert counts["closed_silently"] == 0 and counts["recovered"] == 0
+    assert {i["signature"] for i in ladder.open_incidents()} == {
+        "cell:liveness:job/x", "cell:liveness:job-runner", "cell:liveness:job-cells"}
+
+
+def test_a_job_problem_reaches_the_canary_unchanged(cur):
+    """C12 (AC4): the canary's own read and assertion see a failing job cell as any liveness cell."""
+    from scripts import health_canary
+
+    _runner_beat(cur, "r1", "0 minutes")
+    _job(cur, "x", due="1 minute", last_ok="2 hours", failures=3, last_outcome="failed", last_error="exit 1")
+    _run(cur, "x", started="121 minutes", ended="2 hours", outcome="ok", exit_code=0)
+    for started in ("61 minutes", "30 minutes", "5 minutes"):
+        _run(cur, "x", started=started, ended=f"{started} -60 seconds", outcome="failed", exit_code=1)
+    assert _said(_liveness(cur)[3], "job/x")[0] == "fail"
+    cur.execute("insert into pipeline_check_results (run_at, check_key, status, value, details) "
+                "select now() - interval '20 minutes', check_key, status, value, details from pipeline_check_results "
+                "where check_key = 'liveness' order by id desc limit 1")
+    cur.execute("select now()")
+    (now,) = cur.fetchone()
+
+    def told() -> list[str]:
+        cur.execute(health_canary._CELLS_SQL, {"since": now - _dt.timedelta(minutes=health_canary.LIVENESS_STALE_MIN)})
+        rows = cur.fetchall()
+        return health_canary.failing_cells_have_incidents([r[:3] for r in rows], rows[0][3], now)
+
+    assert told() == ["liveness cell job/x has failed for at least 20 min with no open incident: the API's teller is "
+                      "not running"]
+    _incident(cur, "cell:liveness:job/x")
+    assert told() == []
+
+
+def test_migration_682_post_condition_holds_keeps_one_liveness_row_and_leaves_no_probe(cur):
+    _beat(cur, "liveness-test-fresh", "0 minutes")
+    cur.execute(_statement("do $post$", "$post$;", _MIGRATION_682))
+    cur.execute("select count(*) from pipeline_check_results where check_key = 'liveness'")
+    assert cur.fetchone()[0] == 1
+    cur.execute("select (select count(*) from scheduled_jobs where job_name = '_682_probe'), "
+                "(select count(*) from job_runs where job_name = '_682_probe')")
+    assert cur.fetchone() == (0, 0)
+
+
+def test_migration_682_post_condition_refuses_a_watcher_without_the_job_cells(cur):
+    """The guard bites: 675's body, re-created inside the test's transaction, judges no scheduled job."""
+    import psycopg
+
+    cur.execute(_statement("create or replace function public.health_liveness()", "$fn$;", _MIGRATION_675))
+    with pytest.raises(psycopg.errors.RaiseException,
+                       match="682: health_liveness\\(\\) does not judge the scheduled jobs"):
+        with cur.connection.transaction():
+            cur.execute(_statement("do $post$", "$post$;", _MIGRATION_682))
+
+
+def test_migration_682_precondition_takes_675s_body_or_its_own_and_refuses_a_drift(cur):
+    """Fail-closed: a live watcher that is neither 675's body nor 682's (a re-run) is never regressed."""
+    import psycopg
+
+    pre = _statement("do $pre$", "$pre$;", _MIGRATION_682)
+    cur.execute(pre)  # 682's own body is live: a re-run
+    watcher_675 = _statement("create or replace function public.health_liveness()", "$fn$;", _MIGRATION_675)
+    cur.execute(watcher_675)
+    cur.execute(pre)
+    drifted = watcher_675.replace("-- The worker beats every 30 s", "-- The worker beats every 30 s.", 1)
+    assert drifted != watcher_675
+    cur.execute(drifted)
+    with pytest.raises(psycopg.errors.RaiseException, match="682 refused: health_liveness\\(\\) is neither"):
+        with cur.connection.transaction():
+            cur.execute(pre)
