@@ -1185,7 +1185,7 @@ def test_migration_682_first_apply_takes_a_re_stamped_join_back_to_the_rows_firs
         _run(cur, "pr2", started=started, ended=ended, outcome="failed", exit_code=1)
     _job(cur, "after", joined="2 hours", last_ok="1 hour", last_outcome="ok")  # every run since its join: untouched
     _run(cur, "after", started="70 minutes", ended="1 hour", outcome="ok", exit_code=0)
-    _job(cur, "gone", joined="30 minutes", retired="10 minutes")  # retired: not the runner's, untouched
+    _job(cur, "gone", joined="3 hours", retired="2 hours")  # retired an hour or more: not the runner's, untouched
     _run(cur, "gone", started="3 days", ended="3 days", outcome="ok", exit_code=0)
 
     def joined() -> dict[str, Any]:
@@ -1195,7 +1195,7 @@ def test_migration_682_first_apply_takes_a_re_stamped_join_back_to_the_rows_firs
     _apply_682(cur)
 
     assert joined() == {"pr2": _dt.timedelta(hours=32, minutes=10), "after": _dt.timedelta(hours=2),
-                        "gone": _dt.timedelta(minutes=30)}
+                        "gone": _dt.timedelta(hours=3)}
     assert _said(_liveness(cur)[3], "job/pr2") == (
         "fail", "pr2: 5 failed runs in a row, the first 30.0 h ago; the last: exit 1")
 
@@ -1207,3 +1207,33 @@ def test_migration_682_first_apply_takes_a_re_stamped_join_back_to_the_rows_firs
     assert joined()["reland"] == _dt.timedelta(hours=2)
     cur.execute("select ctid::text from scheduled_jobs where job_name = 'reland'")
     assert cur.fetchone() == before, "a re-run writes no runner row"
+
+
+def test_migration_682_first_apply_heals_a_row_an_older_images_blink_has_retired(cur: Any) -> None:
+    """PR-2 before 682 (review, round 4): an older image booted 20 min before the apply and retired a row failing for
+    30 h that main's register had re-stamped at the latest boot, 50 min ago. The heal takes the trigger's own keep line,
+    so it joins that row at its first run too, and the latest image's next boot (main's register: it re-stamps)
+    un-retires it with that join: a Problem, never "registered again", ok, until a run closes 30 or 91 d on."""
+    _runner_beat(cur, "r1", "0 minutes")
+    cur.execute("drop trigger scheduled_jobs_keep_registry_at on scheduled_jobs")  # as before the first apply
+    for name, retired in (("blink", "20 minutes"), ("live", None)):
+        _job(cur, name, due="5 hours", last_ok="32 hours", failures=5, last_outcome="failed", last_error="exit 1",
+             joined="50 minutes", retired=retired)
+        _run(cur, name, started="32 hours 10 minutes", ended="32 hours", outcome="ok", exit_code=0)
+        for ago in (30, 24, 18, 12, 6):
+            _run(cur, name, started=f"{ago} hours", ended=f"{ago} hours -5 minutes", outcome="failed", exit_code=1)
+    _job(cur, "gone", joined="3 hours", retired="2 hours")  # retired an hour or more: its un-retire re-lands it
+    _run(cur, "gone", started="3 days", ended="3 days", outcome="ok", exit_code=0)
+
+    _apply_682(cur)
+    cur.execute("insert into scheduled_jobs (job_name, cadence, runner) select n, '6 hours', 'job-runner' "
+                "from unnest(array['blink', 'live']) n "
+                "on conflict (job_name) do update set registry_at = now(), retired_at = null")  # main's re-stamp
+
+    cur.execute("select job_name, now() - registry_at from scheduled_jobs")
+    assert dict(cur.fetchall()) == {"blink": _dt.timedelta(hours=32, minutes=10),
+                                    "live": _dt.timedelta(hours=32, minutes=10), "gone": _dt.timedelta(hours=3)}
+    cells = _liveness(cur)[3]
+    for name in ("blink", "live"):
+        assert _said(cells, f"job/{name}") == (
+            "fail", f"{name}: 5 failed runs in a row, the first 30.0 h ago; the last: exit 1")

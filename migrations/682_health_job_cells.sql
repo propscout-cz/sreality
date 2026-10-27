@@ -14,8 +14,8 @@
 --     blink) and kept by every later boot (job_lease._REGISTER_SQL), and the database keeps it too, so an image that
 --     re-stamps it on every boot (main's job_lease before #2026, or a revert) cannot move it. To move a live row's
 --     registry_at on purpose, set its retired_at an hour back first.
---   * The first apply's heal: a live runner row whose runs began before its registry_at (re-stamped by main's
---     register, #2025 PR-2 deployed first) joins at its first run.
+--   * The first apply's heal: a live runner row, or one retired under an hour (a blink), whose runs began before its
+--     registry_at (re-stamped by main's register, #2025 PR-2 deployed first) joins at its first run.
 --   * public.health_span(double precision): a duration as Health reads it. Reads nothing.
 --   * public.health_job_cells(interval): one job/<name> cell per registered live job-runner row (_DUE_SQL's predicate:
 --     runner 'job-runner', registry_at set, retired_at null), judged on its runs since registry_at and ok until the
@@ -33,9 +33,9 @@
 -- APPLY through apply_migration.yml (--ref the feature branch) before merging, and before #2025 PR-2's first deploy
 -- whichever merges first: the deployed code reads nothing this changes, and with no registered job-runner row the
 -- helper writes no cell. Before this PR's job_lease deploys (or after a revert of it), register re-stamps registry_at
--- on every boot: the trigger keeps it. Applied after PR-2's deploy, the heal joins each live runner row at its first
--- run; a row PR-2 reverted and re-landed before the apply is then judged on its runs from before the revert too (a
--- Problem until a run since closes, never a false ok).
+-- on every boot: the trigger keeps it. Applied after PR-2's deploy, the heal joins each live runner row, and each one
+-- an older image retired under an hour ago, at its first run; a row PR-2 reverted and re-landed before the apply is
+-- then judged on its runs from before the revert too (a Problem until a run since closes, never a false ok).
 -- The post-condition runs the helper over a rolled-back probe row, so every per-row expression is evaluated at
 -- apply, and re-stamps that row to prove the trigger keeps its registry_at.
 -- ROLLBACK: forward only (rule 1). Every statement is idempotent: a re-run passes the precondition (this file's own
@@ -61,11 +61,14 @@ $pre$;
 -- (2025-plan decision 13's fallback), main's register re-stamped registry_at on every boot, so each live runner row
 -- would read as joined at its last boot before this apply, its streak, timeout and clock unjudged. Every run on record
 -- is its own (PR-2's rows were born at its first boot, and only the runner writes job_runs): its join goes back to its
--- first run. Skipped once the trigger exists, so a re-run writes no runner row (the trigger would keep each join).
+-- first run. The trigger's keep line: a row an older image retired under an hour ago is healed too, as the latest
+-- image's next boot un-retires it with this join (a blink). Skipped once the trigger exists, so a re-run writes no
+-- runner row (the trigger would keep each join).
 update public.scheduled_jobs j
    set registry_at = r.first_at
   from (select job_name, min(started_at) as first_at from public.job_runs group by job_name) r
- where r.job_name = j.job_name and j.runner = 'job-runner' and j.registry_at is not null and j.retired_at is null
+ where r.job_name = j.job_name and j.runner = 'job-runner' and j.registry_at is not null
+   and (j.retired_at is null or j.retired_at > now() - make_interval(secs => 3600))
    and r.first_at < j.registry_at
    and not exists (select 1 from pg_trigger t where t.tgrelid = 'public.scheduled_jobs'::regclass
                       and t.tgname = 'scheduled_jobs_keep_registry_at');

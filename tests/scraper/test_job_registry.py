@@ -694,6 +694,8 @@ def test_the_registry_at_trigger_and_the_register_share_one_rejoin_line() -> Non
     line = f"make_interval(secs => {job_lease.REJOIN_AFTER_S})"
     assert f"old.retired_at > now() - {line}" in trigger
     assert f"s.retired_at <= now() - {line}" in job_lease._REGISTER_SQL
+    heal = sql[sql.index("update public.scheduled_jobs j"):sql.index("create or replace function public.scheduled_jobs")]
+    assert f"j.retired_at > now() - {line}" in heal, "the first apply heals what the trigger keeps"
 
 
 def test_the_watcher_precondition_pins_675s_body_and_its_own() -> None:
