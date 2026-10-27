@@ -266,19 +266,25 @@ def test_the_map_is_gone_from_the_audit_page() -> None:
             assert gone not in text, f"{rel} still names {gone}"
 
 
-def test_the_audit_page_is_routed_and_leads_the_nav() -> None:
-    """513 unrouted the page. It comes back as the FIRST top-level nav entry with
-    its count — the badge is a work queue that counts down on its own."""
+def test_the_audit_page_is_routed_and_leads_the_admin_menu() -> None:
+    """513 unrouted the page. It comes back as the FIRST item of the Admin menu, its
+    count on the Admin trigger (ruling P33) — the badge is a work queue that counts
+    down on its own."""
     routes = (REPO / "frontend" / "src" / "lib" / "routes.ts").read_text(encoding="utf-8")
     assert "newDedupPinAudit: def('/new-dedup/pin-audit')" in routes
     assert "ROUTES.newDedupPinAudit.childPath" in (
         REPO / "frontend" / "src" / "routes.tsx"
     ).read_text(encoding="utf-8")
     shell = (REPO / "frontend" / "src" / "components" / "Shell.tsx").read_text(encoding="utf-8")
-    start = shell.index("const navItems")
-    nav = shell[start: shell.index("];", start)]
-    assert nav.index("'!AUDIT POLOH'") < nav.index("'Browse'"), (
-        "!AUDIT POLOH is no longer the first nav entry"
+
+    def block(name: str) -> str:
+        start = shell.index(f"const {name}")
+        return shell[start: shell.index("];", start)]
+
+    assert "'!AUDIT POLOH'" not in block("navItems"), "!AUDIT POLOH is back in the top row"
+    admin = block("adminItems")
+    assert admin.index("'!AUDIT POLOH'") < admin.index("'Health'"), (
+        "!AUDIT POLOH is no longer the first Admin menu item"
     )
 
 

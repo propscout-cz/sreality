@@ -35,10 +35,9 @@ export interface RouteTitleHandle {
   title?: string;
 }
 
-/** "PS: <segment>", or the bare app name when there is no segment. */
+/** The segment alone (the tab's PS favicon already says whose it is), or the bare app name when there is no segment. */
 export function formatTitle(segment: string | null | undefined): string {
-  const trimmed = segment?.trim();
-  return trimmed ? `${APP_SHORT}: ${trimmed}` : APP_NAME;
+  return segment?.trim() || APP_NAME;
 }
 
 /* An override is keyed by the path that set it, so a value left behind by a

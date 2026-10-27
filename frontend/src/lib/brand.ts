@@ -24,7 +24,7 @@
 
 export const APP_NAME = 'PropScout.cz';
 
-/** Abbreviation used as the browser-tab title prefix ("PS: …"). */
+/** Abbreviation for tight spots (the phone shell's header fallback); the tab title carries no prefix. */
 export const APP_SHORT = 'PS';
 
 /** chrome://extensions display name — brand + what the panel does. */

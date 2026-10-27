@@ -1514,9 +1514,7 @@ def _build_registry() -> dict[str, FilterDef]:
                 "(`pozemek`) alike. Reads the `plot_area_m2` measure, which is "
                 "`area_m2` for land and `estate_area` otherwise — not the "
                 "`estate_area` column, which four portals leave null on land. "
-                "Apartments usually have no plot at all. A stated plot under 10 m² "
-                "or over 1 000 000 m² (100 ha) is a portal artefact and reads as no "
-                "plot (migration 680), so it matches no bound."
+                "Apartments usually have no plot at all."
             ),
             category=CATEGORY_PROPERTY,
             ui_control=UiControl.RANGE_INPUTS,
@@ -1951,11 +1949,7 @@ def _build_registry() -> dict[str, FilterDef]:
                 "overall'); positive = total rise of at least that much "
                 "(`>= X`). Zero is treated as unset. Properties with fewer "
                 "than two price points across that lineage, or an unpriced "
-                "canonical listing, are excluded when set. A placeholder price "
-                "(under 10 000 CZK for a sale, auction or share, under 500 CZK for "
-                "a rent, e.g. 1 CZK standing in for 'price on request') is not a "
-                "price point: it neither opens nor closes the span, and a shown "
-                "placeholder means no change."
+                "canonical listing, are excluded when set."
             ),
             category=CATEGORY_VELOCITY,
             ui_control=UiControl.NUMBER_INPUT,

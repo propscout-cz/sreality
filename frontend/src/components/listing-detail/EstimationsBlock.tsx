@@ -123,7 +123,7 @@ export default function EstimationsBlock({
   return (
     <>
       {!bare && <Hairline />}
-      <section id="estimations" ref={sectionRef} className="scroll-mt-6">
+      <section id="estimations" ref={sectionRef} className="scroll-mt-28">
         <div className="flex items-baseline justify-between">
           <SectionLabel>{label}</SectionLabel>
           <p className="text-[0.7rem] tracking-wide text-[var(--color-ink-4)] font-mono tabular-nums">

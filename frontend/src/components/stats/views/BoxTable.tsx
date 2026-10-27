@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react';
+import { memo, useId, useMemo, type ReactNode } from 'react';
 import { valueAxisSpec } from '@/lib/chartAxis';
 import { fmtCount } from '@/lib/format';
 import {
@@ -45,8 +45,18 @@ interface Tick {
  * rollup, n per row, the box on one shared axis, and the mean plus the five
  * numbers it draws as columns of the same table — no tooltip, the numbers are
  * right there. A row under the minimum shows its n and the dashed mark, never
- * a box. */
-function BoxTable({ pivot, showSmall = false }: { pivot: StatsPivot; showSmall?: boolean }) {
+ * a box. The legend names the table; a `notice` sits between it and the column
+ * heads, outside the table's name and its sideways scroll (ruling S09). */
+function BoxTable({
+  pivot,
+  showSmall = false,
+  notice,
+}: {
+  pivot: StatsPivot;
+  showSmall?: boolean;
+  notice?: ReactNode;
+}) {
+  const legendId = useId();
   const { spec, basis } = pivot;
   const rows = useMemo(() => pivotRows(pivot), [pivot]);
   /* The shared scale, its ticks placed once for the header and every row. */
@@ -61,73 +71,76 @@ function BoxTable({ pivot, showSmall = false }: { pivot: StatsPivot; showSmall?:
   const fmt = statFormat(spec.measure);
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-[0.8rem]">
-        <caption className="caption-top pb-2 text-left text-[0.7rem] text-[var(--color-ink-3)]">
-          <span className="font-medium text-[var(--color-ink-2)]">{quantityLabel(spec.measure, basis)}</span>{' '}
-          — vousy p10–p90, krabice p25–p75, čára medián
-        </caption>
-        <thead>
-          <tr className="border-b border-[var(--color-rule)]">
-            <th scope="col" className={ROW_DIM_TH}>
-              {rowDimsLabel(spec, basis)}
-            </th>
-            <th scope="col" className={NUM_TH}>n</th>
-            <th scope="col" className="min-w-[12rem] w-full px-3 py-1.5 align-bottom">
-              <span className="sr-only">Rozložení</span>
-              <span aria-hidden="true" className="relative block h-4">
-                {scale?.ticks.map((t) => (
-                  <span
-                    key={t.value}
-                    data-tick={t.value}
-                    className="absolute bottom-0 font-mono tabular-nums text-[0.62rem] font-normal text-[var(--color-ink-3)] whitespace-nowrap"
-                    style={{ left: `${t.at}%`, transform: `translateX(${tickShift(t.at)})` }}
-                  >
-                    {t.label}
-                  </span>
-                ))}
-              </span>
-            </th>
-            {COLUMNS.map((q) => (
-              <th key={q} scope="col" className={NUM_TH}>
-                {STAT_LABEL[q]}
+    <>
+      <p id={legendId} className="pb-2 text-left text-[0.7rem] text-[var(--color-ink-3)]">
+        <span className="font-medium text-[var(--color-ink-2)]">{quantityLabel(spec.measure, basis)}</span>{' '}
+        — vousy p10–p90, krabice p25–p75, čára medián
+      </p>
+      {notice}
+      <div className="overflow-x-auto">
+        <table aria-labelledby={legendId} className="w-full text-[0.8rem]">
+          <thead>
+            <tr className="border-b border-[var(--color-rule)]">
+              <th scope="col" className={ROW_DIM_TH}>
+                {rowDimsLabel(spec, basis)}
               </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => {
-            const cell = row.cells.get('');
-            const small = showSmall && !isDrawn(cell) ? cell?.small ?? null : null;
-            return (
-              <PivotRow key={row.key} row={row} small={small != null}>
-                <td className={`${NUM_TD} text-[var(--color-ink-3)]`}>{fmtCount(cell?.n ?? 0)}</td>
-                {isDrawn(cell) && scale ? (
-                  <>
-                    <td className="px-3 py-1.5">
-                      <Box cell={cell} ticks={scale.ticks} pos={scale.pos} />
-                    </td>
-                    {COLUMNS.map((q) => (
-                      <td key={q} className={statTd(q)}>
-                        {cell[q] == null ? '—' : fmt(cell[q])}
+              <th scope="col" className={NUM_TH}>n</th>
+              <th scope="col" className="min-w-[12rem] w-full px-3 py-1.5 align-bottom">
+                <span className="sr-only">Rozložení</span>
+                <span aria-hidden="true" className="relative block h-4">
+                  {scale?.ticks.map((t) => (
+                    <span
+                      key={t.value}
+                      data-tick={t.value}
+                      className="absolute bottom-0 font-mono tabular-nums text-[0.62rem] font-normal text-[var(--color-ink-3)] whitespace-nowrap"
+                      style={{ left: `${t.at}%`, transform: `translateX(${tickShift(t.at)})` }}
+                    >
+                      {t.label}
+                    </span>
+                  ))}
+                </span>
+              </th>
+              {COLUMNS.map((q) => (
+                <th key={q} scope="col" className={NUM_TH}>
+                  {STAT_LABEL[q]}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const cell = row.cells.get('');
+              const small = showSmall && !isDrawn(cell) ? cell?.small ?? null : null;
+              return (
+                <PivotRow key={row.key} row={row} small={small != null}>
+                  <td className={`${NUM_TD} text-[var(--color-ink-3)]`}>{fmtCount(cell?.n ?? 0)}</td>
+                  {isDrawn(cell) && scale ? (
+                    <>
+                      <td className="px-3 py-1.5">
+                        <Box cell={cell} ticks={scale.ticks} pos={scale.pos} />
                       </td>
-                    ))}
-                  </>
-                ) : small ? (
-                  <td colSpan={1 + COLUMNS.length} className="px-3 py-1.5 text-right">
-                    <SmallStats small={small} fmt={fmt} />
-                  </td>
-                ) : (
-                  <td colSpan={1 + COLUMNS.length} className="px-3 py-1.5">
-                    <TooFew minN={pivot.min_n} />
-                  </td>
-                )}
-              </PivotRow>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+                      {COLUMNS.map((q) => (
+                        <td key={q} className={statTd(q)}>
+                          {cell[q] == null ? '—' : fmt(cell[q])}
+                        </td>
+                      ))}
+                    </>
+                  ) : small ? (
+                    <td colSpan={1 + COLUMNS.length} className="px-3 py-1.5 text-right">
+                      <SmallStats small={small} fmt={fmt} />
+                    </td>
+                  ) : (
+                    <td colSpan={1 + COLUMNS.length} className="px-3 py-1.5">
+                      <TooFew minN={pivot.min_n} />
+                    </td>
+                  )}
+                </PivotRow>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 

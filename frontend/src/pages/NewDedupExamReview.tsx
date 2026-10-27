@@ -15,6 +15,7 @@ import {
 import { fetchImagesByImageIds } from '@/lib/queries';
 import { imageSrc } from '@/lib/imageUrl';
 import { splitTagLabel } from '@/lib/tagLabel';
+import SizeToggle, { type SizeStep } from '@/components/SizeToggle';
 import Spinner from '@/components/Spinner';
 import ErrorBanner from '@/components/ErrorBanner';
 import { useOptimisticWrite } from '@/lib/useOptimisticWrite';
@@ -37,6 +38,11 @@ import { useOptimisticWrite } from '@/lib/useOptimisticWrite';
  */
 
 type PhotoSize = 's' | 'm' | 'l';
+const PHOTO_STEPS: ReadonlyArray<SizeStep<PhotoSize>> = [
+  { value: 's', label: 'S' },
+  { value: 'm', label: 'M' },
+  { value: 'l', label: 'L' },
+];
 
 /* Per-viewer convenience only — safe to lose. localStorage can throw (blocked
  * site data), so both sides are guarded and 's' is the working fallback. */
@@ -302,23 +308,9 @@ export default function NewDedupExamReview() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <span className="flex items-center gap-1" role="group" aria-label="photo size">
+          <span className="flex items-center gap-1">
             <span className="text-[0.65rem] tracking-[0.1em] uppercase text-[var(--color-ink-4)] mr-0.5">photo</span>
-            {(['s', 'm', 'l'] as const).map((v) => (
-              <button
-                key={v}
-                type="button"
-                onClick={() => pickPhotoSize(v)}
-                aria-pressed={photoSize === v}
-                className={`px-2 py-1 text-xs uppercase rounded-[var(--radius-sm)] border ${
-                  photoSize === v
-                    ? 'border-[var(--color-ink-2)] text-[var(--color-ink)]'
-                    : 'border-[var(--color-rule)] text-[var(--color-ink-3)] hover:text-[var(--color-ink)]'
-                }`}
-              >
-                {v}
-              </button>
-            ))}
+            <SizeToggle label="photo size" steps={PHOTO_STEPS} value={photoSize} onChange={pickPhotoSize} />
           </span>
           <Link to={backToExam} className="text-xs text-[var(--color-copper)] hover:underline">
             ← back to the exam

@@ -239,11 +239,8 @@ export default function WatchdogEdit() {
 function Header() {
   return (
     <header>
-      <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-        Watchdog
-      </p>
       <h1
-        className="mt-1.5 text-[2.1rem] leading-tight"
+        className="text-[2.1rem] leading-tight"
         style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
       >
         Edit watchdog
