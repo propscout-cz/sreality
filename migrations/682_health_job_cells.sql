@@ -7,7 +7,8 @@
 --   liveness cell, so a job's Problem opens an incident and e-mails through the existing canary (ruling R-1).
 --
 -- WHAT CHANGES. Additive only: three new functions, one trigger and one function replace. No table, column, view or
--- grant; the one row write is the first apply's heal below, which finds no row in the planned order.
+-- grant. Rows written: the first apply's heal below (none in the planned order), and on every apply the post-condition's
+-- one liveness row, kept as 620's to 675's were.
 --   * public.scheduled_jobs_keep_registry_at() and its BEFORE UPDATE OF registry_at trigger on scheduled_jobs:
 --     registry_at is when a row joined the runner, stamped when it is new, adopted (NULL: a lane's held() row) or
 --     un-retired an hour or more after its retirement (job_lease.REJOIN_AFTER_S; a shorter one is an older image's
