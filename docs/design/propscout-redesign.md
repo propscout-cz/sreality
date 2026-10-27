@@ -40,6 +40,8 @@ fetch these links with curl or WebFetch.
 5. **Agendas 2–8** (every other confirmed ruling): built on branch `feature/redesign-rulings`, one commit per
    agenda; the as-built notes are under "What to build next". Not built: the render-scoring removal and the
    unruled additions (both below).
+6. **Tab strips** (operator ruling 2026-10-27: option A, a rule across the column): one `components/Tabs.tsx`,
+   built on branch `feature/shared-controls`; the binding pattern is `.interface-design/system.md` § Tab strip.
 
 ## How this operator wants design work done
 

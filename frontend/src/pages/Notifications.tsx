@@ -38,6 +38,7 @@ import { useInfiniteList } from '@/lib/useInfiniteList';
 import { fmtAbsolute, fmtCount, fmtCzk, fmtRelative } from '@/lib/format';
 import { listingKindLabel } from '@/lib/enums';
 import InfiniteSentinel from '@/components/InfiniteSentinel';
+import { SegmentedBar, type SegmentOption } from '@/components/controls';
 import type {
   DispatchChangeKind,
   NotificationSourceKind,
@@ -67,16 +68,18 @@ const CHANGE_META: Record<DispatchChangeKind, { label: string; dot: string }> = 
   shared_pipeline:   { label: 'Shared pipeline',   dot: 'var(--color-ink-3)' },
 };
 
-const SOURCE_TABS: ReadonlyArray<{ key: SourceFilter; label: string }> = [
-  { key: 'all', label: 'All' },
-  { key: 'collection_monitor', label: 'Monitoring' },
-  { key: 'watchdog', label: 'Watchdogs' },
-  { key: 'share', label: 'Shared' },
+/* The two filters each pick one: the one joined bar (SegmentedBar), in the phone
+ * tone inside the phone frame (chosen = ink on the inset well, never copper). */
+const SOURCE_OPTS: ReadonlyArray<SegmentOption<SourceFilter>> = [
+  { value: 'all', label: 'All' },
+  { value: 'collection_monitor', label: 'Monitoring' },
+  { value: 'watchdog', label: 'Watchdogs' },
+  { value: 'share', label: 'Shared' },
 ];
 
-const SEEN_TABS: ReadonlyArray<{ key: WatchdogSeenFilter; label: string }> = [
-  { key: 'all', label: 'All' },
-  { key: 'unseen', label: 'Unread' },
+const SEEN_OPTS: ReadonlyArray<SegmentOption<WatchdogSeenFilter>> = [
+  { value: 'all', label: 'All' },
+  { value: 'unseen', label: 'Unread' },
 ];
 
 export default function Notifications() {
@@ -117,6 +120,7 @@ export default function Notifications() {
   // phone frame: the title is its header's, beside the bell that has the count.
   const phone = usePhoneShell();
   usePageTitle(!phone && unread > 0 ? `Notifications (${unread > 99 ? '99+' : unread})` : null);
+  const tone = phone ? 'phone' : 'desktop';
 
   return (
     <div className="px-6 py-8 max-w-5xl mx-auto max-md:px-4 max-md:pt-5 max-md:pb-6">
@@ -127,8 +131,8 @@ export default function Notifications() {
       />
 
       <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-3 max-md:mt-4 max-md:gap-y-2">
-        <Tabs<SourceFilter> tabs={SOURCE_TABS} value={source} onChange={setSource} />
-        <Tabs<WatchdogSeenFilter> tabs={SEEN_TABS} value={seen} onChange={setSeen} />
+        <SegmentedBar hug tone={tone} label="Source" options={SOURCE_OPTS} value={source} onChange={setSource} />
+        <SegmentedBar hug tone={tone} label="Read state" options={SEEN_OPTS} value={seen} onChange={setSeen} />
       </div>
 
       <div className="mt-7 max-md:mt-4">
@@ -204,39 +208,6 @@ function Header({
         {markAllPending ? 'Marking…' : 'Mark all read'}
       </button>
     </header>
-  );
-}
-
-function Tabs<T extends string>({
-  tabs,
-  value,
-  onChange,
-}: {
-  tabs: ReadonlyArray<{ key: T; label: string }>;
-  value: T;
-  onChange: (v: T) => void;
-}) {
-  return (
-    <div className="inline-flex items-center gap-1 max-md:flex-wrap">
-      {tabs.map((t) => {
-        const active = t.key === value;
-        return (
-          <button
-            key={t.key}
-            type="button"
-            onClick={() => onChange(t.key)}
-            className={[
-              'px-2.5 py-1 text-[0.78rem] rounded-[var(--radius-sm)] transition-colors max-md:h-9 max-md:px-3 max-md:py-0 max-md:text-[13px]',
-              active
-                ? 'bg-[var(--color-copper-soft)] text-[var(--color-copper)]'
-                : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
-            ].join(' ')}
-          >
-            {t.label}
-          </button>
-        );
-      })}
-    </div>
   );
 }
 

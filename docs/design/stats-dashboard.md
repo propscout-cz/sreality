@@ -149,8 +149,9 @@ byty-only dimension) and the first save persists the whole list. A board holds a
   width), Uložit / Zrušit. A table or box whose every cell is under the floor says so once above the table, with
   "Zobrazit malé vzorky", which turns the tab's switch on (ruling S09; `lib/stats` `everyCellUnderMin`).
 - `components/stats/ChartBuilder.tsx`: a palette of dimension chips grouped (Vlastnost · Cena · Místo ·
-  Vybavení), the shelves Řádky (six slots, sortable) and Sloupce (one), the Hodnota well, the view picker and
-  the statistic picker (a multi-select: line, bar and a table with a column; the first pick leads, the last
+  Vybavení), the shelves Řádky (six slots, sortable) and Sloupce (one), the Hodnota well, the view picker (both
+  pick-ones, so each the joined `SegmentedBar`; a view the shelves rule out is a disabled segment, its reason
+  its hover box and the line under the bar) and the statistic picker (a multi-select of chips: line, bar and a table with a column; the first pick leads, the last
   one cannot be unpicked — `lib/stats.toggleStat`). Drag with dnd-kit (mouse; a long press on touch, so
   the palette still scrolls on a phone; the row grip also sorts from the keyboard); every drop also has a click
   path (a chip click appends to Řádky; a slot's × removes) so the keyboard works. Rules enforced in the UI exactly as in the registry: a

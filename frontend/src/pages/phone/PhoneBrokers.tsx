@@ -16,7 +16,8 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import BottomSheet from '@/components/phone/BottomSheet';
 import DayRule from '@/components/phone/DayRule';
 import { RollEmpty } from '@/components/phone/RollParts';
-import { CHIP, CHIP_DIVIDER, CHIP_MD, CHIP_ROW, CHIP_SM, chipState } from '@/components/phone/chips';
+import { SegmentedBar } from '@/components/controls';
+import { CHIP, CHIP_MD, CHIP_ROW, chipState } from '@/components/phone/chips';
 import { ChevronIcon, ClearIcon, PinIcon, SearchIcon } from '@/components/phone/phoneIcons';
 import { placeLabelOf } from '@/components/phone/placeLabel';
 import { LocationTypeahead } from '@/components/filter-controls/LocationTypeahead';
@@ -33,8 +34,9 @@ import { czPlural, fmtCount } from '@/lib/format';
 import { ROUTES } from '@/lib/routes';
 import { useDebouncedTerm } from '@/lib/useDebouncedTerm';
 
-/* The phone's category and offer pills: the two the operator works (Q12). A
- * pressed pill tapped again lets go — no constraint, the desktop's "Vše". */
+/* The phone's category and offer bars: the two the operator works (Q12). Each
+ * is deselectable — the lit segment tapped again lets go, lighting nothing: no
+ * constraint, the desktop's "Vše". */
 const CATEGORIES: ReadonlyArray<{ value: string; label: string }> = [
   { value: 'byt', label: 'Byty' },
   { value: 'dum', label: 'Domy' },
@@ -44,6 +46,9 @@ const OFFERS: ReadonlyArray<{ value: string; label: string }> = [
   { value: 'pronajem', label: 'Pronájem' },
 ];
 const LIMIT = 100;
+/* A bar's equal columns are minmax(0, 1fr), so the sideways-scrolling chip row
+ * could squeeze it below its labels; the slot keeps it whole, as a chip is. */
+const BAR_SLOT = 'flex shrink-0';
 
 const CATEGORY_WORD: Record<string, string> = { byt: 'byty', dum: 'domy' };
 const OFFER_WORD: Record<string, string> = { prodej: 'prodej', pronajem: 'pronájem' };
@@ -245,46 +250,34 @@ function Leaderboard() {
           <PinIcon className="h-3.5 w-3.5 shrink-0" />
           <span className="truncate">{placeLabel}</span>
         </button>
-        <span aria-hidden className={CHIP_DIVIDER} />
-        {CATEGORIES.map((c) => (
-          <button
-            key={c.value}
-            type="button"
-            aria-pressed={categoryMain === c.value}
-            onClick={() => setCategoryMain(categoryMain === c.value ? null : c.value)}
-            className={pill(categoryMain === c.value)}
-          >
-            {c.label}
-          </button>
-        ))}
-        <span aria-hidden className={CHIP_DIVIDER} />
-        {OFFERS.map((o) => (
-          <button
-            key={o.value}
-            type="button"
-            aria-pressed={categoryType === o.value}
-            onClick={() => setCategoryType(categoryType === o.value ? null : o.value)}
-            className={pill(categoryType === o.value)}
-          >
-            {o.label}
-          </button>
-        ))}
+        <div className={BAR_SLOT}>
+          <SegmentedBar<string | null>
+            tone="phone"
+            deselectable
+            label="Typ"
+            options={CATEGORIES}
+            value={categoryMain}
+            onChange={setCategoryMain}
+          />
+        </div>
+        <div className={BAR_SLOT}>
+          <SegmentedBar<string | null>
+            tone="phone"
+            deselectable
+            label="Nabídka"
+            options={OFFERS}
+            value={categoryType}
+            onChange={setCategoryType}
+          />
+        </div>
       </div>
-      <div className={`${CHIP_ROW} mt-2 items-center`} role="group" aria-label="Řadit dle">
+      <div className={`${CHIP_ROW} mt-2 items-center`}>
         <span className="shrink-0 text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--color-ink-3)]">
           Řadit
         </span>
-        {LEADER_METRIC_OPTIONS.map((m) => (
-          <button
-            key={m.value}
-            type="button"
-            aria-pressed={metric === m.value}
-            onClick={() => setMetric(m.value)}
-            className={`${CHIP} ${CHIP_SM} ${chipState(metric === m.value)}`}
-          >
-            {m.label}
-          </button>
-        ))}
+        <div className={BAR_SLOT}>
+          <SegmentedBar tone="phone" label="Řadit dle" options={LEADER_METRIC_OPTIONS} value={metric} onChange={setMetric} />
+        </div>
       </div>
 
       <DayRule label={boardQ.data?.caption ?? placeLabel} />

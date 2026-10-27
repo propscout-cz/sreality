@@ -74,6 +74,12 @@ toolkit work.
 - **Done, agenda 8 Shell** (2026-10-27): "!AUDIT POLOH" is the first Admin item, its count on the Admin
   trigger (P33); the footer keeps only the map-tile attribution (P34); no small-caps label above a page's h1
   (P26, on every agenda's pages; only the error and not-found states keep one).
+- **Done, tab strips** (2026-10-27; the operator picked option A of the tab-strip options page): one
+  `components/Tabs.tsx` for Browse (+ its Explore windows), the property page, a collection and NEW DEDUP
+  Labeling; a full-width rule, the first label on the title's edge, a label-wide 2px copper line on the rule, no
+  weight change, the inset count pill, arrow keys everywhere; the property strip now pins under the header (it
+  hid behind it). Kept unruled: Browse's tab count, the collection's divider, the broker window's single tab,
+  the filled toggles. Pattern: `.interface-design/system.md` § Tab strip.
 - **Next (not built):** removing render scoring end to end (operator note on P03), scoped first. Open for the
   operator: the phone header's P31 controls, and whether the property page should get the city-index strip
   (P19 assumed one there; it never had it). Handoff: `docs/design/propscout-redesign.md`.

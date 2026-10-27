@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
@@ -220,5 +220,27 @@ describe('<BrokerDetail> explore this broker', () => {
       categoryMain: 'dum',
       categoryType: 'pronajem',
     });
+  });
+});
+
+/* Typ and Nabídka are pick-ones, so each is the ONE joined bar (operator ruling
+ * 2026-10-27, system.md § Option groups); Vše keeps its place, first. */
+describe('<BrokerDetail> inventory filters', () => {
+  it('draws Typ and Nabídka as joined bars, Vše lit by default, the chosen segment filled copper', async () => {
+    vi.mocked(brokers.fetchBrokerListings).mockResolvedValue([listing({})]);
+    renderPage();
+    const typ = await screen.findByRole('group', { name: 'Typ' });
+    const offer = screen.getByRole('group', { name: 'Nabídka' });
+    expect(within(typ).getAllByRole('button').map((b) => b.textContent)).toEqual(['Vše', 'Byty', 'Domy', 'Pozemky', 'Komerční']);
+    expect(within(offer).getAllByRole('button').map((b) => b.textContent)).toEqual(['Vše', 'Prodej', 'Pronájem']);
+    for (const bar of [typ, offer]) {
+      expect(bar.firstElementChild).toHaveClass('inline-flex', 'border', 'bg-[var(--color-paper-2)]');
+      expect(within(bar).getByRole('button', { name: 'Vše' })).toHaveAttribute('aria-pressed', 'true');
+      expect(within(bar).getByRole('button', { name: 'Vše' })).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+      for (const b of within(bar).getAllByRole('button')) expect(b).not.toHaveClass('border');
+    }
+    fireEvent.click(within(typ).getByRole('button', { name: 'Domy' }));
+    expect(within(typ).getByRole('button', { name: 'Domy' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(typ).getByRole('button', { name: 'Vše' })).toHaveAttribute('aria-pressed', 'false');
   });
 });

@@ -64,7 +64,7 @@ import RangeStrip from '@/components/estimation/RangeStrip';
 import Timeline from '@/components/estimation/Timeline';
 import { MfReferenceCard } from '@/components/estimation/MfReferenceCard';
 import { mfShape } from '@/lib/mfReference';
-import { DecimalField, PickButton } from '@/components/controls';
+import { DecimalField, PickButton, SegmentedBar } from '@/components/controls';
 import { canRerun, type RerunOverrides } from '@/lib/rerun';
 import { advertPath, listingPath } from '@/lib/listingUrl';
 import { filterById } from '@/lib/filterRegistry.generated';
@@ -1579,9 +1579,11 @@ function AdjustPanel({
         </div>
       </div>
 
-      <div>
+      <div className="space-y-1.5">
         <FieldLabel>Estimate kind</FieldLabel>
-        <SegRow
+        <SegmentedBar
+          fill
+          label="Estimate kind"
           options={[
             { value: 'rent', label: 'Rent (monthly)' },
             { value: 'sale', label: 'Sale price' },
@@ -1593,9 +1595,11 @@ function AdjustPanel({
 
       {state.estimate_kind === 'rent' && (
         <>
-          <div>
+          <div className="space-y-1.5">
             <FieldLabel>Model provider</FieldLabel>
-            <SegRow
+            <SegmentedBar
+              fill
+              label="Model provider"
               options={[
                 { value: 'anthropic', label: 'Claude' },
                 { value: 'gemini', label: 'Gemini' },
@@ -1604,9 +1608,11 @@ function AdjustPanel({
               onChange={(v) => set('provider', v)}
             />
           </div>
-          <div>
+          <div className="space-y-1.5">
             <FieldLabel>Comparable lifecycle</FieldLabel>
-            <SegRow
+            <SegmentedBar
+              fill
+              label="Comparable lifecycle"
               options={[
                 { value: 'active', label: 'Active' },
                 { value: 'delisted', label: 'Delisted' },
@@ -1703,33 +1709,6 @@ function FieldLabel({
       <span id={id}>{children}</span>
       {required && <span className="ml-1 text-[var(--color-ink-4)]">·</span>}
     </p>
-  );
-}
-
-function SegRow<T extends string>({
-  options,
-  value,
-  onChange,
-}: {
-  options: ReadonlyArray<{ value: T; label: string }>;
-  value: T;
-  onChange: (v: T) => void;
-}) {
-  return (
-    <div
-      className="mt-1.5 grid gap-1"
-      style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
-    >
-      {options.map((opt) => (
-        <PickButton
-          key={opt.value}
-          on={value === opt.value}
-          onClick={() => onChange(opt.value)}
-        >
-          {opt.label}
-        </PickButton>
-      ))}
-    </div>
   );
 }
 

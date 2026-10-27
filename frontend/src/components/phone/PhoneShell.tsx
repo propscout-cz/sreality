@@ -16,6 +16,7 @@ import { Link, useLocation, useNavigate, useNavigationType } from 'react-router-
 
 import CollectionMark from '@/components/CollectionMark';
 import SkipLink from '@/components/SkipLink';
+import { SegmentedBar } from '@/components/controls';
 import { FunnelIcon } from '@/components/icons';
 import { useAuth } from '@/lib/auth';
 import { APP_SHORT } from '@/lib/brand';
@@ -317,29 +318,8 @@ function AccountSheet({ onClose }: { onClose: () => void }) {
         <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--color-ink-3)]">
           Vzhled
         </p>
-        <div
-          role="radiogroup"
-          aria-label="Vzhled"
-          className="mt-2 grid grid-cols-3 overflow-hidden rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)]"
-        >
-          {THEMES.map((t, i) => (
-            <button
-              key={t.value}
-              type="button"
-              role="radio"
-              aria-checked={mode === t.value}
-              onClick={() => setMode(t.value)}
-              className={[
-                'h-9 text-center text-[13px]',
-                i > 0 ? 'border-l border-[var(--color-rule)]' : '',
-                mode === t.value
-                  ? 'bg-[var(--color-copper-soft)] font-medium text-[var(--color-copper)]'
-                  : 'text-[var(--color-ink-2)]',
-              ].join(' ')}
-            >
-              {t.label}
-            </button>
-          ))}
+        <div className="mt-2">
+          <SegmentedBar tone="phone" fill label="Vzhled" options={THEMES} value={mode} onChange={setMode} />
         </div>
       </div>
       <div className="mt-3 border-t border-[var(--color-rule-soft)]">

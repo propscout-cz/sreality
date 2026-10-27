@@ -13,6 +13,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -33,6 +34,7 @@ import {
   useCardCoverTag,
 } from '@/lib/browseLayout';
 import ImageSizeToggle from '@/components/ImageSizeToggle';
+import { SegmentedBar } from '@/components/controls';
 import { FilterSidebar, FilterSidebarRail } from '@/components/Filters';
 import ListingCards, { CARD_PHOTOS_PER_CARD } from '@/components/ListingCards';
 /* The Stats tab (the chart builder, dnd-kit, recharts) is its own chunk: it is a
@@ -473,8 +475,10 @@ export default function BrowseExperience({
     filters.maxCityPopulation,
   ]);
 
+  /* Unique per mount: an Explore window's Browse can sit over a page that has tabs. */
+  const tabIds = useId();
   const tabs: ReadonlyArray<Tab<TabKey>> = [
-    { key: 'map', label: 'Nemovitosti', badge: cohortTotal?.toLocaleString('cs-CZ') },
+    { key: 'map', label: 'Nemovitosti', count: cohortTotal?.toLocaleString('cs-CZ') },
     ...(f.stats ? [{ key: 'stats', label: 'Statistiky' } as Tab<TabKey>] : []),
   ];
 
@@ -565,26 +569,35 @@ export default function BrowseExperience({
               />
             </div>
           )}
-          {/* A merge in progress takes a row of its own under the tabs: its letters
-              and statement grow with every group, and beside the tabs they pushed
-              Merge and Cancel off the screen. */}
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-            <Tabs tabs={tabs} active={tab} onChange={view.setTab} />
-            {tab === 'map' && (
-              <div className="flex items-center gap-2">
-                <MapViewToggle
-                  collapsed={mapCollapsed.value}
-                  onChange={mapCollapsed.set}
-                />
-                <ImageSizeToggle
-                  large={cardImageLarge.value}
-                  onChange={cardImageLarge.set}
-                  label="Card image size"
-                />
-              </div>
-            )}
+          {/* The tab strip (components/Tabs.tsx) carries the map tab's two toggles
+              at its right end, above its rule. A merge in progress takes a row of
+              its own under the strip: its letters and statement grow with every
+              group, and beside the tabs they pushed Merge and Cancel off the screen. */}
+          <div className="mt-4">
+            <Tabs
+              tabs={tabs}
+              active={tab}
+              onChange={view.setTab}
+              ariaLabel="Zobrazení výsledků"
+              idPrefix={tabIds}
+              trailing={
+                tab === 'map' ? (
+                  <>
+                    <MapViewToggle
+                      collapsed={mapCollapsed.value}
+                      onChange={mapCollapsed.set}
+                    />
+                    <ImageSizeToggle
+                      large={cardImageLarge.value}
+                      onChange={cardImageLarge.set}
+                      label="Card image size"
+                    />
+                  </>
+                ) : undefined
+              }
+            />
             {tab === 'map' && f.mergeMode && mergeMode.active && (
-              <div className="basis-full min-w-0">
+              <div className="mt-3 min-w-0">
                 <MergeBar
                   merge={mergeMode}
                   merging={mergeMut.isPending}
@@ -596,7 +609,12 @@ export default function BrowseExperience({
         </div>
 
         {tab === 'map' && (
-          <div className="px-6 pt-5 pb-6 flex-1 min-h-0">
+          <div
+            role="tabpanel"
+            id={`${tabIds}panel-map`}
+            aria-labelledby={`${tabIds}tab-map`}
+            className="px-6 pt-5 pb-6 flex-1 min-h-0"
+          >
             <div
               ref={innerRef}
               className={
@@ -723,7 +741,12 @@ export default function BrowseExperience({
         )}
 
         {tab === 'stats' && (
-          <div className={`px-6 pt-5 pb-8${isModal ? ' flex-1 min-h-0 overflow-y-auto' : ''}`}>
+          <div
+            role="tabpanel"
+            id={`${tabIds}panel-stats`}
+            aria-labelledby={`${tabIds}tab-stats`}
+            className={`px-6 pt-5 pb-8${isModal ? ' flex-1 min-h-0 overflow-y-auto' : ''}`}
+          >
             <Suspense fallback={<Skeleton height={320} className="my-8" />}>
               <StatsDashboard
                 filters={filters}
@@ -893,9 +916,9 @@ function MapSkeleton() {
 
 /* Properties-tab layout switch: fold the map panel away to give the cards the
  * full width (they reflow to more columns automatically), or bring it back.
- * Reuses the app's segmented-control idiom (LocationModeSection): paper-2
- * track, copper-fill active, borders-only — civic-archive consistent. The
- * choice persists per-browser (useMapCollapsed), not in the shareable URL. */
+ * The one joined bar (operator ruling 2026-10-27), hugging like the image-size
+ * switch beside it. The choice persists per-browser (useMapCollapsed), not in
+ * the shareable URL. */
 function MapViewToggle({
   collapsed,
   onChange,
@@ -903,40 +926,17 @@ function MapViewToggle({
   collapsed: boolean;
   onChange: (collapsed: boolean) => void;
 }) {
-  const seg = (active: boolean) =>
-    [
-      'inline-flex items-center gap-1.5 px-2.5 py-1 text-[0.7rem] rounded-[var(--radius-xs)] transition-colors',
-      active
-        ? 'bg-[var(--color-copper)] text-[var(--color-on-copper)]'
-        : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
-    ].join(' ');
   return (
-    <div
-      role="group"
-      aria-label="Properties layout"
-      className="inline-flex items-center gap-0.5 p-0.5 rounded-[var(--radius-sm)] bg-[var(--color-paper-2)] border border-[var(--color-rule)]"
-    >
-      <button
-        type="button"
-        onClick={() => onChange(false)}
-        aria-pressed={!collapsed}
-        title="Show the map beside the cards"
-        className={seg(!collapsed)}
-      >
-        <SplitGlyph />
-        Split
-      </button>
-      <button
-        type="button"
-        onClick={() => onChange(true)}
-        aria-pressed={collapsed}
-        title="Hide the map — full-width cards"
-        className={seg(collapsed)}
-      >
-        <CardsGlyph />
-        Cards
-      </button>
-    </div>
+    <SegmentedBar
+      hug
+      label="Properties layout"
+      options={[
+        { value: false, label: 'Split', title: 'Show the map beside the cards', glyph: <SplitGlyph /> },
+        { value: true, label: 'Cards', title: 'Hide the map — full-width cards', glyph: <CardsGlyph /> },
+      ]}
+      value={collapsed}
+      onChange={onChange}
+    />
   );
 }
 

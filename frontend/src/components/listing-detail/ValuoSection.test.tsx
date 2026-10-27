@@ -195,8 +195,29 @@ describe('<ValuoSection> editor', () => {
     expect(placeBox()).toHaveClass('h-[2.125rem]');
     const rating = screen.getByRole('combobox', { name: 'Stav' }); // no default: nothing is sent
     expect(rating).toHaveClass('h-[2.125rem]', 'border-dashed');
-    for (const b of param('Novostavba').getAllByRole('button')) expect(b).toHaveClass('h-[2.125rem]', 'border-dashed');
-    expect(screen.getByRole('button', { name: 'Prodej' })).not.toHaveClass('border-dashed');
+    // A pick-one is one joined bar: its track is the box.
+    expect(param('Novostavba').getByRole('group', { name: 'Novostavba' }).firstElementChild).toHaveClass('h-[2.125rem]', 'border-dashed');
+    expect(screen.getByRole('button', { name: 'Prodej' }).parentElement).toHaveClass('h-[2.125rem]');
+    expect(screen.getByRole('button', { name: 'Prodej' }).parentElement).not.toHaveClass('border-dashed');
+  });
+
+  /* The joined bar (operator ruling 2026-10-27) as the form box: a required pick-one has no "neuvedeno" to light. */
+  it('lights nothing in a required pick-one that has no value, its track the dashed box', async () => {
+    renderSection(page({ defaults: { ...DEFAULTS, kind: null } }));
+    const bar = (await screen.findAllByRole('group', { name: 'Typ obchodu' })).at(-1)!;
+    expect(within(bar).getAllByRole('button').map((b) => b.textContent)).toEqual(['Prodej', 'Pronájem']);
+    for (const b of within(bar).getAllByRole('button')) expect(b).toHaveAttribute('aria-pressed', 'false');
+    expect(bar.firstElementChild).toHaveClass('h-[2.125rem]', 'border-dashed');
+  });
+
+  it('paints a refused pick-one\'s track brick and names the refusal on the bar', async () => {
+    const refused = { ...REFUSED, error: { ...REFUSED.error!, form_errors: [{ field: 'kind', message: 'Invalid enum value' }] } };
+    renderSection(page({ blocking: [], defaults: { ...DEFAULTS, rating: 'good' }, history: [refused] }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Nové ocenění →' }));
+    const bar = screen.getAllByRole('group', { name: 'Typ obchodu' }).at(-1)!;
+    expect(bar).toHaveAttribute('aria-invalid', 'true');
+    expect(bar).toHaveAccessibleDescription('Valuo: „Invalid enum value“');
+    expect(bar.firstElementChild).toHaveClass('[[aria-invalid=true]>&]:border-[var(--color-brick)]');
   });
 
   it('tags every value with where it came from, and counts the folded group', async () => {

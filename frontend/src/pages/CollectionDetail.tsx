@@ -556,6 +556,7 @@ function Members({
   editable: boolean;
 }) {
   const [params, setParams] = useSearchParams();
+  const ids = useId();
   const tab: MembersTab = params.get('tab') === 'table' ? 'table' : 'cards';
   const setTab = (next: MembersTab) =>
     setParams(
@@ -574,8 +575,8 @@ function Members({
   }
   return (
     <div>
-      <Tabs tabs={MEMBER_TABS} active={tab} onChange={setTab} />
-      <div className="mt-5">
+      <Tabs tabs={MEMBER_TABS} active={tab} onChange={setTab} ariaLabel="Zobrazení nemovitostí" idPrefix={ids} />
+      <div role="tabpanel" id={`${ids}panel-${tab}`} aria-labelledby={`${ids}tab-${tab}`} className="mt-5">
         {tab === 'table' ? (
           <PropertiesBlock collectionId={collection.id} properties={properties} editable={editable} />
         ) : (

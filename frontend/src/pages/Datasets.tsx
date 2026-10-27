@@ -37,7 +37,7 @@ import { PINNED_SLUGS, indexLabel } from '@/lib/cityIndexes';
 import { fmtCount, fmtPct, fmtPP } from '@/lib/format';
 import { PPM2_UNIT } from '@/lib/measure';
 import DatasetMap, { METRICS, type DatasetMetric } from '@/components/DatasetMap';
-import { Field } from '@/components/controls';
+import { Field, SegmentedBar } from '@/components/controls';
 import { YmPicker, YM_PARTS } from '@/components/YmPicker';
 import CityPicker from '@/components/CityPicker';
 import { buildHoverData } from '@/lib/growthChoropleth';
@@ -46,6 +46,7 @@ import { hasChipFinerThanObec, keepObecFor } from '@/lib/datasetsPlace';
 import type { DistrictChip } from '@/lib/filters';
 
 const METRIC_ORDER: DatasetMetric[] = ['rent_cagr_pct', 'sale_cagr_pct', 'yield_change_pp_pa'];
+const METRIC_OPTIONS = METRIC_ORDER.map((m) => ({ value: m, label: METRICS[m].label }));
 const MIN_ACTIVE = 3;
 const FIRST_YEAR = 2015;
 const now = new Date();
@@ -522,7 +523,7 @@ export default function Datasets() {
                   <input type="checkbox" checked={chartOnHover} onChange={(e) => setChartOnHover(e.target.checked)} />
                   Chart on hover
                 </label>
-                <MetricToggle metric={metric} onChange={setMetric} />
+                <SegmentedBar hug label="Metric" options={METRIC_OPTIONS} value={metric} onChange={setMetric} />
               </div>
             </div>
             <div className="mt-3 pt-3 border-t border-[var(--color-rule-soft)] flex items-start gap-2.5">
@@ -620,26 +621,6 @@ function WindowControl({
       <YmPicker label="Window from" parts={YM_PARTS.en} size="md" value={from} onChange={onFrom} />
       <span className="text-[var(--color-ink-3)]">→</span>
       <YmPicker label="Window to" parts={YM_PARTS.en} size="md" value={to} onChange={onTo} />
-    </div>
-  );
-}
-
-function MetricToggle({ metric, onChange }: { metric: DatasetMetric; onChange: (m: DatasetMetric) => void }) {
-  return (
-    <div className="inline-flex rounded-[var(--radius-sm)] border border-[var(--color-rule)] overflow-hidden">
-      {METRIC_ORDER.map((m, i) => (
-        <button
-          key={m}
-          onClick={() => onChange(m)}
-          className={`px-3 py-1.5 text-sm transition-colors ${i > 0 ? 'border-l border-[var(--color-rule)]' : ''} ${
-            metric === m
-              ? 'bg-[var(--color-copper-soft)] text-[var(--color-copper)]'
-              : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink)]'
-          }`}
-        >
-          {METRICS[m].label}
-        </button>
-      ))}
     </div>
   );
 }
