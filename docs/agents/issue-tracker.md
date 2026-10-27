@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and specs for this repo live as GitHub issues on `waiff/sreality`. Use the `gh` CLI for all operations.
+Issues and specs for this repo live as GitHub issues on `propscout-cz/sreality` (owned by the company organisation since #2008; `waiff/sreality` redirects). Use the `gh` CLI for all operations.
 
 **The repo is public: every issue is world-readable.** Keep tokens, DB URLs, operator-private rulings and personal data out of issue titles, bodies and comments.
 

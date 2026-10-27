@@ -37,7 +37,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -54,22 +53,9 @@ GENERATED_NOTICE = (
     "must be paired with a fresh regen in the same commit."
 )
 
-DEFAULT_SLUG = "waiff/sreality"
+# A constant, not the clone's remote: CI regenerates and diffs this file in every checkout.
+REPO_SLUG = "propscout-cz/sreality"
 DEFAULT_BRANCH = "main"
-
-
-def _repo_slug() -> str:
-    try:
-        url = subprocess.check_output(
-            ["git", "config", "--get", "remote.origin.url"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-    except Exception:
-        return DEFAULT_SLUG
-    url = url.removesuffix(".git")
-    m = re.search(r"([^/:]+)/([^/]+)$", url)
-    return f"{m.group(1)}/{m.group(2)}" if m else DEFAULT_SLUG
 
 
 def _leading_description(text: str) -> str:
@@ -257,10 +243,9 @@ def _parse_workflow(path: Path, slug: str) -> dict[str, Any]:
 
 def generate() -> str:
     root = Path(__file__).resolve().parent.parent
-    slug = _repo_slug()
     workflows_dir = root / ".github" / "workflows"
     files = sorted(workflows_dir.glob("*.yml"))
-    docs = [_parse_workflow(p, slug) for p in files]
+    docs = [_parse_workflow(p, REPO_SLUG) for p in files]
     return json.dumps(
         {"_generated": GENERATED_NOTICE, "workflows": docs},
         indent=2,

@@ -11,7 +11,7 @@ one definition in code (`scraper/jobs.py`), one database row that says when it i
 (`scheduled_jobs`), and one usage-billed host: a Railway service, the job runner, run as two identical
 replicas that claim due rows by compare-and-set and run each job as a killable subprocess with a run
 history (`job_runs`). GitHub keeps only work that needs a branch (CI), a human click (attended forms) or
-independence from Railway (the hourly canary), under a `propscout` organisation on Enterprise Cloud whose
+independence from Railway (the hourly canary), under a `propscout-cz` organisation on Enterprise Cloud whose
 50,000 included minutes cover it. Pure SQL runs on pg_cron; GPU work rents RunPod pods.
 
 **Considered and rejected:** one Railway cron service per job (no kill of a hung run, which then blocks its

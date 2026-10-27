@@ -132,7 +132,7 @@ def run_dataset_now(conn: "psycopg.Connection", dataset_id: int) -> dict[str, An
             "(repo Actions: read+write) as GH_DISPATCH_TOKEN; the dataset will "
             "otherwise scrape on the next scheduled run.",
         )
-    repo = os.environ.get("GH_REPO", "waiff/sreality")
+    repo = os.environ.get("GH_REPO", "propscout-cz/sreality")
     try:
         resp = requests.post(
             f"https://api.github.com/repos/{repo}/actions/workflows/{_DISPATCH_WORKFLOW}/dispatches",
