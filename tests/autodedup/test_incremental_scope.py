@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from dataclasses import replace as dc_replace
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -22,9 +21,7 @@ from autodedup import cohort
 from autodedup.incremental import Limits, WorkItem, run_pass
 from autodedup.incremental_lane import (
     CURSOR_CHANGED,
-    CURSOR_ENTER,
     CURSOR_EVIDENCE,
-    CURSOR_FLIPPED,
     CURSOR_NEW,
     CURSOR_SCOPE,
     MAX_SCHEMA_MB,

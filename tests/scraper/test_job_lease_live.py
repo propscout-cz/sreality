@@ -19,7 +19,7 @@ import pytest
 
 from scraper import job_lease, jobs
 from scraper.jobs import Job
-from tests._live_property import REQUIRED_DB, cur, db_url  # noqa: F401 -- `cur` is the fixture
+from tests._live_property import REQUIRED_DB, db_url
 
 pytestmark = REQUIRED_DB
 

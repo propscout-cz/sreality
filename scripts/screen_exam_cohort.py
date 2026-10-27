@@ -121,7 +121,7 @@ def _draw_unscreened(conn: Any, *, cohort_id: int, model: str, count: int) -> li
 
 
 def _screen_batch(
-    conn: Any, r2, *, cohort_id: int, rows: list[tuple[int, str]],
+    conn: Any, r2: Any, *, cohort_id: int, rows: list[tuple[int, str]],
     tags: list[dict[str, Any]], model: str, max_usd: float, max_seconds: int,
     workers: int,
 ) -> dict[str, Any]:

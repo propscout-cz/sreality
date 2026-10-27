@@ -13,7 +13,7 @@ import re
 
 from tests.migration_defs import latest_definition
 from tests.test_portal_exclusion_migration import _params, _types
-from tests.test_read_model_rewrite_migration import _function_bodies, _md5, _read
+from tests.test_read_model_rewrite_migration import _md5, _read
 
 NAME = "629_curated_set_scope.sql"
 SQL = _read(NAME)

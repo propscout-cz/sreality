@@ -588,6 +588,13 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_merge_safety_live.py -q
 
+      - name: The headline price change skips a placeholder price (ruling 2026-10-26)
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_price_change_placeholder_live.py -q
+
       # The ONE listing write (rule 2), executed: every per-source upsert text runs, the
       # latest-snapshot tiebreak and statement_timestamp() stamp are observed, not asserted.
       - name: The one listing write appends exactly on content change (executed)
@@ -799,6 +806,16 @@ jobs:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_location_ad_readers_live.py tests/test_property_location_ad_rail.py tests/test_publication_settle_live.py -q
+
+      # City proximity runs on pg_cron (migration 674): the function raises no NOTICE (one inside a pg_cron
+      # command blocks the launcher, 658), holds its advisory lock to the end of its transaction, is closed to
+      # browser roles, and the script's batched full rebuild recomputes every placeable property.
+      - name: City proximity is pg_cron-safe (migration 674)
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_674_city_proximity_pg_cron.py -q
 
       # MF reference rent is ONE read-time measure (migration 565), read by the two serving
       # views (browse_projection, properties_public) with the stored KU (566/567, replayed

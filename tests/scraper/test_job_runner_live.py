@@ -24,7 +24,7 @@ from scraper import job_lease, job_process, jobs
 from scraper.job_process import Child, Guard
 from scraper.job_runner import Finished, PgLedger, Runner
 from scraper.jobs import Job
-from tests._live_property import REQUIRED_DB, cur, db_url  # noqa: F401 -- `cur` is the fixture
+from tests._live_property import REQUIRED_DB, db_url
 from tests.scraper.test_job_runner import CHILD, Clock, Script, StandIn, _kill_quietly, _wait_for
 
 pytestmark = REQUIRED_DB

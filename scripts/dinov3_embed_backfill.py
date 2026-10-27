@@ -42,10 +42,15 @@ import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from scraper import image_storage
 from scraper.dinov3_config import IDENTITY_FIELDS, encoder_identity
+
+if TYPE_CHECKING:
+    import psycopg
+    import torch
+    from PIL import Image
 
 LOG = logging.getLogger("dinov3_embed_backfill")
 
@@ -165,19 +170,21 @@ class WriteThrottle:
         return delay
 
 
-def _vec_str(row) -> str:
+def _vec_str(row: torch.Tensor) -> str:
     """A normalized embedding row -> pgvector's text form '[f,f,...]' (halfvec parses it)."""
     return "[" + ",".join(f"{x:.6f}" for x in row.tolist()) + "]"
 
 
-def _download_decode(r2, rows: list, workers: int):
+def _download_decode(
+    r2: image_storage.R2Client, rows: list[tuple[int, str]], workers: int,
+) -> tuple[list[tuple[int, Image.Image]], int]:
     """(decoded, failed): decoded = [(image_id, RGB image)]. A failure — transient R2
     error or bytes that will never decode — is simply left unwritten; the anti-join
     picks the image up again on the next run, and the in-run cursor stops it wedging
     this one. Nothing is staged on local disk."""
     from PIL import Image  # base dep
 
-    def _one(row):
+    def _one(row: tuple[int, str]) -> tuple[int, Image.Image | None]:
         image_id, key = row[0], row[1]
         try:
             data = r2.download_bytes(key)
@@ -199,7 +206,7 @@ def _download_decode(r2, rows: list, workers: int):
     return decoded, failed
 
 
-def _scalar(conn, sql: str, params: dict[str, Any] | None = None,
+def _scalar(conn: psycopg.Connection, sql: str, params: dict[str, Any] | None = None,
             timeout_ms: int = SELECT_TIMEOUT_MS) -> int:
     with conn.transaction(), conn.cursor() as cur:
         # SET is a utility statement — it cannot take a bound parameter.
@@ -209,7 +216,7 @@ def _scalar(conn, sql: str, params: dict[str, Any] | None = None,
     return int(row[0]) if row else 0
 
 
-def embedded_count(conn, identity: dict[str, Any],
+def embedded_count(conn: psycopg.Connection, identity: dict[str, Any],
                    timeout_ms: int = SELECT_TIMEOUT_MS) -> int:
     """Rows written under this exact six-fact identity.
 
@@ -223,8 +230,8 @@ def embedded_count(conn, identity: dict[str, Any],
     return _scalar(conn, _EMBEDDED_COUNT_SQL, identity, timeout_ms=timeout_ms)
 
 
-def select_pending(conn, *, identity: dict[str, Any], batch: int, shard: int,
-                   shards: int, after_id: int) -> list[tuple[int, str]]:
+def select_pending(conn: psycopg.Connection, *, identity: dict[str, Any], batch: int,
+                   shard: int, shards: int, after_id: int) -> list[tuple[int, str]]:
     """One chunk of images with no vector under this exact six-fact identity."""
     params = {**identity, "batch": batch, "shard": shard, "shards": shards,
               "after_id": after_id}

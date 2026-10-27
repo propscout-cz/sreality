@@ -1971,7 +1971,6 @@ def test_a_build_pass_its_pair_budget_refuses_reports_every_attempt(tmp_path,
     one's `wanted_pairs` and `pairs_to_decide`, `aborted` "pair_budget" — and nothing is
     written, the reject ledger included. With the budget back the next pass commits."""
     from autodedup import incremental_lane
-    from autodedup.incremental import bootstrap_key
     from tests.autodedup import lane_world
 
     made: list[int] = []
