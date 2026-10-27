@@ -646,7 +646,7 @@ def test_a_re_landed_job_is_judged_on_its_runs_since_it_rejoined(cur: Any) -> No
     cells = _liveness(cur)[3]
 
     assert _said(cells, "job/cut") == (
-        "ok", "cut: last ok 3 d ago; due now; its last run was cut by a deploy and is due again at once")
+        "ok", "cut: last ok 3 d ago; due now; its last run was interrupted and is due again at once")
     assert _conditions(cells, "job/cut") == []
     assert _said(cells, "job/cut_rerun") == (
         "ok", "cut_rerun: running for 60 s of its 20 min budget on job-runner/r1")
@@ -828,7 +828,7 @@ def test_a_blink_keeps_the_schedule_so_a_cut_run_stays_due_and_a_missed_slot_sta
     cells = _liveness(cur)[3]
 
     assert _said(cells, "job/cut") == (
-        "ok", "cut: last ok 6.0 h ago; due now; its last run was cut by a deploy and is due again at once")
+        "ok", "cut: last ok 6.0 h ago; due now; its last run was interrupted and is due again at once")
     assert _said(cells, "job/never") == (
         "fail", "never: late: never ran ok for 4 d (Watch past 24.5 h, Problem past 2 d)")
     assert _conditions(cells, "job/never")[0] == "warn: due 3 d ago and not started"
@@ -844,7 +844,7 @@ def test_a_cut_run_is_said_to_be_due_again_only_while_it_is(cur: Any) -> None:
     _run(cur, "re_slotted", started="11 minutes", ended="5 minutes", outcome="interrupted", exit_code=143)
 
     assert _said(_liveness(cur)[3], "job/re_slotted") == (
-        "ok", "re_slotted: last ok 6.0 h ago; next slot in 2.5 h; its last run was cut by a deploy")
+        "ok", "re_slotted: last ok 6.0 h ago; next slot in 2.5 h; its last run was interrupted")
 
 
 def test_an_adopted_lane_row_waiting_for_its_first_slot_is_never_said_to_be_registered_again(cur: Any) -> None:
@@ -955,9 +955,9 @@ def test_a_failing_job_names_its_cause_and_three_quick_failures_are_only_watch(c
         "warn", "s_cut: 2 failed runs in a row, the first 30 min ago; the last: failed, exit 1")
     assert _said(cells, "job/s_bare") == ("warn", "s_bare: its last run failed: failed, exit -9")
     assert _said(cells, "job/s_deploy") == (
-        "ok", "s_deploy: last ok 60 min ago; due now; its last run was cut by a deploy and is due again at once")
+        "ok", "s_deploy: last ok 60 min ago; due now; its last run was interrupted and is due again at once")
     assert _said(cells, "job/s_drill") == (
-        "ok", "s_drill: last ok 31 d ago; next slot in 60 d; a request by github:op was cut by a deploy; it is not "
+        "ok", "s_drill: last ok 31 d ago; next slot in 60 d; a request by github:op was interrupted; it is not "
               "re-filed")
     assert _said(cells, "job/s_typo") == (
         "warn", "s_typo: its last run failed: exit 2 (a request by github:op, args --limitt 5)")
