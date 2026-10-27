@@ -1,7 +1,7 @@
 # Actions exit: make the repo private, run recurring work where it is billed by use
 
 Status: APPROVED 2026-10-25 (rulings R1–R27 below); building: W0 and W1 PRs landing, W2's schema (#2042) and
-registry (#2023) landed, the runner (#2024) landed, its service (#2025) next. Audit: 84 workflow files, 14 days of run data, two review panels (42 agents on the audit and first design; 20 agents on the from-scratch
+registry (#2023) landed, the runner (#2024) landed, its job cells and form (#2026) landed, its service (#2025) next. Audit: 84 workflow files, 14 days of run data, two review panels (42 agents on the audit and first design; 20 agents on the from-scratch
 design: four architects, three judges, twelve refuters). Per-file verdicts: [dispositions.md](dispositions.md).
 Decision record: [ADR 0001](../../adr/0001-scheduled-jobs-on-a-railway-job-runner.md).
 
@@ -146,20 +146,41 @@ production.
   `failed`, with the peak in its error. A pure request run never moves the schedule (its exit 75 only pulls it to
   60 s); a request that also took a due slot advances it; an interrupted or lost request is not re-filed.
 - **Manual runs and pauses**: `python -m scraper.job_runner request <job> [--by WHO] -- <args>` writes a request
-  row the runner executes on the same host (args appended to the registry's; a second waits for the first); one
-  request-only GitHub form "Jobs: run now" does the same for the operator; `pause <job> --until <date|now>
+  row the runner executes on the same host (args appended to the registry's, so they override its flags
+  unchecked; a second is refused while one waits; one filed during a run waits for it); one request-only GitHub
+  form "Jobs: run now" (`run_job.yml`: a typed job name, refused unless it is one, R-2 of #2026) does the same for
+  the operator; `pause <job> --until <date|now>
   --note` sets `paused_until` on any live row, a lane's included (`--until now` lifts it); `once <job>` runs a due
   or requested runner entry in the foreground (GitHub entries from #2033; a closed terminal stops it like Ctrl-C,
   and it exits 1 when the database does not answer within 60 s); `list` shows every row. Nothing is a
   flag; a pause always ends.
-- **Health**: a `job/<name>` cell per row, computed in SQL by the pg_cron watcher (so it survives a Railway
-  outage), judged from `last_success_at` against the row's own cadence and `timeout_s` (warn at 2/3,
-  problem at 1×), showing the cause (exit code or signal) from `job_runs`; a `held by sibling` state for the
-  `location-heavy` resource; one heartbeat row per replica for liveness (`job-runner/<RAILWAY_REPLICA_ID[:8]>`,
-  carrying its deployment; it beats only after a claim pass completes, so a replica that cannot register or list
-  due jobs goes red), each worker with its own liveness subject (migration 675); a clean stop deletes its
-  row, and each beat forgets another deployment's rows and its own deployment's after an hour of silence. The two
-  global in-flight thresholds are deleted.
+- **Health** (as built, #2026, migration 682): a `job/<name>` cell per live registered job-runner row (the due
+  list's predicate), computed in SQL by the pg_cron watcher (so it survives a Railway outage) through
+  `public.health_job_cells()`, a seam a later wave replaces alone. A job cell is never `unknown`: not run yet,
+  paused or held reads ok and says why. Against the row's own cadence C and `timeout_s` T: in flight is Watch past
+  ⅔·T and "being stopped" past T; a run the runner recorded `timeout` is a Problem until a later run closes (warn
+  at 2/3, problem at 1×, read from the runner's own record, never a sample of the 90 s kill window: R-3); in
+  flight past T + `STUCK_RUN_GRACE_S` is a Problem (the kill did not land). A failure streak is Watch at 1 and a
+  Problem at 3 once its first failure is min(C, 1 h) old (backoff reaches 3 in minutes). Late is Watch past
+  C + T + W and a Problem a further min(C, 1 d) on, W the longest sibling run seen on its resource, anchored on the
+  last ok run, else the first scheduled run, else the first slot, and on a lapsed pause; a row waiting for the
+  first slot of its (re)registration is judged from that slot, its carried streak unjudged. `held by sibling` is
+  ok, shown only while the job waits; a due job or a request unstarted for 10 min is Watch while a replica beats
+  and a Problem when none has for 10 min; a refused registry entry is a Problem; a pause longer than
+  greater(C, 7 d) is Watch. The cause (outcome, signed exit code, error, requester and args) comes from
+  `job_runs`, never its `log_tail`. A `job-runner` fleet cell is ok or Watch, never a Problem: a cleanly stopped
+  runner reads Watch until a job comes due + 10 min. If the arm raises, one `job-cells` Problem and a listed
+  `unknown` per open job incident keep those incidents open. One heartbeat row per replica for liveness
+  (`job-runner/<RAILWAY_REPLICA_ID[:8]>`, carrying its deployment; it beats only after a claim pass completes,
+  so a replica that cannot register or list due jobs goes red while its heartbeat row exists), each worker with
+  its own liveness subject (migration 675); a clean stop deletes its row, and each beat forgets another
+  deployment's rows and its own deployment's after an hour of silence. A replica that never registers never
+  beats, so it has no row: a job main's registry puts on the runner with no live row is the `jobs` check's
+  `job-runner/registry` Problem an hour after the worker's boot (`jobs_runner_register_grace_s`), once the previous
+  measurement read it missing too. The two global in-flight thresholds are replaced by a test-pinned mirror of the
+  worker's one pass budget (`LANE_PASS_BUDGET_S` = `LANE_PASS_TIMEOUT_SECONDS`): a lane is Watch at ⅔ and a
+  Problem at 1×, a job Watch at ⅔ of its `timeout_s` and a Problem at the runner's recorded stop; one shape, two
+  mechanisms.
 - **Deploys**: `portal_runner.run_phase` installs a SIGTERM/SIGINT handler that sets one shared stop event;
   `portal.deadline_reached()` reads it; the rate limiters wait on it; `BasePortalClient._request` checks it
   before every attempt and backoff and caps each request at the drain budget left. `by_category` persists
@@ -308,10 +329,11 @@ Deleted: 46 workflow files (27 in W0, 17 across W2–W5, `clip_tag` in W5, 2 in 
 ~45 concurrency groups; every self-chain and PAT; the `count_probe` lane and its dispatch (~200 lines +
 tests); 11 one-shot scripts (~2,850 lines) and their tests (~1,400); the image shard flags; four duplicate
 drain phases; the `location-batch` GitHub group, the intake chain and yield; the `location_resolve` tick;
-`railway*.json` ×3; the two global in-flight thresholds and the hand-kept stuck-run cutoff; the per-walk
+`railway*.json` ×3; the two global in-flight thresholds (replaced by a pinned mirror of the worker's one pass
+budget) and the hand-kept stuck-run cutoff; the per-walk
 `--max-seconds` duplicate; idnes's own slice ordering; the `LOCATION_INTAKE_WORKERS` override; the 4-way
 CLIP shard matrix and weights cache; `location_refetch`'s first-delay machinery; the 18 h GitHub slack on
-re-hosted artifact rows; the anonymous GitHub clone in RunPod pods; 13.2 GB of public artifacts. By ruling:
+artifact rows, re-hosted row by row in each move PR; the anonymous GitHub clone in RunPod pods; 13.2 GB of public artifacts. By ruling:
 up to 9 more files (R6a) and the dead lease columns, alias view and index (R6b).
 Never built (dropped from the first design): the shared `lanes.py` move, 17 interval knobs, the due-gated
 GitHub matrix, the overdue-only fallback rule, the disarm wave, runtime memory admission.
@@ -324,6 +346,9 @@ heartbeat row per replica; the runner's daily `job_runs` prune; `RAILWAY_TOKEN`;
 (#2024):** `scraper/job_runner.py` ~725 lines (~595 of code), `scraper/job_process.py` ~410 (~300), `job_lease.py`
 +~375 (the runner's statements), `stop.py` +4/−3 (an opt-in hangup), ~2,200 test lines; the guard thread, the mixed
 kill mode, the straggler wait, atomic spawn and the per-call stopping budget are the growth over the estimate.
+**As built (#2026):** the `job/<name>` arm is migration 682's `health_job_cells()` (~220 SQL lines; the watcher
+re-created around one ~20-line block), the `job-runner/registry` census ~50 lines, `run_job.yml` ~60 lines; the
+fleet cell, the (re)registered first slot, the refused entries and the arm-raised placeholders are the growth.
 
 Net: workflow files 84 → ~38 (31 if R6a passes in full); live GitHub schedules 34 → 2; production schedulers
 2 → 1; Railway services 3 → 4; Railway config files 3 → 1; worker lanes 17 → 16; roughly −8,500 to −9,000 lines.

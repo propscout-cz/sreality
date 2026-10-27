@@ -3,7 +3,7 @@
 The Railway job runner (`scraper/job_runner.py`, `scraper/job_process.py`; SQL in `scraper/job_lease.py`) runs every
 `scraper/jobs.py` entry whose host is `job-runner` (`jobs.runner_jobs()`), each as its own subprocess. Design and
 rulings: `docs/design/actions-exit/PROGRAM.md` § 4.2. It runs nothing until a move PR (#2025, #2027–#2033) flips an
-entry's host. The service itself is #2025's.
+entry's host. The service itself is #2025's. Its Health cells and the "Jobs: run now" form are #2026's (below).
 
 ## Verbs (`python -m scraper.job_runner <verb>`)
 
@@ -13,7 +13,7 @@ A bare call prints help and exits 2: on a box with production credentials it nev
 |---|---|
 | `run` | The service (Railway's start command, exec form). Registers the registry at boot, retires only rows it registered, claims due jobs, beats (only after a claim pass completes, so a replica that cannot register or list due jobs goes red), prunes `job_runs` after 90 days. |
 | `once <job>` | One foreground claim, run and release of a runner entry if it is due or requested. No upsert, no heartbeat. Exit 0 ok (75 included) or not due, 143 interrupted (a closed terminal and `Ctrl+\` are the stop too: the child has its own session and would outlive the runner), 1 otherwise (a timeout, or a database that did not answer within 60 s: "the database did not answer"). GitHub entries need #2033. |
-| `request <job> [--by WHO] [-- ARGS]` | Files a request row; the runner runs it within seconds, even while the schedule is paused. ARGS are appended to the registry argv (argparse keeps a repeated flag's last value). A second request is refused while one waits. |
+| `request <job> [--by WHO] [-- ARGS]` | Files a request row; the runner runs it within seconds, even while the schedule is paused. ARGS are appended to the registry argv (argparse keeps a repeated flag's last value), so they override the job's own flags unchecked: `clip --workers 64` or `stale_images --limit 10000000` bypass the co-tenancy census, which counts declared memory only. A second request is refused while one waits. The operator's form is "Jobs: run now" (below). |
 | `pause <job> --until <ISO\|now> --note TEXT [--by WHO]` | Pauses the schedule (a request still runs) on any live row, a `held()` lane's included. `--until now` lifts it and records who did. A past time is refused. |
 | `list` | Every `scheduled_jobs` row with its state and latest run. |
 
@@ -70,10 +70,79 @@ select job_name, outcome, exit_code, peak_rss_mb, started_at, ended_at - started
   from job_runs order by id desc limit 20;
 ```
 
+## Health: the `job/<name>` cell (migration 682, #2026)
+
+The pg_cron watcher writes one `job/<name>` cell per live registered job-runner row (`runner = 'job-runner'`,
+`registry_at` set, not retired: the due list's predicate), from `public.health_job_cells()`, every 5 min, so it
+survives a Railway outage. A job cell is never `unknown`. C is the row's cadence, T its `timeout_s`, W the longest run
+of a sibling on its resource seen since its clock started. The worst condition wins; every condition is in
+`facts.conditions`.
+
+| State | Status | Message (after `<job>: `) |
+|---|---|---|
+| Running, under ⅔·T | ok | `running for N of its T budget on job-runner/ab12cd34` (+ `; a request by X waits for it`) |
+| Running past ⅔·T / past T / past T + 10 min | Watch / Watch / **Problem** | `running for …`; past T `; past it: the runner is stopping it`; past T + `STUCK_RUN_GRACE_S` `; past the runner's 10 min stopping grace: nothing is stopping it` |
+| The latest closed run is `timeout` (ruling R-3) | **Problem** until a later run closes | `its last run hit its T budget and was stopped (timeout)` |
+| Failures in a row (`consecutive_failures`) | Watch at 1; **Problem** at 3 once the streak's first failure is min(C, 1 h) old | `its last run failed: <cause>` / `3 failed runs in a row, the first N ago; the last: <cause>` |
+| Late since its clock | Watch past C + T + W; **Problem** past that + min(C, 1 d) | `late: no ok run for N (Watch past …, Problem past …)` or `never ran ok` |
+| Due or requested, not started for 10 min | Watch while a replica beats; **Problem** when none has for 10 min | `due N ago and not started` / `requested by X N ago and not started` (+ `; no job-runner replica has beaten for 10 min`) |
+| Refused at boot (a replica's `JOBS skip`) | **Problem** | `refused at boot by job-runner/ab12cd34 (JOBS skip in its log): no replica claims it`; with no row: `… it has no row and runs nowhere` |
+| Paused | ok (late, failing and timeout suppressed) | `paused for N more by X: note` (+ `; its last run failed: <cause>`); paused longer than greater(C, 7 d) is Watch, `…longer than a cycle: its slots are skipped until then` |
+| Waiting for a sibling on its resource | ok | `waiting for B, which holds location-heavy (running N of its M budget)` (only while it waits) |
+| Requested, under 10 min | ok | `requested by X N ago; starting` |
+| New, adopted or un-retired, before its first slot | ok (history not judged) | `not run yet; first slot in N (… UTC)` / `registered again; not run here since; first slot in N (…); last ok M ago` |
+| Otherwise | ok | `last ok N ago; next slot in M` or `; due now`; a deploy-cut run adds `; its last run was cut by a deploy and is due again at once` (a cut request: `; a request by X was cut by a deploy; it is not re-filed`) |
+
+- **The clock** is the last ok run, else the first *scheduled* run (`requested_by IS NULL`) minus C, else the first
+  slot minus C, and a pause that lapsed restarts it. Never `registry_at` (every boot re-stamps it), never a request
+  run. Known edge: a run that served a request and took its due slot keeps `requested_by` (`job_runs` has no due
+  slot), so a never-succeeded job whose first run was one reads late up to one cycle later, never earlier.
+- **The cause** is the latest `failed`/`timeout`/`lost` run's: `lost: the replica holding it stopped renewing its
+  lease`; `scheduled_jobs.last_error` when that failure is the latest closed run; else `<outcome>, exit <code>`; a
+  request's cause adds `(a request by github:x, args …)`. `log_tail` is never read.
+- **Requests count as the job's runs** (#2024's release): a `--dry-run` request makes the job look freshly done and
+  resets the streak; a mistyped argument is a failed run (Watch until the next ok one; re-request it corrected).
+- **`job-runner`** (the fleet, present while any live row exists): ok `N replicas beating; M jobs registered`, or Watch
+  when no replica has beaten for 10 min; never a Problem (a cleanly stopped or deleted runner deletes its beats; it
+  stays Watch until a job comes due + 10 min). Each replica keeps its own `worker/job-runner/<id>` cell (migration 675).
+- **`job-cells`**: a Problem if the helper raised (`the job cells could not be computed: …`), with an `unknown`
+  `<subject>: not judged` cell per open `job/*` incident, so the teller neither recovers nor retires them.
+- **`job-runner/registry`** (the worker's `jobs` check, `scripts/checks/platform.py`): every name in
+  `jobs.runner_jobs()` (the code the worker runs: main's) needs a live registered row. Missing past
+  `jobs_runner_register_grace_s` (3600 s) from the worker's boot, read missing at the previous measurement too: a
+  **Problem**, "the runner is not running this registry" (its build failed or was skipped, it refused the entry, or an
+  older image booted and retired it): read Railway's job-runner deployments and the `BOOT … jobs=N` line. Missing at
+  one read only: Watch (in a deploy overlap the one worker heartbeat row can be the predecessor's). A live row the code
+  does not declare: Watch. Inside the grace: ok `waiting for the runner's deploy`.
+- **For the move PRs (#2027, #2028, #2029): the ⅔ line.** A job whose own budget sits above ⅔ of its `timeout_s`
+  reads Watch on every healthy run that uses it: location_intake runs `--max-seconds 2400` against T 3300 (⅔ = 2200)
+  and property_sweep `--max-seconds 6000` against 7800 (⅔ = 5200). Each move PR sets `timeout_s` ≥ 1.5× the job's own
+  budget, lowers the budget, or asks the operator. A walk stopped at its own timeout records `timeout`, a Problem: W4
+  keeps `walk_timeout_s` above each walk's p95. W2's three jobs are clear (stale_images runs 21-30 s of 1200;
+  rent_map and map_overlays carry no self-budget).
+- One job's cell off: `pause <job> --until <t> --note <why>`. The whole arm, forward only: a migration replacing
+  `health_job_cells(interval)` with `select '[]'::jsonb`.
+
+## Jobs: run now, click by click
+
+The GitHub form `.github/workflows/run_job.yml` files a request through the `request` verb (`--by github:<you>`) and
+runs nothing on GitHub; the runner starts the job within seconds once it and its resource are free.
+
+1. github.com → the repo → **Actions** → **Jobs: run now** (left list) → **Run workflow** (right).
+2. Leave "Use workflow from" on `main`.
+3. Type the job's name as Health shows it after `job/` (e.g. `map_overlays`); anything but `a-z`, `0-9` and `_` is
+   refused before Python runs. Optional args, e.g. `--dry-run` (quote a value with spaces); they override the job's
+   own flags unchecked.
+4. **Run workflow**.
+5. Open the run and read its one summary line: `request filed for <job>`, or why not (`<job> runs on
+   github-actions-until-moved` until its move PR lands; `a request by … has waited since …`; `not a job name`). Then
+   watch `job/<name>` on Health. Green means asked, not done.
+
 ## W2-gate drills (PROGRAM W2)
 
-- **Request run:** `request stale_images --by cli:me -- --limit 10`; a `RUN start … requested_by=cli:me` within 10 s,
-  then `RUN end`, and the row's `due_at` unchanged.
+- **Request run:** through the form (above) with `job=stale_images`, `args=--limit 10`, or
+  `request stale_images --by cli:me -- --limit 10`; a `RUN start … requested_by=github:<you>` within 10 s, then
+  `RUN end`, and the row's `due_at` unchanged.
 - **Pause with expiry:** `pause rent_map --until <now + 15 min> --note drill`; no claim while paused; a due slot
   inside the window is taken once the pause ends.
 - **Self-fence:** make one replica's database unreachable (or stop its renewals) while a job runs; `RUN kill …
