@@ -15,7 +15,8 @@ Exit codes, in the runner's terms: 0 done, nothing pending, downloads failing wi
 marked, --dry-run; 75 more remains (the budget cut a run that was making progress, or a
 campaign is still open); 143 a stop signal, after the chunk in hand; 2 SUPABASE_DB_URL or R2_*
 missing (R2 is required: a run that cannot download tags nothing); 1 downloads attempted and
-nothing marked, an embed failure that is not one image's, a crash.
+nothing marked, an embed failure that is not one image's, a crash. `--verify-reembed` runs only the re-embed proof
+(scripts/clip_reembed.py), which writes nothing: 0 on a pass, else 1.
 
 Usage:  python -m scripts.clip_tag_backfill --max-seconds 1500 --limit 5000 --workers 16
 Required: SUPABASE_DB_URL, R2_*, and the `clip` extra.
@@ -531,6 +532,9 @@ def _parser() -> argparse.ArgumentParser:
                         "Unset = use that operator priority list (empty = global only).")
     p.add_argument("--dry-run", action="store_true",
                    help="Report the pending count and exit without tagging.")
+    p.add_argument("--verify-reembed", action="store_true",
+                   help="Only the re-embed proof (scripts/clip_reembed.py): re-compute the frozen 100-image sample "
+                        "and compare; writes nothing.")
     p.add_argument("--verbose", action="store_true")
     return p
 
@@ -555,6 +559,11 @@ def main() -> int:
     from scraper.clip_tagger import Tagger
 
     with psycopg.connect(db_url, autocommit=True, prepare_threshold=None) as conn:
+        if args.verify_reembed:
+            from scripts import clip_reembed
+
+            return clip_reembed.verify(conn, args, r2_factory=lambda: clip_reembed.r2_client(args.workers),
+                                       tagger_factory=Tagger.load)
         return run(conn, args, r2_factory=lambda: _r2_client(args.workers), tagger_factory=Tagger.load)
 
 
