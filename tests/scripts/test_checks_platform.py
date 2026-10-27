@@ -18,6 +18,7 @@ import pytest
 from psycopg import errors as pg_errors
 
 from autodedup.incremental_lane import LEASE_LOST, STOPPING
+from scraper import jobs
 from scripts.checks import platform as plat
 from scripts.checks.common import PREVIOUS_CELLS_SQL
 from scripts.migration_objects import SAFE_IDENT, load_migrations
@@ -155,10 +156,12 @@ def _jobs(*, workflows: list[Any] | None = None, cursor: Any = "fresh", cron: An
           lanes: dict[str, Any] | None = None, booted: _dt.datetime | None = None,
           beat_at: _dt.datetime | None = None, previous: list[dict[str, Any]] | None = None,
           previous_at: _dt.datetime | None = None, artifacts: list[Any] | None = None,
-          whole: bool = True) -> tuple[dict[str, Any], _Conn]:
+          whole: bool = True, registered: list[str] | None = None) -> tuple[dict[str, Any], _Conn]:
     """check_jobs over a healthy fleet, with the parts a test names replaced. The heartbeat carries
     every registered lane, as the worker's does from boot: those a test does not name are healthy
-    (`whole=False`: only the named ones, a beat from a worker older than this code)."""
+    (`whole=False`: only the named ones, a beat from a worker older than this code). The job runner
+    has registered every job this code puts on it (`registered`: these rows instead), so no verdict
+    here moves when a move PR hands a job to the runner."""
     if lanes is None:
         lanes = {"probe": _lane()}
     if whole:
@@ -172,7 +175,8 @@ def _jobs(*, workflows: list[Any] | None = None, cursor: Any = "fresh", cron: An
         PREVIOUS_CELLS_SQL: ([(previous_at or _ago(minutes=9), previous)]
                              if previous is not None else []),
         plat._ARTIFACTS_SQL: artifacts or [],
-        plat._REGISTERED_SQL: [],
+        plat._REGISTERED_SQL: [(name,) for name in (
+            sorted(j.name for j in plat._runner_jobs()) if registered is None else registered)],
     })
     return plat.check_jobs(conn, T), conn
 
@@ -727,9 +731,12 @@ def test_with_nothing_declared_or_registered_the_registry_cell_is_ok() -> None:
 
 def test_the_registry_cell_is_always_in_the_jobs_check_and_reads_the_code_the_worker_runs(
         monkeypatch: pytest.MonkeyPatch) -> None:
+    cell = _cells(_jobs()[0])["job-runner/registry"]
+    assert cell["facts"]["declared"] == sorted(j.name for j in jobs.runner_jobs()) and cell["status"] == "ok"
+    monkeypatch.setattr(plat, "_runner_jobs", lambda: ())
     assert _cells(_jobs()[0])["job-runner/registry"]["message"] == "no job is declared on the job runner yet"
     monkeypatch.setattr(plat, "_runner_jobs", lambda: (_JobEntry("stale_images"),))
-    cell = _cells(_jobs()[0])["job-runner/registry"]
+    cell = _cells(_jobs(registered=[])[0])["job-runner/registry"]
     assert cell["facts"]["declared"] == ["stale_images"] and cell["status"] == "warn"
 
 
