@@ -248,6 +248,8 @@ class _StoreCur:
         if sql.startswith("SET LOCAL"):
             db.selects.append([])
             db.pending |= set(db.arrivals.get(len(db.selects), ()))
+            if db.on_select:
+                db.on_select(len(db.selects))
         elif "clip_tagging_priority_region_ids" in sql:
             rows = [([],)]
         elif sql in (ctb._SELECT_FRESH, ctb._SELECT_REGION, ctb._SELECT_GLOBAL):
@@ -299,8 +301,10 @@ class _Store:
     order, and a campaign of stored vectors."""
 
     def __init__(self, ids: Iterable[int] = (), *, fresh: Iterable[int] = (),
-                 arrivals: dict[int, Iterable[int]] | None = None, campaign: int = 0) -> None:
+                 arrivals: dict[int, Iterable[int]] | None = None, campaign: int = 0,
+                 on_select: Callable[[int], None] | None = None) -> None:
         self.pending = set(ids)
+        self.on_select = on_select
         self.fresh = set(fresh)
         self.arrivals = {n: list(v) for n, v in (arrivals or {}).items()}
         self.campaign = list(range(10**9, 10**9 + campaign))
@@ -323,16 +327,36 @@ class _Store:
         return _StoreCur(self)
 
 
+class _Bytes(bytes):
+    """A GET's body: counts how many are alive at once."""
+
+    made = 0
+    live = 0
+
+    def __new__(cls, value: bytes) -> "_Bytes":
+        with _Live.lock:
+            _Bytes.made += 1
+            _Bytes.live += 1
+        return super().__new__(cls, value)
+
+    def __del__(self) -> None:
+        with _Live.lock:
+            _Bytes.live -= 1
+
+
 class _R2:
-    """GETs return the image id as bytes; `fail(id, n)` (n: the GET's number) raises after `secs` fake seconds; an id
-    in `block` waits (its first GET only) until `release` or 3 s."""
+    """GETs return the image id as bytes (`junk` ids: bytes that decode to no image); `fail(id, n)` (n: the GET's
+    number) raises after `secs` fake seconds; an id in `block` waits (its first GET only) until `release` or 3 s,
+    counted in `blocking` meanwhile."""
 
     def __init__(self, clock: _Clock, *, fail: Callable[[int, int], bool] = lambda i, n: False, secs: float = 0.0,
-                 delay: float = 0.0, block: Iterable[int] = (),
+                 delay: float = 0.0, block: Iterable[int] = (), junk: Iterable[int] = (),
                  on_get: Callable[[int, int], None] | None = None) -> None:
         self.clock, self.fail, self.secs, self.delay, self.on_get = clock, fail, secs, delay, on_get
         self.block = set(block)
+        self.junk = set(junk)
         self.release = threading.Event()
+        self.blocking = 0
         self.calls: list[int] = []
         self._lock = threading.Lock()
 
@@ -348,11 +372,15 @@ class _R2:
         if self.delay:
             time.sleep(self.delay)
         if blocked:
+            with self._lock:
+                self.blocking += 1
             self.release.wait(3)
+            with self._lock:
+                self.blocking -= 1
         self.clock.advance(self.secs)
         if self.fail(image_id, n):
             raise RuntimeError("R2 blip")
-        return str(image_id).encode()
+        return _Bytes(b"not-an-image" if image_id in self.junk else str(image_id).encode())
 
 
 class _Live:
@@ -441,6 +469,7 @@ def _fakes(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(ctb, "_decode", lambda data: _Live(int(data)) if data.isdigit() else real(data))
     monkeypatch.setattr(rte, "_as_tensor", lambda vectors: vectors)
     _Live.live = _Live.peak = 0
+    _Bytes.made = _Bytes.live = 0
     yield
 
 
@@ -540,10 +569,99 @@ def test_a_straggler_past_the_download_deadline_stays_unmarked() -> None:
         assert job.run("--download-deadline", "45") == 0
         first = set(range(1, 129)) - {64}
         assert set(job.tagger.batches[0]) == first and set(store.marked[:127]) == first, "the other 127 are tagged"
-        assert store.selects[2][-1] == 64, "a later re-select offers the straggler again"
-        assert job.tagger.batches[2] == [64] and store.marked[-1] == 64 and len(store.marked) == 256
+        assert len(store.selects) == 3 and store.selects[2][-1] == 64, "a later re-select still sees the straggler"
+        assert 64 not in store.marked and 64 in store.pending, "this run skips it; the next slot retries it"
+        assert len(store.marked) == 255 and r2.calls.count(64) == 1
     finally:
         r2.release.set()
+
+
+def test_images_whose_get_always_fails_cost_one_get_a_run_and_never_end_the_drain(
+        caplog: pytest.LogCaptureFixture) -> None:
+    """A dead object (deleted from R2, say) is newer than the backlog behind it, so every re-select would offer it
+    first again: 200 of them would fill an all-failed chunk and end the run. Each costs one GET a run instead."""
+    clock = _Clock()
+    dead = set(range(25, 5001, 25))
+    store = _Store(range(1, 5001))
+    r2 = _R2(clock, fail=lambda i, n: i in dead)
+    with caplog.at_level(logging.INFO):
+        assert _Job(store, clock=clock, r2=r2).run("--max-seconds", "1500") == 0
+    assert _lines(caplog)[-1] == "CLIP_JOB exit=0 why=done"
+    assert set(store.marked) == set(range(1, 5001)) - dead and dead <= store.pending
+    assert {i: r2.calls.count(i) for i in dead} == dict.fromkeys(dead, 1)
+
+
+def test_a_few_failing_gets_alone_are_no_r2_outage(caplog: pytest.LogCaptureFixture) -> None:
+    """Nothing else waits (a quiet hour, three dead objects): under a chunk of failed GETs is no outage and starts no
+    failure streak; a whole chunk failing is one (test_transient_download_errors_never_chain_the_job's cases a-c)."""
+    clock = _Clock()
+    with caplog.at_level(logging.INFO):
+        assert _Job(_Store(range(1, 4)), clock=clock, r2=_R2(clock, fail=lambda i, n: True)).run() == 0
+    assert _lines(caplog)[-1] == "CLIP_JOB exit=0 why=errors"
+
+
+def test_a_chunks_bytes_are_dropped_once_it_is_decoded() -> None:
+    """While chunk 1 encodes, the only GET bodies alive are the prefetched chunk's (decision 5's memory budget)."""
+    clock = _Clock()
+    alive: list[int] = []
+
+    def on_embed(ids: list[int]) -> None:
+        if ids[0] == 384:
+            until = time.monotonic() + 2
+            while _Bytes.made < 256 and time.monotonic() < until:
+                time.sleep(0.001)
+            alive.append(_Bytes.live)
+
+    assert _Job(_Store(range(1, 385)), clock=clock, tagger=_Tagger(clock, on_embed=on_embed)).run() == 0
+    assert alive == [128], "chunk 2's bodies, never chunk 1's"
+
+
+def test_a_prefetched_chunk_whose_deadline_passed_during_the_encode_still_gets_a_wait() -> None:
+    """Its GETs queued behind four slow ones while chunk 1 encoded for 50 s, past its 45 s from submission: once
+    current it still waits a moment, so the GETs that were about to land are tagged, not dropped."""
+    clock = _Clock()
+    r2 = _R2(clock, block=[128, 127, 126, 125])
+
+    def on_embed(ids: list[int]) -> None:
+        if ids[0] == 256:
+            threading.Timer(0.2, r2.release.set).start()
+
+    job = _Job(_Store(range(1, 257)), clock=clock, r2=r2, tagger=_Tagger(clock, secs=50, on_embed=on_embed))
+    try:
+        assert job.run("--workers", "4", "--download-deadline", "45") == 0
+        assert len(job.store.marked) == 256
+    finally:
+        r2.release.set()
+
+
+def test_a_get_cancelled_before_it_started_is_no_attempt(caplog: pytest.LogCaptureFixture) -> None:
+    """One stalled GET holds the only worker past the deadline: one attempt, failed; the 127 queued behind it were
+    never tried."""
+    clock = _Clock(step=1.0)
+    r2 = _R2(clock, block=[128])
+    try:
+        with caplog.at_level(logging.INFO):
+            assert _Job(_Store(range(1, 129)), clock=clock, r2=r2).run("--workers", "1", "--download-deadline",
+                                                                        "45") == 1
+    finally:
+        r2.release.set()
+    done = next(line for line in _lines(caplog) if line.startswith("CLIP_TAG done "))
+    assert " errors=1 attempts=1 " in done, done
+    assert r2.calls == [128]
+
+
+def test_stalled_gets_never_hold_up_the_decode() -> None:
+    """Both download workers are stuck on GETs abandoned at the deadline; the chunk still decodes and encodes."""
+    clock = _Clock(step=1.0)
+    r2 = _R2(clock, block=[2, 1])
+    held: list[int] = []
+    tagger = _Tagger(clock, on_embed=lambda ids: held.append(r2.blocking))
+    try:
+        assert _Job(_Store(range(1, 129)), clock=clock, r2=r2, tagger=tagger).run(
+            "--workers", "2", "--download-deadline", "45") == 0
+    finally:
+        r2.release.set()
+    assert held[:1] == [2], "chunk 1 encoded while both stalled GETs still held the download workers"
 
 
 def test_tag_runs_before_retag_with_one_model_load_and_one_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -600,7 +718,8 @@ def test_a_batch_that_fails_to_embed_isolates_one_bad_image(caplog: pytest.LogCa
     lambda ids: RuntimeError("every image"),
     lambda ids: RuntimeError("three bad") if {5, 7, 9} & set(ids) else None,
     lambda ids: MemoryError() if 7 in ids else None,
-], ids=["no-image-embeds-alone", "over-the-cap", "memory-error"])
+    lambda ids: MemoryError() if ids == [7] else RuntimeError("batch") if len(ids) > 1 else None,
+], ids=["no-image-embeds-alone", "over-the-cap", "memory-error", "memory-error-alone"])
 def test_an_embed_failure_that_is_not_one_images_marks_nothing_and_exits_1(
         caplog: pytest.LogCaptureFixture, raises: Callable[[list[int]], BaseException | None]) -> None:
     clock = _Clock()
@@ -609,6 +728,87 @@ def test_an_embed_failure_that_is_not_one_images_marks_nothing_and_exits_1(
         assert _Job(store, clock=clock, tagger=_Tagger(clock, raises=raises)).run() == 1
     assert store.marked == [] and store.writes == []
     assert _lines(caplog)[-1] == "CLIP_JOB exit=1 why=embed"
+
+
+@pytest.mark.parametrize("kind", ["embed", "decode"])
+def test_the_run_stamps_at_most_five_photos_terminal(caplog: pytest.LogCaptureFixture, kind: str) -> None:
+    """Two failing photos in each of four chunks: chunks 1 and 2 mark theirs; chunk 3 would make six, so the run exits
+    1 there and marks nothing of it (an environmental regression never stamps a whole run's photos)."""
+    clock = _Clock()
+    bad = {500, 499, 372, 371, 244, 243, 116, 115}
+    store = _Store(range(1, 513))
+    if kind == "embed":
+        job = _Job(store, clock=clock,
+                   tagger=_Tagger(clock, raises=lambda ids: RuntimeError("shape") if bad & set(ids) else None))
+    else:
+        job = _Job(store, clock=clock, r2=_R2(clock, junk=bad))
+    with caplog.at_level(logging.INFO):
+        assert job.run() == 1
+    assert _lines(caplog)[-1] == f"CLIP_JOB exit=1 why={kind}"
+    assert bad & set(store.marked) == {500, 499, 372, 371} and len(store.marked) == 256, "chunk 3 marks nothing"
+
+
+def test_an_undecodable_photo_beside_siblings_that_decode_is_marked_terminal(caplog: pytest.LogCaptureFixture) -> None:
+    clock = _Clock()
+    store = _Store(range(1, 51))
+    with caplog.at_level(logging.INFO):
+        assert _Job(store, clock=clock, r2=_R2(clock, junk=[7, 9])).run() == 0
+    assert sorted(store.marked) == list(range(1, 51))
+    assert sorted(store.tagged) == sorted(store.vectored) == sorted(set(range(1, 51)) - {7, 9})
+    assert [line for line in _lines(caplog) if line.startswith("CLIP_TAG undecodable ")] == [
+        "CLIP_TAG undecodable image=9: UnidentifiedImageError", "CLIP_TAG undecodable image=7: UnidentifiedImageError"]
+    assert " terminal=2 " in next(line for line in _lines(caplog) if line.startswith("CLIP_TAG done "))
+
+
+def _oom(data: bytes) -> Any:
+    raise MemoryError
+
+
+@pytest.mark.parametrize(("junk", "oom"), [(range(1, 51), ()), ((5, 7, 9), ()), ((), (7,))],
+                         ids=["nothing-decodes", "over-the-cap", "memory-error"])
+def test_a_decode_failure_that_is_not_one_photos_marks_nothing_and_exits_1(
+        caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch, junk: Iterable[int],
+        oom: tuple[int, ...]) -> None:
+    """A Pillow regression or memory pressure, not a corrupt file: stamping would lose the photos' CLIP evidence."""
+    fake = ctb._decode
+    monkeypatch.setattr(ctb, "_decode", lambda data: _oom(data) if data.isdigit() and int(data) in oom else fake(data))
+    clock = _Clock()
+    store = _Store(range(1, 51))
+    with caplog.at_level(logging.INFO):
+        assert _Job(store, clock=clock, r2=_R2(clock, junk=junk)).run() == 1
+    assert store.marked == [] and store.writes == []
+    assert _lines(caplog)[-1] == "CLIP_JOB exit=1 why=decode"
+
+
+def test_a_stop_during_a_reselect_submits_no_more_gets() -> None:
+    clock = _Clock()
+    store = _Store(range(1, 301), arrivals={2: range(1001, 1129)},
+                   on_select=lambda n: stop.EVENT.set() if n == 2 else None)
+    # The encode takes a moment, so GETs submitted before it would have started.
+    job = _Job(store, clock=clock, tagger=_Tagger(clock, on_embed=lambda ids: time.sleep(0.05)))
+    try:
+        assert job.run() == stop.EXIT_CODE
+        assert len(store.selects) == 2 and not [i for i in job.r2.calls if i > 1000], "no GET after the stop"
+        assert len(store.marked) == 300, "the chunk in hand still commits"
+    finally:
+        stop.reset()
+
+
+def test_a_stop_during_the_model_load_submits_no_get() -> None:
+    clock = _Clock()
+    store = _Store(range(1, 301))
+    job = _Job(store, clock=clock)
+
+    def load(threads: int) -> _Tagger:
+        stop.EVENT.set()
+        return job.tagger
+
+    try:
+        assert ctb.run(store, ctb._parser().parse_args([]), r2_factory=job._r2, tagger_factory=load,
+                       clock=clock) == stop.EXIT_CODE
+        assert job.r2.calls == [] and store.marked == []
+    finally:
+        stop.reset()
 
 
 def test_a_stop_signal_finishes_the_chunk_in_hand_and_exits_143() -> None:

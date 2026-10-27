@@ -7,16 +7,18 @@ Selects images not yet CLIP-tagged via the in-table marker images.clip_tagged_at
 Downloads bytes from R2 on a worker pool (the next chunk's while this one encodes, each chunk
 waiting at most --download-deadline for its GETs), tags and embeds them, and per chunk writes
 the tags, then the vectors, then the stamp. Inside --max-seconds it selects again every
---reselect-seconds and whenever its snapshot drains, and its tag phase ends on a select under
-one chunk; an open campaign is then re-tagged from the stored vectors
-(scripts/retag_from_embeddings.py) under the same deadline.
+--reselect-seconds and whenever its snapshot drains (never offering again a GET that failed in
+this run: the next slot retries it), and its tag phase ends on a select under one chunk; an
+open campaign is then re-tagged from the stored vectors (scripts/retag_from_embeddings.py)
+under the same deadline.
 
 Exit codes, in the runner's terms: 0 done, nothing pending, downloads failing with something
-marked, --dry-run; 75 more remains (the budget cut a run that was making progress, or a
-campaign is still open); 143 a stop signal, after the chunk in hand; 2 SUPABASE_DB_URL or R2_*
-missing (R2 is required: a run that cannot download tags nothing); 1 downloads attempted and
-nothing marked, an embed failure that is not one image's, a crash. `--verify-reembed` runs only the re-embed proof
-(scripts/clip_reembed.py), which writes nothing: 0 on a pass, else 1.
+marked or under a chunk of them, --dry-run; 75 more remains (the budget cut a run that was
+making progress, or a campaign is still open); 143 a stop signal, after the chunk in hand; 2
+SUPABASE_DB_URL or R2_* missing (R2 is required: a run that cannot download tags nothing); 1 a
+whole chunk's downloads failed and nothing was marked, a decode or embed failure that is not one
+image's, a crash. `--verify-reembed` runs only the re-embed proof (scripts/clip_reembed.py),
+which writes nothing: 0 on a pass, else 1.
 
 Usage:  python -m scripts.clip_tag_backfill --max-seconds 1500 --limit 5000 --workers 16
 Required: SUPABASE_DB_URL, R2_*, and the `clip` extra.
@@ -54,13 +56,17 @@ LOG = logging.getLogger("clip_tag_backfill")
 EXIT_MORE = 75
 # Why a run ended -> its exit code (the module docstring; `late` is a budget spent before the first chunk).
 EXITS = {"done": 0, "nothing": 0, "dry_run": 0, "errors": 0, "late": 0, "budget": EXIT_MORE, "retag": EXIT_MORE,
-         "r2": 1, "embed": 1, "stop": stop.EXIT_CODE, "refused": 2}
+         "r2": 1, "decode": 1, "embed": 1, "stop": stop.EXIT_CODE, "refused": 2}
 PROGRESS_EVERY_S = 60
 MAX_WARNINGS = 10
-# An image that fails to embed alone while a sibling embeds alone is marked terminal, at most this many.
+# An image that fails to decode, or to embed alone, while a sibling of its chunk does is marked terminal: at most this
+# many of each kind.
 TERMINAL_PER_CHUNK, TERMINAL_PER_RUN = 2, 5
 # How often a wait on a chunk's GETs looks at the stop signal.
 _POLL_S = 0.5
+# The least a chunk waits for its GETs once it is current: a prefetched chunk's deadline runs from its submission, and
+# can pass while the chunk before it encodes.
+MIN_WAIT_S = 5.0
 # This job's R2 only: a GET that stalls before its response costs at most 2 × (5 + 20) s and the backoff; botocore's
 # defaults (60 s, legacy retries) fit the 130–430 s chunks GitHub's shards waited on (#2032).
 R2_TIMEOUTS: dict[str, int] = {"connect_timeout_s": 5, "read_timeout_s": 20, "max_attempts": 2}
@@ -255,9 +261,10 @@ class _Tally:
     written: int = 0   # tag rows
     embedded: int = 0  # vector rows
     marked: int = 0    # stamps
-    attempts: int = 0  # GETs waited on
+    attempts: int = 0  # GETs started (one cancelled before it started is none)
     errors: int = 0    # of those, failed or past the download deadline
     terminal: int = 0  # stamped with no tag: undecodable bytes, or one image's embed failure
+    decode_terminal: int = 0
     embed_terminal: int = 0
     selects: int = 0
 
@@ -299,37 +306,58 @@ def _submit(pool: ThreadPoolExecutor, r2: image_storage.R2Client, rows: list,
     return _Fetch(rows, [pool.submit(r2.download_bytes, row[1]) for row in rows], clock())
 
 
-def _await(fetch: _Fetch, deadline_s: float, clock: Callable[[], float]) -> list[tuple[int, bytes]]:
-    """The chunk's downloaded bytes, waiting at most `deadline_s` from submission and never past a stop. A GET still
-    queued is cancelled; one in flight is abandoned. Both stay unmarked for the next select."""
+def _await(fetch: _Fetch, deadline_s: float, clock: Callable[[], float]) -> tuple[list[tuple[int, bytes]], list[int]]:
+    """(the chunk's downloaded bytes, the ids whose GET failed or was abandoned in flight), waiting until `deadline_s`
+    after submission, at least MIN_WAIT_S once current, and never past a stop. A GET still queued is cancelled and was
+    no attempt. The futures are dropped, so the bytes live only in the list returned."""
+    until = max(fetch.submitted_at + deadline_s, clock() + MIN_WAIT_S)
     pending = set(fetch.futures)
     while pending and not stop.requested():
-        left = fetch.submitted_at + deadline_s - clock()
+        left = until - clock()
         if left <= 0:
             break
         _done, pending = wait(pending, timeout=min(left, _POLL_S))
-    fetch.cancel()
-    return [(row[0], f.result()) for row, f in zip(fetch.rows, fetch.futures)
-            if f.done() and not f.cancelled() and f.exception() is None]
+    got: list[tuple[int, bytes]] = []
+    failed: list[int] = []
+    for row, future in zip(fetch.rows, fetch.futures):
+        if future.cancel():
+            continue
+        if future.done() and future.exception() is None:
+            got.append((row[0], future.result()))
+        else:
+            failed.append(row[0])
+    fetch.futures.clear()
+    return got, failed
 
 
-def _decode_all(pool: ThreadPoolExecutor, got: list[tuple[int, bytes]]) -> tuple[list[tuple[int, Any]], list[int]]:
-    """(decoded, undecodable): the latter are terminal, marked so they leave the needs-clip index."""
+def _decode_all(pool: ThreadPoolExecutor,
+                got: list[tuple[int, bytes]]) -> tuple[list[tuple[int, Any]], list[tuple[int, str]]]:
+    """(decoded, [(image_id, exception name)] whose bytes do not decode). A MemoryError propagates: it is the
+    process's, not the file's."""
 
-    def one(item: tuple[int, bytes]) -> tuple[int, Any]:
+    def one(item: tuple[int, bytes]) -> tuple[int, Any, str]:
         try:
-            return item[0], _decode(item[1])
-        except Exception:  # noqa: BLE001 - stored bytes won't decode: terminal, mark it
-            return item[0], None
+            return item[0], _decode(item[1]), ""
+        except MemoryError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - judged by the caller, with its siblings
+            return item[0], None, type(exc).__name__
 
     decoded: list[tuple[int, Any]] = []
-    undecodable: list[int] = []
-    for image_id, img in pool.map(one, got):
+    undecodable: list[tuple[int, str]] = []
+    for image_id, img, name in pool.map(one, got):
         if img is None:
-            undecodable.append(image_id)
+            undecodable.append((image_id, name))
         else:
             decoded.append((image_id, img))
     return decoded, undecodable
+
+
+def _undecodable_alone(decoded: list, undecodable: list, tally: _Tally) -> bool:
+    """Bytes that decode to no image beside a sibling that does are the file's: terminal, within the caps. Anything
+    else (nothing of the chunk decodes, a cap passed) is the environment's, and marks nothing."""
+    return bool(decoded) and len(undecodable) <= TERMINAL_PER_CHUNK and (
+        tally.decode_terminal + len(undecodable) <= TERMINAL_PER_RUN)
 
 
 def _embed(tagger: Tagger, decoded: list[tuple[int, Any]], batch_size: int, tally: _Tally,
@@ -380,12 +408,13 @@ def _write(conn: psycopg.Connection, model: str, revision: str | None,
         cur.execute(_MARK_SQL, (mark_ids,))  # drop from the needs-clip partial index
 
 
-def _verdict(tally: _Tally, *, cut: bool, all_failed: bool = False) -> str:
+def _verdict(tally: _Tally, *, cut: bool, all_failed: bool = False, whole_chunk: bool = True) -> str:
     """Why a tag phase that stopped short ended. Progress decides, not the cut: more remains (75) only when the
-    deadline stopped a run whose downloads mostly worked; an R2 outage never chains a run every minute."""
+    deadline stopped a run whose downloads mostly worked; an R2 outage never chains a run every minute. A failed
+    chunk smaller than a whole one with nothing marked (a few dead objects alone in a quiet hour) is no outage."""
     if cut and not all_failed and tally.errors * 2 < tally.attempts:
         return "budget"
-    if tally.attempts and not tally.marked:
+    if tally.attempts and not tally.marked and whole_chunk:
         return "r2"
     return "errors" if tally.attempts else "late"
 
@@ -396,39 +425,57 @@ def _take(snapshot: deque, n: int) -> list:
 
 def _tag(conn: psycopg.Connection, r2: image_storage.R2Client, tagger: Tagger, rows: list, args: argparse.Namespace,
          *, priority: list[int], model: str, deadline: float, clock: Callable[[], float], tally: _Tally,
-         lines: _Lines) -> str:
+         lines: _Lines, decoders: int) -> str:
     """The tag phase; returns why it ended (EXITS). A chunk's GETs are submitted when the chunk before it has
-    decoded, so they download while it encodes; at most one chunk is ever decoded in memory."""
+    decoded, so they download while it encodes; at most one chunk is ever decoded in memory, on its own pool, so a
+    GET abandoned in flight never delays it. A GET that failed in this run is not offered again before the next."""
     size = args.chunk
     snapshot, final = deque(rows), len(rows) < size
     last_select = clock()
     if last_select >= deadline:
         return _verdict(tally, cut=True)
+    if stop.requested():
+        return "stop"
     pool = ThreadPoolExecutor(max_workers=max(1, args.workers))
+    decode_pool = ThreadPoolExecutor(max_workers=max(1, decoders))
+    failed_ids: set[int] = set()
     try:
         fetch = _submit(pool, r2, _take(snapshot, size), clock)
         while True:
-            got = _await(fetch, args.download_deadline, clock)
-            tally.attempts += len(fetch.rows)
-            tally.errors += len(fetch.rows) - len(got)
+            got, failed = _await(fetch, args.download_deadline, clock)
+            tally.attempts += len(got) + len(failed)
+            tally.errors += len(failed)
+            failed_ids.update(failed)
             if not got:
-                return "stop" if stop.requested() else _verdict(tally, cut=clock() >= deadline, all_failed=True)
+                return "stop" if stop.requested() else _verdict(tally, cut=clock() >= deadline, all_failed=True,
+                                                               whole_chunk=len(fetch.rows) >= size)
             in_hand = {row[0] for row in fetch.rows}
-            decoded, undecodable = _decode_all(pool, got)
+            try:
+                decoded, undecodable = _decode_all(decode_pool, got)
+            except MemoryError:
+                lines.warn("CLIP_TAG decode failed chunk n=%d: MemoryError", len(got))
+                return "decode"
             del got
+            if undecodable and not _undecodable_alone(decoded, undecodable, tally):
+                lines.warn("CLIP_TAG decode failed chunk n=%d undecodable=%d: not one image's",
+                           len(decoded) + len(undecodable), len(undecodable))
+                return "decode"
+            for image_id, name in undecodable:
+                lines.warn("CLIP_TAG undecodable image=%d: %s", image_id, name)
             nxt: _Fetch | None = None
             if not stop.requested() and clock() < deadline and (snapshot or not final):
                 if not snapshot or clock() - last_select >= args.reselect_seconds:
                     fresh, phase = _select_pending(conn, limit=args.limit, priority_regions=priority)
                     tally.selects += 1
                     last_select = clock()
-                    fresh = [row for row in fresh if row[0] not in in_hand]
+                    fresh = [row for row in fresh if row[0] not in in_hand and row[0] not in failed_ids]
                     snapshot, final = deque(fresh), len(fresh) < size
                     lines.every_minute("CLIP_TAG reselect pending=%d phase=%s", len(fresh), phase)
-                if snapshot:
+                if snapshot and not stop.requested():
                     nxt = _submit(pool, r2, _take(snapshot, size), clock)
             encoded: list[tuple[int, TagResult, str]] = []
-            terminal = list(undecodable)
+            terminal = [image_id for image_id, _ in undecodable]
+            tally.decode_terminal += len(undecodable)
             if decoded:
                 result = _embed(tagger, decoded, args.batch_size, tally, lines)
                 if result is None:
@@ -460,6 +507,7 @@ def _tag(conn: psycopg.Connection, r2: image_storage.R2Client, tagger: Tagger, r
             fetch = nxt
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
+        decode_pool.shutdown(wait=False, cancel_futures=True)
 
 
 def _exit(why: str) -> int:
@@ -496,7 +544,7 @@ def run(conn: psycopg.Connection, args: argparse.Namespace, *, r2_factory: Calla
     why = "done"
     if rows:
         why = _tag(conn, r2_factory(), tagger, rows, args, priority=priority, model=model, deadline=deadline,
-                   clock=clock, tally=tally, lines=lines)
+                   clock=clock, tally=tally, lines=lines, decoders=threads)
     tag_secs = clock() - tag_started
     retagged, drained, retag_secs = 0, cutoff is None, 0.0
     if cutoff is not None and why == "done":
