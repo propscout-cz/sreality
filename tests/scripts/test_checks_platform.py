@@ -724,7 +724,7 @@ def test_a_row_this_code_does_not_declare_is_watch_past_the_grace() -> None:
 
 
 def test_with_nothing_declared_or_registered_the_registry_cell_is_ok() -> None:
-    """Production until #2025 PR-2: runner_jobs() is empty."""
+    """Production before #2025 PR-2, when runner_jobs() was empty."""
     cell, _ = _registry(set(), [])
     assert (cell["status"], cell["message"]) == ("ok", "no job is declared on the job runner yet")
 
