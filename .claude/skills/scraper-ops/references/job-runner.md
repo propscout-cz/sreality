@@ -97,10 +97,11 @@ of a sibling on its resource seen since its clock started. The worst condition w
   slot minus C, and a pause that lapsed restarts it. Never a request run. A row that **joined after a gap**
   (`registry_at`, stamped when a row is new, adopted or un-retired and kept by later boots; no ok run since and no run
   of it in the C + T before) is judged on its runs since the join: its clock is its first scheduled run since minus C,
-  else its first slot minus C, and its streak counts its failed runs since, so the success, streak and error
-  un-retiring carries from before a revert never read Problem (a deploy-cut first run reads ok, one failure Watch). A
-  row whose runs go on through `registry_at` is judged whole. Known edge: a run that served a request and took its due slot keeps `requested_by` (`job_runs` has no due
-  slot), so a never-succeeded job whose first run was one reads late up to one cycle later, never earlier.
+  else its first slot minus C, and its streak counts its failed runs since, so the success and streak un-retiring
+  carries from before a revert never read Problem (a deploy-cut first run reads ok, one failure Watch). A row whose
+  runs go on through `registry_at` is judged whole. Known edge: a run that served a request and took its due slot
+  keeps `requested_by` (`job_runs` has no due slot), so a never-succeeded job whose first run was one reads late up
+  to one cycle later, never earlier.
 - **The cause** is the latest `failed`/`timeout`/`lost` run's: `lost: the replica holding it stopped renewing its
   lease`; `scheduled_jobs.last_error` when that failure is the latest closed run; else `<outcome>, exit <code>`; a
   request's cause adds `(a request by github:x, args …)`. `log_tail` is never read.
