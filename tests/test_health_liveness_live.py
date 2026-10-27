@@ -506,7 +506,7 @@ def _job_subjects(cells: dict[str, list[dict[str, Any]]]) -> set[str]:
     return {s for s in cells if s.startswith("job")}
 
 
-def test_a_registered_job_that_has_not_run_yet_reads_ok_and_the_fleet_counts_it(cur):
+def test_a_registered_job_that_has_not_run_yet_reads_ok_and_the_fleet_counts_it(cur: Any) -> None:
     """C2: never 'unknown', or one never-run job would turn the whole row Not measured."""
     _runner_beat(cur, "r1", "0 minutes")
     _job(cur, "x", due="5 hours")
@@ -521,7 +521,7 @@ def test_a_registered_job_that_has_not_run_yet_reads_ok_and_the_fleet_counts_it(
     assert (status, details["message"]) == ("ok", "Watchers: all alive")
 
 
-def test_production_shape_has_no_job_cell(cur):
+def test_production_shape_has_no_job_cell(cur: Any) -> None:
     """C1 (guard): the lane row, retired registered rows and an unregistered runner row get no cell, nor a fleet."""
     _runner_beat(cur, "r1", "0 minutes")
     cur.execute("insert into scheduled_jobs (job_name, cadence, runner) "
@@ -534,7 +534,7 @@ def test_production_shape_has_no_job_cell(cur):
     assert _job_subjects(_liveness(cur)[3]) == set()
 
 
-def test_a_job_is_late_past_its_cadence_its_budget_and_a_cycle_more(cur):
+def test_a_job_is_late_past_its_cadence_its_budget_and_a_cycle_more(cur: Any) -> None:
     """C3: Watch past C + T + W, Problem a min(C, 1 d) later; each of these was just claimed, late."""
     _runner_beat(cur, "r1", "0 minutes")
     for name, every, timeout_s, last_ok, due in (
@@ -560,7 +560,7 @@ def test_a_job_is_late_past_its_cadence_its_budget_and_a_cycle_more(cur):
         "fail", "fail_31d: late: no ok run for 31 d (Watch past 30 d, Problem past 31 d)")
 
 
-def test_a_never_succeeded_job_is_late_from_its_first_scheduled_run_never_from_a_request(cur):
+def test_a_never_succeeded_job_is_late_from_its_first_scheduled_run_never_from_a_request(cur: Any) -> None:
     """C3: never anchored on due_at alone (every release moves it) nor on a request run (a failed drill on a quarterly
     job is a failure, not lateness)."""
     _runner_beat(cur, "r1", "0 minutes")
@@ -587,7 +587,7 @@ def test_a_never_succeeded_job_is_late_from_its_first_scheduled_run_never_from_a
     assert _conditions(cells, "job/quarterly") == ["warn: its last run failed: exit 2 (a request by github:op)"]
 
 
-def test_a_lapsed_pause_restarts_the_late_and_the_waiting_clock(cur):
+def test_a_lapsed_pause_restarts_the_late_and_the_waiting_clock(cur: Any) -> None:
     """C3: a pause that lifted a minute ago, three days after the last ok run, is neither late nor long waiting."""
     _runner_beat(cur, "r1", "0 minutes")
     _job(cur, "lifted", last_ok="3 days", due="-3960 minutes", paused="-1 minute")
@@ -596,7 +596,7 @@ def test_a_lapsed_pause_restarts_the_late_and_the_waiting_clock(cur):
     assert _said(_liveness(cur)[3], "job/lifted") == ("ok", "lifted: last ok 3 d ago; due now")
 
 
-def test_a_re_registered_job_is_judged_from_its_new_first_slot(cur):
+def test_a_re_registered_job_is_judged_from_its_new_first_slot(cur: Any) -> None:
     """C3: un-retiring keeps last_success_at, the streak and last_error; a re-landed row reads from its new first slot
     until a run closes there, so neither its old streak nor its old success reads Problem, its first run included."""
     _runner_beat(cur, "r1", "0 minutes")
@@ -694,7 +694,7 @@ def test_a_quarterly_job_whose_ok_run_was_pruned_is_not_read_as_registered_again
 _OOM = "SIGKILL not sent by the runner (likely the OOM killer); peak 900 MB of memory_mb 256"
 
 
-def test_a_failing_job_names_its_cause_and_three_quick_failures_are_only_watch(cur):
+def test_a_failing_job_names_its_cause_and_three_quick_failures_are_only_watch(cur: Any) -> None:
     """C4: the cause is the latest failure run's; three in a row are a Problem once they span min(cadence, 1 h)."""
     _runner_beat(cur, "r1", "0 minutes")
 
@@ -752,7 +752,7 @@ def test_a_failing_job_names_its_cause_and_three_quick_failures_are_only_watch(c
     assert "secret" not in json.dumps(details), "job_runs.log_tail is never read: it can hold a connection string"
 
 
-def test_a_run_in_flight_is_watch_at_two_thirds_and_a_recorded_timeout_is_a_problem(cur):
+def test_a_run_in_flight_is_watch_at_two_thirds_and_a_recorded_timeout_is_a_problem(cur: Any) -> None:
     """C5 (ruling R-3): Watch past 2/3 T and while the runner stops it past T; a Problem once the runner records the
     stop, or past T + the stuck-run grace when no stop lands."""
     _runner_beat(cur, "r1", "0 minutes")
@@ -821,7 +821,7 @@ def _held(cur: Any) -> None:
          last_ok="3 hours")
 
 
-def test_a_job_waiting_out_a_siblings_run_is_held_not_late(cur):
+def test_a_job_waiting_out_a_siblings_run_is_held_not_late(cur: Any) -> None:
     """C6: W is the sibling's run inside the wait, measured, so a 6 h load holds intake in green."""
     _held(cur)
     _run(cur, "b_load", started="3 hours", resource="location-heavy", holder="h/b")
@@ -839,7 +839,7 @@ def test_a_job_waiting_out_a_siblings_run_is_held_not_late(cur):
     assert _said(cells, "job/b_load") == ("ok", "b_load: running for 3.0 h of its 6.0 h budget on job-runner/r1")
 
 
-def test_a_siblings_closed_run_counts_only_its_own_length(cur):
+def test_a_siblings_closed_run_counts_only_its_own_length(cur: Any) -> None:
     """C6: B ran an hour and closed two hours ago, so A waited an hour of it and is late past C + T + 1 h."""
     _held(cur)
     _run(cur, "b_load", started="3 hours", ended="2 hours", outcome="ok", exit_code=0, resource="location-heavy",
@@ -856,7 +856,7 @@ def test_a_siblings_closed_run_counts_only_its_own_length(cur):
     assert "warn: late: no ok run for 3.5 h (Watch past 2.9 h, Problem past 3.9 h)" in a["facts"]["conditions"]
 
 
-def test_a_job_that_is_not_due_is_not_held_by_a_running_sibling(cur):
+def test_a_job_that_is_not_due_is_not_held_by_a_running_sibling(cur: Any) -> None:
     """C6: held only while waiting; a sibling's open run alone says nothing about a job not yet due."""
     _held(cur)
     _run(cur, "b_load", started="3 hours", resource="location-heavy", holder="h/b")
@@ -868,7 +868,7 @@ def test_a_job_that_is_not_due_is_not_held_by_a_running_sibling(cur):
     assert _said(_liveness(cur)[3], "job/a_intake") == ("ok", "a_intake: last ok 20 min ago; next slot in 40 min")
 
 
-def test_a_due_job_with_no_runner_beating_is_a_problem_and_the_fleet_a_watch(cur):
+def test_a_due_job_with_no_runner_beating_is_a_problem_and_the_fleet_a_watch(cur: Any) -> None:
     """C7: the cells survive a missing heartbeat; waiting is Watch while a replica beats, a Problem when none does."""
     _job(cur, "x", due="-15 minutes", last_ok="375 minutes")
     _run(cur, "x", started="376 minutes", ended="375 minutes", outcome="ok", exit_code=0)
@@ -905,7 +905,7 @@ def test_a_due_job_with_no_runner_beating_is_a_problem_and_the_fleet_a_watch(cur
     assert {s for s in cells if s.startswith("worker")} == {"worker/job-runner/r1"}
 
 
-def test_an_entry_a_replica_refused_at_boot_is_a_problem(cur):
+def test_an_entry_a_replica_refused_at_boot_is_a_problem(cur: Any) -> None:
     """C8: a refused entry runs nowhere, so it gets its own cell even with no row."""
     _runner_beat(cur, "r1", "0 minutes", skipped=("", "ghost", "x"))
     _job(cur, "x", due="5 hours")
@@ -920,7 +920,7 @@ def test_an_entry_a_replica_refused_at_boot_is_a_problem(cur):
         "fail", "x: refused at boot by job-runner/r1 (JOBS skip in its log): no replica claims it")
 
 
-def test_a_paused_job_reads_ok_unless_the_pause_outlasts_a_cycle(cur):
+def test_a_paused_job_reads_ok_unless_the_pause_outlasts_a_cycle(cur: Any) -> None:
     """C9: a pause suppresses late, failing and a recorded timeout; a request still runs and is judged in flight."""
     _runner_beat(cur, "r1", "0 minutes")
     _job(cur, "p_failing", due="-66 hours", last_ok="3 days", failures=3, last_outcome="failed", last_error="exit 1",
@@ -945,7 +945,7 @@ def test_a_paused_job_reads_ok_unless_the_pause_outlasts_a_cycle(cur):
     assert _said(cells, "job/p_6d") == ("ok", "p_6d: paused for 6 d more by test: drill")
 
 
-def test_an_open_job_incident_recovers_once_its_row_retires(cur):
+def test_an_open_job_incident_recovers_once_its_row_retires(cur: Any) -> None:
     """C10 (guard on 675's recovery arm): a job/<name> incident whose row is gone reads 'no longer failing'."""
     _runner_beat(cur, "r1", "0 minutes")
     _job(cur, "x", retired=True)
@@ -957,7 +957,7 @@ def test_an_open_job_incident_recovers_once_its_row_retires(cur):
     assert "job-runner" not in cells
 
 
-def test_a_raising_job_arm_costs_only_its_cells_and_keeps_its_incidents_open(cur):
+def test_a_raising_job_arm_costs_only_its_cells_and_keeps_its_incidents_open(cur: Any) -> None:
     """C11: the arm's subtransaction keeps every other cell; each open job incident gets a listed 'unknown' cell, which
     the teller neither keeps, recovers nor retires, and 'job-cells' keeps the row 'fail', never 'unknown'."""
     from tests.toolkit.test_system_alerts import _FakeConn as _Ladder
@@ -995,7 +995,7 @@ def test_a_raising_job_arm_costs_only_its_cells_and_keeps_its_incidents_open(cur
         "cell:liveness:job/x", "cell:liveness:job-runner", "cell:liveness:job-cells"}
 
 
-def test_a_job_problem_reaches_the_canary_unchanged(cur):
+def test_a_job_problem_reaches_the_canary_unchanged(cur: Any) -> None:
     """C12 (AC4): the canary's own read and assertion see a failing job cell as any liveness cell."""
     from scripts import health_canary
 
@@ -1022,7 +1022,7 @@ def test_a_job_problem_reaches_the_canary_unchanged(cur):
     assert told() == []
 
 
-def test_migration_682_post_condition_holds_keeps_one_liveness_row_and_leaves_no_probe(cur):
+def test_migration_682_post_condition_holds_keeps_one_liveness_row_and_leaves_no_probe(cur: Any) -> None:
     _beat(cur, "liveness-test-fresh", "0 minutes")
     cur.execute(_statement("do $post$", "$post$;", _MIGRATION_682))
     cur.execute("select count(*) from pipeline_check_results where check_key = 'liveness'")
@@ -1032,7 +1032,7 @@ def test_migration_682_post_condition_holds_keeps_one_liveness_row_and_leaves_no
     assert cur.fetchone() == (0, 0)
 
 
-def test_migration_682_post_condition_refuses_a_watcher_without_the_job_cells(cur):
+def test_migration_682_post_condition_refuses_a_watcher_without_the_job_cells(cur: Any) -> None:
     """The guard bites: 675's body, re-created inside the test's transaction, judges no scheduled job."""
     import psycopg
 
@@ -1043,7 +1043,7 @@ def test_migration_682_post_condition_refuses_a_watcher_without_the_job_cells(cu
             cur.execute(_statement("do $post$", "$post$;", _MIGRATION_682))
 
 
-def test_migration_682_precondition_takes_675s_body_or_its_own_and_refuses_a_drift(cur):
+def test_migration_682_precondition_takes_675s_body_or_its_own_and_refuses_a_drift(cur: Any) -> None:
     """Fail-closed: a live watcher that is neither 675's body nor 682's (a re-run) is never regressed."""
     import psycopg
 
