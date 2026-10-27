@@ -47,10 +47,31 @@ describe('<Tabs>', () => {
       expect(classes(tab).filter((c) => /^(px|pl|pr|ps|pe)-/.test(c))).toEqual([]);
     }
     const list = classes(screen.getByRole('tablist'));
-    expect(list).toContain('gap-6');
+    expect(classes(screen.getAllByRole('tab')[0].parentElement!)).toContain('gap-6');
     // The scroller's 4px of ring room is cancelled by an equal negative margin.
     expect(list).toContain('-mx-1');
     expect(list).toContain('p-1');
+  });
+
+  /* The ring room hangs 4px past the strip, below its rule too; pinned, that band
+     sits over the panels scrolling underneath and swallowed their clicks. */
+  it('takes clicks on the tabs and their gaps only, never on the ring room', () => {
+    const onChange = vi.fn();
+    render(<Tabs tabs={TABS} active="a" onChange={onChange} ariaLabel="Části" sticky />);
+    const list = screen.getByRole('tablist');
+    const tabs = screen.getAllByRole('tab');
+    const row = tabs[0].parentElement!;
+    expect(classes(list)).toContain('pointer-events-none');
+    expect(classes(list)).toEqual(expect.arrayContaining(['-mt-1', '-mb-1.25', 'p-1']));
+    // One row, inside the scroller's padding, holds every tab: tabs and gaps take the
+    // clicks and the sideways swipes, and it is exactly the strip's height.
+    expect(row.parentElement).toBe(list);
+    expect(list.children).toHaveLength(1);
+    for (const tab of tabs) expect(tab.parentElement).toBe(row);
+    expect(classes(row)).toEqual(expect.arrayContaining(['pointer-events-auto', 'flex', 'shrink-0']));
+    expect(classes(row).filter((c) => /^-?[mp][trblxy]?-/.test(c))).toEqual([]);
+    fireEvent.click(tabs[1]);
+    expect(onChange).toHaveBeenCalledWith('b');
   });
 
   it('marks the open tab with a 2px copper line exactly its width, on the rule', () => {

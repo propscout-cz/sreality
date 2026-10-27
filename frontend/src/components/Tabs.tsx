@@ -7,7 +7,11 @@
  * and keeps 4px of room on every side for the global focus ring (a scroller clips
  * an outline at its padding box); its negative margins give that room back, so the
  * first label sits on the content edge and the buttons' bottom row lies ON the rule
- * (-mb-1.25 = the 4px + the rule's 1px), where the 2px copper line covers it. */
+ * (-mb-1.25 = the 4px + the rule's 1px), where the 2px copper line covers it.
+ * That room hangs 4px past the strip, below the rule too, so the tablist takes no
+ * pointer: the ROW (tabs and the gaps between them, exactly the strip's height)
+ * takes the clicks and the sideways swipes, and content scrolling under a pinned
+ * strip stays clickable right up to the rule. */
 import { useRef, type KeyboardEvent, type ReactNode } from 'react';
 
 export interface Tab<T extends string> {
@@ -31,7 +35,8 @@ interface Props<T extends string> {
 
 const STRIP = 'flex flex-wrap-reverse items-center gap-x-4 gap-y-2 border-b border-[var(--color-rule)]';
 const LIST =
-  '-mx-1 -mt-1 -mb-1.25 flex min-w-0 flex-auto gap-6 overflow-x-auto p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden';
+  'pointer-events-none -mx-1 -mt-1 -mb-1.25 flex min-w-0 flex-auto overflow-x-auto p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden';
+const ROW = 'pointer-events-auto flex shrink-0 gap-6';
 const TAB = 'relative inline-flex h-11 shrink-0 items-center gap-2 whitespace-nowrap text-sm transition-colors';
 const ON = 'text-[var(--color-ink)]';
 const IDLE = 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]';
@@ -70,36 +75,38 @@ export default function Tabs<T extends string>({
   return (
     <div className={sticky ? `${STRIP} sticky top-14 z-20 bg-[var(--color-paper)]` : STRIP}>
       <div role="tablist" aria-label={ariaLabel} onKeyDown={onKeyDown} className={LIST}>
-        {tabs.map((t, i) => {
-          const on = t.key === active;
-          return (
-            <button
-              key={t.key}
-              ref={(el) => {
-                if (el) buttons.current.set(t.key, el);
-                else buttons.current.delete(t.key);
-              }}
-              type="button"
-              role="tab"
-              id={idPrefix != null ? `${idPrefix}tab-${t.key}` : undefined}
-              aria-controls={idPrefix != null ? `${idPrefix}panel-${t.key}` : undefined}
-              aria-selected={on}
-              tabIndex={i === at ? 0 : -1}
-              onClick={() => onChange(t.key)}
-              className={`${TAB} ${on ? ON : IDLE}`}
-            >
-              {t.label}
-              {t.count != null && <span className={COUNT}>{t.count}</span>}
-              {on && (
-                <span
-                  aria-hidden="true"
-                  data-tab-indicator=""
-                  className="absolute inset-x-0 bottom-0 h-0.5 bg-[var(--color-copper)]"
-                />
-              )}
-            </button>
-          );
-        })}
+        <div className={ROW}>
+          {tabs.map((t, i) => {
+            const on = t.key === active;
+            return (
+              <button
+                key={t.key}
+                ref={(el) => {
+                  if (el) buttons.current.set(t.key, el);
+                  else buttons.current.delete(t.key);
+                }}
+                type="button"
+                role="tab"
+                id={idPrefix != null ? `${idPrefix}tab-${t.key}` : undefined}
+                aria-controls={idPrefix != null ? `${idPrefix}panel-${t.key}` : undefined}
+                aria-selected={on}
+                tabIndex={i === at ? 0 : -1}
+                onClick={() => onChange(t.key)}
+                className={`${TAB} ${on ? ON : IDLE}`}
+              >
+                {t.label}
+                {t.count != null && <span className={COUNT}>{t.count}</span>}
+                {on && (
+                  <span
+                    aria-hidden="true"
+                    data-tab-indicator=""
+                    className="absolute inset-x-0 bottom-0 h-0.5 bg-[var(--color-copper)]"
+                  />
+                )}
+              </button>
+            );
+          })}
+        </div>
       </div>
       {trailing != null && <div className="ml-auto flex shrink-0 items-center gap-2">{trailing}</div>}
     </div>

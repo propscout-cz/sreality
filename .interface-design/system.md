@@ -100,7 +100,10 @@ section and shelf names, JetBrains Mono (`font-mono`) with `tabular-nums` on EVE
   - Full WAI-ARIA tabs: a named `tablist`, `type="button"` tabs, `aria-selected`, a roving tabindex, ←/→ wrapping,
     Home/End, focus following the selection; `idPrefix` adds the ids and `aria-controls` where the caller has panels.
   - Too many tabs scroll sideways with no scrollbar. The scroller keeps 4px round every tab so the global focus ring
-    is never clipped (no opt-out, no inner ring) and gives the room back with negative margins.
+    is never clipped by it (no opt-out, no inner ring) and gives the room back with negative margins. That room hangs
+    past the strip, below the rule too, so the scroller takes no pointer: one row inside it (the tabs and their gaps,
+    exactly the strip's height) takes the clicks and the sideways swipes, and content under a pinned strip stays
+    clickable up to the rule.
   - `sticky` pins the strip under the Shell bar (`top-14`, `z-20`: above the cards' z-10 controls, below the bar's
     z-30); a scroll target under it uses `scroll-mt-28` (bar 57px + strip 44px + air).
   - Out of scope: the phone pipeline's stage strip and the pill view switches (`MapViewToggle`, `SizeToggle`,
