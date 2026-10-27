@@ -6,7 +6,7 @@ taxonomy's text anchors dotted with each stored vector. The way to apply a TAXON
 Campaign-driven + resumable: re-tags every row whose `image_clip_tags.tagged_at` is older
 than `app_settings.clip_taxonomy_retag_after` (the campaign cutoff — set it to now() to start
 a re-tag after a taxonomy edit), and stamps `tagged_at = now()` on each, so a re-tagged row
-drops out of the scan. No cutoff set → nothing to do. A library: the runner's clip job
+drops out of the scan. No cutoff set → nothing to do; a cutoff later than now() waits for it. A library: the runner's clip job
 (scripts/clip_tag_backfill.py) calls `campaign_cutoff` before it loads the model and `retag`
 after tagging, with the same model load and deadline (#2032). New / not-yet-tagged images go
 through that job's tag phase, which loads the same live taxonomy.
@@ -34,12 +34,13 @@ PROGRESS_EVERY_S = 60
 
 _CUTOFF_SQL = "SELECT value #>> '{}' FROM app_settings WHERE key = 'clip_taxonomy_retag_after'"
 
+# The database's clock judges a future cutoff: it is the one that stamps tagged_at.
 _PENDING_SQL = """
-    SELECT 1
-    FROM image_clip_tags t
-    JOIN image_clip_embeddings e ON e.image_id = t.image_id AND e.model = t.model
-    WHERE t.tagged_at < %(cutoff)s::timestamptz
-    LIMIT 1
+    SELECT %(cutoff)s::timestamptz > now() AS future,
+           EXISTS (SELECT 1
+                     FROM image_clip_tags t
+                     JOIN image_clip_embeddings e ON e.image_id = t.image_id AND e.model = t.model
+                    WHERE t.tagged_at < %(cutoff)s::timestamptz) AS pending
 """
 _SELECT = """
     SELECT t.image_id, t.model, e.embedding
@@ -68,8 +69,9 @@ def _as_tensor(vectors: list[list[float]]) -> torch.Tensor:
 
 
 def campaign_cutoff(conn: psycopg.Connection) -> str | None:
-    """The open campaign's cutoff; None for an unset key, a JSON null, or a drained campaign (no row older than it).
-    A malformed value surfaces as the cast error of the pending check, before any model load."""
+    """The open campaign's cutoff; None for an unset key, a JSON null, a drained campaign (no row older than it), or a
+    cutoff still in the future (a re-tagged row, stamped now(), would match it again: it would never drain). A
+    malformed value surfaces as the cast error of the pending check, before any model load."""
     with conn.cursor() as cur:
         cur.execute(_CUTOFF_SQL)
         row = cur.fetchone()
@@ -77,7 +79,11 @@ def campaign_cutoff(conn: psycopg.Connection) -> str | None:
         if not cutoff:
             return None
         cur.execute(_PENDING_SQL, {"cutoff": cutoff})
-        return cutoff if cur.fetchone() else None
+        future, pending = cur.fetchone()
+    if future:
+        LOG.warning("RETAG cutoff=%s is later than the database's now(): no campaign until it passes", cutoff)
+        return None
+    return cutoff if pending else None
 
 
 def retag(conn: psycopg.Connection, tagger: Tagger, cutoff: str, *, deadline: float,

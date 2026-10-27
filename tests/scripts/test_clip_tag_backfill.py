@@ -265,7 +265,7 @@ class _StoreCur:
         elif sql == rte._CUTOFF_SQL:
             rows = [("2026-06-26T16:45:00Z",)]
         elif sql == rte._PENDING_SQL:
-            rows = [(1,)] if db.campaign_left() else []
+            rows = [(False, db.campaign_left())]
         elif sql == rte._SELECT:
             db.writes.append("retag_select")
             rows = [(i, "m", "[0.5,0.5]") for i in db.campaign[db.retagged:db.retagged + params["limit"]]]

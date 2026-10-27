@@ -37,7 +37,7 @@ class _Cur:
         if sql == rte._CUTOFF_SQL:
             self._rows = [] if self._db.cutoff is _UNSET else [(self._db.cutoff,)]
         elif sql == rte._PENDING_SQL:
-            self._rows = [(1,)] if self._db.waiting else []
+            self._rows = [(self._db.future, bool(self._db.waiting))]
         elif sql == rte._SELECT:
             self._db.selects += 1
             self._rows = [(i, "m", "[0.5,0.5]") for i in self._db.waiting[:params["limit"]]]
@@ -61,8 +61,10 @@ _UNSET = object()
 
 
 class _DB:
-    def __init__(self, *, cutoff: Any = "2026-06-26T16:45:00Z", waiting: int = 0, secs_per_batch: float = 0.0) -> None:
+    def __init__(self, *, cutoff: Any = "2026-06-26T16:45:00Z", waiting: int = 0, secs_per_batch: float = 0.0,
+                 future: bool = False) -> None:
         self.cutoff = cutoff
+        self.future = future
         self.waiting = list(range(1, waiting + 1))
         self.secs_per_batch = secs_per_batch
         self.executed: list[str] = []
@@ -93,6 +95,17 @@ def test_no_cutoff_is_no_campaign(cutoff: Any) -> None:
 def test_a_drained_campaign_is_no_campaign() -> None:
     assert rte.campaign_cutoff(_DB(waiting=0)) is None
     assert rte.campaign_cutoff(_DB(waiting=1)) == "2026-06-26T16:45:00Z"
+
+
+def test_a_cutoff_later_than_the_databases_now_is_no_campaign(caplog: pytest.LogCaptureFixture) -> None:
+    """Re-tagged rows are stamped now(), still before such a cutoff: the campaign would never drain, and every run
+    would re-tag for its whole slice and exit 75, green. It waits, with one warning a run, until the cutoff passes."""
+    db = _DB(waiting=3, future=True)
+    with caplog.at_level(logging.WARNING, logger=rte.LOG.name):
+        assert rte.campaign_cutoff(db) is None
+    assert [r.getMessage() for r in caplog.records] == [
+        "RETAG cutoff=2026-06-26T16:45:00Z is later than the database's now(): no campaign until it passes"]
+    assert db.selects == 0
 
 
 def test_retag_loops_until_no_row_is_left() -> None:
