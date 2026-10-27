@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { useSpaLinkDelegation } from '@/lib/linkGestures';
+import { useNewTabProps, useSpaLinkDelegation } from '@/lib/linkGestures';
 import { YmPicker, YM_SELECT_CLS } from '@/components/YmPicker';
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import { createMap } from '@/lib/basemap';
@@ -80,6 +80,11 @@ const emptyCenterCircle: GeoJSON.Feature<GeoJSON.Polygon> = {
   type: 'Feature',
   properties: {},
   geometry: { type: 'Polygon', coordinates: [[]] },
+};
+
+const viewBounds = (map: maplibregl.Map): MapBounds => {
+  const b = map.getBounds();
+  return { west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() };
 };
 
 /* Fallback shape for a curated city that has no municipality boundary
@@ -477,8 +482,9 @@ export default function ListingMap({
   useEffect(() => {
     setColorByMin(null);
   }, [colorByIndex?.index_name]);
-  /* The map fits to results exactly once — the first time a non-empty
-   * row set arrives after the map is ready. Subsequent filter changes
+  /* The map fits to results at most once — the first time a non-empty
+   * row set arrives after the map is ready, unless the operator has
+   * already moved it (the moveend handler). Subsequent filter changes
    * never re-zoom, so the operator stays anchored on whatever area
    * they're examining. The Reset-view control offers an explicit
    * opt-in if they want to widen back to the full cohort. */
@@ -515,6 +521,11 @@ export default function ListingMap({
    * callback without rebinding. */
   const onHoverRef = useRef(onHover);
   onHoverRef.current = onHover;
+  /* And for the popup's "View details →": a new tab on the desktop, like the
+   * Browse card beside the map (lib/linkGestures `useNewTabProps`). */
+  const newTab = useNewTabProps();
+  const newTabRef = useRef(newTab);
+  newTabRef.current = newTab;
   /* When centre+radius mode is active the `moveend` handler must
    * skip emitting bounds — the cohort filters by the dashed circle,
    * not the viewport. Suppression flag rather than removing the
@@ -915,7 +926,7 @@ export default function ListingMap({
           className: 'listing-popup',
         })
           .setLngLat(at)
-          .setHTML(listingPopupHtml(props));
+          .setHTML(listingPopupHtml(props, newTabRef.current));
         /* The circle lives exactly as long as the popup that explains it: its
          * ×, a click elsewhere on the map, or the next popup replacing it all
          * end in `close`. */
@@ -1113,19 +1124,15 @@ export default function ListingMap({
      * undefined`, which we skip — otherwise the initial-fit refit and
      * the Reset-view animation would both write to the URL.
      * Also skip when centre+radius mode is on; the dashed circle owns
-     * the spatial predicate in that mode. */
+     * the spatial predicate in that mode.
+     * Any user move, in either mode, voids a still-pending fit to results:
+     * an empty first cohort (a small circle) leaves it pending, and the next
+     * non-empty one (the switch back to the viewport) zoomed out over them. */
     map.on('moveend', (e) => {
       if (e.originalEvent == null) return;
+      didInitialFitRef.current = true;
       if (suppressBoundsRef.current) return;
-      const cb = onBoundsChangeRef.current;
-      if (!cb) return;
-      const b = map.getBounds();
-      cb({
-        west:  b.getWest(),
-        south: b.getSouth(),
-        east:  b.getEast(),
-        north: b.getNorth(),
-      });
+      onBoundsChangeRef.current?.(viewBounds(map));
     });
 
     return () => {
@@ -1275,6 +1282,18 @@ export default function ListingMap({
     );
   }, [centerCircle, ready]);
 
+  /* Leaving the circle hands the spatial predicate back to the viewport: emit
+   * the view on screen, so the cohort is what the map shows without a pan (the
+   * URL's bbox is otherwise stale or absent — no move writes it under a circle). */
+  const prevCenterCircleRef = useRef(centerCircle);
+  useEffect(() => {
+    const had = prevCenterCircleRef.current != null;
+    prevCenterCircleRef.current = centerCircle;
+    const map = mapRef.current;
+    if (!ready || !map || !had || centerCircle != null) return;
+    onBoundsChangeRef.current?.(viewBounds(map));
+  }, [centerCircle, ready]);
+
   /* ONE data effect for both lanes. The cohort arrives as points (`rows`, up to
    * the pin limit, every one a pin at any zoom) or as the server's tile cells
    * (above it), never both. Cells arrive at the finest level the server could
@@ -1294,9 +1313,7 @@ export default function ListingMap({
 
     /* The view the cohort was fetched for (the viewport is a filter), so an edge
      * tile's mark lands on the part of the tile that is on screen. */
-    const b = map.getBounds();
-    const view = { west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() };
-    const { pins, marks } = marksFor(rows, counts, level, view);
+    const { pins, marks } = marksFor(rows, counts, level, viewBounds(map));
     pinSource.setData(toFeatureCollection(pins, priceMetric));
     countSource.setData(toCountFeatureCollection(marks));
 

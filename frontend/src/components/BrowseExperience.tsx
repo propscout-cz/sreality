@@ -52,7 +52,6 @@ import {
   toSearchParams,
   savedMapArea,
   cohortKindOf,
-  DEFAULT_FILTERS,
   type ListingFilters,
 } from '@/lib/filters';
 import { usePageTitle } from '@/lib/pageTitle';
@@ -145,7 +144,7 @@ export default function BrowseExperience({
   const newProperty = useNewPropertyDialog();
   const { filters, sort, tab, overlay, activePresetId } = view;
 
-  // Browser-tab title reflects the active filters ("PS: 2+kk · 60–90 m² · Praha")
+  // Browser-tab title reflects the active filters ("2+kk · 60–90 m² · Praha")
   // so multiple Browse tabs are distinguishable. Skipped in the Explore-area
   // modal, which reuses this component but must not own the page title.
   usePageTitle(isModal ? null : browseTitleSummary(filters));
@@ -507,6 +506,7 @@ export default function BrowseExperience({
             <FilterSidebar
               filters={filters}
               onChange={view.setFilters}
+              onReset={view.resetFilters}
               onLocationPick={handleLocationPick}
               width={sidebar.value}
               layout={layout}
@@ -656,7 +656,7 @@ export default function BrowseExperience({
                 hoverOrigin={hoverState.origin}
                 onHover={setHoveredFromCards}
                 onSort={view.setSort}
-                onClearFilters={() => view.setFilters(DEFAULT_FILTERS)}
+                onClearFilters={view.resetFilters}
                 onClearBounds={() => view.setBounds(null)}
                 merge={mergeMode.active ? mergeMode : null}
                 onEnterMerge={f.mergeMode ? mergeMode.enter : undefined}

@@ -23,7 +23,7 @@ fetch these links with curl or WebFetch.
 ## What is done
 
 1. **PR #2115** (merged 2026-10-27; Railway deployed API, vite and realtime-worker):
-   - the app is **PropScout.cz** (`lib/brand.ts`; tab titles "PS: …"; a "PS" home-screen icon; extension name);
+   - the app is **PropScout.cz** (`lib/brand.ts`; tab titles are the page name alone (no prefix) under a "PS" favicon; a "PS" home-screen icon; extension name);
    - three colour schemes, **Měď** (default), **Kobalt**, **Grafit**, each light and dark, picked per device in the
      account menu, the phone account sheet and Settings → Appearance (`lib/theme.ts`, `globals.css`
      `data-scheme` blocks, `components/SchemeSwatch.tsx`);
@@ -67,7 +67,7 @@ Where an operator note goes further than the proposal, the note wins; the table 
 | P05 | Browse card | Drop “Byt na prodej ·” from the card title | **Confirmed** | Title “2+kk · 54 m²”; the type and deal prefix stays when the filter spans several types or both deals. |  |
 | P06 | Browse card | Storey as text, not a bordered chip | Declined | Keep as is: A bordered “3. patro z 5” chip after the place line. | keep separate, feel free to adjust the chip as you seem fit |
 | P07 | Browse card | Small cards: hide MF yield and the estimate corner | Declined | Keep as is: Small cards (184px) show “Výnos MF” and “Odhad” like Large ones. |  |
-| P08 | Browse page | Fold the preset bar into the tab row | Declined | Keep as is: A row of its own: Pipeline chip, Presety fold, every preset with grip · name · ⋯, group boxes, Aktualizovat / Uložit preset / Nová skupina. |  |
+| P08 | Browse page | Fold the preset bar into the tab row | Declined | Keep as is: A row of its own: Pipeline chip, Presety fold, every preset with grip · name · ⋯, group boxes, Aktualizovat / Uložit preset / Nová skupina. | Aktualizovat removed 2026-10-27 (operator): a dirty preset's ⋯ menu leads with Save changes and Revert to saved; don't re-add a bar button. |
 | P09 | Browse page | Drop the long scope sentence once the applied-filter pills exist | **Confirmed** | The header keeps “12 345 bytů na prodej”; the rest is said by the removable pills under it. |  |
 | P10 | Browse page | Move “Režim slučování” to the results header | **Confirmed** | A quiet “Sloučit…” next to Obálka and Řadit above the cards. |  |
 | P11 | Browse page | Split “Základní” into Základní + Parametry | Declined | Keep as is: Základní holds 17 rows and is open by default. |  |
@@ -111,6 +111,9 @@ and build exactly what it says (the rulings are also copied below).
 - `decision: "decline"` → leave that part as it is; don't propose it again.
 - `decision: null` → not ruled yet: ask the operator before building it, and build the rest.
 - A `note` goes further than the proposal where they differ, as in the removal review.
+
+**The target picture is `docs/design/propscout-stats-target.png`** (its standalone page with the exact markup:
+`propscout-stats-target.html`): the agreed design with a yellow tag on each change. Build the Stats tab to match it.
 
 **Ruled 2026-10-27** (copied from the review page; the page stays the source if they ever differ):
 

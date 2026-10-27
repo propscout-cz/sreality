@@ -7,6 +7,33 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Preset save moves into the chip menu; Reset leaves the preset (2026-10-27, no migration)
+- **Done** (operator ask 2026-10-27: "get rid of the update preset button", option B of the
+  proposal page). The copper Update button is gone from both saved-set bars (Browse presets, Stats
+  dashboards). An edited chip keeps its dot; its ⋯ menu leads with Save changes (one click, no dialog,
+  the set's own map-area / filter answer) and Revert to saved. The filter sidebar's Reset and the
+  empty-results "clear filters" now write the default filters AND deselect the preset in one write
+  (`browseState.resetFilters`), so a reset never shows the preset as edited.
+- **Ruled 2026-10-27:** Save changes is one click; adding or dropping a map area / dashboard filter
+  on an existing set went with the dialog (save it as a new set instead).
+- **Not built (offered, open):** an undo toast after a save (`lib/toast`: an action toast stays until
+  dismissed, louder than the button removed) and Ctrl/⌘+S.
+
+### Lists open in a new tab (2026-10-27, no migration)
+- **Done** (operator ask 2026-10-27: "when I click on a notification, browse card or pipeline card, open it
+  in a new window"). A notification row (and a share row's "Open …" link), a Browse card (and its estimate
+  chip) and a pipeline card open their destination in a new tab on the desktop, so the list being worked
+  through is never unloaded. From the app-wide link review, the same rule now covers: the map pin popup's
+  "View details →", the pipeline card's broker, a Brokers ranking row (its filters are not in the URL), a
+  collection's rows (the place is now the link, not the sreality id), a broker's ads, a run's comparables
+  ("View in full", the set-aside list) and the advert-not-found page's portal link. ONE rule, `lib/linkGestures`
+  `useNewTabProps` (`{ external }` adds `noreferrer`): `target="_blank" rel="noopener"` on the desktop, nothing
+  in the phone shell (often the installed app, where a new tab leaves the app). Navigation stays in the tab:
+  menus, crumbs, "Go to Browse", redirects after a save, a collection opened from Collections. The
+  pipeline card's address link is now stretched over the whole card (`.stretched-link`, as Browse and the
+  phone board), its controls lifted with `card-action`, its tooltips with `card-tip`; the town line's own
+  tooltip went (the link's title is the whole place). A middle-click on a notification marks it read too.
+
 ### PropScout.cz and three colour schemes (2026-10-26, no migration)
 - **Done** (operator ask 2026-10-26: "rename the app to PropScout.cz", "build Měď, Kobalt and Grafit as
   themes the user can pick from"). The brand is `PropScout.cz` (`lib/brand.ts`; tab prefix "PS:", a "PS"
@@ -232,13 +259,10 @@ toolkit work.
   column the card's price-move badge and the Price change filter read (first observed price of the
   shown price's lineage → the shown price); an ad seen at one price (66% of active sales) sorts last
   both ways. ~84 ms, flats for sale.
-- **Done: implausible lots and placeholder prices 2026-10-26** (operator ruling; migration 680). Both new
-  sorts opened on junk: a 48 194 054 m² lot and runs of "1 m²" at the lot sort's two ends, and at the
-  price-change sort's ends a 1 Kč first price (+2 869 456 %) or a drop to 0 / 11 Kč (−100 %). The plot
-  measure now reads a lot outside 10 .. 1 000 000 m² as no lot (800 of 158 728 active properties with a
-  lot), and the rollup's `total_price_change_pct` skips prices under 10 000 Kč (sale, auction, share) /
-  500 Kč (rent) — `toolkit.measures`. Sort, filter and card move together; nothing stored changes.
-  Not in scope: the step counts and price-drop alerts (`listing_price_steps`) still count a placeholder.
+- **Ruled 2026-10-27: no plausibility patches on Browse values.** Both sorts open on portal junk at their
+  ends (a 48 194 054 m² lot, a 1 Kč first price, a ×1000 typo). #2117 (a 10 .. 1 000 000 m² lot band,
+  migration 680, and a placeholder-price floor in the rollup) was merged 2026-10-26 and reverted the next
+  day (migration 685): the user narrows odd values with the filters (Lot area, Price, Price change).
 - **Shipped (2026-10-22): Advanced → Energy rating (PENB A–G)**, Browse + Watchdog (migration 648:
   `energy_rating_filter` on the Stats and map-tile RPCs; `browse_list` already carried the column). A
   property's rating is the first non-null across its ads; G is also the legal "no certificate"

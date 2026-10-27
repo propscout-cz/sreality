@@ -1,7 +1,8 @@
 /* The one Notifications feed: watchdog matches, collection-monitor change
  * events and things shared with me, from one endpoint. A read/triage surface —
  * filter by source / seen, mark one or all read, open what a row is about
- * (lib/dispatchTarget). The deal pipeline, the watchdog list and this feed stay
+ * (lib/dispatchTarget; on the desktop in a new tab, so the feed stays where it
+ * was — lib/linkGestures `useNewTabProps`). The deal pipeline, the watchdog list and this feed stay
  * distinct; this is where "what changed about things I care about" lives, and
  * its unseen rows are the count the nav badge, the phone bell and the app icon
  * show (lib/unreadCount). Older rows load as the end of the list comes into
@@ -17,7 +18,7 @@
  * A coalesced push opens this page as `/notifications?d={delivery}`: the open is
  * reported once and the parameter dropped (lib/push). */
 
-import { useId, useState } from 'react';
+import { useId, useState, type MouseEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -27,6 +28,7 @@ import {
 } from '@/lib/api';
 import { notificationKeys } from '@/lib/queries';
 import { dispatchTarget } from '@/lib/dispatchTarget';
+import { useNewTabProps } from '@/lib/linkGestures';
 import { ROUTES } from '@/lib/routes';
 import { usePageTitle } from '@/lib/pageTitle';
 import { usePhoneShell } from '@/lib/phoneShell';
@@ -231,6 +233,12 @@ function useMarkSeen(d: WatchdogDispatch): () => void {
   };
 }
 
+/* A middle-click opens a row's link too, but fires `auxclick`, never `click`;
+ * an opened row is a read row either way. */
+const onMiddleClick = (fn: () => void) => (e: MouseEvent) => {
+  if (e.button === 1) fn();
+};
+
 /* The unread dot is decorative; the state rides on the control's description
  * (`id`), so marking a row seen never renames it. */
 function UnreadDot({ unread, id, color }: { unread: boolean; id: string; color: string }) {
@@ -267,6 +275,7 @@ function StandardNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }
       ? (d.collection_name ?? 'Monitoring')
       : (d.subscription_name ?? 'Watchdog');
   const to = dispatchTarget(d);
+  const newTab = useNewTabProps();
   const control = {
     onClick: markSeen,
     'aria-describedby': unread ? unreadId : undefined,
@@ -323,7 +332,7 @@ function StandardNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }
   return to === FEED ? (
     <button type="button" {...control}>{body}</button>
   ) : (
-    <Link to={to} {...control}>{body}</Link>
+    <Link to={to} {...newTab} {...control} onAuxClick={onMiddleClick(markSeen)}>{body}</Link>
   );
 }
 
@@ -382,6 +391,7 @@ function ShareNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }) {
   const meta = CHANGE_META[d.change_kind];
   const kind = d.share_kind ? SHARE_META[d.share_kind] : null;
   const to = dispatchTarget(d);
+  const newTab = useNewTabProps();
 
   return (
     <div className="flex items-start gap-3 py-3.5 max-md:flex-wrap max-md:gap-x-2.5 max-md:gap-y-1 max-md:px-4">
@@ -403,7 +413,9 @@ function ShareNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }) {
       {kind && to !== FEED && (
         <Link
           to={to}
+          {...newTab}
           onClick={markSeen}
+          onAuxClick={onMiddleClick(markSeen)}
           className="shrink-0 mt-0.5 text-[0.78rem] text-[var(--color-ink-2)] underline decoration-[var(--color-rule-strong)] underline-offset-2 hover:text-[var(--color-ink)] hover:decoration-[var(--color-ink-3)] transition-colors max-md:order-last max-md:-my-1.5 max-md:inline-flex max-md:min-h-11 max-md:basis-full max-md:items-center max-md:pl-4 max-md:text-[13px]"
         >
           {kind.open}

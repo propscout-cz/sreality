@@ -2,6 +2,7 @@
  * module, free of MapLibre, so what the popup says is testable. The classes are
  * styled in globals.css (`.lp-*`). */
 import { escapeHtml } from './escapeHtml';
+import type { NewTabProps } from './linkGestures';
 import { listingKindLabel } from './enums';
 import { fmtAbsolute, fmtArea, fmtCzk, fmtMeasuredPricePerM2, fmtRelativeCs } from './format';
 import { propertyPath } from './listingUrl';
@@ -9,7 +10,7 @@ import { areaKindOf, ppm2BasisFromToken } from './measure';
 import type { MapRow } from './queries';
 import { pinPrecisionLabel, pinPrecisionShort } from './uncertaintyCircle';
 
-export function listingPopupHtml(r: MapRow): string {
+export function listingPopupHtml(r: MapRow, newTab: NewTabProps = {}): string {
   const price = fmtCzk(r.price_czk);
   /* The popup has room, so it says what the m² MEASURES: a pozemek's area_m2 is
    * its plot, not a floor plan (the Option-A fork keeps the column polymorphic). */
@@ -51,7 +52,9 @@ export function listingPopupHtml(r: MapRow): string {
         <span class="lp-sep">·</span>
         <span title="${escapeHtml(seenAbs)}">viděno <span class="lp-mono">${escapeHtml(seen)}</span></span>
       </p>
-      <a href="${propertyPath(r.property_id, r.listing_id)}" class="lp-link">View details →</a>
+      <a href="${propertyPath(r.property_id, r.listing_id)}"${
+        newTab.target ? ` target="${newTab.target}" rel="${newTab.rel}"` : ''
+      } class="lp-link">View details →</a>
     </div>
   `;
 }

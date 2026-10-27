@@ -7,7 +7,7 @@
  * name-scoped label, so N chips no longer expose N identical "⋯" buttons.
  *
  * The rest pins what the fold into SavedSetBar must not change: the Pipeline
- * chip leads the row, "Update preset" re-captures filters + sort (every filter,
+ * chip leads the row, the menu's "Save changes" re-captures filters + sort (every filter,
  * the curation lenses included — ruling 2026-10-22), a new preset
  * offers the map area only while one is applied (ticked for a new preset), and Edit
  * touches metadata only.
@@ -53,6 +53,12 @@ import {
 import FilterPresetBar, { PRESETS_EXPANDED_KEY } from './FilterPresetBar';
 
 const BOUNDS = { west: 14.3, south: 50.0, east: 14.5, north: 50.1 };
+
+/* The dirty chip's menu: Save changes writes at once (no dialog, operator 2026-10-27). */
+const saveChanges = () => {
+  fireEvent.click(screen.getByRole('button', { name: 'Preset options: Praha 2+kk' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Save changes' }));
+};
 
 function renderBar({
   filters = {} as ListingFilters,
@@ -146,40 +152,45 @@ describe('<FilterPresetBar> behaviour', () => {
     expect(screen.getByRole('button', { name: 'Brno 3+1' })).toBeInTheDocument();
   });
 
-  it('offers "Update preset" on a dirty preset and saves filters + sort back into it', async () => {
+  it('saves filters + sort back into a dirty preset from its menu, with no dialog', async () => {
     vi.mocked(updateFilterPreset).mockResolvedValue(preset);
     renderBar({ filters: DEFAULT_FILTERS });
-    fireEvent.click(screen.getByRole('button', { name: 'Update preset' }));
-    const dialog = screen.getByRole('dialog', { name: 'Update preset' });
-    expect(within(dialog).queryByRole('button', { name: /map area/ })).toBeNull();
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Update preset' }));
+    saveChanges();
+    expect(screen.queryByRole('dialog')).toBeNull();
     await waitFor(() => expect(updateFilterPreset).toHaveBeenCalledTimes(1));
     const [id, patch] = vi.mocked(updateFilterPreset).mock.calls[0];
     expect(id).toBe('p1');
     expect(patch).toMatchObject({ name: 'Praha 2+kk', color: null, filter_spec: { sort: sortToParam(DEFAULT_SORT) } });
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
-  it('offers "Update preset" when a curation filter drifts, and saves it into the preset', async () => {
+  it('reverts a dirty preset by loading it again', () => {
+    const onLoad = vi.fn();
+    renderBar({ onLoad });
+    fireEvent.click(screen.getByRole('button', { name: 'Preset options: Praha 2+kk' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Revert to saved' }));
+    expect(onLoad).toHaveBeenCalledWith(preset);
+    expect(updateFilterPreset).not.toHaveBeenCalled();
+  });
+
+  it('saves a drifted curation filter into the preset', async () => {
     vi.mocked(updateFilterPreset).mockResolvedValue(preset);
     const outside = { set: 'out' as const, in: [], out: [] };
     renderBar({
       presets: [{ ...preset, filter_spec: { filters: DEFAULT_FILTERS, sort: null } }],
       filters: { ...DEFAULT_FILTERS, pipeline: outside, collections: outside },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Update preset' }));
-    const dialog = screen.getByRole('dialog', { name: 'Update preset' });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Update preset' }));
+    saveChanges();
     await waitFor(() => expect(updateFilterPreset).toHaveBeenCalledTimes(1));
     const saved = vi.mocked(updateFilterPreset).mock.calls[0][1].filter_spec?.filters;
     expect(saved?.pipeline).toEqual(outside);
     expect(saved?.collections).toEqual(outside);
   });
 
-  it('offers no update while the loaded preset is clean', () => {
+  it('offers no save while the loaded preset is clean', () => {
     renderBar({ presets: [{ ...preset, filter_spec: { filters: DEFAULT_FILTERS, sort: null } }], filters: DEFAULT_FILTERS });
     expect(screen.getByRole('button', { name: 'Praha 2+kk' })).toHaveAccessibleDescription('Load preset: Praha 2+kk');
-    expect(screen.queryByRole('button', { name: 'Update preset' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Preset options: Praha 2+kk' }));
+    expect(screen.queryByRole('menuitem', { name: 'Save changes' })).toBeNull();
   });
 
   it('saves a new preset with the map area by default, and selects it', async () => {
@@ -209,16 +220,24 @@ describe('<FilterPresetBar> behaviour', () => {
     expect(vi.mocked(createFilterPreset).mock.calls[0][0].filter_spec.filters.bounds).toBeNull();
   });
 
-  it('keeps a preset saved without the map area without it on update', async () => {
+  it('keeps a preset saved without the map area without it on save', async () => {
     vi.mocked(updateFilterPreset).mockResolvedValue(preset);
     renderBar({ filters: { ...DEFAULT_FILTERS, bounds: BOUNDS } });
-    fireEvent.click(screen.getByRole('button', { name: 'Update preset' }));
-    const dialog = screen.getByRole('dialog', { name: 'Update preset' });
-    const box = within(dialog).getByRole('button', { name: 'Include the current map area in this preset' });
-    expect(box).toHaveAttribute('aria-pressed', 'false');
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Update preset' }));
+    saveChanges();
     await waitFor(() => expect(updateFilterPreset).toHaveBeenCalledTimes(1));
     expect(vi.mocked(updateFilterPreset).mock.calls[0][1].filter_spec?.filters.bounds).toBeNull();
+  });
+
+  it('keeps a preset saved with a map area with the current one on save', async () => {
+    vi.mocked(updateFilterPreset).mockResolvedValue(preset);
+    const before = { ...BOUNDS, north: 50.2 };
+    renderBar({
+      presets: [{ ...preset, filter_spec: { filters: { ...DEFAULT_FILTERS, bounds: before }, sort: null } }],
+      filters: { ...DEFAULT_FILTERS, bounds: BOUNDS },
+    });
+    saveChanges();
+    await waitFor(() => expect(updateFilterPreset).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(updateFilterPreset).mock.calls[0][1].filter_spec?.filters.bounds).toEqual(BOUNDS);
   });
 
   it('edits the name and colour only', async () => {

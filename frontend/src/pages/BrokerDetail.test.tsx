@@ -173,6 +173,7 @@ describe('<BrokerDetail> locality cell never fabricates a listing link', () => {
 
     const link = await screen.findByRole('link', { name: /S cilem/ });
     expect(link).toHaveAttribute('href', '/property/42?advert=2');
+    expect(link).toHaveAttribute('target', '_blank');
   });
 
   it('still links a row that carries a sreality id', async () => {

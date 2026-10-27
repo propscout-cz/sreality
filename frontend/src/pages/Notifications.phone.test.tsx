@@ -158,6 +158,8 @@ describe('<Notifications> at phone width', () => {
   it('keeps every control of the desktop page, filter names in English', async () => {
     const { container } = renderPhone();
     expect(await screen.findByRole('link', { name: /^Price drop Praha 2/ })).toHaveAttribute('href', '/property/999');
+    /* In place, not a new tab: that would leave the installed app. */
+    expect(screen.getByRole('link', { name: /^Price drop Praha 2/ })).not.toHaveAttribute('target');
     for (const name of ['Monitoring', 'Watchdogs', 'Shared', 'Unread', 'Mark all read']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument();
     }

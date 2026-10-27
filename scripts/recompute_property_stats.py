@@ -77,7 +77,6 @@ from typing import Any
 from scraper import db
 from toolkit.browse_read_model import sync_browse_list
 from toolkit.filter_registry import PORTAL_OPTIONS
-from toolkit.measures import placeholder_floor_sql
 from toolkit.publication import CAP_SQL
 
 LOG = logging.getLogger("recompute_property_stats")
@@ -103,11 +102,6 @@ _NEWEST_AD_AT_AGG = "\n".join(
     for o in PORTAL_OPTIONS)
 _NEWEST_AD_AT_SET = "\n".join(
     f"      newest_ad_at_{o.value} = r.newest_ad_at_{o.value}," for o in PORTAL_OPTIONS)
-
-# The placeholder floor (toolkit.measures) over the canonical advert's deal, once per alias the
-# rollup reads it under: `cn` inside the lineage members, `c` in the headline delta.
-_SPAN_FLOOR = placeholder_floor_sql("cn.category_type")
-_HEAD_FLOOR = placeholder_floor_sql("c.category_type")
 
 _RECOMPUTE_BATCH_SQL = f"""
     WITH batch AS (
@@ -177,21 +171,15 @@ _RECOMPUTE_BATCH_SQL = f"""
       )
       SELECT * FROM link
     ),
-    -- Each priced link's first and last price over its own snapshots, dated by the first; and
-    -- the same over its REAL prices only, for the headline delta: a price under the placeholder
-    -- floor of the canonical advert's deal (toolkit.measures, ruling 2026-10-26) is a portal
-    -- stand-in, never a price, so it neither opens nor counts toward the span.
+    -- Each priced link's first and last price over its own snapshots, dated by the first.
     members AS (
       SELECT g.pid, g.hop,
         (array_agg(s.price_czk ORDER BY s.scraped_at, s.id))[1]           AS first_price,
         min(s.scraped_at)                                                 AS first_at,
         (array_agg(s.price_czk ORDER BY s.scraped_at DESC, s.id DESC))[1] AS last_price,
-        (array_agg(s.price_czk ORDER BY s.scraped_at, s.id)
-          FILTER (WHERE s.price_czk >= {_SPAN_FLOOR}))[1]                 AS first_real_price,
-        count(*) FILTER (WHERE s.price_czk >= {_SPAN_FLOOR})              AS real_points
+        count(*)                                                          AS price_points
       FROM lineage g
       JOIN listing_snapshots s ON s.listing_id = g.id
-      JOIN canon cn ON cn.property_id = g.pid
       WHERE s.price_czk IS NOT NULL
       GROUP BY g.pid, g.hop
     ),
@@ -228,14 +216,13 @@ _RECOMPUTE_BATCH_SQL = f"""
     -- The headline delta, compounded over those steps: it telescopes to the oldest priced link's
     -- first price against the canonical advert's last. (No literal percent sign in this comment on
     -- purpose -- prose percent inside executed SQL is an `incomplete placeholder` crash in
-    -- psycopg; tests/test_sql_placeholders.py guards it.) NULL under two REAL priced snapshots, or
-    -- when the canonical advert's price is missing or a placeholder.
+    -- psycopg; tests/test_sql_placeholders.py guards it.) NULL under two priced snapshots or with
+    -- an unpriced canonical advert.
     lineage_span AS (
       SELECT pid,
-        (array_agg(first_real_price ORDER BY hop DESC)
-          FILTER (WHERE first_real_price IS NOT NULL))[1] AS first_price,
+        (array_agg(first_price ORDER BY hop DESC))[1]     AS first_price,
         (array_agg(last_price) FILTER (WHERE hop = 0))[1] AS last_price,
-        sum(real_points)                                  AS price_points
+        sum(price_points)                                 AS price_points
       FROM members
       GROUP BY pid
     ),
@@ -294,7 +281,6 @@ _RECOMPUTE_BATCH_SQL = f"""
       price_change_count_365d = coalesce(ph.changes_365d, 0),
       total_price_change_pct  = CASE
           WHEN cs.price_points >= 2 AND cs.first_price > 0
-           AND cs.last_price >= {_HEAD_FLOOR} AND c.price_czk >= {_HEAD_FLOOR}
           THEN (cs.last_price - cs.first_price)::numeric / cs.first_price * 100
       END,
       last_change_at      = coalesce(ch.last_change_at, r.first_seen_at),

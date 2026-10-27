@@ -1607,7 +1607,9 @@ renumber.** Navigate by area:
     determined `cz`, a missing required parameter) is a 4xx and writes nothing. Every signed-in user may value a property (`verify_jwt`; tenancy shape 3); reads and history are the
     caller's own account. The operator's careful defaults: a missing condition blocks the button,
     `velmi_dobry` is Valuo's `very_good` "Velmi dobrý" (operator ruling 2026-10-20, superseding `good`),
-    `novostavba` is `very_good` (`assumed`; v3 has no "new" rating) plus `new_building: true`, a house's
+    `novostavba` is `very_good` (`assumed`; v3 has no "new" rating) plus `new_building: true` (so are `projekt` /
+    `ve_vystavbe`; every other flat or house sends `new_building: false`, an ad without a condition by assumption — never
+    left empty, the editor offers only ano/ne: operator ruling 2026-10-27), a house's
     energy class G is not sent (`assumed` —
     Czech ads without a PENB certificate must state G too), and a yes/no attribute is sent only
     when the ad says yes — portals store "not mentioned" as no (sreality's garage, bezrealitky's
@@ -3587,7 +3589,7 @@ renumber.** Navigate by area:
     (`pipelineViewFilters`: no category, no deal type, no price/area/location), with any active
     preset deselected, in ONE atomic write (`browseState.loadPipelineView`; two writes against
     one searchParams snapshot clobber each other, and a preset left active over replaced filters
-    reads as dirty and pops "Update preset"). It shipped as a modifier that AND'd itself onto
+    reads as edited). It shipped as a modifier that AND'd itself onto
     whatever was set, which was wrong: Browse's default cohort is `byt` + `pronajem`, so "show me
     my pipeline" showed 1 of 45 deals — every sale flat, house and commercial unit hidden by a
     default the operator never chose for that purpose. `status` deliberately stays `any` so a
@@ -3597,7 +3599,7 @@ renumber.** Navigate by area:
     sidebar's Curation → Pipeline control (`CuratedSetFilter`: compose with current filters, pick
     or exclude stages). It is still **not a preset**: nothing is saved, and loading it deselects
     the active preset. A preset stores the pipeline scope like every filter, so a change to it
-    offers "Update preset" and loading the preset applies it (ruling 2026-10-22, reversing
+    marks the preset edited (Save changes in its ⋯ menu) and loading the preset applies it (ruling 2026-10-22, reversing
     2026-10-19); a Stats dashboard leaves it out (`DASHBOARD_EXCLUDED_KEYS`). A
     watchdog can't use it (`UNSUPPORTED_LABELS`) — the operator's own state can't be a trigger. The
     extension bookmarks AND changes stage property-grain like every other surface: it reads
@@ -3990,12 +3992,10 @@ renumber.** Navigate by area:
     `pozemek`: **32,626 of 101,021 rows (32.3 %) carry no `estate_area`** — bazos 15,846,
     realitymix 11,470, mmreality 3,653, remax 1,649 — and 31,613 of them carry the parcel in
     `area_m2`. So `min_estate_area = 500` dropped a third of the country's land inventory
-    without a word. The fix is the name, **not** a writer change. **Since migration 680 the
-    measure has a plausible band** (operator ruling 2026-10-26): a stated plot outside
-    10 .. 1,000,000 m² is a portal artefact (a "1 m²" stand-in, a 48 km² typo) and reads NULL,
-    so the lot sort, the Lot area filter and the card's lot all skip it; nothing stored changes.
-    The same ruling made the rollup's `total_price_change_pct` skip PLACEHOLDER prices (under
-    10,000 Kč capital / 500 Kč rent, `toolkit.measures.placeholder_floor_sql`). **The writer rule, stated once:** a
+    without a word. The fix is the name, **not** a writer change. **No plausibility band:** 680 read
+    a lot outside 10 .. 1,000,000 m² as no lot and #2117 made the rollup's price change skip
+    placeholder prices; both were reverted (migration 685, operator ruling 2026-10-27) — a value that
+    makes no sense is narrowed by the user with the filters, never hidden by a rule. **The writer rule, stated once:** a
     parser fills `estate_area` ONLY from a parcel cell the page itself LABELS — sreality,
     bezrealitky, idnes, ceskereality, maxima and (from W21) mmreality all do, land rows
     included, and that is faithful reporting rather than duplication — **and only when what

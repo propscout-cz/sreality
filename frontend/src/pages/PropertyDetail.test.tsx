@@ -600,7 +600,10 @@ describe('<AdvertRedirect> old advert addresses', () => {
     const url = 'https://reality.bazos.cz/inzerat/196123456/byt.php';
     renderAtState('/listing/bazos/196123456', { pastedUrl: url });
     expect(await screen.findByRole('heading', { name: 'Tento inzerát v databázi nemáme.' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Otevřít na portálu Bazoš/ })).toHaveAttribute('href', url);
+    const portal = screen.getByRole('link', { name: /Otevřít na portálu Bazoš/ });
+    expect(portal).toHaveAttribute('href', url);
+    expect(portal).toHaveAttribute('target', '_blank');
+    expect(portal).toHaveAttribute('rel', 'noopener noreferrer');
     fireEvent.click(screen.getByRole('button', { name: 'Přidat do databáze' }));
     expect(openNewProperty).toHaveBeenCalledWith({ url });
   });

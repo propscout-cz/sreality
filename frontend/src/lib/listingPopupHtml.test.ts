@@ -77,6 +77,18 @@ describe('listingPopupHtml', () => {
     expect(link?.getAttribute('href')).toMatch(/42/);
   });
 
+  it('opens the property in a new tab on desktop, in place where the caller says so', () => {
+    const link = (html: string) => {
+      const el = document.createElement('div');
+      el.innerHTML = html;
+      return el.querySelector('a');
+    };
+    const desktop = link(listingPopupHtml(ROW, { target: '_blank', rel: 'noopener' }));
+    expect(desktop).toHaveAttribute('target', '_blank');
+    expect(desktop).toHaveAttribute('rel', 'noopener');
+    expect(link(listingPopupHtml(ROW, {}))).not.toHaveAttribute('target');
+  });
+
   it('escapes what it interpolates, the place included', () => {
     const el = popup({ ...ROW, display_label: 'U "Lva" <b>12</b>' });
     expect(el.querySelector('.lp-district')?.textContent).toBe('U "Lva" <b>12</b>');

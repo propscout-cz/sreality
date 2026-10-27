@@ -10,7 +10,9 @@
  *   street (the card's link)  →  town  →  price + how it moved  →
  *   disposition/area + yield (Velké only)  →  tags  →  artifact link  →  broker
  * The street leads and carries the link because it NAMES the property, the way
- * a Browse card's title does; the price describes it. The town is ALWAYS the
+ * a Browse card's title does; the price describes it. The link is stretched
+ * over the whole card, so the card opens (in a new tab) from anywhere but its
+ * controls. The town is ALWAYS the
  * second row, on a line of its own: folded into the street's single truncating
  * line it was the first thing clipped, and it is what the operator triages by.
  */
@@ -24,6 +26,7 @@ import { fmtArea, fmtCzk, fmtMeasuredPricePerM2 } from '@/lib/format';
 import { ppm2BasisFromToken } from '@/lib/measure';
 import { listingKindLabel } from '@/lib/enums';
 import { propertyPath } from '@/lib/listingUrl';
+import { useNewTabProps } from '@/lib/linkGestures';
 import { splitCardPlace } from '@/lib/cardPlace';
 import { useCardTags } from '@/lib/useCardTags';
 import { useActingReadOnly } from '@/lib/acting';
@@ -81,7 +84,7 @@ function CardTags({ property_id }: { property_id: number }) {
 
   if (readFailed(membersQ)) {
     return (
-      <div className="mt-1">
+      <div className="card-action mt-1">
         <ReadFailedMark what="Štítky" onRetry={() => void membersQ.refetch()} />
       </div>
     );
@@ -95,7 +98,7 @@ function CardTags({ property_id }: { property_id: number }) {
         aria-label={mine.length ? `${TAG_ASSIGN_LABEL}: ${mine.map((t) => t.name).join(', ')}` : 'Přidat štítek'}
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
-        className="mt-1 flex w-full flex-wrap items-center gap-1 text-left text-[0.68rem] leading-none"
+        className="card-action mt-1 flex w-full flex-wrap items-center gap-1 text-left text-[0.68rem] leading-none"
       >
         {mine.length ? (
           mine.map((t) => <TagChip key={t.id} tag={t} />)
@@ -145,6 +148,7 @@ export function CardFace({
    * curation is not readable under a read share (ruling 2), so neither read is
    * made — the card is the board's own fields only. */
   const readOnly = useActingReadOnly();
+  const newTab = useNewTabProps();
   const cover = coverFor(card.listing_id);
   /* MS7: the property's list, compact — its first broker, "+N" for the rest. */
   const brokerList = brokersFor(card.property_id);
@@ -184,116 +188,124 @@ export function CardFace({
   const { stacked, showsYield } = PIPELINE_CARD_GEOMETRY[size];
 
   return (
-    <div className={stacked ? 'flex flex-col gap-2' : 'flex gap-2.5'}>
-      <CardThumb url={cover} inactive={inactive} size={size} />
-      <div className="min-w-0 flex-1">
-        <p className={`truncate text-sm ${head ? inkColor : 'text-[var(--color-ink-4)]'}`}>
-          {/* The card is a property, so it links to the property page.
+    <div>
+      <div className={stacked ? 'flex flex-col gap-2' : 'flex gap-2.5'}>
+        <CardThumb url={cover} inactive={inactive} size={size} />
+        <div className="min-w-0 flex-1">
+          <p className={`truncate text-sm ${head ? inkColor : 'text-[var(--color-ink-4)]'}`}>
+            {/* The card is a property, so it links to the property page, and
+                the link is the whole card: `.stretched-link` (globals.css)
+                spreads its hit area over the card's box (BoardCard's `relative`
+                wrapper), as on Browse and the phone board; every control on the
+                card sits above it with `card-action`, every tooltip with
+                `card-tip`.
 
-              Opens in a NEW TAB: the board is a triage surface the operator
-              works a column at a time, so following a card must not unload it.
+                Opens in a NEW TAB: the board is a triage surface the operator
+                works a column at a time, so following a card must not unload it.
 
-              The link is the card's ONLY way to its listing, so a property
-              with no street (a label that is just the town) or no place at all
-              still gets words to click rather than the bare em-dash other
-              surfaces print for a missing label. The title carries the full
-              place because the line truncates. */}
-          <Link
-            to={propertyPath(card.property_id)}
-            target="_blank"
-            rel="noopener"
-            title={[place, inactive ? 'neaktivní inzerát' : null]
-              .filter(Boolean)
-              .join(' · ') || undefined}
-            className="hover:text-[var(--color-copper)] hover:underline underline-offset-2"
-          >
-            {head || (town ? 'Ulice neuvedena' : 'Lokalita neurčena')}
-          </Link>
-        </p>
-        {/* Always rendered, so the town sits at the same place on every card in
-            a column; a dash rather than a collapsed row when it is unknown. */}
-        <p
-          className={`mt-0.5 truncate text-xs ${town ? 'text-[var(--color-ink-2)]' : 'text-[var(--color-ink-4)]'}`}
-          title={town ?? undefined}
-        >
-          {town ?? '—'}
-        </p>
-        {/* Price and its movement are one typographic unit — the delta sits on
-            the price's own baseline rather than reading as a separate badge. */}
-        <div className="mt-0.5 flex items-baseline gap-1.5">
-          <span className={`font-mono tabular-nums text-sm ${inkColor}`}>
-            {fmtCzk(card.price_czk)}
-          </span>
-          {/* The board is deal-agnostic (rule 22), so a monthly rent and a
-              capital sum sit in one column. Same marker the Browse cards
-              use. */}
-          {card.category_type === 'pronajem' && card.price_czk != null && (
-            <span className="text-[var(--color-ink-4)] text-[0.7rem]">/měs</span>
-          )}
-          <PriceDelta
-            pct={card.total_price_change_pct}
-            changes={card.price_change_count}
-            muted={inactive}
-          />
-        </div>
-        <div className="mt-0.5 flex items-center justify-between gap-2">
-          <span className="truncate font-mono tabular-nums text-xs text-[var(--color-ink-4)]">
-            {dims || '—'}
-          </span>
-          {showsYield && card.mf_gross_yield_pct != null && (
-            <span
-              className="shrink-0 font-mono tabular-nums text-[0.68rem] text-[var(--color-ink-3)]"
-              title="Hrubý výnos dle cenové mapy nájemného MF"
-            >
-              MF{' '}
-              {card.mf_gross_yield_pct.toLocaleString('cs-CZ', {
-                minimumFractionDigits: 1,
-                maximumFractionDigits: 1,
-              })}{' '}
-              %
-            </span>
-          )}
-        </div>
-        {!readOnly && (
-          <>
-            <CardTags property_id={card.property_id} />
-            <ArtifactLinkButton
-              property_id={card.property_id}
-              className="mt-1 px-1.5 py-0.5 text-[0.68rem] leading-[1.2]"
-            />
-          </>
-        )}
-        {/* Who last moved it acting as the board's owner (ruling 5). Board
-            data, so a read share sees it too. */}
-        <DelegatedStamp stamp={card} className="mt-1 truncate" />
-        {/* The broker line streams in behind the card. Its height is
-            reserved while the read is in flight so the column does not
-            reflow when it lands; once resolved, a card with no attributed
-            broker collapses the space rather than holding an empty row. */}
-        {broker ? (
-          <p className="mt-0.5 truncate text-[0.7rem] text-[var(--color-ink-3)]">
+                The link is the card's ONLY way to its listing, so a property
+                with no street (a label that is just the town) or no place at all
+                still gets words to click rather than the bare em-dash other
+                surfaces print for a missing label. The title carries the full
+                place because the line truncates. */}
             <Link
-              to={ROUTES.brokerDetail.build({ id: broker.broker_id })}
-              title={brokerHoverTitle(broker, brokerList?.fromInactive)}
-              className="hover:text-[var(--color-copper)] hover:underline underline-offset-2"
+              to={propertyPath(card.property_id)}
+              {...newTab}
+              title={[place, inactive ? 'neaktivní inzerát' : null]
+                .filter(Boolean)
+                .join(' · ') || undefined}
+              className="stretched-link hover:text-[var(--color-copper)] hover:underline underline-offset-2"
             >
-              {broker.broker_display_name ?? 'Makléř'}
+              {head || (town ? 'Ulice neuvedena' : 'Lokalita neurčena')}
             </Link>
-            {broker.broker_firm_label && (
-              <span className="text-[var(--color-ink-4)]"> · {broker.broker_firm_label}</span>
+          </p>
+          {/* Always rendered, so the town sits at the same place on every card in
+              a column; a dash rather than a collapsed row when it is unknown.
+              No tooltip of its own: the card link's title is the whole place. */}
+          <p
+            className={`mt-0.5 truncate text-xs ${town ? 'text-[var(--color-ink-2)]' : 'text-[var(--color-ink-4)]'}`}
+          >
+            {town ?? '—'}
+          </p>
+          {/* Price and its movement are one typographic unit — the delta sits on
+              the price's own baseline rather than reading as a separate badge. */}
+          <div className="mt-0.5 flex items-baseline gap-1.5">
+            <span className={`font-mono tabular-nums text-sm ${inkColor}`}>
+              {fmtCzk(card.price_czk)}
+            </span>
+            {/* The board is deal-agnostic (rule 22), so a monthly rent and a
+                capital sum sit in one column. Same marker the Browse cards
+                use. */}
+            {card.category_type === 'pronajem' && card.price_czk != null && (
+              <span className="text-[var(--color-ink-4)] text-[0.7rem]">/měs</span>
             )}
-            {others.length > 0 && (
+            <PriceDelta
+              pct={card.total_price_change_pct}
+              changes={card.price_change_count}
+              muted={inactive}
+              className="card-tip"
+            />
+          </div>
+          <div className="mt-0.5 flex items-center justify-between gap-2">
+            <span className="truncate font-mono tabular-nums text-xs text-[var(--color-ink-4)]">
+              {dims || '—'}
+            </span>
+            {showsYield && card.mf_gross_yield_pct != null && (
               <span
-                className="text-[var(--color-ink-4)]"
-                title={others.map((b) => b.broker_display_name ?? 'Makléř').join(', ')}
+                className="card-tip shrink-0 font-mono tabular-nums text-[0.68rem] text-[var(--color-ink-3)]"
+                title="Hrubý výnos dle cenové mapy nájemného MF"
               >
-                {' '}+{others.length}
+                MF{' '}
+                {card.mf_gross_yield_pct.toLocaleString('cs-CZ', {
+                  minimumFractionDigits: 1,
+                  maximumFractionDigits: 1,
+                })}{' '}
+                %
               </span>
             )}
-          </p>
-        ) : brokersPending ? (
-          <p className="mt-0.5 h-[0.95rem]" aria-hidden />
-        ) : null}
+          </div>
+          {!readOnly && (
+            <>
+              <CardTags property_id={card.property_id} />
+              <ArtifactLinkButton
+                property_id={card.property_id}
+                className="card-action mt-1 px-1.5 py-0.5 text-[0.68rem] leading-[1.2]"
+              />
+            </>
+          )}
+          {/* Who last moved it acting as the board's owner (ruling 5). Board
+              data, so a read share sees it too. */}
+          <DelegatedStamp stamp={card} className="card-tip mt-1 truncate" />
+          {/* The broker line streams in behind the card. Its height is
+              reserved while the read is in flight so the column does not
+              reflow when it lands; once resolved, a card with no attributed
+              broker collapses the space rather than holding an empty row. */}
+          {broker ? (
+            <p className="mt-0.5 truncate text-[0.7rem] text-[var(--color-ink-3)]">
+              <Link
+                to={ROUTES.brokerDetail.build({ id: broker.broker_id })}
+                {...newTab}
+                title={brokerHoverTitle(broker, brokerList?.fromInactive)}
+                className="card-action hover:text-[var(--color-copper)] hover:underline underline-offset-2"
+              >
+                {broker.broker_display_name ?? 'Makléř'}
+              </Link>
+              {broker.broker_firm_label && (
+                <span className="text-[var(--color-ink-4)]"> · {broker.broker_firm_label}</span>
+              )}
+              {others.length > 0 && (
+                <span
+                  className="card-tip text-[var(--color-ink-4)]"
+                  title={others.map((b) => b.broker_display_name ?? 'Makléř').join(', ')}
+                >
+                  {' '}+{others.length}
+                </span>
+              )}
+            </p>
+          ) : brokersPending ? (
+            <p className="mt-0.5 h-[0.95rem]" aria-hidden />
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -330,7 +342,7 @@ export default function BoardCard({
     <div
       ref={setNodeRef}
       style={style}
-      className={`rounded-[var(--radius-md)] border p-2.5 ${surface}`}
+      className={`relative rounded-[var(--radius-md)] border p-2.5 ${surface}`}
     >
       <div className="flex items-start gap-1.5">
         {!readOnly && (
@@ -339,7 +351,7 @@ export default function BoardCard({
             {...attributes}
             {...listeners}
             aria-label="Přetáhnout kartu do jiné fáze"
-            className="shrink-0 cursor-grab touch-none pt-0.5 leading-none text-[var(--color-ink-4)] hover:text-[var(--color-ink-2)] active:cursor-grabbing"
+            className="card-action shrink-0 cursor-grab touch-none pt-0.5 leading-none text-[var(--color-ink-4)] hover:text-[var(--color-ink-2)] active:cursor-grabbing"
           >
             ⠿
           </button>
@@ -354,7 +366,7 @@ export default function BoardCard({
             aria-label="Odebrat z pipeline"
             aria-expanded={confirming}
             title="Odebrat z pipeline"
-            className="shrink-0 rounded-[var(--radius-xs)] pt-0.5 text-[var(--color-ink-4)] hover:text-[var(--color-brick)] focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-rule-strong)]"
+            className="card-action shrink-0 rounded-[var(--radius-xs)] pt-0.5 text-[var(--color-ink-4)] hover:text-[var(--color-brick)] focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-rule-strong)]"
           >
             <TrashIcon className="h-3.5 w-3.5" />
           </button>
@@ -365,7 +377,7 @@ export default function BoardCard({
           drag-only now; the select fallback was removed. */}
       {/* `!readOnly`: the owner can lower the share to read mid-confirm. */}
       {confirming && !readOnly && (
-        <div className="mt-2 flex items-center gap-2 border-t border-[var(--color-rule-soft)] pt-2 text-[0.72rem]">
+        <div className="card-action mt-2 flex items-center gap-2 border-t border-[var(--color-rule-soft)] pt-2 text-[0.72rem]">
           <span className="mr-auto text-[var(--color-ink-3)]">Odebrat z pipeline?</span>
           <button
             type="button"
