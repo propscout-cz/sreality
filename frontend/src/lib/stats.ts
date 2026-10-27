@@ -272,11 +272,18 @@ export const createStatsDashboard = (input: {
   charts: ChartSpec[];
   filter_spec?: PresetSpec;
   color?: TagColor | null;
+  show_small?: boolean;
 }): Promise<SavedDashboard> => apiPost<SavedDashboard>('/stats/dashboards', input);
 
 export const updateStatsDashboard = (
   id: string,
-  patch: { name?: string; charts?: ChartSpec[]; filter_spec?: PresetSpec | null; color?: TagColor | null },
+  patch: {
+    name?: string;
+    charts?: ChartSpec[];
+    filter_spec?: PresetSpec | null;
+    color?: TagColor | null;
+    show_small?: boolean;
+  },
 ): Promise<SavedDashboard> => apiPut<SavedDashboard>(dashboardPath(id), patch);
 
 export const deleteStatsDashboard = (id: string): Promise<unknown> => apiDelete(dashboardPath(id));

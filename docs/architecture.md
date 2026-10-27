@@ -1764,7 +1764,9 @@ renumber.** Navigate by area:
     sighting of the property's newest advert there, NULL with none; MS19), which W5 projects.
     The city figures (`home_obec_pop`, `near_*`) follow the LOCATION advert's point (since 636):
     the rollup clears `city_proximity_computed_at` when the location advert changes, and the
-    hourly `recompute_city_proximity` refills them from that point, writing a row only while its
+    hourly `recompute_city_proximity` (pg_cron job `recompute-city-proximity` since 674; the full
+    rebuild, `scripts/recompute_city_proximity.py --full`, ends the population load and the
+    curated-city seed, in id batches) refills them from that point, writing a row only while its
     `location_listing_ref_id` is still the one the run read, so a run that races a change writes
     nothing stale (that guard replaced 588's `< repr_since` repair). The job reads only a point:
     a location advert without one keeps the figures of an earlier point (or none) until it gains
@@ -1818,7 +1820,8 @@ renumber.** Navigate by area:
     median — each from the SAME query and rule as the tab it opens, so the two never disagree. The
     "Okolí dashboard" tab (`MarketTile`, 2026-10-23) draws the account's ONE dashboard marked for it
     (`stats_dashboards.property_card`, migration 664, any name, never a filter; set up in Browse ›
-    Statistiky) over ONE neighbourhood definition,
+    Statistiky), with that dashboard's own "Malé vzorky" setting (`show_small`, migration 681), over ONE
+    neighbourhood definition,
     `lib/neighbourhood` — the property's type, deal, disposition and ownership (one it does not state is
     left unset and named), Browse's centre + radius around it (250 m – 2 km, 500 m default, the square
     every Browse reader filters on), the user's building material and condition, under the Stats lens
@@ -3981,7 +3984,12 @@ renumber.** Navigate by area:
     `pozemek`: **32,626 of 101,021 rows (32.3 %) carry no `estate_area`** — bazos 15,846,
     realitymix 11,470, mmreality 3,653, remax 1,649 — and 31,613 of them carry the parcel in
     `area_m2`. So `min_estate_area = 500` dropped a third of the country's land inventory
-    without a word. The fix is the name, **not** a writer change. **The writer rule, stated once:** a
+    without a word. The fix is the name, **not** a writer change. **Since migration 680 the
+    measure has a plausible band** (operator ruling 2026-10-26): a stated plot outside
+    10 .. 1,000,000 m² is a portal artefact (a "1 m²" stand-in, a 48 km² typo) and reads NULL,
+    so the lot sort, the Lot area filter and the card's lot all skip it; nothing stored changes.
+    The same ruling made the rollup's `total_price_change_pct` skip PLACEHOLDER prices (under
+    10,000 Kč capital / 500 Kč rent, `toolkit.measures.placeholder_floor_sql`). **The writer rule, stated once:** a
     parser fills `estate_area` ONLY from a parcel cell the page itself LABELS — sreality,
     bezrealitky, idnes, ceskereality, maxima and (from W21) mmreality all do, land rows
     included, and that is faithful reporting rather than duplication — **and only when what
