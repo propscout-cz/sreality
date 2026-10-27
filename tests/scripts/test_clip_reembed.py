@@ -114,11 +114,18 @@ class _Conn:
 
 
 class _R2:
-    """GETs return the image id as bytes; `fails[id]` GETs of that image raise first."""
+    """GETs return the image id as bytes; `fails[id]` GETs of that image raise first. `head` answers object_size:
+    the size, None for an object that does not exist ("gone"), or an error ("raises")."""
 
-    def __init__(self, fails: dict[int, int] | None = None) -> None:
+    def __init__(self, fails: dict[int, int] | None = None, head: str = "exists") -> None:
         self.fails = dict(fails or {})
+        self.head = head
         self.calls: list[int] = []
+
+    def object_size(self, key: str) -> int | None:
+        if self.head == "raises":
+            raise RuntimeError("R2 down")
+        return None if self.head == "gone" else 9
 
     def download_bytes(self, key: str) -> bytes:
         image_id = int(key.rsplit("/", 1)[1].split(".")[0])
@@ -283,6 +290,21 @@ def test_a_download_shortfall_is_its_own_result(caplog: pytest.LogCaptureFixture
     assert _field(line, "exact_rows") == "99", "the 99 that downloaded are compared, and match"
 
 
+@pytest.mark.parametrize(("head", "why"), [("gone", "sample"), ("raises", "download")])
+def test_a_sample_object_gone_from_r2_fails_the_sample_not_the_download(caplog: pytest.LogCaptureFixture, head: str,
+                                                                       why: str) -> None:
+    """A deleted object never downloads, so re-requesting cannot help: it is a broken frozen row (P0). Only R2 saying
+    so counts; a HEAD that fails too stays an inconclusive shortfall."""
+    sample = _Sample()
+    lost = cr.SAMPLE_IDS[61]
+    sample.r2 = _R2({lost: cr.ROUNDS}, head=head)
+    with caplog.at_level(logging.INFO):
+        code, _conn, _tagger = sample.verify()
+    line = _summary(caplog)
+    assert code == 1 and (_field(line, "why"), _field(line, "missing")) == (why, "1")
+    assert [f.split()[1:3] for f in _failures(caplog)] == [[why, f"image={lost}"]]
+
+
 def test_a_value_failure_outranks_a_download_shortfall(caplog: pytest.LogCaptureFixture) -> None:
     sample = _Sample()
     sample.r2 = _R2({cr.SAMPLE_IDS[0]: 3})
@@ -378,6 +400,20 @@ def test_a_config_outside_the_pins_snapshot_fails_the_identity(caplog: pytest.Lo
         code, _conn, _tagger = _Sample().verify()
     assert code == 1 and _field(_summary(caplog), "why") == "identity"
     assert any(f.split()[1] == "identity" and "config.json" in f for f in _failures(caplog))
+
+
+@pytest.mark.parametrize(("missing", "weights"), [("config.json", cr.WEIGHTS_OID[:12]), ("pytorch_model.bin", "none")])
+def test_a_file_not_cached_at_the_pin_fails_the_identity(caplog: pytest.LogCaptureFixture,
+                                                         monkeypatch: pytest.MonkeyPatch, missing: str,
+                                                         weights: str) -> None:
+    """The lookup's reachable miss (try_to_load_from_cache returns no path): one CLIP_VERIFY line, never a crash."""
+    real = cr._cache_path
+    monkeypatch.setattr(cr, "_cache_path", lambda model, filename, revision: (
+        None if filename == missing else real(model, filename, revision)))
+    with caplog.at_level(logging.INFO):
+        code, _conn, _tagger = _Sample().verify()
+    line = _summary(caplog)
+    assert code == 1 and _field(line, "why") == "identity" and _field(line, "weights") == weights
 
 
 @pytest.mark.parametrize("fact", ["cuda", "torchvision", "processor"])

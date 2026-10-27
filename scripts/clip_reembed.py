@@ -3,7 +3,7 @@ within fp32 tolerance, and so are their tags.
 
 Run as `python -m scraper.job_runner request clip --by <who> -- --verify-reembed` (scripts/clip_tag_backfill.py
 dispatches here). It reads a frozen sample in one READ ONLY transaction and writes nothing. Pass rules, all must hold:
-P0 the sample is the frozen one and downloads within ROUNDS; P1 every vector within L2_MAX of its stored one (float64);
+P0 the sample is the frozen one, every object exists in R2, and it downloads within ROUNDS; P1 every vector within L2_MAX of its stored one (float64);
 P2a the fresh and the stored vector give the same tags here; P2b the fresh tags equal the stored rows (only while the
 taxonomy is the one that tagged them); P3 the loaded weights, the CPU build and the image processor are production's.
 One CLIP_VERIFY line, after at most MAX_FAILURE_LINES failure lines; exit 0 on a pass, else 1. `why=download` alone is
@@ -200,6 +200,14 @@ def _download(r2: image_storage.R2Client, keys: dict[int, str], workers: int) ->
     return got, left
 
 
+def _gone(r2: image_storage.R2Client, key: str) -> bool:
+    """True only when R2 says the object does not exist: no re-request can fetch it."""
+    try:
+        return r2.object_size(key) is None
+    except Exception:  # noqa: BLE001 - R2 failing the HEAD too is a shortfall, not a gone object
+        return False
+
+
 def _identity(tagger: Tagger, model: str, failures: _Failures) -> dict[str, str]:
     """P3: the revision that actually loaded (config._commit_hash; tagger.revision is only the file's string), the
     cached files it came from, a CPU torch and the slow PIL image processor (no torchvision: the fast one changes
@@ -257,10 +265,14 @@ def verify(conn: psycopg.Connection, args: argparse.Namespace, *, r2_factory: Ca
     started = clock()
     # A row with no stored vector already failed P0 and has nothing to be compared with.
     keys = {i: r[2] for i, r in rows.items() if r[2] and r[5] is not None}
-    got, missing = _download(r2_factory(), keys, args.workers)
+    r2 = r2_factory()
+    got, missing = _download(r2, keys, args.workers)
     secs_download = clock() - started
     for image_id in missing:
-        failures.add("download", f"image={image_id} rounds={ROUNDS}")
+        if _gone(r2, keys[image_id]):
+            failures.add("sample", f"image={image_id} object gone")
+        else:
+            failures.add("download", f"image={image_id} rounds={ROUNDS}")
     decoded: list[tuple[int, Any]] = []
     for image_id in sorted(got):
         try:
