@@ -28,6 +28,8 @@ const renderChart = (props: Partial<Parameters<typeof StatsChart>[0]> = {}) => {
 
 const card = (name: string) => screen.getByRole('article', { name });
 const button = (name: string) => screen.getByRole('button', { name });
+const item = (name: string) => screen.getByRole('menuitem', { name });
+const MENU = 'Další akce grafu Plocha · Dispozice';
 
 beforeEach(() => {
   vi.mocked(stats.fetchStatsPivot).mockImplementation(async (_f, spec) =>
@@ -151,22 +153,61 @@ describe('<StatsChart>', () => {
     expect(await screen.findByText(stats.tooManySeriesText())).toBeInTheDocument();
   });
 
+  /* Ruling P14 (2026-10-27): Upravit stays; ↑, ↓ and Odebrat sit in a ⋯ menu. */
+  it('shows Upravit and a ⋯ menu that holds the moves and Odebrat', () => {
+    const later = vi.fn();
+    renderChart({ onMove: { later } });
+    const header = card('Plocha · Dispozice').querySelector('header')!;
+    expect(within(header).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Upravit graf Plocha · Dispozice',
+      'Další akce grafu Plocha · Dispozice',
+    ]);
+    fireEvent.click(button(MENU));
+    expect(screen.getAllByRole('menuitem').map((i) => i.textContent)).toEqual([
+      '↑ Posunout dopředu',
+      '↓ Posunout dozadu',
+      'Odebrat',
+    ]);
+    expect(item('↑ Posunout dopředu')).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(item('↓ Posunout dozadu'));
+    expect(later).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers no moves where the board gives none', () => {
+    renderChart();
+    fireEvent.click(button(MENU));
+    expect(screen.getAllByRole('menuitem').map((i) => i.textContent)).toEqual(['Odebrat']);
+  });
+
+  it('shows no actions on a read-only card', async () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <StatsChart chart={CHART} filters={DEFAULT_FILTERS} />
+      </QueryClientProvider>,
+    );
+    await screen.findByRole('table');
+    expect(screen.queryByRole('button', { name: /Upravit|Další akce/ })).toBeNull();
+  });
+
   it('removes only after one confirm step', () => {
     const { onRemove } = renderChart();
-    fireEvent.click(button('Odebrat graf Plocha · Dispozice'));
+    fireEvent.click(button(MENU));
+    fireEvent.click(item('Odebrat'));
     expect(onRemove).not.toHaveBeenCalled();
     fireEvent.click(button('Ponechat graf'));
-    fireEvent.click(button('Odebrat graf Plocha · Dispozice'));
+    fireEvent.click(button(MENU));
+    fireEvent.click(item('Odebrat'));
     fireEvent.click(button('Ano, odebrat graf Plocha · Dispozice'));
     expect(onRemove).toHaveBeenCalledTimes(1);
   });
 
   it('moves keyboard focus to where the next action is on every flip', async () => {
     renderChart();
-    fireEvent.click(button('Odebrat graf Plocha · Dispozice'));
+    fireEvent.click(button(MENU));
+    fireEvent.click(item('Odebrat'));
     expect(document.activeElement).toBe(button('Ponechat graf'));
     fireEvent.click(button('Ponechat graf'));
-    expect(document.activeElement).toBe(button('Odebrat graf Plocha · Dispozice'));
+    expect(document.activeElement).toBe(button(MENU));
     fireEvent.click(button('Upravit graf Plocha · Dispozice'));
     expect(document.activeElement).toBe(screen.getByRole('group', { name: 'Úprava grafu Plocha · Dispozice' }));
     fireEvent.click(button('Zrušit úpravy grafu'));

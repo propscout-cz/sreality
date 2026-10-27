@@ -39,7 +39,7 @@ import {
   type MapBounds,
   type PresetSpec,
   listingFiltersToRegistryView,
-  summarise,
+  countedWords,
   toSearchParams,
   watchdogNameSuggestion,
 } from './filters';
@@ -370,19 +370,21 @@ describe('nullable deal type', () => {
     expect(fromSearchParams(rent).categoryType).toBe('pronajem');
   });
 
-  it('drops the deal phrase from the headline instead of printing null', () => {
-    const line = summarise({ ...DEFAULT_FILTERS, categoryType: null }, 12);
-    expect(line).not.toMatch(/null|undefined/);
-    expect(line).toMatch(/12/);
-  });
-
-  it('names both sides of the portal filter, so an exclusion is never invisible', () => {
-    expect(summarise(DEFAULT_FILTERS, 1)).not.toMatch(/Sreality|iDNES/);
-    expect(summarise({ ...DEFAULT_FILTERS, portals: ['idnes'], portalsExcluded: ['sreality'] }, 1))
-      .toMatch(/on iDNES −Sreality$/);
-    expect(summarise({
-      ...DEFAULT_FILTERS, portalsExcluded: ['sreality'], portalsExcludedActiveOnly: true,
-    }, 1)).toMatch(/−Sreality \(active ads\)$/);
+  /* Ruling P09 (2026-10-27): the header says what is counted; every filter is
+     a pill under it (AppliedFilterPills.test.tsx), so these words name none. */
+  it('says what the header counts: the type and the deal, nothing else', () => {
+    expect(countedWords(DEFAULT_FILTERS)).toBe('apartments for sale');
+    expect(countedWords({ ...DEFAULT_FILTERS, categoryType: null })).toBe('apartments');
+    expect(countedWords({ ...DEFAULT_FILTERS, categoryMain: [] })).toBe('properties for sale');
+    expect(countedWords({ ...DEFAULT_FILTERS, categoryMain: ['byt', 'dum'] })).toBe('apartments / houses for sale');
+    const narrowed: ListingFilters = {
+      ...DEFAULT_FILTERS,
+      districts: [{ name: 'Praha', context: null, level: 'obec', id: 554782 }],
+      portals: ['idnes'],
+      pipeline: { set: 'out', in: [], out: [] },
+      bounds: { west: 14.4, south: 50.06, east: 14.44, north: 50.1 },
+    };
+    expect(countedWords(narrowed)).toBe('apartments for sale');
   });
 });
 
@@ -617,19 +619,6 @@ describe('applyRegistryUpdate', () => {
     /* The watchdog has no tag clause on either side (rule 16). */
     expect(filtersToWatchdogSpec({ ...DEFAULT_FILTERS, tags: { set: null, in: [], out: [7] } })
       .unsupported).toContain('tags');
-  });
-
-  it('names every active curated set in the headline, in Czech', () => {
-    const line = summarise({
-      ...DEFAULT_FILTERS,
-      tags: { set: 'out', in: [], out: [] },
-      collections: { set: null, in: [4], out: [] },
-      pipeline: { set: 'out', in: [], out: [] },
-    }, 3);
-    expect(line).toContain('bez štítků');
-    expect(line).toContain('v kolekci (1 kolekce)');
-    expect(line).toContain('mimo pipeline');
-    expect(summarise(DEFAULT_FILTERS, 3)).not.toMatch(/pipeline|kolekc|štít/);
   });
 
   it('accepts DistrictChip[] for districts; null clears the list', () => {

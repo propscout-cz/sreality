@@ -4,6 +4,7 @@ import type { ListingFilters } from '@/lib/filters';
 import { browseKeys } from '@/lib/browseKeys';
 import { lazyChunk } from '@/lib/lazyChunk';
 import Skeleton from '@/components/Skeleton';
+import OverflowMenu, { type OverflowMenuItem } from '@/components/OverflowMenu';
 import type { ChartStat } from '@/lib/statsRegistry.generated';
 import {
   LINE_NEEDS_ROW,
@@ -34,9 +35,9 @@ const PivotSeries = lazyChunk(() => import('./views/PivotSeries'));
 const ACTION =
   'rounded-[var(--radius-xs)] px-1.5 py-1 text-[0.75rem] text-[var(--color-ink-3)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)] disabled:opacity-35 disabled:hover:bg-transparent disabled:cursor-not-allowed aria-disabled:opacity-35 aria-disabled:hover:bg-transparent aria-disabled:cursor-not-allowed transition-colors';
 
-type FocusTarget = 'heading' | 'edit' | 'remove' | 'keep' | 'earlier' | 'later' | 'builder';
+type FocusTarget = 'heading' | 'edit' | 'menu' | 'keep' | 'builder';
 
-/* The card's two move buttons, one definition. */
+/* The ⋯ menu's two moves, one definition. */
 const MOVES = [
   { dir: 'earlier', glyph: '↑', where: 'dopředu' },
   { dir: 'later', glyph: '↓', where: 'dozadu' },
@@ -46,16 +47,17 @@ const MOVES = [
  * neighbour (the pressed control was re-inserted or is gone). `seq` re-fires an
  * identical request. */
 export interface CardFocus {
-  target: Extract<FocusTarget, 'heading' | 'edit' | 'earlier' | 'later'>;
+  target: Extract<FocusTarget, 'heading' | 'edit' | 'menu'>;
   seq: number;
 }
 
 /* One card of the board: the derived title, the sample ledger, the view. Upravit
  * flips THIS card (same box, same width) into the builder over a live preview;
  * Uložit hands the chart back and the card leaves edit mode once the board has
- * saved it (a failed save keeps the draft); Zrušit drops the draft. Odebrat asks
- * once. Every flip moves keyboard focus to where the next action is, because
- * the control just pressed is gone. */
+ * saved it (a failed save keeps the draft); Zrušit drops the draft. The moves and
+ * Odebrat sit in a ⋯ menu beside Upravit (ruling P14); Odebrat asks once. Every
+ * flip moves keyboard focus to where the next action is, because the control
+ * just pressed is gone. */
 export default function StatsChart({
   chart,
   filters,
@@ -109,7 +111,9 @@ export default function StatsChart({
     refs.current[t] = el;
   };
   const focusTo = (t: FocusTarget) => {
-    const el = refs.current[t];
+    const at = refs.current[t];
+    /* OverflowMenu has no ref of its own: its trigger is the wrapper's button. */
+    const el = t === 'menu' ? at?.querySelector('button') : at;
     if (el && !(el instanceof HTMLButtonElement && el.disabled)) el.focus();
     else refs.current.heading?.focus();
   };
@@ -157,8 +161,18 @@ export default function StatsChart({
   };
   const keep = () => {
     setConfirming(false);
-    focusNext.current = 'remove';
+    focusNext.current = 'menu';
   };
+  const menu: OverflowMenuItem[] = [
+    ...(onMove
+      ? MOVES.map((m) => ({
+          label: `${m.glyph} Posunout ${m.where}`,
+          onSelect: () => onMove[m.dir]?.(),
+          disabled: !onMove[m.dir] || saving,
+        }))
+      : []),
+    { label: 'Odebrat', onSelect: askRemove, danger: true, disabled: saving },
+  ];
 
   return (
     <article
@@ -189,34 +203,12 @@ export default function StatsChart({
               </>
             ) : (
               <>
-                {onMove &&
-                  MOVES.map((m) => (
-                    <button
-                      key={m.dir}
-                      ref={refTo(m.dir)}
-                      type="button"
-                      className={ACTION}
-                      onClick={saving ? undefined : onMove[m.dir]}
-                      disabled={!onMove[m.dir]}
-                      aria-disabled={saving || undefined}
-                      aria-label={`Posunout graf ${title} ${m.where}`}
-                    >
-                      {m.glyph}
-                    </button>
-                  ))}
                 <button ref={refTo('edit')} type="button" className={ACTION} onClick={begin} aria-label={`Upravit graf ${title}`}>
                   Upravit
                 </button>
-                <button
-                  ref={refTo('remove')}
-                  type="button"
-                  className={ACTION}
-                  onClick={askRemove}
-                  aria-disabled={saving || undefined}
-                  aria-label={`Odebrat graf ${title}`}
-                >
-                  Odebrat
-                </button>
+                <span ref={refTo('menu')} className="contents">
+                  <OverflowMenu label={`Další akce grafu ${title}`} items={menu} />
+                </span>
               </>
             )}
           </div>

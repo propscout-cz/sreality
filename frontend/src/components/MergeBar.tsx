@@ -28,21 +28,8 @@ export default function MergeBar({
   const used = merge.groups.map(([letter]) => letter);
   const next = LETTERS.find((letter) => !used.includes(letter));
   const chips = next ? [...used, next] : used;
-  const toggle = (
-    <button
-      type="button"
-      onClick={merge.active ? merge.exit : merge.enter}
-      disabled={merging}
-      className={`${BTN} border ${
-        merge.active
-          ? 'border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] hover:border-[var(--color-rule-strong)]'
-          : 'border-[var(--color-copper)] text-[var(--color-copper-2)] hover:bg-[var(--color-copper-soft)]'
-      }`}
-    >
-      {merge.active ? 'Cancel' : 'Merge mode'}
-    </button>
-  );
-  if (!merge.active) return <div className="shrink-0">{toggle}</div>;
+  /* The way in is the cards header's "Sloučit…" (ruling P10): the bar is the mode. */
+  if (!merge.active) return null;
   /* Two columns: the letters and the statement wrap in the left one however many
    * letters are in use, so Merge and Cancel never leave the right edge. */
   return (
@@ -89,7 +76,14 @@ export default function MergeBar({
         >
           {merging ? 'Merging…' : mergeLabel(used)}
         </button>
-        {toggle}
+        <button
+          type="button"
+          onClick={merge.exit}
+          disabled={merging}
+          className={`${BTN} border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] hover:border-[var(--color-rule-strong)]`}
+        >
+          Cancel
+        </button>
       </div>
     </div>
   );

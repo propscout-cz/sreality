@@ -49,8 +49,8 @@ export default function StatsDashboard({
 }) {
   const qc = useQueryClient();
   const [pending, setPending] = useState<ChartSpec | null>(null);
-  /* Where focus lands after a board-level change: the moved card's arrow, the
-   * card that took a removed one's place, a new chart's Upravit once saved. */
+  /* Where focus lands after a board-level change: the moved card's ⋯ trigger,
+   * the card that took a removed one's place, a new chart's Upravit once saved. */
   const [focus, setFocus] = useState<{ id: string; req: CardFocus } | null>(null);
   const seq = useRef(0);
   const focusCard = (id: string, target: CardFocus['target']) =>
@@ -117,7 +117,7 @@ export default function StatsDashboard({
     const to = from + delta;
     if (from < 0 || to < 0 || to >= charts.length) return;
     save.mutate(arrayMove(charts, from, to));
-    focusCard(id, delta < 0 ? 'earlier' : 'later');
+    focusCard(id, 'menu');
   };
   const remove = (id: string) => {
     const at = listed.findIndex((c) => c.id === id);

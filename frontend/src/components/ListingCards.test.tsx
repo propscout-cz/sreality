@@ -168,6 +168,7 @@ function renderGrid(
     cohortKind?: CohortKind | null;
     coverTag?: CoverTag;
     onCoverTag?: (next: CoverTag) => void;
+    onEnterMerge?: () => void;
     /* Browse opts the storey in; the grid tests that predate it do not. */
     floors?: boolean;
   } = {},
@@ -203,6 +204,7 @@ function renderGrid(
             onClearFilters={() => {}}
             onClearBounds={() => {}}
             merge={merge}
+            onEnterMerge={opts.onEnterMerge}
             estimates={opts.estimates}
             estimatingIds={new Set()}
             onEstimate={() => {}}
@@ -474,6 +476,32 @@ describe('<ListingCards> the cover photo', () => {
     });
     expect(onCoverTag).toHaveBeenCalledWith('garage');
     expect(screen.getByRole('option', { name: 'Fasáda' })).toBeInTheDocument();
+  });
+});
+
+/* Ruling P10 (2026-10-27): merge mode is entered from a quiet "Sloučit…" beside
+ * Cover and Sort above the cards; the bar it opens says the rest. */
+describe('<ListingCards> the way into merge mode', () => {
+  const enterButton = () => screen.queryByRole('button', { name: 'Sloučit…' });
+
+  it('sits after the Sort select in the header and enters the mode', async () => {
+    const onEnterMerge = vi.fn();
+    renderGrid({ onEnterMerge });
+    const sort = await screen.findByRole('combobox', { name: /Sort/ });
+    const button = enterButton()!;
+    expect(sort.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(button.parentElement).toBe(sort.closest('label')!.parentElement);
+    expect(button.className).not.toContain('copper');
+    fireEvent.click(button);
+    expect(onEnterMerge).toHaveBeenCalledTimes(1);
+  });
+
+  it('is absent where the surface has no merge mode, and while the mode is on', async () => {
+    renderGrid();
+    await screen.findByRole('combobox', { name: /Sort/ });
+    expect(enterButton()).toBeNull();
+    renderGrid({ onEnterMerge: vi.fn(), merge: {} });
+    expect(enterButton()).toBeNull();
   });
 });
 

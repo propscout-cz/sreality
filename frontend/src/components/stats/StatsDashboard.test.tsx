@@ -45,6 +45,7 @@ const renderBoard = (
 
 const titles = () => screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
 const button = (name: string) => screen.getByRole('button', { name });
+const item = (name: string) => screen.getByRole('menuitem', { name });
 
 beforeEach(() => {
   stored = null;
@@ -102,10 +103,11 @@ describe('<StatsDashboard>', () => {
     expect(document.activeElement).toBe(button('Přidat graf'));
   });
 
-  it('removes a chart behind one confirm and reorders by its arrows, keeping focus', async () => {
+  it('removes a chart behind one confirm and reorders from its ⋯ menu, keeping focus', async () => {
     renderBoard();
     const first = await screen.findByRole('article', { name: 'Cena' });
-    fireEvent.click(within(first).getByRole('button', { name: 'Odebrat graf Cena' }));
+    fireEvent.click(within(first).getByRole('button', { name: 'Další akce grafu Cena' }));
+    fireEvent.click(item('Odebrat'));
     fireEvent.click(within(first).getByRole('button', { name: 'Ano, odebrat graf Cena' }));
     await waitFor(() => expect(stats.saveDashboard).toHaveBeenCalledTimes(1));
     expect(vi.mocked(stats.saveDashboard).mock.calls[0][0].map((c) => c.id)).toEqual([
@@ -114,14 +116,16 @@ describe('<StatsDashboard>', () => {
     await waitFor(() => expect(titles()).toHaveLength(3));
     /* The card that took its place has focus. */
     expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Cena za m²' }));
-    expect(button('Posunout graf Cena za m² dopředu')).toBeDisabled();
-    await waitFor(() => expect(button('Posunout graf Cena za m² dozadu')).not.toHaveAttribute('aria-disabled'));
-    fireEvent.click(button('Posunout graf Cena za m² dozadu'));
+    fireEvent.click(button('Další akce grafu Cena za m²'));
+    expect(item('↑ Posunout dopředu')).toHaveAttribute('aria-disabled', 'true');
+    await waitFor(() => expect(item('↓ Posunout dozadu')).not.toHaveAttribute('aria-disabled'));
+    fireEvent.click(item('↓ Posunout dozadu'));
     await waitFor(() => expect(stats.saveDashboard).toHaveBeenCalledTimes(2));
     expect(vi.mocked(stats.saveDashboard).mock.calls[1][0].map((c) => c.id)).toEqual([
       'default-3', 'default-2', 'default-4',
     ]);
-    expect(document.activeElement).toBe(button('Posunout graf Cena za m² dozadu'));
+    /* The moved card's ⋯ trigger, where the next move starts. */
+    await waitFor(() => expect(document.activeElement).toBe(button('Další akce grafu Cena za m²')));
   });
 
   it('offers no new chart at the cap, and says why', async () => {

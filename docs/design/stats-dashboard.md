@@ -142,8 +142,9 @@ byty-only dimension) and the first save persists the whole list. A board holds a
 - `components/stats/StatsDashboard.tsx`: the tab. Reads the board, renders one `StatsChart` per chart, "Přidat
   graf" at the end, saves through `lib/useOptimisticWrite` (the ONE write policy, mutation key
   `['write','stats','dashboard']`): the PUT's answer becomes the cache on success, a re-read only on failure.
-- `components/stats/StatsChart.tsx`: one card — derived title, `SampleLedger`, the view, Upravit / Odebrat; in
-  edit mode the card flips in place to `ChartBuilder` (same card, same width), Uložit / Zrušit.
+- `components/stats/StatsChart.tsx`: one card — derived title, `SampleLedger`, the view, Upravit + ⋯ (↑ / ↓ /
+  Odebrat, with its confirm; ruling P14); in edit mode the card flips in place to `ChartBuilder` (same card, same
+  width), Uložit / Zrušit.
 - `components/stats/ChartBuilder.tsx`: a palette of dimension chips grouped (Vlastnost · Cena · Místo ·
   Vybavení), the shelves Řádky (six slots, sortable) and Sloupce (one), the Hodnota well, the view picker and
   the statistic picker (a multi-select: line, bar and a table with a column; the first pick leads, the last

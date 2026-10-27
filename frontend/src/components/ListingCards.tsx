@@ -131,6 +131,9 @@ interface Props {
    * writes the active one instead of navigating; the marks stay, read-only
    * (MS16); the grid hands the mode's key handler the focused card. */
   merge: MergeMode | null;
+  /* The way into merge mode, beside Cover and Sort (ruling P10): a quiet
+   * "Sloučit…" while the mode is off, absent where the surface has none. */
+  onEnterMerge?: () => void;
   /* On-card estimate: latest rent estimate per listing id (keyed by
    * sreality_id), the set of ids whose run is being kicked off right now
    * (optimistic spinner), and the trigger. Estimate runs on apartment cards
@@ -166,6 +169,7 @@ export default function ListingCards({
   onClearFilters,
   onClearBounds,
   merge,
+  onEnterMerge,
   estimates,
   estimatingIds,
   estimateRefusals,
@@ -215,6 +219,15 @@ export default function ListingCards({
         <div className="flex items-center gap-2 shrink-0">
           <CoverDropdown coverTag={coverTag} onChange={onCoverTag} />
           <SortDropdown sort={sort} onChange={onSort} />
+          {onEnterMerge && merge == null && (
+            <button
+              type="button"
+              onClick={onEnterMerge}
+              className="px-2 py-1 text-[0.7rem] rounded-[var(--radius-sm)] bg-[var(--color-paper-2)] border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:border-[var(--color-rule-strong)] transition-colors"
+            >
+              Sloučit…
+            </button>
+          )}
         </div>
       </div>
 

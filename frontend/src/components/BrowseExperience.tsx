@@ -44,7 +44,7 @@ import { fetchDatasets, fetchGrowth, fetchGrowthShapes, fetchSeries, priceStatsK
 import { buildHoverData, type GrowthMetric } from '@/lib/growthChoropleth';
 import { useMapOverlayRegistry } from '@/lib/mapOverlays';
 import {
-  summarise,
+  countedWords,
   isDefault,
   browseTitleSummary,
   toSearchParams,
@@ -57,6 +57,7 @@ import { usePageTitle } from '@/lib/pageTitle';
 import { portalLabel } from '@/lib/portals';
 import CreateWatchdogModal from '@/components/CreateWatchdogModal';
 import MergeBar from '@/components/MergeBar';
+import AppliedFilterPills from '@/components/AppliedFilterPills';
 import FilterPresetBar from '@/components/FilterPresetBar';
 import type { FilterPreset, ListingEstimate } from '@/lib/types';
 import {
@@ -602,13 +603,6 @@ export default function BrowseExperience({
     if (tab === 'map') cards.refetch();
   };
   const mapError = mapVisible ? mapQuery.error : null;
-  const mergeBar = (
-    <MergeBar
-      merge={mergeMode}
-      merging={mergeMut.isPending}
-      onMerge={() => mergeMut.mutate(mergeMode.letters)}
-    />
-  );
 
   return (
     <div className={`flex${isModal ? ' h-full' : ''}`} ref={outerRef}>
@@ -668,12 +662,8 @@ export default function BrowseExperience({
               tab === 'stats' ? statsFetching > 0 :
               false
             }
-            onClearBounds={filters.bounds ? () => view.setBounds(null) : undefined}
-            onClearBroker={
-              filters.brokerId != null
-                ? () => view.setFilters({ ...filters, brokerId: null })
-                : undefined
-            }
+            onFiltersChange={view.setFilters}
+            onClearBounds={() => view.setBounds(null)}
             onCreateWatchdog={f.watchdog ? () => setWatchdogModalOpen(true) : undefined}
             onNewProperty={f.newProperty && newProperty ? () => newProperty.open() : undefined}
           />
@@ -706,11 +696,16 @@ export default function BrowseExperience({
                   onChange={cardImageLarge.set}
                   label="Card image size"
                 />
-                {f.mergeMode && !mergeMode.active && mergeBar}
               </div>
             )}
             {tab === 'map' && f.mergeMode && mergeMode.active && (
-              <div className="basis-full min-w-0">{mergeBar}</div>
+              <div className="basis-full min-w-0">
+                <MergeBar
+                  merge={mergeMode}
+                  merging={mergeMut.isPending}
+                  onMerge={() => mergeMut.mutate(mergeMode.letters)}
+                />
+              </div>
             )}
           </div>
         </div>
@@ -761,6 +756,7 @@ export default function BrowseExperience({
                 onClearFilters={() => view.setFilters(DEFAULT_FILTERS)}
                 onClearBounds={() => view.setBounds(null)}
                 merge={mergeMode.active ? mergeMode : null}
+                onEnterMerge={f.mergeMode ? mergeMode.enter : undefined}
                 estimates={estimates}
                 estimatingIds={estimatingIds}
                 estimateRefusals={estimateRefusals}
@@ -905,8 +901,8 @@ function FilterSummary({
   onRetryCount,
   loading,
   showTitle,
+  onFiltersChange,
   onClearBounds,
-  onClearBroker,
   onCreateWatchdog,
   onNewProperty,
 }: {
@@ -923,11 +919,9 @@ function FilterSummary({
   onRetryCount: () => void;
   loading: boolean;
   showTitle: boolean;
-  onClearBounds?: () => void;
-  /* The scope's way out in the header: a /browse?broker=<id> view (reached via
-   * "Go to Browse") opens with Advanced folded, so the sidebar's Broker control
-   * is out of sight (see ListingFilters.brokerId). */
-  onClearBroker?: () => void;
+  /* Each applied-filter pill's ×: one filter back to its default. */
+  onFiltersChange: (next: ListingFilters) => void;
+  onClearBounds: () => void;
   onCreateWatchdog?: () => void;
   onNewProperty?: () => void;
 }) {
@@ -942,7 +936,14 @@ function FilterSummary({
             }`}
             aria-busy={countStale || undefined}
           >
-            {loading && count == null ? 'Loading…' : summarise(filters, count)}
+            {loading && count == null ? (
+              'Loading…'
+            ) : (
+              <>
+                <span className="font-mono tabular-nums">{count == null ? '…' : count.toLocaleString('cs-CZ')}</span>{' '}
+                {countedWords(filters)}
+              </>
+            )}
           </p>
           {order && <PortalOrderChip portal={order.portal} direction={order.direction} />}
           {countStale && (
@@ -963,32 +964,12 @@ function FilterSummary({
               <span>Count may be stale — retry</span>
             </button>
           )}
-          {onClearBounds && (
-            <button
-              type="button"
-              onClick={onClearBounds}
-              className="group inline-flex items-center gap-1 px-2 py-0.5 text-[0.7rem] tracking-wide rounded-[var(--radius-sm)] bg-[var(--color-copper-soft)] text-[var(--color-copper)] hover:bg-[var(--color-copper)]/15 transition-colors"
-              title="Clear the map area filter and widen back to the full cohort"
-            >
-              <span>Map area applied</span>
-              <span aria-hidden className="opacity-60 group-hover:opacity-100">
-                ×
-              </span>
-            </button>
-          )}
-          {onClearBroker && (
-            <button
-              type="button"
-              onClick={onClearBroker}
-              className="group inline-flex items-center gap-1 px-2 py-0.5 text-[0.7rem] tracking-wide rounded-[var(--radius-sm)] bg-[var(--color-copper-soft)] text-[var(--color-copper)] hover:bg-[var(--color-copper)]/15 transition-colors"
-              title="Clear the broker scope and widen back to the full cohort"
-            >
-              <span>Broker scope applied</span>
-              <span aria-hidden className="opacity-60 group-hover:opacity-100">
-                ×
-              </span>
-            </button>
-          )}
+        </div>
+        {/* Ruling P09: the count says what is counted, the pills under it say the
+            rest. The line is kept when no filter is set, so the first pill (a map
+            pan sets the map area) does not push the tabs, cards and map down. */}
+        <div data-testid="applied-filters-row" className="mt-1.5 min-h-6">
+          <AppliedFilterPills filters={filters} onChange={onFiltersChange} onClearBounds={onClearBounds} />
         </div>
       </div>
       <div className="shrink-0 flex items-center gap-2">
