@@ -90,7 +90,7 @@ operator can watch, and work to completion.
   status (API / vite / realtime-worker), each with `state` + a live URL, no Railway token
   needed. For frontend-visible changes, follow with a real-browser check against the
   production URL — read-only only; never drive a mutating action (merge/unmerge, delete,
-  send, …) against production autonomously. `.railway/` (deploy config, no territory) deploys only by the operator's apply (`scripts/railway_iac_wizard.sh`); never change a Railway setting or variable name by dashboard or Railway MCP write, but for the written undo (architecture § Railway service configuration); domains stay dashboard-owned.
+  send, …) against production autonomously. `.railway/` (no territory) deploys only by the operator's wizard apply; never change a Railway setting or variable name by dashboard or Railway MCP, but the undo in architecture § Railway service configuration; domains stay dashboard-owned.
 ## Fetching live state (fetch, don't ask)
 
 Dynamic state lives outside Git — don't ask, fetch it:
