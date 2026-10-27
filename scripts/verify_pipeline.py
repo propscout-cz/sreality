@@ -96,16 +96,16 @@ THRESHOLDS: dict[str, Any] = {
     "jobs_lane_floor_s": 900,
     # 15 min of worker uptime before a lane that has not woken or passed can be judged.
     "jobs_lane_boot_grace_s": 900,
-    # Eight portals at up to 120 s each make ~16 min an honest drain pass (the old stall warn).
-    "jobs_lane_inflight_warn_s": 1200,
-    # LANE_PASS_TIMEOUT_SECONDS: past it the worker abandons the pass (a wedge sat nine hours).
-    "jobs_lane_inflight_fail_s": 1800,
     # Hourly-or-slower lanes pass about once per boot, so any failing_since there is a Problem.
     "jobs_lane_daily_interval_s": 3600,
     # Half the passes since the previous result failed: autodedup's failed_passes 6 on 10-02.
     "jobs_lane_flap_share": 0.5,
     # ...over at least 3 passes, so one failure in two passes is not a flap.
     "jobs_lane_flap_min_passes": 3,
+    # A merge restarts the worker at once and the job runner after its image build and 250 s drain (2025-plan
+    # decision 4): past this a job the code declares on the runner with no live row is no deploy in progress. Re-set
+    # once #2025 PR-1's CI measures the runner's build; never under 1800.
+    "jobs_runner_register_grace_s": 3600,
     # --- capacity (platform alarm): is the database, and the worker's memory, keeping up ----
     # browse-list-rebuild ran 15-28 x its ~9.9 s reference from 08-17: Watch at 3 x and 30 s.
     "capacity_p50_warn_multiple": 3,

@@ -13,19 +13,20 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any
 
 import psycopg
 import pytest
 
-from scraper import job_lease, job_process, jobs
+from scraper import job_lease, job_process, job_runner, jobs
 from scraper.job_process import Child, Guard
 from scraper.job_runner import Finished, PgLedger, Runner
 from scraper.jobs import Job
 from tests._live_property import REQUIRED_DB, db_url
 from tests.scraper.test_job_runner import CHILD, Clock, Script, StandIn, _kill_quietly, _wait_for
+from tests.scraper.test_run_job_form import form_argv
 
 pytestmark = REQUIRED_DB
 
@@ -145,6 +146,45 @@ def test_a_request_runs_on_a_paused_row_with_its_args_and_leaves_the_schedule(
     live.tick()
     assert live.runs(entry.name) == [("ok", False, ["--lines", "3"], "github:op", 0)]
     assert live.row(entry.name)["due_at"] == before, "a pure request run never moves the schedule"
+
+
+class _Unclosed:
+    """The test transaction's connection for job_runner.main, which closes its connection when done."""
+
+    def __init__(self, conn: psycopg.Connection) -> None:
+        self._conn = conn
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._conn, name)
+
+    def close(self) -> None:
+        return None
+
+
+def test_the_run_now_form_files_the_request_the_runner_executes_next_tick(
+        cur: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any, capsys: pytest.CaptureFixture[str]) -> None:
+    """#2026 AC2: the argv the form's real run: line builds (tests/scraper/test_run_job_form.py) goes through the
+    runner's own CLI, which writes only the request; the next tick runs it with those args, by that requester."""
+    entry = _entry("--exit", "0")
+    entry = replace(entry, name=entry.name.replace("-", "_"))  # the form takes a registry name: snake_case
+    live = _live(cur, monkeypatch, [entry], {entry.name: Script(code=0, at=1010.0)})
+    live.runner.tick()
+    before = live.row(entry.name)["due_at"]
+    job_lease.pause(cur.connection, entry.name, until=datetime(2099, 1, 1).astimezone(), note="drill", by="test")
+    argv = form_argv(entry.name, "--lines 3", "op", tmp_path)[2:]
+    assert job_runner.main(argv, registry=[entry], connect=lambda: _Unclosed(cur.connection)) == 0
+    assert capsys.readouterr().out == f"request filed for {entry.name}\n"
+    cur.execute("SELECT requested_by, requested_args FROM scheduled_jobs WHERE job_name = %s", (entry.name,))
+    assert cur.fetchone() == ("github:op", ["--lines", "3"])
+    live.tick()
+    [(command, _, _)] = live.standin.spawned
+    assert command[-5:] == [CHILD, "--exit", "0", "--lines", "3"]
+    live.tick()
+    assert live.runs(entry.name) == [("ok", False, ["--lines", "3"], "github:op", 0)]
+    assert live.row(entry.name)["due_at"] == before, "a pure request run never moves the schedule"
+    cur.execute("SELECT requested_at, requested_args, requested_by FROM scheduled_jobs WHERE job_name = %s",
+                (entry.name,))
+    assert cur.fetchone() == (None, None, None)
 
 
 def test_a_request_on_a_due_row_is_one_run_that_takes_the_slot(cur: Any, monkeypatch: pytest.MonkeyPatch) -> None:
