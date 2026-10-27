@@ -371,8 +371,8 @@ describe('the one-portal order', () => {
   });
 
   it('passes every other sort straight through', () => {
-    for (const field of ['price_czk', 'price_per_m2', 'area_m2', 'plot_area_m2', 'street_name',
-                         'last_seen_at', 'mf_gross_yield_pct'] as const) {
+    for (const field of ['price_czk', 'price_per_m2', 'total_price_change_pct', 'area_m2',
+                         'plot_area_m2', 'street_name', 'last_seen_at', 'mf_gross_yield_pct'] as const) {
       expect(orderPortal(withPortals(['idnes']), { field, direction: 'desc' })).toBeNull();
       expect(effectiveSort(withPortals(['idnes']), { field, direction: 'desc' }))
         .toEqual({ field, direction: 'desc' });
@@ -507,6 +507,34 @@ describe('the cards sort menu', () => {
     expect(s.calls).toContainEqual(
       ['or', ['street_name.lt."nám. Míru",and(street_name.eq."nám. Míru",property_id.lt.7),street_name.is.null']]);
     expect(String(s.calls.find(([m]) => m === 'select')?.[1][0])).toContain('street_name');
+    vi.restoreAllMocks();
+  });
+  /* Price change is the card's price-move badge column: the biggest drop is the most
+   * negative percent, so it sorts ascending; an ad seen at one price has none and
+   * comes last both ways. */
+  it('offers price change both ways, the biggest drop ascending', () => {
+    const byLabel = new Map(CARD_SORTS.map((o) => [o.label, o.spec]));
+    expect(byLabel.get('Změna ceny: největší pokles'))
+      .toEqual({ field: 'total_price_change_pct', direction: 'asc' });
+    expect(byLabel.get('Změna ceny: největší nárůst'))
+      .toEqual({ field: 'total_price_change_pct', direction: 'desc' });
+    expect(parseSort('total_price_change_pct')).toEqual({ field: 'total_price_change_pct', direction: 'asc' });
+  });
+
+  it('pages the cards by price change past a negative cursor, the rows without a change last', async () => {
+    const s = stubReads();
+    await fetchListingsForCards(
+      DEFAULT_FILTERS,
+      { field: 'total_price_change_pct', direction: 'asc' },
+      { value: -12.5, id: 7 },
+    );
+    expect(s.calls.filter(([m]) => m === 'order').map(([, a]) => a)).toEqual([
+      ['total_price_change_pct', { ascending: true, nullsFirst: false }],
+      ['property_id', { ascending: true }],
+    ]);
+    expect(s.calls).toContainEqual(['or', [
+      'total_price_change_pct.gt.-12.5,and(total_price_change_pct.eq.-12.5,property_id.gt.7),total_price_change_pct.is.null',
+    ]]);
     vi.restoreAllMocks();
   });
 });

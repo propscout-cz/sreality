@@ -147,6 +147,8 @@ def _jwt_reason(exc: Exception) -> str:
         (jwt.ExpiredSignatureError, "expired"),
         (jwt.InvalidSignatureError, "bad signature"),
         (jwt.InvalidAudienceError, "wrong audience"),
+        (jwt.InvalidIssuerError, "wrong issuer"),
+        (jwt.MissingRequiredClaimError, "missing claim"),
         (jwt.PyJWKClientError, "unknown signing key"),
     ):
         if isinstance(exc, cls):
@@ -164,10 +166,31 @@ def _bearer(authorization: str | None) -> dict | None:
     return verify_jwt(authorization)
 
 
+# Any one marks a Railway deployment: its documented system variables, plus the legacy name the spec cites.
+_RAILWAY_MARKERS = ("RAILWAY_ENVIRONMENT", "RAILWAY_ENVIRONMENT_NAME", "RAILWAY_ENVIRONMENT_ID",
+                    "RAILWAY_PROJECT_ID", "RAILWAY_SERVICE_ID")
+
+
+def refuse_auth_optional_on_railway() -> None:
+    """Boot guard: on Railway the local-dev opt-out would open every require_token route to anyone (M0, #2059)."""
+    marker = next((m for m in _RAILWAY_MARKERS if os.environ.get(m)), None)
+    if os.environ.get("API_AUTH_OPTIONAL") == "1" and marker:
+        raise RuntimeError(
+            f"API_AUTH_OPTIONAL=1 is a local-dev switch and is refused on Railway ({marker} is set): "
+            "unset it on this service"
+        )
+
+
 def require_token(authorization: str | None = Header(default=None)) -> None:
     """Any signed-in caller — a verified Supabase JWT — with no identity returned.
     A route that needs one takes verify_jwt / tenant_conn."""
     _bearer(authorization)
+
+
+def token_claims(authorization: str | None = Header(default=None)) -> dict | None:
+    """require_token's gate, returning the claims (None under the local-dev opt-out) for a flag gated on
+    admin, as a forced refresh is; never a scope: identity routes take verify_jwt / tenant_conn."""
+    return _bearer(authorization)
 
 
 # Fixed system account id (mirrors migrations/286_accounts_foundation.sql). The
@@ -221,15 +244,26 @@ def verify_jwt(authorization: str | None = Header(default=None)) -> dict:
 
     import jwt  # PyJWT (api extra); imported lazily to keep boot light
 
-    jwks_url = base.rstrip("/") + "/auth/v1/.well-known/jwks.json"
+    # A user's session only as Supabase Auth issues one (M0, #2059): this project's issuer (GoTrue stamps
+    # `<API_EXTERNAL_URL>/auth/v1`), audience and role `authenticated`, a subject and an expiry. A token
+    # carrying `client_id` went to an OAuth client, for another audience.
+    issuer = base.rstrip("/") + "/auth/v1"
     try:
-        signing_key = _jwks_client(jwks_url).get_signing_key_from_jwt(token)
-        return jwt.decode(
-            token, signing_key.key,
-            algorithms=["ES256", "RS256"], audience="authenticated",
+        signing_key = _jwks_client(issuer + "/.well-known/jwks.json").get_signing_key_from_jwt(token)
+        # The PyJWK, not its raw key: PyJWT then verifies with the key's own algorithm, so a header naming
+        # another one fails as a token error (401) instead of a TypeError (500).
+        claims = jwt.decode(
+            token, signing_key,
+            algorithms=["ES256", "RS256"], audience="authenticated", issuer=issuer,
+            options={"require": ["exp", "iss", "aud", "sub", "role"]},
         )
     except jwt.PyJWTError as exc:
         raise _unauthorized("Invalid token", reason=_jwt_reason(exc)) from exc
+    if claims["role"] != "authenticated":
+        raise _unauthorized("Invalid token", reason="wrong role")
+    if "client_id" in claims:
+        raise _unauthorized("Invalid token", reason="client token")
+    return claims
 
 
 def account_scope(
@@ -276,3 +310,10 @@ def require_admin(claims: dict = Depends(verify_jwt)) -> dict:
     if not is_admin(claims):
         raise HTTPException(status_code=403, detail="Admin only")
     return claims
+
+
+def require_admin_to_force(force_refresh: bool, claims: dict | None) -> None:
+    """A forced refresh re-buys a cached LLM answer: an admin's alone (403, the opt-out's anonymous caller
+    included); a plain read of the cached answer stays open to the route's callers (M0, #2059)."""
+    if force_refresh and (claims is None or not is_admin(claims)):
+        raise HTTPException(status_code=403, detail="Admin only: force_refresh")

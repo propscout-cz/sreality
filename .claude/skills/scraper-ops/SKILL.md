@@ -1,6 +1,6 @@
 ---
 name: scraper-ops
-description: Use when running, debugging, or extending the scrapers — triggering the per-portal index-walk workflows, adding a new scraper field without breaking data, refreshing portal HTML fixtures, reading the pipeline logs (INDEX/ENQUEUE/VERIFY/DRAIN/IMAGES line shapes), the always-on real-time worker (probe/drain/images/property-maintenance/broker-maintenance/estimation/location-resolve/location-intake-fast/location-refetch/sold-comps/text-extract/health/autodedup/notifications/push/heartbeat lanes), the visual-signal producer jobs (image pHash, CLIP tagging/retag, DINOv3 corpus embedding on RunPod), or the pipeline verification/alerting harness. Also covers condition-scoring (parked) and image-download workflow cadence. Triggers on: index_walk, detail_drain, gh workflow run, delist_policy, presence check, scrape_runs, fixtures, RUN done, a new listings column, onboarding a portal, reading a scrape log, realtime_worker, sold_comps, clip_tag, dinov3_embed_backfill, compute_image_phash, verify_pipeline, health_canary, health_liveness, health lane, job cell, missing lane, match_once, reason line.
+description: Use when running, debugging, or extending the scrapers — triggering the per-portal index-walk workflows, adding a new scraper field without breaking data, refreshing portal HTML fixtures, reading the pipeline logs (INDEX/ENQUEUE/VERIFY/DRAIN/IMAGES line shapes), the always-on real-time worker (probe/drain/images/property-maintenance/broker-maintenance/estimation/location-resolve/location-intake-fast/location-refetch/sold-comps/text-extract/health/autodedup/notifications/push/heartbeat lanes), the visual-signal producer jobs (image pHash, CLIP tagging/retag, DINOv3 corpus embedding on RunPod), or the pipeline verification/alerting harness. Also covers condition-scoring (parked) and image-download workflow cadence. Triggers on: index_walk, detail_drain, gh workflow run, delist_policy, presence check, scrape_runs, fixtures, RUN done, a new listings column, onboarding a portal, reading a scrape log, realtime_worker, sold_comps, clip_tag, dinov3_embed_backfill, compute_image_phash, verify_pipeline, health_canary, health_liveness, health lane, job cell, missing lane, match_once, reason line, job_runner, scheduled_jobs, job_runs.
 ---
 
 # Scraper operations
@@ -220,7 +220,7 @@ from the slow "download each ad" write:
   category's pages and `by_category` entry are written together as it ends
   (`db.bump_index_progress`), so a SIGKILL keeps them.
   Never hand-roll it, and never add a portal without wiring the flag through —
-  `tests/scraper/test_walk_deadline_wiring.py` fails the build if you do. Ids are classified by the
+  `tests/scraper/test_walk_deadline_wiring.py` fails the build if you do. **The job runner** (`python -m scraper.job_runner run|once|request|pause|list`, #2024: SIGTERM at `timeout_s`, SIGKILL 90 s later, a timeout recorded `timeout` whatever the exit): verbs, log lines, outcomes and drills in `references/job-runner.md`. Ids are classified by the
   one shared `portal.classify_index_sighting` (**an index card with no price reads `unchanged`,
   never `changed`**) — and are **enqueued** into
   `listing_detail_queue` in one of two service classes — ACQUISITION (never fetched) or REFRESH
@@ -436,7 +436,7 @@ missing), `publishing` (queue age, Browse visibility of new ads and of the stock
 **Quality checks (Health dashboard sprint wave 6, `scripts/checks/quality.py`, on the worker):** the `parsing` alarm (fill and vocabulary against the blessed baseline, new ads' per-m² measures, stock
 medians, location payload shape via `claims_common.PAYLOAD_SHAPE_PREDICATES`, re-snapshot churn) and the gauges `data_quality` (basis floor, area vs usable, no portal link), `location_town_coverage` (active ads only) and `text_extraction` (flow, backlog ETA), each gauge cell with a 30-day `trend` and `worse_7d`.
 **Watchers (migration 620):** pg_cron's `health_liveness()` (job `health-liveness`, every 5 min) writes one `liveness` row
-(host `pg_cron`) whose cells judge what must not judge itself: `worker` (heartbeat over 10 min old), `health_lane` (no completed pass, a pass in flight or failing for 10 min), `stale:<key>` (an alarm past its staleness budget) and `unalerted` (a
+(host `pg_cron`) whose cells judge what must not judge itself: `worker/<name>` (each heartbeat over 10 min old), `job/<name>` + `job-runner` (each runner job and the fleet: `health_job_cells`, `references/job-runner.md`), `health_lane` (no completed pass, a pass in flight or failing for 10 min), `stale:<key>` (an alarm past its staleness budget) and `unalerted` (a
 measured Problem with no incident; the matcher-lease `api` cell went in W2b, mig 655); the ladder tells them, and they replace `worker_liveness` and the 24 h dead-man job.
 The canary's last step, `scripts/health_canary.py`, exits 2 when the DB does not answer and 1 on any `CANARY FAIL`: the
 newest `liveness` row is 30 min old, a failing liveness cell has no incident after 15 min, or an open, unacknowledged alarm-class

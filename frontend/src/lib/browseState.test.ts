@@ -355,6 +355,45 @@ describe('the dashboard on the URL', () => {
     expect(params(result.current.search).has('market')).toBe(false);
   });
 
+  it('a dashboard loads its saved switch: on sets `small=1`, off clears it; the modal state follows too', () => {
+    const { result } = urlState('/browse?tab=stats&small=1');
+    act(() => result.current.view.loadDashboard(dashboard({ id: 'd-off', show_small: false })));
+    expect(params(result.current.search).has('small')).toBe(false);
+    expect(params(result.current.search).get('dashboard')).toBe('d-off');
+    expect(result.current.nav).toBe('REPLACE');
+    act(() => result.current.view.loadDashboard(dashboard({ id: 'd-on', show_small: true, filter_spec: SPEC })));
+    expect(params(result.current.search).get('small')).toBe('1');
+    expect(result.current.nav).toBe('PUSH');
+    const memory = renderHook(() => useMemoryBrowseState({ filters: DEFAULT_FILTERS }));
+    act(() => memory.result.current.loadDashboard(dashboard({ id: 'd-on', show_small: true })));
+    expect(memory.result.current.statsSmall).toBe(true);
+  });
+
+  it('reads, sets and clears the small-samples switch `small=1` alone, replacing the entry', () => {
+    const { result } = urlState('/browse?tab=stats&cat=byt');
+    expect(result.current.view.statsSmall).toBe(false);
+    act(() => result.current.view.setStatsSmall(true));
+    expect(params(result.current.search).get('small')).toBe('1');
+    expect(result.current.view.statsSmall).toBe(true);
+    expect(result.current.nav).toBe('REPLACE');
+    act(() => result.current.view.setFilters({ ...DEFAULT_FILTERS, priceMax: 4_000_000 }));
+    expect(params(result.current.search).get('small')).toBe('1');
+    act(() => result.current.view.setStatsSmall(false));
+    expect(params(result.current.search).has('small')).toBe(false);
+  });
+
+  it('the explore modals hold the switch in memory and Go to Browse carries it', () => {
+    const { result } = renderHook(() => useMemoryBrowseState({ filters: DEFAULT_FILTERS }));
+    expect(result.current.statsSmall).toBe(false);
+    act(() => result.current.setStatsSmall(true));
+    expect(result.current.statsSmall).toBe(true);
+    const href = browseUrlFromState({
+      filters: result.current.filters, sort: result.current.sort, tab: 'stats', overlay: result.current.overlay,
+      statsSmall: result.current.statsSmall,
+    });
+    expect(new URLSearchParams(href.split('?')[1]).get('small')).toBe('1');
+  });
+
   it('the explore modals hold the same dashboard and lens in memory, and Go to Browse carries both', () => {
     const { result } = renderHook(() => useMemoryBrowseState({ filters: { ...DEFAULT_FILTERS, priceMax: 9_000_000 } }));
     expect(result.current.activeDashboardId).toBeNull();

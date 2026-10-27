@@ -207,7 +207,7 @@ sanctioned second, `acting_account_ids()`, read only by the eleven curation poli
 
 Per-table RLS pattern, repeated across migrations 290 (5 live curation tables: `collections`, `tags`,
 `property_notes`, `filter_presets`, `notification_subscriptions`; its sixth was dropped by 639),
-291 (`estimation_runs`/`building_runs`, `account_id` NULLABLE, defaults to SYSTEM), 292 (6
+291 (`estimation_runs`/`building_runs`, `account_id` NULLABLE, defaults to SYSTEM; since 679 the browser writes only `estimation_runs.scenario`), 292 (6
 child-grain tables incl. `notification_dispatches`, `account_id` **trigger-derived** from the
 parent row, not caller-supplied), and 294 (pipeline tables): `revoke all ... from anon,
 authenticated` → `grant select/insert/update/delete ... to authenticated` → a `for all

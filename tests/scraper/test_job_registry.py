@@ -10,6 +10,7 @@ import argparse
 import ast
 import contextlib
 import functools
+import hashlib
 import importlib
 import inspect
 import io
@@ -25,10 +26,11 @@ import pytest
 import yaml
 
 from location_data.resolver import drain
-from scraper import jobs
+from scraper import job_lease, job_runner, jobs
 from scraper.jobs import Job
 from scraper.portal import _LIMIT_COERCERS, PortalConfig, PortalLimits
 from scraper.portal_factory import PORTAL_CLASSES
+from tests.migration_defs import MIGRATIONS, latest_definition
 
 FIXED = 11
 ROOT = Path(__file__).resolve().parents[2]
@@ -283,8 +285,10 @@ def _occupied_hours(job: Job, siblings: Sequence[Job] = ()) -> set[int]:
     return hours
 
 
+# The census holds for scheduled runs and their retries (the runner keeps a DB-heavy job's backoff, timeout and lost
+# retries in its own hour); an interrupted run is due again at once (#2024 R-a (b)), so a deploy can overlap two.
 def db_heavy_problems(entries: Sequence[Job]) -> list[str]:
-    """No two DB-heavy jobs can hold the database in one hour, unless one resource already keeps them apart."""
+    """No two DB-heavy jobs' scheduled runs hold the database in one hour, unless one resource keeps them apart."""
     heavy = [j for j in entries if j.db_heavy]
     hours = {j.name: _occupied_hours(j, [s for s in entries if j.resource is not None and s.resource == j.resource
                                          and s.name != j.name]) for j in heavy}
@@ -644,3 +648,75 @@ def test_the_accessor_census_fires() -> None:
     assert accessor_problems({"scraper/job_runner.py": "from scraper.jobs import Job, declared\n"})
     assert accessor_problems({"scraper/job_runner.py": "from scraper.jobs import (\n    Job,\n    declared,\n)\n"})
     assert accessor_problems({"scraper/jobs.py": "def declared():\n    return jobs.declared()\n"}) == []
+
+
+# --- the Health job cells (migration 682, #2026): the SQL spells the runner's own literals ------------------------
+
+WATCHER = "create or replace function public.health_liveness()"
+JOBS_BLOCK = "  -- Scheduled jobs (Actions exit W2, #2026, migration 682)"
+
+
+def _dollar_body(text: str, start: str, tag: str) -> str:
+    """pg_proc.prosrc of the statement opened by `start`: the whole `tag`-quoted string, first and last newline
+    included."""
+    at = text.index(start)
+    return text[at: text.index(f"{tag};", at)].split(tag)[1]
+
+
+def _watcher(text: str) -> str:
+    at = text.index(WATCHER)
+    return text[at: text.index("$fn$;", at) + len("$fn$;")]
+
+
+def job_cell_literal_problems(sql: str) -> list[str]:
+    """The helper's body (comments stripped) names jobs.RUNNER, the heartbeat prefix and the stuck-run grace."""
+    body = re.sub(r"--[^\n]*", "", _dollar_body(sql, "create or replace function public.health_job_cells(", "$cells$"))
+    wanted = (f"runner = '{jobs.RUNNER}'", f"'{job_runner.HEARTBEAT_PREFIX}'", f"+ {jobs.STUCK_RUN_GRACE_S}")
+    return [f"health_job_cells() does not spell {w}" for w in wanted if w not in body]
+
+
+def test_the_job_cells_spell_the_runners_literals() -> None:
+    sql = latest_definition("health_job_cells").read_text(encoding="utf-8")
+    assert job_cell_literal_problems(sql) == []
+
+
+def test_the_job_cell_literal_census_fires() -> None:
+    sql = latest_definition("health_job_cells").read_text(encoding="utf-8")
+    assert job_cell_literal_problems(sql.replace("j.runner = 'job-runner'", "j.runner = 'job_runner'"))
+    assert job_cell_literal_problems(sql.replace("'job-runner/'", "'job-runner-'"))
+    assert job_cell_literal_problems(sql.replace("j.timeout_s + 600", "j.timeout_s + 300"))
+
+
+def test_the_registry_at_trigger_and_the_register_share_one_rejoin_line() -> None:
+    """A retirement shorter than job_lease.REJOIN_AFTER_S is a blink: 682's trigger keeps the join, _REGISTER_SQL the
+    join and the schedule, and the job cells judge the row through it."""
+    sql = (MIGRATIONS / "682_health_job_cells.sql").read_text(encoding="utf-8")
+    trigger = _dollar_body(sql, "create or replace function public.scheduled_jobs_keep_registry_at()", "$keep$")
+    line = f"make_interval(secs => {job_lease.REJOIN_AFTER_S})"
+    assert f"old.retired_at > now() - {line}" in trigger
+    assert job_lease._REGISTER_SQL.count(f"s.retired_at <= now() - {line}") == 2, "registry_at and due_at"
+    heal = sql[sql.index("update public.scheduled_jobs j"):sql.index("create or replace function public.scheduled_jobs")]
+    assert f"j.retired_at > now() - {line}" in heal, "the first apply heals what the trigger keeps"
+    cells = _dollar_body(sql, "create or replace function public.health_job_cells(", "$cells$")
+    assert f"j.retired_at > now() - {line}" in cells, "a blink keeps its cell"
+
+
+def test_the_watcher_precondition_pins_675s_body_and_its_own() -> None:
+    """682's `$pre$` refuses any live watcher but 675's body or its own (a re-run); both hashes come from the files."""
+    sql = (MIGRATIONS / "682_health_job_cells.sql").read_text(encoding="utf-8")
+    s675 = (MIGRATIONS / "675_scheduled_jobs_expand.sql").read_text(encoding="utf-8")
+    pre = sql[sql.index("do $pre$"): sql.index("$pre$;")]
+    for text in (s675, sql):
+        digest = hashlib.md5(_dollar_body(text, WATCHER, "$fn$").encode()).hexdigest()
+        assert f"'{digest}'" in pre, digest
+
+
+def test_the_watcher_is_675s_with_only_the_jobs_block_inserted() -> None:
+    sql = (MIGRATIONS / "682_health_job_cells.sql").read_text(encoding="utf-8")
+    s675 = (MIGRATIONS / "675_scheduled_jobs_expand.sql").read_text(encoding="utf-8")
+    new = _watcher(sql)
+    start = new.index(JOBS_BLOCK)
+    end = new.index("  end;\n\n", start) + len("  end;\n\n")
+    assert new[:start] + new[end:] == _watcher(s675)
+    assert new[start:end].count("public.health_job_cells(c_worker_dead)") == 1
+    assert sql.count(WATCHER) == 1

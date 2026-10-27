@@ -186,7 +186,7 @@ export default function LinkPage() {
           <button
             type="submit"
             disabled={!text.trim() || busy}
-            className="h-11 rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-3 text-[14px] font-medium text-white active:bg-[var(--color-copper-2)] disabled:opacity-40"
+            className="h-11 rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-3 text-[14px] font-medium text-[var(--color-on-copper)] active:bg-[var(--color-copper-2)] disabled:opacity-40"
           >
             {isAdmin ? 'Přidat' : 'Otevřít'}
           </button>

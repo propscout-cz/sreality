@@ -4,10 +4,12 @@
  * their list and persist a drag through `useSavedSet`, and bring the other writes
  * and the words; the bar decides nothing about a set's blob.
  *
- * A chip click loads (`onLoad`); the active chip, once `dirty`, carries a dot and
- * the copper update button appears. Own chips drag by a grip (dnd-kit, keyboard
- * too); a chip SHARED with the account (`isOwn` false) follows them, names its
- * owner (`suffix`), and never drags, renames, deletes or updates.
+ * A chip click loads (`onLoad`); the active chip, once `dirty`, carries a dot, and
+ * its menu leads with Save changes (own chips: one click, no dialog) and Revert
+ * to saved (a reload). The bar draws no update button (operator 2026-10-27). Own
+ * chips drag by a grip (dnd-kit, keyboard too); a chip SHARED with the account
+ * (`isOwn` false) follows them, names its owner (`suffix`), and never drags,
+ * renames, deletes or saves.
  *
  * An instance with GROUPS (presets, migration 672) draws each group as a box
  * after the loose chips: a chip drags into a box, between boxes and back out (a
@@ -41,21 +43,31 @@ export type SavedSetItem = { id: string; name: string; color: TagColor | null; g
 export type SavedSetGroup = { id: string; name: string; color: TagColor | null };
 
 /* A chip menu entry. A `confirm` one is two-step (the first click arms it); a
- * promise keeps the menu open and busy, closing it on success. `danger` hovers brick. */
+ * promise keeps the menu open and busy, closing it on success. `danger` hovers
+ * brick; `accent` is the menu's one copper line (Save changes). */
 export interface SavedSetMenuItem {
   label: string;
   onSelect: () => void | Promise<unknown>;
   confirm?: { label: string; busy: string };
   danger?: boolean;
+  accent?: boolean;
+}
+
+export interface SavedSetBadge {
+  label: string;
+  /* Its tooltip. */
+  title: string;
+  icon?: ReactNode;
 }
 
 /* Every string the bar draws: the presets' English, the dashboards' Czech. `load`,
- * `reorder` and `options` name a chip as "<word>: <name>"; the update button
- * reads as the update dialog's submit. `shared` words a chip shared WITH the
+ * `reorder` and `options` name a chip as "<word>: <name>"; `saveChanges` and
+ * `revert` lead a dirty chip's menu. `shared` words a chip shared WITH the
  * account: the owner's lead-in for a screen reader, and its dirty dot's hint. */
 export type SavedSetCopy = SaveModalWords &
   Record<
-    'empty' | 'save' | 'saveHint' | 'updateHint' | 'edit' | 'load' | 'reorder' | 'dragHint' | 'options' | 'edited' | 'editedHint',
+    | 'empty' | 'save' | 'saveHint' | 'saveChanges' | 'revert' | 'edit' | 'load' | 'reorder' | 'dragHint' | 'options'
+    | 'edited' | 'editedHint',
     string
   > & {
     delete: Required<Pick<SavedSetMenuItem, 'label' | 'confirm'>>;
@@ -91,6 +103,7 @@ export interface SavedSetBarProps<T extends SavedSetItem> {
   onLoad: (item: T) => void;
   /* The dialog's writes: it stays open and busy until the promise settles. */
   onSaveNew: (name: string, checked: boolean, color: TagColor | null) => Promise<unknown>;
+  /* Save changes: the item's own name, colour and checkbox choice, no dialog. */
   onUpdate: (item: T, name: string, checked: boolean, color: TagColor | null) => Promise<unknown>;
   onRename: (item: T, name: string, color: TagColor | null) => Promise<unknown>;
   onDelete: (item: T) => Promise<unknown>;
@@ -100,10 +113,15 @@ export interface SavedSetBarProps<T extends SavedSetItem> {
   isOwn?: (item: T) => boolean;
   /* A small ink-3 suffix after the chip's name (a shared chip's owner; an own chip's role). */
   suffix?: (item: T) => string | null;
+  /* A small tracked-caps badge after the name, in the chip's own colour (the Okolí
+   * dashboard's). Where a chip has one, its suffix is read but not shown, and the
+   * name truncates alone so a long one never hides the badge. */
+  badge?: (item: T) => SavedSetBadge | null;
   /* Menu entries the instance adds (between Edit… and Delete on an own chip). */
   chipMenu?: (item: T) => SavedSetMenuItem[];
-  /* The one checkbox the save and update dialogs offer; `initial(null)` on a save. `disabled`
-   * answers why it is greyed out for an item, or null where it is not. */
+  /* The one checkbox the save dialog offers (`initial(null)`); Save changes keeps an item's
+   * own answer, `initial(item)`. `disabled` answers why it is greyed out for an item, or
+   * null where it is not (Save changes then sends it unticked). */
   checkbox?: {
     label: string;
     initial: (item: T | null) => boolean;
@@ -179,7 +197,7 @@ export function useSavedSet<T extends SavedSetItem>(
 
 type ModalState<T> =
   | { mode: 'save'; item: null }
-  | { mode: 'update' | 'edit'; item: T }
+  | { mode: 'edit'; item: T }
   | { mode: 'group'; item: SavedSetGroup | null };
 
 /* The drag in flight: what it moves, the box it left, and the arrangement as it stands. */
@@ -190,7 +208,7 @@ export const chipBase =
 
 export default function SavedSetBar<T extends SavedSetItem>({
   items, loading = false, activeId, dirty, copy, onLoad, onSaveNew, onUpdate, onRename, onDelete, onReorder,
-  isOwn = () => true, suffix, chipMenu, checkbox, leading, collapse, groups,
+  isOwn = () => true, suffix, badge, chipMenu, checkbox, leading, collapse, groups,
 }: SavedSetBarProps<T>) {
   const barRef = useRef<HTMLDivElement>(null);
   const dirtyId = useId();
@@ -205,7 +223,6 @@ export default function SavedSetBar<T extends SavedSetItem>({
   const shown = collapsed ? items.filter((i) => i.id === activeId) : items;
   const own = shown.filter(isOwn);
   const shared = shown.filter((i) => !isOwn(i));
-  const active = items.find((i) => i.id === activeId);
   const byId = new Map(own.map((i) => [i.id, i]));
 
   /* Folded, the bar is the active chip alone: no boxes, nothing to drag. */
@@ -311,9 +328,26 @@ export default function SavedSetBar<T extends SavedSetItem>({
     commit(moveWithin(d.containers, id, String(over.id)), groupIds);
   };
 
+  /* A dirty chip's menu leads with the save (own only) and the revert: a reload of
+   * the stored set. The save keeps the item's name, colour and checkbox answer. */
+  const dirtyEntries = (item: T): SavedSetMenuItem[] =>
+    item.id === activeId && dirty
+      ? [
+          ...(isOwn(item)
+            ? [{
+                label: copy.saveChanges,
+                accent: true,
+                onSelect: () =>
+                  onUpdate(item, item.name, checkbox != null && checkbox.disabled?.(item) == null && checkbox.initial(item), item.color),
+              }]
+            : []),
+          { label: copy.revert, onSelect: () => onLoad(item) },
+        ]
+      : [];
+
   const menuFor = (item: T): SavedSetMenuItem[] => {
     const added = chipMenu?.(item) ?? [];
-    if (!isOwn(item)) return added;
+    if (!isOwn(item)) return [...dirtyEntries(item), ...added];
     const at = containerOf(base, item.id) ?? LOOSE;
     const moves: SavedSetMenuItem[] = groups
       ? [
@@ -324,6 +358,7 @@ export default function SavedSetBar<T extends SavedSetItem>({
         ]
       : [];
     return [
+      ...dirtyEntries(item),
       { label: copy.edit, onSelect: () => setModal({ mode: 'edit', item }) },
       ...moves,
       ...added,
@@ -375,7 +410,9 @@ export default function SavedSetBar<T extends SavedSetItem>({
             className={`block w-full px-3 py-1.5 text-left text-[0.8rem] disabled:opacity-50 ${
               armed
                 ? 'text-[var(--color-brick)] hover:bg-[var(--color-brick-soft)]'
-                : `text-[var(--color-ink-2)] hover:bg-[var(--color-paper-2)] ${entry.danger ? 'hover:text-[var(--color-brick)]' : 'hover:text-[var(--color-ink)]'}`
+                : entry.accent
+                  ? 'font-medium text-[var(--color-copper)] hover:bg-[var(--color-paper-2)]'
+                  : `text-[var(--color-ink-2)] hover:bg-[var(--color-paper-2)] ${entry.danger ? 'hover:text-[var(--color-brick)]' : 'hover:text-[var(--color-ink)]'}`
             }`}
           >
             {armed ? (running ? armed.busy : armed.label) : entry.label}
@@ -391,6 +428,7 @@ export default function SavedSetBar<T extends SavedSetItem>({
     const marked = item.id === activeId && dirty;
     const entries = menu?.id === item.id ? menuFor(item) : null;
     const owner = suffix?.(item);
+    const tag = badge?.(item) ?? null;
     /* "<name> — <by> <owner>": two shared chips of one name stay two for a screen reader;
      * an own chip's suffix is its role, read without "by". */
     const ownerLead = ['—', isOwn(item) ? null : copy.shared?.by].filter(Boolean).join(' ');
@@ -429,20 +467,30 @@ export default function SavedSetBar<T extends SavedSetItem>({
               <button
                 type="button"
                 onClick={() => onLoad(item)}
-                className={`${draggable ? 'pl-0.5' : 'pl-2.5'} pr-2.5 py-1 max-w-[16rem] truncate`}
+                className={`${draggable ? 'pl-0.5' : 'pl-2.5'} pr-2.5 py-1 max-w-[16rem] ${tag ? 'inline-flex items-center' : 'truncate'}`}
                 aria-describedby={marked ? dirtyId : undefined}
                 title={`${copy.load}: ${item.name}`}
               >
-                {item.name}
+                {tag ? <span className="min-w-0 truncate">{item.name}</span> : item.name}
                 {owner ? (
                   <>
                     <span className="sr-only"> {ownerLead} </span>
-                    <span className="ml-1.5 text-[0.7rem] text-[var(--color-ink-3)]">{owner}</span>
+                    <span className={tag ? 'sr-only' : 'ml-1.5 text-[0.7rem] text-[var(--color-ink-3)]'}>{owner}</span>
                   </>
+                ) : null}
+                {tag ? (
+                  <span
+                    title={tag.title}
+                    aria-hidden
+                    className="ml-1.5 inline-flex shrink-0 items-center gap-0.5 text-[0.58rem] font-medium uppercase tracking-[0.16em]"
+                  >
+                    {tag.icon}
+                    {tag.label}
+                  </span>
                 ) : null}
                 {marked ? (
                   <>
-                    <span className="ml-1 text-[var(--chip-accent)]" title={editedHint} aria-hidden>
+                    <span className={`ml-1 text-[1.1em] leading-none text-[var(--chip-accent)]${tag ? ' shrink-0' : ''}`} title={editedHint} aria-hidden>
                       •
                     </span>
                     <span id={dirtyId} hidden>
@@ -598,17 +646,6 @@ export default function SavedSetBar<T extends SavedSetItem>({
         ) : null}
       </DndContext>
 
-      {active && dirty && isOwn(active) ? (
-        <button
-          type="button"
-          onClick={() => setModal({ mode: 'update', item: active })}
-          className="px-2.5 py-1 text-[0.8rem] rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
-          title={copy.updateHint}
-        >
-          {copy.submit.update}
-        </button>
-      ) : null}
-
       <button
         type="button"
         onClick={() => setModal({ mode: 'save', item: null })}
@@ -648,21 +685,14 @@ export default function SavedSetBar<T extends SavedSetItem>({
           mode={modal.mode}
           initial={modal.item}
           checkbox={
-            checkbox && modal.mode !== 'edit'
-              ? {
-                  label: checkbox.label,
-                  initial: checkbox.initial(modal.item),
-                  disabledHint: checkbox.disabled?.(modal.item) ?? null,
-                }
+            checkbox && modal.mode === 'save'
+              ? { label: checkbox.label, initial: checkbox.initial(null), disabledHint: checkbox.disabled?.(null) ?? null }
               : null
           }
           onSubmit={(name, checked, color) =>
-            (modal.mode === 'save'
-              ? onSaveNew(name, checked, color)
-              : modal.mode === 'update'
-                ? onUpdate(modal.item, name, checked, color)
-                : onRename(modal.item, name, color)
-            ).then(() => setModal(null))
+            (modal.mode === 'save' ? onSaveNew(name, checked, color) : onRename(modal.item, name, color)).then(() =>
+              setModal(null),
+            )
           }
           onClose={() => setModal(null)}
         />

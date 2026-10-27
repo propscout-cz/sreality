@@ -136,6 +136,8 @@ async def _lifespan(_app: FastAPI) -> "AsyncIterator[None]":
     useful for tests / one-off CLI invocations that import api.main but
     don't want a background task chattering.
     """
+    # First: uvicorn exits on a failed startup, so the deploy crashes instead of serving an open API.
+    deps.refuse_auth_optional_on_railway()
     if not os.environ.get("STUCK_ROW_SWEEP_DISABLED"):
         try:
             with deps.open_background_conn() as conn:
@@ -661,8 +663,9 @@ def post_summarize_listing(
     body: s.SummarizeListingIn,
     conn: Any = Depends(deps.get_db_conn),
     llm_client: Any = Depends(deps.get_llm_client),
-    _: None = Depends(deps.require_token),
+    claims: dict | None = Depends(deps.token_claims),
 ) -> dict[str, Any]:
+    deps.require_admin_to_force(body.force_refresh, claims)
     try:
         return summarize_listing(
             conn, llm_client,
@@ -724,8 +727,9 @@ def post_compare_listing_images(
     body: s.CompareListingImagesIn,
     conn: Any = Depends(deps.get_db_conn),
     llm_client: Any = Depends(deps.get_llm_client),
-    _: None = Depends(deps.require_token),
+    claims: dict | None = Depends(deps.token_claims),
 ) -> dict[str, Any]:
+    deps.require_admin_to_force(body.force_refresh, claims)
     try:
         return compare_listing_images(
             conn, llm_client,
@@ -1043,7 +1047,7 @@ def get_listings_ingest(
 def post_buildings(
     body: s.CreateBuildingIn,
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     return create_building_run(conn, body)
 
@@ -1056,7 +1060,7 @@ def post_buildings_confirm_units(
     conn: Any = Depends(deps.get_db_conn),
     sreality_client: Any = Depends(deps.get_sreality_client),
     llm_client: Any = Depends(deps.get_llm_client),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     return confirm_units(
         conn, building_id, body,
@@ -1071,7 +1075,7 @@ def post_buildings_re_extract(
     building_id: int,
     conn: Any = Depends(deps.get_db_conn),
     llm_client: Any = Depends(deps.get_llm_client),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     return re_extract(conn, llm_client, building_id)
 
@@ -1084,7 +1088,7 @@ def get_buildings(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     return list_building_runs(
         conn,
@@ -1100,7 +1104,7 @@ def get_buildings(
 def get_building(
     building_id: int,
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     row = get_building_run(conn, building_id)
     if row is None:
@@ -1113,7 +1117,7 @@ def patch_building_inputs(
     building_id: int,
     body: s.UpdateBuildingInputsIn,
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     return update_building_inputs(conn, building_id, body)
 
@@ -1124,7 +1128,7 @@ def post_building_attachment(
     file: UploadFile = File(...),
     source: str = "ui",
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     row = assert_editable_for_attachments(conn, building_id)
     uploaded_by = source if source in ("ui", "api", "clickup") else None
@@ -1140,7 +1144,7 @@ def post_building_attachment(
 def list_building_attachments(
     building_id: int,
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     # 404 if the parent doesn't exist; otherwise return rows (may be empty).
     if get_building_run(conn, building_id) is None:
@@ -1153,7 +1157,7 @@ def delete_building_attachment(
     building_id: int,
     attachment_id: int,
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     assert_editable_for_attachments(conn, building_id)
     attachments_module.delete_building_attachment(conn, building_id, attachment_id)
@@ -1165,7 +1169,7 @@ def get_building_attachment_raw(
     building_id: int,
     attachment_id: int,
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> Response:
     """The preview proxy (the bucket is private): cached hard, as every attachment's bytes are,
     because a row never changes them (without it each `AttachmentCard` mount re-pulled up to 25 MB

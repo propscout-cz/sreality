@@ -46,6 +46,17 @@ def test_the_signal_cuts_only_a_request_in_hand() -> None:
     assert stop.requested()
 
 
+@pytest.mark.parametrize("sig", [signal.SIGHUP, signal.SIGQUIT])
+def test_a_foreground_install_also_takes_a_hangup_and_a_quit_as_the_stop(sig: signal.Signals) -> None:
+    """`job_runner once` runs its child in its own session: a closed terminal must stop it, not orphan it."""
+    stop.install()
+    assert signal.getsignal(sig) is not stop._on_signal, "only a foreground run asks for these"
+    stop.install(hangup=True)
+    assert signal.getsignal(sig) is stop._on_signal  # before the kill: an unrouted one would end this process
+    os.kill(os.getpid(), sig)
+    assert stop.requested()
+
+
 def test_reset_forgets_the_stop_and_the_install() -> None:
     stop.install()
     stop.EVENT.set()

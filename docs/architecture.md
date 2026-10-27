@@ -684,11 +684,11 @@ rules. Identify which one a task belongs to before you start.
   sign-in, so whatever it held proved only "loaded the SPA"). Every API call sends the session JWT
   (see "One credential" below); a `require_token` route still returns no identity, admin or
   account-scoped data — those sit behind `verify_jwt` / `require_admin` / `tenant_conn`.
-  At least these still break it, running service-role behind `require_token`
-  alone with no account predicate: `/buildings*` (`building_runs` has tenant RLS since
-  migration 291; the other, `POST /notifications/dispatches/{id}/estimate`, was deleted
-  2026-10-21 in notifications W1) — owed as `roadmap/public-release-track.md` item 11, an
-  open list. The estimation trace payload and both `/feedback` routes moved onto the tenant
+  `/buildings*` ran service-role behind `require_token` alone with no account predicate
+  until agent platform M0 (2026-10-26) made every building route `require_admin` (its rows, SYSTEM-stamped,
+  stay readable through PostgREST's SYSTEM read arm: owed, item 11); the other,
+  `POST /notifications/dispatches/{id}/estimate`, was deleted 2026-10-21 in notifications W1
+  (`roadmap/public-release-track.md` item 11, an open list). The estimation trace payload and both `/feedback` routes moved onto the tenant
   pool 2026-10-02; the feedback POST's refiner is admin-only (the `database` skill's
   `references/tenancy.md`, named exception); `/filter-presets*` followed 2026-10-12 (per
   account, migration 595); `PUT /stats/dashboard` was born there (migration 626).
@@ -910,7 +910,9 @@ rules. Identify which one a task belongs to before you start.
   same switcher strip above the stage tabs: a read board has no stage sheet and no tag chips or
   artifact button; an edit board moves cards through the stage sheet as the owner (ruling 6). The
   remembered stage is per board (`sreality.phone.pipelineStage:<owner>`); sharing and leaving a
-  board, and "Upravit jako", stay desktop-only.
+  board, and "Upravit jako", stay desktop-only. Its one filter, **Lokalita**, is the desktop bar's:
+  the same `districts` URL params (`lib/pipelineState`), `LocationTypeahead` in a sheet and
+  `matchesDistricts` over the board's five codes — every stage page stays, counting the place's cards.
   The W4 screens (`pages/phone/`, #1769) add no read either: a collection's members and a
   broker's ads are the feed's card read under the `collections` / `brokerId` prefilter, the
   lists and the dossier are the desktop pages' own API calls, and each page component picks
@@ -1529,7 +1531,12 @@ renumber.** Navigate by area:
     **What immutability covers.** The RESULT: the estimate, the trace, the cost, the
     comparables frozen at run time. One thing on the row is deliberately mutable: the
     operator's yield `scenario` (`PATCH /estimations/{id}/scenario`) — a what-if overlay, not a
-    computed output. Subject IDENTITY (`input_listing_id`) is stamped at submit and never
+    computed output. The database holds this by grant, not by convention (migration 679): the
+    browser role (`authenticated`) may INSERT into neither `estimation_runs` nor `building_runs`
+    and may UPDATE only `estimation_runs.scenario`, the one column that route writes on the tenant
+    connection; every other run write is the API's, on the service role. Until 679, migration 291's
+    table-wide INSERT/UPDATE let a signed-in browser create its own runs through PostgREST (past the
+    metering gate) and rewrite a result. Subject IDENTITY (`input_listing_id`) is stamped at submit and never
     changes (2026-10-20; until then a binder could late-bind it, see below). Since the surrogate
     cutover (migration 411, PR #1095, completed for `property_estimates_public` by migration
     412) every read path that answers "what estimates exist for this listing" FILTERS on
@@ -1600,7 +1607,9 @@ renumber.** Navigate by area:
     determined `cz`, a missing required parameter) is a 4xx and writes nothing. Every signed-in user may value a property (`verify_jwt`; tenancy shape 3); reads and history are the
     caller's own account. The operator's careful defaults: a missing condition blocks the button,
     `velmi_dobry` is Valuo's `very_good` "Velmi dobrý" (operator ruling 2026-10-20, superseding `good`),
-    `novostavba` is `very_good` (`assumed`; v3 has no "new" rating) plus `new_building: true`, a house's
+    `novostavba` is `very_good` (`assumed`; v3 has no "new" rating) plus `new_building: true` (so are `projekt` /
+    `ve_vystavbe`; every other flat or house sends `new_building: false`, an ad without a condition by assumption — never
+    left empty, the editor offers only ano/ne: operator ruling 2026-10-27), a house's
     energy class G is not sent (`assumed` —
     Czech ads without a PENB certificate must state G too), and a yes/no attribute is sent only
     when the ad says yes — portals store "not mentioned" as no (sreality's garage, bezrealitky's
@@ -1759,7 +1768,9 @@ renumber.** Navigate by area:
     sighting of the property's newest advert there, NULL with none; MS19), which W5 projects.
     The city figures (`home_obec_pop`, `near_*`) follow the LOCATION advert's point (since 636):
     the rollup clears `city_proximity_computed_at` when the location advert changes, and the
-    hourly `recompute_city_proximity` refills them from that point, writing a row only while its
+    hourly `recompute_city_proximity` (pg_cron job `recompute-city-proximity` since 674; the full
+    rebuild, `scripts/recompute_city_proximity.py --full`, ends the population load and the
+    curated-city seed, in id batches) refills them from that point, writing a row only while its
     `location_listing_ref_id` is still the one the run read, so a run that races a change writes
     nothing stale (that guard replaced 588's `< repr_since` repair). The job reads only a point:
     a location advert without one keeps the figures of an earlier point (or none) until it gains
@@ -1813,7 +1824,8 @@ renumber.** Navigate by area:
     median — each from the SAME query and rule as the tab it opens, so the two never disagree. The
     "Okolí dashboard" tab (`MarketTile`, 2026-10-23) draws the account's ONE dashboard marked for it
     (`stats_dashboards.property_card`, migration 664, any name, never a filter; set up in Browse ›
-    Statistiky) over ONE neighbourhood definition,
+    Statistiky), with that dashboard's own "Malé vzorky" setting (`show_small`, migration 681), over ONE
+    neighbourhood definition,
     `lib/neighbourhood` — the property's type, deal, disposition and ownership (one it does not state is
     left unset and named), Browse's centre + radius around it (250 m – 2 km, 500 m default, the square
     every Browse reader filters on), the user's building material and condition, under the Stats lens
@@ -2660,9 +2672,11 @@ renumber.** Navigate by area:
     `public.health_liveness()` (SECURITY DEFINER, execute revoked from the browser roles; pg_cron
     job `health-liveness`, every 5 min, under a 60 s statement timeout), runs outside the worker
     and the API and writes ONE `liveness` result per call (host `pg_cron`; no incident, no notice —
-    the teller tells it like any check): a `worker` cell per worker (heartbeat over 10 min old), a
+    the teller tells it like any check): a `worker/<name>` cell per heartbeat row (heartbeat over 10 min
+    old; migration 675), a `job/<name>` cell per job-runner job and a `job-runner` fleet cell (migration 682,
+    `health_job_cells()`; the `jobs` check's `job-runner/registry` census covers a job with no row), a
     `health_lane` cell (the worker's health lane, silent for 10 min), a `stale:<key>` cell per alarm
-    past its staleness budget (worker keys fold into a failing `worker` cell) and an `unalerted` cell
+    past its staleness budget (worker keys fold into a failing `worker/<name>` cell) and an `unalerted` cell
     (an alarm cell measured failing now and two cadences ago with no open incident; the `api` cell,
     which judged the watchdog matcher's lease, went with the matcher in W2b, migration 655); a
     subject that stops failing reads `ok` while its incident is open, so it recovers on a measured OK. It replaced the `worker_liveness` check and migration 274's 24 h
@@ -2720,8 +2734,9 @@ renumber.** Navigate by area:
     page (`/notifications`) reads every producer off one LEFT-join feed (the watchdog-only
     INNER join became a LEFT join + a `collections` join so monitor and share rows aren't dropped;
     its System tab and the duplicate `/watchdog` feed went in W1, `/watchdog` now lists the watchdogs,
-    and the feed pages with "Load more"), and ONE unread observer (`frontend/src/lib/unreadCount.tsx`,
-    mounted once by `Shell`, W5a) polls `GET /notifications/unread-count` for the red desktop nav badge,
+    and the feed loads older rows as the end of the list comes into view, as Browse does), and ONE
+    unread observer (`frontend/src/lib/unreadCount.tsx`, mounted once by `Shell`, W5a) polls
+    `GET /notifications/unread-count` for the red desktop nav badge,
     the phone header's bell, the page itself and the installed app's icon badge;
     `POST /notifications/mark-all-seen` clears it.)
     **The Stats tab is a dashboard over the SAME cohort (migration 626, `docs/design/stats-dashboard.md`).**
@@ -3571,7 +3586,7 @@ renumber.** Navigate by area:
     (`pipelineViewFilters`: no category, no deal type, no price/area/location), with any active
     preset deselected, in ONE atomic write (`browseState.loadPipelineView`; two writes against
     one searchParams snapshot clobber each other, and a preset left active over replaced filters
-    reads as dirty and pops "Update preset"). It shipped as a modifier that AND'd itself onto
+    reads as edited). It shipped as a modifier that AND'd itself onto
     whatever was set, which was wrong: Browse's default cohort is `byt` + `pronajem`, so "show me
     my pipeline" showed 1 of 45 deals — every sale flat, house and commercial unit hidden by a
     default the operator never chose for that purpose. `status` deliberately stays `any` so a
@@ -3581,7 +3596,7 @@ renumber.** Navigate by area:
     sidebar's Curation → Pipeline control (`CuratedSetFilter`: compose with current filters, pick
     or exclude stages). It is still **not a preset**: nothing is saved, and loading it deselects
     the active preset. A preset stores the pipeline scope like every filter, so a change to it
-    offers "Update preset" and loading the preset applies it (ruling 2026-10-22, reversing
+    marks the preset edited (Save changes in its ⋯ menu) and loading the preset applies it (ruling 2026-10-22, reversing
     2026-10-19); a Stats dashboard leaves it out (`DASHBOARD_EXCLUDED_KEYS`). A
     watchdog can't use it (`UNSUPPORTED_LABELS`) — the operator's own state can't be a trigger.
     **The pipeline view's neutral cohort needs `category_type` NULLABLE on Browse — NULL means "no deal-type constraint"** (the
@@ -3679,9 +3694,12 @@ renumber.** Navigate by area:
     one says so with a retry inside the row (merge sprint MS16) — while a RESOLVED selection
     matching nothing is zero cards, never everything. Stav's default stays `any`, so a delisted member of a
     collection stays in the cohort. **On the kanban board** stage moves are
-    **drag-and-drop ONLY** (`@dnd-kit`, `Pipeline.tsx`: each column a `useDroppable`, each card a
+    **drag-and-drop ONLY** (`@dnd-kit`, `Pipeline.tsx`: each live column and each row of the folded
+    "Uzavřené" lane — the terminal stages, ruling P22 — a `useDroppable` under its stage's id, each card a
     `useDraggable` with a grip handle; one optimistic move mutation; keyboard moves via the
-    `KeyboardSensor`). The drag→move resolution is the pure, unit-tested `planMove(activeId,
+    `KeyboardSensor`). `boardCollision` picks the target: a closed row is hit by a point (the pointer,
+    or on a keyboard drag the ghost's centre), since a ~2rem row under a tall ghost would otherwise take
+    whichever row the ghost covered most; the columns keep the overlap rule. The drag→move resolution is the pure, unit-tested `planMove(activeId,
     overId, cards)` (same column / dropped-outside / unknown card → no-op). The per-card stage
     `<select>` was **removed** there (the card instead carries a trash → inline two-step confirm →
     optimistic remove-from-pipeline, the app's destructive-action pattern). `<DragOverlay
@@ -3985,7 +4003,10 @@ renumber.** Navigate by area:
     `pozemek`: **32,626 of 101,021 rows (32.3 %) carry no `estate_area`** — bazos 15,846,
     realitymix 11,470, mmreality 3,653, remax 1,649 — and 31,613 of them carry the parcel in
     `area_m2`. So `min_estate_area = 500` dropped a third of the country's land inventory
-    without a word. The fix is the name, **not** a writer change. **The writer rule, stated once:** a
+    without a word. The fix is the name, **not** a writer change. **No plausibility band:** 680 read
+    a lot outside 10 .. 1,000,000 m² as no lot and #2117 made the rollup's price change skip
+    placeholder prices; both were reverted (migration 685, operator ruling 2026-10-27) — a value that
+    makes no sense is narrowed by the user with the filters, never hidden by a rule. **The writer rule, stated once:** a
     parser fills `estate_area` ONLY from a parcel cell the page itself LABELS — sreality,
     bezrealitky, idnes, ceskereality, maxima and (from W21) mmreality all do, land rows
     included, and that is faithful reporting rather than duplication — **and only when what
@@ -5207,7 +5228,8 @@ the cron command** — migration 371's rule, or the refresh would silently die a
 default. Rule 25's deletion parity did not apply: it was an operator-requested review surface with
 a stated end. While it was live it led the TOP-LEVEL nav as `!AUDIT POLOH` (admin-only, first entry,
 badged with the unfiltered row count), not buried in the NEW DEDUP dropdown, because it was a
-decision waiting on the operator.
+decision waiting on the operator. Since 2026-10-27 (redesign ruling P33) it is the first item of the
+Admin menu, with its count on the Admin trigger.
 **The map's container carries an inline `position/inset/size` style and that is NOT redundant with
 Tailwind's `absolute inset-0`**: `globals.css` imports `maplibre-gl.css` AFTER `tailwindcss`, so the
 `.maplibregl-map` class MapLibre stamps onto the container at init wins the cascade with its own

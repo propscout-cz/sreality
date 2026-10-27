@@ -197,7 +197,7 @@ Budget shape, and the two rails that make the shared lease actually exclusive:
   unchanged: every loop tests the budget between batches and they run concurrently, so N workers
   still overrun by at most ONE batch.
 - `max_seconds` is clamped to ≤ 900 and `batch_size` to ≤ 1000, so a HEALTHY pass stays far below
-  the jobs check's 1,200 s in-flight Watch (`jobs_lane_inflight_warn_s`) and below
+  the jobs check's 1,200 s in-flight Watch (`platform.LANE_INFLIGHT_WARN_S`) and below
   `LANE_PASS_TIMEOUT_SECONDS`.
   Throughput does not need a long pass — the queue IS the cursor.
 - **The lease TTL is `max_seconds + batch_size × 2 s` (floor 120 s), not a flat constant.**

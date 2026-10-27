@@ -18,7 +18,7 @@ from psycopg.types.json import Jsonb
 
 from api import push, push_devices
 from api import push_delivery as pd
-from tests._live_property import REQUIRED_DB, _account, _advert, _property, cur, db_url  # noqa: F401
+from tests._live_property import REQUIRED_DB, _account, _advert, _property, db_url
 
 pytestmark = REQUIRED_DB
 

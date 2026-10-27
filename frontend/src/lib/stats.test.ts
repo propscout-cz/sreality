@@ -31,6 +31,7 @@ import {
   dimBlock,
   dropOutcome,
   chartsEqual,
+  everyCellUnderMin,
   fetchDashboard,
   keyLabel,
   ledgerCounts,
@@ -58,7 +59,11 @@ import {
   statUsed,
   viewBlock,
   soldMarketFilters,
+  MARKET_CAPTION,
+  MARKET_LABEL,
+  marketCaption,
   type ChartSpec,
+  type StatsSpec,
 } from './stats';
 
 const RENT = 'rent_monthly_czk_m2';
@@ -321,6 +326,30 @@ describe('the ledger', () => {
 
   it('has nothing to count on a bad spec', () => {
     expect(ledgerCounts(normalizePivot({ refused: 'bad_spec', reason: 'x', cells: [] }, chart({})))).toBeNull();
+  });
+
+  /* Ruling S09: the note "every cell is under 5" reads the payload's own floor and every
+   * cell it sent — each level, the Celkem rollup, every column value. */
+  it('everyCellUnderMin: true only when every cell (the Celkem rollup, every level, every column) is under min_n', () => {
+    const spec: StatsSpec = { rows: ['disposition', 'condition'], cols: ['obec'], measure: 'ppm2' };
+    const small = [
+      cell([], 4, null), cell([], 3, null, '554481'),
+      cell(['1+kk'], 4, null), cell(['1+kk'], 2, null, '554481'),
+      cell(['1+kk', 'novostavba'], 1, null), cell(['1+kk', 'novostavba'], 1, null, '554481'),
+    ];
+    expect(everyCellUnderMin(pivotOf({ spec, cells: small }))).toBe(true);
+    // The Celkem rollup alone reaching the floor is enough to say nothing.
+    const rollupAtFloor = [cell([], 5, 100), ...small.slice(1)];
+    expect(everyCellUnderMin(pivotOf({ spec, cells: rollupAtFloor }))).toBe(false);
+    // So is one column value's leaf.
+    const leafAtFloor = [...small.slice(0, 5), cell(['1+kk', 'novostavba'], 5, 90, '554481')];
+    expect(everyCellUnderMin(pivotOf({ spec, cells: leafAtFloor }))).toBe(false);
+    // The floor is the payload's, not a constant.
+    expect(everyCellUnderMin(pivotOf({ cells: [cell([], 7, null)], min_n: 10 }))).toBe(true);
+    // Nothing to say on a refusal or with no cells.
+    expect(everyCellUnderMin(pivotOf({ refused: 'mixed_category', cells: [] }))).toBe(false);
+    expect(everyCellUnderMin(pivotOf({ cells: [] }))).toBe(false);
+    expect(everyCellUnderMin(normalizePivot({ refused: 'bad_spec', reason: 'x', cells: [] }, chart({})))).toBe(false);
   });
 
   it('names the cohort from the payload', () => {
@@ -669,5 +698,33 @@ describe('soldMarketFilters — the "Prodáno (trh)" lens', () => {
       ...set, status: 'inactive', tomObservedOnly: true, showDismissed: true, tomDaysMin: 2, tomDaysMax: 60,
     });
     expect(set.status).toBe('active');
+  });
+});
+
+/* Ruling S03: the sample sentence sits under its switch, the chosen lens named first in bold. */
+describe('marketCaption — the lens name, then what it counts', () => {
+  it('splits each caption into the lens name and the rest', () => {
+    expect(MARKET_LABEL).toEqual({ filter: 'Jako ve filtru', sold: 'Prodáno (trh)', all: 'Vše' });
+    expect(marketCaption('filter')).toEqual({
+      name: 'Jako ve filtru',
+      text: 'každý graf počítá nemovitosti z filtru; sestava grafů je uložená k vašemu účtu.',
+    });
+    expect(marketCaption('all')).toEqual({
+      name: 'Vše',
+      text: 'aktivní i neaktivní nemovitosti, včetně skrytých, bez omezení doby na trhu; ostatní filtry platí.',
+    });
+    expect(marketCaption('sold')).toEqual({
+      name: 'Prodáno (trh)',
+      text: 'jen neaktivní nemovitosti sledované od vzniku, 2–60 dní na trhu, včetně skrytých; ostatní filtry platí.',
+    });
+  });
+
+  it('keeps the two captions the property page shows, word for word', () => {
+    expect(MARKET_CAPTION.sold).toBe(
+      'Prodáno (trh): jen neaktivní nemovitosti sledované od vzniku, 2–60 dní na trhu, včetně skrytých; ostatní filtry platí.',
+    );
+    expect(MARKET_CAPTION.all).toBe(
+      'Vše: aktivní i neaktivní nemovitosti, včetně skrytých, bez omezení doby na trhu; ostatní filtry platí.',
+    );
   });
 });

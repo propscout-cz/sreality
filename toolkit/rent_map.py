@@ -25,6 +25,7 @@ import logging
 import re
 import unicodedata
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from typing import TYPE_CHECKING, Any
@@ -213,7 +214,7 @@ def _parse_values(cells: dict[tuple[int, int], str]) -> list[RentValue]:
         elif "kod obce" in n:
             col_code = col
 
-    def cols_for(predicate) -> list[int]:
+    def cols_for(predicate: Callable[[str], bool]) -> list[int]:
         return sorted(
             c for c, text in headers.items() if predicate(_norm(text))
         )

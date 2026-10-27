@@ -176,7 +176,7 @@ describe('<ValuoSection> editor', () => {
     expect(within(rating).getAllByRole('option')[0]).toHaveTextContent('Nevyplněno');
     expect(container.querySelector('input[type="date"]')).toHaveValue('2026-10-19');
     // A yes/no in the basic group, where the API's grouping puts it.
-    for (const name of ['neuvedeno', 'ano', 'ne']) expect(param('Novostavba').getByRole('button', { name })).toBeInTheDocument();
+    for (const name of ['ano', 'ne']) expect(param('Novostavba').getByRole('button', { name })).toBeInTheDocument();
     expect(param('Novostavba').getByRole('button', { name: 'ano' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByRole('textbox', { name: 'Podlaží' })).not.toBeInTheDocument();
 
@@ -195,8 +195,29 @@ describe('<ValuoSection> editor', () => {
     expect(placeBox()).toHaveClass('h-[2.125rem]');
     const rating = screen.getByRole('combobox', { name: 'Stav' }); // no default: nothing is sent
     expect(rating).toHaveClass('h-[2.125rem]', 'border-dashed');
-    for (const b of param('Novostavba').getAllByRole('button')) expect(b).toHaveClass('h-[2.125rem]', 'border-dashed');
-    expect(screen.getByRole('button', { name: 'Prodej' })).not.toHaveClass('border-dashed');
+    // A pick-one is one joined bar: its track is the box.
+    expect(param('Novostavba').getByRole('group', { name: 'Novostavba' }).firstElementChild).toHaveClass('h-[2.125rem]', 'border-dashed');
+    expect(screen.getByRole('button', { name: 'Prodej' }).parentElement).toHaveClass('h-[2.125rem]');
+    expect(screen.getByRole('button', { name: 'Prodej' }).parentElement).not.toHaveClass('border-dashed');
+  });
+
+  /* The joined bar (operator ruling 2026-10-27) as the form box: a required pick-one has no "neuvedeno" to light. */
+  it('lights nothing in a required pick-one that has no value, its track the dashed box', async () => {
+    renderSection(page({ defaults: { ...DEFAULTS, kind: null } }));
+    const bar = (await screen.findAllByRole('group', { name: 'Typ obchodu' })).at(-1)!;
+    expect(within(bar).getAllByRole('button').map((b) => b.textContent)).toEqual(['Prodej', 'Pronájem']);
+    for (const b of within(bar).getAllByRole('button')) expect(b).toHaveAttribute('aria-pressed', 'false');
+    expect(bar.firstElementChild).toHaveClass('h-[2.125rem]', 'border-dashed');
+  });
+
+  it('paints a refused pick-one\'s track brick and names the refusal on the bar', async () => {
+    const refused = { ...REFUSED, error: { ...REFUSED.error!, form_errors: [{ field: 'kind', message: 'Invalid enum value' }] } };
+    renderSection(page({ blocking: [], defaults: { ...DEFAULTS, rating: 'good' }, history: [refused] }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Nové ocenění →' }));
+    const bar = screen.getAllByRole('group', { name: 'Typ obchodu' }).at(-1)!;
+    expect(bar).toHaveAttribute('aria-invalid', 'true');
+    expect(bar).toHaveAccessibleDescription('Valuo: „Invalid enum value“');
+    expect(bar.firstElementChild).toHaveClass('[[aria-invalid=true]>&]:border-[var(--color-brick)]');
   });
 
   it('tags every value with where it came from, and counts the folded group', async () => {
@@ -233,11 +254,12 @@ describe('<ValuoSection> editor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Pronájem' }));
     fireEvent.click(screen.getByRole('button', { name: 'Prodej' }));
     fireEvent.change(container.querySelector('input[type="date"]')!, { target: { value: '' } }); // never cleared
-    fireEvent.click(param('Novostavba').getByRole('button', { name: 'neuvedeno' }));
+    openMore();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Podlaží' }), { target: { value: '' } });
     fireEvent.click(cta());
 
     await waitFor(() => expect(apiPost).toHaveBeenCalledTimes(1));
-    expect(apiPost).toHaveBeenCalledWith('/properties/5/valuo', { overrides: { rating: 'good', new_building: null } });
+    expect(apiPost).toHaveBeenCalledWith('/properties/5/valuo', { overrides: { rating: 'good', floor: null } });
     // The answer replaces the editor in place.
     expect(await screen.findByText(t(fmtCzk(6_120_000)))).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Ocenit přes Valuo' })).not.toBeInTheDocument();
@@ -310,6 +332,7 @@ describe('<ValuoSection> editor', () => {
     renderSection(page({ blocking: [], defaults: { ...DEFAULTS, rating: 'good' } }));
     fireEvent.click(await screen.findByRole('button', { name: 'Ocenit přes Valuo →' }));
     const nb = param('Novostavba');
+    expect(nb.getAllByRole('button').map((b) => b.textContent)).toEqual(['ano', 'ne']); // never 'neuvedeno'
     expect(nb.getByRole('button', { name: 'ano' })).toHaveAttribute('aria-pressed', 'true');
     expect(nb.getByText('odvozeno')).toBeInTheDocument();
     expect(nb.getByRole('img', { name: 'Ve výstavbě → Novostavba' })).toBeInTheDocument();

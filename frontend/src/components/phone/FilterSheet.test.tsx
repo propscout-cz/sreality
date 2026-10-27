@@ -305,6 +305,39 @@ describe('the footer', () => {
   });
 });
 
+/* The sheet hosts the desktop controls, so a pick-one is the desktop's joined
+ * bar (operator ruling 2026-10-27): Status as the sidebar draws it, the lone
+ * on/off as its two-segment bar. */
+describe('pick-one rows', () => {
+  it('draws Status as the joined bar, and a tap on the lit status keeps it', async () => {
+    const user = userEvent.setup();
+    const { onApply } = renderSheet();
+    await user.click(within(sheet()).getByRole('button', { name: /^Status/ }));
+    const bar = within(sheet()).getByRole('group', { name: 'Status' });
+    const segs = within(bar).getAllByRole('button');
+    expect(segs.map((b) => b.textContent)).toEqual(['Vše', 'Aktivní', 'Neaktivní']);
+    const track = segs[0].parentElement!;
+    for (const b of segs) expect(b.parentElement).toBe(track);
+    expect(track).toHaveClass('grid', 'w-full', 'border', 'bg-[var(--color-paper-2)]');
+    const lit = within(bar).getByRole('button', { name: 'Aktivní' });
+    expect(lit).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+    await user.click(lit);
+    expect(lit).toHaveAttribute('aria-pressed', 'true');
+    await user.click(within(sheet()).getByRole('button', { name: /^Zobrazit/ }));
+    expect(onApply.mock.calls[0][0].filters.status).toBe(FEED_ALL_FILTERS.status);
+  });
+
+  it('draws Seen at birth as the sidebar\'s two-segment bar', async () => {
+    const user = userEvent.setup();
+    const { onApply } = renderSheet();
+    const bar = within(sheet()).getByRole('group', { name: 'Seen at birth' });
+    expect(within(bar).getAllByRole('button').map((b) => b.textContent)).toEqual(['All ads', 'Seen at birth']);
+    await user.click(within(bar).getByRole('button', { name: 'Seen at birth' }));
+    await user.click(within(sheet()).getByRole('button', { name: /^Zobrazit/ }));
+    expect(onApply.mock.calls[0][0].filters.tomObservedOnly).toBe(true);
+  });
+});
+
 describe('presets from the phone', () => {
   const presetBase = filtersForPreset({ ...DEFAULT_FILTERS, categoryType: 'prodej', dispositions: ['2+kk'] }, true);
   const draft: ListingFilters = { ...presetBase, priceMax: 6_000_000, pipeline: { set: 'in', in: [], out: [] } };

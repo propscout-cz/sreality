@@ -19,6 +19,7 @@ import { createPortal } from 'react-dom';
 import { lazyChunk } from '@/lib/lazyChunk';
 import { Link, useLocation } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
+import { useNewTabProps } from '@/lib/linkGestures';
 import { usePhoneShell } from '@/lib/phoneShell';
 import {
   keepPreviousData,
@@ -63,7 +64,7 @@ import RangeStrip from '@/components/estimation/RangeStrip';
 import Timeline from '@/components/estimation/Timeline';
 import { MfReferenceCard } from '@/components/estimation/MfReferenceCard';
 import { mfShape } from '@/lib/mfReference';
-import { DecimalField, PickButton } from '@/components/controls';
+import { DecimalField, PickButton, SegmentedBar } from '@/components/controls';
 import { canRerun, type RerunOverrides } from '@/lib/rerun';
 import { advertPath, listingPath } from '@/lib/listingUrl';
 import { filterById } from '@/lib/filterRegistry.generated';
@@ -1298,6 +1299,8 @@ function ExcludedComparables({
 }: {
   excluded: ComparableExcluded[] | null;
 }) {
+  /* A comparable opens in a new tab, so the run stays where it was read. */
+  const newTab = useNewTabProps();
   if (!excluded || excluded.length === 0) return null;
   return (
     <div className="mt-6">
@@ -1317,6 +1320,7 @@ function ExcludedComparables({
           >
             <Link
               to={listingPath(row.sreality_id)}
+              {...newTab}
               className="shrink-0 font-mono tabular-nums text-[var(--color-copper)] hover:underline underline-offset-2"
             >
               {row.sreality_id}
@@ -1386,7 +1390,7 @@ function ShowDetailButton({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="px-4 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
+      className="px-4 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] transition-colors"
     >
       Show estimation detail
     </button>
@@ -1575,9 +1579,11 @@ function AdjustPanel({
         </div>
       </div>
 
-      <div>
+      <div className="space-y-1.5">
         <FieldLabel>Estimate kind</FieldLabel>
-        <SegRow
+        <SegmentedBar
+          fill
+          label="Estimate kind"
           options={[
             { value: 'rent', label: 'Rent (monthly)' },
             { value: 'sale', label: 'Sale price' },
@@ -1589,9 +1595,11 @@ function AdjustPanel({
 
       {state.estimate_kind === 'rent' && (
         <>
-          <div>
+          <div className="space-y-1.5">
             <FieldLabel>Model provider</FieldLabel>
-            <SegRow
+            <SegmentedBar
+              fill
+              label="Model provider"
               options={[
                 { value: 'anthropic', label: 'Claude' },
                 { value: 'gemini', label: 'Gemini' },
@@ -1600,9 +1608,11 @@ function AdjustPanel({
               onChange={(v) => set('provider', v)}
             />
           </div>
-          <div>
+          <div className="space-y-1.5">
             <FieldLabel>Comparable lifecycle</FieldLabel>
-            <SegRow
+            <SegmentedBar
+              fill
+              label="Comparable lifecycle"
               options={[
                 { value: 'active', label: 'Active' },
                 { value: 'delisted', label: 'Delisted' },
@@ -1647,7 +1657,7 @@ function AdjustPanel({
             'px-4 py-2 text-sm rounded-[var(--radius-sm)] border transition-colors',
             !valid || pending
               ? 'bg-[var(--color-rule-strong)] text-[var(--color-ink-4)] border-[var(--color-rule-strong)] cursor-not-allowed'
-              : 'bg-[var(--color-copper)] text-white border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
+              : 'bg-[var(--color-copper)] text-[var(--color-on-copper)] border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
           ].join(' ')}
         >
           {pending ? 'Re-running…' : 'Re-run with edits'}
@@ -1699,33 +1709,6 @@ function FieldLabel({
       <span id={id}>{children}</span>
       {required && <span className="ml-1 text-[var(--color-ink-4)]">·</span>}
     </p>
-  );
-}
-
-function SegRow<T extends string>({
-  options,
-  value,
-  onChange,
-}: {
-  options: ReadonlyArray<{ value: T; label: string }>;
-  value: T;
-  onChange: (v: T) => void;
-}) {
-  return (
-    <div
-      className="mt-1.5 grid gap-1"
-      style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
-    >
-      {options.map((opt) => (
-        <PickButton
-          key={opt.value}
-          on={value === opt.value}
-          onClick={() => onChange(opt.value)}
-        >
-          {opt.label}
-        </PickButton>
-      ))}
-    </div>
   );
 }
 
@@ -2042,7 +2025,7 @@ function FloatingFeedbackPanel({
                 'px-4 py-2 text-sm rounded-[var(--radius-sm)] border transition-colors',
                 !submitValid || submitMut.isPending
                   ? 'bg-[var(--color-rule-strong)] text-[var(--color-ink-4)] border-[var(--color-rule-strong)] cursor-not-allowed'
-                  : 'bg-[var(--color-copper)] text-white border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
+                  : 'bg-[var(--color-copper)] text-[var(--color-on-copper)] border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
               ].join(' ')}
             >
               {submitMut.isPending
@@ -2333,7 +2316,7 @@ function RefinementProposal({
               'px-4 py-2 text-sm rounded-[var(--radius-sm)] border transition-colors',
               decidePending
                 ? 'bg-[var(--color-rule-strong)] text-[var(--color-ink-4)] border-[var(--color-rule-strong)] cursor-not-allowed'
-                : 'bg-[var(--color-copper)] text-white border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
+                : 'bg-[var(--color-copper)] text-[var(--color-on-copper)] border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
             ].join(' ')}
           >
             {decidePending ? 'Working…' : 'Apply to skill'}

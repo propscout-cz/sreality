@@ -34,10 +34,13 @@ import argparse
 import json
 import logging
 import sys
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 from toolkit import tag_head_bakeoff as bo
 from toolkit import tag_heads as th
+
+if TYPE_CHECKING:
+    import psycopg
 
 LOG = logging.getLogger("tag_head_bakeoff")
 
@@ -57,7 +60,7 @@ def split_list(values: Sequence[str] | None) -> list[str]:
     return out
 
 
-def _report_plan(conn, args: argparse.Namespace) -> int:
+def _report_plan(conn: psycopg.Connection, args: argparse.Namespace) -> int:
     run = bo.get_run(conn, run_id=args.run_id)
     if run is None:
         LOG.error("BAKEOFF run %d does not exist", args.run_id)

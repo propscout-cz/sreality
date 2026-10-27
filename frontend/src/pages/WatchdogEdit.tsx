@@ -222,7 +222,7 @@ export default function WatchdogEdit() {
           <button
             type="submit"
             disabled={!canSave}
-            className="px-4 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors disabled:opacity-50"
+            className="px-4 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] transition-colors disabled:opacity-50"
           >
             {saveMut.isPending ? 'Saving…' : 'Save changes'}
           </button>
@@ -239,11 +239,8 @@ export default function WatchdogEdit() {
 function Header() {
   return (
     <header>
-      <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-        Watchdog
-      </p>
       <h1
-        className="mt-1.5 text-[2.1rem] leading-tight"
+        className="text-[2.1rem] leading-tight"
         style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
       >
         Edit watchdog

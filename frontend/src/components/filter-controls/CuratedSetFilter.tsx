@@ -167,7 +167,8 @@ export function CuratedSetFilter({
               {row(g.elements.map((u) => elementChip(u, g.gone)))}
             </div>
           ))}
-          {row(<>{head}{tail}</>)}
+          {/* Headingless, so without the rule it reads as a member of the last group. */}
+          <div className="border-t border-[var(--color-rule)] pt-2">{row(<>{head}{tail}</>)}</div>
         </>
       )}
       {d.inRule === 'every' && (scope?.in.length ?? 0) > 1 && (

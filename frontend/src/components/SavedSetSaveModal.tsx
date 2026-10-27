@@ -1,10 +1,10 @@
-/* Name + colour dialog for saving / updating / editing a saved set (a Browse
- * filter preset, a Stats dashboard — components/SavedSetBar), in the instance's
- * words. The swatches are the shared tag palette (TAG_COLORS), so saved sets and
- * tags speak one colour vocabulary. A save or an update may offer ONE checkbox:
- * presets ask whether the current map area is part of the preset, dashboards
- * whether the Browse filter is saved with the charts; the metadata-only edit
- * never offers it (the stored blob is untouched). */
+/* Name + colour dialog for saving / editing a saved set (a Browse filter preset,
+ * a Stats dashboard — components/SavedSetBar), in the instance's words. The
+ * swatches are the shared tag palette (TAG_COLORS), so saved sets and tags speak
+ * one colour vocabulary. A save may offer ONE checkbox: presets ask whether the
+ * current map area is part of the preset, dashboards whether the Browse filter is
+ * saved with the charts; the metadata-only edit never offers it (the stored blob
+ * is untouched). Saving changes into a set takes no dialog (SavedSetBar's menu). */
 
 import { useEffect, useId, useRef, useState } from 'react';
 
@@ -16,14 +16,14 @@ import TagColorPicker from '@/components/TagColorPicker';
 /* The instance's words for the dialog: `kind` is the small-caps eyebrow above
  * the title ("Filter preset", "Dashboard"); `dialog` / `submit` per flow. */
 export type SaveModalWords = Record<'kind' | 'nameLabel' | 'namePlaceholder' | 'color' | 'cancel' | 'saving' | 'failed', string> &
-  Record<'dialog' | 'submit', Record<'save' | 'update' | 'edit', string>>;
+  Record<'dialog' | 'submit', Record<'save' | 'edit', string>>;
 
 const CAPTION = 'text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)]';
 
 export interface SavedSetSaveModalProps {
   words: SaveModalWords;
   mode: keyof SaveModalWords['dialog'];
-  /* The set being updated or edited; null on a save. */
+  /* The set being edited; null on a save. */
   initial: { name: string; color: TagColor | null } | null;
   /* The one checkbox this flow offers, with its starting state; null = none. A
    * `disabledHint` greys it out, unticked, and says why under it. */
@@ -109,7 +109,7 @@ export default function SavedSetSaveModal({ words, mode, initial, checkbox, onSu
             className={[
               'flex h-4 w-4 shrink-0 items-center justify-center rounded-[3px] border text-[0.6rem]',
               checked
-                ? 'border-[var(--color-copper)] bg-[var(--color-copper)] text-white'
+                ? 'border-[var(--color-copper)] bg-[var(--color-copper)] text-[var(--color-on-copper)]'
                 : 'border-[var(--color-rule-strong)] text-transparent',
             ].join(' ')}
             aria-hidden
@@ -140,7 +140,7 @@ export default function SavedSetSaveModal({ words, mode, initial, checkbox, onSu
           type="button"
           onClick={() => void submit()}
           disabled={trimmed.length === 0 || busy}
-          className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors disabled:opacity-50"
+          className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] transition-colors disabled:opacity-50"
         >
           {busy ? words.saving : words.submit[mode]}
         </button>
