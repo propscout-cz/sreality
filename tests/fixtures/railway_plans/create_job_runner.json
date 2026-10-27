@@ -20,7 +20,7 @@
      "name": "job-runner",
      "source": {
       "type": "github",
-      "repo": "waiff/sreality",
+      "repo": "propscout-cz/sreality",
       "branch": "main",
       "checkSuites": false
      },

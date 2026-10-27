@@ -17,7 +17,7 @@
     "path": "resources.service.sreality.source",
     "summary": "Update sreality source",
     "details": [
-     "source.repo (waiff/sreality → propscout/sreality)"
+     "source.repo (propscout-cz/sreality → waiff/sreality)"
     ],
     "severity": "safe",
     "deployEffect": "deploy"
