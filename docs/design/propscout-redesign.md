@@ -106,6 +106,9 @@ and build exactly what it says (the rulings are also copied below).
 - `decision: null` → not ruled yet: ask the operator before building it, and build the rest.
 - A `note` goes further than the proposal where they differ, as in the removal review.
 
+**The target picture is `docs/design/propscout-stats-target.png`** (its standalone page with the exact markup:
+`propscout-stats-target.html`): the agreed design with a yellow tag on each change. Build the Stats tab to match it.
+
 **Ruled 2026-10-27** (copied from the review page; the page stays the source if they ever differ):
 
 | # | Proposal | Ruling | Build |
