@@ -140,5 +140,14 @@ describe('useNewTabProps', () => {
   it('stays in the tab in the phone shell, where a new tab would leave the app', () => {
     setNarrow(true);
     expect(renderHook(() => useNewTabProps()).result.current).toEqual({});
+    expect(renderHook(() => useNewTabProps({ external: true })).result.current).toEqual({});
+  });
+
+  it('sends another site no referrer, as every portal link does', () => {
+    setNarrow(false);
+    expect(renderHook(() => useNewTabProps({ external: true })).result.current).toEqual({
+      target: '_blank',
+      rel: 'noopener noreferrer',
+    });
   });
 });

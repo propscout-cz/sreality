@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
+import { useNewTabProps } from '@/lib/linkGestures';
 import { useQuery } from '@tanstack/react-query';
 import {
   fetchBrokerDossier,
@@ -183,7 +184,9 @@ function BrokerDetailDesktop() {
  * a row can genuinely have nowhere to go. This used to pass `property_id ?? 0`,
  * which built `/listing?property=0` — a link that type-checked and 404'd. The
  * Portál column still carries `source_url`, so the operator is never stranded. */
+/* A broker's ads are a list worked through: each opens in a new tab. */
 function LocalityCell({ l }: { l: BrokerListing }) {
+  const newTab = useNewTabProps();
   const label = l.display_label ?? '—';
   const dot = !l.is_active && (
     <span
@@ -206,7 +209,7 @@ function LocalityCell({ l }: { l: BrokerListing }) {
   }
 
   return (
-    <Link to={path} className="flex items-center gap-2 hover:text-[var(--color-copper-2)]">
+    <Link to={path} {...newTab} className="flex items-center gap-2 hover:text-[var(--color-copper-2)]">
       {dot}
       <span className="truncate font-[family-name:var(--font-sans)]">{label}</span>
     </Link>

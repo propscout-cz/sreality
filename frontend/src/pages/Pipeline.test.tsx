@@ -367,6 +367,8 @@ describe('<Pipeline> board', () => {
        before this resolves. */
     const broker = await screen.findByText('Jan Novák');
     expect(broker.closest('a')).toHaveAttribute('href', '/brokers/7');
+    expect(broker.closest('a')).toHaveAttribute('target', '_blank');
+    expect(broker.closest('a')).toHaveClass('card-action');
     expect(broker.closest('a')).toHaveAttribute(
       'title',
       expect.stringContaining('jan@remax.cz'),

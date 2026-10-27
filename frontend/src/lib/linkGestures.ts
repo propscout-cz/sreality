@@ -16,19 +16,23 @@ import { useNavigate } from 'react-router-dom';
 
 import { usePhoneShell } from './phoneShell';
 
-export type NewTabProps = { target?: '_blank'; rel?: 'noopener' };
+export type NewTabProps = { target?: '_blank'; rel?: 'noopener' | 'noopener noreferrer' };
 
 const NEW_TAB: NewTabProps = { target: '_blank', rel: 'noopener' };
+const NEW_TAB_EXTERNAL: NewTabProps = { target: '_blank', rel: 'noopener noreferrer' };
 const SAME_TAB: NewTabProps = {};
 
-/* The props for a link out of a list the user works through — a Browse card, a
- * pipeline card, a notification row. On the desktop it opens a NEW TAB, so
- * following one never unloads the list (its scroll, its filters, the rows still
- * to triage). Not in the phone shell: that is often the installed web app, where
- * a new tab leaves the app for the browser, so there the link navigates in place
- * and Back returns to the list. */
-export function useNewTabProps(): NewTabProps {
-  return usePhoneShell() ? SAME_TAB : NEW_TAB;
+/* The props for a link out of a list the user works through — a Browse card or
+ * map pin, a pipeline card, a notification row, a collection's or a broker's
+ * properties, a run's comparables — or out of the app. On the desktop it opens
+ * a NEW TAB, so following one never unloads the list (its scroll, its filters,
+ * the rows still to triage). Not in the phone shell: that is often the installed
+ * web app, where a new tab leaves the app for the browser, so there the link
+ * navigates in place and Back returns to the list. An `external` link (another
+ * site) sends no referrer either, as every portal link does. */
+export function useNewTabProps({ external = false }: { external?: boolean } = {}): NewTabProps {
+  if (usePhoneShell()) return SAME_TAB;
+  return external ? NEW_TAB_EXTERNAL : NEW_TAB;
 }
 
 /* The modifier set react-router's own `isModifiedEvent` uses, plus the button

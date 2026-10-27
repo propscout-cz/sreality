@@ -11,8 +11,13 @@ toolkit work.
 - **Done** (operator ask 2026-10-27: "when I click on a notification, browse card or pipeline card, open it
   in a new window"). A notification row (and a share row's "Open …" link), a Browse card (and its estimate
   chip) and a pipeline card open their destination in a new tab on the desktop, so the list being worked
-  through is never unloaded. ONE rule, `lib/linkGestures` `useNewTabProps`: `target="_blank" rel="noopener"`
-  on the desktop, nothing in the phone shell (often the installed app, where a new tab leaves the app). The
+  through is never unloaded. From the app-wide link review, the same rule now covers: the map pin popup's
+  "View details →", the pipeline card's broker, a Brokers ranking row (its filters are not in the URL), a
+  collection's rows (the place is now the link, not the sreality id), a broker's ads, a run's comparables
+  ("View in full", the set-aside list) and the advert-not-found page's portal link. ONE rule, `lib/linkGestures`
+  `useNewTabProps` (`{ external }` adds `noreferrer`): `target="_blank" rel="noopener"` on the desktop, nothing
+  in the phone shell (often the installed app, where a new tab leaves the app). Navigation stays in the tab:
+  menus, crumbs, "Go to Browse", redirects after a save, a collection opened from Collections. The
   pipeline card's address link is now stretched over the whole card (`.stretched-link`, as Browse and the
   phone board), its controls lifted with `card-action`, its tooltips with `card-tip`; the town line's own
   tooltip went (the link's title is the whole place). A middle-click on a notification marks it read too.

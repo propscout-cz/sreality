@@ -18,6 +18,7 @@ import {
 import { isMine, revalidateCollections, settleCollectionWrite } from '@/lib/collectionCache';
 import { curationKeys } from '@/lib/queries';
 import { propertyPath } from '@/lib/listingUrl';
+import { useNewTabProps } from '@/lib/linkGestures';
 import { usePageTitle } from '@/lib/pageTitle';
 import { Field } from '@/components/controls';
 import ErrorBanner from '@/components/ErrorBanner';
@@ -476,6 +477,8 @@ function PropertyRowView({
   editable: boolean;
 }) {
   const qc = useQueryClient();
+  /* A collection is worked through row by row: a property opens in a new tab. */
+  const newTab = useNewTabProps();
 
   const remove = useMutation({
     mutationFn: () => removePropertyFromCollection(collectionId, row.property_id),
@@ -485,17 +488,22 @@ function PropertyRowView({
   return (
     <tr className="border-b border-[var(--color-rule-soft)] last:border-b-0 hover:bg-[var(--color-copper-soft)]/40 transition-colors">
       <td className="px-3 py-2.5 align-middle font-mono tabular-nums text-[var(--color-ink-3)]">
-        <Link
-          to={propertyPath(row.property_id)}
-          className="hover:text-[var(--color-copper)] hover:underline underline-offset-2"
-        >
-          {/* Only sreality has a meaningful public id; other portals carry a
-            * synthetic surrogate that must never render as an "ID". */}
-          {row.source === 'sreality' ? row.sreality_id : '—'}
-        </Link>
+        {/* Only sreality has a meaningful public id; other portals carry a
+          * synthetic surrogate that must never render as an "ID". */}
+        {row.source === 'sreality' ? row.sreality_id : '—'}
       </td>
       <td className="px-3 py-2.5 align-middle text-[var(--color-ink-2)]">
-        {row.display_label ?? <span className="text-[var(--color-ink-4)]">—</span>}
+        {/* The place names the property, so it is the row's link — the id
+          * beside it is a dash for every portal but sreality. */}
+        <Link
+          to={propertyPath(row.property_id)}
+          {...newTab}
+          className={`hover:text-[var(--color-copper)] hover:underline underline-offset-2 ${
+            row.display_label ? '' : 'text-[var(--color-ink-4)]'
+          }`}
+        >
+          {row.display_label ?? 'Unknown location'}
+        </Link>
       </td>
       <td className="px-3 py-2.5 align-middle font-mono tabular-nums text-[var(--color-ink-2)]">
         {listingKindLabel(row) ?? <span className="text-[var(--color-ink-4)]">—</span>}

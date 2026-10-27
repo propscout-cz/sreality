@@ -289,6 +289,7 @@ export function CardFace({
             <p className="mt-0.5 truncate text-[0.7rem] text-[var(--color-ink-3)]">
               <Link
                 to={ROUTES.brokerDetail.build({ id: broker.broker_id })}
+                {...newTab}
                 title={brokerHoverTitle(broker, brokerList?.fromInactive)}
                 className="card-action hover:text-[var(--color-copper)] hover:underline underline-offset-2"
               >
