@@ -220,7 +220,11 @@ describe('<CollectionDetail>', () => {
       expect(screen.queryByRole('switch', { name: 'Monitoring' })).toBeNull();
       expect(screen.queryByText('Sharing')).toBeNull();
       expect(screen.queryByRole('button', { name: 'Remove listing from collection' })).toBeNull();
-      expect(screen.getByRole('link', { name: '900' })).toBeInTheDocument();
+      /* The place is the row's link, opening in a new tab; the id is text. */
+      const row = screen.getByRole('link', { name: 'Praha 5' });
+      expect(row).toHaveAttribute('href', '/property/' + MEMBER.property_id);
+      expect(row).toHaveAttribute('target', '_blank');
+      expect(screen.queryByRole('link', { name: '900' })).toBeNull();
     });
 
     it('says nothing about adding when the shared collection is empty', async () => {

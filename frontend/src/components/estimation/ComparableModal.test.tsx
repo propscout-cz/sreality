@@ -89,6 +89,14 @@ describe('<ComparableModal> as a dialog', () => {
     renderModal([photo(1)]);
     expect(screen.getByRole('dialog')).toHaveAccessibleName('Comparable · id 900');
   });
+
+  /* The run behind the modal is being read comparable by comparable. */
+  it('opens "View in full" in a new tab, leaving the run and this modal open', () => {
+    renderModal([photo(1)]);
+    const full = screen.getByRole('link', { name: /View in full/ });
+    expect(full).toHaveAttribute('href', '/listing/900');
+    expect(full).toHaveAttribute('target', '_blank');
+  });
 });
 
 describe('<ComparableModal> photo thumbnails', () => {
