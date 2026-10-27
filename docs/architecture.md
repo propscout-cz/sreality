@@ -3986,12 +3986,10 @@ renumber.** Navigate by area:
     `pozemek`: **32,626 of 101,021 rows (32.3 %) carry no `estate_area`** — bazos 15,846,
     realitymix 11,470, mmreality 3,653, remax 1,649 — and 31,613 of them carry the parcel in
     `area_m2`. So `min_estate_area = 500` dropped a third of the country's land inventory
-    without a word. The fix is the name, **not** a writer change. **Since migration 680 the
-    measure has a plausible band** (operator ruling 2026-10-26): a stated plot outside
-    10 .. 1,000,000 m² is a portal artefact (a "1 m²" stand-in, a 48 km² typo) and reads NULL,
-    so the lot sort, the Lot area filter and the card's lot all skip it; nothing stored changes.
-    The same ruling made the rollup's `total_price_change_pct` skip PLACEHOLDER prices (under
-    10,000 Kč capital / 500 Kč rent, `toolkit.measures.placeholder_floor_sql`). **The writer rule, stated once:** a
+    without a word. The fix is the name, **not** a writer change. **No plausibility band:** 680 read
+    a lot outside 10 .. 1,000,000 m² as no lot and #2117 made the rollup's price change skip
+    placeholder prices; both were reverted (migration 685, operator ruling 2026-10-27) — a value that
+    makes no sense is narrowed by the user with the filters, never hidden by a rule. **The writer rule, stated once:** a
     parser fills `estate_area` ONLY from a parcel cell the page itself LABELS — sreality,
     bezrealitky, idnes, ceskereality, maxima and (from W21) mmreality all do, land rows
     included, and that is faithful reporting rather than duplication — **and only when what
