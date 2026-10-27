@@ -445,7 +445,9 @@ jobs:
       # alarm past its budget and a measured Problem with no incident (a failing explicit cell, since 633) each
       # become one failing cell the ladder reads unchanged; a dead worker folds its keys into its own cell; since
       # 655 no API lease is judged (the API runs no matcher), and 655's post-condition runs here, refusing a body
-      # that still reads the lease. The replay has no pg_cron, so this lane runs the function itself, in a
+      # that still reads the lease. Since 682 each registered job-runner job and the fleet get a cell (a raising
+      # arm keeps its incidents open through the teller), and 682's post-condition and fail-closed precondition
+      # run here too. The replay has no pg_cron, so this lane runs the function itself, in a
       # transaction that always rolls back. Migration 633's own statements run in their step, below.
       - name: The pg_cron watcher judges the watchers (migration 620)
         env:
