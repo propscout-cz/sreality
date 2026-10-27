@@ -1,15 +1,32 @@
-"""_select_pending: SET-LOCAL is a literal (not a bound param) + priority→global drain.
+"""The runner's clip job (#2032): its selection order, and the run's behaviour with fakes.
 
-Regression guard for the SyntaxError that stalled every clip_tag shard: `SET` is a
-PostgreSQL utility statement and cannot take a bound parameter ($1), so the timeout must
-be interpolated, never passed as %s.
+_select_pending: SET LOCAL is a literal (not a bound param), then the fresh arm, the priority
+kraje and the global newest-first drain. Regression guard for the SyntaxError that stalled
+every clip_tag shard: `SET` is a PostgreSQL utility statement and cannot take a bound
+parameter ($1), so the timeout must be interpolated, never passed as %s.
+
+run(): fakes for the connection (statements recorded, pending rows re-served, a campaign),
+R2 (GETs that fail, block or take fake seconds), the tagger (8-d vectors, a load counter, an
+embed that can raise per image), the decoder (live images counted) and a fake clock.
 """
 
 from __future__ import annotations
 
+import contextlib
+import io
+import logging
+import sys
+import threading
+import time
+from collections.abc import Callable, Iterable, Iterator
 from typing import Any
 
+import pytest
+
+from scraper import image_storage, stop
+from scraper.clip_tagger import TagResult
 from scripts import clip_tag_backfill as ctb
+from scripts import retag_from_embeddings as rte
 
 
 class _Cur:
@@ -28,6 +45,8 @@ class _Cur:
         self._conn.executed.append((s, params))
         if s.startswith("SET LOCAL"):
             self._rows = []
+        elif "last_download_attempt_at" in s:  # the fresh arm
+            self._rows = list(self._conn.fresh_rows)
         elif isinstance(params, dict) and "region" in params:
             self._rows = list(self._conn.region_rows.get(params["region"], []))
         elif "FROM images i" in s:  # the global fallback select
@@ -49,10 +68,11 @@ class _Txn:
 
 class _Conn:
     def __init__(self, region_rows: dict | None = None,
-                 global_rows: list | None = None) -> None:
+                 global_rows: list | None = None, fresh_rows: list | None = None) -> None:
         self.executed: list[tuple[str, Any]] = []
         self.region_rows = region_rows or {}
         self.global_rows = global_rows or []
+        self.fresh_rows = fresh_rows or []
 
     def transaction(self) -> "_Txn":
         return _Txn()
@@ -75,9 +95,9 @@ def test_region_and_global_selects_join_images_on_listing_id() -> None:
 
 def test_set_local_statement_timeout_is_literal_not_parameterized() -> None:
     conn = _Conn(global_rows=[(1, "k", True)])
-    ctb._select_pending(conn, limit=10, shards=1, shard=0, priority_regions=[])
+    ctb._select_pending(conn, limit=10, priority_regions=[])
     set_stmts = [(s, p) for s, p in conn.executed if s.startswith("SET LOCAL")]
-    # The fresh region + global phases share one selection transaction.
+    # The fresh, region and global arms share one selection transaction.
     assert len(set_stmts) == 1
     for sql, params in set_stmts:
         assert params is None  # SET can't bind a param
@@ -91,7 +111,7 @@ def test_drains_priority_region_then_global() -> None:
         global_rows=[(3, "c", True)],
     )
     rows, phase = ctb._select_pending(
-        conn, limit=10, shards=1, shard=0, priority_regions=[19])
+        conn, limit=10, priority_regions=[19])
     assert [r[0] for r in rows] == [1, 2, 3]  # region 19 first, then global
     assert "r19:2" in phase and "global:1" in phase
 
@@ -102,7 +122,7 @@ def test_priority_filling_budget_skips_global() -> None:
         global_rows=[(9, "x", True)],
     )
     rows, phase = ctb._select_pending(
-        conn, limit=2, shards=1, shard=0, priority_regions=[19])
+        conn, limit=2, priority_regions=[19])
     assert [r[0] for r in rows] == [1, 2]
     assert "global" not in phase  # budget filled by the priority region
 
@@ -115,7 +135,7 @@ def test_region_and_global_overlap_is_deduped() -> None:
         global_rows=[(2, "b", True), (3, "c", True)],
     )
     rows, _ = ctb._select_pending(
-        conn, limit=10, shards=1, shard=0, priority_regions=[19])
+        conn, limit=10, priority_regions=[19])
     assert [r[0] for r in rows] == [1, 2, 3]  # image 2 appears once
 
 
@@ -146,3 +166,481 @@ def test_download_decode_marks_terminal_keeps_transient_retryable() -> None:
     assert set(terminal) == {2}                # corrupt bytes -> terminal (gets marked)
     # the download exception (3) is transient -> neither decoded nor terminal -> retries
     assert 3 not in {d[0] for d in decoded} and 3 not in terminal
+
+
+def test_fresh_photos_come_before_the_priority_kraje() -> None:
+    conn = _Conn(
+        fresh_rows=[(50, "f", True), (40, "x", True)],
+        region_rows={19: [(40, "x", True), (30, "r", True)], 27: [(20, "q", True)]},
+        global_rows=[(10, "g", True)],
+    )
+    rows, phase = ctb._select_pending(conn, limit=10, priority_regions=[19, 27])
+    assert [r[0] for r in rows] == [50, 40, 30, 20, 10]  # 40 once, at its fresh place
+    assert phase == "fresh:2+r19:2+r27:1+global:1"
+    arms = [s for s, _ in conn.executed if not s.startswith("SET LOCAL")]
+    assert arms == [" ".join(sql.split()) for sql in
+                    (ctb._SELECT_FRESH, ctb._SELECT_REGION, ctb._SELECT_REGION, ctb._SELECT_GLOBAL)]
+    assert "interval '45 minutes'" in ctb._SELECT_FRESH and "ORDER BY i.id DESC" in ctb._SELECT_FRESH
+
+
+@pytest.mark.parametrize("argv", [["--shard", "0"], ["--shards", "4"], ["--categories", "dum"]])
+def test_no_shard_flag_or_shard_clause_remains(argv: list[str]) -> None:
+    with pytest.raises(SystemExit) as refused, contextlib.redirect_stderr(io.StringIO()):
+        ctb._parser().parse_args(argv)
+    assert refused.value.code == 2
+    for sql in (ctb._SELECT_FRESH, ctb._SELECT_REGION, ctb._SELECT_GLOBAL):
+        assert "shard" not in sql
+
+
+def test_the_clip_job_bounds_each_r2_get(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(image_storage.R2Client, "from_env", lambda **kwargs: seen.update(kwargs) or "r2")
+    assert ctb._r2_client(16) == "r2"
+    assert seen == {"max_pool_connections": 20, "connect_timeout_s": 5, "read_timeout_s": 20, "max_attempts": 2}
+
+
+def test_missing_r2_refuses_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    import psycopg
+
+    monkeypatch.setenv("SUPABASE_DB_URL", "postgresql://unused")
+    for name in image_storage.R2_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(sys, "argv", ["clip_tag_backfill"])
+    monkeypatch.setattr(psycopg, "connect", lambda *a, **k: pytest.fail("a refused run never connects"))
+    assert ctb.main() == 2
+
+
+# ── run() with fakes ──────────────────────────────────────────────────────────────────────────
+
+class _Clock:
+    """Fake monotonic seconds: `advance` moves it; `step` moves it on every read too."""
+
+    def __init__(self, step: float = 0.0) -> None:
+        self.t = 0.0
+        self.step = step
+        self._lock = threading.Lock()
+
+    def __call__(self) -> float:
+        with self._lock:
+            now = self.t
+            self.t += self.step
+            return now
+
+    def advance(self, seconds: float) -> None:
+        with self._lock:
+            self.t += seconds
+
+
+class _StoreCur:
+    def __init__(self, db: "_Store") -> None:
+        self._db = db
+        self._rows: list[tuple[Any, ...]] = []
+
+    def __enter__(self) -> "_StoreCur":
+        return self
+
+    def __exit__(self, *exc: Any) -> bool:
+        return False
+
+    def execute(self, sql: str, params: Any = None) -> None:
+        db = self._db
+        rows: list[tuple[Any, ...]] = []
+        if sql.startswith("SET LOCAL"):
+            db.selects.append([])
+            db.pending |= set(db.arrivals.get(len(db.selects), ()))
+        elif "clip_tagging_priority_region_ids" in sql:
+            rows = [([],)]
+        elif sql in (ctb._SELECT_FRESH, ctb._SELECT_REGION, ctb._SELECT_GLOBAL):
+            pool = db.pending & db.fresh if sql == ctb._SELECT_FRESH else (
+                db.pending if sql == ctb._SELECT_GLOBAL else set())
+            got = sorted(pool, reverse=True)[:params["limit"]]
+            db.selects[-1] += got
+            rows = [(i, f"img/{i}.jpg", True) for i in got]
+        elif sql == ctb._MARK_SQL:
+            db.writes.append("stamp")
+            db.marked += [i for i in params[0] if i in db.pending]
+            db.pending -= set(params[0])
+        elif sql == rte._CUTOFF_SQL:
+            rows = [("2026-06-26T16:45:00Z",)]
+        elif sql == rte._PENDING_SQL:
+            rows = [(1,)] if db.campaign_left() else []
+        elif sql == rte._SELECT:
+            db.writes.append("retag_select")
+            rows = [(i, "m", "[0.5,0.5]") for i in db.campaign[db.retagged:db.retagged + params["limit"]]]
+        else:
+            raise AssertionError(f"unexpected SQL: {sql}")
+        self._rows = rows
+
+    def executemany(self, sql: str, params: list[tuple[Any, ...]]) -> None:
+        db = self._db
+        if sql == ctb._UPSERT_SQL:
+            db.writes.append("tags")
+            db.tagged += [p[0] for p in params]
+        elif sql == ctb._UPSERT_EMB_SQL:
+            db.writes.append("vectors")
+            db.vectored += [p[0] for p in params]
+        elif sql == rte._UPDATE:
+            db.writes.append("retag_update")
+            db.retagged += len(params)
+            if db.clock is not None:
+                db.clock.advance(db.retag_secs)
+        else:
+            raise AssertionError(f"unexpected executemany: {sql}")
+
+    def fetchone(self) -> tuple[Any, ...] | None:
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return list(self._rows)
+
+
+class _Store:
+    """The job's database: pending images served newest first (arrivals join at the n-th select), the writes in
+    order, and a campaign of stored vectors."""
+
+    def __init__(self, ids: Iterable[int] = (), *, fresh: Iterable[int] = (),
+                 arrivals: dict[int, Iterable[int]] | None = None, campaign: int = 0) -> None:
+        self.pending = set(ids)
+        self.fresh = set(fresh)
+        self.arrivals = {n: list(v) for n, v in (arrivals or {}).items()}
+        self.campaign = list(range(10**9, 10**9 + campaign))
+        self.retagged = 0
+        self.retag_secs = 0.0
+        self.clock: _Clock | None = None
+        self.marked: list[int] = []
+        self.tagged: list[int] = []
+        self.vectored: list[int] = []
+        self.writes: list[str] = []
+        self.selects: list[list[int]] = []
+
+    def campaign_left(self) -> bool:
+        return self.retagged < len(self.campaign)
+
+    def transaction(self) -> contextlib.AbstractContextManager[None]:
+        return contextlib.nullcontext()
+
+    def cursor(self) -> _StoreCur:
+        return _StoreCur(self)
+
+
+class _R2:
+    """GETs return the image id as bytes; `fail(id, n)` (n: the GET's number) raises after `secs` fake seconds; an id
+    in `block` waits (its first GET only) until `release` or 3 s."""
+
+    def __init__(self, clock: _Clock, *, fail: Callable[[int, int], bool] = lambda i, n: False, secs: float = 0.0,
+                 delay: float = 0.0, block: Iterable[int] = (),
+                 on_get: Callable[[int, int], None] | None = None) -> None:
+        self.clock, self.fail, self.secs, self.delay, self.on_get = clock, fail, secs, delay, on_get
+        self.block = set(block)
+        self.release = threading.Event()
+        self.calls: list[int] = []
+        self._lock = threading.Lock()
+
+    def download_bytes(self, key: str) -> bytes:
+        image_id = int(key.split("/")[1].split(".")[0])
+        with self._lock:
+            self.calls.append(image_id)
+            n = len(self.calls)
+            blocked = image_id in self.block
+            self.block.discard(image_id)
+        if self.on_get:
+            self.on_get(image_id, n)
+        if self.delay:
+            time.sleep(self.delay)
+        if blocked:
+            self.release.wait(3)
+        self.clock.advance(self.secs)
+        if self.fail(image_id, n):
+            raise RuntimeError("R2 blip")
+        return str(image_id).encode()
+
+
+class _Live:
+    """A decoded image: counts how many are alive at once."""
+
+    lock = threading.RLock()
+    live = 0
+    peak = 0
+
+    def __init__(self, image_id: int) -> None:
+        self.image_id = image_id
+        with _Live.lock:
+            _Live.live += 1
+            _Live.peak = max(_Live.peak, _Live.live)
+
+    def __del__(self) -> None:
+        with _Live.lock:
+            _Live.live -= 1
+
+
+class _Vec:
+    def __init__(self, image_id: int) -> None:
+        self.image_id = image_id
+
+    def tolist(self) -> list[float]:
+        return [((self.image_id * (k + 1)) % 7) / 7 for k in range(8)]
+
+
+class _Tagger:
+    model_id = "openai/clip-vit-base-patch32"
+    revision = "3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268"
+
+    def __init__(self, clock: _Clock, *, secs: float = 0.0,
+                 raises: Callable[[list[int]], BaseException | None] = lambda ids: None,
+                 on_embed: Callable[[list[int]], None] | None = None) -> None:
+        self.clock, self.secs, self.raises, self.on_embed = clock, secs, raises, on_embed
+        self.batches: list[list[int]] = []
+
+    def embed(self, images: list[_Live], batch_size: int = 32) -> list[_Vec]:
+        ids = [im.image_id for im in images]
+        self.batches.append(ids)
+        if self.on_embed:
+            self.on_embed(ids)
+        self.clock.advance(self.secs)
+        exc = self.raises(ids)
+        if exc is not None:
+            raise exc
+        return [_Vec(i) for i in ids]
+
+    def tags_from_emb(self, emb: list[Any]) -> list[TagResult]:
+        return [TagResult("kitchen", "kitchen", 0.9, 0.1) for _ in emb]
+
+
+class _Job:
+    """One harness: a store, a clock, R2 and a tagger, and the factory calls the run made."""
+
+    def __init__(self, store: _Store, *, clock: _Clock | None = None, r2: _R2 | None = None,
+                 tagger: _Tagger | None = None) -> None:
+        self.store = store
+        self.clock = clock or _Clock()
+        store.clock = self.clock
+        self.r2 = r2 or _R2(self.clock)
+        self.tagger = tagger or _Tagger(self.clock)
+        self.loads: list[int] = []
+        self.r2_builds = 0
+
+    def _load(self, threads: int) -> _Tagger:
+        self.loads.append(threads)
+        return self.tagger
+
+    def _r2(self) -> _R2:
+        self.r2_builds += 1
+        return self.r2
+
+    def run(self, *argv: str) -> int:
+        """The fakes move the clock without real time passing, so a chunk waits for its GETs unless a test sets the
+        download deadline."""
+        args = ctb._parser().parse_args(["--workers", "16", "--download-deadline", "1e9", *argv])
+        return ctb.run(self.store, args, r2_factory=self._r2, tagger_factory=self._load, clock=self.clock)
+
+
+@pytest.fixture(autouse=True)
+def _fakes(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(ctb, "_POLL_S", 0.005)
+    real = ctb._decode
+    monkeypatch.setattr(ctb, "_decode", lambda data: _Live(int(data)) if data.isdigit() else real(data))
+    monkeypatch.setattr(rte, "_as_tensor", lambda vectors: vectors)
+    _Live.live = _Live.peak = 0
+    yield
+
+
+def _lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.name in (ctb.LOG.name, rte.LOG.name)]
+
+
+def _newest(n: int, top: int) -> set[int]:
+    return set(range(top, top - n, -1))
+
+
+def test_nothing_pending_and_no_campaign_never_loads_the_model(caplog: pytest.LogCaptureFixture) -> None:
+    job = _Job(_Store())
+    with caplog.at_level(logging.INFO):
+        assert job.run("--max-seconds", "1500") == 0
+    assert job.loads == [] and job.r2_builds == 0
+    assert _lines(caplog)[-1] == "CLIP_JOB exit=0 why=nothing"
+
+
+def test_a_run_cut_by_the_budget_with_progress_exits_more_remains(caplog: pytest.LogCaptureFixture) -> None:
+    clock = _Clock()
+    job = _Job(_Store(range(1, 3001)), clock=clock, tagger=_Tagger(clock, secs=200))
+    with caplog.at_level(logging.INFO):
+        assert job.run("--max-seconds", "100") == 75
+    assert set(job.store.marked) == _newest(128, 3000) and len(job.store.marked) == 128, "chunk 2 never marked"
+    assert _lines(caplog)[-1] == "CLIP_JOB exit=75 why=budget"
+
+
+def test_the_run_reselects_and_ends_on_a_reselect_under_one_chunk(caplog: pytest.LogCaptureFixture) -> None:
+    store = _Store(range(1, 301), arrivals={2: range(1001, 1201), 3: range(2001, 2041)})
+    job = _Job(store)
+    with caplog.at_level(logging.INFO):
+        assert job.run("--max-seconds", "1500") == 0
+    assert len(store.marked) == len(set(store.marked)) == 540
+    assert len(job.loads) == 1 and len(store.selects) == 3
+    assert _lines(caplog)[-1] == "CLIP_JOB exit=0 why=done"
+
+
+def test_a_reselect_after_its_interval_puts_a_newer_arrival_first() -> None:
+    """Chunk 2 was prefetched before the 300 s passed; the first chunk selected after them leads with the arrival."""
+    clock = _Clock()
+    store = _Store(range(1, 5001), arrivals={2: [9999]})
+    job = _Job(store, clock=clock, tagger=_Tagger(clock, secs=310))
+    assert job.run("--max-seconds", "1000") == 75
+    assert job.tagger.batches[2][0] == 9999 and 9999 in store.marked
+
+
+@pytest.mark.parametrize(("case", "pending", "argv", "fail", "secs", "embed_secs", "code"), [
+    ("a: every GET fails fast", 5000, [], lambda i, n: True, 0.0, 0.0, 1),
+    ("b: the same at --limit 20000", 20000, ["--limit", "20000"], lambda i, n: True, 0.0, 0.0, 1),
+    ("c: every GET fails after 52 s, past the deadline", 5000, ["--download-deadline", "45"], lambda i, n: True,
+     52.0, 0.0, 1),
+    ("d: 60 % of GETs fail and the deadline cuts", 5000, [], lambda i, n: n % 5 < 3, 0.0, 100.0, 0),
+    ("e: 10 % of GETs fail and the deadline cuts", 5000, [], lambda i, n: n % 10 == 0, 0.0, 100.0, 75),
+], ids=lambda v: v if isinstance(v, str) else "")
+def test_transient_download_errors_never_chain_the_job(case: str, pending: int, argv: list[str],
+                                                       fail: Callable[[int, int], bool], secs: float,
+                                                       embed_secs: float,
+                                                       code: int) -> None:
+    clock = _Clock()
+    job = _Job(_Store(range(1, pending + 1)), clock=clock, r2=_R2(clock, fail=fail, secs=secs),
+               tagger=_Tagger(clock, secs=embed_secs))
+    assert job.run("--max-seconds", "1500", *argv) == code, case
+    if code == 1:
+        assert job.store.marked == [] and len(job.r2.calls) <= 2 * 128, "the all-failed chunk ends the phase"
+    else:
+        assert job.store.marked
+
+
+def test_the_next_chunks_downloads_overlap_the_current_encode() -> None:
+    clock = _Clock()
+    chunk2_fetched = threading.Event()
+    overlapped: list[bool] = []
+
+    def on_get(image_id: int, _n: int) -> None:
+        if image_id <= 128:
+            chunk2_fetched.set()
+
+    def on_embed(ids: list[int]) -> None:
+        if ids[0] == 256:
+            overlapped.append(chunk2_fetched.wait(2))
+
+    job = _Job(_Store(range(1, 257)), clock=clock, r2=_R2(clock, on_get=on_get),
+               tagger=_Tagger(clock, on_embed=on_embed))
+    assert job.run() == 0
+    assert overlapped == [True], "chunk 2's GETs ran while chunk 1 encoded"
+    assert len(job.store.marked) == 256
+    assert 0 < _Live.peak <= 128, "one chunk decoded at a time"
+
+
+def test_a_straggler_past_the_download_deadline_stays_unmarked() -> None:
+    clock = _Clock(step=1.0)
+    r2 = _R2(clock, block=[64])
+    store = _Store(range(1, 129), arrivals={2: range(1001, 1129)})
+    job = _Job(store, clock=clock, r2=r2)
+    try:
+        assert job.run("--download-deadline", "45") == 0
+        first = set(range(1, 129)) - {64}
+        assert set(job.tagger.batches[0]) == first and set(store.marked[:127]) == first, "the other 127 are tagged"
+        assert store.selects[2][-1] == 64, "a later re-select offers the straggler again"
+        assert job.tagger.batches[2] == [64] and store.marked[-1] == 64 and len(store.marked) == 256
+    finally:
+        r2.release.set()
+
+
+def test_tag_runs_before_retag_with_one_model_load_and_one_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    deadlines: list[float] = []
+    real = rte.retag
+
+    def spy(*args: Any, **kwargs: Any) -> tuple[int, bool]:
+        deadlines.append(kwargs["deadline"])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(rte, "retag", spy)
+    store = _Store(range(1, 301), campaign=1000)
+    job = _Job(store)
+    assert job.run("--max-seconds", "1500") == 0
+    assert len(job.loads) == 1
+    assert max(i for i, w in enumerate(store.writes) if w == "stamp") < store.writes.index("retag_select")
+    assert deadlines == [1500.0] and not store.campaign_left()
+
+
+@pytest.mark.parametrize(("campaign", "code", "why"), [(2000, 75, "retag"), (100, 0, "done")])
+def test_a_retag_cut_by_the_budget_exits_75_and_a_drained_one_exits_0(
+        caplog: pytest.LogCaptureFixture, campaign: int, code: int, why: str) -> None:
+    store = _Store(campaign=campaign)
+    store.retag_secs = 1000.0
+    job = _Job(store)
+    with caplog.at_level(logging.INFO):
+        assert job.run("--max-seconds", "1500") == code
+    assert _lines(caplog)[-1] == f"CLIP_JOB exit={code} why={why}"
+    assert len(job.loads) == 1 and job.r2_builds == 0
+
+
+def test_each_chunk_writes_tags_then_vectors_then_the_stamp() -> None:
+    """autodedup reads clip_tagged_at as written last, after the tags and the vector (autodedup/incremental.py's
+    stamp contract, autodedup/incremental_sql.py's CLIP arm)."""
+    store = _Store(range(1, 301))
+    assert _Job(store).run() == 0
+    assert store.writes == ["tags", "vectors", "stamp"] * 3
+
+
+def test_a_batch_that_fails_to_embed_isolates_one_bad_image(caplog: pytest.LogCaptureFixture) -> None:
+    clock = _Clock()
+    tagger = _Tagger(clock, raises=lambda ids: RuntimeError("shape") if 7 in ids else None)
+    store = _Store(range(1, 51))
+    with caplog.at_level(logging.INFO):
+        assert _Job(store, clock=clock, tagger=tagger).run() == 0
+    assert sorted(store.marked) == list(range(1, 51))
+    assert sorted(store.tagged) == sorted(store.vectored) == sorted(set(range(1, 51)) - {7})
+    failed = [line for line in _lines(caplog) if line.startswith("CLIP_TAG embed failed image=")]
+    assert failed == ["CLIP_TAG embed failed image=7: RuntimeError"]
+    assert " terminal=1 " in next(line for line in _lines(caplog) if line.startswith("CLIP_TAG done "))
+
+
+@pytest.mark.parametrize("raises", [
+    lambda ids: RuntimeError("every image"),
+    lambda ids: RuntimeError("three bad") if {5, 7, 9} & set(ids) else None,
+    lambda ids: MemoryError() if 7 in ids else None,
+], ids=["no-image-embeds-alone", "over-the-cap", "memory-error"])
+def test_an_embed_failure_that_is_not_one_images_marks_nothing_and_exits_1(
+        caplog: pytest.LogCaptureFixture, raises: Callable[[list[int]], BaseException | None]) -> None:
+    clock = _Clock()
+    store = _Store(range(1, 51))
+    with caplog.at_level(logging.INFO):
+        assert _Job(store, clock=clock, tagger=_Tagger(clock, raises=raises)).run() == 1
+    assert store.marked == [] and store.writes == []
+    assert _lines(caplog)[-1] == "CLIP_JOB exit=1 why=embed"
+
+
+def test_a_stop_signal_finishes_the_chunk_in_hand_and_exits_143() -> None:
+    clock = _Clock()
+
+    def on_get(_image_id: int, n: int) -> None:
+        if n == 10:
+            stop.EVENT.set()
+
+    r2 = _R2(clock, block=[256, 255], delay=0.01, on_get=on_get)
+    job = _Job(_Store(range(1, 257)), clock=clock, r2=r2)
+    try:
+        assert job.run("--workers", "4") == stop.EXIT_CODE
+        assert job.store.marked, "the chunk in hand commits what decoded"
+        assert not {256, 255} & set(job.store.marked)
+        assert set(job.store.marked) <= set(r2.calls)
+        assert not [i for i in r2.calls if i <= 128], "no GET of chunk 2 after the stop"
+        assert len(r2.calls) < 128, "the queued GETs were cancelled"
+    finally:
+        r2.release.set()
+        stop.reset()
+
+
+def test_a_full_budget_run_fits_the_log_tail(caplog: pytest.LogCaptureFixture) -> None:
+    clock = _Clock()
+    store = _Store(range(1, 90 * 128 + 1), campaign=100 * 512)
+    store.retag_secs = 0.5
+    job = _Job(store, clock=clock, tagger=_Tagger(clock, secs=15))
+    with caplog.at_level(logging.INFO):
+        assert job.run("--max-seconds", "1500") == 0
+    lines = _lines(caplog)
+    assert len(store.marked) == 90 * 128 and not store.campaign_left()
+    assert len(lines) <= 40, len(lines)
+    assert [line.split(" ", 2)[:2] for line in lines[-3:]] == [["CLIP_TAG", "done"], ["RETAG", "done"],
+                                                                ["CLIP_JOB", "exit=0"]]
