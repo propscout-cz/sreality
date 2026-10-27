@@ -6,14 +6,16 @@
 --   a sibling on its resource, waiting with no runner beating. The canary's failing_cells_have_incidents reads every
 --   liveness cell, so a job's Problem opens an incident and e-mails through the existing canary (ruling R-1).
 --
--- WHAT CHANGES. Additive only: three new functions, one trigger and one function replace. No table, column, row,
--- view or grant.
+-- WHAT CHANGES. Additive only: three new functions, one trigger and one function replace. No table, column, view or
+-- grant; the one row write is the first apply's heal below, which finds no row in the planned order.
 --   * public.scheduled_jobs_keep_registry_at() and its BEFORE UPDATE OF registry_at trigger on scheduled_jobs:
 --     registry_at is when a row joined the runner, stamped when it is new, adopted (NULL: a lane's held() row) or
 --     un-retired an hour or more after its retirement (job_lease.REJOIN_AFTER_S; a shorter one is an older image's
 --     blink) and kept by every later boot (job_lease._REGISTER_SQL), and the database keeps it too, so an image that
 --     re-stamps it on every boot (main's job_lease before #2026, or a revert) cannot move it. To move a live row's
 --     registry_at on purpose, set its retired_at an hour back first.
+--   * The first apply's heal: a live runner row whose runs began before its registry_at (re-stamped by main's
+--     register, #2025 PR-2 deployed first) joins at its first run.
 --   * public.health_span(double precision): a duration as Health reads it. Reads nothing.
 --   * public.health_job_cells(interval): one job/<name> cell per registered live job-runner row (_DUE_SQL's predicate:
 --     runner 'job-runner', registry_at set, retired_at null), judged on its runs since registry_at and ok until the
@@ -28,9 +30,12 @@
 --   EXECUTE on all four is revoked from public, anon and authenticated; the two helpers are registered UNGATED (acl)
 --   in tests/_admin_gate_registry.py (no in-file annotation since 676); the trigger function reads no table.
 --
--- APPLY through apply_migration.yml (--ref the feature branch) before merging. Safe in either order: the deployed code
--- reads nothing this changes, and with no registered job-runner row the helper writes no cell. Before this PR's
--- job_lease deploys (or after a revert of it), register re-stamps registry_at on every boot: the trigger keeps it.
+-- APPLY through apply_migration.yml (--ref the feature branch) before merging, and before #2025 PR-2's first deploy
+-- whichever merges first: the deployed code reads nothing this changes, and with no registered job-runner row the
+-- helper writes no cell. Before this PR's job_lease deploys (or after a revert of it), register re-stamps registry_at
+-- on every boot: the trigger keeps it. Applied after PR-2's deploy, the heal joins each live runner row at its first
+-- run; a row PR-2 reverted and re-landed before the apply is then judged on its runs from before the revert too (a
+-- Problem until a run since closes, never a false ok).
 -- The post-condition runs the helper over a rolled-back probe row, so every per-row expression is evaluated at
 -- apply, and re-stamps that row to prove the trigger keeps its registry_at.
 -- ROLLBACK: forward only (rule 1). Every statement is idempotent: a re-run passes the precondition (this file's own
@@ -51,6 +56,19 @@ begin
   end if;
 end
 $pre$;
+
+-- The first apply only (no trigger yet), and a no-op in the planned order, before #2025 PR-2. If PR-2 deployed first
+-- (2025-plan decision 13's fallback), main's register re-stamped registry_at on every boot, so each live runner row
+-- would read as joined at its last boot before this apply, its streak, timeout and clock unjudged. Every run on record
+-- is its own (PR-2's rows were born at its first boot, and only the runner writes job_runs): its join goes back to its
+-- first run. Skipped once the trigger exists, so a re-run writes no runner row (the trigger would keep each join).
+update public.scheduled_jobs j
+   set registry_at = r.first_at
+  from (select job_name, min(started_at) as first_at from public.job_runs group by job_name) r
+ where r.job_name = j.job_name and j.runner = 'job-runner' and j.registry_at is not null and j.retired_at is null
+   and r.first_at < j.registry_at
+   and not exists (select 1 from pg_trigger t where t.tgrelid = 'public.scheduled_jobs'::regclass
+                      and t.tgname = 'scheduled_jobs_keep_registry_at');
 
 -- registry_at is when the row joined the runner: a later write moves it only on a row adopted (NULL) or retired an
 -- hour or more (job_lease.REJOIN_AFTER_S). A shorter retirement is a blink, an older image's boot until the latest

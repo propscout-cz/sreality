@@ -1163,3 +1163,47 @@ def test_migration_682_precondition_takes_675s_body_or_its_own_and_refuses_a_dri
     with pytest.raises(psycopg.errors.RaiseException, match="682 refused: health_liveness\\(\\) is neither"):
         with cur.connection.transaction():
             cur.execute(pre)
+
+
+def _apply_682(cur: Any) -> None:
+    """The whole of 682 inside the test's transaction, its own begin and commit left out."""
+    lines = _MIGRATION_682.read_text(encoding="utf-8").splitlines()
+    cur.execute("\n".join(line for line in lines if line not in ("begin;", "commit;")))
+
+
+def test_migration_682_first_apply_takes_a_re_stamped_join_back_to_the_rows_first_run(cur: Any) -> None:
+    """2025-plan decision 13's fallback, PR-2 before 682: main's register re-stamped registry_at on every boot, so a
+    row failing for 30 h read as joined at the deploy 30 min before the apply ("registered again", ok). The first
+    apply takes each such join back to the row's first run; a re-run keeps a re-land's join (the trigger)."""
+    _runner_beat(cur, "r1", "0 minutes")
+    cur.execute("drop trigger scheduled_jobs_keep_registry_at on scheduled_jobs")  # as before the first apply
+    _job(cur, "pr2", due="20 minutes", last_ok="32 hours", failures=5, last_outcome="failed", last_error="exit 1",
+         joined="30 minutes")
+    _run(cur, "pr2", started="32 hours 10 minutes", ended="32 hours", outcome="ok", exit_code=0)
+    for started, ended in (("30 hours", "1795 minutes"), ("24 hours", "1435 minutes"), ("18 hours", "1075 minutes"),
+                           ("12 hours", "715 minutes"), ("45 minutes", "40 minutes")):
+        _run(cur, "pr2", started=started, ended=ended, outcome="failed", exit_code=1)
+    _job(cur, "after", joined="2 hours", last_ok="1 hour", last_outcome="ok")  # every run since its join: untouched
+    _run(cur, "after", started="70 minutes", ended="1 hour", outcome="ok", exit_code=0)
+    _job(cur, "gone", joined="30 minutes", retired="10 minutes")  # retired: not the runner's, untouched
+    _run(cur, "gone", started="3 days", ended="3 days", outcome="ok", exit_code=0)
+
+    def joined() -> dict[str, Any]:
+        cur.execute("select job_name, now() - registry_at from scheduled_jobs")
+        return dict(cur.fetchall())
+
+    _apply_682(cur)
+
+    assert joined() == {"pr2": _dt.timedelta(hours=32, minutes=10), "after": _dt.timedelta(hours=2),
+                        "gone": _dt.timedelta(minutes=30)}
+    assert _said(_liveness(cur)[3], "job/pr2") == (
+        "fail", "pr2: 5 failed runs in a row, the first 30.0 h ago; the last: exit 1")
+
+    _relanded(cur, "reland", due="5 hours")  # un-retired 2 h ago, its runs from before the revert
+    cur.execute("select ctid::text from scheduled_jobs where job_name = 'reland'")
+    before = cur.fetchone()
+    _apply_682(cur)  # a re-run: the trigger is in place
+
+    assert joined()["reland"] == _dt.timedelta(hours=2)
+    cur.execute("select ctid::text from scheduled_jobs where job_name = 'reland'")
+    assert cur.fetchone() == before, "a re-run writes no runner row"

@@ -102,7 +102,8 @@ of a sibling on its resource seen since its clock started. The worst condition w
   them closes, so the counter, timeout and last ok un-retiring carries from before a revert never read Problem,
   however soon its first slot (a deploy-cut first run reads ok, one failure Watch). A steady row whose only ok run
   was pruned (map_overlays: 91 d cadence, 90 d prune) is not waiting: its `last_success_at` falls after
-  `registry_at`.
+  `registry_at`. Applied after #2025 PR-2 deployed, 682 first joins each live row at its first run (main's register
+  had re-stamped it at every boot); apply it before PR-2's first deploy, whichever merges first.
 - **The clock** is the last ok run since `registry_at`, else the first *scheduled* run since (`requested_by IS NULL`)
   minus C, else the first slot minus C, and a pause that lapsed restarts it. Never a request run. Known edge: a run
   that served a request and took its due slot keeps `requested_by` (`job_runs` has no due slot), so a
