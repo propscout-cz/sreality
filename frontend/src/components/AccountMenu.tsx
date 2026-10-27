@@ -5,6 +5,7 @@ import { ROUTES } from '@/lib/routes';
 import { readDesktopView, switchDesktopView } from '@/lib/phoneShell';
 import { COLOR_SCHEMES, useScheme, useTheme, type ThemeMode } from '@/lib/theme';
 import SchemeSwatch from './SchemeSwatch';
+import { SegmentedBar } from './controls';
 
 const MODES: ReadonlyArray<{ value: ThemeMode; label: string }> = [
   { value: 'light', label: 'Light' },
@@ -100,28 +101,16 @@ export default function AccountMenu() {
               ))}
             </div>
           </div>
-          {/* SegmentedBar's fill look, drawn here because a menu needs menuitemradio
-            * segments and the bar's are aria-pressed buttons. */}
-          <div role="group" aria-label="Light or dark" className="px-3 pb-2">
-            <div className="grid grid-cols-3 gap-0.5 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-0.5">
-              {MODES.map((m) => (
-                <button
-                  key={m.value}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={mode === m.value}
-                  onClick={() => setMode(m.value)}
-                  className={[
-                    'px-2 py-1 text-xs whitespace-nowrap rounded-[var(--radius-xs)] transition-colors',
-                    mode === m.value
-                      ? 'bg-[var(--color-copper)] text-[var(--color-on-copper)]'
-                      : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
-                  ].join(' ')}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
+          {/* The one pick-one bar; inside a menu its segments are menuitemradios. */}
+          <div className="px-3 pb-2">
+            <SegmentedBar
+              fill
+              segmentRole="menuitemradio"
+              label="Light or dark"
+              options={MODES}
+              value={mode}
+              onChange={setMode}
+            />
           </div>
           <div className="my-1 h-px bg-[var(--color-rule)]" aria-hidden />
           {desktopView && (

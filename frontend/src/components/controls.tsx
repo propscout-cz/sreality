@@ -552,10 +552,14 @@ export function TriRow<T extends TriValue>({
  * reading size; `hug` gives each segment its label's width at that size and
  * scrolls sideways when too long; neither is the compact amenity row (equal
  * segments, small type). `tone="phone"` is the phone screens' bar: chosen = ink
- * on the inset well, never colour. `deselectable` (only where null is a value)
- * lights nothing for none and releases the lit segment to null; otherwise a click
- * on the lit segment sets it again. The root is always the named group, which
- * carries `aria`; `box` makes the track the form box. */
+ * on the inset well inside the phone chip's ink-2 hairline, never colour.
+ * `deselectable` (only where null is a value) lights nothing for none and
+ * releases the lit segment to null; otherwise a click on the lit segment sets
+ * it again. The root is always the named group, which
+ * carries `aria`; `box` makes the track the form box. A `fill` segment too narrow
+ * for its label (the filter sidebar dragged to its 240px floor) ends it in an
+ * ellipsis inside its own box, its name kept whole. `segmentRole="menuitemradio"`
+ * serves a bar inside a role=menu (the account menu), aria-checked for pressed. */
 export interface SegmentOption<T> {
   value: T;
   label: string;
@@ -564,6 +568,8 @@ export interface SegmentOption<T> {
   /* Native hover box: what this option does here, or why it is off. */
   title?: string;
   disabled?: boolean;
+  /* The segment's own name where its label leans on the caption ("Hodnota: Cena"). */
+  ariaLabel?: string;
 }
 
 const BAR_TRACK = {
@@ -590,6 +596,7 @@ export function SegmentedBar<T extends string | number | boolean | null>({
   disabled = false,
   aria,
   box,
+  segmentRole,
 }: {
   options: ReadonlyArray<SegmentOption<T>>;
   value: T;
@@ -602,12 +609,23 @@ export function SegmentedBar<T extends string | number | boolean | null>({
   disabled?: boolean;
   aria?: AriaAttributes;
   box?: FormBox;
+  segmentRole?: 'menuitemradio';
 }) {
   const phone = tone === 'phone';
-  const size = phone ? 'px-3 text-[13px]' : fill || hug ? 'px-2 py-1 text-xs' : 'px-2.5 py-0.5 text-[0.7rem]';
+  /* A fill segment's padding only bounds its centred label (the columns are
+   * equal), so it is 4px: the label fits the sidebar's default width whole. */
+  const size = phone
+    ? 'px-3 text-[13px]'
+    : fill
+      ? 'px-1 py-1 text-xs'
+      : hug
+        ? 'px-2 py-1 text-xs'
+        : 'px-2.5 py-0.5 text-[0.7rem]';
   const look = (on: boolean, off: boolean) => {
     if (phone) {
-      if (on) return 'bg-[var(--color-inset)] text-[var(--color-ink)]';
+      /* The phone chip's pressed hairline (chips.ts), inset so no width moves:
+       * the inset well alone is ~1.05:1 on paper. */
+      if (on) return 'bg-[var(--color-inset)] text-[var(--color-ink)] ring-1 ring-inset ring-[var(--color-ink-2)]';
       return off ? 'text-[var(--color-ink-2)]' : 'text-[var(--color-ink-2)] active:bg-[var(--color-inset)]';
     }
     if (on) return 'bg-[var(--color-copper)] text-[var(--color-on-copper)]';
@@ -629,18 +647,20 @@ export function SegmentedBar<T extends string | number | boolean | null>({
         type="button"
         disabled={off}
         title={opt.title}
+        aria-label={opt.ariaLabel}
         onClick={() => onChange(on && deselectable ? (null as T) : opt.value)}
         className={[
           size,
           opt.glyph ? 'inline-flex items-center justify-center gap-1.5' : '',
           hug ? 'shrink-0' : '',
+          fill ? 'min-w-0 overflow-hidden text-ellipsis' : '',
           'whitespace-nowrap rounded-[var(--radius-xs)] transition-colors',
           look(on, off),
           off ? 'cursor-not-allowed opacity-50' : '',
         ]
           .filter(Boolean)
           .join(' ')}
-        aria-pressed={on}
+        {...(segmentRole ? { role: segmentRole, 'aria-checked': on } : { 'aria-pressed': on })}
       >
         {opt.glyph}
         {opt.label}

@@ -658,7 +658,8 @@ describe('<NewDedupTrainingSet> pick-one rows are joined bars', () => {
     const on = within(bar).getByRole('button', { name: lit });
     expect(on).toHaveAttribute('aria-pressed', 'true');
     expect(on).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
-    expect(on).not.toHaveClass('border-[var(--color-sage)]', 'border-[var(--color-ink-2)]');
+    /* One class per assertion: jest-dom's not.toHaveClass(a, b) fails only when BOTH are present. */
+    for (const c of ['border-[var(--color-sage)]', 'border-[var(--color-ink-2)]']) expect(on).not.toHaveClass(c);
     return bar;
   };
 

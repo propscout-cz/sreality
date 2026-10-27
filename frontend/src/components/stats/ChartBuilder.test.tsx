@@ -17,8 +17,9 @@ function Harness({ initial, categoryMain = 'byt' }: { initial: Partial<ChartSpec
 const rowsShelf = () => screen.getByRole('group', { name: 'Řádky' });
 const colsShelf = () => screen.getByRole('group', { name: 'Sloupce' });
 const click = (name: string) => fireEvent.click(screen.getByRole('button', { name }));
-/* A segment of a value-well bar, found inside its named group. */
-const segment = (group: string, name: string) => within(screen.getByRole('group', { name: group })).getByRole('button', { name });
+/* A segment of a value-well bar, found inside its named group by its own name. */
+const segment = (group: string, name: string) =>
+  within(screen.getByRole('group', { name: group })).getByRole('button', { name: `${group}: ${name}` });
 
 describe('<ChartBuilder> — every drag has a click path', () => {
   it('a chip click appends to Řádky; a second click takes it back', () => {
@@ -156,6 +157,16 @@ describe('<ChartBuilder> — Hodnota and Zobrazení are the one joined bar', () 
     expect(screen.getByText('Krabice: krabice nemá Sloupce')).toBeInTheDocument();
     expect(segment('Zobrazení', 'Pruhy')).toBeEnabled();
     expect(segment('Zobrazení', 'Pruhy')).not.toHaveAttribute('title');
+  });
+
+  /* The binding keeps aria names: each segment says which control it is, as the chips did. */
+  it('names every segment by its group, "Hodnota: Cena za m²", "Zobrazení: Pruhy"', () => {
+    render(<Harness initial={{ view: 'bar', rows: ['disposition'] }} />);
+    expect(screen.getByRole('button', { name: 'Hodnota: Cena za m²' })).toHaveTextContent(/^Cena za m²$/);
+    expect(screen.getByRole('button', { name: 'Hodnota: Doba na trhu' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Zobrazení: Pruhy' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Zobrazení: Tabulka' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.queryByRole('button', { name: 'Pruhy' })).toBeNull();
   });
 
   it('a click on the lit segment sets the same value again', () => {

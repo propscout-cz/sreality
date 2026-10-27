@@ -49,7 +49,10 @@ describe('<SegmentedBar>', () => {
   const CHOSEN = ['bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]'];
   const seg = (name: string) => screen.getByRole('button', { name });
 
-  /* The Browse sidebar's Status bar and the amenity rows, byte for byte. */
+  /* The Browse sidebar's Status bar and the amenity rows, byte for byte; a fill
+   * segment's padding is 4px (its label is centred in an equal column, so the
+   * padding only says when the label runs out of room) and a label with no room
+   * left ends in an ellipsis inside its own segment. */
   it('keeps the fill and compact bars exactly as their callers drew them', () => {
     const { rerender } = render(<SegmentedBar fill label="Stav" options={STATUS} value="any" onChange={() => {}} />);
     const track = screen.getByRole('group', { name: 'Stav' });
@@ -57,15 +60,62 @@ describe('<SegmentedBar>', () => {
       'grid w-full gap-0.5 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-0.5');
     expect(track).toHaveStyle({ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' });
     expect(seg('Vše')).toHaveAttribute('class',
-      'px-2 py-1 text-xs whitespace-nowrap rounded-[var(--radius-xs)] transition-colors bg-[var(--color-copper)] text-[var(--color-on-copper)]');
+      'px-1 py-1 text-xs min-w-0 overflow-hidden text-ellipsis whitespace-nowrap rounded-[var(--radius-xs)] transition-colors bg-[var(--color-copper)] text-[var(--color-on-copper)]');
     expect(seg('Aktivní')).toHaveAttribute('class',
-      'px-2 py-1 text-xs whitespace-nowrap rounded-[var(--radius-xs)] transition-colors text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]');
+      'px-1 py-1 text-xs min-w-0 overflow-hidden text-ellipsis whitespace-nowrap rounded-[var(--radius-xs)] transition-colors text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]');
     expect(seg('Vše')).toHaveAttribute('aria-pressed', 'true');
     expect(seg('Aktivní')).toHaveAttribute('aria-pressed', 'false');
 
     rerender(<SegmentedBar label="Stav" options={STATUS} value="any" onChange={() => {}} />);
     expect(screen.getByRole('group', { name: 'Stav' })).toHaveClass('inline-grid');
     expect(seg('Vše')).toHaveClass('px-2.5', 'py-0.5', 'text-[0.7rem]');
+    expect(seg('Vše')).not.toHaveClass('text-ellipsis');
+  });
+
+  /* "Listing for" in the sidebar at its 240px floor: four 47px columns, and
+   * "Pronájem" once ran out of its segment into "Prodej" and past the track. */
+  it('keeps a long fill label inside its own segment, its name whole', () => {
+    const deals = [
+      { value: 'prodej', label: 'Prodej' },
+      { value: 'pronajem', label: 'Pronájem' },
+      { value: 'drazba', label: 'Dražba' },
+      { value: 'podil', label: 'Podíl' },
+    ];
+    render(<SegmentedBar fill label="Listing for" options={deals} value="pronajem" onChange={() => {}} />);
+    expect(screen.getByRole('group', { name: 'Listing for' })).toHaveStyle({ gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' });
+    for (const b of screen.getAllByRole('button')) {
+      for (const c of ['min-w-0', 'overflow-hidden', 'text-ellipsis', 'whitespace-nowrap', 'px-1']) expect(b).toHaveClass(c);
+      expect(b).not.toHaveClass('px-2');
+    }
+    expect(seg('Pronájem')).toHaveAccessibleName('Pronájem');
+  });
+
+  /* ChartBuilder's Hodnota / Zobrazení: "Hodnota: Cena", not a bare "Cena". */
+  it('names a segment by its ariaLabel where it has one', () => {
+    const opts = [{ value: 'a', label: 'Cena', ariaLabel: 'Hodnota: Cena' }, { value: 'b', label: 'Plocha' }];
+    render(<SegmentedBar hug label="Hodnota" options={opts} value="a" onChange={() => {}} />);
+    expect(seg('Hodnota: Cena')).toHaveTextContent('Cena');
+    expect(seg('Hodnota: Cena')).toHaveAttribute('aria-pressed', 'true');
+    expect(seg('Plocha')).not.toHaveAttribute('aria-label');
+  });
+
+  /* The account menu: a bar inside role=menu draws menuitemradio segments. */
+  it('draws menuitemradio segments, checked for pressed, where asked', () => {
+    const onChange = vi.fn();
+    render(
+      <div role="menu">
+        <SegmentedBar fill segmentRole="menuitemradio" label="Light or dark" options={STATUS} value="any" onChange={onChange} />
+      </div>,
+    );
+    expect(screen.getByRole('group', { name: 'Light or dark' })).toHaveClass('grid', 'bg-[var(--color-paper-2)]');
+    expect(screen.queryAllByRole('button')).toHaveLength(0);
+    const vse = screen.getByRole('menuitemradio', { name: 'Vše' });
+    expect(vse).toHaveAttribute('aria-checked', 'true');
+    expect(vse).not.toHaveAttribute('aria-pressed');
+    expect(vse).toHaveClass(...CHOSEN);
+    expect(screen.getByRole('menuitemradio', { name: 'Aktivní' })).toHaveAttribute('aria-checked', 'false');
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Aktivní' }));
+    expect(onChange).toHaveBeenLastCalledWith('active');
   });
 
   it('sets the value clicked, the lit one included', () => {
@@ -164,11 +214,13 @@ describe('<SegmentedBar>', () => {
     expect(group).toHaveClass('overflow-x-auto', 'p-1', '-m-1', 'min-w-0', 'pointer-events-none');
     const track = group.firstElementChild as HTMLElement;
     expect(track).toHaveClass('inline-flex', 'pointer-events-auto', 'border-[var(--color-rule)]');
-    expect(track).not.toHaveClass('grid', 'inline-grid');
+    expect(track).not.toHaveClass('grid');
+    expect(track).not.toHaveClass('inline-grid');
     expect(track.style.gridTemplateColumns).toBe('');
     for (const b of screen.getAllByRole('button')) {
       expect(b.parentElement).toBe(track);
       expect(b).toHaveClass('shrink-0', 'px-2', 'py-1', 'text-xs');
+      expect(b).not.toHaveClass('text-ellipsis');
     }
     expect(seg('Vše')).toHaveClass(...CHOSEN);
   });
@@ -183,12 +235,16 @@ describe('<SegmentedBar>', () => {
     expect(group.firstElementChild).toHaveClass('h-[2.125rem]', 'border-dashed', '[[aria-invalid=true]>&]:border-[var(--color-brick)]');
   });
 
-  /* The phone's own screens: colour there only ever means a stage. */
+  /* The phone's own screens: colour there only ever means a stage. The inset
+   * well is ~1.05:1 on paper, so the chosen segment also wears the phone chip's
+   * pressed ink-2 hairline (chips.ts), inset: a ring, no border, no width moved. */
   it('in the phone tone marks the chosen segment ink on the inset well, never copper', () => {
     render(<SegmentedBar tone="phone" label="Řadit" options={STATUS} value="any" onChange={() => {}} />);
     const track = screen.getByRole('group', { name: 'Řadit' });
-    expect(seg('Vše')).toHaveClass('bg-[var(--color-inset)]', 'text-[var(--color-ink)]');
+    expect(seg('Vše')).toHaveClass('bg-[var(--color-inset)]', 'text-[var(--color-ink)]', 'ring-1', 'ring-inset', 'ring-[var(--color-ink-2)]');
+    for (const c of ['border', 'font-medium']) expect(seg('Vše')).not.toHaveClass(c);
     expect(seg('Aktivní')).toHaveClass('text-[var(--color-ink-2)]');
+    expect(seg('Aktivní')).not.toHaveClass('ring-1');
     expect(track).toHaveClass('h-8', 'border-[var(--color-rule-strong)]');
     expect(track.outerHTML).not.toContain('copper');
     for (const b of screen.getAllByRole('button')) expect(b).toHaveClass('text-[13px]');

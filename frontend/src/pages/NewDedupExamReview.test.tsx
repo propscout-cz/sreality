@@ -210,7 +210,8 @@ describe('<NewDedupExamReview> photo size', () => {
     await user.click(within(bar).getByRole('button', { name: 'L' }));
     const large = within(bar).getByRole('button', { name: 'L' });
     expect(large).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
-    expect(large).not.toHaveClass('border', 'border-[var(--color-ink-2)]');
+    /* One class per assertion: jest-dom's not.toHaveClass(a, b) fails only when BOTH are present. */
+    for (const c of ['border', 'border-[var(--color-ink-2)]']) expect(large).not.toHaveClass(c);
     expect(within(bar).getByRole('button', { name: 'S' })).toHaveAttribute('aria-pressed', 'false');
   });
 });

@@ -240,6 +240,32 @@ describe('<FilterForm>', () => {
     expect(within(unpriced).getAllByRole('button').map((b) => b.textContent)).toEqual(['Priced only', 'Include unpriced']);
   });
 
+  /* The bars are fill bars: equal columns, so at the sidebar's 240px floor
+   * ("Listing for": Pronájem) or in a phone-wide Watchdog editor (its long
+   * "Include listings without a price") a label that has no room left ends in an
+   * ellipsis inside its own segment instead of running into the next one. */
+  it('keeps every segment label inside its own segment, its name whole', () => {
+    render(
+      <FilterForm
+        scope="watchdog"
+        state={{ category_type: 'pronajem' }}
+        onChange={vi.fn()}
+        includeOnly={['include_no_price', 'category_type']}
+        labels={{ include_no_price: 'Include listings without a price', category_type: 'Deal' }}
+        flat
+      />,
+    );
+    const unpriced = screen.getByRole('group', { name: 'Include listings without a price' });
+    const deal = screen.getAllByRole('button', { name: /Pronájem/ })[0].parentElement!;
+    for (const bar of [unpriced, deal]) {
+      expect(bar.style.gridTemplateColumns).toMatch(/^repeat\(\d, minmax\(0, 1fr\)\)$/);
+      for (const b of within(bar).getAllByRole('button')) {
+        for (const c of ['min-w-0', 'overflow-hidden', 'text-ellipsis', 'whitespace-nowrap']) expect(b).toHaveClass(c);
+      }
+    }
+    expect(within(unpriced).getByRole('button', { name: 'Include listings without a price' })).toBeInTheDocument();
+  });
+
   it('renders tristate filters as the TriRow control', () => {
     const onChange = vi.fn();
     render(

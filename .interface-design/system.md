@@ -114,22 +114,31 @@ section and shelf names, JetBrains Mono (`font-mono`) with `tabular-nums` on EVE
   an explicit Vše / All / any included. One track (`--color-paper-2`, rule border, `p-0.5`, `gap-0.5`) of adjoining
   segments; the chosen one is filled `--color-copper` with `--color-on-copper` text, idle `ink-3` (hover `ink-2`),
   colour only, never weight. An ink fill, a raised tile with a shadow, white + bold or a copper-soft chosen segment
-  is not a variant: each converges on this one. `Segmented` (a Field's pick-one), `SizeToggle` / `ImageSizeToggle`
-  and `TriRow` draw it; a local copy that becomes the bar is deleted, never left beside it.
-  - Width: `fill` = equal segments across the container (the filter sidebar's Status line); `hug` = each segment its
+  is not a variant: each converges on this one. `Segmented` (a Field's pick-one), `SizeToggle` / `ImageSizeToggle`,
+  `TriRow` and the account menu's Light / Dark / System row draw it; a local copy that becomes the bar is deleted,
+  never left beside it.
+  - Width: `fill` = equal segments across the container (the filter sidebar's Status line), 4px of side padding
+    (the label is centred, so padding only says when it runs out of room) and a label with no room left ends in an
+    ellipsis inside its own segment, its name whole (the sidebar at its 240px floor); `hug` = each segment its
     label's width at the same reading size, the bar scrolling sideways with no scrollbar inside the tab strip's 4px
     focus-ring room (`Segmented`, toolbars, long labels with counts); neither = the compact amenity rows (equal
     segments, small type).
   - `deselectable` serves a pick-one-or-none group with no Vše (Listing for, by the 2026-10-20 ruling): nothing lit
     when none is set, a click on the lit segment releases it. Otherwise a click on the lit segment sets it again.
-  - Per option a `glyph`, a `title` and `disabled`; `disabled` for the whole control; `box` + `aria` make it the
-    form box (the Valuo editor: the track is the 34px box, dashed while absent, brick while `aria-invalid`).
+  - Per option a `glyph`, a `title`, `disabled` and an `ariaLabel` (the segment's own name where its label leans on
+    the caption: ChartBuilder's "Hodnota: Cena"); `disabled` for the whole control; `box` + `aria` make it the form
+    box (the Valuo editor: the track is the 34px box, dashed while absent, brick while `aria-invalid`).
   - `tone="phone"` on the phone's own screens (Makléři Řadit and Typ / Nabídka, Prohlídky, the account sheet's
-    Vzhled): chosen = ink on `--color-inset`, a `rule-strong` hairline, 32px, 13px type; colour there only ever
-    means a stage. The Filtry sheet hosts desktop controls and keeps the copper bar.
-  - A lone on/off in the filter sidebar or `FilterForm` is a two-segment bar "<off> | <label>" (`LINE_OFF`: "All ads
-    | Seen at birth"), never one chip whose word flips.
-  - The root is always the named `role="group"`; each segment is a button with `aria-pressed`.
+    Vzhled, Notifications inside the phone frame): a `rule-strong` track hairline, 32px, 13px type; chosen = ink on
+    `--color-inset` wearing the phone chip's pressed `ink-2` hairline as an inset ring (`chipState`; the well alone
+    is ~1.05:1 on paper; a ring, so no width moves, and no weight); colour there only ever means a stage. The
+    Filtry sheet hosts desktop controls and keeps the copper bar.
+  - A lone on/off in the filter sidebar or `FilterForm` is a two-segment bar "<off> | <label>", never one chip whose
+    word flips. The off words are ONE list, `BOOLEAN_OFF` (`components/FilterForm.tsx`: "All ads | Seen at birth"),
+    and `RegistryBar` there draws every registry pick-one and on/off bar; a new on/off adds its off word there.
+  - The root is always the named `role="group"`; each segment is a button with `aria-pressed`, except inside a
+    `role="menu"` (the account menu), where `segmentRole="menuitemradio"` makes each one a `menuitemradio` with
+    `aria-checked`.
 - **Pick-several and include / exclude stay chips** (`PickButton`, `MultiselectChips`; the one-chip-one-polarity rule
   in the interface-design skill § Controls).
 - **Stay as they are**, by ruling: a group of more than six options (the phone Filtry sheet's 17 sort orders, the

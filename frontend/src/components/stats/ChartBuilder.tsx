@@ -251,7 +251,8 @@ function Picker({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /* A labelled pick-one, the value or the view: the one joined bar (SegmentedBar),
- * each segment its label's width; a click on the lit segment sets it again. */
+ * each segment its label's width; a click on the lit segment sets it again. Each
+ * segment keeps its own name, "Hodnota: Cena", for a reader moving by buttons. */
 function OneOf<T extends string>({
   label,
   options,
@@ -267,7 +268,13 @@ function OneOf<T extends string>({
   return (
     <div>
       <ShelfLabel id={id}>{label}</ShelfLabel>
-      <SegmentedBar hug options={options} value={value} onChange={onChange} aria={{ 'aria-labelledby': id }} />
+      <SegmentedBar
+        hug
+        options={options.map((o) => ({ ...o, ariaLabel: `${label}: ${o.label}` }))}
+        value={value}
+        onChange={onChange}
+        aria={{ 'aria-labelledby': id }}
+      />
     </div>
   );
 }
