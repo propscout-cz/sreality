@@ -94,8 +94,10 @@ storey chip (the design system draws it as a quiet inset label without a border)
 
 ## What to build next
 
-Build the confirmed items **one PR per agenda**, in this order (small and visible first). Each PR follows
-`.interface-design/system.md`, updates `roadmap/ui-track.md`, and keeps every element the rulings don't touch.
+Agenda 1 shipped as its own PR (#2127). **Operator ruling 2026-10-27: agendas 2–8 go in ONE PR**
+(branch `feature/redesign-rulings`, one commit per agenda, so a disputed agenda can be dropped alone). The
+build follows `.interface-design/system.md`, updates `roadmap/ui-track.md`, and keeps every element the rulings
+don't touch. P26's header label goes with each page's own agenda.
 File pointers are where the element lives today (2026-10-27); search for the quoted text if a file moved.
 
 1. **Browse card** — **built** (branch `feature/browse-card-hierarchy`). As built: P05 drops the prefix only
@@ -106,8 +108,8 @@ File pointers are where the element lives today (2026-10-27); search for the quo
    clicked photo arrow doesn't keep the tag shown).
 2. **Browse page, map and stats** — P09 (the header keeps the count and what is counted, without the rest of the
    scope sentence: `components/BrowseExperience.tsx` `FilterSummary`, text built by `lib/filters.ts` `summarise`,
-   "Showing …"). **P09's proposal is conditional on the applied-filter pills, which are an unruled addition**:
-   ask the operator whether to build the pills with P09 or keep the sentence until they exist. P10 (merge mode
+   "Showing …"). **Operator ruling 2026-10-27: build the applied-filter pills with P09** (removable pills under
+   the count, one per active filter, × resets that filter). P10 (merge mode
    becomes a quiet "Sloučit…" above the cards; `MergeBar.tsx`, `BrowseExperience.tsx`), P12 (drop the
    price-label button from `components/MapRail.tsx`; keep the checkbox in `ListingMap.tsx`), P13 (the popup's
    `lp-precision` and `lp-seen` "last seen …" lines become one, the precision detail in its tooltip; the popup
@@ -127,7 +129,8 @@ File pointers are where the element lives today (2026-10-27); search for the quo
    `pages/Collections.tsx` `NewCollectionForm`), P31 (the collection page header carries the monitoring switch,
    "Share · N" and ⋯ with rename and delete, replacing `EditBlock`, `MonitoringBlock` and `SharingBlock`), P32
    (Browse cards first, `PropertiesBlock`'s table as the second tab): `pages/CollectionDetail.tsx`. The phone
-   versions (`PhoneCollectionDetail`, `PhoneBrokers`) are separate components: decide per PR whether they follow.
+   versions (`PhoneCollectionDetail`, `PhoneBrokers`) are separate components. **Operator ruling 2026-10-27: the
+   phone versions follow desktop** (Brokers P28–P29, Collections P30–P32).
 8. **Shell and page headers** — P26 (drop the small-caps label above the h1; there is no shared header
    component, each page has its own: `Header` in `pages/WatchdogManage.tsx`, `pages/Notifications.tsx`,
    `pages/Collections.tsx` and `pages/CollectionDetail.tsx`, and an inline header in `BrokersDesktop` in

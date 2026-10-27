@@ -38,7 +38,7 @@ scheme is on.
 - 24 changes are confirmed; the Browse card's (P01, P02, P03, P05, P06 restyle) are built, the rest NOT yet.
   Build them from the
   [review page](https://claude.ai/artifact/WoFQVG1RwmaqXAfBBQoqbV) (P01–P35, each with a before/after picture),
-  one PR per agenda. The 11 declined (P04, P06–P08, P11, P15–P18, P21, P23) stay as they are; don't re-propose.
+  agenda 1 alone (#2127), agendas 2–8 in one PR (operator, 2026-10-27). The 11 declined (P04, P06–P08, P11, P15–P18, P21, P23) stay as they are; don't re-propose.
 - Render scoring is to be removed end to end, front end and backend (operator note on P03): its own scoped PR.
 - Handoff with every ruling, the build queue with file pointers, and the open questions:
   `docs/design/propscout-redesign.md`.

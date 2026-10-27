@@ -22,7 +22,8 @@ toolkit work.
   focus in it, as an opacity overlay (P02); the photo draws no render verdict, just the counter (P03, the card only); a
   card of the one type and deal the filter pins reads "2+kk · 54 m²", any other keeps "Byt na prodej ·"
   (P05); the storey chip is a quiet inset label without a border (P06 note).
-- **Next (not built):** the other confirmed hierarchy changes, one PR per agenda (Browse page and map,
+- **Next (not built):** the other confirmed hierarchy changes, agendas 2–8 in one PR (operator, 2026-10-27; with the
+  applied-filter pills for P09, and the phone Brokers / Collections following desktop) (Browse page and map,
   Stats, Pipeline, Watchdogs, Notifications, Brokers, Collections, Shell); removing render scoring end to
   end (operator note on P03), scoped first. Handoff: `docs/design/propscout-redesign.md`.
 
