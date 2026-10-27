@@ -276,6 +276,12 @@ WORKER_LANES: tuple[str, ...] = (
     "estimation", "location_resolve", "location_intake_fast", "location_refetch",
     "sold_comps", "text_extract", "health", "autodedup", "notifications", "push", "heartbeat",
 )
+# scraper/realtime_worker.LANE_PASS_TIMEOUT_SECONDS (a check never imports the worker; a test pins the two): past it
+# the worker abandons the pass (a wedge sat nine hours). A pass in flight is Watch at two thirds of it (eight portals
+# at up to 120 s each make ~16 min an honest drain pass) and a Problem past it. The worker's own number, not a
+# THRESHOLDS key (#2026 replaced the two global in-flight keys with it).
+LANE_PASS_BUDGET_S = 1800
+LANE_INFLIGHT_WARN_S = LANE_PASS_BUDGET_S * 2 // 3
 
 
 def _lane_cells(conn: Any, thresholds: dict[str, Any],
@@ -378,9 +384,9 @@ def _lane(lane: str, info: dict[str, Any], previous: dict[str, Any], thresholds:
         else:
             conditions.append(("warn", f"its newest pass failed: {error}"))
     in_flight = _num(info.get("in_flight_s"))
-    if in_flight is not None and in_flight > float(thresholds["jobs_lane_inflight_fail_s"]):
+    if in_flight is not None and in_flight > LANE_PASS_BUDGET_S:
         conditions.append(("fail", f"one pass in flight for {_ago(in_flight)}"))
-    elif in_flight is not None and in_flight > float(thresholds["jobs_lane_inflight_warn_s"]):
+    elif in_flight is not None and in_flight > LANE_INFLIGHT_WARN_S:
         conditions.append(("warn", f"one pass in flight for {_ago(in_flight)}"))
     flap = _flap(previous.get(subject), passes, failed, thresholds)
     if flap:

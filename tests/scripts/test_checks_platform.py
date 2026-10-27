@@ -31,8 +31,7 @@ T: dict[str, Any] = {
     "jobs_gh_long_cycle_h": 24, "jobs_gh_streak_fail": 3, "jobs_gh_gap_p90_multiple": 3,
     "jobs_gh_gap_min_starts": 10, "jobs_poller_stale_h": 18, "jobs_cron_fail_of_3": 2,
     "jobs_cron_gap_multiple": 3, "jobs_cron_gap_min_starts": 5, "jobs_lane_floor_s": 900,
-    "jobs_lane_boot_grace_s": 900, "jobs_lane_inflight_warn_s": 1200,
-    "jobs_lane_inflight_fail_s": 1800, "jobs_lane_daily_interval_s": 3600,
+    "jobs_lane_boot_grace_s": 900, "jobs_lane_daily_interval_s": 3600,
     "jobs_lane_flap_share": 0.5, "jobs_lane_flap_min_passes": 3,
     "capacity_p50_warn_multiple": 3, "capacity_p50_warn_floor_s": 30,
     "capacity_p50_fail_multiple": 4, "capacity_p50_fail_floor_s": 60,
@@ -458,10 +457,25 @@ def test_a_daily_lanes_single_failure_is_a_problem_at_once() -> None:
     assert cell["status"] == "fail" and "pass exceeded 1800 s" in cell["message"]
 
 
-def test_a_pass_in_flight_is_watch_past_20_minutes_and_a_problem_past_30() -> None:
-    watch = _cells(_jobs(lanes={"autodedup": _lane(in_flight_s=1300.0)})[0])["lane/autodedup"]
-    problem = _cells(_jobs(lanes={"autodedup": _lane(in_flight_s=1900.0)})[0])["lane/autodedup"]
-    assert (watch["status"], problem["status"]) == ("warn", "fail")
+def test_a_pass_in_flight_is_watch_past_two_thirds_of_the_workers_budget_and_a_problem_past_it() -> None:
+    """The lines are the worker's own pass budget (no THRESHOLDS key since #2026), the messages as they were."""
+    budget, warn = plat.LANE_PASS_BUDGET_S, plat.LANE_INFLIGHT_WARN_S
+    assert (budget, warn) == (1800, 1200)
+
+    def in_flight(seconds: int) -> dict[str, Any]:
+        return _cells(_jobs(lanes={"autodedup": _lane(in_flight_s=float(seconds))})[0])["lane/autodedup"]
+
+    assert in_flight(budget * 2 // 3 - 1)["status"] == "ok"
+    watch, problem = in_flight(budget * 2 // 3 + 1), in_flight(budget + 1)
+    assert (watch["status"], watch["message"]) == ("warn", "one pass in flight for 20 min")
+    assert (problem["status"], problem["message"]) == ("fail", "one pass in flight for 30 min")
+
+
+def test_the_lane_budget_is_the_workers() -> None:
+    """The check mirrors scraper/realtime_worker.LANE_PASS_TIMEOUT_SECONDS (it never imports the worker)."""
+    from scraper import realtime_worker
+
+    assert plat.LANE_PASS_BUDGET_S == realtime_worker.LANE_PASS_TIMEOUT_SECONDS
 
 
 def test_one_cell_per_lane_carries_the_worst_with_every_reason() -> None:
