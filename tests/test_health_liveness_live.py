@@ -436,16 +436,16 @@ def test_migration_675_post_condition_refuses_one_subject_for_every_worker(cur):
 
 # --- the scheduled jobs (migration 682, #2026): a job/<name> cell per registered job-runner row, and the fleet ------
 #
-# Every time is relative to the transaction's frozen now(). A release moves due_at to a slot at most one cadence past
-# the run it closes, so each seed keeps due_at within a cadence of its newest closed run: a row with no run closed
-# since the cadence before its due_at reads as freshly (re)registered.
+# Every time is relative to the transaction's frozen now(). A row is judged on its runs since registry_at (`joined`
+# ago, a year by default, so a steady seed joined before its runs): with no run closed since and no last ok after it,
+# it reads as freshly (re)registered.
 
 
 def _job(cur: Any, name: str, *, every: str = "6 hours", timeout_s: int = 1200, resource: str | None = None,
          due: str = "5 hours", last_ok: str | None = None, failures: int = 0, last_outcome: str | None = None,
          last_error: str | None = None, paused: str | None = None, requested: str | None = None,
          requested_by: str = "github:op", runner: str = "job-runner", registered: bool = True,
-         retired: bool = False, joined: str = "30 days") -> None:
+         retired: bool = False, joined: str = "365 days") -> None:
     """A scheduled_jobs row as the runner's registration leaves it: `due` from now (a minus sign: past), `last_ok`,
     `requested` and `joined` (registry_at: when it joined the runner) ago, `paused` until that far ahead (a minus sign:
     a pause that lapsed), signed 'test' with note 'drill'."""
@@ -657,15 +657,15 @@ def test_a_re_landed_job_is_judged_on_its_runs_since_it_rejoined(cur: Any) -> No
     assert cut["facts"]["joined_at"] is not None and cut["facts"]["fresh_slot"] is False
 
 
-def test_a_row_whose_runs_go_on_through_its_registration_is_judged_whole(cur: Any) -> None:
-    """C3: registry_at alone says no gap; a run that ended within a cadence and budget before it carries the history on,
-    so a streak running through a registry_at (an older image's re-stamp, or a short revert) still reads Problem."""
+def test_a_row_whose_runs_go_on_through_a_boot_is_judged_whole(cur: Any) -> None:
+    """C3: a boot inside a running history is no join: an image that re-stamps registry_at (main's job_lease, or a
+    revert of #2026's) leaves it where the row joined (682's trigger), so a streak running through it reads Problem."""
     _runner_beat(cur, "r1", "0 minutes")
-    _job(cur, "through", due="4 minutes", last_ok="7 hours", failures=6, last_outcome="failed", last_error="exit 1",
-         joined="5 minutes")
+    _job(cur, "through", due="4 minutes", last_ok="7 hours", failures=6, last_outcome="failed", last_error="exit 1")
     _run(cur, "through", started="7 hours 1 minute", ended="7 hours", outcome="ok", exit_code=0)
     for ago in ("410 minutes", "5 hours", "3 hours", "61 minutes", "30 minutes", "4 minutes"):
         _run(cur, "through", started=ago, ended=f"{ago} -30 seconds", outcome="failed", exit_code=1)
+    cur.execute("update scheduled_jobs set registry_at = now() - interval '5 minutes' where job_name = 'through'")
 
     cells = _liveness(cur)[3]
 
@@ -674,7 +674,56 @@ def test_a_row_whose_runs_go_on_through_its_registration_is_judged_whole(cur: An
     assert _conditions(cells, "job/through")[1] == (
         "warn: late: no ok run for 7.0 h (Watch past 6.3 h, Problem past 12.3 h)")
     [job] = cells["job/through"]
-    assert job["facts"]["joined_at"] is None and job["facts"]["streak"] == 6
+    assert job["facts"]["streak"] == 6
+    cur.execute("select now() - registry_at from scheduled_jobs where job_name = 'through'")
+    assert cur.fetchone() == (_dt.timedelta(days=365),)
+
+
+def test_a_job_re_landed_within_a_cadence_of_its_failures_waits_for_its_first_slot(cur: Any) -> None:
+    """C3 (review, defect 1): rent failed its slot and three retries and overlays timed out a drill request; #2025's
+    lasting rollback retired both and the fix re-lands 3 days later. Un-retiring keeps the counter, the timeout and
+    the last ok, but each row is judged from the re-land: ok until its first run closes, then on that run alone."""
+    from scraper import job_lease
+    from scraper.jobs import RUNNER, Job
+
+    _runner_beat(cur, "r1", "0 minutes")
+    _job(cur, "rent", every="30 days", timeout_s=900, due="27 days", failures=4, last_outcome="failed",
+         last_error="exit 1", paused="-2 days", joined="40 days", retired=True)
+    for started, ended in (("3 days", "4319 minutes"), ("4319 minutes", "4318 minutes"),
+                           ("4317 minutes", "4316 minutes"), ("4250 minutes", "4249 minutes")):
+        _run(cur, "rent", started=started, ended=ended, outcome="failed", exit_code=1)
+    _job(cur, "overlays", every="91 days", timeout_s=7200, due="60 days", last_ok="31 days", failures=1,
+         last_outcome="timeout", last_error="stopped at timeout_s=7200; exit -15", joined="100 days", retired=True)
+    _run(cur, "overlays", started="31 days 30 minutes", ended="31 days", outcome="ok", exit_code=0)
+    _run(cur, "overlays", started="3 days 2 hours", ended="3 days", outcome="timeout", exit_code=-15,
+         requested_by="github:op")
+    assert job_lease.register(cur.connection, [
+        Job("rent", ("scripts.fetch_rent_map",), 30 * 86400, 356400, 900, 512, 1, RUNNER),
+        Job("overlays", ("scripts.ingest_map_overlays",), 91 * 86400, 6300000, 7200, 1024, 1, RUNNER),
+    ]).unretired == ("rent", "overlays")
+
+    cells = _liveness(cur)[3]
+
+    st, msg = _said(cells, "job/rent")
+    assert st == "ok" and msg.startswith("rent: not run yet; first slot in "), msg
+    st, msg = _said(cells, "job/overlays")
+    assert st == "ok" and msg.startswith("overlays: registered again; not run here since; first slot in "), msg
+    assert msg.endswith(" UTC); last ok 31 d ago"), msg
+    assert _conditions(cells, "job/rent") == [] and _conditions(cells, "job/overlays") == []
+
+    _run(cur, "rent", started="0 minutes", holder="h/2")  # its first slot, claimed at the re-land
+    assert _said(_liveness(cur)[3], "job/rent") == ("ok", "rent: running for 0 s of its 15 min budget on job-runner/r1")
+    cur.execute("update job_runs set ended_at = now(), outcome = 'failed', exit_code = 1 "
+                "where job_name = 'rent' and ended_at is null")
+    cur.execute("update scheduled_jobs set lease_holder = null, lease_expires_at = null, consecutive_failures = 5, "
+                "due_at = now() + interval '16 minutes' where job_name = 'rent'")
+
+    cells = _liveness(cur)[3]
+
+    assert _said(cells, "job/rent") == ("warn", "rent: its last run failed: exit 1")
+    [rent] = cells["job/rent"]
+    assert (rent["facts"]["consecutive_failures"], rent["facts"]["streak"], rent["facts"]["fresh_slot"]) == (
+        5, 1, False)
 
 
 def test_a_boot_that_re_stamps_registry_at_keeps_a_failing_rows_streak(cur: Any) -> None:

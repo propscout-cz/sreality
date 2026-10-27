@@ -163,10 +163,10 @@ production.
   flight past T + `STUCK_RUN_GRACE_S` is a Problem (the kill did not land). A failure streak is Watch at 1 and a
   Problem at 3 once its first failure is min(C, 1 h) old (backoff reaches 3 in minutes). Late is Watch past
   C + T + W and a Problem a further min(C, 1 d) on, W the longest sibling run seen on its resource, anchored on the
-  last ok run, else the first scheduled run, else the first slot, and on a lapsed pause; a row that joined the
-  runner after a gap (`registry_at`, which `register` stamps for a new, adopted or un-retired row and later boots
-  keep) is judged on its runs since, from the first slot of that registration, the streak and success it carried
-  from before a revert unjudged. `held by sibling` is
+  last ok run, else the first scheduled run, else the first slot, and on a lapsed pause; every row is judged on
+  its runs since it joined the runner (`registry_at`, which `register` stamps for a new, adopted or un-retired row
+  and later boots and 682's trigger keep), from the first slot of that registration, the streak and success it
+  carried from before a revert unjudged. `held by sibling` is
   ok, shown only while the job waits; a due job or a request unstarted for 10 min is Watch while a replica beats
   and a Problem when none has for 10 min; a refused registry entry is a Problem; a pause longer than
   greater(C, 7 d) is Watch. The cause (outcome, signed exit code, error, requester and args) comes from

@@ -15,9 +15,10 @@
 --     row's registry_at on purpose, retire it first.
 --   * public.health_span(double precision): a duration as Health reads it. Reads nothing.
 --   * public.health_job_cells(interval): one job/<name> cell per registered live job-runner row (_DUE_SQL's predicate:
---     runner 'job-runner', registry_at set, retired_at null), one per entry a fresh replica's boot refused that has no
---     such row, and the job-runner fleet cell while live rows exist. Never 'unknown'. Security invoker: the definer
---     watcher calls it. The one seam later waves replace (#2028, #2029, #2033), alone.
+--     runner 'job-runner', registry_at set, retired_at null), judged on its runs since registry_at and ok until the
+--     first of them closes, one per entry a fresh replica's boot refused that has no such row, and the job-runner
+--     fleet cell while live rows exist. Never 'unknown'. Security invoker: the definer watcher calls it. The one seam
+--     later waves replace (#2028, #2029, #2033), alone.
 --   * public.health_liveness() is re-created from the live body, 675's byte for byte (the precondition refuses any
 --     other), with one block after the health-lane arm: the helper's cells, inside a subtransaction. When the helper
 --     raises, the watcher writes one 'job-cells' Problem plus a listed 'unknown' placeholder for each open job/* and
@@ -96,17 +97,7 @@ stable
 set search_path = public
 as $cells$
 with live as (
-  select j.*, extract(epoch from j.cadence)::float8 as every_s, coalesce(j.paused_until > now(), false) as paused,
-         -- Joined after a gap: registry_at is when the row joined the runner (new, adopted or un-retired; a later boot
-         -- keeps it, job_lease._REGISTER_SQL), no ok run since, and no run of it overlapped the cadence and budget
-         -- before it. Its older history (a revert's, which un-retiring carries) is not judged: streak and clock count
-         -- from the join. A row whose history runs on through the join is judged whole, as before.
-         coalesce(j.last_success_at < j.registry_at - j.cadence - make_interval(secs => j.timeout_s), true)
-         and not exists (select 1 from job_runs r
-                          where r.job_name = j.job_name and r.started_at < j.registry_at
-                            and coalesce(r.ended_at, now()) >= j.registry_at - j.cadence
-                                                               - make_interval(secs => j.timeout_s))
-           as joined
+  select j.*, extract(epoch from j.cadence)::float8 as every_s, coalesce(j.paused_until > now(), false) as paused
     from scheduled_jobs j
    where j.runner = 'job-runner' and j.registry_at is not null and j.retired_at is null
 ), fresh as (
@@ -132,34 +123,29 @@ with live as (
          e.id = c.id as fail_is_last, e.outcome as fail_outcome, e.exit_code as fail_exit,
          e.peak_rss_mb, e.requested_by as fail_by, e.args as fail_args,
          h.job_name as held_by, extract(epoch from now() - h.started_at) as held_for_s, hs.timeout_s as held_budget_s,
-         fs.first_at, ss.streak_since, rf.replicas as refused_by,
-         case when l.joined then ss.failed else l.consecutive_failures end as streak,
-         -- Not judged on its history yet: no run has closed since the cadence before its due_at. Only _REGISTER_SQL
-         -- sets due_at with no run (a new, adopted or un-retired row, at the first slot >= now() + timeout_s); every
-         -- release and reap ends a run at or after due_at - cadence. It lasts through the first run, so a re-landed
-         -- row's carried streak, timeout and last success never read Problem while its first slot runs. The runner
-         -- prunes job_runs after 90 days and map_overlays runs every 91, so its ok run that set due_at can be gone:
-         -- last_success_at is that run's end (one release), and only an ok slot run leaves a gap that long.
-         l.due_at is not null and not exists (
-           select 1 from job_runs r
-            where r.job_name = l.job_name and r.ended_at >= l.due_at - l.cadence - make_interval(secs => l.timeout_s))
-         and coalesce(l.last_success_at < l.due_at - l.cadence - make_interval(secs => l.timeout_s), true)
-           as fresh_slot
+         fs.first_at, ss.streak_since, ss.failed as streak, rf.replicas as refused_by,
+         -- Waiting for its first slot: no run has closed since it joined, so the counter, timeout and last ok that
+         -- un-retiring carries are not judged. The runner prunes job_runs after 90 days and map_overlays runs every
+         -- 91, so a steady row's only ok run can be gone: its last_success_at still falls after it joined.
+         c.id is null and coalesce(l.last_success_at < l.registry_at, true) as fresh_slot
     from live l
     left join job_runs o on o.job_name = l.job_name and o.ended_at is null
+    -- A row is judged on its runs since registry_at, when it joined the runner (new, adopted or un-retired; kept by
+    -- every later boot, job_lease._REGISTER_SQL and the trigger above): a re-land's older history is not its own.
     left join lateral (select r.id, r.outcome, r.requested_by from job_runs r
-                        where r.job_name = l.job_name and r.ended_at is not null
+                        where r.job_name = l.job_name and r.started_at >= l.registry_at and r.ended_at is not null
                         order by r.started_at desc, r.id desc limit 1) c on true
     left join lateral (select r.id, r.outcome, r.exit_code, r.peak_rss_mb, r.requested_by, r.args from job_runs r
-                        where r.job_name = l.job_name and r.outcome in ('failed', 'timeout', 'lost')
+                        where r.job_name = l.job_name and r.started_at >= l.registry_at
+                          and r.outcome in ('failed', 'timeout', 'lost')
                         order by r.started_at desc, r.id desc limit 1) e on true
     left join lateral (select min(r.started_at) as first_at from job_runs r     -- the first SCHEDULED run
-                        where r.job_name = l.job_name and r.requested_by is null
-                          and (not l.joined or r.started_at >= l.registry_at)) fs on true
+                        where r.job_name = l.job_name and r.started_at >= l.registry_at
+                          and r.requested_by is null) fs on true
     left join lateral (select min(r.started_at) as streak_since, count(*) as failed  -- the current streak's failures
                          from job_runs r
-                        where r.job_name = l.job_name and r.outcome in ('failed', 'timeout', 'lost')
-                          and (not l.joined or r.started_at >= l.registry_at)
+                        where r.job_name = l.job_name and r.started_at >= l.registry_at
+                          and r.outcome in ('failed', 'timeout', 'lost')
                           and r.started_at > coalesce((select max(k.started_at) from job_runs k
                                                         where k.job_name = l.job_name and k.outcome = 'ok'),
                                                        '-infinity')) ss on true
@@ -169,11 +155,10 @@ with live as (
     left join refused rf on rf.name = l.job_name
 ), y as (
   select x.*,
-         -- Never a request run (a failed drill must not make a quarterly job late); a row that joined after a gap
-         -- counts from its first scheduled run since, as a never-succeeded one; a lapsed pause restarts the clock.
-         greatest(case when x.fresh_slot then greatest(x.last_success_at, x.due_at - x.cadence)
-                       else coalesce(case when not x.joined then x.last_success_at end,
-                                     coalesce(x.first_at, x.due_at) - x.cadence) end,
+         -- Its last ok since it joined, else its first scheduled run since minus C, else its first slot minus C:
+         -- never a request run (a failed drill must not make a quarterly job late); a lapsed pause restarts it.
+         greatest(coalesce(case when x.last_success_at >= x.registry_at then x.last_success_at end,
+                           coalesce(x.first_at, x.due_at) - x.cadence),
                   case when x.paused_until <= now() then x.paused_until end) as since,
          extract(epoch from now() - x.run_at) as flight_s,
          -- Due since its slot, or since a pause that lapsed after it; requested since the request.
@@ -216,7 +201,7 @@ with live as (
         || case when j.run_lapsed then '; its lease lapsed: the replica holding it is gone' else '' end),
     -- Ruling R-3, "problem at the budget": the runner's own record of the stop, never a sample of the kill window. A
     -- pure request never moves due_at (job_lease._RELEASE_RUN_SQL), so nothing retries it: the text says what clears it.
-    (3, case when j.paused or j.fresh_slot or j.last_run is distinct from 'timeout' then null else 'fail' end,
+    (3, case when j.paused or j.last_run is distinct from 'timeout' then null else 'fail' end,
         format('its last run hit its %s budget and was stopped (timeout)', health_span(j.timeout_s))
         || case when j.last_by is not null
                 then ' (a request by ' || j.last_by || '): a request is never retried; a new request or its next slot'
@@ -231,7 +216,7 @@ with live as (
         || ' ' || health_span(j.waiting_s) || ' ago and not started'
         || case when not exists (select 1 from fresh) then '; no job-runner replica has beaten for 10 min' else '' end),
     -- Three in a row is a Problem only once they span min(cadence, 1 h): the backoff retries in 60 s, 120 s, 240 s.
-    (5, case when j.paused or j.fresh_slot or j.streak = 0 then null
+    (5, case when j.paused or j.streak = 0 then null
              when j.streak >= 3
               and coalesce(j.streak_since, '-infinity') <= now() - least(j.cadence, interval '1 hour') then 'fail'
              else 'warn' end,
@@ -272,15 +257,14 @@ select coalesce(jsonb_agg(cell order by subject), '[]'::jsonb) from (
                       j.paused_by, j.pause_note)
                || case when j.streak > 0
                        then '; its last run failed: ' || coalesce(j.cause, j.last_outcome) else '' end
-             when j.fresh_slot and j.due_at > now() and j.last_run is null and j.last_success_at is null then
+             when j.fresh_slot and j.due_at > now() and j.last_success_at is null then
                format('not run yet; first slot in %s (%s UTC)', health_span(extract(epoch from j.due_at - now())),
                       to_char(j.due_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI'))
              when j.fresh_slot and j.due_at > now() then
-               format('registered again; not run here since; first slot in %s (%s UTC); %s',
+               format('registered again; not run here since; first slot in %s (%s UTC); last ok %s ago',
                       health_span(extract(epoch from j.due_at - now())),
                       to_char(j.due_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI'),
-                      coalesce('last ok ' || health_span(extract(epoch from now() - j.last_success_at)) || ' ago',
-                               'never ran ok'))
+                      health_span(extract(epoch from now() - j.last_success_at)))
              else
                coalesce('last ok ' || health_span(extract(epoch from now() - j.last_success_at)) || ' ago',
                         'never ran ok')
@@ -298,7 +282,7 @@ select coalesce(jsonb_agg(cell order by subject), '[]'::jsonb) from (
              'due_at', j.due_at, 'paused_until', j.paused_until, 'paused_by', j.paused_by, 'pause_note', j.pause_note,
              'requested_at', j.requested_at, 'requested_by', j.requested_by, 'last_success_at', j.last_success_at,
              'consecutive_failures', j.consecutive_failures, 'streak', j.streak,
-             'joined_at', case when j.joined then j.registry_at end, 'last_run', j.last_run, 'cause', j.cause,
+             'joined_at', j.registry_at, 'last_run', j.last_run, 'cause', j.cause,
              'exit_code', j.fail_exit, 'peak_rss_mb', j.peak_rss_mb, 'in_flight_s', round(j.flight_s),
              'run_replica', j.run_replica, 'held_by', j.held_by, 'sibling_wait_s', round(j.sibling_wait_s),
              'fresh_slot', j.fresh_slot, 'streak_since', j.streak_since,
@@ -608,19 +592,20 @@ begin
   end if;
   -- A rolled-back probe evaluates every per-row expression (the laterals, the sibling wait, format(), the
   -- health_span casts, the conditions), which no registered row would before the first job moves, and the trigger.
-  -- Never committed, so no runner sees it.
+  -- It joined before its runs, so they are its own. Never committed, so no runner sees it.
   begin
     insert into scheduled_jobs (job_name, cadence, runner, registry_at, offset_s, timeout_s, memory_mb, cpus, due_at,
                                 resource, consecutive_failures, last_outcome, last_error)
-    values ('_682_probe', interval '6 hours', 'job-runner', now(), 0, 1200, 256, 1, now() - interval '15 minutes',
-            '_682_probe', 1, 'failed', 'exit 1');
+    values ('_682_probe', interval '6 hours', 'job-runner', now() - interval '2 hours', 0, 1200, 256, 1,
+            now() - interval '15 minutes', '_682_probe', 1, 'failed', 'exit 1');
     insert into job_runs (job_name, holder, resource, args, requested_by, started_at, ended_at, outcome, exit_code)
     values ('_682_probe', 'probe/a', '_682_probe', '{--probe}', 'probe', now() - interval '1 hour',
             now() - interval '50 minutes', 'failed', 1);
     insert into job_runs (job_name, holder, resource, started_at)
     values ('_682_probe', 'probe/b', '_682_probe', now() - interval '5 minutes');
     update scheduled_jobs set registry_at = now() - interval '1 day' where job_name = '_682_probe';  -- a re-stamp
-    if not exists (select 1 from scheduled_jobs where job_name = '_682_probe' and registry_at = now()) then
+    if not exists (select 1 from scheduled_jobs where job_name = '_682_probe'
+                      and registry_at = now() - interval '2 hours') then
       raise exception '682: a write moved a live row''s registry_at';
     end if;
     select e into v_probe from jsonb_array_elements(public.health_job_cells(interval '10 minutes')) e
