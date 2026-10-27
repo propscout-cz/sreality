@@ -3,7 +3,7 @@
  * the exam's own vocabulary — never a per-cell patch that could produce a row
  * shape the exam could not. */
 
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -196,6 +196,22 @@ describe('<NewDedupExamReview> photo size', () => {
     expect(img.className).toContain('max-h-[32rem]');
     // Full-size inspection: the thumbnail links out to the image itself.
     expect(img.closest('a')).toHaveAttribute('href', 'blob:photo');
+  });
+
+  /* A pick-one is the ONE joined bar (operator ruling 2026-10-27, system.md § Option
+   * groups), the photo-size switch every other grid draws: no ink-outlined chips. */
+  it('draws S/M/L as the joined photo-size bar, the chosen size filled copper', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText(/2 answered/);
+    const bar = screen.getByRole('group', { name: 'photo size' });
+    expect(bar.firstElementChild).toHaveClass('inline-flex', 'border', 'bg-[var(--color-paper-2)]');
+    expect(within(bar).getAllByRole('button').map((b) => b.textContent)).toEqual(['S', 'M', 'L']);
+    await user.click(within(bar).getByRole('button', { name: 'L' }));
+    const large = within(bar).getByRole('button', { name: 'L' });
+    expect(large).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+    expect(large).not.toHaveClass('border', 'border-[var(--color-ink-2)]');
+    expect(within(bar).getByRole('button', { name: 'S' })).toHaveAttribute('aria-pressed', 'false');
   });
 });
 

@@ -2481,4 +2481,30 @@ describe('<NewDedupLabeling>', () => {
     fireEvent.click(await screen.findByText('Select all'));
     expect(screen.getByText('1 selected')).toBeInTheDocument();
   });
+
+  /* A pick-one is the ONE joined bar (operator ruling 2026-10-27, system.md § Option
+   * groups): the grid and the tag version sit beside the photo-size bar as bars of
+   * their own, never soft chips. */
+  it('draws the grid and the tag version as joined bars, the chosen segment filled copper', async () => {
+    renderPage();
+    await screen.findByRole('button', { name: 'interier - kuchyne' });
+    for (const [name, lit, idle] of [
+      ['Labeling mode', 'Proposals', 'Candidates'],
+      ['Tag version', 'New tag', 'Original tag'],
+    ]) {
+      const bar = screen.getByRole('group', { name });
+      expect(bar.firstElementChild).toHaveClass('inline-flex', 'border', 'bg-[var(--color-paper-2)]');
+      const on = within(bar).getByRole('button', { name: lit });
+      expect(on).toHaveAttribute('aria-pressed', 'true');
+      expect(on).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+      expect(on).not.toHaveClass('border');
+      expect(within(bar).getByRole('button', { name: idle })).toHaveAttribute('aria-pressed', 'false');
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Original tag' }));
+    expect(screen.getByRole('button', { name: 'Original tag' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Candidates' }));
+    expect(screen.getByRole('button', { name: 'Candidates' })).toHaveAttribute('aria-pressed', 'true');
+    /* The tag version is a Proposals-only choice. */
+    expect(screen.queryByRole('group', { name: 'Tag version' })).toBeNull();
+  });
 });
