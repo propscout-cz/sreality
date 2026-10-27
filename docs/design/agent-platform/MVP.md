@@ -122,22 +122,23 @@ while the scenario PATCH works; boot refuses `API_AUTH_OPTIONAL`; a foreign-issu
 
 Railway asked customers to replace every credential stored there before 2026-10-21. Rotated earlier, on
 2026-10-22: the four AI provider keys, RunPod, the Cloudflare API token; VAPID is newer and stays. The rest
-are rotated with `scripts/rotate_credentials.sh`, which writes the date and the check into each row below.
+were rotated on 2026-10-27; each row below carries its date and the check.
 Inventory: `.claude/skills/toolkit-api/references/secrets-inventory.md`.
 
 | Secret | Rotated | Verified by |
 |---|---|---|
-| Smoke-test accounts | pending | |
-| R2 access key pair | pending | |
-| Mapy keys | pending | |
+| Smoke-test accounts | 2026-10-27 | sign-in with the new password |
+| R2 access key pair | 2026-10-27 | boto3 head/put/delete; the API signs with the new pair (R2 404, not 403); worker variable checked |
+| Mapy keys | 2026-10-27 | geocode 200 per key; /maps/suggest 200; API variable checked |
 | Valuo tokens | pending | |
 | GitHub tokens | pending | |
-| Stripe | pending | |
-| Supabase secret key | pending | |
-| Supabase legacy JWT secret | pending | |
-| Old credentials revoked | pending | |
-| Database password and connection strings | pending | |
-| Tenant pool password | pending | |
+| Stripe | 2026-10-27 | nothing stored: none on the Railway API (looked), no STRIPE* GitHub secret |
+| Supabase secret key | 2026-10-27 | Auth admin API 200 (its one copy is the GitHub secret; no code reads it) |
+| Supabase legacy JWT secret | 2026-10-27 | legacy JWT-based API keys disabled first (Supabase requires it), then revoked; sign-in, signed-in API and PostgREST reads still 200; extension panel checked |
+| Old credentials revoked | 2026-10-27 | API presign accepted by R2 + /maps/suggest + Health, after the revocation |
+| Database password and connection strings | 2026-10-27 | psycopg on the new transaction + session strings; new API GET /estimations 200; worker heartbeat; pg_cron 0 failed; GitHub's first scheduled DB run (Location: resolve 40478303026, 09:06Z) succeeded |
+| Residential proxy (`SCRAPER_PROXY_URL`, DataImpulse; operator ruling 2026-10-27) | 2026-10-27 | new password tested through gw.dataimpulse.com:823 (CONNECT 200); worker PROBE ceskereality + idnes errors=0, mmreality fetching, proxied photos stored |
+| Tenant pool password | 2026-10-27 | psycopg as tenant_pool; new API GET /pipeline/stages 200 |
 
 **M1, about 3.5 weeks: the spine, agent-worker, parity, code and files, the scout in production.**
 - *M1a (days 6–12):* `api/capabilities/` with the entries of § 2 (the Search agenda in `filter_registry`, the stats
@@ -260,7 +261,7 @@ start runs, what agent search means, and model-written SQL.
 
 1. The customer-group context page (operator, later).
 2. The facet list v1 for the photo assessment (Claude drafts in M1a; operator edits).
-3. The remaining credential rotation (operator, with `scripts/rotate_credentials.sh`, M0; the log is under § 3, M0).
+3. The remaining credential rotation (operator, with a Claude session; the log is under § 3, M0).
 4. The monthly Valuo cap per account (operator; a number).
 5. Post the M0 issue or PR number on Actions-exit #2025 once `/to-tickets` creates it.
 
@@ -270,4 +271,4 @@ start runs, what agent search means, and model-written SQL.
 |---|---|---|
 | #2058 M0 run-table grants | migration 679: the browser INSERTs no run and UPDATEs only `estimation_runs.scenario`; censuses in `tests/_tenant_registry.py` `BROWSER_WRITE_COLUMNS` | nothing: applied 2026-10-26 14:05Z; production PostgREST as a member: INSERT 403, `status` UPDATE 403, `scenario` UPDATE 204 |
 | #2059 M0 route and sign-in hardening | `/buildings*` and `force_refresh` admin-only; `verify_jwt` pins the issuer, requires `exp`/`sub`/`role`, refuses `client_id`; the API refuses to boot with `API_AUTH_OPTIONAL` on Railway | delete `RUNPOD_API_KEY` from the Railway API service (no reader), after sreality-e9's signed-in check; still owed: building runs readable through PostgREST's SYSTEM arm (`roadmap/public-release-track.md` item 11) |
-| #2061 M0 credential rotation wizard | `scripts/rotate_credentials.sh` (17 stages, resumable with `--from N`, database last) and the per-secret inventory `.claude/skills/toolkit-api/references/secrets-inventory.md` | the operator runs the wizard in a window from sreality-e9; the M0 credential rotation log (§ 3) fills in as it goes |
+| #2061 M0 credential rotation wizard | `scripts/rotate_credentials.sh` (17 stages, resumable with `--from N`, database last) and the per-secret inventory `.claude/skills/toolkit-api/references/secrets-inventory.md` | run to stage 13 on 2026-10-27, the database by hand; removed the same day at the operator's request (rotations run in a Claude session) |

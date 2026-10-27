@@ -152,7 +152,7 @@ export default function BrowseExperience({
   const newProperty = useNewPropertyDialog();
   const { filters, sort, tab, overlay, activePresetId } = view;
 
-  // Browser-tab title reflects the active filters ("PS: 2+kk · 60–90 m² · Praha")
+  // Browser-tab title reflects the active filters ("2+kk · 60–90 m² · Praha")
   // so multiple Browse tabs are distinguishable. Skipped in the Explore-area
   // modal, which reuses this component but must not own the page title.
   usePageTitle(isModal ? null : browseTitleSummary(filters));

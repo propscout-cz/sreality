@@ -23,7 +23,7 @@ fetch these links with curl or WebFetch.
 ## What is done
 
 1. **PR #2115** (merged 2026-10-27; Railway deployed API, vite and realtime-worker):
-   - the app is **PropScout.cz** (`lib/brand.ts`; tab titles "PS: …"; a "PS" home-screen icon; extension name);
+   - the app is **PropScout.cz** (`lib/brand.ts`; tab titles are the page name alone (no prefix) under a "PS" favicon; a "PS" home-screen icon; extension name);
    - three colour schemes, **Měď** (default), **Kobalt**, **Grafit**, each light and dark, picked per device in the
      account menu, the phone account sheet and Settings → Appearance (`lib/theme.ts`, `globals.css`
      `data-scheme` blocks, `components/SchemeSwatch.tsx`);
@@ -106,6 +106,9 @@ and build exactly what it says (the rulings are also copied below).
 - `decision: "decline"` → leave that part as it is; don't propose it again.
 - `decision: null` → not ruled yet: ask the operator before building it, and build the rest.
 - A `note` goes further than the proposal where they differ, as in the removal review.
+
+**The target picture is `docs/design/propscout-stats-target.png`** (its standalone page with the exact markup:
+`propscout-stats-target.html`): the agreed design with a yellow tag on each change. Build the Stats tab to match it.
 
 **Ruled 2026-10-27** (copied from the review page; the page stays the source if they ever differ):
 

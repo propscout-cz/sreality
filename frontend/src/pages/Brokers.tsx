@@ -22,6 +22,7 @@ import ErrorBanner from '../components/ErrorBanner';
 import { DecimalField, Field, PickButton, Segmented, Switch } from '../components/controls';
 import { SUBTYPE_LABELS_BY_MAIN } from '@/lib/enums';
 import { ROUTES } from '@/lib/routes';
+import { useNewTabProps } from '@/lib/linkGestures';
 import { fmtCount } from '../lib/format';
 import { usePhoneShell } from '@/lib/phoneShell';
 import { useDebouncedTerm } from '@/lib/useDebouncedTerm';
@@ -479,6 +480,7 @@ function Ledger({
   placeLabel: string;
   capped: boolean;
 }) {
+  const newTab = useNewTabProps();
   return (
     <div className="border border-[var(--color-rule)] rounded-[var(--radius-md)] overflow-hidden">
       <div className="px-4 py-2.5 border-b border-[var(--color-rule)] bg-[var(--color-paper-2)] flex items-baseline justify-between">
@@ -495,9 +497,12 @@ function Ledger({
             {/* A real anchor, not a button with a navigate() handler: an analyst
               * comparing brokers needs right-click → open in a new tab,
               * ctrl/middle-click, and a copyable link address. Every child here
-              * is a <span>, so there is no nested-interactive problem. */}
+              * is a <span>, so there is no nested-interactive problem. A new
+              * tab on a plain click too: the board's filters are not in the
+              * URL, so Back would land on a reset board. */}
             <Link
               to={ROUTES.brokerDetail.build({ id: r.broker_id })}
+              {...newTab}
               className="w-full text-left px-4 py-3 flex items-center gap-4 border-b border-[var(--color-rule-soft)] last:border-0 hover:bg-[var(--color-copper-soft)] transition-colors group"
             >
               <span className="w-7 shrink-0 text-right font-[family-name:var(--font-display)] text-lg text-[var(--color-copper)] tabular-nums">

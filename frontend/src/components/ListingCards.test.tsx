@@ -22,7 +22,7 @@
  * keyboard or a screen reader reaches the card, and nothing else.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -33,6 +33,7 @@ import ListingCards from './ListingCards';
 import type { CohortKind } from '@/lib/filters';
 import { CardHydrationProvider } from '@/lib/hydration';
 import { useMergeMode, type MergeMode } from '@/lib/useMergeMode';
+import { PHONE_SHELL_QUERY } from '@/lib/phoneShell';
 import { expectNoNestedInteractive } from '@/test/a11y';
 import * as api from '@/lib/api';
 import * as brokers from '@/lib/brokers';
@@ -577,14 +578,47 @@ describe('<ListingCards> the card is not a link — its TITLE is', () => {
     expect(locationNow()).toBe('/');
   });
 
-  it('navigates to the property page on a plain click of the title link', async () => {
+  /* Browse is a list worked through card by card, so on the desktop a card
+     opens its property in a NEW TAB and Browse stays where it was. The router
+     leaves a target="_blank" click to the browser, so this tab never moves. */
+  it('opens the property page in a new tab, leaving Browse in place', async () => {
     renderGrid();
 
-    fireEvent.click(await screen.findByRole('link', { name: /^Byt na prodej/ }));
-
+    const link = await screen.findByRole('link', { name: /^Byt na prodej/ });
     // The card's own advert rides along; the page ignores it when it is the
     // canonical one and opens its row when the card is one portal's advert.
-    expect(locationNow()).toBe('/property/42?advert=111');
+    expect(link).toHaveAttribute('href', '/property/42?advert=111');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener');
+
+    fireEvent.click(link);
+    expect(locationNow()).toBe('/');
+  });
+
+  describe('in the phone shell', () => {
+    const originalMatchMedia = window.matchMedia;
+    beforeEach(() => {
+      window.matchMedia = ((query: string) => ({
+        matches: query === PHONE_SHELL_QUERY,
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      })) as unknown as typeof window.matchMedia;
+    });
+    afterEach(() => {
+      window.matchMedia = originalMatchMedia;
+    });
+
+    /* There a new tab would leave the installed app for the browser. */
+    it('navigates in place on a plain click of the title link', async () => {
+      renderGrid();
+
+      const link = await screen.findByRole('link', { name: /^Byt na prodej/ });
+      expect(link).not.toHaveAttribute('target');
+
+      fireEvent.click(link);
+      expect(locationNow()).toBe('/property/42?advert=111');
+    });
   });
 
   /* Same rule lib/linkGestures encodes for the surfaces the router does not
@@ -623,9 +657,11 @@ describe('<ListingCards> the card is not a link — its TITLE is', () => {
 
     const link = await screen.findByRole('link', { name: /Výnos/ });
     expect(link).toHaveAttribute('href', '/listing/sreality/900?run=77#estimations');
+    // A new tab, like the card itself: one card never opens two ways.
+    expect(link).toHaveAttribute('target', '_blank');
 
     fireEvent.click(link);
-    expect(locationNow()).toBe('/listing/sreality/900?run=77#estimations');
+    expect(locationNow()).toBe('/');
   });
 });
 
