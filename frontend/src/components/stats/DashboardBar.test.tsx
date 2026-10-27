@@ -314,7 +314,9 @@ describe('<DashboardBar> the list', () => {
     const load = await chip('Od Jany — sdílí jana@example.com');
     expect(load).toHaveAccessibleDescription(EDITED);
     expect(within(load).getByTitle(/Uložit jako vlastní$/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Uložit změny' })).toBeNull();
+    await menuFor('Od Jany — sdílí jana@example.com');
+    expect(screen.queryByRole('menuitem', { name: 'Uložit změny' })).toBeNull();
+    expect(screen.getByRole('menuitem', { name: 'Zahodit změny' })).toBeInTheDocument();
   });
 });
 
@@ -427,24 +429,21 @@ describe('<DashboardBar> arrival with ?dashboard=', () => {
 });
 
 describe('<DashboardBar> saving', () => {
-  const openUpdate = async () => {
-    fireEvent.click(await screen.findByRole('button', { name: 'Uložit změny' }));
-    return screen.getByRole('dialog', { name: 'Uložit změny dashboardu' });
+  /* The dirty chip's menu: Uložit změny writes at once, no dialog (operator 2026-10-27). */
+  const saveChanges = async (name: string) => {
+    await menuFor(name);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Uložit změny' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
   };
   const box = (dialog: HTMLElement) => within(dialog).getByRole('button', { name: 'Uložit i nastavení filtru' });
-  const submit = (dialog: HTMLElement) => fireEvent.click(within(dialog).getByRole('button', { name: 'Uložit změny' }));
 
-  it('greys the filter box out on the property page\'s dashboard and never sends a filter for it', async () => {
+  it('never sends a filter for the property page\'s dashboard', async () => {
     const card = row({ ...OWN, filter_spec: null, property_card: true });
     vi.mocked(listStatsDashboards).mockResolvedValue({ data: [card], total: 1 });
     loadedBefore('d-own');
     vi.mocked(updateStatsDashboard).mockResolvedValue({ ...card, charts: [A, B] });
-    renderBar('/browse?tab=stats&dashboard=d-own', [A, B]);
-    const dialog = await openUpdate();
-    expect(box(dialog)).toBeDisabled();
-    expect(box(dialog)).toHaveAttribute('aria-pressed', 'false');
-    expect(within(dialog).getByText(/Okolí dashboard filtr nenese/)).toBeInTheDocument();
-    submit(dialog);
+    renderBar('/browse?tab=stats&dashboard=d-own&cat=dum', [A, B]);
+    await saveChanges('Ceny — okolí dashboard');
     await waitFor(() =>
       expect(updateStatsDashboard).toHaveBeenCalledWith('d-own', { name: 'Ceny', color: null, charts: [A, B], show_small: false }),
     );
@@ -455,13 +454,29 @@ describe('<DashboardBar> saving', () => {
     vi.mocked(updateStatsDashboard).mockResolvedValue({ ...OWN, charts: [A, B] });
     renderBar('/browse?tab=stats&dashboard=d-own', [A, B]);
     expect(await chip('Ceny')).toHaveAccessibleDescription(EDITED);
-    const dialog = await openUpdate();
-    expect(box(dialog)).toHaveAttribute('aria-pressed', 'false');
-    submit(dialog);
+    await saveChanges('Ceny');
     await waitFor(() => expect(updateStatsDashboard).toHaveBeenCalledTimes(1));
     expect(updateStatsDashboard).toHaveBeenCalledWith('d-own', { name: 'Ceny', color: null, charts: [A, B], show_small: false });
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Uložit změny' })).toBeNull());
-    expect(screen.getByRole('button', { name: 'Ceny' })).not.toHaveAccessibleDescription(EDITED);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Ceny' })).not.toHaveAccessibleDescription(EDITED));
+  });
+
+  it('keeps a dashboard saved without a filter without one, whatever the filters', async () => {
+    loadedBefore('d-own');
+    vi.mocked(updateStatsDashboard).mockResolvedValue({ ...OWN, charts: [A, B] });
+    renderBar('/browse?tab=stats&dashboard=d-own&cat=dum', [A, B]);
+    await saveChanges('Ceny');
+    await waitFor(() => expect(updateStatsDashboard).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(updateStatsDashboard).mock.calls[0][1]).not.toHaveProperty('filter_spec');
+  });
+
+  it('throws the edits away on Zahodit změny: the stored charts back into the board, nothing saved', async () => {
+    loadedBefore('d-own');
+    renderBar('/browse?tab=stats&dashboard=d-own', [A, B]);
+    expect(await chip('Ceny')).toHaveAccessibleDescription(EDITED);
+    await menuFor('Ceny');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Zahodit změny' }));
+    await waitFor(() => expect(writes).toEqual([OWN.charts]));
+    expect(updateStatsDashboard).not.toHaveBeenCalled();
   });
 
   it('marks the dashboard dirty when the "Malé vzorky" switch differs from the saved one, and saves the switch', async () => {
@@ -469,7 +484,7 @@ describe('<DashboardBar> saving', () => {
     vi.mocked(updateStatsDashboard).mockResolvedValue({ ...OWN, show_small: true });
     renderBar('/browse?tab=stats&dashboard=d-own&small=1', [A]);
     expect(await chip('Ceny')).toHaveAccessibleDescription(EDITED);
-    submit(await openUpdate());
+    await saveChanges('Ceny');
     await waitFor(() => expect(updateStatsDashboard).toHaveBeenCalledTimes(1));
     expect(updateStatsDashboard).toHaveBeenCalledWith('d-own', { name: 'Ceny', color: null, charts: [A], show_small: true });
     await waitFor(() => expect(screen.getByRole('button', { name: 'Ceny' })).not.toHaveAccessibleDescription(EDITED));
@@ -480,9 +495,7 @@ describe('<DashboardBar> saving', () => {
     vi.mocked(updateStatsDashboard).mockResolvedValue(WITH_FILTER);
     renderBar('/browse?tab=stats&dashboard=d-filter&cat=byt&tags=4&broker=7&dismissed=show', [B]);
     expect(await chip('Domy')).toHaveAccessibleDescription(EDITED);
-    const dialog = await openUpdate();
-    expect(box(dialog)).toHaveAttribute('aria-pressed', 'true');
-    submit(dialog);
+    await saveChanges('Domy');
     await waitFor(() => expect(updateStatsDashboard).toHaveBeenCalledTimes(1));
     const [, patch] = vi.mocked(updateStatsDashboard).mock.calls[0];
     expect(patch.charts).toEqual([B]);
@@ -493,23 +506,6 @@ describe('<DashboardBar> saving', () => {
     expect(patch.filter_spec?.filters.brokerId).toBeNull();
     expect(patch.filter_spec?.filters.showDismissed).toBe(false);
     expect(patch.filter_spec?.sort).toBe('-first_seen_at');
-  });
-
-  it('clears the stored filter when the box is unticked', async () => {
-    loadedBefore('d-filter');
-    vi.mocked(updateStatsDashboard).mockResolvedValue({ ...WITH_FILTER, filter_spec: null });
-    renderBar('/browse?tab=stats&dashboard=d-filter&cat=byt', [B]);
-    const dialog = await openUpdate();
-    fireEvent.click(box(dialog));
-    submit(dialog);
-    await waitFor(() => expect(updateStatsDashboard).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(updateStatsDashboard).mock.calls[0][1]).toEqual({
-      name: 'Domy',
-      color: null,
-      charts: [B],
-      show_small: false,
-      filter_spec: null,
-    });
   });
 
   it('marks a sort-only change dirty, as a preset does, and saves the current sort', async () => {
@@ -523,7 +519,7 @@ describe('<DashboardBar> saving', () => {
     loaded.set('sort', 'price_czk');
     renderBar(`/browse?${loaded}`, [B]);
     expect(await chip('Domy')).toHaveAccessibleDescription(EDITED);
-    submit(await openUpdate());
+    await saveChanges('Domy');
     await waitFor(() => expect(updateStatsDashboard).toHaveBeenCalledTimes(1));
     const [, patch] = vi.mocked(updateStatsDashboard).mock.calls[0];
     expect(patch.charts).toEqual([B]);
@@ -536,18 +532,6 @@ describe('<DashboardBar> saving', () => {
     renderBar('/browse?tab=stats&dashboard=d-own&sort=price_czk', [A]);
     expect(await chip('Ceny')).not.toHaveAccessibleDescription(EDITED);
     expect(screen.queryByRole('button', { name: 'Uložit změny' })).toBeNull();
-  });
-
-  it('adds the current filter to a dashboard without one when the box is ticked', async () => {
-    loadedBefore('d-own');
-    vi.mocked(updateStatsDashboard).mockResolvedValue(OWN);
-    renderBar('/browse?tab=stats&dashboard=d-own&cat=dum', [A, B]);
-    const dialog = await openUpdate();
-    fireEvent.click(box(dialog));
-    submit(dialog);
-    await waitFor(() => expect(updateStatsDashboard).toHaveBeenCalledTimes(1));
-    const [, patch] = vi.mocked(updateStatsDashboard).mock.calls[0];
-    expect(patch.filter_spec?.filters.categoryMain).toEqual(['dum']);
   });
 
   it('saves the working charts as a new dashboard without the filter, and selects it', async () => {
