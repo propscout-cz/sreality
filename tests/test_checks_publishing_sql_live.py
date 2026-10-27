@@ -21,7 +21,8 @@ the check sends, then the cells it feeds. The rules pinned:
   CHANGED or FAILURE row; a presence check counts in neither.
 - photo tags: a photo stored since the latest of a day ago, the clip row's runner join and the end of its last pause,
   and over 45 min ago, is late when CLIP tagged it over 45 min after storage or not yet; tagged means stamped AND
-  vectored by the taxonomy's model.
+  vectored by the taxonomy's model, read with bound values and one keyed vector probe a photo (never a join over
+  image_clip_embeddings, which prod planned as a read of its whole key).
 
 Runs in CI's migrations lane (`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED=1`); skipped locally.
 """
@@ -396,6 +397,14 @@ def _stored(conn: Any, listing_id: int, sequence: int, stored: _dt.timedelta, *,
     return image
 
 
+def _cohort(conn: Any, since: _dt.datetime) -> tuple[Any, ...]:
+    """The cohort statement as the cell sends it, over photos stored since `since`."""
+    newest = conn.execute("select max(id) from images").fetchone()[0]
+    return conn.execute(pub._TAG_COHORT_SQL, {
+        "model": pub._CLIP_MODEL, "min_id": newest - pub._TAG_ID_WINDOW, "since": since,
+        "late_min": int(THRESHOLDS["publishing_tag_late_min"])}).fetchone()
+
+
 def test_a_photo_is_tagged_only_once_stamped_and_vectored_and_only_since_clip_joined_the_runner(conn: Any) -> None:
     """The cohort is stored since the later of a day ago and the clip row's join, and over 45 min ago; an untagged
     photo ages to now(); a stamp with no vector of the model (none, or another model's) is late and counted apart."""
@@ -413,13 +422,11 @@ def test_a_photo_is_tagged_only_once_stamped_and_vectored_and_only_since_clip_jo
     conn.execute("insert into images (listing_id, sreality_url, sequence, last_download_attempt_at) "
                  "values (%s, %s, 8, now() - interval '2 hours')", (ad, _url(ad, 8)))   # not stored
 
-    params = {"job": pub._TAG_JOB, "runner": pub._TAG_RUNNER, "model": model, "id_window": pub._TAG_ID_WINDOW,
-              "window_h": pub._TAG_WINDOW_H, "late_min": int(THRESHOLDS["publishing_tag_late_min"])}
-    row = conn.execute(pub._TAGS_SQL, params).fetchone()
-    assert row[4:8] == (5, 4, 1, 2), "photos, late, waiting, stamped_no_vector"
-    assert [round(float(v), 1) for v in row[8:11]] == [120.0, 120.0, 120.0]
-
     now = db_now(conn)
+    row = _cohort(conn, now - 3 * _H)
+    assert row[:4] == (5, 4, 1, 2), "photos, late, waiting, stamped_no_vector"
+    assert [round(float(v), 1) for v in row[4:7]] == [120.0, 120.0, 120.0]
+
     c = pub._photo_tags_cell(conn, {**THRESHOLDS, "publishing_tag_min_n": 5}, now)
     assert c["status"] == "fail" and c["facts"]["registry_at"] == iso(now - 3 * _H)
     assert {k: c["facts"][k] for k in ("photos", "late", "waiting", "stamped_no_vector", "oldest_waiting_stored_at",
@@ -440,12 +447,10 @@ def test_photos_stored_before_a_lifted_pause_ended_are_out_of_the_cohort(conn: A
         _stored(conn, ad, sequence, 150 * _MIN)                                   # under the pause, still waiting
     for sequence in range(3, 8):
         _stored(conn, ad, sequence, 90 * _MIN, tagged=10 * _MIN, vector=model)    # since the lift, on time
-    params = {"job": pub._TAG_JOB, "runner": pub._TAG_RUNNER, "model": model, "id_window": pub._TAG_ID_WINDOW,
-              "window_h": pub._TAG_WINDOW_H, "late_min": int(THRESHOLDS["publishing_tag_late_min"])}
-    assert conn.execute(pub._TAGS_SQL, params).fetchone()[4:8] == (5, 0, 0, 0), "photos, late, waiting, unvectored"
     now = db_now(conn)
+    assert _cohort(conn, now - 2 * _H)[:4] == (5, 0, 0, 0), "photos, late, waiting, unvectored"
     c = pub._photo_tags_cell(conn, {**THRESHOLDS, "publishing_tag_min_n": 5}, now)
-    assert c["status"] == "ok"
+    assert c["status"] == "ok" and c["facts"]["photos"] == 5
     assert (c["facts"]["window_from"], c["facts"]["pause_ended_at"]) == (iso(now - 2 * _H), iso(now - 2 * _H))
 
 
@@ -453,11 +458,35 @@ def test_the_tag_line_reads_no_clip_row_retired_or_off_the_runner(conn: Any) -> 
     """Not measured until a live runner row names clip: never judged on GitHub's era."""
     _clip_joined(conn, 3 * _H)
     _stored(conn, _ad(conn, "bazos"), 0, 2 * _H)
-    params = {"job": pub._TAG_JOB, "runner": pub._TAG_RUNNER, "model": pub._CLIP_MODEL,
-              "id_window": pub._TAG_ID_WINDOW, "window_h": pub._TAG_WINDOW_H, "late_min": 45}
+    params = {"job": pub._TAG_JOB, "runner": pub._TAG_RUNNER}
+    assert conn.execute(pub._TAG_JOB_SQL, params).fetchone()[4] == conn.execute(
+        "select max(id) from images").fetchone()[0]
     for off in ("update scheduled_jobs set retired_at = now() where job_name = 'clip'",
                 "update scheduled_jobs set retired_at = null, runner = 'github-actions' where job_name = 'clip'"):
         conn.execute(off)
-        assert conn.execute(pub._TAGS_SQL, params).fetchone()[:5] == (None, None, None, None, 0)
+        assert conn.execute(pub._TAG_JOB_SQL, params).fetchone() is None
     cell = pub._photo_tags_cell(conn, THRESHOLDS, db_now(conn))
     assert (cell["status"], cell["message"]) == ("unknown", "Not measured: clip is not on the job runner")
+
+
+def _plan_nodes(node: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    yield node
+    for child in node.get("Plans", ()):
+        yield from _plan_nodes(child)
+
+
+def test_the_cohort_probes_each_photos_vector_by_its_key_and_never_joins_the_whole_embeddings_table(
+        conn: Any) -> None:
+    """Prod, 2026-10-27: a join over image_clip_embeddings was planned as a merge join reading its whole key (15.4M
+    rows, 6.5 s; it grows ~75k a day) in the check's last cell, where a timeout blanks every publishing cell. With hash
+    and merge joins the planner's only cheap choice, the statement still plans one keyed probe a photo."""
+    conn.execute("set local enable_nestloop = off")
+    plan = conn.execute("explain (format json) " + pub._TAG_COHORT_SQL, {
+        "model": pub._CLIP_MODEL, "min_id": 300_000_000, "since": db_now(conn) - 24 * _H,
+        "late_min": 45}).fetchone()[0][0]["Plan"]
+    nodes = list(_plan_nodes(plan))
+    for join in (n for n in nodes if n["Node Type"] in ("Hash Join", "Merge Join")):
+        below = {n.get("Relation Name") for n in _plan_nodes(join)}
+        assert "image_clip_embeddings" not in below, f"a {join['Node Type']} over image_clip_embeddings"
+    probes = [n for n in nodes if n.get("Relation Name") == "image_clip_embeddings"]
+    assert probes and all("i.id" in (p.get("Index Cond", "") + p.get("Filter", "")) for p in probes), probes

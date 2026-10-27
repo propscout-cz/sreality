@@ -57,11 +57,13 @@ def _tags(*, images: int = 1_000, late: int = 20, waiting: int = 12, unvectored:
           registry_at: _dt.datetime | None = _NOW - _dt.timedelta(days=3),
           paused_until: _dt.datetime | None = None, paused_by: str | None = None,
           pause_note: str | None = None, p50: float | None = 8.04, p90: float | None = 13.1,
-          p99: float | None = 31.0,
-          oldest: _dt.datetime | None = _NOW - _dt.timedelta(minutes=52)) -> list[tuple[Any, ...]]:
-    """_TAGS_SQL's one row: the clip row's join and pause, then its photos stored 45 min-24 h."""
-    return [(registry_at, paused_until, paused_by, pause_note, images, late, waiting, unvectored,
-             p50, p90, p99, oldest)]
+          p99: float | None = 31.0, newest_id: int | None = 309_000_000,
+          oldest: _dt.datetime | None = _NOW - _dt.timedelta(minutes=52)) -> dict[str, list[tuple[Any, ...]]]:
+    """The two tag statements' rows: the clip row's join and pause with the newest image id (none: no live runner
+    row), then its photos stored 45 min-24 h."""
+    job = [] if registry_at is None else [(registry_at, paused_until, paused_by, pause_note, newest_id)]
+    return {"_TAG_JOB_SQL": job,
+            "_TAG_COHORT_SQL": [(images, late, waiting, unvectored, p50, p90, p99, oldest)]}
 
 
 def _healthy() -> dict[str, Any]:
@@ -72,7 +74,7 @@ def _healthy() -> dict[str, Any]:
         pub._STOCK_SQL: [*((p, 50_000, 0, 0, 0, 0) for p in PORTALS), (None, 362_000, 0, 0, 0, 0)],
         pub._PHOTOS_SQL: [_photo(p) for p in PORTALS],
         pub._DIRTY_SQL: [(0, None)],
-        pub._TAGS_SQL: _tags(),
+        **{getattr(pub, name): rows for name, rows in _tags().items()},
     }
 
 
@@ -377,7 +379,7 @@ def test_an_empty_dirty_queue_reads_ok() -> None:
 
 
 def _tag_cell(**over: Any) -> dict[str, Any]:
-    return _cells(_check(_TAGS_SQL=_tags(**over))[0])["fleet/photo_tags"]
+    return _cells(_check(**_tags(**over))[0])["fleet/photo_tags"]
 
 
 @pytest.mark.parametrize("late, status", [(20, "ok"), (70, "warn"), (150, "fail")])
@@ -468,18 +470,35 @@ def test_a_photo_is_tagged_only_once_stamped_and_vectored_by_the_taxonomys_model
     from scraper import jobs
     from scraper.clip_tagger import load_taxonomy
 
-    flat = " ".join(pub._TAGS_SQL.split())
-    assert "left join image_clip_embeddings e on e.image_id = i.id and e.model = %(model)s" in flat
-    assert "case when e.image_id is not null then i.clip_tagged_at end" in flat
-    assert ("greatest(now() - make_interval(hours => %(window_h)s::int), j.registry_at, case when j.paused_until "
-            "<= now() then j.paused_until end)") in flat
-    assert "registry_at is not null and retired_at is null" in flat
+    flat = " ".join(pub._TAG_COHORT_SQL.split())
+    assert ("left join lateral (select true as vectored from image_clip_embeddings e where e.image_id = i.id and "
+            "e.model = %(model)s limit 1) e on true") in flat
+    assert "case when e.vectored then i.clip_tagged_at end" in flat
+    assert "registry_at is not null and retired_at is null" in " ".join(pub._TAG_JOB_SQL.split())
     _, conn = _check()
-    params = _params(conn, pub._TAGS_SQL)
-    assert params["model"] == load_taxonomy()["model"]
-    assert params["runner"] == jobs.RUNNER
-    assert params["job"] in {j.name for j in jobs.runner_jobs()}
-    assert (params["window_h"], params["late_min"]) == (24, 45)
+    job, cohort = _params(conn, pub._TAG_JOB_SQL), _params(conn, pub._TAG_COHORT_SQL)
+    assert cohort["model"] == load_taxonomy()["model"]
+    assert job["runner"] == jobs.RUNNER
+    assert job["job"] in {j.name for j in jobs.runner_jobs()}
+    assert cohort["late_min"] == 45
+
+
+def test_the_cohorts_bounds_are_values_bound_from_the_clip_row_never_read_inside_the_cohort() -> None:
+    """Prod, 2026-10-27: with the id floor an InitPlan and the clip row's bounds a join filter, the planner merge-joined
+    the whole image_clip_embeddings key (15.4M rows, 6.5 s) in the check's last cell. The floor is the newest id less
+    the window, `since` the cell's window_from, and no clip row sends no cohort read."""
+    ended = _NOW - _dt.timedelta(hours=2)
+    out, conn = _check(**_tags(paused_until=ended, paused_by="operator", pause_note="AC2 passed"))
+    cohort = _params(conn, pub._TAG_COHORT_SQL)
+    assert (cohort["min_id"], cohort["since"]) == (309_000_000 - pub._TAG_ID_WINDOW, ended)
+    assert _cells(out)["fleet/photo_tags"]["facts"]["window_from"] == ended.isoformat()
+    flat = " ".join(pub._TAG_COHORT_SQL.split())
+    assert "i.id > %(min_id)s::bigint" in flat and "i.last_download_attempt_at >= %(since)s::timestamptz" in flat
+    assert "scheduled_jobs" not in flat and "max(id)" not in flat
+    _, conn = _check(**_tags(registry_at=None))
+    assert [sql for sql, _, _ in conn.sent if sql == pub._TAG_COHORT_SQL] == []
+    _, conn = _check(**_tags(newest_id=None))
+    assert _params(conn, pub._TAG_COHORT_SQL)["min_id"] is None
 
 
 # --- rails -------------------------------------------------------------------------------------

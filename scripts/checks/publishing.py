@@ -181,44 +181,44 @@ _TAG_WINDOW_H = 24
 # photo stored today.
 _TAG_ID_WINDOW = 2_000_000
 
-# A photo stored (storage_path set; last_download_attempt_at is stamped with it) since the latest of
-# a day ago, the clip row's runner join (never GitHub's era) and the end of its last pause (photos
-# stored under a pause waited by design: the lift must open no incident), and more than the line
-# ago. It is tagged once stamped AND vectored: a stamp with no vector (a terminal mark, an
-# undecodable photo) is late for ever, and an untagged one ages to now(). greatest() skips NULL.
-_TAGS_SQL = """
-with job as (
-    select registry_at, paused_until, paused_by, pause_note
-      from scheduled_jobs
-     where job_name = %(job)s and runner = %(runner)s
-       and registry_at is not null and retired_at is null),
-cohort as (
+# The clip row on the runner and the newest image id, read first: the cohort's bounds are then values, so its read is
+# a primary-key range with one keyed vector probe a photo. With the id floor an InitPlan and the row's bounds a join
+# filter, prod planned a merge join over the whole image_clip_embeddings key (15.4M rows, 6.5 s, 2026-10-27).
+_TAG_JOB_SQL = """
+select registry_at, paused_until, paused_by, pause_note, (select max(id) from images)
+  from scheduled_jobs
+ where job_name = %(job)s and runner = %(runner)s
+   and registry_at is not null and retired_at is null
+"""
+
+# A photo stored (storage_path set; last_download_attempt_at is stamped with it) since `since` and more than the line
+# ago. It is tagged once stamped AND vectored: a stamp with no vector (a terminal mark, an undecodable photo) is late
+# for ever, and an untagged one ages to now(). The LIMIT keeps the probe a per-photo lookup the planner cannot fold
+# into a join.
+_TAG_COHORT_SQL = """
+with cohort as (
     select i.last_download_attempt_at as stored_at, i.clip_tagged_at is null as waiting,
-           i.clip_tagged_at is not null and e.image_id is null as stamped_no_vector,
-           extract(epoch from coalesce(case when e.image_id is not null then i.clip_tagged_at end,
+           i.clip_tagged_at is not null and e.vectored is null as stamped_no_vector,
+           extract(epoch from coalesce(case when e.vectored then i.clip_tagged_at end,
                                        now()) - i.last_download_attempt_at) / 60.0 as lag_min
-      from job j
-      join images i
-        on i.id > (select max(id) from images) - %(id_window)s::bigint
+      from images i
+      left join lateral (select true as vectored
+                           from image_clip_embeddings e
+                          where e.image_id = i.id and e.model = %(model)s
+                          limit 1) e on true
+     where i.id > %(min_id)s::bigint
        and i.storage_path is not null
-       and i.last_download_attempt_at >= greatest(now() - make_interval(hours => %(window_h)s::int),
-                                                  j.registry_at,
-                                                  case when j.paused_until <= now() then j.paused_until end)
-       and i.last_download_attempt_at < now() - make_interval(mins => %(late_min)s::int)
-      left join image_clip_embeddings e on e.image_id = i.id and e.model = %(model)s)
-select j.registry_at, j.paused_until, j.paused_by, j.pause_note,
-       a.photos, a.late, a.waiting, a.stamped_no_vector, a.p50_min, a.p90_min, a.p99_min,
-       a.oldest_waiting
-  from (select count(*) as photos,
-               count(*) filter (where lag_min > %(late_min)s::int) as late,
-               count(*) filter (where waiting) as waiting,
-               count(*) filter (where stamped_no_vector) as stamped_no_vector,
-               percentile_cont(0.5) within group (order by lag_min) as p50_min,
-               percentile_cont(0.9) within group (order by lag_min) as p90_min,
-               percentile_cont(0.99) within group (order by lag_min) as p99_min,
-               min(stored_at) filter (where waiting) as oldest_waiting
-          from cohort) a
-  left join job j on true
+       and i.last_download_attempt_at >= %(since)s::timestamptz
+       and i.last_download_attempt_at < now() - make_interval(mins => %(late_min)s::int))
+select count(*) as photos,
+       count(*) filter (where lag_min > %(late_min)s::int) as late,
+       count(*) filter (where waiting) as waiting,
+       count(*) filter (where stamped_no_vector) as stamped_no_vector,
+       percentile_cont(0.5) within group (order by lag_min) as p50_min,
+       percentile_cont(0.9) within group (order by lag_min) as p90_min,
+       percentile_cont(0.99) within group (order by lag_min) as p99_min,
+       min(stored_at) filter (where waiting) as oldest_waiting
+  from cohort
 """
 
 
@@ -451,24 +451,25 @@ def _minutes(value: Any) -> float | None:
 def _photo_tags_cell(conn: Any, thresholds: dict[str, Any], at: _dt.datetime) -> dict[str, Any]:
     """The share of stored photos CLIP tagged past the line, or not yet; at most Watch if paused."""
     late_min = int(thresholds["publishing_tag_late_min"])
-    params = {"job": _TAG_JOB, "runner": _TAG_RUNNER, "model": _CLIP_MODEL,
-              "id_window": _TAG_ID_WINDOW, "window_h": _TAG_WINDOW_H, "late_min": late_min}
-    row = fetchone(conn, _TAGS_SQL, params) or (None,) * 12
-    registry_at, paused_until = as_utc(row[0]), as_utc(row[1])
-    paused_by, pause_note = row[2], row[3]
-    photos, late, waiting, unvectored = (int(v or 0) for v in row[4:8])
-    p50, p90, p99 = (_minutes(v) for v in row[8:11])
-    oldest = as_utc(row[11])
     subject = "fleet/photo_tags"
-    if registry_at is None:
+    job = fetchone(conn, _TAG_JOB_SQL, {"job": _TAG_JOB, "runner": _TAG_RUNNER})
+    if job is None:
         return cell(subject, "unknown", f"Not measured: {_TAG_JOB} is not on the job runner",
                     unit="%")
+    registry_at, paused_until = as_utc(job[0]), as_utc(job[1])
+    paused_by, pause_note, newest = job[2], job[3], job[4]
     day_back = at - _dt.timedelta(hours=_TAG_WINDOW_H)
     # A deliberate pause (the AC2 hold, a rollback brake) is finite and signed (migration 675): it
     # must open no incident, so it caps the cell at Watch, and once it ends the cohort starts afresh.
     paused = paused_until is not None and paused_until > at
     ended = paused_until if paused_until is not None and not paused else None
     since = max(t for t in (day_back, registry_at, ended) if t is not None)
+    params = {"model": _CLIP_MODEL, "since": since, "late_min": late_min,
+              "min_id": None if newest is None else int(newest) - _TAG_ID_WINDOW}
+    row = fetchone(conn, _TAG_COHORT_SQL, params) or (0, 0, 0, 0, None, None, None, None)
+    photos, late, waiting, unvectored = (int(v or 0) for v in row[:4])
+    p50, p90, p99 = (_minutes(v) for v in row[4:7])
+    oldest = as_utc(row[7])
     facts: dict[str, Any] = {
         "photos": photos, "late": late, "p50_min": p50, "p90_min": p90, "p99_min": p99,
         "waiting": waiting, "stamped_no_vector": unvectored,
