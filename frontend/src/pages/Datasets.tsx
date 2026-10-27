@@ -426,10 +426,7 @@ export default function Datasets() {
     <div className="px-6 py-8 max-w-6xl mx-auto text-[var(--color-ink)]">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="text-xs tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-            ceny nemovitostí
-          </p>
-          <h1 className="mt-1 text-2xl font-[family-name:var(--font-display)]">Datasets</h1>
+          <h1 className="text-2xl font-[family-name:var(--font-display)]">Datasets</h1>
           <p className="mt-1 text-sm text-[var(--color-ink-3)]">
             Rent &amp; sale-price growth and gross yield per municipality, for a chosen window.
           </p>

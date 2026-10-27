@@ -132,11 +132,8 @@ function Header() {
   return (
     <header className="flex items-end justify-between gap-6">
       <div>
-        <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-          Estimations
-        </p>
         <h1
-          className="mt-1.5 text-[2.1rem] leading-tight"
+          className="text-[2.1rem] leading-tight"
           style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
         >
           Past runs

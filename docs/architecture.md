@@ -5214,7 +5214,8 @@ the cron command** — migration 371's rule, or the refresh would silently die a
 default. Rule 25's deletion parity did not apply: it was an operator-requested review surface with
 a stated end. While it was live it led the TOP-LEVEL nav as `!AUDIT POLOH` (admin-only, first entry,
 badged with the unfiltered row count), not buried in the NEW DEDUP dropdown, because it was a
-decision waiting on the operator.
+decision waiting on the operator. Since 2026-10-27 (redesign ruling P33) it is the first item of the
+Admin menu, with its count on the Admin trigger.
 **The map's container carries an inline `position/inset/size` style and that is NOT redundant with
 Tailwind's `absolute inset-0`**: `globals.css` imports `maplibre-gl.css` AFTER `tailwindcss`, so the
 `.maplibregl-map` class MapLibre stamps onto the container at init wins the cascade with its own
