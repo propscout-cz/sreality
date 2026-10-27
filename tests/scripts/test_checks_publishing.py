@@ -439,6 +439,18 @@ def test_a_paused_clip_job_reads_watch_at_most_and_names_who_paused_it_and_why()
     assert lapsed["status"] == "fail" and not lapsed["message"].startswith("paused")
 
 
+def test_after_a_pause_ends_the_cohort_starts_at_its_end() -> None:
+    """Photos stored while clip was paused are late by construction: the lift (the AC2 pass, a brake's end) must not
+    turn them into a Problem, so the cohort starts afresh when the pause ended."""
+    ended = _NOW - _dt.timedelta(hours=2)
+    c = _tag_cell(paused_until=ended, paused_by="operator", pause_note="AC2 passed")
+    assert (c["facts"]["window_from"], c["facts"]["pause_ended_at"]) == (ended.isoformat(), ended.isoformat())
+    assert c["facts"]["paused_until"] is None and not c["message"].startswith("paused")
+    assert "20 of 1,000 photos stored over 45 min ago since clip's pause ended 2.0 h ago were tagged" in c["message"]
+    old = _tag_cell(paused_until=_NOW - _dt.timedelta(days=2), paused_by="operator", pause_note="AC2 passed")
+    assert old["facts"]["window_from"] == (_NOW - _dt.timedelta(hours=24)).isoformat(), "a day-old end loses"
+
+
 def test_the_tag_facts_carry_the_percentiles_the_waiting_and_the_stamped_without_a_vector() -> None:
     oldest = _NOW - _dt.timedelta(hours=3, minutes=6)
     c = _tag_cell(late=70, waiting=48, unvectored=3, p50=9.04, p90=51.96, p99=184.0, oldest=oldest)
@@ -459,7 +471,8 @@ def test_a_photo_is_tagged_only_once_stamped_and_vectored_by_the_taxonomys_model
     flat = " ".join(pub._TAGS_SQL.split())
     assert "left join image_clip_embeddings e on e.image_id = i.id and e.model = %(model)s" in flat
     assert "case when e.image_id is not null then i.clip_tagged_at end" in flat
-    assert "greatest(now() - make_interval(hours => %(window_h)s::int), j.registry_at)" in flat
+    assert ("greatest(now() - make_interval(hours => %(window_h)s::int), j.registry_at, case when j.paused_until "
+            "<= now() then j.paused_until end)") in flat
     assert "registry_at is not null and retired_at is null" in flat
     _, conn = _check()
     params = _params(conn, pub._TAGS_SQL)

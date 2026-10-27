@@ -19,8 +19,9 @@ the check sends, then the cells it feeds. The rules pinned:
   narrow is a stored width under 600 px (no width is unmeasured), and the top reason drops the URL.
 - ingest: the oldest NEW row not given up, claimed or not, whose ad this portal does not hold; changes: the oldest
   CHANGED or FAILURE row; a presence check counts in neither.
-- photo tags: a photo stored since the later of a day ago and the clip row's runner join, and over 45 min ago, is late
-  when CLIP tagged it over 45 min after storage or not yet; tagged means stamped AND vectored by the taxonomy's model.
+- photo tags: a photo stored since the latest of a day ago, the clip row's runner join and the end of its last pause,
+  and over 45 min ago, is late when CLIP tagged it over 45 min after storage or not yet; tagged means stamped AND
+  vectored by the taxonomy's model.
 
 Runs in CI's migrations lane (`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED=1`); skipped locally.
 """
@@ -425,6 +426,27 @@ def test_a_photo_is_tagged_only_once_stamped_and_vectored_and_only_since_clip_jo
                                        "window_from")} == {
         "photos": 5, "late": 4, "waiting": 1, "stamped_no_vector": 2, "oldest_waiting_stored_at": iso(now - 2 * _H),
         "window_from": iso(now - 3 * _H)}
+
+
+def test_photos_stored_before_a_lifted_pause_ended_are_out_of_the_cohort(conn: Any) -> None:
+    """The AC2 hold or a brake lifted 2 h ago: the photos stored under it waited by design and are never judged, so
+    the lift opens no incident; the photos stored since are."""
+    _clip_joined(conn, 3 * _H)
+    conn.execute("update scheduled_jobs set paused_until = now() - interval '2 hours', paused_by = 'operator', "
+                 "pause_note = 'AC2 passed' where job_name = %s", (pub._TAG_JOB,))
+    ad = _ad(conn, "bazos")
+    model = pub._CLIP_MODEL
+    for sequence in range(3):
+        _stored(conn, ad, sequence, 150 * _MIN)                                   # under the pause, still waiting
+    for sequence in range(3, 8):
+        _stored(conn, ad, sequence, 90 * _MIN, tagged=10 * _MIN, vector=model)    # since the lift, on time
+    params = {"job": pub._TAG_JOB, "runner": pub._TAG_RUNNER, "model": model, "id_window": pub._TAG_ID_WINDOW,
+              "window_h": pub._TAG_WINDOW_H, "late_min": int(THRESHOLDS["publishing_tag_late_min"])}
+    assert conn.execute(pub._TAGS_SQL, params).fetchone()[4:8] == (5, 0, 0, 0), "photos, late, waiting, unvectored"
+    now = db_now(conn)
+    c = pub._photo_tags_cell(conn, {**THRESHOLDS, "publishing_tag_min_n": 5}, now)
+    assert c["status"] == "ok"
+    assert (c["facts"]["window_from"], c["facts"]["pause_ended_at"]) == (iso(now - 2 * _H), iso(now - 2 * _H))
 
 
 def test_the_tag_line_reads_no_clip_row_retired_or_off_the_runner(conn: Any) -> None:

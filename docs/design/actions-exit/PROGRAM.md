@@ -326,7 +326,7 @@ that fails alone while a sibling embeds is marked terminal (at most 2 a chunk, 5
 with the same model load (`retag_from_embeddings` is a library now). The runner image pins transformers,
 Pillow and numpy in `data/requirements-clip-runner.txt`, asserted by the offline proof, and `CI: runner image`'s
 `api-image` job proves the API image clip-free. Health's `fleet/photo_tags` judges the 45-min line (tagged =
-stamped and vectored; Watch at most while `clip` is paused). `--verify-reembed` (`scripts/clip_reembed.py`)
+stamped and vectored; Watch at most while `clip` is paused, then judged on the photos stored since the pause ended). `--verify-reembed` (`scripts/clip_reembed.py`)
 re-embeds a frozen 100-image sample read-only; it runs while `clip` is paused "AC2 pending" from its
 registration, and the pause lifts on a pass. No hold for a GitHub run in flight (both writers are idempotent and
 stamp last), and no migration.

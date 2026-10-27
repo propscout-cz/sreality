@@ -181,10 +181,11 @@ _TAG_WINDOW_H = 24
 # photo stored today.
 _TAG_ID_WINDOW = 2_000_000
 
-# A photo stored (storage_path set; last_download_attempt_at is stamped with it) since the later of
-# a day ago and the clip row's runner join, never in GitHub's era, and more than the line ago. It
-# is tagged once stamped AND vectored: a stamp with no vector (a terminal mark, an undecodable
-# photo) is late for ever, and an untagged one ages to now().
+# A photo stored (storage_path set; last_download_attempt_at is stamped with it) since the latest of
+# a day ago, the clip row's runner join (never GitHub's era) and the end of its last pause (photos
+# stored under a pause waited by design: the lift must open no incident), and more than the line
+# ago. It is tagged once stamped AND vectored: a stamp with no vector (a terminal mark, an
+# undecodable photo) is late for ever, and an untagged one ages to now(). greatest() skips NULL.
 _TAGS_SQL = """
 with job as (
     select registry_at, paused_until, paused_by, pause_note
@@ -201,7 +202,8 @@ cohort as (
         on i.id > (select max(id) from images) - %(id_window)s::bigint
        and i.storage_path is not null
        and i.last_download_attempt_at >= greatest(now() - make_interval(hours => %(window_h)s::int),
-                                                  j.registry_at)
+                                                  j.registry_at,
+                                                  case when j.paused_until <= now() then j.paused_until end)
        and i.last_download_attempt_at < now() - make_interval(mins => %(late_min)s::int)
       left join image_clip_embeddings e on e.image_id = i.id and e.model = %(model)s)
 select j.registry_at, j.paused_until, j.paused_by, j.pause_note,
@@ -462,18 +464,23 @@ def _photo_tags_cell(conn: Any, thresholds: dict[str, Any], at: _dt.datetime) ->
         return cell(subject, "unknown", f"Not measured: {_TAG_JOB} is not on the job runner",
                     unit="%")
     day_back = at - _dt.timedelta(hours=_TAG_WINDOW_H)
-    since = max(day_back, registry_at)
     # A deliberate pause (the AC2 hold, a rollback brake) is finite and signed (migration 675): it
-    # must open no incident, so it caps the cell at Watch.
+    # must open no incident, so it caps the cell at Watch, and once it ends the cohort starts afresh.
     paused = paused_until is not None and paused_until > at
+    ended = paused_until if paused_until is not None and not paused else None
+    since = max(t for t in (day_back, registry_at, ended) if t is not None)
     facts: dict[str, Any] = {
         "photos": photos, "late": late, "p50_min": p50, "p90_min": p90, "p99_min": p99,
         "waiting": waiting, "stamped_no_vector": unvectored,
         "oldest_waiting_stored_at": iso(oldest), "window_from": iso(since),
         "registry_at": iso(registry_at), "paused_until": iso(paused_until) if paused else None,
-        "paused_by": paused_by if paused else None, "pause_note": pause_note if paused else None}
+        "paused_by": paused_by if paused else None, "pause_note": pause_note if paused else None,
+        "pause_ended_at": iso(ended)}
     if since == day_back:
         cohort = f"photos stored over {late_min} min and under {ago(_TAG_WINDOW_H * 3600)} ago"
+    elif since == ended:
+        cohort = (f"photos stored over {late_min} min ago since {_TAG_JOB}'s pause ended "
+                  f"{ago((at - since).total_seconds())} ago")
     else:
         cohort = (f"photos stored over {late_min} min ago since {_TAG_JOB} joined the job runner "
                   f"{ago((at - since).total_seconds())} ago")
