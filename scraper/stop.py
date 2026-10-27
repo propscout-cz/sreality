@@ -19,7 +19,8 @@ from types import FrameType
 LOG = logging.getLogger(__name__)
 
 EVENT = threading.Event()
-# 128 + SIGTERM: what a shell reports for a process the stop signal ended, and what the job runner reads as interrupted.
+# 128 + SIGTERM: what a shell reports for a process the stop signal ended. The job runner reads it as interrupted, or as
+# timeout when the stop was its own at the job's timeout_s (an interrupted run is due again at once).
 EXIT_CODE = 143
 _installed = False
 _main_thread_in_request = False
@@ -58,11 +59,12 @@ def interruptible() -> Iterator[None]:
         _main_thread_in_request = False
 
 
-def install() -> None:
-    """SIGTERM and SIGINT set the event. Main thread only: Python installs signal handlers nowhere else."""
+def install(*, hangup: bool = False) -> None:
+    """SIGTERM and SIGINT set the event; with `hangup`, SIGHUP and SIGQUIT too (a foreground `job_runner once`, whose
+    child in its own session would outlive a closed terminal). Main thread only: no other thread can install them."""
     global _installed
     if threading.current_thread() is threading.main_thread():
-        for sig in (signal.SIGTERM, signal.SIGINT):
+        for sig in (signal.SIGTERM, signal.SIGINT, *((signal.SIGHUP, signal.SIGQUIT) if hangup else ())):
             signal.signal(sig, _on_signal)
         _installed = True
 

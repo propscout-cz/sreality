@@ -558,6 +558,8 @@ class SrealityPortal(portal_runner.PortalDefaults):
 
     source = "sreality"
     price_change_min_pct = 0.0  # instance reads from config (portal_factory)
+    walk_every_s = 3600  # PROGRAM R24: hourly once on the job runner
+    walk_timeout_s = 40 * 60
     index_rate = DEFAULT_DETAIL_RATE  # baked floor; instance reads from config
     shared_rate_limiter = False  # instance reads from config (portal_factory)
 

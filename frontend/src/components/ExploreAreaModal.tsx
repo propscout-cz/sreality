@@ -130,6 +130,7 @@ function ExploreAreaModal({
     overlay: view.overlay,
     activeDashboardId: view.activeDashboardId,
     statsMarket: view.statsMarket,
+    statsSmall: view.statsSmall,
   });
 
   return (

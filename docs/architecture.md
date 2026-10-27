@@ -582,7 +582,7 @@ contract; migration 109 is the anti-pattern — never an optional filter paramet
 `price_per_m2` + `price_per_m2_basis`. The fetch LEDGER gets no view at all: a cell is fetched only
 where some account holds a live deal-pipeline card, so the set of fetched cells is a projection of
 tenant state, not market data — `sold_transaction_fetches` is registered in
-`tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS`. Its one reader is
+`tests/_admin_gate_registry.py::ADMIN_ONLY_RELATIONS`. Its one reader is
 `sold_coverage(p_lat, p_lng)`, SECURITY DEFINER and scoped to the MUNICIPALITY containing the point,
 resolved through the same `admin_boundaries` obec polygon W2 builds the cell from: the cell is that
 polygon's envelope expanded by 5 km, so overlapping boxes would otherwise answer with whichever town
@@ -684,11 +684,11 @@ rules. Identify which one a task belongs to before you start.
   sign-in, so whatever it held proved only "loaded the SPA"). Every API call sends the session JWT
   (see "One credential" below); a `require_token` route still returns no identity, admin or
   account-scoped data — those sit behind `verify_jwt` / `require_admin` / `tenant_conn`.
-  At least these still break it, running service-role behind `require_token`
-  alone with no account predicate: `/buildings*` (`building_runs` has tenant RLS since
-  migration 291; the other, `POST /notifications/dispatches/{id}/estimate`, was deleted
-  2026-10-21 in notifications W1) — owed as `roadmap/public-release-track.md` item 11, an
-  open list. The estimation trace payload and both `/feedback` routes moved onto the tenant
+  `/buildings*` ran service-role behind `require_token` alone with no account predicate
+  until agent platform M0 (2026-10-26) made every building route `require_admin` (its rows, SYSTEM-stamped,
+  stay readable through PostgREST's SYSTEM read arm: owed, item 11); the other,
+  `POST /notifications/dispatches/{id}/estimate`, was deleted 2026-10-21 in notifications W1
+  (`roadmap/public-release-track.md` item 11, an open list). The estimation trace payload and both `/feedback` routes moved onto the tenant
   pool 2026-10-02; the feedback POST's refiner is admin-only (the `database` skill's
   `references/tenancy.md`, named exception); `/filter-presets*` followed 2026-10-12 (per
   account, migration 595); `PUT /stats/dashboard` was born there (migration 626).
@@ -711,8 +711,8 @@ rules. Identify which one a task belongs to before you start.
   `is_platform_admin()`; the admin-gated Health/ops RPCs (`health_summary`,
   `scraper_health_checks`, `recent_scrape_runs`, …; migrations 318/332/340) went in migration
   643. A new RPC is INVOKER by default; a DEFINER one that reads admin-only
-  data embeds the admin gate or carries a `-- ci-allow-ungated:` reason
-  (`tests/test_migration_rls_grants.py`, rule 5). Anything else private goes through the
+  data embeds the admin gate or is registered ungated, with its guard and reason, in
+  `tests/_admin_gate_registry.py` (read by both admin-gate lanes). Anything else private goes through the
   FastAPI service.
 - **Every PostgREST read is one of three shapes** (the 2026-08 cap-drift audit): a
   *keyed* read (`.eq` on a key, cardinality bounded by the domain — snapshots per
@@ -1531,7 +1531,12 @@ renumber.** Navigate by area:
     **What immutability covers.** The RESULT: the estimate, the trace, the cost, the
     comparables frozen at run time. One thing on the row is deliberately mutable: the
     operator's yield `scenario` (`PATCH /estimations/{id}/scenario`) — a what-if overlay, not a
-    computed output. Subject IDENTITY (`input_listing_id`) is stamped at submit and never
+    computed output. The database holds this by grant, not by convention (migration 679): the
+    browser role (`authenticated`) may INSERT into neither `estimation_runs` nor `building_runs`
+    and may UPDATE only `estimation_runs.scenario`, the one column that route writes on the tenant
+    connection; every other run write is the API's, on the service role. Until 679, migration 291's
+    table-wide INSERT/UPDATE let a signed-in browser create its own runs through PostgREST (past the
+    metering gate) and rewrite a result. Subject IDENTITY (`input_listing_id`) is stamped at submit and never
     changes (2026-10-20; until then a binder could late-bind it, see below). Since the surrogate
     cutover (migration 411, PR #1095, completed for `property_estimates_public` by migration
     412) every read path that answers "what estimates exist for this listing" FILTERS on
@@ -1761,7 +1766,9 @@ renumber.** Navigate by area:
     sighting of the property's newest advert there, NULL with none; MS19), which W5 projects.
     The city figures (`home_obec_pop`, `near_*`) follow the LOCATION advert's point (since 636):
     the rollup clears `city_proximity_computed_at` when the location advert changes, and the
-    hourly `recompute_city_proximity` refills them from that point, writing a row only while its
+    hourly `recompute_city_proximity` (pg_cron job `recompute-city-proximity` since 674; the full
+    rebuild, `scripts/recompute_city_proximity.py --full`, ends the population load and the
+    curated-city seed, in id batches) refills them from that point, writing a row only while its
     `location_listing_ref_id` is still the one the run read, so a run that races a change writes
     nothing stale (that guard replaced 588's `< repr_since` repair). The job reads only a point:
     a location advert without one keeps the figures of an earlier point (or none) until it gains
@@ -1815,7 +1822,8 @@ renumber.** Navigate by area:
     median — each from the SAME query and rule as the tab it opens, so the two never disagree. The
     "Okolí dashboard" tab (`MarketTile`, 2026-10-23) draws the account's ONE dashboard marked for it
     (`stats_dashboards.property_card`, migration 664, any name, never a filter; set up in Browse ›
-    Statistiky) over ONE neighbourhood definition,
+    Statistiky), with that dashboard's own "Malé vzorky" setting (`show_small`, migration 681), over ONE
+    neighbourhood definition,
     `lib/neighbourhood` — the property's type, deal, disposition and ownership (one it does not state is
     left unset and named), Browse's centre + radius around it (250 m – 2 km, 500 m default, the square
     every Browse reader filters on), the user's building material and condition, under the Stats lens
@@ -3333,7 +3341,9 @@ renumber.** Navigate by area:
     the `browse_projection` line plus one static index line (and its rename) per portal in
     `rebuild_browse_list()`; a tenth portal is offered only with all three, and the same test
     fails until it has them. **The seams.** Attributes: `source`,
-    `index_rate`, `price_change_min_pct` (+ optional `shared_rate_limiter`). Required:
+    `index_rate`, `price_change_min_pct` (+ optional `shared_rate_limiter`), and `walk_every_s` +
+    `walk_timeout_s` (the code-only walk schedule `scraper/jobs.py` generates the portal's walk
+    from; never a `PortalLimits` key). Required:
     `categories`, `category_labels`, `walk_category`, `fetch_detail`. Defaulted on
     `PortalDefaults`, overridden only where the portal differs: `connect_index` (idnes: staleness
     preload), `connect_drain` (sreality: session pooler), `make_client` (sreality: category-bound
@@ -3974,7 +3984,12 @@ renumber.** Navigate by area:
     `pozemek`: **32,626 of 101,021 rows (32.3 %) carry no `estate_area`** — bazos 15,846,
     realitymix 11,470, mmreality 3,653, remax 1,649 — and 31,613 of them carry the parcel in
     `area_m2`. So `min_estate_area = 500` dropped a third of the country's land inventory
-    without a word. The fix is the name, **not** a writer change. **The writer rule, stated once:** a
+    without a word. The fix is the name, **not** a writer change. **Since migration 680 the
+    measure has a plausible band** (operator ruling 2026-10-26): a stated plot outside
+    10 .. 1,000,000 m² is a portal artefact (a "1 m²" stand-in, a 48 km² typo) and reads NULL,
+    so the lot sort, the Lot area filter and the card's lot all skip it; nothing stored changes.
+    The same ruling made the rollup's `total_price_change_pct` skip PLACEHOLDER prices (under
+    10,000 Kč capital / 500 Kč rent, `toolkit.measures.placeholder_floor_sql`). **The writer rule, stated once:** a
     parser fills `estate_area` ONLY from a parcel cell the page itself LABELS — sreality,
     bezrealitky, idnes, ceskereality, maxima and (from W21) mmreality all do, land rows
     included, and that is faithful reporting rather than duplication — **and only when what

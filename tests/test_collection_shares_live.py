@@ -483,7 +483,7 @@ def test_the_owner_cannot_edit_or_delete_the_recipients_shared_note(
 def test_share_party_emails_names_exactly_each_callers_counterparties(
     tenants: dict[str, _Tenant], world: _World,
 ) -> None:
-    a, b, c = tenants["a"], tenants["b"], tenants["c"]
+    a, b = tenants["a"], tenants["b"]
     expected = {"a": {(b.acc, b.email)}, "b": {(a.acc, a.email)}, "c": set()}
     for who, t in tenants.items():
         labels = set(_rows(t, "SELECT account_id, email FROM share_party_emails()"))

@@ -255,11 +255,12 @@ the deadline by value; its overlay keeps `LOOKUP_TIMEOUT_MS` for MV3 port loss n
 
 ## Identity, login, and admin gating (Phase 1, `api/dependencies.py`)
 
-Six auth primitives coexist — four in `api/dependencies.py` over ONE header reader, two in
+Seven auth primitives coexist — five in `api/dependencies.py` over ONE header reader, two in
 `api/tenant_pool.py` (`tenant_conn` after this list). `_bearer` (2026-10-13): `API_AUTH_OPTIONAL=1` → anonymous
 (local dev only), else `verify_jwt` — a verified JWT's claims or a 401/503. Tests mint a caller with
 `tests/api/_jwt.py` `mint` (an autouse fixture serves its key).
-- `require_token` — any signed-in caller, nothing returned (rule #8's baseline). Every client sends its
+- `require_token` — any signed-in caller, nothing returned (rule #8's baseline). Its twin `token_claims` (M0) is
+  the same gate returning the claims (None under the opt-out) for a FLAG gated on admin, never a scope. Every client sends its
   session JWT to every route, so a route moves between gates without a client change (the deploy-skew
   class behind the 2026-10-13 "Invalid token" preset incident: #1775's stale bundle).
 - `account_scope` — `_bearer` plus a READ SCOPE (the tenancy doctrine's FOURTH shape): the local-dev
@@ -272,11 +273,16 @@ Six auth primitives coexist — four in `api/dependencies.py` over ONE header re
 - `verify_jwt` — verifies a Supabase user JWT and returns its claims over ONE path: asymmetric JWKS
   (`SUPABASE_URL` → `/auth/v1/.well-known/jwks.json`, ES256/RS256, cached via `PyJWKClient`); no shared
   secret anywhere (the HS256 `SUPABASE_JWT_SECRET` fallback was deleted 2026-10-13); `503` with `SUPABASE_URL`
-  unset (an unconfigured auth backend must never authenticate anyone). History of the static key it once
-  also accepted (the 2026-08-04 god-credential removal, the 2026-10-13 deletion):
+  unset (an unconfigured auth backend must never authenticate anyone). Since M0 (#2059) only a session as Supabase Auth
+  issues one passes: issuer `<SUPABASE_URL>/auth/v1`, `exp`/`iss`/`aud`/`sub`/`role` required, `role = authenticated`, no
+  `client_id` (an OAuth client's token); a refusal's 401 names `wrong issuer` / `missing claim` / `wrong role` / `client token`,
+  and `mint` fills those claims. History of the static key it once also accepted (2026-08-04 removal, 2026-10-13 deletion):
   `docs/design/api-token-rotation-and-spa-jwt-migration.md`.
 - `require_admin` (`Depends(verify_jwt)`) — gates on `claims["is_admin"]` or
-  `claims["app_metadata"]["is_admin"]`; `403` otherwise. Only reachable via a real Supabase JWT
+  `claims["app_metadata"]["is_admin"]`; `403` otherwise. Every `/buildings*` route takes it since M0 (an extraction plus
+  one estimation per unit), and so does a forced refresh: `deps.require_admin_to_force` (over `token_claims`) 403s a
+  non-admin's `force_refresh: true` on `/tools/summarize_listing` + `/tools/compare_listing_images` (the opt-out's caller
+  too; the cached read stays open), and the route census reds on a body taking it without that call. Only reachable via a real Supabase JWT
   whose `app_metadata.is_admin` was stamped `true` (the `admins` table is the provisioning
   allowlist, but the live claim is a plain `auth.users.raw_app_meta_data` attribute — Supabase
   includes `app_metadata` in every issued JWT by default, no Custom Access Token Hook needed).
@@ -341,9 +347,9 @@ closed), `agent_estimation_concurrency_cap` (3). Deferred: extension `mode:'agen
 
 ## Auth and secrets
 
-All secrets are GitHub Actions secrets and/or Railway env vars in production. Backend code
-references them by name; never write a value into a committed file (`.env` is gitignored).
-API keys are **backend-only** — never `VITE_*`-prefix one; `frontend/` must not see them.
+All secrets are GitHub Actions secrets and/or Railway env vars in production, referenced by name; never write a value into a
+committed file (`.env` is gitignored). API keys are **backend-only**: never `VITE_*`-prefix one. Where each secret lives, who reads
+it, how to rotate and verify it: `references/secrets-inventory.md`; rotate with `scripts/rotate_credentials.sh` (M0, #2061).
 
 Database:
 - `SUPABASE_DB_URL` — Postgres connection string (Supabase → Database → Connection string →
@@ -433,12 +439,15 @@ LLM + maps (FastAPI service + scoring jobs):
   crosses it. Each provider's own console spend cap is the hard guard.
 
 API service:
-- `API_AUTH_OPTIONAL=1` — LOCAL DEV ONLY: opens every `require_token` route to anonymous callers. Never on Railway (rule #8).
+- `API_AUTH_OPTIONAL=1` — LOCAL DEV ONLY: opens every `require_token` route to anonymous callers. Never on Railway (rule #8):
+  since M0 the API refuses to boot with it when any Railway system variable is set (`deps._RAILWAY_MARKERS`: `RAILWAY_ENVIRONMENT`,
+  `_ENVIRONMENT_NAME`, `_ENVIRONMENT_ID`, `_PROJECT_ID`, `_SERVICE_ID`); the lifespan's first step, so uvicorn exits.
 - `CORS_ALLOW_ORIGINS` — CSV of allowed origins; must include the Chrome extension's
   `chrome-extension://<id>` origin and the SPA origin.
 - `STUCK_ROW_SWEEP_DISABLED`, `HEALTH_TELLER_DISABLED` (optional flags) — disable the startup sweep
-  of stuck estimation/building runs, and the system-alerts loop (the health teller, the API's only
-  background loop), respectively. Default: both enabled. `HEALTH_TELLER_DISABLED` replaced
+  of stuck estimation/building/scrape runs (the scrape_runs cutoff, `api.main.STUCK_RUN_CUTOFF_MINUTES`, is
+  held past the longest walk by `tests/scraper/test_job_registry.py`), and the system-alerts loop (the
+  health teller, the API's only background loop), respectively. Default: both enabled. `HEALTH_TELLER_DISABLED` replaced
   `NOTIFICATIONS_MATCHER_DISABLED` in W2b, with no alias (the old name, if still set anywhere, does
   nothing); the watchdog producers run on the realtime worker's `notifications` lane alone.
 
@@ -465,7 +474,8 @@ Scraper orchestration:
 - `GITHUB_ACTOR` — CI context, used for curated-cities upload attribution.
 
 NEW DEDUP (docs/design/new-dedup/PROGRAM.md, Wave 1):
-- `RUNPOD_API_KEY` — Actions secret only (no Railway/frontend use). Auths `scripts/runpod_client.py`'s REST
+- `RUNPOD_API_KEY` — an Actions secret (pods are rented only inside workflows, the judge lane's `autodedup.yml` among them);
+  no Railway service reads it, so the API's copy goes at #2059's deploy and the worker's with the rotation wizard (M0). Auths `scripts/runpod_client.py`'s REST
   (`rest.runpod.io/v1`) + GraphQL (`api.runpod.io/graphql`) calls to launch/poll/terminate on-demand GPU pods.
   Its workflow consumers: `autodedup.yml`, `dinov3_bakeoff_manifest.yml`, `dinov3_embed_backfill.yml`, `runpod_reap.yml`, `tagging_bakeoff.yml`, `text_extraction_bakeoff.yml`
   (`dinov3_embed_backfill` is the DINOv3 corpus embedding pass, never yet run on real data). Every job goes through `RunPodClient.run_job`,

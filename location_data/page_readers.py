@@ -30,7 +30,6 @@ import psycopg
 
 from location_data import payloads
 from location_data.claims_common import (
-    ARCHIVED_COORDINATE_RULES,
     DEFAULT_MAX_CLAIM_VALUE_BYTES,
     EMITTABLE_LICENCE_CLASSES,
     GUARD_CZ_BBOX,

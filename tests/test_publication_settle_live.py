@@ -17,7 +17,7 @@ import pytest
 
 from autodedup.incremental import EVIDENCE_HOLD_REASON, GENERATION
 from scripts.recompute_property_stats import _settle_fresh
-from tests._live_property import REQUIRED_DB, _advert, _recompute, cur  # noqa: F401 -- `cur` is the fixture
+from tests._live_property import REQUIRED_DB, _advert, _recompute
 from toolkit.property_identity import _CARRY_SETTLED_SQL
 
 pytestmark = REQUIRED_DB

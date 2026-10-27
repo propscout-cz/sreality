@@ -1,6 +1,6 @@
 ---
 name: scraper-ops
-description: Use when running, debugging, or extending the scrapers — triggering the per-portal index-walk workflows, adding a new scraper field without breaking data, refreshing portal HTML fixtures, reading the pipeline logs (INDEX/ENQUEUE/VERIFY/DRAIN/IMAGES line shapes), the always-on real-time worker (probe/drain/images/property-maintenance/broker-maintenance/estimation/location-resolve/location-intake-fast/location-refetch/sold-comps/text-extract/health/autodedup/notifications/push/heartbeat lanes), the visual-signal producer jobs (image pHash, CLIP tagging/retag, DINOv3 corpus embedding on RunPod), or the pipeline verification/alerting harness. Also covers condition-scoring (parked) and image-download workflow cadence. Triggers on: index_walk, detail_drain, gh workflow run, delist_policy, presence check, scrape_runs, fixtures, RUN done, a new listings column, onboarding a portal, reading a scrape log, realtime_worker, sold_comps, clip_tag, dinov3_embed_backfill, compute_image_phash, verify_pipeline, health_canary, health_liveness, health lane, job cell, missing lane, match_once, reason line.
+description: Use when running, debugging, or extending the scrapers — triggering the per-portal index-walk workflows, adding a new scraper field without breaking data, refreshing portal HTML fixtures, reading the pipeline logs (INDEX/ENQUEUE/VERIFY/DRAIN/IMAGES line shapes), the always-on real-time worker (probe/drain/images/property-maintenance/broker-maintenance/estimation/location-resolve/location-intake-fast/location-refetch/sold-comps/text-extract/health/autodedup/notifications/push/heartbeat lanes), the visual-signal producer jobs (image pHash, CLIP tagging/retag, DINOv3 corpus embedding on RunPod), or the pipeline verification/alerting harness. Also covers condition-scoring (parked) and image-download workflow cadence. Triggers on: index_walk, detail_drain, gh workflow run, delist_policy, presence check, scrape_runs, fixtures, RUN done, a new listings column, onboarding a portal, reading a scrape log, realtime_worker, sold_comps, clip_tag, dinov3_embed_backfill, compute_image_phash, verify_pipeline, health_canary, health_liveness, health lane, job cell, missing lane, match_once, reason line, job_runner, scheduled_jobs, job_runs.
 ---
 
 # Scraper operations
@@ -220,7 +220,7 @@ from the slow "download each ad" write:
   category's pages and `by_category` entry are written together as it ends
   (`db.bump_index_progress`), so a SIGKILL keeps them.
   Never hand-roll it, and never add a portal without wiring the flag through —
-  `tests/scraper/test_walk_deadline_wiring.py` fails the build if you do. Ids are classified by the
+  `tests/scraper/test_walk_deadline_wiring.py` fails the build if you do. **The job runner** (`python -m scraper.job_runner run|once|request|pause|list`, #2024: SIGTERM at `timeout_s`, SIGKILL 90 s later, a timeout recorded `timeout` whatever the exit): verbs, log lines, outcomes and drills in `references/job-runner.md`. Ids are classified by the
   one shared `portal.classify_index_sighting` (**an index card with no price reads `unchanged`,
   never `changed`**) — and are **enqueued** into
   `listing_detail_queue` in one of two service classes — ACQUISITION (never fetched) or REFRESH
@@ -296,7 +296,7 @@ The detail-drain writes `scrape_runs` rows too (`run_type='detail'`), but only t
 ## Onboarding a portal — and the tenth, `web` (2026-10-21)
 
 A portal is one row per registry, never a branch (the registry list: `docs/architecture.md` § rule 21 and
-`docs/design/new-property-from-link.md` §3.4). Dispatch a new portal's first index walk at deploy: `scraping` judges every portal in `SOURCES` from that moment, so `<portal>/walks` reads Problem until its cron first fires (web, 2026-10-22).
+`docs/design/new-property-from-link.md` §3.4; its Portal class declares `walk_every_s`/`walk_timeout_s` (`scraper/jobs.py`)). Until the walks move to the runner (#2029) a new portal's walk fails the waiting-set ratchet (`ORIGINAL_UNTIL_MOVED` in `tests/scraper/test_job_registry.py`): onboarding waits for #2029 or an operator ruling. Dispatch a new portal's first index walk at deploy: `scraping` judges every portal in `SOURCES` from that moment, so `<portal>/walks` reads Problem until its cron first fires (web, 2026-10-22).
 `web` (`scraper/web_main.py`) is `indexless`: its 6-hourly walk sees
 nothing, reaches the end and nominates every active row as an orphan (its unit has no scope); the worker drains it FIRST;
 its pages go through `scraper/egress.py` (private ranges refused per hop, a wall-clock deadline, a decoded cap). A pasted

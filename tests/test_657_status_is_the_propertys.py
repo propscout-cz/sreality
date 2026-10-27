@@ -46,7 +46,7 @@ def _without_the_lens(s: str) -> str:
 
 
 def test_these_are_the_latest_definitions() -> None:
-    assert latest_definition(STATS).name == "662_status_filter_contract.sql"  # 661/662: one status parameter
+    assert latest_definition(STATS).name == "678_stats_small_samples.sql"  # 661/662: one status parameter, 678 the small-sample summary
     assert latest_definition(RULE).name == NAME
     assert latest_definition("browse_map_cells").name == "662_status_filter_contract.sql"
     assert SQL.count(f"create or replace function public.{STATS}(") == 1

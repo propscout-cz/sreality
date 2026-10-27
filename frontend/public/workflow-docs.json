@@ -1106,7 +1106,7 @@
     {
       "filename": "docs-budget.yml",
       "name": "Docs budget",
-      "description": "Enforces the always-loaded context budgets from CLAUDE.md's Context-discipline rule (line caps on CLAUDE.md/ROADMAP.md/skill bodies, a word cap on skill frontmatter descriptions, and routing completeness — every .claude/skills/ dir must appear in CLAUDE.md's \"Where the detail lives\" table) on any PR touching those paths, and warns (non-blocking) when a PR changes code a skill documents without touching that skill or when a doc line it adds names a code symbol that exists nowhere in the code trees.",
+      "description": "Enforces the always-loaded context budgets from CLAUDE.md's Context-discipline rule (byte caps on CLAUDE.md/ROADMAP.md/skill bodies that only ratchet down, judged against the PR's base; a word cap on skill frontmatter descriptions; routing completeness — every .claude/skills/ dir must appear in CLAUDE.md's \"Where the detail lives\" table) on every PR, and warns (non-blocking) when a PR changes code a skill documents without touching that skill or when a doc line it adds names a code symbol that exists nowhere in the code trees.",
       "manual": false,
       "schedules": [],
       "onPush": false,
@@ -1778,7 +1778,7 @@
     {
       "filename": "load_obec_population.yml",
       "name": "Jobs: load obec population (manual)",
-      "description": "Load ČSÚ municipality population into admin_boundaries.population for EVERY obec (not just the 206 curated cities). Reads the committed DataStat export data/csu_population.json (OBY02AT02 — download from https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02). Idempotent: only changed rows are written. Dispatch this after committing a refreshed export. This is the population source the \"within X km of a municipality with population > N\" proximity filter reads.",
+      "description": "Load ČSÚ municipality population into admin_boundaries.population for EVERY obec (not just the 206 curated cities). Reads the committed DataStat export data/csu_population.json (OBY02AT02 — download from https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02). Idempotent: only changed rows are written. Dispatch this after committing a refreshed export. This is the population source the \"within X km of a municipality with population > N\" proximity filter reads; the job ends with the full city-proximity rebuild that turns it into the precomputed columns.",
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -1790,7 +1790,7 @@
       ],
       "concurrencyGroup": "load-obec-population",
       "cancelInProgress": false,
-      "timeoutMinutes": 15,
+      "timeoutMinutes": 90,
       "permissions": "contents: read",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/load_obec_population.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/load_obec_population.yml"
@@ -2218,40 +2218,6 @@
       "permissions": null,
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/realitymix_index_walk.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/realitymix_index_walk.yml"
-    },
-    {
-      "filename": "recompute_city_proximity.yml",
-      "name": "Jobs: recompute city proximity (hourly)",
-      "description": "Recompute properties.home_obec_pop + near_{pop,jobs,youth,overall}_{5,15}km (migration 142) so the Browse / Watchdog city-proximity + Min Population filters read precomputed indexed columns instead of a per-request spatial RPC. Incremental hourly run fills newly-ingested properties within the hour; the same function rebuilds everything after a population / city-index load.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "40 * * * *",
-          "human": "Every hour at :40"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "full",
-          "description": "Rebuild every property (not just new ones)",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "recompute-city-proximity",
-      "cancelInProgress": false,
-      "timeoutMinutes": 25,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/recompute_city_proximity.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/recompute_city_proximity.yml"
     },
     {
       "filename": "recompute_property_stats.yml",
@@ -3044,7 +3010,7 @@
       ],
       "concurrencyGroup": null,
       "cancelInProgress": null,
-      "timeoutMinutes": 15,
+      "timeoutMinutes": 90,
       "permissions": "contents: write",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/seed_curated_cities.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/seed_curated_cities.yml"
@@ -3341,7 +3307,7 @@
     {
       "filename": "test.yml",
       "name": "CI: tests",
-      "description": "CI test suite, runs on every pull request and on every push to main. Two parallel jobs: a Python job (verifies the filter-registry and workflow-docs codegen are fresh, then runs pytest) and a frontend job (TypeScript type-check + vitest pure-function tests). This is the build gate for every branch.",
+      "description": "CI test suite, runs on every pull request and on every push to main. Two parallel jobs: a Python job (verifies the filter-registry and workflow-docs codegen are fresh, runs pytest, then lints with ruff) and a frontend job (TypeScript type-check + vitest pure-function tests). This is the build gate for every branch.",
       "manual": false,
       "schedules": [],
       "onPush": true,

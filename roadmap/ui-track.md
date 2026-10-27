@@ -26,6 +26,9 @@ toolkit work.
   Prohlídky (`/viewings`, `GET /viewings`): the account's own viewings one day at a time in time order,
   Nadcházející / Vše, arrows + swipe + a date wheel + "Dnes", jumps to the nearest day with a viewing, a
   "now" rule on today; a row opens its property.
+- **Done** (2026-10-26): the day maths is swept across Prague midnight (CET, CEST) and both DST nights
+  under three runner zones (`lib/viewings.boundary.test.ts`); the composer's first guess counts the next
+  full hour on the instant, so the spring DST night no longer pre-fills 02:00, a time its clock skips.
 - **Next (offered, not built):** a push reminder before a viewing; "Přidat do kalendáře" (an .ics file
   for the iPhone calendar).
 
@@ -172,6 +175,18 @@ toolkit work.
   Řazení) gains "Ulice: A → Z / Z → A" on `browse_list.street_name`, the location ad's street under the
   Czech collation (Č after C, Ch after H); a property with no street (62% of active) sorts last both
   ways. A sort key only: the card still prints `display_label`, the street filter stays `ulice_id`.
+- **Done: Price change sort 2026-10-26** (operator request; no migration). The cards menu (desktop +
+  phone Řazení) gains "Změna ceny: největší pokles / největší nárůst" on `total_price_change_pct`, the
+  column the card's price-move badge and the Price change filter read (first observed price of the
+  shown price's lineage → the shown price); an ad seen at one price (66% of active sales) sorts last
+  both ways. ~84 ms, flats for sale.
+- **Done: implausible lots and placeholder prices 2026-10-26** (operator ruling; migration 680). Both new
+  sorts opened on junk: a 48 194 054 m² lot and runs of "1 m²" at the lot sort's two ends, and at the
+  price-change sort's ends a 1 Kč first price (+2 869 456 %) or a drop to 0 / 11 Kč (−100 %). The plot
+  measure now reads a lot outside 10 .. 1 000 000 m² as no lot (800 of 158 728 active properties with a
+  lot), and the rollup's `total_price_change_pct` skips prices under 10 000 Kč (sale, auction, share) /
+  500 Kč (rent) — `toolkit.measures`. Sort, filter and card move together; nothing stored changes.
+  Not in scope: the step counts and price-drop alerts (`listing_price_steps`) still count a placeholder.
 - **Shipped (2026-10-22): Advanced → Energy rating (PENB A–G)**, Browse + Watchdog (migration 648:
   `energy_rating_filter` on the Stats and map-tile RPCs; `browse_list` already carried the column). A
   property's rating is the first non-null across its ads; G is also the legal "no certificate"
@@ -226,6 +241,12 @@ toolkit work.
   listings) and 28 impossible dispositions (812 listings) that charted as raw-spelled "pod 5" rows now read
   as the canon or NULL; the mapping is pinned to `scraper/vocabulary.py` by its test. `backup_642` holds the
   old values — drop it after a clean week.
+- **Done: small samples on request (2026-10-26, migration 678):** a cell under the n ≥ 5 floor carries `small`
+  {min, max, mean, median}; the Stats tab's "Malé vzorky" switch (`small=1`, on every Stats tab) shows it in the
+  table and box views on a tinted row (a column-dimension table tints only that cell), each number with its own
+  label; percentiles never under the floor; line and bar keep their gaps. Since migration 681 a dashboard
+  saves the switch (`show_small`): loading one sets it, changing it marks the dashboard edited, and the
+  property page's Okolí dashboard tab draws with its dashboard's setting.
 - **Done: dashboard duplicate + the sold-market lens (2026-10-22):** an own dashboard's menu offers "Duplikovat"
   (a new row as stored, "<name> (kopie)"); the Stats tab's "Vzorek" switch counts every chart over the Browse
   filter or over the sold market (inactive, seen from birth, dismissed included, 2–60 days on market) — a URL
