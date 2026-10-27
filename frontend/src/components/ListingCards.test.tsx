@@ -22,13 +22,13 @@
  * keyboard or a screen reader reaches the card, and nothing else.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 
-import { useEffect } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import ListingCards from './ListingCards';
 import type { CohortKind } from '@/lib/filters';
 import { CardHydrationProvider } from '@/lib/hydration';
@@ -171,6 +171,9 @@ function renderGrid(
     onEnterMerge?: () => void;
     /* Browse opts the storey in; the grid tests that predate it do not. */
     floors?: boolean;
+    hasNextPage?: boolean;
+    scroll?: 'column' | 'page';
+    empty?: ReactNode;
   } = {},
 ) {
   const qc = new QueryClient({
@@ -193,8 +196,10 @@ function renderGrid(
             onCoverTag={opts.onCoverTag ?? (() => {})}
             isLoading={false}
             isFetchingNextPage={false}
-            hasNextPage={false}
+            hasNextPage={opts.hasNextPage ?? false}
             onReachEnd={() => {}}
+            scroll={opts.scroll}
+            empty={opts.empty}
             restorationKey="test"
             hasFilters={false}
             hasBounds={false}
@@ -1157,5 +1162,59 @@ describe('<ListingCards> the storey label', () => {
     floors();
     renderGrid({ floors: true, row: { ...ROW, is_active: false, active_sources: [] } as CardRow });
     expect(await screen.findByText('2. patro z 5')).toHaveClass('bg-[var(--color-paper)]');
+  });
+});
+
+/* Ruling P32: the collection page shows this grid on a page that scrolls itself,
+ * so the column must not be a scroll box there, and the end sentinel must watch
+ * the viewport (on a box that never scrolls it would load every page at once). */
+describe('<ListingCards> on a page that scrolls', () => {
+  const roots: Array<Element | Document | null | undefined> = [];
+  beforeEach(() => {
+    roots.length = 0;
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(_cb: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+          roots.push(options?.root);
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+        takeRecords() {
+          return [];
+        }
+      },
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('by default the end sentinel watches the card column, which scrolls', async () => {
+    renderGrid({ hasNextPage: true });
+    await screen.findByRole('combobox', { name: /Sort/ });
+    const root = roots[roots.length - 1];
+    expect(root).toBeInstanceOf(HTMLElement);
+    expect(root as HTMLElement).toHaveClass('overflow-y-auto');
+  });
+
+  it('scroll="page": the column does not scroll, and the sentinel watches the viewport', async () => {
+    const { container } = renderGrid({ hasNextPage: true, scroll: 'page' });
+    await screen.findByRole('combobox', { name: /Sort/ });
+    expect(roots.length).toBeGreaterThan(0);
+    expect(roots[roots.length - 1]).toBeNull();
+    expect(container.querySelector('.overflow-y-auto')).toBeNull();
+  });
+});
+
+describe('<ListingCards> the empty slot', () => {
+  it("a surface's own empty node replaces the filter empty state", async () => {
+    renderGrid({ rows: [], empty: <p>Nothing here has a card yet.</p> });
+    expect(await screen.findByText('Nothing here has a card yet.')).toBeInTheDocument();
+    expect(screen.queryByText('No listings match these filters.')).toBeNull();
+  });
+
+  it('without one, the filter empty state stays', async () => {
+    renderGrid({ rows: [] });
+    expect(await screen.findByText('No listings match these filters.')).toBeInTheDocument();
   });
 });

@@ -70,63 +70,60 @@ export default function PhoneCollections() {
 
   return (
     <div className="pt-3">
-      <div className="px-4">
+      {listQ.isPending ? (
+        <RowsSkeleton />
+      ) : listQ.isError ? (
+        <RollEmpty
+          title="Sbírky se nepodařilo načíst."
+          detail="Spojení nebo server teď neodpověděly. Zkuste to znovu."
+          action={{ label: 'Zkusit znovu', onClick: () => void listQ.refetch() }}
+        />
+      ) : mine.length === 0 ? (
+        <RollEmpty
+          title={shared.length > 0 ? 'Zatím žádná vlastní sbírka.' : 'Zatím žádná sbírka.'}
+          detail="Založte první; nemovitost do ní uložíte záložkou na kartě v Nových."
+        />
+      ) : (
+        <ul aria-label="Sbírky" className="border-b border-[var(--color-rule)]">
+          {mine.map((c) => (
+            <li key={c.id}>
+              <CollectionRow c={c} />
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* Ruling P30: the add slot ends my own list, dashed (a place to fill), in
+          every state of the read, as it was reachable before. */}
+      <div className="mt-3 px-4">
         <button
           type="button"
           onClick={() => setCreating(true)}
           aria-haspopup="dialog"
-          className="flex h-11 w-full items-center justify-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)] bg-[var(--color-paper)] text-[15px] font-medium text-[var(--color-copper)] active:bg-[var(--color-inset)]"
+          className="flex h-11 w-full items-center justify-center gap-2 rounded-[var(--radius-sm)] border border-dashed border-[var(--color-rule-strong)] bg-[var(--color-paper)] text-[15px] font-medium text-[var(--color-copper)] active:bg-[var(--color-inset)]"
         >
           <PlusIcon className="h-[18px] w-[18px]" />
           Nová sbírka
         </button>
       </div>
 
-      <div className="mt-4">
-        {listQ.isPending ? (
-          <RowsSkeleton />
-        ) : listQ.isError ? (
-          <RollEmpty
-            title="Sbírky se nepodařilo načíst."
-            detail="Spojení nebo server teď neodpověděly. Zkuste to znovu."
-            action={{ label: 'Zkusit znovu', onClick: () => void listQ.refetch() }}
-          />
-        ) : (
-          <>
-            {mine.length === 0 ? (
-              <RollEmpty
-                title={shared.length > 0 ? 'Zatím žádná vlastní sbírka.' : 'Zatím žádná sbírka.'}
-                detail="Založte první; nemovitost do ní uložíte záložkou na kartě v Nových."
-              />
-            ) : (
-              <ul aria-label="Sbírky" className="border-b border-[var(--color-rule)]">
-                {mine.map((c) => (
-                  <li key={c.id}>
-                    <CollectionRow c={c} />
-                  </li>
-                ))}
-              </ul>
-            )}
-            {shared.length > 0 && (
-              <section aria-labelledby={sharedHeadingId} className="mt-6">
-                <h3
-                  id={sharedHeadingId}
-                  className="px-4 pb-2 text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--color-ink-3)]"
-                >
-                  Sdílené se mnou
-                </h3>
-                <ul aria-label="Sdílené se mnou" className="border-b border-[var(--color-rule)]">
-                  {shared.map((c) => (
-                    <li key={c.id}>
-                      <CollectionRow c={c} />
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-          </>
-        )}
-      </div>
+      {listQ.isSuccess && shared.length > 0 && (
+        <section aria-labelledby={sharedHeadingId} className="mt-6">
+          <h3
+            id={sharedHeadingId}
+            className="px-4 pb-2 text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--color-ink-3)]"
+          >
+            Sdílené se mnou
+          </h3>
+          <ul aria-label="Sdílené se mnou" className="border-b border-[var(--color-rule)]">
+            {shared.map((c) => (
+              <li key={c.id}>
+                <CollectionRow c={c} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <p className="px-4 pb-6 pt-4 text-[12px] text-[var(--color-ink-3)]">{DESKTOP_ONLY_NOTE}</p>
 

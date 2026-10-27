@@ -125,12 +125,25 @@ File pointers are where the element lives today (2026-10-27); search for the quo
    `components/LoadMore.tsx`.
 6. **Brokers** — P28 (drop the caption under each count, `Count` in `pages/Brokers.tsx`, labels passed from
    `Ledger`; the column headers say the unit once), P29 (five firm pills, then "+ N dalších": `CompanyFilter`).
-7. **Collections** — P30 (a dashed "+ Nová kolekce" card at the end of the grid opens the form;
+7. **Collections** — **built** (branch `feature/redesign-rulings`). P30 (a dashed "+ Nová kolekce" card at the end of the grid opens the form;
    `pages/Collections.tsx` `NewCollectionForm`), P31 (the collection page header carries the monitoring switch,
    "Share · N" and ⋯ with rename and delete, replacing `EditBlock`, `MonitoringBlock` and `SharingBlock`), P32
    (Browse cards first, `PropertiesBlock`'s table as the second tab): `pages/CollectionDetail.tsx`. The phone
    versions (`PhoneCollectionDetail`, `PhoneBrokers`) are separate components. **Operator ruling 2026-10-27: the
    phone versions follow desktop** (Brokers P28–P29, Collections P30–P32).
+   As built: the collections page stays a ruled list (turning rows into cards is a restyle no ruling names), so
+   the dashed card is full width after my list and before "Shared with me", in every state of the read, and
+   flips in place into the unchanged form (Cancel, Escape or a created collection flip it back). The header
+   reads "Sledovat", "Sdílet · N" (an inline panel under the header holding the unchanged sharing block, like
+   Pipeline's "Sdílení") and ⋯: Přejmenovat flips the name and description into the edit fields in place;
+   Smazat kolekci shows the existing two-step confirm in the header, and is absent on the default collection.
+   The new controls take the ruling's Czech words; the rest of the page stays English. The cards are Browse's
+   `ListingCards` over the collection scope (`lib/collectionCards`, `scroll="page"`), estimates through
+   `lib/useCardEstimates` (Browse's state, moved out of `BrowseExperience`); `?tab=table` and `?sort=` live in
+   the address; members without a card are counted under the grid and all listed in the table. Phone: "Nová
+   sbírka" moved to the end of my list, dashed, keeping its bottom sheet; phone P32 was already cards with no
+   table, so nothing changed; phone P31 has no blocks to move (its footer sends rename, delete, monitoring and
+   sharing to the desktop), so adding Sledovat / Sdílet / ⋯ to the phone header **awaits the operator's answer**.
 8. **Shell and page headers** — P26 (drop the small-caps label above the h1; there is no shared header
    component, each page has its own: `Header` in `pages/WatchdogManage.tsx`, `pages/Notifications.tsx`,
    `pages/Collections.tsx` and `pages/CollectionDetail.tsx`, and an inline header in `BrokersDesktop` in

@@ -21,7 +21,7 @@ import {
 import { lazyChunk } from '@/lib/lazyChunk';
 import { useNewPropertyDialog } from '@/components/NewPropertyProvider';
 import Skeleton from '@/components/Skeleton';
-import { useIsFetching, useMutation, useQuery } from '@tanstack/react-query';
+import { useIsFetching, useQuery } from '@tanstack/react-query';
 import Tabs, { type Tab } from '@/components/Tabs';
 import ResizeHandle from '@/components/ResizeHandle';
 import {
@@ -34,7 +34,7 @@ import {
 } from '@/lib/browseLayout';
 import ImageSizeToggle from '@/components/ImageSizeToggle';
 import { FilterSidebar, FilterSidebarRail } from '@/components/Filters';
-import ListingCards from '@/components/ListingCards';
+import ListingCards, { CARD_PHOTOS_PER_CARD } from '@/components/ListingCards';
 /* The Stats tab (the chart builder, dnd-kit, recharts) is its own chunk: it is a
  * secondary tab, and the first-visit bundle has a budget (scripts/bundle-budget.mjs). */
 const StatsDashboard = lazyChunk(() => import('@/components/stats/StatsDashboard'));
@@ -59,12 +59,9 @@ import CreateWatchdogModal from '@/components/CreateWatchdogModal';
 import MergeBar from '@/components/MergeBar';
 import AppliedFilterPills from '@/components/AppliedFilterPills';
 import FilterPresetBar from '@/components/FilterPresetBar';
-import type { FilterPreset, ListingEstimate } from '@/lib/types';
-import {
-  createEstimation,
-  isApiConfigured,
-  latestEstimationsByListing,
-} from '@/lib/api';
+import type { FilterPreset } from '@/lib/types';
+import { isApiConfigured } from '@/lib/api';
+import { useCardEstimates } from '@/lib/useCardEstimates';
 import { pushToast } from '@/lib/toast';
 import { browseKeys } from '@/lib/browseKeys';
 import { useMergeMode } from '@/lib/useMergeMode';
@@ -91,13 +88,6 @@ import {
 } from '@/lib/queries';
 import { useInfiniteList } from '@/lib/useInfiniteList';
 import { CardHydrationProvider } from '@/lib/hydration';
-
-/* Client-side retention cap for a card's carousel — the same 50 the inline read
- * used before W7a moved it into the shared hydration layer. images_public has no
- * per-listing LIMIT, so this caps what is KEPT, not what is fetched; 50 sits
- * comfortably above any real listing (typical max ~25) so no carousel is
- * truncated. It is part of the cache key, so changing it is a new cohort. */
-const CARD_PHOTOS_PER_CARD = 50;
 import type { KeysetCursor } from '@/lib/keyset';
 import type { BrowseViewState, TabKey } from '@/lib/browseState';
 
@@ -409,116 +399,11 @@ export default function BrowseExperience({
     return `cards:${sp.toString()}`;
   }, [filters, sort]);
 
-  /* The on-card estimate is sreality-keyed (the estimation backend runs by
-   * sreality_id), so a post-Gate-2 non-sreality card (sreality_id NULL) can't be
-   * estimated — drop the nulls so the batch lookup never queries `sreality_id IN
-   * (…,null)` and no null bleeds into the estimate-state map. */
-  const cardIds = useMemo(
-    () =>
-      cards.rows
-        .map((r) => r.sreality_id)
-        .filter((x): x is number => x != null),
-    [cards.rows],
-  );
-  const [estimatingIds, setEstimatingIds] = useState<ReadonlySet<number>>(
-    () => new Set(),
-  );
-  const [estimates, setEstimates] = useState<Record<number, ListingEstimate>>(
-    {},
-  );
-  /* A submit the API refused (a 422 for an ad it cannot place) creates no run,
-   * so nothing in `estimates` would say it failed — the API's sentence is kept
-   * per card instead, until the next attempt. */
-  const [estimateRefusals, setEstimateRefusals] = useState<Record<number, string>>({});
-  const requestedEstIdsRef = useRef<Set<number>>(new Set());
-  const estimatesEnabled = tab === 'map' && isApiConfigured();
-
-  useEffect(() => {
-    setEstimates({});
-    setEstimateRefusals({});
-    requestedEstIdsRef.current = new Set();
-  }, [cardsRestorationKey]);
-
-  useEffect(() => {
-    if (!estimatesEnabled) return;
-    const fresh = cardIds.filter((id) => !requestedEstIdsRef.current.has(id));
-    if (fresh.length === 0) return;
-    fresh.forEach((id) => requestedEstIdsRef.current.add(id));
-    let cancelled = false;
-    latestEstimationsByListing(fresh)
-      .then((map) => {
-        if (!cancelled) setEstimates((prev) => ({ ...prev, ...map }));
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [cardIds, estimatesEnabled]);
-
-  const pendingEstIds = useMemo(
-    () => [
-      ...estimatingIds,
-      ...Object.values(estimates)
-        .filter((e) => e.status === 'pending' || e.status === 'running')
-        .map((e) => e.sreality_id),
-    ],
-    [estimatingIds, estimates],
-  );
-  useEffect(() => {
-    if (!estimatesEnabled || pendingEstIds.length === 0) return;
-    const timer = setInterval(() => {
-      latestEstimationsByListing(pendingEstIds)
-        .then((map) => setEstimates((prev) => ({ ...prev, ...map })))
-        .catch(() => {});
-    }, 4000);
-    return () => clearInterval(timer);
-  }, [estimatesEnabled, pendingEstIds]);
-  const estimateMut = useMutation({
-    mutationFn: (srealityId: number) =>
-      createEstimation({
-        sreality_id: srealityId,
-        source: 'ui',
-        mode: 'agent',
-        provider: 'anthropic',
-        estimate_kind: 'rent',
-        lifecycle: 'active',
-      }),
-    onMutate: (srealityId) => {
-      setEstimatingIds((prev) => new Set(prev).add(srealityId));
-      setEstimateRefusals((prev) => {
-        if (!(srealityId in prev)) return prev;
-        const next = { ...prev };
-        delete next[srealityId];
-        return next;
-      });
-    },
-    onError: (err, srealityId) => {
-      setEstimateRefusals((prev) => ({
-        ...prev,
-        [srealityId]: err instanceof Error ? err.message : 'Odhad se nepodařilo spustit',
-      }));
-    },
-    onSuccess: (run, srealityId) => {
-      setEstimates((prev) => ({
-        ...prev,
-        [srealityId]: {
-          sreality_id: srealityId,
-          run_id: run.id,
-          status: run.status,
-          estimate_kind: run.estimate_kind,
-          gross_yield_pct: run.gross_yield_pct,
-          estimated_monthly_rent_czk: run.estimated_monthly_rent_czk,
-          created_at: run.created_at,
-        },
-      }));
-    },
-    onSettled: (_run, _err, srealityId) => {
-      setEstimatingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(srealityId);
-        return next;
-      });
-    },
+  /* The on-card estimate (lib/useCardEstimates, shared with the collection page). */
+  const { estimates, estimatingIds, estimateRefusals, onEstimate } = useCardEstimates({
+    rows: cards.rows,
+    enabled: tab === 'map' && isApiConfigured(),
+    resetKey: cardsRestorationKey,
   });
 
   /* The Stats tab is the account's chart board (components/stats); each card reads
@@ -760,7 +645,7 @@ export default function BrowseExperience({
                 estimates={estimates}
                 estimatingIds={estimatingIds}
                 estimateRefusals={estimateRefusals}
-                onEstimate={(srealityId) => estimateMut.mutate(srealityId)}
+                onEstimate={onEstimate}
               />
               </CardHydrationProvider>
               {!mapCollapsed.value && (

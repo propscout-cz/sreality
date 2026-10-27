@@ -171,6 +171,44 @@ describe('<Collections> on the phone', () => {
     expect(within(sheet).getByRole('button', { name: 'Založit sbírku' })).toBeEnabled();
   });
 
+  /* Ruling P30, the phone following desktop (operator 2026-10-27): the add entry
+     is a dashed slot at the end of my own list, before what others share. */
+  const follows = (a: Node, b: Node) =>
+    Boolean(b.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+  it("puts a dashed 'Nová sbírka' after my collections and before 'Sdílené se mnou'", async () => {
+    vi.mocked(api.listCollections).mockResolvedValue({
+      data: [coll({}), coll({ id: 5, name: 'Od Jany', owner_email: 'jana@example.com' })],
+      total: 2,
+    });
+    renderPage();
+    const mine = await screen.findByRole('list', { name: 'Sbírky' });
+    const add = screen.getByRole('button', { name: 'Nová sbírka' });
+    expect(add).toHaveClass('border-dashed');
+    expect(follows(add, mine)).toBe(true);
+    expect(follows(screen.getByRole('heading', { name: 'Sdílené se mnou' }), add)).toBe(true);
+  });
+
+  it("with no collection of my own, 'Nová sbírka' follows the empty line", async () => {
+    vi.mocked(api.listCollections).mockResolvedValue({ data: [], total: 0 });
+    renderPage();
+    const empty = await screen.findByText('Zatím žádná sbírka.');
+    expect(follows(screen.getByRole('button', { name: 'Nová sbírka' }), empty)).toBe(true);
+  });
+
+  it("keeps 'Nová sbírka' while the list loads and after it failed", async () => {
+    vi.mocked(api.listCollections).mockReturnValueOnce(new Promise(() => {}));
+    const { unmount } = renderPage();
+    expect(screen.getByRole('status')).toHaveTextContent('Načítám…');
+    expect(screen.getByRole('button', { name: 'Nová sbírka' })).toBeInTheDocument();
+    unmount();
+
+    vi.mocked(api.listCollections).mockRejectedValue(new Error('boom'));
+    renderPage();
+    const failed = await screen.findByText('Sbírky se nepodařilo načíst.');
+    expect(follows(screen.getByRole('button', { name: 'Nová sbírka' }), failed)).toBe(true);
+  });
+
   it('shows the shared group even when I have no collection of my own', async () => {
     vi.mocked(api.listCollections).mockResolvedValue({
       data: [coll({ id: 5, name: 'Od Jany', owner_email: 'jana@example.com' })],

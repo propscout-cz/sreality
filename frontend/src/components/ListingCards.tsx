@@ -73,6 +73,14 @@ const CARD_GRID_CLASS = 'grid gap-2 grid-cols-[repeat(auto-fill,minmax(min(var(-
  * text in the body does not change. */
 const CARD_IMAGE_MIN = { sm: '11.5rem', lg: '23rem' } as const;
 
+/* Client-side retention cap for a card's carousel — the same 50 the inline read
+ * used before W7a moved it into the shared hydration layer. images_public has no
+ * per-listing LIMIT, so this caps what is KEPT, not what is fetched; 50 sits
+ * comfortably above any real listing (typical max ~25) so no carousel is
+ * truncated. It is part of the cache key, so changing it is a new cohort; every
+ * surface that hydrates this grid passes it (Browse, the collection page). */
+export const CARD_PHOTOS_PER_CARD = 50;
+
 interface Props {
   rows: CardRow[] | null;
   total: number | null;
@@ -143,6 +151,13 @@ interface Props {
   /* The API's refusal sentence per sreality_id, for a submit that made no run. */
   estimateRefusals?: Readonly<Record<number, string>>;
   onEstimate: (srealityId: number) => void;
+  /* Who scrolls the grid: its own fixed-height column (Browse, beside the map),
+   * or the page around it (the collection page, ruling P32): no scroll box, and
+   * the end sentinel watches the viewport. */
+  scroll?: 'column' | 'page';
+  /* What an empty grid says, where "no listings match these filters" would be
+   * wrong (a surface with no filters). */
+  empty?: ReactNode;
 }
 
 export default function ListingCards({
@@ -174,6 +189,8 @@ export default function ListingCards({
   estimatingIds,
   estimateRefusals,
   onEstimate,
+  scroll = 'column',
+  empty,
 }: Props) {
   const showSkeleton = isLoading && rows == null;
   const isEmpty = !showSkeleton && !isError && rows != null && rows.length === 0;
@@ -203,7 +220,7 @@ export default function ListingCards({
 
   return (
     <div
-      className="flex flex-col h-full min-h-0"
+      className={scroll === 'page' ? 'flex flex-col' : 'flex flex-col h-full min-h-0'}
       style={{ '--card-min': CARD_IMAGE_MIN[imageLarge ? 'lg' : 'sm'] } as CSSProperties}
     >
       <div className="flex items-center justify-between px-1 pb-3 text-[0.75rem] text-[var(--color-ink-3)] tabular-nums gap-3">
@@ -233,16 +250,20 @@ export default function ListingCards({
 
       {/* Merge mode's keys arrive here from the focused card (never from the
           window, so a filter field keeps its letters). */}
-      <div ref={scrollRef} onKeyDown={merge?.onKeyDown} className="flex-1 min-h-0 overflow-y-auto pr-1">
+      <div
+        ref={scrollRef}
+        onKeyDown={merge?.onKeyDown}
+        className={scroll === 'page' ? undefined : 'flex-1 min-h-0 overflow-y-auto pr-1'}
+      >
         {showSkeleton && <SkeletonGrid />}
-        {isEmpty && (
+        {isEmpty && (empty ?? (
           <EmptyState
             hasFilters={hasFilters}
             hasBounds={hasBounds}
             onClearFilters={onClearFilters}
             onClearBounds={onClearBounds}
           />
-        )}
+        ))}
         {!showSkeleton && rows && rows.length > 0 && (
           <>
             <ul className={CARD_GRID_CLASS}>
@@ -275,7 +296,7 @@ export default function ListingCards({
               isFetchingNextPage={isFetchingNextPage}
               loadedCount={loaded}
               total={total}
-              rootRef={scrollRef}
+              rootRef={scroll === 'page' ? undefined : scrollRef}
             />
           </>
         )}

@@ -1,5 +1,5 @@
-import { useId, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
 import {
   useMutation,
@@ -10,17 +10,33 @@ import {
   ApiError,
   deleteCollection,
   getCollection,
+  isApiConfigured,
   removePropertyFromCollection,
   shareCollection,
   unshareCollection,
   updateCollection,
 } from '@/lib/api';
 import { isMine, revalidateCollections, settleCollectionWrite } from '@/lib/collectionCache';
-import { curationKeys } from '@/lib/queries';
+import { useCollectionCards } from '@/lib/collectionCards';
+import {
+  DEFAULT_SORT,
+  curationKeys,
+  fetchBrowseCount,
+  parseSort,
+  sortToParam,
+  type SortSpec,
+} from '@/lib/queries';
+import { browseKeys } from '@/lib/browseKeys';
+import { useCardCoverTag, useCardImageLarge } from '@/lib/browseLayout';
+import { CardHydrationProvider } from '@/lib/hydration';
+import { useCardEstimates } from '@/lib/useCardEstimates';
 import { propertyPath } from '@/lib/listingUrl';
 import { usePageTitle } from '@/lib/pageTitle';
 import { Field } from '@/components/controls';
 import ErrorBanner from '@/components/ErrorBanner';
+import ListingCards, { CARD_PHOTOS_PER_CARD } from '@/components/ListingCards';
+import OverflowMenu, { type OverflowMenuItem } from '@/components/OverflowMenu';
+import Tabs, { type Tab } from '@/components/Tabs';
 import {
   fmtAbsolute,
   fmtArea,
@@ -102,29 +118,15 @@ function CollectionDetailDesktop() {
   }
 
   const { collection, properties } = q.data;
-  /* A collection shared with me is view-only: no Edit, Monitoring, Sharing or
-   * per-row Remove (the API would 404 / no-op them anyway). */
+  /* A collection shared with me is view-only: no rename, monitoring, sharing,
+   * delete or per-row Remove (the API would 404 / no-op them anyway). */
   const own = isMine(collection);
   return (
     <Page>
       <Crumb />
-      <Header collection={collection} />
+      <Header collection={collection} own={own} acting={acting} />
       <Hairline />
-      {own && (
-        <>
-          <EditBlock collection={collection} />
-          <Hairline />
-          {!acting && (
-            <>
-              <MonitoringBlock collection={collection} />
-              <Hairline />
-            </>
-          )}
-          <SharingBlock collection={collection} />
-          <Hairline />
-        </>
-      )}
-      <PropertiesBlock collectionId={collection.id} properties={properties} editable={own} />
+      <Members collection={collection} properties={properties} editable={own} />
     </Page>
   );
 }
@@ -153,36 +155,145 @@ function Crumb() {
 /* Header                                                                     */
 /* -------------------------------------------------------------------------- */
 
-function Header({ collection }: { collection: Collection }) {
+/* Ruling P31: the owner's actions sit in the header — the Sledovat switch,
+ * "Sdílet · N" and ⋯ (Přejmenovat, Smazat kolekci) — each opening what its page
+ * block held: the switch itself, the sharing block in a panel under the header,
+ * the edit fields in place of the name, the delete confirm. */
+function Header({
+  collection,
+  own,
+  acting,
+}: {
+  collection: Collection;
+  own: boolean;
+  acting: boolean;
+}) {
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  const [editing, setEditing] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const panelId = useId();
+  /* OverflowMenu keeps its trigger to itself; the editor hands focus back to it. */
+  const menuRef = useRef<HTMLSpanElement>(null);
+  const focusMenu = () =>
+    menuRef.current?.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')?.focus();
+
+  const del = useMutation({
+    mutationFn: () => deleteCollection(collection.id),
+    onSuccess: () => {
+      revalidateCollections(qc);
+      navigate(ROUTES.collections.build(), { replace: true });
+    },
+    onError: (err: Error) => setError(err.message || 'Failed to delete'),
+  });
+
+  const recipients = collection.shared_with.length;
+  const items: OverflowMenuItem[] = [
+    {
+      label: 'Přejmenovat',
+      onSelect: () => {
+        setConfirmingDelete(false);
+        setEditing(true);
+      },
+    },
+    ...(collection.is_system
+      ? []
+      : [{ label: 'Smazat kolekci', danger: true, onSelect: () => setConfirmingDelete(true) }]),
+  ];
+
   return (
     <div className="mt-5">
-      <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-        Collection
-      </p>
-      <h1
-        className="mt-1.5 text-[2.6rem] leading-[1.05]"
-        style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
-      >
-        {collection.name}
-      </h1>
-      {collection.description && (
-        <p className="mt-2 text-sm text-[var(--color-ink-2)] max-w-2xl">
-          {collection.description}
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+        <div className="min-w-0 flex-1">
+          {editing ? (
+            <HeaderEditor
+              collection={collection}
+              onDone={() => {
+                setEditing(false);
+                focusMenu();
+              }}
+            />
+          ) : (
+            <>
+              <h1
+                className="text-[2.6rem] leading-[1.05]"
+                style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
+              >
+                {collection.name}
+              </h1>
+              {collection.description && (
+                <p className="mt-2 text-sm text-[var(--color-ink-2)] max-w-2xl">
+                  {collection.description}
+                </p>
+              )}
+            </>
+          )}
+          <p className="mt-2 text-[0.7rem] tracking-wide text-[var(--color-ink-4)]">
+            <span className="font-mono tabular-nums text-[var(--color-ink-3)]">
+              {fmtCount(collection.listing_count)}
+            </span>{' '}
+            {collection.listing_count === 1 ? 'property' : 'properties'} · updated{' '}
+            <span className="cursor-help" title={fmtAbsolute(collection.updated_at)}>
+              {fmtRelative(collection.updated_at)}
+            </span>
+          </p>
+          {!own && <ViewerLine collection={collection} />}
+        </div>
+        {own && (
+          <div className="flex shrink-0 flex-wrap items-center gap-2 pt-2">
+            {!acting && <MonitorSwitch collection={collection} setError={setError} />}
+            <button
+              type="button"
+              onClick={() => setSharing((v) => !v)}
+              aria-expanded={sharing}
+              aria-controls={sharing ? panelId : undefined}
+              className={HEADER_BUTTON}
+            >
+              Sdílet
+              {recipients > 0 && (
+                <>
+                  {' · '}
+                  <span className="ml-1 font-mono tabular-nums">{fmtCount(recipients)}</span>
+                </>
+              )}
+            </button>
+            <span ref={menuRef} className="contents">
+              <OverflowMenu label="Collection actions" items={items} />
+            </span>
+            {confirmingDelete && (
+              <TwoStep
+                idle="Delete collection"
+                confirm={del.isPending ? 'Deleting…' : `Delete "${collection.name}"`}
+                confirming
+                setConfirming={setConfirmingDelete}
+                pending={del.isPending}
+                onConfirm={() => del.mutate()}
+              />
+            )}
+          </div>
+        )}
+      </div>
+      {error && (
+        <p className="mt-3 text-[0.75rem] text-[var(--color-brick)]">{error}</p>
       )}
-      <p className="mt-2 text-[0.7rem] tracking-wide text-[var(--color-ink-4)]">
-        <span className="font-mono tabular-nums text-[var(--color-ink-3)]">
-          {fmtCount(collection.listing_count)}
-        </span>{' '}
-        {collection.listing_count === 1 ? 'property' : 'properties'} · updated{' '}
-        <span className="cursor-help" title={fmtAbsolute(collection.updated_at)}>
-          {fmtRelative(collection.updated_at)}
-        </span>
-      </p>
-      {!isMine(collection) && <ViewerLine collection={collection} />}
+      {own && sharing && (
+        <section
+          id={panelId}
+          className="mt-5 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-4"
+        >
+          <SharingBlock collection={collection} />
+        </section>
+      )}
     </div>
   );
 }
+
+/* Pipeline's header button, open while its panel shows (a disclosure, so the
+ * state is aria-expanded, never also aria-pressed). */
+const HEADER_BUTTON =
+  'inline-flex items-center h-8 px-3 whitespace-nowrap rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] text-[0.8rem] text-[var(--color-ink-2)] hover:border-[var(--color-rule-strong)] hover:text-[var(--color-ink)] aria-expanded:border-[var(--color-copper)] aria-expanded:text-[var(--color-copper)] transition-colors';
 
 /* The recipient's side: who shared it, that it is read-only, and the one write
  * a recipient has — leaving (its own grant, the only row in `shared_with`). */
@@ -224,16 +335,28 @@ function ViewerLine({ collection }: { collection: Collection }) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Edit block (rename / description) + delete                                 */
+/* Rename / description, in place of the header's name (⋯ → Přejmenovat)       */
 /* -------------------------------------------------------------------------- */
 
-function EditBlock({ collection }: { collection: Collection }) {
+function HeaderEditor({
+  collection,
+  onDone,
+}: {
+  collection: Collection;
+  /* Saved or cancelled: the header flips back. */
+  onDone: () => void;
+}) {
   const qc = useQueryClient();
-  const navigate = useNavigate();
   const [name, setName] = useState(collection.name);
   const [description, setDescription] = useState(collection.description ?? '');
   const [error, setError] = useState<string | null>(null);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const nameRef = useRef<HTMLInputElement>(null);
+  const descriptionRef = useRef<HTMLInputElement>(null);
+
+  /* The default collection's name is locked, so its first field is the description. */
+  useEffect(() => {
+    (collection.is_system ? descriptionRef : nameRef).current?.focus();
+  }, [collection.is_system]);
 
   const dirty =
     name.trim() !== collection.name ||
@@ -249,141 +372,142 @@ function EditBlock({ collection }: { collection: Collection }) {
     onSuccess: () => {
       setError(null);
       revalidateCollections(qc, { collection_id: collection.id });
+      onDone();
     },
     onError: (err: Error) => setError(err.message || 'Failed to save'),
   });
 
-  const del = useMutation({
-    mutationFn: () => deleteCollection(collection.id),
-    onSuccess: () => {
-      revalidateCollections(qc);
-      navigate(ROUTES.collections.build(), { replace: true });
-    },
-    onError: (err: Error) => setError(err.message || 'Failed to delete'),
-  });
-
   return (
-    <div>
-      <SectionLabel>Edit</SectionLabel>
-      <div className="mt-3 flex flex-col gap-2.5 max-w-2xl">
-        <Field label="Name" as="control">
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            maxLength={200}
-            placeholder="Name"
-            disabled={collection.is_system}
-            title={collection.is_system ? "The default collection can't be renamed." : undefined}
-            className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] disabled:opacity-50 disabled:cursor-not-allowed"
-          />
-        </Field>
-        <Field label="Description" as="control">
-          <input
-            type="text"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Description (optional)"
-            className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]"
-          />
-        </Field>
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            disabled={!dirty || save.isPending || name.trim().length === 0}
-            onClick={() => save.mutate()}
-            className="px-4 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          >
-            {save.isPending ? 'Saving…' : 'Save changes'}
-          </button>
-          <div className="ml-auto">
-            {collection.is_system ? (
-              <span className="text-[0.72rem] text-[var(--color-ink-4)]">
-                Default collection — can't be renamed or deleted.
-              </span>
-            ) : (
-              <TwoStep
-                idle="Delete collection"
-                confirm={del.isPending ? 'Deleting…' : `Delete "${collection.name}"`}
-                confirming={confirmingDelete}
-                setConfirming={setConfirmingDelete}
-                pending={del.isPending}
-                onConfirm={() => del.mutate()}
-              />
-            )}
-          </div>
-        </div>
-        {error && (
-          <p className="text-[0.75rem] text-[var(--color-brick)]">{error}</p>
+    <div
+      className="flex flex-col gap-2.5 max-w-2xl"
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          onDone();
+        }
+      }}
+    >
+      <Field label="Name" as="control">
+        <input
+          ref={nameRef}
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          maxLength={200}
+          placeholder="Name"
+          disabled={collection.is_system}
+          title={collection.is_system ? "The default collection can't be renamed." : undefined}
+          className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] disabled:opacity-50 disabled:cursor-not-allowed"
+        />
+      </Field>
+      <Field label="Description" as="control">
+        <input
+          ref={descriptionRef}
+          type="text"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="Description (optional)"
+          className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]"
+        />
+      </Field>
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          disabled={!dirty || save.isPending || name.trim().length === 0}
+          onClick={() => save.mutate()}
+          className="px-4 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          {save.isPending ? 'Saving…' : 'Save changes'}
+        </button>
+        <button
+          type="button"
+          onClick={onDone}
+          className="px-2.5 py-1.5 text-sm tracking-wide text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)] transition-colors"
+        >
+          Cancel
+        </button>
+        {collection.is_system && (
+          <span className="ml-auto text-[0.72rem] text-[var(--color-ink-4)]">
+            Default collection — can't be renamed or deleted.
+          </span>
         )}
       </div>
+      {error && (
+        <p className="text-[0.75rem] text-[var(--color-brick)]">{error}</p>
+      )}
     </div>
   );
 }
 
 /* -------------------------------------------------------------------------- */
-/* Monitoring toggle                                                          */
+/* Monitoring switch ("Sledovat", in the header)                              */
 /* -------------------------------------------------------------------------- */
 
-function MonitoringBlock({ collection }: { collection: Collection }) {
+/* MonitoringBlock's switch as it was drawn; its sentences, which sat beside it,
+ * now describe it (aria-describedby) and are its tooltip. */
+function MonitorSwitch({
+  collection,
+  setError,
+}: {
+  collection: Collection;
+  setError: (message: string | null) => void;
+}) {
   const qc = useQueryClient();
-  const [error, setError] = useState<string | null>(null);
-
-  const invalidate = () => {
-    setError(null);
-    revalidateCollections(qc, { collection_id: collection.id });
-  };
 
   const toggle = useMutation({
     mutationFn: (next: boolean) =>
       updateCollection(collection.id, { monitoring_enabled: next }),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      setError(null);
+      revalidateCollections(qc, { collection_id: collection.id });
+    },
     onError: (err: Error) => setError(err.message || 'Failed to update'),
   });
 
   const on = collection.monitoring_enabled;
+  const switchId = useId();
   const labelId = useId();
+  const descriptionId = useId();
+  const description = `${
+    on
+      ? 'On — a property in this collection raises an alert when its price changes or it is delisted.'
+      : 'Off — properties here are not monitored for changes.'
+  } Alerts appear in the Notifications feed.`;
 
   return (
-    <div>
-      <SectionLabel>
-        <span id={labelId}>Monitoring</span>
-      </SectionLabel>
-      <div className="mt-3 flex items-start gap-3 max-w-2xl">
-        <button
-          type="button"
-          role="switch"
-          aria-checked={on}
-          aria-labelledby={labelId}
-          disabled={toggle.isPending}
-          onClick={() => toggle.mutate(!on)}
+    <div className="flex h-8 items-center gap-2 pr-1" title={description}>
+      <label
+        id={labelId}
+        htmlFor={switchId}
+        className="cursor-pointer select-none text-[0.8rem] text-[var(--color-ink-2)]"
+      >
+        Sledovat
+      </label>
+      <button
+        id={switchId}
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-labelledby={labelId}
+        aria-describedby={descriptionId}
+        disabled={toggle.isPending}
+        onClick={() => toggle.mutate(!on)}
+        className={[
+          'relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors disabled:opacity-50',
+          on ? 'bg-[var(--color-copper)]' : 'bg-[var(--color-rule-strong)]',
+        ].join(' ')}
+      >
+        <span
+          aria-hidden="true"
           className={[
-            'mt-0.5 relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors disabled:opacity-50',
-            on ? 'bg-[var(--color-copper)]' : 'bg-[var(--color-rule-strong)]',
+            'inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform',
+            on ? 'translate-x-[1.15rem]' : 'translate-x-[0.15rem]',
           ].join(' ')}
-        >
-          <span
-            aria-hidden="true"
-            className={[
-              'inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform',
-              on ? 'translate-x-[1.15rem]' : 'translate-x-[0.15rem]',
-            ].join(' ')}
-          />
-        </button>
-        <div className="text-sm text-[var(--color-ink-2)]">
-          <p>
-            {on
-              ? 'On — a property in this collection raises an alert when its price changes or it is delisted.'
-              : 'Off — properties here are not monitored for changes.'}
-          </p>
-          <p className="mt-1 text-[0.78rem] text-[var(--color-ink-4)]">
-            Alerts appear in the Notifications feed.
-          </p>
-        </div>
-      </div>
-      {error && (
-        <p className="mt-2 text-[0.75rem] text-[var(--color-brick)]">{error}</p>
-      )}
+        />
+      </button>
+      <span id={descriptionId} className="sr-only">
+        {description}
+      </span>
     </div>
   );
 }
@@ -392,7 +516,8 @@ function MonitoringBlock({ collection }: { collection: Collection }) {
 /* Sharing (owner only)                                                       */
 /* -------------------------------------------------------------------------- */
 
-/* Share by email, read-only (migration 610) — the one ShareBlock, without modes. */
+/* Share by email, read-only (migration 610) — the one ShareBlock, without modes;
+ * the panel "Sdílet · N" opens under the header. */
 function SharingBlock({ collection }: { collection: Collection }) {
   const qc = useQueryClient();
   const changed = () =>
@@ -405,6 +530,174 @@ function SharingBlock({ collection }: { collection: Collection }) {
       onShare={(email) => shareCollection(collection.id, email).then(changed)}
       onRevoke={(account_id) => unshareCollection(collection.id, account_id).then(changed)}
     />
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Members: Browse's cards first, the table second (ruling P32)               */
+/* -------------------------------------------------------------------------- */
+
+type MembersTab = 'cards' | 'table';
+const MEMBER_TABS: ReadonlyArray<Tab<MembersTab>> = [
+  { key: 'cards', label: 'Cards' },
+  { key: 'table', label: 'Table' },
+];
+
+/* The tab and the card sort live in the address (?tab=table, ?sort=), so Back
+ * from a property lands on the view it was opened from. */
+function Members({
+  collection,
+  properties,
+  editable,
+}: {
+  collection: Collection;
+  properties: CollectionPropertyRow[];
+  editable: boolean;
+}) {
+  const [params, setParams] = useSearchParams();
+  const tab: MembersTab = params.get('tab') === 'table' ? 'table' : 'cards';
+  const setTab = (next: MembersTab) =>
+    setParams(
+      (prev) => {
+        const out = new URLSearchParams(prev);
+        if (next === 'table') out.set('tab', 'table');
+        else out.delete('tab');
+        return out;
+      },
+      { replace: true },
+    );
+
+  /* An empty collection has nothing to draw as cards: its sentence alone. */
+  if (properties.length === 0) {
+    return <PropertiesBlock collectionId={collection.id} properties={properties} editable={editable} />;
+  }
+  return (
+    <div>
+      <Tabs tabs={MEMBER_TABS} active={tab} onChange={setTab} />
+      <div className="mt-5">
+        {tab === 'table' ? (
+          <PropertiesBlock collectionId={collection.id} properties={properties} editable={editable} />
+        ) : (
+          <CardsTab collectionId={collection.id} members={properties} onOpenTable={() => setTab('table')} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+const NO_HOVER: ReadonlySet<number> = new Set();
+const noop = () => {};
+
+/* Browse's card grid over the collection (lib/collectionCards), with its notes,
+ * pipeline, collection and estimate marks; no map, so no hover sync, and no
+ * merge mode. The page scrolls it, not a column of its own. Browse's
+ * per-browser image size and cover choice apply. */
+function CardsTab({
+  collectionId,
+  members,
+  onOpenTable,
+}: {
+  collectionId: number;
+  members: CollectionPropertyRow[];
+  onOpenTable: () => void;
+}) {
+  const [params, setParams] = useSearchParams();
+  const sort = parseSort(params.get('sort'));
+  const onSort = (next: SortSpec) =>
+    setParams(
+      (prev) => {
+        const out = new URLSearchParams(prev);
+        if (sortToParam(next) === sortToParam(DEFAULT_SORT)) out.delete('sort');
+        else out.set('sort', sortToParam(next));
+        return out;
+      },
+      { replace: true },
+    );
+
+  const { filters, list, uncarded } = useCollectionCards({ collectionId, members, sort });
+  const countQ = useQuery<number, Error>({
+    queryKey: browseKeys.count(filters),
+    queryFn: ({ signal }) => fetchBrowseCount(filters, { signal }),
+    staleTime: 60_000,
+  });
+  const imageLarge = useCardImageLarge();
+  const coverTag = useCardCoverTag();
+  const restorationKey = `collection:${collectionId}:${sortToParam(sort)}`;
+  const estimates = useCardEstimates({ rows: list.rows, enabled: isApiConfigured(), resetKey: restorationKey });
+  const listingIds = useMemo(() => list.rows.map((r) => r.listing_id), [list.rows]);
+
+  /* MS16: a failed read is a retry, never an empty grid; the table still lists every member. */
+  if (list.isError) {
+    return (
+      <ErrorBanner
+        flush
+        title="Failed to load:"
+        message={list.error?.message ?? 'The cards did not load.'}
+        onRetry={list.refetch}
+      />
+    );
+  }
+  return (
+    <>
+      <CardHydrationProvider listingIds={listingIds} renders={{ photos: CARD_PHOTOS_PER_CARD, floors: true }}>
+        <ListingCards
+          scroll="page"
+          rows={list.isLoading ? null : list.rows}
+          total={countQ.data ?? null}
+          sort={sort}
+          imageLarge={imageLarge.value}
+          coverTag={coverTag.value}
+          onCoverTag={coverTag.set}
+          isLoading={list.isLoading}
+          isError={list.isError}
+          isFetchingNextPage={list.isFetchingNextPage}
+          hasNextPage={list.hasNextPage}
+          onReachEnd={list.fetchNextPage}
+          restorationKey={restorationKey}
+          hasFilters={false}
+          hasBounds={false}
+          hoveredIds={NO_HOVER}
+          onHover={noop}
+          onSort={onSort}
+          onClearFilters={noop}
+          onClearBounds={noop}
+          merge={null}
+          estimates={estimates.estimates}
+          estimatingIds={estimates.estimatingIds}
+          estimateRefusals={estimates.estimateRefusals}
+          onEstimate={estimates.onEstimate}
+          empty={
+            <div className="rounded-[var(--radius-md)] border border-dashed border-[var(--color-rule)] bg-[var(--color-paper-2)] p-8 text-center">
+              <p className="text-sm text-[var(--color-ink-2)]">
+                None of these properties has a card yet: Browse draws one once a property's
+                location is confirmed and it is published. The table lists every member.
+              </p>
+              <button
+                type="button"
+                onClick={onOpenTable}
+                className="mt-3 text-[0.75rem] tracking-wide uppercase text-[var(--color-copper)] hover:underline"
+              >
+                Open the table
+              </button>
+            </div>
+          }
+        />
+      </CardHydrationProvider>
+      {/* Under a grid only: with no card at all, the grid's empty node says it. */}
+      {list.rows.length > 0 && uncarded.length > 0 && (
+        <p className="mt-3 text-[0.78rem] text-[var(--color-ink-3)]">
+          <span className="font-mono tabular-nums text-[var(--color-ink-2)]">{fmtCount(uncarded.length)}</span>{' '}
+          more without a card yet (location not confirmed, or not published yet).{' '}
+          <button
+            type="button"
+            onClick={onOpenTable}
+            className="text-[var(--color-copper)] hover:underline underline-offset-2"
+          >
+            Open the table
+          </button>
+        </p>
+      )}
+    </>
   );
 }
 

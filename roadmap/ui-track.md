@@ -22,6 +22,12 @@ toolkit work.
   focus in it, as an opacity overlay (P02); the photo draws no render verdict, just the counter (P03, the card only); a
   card of the one type and deal the filter pins reads "2+kk · 54 m²", any other keeps "Byt na prodej ·"
   (P05); the storey chip is a quiet inset label without a border (P06 note).
+- **Done, agenda 7 Collections** (2026-10-27): a dashed "+ Nová kolekce" card ends my list and opens the
+  new-collection form in place (P30; the phone's "Nová sbírka" moved there too, dashed); the collection page
+  header carries the "Sledovat" switch, "Sdílet · N" (the sharing block in a panel) and ⋯ with Přejmenovat (the
+  edit fields in place) and Smazat kolekci (its confirm) (P31); the members are Browse's cards with notes,
+  pipeline and estimates, the table the second tab (P32); no small-caps label above either h1 (P26). Open: the
+  phone header's P31 controls (the phone has none of the three blocks), for the operator.
 - **Next (not built):** the other confirmed hierarchy changes, agendas 2–8 in one PR (operator, 2026-10-27; with the
   applied-filter pills for P09, and the phone Brokers / Collections following desktop) (Browse page and map,
   Stats, Pipeline, Watchdogs, Notifications, Brokers, Collections, Shell); removing render scoring end to
