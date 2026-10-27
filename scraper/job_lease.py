@@ -231,7 +231,9 @@ SELECT registry_at IS NULL, retired_at IS NOT NULL FROM scheduled_jobs WHERE job
 
 # The registry's columns only: never the lease, the history or `enabled` (dead since 675). `due_at` is set only for a
 # new, adopted, un-retired or never-scheduled row, at the first slot no earlier than now() + timeout_s, so a move's
-# first run comes after any GitHub run still in flight; a changed grid is never re-slotted.
+# first run comes after any GitHub run still in flight; a changed grid is never re-slotted. `registry_at` is when the
+# row joined the runner (new, adopted or un-retired), kept by every later boot: Health judges a row that joined after
+# a gap on its runs since (migration 682), as un-retiring keeps the streak and last success of before the revert.
 _REGISTER_SQL = """
 INSERT INTO scheduled_jobs AS s (job_name, argv, cadence, offset_s, timeout_s, memory_mb, cpus, resource, runner,
                                  registry_at, retired_at, due_at)
@@ -243,7 +245,8 @@ VALUES (%(job)s, %(argv)s::text[], make_interval(secs => %(every_s)s::integer), 
 ON CONFLICT (job_name) DO UPDATE
    SET argv = EXCLUDED.argv, cadence = EXCLUDED.cadence, offset_s = EXCLUDED.offset_s,
        timeout_s = EXCLUDED.timeout_s, memory_mb = EXCLUDED.memory_mb, cpus = EXCLUDED.cpus,
-       resource = EXCLUDED.resource, runner = EXCLUDED.runner, registry_at = now(), retired_at = NULL,
+       resource = EXCLUDED.resource, runner = EXCLUDED.runner, retired_at = NULL,
+       registry_at = CASE WHEN s.retired_at IS NOT NULL OR s.registry_at IS NULL THEN now() ELSE s.registry_at END,
        due_at = CASE WHEN s.retired_at IS NOT NULL OR s.registry_at IS NULL OR s.due_at IS NULL
                      THEN EXCLUDED.due_at ELSE s.due_at END
 """

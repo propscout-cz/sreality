@@ -416,6 +416,24 @@ def test_register_un_retires_and_adopts_a_lane_era_row_keeping_its_lease_and_his
     assert [r[:2] for r in _runs(cur, lane_era)] == [("old", "ok")]
 
 
+def test_registry_at_is_when_the_row_joined_the_runner_and_a_later_boot_keeps_it(cur: Any) -> None:
+    """Health (migration 682) judges a row that joined after a gap on its runs since: a boot re-registering a live row
+    must not move that moment, and an un-retire or an adoption must."""
+    _now(cur)
+    live, retired = _entry(), _entry()
+    job_lease.register(cur.connection, [live, retired])
+    lane_era = _job(cur, due=None)
+    cur.execute("UPDATE scheduled_jobs SET registry_at = now() - interval '3 days' WHERE job_name = ANY(%s)",
+                ([live.name, retired.name],))
+    cur.execute("UPDATE scheduled_jobs SET retired_at = now() - interval '1 day' WHERE job_name = %s",
+                (retired.name,))
+    job_lease.register(cur.connection, [live, retired, _entry(lane_era)])
+    cur.execute("SELECT job_name, now() - registry_at FROM scheduled_jobs WHERE job_name = ANY(%s)",
+                ([live.name, retired.name, lane_era],))
+    assert dict(cur.fetchall()) == {live.name: timedelta(days=3), retired.name: timedelta(0),
+                                    lane_era: timedelta(0)}
+
+
 def test_a_row_the_database_refuses_is_skipped_and_its_siblings_still_land(cur: Any) -> None:
     _now(cur)
     bad, good = _entry(cpus=0), _entry()  # cpus 0 breaks 675's declarations_positive
