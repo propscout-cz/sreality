@@ -2635,8 +2635,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": 40,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/runner_image.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/runner_image.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/runner_image.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/runner_image.yml"
     },
     {
       "filename": "runpod_reap.yml",
