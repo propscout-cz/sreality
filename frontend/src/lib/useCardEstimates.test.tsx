@@ -132,4 +132,29 @@ describe('useCardEstimates', () => {
     // The reset forgets what was asked, so the whole new cohort is read again.
     await waitFor(() => expect(api.latestEstimationsByListing).toHaveBeenLastCalledWith([900, 901]));
   });
+
+  it("a new cohort reads every card when its rows land before the previous rows' read answered", async () => {
+    let answerPlaceholderRead: (map: Record<number, ListingEstimate>) => void = () => {};
+    vi.mocked(api.latestEstimationsByListing)
+      .mockResolvedValueOnce({ 900: ESTIMATE })
+      .mockImplementationOnce(() => new Promise((r) => { answerPlaceholderRead = r; }))
+      .mockResolvedValueOnce({ 900: ESTIMATE });
+    const before = [cardRow(1, { sreality_id: 900 })];
+    const { result, rerender } = renderEstimates({ rows: before, enabled: true, resetKey: 'a' });
+    await waitFor(() => expect(result.current.estimates[900]).toEqual(ESTIMATE));
+
+    // A re-sort: the list keeps the previous rows (the same reference) while the new order loads.
+    rerender({ rows: before, enabled: true, resetKey: 'b' });
+    expect(result.current.estimates).toEqual({});
+    expect(api.latestEstimationsByListing).toHaveBeenCalledTimes(2);
+
+    // The new rows land first: that read is dropped, and its ids are asked again.
+    rerender({ rows: [cardRow(2, { sreality_id: 901 }), cardRow(1, { sreality_id: 900 })], enabled: true, resetKey: 'b' });
+    expect(api.latestEstimationsByListing).toHaveBeenCalledTimes(3);
+    expect(api.latestEstimationsByListing).toHaveBeenLastCalledWith([901, 900]);
+    await waitFor(() => expect(result.current.estimates[900]).toEqual(ESTIMATE));
+
+    await act(async () => answerPlaceholderRead({ 900: { ...ESTIMATE, run_id: 1 } }));
+    expect(result.current.estimates[900]).toEqual(ESTIMATE);
+  });
 });

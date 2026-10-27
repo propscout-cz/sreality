@@ -626,17 +626,18 @@ function CardsTab({
   const estimates = useCardEstimates({ rows: list.rows, enabled: isApiConfigured(), resetKey: restorationKey });
   const listingIds = useMemo(() => list.rows.map((r) => r.listing_id), [list.rows]);
 
-  /* MS16: a failed read is a retry, never an empty grid; the table still lists every member. */
-  if (list.isError) {
-    return (
-      <ErrorBanner
-        flush
-        title="Failed to load:"
-        message={list.error?.message ?? 'The cards did not load.'}
-        onRetry={list.refetch}
-      />
-    );
-  }
+  /* MS16: a failed read is a retry, never an empty grid; the table still lists every member.
+   * A failed next page or re-read keeps the cards already drawn, the banner under them; a
+   * failed next page's retry asks for that page alone. */
+  const failed = list.isError ? (
+    <ErrorBanner
+      flush={list.rows.length === 0}
+      title="Failed to load:"
+      message={list.error?.message ?? 'The cards did not load.'}
+      onRetry={list.isFetchNextPageError ? list.fetchNextPage : list.refetch}
+    />
+  ) : null;
+  if (failed && list.rows.length === 0) return failed;
   return (
     <>
       <CardHydrationProvider listingIds={listingIds} renders={{ photos: CARD_PHOTOS_PER_CARD, floors: true }}>
@@ -652,7 +653,9 @@ function CardsTab({
           isError={list.isError}
           isFetchingNextPage={list.isFetchingNextPage}
           hasNextPage={list.hasNextPage}
-          onReachEnd={list.fetchNextPage}
+          /* A failed next page waits for the banner's retry: the end of the grid stays
+             in view, and would ask a page that keeps failing again in a loop. */
+          onReachEnd={list.isFetchNextPageError ? noop : list.fetchNextPage}
           restorationKey={restorationKey}
           hasFilters={false}
           hasBounds={false}
@@ -697,6 +700,7 @@ function CardsTab({
           </button>
         </p>
       )}
+      {failed}
     </>
   );
 }

@@ -3681,9 +3681,12 @@ renumber.** Navigate by area:
     one says so with a retry inside the row (merge sprint MS16) — while a RESOLVED selection
     matching nothing is zero cards, never everything. Stav's default stays `any`, so a delisted member of a
     collection stays in the cohort. **On the kanban board** stage moves are
-    **drag-and-drop ONLY** (`@dnd-kit`, `Pipeline.tsx`: each column a `useDroppable`, each card a
+    **drag-and-drop ONLY** (`@dnd-kit`, `Pipeline.tsx`: each live column and each row of the folded
+    "Uzavřené" lane — the terminal stages, ruling P22 — a `useDroppable` under its stage's id, each card a
     `useDraggable` with a grip handle; one optimistic move mutation; keyboard moves via the
-    `KeyboardSensor`). The drag→move resolution is the pure, unit-tested `planMove(activeId,
+    `KeyboardSensor`). `boardCollision` picks the target: a closed row is hit by a point (the pointer,
+    or on a keyboard drag the ghost's centre), since a ~2rem row under a tall ghost would otherwise take
+    whichever row the ghost covered most; the columns keep the overlap rule. The drag→move resolution is the pure, unit-tested `planMove(activeId,
     overId, cards)` (same column / dropped-outside / unknown card → no-op). The per-card stage
     `<select>` was **removed** there (the card instead carries a trash → inline two-step confirm →
     optimistic remove-from-pipeline, the app's destructive-action pattern). `<DragOverlay

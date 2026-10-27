@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
@@ -18,7 +18,7 @@ import CollectionDetail from './CollectionDetail';
 import type { CollectionPropertyRow, CollectionWithProperties, EstimationRun, PipelineShare } from '@/lib/types';
 import * as api from '@/lib/api';
 import * as queries from '@/lib/queries';
-import { curationKeys, type CardRow, type PipelineMembers } from '@/lib/queries';
+import { CARD_PAGE_SIZE, curationKeys, type CardRow, type PipelineMembers } from '@/lib/queries';
 import { ActingAs } from '@/lib/acting';
 import { collectionCardFilters } from '@/lib/collectionCards';
 import { propertyPath } from '@/lib/listingUrl';
@@ -120,6 +120,24 @@ function renderPage({ path = '/collections/1', acting = null }: { path?: string;
     </QueryClientProvider>,
   );
   return { invalidate };
+}
+
+/* jsdom has no IntersectionObserver; this one lets a test bring the end of the
+ * card grid into view by hand. */
+class FakeIO {
+  static instances: FakeIO[] = [];
+  constructor(readonly callback: IntersectionObserverCallback) {
+    FakeIO.instances.push(this);
+  }
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+  takeRecords(): IntersectionObserverEntry[] {
+    return [];
+  }
+  reach(): void {
+    this.callback([{ isIntersecting: true } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
+  }
 }
 
 const heading = () => screen.findByRole('heading', { level: 1, name: 'Vinohrady watch' });
@@ -484,6 +502,44 @@ describe('<CollectionDetail>', () => {
       fireEvent.click(within(banner).getByRole('button', { name: 'Zkusit znovu' }));
       await waitFor(() => expect(cardLink(CARD)).toBeDefined());
       expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    it('keeps the drawn cards when a later page fails, its retry asking for that page alone', async () => {
+      FakeIO.instances = [];
+      vi.stubGlobal('IntersectionObserver', FakeIO);
+      try {
+        const first = Array.from({ length: CARD_PAGE_SIZE }, (_, i) => cardRow(100 + i));
+        const next = cardRow(200);
+        const CURSOR = { value: 5_000_123, id: 123 };
+        let failing = true;
+        vi.mocked(queries.fetchListingsForCards).mockImplementation(async (_f, _s, cursor) => {
+          if (cursor == null) return { rows: first, nextCursor: CURSOR };
+          if (failing) throw new Error('statement timeout');
+          return { rows: [next], nextCursor: null };
+        });
+        vi.mocked(api.getCollection).mockResolvedValue(WITH_MEMBER);
+        renderPage();
+        await waitFor(() => expect(cardLink(first[0])).toBeDefined());
+
+        act(() => FakeIO.instances[FakeIO.instances.length - 1].reach());
+        const banner = await screen.findByRole('alert');
+        expect(banner).toHaveTextContent('Failed to load: statement timeout');
+        expect(cardLink(first[0])).toBeDefined();
+        expect(cardLink(first[CARD_PAGE_SIZE - 1])).toBeDefined();
+        // The end of the grid is still in view, yet the failed page is not asked again on its own.
+        await act(async () => new Promise((r) => setTimeout(r, 50)));
+        const reads = vi.mocked(queries.fetchListingsForCards).mock.calls;
+        expect(reads.map((c) => c[2])).toEqual([null, CURSOR]);
+
+        failing = false;
+        fireEvent.click(within(banner).getByRole('button', { name: 'Zkusit znovu' }));
+        await waitFor(() => expect(cardLink(next)).toBeDefined());
+        expect(reads.map((c) => c[2])).toEqual([null, CURSOR, CURSOR]);
+        expect(cardLink(first[0])).toBeDefined();
+        expect(screen.queryByRole('alert')).toBeNull();
+      } finally {
+        vi.unstubAllGlobals();
+      }
     });
 
     it('an empty collection shows its sentence and no tabs', async () => {

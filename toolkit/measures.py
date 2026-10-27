@@ -951,4 +951,14 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         why="Pins that the choropleth legend still reads the shared value "
         "labels rather than a local copy of them.",
     ),
+    RegisteredSite(
+        path="frontend/src/lib/listingPopupHtml.test.ts",
+        arm="vocab",
+        hits=1,
+        measure="ppm2",
+        kind=KIND_GUARDS,
+        why="The map popup test's fixture row carries the server's published "
+        "basis token, so the popup's per-m² line is pinned to that basis, never "
+        "a client ratio or a bare 'sale' literal.",
+    ),
 )

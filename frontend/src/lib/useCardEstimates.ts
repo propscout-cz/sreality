@@ -50,17 +50,26 @@ export function useCardEstimates({
 
   useEffect(() => {
     if (!enabled) return;
-    const fresh = cardIds.filter((id) => !requestedRef.current.has(id));
+    const requested = requestedRef.current;
+    const fresh = cardIds.filter((id) => !requested.has(id));
     if (fresh.length === 0) return;
-    fresh.forEach((id) => requestedRef.current.add(id));
+    fresh.forEach((id) => requested.add(id));
     let cancelled = false;
+    let answered = false;
     latestEstimationsByListing(fresh)
       .then((map) => {
+        answered = true;
         if (!cancelled) setEstimates((prev) => ({ ...prev, ...map }));
       })
-      .catch(() => {});
+      .catch(() => {
+        answered = true;
+      });
     return () => {
       cancelled = true;
+      /* A read dropped before it answered reached no card, so its ids are asked
+       * again: a new cohort first re-runs this on the previous rows (the list's
+       * placeholder), then on its own rows, which can share those ids. */
+      if (!answered) fresh.forEach((id) => requested.delete(id));
     };
   }, [cardIds, enabled, resetKey]);
 

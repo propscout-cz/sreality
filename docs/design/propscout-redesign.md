@@ -34,7 +34,10 @@ the ArtifactData tool (`action: "list"`). Never fetch these links with curl or W
    all of them on 2026-10-27 (24 confirmed, 11 declined).
 
 4. **Agenda 1, Browse card** (P01, P02, P03, P05 and the P06 chip restyle): built on branch
-   `feature/browse-card-hierarchy`. Nothing else from the rulings is built yet.
+   `feature/browse-card-hierarchy` (PR #2127).
+5. **Agendas 2–8** (every other confirmed ruling): built on branch `feature/redesign-rulings`, one commit per
+   agenda; the as-built notes are under "What to build next". Not built: the render-scoring removal and the
+   unruled additions (both below).
 
 ## How this operator wants design work done
 
@@ -106,7 +109,7 @@ File pointers are where the element lives today (2026-10-27); search for the quo
    only (`ImageCarousel` `renderBadge={false}`); the gallery, lightbox and the other carousels keep it until
    the render-scoring removal. P02 is `fadeTag` (opacity; the pointer on the card, or keyboard focus in it: `:focus-visible`, so a
    clicked photo arrow doesn't keep the tag shown).
-2. **Browse page, map and stats** — P09 (the header keeps the count and what is counted, without the rest of the
+2. **Browse page, map and stats** — **built** (branch `feature/redesign-rulings`). P09 (the header keeps the count and what is counted, without the rest of the
    scope sentence: `components/BrowseExperience.tsx` `FilterSummary`, text built by `lib/filters.ts` `summarise`,
    "Showing …"). **Operator ruling 2026-10-27: build the applied-filter pills with P09** (removable pills under
    the count, one per active filter, × resets that filter). P10 (merge mode
@@ -115,16 +118,45 @@ File pointers are where the element lives today (2026-10-27); search for the quo
    `lp-precision` and `lp-seen` "last seen …" lines become one, the precision detail in its tooltip; the popup
    HTML in `ListingMap.tsx`), P14 (chart card shows Upravit + a ⋯ menu with move up / move down / remove
    chart; `components/stats/StatsChart.tsx`).
-3. **Pipeline** — P19 (remove `CityIndexStrip` from `components/pipeline/BoardCard.tsx`), P20 (the
+   As built: the count line reads "12 345 apartments for sale" (Browse stays English, the count mono), and
+   every filter beyond the defaults is a removable pill under it (`AppliedFilterPills`), from the one list the
+   phone counts (`phone/filterRows` `appliedFilters`) in the words its sheet says (`phone/filterSummary`); the
+   map-area and broker chips keep their words and tooltips as pills; the pill line keeps its height on the
+   defaults, so a first map pan doesn't push the page down. A URL-only min/max pair (garden area) is one
+   filter now, on the phone too. "Sloučit…" sits after Cover and Sort; the bar under the tabs is the mode,
+   with Cancel (a production smoke check of merge mode is owed after the deploy). The popup moved to
+   `lib/listingPopupHtml`; its rung/radius and exact time are the two halves' tooltips. The ⋯ menu is the
+   shared `components/OverflowMenu` (also the watchdog and collection menus); Odebrat keeps its confirm.
+3. **Pipeline** — **built** (branch `feature/redesign-rulings`). P19 (remove `CityIndexStrip` from `components/pipeline/BoardCard.tsx`), P20 (the
    `mf_gross_yield_pct` span beside the dims row shows on Velké cards only, `BoardCard.tsx`), P22 (terminal
    stages, `is_terminal`, fold into one "Uzavřené" lane of drop rows; `pages/Pipeline.tsx`). Rule #22 holds:
    closing a deal is a move into a terminal stage, never a remove toggle.
-4. **Watchdogs** — P24 (Delete into a ⋯ menu, keeping its confirm), P25 (created date as a grey line under the
+   As built: the board no longer reads the city indexes. The strip was mounted only on the pipeline card, so
+   no surface shows it now: the ruling's "it stays on the property page" assumed one there, and the property
+   page never had it (ask the operator whether it should get one). `CityIndexStrip` and `lib/useCityQuality`
+   stay on disk, unmounted. P20 is `showsYield` in the card-size table, so the drag ghost and the card agree.
+   P22: the lane sits at the board's right end, a row per closed stage (its colour bar, label and count under
+   the active filters); each row is a droppable under its stage's id, so a drop closes the deal through the
+   unchanged `planMove` → `usePipelineCard` move. A row opens its stage's full cards under the rows (which never
+   move), one row at a time, the lane widening to the card size's column. `boardCollision` hits a row by a
+   point (the pointer, or on a keyboard drag the ghost's centre); the columns keep the overlap rule. The
+   skeleton draws the folded lane too.
+4. **Watchdogs** — **built** (branch `feature/redesign-rulings`). P24 (Delete into a ⋯ menu, keeping its confirm), P25 (created date as a grey line under the
    name, drop the column): `pages/WatchdogManage.tsx`.
-5. **Notifications** — P27 (load older items on reaching the end, as Browse does): `pages/Notifications.tsx`,
+   As built: the page stays English, so ⋯ holds one danger item, "Delete…", running the same confirm before
+   the delete. The created date is a grey line under the name, outside its link, the full timestamp in its
+   tooltip; the filter cell's cap rose from 420 to 540 px.
+5. **Notifications** — **built** (branch `feature/redesign-rulings`). P27 (load older items on reaching the end, as Browse does): `pages/Notifications.tsx`,
    `components/LoadMore.tsx`.
-6. **Brokers** — P28 (drop the caption under each count, `Count` in `pages/Brokers.tsx`, labels passed from
+   As built: older rows load through Browse's `InfiniteSentinel` (window scroll, the same keyset cursor, page
+   size 50 and 30 s poll); the list still ends silently, with no end line. `LoadMore`'s four Czech AUTODEDUP
+   callers render as before.
+6. **Brokers** — **built** (branch `feature/redesign-rulings`). P28 (drop the caption under each count, `Count` in `pages/Brokers.tsx`, labels passed from
    `Ledger`; the column headers say the unit once), P29 (five firm pills, then "+ N dalších": `CompanyFilter`).
+   As built: one column-head row says each unit once; each row keeps its units as screen-reader text. The five
+   pills are the busiest firms (the server's order); "+ N dalších" opens the rest in place, and a chosen firm
+   always stays in view. Phone: the unit is said once above the figures; the phone has no firm filter (#1760
+   Q12), so P29 has nothing to collapse there.
 7. **Collections** — **built** (branch `feature/redesign-rulings`). P30 (a dashed "+ Nová kolekce" card at the end of the grid opens the form;
    `pages/Collections.tsx` `NewCollectionForm`), P31 (the collection page header carries the monitoring switch,
    "Share · N" and ⋯ with rename and delete, replacing `EditBlock`, `MonitoringBlock` and `SharingBlock`), P32
@@ -144,14 +176,19 @@ File pointers are where the element lives today (2026-10-27); search for the quo
    sbírka" moved to the end of my list, dashed, keeping its bottom sheet; phone P32 was already cards with no
    table, so nothing changed; phone P31 has no blocks to move (its footer sends rename, delete, monitoring and
    sharing to the desktop), so adding Sledovat / Sdílet / ⋯ to the phone header **awaits the operator's answer**.
-8. **Shell and page headers** — P26 (drop the small-caps label above the h1; there is no shared header
+8. **Shell and page headers** — **built** (branch `feature/redesign-rulings`). P26 (drop the small-caps label above the h1; there is no shared header
    component, each page has its own: `Header` in `pages/WatchdogManage.tsx`, `pages/Notifications.tsx`,
    `pages/Collections.tsx` and `pages/CollectionDetail.tsx`, and an inline header in `BrokersDesktop` in
    `pages/Brokers.tsx`), P33 ("!AUDIT POLOH" moves to the top of the Admin menu, its count on the Admin trigger;
    `components/Shell.tsx`), P34 (drop the "read-only · scrape data" build line from the footer, `Shell.tsx`).
    P35 is design-system only (Terakota dropped; nothing to build).
+   As built: "!AUDIT POLOH" is the first Admin item, above Health; its brick count sits on the Admin trigger
+   (`AuditCountBadge`), and a failed count read leaves the trigger badge-less. P34's footer keeps the map-tile
+   attribution at the right edge. P26 also dropped the label on the Estimations, Watchdog edit, Datasets and
+   Outreach pages (and on /brokers/review with agenda 6); `pages/pageTitleLabels.test.ts` pins every label
+   left above an h1 (only the error and not-found states keep one).
 
-Several of today's screens are in English ("Browse", "Showing …", "Manage watchdogs", "Curated lists"). The
+Several of today's screens are in English ("Browse", "12 345 apartments for sale", "Manage watchdogs", "Curated lists"). The
 design system draws them in Czech; translating them is one of the unruled additions below, so keep each
 screen's language as it is unless the operator rules otherwise.
 
@@ -172,7 +209,7 @@ Known so far:
 ## Shown in the design system but not ruled
 
 These are additions in the previews that the operator has not ruled on yet. Ask before building any of them:
-a Ctrl K "Přejít na…" jump box; applied filters as removable pills above the results; a "Najít filtr" box and
+a Ctrl K "Přejít na…" jump box; a "Najít filtr" box and
 active-count badges on filter bands; Σ asking-price sums on the pipeline and its stage headers; "days in stage"
 on pipeline cards; a 7-day alert count on watchdogs; notifications grouped by day with a photo per row and the
 price move as a struck-through old price; a share bar in the broker leaderboard; one look for every switch;
@@ -189,5 +226,6 @@ directly). Keep `lastChange.note` in the index current.
 
 ## Suggested opening for the next session
 
-> Read `docs/design/propscout-redesign.md` and `.interface-design/system.md`, then build the next
-> unbuilt agenda from "What to build next" as one PR.
+> Read `docs/design/propscout-redesign.md` and `.interface-design/system.md`. Every agenda is built; what
+> is left is the render-scoring scope (send the operator the list first) and the open questions under
+> agendas 3 and 7.
