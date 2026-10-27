@@ -11,7 +11,7 @@ operator ruled, and what is next. Read it top to bottom before touching any of t
 | Design rules for every build | `.interface-design/system.md` (§ Colour schemes, § Hierarchy rulings) | **Yes** |
 | Design system artifact: previews of every agenda, as ruled | https://claude.ai/artifact/NstEVRTDXyQ8ZNJhEpxv7m | Direction only |
 | Removal review: 35 before/after pictures and the operator's answers | https://claude.ai/artifact/WoFQVG1RwmaqXAfBBQoqbV | The rulings below are copied from it |
-| Stats review: 10 proposals for Browse › Stats (S01–S10), pictures and answers | https://claude.ai/artifact/RRDNo2TfAa7iWuMUoUBMfg | **Yes, read live** (§ Stats review below) |
+| Stats review: 10 proposals for Browse › Stats (S01–S10), pictures and answers | https://claude.ai/artifact/RRDNo2TfAa7iWuMUoUBMfg | **Yes** (§ Stats review below) |
 | Sequencing | `roadmap/ui-track.md` § PropScout.cz and three colour schemes | Yes |
 
 Reading the artifacts from a session: use the Artifact tool, `action: "read"` with the URL (add `path` for
@@ -98,23 +98,32 @@ storey chip (the design system draws it as a quiet inset label without a border)
 The operator asked for more hierarchy in the Stats tab, above all its header (the tabs, the dashboard chips,
 the Jako ve filtru / Prodáno (trh) / Vše switch, the Malé vzorky switch and the sample sentence). Ten
 proposals, each with a before/after picture, are on https://claude.ai/artifact/RRDNo2TfAa7iWuMUoUBMfg and the
-operator rules them there. **This review is read live, not copied here:** before building the Stats tab, list
-its `proposals` collection with ArtifactData and build exactly what it says.
+operator ruled them there. Before building the Stats tab, list its `proposals` collection with ArtifactData
+and build exactly what it says (the rulings are also copied below).
 
 - `decision: "confirm"` → build it, in the agenda-2 PR (Browse page, map and stats), alongside P14.
 - `decision: "decline"` → leave that part as it is; don't propose it again.
 - `decision: null` → not ruled yet: ask the operator before building it, and build the rest.
 - A `note` goes further than the proposal where they differ, as in the removal review.
 
-The proposals in short (the page's pictures are the spec): S01 one panel for the board's settings; S02 visible
-row labels "Dashboard" and "Vzorek"; S03 the sample sentence under its switch, the chosen option in bold; S04
-"Malé vzorky (pod 5)" at the end of the Vzorek row, its explanation in a tooltip; S05 the sample said once for the
-board ("4 nemovitosti ve vzorku · byty · prodej · aktivní i neaktivní"), charts keep only differing chips; S06
-an "Okolí" badge on the okolí dashboard's chip; S07 Czech tab labels "Nemovitosti" / "Statistiky"; S08 chart
-titles lead with the measure ("Cena", then "podle Plocha po 10 m² › Stav"); S09 a one-line note with "Zobrazit
-malé vzorky" when every cell is under 5; S10 the box legend only on charts that draw a box. Code pointers are
-in each proposal's `where` field (`components/stats/StatsDashboard.tsx`, `DashboardBar.tsx`, `SampleLedger.tsx`,
-`StatsChart.tsx`, `lib/stats.ts` `MARKET_CAPTION`). The hover rule holds: S04's tooltip is an overlay.
+**Ruled 2026-10-27** (copied from the review page; the page stays the source if they ever differ):
+
+| # | Proposal | Ruling | Build |
+| --- | --- | --- | --- |
+| S01 | One panel for the board's settings | **Confirmed** | The dashboard row and the sample row sit together in one panel above the charts. |
+| S02 | Label the rows | **Confirmed** | A label column: "Dashboard" (which charts), "Vzorek" (which properties are counted). |
+| S03 | Sample sentence under its switch | **Confirmed** | `MARKET_CAPTION` sits directly under the Jako ve filtru / Prodáno (trh) / Vše switch, the chosen option's name in bold. |
+| S04 | Malé vzorky at the row's end | **Confirmed** | "Malé vzorky (pod 5)" at the right end of the Vzorek row; "min, max, průměr, medián" in its tooltip (an overlay). |
+| S05 | Sample stated once for the board | Declined | Keep the chips on every chart as today. |
+| S06 | Okolí badge | **Confirmed** | The okolí dashboard's chip shows its name, then a small "Okolí" badge with a pin; tooltip: the property page shows this dashboard. |
+| S07 | Czech tab labels | **Confirmed** | "Nemovitosti" / "Statistiky" (these two labels only; other English stays until ruled). |
+| S08 | Title: measure first | Declined | Keep "Cena · Plocha po 10 m² › Stav" as one title. |
+| S09 | Every cell under 5: say so once | **Confirmed** | One line above the table, "Všechny buňky mají méně než 5 nemovitostí, takže statistiky jsou skryté.", with a "Zobrazit malé vzorky" button that turns the switch on; rows and counts stay. |
+| S10 | Box legend only when a box is drawn | Declined | Keep the legend line on every chart. |
+
+The page's overview picture shows all ten applied; build only the confirmed seven. Code pointers are in each
+proposal's `where` field (`components/stats/StatsDashboard.tsx`, `DashboardBar.tsx`, `StatsChart.tsx`,
+`lib/stats.ts` `MARKET_CAPTION`, `lib/neighbourhood` `PROPERTY_CARD_LABEL`, the tabs in `BrowseExperience.tsx`).
 
 ## What to build next
 
