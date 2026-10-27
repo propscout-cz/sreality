@@ -6,11 +6,12 @@
  * on the control's DESCRIPTION, which is what these tests pin.
  *
  * Every row opens what lib/dispatchTarget names (the property by property_id,
- * a share by its kind), and older rows page in on "Load more" (keyset cursor).
+ * a share by its kind), and older rows load as the end of the list comes into
+ * view (keyset cursor).
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -263,7 +264,28 @@ describe('<Notifications> share rows', () => {
   });
 });
 
-describe('<Notifications> Load more', () => {
+/* jsdom has no IntersectionObserver; this one records each observer so a test
+ * can bring the end of the list into view by hand. */
+class FakeIO {
+  static instances: FakeIO[] = [];
+  constructor(readonly callback: IntersectionObserverCallback) {
+    FakeIO.instances.push(this);
+  }
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+  takeRecords(): IntersectionObserverEntry[] {
+    return [];
+  }
+  reach(): void {
+    this.callback(
+      [{ isIntersecting: true } as IntersectionObserverEntry],
+      this as unknown as IntersectionObserver,
+    );
+  }
+}
+
+describe('<Notifications> older rows on reaching the end', () => {
   const fullPage: WatchdogDispatchesResponse = {
     ...feed,
     data: Array.from({ length: 50 }, (_, i) => ({ ...baseDispatch, id: `p1-${i}`, display_label: `Řádek ${i}` })),
@@ -277,23 +299,58 @@ describe('<Notifications> Load more', () => {
     next_cursor: null,
   };
 
-  it('asks for the page after next_cursor and appends it', async () => {
+  beforeEach(() => {
+    FakeIO.instances = [];
+    vi.stubGlobal('IntersectionObserver', FakeIO);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('loads the page after next_cursor when the end of the list comes into view', async () => {
     renderPage(fullPage);
-    vi.mocked(listNotifications).mockImplementation(async (params = {}) =>
-      params.cursor === 'cursor-1' ? older : fullPage,
+    let answerOlder: (page: WatchdogDispatchesResponse) => void = () => {};
+    vi.mocked(listNotifications).mockImplementation((params = {}) =>
+      params.cursor === 'cursor-1'
+        ? new Promise((resolve) => {
+            answerOlder = resolve;
+          })
+        : Promise.resolve(fullPage),
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+    expect(FakeIO.instances).toHaveLength(1);
+
+    act(() => FakeIO.instances[0].reach());
     await waitFor(() =>
       expect(listNotifications).toHaveBeenCalledWith(expect.objectContaining({ cursor: 'cursor-1', limit: 50 })),
     );
+    /* The same word the busy button used to show. */
+    expect(await screen.findByText('Loading…')).toBeInTheDocument();
+
+    act(() => answerOlder(older));
     expect(await screen.findByRole('link', { name: /^New match Nejstarší/ })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /^New match Řádek 0/ })).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull());
+    /* Exhausted, the list ends silently, as it did under the button. */
+    await waitFor(() => expect(screen.queryByText('Loading…')).toBeNull());
+    expect(screen.queryByText('End of results')).toBeNull();
   });
 
-  it('offers no Load more when the API names no next page', () => {
-    renderPage();
+  it('watches nothing and adds no end line when the API names no next page', async () => {
+    renderPage({ ...fullPage, next_cursor: null });
+    await waitFor(() => expect(listNotifications).toHaveBeenCalled());
+    expect(FakeIO.instances).toHaveLength(0);
     expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+    expect(screen.queryByText('End of results')).toBeNull();
+    expect(vi.mocked(listNotifications).mock.calls.every(([params]) => params?.cursor === undefined)).toBe(true);
+  });
+});
+
+describe('<Notifications> header', () => {
+  it('titles the page with the h1 alone, no small-caps label above it', () => {
+    renderPage();
+    const title = screen.getByRole('heading', { level: 1, name: 'What changed' });
+    expect(title.previousElementSibling).toBeNull();
+    expect(screen.queryByText('Notifications', { selector: 'p' })).toBeNull();
   });
 });
 

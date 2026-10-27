@@ -2722,8 +2722,9 @@ renumber.** Navigate by area:
     page (`/notifications`) reads every producer off one LEFT-join feed (the watchdog-only
     INNER join became a LEFT join + a `collections` join so monitor and share rows aren't dropped;
     its System tab and the duplicate `/watchdog` feed went in W1, `/watchdog` now lists the watchdogs,
-    and the feed pages with "Load more"), and ONE unread observer (`frontend/src/lib/unreadCount.tsx`,
-    mounted once by `Shell`, W5a) polls `GET /notifications/unread-count` for the red desktop nav badge,
+    and the feed loads older rows as the end of the list comes into view, as Browse does), and ONE
+    unread observer (`frontend/src/lib/unreadCount.tsx`, mounted once by `Shell`, W5a) polls
+    `GET /notifications/unread-count` for the red desktop nav badge,
     the phone header's bell, the page itself and the installed app's icon badge;
     `POST /notifications/mark-all-seen` clears it.)
     **The Stats tab is a dashboard over the SAME cohort (migration 626, `docs/design/stats-dashboard.md`).**
