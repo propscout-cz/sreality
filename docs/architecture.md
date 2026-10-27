@@ -1195,12 +1195,13 @@ on 2026-12-01, and until then a file of that name would override the applied set
     the bound to `scraper/job_runner.py`, +30 s at most, since a deploy waits on it);
   - `BACKEND_WATCH`: every repo tree the Dockerfile COPYs (not `COPY --from=` a stage) plus `/Dockerfile` and
     `/.dockerignore`, pinned to the COPY lines by a census, so a move PR never forgets a tree; `.railway/` stays out;
-  - variables `EXTRAS`, `HF_HUB_OFFLINE: "1"` (no runtime download) and `SUPABASE_DB_URL: sreality.env.SUPABASE_DB_URL`,
-    a reference to the worker's variable (`${{sreality.SUPABASE_DB_URL}}`, ruling #2025-R3): one stored value, so a
-    rotation changes one place, and applying the worker's staged change redeploys job-runner after it (Railway's
-    deployment dependencies), cutting any run in flight (closed `interrupted`, re-claimed at once).
-    `scripts/rotate_credentials.sh` says so and checks two fresh `job-runner/` heartbeats. Later moves add their
-    names in their own PRs.
+  - variables `EXTRAS`, `HF_HUB_OFFLINE: "1"` (no runtime download), `SUPABASE_DB_URL: sreality.env.SUPABASE_DB_URL`
+    and the R2 set, by reference (#2032: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`,
+    each `sreality.env.<NAME>`), references to the worker's variables (`${{sreality.NAME}}`, ruling #2025-R3): one
+    stored value each, so a rotation changes one place, and applying the worker's staged change redeploys job-runner
+    after it (Railway's deployment dependencies), cutting any run in flight (closed `interrupted`, re-claimed at once).
+    `scripts/rotate_credentials.sh` says so after both the database and the stage-11 deploys, and checks two fresh
+    `job-runner/` heartbeats after the database one. Later moves add their names in their own PRs.
 - **The runner image's model layer** (EXTRAS names `clip`; a no-op for the API and the worker), before the source so a
   code-only build reuses it: CPU torch 2.14.1 from PyTorch's CPU index and `huggingface_hub>=0.34,<1.0`, pinned in the
   Dockerfile as the `clip` extra's runtime companions (rule 7: neither is a pyproject entry), then

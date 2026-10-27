@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from scraper import job_process, job_runner, jobs
+from scraper import image_storage, job_process, job_runner, jobs
 from tests._railway_iac import iac_constant, iac_entry, iac_text
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -223,17 +223,23 @@ def test_the_runner_watches_every_tree_the_dockerfile_copies() -> None:
     assert "watchPatterns: BACKEND_WATCH" in iac_entry("jobRunner")
 
 
-def test_the_runner_reads_its_one_secret_from_the_worker_service() -> None:
-    """#2025-R3: the runner stores no secret of its own; it references the worker's SUPABASE_DB_URL, so a rotation
-    changes one place (and redeploys the runner after the worker)."""
+def test_the_runner_reads_the_workers_secrets_by_reference() -> None:
+    """#2025-R3: the runner stores no secret of its own; it references the worker's SUPABASE_DB_URL and its R2 set
+    (#2032: clip downloads photos), so a rotation changes one place (and redeploys the runner after the worker)."""
     runner = iac_entry("jobRunner")
     env = re.search(r"\benv: \{ (.*?) \},", runner, re.S)
     assert env, "the runner declares its variables inline"
-    assert set(re.findall(r"(\w+): ", env.group(1))) == {"EXTRAS", "HF_HUB_OFFLINE", "SUPABASE_DB_URL"}
-    assert "SUPABASE_DB_URL: sreality.env.SUPABASE_DB_URL" in env.group(1)
-    assert not re.search(r"preserve\(|kept\(|ctx\.shared", runner)
+    declared = re.findall(r"(\w+): ", env.group(1))
+    assert len(declared) == len(set(declared))
+    plain = {"EXTRAS", "HF_HUB_OFFLINE"}
+    assert set(declared) == plain | {"SUPABASE_DB_URL", *image_storage.R2_ENV_VARS}
     worker_kept = re.search(r"\bkept\((.*?)\)", iac_entry("worker"), re.S)
-    assert worker_kept and "SUPABASE_DB_URL" in re.findall(r'"(\w+)"', worker_kept.group(1))
+    assert worker_kept, "the worker keeps its secrets"
+    kept_names = set(re.findall(r'"(\w+)"', worker_kept.group(1)))
+    for name in sorted(set(declared) - plain):
+        assert re.search(rf"\b{name}: sreality\.env\.{name}\b", env.group(1)), f"{name} is not the worker's"
+        assert name in kept_names, f"the worker keeps no {name}"
+    assert not re.search(r"preserve\(|kept\(|ctx\.shared", runner)
 
 
 def test_the_api_and_the_worker_pass_their_extras_to_the_root_dockerfile_build() -> None:

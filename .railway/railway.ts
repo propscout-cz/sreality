@@ -51,8 +51,11 @@ const jobRunner = (sreality: ReturnType<typeof service>) => service("job-runner"
   replicas: { [REGION]: RUNNER_REPLICAS },
   deploy: { restartPolicyType: "ALWAYS", drainingSeconds: RUNNER_DRAINING_SECONDS,
             limitOverride: { containers: { cpu: RUNNER_CPUS, memoryBytes: RUNNER_MEMORY_BYTES } } },
-  // One stored secret, the worker's (${{sreality.SUPABASE_DB_URL}}): a rotation changes one place (#2025-R3).
-  env: { EXTRAS: "api,clip,geo", HF_HUB_OFFLINE: "1", SUPABASE_DB_URL: sreality.env.SUPABASE_DB_URL },
+  // The worker's secrets, by reference (${{sreality.NAME}}): a rotation changes one place. SUPABASE_DB_URL (#2025-R3);
+  // the R2 set (#2032).
+  env: { EXTRAS: "api,clip,geo", HF_HUB_OFFLINE: "1", SUPABASE_DB_URL: sreality.env.SUPABASE_DB_URL,
+         R2_ACCOUNT_ID: sreality.env.R2_ACCOUNT_ID, R2_ACCESS_KEY_ID: sreality.env.R2_ACCESS_KEY_ID,
+         R2_SECRET_ACCESS_KEY: sreality.env.R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME: sreality.env.R2_BUCKET_NAME },
 });
 
 const worker = (name: string) => {

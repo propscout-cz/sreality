@@ -381,12 +381,12 @@ deploy_on_railway() {
   pause "Active? Press Enter"
 }
 
-# runner_follows_worker: job-runner reads the worker's SUPABASE_DB_URL by reference (#2025-R3), so applying the
-# worker's staged change redeploys it after sreality (Railway docs: Deployment dependencies).
+# runner_follows_worker: job-runner reads the worker's SUPABASE_DB_URL (#2025-R3) and R2 set (#2032) by reference, so
+# applying the worker's staged change redeploys it after sreality (Railway docs: Deployment dependencies).
 runner_follows_worker() {
   say "${BOLD}Railway realtime-worker → job-runner${RESET} (no job-runner service there yet? skip this)"
   open_url "$RW_WORKER_PROJECT"
-  step "job-runner reads sreality's SUPABASE_DB_URL by reference: Railway redeploys it after sreality."
+  step "job-runner reads sreality's SUPABASE_DB_URL and R2_* by reference: Railway redeploys it after sreality."
   step "If no new job-runner deployment started with the worker's: job-runner → Ctrl+K → Deploy Latest Commit."
   pause "job-runner's new deployment Active? Press Enter"
 }
@@ -622,6 +622,7 @@ s_deploy() {
   stage "Deploy the staged changes, then check each copy"
   deploy_on_railway "$RW_API" API || { warn "nothing is live until the API deploys: --from 11"; exit 1; }
   deploy_on_railway "$RW_WORKER" worker || { warn "the worker still runs the old values: --from 11"; exit 1; }
+  runner_follows_worker
   done_mark PENDING_DEPLOY ""
   local tok id tail
   check "API /health" "$(http_status GET "$API/health" "")" 200 || true

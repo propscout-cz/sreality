@@ -200,7 +200,8 @@ production.
   truth: the existing `portal_index_slices` ledger lifted into `portal_runner`; idnes's own `_slice_order`
   is deleted.
 - **Secrets**: Railway's service variables are the store of record for runtime (the runner references the
-  worker's, ruling #2025-R3; a shared variable would be per project, `ctx.shared.NAME`, a second place to rotate);
+  worker's: `SUPABASE_DB_URL`, ruling #2025-R3, and the R2 set, by reference (#2032); a shared variable would be per
+  project, `ctx.shared.NAME`, a second place to rotate);
   GitHub keeps what CI, the canary and the attended forms read; the duplicated set is listed once in the
   toolkit-api skill. Deleted:
   `SCRAPE_CHAIN_TOKEN` (both hosts), `WORKER_DISPATCH_TOKEN`, `GEMINI_API_KEY`. Added: a new fine-grained

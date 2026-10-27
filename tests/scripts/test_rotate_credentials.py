@@ -98,3 +98,14 @@ def test_the_database_rotation_follows_the_runner_that_references_the_worker() -
     assert 'open_url "$RW_WORKER_PROJECT"' in helper and "Deploy Latest Commit" in helper
     canvas = re.search(r'^RW_WORKER_PROJECT="([^"]+)"$', SCRIPT.read_text(encoding="utf-8"), re.M)
     assert canvas and canvas.group(1) == "https://railway.com/project/6f6ac731-10a5-4a28-b831-350ead8a4a97"
+
+
+def test_an_r2_rotation_follows_the_runner_that_references_the_worker() -> None:
+    """job-runner reads the worker's R2 set by reference too (#2032): stage 11 deploys the worker's staged R2 pair,
+    and Railway redeploys the runner after it, so the step follows that deploy as the database stage's does."""
+    stages = _stages()
+    deploy = stages.split("\ns_deploy() {", 1)[1].split("\n}\n", 1)[0]
+    _before, after = deploy.split('deploy_on_railway "$RW_WORKER" worker', 1)
+    assert "runner_follows_worker" in after, "the worker's deploy redeploys job-runner: the step follows it"
+    helper = stages.split("\nrunner_follows_worker() {", 1)[1].split("\n}\n", 1)[0]
+    assert "SUPABASE_DB_URL" in helper and "R2_" in helper, "the step names every reference that redeploys it"

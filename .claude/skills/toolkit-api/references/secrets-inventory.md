@@ -8,9 +8,9 @@ to where a secret lives or who reads it.
 The Railway services sit in three separate projects: **API** (`api/`, uvicorn),
 **worker** (`scraper/realtime_worker.py`, same image) and **SPA** (`frontend/`, Caddy; it holds only the
 public `VITE_*` build values). The worker's project also runs **job-runner** (`scraper/job_runner.py`, same image,
-#2025), which stores no secret: its `SUPABASE_DB_URL` is a reference to the worker's (`sreality.env.SUPABASE_DB_URL`),
-so a worker rotation changes it too and redeploys it after the worker; its other two variables are `EXTRAS` and
-`HF_HUB_OFFLINE` (`1`). "GH" is a GitHub Actions repository secret. Railway's variable names per
+#2025), which stores no secret: its `SUPABASE_DB_URL` and its four `R2_*` are references to the worker's
+(`sreality.env.<NAME>`; the R2 set by reference since #2032), so a worker rotation changes them too and redeploys it
+after the worker; its other two variables are `EXTRAS` and `HF_HUB_OFFLINE` (`1`). "GH" is a GitHub Actions repository secret. Railway's variable names per
 service come from the 2026-10-25 audit (API 20, worker 14, SPA 3); the wizard has the operator confirm
 each on the service's Variables page before editing it.
 Railway variable NAMES live in `.railway/railway.ts` (each `preserve()`, but job-runner's reference and plain values;
@@ -26,7 +26,7 @@ apply, `scripts/railway_iac_wizard.sh`).
 | `SUPABASE_DB_SESSION_URL` (same password, session pooler 5432) | yes, 7 refs | if present | yes | | `scraper/db.py` `connect_session` (falls back to `SUPABASE_DB_URL`) | with the password above | psycopg; `apply_migration.yml` dry run (its connectivity step prefers this one) |
 | `TENANT_POOL_DB_URL` (`tenant_pool.<ref>` role on the shared pooler, migration 293; an impersonation credential, audit F7) | no | yes | no | | `api/tenant_pool.py` | `ALTER ROLE tenant_pool PASSWORD '<SCRAM verifier>'` (the wizard computes the verifier, so no plaintext password reaches a log) | psycopg as `tenant_pool`; signed-in `GET /pipeline/stages` |
 | `SUPABASE_SERVICE_ROLE_KEY` (a `sb_secret_…` key, not a JWT) | yes | no | no | | nothing (kept for forward compatibility) | Supabase → Settings → API Keys → new secret key, then delete the old one | `GET /auth/v1/admin/users?per_page=1` → 200 |
-| `R2_ACCESS_KEY_ID` + `R2_SECRET_ACCESS_KEY` | yes, 27 refs | yes (serves `/images/{key}`, the zip) | yes (images lane) | RunPod pods via workflow env | `scraper/image_storage.py` (the API and the worker both import it), `autodedup/lane.py`, `location_data/payloads.py`, scripts | Cloudflare → R2 → Manage API tokens → create (Object Read & Write), then delete the old token | boto3 `head_bucket`; the API's presigned photo URL carries the new key id (`X-Amz-Credential`, public); the worker's variable by eye |
+| `R2_ACCESS_KEY_ID` + `R2_SECRET_ACCESS_KEY` | yes, 27 refs | yes (serves `/images/{key}`, the zip) | yes (images lane); job-runner reads the set by reference (a worker rotation redeploys it) | RunPod pods via workflow env | `scraper/image_storage.py` (the API and the worker both import it), `autodedup/lane.py`, `location_data/payloads.py`, scripts | Cloudflare → R2 → Manage API tokens → create (Object Read & Write), then delete the old token | boto3 `head_bucket`; the API's presigned photo URL carries the new key id (`X-Amz-Credential`, public); the worker's variable by eye |
 | `MAPY_CZ_API_KEY` | yes (`seed_curated_cities.yml`) | yes (`/maps/*`, static map) | if present | | `scraper/geocoding.py` | Mapy developer portal → the project → new key, then delete the old one | `GET api.mapy.com/v1/geocode?query=Praha` → 200; the API's variable by eye (`/maps/suggest` falls back to MAPY2, so it passes on either) |
 | `MAPY2_CZ_API_KEY` (backup) | yes (`seed_curated_cities.yml`) | yes | no | | `scraper/geocoding.with_mapy_key_failover` | as above | as above |
 | `VALUO_API_TOKEN`, `VALUO_SANDBOX_API_TOKEN` | no | yes | no | never local | `api/valuo_client.py` | from Valuo (their portal or account contact); ask them to revoke the old ones | `POST /v1/advert/detail` with no ids (prices nothing): 401/403 refused, 000/5xx inconclusive; the API's variables by eye |
