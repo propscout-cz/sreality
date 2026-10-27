@@ -442,10 +442,10 @@ def _tag(conn: psycopg.Connection, r2: image_storage.R2Client, tagger: Tagger, r
     try:
         fetch = _submit(pool, r2, _take(snapshot, size), clock)
         while True:
-            got, failed = _await(fetch, args.download_deadline, clock)
-            tally.attempts += len(got) + len(failed)
-            tally.errors += len(failed)
-            failed_ids.update(failed)
+            got, missed = _await(fetch, args.download_deadline, clock)
+            tally.attempts += len(got) + len(missed)
+            tally.errors += len(missed)
+            failed_ids.update(missed)
             if not got:
                 return "stop" if stop.requested() else _verdict(tally, cut=clock() >= deadline, all_failed=True,
                                                                whole_chunk=len(fetch.rows) >= size)
