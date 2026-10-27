@@ -150,7 +150,7 @@ production.
   unchecked; a second is refused while one waits; one filed during a run waits for it); one request-only GitHub
   form "Jobs: run now" (`run_job.yml`: a typed job name, refused unless it is one, R-2 of #2026) does the same for
   the operator; `pause <job> --until <date|now>
-  --note` sets `paused_until` on any live row, a lane's included (`--until now` lifts it); `once <job>` runs a due
+  --note` sets `paused_until` on any row, a lane's and a retired one's included (`--until now` lifts it); `once <job>` runs a due
   or requested runner entry in the foreground (GitHub entries from #2033; a closed terminal stops it like Ctrl-C,
   and it exits 1 when the database does not answer within 60 s); `list` shows every row. Nothing is a
   flag; a pause always ends.
@@ -166,7 +166,7 @@ production.
   last ok run, else the first scheduled run, else the first slot, and on a lapsed pause; every row is judged on
   its runs since it joined the runner (`registry_at`, which `register` stamps for a new or adopted row, or one
   un-retired an hour or more after its retirement, and later boots and 682's trigger keep; a shorter retirement,
-  an older image's blink, keeps its `due_at` too), from the first slot of
+  an older image's blink or a revert re-landed within the hour, keeps its `due_at` too), from the first slot of
   that registration, the streak and success it carried from before a revert unjudged. `held by sibling` is
   ok, shown only while the job waits; a due job or a request unstarted for 10 min is Watch while a replica beats
   and a Problem when none has for 10 min; a refused registry entry is a Problem; a pause longer than
@@ -261,7 +261,9 @@ long-cadence entry's slot falls at, or up to 3 days after, the calendar run it r
 drift ~5 days a year earlier), else the PR re-phases `offset_s`. After merge, `gh run list --workflow=<file>
 --json status,databaseId` shows any queued or running run of the deleted file; if one exists, the new row
 is paused (`job_runner pause --until`) past that run's timeout, since a queued run in a non-cancelling group
-can start after the merge. A new row's first slot comes after `now() + timeout_s`; rollback is a revert.
+can start after the merge. A new row's first slot comes after `now() + timeout_s`; rollback is a revert. A
+re-land within an hour of its revert's deploy keeps the old `due_at` and claims at its boot, so its retired row
+is paused before that deploy.
 The PR that moves the last waiting job (#2031, #2032 or #2033) also deletes the `github-actions-until-moved`
 host, its ratchet and the gone leavers in the registry test.
 **Gate (7 days):** every job cell green; ≥ 3 deploys survived with interrupted runs re-claimed within 1 min;

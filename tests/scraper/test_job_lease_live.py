@@ -442,9 +442,9 @@ def test_registry_at_is_when_the_row_joined_the_runner_and_a_later_boot_keeps_it
 
 
 def test_an_un_retire_within_the_hour_keeps_the_schedule_and_a_later_one_re_slots_it(cur: Any) -> None:
-    """A blink (an older image without the job retired it, the latest booted again within REJOIN_AFTER_S) is no move
-    from GitHub, which reads main: a deploy-cut run's 'now', a retry or a missed slot stays due and is claimed at once,
-    as after any outage. An un-retire an hour or more on (a re-land) takes the first slot after now() + timeout_s."""
+    """A blink (an older image without the job retired it, the latest booted again within REJOIN_AFTER_S): a
+    deploy-cut run's 'now', a retry or a missed slot stays due and is claimed at once, as after any outage. An
+    un-retire an hour or more on (a re-land) takes the first slot after now() + timeout_s."""
     now = _now(cur)
     blink, hour = _joined(cur, "3 days", retired="59 minutes"), _joined(cur, "3 days", retired="1 hour")
     cur.execute("UPDATE scheduled_jobs SET due_at = now() - interval '35 minutes' WHERE job_name = ANY(%s)",
@@ -453,6 +453,22 @@ def test_an_un_retire_within_the_hour_keeps_the_schedule_and_a_later_one_re_slot
     assert _registry_row(cur, blink)["due_at"] == now - timedelta(minutes=35)
     assert job_lease.claim(cur.connection, blink, holder="A") is not None, "the blink's due run is claimed at once"
     assert _registry_row(cur, hour)["due_at"] >= now + timedelta(seconds=900)
+
+
+def test_a_retired_row_takes_a_pause_and_the_un_retire_keeps_it(cur: Any) -> None:
+    """A revert re-landed within REJOIN_AFTER_S keeps due_at like a blink (timing cannot tell them apart), so a slot
+    that came due while GitHub held the job again would be claimed at the boot that registers it. The move recipe
+    pauses the row past GitHub's run in flight before that boot: a retired row takes it and register keeps it."""
+    now = _now(cur)
+    reland = _joined(cur, "3 days", retired="50 minutes")
+    cur.execute("UPDATE scheduled_jobs SET due_at = now() - interval '20 minutes' WHERE job_name = %s", (reland,))
+    until = now + timedelta(minutes=30)
+    assert job_lease.pause(cur.connection, reland, until=until, note="github run in flight", by="cli:op") is None
+    assert job_lease.register(cur.connection, [_entry(reland)]).unretired == (reland,)
+    assert job_lease.due(cur.connection, [reland]) == []
+    assert job_lease.claim(cur.connection, reland, holder="A") is None
+    cur.execute("SELECT paused_until, due_at FROM scheduled_jobs WHERE job_name = %s", (reland,))
+    assert cur.fetchone() == (until, now - timedelta(minutes=20)), "the slot is taken once the pause ends"
 
 
 def test_the_database_keeps_a_live_rows_registry_at_whatever_the_image_writes(cur: Any) -> None:

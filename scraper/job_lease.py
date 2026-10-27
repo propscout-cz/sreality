@@ -236,8 +236,9 @@ SELECT registry_at IS NULL, retired_at IS NOT NULL FROM scheduled_jobs WHERE job
 # boot and by migration 682's trigger: Health judges a row on its runs since, as un-retiring keeps the streak and last
 # success of before the revert. `due_at` is set only for a row that joins, or was never scheduled, at the first slot
 # no earlier than now() + timeout_s, so a move's first run comes after any GitHub run still in flight; a changed grid
-# is never re-slotted. A shorter retirement is an older image's blink, never a re-land (a PR cycle) nor a move (GitHub
-# reads main, which a Rollback leaves alone): it keeps both, so a cut run, a retry or a missed slot stays due.
+# is never re-slotted. A shorter retirement keeps both, so a cut run, a retry or a missed slot stays due: an older
+# image's blink, or a revert re-landed within the hour, whose boot claims a slot GitHub may have run unless the move
+# recipe paused the retired row first (_PAUSE_SQL).
 _REGISTER_SQL = f"""
 INSERT INTO scheduled_jobs AS s (job_name, argv, cadence, offset_s, timeout_s, memory_mb, cpus, resource, runner,
                                  registry_at, retired_at, due_at)
@@ -336,11 +337,12 @@ SELECT runner, registry_at IS NOT NULL, retired_at IS NOT NULL, requested_at, re
   FROM scheduled_jobs WHERE job_name = %(job)s
 """
 
-# Any live row, a lane's included. 675's CHECK demands the note and the author; `until` NULL lifts the pause now.
+# Any row, a lane's and a retired one's included: register keeps it through an un-retire (a re-land's move recipe).
+# 675's CHECK demands the note and the author; `until` NULL lifts the pause now.
 _PAUSE_SQL = """
 UPDATE scheduled_jobs
    SET paused_until = coalesce(%(until)s::timestamptz, now()), pause_note = %(note)s, paused_by = %(by)s
- WHERE job_name = %(job)s AND retired_at IS NULL
+ WHERE job_name = %(job)s
 RETURNING 1
 """
 
@@ -557,11 +559,7 @@ def pause(conn: psycopg.Connection, name: str, *, until: datetime | None, note: 
     """Pauses the schedule until `until` (a request still runs), or lifts the pause now (`until` None)."""
     with _bounded(conn) as cur:
         cur.execute(_PAUSE_SQL, {"job": name, "until": until, "note": note, "by": by})
-        if cur.fetchone() is not None:
-            return None
-        cur.execute(_ROW_STATE_SQL, {"job": name})
-        row = cur.fetchone()
-    return f"{name} has no row" if row is None else f"{name} is retired"
+        return None if cur.fetchone() is not None else f"{name} has no row"
 
 
 def rows(conn: psycopg.Connection) -> list[dict[str, object]]:

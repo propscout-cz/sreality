@@ -757,7 +757,7 @@ def test_a_boot_that_re_stamps_registry_at_keeps_a_failing_rows_streak(cur: Any)
 def test_an_older_images_boot_that_retires_a_failing_row_for_minutes_keeps_its_join(cur: Any) -> None:
     """C3 (refutation round): an older image booted (a Rollback, or a Redeploy of a non-latest deployment) and retired a
     row failing for 30 h; the latest image booted 3 min later and un-retired it. A retirement under an hour is a blink,
-    never a re-land (a PR cycle), so the row keeps its join and reads Problem, late included, as before the blink."""
+    so the row keeps its join and reads Problem, late included, as before the blink."""
     from scraper import job_lease
     from scraper.jobs import RUNNER, Job
 
