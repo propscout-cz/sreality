@@ -328,7 +328,8 @@ def test_the_api_image_is_proven_free_of_clip() -> None:
     assert len(checks) == 1, "one step asserts the head image is clip-free"
     check = checks[0]["run"]
     assert all(m in check for m in ('"torch"', '"transformers"', "/root/.cache/huggingface"))
-    assert "assert not found, found" in check and "test ! -e /root/.cache/huggingface" in check, "a verdict, not a print"
+    assert "assert not found, found" in check, "a verdict, not a print"
+    assert "test ! -e /root/.cache/huggingface" in check, "a verdict, not a print"
     assert "||" not in check, "nothing in the verdict step may swallow its exit status"
     assert "docker image inspect -f '{{.Size}}'" in runs and "pip freeze" in runs
 

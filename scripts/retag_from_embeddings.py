@@ -6,10 +6,11 @@ taxonomy's text anchors dotted with each stored vector. The way to apply a TAXON
 Campaign-driven + resumable: re-tags every row whose `image_clip_tags.tagged_at` is older
 than `app_settings.clip_taxonomy_retag_after` (the campaign cutoff — set it to now() to start
 a re-tag after a taxonomy edit), and stamps `tagged_at = now()` on each, so a re-tagged row
-drops out of the scan. No cutoff set → nothing to do; a cutoff later than now() waits for it. A library: the runner's clip job
-(scripts/clip_tag_backfill.py) calls `campaign_cutoff` before it loads the model and `retag`
-after tagging, with the same model load and deadline (#2032). New / not-yet-tagged images go
-through that job's tag phase, which loads the same live taxonomy.
+drops out of the scan. No cutoff set → nothing to do; a cutoff later than now() waits for it.
+A library: the runner's clip job (scripts/clip_tag_backfill.py) calls `campaign_cutoff` before
+it loads the model and `retag` after tagging, with the same model load, for a slice of its
+deadline (#2032). New / not-yet-tagged images go through that job's tag phase, which loads the
+same live taxonomy.
 """
 
 from __future__ import annotations

@@ -759,7 +759,8 @@ def test_the_run_stamps_at_most_five_photos_terminal(caplog: pytest.LogCaptureFi
     assert bad & set(store.marked) == {500, 499, 372, 371} and len(store.marked) == 256, "chunk 3 marks nothing"
 
 
-def test_an_undecodable_photo_beside_siblings_that_decode_is_marked_terminal(caplog: pytest.LogCaptureFixture) -> None:
+def test_an_undecodable_photo_beside_siblings_that_decode_is_marked_terminal(
+        caplog: pytest.LogCaptureFixture) -> None:
     clock = _Clock()
     store = _Store(range(1, 51))
     with caplog.at_level(logging.INFO):
