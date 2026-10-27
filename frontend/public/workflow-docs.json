@@ -1305,51 +1305,6 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/export_raw_pages_archive.yml"
     },
     {
-      "filename": "fetch_rent_map.yml",
-      "name": "Jobs: fetch MF rent map (monthly)",
-      "description": "Auto-grab the Ministry of Finance \"Cenová mapa nájemného\" (rent price map) from the MF infografika page, parse it, and append a new rent_map revision — unless the file's sha256 already exists (then it's a no-op). The MF data updates 4×/year (published within 45 days of each quarter end), so a monthly cron mostly no-ops and catches the new release within ~30 days. The same data also lands via manual upload from the Settings page; both share api.rent_map.ingest_bytes, so the latest revision always wins. Every run then re-renders the map's rent choropleth (the `rent_map` reference overlay).",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "0 3 5 * *",
-          "human": "0 3 5 * *"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "source_url",
-          "description": "Override the MF page URL to scrape the XLSX link from",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "Parse + report counts without writing a revision",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "rent-map-fetch",
-      "cancelInProgress": false,
-      "timeoutMinutes": 15,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/fetch_rent_map.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/fetch_rent_map.yml"
-    },
-    {
       "filename": "frontend-build.yml",
       "name": "CI: frontend build",
       "description": "Builds the frontend/ Vite SPA on every pull request, and on a push to main that touches frontend code, to catch build/type errors before deploy. Type-checks (the service worker too), lints for Rules of Hooks, builds the production bundle, checks the service worker and web app manifest made it into dist/, reports every chunk's gzipped size, and enforces a blocking first-visit JS budget that also fails if maplibre or recharts return to the pre-lazy-import path. Does not deploy.",
@@ -1552,56 +1507,6 @@
       "permissions": null,
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/ingest_boundaries.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/ingest_boundaries.yml"
-    },
-    {
-      "filename": "ingest_map_overlays.yml",
-      "name": "Data: ingest map overlays",
-      "description": "Ingests the map reference overlays (Prague metro from IPR Praha's Metropolitní plán, the national flood-zone register from VÚV TGM, kraj borders from admin_boundaries, Prague's university sites from IPR Praha classed by MŠMT's student counts, the MF rent map from rent_map_values × admin_boundaries) into map_overlay_* and renders each section's vector tiles. Quarterly, two days after the quarter starts; dispatch by hand after a publisher revises its data.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "0 4 2 1,4,7,10 *",
-          "human": "0 4 2 1,4,7,10 *"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "sections",
-          "description": "Sections to ingest (comma-separated: metro,flood,kraje,universities,railway,rent_map). Empty = all.",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "Fetch and check every layer; write nothing.",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        },
-        {
-          "name": "accept_shrink",
-          "description": "Accept a layer that came back below 90 % of its previous feature count.",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "ingest-map-overlays",
-      "cancelInProgress": false,
-      "timeoutMinutes": 120,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/ingest_map_overlays.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/ingest_map_overlays.yml"
     },
     {
       "filename": "label_images.yml",
@@ -2350,64 +2255,6 @@
       "permissions": "contents: read",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/reextract.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/reextract.yml"
-    },
-    {
-      "filename": "refresh_stale_images.yml",
-      "name": "Jobs: refresh stale image URLs",
-      "description": "Re-opens active listings whose photos aren't in R2 yet so their (possibly rotated) source image URLs get refreshed. Portals rotate image CDN URLs over weeks; a listing whose images the newest-first backfill never reached before its URLs rotated is stuck — the stored URL 404s, the frontend fallback can't load it, and the image downloader can't fetch it. This sweep (scripts.refresh_stale_image_urls) re-enqueues such listings into the source-generic listing_detail_queue; the detail drain re-fetches them, record_images repoints each not-yet-stored image's URL to the current one, and the realtime worker's images lane then stores the bytes.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "20 */6 * * *",
-          "human": "Every 6 hours at :20"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "limit",
-          "description": "Max listings to re-enqueue this run",
-          "required": false,
-          "type": "string",
-          "default": "5000",
-          "options": null
-        },
-        {
-          "name": "min_age",
-          "description": "Only sweep listings older than this Postgres interval (unless they have a confirmed-stale image)",
-          "required": false,
-          "type": "string",
-          "default": "3 days",
-          "options": null
-        },
-        {
-          "name": "cooldown",
-          "description": "Per-listing cooldown — skip listings re-enqueued within this interval",
-          "required": false,
-          "type": "string",
-          "default": "14 days",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "Report counts and exit without enqueuing",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "refresh-stale-images",
-      "cancelInProgress": false,
-      "timeoutMinutes": 20,
-      "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/refresh_stale_images.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/refresh_stale_images.yml"
     },
     {
       "filename": "reparse.yml",
