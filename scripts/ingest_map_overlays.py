@@ -24,7 +24,7 @@ import time
 import xml.etree.ElementTree as ET
 import zipfile
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any, Literal
 

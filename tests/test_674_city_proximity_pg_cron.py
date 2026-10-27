@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 import yaml
 
-from tests._live_property import REQUIRED_DB, _advert, _property, _recompute, cur  # noqa: F401 -- `cur` is the fixture
+from tests._live_property import REQUIRED_DB, _advert, _property, _recompute
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
@@ -59,7 +59,7 @@ def test_the_seed_rebuilds_after_a_real_seed_even_when_the_geocode_push_failed()
 
 
 @REQUIRED_DB
-def test_recompute_city_proximity_raises_no_notice(cur: Any) -> None:  # noqa: F811
+def test_recompute_city_proximity_raises_no_notice(cur: Any) -> None:
     notices: list[str] = []
     cur.connection.add_notice_handler(lambda d: notices.append(d.message_primary or ""))
     cur.execute("SELECT recompute_city_proximity(false)")
@@ -68,7 +68,7 @@ def test_recompute_city_proximity_raises_no_notice(cur: Any) -> None:  # noqa: F
 
 
 @REQUIRED_DB
-def test_recompute_city_proximity_holds_an_advisory_lock_until_its_transaction_ends(cur: Any) -> None:  # noqa: F811
+def test_recompute_city_proximity_holds_an_advisory_lock_until_its_transaction_ends(cur: Any) -> None:
     # What keeps the hourly run and a full rebuild from updating the same rows at once.
     cur.execute("SELECT recompute_city_proximity(false)")
     cur.execute("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND granted")
@@ -90,7 +90,7 @@ def _placed_property(cur: Any, at: tuple[float, float]) -> int:
 
 
 @REQUIRED_DB
-def test_the_full_rebuild_recomputes_every_placeable_property_in_batches(cur: Any) -> None:  # noqa: F811
+def test_the_full_rebuild_recomputes_every_placeable_property_in_batches(cur: Any) -> None:
     from scripts.recompute_city_proximity import full_rebuild
 
     centre = (15.50, 49.50)
@@ -108,7 +108,7 @@ def test_the_full_rebuild_recomputes_every_placeable_property_in_batches(cur: An
 
 
 @REQUIRED_DB
-def test_a_browser_role_cannot_execute_recompute_city_proximity(cur: Any) -> None:  # noqa: F811
+def test_a_browser_role_cannot_execute_recompute_city_proximity(cur: Any) -> None:
     for role in ("anon", "authenticated"):
         cur.execute("SELECT has_function_privilege(%s, 'public.recompute_city_proximity(boolean)', 'execute')",
                     (role,))

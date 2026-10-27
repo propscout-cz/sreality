@@ -37,7 +37,7 @@ from typing import Any
 
 import pytest
 
-from tests._live_property import REQUIRED_DB, cur  # noqa: F401 -- `cur` is the fixture
+from tests._live_property import REQUIRED_DB
 from toolkit import stats_registry as sr
 
 pytestmark = REQUIRED_DB

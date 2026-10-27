@@ -17,7 +17,7 @@ from fastapi import HTTPException
 from psycopg.types.json import Jsonb
 
 from api import valuo, valuo_client
-from tests._live_property import REQUIRED_DB, _account, _advert, _property, _recompute, cur  # noqa: F401
+from tests._live_property import REQUIRED_DB, _account, _advert, _property, _recompute
 
 pytestmark = REQUIRED_DB
 

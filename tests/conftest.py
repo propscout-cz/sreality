@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import os
+from typing import Any, Iterator
 
 import pytest
+
+from tests._live_property import db_url
 
 
 def pytest_configure(config):  # noqa: ARG001 — pytest hook signature
@@ -54,3 +57,21 @@ def _stop_signal_untouched():
     stop.reset()
     for sig, handler in handlers.items():
         signal.signal(sig, handler)
+
+
+@pytest.fixture()
+def cur() -> Iterator[Any]:
+    """A rollback-always cursor on `db_url()`; a module that defines its own `cur` overrides it."""
+    import psycopg
+
+    conn = psycopg.connect(
+        db_url(),
+        options="-c statement_timeout=20000 -c lock_timeout=5000"
+        " -c idle_in_transaction_session_timeout=30000",
+    )
+    try:
+        with conn.cursor() as c:
+            yield c
+    finally:
+        conn.rollback()
+        conn.close()

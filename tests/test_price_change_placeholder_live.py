@@ -11,7 +11,7 @@ from decimal import Decimal
 from typing import Any
 
 from tests._live_property import REQUIRED_DB
-from tests.test_merge_safety_live import _advert, _property, _recompute, _snapshot, cur  # noqa: F401
+from tests.test_merge_safety_live import _advert, _property, _recompute, _snapshot
 
 pytestmark = REQUIRED_DB
 
