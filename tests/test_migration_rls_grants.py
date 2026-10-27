@@ -22,6 +22,8 @@ architecture rule #1, so older migrations are never rewritten):
      without embedding `is_platform_admin()` (migrations 318/332). Both lists, the
      admin-only relations and the objects sanctioned ungated, are
      tests/_admin_gate_registry.py, shared with the live lane.
+  6. From migration 679 on, no browser write grant on a run table beyond its column UPDATEs in
+     BROWSER_WRITE_COLUMNS (rule 12: the API writes every run on the service role).
 
 Live cross-tenant / effective-grant verification lands in the TEST_DATABASE_URL
 lane (tests/test_tenant_isolation_live.py), which this composes with.
@@ -39,7 +41,12 @@ from tests._admin_gate_registry import (
     sanctioned,
 )
 from tests._admin_gate_shape import gate_is_sound
-from tests._tenant_registry import RENAMED_TENANT_TABLES, TENANT_TABLES
+from tests._tenant_registry import (
+    BROWSER_WRITE_COLUMNS,
+    BROWSER_WRITE_COLUMNS_SINCE,
+    RENAMED_TENANT_TABLES,
+    TENANT_TABLES,
+)
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 # Phase 0 (299) is the baseline: it establishes the posture this gate protects.
@@ -193,8 +200,9 @@ def _enforced_migrations() -> list[Path]:
 def _parse_grant(stmt: str) -> tuple[set[str], list[str], set[str]] | None:
     """(-> privs, objects, roles) for a `grant <privs> on <objs> to <roles>`
     statement, else None. Object names are lowercased + stripped of the leading
-    `table`/`public.`/quotes; a `sequence`/`function`/`all …` object is returned
-    verbatim so callers can ignore it."""
+    `table`/`public.`/quotes (roles unquoted too: the Supabase CLI writes `"public"."t" TO
+    "authenticated"`); a `sequence`/`function`/`all …` object is returned verbatim so callers
+    can ignore it."""
     low = re.sub(r"\s+", " ", stmt.lower()).strip()
     m = re.match(r"grant (.+?) on (.+?) to (.+)$", low)
     if not m:
@@ -203,13 +211,13 @@ def _parse_grant(stmt: str) -> tuple[set[str], list[str], set[str]] | None:
     # the two non-privileges `update (a` and `b)`, so a column-level write grant passed.
     bare = re.sub(r"\s*\([^)]*\)", "", m.group(1))
     privs = {p.strip() for p in bare.split(",") if p.strip()}
-    roles = {r.strip() for r in re.split(r"[,\s]+", m.group(3)) if r.strip()}
+    roles = {r.strip().strip('"') for r in re.split(r"[,\s]+", m.group(3)) if r.strip()}
     raw_objs = m.group(2).strip()
     objs: list[str] = []
     for obj in raw_objs.split(","):
-        obj = obj.strip()
+        obj = obj.replace('"', "").strip()
         obj = re.sub(r'^(table|sequence|function)\s+', "", obj)
-        obj = obj.replace("public.", "").strip().strip('"')
+        obj = obj.replace("public.", "").strip()
         objs.append(obj)
     return privs, objs, roles
 
@@ -458,6 +466,71 @@ def test_a_column_list_never_hides_a_write_grant():
     assert not _offending_write_grants(
         "grant update (seen_at, estimation_run_id) on public.notification_dispatches "
         "to authenticated;")
+
+
+def _split_privileges(text: str) -> list[tuple[str, frozenset[str]]]:
+    """`select, update (a, b)` -> [("select", {}), ("update", {"a", "b"})]: commas inside a column list stay put."""
+    out: list[tuple[str, frozenset[str]]] = []
+    depth, start = 0, 0
+    for i, ch in enumerate(text + ","):
+        depth += (ch == "(") - (ch == ")")
+        if ch == "," and depth == 0:
+            name, _, cols = text[start:i].partition("(")
+            out.append((name.strip(), frozenset(
+                c.strip().strip('"') for c in cols.rstrip(") ").split(",") if c.strip())))
+            start = i + 1
+    return out
+
+
+def _write_limited_grants(sql: str) -> list[str]:
+    """Browser write grants on a BROWSER_WRITE_COLUMNS table beyond its listed column UPDATEs."""
+    out: list[str] = []
+    for stmt in _statements(sql):
+        parsed = _parse_grant(stmt)
+        if not parsed:
+            continue
+        _privs, objs, roles = parsed
+        limited = [o for o in objs if o in BROWSER_WRITE_COLUMNS]
+        if not limited or not roles & set(_ROLES):
+            continue
+        collapsed = re.sub(r"\s+", " ", stmt.strip())
+        privs = re.match(r"grant (.+?) on ", collapsed.lower()).group(1)
+        for name, cols in _split_privileges(privs):
+            if name not in _WRITE_PRIVS:
+                continue
+            for obj in limited:
+                if name != "update" or not cols or not cols <= BROWSER_WRITE_COLUMNS[obj]:
+                    out.append(f"{name}{sorted(cols) if cols else ''} on {obj}: {collapsed}")
+    return out
+
+
+def test_the_run_tables_take_no_browser_write_beyond_their_columns():
+    """Migration 679 (rule 12): the API writes every run on the service role, the browser only a scenario.
+    RED by: a later migration re-granting INSERT, a table-wide UPDATE or another column on a run table."""
+    scanned = [p for p in _enforced_migrations() if _migration_number(p) >= BROWSER_WRITE_COLUMNS_SINCE]
+    assert any(_migration_number(p) == BROWSER_WRITE_COLUMNS_SINCE for p in scanned)
+    offenders = [f"  {p.name}: {o}" for p in scanned for o in _write_limited_grants(p.read_text(encoding="utf-8"))]
+    assert not offenders, (
+        "Migration(s) grant a browser role a write on a run table beyond tests/_tenant_registry.py's "
+        "BROWSER_WRITE_COLUMNS:\n" + "\n".join(offenders)
+    )
+
+
+def test_a_write_limited_grant_is_read_column_by_column():
+    assert not _write_limited_grants("grant update (scenario) on public.estimation_runs to authenticated;")
+    assert not _write_limited_grants("grant select on public.building_runs to authenticated;")
+    for sql in (
+        "grant update on public.estimation_runs to authenticated;",
+        "grant insert on estimation_runs to authenticated;",
+        "grant update (scenario, result) on estimation_runs to authenticated;",
+        "grant select, update (status) on table public.building_runs to authenticated;",
+        "grant all privileges on building_runs to authenticated;",
+        "grant update (scenario) on estimation_runs, building_runs to authenticated;",
+        'GRANT ALL ON TABLE "public"."estimation_runs" TO "authenticated";',
+        'grant insert on public.building_runs to "authenticated";',
+    ):
+        assert _write_limited_grants(sql), sql
+    assert _offending_write_grants('GRANT INSERT ON TABLE "public"."listings" TO "authenticated";')
 
 
 def test_new_base_tables_enable_rls():

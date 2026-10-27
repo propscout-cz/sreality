@@ -26,9 +26,14 @@ import io
 import logging
 import os
 import sys
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from typing import TYPE_CHECKING, Any
 
 from scraper import image_storage
+
+if TYPE_CHECKING:
+    from PIL import Image
 
 LOG = logging.getLogger("label_proposal_backfill")
 
@@ -53,12 +58,14 @@ _UPSERT_SQL = """
 """
 
 
-def _chunks(seq: list, size: int):
+def _chunks(seq: list, size: int) -> Iterator[list]:
     for i in range(0, len(seq), size):
         yield seq[i : i + size]
 
 
-def _download_decode(r2: "image_storage.R2Client", rows: list, workers: int):
+def _download_decode(
+    r2: image_storage.R2Client, rows: list, workers: int,
+) -> list[tuple[int, Image.Image]]:
     """(image_id, RGB image) for every row whose stored bytes decode. A
     download failure (transient R2 blip) or a decode failure (corrupt /
     non-image) both just drop the row for this run — retried next run,
@@ -66,7 +73,7 @@ def _download_decode(r2: "image_storage.R2Client", rows: list, workers: int):
     to terminal-mark against."""
     from PIL import Image  # base dep
 
-    def _one(row):
+    def _one(row: tuple[Any, ...]) -> tuple[int, Image.Image | None]:
         image_id, key = row[0], row[1]
         try:
             data = r2.download_bytes(key)

@@ -59,11 +59,12 @@ def interruptible() -> Iterator[None]:
         _main_thread_in_request = False
 
 
-def install() -> None:
-    """SIGTERM and SIGINT set the event. Main thread only: Python installs signal handlers nowhere else."""
+def install(*, hangup: bool = False) -> None:
+    """SIGTERM and SIGINT set the event; with `hangup`, SIGHUP and SIGQUIT too (a foreground `job_runner once`, whose
+    child in its own session would outlive a closed terminal). Main thread only: no other thread can install them."""
     global _installed
     if threading.current_thread() is threading.main_thread():
-        for sig in (signal.SIGTERM, signal.SIGINT):
+        for sig in (signal.SIGTERM, signal.SIGINT, *((signal.SIGHUP, signal.SIGQUIT) if hangup else ())):
             signal.signal(sig, _on_signal)
         _installed = True
 

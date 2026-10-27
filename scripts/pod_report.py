@@ -2,7 +2,7 @@
 
 WHY THIS FILE IS NOT PART OF THE REPO THE POD CHECKS OUT: it has to work when the
 checkout is exactly what failed. `scripts/pod_bootstrap.py` embeds this source verbatim
-into the start command's heredoc, so it is on the box before `git fetch` runs and it
+into the start command's heredoc, so it is on the box before the code is fetched and it
 runs on the IMAGE's own Python (3.10) — never the 3.12 venv the bootstrap builds later,
 which does not have `psycopg` and may not exist.
 

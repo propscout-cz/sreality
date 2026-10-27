@@ -30,7 +30,6 @@ from api.llm_client import LLMClient
 from api.providers import (
     Completion,
     ModelPrice,
-    TextBlock,
     ToolCall,
     Usage,
 )

@@ -326,16 +326,17 @@ export function useUrlBrowseState(): BrowseViewState {
    * preset id is. */
   const loadDashboard = useCallback(
     (d: SavedDashboard, { replace = false }: { replace?: boolean } = {}) => {
-      if (d.filter_spec == null) {
-        setActiveDashboardId(d.id);
-        return;
-      }
-      const sp = applySavedFilter(d.filter_spec, searchParams);
-      sp.delete('preset');
+      /* One write: the id, the dashboard's "Malé vzorky" switch and, if it carries one, its
+       * filter. Without a filter it is replaced, like the preset id. */
+      const withFilter = d.filter_spec != null;
+      const sp = withFilter ? applySavedFilter(d.filter_spec as PresetSpec, searchParams) : new URLSearchParams(searchParams);
+      if (withFilter) sp.delete('preset');
       sp.set('dashboard', d.id);
-      setSearchParams(sp, { replace });
+      if (d.show_small) sp.set('small', '1');
+      else sp.delete('small');
+      setSearchParams(sp, { replace: withFilter ? replace : true });
     },
-    [searchParams, setSearchParams, setActiveDashboardId],
+    [searchParams, setSearchParams],
   );
 
   const loadPipelineView = useCallback(() => {
@@ -412,6 +413,7 @@ export function useMemoryBrowseState(init: {
           setActivePresetId(null);
         }
         setActiveDashboardId(d.id);
+        setStatsSmall(d.show_small ?? false);
       },
       statsMarket,
       setStatsMarket,

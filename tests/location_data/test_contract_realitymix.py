@@ -29,10 +29,10 @@ from pathlib import Path
 import pytest
 
 from location_data import contracts
+from location_data.claims_common import ARCHIVED_COORDINATE_RULES
 from location_data.claims_intake import Entry, ListingRow, extract_listing
 from location_data.html_scope import ScopeRegister, ScopedDocument, scope_html
 from location_data.page_readers import (
-    ARCHIVED_COORDINATE_RULES,
     PAGE_READERS,
     ArchivedPayload,
     _licensed_coordinate,

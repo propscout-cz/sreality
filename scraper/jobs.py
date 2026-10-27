@@ -14,7 +14,8 @@ GITHUB: Host = "github-actions"
 UNTIL_MOVED: Host = "github-actions-until-moved"
 
 HOUR, DAY = 3600, 86400
-# Children per replica (#2024 enforces it); the largest that many declarations fit this share of one replica.
+# Children per replica (job_runner.MAX_CHILDREN enforces it); the largest that many declarations fit this share of
+# one replica.
 RUNNER_MAX_CONCURRENT = 3
 REPLICA_MEMORY_MB, CO_TENANCY_SHARE = 8192, 0.70
 # The runner's SIGKILL grace after its SIGTERM stays under this; the API's stuck-run cutoff exceeds the longest
@@ -28,7 +29,8 @@ WALK_MEMORY_MB, WALK_CPUS = 512, 1
 @dataclass(frozen=True)
 class Job:
     name: str
-    argv: tuple[str, ...]  # module first: the runner execs [sys.executable, "-m", *argv]
+    argv: tuple[str, ...]  # module first: the runner runs python -m <argv> through an oom_score_adj exec shim (same
+    # pid), request args appended
     every_s: int  # upserted as scheduled_jobs.cadence
     offset_s: int  # the slot on the epoch-anchored cadence grid
     timeout_s: int
@@ -36,7 +38,7 @@ class Job:
     cpus: int  # exported to the child as JOB_CPUS
     host: Host
     resource: str | None = None  # jobs sharing one never overlap
-    db_heavy: bool = False  # read by the hour census only: no two hold the database in one hour
+    db_heavy: bool = False  # the hour census, and the runner keeps a DB-heavy job's retries in its hour
 
 
 _FIXED: tuple[Job, ...] = (
@@ -96,3 +98,8 @@ def declared() -> tuple[Job, ...]:
 def runner_jobs() -> tuple[Job, ...]:
     """The only entries a scheduler may upsert, schedule, claim or request."""
     return tuple(j for j in declared() if j.host == RUNNER)
+
+
+def host_of(name: str) -> Host | None:
+    """The declared host of a name, for a refusal's message; never an entry: a scheduler reads runner_jobs()."""
+    return next((j.host for j in declared() if j.name == name), None)

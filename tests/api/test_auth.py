@@ -9,7 +9,6 @@ the tests below delenv it to exercise the gate.
 from __future__ import annotations
 
 import contextlib
-from typing import Any
 
 import pytest
 

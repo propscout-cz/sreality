@@ -123,7 +123,7 @@ from location_data.claims_common import (  # noqa: F401 - the lane's public voca
     sreality_payload_shape,
     value_norm_mirror,
 )
-from scraper import db, street
+from scraper import db
 from scraper.cpus import job_cpus
 from toolkit import description_extraction as text_lane
 

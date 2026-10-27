@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 
 from autodedup.incremental_sql import RT_MUST_LINK_SQL
-from tests._live_property import (  # `cur` is the fixture
+from tests._live_property import (
     OP,
     REQUIRED_DB,
     _account,
@@ -30,7 +30,6 @@ from tests._live_property import (  # `cur` is the fixture
     _recompute,
     _stage,
     _tag,
-    cur,
 )
 from toolkit.property_identity import letter_landings, merge_property_set
 from toolkit.property_split import SplitRefused, split_preview, split_property
