@@ -53,7 +53,7 @@ api = [
   # no JWT primitive; PyJWT is the minimal, standard choice. The [crypto] extra
   # pulls `cryptography`, required to verify the project's asymmetric ES256
   # signing keys via JWKS (Phase 1 auth).
-  "pyjwt[crypto]>=2.8",
+  "pyjwt[crypto]>=2.9",
   # The property download's PDF sheet (api/property_sheet.py). The stdlib writes no
   # PDF; reportlab is BSD, pure Python, embeds subsetted TrueType fonts (the
   # base-14 PDF fonts have no Czech letters) and needs only Pillow + charset-normalizer,
@@ -78,7 +78,7 @@ geo = [
 pricestats = [
   "playwright>=1.40",
 ]
-# CLIP visual tagging (scraper/clip_tagger.py; clip_tag.yml / clip_retag.yml)
+# CLIP visual tagging (scraper/clip_tagger.py; clip_tag.yml, which also re-tags)
 # AND the DINOv3 embedding lanes (scraper/dinov3_tagger.py;
 # docs/design/new-dedup/ENCODER-DECISION.md). Heavy (torch + transformers) — kept out
 # of the default install; ONLY the GPU workflows install it, and they install the

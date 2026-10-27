@@ -31,6 +31,11 @@ from toolkit.measures import (
     measure_backed,
     per_m2_basis_sql,
     per_m2_sql,
+    PLACEHOLDER_CAPITAL_FLOOR_CZK,
+    PLACEHOLDER_RENT_FLOOR_CZK,
+    PLOT_AREA_MAX_M2,
+    PLOT_AREA_MIN_M2,
+    placeholder_floor_sql,
     plot_area_m2,
     plot_area_sql,
     ppm2_basis,
@@ -62,9 +67,10 @@ def _sql_basis(category_main: str | None, category_type: str | None) -> str | No
     return None
 
 
-_PLOT_MIGRATION = (
-    pathlib.Path(__file__).resolve().parents[2]
-    / "migrations" / "534_plot_area_m2.sql"
+# The LATEST migration that (re)defines the function: 534 created it, 680 added the band.
+_PLOT_MIGRATION = max(
+    m for m in (pathlib.Path(__file__).resolve().parents[2] / "migrations").glob("*.sql")
+    if "create or replace function public.plot_area_m2(" in m.read_text(encoding="utf-8")
 )
 
 
@@ -90,14 +96,26 @@ def test_plot_area_is_a_visible_gap_when_the_row_states_no_plot() -> None:
     assert plot_area_m2("pozemek", None, 900.0) is None
 
 
+def test_an_impossible_lot_reads_as_no_lot() -> None:
+    """Operator ruling 2026-10-26 (migration 680): outside 10 .. 1 000 000 m2 a lot is a
+    portal artefact, on both arms of the CASE, and the band's edges are inside it."""
+    assert plot_area_m2("dum", 180.0, PLOT_AREA_MIN_M2) == PLOT_AREA_MIN_M2
+    assert plot_area_m2("dum", 180.0, PLOT_AREA_MAX_M2) == PLOT_AREA_MAX_M2
+    for lot in (0.0, 1.0, 9.99, 1_000_000.01, 48_194_054.0):
+        assert plot_area_m2("dum", 180.0, lot) is None
+        assert plot_area_m2("pozemek", lot, 900.0) is None
+
+
 def test_the_plot_measure_sql_matches_its_migration() -> None:
     """Two statements of one rule drift silently (the 425 precedent)."""
     sql = _PLOT_MIGRATION.read_text(encoding="utf-8")
     head, body = sql.split("create or replace function public.plot_area_m2(", 1)
     decl, body = body.split("$function$", 1)
     body = body.split("$function$")[0]
-    assert "WHEN p_category_main = 'pozemek' THEN p_area_m2" in body
-    assert "ELSE p_estate_area" in body
+    band = f"BETWEEN {PLOT_AREA_MIN_M2:.0f} AND {PLOT_AREA_MAX_M2:.0f}"
+    assert "WHEN p_category_main = 'pozemek' THEN" in body
+    assert f"CASE WHEN p_area_m2 {band} THEN p_area_m2 END" in body
+    assert f"CASE WHEN p_estate_area {band} THEN p_estate_area END" in body
     # Inlinable, like measure_price_per_m2: a SET clause would turn every predicate
     # on the measure into a per-row function call. Read off the DECLARATION, not the
     # file — the comment above it names the clause in order to forbid it.
@@ -313,3 +331,27 @@ def test_alias_is_required_so_a_unit_blind_call_cannot_be_written():
         per_m2_sql()  # type: ignore[call-arg]
     with pytest.raises(TypeError):
         per_m2_basis_sql()  # type: ignore[call-arg]
+
+
+# ---- the placeholder price floor (ruling 2026-10-26) -----------------------
+
+
+def test_the_placeholder_floor_is_the_deals_own() -> None:
+    """A rent's floor for a rent, the capital floor for every other deal (sale, auction,
+    share), spelled once and read by the rollup's headline price change."""
+    sql = placeholder_floor_sql("c.category_type")
+    assert sql == (
+        f"(CASE WHEN c.category_type = 'pronajem' THEN {PLACEHOLDER_RENT_FLOOR_CZK} "
+        f"ELSE {PLACEHOLDER_CAPITAL_FLOOR_CZK} END)"
+    )
+    assert (PLACEHOLDER_RENT_FLOOR_CZK, PLACEHOLDER_CAPITAL_FLOOR_CZK) == (500, 10_000)
+
+
+def test_the_rollup_reads_the_one_floor() -> None:
+    from scripts.recompute_property_stats import _RECOMPUTE_BATCH_SQL
+
+    assert placeholder_floor_sql("cn.category_type") in _RECOMPUTE_BATCH_SQL
+    assert placeholder_floor_sql("c.category_type") in _RECOMPUTE_BATCH_SQL
+    assert "THEN 500 ELSE 10000" not in _RECOMPUTE_BATCH_SQL.replace(
+        placeholder_floor_sql("cn.category_type"), "").replace(
+        placeholder_floor_sql("c.category_type"), "")

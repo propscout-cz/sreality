@@ -56,7 +56,6 @@ from scripts.runpod_client import GpuOption, NoCapacityError, RunPodClient, RunP
 
 LOG = logging.getLogger("dinov3_embed_dispatch")
 
-REPO_URL = pod_bootstrap.REPO_URL
 # The image supplies git, pip and a CUDA driver. It does NOT supply a usable Python:
 # its 3.10 is below this project's >=3.12 floor, so the pod bootstraps its own
 # interpreter and torch (scripts/pod_bootstrap.py). Chasing a newer image tag is not
@@ -144,7 +143,7 @@ def read_backfill_progress(conn: Any, *, identity: dict[str, Any],
     BOOTED means the pod wrote at least one vector this run — this lane has no separate
     heartbeat row and gets none, because adding one would be a migration for a job that
     already publishes its progress. The consequence is honest and worth stating: the
-    bootstrap deadline here must cover clone + install + weights + the FIRST chunk, not
+    bootstrap deadline here must cover fetch + install + weights + the FIRST chunk, not
     just the boot.
 
     NEVER TERMINAL. Completion would be `pending == 0`, and that anti-join over ~10.4M
@@ -318,6 +317,12 @@ def main() -> int:
     api_key = os.environ.get("RUNPOD_API_KEY")
     if not api_key:
         LOG.error("RUNPOD_API_KEY not set")
+        return 1
+    try:
+        # The pod's code: a signed archive of this sha, never the private repository (#2016).
+        env.update(pod_bootstrap.publish_archive_env(args.ref))
+    except Exception as exc:  # noqa: BLE001 - a failed publish must stop the launch, loudly
+        LOG.error("could not publish the code archive for %s: %s", args.ref, exc)
         return 1
 
     client = RunPodClient(api_key)

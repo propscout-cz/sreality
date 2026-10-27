@@ -46,12 +46,13 @@ def _no_vapid_key(monkeypatch):
 @pytest.fixture(autouse=True)
 def _stop_signal_untouched():
     """`portal_runner.run_phase` installs the stop handlers (scraper.stop): every test leaves the process's SIGTERM and
-    SIGINT handlers, and the shared stop event, as it found them, so a stop in one test never cuts the next."""
+    SIGINT handlers (and a foreground run's SIGHUP and SIGQUIT), and the shared stop event, as it found them, so a stop
+    in one test never cuts the next."""
     import signal
 
     from scraper import stop
 
-    handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT)}
     yield
     stop.reset()
     for sig, handler in handlers.items():

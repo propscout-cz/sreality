@@ -2093,7 +2093,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "float",
       "pg_column": "plot_area_m2",
       "default": null,
-      "description": "Lower bound on PLOT area in m², for houses (`dum`) and land (`pozemek`) alike. Reads the `plot_area_m2` measure, which is `area_m2` for land and `estate_area` otherwise — not the `estate_area` column, which four portals leave null on land. Apartments usually have no plot at all.",
+      "description": "Lower bound on PLOT area in m², for houses (`dum`) and land (`pozemek`) alike. Reads the `plot_area_m2` measure, which is `area_m2` for land and `estate_area` otherwise — not the `estate_area` column, which four portals leave null on land. Apartments usually have no plot at all. A stated plot under 10 m² or over 1 000 000 m² (100 ha) is a portal artefact and reads as no plot (migration 680), so it matches no bound.",
       "category": "Property",
       "ui_control": "range_inputs",
       "agendas": [
@@ -2724,7 +2724,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "float",
       "pg_column": null,
       "default": null,
-      "description": "Signed total price change threshold, as a percent: from the first observed price of the oldest priced listing in the shown price's lineage (the canonical listing and its same-portal predecessors, as in `price_change_count_min`) to the shown price. Negative = total drop of at least that much (`total_price_change_pct <= X`, e.g. -10 for 'down 10%+ overall'); positive = total rise of at least that much (`>= X`). Zero is treated as unset. Properties with fewer than two price points across that lineage, or an unpriced canonical listing, are excluded when set.",
+      "description": "Signed total price change threshold, as a percent: from the first observed price of the oldest priced listing in the shown price's lineage (the canonical listing and its same-portal predecessors, as in `price_change_count_min`) to the shown price. Negative = total drop of at least that much (`total_price_change_pct <= X`, e.g. -10 for 'down 10%+ overall'); positive = total rise of at least that much (`>= X`). Zero is treated as unset. Properties with fewer than two price points across that lineage, or an unpriced canonical listing, are excluded when set. A placeholder price (under 10 000 CZK for a sale, auction or share, under 500 CZK for a rent, e.g. 1 CZK standing in for 'price on request') is not a price point: it neither opens nor closes the span, and a shown placeholder means no change.",
       "category": "Velocity",
       "ui_control": "number_input",
       "agendas": [

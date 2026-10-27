@@ -16,7 +16,10 @@ import ast
 import tomllib
 from pathlib import Path
 
+import yaml
+
 _ROOT = Path(__file__).resolve().parent.parent
+_WORKFLOWS = _ROOT / ".github" / "workflows"
 
 # Loaders that legitimately do NOT pin, with the reason. Kept as an explicit map so
 # adding a file here is a deliberate, reviewed act rather than a silent exemption.
@@ -30,7 +33,6 @@ _UNPINNED_ALLOWED = {
 
 _TAGGING_WORKFLOWS = (
     "clip_tag.yml",
-    "clip_retag.yml",
     "label_proposal_backfill.yml",
 )
 
@@ -90,7 +92,29 @@ def test_embedding_writer_stamps_the_revision():
 
 
 def test_tagging_workflows_exist():
-    # These three are the only installers of the clip extra; if one is renamed the
+    # These two are the only installers of the clip extra; if one is renamed the
     # pin's blast radius changes and this file's assumptions need re-checking.
     for name in _TAGGING_WORKFLOWS:
-        assert (_ROOT / ".github" / "workflows" / name).exists(), name
+        assert (_WORKFLOWS / name).exists(), name
+
+
+def test_retag_runs_in_the_tagging_workflow_after_tag_in_each_shard():
+    # One torch install per shard serves both: the hourly retag workflow installed it four times
+    # an hour to find nothing to re-tag (#2014).
+    assert not (_WORKFLOWS / "clip_retag.yml").exists()
+    doc = yaml.safe_load((_WORKFLOWS / "clip_tag.yml").read_text())
+    (job,) = doc["jobs"].values()
+    assert job["strategy"]["matrix"]["shard"] == [0, 1, 2, 3]
+    runs = [step.get("run", "") for step in job["steps"]]
+    tag = next(i for i, run in enumerate(runs) if "scripts.clip_tag_backfill" in run)
+    retag = next(i for i, run in enumerate(runs) if "scripts.retag_from_embeddings" in run)
+    assert tag < retag
+    assert "--shards 4 --shard ${{ matrix.shard }}" in runs[retag]
+    # A failed tag step (an R2 outage) must not stop the retag, which reads only stored vectors;
+    # a failed install must (it would only fail again on the import).
+    condition = job["steps"][retag]["if"]
+    assert "!cancelled()" in condition and "steps.install.outcome == 'success'" in condition
+    assert "inputs.dry_run != 'true'" in condition
+    # Its budget is what is left of the job's clock after tagging, never a fixed slice of it.
+    assert "JOB_STARTED" in runs[retag] and '--max-seconds "$BUDGET"' in runs[retag]
+    assert any('JOB_STARTED=$(date +%s)' in run for run in runs[:tag])

@@ -30,6 +30,7 @@ filter" — the WORKING board is one per account; named dashboards are many, and
 | name | `name` 1..200 | `name` 1..200, or NULL = the working board (one per account, partial unique) |
 | order / colour | `position`, `color` (8-colour palette) | `position`, `color` (same CHECK text) |
 | blob | `filter_spec {filters, sort}` | `charts` (validate_board) + `filter_spec {filters, sort}` NULL = no filter |
+| scalar | none | `show_small` (681, default false): the saved "Malé vzorky"; the Okolí dashboard tab reads it |
 | listed by | `GET /filter-presets` | `GET /stats/dashboards` (named own + shared; the working row never) |
 | working state | the Browse URL | the working board, the unnamed row: `GET`/`PUT /stats/dashboard` |
 | shared | no | `stats_dashboard_shares`, read-only |
@@ -85,15 +86,18 @@ rewritten for the new upsert (`ON CONFLICT (account_id) WHERE name IS NULL`).
 
 `api/saved_sets.py` replaces `api/filter_presets.py` + the CRUD half of `api/routes/filter_presets.py`:
 
-- A frozen `SavedSetKind(table, noun, id_param, blob_columns, create_in, update_in, nullable, empty_on_read,
-  projection_extra, row_scope, order_by, own_rows)` descriptor. `blob_columns` names the jsonb columns (`filter_spec`
-  for presets; `charts`, `filter_spec` for dashboards); each is validated by its type on the body models in
-  `api/schemas.py`: `PresetSpec` (`_coded_chips`) and `Charts` (`toolkit.stats_registry.validate_board`, its refusal a
-  plain-string 422). `nullable` is the set a PUT's explicit `null` clears (`color`; a dashboard's `filter_spec` too);
-  every other null keeps the stored value, so the API never writes `name = NULL`. `row_scope` applies to EVERY
-  statement, not only the list (dashboards: `name IS NOT NULL`, so no by-id route reaches the working board).
-  `order_by` is the list order. `empty_on_read` keeps the preset reader's `filter_spec or {}`. `own_rows` names the
-  caller's own rows where RLS also shows shared ones (dashboards: `_IS_MINE_SQL`), for the position below.
+- A frozen `SavedSetKind(table, noun, id_param, blob_columns, create_in, update_in, scalar_columns, nullable,
+  empty_on_read, projection_extra, row_scope, order_by, own_rows, refusals, groups)` descriptor. `blob_columns` names
+  the jsonb columns (`filter_spec` for presets; `charts`, `filter_spec` for dashboards); each is validated by its type
+  on the body models in `api/schemas.py`: `PresetSpec` (`_coded_chips`) and `Charts`
+  (`toolkit.stats_registry.validate_board`, its refusal a plain-string 422). `scalar_columns` (migration 681) names
+  plain-typed columns, selected, inserted, partially updated and returned exactly like the blobs minus the jsonb cast
+  (presets: none; dashboards: `show_small`). `nullable` is the set a PUT's explicit `null` clears (`color`; a
+  dashboard's `filter_spec` too); every other null keeps the stored value, so the API never writes `name = NULL`.
+  `row_scope` applies to EVERY statement, not only the list (dashboards: `name IS NOT NULL`, so no by-id route reaches
+  the working board). `order_by` is the list order. `empty_on_read` keeps the preset reader's `filter_spec or {}`.
+  `own_rows` names the caller's own rows where RLS also shows shared ones (dashboards: `_IS_MINE_SQL`), for the
+  position below.
 - One implementation of list / get / create / update / delete / reorder, keyed by the descriptor: the same SQL shapes
   as before (`position = (SELECT COALESCE(MAX(position), -1) + 1 FROM <table>)`, for dashboards over the caller's own
   rows only (`own_rows`); `unnest ... WITH ORDINALITY` reorder, omitted-vs-null colour), the same response rows plus
@@ -115,10 +119,16 @@ Dashboards (`api/routes/stats_dashboards.py`, mounted like the presets router):
   `{account_id, email}` over `stats_dashboard_shares`). `WHERE name IS NOT NULL`. ORDER: the caller's own
   dashboards first, then those shared with them, each group by `position, created_at desc`
   (`(account_id in current_account_ids()) DESC, position, created_at DESC`); the SPA splits the list the same way.
-- `POST /stats/dashboards {name, charts, filter_spec?, color?}` — the "Uložit jako dashboard" write; `charts`
-  through `validate_board`, `filter_spec` through `_coded_chips`; `require_account_id` (never acts).
+- `POST /stats/dashboards {name, charts, filter_spec?, show_small?, color?}` — the "Uložit jako dashboard" write;
+  `charts` through `validate_board`, `filter_spec` through `_coded_chips`, `show_small` a boolean (default false);
+  `require_account_id` (never acts).
 - `PUT /stats/dashboards/reorder {ids}`; `GET/PUT/DELETE /stats/dashboards/{id}` (PUT: partial `name`, `charts`,
-  `filter_spec` where an explicit `null` clears the filter, `color`). A recipient's PUT/DELETE matches 0 rows → 404.
+  `filter_spec` where an explicit `null` clears the filter, `show_small` where a `null` keeps it, `color`). A
+  recipient's PUT/DELETE matches 0 rows → 404.
+- Every dashboard row carries `show_small` (migration 681, a scalar column): the Stats tab's "Malé vzorky" switch
+  (URL `small=1`, cells under the floor shown as their small-sample summary, migration 678), saved with the dashboard
+  and read by the property page's Okolí dashboard tab, which draws that dashboard with its own setting. A recipient
+  reads the owner's (it is part of what was shared). The working board's `GET`/`PUT /stats/dashboard` stay `{charts}`.
 - `POST /stats/dashboards/{id}/shares {email}` → the ownership gate (`UPDATE stats_dashboards SET updated_at = now()
   WHERE id = %s AND account_id IN (SELECT current_account_ids()) AND name IS NOT NULL RETURNING name`), then
   `shares.grant(..., DashboardShare(id, name))` on the service role: insert `ON CONFLICT DO NOTHING RETURNING

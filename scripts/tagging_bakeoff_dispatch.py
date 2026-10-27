@@ -6,8 +6,8 @@ that does not need one:
 
   * `manifest` — a plain runner with the DB and R2. Builds the run, the arms, the image
     manifest and the free `clip-b32-stored` baseline (`tagging_bakeoff_manifest.py`).
-  * `embed`    — rents a GPU pod through `scripts/runpod_client.py`, which clones this
-    repo, installs the `clip` extra and runs `tagging_bakeoff_embed.py`. THE ONLY STAGE
+  * `embed`    — rents a GPU pod through `scripts/runpod_client.py`; the pod fetches a signed
+    archive of the sha, installs the `clip` extra and runs `tagging_bakeoff_embed.py`. THE ONLY STAGE
     THAT SPENDS MONEY.
   * `train`    — back on the runner with the `training` extra, running the results half
     of the experiment (`python -m scripts.tag_head_bakeoff`).
@@ -78,7 +78,6 @@ LOG = logging.getLogger("tagging_bakeoff_dispatch")
 
 STAGES = ("manifest", "embed", "train")
 
-REPO_URL = pod_bootstrap.REPO_URL
 # The image supplies a CUDA driver and nothing else that matters: its Python is 3.10 and
 # this project requires >=3.12, so the pod bootstraps its own interpreter
 # (scripts/pod_bootstrap.py). Do not "fix" this tag by chasing a Python version.
@@ -87,7 +86,7 @@ DEFAULT_IMAGE = "runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04"
 # 4090 is deliberately absent: fastest card, fewest vCPUs, and decode is CPU-side.
 DEFAULT_GPU_ALLOWLIST = ("3090", "a5000")
 MAX_PRICE_PER_HR = 1.00
-# Clone + `pip install -e .[clip]` + the first weight download, before image one is
+# Fetch + `pip install -e .[clip]` + the first weight download, before image one is
 # embedded. The wait window must cover it on top of the payload's own budget.
 STARTUP_GRACE_S = 900
 
@@ -531,6 +530,12 @@ def _run_pod(plan: Plan, args: argparse.Namespace) -> int:
     api_key = os.environ.get("RUNPOD_API_KEY")
     if not api_key:
         LOG.error("RUNPOD_API_KEY not set")
+        return 1
+    try:
+        # The pod's code: a signed archive of this sha, never the private repository (#2016).
+        env.update(pod_bootstrap.publish_archive_env(args.ref))
+    except Exception as exc:  # noqa: BLE001 - a failed publish must stop the launch, loudly
+        LOG.error("could not publish the code archive for %s: %s", args.ref, exc)
         return 1
 
     client = RunPodClient(api_key)

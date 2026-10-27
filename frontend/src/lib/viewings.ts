@@ -63,11 +63,14 @@ export const slotIsComplete = (s: ViewingSlot): boolean =>
   /^\d{4}-\d{2}-\d{2}$/.test(s.day) && /^\d{2}:\d{2}$/.test(s.time);
 
 /* A new viewing's first guess: the next full hour today, or tomorrow at 10:00
- * once that would be past 20:00 (a viewing is rarely booked for the night). */
+ * once that would be past 20:00 (a viewing is rarely booked for the night).
+ * Counted on the instant (Prague's offset is whole hours, so the next full UTC hour
+ * is the next full hour on its clock): the clock's hour + 1 would name 02:00 the
+ * night the clock skips it, and pass over the repeated 02:00 in autumn. */
 export function defaultSlot(now: Date = new Date()): ViewingSlot {
-  const { day, time } = viewingSlot(now.toISOString());
-  const next = Number(time.slice(0, 2)) + 1;
-  return next > 20 ? { day: shiftDay(day, 1), time: '10:00' } : { day, time: `${pad2(next)}:00` };
+  const today = pragueDayKey(now);
+  const next = viewingSlot(new Date((Math.floor(now.getTime() / 3_600_000) + 1) * 3_600_000).toISOString());
+  return next.day === today && next.time <= '20:00' ? next : { day: shiftDay(today, 1), time: '10:00' };
 }
 
 const WEEKDAY_SHORT = new Intl.DateTimeFormat('cs-CZ', { timeZone: 'UTC', weekday: 'short' });

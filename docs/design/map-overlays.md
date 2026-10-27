@@ -216,7 +216,7 @@ sort, legend, scale, variants, reader)])` where a reader is one of two kinds:
   resolves the layer by name from `{service}?f=json`, asserts `geometryType` and the required field
   names, pages by `returnIdsOnly` + chunks of ≤ 50 ids (`f=geojson`, `outSR`, `outFields=*`),
   0.5 s between requests, retries with backoff on 429/5xx/network, honest User-Agent
-  `sreality-tracker/1.0 (+https://github.com/waiff/sreality)` (an HTTP/1.1 session). The mapper
+  `propscout/1.0 (+https://app.propscout.cz; info@propscout.cz)` (`scraper.contact`, #2016) (an HTTP/1.1 session). The mapper
   returns the flat props dict or `None` to skip the feature. Geometry input SRID = `out_sr`.
 - `SqlSource(sql)` — a SELECT yielding `(source_id, props jsonb, geom geometry)` in 3857 (kraje,
   later rent_map).

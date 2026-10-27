@@ -27,7 +27,7 @@ vi.mock('@/components/ExploreAreaModal', () => ({
 
 import { fetchStatsPivot, listStatsDashboards, marketSample } from '@/lib/stats';
 import { DEFAULT_SCOPE, neighbourhoodFilters } from '@/lib/neighbourhood';
-import { pivotOf } from '@/components/stats/testPivot';
+import { cell, pivotOf } from '@/components/stats/testPivot';
 import MarketTile from './MarketTile';
 
 const CHART: ChartSpec = { id: 'c1', view: 'table', rows: [], cols: [], measure: 'ppm2', stats: ['median'] };
@@ -136,5 +136,21 @@ describe('<MarketTile>', () => {
     renderTile({ ...PROPERTY, lat: null } as unknown as PropertyPublic);
     expect(await screen.findByText('Bez souřadnic nelze hledat okolí.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Prozkoumat okolí/ })).toBeNull();
+  });
+
+  it('shows small samples on the property page exactly when its dashboard saved the switch on', async () => {
+    const smallPivot = pivotOf({
+      spec: { rows: [], cols: [], measure: 'ppm2' },
+      cells: [{ ...cell([], 3, null), small: { min: 100_000, max: 140_000, mean: 120_000, median: 118_000 } }],
+    });
+    vi.mocked(fetchStatsPivot).mockResolvedValue(smallPivot);
+    vi.mocked(listStatsDashboards).mockResolvedValue({ data: [dashboard({ show_small: true })], total: 1 });
+    const { unmount } = renderTile();
+    expect(await screen.findByText('malý vzorek')).toBeInTheDocument();
+    unmount();
+    vi.mocked(listStatsDashboards).mockResolvedValue({ data: [dashboard({ show_small: false })], total: 1 });
+    renderTile();
+    expect(await screen.findByText(/^pod 5$/)).toBeInTheDocument();
+    expect(screen.queryByText('malý vzorek')).toBeNull();
   });
 });
