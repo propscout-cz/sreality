@@ -164,6 +164,25 @@ describe('<StatsDashboard>', () => {
     expect(set).toHaveBeenCalledWith('filter');
   });
 
+  /* Operator ruling 2026-10-27: the lens picks one, so it is the one joined bar
+   * (Segmented draws SegmentedBar), the chosen lens filled copper. */
+  it('draws the sample lens as the one joined bar, the chosen lens filled copper', async () => {
+    renderBoard({ value: 'sold', set: vi.fn() });
+    await screen.findAllByRole('heading', { level: 3 });
+    const lens = screen.getByRole('group', { name: 'Vzorek' });
+    const track = lens.firstElementChild as HTMLElement;
+    expect(track).toHaveClass('border', 'bg-[var(--color-paper-2)]');
+    for (const b of within(lens).getAllByRole('button')) {
+      expect(b.parentElement).toBe(track);
+      expect(b).not.toHaveClass('border');
+      expect(b).toHaveAttribute('aria-pressed', String(b.textContent === 'Prodáno (trh)'));
+    }
+    expect(within(lens).getByRole('button', { name: 'Prodáno (trh)' })).toHaveClass(
+      'bg-[var(--color-copper)]',
+      'text-[var(--color-on-copper)]',
+    );
+  });
+
   it('counts every chart over all listings under Vše: any status, dismissed included, no time-on-market bound', async () => {
     vi.mocked(stats.fetchStatsPivot).mockClear();
     renderBoard({ value: 'all', set: vi.fn() });

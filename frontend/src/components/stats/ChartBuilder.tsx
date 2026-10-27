@@ -23,8 +23,8 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Label, PickButton } from '@/components/controls';
-import { STATS_REGISTRY } from '@/lib/statsRegistry.generated';
+import { Label, PickButton, SegmentedBar, type SegmentOption } from '@/components/controls';
+import { STATS_REGISTRY, type ViewId } from '@/lib/statsRegistry.generated';
 import {
   DIMENSION_GROUPS,
   STAT_LABEL,
@@ -36,7 +36,6 @@ import {
   dropOutcome,
   maxColsFor,
   maxRowsFor,
-  measureLabel,
   moveRow,
   noColumnsText,
   placeDim,
@@ -238,7 +237,7 @@ function ShelfLabel({ id, children, aside }: { id: string; children: ReactNode; 
   );
 }
 
-/* A labelled row of pick buttons: a palette group, the value, the view, the statistic. */
+/* A labelled row of pick buttons (pick-several): a palette group, the statistic. */
 function Picker({ label, children }: { label: string; children: ReactNode }) {
   const id = useId();
   return (
@@ -247,6 +246,28 @@ function Picker({ label, children }: { label: string; children: ReactNode }) {
       <div role="group" aria-labelledby={id} className="flex flex-wrap gap-1">
         {children}
       </div>
+    </div>
+  );
+}
+
+/* A labelled pick-one, the value or the view: the one joined bar (SegmentedBar),
+ * each segment its label's width; a click on the lit segment sets it again. */
+function OneOf<T extends string>({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: ReadonlyArray<SegmentOption<T>>;
+  value: T;
+  onChange: (v: T) => void;
+}) {
+  const id = useId();
+  return (
+    <div>
+      <ShelfLabel id={id}>{label}</ShelfLabel>
+      <SegmentedBar hug options={options} value={value} onChange={onChange} aria={{ 'aria-labelledby': id }} />
     </div>
   );
 }
@@ -514,41 +535,31 @@ function ColSlot({
 /* -------------------------------------------------------------------------- */
 
 function ValueWell({ draft, onChange }: { draft: ChartSpec; onChange: (next: ChartSpec) => void }) {
-  /* Why each view cannot take the draft's shelves (null = it can). */
-  const blocks = STATS_REGISTRY.views.map((v) => ({ v, why: viewBlock(draft, v) }));
-  const notes = blocks.filter((x) => x.why != null && x.v !== draft.view);
+  /* A view that cannot take the draft's shelves (never the draft's own) is a
+   * disabled segment; its reason is its hover box and joins the line under the bar. */
+  const refused = STATS_REGISTRY.views
+    .map((v) => ({ v, why: viewBlock(draft, v) }))
+    .filter((x) => x.why != null && x.v !== draft.view)
+    .map(({ v, why }) => ({ v, text: `${VIEW_LABEL[v]}: ${why}` }));
+  const refusal = new Map(refused.map((x) => [x.v, x.text]));
+  const views: ReadonlyArray<SegmentOption<ViewId>> = STATS_REGISTRY.views.map((v) => ({
+    value: v,
+    label: VIEW_LABEL[v],
+    disabled: refusal.has(v),
+    title: refusal.get(v),
+  }));
   /* The well holds three pickers; only the measure group is named "Hodnota". */
   return (
     <div className="space-y-3 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-inset)] p-3">
-      <Picker label="Hodnota">
-        {STATS_REGISTRY.measures.map((m) => (
-          <PickButton
-            key={m.id}
-            on={draft.measure === m.id}
-            onClick={() => onChange({ ...draft, measure: m.id })}
-            ariaLabel={`Hodnota: ${measureLabel(m.id)}`}
-          >
-            {m.label_cs}
-          </PickButton>
-        ))}
-      </Picker>
-      <Picker label="Zobrazení">
-        {blocks.map(({ v, why }) => (
-          <PickButton
-            key={v}
-            on={draft.view === v}
-            disabled={draft.view !== v && why != null}
-            onClick={() => onChange({ ...draft, view: v })}
-            ariaLabel={`Zobrazení: ${VIEW_LABEL[v]}`}
-          >
-            {VIEW_LABEL[v]}
-          </PickButton>
-        ))}
-      </Picker>
-      {notes.length > 0 && (
-        <p className="-mt-1.5 text-[0.7rem] text-[var(--color-ink-3)]">
-          {notes.map((x) => `${VIEW_LABEL[x.v]}: ${x.why}`).join(' · ')}
-        </p>
+      <OneOf
+        label="Hodnota"
+        options={STATS_REGISTRY.measures.map((m) => ({ value: m.id, label: m.label_cs }))}
+        value={draft.measure}
+        onChange={(measure) => onChange({ ...draft, measure })}
+      />
+      <OneOf label="Zobrazení" options={views} value={draft.view} onChange={(view) => onChange({ ...draft, view })} />
+      {refused.length > 0 && (
+        <p className="-mt-1.5 text-[0.7rem] text-[var(--color-ink-3)]">{refused.map((x) => x.text).join(' · ')}</p>
       )}
       {statUsed(draft) && (
         <Picker label="Statistika · jedna nebo víc">

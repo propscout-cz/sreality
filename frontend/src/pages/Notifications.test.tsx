@@ -11,7 +11,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -163,8 +163,8 @@ describe('<Notifications> listing rows', () => {
   });
 });
 
-describe('<Notifications> source tabs', () => {
-  it('offers All, Monitoring, Watchdogs and Shared, and no System tab', () => {
+describe('<Notifications> source filter', () => {
+  it('offers All, Monitoring, Watchdogs and Shared, and no System option', () => {
     renderPage();
     for (const name of ['Monitoring', 'Watchdogs', 'Shared']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument();
@@ -172,7 +172,7 @@ describe('<Notifications> source tabs', () => {
     expect(screen.queryByRole('button', { name: 'System' })).toBeNull();
   });
 
-  it('asks for the share kind on the Shared tab', async () => {
+  it('asks for the share kind under Shared', async () => {
     renderPage();
     vi.mocked(listNotifications).mockResolvedValue({ ...feed, data: [], total: 0 });
     fireEvent.click(screen.getByRole('button', { name: 'Shared' }));
@@ -180,6 +180,42 @@ describe('<Notifications> source tabs', () => {
       expect(listNotifications).toHaveBeenLastCalledWith(
         expect.objectContaining({ source_kind: 'share' }),
       ));
+  });
+});
+
+/* Operator ruling 2026-10-27: the source and read filters pick one each, so each
+ * is the one joined bar (SegmentedBar), chosen filled copper on the desktop. */
+describe('<Notifications> filters are the one joined bar', () => {
+  it('draws Source and Read state as joined tracks, the chosen segment filled copper', () => {
+    renderPage();
+    for (const [name, labels] of [
+      ['Source', ['All', 'Monitoring', 'Watchdogs', 'Shared']],
+      ['Read state', ['All', 'Unread']],
+    ] as const) {
+      const bar = screen.getByRole('group', { name });
+      const track = bar.firstElementChild as HTMLElement;
+      expect(track).toHaveClass('border', 'bg-[var(--color-paper-2)]');
+      const buttons = within(bar).getAllByRole('button');
+      expect(buttons.map((b) => b.textContent)).toEqual(labels);
+      for (const b of buttons) {
+        expect(b.parentElement).toBe(track);
+        expect(b).toHaveAttribute('aria-pressed', String(b.textContent === 'All'));
+      }
+      const all = within(bar).getByRole('button', { name: 'All' });
+      expect(all).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+      expect(all).not.toHaveClass('bg-[var(--color-copper-soft)]');
+    }
+  });
+
+  it('moves the lit segment and asks for unread rows only', async () => {
+    renderPage();
+    vi.mocked(listNotifications).mockResolvedValue({ ...feed, data: [], total: 0 });
+    const read = screen.getByRole('group', { name: 'Read state' });
+    fireEvent.click(within(read).getByRole('button', { name: 'Unread' }));
+    expect(within(read).getByRole('button', { name: 'Unread' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(read).getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'false');
+    await waitFor(() =>
+      expect(listNotifications).toHaveBeenLastCalledWith(expect.objectContaining({ seen: 'unseen' })));
   });
 });
 

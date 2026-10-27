@@ -119,7 +119,7 @@ describe('<StatsChart>', () => {
     renderChart({ chart: { ...CHART, rows: [] } });
     await screen.findByRole('table');
     fireEvent.click(button('Upravit graf Plocha'));
-    fireEvent.click(button('Zobrazení: Čáry'));
+    fireEvent.click(within(screen.getByRole('group', { name: 'Zobrazení' })).getByRole('button', { name: 'Čáry' }));
     expect(button('Uložit graf')).toBeDisabled();
     const hits = screen.getAllByText(stats.LINE_NEEDS_ROW);
     expect(hits).toHaveLength(2);
@@ -138,7 +138,7 @@ describe('<StatsChart>', () => {
     await within(c).findByRole('table');
     fireEvent.click(button('Upravit graf Plocha · Dispozice › Stav'));
     fireEvent.click(button('Odebrat Stav'));
-    fireEvent.click(button('Zobrazení: Čáry'));
+    fireEvent.click(within(screen.getByRole('group', { name: 'Zobrazení' })).getByRole('button', { name: 'Čáry' }));
     expect(within(c).queryByRole('table')).toBeNull();
     expect(screen.getAllByText(/Ve filtru/)).toHaveLength(1);
     expect(screen.queryByText(stats.LINE_NEEDS_ROW)).toBeNull();

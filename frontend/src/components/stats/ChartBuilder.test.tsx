@@ -17,6 +17,8 @@ function Harness({ initial, categoryMain = 'byt' }: { initial: Partial<ChartSpec
 const rowsShelf = () => screen.getByRole('group', { name: 'Řádky' });
 const colsShelf = () => screen.getByRole('group', { name: 'Sloupce' });
 const click = (name: string) => fireEvent.click(screen.getByRole('button', { name }));
+/* A segment of a value-well bar, found inside its named group. */
+const segment = (group: string, name: string) => within(screen.getByRole('group', { name: group })).getByRole('button', { name });
 
 describe('<ChartBuilder> — every drag has a click path', () => {
   it('a chip click appends to Řádky; a second click takes it back', () => {
@@ -68,8 +70,8 @@ describe('<ChartBuilder> — every drag has a click path', () => {
     expect(screen.queryByRole('button', { name: 'Přesunout Dispozice do Sloupců' })).toBeNull();
     unmount();
     render(<Harness initial={{ rows: ['disposition', 'condition'], cols: ['kraj'] }} />);
-    expect(screen.getByRole('button', { name: 'Zobrazení: Krabice' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Zobrazení: Čáry' })).toBeDisabled();
+    expect(segment('Zobrazení', 'Krabice')).toBeDisabled();
+    expect(segment('Zobrazení', 'Čáry')).toBeDisabled();
     expect(screen.getByText(/Čáry: čáry a pruhy mají v Řádcích jen jednu dimenzi/)).toBeInTheDocument();
     expect(screen.getByText(/Krabice: krabice nemá Sloupce/)).toBeInTheDocument();
   });
@@ -100,10 +102,10 @@ describe('<ChartBuilder> — every drag has a click path', () => {
 
   it('picks the value, the view and — where statistics are drawn — the statistics', () => {
     render(<Harness initial={{ rows: ['disposition'] }} />);
-    click('Hodnota: Doba na trhu');
+    fireEvent.click(segment('Hodnota', 'Doba na trhu'));
     expect(latest.measure).toBe('tom_days');
     expect(screen.queryByRole('group', { name: /^Statistika/ })).toBeNull();
-    click('Zobrazení: Pruhy');
+    fireEvent.click(segment('Zobrazení', 'Pruhy'));
     expect(latest.view).toBe('bar');
     expect(screen.getByRole('group', { name: /^Statistika/ })).toBeInTheDocument();
     click('Statistika: p75');
@@ -121,6 +123,49 @@ describe('<ChartBuilder> — every drag has a click path', () => {
     click('Statistika: p90');
     expect(latest.stats).toEqual(['p90']);
     expect(screen.getByRole('button', { name: 'Statistika: p90' })).toBeInTheDocument();
+  });
+});
+
+/* Operator ruling 2026-10-27: a pick-one is the one joined bar (SegmentedBar).
+ * Hodnota and Zobrazení each pick one; Statistika picks several and stays chips. */
+describe('<ChartBuilder> — Hodnota and Zobrazení are the one joined bar', () => {
+  it('draws each as one track of adjoining segments, the chosen one filled copper, no separate chips', () => {
+    render(<Harness initial={{ view: 'bar', rows: ['disposition'] }} />);
+    for (const [group, chosen] of [['Hodnota', 'Cena za m²'], ['Zobrazení', 'Pruhy']] as const) {
+      const bar = screen.getByRole('group', { name: group });
+      const track = bar.firstElementChild as HTMLElement;
+      expect(track).toHaveClass('border', 'bg-[var(--color-paper-2)]');
+      for (const b of within(bar).getAllByRole('button')) {
+        expect(b.parentElement).toBe(track);
+        expect(b).not.toHaveClass('border');
+        expect(b).toHaveAttribute('aria-pressed', String(b.textContent === chosen));
+      }
+      expect(segment(group, chosen)).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+      expect(segment(group, chosen)).not.toHaveClass('bg-[var(--color-copper-soft)]');
+    }
+    /* Statistika picks several: still its own chips. */
+    const stat = within(screen.getByRole('group', { name: 'Statistika · jedna nebo víc' })).getByRole('button', { name: 'Statistika: medián' });
+    expect(stat).toHaveClass('border', 'bg-[var(--color-copper-soft)]');
+  });
+
+  it('keeps a view the shelves rule out as a disabled segment, its reason on hover and under the bar', () => {
+    render(<Harness initial={{ rows: ['disposition'], cols: ['kraj'] }} />);
+    const box = segment('Zobrazení', 'Krabice');
+    expect(box).toBeDisabled();
+    expect(box).toHaveAttribute('title', 'Krabice: krabice nemá Sloupce');
+    expect(screen.getByText('Krabice: krabice nemá Sloupce')).toBeInTheDocument();
+    expect(segment('Zobrazení', 'Pruhy')).toBeEnabled();
+    expect(segment('Zobrazení', 'Pruhy')).not.toHaveAttribute('title');
+  });
+
+  it('a click on the lit segment sets the same value again', () => {
+    const onChange = vi.fn();
+    const draft: ChartSpec = { id: 'c', view: 'table', rows: [], cols: [], measure: 'ppm2', stats: ['median'] };
+    render(<ChartBuilder draft={draft} onChange={onChange} categoryMain="byt" />);
+    fireEvent.click(segment('Hodnota', 'Cena za m²'));
+    expect(onChange).toHaveBeenLastCalledWith({ ...draft, measure: 'ppm2' });
+    fireEvent.click(segment('Zobrazení', 'Tabulka'));
+    expect(onChange).toHaveBeenLastCalledWith({ ...draft, view: 'table' });
   });
 });
 

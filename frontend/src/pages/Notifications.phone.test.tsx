@@ -155,7 +155,7 @@ describe('<Notifications> at phone width', () => {
     expect(document.title).not.toContain('(2)');
   });
 
-  it('keeps every control of the desktop page, tab names in English', async () => {
+  it('keeps every control of the desktop page, filter names in English', async () => {
     const { container } = renderPhone();
     expect(await screen.findByRole('link', { name: /^Price drop Praha 2/ })).toHaveAttribute('href', '/property/999');
     for (const name of ['Monitoring', 'Watchdogs', 'Shared', 'Unread', 'Mark all read']) {
@@ -178,8 +178,23 @@ describe('<Notifications> at phone width', () => {
     /* The frame's header names the page and its bell carries the count; the
      * page adds no label above its title. */
     expect(screen.queryByText('Notifications', { selector: 'p' })).toBeNull();
-    for (const name of ['All', 'Unread']) {
-      expect(screen.getAllByRole('button', { name })[0].className).toContain('max-md:h-9');
+  });
+
+  /* Operator ruling 2026-10-27: a phone screen's pick-one is the joined bar in the
+   * phone tone — chosen = ink on the inset well, never copper (colour on the phone
+   * only ever means a stage). */
+  it('draws the source and read filters as phone-tone joined bars', async () => {
+    renderPhone();
+    await screen.findByRole('link', { name: /^Price drop Praha 2/ });
+    for (const name of ['Source', 'Read state']) {
+      const bar = screen.getByRole('group', { name });
+      const track = bar.firstElementChild as HTMLElement;
+      expect(track).toHaveClass('h-8', 'border-[var(--color-rule-strong)]');
+      const all = within(bar).getByRole('button', { name: 'All' });
+      expect(all.parentElement).toBe(track);
+      expect(all).toHaveAttribute('aria-pressed', 'true');
+      expect(all).toHaveClass('bg-[var(--color-inset)]', 'text-[var(--color-ink)]');
+      for (const b of within(bar).getAllByRole('button')) expect(b.className).not.toContain('copper');
     }
   });
 
