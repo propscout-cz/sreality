@@ -21,7 +21,9 @@
 --   (acl) in tests/_admin_gate_registry.py (no in-file annotation since 676).
 --
 -- APPLY through apply_migration.yml (--ref the feature branch) before merging. Safe in either order: the deployed code
--- reads nothing this changes, and with no registered job-runner row the helper writes no cell. The post-condition
+-- reads nothing this changes, and with no registered job-runner row the helper writes no cell. Until this PR's
+-- job_lease deploys, register re-stamps registry_at on every boot: the join test then holds only for a row with no
+-- run in the cadence and budget before that boot, so a running row's history is never dropped. The post-condition
 -- runs the helper over a rolled-back probe row, so every per-row expression is evaluated at apply.
 -- ROLLBACK: forward only (rule 1). Every statement is idempotent: a re-run passes the precondition (this file's own
 -- body), and a lock-timeout retry re-runs the whole file.
