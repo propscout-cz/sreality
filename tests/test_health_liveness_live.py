@@ -619,6 +619,20 @@ def test_a_re_registered_job_is_judged_from_its_new_first_slot(cur):
         "ok", "reland_running: running for 60 s of its 20 min budget on job-runner/r1")
 
 
+def test_a_quarterly_job_whose_ok_run_was_pruned_is_not_read_as_registered_again(cur: Any) -> None:
+    """C3: the runner prunes job_runs after 90 days and map_overlays runs every 91, so a day before its next slot its
+    ok run is gone; last_success_at, written by that run's release, still says it ran here."""
+    _runner_beat(cur, "r1", "0 minutes")
+    _job(cur, "pruned", every="91 days", timeout_s=7200, due="18 hours", last_ok="90 days 6 hours",
+         last_outcome="ok")
+
+    cells = _liveness(cur)[3]
+
+    assert _said(cells, "job/pruned") == ("ok", "pruned: last ok 90 d ago; next slot in 18.0 h")
+    [job] = cells["job/pruned"]
+    assert job["facts"]["fresh_slot"] is False and job["facts"]["conditions"] == []
+
+
 _OOM = "SIGKILL not sent by the runner (likely the OOM killer); peak 900 MB of memory_mb 256"
 
 

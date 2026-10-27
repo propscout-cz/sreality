@@ -99,10 +99,13 @@ with live as (
          -- Not judged on its history yet: no run has closed since the cadence before its due_at. Only _REGISTER_SQL
          -- sets due_at with no run (a new, adopted or un-retired row, at the first slot >= now() + timeout_s); every
          -- release and reap ends a run at or after due_at - cadence. It lasts through the first run, so a re-landed
-         -- row's carried streak, timeout and last success never read Problem while its first slot runs.
+         -- row's carried streak, timeout and last success never read Problem while its first slot runs. The runner
+         -- prunes job_runs after 90 days and map_overlays runs every 91, so its ok run that set due_at can be gone:
+         -- last_success_at is that run's end (one release), and only an ok slot run leaves a gap that long.
          l.due_at is not null and not exists (
            select 1 from job_runs r
             where r.job_name = l.job_name and r.ended_at >= l.due_at - l.cadence - make_interval(secs => l.timeout_s))
+         and coalesce(l.last_success_at < l.due_at - l.cadence - make_interval(secs => l.timeout_s), true)
            as fresh_slot
     from live l
     left join job_runs o on o.job_name = l.job_name and o.ended_at is null
