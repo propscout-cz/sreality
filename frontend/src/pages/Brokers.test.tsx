@@ -480,6 +480,8 @@ describe('<Brokers> leaderboard rows are links, not buttons', () => {
 
     const first = await screen.findByRole('link', { name: /Jan Fleischner/ });
     expect(first).toHaveAttribute('href', ROUTES.brokerDetail.build({ id: 7 }));
+    // A new tab: the board's filters are not in the URL, so Back would reset them.
+    expect(first).toHaveAttribute('target', '_blank');
     expect(screen.getByRole('link', { name: /Michaela Koudelova/ })).toHaveAttribute(
       'href',
       ROUTES.brokerDetail.build({ id: 42 }),

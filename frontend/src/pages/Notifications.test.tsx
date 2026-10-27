@@ -154,6 +154,24 @@ describe('<Notifications> listing rows', () => {
     expect(screen.getByRole('link', { name: /^New match Brno-střed/ })).toHaveAttribute('href', '/property/4321');
   });
 
+  /* The feed is triaged row by row: on the desktop a row opens in a new tab and
+     the feed stays put. Opening it is reading it, whether by a click or by a
+     middle-click (which fires auxclick, never click). */
+  it('open in a new tab and mark the row read on a click or a middle-click', async () => {
+    vi.mocked(markWatchdogDispatchSeen).mockResolvedValue({ ...baseDispatch, seen_at: '2026-05-12T12:00:00+00:00' });
+    renderPage();
+    const row = screen.getByRole('link', { name: /^New match Praha 5/ });
+    expect(row).toHaveAttribute('target', '_blank');
+    expect(row).toHaveAttribute('rel', 'noopener');
+
+    fireEvent(row, new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+    await waitFor(() => expect(markWatchdogDispatchSeen).toHaveBeenCalledTimes(1));
+    fireEvent(row, new MouseEvent('auxclick', { bubbles: true, button: 2 }));
+    fireEvent.click(row);
+    await waitFor(() => expect(markWatchdogDispatchSeen).toHaveBeenCalledTimes(2));
+    expect(markWatchdogDispatchSeen).toHaveBeenCalledWith('d1');
+  });
+
   it('render a row with nothing to open as a button that only marks it read', async () => {
     vi.mocked(markWatchdogDispatchSeen).mockResolvedValue({ ...baseDispatch, property_id: null });
     renderPage({ ...feed, data: [{ ...baseDispatch, property_id: null }], total: 1 });
@@ -189,6 +207,7 @@ describe('<Notifications> share rows', () => {
     const text = screen.getByRole('button', { name: /^Shared collection owner@example\.com shared the collection "Vinohrady"/ });
     expect(text).toHaveAccessibleDescription('unread');
     expect(screen.getByRole('link', { name: 'Open collection' })).toHaveAttribute('href', '/collection/42');
+    expect(screen.getByRole('link', { name: 'Open collection' })).toHaveAttribute('target', '_blank');
   });
 
   it('marks the share read when the collection is opened', async () => {

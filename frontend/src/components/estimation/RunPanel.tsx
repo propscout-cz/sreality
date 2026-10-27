@@ -19,6 +19,7 @@ import { createPortal } from 'react-dom';
 import { lazyChunk } from '@/lib/lazyChunk';
 import { Link, useLocation } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
+import { useNewTabProps } from '@/lib/linkGestures';
 import { usePhoneShell } from '@/lib/phoneShell';
 import {
   keepPreviousData,
@@ -1298,6 +1299,8 @@ function ExcludedComparables({
 }: {
   excluded: ComparableExcluded[] | null;
 }) {
+  /* A comparable opens in a new tab, so the run stays where it was read. */
+  const newTab = useNewTabProps();
   if (!excluded || excluded.length === 0) return null;
   return (
     <div className="mt-6">
@@ -1317,6 +1320,7 @@ function ExcludedComparables({
           >
             <Link
               to={listingPath(row.sreality_id)}
+              {...newTab}
               className="shrink-0 font-mono tabular-nums text-[var(--color-copper)] hover:underline underline-offset-2"
             >
               {row.sreality_id}
