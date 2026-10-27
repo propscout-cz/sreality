@@ -11,7 +11,7 @@ import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 
-import { CollapsibleGroup, DecimalField, NumberCell, Segmented, TextBox } from './controls';
+import { CollapsibleGroup, DecimalField, NumberCell, Segmented, SegmentedBar, TextBox } from './controls';
 
 describe('<CollapsibleGroup>', () => {
   it('is named by its band title alone, with or without active filters', () => {
@@ -37,20 +37,185 @@ describe('<CollapsibleGroup>', () => {
   });
 });
 
-/* The `variant` pass-through: a bar that mixes Segmented with MultiselectChips
- * (which hardcodes solid) needs Segmented to reach solid too — without moving
- * the callers that never asked for it. */
-describe('<Segmented>', () => {
-  const OPTIONS = [{ value: 'a', label: 'A' }];
-  const cls = () => screen.getByRole('button', { name: 'A' }).className;
+/* THE pick-one control (operator ruling 2026-10-27): one joined track, the chosen
+ * segment filled copper. Every pick-one group in the app draws it, so its modes
+ * are pinned here once. */
+describe('<SegmentedBar>', () => {
+  const STATUS = [
+    { value: 'any', label: 'Vše' },
+    { value: 'active', label: 'Aktivní' },
+    { value: 'inactive', label: 'Neaktivní' },
+  ];
+  const CHOSEN = ['bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]'];
+  const seg = (name: string) => screen.getByRole('button', { name });
 
-  it('stays soft by default and forwards solid when asked', () => {
-    const { rerender } = render(<Segmented options={OPTIONS} value="a" onChange={() => {}} />);
-    expect(cls()).toContain('bg-[var(--color-copper-soft)]');
-    rerender(
-      <Segmented options={OPTIONS} value="a" onChange={() => {}} variant="solid" />,
+  /* The Browse sidebar's Status bar and the amenity rows, byte for byte. */
+  it('keeps the fill and compact bars exactly as their callers drew them', () => {
+    const { rerender } = render(<SegmentedBar fill label="Stav" options={STATUS} value="any" onChange={() => {}} />);
+    const track = screen.getByRole('group', { name: 'Stav' });
+    expect(track).toHaveAttribute('class',
+      'grid w-full gap-0.5 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-0.5');
+    expect(track).toHaveStyle({ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' });
+    expect(seg('Vše')).toHaveAttribute('class',
+      'px-2 py-1 text-xs whitespace-nowrap rounded-[var(--radius-xs)] transition-colors bg-[var(--color-copper)] text-[var(--color-on-copper)]');
+    expect(seg('Aktivní')).toHaveAttribute('class',
+      'px-2 py-1 text-xs whitespace-nowrap rounded-[var(--radius-xs)] transition-colors text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]');
+    expect(seg('Vše')).toHaveAttribute('aria-pressed', 'true');
+    expect(seg('Aktivní')).toHaveAttribute('aria-pressed', 'false');
+
+    rerender(<SegmentedBar label="Stav" options={STATUS} value="any" onChange={() => {}} />);
+    expect(screen.getByRole('group', { name: 'Stav' })).toHaveClass('inline-grid');
+    expect(seg('Vše')).toHaveClass('px-2.5', 'py-0.5', 'text-[0.7rem]');
+  });
+
+  it('sets the value clicked, the lit one included', () => {
+    const onChange = vi.fn();
+    render(<SegmentedBar options={STATUS} value="any" onChange={onChange} />);
+    fireEvent.click(seg('Aktivní'));
+    fireEvent.click(seg('Vše'));
+    expect(onChange.mock.calls).toEqual([['active'], ['any']]);
+  });
+
+  /* Brokers' and Outreach's Vše, the Valuo editor's "neuvedeno". */
+  it('takes null as a real option', () => {
+    const onChange = vi.fn();
+    const opts = [{ value: null, label: 'Vše' }, { value: 'prodej', label: 'Prodej' }];
+    const { rerender } = render(<SegmentedBar options={opts} value={'prodej' as string | null} onChange={onChange} />);
+    fireEvent.click(seg('Vše'));
+    expect(onChange).toHaveBeenLastCalledWith(null);
+    rerender(<SegmentedBar options={opts} value={null} onChange={onChange} />);
+    expect(seg('Vše')).toHaveAttribute('aria-pressed', 'true');
+    expect(seg('Prodej')).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  /* "Listing for" has no Vše (ruling 2026-10-20): no deal lights nothing, and the lit deal releases. */
+  it('in deselectable mode lights nothing for none and releases the lit segment', () => {
+    const onChange = vi.fn();
+    const deals = [{ value: 'pronajem', label: 'Pronájem' }, { value: 'prodej', label: 'Prodej' }];
+    const { rerender } = render(
+      <SegmentedBar deselectable options={deals} value={null as string | null} onChange={onChange} />,
     );
-    expect(cls()).toContain('bg-[var(--color-copper)]');
+    for (const b of screen.getAllByRole('button')) expect(b).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(seg('Prodej'));
+    expect(onChange).toHaveBeenLastCalledWith('prodej');
+    rerender(<SegmentedBar deselectable options={deals} value={'prodej' as string | null} onChange={onChange} />);
+    expect(seg('Prodej')).toHaveClass(...CHOSEN);
+    fireEvent.click(seg('Prodej'));
+    expect(onChange).toHaveBeenLastCalledWith(null);
+    fireEvent.click(seg('Pronájem'));
+    expect(onChange).toHaveBeenLastCalledWith('pronajem');
+  });
+
+  it('refuses deselectable where none is not a value', () => {
+    // @ts-expect-error — a bar whose values exclude null cannot release to null
+    render(<SegmentedBar deselectable options={STATUS} value="any" onChange={() => {}} />);
+    expect(seg('Vše')).toBeInTheDocument();
+  });
+
+  it('disables one option with its reason, or the whole control', () => {
+    const onChange = vi.fn();
+    const opts = [
+      { value: 'table', label: 'Tabulka' },
+      { value: 'box', label: 'Krabice', disabled: true, title: 'Jen pro jednu hodnotu' },
+    ];
+    const { rerender } = render(<SegmentedBar options={opts} value="table" onChange={onChange} />);
+    expect(seg('Krabice')).toBeDisabled();
+    expect(seg('Krabice')).toHaveAttribute('title', 'Jen pro jednu hodnotu');
+    expect(seg('Krabice')).toHaveClass('opacity-50', 'cursor-not-allowed');
+    expect(seg('Krabice')).not.toHaveClass('hover:text-[var(--color-ink-2)]');
+    expect(seg('Tabulka')).toBeEnabled();
+    fireEvent.click(seg('Krabice'));
+    expect(onChange).not.toHaveBeenCalled();
+
+    rerender(<SegmentedBar disabled options={opts} value="table" onChange={onChange} />);
+    for (const b of screen.getAllByRole('button')) expect(b).toBeDisabled();
+    expect(seg('Tabulka')).toHaveClass(...CHOSEN, 'opacity-50');
+  });
+
+  it('draws a glyph before the label, outside the name', () => {
+    const opts = [{ value: 'sm', label: 'Malé', glyph: <svg data-testid="glyph" aria-hidden /> }];
+    render(<SegmentedBar options={opts} value="sm" onChange={() => {}} />);
+    expect(seg('Malé')).toHaveAccessibleName('Malé');
+    expect(seg('Malé').firstChild).toBe(screen.getByTestId('glyph'));
+    expect(seg('Malé')).toHaveClass('inline-flex', 'items-center', 'gap-1.5');
+  });
+
+  /* The Valuo editor: the form box is the TRACK, so the bar reads as one box. */
+  it('puts the form box and the aria on the track', () => {
+    const { rerender } = render(
+      <SegmentedBar label="Novostavba" options={STATUS} value="any" onChange={() => {}} box="absent"
+        aria={{ 'aria-invalid': true, 'aria-describedby': 'why' }} />,
+    );
+    const track = screen.getByRole('group', { name: 'Novostavba' });
+    expect(track).toHaveClass('h-[2.125rem]', 'border-dashed', 'aria-[invalid=true]:border-[var(--color-brick)]');
+    expect(track).toHaveAttribute('aria-invalid', 'true');
+    expect(track).toHaveAttribute('aria-describedby', 'why');
+    for (const b of screen.getAllByRole('button')) expect(b).not.toHaveClass('h-[2.125rem]');
+    rerender(<SegmentedBar label="Novostavba" options={STATUS} value="any" onChange={() => {}} box="present" />);
+    expect(screen.getByRole('group', { name: 'Novostavba' })).not.toHaveClass('border-dashed');
+  });
+
+  /* Long labels (emails, counts) each keep their width; the group is a scroller
+   * that keeps 4px for the focus ring and gives it back, as the tab strip does,
+   * so it stays the root its callers lay out, and the track inside it is drawn. */
+  it('in hug mode sizes each segment to its label and scrolls sideways', () => {
+    render(<SegmentedBar hug label="Fronta" options={STATUS} value="any" onChange={() => {}} />);
+    const group = screen.getByRole('group', { name: 'Fronta' });
+    expect(group).toHaveClass('overflow-x-auto', 'p-1', '-m-1', 'min-w-0', 'pointer-events-none');
+    const track = group.firstElementChild as HTMLElement;
+    expect(track).toHaveClass('inline-flex', 'pointer-events-auto', 'border-[var(--color-rule)]');
+    expect(track).not.toHaveClass('grid', 'inline-grid');
+    expect(track.style.gridTemplateColumns).toBe('');
+    for (const b of screen.getAllByRole('button')) {
+      expect(b.parentElement).toBe(track);
+      expect(b).toHaveClass('shrink-0', 'px-2', 'py-1', 'text-xs');
+    }
+    expect(seg('Vše')).toHaveClass(...CHOSEN);
+  });
+
+  it('in hug mode puts the form box on the track and the aria on the group', () => {
+    render(
+      <SegmentedBar hug label="Druh" options={STATUS} value="any" onChange={() => {}} box="absent"
+        aria={{ 'aria-invalid': true }} />,
+    );
+    const group = screen.getByRole('group', { name: 'Druh' });
+    expect(group).toHaveAttribute('aria-invalid', 'true');
+    expect(group.firstElementChild).toHaveClass('h-[2.125rem]', 'border-dashed', '[[aria-invalid=true]>&]:border-[var(--color-brick)]');
+  });
+
+  /* The phone's own screens: colour there only ever means a stage. */
+  it('in the phone tone marks the chosen segment ink on the inset well, never copper', () => {
+    render(<SegmentedBar tone="phone" label="Řadit" options={STATUS} value="any" onChange={() => {}} />);
+    const track = screen.getByRole('group', { name: 'Řadit' });
+    expect(seg('Vše')).toHaveClass('bg-[var(--color-inset)]', 'text-[var(--color-ink)]');
+    expect(seg('Aktivní')).toHaveClass('text-[var(--color-ink-2)]');
+    expect(track).toHaveClass('h-8', 'border-[var(--color-rule-strong)]');
+    expect(track.outerHTML).not.toContain('copper');
+    for (const b of screen.getAllByRole('button')) expect(b).toHaveClass('text-[13px]');
+  });
+});
+
+/* Segmented is the joined bar (ruling 2026-10-27): its callers (Pipeline Stav,
+ * Brokers, the Valuo editor, …) became one bar at once; `variant` is a no-op. */
+describe('<Segmented>', () => {
+  const OPTIONS = [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }];
+
+  it('draws the one hugging bar, the chosen segment filled copper whatever the variant', () => {
+    const { rerender } = render(<Segmented label="Stav" options={OPTIONS} value="a" onChange={() => {}} />);
+    const soft = screen.getByRole('button', { name: 'A' }).className;
+    expect(screen.getByRole('group', { name: 'Stav' }).firstElementChild).toHaveClass('inline-flex', 'border-[var(--color-rule)]');
+    expect(screen.getByRole('button', { name: 'A' })).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+    expect(screen.getByRole('button', { name: 'B' })).toHaveAttribute('aria-pressed', 'false');
+    rerender(<Segmented label="Stav" options={OPTIONS} value="a" onChange={() => {}} variant="solid" />);
+    expect(screen.getByRole('button', { name: 'A' }).className).toBe(soft);
+  });
+
+  it('sets the value clicked, null included', () => {
+    const onChange = vi.fn();
+    render(<Segmented options={[{ value: null, label: 'Vše' }, ...OPTIONS]} value="a" onChange={onChange} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Vše' }));
+    fireEvent.click(screen.getByRole('button', { name: 'A' }));
+    expect(onChange.mock.calls).toEqual([[null], ['a']]);
   });
 });
 
@@ -147,16 +312,15 @@ describe('the form box', () => {
   const INSET = 'w-full min-w-0 px-2 py-1.5 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]';
 
   it('leaves every control without one as it was', () => {
-    const { container } = render(
+    render(
       <>
-        <Segmented options={[{ value: 'a', label: 'A' }]} value="b" onChange={() => {}} />
+        <Segmented label="Druh" options={[{ value: 'a', label: 'A' }]} value="b" onChange={() => {}} />
         <DecimalField label="Nájem" value={1} onChange={() => {}} suffix="Kč" className="mt-1.5" />
         <NumberCell value={null} placeholder="" onChange={() => {}} ariaLabel="Cena" />
       </>,
     );
-    expect(container.querySelector('div')).toHaveAttribute('class', 'flex flex-wrap gap-1');
-    expect(screen.getByRole('button', { name: 'A' })).toHaveAttribute('class',
-      'px-2 py-1.5 text-xs rounded-[var(--radius-sm)] border transition-colors bg-[var(--color-paper-2)] text-[var(--color-ink-2)] border-[var(--color-rule)] hover:border-[var(--color-rule-strong)] ');
+    expect(screen.getByRole('group', { name: 'Druh' }).firstElementChild).toHaveAttribute('class',
+      'inline-flex pointer-events-auto gap-0.5 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-0.5');
     const rent = screen.getByRole('textbox', { name: 'Nájem' });
     expect(rent.parentElement).toHaveAttribute('class', 'flex items-stretch gap-2 min-w-0 mt-1.5');
     expect(rent).toHaveAttribute('class',
@@ -175,8 +339,8 @@ describe('the form box', () => {
       </>,
     );
     const group = screen.getByRole('group', { name: 'Novostavba' });
-    expect(group).toHaveClass('[&[aria-invalid=true]>button]:border-[var(--color-brick)]');
-    expect(screen.getByRole('button', { name: 'A' })).toHaveClass('h-[2.125rem]', 'border-dashed');
+    expect(group).toHaveAttribute('aria-invalid', 'true');
+    expect(group.firstElementChild).toHaveClass('h-[2.125rem]', 'border-dashed', '[[aria-invalid=true]>&]:border-[var(--color-brick)]');
     const area = screen.getByRole('textbox', { name: 'Plocha' });
     expect(area).toHaveClass('h-[2.125rem]', 'pl-2', 'pr-8', 'py-1.5', 'aria-[invalid=true]:border-[var(--color-brick)]');
     expect(area).not.toHaveClass('px-3', 'py-2', 'border-dashed');

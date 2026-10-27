@@ -195,8 +195,10 @@ describe('<ValuoSection> editor', () => {
     expect(placeBox()).toHaveClass('h-[2.125rem]');
     const rating = screen.getByRole('combobox', { name: 'Stav' }); // no default: nothing is sent
     expect(rating).toHaveClass('h-[2.125rem]', 'border-dashed');
-    for (const b of param('Novostavba').getAllByRole('button')) expect(b).toHaveClass('h-[2.125rem]', 'border-dashed');
-    expect(screen.getByRole('button', { name: 'Prodej' })).not.toHaveClass('border-dashed');
+    // A pick-one is one joined bar: its track is the box.
+    expect(param('Novostavba').getByRole('group', { name: 'Novostavba' }).firstElementChild).toHaveClass('h-[2.125rem]', 'border-dashed');
+    expect(screen.getByRole('button', { name: 'Prodej' }).parentElement).toHaveClass('h-[2.125rem]');
+    expect(screen.getByRole('button', { name: 'Prodej' }).parentElement).not.toHaveClass('border-dashed');
   });
 
   it('tags every value with where it came from, and counts the folded group', async () => {

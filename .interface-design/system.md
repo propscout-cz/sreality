@@ -106,8 +106,40 @@ section and shelf names, JetBrains Mono (`font-mono`) with `tabular-nums` on EVE
     clickable up to the rule.
   - `sticky` pins the strip under the Shell bar (`top-14`, `z-20`: above the cards' z-10 controls, below the bar's
     z-30); a scroll target under it uses `scroll-mt-28` (bar 57px + strip 44px + air).
-  - Out of scope: the phone pipeline's stage strip and the pill view switches (`MapViewToggle`, `SizeToggle`,
-    Notifications' pills).
+  - Out of scope: the phone pipeline's stage strip, and the view switches (`MapViewToggle`, `SizeToggle`,
+    Notifications' pills), which are pick-one bars (§ Option groups).
+
+## Option groups (binding, operator rulings 2026-10-27: "filter buttons reuse the same elements across the app")
+- **A pick-one is ONE joined bar, `SegmentedBar`** (`components/controls.tsx`): any group where one option is chosen,
+  an explicit Vše / All / any included. One track (`--color-paper-2`, rule border, `p-0.5`, `gap-0.5`) of adjoining
+  segments; the chosen one is filled `--color-copper` with `--color-on-copper` text, idle `ink-3` (hover `ink-2`),
+  colour only, never weight. An ink fill, a raised tile with a shadow, white + bold or a copper-soft chosen segment
+  is not a variant: each converges on this one. `Segmented` (a Field's pick-one), `SizeToggle` / `ImageSizeToggle`
+  and `TriRow` draw it; a local copy that becomes the bar is deleted, never left beside it.
+  - Width: `fill` = equal segments across the container (the filter sidebar's Status line); `hug` = each segment its
+    label's width at the same reading size, the bar scrolling sideways with no scrollbar inside the tab strip's 4px
+    focus-ring room (`Segmented`, toolbars, long labels with counts); neither = the compact amenity rows (equal
+    segments, small type).
+  - `deselectable` serves a pick-one-or-none group with no Vše (Listing for, by the 2026-10-20 ruling): nothing lit
+    when none is set, a click on the lit segment releases it. Otherwise a click on the lit segment sets it again.
+  - Per option a `glyph`, a `title` and `disabled`; `disabled` for the whole control; `box` + `aria` make it the
+    form box (the Valuo editor: the track is the 34px box, dashed while absent, brick while `aria-invalid`).
+  - `tone="phone"` on the phone's own screens (Makléři Řadit and Typ / Nabídka, Prohlídky, the account sheet's
+    Vzhled): chosen = ink on `--color-inset`, a `rule-strong` hairline, 32px, 13px type; colour there only ever
+    means a stage. The Filtry sheet hosts desktop controls and keeps the copper bar.
+  - A lone on/off in the filter sidebar or `FilterForm` is a two-segment bar "<off> | <label>" (`LINE_OFF`: "All ads
+    | Seen at birth"), never one chip whose word flips.
+  - The root is always the named `role="group"`; each segment is a button with `aria-pressed`.
+- **Pick-several and include / exclude stay chips** (`PickButton`, `MultiselectChips`; the one-chip-one-polarity rule
+  in the interface-design skill § Controls).
+- **Stay as they are**, by ruling: a group of more than six options (the phone Filtry sheet's 17 sort orders, the
+  Estimation Adjust disposition grid) keeps chips; navigation-like pick-ones (the Pipeline board switcher, Makléři ·
+  Review's reason queues, NEW DEDUP Exam's cohort and set links; page tabs are `Tabs`); lone on/off buttons outside
+  the filter sidebar (Watchdog Active / Paused and its list toggle, the phone Feed's "jen aktivní", the bake-off's
+  "show retired" / "widen"); colour swatch pickers (a text bar loses the preview); the coloured labelling tools
+  (tri-state squares, subject state, training-set marks, head review state: a colour per state, hotkeys); map
+  flyout radio lists; the phone Nové scope row (each chip loads a saved view). Every option keeps its order and
+  wording: Vše is not moved.
 
 ## Health page (2026-10-19)
 Added after the Health page rebuild (`docs/design/health-dashboard.md` § 5, wave 8). It extends the ledger
