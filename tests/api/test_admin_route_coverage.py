@@ -44,6 +44,9 @@ _ADMIN_PREFIXES: tuple[str, ...] = (
     "/admin", "/properties/merge", "/labeling",
     "/outreach", "/broker-review", "/skill-refinements", "/location",
     "/autodedup",
+    # Paste-a-building (rule 13) spends an extraction plus one estimation per unit and holds no
+    # account of its own: operator-only since agent platform M0 (#2059).
+    "/buildings",
 )
 
 # Sentinels proving those routers actually mounted. Without this, a mis-mounted router
@@ -74,7 +77,7 @@ def _bucket(route: APIRoute) -> str:
         return "admin"
     if tenant_pool.tenant_conn in calls or deps.verify_jwt in calls:
         return "tenant"
-    if deps.require_token in calls:
+    if deps.require_token in calls or deps.token_claims in calls:
         return "token"
     # account_scope is require_token's reader (`_bearer`: a verified JWT) plus a
     # read scope, so it buckets with it.
@@ -135,6 +138,21 @@ def test_admin_surfaces_require_admin() -> None:
         "Depends(deps.require_admin) — SPA route-gating is a client affordance, not a "
         "security boundary:\n" + "\n".join(offenders)
     )
+
+
+def _takes_force_refresh(route: APIRoute) -> bool:
+    body = route.body_field.field_info.annotation if route.body_field is not None else None
+    return "force_refresh" in getattr(body, "model_fields", {})
+
+
+def test_a_forced_refresh_is_admin_gated_wherever_it_is_accepted() -> None:
+    """A body field `force_refresh` re-buys a cached LLM answer: every route accepting it calls
+    `deps.require_admin_to_force` (M0, #2059). The gate reads the body, so no dependency can carry it."""
+    accepting = [(m, p, r) for m, p, r in _api_routes() if _takes_force_refresh(r)]
+    assert len(accepting) >= 2, "the census found no route taking force_refresh: check how it reads the body"
+    ungated = sorted(f"  {m} {p}" for m, p, r in accepting
+                     if "require_admin_to_force(" not in inspect.getsource(r.endpoint))
+    assert not ungated, "route(s) accept force_refresh without the admin gate:\n" + "\n".join(ungated)
 
 
 def test_no_route_is_unauthenticated_by_accident() -> None:
@@ -247,6 +265,17 @@ _RLS_ONLY_ALLOWLIST: dict[str, str] = {
     "PUT /filter-presets/reorder": (
         "UPDATE by a list of ids — migration 290's USING clause is the row set, so another "
         "account's id matches nothing"
+    ),
+    "PUT /filter-presets/layout": (
+        "UPDATE by a list of ids on both tables — the 290 and 672 USING clauses are the row sets, and "
+        "672's (group_id, account_id) key refuses another account's group"
+    ),
+    "GET /filter-preset-groups": "RLS-only read (migration 672 policy on `filter_preset_groups`)",
+    "GET /filter-preset-groups/{group_id}": "RLS-only read (migration 672)",
+    "PUT /filter-preset-groups/{group_id}": "UPDATE by id — migration 672 USING clause",
+    "DELETE /filter-preset-groups/{group_id}": "DELETE by id — migration 672 USING clause",
+    "PUT /filter-preset-groups/reorder": (
+        "UPDATE by a list of ids — migration 672's USING clause is the row set"
     ),
     "GET /stats/dashboards": (
         "RLS-only read — migration 626's tenant policy (own) plus 647's shared-read arm "

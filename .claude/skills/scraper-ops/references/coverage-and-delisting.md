@@ -182,10 +182,11 @@ child can only add rows of the same category, which cannot push the union past
 the declared total. The link list never has to be trusted.
 
 Descent runs **only on `incomplete`** — we paged to the pager's own end and came
-up short, which is the shortfall a finer query can fix. An `error` is a transport
-failure and a `degraded` page carries no total to measure a union against;
-descending on either would just multiply failed requests and relabel a fetch
-problem as a coverage one.
+up short, which is the shortfall a finer query can fix. An `error` (a place's
+SECOND refused page — since 2026-10-24 one refused page is skipped, so the place
+ends on its terminator ~26 short and descends) is a transport failure and a
+`degraded` page carries no total to measure a union against; descending on either
+would just multiply failed requests and relabel a fetch problem as a coverage one.
 
 ## The ledger (`portal_index_slices`, migration 454)
 
@@ -222,15 +223,15 @@ select category_main, category_type, slice_key, outcome, collected, walked_at
 ```
 
 **mmreality wrote one row per category until 2026-10-19**, when its slice write
-went with the gate (its ten rows stay, unread, until wave 9). Its ten per-(sale
-type, property type) indexes page to their tail with no second axis (the largest
-is ~300 pages of 12), so each category was one slice, `slice_key='national'`,
-`exhausted` only when the shared arithmetic accepted the collected count against
-the page's own `metadata.count`; the walk's verdict now shows in its
-`RECONCILE-INDEX` line. That evidence is what un-parked it: the portal was parked
-in 2026-05 as "a single mixed index with no result total", and both halves were
-wrong (the bare feed was prodej-only and did declare a count — see
-`docs/architecture.md` § mmreality).
+went with the gate (its ten rows stay, unread: Health wave 9 left them to the
+scraper track). Its ten per-(sale type, property type) indexes page to their
+tail with no second axis (the largest is ~300 pages of 12), so each category was
+one slice, `slice_key='national'`, `exhausted` only when the shared arithmetic
+accepted the collected count against the page's own `metadata.count`; the walk's
+verdict now shows in its `RECONCILE-INDEX` line. That evidence is what un-parked
+it: the portal was parked in 2026-05 as "a single mixed index with no result
+total", and both halves were wrong (the bare feed was prodej-only and did
+declare a count — see `docs/architecture.md` § mmreality).
 
 ## The gate (`coverage_gate.yml`, migration 455) — retired 2026-10-19
 
@@ -256,9 +257,10 @@ nothing left to evaluate (its newest evaluation is from 2026-09-13). What it
 reported as posture is measured now: the `coverage` gauge holds each unit's active
 ads against its declared total and counts the active ads no walk can nominate, and
 the `scraping` alarm's walks arm times each unit's newest walk that reached the
-end. Left for wave 9: `portal_coverage_gate` (153 rows),
-`portals.supports_complete_walk` (no writer now; the SPA's portal posture still
-reads it) and the 150 ceskereality and mmreality rows of `portal_index_slices`.
+end. Migration 643 (Health wave 9) dropped `portal_coverage_gate` (153 rows). It
+did not drop `portals.supports_complete_walk` (no writer now; the Scrapers page's
+portal posture still reads it) or the 150 ceskereality and mmreality rows of
+`portal_index_slices` (unread, unjudged): the scraper track owns both.
 
 ### ceskereality's descent over the 99-page ceiling
 
@@ -418,14 +420,15 @@ Portals also log their own stop per unit (`SLICE … stop=…`,
 is **not** in `scrape_runs.by_category` yet.
 
 **What lands in `scrape_runs.by_category`** (JSONB, no migration): each category
-entry carries `walk_reached_end` (bool — did it nominate?) and `walk_coverage`
-(`complete` / `incomplete` / `unknown`) beside the existing `sreality_result_size`
-(the declared total, spelled once as `portal_runner.DECLARED_TOTAL_KEY`),
-`collected` and `active_db`, and since Health wave 4 `total_is_count` (the
-adapter's "total" is the count of what it saw: remax, maxima) and
-`declared_is_upper_bound` (ceskereality's national count, wider than its kraj
-slices). A category with `walk_reached_end: true, walk_coverage: "incomplete"` is
-the new normal case the old gate refused. The `scraping` alarm's missing arm and
+entry carries `walk_reached_end` (bool — did it nominate?) beside the existing
+`sreality_result_size` (the declared total, spelled once as
+`portal_runner.DECLARED_TOTAL_KEY`) and `collected`, and since Health wave 4
+`total_is_count` (the adapter's "total" is the count of what it saw: remax, maxima)
+and `declared_is_upper_bound` (ceskereality's national count, wider than its kraj
+slices). A category that reached the end with `collected` short of the declared
+total is the new normal case the old gate refused; since Health wave 9 its
+`walk_coverage` verdict is logged (`COVERAGE`), not stored (older entries carry it
+and `active_db`). The `scraping` alarm's missing arm and
 the `coverage` gauge's residual arm read these rows (an entry whose
 `total_is_count` is true or absent is Not measured there, never 0%); they replaced
 the `walk_coverage` check.
@@ -532,8 +535,8 @@ is what the `delisting` check's limits are built on.
 flipped; a second one 12h+ later flips)` is the provisional branch; `DETAIL id=…
 gone (is_active=false)` the flip; `gone (already inactive)` a confirmed verdict
 on a row something else closed. `DRAIN progress` and `RUN done` carry `pending=`
-beside `gone=`; `scrape_runs.listings_inactive` (GitHub drains only — the
-worker writes no `scrape_runs` row) counts every verdict that is not pending —
+beside `gone=`; `scrape_runs.listings_inactive` (a hand `--drain-only` run or a
+combined scraper's drain phase only — the worker writes no `scrape_runs` row) counts every verdict that is not pending —
 flipped, already inactive, no row — so it is not a flip count; the `delisting`
 check's outflow arm counts `listings.inactive_at` stamps instead.
 

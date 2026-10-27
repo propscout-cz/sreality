@@ -1,18 +1,24 @@
 /* Browse's saved filter presets (migration 151) — the preset instance of THE
  * saved-set bar (components/SavedSetBar). A preset is a named filter set + sort
  * order: a chip click restores both (Browse owns the URL write, `onLoad`), and
- * editing either marks it dirty. A preset never fires a notification, unlike a
- * Watchdog. Without the API only the Pipeline chip that leads the row is drawn. */
+ * editing either marks it dirty: its ⋯ menu then saves the edits in or reverts
+ * them. A preset never fires a notification, unlike a Watchdog. Presets sort into GROUPS (migration 672), boxes the bar draws after
+ * the loose chips. Without the API only the Pipeline chip that leads the row is drawn. */
 
 import { useMemo } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
-import { createFilterPreset, deleteFilterPreset, listFilterPresets, reorderFilterPresets, updateFilterPreset } from '@/lib/api';
+import {
+  createFilterPreset, createFilterPresetGroup, deleteFilterPreset, deleteFilterPresetGroup, layoutFilterPresets,
+  listFilterPresets, reorderFilterPresets, updateFilterPreset, updateFilterPresetGroup,
+} from '@/lib/api';
 import { filterPresetKeys, DEFAULT_SORT, sortToParam, type SortSpec } from '@/lib/queries';
 import { filtersEqualForPreset, filtersForPreset, readPresetSpec, type ListingFilters } from '@/lib/filters';
 import { normalizeScope, scopeIncludes } from '@/lib/setScope';
 import type { FilterPreset } from '@/lib/types';
-import SavedSetBar, { chipBase, useSavedSet, type SavedSetCopy } from '@/components/SavedSetBar';
+import SavedSetBar, {
+  chipBase, useSavedSet, type SavedSetCopy, type SavedSetGroupCopy,
+} from '@/components/SavedSetBar';
 import PipelineMark from '@/components/PipelineMark';
 
 export interface FilterPresetBarProps {
@@ -36,9 +42,10 @@ export const PRESET_COPY: SavedSetCopy = {
   empty: 'No saved presets yet.',
   save: '+ Save preset',
   saveHint: 'Save the current filters as a new preset',
-  updateHint: 'Save the current filter changes back into this preset',
-  dialog: { save: 'Save filters as a preset', update: 'Update preset', edit: 'Edit preset' },
-  submit: { save: 'Save preset', update: 'Update preset', edit: 'Save' },
+  saveChanges: 'Save changes',
+  revert: 'Revert to saved',
+  dialog: { save: 'Save filters as a preset', edit: 'Edit preset' },
+  submit: { save: 'Save preset', edit: 'Save' },
   nameLabel: 'Preset name',
   namePlaceholder: 'e.g. 2+kk Praha pod 6M',
   color: 'Color',
@@ -51,8 +58,31 @@ export const PRESET_COPY: SavedSetCopy = {
   dragHint: 'Drag to reorder',
   options: 'Preset options',
   edited: 'Edited since loaded',
-  editedHint: 'Edited since loaded — use Update to save changes',
+  editedHint: 'Edited since loaded — save or revert from ⋯',
   failed: 'Something went wrong.',
+};
+
+export const PRESET_GROUP_COPY: SavedSetGroupCopy = {
+  kind: 'Preset group',
+  dialog: { save: 'New preset group', edit: 'Edit group' },
+  submit: { save: 'Create group', edit: 'Save' },
+  nameLabel: 'Group name',
+  namePlaceholder: 'e.g. Praha byty',
+  color: 'Color',
+  cancel: 'Cancel',
+  saving: 'Saving…',
+  failed: 'Something went wrong.',
+  add: '+ New group',
+  addHint: 'Create a box to sort presets into',
+  empty: 'Drag presets here',
+  loose: 'Drop here to ungroup',
+  move: 'Move group',
+  dragHint: 'Drag to reorder groups',
+  options: 'Group options',
+  edit: 'Edit…',
+  moveTo: 'Move to',
+  ungroup: 'Take out of group',
+  delete: { label: 'Delete group…', confirm: { label: 'Delete group, keep presets', busy: 'Deleting…' } },
 };
 
 export default function FilterPresetBar({
@@ -65,7 +95,9 @@ export default function FilterPresetBar({
   onLoadPipelineView,
 }: FilterPresetBarProps) {
   const qc = useQueryClient();
-  const { enabled, bar } = useSavedSet(filterPresetKeys.all, listFilterPresets, reorderFilterPresets);
+  const { enabled, bar, groups } = useSavedSet(filterPresetKeys.all, listFilterPresets, reorderFilterPresets, {
+    layout: layoutFilterPresets,
+  });
   const sortParam = sortToParam(sort);
   const active = bar.items.find((p) => p.id === activePresetId);
   /* Dirty when either the filters OR the sort drift from the loaded preset. */
@@ -96,9 +128,22 @@ export default function FilterPresetBar({
       if (id === activePresetId) onActivePresetIdChange(null);
     },
   });
+  const createGroup = useMutation({
+    mutationFn: (input: Parameters<typeof createFilterPresetGroup>[0]) => createFilterPresetGroup(input),
+    onSuccess: () => invalidate(),
+  });
+  const editGroup = useMutation({
+    mutationFn: ({ id, ...patch }: { id: string } & Parameters<typeof updateFilterPresetGroup>[1]) =>
+      updateFilterPresetGroup(id, patch),
+    onSuccess: () => invalidate(),
+  });
+  const removeGroup = useMutation({
+    mutationFn: (id: string) => deleteFilterPresetGroup(id),
+    onSuccess: () => invalidate(),
+  });
 
-  /* Save / Update capture the current filters AND the current sort; Edit only
-   * touches metadata (name + colour), leaving the stored filters intact. */
+  /* Save and Save changes capture the current filters AND the current sort; Edit
+   * only touches metadata (name + colour), leaving the stored filters intact. */
   const specOf = (includeMapArea: boolean) => ({ filters: filtersForPreset(filters, includeMapArea), sort: sortParam });
 
   /* The Pipeline chip — "show me my deals" (rule #22) — leads the row, and
@@ -160,8 +205,15 @@ export default function FilterPresetBar({
       }
       onRename={(p, name, color) => update.mutateAsync({ id: p.id, name, color })}
       onDelete={(p) => remove.mutateAsync(p.id)}
+      groups={{
+        ...groups,
+        copy: PRESET_GROUP_COPY,
+        onCreate: (name, color) => createGroup.mutateAsync({ name, color }),
+        onEdit: (g, name, color) => editGroup.mutateAsync({ id: g.id, name, color }),
+        onDelete: (g) => removeGroup.mutateAsync(g.id),
+      }}
       /* A new preset takes the map area unless unticked (operator 2026-10-22);
-       * an update keeps the preset's own choice. */
+       * Save changes keeps the preset's own choice, with no dialog (2026-10-27). */
       checkbox={
         filters.bounds != null
           ? {

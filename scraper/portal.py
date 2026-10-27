@@ -24,6 +24,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
+from scraper import stop
+
 LOG = logging.getLogger(__name__)
 
 
@@ -337,9 +339,10 @@ def deadline_reached(deadline: float | None) -> bool:
 
     A page loop that returns True here MUST report reached_end=False — a deadline
     is a stop of OURS (`OUR_STOPS`), and rule #3 lets only a walk that reached the
-    portal's end nominate the rows it did not see.
+    portal's end nominate the rows it did not see. A stop signal (`scraper.stop`) is
+    the deadline arriving early: every page loop stops on it without a branch of its own.
     """
-    return deadline is not None and time.monotonic() >= deadline
+    return stop.requested() or (deadline is not None and time.monotonic() >= deadline)
 
 
 IndexVerdict = Literal["new", "changed", "unchanged"]
@@ -397,8 +400,9 @@ class PortalConfig:
 
     - supports_complete_walk: can the portal prove a near-complete index walk?
       Posture only since 2026-09-07, with no writer since Health wave 4 (the coverage gate
-      retired; the column goes in wave 9) — it
-      gates no delisting; `walk_reached_end` gates nomination (rule #3).
+      retired; Health wave 9 kept the column, the Scrapers page still reads it, and the
+      scraper track owns it) — it gates no delisting; `walk_reached_end` gates nomination
+      (rule #3).
     - categories: the per-portal list of category descriptors the runner walks.
       Shape is portal-specific (the Portal object interprets it).
     - split_threshold: deep-pagination cap above which a category is walked
@@ -465,12 +469,12 @@ _DEFAULTS: dict[str, PortalConfig] = {
                         "pozemek", "zahrada", "garaz", "ostatni")
         ],
         split_threshold=None,
-        # detail_rate 0.6 is the politeness ceiling (req/s); 4 workers share that
-        # one limiter, so they only overlap per-listing DB latency, not
-        # raise the request rate. max_detail_per_run high so the drain's
+        # 0.7 req/s is bazos's ONE politeness budget, shared by its walk, drain and
+        # probe through the rate ledger (migration 676); 4 workers share it too, so
+        # they only overlap per-listing DB latency, not raise the request rate. max_detail_per_run high so the drain's
         # --max-seconds budget governs, not a tight claim cap (migration 168).
         limits=PortalLimits(
-            index_rate=0.5, detail_workers=4, detail_rate=0.6,
+            index_rate=0.7, detail_workers=4, detail_rate=0.7,
             max_detail_per_run=1500,
         ),
     ),

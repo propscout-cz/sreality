@@ -123,9 +123,13 @@ export interface BrowseViewState {
    * setFilters + setActivePresetId, because in the URL adapter those are two
    * writes against the same searchParams snapshot — the second would clobber
    * the first. Deselecting matters beyond tidiness: leaving a preset marked
-   * active after replacing its filters would render it dirty and pop the
-   * "Update preset" button, which this chip must never do. */
+   * active after replacing its filters would mark it edited, which this chip
+   * must never do. */
   loadPipelineView: () => void;
+  /* Reset: the default filters with any active preset deselected — one write, as
+   * loadPipelineView. A reset leaves the preset's view; it never edits it
+   * (operator 2026-10-27). The sort, the tab and the map knobs stay. */
+  resetFilters: () => void;
   /* The Stats dashboard the board was loaded from (URL key `dashboard`), the
    * preset's twin: a view knob, carried through filtering, outside preset
    * identity. `loadDashboard` writes a dashboard's filter exactly as
@@ -138,6 +142,10 @@ export interface BrowseViewState {
   /* The Stats tab's sample lens (`?market=sold`); Browse's filter is never touched by it. */
   statsMarket: StatsMarket;
   setStatsMarket: (m: StatsMarket) => void;
+  /* The Stats tab's "Malé vzorky" switch (`?small=1`): a cell under the minimum shows min, max,
+   * průměr and medián instead of the dashed mark. A view of the payload only — no refetch. */
+  statsSmall: boolean;
+  setStatsSmall: (on: boolean) => void;
   loadDashboard: (d: SavedDashboard, opts?: { replace?: boolean }) => void;
 }
 
@@ -147,7 +155,7 @@ export interface BrowseViewState {
 const LEGACY_LAYER_KEYS = ['kraje', 'rentmap', 'rentvk'];
 const OVERLAY_URL_KEYS = [
   'tab', 'sort', 'cities', 'colorby', 'layers', ...LEGACY_LAYER_KEYS, 'preset', 'pm', 'labels', 'pins',
-  'dashboard', 'market',
+  'dashboard', 'market', 'small',
 ];
 
 /* A saved filter (a preset's, a dashboard's: the preset blob, lib/filters
@@ -196,6 +204,7 @@ export function useUrlBrowseState(): BrowseViewState {
   const activeDashboardId = searchParams.get('dashboard');
   const marketParam = searchParams.get('market');
   const statsMarket: StatsMarket = isStatsMarket(marketParam) ? marketParam : 'filter';
+  const statsSmall = searchParams.get('small') === '1';
 
   const preserveExtras = useCallback(
     (sp: URLSearchParams): URLSearchParams => {
@@ -306,22 +315,32 @@ export function useUrlBrowseState(): BrowseViewState {
     },
     [searchParams, setSearchParams],
   );
+  const setStatsSmall = useCallback(
+    (on: boolean) => {
+      const sp = new URLSearchParams(searchParams);
+      if (on) sp.set('small', '1');
+      else sp.delete('small');
+      setSearchParams(sp, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
 
   /* With a filter: pushed, like a preset (Back undoes it), unless `replace`.
    * Without one the filters stay and only the id moves, replaced like the
    * preset id is. */
   const loadDashboard = useCallback(
     (d: SavedDashboard, { replace = false }: { replace?: boolean } = {}) => {
-      if (d.filter_spec == null) {
-        setActiveDashboardId(d.id);
-        return;
-      }
-      const sp = applySavedFilter(d.filter_spec, searchParams);
-      sp.delete('preset');
+      /* One write: the id, the dashboard's "Malé vzorky" switch and, if it carries one, its
+       * filter. Without a filter it is replaced, like the preset id. */
+      const withFilter = d.filter_spec != null;
+      const sp = withFilter ? applySavedFilter(d.filter_spec as PresetSpec, searchParams) : new URLSearchParams(searchParams);
+      if (withFilter) sp.delete('preset');
       sp.set('dashboard', d.id);
-      setSearchParams(sp, { replace });
+      if (d.show_small) sp.set('small', '1');
+      else sp.delete('small');
+      setSearchParams(sp, { replace: withFilter ? replace : true });
     },
-    [searchParams, setSearchParams, setActiveDashboardId],
+    [searchParams, setSearchParams],
   );
 
   const loadPipelineView = useCallback(() => {
@@ -333,11 +352,17 @@ export function useUrlBrowseState(): BrowseViewState {
     setSearchParams(sp, { replace: false });
   }, [preserveExtras, setSearchParams]);
 
+  const resetFilters = useCallback(() => {
+    const sp = preserveExtras(toSearchParams(DEFAULT_FILTERS));
+    sp.delete('preset');
+    setSearchParams(sp, { replace: false });
+  }, [preserveExtras, setSearchParams]);
+
   return {
     filters, sort, tab, overlay, activePresetId,
     setFilters, setBounds, setSort, setTab, setOverlay, setActivePresetId, loadPreset,
-    loadPipelineView,
-    activeDashboardId, setActiveDashboardId, loadDashboard, statsMarket, setStatsMarket,
+    loadPipelineView, resetFilters,
+    activeDashboardId, setActiveDashboardId, loadDashboard, statsMarket, setStatsMarket, statsSmall, setStatsSmall,
   };
 }
 
@@ -351,6 +376,7 @@ export function useMemoryBrowseState(init: {
   overlay?: MapOverlayState;
   dashboard?: string | null;
   market?: StatsMarket;
+  small?: boolean;
 }): BrowseViewState {
   const [filters, setFiltersState] = useState<ListingFilters>(init.filters);
   const [sort, setSortState] = useState<SortSpec>(init.sort ?? DEFAULT_SORT);
@@ -361,6 +387,7 @@ export function useMemoryBrowseState(init: {
   const [activePresetId, setActivePresetId] = useState<string | null>(null);
   const [activeDashboardId, setActiveDashboardId] = useState<string | null>(init.dashboard ?? null);
   const [statsMarket, setStatsMarket] = useState<StatsMarket>(init.market ?? 'filter');
+  const [statsSmall, setStatsSmall] = useState<boolean>(init.small ?? false);
 
   return useMemo<BrowseViewState>(
     () => ({
@@ -384,6 +411,10 @@ export function useMemoryBrowseState(init: {
         setFiltersState(pipelineViewFilters());
         setActivePresetId(null);
       },
+      resetFilters: () => {
+        setFiltersState(DEFAULT_FILTERS);
+        setActivePresetId(null);
+      },
       /* A dashboard loads here exactly as on the page (useUrlBrowseState): its filter, if it carries one,
        * replaces the view's (applySavedFilter's reading), and it becomes the active one. */
       activeDashboardId,
@@ -396,11 +427,14 @@ export function useMemoryBrowseState(init: {
           setActivePresetId(null);
         }
         setActiveDashboardId(d.id);
+        setStatsSmall(d.show_small ?? false);
       },
       statsMarket,
       setStatsMarket,
+      statsSmall,
+      setStatsSmall,
     }),
-    [filters, sort, tab, overlay, activePresetId, activeDashboardId, statsMarket],
+    [filters, sort, tab, overlay, activePresetId, activeDashboardId, statsMarket, statsSmall],
   );
 }
 
@@ -462,6 +496,7 @@ export const browseUrlFromState = (s: {
   overlay: MapOverlayState;
   activeDashboardId?: string | null;
   statsMarket?: StatsMarket;
+  statsSmall?: boolean;
 }): string => {
   const sp = toSearchParams(s.filters);
   if (sortToParam(s.sort) !== sortToParam(DEFAULT_SORT)) sp.set('sort', sortToParam(s.sort));
@@ -474,6 +509,7 @@ export const browseUrlFromState = (s: {
   if (s.overlay.pinLimit !== PIN_LIMIT_DEFAULT) sp.set('pins', String(s.overlay.pinLimit));
   if (s.activeDashboardId) sp.set('dashboard', s.activeDashboardId);
   if (s.statsMarket && s.statsMarket !== 'filter') sp.set('market', s.statsMarket);
+  if (s.statsSmall) sp.set('small', '1');
   const qs = sp.toString();
   // Concatenated rather than withQuery(): `sp` is built here key by key and may
   // one day carry a repeated key, which a Record round-trip would collapse.

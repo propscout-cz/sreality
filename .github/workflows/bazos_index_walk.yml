@@ -6,7 +6,7 @@ name: "Scraping: Bazos index walk"
 # nominates unseen ones for a page check once the walk reached the portal's end
 # (source-scoped and throttled; the page, not the count, decides), and
 # new/price-changed ids are enqueued into listing_detail_queue
-# (source='bazos'). No detail fetch — the drain (bazos_detail_drain.yml) consumes
+# (source='bazos'). No detail fetch — the realtime worker's drain lane consumes
 # the queue. Records run_type='index'.
 #
 # WHY split: bazos now walks 22 nationwide scopes (byt/dum/chata/restaurace/
@@ -66,8 +66,8 @@ concurrency:
 jobs:
   index-walk:
     runs-on: ubuntu-latest
-    # The full 22-scope walk is ~2400 pages at the portal's 0.5 req/s index rate
-    # (~85-90 min since migration 488 added pozemek/zahrada/garaz/ostatni). The
+    # The full 22-scope walk is ~2600 pages inside bazos's ONE 0.7 req/s budget, which the
+    # worker's drain shares (migration 676; ~80 min with the drain's usual share). The
     # --max-seconds 6600 (110 min) budget is what actually ends the run: it stops
     # cleanly and FINALIZES the scrape_run, where a GitHub kill leaves ended_at
     # NULL and the tail scopes unwalked (which is what the 75-min timeout did).
@@ -111,4 +111,5 @@ jobs:
           if [ -n "$RADIUS_KM" ]; then ARGS="$ARGS --radius-km $RADIUS_KM"; fi
           if [ -n "$MAX_PAGES" ]; then ARGS="$ARGS --max-pages $MAX_PAGES"; fi
           echo "python -m scraper.bazos_main $ARGS"
-          eval "python -m scraper.bazos_main $ARGS"
+          # exec: a cancel's SIGINT must reach Python, which finalizes the run (#2019), not the shell around it.
+          eval "exec python -m scraper.bazos_main $ARGS"

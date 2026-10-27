@@ -288,7 +288,7 @@ def _walk_with(monkeypatch, n_items: int, total: int | None):
 # The 5th tuple element answers "did the walk reach bazos's last page?", not
 # "did the count reconcile?". The declared total jitters while a ~50 min walk
 # runs, so a deficit is normal on a finished walk; the numeric verdict stays
-# (walk_coverage, logged + recorded in scrape_runs.by_category) as an alarm.
+# (walk_coverage, logged; scrape_runs.by_category keeps its two counts) as an alarm.
 
 
 def test_walk_category_one_row_short_still_reaches_end(monkeypatch):
@@ -489,6 +489,32 @@ def test_walk_category_barren_page_past_declared_total_is_an_end(monkeypatch):
     )
     assert client.offsets == [0, 20, 20]
     assert len(seen) == 19 and reached_end is True
+
+
+def test_walk_category_barren_page_on_the_last_page_the_count_implies_is_an_end(monkeypatch):
+    # bazos's counter over-counts by a handful (ads removed between the count and
+    # the render), so the blank sits where the count puts the LAST PAGE, not its
+    # last row: 20 served, 22 declared, offset 20 empty twice. Placed at page
+    # grain — the one rule that already places a 404 — it is bazos's end
+    # (2026-10-23/24 prodam/byt: 9,040 of 9,042, three walks held open).
+    blank = _page([], total=None, next_offset=None)
+    (seen, _c, _result_size, _pages, reached_end), client = _walk(
+        monkeypatch,
+        [_page([str(i) for i in range(20)], total=22, next_offset=20), blank, blank],
+    )
+    assert client.offsets == [0, 20, 20]
+    assert len(seen) == 20 and reached_end is True
+
+
+def test_walk_category_barren_page_pages_before_the_count_stays_ours(monkeypatch):
+    # A blank a whole page or more before the count's last page is still nobody's
+    # end: 20 served, 400 declared, the page at offset 20 empty twice.
+    blank = _page([], total=None, next_offset=None)
+    (seen, _c, _result_size, _pages, reached_end), _client = _walk(
+        monkeypatch,
+        [_page([str(i) for i in range(20)], total=400, next_offset=20), blank, blank],
+    )
+    assert len(seen) == 20 and reached_end is False
 
 
 def test_walk_category_barren_first_page_is_not_an_end(monkeypatch):

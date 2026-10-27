@@ -5,6 +5,18 @@
 Scraper-specific evolution beyond Phase 1's nightly index walk.
 Independent of the analytical, UI, and map tracks.
 
+### bazos / web floor 0 from a stray 'přízemí' — flat grammar in `floor_from_text` (2026-10-26, PR open)
+- **Found:** `floor_from_text` ended with "any 'přízemí' → 0", so "v šestém podlaží … sklep v přízemí domu"
+  read 0; 373 bazos flats (116 active) carried floor 0 while their text names a higher storey
+  (read-only SQL, 2026-10-25; re-counted 2026-10-26: 374 / 117, query in the PR body).
+- **Done (in the PR):** a flat (or unknown category) reads bare `N. podlaží` (N−1) and spelled-out
+  ordinals up to the tenth; 'přízemí' is 0 only when tied to the flat and no other storey is named
+  (both said → None, for the text lane).
+  Every other category keeps the legacy miner. `scripts/heal_bazos_floor_zero.py` (dry run default,
+  `--apply --backup`) re-reads or NULLs the measured rows.
+- **Next:** run the heal after merge (dry run first); then `reparse` `--fields floor` on bazos to fill
+  the NULL flats that now read a `N. podlaží` (5,915 measured, 568 active).
+
 ### Condition scoring PARKED — no surface reads the frozen 1–5 levels (2026-10-20, done)
 - **Done:** operator ruling 2026-10-20 ("keep the scoring engine for now, but make sure it does
   not impact anything"; rule #14). The crons have been off since PR #730 (2026-07-09) and the last
@@ -48,14 +60,16 @@ Independent of the analytical, UI, and map tracks.
   and mmreality's `_record_slice` + `SLICE_KEY`, the slice writes only it read. It had been a no-op
   since every scraper portal's flag came back true (its newest evaluation is from 2026-09-13). idnes
   keeps its slice ledger for its stalest-first order (`slice_staleness`).
-- **Left for wave 9** (a data delete is the destructive gate; only the first is on wave 9's list
-  so far): `portal_coverage_gate` (153 rows), the 150 unread ceskereality and mmreality rows of
-  `portal_index_slices`, `portals.supports_complete_walk` (no writer now; the SPA's portal posture
-  still reads it) and `delist_flip_refusals`, still written by `db.enqueue_presence_checks` and
-  read by nothing since `delist_flip_refused` went (a wave-9 drop removes the writer first).
+- **Left after Health wave 9** (migration 643 dropped `portal_coverage_gate`; wave 9 as built did
+  not drop the other three, so this track owns them): the 150 unread ceskereality and mmreality
+  rows of `portal_index_slices` (unjudged), `portals.supports_complete_walk` (no writer now; the
+  Scrapers page's portal posture still reads it) and `delist_flip_refusals`, still written by
+  `db.enqueue_presence_checks` and read by nothing since `delist_flip_refused` went (a drop
+  removes the writer first).
 - **Filed by the Health investigation (2026-10-18), owed to this track:** #1851 a sreality ad that
-  answers HTTP 409 (615387212) is given up and re-armed forever by the walk's re-arm; #1852 the
-  bazos rate-ledger lease overflows `smallint`, so every GitHub bazos walk falls back to per-process
+  answers HTTP 409 (615387212) is given up and re-armed forever by the walk's re-arm; #1852 (DONE 2026-10-26,
+  PR #2052: the lease casts its integers and bazos shares ONE 0.7 req/s budget, migration 676) the
+  bazos rate-ledger lease overflowed `smallint`, so every GitHub bazos walk fell back to per-process
   pacing (the cause of the NEW-queue bursts of 10-12, 10-13 and 10-16); #1853 422 active ads with a
   NULL category (ceskereality 124, realitymix 298) sit outside every nomination scope and can never
   become inactive — the `coverage` gauge's `unnominated` cells read them until it lands: Problem on
@@ -127,7 +141,7 @@ Independent of the analytical, UI, and map tracks.
   spurious link fails closed: it pushes the children's sum past the parent's); (v) 81 active
   ceskereality rows with `category_type` NULL, unseen > 7 d, sit outside every nomination scope
   (`db.presence_candidates` filters `category_type = %s`), so `stale_active` rests at WARN: a
-  one-off VERIFY-priority enqueue (precedent `scripts/renominate_false_gone_crawler_rows.py`) plus a
+  one-off VERIFY-priority enqueue (precedent: the 2026-10-02 false-gone renomination below) plus a
   rule that nominates NULL-category rows per source (#1853: 422 ads on 10-18, ceskereality and
   realitymix; the `coverage` gauge's `unnominated` cells count them since Health wave 4).
 
@@ -384,6 +398,91 @@ Independent of the analytical, UI, and map tracks.
   ("zastavěná plocha" / mmreality's `builtUpArea`) with no column to hold it — a schema question,
   not a parser fix; bazos gains no side columns (its free text carries no labelled parcel); and
   the unverified-key census across the nine portals is still unwritten.
+- **W22 (2026-10-25, rebuilt on current main on the operator's go-ahead of 2026-10-25 from the
+  unmerged, superseded #1668 / #1669; heal = migration 671, merged in the same PR, applied after the rule deploys) —
+  a figure in the plot box is not always a plot.** General ruling 3 (2026-09-30) + the
+  operator's flat answers (2026-10-01): on 14 of 14 live pages the portal itself printed one
+  figure in the plot box and the floor-area box (not our key maps). ONE rule,
+  `scraper.area.stated_plot`, at ONE call site before the content hash
+  (`ScrapedListing.__post_init__`; sreality's `parse_listing` calls it itself): a byt NEVER
+  carries a plot; a komerční plot equal (0.1 m²) to the usable measure or a LABELLED headline
+  (usable / floor / total) is absence UNLESS the advert's own description says it is a parcel
+  (the text evidence below); dum / pozemek / ostatni unchanged; never compared against
+  a title fallback or a zastavěná plocha column. Contract cells stay `structured`. Live rows clear at
+  their next fetch (one snapshot each, which cannot be undone); stored echoes need migration 671
+  (DESTRUCTIVE, not applied). **The count, with the text evidence (2026-10-25): 14,156 rows on
+  13,020 properties — byt 3,218 active + 6,751 inactive, komerční 2,226 active + 1,961
+  inactive** (equality alone counted 14,404: komerční 2,356 + 2,079).
+  **Hand-read, done 2026-10-25 (read-only):** all 2,356 active komerční hits sorted by what the
+  advert's OWN description says about a parcel ("pozem…" / "parcel…" + a figure in m²), then read.
+  93 state a parcel EQUAL to the figure, and all 93 are the **reverse case**: an areál, farm, camp,
+  petrol station or penzion whose TRUE parcel was typed into both boxes (a 30,000 m² areál with
+  ~5,000 m² built up; a 164,000 m² riding farm; a 994 m² LPG station) — the rule drops the true
+  plot and keeps the wrong floor figure (ceskereality 26, realitymix 15, idnes 46 — sklad 12,
+  výroba 10, no subtype 11, ubytování 4, zemědělský 4, obchodní prostor 3, restaurace 2 —,
+  mmreality 6). 148 state a DIFFERENT parcel (14 read: 12 echoes — a 495 m² unit whose prose
+  names a 1,484 m² parcel —, 2 reverse). 2,115 state none (19 read by size: every one under
+  3,000 m² with text is the unit's own floor — an 18 m² store, a 119 m² shop, halls, an attic;
+  of the six read among the 110 at ≥ 3,000 m², three are areál sites — the reverse case —, two
+  halls, one has no text). So the rule is right on roughly 93 % of the active komerční hits and
+  drops a TRUE parcel on an estimated ~170 of them (93 confirmed by the advert's own text),
+  concentrated in areál-type ads above ~2,000 m² (sklad, výroba, zemědělský, ubytování,
+  restaurace / camp); the figure stays in the advert's text. The original's campsite
+  (idnes 19082282) was one of a class, not a one-off.
+  **Ruled 2026-10-25 — the advert's text is the evidence, not a size threshold** (rejected as
+  a patch): `stated_plot` reads the description (`text=`, same one site before the hash; the
+  title is not read — no stored column holds it) with ONE pattern,
+  `scraper.area.PLOT_TEXT_EVIDENCE_SRC`, which 671 carries verbatim (Python's `re` and
+  Postgres read the same text — the rails and live tests, and a one-off 12,000-string fuzz
+  against a local Postgres 16, found no disagreement):
+  (a) a stated parcel EQUAL to the figure (m² or ha) keeps it; else (c) a stated parcel that
+  DIFFERS drops it (the box echoes the floor; the true parcel stays in the text); else (b) a
+  built-up area SMALLER than the figure keeps it; else (d) dropped. Re-sorting the 2,356
+  active hits with it (read-only): 92 / 149 / 2,115 (the hand-read's 93 / 148 / 2,115 to
+  within one row). **Kept now: all 92 stated-equal reverse cases** (+ 89 inactive). **Still
+  dropped: all 149 different-parcel hits** (+ 136 inactive) **and 2,077 of the 2,115
+  no-parcel hits** (+ 1,825 inactive); (b) keeps the other 38 (+ 29 inactive). Residuals,
+  named: 104 still-dropped hits at ≥ 3,000 m² — about half areál sites whose text names the
+  site without a parcel word; and (b) is weak — reading its 38, about half are parcels (areál,
+  "zastavěná plocha a nádvoří 705 m², zahrada 547 m²") and about half a multi-storey building's
+  floor area beside its smaller footprint ("zastavěná 336 m², užitná 490 m²", mostly under
+  1,000 m²).
+  **Ruled at merge (2026-10-25, the cleanup session; the operator informed in PR #1999):** (b) is KEPT —
+  a kept figure loses nothing (the ~19 echoes it keeps are the status quo and stay the text lane's to
+  read), while dropping it would blank ~19 true parcels. The autodedup programme was told (sizes sent
+  2026-10-25; no objection; the live-lane plot features `plot_area_rel_diff` / `plot_area_exact` move
+  at each row's first refetch).
+  **Owed after the rule is live (migration 671, same PR, unapplied until then):** the count re-run against the
+  header's census and stop conditions (895 active komerční hits carry no basis stamp; 1 sreality
+  P2 row); `backup_before_drop.yml`; the operator's OK; NO re-seed and no pause (the autodedup session,
+  2026-10-25: the engine already discounts the echo via `d43_plot_column_echo`, and E960 re-reads members' current facts before a merge;
+  it offers a re-claim of the affected in-scope ads through the normal queue on the operator's OK); the apply from `main`
+  (`apply_migration.yml --ref main`); then re-bless the field census (`python -m scraper.field_census
+  --bless`): ceskereality `estate_area` is blessed at fill 0.6145 and the heal takes it to ~0.52
+  (30,275 → 25,734 of 49,383 active), 9.3 pp — 0.7 pp short of `parsing_fill_drop_warn_pp`.
+  **Owed later:** the mmreality-dum residue check; the optional `verify_pipeline` arm (byt /
+  komerční rows with `estate_area = area_m2`, ~0 after the heal); the forward drop of the
+  heal's backup schema after a month.
+
+### R2 key unique per image row (2026-10-25, code done; 670 owed)
+- **Shipped (code):** a photo's R2 key is `img/{listing_id}/{images.id}.jpg` (`image_storage.image_key`).
+  Both older shapes (`{sreality_id}/{seq:04d}`, `{listings.id}/{seq:04d}`) drew the prefix from one
+  number range, so a new listing could overwrite an older listing's photo; 152 keys / 304 rows by
+  2026-10-25. Old keys stay serveable (`LISTING_PHOTO_KEY_RE`); `docs/architecture.md` rule 6.
+- **Owed, in order:** (1) apply `migrations/670_repair_colliding_image_storage_paths.sql` with the
+  operator's OK, only after Railway AND the GH image workflows run the `img/` key code (180 rows on 26
+  listings go back to the download queue). (2) One R2 pass over the 152 keys in the backup
+  (`select distinct storage_path from backup_670.images_r2_key_collision`): delete every
+  `thumb/w1080/<key>.webp` (a copy is rebuilt from the master on its next request, so deleting a correct
+  one costs nothing; this clears the possibly stale copy of the 9 owner rows on one inactive bazos listing
+  that 670 leaves in place, uploaded after 2026-10-12 11:12Z). The other 124 objects stay in use by their
+  owner. (3) Once the 180 rows re-downloaded, drop `backup_670` in a forward migration (`drop table if
+  exists backup_670.images_r2_key_collision; drop schema if exists backup_670;`). Check first:
+  `select count(*) filter (where storage_path like 'img/%'), count(*) from images where id in (select
+  image_id from backup_670.images_r2_key_collision)` (a row with `unavailable_reason` set is done too).
+  Only then delete the 28 objects no row holds any more (the backup's `where owns_object` keys, after
+  checking no `images` row holds one; a restore would point back at them), or leave them to the R2
+  orphan sweep (not built yet).
 
 ### sreality photos: the whole frame, and provenance on every stored row (2026-09-11, in progress)
 - **Shipped:** downloads moved off sreality's `res,749,562,3|shr,,20|jpg,90` (mode 3 = a 4:3 CROP;
@@ -395,23 +494,17 @@ Independent of the analytical, UI, and map tracks.
   provenance is now written on every download: `rendition` + decoded `stored_width`/`stored_height`.
   The image phase gained a wall-clock bound (`--image-max-seconds`, both workflows) because the count
   cap's throughput basis predates the bigger master.
-  **The re-master lane now exists** (`scripts/remaster_sreality_images.py` +
-  `sreality_image_remaster.yml`, 6 shards, `15 */2`): it re-downloads the ~3.55M `rendition IS NULL`
-  rows at the master template and OVERWRITES each R2 object under its stored `storage_path`, stamping
-  provenance + re-arming phash/CLIP through `mark_image_remastered`. sreality ROTATES image URLs when a
-  listing is edited (~75% of stored URLs are dead on the longest-lived actives), so a 404/410/dead-URL
-  on the stored URL re-resolves from the listing's CURRENT detail by image `order` and persists the
-  fresh URL; bytes that come back 749x562 are an anomaly (never uploaded, never stamped as a master).
-  Every outcome stamps the attempt clock, and retiring a row from the queue always takes two sightings
-  20h apart, so one CDN blip can never claim `sreality-749-crop`. **Sequence: pilot with
-  `listing_ids` (and/or `dry_run`) first, read the `REMASTER done …` line, THEN arm the cron by setting
-  the `SREALITY_REMASTER_CRON` repo variable to `on`** — until it is armed the schedule is inert.
-- **Next:** (1) run the re-master to completion — each shard merges its OWN sub-key (`"k/6"`) into
-  `app_settings.sreality_remaster_last_complete` once it has walked its slice out AND confirmed no
-  convertible row is left, so the lane is done when all six sub-keys are there; until then phash/CLIP
-  are comparable only WITHIN a rendition; (2) a thumbnail rendition — the SPA/extension currently serve a
-  master into every grid tile; (3) re-measure one image shard at the new template and resize
-  `MAX_IMG` / the fresh lane's cap from the result; (4) one census of what stored chains actually
+  **The re-master lane ran to completion and was deleted** (6 shards, `15 */2`, 2026-09-11 →
+  2026-10-25, Actions exit W0): it re-downloaded the ~3.55M `rendition IS NULL` rows at the master
+  template and OVERWROTE each R2 object under its stored `storage_path`, re-arming phash/CLIP through
+  `invalidate_derived_signals`; a dead stored URL (sreality ROTATES image URLs when an ad is
+  edited) re-resolved from the ad's CURRENT detail page by image `order`; a row whose source was gone
+  retired as `sreality-749-crop` only after two sightings 20h apart. Done when all six shard sub-keys
+  sat in `app_settings.sreality_remaster_last_complete` (2026-10-25 19:04 UTC) and no stored sreality
+  row lacked a `rendition` (0 on deletion day). phash/CLIP stay comparable only WITHIN a rendition.
+- **Next:** (1) a thumbnail rendition — the SPA/extension currently serve a
+  master into every grid tile; (2) re-measure one image shard at the new template and resize
+  `MAX_IMG` / the fresh lane's cap from the result; (3) one census of what stored chains actually
   carry — `SELECT DISTINCT split_part(op, ',', 1) FROM (SELECT unnest(string_to_array(split_part(
   sreality_url, 'fl=', 2), '|')) op FROM images WHERE sreality_url LIKE '%fl=%') t` — to confirm the
   kept-op allowlist (`rot`) drops nothing that carried meaning.
@@ -468,7 +561,8 @@ Independent of the analytical, UI, and map tracks.
   sreality's national fallback — as a logged `COVERAGE` warning, never a gate. Both facts land
   in `scrape_runs.by_category` (`walk_reached_end` + `walk_coverage`, no migration) and
   `verify_pipeline`'s coverage check reports `categories_nominating` beside the gap (retired
-  2026-10-19 into the `scraping` and `coverage` checks).
+  2026-10-19 into the `scraping` and `coverage` checks; since Health wave 9 only `walk_reached_end`
+  is stored, the `walk_coverage` verdict logged).
 - bazos CI budget: `timeout-minutes` 75 → 130 with `--max-seconds 6600`. Since migration 488
   (22 scopes, ~2,400 pages) GitHub was cancelling the walk at 75 min, so the tail scopes never
   walked and the `scrape_run` was never finalized.
@@ -494,13 +588,14 @@ Independent of the analytical, UI, and map tracks.
   no longer runs a sreality freshness fetch), the ~430-line dead absence sweep and all nine
   `mark_gone` adapters deleted.
 - 2026-10-02 (operator decision 2, option 1): the rows that sreality fetch falsely delisted get a
-  real page check on their own portal. `scripts/renominate_false_gone_crawler_rows.py` via
-  `renominate_false_gone.yml` (dry run default; `apply`, per-source `limit` defaulting to the 25-row
-  pilot, `source`, read-only `readout_since`) queues each at `QUEUE_PRIORITY_VERIFY`; a live page
+  real page check on their own portal. A one-off renomination script behind a dispatch-only
+  workflow (dry run default; `apply`, per-source `limit` defaulting to the 25-row pilot, `source`,
+  read-only `readout_since`; dispatched six times on 2026-10-02, both deleted 2026-10-25 in Actions
+  exit W0) queued each at `QUEUE_PRIORITY_VERIFY`; a live page
   reactivates, a gone one stays put. Prod 2026-10-01: 7,023 crawler rows carry the sreality `gone`
   verdict, 5,884 inactive, 2,061 with the flip signature — an UPPER BOUND, since the unguarded old
   writer also re-stamped rows their portal had long closed (pages ceskereality/realitymix/mmreality
-  still answer with HTTP 200). **Next:** once on `main`: dry run → `apply` with `limit=25` → once the
+  still answer with HTTP 200). **Protocol:** dry run → `apply` with `limit=25` → once the
   drains ran, `readout_since` = the time the apply log prints; release (`limit=all`) only if
   `written_unseen=0`, every `CHECK` row opens as a live detail page (all ceskereality/
   realitymix/mmreality rows, plus any whose filled `raw_json` values, spec cells, images or

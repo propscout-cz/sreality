@@ -16,7 +16,6 @@ import contextlib
 import json
 import logging
 import multiprocessing
-import os
 import re
 from collections.abc import Callable, Mapping
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
@@ -31,7 +30,6 @@ import psycopg
 
 from location_data import payloads
 from location_data.claims_common import (
-    ARCHIVED_COORDINATE_RULES,
     DEFAULT_MAX_CLAIM_VALUE_BYTES,
     EMITTABLE_LICENCE_CLASSES,
     GUARD_CZ_BBOX,
@@ -51,11 +49,13 @@ from location_data.claims_common import (
     env_positive_int,
     guard_admits,
     json_pointer,
+    locator_reads,
     point_wkt,
 )
 from location_data.html_scope import (
     ScopeRegister, ScopedDocument, collapse_ws, scope_html,
 )
+from scraper.cpus import job_cpus
 from scraper.remax_parser import parse_dms_pair
 
 LOG = logging.getLogger("location_data.page_readers")
@@ -373,10 +373,13 @@ def _read_html_marker(
 ) -> list[PageRead]:
     """A PRESENCE detector: the portal's own marker, typed as the label the contract gives it.
 
-    Three shapes, one reader, because the difference is contract data: a selector alone
+    Four shapes, one reader, because the difference is contract data: a selector alone
     (realitymix's `--estimated` block), a selector plus a literal the node's text must
-    contain (idnes' "Nemovitost nemá přesnou adresu…" disclaimer), or a selector plus an
-    attribute that must be present (bazos' maps-anchor `title="Přibližná lokalita"`).
+    contain (idnes' "Nemovitost nemá přesnou adresu…" disclaimer), a selector plus an
+    attribute that must be present (bazos' maps-anchor `title="Přibližná lokalita"`), or a
+    selector plus attributes of which at least one must be absent or EMPTY (`blank_attrs`:
+    realitymix writes `data-gps-lat=""` on a map with no pin, and its map script places no
+    pin unless both carry a value — `:not([attr])` cannot see an empty attribute).
 
     The claim's VALUE is the contract's canonical label, never the portal's own text or
     attribute, so a portal that rewords its sentence stops matching instead of silently
@@ -407,8 +410,17 @@ def _read_html_marker(
                 f"{entry.source}:{entry.entry_id} declares locator.attr="
                 f"{entry.locator.get('attr')!r}; it must be one attribute name or a "
                 f"non-empty list of them, all of which must be present to mark")
+    blank = entry.locator.get("blank_attrs")
+    if blank is not None and (not isinstance(blank, list) or not blank
+                              or not all(isinstance(n, str) and n for n in blank)):
+        raise IntakeRefused(
+            f"{entry.source}:{entry.entry_id} declares locator.blank_attrs={blank!r}; it "
+            f"must be a non-empty list of attribute names, one of which must be absent or "
+            f"empty to mark")
     node = document.css_first(_entry_css(entry))
     if node is None:
+        return []
+    if blank and all(_text(node.attributes.get(name)) is not None for name in blank):
         return []
     if names:
         values = [_text(node.attributes.get(name)) for name in names]
@@ -746,13 +758,6 @@ def _subject_object(
             f"{SUBJECT_MISS_FAIL}}} — the narrowing and the declaration of what a miss means "
             f"are one rule, and any other mode would be the positional fallback this entry "
             f"exists to forbid")
-    exclude = entry.locator.get("exclude_where")
-    if exclude is not None and (not isinstance(exclude, Mapping)
-                                or not exclude.get("json_pointer")
-                                or "equals" not in exclude):
-        raise IntakeRefused(
-            f"{entry.source}:{entry.entry_id} declares malformed `locator.exclude_where` "
-            f"({exclude!r}); it must name a json_pointer and the value it equals")
     wanted = _text(getattr(row, field, None))
     key = str(match["json_pointer"])
     seen = 0
@@ -763,10 +768,7 @@ def _subject_object(
             continue
         pool = found if isinstance(found, list) else [found]
         seen += len(pool)
-        if exclude is not None:
-            excluded = str(exclude["json_pointer"])
-            pool = [item for item in pool
-                    if json_pointer(item, excluded) != exclude.get("equals")]
+        pool = _unexcluded(entry, pool)
         hits = [item for item in pool if _text(json_pointer(item, key)) == wanted]
         if len(hits) == 1:
             return candidate_document, hits[0]
@@ -777,6 +779,20 @@ def _subject_object(
     raise SubjectNotFound(
         f"{entry.entry_id}: none of the {seen} candidate object(s) on this {row.source} "
         f"body carries {key}=={wanted!r}; on_miss=fail")
+
+
+def _unexcluded(entry: Entry, pool: list[Any]) -> list[Any]:
+    """`pool` minus every object `locator.exclude_where` names (idnes' `isSimilar: true`)."""
+    exclude = entry.locator.get("exclude_where")
+    if exclude is None:
+        return pool
+    if (not isinstance(exclude, Mapping) or not exclude.get("json_pointer")
+            or "equals" not in exclude):
+        raise IntakeRefused(
+            f"{entry.source}:{entry.entry_id} declares malformed `locator.exclude_where` "
+            f"({exclude!r}); it must name a json_pointer and the value it equals")
+    excluded = str(exclude["json_pointer"])
+    return [item for item in pool if json_pointer(item, excluded) != exclude.get("equals")]
 
 
 def _rejected_point(entry: Entry, lat: float, lon: float) -> bool:
@@ -852,20 +868,28 @@ def _read_json_regex(
     sampled rows while the title carries the street on 5/12.
 
     The regex runs over the DECODED string: a pattern must not have to know the portal's
-    escaping. FIRST match only."""
+    escaping. FIRST match only.
+
+    When `then` lands on a LIST, the PATTERN picks the object, as `html_attr_regex` lets it
+    pick the node: idnes draws the street of an ad with no exact address as one unlabelled
+    feature titled "Zvýrazněná ulice <name>" beside 20 neighbour features that each carry a
+    full address, so neither position nor an id can name it — only what it says. Exactly
+    one object must match; two is not evidence."""
     compiled, group = _entry_pattern(entry, "json_regex")
     subject = _subject_object(entry, row, embedded_documents(entry, document))
     if subject is None:
         return []
     _, obj = subject
     pointer = str(entry.locator.get("json_pointer") or "")
-    text = _text(json_pointer(obj, pointer) if pointer else obj)
-    if text is None:
+    matches = []
+    for item in _unexcluded(entry, obj if isinstance(obj, list) else [obj]):
+        text = _text(json_pointer(item, pointer) if pointer else item)
+        match = compiled.search(text) if text is not None else None
+        if match is not None:
+            matches.append(match)
+    if len(matches) != 1:
         return []
-    match = compiled.search(text)
-    if match is None:
-        return []
-    value = apply_transforms(_text(match.group(group)), entry.transform)
+    value = apply_transforms(_text(matches[0].group(group)), entry.transform)
     if value is None:
         return []
     return [PageRead(_page_claim(entry, row, value=value))]
@@ -1201,7 +1225,12 @@ def _read_json_breadcrumb(
     forward from it.
 
     FAILS CLOSED: no anchor, no claim. An unverified kraj slug then costs coverage, never
-    correctness, and a per-kraj claim rate of zero is what identifies the wrong slug."""
+    correctness, and a per-kraj claim rate of zero is what identifies the wrong slug.
+
+    `levels_by_anchor` moves a level for one anchor. Prague is a kraj and an obec in ONE
+    crumb (`Praha -> Praha 5 -> Smíchov`), so its quarter sits a level higher than
+    `Plzeňský kraj -> Plzeň-město -> Plzeň -> Skvrňany` puts it — portal data, so the
+    contract states it per slug rather than this reader knowing a city's name."""
     level = entry.locator.get("level")
     if level not in BREADCRUMB_LEVELS:
         raise IntakeRefused(
@@ -1218,17 +1247,29 @@ def _read_json_breadcrumb(
             f"{entry.source}:{entry.entry_id} declares anchor_slugs={slugs!r}; the chain's "
             f"offset moves with the category path, so the anchor is contract data")
     anchors = {str(slug).strip().lower() for slug in slugs}
-    offset = BREADCRUMB_LEVELS[str(level)]
+    moved = entry.locator.get("levels_by_anchor") or {}
+    if not isinstance(moved, Mapping) or not all(
+            str(slug).lower() in anchors and isinstance(levels, Mapping)
+            and all(name in BREADCRUMB_LEVELS and isinstance(at, int) and at >= 0
+                    for name, at in levels.items())
+            for slug, levels in moved.items()):
+        raise IntakeRefused(
+            f"{entry.source}:{entry.entry_id} declares levels_by_anchor={moved!r}; it maps "
+            f"a declared anchor slug to {{level: offset}} over {sorted(BREADCRUMB_LEVELS)}")
     for data in embedded_documents(entry, document):
         for block in _jsonld_blocks(data):
             if block.get("@type") != wanted:
                 continue
             items = _breadcrumb_items(block)
-            anchor = next(
-                (index for index, (_name, url) in enumerate(items)
-                 if url and url.rstrip("/").rsplit("/", 1)[-1].lower() in anchors),
-                None)
-            if anchor is None or anchor + offset >= len(items):
+            slugs_at = [url.rstrip("/").rsplit("/", 1)[-1].lower() if url else ""
+                        for _name, url in items]
+            anchor = next((index for index, slug in enumerate(slugs_at) if slug in anchors),
+                          None)
+            if anchor is None:
+                return []
+            levels = {str(k).lower(): v for k, v in moved.items()}.get(slugs_at[anchor], {})
+            offset = levels.get(str(level), BREADCRUMB_LEVELS[str(level)])
+            if anchor + offset >= len(items):
                 return []
             value = apply_transforms(items[anchor + offset][0], entry.transform)
             if value is None:
@@ -1329,6 +1370,37 @@ def _refuse_oversized_archived(
     return f"oversized_value:{claim.claim_type}"
 
 
+def entry_paths(entry: Entry) -> list[Entry]:
+    """The entry once per path it may answer through, primary first (`locator.fallback`).
+
+    A page path may name a DIFFERENT page reader, which a payload path may not: idnes states
+    an unpinned ad's street in its map config and in its address line, a JSON document and
+    a DOM text node that no one reader reads. The contract gate holds every path to the
+    entry's own surface and method, so a claim's provenance is true whichever path answered."""
+    return [replace(entry, transform=read.transform,
+                    locator={**read.locator, "reader": read.locator.get("reader") or entry.reader})
+            for read in locator_reads(entry)]
+
+
+def read_entry(
+    entry: Entry, row: ListingRow, payload: ArchivedPayload, document: ScopedDocument,
+) -> list[PageRead]:
+    """The reads of the first path that answers. A subject miss on one path lets the next
+    try; it is raised only when no path answered, so the miss is still counted."""
+    missed: SubjectNotFound | None = None
+    for path in entry_paths(entry):
+        try:
+            reads = PAGE_READERS[str(path.reader)](path, row, payload, document)
+        except SubjectNotFound as miss:
+            missed = missed or miss
+            continue
+        if reads:
+            return reads
+    if missed is not None:
+        raise missed
+    return []
+
+
 def extract_page(
     payload: ArchivedPayload,
     row: ListingRow,
@@ -1356,7 +1428,7 @@ def extract_page(
 
     for entry in applicable:
         try:
-            reads = PAGE_READERS[str(entry.reader)](entry, row, payload, document)
+            reads = read_entry(entry, row, payload, document)
         except SubjectNotFound as miss:
             # `on_miss: fail` — an id-matched reader looked and found no object that is this
             # listing's. Counted, not swallowed: without the tally, "the portal changed its
@@ -1402,8 +1474,7 @@ def extract_page(
 # body on the main thread: 1 500-body batches took 143-313 s against ~48 s for the R2 fetch
 # of the same bodies (run 34666292569), and the 249 000-body backlog is re-mined once more
 # on every contract bump. Threads cannot help (the GIL holds for the whole parse), so the
-# bodies go to PROCESSES.
-EXTRACTION_WORKERS_ENV = "LOCATION_INTAKE_WORKERS"
+# bodies go to PROCESSES, as many as the job's CPUs (`scraper.cpus.job_cpus`).
 
 # Below this a batch stays on the main thread. Spinning up a pool costs a fresh interpreter
 # per worker, which is worth it for a 1 500-body drain batch and never for the handful of
@@ -1423,23 +1494,11 @@ EXTRACTION_TIMEOUT_S = 120.0
 _WORKER: dict[str, Any] = {}
 
 
-def extraction_workers() -> int:
-    """How many extraction processes. `os.cpu_count()`, overridable.
-
-    The override exists for ONE case: a runner whose CPU count is misreported (a container
-    with a cgroup quota below the host's core count). It is not a tuning knob and nothing
-    sets it in the workflow."""
-    override = os.environ.get(EXTRACTION_WORKERS_ENV)
-    if override:
-        return env_positive_int(EXTRACTION_WORKERS_ENV, 1)
-    return os.cpu_count() or 1
-
-
 def pool_width(tasks: int) -> int:
     """The width `extract_pages` will actually use for a batch of this size — 1 is the main
     thread. ONE definition, because the lane logs this number beside its bodies/s and a log
     line that guessed it would be the only evidence anyone reads."""
-    workers = extraction_workers()
+    workers = job_cpus()
     return workers if workers >= 2 and tasks >= PARALLEL_MIN_BODIES else 1
 
 

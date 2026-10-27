@@ -25,7 +25,7 @@ from api import dependencies as deps
 from api import main as api_main
 from api import saved_sets as ss
 from api import tenant_pool
-from api.routes.filter_presets import PRESETS
+from api.routes.filter_presets import GROUPS, PRESETS
 
 _SUB = "11111111-1111-1111-1111-111111111111"
 _ACCT = "33333333-3333-3333-3333-333333333333"
@@ -49,62 +49,80 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
 
 @pytest.fixture()
 def store(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    """In-memory replacement for the saved-set persistence functions, presets kind only."""
-    state: dict[str, Any] = {"presets": {}, "owners": {}, "next_id": 1}
+    """In-memory replacement for the saved-set persistence functions: presets and their groups."""
+    state: dict[str, Any] = {"presets": {}, "groups": {}, "owners": {}, "next_id": 1}
 
-    def _to_dict(pid: str) -> dict[str, Any]:
-        return dict(state["presets"][pid])
+    def _rows(kind: ss.SavedSetKind) -> dict[str, dict[str, Any]]:
+        assert kind in (PRESETS, GROUPS)
+        return state["presets"] if kind is PRESETS else state["groups"]
 
     def fake_create_preset(
         conn: Any, kind: ss.SavedSetKind, values: dict[str, Any], *, account_id: str,
     ) -> dict[str, Any]:
-        assert kind is PRESETS
-        name, filter_spec, color = values["name"], values["filter_spec"], values["color"]
+        rows = _rows(kind)
         n = state["next_id"]
         pid = _id(n)
         state["next_id"] += 1
         state["owners"][pid] = account_id
-        state["presets"][pid] = {
+        rows[pid] = {
             "id": pid,
-            "name": name,
-            "filter_spec": filter_spec,
+            "name": values["name"],
+            **{c: values[c] for c in kind.blob_columns},
             "created_at": f"2026-06-03T00:00:0{n}+00:00",
             "updated_at": f"2026-06-03T00:00:0{n}+00:00",
             # Append at end: one past the current max position.
-            "position": max(
-                (p["position"] for p in state["presets"].values()), default=-1
-            )
-            + 1,
-            "color": color,
+            "position": max((p["position"] for p in rows.values()), default=-1) + 1,
+            "color": values["color"],
+            **({"group_id": None} if kind.groups else {}),
         }
-        return _to_dict(pid)
+        return dict(rows[pid])
 
     def fake_list_presets(conn: Any, kind: ss.SavedSetKind) -> list[dict[str, Any]]:
-        assert kind is PRESETS
-        rows = [_to_dict(pid) for pid in state["presets"]]
+        rows = [dict(r) for r in _rows(kind).values()]
         rows.sort(key=lambda r: (r["position"], r["created_at"]))
         return rows
 
     def fake_get_preset(conn: Any, kind: ss.SavedSetKind, pid: str) -> dict[str, Any] | None:
-        return _to_dict(pid) if pid in state["presets"] else None
+        rows = _rows(kind)
+        return dict(rows[pid]) if pid in rows else None
 
     def fake_update_preset(
         conn: Any, kind: ss.SavedSetKind, pid: str, fields: dict[str, Any],
     ) -> dict[str, Any] | None:
         # The route hands over only what changes (saved_sets.changes), so the fake applies it whole.
-        if pid not in state["presets"]:
+        rows = _rows(kind)
+        if pid not in rows:
             return None
-        state["presets"][pid].update(fields)
-        return _to_dict(pid)
+        rows[pid].update(fields)
+        return dict(rows[pid])
 
     def fake_delete_preset(conn: Any, kind: ss.SavedSetKind, pid: str) -> bool:
-        return state["presets"].pop(pid, None) is not None
+        if _rows(kind).pop(pid, None) is None:
+            return False
+        # ON DELETE SET NULL (group_id): the group's presets fall loose.
+        for p in state["presets"].values():
+            if p["group_id"] == pid:
+                p["group_id"] = None
+        return True
 
-    def fake_reorder_presets(conn: Any, kind: ss.SavedSetKind, ids: list[str]) -> list[dict[str, Any]]:
+    def fake_reorder_presets(conn: Any, kind: ss.SavedSetKind, ids: list[str]) -> None:
+        rows = _rows(kind)
         for pos, pid in enumerate(ids):
+            if pid in rows:
+                rows[pid]["position"] = pos
+
+    def fake_layout(
+        conn: Any, kind: ss.SavedSetKind, groups: list[str], items: list[tuple[str, str | None]],
+    ) -> dict[str, Any]:
+        assert kind is PRESETS
+        # The (group_id, account_id) key: a group this account does not hold refuses the whole write.
+        if any(g is not None and g not in state["groups"] for _, g in items):
+            raise ss.HTTPException(status_code=422, detail="group not found")
+        fake_reorder_presets(conn, GROUPS, groups)
+        for pos, (pid, gid) in enumerate(items):
             if pid in state["presets"]:
-                state["presets"][pid]["position"] = pos
-        return fake_list_presets(conn, kind)
+                state["presets"][pid].update(position=pos, group_id=gid)
+        return ss.listing(conn, kind)
 
     monkeypatch.setattr(ss, "create", fake_create_preset)
     monkeypatch.setattr(ss, "list_rows", fake_list_presets)
@@ -112,6 +130,7 @@ def store(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(ss, "update", fake_update_preset)
     monkeypatch.setattr(ss, "delete", fake_delete_preset)
     monkeypatch.setattr(ss, "reorder", fake_reorder_presets)
+    monkeypatch.setattr(ss, "layout", fake_layout)
 
     return state
 
@@ -303,7 +322,7 @@ def test_a_malformed_id_is_a_422_not_a_cast_error(
 
 def test_a_stored_blob_that_is_not_an_object_reads_as_empty():
     """PostgREST can write a JSON null into the NOT NULL column; the SPA reads `spec.filters`."""
-    row = (_id(1), "p", None, None, None, 0, None)
+    row = (_id(1), "p", None, None, None, 0, None, None)
     assert ss._row(PRESETS, row)["filter_spec"] == {}
 
 
@@ -311,6 +330,78 @@ def test_delete_preset(client, store):
     client.post("/filter-presets", json={"name": "p", "filter_spec": SPEC})
     assert client.delete(f"/filter-presets/{_id(1)}").json() == {"deleted": True}
     assert client.delete(f"/filter-presets/{_id(1)}").status_code == 404
+
+
+# --- groups (migration 672) --------------------------------------------------
+
+
+def test_the_list_carries_the_groups_and_each_preset_its_group(client, store):
+    client.post("/filter-presets", json={"name": "a", "filter_spec": SPEC})
+    group = client.post("/filter-preset-groups", json={"name": "Praha", "color": "sage"}).json()
+    assert {k: group[k] for k in ("name", "color", "position")} == {"name": "Praha", "color": "sage", "position": 0}
+    assert "filter_spec" not in group
+    body = client.get("/filter-presets").json()
+    assert [g["name"] for g in body["groups"]] == ["Praha"]
+    assert body["data"][0]["group_id"] is None
+
+
+def test_a_layout_moves_presets_into_and_out_of_groups_in_one_write(client, store):
+    for name in ("a", "b", "c"):
+        client.post("/filter-presets", json={"name": name, "filter_spec": SPEC})
+    g1 = client.post("/filter-preset-groups", json={"name": "Praha"}).json()["id"]
+    g2 = client.post("/filter-preset-groups", json={"name": "Brno"}).json()["id"]
+    a, b, c = _id(1), _id(2), _id(3)
+    res = client.put("/filter-presets/layout", json={
+        "groups": [g2, g1],
+        "items": [{"id": c, "group_id": None}, {"id": a, "group_id": g1}, {"id": b, "group_id": g1}],
+    })
+    assert res.status_code == 200
+    body = res.json()
+    assert [g["name"] for g in body["groups"]] == ["Brno", "Praha"]
+    assert [(r["name"], r["group_id"]) for r in body["data"]] == [("c", None), ("a", g1), ("b", g1)]
+    # Out again: a back to loose, after c.
+    body = client.put("/filter-presets/layout", json={
+        "groups": [g2, g1],
+        "items": [{"id": c}, {"id": a}, {"id": b, "group_id": g1}],
+    }).json()
+    assert [(r["name"], r["group_id"]) for r in body["data"]] == [("c", None), ("a", None), ("b", g1)]
+
+
+def test_a_layout_naming_a_group_the_account_does_not_hold_is_a_422_and_moves_nothing(client, store):
+    client.post("/filter-presets", json={"name": "a", "filter_spec": SPEC})
+    res = client.put("/filter-presets/layout", json={"items": [{"id": _id(1), "group_id": _id(999)}]})
+    assert res.status_code == 422
+    assert store["presets"][_id(1)]["group_id"] is None
+
+
+def test_deleting_a_group_leaves_its_presets_loose(client, store):
+    client.post("/filter-presets", json={"name": "a", "filter_spec": SPEC})
+    gid = client.post("/filter-preset-groups", json={"name": "Praha"}).json()["id"]
+    client.put("/filter-presets/layout", json={"items": [{"id": _id(1), "group_id": gid}]})
+    assert client.delete(f"/filter-preset-groups/{gid}").json() == {"deleted": True}
+    body = client.get("/filter-presets").json()
+    assert body["groups"] == []
+    assert [(r["name"], r["group_id"]) for r in body["data"]] == [("a", None)]
+
+
+def test_a_group_renames_and_recolours_and_stamps_the_account(client, store):
+    gid = client.post("/filter-preset-groups", json={"name": "Praha", "color": "plum"}).json()["id"]
+    assert store["owners"][gid] == _ACCT
+    body = client.put(f"/filter-preset-groups/{gid}", json={"name": "Praha 2"}).json()
+    assert (body["name"], body["color"]) == ("Praha 2", "plum")
+    assert client.put(f"/filter-preset-groups/{gid}", json={"color": None}).json()["color"] is None
+    assert client.post("/filter-preset-groups", json={"name": ""}).status_code == 422
+    assert client.post("/filter-preset-groups", json={"name": "x", "color": "fuchsia"}).status_code == 422
+
+
+def test_a_layout_sql_writes_order_and_group_together():
+    sql = ss._layout_sql(PRESETS)
+    assert "SET position = v.pos, group_id = v.group_id" in sql
+    assert "unnest(%s::uuid[], %s::uuid[]) WITH ORDINALITY" in sql
+    # A kind without groups has no group column and no layout.
+    from api.routes.stats_dashboards import DASHBOARDS
+    assert "group_id" not in ss._list_sql(DASHBOARDS)
+    assert len(ss.statements(DASHBOARDS)) == 7
 
 
 # --- per account (ticket #1761) ---------------------------------------------
@@ -336,14 +427,14 @@ def _preset_routes() -> list[APIRoute]:
     routes = [
         r
         for r in api_main.app.routes
-        if isinstance(r, APIRoute) and r.path.startswith("/filter-presets")
+        if isinstance(r, APIRoute) and r.path.startswith("/filter-preset")
     ]
     if not routes:  # FastAPI >= 0.13x wraps an included router
         for r in api_main.app.routes:
             nested = getattr(getattr(r, "original_router", None), "routes", None) or []
             routes += [
                 n for n in nested
-                if isinstance(n, APIRoute) and n.path.startswith("/filter-presets")
+                if isinstance(n, APIRoute) and n.path.startswith("/filter-preset")
             ]
     return routes
 
@@ -359,10 +450,11 @@ def _calls(route: APIRoute) -> set:
 
 
 def test_every_preset_route_rides_the_tenant_connection():
-    """No preset route accepts the static bundle token or the service-role
-    connection: it proves only 'loaded the SPA', and RLS is the boundary."""
+    """No preset or preset-group route accepts the static bundle token or the
+    service-role connection: it proves only 'loaded the SPA', and RLS is the boundary."""
     routes = _preset_routes()
-    assert len(routes) == 6, [f"{sorted(r.methods)} {r.path}" for r in routes]
+    # Six saved-set routes per kind, plus the presets' layout.
+    assert len(routes) == 13, [f"{sorted(r.methods)} {r.path}" for r in routes]
     for r in routes:
         calls = _calls(r)
         label = f"{sorted(r.methods)} {r.path}"
@@ -386,7 +478,7 @@ class _Cursor:
         self.log.append((sql, params))
 
     def fetchone(self) -> tuple:
-        return ("p-1", "p", SPEC, None, None, 0, None)
+        return ("p-1", "p", SPEC, None, None, 0, None, None)
 
 
 class _Conn:
@@ -419,8 +511,9 @@ def test_reads_and_writes_by_id_carry_no_account_predicate():
     definition of the caller (the #917 bug), not a gate."""
     import inspect
 
-    for fn in (ss.list_rows, ss.get, ss.update, ss.delete, ss.reorder, ss.changes):
+    for fn in (ss.list_rows, ss.get, ss.update, ss.delete, ss.reorder, ss.changes, ss.listing, ss.layout):
         assert "account_id" not in inspect.getsource(fn), fn.__name__
     for sql in (ss._list_sql(PRESETS), ss._get_sql(PRESETS), ss._get_for_update_sql(PRESETS), ss._delete_sql(PRESETS),
-                ss._update_sql(PRESETS, ("name", "filter_spec", "color")), ss._reorder_sql(PRESETS)):
+                ss._update_sql(PRESETS, ("name", "filter_spec", "color")), ss._reorder_sql(PRESETS),
+                ss._layout_sql(PRESETS), *ss.statements(GROUPS)[:3], *ss.statements(GROUPS)[4:]):
         assert "account_id" not in sql, sql

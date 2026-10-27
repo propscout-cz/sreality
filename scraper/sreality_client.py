@@ -19,6 +19,7 @@ from urllib.parse import urlencode
 
 import requests
 
+from scraper import stop
 from scraper.portal_base import (
     GONE_STATUSES,
     RETRYABLE_STATUS,
@@ -306,10 +307,8 @@ class SrealityClient(BasePortalClient):
         """
         if self._limiter is not None:
             self._limiter.acquire()
-        else:
-            elapsed = time.monotonic() - self._last_detail_at
-            if elapsed < self.detail_delay_s:
-                time.sleep(self.detail_delay_s - elapsed)
+        elif stop.wait(self.detail_delay_s - (time.monotonic() - self._last_detail_at)):
+            self._stopped()
         url = DETAIL_URL.format(id=sreality_id)
         try:
             payload = self._get_json(url)

@@ -22,7 +22,6 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from datetime import timedelta
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -56,7 +55,7 @@ from autodedup.export import encode_clip
 from autodedup.settings import Settings
 from tests.autodedup.fake_pg import LEDGER_KEY, FakePg
 from tests.autodedup.test_incremental import _dataset, _settings, _state, arrival_order, invariant_state
-from tests.autodedup.lane_world import GENERATION, seed_lane, true_population
+from tests.autodedup.lane_world import seed_lane, true_population
 from tests.autodedup.lane_world import world as lane_world
 
 TOWN = Scope((ScopeBlock("obec", 563510),))

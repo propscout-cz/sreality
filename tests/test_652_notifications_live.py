@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from tests._live_property import REQUIRED_DB, _account, cur  # noqa: F401 -- `cur` is the fixture
+from tests._live_property import REQUIRED_DB, _account
 
 pytestmark = REQUIRED_DB
 
@@ -46,8 +46,8 @@ def test_a_share_notification_goes_with_its_sharer(cur: Any) -> None:
     owner, recipient = _account(cur), _account(cur)
     cur.execute(
         "INSERT INTO notification_dispatches (source_kind, change_kind, account_id, "
-        "actor_account_id, event_ref, dedupe_key) VALUES ('share', 'shared_pipeline', %s, %s, "
-        "'read', %s) RETURNING id", (recipient, owner, f"share:pipeline:{owner}:{recipient}:read"))
+        "actor_account_id, event_ref) VALUES ('share', 'shared_pipeline', %s, %s, "
+        "'read') RETURNING id", (recipient, owner))
     did = cur.fetchone()[0]
     cur.execute("DELETE FROM accounts WHERE id = %s", (owner,))
     cur.execute("SELECT count(*) FROM notification_dispatches WHERE id = %s", (did,))

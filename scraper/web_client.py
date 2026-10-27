@@ -33,7 +33,7 @@ import time
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
-from scraper import egress
+from scraper import egress, stop
 from scraper.portal_base import GONE_STATUSES, ListingGoneError
 from scraper.portal_identity import WEB, Resolved, resolve_url
 from scraper.rate_ledger import RateBudgetUnavailable
@@ -110,10 +110,9 @@ class WebClient:
             LOG.info("RATE deadline reached source=%s: the next slot on %s starts past the "
                      "run's time budget", WEB, _host_key(url))
             raise RateBudgetUnavailable(f"{WEB}: the next slot on {_host_key(url)} is past the deadline")
-        if wait > 0:
-            time.sleep(wait)
+        stop.wait(wait)
         if limiter is not None:
-            limiter.acquire()
+            limiter.acquire()  # refuses the run if a stop arrived during the host wait
         result = egress.fetch(url, session=self._session, stop_before=is_portal_ad)
         if result.status in GONE_STATUSES:
             raise ListingGoneError(url, result.status)

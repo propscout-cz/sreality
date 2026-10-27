@@ -19,8 +19,11 @@ architecture rule #1, so older migrations are never rewritten):
   4. No migration re-grants the Amendment-A6 broker-directory PII surfaces to a
      browser role before Wave 4 masks them (they were revoked in migration 299).
   5. No migration creates a view/function that reads admin-only operational data
-     without embedding `is_platform_admin()` (migrations 318/332). Enforced from
-     MIN_VIEW_GATE. Escape hatch: `-- ci-allow-ungated: <name> <reason>`.
+     without embedding `is_platform_admin()` (migrations 318/332). Both lists, the
+     admin-only relations and the objects sanctioned ungated, are
+     tests/_admin_gate_registry.py, shared with the live lane.
+  6. From migration 679 on, no browser write grant on a run table beyond its column UPDATEs in
+     BROWSER_WRITE_COLUMNS (rule 12: the API writes every run on the service role).
 
 Live cross-tenant / effective-grant verification lands in the TEST_DATABASE_URL
 lane (tests/test_tenant_isolation_live.py), which this composes with.
@@ -30,8 +33,20 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tests._admin_gate_registry import (
+    ADMIN_ONLY_RELATIONS,
+    ANNOTATION_CUTOVER,
+    UNGATED,
+    live_allowlist,
+    sanctioned,
+)
 from tests._admin_gate_shape import gate_is_sound
-from tests._tenant_registry import RENAMED_TENANT_TABLES, TENANT_TABLES
+from tests._tenant_registry import (
+    BROWSER_WRITE_COLUMNS,
+    BROWSER_WRITE_COLUMNS_SINCE,
+    RENAMED_TENANT_TABLES,
+    TENANT_TABLES,
+)
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 # Phase 0 (299) is the baseline: it establishes the posture this gate protects.
@@ -185,8 +200,9 @@ def _enforced_migrations() -> list[Path]:
 def _parse_grant(stmt: str) -> tuple[set[str], list[str], set[str]] | None:
     """(-> privs, objects, roles) for a `grant <privs> on <objs> to <roles>`
     statement, else None. Object names are lowercased + stripped of the leading
-    `table`/`public.`/quotes; a `sequence`/`function`/`all …` object is returned
-    verbatim so callers can ignore it."""
+    `table`/`public.`/quotes (roles unquoted too: the Supabase CLI writes `"public"."t" TO
+    "authenticated"`); a `sequence`/`function`/`all …` object is returned verbatim so callers
+    can ignore it."""
     low = re.sub(r"\s+", " ", stmt.lower()).strip()
     m = re.match(r"grant (.+?) on (.+?) to (.+)$", low)
     if not m:
@@ -195,13 +211,13 @@ def _parse_grant(stmt: str) -> tuple[set[str], list[str], set[str]] | None:
     # the two non-privileges `update (a` and `b)`, so a column-level write grant passed.
     bare = re.sub(r"\s*\([^)]*\)", "", m.group(1))
     privs = {p.strip() for p in bare.split(",") if p.strip()}
-    roles = {r.strip() for r in re.split(r"[,\s]+", m.group(3)) if r.strip()}
+    roles = {r.strip().strip('"') for r in re.split(r"[,\s]+", m.group(3)) if r.strip()}
     raw_objs = m.group(2).strip()
     objs: list[str] = []
     for obj in raw_objs.split(","):
-        obj = obj.strip()
+        obj = obj.replace('"', "").strip()
         obj = re.sub(r'^(table|sequence|function)\s+', "", obj)
-        obj = obj.replace("public.", "").strip().strip('"')
+        obj = obj.replace("public.", "").strip()
         objs.append(obj)
     return privs, objs, roles
 
@@ -295,123 +311,6 @@ def _rls_exempt_tables(sql: str) -> set[str]:
     return {m.group(1) for m in re.finditer(r"--\s*ci-allow-no-rls:\s*([a-z0-9_]+)", sql.lower())}
 
 
-# Admin-only operational relations. MIRRORS tests/test_tenant_isolation_live.py::
-# _ADMIN_ONLY_RELATIONS — add a new admin table/matview to BOTH. listings/
-# properties/images are deliberately absent (shared-market data behind many
-# legitimately open views); see that file for the full reasoning.
-#
-# tag_taxonomy + image_tag_labels (migration 442) replace image_training_examples
-# here: they are the tag ground truth now, and — like dedup_sim.taxonomy_labels /
-# label_proposals before them, and unlike migration 309 — they are backend-only,
-# with NO `_public` view. image_tag_annotations / phash_pair_notes came out with
-# image_training_examples: no app code reads or writes any of the three since the
-# tag-annotation-matrix cutover (docs/design/tag-annotation-matrix.md); the tables
-# themselves are dropped by that design's Wave C.
-_ADMIN_ONLY_RELATIONS = frozenset({
-    "dedup_engine_runs", "dedup_scan_state", "dedup_vision_bakeoff_results",
-    "dedup_decision_feedback", "property_identity_candidates", "property_merge_events",
-    # The carry record (migration 589): read only by the merge route, the brake's dry run
-    # and the split, all service-role; no `_public` view.
-    "property_merge_carries",
-    "listing_detail_queue", "listing_fetch_failures", "detail_queue_completions",
-    "llm_calls", "parsed_url_cache", "pipeline_check_results",
-    "image_border_cases", "tag_taxonomy", "image_tag_labels",
-    # image_tag_label_events (migration 446) is the append-only decision history
-    # behind image_tag_labels — same backend-only posture, no `_public` view.
-    "image_tag_label_events",
-    # tag_candidates (450) is the per-tag review queue; tag_exam_cohorts /
-    # tag_exam_members (458) are the sealed exam roster. All three are
-    # backend-only with NO `_public` view — and publishing the exam roster would
-    # hand anyone the answer key's index.
-    "tag_candidates", "tag_exam_cohorts", "tag_exam_members", "tag_exam_sets",
-    # tag_exam_screens (459) + tag_exam_suggestions (461): the screener's guesses
-    # and the sitting pre-answers — machine output about the answer key, backend-
-    # only, no `_public` view.
-    "tag_exam_screens", "tag_exam_suggestions",
-    "workflow_failures", "workflow_run_health",
-    "scrape_runs", "worker_heartbeats",
-    "health_summary_mv", "portal_health_mv", "scraper_health_checks_mv",
-    "category_trends_mv", "image_storage_overview_mv", "snapshot_churn_24h_mv",
-    "dedup_funnel_resolutions_archive",
-    "images_failure_overview_mv",
-    # The tagging bake-off store (migration 489, schema dedup_sim): experiment
-    # evidence — runs, encoder arms, their vectors, per-image scores and the
-    # per-head metrics. Backend-only, NO `_public` view; the bake-off page reads
-    # them through the admin-gated API (/new-dedup/tagging-bakeoff/*).
-    "dedup_sim.tag_head_bakeoff_runs",
-    "dedup_sim.tag_head_bakeoff_arms",
-    "dedup_sim.tag_head_bakeoff_vectors",
-    "dedup_sim.tag_head_bakeoff_scores",
-    "dedup_sim.tag_head_bakeoff_metrics",
-    # The versioned tag model (migration 490, PUBLIC schema — it must survive
-    # Wave 8's drop of dedup_sim): the model registry, its per-tag artifacts, and
-    # the per-image winner store. Locked to the service role; the admin pages
-    # read them through the admin-gated API (/new-dedup/tags/*). One deliberate
-    # exception: images_public.tag_head_scores (migration 591, ci-allow-ungated)
-    # publishes the ACTIVE model's per-photo scores for the Browse card cover.
-    "tag_head_models", "tag_head_model_heads", "image_tag_scores",
-    # The Level-0 candidate store (migration 492, schema dedup_sim): parameter
-    # sets, generation runs and the listing-pair evidence rows. Backend-only, NO
-    # `_public` view; the Candidate audit page reads them through the admin-gated
-    # API (/new-dedup/candidates/*).
-    "dedup_sim.candidate_inputs",
-    "dedup_sim.candidate_generations",
-    "dedup_sim.candidate_pairs",
-    # The autonomous dedup engine's own store (migration 528, schema autodedup):
-    # fingerprints, the blocking substrate, pair/cluster grain, the judge queue and the
-    # operator verdicts, the learning tables, and the operator-facing iteration log.
-    # Backend-only, NO `_public` view — the browser client is pinned to schema `public`,
-    # so the progress page and the validation UI read them through the admin-gated API.
-    # `autodedup.merges` is the reserved, EMPTY write ledger (the trial is shadow mode).
-    "autodedup.settings",
-    "autodedup.runs",
-    "autodedup.iterations",
-    "autodedup.listing_fp",
-    "autodedup.image_band",
-    "autodedup.phash_pop",
-    "autodedup.exploded_blocks",
-    "autodedup.pairs",
-    "autodedup.judgements",
-    "autodedup.must_not_link",
-    "autodedup.clusters",
-    "autodedup.cluster_members",
-    "autodedup.cluster_conflicts",
-    "autodedup.merges",
-    "autodedup.verdicts",
-    "autodedup.labels",
-    "autodedup.models",
-    "autodedup.eval_samples",
-    "autodedup.resolve_queue",
-    "autodedup.scan_cursor",
-    "autodedup.judge_queue",
-    # A1's apply ledger (migration 558): what the engine merged in production, dry runs and
-    # refusals included. Backend-only like the rest of the schema.
-    "autodedup.applied_merges",
-    # The operator's own Browse merges, copied once into the engine's schema (migration 564,
-    # E299) so nothing reads the production ledger at evaluation time. Backend-only.
-    "autodedup.operator_merges",
-    # The sold-transaction fetch LEDGER (migration 542). The sales themselves are market
-    # data behind `sold_transactions_public`; the ledger is not. A cell is fetched only
-    # where some account holds a live deal-pipeline card, so its obec set is a projection
-    # of tenant state — publishing it would hand every signed-in account the map and the
-    # cadence of every other account's deal sourcing. NO `_public` view; the ONE reader
-    # is migration 545's `sold_coverage`, a SECURITY DEFINER point lookup that answers
-    # about a single municipality and is annotated `ci-allow-ungated` there.
-    "sold_transaction_fetches",
-    # Auth identities (migration 610): emails are PII. The ONE reader is account_email(),
-    # EXECUTE revoked from every browser role and annotated `ci-allow-ungated` there; the
-    # browser reaches a label only through share_party_emails(), counterparties only.
-    "auth.users",
-    # The health check registry and the incident table (migrations 619 / 462): the browser
-    # reads both only through the admin-gated pipeline_checks_public.
-    "health_checks",
-    "ops_incidents",
-    # The push device registry and its delivery ledger (migration 654): service role only, NO
-    # `_public` view; the /push routes and the worker's push lane are their one writer each.
-    "push_subscriptions",
-    "notification_deliveries",
-})
-
 _CREATE_GATED_OBJ = re.compile(
     r"create (?:or replace )?(?:materialized )?(?:view|function) "
     r'(?:if not exists )?(?:public\.)?"?([a-z0-9_]+)"?',
@@ -427,43 +326,47 @@ _DYNAMIC_DDL = re.compile(
 # dynamic EXECUTE; it predates this rule and is fixed-forward (architecture rule #1).
 _DYNAMIC_DDL_HISTORICAL = frozenset({"299_phase0_anon_hardening.sql"})
 
-# "<file>:<object>" created ungated before migration 318 and re-created WITH the gate
-# BY migration 318 — verified sound in production today. Migrations are append-only, so
-# the exemption lives here rather than in a rewritten file.
-_HISTORICAL_UNGATED = frozenset({
-    "300_dedup_golden_set_foundation.sql:dedup_label_events",
-    "303_dedup_vision_bakeoff_results.sql:dedup_vision_bakeoff_results_public",
-    "307_dedup_recency_instrumentation.sql:dedup_recency_backlog",
-    "308_clip_phash_audit_tooling.sql:image_tag_annotations_public",
-    "308_clip_phash_audit_tooling.sql:phash_pair_notes_public",
-    "309_clip_training_examples.sql:image_training_examples_public",
-    "310_image_border_cases.sql:image_border_cases_public",
-    "311_source_trust_rank_and_sign_check.sql:dedup_label_events",
-})
+_ANNOTATION = re.compile(r"--\s*ci-allow-ungated:\s*([a-z0-9_]+)")
+_SQL_KIND = {"matview": "materialized view", "view": "view", "function": "function"}
 
 
-def _ungated_admin_objects(sql: str) -> list[tuple[str, str]]:
-    """(name, 'reads a, b') for each view/function created over admin-only data whose
-    is_platform_admin() gate is absent OR unsound — moved out of a boolean position,
-    OR'd into a predicate, or turned into a tautology."""
-    exempt = {m.group(1) for m in re.finditer(r"--\s*ci-allow-ungated:\s*([a-z0-9_]+)", sql.lower())}
-    out: list[tuple[str, str]] = []
+def _creates(sql: str) -> list[tuple[str, str, str]]:
+    """(name, registry kind, whitespace-normalised statement) per view/matview/function created."""
+    out: list[tuple[str, str, str]] = []
     for stmt in _statements(sql):
         low = re.sub(r"\s+", " ", stmt.lower()).strip()
         m = _CREATE_GATED_OBJ.match(low)
-        if not m or m.group(1) in exempt:
-            continue
-        kind = "function" if re.match(
-            r"create (?:or replace )?(?:materialized )?function", low) else "view"
-        if gate_is_sound(low, kind):
+        if m:
+            sql_kind = re.match(r"create (?:or replace )?(materialized view|view|function)", low).group(1)
+            out.append((m.group(1), "matview" if sql_kind == "materialized view" else sql_kind, low))
+    return out
+
+
+def _ungated_admin_objects(migration: str, sql: str) -> list[tuple[str, str]]:
+    """(name, 'reads a, b') for each view/function created over admin-only data whose
+    is_platform_admin() gate is absent OR unsound — moved out of a boolean position,
+    OR'd into a predicate, or turned into a tautology — and that the registry does not
+    sanction in this migration."""
+    out: list[tuple[str, str]] = []
+    for name, kind, low in _creates(sql):
+        if sanctioned(migration, name) or gate_is_sound(low, "function" if kind == "function" else "view"):
             continue
         reads = sorted(
-            t for t in _ADMIN_ONLY_RELATIONS
+            t for t in ADMIN_ONLY_RELATIONS
             if re.search(rf"\b{re.escape(t)}\b", low)
         )
         if reads:
-            out.append((m.group(1), ", ".join(reads)))
+            out.append((name, ", ".join(reads)))
     return out
+
+
+def _annotations() -> list[tuple[Path, str]]:
+    """(migration, name) for every `-- ci-allow-ungated: <name>` comment on disk."""
+    return [
+        (p, m.group(1))
+        for p in sorted(MIGRATIONS_DIR.glob("*.sql"))
+        for m in _ANNOTATION.finditer(p.read_text(encoding="utf-8").lower())
+    ]
 
 
 def _dynamic_ddl(sql: str) -> bool:
@@ -478,15 +381,64 @@ def test_new_admin_objects_embed_the_gate():
     offenders = [
         f"  {p.name}: {name} reads {reads}"
         for p in _enforced_migrations()
-        for name, reads in _ungated_admin_objects(p.read_text(encoding="utf-8"))
-        if f"{p.name}:{name}" not in _HISTORICAL_UNGATED
+        for name, reads in _ungated_admin_objects(p.name, p.read_text(encoding="utf-8"))
     ]
     assert not offenders, (
         "view/function(s) read admin-only operational data with no "
         "is_platform_admin() gate — any signed-in non-admin could read them over "
         "supabase-js (SPA route-gating is not a security boundary). Add the gate, "
-        "or annotate `-- ci-allow-ungated: <name> <why>`:\n" + "\n".join(offenders)
+        "or register the object and this migration in tests/_admin_gate_registry.py "
+        "UNGATED with its guard and why:\n" + "\n".join(offenders)
     )
+
+
+def test_every_annotation_is_registered():
+    """The registry is the only exemption: each `-- ci-allow-ungated:` comment names a pair it sanctions."""
+    missing = [f"  {p.name}: {name}" for p, name in _annotations() if not sanctioned(p.name, name)]
+    assert not missing, (
+        "`-- ci-allow-ungated:` comment(s) exempt nothing on their own; register each object and "
+        "migration in tests/_admin_gate_registry.py UNGATED:\n" + "\n".join(missing)
+    )
+
+
+def test_no_annotation_after_cutover():
+    late = [
+        f"  {p.name}: {name}" for p, name in _annotations()
+        if (_migration_number(p) or 0) >= ANNOTATION_CUTOVER
+    ]
+    assert not late, (
+        f"`-- ci-allow-ungated:` is retired from migration {ANNOTATION_CUTOVER}: drop the comment and "
+        "register the object in tests/_admin_gate_registry.py UNGATED (its guard and why):\n" + "\n".join(late)
+    )
+
+
+def test_every_registry_entry_names_a_real_create():
+    """No dead or misspelt entry: each sanctioned migration creates the object as the kind
+    registered, and a recorded drop is in the migration named."""
+    problems: list[str] = []
+    for name, entry in sorted(UNGATED.items()):
+        for migration in entry.sanctioned_in:
+            path = MIGRATIONS_DIR / migration
+            created = path.is_file() and any(
+                n == name and k == entry.kind for n, k, _ in _creates(path.read_text(encoding="utf-8"))
+            )
+            if not created:
+                problems.append(f"  {migration} creates no {entry.kind} {name}")
+        if entry.dropped_in:
+            path = MIGRATIONS_DIR / entry.dropped_in
+            drop = re.compile(
+                rf"drop {_SQL_KIND[entry.kind]} (?:if exists )?(?:public\.)?{re.escape(name)}\b")
+            if not (path.is_file() and drop.search(
+                    re.sub(r"\s+", " ", _strip_comments(path.read_text(encoding="utf-8")).lower()))):
+                problems.append(f"  {entry.dropped_in} drops no {entry.kind} {name}")
+    assert not problems, "tests/_admin_gate_registry.py UNGATED is stale:\n" + "\n".join(problems)
+
+
+def test_live_allowlist_is_pinned():
+    """What the live sweep waives, pinned offline: a registry edit that changes it updates this list on purpose.
+    An 'acl' function (account_email reads emails) never belongs here: the sweep's function arm skips what
+    `authenticated` cannot EXECUTE, so waiving it would let a later grant on it pass unseen."""
+    assert sorted(live_allowlist()) == ["images_public", "llm_cost_hour_union", "location_jobs", "sold_coverage"]
 
 
 def test_no_write_grants_to_browser_roles():
@@ -514,6 +466,71 @@ def test_a_column_list_never_hides_a_write_grant():
     assert not _offending_write_grants(
         "grant update (seen_at, estimation_run_id) on public.notification_dispatches "
         "to authenticated;")
+
+
+def _split_privileges(text: str) -> list[tuple[str, frozenset[str]]]:
+    """`select, update (a, b)` -> [("select", {}), ("update", {"a", "b"})]: commas inside a column list stay put."""
+    out: list[tuple[str, frozenset[str]]] = []
+    depth, start = 0, 0
+    for i, ch in enumerate(text + ","):
+        depth += (ch == "(") - (ch == ")")
+        if ch == "," and depth == 0:
+            name, _, cols = text[start:i].partition("(")
+            out.append((name.strip(), frozenset(
+                c.strip().strip('"') for c in cols.rstrip(") ").split(",") if c.strip())))
+            start = i + 1
+    return out
+
+
+def _write_limited_grants(sql: str) -> list[str]:
+    """Browser write grants on a BROWSER_WRITE_COLUMNS table beyond its listed column UPDATEs."""
+    out: list[str] = []
+    for stmt in _statements(sql):
+        parsed = _parse_grant(stmt)
+        if not parsed:
+            continue
+        _privs, objs, roles = parsed
+        limited = [o for o in objs if o in BROWSER_WRITE_COLUMNS]
+        if not limited or not roles & set(_ROLES):
+            continue
+        collapsed = re.sub(r"\s+", " ", stmt.strip())
+        privs = re.match(r"grant (.+?) on ", collapsed.lower()).group(1)
+        for name, cols in _split_privileges(privs):
+            if name not in _WRITE_PRIVS:
+                continue
+            for obj in limited:
+                if name != "update" or not cols or not cols <= BROWSER_WRITE_COLUMNS[obj]:
+                    out.append(f"{name}{sorted(cols) if cols else ''} on {obj}: {collapsed}")
+    return out
+
+
+def test_the_run_tables_take_no_browser_write_beyond_their_columns():
+    """Migration 679 (rule 12): the API writes every run on the service role, the browser only a scenario.
+    RED by: a later migration re-granting INSERT, a table-wide UPDATE or another column on a run table."""
+    scanned = [p for p in _enforced_migrations() if _migration_number(p) >= BROWSER_WRITE_COLUMNS_SINCE]
+    assert any(_migration_number(p) == BROWSER_WRITE_COLUMNS_SINCE for p in scanned)
+    offenders = [f"  {p.name}: {o}" for p in scanned for o in _write_limited_grants(p.read_text(encoding="utf-8"))]
+    assert not offenders, (
+        "Migration(s) grant a browser role a write on a run table beyond tests/_tenant_registry.py's "
+        "BROWSER_WRITE_COLUMNS:\n" + "\n".join(offenders)
+    )
+
+
+def test_a_write_limited_grant_is_read_column_by_column():
+    assert not _write_limited_grants("grant update (scenario) on public.estimation_runs to authenticated;")
+    assert not _write_limited_grants("grant select on public.building_runs to authenticated;")
+    for sql in (
+        "grant update on public.estimation_runs to authenticated;",
+        "grant insert on estimation_runs to authenticated;",
+        "grant update (scenario, result) on estimation_runs to authenticated;",
+        "grant select, update (status) on table public.building_runs to authenticated;",
+        "grant all privileges on building_runs to authenticated;",
+        "grant update (scenario) on estimation_runs, building_runs to authenticated;",
+        'GRANT ALL ON TABLE "public"."estimation_runs" TO "authenticated";',
+        'grant insert on public.building_runs to "authenticated";',
+    ):
+        assert _write_limited_grants(sql), sql
+    assert _offending_write_grants('GRANT INSERT ON TABLE "public"."listings" TO "authenticated";')
 
 
 def test_new_base_tables_enable_rls():

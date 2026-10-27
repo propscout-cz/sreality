@@ -734,6 +734,16 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
             out.append((int(listing_id), row.get("ev_images"), row.get("ev_phash"),
                         row.get("ev_clip"), row.get("ev_tags")))
         return out[:int(p["limit"])]
+    if sql == S.RT_EVIDENCE_ACTIVE_SQL:
+        # Newest first decision first, NULLS LAST, then id — the statement's order.
+        active = [(row.get("first_decided_at"), int(listing_id), row)
+                  for (g, listing_id), row in db.rt_fp.items()
+                  if g == gen and row.get("ev_complete") is False and row.get("is_active")
+                  and (row.get("updated_at") is None or row["updated_at"]
+                       < db.now - timedelta(minutes=int(p["recheck_minutes"])))]
+        active.sort(key=lambda r: (r[0] is None, -(r[0].timestamp() if r[0] else 0.0), r[1]))
+        return [(listing_id, row.get("ev_images"), row.get("ev_phash"), row.get("ev_clip"),
+                 row.get("ev_tags")) for _stamp, listing_id, row in active][:int(p["limit"])]
     if sql == S.RT_EVIDENCE_PROBE_SQL:
         wanted = set(int(i) for i in p["ids"])
         counts: dict[int, list[int]] = {}
@@ -1089,9 +1099,20 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
                       and (gen, listing_id) not in db.rt_fp)
         return rows[:int(p["limit"])]
     # E976: the build's feed — live adverts first, then inactive, then no `listings` row; ids
-    # ascending within each; no id cursor.
+    # ascending within each; no id cursor. E979 in front: the operator's blocks first, by the
+    # category's place in their list inside them (an unlisted one after the listed).
     if sql == S.RT_SCOPE_BUILD_ENTRANTS_SQL:
         cut = db.now - timedelta(seconds=int(p["lag"]))
+        priority_blocks = [str(b) for b in (p.get("priority_blocks") or [])]
+        priority_cats = [str(c) for c in (p.get("priority_cats") or [])]
+
+        def category_rank(block: str, listing_id: int) -> int:
+            if block not in priority_blocks:
+                return 0
+            row = db.listings.get(listing_id) or {}
+            main, kind = row.get("category_main"), row.get("category_type")
+            cat = None if main is None or kind is None else f"{main}/{kind}"
+            return priority_cats.index(cat) + 1 if cat in priority_cats else len(priority_cats) + 1
 
         def _live(listing_id: int) -> bool:
             return bool((db.listings.get(listing_id) or {}).get("is_active"))
@@ -1115,13 +1136,14 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
                               if g == gen and key in keys))
             return 1 if visible else 2
 
-        rows = sorted(((listing_id, row["resolved_at"])
-                       for (g, _block, listing_id), row in db.scope_ids.items()
-                       if g == gen
-                       and (row["resolved_at"] is None or row["resolved_at"] <= cut)
-                       and (gen, listing_id) not in db.rt_fp),
-                      key=lambda r: (live_first(r[0]), r[0]))
-        return rows[:int(p["limit"])]
+        ranked = sorted(((0 if block in priority_blocks else 1, category_rank(block, listing_id),
+                          live_first(listing_id), listing_id, row["resolved_at"])
+                         for (g, block, listing_id), row in db.scope_ids.items()
+                         if g == gen
+                         and (row["resolved_at"] is None or row["resolved_at"] <= cut)
+                         and (gen, listing_id) not in db.rt_fp),
+                        key=lambda r: r[:4])
+        return [(r[3], r[4]) for r in ranked][:int(p["limit"])]
     if sql == S.RT_SCOPE_SCAN_STATE_SQL:
         out: dict[str, list[Any]] = {}
         window = db.now - timedelta(hours=int(p["hours"]))

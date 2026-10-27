@@ -105,7 +105,6 @@ def _drive_ceskereality(params: Mapping[str, Any], title: str) -> ScrapedListing
     return ceskereality_parser.parse_detail(
         _rows_html(rows, title=title),
         source_url="https://www.ceskereality.cz/prodej/byty/x-1234567.html",
-        category_main="byt", category_type="prodej",
     )
 
 
@@ -352,8 +351,7 @@ _PAGE_PARSERS: dict[str, Callable[[str], Any]] = {
         html, source_url="https://reality.bazos.cz/inzerat/123456789/x.php",
         category_main="byt", category_type="prodej"),
     "ceskereality": lambda html: ceskereality_parser.parse_detail(
-        html, source_url="https://www.ceskereality.cz/prodej/byty/x-1234567.html",
-        category_main="byt", category_type="prodej"),
+        html, source_url="https://www.ceskereality.cz/prodej/byty/x-1234567.html"),
     "idnes": lambda html: idnes_parser.parse_detail(
         html, source_url="https://reality.idnes.cz/detail/prodej/byt/x/0123456789abcdef/",
         category_main="byt", category_type="prodej"),

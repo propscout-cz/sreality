@@ -829,8 +829,8 @@ def _development_pair(a: Listing, b: Listing) -> bool:
     """Do BOTH bodies speak a new development's vocabulary? (`development.PROJECT_TERMS`.)"""
     from autodedup.development import PROJECT_TERMS
 
-    return all(any(term in fold(listing.description or "") for term in PROJECT_TERMS)
-               for listing in (a, b))
+    return all(any(term in body for term in PROJECT_TERMS)
+               for body in (fold(listing.description or "") for listing in (a, b)))
 
 
 def _column_rounding(a: Listing, b: Listing, settings: Settings) -> bool:

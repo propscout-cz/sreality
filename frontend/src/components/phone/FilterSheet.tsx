@@ -28,11 +28,11 @@ import {
   sidebarUnits,
 } from '@/components/Filters';
 import MarketGrowthFilter from '@/components/MarketGrowthFilter';
-import { Segmented } from '@/components/controls';
+import { PickButton } from '@/components/controls';
 import { LocationTypeahead, MultiselectChips } from '@/components/filter-controls';
 import { PortalFilterControl } from '@/components/filter-controls/PortalFilterControl';
 import BrokerFilterControl from '@/components/filter-controls/BrokerFilterControl';
-import { ApiError, createFilterPreset, updateFilterPreset } from '@/lib/api';
+import { ApiError, createFilterPreset, updateFilterPreset, type FilterPresetList } from '@/lib/api';
 import { browseKeys } from '@/lib/browseKeys';
 import { isNewestFirst, sortLabel, type FeedView } from '@/lib/feed';
 import { subtypeOptions } from '@/lib/filterLayout';
@@ -79,7 +79,7 @@ const COUNT_DEBOUNCE_MS = 350;
 
 const SORT_OPTIONS = CARD_SORTS.map((o) => ({ value: sortToParam(o.spec), label: o.label }));
 
-type PresetsResponse = { data: FilterPreset[]; total: number };
+type PresetsResponse = FilterPresetList;
 
 function useDebounced<T>(value: T, ms: number): T {
   const [settled, setSettled] = useState(value);
@@ -212,7 +212,7 @@ export default function FilterSheet({ filters, sort, base, preset, onApply, onCl
         type="button"
         onClick={() => apply()}
         aria-busy={counting || undefined}
-        className="h-11 min-w-0 flex-1 truncate rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-3 text-[15px] font-medium text-white active:bg-[var(--color-copper-2)]"
+        className="h-11 min-w-0 flex-1 truncate rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-3 text-[15px] font-medium text-[var(--color-on-copper)] active:bg-[var(--color-copper-2)]"
       >
         {showLabel}
       </button>
@@ -229,13 +229,19 @@ export default function FilterSheet({ filters, sort, base, preset, onApply, onCl
           open={open.has('sort')}
           onToggle={() => toggle('sort')}
         >
-          <Segmented
-            label="Řazení"
-            variant="solid"
-            options={SORT_OPTIONS}
-            value={sortToParam(draftSort)}
-            onChange={(v) => setDraftSort(parseSort(v))}
-          />
+          {/* Seventeen orders: a chip row, not the joined bar (system.md § Option groups). */}
+          <div role="group" aria-label="Řazení" className="flex flex-wrap gap-1">
+            {SORT_OPTIONS.map((o) => (
+              <PickButton
+                key={o.value}
+                variant="solid"
+                on={o.value === sortToParam(draftSort)}
+                onClick={() => setDraftSort(parseSort(o.value))}
+              >
+                {o.label}
+              </PickButton>
+            ))}
+          </div>
         </Row>
         {sheetBands(draft).map((band) => (
           <section key={band.title} aria-label={band.title}>
@@ -410,7 +416,7 @@ function PresetSheet({
       const data = prev.data.some((p) => p.id === row.id)
         ? prev.data.map((p) => (p.id === row.id ? row : p))
         : [...prev.data, row];
-      return { data, total: data.length };
+      return { ...prev, data, total: data.length };
     });
     void qc.invalidateQueries({ queryKey: filterPresetKeys.all });
     onSaved(row.id);
@@ -457,7 +463,7 @@ function PresetSheet({
                     autoFocus
                     disabled={busy}
                     onClick={() => update.mutate(preset)}
-                    className={`${BUTTON} border-[var(--color-copper)] bg-[var(--color-copper)] text-white`}
+                    className={`${BUTTON} border-[var(--color-copper)] bg-[var(--color-copper)] text-[var(--color-on-copper)]`}
                   >
                     Přepsat
                   </button>
@@ -492,7 +498,7 @@ function PresetSheet({
           <button
             type="submit"
             disabled={busy || !name.trim()}
-            className={`${BUTTON} h-11 border-[var(--color-copper)] bg-[var(--color-copper)] text-white`}
+            className={`${BUTTON} h-11 border-[var(--color-copper)] bg-[var(--color-copper)] text-[var(--color-on-copper)]`}
           >
             Uložit
           </button>

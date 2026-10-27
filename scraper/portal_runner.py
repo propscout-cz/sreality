@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from scraper import db, delist_policy, listing_write, portal_factory, vocabulary
+from scraper import db, delist_policy, listing_write, portal_factory, stop, vocabulary
 from scraper.portal import (
     PortalConfig,
     classify_index_sighting,
@@ -49,7 +49,7 @@ from scraper.portal import (
 )
 from scraper.portal_identity import Resolved
 from scraper.rate_ledger import DEFAULT_LEASE_N, build_rate_limiter
-from scraper.rate_limit import RateLimiter
+from scraper.rate_limit import OUR_REFUSALS, RateLimiter
 
 LOG = logging.getLogger("scraper.portal_runner")
 
@@ -64,7 +64,7 @@ DRAIN_CLAIM_CHUNK = 500
 PROBE_LEASE_N = 5
 
 # The by_category key of a walk's declared total, for every portal: the first portal's name for
-# it, kept because the live health matviews (migrations 233, 354) read it until wave 9.
+# it, kept because scripts/checks/scraping.py reads it and every stored walk carries it.
 DECLARED_TOTAL_KEY = "sreality_result_size"
 
 
@@ -104,6 +104,9 @@ class Portal(Protocol):
     index_rate: float
     # PortalLimits.price_change_min_pct: the walk hands it to reconcile_sightings.
     price_change_min_pct: float
+    # The code-only walk schedule scraper/jobs.py generates this portal's walk from; never a PortalLimits key.
+    walk_every_s: int
+    walk_timeout_s: int
     # Optional (read via getattr, default False): when on, the runner paces via
     # the cross-runtime portal_rate_state ledger instead of a process-local
     # limiter. Resolved from PortalLimits.shared_rate_limiter by each portal.
@@ -368,22 +371,21 @@ def _queue_presence_checks(
 
 def _queue_orphan_checks(
     portal: Portal, conn: Any, scopes: list[Scope], seen: set[Any],
-) -> tuple[int, int, int | None]:
+) -> tuple[int, int]:
     """Rule #3 made total: a walk whose EVERY unit reached the portal's end also nominates
     the active ads in no walked scope (a NULL label, an auction the walk does not ask for),
     against every id it saw. A sighting is label-blind and a unit's nomination is not, so
     without this an ad no unit covers is never checked once it leaves the index. An
     indexless portal's units cover nothing and its walk sees nothing: this is its whole
     nomination. Otherwise an empty seen set nominates nothing, as above. Returns (queued,
-    deferred, the orphans' active count)."""
+    deferred); the VERIFY line logs the orphans' active count."""
     indexless = bool(getattr(portal, "indexless", False))
     if not seen and not indexless:
         LOG.warning("VERIFY orphans skipped: the walk saw no listings")
-        return 0, 0, None
+        return 0, 0
     candidates, active_rows = db.orphan_candidates(
         conn, portal.source, scopes, seen or None, seen_key=getattr(portal, "seen_key", "native"))
-    return (*_enqueue_nominated(portal, conn, {}, candidates, active_rows, label="orphans"),
-            active_rows)
+    return _enqueue_nominated(portal, conn, {}, candidates, active_rows, label="orphans")
 
 
 def _enqueue_nominated(
@@ -404,7 +406,7 @@ def _enqueue_nominated(
 
 def _entry(
     cm: str | None, ct: str | None, *, declared: int | None, collected: int,
-    active_db: int | None, reached: bool, total_is_count: bool, upper_bound: bool,
+    reached: bool, total_is_count: bool, upper_bound: bool,
     counts: Mapping[str, int] | None = None, verified: tuple[int, int] = (0, 0),
 ) -> dict[str, Any]:
     """One scrape_runs.by_category entry: a walked unit's, or the orphans' (NULL labels, the
@@ -423,9 +425,7 @@ def _entry(
         "images_stored":        0,
         DECLARED_TOTAL_KEY:     declared,
         "collected":            collected,
-        "active_db":            active_db,
         "walk_reached_end":     reached,
-        "walk_coverage":        walk_coverage(collected, declared),
         "total_is_count":       total_is_count,
         "declared_is_upper_bound": upper_bound,
     }
@@ -516,9 +516,9 @@ def run_index_walk(
         for category, scope in zip(categories, scopes):
             if deadline_reached(deadline):
                 LOG.info(
-                    "INDEX time budget %.0fs reached; stopping cleanly before the "
-                    "next category (%d walked so far)",
-                    max_seconds, len(category_aggregates),
+                    "INDEX %s; stopping cleanly before the next category (%d walked so far)",
+                    "stop signal" if stop.requested() else f"time budget {max_seconds:.0f}s reached",
+                    len(category_aggregates),
                 )
                 break
             cm_text, ct_text = portal.category_labels(category)
@@ -528,23 +528,26 @@ def run_index_walk(
                     portal.walk_category(category, conn, dry_run, limiter, deadline)
                 )
             except Exception as exc:
-                LOG.exception(
-                    "CATEGORY walk failed cm=%s ct=%s: %s — skipping sweep",
-                    cm_text, ct_text, exc,
-                )
-                failed_categories += 1
+                if stop.requested():
+                    # Cut, not failed: a stop of OURS, so the category nominates nothing.
+                    LOG.warning("CATEGORY cut by the stop signal cm=%s ct=%s: %s",
+                                cm_text, ct_text, exc)
+                else:
+                    LOG.exception(
+                        "CATEGORY walk failed cm=%s ct=%s: %s — skipping sweep",
+                        cm_text, ct_text, exc,
+                    )
+                    failed_categories += 1
                 seen_ids, cat_counts, cat_result_size, cat_pages, reached_end = (
                     set(), {}, None, 0, False,
                 )
             total_pages += cat_pages
-            if conn is not None and run_id is not None:
-                db.bump_index_pages(conn, run_id, cat_pages)
             total_index += len(seen_ids)
             total_enqueued += cat_counts.get("enqueued", 0)
 
             # The numeric verdict is still computed every walk -- it just does
-            # not gate any more. It is logged as an alarm below and recorded in
-            # scrape_runs.by_category so the coverage rail keeps its input.
+            # not gate any more. It is logged as an alarm below and never stored;
+            # by_category keeps the two counts it is computed from.
             coverage = walk_coverage(len(seen_ids), cat_result_size)
 
             to_verify = deferred = 0
@@ -558,7 +561,7 @@ def run_index_walk(
                     # total, which includes listings filed under no kraj at all) would
                     # trip this on every category of every walk, and an alarm that is
                     # on by construction is not an alarm. Those portals emit their own
-                    # scoped one; the number is recorded in by_category either way.
+                    # scoped one; declared and collected are recorded in by_category either way.
                     emit = LOG.info if upper_bound else LOG.warning
                     emit(
                         "COVERAGE cm=%s ct=%s: the walk reached the portal's end but "
@@ -603,8 +606,10 @@ def run_index_walk(
 
             category_aggregates.append(_entry(
                 cm_text, ct_text, declared=cat_result_size, collected=len(seen_ids),
-                active_db=active_db, reached=bool(reached_end), total_is_count=total_is_count,
+                reached=bool(reached_end), total_is_count=total_is_count,
                 upper_bound=upper_bound, counts=cat_counts, verified=(to_verify, deferred)))
+            if conn is not None and run_id is not None:
+                db.bump_index_progress(conn, run_id, cat_pages, category_aggregates[-1])
 
         # Only a walk of the portal's WHOLE agenda knows an ad is in no unit: a dispatch that
         # narrowed it (bazos --sale-type/--category) leaves the rest of the portal unwalked.
@@ -613,18 +618,19 @@ def run_index_walk(
         if conn is not None and categories and ended == len(categories) and not getattr(
                 portal, "narrowed", False):
             try:
-                queued, deferred, orphan_rows = _queue_orphan_checks(
+                queued, deferred = _queue_orphan_checks(
                     portal, conn, [dict(k) for k in groups], walk_seen)
-                orphans = _entry(None, None, declared=0, collected=0, active_db=orphan_rows,
-                                 reached=True, total_is_count=total_is_count,
-                                 upper_bound=upper_bound, verified=(queued, deferred))
+                orphans = _entry(None, None, declared=0, collected=0, reached=True,
+                                 total_is_count=total_is_count, upper_bound=upper_bound,
+                                 verified=(queued, deferred))
             except Exception as exc:  # noqa: BLE001 - a nomination failure is not a walk failure
                 LOG.exception("VERIFY orphans failed: %s -- nothing nominated this walk", exc)
                 failed_categories += 1
-                orphans = _entry(None, None, declared=None, collected=0, active_db=None,
-                                 reached=False, total_is_count=total_is_count,
-                                 upper_bound=upper_bound)
+                orphans = _entry(None, None, declared=None, collected=0, reached=False,
+                                 total_is_count=total_is_count, upper_bound=upper_bound)
             category_aggregates.append(orphans)
+            if run_id is not None:
+                db.bump_index_progress(conn, run_id, 0, orphans)
 
         LOG.info(
             "INDEX total=%d pages=%d enqueued=%d",
@@ -1000,7 +1006,7 @@ def run_detail_drain(
     # Persist the counts delta since the last bump onto the scrape_runs row, so a
     # crash/SIGKILL keeps what committed. Single accumulator (counts) + delta means
     # no double-count and the straddling residual buffer is caught by the final
-    # bump. O(chunks), like bump_index_pages — never per-row.
+    # bump. O(chunks), like bump_index_progress — never per-row.
     last_bumped = dict.fromkeys(counts, 0)
 
     def _persist_counts() -> None:
@@ -1041,8 +1047,9 @@ def run_detail_drain(
         while max_claims is None or total_claimed < max_claims:
             if deadline_reached(deadline):
                 LOG.info(
-                    "DRAIN time budget %ss reached at claimed=%d; finalizing cleanly",
-                    max_seconds, total_claimed,
+                    "DRAIN %s at claimed=%d; finalizing cleanly",
+                    "stop signal" if stop.requested() else f"time budget {max_seconds}s reached",
+                    total_claimed,
                 )
                 break
             chunk = claim_chunk
@@ -1125,10 +1132,11 @@ def run_detail_drain(
                     conn, lambda c: db.release_claims(c, portal.source, deferred),
                     reconnect=portal.connect_drain, label="drain.release",
                 )
-                if limiter.refused_reason == "deadline":
+                if limiter.refused_reason in OUR_REFUSALS:
                     LOG.info(
-                        "DRAIN time budget reached mid-chunk; %d claims handed back "
-                        "source=%s", len(deferred), portal.source)
+                        "DRAIN %s mid-chunk; %d claims handed back source=%s",
+                        "stop signal" if limiter.refused_reason == "stop" else "time budget reached",
+                        len(deferred), portal.source)
                 else:
                     LOG.warning(
                         "DRAIN stopped source=%s: the shared rate budget refused the run; "
@@ -1177,8 +1185,8 @@ def run_detail_drain(
         "listings_inactive":    counts["gone"],
         "images_discovered":    counts["images_discovered"],
         "errors":               counts["errors"],
-        "budget_refused":       int(limiter.refused and limiter.refused_reason != "deadline"),
-        "deadline_stopped":     int(limiter.refused_reason == "deadline"),
+        "budget_refused":       int(limiter.refused and limiter.refused_reason not in OUR_REFUSALS),
+        "deadline_stopped":     int(limiter.refused_reason in OUR_REFUSALS),
         "by_category":          [],
     }
     return (0, scrape_agg)
@@ -1201,7 +1209,7 @@ def _finalize_run(
                 listings_updated=agg.get("listings_updated", 0),
                 listings_inactive=agg.get("listings_inactive", 0),
                 images_discovered=agg.get("images_discovered", 0),
-                images_stored=0,  # bytes are uploaded async by images.yml, not here
+                images_stored=0,  # bytes are uploaded async by the worker's images lane, not here
                 errors=agg.get("errors", 0),
                 by_category=agg.get("by_category", []),
                 # The drain persists its counters per chunk (crash-survivable);
@@ -1250,8 +1258,17 @@ def run_phase(
 
     The contract is now explicit: **`ended_at` means the phase completed.** A
     crash bumps `errors` and deliberately leaves `ended_at` NULL before
-    re-raising, so a crashed run lights up both arms instead of neither.
+    re-raising, so a crashed index walk never reads as a finished walk to the
+    `scraping` or `delisting` check. Once the stuck sweep stamps it, only the
+    categories it finished (each written as it ended, `db.bump_index_progress`)
+    count; the cells of the rest keep aging. No check reads `errors`.
+
+    A stop signal (SIGTERM / SIGINT, `scraper.stop`) is the deadline arriving early:
+    the phase ends after the request in hand, is finalized like any deadline stop
+    (`ended_at` set, no error), and returns `stop.EXIT_CODE`, so a main's next phase
+    never starts and the process exits with the code a stopped job reports.
     """
+    stop.install()
     run_id: int | None = None
     if not dry_run:
         try:
@@ -1273,4 +1290,8 @@ def run_phase(
     else:
         if not dry_run:
             _finalize_run(run_id, agg, drain=runner is run_detail_drain)
+    if stop.requested():
+        LOG.warning("PHASE %s stopped by a signal (source=%s); finalized, exiting %d",
+                    run_type, portal.source, stop.EXIT_CODE)
+        return stop.EXIT_CODE
     return rc

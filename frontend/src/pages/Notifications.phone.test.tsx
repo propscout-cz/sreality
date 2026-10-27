@@ -39,7 +39,9 @@ const row: WatchdogDispatch = {
   collection_name: 'Vinohrady investice',
   property_id: 999,
   change_kind: 'price_drop',
-  message: null,
+  actor_email: null,
+  share_name: null,
+  share_mode: null,
   share_kind: null,
   share_ref: null,
   dispatched_at: '2026-10-21T10:00:00+00:00',
@@ -76,7 +78,9 @@ const share: WatchdogDispatch = {
   price_czk: null,
   prev_price_czk: null,
   trigger_price_czk: null,
-  message: 'owner@example.com shared the collection "Vinohrady" with you',
+  actor_email: 'owner@example.com',
+  share_name: 'Vinohrady',
+  share_mode: null,
 };
 
 const originalMatchMedia = window.matchMedia;
@@ -151,9 +155,11 @@ describe('<Notifications> at phone width', () => {
     expect(document.title).not.toContain('(2)');
   });
 
-  it('keeps every control of the desktop page, tab names in English', async () => {
+  it('keeps every control of the desktop page, filter names in English', async () => {
     const { container } = renderPhone();
     expect(await screen.findByRole('link', { name: /^Price drop Praha 2/ })).toHaveAttribute('href', '/property/999');
+    /* In place, not a new tab: that would leave the installed app. */
+    expect(screen.getByRole('link', { name: /^Price drop Praha 2/ })).not.toHaveAttribute('target');
     for (const name of ['Monitoring', 'Watchdogs', 'Shared', 'Unread', 'Mark all read']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument();
     }
@@ -171,10 +177,26 @@ describe('<Notifications> at phone width', () => {
     /* A row turns into two lines: chip and time, then what it is about. */
     expect(rowLink.className).toContain('max-md:flex-wrap');
     expect(rowLink.className).toContain('max-md:px-4');
-    /* The frame's header names the page and its bell carries the count. */
-    expect(screen.getByText('Notifications', { selector: 'p' }).className).toContain('max-md:hidden');
-    for (const name of ['All', 'Unread']) {
-      expect(screen.getAllByRole('button', { name })[0].className).toContain('max-md:h-9');
+    /* The frame's header names the page and its bell carries the count; the
+     * page adds no label above its title. */
+    expect(screen.queryByText('Notifications', { selector: 'p' })).toBeNull();
+  });
+
+  /* Operator ruling 2026-10-27: a phone screen's pick-one is the joined bar in the
+   * phone tone — chosen = ink on the inset well, never copper (colour on the phone
+   * only ever means a stage). */
+  it('draws the source and read filters as phone-tone joined bars', async () => {
+    renderPhone();
+    await screen.findByRole('link', { name: /^Price drop Praha 2/ });
+    for (const name of ['Source', 'Read state']) {
+      const bar = screen.getByRole('group', { name });
+      const track = bar.firstElementChild as HTMLElement;
+      expect(track).toHaveClass('h-8', 'border-[var(--color-rule-strong)]');
+      const all = within(bar).getByRole('button', { name: 'All' });
+      expect(all.parentElement).toBe(track);
+      expect(all).toHaveAttribute('aria-pressed', 'true');
+      expect(all).toHaveClass('bg-[var(--color-inset)]', 'text-[var(--color-ink)]');
+      for (const b of within(bar).getAllByRole('button')) expect(b.className).not.toContain('copper');
     }
   });
 

@@ -34,6 +34,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from 'react';
 
+import { SegmentedBar } from '@/components/controls';
 import ErrorBanner from '@/components/ErrorBanner';
 import InfiniteSentinel from '@/components/InfiniteSentinel';
 import Panel from '@/components/Panel';
@@ -80,6 +81,7 @@ const TD = 'py-1.5 pr-3 align-top';
 const NUM = 'py-1.5 pr-3 text-right font-mono tabular-nums';
 const ROW = 'border-t border-[var(--color-rule-soft)]';
 
+/* The pick-several chip (portal, type, why); every pick-one row is a SegmentedBar. */
 function Chip({
   on,
   onClick,
@@ -135,6 +137,23 @@ const STATE_NOTE: Record<PinAuditState, string> = {
   pending: 'není problém, systém je zatím nestihl zpracovat',
   unresolved: 'toto je problém',
 };
+
+const STATUS_OPTIONS: ReadonlyArray<{ value: PinAuditFilters['status']; label: string }> = [
+  { value: 'all', label: 'Vše' },
+  { value: 'active', label: 'Běží' },
+  { value: 'delisted', label: 'Stažené' },
+];
+
+const SIBLING_OPTIONS: ReadonlyArray<{ value: PinAuditFilters['sibling']; label: string }> = [
+  { value: 'all', label: 'Vše' },
+  { value: 'yes', label: 'Má' },
+  { value: 'no', label: 'Nemá' },
+];
+
+const SORT_OPTIONS = [
+  { field: 'last_seen_at' as const, label: 'naposledy viděno' },
+  { field: 'first_seen_at' as const, label: 'poprvé viděno' },
+];
 
 const QUALITY_SHORT: Record<PinAuditQuality, string> = {
   active_no_claims: 'běží · nebylo z čeho',
@@ -421,27 +440,21 @@ export default function LocationPinAudit() {
       {err ? <ErrorBanner message={err.message} /> : null}
 
       <div className="mt-6 grid gap-5">
-        <div
-          className="flex flex-wrap items-center gap-2"
-          role="group"
-          aria-label="Skupina inzerátů"
-          data-testid="pin-audit-state-toggle"
-        >
-          {PIN_AUDIT_STATES.map((st) => (
-            <Chip
-              key={st}
-              on={filters.state === st}
-              /* Switching state drops the quality chips with it: they explain a
-               * verdict, and under „čeká na zpracování“ there is none. */
-              onClick={() =>
-                setFilters((f) =>
-                  f.state === st ? f : { ...f, state: st, qualities: [] },
-                )
-              }
-            >
-              {STATE_LABEL[st]} ({fmtCount(stateTotals[st])})
-            </Chip>
-          ))}
+        <div className="flex flex-wrap items-center gap-2" data-testid="pin-audit-state-toggle">
+          <SegmentedBar
+            hug
+            label="Skupina inzerátů"
+            options={PIN_AUDIT_STATES.map((st) => ({
+              value: st,
+              label: `${STATE_LABEL[st]} (${fmtCount(stateTotals[st])})`,
+            }))}
+            value={filters.state}
+            /* Switching state drops the quality chips with it: they explain a
+             * verdict, and under „čeká na zpracování“ there is none. */
+            onChange={(st) =>
+              setFilters((f) => (f.state === st ? f : { ...f, state: st, qualities: [] }))
+            }
+          />
           <span className="text-[0.78rem] text-[var(--color-ink-3)]">
             {STATE_NOTE[filters.state]}
           </span>
@@ -598,32 +611,28 @@ export default function LocationPinAudit() {
               <p className="text-[0.7rem] uppercase tracking-[0.1em] text-[var(--color-ink-3)]">
                 Stav inzerátu
               </p>
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {(['all', 'active', 'delisted'] as const).map((s) => (
-                  <Chip
-                    key={s}
-                    on={filters.status === s}
-                    onClick={() => setFilters((f) => ({ ...f, status: s }))}
-                  >
-                    {s === 'all' ? 'Vše' : s === 'active' ? 'Běží' : 'Stažené'}
-                  </Chip>
-                ))}
+              <div className="mt-1.5">
+                <SegmentedBar
+                  hug
+                  label="Stav inzerátu"
+                  options={STATUS_OPTIONS}
+                  value={filters.status}
+                  onChange={(status) => setFilters((f) => ({ ...f, status }))}
+                />
               </div>
             </div>
             <div>
               <p className="text-[0.7rem] uppercase tracking-[0.1em] text-[var(--color-ink-3)]">
                 Jiný inzerát téže nemovitosti má polohu
               </p>
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {(['all', 'yes', 'no'] as const).map((v) => (
-                  <Chip
-                    key={v}
-                    on={filters.sibling === v}
-                    onClick={() => setFilters((f) => ({ ...f, sibling: v }))}
-                  >
-                    {v === 'all' ? 'Vše' : v === 'yes' ? 'Má' : 'Nemá'}
-                  </Chip>
-                ))}
+              <div className="mt-1.5">
+                <SegmentedBar
+                  hug
+                  label="Jiný inzerát téže nemovitosti má polohu"
+                  options={SIBLING_OPTIONS}
+                  value={filters.sibling}
+                  onChange={(sibling) => setFilters((f) => ({ ...f, sibling }))}
+                />
               </div>
             </div>
             <div>
@@ -646,31 +655,24 @@ export default function LocationPinAudit() {
         >
           <div className="mb-2 flex items-center gap-3 text-[0.78rem] text-[var(--color-ink-3)]">
             <span>Řadit podle:</span>
-            {(
-              [
-                { field: 'last_seen_at' as const, label: 'naposledy viděno' },
-                { field: 'first_seen_at' as const, label: 'poprvé viděno' },
-              ]
-            ).map((o) => (
-              <Chip
-                key={o.field}
-                on={sort.field === o.field}
-                onClick={() =>
-                  setSort((s) =>
-                    s.field === o.field
-                      ? { ...s, direction: s.direction === 'desc' ? 'asc' : 'desc' }
-                      : { field: o.field, direction: 'desc' },
-                  )
-                }
-              >
-                {o.label}
-                {sort.field === o.field
-                  ? sort.direction === 'desc'
-                    ? ' ↓'
-                    : ' ↑'
-                  : ''}
-              </Chip>
-            ))}
+            {/* A click on the lit order flips its direction; another order starts newest first. */}
+            <SegmentedBar
+              hug
+              label="Řadit podle"
+              options={SORT_OPTIONS.map((o) => ({
+                value: o.field,
+                label:
+                  sort.field === o.field ? `${o.label} ${sort.direction === 'desc' ? '↓' : '↑'}` : o.label,
+              }))}
+              value={sort.field}
+              onChange={(field) =>
+                setSort((s) =>
+                  s.field === field
+                    ? { ...s, direction: s.direction === 'desc' ? 'asc' : 'desc' }
+                    : { field, direction: 'desc' },
+                )
+              }
+            />
           </div>
 
           <div className="overflow-x-auto">

@@ -43,51 +43,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": 15,
       "permissions": "contents: write",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/aggregate_condition_markers.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/aggregate_condition_markers.yml"
-    },
-    {
-      "filename": "apply_listings_pk_swap.yml",
-      "name": "R2 GATE 1 — listings PK swap",
-      "description": "The destructive step of the listing-identity refactor: swaps listings' PRIMARY KEY from sreality_id to the surrogate id (runbook § 6). Catalog-only — no table scan, no data rewrite — and reversible in place while zero NULL sreality_id rows exist (see scripts/apply_listings_pk_swap.py).",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "mode",
-          "description": "preflight (safe, read-only) | window (THE SWAP) | resume-cron | rollback",
-          "required": true,
-          "type": "choice",
-          "default": "preflight",
-          "options": [
-            "preflight",
-            "window",
-            "resume-cron",
-            "rollback"
-          ]
-        },
-        {
-          "name": "confirm",
-          "description": "Type APPLY to arm window/rollback. Ignored for preflight.",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_SESSION_URL",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "apply-listings-pk-swap",
-      "cancelInProgress": false,
-      "timeoutMinutes": 30,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/apply_listings_pk_swap.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/apply_listings_pk_swap.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/aggregate_condition_markers.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/aggregate_condition_markers.yml"
     },
     {
       "filename": "apply_migration.yml",
@@ -132,123 +89,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 60,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/apply_migration.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/apply_migration.yml"
-    },
-    {
-      "filename": "apply_r2_constraints.yml",
-      "name": "Apply R2 constraints (indexes + FKs)",
-      "description": "Phase B of the listing-identity refactor (docs/design/listing-identity-r2-pk-swap-runbook.md § 3). Indexes each surrogate column the backfill filled, then mirrors the legacy FK onto it (NOT VALID -> VALIDATE) wherever the legacy column had one.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "table",
-          "description": "Single carrier table (blank = all)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "Report what each column still needs and exit",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_SESSION_URL",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "apply-r2-constraints",
-      "cancelInProgress": false,
-      "timeoutMinutes": 180,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/apply_r2_constraints.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/apply_r2_constraints.yml"
-    },
-    {
-      "filename": "apply_r2_phase_d_prep.yml",
-      "name": "Apply R2 Phase D prep (NOT NULL relax, small PK swaps, listings indexes)",
-      "description": "Phase D of the listing-identity refactor (docs/design/listing-identity-r2-pk-swap-runbook.md § 5, steps 2-5). Drops NOT NULL on every R2_CARRIERS legacy column still enforcing it, swaps estimation_cohort_entries's PK onto (estimation_run_id, listing_id), and pre-builds the two indexes + id NOT NULL that Gate 1's PK swap on `listings` itself will need. All additive/reversible — no writer-deploy dependency (see scripts/apply_r2_phase_d_prep.py's docstring for why dirty_broker_listings is NOT included here).",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "dry_run",
-          "description": "Report what each step still needs and exit",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_SESSION_URL",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "apply-r2-phase-d-prep",
-      "cancelInProgress": false,
-      "timeoutMinutes": 180,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/apply_r2_phase_d_prep.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/apply_r2_phase_d_prep.yml"
-    },
-    {
-      "filename": "apply_r2_unique_guards.yml",
-      "name": "Apply R2 unique guards (indexes + NOT NULL checks)",
-      "description": "Phase B2 of the listing-identity refactor (docs/design/listing-identity-r2-pk-swap-runbook.md § 3, items 4-5). Builds new unique indexes on the surrogate listing_id column(s) alongside the still-live legacy sreality_id-keyed ones, then adds a validated CHECK (listing_id IS NOT NULL) wherever the legacy column is itself NOT NULL.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "table",
-          "description": "Single carrier table (blank = all)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "Report what each guard still needs and exit",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_SESSION_URL",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "apply-r2-unique-guards",
-      "cancelInProgress": false,
-      "timeoutMinutes": 180,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/apply_r2_unique_guards.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/apply_r2_unique_guards.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/apply_migration.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/apply_migration.yml"
     },
     {
       "filename": "autodedup.yml",
@@ -293,77 +135,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 300,
       "permissions": "contents: read, actions: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/autodedup.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/autodedup.yml"
-    },
-    {
-      "filename": "backfill_child_listing_ids.yml",
-      "name": "Backfill child listing_id (R2)",
-      "description": "One-off, dispatch-only backfill for the R2 leg of the listing-identity refactor (docs/design/listing-identity-r2-pk-swap-runbook.md § 2 A4). Fills the surrogate listings.id onto the 22 carrier tables migrations 320-325 added columns to, for rows written BEFORE dual-write shipped. No re-fetch, no LLM, no snapshots.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "table",
-          "description": "Single carrier table (blank = all 22)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "batch",
-          "description": "Cursor-window width for id-cursor carriers",
-          "required": false,
-          "type": "string",
-          "default": "50000",
-          "options": null
-        },
-        {
-          "name": "max_seconds",
-          "description": "Wall-clock budget in seconds (blank = no budget)",
-          "required": false,
-          "type": "string",
-          "default": "4800",
-          "options": null
-        },
-        {
-          "name": "repair",
-          "description": "Also overwrite surrogates that are set but WRONG",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        },
-        {
-          "name": "dry_run",
-          "description": "Report what each carrier needs and exit",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        }
-      ],
-      "secrets": [
-        "SCRAPE_CHAIN_TOKEN",
-        "SUPABASE_DB_SESSION_URL",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "backfill-child-listing-ids",
-      "cancelInProgress": false,
-      "timeoutMinutes": 90,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/backfill_child_listing_ids.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/backfill_child_listing_ids.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/autodedup.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/autodedup.yml"
     },
     {
       "filename": "backfill_idnes_brokers.yml",
@@ -402,45 +175,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 60,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/backfill_idnes_brokers.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/backfill_idnes_brokers.yml"
-    },
-    {
-      "filename": "backfill_render_score.yml",
-      "name": "Backfill image render_score (one-shot, from stored embeddings)",
-      "description": "One-shot corrective for migration 239: the clip_tag backfill skips already-tagged images, so images tagged before the render axis shipped have render_score NULL (the listing-detail render badge is hidden and the byt render exclusion is inert on them). This re-scores the render-vs-photo axis from each image's STORED CLIP embedding — no R2 download, no image re-inference — so it is fast (vector dot products). Horizontally sharded into 4 jobs (image_id %% 4). Resumable + idempotent (a scored row drops out of the render_score-IS-NULL partial index, migration 240). Dispatch-only. Secret: SUPABASE_DB_URL (no R2 needed).",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_seconds",
-          "description": "Per-shard wall-clock budget",
-          "required": false,
-          "type": "string",
-          "default": "3000",
-          "options": null
-        },
-        {
-          "name": "limit",
-          "description": "Per-shard cap (0 = until time budget)",
-          "required": false,
-          "type": "string",
-          "default": "0",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": null,
-      "cancelInProgress": null,
-      "timeoutMinutes": 60,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/backfill_render_score.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/backfill_render_score.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/backfill_idnes_brokers.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/backfill_idnes_brokers.yml"
     },
     {
       "filename": "backfill_unit_price_masquerade.yml",
@@ -524,13 +260,13 @@
       "cancelInProgress": false,
       "timeoutMinutes": 350,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/backfill_unit_price_masquerade.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/backfill_unit_price_masquerade.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/backfill_unit_price_masquerade.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/backfill_unit_price_masquerade.yml"
     },
     {
       "filename": "backup_before_drop.yml",
       "name": "Ops: back up what a destructive migration drops",
-      "description": "Dumps what a DROP TABLE / DROP COLUMN migration is about to destroy, BEFORE it is applied (CLAUDE.md rule 1 / the `database` skill: back up first, then the operator's explicit OK). Each target is `table` (pg_dump of the whole relation) or `table:key,col[,col...]` (a CSV of the key plus those columns, rows where one of them is set), uploaded to R2 under backups/<label>/<UTC date>/ and read back. Never a workflow artifact: the repository is public. workflow_dispatch only; safe to re-run (a same-day re-run overwrites).",
+      "description": "Dumps what a DROP TABLE / DROP COLUMN migration is about to destroy, BEFORE it is applied (CLAUDE.md rule 1 / the `database` skill: back up first, then the operator's explicit OK). Each target is `table` (pg_dump of the whole relation) or `table:key,col[,col...]` (a CSV of the key plus those columns, rows where one of them is set), uploaded to R2 under backups/<label>/<UTC date>/ and read back. Never a workflow artifact: an artifact is not private storage and it expires. workflow_dispatch only; safe to re-run (a same-day re-run overwrites).",
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -547,8 +283,16 @@
         },
         {
           "name": "targets",
-          "description": "Space-separated: `table` or `table:key,col[,col...]`",
-          "required": true,
+          "description": "Space-separated: `table` or `table:key,col[,col...]` (or leave empty and name artifacts)",
+          "required": false,
+          "type": "string",
+          "default": null,
+          "options": null
+        },
+        {
+          "name": "artifacts",
+          "description": "Space-separated `<run-id>:<artifact-name>`: Actions artifacts to archive in R2 as their zip",
+          "required": false,
           "type": "string",
           "default": null,
           "options": null
@@ -565,76 +309,14 @@
       "concurrencyGroup": "backup-before-drop",
       "cancelInProgress": false,
       "timeoutMinutes": 30,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/backup_before_drop.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/backup_before_drop.yml"
-    },
-    {
-      "filename": "bazos_detail_drain.yml",
-      "name": "Scraping: Bazos detail drain",
-      "description": "The slow half of the bazos cadence split (architectural rule #19, like sreality/idnes). Claims a bounded slice of listing_detail_queue (source='bazos', enqueued by bazos_index_walk.yml), fetches each ad's detail page on a rate-limited worker pool, parses it (the real category comes off the page breadcrumb), and writes via listing_write.write_listings (the one listing write; new rows land property_id NULL and the straggler-attach births the singleton). Records run_type='detail' (index_pages=0). The drain records image-URL rows; the shared images.yml job downloads the bytes to R2.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "45 * * * *",
-          "human": "Every hour at :45"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_seconds",
-          "description": "wall-clock drain budget, finalizes cleanly before timeout (blank = 2400 = 40 min)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "max_detail",
-          "description": "hard cap on ads claimed this run (blank = none; the time budget governs)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "concurrent detail-fetch workers (blank = 2)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "rate",
-          "description": "global detail-fetch rate cap, req/s (blank = 0.6)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "bazos-detail-drain",
-      "cancelInProgress": false,
-      "timeoutMinutes": 50,
-      "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/bazos_detail_drain.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/bazos_detail_drain.yml"
+      "permissions": "contents: read, actions: read",
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/backup_before_drop.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/backup_before_drop.yml"
     },
     {
       "filename": "bazos_index_walk.yml",
       "name": "Scraping: Bazos index walk",
-      "description": "The fast half of the bazos cadence split (architectural rule #19, like sreality/idnes). Walks the ENTIRE index of every configured scope (no --max-pages), touch_listings bumps last_seen on still-listed ads, presence nomination (rule #3) nominates unseen ones for a page check once the walk reached the portal's end (source-scoped and throttled; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='bazos'). No detail fetch — the drain (bazos_detail_drain.yml) consumes the queue. Records run_type='index'.",
+      "description": "The fast half of the bazos cadence split (architectural rule #19, like sreality/idnes). Walks the ENTIRE index of every configured scope (no --max-pages), touch_listings bumps last_seen on still-listed ads, presence nomination (rule #3) nominates unseen ones for a page check once the walk reached the portal's end (source-scoped and throttled; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='bazos'). No detail fetch — the realtime worker's drain lane consumes the queue. Records run_type='index'.",
       "manual": true,
       "schedules": [
         {
@@ -723,33 +405,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 130,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/bazos_index_walk.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/bazos_index_walk.yml"
-    },
-    {
-      "filename": "broker_resolution.yml",
-      "name": "Broker resolution (incremental)",
-      "description": "Broker intelligence: the THROTTLED BACKSTOP of the incremental identity resolver (Broker Unify W3). The primary host is the realtime worker's broker_maintenance lane; both call THE same driver, scripts.resolve_brokers.run_incremental_pass — drain the dirty_broker_listings queue until empty (new + content-changed listings enqueued at write time by the detail writers, plus delist/revive flips mirrored in by the property drain), attribute to per-source broker_identities, ensure firms, attach singleton canonical brokers, recompute ONLY the affected brokers' rollups + memberships (one merged statement), and republish the leaderboard matview CONCURRENTLY when its derived_artifacts stamp is older than ~an hour. So this cron matters exactly when the worker is down. O(changes); source-agnostic maintenance job. Shares the broker-resolution concurrency group with the full sweep so the two never mutate at once.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "*/10 * * * *",
-          "human": "Every 10 minutes"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "broker-resolution-incremental",
-      "cancelInProgress": false,
-      "timeoutMinutes": 20,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/broker_resolution.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/broker_resolution.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/bazos_index_walk.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/bazos_index_walk.yml"
     },
     {
       "filename": "build-extension.yml",
@@ -776,76 +433,13 @@
       "cancelInProgress": null,
       "timeoutMinutes": null,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/build-extension.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/build-extension.yml"
-    },
-    {
-      "filename": "ceskereality_detail_drain.yml",
-      "name": "Scraping: Českéreality detail drain",
-      "description": "The slow half of the ceskereality cadence split (architectural rule #19, like sreality/idnes). Claims a bounded slice of listing_detail_queue (source='ceskereality', enqueued by ceskereality_index_walk.yml), fetches each listing page on a rate-limited worker pool, parses it to a ScrapedListing, and writes via listing_write.write_listings (the one listing write; new rows land property_id NULL and the straggler-attach births the singleton). The per-listing category is derived from its detail URL. Records run_type='detail' (index_pages=0). The drain records image-URL rows; the shared images.yml job downloads the bytes to R2.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "50 * * * *",
-          "human": "Every hour at :50"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_seconds",
-          "description": "wall-clock drain budget, finalizes cleanly before timeout (blank = 2400 = 40 min)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "max_detail",
-          "description": "hard cap on listings claimed this run (blank = none; the time budget governs)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "concurrent detail-fetch workers (blank = 2)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "rate",
-          "description": "global detail-fetch rate cap, req/s (blank = 0.7, polite)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SCRAPER_PROXY_URL",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "ceskereality-detail-drain",
-      "cancelInProgress": false,
-      "timeoutMinutes": 50,
-      "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/ceskereality_detail_drain.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/ceskereality_detail_drain.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/build-extension.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/build-extension.yml"
     },
     {
       "filename": "ceskereality_index_walk.yml",
       "name": "Scraping: Českéreality index walk",
-      "description": "The fast half of the ceskereality cadence split (architectural rule #19, like sreality/idnes). Walks the ENTIRE index of every configured category (no --max-pages), touch_listings bumps last_seen on still-listed ids, presence nomination (rule #3) nominates unseen ones for a page check once the walk reached the portal's end (source-scoped; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='ceskereality'). No detail fetch — the drain (ceskereality_detail_drain.yml) consumes the queue. Records run_type='index'.",
+      "description": "The fast half of the ceskereality cadence split (architectural rule #19, like sreality/idnes). Walks the ENTIRE index of every configured category (no --max-pages), touch_listings bumps last_seen on still-listed ids, presence nomination (rule #3) nominates unseen ones for a page check once the walk reached the portal's end (source-scoped; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='ceskereality'). No detail fetch — the realtime worker's drain lane consumes the queue. Records run_type='index'.",
       "manual": true,
       "schedules": [
         {
@@ -894,108 +488,13 @@
       "cancelInProgress": false,
       "timeoutMinutes": 180,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/ceskereality_index_walk.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/ceskereality_index_walk.yml"
-    },
-    {
-      "filename": "clear_unmeasured_fills.yml",
-      "name": "Ops: clear the deleted enrichment lane's unmeasured fills (field-capture W7, step iii)",
-      "description": "Runs scripts/clear_unmeasured_enrichment_fills.py — the operator-approved destructive step (iii) of the field-capture program: blank the `floor` values and the silence-based `false` booleans the DELETED description-enrichment lane wrote on bazos rows and never measured (its own docstring has the counts: ~21k cells, sixteen on active listings). dry_run=true (the default) only counts. The real write needs dry_run=false AND confirm=APPLY, and the script REFUSES to blank a cell it has not first copied into the backup table (listing_id, column_name, value) — a proportionate backup for a table too hot for a data-only pg_dump. Same guard shape as reparse.yml.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "columns",
-          "description": "Comma-separated subset of floor,has_lift,has_balcony,has_parking (blank = all four)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "true = count only. false = write (needs confirm=APPLY).",
-          "required": false,
-          "type": "boolean",
-          "default": "true",
-          "options": null
-        },
-        {
-          "name": "confirm",
-          "description": "Type APPLY to arm the real write. Ignored when dry_run=true.",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "backup_table",
-          "description": "Where every blanked cell is copied first (a plain identifier).",
-          "required": false,
-          "type": "string",
-          "default": "listings_w7_clear_backup",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "reparse",
-      "cancelInProgress": false,
-      "timeoutMinutes": 60,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/clear_unmeasured_fills.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/clear_unmeasured_fills.yml"
-    },
-    {
-      "filename": "clip_retag.yml",
-      "name": "Dedup — CLIP re-tag from stored embeddings (sharded)",
-      "description": "Re-runs the CLIP zero-shot tagging over ALREADY-tagged images from their STORED embeddings (image_clip_embeddings) — NO R2 download, NO image re-inference, just the taxonomy's text anchors dotted with each stored vector. How a TAXONOMY change (new logical tags, sharpened anchors) reaches the back catalogue cheaply; new / not-yet-tagged images go through clip_tag.yml, which loads the same live taxonomy.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "20 * * * *",
-          "human": "Every hour at :20"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_seconds",
-          "description": "Per-shard wall-clock budget",
-          "required": false,
-          "type": "string",
-          "default": "3000",
-          "options": null
-        },
-        {
-          "name": "limit",
-          "description": "Per-shard cap (0 = until time budget)",
-          "required": false,
-          "type": "string",
-          "default": "0",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "clip-retag",
-      "cancelInProgress": false,
-      "timeoutMinutes": 60,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/clip_retag.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/clip_retag.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/ceskereality_index_walk.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/ceskereality_index_walk.yml"
     },
     {
       "filename": "clip_tag.yml",
       "name": "Dedup — CLIP image tagging (sharded)",
-      "description": "Backfills image_clip_tags + image_clip_embeddings: the self-hosted CLIP zero-shot tag per stored image (free replacement for the paid room classifier on the coarse dedup-relevant tags, and the FIRST tagger for dum/pozemek/komercni). Runs GLOBAL full-scale by default (the Středočeský priority drain is complete; pass region_id on dispatch to re-prioritise a kraj). ACTIVE-listing images first; idempotent + resumable (a tagged image drops out of the next select), so once caught up the hourly runs are cheap no-ops that just keep pace with new inflow. Horizontally sharded into 4 parallel jobs (image_id %% 4), each with its own runner + cap, like images.yml. Installs CPU torch + the `clip` extra (transformers); the production CLIP could move to int8-ONNX later as an optimization.",
+      "description": "Backfills image_clip_tags + image_clip_embeddings: the self-hosted CLIP zero-shot tag per stored image (free replacement for the paid room classifier on the coarse dedup-relevant tags, and the FIRST tagger for dum/pozemek/komercni). Runs GLOBAL full-scale by default (the Středočeský priority drain is complete; pass region_id on dispatch to re-prioritise a kraj). ACTIVE-listing images first; idempotent + resumable (a tagged image drops out of the next select), so once caught up the hourly runs are cheap no-ops that just keep pace with new inflow. Horizontally sharded into 4 parallel jobs (image_id %% 4), each with its own runner + cap. Installs CPU torch + the `clip` extra (transformers); the production CLIP could move to int8-ONNX later as an optimization.",
       "manual": true,
       "schedules": [
         {
@@ -1062,8 +561,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 55,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/clip_tag.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/clip_tag.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/clip_tag.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/clip_tag.yml"
     },
     {
       "filename": "compare_condition_models.yml",
@@ -1136,8 +635,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": 20,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/compare_condition_models.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/compare_condition_models.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/compare_condition_models.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/compare_condition_models.yml"
     },
     {
       "filename": "compute_image_phash.yml",
@@ -1193,8 +692,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 55,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/compute_image_phash.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/compute_image_phash.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/compute_image_phash.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/compute_image_phash.yml"
     },
     {
       "filename": "condition_score_batches.yml",
@@ -1258,8 +757,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 60,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/condition_score_batches.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/condition_score_batches.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/condition_score_batches.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/condition_score_batches.yml"
     },
     {
       "filename": "condition_scores.yml",
@@ -1335,79 +834,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 55,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/condition_scores.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/condition_scores.yml"
-    },
-    {
-      "filename": "detail_drain.yml",
-      "name": "Scraping: Sreality detail drain (Phase 2)",
-      "description": "The slow half of the Phase-2 cadence split, now on the shared portal framework: `scraper.sreality_main --drain-only` drives SrealityPortal through the one generic portal_runner. Claims a bounded slice of listing_detail_queue (source='sreality', enqueued by index_walk.yml), fetches each listing's detail on a rate-limited worker pool (429/403 auto-penalize), and writes them in batches via listing_write.write_listings (the one listing write, set-based, one transaction per ~100 listings) on the Session-mode pooler — the Phase-1 prepared-statement win. New listings land with property_id NULL; the recompute_property_stats straggler-attach births each a singleton.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "*/15 * * * *",
-          "human": "Every 15 minutes"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_seconds",
-          "description": "wall-clock drain budget, finalizes cleanly before timeout (blank = 2400 = 40 min)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "max_detail",
-          "description": "cap listings claimed + fetched this run (blank = per-portal config, 12000)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "concurrent detail-fetch workers (blank = per-portal config, 8)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "rate",
-          "description": "global detail-fetch rate cap, req/s (blank = per-portal config, 6.0)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "Report the claimable queue depth and exit without claiming",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SUPABASE_DB_SESSION_URL",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "sreality-detail-drain",
-      "cancelInProgress": false,
-      "timeoutMinutes": 50,
-      "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/detail_drain.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/detail_drain.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/condition_scores.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/condition_scores.yml"
     },
     {
       "filename": "dinov3_bakeoff_manifest.yml",
@@ -1501,8 +929,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 45,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/dinov3_bakeoff_manifest.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/dinov3_bakeoff_manifest.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/dinov3_bakeoff_manifest.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/dinov3_bakeoff_manifest.yml"
     },
     {
       "filename": "dinov3_embed_backfill.yml",
@@ -1611,8 +1039,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 90,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/dinov3_embed_backfill.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/dinov3_embed_backfill.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/dinov3_embed_backfill.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/dinov3_embed_backfill.yml"
     },
     {
       "filename": "discover_condition_markers.yml",
@@ -1680,13 +1108,13 @@
       "cancelInProgress": null,
       "timeoutMinutes": 180,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/discover_condition_markers.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/discover_condition_markers.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/discover_condition_markers.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/discover_condition_markers.yml"
     },
     {
       "filename": "docs-budget.yml",
       "name": "Docs budget",
-      "description": "Enforces the always-loaded context budgets from CLAUDE.md's Context-discipline rule (line caps on CLAUDE.md/ROADMAP.md/skill bodies, a word cap on skill frontmatter descriptions, and routing completeness — every .claude/skills/ dir must appear in CLAUDE.md's \"Where the detail lives\" table) on any PR touching those paths, and warns (non-blocking) when a PR changes code a skill documents without touching that skill or when a doc line it adds names a code symbol that exists nowhere in the code trees.",
+      "description": "Enforces the always-loaded context budgets from CLAUDE.md's Context-discipline rule (byte caps on CLAUDE.md/ROADMAP.md/skill bodies that only ratchet down, judged against the PR's base; a word cap on skill frontmatter descriptions; routing completeness — every .claude/skills/ dir must appear in CLAUDE.md's \"Where the detail lives\" table) on every PR, and warns (non-blocking) when a PR changes code a skill documents without touching that skill or when a doc line it adds names a code symbol that exists nowhere in the code trees.",
       "manual": false,
       "schedules": [],
       "onPush": false,
@@ -1698,8 +1126,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": null,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/docs-budget.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/docs-budget.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/docs-budget.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/docs-budget.yml"
     },
     {
       "filename": "draw_exam_cohort.yml",
@@ -1767,8 +1195,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 15,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/draw_exam_cohort.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/draw_exam_cohort.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/draw_exam_cohort.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/draw_exam_cohort.yml"
     },
     {
       "filename": "draw_tag_candidates.yml",
@@ -1831,41 +1259,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 30,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/draw_tag_candidates.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/draw_tag_candidates.yml"
-    },
-    {
-      "filename": "drop_r2_legacy_fks.yml",
-      "name": "Drop R2 legacy child FKs",
-      "description": "Phase D step 6 of the listing-identity refactor (docs/design/listing-identity-r2-pk-swap-runbook.md § 5, item 6). Drops the legacy child FKs onto listings(sreality_id) — integrity is already held by the parallel listing_id -> listings(id) FKs Phase B validated. Not gate-destructive: re-addable any time (NOT VALID -> VALIDATE).",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "dry_run",
-          "description": "List what would be dropped and exit",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_SESSION_URL",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "drop-r2-legacy-fks",
-      "cancelInProgress": false,
-      "timeoutMinutes": 180,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/drop_r2_legacy_fks.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/drop_r2_legacy_fks.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/draw_tag_candidates.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/draw_tag_candidates.yml"
     },
     {
       "filename": "export_raw_pages_archive.yml",
@@ -1906,8 +1301,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 350,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/export_raw_pages_archive.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/export_raw_pages_archive.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/export_raw_pages_archive.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/export_raw_pages_archive.yml"
     },
     {
       "filename": "fetch_rent_map.yml",
@@ -1951,51 +1346,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 15,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/fetch_rent_map.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/fetch_rent_map.yml"
-    },
-    {
-      "filename": "fetch_sreality_fixtures.yml",
-      "name": "Fixtures: sreality v1 JSON",
-      "description": "Manual trigger only. Fetches a real search response + one real detail response from a GitHub runner IP (this repo's dev sandbox is 403'd by sreality), scrubs emails/phone numbers, and commits the result as tests/fixtures/sample_search.json + sample_listing.json on the current branch. The live /api/v1/estates API is snake_case (id key `hash_id`, detail wrapped under `result`); these fixtures pin the true shape so the parser tests guard reality instead of the HAR-derived camelCase guess.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "category_main",
-          "description": "category_main_cb (1=byt, 2=dum, 4=komercni)",
-          "required": false,
-          "type": "string",
-          "default": "1",
-          "options": null
-        },
-        {
-          "name": "category_type",
-          "description": "category_type_cb (1=prodej, 2=pronajem)",
-          "required": false,
-          "type": "string",
-          "default": "1",
-          "options": null
-        },
-        {
-          "name": "detail_id",
-          "description": "Override detail hash_id (blank = first search result)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [],
-      "concurrencyGroup": null,
-      "cancelInProgress": null,
-      "timeoutMinutes": 5,
-      "permissions": "contents: write",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/fetch_sreality_fixtures.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/fetch_sreality_fixtures.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/fetch_rent_map.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/fetch_rent_map.yml"
     },
     {
       "filename": "frontend-build.yml",
@@ -2015,51 +1367,30 @@
       "cancelInProgress": null,
       "timeoutMinutes": null,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/frontend-build.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/frontend-build.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/frontend-build.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/frontend-build.yml"
     },
     {
-      "filename": "idnes_detail_drain.yml",
-      "name": "Scraping: iDNES Reality detail drain",
-      "description": "The slow half of the iDNES cadence split (architectural rule #19, like sreality). Claims a bounded slice of listing_detail_queue (source='idnes', enqueued by idnes_index_walk.yml), fetches each listing page on a rate-limited worker pool, parses it to a ScrapedListing, and writes via listing_write.write_listings (the one listing write; new rows land property_id NULL and the straggler-attach births the singleton). The per-listing category is derived from its detail URL. Records run_type='detail' (index_pages=0). The drain records image-URL rows; the shared images.yml job downloads the bytes to R2.",
+      "filename": "heal_bazos_floor_zero.yml",
+      "name": "Ops: heal bazos/web flats whose floor is 0 but whose text names a storey",
+      "description": "The one-off heal that rides PR #2054 (scraper/floor.py: a stray \"přízemí\" anywhere in the text used to set floor 0). `scripts/heal_bazos_floor_zero.py` selects source in ('bazos','web'), category_main='byt', floor = 0 whose description names an above-ground storey, and writes the fixed parser's reading when it is above 0, otherwise NULL — a column-only compare-and-set on floor = 0 that enqueues `dirty_properties` in the same statement, never snapshots and never touches `last_seen_at` (rules 2 and 20; ledgered in tests/scraper/test_listing_write_census.py).",
       "manual": true,
-      "schedules": [
-        {
-          "cron": "30 * * * *",
-          "human": "Every hour at :30"
-        }
-      ],
+      "schedules": [],
       "onPush": false,
       "onPullRequest": false,
       "paths": null,
       "inputs": [
         {
-          "name": "max_seconds",
-          "description": "wall-clock drain budget, finalizes cleanly before timeout (blank = 2400 = 40 min)",
+          "name": "dry_run",
+          "description": "true = report what would change only. false = write (needs confirm=APPLY).",
           "required": false,
-          "type": "string",
-          "default": "",
+          "type": "boolean",
+          "default": "true",
           "options": null
         },
         {
-          "name": "max_detail",
-          "description": "hard cap on listings claimed this run (blank = none; the time budget governs)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "concurrent detail-fetch workers (blank = 8)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "rate",
-          "description": "global detail-fetch rate cap, req/s (blank = 4.0)",
+          "name": "confirm",
+          "description": "Type APPLY to arm the real write. Ignored when dry_run=true.",
           "required": false,
           "type": "string",
           "default": "",
@@ -2067,25 +1398,19 @@
         }
       ],
       "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SCRAPER_PROXY_URL",
-        "SCRAPE_CHAIN_TOKEN",
         "SUPABASE_DB_URL"
       ],
-      "concurrencyGroup": "idnes-detail-drain",
+      "concurrencyGroup": "heal-bazos-floor-zero",
       "cancelInProgress": false,
-      "timeoutMinutes": 50,
-      "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/idnes_detail_drain.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/idnes_detail_drain.yml"
+      "timeoutMinutes": 60,
+      "permissions": "contents: read",
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/heal_bazos_floor_zero.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/heal_bazos_floor_zero.yml"
     },
     {
       "filename": "idnes_index_walk.yml",
       "name": "Scraping: iDNES Reality index walk",
-      "description": "The fast half of the iDNES cadence split (architectural rule #19, like sreality). Walks the ENTIRE index of every configured category (no --max-pages), touch_listings bumps last_seen on still-listed ids, unseen ids are nominated for a page check (rule #3) once the walk reached the portal's end (source-scoped; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='idnes'). No detail fetch — the drain (idnes_detail_drain.yml) consumes the queue. Records run_type='index'.",
+      "description": "The fast half of the iDNES cadence split (architectural rule #19, like sreality). Walks the ENTIRE index of every configured category (no --max-pages), touch_listings bumps last_seen on still-listed ids, unseen ids are nominated for a page check (rule #3) once the walk reached the portal's end (source-scoped; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='idnes'). No detail fetch — the realtime worker's drain lane consumes the queue. Records run_type='index'.",
       "manual": true,
       "schedules": [
         {
@@ -2126,109 +1451,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 240,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/idnes_index_walk.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/idnes_index_walk.yml"
-    },
-    {
-      "filename": "images.yml",
-      "name": "Scraping: image backlog drain (sharded)",
-      "description": "THE backlog image-download workflow. Images are fully decoupled from every portal's crawl (the crawls only record image-URL rows; this job uploads the bytes to R2), so this is the owner of the deep backlog across ALL portals (sreality, idnes, bazos, bezrealitky, maxima, mmreality). Source-agnostic.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "0 */2 * * *",
-          "human": "Every 2 hours"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_image_downloads",
-          "description": "Override per-shard images-per-run cap (blank = 18000; 0 = drain to empty / suspicious-stop)",
-          "required": false,
-          "type": "string",
-          "default": null,
-          "options": null
-        },
-        {
-          "name": "image_workers",
-          "description": "Override concurrent workers per shard (blank = 32)",
-          "required": false,
-          "type": "string",
-          "default": null,
-          "options": null
-        },
-        {
-          "name": "images_active_only",
-          "description": "Restrict to active listings only. Default false: drain the full backlog incl. inactive (the fresh fast lane already covers new actives).",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": null,
-      "cancelInProgress": null,
-      "timeoutMinutes": 110,
-      "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/images.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/images.yml"
-    },
-    {
-      "filename": "images_fresh.yml",
-      "name": "Scraping: fresh-listing image fast lane",
-      "description": "Low-latency image fetch for the NEWEST active listings across ALL portals, so a freshly-scraped card renders a photo within minutes instead of waiting for the 2-hourly sharded backlog drain (images.yml). The frontend can only show an image once its bytes are in R2 (storage_path set) — original portal URLs are hotlink/expiry-protected — so racing those URLs on fresh listings is also what prevents the image loss we already saw (~43k+ sreality images lost to expiry).",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "*/15 * * * *",
-          "human": "Every 15 minutes"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_image_downloads",
-          "description": "Override per-run cap (blank = 2500)",
-          "required": false,
-          "type": "string",
-          "default": null,
-          "options": null
-        },
-        {
-          "name": "image_workers",
-          "description": "Override concurrent workers (blank = 32)",
-          "required": false,
-          "type": "string",
-          "default": null,
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SCRAPE_CHAIN_TOKEN",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "images-fresh",
-      "cancelInProgress": false,
-      "timeoutMinutes": 20,
-      "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/images_fresh.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/images_fresh.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/idnes_index_walk.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/idnes_index_walk.yml"
     },
     {
       "filename": "index_walk.yml",
@@ -2273,8 +1497,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 40,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/index_walk.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/index_walk.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/index_walk.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/index_walk.yml"
     },
     {
       "filename": "ingest_boundaries.yml",
@@ -2326,8 +1550,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": 30,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/ingest_boundaries.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/ingest_boundaries.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/ingest_boundaries.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/ingest_boundaries.yml"
     },
     {
       "filename": "ingest_map_overlays.yml",
@@ -2376,8 +1600,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 120,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/ingest_map_overlays.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/ingest_map_overlays.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/ingest_map_overlays.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/ingest_map_overlays.yml"
     },
     {
       "filename": "label_images.yml",
@@ -2504,8 +1728,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 30,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/label_images.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/label_images.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/label_images.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/label_images.yml"
     },
     {
       "filename": "label_proposal_backfill.yml",
@@ -2556,13 +1780,13 @@
       "cancelInProgress": false,
       "timeoutMinutes": 55,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/label_proposal_backfill.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/label_proposal_backfill.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/label_proposal_backfill.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/label_proposal_backfill.yml"
     },
     {
       "filename": "load_obec_population.yml",
       "name": "Jobs: load obec population (manual)",
-      "description": "Load ČSÚ municipality population into admin_boundaries.population for EVERY obec (not just the 206 curated cities). Reads the committed DataStat export data/csu_population.json (OBY02AT02 — download from https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02). Idempotent: only changed rows are written. Dispatch this after committing a refreshed export. This is the population source the \"within X km of a municipality with population > N\" proximity filter reads.",
+      "description": "Load ČSÚ municipality population into admin_boundaries.population for EVERY obec (not just the 206 curated cities). Reads the committed DataStat export data/csu_population.json (OBY02AT02 — download from https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02). Idempotent: only changed rows are written. Dispatch this after committing a refreshed export. This is the population source the \"within X km of a municipality with population > N\" proximity filter reads; the job ends with the full city-proximity rebuild that turns it into the precomputed columns.",
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -2574,10 +1798,10 @@
       ],
       "concurrencyGroup": "load-obec-population",
       "cancelInProgress": false,
-      "timeoutMinutes": 15,
+      "timeoutMinutes": 90,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/load_obec_population.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/load_obec_population.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/load_obec_population.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/load_obec_population.yml"
     },
     {
       "filename": "location_claims_intake.yml",
@@ -2668,8 +1892,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 55,
       "permissions": "contents: read, actions: write",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/location_claims_intake.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/location_claims_intake.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/location_claims_intake.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/location_claims_intake.yml"
     },
     {
       "filename": "location_claims_retire.yml",
@@ -2715,6 +1939,10 @@
         }
       ],
       "secrets": [
+        "R2_ACCESS_KEY_ID",
+        "R2_ACCOUNT_ID",
+        "R2_BUCKET_NAME",
+        "R2_SECRET_ACCESS_KEY",
         "SUPABASE_DB_SESSION_URL",
         "SUPABASE_DB_URL"
       ],
@@ -2722,8 +1950,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 340,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/location_claims_retire.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/location_claims_retire.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/location_claims_retire.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/location_claims_retire.yml"
     },
     {
       "filename": "location_registry_load.yml",
@@ -2770,8 +1998,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 360,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/location_registry_load.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/location_registry_load.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/location_registry_load.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/location_registry_load.yml"
     },
     {
       "filename": "location_resolve.yml",
@@ -2836,8 +2064,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 60,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/location_resolve.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/location_resolve.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/location_resolve.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/location_resolve.yml"
     },
     {
       "filename": "migrations.yml",
@@ -2863,64 +2091,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": 15,
       "permissions": "contents: read, pull-requests: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/migrations.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/migrations.yml"
-    },
-    {
-      "filename": "mirror_model_weights.yml",
-      "name": "Mirror model weights to R2 (one-off)",
-      "description": "Copies externally-licensed model weight files (first use: DINOv3) into our own R2 bucket under models/<name>/ with a sha256 manifest, so no production job ever depends on Meta's time-limited download links or on a Hugging Face token. Dispatch only. The URLs are pasted as a workflow input: they are signed, short-lived links, masked in the job log by the script and never stored — the manifest records only the host, file name, size and hash. Default is a DRY RUN (download + hash, upload nothing); tick `apply` to upload.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "urls",
-          "description": "Weight file URLs, one per line (from Meta's download e-mail)",
-          "required": true,
-          "type": "string",
-          "default": null,
-          "options": null
-        },
-        {
-          "name": "prefix",
-          "description": "R2 key prefix",
-          "required": false,
-          "type": "string",
-          "default": "models/dinov3",
-          "options": null
-        },
-        {
-          "name": "apply",
-          "description": "Upload to R2 and write the manifest (unticked = dry run)",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        },
-        {
-          "name": "note",
-          "description": "Manifest note, e.g. 'licence accepted by <who> on <date> via <route>'",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY"
-      ],
-      "concurrencyGroup": "mirror-model-weights",
-      "cancelInProgress": false,
-      "timeoutMinutes": 45,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/mirror_model_weights.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/mirror_model_weights.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/migrations.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/migrations.yml"
     },
     {
       "filename": "new_dedup_candidates.yml",
@@ -3006,141 +2178,13 @@
       "cancelInProgress": false,
       "timeoutMinutes": 350,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/new_dedup_candidates.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/new_dedup_candidates.yml"
-    },
-    {
-      "filename": "new_dedup_runpod_smoke_test.yml",
-      "name": "NEW DEDUP RunPod smoke test (one-off)",
-      "description": "Proves the RunPod pipeline end-to-end (docs/design/new-dedup/PROGRAM.md, Wave 1): launch the cheapest available GPU pod, run a trivial CUDA op, confirm it, guarantee teardown either way (scripts/runpod_client.py's run_job). Not scheduled — manual trigger only, matching the design's \"manual batches only\" cost-conscious posture. Wave 5's real embedding batches will reuse the same client, different payload.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [],
-      "secrets": [
-        "RUNPOD_API_KEY"
-      ],
-      "concurrencyGroup": "new-dedup-runpod-smoke-test",
-      "cancelInProgress": false,
-      "timeoutMinutes": 15,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/new_dedup_runpod_smoke_test.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/new_dedup_runpod_smoke_test.yml"
-    },
-    {
-      "filename": "property_maintenance.yml",
-      "name": "Jobs: property maintenance (incremental)",
-      "description": "Phase 3 of the scaling roadmap: real-time properties. This is the FAST, FREQUENT half of property maintenance — the dirty-set incremental pass. It runs scripts/recompute_property_stats --incremental, which:",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "*/5 * * * *",
-          "human": "Every 5 minutes"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "batch_size",
-          "description": "Properties recomputed per statement",
-          "required": true,
-          "type": "string",
-          "default": "2000",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "Report straggler + dirty + property counts and exit without writing",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "sreality-property-maintenance",
-      "cancelInProgress": false,
-      "timeoutMinutes": 10,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/property_maintenance.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/property_maintenance.yml"
-    },
-    {
-      "filename": "realitymix_detail_drain.yml",
-      "name": "Scraping: RealityMix detail drain",
-      "description": "The slow half of the realitymix cadence split (architectural rule #19, like sreality/idnes/ceskereality). Claims a bounded slice of listing_detail_queue (source='realitymix', enqueued by realitymix_index_walk.yml), fetches each listing page on a rate-limited worker pool, parses it to a ScrapedListing, and writes via listing_write.write_listings (the one listing write; new rows land property_id NULL and the straggler-attach births the singleton). The per-listing category is read from the page's BreadcrumbList JSON-LD. Records run_type='detail' (index_pages=0). The drain records image-URL rows; the shared images.yml job downloads the bytes to R2.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "40 * * * *",
-          "human": "Every hour at :40"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_seconds",
-          "description": "wall-clock drain budget, finalizes cleanly before timeout (blank = 2400 = 40 min)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "max_detail",
-          "description": "hard cap on listings claimed this run (blank = none; the time budget governs)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "concurrent detail-fetch workers (blank = 4)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "rate",
-          "description": "global detail-fetch rate cap, req/s (blank = 1.5)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SCRAPE_CHAIN_TOKEN",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "realitymix-detail-drain",
-      "cancelInProgress": false,
-      "timeoutMinutes": 50,
-      "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/realitymix_detail_drain.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/realitymix_detail_drain.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/new_dedup_candidates.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/new_dedup_candidates.yml"
     },
     {
       "filename": "realitymix_index_walk.yml",
       "name": "Scraping: RealityMix index walk",
-      "description": "The fast half of the realitymix cadence split (architectural rule #19, like sreality/idnes/ceskereality). Walks the ENTIRE index of every configured category (no --max-pages), touch_listings bumps last_seen on still-listed ids, presence nomination (rule #3) nominates unseen ones for a page check once the walk reached the portal's end (source-scoped; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='realitymix'). No detail fetch — the drain (realitymix_detail_drain.yml) consumes the queue. Records run_type='index'.",
+      "description": "The fast half of the realitymix cadence split (architectural rule #19, like sreality/idnes/ceskereality). Walks the ENTIRE index of every configured category (no --max-pages), touch_listings bumps last_seen on still-listed ids, presence nomination (rule #3) nominates unseen ones for a page check once the walk reached the portal's end (source-scoped; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='realitymix'). No detail fetch — the realtime worker's drain lane consumes the queue. Records run_type='index'.",
       "manual": true,
       "schedules": [
         {
@@ -3180,42 +2224,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 180,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/realitymix_index_walk.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/realitymix_index_walk.yml"
-    },
-    {
-      "filename": "recompute_city_proximity.yml",
-      "name": "Jobs: recompute city proximity (hourly)",
-      "description": "Recompute properties.home_obec_pop + near_{pop,jobs,youth,overall}_{5,15}km (migration 142) so the Browse / Watchdog city-proximity + Min Population filters read precomputed indexed columns instead of a per-request spatial RPC. Incremental hourly run fills newly-ingested properties within the hour; the same function rebuilds everything after a population / city-index load.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "40 * * * *",
-          "human": "Every hour at :40"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "full",
-          "description": "Rebuild every property (not just new ones)",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "recompute-city-proximity",
-      "cancelInProgress": false,
-      "timeoutMinutes": 25,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/recompute_city_proximity.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/recompute_city_proximity.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/realitymix_index_walk.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/realitymix_index_walk.yml"
     },
     {
       "filename": "recompute_property_stats.yml",
@@ -3267,8 +2277,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 130,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/recompute_property_stats.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/recompute_property_stats.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/recompute_property_stats.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/recompute_property_stats.yml"
     },
     {
       "filename": "reextract.yml",
@@ -3338,51 +2348,13 @@
       "cancelInProgress": false,
       "timeoutMinutes": 60,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/reextract.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/reextract.yml"
-    },
-    {
-      "filename": "refresh_population.yml",
-      "name": "Data: refresh city populations (Wikidata)",
-      "description": "FALLBACK SOURCE. The preferred population source is now the official ČSÚ DataStat export \"Počet obyvatel v obcích k 1. 1.\" — download the JSON from https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02, commit it to data/csu_population.json, and run \"Data: seed curated cities\" (which ingests the JSON directly). Use this Wikidata fetcher only when you can't get the official file.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "year",
-          "description": "Latest year to accept (e.g. 2024, 2025)",
-          "required": false,
-          "type": "string",
-          "default": "2024",
-          "options": null
-        },
-        {
-          "name": "commit",
-          "description": "Commit the regenerated CSV back to the branch",
-          "required": false,
-          "type": "choice",
-          "default": "true",
-          "options": [
-            "true",
-            "false"
-          ]
-        }
-      ],
-      "secrets": [],
-      "concurrencyGroup": null,
-      "cancelInProgress": null,
-      "timeoutMinutes": 10,
-      "permissions": "contents: write",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/refresh_population.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/refresh_population.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/reextract.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/reextract.yml"
     },
     {
       "filename": "refresh_stale_images.yml",
       "name": "Jobs: refresh stale image URLs",
-      "description": "Re-opens active listings whose photos aren't in R2 yet so their (possibly rotated) source image URLs get refreshed. Portals rotate image CDN URLs over weeks; a listing whose images the newest-first backfill never reached before its URLs rotated is stuck — the stored URL 404s, the frontend fallback can't load it, and the image downloader can't fetch it. This sweep (scripts.refresh_stale_image_urls) re-enqueues such listings into the source-generic listing_detail_queue; the detail drain re-fetches them, record_images repoints each not-yet-stored image's URL to the current one, and the image backfill (images.yml) then stores the bytes.",
+      "description": "Re-opens active listings whose photos aren't in R2 yet so their (possibly rotated) source image URLs get refreshed. Portals rotate image CDN URLs over weeks; a listing whose images the newest-first backfill never reached before its URLs rotated is stuck — the stored URL 404s, the frontend fallback can't load it, and the image downloader can't fetch it. This sweep (scripts.refresh_stale_image_urls) re-enqueues such listings into the source-generic listing_detail_queue; the detail drain re-fetches them, record_images repoints each not-yet-stored image's URL to the current one, and the realtime worker's images lane then stores the bytes.",
       "manual": true,
       "schedules": [
         {
@@ -3434,71 +2406,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 20,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/refresh_stale_images.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/refresh_stale_images.yml"
-    },
-    {
-      "filename": "renominate_false_gone.yml",
-      "name": "Ops: re-check crawler listings a sreality check falsely delisted",
-      "description": "Runs scripts/renominate_false_gone_crawler_rows.py (operator decision 2026-10-02): crawler listings (bazos, idnes, ...) carry a synthetic negative sreality_id, and until item 3 a sreality freshness fetch of that id read \"not found\" and flipped them inactive. This sends each such row to its OWN portal's detail drain as a presence check (QUEUE_PRIORITY_VERIFY), so a live page reactivates it and a gone page leaves it inactive with its inactive_at untouched. apply=false (the default) only prints the per-source counts.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "apply",
-          "description": "false = count only. true = enqueue the page checks.",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        },
-        {
-          "name": "limit",
-          "description": "Max rows enqueued PER SOURCE, newest flip first. 25 = the pilot; 'all' = release the rest",
-          "required": false,
-          "type": "string",
-          "default": "25",
-          "options": null
-        },
-        {
-          "name": "source",
-          "description": "One crawler source (blank = every source but sreality)",
-          "required": false,
-          "type": "choice",
-          "default": "",
-          "options": [
-            "",
-            "bazos",
-            "bezrealitky",
-            "ceskereality",
-            "idnes",
-            "maxima",
-            "mmreality",
-            "realitymix",
-            "remax"
-          ]
-        },
-        {
-          "name": "readout_since",
-          "description": "Read-only readout of the rows queued since this UTC time (the apply log prints it); leave apply=false",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "renominate-false-gone",
-      "cancelInProgress": false,
-      "timeoutMinutes": 30,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/renominate_false_gone.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/renominate_false_gone.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/refresh_stale_images.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/refresh_stale_images.yml"
     },
     {
       "filename": "reparse.yml",
@@ -3616,13 +2525,13 @@
       "cancelInProgress": false,
       "timeoutMinutes": 180,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/reparse.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/reparse.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/reparse.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/reparse.yml"
     },
     {
       "filename": "resolve_brokers_full.yml",
       "name": "Broker resolution (full sweep + backfill)",
-      "description": "Broker intelligence: the daily full-sweep RECONCILE + the one-shot backfill. Re-attributes a rotating lap of broker-bearing listings from raw_json (keyset-batched so the raw_json scan never times out over the pooler), recomputes ALL broker rollups + memberships in ONE merged statement (recompute_brokers(None), Broker Unify W3 — the old 9-window loop paid ~27 full index walks and 100+ min), rebuilds firm rollups, runs the cross-source merge step, generates candidates, and clears the dirty queue — the self-healing backstop for anything the incremental drain missed. It no longer publishes the leaderboard matview: that is the drain path's job (hourly-if-stale, worker lane + broker_resolution.yml), so serving freshness stopped depending on this job's length or its GH-cron-drifted start time. Nominally runs after the property recompute (04:15); in practice GH throttling drifts both into the same mid-morning window. mode=backfill is the same code path (the first population); dispatch it once after this lands on main. Source-agnostic. Shares the broker-resolution concurrency group with the incremental job.",
+      "description": "Broker intelligence: the daily full-sweep RECONCILE + the one-shot backfill. Re-attributes a rotating lap of broker-bearing listings from raw_json (keyset-batched so the raw_json scan never times out over the pooler), recomputes ALL broker rollups + memberships in ONE merged statement (recompute_brokers(None), Broker Unify W3 — the old 9-window loop paid ~27 full index walks and 100+ min), rebuilds firm rollups, runs the cross-source merge step, generates candidates, and clears the dirty queue — the self-healing backstop for anything the incremental drain missed. It no longer publishes the leaderboard matview: that is the drain path's job (hourly-if-stale, the realtime worker's broker lane), so serving freshness stopped depending on this job's length or its GH-cron-drifted start time. Nominally runs after the property recompute (04:15); in practice GH throttling drifts both into the same mid-morning window. mode=backfill is the same code path (the first population); dispatch it once after this lands on main. Source-agnostic. broker_resolution_lock keeps it apart from the worker's incremental broker lane.",
       "manual": true,
       "schedules": [
         {
@@ -3661,8 +2570,45 @@
       "cancelInProgress": false,
       "timeoutMinutes": 180,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/resolve_brokers_full.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/resolve_brokers_full.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/resolve_brokers_full.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/resolve_brokers_full.yml"
+    },
+    {
+      "filename": "run_job.yml",
+      "name": "Jobs: run now",
+      "description": "Asks the Railway job runner to run one of its jobs now. It only FILES a request (one row on scheduled_jobs, written by the runner's own `request` verb) and runs nothing here. The runner starts it within seconds once the job and its shared resource are free, even while its schedule is paused; a second request is refused while one waits; a job its own workflow still schedules is refused until its move PR lands. A green run means \"asked\", not \"done\": follow the run on Health (job/<name>). Required secret: SUPABASE_DB_URL.",
+      "manual": true,
+      "schedules": [],
+      "onPush": false,
+      "onPullRequest": false,
+      "paths": null,
+      "inputs": [
+        {
+          "name": "job",
+          "description": "The job's name, as Health shows it after job/ (e.g. map_overlays)",
+          "required": true,
+          "type": "string",
+          "default": null,
+          "options": null
+        },
+        {
+          "name": "args",
+          "description": "Optional extra arguments appended to the job's own, e.g. --dry-run (quote a value with spaces; an unmatched quote is refused). They override the job's own flags, memory and worker counts unchecked. A mistyped one is a failed run; one that makes it outrun its time budget is a Problem until a later run (a request is never retried).",
+          "required": false,
+          "type": "string",
+          "default": "",
+          "options": null
+        }
+      ],
+      "secrets": [
+        "SUPABASE_DB_URL"
+      ],
+      "concurrencyGroup": null,
+      "cancelInProgress": null,
+      "timeoutMinutes": 10,
+      "permissions": "contents: read",
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/run_job.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/run_job.yml"
     },
     {
       "filename": "runpod_reap.yml",
@@ -3690,8 +2636,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": 10,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/runpod_reap.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/runpod_reap.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/runpod_reap.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/runpod_reap.yml"
     },
     {
       "filename": "scrape_bezrealitky.yml",
@@ -3718,34 +2664,10 @@
         },
         {
           "name": "max_seconds",
-          "description": "wall-clock budget for the run (default 1500s, under the 30-min job timeout)",
+          "description": "wall-clock budget for the walk (default 1500s, under the 30-min job timeout)",
           "required": false,
           "type": "string",
           "default": "",
-          "options": null
-        },
-        {
-          "name": "max_detail",
-          "description": "cap detail-drain claims this run",
-          "required": false,
-          "type": "string",
-          "default": "2000",
-          "options": null
-        },
-        {
-          "name": "rate",
-          "description": "detail-fetch requests/second ceiling",
-          "required": false,
-          "type": "string",
-          "default": "2.0",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "detail-fetch workers (concurrency; raise for a one-time backfill)",
-          "required": false,
-          "type": "string",
-          "default": "8",
           "options": null
         }
       ],
@@ -3760,8 +2682,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 30,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/scrape_bezrealitky.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/scrape_bezrealitky.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/scrape_bezrealitky.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/scrape_bezrealitky.yml"
     },
     {
       "filename": "scrape_maxima.yml",
@@ -3785,30 +2707,6 @@
           "type": "string",
           "default": "",
           "options": null
-        },
-        {
-          "name": "max_detail",
-          "description": "cap detail-drain claims this run (blank = drain the queue)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "rate",
-          "description": "detail-fetch requests/second ceiling",
-          "required": false,
-          "type": "string",
-          "default": "1.0",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "detail-fetch workers (concurrency; raise for a one-time backfill)",
-          "required": false,
-          "type": "string",
-          "default": "2",
-          "options": null
         }
       ],
       "secrets": [
@@ -3822,8 +2720,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 30,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/scrape_maxima.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/scrape_maxima.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/scrape_maxima.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/scrape_maxima.yml"
     },
     {
       "filename": "scrape_mmreality.yml",
@@ -3849,32 +2747,8 @@
           "options": null
         },
         {
-          "name": "max_detail",
-          "description": "cap detail-drain claims this run (raise for a one-time backfill)",
-          "required": false,
-          "type": "string",
-          "default": "4000",
-          "options": null
-        },
-        {
-          "name": "rate",
-          "description": "detail-fetch requests/second ceiling",
-          "required": false,
-          "type": "string",
-          "default": "2.0",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "detail-fetch workers (concurrency; raise for a one-time backfill)",
-          "required": false,
-          "type": "string",
-          "default": "4",
-          "options": null
-        },
-        {
           "name": "max_seconds",
-          "description": "detail-drain wall-clock budget; it finalizes cleanly before this. Blank = 2400 (40 min).",
+          "description": "walk wall-clock budget; it finalizes cleanly before this. Blank = 2400 (40 min).",
           "required": false,
           "type": "string",
           "default": "",
@@ -3893,8 +2767,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 60,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/scrape_mmreality.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/scrape_mmreality.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/scrape_mmreality.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/scrape_mmreality.yml"
     },
     {
       "filename": "scrape_price_stats.yml",
@@ -3960,7 +2834,6 @@
         }
       ],
       "secrets": [
-        "SCRAPE_CHAIN_TOKEN",
         "SREALITY_LOGIN_EMAIL",
         "SREALITY_LOGIN_PASSWORD",
         "SREALITY_SESSION_COOKIE",
@@ -3969,9 +2842,9 @@
       "concurrencyGroup": "price-stats",
       "cancelInProgress": false,
       "timeoutMinutes": 60,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/scrape_price_stats.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/scrape_price_stats.yml"
+      "permissions": "contents: read, actions: write",
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/scrape_price_stats.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/scrape_price_stats.yml"
     },
     {
       "filename": "scrape_remax.yml",
@@ -3997,35 +2870,11 @@
           "options": null
         },
         {
-          "name": "max_detail",
-          "description": "cap detail-drain claims this run (blank = per-portal config)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
           "name": "max_seconds",
-          "description": "wall-clock budget for the detail drain (seconds)",
+          "description": "wall-clock budget for the walk (seconds)",
           "required": false,
           "type": "string",
           "default": "2100",
-          "options": null
-        },
-        {
-          "name": "rate",
-          "description": "detail-fetch requests/second ceiling",
-          "required": false,
-          "type": "string",
-          "default": "2.0",
-          "options": null
-        },
-        {
-          "name": "workers",
-          "description": "detail-fetch workers (concurrency; raise for a one-time backfill)",
-          "required": false,
-          "type": "string",
-          "default": "4",
           "options": null
         }
       ],
@@ -4040,8 +2889,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 60,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/scrape_remax.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/scrape_remax.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/scrape_remax.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/scrape_remax.yml"
     },
     {
       "filename": "screen_exam_cohort.yml",
@@ -4131,40 +2980,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 30,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/screen_exam_cohort.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/screen_exam_cohort.yml"
-    },
-    {
-      "filename": "seed_broker_settings.yml",
-      "name": "Data: seed broker settings (free-email + franchise domains)",
-      "description": "One-shot workflow that populates the two app_settings rows created as `[]` placeholders by migration 186 — `broker_free_email_domains` and `broker_franchise_domains` — from the committed JSON files (data/broker_free_email_domains.json + data/broker_franchise_domains.json).",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "dry_run",
-          "description": "Print domain counts and exit without UPDATEing",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": null,
-      "cancelInProgress": null,
-      "timeoutMinutes": 5,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/seed_broker_settings.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/seed_broker_settings.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/screen_exam_cohort.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/screen_exam_cohort.yml"
     },
     {
       "filename": "seed_condition_settings.yml",
@@ -4195,8 +3012,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": 5,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/seed_condition_settings.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/seed_condition_settings.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/seed_condition_settings.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/seed_condition_settings.yml"
     },
     {
       "filename": "seed_curated_cities.yml",
@@ -4238,122 +3055,10 @@
       ],
       "concurrencyGroup": null,
       "cancelInProgress": null,
-      "timeoutMinutes": 15,
+      "timeoutMinutes": 90,
       "permissions": "contents: write",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/seed_curated_cities.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/seed_curated_cities.yml"
-    },
-    {
-      "filename": "smoke_agent.yml",
-      "name": "Dev: agent smoke test",
-      "description": "Manual invocation only. Runs scripts/smoke_agent.py against the real Supabase DB and a real LLM provider. Picks a recent Prague 2+kk rental by default; --sreality-id overrides. Real LLM credits are spent — typically under $0.10 per run.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "provider",
-          "description": "LLM provider (anthropic or gemini)",
-          "required": true,
-          "type": "choice",
-          "default": "anthropic",
-          "options": [
-            "anthropic",
-            "gemini"
-          ]
-        },
-        {
-          "name": "sreality_id",
-          "description": "Specific listing id to estimate (leave blank to pick a recent Prague 2+kk)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "skill",
-          "description": "Skill row name",
-          "required": false,
-          "type": "string",
-          "default": "rental_estimator_v1",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "ANTHROPIC_API_KEY",
-        "GEMINI_API_KEY",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": null,
-      "cancelInProgress": null,
-      "timeoutMinutes": 5,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/smoke_agent.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/smoke_agent.yml"
-    },
-    {
-      "filename": "sreality_image_remaster.yml",
-      "name": "Jobs: sreality image re-master",
-      "description": "Re-downloads stored sreality photos at the whole-frame `SQUARE_1800_JPG` master template and OVERWRITES each row's existing R2 object in place, under the `images.storage_path` the row already carries — the ~3.55M rows with `rendition IS NULL` hold the superseded `res,749,562,3` CROP, which cost ~85% of photos their edges. sreality ROTATES image URLs when a listing is edited, so a 404/410 (or a dead-URL 400/401/415) on the stored URL is re-resolved from the listing's CURRENT detail payload by image `order`, and the fresh URL is stored with the bytes. Every success stamps `rendition` + decoded dimensions and re-arms the phash/CLIP lanes; bytes that come back as the 749x562 crop are an anomaly and are never stamped.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "15 */2 * * *",
-          "human": "Every 2 hours at :15"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_images",
-          "description": "Per-shard images-per-run cap (0 = uncapped, bounded by --max-seconds)",
-          "required": false,
-          "type": "string",
-          "default": "16000",
-          "options": null
-        },
-        {
-          "name": "listing_ids",
-          "description": "Pilot mode: comma-separated listings.id (ignores the shard slice)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "Select and report only: no network, no writes",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        },
-        {
-          "name": "reopen",
-          "description": "With listing_ids: un-retire their 'sreality-749-crop' rows first (two-strike path again)",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": null,
-      "cancelInProgress": null,
-      "timeoutMinutes": 110,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/sreality_image_remaster.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/sreality_image_remaster.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/seed_curated_cities.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/seed_curated_cities.yml"
     },
     {
       "filename": "tag_model.yml",
@@ -4492,8 +3197,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 120,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/tag_model.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/tag_model.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/tag_model.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/tag_model.yml"
     },
     {
       "filename": "tagging_bakeoff.yml",
@@ -4641,13 +3346,13 @@
       "cancelInProgress": false,
       "timeoutMinutes": 180,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/tagging_bakeoff.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/tagging_bakeoff.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/tagging_bakeoff.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/tagging_bakeoff.yml"
     },
     {
       "filename": "test.yml",
       "name": "CI: tests",
-      "description": "CI test suite, runs on every pull request and on every push to main. Two parallel jobs: a Python job (verifies the filter-registry and workflow-docs codegen are fresh, then runs pytest) and a frontend job (TypeScript type-check + vitest pure-function tests). This is the build gate for every branch.",
+      "description": "CI test suite, runs on every pull request and on every push to main. Two parallel jobs: a Python job (verifies the filter-registry and workflow-docs codegen are fresh, runs pytest, then lints with ruff) and a frontend job (TypeScript type-check + vitest pure-function tests). This is the build gate for every branch.",
       "manual": false,
       "schedules": [],
       "onPush": true,
@@ -4659,8 +3364,8 @@
       "cancelInProgress": null,
       "timeoutMinutes": 9,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/test.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/test.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/test.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/test.yml"
     },
     {
       "filename": "text_extraction_bakeoff.yml",
@@ -4745,8 +3450,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 240,
       "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/text_extraction_bakeoff.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/text_extraction_bakeoff.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/text_extraction_bakeoff.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/text_extraction_bakeoff.yml"
     },
     {
       "filename": "verify_pipeline.yml",
@@ -4780,8 +3485,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 19,
       "permissions": "contents: read, actions: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/verify_pipeline.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/verify_pipeline.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/verify_pipeline.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/verify_pipeline.yml"
     },
     {
       "filename": "web_index_walk.yml",
@@ -4818,8 +3523,8 @@
       "cancelInProgress": false,
       "timeoutMinutes": 15,
       "permissions": null,
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/web_index_walk.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/web_index_walk.yml"
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/web_index_walk.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/web_index_walk.yml"
     }
   ]
 }

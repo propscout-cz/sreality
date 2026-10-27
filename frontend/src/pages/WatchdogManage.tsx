@@ -19,6 +19,7 @@ import { PPM2_UNIT, ppm2BasisOfCohort } from '@/lib/measure';
 import { portalScopeLabel } from '@/lib/portals';
 import type { WatchdogFilterSpec, WatchdogSubscription } from '@/lib/types';
 import { Th } from '@/components/table';
+import OverflowMenu from '@/components/OverflowMenu';
 
 export default function WatchdogManage() {
   const qc = useQueryClient();
@@ -77,11 +78,8 @@ function Header() {
   return (
     <header className="flex flex-wrap items-end justify-between gap-4">
       <div>
-        <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-          Watchdog
-        </p>
         <h1
-          className="mt-1.5 text-[2.1rem] leading-tight"
+          className="text-[2.1rem] leading-tight"
           style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
         >
           Manage watchdogs
@@ -95,7 +93,7 @@ function Header() {
       <div className="flex items-center gap-3">
         <Link
           to={ROUTES.browse.build()}
-          className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
+          className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] transition-colors"
           title="Watchdogs are created by saving a filter on the Browse page."
         >
           + New in Browse
@@ -123,7 +121,6 @@ function SubscriptionsTable({
               <Th align="left">Name</Th>
               <Th align="left">Filter summary</Th>
               <Th align="right">Fired</Th>
-              <Th align="left">Created</Th>
               <Th align="left">Status</Th>
               <Th align="right"> </Th>
             </tr>
@@ -163,20 +160,20 @@ function SubRow({
         >
           {sub.name}
         </Link>
+        <div
+          className="mt-0.5 text-[0.75rem] text-[var(--color-ink-3)]"
+          title={fmtAbsolute(sub.created_at)}
+        >
+          Created <span className="font-mono tabular-nums">{fmtRelative(sub.created_at)}</span>
+        </div>
       </td>
-      <td className="px-4 py-2.5 align-middle text-[var(--color-ink-2)] max-w-[420px]">
+      <td className="px-4 py-2.5 align-middle text-[var(--color-ink-2)] max-w-[540px]">
         <span className="block truncate" title={summary}>
           {summary}
         </span>
       </td>
       <td className="px-4 py-2.5 align-middle text-right tabular-nums text-[var(--color-ink-2)]">
         {fmtCount(sub.dispatch_count)}
-      </td>
-      <td
-        className="px-4 py-2.5 align-middle text-[var(--color-ink-3)] tabular-nums"
-        title={fmtAbsolute(sub.created_at)}
-      >
-        {fmtRelative(sub.created_at)}
       </td>
       <td className="px-4 py-2.5 align-middle">
         <button
@@ -208,13 +205,10 @@ function SubRow({
         >
           edit
         </Link>
-        <button
-          type="button"
-          onClick={onDelete}
-          className="text-[0.75rem] text-[var(--color-brick)] hover:underline underline-offset-2"
-        >
-          delete
-        </button>
+        <OverflowMenu
+          label={`Actions: ${sub.name}`}
+          items={[{ label: 'Delete…', danger: true, onSelect: onDelete }]}
+        />
       </td>
     </tr>
   );

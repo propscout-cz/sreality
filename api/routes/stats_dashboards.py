@@ -24,6 +24,8 @@ DASHBOARDS = saved_sets.SavedSetKind(
     noun="dashboard",
     id_param="dashboard_id",
     blob_columns=("charts", "filter_spec"),
+    # The Stats tab's "Malé vzorky" switch, saved with the dashboard (migration 681).
+    scalar_columns=("show_small",),
     create_in=s.CreateStatsDashboardIn,
     update_in=s.UpdateStatsDashboardIn,
     nullable=frozenset({"filter_spec", "color"}),
@@ -126,8 +128,8 @@ def share_dashboard(
     body: s.ShareDashboardIn,
 ) -> dict[str, Any]:
     """Share one named dashboard read-only with the account behind a confirmed email (owner only)."""
-    name = shares.owner_gate(conn, _SHARE_GATE_SQL, dashboard_id, "dashboard")
-    shares.grant(open_identity_conn, body.email, shares.DashboardShare(dashboard_id, name))
+    shares.owner_gate(conn, _SHARE_GATE_SQL, dashboard_id, "dashboard")
+    shares.grant(open_identity_conn, body.email, shares.DashboardShare(dashboard_id))
     return saved_sets.row_or_404(DASHBOARDS, saved_sets.get(conn, DASHBOARDS, str(dashboard_id)))
 
 

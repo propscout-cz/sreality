@@ -210,6 +210,18 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
 - **E978 (2026-10-22, visible first):** during a build the feed reads, after the live adverts, the inactive
   ones a visible merge waits for (on a property with a live advert, or whose read adverts sit in a group
   with one): 1,264 of Praha's 25,434 unread at 21:40Z, ~2.5 passes instead of ~15 h. Order only.
+- **E979 (2026-10-25, the operator's build order):** a build reads the blocks named in
+  `autodedup.settings` `rt_build_priority:<generation>` first, in that row's category order (Liberec
+  `obec:563889`: flats for rent, houses for sale, flats for sale, the rest), then E978's order. Data, not
+  code: changing it needs no deploy; no row or a malformed one is E978's order exactly. Order only.
+- **E980 (2026-10-26, active arrivals re-checked first):** every pass the evidence sweep probes the
+  newest 1,000 active adverts still marked incomplete before its round-robin. The kraj build had filled the
+  round-robin to 90,984 rows, ~50 h a cycle at 400 a pass, so an active arrival decided before its CLIP
+  vector waited out the cycle: 1,014 such at 13:00Z, one Hradec Králové flat four properties for 16 h. A row
+  written in the last hour waits; the round-robin's cursor stops before a mover the share cut. Order only;
+  no decision module, digest unchanged.
+  Reverted the same day (#2096): its 57–80 re-decides a pass overran the build's pass deadline twice.
+  **E980b** brings it back OFF in a build and at most 15 re-decides a pass outside one (constants).
 - **E977 (2026-10-22, built; ships only on the operator's yes):** during a build, a block whose walk is
   complete holds back only the groups whose own adverts (members, carried riders) have no fingerprint, not
   every group in the block; a block never walked or mid-walk, an advert the snapshot does not place and the
@@ -229,6 +241,11 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   sit in two towns may be a wrong merge, and since migration 636 its pin stands at the finer ad's
   point, which can be the other building's. Census SQL in the ONE PIN W0/W1 receipts
   (`~/one-pin-artifacts/` on the operator machine; `docs/design/one-pin/PROGRAM.md` W3).
+- **Owed: the share-sale merge (E932; the operator's rulings N5–N10, 2026-10-01):** an advert selling a
+  share of a property (`podil`) merges with the same property's sale advert at the same price, and the
+  merged property reads "Prodej". Built and measured on the pre-Prague engine in PR #1655, never shipped;
+  closed 2026-10-25 on the operator's ruling 4b, its code kept at tag `archive/feature-autodedup-share-sale`.
+  Rebuild it on the current engine once the Prague work is quiet.
 - **Next (W8, E953):** per area, before it enters the apply scope: brake, the area into the scope
   row, `mode=apply` `generation=rt,retire_legacy=1,blocks=town:<code>` dry run, then live, then
   the interval back. Beroun (`town:531057`) first, once the lane has read it after the 10-14

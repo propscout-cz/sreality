@@ -44,7 +44,7 @@ any more: the last, `ppm2_median_shift`'s "compared NOTHING", went with that key
 wave 6, whose median-shift arm reads Not measured until 6 days of its own history exist. The harness
 writes no system alert: results become incidents through the ladder below, shown on Health and told
 outside the app only by the canary's GitHub e-mail (no bell since 2026-10-21, ruling R2b). Since wave 2 the
-pg_cron watcher `health_liveness()` (migration 620) judges whether the worker, the API, the
+pg_cron watcher `health_liveness()` (migration 620) judges whether the worker, the
 ladder and every alarm are alive, and the canary checks the watcher and the ladder from GitHub
 ("Hosts, the watcher and the canary" below). The harness exists because the pipeline
 stalled silently for two days in 2026-07 (Anthropic credit exhaustion, 38k+ failed LLM calls) and
@@ -130,7 +130,7 @@ cell, and its abort arm (the provider stopped the last pass; 2026-10-02..10 the 
 eight days and wrote nothing) the `llm` check's `<provider>/credit` cell.
 
 **Lane cells** (the `jobs` check's `lane/<lane>` since wave 3; `worker_lane_stall` before it) close
-the gap the watcher's `worker` cell (and `worker_liveness` before it) structurally cannot see — a
+the gap the watcher's `worker/<name>` cells (and `worker_liveness` before them) structurally cannot see — a
 worker that is ALIVE with a wedged lane. The realtime worker
 beat every 30 s for nine hours while its drain lane completed ONE pass and its images lane
 completed 486; a pass was recorded only on
@@ -163,7 +163,7 @@ measured OK instead of closing silently after 7 days.
 (`scripts/verify_pipeline.py`), each entry with a one-line basis comment, passed to every check by
 `main()` and by the worker's health lane. Since wave 3 nothing overrides them: `DEFAULT_THRESHOLDS`,
 `load_thresholds` and its merge of `app_settings.pipeline_check_thresholds` are deleted (every
-override equalled its default; migration 624 deletes the row), so a threshold changes in a PR, with
+override equalled its default; migration 643 deleted the row), so a threshold changes in a PR, with
 its basis. Since Health dashboard sprint wave 6 that includes the fill and vocabulary arms' numbers
 (`parsing_fill_*`, `parsing_vocabulary_*`, `parsing_census_stale_days`, sized on the cohort's measured
 drift and passed to
@@ -176,7 +176,7 @@ Field capture W1 shipped this as the `field_fill_matrix` check; since Health das
 the `parsing` alarm's fill and vocabulary arms (`<portal>/fill/<field>`, `<portal>/vocabulary/<field>` and the
 `census` cell; the `parsing` section, below), measured every 6 h on the worker. The rationale holds.
 
-`data_quality_by_source` tests 26 fields for `IS NOT NULL`. That is blind to the two defect
+`data_quality_by_source` (dropped by migration 643) tested 26 fields for `IS NOT NULL`, blind to the two defect
 shapes the field-capture program exists to fix: a value that is PRESENT and outside every
 canonical option list (13 live `condition` spellings against a filter list of 6, ~14k active rows
 unreachable by any Browse filter), and a cell that has read 0.0 % since the parser was written
@@ -233,7 +233,7 @@ semantics the contract declares, so there is nothing yet to be right or wrong ag
 **Who owns which field.** The fill arm owns the 27 `LISTING_COLUMNS` attributes. `data_quality_by_source`'s
 seven probes with no attribute column (`geom`, `locality`, `street`, `property_grouped`, `source_url`, the
 two condition levels) froze with its capture in Health dashboard sprint wave 6 (migration 633 unscheduled
-`capture-data-quality`; wave 9 drops the view): a portal link is the `data_quality` gauge's `url/<portal>`
+`capture-data-quality`; migration 643 dropped the view): a portal link is the `data_quality` gauge's `url/<portal>`
 cell, a town the location gauge's.
 
 **The census half** is checked in per portal under `data/field_capture/census/` and re-blessed
@@ -269,8 +269,8 @@ ended**.
   the API's boot sweep stamps its `ended_at` (its `by_category` stays `[]`): its units'
   `<portal>/walks/<unit>` cells keep aging against G (§ `scraping` below), and `<portal>/walks`
   is a Problem once no walk has finished in 30 d. No check reads `errors`: the two arms a crash
-  used to light, `stuck` (`ended_at is null`) and `err_pct` (`errors`) of `scraper_health_checks()`,
-  have had no reader since Health wave 8 (wave 9 drops the function), and the delisting check's
+  used to light, `stuck` (`ended_at is null`) and `err_pct` (`errors`), went with
+  `scraper_health_checks()` in migration 643, and the delisting check's
   `<portal>/stuck` cell is another thing (active ads whose gone verdict waits past its limit).
 - It catches `BaseException`, not `Exception`: a SIGINT or `SystemExit` out of a phase leaves the
   run just as unfinished as a `CheckViolation`, and "did not finish" must never read as green.
@@ -465,9 +465,9 @@ are gone; the harness only measures.
 
 **Where it runs.** `toolkit/system_alerts.reconcile(conn)` is called every 60 s by the API's
 system-alerts loop (`api/system_alerts_loop.py`; `SYSTEM_ALERTS_INTERVAL_SECONDS = 60`, a
-constant), started in `api/main.py`'s lifespan beside the watchdog matcher and off under the same
-`NOTIFICATIONS_MATCHER_DISABLED` guard: the ladder stays off the worker, so a dead worker cannot
-silence its own alarms. A pass is one transaction under
+constant), started in `api/main.py`'s lifespan as the API's only background loop (the watchdog
+matcher went to the worker's notifications lane in W2b) and off under `HEALTH_TELLER_DISABLED`: the
+ladder stays off the worker, so a dead worker cannot silence its own alarms. A pass is one transaction under
 `pg_try_advisory_xact_lock(hashtext('health_reconcile'))` — a second caller returns zeros and
 writes nothing — and returns its counts (opened, reminded, recovered, closed silently), logged
 when any is non-zero. Its values are module constants in `toolkit/system_alerts`, spelled once
@@ -636,11 +636,13 @@ dead. Its cells judge what must not judge itself:
 
 | cell | Problem when | basis |
 | --- | --- | --- |
-| `worker` | a worker's newest heartbeat is more than 10 min old (with no heartbeat row at all, `unknown`: "no worker on record") | beats come every 30 s, the worker's watchdog exits at 300 s, a deploy gap is under 2 min |
-| `health_lane` | the health lane's own pass, read from its heartbeat entry (`details -> 'health'`, migration 621): no completed pass for 10 min, counted from the later of `last_pass_at` and the worker's `started_at` (the boot seed carries the last pass across a restart, so a restart is judged 10 min after boot, not in its first minute), a pass in flight for 10 min (`in_flight_s`: a pass skipped behind an abandoned one still records a pass) or failing for 10 min (`failing_since`, the message quoting `last_error`); `value` = minutes on that clock; emitted once the heartbeat carries a `health` entry, and folded into a failing `worker` cell. Never result rows (620 judged them): the lane writes one only for a due check, so a restart near a cycle's end read as a Problem | a pass is in flight at most 500 s, the lane's pass budget since Health dashboard sprint wave 6 (360 s in waves 4-5, 300 s in wave 3), 530 s with the heartbeat's 30 s lag; the lane sleeps its 60 s tick after each pass, so a full pass completes at most 560 s after the previous one, 590 s with the lag: both arms stay under the 10 min line, the 10 s left being the pass's own overrun (its connection and due read, each statement's 1 s floor, the daily prune); measured passes ran p50 1.9 s, max 23.1 s on 2026-10-19 |
+| `worker/<name>` | that worker's newest heartbeat is more than 10 min old; one subject per `worker_heartbeats` row since migration 675, so each worker (the realtime worker, each job-runner replica) has its own incident (with no heartbeat row at all, one `worker` cell, `unknown`: "no worker on record") | beats come every 30 s, the worker's watchdog exits at 300 s, a deploy gap is under 2 min |
+| `health_lane` | the health lane's own pass, read from its heartbeat entry (`details -> 'health'`, migration 621): no completed pass for 10 min, counted from the later of `last_pass_at` and the worker's `started_at` (the boot seed carries the last pass across a restart, so a restart is judged 10 min after boot, not in its first minute), a pass in flight for 10 min (`in_flight_s`: a pass skipped behind an abandoned one still records a pass) or failing for 10 min (`failing_since`, the message quoting `last_error`); `value` = minutes on that clock; emitted once the heartbeat carries a `health` entry, and folded into a failing `worker/realtime-worker` cell. Never result rows (620 judged them): the lane writes one only for a due check, so a restart near a cycle's end read as a Problem | a pass is in flight at most 500 s, the lane's pass budget since Health dashboard sprint wave 6 (360 s in waves 4-5, 300 s in wave 3), 530 s with the heartbeat's 30 s lag; the lane sleeps its 60 s tick after each pass, so a full pass completes at most 560 s after the previous one, 590 s with the lag: both arms stay under the 10 min line, the 10 s left being the pass's own overrun (its connection and due read, each statement's 1 s floor, the daily prune); measured passes ran p50 1.9 s, max 23.1 s on 2026-10-19 |
 | `stale:<key>` | an alarm other than `liveness` whose newest measured result (ok/warn/fail written since its `declared_at`) is past its staleness budget (`public.health_stale`); with no measured result it counts from `declared_at`, so a key whose every run is Not measured is still told; facts `key`, `host`, `last_measured_at`, `budget_s` | the budget is 3 × cadence on the worker and pg_cron, cadence + 18 h on GitHub, whose crons arrive up to ~13 h late |
-| `api` | the watchdog matcher's lease (`notification_matcher_lease`) is more than 2 × `notifications_matcher_interval_seconds` (300 by default) + 60 s past its `expires_at`; a NULL `expires_at` (a clean shutdown released it) is `unknown`; interval 0 (matcher off) is `ok` with the state fact `off` | the matcher renews the lease every pass (~300.5 s apart) in the API process that also runs the ladder's loop; the lease lasts 15 min (`api/notifications._MATCHER_LEASE_TTL`), so a crashed API reads Problem about 26 min after its last renewal |
 | `unalerted` | a cell fails in an alarm's newest result (in budget, written since `declared_at`) and also failed in its newest measured result at least 2 cadences older, and has no open `cell:<key>:<subject>` incident; cells are read as the ladder reads them (the explicit `details.cells`; the implicit cell named by the key went in migration 633, Health dashboard sprint wave 6); one cell, `value` = the cells counted, its facts naming the keys and cells | a fail that has stood for two cadences has had every 60 s ladder pass in between to open its incident; like the ladder, it counts no stale or unmeasured result |
+| `job/<name>` | one cell per registered job-runner row (`runner = 'job-runner'`, `registry_at` set), live or retired under an hour (a blink), from `public.health_job_cells()` (migration 682, #2026): its run past `timeout_s` + `STUCK_RUN_GRACE_S` (600 s), its latest closed run `timeout` (ruling R-3), 3 failures in a row whose first is min(cadence, 1 h) old, late past cadence + `timeout_s` + the longest sibling run on its resource + min(cadence, 1 d), due or requested 10 min with no job-runner replica beating, or refused at boot by a replica (`details.skipped`; a refused name with no row gets a cell too). Watch: in flight past ⅔ of `timeout_s` or past it, 1-2 failures (or 3 in under an hour), late past the first line, waiting 10 min while a replica beats, paused longer than greater(cadence, 7 d). Never `unknown`; paused, held, not run yet and the first slot of a (re)registered row read ok and say why; every row is judged on its runs since `registry_at` (when it joined the runner, kept by 682's trigger). State table: `references/job-runner.md` | the runner's own mechanics: SIGTERM at `timeout_s`, SIGKILL 90 s later and the run recorded `timeout`; backoff retries 60 s, 120 s, 240 s; a live replica claims every 5 s |
+| `job-runner` | never: ok `N replicas beating; M jobs registered`, Watch when no `job-runner/%` heartbeat is under 10 min old; present while a live registered row exists, or one retired under an hour (a blink; M counts only the live ones) | a cleanly stopped runner deletes its beats, so the job cells turn Problem once a job is due + 10 min; each replica's own `worker/job-runner/<id>` cell judges an unclean death |
+| `job-cells` | the helper raised: `the job cells could not be computed: <sqlerrm>`; each open `cell:liveness:job/*` or `cell:liveness:job-runner` incident then gets a listed `unknown` cell (`<subject>: not judged`), which the teller neither keeps, recovers nor retires | a subtransaction: a defect costs the job cells, never the watcher's; the `job-cells` fail keeps the row `fail`, never `unknown` |
 
 While a worker's cell fails, the keys hosted on it (a host is named like its worker,
 `realtime-worker`) and its `health_lane` cell fold into it instead of each getting a cell, so a
@@ -657,7 +659,7 @@ so the canary and Health see liveness at once. It replaces two guards: `worker_l
 with a probability of about D / 4.9 h), deleted with `worker_stale_fail_minutes` — the ladder
 closes any open `cell:worker_liveness:*` incident silently as `retired` once its registry row is
 gone; and migration 274's dead-man job `emit-verification-stale-alert` (24 h on the newest row of
-any key; it never fired), which 620 unschedules and 624 drops.
+any key; it never fired), which 620 unscheduled and 643 dropped.
 
 **The canary: `verify_pipeline.yml`**, "Monitoring: health canary (hourly)": cron `15 * * * *`
 plus a manual dispatch whose `dry_run` input reaches the harness step only. GitHub delivers about
@@ -695,7 +697,7 @@ assertion fails, 0 otherwise:
 | `alarms_acknowledged` | an alarm-class cell incident is open and unacknowledged and its latest rung (`ops_incidents.alerted_at`: the onset, or the 6 h, 24 h, 72 h or weekly reminder) is at least 15 min and at most 12 h old; the line names the key and the rung's age | system alerts reach no bell or phone (ruling R2b, 2026-10-21), so this red run's e-mail is how an alarm reaches the operator |
 
 Since W1 (2026-10-21) the fourth assertion reads `ops_incidents` and the registry's class only: no
-`channel_sends`, no `seen_at`, no dedupe key. Gauges are never asserted: a gauge's rungs show on Health once a day (Q2),
+`seen_at` and no bell row (migration 656 dropped `channel_sends`, the dedupe key and the system rows). Gauges are never asserted: a gauge's rungs show on Health once a day (Q2),
 and the e-mail path is for alarms. So an unacknowledged alarm reddens every canary run from 15 min
 to 12 h after its onset and after each reminder rung, and GitHub emails a red scheduled run to
 whoever last changed its cron line: at the first canary run after the onset, and again after each
@@ -706,8 +708,9 @@ reddened a run whenever it measured a failing alarm, read or not, and could neve
 check measured elsewhere — the watcher's, or the worker's.
 
 **Who watches whom.**
-- **pg_cron** (the watcher) watches the worker (its heartbeat), the API (the matcher's lease), the
-  ladder (`unalerted`) and every alarm's freshness, the canary's GitHub-hosted keys included: a
+- **pg_cron** (the watcher) watches the worker (its heartbeat), the ladder (`unalerted`) and every
+  alarm's freshness (its `api` cell, the matcher's lease, went with the matcher in W2b, migration
+  655), the canary's GitHub-hosted keys included: a
   canary that stops running opens a `stale:<key>` incident on Health once its hourly keys pass cadence + 18 h.
 - **The API** (the ladder) turns what the watcher and the checks find into incidents and rungs, and
   keeps doing so for a dead worker because it does not run in the worker.
@@ -716,15 +719,16 @@ check measured elsewhere — the watcher's, or the worker's.
   email needs neither Supabase's scheduler nor Railway.
 - **The worker** (its health lane, since wave 3) runs the platform checks: `jobs` watches every
   production GitHub workflow (through the canary's poller, whose cursor is its `gh/poller` cell),
-  every pg_cron job (`health-liveness` included), every worker lane and every derived artifact.
+  every pg_cron job (`health-liveness` included), every worker lane, every derived artifact and the job
+  runner's registry (`job-runner/registry`; the watcher judges each runner job, `job/<name>`).
   Since wave 4 it also runs the portal checks (`scraping`, `publishing`, `delisting`, `coverage`),
   since Health dashboard sprint wave 5 the engine check (`dedup`), and since wave 6 the `parsing` alarm
   and the quality gauges. The watcher's `health_lane` cell watches the lane.
 
-**Known gap.** A clean API shutdown leaves the lease NULL, which reads Not measured, not Problem:
-that is every deploy's normal state until the new process's first pass claims the lease. An API
-that stops cleanly and never comes back is therefore no liveness Problem by itself; it shows only
-once a liveness cell fails and finds no incident, which the canary's third assertion then emails.
+**Known gap.** Since migration 655 (notifications W2b) the watcher judges no API state: the
+matcher's lease, its only API signal, went with the matcher. A dead API (no teller) shows only
+through `unalerted`, two cadences after a cell fails with no incident, and through the canary,
+whose third assertion emails a failing liveness cell that finds no incident.
 
 ## Delivery readiness — deleted (notifications push program W1, 2026-10-21)
 
@@ -846,11 +850,12 @@ failing rule; the other lanes' `last.errors` count per-item failures inside comp
 | OK, `off` | `interval_s` ≤ 0, or the newest pass's `last.skipped == "slice<=0"` (what a drain or images pass with a slice ≤ 0 records; any other `skipped`, autodedup's included, is not off) |
 | Problem, never woke | `interval_s` is None and the worker has been up more than 15 min (`jobs_lane_boot_grace_s`) |
 | Not measured | the lane's entry has no `interval_s` key at all, which only a worker from before wave 3 writes (the seeded None, the key present and null, is "never woke"); this guards the first deploy, while the old process's beat can still be the newest row |
+| Watch, then Problem, missing | a lane in `LANES` has no heartbeat entry at all (notifications W2b): the beat is from an older process beating beside the new one (a deploy overlap); with the API's matcher gone, a worker without the `notifications` lane would leave the producers unrun and no cell would say so. Watch the first time (this worker's health lane can read its predecessor's row before its own first beat), Problem when the previous measurement read it missing too (fact `missing`); the `heartbeat` lane has no cell, missing or not. It reads another process's beat, never the checker's own: a worker wholly on old code runs the old check too, and shows only in Railway's per-service commit status |
 | Problem, late | `now − last_pass_at` > max(3 × `interval_s`, `interval_s` + 2 × `last_duration_s`, 15 min) (`jobs_lane_floor_s`), once the worker has been up longer than that bound; a lane with no pass yet counts from the worker's start; a lane with no pass in this process counts from the worker's boot, or from this check's previous measurement when the lane read off then (switched on after boot) |
 | Problem, failing | `failing_since` older than max(3 × `interval_s`, 15 min), or set at all when `interval_s` ≥ 1 h (`jobs_lane_daily_interval_s`; a daily lane passes about once per boot) |
-| Problem, in flight | a pass running more than 1,800 s (`jobs_lane_inflight_fail_s`, `LANE_PASS_TIMEOUT_SECONDS`) |
+| Problem, in flight | a pass running more than 1,800 s (`LANE_PASS_BUDGET_S` = `LANE_PASS_TIMEOUT_SECONDS`, 1×: the worker's own pass budget, pinned by a test; no THRESHOLDS key since #2026) |
 | Problem, aborted again | the last pass aborted (`last.aborted`, a non-empty reason string other than the engine's shutdown aborts `stopping` and `lease_lost`), this check's previous measurement read an abort too, and the lane's `passes` has advanced since: a second pass aborted (the heartbeat replaces `last` when a pass completes or is refused, so one abort read twice while the next pass runs or raises stays Watch); or, with `passes` not advanced, the previous measurement's abort condition itself read Problem: the re-read keeps it ("its last pass aborted: pair_budget, after an earlier aborted pass"), while a Problem the cell read for another reason (late, failing) leaves one abort a Watch condition |
-| Watch | a pass running more than 1,200 s (`jobs_lane_inflight_warn_s`); the newest pass failed (`failing_since` set, not yet old); flapping: since this check's previous result, at least half of the lane's attempts failed (`jobs_lane_flap_share`, 0.5), that is `failed_passes` grew at least as much as `passes`, which counts completed passes only, over at least 3 attempts (`jobs_lane_flap_min_passes`); the last pass aborted (`last.aborted`, a non-empty reason string: the engine's `pair_budget` or `deadline`) |
+| Watch | a pass running more than 1,200 s (`LANE_INFLIGHT_WARN_S`, ⅔ of `LANE_PASS_BUDGET_S`); the newest pass failed (`failing_since` set, not yet old); flapping: since this check's previous result, at least half of the lane's attempts failed (`jobs_lane_flap_share`, 0.5), that is `failed_passes` grew at least as much as `passes`, which counts completed passes only, over at least 3 attempts (`jobs_lane_flap_min_passes`); the last pass aborted (`last.aborted`, a non-empty reason string: the engine's `pair_budget` or `deadline`) |
 | no cell | the worker has been up under 15 min and the lane has not passed in this process yet |
 
 A portal failing inside the probe or drain lane has its own cell, `lane/<lane>/<portal>`, from
@@ -868,11 +873,11 @@ stored episode is autodedup's 10-02 stall, when the lane showed `failed_passes` 
 `worker_lane_stall` read OK.
 
 **What the heartbeat carries** (`scraper/realtime_worker.py`, wave 3). `_amain` registers every
-lane from the module constant `LANES` — `probe`, `drain`, `images`, `count_probe`, `maintenance`,
+lane from the module constant `LANES` — `probe`, `drain`, `images`, `maintenance`,
 `broker_maintenance`, `estimation`, `location_resolve`, `location_intake_fast`, `location_refetch`,
 `sold_comps`, `text_extract`, `health`, `autodedup`, `notifications`, `push`, `heartbeat` — seeds each with `interval_s`
 None before any task starts, and asserts that the names it registers equal `LANES`; nothing imports
-the worker to learn the list. `_lane_loop` writes `interval_s` on every wake, the idle branch
+the worker to learn the list (the jobs check mirrors it as `scripts/checks/platform.WORKER_LANES`, a test pins the two). `_lane_loop` writes `interval_s` on every wake, the idle branch
 included, so an off lane reads off, not absent. Per lane: `interval_s`, `passes`, `failed_passes`,
 `last_pass_at`, `last_duration_s`, `started_at`, `in_flight_s`, `last`, `failing_since`,
 `last_error` (at most 300 characters) and, on the probe, drain, notifications and push lanes,
@@ -905,6 +910,21 @@ exceeded 6 h: median 7.2 h, longest 13.5 h, 09-28..10-18); Not measured ("never 
 sweep arm's fail line, and its 52 h Watch has no equivalent; 622 seeded it from
 `app_settings.property_sweep_last_complete`, so its verdict is continuous across the deploy. Every
 live row was inside its budget at build.
+
+**The job runner's registry** (#2026). One `job-runner/registry` cell, always present: the names in
+`scraper.jobs.runner_jobs()` (the code the worker runs, main's) against the live registered job-runner rows
+(`_REGISTERED_SQL`, the runner's due-list predicate), since a job with no row has no `job/<name>` cell in the
+watcher. Facts `declared`, `registered`, `missing`, `undeclared`, `worker_up_s`.
+
+| reads | when |
+| --- | --- |
+| Problem | a declared job has no live row, the worker booted more than `jobs_runner_register_grace_s` (3600 s) ago (no heartbeat row counts as past it), and the previous measurement read it missing too: the runner's deploy failed or was skipped, it refused the entry, or an older image booted and retired it |
+| Watch | the same, read missing at this measurement only (in a deploy overlap both workers beat one heartbeat row, so one read can see the predecessor's old boot); or a live row this code does not declare, past the grace |
+| OK | inside the grace (`waiting for the runner's deploy (worker up N min)`), `N jobs declared on the job runner, all registered`, or `no job is declared on the job runner yet` |
+
+The grace: a merge restarts the worker at once and the runner after its image build and a 250 s drain; it is
+re-set once #2025 PR-1's CI measures the build, never under 1800 s. A worker restart re-arms it, which only delays
+the Problem.
 
 ## The poller — production runs, reason lines and workflow facts (wave 3)
 
@@ -1104,7 +1124,7 @@ when every scope it walked reached the end (a scope it never started leaves no e
 reaches the end (`scrape_runs` records no run arguments); and no per-attempt stamp exists, so the
 fetch-error denominator approximates "attempted in 24 h". It replaces `walk_end_streak` and
 `walk_coverage` (with `_SELF_CERTIFYING_TOTALS`, now the `Portal.total_is_count` seam); the old
-page's SQL checks on the same questions keep rendering until wave 9.
+page's SQL checks on the same questions rendered until wave 8 retired the page, and migration 643 dropped them.
 
 ## `publishing` — do new ads reach Browse quickly, with their photos? (wave 4)
 
@@ -1126,7 +1146,7 @@ measured; the stock Problem needs 200 properties (`publishing_stock_min_n`); pho
 swaps the table in behind its readers. Photo facts: the top `last_error` reason and the count of new
 ads with no image rows, which the arm cannot judge (its denominator is photos, so a parser that
 stops emitting galleries scores nothing: the realitymix 19-day blackout class). The active stock's
-stored share is not computed: an 8M-row scan every 10 min; the image panels keep it until wave 8.
+stored share is not computed: an 8M-row scan every 10 min; the image panels kept it until wave 8.
 
 Basis: the 7-day maximum waits were 119-122 min for NEW (bazos politeness bursts on 10-12, 10-13 and
 10-16, traced to the rate-ledger overflow, #1852) and 106 min for CHANGED, so the bazos 10-13 burst
@@ -1226,7 +1246,7 @@ VERIFY priority and count in the backlog; "active again" includes probe and refe
 verdict older than the ledger's 7 days is pruned, so stuck can never see it. It replaces
 `false_delist_share` (a mixed 7-day window) and `delist_flip_refused` (7 days of
 `delist_flip_refusals`, a table nothing reads after it); the old page's `delisting_latency` and
-`delisting_spike` matview checks rendered until wave 8 retired the page (wave 9 drops the matview).
+`delisting_spike` matview checks rendered until wave 8 retired the page (migration 643 dropped the matview).
 
 ## `coverage` — do we hold what each portal shows? (wave 4, gauge)
 
@@ -1484,7 +1504,7 @@ imported inside the check: the registry must import with the base dependencies o
 | `push/stall` | Problem: a `pending` or `failed` delivery whose `next_attempt_at` passed more than 10 min ago (`notifications_stall_min`), its device not on hold | the lane ticks every 15 s and a claim's lease is 2 min, so a healthy row is never due past ~2.5 min; a terminal failure waits at `'infinity'` and never counts; a device Apple throttled (`push_subscriptions.hold_until`, a 429's Retry-After, up to an hour) keeps its rows due and unclaimed by design, with their attempts handed back; a row a dead process claimed 5 times is failed `lease_expired` by `EXHAUSTED_SQL`; not judged while the lane is braked (nothing is claimed then, so every row is due by design; `push/unconfigured` says so once) |
 | `push/recall` | Problem: a VISIBLE unseen event of the last 24 h, more than 5 min old (`notifications_recall_grace_min`), whose account has a live device registered before it, with no `notification_deliveries` row for that pair | fan-out runs every pass (15 s), so a missing row after 5 min is a lost push (the F2/F10 class); not judged while the lane is braked, which `push/unconfigured` says |
 | `push/failures` | Problem: 3 or more terminal failures (`status = 'failed'`, `next_attempt_at = 'infinity'`) created in 24 h (`notifications_failures_fail`); the message names Apple's reason words | one `BadDeviceToken` is one device's churn; three in a day is a key, payload or JWT fault |
-| `push/unconfigured` | Watch: the push lane's newest pass found no `VAPID_PRIVATE_KEY` (`last.unconfigured`) while a live device exists | the brake is deliberate, so never Problem; Not measured when the worker's heartbeat is stale or missing (the watcher's `worker` cell judges that) |
+| `push/unconfigured` | Watch: the push lane's newest pass found no `VAPID_PRIVATE_KEY` (`last.unconfigured`) while a live device exists | the brake is deliberate, so never Problem; Not measured when the worker's heartbeat is stale or missing (the watcher's `worker/realtime-worker` cell judges that) |
 
 The three-strike rule (iOS removes an origin's subscriptions after silent pushes) has no server
 signal: prevented in `sw.js` (always one notification), never measured here. Gauges (open rate,
@@ -1600,7 +1620,7 @@ sreality's old-API rows, which `floor_convention` watched until Q4 deleted it) h
 
 It replaces `field_fill_matrix`, `ppm2_measure_coverage`'s 7-day arm, `ppm2_median_shift` and
 `location_payload_shape_drift` with `SREALITY_SHAPE_CASE_SQL` and `_LOCATION_SHAPE_REMEDY` (portal literals in
-shared code); and on the old page, until wave 8 retired it, the SQL `snapshot_churn` and `field_null_drift` rungs (wave 9 drops them).
+shared code); and on the old page, until wave 8 retired it, the SQL `snapshot_churn` and `field_null_drift` rungs (migration 643 dropped them).
 
 ## The quality gauges — `data_quality`, `location_town_coverage`, `text_extraction` (Health dashboard sprint wave 6)
 
@@ -1668,7 +1688,7 @@ It replaces `ppm2_basis_floor_share`, `area_vs_usable_divergence`, `outbound_url
 `ppm2_measure_coverage`'s stock arm and `floor_convention` (deleted, Q4), and `data_quality_by_source` with the
 `capture-data-quality` job: migration 633 unschedules the job (24 failures in 30 d, statement timeouts and "job
 startup timeout", each ringing the `jobs` check's cron cell for a job this gauge supersedes), and
-`data_quality_snapshots` stays as frozen history until wave 9 (Q5).
+`data_quality_snapshots` stays as frozen history (Q5): migration 643 dropped the view and kept the table.
 
 ### `location_town_coverage` — rule 25's invariant over active ads
 

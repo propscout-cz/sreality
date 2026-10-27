@@ -12,8 +12,9 @@ name: "Ops: retire claims under old contract versions"
 # TWO STEPS, in this order, and the first is the point of the workflow:
 #
 #   1. THE BACKUP (CLAUDE.md rule 1's pg_dump equivalent). `\copy` of the doomed
-#      rows — the exact join the delete uses — to a gzipped CSV, uploaded as an
-#      artifact with 90-day retention. The step prints the file size; a backup
+#      rows — the exact join the delete uses — to a gzipped CSV, streamed to R2 at
+#      backups/retired-claims/<UTC date>/ (never an artifact: the repository's
+#      artifacts are not private storage). The step prints the file size; a backup
 #      nobody sized is a backup nobody checked. It runs on dry_run too, so the
 #      operator can hold the CSV before arming anything.
 #   2. THE DELETE. `scripts.location_claims_retire`, 20,000-row id-keyset batches,
@@ -104,17 +105,19 @@ jobs:
           set -o pipefail
           psql -X -v ON_ERROR_STOP=1 "$DATABASE_URL" \
             -c "\copy (select c.* from location_claims c join portal_contract_entries e on e.id = c.contract_entry_id join portal_contracts pc on pc.id = e.contract_id where not pc.is_active) to stdout csv header" \
-            | gzip > retired_claims.csv.gz
-          ls -l retired_claims.csv.gz
-          echo "backup size: $(du -h retired_claims.csv.gz | cut -f1) ($(stat -c%s retired_claims.csv.gz) bytes)"
+            | gzip > "retired_claims_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}.csv.gz"
+          ls -l "retired_claims_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}.csv.gz"
+          echo "backup size: $(du -h "retired_claims_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}.csv.gz" | cut -f1) ($(stat -c%s "retired_claims_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}.csv.gz") bytes)"
 
-      - name: Upload the backup
-        uses: actions/upload-artifact@v4
-        with:
-          name: retired-claims-backup
-          path: retired_claims.csv.gz
-          retention-days: 90
-          if-no-files-found: error
+      # One object an attempt (run id + attempt name it: a re-run after a partial delete must not
+      # overwrite the first attempt's larger backup), read back at its size before anything is deleted.
+      - name: Store the backup in R2
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: python -m scripts.backup_before_drop retired-claims --file "retired_claims_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}.csv.gz"
 
       - name: Guard the real delete
         if: ${{ !inputs.dry_run }}

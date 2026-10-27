@@ -669,7 +669,6 @@ def _row(
 
 
 def test_find_comparables_returns_envelope():
-    from datetime import datetime, timezone
     cur = _FakeCursor([_row(1)], _RESULT_COLS)
     conn = _FakeConn(cur)
     res = find_comparables(

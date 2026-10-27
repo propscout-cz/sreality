@@ -23,8 +23,8 @@ A `--sale-type`/`--category` dispatch override narrows to a single scope.
 
 Cadence split, like sreality/idnes (rule #19): the full 14-scope index walk is
 ~1500 pages (≈ 50 min), so it cannot share one job with the detail drain without
-starving it. `bazos_index_walk.yml` runs `--index-only` (every 6h); the bounded
-`bazos_detail_drain.yml` runs `--drain-only` (hourly, `--max-seconds` budget).
+starving it. `bazos_index_walk.yml` runs `--index-only` (every 6h); the realtime
+worker's drain lane drains (`--drain-only` is the hand run).
 Omitting both flags runs both phases back-to-back — an ad-hoc combined run for
 local debugging / narrow scopes; no workflow uses it.
 """
@@ -80,8 +80,10 @@ class BazosPortal(portal_runner.PortalDefaults):
     section never suppresses another's nomination."""
 
     source = SOURCE
+    walk_every_s = 6 * 3600
+    walk_timeout_s = 130 * 60
     price_change_min_pct = 0.0
-    index_rate = 0.5
+    index_rate = 0.7
 
     def __init__(
         self,
@@ -125,12 +127,12 @@ class BazosPortal(portal_runner.PortalDefaults):
         items: list[tuple[str, str, int | None]] = []  # (native, detail_path, idx_price)
         total: int | None = None
         pages = 0
-        page_size = 0  # largest page bazos served this scope; places a 404 at page grain
         offset = 0
         # The largest page this scope has served. bazos publishes no page size, so
         # the walk measures it: it is what tells a SHORT tail page (bazos ran out
         # of ads) from a FULL page that claims no next page — the shape a renamed
-        # pager selector produces on page 1 of every scope.
+        # pager selector produces on page 1 of every scope — and what places a
+        # 404 or a blank page at page grain against the declared total.
         page_size = 0
         # A walk cut short by the wall-clock budget is NOT a finished walk: this
         # flag poisons the numeric coverage record below (the structural verdict
@@ -174,7 +176,6 @@ class BazosPortal(portal_runner.PortalDefaults):
             page_size = max(page_size, len(page.items))
             if page.total is not None:
                 total = page.total
-            page_size = max(page_size, len(page.items))
             LOG.info(
                 "INDEX offset=%d items=%d total=%s", offset, len(page.items), page.total
             )
@@ -201,6 +202,7 @@ class BazosPortal(portal_runner.PortalDefaults):
                 stop = self._confirm_barren(
                     client, sale_type, cat, offset,
                     total=total, collected=len(seen), pages=pages,
+                    page_size=page_size,
                 )
                 break
             if page.next_offset is None:
@@ -341,12 +343,15 @@ class BazosPortal(portal_runner.PortalDefaults):
 
     def _confirm_barren(
         self, client: BazosClient, sale_type: str, cat: str, offset: int, *,
-        total: int | None, collected: int, pages: int,
+        total: int | None, collected: int, pages: int, page_size: int = 0,
     ) -> StopReason:
         """Re-fetch an items-less page once and classify it (rule #3's barren rule).
 
-        Still empty AND at or past what the declared total implies — or no total
-        was ever readable and an earlier page of this scope carried items — is
+        Still empty AND on the last PAGE the declared total implies (placed by
+        `_classify_gone`, the one rule that places a 404 — the counter over-counts
+        by a handful, so 2026-10-23/24 prodam/byt served 9,040 of 9,042 and a
+        row-exact rule held a 9k scope open for three walks) — or no total was
+        ever readable and an earlier page of this scope carried items — is
         bazos's end; anything else stays `barren`, a stop of ours. A confirmation
         that cannot be obtained is not a confirmation, so a scope whose FIRST page
         is barren with no total is never confirmed."""
@@ -362,6 +367,7 @@ class BazosPortal(portal_runner.PortalDefaults):
             # which is what keeps a barren FIRST page from confirming itself.
             return self._classify_gone(
                 total=total, collected=collected, pages=pages, offset=offset,
+                page_size=page_size,
             )
         if parse_index(html).items:
             # The blank was a fluke, so this page's ads were missed: the walk is
@@ -372,7 +378,11 @@ class BazosPortal(portal_runner.PortalDefaults):
                 sale_type, cat, offset,
             )
             return "barren"
-        if (total is not None and offset >= total) or (total is None and collected > 0):
+        placed = self._classify_gone(
+            total=total, collected=collected, pages=pages, offset=offset,
+            page_size=page_size,
+        )
+        if stop_is_portal_end(placed) or (total is None and collected > 0):
             return "empty_confirmed"
         LOG.warning(
             "INDEX barren page uncorroborated sale_type=%s category=%s offset=%d "

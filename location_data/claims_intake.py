@@ -117,12 +117,14 @@ from location_data.claims_common import (  # noqa: F401 - the lane's public voca
     envelope_wkt,
     guard_admits,
     json_pointer,
+    locator_reads,
     mirror_is_faithful,
     point_wkt,
     sreality_payload_shape,
     value_norm_mirror,
 )
-from scraper import db, street
+from scraper import db
+from scraper.cpus import job_cpus
 from toolkit import description_extraction as text_lane
 
 LOG = logging.getLogger("location_data.claims_intake")
@@ -263,38 +265,6 @@ def payload_entries(entries: list[Entry], substrate: str = SUBSTRATE_PAYLOAD) ->
 def reading_entries(entries: list[Entry]) -> list[Entry]:
     """The entries this lane executes against a listing's stored reading (W3)."""
     return payload_entries(entries, SUBSTRATE_READING)
-
-@dataclass(frozen=True, slots=True)
-class LocatorRead:
-    """One path an entry may answer through, with the normalisers THAT path needs."""
-    locator: dict[str, Any]
-    transform: tuple[str, ...]
-
-
-def locator_reads(entry: Entry) -> list[LocatorRead]:
-    """The entry's reads in order: the primary locator, then each `locator.fallback`.
-
-    One entry, one claim type, one reader — a portal whose payload changed shape does not
-    get a second entry to read the old one (that would make the contract a vote the
-    survivorship policy never asked for, `contracts._check_shape`). It gets alternative
-    PATHS inside the entry it already has, and the reader takes the first that answers.
-
-    Each fallback carries its own `transform` because the shapes differ in more than where
-    the value sits: sreality states the street as a bare `/locality/street` today and as the
-    leading segment of one address line in the frozen older shape, so the same entry needs
-    no normaliser on the first path and `address_part_street` on the second. A fallback that
-    names no transform inherits the entry's.
-    """
-    reads = [LocatorRead(entry.locator, entry.transform)]
-    for raw in entry.locator.get("fallback") or ():
-        if not isinstance(raw, dict):
-            continue
-        declared = raw.get("transform")
-        reads.append(LocatorRead(
-            dict(raw),
-            tuple(str(t) for t in declared) if declared is not None else entry.transform))
-    return reads
-
 
 @reader("scalar")
 def _read_scalar(entry: Entry, row: ListingRow) -> list[Claim]:
@@ -2044,7 +2014,7 @@ def run(
              mode, source or "*", batch_size, batch_id,
              ",".join(sorted(page_capable)) or "-", "yes" if store else "no",
              f"{max_seconds:.0f}s" if max_seconds is not None else "none",
-             page_readers.extraction_workers())
+             job_cpus())
 
     budget = _Budget(max_seconds)
     # Resolved once, not per listing: the extractor is called 20 000 times a batch.

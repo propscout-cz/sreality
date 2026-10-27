@@ -303,7 +303,19 @@ _Avoid_: job, automation, task
 **Skill**:
 The instructions an AI follows to carry out a workflow, whether it runs in a user's assistant or
 inside the platform.
-_Avoid_: prompt, agent profile, recipe
+_Avoid_: prompt, recipe
+
+**Agent**:
+A configured specialist that carries out workflows inside the platform: which model it uses, which
+skills it follows, which tools it may call, its limits, and, once mid-run questions exist, when it must ask a person. An agent is
+defined in a file, never in a settings screen.
+_Avoid_: agent profile, bot, assistant (that word means the user's own AI account)
+
+**Tool**:
+One named platform operation with a typed input and a factual output, such as "find comparables"
+or "add to a collection", that an agent, a screen or an assistant can call. A tool declares whether
+it reads market data, reads or writes the user's own data, spends money, runs code, or (later) leaves the platform.
+_Avoid_: function, endpoint, capability (in prose)
 
 **Run**:
 One execution of a workflow, with its inputs and its result. A run usually concerns one property.
@@ -347,6 +359,46 @@ How long an ad must stay gone from its portal, in practice, before the platform 
 check, although the rule asks for 12.
 _Avoid_: dwell (alone), grace period, delisting delay
 
+### Running the platform
+
+**Scheduled job**:
+One piece of production work that repeats on its own timer, such as a portal walk or the daily
+property sweep, with one definition and one record of when it is due and who is running it.
+_Avoid_: workflow (alone), cron, task, automation
+
+**Lane**:
+One always-on loop inside a worker that does a small piece of work again and again, such as draining
+the detail queue or downloading images.
+_Avoid_: thread, loop, daemon
+
+**Realtime worker**:
+The always-on service that runs the lanes that keep the platform fresh within minutes: probes, the
+detail drain, images, property maintenance, notifications and the health lane.
+_Avoid_: the worker (where the job runner could be meant), hot lane, batch-worker
+
+**Job runner**:
+The always-on service, run as two identical copies, that takes each scheduled job when it is due, runs it
+as its own program, stops it when it overruns its budget, and records how it ended.
+_Avoid_: batch-worker, cron worker, scheduler service, jobs runner
+
+**Job run**:
+One execution of a scheduled job, with who ran it, when it started and ended, how it ended and what it used.
+_Avoid_: execution, pass (a pass belongs to a lane), run (alone, which is the AI term above)
+
+**Attended tool**:
+A piece of work a person starts with a click and watches, such as applying a migration, taking a
+backup or re-parsing stored pages. It never runs on a timer.
+_Avoid_: manual workflow, dispatch job, ops job
+
+**Backstop**:
+A scheduled job that repeats a lane's work so the work still happens while that lane is down.
+_Avoid_: fallback job, safety cron, shadow run
+
+**Actions workflow**:
+One file GitHub runs for us, always named with the qualifier: the tests on a pull request, the canary,
+an attended tool. Never "workflow" alone, which is the AI term above.
+_Avoid_: workflow (alone), pipeline, GitHub job
+
 ### Health
 
 **Check**:
@@ -384,8 +436,9 @@ _Avoid_: outage, issue, ticket, problem (for the record)
 
 **System alert**:
 A notice about the platform's own health: an incident has started, is still open, or has recovered.
-Since 2026-10-21 it reaches no notification feed: the Health page shows the incident, and the canary's
-failure email tells an unacknowledged alarm; a watchdog's notice about properties is not one.
+Since 2026-10-21 it reaches no notification feed (its old feed rows were deleted after a backup): the
+Health page shows the incident, and the canary's failure email tells an unacknowledged alarm; a
+watchdog's notice about properties is not one.
 _Avoid_: alarm (that is the check), alert (alone), health notification
 
 **Acknowledge**:

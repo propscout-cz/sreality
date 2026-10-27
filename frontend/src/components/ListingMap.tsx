@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { useSpaLinkDelegation } from '@/lib/linkGestures';
+import { useNewTabProps, useSpaLinkDelegation } from '@/lib/linkGestures';
 import { YmPicker, YM_SELECT_CLS } from '@/components/YmPicker';
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import { createMap } from '@/lib/basemap';
@@ -19,10 +19,9 @@ import type { CityIndexDefinition, CuratedCity, MapCounts, MapRow } from '@/lib/
 import type { CenterRadius, MapBounds } from '@/lib/filters';
 import { groupForPicker, indexLabel, pinnedFirst } from '@/lib/cityIndexes';
 import { legendGradient, mapRampStops, normalizeIndexValue } from '@/lib/cityIndexScale';
-import { czPlural, fmtCzk, fmtArea, fmtMeasuredPricePerM2, fmtRelative, fmtAbsolute } from '@/lib/format';
-import { PPM2_UNIT, areaKindOf, ppm2BasisFromToken } from '@/lib/measure';
+import { czPlural } from '@/lib/format';
+import { PPM2_UNIT, ppm2BasisFromToken } from '@/lib/measure';
 import { PIN_LIMIT_MAX, PIN_LIMIT_MIN, parsePinLimit, type PriceMetric } from '@/lib/browseState';
-import { listingKindLabel } from '@/lib/enums';
 import type { PriceStatDataset, PriceStatGrowthRow, PriceStatGrowthShape } from '@/lib/priceStats';
 import {
   GROWTH_METRICS,
@@ -35,15 +34,16 @@ import {
   type HoverData,
 } from '@/lib/growthChoropleth';
 import HoverChart from '@/components/HoverChart';
+import { SegmentedBar, type SegmentOption } from '@/components/controls';
 import MapOverlayControls, { MapOverlayLegends } from '@/components/MapOverlayControls';
 import { MapLegendCard, OverlayChip, OverlayPanel } from '@/components/OverlayChip';
 import {
-  LabelIcon, LayersIcon, MinusIcon, PlusIcon, RailButton, RailFlyout, RailGroup, ShowAllIcon, SlidersIcon, useRailPanel,
+  LayersIcon, MinusIcon, PlusIcon, RailButton, RailFlyout, RailGroup, ShowAllIcon, SlidersIcon, useRailPanel,
 } from '@/components/MapRail';
 import { escapeHtml } from '@/lib/escapeHtml';
 import { usePersistedFlag } from '@/lib/persistedFlag';
 import { circleRing } from '@/lib/geoRing';
-import { propertyPath } from '@/lib/listingUrl';
+import { listingPopupHtml } from '@/lib/listingPopupHtml';
 import {
   overlayFillIds,
   overlayClickOwner,
@@ -55,7 +55,6 @@ import { parseLayers, type MapOverlayRegistry } from '@/lib/mapOverlays';
 import {
   drawnUncertaintyRadiusM,
   isPinExact,
-  pinPrecisionLabel,
   uncertaintyPixelsAtZoom0,
 } from '@/lib/uncertaintyCircle';
 
@@ -81,6 +80,11 @@ const emptyCenterCircle: GeoJSON.Feature<GeoJSON.Polygon> = {
   type: 'Feature',
   properties: {},
   geometry: { type: 'Polygon', coordinates: [[]] },
+};
+
+const viewBounds = (map: maplibregl.Map): MapBounds => {
+  const b = map.getBounds();
+  return { west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() };
 };
 
 /* Fallback shape for a curated city that has no municipality boundary
@@ -478,8 +482,9 @@ export default function ListingMap({
   useEffect(() => {
     setColorByMin(null);
   }, [colorByIndex?.index_name]);
-  /* The map fits to results exactly once — the first time a non-empty
-   * row set arrives after the map is ready. Subsequent filter changes
+  /* The map fits to results at most once — the first time a non-empty
+   * row set arrives after the map is ready, unless the operator has
+   * already moved it (the moveend handler). Subsequent filter changes
    * never re-zoom, so the operator stays anchored on whatever area
    * they're examining. The Reset-view control offers an explicit
    * opt-in if they want to widen back to the full cohort. */
@@ -516,6 +521,11 @@ export default function ListingMap({
    * callback without rebinding. */
   const onHoverRef = useRef(onHover);
   onHoverRef.current = onHover;
+  /* And for the popup's "View details →": a new tab on the desktop, like the
+   * Browse card beside the map (lib/linkGestures `useNewTabProps`). */
+  const newTab = useNewTabProps();
+  const newTabRef = useRef(newTab);
+  newTabRef.current = newTab;
   /* When centre+radius mode is active the `moveend` handler must
    * skip emitting bounds — the cohort filters by the dashed circle,
    * not the viewport. Suppression flag rather than removing the
@@ -916,7 +926,7 @@ export default function ListingMap({
           className: 'listing-popup',
         })
           .setLngLat(at)
-          .setHTML(popupHtml(props));
+          .setHTML(listingPopupHtml(props, newTabRef.current));
         /* The circle lives exactly as long as the popup that explains it: its
          * ×, a click elsewhere on the map, or the next popup replacing it all
          * end in `close`. */
@@ -1114,19 +1124,15 @@ export default function ListingMap({
      * undefined`, which we skip — otherwise the initial-fit refit and
      * the Reset-view animation would both write to the URL.
      * Also skip when centre+radius mode is on; the dashed circle owns
-     * the spatial predicate in that mode. */
+     * the spatial predicate in that mode.
+     * Any user move, in either mode, voids a still-pending fit to results:
+     * an empty first cohort (a small circle) leaves it pending, and the next
+     * non-empty one (the switch back to the viewport) zoomed out over them. */
     map.on('moveend', (e) => {
       if (e.originalEvent == null) return;
+      didInitialFitRef.current = true;
       if (suppressBoundsRef.current) return;
-      const cb = onBoundsChangeRef.current;
-      if (!cb) return;
-      const b = map.getBounds();
-      cb({
-        west:  b.getWest(),
-        south: b.getSouth(),
-        east:  b.getEast(),
-        north: b.getNorth(),
-      });
+      onBoundsChangeRef.current?.(viewBounds(map));
     });
 
     return () => {
@@ -1276,6 +1282,18 @@ export default function ListingMap({
     );
   }, [centerCircle, ready]);
 
+  /* Leaving the circle hands the spatial predicate back to the viewport: emit
+   * the view on screen, so the cohort is what the map shows without a pan (the
+   * URL's bbox is otherwise stale or absent — no move writes it under a circle). */
+  const prevCenterCircleRef = useRef(centerCircle);
+  useEffect(() => {
+    const had = prevCenterCircleRef.current != null;
+    prevCenterCircleRef.current = centerCircle;
+    const map = mapRef.current;
+    if (!ready || !map || !had || centerCircle != null) return;
+    onBoundsChangeRef.current?.(viewBounds(map));
+  }, [centerCircle, ready]);
+
   /* ONE data effect for both lanes. The cohort arrives as points (`rows`, up to
    * the pin limit, every one a pin at any zoom) or as the server's tile cells
    * (above it), never both. Cells arrive at the finest level the server could
@@ -1295,9 +1313,7 @@ export default function ListingMap({
 
     /* The view the cohort was fetched for (the viewport is a filter), so an edge
      * tile's mark lands on the part of the tile that is on screen. */
-    const b = map.getBounds();
-    const view = { west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() };
-    const { pins, marks } = marksFor(rows, counts, level, view);
+    const { pins, marks } = marksFor(rows, counts, level, viewBounds(map));
     pinSource.setData(toFeatureCollection(pins, priceMetric));
     countSource.setData(toCountFeatureCollection(marks));
 
@@ -1363,7 +1379,7 @@ export default function ListingMap({
   }, [ready]);
 
   /* The listing popup's "View details →" is a raw <a> in a MapLibre-owned HTML
-   * string (see popupHtml below), so <Link> cannot reach it and a plain click
+   * string (lib/listingPopupHtml), so <Link> cannot reach it and a plain click
    * used to do a FULL DOCUMENT LOAD — discarding the bundle, the react-query
    * cache, the viewport and the active filter cohort, with Back re-downloading
    * all of it. Delegated on the CONTAINER (MapLibre parents every popup to
@@ -1547,13 +1563,6 @@ export default function ListingMap({
               {/* A basis-free word, as on the Ceny control: the default cohort is
                   a rental one, whose pins read Kč/m²/měs. */}
               <span className="text-[0.62rem] font-semibold leading-none">za m²</span>
-            </RailButton>
-            <RailButton
-              label={priceLabels ? 'Popisky cen u pinů: zapnuté' : 'Popisky cen u pinů: vypnuté'}
-              pressed={priceLabels}
-              onClick={() => onPriceLabelsChange?.(!priceLabels)}
-            >
-              <LabelIcon />
             </RailButton>
             <RailButton
               label="Piny a ceny"
@@ -1862,59 +1871,44 @@ function CityIndexLegend({ index }: { index: CityIndexDefinition }) {
   );
 }
 
-/* The "Ceny" segmented control — the pin label switches between the total price
- * and the per-m² measure. Two buttons rather than a dropdown because there are
- * exactly two states and the current one has to be readable at a glance while
- * the operator is reading pins. It does NOT recolour anything: per-basis colour
- * ramps are a separate problem (a sale ramp and a rent ramp cannot share a
- * domain) and are deliberately not in this wave. The rail's "za m²" button is
- * the same switch. */
-function PriceMetricControls({
+/* The "Ceny" pick-one — the pin label switches between the total price and the
+ * per-m² measure: the one joined bar (operator ruling 2026-10-27), its chosen
+ * segment copper like every pick-one's. Two segments rather than a dropdown
+ * because there are exactly two states and the current one has to be readable
+ * at a glance while the operator is reading pins. It does NOT recolour
+ * anything: per-basis colour ramps are a separate problem (a sale ramp and a
+ * rent ramp cannot share a domain) and are deliberately not in this wave. The
+ * rail's "za m²" button is the same switch. */
+export function PriceMetricControls({
   priceMetric,
   onPriceMetricChange,
 }: {
   priceMetric: PriceMetric;
   onPriceMetricChange?: (next: PriceMetric) => void;
 }) {
-  const opts: ReadonlyArray<{ value: PriceMetric; label: string }> = [
-    { value: 'total', label: 'Celkem' },
-    /* A basis-FREE word, deliberately not PPM2_UNIT.sale. This control picks a
-       metric, not a basis: the default Browse cohort is `pronajem`, so borrowing
-       the sale unit would print "Kč/m²" on a button whose every pin reads
-       "Kč/m²/měs". It would also couple the button to the sale unit string, so
-       editing that string later would silently rewrite this label. */
-    { value: 'per_m2', label: 'Za m²' },
-  ];
-  const hint = 'Popisky pinů: celková cena nebo cena za m²';
   return (
     <div className="flex items-center gap-2 text-[0.75rem]">
       <span className="text-[var(--color-ink-2)]">Ceny na pinech</span>
-      <div
-        role="group"
-        aria-label="Popisky pinů"
-        className="inline-flex gap-0.5 p-0.5 rounded-[var(--radius-sm)] border border-[var(--color-rule)]"
-      >
-        {opts.map((o) => (
-          <button
-            key={o.value}
-            type="button"
-            aria-pressed={priceMetric === o.value}
-            title={hint}
-            onClick={() => onPriceMetricChange?.(o.value)}
-            className={[
-              'px-2 py-0.5 text-[0.72rem] rounded-[var(--radius-xs)] transition-colors',
-              priceMetric === o.value
-                ? 'bg-[var(--color-ink)] text-[var(--color-paper)]'
-                : 'bg-[var(--color-paper-2)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)]',
-            ].join(' ')}
-          >
-            {o.label}
-          </button>
-        ))}
-      </div>
+      <SegmentedBar
+        label="Popisky pinů"
+        options={PRICE_METRIC_OPTS}
+        value={priceMetric}
+        onChange={(v) => onPriceMetricChange?.(v)}
+      />
     </div>
   );
 }
+
+const PRICE_METRIC_HINT = 'Popisky pinů: celková cena nebo cena za m²';
+const PRICE_METRIC_OPTS: ReadonlyArray<SegmentOption<PriceMetric>> = [
+  { value: 'total', label: 'Celkem', title: PRICE_METRIC_HINT },
+  /* A basis-FREE word, deliberately not PPM2_UNIT.sale. This control picks a
+     metric, not a basis: the default Browse cohort is `pronajem`, so borrowing
+     the sale unit would print "Kč/m²" on a button whose every pin reads
+     "Kč/m²/měs". It would also couple the button to the sale unit string, so
+     editing that string later would silently rewrite this label. */
+  { value: 'per_m2', label: 'Za m²', title: PRICE_METRIC_HINT },
+];
 
 /* The two view knobs: how many properties in view are drawn pin by pin before
  * the map counts them by tile (it IS the server's point budget, so changing it
@@ -2055,49 +2049,6 @@ function PinSwatch({ exact, active }: { exact: boolean; active: boolean }) {
       }}
     />
   );
-}
-
-function popupHtml(r: MapRow): string {
-  const price = fmtCzk(r.price_czk);
-  /* The popup has room, so it says what the m² MEASURES: a pozemek's area_m2 is
-   * its plot, not a floor plan (the Option-A fork keeps the column polymorphic). */
-  const area = fmtArea(r.area_m2, areaKindOf(r.category_main));
-  /* The server measure with its own basis suffix — the popup is where a pin's
-   * label can be read next to the figure it was derived from. */
-  const ppm = fmtMeasuredPricePerM2(
-    r.price_per_m2,
-    ppm2BasisFromToken(r.price_per_m2_basis),
-  );
-  const disposition = listingKindLabel(r) ?? '—';
-  /* The ONE label (migration 503). `lp-district` stays the style hook -- it is a
-   * class name in globals.css, not a claim about what the string is. */
-  const place = r.display_label ?? '';
-  /* Directly under the place it qualifies: "Nádražní 12, Hradec Králové" and
-   * "Přibližná poloha: obec, ±1 km" are one statement. It names the radius the
-   * circle drawn behind this popup shows, and the TRUE one where that circle is
-   * capped. */
-  const precision = pinPrecisionLabel(r);
-  const seen = fmtRelative(r.last_seen_at);
-  const seenAbs = fmtAbsolute(r.last_seen_at);
-  const inactive = !r.is_active;
-  return `
-    <div class="lp">
-      <div class="lp-row">
-        <p class="lp-price">${escapeHtml(price)}</p>
-        ${inactive ? '<span class="lp-inactive">Inactive</span>' : ''}
-      </div>
-      <p class="lp-meta">
-        <span class="lp-mono">${escapeHtml(disposition)}</span>
-        <span class="lp-sep">·</span>
-        <span class="lp-mono">${escapeHtml(area)}</span>
-        ${ppm === '—' ? '' : `<span class="lp-sep">·</span><span class="lp-mono">${escapeHtml(ppm)}</span>`}
-      </p>
-      ${place ? `<p class="lp-district">${escapeHtml(place)}</p>` : ''}
-      <p class="lp-precision">${escapeHtml(precision)}</p>
-      <p class="lp-seen" title="${escapeHtml(seenAbs)}">last seen ${escapeHtml(seen)}</p>
-      <a href="${propertyPath(r.property_id, r.listing_id)}" class="lp-link">View details →</a>
-    </div>
-  `;
 }
 
 function cityPopupHtml(

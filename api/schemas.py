@@ -682,6 +682,17 @@ class UpdatePresetIn(BaseModel):
     color: TagColor | None = None
 
 
+class CreatePresetGroupIn(BaseModel):
+    """A box of presets (migration 672): a saved set with no blob."""
+    name: str = Field(..., min_length=1, max_length=200)
+    color: TagColor | None = None
+
+
+class UpdatePresetGroupIn(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    color: TagColor | None = None
+
+
 class StatsDashboardIn(BaseModel):
     """The account's working board, stored whole (PUT /stats/dashboard)."""
     charts: Charts
@@ -692,6 +703,8 @@ class CreateStatsDashboardIn(BaseModel):
     charts: Charts
     # The preset blob, embedded (ruling 2, never a linked preset); None = the dashboard carries no filter.
     filter_spec: PresetSpec | None = None
+    # The Stats tab's "Malé vzorky": cells under the floor show their small-sample summary (migration 681).
+    show_small: bool = False
     color: TagColor | None = None
 
 
@@ -700,6 +713,7 @@ class UpdateStatsDashboardIn(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     charts: Charts | None = None
     filter_spec: PresetSpec | None = None
+    show_small: bool | None = None
     color: TagColor | None = None
 
 

@@ -6,7 +6,7 @@ Selects images not yet CLIP-tagged via the in-table marker images.clip_tagged_at
 or a one-off --region-id), then a global newest-first sweep — downloads bytes from R2 on
 a worker pool, tags + embeds them, upserts one row per image, and stamps the marker so
 the image drops out of the needs-clip partial index. Idempotent + resumable + shardable
-(image_id % shards), so it parallelises like images.yml. A FREE replacement for the paid
+(image_id % shards), so it parallelises across jobs. A FREE replacement for the paid
 room classifier on the coarse dedup-relevant tags, and the first tagger for
 dum/pozemek/komercni. No-op (exit 0) if R2 env vars are missing.
 
@@ -21,9 +21,16 @@ import io
 import logging
 import os
 import sys
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from typing import TYPE_CHECKING
 
 from scraper import image_storage
+
+if TYPE_CHECKING:
+    import psycopg
+    import torch
+    from PIL import Image
 
 LOG = logging.getLogger("clip_tag_backfill")
 
@@ -102,17 +109,19 @@ _UPSERT_EMB_SQL = """
 """
 
 
-def _chunks(seq: list, size: int):
+def _chunks(seq: list, size: int) -> Iterator[list]:
     for i in range(0, len(seq), size):
         yield seq[i:i + size]
 
 
-def _vec_str(row) -> str:
+def _vec_str(row: torch.Tensor) -> str:
     """A normalized embedding row -> pgvector text form '[f,f,...]'."""
     return "[" + ",".join(f"{x:.6f}" for x in row.tolist()) + "]"
 
 
-def _download_decode(r2: image_storage.R2Client, rows: list, workers: int):
+def _download_decode(
+    r2: image_storage.R2Client, rows: list, workers: int,
+) -> tuple[list[tuple[int, Image.Image]], list[int]]:
     """Returns (decoded, terminal): decoded = [(image_id, RGB image)] that tagged
     successfully; terminal = [image_id] whose STORED bytes won't ever decode (corrupt /
     non-image — e.g. a video cover that slipped past the download reject-list). The
@@ -123,7 +132,7 @@ def _download_decode(r2: image_storage.R2Client, rows: list, workers: int):
     object from a transient miss."""
     from PIL import Image  # base dep
 
-    def _one(row):
+    def _one(row: tuple[int, str, bool]) -> tuple[int, Image.Image | None, bool]:
         image_id, key = row[0], row[1]
         try:
             data = r2.download_bytes(key)
@@ -145,7 +154,7 @@ def _download_decode(r2: image_storage.R2Client, rows: list, workers: int):
     return decoded, terminal
 
 
-def _priority_region_ids(conn, cli_region: int | None) -> list[int]:
+def _priority_region_ids(conn: psycopg.Connection, cli_region: int | None) -> list[int]:
     """Ordered kraj ids to drain before the global fallback. A CLI --region-id wins (ad-hoc
     dispatch); otherwise the operator's app_settings.clip_tagging_priority_region_ids list
     (empty = no priority, straight to the global newest-first sweep)."""
@@ -162,7 +171,7 @@ def _priority_region_ids(conn, cli_region: int | None) -> list[int]:
     return []
 
 
-def _select_pending(conn, *, limit: int, shards: int, shard: int,
+def _select_pending(conn: psycopg.Connection, *, limit: int, shards: int, shard: int,
                     priority_regions: list[int]) -> tuple[list, str]:
     """The run's pending images: priority kraje first (in order), then the global
     newest-first fallback for everything else, up to `limit`. One read transaction with a

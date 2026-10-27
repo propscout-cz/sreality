@@ -9,7 +9,7 @@ name: "Jobs: recompute property stats (daily full reconcile)"
 # recomputed.
 #
 # As of Phase 3 this is the RECONCILE BACKSTOP, not the live path: the fast,
-# frequent dirty-set incremental pass (property_maintenance.yml, cron */5) keeps
+# frequent dirty-set incremental pass (the realtime worker's maintenance lane) keeps
 # `properties` near-real-time by recomputing only the properties the writers
 # queued. This full sweep runs once a day to recompute everything from scratch,
 # so any enqueue the writers missed self-heals within one cycle (a day, or two

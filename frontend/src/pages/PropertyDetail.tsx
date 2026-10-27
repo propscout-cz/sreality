@@ -97,6 +97,8 @@ const ValuoSection = lazyChunk(() => import('@/components/listing-detail/ValuoSe
  * first visit (scripts/bundle-budget.mjs) does not carry them. */
 const PropertyOverview = lazyChunk(() => import('@/components/listing-detail/PropertyOverview'));
 const PhotoMosaic = lazyChunk(() => import('@/components/listing-detail/PhotoMosaic'));
+/* Opens through the neighbourhood tile's own opener, which reads the Stats chunk. */
+const ExploreAreaButton = lazyChunk(() => import('@/components/listing-detail/ExploreAreaButton'));
 const PropertyPhotos = lazyChunk(() => import('@/components/listing-detail/PropertyPhotos'));
 /* The tag assign list rides in with it (scripts/bundle-budget.mjs). */
 const TagsToggle = lazyChunk(() => import('@/components/listing-detail/TagsToggle'));
@@ -347,10 +349,16 @@ export default function PropertyDetail() {
             listing={property}
             heightClass="h-[170px]"
             footer={
-              /* Where exactly is this, elsewhere. The neighbourhood's market
-                 (and "Prozkoumat okolí") is Přehled's Trh v okolí tile. */
+              /* Our own look at the neighbourhood first (the twin of the
+                 neighbourhood tile's "Prozkoumat okolí"), then where exactly
+                 this is, elsewhere. */
               property.lat != null && property.lng != null ? (
-                <ExternalMapLinks lat={property.lat} lng={property.lng} label={property.display_label} />
+                <div className="space-y-1.5">
+                  <Suspense fallback={<div className="h-[33px]" aria-hidden />}>
+                    <ExploreAreaButton property={property} images={images} />
+                  </Suspense>
+                  <ExternalMapLinks lat={property.lat} lng={property.lng} label={property.display_label} />
+                </div>
               ) : null
             }
           />
@@ -667,7 +675,7 @@ function NewEstimationButton({ prefill }: { prefill?: NewEstimationPrefill }) {
     <button
       type="button"
       onClick={() => open(prefill)}
-      className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
+      className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] transition-colors"
     >
       <span className="text-[0.95em] leading-none">+</span>
       <span>New estimation</span>

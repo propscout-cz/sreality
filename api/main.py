@@ -57,7 +57,6 @@ from api.estimation_runs import (
     sweep_stuck_runs,
     update_scenario,
 )
-from api import notifications as nf_module
 from api import system_alerts_loop
 from api.labeling import router as labeling_router
 from api.portal_lookup import lookup_portal_listings
@@ -67,6 +66,7 @@ from api.routes.billing import router as billing_router
 from api.routes.brokers import router as brokers_router
 from api.routes.broker_review import router as broker_review_router
 from api.routes.outreach import router as outreach_router
+from api.routes.filter_presets import group_router as filter_preset_groups_router
 from api.routes.filter_presets import router as filter_presets_router
 from api.routes.stats_dashboards import router as stats_dashboards_router
 from api.routes.images import router as images_router
@@ -110,9 +110,13 @@ from toolkit.measures import MeasureBasisError
 from toolkit.rent_map import compute_reference_rent
 from toolkit.summaries import SummarizeError
 
+# Past every walk's timeout plus the kill grace, so the boot sweep never finalizes a running walk (job registry census).
+STUCK_RUN_CUTOFF_MINUTES = 300
+
+
 @contextlib.asynccontextmanager
 async def _lifespan(_app: FastAPI) -> "AsyncIterator[None]":
-    """Spawn the Watchdog matcher and the system-alerts loops alongside the request handler.
+    """Spawn the system-alerts loop (the health teller) alongside the request handler.
 
     On startup we also sweep any estimation_runs / building_runs left
     in a non-terminal status by a server crash mid-background-task,
@@ -120,32 +124,26 @@ async def _lifespan(_app: FastAPI) -> "AsyncIterator[None]":
     error_message so the operator isn't left looking at a forever-
     pending row. scrape_runs hard-killed at the GitHub-Actions job
     timeout (which can't self-finalize) are likewise stamped with an
-    ended_at so they stop reading as 'stuck' on the Health page.
-
-    The matcher loop opens its own per-pass DB connection and respects the
-    `notifications_matcher_interval_seconds` knob in `app_settings`.
-    Setting that key to 0 keeps the task alive but idle, so an
-    operator can disable matching without redeploying.
+    ended_at, so none stays open forever.
 
     The system-alerts loop (api/system_alerts_loop.py) runs the health
-    ladder every minute on its own connection; it has no knob.
+    ladder every minute on its own connection; it has no knob. It is the
+    API's only background loop: the notification producers run on the
+    realtime worker's `notifications` lane alone (notifications push W2b),
+    and the teller stays here so a dead worker cannot silence its own alarms.
 
-    Both are disabled entirely when the env var `NOTIFICATIONS_MATCHER_DISABLED`
-    is set — useful for tests / one-off CLI invocations that import
-    api.main but don't want a background task chattering.
+    It is disabled when the env var `HEALTH_TELLER_DISABLED` is set —
+    useful for tests / one-off CLI invocations that import api.main but
+    don't want a background task chattering.
     """
+    # First: uvicorn exits on a failed startup, so the deploy crashes instead of serving an open API.
+    deps.refuse_auth_optional_on_railway()
     if not os.environ.get("STUCK_ROW_SWEEP_DISABLED"):
         try:
             with deps.open_background_conn() as conn:
                 est = sweep_stuck_runs(conn)
                 bld = sweep_stuck_buildings(conn)
-                # Above every scrape job's timeout-minutes (idnes's index walk, at
-                # 240, is the binding one): the API boots on every deploy, and
-                # stamping ended_at on a RUNNING walk would make verify_pipeline
-                # report it as truncated and would hide a later crash. Healing a
-                # genuinely dead row late costs nothing — finalize re-stamps
-                # ended_at anyway.
-                scr = sweep_stuck_scrape_runs(conn, older_than_minutes=300)
+                scr = sweep_stuck_scrape_runs(conn, older_than_minutes=STUCK_RUN_CUTOFF_MINUTES)
             if est or bld or scr:
                 logging.info(
                     "stuck-row sweep on startup: %s estimation_runs, "
@@ -170,10 +168,7 @@ async def _lifespan(_app: FastAPI) -> "AsyncIterator[None]":
 
     stop_event: asyncio.Event = asyncio.Event()
     tasks: list[asyncio.Task[None]] = []
-    if not os.environ.get("NOTIFICATIONS_MATCHER_DISABLED"):
-        tasks.append(asyncio.create_task(
-            nf_module.matcher_loop(stop_event), name="notifications-matcher",
-        ))
+    if not os.environ.get("HEALTH_TELLER_DISABLED"):
         tasks.append(asyncio.create_task(
             system_alerts_loop.system_alerts_loop(stop_event), name="system-alerts",
         ))
@@ -314,6 +309,7 @@ app.include_router(broker_review_router)
 # /filter-presets/* (named Browse filter presets: CRUD) — per-account content on
 # the JWT + tenant pool (RLS). Decoupled from /notifications (a preset never fires).
 app.include_router(filter_presets_router)
+app.include_router(filter_preset_groups_router)
 # /stats/dashboards/* (named Stats dashboards: the same saved-set CRUD, plus read-only shares)
 # and /stats/dashboard (the account's working board) — tenant pool (RLS), migration 647.
 app.include_router(stats_dashboards_router)
@@ -667,8 +663,9 @@ def post_summarize_listing(
     body: s.SummarizeListingIn,
     conn: Any = Depends(deps.get_db_conn),
     llm_client: Any = Depends(deps.get_llm_client),
-    _: None = Depends(deps.require_token),
+    claims: dict | None = Depends(deps.token_claims),
 ) -> dict[str, Any]:
+    deps.require_admin_to_force(body.force_refresh, claims)
     try:
         return summarize_listing(
             conn, llm_client,
@@ -730,8 +727,9 @@ def post_compare_listing_images(
     body: s.CompareListingImagesIn,
     conn: Any = Depends(deps.get_db_conn),
     llm_client: Any = Depends(deps.get_llm_client),
-    _: None = Depends(deps.require_token),
+    claims: dict | None = Depends(deps.token_claims),
 ) -> dict[str, Any]:
+    deps.require_admin_to_force(body.force_refresh, claims)
     try:
         return compare_listing_images(
             conn, llm_client,
@@ -1049,7 +1047,7 @@ def get_listings_ingest(
 def post_buildings(
     body: s.CreateBuildingIn,
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     return create_building_run(conn, body)
 
@@ -1062,7 +1060,7 @@ def post_buildings_confirm_units(
     conn: Any = Depends(deps.get_db_conn),
     sreality_client: Any = Depends(deps.get_sreality_client),
     llm_client: Any = Depends(deps.get_llm_client),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     return confirm_units(
         conn, building_id, body,
@@ -1077,7 +1075,7 @@ def post_buildings_re_extract(
     building_id: int,
     conn: Any = Depends(deps.get_db_conn),
     llm_client: Any = Depends(deps.get_llm_client),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     return re_extract(conn, llm_client, building_id)
 
@@ -1090,7 +1088,7 @@ def get_buildings(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     return list_building_runs(
         conn,
@@ -1106,7 +1104,7 @@ def get_buildings(
 def get_building(
     building_id: int,
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     row = get_building_run(conn, building_id)
     if row is None:
@@ -1119,7 +1117,7 @@ def patch_building_inputs(
     building_id: int,
     body: s.UpdateBuildingInputsIn,
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     return update_building_inputs(conn, building_id, body)
 
@@ -1130,7 +1128,7 @@ def post_building_attachment(
     file: UploadFile = File(...),
     source: str = "ui",
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     row = assert_editable_for_attachments(conn, building_id)
     uploaded_by = source if source in ("ui", "api", "clickup") else None
@@ -1146,7 +1144,7 @@ def post_building_attachment(
 def list_building_attachments(
     building_id: int,
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     # 404 if the parent doesn't exist; otherwise return rows (may be empty).
     if get_building_run(conn, building_id) is None:
@@ -1159,7 +1157,7 @@ def delete_building_attachment(
     building_id: int,
     attachment_id: int,
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     assert_editable_for_attachments(conn, building_id)
     attachments_module.delete_building_attachment(conn, building_id, attachment_id)
@@ -1171,7 +1169,7 @@ def get_building_attachment_raw(
     building_id: int,
     attachment_id: int,
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> Response:
     """The preview proxy (the bucket is private): cached hard, as every attachment's bytes are,
     because a row never changes them (without it each `AttachmentCard` mount re-pulled up to 25 MB

@@ -61,8 +61,9 @@ LEDGER: dict[str, Site] = {
     "toolkit/description_extraction.py": Site(
         2, "derived", "NULL-only fill of contract text/none cells (incl. the module docstring)",
         "same-statement"),
-    "scripts/clear_unmeasured_enrichment_fills.py": Site(
-        1, "heal", "one --column -> NULL, with a backup table", "same-statement"),
+    "scripts/heal_bazos_floor_zero.py": Site(
+        1, "heal", "floor 0 -> re-read or NULL on bazos/web flats naming another storey, "
+        "compare-and-set", "same-statement"),
     "scripts/backfill_unit_price_masquerade.py": Site(
         1, "heal", "price_czk -> NULL + raw_json quarantine keys via ||", "separate-statement"),
     "scripts/reextract.py": Site(

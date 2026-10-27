@@ -52,8 +52,9 @@ import {
 } from '@/lib/api';
 import { fmtAbsolute } from '@/lib/format';
 import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
-import { useTheme, type ThemeMode } from '@/lib/theme';
-import { PickButton, Switch, Field } from '@/components/controls';
+import { COLOR_SCHEMES, useScheme, useTheme, type ThemeMode } from '@/lib/theme';
+import SchemeSwatch from '@/components/SchemeSwatch';
+import { PickButton, SegmentedBar, Switch, Field, type SegmentOption } from '@/components/controls';
 import ErrorBanner from '@/components/ErrorBanner';
 import TiersSection from '@/components/TiersSection';
 import { useWorkflowDocs, type WorkflowDoc } from '@/lib/workflowDocs';
@@ -191,35 +192,34 @@ export default function Settings() {
 /* Appearance                                                            */
 /* -------------------------------------------------------------------- */
 
-const THEME_OPTS: ReadonlyArray<{
-  value: ThemeMode;
-  label: string;
-  icon: 'sun' | 'moon' | 'system';
-}> = [
-  { value: 'light',  label: 'Light',  icon: 'sun'    },
-  { value: 'dark',   label: 'Dark',   icon: 'moon'   },
-  { value: 'system', label: 'System', icon: 'system' },
+const THEME_OPTS: ReadonlyArray<SegmentOption<ThemeMode>> = [
+  { value: 'light',  label: 'Light',  glyph: <ThemeGlyph kind="sun" />    },
+  { value: 'dark',   label: 'Dark',   glyph: <ThemeGlyph kind="moon" />   },
+  { value: 'system', label: 'System', glyph: <ThemeGlyph kind="system" /> },
 ];
 
-function ThemeToggle() {
+export function ThemeToggle() {
   const [mode, setMode] = useTheme();
+  const [scheme, setScheme] = useScheme();
   return (
     <div>
-      <div className="inline-flex gap-1.5">
-        {THEME_OPTS.map((opt) => (
+      <div className="inline-flex gap-1.5 mb-2.5">
+        {COLOR_SCHEMES.map((opt) => (
           <PickButton
             key={opt.value}
-            on={mode === opt.value}
-            onClick={() => setMode(opt.value)}
-            className="inline-flex items-center gap-1.5 px-3"
+            on={scheme === opt.value}
+            onClick={() => setScheme(opt.value)}
+            className="inline-flex items-center gap-2 px-3"
           >
-            <ThemeGlyph kind={opt.icon} />
+            <SchemeSwatch colors={opt.swatch} />
             <span>{opt.label}</span>
           </PickButton>
         ))}
       </div>
+      <SegmentedBar hug label="Light or dark" options={THEME_OPTS} value={mode} onChange={setMode} />
       <p className="text-xs text-[var(--color-ink-3)] mt-2.5">
-        Light is the default. System follows your OS preference.
+        Měď and Light are the default. System follows your OS preference. Every user
+        picks both in the account menu too; the choice stays on this device.
       </p>
     </div>
   );

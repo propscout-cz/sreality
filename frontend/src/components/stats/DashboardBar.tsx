@@ -3,11 +3,12 @@
  * named chart set, optionally with the Browse filter it was saved over (the
  * preset blob). Loading one COPIES it into the working board — StatsDashboard's
  * one board write, `onLoadCharts` — then writes the URL (browseState.
- * loadDashboard); it changes only on "Uložit změny". An own dashboard can be
+ * loadDashboard); it changes only on its menu's "Uložit změny". An own dashboard can be
  * duplicated as stored ("Duplikovat": a new row, "<name> (kopie)"). A dashboard
  * shared WITH the account is read-only: Načíst, Uložit jako vlastní, Přestat sledovat.
  * ONE own dashboard, under any name, is the property page's "Okolí dashboard"
- * (migration 664, lib/neighbourhood): its chip says so, it carries no filter (the
+ * (migration 664, lib/neighbourhood): its chip says so with an "Okolí" badge and a
+ * pin (ruling S06), it carries no filter (the
  * save dialog greys the box out), any other own dashboard's menu can make it so
  * ("Použít jako okolí dashboard"), and while the account has none the bar offers to
  * create it from the working board. */
@@ -27,13 +28,16 @@ import type { SavedDashboard } from '@/lib/types';
 import { pushToast } from '@/lib/toast';
 import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import Dialog, { DialogClose } from '@/components/Dialog';
-import SavedSetBar, { useSavedSet, type SavedSetCopy, type SavedSetMenuItem } from '@/components/SavedSetBar';
+import SavedSetBar, {
+  useSavedSet, type SavedSetBadge, type SavedSetCopy, type SavedSetMenuItem,
+} from '@/components/SavedSetBar';
 import ShareBlock from '@/components/ShareBlock';
+import { PinIcon } from '@/components/phone/phoneIcons';
 import { PROPERTY_CARD_LABEL, isPropertyCard } from '@/lib/neighbourhood';
 
 export type DashboardView = Pick<
   BrowseViewState,
-  'filters' | 'sort' | 'activeDashboardId' | 'setActiveDashboardId' | 'loadDashboard'
+  'filters' | 'sort' | 'activeDashboardId' | 'setActiveDashboardId' | 'loadDashboard' | 'statsSmall'
 >;
 
 type DashboardPatch = Parameters<typeof updateStatsDashboard>[1];
@@ -43,9 +47,10 @@ const COPY: SavedSetCopy = {
   empty: 'Zatím žádné uložené dashboardy.',
   save: '+ Uložit jako dashboard',
   saveHint: 'Uložit současné grafy jako nový dashboard',
-  updateHint: 'Uložit současné grafy (a filtr, nese-li ho) zpět do tohoto dashboardu',
-  dialog: { save: 'Uložit grafy jako dashboard', update: 'Uložit změny dashboardu', edit: 'Přejmenovat dashboard' },
-  submit: { save: 'Uložit dashboard', update: 'Uložit změny', edit: 'Uložit' },
+  saveChanges: 'Uložit změny',
+  revert: 'Zahodit změny',
+  dialog: { save: 'Uložit grafy jako dashboard', edit: 'Přejmenovat dashboard' },
+  submit: { save: 'Uložit dashboard', edit: 'Uložit' },
   nameLabel: 'Název dashboardu',
   namePlaceholder: 'např. Praha 2+kk — ceny',
   color: 'Barva',
@@ -58,9 +63,16 @@ const COPY: SavedSetCopy = {
   dragHint: 'Přetažením změníte pořadí',
   options: 'Možnosti dashboardu',
   edited: 'Upraveno od načtení',
-  editedHint: 'Upraveno od načtení — změny uložíte tlačítkem Uložit změny',
+  editedHint: 'Upraveno od načtení — uložíte nebo zahodíte přes ⋯',
   shared: { by: 'sdílí', editedHint: 'Upraveno od načtení — změny uložíte přes Uložit jako vlastní' },
   failed: 'Něco se nepovedlo.',
+};
+
+/* The property page's dashboard, marked on its chip after the name. */
+const OKOLI_BADGE: SavedSetBadge = {
+  label: 'Okolí',
+  title: `Tento dashboard se ukáže na kartě ${PROPERTY_CARD_LABEL} u každé nemovitosti`,
+  icon: <PinIcon className="h-2.5 w-2.5" />,
 };
 
 const listKey = statsDashboardKeys.all;
@@ -130,18 +142,19 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
   const [loadingBoard, setLoadingBoard] = useState(false);
   const shareTitleId = useId();
 
-  const { filters, sort, activeDashboardId } = view;
+  const { filters, sort, activeDashboardId, statsSmall } = view;
   const sortParam = sortToParam(sort);
   const active = items.find((d) => d.id === activeDashboardId);
-  /* Dirty as a preset is: the charts drift, or — for a dashboard that carries a
-   * filter — its filters or its sort do. */
+  /* Dirty as a preset is: the charts or the "Malé vzorky" switch drift, or — for a
+   * dashboard that carries a filter — its filters or its sort do. */
   const dirty = useMemo(() => {
     if (active == null || loadingBoard) return false;
     if (!chartsEqual(working, sanitizeCharts(active.charts))) return true;
+    if ((active.show_small ?? false) !== statsSmall) return true;
     if (active.filter_spec == null) return false;
     const spec = readPresetSpec(active.filter_spec);
     return !filtersEqualForDashboard(filters, spec.filters) || (spec.sort ?? sortToParam(DEFAULT_SORT)) !== sortParam;
-  }, [active, loadingBoard, working, filters, sortParam]);
+  }, [active, loadingBoard, working, statsSmall, filters, sortParam]);
 
   /* A dashboard's filter is the preset blob, captured without the map viewport
    * and without the lenses (it can be shared; filters.DASHBOARD_EXCLUDED_KEYS). */
@@ -254,8 +267,9 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
     const shown = d.id === activeDashboardId && !loadingBoard;
     const charts = shown ? working : sanitizeCharts(d.charts);
     const filter = d.filter_spec == null ? undefined : shown ? currentSpec() : d.filter_spec;
+    const showSmall = shown ? statsSmall : (d.show_small ?? false);
     return create
-      .mutateAsync({ name: d.name, charts, filter_spec: filter, color: d.color })
+      .mutateAsync({ name: d.name, charts, filter_spec: filter, color: d.color, show_small: showSmall })
       .then((created) => {
         if (d.id === activeDashboardId) activate(created.id);
       });
@@ -270,6 +284,7 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
       charts: sanitizeCharts(d.charts),
       filter_spec: d.filter_spec ?? undefined,
       color: d.color,
+      show_small: d.show_small ?? false,
     });
 
   const chipMenu = (d: SavedDashboard): SavedSetMenuItem[] => {
@@ -305,7 +320,7 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
         type="button"
         onClick={() =>
           void create
-            .mutateAsync({ name: PROPERTY_CARD_LABEL, charts: working })
+            .mutateAsync({ name: PROPERTY_CARD_LABEL, charts: working, show_small: statsSmall })
             .then((created) => makeCard.mutateAsync(created.id).then(() => activate(created.id)))
         }
         disabled={create.isPending || makeCard.isPending}
@@ -324,18 +339,25 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
         dirty={dirty}
         copy={COPY}
         suffix={(d) => d.owner_email ?? (isPropertyCard(d) ? 'okolí dashboard' : null)}
+        badge={(d) => (isPropertyCard(d) ? OKOLI_BADGE : null)}
         chipMenu={chipMenu}
         leading={createCard}
         onLoad={load}
         onSaveNew={(name, withFilter, color) =>
           create
-            .mutateAsync({ name, charts: working, filter_spec: withFilter ? currentSpec() : undefined, color })
+            .mutateAsync({
+              name,
+              charts: working,
+              filter_spec: withFilter ? currentSpec() : undefined,
+              color,
+              show_small: statsSmall,
+            })
             .then((created) => activate(created.id))
         }
         onUpdate={(d, name, withFilter, color) => {
-          // Unticking the box drops a stored filter; an untouched box keeps it current.
-          const filter = withFilter ? { filter_spec: currentSpec() } : d.filter_spec != null ? { filter_spec: null } : {};
-          return update.mutateAsync({ id: d.id, patch: { name, color, charts: working, ...filter } });
+          // Save changes keeps the dashboard's own answer: a stored filter is kept current.
+          const filter = withFilter ? { filter_spec: currentSpec() } : {};
+          return update.mutateAsync({ id: d.id, patch: { name, color, charts: working, show_small: statsSmall, ...filter } });
         }}
         onRename={(d, name, color) => update.mutateAsync({ id: d.id, patch: { name, color } })}
         onDelete={(d) => drop.mutateAsync(d)}

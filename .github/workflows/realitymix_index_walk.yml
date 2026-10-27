@@ -6,7 +6,7 @@ name: "Scraping: RealityMix index walk"
 # nominates unseen ones for a page check once the walk reached the portal's end
 # (source-scoped; the page, not the count, decides), and new/price-changed ids are
 # enqueued into listing_detail_queue (source='realitymix').
-# No detail fetch — the drain (realitymix_detail_drain.yml) consumes the queue.
+# No detail fetch — the realtime worker's drain lane consumes the queue.
 # Records run_type='index'.
 #
 # WHY split: realitymix is large (~48k listings across 12 (category × offer-type)
@@ -75,4 +75,5 @@ jobs:
           ARGS="--index-only --max-seconds $MAX_SECONDS"
           if [ -n "$MAX_PAGES" ]; then ARGS="$ARGS --max-pages $MAX_PAGES"; fi
           echo "python -m scraper.realitymix_main $ARGS"
-          eval "python -m scraper.realitymix_main $ARGS"
+          # exec: a cancel's SIGINT must reach Python, which finalizes the run (#2019), not the shell around it.
+          eval "exec python -m scraper.realitymix_main $ARGS"

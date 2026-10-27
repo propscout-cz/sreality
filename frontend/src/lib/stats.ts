@@ -57,8 +57,22 @@ export interface ChartSpec extends StatsSpec {
   stats: ChartStat[];
 }
 
+/* A cell under `min_n` (migration 678): the four numbers it may show behind the
+ * Stats tab's "Malé vzorky" switch. Never percentiles. */
+export interface SmallSample {
+  min: number;
+  max: number;
+  mean: number;
+  median: number;
+}
+export const SMALL_STATS = ['min', 'mean', 'median', 'max'] as const;
+export const SMALL_LABEL: Record<(typeof SMALL_STATS)[number], string> = {
+  min: 'min', mean: 'průměr', median: 'medián', max: 'max',
+};
+
 /* A rollup cell: `keys.length` is its level (0 = the whole sample, per column
- * value). Statistics are null below `min_n` — server-enforced, all six together. */
+ * value). Statistics are null below `min_n` — server-enforced, all six together;
+ * such a cell carries `small` instead (absent before migration 678). */
 export interface StatsCell {
   keys: string[];
   col: string | null;
@@ -69,6 +83,7 @@ export interface StatsCell {
   p25: number | null;
   p75: number | null;
   p90: number | null;
+  small?: SmallSample | null;
 }
 
 /* A pivot's place names, (dimension, RÚIAN code) → name (placeKey); null when
@@ -245,10 +260,23 @@ export const allMarketFilters = (f: ListingFilters): ListingFilters => ({
 /* The sample a lens counts. */
 export const marketSample = (f: ListingFilters, market: StatsMarket): ListingFilters =>
   market === 'sold' ? soldMarketFilters(f) : market === 'all' ? allMarketFilters(f) : f;
+/* The lens's name, as its switch says it; every caption leads with it. */
+export const MARKET_LABEL: Record<StatsMarket, string> = {
+  filter: 'Jako ve filtru',
+  sold: 'Prodáno (trh)',
+  all: 'Vše',
+};
 export const MARKET_CAPTION: Record<StatsMarket, string> = {
-  filter: 'Každý graf počítá nemovitosti z filtru; sestava grafů je uložená k vašemu účtu.',
+  filter: 'Jako ve filtru: každý graf počítá nemovitosti z filtru; sestava grafů je uložená k vašemu účtu.',
   sold: 'Prodáno (trh): jen neaktivní nemovitosti sledované od vzniku, 2–60 dní na trhu, včetně skrytých; ostatní filtry platí.',
   all: 'Vše: aktivní i neaktivní nemovitosti, včetně skrytých, bez omezení doby na trhu; ostatní filtry platí.',
+};
+/* A caption split for the Stats tab, which sets the lens's name in bold (ruling S03). */
+export const marketCaption = (m: StatsMarket): { name: string; text: string } => {
+  const name = MARKET_LABEL[m];
+  const lead = `${name}: `;
+  const caption = MARKET_CAPTION[m];
+  return { name, text: caption.startsWith(lead) ? caption.slice(lead.length) : caption };
 };
 
 
@@ -257,11 +285,18 @@ export const createStatsDashboard = (input: {
   charts: ChartSpec[];
   filter_spec?: PresetSpec;
   color?: TagColor | null;
+  show_small?: boolean;
 }): Promise<SavedDashboard> => apiPost<SavedDashboard>('/stats/dashboards', input);
 
 export const updateStatsDashboard = (
   id: string,
-  patch: { name?: string; charts?: ChartSpec[]; filter_spec?: PresetSpec | null; color?: TagColor | null },
+  patch: {
+    name?: string;
+    charts?: ChartSpec[];
+    filter_spec?: PresetSpec | null;
+    color?: TagColor | null;
+    show_small?: boolean;
+  },
 ): Promise<SavedDashboard> => apiPut<SavedDashboard>(dashboardPath(id), patch);
 
 export const deleteStatsDashboard = (id: string): Promise<unknown> => apiDelete(dashboardPath(id));
@@ -806,6 +841,11 @@ export function ledgerCounts(pivot: StatsPivot): LedgerCounts | null {
   }
   return { filtered, sample, excluded, split: leaves.length > 0 ? { withStats, underMin } : null };
 }
+
+/* Every cell the payload sent (each level, the Celkem rollup, every column value)
+ * is under its floor: the chart counts, but shows no statistic (ruling S09). */
+export const everyCellUnderMin = (pivot: StatsPivot): boolean =>
+  pivot.cells.length > 0 && pivot.cells.every((c) => c.n < pivot.min_n);
 
 const optionLabel = (filterId: string, value: string): string | null => {
   const o = filterById(filterId)?.enum_values?.find((e) => String(e.value) === value);

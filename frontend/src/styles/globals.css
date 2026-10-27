@@ -7,38 +7,50 @@
  * facades, oxidised copper church domes, mansard slate, the off-white of
  * archival paper. Civic-archive feel. Borders only, no shadows except over
  * map tiles. See ROADMAP / U1a for full direction notes.
+ *
+ * Three colour schemes the user picks in the account menu (lib/theme.ts), each
+ * with a light and a dark side: Měď (copper — the default, declared in @theme
+ * below), Kobalt (cobalt) and Grafit (graphite, monochrome: the accent is ink,
+ * so colour only ever means something). A scheme only changes VALUES; every
+ * token keeps its name, so `--color-copper` is "the accent" in all three.
+ * Values and the contrast rationale: .interface-design/system.md § Colour schemes.
  */
 @theme {
-  /* Surfaces. ~3% lightness shifts between levels — whisper-quiet. */
-  --color-paper:        #f6f3ec;          /* canvas, "laid paper" */
-  --color-paper-2:      #fbf9f3;          /* one step up: cards, panels */
-  --color-paper-3:      #ffffff;          /* highest: popovers, dropdowns */
-  --color-inset:        #efeae0;          /* one step DOWN: input bgs, code blocks */
+  /* Měď, light. Surfaces: canvas, cards, popovers, inset wells. */
+  --color-paper:        #f2efe7;
+  --color-paper-2:      #fcfbf8;
+  --color-paper-3:      #ffffff;
+  --color-inset:        #ebe6db;
 
-  /* Foreground hierarchy — four levels. */
-  --color-ink:          #1a1c22;          /* primary */
-  --color-ink-2:        #4a4d57;          /* secondary */
-  --color-ink-3:        #7a7d86;          /* tertiary, metadata */
-  --color-ink-4:        #b0b1b7;          /* muted, disabled, placeholder */
+  --color-ink:          #16181d;
+  --color-ink-2:        #41454e;
+  --color-ink-3:        #5d616a;
+  --color-ink-4:        #a2a4aa;
 
-  /* Borders — low rgba so they recede. */
-  --color-rule:         rgba(26, 28, 34, 0.08);     /* standard */
-  --color-rule-soft:    rgba(26, 28, 34, 0.05);     /* softer separation */
-  --color-rule-strong:  rgba(26, 28, 34, 0.16);     /* emphasis */
-  --color-focus:        rgba(60, 110, 99, 0.45);    /* focus ring */
+  --color-rule:         rgba(22, 24, 29, 0.10);
+  --color-rule-soft:    rgba(22, 24, 29, 0.06);
+  --color-rule-strong:  rgba(22, 24, 29, 0.20);
+  --color-focus:        rgb(30, 122, 105);
 
-  /* Accent — single. Oxidised copper / verdigris from Prague's church domes. */
-  --color-copper:       #3c6e63;
-  --color-copper-2:     #2f5750;          /* hover/active */
-  --color-copper-soft:  rgba(60, 110, 99, 0.10);  /* tinted backgrounds */
+  --color-copper:       #1f6b5c;
+  --color-copper-2:     #175246;
+  --color-copper-soft:  #deece7;
+  --color-on-copper:    #ffffff;
 
-  /* Semantic. Brick for inactive/failures, sage for success, ochre for warn. */
-  --color-brick:        #a04b3d;
-  --color-brick-soft:   rgba(160, 75, 61, 0.10);
-  --color-sage:         #5e7a4a;
-  --color-sage-soft:    rgba(94, 122, 74, 0.10);
-  --color-ochre:        #b58438;
-  --color-ochre-soft:   rgba(181, 132, 56, 0.10);
+  --color-brick:        #a3392b;
+  --color-brick-soft:   #f6e2dd;
+  --color-on-brick:     #ffffff;
+  --color-sage:         #38692a;
+  --color-sage-soft:    #e3ecd8;
+  --color-ochre:        #b57d18;
+  --color-ochre-soft:   #f6ebd3;
+
+  /* The top bar (Shell): a dark band in Měď, the page itself in Kobalt and Grafit. */
+  --color-chrome:         #1d2125;
+  --color-chrome-ink:     #f2eee6;
+  --color-chrome-ink-2:   #a9adb3;
+  --color-chrome-active:  #30373c;
+  --color-chrome-accent:  #7cc4b2;
 
   /* Typography. */
   --font-display: "Fraunces", ui-serif, Georgia, serif;
@@ -52,102 +64,305 @@
   --radius-lg: 10px;
 }
 
-/* Dark mode — mirror the world after dusk: deep ink, copper still copper.
- * Per the skill: shadows lose definition on dark, lean harder on borders. */
+/* Which side of a scheme shows: `data-theme` light|dark on <html>, or no
+ * attribute = follow the OS (lib/theme.ts). Tailwind v4's @theme can't live
+ * inside a selector, so every override below is plain custom properties. A
+ * scheme selector carries one more attribute than its Měď twin, so it always
+ * wins; Měď itself needs no `data-scheme` rule. */
+:root[data-theme="dark"] {
+  --color-paper:        #121417;
+  --color-paper-2:      #191c20;
+  --color-paper-3:      #21252a;
+  --color-inset:        #0d0f11;
+
+  --color-ink:          #ece8de;
+  --color-ink-2:        #bdbab2;
+  --color-ink-3:        #9a9ca2;
+  --color-ink-4:        #5a5d63;
+
+  --color-rule:         rgba(236, 232, 222, 0.11);
+  --color-rule-soft:    rgba(236, 232, 222, 0.06);
+  --color-rule-strong:  rgba(236, 232, 222, 0.20);
+  --color-focus:        rgb(108, 192, 173);
+
+  --color-copper:       #6cc0ad;
+  --color-copper-2:     #8fd3c3;
+  --color-copper-soft:  #1c3430;
+  --color-on-copper:    #0b1a17;
+
+  --color-brick:        #ea8d7b;
+  --color-brick-soft:   #3a201b;
+  --color-on-brick:     #121417;
+  --color-sage:         #9cc67e;
+  --color-sage-soft:    #22301b;
+  --color-ochre:        #e1b05e;
+  --color-ochre-soft:   #352a17;
+
+  --color-chrome:         #0a0c0e;
+  --color-chrome-ink:     #ece8de;
+  --color-chrome-ink-2:   #9ca0a7;
+  --color-chrome-active:  #22282c;
+  --color-chrome-accent:  #6cc0ad;
+  color-scheme: dark;
+}
 @media (prefers-color-scheme: dark) {
-  @theme {
-    --color-paper:        #14161b;
-    --color-paper-2:      #1a1d24;
-    --color-paper-3:      #20242c;
-    --color-inset:        #0e1015;
+  :root:not([data-theme="light"]) {
+    --color-paper:        #121417;
+    --color-paper-2:      #191c20;
+    --color-paper-3:      #21252a;
+    --color-inset:        #0d0f11;
 
     --color-ink:          #ece8de;
-    --color-ink-2:        #b4b3ad;
-    --color-ink-3:        #7e8086;
-    --color-ink-4:        #50535b;
+    --color-ink-2:        #bdbab2;
+    --color-ink-3:        #9a9ca2;
+    --color-ink-4:        #5a5d63;
 
-    --color-rule:         rgba(236, 232, 222, 0.10);
+    --color-rule:         rgba(236, 232, 222, 0.11);
     --color-rule-soft:    rgba(236, 232, 222, 0.06);
-    --color-rule-strong:  rgba(236, 232, 222, 0.18);
-    --color-focus:        rgba(126, 178, 167, 0.55);
+    --color-rule-strong:  rgba(236, 232, 222, 0.20);
+    --color-focus:        rgb(108, 192, 173);
 
-    --color-copper:       #7eb2a7;
-    --color-copper-2:     #9bcabd;
-    --color-copper-soft:  rgba(126, 178, 167, 0.14);
+    --color-copper:       #6cc0ad;
+    --color-copper-2:     #8fd3c3;
+    --color-copper-soft:  #1c3430;
+    --color-on-copper:    #0b1a17;
 
-    --color-brick:        #c47767;
-    --color-brick-soft:   rgba(196, 119, 103, 0.14);
-    --color-sage:         #97b27e;
-    --color-sage-soft:    rgba(151, 178, 126, 0.14);
-    --color-ochre:        #d8a763;
-    --color-ochre-soft:   rgba(216, 167, 99, 0.14);
+    --color-brick:        #ea8d7b;
+    --color-brick-soft:   #3a201b;
+    --color-on-brick:     #121417;
+    --color-sage:         #9cc67e;
+    --color-sage-soft:    #22301b;
+    --color-ochre:        #e1b05e;
+    --color-ochre-soft:   #352a17;
+
+    --color-chrome:         #0a0c0e;
+    --color-chrome-ink:     #ece8de;
+    --color-chrome-ink-2:   #9ca0a7;
+    --color-chrome-active:  #22282c;
+    --color-chrome-accent:  #6cc0ad;
+    color-scheme: dark;
   }
 }
-
-/* Explicit theme override. Tailwind v4's @theme directive can't live
- * inside a selector, so the user-toggled theme redeclares the same
- * variables as plain CSS custom properties on :root. The attribute
- * selector outranks the media query above, letting the operator
- * pick light on a dark OS (and vice versa). Values are copied
- * verbatim from the @theme blocks — token palette is unchanged. */
 :root[data-theme="light"] {
-  --color-paper:        #f6f3ec;
-  --color-paper-2:      #fbf9f3;
-  --color-paper-3:      #ffffff;
-  --color-inset:        #efeae0;
-
-  --color-ink:          #1a1c22;
-  --color-ink-2:        #4a4d57;
-  --color-ink-3:        #7a7d86;
-  --color-ink-4:        #b0b1b7;
-
-  --color-rule:         rgba(26, 28, 34, 0.08);
-  --color-rule-soft:    rgba(26, 28, 34, 0.05);
-  --color-rule-strong:  rgba(26, 28, 34, 0.16);
-  --color-focus:        rgba(60, 110, 99, 0.45);
-
-  --color-copper:       #3c6e63;
-  --color-copper-2:     #2f5750;
-  --color-copper-soft:  rgba(60, 110, 99, 0.10);
-
-  --color-brick:        #a04b3d;
-  --color-brick-soft:   rgba(160, 75, 61, 0.10);
-  --color-sage:         #5e7a4a;
-  --color-sage-soft:    rgba(94, 122, 74, 0.10);
-  --color-ochre:        #b58438;
-  --color-ochre-soft:   rgba(181, 132, 56, 0.10);
-
   color-scheme: light;
 }
 
-:root[data-theme="dark"] {
-  --color-paper:        #14161b;
-  --color-paper-2:      #1a1d24;
-  --color-paper-3:      #20242c;
-  --color-inset:        #0e1015;
+/* Kobalt — Bohemian porcelain: cool white, cobalt accent, light top bar. */
+:root[data-scheme="kobalt"] {
+  --color-paper:        #eef1f5;
+  --color-paper-2:      #fbfcfe;
+  --color-paper-3:      #ffffff;
+  --color-inset:        #e5e9f0;
 
-  --color-ink:          #ece8de;
-  --color-ink-2:        #b4b3ad;
-  --color-ink-3:        #7e8086;
-  --color-ink-4:        #50535b;
+  --color-ink:          #111827;
+  --color-ink-2:        #374151;
+  --color-ink-3:        #545f71;
+  --color-ink-4:        #a0a8b5;
 
-  --color-rule:         rgba(236, 232, 222, 0.10);
-  --color-rule-soft:    rgba(236, 232, 222, 0.06);
-  --color-rule-strong:  rgba(236, 232, 222, 0.18);
-  --color-focus:        rgba(126, 178, 167, 0.55);
+  --color-rule:         rgba(17, 24, 39, 0.10);
+  --color-rule-soft:    rgba(17, 24, 39, 0.06);
+  --color-rule-strong:  rgba(17, 24, 39, 0.20);
+  --color-focus:        rgb(36, 80, 208);
 
-  --color-copper:       #7eb2a7;
-  --color-copper-2:     #9bcabd;
-  --color-copper-soft:  rgba(126, 178, 167, 0.14);
+  --color-copper:       #1f45b5;
+  --color-copper-2:     #183892;
+  --color-copper-soft:  #e2e9fb;
+  --color-on-copper:    #ffffff;
 
-  --color-brick:        #c47767;
-  --color-brick-soft:   rgba(196, 119, 103, 0.14);
-  --color-sage:         #97b27e;
-  --color-sage-soft:    rgba(151, 178, 126, 0.14);
-  --color-ochre:        #d8a763;
-  --color-ochre-soft:   rgba(216, 167, 99, 0.14);
+  --color-brick:        #b4271f;
+  --color-brick-soft:   #fbe4e1;
+  --color-on-brick:     #ffffff;
+  --color-sage:         #1f7346;
+  --color-sage-soft:    #dcf0e3;
+  --color-ochre:        #c17a0c;
+  --color-ochre-soft:   #fcf0d7;
 
-  color-scheme: dark;
+  --color-chrome:         #fbfcfe;
+  --color-chrome-ink:     #131a28;
+  --color-chrome-ink-2:   #4f596b;
+  --color-chrome-active:  #e4eafb;
+  --color-chrome-accent:  #1f45b5;
+}
+:root[data-scheme="kobalt"][data-theme="dark"] {
+  --color-paper:        #0e121a;
+  --color-paper-2:      #141923;
+  --color-paper-3:      #1b2130;
+  --color-inset:        #0a0d13;
+
+  --color-ink:          #e7ebf3;
+  --color-ink-2:        #b4bdcc;
+  --color-ink-3:        #8f99ab;
+  --color-ink-4:        #4e5768;
+
+  --color-rule:         rgba(231, 235, 243, 0.11);
+  --color-rule-soft:    rgba(231, 235, 243, 0.06);
+  --color-rule-strong:  rgba(231, 235, 243, 0.20);
+  --color-focus:        rgb(142, 170, 247);
+
+  --color-copper:       #86a4f6;
+  --color-copper-2:     #a6bdf9;
+  --color-copper-soft:  #1b2645;
+  --color-on-copper:    #0a1230;
+
+  --color-brick:        #f28b82;
+  --color-brick-soft:   #3b1c1a;
+  --color-on-brick:     #0e121a;
+  --color-sage:         #6fcf97;
+  --color-sage-soft:    #14301f;
+  --color-ochre:        #f0b453;
+  --color-ochre-soft:   #33280f;
+
+  --color-chrome:         #0b0f16;
+  --color-chrome-ink:     #e7ebf3;
+  --color-chrome-ink-2:   #99a3b5;
+  --color-chrome-active:  #1b2440;
+  --color-chrome-accent:  #8eaaf7;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-scheme="kobalt"]:not([data-theme="light"]) {
+    --color-paper:        #0e121a;
+    --color-paper-2:      #141923;
+    --color-paper-3:      #1b2130;
+    --color-inset:        #0a0d13;
+
+    --color-ink:          #e7ebf3;
+    --color-ink-2:        #b4bdcc;
+    --color-ink-3:        #8f99ab;
+    --color-ink-4:        #4e5768;
+
+    --color-rule:         rgba(231, 235, 243, 0.11);
+    --color-rule-soft:    rgba(231, 235, 243, 0.06);
+    --color-rule-strong:  rgba(231, 235, 243, 0.20);
+    --color-focus:        rgb(142, 170, 247);
+
+    --color-copper:       #86a4f6;
+    --color-copper-2:     #a6bdf9;
+    --color-copper-soft:  #1b2645;
+    --color-on-copper:    #0a1230;
+
+    --color-brick:        #f28b82;
+    --color-brick-soft:   #3b1c1a;
+    --color-on-brick:     #0e121a;
+    --color-sage:         #6fcf97;
+    --color-sage-soft:    #14301f;
+    --color-ochre:        #f0b453;
+    --color-ochre-soft:   #33280f;
+
+    --color-chrome:         #0b0f16;
+    --color-chrome-ink:     #e7ebf3;
+    --color-chrome-ink-2:   #99a3b5;
+    --color-chrome-active:  #1b2440;
+    --color-chrome-accent:  #8eaaf7;
+  }
+}
+
+/* Grafit — monochrome: the accent is ink, colour only means something. */
+:root[data-scheme="grafit"] {
+  --color-paper:        #f0f0ee;
+  --color-paper-2:      #fbfbfa;
+  --color-paper-3:      #ffffff;
+  --color-inset:        #e7e7e4;
+
+  --color-ink:          #111113;
+  --color-ink-2:        #3b3b41;
+  --color-ink-3:        #5a5a61;
+  --color-ink-4:        #a6a6ac;
+
+  --color-rule:         rgba(17, 17, 19, 0.10);
+  --color-rule-soft:    rgba(17, 17, 19, 0.06);
+  --color-rule-strong:  rgba(17, 17, 19, 0.20);
+  --color-focus:        rgb(17, 17, 19);
+
+  --color-copper:       #18181b;
+  --color-copper-2:     #38383e;
+  --color-copper-soft:  #e3e3e0;
+  --color-on-copper:    #ffffff;
+
+  --color-brick:        #b42318;
+  --color-brick-soft:   #fbe2df;
+  --color-on-brick:     #ffffff;
+  --color-sage:         #1b7548;
+  --color-sage-soft:    #ddefe4;
+  --color-ochre:        #b7791f;
+  --color-ochre-soft:   #f8ecd5;
+
+  --color-chrome:         #f0f0ee;
+  --color-chrome-ink:     #111113;
+  --color-chrome-ink-2:   #55555c;
+  --color-chrome-active:  #e0e0dd;
+  --color-chrome-accent:  #111113;
+}
+:root[data-scheme="grafit"][data-theme="dark"] {
+  --color-paper:        #111112;
+  --color-paper-2:      #18181a;
+  --color-paper-3:      #202023;
+  --color-inset:        #0b0b0c;
+
+  --color-ink:          #efefed;
+  --color-ink-2:        #c0c0c2;
+  --color-ink-3:        #98989e;
+  --color-ink-4:        #55555b;
+
+  --color-rule:         rgba(239, 239, 237, 0.11);
+  --color-rule-soft:    rgba(239, 239, 237, 0.06);
+  --color-rule-strong:  rgba(239, 239, 237, 0.20);
+  --color-focus:        rgb(239, 239, 237);
+
+  --color-copper:       #efefed;
+  --color-copper-2:     #ffffff;
+  --color-copper-soft:  #2a2a2e;
+  --color-on-copper:    #111112;
+
+  --color-brick:        #ff8a7a;
+  --color-brick-soft:   #3b1d19;
+  --color-on-brick:     #111112;
+  --color-sage:         #5fd39a;
+  --color-sage-soft:    #163026;
+  --color-ochre:        #f2b84b;
+  --color-ochre-soft:   #352a12;
+
+  --color-chrome:         #111112;
+  --color-chrome-ink:     #efefed;
+  --color-chrome-ink-2:   #a0a0a6;
+  --color-chrome-active:  #26262a;
+  --color-chrome-accent:  #efefed;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-scheme="grafit"]:not([data-theme="light"]) {
+    --color-paper:        #111112;
+    --color-paper-2:      #18181a;
+    --color-paper-3:      #202023;
+    --color-inset:        #0b0b0c;
+
+    --color-ink:          #efefed;
+    --color-ink-2:        #c0c0c2;
+    --color-ink-3:        #98989e;
+    --color-ink-4:        #55555b;
+
+    --color-rule:         rgba(239, 239, 237, 0.11);
+    --color-rule-soft:    rgba(239, 239, 237, 0.06);
+    --color-rule-strong:  rgba(239, 239, 237, 0.20);
+    --color-focus:        rgb(239, 239, 237);
+
+    --color-copper:       #efefed;
+    --color-copper-2:     #ffffff;
+    --color-copper-soft:  #2a2a2e;
+    --color-on-copper:    #111112;
+
+    --color-brick:        #ff8a7a;
+    --color-brick-soft:   #3b1d19;
+    --color-on-brick:     #111112;
+    --color-sage:         #5fd39a;
+    --color-sage-soft:    #163026;
+    --color-ochre:        #f2b84b;
+    --color-ochre-soft:   #352a12;
+
+    --color-chrome:         #111112;
+    --color-chrome-ink:     #efefed;
+    --color-chrome-ink-2:   #a0a0a6;
+    --color-chrome-active:  #26262a;
+    --color-chrome-accent:  #efefed;
+  }
 }
 
 @layer base {
@@ -301,16 +516,15 @@
     letter-spacing: 0.02em;
     color: var(--color-ink-3);
   }
-  /* How precisely the pin is placed — tight under the place line it qualifies. */
+  /* How precisely the pin is placed and when the ad was last seen, one line
+   * tight under the place it qualifies (ruling P13); each half's detail is its
+   * tooltip. */
   .lp-precision {
     margin: 2px 0 0;
     font-size: 0.68rem;
     color: var(--color-ink-3);
   }
-  .lp-seen {
-    margin: 6px 0 0;
-    font-size: 0.65rem;
-    color: var(--color-ink-4);
+  .lp-precision [title] {
     cursor: help;
   }
   .lp-link {
@@ -434,66 +648,71 @@
 
 /* ----------------------------------------------------------------------------
  * Tag palette (U2.6). Eight-name closed set, enforced server-side by the
- * CHECK constraint in migration 024 and by api/schemas.TagColor. The four
- * names that already exist as global semantics (copper, sage, brick, ochre)
- * reuse those swatches so the visual language stays coherent; slate, plum,
- * teal, sand are introduced here as tag-only tokens. The `-fg` pairs are
- * meant for solid-pill text on the `-soft` background.
+ * CHECK constraint in migration 024 and by api/schemas.TagColor. Tags (and the
+ * pipeline stages that borrow them) are the USER's colours, so they are the
+ * same in every scheme — only light/dark changes them. Each `-fg` value holds
+ * 4.5:1 on its own `-soft` wash over a card. Copper, sage, brick and ochre used
+ * to alias the accent and status tokens; they are literal now, because in
+ * Kobalt and Grafit the accent is not copper.
  * Adding a new colour = a new migration (ALTER CHECK) + new tokens here.
  * -------------------------------------------------------------------------- */
 :root {
-  --color-tag-copper:      var(--color-copper);
-  --color-tag-copper-soft: var(--color-copper-soft);
-  --color-tag-sage:        var(--color-sage);
-  --color-tag-sage-soft:   var(--color-sage-soft);
-  --color-tag-brick:       var(--color-brick);
-  --color-tag-brick-soft:  var(--color-brick-soft);
-  --color-tag-ochre:       var(--color-ochre);
-  --color-tag-ochre-soft:  var(--color-ochre-soft);
-
-  --color-tag-slate:       #4a5b73;
-  --color-tag-slate-soft:  rgba(74, 91, 115, 0.10);
-  --color-tag-plum:        #7a4664;
-  --color-tag-plum-soft:   rgba(122, 70, 100, 0.10);
-  --color-tag-teal:        #2e6f7c;
-  --color-tag-teal-soft:   rgba(46, 111, 124, 0.10);
-  --color-tag-sand:        #9c8c5e;
-  --color-tag-sand-soft:   rgba(156, 140, 94, 0.10);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-tag-slate:       #8a9bb3;
-    --color-tag-slate-soft:  rgba(138, 155, 179, 0.16);
-    --color-tag-plum:        #b687a3;
-    --color-tag-plum-soft:   rgba(182, 135, 163, 0.16);
-    --color-tag-teal:        #74b0bb;
-    --color-tag-teal-soft:   rgba(116, 176, 187, 0.16);
-    --color-tag-sand:        #ccb986;
-    --color-tag-sand-soft:   rgba(204, 185, 134, 0.16);
-  }
-}
-
-:root[data-theme="light"] {
-  --color-tag-slate:       #4a5b73;
-  --color-tag-slate-soft:  rgba(74, 91, 115, 0.10);
-  --color-tag-plum:        #7a4664;
-  --color-tag-plum-soft:   rgba(122, 70, 100, 0.10);
-  --color-tag-teal:        #2e6f7c;
-  --color-tag-teal-soft:   rgba(46, 111, 124, 0.10);
-  --color-tag-sand:        #9c8c5e;
-  --color-tag-sand-soft:   rgba(156, 140, 94, 0.10);
+  --color-tag-copper:       #2f6658;
+  --color-tag-copper-soft:  rgba(47, 102, 88, 0.12);
+  --color-tag-sage:         #4b6a35;
+  --color-tag-sage-soft:    rgba(75, 106, 53, 0.12);
+  --color-tag-brick:        #9a3e30;
+  --color-tag-brick-soft:   rgba(154, 62, 48, 0.12);
+  --color-tag-ochre:        #86601a;
+  --color-tag-ochre-soft:   rgba(134, 96, 26, 0.12);
+  --color-tag-slate:        #42536b;
+  --color-tag-slate-soft:   rgba(66, 83, 107, 0.12);
+  --color-tag-plum:         #74405e;
+  --color-tag-plum-soft:    rgba(116, 64, 94, 0.12);
+  --color-tag-teal:         #286876;
+  --color-tag-teal-soft:    rgba(40, 104, 118, 0.12);
+  --color-tag-sand:         #6c6034;
+  --color-tag-sand-soft:    rgba(108, 96, 52, 0.12);
 }
 
 :root[data-theme="dark"] {
-  --color-tag-slate:       #8a9bb3;
-  --color-tag-slate-soft:  rgba(138, 155, 179, 0.16);
-  --color-tag-plum:        #b687a3;
-  --color-tag-plum-soft:   rgba(182, 135, 163, 0.16);
-  --color-tag-teal:        #74b0bb;
-  --color-tag-teal-soft:   rgba(116, 176, 187, 0.16);
-  --color-tag-sand:        #ccb986;
-  --color-tag-sand-soft:   rgba(204, 185, 134, 0.16);
+  --color-tag-copper:       #7fbcae;
+  --color-tag-copper-soft:  rgba(127, 188, 174, 0.16);
+  --color-tag-sage:         #a3c487;
+  --color-tag-sage-soft:    rgba(163, 196, 135, 0.16);
+  --color-tag-brick:        #e3917f;
+  --color-tag-brick-soft:   rgba(227, 145, 127, 0.16);
+  --color-tag-ochre:        #e0b264;
+  --color-tag-ochre-soft:   rgba(224, 178, 100, 0.16);
+  --color-tag-slate:        #9fb0c8;
+  --color-tag-slate-soft:   rgba(159, 176, 200, 0.16);
+  --color-tag-plum:         #d29cbd;
+  --color-tag-plum-soft:    rgba(210, 156, 189, 0.16);
+  --color-tag-teal:         #7cc0cc;
+  --color-tag-teal-soft:    rgba(124, 192, 204, 0.16);
+  --color-tag-sand:         #d4c18c;
+  --color-tag-sand-soft:    rgba(212, 193, 140, 0.16);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-tag-copper:       #7fbcae;
+    --color-tag-copper-soft:  rgba(127, 188, 174, 0.16);
+    --color-tag-sage:         #a3c487;
+    --color-tag-sage-soft:    rgba(163, 196, 135, 0.16);
+    --color-tag-brick:        #e3917f;
+    --color-tag-brick-soft:   rgba(227, 145, 127, 0.16);
+    --color-tag-ochre:        #e0b264;
+    --color-tag-ochre-soft:   rgba(224, 178, 100, 0.16);
+    --color-tag-slate:        #9fb0c8;
+    --color-tag-slate-soft:   rgba(159, 176, 200, 0.16);
+    --color-tag-plum:         #d29cbd;
+    --color-tag-plum-soft:    rgba(210, 156, 189, 0.16);
+    --color-tag-teal:         #7cc0cc;
+    --color-tag-teal-soft:    rgba(124, 192, 204, 0.16);
+    --color-tag-sand:         #d4c18c;
+    --color-tag-sand-soft:    rgba(212, 193, 140, 0.16);
+  }
 }
 
 /* ----------------------------------------------------------------------------
@@ -538,6 +757,9 @@
    *                               estimate corner
    *    2  .card-tip               a badge whose only job above the ::after is
    *                               to be hit-testable, so its title tooltip shows
+   *   20  the sticky tab strip    (Tabs.tsx `sticky`, the property page) — a
+   *                               photo's chevrons scroll UNDER it, not over
+   *   30  the Shell header        the strip pins just below it (top-14)
    *   50  every modal             (inline, z-50) — Explore modals render cards
    *   60  AnchoredPopover         the portalled panel — on <body>, above any
    *                               modal that opened it

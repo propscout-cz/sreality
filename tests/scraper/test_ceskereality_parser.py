@@ -164,10 +164,7 @@ def test_parse_index_ids():
 
 
 def test_parse_detail_full():
-    listing = parse_detail(
-        DETAIL_HTML, source_url=_DETAIL_URL,
-        category_main="byt", category_type="prodej",
-    )
+    listing = parse_detail(DETAIL_HTML, source_url=_DETAIL_URL)
     assert listing.source == "ceskereality"
     assert listing.source_id_native == "3754200"
     assert listing.source_url == _DETAIL_URL
@@ -232,26 +229,18 @@ def test_parse_detail_published_at_from_datum_vlozeni():
     # month name ("10. února 2020").
     from datetime import date
 
-    listing = parse_detail(
-        PUBLISHED_HTML, source_url=_DETAIL_URL,
-        category_main="byt", category_type="prodej",
-    )
+    listing = parse_detail(PUBLISHED_HTML, source_url=_DETAIL_URL)
     assert listing.published_at == date(2020, 2, 10)
 
 
 def test_parse_detail_published_at_none_when_absent():
     # DETAIL_HTML carries no "Datum vložení" row.
-    listing = parse_detail(
-        DETAIL_HTML, source_url=_DETAIL_URL, category_main="byt", category_type="prodej",
-    )
+    listing = parse_detail(DETAIL_HTML, source_url=_DETAIL_URL)
     assert listing.published_at is None
 
 
 def test_parse_detail_street_from_slug_when_no_jsonld_address():
-    listing = parse_detail(
-        SLUG_STREET_HTML, source_url=SLUG_STREET_URL,
-        category_main="byt", category_type="prodej",
-    )
+    listing = parse_detail(SLUG_STREET_HTML, source_url=SLUG_STREET_URL)
     # The SEO slug's street segment (ASCII-folded), capitalized for display.
     assert listing.street == "Vodickova"
     assert listing.disposition == "2+kk"
@@ -259,8 +248,8 @@ def test_parse_detail_street_from_slug_when_no_jsonld_address():
 
 
 def test_parse_detail_content_hash_and_bridges_to_ingest():
-    a = parse_detail(DETAIL_HTML, source_url=_DETAIL_URL, category_main="byt", category_type="prodej")
-    b = parse_detail(DETAIL_HTML, source_url=_DETAIL_URL, category_main="byt", category_type="prodej")
+    a = parse_detail(DETAIL_HTML, source_url=_DETAIL_URL)
+    b = parse_detail(DETAIL_HTML, source_url=_DETAIL_URL)
     assert digest(a.hash_doc()) == digest(b.hash_doc())
     assert len(digest(a.hash_doc())) == 64
 
@@ -294,16 +283,71 @@ def test_category_from_detail_url():
 
 
 def test_parse_detail_reads_its_category_off_its_own_url():
-    """The drain and the reparse heal pass no category: the page's URL names it, so a re-parse
-    of a stored /drazby/ page heals its NULL category_type. A category a caller passes wins."""
+    """No caller passes a category: the page's URL names it, so a re-parse of a stored
+    /drazby/ page heals its NULL category_type."""
     auction = _DETAIL_URL.replace("/prodej/byty/", "/drazby/byty/")
     listing = parse_detail(DETAIL_HTML, source_url=auction)
     assert (listing.category_main, listing.category_type) == ("byt", "drazba")
     assert listing.price_unit == "za nemovitost"
-    kept = parse_detail(DETAIL_HTML, source_url=auction, category_main="dum", category_type="prodej")
-    assert (kept.category_main, kept.category_type) == ("dum", "prodej")
 
 
+# The modelled W2 page (it carries no canonical) and the URL the attribute probes pair it with;
+# each variant below edits only its <link rel="canonical">.
+_W2_PAGE = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "location_w2" / "ceskereality_detail.html"
+).read_text(encoding="utf-8")
+_W2_URL = "https://www.ceskereality.cz/prodej/byty/x-1234567.html"
+# digest(hash_doc()) of parse_detail(_W2_PAGE, source_url=_W2_URL) on f0fed8d49, before the
+# parser read the canonical at all.
+_W2_HASH = "8db8d3f72b5598f148658b0fc82a259f7fcac894e77f3c0f5a16daf875fbd8e2"
+
+
+def _with_canonical(href: str) -> str:
+    return _W2_PAGE.replace("</title>", f'</title>\n  <link rel="canonical" href="{href}">', 1)
+
+
+def test_a_recategorised_ad_takes_its_category_and_url_from_its_canonical():
+    """3639104 (2026-10-24): its old /komercni-prostory/ URL still answers 200 with the new page,
+    whose canonical names /byty/ — the label and the stored URL follow the page, on the www host."""
+    listing = parse_detail(
+        _with_canonical("https://jiho.ceskereality.cz/prodej/byty/byty-3-1/x-1234567.html"),
+        source_url="https://www.ceskereality.cz/pronajem/komercni-prostory/apartman/x-1234567.html",
+    )
+    assert (listing.category_main, listing.category_type) == ("byt", "prodej")
+    assert listing.price_unit == "za nemovitost"
+    assert listing.source_url == "https://www.ceskereality.cz/prodej/byty/byty-3-1/x-1234567.html"
+    assert listing.source_id_native == "1234567"
+
+
+def test_a_canonical_on_a_regional_host_changes_nothing():
+    """Every page canonicalises to a regional host: the same path leaves the label, the URL and
+    the content hash byte-identical to the parse before the canonical was read (rule 2)."""
+    page = _with_canonical("https://jiho.ceskereality.cz/prodej/byty/x-1234567.html")
+    listing = parse_detail(page, source_url=_W2_URL)
+    assert (listing.category_main, listing.category_type) == ("byt", "prodej")
+    assert listing.source_url == _W2_URL
+    assert digest(listing.hash_doc()) == _W2_HASH
+
+
+def test_a_page_without_a_canonical_is_read_off_the_requested_url():
+    listing = parse_detail(_W2_PAGE, source_url=_W2_URL)
+    assert listing.source_url == _W2_URL
+    assert digest(listing.hash_doc()) == _W2_HASH
+    url = _W2_URL.replace("/prodej/byty/", "/pronajem/komercni-prostory/")
+    rent = parse_detail(_W2_PAGE, source_url=url)
+    assert (rent.category_main, rent.category_type) == ("komercni", "pronajem")
+    assert rent.source_url == url
+
+
+def test_a_canonical_naming_another_ad_is_ignored():
+    """The id is the slug's trailing number: a canonical with another id never re-labels this ad."""
+    listing = parse_detail(
+        _with_canonical("https://jiho.ceskereality.cz/prodej/rodinne-domy/x-3790111.html"),
+        source_url=_W2_URL,
+    )
+    assert (listing.category_main, listing.category_type) == ("byt", "prodej")
+    assert listing.source_url == _W2_URL
+    assert listing.source_id_native == "1234567"
 
 
 def test_index_price_parsing():
@@ -321,9 +365,7 @@ def test_price_takes_first_run_and_clamps_to_int():
 
 def test_parse_detail_price_on_request_is_none_for_rent():
     listing = parse_detail(
-        RENT_NO_PRICE_HTML,
-        source_url="https://www.ceskereality.cz/pronajem/byty/x/y-2.html",
-        category_main="byt", category_type="pronajem",
+        RENT_NO_PRICE_HTML, source_url="https://www.ceskereality.cz/pronajem/byty/x/y-2.html",
     )
     assert listing.price_czk is None
     assert listing.price_unit == "za mesic"
@@ -362,9 +404,7 @@ def test_uzitna_beats_bare_plocha_and_says_so():
         cell.format("Plocha užitná", "41 m²"),
         cell.format("Plocha užitná", "41 m²") + cell.format("Plocha", "58 m²"),
     )
-    listing = parse_detail(
-        html, source_url=_DETAIL_URL, category_main="byt", category_type="prodej",
-    )
+    listing = parse_detail(html, source_url=_DETAIL_URL)
     assert (listing.area_m2, listing.area_basis) == (41.0, "usable")
 
 
@@ -379,9 +419,7 @@ def test_a_bare_plocha_reaches_no_column_at_all():
     html = DETAIL_HTML.replace(
         cell.format("Plocha užitná", "41 m²"), cell.format("Plocha", "58 m²"),
     )
-    listing = parse_detail(
-        html, source_url=_DETAIL_URL, category_main="byt", category_type="prodej",
-    )
+    listing = parse_detail(html, source_url=_DETAIL_URL)
     assert listing.usable_area is None
     assert listing.area_basis != "usable"
 
@@ -400,33 +438,24 @@ def test_jsonld_offer_is_vetoed_by_a_per_area_cena_cell():
     # W1's parse-time rail only guarded the fallback path, so the primary path
     # walked 1,254+ per-m² rows straight into price_czk. Measured 2026-08-24.
     listing = parse_detail(
-        _with_cena("100 Kč za m²/měsíc"), source_url=_DETAIL_URL,
-        category_main="komercni", category_type="pronajem",
+        _with_cena("100 Kč za m²/měsíc"),
+        source_url=_DETAIL_URL.replace("/prodej/byty/", "/pronajem/komercni-prostory/"),
     )
     assert listing.price_czk is None
 
 
 def test_jsonld_offer_survives_an_ordinary_cena_cell():
-    listing = parse_detail(
-        _with_cena("6 999 000 Kč"), source_url=_DETAIL_URL,
-        category_main="byt", category_type="prodej",
-    )
+    listing = parse_detail(_with_cena("6 999 000 Kč"), source_url=_DETAIL_URL)
     assert listing.price_czk == 6_999_000
 
 
 def test_jsonld_offer_survives_a_per_area_note_beside_the_total():
-    listing = parse_detail(
-        _with_cena("6 999 000 Kč (170 707 Kč/m²)"), source_url=_DETAIL_URL,
-        category_main="byt", category_type="prodej",
-    )
+    listing = parse_detail(_with_cena("6 999 000 Kč (170 707 Kč/m²)"), source_url=_DETAIL_URL)
     assert listing.price_czk == 6_999_000
 
 
 def test_jsonld_offer_survives_when_the_page_has_no_cena_cell_at_all():
-    listing = parse_detail(
-        DETAIL_HTML, source_url=_DETAIL_URL,
-        category_main="byt", category_type="prodej",
-    )
+    listing = parse_detail(DETAIL_HTML, source_url=_DETAIL_URL)
     assert listing.price_czk == 6_999_000
 
 
@@ -596,15 +625,11 @@ def test_spaced_thousands_in_a_spec_cell_is_one_number():
         '<span class="i-info__value"> 41 m² </span>',
         '<span class="i-info__value"> 5 870 m² </span>',
     ).replace("Prodej bytu 1+1 41 m²", "Prodej bytu 1+1 5 870 m²")
-    listing = parse_detail(
-        html, source_url=_DETAIL_URL, category_main="komercni", category_type="prodej",
-    )
+    listing = parse_detail(html, source_url=_DETAIL_URL.replace("/byty/", "/komercni-prostory/"))
     assert listing.usable_area == 5870.0
     assert (listing.area_m2, listing.area_basis) == (5870.0, "usable")
     # The same figure on a FLAT is a site area, never the unit (MAX_FLAT_AREA_M2).
-    flat = parse_detail(
-        html, source_url=_DETAIL_URL, category_main="byt", category_type="prodej",
-    )
+    flat = parse_detail(html, source_url=_DETAIL_URL)
     assert (flat.usable_area, flat.area_m2) == (5870.0, None)
 
 
@@ -617,9 +642,7 @@ def test_street_parking_is_not_the_property_s_own_parking():
     The street is the one member of this cell's vocabulary that plainly does not come
     with the unit, and the cell being FILLED makes that a stated `false`, not unknown —
     95 of the 283 parking cells in a 1,000-row census say exactly this."""
-    listing = parse_detail(
-        _STREET_ONLY, source_url=_DETAIL_URL, category_main="byt", category_type="prodej",
-    )
+    listing = parse_detail(_STREET_ONLY, source_url=_DETAIL_URL)
     assert listing.has_parking is False
     assert listing.garage is False
 
@@ -632,15 +655,69 @@ def test_a_room_rental_under_a_five_room_disposition_keeps_the_room_s_size():
             .replace("Prodej bytu 1+1 41 m²", "Pronájem bytu 5+1 a více 14 m²")
             .replace('<span class="i-info__value"> 41 m² </span>',
                      '<span class="i-info__value"> 14 m² </span>'))
-    listing = parse_detail(
-        html, source_url=_DETAIL_URL, category_main="byt", category_type="pronajem",
-    )
+    listing = parse_detail(html, source_url=_DETAIL_URL.replace("/prodej/", "/pronajem/"))
     assert listing.disposition == "5+1"
     assert (listing.area_m2, listing.area_basis, listing.usable_area) == (14.0, "usable", 14.0)
 
     title_only = parse_detail(
         html.replace('<div class="i-info"><span class="i-info__title">Plocha užitná</span>'
                      '<span class="i-info__value"> 14 m² </span></div>', ""),
-        source_url=_DETAIL_URL, category_main="byt", category_type="pronajem",
+        source_url=_DETAIL_URL.replace("/prodej/", "/pronajem/"),
     )
     assert (title_only.area_m2, title_only.area_basis) == (14.0, "unknown")
+
+
+_KOMERCNI_URL = (
+    "https://www.ceskereality.cz/prodej/komercni-prostory/restaurace/praha/"
+    "prodej-restaurace-10-m2-svehlova-3904070.html"
+)
+
+
+def _with_plot_cells(uzitna: str, pozemku: str) -> str:
+    cell = '<div class="i-info"><span class="i-info__title">{}</span>' \
+           '<span class="i-info__value"> {} </span></div>'
+    return DETAIL_HTML.replace(
+        cell.format("Plocha užitná", "41 m²"),
+        cell.format("Plocha užitná", uzitna) + cell.format("Plocha pozemku", pozemku),
+    )
+
+
+def test_a_commercial_plot_that_repeats_the_uzitna_cell_is_not_a_plot() -> None:
+    """General ruling 3. ceskereality is the largest cell — 1,383 of its 3,023 active
+    komerční plots equal the užitná measure (2026-09-30) — and the one portal whose live
+    pages refused the readers (403), so the echo is pinned on the spec cells its stored
+    pages render: one figure under "Plocha užitná" and "Plocha pozemku" (19049187, a
+    10 m² restaurant). The page's statement stays in raw_json; the column reads absence.
+    A site parcel stated beside the floor area (3 400 m² on a 1 200 m² areál) stays."""
+    from scraper.area import parse_area_text
+
+    echo = parse_detail(_with_plot_cells("10 m²", "10 m²"), source_url=_KOMERCNI_URL)
+    assert echo.category_main == "komercni"
+    assert (echo.area_m2, echo.area_basis, echo.usable_area) == (10.0, "usable", 10.0)
+    assert echo.estate_area is None
+    assert parse_area_text(echo.raw["params"]["plocha pozemku"]) == 10.0
+
+    areal = parse_detail(_with_plot_cells("1 200 m²", "3 400 m²"), source_url=_KOMERCNI_URL)
+    assert (areal.usable_area, areal.estate_area) == (1200.0, 3400.0)
+
+
+def test_a_flat_never_carries_a_plot_so_the_b1_control_loses_its_64() -> None:
+    """The operator's answer of 2026-10-01 (a flat NEVER carries a plot). The W2a
+    refetch control `ceskereality_b1.html` — a 2+1 in Ostrov whose spec list states
+    "Plocha pozemku 64 m²" beside "Plocha užitná 59 m²" — kept its 64 under the equality
+    rule alone (the figure is the obytná measure, not an echo); under the flat rule it
+    loses it, and that is the intended move: on this portal 3,185 active flats carry a
+    "plot" that is a doubled floor figure, the placeholder 1 or the building's parcel."""
+    from scraper.area import parse_area_text
+
+    html = (Path(__file__).resolve().parents[1] / "fixtures" / "location_w2a_refetch"
+            / "ceskereality_b1.html").read_text(encoding="utf-8")
+    listing = parse_detail(
+        html,
+        source_url="https://www.ceskereality.cz/prodej/byty/byty-2-1/ostrov/"
+                   "prodej-bytu-2-1-59-m2-majova-3861311.html",
+    )
+    assert listing.category_main == "byt"
+    assert (listing.area_m2, listing.area_basis, listing.usable_area) == (59.0, "usable", 59.0)
+    assert parse_area_text(listing.raw["params"]["plocha pozemku"]) == 64.0
+    assert listing.estate_area is None

@@ -114,7 +114,12 @@ export const formatUncertaintyRadius = (m: number): string => {
   return tens < 1_000 ? `±${tens} m` : `±${czDecimal.format(m / 1_000)} km`;
 };
 
-/* The popup's precision line: the words for what the pin's shape and the circle
+/* The lead words of the popup's precision line (ruling P13); pinPrecisionLabel
+ * below is the detail in its tooltip. */
+export const pinPrecisionShort = (p: PinPrecision): string =>
+  p.granularity_rank == null ? 'Přesnost polohy neznámá' : isPinExact(p) ? 'Přesná poloha' : 'Přibližná poloha';
+
+/* The popup's precision detail: the words for what the pin's shape and the circle
  * show. The radius it prints is the TRUE one, never the drawn cap. */
 export const pinPrecisionLabel = (p: PinPrecision): string => {
   const rank = p.granularity_rank;

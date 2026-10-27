@@ -218,8 +218,8 @@ component is slimmed twice — each wave rewrites one component and slims its st
     the main thread. Each batch logs its own `N bodies/s`; `scripts/bench_page_extraction.py`
     takes the same number off the committed fixtures with no database (16 cores, 1 500 bodies:
     317 → 512 b/s at 2 workers, 1 512 b/s at 16). No new flag, no `INTAKE_VERSION` bump — the
-    claims are identical; `LOCATION_INTAKE_WORKERS` exists only for a runner that misreports
-    its CPU count. The lane also **self-chains** now: GitHub fires the `35 * * * *` cron ~7
+    claims are identical; the `LOCATION_INTAKE_WORKERS` override for a runner that misreports its
+    CPU count went in Actions exit W1 (#2021): the width is `scraper.cpus.job_cpus()`. The lane also **self-chains** now: GitHub fires the `35 * * * *` cron ~7
     times a day (no tick at 02:35 or 03:35 on 2026-09-12), so a 250 000-body backlog drained at
     ~6 000 bodies a fired tick however fast the extraction got. A run dispatches ONE successor
     with the same budget and batch size when it reports an unfinished half THAT IT MOVED
@@ -1174,6 +1174,26 @@ component is slimmed twice — each wave rewrites one component and slims its st
   Measured 2026-10-19: after the W3 backfill 14,051 properties (status `active`, live or dormant)
   stand at an ad other than their canonical one; the plan's census put ~10.8k rings becoming dots, ~84 town changes and 0
   newly unserved.
+- **Unpinned ads get their street — 2026-10-25** (operator ruling 2026-10-25; idnes@6, realitymix@7,
+  remax@6; no migration). An ad with no portal pin and no street claim stood on its TOWN's
+  representative point — Prague's is in Vinohrady, 9 km from 19437599's Mahulenina. Active ads on a
+  town point, measured that day: idnes 22,124, realitymix 12,806, remax 539, every other portal ≈ 0.
+  idnes reads the street off its map highlight ("Zvýrazněná ulice <name>", the one feature with no
+  id, picked by its title — `json_regex` lets the pattern pick an object out of a list), the
+  address line after; realitymix off its heading (the map block is absent on 20 of 22 unpinned
+  pages), the map's `data-address` after; remax keeps the map line. All three drop the word-ending
+  test (`address_part_street:loose`): W18 made RÚIAN the check, and a part of the town named in the
+  street slot binds as the part (v5.7). A page entry's `fallback` may hand over to another page
+  reader of the same surface and method (`page_readers.read_entry`). Also: realitymix's 'estimated'
+  marker fires on an EMPTY `data-gps-*` (`html_marker.blank_attrs`; v6 declared it on no active ad),
+  and its Prague quarter is read one crumb higher (`json_breadcrumb.levels_by_anchor`; 713 Prague
+  ads claimed none). Recovery measured once the bumps' re-mine drains. Unrecoverable here: the
+  ~15.6k idnes fallback ads whose line names only a town (idnes highlights the whole obec) — they
+  wait on the next item.
+- **Next (ruled 2026-10-25): the fallback point.** A část obce has no RÚIAN polygon, so FILL climbs
+  to its obec's point; place it at the centroid of its own address points as W18 places a street,
+  with a radius that is the set's extent (12,810 idnes + 10,875 realitymix quarter-level rows stood
+  on a town point; errors to 12.7 km against a declared 750 m). A `RESOLVER_VERSION` bump.
 - **Owed (ONE PIN W3 hand-off): centroid radii drawn too small** — town 60.4 %, quarter 86.1 %
   containment of the exact point (measured 2026-10-19; street level 98.5 %). The ads agree where
   both are exact (p90 0 m); the misses are the radius, not the evidence. Calibrating a radius is a

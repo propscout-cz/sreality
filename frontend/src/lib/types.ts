@@ -693,9 +693,7 @@ export interface PipelineBoardCard {
   price_change_count: number | null;
   /* The five RÚIAN codes the ONE place predicate tests (lib/districtCodes) —
    * the board filters its cards in the browser, so it carries the same codes
-   * the server-side predicate uses. `obec_id` doubles as the join key to the
-   * curated-city index strip (= curated_cities.admin_boundary_id; see
-   * lib/useCityQuality). */
+   * the server-side predicate uses. */
   obec_id: number | null;
   cast_obce_id: number | null;
   ulice_id: number | null;
@@ -1095,6 +1093,19 @@ export interface FilterPreset {
   position: number;
   /* Optional chip colour from the shared tag palette; null = neutral default. */
   color: TagColor | null;
+  /* The box it sits in (FilterPresetGroup, migration 672); null = loose. */
+  group_id: string | null;
+}
+
+/* A named box the account sorts its presets into (filter_preset_groups,
+ * migration 672): a saved set with no blob. Deleting one leaves its presets loose. */
+export interface FilterPresetGroup {
+  id: string;
+  name: string;
+  color: TagColor | null;
+  position: number;
+  created_at: string;
+  updated_at: string;
 }
 
 /* A named Browse › Stats dashboard (stats_dashboards, migration 647): the
@@ -1119,6 +1130,9 @@ export interface SavedDashboard {
    * 664); always false on a dashboard shared with the caller. Optional while an API without
    * it may answer (a deploy skew reads as "none"). */
   property_card?: boolean;
+  /* The "Malé vzorky" switch saved with the dashboard (migration 681): cells under the
+   * minimum show min, průměr, medián, max. Optional while an API without it may answer. */
+  show_small?: boolean;
 }
 
 export type NotificationSourceKind =
@@ -1126,7 +1140,7 @@ export type NotificationSourceKind =
   | 'collection_monitor'
   /* Something was shared with the caller (migrations 610, 641, 647): a collection
    * (collection_id set), a pipeline or a dashboard (collection_id null); change_kind
-   * names which (migration 652), no listing subject — the `message` text. */
+   * names which (migration 652), no listing subject — the sharer and the thing's name. */
   | 'share';
 
 /* Why a dispatch fired: a detector's event, or what a share opens (the change_kind
@@ -1158,15 +1172,19 @@ export interface WatchdogDispatch {
    * decrease). */
   property_id: number | null;
   change_kind: DispatchChangeKind;
-  /* Free-text body of a `share` row (change_kind 'shared_<kind>'), which has no
-   * listing subject; null on watchdog / collection_monitor rows. */
-  message: string | null;
   /* What a `share` row shares: the kind (the API reads it off change_kind,
    * migration 652), and its id off the row's own columns — the collection id, the
    * owner's account uuid for a pipeline (the actor), the dashboard uuid (the
    * event_ref). Null on every other producer. */
   share_kind: 'collection' | 'pipeline' | 'dashboard' | null;
   share_ref: string | null;
+  /* A share stores no text (migration 656): the bell composes its sentence from
+   * the sharer's email (null once no share joins the two accounts), the shared
+   * collection's or dashboard's live name (null once it cannot be read) and a
+   * pipeline share's mode. All three null on every other producer. */
+  actor_email: string | null;
+  share_name: string | null;
+  share_mode: 'read' | 'edit' | null;
   dispatched_at: string;
   seen_at: string | null;
   /* Change provenance — price events carry these so "why was I pinged" survives

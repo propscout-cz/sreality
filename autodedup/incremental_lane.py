@@ -36,6 +36,7 @@ import json
 import logging
 import math
 import os
+import re
 import socket
 import sys
 import time
@@ -50,7 +51,7 @@ try:
 except ImportError:  # pragma: no cover — no getrusage outside Unix
     resource = None  # type: ignore[assignment]
 
-from autodedup import indistinguishable, normalize, reconcile, rt_lease
+from autodedup import indistinguishable, normalize, reconcile, rt_lease, text_facts
 from autodedup.calibration_cut import CalibrationCut, decode_payload, encode_payload
 from autodedup.dataset import Image, Listing
 from autodedup.export import (
@@ -136,6 +137,7 @@ from autodedup.incremental_sql import (
     RT_CUT_SCOPE_IDS_SQL,
     RT_FLIPPED_LISTINGS_SQL,
     RT_EVIDENCE_CANDIDATES_SQL,
+    RT_EVIDENCE_ACTIVE_SQL,
     RT_EVIDENCE_HELD_COUNT_SQL,
     RT_EVIDENCE_PROBE_SQL,
     RT_EVIDENCE_RELEASE_SQL,
@@ -230,6 +232,7 @@ from autodedup.model import LogisticModel
 from autodedup.score_sql import CLUSTER_CONFLICT_INSERT_SQL
 from autodedup.settings import Settings
 from autodedup.text_facts import body_cache_entries, clear_body_caches
+from scraper.cgroup import memory_ceiling_mb
 
 LOG = logging.getLogger(__name__)
 
@@ -277,6 +280,10 @@ RECUT_SETTING: str = "rt_recut"
 PASS_RATE_SETTING: str = "rt_pass_rate_per_s"
 CLAIM_CAP_SETTING: str = "rt_claim_cap"
 ENGINE_SETTING: str = "rt_engine"
+# E979, the one exception: a row the OPERATOR writes by hand — the blocks a build reads first and
+# the category order inside them, `{"blocks": ["obec:563889"], "categories": [["byt", "pronajem"],
+# ...]}`. Absent or malformed, the build reads in E978's order.
+BUILD_PRIORITY_SETTING: str = "rt_build_priority"
 # The reconcile's skip over a generation no seed of this design built.
 SEED_MISMATCH: str = "seed_version"
 # E941: a pass that sees the worker shutting down, and one whose lease ended under it.
@@ -346,6 +353,23 @@ PAGE_STALL_PAGES: int = 16
 # buffers, 14 MB) and the day costs ~259,000 buffers, 2.0 GB — the same order as the entrant
 # feed's 1.6 GB after W9e cut it 7.8x.
 EVIDENCE_SLICE: int = 400
+# E980: how many ACTIVE rows still marked incomplete the evidence sweep probes on every pass,
+# newest first decision first, ahead of its round-robin. 1,916 qualified on 2026-10-26; at 12
+# buffers a listing 1,000 is ~12,000 buffers (~94 MB) a pass, and the oldest beyond it are
+# still the round-robin's.
+EVIDENCE_ACTIVE_SLICE: int = 1000
+# E980: how long a row the lane just wrote stays out of that arm. It bounds a row whose probe
+# disagrees with its decision for ever (an undecodable image stamped by the CLIP job) to one
+# re-decision an hour; an arrival's vectors land hours after its first decision, so the gate
+# does not delay the case the arm is for.
+EVIDENCE_ACTIVE_RECHECK_MINUTES: int = 60
+# E980b: how many of the arm's moved rows one pass re-decides, and the arm is OFF in a build.
+# A re-decided active advert drags its whole built neighbourhood through retrieval and
+# re-scoring: on 2026-10-26 a build pass that took 28 of them claimed 275 in 1,022 s against
+# ~750 without, and two passes that took 57-80 overran PASS_DEADLINE_S and rolled back (#2091,
+# reverted by #2096). A build pass already runs at 89-97 % of the deadline, so there the feed is
+# E92's round-robin alone; outside a build the passes are short and 15 fit.
+EVIDENCE_ACTIVE_REDECIDE_MAX: int = 15
 # How long after its FIRST decision a listing's photographs are still expected. The producers
 # are hourly (dHash at :20, CLIP at :40) and measured p90 4.51 h to a first tag, so 48 h is
 # ~10x the observed tail rather than a guess at it — and it is the bound on how long a merge
@@ -527,14 +551,15 @@ SNAPSHOT_BYTES_PER_ROW: int = 300
 # review of E962): 43.9 entries, 8.06 kB of RSS and 678 B of payload an advert; a seed of mostly
 # villages ~9-10 kB all in. Plus the population (120 B a hash at its peak, 7.08 hashes an
 # advert: 0.85 kB), libpq's copy of its rows and the payload's two serialisations: 12 kB with
-# headroom. The seed runs on GitHub's ubuntu-latest, 16 GiB, and a cut past it is OOM-killed,
-# stranding `rt_lease` for SEED_LEASE_TTL_S (the lease is taken before the transaction and
-# SIGKILL runs no release). So right after its walk, before the cut, the seed refuses a scope
-# whose peak would pass HALF the runner — the rule a widened scope's gate holds the worker to
-# (E939) — 8,192 MiB / 12 kB = 699,050 adverts (E940's whole cut: 56 kB, ~149,800), though
-# MAX_SCHEMA_MB binds first, above ~470k. The 323,128 of the re-seed: ~3.7 GiB.
+# headroom. The seed runs on a GitHub-hosted runner (16 GiB public, 7 GiB private), and a cut
+# past it is OOM-killed, stranding `rt_lease` for SEED_LEASE_TTL_S (the lease is taken before the
+# transaction and SIGKILL runs no release). So right after its walk, before the cut, the seed
+# refuses a scope whose peak would pass HALF of what the container may use — the rule a widened
+# scope's gate holds the worker to (E939) — measured at import (#2016): 8,192 MiB / 12 kB =
+# 699,050 adverts on a public runner (E940's whole cut: 56 kB, ~149,800), though MAX_SCHEMA_MB
+# binds first, above ~470k. The 323,128 of the re-seed: ~3.7 GiB.
 CUT_PEAK_BYTES_PER_LISTING: int = 12 * 1024
-SEED_MEMORY_MB: float = 8192.0
+SEED_MEMORY_MB: float = memory_ceiling_mb() / 2
 # How many `phash_pop` rows one `executemany` carries. The trial cohort's 41,791 hashes are
 # 9 chunks; the number is the score lane's, for the same reason (bound-parameter size).
 POP_CHUNK: int = 5_000
@@ -1332,13 +1357,15 @@ class SqlWork:
                  max_enter_scans_per_day: int = MAX_ENTER_SCANS_PER_DAY,
                  evidence_slice: int = EVIDENCE_SLICE,
                  evidence_horizon_hours: float = EVIDENCE_HORIZON_HOURS,
+                 evidence_active_slice: int = EVIDENCE_ACTIVE_SLICE,
                  bootstrap: bool = False,
                  pass_budget_s: float = PASS_BUDGET_S,
                  rate_per_s: float = PASS_RATE_PER_S,
                  claim_cap: int | None = None,
                  stale_claims: Sequence[int] = (),
                  stale_waiting: int = 0,
-                 stale_budget: int = reconcile.STALE_FLOOR) -> None:
+                 stale_budget: int = reconcile.STALE_FLOOR,
+                 build_priority: tuple[Sequence[str], Sequence[str]] = ((), ())) -> None:
         self.conn = conn
         self.scope = scope
         self.generation = generation
@@ -1353,6 +1380,7 @@ class SqlWork:
         self.max_enter_scans_per_day = int(max_enter_scans_per_day)
         self.evidence_slice = int(evidence_slice)
         self.evidence_horizon_hours = float(evidence_horizon_hours)
+        self.evidence_active_slice = int(evidence_active_slice)
         self.bootstrap = bool(bootstrap)
         self.pass_budget_s = float(pass_budget_s)
         self.rate_per_s = float(rate_per_s)
@@ -1364,6 +1392,9 @@ class SqlWork:
         self.stale_claims = [int(i) for i in stale_claims]
         self.stale_waiting = int(stale_waiting)
         self.stale_budget = int(stale_budget)
+        # E979: the blocks a build reads first and the `main/type` category order inside them.
+        self.priority_blocks = [str(block) for block in build_priority[0]]
+        self.priority_cats = [str(cat) for cat in build_priority[1]]
         self.attempt = 0
         # Set by `claim` while the phase is on: the entrant backlog it measured, and whether
         # this pass is the one that empties it (E98).
@@ -1523,8 +1554,11 @@ class SqlWork:
                 # E976: a build reads the LIVE adverts first, under no id cursor (two keys are
                 # no keyset): the `rt_fp` anti-join advances it, so its id half stays 0 and the
                 # feed outside the build starts again at the snapshot's first id.
+                # E979: the operator's blocks first, in their category order; empty: E978's.
                 rows = self._query(RT_SCOPE_BUILD_ENTRANTS_SQL, {
-                    "generation": self.generation, "lag": self.lag, "limit": enter_share})
+                    "generation": self.generation, "lag": self.lag, "limit": enter_share,
+                    "priority_blocks": self.priority_blocks,
+                    "priority_cats": self.priority_cats})
                 self._pending[CURSOR_ENTER] = (0, pointer)
             else:
                 after_enter = cursors[CURSOR_ENTER][0]
@@ -1598,17 +1632,25 @@ class SqlWork:
         `image_clip_tags` on every row (72,171 each, 0 disagreements), at a fourteenth of the
         buffers the two joins cost."""
         horizon = {"horizon_hours": int(round(self.evidence_horizon_hours))}
+        # E980: the active arm first, so the share below takes its moved rows before the
+        # round-robin's; the cursor still follows the round-robin's rows alone.
+        active = self._query(RT_EVIDENCE_ACTIVE_SQL, {
+            "generation": self.generation, "limit": self.evidence_active_slice,
+            "recheck_minutes": EVIDENCE_ACTIVE_RECHECK_MINUTES,
+        }) if self.evidence_active_slice > 0 and not self.bootstrap else []
         rows = self._query(RT_EVIDENCE_CANDIDATES_SQL, {
             "generation": self.generation, "after_id": int(after_id),
             "limit": self.evidence_slice, **horizon})
-        recorded = {int(row[0]): (row[1], row[2], row[3], row[4]) for row in rows}
+        recorded: dict[int, tuple[Any, Any, Any, Any]] = {}
+        for row in [*active, *rows]:
+            recorded.setdefault(int(row[0]), (row[1], row[2], row[3], row[4]))
         probed: dict[int, tuple[int, int, int]] = {}
         if recorded:
             probed = {int(row[0]): (int(row[1]), int(row[2]), int(row[3]))
                       for row in self._query(RT_EVIDENCE_PROBE_SQL,
                                              {"ids": sorted(recorded)})}
         moved: list[int] = []
-        for listing_id, (images, phash, clip, tags) in sorted(recorded.items()):
+        for listing_id, (images, phash, clip, tags) in recorded.items():
             live = probed.get(listing_id, (0, 0, 0))
             # A NULL count is a row written before migration 540 — unmeasured, not zero, so
             # it is re-decided once and then carries real counts.
@@ -1625,23 +1667,42 @@ class SqlWork:
             released.extend((int(row[0]), int(row[1])))
         held_total = int(self._query(RT_EVIDENCE_HELD_COUNT_SQL, {
             "generation": self.generation, "reason": EVIDENCE_HOLD_REASON})[0][0] or 0)
-        # A short slice is the end of the sweep, so the cursor wraps — the same round-robin
-        # the drift sweep uses, and the reason a candidate cut by `share` is re-offered.
-        self._pending[CURSOR_EVIDENCE] = (
-            0 if len(rows) < self.evidence_slice else max(recorded, default=int(after_id)))
         self.windows["evidence"] = len(rows)
         self.evidence = {
-            "candidates": len(rows), "listings_probed": len(recorded),
+            "candidates": len(rows), "active_candidates": len(active),
+            "listings_probed": len(recorded),
             "images_probed": sum(row[0] for row in probed.values()),
             "moved": len(moved), "release_candidates": len(set(released)),
             "held_pairs": held_total,
             "horizon_hours": self.evidence_horizon_hours, "slice": self.evidence_slice,
         }
         gone = set(retiring or ())
+        arm_ids = {int(row[0]) for row in active}
+        # E980b: the arm's re-decides are bounded by a count of their own, the round-robin's
+        # by the share as before.
+        arm_moved = [listing_id for listing_id in moved if listing_id in arm_ids]
+        robin_moved = [listing_id for listing_id in moved if listing_id not in arm_ids]
+        arm_taken = min(len(arm_moved), share, EVIDENCE_ACTIVE_REDECIDE_MAX)
+        taken_moved = (arm_moved[:arm_taken] + robin_moved)[:share]
         wanted: list[int] = []
-        for listing_id in moved[:share] + sorted(set(released)):
+        for listing_id in taken_moved + sorted(set(released)):
             if listing_id not in wanted and listing_id not in gone:
                 wanted.append(listing_id)
+        # A short slice is the end of the sweep, so the cursor wraps — the same round-robin
+        # the drift sweep uses. E980b: the cursor stops just before a round-robin mover only
+        # when the ARM's slots displaced it (one E92 would have taken), as E970's revive feed
+        # does; a mover E92 itself cut beyond the share is stepped past as before. In a build
+        # the arm takes nothing, so the cursor is E92's exactly and the round-robin never hands
+        # on more than one share a slice (review of #2101).
+        cut = [listing_id for listing_id in robin_moved[max(0, share - arm_taken):share]
+               if listing_id not in gone]
+        if cut:
+            self._pending[CURSOR_EVIDENCE] = min(cut) - 1
+        else:
+            self._pending[CURSOR_EVIDENCE] = (
+                0 if len(rows) < self.evidence_slice
+                else max((int(row[0]) for row in rows), default=int(after_id)))
+        self.evidence["cut"] = len(cut)
         return [WorkItem(listing_id, "evidence", None, None, redecide=True)
                 for listing_id in wanted]
 
@@ -2233,6 +2294,49 @@ def recut_key(generation: str) -> str:
     return f"{RECUT_SETTING}:{generation}"
 
 
+def build_priority_key(generation: str) -> str:
+    """`rt_build_priority:<generation>` — the operator's build order (E979)."""
+    return f"{BUILD_PRIORITY_SETTING}:{generation}"
+
+
+_PRIORITY_BLOCK = re.compile(r"(obec|cast_obce|okres):([0-9]+)")
+
+
+def parse_build_priority(value: Any) -> tuple[list[str], list[str]]:
+    """The operator's build priority (E979) as (block keys, `main/type` categories). Anything
+    malformed is no priority at all — logged, never raised — so the build reads in E978's order."""
+    if value is None:
+        return [], []
+    try:
+        if isinstance(value, str):
+            value = json.loads(value)
+        blocks = value["blocks"]
+        categories = value.get("categories") or []
+        if not isinstance(blocks, list) or not isinstance(categories, list) or not blocks:
+            raise ValueError("blocks must be a non-empty list, categories a list")
+        keys: list[str] = []
+        for block in blocks:
+            match = _PRIORITY_BLOCK.fullmatch(block) if isinstance(block, str) else None
+            if match is None:
+                raise ValueError(f"block {block!r} is not grain:code")
+            key = f"{match[1]}:{int(match[2])}"      # the snapshot's spelling, `ScopeBlock.key`
+            if key not in keys:
+                keys.append(key)
+        cats: list[str] = []
+        for pair in categories:
+            if (not isinstance(pair, list) or len(pair) != 2
+                    or not all(isinstance(part, str) and part and "/" not in part
+                               for part in pair)):
+                raise ValueError(f"category {pair!r} is not [main, type]")
+            if f"{pair[0]}/{pair[1]}" not in cats:
+                cats.append(f"{pair[0]}/{pair[1]}")
+    except (TypeError, ValueError, KeyError, AttributeError) as exc:
+        LOG.warning("AUTODEDUP: %s ignored, the build reads in E978's order: %s",
+                    BUILD_PRIORITY_SETTING, exc)
+        return [], []
+    return keys, cats
+
+
 def full_claim_cap(reason: str | None = None, limit_mb: float | None = None) -> dict[str, Any]:
     """A seed's cap, an absent row's and a bigger container's: all of `max_listings` (E948b)."""
     return {"cap": PASS_LIMITS.max_listings, "reason": reason, "limit_mb": limit_mb}
@@ -2765,7 +2869,7 @@ def seed_memory(scope_listings: int, memory_mb: float = SEED_MEMORY_MB) -> dict[
             f"rt_seed refused: the calibration cut (streamed, E962) holds "
             f"~{CUT_PEAK_BYTES_PER_LISTING // 1024} kB an advert at its peak, so the "
             f"{int(scope_listings):,} adverts the walk listed would peak at ~{peak_mb:,.0f} MiB, "
-            f"over SEED_MEMORY_MB {float(memory_mb):,.0f} (half the runner's 16 GiB): the "
+            f"over SEED_MEMORY_MB {float(memory_mb):,.0f} (half the container's memory limit): the "
             "runner would kill the seed mid-cut and strand autodedup.rt_lease for "
             f"{SEED_LEASE_TTL_S:,} s. Narrow rt_scope. Nothing was written.")
     return report
@@ -3104,9 +3208,11 @@ def peak_rss_mb() -> float | None:
 
 def memo_entries() -> dict[str, int]:
     """The entries the engine's process-level memos of what it read hold now (E949): the readers
-    cached on a body, by module, E282's shingle sets, and the token hashes and SimHash lanes."""
+    cached on a body, by module, E282's shingle sets, the token hashes and SimHash lanes, and the
+    folded texts (R1)."""
     return {**body_cache_entries(), "shingles": len(indistinguishable._SHINGLE_MEMO),
-            "tokens": len(normalize._token_hashes) + len(normalize._token_lanes)}
+            "tokens": len(normalize._token_hashes) + len(normalize._token_lanes),
+            "folds": len(normalize._folds) + len(text_facts._folds)}
 
 
 def forget_bodies() -> None:
@@ -3117,6 +3223,8 @@ def forget_bodies() -> None:
     indistinguishable._SHINGLE_MEMO.clear()
     normalize._token_hashes.clear()
     normalize._token_lanes.clear()
+    normalize._folds.clear()
+    text_facts._folds.clear()
 
 
 def pass_memory() -> dict[str, Any]:
@@ -3268,7 +3376,8 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                                        engine_key(generation),
                                        reconcile.redecide_key(generation),
                                        reconcile.tried_key(generation),
-                                       reconcile.budget_key(generation)])
+                                       reconcile.budget_key(generation),
+                                       build_priority_key(generation)])
         try:
             scope = pass_scope(read_scope_setting(control, generation))
             parents = resolve_scope_parents(conn, scope)
@@ -3350,7 +3459,9 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                                       else PASS_BUDGET_S),
                        rate_per_s=rate_per_s, claim_cap=int(cap["cap"]),
                        stale_claims=stale_claims, stale_waiting=stale_waiting,
-                       stale_budget=stale_budget)
+                       stale_budget=stale_budget,
+                       build_priority=parse_build_priority(
+                           control.get(build_priority_key(generation))))
         result = None
         stopped = ""
         # E941: halved AHEAD, outside the transaction (`db.connect` is autocommit), so it stands

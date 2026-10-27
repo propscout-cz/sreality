@@ -587,17 +587,10 @@ def test_images_only_does_not_open_scrape_run(monkeypatch):
     assert calls["finalize"] == 0
 
 
-def test_parse_shard_parses_and_validates():
-    assert scraper_main._parse_shard(None) is None
-    assert scraper_main._parse_shard("") is None
-    assert scraper_main._parse_shard("0/4") == (0, 4)
-    assert scraper_main._parse_shard("3/4") == (3, 4)
-
-
-@pytest.mark.parametrize("bad", ["4/4", "5/4", "-1/4", "1", "1/0", "a/b"])
-def test_parse_shard_rejects_bad_input(bad):
+@pytest.mark.parametrize("gone", [["--image-shard", "1/4"], ["--images-active-only"]])
+def test_images_only_no_longer_takes_a_shard_or_an_active_scope(gone):
     with pytest.raises(SystemExit):
-        scraper_main._parse_shard(bad)
+        scraper_main._parse_args(["--images-only", *gone])
 
 
 def test_parse_sources_splits_and_trims():
@@ -607,19 +600,17 @@ def test_parse_sources_splits_and_trims():
     assert scraper_main._parse_sources(" idnes , bazos ") == ("idnes", "bazos")
 
 
-def test_images_only_passes_shard_and_sources_through(monkeypatch):
+def test_images_only_passes_sources_through(monkeypatch):
     captured: dict[str, Any] = {}
     monkeypatch.setattr(scraper_main.db, "connect", lambda: _NoopConn())
     monkeypatch.setattr(
         scraper_main, "_run_image_downloads",
         lambda **k: captured.update(k) or {"images_stored": 0, "by_category": {}},
     )
-    rc = scraper_main.main(
-        ["--images-only", "--image-shard", "1/4", "--image-sources", "idnes,bazos"]
-    )
+    rc = scraper_main.main(["--images-only", "--image-sources", "idnes,bazos"])
     assert rc == 0
-    assert captured["shard"] == (1, 4)
     assert captured["sources"] == ("idnes", "bazos")
+    assert "shard" not in captured and "active_only" not in captured
 
 
 def test_main_finalizes_run_even_when_the_walk_crashes(monkeypatch):
