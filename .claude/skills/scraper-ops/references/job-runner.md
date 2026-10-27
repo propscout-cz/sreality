@@ -138,11 +138,11 @@ runs nothing on GitHub; the runner starts the job within seconds once it and its
 1. github.com → the repo → **Actions** → **Jobs: run now** (left list) → **Run workflow** (right).
 2. Leave "Use workflow from" on `main`.
 3. Type the job's name as Health shows it after `job/` (e.g. `map_overlays`); anything but `a-z`, `0-9` and `_` is
-   refused before Python runs. Optional args, e.g. `--dry-run` (quote a value with spaces); they override the job's
-   own flags unchecked.
+   refused before Python runs. Optional args, e.g. `--dry-run` (quote a value with spaces; an unmatched quote is
+   refused before Python runs, nothing filed); they override the job's own flags unchecked.
 4. **Run workflow**.
 5. Open the run and read its one summary line: `request filed for <job>`, or why not (`<job> runs on
-   github-actions-until-moved` until its move PR lands; `a request by … has waited since …`; `not a job name`). Then
+   github-actions-until-moved` until its move PR lands; `a request by … has waited since …`; `not a job name`; `args: an unmatched quote, nothing filed`). Then
    watch `job/<name>` on Health. Green means asked, not done.
 
 ## W2-gate drills (PROGRAM W2)

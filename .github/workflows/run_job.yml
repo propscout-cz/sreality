@@ -19,7 +19,7 @@ on:
         required: true
         type: string
       args:
-        description: "Optional extra arguments appended to the job's own, e.g. --dry-run (quote a value with spaces). They override the job's own flags, memory and worker counts unchecked. A mistyped one is a failed run; one that makes it outrun its time budget is a Problem until a later run (a request is never retried)."
+        description: "Optional extra arguments appended to the job's own, e.g. --dry-run (quote a value with spaces; an unmatched quote is refused). They override the job's own flags, memory and worker counts unchecked. A mistyped one is a failed run; one that makes it outrun its time budget is a Problem until a later run (a request is never retried)."
         required: false
         default: ""
         type: string
@@ -51,9 +51,11 @@ jobs:
           JOB: ${{ inputs.job }}
           ARGS: ${{ inputs.args }}
         # A job name is a name: `--help` would print help and exit 0 having filed nothing. xargs splits ARGS as a shell
-        # quotes it but evaluates nothing ($(...) stays text); pipefail keeps a refusal red through tee, and the
-        # one-line answer lands on the run's summary page.
+        # quotes it but evaluates nothing ($(...) stays text). On an unmatched quote xargs still runs the command with
+        # the arguments before it, then exits 1, so a dry split refuses ARGS first. pipefail keeps a refusal red through
+        # tee, and the one-line answer lands on the run's summary page.
         run: |
           set -euo pipefail
           [[ "$JOB" =~ ^[a-z0-9_]+$ ]] || { echo "not a job name: $JOB" | tee -a "$GITHUB_STEP_SUMMARY"; exit 2; }
+          printf '%s\n' "$ARGS" | xargs true || { echo "args: an unmatched quote, nothing filed: $ARGS" | tee -a "$GITHUB_STEP_SUMMARY"; exit 2; }
           printf '%s\n' "$ARGS" | xargs python -m scraper.job_runner request "$JOB" --by "github:$GITHUB_TRIGGERING_ACTOR" -- 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"

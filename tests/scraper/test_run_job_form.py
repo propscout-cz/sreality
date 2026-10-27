@@ -25,6 +25,8 @@ ROOT = Path(__file__).resolve().parents[2]
 FORM = ROOT / ".github" / "workflows" / "run_job.yml"
 CALL = 'python -m scraper.job_runner request "$JOB" --by "github:$GITHUB_TRIGGERING_ACTOR" --'
 GUARD = '[[ "$JOB" =~ ^[a-z0-9_]+$ ]]'
+# On an unmatched quote xargs runs the call with the arguments before it, then exits 1: ARGS is split dry first.
+SPLIT = "printf '%s\\n' \"$ARGS\" | xargs true ||"
 
 
 def _text() -> str:
@@ -82,6 +84,8 @@ def form_problems(text: str) -> list[str]:
         problems.append("the step opens with set -euo pipefail")
     elif len(lines) < 2 or not lines[1].startswith(GUARD):
         problems.append("the step's first command after set is the job-name guard")
+    elif len(lines) < 3 or not lines[2].startswith(SPLIT):
+        problems.append("the step splits ARGS dry, refusing an unmatched quote, before it files anything")
     return problems
 
 
@@ -107,6 +111,8 @@ def test_the_form_only_files_a_request() -> None:
     ("        shell: bash\n", ""),
     ("set -euo pipefail", "set -eu"),
     (f"          {GUARD} || {{ echo \"not a job name: $JOB\" | tee -a \"$GITHUB_STEP_SUMMARY\"; exit 2; }}\n", ""),
+    (f"          {SPLIT} {{ echo \"args: an unmatched quote, nothing filed: $ARGS\" | tee -a \"$GITHUB_STEP_SUMMARY\"; "
+     "exit 2; }\n", ""),
 ])
 def test_the_form_census_fires(old: str, new: str) -> None:
     text = _text()
@@ -186,6 +192,14 @@ def test_a_refusal_turns_the_run_red_through_tee_and_lands_on_the_summary(tmp_pa
     done = form_run("map_overlays", "", "op", tmp_path, stub_exit=1)
     assert done.code != 0 and done.called == 1
     assert done.summary.startswith("argv ")
+
+
+@pytest.mark.parametrize("args", ['--limit 10 --min-age "3 days', "--note don't", "--sections 'rent_map"])
+def test_an_unmatched_quote_is_refused_before_anything_is_filed(args: str, tmp_path: Path) -> None:
+    """xargs alone would file the arguments before the bad token, then exit 1: a red run that still asked."""
+    done = form_run("map_overlays", args, "op", tmp_path)
+    assert (done.code, done.called) == (2, 0)
+    assert done.summary == f"args: an unmatched quote, nothing filed: {args}\n"
 
 
 @pytest.mark.parametrize("job", ["--help", "-h", "x;y", "", "Map_Overlays"])
