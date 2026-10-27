@@ -5,17 +5,27 @@
  * stage move — is extracted into the pure `planMove` and unit-tested directly.
  * A render smoke test then pins the board's columns and the trash → confirm →
  * remove flow (stage moves are drag-only; the select fallback was removed).
+ * A drop is driven through the board's own DndContext onDragEnd, recorded below.
  */
 
 import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
+import type {
+  Active,
+  ClientRect,
+  DndContextProps,
+  DragEndEvent,
+  DroppableContainer,
+} from '@dnd-kit/core';
 
-import Pipeline, { planMove } from './Pipeline';
+import Pipeline, { boardCollision, planMove } from './Pipeline';
 import type { Collection, PipelineBoardCard, PipelineStage, PropertySource, Tag } from '@/lib/types';
 import * as api from '@/lib/api';
 import * as queries from '@/lib/queries';
+import type { CityIndexDefinition, CuratedCity } from '@/lib/queries';
+import { PIPELINE_CLOSED_LANE_WIDTH } from '@/lib/pipelineCardSize';
 import * as brokersApi from '@/lib/brokers';
 import { createMutationCache } from '@/lib/mutationCache';
 import * as toast from '@/lib/toast';
@@ -68,6 +78,32 @@ vi.mock('@/lib/queries', async (importOriginal) => {
     fetchPropertyCollectionMemberSet: vi.fn(),
     fetchPropertyTagMemberSet: vi.fn(),
     fetchPropertySourcesByPropertyIds: vi.fn(),
+    fetchCuratedCities: vi.fn(),
+    fetchCityIndexDefinitions: vi.fn(),
+    fetchCityIndexValues: vi.fn(),
+  };
+});
+
+/* The real drag gesture can't be driven in jsdom, so the board's two dnd-kit
+   seams are recorded instead: what each droppable registers under which id, and
+   the DndContext's props, whose onDragEnd a test then calls as a drop would. */
+const dnd = vi.hoisted(() => ({
+  droppables: new Map<string, unknown>(),
+  context: null as DndContextProps | null,
+}));
+vi.mock('@dnd-kit/core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@dnd-kit/core')>();
+  const { createElement } = await import('react');
+  return {
+    ...actual,
+    useDroppable: (args: Parameters<typeof actual.useDroppable>[0]) => {
+      dnd.droppables.set(String(args.id), args.data);
+      return actual.useDroppable(args);
+    },
+    DndContext: (props: DndContextProps) => {
+      dnd.context = props;
+      return createElement(actual.DndContext, props);
+    },
   };
 });
 
@@ -186,6 +222,17 @@ const CARD_INACTIVE: PipelineBoardCard = {
   is_active: false,
 };
 
+// A closed deal: its stage is terminal, so it sits behind the Uzavřené lane.
+const CARD_LOST: PipelineBoardCard = {
+  ...CARD_DUM,
+  property_id: 45,
+  stage_id: 9,
+  sreality_id: 444,
+  listing_id: 444,
+  display_label: 'Luční, Plzeň',
+  obec: 'Plzeň',
+};
+
 const collection = (id: number, name: string): Collection => ({
   id,
   name,
@@ -237,6 +284,16 @@ const STAGES: PipelineStage[] = [
   /* No `code` — exercises stageBadge's ordinal fallback (migration 377). */
   { id: 3, key: 'offer', label: 'Nabídka', position: 3, color: 'teal', is_terminal: false, is_entry: false, code: null },
 ];
+
+/* P22: two terminal stages after the live ones, as the default board's are. */
+const STAGES_CLOSED: PipelineStage[] = [
+  ...STAGES,
+  { id: 9, key: 'lost', label: '9. Lost', position: 9, color: 'sand', is_terminal: true, is_entry: false, code: '9' },
+  { id: 10, key: 'bought', label: '9. Bought', position: 10, color: 'sage', is_terminal: true, is_entry: false, code: '9' },
+];
+
+/* The header row the stage headers are pinned in (BoardFrame). */
+const headerRowOf = (label: string) => screen.getByText(label).parentElement!.parentElement!;
 
 function renderBoard(entry = '/pipeline') {
   // The app's own MutationCache, so a failed write's global toast is real.
@@ -358,9 +415,10 @@ describe('<Pipeline> board', () => {
     // Both stage columns render their header label.
     expect(screen.getByText('Zájem')).toBeInTheDocument();
     expect(screen.getByText('Nabídka')).toBeInTheDocument();
-    // Enriched card content: street + MF yield + broker name linking to the broker page.
+    // No terminal stage, no folded lane: the board is its live columns only.
+    expect(screen.queryByText('Uzavřené')).toBeNull();
+    // Enriched card content: street + broker name linking to the broker page.
     expect(screen.getByText('Sadová')).toBeInTheDocument();
-    expect(screen.getByText(/MF\s*4,3\s*%/)).toBeInTheDocument();
     /* The broker line is a DECORATION now: the card paints without it and it
        arrives on its own query, so this is findBy (async) rather than getBy.
        That asymmetry is the feature — the assertions above it all passed
@@ -452,7 +510,7 @@ describe('<Pipeline> board', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('Zájem')).toBeInTheDocument();
     expect(screen.getByText('Sadová')).toBeInTheDocument();
-    expect(screen.getByText(/MF\s*4,3\s*%/)).toBeInTheDocument();
+    expect(screen.getByText(/5\s*000\s*000/)).toBeInTheDocument();
     // Decoration: absent, and no loading string stands in for the board.
     expect(screen.queryByText('Jan Novák')).not.toBeInTheDocument();
     expect(screen.queryByText('Načítání…')).not.toBeInTheDocument();
@@ -891,6 +949,255 @@ describe('<Pipeline> board', () => {
     // The card without a link offers nothing.
     expect(screen.getAllByRole('link', { name: /^Artifact:/ })).toHaveLength(1);
   });
+
+  /* P19 (2026-10-27, widened by the operator): no city-index strip on the
+     card at all, so the board stops reading the indexes too. Praha has
+     readings here, so before the ruling the card in it drew the strip. */
+  it('draws no city-index strip on a card in a curated city, and reads no city indexes', async () => {
+    const city = {
+      city_id: 1,
+      name: 'Praha',
+      kraj_name: 'Hlavní město Praha',
+      lat: 50.08,
+      lng: 14.43,
+      default_radius_m: 10_000,
+      population: 1_300_000,
+      population_as_of_year: 2024,
+      admin_boundary_id: 554782,
+    } as CuratedCity;
+    const def = {
+      index_name: 'celkove_hodnoceni',
+      label_cs: 'Celkové hodnocení',
+      label_en: null,
+      category: 'overall',
+      scale_min: 0,
+      scale_max: 10,
+      higher_is_better: true,
+      sort_order: 0,
+    } as CityIndexDefinition;
+    const fetchers = [
+      queries.fetchCuratedCities,
+      queries.fetchCityIndexDefinitions,
+      queries.fetchCityIndexValues,
+    ] as const;
+    for (const fn of fetchers) vi.mocked(fn).mockClear();
+    vi.mocked(queries.fetchCuratedCities).mockResolvedValue([city]);
+    vi.mocked(queries.fetchCityIndexDefinitions).mockResolvedValue([def]);
+    vi.mocked(queries.fetchCityIndexValues).mockResolvedValue([
+      { city_id: 1, index_name: 'celkove_hodnoceni', value: 7.4 },
+    ]);
+    renderBoard();
+    expect(await screen.findByText('Jan Novák')).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: /Kvalita obce/ })).toBeNull();
+    for (const fn of fetchers) expect(fn).not.toHaveBeenCalled();
+  });
+
+  /* P20: the MF yield beside the dims line is a Velké-card detail. */
+  it('shows the MF yield on Velké cards only', async () => {
+    renderBoard();
+    expect(await screen.findByText('Sadová')).toBeInTheDocument();
+    expect(screen.queryByText(/MF\s*4,3\s*%/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Střední' }));
+    expect(screen.queryByText(/MF\s*4,3\s*%/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Velké' }));
+    expect(screen.getByText(/MF\s*4,3\s*%/)).toHaveAttribute(
+      'title',
+      'Hrubý výnos dle cenové mapy nájemného MF',
+    );
+  });
+
+  /* P22: the terminal stages fold into ONE narrow lane — a row per closed
+     stage with its count — after the live columns. */
+  it('folds the terminal stages into one Uzavřené lane, a row and count per closed stage', async () => {
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES_CLOSED);
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_LOST]);
+    renderBoard();
+    expect(await screen.findByRole('list', { name: 'Zájem' })).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Nabídka' })).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: '9. Lost' })).toBeNull();
+    expect(screen.queryByRole('list', { name: '9. Bought' })).toBeNull();
+
+    const headerRow = headerRowOf('Zájem');
+    expect(within(headerRow).getByText('Uzavřené')).toBeInTheDocument();
+    expect(within(headerRow).queryByText('9. Lost')).toBeNull();
+    expect(within(headerRow).queryByText('9. Bought')).toBeNull();
+
+    const lane = screen.getByRole('list', { name: 'Uzavřené' });
+    const rows = within(lane).getAllByRole('button');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveAccessibleName('9. Lost · 1');
+    expect(rows[1]).toHaveAccessibleName('9. Bought · 0');
+    for (const row of rows) expect(row).toHaveAttribute('aria-expanded', 'false');
+    // Folded: the closed card is counted, not drawn.
+    expect(screen.queryByText('Luční')).toBeNull();
+    // The page's own count still holds every card on the board.
+    expect(screen.getByText(/nemovitostí/).textContent).toBe('2 nemovitostí');
+  });
+
+  /* A row opens its stage's cards in the lane, under the rows, which never
+     move; one at a time. The lane widens to a column then, header and body
+     from one value so the pinned header row still scrolls with the board. */
+  it("opens a closed stage's cards from its row, one at a time, and folds them back", async () => {
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES_CLOSED);
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_LOST]);
+    renderBoard();
+    const lost = await screen.findByRole('button', { name: '9. Lost · 1' });
+    const bought = screen.getByRole('button', { name: '9. Bought · 0' });
+    const header = screen.getByText('Uzavřené').parentElement!;
+    const body = screen.getByRole('list', { name: 'Uzavřené' }).parentElement!;
+    expect(header.className).toContain(PIPELINE_CLOSED_LANE_WIDTH);
+    expect(body.className).toContain(PIPELINE_CLOSED_LANE_WIDTH);
+    expect(lost).not.toHaveAttribute('aria-controls');
+
+    fireEvent.click(lost);
+    expect(lost).toHaveAttribute('aria-expanded', 'true');
+    const opened = screen.getByRole('list', { name: '9. Lost' });
+    expect(lost).toHaveAttribute('aria-controls', opened.id);
+    expect(within(opened).getByText('Luční')).toBeInTheDocument();
+    // The same card as in any column: the handle, the trash, the broker line's slot.
+    expect(within(opened).getByLabelText('Přetáhnout kartu do jiné fáze')).toBeInTheDocument();
+    expect(within(opened).getByRole('button', { name: 'Odebrat z pipeline' })).toBeInTheDocument();
+    expect(header.className).toContain('w-72');
+    expect(body.className).toContain('w-72');
+    // The rows stay first: a drop target never moves when a row opens.
+    expect(
+      screen.getByRole('list', { name: 'Uzavřené' }).compareDocumentPosition(opened) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    fireEvent.click(bought);
+    expect(lost).toHaveAttribute('aria-expanded', 'false');
+    expect(bought).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.queryByRole('list', { name: '9. Lost' })).toBeNull();
+    expect(screen.getByRole('list', { name: '9. Bought' })).toHaveTextContent('—');
+
+    fireEvent.click(bought);
+    expect(bought).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('list', { name: '9. Bought' })).toBeNull();
+    expect(header.className).toContain(PIPELINE_CLOSED_LANE_WIDTH);
+  });
+
+  /* The rows count the FILTERED board, like the column headers do. */
+  it('counts a closed row under the active filters', async () => {
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES_CLOSED);
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_LOST]);
+    renderBoard();
+    expect(await screen.findByRole('button', { name: '9. Lost · 1' })).toBeInTheDocument();
+    await openMenu('Typ');
+    fireEvent.click(screen.getByRole('button', { name: 'Byty' }));
+    expect(await screen.findByRole('button', { name: '9. Lost · 0' })).toBeInTheDocument();
+  });
+
+  /* Rule #22: closing a deal is a MOVE into a terminal stage. Each row is a
+     drop target under the stage's own droppable id, so a release on it goes
+     through the same planMove → usePipelineCard.move as a column drop. */
+  it('closes a deal by dropping it on a closed row: a stage move, never a remove', async () => {
+    dnd.droppables.clear();
+    vi.mocked(api.movePipelineCard).mockClear().mockResolvedValue({
+      property_id: 42,
+      stage_id: 10,
+      stage_key: 'bought',
+    });
+    vi.mocked(api.removePipelineCard).mockClear();
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES_CLOSED);
+    // The re-read is held open, so what the rows show is the move's own patch.
+    vi.mocked(queries.fetchPipelineBoard)
+      .mockResolvedValueOnce([CARDS[0], CARD_LOST])
+      .mockReturnValue(new Promise(() => {}));
+    renderBoard();
+    expect(await screen.findByRole('button', { name: '9. Bought · 0' })).toBeInTheDocument();
+    expect(dnd.droppables.get('stage:10')).toEqual({ closed: true });
+    expect(dnd.droppables.get('stage:9')).toEqual({ closed: true });
+    expect(dnd.droppables.has('stage:1')).toBe(true);
+    expect(dnd.droppables.get('stage:1')).toBeUndefined();
+    expect(dnd.context?.collisionDetection).toBe(boardCollision);
+
+    await act(async () => {
+      dnd.context?.onDragEnd?.({
+        active: { id: 'card:42' },
+        over: { id: 'stage:10' },
+      } as unknown as DragEndEvent);
+    });
+    await waitFor(() => expect(api.movePipelineCard).toHaveBeenCalledWith(42, 10));
+    expect(api.removePipelineCard).not.toHaveBeenCalled();
+    expect(await screen.findByRole('button', { name: '9. Bought · 1' })).toBeInTheDocument();
+    expect(screen.queryByText('Sadová')).toBeNull();
+  });
+
+  /* The skeleton promises "no reflow, no jump": with the stages warm it is
+     already the live columns plus the folded lane, never a column per closed
+     stage that then collapses. */
+  it('draws the folded lane in the skeleton too', async () => {
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES_CLOSED);
+    vi.mocked(queries.fetchPipelineBoard).mockReturnValue(new Promise(() => {}));
+    renderBoard();
+    expect(await screen.findByText('Uzavřené')).toBeInTheDocument();
+    expect(screen.getByText('Načítání pipeline…')).toBeInTheDocument();
+    expect(screen.getAllByText('9. Lost')).toHaveLength(1);
+    expect(screen.getAllByText('9. Bought')).toHaveLength(1);
+    const headerRow = headerRowOf('Uzavřené');
+    expect(within(headerRow).getByText('Zájem')).toBeInTheDocument();
+    expect(within(headerRow).queryByText('9. Lost')).toBeNull();
+  });
+});
+
+/* P22's drop targeting. Rows are ~2rem tall and the drag ghost 4.5rem to
+ * ~22rem, so an overlap rule would close a deal into whichever row the ghost
+ * covered most. A row is hit by a POINT — the pointer, or on a keyboard drag
+ * (no pointer) the ghost's centre; the columns keep their overlap rule. */
+describe('boardCollision', () => {
+  const box = (left: number, top: number, width: number, height: number): ClientRect => ({
+    left,
+    top,
+    width,
+    height,
+    right: left + width,
+    bottom: top + height,
+  });
+  const droppable = (id: string, closed: boolean) =>
+    ({
+      id,
+      key: id,
+      data: { current: closed ? { closed: true } : undefined },
+      disabled: false,
+      node: { current: null },
+      rect: { current: null },
+    }) as DroppableContainer;
+  // The last live column, stretched to the board's height, then two rows of the lane.
+  const containers = [droppable('stage:3', false), droppable('stage:9', true), droppable('stage:10', true)];
+  const rects = new Map([
+    ['stage:3', box(0, 0, 288, 1000)],
+    ['stage:9', box(304, 0, 208, 32)],
+    ['stage:10', box(304, 36, 208, 32)],
+  ]);
+  const active = { id: 'card:42', data: { current: undefined }, rect: { current: { initial: null, translated: null } } } as Active;
+  const hit = (ghost: ClientRect, pointer: { x: number; y: number } | null) =>
+    boardCollision({
+      active,
+      collisionRect: ghost,
+      droppableRects: rects,
+      droppableContainers: containers,
+      pointerCoordinates: pointer,
+    }).map((c) => c.id);
+
+  it('closes into the row under the pointer, not the row the ghost covers most', () => {
+    // The ghost covers row 9 for 32px and row 10 for 16px; the pointer is on row 10.
+    expect(hit(box(310, -20, 256, 72), { x: 400, y: 50 })[0]).toBe('stage:10');
+  });
+
+  it('never picks a row the pointer is not on, falling back to the columns', () => {
+    // The ghost spans the column's edge and both rows; the pointer is in the gap.
+    expect(hit(box(250, 0, 256, 72), { x: 296, y: 50 })).toEqual(['stage:3']);
+  });
+
+  it('on a keyboard drag, closes into the row under the ghost\'s centre', () => {
+    expect(hit(box(300, 16, 256, 72), null)[0]).toBe('stage:10');
+  });
+
+  it('on a keyboard drag, keeps the column a ghost mostly covers over a row its edge touches', () => {
+    // Plain overlap would score row 9 (0.17) over the column (0.03).
+    expect(hit(box(160, 0, 256, 72), null)).toEqual(['stage:3']);
+  });
 });
 
 /* Pipeline sharing (migration 641, design §3.5): the switcher, a shared board
@@ -979,6 +1286,20 @@ describe('<Pipeline> shared boards', () => {
     expect(api.fetchArtifactLinks).not.toHaveBeenCalledWith({ actAs: 'owner-r' });
     expect(screen.getByText('petr@example.cz')).toBeInTheDocument();
     expect(screen.getByText(/jen ke čtení/, { selector: 'span' })).toBeInTheDocument();
+  });
+
+  /* P22 on a read board: the rows open for reading, the cards in them carry
+     no handle or trash, like every card on it. */
+  it('opens a closed row on a read board for reading, with no drag or trash in it', async () => {
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES_CLOSED);
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_LOST]);
+    setActiveBoard(READ);
+    renderBoard();
+    fireEvent.click(await screen.findByRole('button', { name: '9. Lost · 1' }));
+    const opened = screen.getByRole('list', { name: '9. Lost' });
+    expect(within(opened).getByText('Luční')).toBeInTheDocument();
+    expect(within(opened).queryByLabelText('Přetáhnout kartu do jiné fáze')).toBeNull();
+    expect(within(opened).queryByRole('button', { name: 'Odebrat z pipeline' })).toBeNull();
   });
 
   it('gives an edit board drag, trash, the stage editor and the owner\'s tags — all as the owner', async () => {

@@ -5,9 +5,10 @@
 
 import type { DistrictChip } from '@/lib/filters';
 
-export function placeLabelOf(chips: ReadonlyArray<DistrictChip>): string {
+/* `whole` names the whole country: Browse's English pills pass their own. */
+export function placeLabelOf(chips: ReadonlyArray<DistrictChip>, whole = 'Celá ČR'): string {
   const lead = chips.find((c) => !c.excluded);
   if (lead) return chips.length === 1 ? lead.name : `${lead.name} +${chips.length - 1}`;
-  if (chips.length === 0) return 'Celá ČR';
-  return chips.length === 1 ? `Celá ČR − ${chips[0].name}` : `Celá ČR −${chips.length}`;
+  if (chips.length === 0) return whole;
+  return chips.length === 1 ? `${whole} − ${chips[0].name}` : `${whole} −${chips.length}`;
 }

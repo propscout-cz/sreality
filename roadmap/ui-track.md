@@ -49,11 +49,36 @@ toolkit work.
   focus in it, as an opacity overlay (P02); the photo draws no render verdict, just the counter (P03, the card only); a
   card of the one type and deal the filter pins reads "2+kk · 54 m²", any other keeps "Byt na prodej ·"
   (P05); the storey chip is a quiet inset label without a border (P06 note).
-- **Next (not built):** the other confirmed hierarchy changes, one PR per agenda (Browse page and map,
-  Stats, Pipeline, Watchdogs, Notifications, Brokers, Collections, Shell); removing render scoring end to
-  end (operator note on P03), scoped first. Handoff: `docs/design/propscout-redesign.md`.
+- **Done, agenda 7 Collections** (2026-10-27): a dashed "+ Nová kolekce" card ends my list and opens the
+  new-collection form in place (P30; the phone's "Nová sbírka" moved there too, dashed); the collection page
+  header carries the "Sledovat" switch, "Sdílet · N" (the sharing block in a panel) and ⋯ with Přejmenovat (the
+  edit fields in place) and Smazat kolekci (its confirm) (P31); the members are Browse's cards with notes,
+  pipeline and estimates, the table the second tab (P32); no small-caps label above either h1 (P26). Open: the
+  phone header's P31 controls (the phone has none of the three blocks), for the operator.
+- **Done, agenda 2 Browse page, map and stats** (2026-10-27): the header keeps the count and what is counted,
+  every other applied filter a removable pill under it (P09, pills by operator ruling); "Sloučit…" after Cover
+  and Sort enters merge mode (P10); the map rail has no price-label button, the Piny a ceny checkbox stays
+  (P12); the pin popup says "Přesná poloha · viděno před 2 h", each half's detail in its tooltip (P13); a
+  chart card shows Upravit and ⋯ with ↑, ↓ and Odebrat (P14).
+- **Done, agenda 2 Stats review** (2026-10-27, its own commit): the dashboard row and the sample row sit in one
+  panel above the charts (S01), labelled "Dashboard" and "Vzorek" (S02); the sample sentence sits under the lens,
+  its name in bold (S03); "Malé vzorky (pod 5)" ends the row, its detail in a tooltip (S04); the Okolí dashboard's
+  chip carries an "Okolí" badge with a pin (S06); the tabs read "Nemovitosti" and "Statistiky" (S07); a table or
+  box chart whose every cell is under 5 says so once, with "Zobrazit malé vzorky" (S09). S05, S08, S10 declined.
+- **Done, agenda 3 Pipeline** (2026-10-27): no city-index strip on the card (P19); the MF yield only on Velké
+  cards (P20); the terminal stages fold into one "Uzavřené" lane, a drop row and count per closed stage, a
+  row opening its cards (P22; rule #22: a stage move, never a remove).
+- **Done, agendas 4–6** (2026-10-27): Watchdogs' Delete in a ⋯ menu with its confirm (P24) and the created
+  date under the name (P25); Notifications load older rows on reaching the end (P27); Brokers say each unit
+  once in the column heads (P28) and show five firm pills, then "+ N dalších" (P29), the phone following.
+- **Done, agenda 8 Shell** (2026-10-27): "!AUDIT POLOH" is the first Admin item, its count on the Admin
+  trigger (P33); the footer keeps only the map-tile attribution (P34); no small-caps label above a page's h1
+  (P26, on every agenda's pages; only the error and not-found states keep one).
+- **Next (not built):** removing render scoring end to end (operator note on P03), scoped first. Open for the
+  operator: the phone header's P31 controls, and whether the property page should get the city-index strip
+  (P19 assumed one there; it never had it). Handoff: `docs/design/propscout-redesign.md`.
 - **Ruled 2026-10-27:** ten Stats-tab proposals (S01–S10, mostly the header): S01–S04, S06, S07, S09 confirmed,
-  S05, S08, S10 declined; the Stats PR builds the confirmed ones (handoff § Stats review).
+  S05, S08, S10 declined; the confirmed ones are built (above; handoff § Stats review).
 
 ### Preset groups: boxes on the Browse preset row (2026-10-25, migration 672)
 - **Done** (operator ask 2026-10-25: "group my presets, a boundary box per group, move them into the boxes

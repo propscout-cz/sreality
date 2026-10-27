@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { useNewTabProps, useSpaLinkDelegation, type NewTabProps } from '@/lib/linkGestures';
+import { useNewTabProps, useSpaLinkDelegation } from '@/lib/linkGestures';
 import { YmPicker, YM_SELECT_CLS } from '@/components/YmPicker';
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import { createMap } from '@/lib/basemap';
@@ -19,10 +19,9 @@ import type { CityIndexDefinition, CuratedCity, MapCounts, MapRow } from '@/lib/
 import type { CenterRadius, MapBounds } from '@/lib/filters';
 import { groupForPicker, indexLabel, pinnedFirst } from '@/lib/cityIndexes';
 import { legendGradient, mapRampStops, normalizeIndexValue } from '@/lib/cityIndexScale';
-import { czPlural, fmtCzk, fmtArea, fmtMeasuredPricePerM2, fmtRelative, fmtAbsolute } from '@/lib/format';
-import { PPM2_UNIT, areaKindOf, ppm2BasisFromToken } from '@/lib/measure';
+import { czPlural } from '@/lib/format';
+import { PPM2_UNIT, ppm2BasisFromToken } from '@/lib/measure';
 import { PIN_LIMIT_MAX, PIN_LIMIT_MIN, parsePinLimit, type PriceMetric } from '@/lib/browseState';
-import { listingKindLabel } from '@/lib/enums';
 import type { PriceStatDataset, PriceStatGrowthRow, PriceStatGrowthShape } from '@/lib/priceStats';
 import {
   GROWTH_METRICS,
@@ -38,12 +37,12 @@ import HoverChart from '@/components/HoverChart';
 import MapOverlayControls, { MapOverlayLegends } from '@/components/MapOverlayControls';
 import { MapLegendCard, OverlayChip, OverlayPanel } from '@/components/OverlayChip';
 import {
-  LabelIcon, LayersIcon, MinusIcon, PlusIcon, RailButton, RailFlyout, RailGroup, ShowAllIcon, SlidersIcon, useRailPanel,
+  LayersIcon, MinusIcon, PlusIcon, RailButton, RailFlyout, RailGroup, ShowAllIcon, SlidersIcon, useRailPanel,
 } from '@/components/MapRail';
 import { escapeHtml } from '@/lib/escapeHtml';
 import { usePersistedFlag } from '@/lib/persistedFlag';
 import { circleRing } from '@/lib/geoRing';
-import { propertyPath } from '@/lib/listingUrl';
+import { listingPopupHtml } from '@/lib/listingPopupHtml';
 import {
   overlayFillIds,
   overlayClickOwner,
@@ -55,7 +54,6 @@ import { parseLayers, type MapOverlayRegistry } from '@/lib/mapOverlays';
 import {
   drawnUncertaintyRadiusM,
   isPinExact,
-  pinPrecisionLabel,
   uncertaintyPixelsAtZoom0,
 } from '@/lib/uncertaintyCircle';
 
@@ -921,7 +919,7 @@ export default function ListingMap({
           className: 'listing-popup',
         })
           .setLngLat(at)
-          .setHTML(popupHtml(props, newTabRef.current));
+          .setHTML(listingPopupHtml(props, newTabRef.current));
         /* The circle lives exactly as long as the popup that explains it: its
          * ×, a click elsewhere on the map, or the next popup replacing it all
          * end in `close`. */
@@ -1368,7 +1366,7 @@ export default function ListingMap({
   }, [ready]);
 
   /* The listing popup's "View details →" is a raw <a> in a MapLibre-owned HTML
-   * string (see popupHtml below), so <Link> cannot reach it and a plain click
+   * string (lib/listingPopupHtml), so <Link> cannot reach it and a plain click
    * used to do a FULL DOCUMENT LOAD — discarding the bundle, the react-query
    * cache, the viewport and the active filter cohort, with Back re-downloading
    * all of it. Delegated on the CONTAINER (MapLibre parents every popup to
@@ -1552,13 +1550,6 @@ export default function ListingMap({
               {/* A basis-free word, as on the Ceny control: the default cohort is
                   a rental one, whose pins read Kč/m²/měs. */}
               <span className="text-[0.62rem] font-semibold leading-none">za m²</span>
-            </RailButton>
-            <RailButton
-              label={priceLabels ? 'Popisky cen u pinů: zapnuté' : 'Popisky cen u pinů: vypnuté'}
-              pressed={priceLabels}
-              onClick={() => onPriceLabelsChange?.(!priceLabels)}
-            >
-              <LabelIcon />
             </RailButton>
             <RailButton
               label="Piny a ceny"
@@ -2060,51 +2051,6 @@ function PinSwatch({ exact, active }: { exact: boolean; active: boolean }) {
       }}
     />
   );
-}
-
-function popupHtml(r: MapRow, newTab: NewTabProps): string {
-  const price = fmtCzk(r.price_czk);
-  /* The popup has room, so it says what the m² MEASURES: a pozemek's area_m2 is
-   * its plot, not a floor plan (the Option-A fork keeps the column polymorphic). */
-  const area = fmtArea(r.area_m2, areaKindOf(r.category_main));
-  /* The server measure with its own basis suffix — the popup is where a pin's
-   * label can be read next to the figure it was derived from. */
-  const ppm = fmtMeasuredPricePerM2(
-    r.price_per_m2,
-    ppm2BasisFromToken(r.price_per_m2_basis),
-  );
-  const disposition = listingKindLabel(r) ?? '—';
-  /* The ONE label (migration 503). `lp-district` stays the style hook -- it is a
-   * class name in globals.css, not a claim about what the string is. */
-  const place = r.display_label ?? '';
-  /* Directly under the place it qualifies: "Nádražní 12, Hradec Králové" and
-   * "Přibližná poloha: obec, ±1 km" are one statement. It names the radius the
-   * circle drawn behind this popup shows, and the TRUE one where that circle is
-   * capped. */
-  const precision = pinPrecisionLabel(r);
-  const seen = fmtRelative(r.last_seen_at);
-  const seenAbs = fmtAbsolute(r.last_seen_at);
-  const inactive = !r.is_active;
-  return `
-    <div class="lp">
-      <div class="lp-row">
-        <p class="lp-price">${escapeHtml(price)}</p>
-        ${inactive ? '<span class="lp-inactive">Inactive</span>' : ''}
-      </div>
-      <p class="lp-meta">
-        <span class="lp-mono">${escapeHtml(disposition)}</span>
-        <span class="lp-sep">·</span>
-        <span class="lp-mono">${escapeHtml(area)}</span>
-        ${ppm === '—' ? '' : `<span class="lp-sep">·</span><span class="lp-mono">${escapeHtml(ppm)}</span>`}
-      </p>
-      ${place ? `<p class="lp-district">${escapeHtml(place)}</p>` : ''}
-      <p class="lp-precision">${escapeHtml(precision)}</p>
-      <p class="lp-seen" title="${escapeHtml(seenAbs)}">last seen ${escapeHtml(seen)}</p>
-      <a href="${propertyPath(r.property_id, r.listing_id)}"${
-        newTab.target ? ` target="${newTab.target}" rel="${newTab.rel}"` : ''
-      } class="lp-link">View details →</a>
-    </div>
-  `;
 }
 
 function cityPopupHtml(

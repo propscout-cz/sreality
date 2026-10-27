@@ -2724,8 +2724,9 @@ renumber.** Navigate by area:
     page (`/notifications`) reads every producer off one LEFT-join feed (the watchdog-only
     INNER join became a LEFT join + a `collections` join so monitor and share rows aren't dropped;
     its System tab and the duplicate `/watchdog` feed went in W1, `/watchdog` now lists the watchdogs,
-    and the feed pages with "Load more"), and ONE unread observer (`frontend/src/lib/unreadCount.tsx`,
-    mounted once by `Shell`, W5a) polls `GET /notifications/unread-count` for the red desktop nav badge,
+    and the feed loads older rows as the end of the list comes into view, as Browse does), and ONE
+    unread observer (`frontend/src/lib/unreadCount.tsx`, mounted once by `Shell`, W5a) polls
+    `GET /notifications/unread-count` for the red desktop nav badge,
     the phone header's bell, the page itself and the installed app's icon badge;
     `POST /notifications/mark-all-seen` clears it.)
     **The Stats tab is a dashboard over the SAME cohort (migration 626, `docs/design/stats-dashboard.md`).**
@@ -3682,9 +3683,12 @@ renumber.** Navigate by area:
     one says so with a retry inside the row (merge sprint MS16) — while a RESOLVED selection
     matching nothing is zero cards, never everything. Stav's default stays `any`, so a delisted member of a
     collection stays in the cohort. **On the kanban board** stage moves are
-    **drag-and-drop ONLY** (`@dnd-kit`, `Pipeline.tsx`: each column a `useDroppable`, each card a
+    **drag-and-drop ONLY** (`@dnd-kit`, `Pipeline.tsx`: each live column and each row of the folded
+    "Uzavřené" lane — the terminal stages, ruling P22 — a `useDroppable` under its stage's id, each card a
     `useDraggable` with a grip handle; one optimistic move mutation; keyboard moves via the
-    `KeyboardSensor`). The drag→move resolution is the pure, unit-tested `planMove(activeId,
+    `KeyboardSensor`). `boardCollision` picks the target: a closed row is hit by a point (the pointer,
+    or on a keyboard drag the ghost's centre), since a ~2rem row under a tall ghost would otherwise take
+    whichever row the ghost covered most; the columns keep the overlap rule. The drag→move resolution is the pure, unit-tested `planMove(activeId,
     overId, cards)` (same column / dropped-outside / unknown card → no-op). The per-card stage
     `<select>` was **removed** there (the card instead carries a trash → inline two-step confirm →
     optimistic remove-from-pipeline, the app's destructive-action pattern). `<DragOverlay
@@ -5213,7 +5217,8 @@ the cron command** — migration 371's rule, or the refresh would silently die a
 default. Rule 25's deletion parity did not apply: it was an operator-requested review surface with
 a stated end. While it was live it led the TOP-LEVEL nav as `!AUDIT POLOH` (admin-only, first entry,
 badged with the unfiltered row count), not buried in the NEW DEDUP dropdown, because it was a
-decision waiting on the operator.
+decision waiting on the operator. Since 2026-10-27 (redesign ruling P33) it is the first item of the
+Admin menu, with its count on the Admin trigger.
 **The map's container carries an inline `position/inset/size` style and that is NOT redundant with
 Tailwind's `absolute inset-0`**: `globals.css` imports `maplibre-gl.css` AFTER `tailwindcss`, so the
 `.maplibregl-map` class MapLibre stamps onto the container at init wins the cascade with its own

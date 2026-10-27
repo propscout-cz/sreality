@@ -53,6 +53,13 @@ export interface SavedSetMenuItem {
   accent?: boolean;
 }
 
+export interface SavedSetBadge {
+  label: string;
+  /* Its tooltip. */
+  title: string;
+  icon?: ReactNode;
+}
+
 /* Every string the bar draws: the presets' English, the dashboards' Czech. `load`,
  * `reorder` and `options` name a chip as "<word>: <name>"; `saveChanges` and
  * `revert` lead a dirty chip's menu. `shared` words a chip shared WITH the
@@ -106,6 +113,10 @@ export interface SavedSetBarProps<T extends SavedSetItem> {
   isOwn?: (item: T) => boolean;
   /* A small ink-3 suffix after the chip's name (a shared chip's owner; an own chip's role). */
   suffix?: (item: T) => string | null;
+  /* A small tracked-caps badge after the name, in the chip's own colour (the Okolí
+   * dashboard's). Where a chip has one, its suffix is read but not shown, and the
+   * name truncates alone so a long one never hides the badge. */
+  badge?: (item: T) => SavedSetBadge | null;
   /* Menu entries the instance adds (between Edit… and Delete on an own chip). */
   chipMenu?: (item: T) => SavedSetMenuItem[];
   /* The one checkbox the save dialog offers (`initial(null)`); Save changes keeps an item's
@@ -197,7 +208,7 @@ export const chipBase =
 
 export default function SavedSetBar<T extends SavedSetItem>({
   items, loading = false, activeId, dirty, copy, onLoad, onSaveNew, onUpdate, onRename, onDelete, onReorder,
-  isOwn = () => true, suffix, chipMenu, checkbox, leading, collapse, groups,
+  isOwn = () => true, suffix, badge, chipMenu, checkbox, leading, collapse, groups,
 }: SavedSetBarProps<T>) {
   const barRef = useRef<HTMLDivElement>(null);
   const dirtyId = useId();
@@ -417,6 +428,7 @@ export default function SavedSetBar<T extends SavedSetItem>({
     const marked = item.id === activeId && dirty;
     const entries = menu?.id === item.id ? menuFor(item) : null;
     const owner = suffix?.(item);
+    const tag = badge?.(item) ?? null;
     /* "<name> — <by> <owner>": two shared chips of one name stay two for a screen reader;
      * an own chip's suffix is its role, read without "by". */
     const ownerLead = ['—', isOwn(item) ? null : copy.shared?.by].filter(Boolean).join(' ');
@@ -455,20 +467,30 @@ export default function SavedSetBar<T extends SavedSetItem>({
               <button
                 type="button"
                 onClick={() => onLoad(item)}
-                className={`${draggable ? 'pl-0.5' : 'pl-2.5'} pr-2.5 py-1 max-w-[16rem] truncate`}
+                className={`${draggable ? 'pl-0.5' : 'pl-2.5'} pr-2.5 py-1 max-w-[16rem] ${tag ? 'inline-flex items-center' : 'truncate'}`}
                 aria-describedby={marked ? dirtyId : undefined}
                 title={`${copy.load}: ${item.name}`}
               >
-                {item.name}
+                {tag ? <span className="min-w-0 truncate">{item.name}</span> : item.name}
                 {owner ? (
                   <>
                     <span className="sr-only"> {ownerLead} </span>
-                    <span className="ml-1.5 text-[0.7rem] text-[var(--color-ink-3)]">{owner}</span>
+                    <span className={tag ? 'sr-only' : 'ml-1.5 text-[0.7rem] text-[var(--color-ink-3)]'}>{owner}</span>
                   </>
+                ) : null}
+                {tag ? (
+                  <span
+                    title={tag.title}
+                    aria-hidden
+                    className="ml-1.5 inline-flex shrink-0 items-center gap-0.5 text-[0.58rem] font-medium uppercase tracking-[0.16em]"
+                  >
+                    {tag.icon}
+                    {tag.label}
+                  </span>
                 ) : null}
                 {marked ? (
                   <>
-                    <span className="ml-1 text-[1.1em] leading-none text-[var(--chip-accent)]" title={editedHint} aria-hidden>
+                    <span className={`ml-1 text-[1.1em] leading-none text-[var(--chip-accent)]${tag ? ' shrink-0' : ''}`} title={editedHint} aria-hidden>
                       •
                     </span>
                     <span id={dirtyId} hidden>

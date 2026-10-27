@@ -15,7 +15,7 @@ import { ROUTES } from '@/lib/routes';
 import { expectNoNestedInteractive } from '@/test/a11y';
 
 import Brokers from '../Brokers';
-import { brokerInitials } from './PhoneBrokers';
+import { brokerInitials, metricUnitHead } from './PhoneBrokers';
 
 vi.mock('@/lib/phoneShell', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/phoneShell')>()),
@@ -146,6 +146,53 @@ describe('<Brokers> on the phone', () => {
     vi.mocked(brokers.fetchBrokerLeaderboard).mockRejectedValue(new Error('boom'));
     renderPage();
     expect(await screen.findByText('Žebříček se nepodařilo načíst.')).toBeInTheDocument();
+  });
+});
+
+/* P28 (phone follows desktop, operator 2026-10-27): the unit is said once over
+ * the figures, never under each one. */
+describe('<Brokers> on the phone: P28', () => {
+  // On screen only: not the sr-only copy in each row's link name, and not the
+  // leaderboard kept mounted under `hidden` while a name is searched.
+  const shown = (text: string, root: Pick<typeof screen, 'queryAllByText'> = screen) =>
+    root
+      .queryAllByText(text)
+      .filter((el) => !el.classList.contains('sr-only') && !el.closest('[hidden]'));
+
+  it('the ranked unit is said once above the roll, and follows the metric', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const board = await screen.findByRole('list', { name: 'Žebříček makléřů' });
+
+    expect(shown('nemovitostí')).toHaveLength(1);
+    expect(board.contains(shown('nemovitostí')[0])).toBe(false);
+    expect(shown('nemovitostí', within(board))).toHaveLength(0);
+    expect(within(board).getAllByRole('link')[0]).toHaveAccessibleName(/49 nemovitostí/);
+
+    await user.click(screen.getByRole('button', { name: 'Inzeráty' }));
+    const first = within(screen.getByRole('list', { name: 'Žebříček makléřů' })).getAllByRole('link')[0];
+    await waitFor(() => expect(first).toHaveAccessibleName(/99 inzerátů/));
+    expect(shown('inzerátů')).toHaveLength(1);
+    expect(shown('nemovitostí')).toHaveLength(0);
+    expect(shown('inzerátů')[0].textContent).toBe(metricUnitHead('listing_count'));
+  });
+
+  it('search results say their unit once too', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole('list', { name: 'Žebříček makléřů' });
+    await user.type(screen.getByRole('searchbox', { name: 'Hledat makléře podle jména' }), 'Kub');
+
+    const results = await screen.findByRole('list', { name: 'Nalezení makléři' });
+    expect(within(results).getByRole('link')).toHaveAccessibleName(/12 nemovitostí/);
+    expect(shown('nemovitostí', within(results))).toHaveLength(0);
+    expect(shown('nemovitostí')).toHaveLength(1);
+    expect(results.contains(shown('nemovitostí')[0])).toBe(false);
+  });
+
+  it('names the head from the same branch as the figures', () => {
+    expect(metricUnitHead('active_property_count')).toBe('nemovitostí');
+    expect(metricUnitHead('listing_count')).toBe('inzerátů');
   });
 });
 

@@ -67,6 +67,8 @@ export interface InfiniteListResult<
   isFetchingNextPage: boolean;
   hasNextPage: boolean;
   isError: boolean;
+  /* The failure is the NEXT page's: the pages already loaded are intact. */
+  isFetchNextPageError: boolean;
   error: Error | null;
   fetchNextPage: () => void;
   refetch: () => void;
@@ -149,6 +151,7 @@ export function useInfiniteList<
     isFetchingNextPage: query.isFetchingNextPage,
     hasNextPage: query.hasNextPage,
     isError: query.isError,
+    isFetchNextPageError: query.isFetchNextPageError,
     error: (query.error as Error) ?? null,
     fetchNextPage,
     refetch: () => void query.refetch(),

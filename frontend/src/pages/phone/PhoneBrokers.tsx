@@ -48,15 +48,27 @@ const LIMIT = 100;
 const CATEGORY_WORD: Record<string, string> = { byt: 'byty', dum: 'domy' };
 const OFFER_WORD: Record<string, string> = { prodej: 'prodej', pronajem: 'pronájem' };
 
-/* The ranked figure and its noun: active properties, or every ad ever. */
+type Noun = readonly [one: string, few: string, many: string];
+const PROPERTY_NOUN: Noun = ['nemovitost', 'nemovitosti', 'nemovitostí'];
+const AD_NOUN: Noun = ['inzerát', 'inzeráty', 'inzerátů'];
+
+/* The ranked figure and its noun: active properties, or every ad ever. One
+ * branch serves the row figures and the head over them, so they cannot part. */
+function rankedBy(metric: LeaderMetric): { pick: (r: BrokerLeaderRow) => number; noun: Noun } {
+  return metric === 'listing_count'
+    ? { pick: (r) => r.listing_count, noun: AD_NOUN }
+    : { pick: (r) => r.active_property_count, noun: PROPERTY_NOUN };
+}
+
 export function metricFigure(r: BrokerLeaderRow, metric: LeaderMetric): { value: number; unit: string } {
-  if (metric === 'listing_count') {
-    return { value: r.listing_count, unit: czPlural(r.listing_count, 'inzerát', 'inzeráty', 'inzerátů') };
-  }
-  return {
-    value: r.active_property_count,
-    unit: czPlural(r.active_property_count, 'nemovitost', 'nemovitosti', 'nemovitostí'),
-  };
+  const { pick, noun } = rankedBy(metric);
+  const value = pick(r);
+  return { value, unit: czPlural(value, ...noun) };
+}
+
+/* The unit said once over a column of figures (P28): the noun's "many" form. */
+export function metricUnitHead(metric: LeaderMetric): string {
+  return rankedBy(metric).noun[2];
 }
 
 export default function PhoneBrokers() {
@@ -142,21 +154,24 @@ function SearchResults({ typed, term }: { typed: string; term: string }) {
     body = <Hint>Nikdo takový — zkuste jiný tvar jména.</Hint>;
   } else {
     body = (
-      <ol aria-label="Nalezení makléři" className="border-b border-[var(--color-rule)]">
-        {results.map((b) => (
-          <li key={b.broker_id}>
-            {/* The CZ-scoped count is what the search orders by (migration 396). */}
-            <BrokerRow
-              id={b.broker_id}
-              lead={<Initials name={b.display_name} />}
-              name={b.display_name}
-              firm={b.firm_name ?? b.firm_domain}
-              value={b.cz_active_property_count}
-              unit={czPlural(b.cz_active_property_count, 'nemovitost', 'nemovitosti', 'nemovitostí')}
-            />
-          </li>
-        ))}
-      </ol>
+      <>
+        <UnitHead unit={PROPERTY_NOUN[2]} />
+        <ol aria-label="Nalezení makléři" className="border-b border-[var(--color-rule)]">
+          {results.map((b) => (
+            <li key={b.broker_id}>
+              {/* The CZ-scoped count is what the search orders by (migration 396). */}
+              <BrokerRow
+                id={b.broker_id}
+                lead={<Initials name={b.display_name} />}
+                name={b.display_name}
+                firm={b.firm_name ?? b.firm_domain}
+                value={b.cz_active_property_count}
+                unit={czPlural(b.cz_active_property_count, ...PROPERTY_NOUN)}
+              />
+            </li>
+          ))}
+        </ol>
+      </>
     );
   }
 
@@ -170,6 +185,17 @@ function SearchResults({ typed, term }: { typed: string; term: string }) {
 
 function Hint({ children }: { children: ReactNode }) {
   return <p className="px-4 pb-3 text-[13px] text-[var(--color-ink-3)]">{children}</p>;
+}
+
+/* The figures' unit, said once over their column (P28). pr-10 is the row's pr-3
+ * plus the chevron and its gap, so the word ends where the figures end; each row
+ * keeps its unit as sr-only text, so this is for the eye only. */
+function UnitHead({ unit }: { unit: string }) {
+  return (
+    <p aria-hidden className="pb-1.5 pr-10 text-right text-[11px] text-[var(--color-ink-3)]">
+      {unit}
+    </p>
+  );
 }
 
 function Leaderboard() {
@@ -277,29 +303,32 @@ function Leaderboard() {
           detail="Zkuste jiné místo, nebo typ či nabídku pusťte."
         />
       ) : (
-        <ol
-          aria-label="Žebříček makléřů"
-          aria-busy={boardQ.isPlaceholderData || undefined}
-          className={`border-b border-[var(--color-rule)] transition-opacity ${boardQ.isPlaceholderData ? 'opacity-60' : ''}`}
-        >
-          {rows.map((r, i) => {
-            const fig = metricFigure(r, metric);
-            return (
-              <li key={r.broker_id}>
-                <BrokerRow
-                  id={r.broker_id}
-                  lead={
-                    <span className="font-mono text-[12px] tabular-nums text-[var(--color-ink-3)]">{i + 1}</span>
-                  }
-                  name={r.display_name}
-                  firm={r.firm_name ?? r.firm_domain}
-                  value={fig.value}
-                  unit={fig.unit}
-                />
-              </li>
-            );
-          })}
-        </ol>
+        <>
+          <UnitHead unit={metricUnitHead(metric)} />
+          <ol
+            aria-label="Žebříček makléřů"
+            aria-busy={boardQ.isPlaceholderData || undefined}
+            className={`border-b border-[var(--color-rule)] transition-opacity ${boardQ.isPlaceholderData ? 'opacity-60' : ''}`}
+          >
+            {rows.map((r, i) => {
+              const fig = metricFigure(r, metric);
+              return (
+                <li key={r.broker_id}>
+                  <BrokerRow
+                    id={r.broker_id}
+                    lead={
+                      <span className="font-mono text-[12px] tabular-nums text-[var(--color-ink-3)]">{i + 1}</span>
+                    }
+                    name={r.display_name}
+                    firm={r.firm_name ?? r.firm_domain}
+                    value={fig.value}
+                    unit={fig.unit}
+                  />
+                </li>
+              );
+            })}
+          </ol>
+        </>
       )}
       {!boardQ.isPending && !boardQ.isError && rows.length > 0 && (
         <p className="py-5 text-center text-[0.75rem] tabular-nums text-[var(--color-ink-4)]">
@@ -354,8 +383,10 @@ function BrokerRow({
           </span>
         </span>
         <span className="shrink-0 text-right">
-          <span className="block font-mono text-[15px] tabular-nums text-[var(--color-ink)]">{fmtCount(value)}</span>
-          <span className="block text-[10px] text-[var(--color-ink-3)]">{unit}</span>
+          <span className="block font-mono text-[15px] tabular-nums text-[var(--color-ink)]">
+            {fmtCount(value)}
+            <span className="sr-only"> {unit}</span>
+          </span>
         </span>
         <ChevronIcon className="h-4 w-4 shrink-0 text-[var(--color-ink-4)]" />
       </span>

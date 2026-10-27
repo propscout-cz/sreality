@@ -5,15 +5,15 @@
  * was — lib/linkGestures `useNewTabProps`). The deal pipeline, the watchdog list and this feed stay
  * distinct; this is where "what changed about things I care about" lives, and
  * its unseen rows are the count the nav badge, the phone bell and the app icon
- * show (lib/unreadCount). Older rows page in on "Load more" (keyset, newest
- * first).
+ * show (lib/unreadCount). Older rows load as the end of the list comes into
+ * view (components/InfiniteSentinel, as on Browse; keyset, newest first).
  *
  * ONE PAGE FOR BOTH FRAMES (W5a): below 768 px the same markup lays out to the
  * phone's 16 px gutters (`max-md:`). The frame's header already names the page
- * and its bell carries the count, so the eyebrow and the explanation step
- * aside (the empty state still explains); the rows' hairlines run to the screen
- * edge as the roll's do, and a row turns into two lines — kind and time, then
- * what it is about — whose prices never split.
+ * and its bell carries the count, so the explanation steps aside (the empty
+ * state still explains); the rows' hairlines run to the screen edge as the
+ * roll's do, and a row turns into two lines — kind and time, then what it is
+ * about — whose prices never split.
  *
  * A coalesced push opens this page as `/notifications?d={delivery}`: the open is
  * reported once and the parameter dropped (lib/push). */
@@ -37,7 +37,7 @@ import { useUnreadCount } from '@/lib/unreadCount';
 import { useInfiniteList } from '@/lib/useInfiniteList';
 import { fmtAbsolute, fmtCount, fmtCzk, fmtRelative } from '@/lib/format';
 import { listingKindLabel } from '@/lib/enums';
-import LoadMore from '@/components/LoadMore';
+import InfiniteSentinel from '@/components/InfiniteSentinel';
 import type {
   DispatchChangeKind,
   NotificationSourceKind,
@@ -149,7 +149,16 @@ export default function Notifications() {
                 </li>
               ))}
             </ul>
-            <LoadMore list={feed} label="Load more" busyLabel="Loading…" />
+            {/* Only while there is more: the list ends silently, as it did under the button. */}
+            {feed.hasNextPage && (
+              <InfiniteSentinel
+                onReach={feed.fetchNextPage}
+                hasNextPage
+                isFetchingNextPage={feed.isFetchingNextPage}
+                loadedCount={rows.length}
+                total={null}
+              />
+            )}
           </>
         )}
       </div>
@@ -169,11 +178,8 @@ function Header({
   return (
     <header className="flex items-end justify-between gap-4 max-md:items-center">
       <div className="min-w-0">
-        <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] max-md:hidden">
-          Notifications
-        </p>
         <h1
-          className="mt-1.5 text-[2.1rem] leading-tight max-md:mt-0 max-md:text-[1.5rem]"
+          className="text-[2.1rem] leading-tight max-md:text-[1.5rem]"
           style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
         >
           What changed

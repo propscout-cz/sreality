@@ -516,16 +516,15 @@
     letter-spacing: 0.02em;
     color: var(--color-ink-3);
   }
-  /* How precisely the pin is placed — tight under the place line it qualifies. */
+  /* How precisely the pin is placed and when the ad was last seen, one line
+   * tight under the place it qualifies (ruling P13); each half's detail is its
+   * tooltip. */
   .lp-precision {
     margin: 2px 0 0;
     font-size: 0.68rem;
     color: var(--color-ink-3);
   }
-  .lp-seen {
-    margin: 6px 0 0;
-    font-size: 0.65rem;
-    color: var(--color-ink-4);
+  .lp-precision [title] {
     cursor: help;
   }
   .lp-link {

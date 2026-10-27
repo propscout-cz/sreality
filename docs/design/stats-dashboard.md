@@ -139,11 +139,15 @@ byty-only dimension) and the first save persists the whole list. A board holds a
   area ⇒ "m²", tom_days ⇒ "dní"); `chartTitle` (a band named by its step in the payload's unit, e.g. "Cena
   po 2 500 Kč / měs"; the two-step registry label only while the basis is unknown, and on the palette chip);
   `DEFAULT_CHARTS`; the refusal texts (Czech).
-- `components/stats/StatsDashboard.tsx`: the tab. Reads the board, renders one `StatsChart` per chart, "Přidat
-  graf" at the end, saves through `lib/useOptimisticWrite` (the ONE write policy, mutation key
+- `components/stats/StatsDashboard.tsx`: the tab. One settings panel leads it (rulings S01–S04, 2026-10-27): a
+  "Dashboard" row (the named dashboards' bar) and a "Vzorek" row (the lens, its sentence under it with the lens's
+  name in bold, "Malé vzorky (pod 5)" at the row's end, its detail in a tooltip). Reads the board, renders one
+  `StatsChart` per chart, "Přidat graf" at the end, saves through `lib/useOptimisticWrite` (the ONE write policy, mutation key
   `['write','stats','dashboard']`): the PUT's answer becomes the cache on success, a re-read only on failure.
-- `components/stats/StatsChart.tsx`: one card — derived title, `SampleLedger`, the view, Upravit / Odebrat; in
-  edit mode the card flips in place to `ChartBuilder` (same card, same width), Uložit / Zrušit.
+- `components/stats/StatsChart.tsx`: one card — derived title, `SampleLedger`, the view, Upravit + ⋯ (↑ / ↓ /
+  Odebrat, with its confirm; ruling P14); in edit mode the card flips in place to `ChartBuilder` (same card, same
+  width), Uložit / Zrušit. A table or box whose every cell is under the floor says so once above the table, with
+  "Zobrazit malé vzorky", which turns the tab's switch on (ruling S09; `lib/stats` `everyCellUnderMin`).
 - `components/stats/ChartBuilder.tsx`: a palette of dimension chips grouped (Vlastnost · Cena · Místo ·
   Vybavení), the shelves Řádky (six slots, sortable) and Sloupce (one), the Hodnota well, the view picker and
   the statistic picker (a multi-select: line, bar and a table with a column; the first pick leads, the last
@@ -165,7 +169,7 @@ byty-only dimension) and the first save persists the whole list. A board holds a
   ink tints after, at most `MAX_SERIES` (each colour solid, then dashed) or a one-sentence refusal; the SVG is
   hidden from assistive tech and a screen-reader table carries the same numbers), `views/BoxTable.tsx` (THE box primitive: one shared axis from every row's p10–p90, nested
   rows indented, n per row, a dashed placeholder for a cell under `min_n`; no tooltips — the numbers, and the
-  mean ahead of them, are columns of the same table).
+  mean ahead of them, are columns of the same table; the legend line above names the table).
 - Refusals render as one sentence in the card body; the ledger still shows the counts.
 - `BrowseExperience.tsx`: the stats tab renders `<StatsDashboard filters={filters} />`; `statsQuery`, the
   annotations query, `BrowseStatsView` and their props are gone.

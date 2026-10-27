@@ -163,15 +163,18 @@ describe('<MergeBar>', () => {
     expect(await screen.findByText('Vezme zpět 2 rozhodnutí „Různé“.')).toBeInTheDocument();
   });
 
-  it('enters and leaves the mode from its one button', () => {
-    const enter = vi.fn();
+  /* The way in is the cards header's "Sloučit…" (ruling P10); the bar is the mode. */
+  it('leaves the mode from Cancel and draws no Merge mode button', () => {
     const exit = vi.fn();
-    renderWith(bar({}, { active: false, enter, exit }));
-    fireEvent.click(screen.getByRole('button', { name: 'Merge mode' }));
-    expect(enter).toHaveBeenCalledTimes(1);
-    renderWith(bar({}, { enter, exit }));
+    renderWith(bar({}, { exit }));
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(exit).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'Merge mode' })).toBeNull();
+  });
+
+  it('draws nothing while the mode is off', () => {
+    renderWith(bar({}, { active: false }));
+    expect(screen.queryByRole('button')).toBeNull();
   });
 });
 

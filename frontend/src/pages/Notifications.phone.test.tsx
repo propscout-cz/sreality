@@ -177,8 +177,9 @@ describe('<Notifications> at phone width', () => {
     /* A row turns into two lines: chip and time, then what it is about. */
     expect(rowLink.className).toContain('max-md:flex-wrap');
     expect(rowLink.className).toContain('max-md:px-4');
-    /* The frame's header names the page and its bell carries the count. */
-    expect(screen.getByText('Notifications', { selector: 'p' }).className).toContain('max-md:hidden');
+    /* The frame's header names the page and its bell carries the count; the
+     * page adds no label above its title. */
+    expect(screen.queryByText('Notifications', { selector: 'p' })).toBeNull();
     for (const name of ['All', 'Unread']) {
       expect(screen.getAllByRole('button', { name })[0].className).toContain('max-md:h-9');
     }

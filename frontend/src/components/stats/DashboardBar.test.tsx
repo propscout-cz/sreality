@@ -240,6 +240,23 @@ describe('<DashboardBar> the list', () => {
     expect(screen.queryByRole('button', { name: '+ Okolí dashboard' })).toBeNull();
   });
 
+  /* Ruling S06 (2026-10-27): the chip shows its name, then a small "Okolí" badge with a pin. */
+  it('marks the Okolí dashboard with an Okolí badge and a pin, the property page in its tooltip', async () => {
+    const mine = row({ ...OWN, id: 'd-mine', name: 'Moje okolí', property_card: true });
+    vi.mocked(listStatsDashboards).mockResolvedValue({ data: [mine, WITH_FILTER], total: 2 });
+    renderBar();
+    const card = await chip('Moje okolí — okolí dashboard');
+    const badge = within(card).getByTitle('Tento dashboard se ukáže na kartě Okolí dashboard u každé nemovitosti');
+    expect(badge.textContent).toBe('Okolí');
+    expect(badge.querySelector('svg')).not.toBeNull();
+    /* A screen reader still hears the role; the eye reads the badge. */
+    expect(within(card).getByText('okolí dashboard')).toHaveClass('sr-only');
+    /* A long name truncates on its own, the badge never with it. */
+    expect(within(card).getByText('Moje okolí')).toHaveClass('truncate');
+    expect(badge).toHaveClass('shrink-0');
+    expect(within(screen.getByRole('button', { name: 'Domy' })).queryByTitle(/Tento dashboard se ukáže/)).toBeNull();
+  });
+
   it('takes no dashboard for the property page\'s by its name alone (#1977\'s rule is gone)', async () => {
     vi.mocked(listStatsDashboards).mockResolvedValue({ data: [row({ ...OWN, name: 'Trh v okolí' })], total: 1 });
     renderBar();
@@ -724,20 +741,52 @@ describe('<DashboardBar> sharing', () => {
 });
 
 describe('<StatsDashboard> with the bar', () => {
-  it('loads a dashboard through the board\'s one write (PUT /stats/dashboard)', async () => {
+  function Page() {
+    const view = useUrlBrowseState();
+    return <StatsDashboard filters={view.filters} view={view} />;
+  }
+  const renderPage = () => {
     vi.mocked(stats.fetchDashboard).mockResolvedValue([A]);
     vi.mocked(stats.fetchStatsPivot).mockImplementation(async (_f, spec) => pivotOf({ spec }));
-    function Page() {
-      const view = useUrlBrowseState();
-      return <StatsDashboard filters={view.filters} view={view} />;
-    }
-    render(
+    return render(
       <QueryClientProvider client={client()}>
         <MemoryRouter initialEntries={['/browse?tab=stats']}>
           <Page />
         </MemoryRouter>
       </QueryClientProvider>,
     );
+  };
+
+  /* Rulings S01 + S02 (2026-10-27). */
+  it('puts the dashboard row and the sample row in one panel above the charts, each labelled', async () => {
+    renderPage();
+    const panel = (await chip('Domy')).closest('section')!;
+    expect(panel).not.toBeNull();
+    const dashboard = within(panel).getByText('Dashboard');
+    const sample = within(panel).getByText('Vzorek');
+    expect(dashboard.compareDocumentPosition(sample) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(panel).getByText(/každý graf počítá/)).toBeInTheDocument();
+    const firstChart = await screen.findByRole('article');
+    expect(within(panel).queryByRole('article')).toBeNull();
+    expect(panel.compareDocumentPosition(firstChart) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  /* The filter sidebar stays open below lg, so a screen breakpoint put the label column
+   * beside a ~240px Dashboard cell at 768px, and a long chip ran out of the panel. */
+  it('sets the label column by the panel\'s own width, never by the screen\'s', async () => {
+    renderPage();
+    const panel = (await chip('Domy')).closest('section')!;
+    expect(panel.classList).toContain('@container');
+    for (const label of ['Dashboard', 'Vzorek']) {
+      const row = within(panel).getByText(label).parentElement!;
+      expect(row.classList).toContain('grid-cols-1');
+      expect(row.classList).toContain('@min-[30rem]:grid-cols-[6.5rem_minmax(0,1fr)]');
+      expect(row.className).not.toMatch(/(^|\s)(sm|md|lg|xl|2xl):/);
+    }
+  });
+
+  it('loads a dashboard through the board\'s one write (PUT /stats/dashboard)', async () => {
+    renderPage();
     fireEvent.click(await chip('Domy'));
     await waitFor(() => expect(stats.saveDashboard).toHaveBeenCalledTimes(1));
     expect(vi.mocked(stats.saveDashboard).mock.calls[0][0]).toEqual([B]);

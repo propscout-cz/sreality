@@ -79,8 +79,7 @@ export default function BrokerReview() {
         ← Makléři
       </Link>
       <header className="mt-2">
-        <p className="text-xs tracking-[0.18em] uppercase text-[var(--color-ink-3)]">broker intelligence</p>
-        <h1 className="mt-1 text-2xl font-[family-name:var(--font-display)]">Sloučit duplicity</h1>
+        <h1 className="text-2xl font-[family-name:var(--font-display)]">Sloučit duplicity</h1>
         <p className="mt-1 text-sm text-[var(--color-ink-3)] max-w-2xl">
           Automat slučuje jen záznamy se shodným jménem — buď přes kontakt, který
           patří jedinému jménu, nebo přes společnou firmu u&nbsp;jména, které se

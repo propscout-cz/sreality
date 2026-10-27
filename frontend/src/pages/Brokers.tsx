@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { listBrokerMergeCandidates } from '../lib/api';
@@ -23,7 +23,7 @@ import { DecimalField, Field, PickButton, Segmented, Switch } from '../component
 import { SUBTYPE_LABELS_BY_MAIN } from '@/lib/enums';
 import { ROUTES } from '@/lib/routes';
 import { useNewTabProps } from '@/lib/linkGestures';
-import { fmtCount } from '../lib/format';
+import { czPlural, fmtCount } from '../lib/format';
 import { usePhoneShell } from '@/lib/phoneShell';
 import { useDebouncedTerm } from '@/lib/useDebouncedTerm';
 import { PhoneSuspense } from '@/components/phone/RollParts';
@@ -49,6 +49,10 @@ const LIMIT_OPTIONS: ReadonlyArray<{ value: number; label: string }> = [
   { value: 200, label: '200' },
   { value: 2000, label: 'Vše' },
 ];
+/* The ledger's two count columns: one word heads each column, and each row keeps
+ * the same word for screen readers only (P28). */
+const UNIT = { property: 'nemovitostí', listing: 'inzerátů' } as const;
+const FIRM_PILLS_SHOWN = 5;
 
 /* Under the phone shell the leaderboard is the reduced phone screen (#1760 Q12:
  * place, category/type, metric, name search); everything else stays here. */
@@ -174,10 +178,7 @@ function BrokersDesktop() {
     <div className="px-6 py-8 max-w-5xl mx-auto text-[var(--color-ink)]">
       <header className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-xs tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-            broker intelligence
-          </p>
-          <h1 className="mt-1 text-2xl font-[family-name:var(--font-display)]">Makléři</h1>
+          <h1 className="text-2xl font-[family-name:var(--font-display)]">Makléři</h1>
           <p className="mt-1 text-sm text-[var(--color-ink-3)] max-w-2xl">
             Kdo drží nejvíc inventáře v daném regionu a typu nemovitosti — žebříček
             makléřů a jejich kontakty pro oslovení.
@@ -442,6 +443,17 @@ function CompanyFilter({
   });
   const options = optionsQ.data ?? [];
   const selected = new Set(value);
+  const [open, setOpen] = useState(false);
+  const pillsRef = useRef<HTMLDivElement>(null);
+  const focusAt = useRef<number | null>(null);
+
+  // The opener leaves the DOM as it opens, so focus moves to the first pill it
+  // revealed rather than dropping to the page top.
+  useEffect(() => {
+    if (focusAt.current == null) return;
+    (pillsRef.current?.children[focusAt.current] as HTMLElement | undefined)?.focus();
+    focusAt.current = null;
+  }, [open]);
 
   const toggle = (firmId: number) => {
     if (selected.has(firmId)) onChange(value.filter((id) => id !== firmId));
@@ -455,9 +467,17 @@ function CompanyFilter({
     return <p className="text-sm text-[var(--color-brick)]">Firmy se nepodařilo načíst.</p>;
   }
 
+  // P29: the five busiest (the server sends them by broker_count), then "+ N
+  // dalších". A chosen firm stays in view: a refetch can re-rank it past the
+  // fifth, and a pressed pill must never be hidden.
+  const inView = (f: BrokerFirmOption, i: number) =>
+    open || i < FIRM_PILLS_SHOWN || selected.has(f.firm_id);
+  const shown = options.filter(inView);
+  const more = options.length - shown.length;
+
   return (
-    <div className="flex flex-wrap gap-1">
-      {options.map((f) => (
+    <div ref={pillsRef} className="flex flex-wrap gap-1">
+      {shown.map((f) => (
         <PickButton key={f.firm_id} on={selected.has(f.firm_id)} onClick={() => toggle(f.firm_id)}>
           {firmLabel(f)}{' '}
           <span className="font-[family-name:var(--font-mono)] tabular-nums opacity-70">
@@ -465,6 +485,20 @@ function CompanyFilter({
           </span>
         </PickButton>
       ))}
+      {more > 0 && (
+        <button
+          type="button"
+          onClick={() => {
+            focusAt.current = options.findIndex((f, i) => !inView(f, i));
+            setOpen(true);
+          }}
+          className="px-2 py-1.5 text-xs rounded-[var(--radius-sm)] border border-transparent text-[var(--color-ink-2)] hover:text-[var(--color-ink)] hover:border-[var(--color-rule)] transition-colors"
+        >
+          +{' '}
+          <span className="font-[family-name:var(--font-mono)] tabular-nums">{fmtCount(more)}</span>{' '}
+          {czPlural(more, 'další', 'další', 'dalších')}
+        </button>
+      )}
     </div>
   );
 }
@@ -490,6 +524,18 @@ function Ledger({
         <span className="text-[0.7rem] text-[var(--color-ink-4)] tabular-nums">
           {rows.length} makléřů{capped ? ' (limit)' : ''}
         </span>
+      </div>
+      {/* The units, said once over the rows' own grid; each row carries its
+          units as sr-only text, so this head is for the eye only. */}
+      <div
+        aria-hidden
+        className="px-4 py-1.5 flex items-center gap-4 border-b border-[var(--color-rule-soft)] text-[0.6rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)]"
+      >
+        <span className="w-7 shrink-0" />
+        <span className="min-w-0 flex-1" />
+        <span className="hidden sm:block w-40 shrink-0" />
+        <span className="w-24 shrink-0 text-right">{UNIT.property}</span>
+        <span className="w-24 shrink-0 text-right">{UNIT.listing}</span>
       </div>
       <ol>
         {rows.map((r, i) => (
@@ -520,13 +566,13 @@ function Ledger({
               <Count
                 value={r.active_property_count}
                 total={r.property_count}
-                label="nemovitostí"
+                label={UNIT.property}
                 emphasized={metric === 'active_property_count' || metric === 'property_count'}
               />
               <Count
                 value={r.active_listing_count}
                 total={r.listing_count}
-                label="inzerátů"
+                label={UNIT.listing}
                 emphasized={metric === 'listing_count' || metric === 'active_listing_count'}
               />
             </Link>
@@ -580,9 +626,7 @@ function Count({
         {total > value && (
           <span className="text-[var(--color-ink-4)] text-xs"> / {fmtCount(total)}</span>
         )}
-      </span>
-      <span className="block text-[0.6rem] tracking-[0.1em] uppercase text-[var(--color-ink-4)] mt-0.5">
-        {label}
+        <span className="sr-only"> {label}</span>
       </span>
     </span>
   );

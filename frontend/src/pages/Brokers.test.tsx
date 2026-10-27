@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
@@ -15,7 +15,7 @@ import * as api from '@/lib/api';
 import * as auth from '@/lib/auth';
 import * as brokers from '@/lib/brokers';
 import * as maps from '@/lib/maps';
-import type { BrokerLeaderRow } from '@/lib/brokers';
+import type { BrokerFirmOption, BrokerLeaderRow } from '@/lib/brokers';
 import { ROUTES } from '@/lib/routes';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
@@ -54,13 +54,16 @@ function asUser(isAdmin: boolean): void {
 
 function renderPage() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={['/brokers']}>
-        <Brokers />
-      </MemoryRouter>
-    </QueryClientProvider>,
-  );
+  return {
+    qc,
+    ...render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/brokers']}>
+          <Brokers />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    ),
+  };
 }
 
 beforeEach(() => {
@@ -515,5 +518,110 @@ describe('<Brokers> leaderboard rows are links, not buttons', () => {
 
     const hit = await screen.findByRole('link', { name: /Hledany Makler/ }, { timeout: 3000 });
     expect(hit).toHaveAttribute('href', ROUTES.brokerDetail.build({ id: 99 }));
+  });
+});
+
+/* The redesign's agenda 6 (docs/design/propscout-redesign.md P26, P28, P29). */
+describe('<Brokers> redesign rulings', () => {
+  // What a sighted reader sees: the sr-only copies that keep each row's units in
+  // its link name are not "said" on screen.
+  const shown = (text: string) =>
+    screen.queryAllByText(text).filter((el) => !el.classList.contains('sr-only'));
+
+  // Busiest first, as the server orders them; counts under 1000 so no
+  // thousands separator enters the text.
+  const firms = (n: number): BrokerFirmOption[] =>
+    Array.from({ length: n }, (_, i) => ({
+      firm_id: i + 1,
+      canonical_domain: `firma-${String(i + 1).padStart(2, '0')}.cz`,
+      display_name: null,
+      is_franchise: false,
+      broker_count: 500 - i * 10,
+    }));
+
+  it('P26: the title stands alone, with no small-caps label above it', async () => {
+    asUser(false);
+    renderPage();
+    expect(screen.getByRole('heading', { level: 1, name: 'Makléři' })).toBeInTheDocument();
+    expect(screen.queryByText('broker intelligence')).toBeNull();
+    await waitFor(() => expect(brokers.fetchBrokerLeaderboard).toHaveBeenCalled());
+  });
+
+  it('P28: each unit is said once, in the column header, not under every count', async () => {
+    asUser(false);
+    vi.mocked(brokers.fetchBrokerLeaderboard).mockResolvedValue([
+      leaderRow(7, 'Jan Fleischner'),
+      leaderRow(42, 'Michaela Koudelova'),
+    ]);
+    renderPage();
+
+    // Assistive tech still hears each row's units.
+    const row = await screen.findByRole('link', { name: /Jan Fleischner.*nemovitostí.*inzerátů/ });
+    expect(screen.getByRole('link', { name: /Michaela Koudelova.*nemovitostí.*inzerátů/ })).toBeInTheDocument();
+
+    expect(shown('nemovitostí')).toHaveLength(1);
+    expect(shown('inzerátů')).toHaveLength(1);
+    expect(row.contains(shown('nemovitostí')[0])).toBe(false);
+    expect(row.contains(shown('inzerátů')[0])).toBe(false);
+  });
+
+  it('P29: the five largest firms, then "+ 19 dalších" opens the rest', async () => {
+    asUser(false);
+    vi.mocked(brokers.searchBrokerFirms).mockResolvedValue(firms(24));
+    renderPage();
+
+    expect(await screen.findByText('firma-05.cz')).toBeInTheDocument();
+    expect(brokers.searchBrokerFirms).toHaveBeenCalledWith('', 24);
+    for (const n of ['01', '02', '03', '04']) {
+      expect(screen.getByText(`firma-${n}.cz`)).toBeInTheDocument();
+    }
+    expect(screen.queryByText('firma-06.cz')).toBeNull();
+
+    const more = screen.getByRole('button', { name: /\+\s*19\s*dalších/ });
+    expect(more).not.toHaveAttribute('aria-pressed');
+    fireEvent.click(more);
+
+    expect(screen.getByText('firma-06.cz')).toBeInTheDocument();
+    expect(screen.getByText('firma-24.cz')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /dalš/ })).toBeNull();
+    // The opener is gone, so focus lands on the first pill it revealed.
+    await waitFor(() => expect(screen.getByText('firma-06.cz')).toHaveFocus());
+  });
+
+  it('P29: "+ 2 další" for two to four more; no opener at five firms or fewer', async () => {
+    asUser(false);
+    vi.mocked(brokers.searchBrokerFirms).mockResolvedValue(firms(7));
+    const { unmount } = renderPage();
+    expect(await screen.findByRole('button', { name: /^\+\s*2\s*další$/ })).toBeInTheDocument();
+    unmount();
+
+    vi.mocked(brokers.searchBrokerFirms).mockResolvedValue(firms(5));
+    renderPage();
+    expect(await screen.findByText('firma-05.cz')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /dalš/ })).toBeNull();
+  });
+
+  it('P29: a chosen firm stays in view, pressed, when a refetch ranks it past the fifth', async () => {
+    asUser(false);
+    const before = firms(24);
+    vi.mocked(brokers.searchBrokerFirms).mockResolvedValue(before);
+    const { qc } = renderPage();
+    fireEvent.click(await screen.findByText('firma-05.cz'));
+    expect(screen.getByText('firma-05.cz')).toHaveAttribute('aria-pressed', 'true');
+
+    // firma-06 overtakes firma-05 between two fetches (a reconnect refetch).
+    const after = [
+      ...before.slice(0, 4),
+      { ...before[5], broker_count: before[4].broker_count + 1 },
+      before[4],
+      ...before.slice(6),
+    ];
+    vi.mocked(brokers.searchBrokerFirms).mockResolvedValue(after);
+    await act(() => qc.refetchQueries({ queryKey: ['broker-firm-options'] }));
+
+    await waitFor(() => expect(screen.getByText('firma-06.cz')).toBeInTheDocument());
+    expect(screen.getByText('firma-05.cz')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByText('firma-07.cz')).toBeNull();
+    expect(screen.getByRole('button', { name: /\+\s*18\s*dalších/ })).toBeInTheDocument();
   });
 });

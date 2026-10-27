@@ -8,7 +8,7 @@
  *
  * Reading order on the card:
  *   street (the card's link)  →  town  →  price + how it moved  →
- *   disposition/area + yield  →  tags  →  artifact link  →  broker  →  the municipality's civic indexes
+ *   disposition/area + yield (Velké only)  →  tags  →  artifact link  →  broker
  * The street leads and carries the link because it NAMES the property, the way
  * a Browse card's title does; the price describes it. The link is stretched
  * over the whole card, so the card opens (in a new tab) from anywhere but its
@@ -33,12 +33,10 @@ import { useActingReadOnly } from '@/lib/acting';
 import { TrashIcon } from '@/components/icons';
 import DelegatedStamp from '@/components/DelegatedStamp';
 import PriceDelta from '@/components/PriceDelta';
-import CityIndexStrip from '@/components/CityIndexStrip';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
 import TagChip from '@/components/curation/TagChip';
 import ArtifactLinkButton from '@/components/curation/ArtifactLinkButton';
 import { TAG_ASSIGN_LABEL, TagAssignMenu } from '@/components/curation/TagAssignList';
-import type { CityQualityByObec } from '@/lib/useCityQuality';
 import { useCardHydration } from '@/lib/hydration';
 import type { ListingBroker } from '@/lib/brokers';
 import type { PipelineBoardCard } from '@/lib/types';
@@ -136,11 +134,9 @@ export function brokerHoverTitle(b: ListingBroker, fromInactive = false): string
 /* The card's visible content — reused by the in-column card and the drag ghost. */
 export function CardFace({
   card,
-  cityQuality,
   size = 'sm',
 }: {
   card: PipelineBoardCard;
-  cityQuality?: CityQualityByObec;
   size?: PipelineCardSize;
 }) {
   /* Decorations come from context, not from `card` — see lib/hydration. The
@@ -184,13 +180,12 @@ export function CardFace({
   ]
     .filter(Boolean)
     .join(' · ');
-  const quality = card.obec_id != null ? cityQuality?.get(card.obec_id) : undefined;
 
   /* The whole lg card design is this one axis flip: the same tree, laid out as
      a column so the photo sits above the text at full card width instead of
      beside it. Keeping one tree means a field added to the card can never
      appear at one size and not another. */
-  const { stacked } = PIPELINE_CARD_GEOMETRY[size];
+  const { stacked, showsYield } = PIPELINE_CARD_GEOMETRY[size];
 
   return (
     <div>
@@ -255,7 +250,7 @@ export function CardFace({
             <span className="truncate font-mono tabular-nums text-xs text-[var(--color-ink-4)]">
               {dims || '—'}
             </span>
-            {card.mf_gross_yield_pct != null && (
+            {showsYield && card.mf_gross_yield_pct != null && (
               <span
                 className="card-tip shrink-0 font-mono tabular-nums text-[0.68rem] text-[var(--color-ink-3)]"
                 title="Hrubý výnos dle cenové mapy nájemného MF"
@@ -312,23 +307,16 @@ export function CardFace({
           ) : null}
         </div>
       </div>
-      {/* Full card width, below the photo column — the strip is about the
-          MUNICIPALITY, not this listing, so it reads as a footer rather than as
-          another attribute of the property. Renders nothing when the property
-          is not in a curated city (about half of them). */}
-      <CityIndexStrip quality={quality} muted={inactive} className="card-tip" />
     </div>
   );
 }
 
 export default function BoardCard({
   card,
-  cityQuality,
   onRemove,
   size = 'sm',
 }: {
   card: PipelineBoardCard;
-  cityQuality?: CityQualityByObec;
   size?: PipelineCardSize;
   onRemove: (propertyId: number) => void;
 }) {
@@ -369,7 +357,7 @@ export default function BoardCard({
           </button>
         )}
         <div className="min-w-0 flex-1">
-          <CardFace card={card} cityQuality={cityQuality} size={size} />
+          <CardFace card={card} size={size} />
         </div>
         {!readOnly && (
           <button
