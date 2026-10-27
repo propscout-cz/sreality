@@ -812,10 +812,12 @@ def test_a_due_job_with_no_runner_beating_is_a_problem_and_the_fleet_a_watch(cur
 
 def test_an_entry_a_replica_refused_at_boot_is_a_problem(cur):
     """C8: a refused entry runs nowhere, so it gets its own cell even with no row."""
-    _runner_beat(cur, "r1", "0 minutes", skipped=("ghost", "x"))
+    _runner_beat(cur, "r1", "0 minutes", skipped=("", "ghost", "x"))
     _job(cur, "x", due="5 hours")
 
     cells = _liveness(cur)[3]
+
+    assert _job_subjects(cells) == {"job/ghost", "job/x", "job-runner"}, "an empty name makes no subject-less cell"
 
     assert _said(cells, "job/ghost") == (
         "fail", "ghost: refused at boot by job-runner/r1 (JOBS skip in its log): it has no row and runs nowhere")

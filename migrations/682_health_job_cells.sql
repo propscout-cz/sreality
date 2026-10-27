@@ -83,6 +83,7 @@ with live as (
 ), refused as (
   select e.name, jsonb_agg(f.worker order by f.worker) as replicas
     from fresh f cross join lateral jsonb_array_elements_text(f.skipped) e(name)
+   where e.name <> ''          -- never a subject-less cell, which the teller and the canary would both drop
    group by e.name
 ), x as (
   select l.*, o.started_at as run_at,
