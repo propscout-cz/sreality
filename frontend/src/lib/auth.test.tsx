@@ -20,7 +20,8 @@ const h = vi.hoisted(() => ({
   reads: [] as string[],
   /* Per relation, envelopes served (in order) before the real rows. */
   failNext: {} as Record<string, unknown[]>,
-  updateUser: vi.fn(async (_attrs: unknown) => ({ data: {}, error: null as unknown })),
+  updateUser: vi.fn(async (_attrs: unknown) => ({ data: {}, error: null })),
+  getUser: vi.fn(async () => ({ data: { user: null as unknown }, error: null })),
 }));
 
 vi.mock('./supabase', () => {
@@ -58,6 +59,7 @@ vi.mock('./supabase', () => {
           return { data: { subscription: { unsubscribe: () => {} } } };
         },
         updateUser: h.updateUser,
+        getUser: h.getUser,
       },
     },
   };
@@ -74,7 +76,6 @@ import { isTransientApiError } from './api';
 import { syncAppBadge } from './appBadge';
 import { AuthProvider, useAuth } from './auth';
 import { endPushHere, setPushGate } from './push';
-import { setScheme, syncAppearance } from './theme';
 
 /* A fresh object each call — exactly what Supabase hands out per auth event,
  * and the reason keying on the session object refetched three times. */
@@ -347,26 +348,28 @@ describe('AuthProvider push binding', () => {
 });
 
 describe('AuthProvider appearance', () => {
-  /* The store is module state: each case starts and ends signed out. */
-  beforeEach(() => {
-    syncAppearance(null, async () => {});
-    setScheme('kobalt');
-    h.updateUser.mockClear();
-  });
   afterEach(() => {
-    syncAppearance(null, async () => {});
-    setScheme('med');
+    document.documentElement.removeAttribute('data-scheme');
+    document.documentElement.removeAttribute('data-theme');
     localStorage.clear();
   });
 
-  it("writes this device's choice to a profile without one, and keeps it owed when Supabase answers an error", async () => {
-    h.updateUser.mockResolvedValueOnce({ data: {}, error: new Error('offline') });
+  /* A fresh page load: the store reads the profile from Auth once per load. */
+  it('reads the profile from Auth at load, and sends a pick through updateUser', async () => {
+    vi.resetModules();
+    const fresh = { AuthProvider: (await import('./auth')).AuthProvider, theme: await import('./theme') };
+    const appearance = { scheme: 'grafit', theme: 'dark', at: '2020-01-01T10:00:00.000Z' };
+    h.getUser.mockResolvedValueOnce({ data: { user: { id: 'user-1', user_metadata: { appearance } } }, error: null });
     h.initialSession = sessionFor('user-1');
-    renderAuth(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
-    await waitFor(() =>
-      expect(h.updateUser).toHaveBeenCalledWith({ data: { appearance: { scheme: 'kobalt', theme: 'light' } } }),
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <fresh.AuthProvider><span /></fresh.AuthProvider>
+      </QueryClientProvider>,
     );
-    await new Promise((r) => setTimeout(r, 0));
-    expect(localStorage.getItem('sreality.appearance.unsaved')).toBe('user-1');
+    await waitFor(() => expect(document.documentElement).toHaveAttribute('data-scheme', 'grafit'));
+    act(() => fresh.theme.setScheme('kobalt'));
+    expect(h.updateUser).toHaveBeenLastCalledWith({
+      data: { appearance: { scheme: 'kobalt', theme: 'dark', at: expect.any(String) } },
+    });
   });
 });

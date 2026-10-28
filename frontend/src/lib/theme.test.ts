@@ -74,98 +74,155 @@ describe('appearance store', () => {
   });
 });
 
+/* The one rule: the newest explicit pick wins, per user. */
 describe('appearance in the profile', () => {
-  it("applies and caches the profile's choice over the device's", async () => {
-    localStorage.setItem('sreality.scheme', 'kobalt');
+  const [T0, T1, T2] = ['2020-01-01T10:00:00.000Z', '2020-01-01T11:00:00.000Z', '2020-01-01T12:00:00.000Z'];
+  /* The profile's two calls; `read` answers with the fresh copy of the user. */
+  const account = (fresh: ReturnType<typeof user> | null = null) => ({
+    read: vi.fn(async () => fresh),
+    save: vi.fn(async (_: unknown) => {}),
+  });
+  const cache = (scheme: string, theme: string, chosen?: string) => {
+    localStorage.setItem('sreality.scheme', scheme);
+    localStorage.setItem('sreality.theme', theme);
+    if (chosen) localStorage.setItem('sreality.appearance.chosen', chosen);
+  };
+  /* A session for `u`: the page load's first one is read fresh from Auth. */
+  async function sync(theme: Awaited<ReturnType<typeof load>>, u: ReturnType<typeof user> | null, profile = account(u)) {
+    theme.syncAppearance(u, profile);
+    await settle();
+    return profile;
+  }
+
+  it("applies and caches the profile's newer pick over the device's", async () => {
+    cache('kobalt', 'light', `${T0} u1`);
     const theme = await load();
-    const save = vi.fn();
-    theme.syncAppearance(user({ scheme: 'grafit', theme: 'dark' }), save);
+    const profile = await sync(theme, user({ scheme: 'grafit', theme: 'dark', at: T1 }));
     expect(attrs()).toEqual(['grafit', 'dark']);
     expect(localStorage.getItem('sreality.scheme')).toBe('grafit');
-    expect(save).not.toHaveBeenCalled();
+    expect(localStorage.getItem('sreality.appearance.chosen')).toBe(`${T1} u1`);
+    expect(profile.save).not.toHaveBeenCalled();
   });
 
-  it("uploads this device's choice to a profile without one, once", async () => {
-    localStorage.setItem('sreality.scheme', 'kobalt');
-    const theme = await load();
-    const save = vi.fn().mockResolvedValue(undefined);
-    theme.syncAppearance(user(), save);
-    theme.syncAppearance(user(), save);
-    await settle();
-    theme.syncAppearance(user(), save);
-    expect(save.mock.calls).toEqual([[{ scheme: 'kobalt', theme: 'light' }]]);
-  });
-
-  /* A device that never chose must not overwrite a choice made on another one. */
-  it.each([[{}], [{ 'sreality.scheme': 'med', 'sreality.theme': 'light' }]])(
-    'leaves a profile without one alone while this device holds the default (%o)',
-    async (cache: Record<string, string>) => {
-      for (const [key, value] of Object.entries(cache)) localStorage.setItem(key, value);
+  it.each([[{ scheme: 'kobalt', theme: 'light', at: T0 }], [undefined]])(
+    "sends this device's newer pick to a profile holding %o",
+    async (saved) => {
+      cache('grafit', 'dark', `${T1} u1`);
       const theme = await load();
-      const save = vi.fn();
-      theme.syncAppearance(user(), save);
-      expect(save).not.toHaveBeenCalled();
+      theme.applyAppearance();
+      const profile = await sync(theme, user(saved));
+      expect(attrs()).toEqual(['grafit', 'dark']);
+      expect(profile.save.mock.calls).toEqual([[{ scheme: 'grafit', theme: 'dark', at: T1 }]]);
     },
   );
 
-  it('ignores a value it does not know, and never overwrites it', async () => {
+  /* A device that never picked, or picked before picks were timed, has no time
+   * to beat a profile with: it never overwrites one, and still paints its cache. */
+  it.each([[{}], [{ 'sreality.scheme': 'kobalt', 'sreality.theme': 'dark' }]])(
+    'never sends a pick without a time (%o), and lets a profile replace it',
+    async (stored: Record<string, string>) => {
+      for (const [key, value] of Object.entries(stored)) localStorage.setItem(key, value);
+      const theme = await load();
+      const profile = await sync(theme, user());
+      expect(profile.save).not.toHaveBeenCalled();
+      await sync(theme, user({ scheme: 'grafit', theme: 'light', at: T0 }), profile);
+      expect(attrs()).toEqual(['grafit', 'light']);
+      expect(profile.save).not.toHaveBeenCalled();
+    },
+  );
+
+  it("never sends another user's pick, newer or not, to this user's profile", async () => {
+    cache('grafit', 'dark', `${T2} u1`);
     const theme = await load();
-    const save = vi.fn();
-    theme.syncAppearance(user({ scheme: 'terakota', theme: 'dark' }), save);
-    theme.syncAppearance(user('grafit'), save);
     theme.applyAppearance();
-    expect(attrs()).toEqual([null, 'light']);
-    expect(save).not.toHaveBeenCalled();
+    const profile = await sync(theme, user(undefined, 'u2'));
+    expect(attrs()).toEqual(['grafit', 'dark']);
+    await sync(theme, user({ scheme: 'kobalt', theme: 'light', at: T0 }, 'u2'), profile);
+    expect(attrs()).toEqual(['kobalt', 'light']);
+    expect(profile.save).not.toHaveBeenCalled();
   });
 
-  it('applies a change at once, keeps it when the write fails, and sends it again with the next session', async () => {
+  it('keeps a signed-out pick on the device, and never sends it after sign-in', async () => {
     const theme = await load();
-    const save = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(undefined);
-    theme.syncAppearance(user({ scheme: 'med', theme: 'light' }), save);
-    theme.setScheme('grafit');
-    expect(attrs()).toEqual(['grafit', 'light']);
-    await settle();
-    theme.syncAppearance(user({ scheme: 'med', theme: 'light' }), save);
-    expect(attrs()).toEqual(['grafit', 'light']);
-    theme.setTheme('dark');
-    const grafit = { scheme: 'grafit', theme: 'light' };
-    expect(save.mock.calls).toEqual([[grafit], [grafit], [{ scheme: 'grafit', theme: 'dark' }]]);
-  });
-
-  it('keeps a change the profile never confirmed across a reload, and sends it until it lands', async () => {
-    let theme = await load();
-    theme.syncAppearance(user({ scheme: 'med', theme: 'light' }), vi.fn().mockRejectedValue(new Error('offline')));
-    theme.setScheme('grafit');
-    await settle();
-    theme = await load();
-    theme.applyAppearance();
-    const save = vi.fn().mockResolvedValue(undefined);
-    theme.syncAppearance(user({ scheme: 'med', theme: 'light' }), save);
-    expect(attrs()).toEqual(['grafit', 'light']);
-    expect(save.mock.calls).toEqual([[{ scheme: 'grafit', theme: 'light' }]]);
-    await settle();
-    theme.syncAppearance(user({ scheme: 'kobalt', theme: 'dark' }), save);
-    expect(attrs()).toEqual(['kobalt', 'dark']);
-  });
-
-  it("never lets another user's unconfirmed change hold back this user's profile", async () => {
-    localStorage.setItem('sreality.appearance.unsaved', 'u1');
-    localStorage.setItem('sreality.scheme', 'grafit');
-    const theme = await load();
-    const save = vi.fn();
-    theme.syncAppearance(user({ scheme: 'kobalt', theme: 'dark' }, 'u2'), save);
-    expect(attrs()).toEqual(['kobalt', 'dark']);
-    expect(localStorage.getItem('sreality.appearance.unsaved')).toBe('');
-    expect(save).not.toHaveBeenCalled();
-  });
-
-  it('keeps a signed-out change on the device', async () => {
-    const theme = await load();
-    const save = vi.fn();
-    theme.syncAppearance(null, save);
+    theme.syncAppearance(null, account());
     theme.setScheme('kobalt');
     expect(localStorage.getItem('sreality.scheme')).toBe('kobalt');
-    expect(save).not.toHaveBeenCalled();
+    expect(localStorage.getItem('sreality.appearance.chosen')).toMatch(/^\S+$/);
+    const profile = await sync(theme, user());
+    expect(profile.save).not.toHaveBeenCalled();
+  });
+
+  it('ignores a profile value it does not know, and one without a time', async () => {
+    const theme = await load();
+    const profile = await sync(theme, user({ scheme: 'terakota', theme: 'dark', at: T2 }));
+    await sync(theme, user({ scheme: 'grafit', theme: 'dark' }), profile);
+    theme.applyAppearance();
+    expect(attrs()).toEqual([null, 'light']);
+    expect(profile.save).not.toHaveBeenCalled();
+  });
+
+  it('applies a pick at once and sends it with its time and no other state', async () => {
+    const theme = await load();
+    const profile = await sync(theme, user({ scheme: 'med', theme: 'light', at: T0 }));
+    theme.setScheme('grafit');
+    expect(attrs()).toEqual(['grafit', 'light']);
+    const [[sent]] = profile.save.mock.calls as [[{ at: string }]];
+    expect(sent).toEqual({ scheme: 'grafit', theme: 'light', at: expect.any(String) });
+    expect(Date.parse(sent.at)).toBeGreaterThan(Date.parse(T0));
+    expect(localStorage.getItem('sreality.appearance.chosen')).toBe(`${sent.at} u1`);
+  });
+
+  /* Nothing tracks a failed write: the pick stays newer than the profile. */
+  it('sends a pick again with the next session when its write did not land', async () => {
+    const theme = await load();
+    const profile = await sync(theme, user({ scheme: 'med', theme: 'light', at: T0 }));
+    theme.setScheme('grafit');
+    await sync(theme, user({ scheme: 'med', theme: 'light', at: T0 }), profile);
+    expect(attrs()).toEqual(['grafit', 'light']);
+    expect(profile.save).toHaveBeenCalledTimes(2);
+    expect(profile.save.mock.calls[1]).toEqual(profile.save.mock.calls[0]);
+  });
+
+  it('keeps an unsent pick across a reload and sends it until the profile holds it', async () => {
+    let theme = await load();
+    await sync(theme, user({ scheme: 'med', theme: 'light', at: T0 }));
+    theme.setScheme('grafit');
+    theme = await load();
+    theme.applyAppearance();
+    const profile = await sync(theme, user({ scheme: 'med', theme: 'light', at: T0 }));
+    expect(attrs()).toEqual(['grafit', 'light']);
+    expect(profile.save).toHaveBeenCalledTimes(1);
+  });
+
+  /* updateUser's USER_UPDATED session carries the pick back: applied, not sent. */
+  it('ends after the write: the session that carries the pick back sends nothing', async () => {
+    const theme = await load();
+    const profile = await sync(theme, user({ scheme: 'med', theme: 'light', at: T0 }));
+    theme.setTheme('dark');
+    const [[sent]] = profile.save.mock.calls;
+    await sync(theme, user(sent), profile);
+    await sync(theme, user(sent), profile);
+    expect(attrs()).toEqual([null, 'dark']);
+    expect(profile.save).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the profile from Auth on a page load's first session, and later sessions after that read", async () => {
+    const theme = await load();
+    let answer!: (u: ReturnType<typeof user>) => void;
+    const profile = { ...account(), read: vi.fn(() => new Promise<ReturnType<typeof user>>((r) => (answer = r))) };
+    const stale = user({ scheme: 'kobalt', theme: 'light', at: T0 });
+    theme.syncAppearance(stale, profile);
+    theme.syncAppearance(stale, profile);
+    await settle();
+    expect(attrs()).toEqual([null, null]);
+    answer(user({ scheme: 'grafit', theme: 'dark', at: T1 }));
+    await settle();
+    expect(attrs()).toEqual(['grafit', 'dark']);
+    /* The older copy is answered with the newer pick, never applied over it. */
+    expect(profile.save.mock.calls).toEqual([[{ scheme: 'grafit', theme: 'dark', at: T1 }]]);
+    await sync(theme, user({ scheme: 'med', theme: 'light', at: T2 }), profile);
+    expect(attrs()).toEqual([null, 'light']);
+    expect(profile.read).toHaveBeenCalledTimes(1);
   });
 });
 

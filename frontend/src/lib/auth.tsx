@@ -16,7 +16,7 @@ import { pgRead } from './pgRead';
 import { syncAppBadge } from './appBadge';
 import { endPushHere, setPushGate, signOutPush } from './push';
 import { ROUTES } from './routes';
-import { syncAppearance, type Appearance } from './theme';
+import { syncAppearance, type AppearanceProfile } from './theme';
 
 /**
  * Phase 1 auth context. Tracks the Supabase session and exposes sign-in/out.
@@ -44,10 +44,10 @@ type AuthState = {
 const AuthContext = createContext<AuthState | null>(null);
 
 /* The appearance lives in the user's own Supabase Auth profile (lib/theme). */
-async function saveAppearance(appearance: Appearance): Promise<void> {
-  const { error } = await supabase.auth.updateUser({ data: { appearance } });
-  if (error) throw error;
-}
+const appearanceProfile: AppearanceProfile = {
+  read: async () => (await supabase.auth.getUser()).data.user,
+  save: (appearance) => supabase.auth.updateUser({ data: { appearance } }),
+};
 
 /* THE notifications gate: the bell, the feed's nav entry, the unread poll and
  * push (lib/push `setPushGate`) all follow it. Admins, unconfigured local dev
@@ -89,7 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    syncAppearance(session?.user ?? null, saveAppearance);
+    syncAppearance(session?.user ?? null, appearanceProfile);
   }, [session]);
 
   /* The session's plan agendas: the explicit entitlements row's plan, else the

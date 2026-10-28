@@ -8,7 +8,7 @@ import { readChoice, readValue, writeValue } from './persistedFlag';
  * cache before the first paint) and kept in the signed-in user's profile. */
 export type ThemeMode = 'light' | 'dark' | 'system';
 export type ColorScheme = 'med' | 'kobalt' | 'grafit';
-export interface Appearance {
+interface Appearance {
   scheme: ColorScheme;
   theme: ThemeMode;
 }
@@ -35,13 +35,25 @@ const SCHEMES = COLOR_SCHEMES.map((s) => s.value);
 const MODES = THEME_MODES.map((m) => m.value);
 const SCHEME_KEY = 'sreality.scheme';
 const THEME_KEY = 'sreality.theme';
-/* The user id whose change the profile has not confirmed yet ('' = none). */
-const UNSAVED_KEY = 'sreality.appearance.unsaved';
-const DEFAULT_APPEARANCE: Appearance = { scheme: 'med', theme: 'light' };
+/* Beside the two values index.html reads: when the cached appearance was picked
+ * and, if signed in, by whom ("<ISO time>" or "<ISO time> <user id>"). */
+const CHOSEN_KEY = 'sreality.appearance.chosen';
 
-let state: Appearance = {
-  scheme: readChoice(SCHEME_KEY, SCHEMES, DEFAULT_APPEARANCE.scheme),
-  theme: readChoice(THEME_KEY, MODES, DEFAULT_APPEARANCE.theme),
+/* The profile keeps a pick with its time. On the device, `user` names whose it
+ * is (absent when picked signed out); a default, or a cache written before picks
+ * were timed, has no `at`, so it never overwrites a profile. */
+interface SavedAppearance extends Appearance {
+  at: string;
+}
+type Cached = Appearance & { at?: string; user?: string };
+
+const isTime = (at: unknown): at is string => typeof at === 'string' && !Number.isNaN(Date.parse(at));
+const [cachedAt, cachedUser] = readValue(CHOSEN_KEY, '').split(' ');
+let state: Cached = {
+  scheme: readChoice(SCHEME_KEY, SCHEMES, 'med'),
+  theme: readChoice(THEME_KEY, MODES, 'light'),
+  at: isTime(cachedAt) ? cachedAt : undefined,
+  user: cachedUser || undefined,
 };
 const listeners = new Set<() => void>();
 let systemQuery: MediaQueryList | null = null;
@@ -66,104 +78,72 @@ export function applyAppearance(): void {
   root.setAttribute('data-theme', dark ? 'dark' : 'light');
 }
 
-function commit(next: Appearance): boolean {
-  if (next.scheme === state.scheme && next.theme === state.theme) return false;
+function commit(next: SavedAppearance & { user?: string }): void {
   state = next;
   writeValue(SCHEME_KEY, next.scheme);
   writeValue(THEME_KEY, next.theme);
+  writeValue(CHOSEN_KEY, next.user ? `${next.at} ${next.user}` : next.at);
   applyAppearance();
   for (const listener of listeners) listener();
-  return true;
 }
 
-/* The signed-in user's profile (Supabase Auth user_metadata.appearance; no
- * table, no route). `unsaved` = a choice made while signed in that the profile
- * has not confirmed: it beats the profile's older value and goes again with
- * every session event until a write lands. Its marker sits beside the device
- * cache, keyed to the user, so a reload keeps it. updateUser holds Supabase's
- * auth lock, so writes land in the order they were sent. */
-type SaveAppearance = (appearance: Appearance) => Promise<void>;
-let profile: { id: string; save: SaveAppearance } | null = null;
-let unsaved = false;
-let sending: Appearance | null = null;
+/* lib/auth.tsx's two calls on the signed-in user's Supabase Auth profile
+ * (user_metadata.appearance; no table, no route). */
+type ProfileUser = { id: string; user_metadata?: { appearance?: unknown } };
+export interface AppearanceProfile {
+  read: () => Promise<ProfileUser | null>;
+  save: (appearance: SavedAppearance) => Promise<unknown>;
+}
+let signedIn: { id: string; profile: AppearanceProfile } | null = null;
+let firstRead: Promise<void> | null = null;
 
-function markUnsaved(id: string): void {
-  unsaved = true;
-  writeValue(UNSAVED_KEY, id);
+/* A failed write is not tracked: the pick stays newer than the profile, so the
+ * next session sends it again. */
+function send(): void {
+  if (signedIn && state.at) void signedIn.profile.save({ scheme: state.scheme, theme: state.theme, at: state.at });
 }
 
-function sendToProfile(): void {
-  if (!profile || sending === state) return;
-  const { id, save } = profile;
-  const sent = state;
-  sending = sent;
-  const settle = (saved: boolean) => {
-    if (sending === sent) sending = null;
-    if (saved && state === sent && profile?.id === id) {
-      unsaved = false;
-      writeValue(UNSAVED_KEY, '');
-    }
-  };
-  save(sent).then(() => settle(true), () => settle(false));
-}
-
-function choose(next: Appearance): void {
-  if (!commit(next) || !profile) return;
-  markUnsaved(profile.id);
-  sendToProfile();
+function choose(change: Partial<Appearance>): void {
+  commit({ ...state, ...change, at: new Date().toISOString(), user: signedIn?.id });
+  send();
 }
 
 export function setScheme(scheme: ColorScheme): void {
-  choose({ ...state, scheme });
+  choose({ scheme });
 }
 
 export function setTheme(theme: ThemeMode): void {
-  choose({ ...state, theme });
+  choose({ theme });
 }
 
-/* Metadata is client-writable: only the store's own ids get through. */
-function parseAppearance(value: unknown): Appearance | null {
+/* Metadata is client-writable: only the store's own ids and a real time get through. */
+function parseSaved(value: unknown): SavedAppearance | null {
   if (typeof value !== 'object' || value === null) return null;
-  const { scheme, theme } = value as Record<string, unknown>;
-  if (!SCHEMES.includes(scheme as ColorScheme) || !MODES.includes(theme as ThemeMode)) return null;
-  return { scheme: scheme as ColorScheme, theme: theme as ThemeMode };
+  const { scheme, theme, at } = value as Record<string, unknown>;
+  if (!SCHEMES.includes(scheme as ColorScheme) || !MODES.includes(theme as ThemeMode) || !isTime(at)) return null;
+  return { scheme: scheme as ColorScheme, theme: theme as ThemeMode, at };
 }
 
-/* Fed every auth session (lib/auth.tsx), which is the copy Supabase keeps on
- * the device: another device's change arrives with the next token refresh (up
- * to an hour). The profile's value wins and is cached here, unless this device
- * still owes it a change. A profile that holds none gets this device's choice
- * once per sign-in, and only when it differs from the default, so a device that
- * never chose cannot overwrite another's choice. A value this build does not
- * know is left alone. */
-export function syncAppearance(
-  user: { id: string; user_metadata?: { appearance?: unknown } } | null,
-  save: SaveAppearance,
-): void {
-  const known = user !== null && profile?.id === user.id;
-  profile = user && { id: user.id, save };
-  if (!known) {
-    const owedTo = readValue(UNSAVED_KEY, '');
-    unsaved = user !== null && owedTo === user.id;
-    /* Another user's owed change ends here: it never holds back this user's profile. */
-    if (user && owedTo && !unsaved) writeValue(UNSAVED_KEY, '');
-  }
+/* THE rule: the newest explicit pick wins. The profile's is applied and cached
+ * (with its own time, as this user's) unless this device holds a newer pick by
+ * the same user, which goes to the profile instead. */
+function reconcile(user: ProfileUser | null): void {
+  if (!user || user.id !== signedIn?.id) return;
+  const saved = parseSaved(user.user_metadata?.appearance);
+  const mine = state.user === user.id ? state.at : undefined;
+  if (saved && !(mine && Date.parse(mine) > Date.parse(saved.at))) commit({ ...saved, user: user.id });
+  else if (mine) send();
+}
+
+/* Fed every auth session (lib/auth.tsx). A session's user is the copy kept on
+ * the device, up to an hour old (the next token refresh), so a page load's first
+ * signed-in sync reads the profile from Auth instead, and later ones wait for
+ * that read, so no copy is weighed before it. */
+export function syncAppearance(user: ProfileUser | null, profile: AppearanceProfile): void {
+  signedIn = user && { id: user.id, profile };
   if (!user) return;
-  if (unsaved) {
-    sendToProfile();
-    return;
-  }
-  const stored = user.user_metadata?.appearance;
-  const remote = parseAppearance(stored);
-  if (remote) commit(remote);
-  else if (
-    stored == null &&
-    !known &&
-    (state.scheme !== DEFAULT_APPEARANCE.scheme || state.theme !== DEFAULT_APPEARANCE.theme)
-  ) {
-    markUnsaved(user.id);
-    sendToProfile();
-  }
+  if (firstRead) void firstRead.then(() => reconcile(user));
+  else firstRead = profile.read().then(reconcile, () => {});
 }
 
 function subscribe(listener: () => void): () => void {
