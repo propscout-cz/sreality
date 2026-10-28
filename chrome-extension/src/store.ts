@@ -1,14 +1,16 @@
 /* The extension's ONE data layer, shared by the listing panel (content.ts) and the
  * search-page cards (index_cards.ts): the transport and its session generation,
  * each property's curation, the lists that name it, and the one write path.
- * Surfaces subscribe and re-render from it. No DOM, no `chrome`, no SPA import:
- * deps are injected (like ingest_flow.ts's), so store.test.ts runs it under node.
+ * Surfaces subscribe and re-render from it. No DOM, no `chrome`, no runtime import
+ * (node --test loads this file as it is): deps are injected (like ingest_flow.ts's),
+ * so store.test.ts runs it under node.
  *
  * Invariants (store.test.ts proves each; the focus one, dom.test.ts):
  *  1. One session generation: a reply to a call sent before an account change is
  *     never delivered; get_auth_state / sign_in / sign_out always are.
  *  2. An account change clears every cache: curation, lists, writes in flight.
- *  3. Curation is keyed by property: a reply for listing A never paints listing B.
+ *  3. Curation is keyed by property: a reply for listing A never paints listing B,
+ *     and a lookup sent before a write of a property never undoes that write.
  *  4. One write per property and kind at a time; a second is refused, not queued.
  *  5. A failed optimistic write reverts exactly once — a toggle by undoing its one
  *     step, so a change that landed meanwhile survives.
@@ -18,10 +20,9 @@
  *  7. One live-deal rule for every surface (isLiveDeal).
  *  8. Focus is never stolen from the portal page (dom.ts keepFocus). */
 
-import { collectionsKey } from './glyphs.ts';
 import type {
   ApiMessage, ApiResult, ExtCollection, ExtTag, PipelineCardResult, PipelineMembership,
-  PipelineStage, PortalListing,
+  PipelineStage, PortalListing, PortalLookupItem,
 } from './types';
 
 export type Curation = Pick<PortalListing, 'pipeline' | 'collection_ids' | 'tag_ids' | 'dismissed'>;
@@ -49,11 +50,11 @@ export interface StoreDeps {
   sleep: (ms: number) => Promise<void>;
   /* The stored session's account changes (session.ts onAccountChange). */
   onAccountChange: (fn: (user: string | null) => void) => unknown;
-  /* The back-off between a list read's three tries. */
-  retryMs: number;
 }
 
 export const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+/* The back-off between a read's three tries. */
+const RETRY_MS = 1500;
 
 /* A LIVE deal and a dismissal never coexist: the API refuses the dismissal, and a
  * write that leaves a card live lifts it. Liveness is read off the stage list, the
@@ -76,10 +77,14 @@ const READ: Record<ListKind, ApiMessage> = {
   collections: { type: 'list_collections' },
   tags: { type: 'list_tags' },
 };
-/* What surfaces draw from a list: a reload that keeps this keeps the screen. */
+/* What surfaces draw from a list: a reload that keeps this keeps the screen. Rows
+ * in id order — the server sorts collections by updated_at, which every add/remove
+ * bumps; owner and recipients count (what is saved, who a shared note reaches). */
 const DRAWN: Record<ListKind, (data: never) => string> = {
   stages: (data: PipelineStage[]) => JSON.stringify(data),
-  collections: collectionsKey,
+  collections: (data: ExtCollection[]) => JSON.stringify([...data].sort((a, b) => a.id - b.id).map((c) => [
+    c.id, c.name, c.monitoring_enabled, c.owner_email, (c.shared_with ?? []).map((r) => r.email),
+  ])),
   tags: (data: ExtTag[]) => JSON.stringify(data.map((t) => [t.id, t.name, t.color])),
 };
 
@@ -107,6 +112,9 @@ function step(field: 'collection_ids' | 'tag_ids', id: number, member: boolean) 
 export function createStore(deps: StoreDeps) {
   let session = 0;
   const curations = new Map<number, Curation>();
+  /* Bumped by every step of a write; `written`: each property's last bump. */
+  let clock = 0;
+  const written = new Map<number, number>();
   const blank = (): Record<ListKind, ListView<unknown>> => ({
     stages: { data: null, status: 'loading' },
     collections: { data: null, status: 'loading' },
@@ -115,10 +123,12 @@ export function createStore(deps: StoreDeps) {
   const lists = blank();
   const reading = new Set<ListKind>();
   const writing = new Set<string>();
-  /* `propertyId`: whose curation changed; null when a list did. */
-  const subscribers = new Set<(propertyId: number | null) => void>();
+  /* Whose curation changed; null when a list did. */
+  const subscribers = new Set<(propertyIds: readonly number[] | null) => void>();
   const accountListeners = new Set<(user: string | null) => void>();
-  const notify = (propertyId: number | null): void => { for (const fn of [...subscribers]) fn(propertyId); };
+  const notify = (propertyIds: readonly number[] | null): void => {
+    for (const fn of [...subscribers]) fn(propertyIds);
+  };
   const listen = <F>(set: Set<F>, fn: F): (() => void) => {
     set.add(fn);
     return () => { set.delete(fn); };
@@ -127,6 +137,7 @@ export function createStore(deps: StoreDeps) {
   deps.onAccountChange((user) => {
     session++;
     curations.clear();
+    written.clear();
     Object.assign(lists, blank());
     reading.clear();
     writing.clear();
@@ -142,34 +153,58 @@ export function createStore(deps: StoreDeps) {
     });
   }
 
-  /* Read a list — a held one only on `refresh`, a failed one again. Three tries. */
-  async function load(kind: ListKind, refresh = false): Promise<void> {
-    if (reading.has(kind) || (lists[kind].data != null && !refresh)) return;
-    reading.add(kind);
+  /* A read tried three times, RETRY_MS apart: one network blip must not cost the
+   * page view a list. Null: the account changed between tries. */
+  async function retry<T>(read: () => Promise<ApiResult<T>>): Promise<ApiResult<T> | null> {
     const asked = session;
+    let res = await read();
+    for (let attempt = 1; attempt < 3 && !res.ok; attempt++) {
+      await deps.sleep(RETRY_MS);
+      if (asked !== session) return null;
+      res = await read();
+    }
+    return res;
+  }
+
+  /* Read a list — a held one only on `refresh`, a failed one again. False: nothing
+   * was sent (a read of it is out, or it is held). */
+  function load(kind: ListKind, refresh = false): boolean {
+    if (reading.has(kind) || (lists[kind].data != null && !refresh)) return false;
+    reading.add(kind);
     if (lists[kind].status === 'failed') {
       lists[kind] = { data: null, status: 'loading' };
       notify(null);
     }
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const res = await call<never>(READ[kind]);
+    void retry(() => call<never>(READ[kind])).then((res) => {
+      if (res == null) return;
+      reading.delete(kind);
       if (res.ok) {
         const held = lists[kind].data as never;
         lists[kind] = { data: res.data, status: 'ok' };
-        reading.delete(kind);
         if (held == null || DRAWN[kind](held) !== DRAWN[kind](res.data)) notify(null);
-        return;
+      } else if (lists[kind].data == null) {
+        lists[kind] = { data: null, status: 'failed' };
+        notify(null);
       }
-      if (attempt < 2) {
-        await deps.sleep(deps.retryMs);
-        if (asked !== session) return;
-      }
+    });
+    return true;
+  }
+
+  /* Lookup rows → curation, one notification for the batch. A property written
+   * since `sentAt` keeps what the write left: the row predates it. */
+  function seed(rows: readonly PortalListing[], sentAt: number): void {
+    const changed: number[] = [];
+    for (const row of rows) {
+      if (!row.found || row.property_id == null || (written.get(row.property_id) ?? -1) > sentAt) continue;
+      const held = curations.get(row.property_id);
+      const next: Curation = {
+        pipeline: row.pipeline, collection_ids: row.collection_ids, tag_ids: row.tag_ids, dismissed: row.dismissed,
+      };
+      if (held != null && JSON.stringify(held) === JSON.stringify(next)) continue;
+      curations.set(row.property_id, next);
+      changed.push(row.property_id);
     }
-    reading.delete(kind);
-    if (lists[kind].data == null) {
-      lists[kind] = { data: null, status: 'failed' };
-      notify(null);
-    }
+    if (changed.length > 0) notify(changed);
   }
 
   /* The one write path: optimistic, then the answer settles it or `revert` puts
@@ -185,7 +220,8 @@ export function createStore(deps: StoreDeps) {
     const apply = (fn: (c: Curation) => Curation): void => {
       const c = curations.get(propertyId);
       if (c != null) curations.set(propertyId, fn(c));
-      notify(propertyId);
+      written.set(propertyId, ++clock);
+      notify([propertyId]);
     };
     writing.add(key);
     apply(optimistic);
@@ -218,35 +254,29 @@ export function createStore(deps: StoreDeps) {
       : { type: add ? 'attach_tag' : 'detach_tag', tag_id: id, property_id: propertyId };
     // The likeliest failure is one deleted in the app since the list loaded: re-read it.
     return write(kind, propertyId, add, message, step(field, id, add), step(field, id, add),
-      step(field, id, !add), () => { void load(kind, true); });
+      step(field, id, !add), () => { load(kind, true); });
   }
 
   return {
     call,
+    retry,
     /* After the store dropped what the old account read. */
     onAccountChange: (fn: (user: string | null) => void) => listen(accountListeners, fn),
-    subscribe: (fn: (propertyId: number | null) => void) => listen(subscribers, fn),
-    /* Lookup rows → curation. A `fresh` answer wins; a row handed over from a card
-     * (not fresh) never overwrites what is held. */
-    seed(rows: readonly (PortalListing | null)[], fresh = true): void {
-      for (const row of rows) {
-        if (row == null || !row.found || row.property_id == null) continue;
-        const held = curations.get(row.property_id);
-        if (held != null && !fresh) continue;
-        const next: Curation = {
-          pipeline: row.pipeline, collection_ids: row.collection_ids, tag_ids: row.tag_ids, dismissed: row.dismissed,
-        };
-        if (held != null && JSON.stringify(held) === JSON.stringify(next)) continue;
-        curations.set(row.property_id, next);
-        notify(row.property_id);
-      }
+    subscribe: (fn: (propertyIds: readonly number[] | null) => void) => listen(subscribers, fn),
+    /* The one lookup: its rows become curation when it answers. */
+    lookup(items: PortalLookupItem[]): Promise<ApiResult<PortalListing[]>> {
+      const sentAt = clock;
+      return call<PortalListing[]>({ type: 'lookup_listings', items }).then((res) => {
+        if (res.ok) seed(res.data, sentAt);
+        return res;
+      });
     },
     curation: (propertyId: number): Curation | null => curations.get(propertyId) ?? null,
     list: <K extends ListKind>(kind: K) => lists[kind] as ListView<Lists[K]>,
     load,
     /* Read a list never read: neither a held one nor one that failed. */
     ensure(kind: ListKind): void {
-      if (lists[kind].status === 'loading' && !reading.has(kind)) void load(kind);
+      if (lists[kind].status === 'loading' && !reading.has(kind)) load(kind);
     },
     busy: (kind: WriteKind, propertyId: number): boolean => writing.has(`${kind}:${propertyId}`),
     addToPipeline: (propertyId: number): Pending => pipelineWrite(

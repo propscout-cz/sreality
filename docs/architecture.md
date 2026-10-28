@@ -1023,6 +1023,9 @@ rules. Identify which one a task belongs to before you start.
   pipeline / collections / tags / dismissal keyed by `property_id`, the stage / collection / tag
   lists (one status each, the bounded retry), the one optimistic write path (put back once on
   failure, one write per property and kind at a time) and the transport's ONE session generation.
+  Every lookup goes through it and seeds curation as it answers, except a property written since
+  the lookup went out (a late answer never undoes a write); each overlay run re-reads a list the
+  first time a card needs it, so a failed read is asked again and an app-side rename shows.
   Both surfaces subscribe and re-render from it, so neither syncs the other, and its header lists
   the invariants its tests hold. Index-card badges mark the card with the **listing id** they were
   drawn for (not a boolean), so a card DOM node recycled by the portal's router is re-badged
@@ -1058,8 +1061,9 @@ rules. Identify which one a task belongs to before you start.
   the price as the acquisition-cost denominator — migration 213) mirrors the SPA's `YieldBlock`
   by value: the yield % is **computed-on-read client-side in BOTH** `computeYield` (extension)
   and `YieldBlock` (SPA) — there is no server-side yield (the scenario inputs are the single
-  stored truth, `estimation_runs.scenario` + `ScenarioUpdateIn`). The two clients are separate
-  build territories that can't share a runtime module, so the formula is duplicated by value
+  stored truth, `estimation_runs.scenario` + `ScenarioUpdateIn`). The extension does import pure
+  `frontend/src/lib` modules (`brand`, `portalIds`, `mfReference`), but no such module holds the
+  formula yet (it is inline in `RunPanel.tsx` `YieldBlock`), so it is duplicated by value
   (like `<FunnelIcon>`): **a yield-formula change must touch both
   `computeYield` and `YieldBlock` in the same PR** (the field hints — fond/měs + the acquisition
   denominator — are mirrored too). The bookmark is property-grain

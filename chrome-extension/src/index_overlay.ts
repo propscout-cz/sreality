@@ -228,7 +228,7 @@ export async function runIndexOverlay(
 
   /* The notice is a pure function of the state above: shown, updated in
    * place, or removed — never a second host. While an ask for the current
-   * generation is out, a notice that isn't up stays down (the answer decides;
+   * round is out, a notice that isn't up stays down (the answer decides;
    * raising the previous failure meanwhile would offer a retry that throws
    * that answer away); an error notice that is up reads busy ("Načítám…"),
    * a sign-in notice keeps its button (busy there means a sign-in is running). */
@@ -256,9 +256,9 @@ export async function runIndexOverlay(
     });
   }
 
+  // What each card's listing IS; its curation went to the store as the lookup answered.
   function keep(rows: PortalListing[]): void {
     for (const l of rows) cache.set(l.source_id, l);
-    store.seed(rows);
   }
 
   const promos = createPromoWash();
@@ -335,10 +335,7 @@ export async function runIndexOverlay(
     const asked = round;
     inFlightRound = asked;
     syncNotice();  // a notice already up reads busy while this ask is out
-    const answer = store.call<PortalListing[]>({
-      type: 'lookup_listings',
-      items: ids.map((id) => ({ source: portal!.source, source_id: id })),
-    });
+    const answer = store.lookup(ids.map((id) => ({ source: portal!.source, source_id: id })));
     let deadline: ReturnType<typeof setTimeout> | undefined;
     const late = new Promise<null>((resolve) => {
       deadline = setTimeout(() => resolve(null), LOOKUP_TIMEOUT_MS);

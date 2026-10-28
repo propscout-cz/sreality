@@ -17,7 +17,10 @@ boundary — verified by reading the emitter, not assumed:
   /n/:dispatchId               the push lane (api/push_delivery.py): one event's push, `?d=` its delivery
   /notifications               the push lane: a coalesced push, `?d=` its first delivery
 Widening it past what actually crosses the boundary would make it a second full
-route table to maintain, which is the failure mode it exists to prevent.
+route table to maintain, which is the failure mode it exists to prevent: every
+CROSS_TERRITORY entry must be BUILT off `${APP_BASE_URL}` somewhere in
+chrome-extension/src (the parametrized emitter test), so an entry nothing emits
+fails rather than lingering.
 
 One emitter is data, not code: the health registry (`scripts/verify_pipeline.py`
 CHECKS, and the watcher's own row in `health_liveness()`) stores each check's
@@ -57,7 +60,7 @@ _LANDING_PAGE = REPO / "frontend" / "src" / "pages" / "NotificationOpen.tsx"
 
 def _extension_source() -> str:
     """Every extension module, as one text: a link may be built in any of them."""
-    files = sorted(p for p in EXTENSION_SRC.glob("*.ts") if not p.name.endswith(".test.ts"))
+    files = sorted(p for p in EXTENSION_SRC.rglob("*.ts") if not p.name.endswith(".test.ts"))
     assert files, f"no extension modules under {EXTENSION_SRC}"
     return "\n".join(p.read_text() for p in files)
 
@@ -87,34 +90,25 @@ def test_the_registry_still_declares_every_externally_emitted_route() -> None:
         )
 
 
-def test_extension_builds_the_canonical_listing_route() -> None:
-    """Vanilla-TS territory, so this reads the source rather than calling it."""
-    src = _extension_source()
-    built = re.search(
-        r"\$\{APP_BASE_URL\}(/listing/\$\{encodeURIComponent\([^)]+\)\}"
-        r"/\$\{encodeURIComponent\([^)]+\)\})",
-        src,
+def _emitted(pattern: str) -> re.Pattern[str]:
+    """`/listing/:source/:nativeId` -> the template literal that builds it off the app base:
+    each literal segment as written, each `:param` one `${...}` interpolation, and the
+    path ending there (a query or the closing backtick may follow, never more path)."""
+    path = "".join(
+        r"\$\{[^}]+\}" if part.startswith(":") else re.escape(part)
+        for part in re.split(r"(:[A-Za-z_]\w*)", pattern)
     )
-    assert built, (
-        "chrome-extension/src no longer builds a "
-        "${APP_BASE_URL}/listing/{source}/{native} URL — if the shape changed, "
-        "check it still matches the SPA registry."
-    )
-    # Collapse the interpolations to their pattern shape and compare.
-    shape = re.sub(r"\$\{encodeURIComponent\([^)]+\)\}", ":param", built.group(1))
-    expected = re.sub(r":[A-Za-z_]\w*", ":param", CROSS_TERRITORY["listingCanonical"])
-    assert shape == expected, (
-        f"extension builds {shape!r} but the SPA registry declares {expected!r}"
-    )
+    return re.compile(re.escape("${APP_BASE_URL}") + path + r"(?![\w/.$-])")
 
 
-def test_extension_builds_the_collections_route() -> None:
-    """The save-to-collection checklist links to the app's collections page."""
-    src = _extension_source()
-    assert f"${{APP_BASE_URL}}{CROSS_TERRITORY['collections']}`" in src, (
-        "chrome-extension/src no longer builds "
-        "${APP_BASE_URL}/collections — if the link moved, check it still matches "
-        "the SPA registry."
+@pytest.mark.parametrize("key", sorted(CROSS_TERRITORY))
+def test_the_extension_builds_every_pinned_route(key: str) -> None:
+    """Vanilla-TS territory, so this reads the source rather than calling it. A pinned
+    route nothing builds fails here: drop it rather than keep a second route table."""
+    pattern = CROSS_TERRITORY[key]
+    assert _emitted(pattern).search(_extension_source()), (
+        f"chrome-extension/src no longer builds ${{APP_BASE_URL}}{pattern} ({key}) — if the "
+        f"link moved, check it still matches the SPA registry; if nothing emits it, drop it here."
     )
 
 
@@ -212,21 +206,6 @@ def test_every_registry_domain_has_a_section_on_the_health_page() -> None:
     assert tuple(_SECTION_KEY.findall(block)) == tuple(DOMAINS)
     domain = _text(_liveness_row()["domain"])
     assert domain in DOMAINS, f"health_liveness() registers domain {domain!r}: no section"
-
-
-def test_the_contract_names_only_what_actually_crosses_a_boundary() -> None:
-    """Guards the file against becoming a second full route table.
-
-    Every entry must be emitted by the extension. An entry nothing emits is dead
-    weight that still has to be kept in sync.
-    """
-    emitters = _extension_source()
-    for key, pattern in CROSS_TERRITORY.items():
-        literal_prefix = pattern.split("/:")[0]
-        assert literal_prefix in emitters, (
-            f"{key} ({pattern}) is pinned by this contract but nothing outside the "
-            f"SPA emits it — drop it rather than maintaining a second route table."
-        )
 
 
 def test_registry_file_is_where_this_test_thinks_it_is() -> None:

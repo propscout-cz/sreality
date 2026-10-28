@@ -243,9 +243,8 @@ function send(message: ApiMessage): Promise<ApiResult<unknown>> {
   });
 }
 
-/* The one store both surfaces draw from (store.ts). Created before any overlay
- * subscribes, so its account-change clear runs first. */
-const store = createStore({ send, sleep, onAccountChange, retryMs: 1500 });
+/* The one store both surfaces draw from (store.ts). */
+const store = createStore({ send, sleep, onAccountChange });
 const { call } = store;
 
 // ----------------------------------------------------------------------
@@ -1063,7 +1062,7 @@ function mountPanel(): {
       p.className = 'coll-state';
       if (state.collectionsFailed) {
         p.textContent = 'Kolekce se nepodařilo načíst. ';
-        p.appendChild(retryLink(() => { void store.load('collections', true); }));
+        p.appendChild(retryLink(() => { store.load('collections', true); }));
       } else {
         p.textContent = 'Načítám kolekce…';
         p.classList.add('note--loading');
@@ -1204,7 +1203,7 @@ function mountPanel(): {
       p.className = 'coll-state';
       if (state.tagsFailed) {
         p.textContent = 'Štítky se nepodařilo načíst. ';
-        p.appendChild(retryLink(() => { void store.load('tags', true); }));
+        p.appendChild(retryLink(() => { store.load('tags', true); }));
       } else {
         p.textContent = 'Načítám štítky…';
         p.classList.add('note--loading');
@@ -1356,7 +1355,7 @@ function mountPanel(): {
     } else if (audience == null && state.collectionsFailed) {
       // An unknown audience is not "nobody": say so and read again.
       const line = errorLine('Sdílení se nepodařilo načíst. ');
-      line.appendChild(retryLink(() => { void store.load('collections', true); }));
+      line.appendChild(retryLink(() => { store.load('collections', true); }));
       sec.appendChild(line);
     }
 
@@ -1852,7 +1851,7 @@ function shownProperty(): number | null {
 }
 
 function view(s: PanelState): PanelView {
-  const pid = s.listing?.found ? s.listing.property_id : null;
+  const pid = shownProperty();
   const curation = pid != null ? store.curation(pid) : null;
   const collections = store.list('collections');
   const tags = store.list('tags');
@@ -1872,9 +1871,10 @@ function view(s: PanelState): PanelView {
 }
 
 /* A list, or the shown property's curation, changed — here, on a card, anywhere. */
-store.subscribe((propertyId) => {
+store.subscribe((changed) => {
   if (state == null) return;
-  if (propertyId == null || propertyId === shownProperty()) render(state);
+  const pid = shownProperty();
+  if (changed == null || (pid != null && changed.includes(pid))) render(state);
 });
 
 function setState(updater: (prev: PanelState) => PanelState): void {
@@ -2051,10 +2051,7 @@ async function onIngest(): Promise<void> {
     }));
     return;
   }
-  const res = await call<PortalListing[]>({
-    type: 'lookup_listings',
-    items: [{ source: outcome.source, source_id: outcome.nativeId }],
-  });
+  const res = await store.lookup([{ source: outcome.source, source_id: outcome.nativeId }]);
   if (epoch !== renderEpoch) return;
   if (!res.ok) {
     setStateIf(epoch, (prev) => ({
@@ -2174,7 +2171,7 @@ function onToggleTagsMenu(): void {
     ...prev, tagsOpen: opening, tagError: null,
     ...(opening ? { collectionsOpen: false, collectionError: null } : {}),
   }));
-  if (opening) void store.load('tags', true);
+  if (opening) store.load('tags', true);
 }
 
 function onCloseTagsMenu(): void {
@@ -2192,7 +2189,7 @@ function onToggleCollectionsMenu(): void {
     ...prev, collectionsOpen: opening, collectionError: null,
     ...(opening ? { tagsOpen: false, tagError: null } : {}),
   }));
-  if (opening) void store.load('collections', true);
+  if (opening) store.load('collections', true);
 }
 
 /* Escape: close, and hand focus back to the trigger — the row that had it was
@@ -2270,15 +2267,9 @@ async function loadNotes(): Promise<void> {
   const propertyId = l.property_id;
   const mine = (prev: PanelState): boolean => prev.listing?.property_id === propertyId;
   if (state.notesFailed) setState((prev) => ({ ...prev, notesFailed: false }));
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const res = await call<ExtNote[]>({ type: 'list_notes', property_id: propertyId });
-    if (res.ok) {
-      setState((prev) => (mine(prev) ? { ...prev, notes: res.data } : prev));
-      return;
-    }
-    await sleep(1500);
-  }
-  setState((prev) => (mine(prev) ? { ...prev, notesFailed: true } : prev));
+  const res = await store.retry(() => call<ExtNote[]>({ type: 'list_notes', property_id: propertyId }));
+  if (res == null) return;
+  setState((prev) => (!mine(prev) ? prev : res.ok ? { ...prev, notes: res.data } : { ...prev, notesFailed: true }));
 }
 
 /* Save the draft as a note on the listing's property. `origin_listing_ref_id` is
@@ -2488,10 +2479,7 @@ export async function openPanel(
   if (prefetched !== undefined) {
     listing = prefetched;
   } else {
-    const res = await call<PortalListing[]>({
-      type: 'lookup_listings',
-      items: [{ source: ref.source, source_id: ref.sourceId }],
-    });
+    const res = await store.lookup([{ source: ref.source, source_id: ref.sourceId }]);
     if (!res.ok) {
       if (res.detail === NOT_SIGNED_IN_DETAIL) {
         setStateIf(epoch, (prev) => ({ ...prev, phase: 'signed_out', authEmail: null }));
@@ -2505,17 +2493,14 @@ export async function openPanel(
   /* The lookup for a listing the operator has already navigated away from must
    * not land — this is the apply that would otherwise show A's yield under B. */
   if (epoch !== renderEpoch) return;
-  await showListing(epoch, listing, prefetched === undefined);
+  await showListing(epoch, listing);
 }
 
 /* Paint one lookup row and start what a held ad needs. Shared by openPanel and
  * the add-to-database flow (onIngest), so an ad the panel just added gets
- * exactly the controls of any ad we hold. A row a card handed over is not
- * `fresh`: its curation is the page's lookup, and the store's may be newer. */
-async function showListing(
-  epoch: number, listing: PortalListing | null, fresh = true,
-): Promise<void> {
-  store.seed([listing], fresh);
+ * exactly the controls of any ad we hold. Its curation is the store's: every
+ * lookup (the card's that handed a row over too) seeded it as it answered. */
+async function showListing(epoch: number, listing: PortalListing | null): Promise<void> {
   /* The panel is for an ad we hold (app link, facts, MF, estimate); an ad we
    * lack gets only the offer to add it — an estimation is always of a held ad. */
   const held = listing?.found ? listing : null;
@@ -2542,9 +2527,9 @@ async function showListing(
    * shared note reaches, and a share or collection made in the app since the
    * tab loaded must not leave either wrong — the SPA re-reads after 30 s. */
   if (held.property_id != null) {
-    void store.load('stages');
-    void store.load('collections', true);
-    void store.load('tags');
+    store.load('stages');
+    store.load('collections', true);
+    store.load('tags');
     void loadNotes();  // the property's existing notes (per-property, lazy)
   }
 

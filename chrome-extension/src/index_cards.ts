@@ -45,7 +45,7 @@ import {
   stageBadge,
 } from './glyphs';
 import { PHOTO_MARK_HOST_CLASS, createPhotoMark } from './index_photo_mark';
-import { isLiveDeal, type Curation, type Pending, type Store } from './store';
+import { isLiveDeal, type Curation, type ListKind, type Pending, type Store } from './store';
 import { detailRef, type PortalRef } from '../../frontend/src/lib/portalIds';
 import type { PortalListing } from './types';
 
@@ -329,6 +329,14 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
   /* Collection ids a held list did not know and was re-read for — once each, so
    * an id a fresh read still lacks cannot loop the re-read. */
   const rereadFor = new Set<number>();
+  /* Lists this run has read. Each overlay run reads a list afresh the first time a
+   * card needs it — a rename made in the app shows, a read that failed is asked
+   * once more — and after that only one never read (paint runs on every pass). */
+  const read = new Set<ListKind>();
+  function need(kind: ListKind): void {
+    if (read.has(kind)) store.ensure(kind);
+    else if (store.load(kind, true)) read.add(kind);
+  }
 
   let menu: Menu | null = null;
   let menuDom: MenuDom | null = null;
@@ -463,19 +471,17 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
       const view = deps.badgeFor(l);
       /* The lists tell mine from shared and name the label; they name the tag
        * chips. A held list that lacks one of the card's collections is stale
-       * (made or shared in the app since it was read): re-read it once. Before
-       * the unchanged-paint return, so a stale-but-unchanged card still asks. */
+       * (made or shared in the app since it was read): re-read it once — an id
+       * is spent only on a read that went out, not on one already under way.
+       * Before the unchanged-paint return, so a stale-but-unchanged card asks. */
       if (memberIds.length > 0) {
-        if (collections == null) store.ensure('collections');
-        else if (!knowsAll(memberIds, collections)) {
+        need('collections');
+        if (collections != null && !knowsAll(memberIds, collections)) {
           const fresh = memberIds.filter((id) => !rereadFor.has(id));
-          if (fresh.length > 0) {
-            for (const id of fresh) rereadFor.add(id);
-            void store.load('collections', true);
-          }
+          if (fresh.length > 0 && store.load('collections', true)) for (const id of fresh) rereadFor.add(id);
         }
       }
-      if (tagIds.length > 0) store.ensure('tags');
+      if (tagIds.length > 0) need('tags');
       const busyPipeline = pid != null && store.busy('pipeline', pid);
       const busyDismiss = pid != null && store.busy('dismissed', pid);
       const state = JSON.stringify([
@@ -570,7 +576,7 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
     card.appendChild(host);
     paint();
     // The stage list names each card's badge and says which deals are live.
-    if (hasProperty) store.ensure('stages');
+    if (hasProperty) need('stages');
   }
 
   function clear(card: HTMLElement): void {
@@ -609,6 +615,7 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
     closeMenu(false);
     for (const card of [...handles.keys()]) clear(card);
     rereadFor.clear();
+    read.clear();
   }
 
   // ---- the menus ------------------------------------------------------------
@@ -639,8 +646,8 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
     window.addEventListener('scroll', placeMenu, { capture: true, passive: true });
     window.addEventListener('resize', placeMenu);
 
-    if (kind === 'stages') void store.load('stages');
-    else void store.load('collections', true);
+    if (kind === 'stages') store.load('stages');
+    else store.load('collections', true);
     refresh();
     focusInMenu(kind === 'stages' ? '[aria-checked="true"]' : '.row');
   }
@@ -775,7 +782,7 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
 
     if (stages == null) {
       box.appendChild(status === 'failed'
-        ? stateLine('Fáze se nepodařilo načíst.', () => { void store.load('stages'); })
+        ? stateLine('Fáze se nepodařilo načíst.', () => { store.load('stages'); })
         : stateLine('Načítám fáze…'));
     } else {
       const list = h('div', 'list');
@@ -872,7 +879,7 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
       /* A failed read is NOT an empty one — "no collections yet" would tell an
        * operator whose collections exist that they have none. */
       box.appendChild(status === 'failed'
-        ? stateLine('Kolekce se nepodařilo načíst.', () => { void store.load('collections', true); })
+        ? stateLine('Kolekce se nepodařilo načíst.', () => { store.load('collections', true); })
         : stateLine('Načítám kolekce…'));
     } else if (saveTargets(collections).length === 0) {
       box.appendChild(stateLine('Zatím nemáte žádnou kolekci.'));
