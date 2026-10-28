@@ -104,8 +104,8 @@ const CARD_COLS =
   /* The lot the card names after the floor area and the Lot area sort orders by:
    * THE plot measure (migration 534) and never the bare estate_area column. */
   'plot_area_m2,' +
-  /* The portals with an active ad, else every portal (MS19, migration 590): the phone feed's
-   * portal chips. The Browse card names no portal (ruling P01, 2026-10-27). */
+  /* The portals with an active ad, else every portal (MS19, migration 590): the portal chips
+   * of the phone feed. The Browse card names no portal (ruling P01, 2026-10-27). */
   'all_sources,active_sources,' +
   /* The ad-count badge (migration 590): how many ads the property holds, active or not. */
   'source_count';
@@ -1053,7 +1053,7 @@ const PROPERTY_COLS =
    * (lib/mfReference) and pairs a value with the property yield. */
   'description,mf_gross_yield_pct,mf_reference_rent,' +
   'price_change_count,total_price_change_pct,' +
-  /* The town's RÚIAN code: Přehled's city-index card (P19, lib/useCityQuality). */
+  /* The RÚIAN code of the town: the city-index card on Přehled (P19, lib/useCityQuality). */
   'obec_id';
 
 export interface PropertyPublic extends ListingPublic {
