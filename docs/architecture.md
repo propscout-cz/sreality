@@ -1116,16 +1116,20 @@ rules. Identify which one a task belongs to before you start.
 When in doubt about which territory a task belongs to, ask. Don't import frontend deps
 into the Python tree or vice versa.
 
-**`.railway/` belongs to no territory.** It is operator-applied deploy configuration: `.railway/railway.ts` plus a
-Node manifest (`package.json` + lockfile) that serves only the pinned Railway CLI and SDK. Python never imports it, no
-image copies it (the root Dockerfile COPYs named trees; `.dockerignore` lists it too), and CI never builds it; only the
-text guards that import `tests/_railway_iac.py` read it (`tests/test_railway_config.py`, and the worker's E941/E949 tests
-in `tests/scraper/test_realtime_worker_autodedup.py`). Edits follow the subsection below.
+**`.railway/` belongs to no territory.** It is operator-applied deploy configuration: `.railway/railway.ts`, the
+wizard's plan check `.railway/plan_check.mjs`, and a Node manifest (`package.json` + lockfile) that serves only the
+pinned Railway CLI and SDK. Python never imports it, no image copies it (the root Dockerfile COPYs named trees;
+`.dockerignore` lists it too), the runner's watch patterns leave it out, and CI never builds it. The text guards that
+import `tests/_railway_iac.py` read it (`tests/test_railway_config.py`, and the worker's E941/E949 tests in
+`tests/scraper/test_realtime_worker_autodedup.py`); `.railway/plan_check.mjs` imports only `node:fs`, so one CI test
+(`tests/test_railway_plan_check.py`) runs it under the image's preinstalled Node, without `npm ci`. Edits follow the
+subsection below.
 
 ### Railway service configuration
 
-Three Railway projects, `API`, `realtime-worker` and `vite`, each hold one service `sreality` and one `production`
-environment (commit statuses read `<project> - sreality`). Since #2060 every setting they run with lives in
+Three Railway projects, `API`, `realtime-worker` and `vite`, each with one `production` environment, hold four services:
+each a `sreality`, and realtime-worker also the job runner `job-runner` (#2025). Commit statuses read
+`<project> - <service>`. Since #2060 every setting they run with lives in
 `.railway/railway.ts`, Railway's infrastructure-as-code file. Config as Code (the old `railway*.json`) stops being read
 on 2026-12-01, and until then a file of that name would override the applied settings, so a guard test fails on one.
 - **One file, three plans.** An IaC file describes one project/environment and omitting a resource deletes it, so the
@@ -1133,31 +1137,106 @@ on 2026-12-01, and until then a file of that name would override the applied set
 - **Deploys never read it.** A change ships as a PR, then the operator applies it with `scripts/railway_iac_wizard.sh`
   (a pinned plan, an interactive apply) inside a merge window, the worker's in an e9 window with the autodedup brake on,
   then `railway config plan --detailed-exit-code` must exit 0 (the wizard's drift mode). A `.railway/`-only merge still
-  redeploys the API and the worker, which have no watch patterns (#1857). The wizard's modes are M0's (preflight,
-  window1, window2, drift): the first follow-up IaC PR adds a general apply mode from its pinned-plan helpers.
-- **Every variable NAME is declared,** each `preserve()` (values stay in Railway): add a name in the same PR as the
-  secret; removing one is a destructive delete the apply asks to confirm. `EXTRAS` (API and worker: `api`) is the root
-  Dockerfile's build argument: a service variable reaches the ARG of its name, and the build log echoes it.
+  redeploys the API and the worker, which have no watch patterns (#1857).
+- **A watch-skipped deploy still posts `success`**, described "No deployment needed - watched paths not modified"
+  (vite on 4e176754a), so a status never proves a deploy: proof that a service deployed a SHA is its list-deployments
+  row reading SUCCESS, not SKIPPED.
+- **The wizard's modes** (#2025 deleted M0's one-shot `window1`/`window2`; their evidence is on #2060):
+  - `preflight [<label>=<adds>:<destroys>[:<service>]]…`, read-only: the tools (Node ≥ 22.6, `npm ci`, the pinned
+    CLI and the flags the modes use, `railway ssh`'s `-p`/`-s`/`-e`), the PR head with `.railway/` clean, the login,
+    then every project's pinned plan checked against its expected counts (`0:0` unless named), one result per label.
+  - `window <label> <adds> <destroys> <service>`, one e9 window, the autodedup brake on for `worker`: the gate (e9's
+    light, status.railway.com, the PR head, still a draft, its checks green, `CI: runner image` among them when the PR
+    changes an image input), the scoped pinned plan, the interactive apply, the checks before the merge, the merge at
+    once, Railway's commit statuses on the merge SHA (one per declared service), the read-only check of each public
+    service the merge redeployed (the API on every merge; vite on a `frontend/` change, `workflow-docs.json`
+    included), then drift = 0 on all three from main's file. The apply precedes the merge, so main declares nothing
+    Railway lacks for longer than the merge takes.
+  - `drift`, read-only: it refuses a checkout whose `.railway/` differs from `origin/main`'s (run it from the `main`
+    branch after `git pull --ff-only`, never a detached HEAD, which main's wizard refuses until #2025 merges), then
+    plans all three.
+  - `runner-list` and `runner-pause <job> <until> <note>`: `python -m scraper.job_runner list|pause` on job-runner
+    over `railway ssh -p <worker project> -e production -s job-runner`; the first use registers an SSH key. If ssh
+    cannot reach the service, the agent runs the one-row SQL with the operator's OK. A request is #2026's "Jobs: run
+    now" form, never the wizard.
+  The wizard runs from copies of itself and of the plan check in its own `~/.railway-m0/run.*` directory (removed at
+  exit), so neither a pull mid-window nor a second run beside it changes them; a pull to the PR head that would change
+  one stops the run, to be started again.
+- **The plan check is structural.** `.railway/plan_check.mjs <plan.json> <adds> <destroys> [<service>]` reads the
+  pinned `--out` file and refuses: counts other than the expected ones (counted as the CLI's summary line counts
+  them); a destructive change when 0 destroys are expected; any domain change; a kind the CLI never writes; an update
+  whose field cannot be read; a source or networking change of an existing service, read from every place a field
+  shows (`field`, the path, the details, the summary; a create sets both, so only a create of the named service
+  passes). With `<service>`, every change must TARGET `service.<service>`: its `address`, the created resource's own
+  address or its `path` under `resources.<address>`, else the summary's service token. Values and details never decide
+  a target (the runner's reference names `service.sreality` inside its own create), and a change whose targets are
+  missing or disagree is refused.
+  `tests/fixtures/railway_plans/` is synthetic until #2025 pins it to a real plan's change list (names only).
+- **Every variable NAME is declared,** a secret as `preserve()` (values stay in Railway) or as a reference to another
+  service's (the runner's `SUPABASE_DB_URL`), a plain value written out: add a name in the same PR as the secret;
+  removing one is a destructive delete the apply asks to confirm. `EXTRAS` (API and worker: `api`; the runner:
+  `api,clip,geo`) is the root Dockerfile's build argument: a service variable reaches the ARG of its name, and the
+  build log echoes it.
 - **Domains stay dashboard-owned, custom and generated (`*.up.railway.app`)**: no plan diffs either, and IaC cannot
   register one. The file names the two custom domains that exist, so removing one of those also takes it out of the
   file (a plan errors on a declared domain Railway lacks). `REPO` must equal the services' GitHub source, or the plan
   shows a source change.
 - **What a plan cannot see:** with one replica in one region, a region change; and a custom domain's port. Both are
   read with describe-service after every apply.
-- **Start commands:** only the worker declares one (E949's arena cap; its 30 s `drainingSeconds` is E941's). The API
-  and vite run their image's own command (ruling R5, 2026-10-26): Railway runs a start command in exec form, so an
-  unwrapped `$PORT` never expands (8a362a0ea).
+- **Start commands:** the worker and the runner declare one, each python as PID 1 so it gets the SIGTERM: the worker's
+  `env MALLOC_ARENA_MAX=2 python …` (E949's arena cap; its 30 s `drainingSeconds` is E941's) and the runner's bare
+  `python -m scraper.job_runner run`. The API and vite run their image's own command (ruling R5, 2026-10-26): Railway
+  runs a start command in exec form, so an unwrapped `$PORT` never expands (8a362a0ea).
+- **The job runner** (`jobRunner` in the worker's project; `docs/design/actions-exit/PROGRAM.md` § 4.2), dark until
+  #2025's move PR flips its first jobs' host:
+  - two replicas in the worker's region, each 4 vCPU and 8 GB, restart policy ALWAYS, `checkSuites: false`. Railway
+    counts decimal bytes, so 8e9 B is 7,629 MiB in the cgroup, `jobs.REPLICA_MEMORY_MB` (a test ties them); the BOOT
+    line and every beat carry `memory_limit_mb` and `cpus` as the replica's cgroup reads them;
+  - `drainingSeconds` 250: the runner checks its own 180 s drain only between ticks, then forgets its heartbeat, so
+    Railway's SIGKILL must wait a guard poll, that drain, a tick, one stopping tick and the forget, 243 s (a test ties
+    the bound to `scraper/job_runner.py`, +30 s at most, since a deploy waits on it);
+  - `BACKEND_WATCH`: every repo tree the Dockerfile COPYs (not `COPY --from=` a stage) plus `/Dockerfile` and
+    `/.dockerignore`, pinned to the COPY lines by a census, so a move PR never forgets a tree; `.railway/` stays out;
+  - variables `EXTRAS`, `HF_HUB_OFFLINE: "1"` (no runtime download) and `SUPABASE_DB_URL: sreality.env.SUPABASE_DB_URL`,
+    a reference to the worker's variable (`${{sreality.SUPABASE_DB_URL}}`, ruling #2025-R3): one stored value, so a
+    rotation changes one place, and applying the worker's staged change redeploys job-runner after it (Railway's
+    deployment dependencies), cutting any run in flight (closed `interrupted`, re-claimed at once).
+    The secrets inventory's rotation steps say so and check its Health cells. Later moves add their names in their
+    own PRs.
+- **The runner image's model layer** (EXTRAS names `clip`; a no-op for the API and the worker), before the source so a
+  code-only build reuses it: CPU torch 2.14.1 from PyTorch's CPU index and `huggingface_hub>=0.34,<1.0`, pinned in the
+  Dockerfile as the `clip` extra's runtime companions (rule 7: neither is a pyproject entry), then
+  `scripts/bake_clip_weights.py` bakes the pinned CLIP checkpoint (replicas cannot share a volume). It is keyed on the
+  pin alone: a first stage, `clip-ref`, extracts model and revision from `data/clip_taxonomy.json`, so a prompt edit
+  reuses torch and the weights. The build then loads the model with the hub offline and asserts CPU torch, so a
+  missing file fails the build and the old deployment stays live. `CI: runner image`
+  (`.github/workflows/runner_image.yml`) builds it on every PR that changes an image input (the wizard's
+  `IMAGE_INPUTS`, the same list, which includes the scraper files the proof imports, held to its imports by a test).
+- **The runner is cut only by a new deployment:** a Redeploy of the ACTIVE deployment (same image and configuration)
+  or Deploy Latest Commit. Restart restarts the process inside its container, and no doc says it honours
+  `drainingSeconds`, so it is never a runner procedure. **Never boot an older runner image:** no dashboard Rollback,
+  and no Redeploy or Restart of a non-latest deployment. Its boot retires every row its registry lacks
+  (`job_lease._RETIRE_SQL` has no newer-wins guard), and the newer deployment registers again only at its next boot.
+  After any manual runner deploy, `select job_name, retired_at from scheduled_jobs where runner = 'job-runner'` must
+  show every registry entry with `retired_at` null.
 - **Never change a service setting or a variable name in the dashboard or with Railway MCP write tools** (domains
-  are outside this rule, above), except as the emergency undo U-2, and fold any such change back into the file: the
-  next plan shows it as drift.
-- **Adding a service** is one more `service(...)` in its project's definition (#2075's agent-worker in `API`); a new
-  Railway project (where #2025's runner lives is its own ruling) also needs a `PROJECTS` entry, a row in the
+  are outside this rule, above), except as the emergency undo U-2 or U-4, and fold any such change back into the
+  file: the next plan shows it as drift.
+- **Adding a service** is one more `service(...)` in its project's definition, as its own top-level const so the
+  text guards can scope it (#2025's `jobRunner` in realtime-worker; #2075's agent-worker in `API`), and its name in
+  the wizard's `SERVICES` (a test ties it to the file: a window waits for one commit status per service); a new
+  Railway project (#2025 added none) also needs a `PROJECTS` entry, a row in the
   project-map test, and a row in the wizard's `PROJECT_ID`, `PROJECT_NAME` and `LABELS` (a guard test ties those to
   `PROJECTS`). Removing a service deletes it.
 
 Undo paths (U-1 and U-2 rehearsed on vite in #2060's window 1; evidence on #2060):
-- **U-1, the lasting path, for any IaC change:** `git revert` it in a PR, merge in a window, then plan (it shows the
-  reverse diff), apply, and plan again until it exits 0.
+- **U-1, the lasting path, for any IaC change:** `git revert` it in a PR and run that PR's `window`: the reverse plan
+  is applied at its head, then it merges, and drift reads 0. **For a service add, U-1 is a forward PR instead**, since
+  reverting the adding PR also reverts the wizard modes and the plan check the removal needs: it deletes only the
+  service from its project's `resources` (and the tests that pin it); `preflight <label>=0:<n>:<service>` reads `n`
+  (one `resource.delete` plus each `variable.delete` the plan counts); then `window <label> 0 <n> <service>`, answering
+  the CLI's destructive confirmation. The window reads the delete off the pinned plan, so it asks that the service is
+  gone and the project's other deployment ids unchanged, never for a deployment of it.
 - **U-2, emergency:** edit the one field in the dashboard and Deploy, then fold it into the file in a PR (until then
   the plan exits 2 with exactly that line); applying the unchanged file puts the declared value back. A dashboard
   Rollback restores only the image and the variables, never settings; a Redeploy reuses the old deployment's frozen
@@ -1167,6 +1246,10 @@ Undo paths (U-1 and U-2 rehearsed on vite in #2060's window 1; evidence on #2060
   re-enter `/railway.worker.json` as the worker's config-file path without a redeploy (hold Alt while clicking
   Deploy). The dashboard values equal the files', so the effect is neutral. `railway config migrate undo` cannot help:
   it restores only paths a `migrate cutover` saved, and it accepts only `railway.json`/`railway.toml` names.
+- **U-4, emergency, before the adding PR merges:** the dashboard → the service → Settings → Delete service, only for
+  a service main's file never declared (job-runner before #2025's PR-1 merges: its window applies before the merge).
+  Then `drift` from the `main` branch (`git checkout main`, `git pull --ff-only`; main's wizard is then still the one
+  before #2025, which refuses a detached HEAD) reads 0.
 
 ## Architectural rules — full rationale
 

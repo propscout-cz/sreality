@@ -3,7 +3,9 @@
 The Railway job runner (`scraper/job_runner.py`, `scraper/job_process.py`; SQL in `scraper/job_lease.py`) runs every
 `scraper/jobs.py` entry whose host is `job-runner` (`jobs.runner_jobs()`), each as its own subprocess. Design and
 rulings: `docs/design/actions-exit/PROGRAM.md` § 4.2. It runs nothing until a move PR (#2025, #2027–#2033) flips an
-entry's host. The service itself is #2025's. Its Health cells and the "Jobs: run now" form are #2026's (below).
+entry's host. On Railway it is the service `job-runner` in the realtime-worker project, two replicas of 4 vCPU and
+8 GB (`.railway/railway.ts` `jobRunner`; settings, drain and image: `docs/architecture.md` § Railway service
+configuration). Its Health cells and the "Jobs: run now" form are #2026's (below).
 
 ## Verbs (`python -m scraper.job_runner <verb>`)
 
@@ -17,19 +19,24 @@ A bare call prints help and exits 2: on a box with production credentials it nev
 | `pause <job> --until <ISO\|now> --note TEXT [--by WHO]` | Pauses the schedule (a request still runs) on any row, a `held()` lane's and a retired one's included (an un-retire keeps it). `--until now` lifts it and records who did. A past time is refused. |
 | `list` | Every `scheduled_jobs` row with its state and latest run. |
 
+On Railway the operator runs `list` and `pause` with `scripts/railway_iac_wizard.sh runner-list` and `runner-pause
+<job> <until> <note>` (over `railway ssh` to job-runner; `pause` echoes the command and asks first, `--by operator`). A
+request is #2026's "Jobs: run now" form, never the wizard. If ssh cannot reach the service, the agent runs the one-row
+SQL with the operator's OK.
+
 Recipes:
 - Run a job now with a smaller batch: `python -m scraper.job_runner request clip --by cli:me -- --limit 500`.
 - Hold a job for a maintenance window: `pause property_sweep --until 2026-11-01T06:00 --note "migration 690"`.
 - **After a move PR merges**, `gh run list --workflow=<deleted file> --json status,databaseId`; if a run is queued or
-  running, pause the new row past that run's timeout, since a queued run in a non-cancelling group can still start.
-  A re-land within an hour of its revert's deploy keeps the row's `due_at`, and its boot claims a slot GitHub ran in
-  between: pause the retired row before that deploy (the slot then runs once the pause ends).
+  running, pause the new row past that run's timeout (`runner-pause`), since a queued run in a non-cancelling group
+  can still start. A re-land within an hour of its revert's deploy keeps the row's `due_at`, and its boot claims a
+  slot GitHub ran in between: pause the retired row before that deploy (the slot then runs once the pause ends).
 
 ## Log lines (Railway logs)
 
 | Line | Meaning |
 |---|---|
-| `BOOT pid1=… version=… holder=… deployment=… heartbeat=… pooler_addresses=… jobs=N` | Once per start. `pid1=False` on Railway means the start command is not exec form; `pooler_addresses` above 2 breaks the drain's connect budget. |
+| `BOOT pid1=… version=… holder=… deployment=… heartbeat=… pooler_addresses=… jobs=N memory_limit_mb=… cpus=…` | Once per start. `pid1=False` on Railway means the start command is not exec form; `pooler_addresses` above 2 breaks the drain's connect budget. The limits are the replica's cgroup's (a Railway replica: ≈ 7629 MiB, 4); every beat's `worker_heartbeats.details` carries them too. |
 | `JOBS register entries=… inserted=[…] adopted=[…] unretired=[…] retired=[…] skipped=[…]` | The boot upsert landed (retried every tick until it does; nothing is claimed before). |
 | `JOBS skip job=… why=…` (ERROR) | The database refused that entry (a CHECK, a bad value): never claimed until a deploy fixes it. |
 | `RUN start job=… run=… pid=… requested_by=… args=…` | A claim spawned. The child's own output follows as `[<job>#<run>] <line>`. |
@@ -39,7 +46,7 @@ Recipes:
 | `LEASE lost job=…: …` | A renewal or a release was refused, or the reaper closed a lapsed run as `lost`. Each claim is its own holder (`<BOOT holder>/<n>`), so a late release never touches a later run of the job. |
 | `LEDGER <call> failed (connection lost): …` | A database call failed; the tick asks nothing more after a lost connection. A finished run waits in memory and is released when the database answers. |
 | `STOP seen: forwarding SIGTERM to N children, SIGKILL in 90 s` | A deploy's SIGTERM. Claims stop, mid-phase too (a lease claimed as it lands is released `interrupted`, "deploy stop; not started"); renewals and releases go on until nothing runs. |
-| `STOP drain spent …` (ERROR) | Railway's 180 s ran out first; those leases lapse and the reaper closes them `lost`. |
+| `STOP drain spent …` (ERROR) | The runner's own 180 s drain ran out (Railway's SIGKILL follows at 250 s); those leases lapse and the reaper closes them `lost`. |
 | `TICK failed` / `WATCHDOG no clean tick for N s: killed N children, exiting` | A tick raised; after 300 s with no clean tick the guard kills every child and exits, and Railway restarts it. The guard only queues its lines (`STOP`, `RUN term`, `RUN kill`) for a forwarder thread, and the exit's backstop writes nowhere, so a stalled log reader holds no signal and no exit (≤ 10 s). |
 
 ## Outcomes and next due time
@@ -157,13 +164,35 @@ runs nothing on GitHub; the runner starts the job within seconds once it and its
    github-actions-until-moved` until its move PR lands; `a request by … has waited since …`; `not a job name`; `args: an unmatched quote, nothing filed`). Then
    watch `job/<name>` on Health. Green means asked, not done.
 
-## W2-gate drills (PROGRAM W2)
+## Runner-only operations outside e9's windows (#2025-R2, ruled by e9 2026-10-26)
 
-- **Request run:** through the form (above) with `job=stale_images`, `args=--limit 10`, or
-  `request stale_images --by cli:me -- --limit 10`; a `RUN start … requested_by=github:<you>` within 10 s, then
-  `RUN end`, and the row's `due_at` unchanged.
-- **Pause with expiry:** `pause rent_map --until <now + 15 min> --note drill`; no claim while paused; a due slot
-  inside the window is taken once the pause ends.
-- **Self-fence:** make one replica's database unreachable (or stop its renewals) while a job runs; `RUN kill …
-  why=fence` must land before the lease's expiry (≤ 150 s after the last renewal), and the other replica claims
-  the job only after it.
+Once W-1 has shown `sreality`'s deployment id unchanged by the job-runner apply, three kinds may run outside e9's
+windows: (a) an apply whose every change targets `service.job-runner`; (b) a Redeploy or Deploy Latest Commit of
+job-runner; (c) the gate-week drills below. Merges still wait for e9's light. Four conditions:
+1. The wizard's target check stays on. A change to shared or project-level variables, to the worker service or to the
+   API service books a window.
+2. Before drills C and D, e9 gets a one-line FYI with the time. No brake is needed.
+3. A job that writes autodedup tables, takes `rt_lease` or runs anything in `autodedup/` needs e9's window, as merges
+   do.
+4. If a runner operation ever moves `sreality`'s deployment id or restarts the worker, runner-only work stops and e9
+   is told.
+
+## W2-gate drills (PROGRAM W2; the gate ticket after #2025's move PR has the exact lines)
+
+A deploy cut is a new deployment only: job-runner → Deployments → the ACTIVE deployment → ⋯ → Redeploy. Never Restart
+(no doc says it honours the drain), never an older deployment (its boot retires the newer registry's rows).
+- **A. Request run** (#2026's "Jobs: run now" form): `map_overlays --dry-run` and `rent_map` (live) each end `ok`
+  with `requested_by` set, `peak_rss_mb` under its declaration (1024, 512), and `due_at` unchanged.
+- **B. Pause with expiry:** `runner-pause stale_images <a :20 slot + 10 min> drill`; no claim while paused; that slot
+  is claimed once the pause lapses (`stale_images`, not `rent_map`, whose grid is 30 days).
+- **C. Deploy cut of a request** (e9 gets a one-line FYI with the time first, #2025-R2): Redeploy during a
+  `map_overlays --dry-run` request; the run closes `interrupted` (exit 143 or −15) within 250 s of the SIGTERM and is
+  not filed again. It also measures click-to-SIGTERM.
+- **D. Re-claim** (the same FYI to e9 first): a Redeploy timed so its SIGTERM lands inside a due-slot `stale_images`
+  run; the next run's `started_at` is ≤ 60 s after the cut run's `ended_at`. Retry at a later slot if the cut misses.
+- **E. Self-fence** (in W2's gate, ruled #2025-R1: it moves to W3's gate only if drill A's `map_overlays --dry-run`
+  runs under 60 s, since a renewal must then fall inside the run): during a `map_overlays --dry-run` request longer
+  than 60 s, with the operator's explicit OK at drill time for its two production UPDATEs, the agent sets that row's
+  `lease_expires_at` to the past; expect `RUN kill … why=fence` at the holder's next refused renewal (≤ 60 s), the run
+  closed `lost`, and no second holder while its child lived. Restore the row's `due_at`, then one clean `--dry-run`
+  request.

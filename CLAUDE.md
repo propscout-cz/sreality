@@ -87,7 +87,7 @@ operator can watch, and work to completion.
   autonomous; destructive ones pause for confirmation + a backup).
 - **A merge is not a deploy.** After a PR merges to `main`, confirm Railway's rollout with
   `gh api repos/{owner}/{repo}/commits/<sha>/status` — Railway posts a per-service commit
-  status (API / vite / realtime-worker), each with `state` + a live URL, no Railway token
+  status (`<project> - <service>`), each with `state` + a live URL, no Railway token
   needed. For frontend-visible changes, follow with a real-browser check against the
   production URL — read-only only; never drive a mutating action (merge/unmerge, delete,
   send, …) against production autonomously. `.railway/` deploys only by the operator's wizard apply, never a Railway dashboard or MCP edit (exceptions: architecture § Railway service configuration).

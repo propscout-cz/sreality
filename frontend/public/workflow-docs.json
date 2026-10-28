@@ -2611,6 +2611,34 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/run_job.yml"
     },
     {
+      "filename": "runner_image.yml",
+      "name": "CI: runner image",
+      "description": "Builds the job-runner image, the root Dockerfile with EXTRAS=api,clip,geo (CPU torch, the baked CLIP checkpoint, the geo wheels), on every pull request that changes an image input, before Railway first builds it after the merge (#2025): a failure there would leave main unable to build the runner until a fix lands. The build's own offline RUN is the proof (CPU torch, and the checkpoint loads with the hub offline), so the scraper files it imports are inputs too; the log then shows the image size. No secrets; it pushes and deploys nothing. About 10 minutes a run, billed once the repository is private.",
+      "manual": false,
+      "schedules": [],
+      "onPush": false,
+      "onPullRequest": true,
+      "paths": [
+        ".dockerignore",
+        ".github/workflows/runner_image.yml",
+        "Dockerfile",
+        "data/clip_taxonomy.json",
+        "pyproject.toml",
+        "scraper/__init__.py",
+        "scraper/clip_tagger.py",
+        "scraper/cpus.py",
+        "scripts/bake_clip_weights.py"
+      ],
+      "inputs": [],
+      "secrets": [],
+      "concurrencyGroup": null,
+      "cancelInProgress": null,
+      "timeoutMinutes": 40,
+      "permissions": "contents: read",
+      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/runner_image.yml",
+      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/runner_image.yml"
+    },
+    {
       "filename": "runpod_reap.yml",
       "name": "Ops: terminate a RunPod pod by id",
       "description": "The bake-off tears its pod down in a `finally`, but a terminate call that times out on RunPod's side (run 35731041090: \"POD MAY STILL BE BILLING\") leaves a pod nobody can reach from a shell without the key. This is the one-input remedy: write the receipt `autodedup.oss_pod --reap` already understands and let it DELETE the pod. Idempotent — an already-gone pod counts as success.",

@@ -1,4 +1,5 @@
-// Railway settings for the three production projects (#2060): API, realtime-worker and vite, one service "sreality" each.
+// Railway settings for the three production projects (#2060): API, realtime-worker and vite; each runs service
+// `sreality`, and realtime-worker also the job runner `job-runner` (#2025).
 // Deploys never read this file: a change takes effect only when the operator applies it, linked to ONE project, inside an
 // announced window (scripts/railway_iac_wizard.sh). `railway config plan --detailed-exit-code` = 0 means Railway matches it.
 // Every live variable NAME is listed (values stay in Railway): a name missing here plans as a destructive delete.
@@ -15,6 +16,16 @@ const VITE_DRAINING_SECONDS = 0;             // ruling R4
 // E949 + E941, pinned by tests/scraper/test_realtime_worker_autodedup.py.
 const WORKER_START = "env MALLOC_ARENA_MAX=2 python -m scraper.realtime_worker";
 const WORKER_DRAINING_SECONDS = 30;
+// The job runner (Actions exit §4.2): scraper/jobs.py's runner entries on two identical replicas. Exec form, so python
+// is PID 1 and gets Railway's SIGTERM. tests/test_railway_config.py ties the drain to scraper/job_runner.py and the
+// memory to jobs.REPLICA_MEMORY_MB (Railway counts decimal bytes).
+const RUNNER_START = "python -m scraper.job_runner run";
+const RUNNER_REPLICAS = 2;
+const RUNNER_CPUS = 4;
+const RUNNER_MEMORY_BYTES = 8000000000;
+const RUNNER_DRAINING_SECONDS = 250;
+// Every repo tree the root Dockerfile copies, plus the files that build it (a census pins it to the COPY lines).
+const BACKEND_WATCH = ["/Dockerfile", "/.dockerignore", "/pyproject.toml", "/scraper/**", "/toolkit/**", "/api/**", "/scripts/**", "/location_data/**", "/contracts/**", "/data/**", "/autodedup/**"];
 const kept = (...names: string[]) => Object.fromEntries(names.map((name) => [name, preserve()]));
 
 const api = (name: string) => project(name, { resources: [service("sreality", {
@@ -33,7 +44,19 @@ const api = (name: string) => project(name, { resources: [service("sreality", {
     "TENANT_POOL_DB_URL", "VALUO_API_TOKEN", "VALUO_SANDBOX_API_TOKEN", "VAPID_PRIVATE_KEY") },
 })] });
 
-const worker = (name: string) => project(name, { resources: [service("sreality", {
+const jobRunner = (sreality: ReturnType<typeof service>) => service("job-runner", {
+  source: github(REPO, { checkSuites: false }),
+  build: { ...DOCKERFILE, watchPatterns: BACKEND_WATCH },
+  start: RUNNER_START,
+  replicas: { [REGION]: RUNNER_REPLICAS },
+  deploy: { restartPolicyType: "ALWAYS", drainingSeconds: RUNNER_DRAINING_SECONDS,
+            limitOverride: { containers: { cpu: RUNNER_CPUS, memoryBytes: RUNNER_MEMORY_BYTES } } },
+  // One stored secret, the worker's (${{sreality.SUPABASE_DB_URL}}): a rotation changes one place (#2025-R3).
+  env: { EXTRAS: "api,clip,geo", HF_HUB_OFFLINE: "1", SUPABASE_DB_URL: sreality.env.SUPABASE_DB_URL },
+});
+
+const worker = (name: string) => {
+  const sreality = service("sreality", {
   source: github(REPO),
   build: DOCKERFILE,
   start: WORKER_START,
@@ -43,7 +66,9 @@ const worker = (name: string) => project(name, { resources: [service("sreality",
     "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "MAPY2_CZ_API_KEY", "MAPY_CZ_API_KEY", "OPENAI_API_KEY", "QWEN_API_KEY",
     "R2_ACCESS_KEY_ID", "R2_ACCOUNT_ID", "R2_BUCKET_NAME", "R2_SECRET_ACCESS_KEY", "REALTIME_WORKER_ENABLED",
     "RUNPOD_API_KEY", "SCRAPER_PROXY_URL", "SUPABASE_DB_SESSION_URL", "SUPABASE_DB_URL", "VAPID_PRIVATE_KEY") },
-})] });
+  });
+  return project(name, { resources: [sreality, jobRunner(sreality)] });
+};
 
 const vite = (name: string) => project(name, { resources: [service("sreality", {
   source: github(REPO, { rootDirectory: "/frontend" }),

@@ -1045,6 +1045,50 @@ def test_a_replica_beats_only_while_its_claim_passes_complete() -> None:
     assert len(rig.ledger.named("beat")) == 2
 
 
+def test_an_empty_registry_registers_nothing_and_still_beats() -> None:
+    """The dark runner (#2025 holds no job until its move PR): an empty claim pass still completes, so each replica
+    beats and its liveness subject is green before the first job moves."""
+    rig = _rig([], beats=True)
+    rig.runner.tick()
+    assert [e[1] for e in rig.ledger.named("register")] == [[]] and rig.runner.registered
+    assert [e[1] for e in rig.ledger.named("due")] == [[]] and rig.ledger.named("claim") == []
+    assert rig.runner.claim_passes == 1 and len(rig.ledger.named("beat")) == 1
+    rig.clock.advance(job_runner.BEAT_EVERY_S + 1)
+    rig.runner.tick()
+    assert len(rig.ledger.named("beat")) == 2
+
+
+def test_the_boot_line_and_identity_carry_the_replica_limits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                             caplog: pytest.LogCaptureFixture) -> None:
+    """The replica's own cgroup limits on the BOOT line and in every beat's details, so Railway's 8 GB (8e9 B, 7,629
+    MiB) and 4 vCPU are one SELECT away, as the worker reports its 22,888 MiB."""
+    from scraper import cgroup, cpus, stop
+
+    (tmp_path / "memory.max").write_text("8000000000\n")
+    (tmp_path / "cpu.max").write_text("400000 100000\n")
+    (tmp_path / "self.cgroup").write_text("0::/\n")
+    read = cgroup.memory_limit_mb
+    monkeypatch.setattr(cgroup, "memory_limit_mb", lambda: read(str(tmp_path)))
+    monkeypatch.setattr(cpus, "CGROUP_ROOT", tmp_path)
+    monkeypatch.setattr(cpus, "PROC_CGROUP", tmp_path / "self.cgroup")
+    monkeypatch.setattr(cpus.os, "sched_getaffinity", lambda _pid: set(range(32)), raising=False)
+    monkeypatch.delenv(cpus.JOB_CPUS_ENV, raising=False)
+    monkeypatch.setenv("RAILWAY_REPLICA_ID", "0f3c9a1e-77aa-4d1e")
+    monkeypatch.setattr(stop, "install", lambda **_: None)
+    monkeypatch.setattr(job_runner.db, "database_url", lambda: "postgresql://u@pooler.example:6543/postgres")
+    monkeypatch.setattr(job_runner, "_pooler_addresses", lambda url: 2)
+    monkeypatch.setattr(job_runner, "_guard", lambda *, watchdog: Guard(clock=Clock()))
+    served: list[Runner] = []
+    monkeypatch.setattr(job_runner, "loop", served.append)
+    with caplog.at_level("INFO", logger="scraper.job_runner"):
+        assert job_runner.serve(registry=()) == 0
+    [boot] = [r.getMessage() for r in caplog.records if r.getMessage().startswith("BOOT ")]
+    assert "heartbeat=job-runner/0f3c9a1e" in boot and boot.endswith("jobs=0 memory_limit_mb=7629.4 cpus=4"), boot
+    [runner] = served
+    assert {k: runner.identity[k] for k in ("memory_limit_mb", "cpus")} == {"memory_limit_mb": 7629.4, "cpus": 4}
+    assert {"version", "holder"} <= set(runner.identity), "the beat's details carry the identity whole"
+
+
 def test_the_pg_ledger_stamps_its_deployment_on_every_beat(monkeypatch: pytest.MonkeyPatch) -> None:
     beats: list[tuple[str, dict[str, object]]] = []
     monkeypatch.setattr(job_lease, "beat", lambda conn, worker, started_at, details: beats.append((worker, details)))

@@ -5,20 +5,24 @@ new value works. Each rotation's date and check go in `docs/design/agent-platfor
 rotation log; agent platform M0, #2061). Update this file in the same PR as any change
 to where a secret lives or who reads it.
 
-The Railway services are three separate projects, one service each: **API** (`api/`, uvicorn),
+The Railway services sit in three separate projects: **API** (`api/`, uvicorn),
 **worker** (`scraper/realtime_worker.py`, same image) and **SPA** (`frontend/`, Caddy; it holds only the
-public `VITE_*` build values). "GH" is a GitHub Actions repository secret. Railway's variable names per
+public `VITE_*` build values). The worker's project also runs **job-runner** (`scraper/job_runner.py`, same image,
+#2025), which stores no secret: its `SUPABASE_DB_URL` is a reference to the worker's (`sreality.env.SUPABASE_DB_URL`),
+so a worker rotation changes it too and redeploys it after the worker; its other two variables are `EXTRAS` and
+`HF_HUB_OFFLINE` (`1`). "GH" is a GitHub Actions repository secret. Railway's variable names per
 service come from the 2026-10-25 audit (API 20, worker 14, SPA 3); the operator confirms each on the
 service's Variables page before editing it.
-Railway variable NAMES live in `.railway/railway.ts` (each `preserve()`; values stay in Railway): add a name there in
-the same PR as the secret, remove it there to delete one (an operator apply, `scripts/railway_iac_wizard.sh`).
-`EXTRAS` (API and worker: `api`) is the root Dockerfile's build argument.
+Railway variable NAMES live in `.railway/railway.ts` (each `preserve()`, but job-runner's reference and plain values;
+values stay in Railway): add a name there in the same PR as the secret, remove it there to delete one (an operator
+apply, `scripts/railway_iac_wizard.sh`).
+`EXTRAS` (API and worker: `api`; job-runner: `api,clip,geo`) is the root Dockerfile's build argument.
 
 ## Rotated in M0 (ruling Q13, MVP.md § 4)
 
 | Secret | GH | Railway API | Railway worker | Elsewhere | Read by | Rotate at | Verified by |
 |---|---|---|---|---|---|---|---|
-| `SUPABASE_DB_URL` (the postgres password) | yes, 62 workflow refs: the **shared** pooler's transaction string (runners reach Supabase over IPv4 only) | yes, the kind it holds today | yes, likewise | RunPod pods get it from a workflow's env | `scraper/db.py` `connect`, `api/dependencies.py` `get_db_conn`, scripts | Supabase → Database settings → Reset database password (one password, so no overlap: stage Railway first, set GitHub just before the reset) | psycopg on the exact GitHub string; signed-in `GET /estimations` |
+| `SUPABASE_DB_URL` (the postgres password) | yes, 62 workflow refs: the **shared** pooler's transaction string (runners reach Supabase over IPv4 only) | yes, the kind it holds today | yes, likewise; job-runner reads it by reference (a worker rotation redeploys it) | RunPod pods get it from a workflow's env | `scraper/db.py` `connect`, `api/dependencies.py` `get_db_conn`, scripts | Supabase → Database settings → Reset database password (one password, so no overlap: stage Railway first, set GitHub just before the reset) | psycopg on the exact GitHub string; signed-in `GET /estimations` |
 | `SUPABASE_DB_SESSION_URL` (same password, session pooler 5432) | yes, 7 refs | if present | yes | | `scraper/db.py` `connect_session` (falls back to `SUPABASE_DB_URL`) | with the password above | psycopg; `apply_migration.yml` dry run (its connectivity step prefers this one) |
 | `TENANT_POOL_DB_URL` (`tenant_pool.<ref>` role on the shared pooler, migration 293; an impersonation credential, audit F7) | no | yes | no | | `api/tenant_pool.py` | `ALTER ROLE tenant_pool PASSWORD '<SCRAM verifier>'` (compute the verifier locally, so no plaintext password reaches a log) | psycopg as `tenant_pool`; signed-in `GET /pipeline/stages` |
 | `SUPABASE_SERVICE_ROLE_KEY` (a `sb_secret_…` key, not a JWT) | yes | no | no | | nothing (kept for forward compatibility) | Supabase → Settings → API Keys → new secret key, then delete the old one | `GET /auth/v1/admin/users?per_page=1` → 200 |
@@ -61,7 +65,8 @@ Values never enter a chat: generate or hold them in a private scratch file and h
 database goes last (Supabase keeps one postgres password, so there is no overlap): shared pooler
 `aws-0-eu-west-1.pooler.supabase.com`, 6543 for `SUPABASE_DB_URL` and `TENANT_POOL_DB_URL`, 5432 for
 `SUPABASE_DB_SESSION_URL`; reset under Database settings → Reset password (wait for the green toast), deploy the API
-and worker at once, then re-key `tenant_pool`. A burst of failed connections right after the reset is the pooler's
+and worker at once (job-runner, which reads the worker's string by reference, redeploys after the worker; if it
+does not, job-runner → Deploy Latest Commit, and check its Health cells too), then re-key `tenant_pool`. A burst of failed connections right after the reset is the pooler's
 cache, not a bad password: do not reset twice.
 
 ## Not rotated here
