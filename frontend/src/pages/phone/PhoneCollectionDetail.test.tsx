@@ -16,7 +16,7 @@ import type { Collection, CollectionPropertyRow } from '@/lib/types';
 import { cardRow } from '@/test/cardRow';
 
 import CollectionDetail from '../CollectionDetail';
-import { DESKTOP_ONLY_NOTE, VIEWER_NOTE } from './PhoneCollections';
+import { MANAGE_NOTE, VIEWER_NOTE } from './PhoneCollections';
 
 vi.mock('@/lib/phoneShell', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/phoneShell')>()),
@@ -107,6 +107,7 @@ function renderPage(path = '/collection/7') {
       <MemoryRouter initialEntries={[path]}>
         <Routes>
           <Route path="/collection/:id" element={<CollectionDetail />} />
+          <Route path="/collections" element={<p>Seznam sbírek</p>} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -127,7 +128,7 @@ describe('<CollectionDetail> on the phone', () => {
     expect(filters.categoryType).toBeNull();
   });
 
-  it('heads the roll with the name, the count and the monitored mark; no edit controls', async () => {
+  it('heads the roll with the name, the count and the monitored mark', async () => {
     renderPage();
     const heading = await screen.findByRole('heading', { name: 'K prohlídce' });
     const header = heading.closest('header')!;
@@ -135,9 +136,6 @@ describe('<CollectionDetail> on the phone', () => {
     expect(text).toContain('3 nemovitosti');
     expect(text).toContain('založena 3. 10.');
     expect(within(header).getByText('sledováno')).toBeInTheDocument();
-    expect(screen.queryByRole('switch')).toBeNull();
-    expect(screen.queryByRole('button', { name: /delete|smazat|save/i })).toBeNull();
-    expect(screen.getByText('Přejmenování, smazání, sledování a sdílení nastavíte na počítači.')).toBeInTheDocument();
   });
 
   it('removes a property by unchecking this collection in the card sheet', async () => {
@@ -197,8 +195,11 @@ describe('<CollectionDetail> on the phone', () => {
     expect(header?.textContent).toContain('sdílí jana@example.com · jen ke čtení');
     expect(header?.textContent).not.toContain('založena');
     expect(within(heading.closest('header') as HTMLElement).queryByText('sledováno')).toBeNull();
-    // The owner's footer promises management a viewer does not have.
-    expect(screen.queryByText(DESKTOP_ONLY_NOTE)).toBeNull();
+    // A viewer manages nothing: no switch, no sharing, no ⋯.
+    expect(within(header as HTMLElement).queryByRole('switch')).toBeNull();
+    expect(within(header as HTMLElement).queryByRole('button', { name: /Sdílet/ })).toBeNull();
+    expect(within(header as HTMLElement).queryByRole('button', { name: 'Další akce' })).toBeNull();
+    expect(screen.queryByText(MANAGE_NOTE)).toBeNull();
     expect(screen.getByText(VIEWER_NOTE)).toBeInTheDocument();
   });
 
@@ -231,5 +232,86 @@ describe('<CollectionDetail> on the phone', () => {
     const sheet = screen.getByRole('dialog', { name: 'Uložit do sbírky' });
     await within(sheet).findByRole('button', { name: /Archiv/ });
     expect(within(sheet).queryByRole('button', { name: /K prohlídce/ })).toBeNull();
+  });
+});
+
+/* Ruling P31, the phone following desktop (operator 2026-10-27): my collection's
+   header carries the Sledovat switch, "Sdílet · N" and ⋯ (Přejmenovat, Smazat
+   sbírku), each opening what the desktop's opens, over the same writes. */
+describe('<CollectionDetail> on the phone: the header actions (P31)', () => {
+  const header = async () =>
+    (await screen.findByRole('heading', { name: 'K prohlídce' })).closest('header') as HTMLElement;
+
+  it('carries Sledovat, Sdílet · N and ⋯, and no footer sends management to the desktop', async () => {
+    vi.mocked(api.getCollection).mockResolvedValue({
+      collection: { ...COLLECTION, shared_with: [{ account_id: 'a1', email: 'jana@example.com' }, { account_id: 'a2', email: 'petr@example.com' }] },
+      properties: [member(1)],
+    });
+    renderPage();
+    const h = await header();
+    expect(within(h).getByRole('switch', { name: 'Sledovat' })).toHaveAttribute('aria-checked', 'true');
+    expect(within(h).getByRole('button', { name: 'Sdílet · 2' })).toHaveAttribute('aria-expanded', 'false');
+    expect(within(h).getByRole('button', { name: 'Další akce' })).toHaveAttribute('aria-haspopup', 'menu');
+    expect(screen.queryByText(MANAGE_NOTE)).toBeNull();
+    expect(screen.queryByText(/na počítači/)).toBeNull();
+  });
+
+  it('switches monitoring off through the same write as the desktop', async () => {
+    vi.mocked(api.updateCollection).mockResolvedValue({ ...COLLECTION, monitoring_enabled: false });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(within(await header()).getByRole('switch', { name: 'Sledovat' }));
+    expect(api.updateCollection).toHaveBeenCalledWith(7, { monitoring_enabled: false });
+  });
+
+  it('opens the sharing card under the header', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const share = within(await header()).getByRole('button', { name: 'Sdílet' });
+    await user.click(share);
+    expect(share).toHaveAttribute('aria-expanded', 'true');
+    const panel = document.getElementById(share.getAttribute('aria-controls') as string) as HTMLElement;
+    expect(panel).not.toBeNull();
+    expect(within(panel).getByText('Sdílení')).toBeInTheDocument();
+  });
+
+  it('renames in place from ⋯ → Přejmenovat', async () => {
+    vi.mocked(api.updateCollection).mockResolvedValue({ ...COLLECTION, name: 'Na prohlídku' });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(within(await header()).getByRole('button', { name: 'Další akce' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Přejmenovat' }));
+    const name = screen.getByLabelText('Název');
+    expect(name).toHaveValue('K prohlídce');
+    expect(name).toHaveFocus();
+    await user.clear(name);
+    await user.type(name, 'Na prohlídku');
+    await user.click(screen.getByRole('button', { name: 'Uložit' }));
+    expect(api.updateCollection).toHaveBeenCalledWith(7, { name: 'Na prohlídku', description: 'Vysočany, do 8 mil.' });
+  });
+
+  it('deletes after the two-step confirm from ⋯ → Smazat sbírku', async () => {
+    vi.mocked(api.deleteCollection).mockResolvedValue({ deleted: true });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(within(await header()).getByRole('button', { name: 'Další akce' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Smazat sbírku' }));
+    expect(api.deleteCollection).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Smazat „K prohlídce“' }));
+    await waitFor(() => expect(api.deleteCollection).toHaveBeenCalledWith(7));
+    // Gone, so back to the list, as on the desktop.
+    expect(await screen.findByText('Seznam sbírek')).toBeInTheDocument();
+  });
+
+  it('offers no delete for the default collection', async () => {
+    vi.mocked(api.getCollection).mockResolvedValue({
+      collection: { ...COLLECTION, is_system: true },
+      properties: [member(1)],
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(within(await header()).getByRole('button', { name: 'Další akce' }));
+    expect(screen.getByRole('menuitem', { name: 'Přejmenovat' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Smazat sbírku' })).toBeNull();
   });
 });

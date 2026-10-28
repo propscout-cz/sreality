@@ -71,4 +71,23 @@ describe('<ImageCarousel>', () => {
     rerender(<ImageCarousel images={frames('1.jpg', '2.jpg', '3.jpg')} startIndex={1} />);
     expect(document.querySelector('img')!.getAttribute('src')).toBe('3.jpg');
   });
+
+  /* Ruling P02 with its note (2026-10-27): a Browse card's photo draws no room tag;
+     every other carousel keeps it, always shown. */
+  const tagged = (...urls: string[]) =>
+    urls.map((url) => ({ url, tag: 'kitchen', confidence: 0.9, renderScore: null }));
+
+  it('shows the current frame\'s room tag by default, always on', () => {
+    render(<ImageCarousel images={tagged('1.jpg', '2.jpg')} />);
+    const tag = screen.getByText('kuchyně');
+    expect(tag).toHaveClass('absolute', 'bottom-1', 'left-1');
+    expect(tag).not.toHaveClass('opacity-0');
+  });
+
+  it('draws no room tag when the caller turns it off (the Browse card)', () => {
+    render(<ImageCarousel images={tagged('1.jpg', '2.jpg')} roomTag={false} />);
+    expect(screen.queryByText('kuchyně')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Next photo' }));
+    expect(screen.queryByText('kuchyně')).toBeNull();
+  });
 });

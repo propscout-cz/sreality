@@ -42,10 +42,9 @@ interface Props {
   /* Chevrons fade in on parent `.group` hover (cards) rather than always
    * showing (a panel with no hover-group wrapper). */
   fadeChevrons?: boolean;
-  /* The room tag shows only while the pointer is on the parent `.group` or keyboard
-   * focus is inside it (a Browse card, ruling P02 2026-10-27): focus-visible, so a
-   * clicked chevron does not keep it shown. An opacity overlay, never a layout change. */
-  fadeTag?: boolean;
+  /* The current frame's room tag, bottom-left. A Browse card passes false: its photo
+   * draws no room tag (ruling P02, operator note 2026-10-27). Default true. */
+  roomTag?: boolean;
   /* The CLIP render-vs-photo pill above the counter. A Browse card passes false:
    * its photo shows just the counter (ruling P03 2026-10-27). */
   renderBadge?: boolean;
@@ -86,7 +85,7 @@ const ImageCarousel = forwardRef<ImageCarouselHandle, Props>(function ImageCarou
   imgClassName = '',
   hoverZoom = false,
   fadeChevrons = false,
-  fadeTag = false,
+  roomTag = true,
   renderBadge = true,
   tabbableChevrons = true,
   eager = false,
@@ -154,16 +153,13 @@ const ImageCarousel = forwardRef<ImageCarouselHandle, Props>(function ImageCarou
 
       {children}
 
-      <ImageTagBadge
-        tag={current?.tag}
-        confidence={current?.confidence}
-        className={
-          'absolute bottom-1 left-1 z-[1] max-w-[calc(100%-3.5rem)] truncate'
-          + (fadeTag
-            ? ' opacity-0 group-hover:opacity-100 group-has-[:focus-visible]:opacity-100 transition-opacity duration-150'
-            : '')
-        }
-      />
+      {roomTag && (
+        <ImageTagBadge
+          tag={current?.tag}
+          confidence={current?.confidence}
+          className="absolute bottom-1 left-1 z-[1] max-w-[calc(100%-3.5rem)] truncate"
+        />
+      )}
 
       {/* Bottom-RIGHT metadata stack: the render-vs-photo pill above the photo
           counter (mirrors the listing-detail gallery's placement; the room tag

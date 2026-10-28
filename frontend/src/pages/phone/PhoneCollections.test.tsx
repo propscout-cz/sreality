@@ -81,12 +81,12 @@ describe('<Collections> on the phone', () => {
     expect(within(rows[1]).getByText('sledováno')).toBeInTheDocument();
   });
 
-  it('offers no rename, delete, monitoring or sharing control — the footer says where they live', async () => {
+  it('offers no rename, delete, monitoring or sharing control — the footer says the collection page has them', async () => {
     renderPage();
     await screen.findByRole('list', { name: 'Sbírky' });
     expect(screen.queryByRole('button', { name: /delete|smazat/i })).toBeNull();
     expect(screen.queryByRole('switch')).toBeNull();
-    expect(screen.getByText('Přejmenování, smazání, sledování a sdílení nastavíte na počítači.')).toBeInTheDocument();
+    expect(screen.getByText('Přejmenování, smazání, sledování a sdílení najdete na stránce sbírky.')).toBeInTheDocument();
   });
 
   it('creates a collection from the sheet with monitoring off', async () => {

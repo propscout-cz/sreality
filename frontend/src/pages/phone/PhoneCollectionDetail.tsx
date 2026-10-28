@@ -7,20 +7,38 @@
  * collection shared with me is read-only: the sheet lists only my own
  * collections, so it offers no removal here, and the header says whose it is.
  *
+ * MY COLLECTION'S HEADER FOLLOWS THE DESKTOP'S (ruling P31; operator 2026-10-27:
+ * the phone follows desktop): the Sledovat switch, "Sdílet · N" and ⋯
+ * (Přejmenovat, Smazat sbírku), each opening what the desktop's opens — the
+ * sharing card under the header, the name and description as fields in place,
+ * the two-step delete — over the same writes.
+ *
  * THE CARDS ARE BROWSE'S READ, shared with the desktop page (lib/collectionCards).
  * A removal shows at once: the write's settle (lib/curationSettle) drops the
  * card from this roll in place. A member Browse does not serve has no card; it
  * stays reachable as a plain line under the roll, from the collection's own read. */
 
+import { useEffect, useId, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { CardRoll } from '@/components/phone/CardRoll';
 import { RollEmpty, RollSkeleton } from '@/components/phone/RollParts';
 import DayRule from '@/components/phone/DayRule';
 import { ChevronIcon } from '@/components/phone/phoneIcons';
-import { ApiError, getCollection } from '@/lib/api';
-import { isMine } from '@/lib/collectionCache';
+import OverflowMenu, { type OverflowMenuItem } from '@/components/OverflowMenu';
+import ShareBlock from '@/components/ShareBlock';
+import { TwoStep } from '@/components/TwoStep';
+import { useActing } from '@/lib/acting';
+import {
+  ApiError,
+  deleteCollection,
+  getCollection,
+  shareCollection,
+  unshareCollection,
+  updateCollection,
+} from '@/lib/api';
+import { isMine, revalidateCollections } from '@/lib/collectionCache';
 import { useCollectionCards } from '@/lib/collectionCards';
 import { listingKindLabel } from '@/lib/enums';
 import { fmtArea, fmtCount, fmtCzk } from '@/lib/format';
@@ -31,7 +49,6 @@ import { ROUTES } from '@/lib/routes';
 import type { Collection, CollectionPropertyRow } from '@/lib/types';
 
 import {
-  DESKTOP_ONLY_NOTE,
   MonitoredMark,
   VIEWER_NOTE,
   foundedLabel,
@@ -93,14 +110,54 @@ export default function PhoneCollectionDetail() {
 }
 
 function Header({ collection }: { collection: Collection }) {
+  const own = isMine(collection);
+  /* Acting as a pipeline's owner the API refuses monitoring (403), as on the desktop. */
+  const acting = useActing() != null;
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  const [editing, setEditing] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const panelId = useId();
+
+  const del = useMutation({
+    mutationFn: () => deleteCollection(collection.id),
+    onSuccess: () => {
+      revalidateCollections(qc);
+      navigate(ROUTES.collections.build(), { replace: true });
+    },
+    onError: (err: Error) => setError(err.message || 'Sbírku se nepodařilo smazat.'),
+  });
+
+  const recipients = collection.shared_with.length;
+  const items: OverflowMenuItem[] = [
+    {
+      label: 'Přejmenovat',
+      onSelect: () => {
+        setConfirmingDelete(false);
+        setEditing(true);
+      },
+    },
+    ...(collection.is_system
+      ? []
+      : [{ label: 'Smazat sbírku', danger: true, onSelect: () => setConfirmingDelete(true) }]),
+  ];
+
   return (
     <header className="px-4 pb-1 pt-5">
       <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--color-ink-3)]">Sbírka</p>
-      <h2 className="mt-1 font-display text-[26px] font-medium leading-[1.15] tracking-[-0.015em] text-[var(--color-ink)]">
-        {collection.name}
-      </h2>
-      {collection.description && (
-        <p className="mt-1.5 text-[14px] text-[var(--color-ink-2)]">{collection.description}</p>
+      {editing ? (
+        <Editor collection={collection} onDone={() => setEditing(false)} />
+      ) : (
+        <>
+          <h2 className="mt-1 font-display text-[26px] font-medium leading-[1.15] tracking-[-0.015em] text-[var(--color-ink)]">
+            {collection.name}
+          </h2>
+          {collection.description && (
+            <p className="mt-1.5 text-[14px] text-[var(--color-ink-2)]">{collection.description}</p>
+          )}
+        </>
       )}
       <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-[var(--color-ink-3)]">
         <span>
@@ -118,14 +175,218 @@ function Header({ collection }: { collection: Collection }) {
             <span className="text-[var(--color-ink-4)]"> · jen ke čtení</span>
           </span>
         )}
-        {isMine(collection) && collection.monitoring_enabled && (
+        {own && collection.monitoring_enabled && (
           <>
             <span aria-hidden>·</span>
             <MonitoredMark />
           </>
         )}
       </p>
+      {own && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {!acting && <MonitorSwitch collection={collection} setError={setError} />}
+          <button
+            type="button"
+            onClick={() => setSharing((v) => !v)}
+            aria-expanded={sharing}
+            aria-controls={sharing ? panelId : undefined}
+            className="inline-flex h-10 items-center whitespace-nowrap rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-3 text-[14px] text-[var(--color-ink-2)] active:bg-[var(--color-inset)] aria-expanded:border-[var(--color-copper)] aria-expanded:text-[var(--color-copper)]"
+          >
+            Sdílet
+            {recipients > 0 && (
+              <>
+                {' · '}
+                <span className="ml-1 font-mono tabular-nums">{fmtCount(recipients)}</span>
+              </>
+            )}
+          </button>
+          <OverflowMenu label="Další akce" items={items} />
+        </div>
+      )}
+      {own && confirmingDelete && (
+        <div className="mt-3">
+          <TwoStep
+            idle="Smazat sbírku"
+            confirm={del.isPending ? 'Mažu…' : `Smazat „${collection.name}“`}
+            cancel="Zrušit"
+            confirming
+            setConfirming={setConfirmingDelete}
+            pending={del.isPending}
+            onConfirm={() => del.mutate()}
+            touch
+          />
+        </div>
+      )}
+      {error && <p className="mt-2 text-[13px] text-[var(--color-brick)]">{error}</p>}
+      {own && sharing && (
+        <div className="mt-4">
+          <SharingCard collection={collection} id={panelId} />
+        </div>
+      )}
     </header>
+  );
+}
+
+/* ⋯ → Přejmenovat: the name and description as fields in place of the heading. */
+function Editor({ collection, onDone }: { collection: Collection; onDone: () => void }) {
+  const qc = useQueryClient();
+  const [name, setName] = useState(collection.name);
+  const [description, setDescription] = useState(collection.description ?? '');
+  const [error, setError] = useState<string | null>(null);
+  const nameId = useId();
+  const descriptionId = useId();
+  const nameRef = useRef<HTMLInputElement>(null);
+  const descriptionRef = useRef<HTMLInputElement>(null);
+
+  /* The default collection's name is locked, so its first field is the description. */
+  useEffect(() => {
+    (collection.is_system ? descriptionRef : nameRef).current?.focus();
+  }, [collection.is_system]);
+
+  const nextDescription = description.trim() === '' ? null : description.trim();
+  const dirty = name.trim() !== collection.name || nextDescription !== collection.description;
+  const save = useMutation({
+    mutationFn: () => updateCollection(collection.id, { name: name.trim(), description: nextDescription }),
+    onSuccess: () => {
+      revalidateCollections(qc, { collection_id: collection.id });
+      onDone();
+    },
+    onError: (err: Error) => setError(err.message || 'Změny se nepodařilo uložit.'),
+  });
+  const canSave = dirty && !save.isPending && name.trim().length > 0;
+  const field =
+    'h-11 w-full rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-inset)] px-3 text-[16px] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)] disabled:opacity-50';
+
+  return (
+    <form
+      className="mt-2 flex flex-col gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (canSave) save.mutate();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          onDone();
+        }
+      }}
+    >
+      <label htmlFor={nameId} className="text-[13px] text-[var(--color-ink-2)]">
+        Název
+      </label>
+      <input
+        id={nameId}
+        ref={nameRef}
+        type="text"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        maxLength={200}
+        disabled={collection.is_system}
+        className={field}
+      />
+      <label htmlFor={descriptionId} className="text-[13px] text-[var(--color-ink-2)]">
+        Popis
+      </label>
+      <input
+        id={descriptionId}
+        ref={descriptionRef}
+        type="text"
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+        placeholder="Nepovinný"
+        className={field}
+      />
+      {collection.is_system && (
+        <p className="text-[12px] text-[var(--color-ink-3)]">Výchozí sbírku nelze přejmenovat ani smazat.</p>
+      )}
+      {error && <p className="text-[13px] text-[var(--color-brick)]">{error}</p>}
+      <div className="mt-1 flex gap-2">
+        <button
+          type="submit"
+          disabled={!canSave}
+          className="h-11 flex-1 rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[15px] font-medium text-[var(--color-paper)] transition-opacity disabled:opacity-40"
+        >
+          {save.isPending ? 'Ukládám…' : 'Uložit'}
+        </button>
+        <button type="button" onClick={onDone} className="h-11 px-4 text-[15px] text-[var(--color-ink-3)]">
+          Zrušit
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/* "Sledovat": the desktop's switch at the phone's size (the account sheet's track). */
+function MonitorSwitch({
+  collection,
+  setError,
+}: {
+  collection: Collection;
+  setError: (message: string | null) => void;
+}) {
+  const qc = useQueryClient();
+  const toggle = useMutation({
+    mutationFn: (next: boolean) => updateCollection(collection.id, { monitoring_enabled: next }),
+    onSuccess: () => {
+      setError(null);
+      revalidateCollections(qc, { collection_id: collection.id });
+    },
+    onError: (err: Error) => setError(err.message || 'Sledování se nepodařilo změnit.'),
+  });
+  const on = collection.monitoring_enabled;
+  const labelId = useId();
+  const descriptionId = useId();
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-labelledby={labelId}
+      aria-describedby={descriptionId}
+      disabled={toggle.isPending}
+      onClick={() => toggle.mutate(!on)}
+      className="flex h-10 items-center gap-2 pr-1 disabled:opacity-50"
+    >
+      <span id={labelId} className="text-[14px] text-[var(--color-ink-2)]">
+        Sledovat
+      </span>
+      <span
+        aria-hidden
+        className={[
+          'relative h-[26px] w-[44px] shrink-0 rounded-full transition-colors',
+          on ? 'bg-[var(--color-copper)]' : 'bg-[var(--color-rule-strong)]',
+        ].join(' ')}
+      >
+        <span
+          className={[
+            'absolute top-[3px] h-5 w-5 rounded-full bg-[var(--color-paper)] transition-[left]',
+            on ? 'left-[21px]' : 'left-[3px]',
+          ].join(' ')}
+        />
+      </span>
+      <span id={descriptionId} className="sr-only">
+        {on
+          ? 'Zapnuto: změna ceny nebo stažení inzerátu u nemovitosti v této sbírce vás upozorní.'
+          : 'Vypnuto: nemovitosti v této sbírce se nesledují.'}
+      </span>
+    </button>
+  );
+}
+
+/* "Sdílet · N": the one ShareBlock, read-only shares (migration 610), as on the desktop. */
+function SharingCard({ collection, id }: { collection: Collection; id: string }) {
+  const qc = useQueryClient();
+  const changed = () => revalidateCollections(qc, { collection_id: collection.id, shareChanged: true });
+  return (
+    <ShareBlock
+      id={id}
+      title="Sdílení"
+      lang="cs"
+      description="Komu sbírku nasdílíte, uvidí ji i její nemovitosti a přečte poznámky, které označíte jako sdílené. Měnit ji nemůže a upozornění zůstávají vaše."
+      recipients={collection.shared_with}
+      onShare={(email) => shareCollection(collection.id, email).then(changed)}
+      onRevoke={(account_id) => unshareCollection(collection.id, account_id).then(changed)}
+    />
   );
 }
 
@@ -155,10 +416,11 @@ function Members({ collection, members }: { collection: Collection; members: Col
         }
       />
       {uncarded.length > 0 && <Uncarded rows={uncarded} />}
-      {/* A viewer manages nothing; its one write, leaving, lives on the desktop too. */}
-      <p className="px-4 pb-6 pt-4 text-[12px] text-[var(--color-ink-3)]">
-        {isMine(collection) ? DESKTOP_ONLY_NOTE : VIEWER_NOTE}
-      </p>
+      {/* My collection is managed from its header; a viewer manages nothing, and
+          its one write, leaving, lives on the desktop. */}
+      {!isMine(collection) && (
+        <p className="px-4 pb-6 pt-4 text-[12px] text-[var(--color-ink-3)]">{VIEWER_NOTE}</p>
+      )}
     </div>
   );
 }
