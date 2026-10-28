@@ -2,14 +2,14 @@
  * surfaces — the SPA and the Chrome extension.
  *
  * The SPA imports it natively. The Chrome extension imports THIS SAME FILE
- * (`chrome-extension/src/content.ts` and its `vite.config.ts`) rather than
+ * (`chrome-extension/src/sheet.ts` and its `vite.config.ts`) rather than
  * hand-mirroring the name: this module has zero dependencies and no DOM/React,
  * so it is safe to pull into either build, and both builds always have the
  * whole repo checked out. Change the name here and it flows to:
  *   - the SPA header wordmark (components/Shell.tsx, derived from APP_NAME)
  *   - every SPA browser-tab title (lib/pageTitle.tsx)
- *   - the extension panel wordmark (chrome-extension/src/content.ts) and the
- *     search-page notice's (chrome-extension/src/index_overlay.ts)
+ *   - the extension side sheet's wordmark and folded tab (chrome-extension/src/sheet.ts)
+ *     and the search-page notice's (chrome-extension/src/index_overlay.ts)
  *   - the extension's chrome://extensions name (manifest, built from
  *     EXTENSION_NAME by chrome-extension/vite.config.ts)
  * and is COPIED, by hand, into the installed app's name and home-screen label

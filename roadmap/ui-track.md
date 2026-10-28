@@ -103,8 +103,18 @@ toolkit work.
   Prozkoumat okolí, Ověřit aktuálnost), Valuo's comparables and both ledgers (`RunHistory`) L3 groups. C10: Odhady,
   Makléř, Popis, Moje fotky and Valuo keep their card with count 0 and one line ("Zatím bez ocenění." + "Ocenit
   přes Valuo →"); no dashed tile or box-in-a-box is left (the broker's contact card is `bare` inside its card).
-- **Next (not built):** the section cards: `components/Panel.tsx` first, then the property page's tabs, the other
-  detail pages, and the extension's panel (with its new layout).
+- **Built 2026-10-28 (branch `feature/extension-side-sheet`): the extension's panel** is a side sheet of section
+  cards (operator rulings 2026-10-28, X1): full height on the right, folding to a tab, a header, "Vývoj ceny" (one
+  step line per ad), "Moje" (pipeline step bar + "Uzavřít ▾", collections, tags, notes), "AI agenti" (the Výnos
+  estimate, three agents "Brzy", a chat box with no backend). The old floating panel is deleted.
+- **Next (not built):** the section cards on `components/Panel.tsx` first, then the property page's tabs and the
+  other detail pages. Owed by the sheet: the chat and the three agents need their backends (agent platform); the
+  lookup's `kind_label`, `sreality_id` and the ad's `subtype` / `last_seen_at` are no longer read by the extension
+  (the API cleanup PR); `dist/content.js` grew 199,330 → 300,721 B unminified (+51 %), 82,669 B of it
+  `filterRegistry.generated.ts`, which `lib/portals.ts` (via `priceHistory`) and `lib/enums.ts` both evaluate at
+  load, on every portal page — either a small generated labels-only module both read instead of the registry, or
+  accept it and rely on the minified store build already owed (`chrome-extension/README.md` § Chrome Web Store
+  submission): operator call.
 
 ### Preset groups: boxes on the Browse preset row (2026-10-25, migration 672)
 - **Done** (operator ask 2026-10-25: "group my presets, a boundary box per group, move them into the boxes

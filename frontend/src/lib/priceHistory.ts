@@ -26,6 +26,13 @@ export interface PriceSeries {
   endT: number;
 }
 
+/* The property's adverts in chart order: the canonical advert first (it owns the
+ * accent), the rest as given. The property page and the extension's side sheet. */
+export function canonicalFirst<T extends { id: number }>(adverts: readonly T[], canonicalId: number | null): T[] {
+  const canonical = adverts.find((a) => a.id === canonicalId);
+  return canonical == null ? [...adverts] : [canonical, ...adverts.filter((a) => a !== canonical)];
+}
+
 /* One step-line per advert that has a price, in the order given (the canonical
  * advert first), held flat between changes and running to `nowMs` while its
  * advert is live, else to its last sighting. Labelled by portal; two tracks on

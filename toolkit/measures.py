@@ -849,16 +849,16 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         "reads the rent-basis string from the shared map.",
     ),
     RegisteredSite(
-        path="chrome-extension/src/content.ts",
+        path="chrome-extension/src/panel_agents.ts",
         arm="vocab",
         hits=1,
         measure="fond_per_m2",
         kind=KIND_LABELS,
-        why="The listing panel's fond oprav + SVJ input, RunPanel's twin: the "
-        "suffix is PPM2_UNIT.rent, imported from the SPA's measure.ts (no copy). "
-        "The number is the operator's rate or the server's served default "
-        "(`fond_per_m2_czk_default`); the MF per-m² figures beside it go through "
-        "fmtMeasuredPricePerM2 on the rent basis.",
+        why="The side sheet's Výnos editor, its fond oprav + SVJ input: RunPanel's "
+        "twin, the suffix PPM2_UNIT.rent imported from the SPA's measure.ts (no "
+        "copy). The number is the operator's rate or the server's served default "
+        "(`fond_per_m2_czk_default`); the header's per-m² goes through "
+        "fmtMeasuredPricePerM2 with the lookup's basis.",
     ),
     RegisteredSite(
         path="frontend/src/pages/Datasets.tsx",

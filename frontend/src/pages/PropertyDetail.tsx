@@ -52,7 +52,7 @@ import type {
   ListingFreshnessCheckPublic,
   PropertySource,
 } from '@/lib/types';
-import { lowestActivePrice, type PriceAdvert } from '@/lib/priceHistory';
+import { canonicalFirst, lowestActivePrice, type PriceAdvert } from '@/lib/priceHistory';
 import Skeleton from '@/components/Skeleton';
 import Panel from '@/components/Panel';
 import {
@@ -179,9 +179,8 @@ export default function PropertyDetail() {
   // Canonical advert first; memoized, as a fresh array re-renders the chart mid-measure (#310).
   const chartAdverts = useMemo<PriceAdvert[]>(() => {
     if (!property) return [];
-    if (sources.length === 0) return [property];
-    return canonical ? [canonical, ...sources.filter((s) => s !== canonical)] : sources;
-  }, [property, sources, canonical]);
+    return sources.length === 0 ? [property] : canonicalFirst(sources, advertId);
+  }, [property, sources, advertId]);
 
   // MS8, display only, like with like: against the canonical advert's live price
   // (the header's stored one waits for the recompute). Only the property's deal

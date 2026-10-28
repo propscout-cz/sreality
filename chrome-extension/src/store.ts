@@ -1,4 +1,4 @@
-/* The extension's ONE data layer, shared by the listing panel (content.ts) and the
+/* The extension's ONE data layer, shared by the listing panel (panel.ts) and the
  * search-page cards (index_cards.ts): the transport and its session generation,
  * each property's curation, the lists that name it, and the one write path.
  * Surfaces subscribe and re-render from it. No DOM, no `chrome`, no runtime import
@@ -70,6 +70,7 @@ export function isLiveDeal(
 
 const OUT: PipelineMembership = {
   in_pipeline: false, stage_id: null, stage_key: null, stage_label: null, stage_code: null, stage_color: null,
+  entered_stage_at: null,
 };
 const ALWAYS_ANSWERED = new Set<ApiMessage['type']>(['get_auth_state', 'sign_in', 'sign_out']);
 const READ: Record<ListKind, ApiMessage> = {
@@ -95,6 +96,7 @@ const fromCard = (card: PipelineCardResult, base: PipelineMembership): PipelineM
   stage_label: card.stage_label ?? base.stage_label,
   stage_code: card.stage_code ?? base.stage_code,
   stage_color: card.stage_color ?? base.stage_color,
+  entered_stage_at: card.entered_stage_at ?? base.entered_stage_at,
 });
 // A live deal lifts the caller's dismissal server-side; mirror it.
 const lift = (c: Curation): Curation => ({ ...c, dismissed: c.dismissed == null ? c.dismissed : false });
@@ -299,6 +301,8 @@ export function createStore(deps: StoreDeps) {
         stage_label: target?.label ?? prior.stage_label,
         stage_code: target?.code ?? null,
         stage_color: target?.color ?? prior.stage_color,
+        // A move restamps it: unknown until the card comes back.
+        entered_stage_at: null,
       };
       // Re-opening a closed deal makes it live, which lifts its dismissal.
       const reopens = target != null && !target.is_terminal;

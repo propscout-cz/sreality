@@ -6,8 +6,8 @@
  * It runs on EVERY index page of a portal, whatever the category. Per card
  * (index_cards.ts): the pipeline / collection / hide controls for any listing
  * we have a property for, and — on sale apartments only — the yield badge,
- * ALWAYS clickable → opens the full yield panel (MF rent/yield + the editable
- * comparables calculator + run/view estimation). Badge label: "Výnos MF X %"
+ * ALWAYS clickable → opens the listing side sheet (panel.ts: the property's
+ * facts, price history, curation and the Výnos estimate). Badge label: "Výnos MF X %"
  * (or the town's "X–Y %" range) when the property's MF result has a yield, else
  * "Odhad X %" when an estimation already exists, else "Odhadnout výnos".
  *
@@ -69,9 +69,9 @@ const MAX_LOOKUP_PER_PASS = 50;
  * It shows while ANY listing card waits on the failed lookup — every card gets
  * controls from it now, so a rental or house search is as stuck as a flat one —
  * and never on a page without listing cards. It sits in the dock, bottom-LEFT,
- * above the "Skrýt skryté" bar: the panel owns the bottom-right corner and a
+ * above the "Skrýt skryté" bar: the listing sheet owns the right edge and a
  * badge click can open it while the notice is up (a new card's lookup failing
- * under an open panel), so the two never share a corner. × hides it until the
+ * under an open sheet), so the two never share a side. × hides it until the
  * next page load (a soft-nav round trip through a listing keeps it hidden).
  *
  * Backoff: after a failure, observer-driven passes don't ask again for

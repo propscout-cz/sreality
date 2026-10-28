@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildPriceSeries,
   buildChartRows,
+  canonicalFirst,
   lastMoveByTrack,
   lowestActivePrice,
   priceChangeEvents,
@@ -40,6 +41,18 @@ const IDNES: PriceAdvert = {
   first_seen_at: '2026-01-10T00:00:00Z',
   last_seen_at: '2026-02-20T00:00:00Z',
 };
+
+describe('canonicalFirst', () => {
+  const BEZ: PriceAdvert = { ...IDNES, id: 300, source: 'bezrealitky' };
+  it('puts the canonical advert first, by id, wherever it sits; the rest keep their order', () => {
+    expect(canonicalFirst([IDNES, BEZ, ADVERT], 100).map((a) => a.id)).toEqual([100, 200, 300]);
+    expect(canonicalFirst([ADVERT, IDNES, BEZ], 300).map((a) => a.id)).toEqual([300, 100, 200]);
+  });
+  it('keeps the given order when the canonical advert is unknown or absent', () => {
+    expect(canonicalFirst([IDNES, ADVERT], null).map((a) => a.id)).toEqual([200, 100]);
+    expect(canonicalFirst([IDNES, ADVERT], 999).map((a) => a.id)).toEqual([200, 100]);
+  });
+});
 
 describe('buildPriceSeries', () => {
   it('draws the advert’s own snapshots as one track, extended to now while live', () => {

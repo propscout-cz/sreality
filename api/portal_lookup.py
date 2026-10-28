@@ -142,6 +142,7 @@ SELECT
     pc.label AS pipeline_stage_label,
     pc.code  AS pipeline_stage_code,
     pc.color AS pipeline_stage_color,
+    pc.entered_stage_at AS pipeline_entered_stage_at,
     (SELECT coalesce(array_agg(cp.collection_id ORDER BY cp.collection_id), array[]::bigint[])
        FROM collection_properties cp
       WHERE cp.property_id = tgt.property_id) AS collection_ids,
@@ -156,7 +157,7 @@ FROM tgt
 -- than one card and multiply the output rows. Residual gap: such a caller sees
 -- the most recently updated card; the active-account primitive is the future fix.
 LEFT JOIN LATERAL (
-    SELECT pp.stage_id, ps.key, ps.label, ps.code, ps.color
+    SELECT pp.stage_id, ps.key, ps.label, ps.code, ps.color, pp.entered_stage_at
     FROM property_pipeline pp
     JOIN pipeline_stages ps ON ps.id = pp.stage_id
     WHERE pp.property_id = tgt.property_id
@@ -293,6 +294,9 @@ def lookup_portal_listings(
                 # the same mark as the SPA's, from one server-side source.
                 "stage_code": acct.get("pipeline_stage_code"),
                 "stage_color": acct.get("pipeline_stage_color"),
+                # Since when the card sits at this stage (the PATCH stamps it): the
+                # panel's "ve fázi od".
+                "entered_stage_at": _clean(acct.get("pipeline_entered_stage_at")),
             }
             if row["property_id"] is not None
             else None

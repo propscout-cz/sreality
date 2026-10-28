@@ -16,6 +16,7 @@ import type {
   PipelineCardResult,
   PortalListing,
   PortalLookupItem,
+  PriceHistory,
   TagWriteResult,
   YieldScenarioUpdate,
 } from './types';
@@ -201,6 +202,12 @@ export async function getEstimation(
   run_id: number,
 ): Promise<ApiResult<EstimationRun>> {
   return request<EstimationRun>(`/estimations/${run_id}`);
+}
+
+/* GET /properties/:id/price-history — every ad of the property and its price
+ * snapshots, for the panel's "Vývoj ceny" chart. */
+export function getPriceHistory(property_id: number): Promise<ApiResult<PriceHistory>> {
+  return requestData(`/properties/${property_id}/price-history`);
 }
 
 /* POST /dismissals / DELETE /dismissals/:property_id — hide the property from

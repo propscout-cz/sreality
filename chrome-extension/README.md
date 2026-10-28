@@ -1,89 +1,74 @@
-# PropScout.cz — Chrome extension (Realitní výnos / MF panel)
+# PropScout.cz — Chrome extension (the listing side sheet + search-page controls)
 
-Overlays the property's **MF reference rent** (`mf_reference_rent`, rendered by
-its shape) and the **"Výnos MF"** gross yield (`mf_gross_yield_pct`) — the same
-figures the SPA shows — on listing pages
+Overlays what the app knows about a property — its facts, its price history
+across every ad, the operator's pipeline, collections, tags and notes, the
+**"Výnos MF"** gross yield (`mf_gross_yield_pct`) and the comparables estimate,
+the same figures the SPA shows — on listing pages
 across **every portal we scrape** (sreality, bazos, bezrealitky, idnes,
 maxima, remax, mmreality, ceskereality).
 
-- **Detail pages** get a floating panel (closed shadow root). For **any**
-  listing we have, it shows a **deal-pipeline control** (bookmark, then change
-  stage / remove), a **save-to-collection** control, **operator notes** (see the
-  existing notes + add a new one), and an **"Otevřít v aplikaci"** deep-link to
-  that listing's page in our app (`/listing/{sreality_id}`) plus its subject
-  facts. For a **flat** it shows the property's MF result by its shape — a value
-  (Výnos MF headline on a sale flat + the rent), the town's published range with
-  its note behind an (i), or the reason note alone — and nothing before the
-  advert is attached to a property. **Apartments for sale** additionally get a
-  comparables-based estimation as the deeper tool / fallback. A listing not in
-  our DB shows "Tato nemovitost zatím není v naší databázi." and a **Přidat do
-  databáze** button: it `POST`s the page URL to `/listings/ingest` (admins
-  only in v1), polls `GET /listings/ingest/{source}/{native_id}` every 2 s on
-  the estimate's budget (Hledám inzerát → Stahuji stránku → Zakládám
-  nemovitost), and once the ad is held with a property re-reads the lookup, so
-  every control above appears as for any listing we have. A refused, gone or
-  failed ad shows the API's one Czech sentence above the button. A non-admin's
-  first click answers the admin sentence and hides the button until the account
-  changes (the extension cannot read the admin claim). The flow itself is
-  `src/ingest_flow.ts` (no DOM, no `chrome`), tested by `npm test` (CI too).
-  - The **notes** are property-grain (rule #18), the same notes the SPA's
-    listing-detail `CurationBlock` shows. The panel lists the property's existing
-    notes (most-recent-first) and an add box ("Přidat poznámku…" → **Uložit
-    poznámku**). Writes go through the same JWT-gated `POST /properties/{id}/notes`
-    the SPA uses, recording the viewed advert's surrogate id as the note's
-    `origin_listing_ref_id` ("written while viewing this advert"); the panel fetches
-    existing notes lazily via `GET /properties/{id}/notes` on open, and a read that
-    fails every try says so with **Zkusit znovu**, never as "no notes" (MS16).
-    Sharing (migration 610): another author's shared note shows read-only as
-    "od {email} · {datum}" with no edit/delete; when someone shares a collection
-    holding the property with the operator, or the operator shares one, the add
-    box offers **"Sdílet s {emails}"** (off by default) and an own note carries
-    **Sdíleno** with a **Nesdílet** / **Sdílet s …** toggle (`PATCH {shared}`) —
-    the SPA's audience rule, so the two clients never disagree.
-  - The **pipeline control** is property-grain (the deal pipeline, rule #22),
-    the same as the SPA's listing-detail control. Out of pipeline → a
-    **"Přidat do pipeline"** button that inserts the property at the entry stage.
-    In pipeline → a pill with a stage **`<select>`** (change the deal stage) and a
-    **`✕`** (remove). Writes go through the same bearer-gated
-    `POST/DELETE /pipeline/cards` (bookmark/remove) + `PATCH /pipeline/cards/{id}`
-    (change stage — stamps `entered_stage_at`, logs a `moved` event) the SPA uses;
-    membership (incl. the current `stage_id`) comes back on the
-    `POST /listings/lookup` response and the stage list from `GET /pipeline/stages`.
-    Hidden only while a freshly-scraped listing has no property yet (a few minutes).
-  - The **save-to-collection control** is property-grain (rule #18) and is the
-    SPA listing header's "Uložit do kolekce": it reads **"Uložit do kolekce"**
-    while the property is in none of the operator's OWN collections and
-    **"V kolekci"** / **"V kolekcích · N"** once it is (hovering names them) — a
-    collection someone shared view-only never counts as saved. A click opens a
-    checklist of **every own** collection (a shared one is never a save target),
-    monitored ones first and bell-marked,
-    where one click adds or removes the property through the same bearer-gated
-    `POST/DELETE /collections/{id}/properties` the SPA uses. Membership rides on
-    `POST /listings/lookup` (`collection_ids`); the list comes from
-    `GET /collections` and is re-read whenever the checklist opens, so a
-    collection made in the app appears without reloading the portal page.
-    Creating, renaming and monitoring settings stay in the app ("Spravovat
-    kolekce →"). It replaced a one-click "Sledovat" bell that could only reach
-    the single monitoring collection.
-  - The **tag row** (rule #18), under the action bar: the property's tags as
-    the app's chips (the name in the tag's colour), then a **Štítky** /
-    **Přidat štítek** button opening the checklist of every tag, where one
-    click attaches or detaches through the same `POST/DELETE
-    /properties/{id}/tags` the SPA's assign list uses. Tags ride on
-    `POST /listings/lookup` (`tag_ids`); names and colours come from
-    `GET /tags`, re-read when the checklist opens. One checklist at a time —
-    opening it closes the collection one. Creating, renaming and recolouring
-    stay in the app's assign list ("Nový štítek v aplikaci →").
-  - The panel **scrolls** when it is taller than the window (it is pinned to
-    the bottom edge and grows upward), keeping its scroll position across
-    re-renders.
-  - The **hide control** ("Skrýt" / "Skryto", migration 536) dismisses the
-    property from the app's discovery surfaces (Browse, notifications) and undoes
-    it, one click either way, through the same `POST/DELETE /dismissals` the SPA's
-    `DismissButton` uses; the state rides on `POST /listings/lookup` (`dismissed`).
-    Absent while the property is a LIVE deal (a card at a non-terminal stage); a
-    deal closed into "Passed"/"Lost" keeps it. Adding a card, or moving one back
-    into a live stage, lifts the dismissal.
+- **Detail pages** get the **side sheet** (`src/panel.ts`, frame `src/sheet.ts`,
+  one closed shadow root, one stylesheet `src/panel.css` over the app's
+  `tokens.css`, in the user's scheme and theme): a full-height ~360 px sheet on
+  the right edge that covers the page (it never pushes it) and opens by itself.
+  Folded, it is a tab on that edge — the PS mark, the deal's stage badge, this
+  ad's price drop and the MF yield. The fold is remembered
+  (`chrome.storage.local` `panelFolded`; the old panel's `panelMinimized` is
+  read once and removed), and on a viewport under 1280 px the sheet starts
+  folded. The top bar: the wordmark, **V aplikaci ↗** (the ad's page in the
+  app, `/listing/{source}/{native_id}`), the **⋯** account menu (email +
+  **Odhlásit**, which signs out in every tab) and the fold. Under it:
+  - **The header** (`src/panel_header.ts`): deal · status · days on market, the
+    title (type, disposition, area), the address, the facts by property type —
+    a flat its floor, condition and ownership; a house its plot, condition and
+    house type; a commercial unit its type, floor and condition; a plot its
+    ownership only (a fact the property lacks is left out). This ad's price in
+    the live colour, its own last price move and its per-m² with the basis's
+    unit; the MF gross yield beside it only when the lookup serves one.
+  - **Vývoj ceny** (`src/panel_price.ts`): one step line per ad of the property
+    from `GET /properties/{id}/price-history` through the app's
+    `lib/priceHistory` and `lib/chartAxis` — the canonical ad first in the
+    accent, the others in ink dashed, an ad taken down dashed to a hollow end,
+    each labelled where it ends; the note counts portals and ads taken down; a
+    history with no move says "Cena se od … nezměnila.".
+  - **Moje** (`src/panel_mine.ts`), property-grain (rules #18, #22), every write
+    through the one store (`src/store.ts`) to the same JWT-gated routes the SPA
+    uses. Out of the pipeline: **Přidat do pipeline** (entry stage) and the
+    **Skrýt** toggle (migration 536; absent while the property is a LIVE deal).
+    In it: a step bar over the open stages (more than four: the stage
+    `<select>`), "ve fázi od" (the lookup's `pipeline.entered_stage_at`) and
+    **Uzavřít ▾** — the closed stages, then **Odebrat z pipeline…** behind a
+    two-step confirm (never a one-click remove). Collections (mine only — a
+    shared one is never "saved") and tags as chips, three then **+N**; **+** or
+    **+N** opens the save checklist (`src/checklist.ts`, the search cards' too),
+    re-read on opening; creating and renaming stay in the app. The notes: the
+    latest and the count; **Všechny** / **Přidat poznámku** expand them in place
+    to the full CRUD — edit, delete behind a confirm, another author's shared
+    note read-only ("od {email} · {datum}"), and **Sdílet s {emails}** (off by
+    default, offered only when someone would read it; migration 610). A note
+    records the viewed ad as its `origin_listing_ref_id`; a read that fails
+    every try says so with **Zkusit znovu**, never "no notes" (MS16).
+  - **AI agenti** (`src/panel_agents.ts`), the accent card: on a flat for sale
+    the **Výnos** row runs the comparables estimate (`POST /estimations`, polled
+    2 s up to 6 min) and shows its yield with the assumptions editor below it
+    — rent, fond oprav + SVJ, price, renovation, a live yield and **Reset**,
+    saved to the run's `scenario`; the monthly quota (zbývá N), the trial line
+    and, at the limit, **Upgradovat**. Flip agent, Agent přestavby and
+    Regionální scout are marked **Brzy**. The chat box has no backend yet: a
+    hover, focus or click lays "Chat s agentem připravujeme" over it.
+  - A listing not in our DB shows "Tato nemovitost zatím není v naší
+    databázi." and **Přidat do databáze**: it `POST`s the page URL to
+    `/listings/ingest` (admins only in v1), polls `GET /listings/ingest/{source}/{native_id}`
+    every 2 s on the estimate's budget (Hledám inzerát → Stahuji stránku →
+    Zakládám nemovitost), and once the ad is held with a property re-reads the
+    lookup, so the sheet fills as for any listing we have. A refused, gone or
+    failed ad shows the API's one Czech sentence above the button; a
+    non-admin's first click answers the admin sentence and hides the button
+    until the account changes. The flow is `src/ingest_flow.ts` (no DOM, no
+    `chrome`), tested by `npm test`.
+  - Signed out, a failed lookup (**Zkusit znovu**) and the first load (a static
+    skeleton in the cards' shape) are one card each. The sheet never takes
+    focus from the portal page; Escape closes its menus.
 - **Index / search pages — every category, not just flats** — get the Browse
   card's own controls on each listing card we have a property for, in the same
   order and with the same meaning as in the app (`src/index_cards.ts`):
@@ -111,11 +96,11 @@ maxima, remax, mmreality, ceskereality).
     it, corners matched), not by portal markup. A hidden card drawn barely
     visible gets no mark, and neither does a card guess that holds several
     listings (it could mark another listing's photo).
-  - All three write through the same routes as the panel and the app, are
+  - All three write through the same routes as the side sheet and the app, are
     optimistic (a failure puts the state back and says why in the corner), and
     are property-grain: a write repaints every card of that property on the
-    page, and the panel when it shows the same property (and the other way
-    round) — the cards and the panel draw from one store (`src/store.ts`), so
+    page, and the sheet when it shows the same property (and the other way
+    round) — the cards and the sheet draw from one store (`src/store.ts`), so
     neither has to tell the other.
   - A card is the outermost list item / article that still holds ONE listing,
     so a photo carousel that repeats the link on every slide gets one set of
@@ -128,7 +113,7 @@ maxima, remax, mmreality, ceskereality).
   parent of three or more items is the grid; smaller children (sort bars,
   pagination) are left alone.
 - **The corner dock** (`src/index_dock.ts`) sits **bottom-left** on every index
-  page with listing cards (the panel owns the bottom-right): a **Skrýt skryté**
+  page with listing cards (the listing sheet owns the right edge): a **Skrýt skryté**
   switch plus how many hidden properties this page holds. On (the default), a
   hidden property's card stays where it is but is drawn barely visible (10 %,
   greyscale; hovering lifts it enough to see what it is); off, it is drawn like
@@ -141,12 +126,12 @@ maxima, remax, mmreality, ceskereality).
   three controls: `Výnos MF X.X %` (or the
   town's `X.X–Y.Y %` range, its note in the tooltip) when the property's MF
   result has a yield, otherwise a clickable **Odhadnout výnos** badge that opens
-  the yield panel to estimate that ad. Only an ad we hold gets one. Controls and
+  the side sheet (unfolded) for that ad. Only an ad we hold gets one. Controls and
   badges come only from a successful lookup; when it fails the page is not left
   silent — one small
   notice in the dock, above the switch, says
   why: **Přihlásit se přes Google** when signed out (a click first checks for
-  a session made elsewhere — the panel, another tab — and skips the Google
+  a session made elsewhere — the sheet, another tab — and skips the Google
   round trip if there is one), **Obnovit stránku** when the extension was
   reloaded, updated, disabled or removed under the open tab (the overlay then
   stops scanning), the error + **Zkusit znovu** otherwise (no button for a
@@ -161,28 +146,26 @@ The default display is a **read** of data we already have — no LLM call. It
 maps each portal listing to our row by `(source, native id)` through the
 FastAPI `POST /listings/lookup` endpoint (the public views don't expose the
 native id, so the browser can't resolve non-sreality listings on its own).
-The editable estimation block still shares its scenario state (rent / fond
-oprav / listing price) with the SPA's `/estimation/:id` page via the
-`scenario` JSONB column on `estimation_runs`.
+The Výnos editor shares its scenario state (rent / fond oprav / price /
+renovation) with the SPA's `/estimation/:id` page via the `scenario` JSONB
+column on `estimation_runs`.
 
 ### Per-m² figures carry their basis (measure sprint W7)
 
-"One measure, one definition, one label" — the panel **reads** per-m² numbers,
+"One measure, one definition, one label" — the sheet **reads** per-m² numbers,
 it never derives them:
 
-- The MF ledger line renders the per-m² rate carried in the property's own MF
-  result (`total_per_m2`, or a range's two totals). It used to divide the rent
-  by the listing's `area_m2` in the browser, which mixed grains — the rent is
-  **property**-grain and the area **listing**-grain.
-- Both monthly per-m² figures (the MF reference rent and the *Fond oprav + SVJ*
-  rate) are labelled **Kč/m²/měs**, the same unit string
-  `toolkit/measures.PPM2_UNIT_CS` uses. A bare `Kč/m²` is the *capital* unit.
-- The subject's area shows **which** area it is — `905 m² (pozemek)`,
-  `65 m² (užitná)` — from `listings.area_basis` (migration 423). `area_m2` is
-  polymorphic, so the bare number cannot say whether it is a flat or a field.
+- The header's per-m² is the lookup's `price_per_m2`, rendered with its
+  `price_per_m2_basis` through the app's `fmtMeasuredPricePerM2`, so a sale,
+  a rent and a plot each carry their own unit.
+- The *Fond oprav + SVJ* rate is labelled with the app's monthly unit
+  (`PPM2_UNIT.rent`, the same string `toolkit/measures.PPM2_UNIT_CS` uses). A
+  bare `Kč/m²` is the *capital* unit.
+- A plot's headline area says it is a plot (`905 m² pozemku`); the title's
+  hover names the area's basis from `listings.area_basis` (migration 423).
 - The fond is **not multiplied by a parcel**, and *whether a fond applies* is
   decided in exactly one place — the server, on `area_basis` **or**
-  `category_main` (`api/portal_lookup._fond_default_czk_per_m2`). The panel
+  `category_main` (`api/portal_lookup._fond_default_czk_per_m2`). The sheet
   reads that answer rather than re-deriving it, because migration 423 added
   `area_basis` with no backfill: a land row not yet re-scraped has no stamp,
   and a client rule keyed on the stamp alone would disagree with the server.
@@ -192,14 +175,12 @@ it never derives them:
   yield subtracts from the rent and which can turn the figure negative.
 - The default fond rate is **served per subject** by `POST /listings/lookup`
   (`fond_per_m2_czk_default`) from the one definition in
-  `api/schemas.DEFAULT_FOND_CZK_PER_M2`; the extension holds no live copy of
-  the number. Three distinct states: a number is the rate, `null` means "no
-  fond can apply to this subject", and an **absent key** means the API predates
-  this change — the panel then falls back to the pre-W7 literal so an old
-  deployment cannot silently blank the field and drop the headline yield.
+  `api/schemas.DEFAULT_FOND_CZK_PER_M2`, on every row; the extension holds no
+  copy of the number. A number is the rate, `null` means "no fond can apply to
+  this subject".
 - `POST /estimations` takes the ad's `listing_id` from the lookup (an
   estimation is always of an ad we hold; an ad we lack is added first) and is
-  **category-aware**: the panel sends the subject's `category_main` and picks
+  **category-aware**: the sheet sends the subject's `category_main` and picks
   `estimate_kind` from it (a subject being sold needs a rent, one already let
   needs a sale price, land is never estimated as a rent). **The category arm is
   latent today.** The estimation block only renders for apartments for sale we
@@ -217,9 +198,9 @@ The extension runs its **own** Supabase session — a separate sign-in from
 the SPA's, never the SPA's refresh token (Supabase rotates refresh tokens
 with reuse-detection, so sharing one between two independently-refreshing
 sessions would eventually log both out). Every API route now requires a
-real per-user session; the panel shows a **"Přihlásit se přes Google"**
-prompt until you sign in, and a compact "signed in as … · Odhlásit" line
-in the panel once you are.
+real per-user session; the sheet shows a **"Přihlásit se přes Google"**
+prompt until you sign in, and once you are, its **⋯** menu names the
+account and offers **Odhlásit**.
 
 Under the hood: `chrome.identity.launchWebAuthFlow` opens the Google
 consent screen via Supabase GoTrue's PKCE flow; the code exchange and the
@@ -460,29 +441,26 @@ service must allow that origin or every request will be blocked.
 
 ## Use
 
-**First run:** the floating panel shows **"Přihlásit se přes Google"** —
+**First run:** the side sheet shows **"Přihlásit se přes Google"** —
 click it, complete the Google consent screen in the popup window that
-opens, and the panel reloads signed in. A compact "you@example.com ·
-Odhlásit" line then appears atop the panel; **Odhlásit** signs out in every
-tab (search pages drop their badges and card controls; open panels prompt).
+opens, and the sheet reloads signed in. Its **⋯** menu then names the
+account; **Odhlásit** there signs out in every tab (search pages drop their
+badges and card controls; an open sheet prompts).
 
 **On a listing detail page** (any supported portal):
 
-1. A floating panel appears bottom-right.
-2. At the top, for **any** listing we have: a **Přidat do pipeline** bookmark
-   (click to add the property to the deal pipeline / again to remove — it fills
-   in and shows the current stage) and an **Otevřít v aplikaci** link.
-3. For a **flat** we have, it shows the property's MF result by shape:
-   **Výnos MF X.X %** (sale flats) + the reference rent per month and per m²; the
-   town's range with an (i) note; or the reason note alone.
-4. For anything that isn't an apartment for sale, the estimation block is
-   replaced by a short note (the bookmark + app link still show).
-5. Below the MF headline, the **comparables estimation** block: if a
-   successful estimation exists it loads the editable yield scenario; if not,
-   a **Spustit odhad** button `POST`s the ad's `listing_id` to `/estimations`
-   and polls until done.
-   Edits to the three fields debounce 500 ms and PATCH the scenario back —
-   the SPA's `/estimation/:id` page picks up the same state on next load.
+1. The side sheet opens on the right edge (folded to a tab on a window under
+   1280 px; the **›** in its top bar folds it, the tab unfolds it, and it
+   stays as you left it).
+2. The header says what the property is and what this ad asks; **V aplikaci ↗**
+   opens it in the app.
+3. **Vývoj ceny** charts every ad of the property; **Moje** holds the pipeline
+   (**Přidat do pipeline**, then the stage bar and **Uzavřít ▾**), the hide
+   toggle, collections, tags and notes.
+4. On a flat for sale, **AI agenti › Odhad výnosu** runs the comparables
+   estimate, or opens the one already made; its editor's fields debounce
+   500 ms and PATCH the scenario back — the SPA's `/estimation/:id` page picks
+   up the same state on next load.
 
 **On a search / index page** (any supported portal, any category):
 
@@ -500,7 +478,7 @@ tab (search pages drop their badges and card controls; open panels prompt).
 2. Sale-apartment cards also get a badge right after the icons:
    `Výnos MF X.X %` (or a range) when we have the yield (rent or note in the
    tooltip); otherwise a
-   clickable **Odhadnout výnos** badge that opens the yield panel, where the
+   clickable **Odhadnout výnos** badge that opens the side sheet, where the
    estimate runs.
 3. In the bottom-left corner, the **Skrýt skryté** switch: on, the properties
    you have hidden stay on the page as barely visible cards (hover one to peek

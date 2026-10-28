@@ -36,7 +36,7 @@ test('a card is a section: title bar (title, count) over a body', () => {
   const card = buildCard({ title: 'Poznámky', count: 3 }, doc);
   assert.equal(
     shape(fake(card.section)),
-    'section.card[div.card-bar[h3.card-title,span.card-count],div.card-body]',
+    'section.card[div.card-bar[h2.card-title,span.card-count],div.card-body]',
   );
   const [bar, body] = fake(card.section).children;
   assert.equal(bar.children[0].textContent, 'Poznámky');
@@ -50,8 +50,12 @@ test('an empty section keeps its count 0; an unknown count draws none', () => {
   assert.equal(zero.children[0].children[1].textContent, '0');
   for (const count of [null, undefined]) {
     const bare = fake(buildCard({ title: 'Poznámky', count }, doc).section);
-    assert.equal(shape(bare), 'section.card[div.card-bar[h3.card-title],div.card-body]');
+    assert.equal(shape(bare), 'section.card[div.card-bar[h2.card-title],div.card-body]');
   }
+});
+
+test('a variant adds its class to the section', () => {
+  assert.equal(fake(buildCard({ title: 'AI agenti', variant: 'agcard' }, doc).section).className, 'card agcard');
 });
 
 test('actions sit at the bar end, after the count', () => {
@@ -59,6 +63,6 @@ test('actions sit at the bar end, after the count', () => {
   const card = fake(buildCard({ title: 'Odhad', count: 2, actions: [action] }, doc).section);
   assert.equal(
     shape(card.children[0]),
-    'div.card-bar[h3.card-title,span.card-count,div.card-actions[button.]]',
+    'div.card-bar[h2.card-title,span.card-count,div.card-actions[button.]]',
   );
 });

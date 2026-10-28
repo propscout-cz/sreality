@@ -1,6 +1,6 @@
 /* The search page's corner dock — the one page-level thing the extension shows
  * on EVERY index page with listing cards, whatever their category: a small bar
- * in the bottom-left corner (the panel owns the bottom-right) holding the
+ * in the bottom-left corner (the listing sheet owns the right edge) holding the
  * "Skrýt skryté" switch. Above it, in the same column so nothing overlaps: a
  * slot for the lookup-failure notice (index_overlay.ts) and a line for the
  * reason a card write failed.
@@ -11,8 +11,8 @@
  * by its filled eye. The card is never removed: pulling nodes out of a portal's
  * result grid breaks its layout and its paging, and a card that is gone can't
  * be un-hidden from where it stood. The preference is per browser, kept in
- * chrome.storage.local like the panel's minimized state, and follows the
- * operator across portals and tabs. */
+ * chrome.storage.local like the side sheet's fold (`panelFolded`), and follows
+ * the operator across portals and tabs. */
 
 import tokens from '../../frontend/src/styles/tokens.css?inline';
 import { themeHost } from './appearance';
