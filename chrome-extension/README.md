@@ -144,8 +144,7 @@ maxima, remax, mmreality, ceskereality).
 
 The default display is a **read** of data we already have — no LLM call. It
 maps each portal listing to our row by `(source, native id)` through the
-FastAPI `POST /listings/lookup` endpoint (the public views don't expose the
-native id, so the browser can't resolve non-sreality listings on its own).
+FastAPI `POST /listings/lookup` endpoint.
 The Výnos editor shares its scenario state (rent / fond oprav / price /
 renovation) with the SPA's `/estimation/:id` page via the `scenario` JSONB
 column on `estimation_runs`.
@@ -263,7 +262,7 @@ One-time setup — repository secrets:
    `VITE_SUPABASE_ANON_KEY` (the anon/publishable key — not a secret key).
 5. (Optional) Add `EXT_APP_BASE_URL` = the SPA (browser app) URL, no trailing
    slash — powers the "Otevřít v aplikaci" link to a listing's page in our app
-   (`/listing/{sreality_id}`). Leave it unset to hide the link.
+   (`/listing/{source}/{native id}`). Leave it unset to hide the link.
 
 Building:
 1. The workflow runs automatically on every push to `main` that
