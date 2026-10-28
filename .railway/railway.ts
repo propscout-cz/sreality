@@ -10,7 +10,7 @@ const DOCKERFILE = { builder: "DOCKERFILE", dockerfilePath: "Dockerfile" };
 // No override existed before #2060, so each replica had the Pro ceiling (the worker's cgroup reads 22,888 MiB = 24e9 B).
 const LIMITS = { containers: { cpu: 24, memoryBytes: 24_000_000_000 } };
 const API_DRAINING_SECONDS = 0;              // ruling R4
-const VITE_DRAINING_SECONDS = 0;             // ruling R4
+const VITE_DRAINING_SECONDS = 10;            // ruling R4
 // The API and vite declare no start command: each runs its image's own (Dockerfile CMD; caddy:2-alpine CMD), ruling R5.
 // E949 + E941, pinned by tests/scraper/test_realtime_worker_autodedup.py.
 const WORKER_START = "env MALLOC_ARENA_MAX=2 python -m scraper.realtime_worker";
