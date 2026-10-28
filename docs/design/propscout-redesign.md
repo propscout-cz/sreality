@@ -260,8 +260,10 @@ File pointers are where the element lives today (2026-10-27); search for the quo
    `lib/useCardEstimates` (Browse's state, moved out of `BrowseExperience`); `?tab=table` and `?sort=` live in
    the address; members without a card are counted under the grid and all listed in the table. Phone: "Nová
    sbírka" moved to the end of my list, dashed, keeping its bottom sheet; phone P32 was already cards with no
-   table, so nothing changed; phone P31 has no blocks to move (its footer sends rename, delete, monitoring and
-   sharing to the desktop), so adding Sledovat / Sdílet / ⋯ to the phone header **awaits the operator's answer**.
+   table, so nothing changed. Phone P31 (the phone follows desktop): my collection's header carries the Sledovat
+   switch, "Sdílet · N" (the sharing card under the header) and ⋯ (Přejmenovat in place, Smazat sbírku behind the
+   two-step confirm, absent on the default collection), over the desktop's writes; the footer that sent this to the
+   desktop is gone, and the list's footer and new-collection sheet now point at the collection's page.
 8. **Shell and page headers** — **built** (branch `feature/redesign-rulings`). P26 (drop the small-caps label above the h1; there is no shared header
    component, each page has its own: `Header` in `pages/WatchdogManage.tsx`, `pages/Notifications.tsx`,
    `pages/Collections.tsx` and `pages/CollectionDetail.tsx`, and an inline header in `BrokersDesktop` in
