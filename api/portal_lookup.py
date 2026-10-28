@@ -2,14 +2,12 @@
 
 The Chrome extension overlays the Browse-card 'Výnos MF' yield
 (`mf_gross_yield_pct`) and the MF reference rent (`mf_reference_rent`) on
-portal detail + index pages, across every scraped portal, and deep-links each
-listing to its SPA page (`/listing/{sreality_id}`). The public views expose
-only `(source, sreality_id)`, so a non-sreality card — which only knows its own
-native id from its href — can't map to our row from the browser. This
-server-side lookup resolves uniformly on `(source, source_id_native)` (the
-migration-091 unique key; for sreality `source_id_native` is the numeric id as
-text) and joins any latest successful estimation. Read-only; bearer-gated like
-every other non-/health route.
+portal detail + index pages, across every scraped portal, and fills its listing
+sheet's header from the same row. A card knows only its own `(source, native
+id)` from its href, so the lookup resolves uniformly on `(source,
+source_id_native)` (the migration-091 unique key; for sreality
+`source_id_native` is the numeric id as text) and joins any latest successful
+estimation. Read-only; bearer-gated like every other non-/health route.
 
 It also returns the listing's `property_id` + its **deal-pipeline membership**
 (rule #22) so the panel's "Přidat do pipeline" toggle knows its state in the
@@ -51,7 +49,6 @@ from typing import TYPE_CHECKING, Any
 from psycopg.rows import dict_row
 
 from api.schemas import DEFAULT_FOND_CZK_PER_M2
-from toolkit.filter_registry import label_cs
 from toolkit.measures import LAND_CATEGORY_MAIN, plot_area_sql
 
 if TYPE_CHECKING:
@@ -61,14 +58,12 @@ if TYPE_CHECKING:
 
 # Listing columns projected onto each entry (dict keys === SELECT aliases).
 # `listing_id` is the surrogate (always present for a found listing) and is what
-# a write should carry; `sreality_id` is the legacy handle, kept for the SPA's
-# legacy /listing/{sreality_id} route and NULL post-Gate-2.
+# a write should carry.
 _LISTING_COLS: tuple[str, ...] = (
-    "sreality_id", "listing_id", "property_id",
+    "listing_id", "property_id",
     "category_main", "category_type", "area_m2", "area_basis",
     "price_czk", "price_per_m2", "price_per_m2_basis",
-    "disposition", "subtype",
-    "display_label", "is_active", "last_seen_at",
+    "disposition", "display_label", "is_active",
     "mf_reference_rent_czk", "mf_gross_yield_pct", "mf_reference_rent",
     "canonical_listing_id", "property_is_active", "tom_days", "floor",
     "total_floors", "condition", "ownership", "property_subtype", "plot_area_m2",
@@ -80,8 +75,8 @@ SELECT
     req.source,
     req.source_id,
     (l.source_id_native IS NOT NULL) AS found,
-    l.sreality_id, l.id AS listing_id, l.property_id,
-    l.category_main, l.category_type, l.area_m2, l.price_czk, l.disposition, l.subtype,
+    l.id AS listing_id, l.property_id,
+    l.category_main, l.category_type, l.area_m2, l.price_czk, l.disposition,
     -- ONE place string (migration 503), the same one Browse, the map and the
     -- notifications print. The panel used to fall back `district ?? locality`
     -- while the SPA fell back the other way, so one listing could be labelled
@@ -92,7 +87,7 @@ SELECT
              location_display_label(ll.street_name, ll.house_number_cp, ll.house_number_co,
                                     ll.obec_name, ll.cast_obce_name, ll.country_code,
                                     ll.country_status)) AS display_label,
-    l.is_active, l.last_seen_at,
+    l.is_active,
     -- THE measure and its label (migration 425), listing-grain: the panel is
     -- overlaid on ONE portal advert, so the number must be that advert's.
     -- `area_basis` (migration 423) rides along because the denominator is
@@ -114,7 +109,7 @@ SELECT
     -- What the property IS, each field at its MS11 grain (docs/design/merge-sprint/PROGRAM.md):
     -- the panel header's facts, off the same row as MF and, like it, NULL before attach.
     -- `pp.listing_id` is the canonical ad (MS5), the first track of the price history;
-    -- `is_active` and `subtype` are aliased because `l.*` above are this advert's own.
+    -- `is_active` is aliased because `l.is_active` above is this advert's own.
     pp.listing_id AS canonical_listing_id, pp.is_active AS property_is_active,
     pp.tom_days, pp.floor, pp.total_floors, pp.condition, pp.ownership,
     pp.subtype AS property_subtype,
@@ -266,10 +261,6 @@ def lookup_portal_listings(
         # from this subject's denominator (see `_fond_default_czk_per_m2`).
         # Served so the extension holds no copy of the number.
         entry["fond_per_m2_czk_default"] = _fond_default_czk_per_m2(row)
-        # The display "kind": the subtype label (commercial/houses) else the
-        # disposition (apartments). Computed server-side from the one canonical
-        # label source so the extension needs no slug dictionary of its own.
-        entry["kind_label"] = label_cs("subtype", row["subtype"]) or row["disposition"]
         acct = account_by_listing.get(row["listing_id"], {})
         est_id = acct.get("estimation_id")
         entry["latest_estimation"] = (

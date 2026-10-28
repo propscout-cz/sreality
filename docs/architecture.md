@@ -1084,8 +1084,7 @@ rules. Identify which one a task belongs to before you start.
   **Index/search pages** get per-card badges via anchor-href scanning (no per-portal card
   selectors — robust to markup changes). The default display is a **read** through
   `POST /listings/lookup`, which maps a card's on-page `(source, native id)` to our row +
-  MF figures + `sreality_id` (the public views don't expose `source_id_native`, so the
-  browser can't resolve non-sreality listings directly). Badges come only from a successful
+  MF figures. Badges come only from a successful
   lookup; a failed one raises ONE page-level notice (bottom-LEFT corner — the listing sheet owns the
   right edge — in a closed shadow root, shown only while cards the URL doesn't rule out as sale
   apartments wait on it): a sign-in button when signed out (that 401 used to leave search pages
