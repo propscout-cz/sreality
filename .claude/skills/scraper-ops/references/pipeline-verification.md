@@ -543,8 +543,8 @@ is a no-op on repetition: `ON CONFLICT` on the open signature, `coalesce` on
 over one state changing nothing.
 
 **Replay rail.** `tests/toolkit/test_system_alerts_replay.py` feeds 14 days of real results
-(run-length-encoded aggregates in `tests/fixtures/health_replay_14d.csv`, no ids or URLs: the repo
-is public) through `reconcile`, and asserts no recovery while a key's newest row is `unknown`,
+(run-length-encoded aggregates in `tests/fixtures/health_replay_14d.csv`, no ids or URLs: git
+history is permanent) through `reconcile`, and asserts no recovery while a key's newest row is `unknown`,
 one incident per maximal fail streak, and one onset plus its rungs, nothing else, for a key that
 fails the whole window. Its registry copy is host-aware since wave 3 (3 × cadence on the worker,
 cadence + 18 h on GitHub), and its fixture has held the surviving keys only since wave 4, which

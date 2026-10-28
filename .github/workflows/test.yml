@@ -97,8 +97,9 @@ jobs:
         run: npm test
 
   secrets:
-    # gitleaks over exactly the commits this PR (or this push to main) adds, through the one pinned binary that the
-    # .githooks run too (#2035). GitHub's own secret scanning stops when the repository goes private.
+    # gitleaks over exactly the commits this PR (or this push to main) adds, a merge by what it changed beyond the
+    # automatic merge, through the one pinned binary the .githooks run too (#2035). GitHub's own secret scanning stops
+    # when the repository goes private.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -111,10 +112,10 @@ jobs:
         run: |
           token="ghp_$(head -c 96 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 36)"
           rc=0
-          printf 'token = "%s"\n' "$token" | scripts/gitleaks.sh stdin --no-banner --redact --exit-code 3 || rc=$?
+          printf 'token = "%s"\n' "$token" | scripts/gitleaks.sh stdin --exit-code 3 || rc=$?
           [ "$rc" = 3 ] || { echo "::error::gitleaks did not report the planted token (exit $rc)"; exit 1; }
 
       - name: Scan the new commits
         env:
           RANGE: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || format('{0}..{1}', github.event.before, github.sha) }}
-        run: scripts/gitleaks.sh git --no-banner --redact --verbose --log-opts="$RANGE"
+        run: scripts/gitleaks.sh git --log-opts="--remerge-diff $RANGE"

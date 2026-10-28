@@ -1,3 +1,5 @@
 #!/usr/bin/env bash
 # Secret scan of what this commit adds (#2035). Enabled once per clone: git config core.hooksPath .githooks
-exec "$(git rev-parse --show-toplevel)/scripts/gitleaks.sh" git --pre-commit --staged --redact --no-banner --verbose --log-level warn
+# A merge's staged diff is everything the other side brings; pre-push and CI judge the merge by its own changes instead.
+git rev-parse -q --verify MERGE_HEAD >/dev/null && exit 0
+exec "$(git rev-parse --show-toplevel)/scripts/gitleaks.sh" git --pre-commit --staged

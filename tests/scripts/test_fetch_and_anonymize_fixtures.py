@@ -216,6 +216,7 @@ _MAP_KEY = "Zq" + "8kV2n" + "Wx3zY5tB7m" + "Lp4"
     (f'<iframe src="https://www.google.com/maps/embed/v1/place?key={_GOOGLE}&q=50.1,14.4">', "&q=50.1,14.4"),
     (f'<div data-gm-api-key="{_GOOGLE}">', "data-gm-api-key="),
     (f'<script src="https://cc.dalten.cz/ccJsNoD/?token={_TOKEN}"></script>', "?token="),
+    (f'"style": "https://api.maptiler.com/maps/hybrid/style.json?key={_MAP_KEY}",', "style.json?key="),
     (f'"mtMapKey": "{_MAP_KEY}",', '"mtMapKey": "'),
     (f'\\"mtMapKey\\":\\"{_MAP_KEY}\\"', '\\"mtMapKey\\":\\"'),
     (f"'sitekey': '{_TOKEN}'", "'sitekey': '"),

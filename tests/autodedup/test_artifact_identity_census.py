@@ -1,6 +1,6 @@
 """No lane artifact carries the operator's identity.
 
-Every lane uploads `out/` to a GitHub Actions artifact of a PUBLIC repository, so anything a
+Every lane uploads `out/` to a GitHub Actions artifact, so anything a
 lane writes is readable by anyone who can see the run. Advert-side PII has had a rail since
 W2 (`export_sql`'s broker columns, E28). The OPERATOR's own identity did not: `mode=labels`
 shipped `autodedup.verdicts.decided_by` — a login, which is an e-mail address — verbatim in

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# THE gitleaks: CI's `secrets` job and the .githooks run it through here, so one version scans every boundary (#2035).
-# The release is fetched once into the user cache, checked against its pinned sha256, then run with the given args.
-# Usage: scripts/gitleaks.sh <gitleaks args>   e.g. scripts/gitleaks.sh git --redact   (the whole history)
+# THE gitleaks: CI's `secrets` job and the .githooks run it through here, so one version and one output policy (values
+# redacted, each finding shown, quiet when clean) scan every boundary (#2035). The release is fetched once into the user
+# cache and checked against its pinned sha256.
+# Usage: scripts/gitleaks.sh <gitleaks subcommand and args>   e.g. scripts/gitleaks.sh git   (the whole history)
 set -euo pipefail
 version=8.30.1
 case "$(uname -s)-$(uname -m)" in
@@ -11,14 +12,17 @@ case "$(uname -s)-$(uname -m)" in
 esac
 bin="${XDG_CACHE_HOME:-$HOME/.cache}/gitleaks/$version/gitleaks"
 if [[ ! -x "$bin" ]]; then
-  tmp=$(mktemp -d)
-  tarball="$tmp/gitleaks.tar.gz"
-  curl -fsSL -o "$tarball" "https://github.com/gitleaks/gitleaks/releases/download/v$version/gitleaks_${version}_$asset.tar.gz"
-  actual=$( (sha256sum "$tarball" 2>/dev/null || shasum -a 256 "$tarball") | cut -d' ' -f1)
-  [[ "$actual" == "$sha256" ]] || { echo "scripts/gitleaks.sh: checksum mismatch for $asset ($actual)" >&2; rm -rf "$tmp"; exit 2; }
-  tar -xzf "$tarball" -C "$tmp" gitleaks
   mkdir -p "$(dirname "$bin")"
-  mv "$tmp/gitleaks" "$bin"
+  # Beside the binary, so the final mv is an atomic rename: a concurrent first run never execs a half-written file.
+  tmp=$(mktemp -d "$(dirname "$bin")/.download.XXXXXX")
+  trap 'rm -rf "$tmp"' EXIT
+  curl -fsSL -o "$tmp/gitleaks.tar.gz" \
+    "https://github.com/gitleaks/gitleaks/releases/download/v$version/gitleaks_${version}_$asset.tar.gz"
+  actual=$( (sha256sum "$tmp/gitleaks.tar.gz" 2>/dev/null || shasum -a 256 "$tmp/gitleaks.tar.gz") | cut -d' ' -f1)
+  [[ "$actual" == "$sha256" ]] || { echo "scripts/gitleaks.sh: checksum mismatch for $asset ($actual)" >&2; exit 2; }
+  tar -xzf "$tmp/gitleaks.tar.gz" -C "$tmp" gitleaks
+  mv -f "$tmp/gitleaks" "$bin"
   rm -rf "$tmp"
+  trap - EXIT
 fi
-exec "$bin" "$@"
+exec "$bin" --no-banner --redact --verbose --log-level warn "$@"

@@ -85,15 +85,15 @@ _URL_RE = re.compile(r"https?://[^\s\"'<>]+")
 # token) are public in the page, but a secret scanner cannot tell them from ours (#2035).
 _CREDENTIAL_RE = re.compile(
     r"AIza[0-9A-Za-z_\-]{35}"
-    r"|(?P<name>[?&]token=|\\?[\"']?(?:mtMapKey|sitekey)\\?[\"']?\s*[:=]\s*\\?[\"'])[0-9A-Za-z_\-]{16,}"
+    r"|(?P<prefix>[?&](?:key|token)=|\\?[\"']?(?:mtMapKey|sitekey)\\?[\"']?\s*[:=]\s*\\?[\"'])[0-9A-Za-z_\-]{16,}"
 )
 
 
 def redact_credentials(html: str) -> str:
     """Overwrites each third-party credential's value with as many x's, so no byte offset in the page moves."""
     def _blank(match: re.Match[str]) -> str:
-        name = match.group("name") or ""
-        return name + "x" * (len(match.group(0)) - len(name))
+        prefix = match.group("prefix") or ""
+        return prefix + "x" * (len(match.group(0)) - len(prefix))
 
     return _CREDENTIAL_RE.sub(_blank, html)
 
@@ -141,7 +141,7 @@ EMAIL_PLACEHOLDER = "agent@example.cz"
 NAME_PLACEHOLDER = "Jan Novák"
 
 CONTACT_BANNER = (
-    "<!-- ANONYMIZED FIXTURE — phones, emails and agent names replaced with "
+    "<!-- ANONYMIZED FIXTURE — phones, emails, agent names and third-party keys replaced with "
     "placeholders (scripts/fetch_and_anonymize_fixtures.py --scrub-contacts). "
     "Every other byte is the portal's. -->\n"
 )
