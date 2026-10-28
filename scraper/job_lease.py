@@ -24,8 +24,9 @@ Two shapes over one row:
   `STATEMENT_TIMEOUT_S` (`_bounded`).
 * `held` — a leased lane with no schedule (the location resolver drain, run every few seconds by the realtime worker
   and by `location_resolve.yml`): no due time and no run history, just mutual exclusion and the last outcome. It yields
-  a `Hold` its holder renews (`renew`) and stops by (`Hold.fenced`); `fence` makes each of the holder's commits refuse
-  a lapsed lease; the release falls back to one fresh connection when the holding one died.
+  a `Hold`. A lane that never renews needs a TTL that outlasts its pass (the resolver lanes); one that `renew`s, stops
+  by `Hold.fenced` and ends each transaction with `fence` cannot commit under a lapsed lease. The release falls back to
+  one fresh connection when the holding one died.
 """
 from __future__ import annotations
 
@@ -419,9 +420,12 @@ def _fence_at(sent_at: float, ttl_s: int) -> float:
 
 @contextmanager
 def _bounded(conn: psycopg.Connection) -> Iterator[psycopg.Cursor]:
-    """One transaction under STATEMENT_TIMEOUT_S: a stalled database bounds each runner call, lock waits included."""
+    """One transaction under STATEMENT_TIMEOUT_S: a stalled database bounds each runner call, lock waits included.
+    Inside a caller's transaction it is a savepoint under the caller's bound: a local setting would outlive it."""
+    own = conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
     with conn.transaction(), conn.cursor() as cur:
-        cur.execute(_BOUND_SQL)
+        if own:
+            cur.execute(_BOUND_SQL)
         yield cur
 
 
@@ -453,16 +457,16 @@ def claim(conn: psycopg.Connection, job_name: str, *, holder: str | None = None,
                  requested_by=requested_by, due_slot=bool(due_slot))
 
 
-def renew(conn: psycopg.Connection, lease: Hold) -> bool:
+def renew(conn: psycopg.Connection, hold: Hold) -> bool:
     """Extends a lease that has not lapsed; on False the holder keeps its old fence and must stop by it."""
     sent_at = clock()
     with _bounded(conn) as cur:
-        cur.execute(_RENEW_SQL, {"job": lease.job_name, "holder": lease.holder, "ttl": lease.ttl_s})
+        cur.execute(_RENEW_SQL, {"job": hold.job_name, "holder": hold.holder, "ttl": hold.ttl_s})
         renewed = cur.fetchone() is not None
     if renewed:
-        lease.fence_at = _fence_at(sent_at, lease.ttl_s)
+        hold.fence_at = _fence_at(sent_at, hold.ttl_s)
     else:
-        LOG.warning("LEASE lost job=%s holder=%s: renewal refused", lease.job_name, lease.holder)
+        LOG.warning("LEASE lost job=%s holder=%s: renewal refused", hold.job_name, hold.holder)
     return renewed
 
 
@@ -479,7 +483,7 @@ def fence(conn: psycopg.Connection, hold: Hold) -> None:
 
 
 def _release_params(hold: Hold, outcome: str, *, due: str | None, error: str | None) -> dict[str, object]:
-    """`_RELEASE_RUN_SQL`'s parameters for a hold that took no due slot on a request: a lane's, and a run's base."""
+    """`_RELEASE_RUN_SQL`'s parameters as a lane releases (no request, no due slot); `release` adds a run's own."""
     if outcome not in RELEASE_OUTCOMES:
         raise ValueError(f"{outcome!r} is not a release outcome")
     due = due or ("now" if outcome == "interrupted" else "slot")
@@ -628,12 +632,12 @@ def _release_hold(conn: psycopg.Connection, hold: Hold, outcome: str, error: str
     with _bounded(conn) as cur:
         cur.execute(_RELEASE_RUN_SQL, _release_params(hold, outcome, due=None, error=error))
         if cur.fetchone() is None:
-            LOG.warning("LEASE lost job=%s holder=%s: another holder had it at the release, so its outcome %s is "
-                        "not recorded", hold.job_name, hold.holder, outcome)
+            LOG.warning("LEASE gone job=%s holder=%s at the release (already released, or another holder took it): "
+                        "outcome %s not written by this call", hold.job_name, hold.holder, outcome)
 
 
-def _give_back(conn: psycopg.Connection, hold: Hold, outcome: str, error: str | None,
-               original: BaseException | None, connect: Callable[[], psycopg.Connection]) -> None:
+def _release_with_fallback(conn: psycopg.Connection, hold: Hold, outcome: str, error: str | None,
+                           original: BaseException | None, connect: Callable[[], psycopg.Connection]) -> None:
     """Releases on the holding connection, else once on a fresh one. Never replaces `original`: a failure is noted on
     it and the lease expires by itself; with no `original`, the release's own failure is the error."""
     try:
@@ -665,10 +669,11 @@ def _give_back(conn: psycopg.Connection, hold: Hold, outcome: str, error: str | 
 
 @contextmanager
 def held(conn: psycopg.Connection, job_name: str, *, cadence: str, runner: str = "github_actions",
-         ttl_s: int = 3600, connect: Callable[[], psycopg.Connection] = _fresh_connection) -> Iterator[Hold | None]:
-    """Yields this run's `Hold` on the lane, or None when another run holds it or it is paused or retired. `connect`
-    opens the fallback connection the release uses when `conn` died."""
-    holder = holder_id()
+         ttl_s: int = 3600, holder: str | None = None,
+         connect: Callable[[], psycopg.Connection] = _fresh_connection) -> Iterator[Hold | None]:
+    """Yields this run's `Hold` on the lane, or None when another run holds it or it is paused or retired. Taking and
+    releasing it are bounded like a runner call; `connect` opens the release's fallback when `conn` died."""
+    holder = holder or holder_id()
     sent_at = clock()
     with _bounded(conn) as cur:
         cur.execute(_UPSERT_LANE_SQL, (job_name, cadence, runner))
@@ -689,4 +694,4 @@ def held(conn: psycopg.Connection, job_name: str, *, cadence: str, runner: str =
         outcome, original = "interrupted", exc
         raise
     finally:
-        _give_back(conn, hold, outcome, error, original, connect)
+        _release_with_fallback(conn, hold, outcome, error, original, connect)

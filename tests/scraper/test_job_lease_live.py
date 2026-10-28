@@ -797,9 +797,9 @@ def _lane_state(conn: Any, name: str) -> tuple[Any, ...]:
 
 
 def _lapse_from(conn: Any, name: str) -> None:
+    """The lease ends now, by this session's clock: later than the start of any transaction the holder has open."""
     with conn.cursor() as cur:
-        cur.execute("UPDATE scheduled_jobs SET lease_expires_at = now() - interval '1 second' WHERE job_name = %s",
-                    (name,))
+        cur.execute("UPDATE scheduled_jobs SET lease_expires_at = now() WHERE job_name = %s", (name,))
 
 
 def test_a_commit_under_a_lapsed_lane_lease_is_refused_and_a_fenced_one_holds_off_the_next_holder() -> None:
@@ -823,8 +823,12 @@ def test_a_commit_under_a_lapsed_lane_lease_is_refused_and_a_fenced_one_holds_of
                 assert taker.is_alive(), "a take-over waits for the fenced commit"
             taker.join(timeout=15)
             assert not taker.is_alive()
+            with b.cursor() as cur:  # live again, so the lease lapses INSIDE the next transaction
+                cur.execute("UPDATE scheduled_jobs SET lease_expires_at = now() + interval '1 minute'"
+                            " WHERE job_name = %s", (name,))
             with pytest.raises(job_lease.LeaseLost), a.transaction(), a.cursor() as cur:
                 cur.execute("INSERT INTO fence_probe VALUES (2)")
+                _lapse_from(b, name)
                 job_lease.fence(a, hold)
         with a.cursor() as cur:
             cur.execute("SELECT n FROM fence_probe")
@@ -833,6 +837,26 @@ def test_a_commit_under_a_lapsed_lane_lease_is_refused_and_a_fenced_one_holds_of
         _cleanup(b, [name])
         a.close()
         b.close()
+
+
+def test_a_renewal_inside_the_holder_s_transaction_keeps_the_holder_s_own_timeout() -> None:
+    """A lane holder renews between its statements, often inside its own transaction: the renewal's 5 s bound must not
+    outlive it there. Also: the holder names itself, as a mode prefix does (#2107)."""
+    (a,) = _sessions(1)
+    name = f"test-renew-{uuid.uuid4().hex[:12]}"
+    try:
+        with job_lease.held(a, name, cadence="15 minutes", holder="incremental:test") as hold:
+            assert hold is not None and hold.holder == "incremental:test"
+            with a.transaction(), a.cursor() as cur:
+                cur.execute("SELECT set_config('statement_timeout', '600000', true)")
+                assert job_lease.renew(a, hold)
+                cur.execute("SHOW statement_timeout")
+                assert cur.fetchone() == ("10min",)
+                cur.execute("SELECT lease_holder FROM scheduled_jobs WHERE job_name = %s", (name,))
+                assert cur.fetchone() == ("incremental:test",)
+    finally:
+        _cleanup(a, [name])
+        a.close()
 
 
 def test_a_release_over_a_dead_connection_lands_on_a_fresh_one_and_the_body_s_error_still_propagates() -> None:
@@ -849,7 +873,8 @@ def test_a_release_over_a_dead_connection_lands_on_a_fresh_one_and_the_body_s_er
         a = fresh()
         with pytest.raises(RuntimeError, match="drain broke") as raised, job_lease.held(
                 a, names[0], cadence="15 minutes", connect=fresh):
-            a.close()
+            with b.cursor() as cur:
+                cur.execute("SELECT pg_terminate_backend(%s)", (a.info.backend_pid,))
             raise RuntimeError("drain broke")
         assert any("fresh connection" in note for note in raised.value.__notes__)
         assert _lane_state(b, names[0]) == (False, "failed", "drain broke")
