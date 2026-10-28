@@ -1,4 +1,4 @@
-"""FastAPI dependencies: per-request DB connection, shared SrealityClient, auth."""
+"""FastAPI dependencies: per-request DB connection, shared SrealityClient, auth, the DB busy-error classes."""
 
 from __future__ import annotations
 
@@ -20,7 +20,8 @@ from scraper.sreality_client import SrealityClient
 # the one signal the SPA's transient-only retry predicate acts on. Everything
 # else is deterministic and answers 500. Routes that already catch these and
 # refuse with their own contract (toolkit/property_split's structured 409)
-# never reach that handler; the tool registry maps them to its retryable BUSY.
+# never reach api.main's _unhandled_exception_handler; the tool registry maps
+# them to its retryable BUSY.
 DB_BUSY_ERRORS = (
     psycopg.errors.QueryCanceled,
     psycopg.errors.LockNotAvailable,

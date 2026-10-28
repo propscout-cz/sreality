@@ -94,8 +94,8 @@ tenant-scoped:
   authorization — a route needing per-account isolation must use it, not `get_db_conn`. There
   is NO fallback connection (the static-`API_TOKEN` bypass was deleted 2026-09-11): an unset
   `TENANT_POOL_DB_URL` raises.
-  `tenant_transaction(claims, act_as=, method=)` is the same block as a context manager, for one named
-  exception (`references/tenancy.md`): it commits before slow service-role work.
+  `tenant_transaction(claims, act_as=, method=)` is the same block as a context manager, for two named
+  callers (`references/tenancy.md`): the feedback route and the tool registry's tenant tools.
 
 **Mutual exclusion over the pooler: three shapes, never a session advisory lock from Python.** Service-role
 Python runs on the **transaction-mode** pooler (`SUPABASE_DB_URL`, port 6543), where autocommit statements land on

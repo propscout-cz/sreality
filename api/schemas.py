@@ -18,6 +18,7 @@ from pydantic import (
     model_validator,
 )
 
+from api.capabilities.subject import Point, unanchored
 from api.filter_args import agenda_ids, as_str_list, filter_model
 from api.location_filter import DistrictChip
 from toolkit import ComparableFilters
@@ -47,8 +48,19 @@ _CohortFilters = filter_model(
 )
 
 
+class FindComparablesTarget(Point):
+    exclude_listing_ids: list[int] = Field(
+        default_factory=list, description="Ads whose whole property is left out of the cohort (Decision 13).")
+
+
 class FindComparablesIn(_CohortFilters):
-    target: TargetIn
+    target: FindComparablesTarget
+
+    @model_validator(mode="after")
+    def _bands_have_their_anchor(self) -> "FindComparablesIn":
+        if missing := unanchored(self, self.target):
+            raise ValueError(f"{'; '.join(missing)}, and the target has none")
+        return self
 
 
 class ClusterComparablesIn(BaseModel):

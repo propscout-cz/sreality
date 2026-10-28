@@ -33,7 +33,6 @@ def held(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         lookups["facts"] += 1
         return dict(FACTS) if lid == 70 else None
     monkeypatch.setattr(subject, "subject_mf_facts", facts)
-    monkeypatch.setattr(market, "subject_mf_facts", facts)
     return lookups
 
 
@@ -92,16 +91,29 @@ def test_an_explicit_null_category_still_means_every_category(held: Any, monkeyp
     assert held["facts"] == 0
 
 
-@pytest.mark.parametrize("args, code", [({"property_id": 8}, ToolErrorCode.NOT_FOUND),
-                                        ({"listing_id": 71}, ToolErrorCode.NOT_FOUND)])
-def test_a_subject_we_do_not_hold_is_not_found(held: Any, args: dict[str, Any], code: ToolErrorCode) -> None:
-    assert _error("find_comparables_relaxed", args).code is code
+@pytest.mark.parametrize("args, said", [({"property_id": 8}, "property 8"), ({"listing_id": 71}, "ad 71")])
+def test_a_subject_we_do_not_hold_is_not_found_in_the_callers_own_words(held: Any, args: dict[str, Any],
+                                                                        said: str) -> None:
+    err = _error("find_comparables_relaxed", args)
+    assert err.code is ToolErrorCode.NOT_FOUND and said in err.message
 
 
-def test_a_held_ad_with_no_location_is_refused(held: Any, monkeypatch) -> None:
+@pytest.mark.parametrize("args, said", [({"listing_id": 70}, "ad 70 has no location"),
+                                        ({"property_id": 7}, "property 7 (its canonical ad 70) has no location")])
+def test_a_held_subject_with_no_location_is_refused(held: Any, monkeypatch, args: dict[str, Any], said: str) -> None:
     monkeypatch.setattr(subject, "match_listing", lambda conn, lid: {"spec": {**SPEC, "lat": None, "lng": None}})
-    err = _error("find_comparables_relaxed", {"listing_id": 70})
-    assert err.code is ToolErrorCode.REFUSED and "no location" in err.message
+    err = _error("find_comparables_relaxed", args)
+    assert err.code is ToolErrorCode.REFUSED and said in err.message
+
+
+@pytest.mark.parametrize("name", ["find_comparables_relaxed", "analyze_distribution", "find_distribution_outliers",
+                                  "estimate_yield"])
+def test_recency_without_the_active_gate_is_refused_not_dropped(name: str) -> None:
+    args = {"point": POINT, "category_main": "byt", "max_age_days": 30}
+    if "category_type" in registry.ENTRIES[name].args.model_fields:
+        args["category_type"] = "prodej"
+    err = _error(name, args)
+    assert err.code is ToolErrorCode.INVALID_ARGUMENTS and "lifecycle='active'" in err.message
 
 
 # --- each tool returns its toolkit function's own envelope ------------------------------------------------------
@@ -196,6 +208,48 @@ def test_reference_rent_says_so_when_the_map_has_none(held: Any, monkeypatch) ->
     monkeypatch.setattr(market, "compute_reference_rent", lambda conn, **facts: None)
     out = _call("compute_reference_rent", {"listing_id": 70})
     assert out["data"] is None and out["metadata"]["result_count"] == 0
+
+
+@pytest.mark.parametrize("band, missing", [({"floor_band": 1}, "floor"), ({"area_band_pct": 0.3}, "area_m2"),
+                                           ({"disposition_match": "loose"}, "disposition")])
+def test_a_band_asked_for_without_the_subjects_own_value_is_refused_not_dropped(
+        held: Any, monkeypatch, band: dict[str, Any], missing: str) -> None:
+    bare = {k: v for k, v in POINT.items() if k != missing}
+    err = _error("find_comparables_relaxed", {"point": bare, **CATS, **band})
+    assert err.code is ToolErrorCode.REFUSED and missing in err.message
+    monkeypatch.setattr(subject, "match_listing", lambda conn, lid: {"spec": {**SPEC, missing: None}})
+    err = _error("compute_market_velocity", {"property_id": 7, **band})
+    assert err.code is ToolErrorCode.REFUSED and "property 7" in err.message and missing in err.message
+
+
+def test_a_band_left_at_its_default_or_any_never_refuses(held: Any, monkeypatch) -> None:
+    _capture(monkeypatch, "find_comparables_relaxed")
+    _call("find_comparables_relaxed", {"point": {"lat": 50.0, "lng": 14.0}, **CATS, "disposition_match": "any"})
+
+
+@pytest.mark.parametrize("extra", [{"area_m2": 60.0}, {"disposition": "2+kk"}, {"floor": 3}])
+def test_describe_neighborhood_refuses_point_attributes_it_cannot_apply(extra: dict[str, Any]) -> None:
+    args = {"point": {"lat": 50.08, "lng": 14.42, **extra}, **CATS}
+    assert _error("describe_neighborhood", args).code is ToolErrorCode.INVALID_ARGUMENTS
+
+
+def test_describe_neighborhood_says_its_recency_window_needs_no_lifecycle() -> None:
+    schema = registry.ENTRIES["describe_neighborhood"].input_schema["properties"]["max_age_days"]
+    assert "lifecycle" not in schema["description"]
+
+
+def test_each_description_states_the_categories_its_point_must_carry_and_the_unit_key_it_returns() -> None:
+    for name, entry in registry.ENTRIES.items():
+        fields = entry.args.model_fields
+        if "point" in fields:
+            for c in ("category_main", "category_type"):
+                assert (c in entry.description) is (c in fields), (name, c)
+    assert "estimate_kind" in registry.ENTRIES["estimate_yield"].description
+    for name in ("analyze_distribution", "find_distribution_outliers"):   # their envelopes carry `basis`
+        assert "price_per_m2_basis" not in registry.ENTRIES[name].description, name
+    for name in ("find_comparables_relaxed", "estimate_yield"):
+        assert "price_per_m2_basis" in registry.ENTRIES[name].description, name
+    assert "sreality" in registry.ENTRIES["find_distribution_outliers"].description
 
 
 def test_describe_neighborhood_takes_the_subjects_place_and_its_four_filters(held: Any, monkeypatch) -> None:

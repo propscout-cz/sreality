@@ -59,14 +59,14 @@ def call(caller: Caller, name: str, raw_args: object) -> dict[str, Any]:
     """Run one tool; its result envelope, or a ToolError."""
     entry, args = validate(name, raw_args)
     try:
-        # A raise leaves the `with` first, so a tenant transaction rolls back before the error is mapped.
+        # Every refusal is raised inside the `with`, so a tenant transaction rolls back before the error is mapped.
         with _connection(caller, entry) as conn:
             result = entry.handler(Context(conn), args)
+            if not isinstance(result, dict) or "data" not in result:
+                raise TypeError(f"{name} returned no envelope")
+            return fit(result)
     except Exception as exc:
         raise to_tool_error(exc, tool=name) from exc
-    if not isinstance(result, dict) or "data" not in result:
-        raise to_tool_error(TypeError(f"{name} returned no envelope"), tool=name)
-    return fit(result)
 
 
 def schemas() -> list[dict[str, Any]]:

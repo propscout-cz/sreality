@@ -10,11 +10,9 @@ _NULL = {"type": "null"}
 
 
 def portable(model: type[BaseModel]) -> dict[str, Any]:
-    """`model`'s JSON Schema with every `$ref` inlined, `X | None` collapsed to X, and no titles or null defaults.
-
-    Gemini's client refuses `$ref`/`$defs` and type arrays; no provider needs the null branch of an optional
-    argument, which an omitted key already expresses.
-    """
+    """`model`'s JSON Schema with `$ref` inlined, `X | None` as X plus `nullable`, and no titles or null defaults."""
+    # Gemini's client refuses $ref/$defs and type arrays; `nullable` is the null every provider reads, and null is
+    # not omission (an unset category takes the subject's own, null means every category).
     raw = model.model_json_schema()
     return _clean(raw, raw.pop("$defs", {}))
 
@@ -29,7 +27,8 @@ def _clean(node: Any, defs: dict[str, Any]) -> Any:
         return _clean(inlined, defs)
     branches = [b for b in node.get("anyOf", ()) if b != _NULL]
     if len(branches) == 1:
-        return _clean({**branches[0], **{k: v for k, v in node.items() if k != "anyOf"}}, defs)
+        rest = {k: v for k, v in node.items() if k != "anyOf"}
+        return _clean({**branches[0], **rest, "nullable": True}, defs)
     out: dict[str, Any] = {}
     for key, value in node.items():
         if key == "title" or (key == "default" and value is None):

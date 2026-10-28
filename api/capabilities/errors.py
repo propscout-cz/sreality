@@ -84,6 +84,10 @@ def to_tool_error(exc: Exception, *, tool: str) -> ToolError:
     elif isinstance(exc, DB_BUSY_ERRORS):
         return ToolError(ToolErrorCode.BUSY,
                          "the database is busy or the query ran past its time limit; retry or narrow the request")
+    elif isinstance(exc, psycopg.errors.DataError):
+        # SQLSTATE class 22: a value the database cannot apply (an interval or a number out of its range).
+        LOG.warning("tool %s refused a value the database cannot apply: %s", tool, exc)
+        return ToolError(ToolErrorCode.REFUSED, "a value is outside what the database can apply; narrow it")
     elif isinstance(exc, psycopg.errors.InsufficientPrivilege):
         return ToolError(ToolErrorCode.FORBIDDEN, f"{tool} may not read or change that data")
     elif isinstance(exc, psycopg.OperationalError):

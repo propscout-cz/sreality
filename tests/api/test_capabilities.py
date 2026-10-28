@@ -57,7 +57,7 @@ def test_invalid_arguments_never_reach_the_handler(probe: Any, args: object, loc
     probe(lambda ctx, a: pytest.fail("handler ran"))
     err = _error("probe", args)
     assert err.code is ToolErrorCode.INVALID_ARGUMENTS and not err.retryable
-    assert [d["loc"] for d in err.details][:1] == [loc] or loc == []
+    assert [d["loc"] for d in err.details][:1] == [loc]
     assert all(set(d) == {"loc", "msg", "type"} for d in err.details)   # the value sent is never echoed
 
 
@@ -143,6 +143,8 @@ def test_a_tenant_tools_error_leaves_the_transaction_before_it_is_mapped(probe: 
     (psycopg.errors.DeadlockDetected("deadlock"), ToolErrorCode.BUSY, None),
     (psycopg.errors.InsufficientPrivilege("permission denied for table x"), ToolErrorCode.FORBIDDEN, None),
     (psycopg.OperationalError("connection refused"), ToolErrorCode.UNAVAILABLE, None),
+    (psycopg.errors.DatetimeFieldOverflow("timestamp out of range"), ToolErrorCode.REFUSED, None),
+    (psycopg.errors.NumericValueOutOfRange("integer out of range"), ToolErrorCode.REFUSED, None),
     (ValueError("a cohort with no single per-m² basis"), ToolErrorCode.REFUSED,
      "a cohort with no single per-m² basis"),
 ])
@@ -169,6 +171,24 @@ def test_anything_else_is_internal_with_a_reference_and_no_text(probe: Any, rais
     err = _error("probe", {})
     assert err.code is ToolErrorCode.INTERNAL and "secret" not in err.message and "ref " in err.message
     assert err.message.split("ref ")[1].rstrip(")") in caplog.text
+
+
+def test_a_tenant_result_refused_for_its_size_rolls_the_transaction_back(probe: Any, monkeypatch) -> None:
+    states: list[str] = []
+
+    @contextlib.contextmanager
+    def fake_transaction(claims: dict, *, act_as: Any, method: str) -> Any:
+        try:
+            yield object()
+            states.append("committed")
+        except Exception:
+            states.append("rolled back")
+            raise
+    monkeypatch.setattr(registry.tenant_pool, "tenant_transaction", fake_transaction)
+    monkeypatch.setattr(truncate, "RESULT_BUDGET", 100)
+    probe(lambda ctx, a: {"data": "x" * 500}, tenancy=Tenancy.TENANT, effect=Effect.WRITE)
+    err = _error("probe", {}, Caller(market=MARKET_CONN, claims={"sub": "a"}))
+    assert (err.code, states) == (ToolErrorCode.RESULT_TOO_LARGE, ["rolled back"])
 
 
 def test_a_result_that_is_no_envelope_is_internal(probe: Any) -> None:
@@ -227,6 +247,14 @@ def test_a_list_envelope_is_cut_the_same_way(monkeypatch) -> None:
     monkeypatch.setattr(truncate, "RESULT_BUDGET", 1_000)
     fitted = truncate.fit({"data": _rows(100), "metadata": {"tool": "t"}})
     assert fitted["metadata"]["truncated"]["data"]["total"] == 100 and fitted["data"] == _rows(100)[: len(fitted["data"])]
+
+
+@pytest.mark.parametrize("data", ["x" * 500, None, 12345])
+def test_oversized_data_that_is_no_list_is_refused_not_crashed(monkeypatch, data: Any) -> None:
+    monkeypatch.setattr(truncate, "RESULT_BUDGET", 40)
+    with pytest.raises(ToolError) as info:
+        truncate.fit({"data": data, "metadata": {"notes": ["y" * 100]}})
+    assert info.value.code is ToolErrorCode.RESULT_TOO_LARGE
 
 
 def test_what_cannot_fit_with_every_list_empty_is_refused(monkeypatch) -> None:

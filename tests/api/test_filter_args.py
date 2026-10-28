@@ -63,7 +63,10 @@ def test_the_registry_min_is_a_floor_and_its_slider_max_is_never_a_bound() -> No
     # The registry's max is a slider axis (price ≤ 100 000): a sale band must pass.
     assert Cohort(max_price_czk=5_000_000, max_estate_area=20_000.0).max_price_czk == 5_000_000
     schema = Cohort.model_json_schema()["properties"]
-    assert schema["radius_m"]["minimum"] == 100 and "maximum" not in schema["radius_m"]
+    # The only maximum on an integer filter is its int4 column type, never the slider's 10 000 m.
+    assert schema["radius_m"]["minimum"] == 100 and schema["radius_m"]["maximum"] == 2**31 - 1
+    with pytest.raises(ValidationError):
+        Cohort(radius_m=2**31)
 
 
 def test_unknown_keys_are_refused_and_strings_parse() -> None:
@@ -73,9 +76,28 @@ def test_unknown_keys_are_refused_and_strings_parse() -> None:
     assert issubclass(Cohort, Args)
 
 
-def test_descriptions_are_the_registrys() -> None:
+def test_descriptions_are_the_registrys_with_the_unit_and_basis_they_point_at() -> None:
     for fid, field in Cohort.model_fields.items():
-        assert field.description == fr.REGISTRY[fid].description
+        assert field.description.startswith(fr.REGISTRY[fid].description)
+    ppm2 = Cohort.model_fields["min_price_per_m2"].description
+    assert ppm2.endswith("Unit: CZK/m²; basis: depends_on_category.")
+    assert Cohort.model_fields["has_lift"].description == fr.REGISTRY["has_lift"].description
+
+
+def test_a_consumer_whose_semantics_differ_restates_the_description() -> None:
+    Neighbourhood = filter_model("N", ("max_age_days",), describe_neighborhood,
+                                 descriptions={"max_age_days": "Drop ads last seen more than N days ago."})
+    assert Neighbourhood.model_fields["max_age_days"].description == "Drop ads last seen more than N days ago. Unit: days."
+
+
+def test_recency_without_the_active_gate_is_refused_because_the_cohort_would_drop_it() -> None:
+    with pytest.raises(ValidationError, match="lifecycle='active'"):
+        Cohort(max_age_days=30)
+    with pytest.raises(ValidationError, match="lifecycle='active'"):
+        Cohort(max_age_days=30, lifecycle="all")
+    assert Cohort(max_age_days=30, lifecycle="active").max_age_days == 30
+    # A consumer that applies recency without a lifecycle gate takes it alone.
+    assert filter_model("N", ("max_age_days",), describe_neighborhood)(max_age_days=30).max_age_days == 30
 
 
 def test_a_filter_the_consumer_cannot_take_cannot_be_generated() -> None:

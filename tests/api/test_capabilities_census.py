@@ -102,7 +102,7 @@ def test_a_market_tool_takes_no_id_but_a_property_or_an_ad_and_never_forces_a_re
 
 # --- 4. portable shape ------------------------------------------------------------------------------------------
 
-_UNPORTABLE = {"$ref", "$defs", "anyOf", "oneOf", "allOf", "title", "const"}
+_UNPORTABLE = {"$ref", "$defs", "anyOf", "oneOf", "allOf", "title", "const", "exclusiveMinimum", "exclusiveMaximum"}
 
 
 def _nodes(node: Any) -> list[dict[str, Any]]:
@@ -129,6 +129,32 @@ def test_every_input_schema_is_portable_to_every_provider() -> None:
             assert sub.get("description"), f"{name}.{dotted} has no description"
 
 
+def test_every_input_schema_builds_with_the_gemini_sdk() -> None:
+    """Gemini's client refuses what the other providers take silently (exclusive bounds, $ref, type arrays)."""
+    types = pytest.importorskip("google.genai.types")
+    from api.providers.gemini import _schema_for_gemini
+    for name, entry in ENTRIES.items():
+        types.FunctionDeclaration(name=name, description=entry.description,
+                                  parameters=_schema_for_gemini(entry.input_schema))
+
+
+def test_a_field_that_takes_null_says_so_because_null_is_not_omission() -> None:
+    """A held subject's unset category takes its own; null asks for every category: the schema must offer null."""
+    for name, entry in ENTRIES.items():
+        rendered = entry.input_schema["properties"]
+        for field, raw in entry.args.model_json_schema()["properties"].items():
+            if {"type": "null"} in raw.get("anyOf", []):
+                assert rendered[field].get("nullable") is True, (name, field)
+
+
+def test_no_tool_offers_a_parked_condition_level() -> None:
+    """Rule 14: condition scoring is parked, so no surface reads its levels."""
+    from tests.toolkit.test_filter_registry import _PARKED_CONDITION_LEVELS
+    for name, entry in ENTRIES.items():
+        names = {dotted.rsplit(".", 1)[-1] for dotted, _ in _walk(entry.input_schema)}
+        assert not names & _PARKED_CONDITION_LEVELS, name
+
+
 # --- 6. only the registry opens a connection --------------------------------------------------------------------
 
 _OPENERS = {"connect", "connect_session", "tenant_transaction", "tenant_conn", "get_db_conn", "open_background_conn"}
@@ -153,16 +179,24 @@ _VELOCITY_SUBJECT = (lambda sql: "AS tom_days" in sql and "l.is_active, l.dispos
                      [(True, "2+kk", 50.08, 14.42, "byt", "prodej", 70, 12)])
 
 
+def _point_fields(entry: Entry) -> tuple[str, ...]:
+    """The fields of the point model this tool declares (a place only, or a place with attributes)."""
+    point = entry.args.model_fields.get("point")
+    return tuple(point.annotation.__args__[0].model_fields) if point is not None else ()
+
+
 def _baseline(entry: Entry) -> dict[str, Any]:
     fields = entry.args.model_fields
     args: dict[str, Any] = {}
     if "point" in fields:
-        args["point"] = _POINT
+        args["point"] = {k: v for k, v in _POINT.items() if k in _point_fields(entry)}
     if "listing_id" in fields and fields["listing_id"].is_required():
         args["listing_id"] = 70
     args.update({c: v for c, v in (("category_main", "byt"), ("category_type", "prodej")) if c in fields})
     if "lifecycle" in fields and fields["lifecycle"].default is None:
         args["lifecycle"] = "active"   # max_age_days renders only with a lifecycle gate
+    if "floor_band" in fields:
+        args["floor_band"] = 2         # the point's floor renders only inside a floor band
     return args
 
 
@@ -195,3 +229,16 @@ def test_every_filter_a_tool_declares_changes_the_statement_it_runs(name: str) -
         if _statements(name, {**base, fid: _distinct(props[fid], current)}) == before:
             dropped.append(fid)
     assert not dropped, f"{name} declares filters that never reach its SQL: {dropped}"
+
+
+_OTHER_POINT = {"lat": 50.09, "lng": 14.43, "area_m2": 90.0, "disposition": "3+kk", "floor": 5}
+
+
+@pytest.mark.parametrize("name", sorted(n for n, e in ENTRIES.items() if "point" in e.args.model_fields))
+def test_every_point_attribute_a_tool_accepts_changes_the_statement_it_runs(name: str) -> None:
+    entry = ENTRIES[name]
+    base = _baseline(entry)
+    before = _statements(name, base)
+    dropped = [f for f in _point_fields(entry)
+               if _statements(name, {**base, "point": {**base["point"], f: _OTHER_POINT[f]}}) == before]
+    assert not dropped, f"{name} accepts point attributes it never applies: {dropped}"

@@ -29,7 +29,7 @@ def _with_heads(result: dict[str, Any], heads: dict[str, int]) -> dict[str, Any]
     data = result["data"]
     if isinstance(data, list):
         data = data[: heads["data"]] if "data" in heads else data
-    else:
+    elif isinstance(data, dict):
         data = {k: v[: heads[f"data.{k}"]] if f"data.{k}" in heads else v for k, v in data.items()}
     truncated = {path: {"kept": n, "total": len(lists[path])} for path, n in heads.items() if n < len(lists[path])}
     metadata = {**(result.get("metadata") or {}), "truncated": truncated} if truncated else result.get("metadata")
@@ -41,9 +41,9 @@ def _fits(result: dict[str, Any]) -> bool:
 
 
 def fit(result: dict[str, Any]) -> dict[str, Any]:
-    """`result` itself when it fits; else its lists under `data` cut to their longest fitting heads (smaller lists
-    are kept whole first), each cut recorded in `metadata.truncated` (`result_count` stays the true total). Rows
-    are never split, so every per-m² figure keeps its basis (rule 23)."""
+    """`result` itself when it fits, else its lists under `data` cut to their longest fitting whole-row heads."""
+    # Smaller lists are kept whole first; each cut is recorded in metadata.truncated and result_count stays the true
+    # total. A row is never split, so every per-m² figure keeps its basis (rule 23).
     if _fits(result):
         return result
     lists = _lists(result)
