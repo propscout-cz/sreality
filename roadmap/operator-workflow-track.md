@@ -384,12 +384,10 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   The kanban's shape (drag to move, own trash + two-step confirm to remove) stays sanctioned.
 - **Owed (not built):** the board tints column headers + stage-editor swatches with its own
   `stageColor` (grey fallback) instead of `stageAccent` (copper) — converge, or record the
-  grey fallback as deliberate. The extension hand-copies the funnel SVG (forced: no React)
-  plus `stageBadge` and `stageAccent` (not forced: pure TS it could import from
-  `frontend/src/lib/pipelineStage.ts`, as it already imports `lib/brand`) — import it; since
-  Phase U-EXT-INDEX the copies live in ONE file, `chrome-extension/src/glyphs.ts`. Then
-  rule #22 (CLAUDE.md + architecture) drops the remaining exceptions (origin: Phase U-PIPE
-  3i below).
+  grey fallback as deliberate. Then rule #22 (CLAUDE.md + architecture) drops the remaining
+  exception (origin: Phase U-PIPE 3i below). Done 2026-10-28: the extension imports
+  `stageBadge` / `stageAccent` from `frontend/src/lib/pipelineStage.ts` (only the funnel SVG
+  stays a copy, forced: no React).
 
 ### Phase U2.6: Collections + tags + notes (done)
 Operator watchlists, freeform coloured tags, and per-listing journal

@@ -16,7 +16,8 @@ import {
   unshareCollection,
   updateCollection,
 } from '@/lib/api';
-import { isMine, revalidateCollections, settleCollectionWrite } from '@/lib/collectionCache';
+import { revalidateCollections, settleCollectionWrite } from '@/lib/collectionCache';
+import { isMine } from '@/lib/collectionRules';
 import { useCollectionCards } from '@/lib/collectionCards';
 import {
   DEFAULT_SORT,

@@ -16,10 +16,7 @@ vi.mock('./queries', async (orig) => ({
 
 import { listCollections } from './api';
 import {
-  collectionLabel,
-  isMine,
   revalidateCollections,
-  shareAudience,
   useCollectionMembership,
   useCollections,
 } from './collectionCache';
@@ -34,38 +31,6 @@ const own = (over: Partial<Collection> = {}): Collection => ({
 });
 const sharedBy = (email: string, over: Partial<Collection> = {}): Collection =>
   own({ owner_email: email, shared_with: [{ account_id: 'me', email: null }], ...over });
-
-describe('mine vs shared: one predicate, one label, one audience', () => {
-  it('isMine is owner_email == null', () => {
-    expect(isMine(own())).toBe(true);
-    expect(isMine(sharedBy('petr@example.cz'))).toBe(false);
-    expect(isMine({ owner_email: null })).toBe(true);
-  });
-
-  it('collectionLabel names the owner of a shared collection only', () => {
-    expect(collectionLabel(own({ name: 'monitoring' }))).toBe('monitoring');
-    expect(collectionLabel(sharedBy('petr@example.cz', { name: 'monitoring' })))
-      .toBe('monitoring · petr@example.cz');
-  });
-
-  it('shareAudience: my recipients and the owners of what is shared with me, sorted, once each', () => {
-    const byId = new Map<number, Collection>([
-      [1, own({ id: 1, shared_with: [
-        { account_id: 'b', email: 'zuzana@example.cz' },
-        { account_id: 'c', email: 'adam@example.cz' },
-      ] })],
-      [2, sharedBy('petr@example.cz', { id: 2 })],
-      [3, sharedBy('adam@example.cz', { id: 3 })],
-      [4, own({ id: 4 })],
-    ]);
-    expect(shareAudience([1, 2, 3, 4], byId)).toEqual([
-      'adam@example.cz', 'petr@example.cz', 'zuzana@example.cz',
-    ]);
-    // An unshared collection, or an id the list does not know, has no audience.
-    expect(shareAudience([4, 99], byId)).toEqual([]);
-    expect(shareAudience([2], byId)).toEqual(['petr@example.cz']);
-  });
-});
 
 function wrapper() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });

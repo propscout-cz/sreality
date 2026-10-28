@@ -27,8 +27,9 @@
 // The shared product brand (frontend/src/lib/brand.ts) — the notice's wordmark
 // is the same string as the panel header's.
 import { APP_NAME } from '../../frontend/src/lib/brand';
-// The MF result's ONE shape rule, shared with the SPA (a zero-dependency module).
-import { mfShape } from '../../frontend/src/lib/mfReference';
+import { fmtCzk, fmtPct } from '../../frontend/src/lib/format';
+// The MF result's ONE shape rule and its yield text, shared with the SPA.
+import { mfShape, mfYieldText } from '../../frontend/src/lib/mfReference';
 import {
   API_NOT_CONFIGURED_DETAIL,
   EXTENSION_RELOADED_DETAIL,
@@ -149,33 +150,6 @@ export interface IndexOverlayHandle {
    * called when a route change (SPA soft-nav) moves the tab off an index page,
    * so repeated navigations don't stack duplicate observers scanning the DOM. */
   stop: () => void;
-}
-
-export function fmtPct(n: number | null | undefined): string {
-  return n == null
-    ? '—'
-    : `${n.toLocaleString('cs-CZ', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} %`;
-}
-
-/* The MF yield every extension surface prints (this badge, the panel's figure
- * and its minimized bar), by the SHAPE of the property's result: a value's
- * yield, or a range's two; null for a reason, no result, or no yield (a rental
- * flat, a price too low to divide by). */
-export function mfYieldText(listing: PortalListing | null): string | null {
-  if (listing == null || !listing.found) return null;
-  const shape = mfShape(listing.mf_reference_rent);
-  if (shape.kind === 'value') {
-    return listing.mf_gross_yield_pct != null ? fmtPct(listing.mf_gross_yield_pct) : null;
-  }
-  if (shape.kind !== 'range') return null;
-  const { yield_min_pct: lo, yield_max_pct: hi } = shape.range;
-  if (lo == null || hi == null) return null;
-  const low = lo.toLocaleString('cs-CZ', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-  return `${low}–${fmtPct(hi)}`;
-}
-
-export function fmtCzk(n: number | null | undefined): string {
-  return n == null ? '—' : `${Math.round(n).toLocaleString('cs-CZ')} Kč`;
 }
 
 export function failureKind(detail: string): FailureKind {
@@ -566,7 +540,7 @@ function badgeFor(listing: PortalListing): BadgeView | null {
   } else if (shape.kind !== 'none' && shape.note != null) {
     title = shape.note;
   }
-  const mfYield = mfYieldText(listing);
+  const mfYield = mfYieldText(listing.mf_gross_yield_pct, listing.mf_reference_rent);
   if (mfYield != null) return { kind: 'yield', text: `Výnos MF ${mfYield}`, title };
   if (listing.latest_estimation?.gross_yield_pct != null) {
     return { kind: 'est', text: `Odhad ${fmtPct(listing.latest_estimation.gross_yield_pct)}`, title };
@@ -575,17 +549,18 @@ function badgeFor(listing: PortalListing): BadgeView | null {
 }
 
 /* The notice's stylesheet, handed to the dock: it mounts in the dock's closed
- * shadow root (which positions it and keeps the portal's CSS out). The panel's
- * civic-archive palette by value: paper surface, ink edge, the 2px copper
- * "filed" top edge, a copper button. */
+ * shadow root (which positions it, keeps the portal's CSS out and carries the
+ * app's tokens): a popover surface, the 2px accent "filed" top edge, an accent
+ * button. Font sizes in px, so a portal's root font size cannot shrink them. */
 const NOTICE_CSS = `
   .__mf_notice {
     box-sizing: border-box; width: max-content;
     max-width: min(21rem, calc(100vw - 2.5rem));
     padding: 0.6rem 0.85rem 0.8rem;
-    font-size: 0.82rem; line-height: 1.45; text-align: left; color: #1c1c1c;
-    background: #f7f3ec; border: 1px solid #1c1c1c;
-    box-shadow: inset 0 2px 0 #b3592d, 0 10px 34px -10px rgba(28, 20, 10, 0.30);
+    font-size: 13px; line-height: 1.45; text-align: left; color: var(--color-ink);
+    background: var(--color-paper-3); border: 1px solid var(--color-rule-strong);
+    border-radius: var(--radius-md);
+    box-shadow: inset 0 2px 0 var(--color-copper), 0 10px 34px -10px rgba(28, 20, 10, 0.30);
     transition: opacity 140ms ease;
   }
   /* Transparent, not hidden: the empty live region must already be in the
@@ -597,33 +572,33 @@ const NOTICE_CSS = `
     gap: 1rem; margin-bottom: 0.35rem;
   }
   .n-mark { display: inline-flex; align-items: center; gap: 0.45rem; }
-  .n-tick { width: 0.5rem; height: 0.5rem; background: #b3592d; flex-shrink: 0; }
+  .n-tick { width: 0.5rem; height: 0.5rem; background: var(--color-copper); flex-shrink: 0; }
   .n-word {
-    font-size: 0.64rem; font-weight: 600; text-transform: uppercase;
-    letter-spacing: 0.2em; color: #b3592d;
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.2em; color: var(--color-copper);
   }
   .n-close {
     margin: -0.2rem -0.3rem -0.2rem 0; padding: 0 0.2rem;
-    font: inherit; font-size: 1.1rem; line-height: 1; color: #8a8a8a;
+    font: inherit; font-size: 18px; line-height: 1; color: var(--color-ink-3);
     background: transparent; border: 0; cursor: pointer;
   }
-  .n-close:hover { color: #1c1c1c; }
+  .n-close:hover { color: var(--color-ink); }
   .n-text { margin: 0; }
   .n-detail, .n-error {
-    margin: 0.15rem 0 0; font-size: 0.74rem; overflow-wrap: anywhere;
+    margin: 0.15rem 0 0; font-size: 12px; overflow-wrap: anywhere;
   }
-  .n-detail { color: #555; }
-  .n-error { color: #b34730; }
+  .n-detail { color: var(--color-ink-3); }
+  .n-error { color: var(--color-brick); }
   .n-primary {
     display: block; width: 100%; margin-top: 0.6rem; padding: 0.5rem 0.9rem;
-    font: inherit; font-size: 0.72rem; font-weight: 600; text-transform: uppercase;
-    letter-spacing: 0.1em; color: #fff; background: #b3592d; border: 0;
-    cursor: pointer; transition: background 120ms ease;
+    font: inherit; font-size: 12px; font-weight: 600;
+    color: var(--color-on-copper); background: var(--color-copper); border: 0;
+    border-radius: var(--radius-sm); cursor: pointer; transition: background 120ms ease;
   }
-  .n-primary:hover { background: #9a4b25; }
-  .n-primary[aria-disabled="true"] { background: #8a8a8a; cursor: wait; }
+  .n-primary:hover { background: var(--color-copper-2); }
+  .n-primary[aria-disabled="true"] { background: var(--color-ink-3); cursor: wait; }
   .n-close:focus-visible, .n-primary:focus-visible {
-    outline: 2px solid #b3592d; outline-offset: 2px;
+    outline: 2px solid var(--color-focus); outline-offset: 2px;
   }
 `;
 

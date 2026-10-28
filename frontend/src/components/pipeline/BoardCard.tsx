@@ -24,6 +24,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { useDraggable } from '@dnd-kit/core';
 import { fmtArea, fmtCzk, fmtMeasuredPricePerM2 } from '@/lib/format';
 import { ppm2BasisFromToken } from '@/lib/measure';
+import { mfYieldText } from '@/lib/mfReference';
 import { listingKindLabel } from '@/lib/enums';
 import { propertyPath } from '@/lib/listingUrl';
 import { useNewTabProps } from '@/lib/linkGestures';
@@ -255,12 +256,7 @@ export function CardFace({
                 className="card-tip shrink-0 font-mono tabular-nums text-[0.68rem] text-[var(--color-ink-3)]"
                 title="Hrubý výnos dle cenové mapy nájemného MF"
               >
-                MF{' '}
-                {card.mf_gross_yield_pct.toLocaleString('cs-CZ', {
-                  minimumFractionDigits: 1,
-                  maximumFractionDigits: 1,
-                })}{' '}
-                %
+                MF {mfYieldText(card.mf_gross_yield_pct)}
               </span>
             )}
           </div>

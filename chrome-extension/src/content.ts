@@ -12,28 +12,19 @@
  * worker (host_permissions + the portal's CORS don't apply there). */
 
 import styles from './styles.css?inline';
+import tokens from '../../frontend/src/styles/tokens.css?inline';
 import { detailRef, portalForHost, type PortalRef } from '../../frontend/src/lib/portalIds';
 import {
-  COLLECTION_SAVE_LABEL,
   bellIconSvg,
   bookmarkIconSvg,
   eyeOffIconSvg,
   funnelIconSvg,
-  isMine,
   savedCollections,
   saveTargets,
-  shareAudience,
-  stageAccent,
-  stageBadge,
+  stageLook,
 } from './glyphs';
-import {
-  failureKind,
-  fmtCzk,
-  fmtPct,
-  mfYieldText,
-  runIndexOverlay,
-  type IndexOverlayHandle,
-} from './index_overlay';
+import { failureKind, runIndexOverlay, type IndexOverlayHandle } from './index_overlay';
+import { followAppearance } from './appearance';
 import { buildCard } from './card';
 import {
   APP_BASE_URL,
@@ -53,20 +44,22 @@ import type {
   AuthState,
   BillingMe,
   EstimationRun,
-  ExtCollection,
-  ExtNote,
-  ExtTag,
   IngestState,
-  PipelineStage,
   PortalListing,
   RouteMessage,
   YieldScenarioUpdate,
 } from './types';
+import type { Collection, Note, PipelineStage, Tag } from '../../frontend/src/lib/types';
 // Shared product brand — the ONE definition (frontend/src/lib/brand.ts), the
 // same one the SPA uses. Rebranding there updates the panel wordmark here too.
 import { APP_NAME } from '../../frontend/src/lib/brand';
-// The MF result's ONE shape rule, shared with the SPA (a zero-dependency module).
-import { mfShape } from '../../frontend/src/lib/mfReference';
+// The app's own definitions, one each: the MF shape rule and its yield text,
+// the formatters and the per-m² vocabulary, the stage look, the collection rules.
+import { mfShape, mfYieldText } from '../../frontend/src/lib/mfReference';
+import { fmtArea, fmtCount, fmtCzk, fmtMeasuredPricePerM2, fmtPct } from '../../frontend/src/lib/format';
+import { PPM2_UNIT, areaBasisLabel } from '../../frontend/src/lib/measure';
+import { stageAccent, stageBadge } from '../../frontend/src/lib/pipelineStage';
+import { COLLECTION_SAVE_LABEL, isMine, shareAudience } from '../../frontend/src/lib/collectionRules';
 
 const DEFAULT_RENOVATION_CZK = 0;
 /* Back-compat ONLY, never a second live definition of the fond rate: the value
@@ -87,33 +80,6 @@ const POLL_INTERVAL_MS = 2000;
 // agent's ~240 s wall clock plus queue latency.
 const POLL_MAX_ATTEMPTS = 180;
 const HOST_ELEMENT_ID = '__sreality_yield_panel_host__';
-
-/* ---- the measure vocabulary, as this territory spells it -----------------
- *
- * The extension is a third territory that cannot import the Python or the SPA
- * module holding these, so they are copied — but copied VERBATIM, because a
- * second spelling of a unit is a second definition of it.
- *
- * The unit of every MONTHLY per-m² figure the panel renders (the MF reference
- * rent and the fond rate alike), spelled as
- * `toolkit/measures.PPM2_UNIT_CS['rent_monthly_czk_m2']`. The bare unit
- * without the period suffix is the CAPITAL one: using it for a per-month
- * charge misnames the figure by a factor of twelve. */
-const CZK_PER_M2_MONTH = 'Kč/m²/měs';
-
-/* Czech names for `listings.area_basis` (migration 423) — the stamp that says
- * WHICH physical area `area_m2` holds. 'unknown' is deliberately absent: an
- * area nobody labelled renders bare rather than being handed a basis it never
- * had. */
-const AREA_BASIS_CS: Record<string, string> = {
-  usable: 'užitná',
-  floor: 'podlahová',
-  total: 'celková',
-  plot: 'pozemek',
-};
-
-/* The one `area_basis` value that means `area_m2` IS the parcel. */
-const PLOT_AREA_BASIS = 'plot';
 
 /* Minimized = the panel collapses to a tiny bar showing just the two yield
  * figures. The preference persists across listings/pages via chrome.storage.local
@@ -171,7 +137,7 @@ interface PanelState {
   /* The last attach/detach failure, shown inside the tag checklist. */
   tagError: string | null;
   /* The property's operator notes (null = not loaded). Per-property, not cached. */
-  notes: ExtNote[] | null;
+  notes: Note[] | null;
   /* True once every retry of the notes read failed: the panel says so and offers
    * a retry instead of drawing "no notes" (MS16). */
   notesFailed: boolean;
@@ -200,10 +166,10 @@ interface PanelState {
  * in flight — projected per render by `view`, never copied into the state. */
 interface PanelView extends PanelState {
   stages: PipelineStage[] | null;
-  collections: ExtCollection[] | null;
+  collections: Collection[] | null;
   /* Every retry of the read failed with no list to show: say so, not "Načítám…". */
   collectionsFailed: boolean;
-  tags: ExtTag[] | null;
+  tags: Tag[] | null;
   tagsFailed: boolean;
   /* A write of that kind is in flight for the property (disables its control). */
   pipelineBusy: boolean;
@@ -447,7 +413,7 @@ function fondHint(state: PanelState): string {
    * `area_basis` stamp is used only to word it, and is absent for a land row
    * the server recognised by `category_main` alone. */
   if (!fondApplies(state)) {
-    return area.basis === PLOT_AREA_BASIS
+    return area.basis === 'plot'
       ? 'Neuplatní se — plocha je pozemek.'
       : 'Neuplatní se u tohoto typu nemovitosti.';
   }
@@ -458,7 +424,7 @@ function fondHint(state: PanelState): string {
 function acquisitionHint(state: PanelState): string {
   const reno = state.renovation ?? 0;
   return reno > 0 && state.price != null
-    ? `Akvizice ${fmtCzk(state.price + reno)}`
+    ? `Akvizice ${fmtCzk(Math.round(state.price + reno))}`
     : 'Jednorázový rozpočet, přičte se k ceně';
 }
 
@@ -468,7 +434,7 @@ function acquisitionHint(state: PanelState): string {
  * exists. */
 function minimizedYieldCells(state: PanelState): { label: string; value: string }[] {
   const cells: { label: string; value: string }[] = [];
-  const mf = mfYieldText(state.listing);
+  const mf = mfYieldText(state.listing?.mf_gross_yield_pct, state.listing?.mf_reference_rent);
   if (mf != null) cells.push({ label: 'MF', value: mf });
   if (state.run?.status === 'success') {
     const y = computeYield(state);
@@ -549,7 +515,11 @@ function mountPanel(): {
   document.documentElement.appendChild(host);
   const shadow = host.attachShadow({ mode: 'closed' });
   const styleEl = document.createElement('style');
-  styleEl.textContent = styles;
+  /* TEMPORARY (until this panel is replaced): the app's palette ahead of the
+   * panel's own, for the stage colours lib/pipelineStage names and the brick
+   * styles.css's note deletion reads. The host carries no theme attributes, so
+   * it stays Měď light like the rest of it. */
+  styleEl.textContent = tokens + styles;
   shadow.appendChild(styleEl);
 
   const panel = document.createElement('div');
@@ -906,7 +876,8 @@ function mountPanel(): {
     /* Tint by the CURRENT stage, like the SPA's pill — the pill was copper for
      * every stage before the badge existed, which made "which stage am I on?"
      * unreadable at a glance. */
-    const accent = stageAccent(l.pipeline?.stage_color);
+    const look = stageLook(l.pipeline);
+    const accent = stageAccent(look);
     pill.style.color = accent.fg;
     pill.style.background = accent.soft;
     pill.style.borderColor = accent.fg;
@@ -914,9 +885,7 @@ function mountPanel(): {
     const icon = document.createElement('span');
     icon.className = 'pipeline-pill-icon';
     icon.innerHTML = funnelIconSvg(true);
-    const badge = stageBadge(
-      l.pipeline?.stage_code, l.pipeline?.stage_id, state.stages,
-    );
+    const badge = look && stageBadge(look, state.stages ?? []);
     if (badge != null) {
       const code = document.createElement('span');
       code.className = 'pipeline-stage-code';
@@ -1373,7 +1342,7 @@ function mountPanel(): {
   /* Another author's SHARED note (they marked it; a share put it in reach):
    * read only — no edit or delete, a neutral left rule, and the author first on
    * its meta line (the SPA's ForeignNoteRow). */
-  function buildForeignNoteItem(n: ExtNote): HTMLElement {
+  function buildForeignNoteItem(n: Note): HTMLElement {
     const item = document.createElement('div');
     item.className = 'note-item note-item--foreign';
     item.setAttribute('role', 'group');
@@ -1392,7 +1361,7 @@ function mountPanel(): {
   }
 
   /* The note's date/edited marker; the exact stamps on hover. */
-  function noteDate(n: ExtNote): HTMLElement {
+  function noteDate(n: Note): HTMLElement {
     const date = document.createElement('span');
     date.className = 'note-date';
     date.textContent = fmtNoteDate(n.created_at) + (n.updated_at != null ? ' (upraveno)' : '');
@@ -1406,7 +1375,7 @@ function mountPanel(): {
    * shared mark and toggle, an edit/delete icon pair, and (when this note is the
    * one pending delete) a confirm row in place of the meta line — mirrors the
    * SPA NoteRow's two-step confirm. */
-  function buildNoteItem(n: ExtNote, state: PanelView, audience: string[] | null): HTMLElement {
+  function buildNoteItem(n: Note, state: PanelView, audience: string[] | null): HTMLElement {
     const item = document.createElement('div');
     item.className = 'note-item';
 
@@ -1490,7 +1459,7 @@ function mountPanel(): {
   /* A note in inline-edit mode: textarea (seeded from + writing to the module
    * global noteEditDraft, same non-rerendering-per-keystroke pattern as the
    * add-note box) + Save/Cancel. */
-  function buildNoteEditItem(n: ExtNote, state: PanelView): HTMLElement {
+  function buildNoteEditItem(n: Note, state: PanelView): HTMLElement {
     const item = document.createElement('div');
     item.className = 'note-item note-item--editing';
 
@@ -1540,7 +1509,7 @@ function mountPanel(): {
     if (l == null || !l.found) return;
     const shape = mfShape(l.mf_reference_rent);
     if (shape.kind === 'none') return;
-    const pct = mfYieldText(l);  // null for a note: it carries no yield
+    const pct = mfYieldText(l.mf_gross_yield_pct, l.mf_reference_rent);  // null for a note: it carries no yield
     const card = buildCard({ title: pct != null ? 'Výnos MF (hrubý)' : 'Cenová mapa MF' });
     card.title.title = pct != null
       ? 'Hrubý výnos dle cenové mapy nájemného MF (nájem ÷ cena)'
@@ -1568,16 +1537,15 @@ function mountPanel(): {
     val.className = 'mf-ledger-value';
     /* The per-m² rate is the result's own (a value's total, a range's two
      * totals), never a quotient taken here. */
-    const num = (n: number): string => Math.round(n).toLocaleString('cs-CZ');
     if (shape.kind === 'value') {
       val.textContent =
         `${fmtCzk(shape.ref.monthly_rent_czk)}/měs · ` +
-        `${num(shape.ref.total_per_m2)} ${CZK_PER_M2_MONTH}`;
+        fmtMeasuredPricePerM2(shape.ref.total_per_m2, 'rent');
     } else {
       const r = shape.range;
       val.textContent =
-        `${num(r.rent_min_czk)}–${fmtCzk(r.rent_max_czk)}/měs · ` +
-        `${num(r.per_m2_min)}–${num(r.per_m2_max)} ${CZK_PER_M2_MONTH}`;
+        `${fmtCount(r.rent_min_czk)}–${fmtCzk(r.rent_max_czk)}/měs · ` +
+        `${fmtCount(Math.round(r.per_m2_min))}–${fmtMeasuredPricePerM2(r.per_m2_max, 'rent')}`;
       if (shape.note != null) {
         const info = document.createElement('span');
         info.className = 'mf-info';
@@ -1617,10 +1585,8 @@ function mountPanel(): {
      * cannot tell the operator whether they are looking at a flat or a field.
      * An unstamped/unknown basis renders bare rather than guessing. */
     if (l.area_m2 != null) {
-      const areaBasis = AREA_BASIS_CS[l.area_basis ?? ''] ?? null;
-      meta.push(
-        `${Math.round(l.area_m2)} m²` + (areaBasis != null ? ` (${areaBasis})` : ''),
-      );
+      const areaBasis = areaBasisLabel(l.area_basis);
+      meta.push(fmtArea(l.area_m2) + (areaBasis != null ? ` (${areaBasis})` : ''));
     }
     if (l.price_czk != null) meta.push(fmtCzk(l.price_czk));
     if (meta.length > 0) {
@@ -1715,7 +1681,7 @@ function mountPanel(): {
     fields.appendChild(buildField({
       // A MONTHLY rate. The period-less unit this replaces is the capital one —
       // it named a per-month charge as if it were a purchase price per m².
-      key: 'cost', label: 'Fond oprav + SVJ', suffix: CZK_PER_M2_MONTH,
+      key: 'cost', label: 'Fond oprav + SVJ', suffix: PPM2_UNIT.rent,
       value: state.costPerM2, onInput: (v) => onEdit('cost', v),
       hint: fondHint(state),
       /* An editable field that changes nothing is a lie — and a typed rate
@@ -2154,10 +2120,10 @@ function onToggleTag(tagId: number): Promise<void> {
 
 /* The SPA's TagChip: the tag's name in its colour on its soft wash. The tag
  * palette IS the stage palette (TagColor), so its accent resolves alike. */
-function tagChip(tag: ExtTag): HTMLElement {
+function tagChip(tag: Tag): HTMLElement {
   const chip = document.createElement('span');
   chip.className = 'tag-chip';
-  const accent = stageAccent(tag.color);
+  const accent = stageAccent(tag);
   chip.style.color = accent.fg;
   chip.style.borderColor = accent.fg;
   chip.style.background = accent.soft;
@@ -2239,7 +2205,7 @@ let noteEditDraft = '';
  * reset with the draft. */
 let noteShareDraft = false;
 
-/* Who a SHARED note on the panel's property would reach — the SPA's
+/* Who a SHARED note on the panel's property would reach — the app's
  * shareAudience over the same facts (the lookup's collection_ids × the
  * collection list). Null = not known yet (the list loading or failed), which
  * must never read as "nobody": no checkbox, no share toggle, no "nobody" claim. */
@@ -2248,7 +2214,7 @@ function noteAudience(s: PanelView): string[] | null {
   if (l == null) return null;
   if ((l.collection_ids ?? []).length === 0) return [];
   if (s.collections == null) return null;
-  return shareAudience(l.collection_ids ?? [], s.collections);
+  return shareAudience(l.collection_ids ?? [], new Map(s.collections.map((c) => [c.id, c])));
 }
 
 /* Notes are PER-PROPERTY (not page-wide like the store's lists), so they're fetched
@@ -2267,7 +2233,7 @@ async function loadNotes(): Promise<void> {
   const propertyId = l.property_id;
   const mine = (prev: PanelState): boolean => prev.listing?.property_id === propertyId;
   if (state.notesFailed) setState((prev) => ({ ...prev, notesFailed: false }));
-  const res = await store.retry(() => call<ExtNote[]>({ type: 'list_notes', property_id: propertyId }));
+  const res = await store.retry(() => call<Note[]>({ type: 'list_notes', property_id: propertyId }));
   if (res == null) return;
   setState((prev) => (!mine(prev) ? prev : res.ok ? { ...prev, notes: res.data } : { ...prev, notesFailed: true }));
 }
@@ -2285,7 +2251,7 @@ async function onAddNote(): Promise<void> {
   // Shared only while the checkbox is on screen, i.e. someone would read it.
   const shared = noteShareDraft && (noteAudience(view(state))?.length ?? 0) > 0;
   setState((prev) => ({ ...prev, noteBusy: true, errorMessage: null }));
-  const res = await call<ExtNote>({
+  const res = await call<Note>({
     type: 'add_note', property_id: propertyId, body, shared,
     origin_listing_ref_id: l.listing_id ?? null,
   });
@@ -2312,7 +2278,7 @@ async function onAddNote(): Promise<void> {
 
 /* Open a note for inline edit — seeds the edit draft with its current body and
  * closes any delete-confirm row (a note can't be mid-edit and mid-confirm). */
-function onEditNoteStart(note: ExtNote): void {
+function onEditNoteStart(note: Note): void {
   noteEditDraft = note.body;
   setState((prev) => ({ ...prev, noteEditingId: note.id, noteConfirmDeleteId: null }));
 }
@@ -2331,7 +2297,7 @@ async function onEditNoteSave(noteId: number): Promise<void> {
   if (body === '') return;
   const propertyId = l.property_id;
   setState((prev) => ({ ...prev, noteRowBusy: true, errorMessage: null }));
-  const res = await call<ExtNote>({
+  const res = await call<Note>({
     type: 'update_note', property_id: propertyId, note_id: noteId, patch: { body },
   });
   if (!res.ok) {
@@ -2352,12 +2318,12 @@ async function onEditNoteSave(noteId: number): Promise<void> {
 
 /* Mark one of my notes shared, or private again (PATCH {shared}; not an edit,
  * so `updated_at` stays). Identity-guarded like the other note writes. */
-async function onToggleNoteShared(note: ExtNote): Promise<void> {
+async function onToggleNoteShared(note: Note): Promise<void> {
   const l = state.listing;
   if (l == null || l.property_id == null || state.noteRowBusy) return;
   const propertyId = l.property_id;
   setState((prev) => ({ ...prev, noteRowBusy: true, errorMessage: null }));
-  const res = await call<ExtNote>({
+  const res = await call<Note>({
     type: 'update_note', property_id: propertyId, note_id: note.id, patch: { shared: !note.shared },
   });
   if (!res.ok) {
@@ -2614,4 +2580,9 @@ chrome.runtime.onMessage.addListener((message: RouteMessage) => {
   if (message.type === 'route_changed') renderForUrl(message.url);
 });
 
+// The profile's scheme and theme on every themed shadow host (appearance.ts).
+followAppearance(async () => {
+  const auth = await call<AuthState>({ type: 'get_auth_state' });
+  return auth.ok ? auth.data.appearance : null;
+});
 renderForUrl(window.location.href);

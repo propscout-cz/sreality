@@ -20,42 +20,10 @@ import { listCollections } from '@/lib/api';
 import { actingKey, actOpts, useActAs } from '@/lib/acting';
 import { curationKeys, fetchPropertyCollectionMemberSet } from '@/lib/queries';
 import { settleMemberWrite } from '@/lib/curationSettle';
+import { isMine } from '@/lib/collectionRules';
 import type { Collection } from '@/lib/types';
 
 const NO_COLLECTIONS: Collection[] = [];
-
-/* THE predicate for "mine" vs "shared with me" (migration 610): the API sets
- * owner_email to null exactly when the caller owns the thing. Notes carry the
- * same field, so one definition serves both. */
-export function isMine(x: { owner_email: string | null }): boolean {
-  return x.owner_email == null;
-}
-
-/* The one label: a shared collection names its owner, which also tells apart
- * same-named collections (every account has a "monitoring"). */
-export function collectionLabel(c: Collection): string {
-  return isMine(c) ? c.name : `${c.name} · ${c.owner_email}`;
-}
-
-/* Who else can read a SHARED note on a property sitting in `ids`: for a
- * collection I own, every recipient; for one shared with me, its owner.
- * De-duplicated and sorted, so the composer label is stable. */
-export function shareAudience(
-  ids: Iterable<number>,
-  byId: ReadonlyMap<number, Collection>,
-): string[] {
-  const emails = new Set<string>();
-  for (const id of ids) {
-    const c = byId.get(id);
-    if (c == null) continue;
-    if (isMine(c)) {
-      for (const s of c.shared_with) if (s.email != null) emails.add(s.email);
-    } else if (c.owner_email != null) {
-      emails.add(c.owner_email);
-    }
-  }
-  return [...emails].sort();
-}
 
 /* The caller's collections (GET /collections) — or, inside <ActingAs>, the
  * owner's (lib/acting). A failed read is a retry, never "No collections yet"

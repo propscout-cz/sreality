@@ -1,4 +1,17 @@
 import { useSyncExternalStore } from 'react';
+import {
+  DEFAULT_APPEARANCE,
+  MODES,
+  SCHEMES,
+  followSystemDark,
+  isTime,
+  paintAppearance,
+  parseAppearance,
+  type Appearance,
+  type ColorScheme,
+  type SavedAppearance,
+  type ThemeMode,
+} from './appearance';
 import { readChoice, readValue, writeValue } from './persistedFlag';
 
 /* The user's appearance: a colour scheme (styles/tokens.css: Měď needs no
@@ -6,76 +19,33 @@ import { readChoice, readValue, writeValue } from './persistedFlag';
  * side, so every scheme has both. ONE store for every picker (account menu,
  * phone account sheet, Settings), cached on the device (index.html applies the
  * cache before the first paint) and kept in the signed-in user's profile. */
-export type ThemeMode = 'light' | 'dark' | 'system';
-export type ColorScheme = 'med' | 'kobalt' | 'grafit';
-interface Appearance {
-  scheme: ColorScheme;
-  theme: ThemeMode;
-}
-
-export const COLOR_SCHEMES: ReadonlyArray<{
-  value: ColorScheme;
-  label: string;
-  /* Canvas, accent, live price — drawn as the picker's swatch (light side). */
-  swatch: readonly [string, string, string];
-}> = [
-  { value: 'med', label: 'Měď', swatch: ['#f2efe7', '#1f6b5c', '#38692a'] },
-  { value: 'kobalt', label: 'Kobalt', swatch: ['#eef1f5', '#1f45b5', '#1f7346'] },
-  { value: 'grafit', label: 'Grafit', swatch: ['#f0f0ee', '#18181b', '#1b7548'] },
-];
-
-/* Light or dark, in picker order; a surface in another language relabels it. */
-export const THEME_MODES: ReadonlyArray<{ value: ThemeMode; label: string }> = [
-  { value: 'light', label: 'Light' },
-  { value: 'dark', label: 'Dark' },
-  { value: 'system', label: 'System' },
-];
-
-const SCHEMES = COLOR_SCHEMES.map((s) => s.value);
-const MODES = THEME_MODES.map((m) => m.value);
 const SCHEME_KEY = 'sreality.scheme';
 const THEME_KEY = 'sreality.theme';
 /* Beside the two values index.html reads: when the cached appearance was picked
  * and, if signed in, by whom ("<ISO time>" or "<ISO time> <user id>"). */
 const CHOSEN_KEY = 'sreality.appearance.chosen';
 
-/* The profile keeps a pick with its time. On the device, `user` names whose it
- * is (absent when picked signed out); a default, or a cache written before picks
- * were timed, has no `at`, so it never overwrites a profile. */
-interface SavedAppearance extends Appearance {
-  at: string;
-}
+/* On the device, `user` names whose pick it is (absent when picked signed out);
+ * a default, or a cache written before picks were timed, has no `at`, so it
+ * never overwrites a profile. */
 type Cached = Appearance & { at?: string; user?: string };
-
-const isTime = (at: unknown): at is string => typeof at === 'string' && !Number.isNaN(Date.parse(at));
 const [cachedAt, cachedUser] = readValue(CHOSEN_KEY, '').split(' ');
 let state: Cached = {
-  scheme: readChoice(SCHEME_KEY, SCHEMES, 'med'),
-  theme: readChoice(THEME_KEY, MODES, 'light'),
+  scheme: readChoice(SCHEME_KEY, SCHEMES, DEFAULT_APPEARANCE.scheme),
+  theme: readChoice(THEME_KEY, MODES, DEFAULT_APPEARANCE.theme),
   at: isTime(cachedAt) ? cachedAt : undefined,
   user: cachedUser || undefined,
 };
 const listeners = new Set<() => void>();
-let systemQuery: MediaQueryList | null = null;
 
 /* "system" is resolved here, so <html> always carries light or dark; an OS
- * flip re-applies it (the listener attaches the first time it is asked). */
-function systemIsDark(): boolean {
-  if (!systemQuery && typeof window.matchMedia === 'function') {
-    systemQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    systemQuery.addEventListener('change', () => {
-      if (state.theme === 'system') applyAppearance();
-    });
-  }
-  return systemQuery?.matches ?? false;
-}
+ * flip re-applies it. */
+const systemIsDark = followSystemDark(() => {
+  if (state.theme === 'system') applyAppearance();
+});
 
 export function applyAppearance(): void {
-  const root = document.documentElement;
-  if (state.scheme === 'med') root.removeAttribute('data-scheme');
-  else root.setAttribute('data-scheme', state.scheme);
-  const dark = state.theme === 'dark' || (state.theme === 'system' && systemIsDark());
-  root.setAttribute('data-theme', dark ? 'dark' : 'light');
+  paintAppearance(document.documentElement, state, systemIsDark);
 }
 
 function commit(next: SavedAppearance & { user?: string }): void {
@@ -116,20 +86,12 @@ export function setTheme(theme: ThemeMode): void {
   choose({ theme });
 }
 
-/* Metadata is client-writable: only the store's own ids and a real time get through. */
-function parseSaved(value: unknown): SavedAppearance | null {
-  if (typeof value !== 'object' || value === null) return null;
-  const { scheme, theme, at } = value as Record<string, unknown>;
-  if (!SCHEMES.includes(scheme as ColorScheme) || !MODES.includes(theme as ThemeMode) || !isTime(at)) return null;
-  return { scheme: scheme as ColorScheme, theme: theme as ThemeMode, at };
-}
-
 /* THE rule: the newest explicit pick wins. The profile's is applied and cached
  * (with its own time, as this user's) unless this device holds a newer pick by
  * the same user, which goes to the profile instead. */
 function reconcile(user: ProfileUser | null): void {
   if (!user || user.id !== signedIn?.id) return;
-  const saved = parseSaved(user.user_metadata?.appearance);
+  const saved = parseAppearance(user.user_metadata?.appearance);
   const mine = state.user === user.id ? state.at : undefined;
   if (saved && !(mine && Date.parse(mine) > Date.parse(saved.at))) commit({ ...saved, user: user.id });
   else if (mine) send();

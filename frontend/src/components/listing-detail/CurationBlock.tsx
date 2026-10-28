@@ -46,11 +46,8 @@ import { actingKey, actOpts, useActAs } from '@/lib/acting';
 import { curationKeys } from '@/lib/queries';
 import { browseReads } from '@/lib/curationSettle';
 import { useTagReads } from '@/lib/useCardTags';
-import {
-  isMine,
-  shareAudience,
-  useCollectionMembership,
-} from '@/lib/collectionCache';
+import { useCollectionMembership } from '@/lib/collectionCache';
+import { isMine, shareAudience } from '@/lib/collectionRules';
 import { fmtAbsolute, fmtRelative } from '@/lib/format';
 import type { Note } from '@/lib/types';
 import {

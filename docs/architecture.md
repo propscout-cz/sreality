@@ -1101,11 +1101,24 @@ rules. Identify which one a task belongs to before you start.
   `vite build --mode content` then `--mode background`: `content.js` a self-contained IIFE
   classic script with `index_overlay.ts` bundled in, `background.js` ESM) plus a copied-over
   `manifest.json` and `icon-{16,48,128}.png`; output lands in `chrome-extension/dist/`.
-- **Vanilla TypeScript only — no React, no Tailwind.** The panel lives inside a closed
-  shadow root with its own scoped CSS in `src/styles.css?inline`. Palette mirrors the
-  SPA's civic-archive tokens by hand-coded values for now; a later change has it read
-  the SPA's `frontend/src/styles/tokens.css`, whose rules already name `:host`. Keep the
-  bundle small.
+- **Vanilla TypeScript only — no React, no Tailwind.** Every surface lives inside a closed
+  shadow root. The search-page roots (card cluster, its menus, the photo mark, the dock and its
+  notice) take the app's palette as it is, `frontend/src/styles/tokens.css?inline` (`--color-*`,
+  `--radius-*`; its rules name `:host(…)`), and wear the user's appearance: `src/appearance.ts`
+  `themeHost` stamps `data-scheme` / `data-theme` on each host by `lib/appearance.ts`
+  `paintAppearance`, from the profile's `user_metadata.appearance` that `get_auth_state` reads off the
+  session token (Měď light when signed out or unset; asked at start and on every session change;
+  `system` follows the OS; the photo mark, paint on a photo, is pinned to its light side). The listing panel keeps its own light palette (`src/tokens.css` +
+  `src/styles.css?inline`) until it is replaced, with the app's tokens ahead of it for the stage and
+  tag colours only (its host is not themed). Every definition the app already has is IMPORTED from
+  `frontend/src/lib` (formatters, the per-m² vocabulary, the MF shape and yield text, the stage
+  look, the collection rules, the appearance values, the wire types), and `vite.config.ts`'s
+  `assert-pure-app-imports` fails the build when such a module imports anything but another plain
+  `.ts` module by relative path (no package, no `@/` alias, no `.tsx`). Type-only imports pass the
+  rail, but the extension's `tsc` checks their whole closure (`lib/types.ts` reaches `filters.ts`
+  and the filter registry) under `verbatimModuleSyntax`, and in CI with no `frontend/node_modules`,
+  so a type import written without `type`, or any package import there, fails the extension job.
+  Keep the bundle small.
 - Every network call goes through the background service worker via
   `chrome.runtime.sendMessage` so `host_permissions` covers the API origin and the fetch
   isn't subject to the portal's CORS posture. The content script never calls `fetch`
@@ -3046,8 +3059,9 @@ renumber.** Navigate by area:
     (migration 610) the SPA checklist lists the caller's OWN collections only — a shared one is
     view-only — and every saved mark means "in one of mine" (`saved = mine.size > 0`), while cohort
     readers (Browse prefilter, Pipeline board, phone roll) keep the full visible map; the extension
-    follows by value (`chrome-extension/src/glyphs.ts`: `isMine`, `saveTargets`, `savedCollections`
-    over the lookup's `collection_ids`, and `shareAudience` mirroring the SPA's for its notes).
+    imports the same rules (`lib/collectionRules.ts`: `isMine`, `sortCollections`, `shareAudience`
+    for its notes, `COLLECTION_SAVE_LABEL`) and adds only `saveTargets` / `savedCollections` over the
+    lookup's `collection_ids` (`chrome-extension/src/glyphs.ts`).
     In the SPA those affordances share ONE membership read and ONE collection list, each behind a
     hook in `lib/collectionCache.ts` (`useCollections`, `useCollectionMembers` — the whole-set map,
     `fetchPropertyCollectionMemberSet` under `curationKeys.propertyCollectionMembers` — and
@@ -3629,13 +3643,11 @@ renumber.** Navigate by area:
     (`is_entry` — filled = the entry stage) — so the "into the pipeline" concept reads as one
     icon everywhere.** Two surfaces carry their own versions today. The kanban card has no mark
     (its column IS the stage): it moves by drag and removes through its own trash + two-step
-    confirm (`components/pipeline/BoardCard.tsx`). The Chrome-extension panel reproduces the glyph
-    by value in vanilla TS (separate territory, no React import) and also hand-copies
-    `stageBadge` / `stageAccent` into `content.ts` — pure TS it could import from
-    `frontend/src/lib/pipelineStage.ts`, as it already imports `lib/brand`, `lib/mfReference` and
-    `lib/portalIds`.
+    confirm (`components/pipeline/BoardCard.tsx`). The Chrome extension reproduces the glyph
+    by value in vanilla TS (separate territory, no React import) and imports `stageBadge` /
+    `stageAccent` from `frontend/src/lib/pipelineStage.ts`.
     The kanban's shape is sanctioned (its writes already go through `usePipelineCard`); its grey
-    `stageColor` and the extension's copies are owed (`roadmap/operator-workflow-track.md` § Rule #22).
+    `stageColor` is owed (`roadmap/operator-workflow-track.md` § Rule #22).
     **TENANCY NOTE — stated here once, for rule #18 as well.** Pipeline MEMBERSHIP has exactly ONE
     definition: `current_account_ids()`, the database's own membership function, on every surface —
     the extension's `POST /listings/lookup` included, which takes no account argument and whose SQL
@@ -4271,11 +4283,13 @@ renumber.** Navigate by area:
     **The faces.** `toolkit/measures.py` renders the SQL (`per_m2_sql(alias)`), mirrors the
     resolution order for rows that never touched Postgres, and owns the vocabulary, the floors and
     the unit strings; `frontend/src/lib/measure.ts` is its SPA twin and reads the server-published
-    token wherever a column exists; the Chrome extension, which can import neither, copies the one
-    unit string VERBATIM. `api/estimate_yield._scale` may not multiply a per-m² percentile by an
-    area without `require_scalable_basis` agreeing that the product may be CALLED what the caller
-    intends — the arithmetic is identical for a monthly and a capital rate, which is exactly why
-    an unlabelled one is dangerous rather than merely untidy.
+    token wherever a column exists; the Chrome extension imports that module (`PPM2_UNIT`, and
+    `fmtMeasuredPricePerM2` from `lib/format.ts`) and spells no unit of its own, so the one
+    SPA-to-Python value test in `tests/test_measure_registry_census.py` covers it too.
+    `api/estimate_yield._scale` may not multiply a per-m² percentile by an area without
+    `require_scalable_basis` agreeing that the product may be CALLED what the caller intends — the
+    arithmetic is identical for a monthly and a capital rate, which is exactly why an unlabelled one
+    is dangerous rather than merely untidy.
 
     **Why a rail and not a rule.** The program that unified this found **64 live call sites** —
     nine SQL definitions, five Python-emitted statements bypassing every view, six client-side

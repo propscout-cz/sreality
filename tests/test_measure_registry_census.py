@@ -48,7 +48,7 @@ THE NAMED BLIND SPOTS — real, and listed so nobody has to rediscover them:
     (`property_sources_mv` was that example until migration 432 dropped it as a
     61 MB orphan — the CLASS of blind spot is unchanged.)
   * The census is VALUE-BLIND: it counts occurrences, never compares them. The
-    two tests at the foot of this file are the exception, and they exist because
+    test at the foot of this file is the exception, and it exists because
     counting could not tell a verbatim copy of a unit from a wrong one.
 A rail that documents its own edges cannot manufacture confidence.
 
@@ -894,18 +894,19 @@ def test_per_m2_sql_requires_an_alias() -> None:
 # ------------------------------------------------- the VALUE half of the rail --
 #
 # The census counts occurrences. It is value-BLIND by construction, so it cannot
-# tell a verbatim copy of a unit string from a wrong one: changing the
-# extension's monthly suffix to the bare capital one leaves every count at its
-# registered number and CI green, while re-introducing the exact factor-of-twelve
-# mislabel W8 removed from RunPanel. These two tests close that: the three
-# territories are compared VALUE by VALUE, in the only direction that works —
-# Python reading the other two as text, since neither can be imported here.
+# tell a verbatim copy of a unit string from a wrong one: changing the SPA's
+# monthly suffix to the bare capital one leaves every count at its registered
+# number and CI green, while re-introducing the exact factor-of-twelve mislabel
+# W8 removed from RunPanel. The test below closes that: the two territories are
+# compared VALUE by VALUE, Python reading the TypeScript as text, since it cannot
+# be imported here. The Chrome extension spells no unit of its own: it imports
+# the SPA's measure.ts, so this one comparison covers it too, and the scan above
+# still flags a unit string anyone writes into chrome-extension/src again.
 
 _TS_UNIT_MAP = re.compile(
     r"export const PPM2_UNIT\s*:[^=]*=\s*\{(?P<body>[^}]*)\}", re.DOTALL
 )
 _TS_UNIT_ENTRY = re.compile(r"(?P<key>sale|rent|land)\s*:\s*'(?P<value>[^']*)'")
-_EXT_MONTHLY_UNIT = re.compile(r"const CZK_PER_M2_MONTH\s*=\s*'(?P<value>[^']*)'")
 
 
 def test_the_spa_unit_vocabulary_matches_the_python_one_value_for_value() -> None:
@@ -934,21 +935,4 @@ def test_the_spa_unit_vocabulary_matches_the_python_one_value_for_value() -> Non
     )
     assert len(set(expected.values())) == 3, (
         "two bases share a unit string, so the surfaces cannot distinguish them"
-    )
-
-
-def test_the_extension_copy_is_still_verbatim() -> None:
-    """The Chrome extension has no test job and no importable module, so this is
-    the ONLY thing standing between its copied suffix and a silent 12x
-    mislabel of the fond rate and the MF reference rent."""
-    src = (REPO / "chrome-extension/src/content.ts").read_text(encoding="utf-8")
-    m = _EXT_MONTHLY_UNIT.search(src)
-    assert m, "CZK_PER_M2_MONTH is gone from the extension — was it renamed?"
-
-    from toolkit import measures
-
-    assert m.group("value") == measures.PPM2_UNIT_CS[measures.RENT_MONTHLY_CZK_M2], (
-        "the extension's monthly per-m² suffix is no longer a verbatim copy of "
-        "PPM2_UNIT_CS['rent_monthly_czk_m2']. The bare capital unit on a monthly "
-        "charge is wrong by a factor of twelve."
     )

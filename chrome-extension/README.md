@@ -324,6 +324,17 @@ self-contained, and a build-time guard in `vite.config.ts` re-parses `content.js
 as a classic script and fails the build if a static import ever comes back. A
 bare `vite build` with no `--mode` now errors rather than emitting half a bundle.
 
+The bundles import what the app already defines straight from `frontend/src`
+(formatters, the per-m² vocabulary, the MF result, the stage look, the
+collection rules, the appearance values, the palette `styles/tokens.css`) — one
+definition each, never a copy. A second guard in `vite.config.ts` keeps that
+safe: an app module the extension bundles may import only another plain `.ts`
+module by relative path, so a React, Supabase or `@/` import fails the build
+instead of landing in every portal page. The search-page controls take the
+user's colour scheme and light/dark side from their profile (the same choice
+as in the app, read from the session at its next refresh; Měď light when
+signed out).
+
 ## Install in Chrome (unpacked)
 
 1. Open `chrome://extensions` in Chrome.

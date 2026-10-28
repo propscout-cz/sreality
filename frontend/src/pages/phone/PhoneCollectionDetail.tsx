@@ -38,7 +38,8 @@ import {
   unshareCollection,
   updateCollection,
 } from '@/lib/api';
-import { isMine, revalidateCollections } from '@/lib/collectionCache';
+import { revalidateCollections } from '@/lib/collectionCache';
+import { isMine } from '@/lib/collectionRules';
 import { useCollectionCards } from '@/lib/collectionCards';
 import { listingKindLabel } from '@/lib/enums';
 import { fmtArea, fmtCount, fmtCzk } from '@/lib/format';

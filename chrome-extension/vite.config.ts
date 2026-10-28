@@ -10,6 +10,8 @@ import { EXTENSION_NAME } from '../frontend/src/lib/brand';
 // frontend/src/lib/portalIds.test.ts keeps equal to them.
 import { PORTALS } from '../frontend/src/lib/portalIds';
 
+const APP_SRC = resolve(__dirname, '../frontend/src') + '/';
+
 /* ONE ENTRY PER PASS — `npm run build` runs vite twice, content then background.
  *
  * A manifest-declared content script is a CLASSIC script: MV3 has no module mode
@@ -95,6 +97,30 @@ export default defineConfig(({ mode }) => {
       minify: false,
     },
     plugins: [
+      {
+        /* THE CROSS-TREE RAIL. The bundles take the app's pure modules from
+         * frontend/src (one definition each), and such a module may import only
+         * another plain .ts module, by relative path: a bare package (React,
+         * Supabase), an `@/` alias or a .tsx component would load the app's
+         * runtime into every portal page. Type-only imports are erased before
+         * this runs, so they pass. */
+        name: 'assert-pure-app-imports',
+        enforce: 'pre',
+        async resolveId(source, importer) {
+          if (importer == null || !importer.startsWith(APP_SRC)) return null;
+          const resolved = source.startsWith('.')
+            ? await this.resolve(source, importer, { skipSelf: true })
+            : null;
+          if (resolved == null || !resolved.id.split('?')[0].endsWith('.ts')) {
+            throw new Error(
+              `${importer} imports "${source}": an app module the extension bundles may ` +
+              'import only another plain .ts module by relative path (no package, no @/ ' +
+              'alias, no .tsx). Move what the extension needs into such a module.',
+            );
+          }
+          return null;
+        },
+      },
       {
         name: 'copy-static',
         closeBundle() {

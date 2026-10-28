@@ -52,7 +52,8 @@ import {
 } from '@/lib/api';
 import { fmtAbsolute } from '@/lib/format';
 import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
-import { COLOR_SCHEMES, THEME_MODES, useScheme, useTheme, type ThemeMode } from '@/lib/theme';
+import { COLOR_SCHEMES, THEME_MODES, type ThemeMode } from '@/lib/appearance';
+import { useScheme, useTheme } from '@/lib/theme';
 import SchemeSwatch from '@/components/SchemeSwatch';
 import { PickButton, SegmentedBar, Switch, Field } from '@/components/controls';
 import ErrorBanner from '@/components/ErrorBanner';

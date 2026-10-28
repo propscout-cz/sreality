@@ -29,11 +29,11 @@
  * the two host elements (the cluster's, the photo mark's) and two attributes
  * on the card. */
 
-import tokens from './tokens.css?inline';
+import tokens from '../../frontend/src/styles/tokens.css?inline';
+import { themeHost } from './appearance';
 import { COLLECTIONS_URL, friendlyDetail } from './config';
 import { h, keepFocus } from './dom';
 import {
-  COLLECTION_SAVE_LABEL,
   bellIconSvg,
   bookmarkIconSvg,
   eyeOffIconSvg,
@@ -41,9 +41,10 @@ import {
   knowsAll,
   savedCollections,
   saveTargets,
-  stageAccent,
-  stageBadge,
+  stageLook,
 } from './glyphs';
+import { COLLECTION_SAVE_LABEL } from '../../frontend/src/lib/collectionRules';
+import { stageAccent, stageBadge } from '../../frontend/src/lib/pipelineStage';
 import { PHOTO_MARK_HOST_CLASS, createPhotoMark } from './index_photo_mark';
 import { isLiveDeal, type Curation, type ListKind, type Pending, type Store } from './store';
 import { detailRef, type PortalRef } from '../../frontend/src/lib/portalIds';
@@ -168,23 +169,24 @@ const CARD_CSS = `
   .act {
     box-sizing: border-box; display: inline-flex; align-items: center;
     justify-content: center; gap: 2px; height: 24px; min-width: 24px;
-    margin: 0; padding: 0; font: inherit; color: var(--ink-3);
-    background: rgba(255, 253, 248, 0.92); border: 1px solid rgba(28, 28, 28, 0.32);
+    margin: 0; padding: 0; font: inherit; color: var(--color-ink-3);
+    background: color-mix(in srgb, var(--color-paper-3) 92%, transparent);
+    border: 1px solid var(--color-rule-strong); border-radius: var(--radius-xs);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
     -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
     cursor: pointer;
     transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
   }
-  .act:hover { color: var(--copper); border-color: var(--copper); }
-  .act--dismiss:hover { color: var(--ink); border-color: var(--ink); }
+  .act:hover { color: var(--color-copper); border-color: var(--color-copper); }
+  .act--dismiss:hover { color: var(--color-ink); border-color: var(--color-ink); }
   .act[aria-disabled="true"] { opacity: 0.6; cursor: wait; }
-  .act:focus-visible, .badge:focus-visible { outline: 2px solid var(--copper); outline-offset: 1px; }
+  .act:focus-visible, .badge:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 1px; }
   .act svg { width: 14px; height: 14px; flex-shrink: 0; }
-  .act--in { padding: 0 4px; background: rgba(255, 253, 248, 0.96); }
-  .act--saved { color: var(--copper); border-color: var(--copper); background: var(--copper-soft); }
-  .act--on { color: var(--ink); border-color: var(--ink-3); background: var(--bg-sunk); }
+  .act--in { padding: 0 4px; background: color-mix(in srgb, var(--color-paper-3) 96%, transparent); }
+  .act--saved { color: var(--color-copper); border-color: var(--color-copper); background: var(--color-copper-soft); }
+  .act--on { color: var(--color-ink); border-color: var(--color-ink-3); background: var(--color-inset); }
   .code {
-    font-size: 10px; font-weight: 600; line-height: 1;
+    font-size: 11px; font-weight: 600; line-height: 1;
     font-variant-numeric: tabular-nums;
   }
   .badge {
@@ -192,19 +194,20 @@ const CARD_CSS = `
     height: 24px; margin: 0; padding: 0 7px;
     font: inherit; font-size: 11px; font-weight: 600; line-height: 1;
     letter-spacing: 0.02em; font-variant-numeric: tabular-nums; white-space: nowrap;
-    border: 1px solid var(--rule-strong); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+    border: 1px solid var(--color-rule-strong); border-radius: var(--radius-xs);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
     cursor: pointer;
   }
-  .badge--yield { background: var(--copper); color: #fff; }
-  .badge--est { background: var(--ink-3); color: #fff; }
-  .badge--cta { background: var(--bg); color: var(--copper); }
-  .badge--cta:hover { background: var(--copper-soft); }
+  .badge--yield { background: var(--color-copper); color: var(--color-on-copper); }
+  .badge--est { background: var(--color-ink-3); color: var(--color-paper-3); }
+  .badge--cta { background: var(--color-paper-3); color: var(--color-copper); }
+  .badge--cta:hover { background: var(--color-copper-soft); }
   .badge--yield:hover, .badge--est:hover { filter: brightness(1.08); }
   @media (prefers-reduced-motion: reduce) { .bar, .act { transition: none; } }
 `;
 
-/* The panel's slip, floated: paper surface, ink edge, the copper "filed" top
- * edge. Rows are the panel checklist's rows. */
+/* The panel's slip, floated: a popover surface, the accent "filed" top edge.
+ * Rows are the panel checklist's rows. */
 const MENU_CSS = `
   ${tokens}
   :host { all: initial; }
@@ -215,14 +218,15 @@ const MENU_CSS = `
     max-height: calc(100vh - 16px); overflow-y: auto; overscroll-behavior: contain;
     padding: 8px 6px;
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
-    font-size: 13px; line-height: 1.3; text-align: left; color: var(--ink);
-    background: var(--bg); border: 1px solid var(--rule-strong);
-    box-shadow: inset 0 2px 0 var(--copper), 0 10px 34px -10px rgba(28, 20, 10, 0.35);
+    font-size: 13px; line-height: 1.3; text-align: left; color: var(--color-ink);
+    background: var(--color-paper-3); border: 1px solid var(--color-rule-strong);
+    border-radius: var(--radius-md);
+    box-shadow: inset 0 2px 0 var(--color-copper), 0 10px 34px -10px rgba(28, 20, 10, 0.35);
   }
   .menu:focus { outline: none; }
   .eyebrow {
-    margin: 2px 6px 6px; font-size: 10px; text-transform: uppercase;
-    letter-spacing: 0.16em; color: var(--ink-3);
+    margin: 2px 6px 6px; font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.16em; color: var(--color-ink-3);
   }
   .list {
     display: flex; flex-direction: column; gap: 1px; max-height: 240px;
@@ -231,13 +235,14 @@ const MENU_CSS = `
   .row {
     box-sizing: border-box; display: flex; align-items: center; gap: 8px;
     width: 100%; margin: 0; padding: 6px; font: inherit; text-align: left;
-    color: var(--ink); background: transparent; border: 0; cursor: pointer;
+    color: var(--color-ink); background: transparent; border: 0;
+    border-radius: var(--radius-xs); cursor: pointer;
     transition: background 120ms ease;
   }
-  .row:hover:not([aria-disabled="true"]) { background: var(--copper-soft); }
+  .row:hover:not([aria-disabled="true"]) { background: var(--color-copper-soft); }
   .row[aria-disabled="true"] { opacity: 0.6; cursor: wait; }
   .row:focus-visible, .link:focus-visible, .yes:focus-visible, .no:focus-visible {
-    outline: 2px solid var(--copper); outline-offset: -2px;
+    outline: 2px solid var(--color-focus); outline-offset: -2px;
   }
   .name {
     flex: 1 1 auto; min-width: 0; overflow: hidden;
@@ -246,45 +251,46 @@ const MENU_CSS = `
   .stage-code {
     box-sizing: border-box; display: inline-flex; align-items: center;
     justify-content: center; min-width: 18px; height: 16px; padding: 0 3px;
-    flex-shrink: 0; font-size: 10px; font-weight: 600; line-height: 1;
+    flex-shrink: 0; font-size: 11px; font-weight: 600; line-height: 1;
     font-variant-numeric: tabular-nums; border: 1px solid currentColor;
+    border-radius: var(--radius-xs);
   }
   .mark { flex-shrink: 0; font-size: 11px; }
   .check {
     box-sizing: border-box; display: inline-flex; align-items: center;
     justify-content: center; width: 14px; height: 14px; flex-shrink: 0;
-    font-size: 10px; line-height: 1; color: transparent;
-    background: var(--paper); border: 1px solid var(--ink-4);
+    font-size: 11px; line-height: 1; color: transparent;
+    background: var(--color-paper-3); border: 1px solid var(--color-ink-3);
+    border-radius: var(--radius-xs);
   }
-  .row--member .check { color: #fff; background: var(--copper); border-color: var(--copper); }
-  .bell { display: inline-flex; flex-shrink: 0; color: var(--copper); }
+  .row--member .check {
+    color: var(--color-on-copper); background: var(--color-copper); border-color: var(--color-copper);
+  }
+  .bell { display: inline-flex; flex-shrink: 0; color: var(--color-copper); }
   .bell svg { width: 13px; height: 13px; }
-  .state { margin: 2px 6px; font-size: 12px; color: var(--ink-3); }
-  .error { margin: 6px 6px 0; font-size: 11px; line-height: 1.35; color: #b34730; }
+  .state { margin: 2px 6px; font-size: 12px; color: var(--color-ink-3); }
+  .error { margin: 6px 6px 0; font-size: 11px; line-height: 1.35; color: var(--color-brick); }
   .link {
-    margin: 0; padding: 0; font: inherit; font-weight: 600; color: var(--copper);
+    margin: 0; padding: 0; font: inherit; font-weight: 600; color: var(--color-copper);
     text-decoration: none; background: transparent; border: 0; cursor: pointer;
   }
-  .link:hover { color: var(--copper-deep); text-decoration: underline; }
-  .manage {
-    display: inline-block; margin: 8px 6px 0; font-size: 10px;
-    text-transform: uppercase; letter-spacing: 0.12em;
-  }
-  .sep { height: 0; margin: 6px 0 4px; border: 0; border-top: 1px solid var(--rule); }
-  .row--remove { color: var(--ink-3); }
-  .row--remove:hover:not([aria-disabled="true"]) { color: #b34730; background: rgba(179, 71, 48, 0.08); }
+  .link:hover { color: var(--color-copper-2); text-decoration: underline; }
+  .manage { display: inline-block; margin: 8px 6px 0; font-size: 11px; }
+  .sep { height: 0; margin: 6px 0 4px; border: 0; border-top: 1px solid var(--color-rule); }
+  .row--remove { color: var(--color-ink-3); }
+  .row--remove:hover:not([aria-disabled="true"]) { color: var(--color-brick); background: var(--color-brick-soft); }
   .confirm { padding: 4px 6px 2px; }
   .confirm-q { margin: 0; font-size: 12px; font-weight: 600; }
-  .confirm-d { margin: 3px 0 0; font-size: 11px; line-height: 1.35; color: var(--ink-3); }
+  .confirm-d { margin: 3px 0 0; font-size: 11px; line-height: 1.35; color: var(--color-ink-3); }
   .confirm-actions { display: flex; gap: 6px; margin-top: 7px; }
   .yes, .no {
     margin: 0; padding: 3px 8px; font: inherit; font-size: 11px;
-    background: transparent; cursor: pointer;
+    background: transparent; border-radius: var(--radius-sm); cursor: pointer;
   }
-  .yes { color: #b34730; border: 1px solid #b34730; }
-  .yes:hover { color: var(--paper); background: #b34730; }
-  .no { color: var(--ink-3); border: 1px solid var(--rule); }
-  .no:hover { color: var(--ink); border-color: var(--ink-4); }
+  .yes { color: var(--color-brick); border: 1px solid var(--color-brick); }
+  .yes:hover { color: var(--color-on-brick); background: var(--color-brick); }
+  .no { color: var(--color-ink-3); border: 1px solid var(--color-rule); }
+  .no:hover { color: var(--color-ink); border-color: var(--color-ink-4); }
 `;
 
 /* Events that start inside the cluster end there. A card is often one big
@@ -389,6 +395,7 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
 
     const host = document.createElement('div');
     host.className = HOST_CLASS;
+    themeHost(host);
     const shadow = host.attachShadow({ mode: 'closed' });
     const style = document.createElement('style');
     style.textContent = CARD_CSS;
@@ -455,7 +462,8 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
       const collectionsFailed = store.list('collections').status === 'failed';
       const p = cur?.pipeline;
       const inPipe = p?.in_pipeline ?? false;
-      const code = inPipe ? stageBadge(p?.stage_code, p?.stage_id, stages) : null;
+      const look = stageLook(p);
+      const code = look && stageBadge(look, stages ?? []);
       const memberIds = cur?.collection_ids ?? [];
       /* Saved = in one of MINE; until the list lands mine is unknown, and no
        * mark beats a wrong one (a shared-only property is not saved). */
@@ -496,7 +504,7 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
 
       funnel.hidden = pid == null;
       funnel.className = 'act' + (inPipe ? ' act--in' : '');
-      const accent = stageAccent(p?.stage_color);
+      const accent = stageAccent(look);
       funnel.style.color = inPipe ? accent.fg : '';
       funnel.style.borderColor = inPipe ? accent.fg : '';
       const funnelLabel = !inPipe
@@ -630,6 +638,7 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
     document.getElementById(MENU_HOST_ID)?.remove();
     const host = document.createElement('div');
     host.id = MENU_HOST_ID;
+    themeHost(host);
     const shadow = host.attachShadow({ mode: 'closed' });
     const style = document.createElement('style');
     style.textContent = MENU_CSS;
@@ -788,13 +797,13 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
       const list = h('div', 'list');
       for (const stage of stages) {
         const isCurrent = stage.id === cur.pipeline?.stage_id;
-        const accent = stageAccent(stage.color);
+        const accent = stageAccent(stage);
         const row = h('button', 'row');
         row.setAttribute('role', 'menuitemradio');
         row.setAttribute('aria-checked', String(isCurrent));
         row.dataset.key = `stage-${stage.id}`;
         setBusy(row, pending);
-        const code = h('span', 'stage-code', stageBadge(stage.code, stage.id, stages) ?? '·');
+        const code = h('span', 'stage-code', stageBadge(stage, stages) ?? '·');
         code.setAttribute('aria-hidden', 'true');
         code.style.color = accent.fg;
         row.append(code, h('span', 'name', stage.label));

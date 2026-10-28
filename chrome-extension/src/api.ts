@@ -11,18 +11,15 @@ import type {
   CollectionWriteResult,
   DismissalWriteResult,
   EstimationRun,
-  ExtCollection,
-  ExtNote,
-  ExtTag,
   IngestState,
   NotePatch,
   PipelineCardResult,
-  PipelineStage,
   PortalListing,
   PortalLookupItem,
   TagWriteResult,
   YieldScenarioUpdate,
 } from './types';
+import type { Collection, Note, PipelineStage, Tag } from '../../frontend/src/lib/types';
 
 if (!API_BASE_URL) {
   console.warn(
@@ -269,13 +266,13 @@ export function listPipelineStages(): Promise<ApiResult<PipelineStage[]>> {
 
 /* GET /collections — the caller's collections (rule #18), for the panel's
  * save-to-collection checklist. */
-export function listCollections(): Promise<ApiResult<ExtCollection[]>> {
+export function listCollections(): Promise<ApiResult<Collection[]>> {
   return requestData('/collections');
 }
 
 /* GET /tags — the caller's tags (rule #18), names + colours for the search-page
  * card chips, ordered by name. */
-export function listTags(): Promise<ApiResult<ExtTag[]>> {
+export function listTags(): Promise<ApiResult<Tag[]>> {
   return requestData('/tags');
 }
 
@@ -329,7 +326,7 @@ export async function removeFromCollection(
 
 /* GET /properties/:id/notes — the property's operator notes (rule #18),
  * most-recent-first. */
-export function listNotes(property_id: number): Promise<ApiResult<ExtNote[]>> {
+export function listNotes(property_id: number): Promise<ApiResult<Note[]>> {
   return requestData(`/properties/${property_id}/notes`);
 }
 
@@ -343,8 +340,8 @@ export async function addNote(
   body: string,
   shared: boolean,
   origin_listing_ref_id: number | null,
-): Promise<ApiResult<ExtNote>> {
-  return request<ExtNote>(`/properties/${property_id}/notes`, {
+): Promise<ApiResult<Note>> {
+  return request<Note>(`/properties/${property_id}/notes`, {
     method: 'POST',
     body: JSON.stringify({ body, shared, origin_listing_ref_id }),
   });
@@ -357,8 +354,8 @@ export async function updateNote(
   property_id: number,
   note_id: number,
   patch: NotePatch,
-): Promise<ApiResult<ExtNote>> {
-  return request<ExtNote>(`/properties/${property_id}/notes/${note_id}`, {
+): Promise<ApiResult<Note>> {
+  return request<Note>(`/properties/${property_id}/notes/${note_id}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
   });

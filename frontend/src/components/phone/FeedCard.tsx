@@ -22,6 +22,7 @@ import { useCardPhotos } from '@/lib/hydration';
 import type { CoverTag } from '@/lib/imageTags';
 import { propertyPath } from '@/lib/listingUrl';
 import { areaKindOf, plotBesideArea, ppm2BasisFromToken } from '@/lib/measure';
+import { mfYieldText } from '@/lib/mfReference';
 import { portalShort } from '@/lib/portals';
 import type { CardRow } from '@/lib/queries';
 
@@ -94,11 +95,8 @@ export const portalsWord = (n: number): string =>
 export function feedMfYield(
   r: Pick<CardRow, 'mf_gross_yield_pct' | 'category_main' | 'category_type'>,
 ): string | null {
-  if (r.mf_gross_yield_pct == null || r.category_main !== 'byt' || r.category_type !== 'prodej') return null;
-  return `MF ${r.mf_gross_yield_pct.toLocaleString('cs-CZ', {
-    minimumFractionDigits: 1,
-    maximumFractionDigits: 1,
-  })}${NBSP}%`;
+  const text = mfYieldText(r.mf_gross_yield_pct);
+  return text == null || r.category_main !== 'byt' || r.category_type !== 'prodej' ? null : `MF ${text}`;
 }
 
 export const feedDays = (tomDays: number | null): string | null =>

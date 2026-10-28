@@ -1134,7 +1134,8 @@ export const fetchAdvertProperty = async (
 const PROPERTY_SOURCE_COLS =
   'id,property_id,source,source_url,source_id_native,ad_reference,is_active,price_czk,first_seen_at,last_seen_at';
 
-/* Every advert of one property, oldest first — the merged-adverts section's rows. */
+/* Every advert of one property, oldest first (id breaks a tie, as the API's
+ * price-history read does) — the merged-adverts section's rows. */
 export const fetchPropertySources = async (
   propertyId: number,
   { signal }: PgReadOptions = {},
@@ -1144,7 +1145,8 @@ export const fetchPropertySources = async (
       .from('property_sources_public')
       .select(PROPERTY_SOURCE_COLS)
       .eq('property_id', propertyId)
-      .order('first_seen_at', { ascending: true }),
+      .order('first_seen_at', { ascending: true })
+      .order('id', { ascending: true }),
     { signal },
   );
   return data ?? [];

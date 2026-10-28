@@ -1028,7 +1028,7 @@
 }
 .note-action-btn svg { width: 0.7rem; height: 0.7rem; }
 .note-action-btn:hover { color: var(--ink); }
-.note-action-btn--danger:hover { color: var(--tag-brick); }
+.note-action-btn--danger:hover { color: var(--color-tag-brick); }
 
 .note-confirm-delete {
   display: flex;
@@ -1038,15 +1038,15 @@
 }
 .note-confirm-delete span {
   font-size: 0.68rem;
-  color: var(--tag-brick);
+  color: var(--color-tag-brick);
 }
 
 .note-confirm-yes {
   padding: 0.12rem 0.45rem;
   font-size: 0.65rem;
   letter-spacing: 0.03em;
-  color: var(--tag-brick);
-  background: var(--tag-brick-soft);
+  color: var(--color-tag-brick);
+  background: var(--color-tag-brick-soft);
   border: 0;
   cursor: pointer;
 }

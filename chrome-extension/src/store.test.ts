@@ -3,7 +3,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore, isLiveDeal } from './store.ts';
-import type { ApiMessage, ApiResult, PipelineStage, PortalListing } from './types';
+import type { ApiMessage, ApiResult, PortalListing } from './types';
+import type { PipelineStage } from '../../frontend/src/lib/types';
 
 interface Out {
   message: ApiMessage;

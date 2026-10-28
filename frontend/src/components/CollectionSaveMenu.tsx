@@ -32,11 +32,9 @@ import {
 } from '@/lib/api';
 import { actOpts, useActAs } from '@/lib/acting';
 import { settleCollectionWrite, useCollections } from '@/lib/collectionCache';
+import { COLLECTION_SAVE_LABEL, sortCollections } from '@/lib/collectionRules';
 import { ROUTES } from '@/lib/routes';
 
-/* The trigger's accessible name, and the panel's — one string so a test that
- * finds the button finds the panel it opens. */
-export const COLLECTION_SAVE_LABEL = 'Uložit do kolekce';
 
 export default function CollectionSaveMenu({
   property_id,
@@ -122,12 +120,7 @@ export function CollectionSaveList({
   });
   const pending = add.isPending || remove.isPending;
 
-  // Monitored collections first, then alphabetical.
-  const sorted = [...mine].sort(
-    (a, b) =>
-      (b.monitoring_enabled ? 1 : 0) - (a.monitoring_enabled ? 1 : 0) ||
-      a.name.localeCompare(b.name),
-  );
+  const sorted = sortCollections(mine);
 
   return (
     <>
