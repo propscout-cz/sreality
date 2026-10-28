@@ -75,7 +75,8 @@ index), **B, section cards** is ruled. **Picture with each value tagged: `docs/d
   Title 600 14/20 `--ink` in the panel's font (it loads no web fonts on a portal page, so no Fraunces). Count
   `--ink-3` with tabular figures. Body 10 / 12 / 12 px, 10 px between cards. The eyebrows (`.mf-eyebrow`,
   `.coll-eyebrow`, `.est-eyebrow`, `.notes-eyebrow`) become card titles. `.field-label` and `.mf-ledger-label` stay
-  L4. A new panel layout uses these cards from the start.
+  L4. A new panel layout uses these cards from the start. Built: `chrome-extension/src/card.ts` `buildCard` (the MF, estimate
+  and notes blocks and the collection / tag checklists).
 
 ## Depth
 Borders only. `--color-rule` for structure, `--color-rule-soft` for row separation, `--color-rule-strong`
@@ -205,7 +206,7 @@ above for status and adds no token.
   black exact-position contour. Red was rejected (the metro C and flood overlays are red), teal green (the old
   `#3c6e63`) sat in the woods' hue. The estimation `ComparablesMap` and `DetailMap` keep copper: there green
   is "comparable" against the orange subject.
-- **Shared admin primitives**: `Panel` (paper-2, rule border, small-caps title) is the card of Health, Costs,
+- **Shared admin primitives**: `Panel` (the section card, § Section cards) is the card of Health, Costs,
   LocationQuality, LocationPinAudit and NewDedupDashboard; `Stat` (label, mono value, ink-3 hint, an optional
   dot; never a coloured number) the tile of Health, Costs, LocationQuality and AutodedupProgress; `StatusDot`;
   `Skeleton`, the loading block (static: no pulse); `ErrorBanner`, the one failure banner (`flush` under a
