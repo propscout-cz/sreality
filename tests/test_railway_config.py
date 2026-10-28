@@ -10,11 +10,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from scraper import job_process, job_runner, jobs
+from scraper import image_storage, job_process, job_runner, jobs
 from tests._railway_iac import iac_constant, iac_entry, iac_text
 
 ROOT = Path(__file__).resolve().parents[1]
 WIZARD = ROOT / "scripts" / "railway_iac_wizard.sh"
+PINS = ROOT / "data" / "requirements-clip-runner.txt"
 
 
 def test_no_config_as_code_file_is_left_to_override_the_iac_file() -> None:
@@ -223,17 +224,23 @@ def test_the_runner_watches_every_tree_the_dockerfile_copies() -> None:
     assert "watchPatterns: BACKEND_WATCH" in iac_entry("jobRunner")
 
 
-def test_the_runner_reads_its_one_secret_from_the_worker_service() -> None:
-    """#2025-R3: the runner stores no secret of its own; it references the worker's SUPABASE_DB_URL, so a rotation
-    changes one place (and redeploys the runner after the worker)."""
+def test_the_runner_reads_the_workers_secrets_by_reference() -> None:
+    """#2025-R3: the runner stores no secret of its own; it references the worker's SUPABASE_DB_URL and its R2 set
+    (#2032: clip downloads photos), so a rotation changes one place (and redeploys the runner after the worker)."""
     runner = iac_entry("jobRunner")
     env = re.search(r"\benv: \{ (.*?) \},", runner, re.S)
     assert env, "the runner declares its variables inline"
-    assert set(re.findall(r"(\w+): ", env.group(1))) == {"EXTRAS", "HF_HUB_OFFLINE", "SUPABASE_DB_URL"}
-    assert "SUPABASE_DB_URL: sreality.env.SUPABASE_DB_URL" in env.group(1)
-    assert not re.search(r"preserve\(|kept\(|ctx\.shared", runner)
+    declared = re.findall(r"(\w+): ", env.group(1))
+    assert len(declared) == len(set(declared))
+    plain = {"EXTRAS", "HF_HUB_OFFLINE"}
+    assert set(declared) == plain | {"SUPABASE_DB_URL", *image_storage.R2_ENV_VARS}
     worker_kept = re.search(r"\bkept\((.*?)\)", iac_entry("worker"), re.S)
-    assert worker_kept and "SUPABASE_DB_URL" in re.findall(r'"(\w+)"', worker_kept.group(1))
+    assert worker_kept, "the worker keeps its secrets"
+    kept_names = set(re.findall(r'"(\w+)"', worker_kept.group(1)))
+    for name in sorted(set(declared) - plain):
+        assert re.search(rf"\b{name}: sreality\.env\.{name}\b", env.group(1)), f"{name} is not the worker's"
+        assert name in kept_names, f"the worker keeps no {name}"
+    assert not re.search(r"preserve\(|kept\(|ctx\.shared", runner)
 
 
 def test_the_api_and_the_worker_pass_their_extras_to_the_root_dockerfile_build() -> None:
@@ -259,13 +266,72 @@ def test_the_runner_image_is_cpu_torch_baked_and_offline() -> None:
     model = final.index("scripts/bake_clip_weights.py data/clip_checkpoint.json")
     assert final.index("ARG EXTRAS\n") < model < final.index("COPY pyproject.toml ./")
     early = re.findall(r"^COPY .*$", final[:final.index("COPY pyproject.toml ./")], re.M)
-    assert [c for c in early if "data/" in c] == ["COPY --from=clip-ref /ref/clip_checkpoint.json ./data/"], early
-    assert final.count('case ",${EXTRAS}," in *,clip,*)') == 2
+    assert [c for c in early if "data/" in c] == ["COPY --from=clip-ref /ref/clip_checkpoint.json ./data/",
+                                                  f"COPY {PINS.relative_to(ROOT)} ./data/"], early
+    assert final.count('case ",${EXTRAS}," in *,clip,*)') == 3
     assert "--index-url https://download.pytorch.org/whl/cpu" in final and '"torch==' in final
     assert "HF_HUB_OFFLINE=1 python" in final and "assert torch.version.cuda is None" in final
     assert not (ROOT / "data" / "clip_checkpoint.json").exists(), "the repo's data/ would overwrite the staged pin"
     assert "MALLOC_ARENA_MAX" not in dockerfile
     assert "COPY scripts/ ./scripts/" in final and "COPY autodedup/ ./autodedup/" in final
+
+
+def _pins() -> dict[str, str]:
+    pins: dict[str, str] = {}
+    for line in PINS.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            name, sep, version = line.partition("==")
+            assert sep and re.fullmatch(r"\d+(\.\d+)*", version), f"not an exact pin: {line}"
+            pins[name] = version
+    return pins
+
+
+def test_the_runner_vector_stack_is_pinned_and_proven() -> None:
+    """Pillow decodes and resizes the pixels CLIP reads, so the re-embed proof (#2032 AC2) holds only while the stack
+    under it stays put: one manifest pins it, a layer after the weights installs it (a bump rebuilds neither torch
+    nor the checkpoint), and the offline proof asserts the installed versions against the same file."""
+    pins = _pins()
+    assert set(pins) == {"transformers", "Pillow", "numpy"}, pins
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    final = dockerfile.rsplit("\nFROM ", 1)[1]
+    rel = PINS.relative_to(ROOT).as_posix()
+    model = final.index("scripts/bake_clip_weights.py data/clip_checkpoint.json")
+    copy = final.index(f"COPY {rel} ./data/")
+    install = final.index(f"pip install -r {rel}")
+    assert model < copy < install < final.index("COPY pyproject.toml ./")
+    guard = final.rindex('case ",${EXTRAS}," in *,clip,*)', 0, install)
+    assert copy < guard and "esac" not in final[guard:install], "the install runs inside a clip guard"
+    for name in pins:
+        assert not re.search(rf"{name}\s*==", dockerfile, re.I), f"{name} is pinned in the Dockerfile, not the file"
+    proof = final.split("HF_HUB_OFFLINE=1 python -c", 1)[1].split("esac", 1)[0]
+    torch_pin = re.search(r'pip install "torch==([\d.]+)"', final)
+    assert torch_pin and torch_pin.group(1) == "2.14.1"
+    assert rel in proof and f'"{torch_pin.group(1)}"' in proof, "the proof asserts the file's versions and torch"
+    # Asserts, not prints: a resolver that swapped Pillow or numpy must fail the build.
+    assert "got = {name: version(name) for name in pins}; assert got == pins," in proof
+    assert f'assert torch.__version__.split("+")[0] == "{torch_pin.group(1)}",' in proof
+
+
+def test_the_api_image_is_proven_free_of_clip() -> None:
+    """AC3b (#2032): the API and the worker are one build (EXTRAS=api). CI builds it at the base and at the pull
+    request, fails if it can import torch or transformers or holds the hub cache, and prints both sizes."""
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "runner_image.yml").read_text(encoding="utf-8"))
+    api = [job for job in workflow["jobs"].values()
+           if any("--build-arg EXTRAS=api " in s.get("run", "") for s in job["steps"])]
+    assert len(api) == 1, "one job builds the API image"
+    runs = "\n".join(s.get("run", "") for s in api[0]["steps"])
+    assert "github.event.pull_request.base.sha" in str(api[0]) and "fetch-depth: 0" not in runs
+    assert any(s.get("with", {}).get("fetch-depth") == 0 for s in api[0]["steps"])
+    assert runs.count("docker build ") == 2
+    checks = [s for s in api[0]["steps"] if "find_spec" in s.get("run", "")]
+    assert len(checks) == 1, "one step asserts the head image is clip-free"
+    check = checks[0]["run"]
+    assert all(m in check for m in ('"torch"', '"transformers"', "/root/.cache/huggingface"))
+    assert "assert not found, found" in check, "a verdict, not a print"
+    assert "test ! -e /root/.cache/huggingface" in check, "a verdict, not a print"
+    assert "||" not in check, "nothing in the verdict step may swallow its exit status"
+    assert "docker image inspect -f '{{.Size}}'" in runs and "pip freeze" in runs
 
 
 def test_the_runner_image_workflow_builds_on_every_image_input() -> None:
@@ -338,3 +404,19 @@ def test_the_wizard_has_the_general_modes_and_checks_with_its_own_copy() -> None
     calls = re.findall(r"^.*\bnode\b.*plan_check.*$", wizard, re.M)
     assert calls and all('node "$RUN_DIR/plan_check.mjs"' in c for c in calls), calls
     assert "-running." not in wizard
+
+
+def test_a_runner_only_window_asks_no_brake() -> None:
+    """#2025-R2 (a), ruled by e9 on 2026-10-26: a change that targets only job-runner needs no autodedup brake, so
+    its window asks none (#2032's R2 references, W3's and W4's variables). The merge stays on e9's light."""
+    wizard = WIZARD.read_text(encoding="utf-8")
+    assert re.search(r"^RUNNER=job-runner\b", wizard, re.M)
+    window = wizard.split("\nmode_window() {\n", 1)[1].split("\n}\n", 1)[0]
+    brake = window.split('  stage "Brake"\n', 1)[1].split("\n  pause\n", 1)[0]
+    assert brake.startswith('  if [[ "$label" == worker && "$service" != "$RUNNER" ]]; then\n'), brake
+    asked, rest = brake.split('\n  elif [[ "$label" == worker ]]; then\n', 1)
+    runner_only, otherwise = rest.split("\n  else\n", 1)
+    assert "realtime_autodedup_interval_seconds" in asked and "BRAKE_ASKED=1" in asked
+    assert "#2025-R2" in runner_only and "$RUNNER" in runner_only and "BRAKE_ASKED" not in runner_only
+    # A vite or API window skips the brake for its own reason, never the runner ruling's.
+    assert "the worker's project" in otherwise and "#2025-R2" not in otherwise and "BRAKE_ASKED" not in otherwise

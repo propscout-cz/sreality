@@ -152,10 +152,10 @@ property + clears the dirty queue under a `--max-seconds` budget; a budget stop 
 swept and saves `app_settings.property_sweep_cursor`, where the next run resumes the cycle (if <36h old);
 a resumed run that stops again exits RED; only a whole cycle stamps the `property_sweep` artifact, judged by `jobs`). The visual-signal producers run alongside:
 `compute_image_phash.yml` (hourly pHash BACKSTOP only — the image drain hashes the bytes in hand and writes `phash` in the
-`storage_path` UPDATE, so this job takes just `phash IS NULL` rows: `IMAGES done phash_missed`), `clip_tag.yml`
-(`scripts/clip_tag_backfill.py` — zero-shot CLIP room/plot tags into `image_clip_tags` + a 512-d vector into `image_clip_embeddings`;
-then, in each shard, `scripts/retag_from_embeddings.py` re-runs the zero-shot over each image's STORED embedding when the
-taxonomy changes, per `app_settings.clip_taxonomy_retag_after`; no R2 download, no re-inference). Newest and
+`storage_path` UPDATE, so this job takes just `phash IS NULL` rows: `IMAGES done phash_missed`), the runner's `clip`
+job (`scripts/clip_tag_backfill.py`, every 15 min: zero-shot CLIP room/plot tags into `image_clip_tags` + a 512-d vector into
+`image_clip_embeddings`, then in the same run a re-tag from STORED vectors when the taxonomy changes, per
+`app_settings.clip_taxonomy_retag_after`). Newest and
 **dispatch-only**: `dinov3_embed_backfill.yml` (GPU, inert until the encoder config is complete),
 `tagging_bakeoff.yml` (GPU, the encoder EXPERIMENT, `dedup_sim` only), `tag_model.yml` (CPU, ONE
 versioned tag model, mig 490 — the tag is the argmax head) and `new_dedup_candidates.yml` (CPU, Level 0
@@ -167,7 +167,7 @@ removed wholesale in the 2026-08 NEW DEDUP cutoff (architectural rule #15; `docs
 and its workflows/scripts must never be resurrected; nothing auto-merges (merges are operator-ordered through
 `POST /properties/merge`; AUTODEDUP's `mode=apply` is dark until `app_settings.autodedup_apply_scope` names an area). The
 tagging/pHash/embedding lanes above ARE kept running because the rebuilt engine (`docs/design/new-dedup/PROGRAM.md`)
-consumes them, so treat a stalled `clip_tag.yml` or `compute_image_phash.yml` as a real problem.
+consumes them, so treat a stalled `clip` job (`job/clip`, `fleet/photo_tags`) or `compute_image_phash.yml` as a real problem.
 
 **CLIP tagging persists an embedding for every TAGGED image** (PR #748, ~19% coverage gap; PR #751 backfilled the tagged-but-vectorless backlog).
 **Any job that REPLACES an image's bytes under its existing `storage_path`** (none since the sreality re-master lane finished and was
@@ -428,7 +428,7 @@ provider, error share and starvation per (provider, `called_for`), 24 h spend. T
 row after 5 min; neither judged while braked), `push/failures` (≥ 3 terminal in 24 h), `push/unconfigured` (Watch: braked while a device waits).
 **Portal checks (wave 4, `scripts/checks/{scraping,publishing,delisting}.py`, on the worker; cells `<portal>/<arm>`):**
 `scraping` (walks: hours since a unit's newest end-reached walk against the portal's own walk gap; inflow; fetch errors;
-missing), `publishing` (queue age, Browse visibility of new ads and of the stock, photos, `fleet/dirty`), `delisting`
+missing), `publishing` (queue age, Browse visibility of new ads and of the stock, photos, `fleet/dirty`, `fleet/photo_tags`), `delisting`
 (outflow, stuck verdicts, verify backlog, deferrals, precision), the `coverage` gauge (residual, unnominated ads).
 **Engine check (Health dashboard sprint wave 5, `scripts/checks/dedup.py`, on the worker; key `dedup`, label "Engine"):** the engine's state
 (off/building/merging/idle: the `state` cell, always OK, and a fact on every cell); `stream`, `build`, `merge_pause`, `decision_lag`, `lease`,

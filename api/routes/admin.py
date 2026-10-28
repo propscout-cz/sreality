@@ -569,8 +569,9 @@ def get_clip_tagging_regions(
 ) -> dict[str, Any]:
     """Per-kraj CLIP-tagging switchboard: every kraj with its priority flag + how many
     of its active listings already have a CLIP tag (coverage). Marking a kraj priority
-    makes the scheduled clip_tag runs drain it (and its embeddings, so its dedup cosine
-    is ready) BEFORE the global sweep — same app_settings key the backfill reads."""
+    makes the runner's clip job drain it (and its embeddings, so its dedup cosine is
+    ready) after the photos stored in the last 45 min and BEFORE the global sweep — same
+    app_settings key the job reads."""
     return {"data": _clip_regions_payload(conn)}
 
 

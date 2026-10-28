@@ -2323,8 +2323,9 @@ export const updateConditionScoringRegions = (
 
 /* Per-kraj CLIP-tagging drain priority. GET every kraj with its priority flag +
  * active-listing volume; PUT replaces the full priority list
- * (app_settings.clip_tagging_priority_region_ids). The scheduled clip_tag runs read
- * the same key — a priority kraj is drained (tags + embeddings) before the global sweep. */
+ * (app_settings.clip_tagging_priority_region_ids). The runner's clip job reads the same
+ * key — a priority kraj is drained (tags + embeddings) after the photos stored in the last
+ * 45 min and before the global sweep. */
 export interface ClipTaggingRegion {
   id: number;
   name: string;

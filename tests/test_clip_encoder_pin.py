@@ -13,10 +13,12 @@ grep while the actual call site had dropped it.
 """
 
 import ast
+import re
 import tomllib
 from pathlib import Path
 
-import yaml
+from scraper import jobs
+from tests._railway_iac import iac_entry, iac_text
 
 _ROOT = Path(__file__).resolve().parent.parent
 _WORKFLOWS = _ROOT / ".github" / "workflows"
@@ -31,10 +33,12 @@ _UNPINNED_ALLOWED = {
     "scraper/label_proposal_tagger.py",
 }
 
-_TAGGING_WORKFLOWS = (
-    "clip_tag.yml",
-    "label_proposal_backfill.yml",
-)
+_TAGGING_WORKFLOWS = ("label_proposal_backfill.yml",)
+# The runner image is the other installer: built by Railway and by its CI check, never by a pip step (#2032).
+_IMAGE_WORKFLOWS = ("runner_image.yml",)
+_PIP_CLIP = re.compile(r"\.\[[\w,]*\bclip\b[\w,]*\]")
+_EXTRAS_CLIP = re.compile(r"EXTRAS=[\w,]*\bclip\b")
+_RUNNER_EXTRAS = 'EXTRAS: "api,clip,geo"'
 
 
 def _from_pretrained_calls(tree: ast.AST) -> list[ast.Call]:
@@ -91,30 +95,36 @@ def test_embedding_writer_stamps_the_revision():
     assert "revision  = EXCLUDED.revision" in sql
 
 
-def test_tagging_workflows_exist():
-    # These two are the only installers of the clip extra; if one is renamed the
-    # pin's blast radius changes and this file's assumptions need re-checking.
-    for name in _TAGGING_WORKFLOWS:
-        assert (_WORKFLOWS / name).exists(), name
+def clip_installers(workflows: dict[str, str]) -> tuple[set[str], set[str]]:
+    """(files that pip-install the clip extra, files that build an image whose EXTRAS name clip)."""
+    return ({f for f, text in workflows.items() if _PIP_CLIP.search(text)},
+            {f for f, text in workflows.items() if _EXTRAS_CLIP.search(text)})
 
 
-def test_retag_runs_in_the_tagging_workflow_after_tag_in_each_shard():
-    # One torch install per shard serves both: the hourly retag workflow installed it four times
-    # an hour to find nothing to re-tag (#2014).
-    assert not (_WORKFLOWS / "clip_retag.yml").exists()
-    doc = yaml.safe_load((_WORKFLOWS / "clip_tag.yml").read_text())
-    (job,) = doc["jobs"].values()
-    assert job["strategy"]["matrix"]["shard"] == [0, 1, 2, 3]
-    runs = [step.get("run", "") for step in job["steps"]]
-    tag = next(i for i, run in enumerate(runs) if "scripts.clip_tag_backfill" in run)
-    retag = next(i for i, run in enumerate(runs) if "scripts.retag_from_embeddings" in run)
-    assert tag < retag
-    assert "--shards 4 --shard ${{ matrix.shard }}" in runs[retag]
-    # A failed tag step (an R2 outage) must not stop the retag, which reads only stored vectors;
-    # a failed install must (it would only fail again on the import).
-    condition = job["steps"][retag]["if"]
-    assert "!cancelled()" in condition and "steps.install.outcome == 'success'" in condition
-    assert "inputs.dry_run != 'true'" in condition
-    # Its budget is what is left of the job's clock after tagging, never a fixed slice of it.
-    assert "JOB_STARTED" in runs[retag] and '--max-seconds "$BUDGET"' in runs[retag]
-    assert any('JOB_STARTED=$(date +%s)' in run for run in runs[:tag])
+def test_the_clip_extra_has_exactly_its_known_installers():
+    # Each installer resolves the clip stack on its own: a new one widens the pin's blast radius, so this file's
+    # assumptions need re-checking before it lands.
+    workflows = {p.name: p.read_text() for p in sorted(_WORKFLOWS.glob("*.yml"))}
+    assert clip_installers(workflows) == (set(_TAGGING_WORKFLOWS), set(_IMAGE_WORKFLOWS))
+    assert iac_text().count(_RUNNER_EXTRAS) == 1 and _RUNNER_EXTRAS in iac_entry("jobRunner")
+    stray = {**workflows, "stray.yml": 'steps:\n  - run: pip install -e ".[api,clip]"\n'}
+    assert clip_installers(stray)[0] == {*_TAGGING_WORKFLOWS, "stray.yml"}
+
+
+def _calls_in_order(function: ast.FunctionDef) -> list[str]:
+    calls = [n for n in ast.walk(function) if isinstance(n, ast.Call)]
+    return [ast.unparse(c.func) for c in sorted(calls, key=lambda c: (c.lineno, c.col_offset))]
+
+
+def test_clip_tags_then_retags_in_one_runner_job():
+    # One model load serves both: the GitHub tag and retag workflows installed torch per shard (#2014, #2032).
+    assert not (_WORKFLOWS / "clip_tag.yml").exists() and not (_WORKFLOWS / "clip_retag.yml").exists()
+    clip = next(j for j in jobs.declared() if j.name == "clip")
+    assert clip.host == jobs.RUNNER and clip.argv[0] == "scripts.clip_tag_backfill"
+    tree = ast.parse((_ROOT / "scripts" / "clip_tag_backfill.py").read_text())
+    assert any(isinstance(n, ast.ImportFrom) and n.module == "scripts"
+               and "retag_from_embeddings" in {a.name for a in n.names} for n in tree.body)
+    run = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "run")
+    calls = _calls_in_order(run)
+    assert "_tag" in calls and "retag_from_embeddings.retag" in calls
+    assert calls.index("_tag") < calls.index("retag_from_embeddings.retag"), "retag runs after the tag loop"

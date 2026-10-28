@@ -209,6 +209,15 @@ THRESHOLDS: dict[str, Any] = {
     # Problem past 8 h: the 08-20 outage held dirty rows for 6 d; 09-15's 165 h was the sweep's age (the
     # dirty queue stayed under 1 h that day), so the dirty arm alone would have missed it: jobs' sweep cell has it.
     "publishing_dirty_fail_h": 8,
+    # Photo tags (#2032): a stored photo is late when CLIP stamped and vectored it over 45 min after storage, or not
+    # yet; the line #2032's gate holds as a 7-day p90 (GitHub's 7 days to 10-27: p90 298 min).
+    "publishing_tag_late_min": 45,
+    # Watch when the Wilson LB of the late share is past 5 %: the replay of 10-20..26 reads 1.1 % at 3 img/s.
+    "publishing_tag_late_warn": 0.05,
+    # Problem past 10 %: the day's p90 is then over the line the ticket promises.
+    "publishing_tag_late_fail": 0.10,
+    # Under 500 photos in the cohort (under 10 min of weekday inflow, 82k-92k a day) the tag line is Not measured.
+    "publishing_tag_min_n": 500,
     # --- delisting (portal alarm): are gone ads made inactive, on time and correctly ------
     # Outflow: Problem under 20 % of the quietest 24 h within ±3 h of this hour 7/14/21/28 d back
     # (10-10: 0 against 400-1,900).

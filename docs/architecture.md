@@ -1218,10 +1218,11 @@ on 2026-12-01, and until then a file of that name would override the applied set
   read with describe-service after every apply.
 - **Start commands:** the worker and the runner declare one, each python as PID 1 so it gets the SIGTERM: the worker's
   `env MALLOC_ARENA_MAX=2 python …` (E949's arena cap; its 30 s `drainingSeconds` is E941's) and the runner's bare
-  `python -m scraper.job_runner run`. The API and vite run their image's own command (ruling R5, 2026-10-26): Railway
+  `python -m scraper.job_runner run`, whose children get the same cap by default (`child_env`, #2032). The API and vite run their image's own command (ruling R5, 2026-10-26): Railway
   runs a start command in exec form, so an unwrapped `$PORT` never expands (8a362a0ea).
 - **The job runner** (`jobRunner` in the worker's project; `docs/design/actions-exit/PROGRAM.md` § 4.2), the host of
-  `stale_images`, `rent_map` and `map_overlays` since #2025's move PR:
+  `stale_images`, `rent_map` and `map_overlays` since #2025's move PR, and of `clip` since #2032 (CLIP tags, vectors
+  and the re-tag campaign, one unsharded run every 15 min; `fleet/photo_tags` judges its 45-min line):
   - two replicas in the worker's region, each 4 vCPU and 8 GB, restart policy ALWAYS, `checkSuites: false`. Railway
     counts decimal bytes, so 8e9 B is 7,629 MiB in the cgroup, `jobs.REPLICA_MEMORY_MB` (a test ties them); the BOOT
     line and every beat carry `memory_limit_mb` and `cpus` as the replica's cgroup reads them;
@@ -1230,10 +1231,11 @@ on 2026-12-01, and until then a file of that name would override the applied set
     the bound to `scraper/job_runner.py`, +30 s at most, since a deploy waits on it);
   - `BACKEND_WATCH`: every repo tree the Dockerfile COPYs (not `COPY --from=` a stage) plus `/Dockerfile` and
     `/.dockerignore`, pinned to the COPY lines by a census, so a move PR never forgets a tree; `.railway/` stays out;
-  - variables `EXTRAS`, `HF_HUB_OFFLINE: "1"` (no runtime download) and `SUPABASE_DB_URL: sreality.env.SUPABASE_DB_URL`,
-    a reference to the worker's variable (`${{sreality.SUPABASE_DB_URL}}`, ruling #2025-R3): one stored value, so a
-    rotation changes one place, and applying the worker's staged change redeploys job-runner after it (Railway's
-    deployment dependencies), cutting any run in flight (closed `interrupted`, re-claimed at once).
+  - variables `EXTRAS`, `HF_HUB_OFFLINE: "1"` (no runtime download), `SUPABASE_DB_URL: sreality.env.SUPABASE_DB_URL`
+    and the R2 set, by reference (#2032: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`,
+    each `sreality.env.<NAME>`), references to the worker's variables (`${{sreality.NAME}}`, ruling #2025-R3): one
+    stored value each, so a rotation changes one place, and applying the worker's staged change redeploys job-runner
+    after it (Railway's deployment dependencies), cutting any run in flight (closed `interrupted`, re-claimed at once).
     The secrets inventory's rotation steps say so and check its Health cells. Later moves add their names in their
     own PRs.
 - **The runner image's model layer** (EXTRAS names `clip`; a no-op for the API and the worker), before the source so a
@@ -1245,6 +1247,16 @@ on 2026-12-01, and until then a file of that name would override the applied set
   missing file fails the build and the old deployment stays live. `CI: runner image`
   (`.github/workflows/runner_image.yml`) builds it on every PR that changes an image input (the wizard's
   `IMAGE_INPUTS`, the same list, which includes the scraper files the proof imports, held to its imports by a test).
+- **The runner's CLIP vector stack is pinned (#2032):** `data/requirements-clip-runner.txt` (transformers, Pillow,
+  numpy at `==`) installs in its own layer after the weights, and the offline proof asserts every version in it and
+  torch's. Pillow decodes and resizes the pixels the model reads, so a resolver drift would move every new vector
+  under a green build. pyproject keeps its ranges (`Pillow>=10`, `transformers>=4.56,<5`), so RunPod's path is
+  untouched. **A bump** (a Pillow security fix included): edit the file (torch: the Dockerfile's model layer), let
+  `CI: runner image` build it, pause `clip` (`runner-pause`) before the merge deploys, merge, then file
+  `request clip -- --verify-reembed` on the new image (`scripts/clip_reembed.py`: 100 frozen images re-embedded
+  within fp32 tolerance, read-only) and lift the pause on a pass, so no vector of the new stack lands unproven.
+  The `api-image` job of the same workflow builds `EXTRAS=api` at the PR's base and head and fails if the head can
+  import torch or transformers or holds a Hugging Face cache, so the API and worker images stay clip-free.
 - **The runner is cut only by a new deployment:** a Redeploy of the ACTIVE deployment (same image and configuration)
   or Deploy Latest Commit. Restart restarts the process inside its container, and no doc says it honours
   `drainingSeconds`, so it is never a runner procedure. **Never boot an older runner image:** no dashboard Rollback,
@@ -2428,8 +2440,8 @@ renumber.** Navigate by area:
     `same`, is a done row.
     **Signal producers keep running** — they are the substrate the new engine will consume, and
     stopping them would leave a cold start: image pHash (`compute_image_phash.yml`), the
-    self-hosted CLIP tagger and its embeddings (`clip_tag.yml`, which also re-tags from stored embeddings, writing
-    `image_clip_tags` + `image_clip_embeddings`), and the operator's labeling corpus
+    self-hosted CLIP tagger and its embeddings (the job runner's `clip` job since #2032, which also re-tags from
+    stored embeddings, writing `image_clip_tags` + `image_clip_embeddings`), and the operator's labeling corpus
     (`tag_taxonomy`, `image_tag_labels`, `image_border_cases`). `listing_image_comparisons`
     (the agent-facing `compare_listing_images` tool) is unrelated to dedup and unaffected.
     A fourth producer now exists as infrastructure: the **DINOv3 embedding lane**

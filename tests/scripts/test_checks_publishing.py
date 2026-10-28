@@ -1,4 +1,4 @@
-"""Hermetic tests for scripts.checks.publishing: ingest, changes, visible, stock, photos, dirty."""
+"""Hermetic tests for scripts.checks.publishing: the portal arms, dirty and the photo tags."""
 
 # No DB: the wave-3 fake connection answers each statement by the SQL constant it carries, through
 # the per-check clock. Every statement ran read-only against production on 2026-10-19 (queue 2 ms,
@@ -36,6 +36,8 @@ T: dict[str, Any] = {
     "publishing_photos_min_n": 200, "publishing_photos_narrow_warn": 0.10,
     "publishing_photos_narrow_fail": 0.50, "publishing_photos_min_px": 600,
     "publishing_dirty_warn_h": 4, "publishing_dirty_fail_h": 8,
+    "publishing_tag_late_min": 45, "publishing_tag_late_warn": 0.05,
+    "publishing_tag_late_fail": 0.10, "publishing_tag_min_n": 500,
 }
 
 
@@ -51,6 +53,19 @@ def _photo(source: str, *, ads: int = 500, bare: int = 0, photos: int = 7_000,
             photos - not_stored if measured is None else measured, narrow, reason, reason_photos)
 
 
+def _tags(*, images: int = 1_000, late: int = 20, waiting: int = 12, unvectored: int = 0,
+          registry_at: _dt.datetime | None = _NOW - _dt.timedelta(days=3),
+          paused_until: _dt.datetime | None = None, paused_by: str | None = None,
+          pause_note: str | None = None, p50: float | None = 8.04, p90: float | None = 13.1,
+          p99: float | None = 31.0, newest_id: int | None = 309_000_000,
+          oldest: _dt.datetime | None = _NOW - _dt.timedelta(minutes=52)) -> dict[str, list[tuple[Any, ...]]]:
+    """The two tag statements' rows: the clip row's join and pause with the newest image id (none: no live runner
+    row), then its photos stored 45 min-24 h."""
+    job = [] if registry_at is None else [(registry_at, paused_until, paused_by, pause_note, newest_id)]
+    return {"_TAG_JOB_SQL": job,
+            "_TAG_COHORT_SQL": [(images, late, waiting, unvectored, p50, p90, p99, oldest)]}
+
+
 def _healthy() -> dict[str, Any]:
     """Every arm's rows for a fleet where everything reaches Browse."""
     return {
@@ -59,6 +74,7 @@ def _healthy() -> dict[str, Any]:
         pub._STOCK_SQL: [*((p, 50_000, 0, 0, 0, 0) for p in PORTALS), (None, 362_000, 0, 0, 0, 0)],
         pub._PHOTOS_SQL: [_photo(p) for p in PORTALS],
         pub._DIRTY_SQL: [(0, None)],
+        **{getattr(pub, name): rows for name, rows in _tags().items()},
     }
 
 
@@ -82,12 +98,12 @@ def _params(conn: _Conn, sql: str) -> Any:
 # --- shape -------------------------------------------------------------------------------------
 
 
-def test_publishing_returns_one_cell_per_portal_and_arm_and_the_two_fleet_cells() -> None:
+def test_publishing_returns_one_cell_per_portal_and_arm_and_the_three_fleet_cells() -> None:
     out, _ = _check()
     assert out["check_key"] == "publishing" and out["status"] == "ok" and out["value"] == 0
     cells = _cells(out)
     assert set(cells) == {f"{p}/{arm}" for p in PORTALS for arm in _ARMS} | {
-        "fleet/stock", "fleet/dirty"}
+        "fleet/stock", "fleet/dirty", "fleet/photo_tags"}
     for subject, c in cells.items():
         assert set(c) == {"subject", "portal", "status", "value", "unit", "message", "facts"}
         portal, _, _arm = subject.partition("/")
@@ -357,6 +373,132 @@ def test_the_dirty_queue_watches_past_4_h_and_fails_past_8_h(hours: float, statu
 def test_an_empty_dirty_queue_reads_ok() -> None:
     c = _cells(_check()[0])["fleet/dirty"]
     assert c["status"] == "ok" and c["value"] == 0.0 and c["facts"]["dirty"] == 0
+
+
+# --- the fleet's photo tags --------------------------------------------------------------------
+
+
+def _tag_cell(**over: Any) -> dict[str, Any]:
+    return _cells(_check(**_tags(**over))[0])["fleet/photo_tags"]
+
+
+@pytest.mark.parametrize("late, status", [(20, "ok"), (70, "warn"), (150, "fail")])
+def test_photo_tags_judge_the_lower_bound_of_photos_tagged_past_45_min(late: int,
+                                                                       status: str) -> None:
+    """Watch above 5 %, Problem above 10 % (the p90 past the line), each on the Wilson bound."""
+    c = _tag_cell(late=late)
+    lower = wilson_lower(late, 1_000)
+    assert c["status"] == status and c["portal"] is None
+    assert c["value"] == round(100 * late / 1_000, 2) and c["unit"] == "%"
+    assert c["facts"]["lower_bound"] == round(lower, 4)
+    said = (f"{late:,} of 1,000 photos stored over 45 min and under 24.0 h ago were tagged over "
+            f"45 min after it, or not yet ({late / 1_000:.2%}; lower bound {lower:.2%})")
+    assert said in c["message"]
+
+
+def test_photo_tags_are_judged_on_the_lower_bound_never_the_raw_share() -> None:
+    """33 of 600 late is a raw 5.5 %, past the Watch line; its lower bound (3.9 %) is not."""
+    c = _tag_cell(images=600, late=33)
+    assert c["status"] == "ok" and c["value"] == 5.5
+    assert c["facts"]["lower_bound"] == round(wilson_lower(33, 600), 4) < 0.05
+
+
+def test_under_500_photos_the_tag_line_is_not_measured() -> None:
+    c = _tag_cell(images=400, late=400)
+    assert c["status"] == "unknown"
+    assert c["message"].startswith("Not measured: 400 photos stored over 45 min and under 24.0 h "
+                                   "ago, fewer than 500")
+
+
+def test_the_tag_line_is_not_measured_while_no_live_runner_row_names_clip() -> None:
+    c = _tag_cell(registry_at=None, images=0, late=0, waiting=0, p50=None, p90=None, p99=None,
+                  oldest=None)
+    assert c["status"] == "unknown"
+    assert c["message"] == "Not measured: clip is not on the job runner"
+
+
+def test_the_cohort_starts_when_clip_joined_the_runner_never_in_githubs_era() -> None:
+    c = _tag_cell(registry_at=_NOW - _dt.timedelta(hours=3))
+    since = "photos stored over 45 min ago since clip joined the job runner 3.0 h ago"
+    assert since in c["message"]
+    assert c["facts"]["window_from"] == (_NOW - _dt.timedelta(hours=3)).isoformat()
+    assert _tag_cell()["facts"]["window_from"] == (_NOW - _dt.timedelta(hours=24)).isoformat()
+
+
+def test_a_paused_clip_job_reads_watch_at_most_and_names_who_paused_it_and_why() -> None:
+    """A deliberate pause (the AC2 hold, a rollback brake) opens no incident, sends no e-mail."""
+    until = _NOW + _dt.timedelta(hours=20)
+    pause = {"paused_until": until, "paused_by": "operator", "pause_note": "AC2 pending"}
+    c = _tag_cell(late=150, waiting=140, **pause)
+    assert c["status"] == "warn"
+    assert c["message"].startswith(f"paused by operator until {until.isoformat()}: AC2 pending; "
+                                   "140 photos waiting; 150 of 1,000")
+    assert (c["facts"]["paused_until"], c["facts"]["paused_by"], c["facts"]["pause_note"]) == (
+        until.isoformat(), "operator", "AC2 pending")
+    calm = _tag_cell(late=20, **pause)
+    assert calm["status"] == "ok" and calm["message"].startswith("paused by operator until")
+    lapsed = _tag_cell(late=150, **{**pause, "paused_until": _NOW - _dt.timedelta(minutes=1)})
+    assert lapsed["status"] == "fail" and not lapsed["message"].startswith("paused")
+
+
+def test_after_a_pause_ends_the_cohort_starts_at_its_end() -> None:
+    """Photos stored while clip was paused are late by construction: the lift (the AC2 pass, a brake's end) must not
+    turn them into a Problem, so the cohort starts afresh when the pause ended."""
+    ended = _NOW - _dt.timedelta(hours=2)
+    c = _tag_cell(paused_until=ended, paused_by="operator", pause_note="AC2 passed")
+    assert (c["facts"]["window_from"], c["facts"]["pause_ended_at"]) == (ended.isoformat(), ended.isoformat())
+    assert c["facts"]["paused_until"] is None and not c["message"].startswith("paused")
+    assert "20 of 1,000 photos stored over 45 min ago since clip's pause ended 2.0 h ago were tagged" in c["message"]
+    old = _tag_cell(paused_until=_NOW - _dt.timedelta(days=2), paused_by="operator", pause_note="AC2 passed")
+    assert old["facts"]["window_from"] == (_NOW - _dt.timedelta(hours=24)).isoformat(), "a day-old end loses"
+
+
+def test_the_tag_facts_carry_the_percentiles_the_waiting_and_the_stamped_without_a_vector() -> None:
+    oldest = _NOW - _dt.timedelta(hours=3, minutes=6)
+    c = _tag_cell(late=70, waiting=48, unvectored=3, p50=9.04, p90=51.96, p99=184.0, oldest=oldest)
+    keys = ("photos", "late", "p50_min", "p90_min", "p99_min", "waiting", "stamped_no_vector",
+            "oldest_waiting_stored_at")
+    assert {k: c["facts"][k] for k in keys} == {
+        "photos": 1_000, "late": 70, "p50_min": 9.0, "p90_min": 52.0, "p99_min": 184.0,
+        "waiting": 48, "stamped_no_vector": 3, "oldest_waiting_stored_at": oldest.isoformat()}
+    assert c["message"].endswith("p50 9.0 min, p90 52.0 min, p99 184.0 min; 48 waiting, the "
+                                 "oldest stored 3.1 h ago; 3 stamped with no vector")
+
+
+def test_a_photo_is_tagged_only_once_stamped_and_vectored_by_the_taxonomys_model() -> None:
+    """A stamp with no vector (a terminal mark, an undecodable photo) is never a tagged photo."""
+    from scraper import jobs
+    from scraper.clip_tagger import load_taxonomy
+
+    flat = " ".join(pub._TAG_COHORT_SQL.split())
+    assert ("left join lateral (select true as vectored from image_clip_embeddings e where e.image_id = i.id and "
+            "e.model = %(model)s limit 1) e on true") in flat
+    assert "case when e.vectored then i.clip_tagged_at end" in flat
+    assert "registry_at is not null and retired_at is null" in " ".join(pub._TAG_JOB_SQL.split())
+    _, conn = _check()
+    job, cohort = _params(conn, pub._TAG_JOB_SQL), _params(conn, pub._TAG_COHORT_SQL)
+    assert cohort["model"] == load_taxonomy()["model"]
+    assert job["runner"] == jobs.RUNNER
+    assert job["job"] in {j.name for j in jobs.runner_jobs()}
+    assert cohort["late_min"] == 45
+
+
+def test_the_cohorts_bounds_are_values_bound_from_the_clip_row_never_read_inside_the_cohort() -> None:
+    """Prod, 2026-10-27: with the id floor an InitPlan and the clip row's bounds a join filter, the planner merge-joined
+    the whole image_clip_embeddings key (15.4M rows, 6.5 s) in the check's last cell. The floor is the newest id less
+    the window, `since` the cell's window_from, and no clip row sends no cohort read."""
+    ended = _NOW - _dt.timedelta(hours=2)
+    out, conn = _check(**_tags(paused_until=ended, paused_by="operator", pause_note="AC2 passed"))
+    cohort = _params(conn, pub._TAG_COHORT_SQL)
+    assert (cohort["min_id"], cohort["since"]) == (309_000_000 - pub._TAG_ID_WINDOW, ended)
+    assert _cells(out)["fleet/photo_tags"]["facts"]["window_from"] == ended.isoformat()
+    flat = " ".join(pub._TAG_COHORT_SQL.split())
+    assert "i.id > %(min_id)s::bigint" in flat and "i.last_download_attempt_at >= %(since)s::timestamptz" in flat
+    assert "scheduled_jobs" not in flat and "max(id)" not in flat
+    _, conn = _check(**_tags(registry_at=None))
+    assert [sql for sql, _, _ in conn.sent if sql == pub._TAG_COHORT_SQL] == []
+    _, conn = _check(**_tags(newest_id=None))
+    assert _params(conn, pub._TAG_COHORT_SQL)["min_id"] is None
 
 
 # --- rails -------------------------------------------------------------------------------------

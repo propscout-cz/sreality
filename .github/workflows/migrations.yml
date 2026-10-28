@@ -502,6 +502,14 @@ jobs:
                  tests/test_checks_delisting_sql_live.py tests/test_checks_dedup_sql_live.py \
                  tests/test_checks_quality_sql_live.py -q
 
+      # The clip job's selection (#2032), executed: a photo stored in the last 45 min comes before an older one in a
+      # priority kraj whatever their ids, under the job's batch statement timeout. The fakes answer each arm canned.
+      - name: The clip job selects the last 45 min's photos first (#2032)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_clip_select_sql_live.py -q
+
       # Rule 3 made total (Health green wave 2): every portal built from its replayed `portals` row, one
       # seeded active ad per label (NULLs included), the real nomination queries run: each ad is returned by
       # exactly one walked unit's scope or by the orphan scope, never by none and never by two.

@@ -125,8 +125,10 @@ def child_command(job: Job, args: Sequence[str] | None) -> list[str]:
 
 
 def child_env(job: Job, run_id: int, base: Mapping[str, str]) -> dict[str, str]:
-    return {**base, cpus.JOB_CPUS_ENV: str(job.cpus), "JOB_NAME": job.name, "JOB_RUN_ID": str(run_id),
-            "PYTHONUNBUFFERED": "1"}
+    # glibc's per-thread arenas keep what they freed (E949, the worker's `env MALLOC_ARENA_MAX=2`): clip downloads and
+    # decodes on 20 threads beside torch's inside its 2048 MB declaration. The runner's own value wins.
+    return {"MALLOC_ARENA_MAX": "2", **base, cpus.JOB_CPUS_ENV: str(job.cpus), "JOB_NAME": job.name,
+            "JOB_RUN_ID": str(run_id), "PYTHONUNBUFFERED": "1"}
 
 
 def heartbeat_name(env: Mapping[str, str]) -> str | None:
