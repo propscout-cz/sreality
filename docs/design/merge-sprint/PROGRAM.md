@@ -246,7 +246,8 @@ Items marked *(default)* were not asked; they are engineering defaults the opera
   any of them *(default, as today)*. A broker filter works the same over that broker's ads; portal and
   broker together mean one ad satisfies both. One rule on Browse list, count, map, Stats and Watchdog.
   A row shows the canonical ad's facts; its portal badge lists the portals where the property has an
-  active ad, or, when none is active, all its portals marked inactive *(default)*. **Newest first
+  active ad, or, when none is active, all its portals marked inactive *(default)* (P01, 2026-10-27:
+  the Browse card names no portals; the rule lives on in the phone feed's chips, `feedPortals`). **Newest first
   (Q49 b):** with exactly one portal P selected, "Newest first" and "Oldest first" order properties by
   when their newest ad on P was first seen, active or not, so a property advertised on P again rises
   to the top *(its newest ad on P, not its first: default)*. With no portal or several portals they

@@ -123,7 +123,7 @@ describe('<WatchdogManage> delete in the ⋯ menu (P24)', () => {
     await renderPage();
     const row = within(rowOf('Praha 2+kk'));
     expect(row.queryByRole('button', { name: /delete/i })).toBeNull();
-    expect(screen.queryByRole('menuitem', { name: /delete/i })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: /smazat/i })).toBeNull();
     expect(row.getByRole('link', { name: 'edit' })).toHaveAttribute('href', '/watchdog/w1/edit');
   });
 
@@ -134,7 +134,7 @@ describe('<WatchdogManage> delete in the ⋯ menu (P24)', () => {
     const trigger = within(rowOf('Praha 2+kk')).getByRole('button', { name: 'Actions: Praha 2+kk' });
     expect(trigger).toHaveAttribute('aria-haspopup', 'menu');
     await user.click(trigger);
-    await user.click(screen.getByRole('menuitem', { name: 'Delete…' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Smazat…' }));
     expect(confirm).toHaveBeenCalledWith(CONFIRM_TEXT);
     expect(deleteWatchdogSubscription).not.toHaveBeenCalled();
   });
@@ -144,7 +144,7 @@ describe('<WatchdogManage> delete in the ⋯ menu (P24)', () => {
     await renderPage();
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Actions: Praha 2+kk' }));
-    await user.click(screen.getByRole('menuitem', { name: 'Delete…' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Smazat…' }));
     await waitFor(() => expect(deleteWatchdogSubscription).toHaveBeenCalledTimes(1));
     expect(deleteWatchdogSubscription).toHaveBeenCalledWith('w1');
     expect(deleteWatchdogSubscription).not.toHaveBeenCalledWith('w2');

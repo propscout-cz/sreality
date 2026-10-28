@@ -1041,7 +1041,13 @@ rules. Identify which one a task belongs to before you start.
   property page with that advert's row open) + subject facts; for a flat it shows the
   property's MF result by SHAPE (value + "Výnos MF" on a sale flat, range + (i) note, note,
   nothing before attach) and, for sale apartments, the comparables estimation as the deeper
-  tool/fallback (the bookmark + link + facts are not gated). The estimation's editable **net-yield
+  tool/fallback (the bookmark + link + facts are not gated). The lookup also carries the property's
+  header facts at their MS11 grain (`docs/design/merge-sprint/PROGRAM.md`), off the same
+  `properties_public` row as MF, NULL before attach, the plot through `plot_area_m2` (keys:
+  `portal_lookup._LISTING_COLS`); the price chart reads `GET /properties/{id}/price-history`
+  (`require_token`, service role): the SPA property page's `property_sources_public` +
+  `listing_snapshots_public` reads, column for column.
+  The estimation's editable **net-yield
   calculator** (rent / fond oprav+SVJ / cena / **rekonstrukce**, with the renovation joining
   the price as the acquisition-cost denominator — migration 213) mirrors the SPA's `YieldBlock`
   by value: the yield % is **computed-on-read client-side in BOTH** `computeYield` (extension)

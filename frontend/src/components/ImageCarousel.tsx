@@ -6,7 +6,6 @@ import {
   type ReactNode,
 } from 'react';
 import ImageTagBadge from './ImageTagBadge';
-import ImageRenderBadge from './ImageRenderBadge';
 import { type TaggedImageUrl } from '@/lib/imageTags';
 
 /* Compact inline image carousel — the photo strip on Browse listing
@@ -42,13 +41,9 @@ interface Props {
   /* Chevrons fade in on parent `.group` hover (cards) rather than always
    * showing (a panel with no hover-group wrapper). */
   fadeChevrons?: boolean;
-  /* The room tag shows only while the pointer is on the parent `.group` or keyboard
-   * focus is inside it (a Browse card, ruling P02 2026-10-27): focus-visible, so a
-   * clicked chevron does not keep it shown. An opacity overlay, never a layout change. */
-  fadeTag?: boolean;
-  /* The CLIP render-vs-photo pill above the counter. A Browse card passes false:
-   * its photo shows just the counter (ruling P03 2026-10-27). */
-  renderBadge?: boolean;
+  /* The current frame's room tag, bottom-left. A Browse card passes false: its photo
+   * draws no room tag (ruling P02, operator note 2026-10-27). Default true. */
+  roomTag?: boolean;
   /* Chevrons as tab stops (the default: in a panel they are the only way to
    * page by keyboard). A Browse card passes false — the card is ONE tab stop
    * and pages with ← → through the handle below — so Tab goes card to card. */
@@ -86,8 +81,7 @@ const ImageCarousel = forwardRef<ImageCarouselHandle, Props>(function ImageCarou
   imgClassName = '',
   hoverZoom = false,
   fadeChevrons = false,
-  fadeTag = false,
-  renderBadge = true,
+  roomTag = true,
   tabbableChevrons = true,
   eager = false,
   referrerPolicy,
@@ -154,30 +148,22 @@ const ImageCarousel = forwardRef<ImageCarouselHandle, Props>(function ImageCarou
 
       {children}
 
-      <ImageTagBadge
-        tag={current?.tag}
-        confidence={current?.confidence}
-        className={
-          'absolute bottom-1 left-1 z-[1] max-w-[calc(100%-3.5rem)] truncate'
-          + (fadeTag
-            ? ' opacity-0 group-hover:opacity-100 group-has-[:focus-visible]:opacity-100 transition-opacity duration-150'
-            : '')
-        }
-      />
+      {roomTag && (
+        <ImageTagBadge
+          tag={current?.tag}
+          confidence={current?.confidence}
+          className="absolute bottom-1 left-1 z-[1] max-w-[calc(100%-3.5rem)] truncate"
+        />
+      )}
 
-      {/* Bottom-RIGHT metadata stack: the render-vs-photo pill above the photo
-          counter (mirrors the listing-detail gallery's placement; the room tag
-          owns bottom-left). Kept off the top-left corner, which the caller's
-          overlay controls (the Browse card's bookmark + collection buttons,
-          --z-card-action) own — the badge used to sit behind them. */}
-      <div className="absolute bottom-1 right-1 z-[1] flex flex-col items-end gap-1">
-        {renderBadge && <ImageRenderBadge renderScore={current?.renderScore} />}
-        {hasMany && (
-          <span className="px-1.5 py-0.5 text-[0.6rem] tracking-[0.08em] tabular-nums rounded-[var(--radius-xs)] bg-[var(--color-paper-3)]/85 border border-[var(--color-rule)] text-[var(--color-ink-2)] backdrop-blur-sm">
-            {safeIndex + 1} / {images.length}
-          </span>
-        )}
-      </div>
+      {/* The photo counter sits bottom-RIGHT (the room tag owns bottom-left), off
+          the top-left corner, which the caller's overlay controls (the Browse
+          card's bookmark + collection buttons, --z-card-action) own. */}
+      {hasMany && (
+        <span className="absolute bottom-1 right-1 z-[1] px-1.5 py-0.5 text-[0.6rem] tracking-[0.08em] tabular-nums rounded-[var(--radius-xs)] bg-[var(--color-paper-3)]/85 border border-[var(--color-rule)] text-[var(--color-ink-2)] backdrop-blur-sm">
+          {safeIndex + 1} / {images.length}
+        </span>
+      )}
 
       {hasMany && (
         <>

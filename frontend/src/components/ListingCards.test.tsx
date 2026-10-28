@@ -38,7 +38,7 @@ import { expectNoNestedInteractive } from '@/test/a11y';
 import * as api from '@/lib/api';
 import * as brokers from '@/lib/brokers';
 import * as queries from '@/lib/queries';
-import { fmtShortDate } from '@/lib/format';
+import { fmtShortDate, fmtTomDays } from '@/lib/format';
 import type { CardRow } from '@/lib/queries';
 import type { HoverTarget } from '@/lib/hoverSync';
 import type { ImagePublic, ListingEstimate } from '@/lib/types';
@@ -121,7 +121,6 @@ const photo = (id: number): ImagePublic =>
     storage_path: null,
     clip_fine_tag: null,
     clip_confidence: null,
-    clip_render_score: null,
   }) as unknown as ImagePublic;
 
 /* The carousel's "n / total" pill, matched on the LEAF node: every ancestor's
@@ -1019,9 +1018,7 @@ describe('<ListingCards> merge mode with a multi-photo card', () => {
   });
 });
 
-/* MS19: a card is a property. Its badge names the portals where it has an active ad
- * (or, with none active, every portal it had; the card itself carries the status), and under one
- * portal's "Newest first" a card whose date there is not its own first seen says so. */
+/* A property's title adds its lot after the floor area; a pozemek names its area once. */
 describe('<ListingCards> the title names the lot', () => {
   const title = () => screen.findByRole('link', { name: /na prodej/ });
 
@@ -1041,54 +1038,59 @@ describe('<ListingCards> the title names the lot', () => {
   });
 });
 
-describe('<ListingCards> the portal badge and the order date', () => {
-  const badge = () => screen.getByTitle(/^Portály/);
+/* Ruling P01 with the operator's note "remove it from the card entirely" (2026-10-27):
+   the card names no portal, neither on the photo nor in its foot. The photo keeps the
+   lifespan badge and the ad count; under one portal's "Newest first" the badge keeps
+   the day of the newest ad there (MS19), without the portal's name. */
+describe('<ListingCards> no portal names on the card', () => {
+  const PORTAL_NAMES = /iDNES|Sreality|Bazoš|Bezrealitky|Reality|Portály/;
 
-  it('lists every portal with an active ad', () => {
-    renderGrid({ row: { ...ROW, all_sources: ['idnes', 'sreality'], active_sources: ['idnes', 'sreality'] } });
-    expect(badge().textContent).toBe('iDNES Reality · Sreality');
+  it('names no portal on a live card', () => {
+    const { container } = renderGrid({
+      row: { ...ROW, all_sources: ['idnes', 'sreality'], active_sources: ['idnes', 'sreality'] } as CardRow,
+    });
+    expect(screen.queryByTitle(/^Portály/)).toBeNull();
+    expect(container.textContent).not.toMatch(PORTAL_NAMES);
   });
 
-  it('lists only the live portals while one is live', () => {
-    renderGrid({ row: { ...ROW, all_sources: ['bazos', 'idnes'], active_sources: ['idnes'] } });
-    expect(badge().textContent).toBe('iDNES Reality');
+  it('names no portal on a delisted card', () => {
+    const { container } = renderGrid({
+      row: { ...ROW, is_active: false, all_sources: ['bazos', 'idnes'], active_sources: [] } as CardRow,
+    });
+    expect(screen.queryByTitle(/^Portály/)).toBeNull();
+    expect(container.textContent).not.toMatch(PORTAL_NAMES);
   });
 
-  it('lists every portal when no ad is live, with no status word (the card carries the status)', () => {
-    renderGrid({ row: { ...ROW, is_active: false, all_sources: ['bazos', 'idnes'], active_sources: [] } });
-    expect(badge().textContent).toBe('Bazoš · iDNES Reality');
-    expect(badge()).toHaveAttribute(
-      'title', 'Portály, kde nemovitost inzerovala; žádný inzerát není aktivní: Bazoš · iDNES Reality');
+  it('names no portal under a one-portal order either, in the text or a tooltip', () => {
+    const { container } = renderGrid({
+      orderPortal: 'idnes',
+      row: {
+        ...ROW, all_sources: ['idnes', 'sreality'], active_sources: ['idnes', 'sreality'],
+        newest_ad_at_idnes: '2026-03-05T10:00:00Z',
+      } as CardRow,
+    });
+    expect(container.textContent).not.toMatch(PORTAL_NAMES);
+    const titles = Array.from(container.querySelectorAll('[title]')).map((el) => el.getAttribute('title'));
+    expect(titles.join(' | ')).not.toMatch(PORTAL_NAMES);
   });
 
-  it('truncates a long list at its end, never its start, inside the card', () => {
-    renderGrid({ row: { ...ROW, is_active: false, all_sources: ['ceskereality', 'idnes', 'realitymix', 'sreality'], active_sources: [] } });
-    expect(badge()).toHaveClass('truncate', 'min-w-0');
-    /* Only the portal list truncates: the lifespan run keeps its whole text. */
-    expect(screen.getByTitle(/^Neaktivní/)).not.toHaveClass('truncate');
-  });
-
-  /* Ruling P01 (2026-10-27): the portals left the photo for the card's foot, on
-     the line above the MF yield; the photo keeps the lifespan and the ad count. */
-  it('names the portals in the foot, above the MF yield, not on the photo', () => {
+  it('keeps the MF yield in the foot and the lifespan and ad count on the photo', () => {
     renderGrid({ row: { ...ROW, mf_gross_yield_pct: 4.1, source_count: 2 } as CardRow });
-    const portals = badge();
-    const yieldLine = screen.getByTitle(/^Hrubý výnos/);
-    expect(portals.compareDocumentPosition(yieldLine) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByTitle(/^Hrubý výnos/)).toBeInTheDocument();
     const photo = screen.getByTitle(/^Aktivní/).closest('.aspect-\\[5\\/4\\]');
     expect(photo).not.toBeNull();
-    expect(photo).not.toContainElement(portals);
     expect(photo).toContainElement(screen.getByTitle(/^Nemovitost spojuje/));
   });
 
   const lifespan = () => screen.getByTitle(/^Aktivní/).textContent;
 
-  it("shows the portal's date beside the card's own when the two days differ", () => {
+  it("keeps the newest ad's day beside the card's own when the two days differ", () => {
     renderGrid({
       orderPortal: 'idnes',
       row: { ...ROW, newest_ad_at_idnes: '2026-03-05T10:00:00Z' } as CardRow,
     });
-    expect(lifespan()).toContain(`·iDNESod${fmtShortDate('2026-03-05T10:00:00Z')}`);
+    expect(lifespan()).toContain(`·od${fmtShortDate('2026-03-05T10:00:00Z')}`);
+    expect(lifespan()).not.toContain('iDNES');
   });
 
   it('shows one date when the newest ad there is the first seen', () => {
@@ -1096,12 +1098,12 @@ describe('<ListingCards> the portal badge and the order date', () => {
       orderPortal: 'idnes',
       row: { ...ROW, newest_ad_at_idnes: '2026-01-01T09:00:00Z' } as CardRow,
     });
-    expect(lifespan()).not.toContain('iDNES');
+    expect(lifespan()).toBe(`od${fmtShortDate(ROW.first_seen_at)}·${fmtTomDays(3)}`);
   });
 
-  it('shows no portal date without the one-portal order', () => {
+  it('shows no second date without the one-portal order', () => {
     renderGrid({ row: { ...ROW, newest_ad_at_idnes: '2026-03-05T10:00:00Z' } as CardRow });
-    expect(lifespan()).not.toContain('iDNES');
+    expect(lifespan()).not.toContain(fmtShortDate('2026-03-05T10:00:00Z'));
   });
 });
 
@@ -1151,32 +1153,28 @@ describe('<ListingCards> the title drops what the filter says', () => {
   });
 });
 
-/* Rulings P02 and P03 (2026-10-27): the photo shows just the counter; the room
-   tag is an overlay that appears with the pointer or focus on the card. */
+/* Ruling P02 (2026-10-27): the photo shows just the counter. Its note, "remove it
+   from the card entirely": no room tag on the card, not on hover or focus. */
 describe('<ListingCards> the photo overlays', () => {
-  const tagged = (renderScore: number) =>
+  const tagged = () =>
     vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(
       new Map([[111, [1, 2].map((id) => ({
-        ...photo(id), clip_fine_tag: 'kitchen', clip_confidence: 0.9, clip_render_score: renderScore,
+        ...photo(id), clip_fine_tag: 'kitchen', clip_confidence: 0.9,
       }) as unknown as ImagePublic)]]),
     );
 
-  it('shows the room tag only while the card is hovered or focused, without moving anything', async () => {
-    tagged(0.1);
-    renderGrid();
-    const tag = await screen.findByText('kuchyně');
-    /* Keyboard focus only: a mouse click on a chevron leaves focus behind, and
-       the tag must not stay shown once the pointer has moved to another card. */
-    expect(tag).toHaveClass('absolute', 'opacity-0', 'group-hover:opacity-100', 'group-has-[:focus-visible]:opacity-100');
-    expect(tag).not.toHaveClass('group-focus-within:opacity-100');
-    expect(tag.closest('.group')).not.toBeNull();
-  });
-
-  it('draws no render verdict, whatever the score', async () => {
-    tagged(0.9);
+  it('draws no room tag on the photo, hovered or focused', async () => {
+    tagged();
     renderGrid();
     await screen.findByText(counterIs('1 / 2'));
-    expect(screen.queryByText(/^Render \d+$|^Foto \d+$/)).toBeNull();
+    expect(screen.queryByText('kuchyně')).toBeNull();
+    const link = screen.getByRole('link', { name: TITLE_RE });
+    fireEvent.mouseEnter(link.closest('.group') as HTMLElement);
+    link.focus();
+    expect(screen.queryByText('kuchyně')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Next photo' }));
+    expect(screen.getByText(counterIs('2 / 2'))).toBeInTheDocument();
+    expect(screen.queryByText('kuchyně')).toBeNull();
   });
 });
 

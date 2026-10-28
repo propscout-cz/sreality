@@ -181,7 +181,6 @@ const photo = (seq: number): ImagePublic =>
     clip_fine_tag: null,
     clip_logical_tag: null,
     clip_confidence: null,
-    clip_render_score: null,
     phash: null,
   }) as ImagePublic;
 
@@ -315,6 +314,36 @@ describe('the phone property page', () => {
     );
     noMaps();
   });
+
+  /* One pattern for the app (section cards, operator ruling 2026-10-28): every section of the
+     phone page is the desktop's card — a region named by its title, a bare count beside it — 16 px
+     apart, and one with nothing keeps its card and says so in one line (C10), with no action the
+     phone does not offer (#1760 Q10). */
+  it('draws every section as a card, 16 px apart; an empty one keeps its card in one line', async () => {
+    vi.mocked(queries.fetchProperty).mockResolvedValue({ ...SALE, description: null } as PropertyPublic);
+    renderAt('/property/304388');
+    const card = (name: string) => screen.findByRole('region', { name }, LOADED);
+    const bar = (region: HTMLElement) =>
+      within(region).getByRole('heading', { level: 2 }).parentElement as HTMLElement;
+
+    const poloha = await card('Poloha');
+    expect(poloha.parentElement).toHaveClass('space-y-4');
+    const ads = await card('Inzeráty');
+    expect(within(bar(ads)).getByText('2')).toBeInTheDocument();
+    expect(within(bar(ads)).getByText('2 portály')).toBeInTheDocument();
+    expect(within(await card('Popis')).getByText('Inzerát nemá popis.')).toBeInTheDocument();
+    const makleri = await card('Makléři');
+    expect(await within(makleri).findByText('Makléř není uveden.', {}, LOADED)).toBeInTheDocument();
+    expect(within(bar(makleri)).getByText('0')).toBeInTheDocument();
+    const odhady = await card('Odhady');
+    expect(await within(odhady).findByText('No estimation runs for this property yet.', {}, LOADED)).toBeInTheDocument();
+    expect(within(odhady).queryByRole('button')).toBeNull();
+    expect(await within(await card('Valuo')).findByText('Zatím bez ocenění.', {}, LOADED)).toBeInTheDocument();
+    for (const name of ['Moje fotky', 'Fakta', 'Vývoj ceny', 'Prodané v okolí', 'Čerstvost', 'Štítky', 'Poznámky']) {
+      expect(await card(name)).toBeInTheDocument();
+    }
+    noMaps();
+  }, 15_000);
 
   it('draws a rent: the monthly price and per-m² in Kč/m²/měs, no MF badge', async () => {
     vi.mocked(queries.fetchProperty).mockResolvedValue(RENT);

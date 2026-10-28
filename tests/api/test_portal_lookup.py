@@ -28,6 +28,8 @@ from api import main as api_main
 from api import portal_lookup as pl
 from api import schemas as s
 from api import tenant_pool
+from tests.test_sql_placeholders import _invalid_placeholder
+from toolkit.measures import plot_area_sql
 
 _USER = uuid.uuid4()
 
@@ -35,6 +37,13 @@ _USER = uuid.uuid4()
 # ----------------------------------------------------------------------
 # Logic: lookup_portal_listings against a fake dict-row cursor.
 # ----------------------------------------------------------------------
+
+# The panel header's property facts (MS11), off the same `pp` row as MF.
+_PROPERTY_FACTS = (
+    "canonical_listing_id", "property_is_active", "tom_days", "floor",
+    "total_floors", "condition", "ownership", "property_subtype", "plot_area_m2",
+)
+
 
 def _mk_market_row(source: str, source_id: str, found: bool, **cols: Any) -> dict[str, Any]:
     """One market-query dict row (service-role conn) keyed by SELECT aliases."""
@@ -48,6 +57,7 @@ def _mk_market_row(source: str, source_id: str, found: bool, **cols: Any) -> dic
         "display_label": None, "is_active": None,
         "last_seen_at": None, "mf_reference_rent_czk": None,
         "mf_gross_yield_pct": None, "mf_reference_rent": None,
+        **dict.fromkeys(_PROPERTY_FACTS),
     }
     row.update(cols)
     return row
@@ -249,6 +259,48 @@ def test_lookup_reads_mf_from_properties_public_by_property_id() -> None:
         assert f"pp.{col}" in code
         assert col in pl._LISTING_COLS
     assert "mf_reference_rent_per_m2_czk" not in pl._LISTING_COLS
+
+
+def test_lookup_serves_the_property_facts_beside_the_adverts_own_kind() -> None:
+    """A merged house seen on its delisted non-canonical advert: the header facts (status
+    included) are the PROPERTY's, the advert's own `is_active` / `subtype` / `kind_label` keep
+    their meaning, and an advert not yet attached has no property facts (no coalesce to its own)."""
+    market_rows = [
+        _mk_market_row("idnes", "merged", True, listing_id=41, property_id=901,
+                       category_main="dum", category_type="prodej", subtype="vila",
+                       is_active=False, property_is_active=True,
+                       canonical_listing_id=40, tom_days=94,
+                       total_floors=2, condition="velmi_dobry", ownership="osobni",
+                       property_subtype="rodinny_dum", plot_area_m2=Decimal("905.0")),
+        _mk_market_row("idnes", "fresh", True, listing_id=42, property_id=None,
+                       category_main="dum", category_type="prodej", subtype="vila"),
+    ]
+    merged, fresh = pl.lookup_portal_listings(
+        _FakeConn(market_rows), _FakeConn([]), _items(("idnes", "merged"), ("idnes", "fresh")),
+    )["data"]
+    assert merged["canonical_listing_id"] == 40
+    assert (merged["is_active"], merged["property_is_active"]) == (False, True)
+    assert (merged["tom_days"], merged["floor"], merged["total_floors"]) == (94, None, 2)
+    assert (merged["condition"], merged["ownership"]) == ("velmi_dobry", "osobni")
+    assert merged["plot_area_m2"] == 905.0 and type(merged["plot_area_m2"]) is float
+    assert (merged["property_subtype"], merged["subtype"], merged["kind_label"]) == (
+        "rodinny_dum", "vila", "Vila")
+    for key in _PROPERTY_FACTS:
+        assert fresh[key] is None, key
+
+
+def test_lookup_reads_the_property_facts_off_pp_and_the_plot_measure() -> None:
+    code = "\n".join(line.split("--")[0] for line in pl._MARKET_SQL.splitlines())
+    assert f"{plot_area_sql('pp')} AS plot_area_m2" in code
+    assert "estate_area" not in code.replace(plot_area_sql("pp"), "")
+    assert "pp.listing_id AS canonical_listing_id" in code
+    assert "pp.is_active AS property_is_active" in code
+    assert "pp.subtype AS property_subtype" in code
+    for col in ("tom_days", "floor", "total_floors", "condition", "ownership"):
+        assert f"pp.{col}" in code and f"l.{col}" not in code, col
+    assert set(_PROPERTY_FACTS) <= set(pl._LISTING_COLS)
+    # An f-string constant leaves the offline `%` sweep (tests/sql_corpus.py reads literals only).
+    assert _invalid_placeholder(pl._MARKET_SQL) is None
 
 
 def test_lookup_binds_one_value_pair_per_item() -> None:

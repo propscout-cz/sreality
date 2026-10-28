@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
@@ -160,5 +160,41 @@ describe('<BuildingDetail> control names', () => {
     const file = container.querySelector('input[type="file"]');
     expect(file).not.toBeNull();
     expect(file!).toHaveAccessibleName('Attachments');
+  });
+});
+
+/* Section cards (operator ruling 2026-10-28, system.md § Section cards): each
+ * section is a card on paper-2 named by its title, with a bare count where it
+ * holds a list; a unit inside the Units card is an L3 group, never a box in a
+ * box; the ochre warnings box stays as it is. */
+describe('<BuildingDetail> section cards', () => {
+  const card = (name: string) => screen.getByRole('region', { name });
+  const countOf = (region: HTMLElement) =>
+    within(region).getByRole('heading', { level: 2 }).nextElementSibling?.textContent;
+  const expectCard = (region: HTMLElement) => {
+    expect(region.tagName).toBe('SECTION');
+    expect(region).toHaveClass('border', 'bg-[var(--color-paper-2)]', 'rounded-[var(--radius-md)]');
+  };
+
+  it('draws a finished building as Subject, Building totals and Units cards', () => {
+    renderPage();
+    for (const name of ['Subject', 'Building totals', 'Units']) expectCard(card(name));
+    expect(countOf(card('Units'))).toBe('2');
+    const units = within(card('Units')).getAllByRole('heading', { level: 3 });
+    expect(units.map((h) => h.textContent)).toEqual([expect.stringContaining('u1'), expect.stringContaining('u2')]);
+    for (const h of units) expect(h.closest('.border')).toBe(card('Units'));
+  });
+
+  it('draws an awaiting building as Operator context, Attachments and Review units cards', () => {
+    renderPage({ ...building, status: 'awaiting_input', warnings: ['Two units share a label.'] });
+    for (const name of ['Subject', 'Operator context', 'Attachments', 'Review units']) expectCard(card(name));
+    expect(countOf(card('Attachments'))).toBe('0');
+    expect(within(card('Attachments')).getByText('max 20')).toBeInTheDocument();
+    expect(within(card('Attachments')).getByText(/^No attachments yet\./)).toBeInTheDocument();
+    expect(countOf(card('Review units'))).toBe('2');
+    /* The editor's table scrolls, so it keeps its own box. */
+    expect(within(card('Review units')).getByRole('table').parentElement).toHaveClass('overflow-x-auto', 'border');
+    /* The ochre warnings box stays, outside every card. */
+    expect(screen.getByText('Heads-up').closest('section')).toHaveClass('bg-[var(--color-ochre-soft)]');
   });
 });

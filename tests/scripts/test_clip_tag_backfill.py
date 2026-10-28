@@ -417,7 +417,7 @@ class _Tagger:
         return [_Vec(i) for i in ids]
 
     def tags_from_emb(self, emb: list[Any]) -> list[TagResult]:
-        return [TagResult("kitchen", "kitchen", 0.9, 0.1) for _ in emb]
+        return [TagResult("kitchen", "kitchen", 0.9) for _ in emb]
 
 
 class _Job:

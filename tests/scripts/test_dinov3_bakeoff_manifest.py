@@ -273,8 +273,8 @@ def _script() -> list[tuple[str, Any]]:
         ("SELECT id, label FROM tag_taxonomy WHERE active",
          [(3, "interier - pudorys"), (22, "interier - koupelna")]),
         ("FROM images i TABLESAMPLE SYSTEM (%(pct)s) JOIN image_clip_tags",
-         [(301, 71, 5, "img/301.jpg", 0.1, "kitchen"),
-          (302, 72, 6, "img/302.jpg", None, "bathroom")]),
+         [(301, 71, 5, "img/301.jpg", "kitchen"),
+          (302, 72, 6, "img/302.jpg", "bathroom")]),
         ("FROM images i TABLESAMPLE SYSTEM",
          [(101, 11, 0b1010), (102, 22, 0b1010), (103, 33, 0b1011)]),
         ("FROM image_tag_labels l", _labelled),
@@ -285,7 +285,7 @@ def _script() -> list[tuple[str, Any]]:
         ("FROM image_clip_embeddings e",
          [("openai/clip-vit-base-patch32", None, 12)]),
         ("LEFT JOIN image_clip_tags t",
-         lambda p: [(i, f"img/{i}.jpg", 1234, 70 + (i % 3), 900, 0.1, "kitchen")
+         lambda p: [(i, f"img/{i}.jpg", 1234, 70 + (i % 3), 900, "kitchen")
                     for i in p["ids"]]),
     ]
 

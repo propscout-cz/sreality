@@ -101,4 +101,14 @@ describe('<EstimationDetail> redirect', () => {
     expect(screen.getByTestId('run-body')).toBeInTheDocument();
     expect(where()).toBe('/estimation/41');
   });
+
+  it('draws no small-caps label above the title (P26); the run id stays as plain metadata', async () => {
+    fetchRun.mockResolvedValue(run({
+      input_spec: { lat: 50.1, lng: 14.4, area_m2: 61, disposition: '2+kk', floor: 2 },
+    }));
+    renderAt('/estimation/41');
+    const id = await screen.findByText('Run #41');
+    expect(id).not.toHaveClass('uppercase');
+    expect(screen.queryByText(/Estimation · run #41/)).toBeNull();
+  });
 });

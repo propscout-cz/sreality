@@ -46,7 +46,7 @@ class _Cur:
 
     def executemany(self, sql: str, params: list[tuple[Any, ...]]) -> None:
         assert sql == rte._UPDATE
-        done = {p[4] for p in params}
+        done = {p[-2] for p in params}  # (…, image_id, model)
         self._db.waiting = [i for i in self._db.waiting if i not in done]
         self._db.clock.t += self._db.secs_per_batch
 
@@ -77,7 +77,7 @@ class _DB:
 
 class _Tagger:
     def tags_from_emb(self, emb: Any) -> list[TagResult]:
-        return [TagResult("kitchen", "kitchen", 0.9, 0.1) for _ in emb]
+        return [TagResult("kitchen", "kitchen", 0.9) for _ in emb]
 
 
 @pytest.fixture(autouse=True)

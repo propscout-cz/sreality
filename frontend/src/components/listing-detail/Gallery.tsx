@@ -2,7 +2,6 @@ import { useCallback, useState } from 'react';
 import type { ImagePublic } from '@/lib/types';
 import { imageSrc } from '@/lib/imageUrl';
 import ImageTagBadge from '@/components/ImageTagBadge';
-import ImageRenderBadge from '@/components/ImageRenderBadge';
 import ImageLightbox from '@/components/ImageLightbox';
 
 interface Props {
@@ -80,10 +79,6 @@ function Thumbnail({
             tag={image.clip_fine_tag}
             confidence={image.clip_confidence}
             className="absolute bottom-1 left-1 max-w-[calc(100%-0.5rem)] truncate"
-          />
-          <ImageRenderBadge
-            renderScore={image.clip_render_score}
-            className="absolute bottom-1 right-1"
           />
         </>
       )}

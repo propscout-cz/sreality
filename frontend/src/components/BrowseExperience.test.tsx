@@ -122,13 +122,16 @@ beforeEach(() => {
 afterEach(() => localStorage.removeItem(MAP_COLLAPSED));
 
 describe('<BrowseExperience> one portal\'s "Newest first"', () => {
+  /* The header chip names the portal; the card keeps the day of its newest ad
+     there and names no portal (P01's note, 2026-10-27). */
   it('names the order in the header and dates each card on that portal', async () => {
     renderBrowse(['idnes']);
     const chip = await screen.findByText('newest on iDNES Reality');
     expect(chip.getAttribute('title')).toMatch(
       /^Newest first follows iDNES Reality: each property is placed by when its newest iDNES Reality ad was first seen/,
     );
-    expect(await lifespan()).toContain(`·iDNESod${fmtShortDate(IDNES_DAY)}`);
+    expect(await lifespan()).toContain(`·od${fmtShortDate(IDNES_DAY)}`);
+    expect(await lifespan()).not.toContain('iDNES');
   });
 
   it('names "Oldest first" the same way', async () => {
@@ -138,7 +141,7 @@ describe('<BrowseExperience> one portal\'s "Newest first"', () => {
 
   it('keeps the property\'s own order and dates with two portals', async () => {
     renderBrowse(['idnes', 'sreality']);
-    expect(await lifespan()).not.toContain('iDNES');
+    expect(await lifespan()).not.toContain(fmtShortDate(IDNES_DAY));
     expect(screen.queryByText(/^(newest|oldest) on /)).toBeNull();
   });
 });
@@ -234,7 +237,8 @@ describe('<BrowseExperience> the cards\' ad counts', () => {
 
 /* The Cover dropdown beside Sort (#1726) as the page wires it: the pick is this
  * browser's own (`sreality.browse.cardCoverTag`) and opens each card on that photo,
- * with the same card's portal badge, ad count and portal date still on it. */
+ * with the same card's ad count and newest-ad date still on it (the card names no
+ * portal: P01's note, 2026-10-27). */
 describe('<BrowseExperience> the cards\' cover photo', () => {
   const COVER_KEY = 'sreality.browse.cardCoverTag';
   const tagged = (id: number, clip_fine_tag: string) =>
@@ -261,11 +265,11 @@ describe('<BrowseExperience> the cards\' cover photo', () => {
 
     expect(await screen.findByText(counterIs('3 / 4'))).toBeInTheDocument();
     expect(localStorage.getItem(COVER_KEY)).toBe('kitchen');
-    const card = screen.getByTitle(/^Portály/).closest('li')!;
+    const card = screen.getByTitle(/^Aktivní/).closest('li')!;
     expect(within(card).getByText(counterIs('3 / 4'))).toBeInTheDocument();
-    expect(within(card).getByTitle(/^Portály/).textContent).toBe('iDNES Reality · Sreality');
+    expect(within(card).queryByTitle(/^Portály/)).toBeNull();
     expect(within(card).getByTitle(/^Nemovitost spojuje 2 inzeráty/)).toHaveTextContent(/^2\s*inzeráty$/);
-    expect(within(card).getByTitle(/^Aktivní/).textContent).toContain(`·iDNESod${fmtShortDate(IDNES_DAY)}`);
+    expect(within(card).getByTitle(/^Aktivní/).textContent).toContain(`·od${fmtShortDate(IDNES_DAY)}`);
   });
 
   it('opens on the stored pick when the page loads', async () => {

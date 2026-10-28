@@ -69,11 +69,12 @@ PIN = "3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268"
 # The hub's LFS oid of pytorch_model.bin at PIN (605,247,071 B); the revision ships no safetensors.
 WEIGHTS_OID = "a63082132ba4f97a80bea76823f544493bffa8082296d62d71581a4feff1576f"
 # The taxonomy that tagged the sample (prompts last changed 2026-06-26, ab2691d87); see _taxonomy_digest.
-TAXONOMY_KEYS = ("model", "revision", "prompts", "collapse", "render_anchors", "photo_anchors")
-TAXONOMY_SHA256 = "d0170f147e5e2a28a0cef04b5c5b67d5a98868864da8d16f4802e02a23f02892"
+# The render anchors left the digest with #2151: they never touched the room softmax the sample's tags come from.
+TAXONOMY_KEYS = ("model", "revision", "prompts", "collapse")
+TAXONOMY_SHA256 = "fd5cd3c6cb30357f5497702c55cce7976a22e8452120c8f1590ec25f58e194ad"
 # Production against itself (7,332 same-photo pairs on one stack): non-zero L2 max 6.41e-6, never 1e-5.
 L2_MAX = 1e-5
-# Stored confidence and render_score are rounded to 4 decimals, and stored as real.
+# Stored confidence is rounded to 4 decimals, and stored as real.
 TAG_TOL = 1e-4 + 1e-6
 ROUNDS = 3
 MAX_FAILURE_LINES = 10
@@ -81,7 +82,7 @@ WHY_ORDER = ("sample", "identity", "vector", "tags", "stored_tags", "download")
 
 _READ_SQL = """
     SELECT i.id, i.listing_id, i.storage_path, i.clip_tagged_at, e.revision, e.embedding::text,
-           t.fine_tag, t.logical_tag, t.confidence, t.render_score
+           t.fine_tag, t.logical_tag, t.confidence
     FROM images i
     LEFT JOIN image_clip_embeddings e ON e.image_id = i.id AND e.model = %(model)s
     LEFT JOIN image_clip_tags t ON t.image_id = i.id AND t.model = %(model)s
@@ -235,14 +236,10 @@ def _identity(tagger: Tagger, model: str, failures: _Failures) -> dict[str, str]
 
 
 def _stored_tags_differ(fresh: TagResult, row: tuple[Any, ...]) -> bool:
-    fine, logical, confidence, render = row[6:10]
+    fine, logical, confidence = row[6:9]
     if (fresh.fine_tag, fresh.logical_tag) != (fine, logical):
         return True
-    if confidence is None or abs(fresh.confidence - float(confidence)) > TAG_TOL:
-        return True
-    if (fresh.render_score is None) != (render is None):
-        return True
-    return render is not None and abs(fresh.render_score - float(render)) > TAG_TOL
+    return confidence is None or abs(fresh.confidence - float(confidence)) > TAG_TOL
 
 
 def _summary(passed: bool, why: str, facts: dict[str, Any]) -> int:
@@ -312,8 +309,8 @@ def verify(conn: psycopg.Connection, args: argparse.Namespace, *, r2_factory: Ca
         if check_stored:
             if _stored_tags_differ(a, rows[image_id]):
                 row = rows[image_id]
-                failures.add("stored_tags", f"image={image_id} fresh={a.fine_tag}/{a.logical_tag}/{a.confidence}/"
-                                            f"{a.render_score} stored={row[6]}/{row[7]}/{row[8]}/{row[9]}")
+                failures.add("stored_tags", f"image={image_id} fresh={a.fine_tag}/{a.logical_tag}/{a.confidence} "
+                                            f"stored={row[6]}/{row[7]}/{row[8]}")
             else:
                 stored_equal += 1
 

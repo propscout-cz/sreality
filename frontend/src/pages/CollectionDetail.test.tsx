@@ -182,6 +182,18 @@ describe('<CollectionDetail>', () => {
     expect(screen.queryByRole('textbox', { name: 'Name' })).toBeNull();
   });
 
+  /* Section cards (operator ruling 2026-10-28): an empty collection keeps its
+     Properties card with count 0 and its one muted line (C10); no hairline
+     separates the header from it any more. */
+  it('keeps an empty collection as the Properties card, count 0, under the header with no hairline', async () => {
+    renderPage();
+    const card = await screen.findByRole('region', { name: 'Properties' });
+    expect(within(card).getByRole('heading', { level: 2, name: 'Properties' }).nextElementSibling)
+      .toHaveTextContent('0');
+    expect(within(card).getByText(/^No properties/)).toBeInTheDocument();
+    expect(document.body.querySelector('.h-px')).toBeNull();
+  });
+
   it('says a failed read with a retry that reads again (MS16)', async () => {
     vi.mocked(api.getCollection).mockRejectedValueOnce(new Error('HTTP 500'));
     renderPage();
@@ -340,7 +352,13 @@ describe('<CollectionDetail>', () => {
       expect(button).toHaveAttribute('aria-expanded', 'true');
       const panel = document.getElementById(button.getAttribute('aria-controls') ?? '');
       expect(panel).not.toBeNull();
-      expect(within(panel as HTMLElement).getByText('Sharing')).toBeInTheDocument();
+      /* The sharing panel is a section card (system.md § Section cards): its
+         title names the region, its count is the recipients. */
+      const card = screen.getByRole('region', { name: 'Sharing' });
+      expect(card).toBe(panel);
+      expect(card).toHaveClass('border', 'bg-[var(--color-paper-2)]', 'rounded-[var(--radius-md)]');
+      expect(within(card).getByRole('heading', { level: 2, name: 'Sharing' }).nextElementSibling)
+        .toHaveTextContent('1');
 
       fireEvent.click(button);
       expect(button).toHaveAttribute('aria-expanded', 'false');
@@ -442,7 +460,13 @@ describe('<CollectionDetail>', () => {
       const { invalidate } = renderPage();
       fireEvent.click(await screen.findByRole('tab', { name: 'Table' }));
       expect(screen.getByRole('tab', { name: 'Table' })).toHaveAttribute('aria-selected', 'true');
-      expect(screen.getByText('Properties')).toBeInTheDocument();
+      /* The table tab is the Properties card, its count the members; the table
+         that scrolls keeps its own box (C9). */
+      const card = screen.getByRole('region', { name: 'Properties' });
+      expect(card).toHaveClass('border', 'bg-[var(--color-paper-2)]');
+      expect(within(card).getByRole('heading', { level: 2, name: 'Properties' }).nextElementSibling)
+        .toHaveTextContent('1');
+      expect(within(card).getByRole('table').closest('.overflow-hidden')).toHaveClass('border');
 
       fireEvent.click(screen.getByRole('button', { name: 'Remove listing from collection' }));
       await waitFor(() =>

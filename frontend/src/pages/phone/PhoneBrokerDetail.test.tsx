@@ -167,6 +167,21 @@ describe('<BrokerDetail> on the phone', () => {
     expect(container.querySelector('.maplibregl-map, canvas')).toBeNull();
   });
 
+  /* Section cards (operator ruling 2026-10-28): Působnost and Firmy are cards like the
+     phone property page's, their titles L2 (never small caps), Firmy's count bare. */
+  it('draws Působnost and Firmy as section cards', async () => {
+    renderPage();
+    const reach = await screen.findByRole('region', { name: 'Působnost' });
+    const firms = screen.getByRole('region', { name: 'Firmy' });
+    for (const card of [reach, firms]) {
+      expect(card.tagName).toBe('SECTION');
+      expect(card).toHaveClass('border', 'bg-[var(--color-paper-2)]', 'rounded-[var(--radius-md)]');
+    }
+    const title = within(firms).getByRole('heading', { level: 2, name: 'Firmy' });
+    expect(title).not.toHaveClass('uppercase');
+    expect(title.nextElementSibling).toHaveTextContent(/^1$/);
+  });
+
   it("lists the broker's live ads as Browse's cards", async () => {
     renderPage();
     const offer = await screen.findByRole('region', { name: 'Nabídka' });

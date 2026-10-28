@@ -132,9 +132,9 @@ describe('makeHydration lookup', () => {
       7,
       [
         { id: 1, sreality_url: 'https://img/a.jpg', storage_path: null,
-          clip_fine_tag: 'kuchyne', clip_confidence: 0.9, clip_render_score: null },
+          clip_fine_tag: 'kuchyne', clip_confidence: 0.9 },
         { id: 2, sreality_url: 'https://img/b.jpg', storage_path: null,
-          clip_fine_tag: null, clip_confidence: null, clip_render_score: null },
+          clip_fine_tag: null, clip_confidence: null },
       ] as unknown as ImagePublic[],
     ],
   ]);

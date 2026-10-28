@@ -34,7 +34,7 @@ import { MissingPhotoTile } from '@/components/autodedup/ListingMini';
 import SplitPanel from '@/components/autodedup/SplitPanel';
 import { priceLabel } from '@/components/autodedup/SplitPlanLines';
 import { UnitSelect, type UnitMap } from '@/components/autodedup/UnitSplit';
-import { SectionLabel } from '@/components/section';
+import Panel from '@/components/Panel';
 import { fetchPropertyOrigins, type AdvertOrigin, type Letters } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import type { ListingBroker } from '@/lib/brokers';
@@ -46,7 +46,7 @@ import {
 } from '@/lib/hydration/useCardHydration';
 import { imageSrc } from '@/lib/imageUrl';
 import { areaKindOf } from '@/lib/measure';
-import { inzeratu, mergeOriginLabel, mergedAdvertsKeys, splitPlan } from '@/lib/mergedAdverts';
+import { mergeOriginLabel, mergedAdvertsKeys, splitPlan } from '@/lib/mergedAdverts';
 import { portalBadge } from '@/lib/portals';
 import { fetchListingsForListingIds } from '@/lib/queries';
 import { ROUTES, withQuery } from '@/lib/routes';
@@ -168,16 +168,19 @@ export default function MergedAdvertsSection({
       ? 'Nepřišel sloučením — při rozdělení zůstanou v této nemovitosti inzeráty písmena, které má nejvíc vlastních inzerátů.'
       : 'Nepřišel sloučením — inzeráty s jeho písmenem při rozdělení zůstanou v této nemovitosti.';
 
+  /* A section card (C1–C10): the adverts are its count, the portals its note; the
+     advert rows stay list items, each its own frame. */
   return (
-    <section aria-label="Sloučené inzeráty">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <SectionLabel>{sources.length > 1 ? 'Sloučené inzeráty' : 'Inzerát'}</SectionLabel>
-        <p className="text-[0.7rem] tracking-wide text-[var(--color-ink-4)] font-mono tabular-nums">
-          {fmtCount(sources.length)} {inzeratu(sources.length)} · {fmtCount(portals)}{' '}
-          {portals === 1 ? 'portál' : portals <= 4 ? 'portály' : 'portálů'}
-        </p>
-      </div>
-      <p className="mt-1 text-[0.75rem] text-[var(--color-ink-3)]">
+    <Panel
+      title={sources.length > 1 ? 'Sloučené inzeráty' : 'Inzerát'}
+      count={fmtCount(sources.length)}
+      note={
+        <span className="font-mono tabular-nums">
+          {fmtCount(portals)} {portals === 1 ? 'portál' : portals <= 4 ? 'portály' : 'portálů'}
+        </span>
+      }
+    >
+      <p className="text-[0.75rem] text-[var(--color-ink-3)]">
         Inzeráty, které tvoří tuto nemovitost. Rozbalte řádek pro popis, všechny
         fotky a makléře.
         {canSplit &&
@@ -195,7 +198,7 @@ export default function MergedAdvertsSection({
         )}
       </p>
       {detailsQ.isError && (
-        <p className="mt-2 text-[0.75rem] text-[var(--color-brick)]">
+        <p className="text-[0.75rem] text-[var(--color-brick)]">
           Údaje inzerátů se nepodařilo načíst: {detailsQ.error.message}
         </p>
       )}
@@ -210,7 +213,7 @@ export default function MergedAdvertsSection({
           onCancel={reset}
         />
       )}
-      <ul className="mt-4 space-y-2">
+      <ul className="space-y-2">
         {sources.map((s) => (
           <MergedAdvertRow
             key={s.id}
@@ -247,7 +250,7 @@ export default function MergedAdvertsSection({
           />
         ))}
       </ul>
-    </section>
+    </Panel>
   );
 }
 

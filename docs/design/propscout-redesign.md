@@ -1,6 +1,6 @@
 # PropScout.cz redesign: handoff
 
-Status 2026-10-27. This is the one place to pick the redesign up from. It records what is done, what the
+Status 2026-10-28. This is the one place to pick the redesign up from. It records what is done, what the
 operator ruled, and what is next. Read it top to bottom before touching any of the screens named here.
 
 ## Where everything lives
@@ -9,6 +9,7 @@ operator ruled, and what is next. Read it top to bottom before touching any of t
 | --- | --- | --- |
 | Rename + three colour schemes (built) | PR waiff/sreality#2115, merged and live 2026-10-27 | Yes |
 | Design rules for every build | `.interface-design/system.md` (§ Colour schemes, § Hierarchy rulings) | **Yes** |
+| Section cards: how every page separates its sections (app + extension), ruled and built 2026-10-28 | `.interface-design/system.md` § Section cards; picture `docs/design/propscout-section-cards.png` | **Yes** (§ Section cards below) |
 | Design system artifact: previews of every agenda, as ruled | https://claude.ai/artifact/NstEVRTDXyQ8ZNJhEpxv7m | Direction only |
 | Removal review: 35 before/after pictures and the operator's answers | https://claude.ai/artifact/WoFQVG1RwmaqXAfBBQoqbV | The rulings below are copied from it |
 | Stats review: 10 proposals for Browse › Stats (S01–S10), pictures and answers | https://claude.ai/artifact/RRDNo2TfAa7iWuMUoUBMfg | **Yes** (§ Stats review below) |
@@ -38,8 +39,8 @@ fetch these links with curl or WebFetch.
 4. **Agenda 1, Browse card** (P01, P02, P03, P05 and the P06 chip restyle): built on branch
    `feature/browse-card-hierarchy` (PR #2127).
 5. **Agendas 2–8** (every other confirmed ruling): built on branch `feature/redesign-rulings`, one commit per
-   agenda; the as-built notes are under "What to build next". Not built: the render-scoring removal and the
-   unruled additions (both below).
+   agenda; the as-built notes are under "What to build next". Not built: the unruled additions (below). The
+   render-scoring removal is built (branch `feature/remove-render-scoring`, below).
 6. **Tab strips** (operator ruling 2026-10-27: option A, a rule across the column): one `components/Tabs.tsx`,
    built on branch `feature/shared-controls`; the binding pattern is `.interface-design/system.md` § Tab strip.
 
@@ -160,6 +161,25 @@ proposal's `where` field (`components/stats/StatsDashboard.tsx`, `DashboardBar.t
   turns the same switch on (so a loaded dashboard reads "Upraveno od načtení", as the switch does) and leaves focus
   on that chart's heading.
 
+## Section cards (ruled 2026-10-28)
+
+The operator found the small grey capital headings ("MOJE FOTKY (0)", "VÝVOJ CENY", "VALUO") too weak to tell
+sections apart, and asked for one pattern for the app and the Chrome extension. Four options were drawn
+(headline and rule, section cards, ledger band, side index; https://claude.ai/artifact/VYURnTgzeSshYX1Vsn3C3v,
+private to the operator's account) and **B, section cards**, was chosen. Each section is a paper card with a
+title bar: a Fraunces title, its count, the actions on the right. Small caps are left for field labels only.
+
+**The binding spec is `.interface-design/system.md` § Section cards; the picture is
+`docs/design/propscout-section-cards.png`** (standalone page `propscout-section-cards.html`), each value tagged
+C1–C10 and X1 (the extension). **Built 2026-10-28** (branch `feature/section-cards`). As built:
+`components/Panel.tsx` is the one card (`Panel`: title, bare `count`, `note`, `accessory`, `lede`), with
+`PanelGroup` (C7, an L3 group), `PanelEmpty` (C10) and `PANEL_ACTION` (C6, the title bar's small secondary
+button). It wraps every section of the property page's tabs, desktop and phone, and of the estimation run, broker
+(phone too), collection, sharing (`ShareBlock`), building and pipeline (Sdílení, Fáze pipeline) pages; the admin
+panels (Health, Costs, LocationQuality, LocationPinAudit, NewDedupDashboard) get it through `Panel`. Dialogs keep
+their hairlines, their sections L3. `SectionLabel` is the L4 field label only. The extension's X1 cards are built
+in the same PR.
+
 ## What to build next
 
 Agenda 1 shipped as its own PR (#2127). **Operator ruling 2026-10-27: agendas 2–8 go in ONE PR**
@@ -171,8 +191,8 @@ File pointers are where the element lives today (2026-10-27); search for the quo
 1. **Browse card** — **built** (branch `feature/browse-card-hierarchy`). As built: P05 drops the prefix only
    on a card whose own type and deal are the ones the filter pins (`cohortKind` from `BrowseExperience`); a
    subtype ("Rodinný dům") stays, since the filter doesn't name it (`lib/filters` `cohortKindOf`). P03 hides the verdict on the Browse card
-   only (`ImageCarousel` `renderBadge={false}`); the gallery, lightbox and the other carousels keep it until
-   the render-scoring removal. P02 is `fadeTag` (opacity; the pointer on the card, or keyboard focus in it: `:focus-visible`, so a
+   only (`ImageCarousel` `renderBadge={false}`); the render-scoring removal (below) then took the verdict off
+   every photo. P02 is `fadeTag` (opacity; the pointer on the card, or keyboard focus in it: `:focus-visible`, so a
    clicked photo arrow doesn't keep the tag shown).
 2. **Browse page, map and stats** — **built** (branch `feature/redesign-rulings`). P09 (the header keeps the count and what is counted, without the rest of the
    scope sentence: `components/BrowseExperience.tsx` `FilterSummary`, text built by `lib/filters.ts` `summarise`,
@@ -197,10 +217,10 @@ File pointers are where the element lives today (2026-10-27); search for the quo
    `mf_gross_yield_pct` span beside the dims row shows on Velké cards only, `BoardCard.tsx`), P22 (terminal
    stages, `is_terminal`, fold into one "Uzavřené" lane of drop rows; `pages/Pipeline.tsx`). Rule #22 holds:
    closing a deal is a move into a terminal stage, never a remove toggle.
-   As built: the board no longer reads the city indexes. The strip was mounted only on the pipeline card, so
-   no surface shows it now: the ruling's "it stays on the property page" assumed one there, and the property
-   page never had it (ask the operator whether it should get one). `CityIndexStrip` and `lib/useCityQuality`
-   stay on disk, unmounted. P20 is `showsYield` in the card-size table, so the drag ghost and the card agree.
+   As built: the board no longer reads the city indexes. The ruling keeps the strip on the property page, which
+   never had one, so Přehled now gives it a card, "Kvalita obce · <town>", last in the right column
+   (`PropertyOverview` `CityQualityCard`, reading `properties_public.obec_id`); a town that is not a curated city
+   shows no card, never a placeholder. P20 is `showsYield` in the card-size table, so the drag ghost and the card agree.
    P22: the lane sits at the board's right end, a row per closed stage (its colour bar, label and count under
    the active filters); each row is a droppable under its stage's id, so a drop closes the deal through the
    unchanged `planMove` → `usePipelineCard` move. A row opens its stage's full cards under the rows (which never
@@ -209,8 +229,8 @@ File pointers are where the element lives today (2026-10-27); search for the quo
    skeleton draws the folded lane too.
 4. **Watchdogs** — **built** (branch `feature/redesign-rulings`). P24 (Delete into a ⋯ menu, keeping its confirm), P25 (created date as a grey line under the
    name, drop the column): `pages/WatchdogManage.tsx`.
-   As built: the page stays English, so ⋯ holds one danger item, "Delete…", running the same confirm before
-   the delete. The created date is a grey line under the name, outside its link, the full timestamp in its
+   As built: ⋯ holds one danger item, "Smazat…" (the ruling's word: a new control takes it, the rest of the page
+   stays English, as on the collection page), running the same confirm before the delete. The created date is a grey line under the name, outside its link, the full timestamp in its
    tooltip; the filter cell's cap rose from 420 to 540 px.
 5. **Notifications** — **built** (branch `feature/redesign-rulings`). P27 (load older items on reaching the end, as Browse does): `pages/Notifications.tsx`,
    `components/LoadMore.tsx`.
@@ -240,8 +260,10 @@ File pointers are where the element lives today (2026-10-27); search for the quo
    `lib/useCardEstimates` (Browse's state, moved out of `BrowseExperience`); `?tab=table` and `?sort=` live in
    the address; members without a card are counted under the grid and all listed in the table. Phone: "Nová
    sbírka" moved to the end of my list, dashed, keeping its bottom sheet; phone P32 was already cards with no
-   table, so nothing changed; phone P31 has no blocks to move (its footer sends rename, delete, monitoring and
-   sharing to the desktop), so adding Sledovat / Sdílet / ⋯ to the phone header **awaits the operator's answer**.
+   table, so nothing changed. Phone P31 (the phone follows desktop): my collection's header carries the Sledovat
+   switch, "Sdílet · N" (the sharing card under the header) and ⋯ (Přejmenovat in place, Smazat sbírku behind the
+   two-step confirm, absent on the default collection), over the desktop's writes; the footer that sent this to the
+   desktop is gone, and the list's footer and new-collection sheet now point at the collection's page.
 8. **Shell and page headers** — **built** (branch `feature/redesign-rulings`). P26 (drop the small-caps label above the h1; there is no shared header
    component, each page has its own: `Header` in `pages/WatchdogManage.tsx`, `pages/Notifications.tsx`,
    `pages/Collections.tsx` and `pages/CollectionDetail.tsx`, and an inline header in `BrokersDesktop` in
@@ -260,17 +282,33 @@ screen's language as it is unless the operator rules otherwise.
 
 ## Render scoring: remove end to end (operator note on P03)
 
-Not started. Scope it first and send the operator the list of what would go before building anything.
-Known so far:
-- Producer: `scraper/clip_tagger.py` writes a per-image render score (migration `239_image_clip_render_score.sql`;
-  see also 245, 246, 456, 496 and 416 for where it reaches views).
-- Front end: `components/ImageRenderBadge.tsx`, `lib/imageTags.ts`, the gallery, lightbox, carousel, map preview,
-  sold comps, origin panel and the autodedup member rows read it (grep the front end for `render`).
-- **Check before removing**: migration 239 notes that the old dedup engine excluded high-render images from
-  its photo-match signal. Find whether autodedup or any SQL function still reads the score (CLAUDE.md rule 15:
-  the CLIP signal producers stay live), and say so in the scope.
-- Dropping a column is a destructive migration: it pauses for the operator's OK and a backup (`database`
-  skill). Stopping the producer and every reader can come first, the column drop last.
+**Built** (branch `feature/remove-render-scoring`): the operator approved the scope below on 2026-10-28, with the
+column drop in the same PR. As built: the tagger, both writers, the taxonomy anchors, the bake-off render limb
+(`--render-max` is gone; P1b now draws any non-document photo) and every SPA reader are removed; migration 686
+recreates both views without `clip_render_score` and drops the index and the column. It is applied after the
+PR deploys (the deployed tagger and SPA used the column until then), after a backup. The scope as approved:
+
+- **Nothing that must stay reads it.** None of autodedup's 20 `DECISION_MODULES` reads the score; its CLIP read
+  (`export_sql.py`) takes only `fine_tag`, `logical_tag` and `confidence`. No SQL function, RPC or matview reads it
+  (checked in the live catalog). The exclusion migration 239 describes belonged to the removed 2026-08 engine.
+- **Producer:** the render-only parts of `scraper/clip_tagger.py` (the render/photo anchors, `render_score` on
+  `TagResult`, the 4th output of `tags_from_emb`, the caller-less `render_scores_from_emb`). The room tags and
+  the CLIP embeddings stay, untouched. Also the writers `scripts/clip_tag_backfill.py` and
+  `scripts/retag_from_embeddings.py`, the anchor keys in `data/clip_taxonomy.json`, and `tests/test_clip_taxonomy.py`.
+- **Another reader:** the NEW DEDUP DINOv3 bake-off scripts (`scripts/dinov3_bakeoff*.py` and their test) filter on
+  the score; their render limb goes too, or they break at the column drop.
+- **Database:** `image_clip_tags.render_score` (13.4 M scored photos; the operator labels `render_flagged` were
+  never set), its index `image_clip_tags_render_null_idx`, and two views that project it as `clip_render_score`:
+  `images_public` (latest body 591) and `listing_cover_public` (416).
+- **SPA:** delete `ImageRenderBadge`; take `renderScore` out of `lib/imageTags`, `lib/types`, `IMAGE_PUBLIC_COLS`,
+  card hydration, `ImageCarousel`'s `renderBadge`, `Gallery` and `ImageLightbox`, plus fixtures. Today the badge
+  shows in the property gallery, the lightbox and the merged-adverts carousel. No API, toolkit or extension reader.
+- **Docs:** this file, `.interface-design/system.md`, `roadmap/ui-track.md`, `roadmap/photo-kinds.md`,
+  `docs/design/photo-kinds/PROGRAM.md` (its § 4.6 lists the tagger and `render_score` as a never-edit boundary,
+  which this ruling overrides), `new-dedup/ENCODER-DECISION.md`, `clip-linear-probe.md`.
+- **Order.** (a) One non-destructive PR: the producer, every reader, and a forward migration in which both views
+  project `NULL::real as clip_render_score` and stop reading the column, dropping the index. (b) Last, in an
+  operator-opened window after a pg_dump: `DROP COLUMN render_score` (and, if wanted, the views' NULL column).
 
 ## Shown in the design system but not ruled
 
@@ -292,6 +330,6 @@ directly). Keep `lastChange.note` in the index current.
 
 ## Suggested opening for the next session
 
-> Read `docs/design/propscout-redesign.md` and `.interface-design/system.md`. Every agenda is built; what
-> is left is the render-scoring scope (send the operator the list first) and the open questions under
-> agendas 3 and 7.
+> Read `docs/design/propscout-redesign.md` and `.interface-design/system.md`. Every agenda and the section
+> cards are built, and so is the render-scoring removal; what is left is the open questions under agendas 3
+> and 7.

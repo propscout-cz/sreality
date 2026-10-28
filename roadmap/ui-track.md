@@ -80,11 +80,23 @@ toolkit work.
   weight change, the inset count pill, arrow keys everywhere; the property strip now pins under the header (it
   hid behind it). Kept unruled: Browse's tab count, the collection's divider, the broker window's single tab,
   the filled toggles. Pattern: `.interface-design/system.md` § Tab strip.
-- **Next (not built):** removing render scoring end to end (operator note on P03), scoped first. Open for the
-  operator: the phone header's P31 controls, and whether the property page should get the city-index strip
-  (P19 assumed one there; it never had it). Handoff: `docs/design/propscout-redesign.md`.
+- **Built 2026-10-28:** the operator review notes P19 (the city-index card on Přehled), P24 and phone P31; and
+  render scoring removed end to end (P03: tagger, writers, SPA, migration 686 dropping the column). Handoff:
+  `docs/design/propscout-redesign.md`.
 - **Ruled 2026-10-27:** ten Stats-tab proposals (S01–S10, mostly the header): S01–S04, S06, S07, S09 confirmed,
   S05, S08, S10 declined; the confirmed ones are built (above; handoff § Stats review).
+- **Ruled 2026-10-28: section cards** (operator ask: "find a better way to separate sections … same pattern on the
+  new chrome plugin layout"; option B of four). Every detail-page section, the admin panels and the extension's
+  panel sections become a card with a title bar (Fraunces title, count, actions); small caps stay for field labels
+  only. Spec `.interface-design/system.md` § Section cards, picture `docs/design/propscout-section-cards.png`.
+- **Done (branch `feature/section-cards`): the property page.** Every section of every tab, the Poznámky card above
+  them and the phone property page's sections are `Panel` cards, 16 px apart: the count bare beside the title
+  (never in brackets or the title string), the actions in the title bar (Moje fotky's Nahrát, Valuo's Sandbox,
+  Prozkoumat okolí, Ověřit aktuálnost), Valuo's comparables and both ledgers (`RunHistory`) L3 groups. C10: Odhady,
+  Makléř, Popis, Moje fotky and Valuo keep their card with count 0 and one line ("Zatím bez ocenění." + "Ocenit
+  přes Valuo →"); no dashed tile or box-in-a-box is left (the broker's contact card is `bare` inside its card).
+- **Next (not built):** the section cards: `components/Panel.tsx` first, then the property page's tabs, the other
+  detail pages, and the extension's panel (with its new layout).
 
 ### Preset groups: boxes on the Browse preset row (2026-10-25, migration 672)
 - **Done** (operator ask 2026-10-25: "group my presets, a boundary box per group, move them into the boxes

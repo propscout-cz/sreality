@@ -52,7 +52,7 @@ _SELECT = """
 """
 _UPDATE = (
     "UPDATE image_clip_tags SET fine_tag = %s, logical_tag = %s, confidence = %s, "
-    "render_score = %s, tagged_at = now() WHERE image_id = %s AND model = %s"
+    "tagged_at = now() WHERE image_id = %s AND model = %s"
 )
 
 
@@ -100,7 +100,7 @@ def retag(conn: psycopg.Connection, tagger: Tagger, cutoff: str, *, deadline: fl
             return written, True
         results = tagger.tags_from_emb(_as_tensor([_parse_vec(r[2]) for r in rows]))
         with conn.cursor() as cur:
-            cur.executemany(_UPDATE, [(tr.fine_tag, tr.logical_tag, tr.confidence, tr.render_score, r[0], r[1])
+            cur.executemany(_UPDATE, [(tr.fine_tag, tr.logical_tag, tr.confidence, r[0], r[1])
                                       for r, tr in zip(rows, results)])
         written += len(rows)
         batches += 1

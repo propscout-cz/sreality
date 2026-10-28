@@ -182,7 +182,7 @@ UNGATED: dict[str, Ungated] = {
         "facts about the one municipality containing it out; never a cell list, a bbox, `error` or `pages`, so it "
         "cannot be walked to enumerate which towns are being worked."),
     "images_public": Ungated(
-        "view", "reachable", ("591_images_public_tag_head_scores.sql",),
+        "view", "reachable", ("591_images_public_tag_head_scores.sql", "686_drop_render_score.sql"),
         "Every signed-in Browse card's cover is chosen by the active tag model's scores (operator ruling "
         "2026-10-07). It publishes a photo's per-head scores and which model is active: market facts about a photo, "
         "like its CLIP tag columns since 236; never a label, a labeller, model artifacts or metrics."),

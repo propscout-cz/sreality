@@ -41,7 +41,6 @@ import {
 import type { CohortKind } from '@/lib/filters';
 import { plotBesideArea, ppm2BasisFromToken } from '@/lib/measure';
 import { listingKindParts, listingTypeLabel } from '@/lib/enums';
-import { portalLabel, portalShort } from '@/lib/portals';
 import type { ListingEstimate } from '@/lib/types';
 import { runSurfaceUrl } from '@/lib/runLinks';
 import { propertyPath } from '@/lib/listingUrl';
@@ -471,10 +470,6 @@ function Card({
   const orderedAt = orderPortal ? r[`newest_ad_at_${orderPortal}`] : null;
   const orderedDay = orderedAt ? fmtShortDate(orderedAt) : null;
   const orderDate = orderedDay && orderedDay !== fmtShortDate(r.first_seen_at) ? orderedDay : null;
-  /* MS19's badge: the portals with an active ad, or every portal once none is
-   * active (the card's surface and closed run already say which). */
-  const activePortals = r.active_sources;
-  const badgePortals = (activePortals.length ? activePortals : r.all_sources).map(portalLabel).join(' · ');
 
   /* W7a: photos come from the shared hydration layer, not off `r`. They used to
      be awaited inside the cards read, so the whole grid waited on 24 cards'
@@ -534,8 +529,7 @@ function Card({
         imgClassName={imageFilter}
         hoverZoom
         fadeChevrons
-        fadeTag
-        renderBadge={false}
+        roomTag={false}
         tabbableChevrons={false}
       >
         {merge && (
@@ -573,9 +567,9 @@ function Card({
         )}
         {/* Metadata margin: file-tab badges down the right edge of the
           * photo — the lifespan run, then the number of ads the property
-          * holds when it holds more than one (the portals sit in the card's
-          * foot, ruling P01). Status is carried by the card surface, not a
-          * pill. Borders-only, paper-3/85 + backdrop-blur over the photo. */}
+          * holds when it holds more than one (the card names no portals:
+          * ruling P01, operator note 2026-10-27). Status is carried by the card
+          * surface, not a pill. Borders-only, paper-3/85 + backdrop-blur over the photo. */}
         <div className="absolute top-1 right-1 max-w-[calc(100%-0.5rem)] flex flex-col items-end gap-1">
           <CardBadge title={lifespanTitle}>
             {inactive ? (
@@ -597,10 +591,11 @@ function Card({
               </>
             )}
             {orderPortal && orderDate && (
+              /* The newest ad's day under one portal's "Newest first" (MS19),
+                 without the portal's name (P01's note: none on the card). */
               <>
                 <span className="opacity-40 mx-1">·</span>
-                {portalShort(orderPortal)}
-                <span className="opacity-60 mx-1">od</span>
+                <span className="opacity-60 mr-1">od</span>
                 {orderDate}
               </>
             )}
@@ -676,21 +671,6 @@ function Card({
             {fmtMeasuredPricePerM2(r.price_per_m2, ppm2BasisFromToken(r.price_per_m2_basis))}
           </p>
         </div>
-        {badgePortals && (
-          /* The foot's first line (ruling P01): quiet text that loses its END
-             when long. Only the text is hit-testable, so the rest of the line
-             still opens the card. */
-          <p className="mt-0.5 flex min-w-0 text-[0.62rem] text-[var(--color-ink-3)]">
-            <span
-              title={`${activePortals.length
-                ? 'Portály, kde má nemovitost aktivní inzerát'
-                : 'Portály, kde nemovitost inzerovala; žádný inzerát není aktivní'}: ${badgePortals}`}
-              className="card-tip min-w-0 truncate"
-            >
-              {badgePortals}
-            </span>
-          </p>
-        )}
         {r.mf_gross_yield_pct != null && (
           <p
             className="card-tip mt-0.5 text-[0.62rem] text-[var(--color-ink-3)] tabular-nums"

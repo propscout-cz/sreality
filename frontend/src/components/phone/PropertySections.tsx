@@ -1,5 +1,6 @@
 /* The phone property page's own sections (#1767, the prototype's "Nemovitost"):
- * each a hairline-separated block under a micro label. Where it is (Poloha: a
+ * each a section card (components/Panel, operator ruling 2026-10-28: one pattern
+ * for the app), the same card the desktop tabs draw. Where it is (Poloha: a
  * streamed Mapy static image, never a WebGL map), facts, description, the ads
  * with their portal links, the brokers and the registered sales near the
  * property — the desktop page's reads and rules, drawn at phone width. The
@@ -11,7 +12,7 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
 import BrokerContactCard from '@/components/BrokerContactCard';
-import { SectionLabel } from '@/components/section';
+import Panel, { PanelEmpty } from '@/components/Panel';
 import { priceLabel } from '@/components/autodedup/SplitPlanLines';
 import { propertyBrokers } from '@/lib/brokers';
 import { listingKindParts } from '@/lib/enums';
@@ -46,26 +47,22 @@ import { ExternalIcon } from './phoneIcons';
 
 export function PhoneSection({
   label,
-  aside,
+  count,
+  note,
   id,
   children,
 }: {
   label: string;
-  /* A mono count or range beside the label ("3 portály", "14 do 1 km"). */
-  aside?: ReactNode;
+  /* A bare count beside the title (C6), and a short note after it ("3 portály", "do 1 km"). */
+  count?: number | string | null;
+  note?: ReactNode;
   id?: string;
   children: ReactNode;
 }) {
   return (
-    <section aria-label={label} id={id} className="scroll-mt-16 px-4 py-4">
-      <div className="mb-3 flex items-baseline justify-between gap-2">
-        <SectionLabel>{label}</SectionLabel>
-        {aside != null && (
-          <span className="font-mono text-[11px] tabular-nums text-[var(--color-ink-3)]">{aside}</span>
-        )}
-      </div>
+    <Panel title={label} count={count} note={note} id={id}>
       {children}
-    </section>
+    </Panel>
   );
 }
 
@@ -162,24 +159,32 @@ export function DescriptionSection({ text }: { text: string | null }) {
     const el = ref.current;
     if (el) setOverflows(el.scrollHeight - el.clientHeight > 1);
   }, [body]);
-  if (!body) return null;
+  if (!body) {
+    return (
+      <PhoneSection label="Popis">
+        <PanelEmpty>Inzerát nemá popis.</PanelEmpty>
+      </PhoneSection>
+    );
+  }
   return (
     <PhoneSection label="Popis">
-      <p
-        ref={ref}
-        className={`whitespace-pre-wrap text-[14px] leading-relaxed text-[var(--color-ink-2)] ${open ? '' : 'line-clamp-6'}`}
-      >
-        {body}
-      </p>
-      {(overflows || open) && (
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className="mt-1 h-8 text-[13px] font-medium text-[var(--color-copper)]"
+      <div>
+        <p
+          ref={ref}
+          className={`whitespace-pre-wrap text-[14px] leading-relaxed text-[var(--color-ink-2)] ${open ? '' : 'line-clamp-6'}`}
         >
-          {open ? 'Zkrátit' : 'Celý popis'}
-        </button>
-      )}
+          {body}
+        </p>
+        {(overflows || open) && (
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="mt-1 h-8 text-[13px] font-medium text-[var(--color-copper)]"
+          >
+            {open ? 'Zkrátit' : 'Celý popis'}
+          </button>
+        )}
+      </div>
     </PhoneSection>
   );
 }
@@ -224,7 +229,7 @@ export function AdsSection({
   }
   if (sources.length === 0) return null;
   return (
-    <PhoneSection label="Inzeráty" aside={portalsAside(portals)}>
+    <PhoneSection label="Inzeráty" count={sources.length} note={portalsAside(portals)}>
       <ul>
         {sources.map((s, i) => (
           <li
@@ -282,8 +287,8 @@ const initials = (name: string | null): string =>
 /* MS7 (lib/brokers.propertyBrokers) over the batched read the desktop list uses,
  * and the desktop's own contact card under each name — the same channels, the
  * same ad references, the same copy behaviour (lib/clipboard) on both shells.
- * A failed read says so with a retry, never "no broker"; loading and a genuinely
- * unattributed property render nothing. */
+ * A failed read says so with a retry, never "no broker"; a genuinely
+ * unattributed property keeps its card, count 0, and says so (C10). */
 export function BrokersSection({
   adverts,
   canonicalId,
@@ -313,10 +318,28 @@ export function BrokersSection({
       </PhoneSection>
     );
   }
+  /* A property always has an ad: an empty list is one not read yet. */
+  if (read.isPending || adverts.length === 0) {
+    return (
+      <PhoneSection label="Makléři">
+        <p className="text-[13px] text-[var(--color-ink-3)]">Načítám…</p>
+      </PhoneSection>
+    );
+  }
   const { brokers, fromInactive } = propertyBrokers(adverts, read.brokers, canonicalId);
-  if (brokers.length === 0) return null;
+  if (brokers.length === 0) {
+    return (
+      <PhoneSection label="Makléři" count={0}>
+        <PanelEmpty>Makléř není uveden.</PanelEmpty>
+      </PhoneSection>
+    );
+  }
   return (
-    <PhoneSection label="Makléři" aside={fromInactive ? 'z neaktivních inzerátů' : brokers.length}>
+    <PhoneSection
+      label="Makléři"
+      count={brokers.length}
+      note={fromInactive ? 'z neaktivních inzerátů' : undefined}
+    >
       <ul className="space-y-5">
         {brokers.map((b) => (
           <li key={b.broker_id}>
@@ -339,7 +362,7 @@ export function BrokersSection({
                 </p>
               </div>
             </div>
-            <BrokerContactCard broker={b} ads={b.ads} className="mt-3" />
+            <BrokerContactCard broker={b} ads={b.ads} bare className="mt-3" />
           </li>
         ))}
       </ul>
@@ -395,7 +418,7 @@ function SoldList({ lat, lng, kind }: { lat: number; lng: number; kind: string }
   const summary = rowsQ.isSuccess ? summarizeSold(rows) : null;
   const coverage = coverageQ.data ?? null;
   const km = `${radiusM / 1000} km`;
-  const aside = rowsQ.isSuccess && rows.length > 0 ? `${rows.length}${truncated ? '+' : ''} do ${km}` : undefined;
+  const counted = rowsQ.isSuccess && rows.length > 0;
 
   let note: ReactNode = null;
   if (rowsQ.isError) {
@@ -417,7 +440,11 @@ function SoldList({ lat, lng, kind }: { lat: number; lng: number; kind: string }
   }
 
   return (
-    <PhoneSection label="Prodané v okolí" aside={aside}>
+    <PhoneSection
+      label="Prodané v okolí"
+      count={counted ? `${rows.length}${truncated ? '+' : ''}` : null}
+      note={counted ? `do ${km}` : undefined}
+    >
       {rowsQ.isLoading ? (
         <p className="text-[13px] text-[var(--color-ink-3)]">Načítám…</p>
       ) : note ? (

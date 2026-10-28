@@ -384,6 +384,7 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
           </div>
           <div className="mt-4">
             <ShareBlock
+              frame="dialog"
               title="Sdílení"
               lang="cs"
               description="Komu dashboard nasdílíte, uvidí ho mezi svými dashboardy a může si ho načíst nebo uložit jako vlastní. Měnit ho nemůže; vaše uložené změny uvidí."

@@ -2,8 +2,8 @@
  * 2026-10-23: the adverts and the price moves are one card, right under the
  * description): one card per question, each with the answer and a way into its
  * tab — the description; where it is advertised and how its price moved; is the
- * price right; beside them the brokers and how to reach them, and what flats
- * nearby actually sold for.
+ * price right; beside them the brokers and how to reach them, what flats nearby
+ * actually sold for and, in a curated city, the town's quality indexes.
  *
  * Every figure here is read from the same query, with the same rule, as the tab
  * it summarises, so the two can never disagree: our estimate is the estimations
@@ -16,7 +16,8 @@ import { useQuery } from '@tanstack/react-query';
 import type { FilterState } from '@/components/FilterForm';
 import Skeleton from '@/components/Skeleton';
 import Stat from '@/components/Stat';
-import { SectionLabel } from '@/components/section';
+import Panel from '@/components/Panel';
+import CityIndexStrip from '@/components/CityIndexStrip';
 import RangeStrip from '@/components/estimation/RangeStrip';
 import {
   czPlural,
@@ -40,13 +41,11 @@ import {
 } from '@/lib/queries';
 import { COVERED_CATEGORIES, RADII_M, summarizeSold } from '@/lib/soldComps';
 import type { ListingSnapshotPublic, PropertySource, SoldComparable } from '@/lib/types';
+import { useCityQuality } from '@/lib/useCityQuality';
 import { band, shownPrice, useValuoPage } from '@/lib/valuo';
 import BrokerList from './BrokerList';
 import { DescriptionBody } from './ListingOverview';
 import type { PropertyTabId } from './PropertyTabs';
-
-const CARD =
-  'min-w-0 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-5 pt-4 pb-5';
 
 export interface LowestActive {
   price: number;
@@ -79,17 +78,15 @@ export default function PropertyOverview({
   return (
     <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
       <div className="min-w-0 space-y-4">
-        {description && (
-          <div className={CARD}>
-            <DescriptionBody
-              text={description}
-              label="Popis"
-              className=""
-              clamp="line-clamp-6"
-              words={['Celý popis', 'Méně']}
-            />
-          </div>
-        )}
+        {/* With no description the card stays and says so (C10). */}
+        <DescriptionBody
+          text={description}
+          label="Popis"
+          empty="Inzerát nemá popis."
+          className="min-w-0"
+          clamp="line-clamp-6"
+          words={['Celý popis', 'Méně']}
+        />
         <AdvertsPriceCard
           property={property}
           sources={sources}
@@ -108,31 +105,48 @@ export default function PropertyOverview({
           canonicalId={property.id}
           advertsFailed={sourcesFailed}
           onRetryAdverts={onRetrySources}
-          className={CARD}
         />
         <MarketCard property={property} onOpen={() => onOpen('hodnota')} />
+        <CityQualityCard obecId={property.obec_id} />
       </div>
     </div>
   );
 }
 
+/* Ruling P19 (2026-10-27): off the pipeline card, the town's city-index strip stays
+   on the property page. Only a curated city has one, so any other town shows no
+   card at all, never a placeholder (the strip's own rule); nothing here opens a tab. */
+function CityQualityCard({ obecId }: { obecId: number | null }) {
+  const { byObec } = useCityQuality(obecId != null);
+  const quality = obecId == null ? undefined : byObec.get(obecId);
+  if (!quality || quality.readings.length === 0) return null;
+  return (
+    <Panel title={`Kvalita obce · ${quality.city_name}`} className="min-w-0">
+      <CityIndexStrip quality={quality} className="mt-0! border-t-0! pt-0!" />
+    </Panel>
+  );
+}
+
+/* A section card (C1–C10) whose one action opens the tab it summarises. */
 function Card({
   title,
+  count,
   action,
   onAction,
-  className = '',
   children,
 }: {
   title: string;
+  count?: number;
   action: string;
   onAction: () => void;
-  className?: string;
   children: ReactNode;
 }) {
   return (
-    <section aria-label={title} className={`${CARD} ${className}`}>
-      <div className="flex items-baseline justify-between gap-3">
-        <SectionLabel>{title}</SectionLabel>
+    <Panel
+      title={title}
+      count={count}
+      className="min-w-0"
+      accessory={
         <button
           type="button"
           onClick={onAction}
@@ -140,9 +154,10 @@ function Card({
         >
           {action} →
         </button>
-      </div>
-      <div className="mt-3">{children}</div>
-    </section>
+      }
+    >
+      {children}
+    </Panel>
   );
 }
 
@@ -230,8 +245,8 @@ function ValueCard({
   return (
     <Card title="Je cena v pořádku?" action="Cena a hodnota" onAction={onOpen}>
       {verdict && <p className="text-[0.95rem] text-[var(--color-ink)]">{verdict}</p>}
-      {strip && <div className="mt-4">{strip}</div>}
-      <div className="mt-4 grid grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-2">
+      {strip && <div>{strip}</div>}
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-2">
         <Stat
           label="Náš odhad"
           value={oursValue != null ? fmtCzk(oursValue) : '—'}
@@ -336,22 +351,22 @@ function AdvertsPriceCard({
   ].filter(Boolean);
 
   return (
-    <Card title={`Inzeráty a vývoj ceny · ${sources.length}`} action="Detail ceny" onAction={onOpenPrice}>
+    <Card title="Inzeráty a vývoj ceny" count={sources.length} action="Detail ceny" onAction={onOpenPrice}>
       <p className="text-[0.85rem] text-[var(--color-ink-2)]">{summary.join(' · ')}</p>
       {series.length > 0 && (
-        <div className="mt-3">
+        <div>
           <PriceSparkline series={series} activeIds={new Set(sources.filter((s) => s.is_active).map((s) => s.id))} />
         </div>
       )}
       {failed ? (
-        <p className="mt-3 text-sm text-[var(--color-brick)]">
+        <p className="text-sm text-[var(--color-brick)]">
           Inzeráty se nepodařilo načíst
           <button type="button" onClick={onRetry} className="ml-3 font-medium underline underline-offset-2 hover:no-underline">
             Zkusit znovu
           </button>
         </p>
       ) : (
-        <ul aria-label="Inzeráty" className="mt-3 divide-y divide-[var(--color-rule-soft)]">
+        <ul aria-label="Inzeráty" className="divide-y divide-[var(--color-rule-soft)]">
           {ordered.map((s) => {
             const portal = portalLabel(s.source) ?? s.source;
             const i = trackIndex.get(s.id);
@@ -404,7 +419,7 @@ function AdvertsPriceCard({
       <button
         type="button"
         onClick={onOpenAdverts}
-        className="mt-2 text-[0.8rem] text-[var(--color-copper)] hover:underline underline-offset-2"
+        className="text-[0.8rem] text-[var(--color-copper)] hover:underline underline-offset-2"
       >
         Všechny inzeráty →
       </button>
@@ -513,7 +528,7 @@ function MarketCard({ property, onOpen }: { property: PropertyPublic; onOpen: ()
     );
   } else {
     body = (
-      <>
+      <div>
         <p className="font-display text-[1.6rem] leading-none tabular-nums text-[var(--color-ink)]">
           {fmtMeasuredPricePerM2(summary.medianPpm2, summary.basis)}
         </p>
@@ -528,13 +543,13 @@ function MarketCard({ property, onOpen }: { property: PropertyPublic; onOpen: ()
             </span>
           </p>
         )}
-      </>
+      </div>
     );
   }
   return (
     <Card title="Trh v okolí" action="Prodeje" onAction={onOpen}>
       {body}
-      <p className="mt-3 text-[0.7rem] text-[var(--color-ink-3)]">
+      <p className="text-[0.7rem] text-[var(--color-ink-3)]">
         Jediné skutečně zaplacené ceny na stránce · katastr přes reas.cz
       </p>
     </Card>

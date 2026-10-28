@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -96,6 +96,9 @@ const sale = (over: Partial<SoldComparable> = {}): SoldComparable => ({
   ...over,
 });
 
+/* The section card (system.md § Section cards): a region named by its title. */
+const section = () => screen.getByRole('region', { name: 'Registered sales' });
+
 function renderBlock(categoryMain = 'byt') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -142,7 +145,7 @@ describe('<SoldCompsBlock> coverage states', () => {
     expect(screen.queryByText(/No registered sale within/)).toBeNull();
     expect(screen.queryByRole('button', { name: '1 km' })).toBeNull();
     expect(screen.queryByRole('textbox', { name: /Sold within/ })).toBeNull();
-    expect(screen.queryByText('(0)')).toBeNull();
+    expect(within(section()).queryByText('0')).toBeNull();
   });
 
   /* A fetched cell is the obec's envelope plus 5 km, so the store holds sales
@@ -323,7 +326,40 @@ describe('<SoldCompsBlock> coverage states', () => {
 
     expect(await screen.findByText(/Failed to load/)).toBeInTheDocument();
     expect(screen.queryByText(/No registered sale within/)).toBeNull();
-    expect(screen.queryByText('(0)')).toBeNull();
+    expect(within(section()).queryByText('0')).toBeNull();
+  });
+});
+
+/* Section cards (operator ruling 2026-10-28): the title bar holds the title, the bare count and
+   the note (C6); a block with nothing to show keeps its card and says so in one line (C10). */
+describe('<SoldCompsBlock> section card', () => {
+  beforeEach(() => {
+    comps.mockReset();
+    coverage.mockReset();
+    members.mockReset();
+    coverage.mockResolvedValue(COVERAGE);
+    members.mockResolvedValue(new Map());
+  });
+
+  it('draws its title, a bare count and the note on one title bar', async () => {
+    comps.mockResolvedValue([sale(), sale()]);
+    renderBlock();
+    await screen.findByRole('table');
+    const bar = within(section()).getByRole('heading', { level: 2 }).parentElement as HTMLElement;
+    expect(within(bar).getByRole('heading', { level: 2 })).toHaveTextContent(/^Registered sales$/);
+    expect(within(bar).getByText('2')).toBeInTheDocument();
+    expect(within(bar).getByText('realized prices, not asking prices')).toBeInTheDocument();
+  });
+
+  it('keeps its card without coordinates, in one line', () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <SoldCompsBlock categoryMain="byt" lat={null} lng={null} propertyId={PROPERTY_ID} />
+      </QueryClientProvider>,
+    );
+    expect(within(section()).getByText('Bez souřadnic nelze hledat prodeje v okolí.')).toBeInTheDocument();
+    expect(comps).not.toHaveBeenCalled();
   });
 });
 
@@ -479,7 +515,8 @@ describe('<SoldCompsBlock> query plumbing', () => {
     renderBlock();
 
     await screen.findByRole('table');
-    expect(screen.getByText(`(${SOLD_COMPS_LIMIT}+)`)).toBeInTheDocument();
+    expect(within(section()).getByText(`${SOLD_COMPS_LIMIT}+`)).toBeInTheDocument();
+    expect(screen.queryByText(`(${SOLD_COMPS_LIMIT}+)`)).toBeNull();
     expect(screen.getByText(/median/)).toHaveTextContent(
       `the ${SOLD_COMPS_LIMIT} nearest, not the whole cohort`,
     );

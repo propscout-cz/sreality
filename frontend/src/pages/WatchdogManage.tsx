@@ -207,7 +207,7 @@ function SubRow({
         </Link>
         <OverflowMenu
           label={`Actions: ${sub.name}`}
-          items={[{ label: 'Delete…', danger: true, onSelect: onDelete }]}
+          items={[{ label: 'Smazat…', danger: true, onSelect: onDelete }]}
         />
       </td>
     </tr>

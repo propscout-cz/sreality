@@ -189,7 +189,7 @@ function imageTag(over: Partial<NewDedupImageTag> = {}): NewDedupImageTag {
 const IMAGE: ImagePublic = {
   id: 101, sreality_id: 555, sequence: 1, sreality_url: 'https://sdn.cz/x.jpg',
   storage_path: 'img/555/1.jpg', clip_fine_tag: 'kitchen', clip_logical_tag: 'kitchen',
-  clip_confidence: 0.6, clip_render_score: 0.1, phash: 123,
+  clip_confidence: 0.6, phash: 123,
 };
 
 /* Default fixture is a legacy row — decided for the tag but never drawn as a

@@ -130,12 +130,11 @@ SELECT_TIMEOUT_MS = 300_000
 _MARK_SQL = "UPDATE images SET clip_tagged_at = now() WHERE id = ANY(%s) AND clip_tagged_at IS NULL"
 
 _UPSERT_SQL = """
-    INSERT INTO image_clip_tags (image_id, model, fine_tag, logical_tag, confidence, render_score)
-    VALUES (%s, %s, %s, %s, %s, %s)
+    INSERT INTO image_clip_tags (image_id, model, fine_tag, logical_tag, confidence)
+    VALUES (%s, %s, %s, %s, %s)
     ON CONFLICT (image_id, model) DO UPDATE
       SET fine_tag = EXCLUDED.fine_tag, logical_tag = EXCLUDED.logical_tag,
-          confidence = EXCLUDED.confidence, render_score = EXCLUDED.render_score,
-          tagged_at = now()
+          confidence = EXCLUDED.confidence, tagged_at = now()
 """
 
 # Embeddings (for the cosine recall tier) stored for EVERY tagged image. They were
@@ -369,7 +368,7 @@ def _write(conn: psycopg.Connection, model: str, revision: str | None,
     vector (autodedup/incremental.py decision_digest, autodedup/incremental_sql.py's CLIP probe)."""
     with conn.cursor() as cur:
         if encoded:
-            cur.executemany(_UPSERT_SQL, [(image_id, model, r.fine_tag, r.logical_tag, r.confidence, r.render_score)
+            cur.executemany(_UPSERT_SQL, [(image_id, model, r.fine_tag, r.logical_tag, r.confidence)
                                           for image_id, r, _ in encoded])
             # tagger.revision, not the file read: stamp what the loaded weights actually were.
             cur.executemany(_UPSERT_EMB_SQL, [(image_id, model, revision, vec) for image_id, _, vec in encoded])

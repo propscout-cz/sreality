@@ -104,7 +104,8 @@ const CARD_COLS =
   /* The lot the card names after the floor area and the Lot area sort orders by:
    * THE plot measure (migration 534) and never the bare estate_area column. */
   'plot_area_m2,' +
-  /* The portal badge (MS19, migration 590): the portals with an active ad, else every portal. */
+  /* The portals with an active ad, else every portal (MS19, migration 590): the portal chips
+   * of the phone feed. The Browse card names no portal (ruling P01, 2026-10-27). */
   'all_sources,active_sources,' +
   /* The ad-count badge (migration 590): how many ads the property holds, active or not. */
   'source_count';
@@ -778,7 +779,7 @@ export interface CardRow {
   total_price_change_pct: number | null;
   price_change_count: number | null;
   /* Every portal with an ad, and those with an active ad (MS19; never NULL: the
-   * projection coalesces them). The portal badge reads them. */
+   * projection coalesces them). The phone feed's portal chips read them. */
   all_sources: string[];
   active_sources: string[];
   /* How many ads the property holds, active or not (migration 590, the
@@ -1051,10 +1052,13 @@ const PROPERTY_COLS =
   /* MF is property-grain: the page renders `mf_reference_rent` by shape
    * (lib/mfReference) and pairs a value with the property yield. */
   'description,mf_gross_yield_pct,mf_reference_rent,' +
-  'price_change_count,total_price_change_pct';
+  'price_change_count,total_price_change_pct,' +
+  /* The RÚIAN code of the town: the city-index card on Přehled (P19, lib/useCityQuality). */
+  'obec_id';
 
 export interface PropertyPublic extends ListingPublic {
   property_id: number;
+  obec_id: number | null;
   mf_gross_yield_pct: number | null;
   mf_reference_rent: ReferenceRent | null;
   price_change_count: number | null;
@@ -1258,7 +1262,7 @@ export const fetchListingFloors = async (
  * (clip_fine_tag / clip_logical_tag / clip_confidence, migration 236) so every
  * photo surface can render its bottom-left tag badge from the same read. */
 const IMAGE_PUBLIC_COLS =
-  'id,sreality_id,sequence,sreality_url,storage_path,clip_fine_tag,clip_logical_tag,clip_confidence,clip_render_score,phash';
+  'id,sreality_id,sequence,sreality_url,storage_path,clip_fine_tag,clip_logical_tag,clip_confidence,phash';
 
 /* Batch image fetch keyed on `sreality_id` — kept for the callers whose upstream
  * read model is still sreality-keyed and carries no surrogate id. These

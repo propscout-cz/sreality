@@ -38,7 +38,8 @@ import { MultiselectChips } from '@/components/filter-controls';
 import { Field, Segmented } from '@/components/controls';
 import Dialog, { DialogClose } from '@/components/Dialog';
 import ImageCarousel from '@/components/ImageCarousel';
-import { Hairline, SectionLabel } from '@/components/section';
+import Panel, { PanelEmpty } from '@/components/Panel';
+import { Hairline } from '@/components/section';
 import { Th } from '@/components/table';
 import { areaBasisLabel, categoryMainLabel, listingKindLabel } from '@/lib/enums';
 import { FILTER_REGISTRY } from '@/lib/filterRegistry.generated';
@@ -131,23 +132,29 @@ export default function SoldCompsBlock({
   propertyId,
 }: {
   categoryMain: string | null;
-  /* The listing's resolved point — the caller gates on both being present. */
-  lat: number;
-  lng: number;
+  /* The listing's resolved point; without one the card stays and says so (C10). */
+  lat: number | null;
+  lng: number | null;
   /* Only to answer "does this property already hold a pipeline card", which is
    * what the never-checked sentence must know before it tells the operator to
    * add one. Read from the members map this page already has in cache. */
   propertyId: number | null;
 }) {
+  if (lat == null || lng == null) {
+    return (
+      <SoldPanel>
+        <PanelEmpty>Bez souřadnic nelze hledat prodeje v okolí.</PanelEmpty>
+      </SoldPanel>
+    );
+  }
   if (!COVERED_CATEGORIES.has(categoryMain ?? '')) {
     return (
-      <div>
-        <SectionLabel>Registered sales</SectionLabel>
-        <p className="mt-2 text-sm text-[var(--color-ink-3)]">
+      <SoldPanel>
+        <PanelEmpty>
           reas.cz publishes registered sales of flats and houses only — there is
           nothing to show for a {categoryMainLabel(categoryMain).toLowerCase()}.
-        </p>
-      </div>
+        </PanelEmpty>
+      </SoldPanel>
     );
   }
   return (
@@ -157,6 +164,16 @@ export default function SoldCompsBlock({
       lng={lng}
       propertyId={propertyId}
     />
+  );
+}
+
+/* The section card (C1–C10): its title, the count once the read answered, and
+ * the one caveat that matters most as the title bar's note (C6). */
+function SoldPanel({ count, children }: { count?: string | null; children: ReactNode }) {
+  return (
+    <Panel title="Registered sales" count={count} note="realized prices, not asking prices">
+      {children}
+    </Panel>
   );
 }
 
@@ -231,25 +248,12 @@ function SoldComps({
   const showCohort = looked || everHeldSales.current;
 
   return (
-    <div>
-      <div className="flex items-baseline justify-between gap-4">
-        <SectionLabel>
-          <span>Registered sales</span>
-          {/* Only once the read has ANSWERED: a "(0)" beside the heading while
-              the query is in flight — or after it failed — is the loudest
-              number on the block asserting the one thing it does not know. */}
-          {rowsQ.isSuccess && showCohort && (
-            <span className="ml-2 font-mono tabular-nums text-[var(--color-ink-4)] tracking-normal">
-              ({rows.length}
-              {truncated && '+'})
-            </span>
-          )}
-        </SectionLabel>
-        <p className="text-[0.7rem] tracking-wide text-[var(--color-ink-4)]">
-          realized prices, not asking prices
-        </p>
-      </div>
-
+    <SoldPanel
+      /* Only once the read has ANSWERED: a "0" beside the heading while the
+         query is in flight — or after it failed — is the loudest number on the
+         block asserting the one thing it does not know. */
+      count={rowsQ.isSuccess && showCohort ? `${rows.length}${truncated ? '+' : ''}` : null}
+    >
       <Coverage
         coverage={coverageQ.data ?? null}
         pending={coverageQ.isLoading}
@@ -259,7 +263,7 @@ function SoldComps({
 
       {showCohort && (
         <>
-          <div className="mt-4 flex flex-wrap items-start gap-x-6 gap-y-4">
+          <div className="flex flex-wrap items-start gap-x-6 gap-y-4">
             <Field label="Radius">
               <Segmented
                 options={RADII_M.map((m) => ({
@@ -289,19 +293,20 @@ function SoldComps({
           {summary && <SummaryLine summary={summary} truncated={truncated} />}
 
           {rowsQ.isLoading ? (
-            <p className="mt-4 text-sm text-[var(--color-ink-3)]">Loading…</p>
+            <p className="text-sm text-[var(--color-ink-3)]">Loading…</p>
           ) : rowsQ.error ? (
-            <p className="mt-4 text-sm text-[var(--color-brick)]">
+            <p className="text-sm text-[var(--color-brick)]">
               Failed to load: {rowsQ.error.message}
             </p>
           ) : rows.length === 0 ? (
-            <p className="mt-4 text-sm text-[var(--color-ink-3)]">
+            <p className="text-sm text-[var(--color-ink-3)]">
               No registered sale within {radiusM / 1000} km matches these
               filters.
             </p>
           ) : (
             <>
-              <div className="mt-4 rounded-[var(--radius-md)] border border-[var(--color-rule)] overflow-x-auto">
+              {/* A table that scrolls keeps its own box (system.md § Section cards). */}
+              <div className="rounded-[var(--radius-md)] border border-[var(--color-rule)] overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-[var(--color-paper-2)] border-b border-[var(--color-rule)]">
                     <tr>
@@ -328,7 +333,7 @@ function SoldComps({
                 </table>
               </div>
               {truncated && (
-                <p className="mt-2 text-[0.7rem] text-[var(--color-ink-4)]">
+                <p className="text-[0.7rem] text-[var(--color-ink-4)]">
                   The {SOLD_COMPS_LIMIT} nearest — narrow the radius or the
                   filters to see the rest.
                 </p>
@@ -337,7 +342,7 @@ function SoldComps({
                   so say what it is measured between. The sale's point is its
                   BUILDING (units in one building share it exactly); this
                   listing's own point can be a street or a town centroid. */}
-              <p className="mt-2 text-[0.7rem] text-[var(--color-ink-4)]">
+              <p className="text-[0.7rem] text-[var(--color-ink-4)]">
                 Distances run between geocoded points: the sale's is its
                 building, this listing's own may be street- or town-grain.
               </p>
@@ -347,7 +352,7 @@ function SoldComps({
       )}
 
       {active && <SoldDialog row={active} onClose={() => setActive(null)} />}
-    </div>
+    </SoldPanel>
   );
 }
 
@@ -374,7 +379,7 @@ function Coverage({
   if (pending) return null;
   if (error) {
     return (
-      <p className="mt-2 text-sm text-[var(--color-brick)]">
+      <p className="text-sm text-[var(--color-brick)]">
         Coverage unavailable: {error.message}
       </p>
     );
@@ -384,7 +389,7 @@ function Coverage({
    * on the one surface that reads this ledger. */
   if (coverage && coverage.fetched_at == null && coverage.last_attempt_at) {
     return (
-      <p className="mt-2 text-sm text-[var(--color-brick)]">
+      <p className="text-sm text-[var(--color-brick)]">
         {coverage.obec_name} was last tried on{' '}
         {fmtShortDate(coverage.last_attempt_at)} and
         the fetch failed — nothing has been read here yet, and that is our side,
@@ -416,7 +421,7 @@ function Coverage({
               ' list.'
             : ' Add this property to the pipeline to put its town on that list.';
     return (
-      <p className="mt-2 text-sm text-[var(--color-ink-3)]">
+      <p className="text-sm text-[var(--color-ink-3)]">
         {coverage ? `${coverage.obec_name} has` : 'This area has'} not been
         checked yet — registered sales are fetched only for towns where the
         deal pipeline has a live card.
@@ -425,7 +430,7 @@ function Coverage({
     );
   }
   return (
-    <p className="mt-2 text-sm text-[var(--color-ink-3)]">
+    <p className="text-sm text-[var(--color-ink-3)]">
       {coverage.obec_name} · reas.cz · checked{' '}
       {fmtShortDate(coverage.fetched_at)} ·{' '}
       {coverage.truncated
@@ -552,7 +557,6 @@ function SoldDialog({ row, onClose }: { row: SoldComparable; onClose: () => void
     url,
     tag: null,
     confidence: null,
-    renderScore: null,
   }));
   const gap = askToSoldPct(row);
   const days = daysListed(row);
@@ -682,14 +686,14 @@ function SummaryLine({
 }) {
   if (summary.mixedKinds) {
     return (
-      <p className="mt-4 text-sm text-[var(--color-ink-2)]">
+      <p className="text-sm text-[var(--color-ink-2)]">
         No median: these sales are flats and houses together, and the two trade
         at different Kč/m². Filter to one kind.
       </p>
     );
   }
   return (
-    <p className="mt-4 text-sm text-[var(--color-ink-2)]">
+    <p className="text-sm text-[var(--color-ink-2)]">
       median{' '}
       <span className="font-mono tabular-nums text-[var(--color-ink)]">
         {fmtMeasuredPricePerM2(summary.medianPpm2, summary.basis)}

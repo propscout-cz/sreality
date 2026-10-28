@@ -4,8 +4,9 @@
  *
  * MS7 (lib/brokers.propertyBrokers), from one batched read the advert rows share.
  * A failed read says so with a retry, never "no broker" (the dark state that hid
- * the PostgREST revocation here for a month). Loading and "no broker" render
- * nothing, frame included: most properties have no attributed broker. */
+ * the PostgREST revocation here for a month). A section card (system.md § Section
+ * cards): with no attributed broker it stays, count 0, and says so (C10); while
+ * the read is out it claims nothing either way. */
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
@@ -13,30 +14,26 @@ import { propertyBrokers } from '@/lib/brokers';
 import { useListingBrokers } from '@/lib/hydration';
 import type { PropertySource } from '@/lib/types';
 import BrokerContactCard from '@/components/BrokerContactCard';
-import { SectionLabel } from '@/components/section';
+import Panel, { PanelEmpty } from '@/components/Panel';
 
 export default function BrokerList({
   adverts,
   canonicalId,
   advertsFailed,
   onRetryAdverts,
-  className,
 }: {
   adverts: PropertySource[];
   canonicalId: number;
   advertsFailed: boolean;
   onRetryAdverts: () => void;
-  /* The frame, drawn only when there is something to say. */
-  className?: string;
 }) {
   const ids = useMemo(() => adverts.map((a) => a.id), [adverts]);
   const read = useListingBrokers(ids);
 
   if (advertsFailed || read.isError) {
     return (
-      <section aria-label="Makléř" className={className}>
-        <SectionLabel>Makléř</SectionLabel>
-        <p className="mt-3 text-sm text-[var(--color-brick)]">
+      <Panel title="Makléř" className="min-w-0">
+        <p className="text-sm text-[var(--color-brick)]">
           Makléře se nepodařilo načíst
           <button
             type="button"
@@ -46,23 +43,34 @@ export default function BrokerList({
             Zkusit znovu
           </button>
         </p>
-      </section>
+      </Panel>
+    );
+  }
+  /* A property always has an advert: an empty list is one not read yet. */
+  if (read.isPending || adverts.length === 0) {
+    return (
+      <Panel title="Makléř" className="min-w-0">
+        <p className="text-sm text-[var(--color-ink-3)]">Načítám…</p>
+      </Panel>
     );
   }
   const { brokers, fromInactive } = propertyBrokers(adverts, read.brokers, canonicalId);
-  if (brokers.length === 0) return null;
+  if (brokers.length === 0) {
+    return (
+      <Panel title="Makléř" count={0} className="min-w-0">
+        <PanelEmpty>Makléř není uveden.</PanelEmpty>
+      </Panel>
+    );
+  }
 
   return (
-    <section aria-label={brokers.length > 1 ? 'Makléři' : 'Makléř'} className={className}>
-      <SectionLabel>
-        {brokers.length > 1 ? 'Makléři' : 'Makléř'}
-        {fromInactive && (
-          <span className="ml-2 normal-case tracking-normal font-normal text-[var(--color-ink-3)]">
-            z neaktivních inzerátů
-          </span>
-        )}
-      </SectionLabel>
-      <ul className="mt-3 space-y-4">
+    <Panel
+      title={brokers.length > 1 ? 'Makléři' : 'Makléř'}
+      count={brokers.length}
+      note={fromInactive ? 'z neaktivních inzerátů' : undefined}
+      className="min-w-0"
+    >
+      <ul className="space-y-4">
         {brokers.map((b) => (
           <li key={b.broker_id} className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
             <div className="min-w-0">
@@ -78,11 +86,11 @@ export default function BrokerList({
                 {b.broker_firm_label ?? 'nezávislý / neznámá kancelář'}
               </p>
             </div>
-            <BrokerContactCard broker={b} ads={b.ads} />
+            <BrokerContactCard broker={b} ads={b.ads} bare />
           </li>
         ))}
       </ul>
-    </section>
+    </Panel>
   );
 }
 

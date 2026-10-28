@@ -244,3 +244,54 @@ describe('<BrokerDetail> inventory filters', () => {
     expect(within(typ).getByRole('button', { name: 'Vše' })).toHaveAttribute('aria-pressed', 'false');
   });
 });
+
+/* Section cards (operator ruling 2026-10-28, system.md § Section cards): the
+ * stats strip stays; each section below it is a card named by its title, with
+ * a bare count in the title bar (0 and one muted line when empty, C10), and no
+ * bordered box inside the card except the inventory's scrolling table. */
+describe('<BrokerDetail> section cards', () => {
+  const card = (name: string) => screen.getByRole('region', { name });
+  const countOf = (region: HTMLElement) =>
+    within(region).getByRole('heading', { level: 2 }).nextElementSibling?.textContent;
+
+  it('draws Kde inzeruje, Kanceláře and Inventář as cards with their counts', async () => {
+    vi.mocked(brokers.fetchBrokerDossier).mockResolvedValue({
+      ...dossier({}),
+      region_shares: [
+        { geo_id: 1, name: 'Praha', active_property_count: 9 },
+        { geo_id: 2, name: 'Brno', active_property_count: 3 },
+      ] as unknown as brokers.BrokerRegionShare[],
+      memberships: [
+        { firm_id: 5, firm_name: 'RE/MAX', firm_domain: null, is_current: true, listing_count: 40 },
+      ] as unknown as brokers.BrokerMembership[],
+    });
+    vi.mocked(brokers.fetchBrokerListings).mockResolvedValue([listing({ listing_id: 1 }), listing({ listing_id: 2 })]);
+    renderPage();
+    await screen.findByRole('table');
+    for (const name of ['Kde inzeruje', 'Kanceláře', 'Inventář']) {
+      const r = card(name);
+      expect(r.tagName).toBe('SECTION');
+      expect(r).toHaveClass('border', 'bg-[var(--color-paper-2)]', 'rounded-[var(--radius-md)]');
+    }
+    expect(countOf(card('Kde inzeruje'))).toBe('2');
+    expect(countOf(card('Kanceláře'))).toBe('1');
+    expect(countOf(card('Inventář'))).toBe('2 z 52');
+    /* No box in a box: the lists sit on the card itself; the table keeps its own. */
+    expect(within(card('Kde inzeruje')).getByRole('list').parentElement).not.toHaveClass('border');
+    expect(within(card('Kanceláře')).getByRole('list').parentElement).not.toHaveClass('border');
+    expect(within(card('Inventář')).getByRole('table').parentElement).toHaveClass('overflow-x-auto', 'border');
+    /* Typ / Nabídka are L4 field labels. */
+    expect(within(card('Inventář')).getByText('Typ', { selector: 'span' }))
+      .toHaveClass('uppercase', 'tracking-[0.08em]', 'font-semibold');
+  });
+
+  it('keeps an empty section as its card with count 0 and one muted line', async () => {
+    renderPage();
+    expect(await screen.findByText('Žádné inzeráty.')).toBeInTheDocument();
+    expect(countOf(card('Kde inzeruje'))).toBe('0');
+    expect(within(card('Kde inzeruje')).getByText('Bez aktivního regionu.')).toBeInTheDocument();
+    expect(countOf(card('Kanceláře'))).toBe('0');
+    expect(countOf(card('Inventář'))).toBe('0');
+    expect(within(card('Inventář')).getByText('Žádné inzeráty.').closest('.border')).toBe(card('Inventář'));
+  });
+});

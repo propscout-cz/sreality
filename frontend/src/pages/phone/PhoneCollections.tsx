@@ -4,7 +4,7 @@
  * one — and "Nová sbírka" as the one action, a name in a bottom sheet.
  *
  * Reads and writes are the desktop page's own: `useCollections`,
- * `createCollection` (monitoring off — monitoring is set on the desktop, Q11),
+ * `createCollection` (monitoring off — it is switched on the collection's page, Q11, P31),
  * then `revalidateCollections` so every collection glyph on
  * every card hears about the new list. Rename, delete, monitoring and sharing
  * have no control here on purpose; the footer says where they live. Collections
@@ -26,7 +26,7 @@ import { ROUTES } from '@/lib/routes';
 import { pushToast } from '@/lib/toast';
 import type { Collection } from '@/lib/types';
 
-export const DESKTOP_ONLY_NOTE = 'Přejmenování, smazání, sledování a sdílení nastavíte na počítači.';
+export const MANAGE_NOTE = 'Přejmenování, smazání, sledování a sdílení najdete na stránce sbírky.';
 /* A collection shared with me: nothing of it is mine to manage but my place in it. */
 export const VIEWER_NOTE = 'Sbírku ze svého seznamu odeberete na počítači.';
 
@@ -111,7 +111,7 @@ export default function PhoneCollections() {
         <section aria-labelledby={sharedHeadingId} className="mt-6">
           <h3
             id={sharedHeadingId}
-            className="px-4 pb-2 text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--color-ink-3)]"
+            className="px-4 pb-2 text-sm leading-5 font-semibold text-[var(--color-ink)]"
           >
             Sdílené se mnou
           </h3>
@@ -125,7 +125,7 @@ export default function PhoneCollections() {
         </section>
       )}
 
-      <p className="px-4 pb-6 pt-4 text-[12px] text-[var(--color-ink-3)]">{DESKTOP_ONLY_NOTE}</p>
+      <p className="px-4 pb-6 pt-4 text-[12px] text-[var(--color-ink-3)]">{MANAGE_NOTE}</p>
 
       {creating && (
         <NewCollectionSheet
@@ -186,7 +186,7 @@ function RowsSkeleton() {
 }
 
 /* The name, and nothing else: monitoring starts off, as the desktop form's
- * default; the description stays a desktop field. Return on the keyboard
+ * default; the description is added on the collection's page (⋯ → Přejmenovat). Return on the keyboard
  * submits, so the sheet works with the keyboard covering its lower half. */
 function NewCollectionSheet({ existing, onClose }: { existing: string[]; onClose: () => void }) {
   const qc = useQueryClient();
@@ -247,7 +247,7 @@ function NewCollectionSheet({ existing, onClose }: { existing: string[]; onClose
           {create.isPending ? 'Zakládám…' : 'Založit sbírku'}
         </button>
         <p className="mt-1 text-[12px] text-[var(--color-ink-3)]">
-          Sledování změn zapnete na počítači.
+          Sledování změn zapnete na stránce sbírky.
         </p>
       </form>
     </BottomSheet>

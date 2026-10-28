@@ -41,7 +41,7 @@ def _text(values: list[float]) -> str:
 
 def _tags(values: list[float]) -> TagResult:
     fine = "kitchen" if values[0] >= values[1] else "bathroom"
-    return TagResult(fine, fine, 0.9, 0.1)
+    return TagResult(fine, fine, 0.9)
 
 
 class _Row:
@@ -152,7 +152,7 @@ class _Sample:
             listing = i // 1000
             t = self.tags[i]
             out.append((i, listing, f"img/{listing}/{i}.jpg", _STAMP, cr.PIN, _text(self.stored[i]),
-                        t.fine_tag, t.logical_tag, t.confidence, t.render_score))
+                        t.fine_tag, t.logical_tag, t.confidence))
         return out
 
     def verify(self, *argv: str) -> tuple[int, _Conn, _Tagger]:
@@ -336,8 +336,8 @@ def test_a_text_side_difference_fails_against_the_stored_tags(caplog: pytest.Log
     sample = _Sample()
     image = cr.SAMPLE_IDS[88]
     t = sample.tags[image]
-    sample.tags[image] = (TagResult("bedroom", t.logical_tag, t.confidence, t.render_score) if what == "fine_tag"
-                          else TagResult(t.fine_tag, t.logical_tag, round(t.confidence + 2e-4, 4), t.render_score))
+    sample.tags[image] = (TagResult("bedroom", t.logical_tag, t.confidence) if what == "fine_tag"
+                          else TagResult(t.fine_tag, t.logical_tag, round(t.confidence + 2e-4, 4)))
     with caplog.at_level(logging.INFO):
         code, _conn, _tagger = sample.verify()
     line = _summary(caplog)
@@ -349,7 +349,7 @@ def test_a_text_side_difference_fails_against_the_stored_tags(caplog: pytest.Log
 def test_stored_tags_within_their_rounding_pass(caplog: pytest.LogCaptureFixture) -> None:
     sample = _Sample()
     t = sample.tags[cr.SAMPLE_IDS[5]]
-    sample.tags[cr.SAMPLE_IDS[5]] = TagResult(t.fine_tag, t.logical_tag, round(t.confidence + 1e-4, 4), 0.1001)
+    sample.tags[cr.SAMPLE_IDS[5]] = TagResult(t.fine_tag, t.logical_tag, round(t.confidence + 1e-4, 4))
     with caplog.at_level(logging.INFO):
         assert sample.verify()[0] == 0, _summary(caplog)
 
@@ -359,7 +359,7 @@ def test_a_changed_taxonomy_skips_the_stored_tag_rule(caplog: pytest.LogCaptureF
     monkeypatch.setattr(cr, "TAXONOMY_SHA256", "0" * 64)
     sample = _Sample()
     t = sample.tags[cr.SAMPLE_IDS[88]]
-    sample.tags[cr.SAMPLE_IDS[88]] = TagResult("bedroom", t.logical_tag, t.confidence, t.render_score)
+    sample.tags[cr.SAMPLE_IDS[88]] = TagResult("bedroom", t.logical_tag, t.confidence)
     with caplog.at_level(logging.INFO):
         code, _conn, _tagger = sample.verify()
     line = _summary(caplog)
