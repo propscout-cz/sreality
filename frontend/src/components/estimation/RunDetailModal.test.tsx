@@ -266,6 +266,18 @@ describe('<RunDetailModal>', () => {
     expect(within(title).getByText('#77')).toHaveClass('font-mono', 'tabular-nums');
   });
 
+  it('titles the floating feedback panels as L3 headings, not small caps', async () => {
+    render(<Host />);
+    fireEvent.click(screen.getByRole('button', { name: 'open-run-detail' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Provide feedback/ }));
+
+    for (const name of ['Feedback', /^Skill prompt · /]) {
+      const h = within(runDetail()).getByRole('heading', { level: 3, name });
+      expect(h).toHaveClass('text-sm', 'font-semibold', 'text-[var(--color-ink)]');
+      expect(h).not.toHaveClass('uppercase');
+    }
+  });
+
   it('heads the set-aside comparables with an L3 title, not small caps', async () => {
     render(
       <Host run={{ ...RUN, comparables_excluded: [{ sreality_id: 555, reason: 'too far' }] } as EstimationRun} />,

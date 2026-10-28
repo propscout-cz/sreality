@@ -2009,9 +2009,8 @@ function FloatingFeedbackPanel({
       {/* Panel 1 — feedback composer ---------------------------------- */}
       <section className="rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] shadow-[0_8px_24px_rgba(0,0,0,0.08)] overflow-hidden">
         <div className="px-4 py-3 border-b border-[var(--color-rule)] flex items-center justify-between gap-3">
-          <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] font-medium">
-            Feedback
-          </p>
+          {/* A panel title: L3, never small caps (system.md § Section cards). */}
+          <h3 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">Feedback</h3>
           <button
             type="button"
             onClick={() => setOpen(false)}
@@ -2107,10 +2106,10 @@ function FloatingFeedbackPanel({
       {/* Panel 2 — skill prompt editor -------------------------------- */}
       <section className="rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] shadow-[0_8px_24px_rgba(0,0,0,0.08)] overflow-hidden">
         <div className="px-4 py-3 border-b border-[var(--color-rule)] flex items-center justify-between gap-3">
-          <p id={promptLabelId} className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] font-medium">
+          <h3 id={promptLabelId} className="text-sm leading-5 font-semibold text-[var(--color-ink)]">
             Skill prompt · {effectiveSkillName}
-          </p>
-          <span className="text-[0.65rem] tracking-[0.16em] uppercase text-[var(--color-ink-4)]">
+          </h3>
+          <span className="text-xs text-[var(--color-ink-3)]">
             {skillSource === 'trace'
               ? `from run trace · mode ${run.mode}`
               : run.mode === 'agent'

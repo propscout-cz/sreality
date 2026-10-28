@@ -76,4 +76,20 @@ describe('LocationQuality accessible names', () => {
     expect(form.getByRole('textbox', { name: 'Note' })).toBeInTheDocument();
     expectNoNestedInteractive(document.body);
   });
+
+  /* Section cards (C7): inside the inspector card the correction form is an L3 group,
+     never a small-caps title on a box of its own. */
+  it('heads the correction form as an L3 group, with no box of its own', async () => {
+    renderPage();
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Listing or native id' }), { target: { value: '42' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect' }));
+
+    const title = await screen.findByRole('heading', { level: 3, name: 'Operator correction' });
+    expect(title).toHaveClass('text-sm', 'font-semibold');
+    expect(title).not.toHaveClass('uppercase');
+    const group = title.parentElement!.parentElement!;
+    expect(group).toContainElement(screen.getByRole('button', { name: 'Correct' }));
+    expect(group).not.toHaveClass('rounded-[var(--radius-sm)]');
+    expect(group.className).not.toMatch(/\bborder-\[var\(--color-rule-soft\)\] px-3/);
+  });
 });
