@@ -136,10 +136,11 @@ UPDATE scheduled_jobs
  WHERE job_name = %(job)s
 """
 
+# By the clock, as the fence reads it: inside a caller's transaction `now()` is that transaction's start.
 _RENEW_SQL = """
 UPDATE scheduled_jobs
-   SET lease_expires_at = now() + make_interval(secs => %(ttl)s)
- WHERE job_name = %(job)s AND lease_holder = %(holder)s AND lease_expires_at >= now()
+   SET lease_expires_at = clock_timestamp() + make_interval(secs => %(ttl)s)
+ WHERE job_name = %(job)s AND lease_holder = %(holder)s AND lease_expires_at >= clock_timestamp()
 RETURNING 1
 """
 
@@ -458,7 +459,8 @@ def claim(conn: psycopg.Connection, job_name: str, *, holder: str | None = None,
 
 
 def renew(conn: psycopg.Connection, hold: Hold) -> bool:
-    """Extends a lease that has not lapsed; on False the holder keeps its old fence and must stop by it."""
+    """Extends a lease that has not lapsed; on False the holder keeps its old fence and must stop by it. Renew between
+    the holder's transactions: inside one, the renewal stands only if that transaction commits."""
     sent_at = clock()
     with _bounded(conn) as cur:
         cur.execute(_RENEW_SQL, {"job": hold.job_name, "holder": hold.holder, "ttl": hold.ttl_s})
@@ -628,12 +630,11 @@ def _fresh_connection() -> psycopg.Connection:
     return db.connect(attempts=1, connect_timeout=10)
 
 
-def _release_hold(conn: psycopg.Connection, hold: Hold, outcome: str, error: str | None) -> None:
+def _release_hold(conn: psycopg.Connection, hold: Hold, outcome: str, error: str | None) -> bool:
+    """False: no row was this holder's any more (released already, or another holder took the lane)."""
     with _bounded(conn) as cur:
         cur.execute(_RELEASE_RUN_SQL, _release_params(hold, outcome, due=None, error=error))
-        if cur.fetchone() is None:
-            LOG.warning("LEASE gone job=%s holder=%s at the release (already released, or another holder took it): "
-                        "outcome %s not written by this call", hold.job_name, hold.holder, outcome)
+        return cur.fetchone() is not None
 
 
 def _release_with_fallback(conn: psycopg.Connection, hold: Hold, outcome: str, error: str | None,
@@ -641,14 +642,16 @@ def _release_with_fallback(conn: psycopg.Connection, hold: Hold, outcome: str, e
     """Releases on the holding connection, else once on a fresh one. Never replaces `original`: a failure is noted on
     it and the lease expires by itself; with no `original`, the release's own failure is the error."""
     try:
-        _release_hold(conn, hold, outcome, error)
+        if not _release_hold(conn, hold, outcome, error):
+            LOG.warning("LEASE gone job=%s holder=%s at the release: another holder took it, so outcome %s is not "
+                        "written", hold.job_name, hold.holder, outcome)
         return
     except Exception as exc:  # noqa: BLE001 - retried on a fresh connection below
         first = exc
     fresh = None
     try:
         fresh = connect()
-        _release_hold(fresh, hold, outcome, error)
+        released = _release_hold(fresh, hold, outcome, error)
     except Exception as exc:
         if original is None:
             raise exc from first
@@ -660,7 +663,8 @@ def _release_with_fallback(conn: psycopg.Connection, hold: Hold, outcome: str, e
             with suppress(Exception):
                 fresh.close()
     note = (f"releasing the {hold.job_name} lease failed on the holding connection ({type(first).__name__}: {first}); "
-            "released on a fresh connection")
+            + ("released on a fresh connection" if released else
+               "a fresh connection found nothing left to release (the first release landed, or another holder took it)"))
     if original is None:
         LOG.warning("LEASE %s", note)
     else:

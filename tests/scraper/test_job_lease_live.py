@@ -147,7 +147,7 @@ def test_renewal_extends_a_live_lease_and_moves_the_fence(cur: Any) -> None:
     cur.execute("UPDATE scheduled_jobs SET lease_expires_at = now() + interval '5 seconds' WHERE job_name = %s",
                 (name,))
     assert job_lease.renew(conn, lease)
-    assert _row(cur, name)["ttl"] == timedelta(seconds=60)
+    assert timedelta(seconds=60) <= _row(cur, name)["ttl"] < timedelta(seconds=65), "by the clock, from now"
     assert lease.fence_at >= first_fence
 
 
@@ -699,6 +699,7 @@ def test_rows_lists_each_row_with_its_latest_run(cur: Any) -> None:
 
 
 def test_the_lease_only_lane_takes_no_run_and_honours_a_pause(cur: Any) -> None:
+    _now(cur)
     conn = cur.connection
     name = f"test-lane-{uuid.uuid4().hex[:12]}"
     with job_lease.held(conn, name, cadence="15 minutes") as hold:
@@ -725,6 +726,7 @@ def test_the_lease_only_lane_takes_no_run_and_honours_a_pause(cur: Any) -> None:
 
 
 def test_a_held_lane_renews_its_lease_and_fences_itself_by_it(cur: Any) -> None:
+    _now(cur)
     conn = cur.connection
     name = f"test-lane-{uuid.uuid4().hex[:12]}"
     sent_before = time.monotonic()
@@ -736,7 +738,7 @@ def test_a_held_lane_renews_its_lease_and_fences_itself_by_it(cur: Any) -> None:
         cur.execute("UPDATE scheduled_jobs SET lease_expires_at = now() + interval '5 seconds' WHERE job_name = %s",
                     (name,))
         assert job_lease.renew(conn, hold)
-        assert _row(cur, name)["ttl"] == timedelta(seconds=60)
+        assert timedelta(seconds=60) <= _row(cur, name)["ttl"] < timedelta(seconds=65)
         _expire(cur, name)
         assert not job_lease.renew(conn, hold), "a lapsed lane lease is lost, never resurrected"
 
@@ -839,17 +841,21 @@ def test_a_commit_under_a_lapsed_lane_lease_is_refused_and_a_fenced_one_holds_of
         b.close()
 
 
-def test_a_renewal_inside_the_holder_s_transaction_keeps_the_holder_s_own_timeout() -> None:
-    """A lane holder renews between its statements, often inside its own transaction: the renewal's 5 s bound must not
-    outlive it there. Also: the holder names itself, as a mode prefix does (#2107)."""
+def test_a_renewal_nested_in_the_holder_s_transaction_counts_from_the_clock_and_keeps_the_holder_s_timeout() -> None:
+    """A holder should renew between its transactions, but one nested in a transaction must stay sound: its expiry counts
+    from the clock (as the fence reads it), not the transaction's start, and its 5 s bound does not outlive it. Also: the
+    holder names itself, as a mode prefix does (#2107)."""
     (a,) = _sessions(1)
     name = f"test-renew-{uuid.uuid4().hex[:12]}"
     try:
         with job_lease.held(a, name, cadence="15 minutes", holder="incremental:test") as hold:
             assert hold is not None and hold.holder == "incremental:test"
             with a.transaction(), a.cursor() as cur:
-                cur.execute("SELECT set_config('statement_timeout', '600000', true)")
+                cur.execute("SELECT set_config('statement_timeout', '600000', true), pg_sleep(1.2)")
                 assert job_lease.renew(a, hold)
+                cur.execute("SELECT lease_expires_at - clock_timestamp() FROM scheduled_jobs WHERE job_name = %s",
+                            (name,))
+                assert cur.fetchone()[0] > timedelta(seconds=hold.ttl_s - 1), "now() would have lost the 1.2 s slept"
                 cur.execute("SHOW statement_timeout")
                 assert cur.fetchone() == ("10min",)
                 cur.execute("SELECT lease_holder FROM scheduled_jobs WHERE job_name = %s", (name,))
@@ -874,7 +880,7 @@ def test_a_release_over_a_dead_connection_lands_on_a_fresh_one_and_the_body_s_er
         with pytest.raises(RuntimeError, match="drain broke") as raised, job_lease.held(
                 a, names[0], cadence="15 minutes", connect=fresh):
             with b.cursor() as cur:
-                cur.execute("SELECT pg_terminate_backend(%s)", (a.info.backend_pid,))
+                cur.execute("SELECT pg_terminate_backend(%s, 5000)", (a.info.backend_pid,))
             raise RuntimeError("drain broke")
         assert any("fresh connection" in note for note in raised.value.__notes__)
         assert _lane_state(b, names[0]) == (False, "failed", "drain broke")
