@@ -17,7 +17,7 @@ from dataclasses import replace
 from location_data.resolver import bind as step_bind
 from location_data.resolver import core
 from location_data.resolver import grade as step_grade
-from location_data.resolver.types import AddressPoint, Street
+from location_data.resolver.types import AddressPoint, PartPoint, Street
 from location_data.resolver.version import RESOLVER_VERSION
 from tests.location_data import mini_mirror as mm
 
@@ -454,17 +454,57 @@ def test_an_admissible_pin_still_wins_over_the_unit_point():
     assert (resolution.lat, resolution.lon) == (49.7600, 18.0200)
 
 
-def test_a_quarter_takes_its_towns_point_because_ruian_draws_no_quarter_polygon():
-    """The walk, and why it is a walk and not `chain[0]`: `cast_obce` and `momc` are the two
-    levels a Czech listing most often names by hand, and RÚIAN has no polygon for either —
-    so the finest bound unit is precisely the one with no point of its own."""
+def test_a_quarter_stands_at_its_own_doors_because_ruian_draws_no_quarter_polygon():
+    """v5.8 (operator ruling 2026-10-25). RÚIAN draws no polygon for a část obce, the level a
+    Czech listing most often names by hand, so a quarter used to take its TOWN's point — a
+    Břevnov ad stood in Vinohrady, 9 km from its street. It stands at the centroid of its own
+    doors now, as a bound street does, and their reach is the floor under its radius."""
+    mirror = mm.default_mirror()
     resolution = _resolve([
         mm.claim(1, "obec_name", value_text="Praha"),
         mm.claim(2, "cast_obce_name", value_text="Vokovice"),
-    ])
+    ], mirror=mirror)
+    part = mirror.part_point(14)
+    assert part is not None
     assert resolution.cast_obce_kod == 490067
     assert resolution.granularity == "cast_obce_or_quarter"
+    assert (resolution.lat, resolution.lon) == (part.lat, part.lon)
+    assert (resolution.lat, resolution.lon) != (50.0755, 14.4378)
+    assert resolution.uncertainty_radius_m == max(
+        step_grade.RADIUS_M["cast_obce_or_quarter"], part.extent_m)
+
+
+def test_a_quarter_with_no_door_takes_its_towns_point_and_the_towns_reach():
+    """The walk, and why it is a walk and not `chain[0]`: a část with no valid door has no
+    point either, so it climbs to the town — and the radius then says how far the town
+    reaches from that point (Praha 17.6 km), not the 1 km an `obec` row used to claim."""
+    mirror = mm.default_mirror()
+    mirror.points = [p for p in mirror.points if p.cast_obce_unit_id != 14]
+    mirror.units = [replace(u, extent_m=17_556.0) if u.level == "obec" and u.code == 554782
+                    else u for u in mirror.units]
+    resolution = _resolve([
+        mm.claim(1, "obec_name", value_text="Praha"),
+        mm.claim(2, "cast_obce_name", value_text="Vokovice"),
+    ], mirror=mirror)
+    assert resolution.cast_obce_kod == 490067
     assert (resolution.lat, resolution.lon) == (50.0755, 14.4378)
+    assert resolution.uncertainty_radius_m == 17_556.0
+
+
+def test_a_pin_placed_quarter_keeps_its_pin_and_takes_no_floor_from_the_doors():
+    """FILL places only what BIND did not: a pinned row keeps its pin, and the reach of the
+    část's doors — read here for its KÚ, Praha spanning several — is no floor under the pin's
+    radius."""
+    mirror = mm.default_mirror()
+    wide = PartPoint(lat=50.2, lon=14.2, extent_m=5_000.0, point_count=9)
+    mirror.part_point = lambda unit_id: wide  # type: ignore[method-assign]
+    resolution = _resolve([
+        mm.claim(1, "obec_name", value_text="Praha"),
+        mm.claim(2, "cast_obce_name", value_text="Vokovice"),
+        mm.claim(3, "coordinate", lat=50.10102, lon=14.34804, declared_precision_label="gps"),
+    ], mirror=mirror)
+    assert (resolution.lat, resolution.lon) == (50.10102, 14.34804)
+    assert resolution.uncertainty_radius_m < wide.extent_m
 
 
 def test_a_region_only_listing_is_placed_at_the_region_it_named():

@@ -21,7 +21,7 @@ import pytest
 from location_data.resolver import bind as step_bind
 from location_data.resolver import core
 from location_data.resolver import fill as step_fill
-from location_data.resolver.types import AddressPoint, Binding, Street
+from location_data.resolver.types import AddressPoint, Binding, PartPoint, Street
 from location_data.resolver.version import RESOLVER_VERSION
 from tests.location_data import mini_mirror as mm
 
@@ -215,31 +215,33 @@ def test_a_disputed_row_keeps_its_bound_entitys_ku():
     assert resolution.katastr_kod == VOKOVICE_KU
 
 
-def test_the_part_question_is_asked_only_for_a_part_bind_in_a_multi_ku_town():
-    """The one round trip the rule adds, and only where nothing already read answers it."""
+def test_the_part_question_is_asked_only_for_a_part_bind():
+    """The one round trip the rule adds, and only where nothing already read answers it. A
+    part bind asks it for its KÚ (Praha spans several) and, unpinned, for its point (v5.8);
+    the run cache makes those one round trip."""
     asked: list[int] = []
     mirror = _mirror()
-    original = mirror.part_katastr_kod
+    original = mirror.part_point
 
-    def counting(unit_id: int) -> int | None:
+    def counting(unit_id: int) -> PartPoint | None:
         asked.append(unit_id)
         return original(unit_id)
 
-    mirror.part_katastr_kod = counting  # type: ignore[method-assign]
+    mirror.part_point = counting  # type: ignore[method-assign]
     _resolve([mm.claim(1, "obec_name", value_text="Praha"),
               mm.claim(2, "street_name", value_text="Nad Bořislavkou 487/40")], mirror)
     _resolve([mm.claim(1, "obec_name", value_text="Praha")], mirror)
     assert asked == []
     _resolve([mm.claim(1, "obec_name", value_text="Praha"),
               mm.claim(2, "cast_obce_name", value_text="Vokovice")], mirror)
-    assert asked == [14]
+    assert set(asked) == {14}
 
 
 def test_the_katastr_rule_carries_its_own_resolver_version():
     """A rule that changes an output moves `RESOLVER_VERSION`, or the sweep never re-queues
     the corpus and no existing row ever gets its KÚ (v5.4) — nor the W2 town rule (v5.5), nor
-    W4's parts and streets (v5.7)."""
-    assert RESOLVER_VERSION == "resolver:v5.7"
+    W4's parts and streets (v5.7), nor a část placed at its own doors (v5.8)."""
+    assert RESOLVER_VERSION == "resolver:v5.8"
 
 
 # ------------------------------------------------------------------ the SQL side
@@ -258,7 +260,7 @@ def test_every_ku_answer_rides_a_read_fill_already_makes():
         (resolve_db._ADDRESS_POINT_SQL, 2),             # version, kod_adm
         (resolve_db._ADDRESS_POINTS_BY_NUMBER_SQL, 11),  # version + ten (v5.5: typ_so, part)
         (resolve_db._STREET_POINT_SQL, 3),              # street id, version x2
-        (resolve_db._PART_KATASTR_SQL, 3),              # unit id, version x2
+        (resolve_db._PART_POINT_SQL, 3),                # unit id, version x2
         (resolve_db._ADMIN_CHAIN_SQL, 2),               # unchanged: the sole KÚ binds none
     ):
         assert sql.count("%s") == placeholders, _flat(sql)
@@ -275,7 +277,7 @@ def test_the_ku_is_only_ever_asked_of_a_registry_geometry():
                 resolve_db._IN_CZ_SQL):
         assert "katastralni_uzemi" not in _flat(sql)
     for sql in (resolve_db._ADDRESS_POINT_SQL, resolve_db._STREET_POINT_SQL,
-                resolve_db._PART_KATASTR_SQL):
+                resolve_db._PART_POINT_SQL):
         assert "unnest(" not in _flat(sql)
 
 
@@ -285,7 +287,7 @@ def test_the_door_rule_reads_the_polygon_by_unit_and_version():
     purpose)` — 22 ms for a 9,193-door část where a probe per door took 1.7 s."""
     from location_data.resolver import resolve_db
 
-    for sql in (resolve_db._STREET_POINT_SQL, resolve_db._PART_KATASTR_SQL):
+    for sql in (resolve_db._STREET_POINT_SQL, resolve_db._PART_POINT_SQL):
         flat = _flat(sql)
         assert ("a.unit_id = k.id and a.registry_version_id = %s "
                 "and a.purpose = 'authoritative'") in flat
