@@ -217,10 +217,10 @@ File pointers are where the element lives today (2026-10-27); search for the quo
    `mf_gross_yield_pct` span beside the dims row shows on Velké cards only, `BoardCard.tsx`), P22 (terminal
    stages, `is_terminal`, fold into one "Uzavřené" lane of drop rows; `pages/Pipeline.tsx`). Rule #22 holds:
    closing a deal is a move into a terminal stage, never a remove toggle.
-   As built: the board no longer reads the city indexes. The strip was mounted only on the pipeline card, so
-   no surface shows it now: the ruling's "it stays on the property page" assumed one there, and the property
-   page never had it (ask the operator whether it should get one). `CityIndexStrip` and `lib/useCityQuality`
-   stay on disk, unmounted. P20 is `showsYield` in the card-size table, so the drag ghost and the card agree.
+   As built: the board no longer reads the city indexes. The ruling keeps the strip on the property page, which
+   never had one, so Přehled now gives it a card, "Kvalita obce · <town>", last in the right column
+   (`PropertyOverview` `CityQualityCard`, reading `properties_public.obec_id`); a town that is not a curated city
+   shows no card, never a placeholder. P20 is `showsYield` in the card-size table, so the drag ghost and the card agree.
    P22: the lane sits at the board's right end, a row per closed stage (its colour bar, label and count under
    the active filters); each row is a droppable under its stage's id, so a drop closes the deal through the
    unchanged `planMove` → `usePipelineCard` move. A row opens its stage's full cards under the rows (which never

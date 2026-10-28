@@ -2,8 +2,8 @@
  * 2026-10-23: the adverts and the price moves are one card, right under the
  * description): one card per question, each with the answer and a way into its
  * tab — the description; where it is advertised and how its price moved; is the
- * price right; beside them the brokers and how to reach them, and what flats
- * nearby actually sold for.
+ * price right; beside them the brokers and how to reach them, what flats nearby
+ * actually sold for and, in a curated city, the town's quality indexes.
  *
  * Every figure here is read from the same query, with the same rule, as the tab
  * it summarises, so the two can never disagree: our estimate is the estimations
@@ -17,6 +17,7 @@ import type { FilterState } from '@/components/FilterForm';
 import Skeleton from '@/components/Skeleton';
 import Stat from '@/components/Stat';
 import Panel from '@/components/Panel';
+import CityIndexStrip from '@/components/CityIndexStrip';
 import RangeStrip from '@/components/estimation/RangeStrip';
 import {
   czPlural,
@@ -40,6 +41,7 @@ import {
 } from '@/lib/queries';
 import { COVERED_CATEGORIES, RADII_M, summarizeSold } from '@/lib/soldComps';
 import type { ListingSnapshotPublic, PropertySource, SoldComparable } from '@/lib/types';
+import { useCityQuality } from '@/lib/useCityQuality';
 import { band, shownPrice, useValuoPage } from '@/lib/valuo';
 import BrokerList from './BrokerList';
 import { DescriptionBody } from './ListingOverview';
@@ -105,8 +107,23 @@ export default function PropertyOverview({
           onRetryAdverts={onRetrySources}
         />
         <MarketCard property={property} onOpen={() => onOpen('hodnota')} />
+        <CityQualityCard obecId={property.obec_id} />
       </div>
     </div>
+  );
+}
+
+/* Ruling P19 (2026-10-27): off the pipeline card, the town's city-index strip stays
+   on the property page. Only a curated city has one, so any other town shows no
+   card at all, never a placeholder (the strip's own rule); nothing here opens a tab. */
+function CityQualityCard({ obecId }: { obecId: number | null }) {
+  const { byObec } = useCityQuality(obecId != null);
+  const quality = obecId == null ? undefined : byObec.get(obecId);
+  if (!quality || quality.readings.length === 0) return null;
+  return (
+    <Panel title={`Kvalita obce · ${quality.city_name}`} className="min-w-0">
+      <CityIndexStrip quality={quality} className="mt-0! border-t-0! pt-0!" />
+    </Panel>
   );
 }
 

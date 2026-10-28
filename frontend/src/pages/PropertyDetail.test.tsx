@@ -182,6 +182,9 @@ vi.mock('@/lib/queries', async (importOriginal) => {
     fetchPropertyTagIds: vi.fn(async () => []),
     fetchIsDismissed: vi.fn(async () => false),
     fetchPropertyTagMemberSet: vi.fn(async () => new Map()),
+    fetchCuratedCities: vi.fn(async () => []),
+    fetchCityIndexDefinitions: vi.fn(async () => []),
+    fetchCityIndexValues: vi.fn(async () => []),
   };
 });
 vi.mock('@/lib/auth', async (importOriginal) => ({
@@ -264,8 +267,7 @@ function Where() {
   return <p data-testid="where">{l.pathname + l.search + l.hash}</p>;
 }
 
-function renderAt(path: string) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function renderAt(path: string, qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[path]}>
@@ -625,6 +627,93 @@ describe('<PropertyDetail> section cards', () => {
     const ids = await card('Identifikátory');
     expect(checks.parentElement).toBe(ids.parentElement);
     expect(ids.parentElement).toHaveClass('space-y-4');
+  });
+});
+
+/* Ruling P19 (2026-10-27): off the pipeline card, the city-index strip "stays on
+   the property page". Přehled shows it for the property's town (its obec code, the
+   curated city's admin_boundary_id), last in the right column; a town that is not a
+   curated city shows nothing, never a placeholder. */
+describe('<PropertyDetail> Přehled: the town\'s city indexes (P19)', () => {
+  const def = (index_name: string): queries.CityIndexDefinition => ({
+    index_name,
+    label_cs: `Index ${index_name}`,
+    label_en: null,
+    category: index_name === 'celkove_hodnoceni' ? 'overall' : 'sub_index',
+    scale_min: 0,
+    scale_max: 10,
+    higher_is_better: true,
+    sort_order: 0,
+  } as queries.CityIndexDefinition);
+  const DEFS = ['celkove_hodnoceni', 'prirustek_obyvatel', 'stehovani_mladych', 'pracovni_mista'].map(def);
+  const CITY: queries.CuratedCity = {
+    city_id: 5,
+    name: 'Beroun',
+    kraj_name: 'Středočeský kraj',
+    lat: 49.9,
+    lng: 14.07,
+    default_radius_m: 5000,
+    population: 19_000,
+    population_as_of_year: 2024,
+    admin_boundary_id: 531057,
+  };
+  const VALUES: queries.CityIndexValue[] = DEFS.map((d, i) => ({ city_id: 5, index_name: d.index_name, value: 6 + i }));
+
+  /* The three reads already answered, as once the Browse map has loaded them: the
+     lookup is built on the page's first render, so an absent strip means "not a
+     curated city", never "still loading". */
+  const seeded = () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(queries.cityQualityKeys.cities, [CITY]);
+    qc.setQueryData(queries.cityQualityKeys.definitions, DEFS);
+    qc.setQueryData(queries.cityQualityKeys.values, VALUES);
+    return qc;
+  };
+  const overview = async () => {
+    await screen.findByRole('heading', { level: 1 });
+    return screen.findByRole('tabpanel');
+  };
+
+  beforeEach(() => {
+    vi.mocked(queries.fetchCuratedCities).mockClear();
+    vi.mocked(queries.fetchCityIndexDefinitions).mockClear();
+    vi.mocked(queries.fetchCityIndexValues).mockClear();
+  });
+
+  it('shows the curated town\'s strip, titled with the town, last in the right column', async () => {
+    vi.mocked(queries.fetchProperty).mockResolvedValue({ ...PROPERTY, obec_id: 531057 });
+    renderAt('/property/774', seeded());
+    const panel = await overview();
+    const strip = await within(panel).findByRole('group', { name: 'Kvalita obce Beroun' });
+    const card = strip.closest('section') as HTMLElement;
+    expect(card).toHaveAccessibleName('Kvalita obce · Beroun');
+    expect(within(card).getByText('Kvalita obce · Beroun')).toBeInTheDocument();
+    // Nothing to open: the card has no link of its own.
+    expect(within(card).queryByRole('button')).toBeNull();
+    // Last in the right column, after Trh v okolí.
+    const market = within(panel).getByRole('region', { name: 'Trh v okolí' });
+    expect(market.parentElement).toBe(card.parentElement);
+    expect(card.parentElement!.lastElementChild).toBe(card);
+  });
+
+  it('shows nothing for a town that is not a curated city', async () => {
+    vi.mocked(queries.fetchProperty).mockResolvedValue({ ...PROPERTY, obec_id: 554782 });
+    renderAt('/property/774', seeded());
+    const panel = await overview();
+    await within(panel).findByRole('region', { name: 'Trh v okolí' });
+    expect(within(panel).queryByRole('group', { name: /^Kvalita obce/ })).toBeNull();
+    expect(within(panel).queryByText(/^Kvalita obce/)).toBeNull();
+  });
+
+  it('reads no city data for a property with no town code', async () => {
+    vi.mocked(queries.fetchProperty).mockResolvedValue({ ...PROPERTY, obec_id: null });
+    renderAt('/property/774');
+    const panel = await overview();
+    await within(panel).findByRole('region', { name: 'Trh v okolí' });
+    expect(within(panel).queryByText(/^Kvalita obce/)).toBeNull();
+    expect(queries.fetchCuratedCities).not.toHaveBeenCalled();
+    expect(queries.fetchCityIndexDefinitions).not.toHaveBeenCalled();
+    expect(queries.fetchCityIndexValues).not.toHaveBeenCalled();
   });
 });
 

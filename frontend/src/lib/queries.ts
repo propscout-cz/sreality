@@ -1052,10 +1052,13 @@ const PROPERTY_COLS =
   /* MF is property-grain: the page renders `mf_reference_rent` by shape
    * (lib/mfReference) and pairs a value with the property yield. */
   'description,mf_gross_yield_pct,mf_reference_rent,' +
-  'price_change_count,total_price_change_pct';
+  'price_change_count,total_price_change_pct,' +
+  /* The town's RÚIAN code: Přehled's city-index card (P19, lib/useCityQuality). */
+  'obec_id';
 
 export interface PropertyPublic extends ListingPublic {
   property_id: number;
+  obec_id: number | null;
   mf_gross_yield_pct: number | null;
   mf_reference_rent: ReferenceRent | null;
   price_change_count: number | null;
