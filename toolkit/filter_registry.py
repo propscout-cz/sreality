@@ -56,7 +56,7 @@ class Agenda(StrEnum):
     BROWSE = "browse"             # frontend Browse sidebar
     WATCHDOG = "watchdog"         # WatchdogFilterSpec + matcher
     COMPARABLES = "comparables"   # toolkit.find_comparables_* + agent tools
-    ESTIMATION = "estimation"     # CreateEstimationIn / EstimateYieldIn
+    ESTIMATION = "estimation"     # CreateEstimationIn
     VELOCITY = "velocity"         # compute_market_velocity
     NEIGHBORHOOD = "neighborhood" # describe_neighborhood
     DEFAULTS = "defaults"         # Settings → app_settings tunables

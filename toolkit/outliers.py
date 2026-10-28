@@ -50,8 +50,7 @@ def find_distribution_outliers(
     pairs = [(l["sreality_id"], float(l[field])) for l in contributing]
     n = len(pairs)
     # The unit `median`, `iqr` and every outlier `value` below are IN. Read off
-    # the contributing rows, never derived: this tool is reachable over HTTP with
-    # caller-supplied listings that carry no basis, and those must read
+    # the contributing rows, never derived: rows that carry no basis must read
     # 'unknown' rather than be assumed to be sale prices.
     basis = cohort_basis(contributing) if field == _PER_M2_FIELD else None
     md_filters = {

@@ -176,7 +176,10 @@ fails, M2 and M3 wait: the scout's skill is reworked and re-graded; the spine st
 **M2, 2–3 weeks: the estimator rebuilt.** Estimator v2 on the spine (§ 2), the estimation record kept, both rows
 inserted in one transaction at submit (rule 12), the old paths deleted after 30 estimations and 7 quiet days; then
 the richer output and its screens. *Exit:* the extension's metered runs are unchanged; the SPA shows the new output;
-the `skills` table and the Settings editor are gone.
+the `skills` table and the Settings editor are gone. For reference while rebuilding: the seven REST twins of the agent's
+analytics, retired before M1a (`/tools/find_comparables_relaxed`, `analyze_distribution`, `find_distribution_outliers`,
+`compute_market_velocity`, `compute_listing_velocity`, `describe_neighborhood`, `/estimate_yield`), are kept at the git tag
+`archive/rest-tool-routes-2026-10-28` (`git show archive/rest-tool-routes-2026-10-28:api/main.py`, and `:api/schemas.py`).
 
 **M3, 1 week: the drafter.** The draft_email proposal kind, the mailto handoff, broker contacts as the user sees
 them. *Exit:* the platform PR adds the draft_email proposal kind (it writes nothing, so it needs no inverse) and the
@@ -275,3 +278,4 @@ start runs, what agent search means, and model-written SQL.
 | #2058 M0 run-table grants | migration 679: the browser INSERTs no run and UPDATEs only `estimation_runs.scenario`; censuses in `tests/_tenant_registry.py` `BROWSER_WRITE_COLUMNS` | nothing: applied 2026-10-26 14:05Z; production PostgREST as a member: INSERT 403, `status` UPDATE 403, `scenario` UPDATE 204 |
 | #2059 M0 route and sign-in hardening | `/buildings*` and `force_refresh` admin-only; `verify_jwt` pins the issuer, requires `exp`/`sub`/`role`, refuses `client_id`; the API refuses to boot with `API_AUTH_OPTIONAL` on Railway | delete `RUNPOD_API_KEY` from the Railway API service (no reader), after sreality-e9's signed-in check; still owed: building runs readable through PostgREST's SYSTEM arm (`roadmap/public-release-track.md` item 11) |
 | #2061 M0 credential rotation wizard | `scripts/rotate_credentials.sh` (17 stages, resumable with `--from N`, database last) and the per-secret inventory `.claude/skills/toolkit-api/references/secrets-inventory.md` | run to stage 13 on 2026-10-27, the database by hand; removed the same day at the operator's request (rotations run in a Claude session) |
+| #2062 prep: REST twins retired | the seven zero-traffic REST routes (0 requests in 7 days, no caller in the repo) and their request bodies, which the M1a tools replace; the estimator never called them (it calls the toolkit in-process); source kept at the tag named under § 3, M2 | nothing |
