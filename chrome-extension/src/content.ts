@@ -34,6 +34,7 @@ import {
   runIndexOverlay,
   type IndexOverlayHandle,
 } from './index_overlay';
+import { buildCard } from './card';
 import { INGEST_STEP_CS, isAdminGate, outcomeMessage, runIngest, type IngestStep } from './ingest_flow';
 import { onAccountChange } from './session';
 import type {
@@ -1123,14 +1124,13 @@ function mountPanel(): {
    * can sit in several collections) and closes from its trigger or Escape. It
    * opens IN the panel's flow rather than floating over it: the panel re-renders
    * wholesale on every state change and is pinned to the viewport's bottom
-   * edge, so an inline slip is the shape that survives both. */
+   * edge, so a card in the flow is the shape that survives both. */
   function renderCollectionMenu(body: HTMLElement, state: PanelState): void {
     const l = state.listing;
     if (!state.collectionsOpen || l == null || !l.found || l.property_id == null) return;
     const memberIds = new Set(l.collection_ids ?? []);
 
-    const menu = document.createElement('div');
-    menu.className = 'coll-menu';
+    const { section: menu, body: menuBody } = buildCard({ title: COLLECTION_SAVE_LABEL });
     menu.id = COLLECTION_MENU_ID;
     menu.setAttribute('role', 'group');
     menu.setAttribute('aria-label', COLLECTION_SAVE_LABEL);
@@ -1139,11 +1139,6 @@ function mountPanel(): {
       e.stopPropagation();
       onCloseCollectionsMenu();
     };
-
-    const eyebrow = document.createElement('p');
-    eyebrow.className = 'coll-eyebrow';
-    eyebrow.textContent = COLLECTION_SAVE_LABEL;
-    menu.appendChild(eyebrow);
 
     if (state.collections == null) {
       /* A failed read is NOT an empty one — "no collections yet" would tell an
@@ -1157,12 +1152,12 @@ function mountPanel(): {
         p.textContent = 'Načítám kolekce…';
         p.classList.add('note--loading');
       }
-      menu.appendChild(p);
+      menuBody.appendChild(p);
     } else if (saveTargets(state.collections).length === 0) {
       const p = document.createElement('p');
       p.className = 'coll-state';
       p.textContent = 'Zatím nemáte žádnou kolekci.';
-      menu.appendChild(p);
+      menuBody.appendChild(p);
     } else {
       const list = document.createElement('ul');
       list.className = 'coll-list';
@@ -1206,7 +1201,7 @@ function mountPanel(): {
         li.appendChild(row);
         list.appendChild(li);
       }
-      menu.appendChild(list);
+      menuBody.appendChild(list);
     }
 
     if (state.collectionError != null) {
@@ -1214,7 +1209,7 @@ function mountPanel(): {
       err.className = 'coll-error';
       err.setAttribute('role', 'alert');
       err.textContent = state.collectionError;
-      menu.appendChild(err);
+      menuBody.appendChild(err);
     }
 
     /* Creating, renaming and monitoring settings stay in the app, as they do on
@@ -1228,7 +1223,7 @@ function mountPanel(): {
       manage.textContent = state.collections != null && saveTargets(state.collections).length === 0
         ? 'Založit kolekci v aplikaci →'
         : 'Spravovat kolekce →';
-      menu.appendChild(manage);
+      menuBody.appendChild(manage);
     }
 
     body.appendChild(menu);
@@ -1282,8 +1277,7 @@ function mountPanel(): {
     if (!state.tagsOpen || l == null || !l.found || l.property_id == null) return;
     const ids = new Set(l.tag_ids ?? []);
 
-    const menu = document.createElement('div');
-    menu.className = 'coll-menu';
+    const { section: menu, body: menuBody } = buildCard({ title: TAGS_LABEL });
     menu.id = TAG_MENU_ID;
     menu.setAttribute('role', 'group');
     menu.setAttribute('aria-label', TAGS_LABEL);
@@ -1292,11 +1286,6 @@ function mountPanel(): {
       e.stopPropagation();
       onCloseTagsMenu();
     };
-
-    const eyebrow = document.createElement('p');
-    eyebrow.className = 'coll-eyebrow';
-    eyebrow.textContent = TAGS_LABEL;
-    menu.appendChild(eyebrow);
 
     if (state.tags == null) {
       const p = document.createElement('p');
@@ -1308,12 +1297,12 @@ function mountPanel(): {
         p.textContent = 'Načítám štítky…';
         p.classList.add('note--loading');
       }
-      menu.appendChild(p);
+      menuBody.appendChild(p);
     } else if (state.tags.length === 0) {
       const p = document.createElement('p');
       p.className = 'coll-state';
       p.textContent = 'Zatím nemáte žádný štítek.';
-      menu.appendChild(p);
+      menuBody.appendChild(p);
     } else {
       const list = document.createElement('ul');
       list.className = 'coll-list';
@@ -1343,7 +1332,7 @@ function mountPanel(): {
         li.appendChild(row);
         list.appendChild(li);
       }
-      menu.appendChild(list);
+      menuBody.appendChild(list);
     }
 
     if (state.tagError != null) {
@@ -1351,7 +1340,7 @@ function mountPanel(): {
       err.className = 'coll-error';
       err.setAttribute('role', 'alert');
       err.textContent = state.tagError;
-      menu.appendChild(err);
+      menuBody.appendChild(err);
     }
 
     // The app's listing page holds the assign list that also creates and edits tags.
@@ -1363,7 +1352,7 @@ function mountPanel(): {
       manage.target = '_blank';
       manage.rel = 'noopener';
       manage.textContent = 'Nový štítek v aplikaci →';
-      menu.appendChild(manage);
+      menuBody.appendChild(manage);
     }
 
     body.appendChild(menu);
@@ -1400,14 +1389,9 @@ function mountPanel(): {
     const l = state.listing;
     if (l == null || !l.found || l.property_id == null) return;
     const audience = noteAudience(state);
-    const sec = document.createElement('div');
-    sec.className = 'notes';
-
-    const eyebrow = document.createElement('p');
-    eyebrow.className = 'notes-eyebrow';
-    const count = state.notes?.length ?? 0;
-    eyebrow.textContent = count > 0 ? `Poznámky (${count})` : 'Poznámky';
-    sec.appendChild(eyebrow);
+    /* The count only once the notes are read: 0 is "none", not "unknown". */
+    const card = buildCard({ title: 'Poznámky', count: state.notes?.length ?? null });
+    const sec = card.body;
 
     /* Not loaded and failed are not "no notes" (MS16). */
     if (state.notesFailed) {
@@ -1478,7 +1462,7 @@ function mountPanel(): {
     btn.onclick = () => { void onAddNote(); };
     sec.appendChild(btn);
 
-    body.appendChild(sec);
+    body.appendChild(card.section);
   }
 
   /* Another author's SHARED note (they marked it; a share put it in reach):
@@ -1640,33 +1624,32 @@ function mountPanel(): {
     return item;
   }
 
-  /* The stamped valuation: eyebrow → big copper yield figure → a hairline-ruled
+  /* The stamped valuation, one card: big copper yield figure → a hairline-ruled
    * ledger line carrying the MF reference rent (the signature of the panel).
    * Everything comes off the property's ONE result, by its shape: a value
    * (its yield + rent + the per-m² rate it was built from), the town's range
    * (both ends, with the result's note behind an (i)), a note alone, or
    * nothing. The yield figure appears only when the result has one (a sale
-   * flat); a rental flat shows its rent. No reason text is written here. */
+   * flat), and names the card; a rental flat shows its rent under the source's
+   * name. No reason text is written here. */
   function renderMfBlock(body: HTMLElement, state: PanelState): void {
     const l = state.listing;
     if (l == null || !l.found) return;
     const shape = mfShape(l.mf_reference_rent);
     if (shape.kind === 'none') return;
-    const mf = document.createElement('div');
-    mf.className = 'mf';
+    const pct = mfYieldText(l);  // null for a note: it carries no yield
+    const card = buildCard({ title: pct != null ? 'Výnos MF (hrubý)' : 'Cenová mapa MF' });
+    card.title.title = pct != null
+      ? 'Hrubý výnos dle cenové mapy nájemného MF (nájem ÷ cena)'
+      : 'Cenová mapa nájemného MF';
+    const mf = card.body;
     if (shape.kind === 'note') {
       mf.appendChild(note(shape.note));
-      body.appendChild(mf);
+      body.appendChild(card.section);
       return;
     }
 
-    const pct = mfYieldText(l);
     if (pct != null) {
-      const eyebrow = document.createElement('p');
-      eyebrow.className = 'mf-eyebrow';
-      eyebrow.textContent = 'Výnos MF (hrubý)';
-      eyebrow.title = 'Hrubý výnos dle cenové mapy nájemného MF (nájem ÷ cena)';
-      mf.appendChild(eyebrow);
       const figure = document.createElement('p');
       figure.className = 'mf-figure';
       figure.textContent = pct;
@@ -1705,7 +1688,7 @@ function mountPanel(): {
     ledger.appendChild(lab);
     ledger.appendChild(val);
     mf.appendChild(ledger);
-    body.appendChild(mf);
+    body.appendChild(card.section);
   }
 
   /* The catalog subject line: the disposition as the headword, area + price as
@@ -1756,12 +1739,8 @@ function mountPanel(): {
   }
 
   function renderEstimation(body: HTMLElement, state: PanelState): void {
-    const sec = document.createElement('div');
-    sec.className = 'est';
-    const head = document.createElement('p');
-    head.className = 'est-eyebrow';
-    head.textContent = 'Odhad výnosu (komparativní)';
-    sec.appendChild(head);
+    const card = buildCard({ title: 'Odhad výnosu (komparativní)' });
+    const sec = card.body;
 
     /* No estimation yet (or one is running). */
     if (state.run == null) {
@@ -1795,7 +1774,7 @@ function mountPanel(): {
           }
         }
       }
-      body.appendChild(sec);
+      body.appendChild(card.section);
       return;
     }
 
@@ -1809,7 +1788,7 @@ function mountPanel(): {
       btn.disabled = state.busy;
       btn.onclick = () => onCreateRun();
       sec.appendChild(btn);
-      body.appendChild(sec);
+      body.appendChild(card.section);
       return;
     }
 
@@ -1881,7 +1860,7 @@ function mountPanel(): {
     reset.onclick = (e) => { e.preventDefault(); onReset(); };
     foot.appendChild(reset);
     sec.appendChild(foot);
-    body.appendChild(sec);
+    body.appendChild(card.section);
   }
 
   function buildField(opts: {
