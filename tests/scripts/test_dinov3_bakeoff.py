@@ -94,11 +94,11 @@ def test_worst_pairs_returns_the_top_scoring_negatives() -> None:
 
 def _images() -> dict:
     return {
-        "1": {"phash": 0b1010, "render_score": None},
-        "2": {"phash": 0b1010, "render_score": 0.1},    # pHash-identical to 1
-        "3": {"phash": 0b1011, "render_score": 0.99},   # 1 bit from 1; a render
-        "4": {"phash": None, "render_score": 0.2},
-        "5": {"phash": (1 << 40), "render_score": 0.0},  # far from everything
+        "1": {"phash": 0b1010},
+        "2": {"phash": 0b1010},          # pHash-identical to 1
+        "3": {"phash": 0b1011},          # 1 bit from 1
+        "4": {"phash": None},
+        "5": {"phash": (1 << 40)},       # far from everything
     }
 
 
@@ -129,11 +129,6 @@ def test_clip_derived_limbs_are_switchable() -> None:
     # With the incumbent's opinion off, the same pair survives — which is the point:
     # one of the arms IS the incumbent.
     assert not bo.is_shared_photo(at_ceiling, images, hamming_max=0, clip_limbs=False)
-
-    render_pair = {"a": 3, "b": 5, "clip_cos": 0.1}
-    assert bo.is_shared_photo(render_pair, images, hamming_max=0, clip_limbs=True,
-                              render_max=0.95)
-    assert not bo.is_shared_photo(render_pair, images, hamming_max=0, clip_limbs=False)
 
 
 def test_a_missing_phash_is_never_a_shared_photo() -> None:
@@ -403,7 +398,7 @@ def _manifest() -> dict:
                    "tags": [], "patterns": []},
         },
         "canary": {"image_ids": [1, 2]},
-        "images": {str(i): {"phash": i, "render_score": 0.0} for i in range(1, 14)},
+        "images": {str(i): {"phash": i} for i in range(1, 14)},
     }
 
 
@@ -413,7 +408,7 @@ def test_readouts_produce_the_headline_and_the_control() -> None:
              "rejpeg_q60": {"P1b:rejpeg_q60:10": 0.95}}
     out = bo.readouts(manifest, manifest["images"],
                       lambda a, b, pair: pair.get("clip_cos"), synth,
-                      exclusion_hamming=0, render_max=0.95, worst_n=5)
+                      exclusion_hamming=0, worst_n=5)
     assert set(out) == {"all", "excl_phash_only", "excl_with_clip"}
     head = out["all"]["P1b_vs_P3"]
     assert head["n_pos"] == 3 and head["n_neg"] == 2 and head["auc"] == 1.0
@@ -436,7 +431,7 @@ def test_the_exclusion_never_touches_the_positive_population() -> None:
     out = bo.readouts(manifest, manifest["images"],
                       lambda a, b, pair: pair.get("clip_cos"),
                       {"crop10": {"P1b:crop10:10": 0.99}},
-                      exclusion_hamming=6, render_max=0.95, worst_n=5)
+                      exclusion_hamming=6, worst_n=5)
     assert out["excl_phash_only"]["coverage"]["P1a"] == 2, "P1a must survive intact"
     assert out["excl_phash_only"]["coverage"]["P3"] == 0, "P3 is the filtered side"
     assert out["excl_phash_only"]["coverage"]["P2"] == 1, "P2 is an inspection set"
@@ -449,7 +444,7 @@ def test_the_clip_limbs_variant_drops_the_pairs_the_incumbent_calls_identical() 
     manifest["populations"]["P3"]["pairs"][0]["clip_cos"] = 0.9999
     out = bo.readouts(manifest, manifest["images"],
                       lambda a, b, pair: pair.get("clip_cos"), {},
-                      exclusion_hamming=0, render_max=0.95, worst_n=5)
+                      exclusion_hamming=0, worst_n=5)
     assert out["all"]["coverage"]["P3"] == 2
     assert out["excl_phash_only"]["coverage"]["P3"] == 2, (
         "the encoder-independent limb must not consult the incumbent's cosine")

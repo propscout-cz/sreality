@@ -43,7 +43,7 @@ THE EXCLUSION IS TWO INDEPENDENT KNOBS. `--p1a-hamming` (what the manifest calle
 POSITIVE) and `--exclusion-hamming` (the contamination filter applied to the P3 side)
 are separate parameters, because the predecessor harness defaulted them to the same
 value and would therefore have produced an empty positive set by construction. The
-exclusion's CLIP-DERIVED limbs (stored cosine at ceiling, render_score floor) are
+exclusion's CLIP-DERIVED limb (stored cosine at ceiling) is
 reported both ON and OFF: baking the incumbent's opinion into the evaluation set is a
 confound when one of the arms IS the incumbent.
 
@@ -173,7 +173,6 @@ def is_shared_photo(
     hamming_max: int,
     clip_limbs: bool,
     clip_ceiling: float = SHARED_CLIP_COS,
-    render_max: float = 1.01,
 ) -> bool:
     """'These two are literally the same picture' — the rule that strips shared
     marketing renders out of the NEGATIVE side.
@@ -182,8 +181,9 @@ def is_shared_photo(
     Hamming distance that DEFINES P1a; the predecessor defaulted both to 2, which made
     the positive population empty by construction (ENCODER-DECISION §5.2 fix 1).
 
-    `clip_limbs=False` drops the CLIP-derived limbs (stored cosine at ceiling, and the
-    render_score floor), leaving a purely encoder-independent rule. Both readings are
+    `clip_limbs=False` drops the CLIP-derived limb (stored cosine at ceiling; the render
+    score floor went with render scoring, ruling 2026-10-28), leaving a purely
+    encoder-independent rule. Both readings are
     reported, because deciding which pairs survive with the incumbent's own opinion is
     a confound when the incumbent is one of the arms (§5.2 fix 2, §5.1 gap 5).
     """
@@ -192,9 +192,6 @@ def is_shared_photo(
     if clip_limbs:
         cos = pair.get("clip_cos")
         if cos is not None and cos >= clip_ceiling:
-            return True
-        ra, rb = a.get("render_score"), b.get("render_score")
-        if (ra or 0.0) >= render_max or (rb or 0.0) >= render_max:
             return True
     pa, pb = a.get("phash"), b.get("phash")
     return pa is not None and pb is not None and hamming64(pa, pb) <= hamming_max
@@ -757,21 +754,19 @@ def readouts(
     synth: dict[str, dict[str, float]],
     *,
     exclusion_hamming: int,
-    render_max: float,
     worst_n: int,
 ) -> dict[str, Any]:
     """§5.4's readouts 1-3 for one arm, at three exclusion settings.
 
     `all` applies no contamination filter; `excl_phash_only` applies the
-    encoder-independent limb; `excl_with_clip` adds the CLIP-derived limbs. Reporting
+    encoder-independent limb; `excl_with_clip` adds the CLIP-derived limb. Reporting
     all three is the answer to §5.1's gap 5 — with only the last one, the incumbent's
     opinion silently decides which pairs every OTHER arm is judged on.
     """
     variants = {
         "all": None,
         "excl_phash_only": {"hamming_max": exclusion_hamming, "clip_limbs": False},
-        "excl_with_clip": {"hamming_max": exclusion_hamming, "clip_limbs": True,
-                           "render_max": render_max},
+        "excl_with_clip": {"hamming_max": exclusion_hamming, "clip_limbs": True},
     }
     out: dict[str, Any] = {}
     for variant, exclusion in variants.items():
@@ -885,9 +880,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                     help="THE CONTAMINATION FILTER's pHash threshold, independent of "
                          "the manifest's P1a definition. Same value for both is the "
                          "predecessor's bug: it empties the positive set.")
-    ap.add_argument("--render-max", type=float, default=0.95,
-                    help="CLIP-derived render_score floor, one of the limbs reported "
-                         "both on and off.")
     ap.add_argument("--worst-pairs", type=int, default=20)
     ap.add_argument("--gpu-cost-per-hr", type=float, default=0.22,
                     help="RTX 3090 list price per §5.3; used for the $/1M readout.")
@@ -957,8 +949,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         manifest, images,
         lambda a, b, pair: pair.get("clip_cos"),
         synth={},  # a stored vector has no transformed twin to compare against
-        exclusion_hamming=args.exclusion_hamming, render_max=args.render_max,
-        worst_n=args.worst_pairs)
+        exclusion_hamming=args.exclusion_hamming, worst_n=args.worst_pairs)
     baseline.note = ("P1b is absent for the stored arm by construction: no vector "
                      "exists for a transform that was never embedded. Read this arm "
                      "through P1a_vs_P3 — it is the pHash control's own baseline.")
@@ -1012,7 +1003,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             },
             readouts=readouts(manifest, images, _pair_lookup(table), synth,
                               exclusion_hamming=args.exclusion_hamming,
-                              render_max=args.render_max, worst_n=args.worst_pairs),
+                              worst_n=args.worst_pairs),
         ))
         LOG.info("%s: %.1f img/s, $%.2f/1M", arm.name, img_per_s,
                  results[-1].throughput["usd_per_1m_images"])
@@ -1038,7 +1029,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                        "vectors were written to any database."),
         "args": {"device": device, "batch_size": args.batch_size,
                  "exclusion_hamming": args.exclusion_hamming,
-                 "render_max": args.render_max,
                  "gpu_cost_per_hr": args.gpu_cost_per_hr},
         "arms": [asdict(r) for r in results],
         "precision_drift": drift,

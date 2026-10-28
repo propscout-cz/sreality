@@ -35,7 +35,7 @@ _SELECT = """
 """
 _UPDATE = (
     "UPDATE image_clip_tags SET fine_tag = %s, logical_tag = %s, confidence = %s, "
-    "render_score = %s, tagged_at = now() WHERE image_id = %s AND model = %s"
+    "tagged_at = now() WHERE image_id = %s AND model = %s"
 )
 
 
@@ -111,7 +111,7 @@ def main() -> int:
             embs = np.array([_parse_vec(r[2]) for r in rows], dtype=np.float32)
             results = tagger.tags_from_emb(torch.from_numpy(embs))
             params = [
-                (tr.fine_tag, tr.logical_tag, tr.confidence, tr.render_score, r[0], r[1])
+                (tr.fine_tag, tr.logical_tag, tr.confidence, r[0], r[1])
                 for r, tr in zip(rows, results)
             ]
             with conn.cursor() as cur:
