@@ -26,7 +26,7 @@ tests/fixtures/portal_html/idnes_detail.html). Bazos needs two
 fixtures — a search/index page and a single detail page.
 
 Anonymization scope: drop contact PII (phones, emails) and exact
-street numbers. Listing prices, dispositions, and the surrounding
+street numbers, and blank the page's third-party credentials (both modes). Listing prices, dispositions, and the surrounding
 HTML structure are preserved — they're public data and the parser
 tests need them to make meaningful assertions. Site-specific
 agent-name patterns are too varied to scrub by regex without false
@@ -81,6 +81,21 @@ _EMAIL_RE = re.compile(
 _STREET_NUM_RE = re.compile(r"\b(\d{1,4})/(\d{1,4}[a-z]?)\b")
 # http(s) URLs are masked out before scrubbing — see anonymize().
 _URL_RE = re.compile(r"https?://[^\s\"'<>]+")
+# The third-party credentials a portal page embeds (a Google Maps key, a map tiles key, a captcha site key, a widget
+# token) are public in the page, but a secret scanner cannot tell them from ours (#2035).
+_CREDENTIAL_RE = re.compile(
+    r"AIza[0-9A-Za-z_\-]{35}"
+    r"|(?P<name>[?&]token=|\\?[\"']?(?:mtMapKey|sitekey)\\?[\"']?\s*[:=]\s*\\?[\"'])[0-9A-Za-z_\-]{16,}"
+)
+
+
+def redact_credentials(html: str) -> str:
+    """Overwrites each third-party credential's value with as many x's, so no byte offset in the page moves."""
+    def _blank(match: re.Match[str]) -> str:
+        name = match.group("name") or ""
+        return name + "x" * (len(match.group(0)) - len(name))
+
+    return _CREDENTIAL_RE.sub(_blank, html)
 
 
 def anonymize(html: str) -> str:
@@ -97,7 +112,7 @@ def anonymize(html: str) -> str:
         urls.append(match.group(0))
         return f"\x00URL{len(urls) - 1}\x00"
 
-    out = _URL_RE.sub(_mask, html)
+    out = _URL_RE.sub(_mask, redact_credentials(html))
     out = _PHONE_RE.sub("+420 XXX XXX XXX", out)
     out = _EMAIL_RE.sub("agent@example.cz", out)
     out = _STREET_NUM_RE.sub("XXX/YY", out)
@@ -233,7 +248,7 @@ def _replace_name(html: str, name: str) -> str:
 
 
 def anonymize_contacts(html: str, *, names: Sequence[str] = ()) -> str:
-    """Scrub contact PII only, leaving every other byte of the page intact.
+    """Scrub contact PII (and blank third-party credentials, same length), leaving every other byte intact.
 
     Covers the four shapes a Czech portal spells a contact in: rendered text, a
     tel:/mailto: href, an embedded-JSON field (plain, entity- or backslash-escaped),
@@ -243,7 +258,7 @@ def anonymize_contacts(html: str, *, names: Sequence[str] = ()) -> str:
     the placeholder under a key it already carries returns the same bytes — so a
     second pass is a no-op, which is what lets a committed fixture be re-verified.
     """
-    out = html
+    out = redact_credentials(html)
     for name in names:
         out = _replace_name(out, name)
     out = _EMAIL_RE.sub(EMAIL_PLACEHOLDER, out)

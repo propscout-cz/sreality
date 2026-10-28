@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Secret scan of what this commit adds (#2035). Enabled once per clone: git config core.hooksPath .githooks
+exec "$(git rev-parse --show-toplevel)/scripts/gitleaks.sh" git --pre-commit --staged --redact --no-banner --verbose --log-level warn

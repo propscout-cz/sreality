@@ -1782,7 +1782,7 @@ is filed (#1860).
 
 **Replay rails (Health dashboard sprint wave 6).** `tests/scripts/test_checks_quality_replay.py` feeds the
 four checks' inputs through the real ladder from fixtures under `tests/fixtures/health_quality_*.csv`,
-exported read-only from production (counts only: the repo is public), each export's SQL and time in the test's
+exported read-only from production (counts only: git history is permanent), each export's SQL and time in the test's
 header. `pipeline_check_results` keeps 35 days (Q5), so the fixtures come from that window (the legacy checks'
 runs and stored medians) and from durable stores: churn per portal per day over 28 d from `listing_snapshots`,
 the 7-day and stock gaps over 28 d and the weekly stock medians over 6 weeks, as the measure view computes them, the active no-town counts per portal (current only:

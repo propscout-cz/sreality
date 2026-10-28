@@ -266,11 +266,12 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
 - Scraper smoke: `python -m scraper.sreality_main --index-only --dry-run --max-seconds 60` writes nothing; `--drain-only --max-detail 10` is a small live run (other `scraper.<portal>_main`s alike).
 ## Secrets
 
-Never commit secrets (`.env` is gitignored). API keys are **backend-only** — never `VITE_*`-prefix a backend
-secret (the frontend build must not see it). **Full env-var / secrets reference:** the `toolkit-api` skill.
+Never commit secrets (`.env` is gitignored; gitleaks hooks: `git config core.hooksPath .githooks` once per clone).
+API keys are **backend-only** — never `VITE_*`-prefix a backend secret. **Full env-var / secrets reference:** the
+`toolkit-api` skill.
 ## Agent skills
 
-- **Issue tracker:** GitHub Issues on this PUBLIC repo, via `gh` — always with `--json` (plain `gh issue view` / `gh pr view` exit 1 here). Before you work on, create or close a ticket, read `docs/agents/issue-tracker.md`: a ticket is yours once `python3 -m scripts.ticket_claim claim <n>` exits 0; each post-merge gate is its own `gate` ticket.
+- **Issue tracker:** GitHub Issues, via `gh` — always with `--json` (plain `gh issue view` / `gh pr view` exit 1 here). Before you work on, create or close a ticket, read `docs/agents/issue-tracker.md`: a ticket is yours once `python3 -m scripts.ticket_claim claim <n>` exits 0; each post-merge gate is its own `gate` ticket.
 - **Triage labels:** the five default role names (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
 - **Domain docs:** single-context — root `GLOSSARY.md` + `docs/adr/`; the numbered rules above bind as ADRs do. See `docs/agents/domain.md`.
 ## What is explicitly out of scope right now
