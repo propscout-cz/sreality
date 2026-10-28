@@ -282,17 +282,29 @@ screen's language as it is unless the operator rules otherwise.
 
 ## Render scoring: remove end to end (operator note on P03)
 
-Not started. Scope it first and send the operator the list of what would go before building anything.
-Known so far:
-- Producer: `scraper/clip_tagger.py` writes a per-image render score (migration `239_image_clip_render_score.sql`;
-  see also 245, 246, 456, 496 and 416 for where it reaches views).
-- Front end: `components/ImageRenderBadge.tsx`, `lib/imageTags.ts`, the gallery, lightbox, carousel, map preview,
-  sold comps, origin panel and the autodedup member rows read it (grep the front end for `render`).
-- **Check before removing**: migration 239 notes that the old dedup engine excluded high-render images from
-  its photo-match signal. Find whether autodedup or any SQL function still reads the score (CLAUDE.md rule 15:
-  the CLIP signal producers stay live), and say so in the scope.
-- Dropping a column is a destructive migration: it pauses for the operator's OK and a backup (`database`
-  skill). Stopping the producer and every reader can come first, the column drop last.
+Not started: **scoped 2026-10-28, awaiting the operator's go** on the list below before anything is built.
+
+- **Nothing that must stay reads it.** None of autodedup's 20 `DECISION_MODULES` reads the score; its CLIP read
+  (`export_sql.py`) takes only `fine_tag`, `logical_tag` and `confidence`. No SQL function, RPC or matview reads it
+  (checked in the live catalog). The exclusion migration 239 describes belonged to the removed 2026-08 engine.
+- **Producer:** the render-only parts of `scraper/clip_tagger.py` (the render/photo anchors, `render_score` on
+  `TagResult`, the 4th output of `tags_from_emb`, the caller-less `render_scores_from_emb`). The room tags and
+  the CLIP embeddings stay, untouched. Also the writers `scripts/clip_tag_backfill.py` and
+  `scripts/retag_from_embeddings.py`, the anchor keys in `data/clip_taxonomy.json`, and `tests/test_clip_taxonomy.py`.
+- **Another reader:** the NEW DEDUP DINOv3 bake-off scripts (`scripts/dinov3_bakeoff*.py` and their test) filter on
+  the score; their render limb goes too, or they break at the column drop.
+- **Database:** `image_clip_tags.render_score` (13.4 M scored photos; the operator labels `render_flagged` were
+  never set), its index `image_clip_tags_render_null_idx`, and two views that project it as `clip_render_score`:
+  `images_public` (latest body 591) and `listing_cover_public` (416).
+- **SPA:** delete `ImageRenderBadge`; take `renderScore` out of `lib/imageTags`, `lib/types`, `IMAGE_PUBLIC_COLS`,
+  card hydration, `ImageCarousel`'s `renderBadge`, `Gallery` and `ImageLightbox`, plus fixtures. Today the badge
+  shows in the property gallery, the lightbox and the merged-adverts carousel. No API, toolkit or extension reader.
+- **Docs:** this file, `.interface-design/system.md`, `roadmap/ui-track.md`, `roadmap/photo-kinds.md`,
+  `docs/design/photo-kinds/PROGRAM.md` (its § 4.6 lists the tagger and `render_score` as a never-edit boundary,
+  which this ruling overrides), `new-dedup/ENCODER-DECISION.md`, `clip-linear-probe.md`.
+- **Order.** (a) One non-destructive PR: the producer, every reader, and a forward migration in which both views
+  project `NULL::real as clip_render_score` and stop reading the column, dropping the index. (b) Last, in an
+  operator-opened window after a pg_dump: `DROP COLUMN render_score` (and, if wanted, the views' NULL column).
 
 ## Shown in the design system but not ruled
 
