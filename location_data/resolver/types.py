@@ -139,6 +139,10 @@ class AdminUnit:
     kraj_kod: int | None = None
     obec_kod: int | None = None
     psc_set: tuple[str, ...] = ()
+    # How far the polygon reaches from that point (`containment_radius_m`), off the same
+    # read: the radius a row FILL places there can honestly claim — Praha's point reaches
+    # 17.6 km, where the `obec` constant says 1 km (v5.8).
+    extent_m: float | None = None
     # An OBEC's one KÚ child, else None — answered by `admin_chain` only, like the point. A
     # one-KÚ obec is 3,942 of 6,258 (gate 0, 2026-09-25), and every entity inside one lies in
     # that KÚ by the hierarchy alone.
@@ -207,6 +211,22 @@ class StreetPoint:
     part_unit_ids: tuple[int | None, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class PartPoint:
+    """Where a část obce IS, derived from its own address points as `StreetPoint` is (v5.8).
+
+    RÚIAN draws no polygon for a část obce, so FILL used to climb to the town's point: a
+    Břevnov ad stood in Vinohrady, 9 km from its street. The centroid of the část's valid
+    doors (Břevnov: 2,976, 1.1 km from that street) and the distance to the farthest of them
+    (2.9 km) place it, and the same door set answers its KÚ (Q7)."""
+
+    lat: float
+    lon: float
+    extent_m: float
+    point_count: int
+    katastr_kod: int | None = None
+
+
 class RegistryView(Protocol):
     """The RÚIAN mirror as the resolver sees it, pinned to one `registry_version_id`."""
 
@@ -231,9 +251,10 @@ class RegistryView(Protocol):
         """Where a bound street sits, off its own address points. None when it has none —
         `ruian_streets` holds the name, never the geometry."""
 
-    def part_katastr_kod(self, unit_id: int) -> int | None:
-        """The one KÚ holding every RÚIAN door of a část obce, else None (the Q7 door rule).
-        Asked only for a row BOUND to a část in a multi-KÚ obec."""
+    def part_point(self, unit_id: int) -> PartPoint | None:
+        """Where a část obce's own doors are, and the one KÚ holding every one of them (the
+        Q7 door rule). None when it has none. Asked for a row BOUND to a část that no pin
+        placed, or whose obec spans several KÚ."""
 
     def admin_units_by_name(
         self, name_norm: str, *, levels: Sequence[str] = ()
@@ -387,6 +408,8 @@ class Fill:
     psc: str | None = None
     lat: float | None = None
     lon: float | None = None
+    # How far the placed-on entity reaches from `lat`/`lon`: the floor under the radius.
+    extent_m: float | None = None
     katastr_kod: int | None = None
 
 
