@@ -14,6 +14,7 @@
  * chrome.storage.local like the panel's minimized state, and follows the
  * operator across portals and tabs. */
 
+import { h } from './dom';
 import { onStoredChange } from './session';
 import tokens from './tokens.css?inline';
 
@@ -120,35 +121,24 @@ export function mountDock(extraCss: string, onToggle: () => void): DockHandle {
   style.textContent = DOCK_CSS + extraCss;
   shadow.appendChild(style);
 
-  const dock = document.createElement('div');
-  dock.className = 'dock';
-  const slot = document.createElement('div');
-  slot.className = 'slot';
-  const flashLine = document.createElement('p');
-  flashLine.className = 'flash';
+  const dock = h('div', 'dock');
+  const slot = h('div', 'slot');
+  const flashLine = h('p', 'flash');
   flashLine.setAttribute('role', 'alert');
   flashLine.hidden = true;
 
-  const bar = document.createElement('div');
-  bar.className = 'bar';
-  const tick = document.createElement('span');
-  tick.className = 'tick';
-  const toggle = document.createElement('button');
-  toggle.type = 'button';
-  toggle.className = 'switch';
+  const bar = h('div', 'bar');
+  const tick = h('span', 'tick');
+  const toggle = h('button', 'switch');
   toggle.setAttribute('role', 'switch');
   const label = document.createElement('span');
   label.textContent = 'Skrýt skryté';
-  const track = document.createElement('span');
-  track.className = 'track';
+  const track = h('span', 'track');
   track.setAttribute('aria-hidden', 'true');
-  const thumb = document.createElement('span');
-  thumb.className = 'thumb';
-  track.appendChild(thumb);
+  track.appendChild(h('span', 'thumb'));
   toggle.append(label, track);
   toggle.onclick = onToggle;
-  const count = document.createElement('span');
-  count.className = 'count';
+  const count = h('span', 'count');
   count.hidden = true;
   bar.append(tick, toggle, count);
 

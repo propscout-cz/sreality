@@ -29,6 +29,7 @@
  * hosts' order in the card. */
 
 import tokens from './tokens.css?inline';
+import { h } from './dom';
 import { bookmarkIconSvg, stageAccent } from './glyphs';
 
 export const PHOTO_MARK_HOST_CLASS = '__mf_photo_mark_host';
@@ -236,16 +237,11 @@ export function createPhotoMark(card: HTMLElement, cardAttr: string): PhotoMark 
   const onLoad = (): void => schedule();
 
   function build(): NonNullable<typeof parts> {
-    host = document.createElement('div');
-    host.className = PHOTO_MARK_HOST_CLASS;
+    host = h('div', PHOTO_MARK_HOST_CLASS);
     const shadow = host.attachShadow({ mode: 'closed' });
     const style = document.createElement('style');
     style.textContent = css(cardAttr);
-    const div = (className: string): HTMLElement => {
-      const node = document.createElement('div');
-      node.className = className;
-      return node;
-    };
+    const div = (className: string): HTMLElement => h('div', className);
     const box = div('box');
     box.setAttribute('aria-hidden', 'true');
     box.hidden = true;
@@ -337,18 +333,14 @@ export function createPhotoMark(card: HTMLElement, cardAttr: string): PhotoMark 
     savedName.hidden = text === '';
     const shownTags = next.tags.length > MAX_CHIPS ? next.tags.slice(0, MAX_CHIPS - 1) : next.tags;
     chips.replaceChildren(...shownTags.map((t) => {
-      const chip = document.createElement('span');
-      chip.className = 'chip';
+      const chip = h('span', 'chip', t.name);
       // The tag palette IS the stage palette (TagColor), so its accent resolves alike.
       chip.style.setProperty('--chip', stageAccent(t.color).fg);
-      chip.textContent = t.name;
       return chip;
     }));
     if (shownTags.length < next.tags.length) {
-      const more = document.createElement('span');
-      more.className = 'chip';
+      const more = h('span', 'chip', `+${next.tags.length - shownTags.length}`);
       more.style.setProperty('--chip', 'var(--ink-3)');
-      more.textContent = `+${next.tags.length - shownTags.length}`;
       chips.append(more);
     }
     chips.hidden = next.tags.length === 0;

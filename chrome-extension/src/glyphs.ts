@@ -103,19 +103,6 @@ export function sortCollections(collections: ExtCollection[]): ExtCollection[] {
   );
 }
 
-/* The collection list as the marks draw it — ONE definition for the panel and
- * the cards, compared this way rather than as whole API rows, which also carry
- * an `updated_at` that every add/remove bumps (no reason to redraw). Owner and
- * recipients count: they decide what is saved and who a shared note reaches. */
-export function collectionsKey(collections: ExtCollection[]): string {
-  return JSON.stringify(
-    sortCollections(collections).map((c) => [
-      c.id, c.name, c.monitoring_enabled, c.owner_email,
-      (c.shared_with ?? []).map((r) => r.email),
-    ]),
-  );
-}
-
 /* Whether a held list knows every collection a lookup names. RLS means a fresh
  * read holds every id a lookup can return, so an unknown id means the held
  * list is stale (made or shared since it was read) — re-read it. */

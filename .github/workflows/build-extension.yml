@@ -19,17 +19,17 @@ on:
     branches: [main]
     paths:
       - 'chrome-extension/**'
-      # The extension imports the shared brand and portal-id rules from the SPA
-      # tree, so a change to either must re-validate the extension build
-      # (manifest name + wordmark; content_scripts.matches + the id extractors).
-      - 'frontend/src/lib/brand.ts'
-      - 'frontend/src/lib/portalIds.ts'
+      # The extension imports modules from the SPA tree (brand, portal ids, the
+      # MF shape rule, and more to come) — a glob, not a hand list, so a new
+      # import can't slip past the rail (mfReference.ts did).
+      - 'frontend/src/lib/**'
+      - 'frontend/src/styles/**'
       - '.github/workflows/build-extension.yml'
   pull_request:
     paths:
       - 'chrome-extension/**'
-      - 'frontend/src/lib/brand.ts'
-      - 'frontend/src/lib/portalIds.ts'
+      - 'frontend/src/lib/**'
+      - 'frontend/src/styles/**'
       - '.github/workflows/build-extension.yml'
   workflow_dispatch:
 

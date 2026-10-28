@@ -115,7 +115,8 @@ maxima, remax, mmreality, ceskereality).
     optimistic (a failure puts the state back and says why in the corner), and
     are property-grain: a write repaints every card of that property on the
     page, and the panel when it shows the same property (and the other way
-    round).
+    round) — the cards and the panel draw from one store (`src/store.ts`), so
+    neither has to tell the other.
   - A card is the outermost list item / article that still holds ONE listing,
     so a photo carousel that repeats the link on every slide gets one set of
     controls, not one per slide. The controls live in a closed shadow root per
