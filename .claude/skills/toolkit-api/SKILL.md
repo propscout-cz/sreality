@@ -225,7 +225,7 @@ it (`api/`). They do not apply to the scraper.
     beside it, in `data` and in `filters_used`; a tool handed caller-supplied rows degrades to
     `'unknown'` rather than defaulting to sale. `require_scalable_basis` gates any
     multiplication of a per-m² percentile by an area (`estimate_yield._scale`), raising
-    `MeasureBasisError` → 422, and it is enforced on BOTH paths: `estimate_yield._scale` for
+    `MeasureBasisError` (a failed run on the estimation paths, REFUSED through the tool registry), and it is enforced on BOTH paths: `estimate_yield._scale` for
     deterministic runs, `api/agent._require_cohort_scalable_into_rent` for agent runs (the
     model does its own multiplication there, so the gate sits where its number lands). Six
     per-m² statements are invisible to `tests/sql_corpus.discover()`, for TWO different
