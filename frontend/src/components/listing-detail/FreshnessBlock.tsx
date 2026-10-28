@@ -3,7 +3,7 @@
  * by the desktop property page and the phone layout (#1767). */
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
-import Panel, { PanelEmpty } from '@/components/Panel';
+import Panel, { PANEL_ACTION, PanelEmpty } from '@/components/Panel';
 import {
   ApiError,
   verifyListingFreshness,
@@ -36,8 +36,8 @@ export default function FreshnessBlock({
     },
   });
 
-  /* A section card (C1–C10): the re-check is its action; the log is a plain table in it, no box of
-   * its own (C9), its heads L4 (C8). */
+  /* A section card (C1–C10): the re-check is its title-bar action, a small secondary button (C6); the
+   * log is a plain table in it, no box of its own (C9), its heads L4 (C8). */
   return (
     <Panel
       title={label}
@@ -47,7 +47,7 @@ export default function FreshnessBlock({
           type="button"
           onClick={() => verify.mutate()}
           disabled={verify.isPending}
-          className="px-3 py-1 text-[0.78rem] rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          className={PANEL_ACTION}
         >
           {verify.isPending ? 'Ověřuji…' : 'Ověřit aktuálnost'}
         </button>

@@ -58,6 +58,10 @@ export default function Panel({
   );
 }
 
+/* A title-bar action (C6): a small secondary button, never a copper fill. */
+export const PANEL_ACTION =
+  'inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)] px-3 text-[0.8rem] text-[var(--color-ink-2)] transition-colors hover:border-[var(--color-copper)] hover:text-[var(--color-copper)] disabled:cursor-not-allowed disabled:opacity-50';
+
 /* A group inside a card (C7, L3: Inter 600 14/20, ink): a title over its blocks, a rule-soft line above
  * every group but the first. Never a bordered or dashed box. */
 export function PanelGroup({

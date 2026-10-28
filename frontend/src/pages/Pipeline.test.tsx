@@ -830,6 +830,24 @@ describe('<Pipeline> board', () => {
     expect(create).toHaveAccessibleName('Nová fáze');
   });
 
+  /* Section cards (operator ruling 2026-10-28): the stage manager is one card like
+     Sdílení — its title the region's name, the stages its count, the add action in
+     the title bar (C6), never a small-caps label. */
+  it('opens the stage manager as the Fáze pipeline section card, its count the stages', async () => {
+    renderBoard();
+    fireEvent.click(await screen.findByRole('button', { name: 'Spravovat fáze' }));
+    const card = await screen.findByRole('region', { name: 'Fáze pipeline' });
+    expect(card.tagName).toBe('SECTION');
+    expect(card).toHaveClass('border', 'bg-[var(--color-paper-2)]', 'rounded-[var(--radius-md)]');
+    const title = within(card).getByRole('heading', { level: 2, name: 'Fáze pipeline' });
+    expect(title).not.toHaveClass('uppercase');
+    expect(title.nextElementSibling).toHaveTextContent(String(STAGES.length));
+    const bar = title.parentElement!;
+    expect(within(bar).getByRole('textbox', { name: 'Nová fáze' })).toBeInTheDocument();
+    expect(within(bar).getByRole('button', { name: 'Přidat' })).not.toHaveClass('uppercase');
+    expect(within(card).getByDisplayValue('Nabídka')).toBeInTheDocument();
+  });
+
   it('trash → confirm removes the card via removePipelineCard', async () => {
     renderBoard();
     const trash = await screen.findByLabelText('Odebrat z pipeline');

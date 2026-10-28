@@ -31,7 +31,7 @@ import {
 } from '@/components/NewEstimationModal';
 import type { PropertyPublic } from '@/lib/queries';
 import type { EstimationRun } from '@/lib/types';
-import Panel, { PanelEmpty } from '@/components/Panel';
+import Panel, { PANEL_ACTION, PanelEmpty } from '@/components/Panel';
 import type { Column } from '@/components/table';
 
 /* The anchor every estimation link lands on (`#estimations`). */
@@ -72,6 +72,8 @@ export default function EstimationsBlock({
     ?? runs[0]
     ?? null;
 
+  /* The header's own flow: the one modal, the page's prefill (no second implementation). */
+  const { open: openNewEstimation } = useNewEstimationModal();
   const qc = useQueryClient();
   const rerunMut = useMutation<EstimationRun, ApiError, RerunInput>({
     mutationFn: ({ run, overrides }) =>
@@ -116,13 +118,21 @@ export default function EstimationsBlock({
     && String(selected.id) === runParam;
 
   /* A section card (C1–C10). With no run it stays, its count 0, and says so with
-     the way to start one (C10) — the old dashed "no runs" tile is that line. */
+     the way to start one (C10) — the old dashed "no runs" tile is that line. Its
+     title bar carries "Nový odhad" (C6, the binding picture), the page header's flow. */
   return (
     <Panel
       id={SECTION_ID}
       title={label}
       count={runsQ.isSuccess ? runs.length : null}
       className="scroll-mt-28!"
+      accessory={
+        !readOnly && prefill ? (
+          <button type="button" onClick={() => openNewEstimation(prefill)} className={PANEL_ACTION}>
+            Nový odhad
+          </button>
+        ) : undefined
+      }
     >
       {/* Two authorities, side by side: the ministry's reference figure
           and our comparables-based estimate. */}

@@ -369,9 +369,14 @@ export function RunDetailModal({
             take the card shape of the RunBody that opened the dialog. */}
         <RunSectionMode.Provider value="dialog">
         <div className="p-6">
-          <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] font-medium">
-            Estimation detail · run #{run.id}
-          </p>
+          {/* A dialog title, not a small-caps label (small caps are L4 field labels only). */}
+          <h2
+            className="pr-10 text-xl leading-tight"
+            style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
+          >
+            Estimation detail · run{' '}
+            <span className="font-mono tabular-nums text-[var(--color-ink-3)]">#{run.id}</span>
+          </h2>
 
           <Hairline />
           <RentRange run={run} />
@@ -1367,13 +1372,10 @@ function ExcludedComparables({
   if (!excluded || excluded.length === 0) return null;
   return (
     <div className="mt-6">
-      <div className="flex items-baseline justify-between">
-        <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] font-medium">
-          Considered and set aside
-        </p>
-        <p className="text-[0.7rem] tracking-wide text-[var(--color-ink-4)] font-mono tabular-nums">
-          {excluded.length}
-        </p>
+      {/* An L3 group title (Inter 600 14/20, ink) with its bare count beside it, never small caps. */}
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h3 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">Considered and set aside</h3>
+        <span className="font-mono text-xs tabular-nums text-[var(--color-ink-3)]">{excluded.length}</span>
       </div>
       <ul className="mt-3 space-y-1.5">
         {excluded.map((row) => (

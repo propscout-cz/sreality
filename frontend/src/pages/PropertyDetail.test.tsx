@@ -92,6 +92,18 @@ describe('<FreshnessBlock> verify button', () => {
     ).toBeInTheDocument();
   });
 
+  /* Spec C6 (section cards): a title-bar action is a small SECONDARY button, never a
+     copper fill; the page keeps one primary action, in its header. */
+  it('draws the verify button as a secondary title-bar action, not a copper fill', () => {
+    renderBlock(new QueryClient());
+    const button = screen.getByRole('button', { name: 'Ověřit aktuálnost' });
+    const bar = screen.getByRole('heading', { level: 2, name: 'Freshness checks' }).parentElement!;
+    expect(bar).toContainElement(button);
+    expect(button.className).not.toMatch(/bg-\[var\(--color-copper\)\]/);
+    expect(button.className).not.toMatch(/on-copper/);
+    expect(button).toHaveClass('border', 'border-[var(--color-rule-strong)]');
+  });
+
   it('calls the API, surfaces an "updated" outcome, and invalidates queries', async () => {
     let resolve!: (v: api.VerifyFreshnessResult) => void;
     verifyMock.mockReturnValue(
@@ -647,6 +659,19 @@ describe('<PropertyDetail> New estimation', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /New estimation/ }));
     expect(openEstimation).toHaveBeenCalledWith(expect.objectContaining({ listingId: 105054 }));
+  });
+
+  /* The Odhady card's title-bar "Nový odhad" (binding picture, section cards) is the
+     header button's own flow: the same modal, the same prefill. */
+  it('opens the same flow from the Odhady card\'s Nový odhad as from the header', async () => {
+    openEstimation.mockClear();
+    renderAt('/property/774?tab=hodnota');
+
+    fireEvent.click(await screen.findByRole('button', { name: /New estimation/ }));
+    const card = await screen.findByRole('region', { name: 'Odhady' }, { timeout: 5000 });
+    fireEvent.click(await within(card).findByRole('button', { name: 'Nový odhad' }));
+    expect(openEstimation).toHaveBeenCalledTimes(2);
+    expect(openEstimation.mock.calls[1]).toEqual(openEstimation.mock.calls[0]);
   });
 });
 

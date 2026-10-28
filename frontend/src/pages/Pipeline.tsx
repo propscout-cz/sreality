@@ -37,6 +37,7 @@ import { revalidatePipelineShares, useBoardSelection, useSharedBoardGuard } from
 import { useCollectionMembers, useCollections } from '@/lib/collectionCache';
 import { useTagReads } from '@/lib/useCardTags';
 import { matchesDistricts, pipelineKeys, pipelineShareKeys } from '@/lib/queries';
+import Panel, { PANEL_ACTION } from '@/components/Panel';
 import ShareBlock from '@/components/ShareBlock';
 import { TwoStep } from '@/components/TwoStep';
 import BoardSwitcher from '@/components/pipeline/BoardSwitcher';
@@ -987,15 +988,38 @@ function StageManager({ stages }: { stages: PipelineStage[] }) {
     if (label) create.mutate(label);
   };
 
+  /* A section card like Sdílení (C1–C6): the stages its count, adding one its title-bar action. */
   return (
-    <section className="mt-5 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-4">
-      <p className="text-[0.7rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
-        Fáze pipeline
-      </p>
-      {err && (
-        <p className="mt-2 text-xs text-[var(--color-brick)]">{err}</p>
-      )}
-      <ul className="mt-3 space-y-2">
+    <Panel
+      className="mt-5"
+      title="Fáze pipeline"
+      count={stages.length}
+      accessory={
+        <div className="flex items-center gap-2">
+          <input
+            aria-label="Nová fáze"
+            value={newLabel}
+            onChange={(e) => setNewLabel(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submitNew();
+            }}
+            placeholder="Nová fáze…"
+            maxLength={80}
+            className="h-8 w-44 px-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)]"
+          />
+          <button
+            type="button"
+            onClick={submitNew}
+            disabled={!newLabel.trim() || create.isPending}
+            className={PANEL_ACTION}
+          >
+            Přidat
+          </button>
+        </div>
+      }
+    >
+      {err && <p className="text-xs text-[var(--color-brick)]">{err}</p>}
+      <ul className="space-y-2">
         {stages.map((s, i) => (
           <StageEditorRow
             key={s.id}
@@ -1009,28 +1033,7 @@ function StageManager({ stages }: { stages: PipelineStage[] }) {
           />
         ))}
       </ul>
-      <div className="mt-4 flex items-center gap-2 border-t border-[var(--color-rule)] pt-3">
-        <input
-          aria-label="Nová fáze"
-          value={newLabel}
-          onChange={(e) => setNewLabel(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') submitNew();
-          }}
-          placeholder="Nová fáze…"
-          maxLength={80}
-          className="flex-1 px-2 py-1 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)]"
-        />
-        <button
-          type="button"
-          onClick={submitNew}
-          disabled={!newLabel.trim() || create.isPending}
-          className="text-[0.72rem] tracking-[0.1em] uppercase px-3 py-1.5 rounded-[var(--radius-sm)] border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:border-[var(--color-rule-strong)] hover:text-[var(--color-ink)] disabled:opacity-50"
-        >
-          Přidat
-        </button>
-      </div>
-    </section>
+    </Panel>
   );
 }
 

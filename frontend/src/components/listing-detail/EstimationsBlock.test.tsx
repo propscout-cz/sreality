@@ -67,12 +67,12 @@ const property = (mf: Partial<PropertyPublic>): PropertyPublic =>
     ...mf,
   }) as unknown as PropertyPublic;
 
-function renderBlock(listing: PropertyPublic, prefill?: { listingId: number }) {
+function renderBlock(listing: PropertyPublic, prefill?: { listingId: number }, readOnly = false) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
-        <EstimationsBlock listing={listing} listingIds={[listing.id]} prefill={prefill} />
+        <EstimationsBlock listing={listing} listingIds={[listing.id]} prefill={prefill} readOnly={readOnly} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -143,5 +143,38 @@ describe('EstimationsBlock first run', () => {
     renderBlock(property({ mf_reference_rent: FROZEN_REF }));
     await screen.findByText('No estimation runs for this property yet.');
     expect(screen.queryByRole('button', { name: /Run an estimation/ })).toBeNull();
+  });
+});
+
+/* The binding picture (docs/design/propscout-section-cards.png) draws "Nový odhad" in
+   the card's title bar (C6): a small secondary button opening the SAME flow as the
+   page header's "New estimation" — the one modal, with the page's prefill. */
+describe('EstimationsBlock title-bar Nový odhad', () => {
+  beforeEach(() => {
+    fetchRuns.mockReset();
+    openEstimation.mockClear();
+  });
+
+  it('sits in the title bar beside the count and opens the new-estimation flow', async () => {
+    fetchRuns.mockResolvedValue({ data: [run], total: 1, limit: 50, offset: 0, next_cursor: null });
+    renderBlock(property({}), { listingId: 11 });
+    const card = await screen.findByRole('region', { name: 'Estimates' });
+    await within(card).findByTestId('run-body');
+    const bar = within(card).getByRole('heading', { level: 2, name: 'Estimates' }).parentElement!;
+    const button = within(bar).getByRole('button', { name: 'Nový odhad' });
+    expect(button.className).not.toMatch(/bg-\[var\(--color-copper\)\]/);
+    fireEvent.click(button);
+    expect(openEstimation).toHaveBeenCalledWith({ listingId: 11 });
+  });
+
+  it('is not offered read-only (the phone) or without an ad to estimate', async () => {
+    fetchRuns.mockResolvedValue({ data: [run], total: 1, limit: 50, offset: 0, next_cursor: null });
+    const { unmount } = renderBlock(property({}), { listingId: 11 }, true);
+    await screen.findByTestId('run-body');
+    expect(screen.queryByRole('button', { name: 'Nový odhad' })).toBeNull();
+    unmount();
+    renderBlock(property({}));
+    await screen.findByTestId('run-body');
+    expect(screen.queryByRole('button', { name: 'Nový odhad' })).toBeNull();
   });
 });
