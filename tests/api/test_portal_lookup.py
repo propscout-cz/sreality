@@ -70,6 +70,7 @@ def _mk_account_row(listing_id: int, **cols: Any) -> dict[str, Any]:
         "estimation_id": None, "estimation_kind": None, "estimation_yield": None,
         "in_pipeline": False, "pipeline_stage_id": None,
         "pipeline_stage_key": None, "pipeline_stage_label": None,
+        "pipeline_entered_stage_at": None,
         # The SQL coalesces to an empty array (never NULL); the Python layer
         # nulls it for no-property rows.
         "collection_ids": [],
@@ -140,6 +141,7 @@ def test_lookup_maps_rows_with_sreality_id_mf_and_estimation() -> None:
                         estimation_yield=Decimal("5.46"),
                         in_pipeline=True, pipeline_stage_id=3,
                         pipeline_stage_key="interested", pipeline_stage_label="Zájem",
+                        pipeline_entered_stage_at=_TS,
                         collection_ids=[7, 9], tag_ids=[3]),
         # bazos listing: nothing account-side but a dismissal
         _mk_account_row(9002, dismissed=True),
@@ -167,6 +169,8 @@ def test_lookup_maps_rows_with_sreality_id_mf_and_estimation() -> None:
         "stage_key": "interested", "stage_label": "Zájem",
         # Badge + accent (migration 377) so the panel's funnel matches the SPA's.
         "stage_code": None, "stage_color": None,
+        # The panel's "ve fázi od": the card's stage stamp, datetime → iso8601.
+        "entered_stage_at": _TS.isoformat(),
     }
     assert sr["collection_ids"] == [7, 9]  # property-grain memberships
     assert sr["tag_ids"] == [3]  # property-grain, like collections
@@ -187,7 +191,7 @@ def test_lookup_maps_rows_with_sreality_id_mf_and_estimation() -> None:
     assert bz["pipeline"] == {
         "in_pipeline": False, "stage_id": None,
         "stage_key": None, "stage_label": None,
-        "stage_code": None, "stage_color": None,
+        "stage_code": None, "stage_color": None, "entered_stage_at": None,
     }
     assert bz["collection_ids"] == []  # has a property, in no collection
     assert bz["tag_ids"] == []
@@ -400,6 +404,14 @@ def test_fond_default_is_served_for_an_item_with_no_row_at_all() -> None:
         _FakeConn([]), _FakeConn([]), _items(("sreality", "nothing")),
     )
     assert out["data"][0]["fond_per_m2_czk_default"] == s.DEFAULT_FOND_CZK_PER_M2
+
+
+def test_the_card_stage_stamp_rides_the_pipeline_lateral() -> None:
+    """The panel's "ve fázi od" reads the caller's card row, the same LATERAL that
+    picks the stage (a stamp off another account's card would date the wrong move)."""
+    lateral = pl._ACCOUNT_SQL.split("LEFT JOIN LATERAL")[1]
+    assert "pp.entered_stage_at" in lateral
+    assert "pc.entered_stage_at AS pipeline_entered_stage_at" in pl._ACCOUNT_SQL
 
 
 def test_lookup_takes_no_account_argument() -> None:
