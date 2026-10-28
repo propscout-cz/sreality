@@ -25,6 +25,8 @@ class ScriptTx:
 
 
 class ScriptCur:
+    description = None  # no column names: a reader that maps rows by name sees none
+
     def __init__(self, conn: "ScriptConn") -> None:
         self._conn, self._rows, self.rowcount = conn, [], 0
 

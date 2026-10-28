@@ -104,6 +104,36 @@ def test_find_comparables_non_byt_category_flows_through(client, monkeypatch):
     assert captured["filters"].category_type == "prodej"
 
 
+_CATS = {"category_main": "byt", "category_type": "prodej"}
+
+
+def test_find_comparables_hands_every_declared_filter_to_the_cohort(client, monkeypatch):
+    """The body is generated from the registry, so a filter it declares reaches ComparableFilters:
+    the seen-window filters were declared and silently dropped, ppm2 and garden had no field."""
+    captured = {}
+    monkeypatch.setattr(api_main, "find_comparables",
+                        lambda conn, target, filters: captured.setdefault("f", filters) and {"data": {}})
+    sent = {"last_seen_min_days": 2, "last_seen_max_days": 9, "first_seen_min_days": 3,
+            "first_seen_max_days": 30, "min_price_per_m2": 80_000.0, "max_garden_area": 400.0,
+            "furnished": "ano", "max_price_czk": 9_000_000}
+    res = client.post("/tools/find_comparables", json={"target": {"lat": 50.0, "lng": 14.0}, **_CATS, **sent})
+    assert res.status_code == 200
+    assert {k: getattr(captured["f"], k) for k in sent} == {**sent, "furnished": ["ano"]}
+
+
+@pytest.mark.parametrize("bad", [
+    {"price_min": 1},                      # an unknown key was ignored: now it is named
+    {"category_main": "byty"},             # off-vocabulary was a silently empty 200
+    {"portals": ["sreality.cz"]},
+    {"radius_m": 50},                      # below the registry floor
+    {"min_price_czk": -1},
+])
+def test_find_comparables_refuses_what_it_used_to_drop(client, monkeypatch, bad):
+    monkeypatch.setattr(api_main, "find_comparables", lambda *a: pytest.fail("reached the cohort"))
+    res = client.post("/tools/find_comparables", json={"target": {"lat": 50.0, "lng": 14.0}, **_CATS, **bad})
+    assert res.status_code == 422, res.text
+
+
 def test_verify_listing_freshness_passes_args(client, monkeypatch):
     captured = {}
     def fake(conn, c, sid, max_age):

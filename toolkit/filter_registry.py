@@ -18,9 +18,10 @@ consumer needs:
 
 Adding a new filter is a single PR that touches this file, the consumer
 models of its agendas (ComparableFilters / WatchdogFilterSpec) and (if it
-needs a DB column) a migration. Every downstream surface — Pydantic
-schemas, agent tool JSON, Watchdog matcher, React FilterForm, browse
-URL serialiser — is generated from the registry, compiled from it
+needs a DB column) a migration. Every downstream surface — the REST and
+tool-registry argument models (`api/filter_args.py`), agent tool JSON,
+Watchdog matcher, React FilterForm, browse URL serialiser — is generated
+from the registry, compiled from it
 (`toolkit/filter_compiler.py`), or pinned to it by a coverage test; the
 model fields are pinned in both directions, so a filter missing from a
 model fails CI rather than being silently dropped.

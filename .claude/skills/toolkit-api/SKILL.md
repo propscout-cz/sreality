@@ -29,6 +29,9 @@ it (`api/`). They do not apply to the scraper.
      }
    }
    ```
+   **An agent reaches a tool through the tool registry** (`api/capabilities/`, #2062): one `Entry` per tool
+   (tenancy + effect, a generated strict argument model), one `registry.call`, one error table, structural
+   truncation. Adding a tool and its census: `references/tool-registry.md`.
 3. **Every tool excludes `given_up = true` listings** from `listing_fetch_failures` by
    default. An `include_unreliable: bool = False` parameter overrides. Every cohort (`_shared_filter_where`, the listings adapter over `toolkit/filter_compiler.compile_filter_where`: comparables, velocity, the transit corridor) counts a property ONCE: its FROM is `location_data.claims_common.COHORT_LOCATION_FROM` (ruling R8, migration 636: place → the live property it locates → its canonical advert as the comparable, so price, area and snapshot_id are the canonical advert's and distance, district and place the location advert's), and `_shared_filter_where` leaves out every advert of the subject's property via `TargetSpec.exclude_listing_ids` / `TargetIn.exclude_listing_ids` (the ONE exclusion, decision 13: any advert of the subject names its whole property; the sreality-keyed `exclude_ids` is gone, a frozen spec's copy is history and never re-read).
 4. **"Active" filter is `is_active = true AND last_seen_at > now() - interval 'X days'`
@@ -69,25 +72,8 @@ it (`api/`). They do not apply to the scraper.
    function may write. The API service should still connect with a read-only role if Postgres
    permits; these nine paths then need a separately-elevated route. For now we ship with one
    role and discipline.
-   **Broker merge-review writes are durable decisions, not just status flips** (`api/broker_review.py`,
-   migration 401). The nightly sweep re-derives every merge from scratch — name-gated and
-   portal-agnostic since 2026-08-20 — so an unmerge used to be re-applied the same night.
-   `unmerge_group` derives, inside its own transaction and BEFORE the re-point, every cross-owner
-   identity pair it pulled apart (SAME-PORTAL PAIRS INCLUDED: within-source merging is allowed now,
-   and the biggest duplicate fans are same-portal) and records it in `broker_merge_suppressions`. Both derivations read a **cohort**, never a remembered id: the
-   unmerge anchors on where the restored identities live NOW (the survivor on the event rows may itself
-   have been merged away since — that read returns nothing and the unmerge silently writes zero rows),
-   and a dismissal anchors on the candidate's BROKER pair, suppressing every cross-owner pair between
-   them (the card is keyed `contactbridge:{lo}:{hi}` and the evidence is last-write-wins, so sibling
-   identity pairs would otherwise stay live). Pairs already under one broker are skipped — an active
-   suppression over co-located identities is an instant `verify_pipeline` violation. A `name_firm`
-   candidate has no identity evidence: dismiss only. `merge_brokers` LIFTS (never deletes) every active
-   suppression whose two identities sit under DIFFERENT brokers being merged — an explicit operator
-   merge always beats the rail, which gates the AUTO path only; `GET /broker-review/suppressions` +
-   `POST /broker-review/suppressions/{id}/lift` (409 on a re-lift) are the ledger and the manual
-   override. Every mutating `/broker-review/*` route binds `require_admin`'s claims and threads
-   `claims.get("email") or claims.get("sub")` into `undone_by` / `resolved_by` / `created_by` /
-   `lifted_by`.
+   **Broker merge-review writes are durable decisions, not just status flips** (suppressions the nightly sweep
+   honours, lifts, the `*_by` stamps): `references/broker-review-writes.md`.
    **The AUTODEDUP ruling store is written** (mig 528, same `decided_by` idiom) by `POST /autodedup/verdict` (+ `/split`, `/candidate-split`) and, via `toolkit.property_identity.record_rulings`, by `POST /properties/merge` (a statement of letters over properties, `{letters: {id: "A"}}`, `merge_letters` → one `merge_property_set` per letter in ONE transaction: the oldest record survives, every property-anchored operator-state row follows through `PROPERTY_CARRIERS` (an alert the survivor already holds is marked `duplicate_of`, never deleted, mig 653) and each curation row moved or folded is written to the carry record (`property_merge_carries`), `CategoryClash` refuses rule 15 over the set's ads (a Czech 409), ONE `properties_changed` (rollup, Browse row, broker queue) ends it; "same" on the ticked cards' canonical adverts and every negative pair or set across its members (MS12; `GET /properties/merge` counts it before the click); the route answers the acting account's moved items and `hidden_for_you`) and `POST /properties/{id}/split` (MS18, by letters, `expect` = its `GET` preview's `plan`, a preview the click's `choices` can be read into: ONE `detach_listings` (births in `new`, the acting account's routed items in `curation`) + `merge_property_set` per joined letter, which rules as the merge it is; the split's own rulings "different", across letters only). An engine merge / `unapply` (ONE `detach_listings` per group, routing curation by its carry rows) rules nothing. Each appends
    on change (migration 574); a negative PAIR verdict upserts `autodedup.must_not_link` and reversing it DELETEs that row; cluster verdicts add none; only `/autodedup/*` answers an un-migrated store with a 503. Engine SPLITS are propose-only (decision 9): `GET /autodedup/proposed-splits` (`generation`, keyset `after`/`limit`) and `/proposed-splits/{property_id}` read `autodedup/proposed_splits.py` → `{property_id, canonical_listing_id, proposed, groups: [{cluster_key, adverts: [{listing_id, source, is_active, origin_property_id}]}], unseen, splits: [{listing_lo, listing_hi, reason_source, reason, ruling}], ruled}`; each card links to the property page's split dialog (`?letters=`), no write route of its own.
 6. **Spatial queries measure in metres, so they cast.** A listing's point is

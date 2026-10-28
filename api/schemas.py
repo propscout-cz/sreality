@@ -18,21 +18,15 @@ from pydantic import (
     model_validator,
 )
 
+from api.filter_args import agenda_ids, as_str_list, filter_model
 from api.location_filter import DistrictChip
+from toolkit import ComparableFilters
 from toolkit import stats_registry as sr
-
-
-def _as_str_list(v: Any) -> Any:
-    """Coerce a bare string into a single-element list (backward-compat for
-    callers that still send `furnished="ano"` now that the filter is
-    multi-select). None and lists pass through unchanged."""
-    if isinstance(v, str):
-        return [v]
-    return v
+from toolkit.filter_registry import Agenda
 
 
 # Multi-select enum filter that also accepts a single bare string.
-EnumListFilter = Annotated[list[str] | None, BeforeValidator(_as_str_list)]
+EnumListFilter = Annotated[list[str] | None, BeforeValidator(as_str_list)]
 
 
 class TargetIn(BaseModel):
@@ -44,51 +38,17 @@ class TargetIn(BaseModel):
     exclude_listing_ids: list[int] = Field(default_factory=list)
 
 
-class FindComparablesIn(BaseModel):
+# The cohort filters are the registry's, generated (api/filter_args.py): a new COMPARABLES filter needs no edit
+# here. The category pair is required, null meaning every category: a missing category used to mean "apartments
+# for rent", which made house and commercial cohorts impossible to drive cleanly.
+_CohortFilters = filter_model(
+    "FindComparablesFilters", agenda_ids(Agenda.COMPARABLES), ComparableFilters,
+    required={"category_main", "category_type"},
+)
+
+
+class FindComparablesIn(_CohortFilters):
     target: TargetIn
-    radius_m: int = 1000
-    area_band_pct: float = 0.20
-    disposition_match: Literal["exact", "loose", "any"] = "exact"
-    # No implicit freshness gate. Pass max_age_days + lifecycle='active'
-    # explicitly when you want only fresh active listings; lifecycle
-    # also unlocks 'delisted' / 'all' cohorts.
-    max_age_days: int | None = None
-    lifecycle: Literal["active", "delisted", "all"] | None = None
-    floor_band: int | None = None
-    portals: list[str] | None = None
-    condition_match: list[str] | None = None
-    building_type_match: list[str] | None = None
-    energy_rating_match: list[str] | None = None
-    has_balcony: bool | None = None
-    has_lift: bool | None = None
-    has_parking: bool | None = None
-    min_price_czk: int | None = None
-    max_price_czk: int | None = None
-    # Required, no silent default. A missing category used to mean
-    # "apartments for rent", which made house/commercial cohorts
-    # impossible to drive cleanly. Pass `null` explicitly to search every
-    # category. See ComparableFilters in toolkit/comparables.py.
-    category_main: str | None = Field(...)
-    category_type: str | None = Field(...)
-    category_sub_cb: int | None = None
-    include_unreliable: bool = False
-    furnished: EnumListFilter = None
-    terrace: bool | None = None
-    cellar: bool | None = None
-    garage: bool | None = None
-    ownership: EnumListFilter = None
-    min_estate_area: float | None = None
-    max_estate_area: float | None = None
-    min_usable_area: float | None = None
-    max_usable_area: float | None = None
-    min_parking_lots: int | None = None
-    tom_days_min: int | None = None
-    tom_days_max: int | None = None
-    tom_observed_only: bool | None = None
-    last_seen_min_days: int | None = None
-    last_seen_max_days: int | None = None
-    first_seen_min_days: int | None = None
-    first_seen_max_days: int | None = None
 
 
 class ClusterComparablesIn(BaseModel):
