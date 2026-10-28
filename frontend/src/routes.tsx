@@ -12,10 +12,8 @@ import ForgotPassword from './pages/ForgotPassword';
 import UpdatePassword from './pages/UpdatePassword';
 import Browse from './pages/Browse';
 import PropertyDetail, { AdvertRedirect } from './pages/PropertyDetail';
-import EstimationDetail from './pages/EstimationDetail';
 import EstimationList from './pages/EstimationList';
 import Brokers from './pages/Brokers';
-import BrokerDetail from './pages/BrokerDetail';
 import Collections from './pages/Collections';
 import Pipeline from './pages/Pipeline';
 import WatchdogManage from './pages/WatchdogManage';
@@ -68,6 +66,10 @@ const BuildingDetail = lazyChunk(() => import('./pages/BuildingDetail'));
 // A collection's page opens from the collections list or a shared link, not on a first
 // visit: its own chunk keeps the members' card grid off the first-visit budget.
 const CollectionDetail = lazyChunk(() => import('./pages/CollectionDetail'));
+// An estimation run and a broker open from a link in a list, not on a first visit: their own chunks keep
+// the section cards' growth off the first-visit budget.
+const EstimationDetail = lazyChunk(() => import('./pages/EstimationDetail'));
+const BrokerDetail = lazyChunk(() => import('./pages/BrokerDetail'));
 
 function AdminPage({ children }: { children: ReactNode }) {
   return (
@@ -141,10 +143,26 @@ export const routes: RouteObject[] = [
       { path: ROUTES.costs.childPath, element: <AdminPage><Costs /></AdminPage>, handle: { title: 'LLM costs' } },
       { path: 'estimate', element: <Navigate to={ROUTES.estimations.build()} replace /> },
       { path: ROUTES.estimations.childPath, element: <EstimationList />, handle: { title: 'Estimations' } },
-      { path: ROUTES.estimationDetail.childPath, element: <EstimationDetail />, handle: { title: 'Estimation' } },
+      {
+        path: ROUTES.estimationDetail.childPath,
+        element: (
+          <Suspense fallback={<Skeleton height={320} className="mx-6 my-8" />}>
+            <EstimationDetail />
+          </Suspense>
+        ),
+        handle: { title: 'Estimation' },
+      },
       { path: ROUTES.brokers.childPath, element: <Brokers />, handle: { title: 'Brokers' } },
       { path: ROUTES.brokersReview.childPath, element: <AdminPage><BrokerReview /></AdminPage>, handle: { title: 'Brokers · Review' } },
-      { path: ROUTES.brokerDetail.childPath, element: <BrokerDetail />, handle: { title: 'Broker' } },
+      {
+        path: ROUTES.brokerDetail.childPath,
+        element: (
+          <Suspense fallback={<Skeleton height={320} className="mx-6 my-8" />}>
+            <BrokerDetail />
+          </Suspense>
+        ),
+        handle: { title: 'Broker' },
+      },
       { path: ROUTES.outreach.childPath, element: <AdminPage><Outreach /></AdminPage>, handle: { title: 'Outreach' } },
       { path: ROUTES.outreachDetail.childPath, element: <AdminPage><OutreachDetail /></AdminPage>, handle: { title: 'Campaign' } },
       {
